@@ -1,0 +1,54 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "echo-brain/provenance/extraction-policy.v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["policy_version", "reviewed_spec_sha", "source", "seeds", "resolution", "dispositions", "target_only_paths"],
+  "properties": {
+    "policy_version": { "const": 1 },
+    "reviewed_spec_sha": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+    "source": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["repository", "source_sha", "git_object_envelope"],
+      "properties": {
+        "repository": { "type": "string" },
+        "source_sha": { "type": "string", "pattern": "^[0-9a-f]{40}$" },
+        "git_object_envelope": { "type": "object" }
+      }
+    },
+    "seeds": { "type": "object" },
+    "resolution": { "type": "object" },
+    "dispositions": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["transform_allowlist", "exclusion_allowlist", "invariant"],
+      "properties": {
+        "transform_allowlist": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["target_path", "source_path", "transform", "authority", "rule"],
+            "properties": {
+              "target_path": { "type": "string" },
+              "source_path": { "type": "string" },
+              "transform": { "type": "string" },
+              "authority": { "type": "string" },
+              "rule": { "type": "string" }
+            }
+          }
+        },
+        "exclusion_allowlist": { "type": "array", "maxItems": 0 },
+        "invariant": { "type": "string" }
+      }
+    },
+    "target_only_paths": {
+      "type": "array",
+      "items": { "type": "string" },
+      "minItems": 21,
+      "maxItems": 21,
+      "uniqueItems": true
+    }
+  }
+}

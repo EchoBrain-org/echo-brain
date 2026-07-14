@@ -1,0 +1,46 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://echo.local/schemas/product/runtime-config.v1.schema.json",
+  "title": "ECHO Team-product runtime configuration",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "lane",
+    "state_dir",
+    "granola",
+    "brain_adapter",
+    "approval_mode"
+  ],
+  "properties": {
+    "schema_version": { "const": 1 },
+    "lane": { "const": "team-product" },
+    "state_dir": { "type": "string", "minLength": 2, "pattern": "^/" },
+    "granola": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["workspace_id", "input", "credential_ref"],
+      "properties": {
+        "workspace_id": { "type": "string", "minLength": 1 },
+        "input": { "const": "api" },
+        "credential_ref": { "$ref": "#/definitions/secretReference" }
+      }
+    },
+    "brain_adapter": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "credential_ref"],
+      "properties": {
+        "id": { "type": "string", "minLength": 1, "pattern": "^[a-z][a-z0-9-]*$" },
+        "credential_ref": { "$ref": "#/definitions/secretReference" }
+      }
+    },
+    "approval_mode": { "const": "manual" }
+  },
+  "definitions": {
+    "secretReference": {
+      "type": "string",
+      "pattern": "^(env|keychain):[A-Za-z][A-Za-z0-9_.-]*$"
+    }
+  }
+}

@@ -1,0 +1,106 @@
+{
+  "policy_version": 1,
+  "reviewed_spec_sha": "832be81341f2c523fd42918206774ec8a51f54de653a323ad56d612e0ea47748",
+  "source": {
+    "repository": "Project_echo",
+    "source_sha": "2971310441b69735cbe759293abd8c4d044bf347",
+    "git_object_envelope": {
+      "launcher": "env -i HOME=<scratch> LC_ALL=C TZ=UTC PATH=/usr/local/bin:/usr/bin:/bin GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=/dev/null GIT_ATTR_NOSYSTEM=1 GIT_NO_REPLACE_OBJECTS=1 /usr/local/bin/git --git-dir=<project-git-dir>",
+      "git_version": "2.37.3",
+      "rejects": [
+        "objects/info/alternates",
+        "commondir",
+        "refs/replace/*",
+        "info/grafts",
+        "remote.*.promisor / partial-clone config",
+        "config includes",
+        "filters / export-subst attributes",
+        "inherited GIT_DIR / GIT_WORK_TREE / GIT_COMMON_DIR / GIT_OBJECT_DIRECTORY / GIT_ALTERNATE_OBJECT_DIRECTORIES / GIT_CONFIG_COUNT / GIT_CONFIG_KEY / GIT_CONFIG_VALUE"
+      ],
+      "enumeration": "ls-tree -rz --full-tree; NUL-parsed paths, no quoting",
+      "blob_read": "cat-file --batch, exact declared blob length"
+    }
+  },
+  "seeds": {
+    "entry_points": [
+      "src/product/cli.ts",
+      "src/product/index.ts"
+    ],
+    "allowed_internal_expansion_source": "product/source-boundary.v1.json",
+    "relocations": {
+      "product/package.template.json": "package.json",
+      "product/npm-shrinkwrap.json": "npm-shrinkwrap.json",
+      "schemas/product/runtime-config.v1.schema.json": "schemas/runtime-config.v1.schema.json"
+    },
+    "copies": [
+      "product/source-boundary.v1.json"
+    ],
+    "runtime_schema": "schemas/product/runtime-config.v1.schema.json",
+    "test_inventory": [
+      "tests/product/build-once-contract.test.ts",
+      "tests/product/hermeticity.test.ts",
+      "tests/product/import-fence.test.ts",
+      "tests/product/packaged-product.test.ts",
+      "tests/product/qualification-report.test.ts",
+      "tests/product/runtime-config.test.ts",
+      "tests/product/runtime-isolation.test.ts",
+      "tests/product/setup.ts"
+    ]
+  },
+  "resolution": {
+    "kind": "byte-sorted fixed-point over raw blobs",
+    "followed_edge_kinds": [
+      "static ESM import/export with a literal relative specifier",
+      "dynamic import() with a literal relative specifier",
+      "CommonJS require()/createRequire()(...) with a literal relative specifier"
+    ],
+    "relative_resolution_order": [
+      "<spec>.js -> <spec>.ts",
+      "<spec>.js -> <spec>.mts",
+      "<spec> (exact tracked path)",
+      "<spec>.ts",
+      "<spec>.mts",
+      "<spec>/index.ts"
+    ],
+    "test_seed_edge_scope": "The eight tests/product files are byte-parity leaves. Their literal-specifier module imports ARE followed (this reaches src/product/*, src/enrich/granola-signals.ts, and tools/product/toolchain-preflight.mjs). Their runtime join(REPO_ROOT, '<literal>') paths passed to spawnSanitizedChild or readFileSync are computed-base references, NOT module edges; they are recorded as parity-only references and are not part of the extracted closure.",
+    "unknown_or_computed_repository_capable_edge": "fail",
+    "node_builtin_specifiers": "node:-prefixed and bare Node 22 core modules are terminal (not repository edges)",
+    "external_bare_specifiers": "validated against the locked npm tree by check-dependencies.mjs, not followed as repository edges"
+  },
+  "dispositions": {
+    "transform_allowlist": [
+      {
+        "target_path": "package.json",
+        "source_path": "product/package.template.json",
+        "transform": "add engines.npm = \"10.9.4\"",
+        "authority": "founder adjudication #3 (2026-07-14), review finding F3",
+        "rule": "target equals source parsed-JSON with exactly one added key engines.npm=\"10.9.4\"; no other key added, removed, or changed"
+      }
+    ],
+    "exclusion_allowlist": [],
+    "invariant": "Every source row appears exactly once as copied, relocated, or relocated-with-transform. The only transform is the founder-adjudicated package.json npm pin above. Production TypeScript, product/source-boundary.v1.json, and the eight tests/product files remain byte and mode identical."
+  },
+  "target_only_paths": [
+    "README.md",
+    "provenance/extraction-policy.v1.json",
+    "provenance/source-plan.v1.json",
+    "provenance/source-extraction.v1.json",
+    "provenance/test-parity.v1.json",
+    "provenance/dependency-toolchain.v1.json",
+    "provenance/schemas/extraction-policy.v1.schema.json",
+    "provenance/schemas/source-plan.v1.schema.json",
+    "provenance/schemas/source-extraction.v1.schema.json",
+    "provenance/schemas/test-parity.v1.schema.json",
+    "provenance/schemas/dependency-toolchain.v1.schema.json",
+    "tools/check-provenance.mjs",
+    "tools/check-boundary.mjs",
+    "tools/check-dependencies.mjs",
+    "tools/audit-pinned-extraction.mjs",
+    "tools/verify-artifact.mjs",
+    "tests/product/end-to-end-synthetic.test.ts",
+    "tests/migration/provenance.test.ts",
+    "tests/migration/dependency-set.test.ts",
+    "tests/migration/source-independence.test.ts",
+    "tests/migration/packaged-product.test.ts"
+  ]
+}

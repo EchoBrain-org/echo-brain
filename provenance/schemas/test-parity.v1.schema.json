@@ -1,0 +1,34 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "echo-brain/provenance/test-parity.v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["parity_version", "source_sha", "executed_suite", "pinned_tests"],
+  "properties": {
+    "parity_version": { "const": 1 },
+    "source_sha": { "type": "string", "pattern": "^[0-9a-f]{40}$" },
+    "executed_suite": {
+      "type": "array",
+      "items": { "type": "string" },
+      "minItems": 1
+    },
+    "pinned_tests": {
+      "type": "array",
+      "minItems": 8,
+      "maxItems": 8,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["path", "git_mode", "source_blob_oid", "source_sha256", "target_sha256", "executed"],
+        "properties": {
+          "path": { "type": "string" },
+          "git_mode": { "type": "string", "enum": ["100644"] },
+          "source_blob_oid": { "type": "string", "pattern": "^[0-9a-f]{40}$" },
+          "source_sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+          "target_sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+          "executed": { "const": false }
+        }
+      }
+    }
+  }
+}

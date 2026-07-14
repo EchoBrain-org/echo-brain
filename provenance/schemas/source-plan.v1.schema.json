@@ -1,0 +1,32 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "echo-brain/provenance/source-plan.v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["plan_version", "reviewed_spec_sha", "source_sha", "rows"],
+  "properties": {
+    "plan_version": { "const": 1 },
+    "reviewed_spec_sha": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+    "source_sha": { "type": "string", "pattern": "^[0-9a-f]{40}$" },
+    "rows": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["source_path", "target_path", "git_mode", "blob_oid", "sha256", "size", "disposition"],
+        "properties": {
+          "source_path": { "type": "string" },
+          "target_path": { "type": "string" },
+          "git_mode": { "type": "string", "enum": ["100644", "100755"] },
+          "blob_oid": { "type": "string", "pattern": "^[0-9a-f]{40}$" },
+          "sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+          "size": { "type": "integer", "minimum": 0 },
+          "disposition": { "type": "string", "enum": ["copied", "relocated"] },
+          "transform": { "type": "string" },
+          "target_sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" }
+        }
+      }
+    }
+  }
+}

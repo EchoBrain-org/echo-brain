@@ -1,0 +1,50 @@
+{
+  "boundary_version": 1,
+  "entry_points": [
+    "src/product/cli.ts",
+    "src/product/index.ts"
+  ],
+  "allowed_internal_paths": [
+    "src/product/**",
+    "src/capture/granola-source-policy.ts",
+    "src/capture/pipeline-core.ts",
+    "src/capture/surfaces/granola-poller.ts",
+    "src/enrich/granola-signals.ts",
+    "src/enrich/post-meeting-brief.ts",
+    "src/enrich/worker-heartbeat.ts",
+    "src/storage/interface.ts",
+    "src/storage/sqlite.ts",
+    "src/storage/migrate.ts",
+    "src/storage/source-match.ts",
+    "src/echo-home/state-paths.ts",
+    "src/echo-home/adapters/atomic-write.ts",
+    "src/logging/index.ts",
+    "src/guards.ts",
+    "src/util/json.ts",
+    "src/util/subject.ts",
+    "src/util/timestamp.ts"
+  ],
+  "forbidden_internal_roots": [
+    "src/daemon/",
+    "src/mcp/",
+    "src/coord/",
+    "src/trace/",
+    "src/capture/extractors/",
+    "src/capture/surfaces/fs-watcher.ts",
+    "src/capture/surfaces/git-watcher.ts",
+    "src/surfaces/ceo-slack-responder/",
+    "src/enrich/granola-intake-candidates.ts",
+    "src/enrich/decision-drift.ts",
+    "src/cli/commands/orchestration.ts"
+  ],
+  "allowed_external_runtime_packages": [
+    "ajv",
+    "better-sqlite3"
+  ],
+  "child_process_owner": "src/product/spawn-sanitized-child.ts",
+  "phase_1_platform": {
+    "os": "darwin",
+    "architecture": "arm64",
+    "node": "22.22.1"
+  }
+}

@@ -1,0 +1,77 @@
+{
+  "parity_version": 1,
+  "source_sha": "2971310441b69735cbe759293abd8c4d044bf347",
+  "executed_suite": [
+    "tests/migration/provenance.test.ts",
+    "tests/migration/dependency-set.test.ts",
+    "tests/migration/source-independence.test.ts",
+    "tests/migration/packaged-product.test.ts",
+    "tests/product/end-to-end-synthetic.test.ts"
+  ],
+  "pinned_tests": [
+    {
+      "path": "tests/product/build-once-contract.test.ts",
+      "git_mode": "100644",
+      "source_blob_oid": "08685583efc7d6008d32977d4486b6ec0068b456",
+      "source_sha256": "9929bebe17ec72c441a20f57273ccc80f8331db5c5146363ea5befa6912c005d",
+      "target_sha256": "9929bebe17ec72c441a20f57273ccc80f8331db5c5146363ea5befa6912c005d",
+      "executed": false
+    },
+    {
+      "path": "tests/product/hermeticity.test.ts",
+      "git_mode": "100644",
+      "source_blob_oid": "cbc4862b249426862365e8da012c00123f709200",
+      "source_sha256": "bb97a1b14c07f7f5184ba2e2da39352c42bc999ec5f5405b101c14c6f935fe70",
+      "target_sha256": "bb97a1b14c07f7f5184ba2e2da39352c42bc999ec5f5405b101c14c6f935fe70",
+      "executed": false
+    },
+    {
+      "path": "tests/product/import-fence.test.ts",
+      "git_mode": "100644",
+      "source_blob_oid": "a48bbe0545c6d6d7c102bf3d1adb0fd1fa0ff080",
+      "source_sha256": "962cb83465678defc200a79c8b68909a63bf94b0c763ae18800db99524dbd35d",
+      "target_sha256": "962cb83465678defc200a79c8b68909a63bf94b0c763ae18800db99524dbd35d",
+      "executed": false
+    },
+    {
+      "path": "tests/product/packaged-product.test.ts",
+      "git_mode": "100644",
+      "source_blob_oid": "06bc58813719832a546cdd71937ce361863a81bd",
+      "source_sha256": "994e1589c59130f94b02eff188fa19e06e4b40266938c7da77f2f75f078bd9e7",
+      "target_sha256": "994e1589c59130f94b02eff188fa19e06e4b40266938c7da77f2f75f078bd9e7",
+      "executed": false
+    },
+    {
+      "path": "tests/product/qualification-report.test.ts",
+      "git_mode": "100644",
+      "source_blob_oid": "3fb52bd08e48a9c9cadd341e87f89cfa9531ca05",
+      "source_sha256": "0f20530cf7cabcbb2a2b73724496bc5fc5092c4ed5d2fc23c1c00ed1ed38f5e4",
+      "target_sha256": "0f20530cf7cabcbb2a2b73724496bc5fc5092c4ed5d2fc23c1c00ed1ed38f5e4",
+      "executed": false
+    },
+    {
+      "path": "tests/product/runtime-config.test.ts",
+      "git_mode": "100644",
+      "source_blob_oid": "fbfb17fe97d6d4b06b93685b19a52ecc64f1f260",
+      "source_sha256": "6d81de980261087b2a11ea822c6716f25031a9f992313934afb1cf6b8f5913d3",
+      "target_sha256": "6d81de980261087b2a11ea822c6716f25031a9f992313934afb1cf6b8f5913d3",
+      "executed": false
+    },
+    {
+      "path": "tests/product/runtime-isolation.test.ts",
+      "git_mode": "100644",
+      "source_blob_oid": "0a0840b9e627d8e62a6b3f4bae259aac541ac8d2",
+      "source_sha256": "bcfe01f2b022e56caf5d2648625ad8dcd7fe03e7e7452208db8fc323e622e02b",
+      "target_sha256": "bcfe01f2b022e56caf5d2648625ad8dcd7fe03e7e7452208db8fc323e622e02b",
+      "executed": false
+    },
+    {
+      "path": "tests/product/setup.ts",
+      "git_mode": "100644",
+      "source_blob_oid": "fa69be5aa436d6f4b24185cc9ce786cff08699a7",
+      "source_sha256": "1d9d0239606d05312bd8a280eb49bb948852333d6c9c8a18359a949273959e8d",
+      "target_sha256": "1d9d0239606d05312bd8a280eb49bb948852333d6c9c8a18359a949273959e8d",
+      "executed": false
+    }
+  ]
+}

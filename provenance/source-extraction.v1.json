@@ -1,0 +1,529 @@
+{
+  "extraction_version": 1,
+  "reviewed_spec_sha": "832be81341f2c523fd42918206774ec8a51f54de653a323ad56d612e0ea47748",
+  "source_sha": "2971310441b69735cbe759293abd8c4d044bf347",
+  "target_commit": null,
+  "entries": [
+    {
+      "target_path": "README.md",
+      "git_mode": "100644",
+      "target_sha256": "ae9a62af323194c09124fa2023fd66420488f8f8788646938df65b30b4de8e4f",
+      "origin": {
+        "kind": "target-only"
+      }
+    },
+    {
+      "target_path": "npm-shrinkwrap.json",
+      "git_mode": "100644",
+      "target_sha256": "9ffc39fa013a67517d95399c80759a4fd359ce1ab1ccc5ee0e957504796ab296",
+      "origin": {
+        "kind": "relocated",
+        "source_path": "product/npm-shrinkwrap.json",
+        "source_blob_oid": "ddb57d51ccadcfdaaddeaf2ad993249aa11291b7"
+      }
+    },
+    {
+      "target_path": "package.json",
+      "git_mode": "100644",
+      "target_sha256": "e7dd03dfce75c3ae4053541bb813b17f228dc6e15cec32aa268d0adbf3320736",
+      "origin": {
+        "kind": "relocated",
+        "source_path": "product/package.template.json",
+        "source_blob_oid": "1300679f38eaa425732c0afd9f5f6b96854ee85c",
+        "transform": "add engines.npm = \"10.9.4\" (founder adjudication #3, review finding F3)"
+      }
+    },
+    {
+      "target_path": "product/source-boundary.v1.json",
+      "git_mode": "100644",
+      "target_sha256": "ec38f1fe752f456035c8b0232cda1864be3092dfd15c1294c9d5855834e259db",
+      "origin": {
+        "kind": "copied",
+        "source_path": "product/source-boundary.v1.json",
+        "source_blob_oid": "91cc641e26928132fa147b31f5868f18a4ce0401"
+      }
+    },
+    {
+      "target_path": "provenance/dependency-toolchain.v1.json",
+      "git_mode": "100644",
+      "target_sha256": "5990cfa19f036b7defebd6764052cb341b98ce46608d2c977aee2fef499d6ef2",
+      "origin": {
+        "kind": "target-only"
+      }
+    },
+    {
+      "target_path": "provenance/extraction-policy.v1.json",
+      "git_mode": "100644",
+      "target_sha256": "771a59ed73be2221ef10d1814beeb6d8d5cc06b937186407332f3cde67072945",
+      "origin": {
+        "kind": "target-only"
+      }
+    },
+    {
+      "target_path": "provenance/schemas/dependency-toolchain.v1.schema.json",
+      "git_mode": "100644",
+      "target_sha256": "46e4fc933e4850472c1dd1c210377ccd0ca828b2e8172c8fefaad988397a1998",
+      "origin": {
+        "kind": "target-only"
+      }
+    },
+    {
+      "target_path": "provenance/schemas/extraction-policy.v1.schema.json",
+      "git_mode": "100644",
+      "target_sha256": "dacf805e01206c5cff76544e48ecd877c2402536e56284e6431ee740ae88402e",
+      "origin": {
+        "kind": "target-only"
+      }
+    },
+    {
+      "target_path": "provenance/schemas/source-extraction.v1.schema.json",
+      "git_mode": "100644",
+      "target_sha256": "00fe64e247bd0bc449acb8757f0b41cb103ee7f268be43bbbd6edd3974b8a001",
+      "origin": {
+        "kind": "target-only"
+      }
+    },
+    {
+      "target_path": "provenance/schemas/source-plan.v1.schema.json",
+      "git_mode": "100644",
+      "target_sha256": "d6be39e282f875181abb29df8ae41c23bfe067d5bf77255eddbe64ae5a5afbbd",
+      "origin": {
+        "kind": "target-only"
+      }
+    },
+    {
+      "target_path": "provenance/schemas/test-parity.v1.schema.json",
+      "git_mode": "100644",
+      "target_sha256": "1102bfd467a28f71df8491cc9a4c993b3e8f6af603638e4ba98be92a0b5846fb",
+      "origin": {
+        "kind": "target-only"
+      }
+    },
+    {
+      "target_path": "provenance/source-plan.v1.json",
+      "git_mode": "100644",
+      "target_sha256": "3874b30f28955ff07850b9c841a35e76a1241cb82ba38191691335f9142840ab",
+      "origin": {
+        "kind": "target-only"
+      }
+    },
+    {
+      "target_path": "provenance/test-parity.v1.json",
+      "git_mode": "100644",
+      "target_sha256": "97be8b6a5a8e2a3bb1519a6198c219e09d7474ecbcd017227100cc2b57d491cc",
+      "origin": {
+        "kind": "target-only"
+      }
+    },
+    {
+      "target_path": "schemas/runtime-config.v1.schema.json",
+      "git_mode": "100644",
+      "target_sha256": "2af5b676bf79771a6e5b1e67d394d2e2bfdf994d3507870eebbdf0d942e93953",
+      "origin": {
+        "kind": "relocated",
+        "source_path": "schemas/product/runtime-config.v1.schema.json",
+        "source_blob_oid": "9e045732c3e17b6b9e360858c55fa5cf9a00472e"
+      }
+    },
+    {
+      "target_path": "src/capture/granola-source-policy.ts",
+      "git_mode": "100644",
+      "target_sha256": "a2d2ad902920f21ab52a41c3f895aa82efeab7488a5d4e6ffdfcb06e44ea1990",
+      "origin": {
+        "kind": "copied",
+        "source_path": "src/capture/granola-source-policy.ts",
+        "source_blob_oid": "8664706bde86785fad87f525a6cfbc6bafb9610b"
+      }
+    },
+    {
+      "target_path": "src/capture/pipeline-core.ts",
+      "git_mode": "100644",
+      "target_sha256": "796d4552723ad1c9e09efa6de9c01716ec2eac810056eb0e47eb306d94fdfa06",
+      "origin": {
+        "kind": "copied",
+        "source_path": "src/capture/pipeline-core.ts",
+        "source_blob_oid": "dfa2bb254be7924bcd4cd66ad1111095494fe577"
+      }
+    },
+    {
+      "target_path": "src/capture/surfaces/granola-poller.ts",
+      "git_mode": "100644",
+      "target_sha256": "7d1ac043256510cd194613d7aaedf59c6875cf9e93d126383b34bd4ec816f713",
+      "origin": {
+        "kind": "copied",
+        "source_path": "src/capture/surfaces/granola-poller.ts",
+        "source_blob_oid": "ffd7b15f0d4d1bc36f06d37ae344ae2e793343f3"
+      }
+    },
+    {
+      "target_path": "src/echo-home/adapters/atomic-write.ts",
+      "git_mode": "100644",
+      "target_sha256": "f0f8db5e3d80843cc50c82af8a88e55054c546e2343364009e6817903ce4b45e",
+      "origin": {
+        "kind": "copied",
+        "source_path": "src/echo-home/adapters/atomic-write.ts",
+        "source_blob_oid": "6f1d0dedc983a52ed6d328a26b0724e1b3cc2daa"
+      }
+    },
+    {
+      "target_path": "src/echo-home/state-paths.ts",
+      "git_mode": "100644",
+      "target_sha256": "d1c44e79d28e1d67de07ac7e349def697667d9b53a9472be7cadfaedf74bfd58",
+      "origin": {
+        "kind": "copied",
+        "source_path": "src/echo-home/state-paths.ts",
+        "source_blob_oid": "bcf30e93c9648868e6ff2c8271059797e9d44773"
+      }
+    },
+    {
+      "target_path": "src/enrich/granola-signals.ts",
+      "git_mode": "100644",
+      "target_sha256": "f67d1220ed8ad20e8d8d56a74e15fb28d81ee287c52cda90bbede8c6d01fd9d4",
+      "origin": {
+        "kind": "copied",
+        "source_path": "src/enrich/granola-signals.ts",
+        "source_blob_oid": "1dc78fbc0dc0f435e7d9131dece18107c4cdf2ae"
+      }
+    },
+    {
+      "target_path": "src/enrich/post-meeting-brief.ts",
+      "git_mode": "100644",
+      "target_sha256": "c96d1b820eabda063fdb0c470827a4fcf7df41009a16dd0c2927a9028a7dccf8",
+      "origin": {
+        "kind": "copied",
+        "source_path": "src/enrich/post-meeting-brief.ts",
+        "source_blob_oid": "dd296741c6c8fc0af761cd67d7ed8a45cf3ed049"
+      }
+    },
+    {
+      "target_path": "src/enrich/worker-heartbeat.ts",
+      "git_mode": "100644",
+      "target_sha256": "d83fbfa0db6dd3f358503ec306dea39dc40a3ecc9d5894812d14b1690a5b5014",
+      "origin": {
+        "kind": "copied",
+        "source_path": "src/enrich/worker-heartbeat.ts",
+        "source_blob_oid": "fe4adceb46d99704a138aaa1fed79fdef61be667"
+      }
+    },
+    {
+      "target_path": "src/guards.ts",
+      "git_mode": "100644",
+      "target_sha256": "e6099d1aced802ba6125946ad7555b1b2e3ae12d89ea0034decc323410a485be",
+      "origin": {
+        "kind": "copied",
+        "source_path": "src/guards.ts",
+        "source_blob_oid": "251a4bfface223c1401441115b55f4e9b9410699"
+      }
+    },
+    {
+      "target_path": "src/logging/index.ts",
+      "git_mode": "100644",
+      "target_sha256": "a6d36e7d58662ca032320d6ebdec1a2db574a7dafa4715855b2bdd2acc7e0367",
+      "origin": {
+        "kind": "copied",
+        "source_path": "src/logging/index.ts",
+        "source_blob_oid": "6570d49a44c72d6e23c4bf35d6c0cd1570e89b8f"
+      }
+    },
+    {
+      "target_path": "src/product/cli.ts",
+      "git_mode": "100644",
+      "target_sha256": "237654d882218cfe102b80c8eeb73b38f79f100ded0064a0e31be48bf66518f9",
+      "origin": {
+        "kind": "copied",
+        "source_path": "src/product/cli.ts",
+        "source_blob_oid": "5f9386140a714161540a8b97d57af78f6a43c34b"
+      }
+    },
+    {
+      "target_path": "src/product/config.ts",
+      "git_mode": "100644",
+      "target_sha256": "017d61f602b687f20333e1ecf311a83cb18c4aa069c03b6a817ead061d22e7d5",
+      "origin": {
+        "kind": "copied",
+        "source_path": "src/product/config.ts",
+        "source_blob_oid": "b1365e7902a8d4040e2ba0dc9ce240413d5fd266"
+      }
+    },
+    {
+      "target_path": "src/product/index.ts",
+      "git_mode": "100644",
+      "target_sha256": "c002f00eca55d6e8bfe7a942eb525f0a299c102bab112b2a7304aa36ac31415e",
+      "origin": {
+        "kind": "copied",
+        "source_path": "src/product/index.ts",
+        "source_blob_oid": "7c8d171d127e6b9fa7a61c7d359de2d01c5dd11f"
+      }
+    },
+    {
+      "target_path": "src/product/paths.ts",
+      "git_mode": "100644",
+      "target_sha256": "a6e36d95074975f104e558ba71478b263b07a2c09a364a0f18442cdd5f61961c",
+      "origin": {
+        "kind": "copied",
+        "source_path": "src/product/paths.ts",
+        "source_blob_oid": "3f765f979fee41e56a616f64217110113b2afc45"
+      }
+    },
+    {
+      "target_path": "src/product/runtime.ts",
+      "git_mode": "100644",
+      "target_sha256": "813bc16c1309c81886c7f6a3a197f2cabd4c1cda1ed2948ca21774ff80280950",
+      "origin": {
+        "kind": "copied",
+        "source_path": "src/product/runtime.ts",
+        "source_blob_oid": "3f034186f62377cbe8c9e7f6353736b239761e66"
+      }
+    },
+    {
+      "target_path": "src/product/spawn-sanitized-child.ts",
+      "git_mode": "100644",
+      "target_sha256": "29a0b9105fac2de573cd01e6c041b937580c66655af45dbb6ef4ec5c376c7055",
+      "origin": {
+        "kind": "copied",
+        "source_path": "src/product/spawn-sanitized-child.ts",
+        "source_blob_oid": "1d9990abc28c923644a0026a81569a2d4243de07"
+      }
+    },
+    {
+      "target_path": "src/storage/interface.ts",
+      "git_mode": "100644",
+      "target_sha256": "01d57b0742e2dd601de0de23abe4905b7cd1df82fd724fad394d35888af945f5",
+      "origin": {
+        "kind": "copied",
+        "source_path": "src/storage/interface.ts",
+        "source_blob_oid": "ba954577736841e47ef1dd27e050455ee097867b"
+      }
+    },
+    {
+      "target_path": "src/storage/migrate.ts",
+      "git_mode": "100644",
+      "target_sha256": "e21466f7fa56c5e872599110d16054bea229b3589d0dfa81d650e85c5ec5cf7c",
+      "origin": {
+        "kind": "copied",
+        "source_path": "src/storage/migrate.ts",
+        "source_blob_oid": "27c1e20dd5058ad524b7ce7661e7783d4119d896"
+      }
+    },
+    {
+      "target_path": "src/storage/source-match.ts",
+      "git_mode": "100644",
+      "target_sha256": "dc01582037e2e6bca906b223c273bd9687fb97965d1260ac85367ec5c9067069",
+      "origin": {
+        "kind": "copied",
+        "source_path": "src/storage/source-match.ts",
+        "source_blob_oid": "1f5c9228976bdc5a324934a0150e9ef672708b03"
+      }
+    },
+    {
+      "target_path": "src/storage/sqlite.ts",
+      "git_mode": "100644",
+      "target_sha256": "d5559dd1a092e26536790a7832d8ee4c64d957fd0fd343d19336f0fddbf60878",
+      "origin": {
+        "kind": "copied",
+        "source_path": "src/storage/sqlite.ts",
+        "source_blob_oid": "add66d86545ae96ecb2ba486a8e447dc29ffbbc0"
+      }
+    },
+    {
+      "target_path": "src/util/json.ts",
+      "git_mode": "100644",
+      "target_sha256": "e39d9255f557e388d352bd73933b05cc30082d19525720c099e0949fb2656751",
+      "origin": {
+        "kind": "copied",
+        "source_path": "src/util/json.ts",
+        "source_blob_oid": "d354247f42c1b49dcef26e54732c648224fcaa5f"
+      }
+    },
+    {
+      "target_path": "src/util/subject.ts",
+      "git_mode": "100644",
+      "target_sha256": "85d70f78278b7d27e949d7e9b898744432c18cd29b2bf88c44dc137a57fd6f7a",
+      "origin": {
+        "kind": "copied",
+        "source_path": "src/util/subject.ts",
+        "source_blob_oid": "ca9b8d08b3fb9c14da5464223ed58609c0cb8ae3"
+      }
+    },
+    {
+      "target_path": "src/util/timestamp.ts",
+      "git_mode": "100644",
+      "target_sha256": "c8e65b810e4ee5ab7b8b896e4ef15a1438d44bfa43c34b072cec170a58aca2ee",
+      "origin": {
+        "kind": "copied",
+        "source_path": "src/util/timestamp.ts",
+        "source_blob_oid": "cea84e51ef6357a44bf8efa1aa3562feffdd4f32"
+      }
+    },
+    {
+      "target_path": "tests/migration/dependency-set.test.ts",
+      "git_mode": "100644",
+      "target_sha256": "d562961c0e019dff8dce82a82475cca90566b25c00a22e60d0ce531943b68a71",
+      "origin": {
+        "kind": "target-only"
+      }
+    },
+    {
+      "target_path": "tests/migration/packaged-product.test.ts",
+      "git_mode": "100644",
+      "target_sha256": "740104ed61342dc2d924813c34fa0fe1c85bebd365c3a3b8f483923b23aab81d",
+      "origin": {
+        "kind": "target-only"
+      }
+    },
+    {
+      "target_path": "tests/migration/provenance.test.ts",
+      "git_mode": "100644",
+      "target_sha256": "866e8555b42b07ab263873b8c4e38594606e7e5de1c7f6d336dbbd7d60f02f60",
+      "origin": {
+        "kind": "target-only"
+      }
+    },
+    {
+      "target_path": "tests/migration/source-independence.test.ts",
+      "git_mode": "100644",
+      "target_sha256": "f5dc50eac20b16232c0113f4e41938ed36d7ec509111223b33492c9f71eda87e",
+      "origin": {
+        "kind": "target-only"
+      }
+    },
+    {
+      "target_path": "tests/product/build-once-contract.test.ts",
+      "git_mode": "100644",
+      "target_sha256": "9929bebe17ec72c441a20f57273ccc80f8331db5c5146363ea5befa6912c005d",
+      "origin": {
+        "kind": "copied",
+        "source_path": "tests/product/build-once-contract.test.ts",
+        "source_blob_oid": "08685583efc7d6008d32977d4486b6ec0068b456"
+      }
+    },
+    {
+      "target_path": "tests/product/end-to-end-synthetic.test.ts",
+      "git_mode": "100644",
+      "target_sha256": "f85afea798bbf7b127a2932a9fe804e46502d0cb5818d2371076e868e4af20c9",
+      "origin": {
+        "kind": "target-only"
+      }
+    },
+    {
+      "target_path": "tests/product/hermeticity.test.ts",
+      "git_mode": "100644",
+      "target_sha256": "bb97a1b14c07f7f5184ba2e2da39352c42bc999ec5f5405b101c14c6f935fe70",
+      "origin": {
+        "kind": "copied",
+        "source_path": "tests/product/hermeticity.test.ts",
+        "source_blob_oid": "cbc4862b249426862365e8da012c00123f709200"
+      }
+    },
+    {
+      "target_path": "tests/product/import-fence.test.ts",
+      "git_mode": "100644",
+      "target_sha256": "962cb83465678defc200a79c8b68909a63bf94b0c763ae18800db99524dbd35d",
+      "origin": {
+        "kind": "copied",
+        "source_path": "tests/product/import-fence.test.ts",
+        "source_blob_oid": "a48bbe0545c6d6d7c102bf3d1adb0fd1fa0ff080"
+      }
+    },
+    {
+      "target_path": "tests/product/packaged-product.test.ts",
+      "git_mode": "100644",
+      "target_sha256": "994e1589c59130f94b02eff188fa19e06e4b40266938c7da77f2f75f078bd9e7",
+      "origin": {
+        "kind": "copied",
+        "source_path": "tests/product/packaged-product.test.ts",
+        "source_blob_oid": "06bc58813719832a546cdd71937ce361863a81bd"
+      }
+    },
+    {
+      "target_path": "tests/product/qualification-report.test.ts",
+      "git_mode": "100644",
+      "target_sha256": "0f20530cf7cabcbb2a2b73724496bc5fc5092c4ed5d2fc23c1c00ed1ed38f5e4",
+      "origin": {
+        "kind": "copied",
+        "source_path": "tests/product/qualification-report.test.ts",
+        "source_blob_oid": "3fb52bd08e48a9c9cadd341e87f89cfa9531ca05"
+      }
+    },
+    {
+      "target_path": "tests/product/runtime-config.test.ts",
+      "git_mode": "100644",
+      "target_sha256": "6d81de980261087b2a11ea822c6716f25031a9f992313934afb1cf6b8f5913d3",
+      "origin": {
+        "kind": "copied",
+        "source_path": "tests/product/runtime-config.test.ts",
+        "source_blob_oid": "fbfb17fe97d6d4b06b93685b19a52ecc64f1f260"
+      }
+    },
+    {
+      "target_path": "tests/product/runtime-isolation.test.ts",
+      "git_mode": "100644",
+      "target_sha256": "bcfe01f2b022e56caf5d2648625ad8dcd7fe03e7e7452208db8fc323e622e02b",
+      "origin": {
+        "kind": "copied",
+        "source_path": "tests/product/runtime-isolation.test.ts",
+        "source_blob_oid": "0a0840b9e627d8e62a6b3f4bae259aac541ac8d2"
+      }
+    },
+    {
+      "target_path": "tests/product/setup.ts",
+      "git_mode": "100644",
+      "target_sha256": "1d9d0239606d05312bd8a280eb49bb948852333d6c9c8a18359a949273959e8d",
+      "origin": {
+        "kind": "copied",
+        "source_path": "tests/product/setup.ts",
+        "source_blob_oid": "fa69be5aa436d6f4b24185cc9ce786cff08699a7"
+      }
+    },
+    {
+      "target_path": "tools/audit-pinned-extraction.mjs",
+      "git_mode": "100644",
+      "target_sha256": "51689285ca8c226d92fc7334ef20aab1d9804b9466b6c87714497cfc3d127be3",
+      "origin": {
+        "kind": "target-only"
+      }
+    },
+    {
+      "target_path": "tools/check-boundary.mjs",
+      "git_mode": "100644",
+      "target_sha256": "ac8771b6742fa9c1c07861e7b28538e590d46e2df43949c95f20fecf86950c3c",
+      "origin": {
+        "kind": "target-only"
+      }
+    },
+    {
+      "target_path": "tools/check-dependencies.mjs",
+      "git_mode": "100644",
+      "target_sha256": "f38a76cc33377be4f789982ac009d5e62705d018b5a076af58d7e02d60f9a48a",
+      "origin": {
+        "kind": "target-only"
+      }
+    },
+    {
+      "target_path": "tools/check-provenance.mjs",
+      "git_mode": "100644",
+      "target_sha256": "9079d2f3fe2d62ebe579fef5db099f4c5b40266dd131dcfe8123cbaceb314734",
+      "origin": {
+        "kind": "target-only"
+      }
+    },
+    {
+      "target_path": "tools/product/toolchain-preflight.mjs",
+      "git_mode": "100644",
+      "target_sha256": "d22aa2ef5136f1652ee301ce961285229d47b7037e63b07f3b532202867c869c",
+      "origin": {
+        "kind": "copied",
+        "source_path": "tools/product/toolchain-preflight.mjs",
+        "source_blob_oid": "18bbe27391d394ae849df962aa050369ed83a682"
+      }
+    },
+    {
+      "target_path": "tools/verify-artifact.mjs",
+      "git_mode": "100644",
+      "target_sha256": "3ef643821f782033a6acdd67782040f9d7e047542eda6a68697efc78e0e446a9",
+      "origin": {
+        "kind": "target-only"
+      }
+    }
+  ]
+}
