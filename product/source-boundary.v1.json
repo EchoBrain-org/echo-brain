@@ -16,9 +16,6 @@
     "src/capture/granola-source-policy.ts",
     "src/capture/pipeline-core.ts",
     "src/capture/surfaces/granola-poller.ts",
-    "src/enrich/granola-signals.ts",
-    "src/enrich/post-meeting-brief.ts",
-    "src/enrich/worker-heartbeat.ts",
     "src/storage/interface.ts",
     "src/storage/sqlite.ts",
     "src/storage/core-state-sqlite.ts",
@@ -42,8 +39,7 @@
     "src/capture/surfaces/fs-watcher.ts",
     "src/capture/surfaces/git-watcher.ts",
     "src/surfaces/ceo-slack-responder/",
-    "src/enrich/granola-intake-candidates.ts",
-    "src/enrich/decision-drift.ts",
+    "src/enrich/",
     "src/cli/commands/orchestration.ts"
   ],
   "allowed_external_runtime_packages": [
