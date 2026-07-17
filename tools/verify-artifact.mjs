@@ -12,14 +12,11 @@
 // uid/gid=0, normalized modes, byte-sorted members, followed by zlib gzip (header
 // mtime forced to 0). npm's own `pack` mtime behavior is NOT relied upon.
 //
-// Schema staging note (AC3<->AC5 reconciliation): the runtime-config schema is
-// committed at schemas/runtime-config.v1.schema.json (AC5) but the byte-identical
-// src/product/config.ts loads it at runtime from ../../schemas/product/runtime-config.v1.schema.json.
-// This builder stages the committed schema into the tarball at schemas/product/
-// runtime-config.v1.schema.json so the unchangeable runtime loader resolves it.
+// Runtime assets are packaged at their canonical paths: the config schema at
+// schemas/runtime-config.v1.schema.json and SQLite migrations under dist/storage/.
 import { createHash } from 'node:crypto';
 import { spawnSync } from 'node:child_process';
-import { existsSync, mkdirSync, readFileSync, writeFileSync, readdirSync, statSync } from 'node:fs';
+import { cpSync, existsSync, mkdirSync, readFileSync, writeFileSync, readdirSync, statSync } from 'node:fs';
 import { join, relative } from 'node:path';
 import { gzipSync } from 'node:zlib';
 import process from 'node:process';
@@ -78,25 +75,13 @@ function compile(distDir) {
   if (!tsc) {
     throw new Error('no toolchain tsc available (set ECHO_TSC or provision node_modules per provenance/dependency-toolchain.v1.json)');
   }
-  // Compile the extracted src/ tree with the exact source compiler options (the source
-  // tsconfig is not part of the extraction closure, so the options are pinned here to
-  // preserve build fidelity). Only src/ is emitted to dist/.
-  const cfgPath = join(distDir, '..', 'tsconfig.build.json');
-  mkdirSync(join(distDir, '..'), { recursive: true });
-  writeFileSync(cfgPath, JSON.stringify({
-    compilerOptions: {
-      target: 'ES2022', module: 'NodeNext', moduleResolution: 'NodeNext',
-      esModuleInterop: true, strict: true, noImplicitAny: true,
-      noUnusedLocals: true, noUnusedParameters: true, skipLibCheck: true,
-      resolveJsonModule: true, isolatedModules: true, forceConsistentCasingInFileNames: true,
-      declaration: false, sourceMap: false, rootDir: join(REPO, 'src'), outDir: distDir,
-    },
-    include: [join(REPO, 'src/**/*')],
-  }, null, 2));
-  const r = spawnSync(tsc, ['-p', cfgPath], {
+  const r = spawnSync(tsc, ['-p', join(REPO, 'tsconfig.build.json'), '--outDir', distDir], {
     cwd: REPO, encoding: 'utf8', env: { ...process.env, SOURCE_DATE_EPOCH: String(SOURCE_DATE_EPOCH) },
   });
   if (r.status !== 0) throw new Error(`tsc failed: ${r.stdout}\n${r.stderr}`);
+  cpSync(join(REPO, 'src', 'storage', 'migrations'), join(distDir, 'storage', 'migrations'), {
+    recursive: true,
+  });
 }
 function collectDist(distDir) {
   const files = [];
@@ -114,10 +99,16 @@ function collectDist(distDir) {
 function main() {
   const args = parseArgs(process.argv.slice(2));
   if (existsSync(args.out)) { process.stderr.write(`--out must be absent: ${args.out}\n`); process.exit(2); }
+  const dirty = git('status', '--porcelain', '--untracked-files=all').toString().trim();
+  if (dirty !== '') {
+    process.stderr.write('refusing to build a release artifact from a dirty worktree\n');
+    process.exit(2);
+  }
   mkdirSync(args.out, { recursive: true });
   const head = git('rev-parse', 'HEAD').toString().trim();
   const treeOid = git('rev-parse', 'HEAD^{tree}').toString().trim();
   const lockHash = sha256(readFileSync(join(REPO, 'npm-shrinkwrap.json')));
+  const packageJson = JSON.parse(readFileSync(join(REPO, 'package.json'), 'utf8'));
 
   const distDir = join(args.out, 'dist');
   compile(distDir);
@@ -128,9 +119,12 @@ function main() {
   add('package.json', readFileSync(join(REPO, 'package.json')));
   add('npm-shrinkwrap.json', readFileSync(join(REPO, 'npm-shrinkwrap.json')));
   add('README.md', readFileSync(join(REPO, 'README.md')));
-  // AC3<->AC5 schema staging: committed at schemas/runtime-config..., staged at schemas/product/...
-  add('schemas/product/runtime-config.v1.schema.json', readFileSync(join(REPO, 'schemas/runtime-config.v1.schema.json')));
-  for (const { rel, full } of collectDist(distDir)) add(rel, readFileSync(full));
+  add('LICENSE', readFileSync(join(REPO, 'LICENSE')));
+  add('docs/architecture/core-and-adapters.md', readFileSync(join(REPO, 'docs/architecture/core-and-adapters.md')));
+  add('schemas/runtime-config.v1.schema.json', readFileSync(join(REPO, 'schemas/runtime-config.v1.schema.json')));
+  for (const { rel, full } of collectDist(distDir)) {
+    add(rel, readFileSync(full), rel === 'dist/product/cli.js' ? 0o755 : 0o644);
+  }
   members.sort((a, b) => a.name.localeCompare(b.name));
 
   const memberManifest = members.map((m) => ({
@@ -142,11 +136,13 @@ function main() {
   tgz.writeUInt32LE(0, 4);
 
   const tgzSha = sha256(tgz);
-  const tarPath = join(args.out, 'echo-brain-0.0.0-dev.0.tgz');
+  const tarPath = join(args.out, `${packageJson.name}-${packageJson.version}.tgz`);
   writeFileSync(tarPath, tgz);
   const identity = {
     run_id: args['run-id'],
-    source_sha: '2971310441b69735cbe759293abd8c4d044bf347',
+    source_sha: head,
+    extraction_source_sha: '2971310441b69735cbe759293abd8c4d044bf347',
+    version: packageJson.version,
     head_commit: head,
     head_tree: treeOid,
     lock_sha256: lockHash,

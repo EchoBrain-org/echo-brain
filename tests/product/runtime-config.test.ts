@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import {
   classifyMountTable,
   createStateFilesystemClassifier,
+  ProductConfigError,
   validateProductRuntimeConfig,
   type ProductRuntimeConfig,
 } from '../../src/product/config.js';
@@ -12,21 +13,37 @@ import { runProductCli } from '../../src/product/cli.js';
 
 const directories: string[] = [];
 
-function validConfig(overrides: Record<string, unknown> = {}): Record<string, unknown> {
+function validConfig(
+  overrides: Record<string, unknown> = {},
+): Record<string, unknown> {
   return {
     schema_version: 1,
     lane: 'team-product',
     state_dir: '/tmp/echo-brain/state',
-    granola: {
-      workspace_id: 'workspace-synthetic',
-      input: 'api',
-      credential_ref: 'env:GRANOLA_API_KEY',
+    meeting_sources: [
+      {
+        adapter_id: 'fixture-meetings',
+        instance_id: 'primary',
+        credential_ref: 'env:MEETING_SOURCE_KEY',
+        settings: { workspace: 'synthetic' },
+      },
+    ],
+    decision_processor: {
+      adapter_id: 'fixture-processor',
+      instance_id: 'primary',
+      credential_ref: 'env:DECISION_PROCESSOR_KEY',
+      settings: { model: 'synthetic' },
     },
-    brain_adapter: {
-      id: 'anthropic-api',
-      credential_ref: 'env:ANTHROPIC_API_KEY',
-    },
+    communication_channels: [
+      {
+        adapter_id: 'fixture-channel',
+        instance_id: 'team',
+        credential_ref: 'keychain:ECHO_CHANNEL_KEY',
+        settings: { destination: 'synthetic' },
+      },
+    ],
     approval_mode: 'manual',
+    cycle_interval_ms: 30_000,
     ...overrides,
   };
 }
@@ -40,29 +57,48 @@ function writeConfig(value: unknown): string {
 }
 
 afterEach(() => {
-  while (directories.length > 0) rmSync(directories.pop()!, { recursive: true, force: true });
+  while (directories.length > 0)
+    rmSync(directories.pop()!, { recursive: true, force: true });
 });
 
 describe('product runtime configuration', () => {
-  it('accepts the explicit Team-product lane and secret references', () => {
+  it('accepts tool-agnostic adapter descriptors and secret references', () => {
     expect(validateProductRuntimeConfig(validConfig())).toMatchObject({
       schema_version: 1,
       lane: 'team-product',
       approval_mode: 'manual',
-      granola: { input: 'api', credential_ref: 'env:GRANOLA_API_KEY' },
-      brain_adapter: { id: 'anthropic-api', credential_ref: 'env:ANTHROPIC_API_KEY' },
+      cycle_interval_ms: 30_000,
+      meeting_sources: [
+        {
+          adapter_id: 'fixture-meetings',
+          instance_id: 'primary',
+          credential_ref: 'env:MEETING_SOURCE_KEY',
+        },
+      ],
+      decision_processor: {
+        adapter_id: 'fixture-processor',
+        instance_id: 'primary',
+        credential_ref: 'env:DECISION_PROCESSOR_KEY',
+      },
+      communication_channels: [
+        {
+          adapter_id: 'fixture-channel',
+          instance_id: 'team',
+          credential_ref: 'keychain:ECHO_CHANNEL_KEY',
+        },
+      ],
     });
   });
 
   it.each([
     ['retired profile', { profile: 'customer' }],
     [
-      'inline Granola secret',
+      'inline adapter secret outside settings',
       {
-        granola: {
-          workspace_id: 'workspace-synthetic',
-          input: 'api',
-          credential_ref: 'env:GRANOLA_API_KEY',
+        decision_processor: {
+          adapter_id: 'fixture-processor',
+          instance_id: 'primary',
+          settings: {},
           api_key: 'secret-value',
         },
       },
@@ -70,27 +106,59 @@ describe('product runtime configuration', () => {
     ['relative state', { state_dir: 'relative/state' }],
     ['traversing state', { state_dir: '/tmp/echo/../shared' }],
     ['unknown field', { surprise: true }],
-    ['missing wedge dependency', { granola: undefined }],
+    ['no meeting source', { meeting_sources: [] }],
+    ['missing decision processor', { decision_processor: undefined }],
+    ['no communication channel', { communication_channels: [] }],
     ['wrong lane', { lane: 'dogfood' }],
     ['non-manual approval', { approval_mode: 'automatic' }],
+    ['too-frequent cycle', { cycle_interval_ms: 999 }],
   ])('rejects %s', (_name, overrides) => {
     const value = validConfig(overrides as Record<string, unknown>);
-    if ('granola' in overrides && overrides.granola === undefined) delete value.granola;
-    expect(() => validateProductRuntimeConfig(value)).toThrow(/invalid product runtime configuration/);
+    if (
+      'decision_processor' in overrides &&
+      overrides.decision_processor === undefined
+    ) {
+      delete value.decision_processor;
+    }
+    expect(() => validateProductRuntimeConfig(value)).toThrow(
+      /invalid product runtime configuration/,
+    );
+  });
+
+  it('rejects duplicate adapter instances within one capability', () => {
+    const duplicate = {
+      adapter_id: 'fixture-meetings',
+      instance_id: 'primary',
+      settings: {},
+    };
+    try {
+      validateProductRuntimeConfig(
+        validConfig({ meeting_sources: [duplicate, duplicate] }),
+      );
+      throw new Error('expected duplicate adapter instance to fail validation');
+    } catch (error) {
+      expect(error).toBeInstanceOf(ProductConfigError);
+      expect((error as ProductConfigError).issues).toContain(
+        "/meeting_sources contains duplicate adapter instance 'fixture-meetings/primary'",
+      );
+    }
   });
 
   it('fails invalid CLI config before the filesystem probe or any state side effect', async () => {
     const configPath = writeConfig(validConfig({ state_dir: 'relative' }));
     let probes = 0;
     let stderr = '';
-    const status = await runProductCli(['validate-config', '--config', configPath], {
-      classifyStateFilesystem: async () => {
-        probes += 1;
-        return { kind: 'local', raw: 'apfs' };
+    const status = await runProductCli(
+      ['validate-config', '--config', configPath],
+      {
+        classifyStateFilesystem: async () => {
+          probes += 1;
+          return { kind: 'local', raw: 'apfs' };
+        },
+        stdout: { write: () => true },
+        stderr: { write: (chunk) => ((stderr += String(chunk)), true) },
       },
-      stdout: { write: () => true },
-      stderr: { write: (chunk) => ((stderr += String(chunk)), true) },
-    });
+    );
     expect(status).toBe(2);
     expect(probes).toBe(0);
     expect(stderr).toContain('invalid product runtime configuration');
@@ -109,15 +177,35 @@ describe('product runtime configuration', () => {
       const report = JSON.parse(stdout) as {
         maturity: string;
         wedge_executed: boolean;
-        brain_adapter: { status: string };
+        adapters_loaded: boolean;
+        adapter_references: {
+          meeting_sources: Array<{ adapter_id: string; instance_id: string }>;
+          decision_processor: { adapter_id: string; instance_id: string };
+          communication_channels: Array<{
+            adapter_id: string;
+            instance_id: string;
+          }>;
+        };
       };
       expect(report.maturity).toBe('DEV');
       expect(report.wedge_executed).toBe(false);
-      if (command === 'selftest') expect(report.brain_adapter.status).toBe('pending');
+      expect(report.adapters_loaded).toBe(false);
+      expect(report.adapter_references).toEqual({
+        meeting_sources: [
+          { adapter_id: 'fixture-meetings', instance_id: 'primary' },
+        ],
+        decision_processor: {
+          adapter_id: 'fixture-processor',
+          instance_id: 'primary',
+        },
+        communication_channels: [
+          { adapter_id: 'fixture-channel', instance_id: 'team' },
+        ],
+      });
     }
   });
 
-  it('makes production run fail loudly on the unavailable rank-3 adapter before probing state', async () => {
+  it('makes production run report every unavailable adapter before probing state', async () => {
     const configPath = writeConfig(validConfig());
     let probes = 0;
     let stderr = '';
@@ -132,7 +220,9 @@ describe('product runtime configuration', () => {
     expect(status).toBe(1);
     expect(probes).toBe(0);
     expect(stderr).toContain('adapter_unavailable');
-    expect(stderr).toContain('anthropic-api');
+    expect(stderr).toContain('fixture-meetings');
+    expect(stderr).toContain('fixture-processor');
+    expect(stderr).toContain('fixture-channel');
   });
 });
 
@@ -146,7 +236,9 @@ describe('state filesystem classification', () => {
     ['hfs', 'local'],
     ['ext4', 'unknown'],
   ] as const)('normalizes exactly %s as %s', (type, kind) => {
-    expect(classifyMountTable('/target/state', `source on / (${type}, local)\n`)).toEqual({
+    expect(
+      classifyMountTable('/target/state', `source on / (${type}, local)\n`),
+    ).toEqual({
       kind,
       raw: type,
     });
@@ -170,10 +262,12 @@ describe('state filesystem classification', () => {
       kind: 'network',
       raw: 'nfs',
     });
-    expect(classifyMountTable('/Volumes/team/echo/state', nestedFirst)).toEqual({
-      kind: 'network',
-      raw: 'nfs',
-    });
+    expect(classifyMountTable('/Volumes/team/echo/state', nestedFirst)).toEqual(
+      {
+        kind: 'network',
+        raw: 'nfs',
+      },
+    );
   });
 
   it('does not treat string-prefix collisions as descendants', () => {
@@ -186,11 +280,16 @@ describe('state filesystem classification', () => {
   });
 
   it('fails closed for malformed, empty, unmatched, and equal-depth ambiguous tables', () => {
-    expect(classifyMountTable('/tmp/state', 'not mount output\n').kind).toBe('unknown');
-    expect(classifyMountTable('/tmp/state', '').kind).toBe('unknown');
-    expect(classifyMountTable('/tmp/state', 'source on /Volumes/else (apfs, local)\n').kind).toBe(
+    expect(classifyMountTable('/tmp/state', 'not mount output\n').kind).toBe(
       'unknown',
     );
+    expect(classifyMountTable('/tmp/state', '').kind).toBe('unknown');
+    expect(
+      classifyMountTable(
+        '/tmp/state',
+        'source on /Volumes/else (apfs, local)\n',
+      ).kind,
+    ).toBe('unknown');
     expect(
       classifyMountTable(
         '/Volumes/team/state',
@@ -213,7 +312,10 @@ describe('state filesystem classification', () => {
         stderr: '',
       }),
     });
-    expect(await classifier('/install/not-created/state')).toEqual({ kind: 'local', raw: 'apfs' });
+    expect(await classifier('/install/not-created/state')).toEqual({
+      kind: 'local',
+      raw: 'apfs',
+    });
     expect(seen).toEqual(['/install']);
 
     const failed = createStateFilesystemClassifier({
@@ -221,7 +323,10 @@ describe('state filesystem classification', () => {
       realpath: (path) => path,
       mountTable: async () => ({ ok: false, stdout: '', stderr: 'timed out' }),
     });
-    expect(await failed('/install')).toEqual({ kind: 'unknown', raw: 'timed out' });
+    expect(await failed('/install')).toEqual({
+      kind: 'unknown',
+      raw: 'timed out',
+    });
   });
 
   it('treats network and unknown probes as fail-closed in CLI commands', async () => {
@@ -230,11 +335,14 @@ describe('state filesystem classification', () => {
       { kind: 'network', raw: 'smbfs' },
       { kind: 'unknown', raw: 'probe failed' },
     ] as const) {
-      const status = await runProductCli(['validate-config', '--config', configPath], {
-        classifyStateFilesystem: async () => classification,
-        stdout: { write: () => true },
-        stderr: { write: () => true },
-      });
+      const status = await runProductCli(
+        ['validate-config', '--config', configPath],
+        {
+          classifyStateFilesystem: async () => classification,
+          stdout: { write: () => true },
+          stderr: { write: () => true },
+        },
+      );
       expect(status).toBe(1);
     }
   });

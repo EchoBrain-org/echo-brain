@@ -3,22 +3,35 @@ import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
-import { runProductCli, type ProductCliProcess } from '../../src/product/cli.js';
+import {
+  runProductCli,
+  type ProductCliProcess,
+} from '../../src/product/cli.js';
+import { ProductAdapterFactoryRegistry } from '../../src/product/adapter-factories.js';
 import { validateProductRuntimeConfig } from '../../src/product/config.js';
 import {
   startProductRuntime,
+  withRuntimeDeadline,
   type DeadlineRunner,
+  type ProductComponentHandle,
   type ProductComponentName,
   type ProductRuntimeComponent,
   type ProductRuntimeDependencies,
 } from '../../src/product/runtime.js';
-import type { GranolaSignalAdapter } from '../../src/enrich/granola-signals.js';
+import { prepareProductComposition } from '../../src/product/composition.js';
+import {
+  AdapterRegistry,
+  type CommunicationChannelAdapter,
+  type DecisionProcessorAdapter,
+  type MeetingSourceAdapter,
+} from '../../src/core/index.js';
 
 const COMPONENTS: readonly ProductComponentName[] = [
   'product-state',
-  'granola-meeting-input',
-  'signal-extraction',
-  'manual-brief-approval',
+  'meeting-ingestion',
+  'decision-processing',
+  'manual-approval',
+  'communication-delivery',
   'product-health',
 ];
 const directories: string[] = [];
@@ -28,38 +41,43 @@ function config() {
     schema_version: 1,
     lane: 'team-product',
     state_dir: '/tmp/echo-product-runtime/state',
-    granola: {
-      workspace_id: 'workspace-synthetic',
-      input: 'api',
-      credential_ref: 'env:GRANOLA_API_KEY',
+    meeting_sources: [
+      {
+        adapter_id: 'fixture-meetings',
+        instance_id: 'primary',
+        credential_ref: 'env:MEETING_SOURCE_KEY',
+        settings: {},
+      },
+    ],
+    decision_processor: {
+      adapter_id: 'fixture-processor',
+      instance_id: 'primary',
+      credential_ref: 'env:DECISION_PROCESSOR_KEY',
+      settings: {},
     },
-    brain_adapter: {
-      id: 'fixture-memory',
-      credential_ref: 'env:FIXTURE_BRAIN_KEY',
-    },
+    communication_channels: [
+      {
+        adapter_id: 'fixture-channel',
+        instance_id: 'team',
+        credential_ref: 'keychain:COMMUNICATION_CHANNEL_KEY',
+        settings: {},
+      },
+    ],
     approval_mode: 'manual',
   });
-}
-
-function adapter(extractCalls: string[] = []): GranolaSignalAdapter {
-  return {
-    id: 'fixture-memory',
-    preflight: async () => {},
-    extract: async (input) => {
-      extractCalls.push(input.note_id);
-      return [];
-    },
-  };
 }
 
 function components(
   starts: string[],
   stops: string[],
-  overrides: Partial<Record<ProductComponentName, ProductRuntimeComponent['start']>> = {},
+  overrides: Partial<
+    Record<ProductComponentName, ProductRuntimeComponent['start']>
+  > = {},
 ): ProductRuntimeComponent[] {
   return COMPONENTS.map((name) => ({
     name,
-    start: overrides[name] ??
+    start:
+      overrides[name] ??
       (async () => {
         starts.push(name);
         return { stop: async () => void stops.push(name) };
@@ -67,78 +85,212 @@ function components(
   }));
 }
 
+interface RegisteredFixtures {
+  registry: AdapterRegistry;
+  meetingSource: MeetingSourceAdapter;
+  decisionProcessor: DecisionProcessorAdapter;
+  communicationChannel: CommunicationChannelAdapter;
+}
+
+function registeredFixtures(): RegisteredFixtures {
+  const registry = new AdapterRegistry();
+  const validateConfig = () => ({ ok: true, errors: [] });
+  const healthCheck = async () => ({
+    status: 'healthy' as const,
+    checked_at: '2026-07-16T00:00:00.000Z',
+  });
+  const meetingSource: MeetingSourceAdapter = {
+    identity: {
+      kind: 'meeting-source',
+      adapter_id: 'fixture-meetings',
+      instance_id: 'primary',
+      version: '1.0.0',
+    },
+    validateConfig,
+    healthCheck,
+    pull: async () => ({ meetings: [] }),
+  };
+  const decisionProcessor: DecisionProcessorAdapter = {
+    identity: {
+      kind: 'decision-processor',
+      adapter_id: 'fixture-processor',
+      instance_id: 'primary',
+      version: '1.0.0',
+    },
+    validateConfig,
+    healthCheck,
+    extract: async (meeting) => ({
+      schema_version: 1,
+      meeting_id: meeting.id,
+      meeting_revision: meeting.provenance.canonical_revision,
+      processor: decisionProcessor.identity,
+      generated_at: '2026-07-16T00:00:00.000Z',
+      signals: [],
+    }),
+  };
+  const communicationChannel: CommunicationChannelAdapter = {
+    identity: {
+      kind: 'communication-channel',
+      adapter_id: 'fixture-channel',
+      instance_id: 'team',
+      version: '1.0.0',
+    },
+    destination: {
+      adapter_id: 'fixture-channel',
+      instance_id: 'team',
+      external_id: 'synthetic-team',
+    },
+    validateConfig,
+    healthCheck,
+    publish: async (envelope) => ({
+      schema_version: 1,
+      envelope_id: envelope.id,
+      status: 'delivered',
+      external_id: 'synthetic-message',
+      recorded_at: '2026-07-16T00:00:00.000Z',
+      retryable: false,
+    }),
+  };
+  registry.register(meetingSource);
+  registry.register(decisionProcessor);
+  registry.register(communicationChannel);
+  return { registry, meetingSource, decisionProcessor, communicationChannel };
+}
+
 function dependencies(
   runtimeComponents: readonly ProductRuntimeComponent[],
   extra: Partial<ProductRuntimeDependencies> = {},
 ): ProductRuntimeDependencies {
+  const { registry } = registeredFixtures();
   return {
     classifyStateFilesystem: async () => ({ kind: 'local', raw: 'apfs' }),
-    brainAdapters: { 'fixture-memory': adapter() },
+    adapterRegistry: registry,
     components: runtimeComponents,
     ...extra,
   };
 }
 
-function configFile(): string {
+function fixtureFactories(
+  fixtures: RegisteredFixtures,
+): ProductAdapterFactoryRegistry {
+  const factories = new ProductAdapterFactoryRegistry();
+  factories.register({
+    kind: 'meeting-source',
+    adapter_id: fixtures.meetingSource.identity.adapter_id,
+    create: () => fixtures.meetingSource,
+  });
+  factories.register({
+    kind: 'decision-processor',
+    adapter_id: fixtures.decisionProcessor.identity.adapter_id,
+    create: () => fixtures.decisionProcessor,
+  });
+  factories.register({
+    kind: 'communication-channel',
+    adapter_id: fixtures.communicationChannel.identity.adapter_id,
+    create: () => fixtures.communicationChannel,
+  });
+  return factories;
+}
+
+function configFile(value: ReturnType<typeof config> = config()): string {
   const directory = mkdtempSync(join(tmpdir(), 'echo-product-runtime-cli-'));
   directories.push(directory);
   const path = join(directory, 'config.json');
-  writeFileSync(path, `${JSON.stringify(config(), null, 2)}\n`);
+  writeFileSync(path, `${JSON.stringify(value, null, 2)}\n`);
   return path;
 }
 
 afterEach(() => {
-  while (directories.length > 0) rmSync(directories.pop()!, { recursive: true, force: true });
+  while (directories.length > 0)
+    rmSync(directories.pop()!, { recursive: true, force: true });
 });
 
 describe('isolated product runtime', () => {
-  it('starts exactly the five wedge components in order with installation-local paths', async () => {
+  it('keeps the runtime deadline alive for a never-settling operation', async () => {
+    await expect(
+      withRuntimeDeadline(
+        new Promise<never>(() => {}),
+        5,
+        'never-settling operation',
+      ),
+    ).rejects.toThrow('never-settling operation timed out after 5ms');
+  });
+
+  it('keeps adapter health deadlines alive for never-settling checks', async () => {
+    const directory = mkdtempSync(join(tmpdir(), 'echo-health-deadline-'));
+    directories.push(directory);
+    const fixtures = registeredFixtures();
+    fixtures.meetingSource.healthCheck = () => new Promise(() => {});
+
+    await expect(
+      prepareProductComposition(
+        { ...config(), state_dir: join(directory, 'state') },
+        fixtures.registry,
+        {
+          classifyStateFilesystem: async () => ({
+            kind: 'local',
+            raw: 'apfs',
+          }),
+          healthTimeoutMs: 5,
+        },
+      ),
+    ).rejects.toMatchObject({
+      code: 'adapter_unavailable',
+      details: [
+        expect.stringContaining('health check timed out after 5ms'),
+      ],
+    });
+  });
+
+  it('starts exactly the six generic components in order with typed registered adapters', async () => {
     const starts: string[] = [];
     const stops: string[] = [];
-    const extractCalls: string[] = [];
+    const fixtures = registeredFixtures();
     const runtimeComponents = components(starts, stops, {
       'product-state': async (context) => {
         starts.push('product-state');
-        expect(Object.values(context.paths).every((path) => path.startsWith(config().state_dir))).toBe(
-          true,
+        expect(
+          Object.values(context.paths).every((path) =>
+            path.startsWith(config().state_dir),
+          ),
+        ).toBe(true);
+        expect(JSON.stringify(context.paths)).not.toMatch(
+          /MEETING_SOURCE_KEY|PROCESSOR_KEY|CHANNEL_KEY/,
         );
-        expect(JSON.stringify(context.paths)).not.toMatch(/GRANOLA|ANTHROPIC|FIXTURE_BRAIN_KEY/);
         return { stop: async () => void stops.push('product-state') };
       },
-      'signal-extraction': async (context) => {
-        starts.push('signal-extraction');
-        await context.adapter.extract(
-          {
-            note_id: 'synthetic-note',
-            meeting_title: 'Synthetic meeting',
-            updated_at: '2026-07-13T00:00:00.000Z',
-            summary_text: 'Synthetic summary',
-            summary_dedupe_key: 'summary',
-            transcript_text: 'Synthetic transcript',
-            transcript_dedupe_key: 'transcript',
-            transcript_items: [],
-          },
-          { extractor_version: 'fixture' },
+      'decision-processing': async (context) => {
+        starts.push('decision-processing');
+        expect(context.adapters.meetingSources).toEqual([
+          fixtures.meetingSource,
+        ]);
+        expect(context.adapters.decisionProcessor).toBe(
+          fixtures.decisionProcessor,
         );
-        return { stop: async () => void stops.push('signal-extraction') };
+        expect(context.adapters.communicationChannels).toEqual([
+          fixtures.communicationChannel,
+        ]);
+        return { stop: async () => void stops.push('decision-processing') };
       },
     });
     const result = await startProductRuntime(
       config(),
-      dependencies(runtimeComponents, { brainAdapters: { 'fixture-memory': adapter(extractCalls) } }),
+      dependencies(runtimeComponents, { adapterRegistry: fixtures.registry }),
     );
     expect(result.ok).toBe(true);
     if (!result.ok) throw result.error;
     expect(starts).toEqual(COMPONENTS);
-    expect(extractCalls).toEqual(['synthetic-note']);
-    expect(result.handle.paths).toMatchObject({
-      database: '/tmp/echo-product-runtime/state/echo-brain.sqlite',
-      pollCheckpoint: '/tmp/echo-product-runtime/state/checkpoints/granola.json',
-      signalCheckpoint: '/tmp/echo-product-runtime/state/checkpoints/granola-signals.json',
-      briefs: '/tmp/echo-product-runtime/state/briefs',
-      heartbeat: '/tmp/echo-product-runtime/state/health/granola-signals.json',
+    expect(result.handle.paths.database).toBe(
+      '/tmp/echo-product-runtime/state/echo-brain.sqlite',
+    );
+    expect(result.handle.paths.briefs).toBe(
+      '/tmp/echo-product-runtime/state/briefs',
+    );
+    expect(await result.handle.shutdown()).toEqual({
+      ok: true,
+      errors: [],
+      remaining: [],
     });
-    expect(await result.handle.shutdown()).toEqual({ ok: true, errors: [], remaining: [] });
     expect(stops).toEqual([...COMPONENTS].reverse());
   });
 
@@ -150,10 +302,60 @@ describe('isolated product runtime', () => {
         probes += 1;
         return { kind: 'local', raw: 'apfs' };
       },
-      brainAdapters: {},
+      adapterRegistry: new AdapterRegistry(),
       components: components(starts, []),
     });
-    expect(result).toMatchObject({ ok: false, error: { code: 'adapter_unavailable' } });
+    expect(result).toMatchObject({
+      ok: false,
+      error: { code: 'adapter_unavailable' },
+    });
+    if (result.ok) throw new Error('expected failure');
+    expect(result.error.details).toEqual([
+      "meeting-source adapter 'fixture-meetings' instance 'primary' is unavailable",
+      "decision-processor adapter 'fixture-processor' instance 'primary' is unavailable",
+      "communication-channel adapter 'fixture-channel' instance 'team' is unavailable",
+    ]);
+    expect(probes).toBe(0);
+    expect(starts).toEqual([]);
+  });
+
+  it('aggregates adapter-owned config errors before filesystem or component side effects', async () => {
+    const fixtures = registeredFixtures();
+    fixtures.meetingSource.validateConfig = () => ({
+      ok: false,
+      errors: ['workspace setting is required'],
+    });
+    fixtures.decisionProcessor.validateConfig = () => ({
+      ok: false,
+      errors: ['model setting is unsupported'],
+    });
+    fixtures.communicationChannel.validateConfig = () => ({
+      ok: false,
+      errors: [],
+    });
+    let probes = 0;
+    const starts: string[] = [];
+    const result = await startProductRuntime(config(), {
+      classifyStateFilesystem: async () => {
+        probes += 1;
+        return { kind: 'local', raw: 'apfs' };
+      },
+      adapterRegistry: fixtures.registry,
+      components: components(starts, []),
+    });
+    expect(result).toMatchObject({
+      ok: false,
+      error: { code: 'adapter_invalid_config' },
+    });
+    if (result.ok) throw new Error('expected failure');
+    expect(result.error.details).toEqual([
+      "meeting-source adapter 'fixture-meetings' instance 'primary': workspace setting is required",
+      "decision-processor adapter 'fixture-processor' instance 'primary': model setting is unsupported",
+      "communication-channel adapter 'fixture-channel' instance 'team': configuration is invalid",
+    ]);
+    expect(JSON.stringify(result.error)).not.toMatch(
+      /MEETING_SOURCE_KEY|DECISION_PROCESSOR_KEY|COMMUNICATION_CHANNEL_KEY/,
+    );
     expect(probes).toBe(0);
     expect(starts).toEqual([]);
   });
@@ -175,7 +377,10 @@ describe('isolated product runtime', () => {
           }),
         ),
       );
-      expect(result).toMatchObject({ ok: false, error: { code: 'startup_failed' } });
+      expect(result).toMatchObject({
+        ok: false,
+        error: { code: 'startup_failed' },
+      });
       expect(starts).toEqual(COMPONENTS.slice(0, failureIndex + 1));
       expect(stops).toEqual([...COMPONENTS.slice(0, failureIndex)].reverse());
     },
@@ -185,31 +390,84 @@ describe('isolated product runtime', () => {
     const starts: string[] = [];
     const stops: string[] = [];
     const deadline: DeadlineRunner = async (operation, _timeout, label) => {
-      if (label === 'signal-extraction start') throw new Error('signal-extraction start timed out');
-      if (label === 'granola-meeting-input rollback') throw new Error('meeting rollback failed');
+      if (label === 'decision-processing start')
+        throw new Error('decision-processing start timed out');
+      if (label === 'meeting-ingestion rollback')
+        throw new Error('meeting rollback failed');
       return await operation;
     };
     const result = await startProductRuntime(
       config(),
       dependencies(
         components(starts, stops, {
-          'signal-extraction': () => new Promise(() => {}),
+          'decision-processing': () => new Promise(() => {}),
         }),
         { withDeadline: deadline },
       ),
     );
     expect(result.ok).toBe(false);
     if (result.ok) throw new Error('expected failure');
-    expect(result.error.details).toContain('signal-extraction start timed out');
+    expect(result.error.details).toContain(
+      'decision-processing start timed out',
+    );
     expect(result.error.details).toContain('meeting rollback failed');
     expect(stops).toContain('product-state');
+  });
+
+  it('cancels startup after the overall deadline and cleans up a late handle once', async () => {
+    const starts: string[] = [];
+    const stops: string[] = [];
+    let resolveLate!: (handle: ProductComponentHandle) => void;
+    const lateStart = new Promise<ProductComponentHandle>((resolve) => {
+      resolveLate = resolve;
+    });
+
+    const result = await startProductRuntime(
+      config(),
+      dependencies(
+        components(starts, stops, {
+          'meeting-ingestion': () => {
+            starts.push('meeting-ingestion');
+            return lateStart;
+          },
+        }),
+        {
+          deadlines: {
+            componentStartMs: 1_000,
+            overallStartMs: 5,
+            shutdownMs: 1_000,
+          },
+        },
+      ),
+    );
+
+    expect(result).toMatchObject({
+      ok: false,
+      error: {
+        code: 'startup_failed',
+        details: ['product runtime startup timed out after 5ms'],
+      },
+    });
+    expect(starts).toEqual(['product-state', 'meeting-ingestion']);
+    expect(stops).toEqual(['product-state']);
+
+    resolveLate({
+      stop: () => void stops.push('meeting-ingestion'),
+    });
+    for (let attempt = 0; attempt < 20 && stops.length < 2; attempt += 1) {
+      await new Promise(setImmediate);
+    }
+
+    expect(starts).toEqual(['product-state', 'meeting-ingestion']);
+    expect(stops).toEqual(['product-state', 'meeting-ingestion']);
   });
 
   it('makes shutdown idempotent, bounded, and explicit about remaining handles', async () => {
     const starts: string[] = [];
     const stops: string[] = [];
     const deadline: DeadlineRunner = async (operation, _timeout, label) => {
-      if (label === 'granola-meeting-input shutdown') throw new Error('meeting shutdown timed out');
+      if (label === 'meeting-ingestion shutdown')
+        throw new Error('meeting shutdown timed out');
       return await operation;
     };
     const result = await startProductRuntime(
@@ -223,7 +481,7 @@ describe('isolated product runtime', () => {
     expect(await first).toEqual({
       ok: false,
       errors: ['meeting shutdown timed out'],
-      remaining: ['granola-meeting-input'],
+      remaining: ['meeting-ingestion'],
     });
     expect(stops.filter((name) => name === 'product-state')).toHaveLength(1);
   });
@@ -235,11 +493,20 @@ describe('isolated product runtime', () => {
       baseline.slice(1),
       [...baseline, baseline[0]!],
       [...baseline].reverse(),
-      [...baseline, { name: 'remote-delivery' as ProductComponentName, start: async () => ({ stop() {} }) }],
+      [
+        ...baseline,
+        {
+          name: 'remote-delivery' as ProductComponentName,
+          start: async () => ({ stop() {} }),
+        },
+      ],
     ];
     for (const variant of variants) {
       const result = await startProductRuntime(config(), dependencies(variant));
-      expect(result).toMatchObject({ ok: false, error: { code: 'invalid_dependencies' } });
+      expect(result).toMatchObject({
+        ok: false,
+        error: { code: 'invalid_dependencies' },
+      });
     }
     expect(starts).toEqual([]);
   });
@@ -256,27 +523,156 @@ describe('isolated product runtime', () => {
           classifyStateFilesystem: async () => classification,
         }),
       );
-      expect(result).toMatchObject({ ok: false, error: { code: 'state_not_local' } });
+      expect(result).toMatchObject({
+        ok: false,
+        error: { code: 'state_not_local' },
+      });
       expect(starts).toEqual([]);
     }
   });
 
-  it('routes SIGTERM through bounded shutdown and returns a nonzero command result', async () => {
+  it('captures SIGTERM during injected runtime startup and shuts down cleanly', async () => {
     const starts: string[] = [];
     const stops: string[] = [];
     const emitter = new EventEmitter();
     const processLike = emitter as ProductCliProcess;
+    let releaseStart: () => void = () => undefined;
+    const startGate = new Promise<void>((resolve) => {
+      releaseStart = resolve;
+    });
     const execution = runProductCli(['run', '--config', configFile()], {
       classifyStateFilesystem: async () => ({ kind: 'local', raw: 'apfs' }),
-      runtime: dependencies(components(starts, stops)),
+      runtime: dependencies(
+        components(starts, stops, {
+          'product-state': async () => {
+            starts.push('product-state');
+            await startGate;
+            return {
+              stop: async () => void stops.push('product-state'),
+            };
+          },
+        }),
+      ),
       process: processLike,
       stdout: { write: () => true },
       stderr: { write: () => true },
     });
-    while (emitter.listenerCount('SIGTERM') === 0) await new Promise(setImmediate);
+    while (starts.length === 0)
+      await new Promise(setImmediate);
+    expect(emitter.listenerCount('SIGTERM')).toBe(1);
     emitter.emit('SIGTERM');
-    expect(await execution).toBe(1);
+    releaseStart();
+    expect(await execution).toBe(0);
     expect(starts).toEqual(COMPONENTS);
     expect(stops).toEqual([...COMPONENTS].reverse());
+    expect(emitter.listenerCount('SIGINT')).toBe(0);
+    expect(emitter.listenerCount('SIGTERM')).toBe(0);
+  });
+
+  it('does not run a cycle when SIGINT arrives during composition health setup', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'echo-product-signal-'));
+    directories.push(root);
+    const configured = validateProductRuntimeConfig({
+      ...config(),
+      state_dir: join(root, 'state'),
+    });
+    const fixtures = registeredFixtures();
+    let healthStarted = false;
+    let releaseHealth: () => void = () => undefined;
+    const healthGate = new Promise<void>((resolve) => {
+      releaseHealth = resolve;
+    });
+    fixtures.meetingSource.healthCheck = async () => {
+      healthStarted = true;
+      await healthGate;
+      return {
+        status: 'healthy',
+        checked_at: '2026-07-16T00:00:00.000Z',
+      };
+    };
+    let pulls = 0;
+    fixtures.meetingSource.pull = async () => {
+      pulls += 1;
+      return { meetings: [] };
+    };
+    const emitter = new EventEmitter();
+    let stdout = '';
+    const execution = runProductCli(
+      ['run', '--config', configFile(configured)],
+      {
+        classifyStateFilesystem: async () => ({
+          kind: 'local',
+          raw: 'apfs',
+        }),
+        adapterFactories: fixtureFactories(fixtures),
+        process: emitter as ProductCliProcess,
+        stdout: { write: (chunk) => ((stdout += String(chunk)), true) },
+        stderr: { write: () => true },
+      },
+    );
+    while (!healthStarted) await new Promise(setImmediate);
+    expect(emitter.listenerCount('SIGINT')).toBe(1);
+    emitter.emit('SIGINT');
+    releaseHealth();
+
+    expect(await execution).toBe(0);
+    expect(pulls).toBe(0);
+    expect(JSON.parse(stdout)).toMatchObject({
+      ok: true,
+      signal: 'SIGINT',
+      shutdown: { ok: true },
+    });
+    expect(emitter.listenerCount('SIGINT')).toBe(0);
+    expect(emitter.listenerCount('SIGTERM')).toBe(0);
+  });
+
+  it('removes signal handlers when composition setup fails', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'echo-product-signal-error-'));
+    directories.push(root);
+    const configured = validateProductRuntimeConfig({
+      ...config(),
+      state_dir: join(root, 'state'),
+    });
+    const fixtures = registeredFixtures();
+    fixtures.meetingSource.healthCheck = async () => {
+      throw new Error('health setup failed');
+    };
+    const emitter = new EventEmitter();
+
+    expect(
+      await runProductCli(['run', '--config', configFile(configured)], {
+        classifyStateFilesystem: async () => ({
+          kind: 'local',
+          raw: 'apfs',
+        }),
+        adapterFactories: fixtureFactories(fixtures),
+        process: emitter as ProductCliProcess,
+        stdout: { write: () => true },
+        stderr: { write: () => true },
+      }),
+    ).toBe(1);
+    expect(emitter.listenerCount('SIGINT')).toBe(0);
+    expect(emitter.listenerCount('SIGTERM')).toBe(0);
+  });
+
+  it('removes signal handlers when injected runtime startup fails', async () => {
+    const emitter = new EventEmitter();
+    const execution = runProductCli(['run', '--config', configFile()], {
+      classifyStateFilesystem: async () => ({ kind: 'local', raw: 'apfs' }),
+      runtime: dependencies(
+        components([], [], {
+          'product-state': async () => {
+            throw new Error('startup failed');
+          },
+        }),
+      ),
+      process: emitter as ProductCliProcess,
+      stdout: { write: () => true },
+      stderr: { write: () => true },
+    });
+
+    expect(await execution).toBe(1);
+    expect(emitter.listenerCount('SIGINT')).toBe(0);
+    expect(emitter.listenerCount('SIGTERM')).toBe(0);
   });
 });

@@ -1,70 +1,230 @@
-# echo-brain (local DEV extraction candidate)
+# echo-brain
 
-`echo-brain` is the standalone, client-local **meeting-to-brief** product boundary for
-ECHO's Team decision wedge. This repository was materialized by an attended, one-time
-source extraction from a pinned commit of the `Project_echo` monorepo. It is a local
-DEV candidate only.
+`echo-brain` is ECHO's standalone, tool-agnostic connection layer for turning
+meeting material into reviewed decisions and delivering those decisions to the
+places where a team works. Meeting tools, decision-processing providers, and
+communication tools are adapters around a stable core; no vendor defines the
+core product model.
 
-- `authority: false` — `Project_echo` remains the source, backup, and active authority.
-- `maturity: DEV` — a successful build, install, or offline selftest does **not** advance
-  the candidate beyond DEV and does **not** prove that a real meeting ran.
-- Source SHA: `2971310441b69735cbe759293abd8c4d044bf347`
-- Extraction item: `2026-07-13-133-local-echo-brain-source-extraction`
+```text
+meeting-source adapter(s)
+        -> canonical meeting documents
+        -> decision-processing core
+        -> canonical decisions, actions, and briefs
+        -> manual approval
+        -> communication-channel adapter(s)
+        -> delivery receipts
+```
 
-## What this repository is
+The repository contains canonical contracts, an adapter/factory registry,
+durable SQLite core state, a resumable manual-approval queue, processing and
+brief-building primitives, and a composed CLI without importing Project
+ECHO's daemon, MCP, Machine capture, or Fleet orchestration.
 
-Every production TypeScript module, the product boundary (`product/source-boundary.v1.json`),
-and the eight pinned `tests/product` files were copied **byte-for-byte** from the pinned
-`Project_echo` commit through a sanitized Git object envelope. `product/npm-shrinkwrap.json` and
-the runtime-config schema were relocated without content change. `product/package.template.json`
-was relocated to `package.json` with exactly one founder-adjudicated transform — the npm `10.9.4`
-engine pin (the sole entry in `provenance/extraction-policy.v1.json`'s `transform_allowlist`,
-verified semantically by the operator audit). The `provenance/` tree records deterministic
-file-level provenance for every tracked blob; the `tools/check-*.mjs` verifiers re-check that
-provenance, the product boundary, and the
-dependency partition locally.
+This repository is now self-building and installable as a local DEV package. It
+is not yet the authoritative live product:
 
-The eight pinned `tests/product` files are preserved as **byte-parity evidence** and are
-inventoried in `provenance/test-parity.v1.json`. They exercise the item-132 in-repo
-qualification tooling (`tools/product/*.mjs`, CI workflows) via runtime path construction and
-are **not** part of this repository's executed suite. The executed suite is
-`tests/migration/**` plus `tests/product/end-to-end-synthetic.test.ts`.
+- maturity: `DEV`
+- authority: `false`
+- production adapter composition: implemented
+- bundled semantic/model processor and team-channel adapters: pending
+- real meeting / FOUNDER LIVE evidence: pending
+- registry publication: disabled (`private: true`)
 
-## Standalone identity, not byte relocation
+## Requirements
 
-`README.md` is an explicitly authored target-only file so it can state standalone identity
-without pretending byte relocation from any source README.
+- macOS
+- Node `22.22.1`
+- npm `10.9.4`
+- Xcode command-line tools when `better-sqlite3` must build from source
 
-## Local DEV commands
+The original phase-one qualification target is macOS arm64. A successful build
+on another architecture is development evidence, not phase-one qualification.
 
-The runtime dependency tree (`ajv`, `better-sqlite3`) is pinned by the committed
-`npm-shrinkwrap.json`. `package.json` pins Node 22.22.1 and npm 10.9.4 in `engines`.
+## Build and verify from a clean checkout
 
-The build/test/lint toolchain is **not** a runtime dependency and is **not committed to this
-repository**. It is provisioned out-of-band with recorded registry integrity digests in
-`provenance/dependency-toolchain.v1.json`: TypeScript and the `@types/*` build inputs
-(`javascript_clis` + `build_inputs`) for the `verify-artifact` compile, the Vitest runner, and
-ESLint for the lint gate. The lint gate runs ESLint via an explicit `--config` against a scratch
-flat config that is **not** committed here; the config's exact bytes and SHA-256 are recorded in
-the Project_echo migration record (`raw/internal/migrations/2026-07-13-133-echo-brain.md`), and
-its digest is named in `provenance/dependency-toolchain.v1.json` under `lint`. There is no
-committed linter or lint configuration in this repository. All verification runs offline under a
-network-denial sandbox with the pinned Node 22.22.1 / npm 10.9.4 toolchain.
+```sh
+npm ci
+npm run check
+npm pack --json
+```
 
-The installed CLI exposes `validate-config`, `selftest`, and `run`. `selftest` is offline and
-reports the rank-3 production brain adapter as pending; it keeps `wedge_executed: false` and
-never claims the wedge ran. `run` fails closed until that adapter exists.
+The committed shrinkwrap contains both runtime and development dependencies, so
+no Project ECHO checkout or out-of-band TypeScript/Vitest/ESLint installation is
+required.
 
-## Inherited debt (unchanged from source)
+Useful individual commands:
 
-This boundary does not absorb, relabel, or waive the generic `echoctl`/platform debts recorded
-in the source `product/README.md`: the generic release-doctor omission, Windows onboarding
-`EBUSY`/filesystem-event failures, and the macOS/Ubuntu Node 22 packaging races remain owned by
-their source-side owners. Phase 1 is macOS-only.
+```sh
+npm run build
+npm run typecheck
+npm run lint
+npm test
+npm run check:provenance
+npm run check:boundary
+npm run check:dependencies
+```
 
-## Next gates (no transition performed here)
+`npm run build` emits JavaScript, declarations, source maps, and the SQLite
+migrations under `dist/`. `npm pack` runs that build automatically and includes
+the CLI, runtime schema, migrations, license, README, and shrinkwrap.
 
-This repository performs no remote creation, publication, deployment, client install, credential
-change, real meeting, or maturity advancement. Cutover to authoritative status requires a
-separate founder-approved proposal after parity acceptance, per the source graduation pipeline
-(`DEV -> FOUNDER LIVE -> QUALIFIED -> CLIENT LIVE`).
+## Install the local tarball
+
+After `npm pack`, install the exact tarball into a user-controlled prefix:
+
+```sh
+npm install --global ./echo-brain-0.0.0-dev.0.tgz
+```
+
+Or keep it isolated:
+
+```sh
+npm install --prefix "$HOME/.local/share/echo-brain" ./echo-brain-0.0.0-dev.0.tgz
+"$HOME/.local/share/echo-brain/node_modules/.bin/echo-brain" --help
+```
+
+## Runtime configuration
+
+Operational commands require an absolute JSON config path. A DEV example:
+
+```json
+{
+  "schema_version": 1,
+  "lane": "team-product",
+  "state_dir": "/Users/you/.echo-brain",
+  "meeting_sources": [
+    {
+      "adapter_id": "granola",
+      "instance_id": "primary",
+      "credential_ref": "env:GRANOLA_API_KEY",
+      "settings": {
+        "page_size": 30,
+        "cursor_overlap_ms": 1000
+      }
+    }
+  ],
+  "decision_processor": {
+    "adapter_id": "structured-text",
+    "instance_id": "primary",
+    "settings": {}
+  },
+  "communication_channels": [
+    {
+      "adapter_id": "jsonl-outbox",
+      "instance_id": "team-primary",
+      "settings": {
+        "path": "/Users/you/.echo-brain/outbox.jsonl",
+        "destination_id": "reviewed-briefs"
+      }
+    }
+  ],
+  "approval_mode": "manual",
+  "cycle_interval_ms": 60000
+}
+```
+
+Credential values do not belong in this file. The schema accepts `env:` and
+`keychain:` references; the bundled Granola adapter resolves `env:` by default
+and accepts an injected resolver for other credential stores. A credential
+reference is optional because some adapters do not require authentication.
+`settings` is deliberately opaque to the core and is validated by the selected
+adapter. Adapter IDs select an implementation; instance IDs distinguish
+multiple configured instances of the same capability.
+
+```sh
+echo-brain validate-config --config /absolute/path/runtime-config.json
+echo-brain selftest --config /absolute/path/runtime-config.json
+echo-brain run-once --config /absolute/path/runtime-config.json
+echo-brain approvals --config /absolute/path/runtime-config.json
+echo-brain approve --config /absolute/path/runtime-config.json --id <id> --reviewer <name>
+echo-brain run --config /absolute/path/runtime-config.json
+```
+
+- `validate-config` validates the schema and local-filesystem requirement.
+- `selftest` is offline. It verifies that SQLite can open and load the packaged
+  migration, reports the configured adapter references without loading them,
+  and keeps `wedge_executed: false`.
+- `run-once` loads adapters through the common factory shape, checks their
+  configuration and health, runs every meeting source once, and persists its
+  cursor and processing state in SQLite. Every adapter operation has a host
+  deadline and receives an `AbortSignal`; a non-settling adapter cannot hold the
+  process open forever.
+- An unreviewed brief is written to `state_dir/approvals/` with private file
+  permissions. `approvals`, `approve`, and `reject` operate that durable queue.
+  The next cycle delivers the exact approved snapshot; pending work never
+  advances the source cursor.
+- `run` performs the same cycle immediately and repeats it at
+  `cycle_interval_ms` until `SIGINT` or `SIGTERM`. Shutdown aborts the active
+  adapter operation before closing durable state.
+
+Delivery failures are conservative. Authentication, configuration, transport,
+timeout, and unknown-outcome failures pin the source cursor for retry or
+operator repair. Only an explicit non-retryable `rejected` receipt proves that
+one artifact is terminal: it is recorded as a dead letter, surfaced as an
+unsuccessful cycle, and does not starve later source pages. Successful receipts,
+resolved approvals, extracted decision sets, and adapter-version cursors are
+monotonic across restarts.
+
+The bundled `structured-text` processor intentionally extracts only lines that
+begin with `Decision:`, `Action:`, or `Rationale:`. It is an honest offline
+baseline, not a semantic or model-backed extractor. The bundled
+`jsonl-outbox` channel is a durable, idempotent local delivery reference, not a
+substitute for a team's communication adapter.
+
+## Stable core and adapter boundaries
+
+The governing extension rules and per-capability checklists are documented in
+[`docs/architecture/core-and-adapters.md`](docs/architecture/core-and-adapters.md).
+
+The core owns canonical meeting, decision, brief, provenance, approval,
+delivery, receipt, and error shapes. It also owns idempotency, checkpoints,
+storage, orchestration, and health semantics.
+
+The canonical meeting contract is version-controlled as
+[`schemas/meeting-context.v1.schema.json`](schemas/meeting-context.v1.schema.json).
+This is the rich baseline contract—not a compatibility branch for the removed
+narrow meeting shape. Only identity, provenance, capture status, and the
+participant/content/artifact collections are required. Meeting details and
+context remain optional so each source adapter can preserve exactly what its
+tool provides.
+
+Adapters own authentication, vendor APIs, pagination, rate-limit handling,
+vendor error translation, and mapping to or from the canonical shapes. All
+adapters share identity, configuration, lifecycle, health, and error contracts;
+their directional capabilities remain typed as meeting source, decision
+processor, or communication channel.
+
+Future PM, engineering, and other surfaces should be introduced as capability
+adapters over the same canonical artifacts. Portable concepts belong in typed
+core fields; uncommon vendor-specific values stay in bounded `extensions` or
+adapter `settings` and must not become required core semantics.
+
+## What remains before advancing beyond DEV
+
+1. Add and qualify a semantic decision-processor adapter and the first real
+   team communication-channel adapter using the same contracts.
+2. Move the remaining Granola compatibility implementation out of the legacy
+   `src/capture/**` paths after its canonical bridge fully replaces those APIs.
+3. Bound first-run processing to seven days and serve newest meetings first,
+   independent of the selected meeting adapter.
+4. Add install/status/doctor/service lifecycle and rollback behavior.
+5. Run the exact artifact through isolated FOUNDER LIVE before advancing beyond
+   `DEV`.
+
+## Extraction provenance
+
+The immutable extraction baseline is commit
+`41c28171c64710b3ad23392a2606d75cfe8e7b2c`, extracted from Project ECHO commit
+`2971310441b69735cbe759293abd8c4d044bf347` under item
+`2026-07-13-133-local-echo-brain-source-extraction`.
+
+The JSON records under `provenance/` bind that historical commit. Later
+standalone changes are successor work and are not relabeled as copied source.
+`node tools/check-provenance.mjs` therefore verifies the immutable extraction
+commit by default.
+
+The first successor restores the byte-identical
+`src/storage/migrations/0001_initial.sql`, which the extracted SQLite runtime
+requires but the one-time artifact closure accidentally omitted. The standalone
+core state is added separately by `0002_core_state.sql`.

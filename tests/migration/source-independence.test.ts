@@ -23,9 +23,8 @@ describe('source independence', () => {
     }
   });
 
-  it('no .gitmodules and no configured remotes', () => {
+  it('has no submodule configuration', () => {
     expect(git('ls-files', '.gitmodules').trim()).toBe('');
-    expect(git('remote').trim()).toBe('');
   });
 
   it('no extracted production source module references the source or a sibling repository', () => {

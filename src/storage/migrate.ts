@@ -35,19 +35,28 @@ export function loadMigrations(migrationsDir: string): Migration[] {
 
 export function migrate(db: Database.Database, migrationsDir: string): number {
   const migrations = loadMigrations(migrationsDir);
-  const currentRow = db.pragma('user_version', { simple: true }) as number;
-  let applied = currentRow;
-
-  for (const m of migrations) {
-    if (m.version <= applied) continue;
-    const tx = db.transaction(() => {
+  // Serialize the version read and every schema change. Reading user_version
+  // before taking the write lock lets two first-start processes both decide
+  // to apply the same CREATE statements from a stale version snapshot.
+  db.exec('BEGIN IMMEDIATE');
+  try {
+    let applied = db.pragma('user_version', { simple: true }) as number;
+    for (const m of migrations) {
+      if (m.version <= applied) continue;
       db.exec(m.sql);
       db.pragma(`user_version = ${m.version}`);
-    });
-    tx();
-    applied = m.version;
+      applied = m.version;
+    }
+    db.exec('COMMIT');
+    return applied;
+  } catch (error) {
+    try {
+      db.exec('ROLLBACK');
+    } catch {
+      // Preserve the migration failure if SQLite already rolled back.
+    }
+    throw error;
   }
-  return applied;
 }
 
 const TZ_MARKER_RE = /Z$|[+-]\d{2}(?::?\d{2})?$/;

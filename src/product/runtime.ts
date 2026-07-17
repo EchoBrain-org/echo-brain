@@ -1,4 +1,11 @@
-import type { GranolaSignalAdapter } from '../enrich/granola-signals.js';
+import type {
+  Adapter,
+  AdapterInstanceConfig,
+  AdapterRegistry,
+  CommunicationChannelAdapter,
+  DecisionProcessorAdapter,
+  MeetingSourceAdapter,
+} from '../core/index.js';
 import type {
   ClassifyStateFilesystem,
   ProductRuntimeConfig,
@@ -8,24 +15,33 @@ import { resolveProductStatePaths, type ProductStatePaths } from './paths.js';
 
 export type ProductComponentName =
   | 'product-state'
-  | 'granola-meeting-input'
-  | 'signal-extraction'
-  | 'manual-brief-approval'
+  | 'meeting-ingestion'
+  | 'decision-processing'
+  | 'manual-approval'
+  | 'communication-delivery'
   | 'product-health';
 
 export interface ProductComponentHandle {
   stop: () => void | Promise<void>;
 }
 
+export interface ProductRuntimeAdapters {
+  meetingSources: readonly MeetingSourceAdapter[];
+  decisionProcessor: DecisionProcessorAdapter;
+  communicationChannels: readonly CommunicationChannelAdapter[];
+}
+
 export interface ProductRuntimeContext {
   config: ProductRuntimeConfig;
   paths: ProductStatePaths;
-  adapter: GranolaSignalAdapter;
+  adapters: ProductRuntimeAdapters;
 }
 
 export interface ProductRuntimeComponent {
   name: ProductComponentName;
-  start: (context: ProductRuntimeContext) => ProductComponentHandle | Promise<ProductComponentHandle>;
+  start: (
+    context: ProductRuntimeContext,
+  ) => ProductComponentHandle | Promise<ProductComponentHandle>;
 }
 
 export interface ProductRuntimeDeadlines {
@@ -34,11 +50,15 @@ export interface ProductRuntimeDeadlines {
   shutdownMs: number;
 }
 
-export type DeadlineRunner = <T>(operation: Promise<T>, timeoutMs: number, label: string) => Promise<T>;
+export type DeadlineRunner = <T>(
+  operation: Promise<T>,
+  timeoutMs: number,
+  label: string,
+) => Promise<T>;
 
 export interface ProductRuntimeDependencies {
   classifyStateFilesystem: ClassifyStateFilesystem;
-  brainAdapters: Readonly<Record<string, GranolaSignalAdapter>>;
+  adapterRegistry: AdapterRegistry;
   components: readonly ProductRuntimeComponent[];
   deadlines?: Partial<ProductRuntimeDeadlines>;
   withDeadline?: DeadlineRunner;
@@ -64,6 +84,7 @@ export class ProductRuntimeFailure extends Error {
     public readonly code:
       | 'invalid_dependencies'
       | 'adapter_unavailable'
+      | 'adapter_invalid_config'
       | 'state_not_local'
       | 'startup_failed',
     message: string,
@@ -83,9 +104,10 @@ class DeadlineError extends Error {
 
 const EXPECTED_COMPONENTS: readonly ProductComponentName[] = [
   'product-state',
-  'granola-meeting-input',
-  'signal-extraction',
-  'manual-brief-approval',
+  'meeting-ingestion',
+  'decision-processing',
+  'manual-approval',
+  'communication-delivery',
   'product-health',
 ];
 
@@ -101,8 +123,12 @@ export function withRuntimeDeadline<T>(
   label: string,
 ): Promise<T> {
   return new Promise<T>((resolve, reject) => {
-    const timer = setTimeout(() => reject(new DeadlineError(label, timeoutMs)), timeoutMs);
-    timer.unref();
+    const timer = setTimeout(
+      () => reject(new DeadlineError(label, timeoutMs)),
+      timeoutMs,
+    );
+    // This may be the only active handle when an operation never settles.
+    // Keeping it referenced is what makes the runtime deadline enforceable.
     operation.then(
       (value) => {
         clearTimeout(timer);
@@ -116,18 +142,24 @@ export function withRuntimeDeadline<T>(
   });
 }
 
-function validateComponents(components: readonly ProductRuntimeComponent[]): string[] {
+function validateComponents(
+  components: readonly ProductRuntimeComponent[],
+): string[] {
   const names = components.map((component) => component.name);
   const errors: string[] = [];
   for (const expected of EXPECTED_COMPONENTS) {
     const count = names.filter((name) => name === expected).length;
-    if (count !== 1) errors.push(`component '${expected}' must appear exactly once`);
+    if (count !== 1)
+      errors.push(`component '${expected}' must appear exactly once`);
   }
   for (const name of names) {
-    if (!EXPECTED_COMPONENTS.includes(name)) errors.push(`forbidden component '${name}'`);
+    if (!EXPECTED_COMPONENTS.includes(name))
+      errors.push(`forbidden component '${name}'`);
   }
   if (names.join('\n') !== EXPECTED_COMPONENTS.join('\n')) {
-    errors.push(`components must start in declared order: ${EXPECTED_COMPONENTS.join(', ')}`);
+    errors.push(
+      `components must start in declared order: ${EXPECTED_COMPONENTS.join(', ')}`,
+    );
   }
   return errors;
 }
@@ -140,6 +172,110 @@ function stateClassificationFailure(
     `product state filesystem is ${classification.kind}: ${classification.raw}`,
     [`kind=${classification.kind}`, `raw=${classification.raw}`],
   );
+}
+
+function unavailableAdapterDetail(
+  kind: string,
+  config: AdapterInstanceConfig,
+): string {
+  return `${kind} adapter '${config.adapter_id}' instance '${config.instance_id}' is unavailable`;
+}
+
+function invalidAdapterPrefix(
+  kind: string,
+  config: AdapterInstanceConfig,
+): string {
+  return `${kind} adapter '${config.adapter_id}' instance '${config.instance_id}'`;
+}
+
+function validateConfiguredAdapter(
+  kind: string,
+  config: AdapterInstanceConfig,
+  adapter: Adapter,
+): string[] {
+  const prefix = invalidAdapterPrefix(kind, config);
+  try {
+    const result = adapter.validateConfig(config);
+    if (result.ok) return [];
+    if (result.errors.length === 0)
+      return [`${prefix}: configuration is invalid`];
+    return result.errors.map((error) => `${prefix}: ${error}`);
+  } catch {
+    return [`${prefix}: configuration validation failed unexpectedly`];
+  }
+}
+
+export function resolveConfiguredAdapters(
+  config: ProductRuntimeConfig,
+  registry: AdapterRegistry,
+): ProductRuntimeAdapters | ProductRuntimeFailure {
+  const missing: string[] = [];
+  const meetingSources = config.meeting_sources.map((adapterConfig) => {
+    const adapter = registry.getMeetingSource(adapterConfig);
+    if (adapter === undefined)
+      missing.push(unavailableAdapterDetail('meeting-source', adapterConfig));
+    return adapter;
+  });
+  const decisionProcessor = registry.getDecisionProcessor(
+    config.decision_processor,
+  );
+  if (decisionProcessor === undefined) {
+    missing.push(
+      unavailableAdapterDetail('decision-processor', config.decision_processor),
+    );
+  }
+  const communicationChannels = config.communication_channels.map(
+    (adapterConfig) => {
+      const adapter = registry.getCommunicationChannel(adapterConfig);
+      if (adapter === undefined) {
+        missing.push(
+          unavailableAdapterDetail('communication-channel', adapterConfig),
+        );
+      }
+      return adapter;
+    },
+  );
+  if (missing.length > 0) {
+    return new ProductRuntimeFailure(
+      'adapter_unavailable',
+      `configured adapters are unavailable: ${missing.join('; ')}`,
+      missing,
+    );
+  }
+  const invalid = [
+    ...config.meeting_sources.flatMap((adapterConfig, index) =>
+      validateConfiguredAdapter(
+        'meeting-source',
+        adapterConfig,
+        meetingSources[index] as MeetingSourceAdapter,
+      ),
+    ),
+    ...validateConfiguredAdapter(
+      'decision-processor',
+      config.decision_processor,
+      decisionProcessor as DecisionProcessorAdapter,
+    ),
+    ...config.communication_channels.flatMap((adapterConfig, index) =>
+      validateConfiguredAdapter(
+        'communication-channel',
+        adapterConfig,
+        communicationChannels[index] as CommunicationChannelAdapter,
+      ),
+    ),
+  ];
+  if (invalid.length > 0) {
+    return new ProductRuntimeFailure(
+      'adapter_invalid_config',
+      `configured adapters rejected their configuration: ${invalid.join('; ')}`,
+      invalid,
+    );
+  }
+  return {
+    meetingSources: meetingSources as MeetingSourceAdapter[],
+    decisionProcessor: decisionProcessor as DecisionProcessorAdapter,
+    communicationChannels:
+      communicationChannels as CommunicationChannelAdapter[],
+  };
 }
 
 export async function startProductRuntime(
@@ -157,51 +293,104 @@ export async function startProductRuntime(
       ),
     };
   }
-  const adapter = dependencies.brainAdapters[config.brain_adapter.id];
-  if (adapter === undefined) {
-    return {
-      ok: false,
-      error: new ProductRuntimeFailure(
-        'adapter_unavailable',
-        `production brain adapter '${config.brain_adapter.id}' is unavailable`,
-      ),
-    };
-  }
-  const classification = await dependencies.classifyStateFilesystem(config.state_dir);
+  const adapters = resolveConfiguredAdapters(
+    config,
+    dependencies.adapterRegistry,
+  );
+  if (adapters instanceof ProductRuntimeFailure)
+    return { ok: false, error: adapters };
+
+  const classification = await dependencies.classifyStateFilesystem(
+    config.state_dir,
+  );
   if (classification.kind !== 'local') {
     return { ok: false, error: stateClassificationFailure(classification) };
   }
 
   const paths = resolveProductStatePaths(config.state_dir);
-  const context: ProductRuntimeContext = { config, paths, adapter };
+  const context: ProductRuntimeContext = { config, paths, adapters };
   const deadlines = { ...DEFAULT_DEADLINES, ...dependencies.deadlines };
   const withDeadline = dependencies.withDeadline ?? withRuntimeDeadline;
-  const started: Array<{ component: ProductRuntimeComponent; handle: ProductComponentHandle }> = [];
+  const started: Array<{
+    component: ProductRuntimeComponent;
+    handle: ProductComponentHandle;
+  }> = [];
+  const stopPromises = new WeakMap<ProductComponentHandle, Promise<void>>();
+  let startupAbandoned = false;
+
+  const stopOnce = (
+    component: ProductRuntimeComponent,
+    handle: ProductComponentHandle,
+    phase: 'rollback' | 'late-start cleanup',
+  ): Promise<void> => {
+    const existing = stopPromises.get(handle);
+    if (existing !== undefined) return existing;
+    const stopping = Promise.resolve().then(() =>
+      withDeadline(
+        Promise.resolve().then(() => handle.stop()),
+        deadlines.shutdownMs,
+        `${component.name} ${phase}`,
+      ),
+    );
+    stopPromises.set(handle, stopping);
+    return stopping;
+  };
 
   const startAll = async (): Promise<void> => {
     for (const component of dependencies.components) {
+      if (startupAbandoned) return;
+      const startOperation = Promise.resolve().then(() =>
+        component.start(context),
+      );
+      const observedStart = startOperation.then(async (handle) => {
+        if (
+          handle === null ||
+          typeof handle !== 'object' ||
+          typeof handle.stop !== 'function'
+        ) {
+          throw new Error(
+            `${component.name} returned an invalid shutdown handle`,
+          );
+        }
+        if (startupAbandoned) {
+          await stopOnce(component, handle, 'late-start cleanup');
+          throw new Error(
+            `${component.name} resolved after startup was abandoned`,
+          );
+        }
+        return handle;
+      });
       const handle = await withDeadline(
-        Promise.resolve().then(() => component.start(context)),
+        observedStart,
         deadlines.componentStartMs,
         `${component.name} start`,
       );
-      if (handle === null || typeof handle !== 'object' || typeof handle.stop !== 'function') {
-        throw new Error(`${component.name} returned an invalid shutdown handle`);
+      // The overall deadline can expire after observedStart resolves but
+      // before this continuation runs. Dispose that handle instead of
+      // publishing it as started or advancing to the next component.
+      if (startupAbandoned) {
+        await stopOnce(component, handle, 'late-start cleanup');
+        return;
       }
       started.push({ component, handle });
     }
   };
 
   try {
-    await withDeadline(startAll(), deadlines.overallStartMs, 'product runtime startup');
+    await withDeadline(
+      startAll(),
+      deadlines.overallStartMs,
+      'product runtime startup',
+    );
   } catch (error) {
+    startupAbandoned = true;
     const details = [(error as Error).message];
     for (const startedComponent of [...started].reverse()) {
       try {
-        await withDeadline(
-          Promise.resolve().then(() => startedComponent.handle.stop()),
-          deadlines.shutdownMs,
-          `${startedComponent.component.name} rollback`,
+        await stopOnce(
+          startedComponent.component,
+          startedComponent.handle,
+          'rollback',
         );
       } catch (rollbackError) {
         details.push((rollbackError as Error).message);

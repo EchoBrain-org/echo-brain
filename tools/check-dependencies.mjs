@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // AC2 — dependency edge partition.
 //
-// Scans captured target HEAD blobs and partitions every module edge:
+// Scans the repository worktree and partitions every module edge:
 //   - repository-local import/read  -> resolves to exactly one tracked target blob
 //   - bare import / package CLI      -> exact locked npm row (npm-shrinkwrap.json)
 //                                       or a named JavaScript CLI in the toolchain manifest
@@ -11,9 +11,9 @@
 // source-repo or sibling repository edge, or an unresolved repository-local edge.
 //
 // Node builtins only; safe to run before `npm ci`.
-import { spawnSync } from 'node:child_process';
 import { dirname, posix } from 'node:path';
 import process from 'node:process';
+import { repositoryWorktree, textFile } from './lib/repository-files.mjs';
 
 const REPO = process.cwd();
 const NODE22_BUILTINS = new Set([
@@ -29,23 +29,6 @@ const NODE22_BUILTINS = new Set([
 const FORBIDDEN_PROTOS = ['file:', 'link:', 'git+', 'git:', 'workspace:', 'portal:'];
 const SIBLING_MARKERS = ['Project_echo', 'echo-loop', 'echo-context', '/echo-dev-platform'];
 
-function git(...args) {
-  const r = spawnSync('/usr/local/bin/git', ['-C', REPO, ...args], { encoding: 'buffer', maxBuffer: 1 << 28 });
-  if (r.status !== 0) throw new Error(`git ${args.join(' ')} failed: ${r.stderr}`);
-  return r.stdout;
-}
-function headTree() {
-  const out = git('ls-tree', '-rz', '--format=%(objectmode) %(objectname) %(path)', 'HEAD');
-  const tree = new Map();
-  for (const entry of out.toString('utf8').split('\0')) {
-    if (!entry.trim()) continue;
-    const [mode, oid, ...rest] = entry.split(' ');
-    tree.set(rest.join(' '), { mode, oid });
-  }
-  return tree;
-}
-const blob = (t, p) => (t.has(p) ? git('cat-file', 'blob', t.get(p).oid).toString('utf8') : null);
-
 const IMPORT_RE =
   /(?:import|export)\s+(?:[^'"]*?\s+from\s+)?['"]([^'"]+)['"]|(?:^|[^.\w])(?:import|require)\s*\(\s*['"]([^'"]+)['"]\s*\)/gm;
 
@@ -59,12 +42,12 @@ function resolveRelative(tree, importer, spec) {
 }
 
 function main() {
-  const tree = headTree();
+  const tree = repositoryWorktree(REPO);
   const errors = [];
-  const lock = JSON.parse(blob(tree, 'npm-shrinkwrap.json'));
-  const pkg = JSON.parse(blob(tree, 'package.json'));
+  const lock = JSON.parse(textFile(tree, 'npm-shrinkwrap.json'));
+  const pkg = JSON.parse(textFile(tree, 'package.json'));
   const toolchain = tree.has('provenance/dependency-toolchain.v1.json')
-    ? JSON.parse(blob(tree, 'provenance/dependency-toolchain.v1.json')) : { javascript_clis: [], system_helpers: [] };
+    ? JSON.parse(textFile(tree, 'provenance/dependency-toolchain.v1.json')) : { javascript_clis: [], system_helpers: [] };
 
   const lockedNames = new Set();
   for (const p of Object.keys(lock.packages ?? {})) {
@@ -78,11 +61,16 @@ function main() {
     if (!/^\d+\.\d+\.\d+([-+].*)?$/.test(spec)) errors.push(`dependency ${name} is not an exact version: ${spec}`);
     if (!lockedNames.has(name)) errors.push(`declared dependency ${name} not present in npm-shrinkwrap.json`);
   }
+  for (const [name, spec] of Object.entries(pkg.devDependencies ?? {})) {
+    if (FORBIDDEN_PROTOS.some((pr) => spec.startsWith(pr))) errors.push(`devDependency ${name} uses forbidden protocol: ${spec}`);
+    if (!/^\d+\.\d+\.\d+([-+].*)?$/.test(spec)) errors.push(`devDependency ${name} is not an exact version: ${spec}`);
+    if (!lockedNames.has(name)) errors.push(`declared devDependency ${name} not present in npm-shrinkwrap.json`);
+  }
 
   const usedExternal = new Set();
   for (const [path, { }] of tree) {
-    if (!/\.(ts|mts|mjs)$/.test(path)) continue;
-    const text = blob(tree, path);
+    if (!/\.(ts|mts|js|mjs)$/.test(path)) continue;
+    const text = textFile(tree, path);
     for (const m of text.matchAll(IMPORT_RE)) {
       const spec = m[1] ?? m[2];
       if (!spec) continue;
@@ -209,7 +197,7 @@ function main() {
     .split('\n').filter((l) => !/^\s*(\/\/|\*)/.test(l)).join('\n');
   for (const [path] of tree) {
     if (!/^(src|tools|tests\/migration)\/.*\.(ts|mts|mjs)$/.test(path)) continue;
-    const text = stripComments(blob(tree, path));
+    const text = stripComments(textFile(tree, path));
     for (const c of [...text.matchAll(TUPLE_RE)].map((m) => m[1])) classifyCmd(c, path);
     for (const expression of commandExpressions(text)) {
       const tok = expression.trim();

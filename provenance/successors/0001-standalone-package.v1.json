@@ -1,0 +1,27 @@
+{
+  "schema_version": 1,
+  "kind": "successor_change_record",
+  "extraction_baseline": {
+    "commit": "41c28171c64710b3ad23392a2606d75cfe8e7b2c",
+    "tree": "5691ab527de8eb622ed1d333ed867a2191afdf8a",
+    "source_repo_commit": "2971310441b69735cbe759293abd8c4d044bf347"
+  },
+  "intent": "Make the DEV extraction buildable, testable, and npm-installable from its own checkout without changing product authority or claiming a live brain adapter.",
+  "restored_source_assets": [
+    {
+      "source_path": "src/storage/migrations/0001_initial.sql",
+      "source_blob_oid": "98cf5ab2321a615ffcb09e0acb3492da95773bf6",
+      "source_sha256": "e8e96abe792ec8a601633977102705fc8aae005f7b2adba36966d295f2c824b3",
+      "target_path": "src/storage/migrations/0001_initial.sql",
+      "reason": "Required by SqliteStorage at runtime but omitted from the extraction artifact closure."
+    }
+  ],
+  "state": {
+    "maturity": "DEV",
+    "authority": false,
+    "installed": false,
+    "production_brain_adapter": false,
+    "wedge_executed": false
+  }
+}
+

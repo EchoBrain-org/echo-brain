@@ -2,10 +2,17 @@
   "boundary_version": 1,
   "entry_points": [
     "src/product/cli.ts",
-    "src/product/index.ts"
+    "src/product/index.ts",
+    "src/core/index.ts",
+    "src/adapters/index.ts",
+    "src/adapters/meeting-sources/granola/index.ts",
+    "src/adapters/decision-processors/structured-text/index.ts",
+    "src/adapters/communication-channels/jsonl-outbox/index.ts"
   ],
   "allowed_internal_paths": [
     "src/product/**",
+    "src/core/**",
+    "src/adapters/**",
     "src/capture/granola-source-policy.ts",
     "src/capture/pipeline-core.ts",
     "src/capture/surfaces/granola-poller.ts",
@@ -14,6 +21,7 @@
     "src/enrich/worker-heartbeat.ts",
     "src/storage/interface.ts",
     "src/storage/sqlite.ts",
+    "src/storage/core-state-sqlite.ts",
     "src/storage/migrate.ts",
     "src/storage/source-match.ts",
     "src/echo-home/state-paths.ts",
@@ -21,6 +29,7 @@
     "src/logging/index.ts",
     "src/guards.ts",
     "src/util/json.ts",
+    "src/util/process-file-lock.ts",
     "src/util/subject.ts",
     "src/util/timestamp.ts"
   ],
@@ -41,6 +50,24 @@
     "ajv",
     "better-sqlite3"
   ],
+  "runtime_assets": [
+    "schemas/meeting-context.v1.schema.json",
+    "schemas/runtime-config.v1.schema.json",
+    "src/storage/migrations/0001_initial.sql",
+    "src/storage/migrations/0002_core_state.sql"
+  ],
+  "layer_rules": [
+    {
+      "name": "core-is-tool-agnostic",
+      "from": "src/core/**",
+      "allowed_imports": ["src/core/**"]
+    }
+  ],
+  "adapter_architecture": {
+    "core_root": "src/core/**",
+    "adapters_root": "src/adapters/",
+    "forbid_discovered_adapter_ids_in_core": true
+  },
   "child_process_owner": "src/product/spawn-sanitized-child.ts",
   "phase_1_platform": {
     "os": "darwin",

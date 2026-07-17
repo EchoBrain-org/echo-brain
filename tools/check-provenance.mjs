@@ -1,8 +1,8 @@
 #!/usr/bin/env node
-// AC3 — target-local provenance check.
+// AC3 — immutable extraction-baseline provenance check.
 //
 // Validates: reviewed policy SHA; empty transform/exclusion allowlists; that
-// source-extraction.v1.json partitions every regular tracked target HEAD blob
+// source-extraction.v1.json partitions every regular extraction-commit blob
 // (other than itself) exactly once with matching git mode and SHA-256; that the
 // declared target-only set equals the actual target-only partition; and that the
 // eight pinned tests + relocations/copies carry the recorded source provenance.
@@ -17,15 +17,22 @@ import process from 'node:process';
 const REPO = process.cwd();
 const EXPECTED_SPEC_SHA = '832be81341f2c523fd42918206774ec8a51f54de653a323ad56d612e0ea47748';
 const EXPECTED_SOURCE_SHA = '2971310441b69735cbe759293abd8c4d044bf347';
+const EXTRACTION_COMMIT = '41c28171c64710b3ad23392a2606d75cfe8e7b2c';
 const SELF = 'provenance/source-extraction.v1.json';
+
+function selectedCommit(argv) {
+  if (argv.length === 0) return EXTRACTION_COMMIT;
+  if (argv.length === 2 && argv[0] === '--commit' && argv[1] !== '') return argv[1];
+  throw new Error('usage: check-provenance.mjs [--commit <tree-ish>]');
+}
 
 function git(...args) {
   const r = spawnSync('/usr/local/bin/git', ['-C', REPO, ...args], { encoding: 'buffer', maxBuffer: 1 << 28 });
   if (r.status !== 0) throw new Error(`git ${args.join(' ')} failed: ${r.stderr}`);
   return r.stdout;
 }
-function headTree() {
-  const out = git('ls-tree', '-rz', '--format=%(objectmode) %(objectname) %(path)', 'HEAD');
+function commitTree(commit) {
+  const out = git('ls-tree', '-rz', '--format=%(objectmode) %(objectname) %(path)', commit);
   const tree = new Map();
   for (const entry of out.toString('utf8').split('\0')) {
     if (!entry.trim()) continue;
@@ -38,7 +45,8 @@ const rawBlob = (t, p) => git('cat-file', 'blob', t.get(p).oid);
 const sha256 = (buf) => createHash('sha256').update(buf).digest('hex');
 
 function main() {
-  const tree = headTree();
+  const commit = selectedCommit(process.argv.slice(2));
+  const tree = commitTree(commit);
   const errors = [];
   const get = (p) => JSON.parse(rawBlob(tree, p).toString('utf8'));
 
@@ -100,7 +108,14 @@ function main() {
     if (!transformedInExtraction.has(p)) errors.push(`transform_allowlist entry ${p} has no transformed source-extraction origin`);
   }
 
-  const result = { ok: errors.length === 0, partition_count: extraction.entries.length, target_only: [...actualTargetOnly].sort(), errors };
+  const result = {
+    ok: errors.length === 0,
+    checked_commit: git('rev-parse', commit).toString().trim(),
+    extraction_commit: EXTRACTION_COMMIT,
+    partition_count: extraction.entries.length,
+    target_only: [...actualTargetOnly].sort(),
+    errors,
+  };
   process.stdout.write(JSON.stringify(result, null, 2) + '\n');
   if (!result.ok) process.exit(1);
 }

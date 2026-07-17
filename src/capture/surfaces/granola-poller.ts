@@ -1,20 +1,30 @@
-import { randomUUID } from 'node:crypto';
-import { mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
-import { dirname, join } from 'node:path';
-import { isNonEmptyString } from '../../guards.js';
-import { ECHO_STATE_PATHS } from '../../echo-home/state-paths.js';
-import { atomicWrite } from '../../echo-home/adapters/atomic-write.js';
-import { createLogger } from '../../logging/index.js';
-import type { AtomIterationRecord, CaptureEvent, Storage } from '../../storage/interface.js';
-import { parseJson } from '../../util/json.js';
+import { randomUUID } from "node:crypto";
+import {
+  mkdirSync,
+  readFileSync,
+  renameSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
+import { dirname, join } from "node:path";
+import { isNonEmptyString } from "../../guards.js";
+import { ECHO_STATE_PATHS } from "../../echo-home/state-paths.js";
+import { atomicWrite } from "../../echo-home/adapters/atomic-write.js";
+import { createLogger } from "../../logging/index.js";
+import type {
+  AtomIterationRecord,
+  CaptureEvent,
+  Storage,
+} from "../../storage/interface.js";
+import { parseJson } from "../../util/json.js";
 import {
   GRANOLA_API_SOURCE,
   GRANOLA_SOURCE_POLICY,
-} from '../granola-source-policy.js';
-import { processCandidateWithPolicy } from '../pipeline-core.js';
+} from "../granola-source-policy.js";
+import { processCandidateWithPolicy } from "../pipeline-core.js";
 
 export const GRANOLA_SOURCE = GRANOLA_API_SOURCE;
-export const GRANOLA_API_BASE_URL = 'https://public-api.granola.ai/v1';
+export const GRANOLA_API_BASE_URL = "https://public-api.granola.ai/v1";
 export const GRANOLA_CHECKPOINT_SCHEMA_VERSION = 1;
 export const DEFAULT_GRANOLA_POLL_INTERVAL_MS = 60_000;
 export const DEFAULT_GRANOLA_REQUEST_TIMEOUT_MS = 15_000;
@@ -25,7 +35,7 @@ export const DEFAULT_GRANOLA_CHECKPOINT_LOCK_STALE_MS = 60_000;
 export const DEFAULT_GRANOLA_CHECKPOINT_LOCK_RETRY_MS = 100;
 export const DEFAULT_GRANOLA_RATE_LIMIT_RETRY_AFTER_CAP_MS = 30_000;
 
-const log = createLogger('capture.surfaces.granola');
+const log = createLogger("capture.surfaces.granola");
 
 export interface GranolaListNote {
   id: string;
@@ -34,6 +44,18 @@ export interface GranolaListNote {
   owner?: unknown;
   created_at?: string;
   updated_at?: string;
+  /** Provider fields not yet promoted into the typed Granola contract. */
+  provider_fields?: Record<string, unknown>;
+}
+
+export interface GranolaTranscriptSpeaker {
+  id?: unknown;
+  name?: unknown;
+  display_name?: unknown;
+  email?: unknown;
+  source?: unknown;
+  diarization_label?: unknown;
+  [key: string]: unknown;
 }
 
 export interface GranolaTranscriptItem {
@@ -42,13 +64,14 @@ export interface GranolaTranscriptItem {
   end_time?: number | string | null;
   start?: number | string | null;
   end?: number | string | null;
-  speaker?: string | { name?: unknown; email?: unknown } | null;
+  speaker?: string | GranolaTranscriptSpeaker | null;
+  [key: string]: unknown;
 }
 
 export interface GranolaNoteDetail extends GranolaListNote {
   summary_markdown?: string | null;
   summary_text?: string | null;
-  transcript?: GranolaTranscriptItem[];
+  transcript?: GranolaTranscriptItem[] | null;
   attendees?: unknown;
   calendar_event?: unknown;
   folder_membership?: unknown;
@@ -68,8 +91,14 @@ export interface GranolaListResponse {
 }
 
 export interface GranolaApiClient {
-  listNotes(params: GranolaListParams): Promise<GranolaListResponse>;
-  getNote(noteId: string): Promise<GranolaNoteDetail>;
+  listNotes(
+    params: GranolaListParams,
+    options?: { signal?: AbortSignal },
+  ): Promise<GranolaListResponse>;
+  getNote(
+    noteId: string,
+    options?: { signal?: AbortSignal },
+  ): Promise<GranolaNoteDetail>;
 }
 
 export interface GranolaCheckpoint {
@@ -96,18 +125,23 @@ export interface GranolaPollOptions {
 }
 
 export type GranolaPollResult =
-  | { status: 'ok'; notes_seen: number; notes_ingested: number; atoms_written: number }
-  | { status: 'skipped'; reason: 'in_flight' | 'disabled' }
-  | { status: 'error'; reason: GranolaErrorReason; message: string };
+  | {
+      status: "ok";
+      notes_seen: number;
+      notes_ingested: number;
+      atoms_written: number;
+    }
+  | { status: "skipped"; reason: "in_flight" | "disabled" }
+  | { status: "error"; reason: GranolaErrorReason; message: string };
 
 export type GranolaErrorReason =
-  | 'auth_failed'
-  | 'rate_limited'
-  | 'timeout'
-  | 'pagination_failed'
-  | 'checkpoint_failed'
-  | 'api_failed'
-  | 'pipeline_failed';
+  | "auth_failed"
+  | "rate_limited"
+  | "timeout"
+  | "pagination_failed"
+  | "checkpoint_failed"
+  | "api_failed"
+  | "pipeline_failed";
 
 export interface GranolaPollerHandle {
   enabled: boolean;
@@ -127,29 +161,32 @@ export interface GranolaPollerOptions extends GranolaPollOptions {
 }
 
 type ApiKeyResolution =
-  | { enabled: true; apiKey: string; source: 'env' | 'config' | 'options' }
+  | { enabled: true; apiKey: string; source: "env" | "config" | "options" }
   | {
       enabled: false;
-      reason: 'missing' | 'invalid';
-      source: 'env' | 'config' | 'options' | 'none';
+      reason: "missing" | "invalid";
+      source: "env" | "config" | "options" | "none";
     };
 
 export class GranolaApiError extends Error {
   constructor(
     message: string,
-    public readonly reason: Exclude<GranolaErrorReason, 'checkpoint_failed' | 'pipeline_failed'>,
+    public readonly reason: Exclude<
+      GranolaErrorReason,
+      "checkpoint_failed" | "pipeline_failed"
+    >,
     public readonly status?: number,
     public readonly retryAfterMs?: number,
   ) {
     super(message);
-    this.name = 'GranolaApiError';
+    this.name = "GranolaApiError";
   }
 }
 
 class GranolaCheckpointError extends Error {
   constructor(message: string) {
     super(message);
-    this.name = 'GranolaCheckpointError';
+    this.name = "GranolaCheckpointError";
   }
 }
 
@@ -172,24 +209,24 @@ interface LockMetadata {
 }
 
 function lockMetadataPath(lockDir: string): string {
-  return join(lockDir, 'holder.json');
+  return join(lockDir, "holder.json");
 }
 
 function lockTokenPath(lockDir: string): string {
-  return join(lockDir, 'owner-token');
+  return join(lockDir, "owner-token");
 }
 
 function parseLockMetadata(lockDir: string): LockMetadata | null {
   try {
-    const parsed = parseJson(readFileSync(lockMetadataPath(lockDir), 'utf8'));
+    const parsed = parseJson(readFileSync(lockMetadataPath(lockDir), "utf8"));
     if (!isPlainObject(parsed)) return null;
-    const ownerToken = parsed['owner_token'];
-    const pid = parsed['pid'];
-    const acquiredAt = parsed['acquired_at'];
+    const ownerToken = parsed["owner_token"];
+    const pid = parsed["pid"];
+    const acquiredAt = parsed["acquired_at"];
     if (
-      typeof ownerToken !== 'string' ||
-      typeof pid !== 'number' ||
-      typeof acquiredAt !== 'string'
+      typeof ownerToken !== "string" ||
+      typeof pid !== "number" ||
+      typeof acquiredAt !== "string"
     ) {
       return null;
     }
@@ -216,7 +253,8 @@ export async function acquireGranolaCheckpointLock(
   checkpointPath: string,
   opts: GranolaCheckpointLockOptions = {},
 ): Promise<GranolaCheckpointLock> {
-  const timeoutMs = opts.timeoutMs ?? DEFAULT_GRANOLA_CHECKPOINT_LOCK_TIMEOUT_MS;
+  const timeoutMs =
+    opts.timeoutMs ?? DEFAULT_GRANOLA_CHECKPOINT_LOCK_TIMEOUT_MS;
   const staleMs = opts.staleMs ?? DEFAULT_GRANOLA_CHECKPOINT_LOCK_STALE_MS;
   const retryMs = opts.retryMs ?? DEFAULT_GRANOLA_CHECKPOINT_LOCK_RETRY_MS;
   const lockDir = `${checkpointPath}.lock`;
@@ -224,7 +262,9 @@ export async function acquireGranolaCheckpointLock(
   try {
     mkdirSync(dirname(checkpointPath), { recursive: true });
   } catch (err) {
-    throw new GranolaCheckpointError(`checkpoint lock directory failed: ${(err as Error).message}`);
+    throw new GranolaCheckpointError(
+      `checkpoint lock directory failed: ${(err as Error).message}`,
+    );
   }
 
   for (;;) {
@@ -236,22 +276,28 @@ export async function acquireGranolaCheckpointLock(
       writeFileSync(
         lockMetadataPath(lockDir),
         `${JSON.stringify(
-          { owner_token: ownerToken, pid: process.pid, acquired_at: acquiredAt },
+          {
+            owner_token: ownerToken,
+            pid: process.pid,
+            acquired_at: acquiredAt,
+          },
           null,
           2,
         )}\n`,
       );
       return { checkpointPath, lockDir, ownerToken };
     } catch (err) {
-      if (!isErrnoException(err) || err.code !== 'EEXIST') {
-        throw new GranolaCheckpointError(`checkpoint lock failed: ${(err as Error).message}`);
+      if (!isErrnoException(err) || err.code !== "EEXIST") {
+        throw new GranolaCheckpointError(
+          `checkpoint lock failed: ${(err as Error).message}`,
+        );
       }
       if (isLockStale(lockDir, Date.now(), staleMs)) {
         try {
           removeStaleLock(lockDir);
           continue;
         } catch (removeErr) {
-          if (!isErrnoException(removeErr) || removeErr.code !== 'ENOENT') {
+          if (!isErrnoException(removeErr) || removeErr.code !== "ENOENT") {
             throw new GranolaCheckpointError(
               `checkpoint stale-lock takeover failed: ${(removeErr as Error).message}`,
             );
@@ -259,21 +305,25 @@ export async function acquireGranolaCheckpointLock(
         }
       }
       if (Date.now() - start >= timeoutMs) {
-        throw new GranolaCheckpointError(`checkpoint lock timed out after ${timeoutMs}ms`);
+        throw new GranolaCheckpointError(
+          `checkpoint lock timed out after ${timeoutMs}ms`,
+        );
       }
       await sleep(retryMs);
     }
   }
 }
 
-export function releaseGranolaCheckpointLock(lock: GranolaCheckpointLock): void {
+export function releaseGranolaCheckpointLock(
+  lock: GranolaCheckpointLock,
+): void {
   try {
-    const token = readFileSync(lockTokenPath(lock.lockDir), 'utf8').trim();
+    const token = readFileSync(lockTokenPath(lock.lockDir), "utf8").trim();
     if (token === lock.ownerToken) {
       rmSync(lock.lockDir, { recursive: true, force: true });
     }
   } catch (err) {
-    if (!isErrnoException(err) || err.code !== 'ENOENT') throw err;
+    if (!isErrnoException(err) || err.code !== "ENOENT") throw err;
   }
 }
 
@@ -291,28 +341,30 @@ export async function withGranolaCheckpointLock<T>(
 }
 
 export function granolaCheckpointPath(): string {
-  return join(ECHO_STATE_PATHS.state, 'granola-checkpoint.json');
+  return join(ECHO_STATE_PATHS.state, "granola-checkpoint.json");
 }
 
 export function granolaConfigPath(): string {
-  return join(ECHO_STATE_PATHS.state, 'granola.json');
+  return join(ECHO_STATE_PATHS.state, "granola.json");
 }
 
 function isErrnoException(err: unknown): err is NodeJS.ErrnoException {
-  return err instanceof Error && 'code' in err;
+  return err instanceof Error && "code" in err;
 }
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {
-  return typeof value === 'object' && value !== null && !Array.isArray(value);
+  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 function isValidGranolaApiKey(value: unknown): value is string {
-  return typeof value === 'string' && GRANOLA_API_KEY_RE.test(value);
+  return typeof value === "string" && GRANOLA_API_KEY_RE.test(value);
 }
 
-function disabledKey(reason: Extract<ApiKeyResolution, { enabled: false }>): GranolaPollResult {
-  log.error('disabled', { reason: reason.reason, key_source: reason.source });
-  return { status: 'skipped', reason: 'disabled' };
+function disabledKey(
+  reason: Extract<ApiKeyResolution, { enabled: false }>,
+): GranolaPollResult {
+  log.error("disabled", { reason: reason.reason, key_source: reason.source });
+  return { status: "skipped", reason: "disabled" };
 }
 
 export function resolveGranolaApiKey(
@@ -322,47 +374,47 @@ export function resolveGranolaApiKey(
 ): ApiKeyResolution {
   if (optionApiKey !== undefined) {
     if (isValidGranolaApiKey(optionApiKey)) {
-      return { enabled: true, apiKey: optionApiKey, source: 'options' };
+      return { enabled: true, apiKey: optionApiKey, source: "options" };
     }
-    return { enabled: false, reason: 'invalid', source: 'options' };
+    return { enabled: false, reason: "invalid", source: "options" };
   }
 
-  const envKey = env['GRANOLA_API_KEY'];
+  const envKey = env["GRANOLA_API_KEY"];
   if (isNonEmptyString(envKey)) {
     if (isValidGranolaApiKey(envKey)) {
-      return { enabled: true, apiKey: envKey, source: 'env' };
+      return { enabled: true, apiKey: envKey, source: "env" };
     }
-    return { enabled: false, reason: 'invalid', source: 'env' };
+    return { enabled: false, reason: "invalid", source: "env" };
   }
 
   let raw: string;
   try {
-    raw = readFileSync(configPath, 'utf8');
+    raw = readFileSync(configPath, "utf8");
   } catch (err) {
-    if (isErrnoException(err) && err.code === 'ENOENT') {
-      return { enabled: false, reason: 'missing', source: 'none' };
+    if (isErrnoException(err) && err.code === "ENOENT") {
+      return { enabled: false, reason: "missing", source: "none" };
     }
-    return { enabled: false, reason: 'invalid', source: 'config' };
+    return { enabled: false, reason: "invalid", source: "config" };
   }
 
   let parsed: unknown;
   try {
     parsed = parseJson(raw);
   } catch {
-    return { enabled: false, reason: 'invalid', source: 'config' };
+    return { enabled: false, reason: "invalid", source: "config" };
   }
   if (!isPlainObject(parsed)) {
-    return { enabled: false, reason: 'invalid', source: 'config' };
+    return { enabled: false, reason: "invalid", source: "config" };
   }
-  const apiKey = parsed['api_key'];
+  const apiKey = parsed["api_key"];
   if (!isValidGranolaApiKey(apiKey)) {
     return {
       enabled: false,
-      reason: apiKey === undefined ? 'missing' : 'invalid',
-      source: 'config',
+      reason: apiKey === undefined ? "missing" : "invalid",
+      source: "config",
     };
   }
-  return { enabled: true, apiKey, source: 'config' };
+  return { enabled: true, apiKey, source: "config" };
 }
 
 export class HttpGranolaApiClient implements GranolaApiClient {
@@ -375,77 +427,101 @@ export class HttpGranolaApiClient implements GranolaApiClient {
     } = {},
   ) {}
 
-  async listNotes(params: GranolaListParams): Promise<GranolaListResponse> {
-    const url = this.url('/notes');
+  async listNotes(
+    params: GranolaListParams,
+    options: { signal?: AbortSignal } = {},
+  ): Promise<GranolaListResponse> {
+    const url = this.url("/notes");
     if (params.updated_after !== undefined) {
-      url.searchParams.set('updated_after', params.updated_after);
+      url.searchParams.set("updated_after", params.updated_after);
     }
     if (params.cursor !== undefined) {
-      url.searchParams.set('cursor', params.cursor);
+      url.searchParams.set("cursor", params.cursor);
     }
     if (params.page_size !== undefined) {
-      url.searchParams.set('page_size', String(params.page_size));
+      url.searchParams.set("page_size", String(params.page_size));
     }
-    return parseListResponse(await this.fetchJson(url));
+    return parseListResponse(await this.fetchJson(url, options.signal));
   }
 
-  async getNote(noteId: string): Promise<GranolaNoteDetail> {
+  async getNote(
+    noteId: string,
+    options: { signal?: AbortSignal } = {},
+  ): Promise<GranolaNoteDetail> {
     const url = this.url(`/notes/${encodeURIComponent(noteId)}`);
-    url.searchParams.set('include', 'transcript');
-    return parseNoteDetail(await this.fetchJson(url));
+    url.searchParams.set("include", "transcript");
+    return parseNoteDetail(await this.fetchJson(url, options.signal));
   }
 
   private url(path: string): URL {
-    return new URL(path.replace(/^\//, ''), `${this.opts.baseUrl ?? GRANOLA_API_BASE_URL}/`);
+    return new URL(
+      path.replace(/^\//, ""),
+      `${this.opts.baseUrl ?? GRANOLA_API_BASE_URL}/`,
+    );
   }
 
-  private async fetchJson(url: URL): Promise<unknown> {
+  private async fetchJson(
+    url: URL,
+    parentSignal: AbortSignal | undefined,
+  ): Promise<unknown> {
     const controller = new AbortController();
-    const timeout = setTimeout(
-      () => controller.abort(),
-      this.opts.requestTimeoutMs ?? DEFAULT_GRANOLA_REQUEST_TIMEOUT_MS,
-    );
+    let timedOut = false;
+    const onParentAbort = () => controller.abort(parentSignal?.reason);
+    if (parentSignal?.aborted === true) onParentAbort();
+    else parentSignal?.addEventListener("abort", onParentAbort, { once: true });
+    const timeout = setTimeout(() => {
+      timedOut = true;
+      controller.abort();
+    }, this.opts.requestTimeoutMs ?? DEFAULT_GRANOLA_REQUEST_TIMEOUT_MS);
     const fetchImpl = this.opts.fetchImpl ?? fetch;
     try {
       const response = await fetchImpl(url, {
         headers: {
           Authorization: `Bearer ${this.apiKey}`,
-          Accept: 'application/json',
+          Accept: "application/json",
         },
         signal: controller.signal,
       });
       if (!response.ok) {
-        const retryAfterMs = parseRetryAfterMs(response.headers.get('retry-after'));
+        const retryAfterMs = parseRetryAfterMs(
+          response.headers.get("retry-after"),
+        );
         if (response.status === 401 || response.status === 403) {
           throw new GranolaApiError(
-            'Granola API authentication failed',
-            'auth_failed',
+            "Granola API authentication failed",
+            "auth_failed",
             response.status,
           );
         }
         if (response.status === 429) {
           throw new GranolaApiError(
-            'Granola API rate limit exceeded',
-            'rate_limited',
+            "Granola API rate limit exceeded",
+            "rate_limited",
             response.status,
             retryAfterMs,
           );
         }
         throw new GranolaApiError(
           `Granola API request failed with HTTP ${response.status}`,
-          'api_failed',
+          "api_failed",
           response.status,
         );
       }
       return await response.json();
     } catch (err) {
       if (err instanceof GranolaApiError) throw err;
-      if (err instanceof Error && err.name === 'AbortError') {
-        throw new GranolaApiError('Granola API request timed out', 'timeout');
+      if (controller.signal.aborted) {
+        throw new GranolaApiError(
+          timedOut
+            ? "Granola API request timed out"
+            : "Granola API request was cancelled",
+          "timeout",
+        );
       }
-      throw new GranolaApiError((err as Error).message, 'api_failed');
+      throw new GranolaApiError((err as Error).message, "api_failed");
     } finally {
       clearTimeout(timeout);
+      parentSignal?.removeEventListener("abort", onParentAbort);
     }
   }
 }
@@ -461,19 +537,25 @@ function parseRetryAfterMs(value: string | null): number | undefined {
 
 function parseListResponse(value: unknown): GranolaListResponse {
   if (!isPlainObject(value)) {
-    throw new GranolaApiError('Granola list response was not an object', 'pagination_failed');
-  }
-  const notes = value['notes'];
-  const hasMore = value['hasMore'];
-  const cursor = value['cursor'];
-  if (!Array.isArray(notes) || typeof hasMore !== 'boolean') {
     throw new GranolaApiError(
-      'Granola list response had invalid pagination fields',
-      'pagination_failed',
+      "Granola list response was not an object",
+      "pagination_failed",
     );
   }
-  if (cursor !== null && cursor !== undefined && typeof cursor !== 'string') {
-    throw new GranolaApiError('Granola list cursor was invalid', 'pagination_failed');
+  const notes = value["notes"];
+  const hasMore = value["hasMore"];
+  const cursor = value["cursor"];
+  if (!Array.isArray(notes) || typeof hasMore !== "boolean") {
+    throw new GranolaApiError(
+      "Granola list response had invalid pagination fields",
+      "pagination_failed",
+    );
+  }
+  if (cursor !== null && cursor !== undefined && typeof cursor !== "string") {
+    throw new GranolaApiError(
+      "Granola list cursor was invalid",
+      "pagination_failed",
+    );
   }
   return {
     notes: notes.map(parseListNote),
@@ -483,41 +565,101 @@ function parseListResponse(value: unknown): GranolaListResponse {
 }
 
 function parseListNote(value: unknown): GranolaListNote {
-  if (!isPlainObject(value) || !isNonEmptyString(value['id'])) {
-    throw new GranolaApiError('Granola list note was missing id', 'pagination_failed');
+  if (!isPlainObject(value) || !isNonEmptyString(value["id"])) {
+    throw new GranolaApiError(
+      "Granola list note was missing id",
+      "pagination_failed",
+    );
   }
-  const note: GranolaListNote = { id: value['id'] };
+  const note: GranolaListNote = { id: value["id"] };
   copyStringFields(value, note as unknown as Record<string, unknown>, [
-    'object',
-    'title',
-    'created_at',
-    'updated_at',
+    "object",
+    "title",
+    "created_at",
+    "updated_at",
   ]);
-  if ('owner' in value) note.owner = value['owner'];
+  if ("owner" in value) note.owner = value["owner"];
+  const providerFields = unknownFields(value, [
+    "id",
+    "object",
+    "title",
+    "owner",
+    "created_at",
+    "updated_at",
+  ]);
+  if (providerFields !== undefined) note.provider_fields = providerFields;
   return note;
 }
 
 function parseNoteDetail(value: unknown): GranolaNoteDetail {
   const base = parseListNote(value);
   if (!isPlainObject(value)) {
-    throw new GranolaApiError('Granola note detail was not an object', 'api_failed');
+    throw new GranolaApiError(
+      "Granola note detail was not an object",
+      "api_failed",
+    );
   }
   const detail: GranolaNoteDetail = { ...base };
   copyStringFields(value, detail as unknown as Record<string, unknown>, [
-    'summary_markdown',
-    'summary_text',
-    'web_url',
+    "summary_markdown",
+    "summary_text",
+    "web_url",
   ]);
-  const transcript = value['transcript'];
+  const transcript = value["transcript"];
   if (Array.isArray(transcript)) {
-    detail.transcript = transcript
-      .filter(isPlainObject)
-      .map((item) => ({ ...item }) as GranolaTranscriptItem);
+    if (!transcript.every(isPlainObject)) {
+      throw new GranolaApiError(
+        "Granola note transcript contained an invalid item",
+        "api_failed",
+      );
+    }
+    detail.transcript = transcript.map(
+      (item) => ({ ...item }) as GranolaTranscriptItem,
+    );
+  } else if (transcript === null) {
+    detail.transcript = null;
+  } else if (transcript !== undefined) {
+    throw new GranolaApiError(
+      "Granola note transcript was invalid",
+      "api_failed",
+    );
   }
-  for (const key of ['attendees', 'calendar_event', 'folder_membership'] as const) {
+  for (const key of [
+    "attendees",
+    "calendar_event",
+    "folder_membership",
+  ] as const) {
     if (key in value) detail[key] = value[key];
   }
+  const providerFields = unknownFields(value, [
+    "id",
+    "object",
+    "title",
+    "owner",
+    "created_at",
+    "updated_at",
+    "summary_markdown",
+    "summary_text",
+    "web_url",
+    "transcript",
+    "attendees",
+    "calendar_event",
+    "folder_membership",
+  ]);
+  if (providerFields === undefined) delete detail.provider_fields;
+  else detail.provider_fields = providerFields;
   return detail;
+}
+
+function unknownFields(
+  value: Record<string, unknown>,
+  knownFields: readonly string[],
+): Record<string, unknown> | undefined {
+  const known = new Set(knownFields);
+  const fields = Object.fromEntries(
+    Object.entries(value).filter(([key]) => !known.has(key)),
+  );
+  return Object.keys(fields).length === 0 ? undefined : fields;
 }
 
 function copyStringFields(
@@ -527,7 +669,7 @@ function copyStringFields(
 ): void {
   for (const field of fields) {
     const value = from[field];
-    if (typeof value === 'string') {
+    if (typeof value === "string") {
       to[field] = value;
     } else if (value === null) {
       to[field] = null;
@@ -544,35 +686,48 @@ function emptyCheckpoint(): GranolaCheckpoint {
   };
 }
 
-export function loadGranolaCheckpoint(filePath = granolaCheckpointPath()): GranolaCheckpoint {
+export function loadGranolaCheckpoint(
+  filePath = granolaCheckpointPath(),
+): GranolaCheckpoint {
   let raw: string;
   try {
-    raw = readFileSync(filePath, 'utf8');
+    raw = readFileSync(filePath, "utf8");
   } catch (err) {
-    if (isErrnoException(err) && err.code === 'ENOENT') return emptyCheckpoint();
-    throw new GranolaCheckpointError(`checkpoint read failed: ${(err as Error).message}`);
+    if (isErrnoException(err) && err.code === "ENOENT")
+      return emptyCheckpoint();
+    throw new GranolaCheckpointError(
+      `checkpoint read failed: ${(err as Error).message}`,
+    );
   }
 
   let parsed: unknown;
   try {
     parsed = parseJson(raw);
   } catch (err) {
-    throw new GranolaCheckpointError(`checkpoint JSON invalid: ${(err as Error).message}`);
+    throw new GranolaCheckpointError(
+      `checkpoint JSON invalid: ${(err as Error).message}`,
+    );
   }
-  if (!isPlainObject(parsed) || parsed['schema_version'] !== GRANOLA_CHECKPOINT_SCHEMA_VERSION) {
-    throw new GranolaCheckpointError('checkpoint schema invalid');
+  if (
+    !isPlainObject(parsed) ||
+    parsed["schema_version"] !== GRANOLA_CHECKPOINT_SCHEMA_VERSION
+  ) {
+    throw new GranolaCheckpointError("checkpoint schema invalid");
   }
-  const highWaterMark = parsed['high_water_mark'];
-  const ingested = parsed['ingested_note_ids'];
-  const lastSyncedAt = parsed['last_synced_at'];
-  if (highWaterMark !== null && typeof highWaterMark !== 'string') {
-    throw new GranolaCheckpointError('checkpoint high_water_mark invalid');
+  const highWaterMark = parsed["high_water_mark"];
+  const ingested = parsed["ingested_note_ids"];
+  const lastSyncedAt = parsed["last_synced_at"];
+  if (highWaterMark !== null && typeof highWaterMark !== "string") {
+    throw new GranolaCheckpointError("checkpoint high_water_mark invalid");
   }
-  if (!Array.isArray(ingested) || !ingested.every((v) => typeof v === 'string')) {
-    throw new GranolaCheckpointError('checkpoint ingested_note_ids invalid');
+  if (
+    !Array.isArray(ingested) ||
+    !ingested.every((v) => typeof v === "string")
+  ) {
+    throw new GranolaCheckpointError("checkpoint ingested_note_ids invalid");
   }
-  if (lastSyncedAt !== null && typeof lastSyncedAt !== 'string') {
-    throw new GranolaCheckpointError('checkpoint last_synced_at invalid');
+  if (lastSyncedAt !== null && typeof lastSyncedAt !== "string") {
+    throw new GranolaCheckpointError("checkpoint last_synced_at invalid");
   }
   return {
     schema_version: GRANOLA_CHECKPOINT_SCHEMA_VERSION,
@@ -602,16 +757,23 @@ export async function writeCheckpointJsonWithLock(
   content: string,
   opts: LockedCheckpointWriteOptions = {},
 ): Promise<void> {
-  const token = readFileSync(lockTokenPath(lock.lockDir), 'utf8').trim();
+  const token = readFileSync(lockTokenPath(lock.lockDir), "utf8").trim();
   if (token !== lock.ownerToken) {
-    throw new GranolaCheckpointError('checkpoint lock owner token mismatch before stage');
+    throw new GranolaCheckpointError(
+      "checkpoint lock owner token mismatch before stage",
+    );
   }
-  const tempPath = join(lock.lockDir, `pending-${lock.ownerToken}-${randomUUID()}`);
+  const tempPath = join(
+    lock.lockDir,
+    `pending-${lock.ownerToken}-${randomUUID()}`,
+  );
   writeFileSync(tempPath, content);
-  const rereadToken = readFileSync(lockTokenPath(lock.lockDir), 'utf8').trim();
+  const rereadToken = readFileSync(lockTokenPath(lock.lockDir), "utf8").trim();
   if (rereadToken !== lock.ownerToken) {
     rmSync(tempPath, { force: true });
-    throw new GranolaCheckpointError('checkpoint lock owner token mismatch before commit');
+    throw new GranolaCheckpointError(
+      "checkpoint lock owner token mismatch before commit",
+    );
   }
   await opts.beforeCommit?.(tempPath);
   renameSync(tempPath, lock.checkpointPath);
@@ -621,13 +783,18 @@ async function writeGranolaCheckpointLocked(
   lock: GranolaCheckpointLock,
   checkpoint: GranolaCheckpoint,
 ): Promise<void> {
-  await writeCheckpointJsonWithLock(lock, `${JSON.stringify(checkpoint, null, 2)}\n`);
+  await writeCheckpointJsonWithLock(
+    lock,
+    `${JSON.stringify(checkpoint, null, 2)}\n`,
+  );
 }
 
 function granolaAtomUpdatedAt(event: CaptureEvent): string | null {
-  const value = event.metadata?.['updated_at'];
-  if (typeof value !== 'string') return null;
-  return Number.isNaN(new Date(value).getTime()) ? null : new Date(value).toISOString();
+  const value = event.metadata?.["updated_at"];
+  if (typeof value !== "string") return null;
+  return Number.isNaN(new Date(value).getTime())
+    ? null
+    : new Date(value).toISOString();
 }
 
 function isGranolaRawAtom(event: AtomIterationRecord): boolean {
@@ -635,13 +802,13 @@ function isGranolaRawAtom(event: AtomIterationRecord): boolean {
 }
 
 function atomNoteId(event: CaptureEvent): string | null {
-  const value = event.metadata?.['note_id'];
-  return typeof value === 'string' && value.length > 0 ? value : null;
+  const value = event.metadata?.["note_id"];
+  return typeof value === "string" && value.length > 0 ? value : null;
 }
 
-function atomGranolaType(event: CaptureEvent): 'summary' | 'transcript' | null {
-  const value = event.metadata?.['granola_atom_type'];
-  return value === 'summary' || value === 'transcript' ? value : null;
+function atomGranolaType(event: CaptureEvent): "summary" | "transcript" | null {
+  const value = event.metadata?.["granola_atom_type"];
+  return value === "summary" || value === "transcript" ? value : null;
 }
 
 function newerGranolaAtom(
@@ -663,14 +830,16 @@ export async function resolveCurrentGranolaNotes(
   storage: Storage,
 ): Promise<Map<string, CurrentGranolaNoteAtoms>> {
   const byNote = new Map<string, CurrentGranolaNoteAtoms>();
-  const atoms = await storage.iterateAtomsByAppendOrder({ sourcePrefixes: [GRANOLA_SOURCE] });
+  const atoms = await storage.iterateAtomsByAppendOrder({
+    sourcePrefixes: [GRANOLA_SOURCE],
+  });
   for (const atom of atoms) {
     if (!isGranolaRawAtom(atom)) continue;
     const noteId = atomNoteId(atom);
     const atomType = atomGranolaType(atom);
     if (noteId === null || atomType === null) continue;
     const entry = byNote.get(noteId) ?? { note_id: noteId };
-    if (atomType === 'summary') {
+    if (atomType === "summary") {
       if (newerGranolaAtom(atom, entry.summary)) entry.summary = atom;
     } else if (newerGranolaAtom(atom, entry.transcript)) {
       entry.transcript = atom;
@@ -684,47 +853,75 @@ export async function resolveCurrentGranolaNoteAtoms(
   storage: Storage,
   noteId: string,
 ): Promise<CurrentGranolaNoteAtoms> {
-  return (await resolveCurrentGranolaNotes(storage)).get(noteId) ?? { note_id: noteId };
+  return (
+    (await resolveCurrentGranolaNotes(storage)).get(noteId) ?? {
+      note_id: noteId,
+    }
+  );
 }
 
 function maxIso(a: string | null, b: string | undefined): string | null {
   if (b === undefined || Number.isNaN(new Date(b).getTime())) return a;
   if (a === null) return new Date(b).toISOString();
-  return new Date(b).getTime() > new Date(a).getTime() ? new Date(b).toISOString() : a;
+  return new Date(b).getTime() > new Date(a).getTime()
+    ? new Date(b).toISOString()
+    : a;
 }
 
-function speakerName(speaker: GranolaTranscriptItem['speaker']): string {
-  if (typeof speaker === 'string' && speaker.length > 0) return speaker;
+function speakerName(speaker: GranolaTranscriptItem["speaker"]): string {
+  if (typeof speaker === "string" && speaker.length > 0) return speaker;
   if (isPlainObject(speaker)) {
-    const name = speaker['name'];
-    if (typeof name === 'string' && name.length > 0) return name;
-    const email = speaker['email'];
-    if (typeof email === 'string' && email.length > 0) return email;
+    const diarizationLabel = speaker["diarization_label"];
+    if (typeof diarizationLabel === "string" && diarizationLabel.length > 0) {
+      return diarizationLabel;
+    }
+    const name = speaker["name"];
+    if (typeof name === "string" && name.length > 0) return name;
+    const email = speaker["email"];
+    if (typeof email === "string" && email.length > 0) return email;
+    const source = speaker["source"];
+    if (source === "microphone") return "Microphone audio";
+    if (source === "speaker") return "Remote audio";
+    if (typeof source === "string" && source.length > 0)
+      return `${source} audio`;
   }
-  return 'Speaker';
+  return "Speaker";
 }
 
-export function renderGranolaTranscript(transcript: readonly GranolaTranscriptItem[] = []): string {
+export function renderGranolaTranscript(
+  transcript: readonly GranolaTranscriptItem[] = [],
+): string {
   const lines: string[] = [];
   for (const turn of transcript) {
-    const text = typeof turn.text === 'string' ? turn.text.trim() : '';
+    const text = typeof turn.text === "string" ? turn.text.trim() : "";
     if (text.length === 0) continue;
     const start = turn.start_time ?? turn.start;
     const end = turn.end_time ?? turn.end;
     const time =
       start !== undefined && start !== null
-        ? `[${String(start)}${end !== undefined && end !== null ? `-${String(end)}` : ''}] `
-        : '';
+        ? `[${String(start)}${end !== undefined && end !== null ? `-${String(end)}` : ""}] `
+        : "";
     lines.push(`${time}${speakerName(turn.speaker)}: ${text}`);
   }
-  return lines.join('\n');
+  return lines.join("\n");
 }
 
-function addIfDefined(meta: Record<string, unknown>, key: string, value: unknown): void {
+function addIfDefined(
+  meta: Record<string, unknown>,
+  key: string,
+  value: unknown,
+): void {
   if (value !== undefined && value !== null) meta[key] = value;
 }
 
-function mergedDetail(listNote: GranolaListNote, detail: GranolaNoteDetail): GranolaNoteDetail {
+function mergedDetail(
+  listNote: GranolaListNote,
+  detail: GranolaNoteDetail,
+): GranolaNoteDetail {
+  const providerFields = {
+    ...(listNote.provider_fields ?? {}),
+    ...(detail.provider_fields ?? {}),
+  };
   return {
     ...listNote,
     ...detail,
@@ -733,15 +930,18 @@ function mergedDetail(listNote: GranolaListNote, detail: GranolaNoteDetail): Gra
     updated_at: detail.updated_at ?? listNote.updated_at,
     title: detail.title ?? listNote.title,
     owner: detail.owner ?? listNote.owner,
+    ...(Object.keys(providerFields).length === 0
+      ? {}
+      : { provider_fields: providerFields }),
   };
 }
 
 export function granolaNoteToCaptureEvents(
   note: GranolaNoteDetail,
   observedAt: string,
-): [Omit<CaptureEvent, 'id'>, Omit<CaptureEvent, 'id'>] {
+): [Omit<CaptureEvent, "id">, Omit<CaptureEvent, "id">] {
   const timestamp = note.updated_at ?? note.created_at ?? observedAt;
-  const title = note.title ?? 'Untitled Granola note';
+  const title = note.title ?? "Untitled Granola note";
   const transcript = note.transcript ?? [];
   const sharedMetadata: Record<string, unknown> = {
     note_id: note.id,
@@ -749,20 +949,21 @@ export function granolaNoteToCaptureEvents(
     created_at: note.created_at,
     updated_at: note.updated_at,
   };
-  addIfDefined(sharedMetadata, 'owner', note.owner);
-  addIfDefined(sharedMetadata, 'attendees', note.attendees);
-  addIfDefined(sharedMetadata, 'calendar_event', note.calendar_event);
-  addIfDefined(sharedMetadata, 'folder_membership', note.folder_membership);
-  addIfDefined(sharedMetadata, 'web_url', note.web_url);
+  addIfDefined(sharedMetadata, "owner", note.owner);
+  addIfDefined(sharedMetadata, "attendees", note.attendees);
+  addIfDefined(sharedMetadata, "calendar_event", note.calendar_event);
+  addIfDefined(sharedMetadata, "folder_membership", note.folder_membership);
+  addIfDefined(sharedMetadata, "web_url", note.web_url);
+  addIfDefined(sharedMetadata, "provider_fields", note.provider_fields);
 
   return [
     {
       source: GRANOLA_SOURCE,
       timestamp,
-      content: note.summary_markdown ?? note.summary_text ?? '',
+      content: note.summary_markdown ?? note.summary_text ?? "",
       metadata: {
         ...sharedMetadata,
-        granola_atom_type: 'summary',
+        granola_atom_type: "summary",
         dedupe_key: `granola:${note.id}:summary`,
         summary_text: note.summary_text ?? undefined,
       },
@@ -773,7 +974,7 @@ export function granolaNoteToCaptureEvents(
       content: renderGranolaTranscript(transcript),
       metadata: {
         ...sharedMetadata,
-        granola_atom_type: 'transcript',
+        granola_atom_type: "transcript",
         dedupe_key: `granola:${note.id}:transcript`,
         transcript_count: transcript.length,
       },
@@ -794,18 +995,25 @@ async function withRateLimitRetry<T>(
   try {
     return await op();
   } catch (err) {
-    if (!(err instanceof GranolaApiError) || err.reason !== 'rate_limited') throw err;
+    if (!(err instanceof GranolaApiError) || err.reason !== "rate_limited")
+      throw err;
     const delayMs = Math.min(
       err.retryAfterMs ?? retryDelayMs,
       DEFAULT_GRANOLA_RATE_LIMIT_RETRY_AFTER_CAP_MS,
     );
-    log.warn('rate_limited_retry', { operation: label, delay_ms: delayMs });
+    log.warn("rate_limited_retry", { operation: label, delay_ms: delayMs });
     await sleep(delayMs);
     try {
       return await op();
     } catch (retryErr) {
-      if (retryErr instanceof GranolaApiError && retryErr.reason === 'rate_limited') {
-        log.error('rate_limited_repeated', { operation: label, status: retryErr.status });
+      if (
+        retryErr instanceof GranolaApiError &&
+        retryErr.reason === "rate_limited"
+      ) {
+        log.error("rate_limited_repeated", {
+          operation: label,
+          status: retryErr.status,
+        });
       }
       throw retryErr;
     }
@@ -835,29 +1043,36 @@ function shouldFetchGranolaNote(
   if (!ingestedNoteIds.has(listNote.id)) return true;
   if (
     currentAtoms === undefined ||
-    (currentAtoms.summary === undefined && currentAtoms.transcript === undefined)
+    (currentAtoms.summary === undefined &&
+      currentAtoms.transcript === undefined)
   ) {
     return false;
   }
   const liveUpdatedAt = noteUpdatedAt(listNote);
   const storedUpdatedAt = currentStoredUpdatedAt(currentAtoms);
-  return liveUpdatedAt !== null && storedUpdatedAt !== null && liveUpdatedAt > storedUpdatedAt;
+  return (
+    liveUpdatedAt !== null &&
+    storedUpdatedAt !== null &&
+    liveUpdatedAt > storedUpdatedAt
+  );
 }
 
 function errorReason(err: unknown): GranolaErrorReason {
   if (err instanceof GranolaApiError) return err.reason;
-  if (err instanceof GranolaCheckpointError) return 'checkpoint_failed';
-  return 'pipeline_failed';
+  if (err instanceof GranolaCheckpointError) return "checkpoint_failed";
+  return "pipeline_failed";
 }
 
 function logPollError(err: unknown, stage: string): void {
   const reason = errorReason(err);
   const payload = { reason, stage, message: (err as Error).message };
-  if (reason === 'auth_failed') log.error('auth_failed', payload);
-  else if (reason === 'timeout') log.error('request_timeout', payload);
-  else if (reason === 'pagination_failed') log.error('pagination_failed', payload);
-  else if (reason === 'checkpoint_failed') log.error('checkpoint_write_failed', payload);
-  else log.error('poll_failed', payload);
+  if (reason === "auth_failed") log.error("auth_failed", payload);
+  else if (reason === "timeout") log.error("request_timeout", payload);
+  else if (reason === "pagination_failed")
+    log.error("pagination_failed", payload);
+  else if (reason === "checkpoint_failed")
+    log.error("checkpoint_write_failed", payload);
+  else log.error("poll_failed", payload);
 }
 
 export async function pollGranolaOnce(
@@ -869,7 +1084,7 @@ export async function pollGranolaOnce(
   const checkpointPath = options.checkpointPath ?? granolaCheckpointPath();
   const pageSize = options.pageSize ?? DEFAULT_GRANOLA_PAGE_SIZE;
   const retryDelayMs = options.retryDelayMs ?? 1_000;
-  let stage = 'checkpoint_lock';
+  let stage = "checkpoint_lock";
   try {
     return await withGranolaCheckpointLock(
       checkpointPath,
@@ -879,7 +1094,7 @@ export async function pollGranolaOnce(
         retryMs: options.lockRetryMs,
       },
       async (lock) => {
-        stage = 'checkpoint_read';
+        stage = "checkpoint_read";
         const checkpoint = loadGranolaCheckpoint(checkpointPath);
         const startingHighWaterMark = checkpoint.high_water_mark;
         const ingestedNoteIds = new Set(checkpoint.ingested_note_ids);
@@ -888,10 +1103,10 @@ export async function pollGranolaOnce(
         const notes: GranolaListNote[] = [];
         let cursor: string | undefined;
 
-        stage = 'list';
+        stage = "list";
         for (let page = 0; page < 1_000; page += 1) {
           const response = await withRateLimitRetry(
-            'list_notes',
+            "list_notes",
             () =>
               client.listNotes({
                 updated_after: startingHighWaterMark ?? undefined,
@@ -902,20 +1117,23 @@ export async function pollGranolaOnce(
           );
           notes.push(...response.notes);
           for (const note of response.notes) {
-            maxUpdatedAt = maxIso(maxUpdatedAt, note.updated_at ?? note.created_at);
+            maxUpdatedAt = maxIso(
+              maxUpdatedAt,
+              note.updated_at ?? note.created_at,
+            );
           }
           if (!response.hasMore) break;
           if (!isNonEmptyString(response.cursor)) {
             throw new GranolaApiError(
-              'Granola pagination indicated hasMore without cursor',
-              'pagination_failed',
+              "Granola pagination indicated hasMore without cursor",
+              "pagination_failed",
             );
           }
           cursor = response.cursor;
           if (page === 999) {
             throw new GranolaApiError(
-              'Granola pagination exceeded safety page cap',
-              'pagination_failed',
+              "Granola pagination exceeded safety page cap",
+              "pagination_failed",
             );
           }
         }
@@ -923,25 +1141,40 @@ export async function pollGranolaOnce(
         let notesIngested = 0;
         let atomsWritten = 0;
         for (const listNote of notes) {
-          if (!shouldFetchGranolaNote(listNote, ingestedNoteIds, currentNotes.get(listNote.id))) {
+          if (
+            !shouldFetchGranolaNote(
+              listNote,
+              ingestedNoteIds,
+              currentNotes.get(listNote.id),
+            )
+          ) {
             continue;
           }
 
           stage = `detail:${listNote.id}`;
           const detail = await withRateLimitRetry(
-            'get_note',
+            "get_note",
             () => client.getNote(listNote.id),
             retryDelayMs,
           );
           const note = mergedDetail(listNote, detail);
-          maxUpdatedAt = maxIso(maxUpdatedAt, note.updated_at ?? note.created_at);
+          maxUpdatedAt = maxIso(
+            maxUpdatedAt,
+            note.updated_at ?? note.created_at,
+          );
 
           stage = `pipeline:${listNote.id}`;
           const events = granolaNoteToCaptureEvents(note, now());
           for (const event of events) {
-            const result = await processCandidateWithPolicy(event, storage, GRANOLA_SOURCE_POLICY);
+            const result = await processCandidateWithPolicy(
+              event,
+              storage,
+              GRANOLA_SOURCE_POLICY,
+            );
             if (!result.accepted) {
-              throw new Error(`Granola event rejected by pipeline: ${result.reason}`);
+              throw new Error(
+                `Granola event rejected by pipeline: ${result.reason}`,
+              );
             }
             atomsWritten += 1;
           }
@@ -962,21 +1195,21 @@ export async function pollGranolaOnce(
           });
         }
 
-        stage = 'checkpoint_final';
+        stage = "checkpoint_final";
         await writeGranolaCheckpointLocked(lock, {
           schema_version: GRANOLA_CHECKPOINT_SCHEMA_VERSION,
           high_water_mark: maxUpdatedAt,
           ingested_note_ids: [...ingestedNoteIds].sort(),
           last_synced_at: now(),
         });
-        log.info('poll_ok', {
+        log.info("poll_ok", {
           notes_seen: notes.length,
           notes_ingested: notesIngested,
           atoms_written: atomsWritten,
           high_water_mark: maxUpdatedAt,
         });
         return {
-          status: 'ok',
+          status: "ok",
           notes_seen: notes.length,
           notes_ingested: notesIngested,
           atoms_written: atomsWritten,
@@ -985,7 +1218,11 @@ export async function pollGranolaOnce(
     );
   } catch (err) {
     logPollError(err, stage);
-    return { status: 'error', reason: errorReason(err), message: (err as Error).message };
+    return {
+      status: "error",
+      reason: errorReason(err),
+      message: (err as Error).message,
+    };
   }
 }
 
@@ -995,7 +1232,11 @@ export function startGranolaPoller(
 ): GranolaPollerHandle {
   const keyResolution =
     options.client !== undefined
-      ? ({ enabled: true, apiKey: 'injected-client', source: 'options' } as const)
+      ? ({
+          enabled: true,
+          apiKey: "injected-client",
+          source: "options",
+        } as const)
       : resolveGranolaApiKey(options.env, options.configPath, options.apiKey);
   if (!keyResolution.enabled) {
     const disabled = disabledKey(keyResolution);
@@ -1012,16 +1253,17 @@ export function startGranolaPoller(
       baseUrl: options.apiBaseUrl,
       requestTimeoutMs: options.requestTimeoutMs,
     });
-  const pollIntervalMs = options.pollIntervalMs ?? DEFAULT_GRANOLA_POLL_INTERVAL_MS;
+  const pollIntervalMs =
+    options.pollIntervalMs ?? DEFAULT_GRANOLA_POLL_INTERVAL_MS;
   const runOnStart = options.runOnStart ?? true;
   let stopped = false;
   let inFlight: Promise<GranolaPollResult> | null = null;
 
   async function runPoll(): Promise<GranolaPollResult> {
-    if (stopped) return { status: 'skipped', reason: 'disabled' };
+    if (stopped) return { status: "skipped", reason: "disabled" };
     if (inFlight !== null) {
-      log.warn('poll_skipped_in_flight', {});
-      return { status: 'skipped', reason: 'in_flight' };
+      log.warn("poll_skipped_in_flight", {});
+      return { status: "skipped", reason: "in_flight" };
     }
     inFlight = pollGranolaOnce(storage, client, options);
     try {
@@ -1033,17 +1275,17 @@ export function startGranolaPoller(
 
   const interval = setInterval(() => {
     void runPoll().catch((err: unknown) => {
-      log.error('handler_error', { message: (err as Error).message });
+      log.error("handler_error", { message: (err as Error).message });
     });
   }, pollIntervalMs);
   interval.unref();
   if (runOnStart) {
     void runPoll().catch((err: unknown) => {
-      log.error('handler_error', { message: (err as Error).message });
+      log.error("handler_error", { message: (err as Error).message });
     });
   }
 
-  log.info('started', {
+  log.info("started", {
     poll_interval_ms: pollIntervalMs,
     checkpoint_path: options.checkpointPath ?? granolaCheckpointPath(),
     key_source: keyResolution.source,
@@ -1055,8 +1297,8 @@ export function startGranolaPoller(
     stop: async () => {
       stopped = true;
       clearInterval(interval);
-      if (inFlight !== null) await inFlight.catch(() => ({ status: 'error' }));
-      log.info('stopped', {});
+      if (inFlight !== null) await inFlight.catch(() => ({ status: "error" }));
+      log.info("stopped", {});
     },
   };
 }

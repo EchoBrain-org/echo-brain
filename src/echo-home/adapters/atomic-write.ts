@@ -1,6 +1,7 @@
 import {
   closeSync,
   fchmodSync,
+  fsyncSync,
   lstatSync,
   openSync,
   realpathSync,
@@ -10,7 +11,7 @@ import {
   writeSync,
 } from 'node:fs';
 import { homedir } from 'node:os';
-import { resolve } from 'node:path';
+import { dirname, resolve } from 'node:path';
 import { randomUUID } from 'node:crypto';
 
 export type AtomicWriteErrorCode =
@@ -178,13 +179,31 @@ export function atomicWrite(opts: AtomicWriteOpts): void {
     fd = openSync(tempPath, 'w', mode);
     const buffer =
       typeof opts.content === 'string' ? Buffer.from(opts.content, 'utf8') : opts.content;
-    writeSync(fd, buffer, 0, buffer.length, 0);
+    let offset = 0;
+    while (offset < buffer.length) {
+      const written = writeSync(
+        fd,
+        buffer,
+        offset,
+        buffer.length - offset,
+        offset,
+      );
+      if (written === 0) {
+        throw new AtomicWriteError(
+          'UNKNOWN',
+          writePath,
+          'temp file write made no progress',
+        );
+      }
+      offset += written;
+    }
     if (lockTo600) {
       fchmodSync(fd, 0o600);
     } else if (existingMode !== undefined) {
       // Re-apply existing mode in case the process umask stripped bits.
       fchmodSync(fd, existingMode);
     }
+    fsyncSync(fd);
   } catch (err) {
     if (fd !== undefined) {
       try {
@@ -226,5 +245,20 @@ export function atomicWrite(opts: AtomicWriteOpts): void {
       writePath,
       `rename to ${writePath} failed: ${(err as Error).message}`,
     );
+  }
+
+  let directoryFd: number | undefined;
+  try {
+    directoryFd = openSync(dirname(writePath), 'r');
+    fsyncSync(directoryFd);
+  } catch (err) {
+    const code = errnoCode(err);
+    throw new AtomicWriteError(
+      code,
+      writePath,
+      `failed to sync containing directory: ${(err as Error).message}`,
+    );
+  } finally {
+    if (directoryFd !== undefined) closeSync(directoryFd);
   }
 }

@@ -1,0 +1,29 @@
+{
+  "schema_version": 1,
+  "kind": "successor_change_record",
+  "predecessor": "provenance/successors/0002-tool-agnostic-core.v1.json",
+  "decision": "The standalone runtime composes all capabilities through the shared adapter-factory shape, persists core state in SQLite, and requires durable manual approval of an exact brief snapshot before any channel delivery.",
+  "implemented_capabilities": [
+    "canonical Granola meeting-source bridge",
+    "durable SQLite CoreStateStore",
+    "pending, approved, and rejected manual approval queue",
+    "one-shot and recurring adapter-composed CLI cycles",
+    "explicit-label structured-text reference processor",
+    "durable idempotent JSONL outbox reference channel"
+  ],
+  "architectural_invariants": [
+    "pending approvals never advance a source cursor",
+    "delivery publishes the stored approved brief snapshot rather than retry output",
+    "processing and delivery keys use collision-safe versioned encodings",
+    "concrete adapter names remain outside src/core",
+    "adapter settings remain opaque to the core and are validated by the adapter",
+    "SQLite state survives restart and all logical writes are idempotent"
+  ],
+  "state": {
+    "maturity": "DEV",
+    "authority": false,
+    "installed": false,
+    "production_adapter_set": false,
+    "wedge_executed": false
+  }
+}

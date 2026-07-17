@@ -1,0 +1,760 @@
+import { describe, expect, it } from 'vitest';
+import {
+  AdapterError,
+  AdapterRegistry,
+  type AdapterOperationContext,
+  runCoreCycle,
+  type AdapterConfig,
+  type AdapterConfigValidation,
+  type AdapterHealth,
+  type ApprovalDecision,
+  type ApprovalGate,
+  type ApprovalRequest,
+  type CommunicationChannelAdapter,
+  type CoreStateStore,
+  type DecisionExtractionContext,
+  type DecisionProcessorAdapter,
+  type DecisionSet,
+  type DeliveryEnvelope,
+  type DeliveryReceipt,
+  type MeetingBatch,
+  type MeetingDocument,
+  type MeetingPullRequest,
+  type MeetingSourceAdapter,
+} from '../../src/core/index.js';
+import { adapterConformance } from './adapter-conformance.js';
+
+const meeting: MeetingDocument = {
+  schema_version: 1,
+  id: 'meeting-1',
+  title: 'Weekly product review',
+  time: { actual_start_at: '2026-07-16T16:00:00.000Z' },
+  capture: {
+    state: 'complete',
+    components: [{ kind: 'transcript', state: 'available' }],
+  },
+  participants: [
+    { id: 'participant-1', display_name: 'Operator' },
+  ],
+  content: [
+    {
+      id: 'block-1',
+      kind: 'transcript',
+      text: 'We decided to ship the adapter contract.',
+    },
+  ],
+  artifacts: [],
+  provenance: {
+    source: {
+      kind: 'meeting-source',
+      adapter_id: 'source-alpha',
+      instance_id: 'primary',
+      version: '1.0.0',
+    },
+    external_id: 'external-meeting-1',
+    canonical_revision: 'revision-1',
+    observed_at: '2026-07-16T17:01:00.000Z',
+    normalizer_version: '1.0.0',
+    source_updated_at: '2026-07-16T17:00:00.000Z',
+  },
+};
+
+function validConfig(config: AdapterConfig): AdapterConfigValidation {
+  return config.adapter_id.length > 0
+    ? { ok: true, errors: [] }
+    : { ok: false, errors: ['adapter_id is required'] };
+}
+
+async function healthy(): Promise<AdapterHealth> {
+  return { status: 'healthy', checked_at: '2026-07-16T17:02:00.000Z' };
+}
+
+class SourceFake implements MeetingSourceAdapter {
+  readonly identity = {
+    kind: 'meeting-source' as const,
+    adapter_id: 'source-alpha',
+    instance_id: 'primary',
+    version: '1.0.0',
+  };
+  readonly requests: MeetingPullRequest[] = [];
+
+  validateConfig = validConfig;
+  healthCheck = healthy;
+
+  async pull(request: MeetingPullRequest): Promise<MeetingBatch> {
+    this.requests.push(request);
+    return { meetings: [meeting], next_cursor: 'cursor-2' };
+  }
+}
+
+class InvalidCursorSource extends SourceFake {
+  override async pull(): Promise<MeetingBatch> {
+    return {
+      meetings: [meeting],
+      next_cursor: 42,
+    } as unknown as MeetingBatch;
+  }
+}
+
+class ProcessorFake implements DecisionProcessorAdapter {
+  readonly identity = {
+    kind: 'decision-processor' as const,
+    adapter_id: 'processor-alpha',
+    instance_id: 'primary',
+    version: '2.0.0',
+  };
+  readonly contexts: DecisionExtractionContext[] = [];
+
+  validateConfig = validConfig;
+  healthCheck = healthy;
+
+  async extract(
+    input: MeetingDocument,
+    context: DecisionExtractionContext,
+  ): Promise<DecisionSet> {
+    this.contexts.push(context);
+    return {
+      schema_version: 1,
+      meeting_id: input.id,
+      meeting_revision: input.provenance.canonical_revision,
+      processor: this.identity,
+      generated_at: '2026-07-16T17:03:00.000Z',
+      signals: [
+        {
+          id: 'decision-1',
+          kind: 'decision',
+          text: 'Ship the adapter contract',
+          subject: 'adapter-contract',
+          confidence: 0.95,
+          status: 'decided',
+          evidence: [{ meeting_id: input.id, block_id: 'block-1' }],
+        },
+        {
+          id: 'action-1',
+          kind: 'action',
+          text: 'Publish the shared conformance suite',
+          subject: 'adapter-contract',
+          confidence: 0.9,
+          owner: 'Operator',
+          due_at: null,
+          evidence: [{ meeting_id: input.id, block_id: 'block-1' }],
+        },
+      ],
+    };
+  }
+}
+
+class InvalidEvidenceProcessor extends ProcessorFake {
+  override async extract(
+    input: MeetingDocument,
+    context: DecisionExtractionContext,
+  ): Promise<DecisionSet> {
+    const result = await super.extract(input, context);
+    return {
+      ...result,
+      signals: result.signals.map((signal, index) =>
+        index === 0
+          ? {
+              ...signal,
+              evidence: [
+                {
+                  meeting_id: input.id,
+                  block_id: 'missing-content-block',
+                  quote: 'not present in the meeting',
+                },
+              ],
+            }
+          : signal,
+      ),
+    };
+  }
+}
+
+class ChannelFake implements CommunicationChannelAdapter {
+  readonly identity = {
+    kind: 'communication-channel' as const,
+    adapter_id: 'channel-alpha',
+    instance_id: 'team-primary',
+    version: '1.0.0',
+  };
+  readonly destination = {
+    adapter_id: this.identity.adapter_id,
+    instance_id: this.identity.instance_id,
+    external_id: 'destination-1',
+  };
+  readonly envelopes: DeliveryEnvelope[] = [];
+  nextStatus: DeliveryReceipt['status'] = 'delivered';
+  nextRetryable: boolean | undefined;
+
+  validateConfig = validConfig;
+  healthCheck = healthy;
+
+  async publish(envelope: DeliveryEnvelope): Promise<DeliveryReceipt> {
+    this.envelopes.push(envelope);
+    return {
+      schema_version: 1,
+      envelope_id: envelope.id,
+      status: this.nextStatus,
+      external_id: this.nextStatus === 'delivered' ? 'receipt-1' : null,
+      recorded_at: '2026-07-16T17:05:00.000Z',
+      retryable: this.nextRetryable ?? this.nextStatus !== 'delivered',
+    };
+  }
+}
+
+class InvalidReceiptChannel extends ChannelFake {
+  override async publish(envelope: DeliveryEnvelope): Promise<DeliveryReceipt> {
+    this.envelopes.push(envelope);
+    return {
+      schema_version: 1,
+      envelope_id: envelope.id,
+      status: 'delivered',
+      external_id: null,
+      recorded_at: '2026-07-16T17:05:00.000Z',
+      retryable: false,
+    };
+  }
+}
+
+class UnauthorizedChannel extends ChannelFake {
+  override async publish(envelope: DeliveryEnvelope): Promise<DeliveryReceipt> {
+    this.envelopes.push(envelope);
+    throw new AdapterError('unauthorized', 'channel credentials expired', false);
+  }
+}
+
+class HangingChannel extends ChannelFake {
+  observedSignal: AbortSignal | undefined;
+  private announceStarted!: () => void;
+  readonly started = new Promise<void>((resolve) => {
+    this.announceStarted = resolve;
+  });
+
+  override async publish(
+    envelope: DeliveryEnvelope,
+    context?: AdapterOperationContext,
+  ): Promise<DeliveryReceipt> {
+    this.envelopes.push(envelope);
+    this.observedSignal = context?.signal;
+    this.announceStarted();
+    return await new Promise<DeliveryReceipt>(() => undefined);
+  }
+}
+
+class GateFake implements ApprovalGate {
+  readonly requests: ApprovalRequest[] = [];
+
+  constructor(
+    private readonly status: Exclude<ApprovalDecision['status'], 'pending'>,
+  ) {}
+
+  async review(request: ApprovalRequest): Promise<ApprovalDecision> {
+    this.requests.push(request);
+    return this.status === 'approved'
+      ? {
+          status: 'approved',
+          reviewed_at: '2026-07-16T17:04:00.000Z',
+          reviewed_by: 'reviewer-1',
+          reason: null,
+          approved_brief: request.brief,
+        }
+      : {
+          status: 'rejected',
+          reviewed_at: '2026-07-16T17:04:00.000Z',
+          reviewed_by: 'reviewer-1',
+          reason: 'needs revision',
+          approved_brief: null,
+        };
+  }
+}
+
+class PendingGateFake implements ApprovalGate {
+  async review(): Promise<ApprovalDecision> {
+    return {
+      status: 'pending',
+      reviewed_at: null,
+      reviewed_by: null,
+      reason: null,
+      approved_brief: null,
+    };
+  }
+}
+
+class InvalidRejectedGate implements ApprovalGate {
+  async review(): Promise<ApprovalDecision> {
+    return {
+      status: 'rejected',
+      reviewed_at: null,
+      reviewed_by: null,
+      reason: null,
+      approved_brief: null,
+    } as unknown as ApprovalDecision;
+  }
+}
+
+class InvalidApprovedBriefGate implements ApprovalGate {
+  async review(request: ApprovalRequest): Promise<ApprovalDecision> {
+    return {
+      status: 'approved',
+      reviewed_at: '2026-07-16T17:04:00.000Z',
+      reviewed_by: 'reviewer-1',
+      reason: null,
+      approved_brief: {
+        ...request.brief,
+        actions: null,
+      },
+    } as unknown as ApprovalDecision;
+  }
+}
+
+class StateFake implements CoreStateStore {
+  cursor: string | undefined = 'cursor-1';
+  readonly processed = new Set<string>();
+  readonly meetings: MeetingDocument[] = [];
+  readonly decisions: DecisionSet[] = [];
+  readonly decisionEntries: Array<{
+    meeting: MeetingDocument;
+    decisions: DecisionSet;
+  }> = [];
+  readonly approvals: ApprovalDecision[] = [];
+  readonly approvalsByKey = new Map<string, ApprovalDecision>();
+  readonly receipts: DeliveryReceipt[] = [];
+
+  async getSourceCursor(): Promise<string | undefined> {
+    return this.cursor;
+  }
+
+  async setSourceCursor(_source: MeetingSourceAdapter['identity'], cursor: string): Promise<void> {
+    this.cursor = cursor;
+  }
+
+  async hasProcessed(processingKey: string): Promise<boolean> {
+    return this.processed.has(processingKey);
+  }
+
+  async saveMeeting(value: MeetingDocument): Promise<void> {
+    this.meetings.push(value);
+  }
+
+  async saveDecisionSet(meeting: MeetingDocument, value: DecisionSet): Promise<void> {
+    this.decisions.push(value);
+    this.decisionEntries.push({ meeting, decisions: value });
+  }
+
+  async getDecisionSet(
+    meeting: MeetingDocument,
+    processor: DecisionProcessorAdapter['identity'],
+  ): Promise<DecisionSet | undefined> {
+    return this.decisionEntries.find(
+      (entry) =>
+        entry.meeting.provenance.source.adapter_id === meeting.provenance.source.adapter_id &&
+        entry.meeting.provenance.source.instance_id === meeting.provenance.source.instance_id &&
+        entry.meeting.provenance.external_id === meeting.provenance.external_id &&
+        entry.meeting.provenance.canonical_revision === meeting.provenance.canonical_revision &&
+        entry.decisions.processor.adapter_id === processor.adapter_id &&
+        entry.decisions.processor.instance_id === processor.instance_id &&
+        entry.decisions.processor.version === processor.version,
+    )?.decisions;
+  }
+
+  async getApproval(processingKey: string): Promise<ApprovalDecision | undefined> {
+    return this.approvalsByKey.get(processingKey);
+  }
+
+  async saveApproval(processingKey: string, value: ApprovalDecision): Promise<void> {
+    this.approvals.push(value);
+    const current = this.approvalsByKey.get(processingKey);
+    if (current === undefined || (current.status === 'pending' && value.status !== 'pending')) {
+      this.approvalsByKey.set(processingKey, value);
+    }
+  }
+
+  async saveDeliveryReceipt(
+    _envelope: DeliveryEnvelope,
+    receipt: DeliveryReceipt,
+  ): Promise<void> {
+    this.receipts.push(receipt);
+  }
+
+  async markProcessed(processingKey: string): Promise<void> {
+    this.processed.add(processingKey);
+  }
+}
+
+adapterConformance({
+  name: 'meeting source fake',
+  kind: 'meeting-source',
+  create: () => new SourceFake(),
+  validConfig: { adapter_id: 'source-alpha', instance_id: 'primary', settings: {} },
+  invalidConfig: {
+    adapter_id: '',
+    instance_id: 'primary',
+    credential_ref: 'env:DO_NOT_RENDER',
+    settings: {},
+  },
+});
+
+describe('tool-agnostic adapter registry', () => {
+  it('registers typed capabilities and rejects duplicate instances', () => {
+    const registry = new AdapterRegistry();
+    const source = new SourceFake();
+    const processor = new ProcessorFake();
+    const channel = new ChannelFake();
+    registry.register(source);
+    registry.register(processor);
+    registry.register(channel);
+
+    const settings = {};
+    expect(
+      registry.getMeetingSource({ adapter_id: 'source-alpha', instance_id: 'primary', settings }),
+    ).toBe(source);
+    expect(
+      registry.getDecisionProcessor({ adapter_id: 'processor-alpha', instance_id: 'primary', settings }),
+    ).toBe(processor);
+    expect(
+      registry.getCommunicationChannel({
+        adapter_id: 'channel-alpha',
+        instance_id: 'team-primary',
+        settings,
+      }),
+    ).toBe(channel);
+    expect(() => registry.register(source)).toThrow(/already registered/);
+  });
+});
+
+describe('tool-agnostic core cycle', () => {
+  it('rejects a malformed source batch before writing core state', async () => {
+    const state = new StateFake();
+    await expect(
+      runCoreCycle({
+        meetingSource: new InvalidCursorSource(),
+        decisionProcessor: new ProcessorFake(),
+        communicationChannels: [new ChannelFake()],
+        approvalGate: new GateFake('approved'),
+        state,
+      }),
+    ).rejects.toThrow(/next_cursor/);
+    expect(state.meetings).toHaveLength(0);
+    expect(state.cursor).toBe('cursor-1');
+  });
+
+  it('processes an approved revision and stores an idempotent delivery receipt', async () => {
+    const source = new SourceFake();
+    const processor = new ProcessorFake();
+    const channel = new ChannelFake();
+    const state = new StateFake();
+    const result = await runCoreCycle({
+      meetingSource: source,
+      decisionProcessor: processor,
+      communicationChannels: [channel],
+      approvalGate: new GateFake('approved'),
+      state,
+      now: () => '2026-07-16T17:03:30.000Z',
+      createId: (() => {
+        let id = 0;
+        return () => `generated-${++id}`;
+      })(),
+    });
+
+    expect(result).toMatchObject({
+      ok: true,
+      meetings_seen: 1,
+      meetings_processed: 1,
+      deliveries: 1,
+      cursor_advanced: true,
+    });
+    expect(source.requests).toEqual([{ cursor: 'cursor-1' }]);
+    expect(state.cursor).toBe('cursor-2');
+    expect(state.meetings).toEqual([meeting]);
+    expect(state.decisions).toHaveLength(1);
+    expect(state.receipts).toHaveLength(1);
+    expect(channel.envelopes[0]!.brief.decisions[0]!.text).toBe('Ship the adapter contract');
+    const deliveryParts = JSON.parse(
+      channel.envelopes[0]!.idempotency_key.slice('delivery:v1:'.length),
+    ) as string[];
+    const processingParts = JSON.parse(
+      deliveryParts[0]!.slice('processing:v1:'.length),
+    ) as string[];
+    expect(processingParts.slice(0, 4)).toEqual([
+      'source-alpha',
+      'primary',
+      'external-meeting-1',
+      'revision-1',
+    ]);
+  });
+
+  it('records a rejection without publishing', async () => {
+    const channel = new ChannelFake();
+    const state = new StateFake();
+    const result = await runCoreCycle({
+      meetingSource: new SourceFake(),
+      decisionProcessor: new ProcessorFake(),
+      communicationChannels: [channel],
+      approvalGate: new GateFake('rejected'),
+      state,
+    });
+
+    expect(result).toMatchObject({ ok: true, meetings_rejected: 1, deliveries: 0 });
+    expect(channel.envelopes).toHaveLength(0);
+    expect(state.processed.size).toBe(1);
+  });
+
+  it('keeps the source cursor pinned while manual approval is pending', async () => {
+    const channel = new ChannelFake();
+    const state = new StateFake();
+    const result = await runCoreCycle({
+      meetingSource: new SourceFake(),
+      decisionProcessor: new ProcessorFake(),
+      communicationChannels: [channel],
+      approvalGate: new PendingGateFake(),
+      state,
+    });
+
+    expect(result).toMatchObject({
+      ok: true,
+      meetings_pending: 1,
+      meetings_processed: 0,
+      deliveries: 0,
+      cursor_advanced: false,
+    });
+    expect(channel.envelopes).toHaveLength(0);
+    expect(state.processed.size).toBe(0);
+    expect(state.cursor).toBe('cursor-1');
+  });
+
+  it('reuses the persisted decision set while a pending approval resumes', async () => {
+    const source = new SourceFake();
+    const processor = new ProcessorFake();
+    const channel = new ChannelFake();
+    const state = new StateFake();
+    await runCoreCycle({
+      meetingSource: source,
+      decisionProcessor: processor,
+      communicationChannels: [channel],
+      approvalGate: new PendingGateFake(),
+      state,
+    });
+    const resumed = await runCoreCycle({
+      meetingSource: source,
+      decisionProcessor: processor,
+      communicationChannels: [channel],
+      approvalGate: new GateFake('approved'),
+      state,
+    });
+
+    expect(processor.contexts).toHaveLength(1);
+    expect(state.decisions).toHaveLength(1);
+    expect(resumed).toMatchObject({ meetings_processed: 1, deliveries: 1 });
+  });
+
+  it('does not mark or advance a revision whose delivery is unresolved', async () => {
+    const channel = new ChannelFake();
+    channel.nextStatus = 'unknown';
+    const state = new StateFake();
+    const result = await runCoreCycle({
+      meetingSource: new SourceFake(),
+      decisionProcessor: new ProcessorFake(),
+      communicationChannels: [channel],
+      approvalGate: new GateFake('approved'),
+      state,
+    });
+
+    expect(result).toMatchObject({ ok: false, cursor_advanced: false });
+    expect(result.failures).toEqual([
+      expect.objectContaining({ stage: 'delivery', meeting_id: 'meeting-1' }),
+    ]);
+    expect(state.processed.size).toBe(0);
+    expect(state.cursor).toBe('cursor-1');
+    expect(state.receipts[0]!.status).toBe('unknown');
+  });
+
+  it('rejects processor evidence that cannot be resolved to the canonical meeting', async () => {
+    const state = new StateFake();
+    const result = await runCoreCycle({
+      meetingSource: new SourceFake(),
+      decisionProcessor: new InvalidEvidenceProcessor(),
+      communicationChannels: [new ChannelFake()],
+      approvalGate: new GateFake('approved'),
+      state,
+    });
+
+    expect(result).toMatchObject({ ok: false, cursor_advanced: false });
+    expect(result.failures).toEqual([
+      expect.objectContaining({ stage: 'processing', meeting_id: 'meeting-1' }),
+    ]);
+    expect(state.decisions).toHaveLength(0);
+    expect(state.processed.size).toBe(0);
+  });
+
+  it('fails closed on a logically invalid delivered receipt', async () => {
+    const state = new StateFake();
+    const result = await runCoreCycle({
+      meetingSource: new SourceFake(),
+      decisionProcessor: new ProcessorFake(),
+      communicationChannels: [new InvalidReceiptChannel()],
+      approvalGate: new GateFake('approved'),
+      state,
+    });
+
+    expect(result).toMatchObject({ ok: false, cursor_advanced: false });
+    expect(result.failures).toEqual([
+      expect.objectContaining({ stage: 'delivery', meeting_id: 'meeting-1' }),
+    ]);
+    expect(state.receipts).toHaveLength(0);
+    expect(state.processed.size).toBe(0);
+  });
+
+  it('does not mark a revision from a malformed rejected approval', async () => {
+    const state = new StateFake();
+    const result = await runCoreCycle({
+      meetingSource: new SourceFake(),
+      decisionProcessor: new ProcessorFake(),
+      communicationChannels: [new ChannelFake()],
+      approvalGate: new InvalidRejectedGate(),
+      state,
+    });
+
+    expect(result).toMatchObject({ ok: false, cursor_advanced: false });
+    expect(result.failures).toEqual([
+      expect.objectContaining({ stage: 'approval', meeting_id: 'meeting-1' }),
+    ]);
+    expect(state.processed.size).toBe(0);
+  });
+
+  it('does not publish a malformed approved brief', async () => {
+    const state = new StateFake();
+    const channel = new ChannelFake();
+    const result = await runCoreCycle({
+      meetingSource: new SourceFake(),
+      decisionProcessor: new ProcessorFake(),
+      communicationChannels: [channel],
+      approvalGate: new InvalidApprovedBriefGate(),
+      state,
+    });
+
+    expect(result).toMatchObject({ ok: false, cursor_advanced: false });
+    expect(result.failures).toEqual([
+      expect.objectContaining({ stage: 'approval', meeting_id: 'meeting-1' }),
+    ]);
+    expect(channel.envelopes).toHaveLength(0);
+    expect(state.processed.size).toBe(0);
+  });
+
+  it('pins auth and configuration errors instead of misclassifying them as dead letters', async () => {
+    const state = new StateFake();
+    const result = await runCoreCycle({
+      meetingSource: new SourceFake(),
+      decisionProcessor: new ProcessorFake(),
+      communicationChannels: [new UnauthorizedChannel()],
+      approvalGate: new GateFake('approved'),
+      state,
+    });
+
+    expect(result).toMatchObject({
+      ok: false,
+      cursor_advanced: false,
+      meetings_dead_lettered: 0,
+      dead_letters: [],
+    });
+    expect(state.processed.size).toBe(0);
+  });
+
+  it('bounds a non-settling channel operation and aborts its adapter context', async () => {
+    const channel = new HangingChannel();
+    const state = new StateFake();
+    const result = await runCoreCycle({
+      meetingSource: new SourceFake(),
+      decisionProcessor: new ProcessorFake(),
+      communicationChannels: [channel],
+      approvalGate: new GateFake('approved'),
+      state,
+      deadlines: { publishMs: 5 },
+    });
+
+    expect(result).toMatchObject({ ok: false, cursor_advanced: false });
+    expect(result.failures[0]?.message).toMatch(/timed out/);
+    expect(channel.observedSignal?.aborted).toBe(true);
+    expect(state.processed.size).toBe(0);
+  });
+
+  it('propagates host cancellation into an active adapter operation', async () => {
+    const channel = new HangingChannel();
+    const controller = new AbortController();
+    const cycle = runCoreCycle({
+      meetingSource: new SourceFake(),
+      decisionProcessor: new ProcessorFake(),
+      communicationChannels: [channel],
+      approvalGate: new GateFake('approved'),
+      state: new StateFake(),
+      signal: controller.signal,
+    });
+    await channel.started;
+    controller.abort(new Error('test shutdown'));
+    const result = await cycle;
+
+    expect(result).toMatchObject({ ok: false, cursor_advanced: false });
+    expect(result.failures[0]?.message).toBe('test shutdown');
+    expect(channel.observedSignal?.aborted).toBe(true);
+  });
+
+  it('reuses one persisted approved snapshot and delivery key across retries', async () => {
+    const channel = new ChannelFake();
+    const gate = new GateFake('approved');
+    const state = new StateFake();
+    channel.nextStatus = 'unknown';
+    await runCoreCycle({
+      meetingSource: new SourceFake(),
+      decisionProcessor: new ProcessorFake(),
+      communicationChannels: [channel],
+      approvalGate: gate,
+      state,
+    });
+    channel.nextStatus = 'delivered';
+    const resumed = await runCoreCycle({
+      meetingSource: new SourceFake(),
+      decisionProcessor: new ProcessorFake(),
+      communicationChannels: [channel],
+      approvalGate: gate,
+      state,
+    });
+
+    expect(gate.requests).toHaveLength(1);
+    expect(channel.envelopes).toHaveLength(2);
+    expect(channel.envelopes[1]!.brief).toEqual(channel.envelopes[0]!.brief);
+    expect(channel.envelopes[1]!.idempotency_key).toBe(
+      channel.envelopes[0]!.idempotency_key,
+    );
+    expect(resumed).toMatchObject({ ok: true, meetings_processed: 1 });
+  });
+
+  it('dead-letters a permanent delivery rejection and advances the batch', async () => {
+    const channel = new ChannelFake();
+    channel.nextStatus = 'rejected';
+    channel.nextRetryable = false;
+    const state = new StateFake();
+    const result = await runCoreCycle({
+      meetingSource: new SourceFake(),
+      decisionProcessor: new ProcessorFake(),
+      communicationChannels: [channel],
+      approvalGate: new GateFake('approved'),
+      state,
+    });
+
+    expect(result).toMatchObject({
+      ok: false,
+      meetings_dead_lettered: 1,
+      meetings_processed: 0,
+      cursor_advanced: true,
+      failures: [],
+      dead_letters: [
+        {
+          meeting_id: 'meeting-1',
+          channel_adapter_id: 'channel-alpha',
+          channel_instance_id: 'team-primary',
+        },
+      ],
+    });
+    expect(state.processed.size).toBe(1);
+    expect(state.cursor).toBe('cursor-2');
+  });
+});

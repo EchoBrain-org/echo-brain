@@ -22,7 +22,7 @@ const FIXED_MEETING_DATE = '2026-07-13T17:00:00.000Z';
 
 // Deterministic, offline extractor adapter (stands in for the rank-3 API brain).
 const syntheticAdapter: GranolaSignalExtractor = async (
-  input: GranolaSignalExtractionInput,
+  _input: GranolaSignalExtractionInput,
   _context: GranolaSignalExtractionContext,
 ): Promise<GranolaExtractedSignal[]> => [
   {

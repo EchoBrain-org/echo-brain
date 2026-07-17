@@ -2,7 +2,7 @@
 // AC4 — Enforce the product boundary natively.
 //
 // Resolves the transitive internal module graph from the product entry points in
-// product/source-boundary.v1.json against tracked target HEAD blobs. Rejects any
+// product/source-boundary.v1.json against the repository worktree. Rejects any
 // edge outside allowed_internal_paths, into a forbidden_internal_root, or that
 // escapes the repository; classifies node: / bare-core specifiers against the
 // pinned Node 22 built-in set (never as npm rows); requires the full transitive
@@ -10,9 +10,9 @@
 // check-dependencies.mjs (this tool only asserts they are declared external).
 //
 // Node builtins only; safe to run before `npm ci`.
-import { spawnSync } from 'node:child_process';
 import { dirname, posix } from 'node:path';
 import process from 'node:process';
+import { repositoryWorktree, textFile } from './lib/repository-files.mjs';
 
 const REPO = process.cwd();
 
@@ -28,33 +28,6 @@ const NODE22_BUILTINS = new Set([
   'timers/promises', 'tls', 'trace_events', 'tty', 'url', 'util', 'util/types',
   'v8', 'vm', 'wasi', 'worker_threads', 'zlib',
 ]);
-
-function git(...args) {
-  const r = spawnSync('/usr/local/bin/git', ['-C', REPO, ...args], {
-    encoding: 'buffer', maxBuffer: 1 << 28,
-  });
-  if (r.status !== 0) {
-    throw new Error(`git ${args.join(' ')} failed: ${r.stderr}`);
-  }
-  return r.stdout;
-}
-
-function headTree() {
-  const out = git('ls-tree', '-rz', '--format=%(objectmode) %(objectname) %(path)', 'HEAD');
-  const tree = new Map();
-  for (const entry of out.toString('utf8').split('\0')) {
-    if (!entry.trim()) continue;
-    const [mode, oid, ...rest] = entry.split(' ');
-    tree.set(rest.join(' '), { mode, oid });
-  }
-  return tree;
-}
-
-function blob(tree, path) {
-  const e = tree.get(path);
-  if (!e) return null;
-  return git('cat-file', 'blob', e.oid).toString('utf8');
-}
 
 const IMPORT_RE =
   /(?:import|export)\s+(?:[^'"]*?\s+from\s+)?['"]([^'"]+)['"]|(?:^|[^.\w])(?:import|require)\s*\(\s*['"]([^'"]+)['"]\s*\)/gm;
@@ -78,15 +51,63 @@ function resolveRelative(tree, importer, spec) {
 }
 
 function main() {
-  const tree = headTree();
-  const boundary = JSON.parse(blob(tree, 'product/source-boundary.v1.json'));
+  const tree = repositoryWorktree(REPO);
+  const boundary = JSON.parse(textFile(tree, 'product/source-boundary.v1.json'));
   const allowed = boundary.allowed_internal_paths;
   const forbidden = boundary.forbidden_internal_roots;
   const external = new Set(boundary.allowed_external_runtime_packages);
+  const layerRules = boundary.layer_rules ?? [];
+  const adapterArchitecture = boundary.adapter_architecture;
   const errors = [];
+  const runtimeAssets = boundary.runtime_assets ?? [];
+  for (const asset of runtimeAssets) {
+    if (!tree.has(asset)) errors.push(`runtime asset missing from worktree: ${asset}`);
+  }
 
   const isAllowed = (p) => allowed.some((g) => matchesGlob(p, g));
   const isForbidden = (p) => forbidden.some((g) => matchesGlob(p, g));
+
+  const discoveredAdapterIds = new Set();
+  if (adapterArchitecture?.forbid_discovered_adapter_ids_in_core === true) {
+    for (const [path] of tree) {
+      if (!path.startsWith(adapterArchitecture.adapters_root)) continue;
+      const relative = path.slice(adapterArchitecture.adapters_root.length);
+      const parts = relative.split('/');
+      if (parts.length >= 3) discoveredAdapterIds.add(parts[1]);
+    }
+    for (const [path] of tree) {
+      if (
+        !matchesGlob(path, adapterArchitecture.core_root) ||
+        !/\.(?:ts|mts|js|mjs)$/.test(path)
+      ) continue;
+      const source = textFile(tree, path).toLowerCase();
+      for (const adapterId of discoveredAdapterIds) {
+        if (source.includes(adapterId.toLowerCase())) {
+          errors.push(`adapter id '${adapterId}' leaked into tool-agnostic core module: ${path}`);
+        }
+      }
+    }
+  }
+
+  // Layer rules apply to every matching worktree module, not only modules that
+  // happen to be reachable from today's public entry points. This makes the
+  // dependency direction durable as new core files are added.
+  for (const [path] of tree) {
+    const matchingRules = layerRules.filter((rule) => matchesGlob(path, rule.from));
+    if (matchingRules.length === 0 || !/\.(?:ts|mts|js|mjs)$/.test(path)) continue;
+    const source = textFile(tree, path);
+    for (const match of source.matchAll(IMPORT_RE)) {
+      const spec = match[1] ?? match[2];
+      if (!spec?.startsWith('.')) continue;
+      const resolved = resolveRelative(tree, path, spec);
+      if (resolved === null) continue;
+      for (const rule of matchingRules) {
+        if (!rule.allowed_imports.some((pattern) => matchesGlob(resolved, pattern))) {
+          errors.push(`layer rule '${rule.name}' rejects edge: ${path} -> ${resolved}`);
+        }
+      }
+    }
+  }
 
   const seen = new Set();
   const work = [...boundary.entry_points];
@@ -104,7 +125,7 @@ function main() {
       continue;
     }
     closure.add(p);
-    const text = blob(tree, p);
+    const text = textFile(tree, p);
     for (const m of text.matchAll(IMPORT_RE)) {
       const spec = m[1] ?? m[2];
       if (!spec) continue;
@@ -136,6 +157,9 @@ function main() {
     entry_points: boundary.entry_points,
     closure: [...closure].sort(),
     external_packages: [...externalSeen].sort(),
+    runtime_assets: runtimeAssets,
+    layer_rules: layerRules.map((rule) => rule.name),
+    discovered_adapter_ids: [...discoveredAdapterIds].sort(),
     errors,
   };
   process.stdout.write(JSON.stringify(result, null, 2) + '\n');

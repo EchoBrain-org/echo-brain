@@ -1,0 +1,367 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://echo.local/schemas/meeting-context.v1.schema.json",
+  "title": "ECHO canonical meeting context",
+  "description": "Tool-agnostic normalized meeting context emitted by meeting-source adapters.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "id",
+    "provenance",
+    "capture",
+    "participants",
+    "content",
+    "artifacts"
+  ],
+  "properties": {
+    "schema_version": { "const": 1 },
+    "id": { "$ref": "#/definitions/nonEmptyString" },
+    "provenance": { "$ref": "#/definitions/provenance" },
+    "capture": { "$ref": "#/definitions/capture" },
+    "participants": {
+      "type": "array",
+      "maxItems": 10000,
+      "items": { "$ref": "#/definitions/participant" }
+    },
+    "content": {
+      "type": "array",
+      "maxItems": 10000,
+      "items": { "$ref": "#/definitions/contentBlock" }
+    },
+    "artifacts": {
+      "type": "array",
+      "maxItems": 10000,
+      "items": { "$ref": "#/definitions/artifact" }
+    },
+    "title": { "$ref": "#/definitions/nonEmptyString" },
+    "description": { "$ref": "#/definitions/nonEmptyString" },
+    "lifecycle": {
+      "enum": ["scheduled", "active", "completed", "cancelled", "deleted", "unknown"]
+    },
+    "time": { "$ref": "#/definitions/time" },
+    "context": { "$ref": "#/definitions/context" },
+    "governance": { "$ref": "#/definitions/governance" },
+    "extensions": { "$ref": "#/definitions/jsonObject" }
+  },
+  "definitions": {
+    "nonEmptyString": {
+      "type": "string",
+      "minLength": 1,
+      "pattern": ".*\\S.*"
+    },
+    "timestamp": {
+      "type": "string",
+      "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}\\.[0-9]{3}Z$"
+    },
+    "jsonValue": {
+      "oneOf": [
+        { "type": "null" },
+        { "type": "string" },
+        { "type": "number" },
+        { "type": "boolean" },
+        {
+          "type": "array",
+          "items": { "$ref": "#/definitions/jsonValue" }
+        },
+        { "$ref": "#/definitions/jsonObject" }
+      ]
+    },
+    "jsonObject": {
+      "type": "object",
+      "additionalProperties": { "$ref": "#/definitions/jsonValue" }
+    },
+    "adapterIdentity": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "adapter_id", "instance_id", "version"],
+      "properties": {
+        "kind": { "const": "meeting-source" },
+        "adapter_id": { "$ref": "#/definitions/nonEmptyString" },
+        "instance_id": { "$ref": "#/definitions/nonEmptyString" },
+        "version": { "$ref": "#/definitions/nonEmptyString" }
+      }
+    },
+    "provenance": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "source",
+        "external_id",
+        "canonical_revision",
+        "observed_at",
+        "normalizer_version"
+      ],
+      "properties": {
+        "source": { "$ref": "#/definitions/adapterIdentity" },
+        "external_id": { "$ref": "#/definitions/nonEmptyString" },
+        "canonical_revision": { "$ref": "#/definitions/nonEmptyString" },
+        "observed_at": { "$ref": "#/definitions/timestamp" },
+        "normalizer_version": { "$ref": "#/definitions/nonEmptyString" },
+        "source_revision": { "$ref": "#/definitions/nonEmptyString" },
+        "previous_revision": { "$ref": "#/definitions/nonEmptyString" },
+        "source_created_at": { "$ref": "#/definitions/timestamp" },
+        "source_updated_at": { "$ref": "#/definitions/timestamp" },
+        "source_url": { "$ref": "#/definitions/nonEmptyString" },
+        "metadata": { "$ref": "#/definitions/jsonObject" }
+      }
+    },
+    "captureComponent": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "state"],
+      "properties": {
+        "kind": {
+          "enum": [
+            "metadata",
+            "participants",
+            "agenda",
+            "summary",
+            "notes",
+            "transcript",
+            "chat",
+            "recording",
+            "attachments",
+            "artifacts",
+            "other"
+          ]
+        },
+        "state": {
+          "enum": ["available", "empty", "pending", "not_provided", "forbidden", "failed"]
+        },
+        "reason": { "$ref": "#/definitions/nonEmptyString" },
+        "metadata": { "$ref": "#/definitions/jsonObject" }
+      }
+    },
+    "capture": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["state", "components"],
+      "properties": {
+        "state": { "enum": ["complete", "partial", "processing", "unavailable", "deleted"] },
+        "components": {
+          "type": "array",
+          "maxItems": 100,
+          "items": { "$ref": "#/definitions/captureComponent" }
+        },
+        "warnings": {
+          "type": "array",
+          "maxItems": 1000,
+          "items": { "$ref": "#/definitions/nonEmptyString" }
+        }
+      }
+    },
+    "participantIdentity": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "value"],
+      "properties": {
+        "kind": { "enum": ["source", "email", "phone", "other"] },
+        "value": { "$ref": "#/definitions/nonEmptyString" }
+      }
+    },
+    "participant": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id"],
+      "properties": {
+        "id": { "$ref": "#/definitions/nonEmptyString" },
+        "display_name": { "$ref": "#/definitions/nonEmptyString" },
+        "identities": {
+          "type": "array",
+          "maxItems": 100,
+          "uniqueItems": true,
+          "items": { "$ref": "#/definitions/participantIdentity" }
+        },
+        "roles": {
+          "type": "array",
+          "maxItems": 20,
+          "uniqueItems": true,
+          "items": {
+            "enum": ["organizer", "host", "invitee", "attendee", "speaker", "note_taker", "bot"]
+          }
+        },
+        "response_status": { "enum": ["accepted", "declined", "tentative", "unknown"] },
+        "attendance": { "enum": ["attended", "no_show", "unknown"] },
+        "organization": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "name": { "$ref": "#/definitions/nonEmptyString" },
+            "domain": { "$ref": "#/definitions/nonEmptyString" }
+          }
+        },
+        "is_external": { "type": "boolean" },
+        "metadata": { "$ref": "#/definitions/jsonObject" }
+      }
+    },
+    "contentBlock": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "kind", "text"],
+      "properties": {
+        "id": { "$ref": "#/definitions/nonEmptyString" },
+        "kind": {
+          "enum": [
+            "summary",
+            "note",
+            "agenda",
+            "transcript",
+            "caption",
+            "chat_message",
+            "chapter",
+            "provider_action_item",
+            "provider_decision",
+            "artifact_text",
+            "other"
+          ]
+        },
+        "text": { "$ref": "#/definitions/nonEmptyString" },
+        "artifact_id": { "$ref": "#/definitions/nonEmptyString" },
+        "author_participant_id": { "$ref": "#/definitions/nonEmptyString" },
+        "speaker_participant_id": { "$ref": "#/definitions/nonEmptyString" },
+        "sequence": { "type": "integer", "minimum": 0 },
+        "started_at": { "$ref": "#/definitions/timestamp" },
+        "ended_at": { "$ref": "#/definitions/timestamp" },
+        "start_offset_ms": { "type": "integer", "minimum": 0 },
+        "end_offset_ms": { "type": "integer", "minimum": 0 },
+        "language": { "$ref": "#/definitions/nonEmptyString" },
+        "confidence": { "type": "number", "minimum": 0, "maximum": 1 },
+        "origin": { "enum": ["human", "source_ai", "imported", "unknown"] },
+        "source_external_id": { "$ref": "#/definitions/nonEmptyString" },
+        "metadata": { "$ref": "#/definitions/jsonObject" }
+      }
+    },
+    "artifact": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "kind", "availability"],
+      "properties": {
+        "id": { "$ref": "#/definitions/nonEmptyString" },
+        "kind": {
+          "enum": [
+            "audio",
+            "video",
+            "transcript",
+            "document",
+            "slides",
+            "whiteboard",
+            "chat",
+            "image",
+            "attachment",
+            "link",
+            "raw_payload",
+            "other"
+          ]
+        },
+        "availability": {
+          "enum": [
+            "available",
+            "pending",
+            "forbidden",
+            "missing",
+            "expired",
+            "redacted",
+            "unknown"
+          ]
+        },
+        "title": { "$ref": "#/definitions/nonEmptyString" },
+        "mime_type": { "$ref": "#/definitions/nonEmptyString" },
+        "language": { "$ref": "#/definitions/nonEmptyString" },
+        "external_id": { "$ref": "#/definitions/nonEmptyString" },
+        "source_url": { "$ref": "#/definitions/nonEmptyString" },
+        "content_hash": { "$ref": "#/definitions/nonEmptyString" },
+        "metadata": { "$ref": "#/definitions/jsonObject" }
+      }
+    },
+    "time": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "scheduled_start_at": { "$ref": "#/definitions/timestamp" },
+        "scheduled_end_at": { "$ref": "#/definitions/timestamp" },
+        "actual_start_at": { "$ref": "#/definitions/timestamp" },
+        "actual_end_at": { "$ref": "#/definitions/timestamp" },
+        "timezone": { "$ref": "#/definitions/nonEmptyString" },
+        "all_day": { "type": "boolean" }
+      }
+    },
+    "calendarContext": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "event_id": { "$ref": "#/definitions/nonEmptyString" },
+        "series_id": { "$ref": "#/definitions/nonEmptyString" },
+        "recurrence_id": { "$ref": "#/definitions/nonEmptyString" },
+        "organizer_participant_id": { "$ref": "#/definitions/nonEmptyString" }
+      }
+    },
+    "locationContext": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "kind": { "enum": ["virtual", "physical", "hybrid"] },
+        "name": { "$ref": "#/definitions/nonEmptyString" },
+        "join_reference": { "$ref": "#/definitions/nonEmptyString" }
+      }
+    },
+    "scope": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "value", "origin"],
+      "properties": {
+        "kind": { "enum": ["domain", "team", "project", "customer", "topic"] },
+        "value": { "$ref": "#/definitions/nonEmptyString" },
+        "origin": { "enum": ["source", "adapter_config"] }
+      }
+    },
+    "context": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "calendar": { "$ref": "#/definitions/calendarContext" },
+        "location": { "$ref": "#/definitions/locationContext" },
+        "scopes": {
+          "type": "array",
+          "maxItems": 1000,
+          "items": { "$ref": "#/definitions/scope" }
+        },
+        "labels": {
+          "type": "array",
+          "maxItems": 1000,
+          "items": { "$ref": "#/definitions/nonEmptyString" }
+        },
+        "language": { "$ref": "#/definitions/nonEmptyString" },
+        "meeting_type": { "$ref": "#/definitions/nonEmptyString" },
+        "metadata": { "$ref": "#/definitions/jsonObject" }
+      }
+    },
+    "consent": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["purpose", "status"],
+      "properties": {
+        "purpose": { "enum": ["recording", "transcription", "analysis", "distribution"] },
+        "status": { "enum": ["granted", "denied", "unknown", "not_required"] },
+        "recorded_at": { "$ref": "#/definitions/timestamp" },
+        "source_reference": { "$ref": "#/definitions/nonEmptyString" }
+      }
+    },
+    "governance": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "sensitivity": { "enum": ["public", "internal", "confidential", "restricted"] },
+        "consent": {
+          "type": "array",
+          "maxItems": 100,
+          "items": { "$ref": "#/definitions/consent" }
+        },
+        "retention_until": { "$ref": "#/definitions/timestamp" },
+        "deletion_requested_at": { "$ref": "#/definitions/timestamp" },
+        "redaction_state": { "enum": ["none", "partial", "full"] },
+        "metadata": { "$ref": "#/definitions/jsonObject" }
+      }
+    }
+  }
+}

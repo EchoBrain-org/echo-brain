@@ -1,0 +1,19 @@
+{
+  "extends": "./tsconfig.build.json",
+  "compilerOptions": {
+    "noEmit": true,
+    "rootDir": ".",
+    "types": ["node", "vitest/globals"]
+  },
+  "include": [
+    "src/**/*.ts",
+    "tests/migration/**/*.ts",
+    "tests/standalone/**/*.ts",
+    "tests/core/**/*.ts",
+    "tests/adapters/**/*.ts",
+    "tests/product/end-to-end-synthetic.test.ts",
+    "tests/product/runtime-config.test.ts",
+    "tests/product/runtime-isolation.test.ts",
+    "vitest.config.ts"
+  ]
+}

@@ -1,6 +1,7 @@
 import { existsSync, readFileSync, realpathSync } from 'node:fs';
 import { dirname, isAbsolute, normalize, parse, resolve, sep } from 'node:path';
 import { Ajv, type ErrorObject, type ValidateFunction } from 'ajv';
+import type { AdapterInstanceConfig } from '../core/index.js';
 import { parseJson } from '../util/json.js';
 import { spawnSanitizedChild } from './spawn-sanitized-child.js';
 
@@ -8,15 +9,10 @@ export interface ProductRuntimeConfig {
   schema_version: 1;
   lane: 'team-product';
   state_dir: string;
-  granola: {
-    workspace_id: string;
-    input: 'api';
-    credential_ref: string;
-  };
-  brain_adapter: {
-    id: string;
-    credential_ref: string;
-  };
+  meeting_sources: readonly AdapterInstanceConfig[];
+  decision_processor: AdapterInstanceConfig;
+  communication_channels: readonly AdapterInstanceConfig[];
+  cycle_interval_ms?: number;
   approval_mode: 'manual';
 }
 
@@ -52,10 +48,15 @@ interface FilesystemProbeDependencies {
 }
 
 const runtimeSchema = parseJson(
-  readFileSync(new URL('../../schemas/product/runtime-config.v1.schema.json', import.meta.url), 'utf8'),
+  readFileSync(
+    new URL('../../schemas/runtime-config.v1.schema.json', import.meta.url),
+    'utf8',
+  ),
 );
 const ajv = new Ajv({ allErrors: true, strict: false });
-const validateRuntimeSchema = ajv.compile<ProductRuntimeConfig>(runtimeSchema as object);
+const validateRuntimeSchema = ajv.compile<ProductRuntimeConfig>(
+  runtimeSchema as object,
+);
 
 function formatSchemaErrors(errors: ValidateFunction['errors']): string[] {
   return (errors ?? []).map((error: ErrorObject) => {
@@ -68,9 +69,44 @@ function containsTraversal(path: string): boolean {
   return path.split(/[\\/]+/).includes('..');
 }
 
-export function validateProductRuntimeConfig(value: unknown): ProductRuntimeConfig {
+function freezeAdapterConfig(
+  config: AdapterInstanceConfig,
+): AdapterInstanceConfig {
+  return Object.freeze({
+    ...config,
+    settings: deepFreeze({ ...config.settings }),
+  });
+}
+
+function deepFreeze<T>(value: T): T {
+  if (value !== null && typeof value === 'object') {
+    for (const item of Object.values(value)) deepFreeze(item);
+    Object.freeze(value);
+  }
+  return value;
+}
+
+function duplicateAdapterInstances(
+  configs: readonly AdapterInstanceConfig[],
+): string[] {
+  const seen = new Set<string>();
+  const duplicates = new Set<string>();
+  for (const config of configs) {
+    const key = `${config.adapter_id}/${config.instance_id}`;
+    if (seen.has(key)) duplicates.add(key);
+    seen.add(key);
+  }
+  return [...duplicates];
+}
+
+export function validateProductRuntimeConfig(
+  value: unknown,
+): ProductRuntimeConfig {
   if (!validateRuntimeSchema(value)) {
-    throw new ProductConfigError('invalid product runtime configuration', formatSchemaErrors(validateRuntimeSchema.errors));
+    throw new ProductConfigError(
+      'invalid product runtime configuration',
+      formatSchemaErrors(validateRuntimeSchema.errors),
+    );
   }
   if (!isAbsolute(value.state_dir) || containsTraversal(value.state_dir)) {
     throw new ProductConfigError('invalid product runtime configuration', [
@@ -78,31 +114,61 @@ export function validateProductRuntimeConfig(value: unknown): ProductRuntimeConf
     ]);
   }
   const normalized = normalize(value.state_dir);
-  if (normalized === parse(normalized).root || normalized.split(sep).length < 3) {
+  if (
+    normalized === parse(normalized).root ||
+    normalized.split(sep).length < 3
+  ) {
     throw new ProductConfigError('invalid product runtime configuration', [
       '/state_dir must name an installation-local directory below the filesystem root',
+    ]);
+  }
+  const duplicateSources = duplicateAdapterInstances(value.meeting_sources);
+  const duplicateChannels = duplicateAdapterInstances(
+    value.communication_channels,
+  );
+  if (duplicateSources.length > 0 || duplicateChannels.length > 0) {
+    throw new ProductConfigError('invalid product runtime configuration', [
+      ...duplicateSources.map(
+        (key) =>
+          `/meeting_sources contains duplicate adapter instance '${key}'`,
+      ),
+      ...duplicateChannels.map(
+        (key) =>
+          `/communication_channels contains duplicate adapter instance '${key}'`,
+      ),
     ]);
   }
   return Object.freeze({
     ...value,
     state_dir: resolve(value.state_dir),
-    granola: Object.freeze({ ...value.granola }),
-    brain_adapter: Object.freeze({ ...value.brain_adapter }),
+    meeting_sources: Object.freeze(
+      value.meeting_sources.map(freezeAdapterConfig),
+    ),
+    decision_processor: freezeAdapterConfig(value.decision_processor),
+    communication_channels: Object.freeze(
+      value.communication_channels.map(freezeAdapterConfig),
+    ),
   });
 }
 
-export function loadProductRuntimeConfig(filePath: string): ProductRuntimeConfig {
+export function loadProductRuntimeConfig(
+  filePath: string,
+): ProductRuntimeConfig {
   let raw: string;
   try {
     raw = readFileSync(filePath, 'utf8');
   } catch (error) {
-    throw new ProductConfigError(`cannot read product runtime configuration: ${(error as Error).message}`);
+    throw new ProductConfigError(
+      `cannot read product runtime configuration: ${(error as Error).message}`,
+    );
   }
   let parsed: unknown;
   try {
     parsed = parseJson(raw);
   } catch (error) {
-    throw new ProductConfigError(`invalid product runtime configuration JSON: ${(error as Error).message}`);
+    throw new ProductConfigError(
+      `invalid product runtime configuration JSON: ${(error as Error).message}`,
+    );
   }
   return validateProductRuntimeConfig(parsed);
 }
@@ -143,13 +209,24 @@ export function classifyMountTable(
   const records = parseMountTable(stdout);
   if (records === null) return { kind: 'unknown', raw: stdout };
   const normalizedPath = normalize(resolvedPath);
-  const matches = records.filter((record) => isExactOrDescendant(normalizedPath, record.mountPoint));
+  const matches = records.filter((record) =>
+    isExactOrDescendant(normalizedPath, record.mountPoint),
+  );
   if (matches.length === 0) return { kind: 'unknown', raw: stdout };
-  const deepest = Math.max(...matches.map((record) => componentDepth(record.mountPoint)));
-  const candidates = matches.filter((record) => componentDepth(record.mountPoint) === deepest);
-  const identities = new Set(candidates.map((record) => `${record.mountPoint}\u0000${record.type}`));
+  const deepest = Math.max(
+    ...matches.map((record) => componentDepth(record.mountPoint)),
+  );
+  const candidates = matches.filter(
+    (record) => componentDepth(record.mountPoint) === deepest,
+  );
+  const identities = new Set(
+    candidates.map((record) => `${record.mountPoint}\u0000${record.type}`),
+  );
   if (identities.size !== 1) {
-    return { kind: 'unknown', raw: candidates.map((record) => record.raw).join('\n') };
+    return {
+      kind: 'unknown',
+      raw: candidates.map((record) => record.raw).join('\n'),
+    };
   }
   const selected = candidates[0]!;
   if (['nfs', 'smbfs', 'afpfs', 'webdav'].includes(selected.type)) {
@@ -161,7 +238,11 @@ export function classifyMountTable(
   return { kind: 'unknown', raw: selected.type };
 }
 
-async function readMountTable(): Promise<{ ok: boolean; stdout: string; stderr: string }> {
+async function readMountTable(): Promise<{
+  ok: boolean;
+  stdout: string;
+  stderr: string;
+}> {
   const child = spawnSanitizedChild('/sbin/mount', [], {
     env: { LC_ALL: 'C' },
     timeout: 2_000,
@@ -173,8 +254,12 @@ async function readMountTable(): Promise<{ ok: boolean; stdout: string; stderr: 
   child.stdout.on('data', (chunk: string) => (stdout += chunk));
   child.stderr.on('data', (chunk: string) => (stderr += chunk));
   return await new Promise((resolveResult) => {
-    child.once('error', (error) => resolveResult({ ok: false, stdout, stderr: error.message }));
-    child.once('close', (code) => resolveResult({ ok: code === 0, stdout, stderr }));
+    child.once('error', (error) =>
+      resolveResult({ ok: false, stdout, stderr: error.message }),
+    );
+    child.once('close', (code) =>
+      resolveResult({ ok: code === 0, stdout, stderr }),
+    );
   });
 }
 
@@ -200,11 +285,15 @@ export function createStateFilesystemClassifier(
   return async (path) => {
     try {
       const ancestor = closestExistingAncestor(path, exists);
-      if (ancestor === null) return { kind: 'unknown', raw: 'no existing ancestor' };
+      if (ancestor === null)
+        return { kind: 'unknown', raw: 'no existing ancestor' };
       const resolvedPath = realpath(ancestor);
       const result = await mountTable();
       if (!result.ok) {
-        return { kind: 'unknown', raw: result.stderr || 'mount command failed' };
+        return {
+          kind: 'unknown',
+          raw: result.stderr || 'mount command failed',
+        };
       }
       return classifyMountTable(resolvedPath, result.stdout);
     } catch (error) {

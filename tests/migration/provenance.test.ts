@@ -1,7 +1,7 @@
 // AC3 — provenance: schema conformance, raw-object partition, exact dispositions,
 // full target partition, and evasion failure.
 import { spawnSync } from 'node:child_process';
-import { mkdtempSync, readFileSync, writeFileSync, rmSync, cpSync } from 'node:fs';
+import { mkdtempSync, readFileSync, writeFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { Ajv } from 'ajv';
@@ -47,7 +47,7 @@ describe('provenance records', () => {
     expect(new Set(policy.target_only_paths).size).toBe(21);
   });
 
-  it('check-provenance passes against the committed target HEAD', () => {
+  it('check-provenance passes against the immutable extraction baseline', () => {
     const r = spawnSync(process.execPath, [join(REPO, 'tools/check-provenance.mjs')], { cwd: REPO, encoding: 'utf8' });
     expect(r.stdout + r.stderr).toContain('"ok": true');
     expect(r.status).toBe(0);
@@ -65,7 +65,11 @@ describe('provenance records', () => {
       encoding: 'utf8',
       env: { ...process.env, GIT_AUTHOR_NAME: 't', GIT_AUTHOR_EMAIL: 't@t', GIT_COMMITTER_NAME: 't', GIT_COMMITTER_EMAIL: 't@t' },
     });
-    const r = spawnSync(process.execPath, [join(clone, 'tools/check-provenance.mjs')], { cwd: clone, encoding: 'utf8' });
+    const r = spawnSync(
+      process.execPath,
+      [join(clone, 'tools/check-provenance.mjs'), '--commit', 'HEAD'],
+      { cwd: clone, encoding: 'utf8' },
+    );
     expect(r.status).not.toBe(0);
     expect(r.stdout + r.stderr).toMatch(/sha256 drift|unpartitioned/);
   });
