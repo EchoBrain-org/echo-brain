@@ -16,7 +16,7 @@ import {
   type ApprovalRequest,
   type DecisionBrief,
 } from '../core/index.js';
-import { atomicWrite } from '../echo-home/adapters/atomic-write.js';
+import { atomicWrite } from '../infrastructure/filesystem/atomic-write.js';
 import { parseJson } from '../util/json.js';
 import { acquireProcessFileLock } from '../util/process-file-lock.js';
 

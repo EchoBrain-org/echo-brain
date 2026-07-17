@@ -6,9 +6,8 @@ import {
   GRANOLA_DERIVED_INDEX_SOURCE,
   GRANOLA_DERIVED_SOURCE,
   isAllowedGranolaDerivedSource,
-} from '../capture/granola-source-policy.js';
-import { ECHO_STATE_PATHS } from '../echo-home/state-paths.js';
-import { atomicWrite } from '../echo-home/adapters/atomic-write.js';
+} from '../adapters/meeting-sources/granola/compatibility/granola-source-policy.js';
+import { atomicWrite } from '../infrastructure/filesystem/atomic-write.js';
 import { isNonEmptyString } from '../guards.js';
 import { createLogger } from '../logging/index.js';
 import { normalizeSubject } from '../util/subject.js';
@@ -18,7 +17,7 @@ import {
   resolveCurrentGranolaNotes,
   withGranolaCheckpointLock,
   writeCheckpointJsonWithLock,
-} from '../capture/surfaces/granola-poller.js';
+} from '../adapters/meeting-sources/granola/compatibility/granola-poller.js';
 import {
   GRANOLA_SIGNALS_WORKER,
   writeWorkerHeartbeat,
@@ -123,11 +122,9 @@ export interface GranolaSignalRunManifest {
   signal_atom_ids: string[];
 }
 
-export interface GranolaSignalWorkerOptions {
-  checkpointPath?: string;
+export interface GranolaSignalRunOptions {
+  checkpointPath: string;
   extractorVersion?: string;
-  extractFn?: GranolaSignalExtractor;
-  adapter?: GranolaSignalAdapter;
   now?: () => string;
   settleMs?: number;
   lowConfidenceThreshold?: number;
@@ -140,12 +137,16 @@ export interface GranolaSignalWorkerOptions {
   lockTimeoutMs?: number;
   lockStaleMs?: number;
   lockRetryMs?: number;
+}
+
+export interface GranolaSignalWorkerOptions extends GranolaSignalRunOptions {
+  extractFn?: GranolaSignalExtractor;
+  adapter?: GranolaSignalAdapter;
   workerIntervalMs?: number;
   runOnStart?: boolean;
-  env?: NodeJS.ProcessEnv;
   /** Compatibility-only injected availability seam; never selects an adapter. */
   preflight?: () => Promise<void>;
-  heartbeatPath?: string;
+  heartbeatPath: string;
 }
 
 /**
@@ -213,8 +214,8 @@ export class GranolaExtractorParseError extends Error {
   }
 }
 
-export function granolaSignalCheckpointPath(): string {
-  return join(ECHO_STATE_PATHS.state, 'granola-signals-checkpoint.json');
+export function granolaSignalCheckpointPath(checkpointDirectory: string): string {
+  return join(checkpointDirectory, 'granola-signals.json');
 }
 
 function isErrnoException(err: unknown): err is NodeJS.ErrnoException {
@@ -230,7 +231,7 @@ function emptyCheckpoint(): GranolaSignalCheckpoint {
 }
 
 export function loadGranolaSignalCheckpoint(
-  filePath = granolaSignalCheckpointPath(),
+  filePath: string,
 ): GranolaSignalCheckpoint {
   let raw: string;
   try {
@@ -288,7 +289,7 @@ export function loadGranolaSignalCheckpoint(
 
 export function writeGranolaSignalCheckpoint(
   checkpoint: GranolaSignalCheckpoint,
-  filePath = granolaSignalCheckpointPath(),
+  filePath: string,
 ): void {
   mkdirSync(dirname(filePath), { recursive: true });
   atomicWrite({ filePath, content: `${JSON.stringify(checkpoint, null, 2)}\n` });
@@ -698,7 +699,7 @@ function updateCheckpointFailure(
 
 export async function clearGranolaSignalFailure(
   noteId: string,
-  checkpointPath = granolaSignalCheckpointPath(),
+  checkpointPath: string,
 ): Promise<void> {
   await withGranolaCheckpointLock(checkpointPath, {}, async (lock) => {
     const checkpoint = loadGranolaSignalCheckpoint(checkpointPath);
@@ -749,7 +750,7 @@ async function extractWithRetries(
 export async function runGranolaSignalWorkerOnce(
   storage: Storage,
   extractFn: GranolaSignalExtractor,
-  options: GranolaSignalWorkerOptions = {},
+  options: GranolaSignalRunOptions,
 ): Promise<GranolaSignalWorkerResult> {
   if (
     !isAllowedGranolaDerivedSource(GRANOLA_SIGNAL_SOURCE) ||
@@ -763,7 +764,7 @@ export async function runGranolaSignalWorkerOnce(
   }
 
   const now = options.now ?? (() => new Date().toISOString());
-  const checkpointPath = options.checkpointPath ?? granolaSignalCheckpointPath();
+  const checkpointPath = options.checkpointPath;
   const extractorVersion = options.extractorVersion ?? GRANOLA_SIGNAL_EXTRACTOR_VERSION;
   const settleMs = options.settleMs ?? DEFAULT_GRANOLA_SIGNAL_SETTLE_MS;
   const lowConfidenceThreshold =
@@ -1101,7 +1102,7 @@ function granolaSignalHeartbeat(
 
 export async function startGranolaSignalWorker(
   storage: Storage,
-  options: GranolaSignalWorkerOptions = {},
+  options: GranolaSignalWorkerOptions,
 ): Promise<GranolaSignalWorkerHandle> {
   let extractFn: GranolaSignalExtractor | null = options.extractFn ?? null;
   const compatibilityAdapter: GranolaSignalAdapter | undefined =
@@ -1214,7 +1215,7 @@ export async function startGranolaSignalWorker(
 
   log.info('started', {
     worker_interval_ms: workerIntervalMs,
-    checkpoint_path: options.checkpointPath ?? granolaSignalCheckpointPath(),
+    checkpoint_path: options.checkpointPath,
   });
 
   return {

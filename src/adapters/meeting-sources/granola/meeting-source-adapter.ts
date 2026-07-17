@@ -25,7 +25,7 @@ import {
   type GranolaListNote,
   type GranolaNoteDetail,
   type GranolaTranscriptItem,
-} from "../../../capture/surfaces/granola-poller.js";
+} from "./granola-api-client.js";
 
 export const GRANOLA_MEETING_SOURCE_ADAPTER_ID = "granola";
 export const GRANOLA_MEETING_SOURCE_ADAPTER_VERSION = "2.2.0";

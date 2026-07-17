@@ -1,16 +1,14 @@
 import {
   closeSync,
+  constants,
   fchmodSync,
   fsyncSync,
   lstatSync,
   openSync,
-  realpathSync,
   renameSync,
-  statSync,
   unlinkSync,
   writeSync,
 } from 'node:fs';
-import { homedir } from 'node:os';
 import { dirname, resolve } from 'node:path';
 import { randomUUID } from 'node:crypto';
 
@@ -40,30 +38,6 @@ export interface AtomicWriteOpts {
   filePath: string;
   content: string | Buffer;
   secretSensitive?: boolean;
-  followSymlink?: boolean;
-}
-
-let __testTempHook: ((tempPath: string) => void) | undefined;
-
-/**
- * Test-only: register a hook called with each temp filename atomicWrite uses
- * (before the rename). Production code MUST NOT call this. Pass undefined to
- * clear. The hook is invoked synchronously before rename(); any throw escapes
- * to the caller. Used by the unique-temp pin test in AC9.
- */
-export function __setAtomicWriteTestHook(
-  hook: ((tempPath: string) => void) | undefined,
-): void {
-  __testTempHook = hook;
-}
-
-const SECRET_SENSITIVE_ALLOWLIST: readonly string[] = [
-  resolve(homedir(), '.codex/config.toml'),
-  resolve(homedir(), '.cursor/mcp.json'),
-];
-
-function isAllowlistedSecretPath(absPath: string): boolean {
-  return SECRET_SENSITIVE_ALLOWLIST.includes(absPath);
 }
 
 function errnoCode(err: unknown): AtomicWriteErrorCode {
@@ -95,64 +69,35 @@ function bestEffortUnlink(path: string): void {
 
 export function atomicWrite(opts: AtomicWriteOpts): void {
   const absPath = resolve(opts.filePath);
-  const followSymlink = opts.followSymlink === true;
   const secretSensitive = opts.secretSensitive === true;
 
   let existingMode: number | undefined;
-  let writePath = absPath;
-  let kind: 'missing' | 'regular' | 'symlink' = 'missing';
+  const writePath = absPath;
 
   try {
     const lst = lstatSync(absPath);
     if (lst.isSymbolicLink()) {
-      kind = 'symlink';
-    } else if (lst.isDirectory()) {
-      throw new AtomicWriteError('EISDIR', absPath, `target is a directory: ${absPath}`);
-    } else {
-      kind = 'regular';
-      existingMode = lst.mode & 0o777;
-    }
-  } catch (err) {
-    if (err instanceof AtomicWriteError) throw err;
-    const code = errnoCode(err);
-    if (code === 'ENOENT') {
-      kind = 'missing';
-    } else {
-      throw new AtomicWriteError(code, absPath, `lstat failed: ${(err as Error).message}`);
-    }
-  }
-
-  if (kind === 'symlink') {
-    if (!followSymlink) {
       throw new AtomicWriteError(
         'EEXIST',
         absPath,
         `refusing to write through symlink at ${absPath}`,
       );
-    }
-    try {
-      writePath = realpathSync(absPath);
-    } catch (err) {
-      const code = errnoCode(err);
+    } else if (lst.isDirectory()) {
+      throw new AtomicWriteError('EISDIR', absPath, `target is a directory: ${absPath}`);
+    } else if (!lst.isFile()) {
       throw new AtomicWriteError(
-        code === 'UNKNOWN' ? 'ENOENT' : code,
+        'EEXIST',
         absPath,
-        `realpath failed (broken or dangling symlink): ${(err as Error).message}`,
+        `target is not a regular file: ${absPath}`,
       );
+    } else {
+      existingMode = lst.mode & 0o777;
     }
-    try {
-      const st = statSync(writePath);
-      existingMode = st.mode & 0o777;
-    } catch (err) {
-      const code = errnoCode(err);
-      if (code !== 'ENOENT') {
-        throw new AtomicWriteError(
-          code,
-          writePath,
-          `stat of resolved target failed: ${(err as Error).message}`,
-        );
-      }
-      existingMode = undefined;
+  } catch (err) {
+    if (err instanceof AtomicWriteError) throw err;
+    const code = errnoCode(err);
+    if (code !== 'ENOENT') {
+      throw new AtomicWriteError(code, absPath, `lstat failed: ${(err as Error).message}`);
     }
   }
 
@@ -165,18 +110,39 @@ export function atomicWrite(opts: AtomicWriteOpts): void {
     } else {
       mode = existingMode;
     }
-  } else if (secretSensitive || isAllowlistedSecretPath(writePath)) {
+  } else if (secretSensitive) {
     mode = 0o600;
     lockTo600 = true;
   } else {
     mode = 0o666;
   }
 
-  const tempPath = `${writePath}.${process.pid}.${randomUUID().slice(0, 8)}.tmp`;
-
+  let tempPath = '';
   let fd: number | undefined;
+  let ownsTemp = false;
+  const exclusiveWriteFlags =
+    constants.O_WRONLY |
+    constants.O_CREAT |
+    constants.O_EXCL |
+    constants.O_NOFOLLOW;
   try {
-    fd = openSync(tempPath, 'w', mode);
+    for (let attempt = 0; attempt < 10; attempt += 1) {
+      tempPath = `${writePath}.${process.pid}.${randomUUID()}.tmp`;
+      try {
+        fd = openSync(tempPath, exclusiveWriteFlags, mode);
+        ownsTemp = true;
+        break;
+      } catch (err) {
+        if (errnoCode(err) !== 'EEXIST' || attempt === 9) throw err;
+      }
+    }
+    if (fd === undefined) {
+      throw new AtomicWriteError(
+        'EEXIST',
+        writePath,
+        'could not create a unique temporary file',
+      );
+    }
     const buffer =
       typeof opts.content === 'string' ? Buffer.from(opts.content, 'utf8') : opts.content;
     let offset = 0;
@@ -213,7 +179,7 @@ export function atomicWrite(opts: AtomicWriteOpts): void {
       }
       fd = undefined;
     }
-    bestEffortUnlink(tempPath);
+    if (ownsTemp) bestEffortUnlink(tempPath);
     if (err instanceof AtomicWriteError) throw err;
     const code = errnoCode(err);
     throw new AtomicWriteError(
@@ -231,14 +197,11 @@ export function atomicWrite(opts: AtomicWriteOpts): void {
     }
   }
 
-  if (__testTempHook !== undefined) {
-    __testTempHook(tempPath);
-  }
-
   try {
     renameSync(tempPath, writePath);
+    ownsTemp = false;
   } catch (err) {
-    bestEffortUnlink(tempPath);
+    if (ownsTemp) bestEffortUnlink(tempPath);
     const code = errnoCode(err);
     throw new AtomicWriteError(
       code,

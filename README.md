@@ -132,6 +132,10 @@ reference is optional because some adapters do not require authentication.
 adapter. Adapter IDs select an implementation; instance IDs distinguish
 multiple configured instances of the same capability.
 
+`state_dir` is the single authority for current product state. The standalone
+product does not read `ECHO_HOME`; integrations and compatibility workers must
+receive concrete checkpoint, health, and output paths from their caller.
+
 ```sh
 echo-brain validate-config --config /absolute/path/runtime-config.json
 echo-brain selftest --config /absolute/path/runtime-config.json
@@ -204,8 +208,8 @@ adapter `settings` and must not become required core semantics.
 
 1. Add and qualify a semantic decision-processor adapter and the first real
    team communication-channel adapter using the same contracts.
-2. Move the remaining Granola compatibility implementation out of the legacy
-   `src/capture/**` paths after its canonical bridge fully replaces those APIs.
+2. Move the remaining legacy enrichment consumers from the Granola adapter's
+   raw-event compatibility API to canonical records, then retire that API.
 3. Bound first-run processing to seven days and serve newest meetings first,
    independent of the selected meeting adapter.
 4. Add install/status/doctor/service lifecycle and rollback behavior.

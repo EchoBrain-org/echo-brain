@@ -175,6 +175,11 @@ src/
     communication-channels/
       <adapter-id>/
         index.ts
+  product/
+    paths.ts                    sole authority for configured product-state paths
+  infrastructure/
+    filesystem/
+      atomic-write.ts           path-agnostic durable file replacement
 ```
 
 An adapter directory may contain its API client, config parser, mapper, and
@@ -182,12 +187,23 @@ error translation. Only `index.ts` is public. Vendor SDK types must stop at the
 adapter boundary. Shared logic graduates to the core only after it is expressed
 entirely in canonical terms.
 
+Infrastructure contains vendor-neutral mechanisms, not product or path policy.
+Callers supply concrete destinations and security requirements to the atomic
+writer. `state_dir`, resolved through `src/product/paths.ts`, is the sole
+authority for current product state; product code must not discover an ambient
+`ECHO_HOME`. Compatibility workers that remain outside the canonical loop must
+receive checkpoint and health paths explicitly.
+
 The Granola namespace now exposes a canonical `MeetingSourceAdapter` bridge
 with deterministic revisions, evidence-addressable blocks, opaque cursors,
 configuration validation, health, and shared error classification. Its HTTP
-client remains under `src/capture/**` as a compatibility dependency. That
-client can move behind the adapter directory later without changing core code
-or the canonical contract.
+client and provider types now live directly under the Granola adapter; raw-event
+APIs still used by legacy enrichment are isolated under
+`src/adapters/meeting-sources/granola/compatibility/**`. The canonical adapter
+does not depend on that compatibility directory. The top-level `src/capture/**`
+architecture has been removed. New product code must enter through the
+canonical adapter; the compatibility surface may be retired after its remaining
+enrichment consumers move to canonical records.
 
 The package also includes two vendor-neutral reference implementations:
 

@@ -4,7 +4,7 @@ import {
   resolveCurrentGranolaNoteAtoms,
   resolveCurrentGranolaNotes,
   type CurrentGranolaNoteAtoms,
-} from '../capture/surfaces/granola-poller.js';
+} from '../adapters/meeting-sources/granola/compatibility/granola-poller.js';
 import type { CaptureEvent, Storage } from '../storage/interface.js';
 import {
   filterToCurrentSignalRuns,

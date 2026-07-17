@@ -55,6 +55,7 @@ function main() {
   const boundary = JSON.parse(textFile(tree, 'product/source-boundary.v1.json'));
   const allowed = boundary.allowed_internal_paths;
   const forbidden = boundary.forbidden_internal_roots;
+  const removed = boundary.removed_internal_roots ?? [];
   const external = new Set(boundary.allowed_external_runtime_packages);
   const layerRules = boundary.layer_rules ?? [];
   const adapterArchitecture = boundary.adapter_architecture;
@@ -66,6 +67,12 @@ function main() {
 
   const isAllowed = (p) => allowed.some((g) => matchesGlob(p, g));
   const isForbidden = (p) => forbidden.some((g) => matchesGlob(p, g));
+
+  for (const [path] of tree) {
+    if (removed.some((root) => matchesGlob(path, root))) {
+      errors.push(`module remains under removed internal root: ${path}`);
+    }
+  }
 
   const discoveredAdapterIds = new Set();
   if (adapterArchitecture?.forbid_discovered_adapter_ids_in_core === true) {
@@ -82,7 +89,11 @@ function main() {
       ) continue;
       const source = textFile(tree, path).toLowerCase();
       for (const adapterId of discoveredAdapterIds) {
-        if (source.includes(adapterId.toLowerCase())) {
+        // Word-boundary match: a bare substring check false-positives on short
+        // ids (e.g. 'llm' inside 'pullMs') while a genuine leak always appears
+        // as a standalone token ('llm', "llm", llm-adapter, ...).
+        const escaped = adapterId.toLowerCase().replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+        if (new RegExp(`(?<![a-z0-9])${escaped}(?![a-z0-9])`).test(source)) {
           errors.push(`adapter id '${adapterId}' leaked into tool-agnostic core module: ${path}`);
         }
       }
@@ -158,6 +169,7 @@ function main() {
     closure: [...closure].sort(),
     external_packages: [...externalSeen].sort(),
     runtime_assets: runtimeAssets,
+    removed_internal_roots: removed,
     layer_rules: layerRules.map((rule) => rule.name),
     discovered_adapter_ids: [...discoveredAdapterIds].sort(),
     errors,

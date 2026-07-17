@@ -14,4 +14,9 @@ changes without rewriting the historical extraction claim. In particular,
 `0002-tool-agnostic-core.v1.json` records the core/adapter dependency direction
 that governs future integrations. `0003-adapter-composed-runtime.v1.json`
 records the first durable, manually approved vertical slice built on that
-boundary.
+boundary. `0004-granola-adapter-boundary.v1.json` records removal of the
+top-level capture architecture and relocation of its remaining Granola
+compatibility implementation behind the meeting-source adapter namespace.
+`0005-state-and-filesystem-boundary.v1.json` records removal of the ambient
+ECHO home path policy, explicit injection of remaining compatibility paths, and
+relocation of durable file replacement into vendor-neutral infrastructure.

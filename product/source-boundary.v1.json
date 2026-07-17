@@ -13,9 +13,6 @@
     "src/product/**",
     "src/core/**",
     "src/adapters/**",
-    "src/capture/granola-source-policy.ts",
-    "src/capture/pipeline-core.ts",
-    "src/capture/surfaces/granola-poller.ts",
     "src/enrich/granola-signals.ts",
     "src/enrich/post-meeting-brief.ts",
     "src/enrich/worker-heartbeat.ts",
@@ -24,8 +21,7 @@
     "src/storage/core-state-sqlite.ts",
     "src/storage/migrate.ts",
     "src/storage/source-match.ts",
-    "src/echo-home/state-paths.ts",
-    "src/echo-home/adapters/atomic-write.ts",
+    "src/infrastructure/filesystem/atomic-write.ts",
     "src/logging/index.ts",
     "src/guards.ts",
     "src/util/json.ts",
@@ -38,14 +34,14 @@
     "src/mcp/",
     "src/coord/",
     "src/trace/",
-    "src/capture/extractors/",
-    "src/capture/surfaces/fs-watcher.ts",
-    "src/capture/surfaces/git-watcher.ts",
+    "src/capture/",
+    "src/echo-home/",
     "src/surfaces/ceo-slack-responder/",
     "src/enrich/granola-intake-candidates.ts",
     "src/enrich/decision-drift.ts",
     "src/cli/commands/orchestration.ts"
   ],
+  "removed_internal_roots": ["src/capture/", "src/echo-home/"],
   "allowed_external_runtime_packages": [
     "ajv",
     "better-sqlite3"
@@ -61,6 +57,14 @@
       "name": "core-is-tool-agnostic",
       "from": "src/core/**",
       "allowed_imports": ["src/core/**"]
+    },
+    {
+      "name": "granola-canonical-adapter-avoids-compatibility",
+      "from": "src/adapters/meeting-sources/granola/meeting-source-adapter.ts",
+      "allowed_imports": [
+        "src/core/**",
+        "src/adapters/meeting-sources/granola/granola-api-client.ts"
+      ]
     }
   ],
   "adapter_architecture": {

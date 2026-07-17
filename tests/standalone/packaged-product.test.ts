@@ -71,8 +71,13 @@ describe('ordinary npm package', () => {
       'package/dist/core/index.js',
       'package/dist/core/index.d.ts',
       'package/dist/adapters/meeting-sources/granola/index.js',
+      'package/dist/adapters/meeting-sources/granola/granola-api-client.js',
+      'package/dist/adapters/meeting-sources/granola/compatibility/granola-poller.js',
+      'package/dist/adapters/meeting-sources/granola/compatibility/granola-source-policy.js',
+      'package/dist/adapters/meeting-sources/granola/compatibility/pipeline-core.js',
       'package/dist/adapters/decision-processors/structured-text/index.js',
       'package/dist/adapters/communication-channels/jsonl-outbox/index.js',
+      'package/dist/infrastructure/filesystem/atomic-write.js',
       'package/dist/storage/migrations/0001_initial.sql',
       'package/dist/storage/migrations/0002_core_state.sql',
       'package/schemas/meeting-context.v1.schema.json',
@@ -87,6 +92,12 @@ describe('ordinary npm package', () => {
         true,
       );
     }
+    expect(
+      [...members].some((member) => member.startsWith('package/dist/capture/')),
+    ).toBe(false);
+    expect(
+      [...members].some((member) => member.startsWith('package/dist/echo-home/')),
+    ).toBe(false);
     const digest = createHash('sha256')
       .update(readFileSync(artifactPath))
       .digest('hex');
@@ -267,11 +278,14 @@ describe('ordinary npm package', () => {
         '-e',
         [
           "const core = await import('echo-brain/core');",
+          "const granola = await import('echo-brain/adapters/meeting-sources/granola');",
           "const processor = await import('echo-brain/adapters/decision-processors/structured-text');",
           "const channel = await import('echo-brain/adapters/communication-channels/jsonl-outbox');",
           'const registry = new core.AdapterRegistry();',
           'console.log(JSON.stringify({',
           "  ok: typeof registry.get === 'function' &&",
+          "    typeof granola.GranolaMeetingSourceAdapter === 'function' &&",
+          "    typeof granola.HttpGranolaApiClient === 'function' &&",
           "    typeof processor.StructuredTextDecisionProcessor === 'function' &&",
           "    typeof channel.JsonlOutboxCommunicationChannel === 'function'",
           '}));',

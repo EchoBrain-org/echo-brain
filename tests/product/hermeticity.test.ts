@@ -83,7 +83,6 @@ describe('product hermeticity setup', () => {
 
   it('blocks credential environment reads and clears product overrides', () => {
     expect(() => process.env.ANTHROPIC_API_KEY).toThrow('credential environment access');
-    expect(process.env.ECHO_HOME).toBeUndefined();
     expect(process.env.ECHO_LOG_LEVEL).toBeUndefined();
   });
 

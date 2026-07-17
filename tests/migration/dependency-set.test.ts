@@ -1,7 +1,13 @@
 // AC2 — dependency edge partition: repository-local vs locked-npm vs toolchain,
 // with range/protocol/sibling/source-repo edges failing.
 import { spawnSync } from 'node:child_process';
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import {
+  copyFileSync,
+  mkdirSync,
+  mkdtempSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import { resolve, join } from 'node:path';
 import { afterAll, describe, expect, it } from 'vitest';
@@ -57,6 +63,39 @@ describe('dependency partition', () => {
     expect(out.external_packages.sort()).toEqual(['ajv', 'better-sqlite3']);
     expect(out.closure.every((p) => p.startsWith('src/'))).toBe(true);
   });
+
+  it.each(['capture', 'echo-home'])(
+    'the product boundary rejects unreferenced modules under removed root src/%s',
+    (removedRoot) => {
+      const clone = cloneRepo();
+      copyFileSync(
+        join(REPO, 'tools/check-boundary.mjs'),
+        join(clone, 'tools/check-boundary.mjs'),
+      );
+      copyFileSync(
+        join(REPO, 'product/source-boundary.v1.json'),
+        join(clone, 'product/source-boundary.v1.json'),
+      );
+      for (const root of ['capture', 'echo-home']) {
+        rmSync(join(clone, 'src', root), { recursive: true, force: true });
+      }
+      const removedDirectory = join(clone, 'src', removedRoot);
+      mkdirSync(removedDirectory, { recursive: true });
+      writeFileSync(
+        join(removedDirectory, 'orphan.ts'),
+        'export const orphan = true;\n',
+      );
+      const result = spawnSync(
+        process.execPath,
+        [join(clone, 'tools/check-boundary.mjs')],
+        { cwd: clone, encoding: 'utf8' },
+      );
+      expect(result.status).not.toBe(0);
+      expect(result.stdout + result.stderr).toContain(
+        `module remains under removed internal root: src/${removedRoot}/orphan.ts`,
+      );
+    },
+  );
 
   it('helper/CLI partition names the toolchain-preflight system helpers (clang++/xcode-select/xcrun)', () => {
     const r = spawnSync(process.execPath, [join(REPO, 'tools/check-dependencies.mjs')], { cwd: REPO, encoding: 'utf8' });

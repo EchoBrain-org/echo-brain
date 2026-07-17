@@ -1,8 +1,14 @@
-import { isNonEmptyString } from '../guards.js';
-import { createLogger } from '../logging/index.js';
-import type { CaptureEvent, EventId, Storage } from '../storage/interface.js';
+import { isNonEmptyString } from '../../../../guards.js';
+import { createLogger } from '../../../../logging/index.js';
+import type {
+  CaptureEvent,
+  EventId,
+  Storage,
+} from '../../../../storage/interface.js';
 
-const log = createLogger('capture.pipeline-core');
+const log = createLogger(
+  'adapters.meeting-sources.granola.compatibility.event-pipeline',
+);
 const TZ_MARKER_RE = /Z$|[+-]\d{2}(?::?\d{2})?$/;
 
 export interface CandidateEvent {

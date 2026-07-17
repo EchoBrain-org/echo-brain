@@ -1,9 +1,9 @@
 // Item 120 — worker heartbeat artifacts: the paired invariant for fail-closed
 // workers. "Never crash the daemon" was adopted without its twin: a degraded or
 // self-disabled worker must be externally OBSERVABLE. Each enrichment worker
-// writes a small, atomically-overwritten heartbeat under `~/.echo/state/` at the
-// end of every tick and on boot-time disable, so a stalled tick or an accidental
-// disablement (the f19dc419 "zero signals for weeks" class) becomes queryable.
+// writes a small, atomically-overwritten heartbeat at a caller-supplied product
+// health path at the end of every tick and on boot-time disable, so a stalled
+// tick or an accidental disablement becomes queryable.
 //
 // This module is the whole contract item 117's doctor imports — path + type +
 // worker-name constants only, no doctor coupling. No worker ever READS a
@@ -12,8 +12,7 @@
 
 import { mkdirSync } from 'node:fs';
 import { dirname, join } from 'node:path';
-import { atomicWrite } from '../echo-home/adapters/atomic-write.js';
-import { ECHO_STATE_PATHS } from '../echo-home/state-paths.js';
+import { atomicWrite } from '../infrastructure/filesystem/atomic-write.js';
 import { createLogger } from '../logging/index.js';
 
 const log = createLogger('enrich.worker-heartbeat');
@@ -45,26 +44,24 @@ export interface WorkerHeartbeat {
 }
 
 /**
- * AC1b: heartbeat path derived from the worker name, under
- * `ECHO_HOME_PATHS.state`. `ECHO_HOME_PATHS` is a live binding, so a test that
- * repoints ECHO_HOME via `setEchoHomeRoot` resolves the temp state dir here.
+ * Derive a worker heartbeat path inside the configured product health
+ * directory. The caller owns the directory policy; this module owns only the
+ * stable filename.
  */
-export function workerHeartbeatPath(name: string): string {
-  return join(ECHO_STATE_PATHS.state, `worker-heartbeat-${name}.json`);
+export function workerHeartbeatPath(healthDirectory: string, name: string): string {
+  return join(healthDirectory, `worker-heartbeat-${name}.json`);
 }
 
 /**
- * AC1d + AC5: best-effort atomic overwrite. `mkdirSync` the state dir first — a
- * fresh/launchd ECHO_HOME may not have `state/` yet, and best-effort swallowing
- * would otherwise erase the very observability this artifact adds (mirrors
- * `writeDriftSweepCheckpoint`'s mkdir-before-atomicWrite). Any write failure
- * (symlinked target, ENOSPC, …) is caught and logged, never propagated into the
- * worker's `run()` or boot path.
+ * Best-effort atomic overwrite. Create the destination directory first because
+ * a fresh installation may not have its health directory yet. Any write
+ * failure (symlinked target, ENOSPC, …) is caught and logged, never propagated
+ * into the worker's `run()` or boot path.
  */
 export function writeWorkerHeartbeat(
   name: string,
   heartbeat: WorkerHeartbeat,
-  destination = workerHeartbeatPath(name),
+  destination: string,
 ): void {
   const filePath = destination;
   try {

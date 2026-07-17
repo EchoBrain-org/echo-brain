@@ -7,6 +7,7 @@ export default defineConfig({
       'tests/standalone/**/*.test.ts',
       'tests/core/**/*.test.ts',
       'tests/adapters/**/*.test.ts',
+      'tests/infrastructure/**/*.test.ts',
       'tests/product/end-to-end-synthetic.test.ts',
       'tests/product/runtime-config.test.ts',
       'tests/product/runtime-isolation.test.ts',
