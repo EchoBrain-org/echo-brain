@@ -191,20 +191,16 @@ Infrastructure contains vendor-neutral mechanisms, not product or path policy.
 Callers supply concrete destinations and security requirements to the atomic
 writer. `state_dir`, resolved through `src/product/paths.ts`, is the sole
 authority for current product state; product code must not discover an ambient
-`ECHO_HOME`. Any retained compatibility API outside the canonical loop must
-receive checkpoint and configuration paths explicitly.
+`ECHO_HOME`.
 
-The Granola namespace now exposes a canonical `MeetingSourceAdapter` bridge
-with deterministic revisions, evidence-addressable blocks, opaque cursors,
+The Granola namespace exposes a canonical `MeetingSourceAdapter` bridge with
+deterministic revisions, evidence-addressable blocks, opaque cursors,
 configuration validation, health, and shared error classification. Its HTTP
-client and provider types now live directly under the Granola adapter. The
-retained raw-event API is isolated under
-`src/adapters/meeting-sources/granola/compatibility/**` and has no internal
-product or enrichment consumer. The canonical adapter does not depend on that
-compatibility directory. The top-level `src/capture/**` and `src/enrich/**`
-architectures have been removed. New product code must enter through the
-canonical adapter; the compatibility surface can be retired separately after
-confirming that no external consumer relies on it.
+client and provider types live directly under the Granola adapter
+(`granola-api-client.ts` + `meeting-source-adapter.ts`). The top-level
+`src/capture/**` and `src/enrich/**` architectures, and the Granola
+raw-event compatibility surface, have been removed. Product code enters
+Granola only through the canonical meeting-source adapter.
 
 The package also includes two vendor-neutral reference implementations:
 

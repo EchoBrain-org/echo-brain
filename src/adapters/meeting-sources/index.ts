@@ -21,5 +21,5 @@ export type {
   MeetingTime,
 } from '../../core/index.js';
 
-/** Compatibility and qualified meeting-source implementations. */
+/** Qualified meeting-source implementations. */
 export * as granola from './granola/index.js';

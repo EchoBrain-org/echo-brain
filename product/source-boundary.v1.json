@@ -35,12 +35,14 @@
     "src/echo-home/",
     "src/surfaces/ceo-slack-responder/",
     "src/enrich/",
+    "src/adapters/meeting-sources/granola/compatibility/",
     "src/cli/commands/orchestration.ts"
   ],
   "removed_internal_roots": [
     "src/capture/",
     "src/echo-home/",
-    "src/enrich/"
+    "src/enrich/",
+    "src/adapters/meeting-sources/granola/compatibility/"
   ],
   "allowed_external_runtime_packages": [
     "ajv",

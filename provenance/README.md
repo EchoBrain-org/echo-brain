@@ -22,4 +22,6 @@ ECHO home path policy, explicit injection of remaining compatibility paths, and
 relocation of durable file replacement into vendor-neutral infrastructure.
 `0006-enrich-retirement.v1.json` records retirement of the unreachable legacy
 enrichment pipeline and its synthetic extraction witness in favor of the
-canonical adapter/core cycle.
+canonical adapter/core cycle. `0007-granola-compatibility-retirement.v1.json`
+records removal of the Granola raw-event compatibility export so Granola
+ingress is only the canonical meeting-source adapter.

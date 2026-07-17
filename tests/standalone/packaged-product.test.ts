@@ -72,9 +72,7 @@ describe('ordinary npm package', () => {
       'package/dist/core/index.d.ts',
       'package/dist/adapters/meeting-sources/granola/index.js',
       'package/dist/adapters/meeting-sources/granola/granola-api-client.js',
-      'package/dist/adapters/meeting-sources/granola/compatibility/granola-poller.js',
-      'package/dist/adapters/meeting-sources/granola/compatibility/granola-source-policy.js',
-      'package/dist/adapters/meeting-sources/granola/compatibility/pipeline-core.js',
+      'package/dist/adapters/meeting-sources/granola/meeting-source-adapter.js',
       'package/dist/adapters/decision-processors/structured-text/index.js',
       'package/dist/adapters/communication-channels/jsonl-outbox/index.js',
       'package/dist/infrastructure/filesystem/atomic-write.js',
@@ -100,6 +98,11 @@ describe('ordinary npm package', () => {
     ).toBe(false);
     expect(
       [...members].some((member) => member.startsWith('package/dist/enrich/')),
+    ).toBe(false);
+    expect(
+      [...members].some((member) =>
+        member.includes('/granola/compatibility/'),
+      ),
     ).toBe(false);
     const digest = createHash('sha256')
       .update(readFileSync(artifactPath))
