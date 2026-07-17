@@ -64,7 +64,7 @@ describe('dependency partition', () => {
     expect(out.closure.every((p) => p.startsWith('src/'))).toBe(true);
   });
 
-  it.each(['capture', 'echo-home'])(
+  it.each(['capture', 'echo-home', 'enrich'])(
     'the product boundary rejects unreferenced modules under removed root src/%s',
     (removedRoot) => {
       const clone = cloneRepo();
@@ -76,7 +76,7 @@ describe('dependency partition', () => {
         join(REPO, 'product/source-boundary.v1.json'),
         join(clone, 'product/source-boundary.v1.json'),
       );
-      for (const root of ['capture', 'echo-home']) {
+      for (const root of ['capture', 'echo-home', 'enrich']) {
         rmSync(join(clone, 'src', root), { recursive: true, force: true });
       }
       const removedDirectory = join(clone, 'src', removedRoot);

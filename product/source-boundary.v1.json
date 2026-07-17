@@ -13,9 +13,6 @@
     "src/product/**",
     "src/core/**",
     "src/adapters/**",
-    "src/enrich/granola-signals.ts",
-    "src/enrich/post-meeting-brief.ts",
-    "src/enrich/worker-heartbeat.ts",
     "src/storage/interface.ts",
     "src/storage/sqlite.ts",
     "src/storage/core-state-sqlite.ts",
@@ -37,11 +34,14 @@
     "src/capture/",
     "src/echo-home/",
     "src/surfaces/ceo-slack-responder/",
-    "src/enrich/granola-intake-candidates.ts",
-    "src/enrich/decision-drift.ts",
+    "src/enrich/",
     "src/cli/commands/orchestration.ts"
   ],
-  "removed_internal_roots": ["src/capture/", "src/echo-home/"],
+  "removed_internal_roots": [
+    "src/capture/",
+    "src/echo-home/",
+    "src/enrich/"
+  ],
   "allowed_external_runtime_packages": [
     "ajv",
     "better-sqlite3"

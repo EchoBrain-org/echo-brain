@@ -12,7 +12,7 @@ export default [
       'tests/standalone/**/*.ts',
       'tests/core/**/*.ts',
       'tests/adapters/**/*.ts',
-      'tests/product/end-to-end-synthetic.test.ts',
+      'tests/infrastructure/**/*.ts',
       'tests/product/runtime-config.test.ts',
       'tests/product/runtime-isolation.test.ts',
       'vitest.config.ts',

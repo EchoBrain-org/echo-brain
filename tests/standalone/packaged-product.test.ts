@@ -98,6 +98,9 @@ describe('ordinary npm package', () => {
     expect(
       [...members].some((member) => member.startsWith('package/dist/echo-home/')),
     ).toBe(false);
+    expect(
+      [...members].some((member) => member.startsWith('package/dist/enrich/')),
+    ).toBe(false);
     const digest = createHash('sha256')
       .update(readFileSync(artifactPath))
       .digest('hex');
