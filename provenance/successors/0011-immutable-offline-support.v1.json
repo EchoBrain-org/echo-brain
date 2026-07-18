@@ -1,0 +1,23 @@
+{
+  "schema_version": 1,
+  "kind": "successor_change_record",
+  "predecessor": "provenance/successors/0010-qualification-runner-portability.v1.json",
+  "decision": "Keep the hashed offline qualification support bundle immutable by copying its npm cache into each disposable install prefix and deleting that working copy after npm exits.",
+  "implemented_capabilities": [
+    "per-install npm cache isolation for offline product qualification",
+    "post-install verification that the artifact and support bundle still match their manifests",
+    "cleanup of the disposable cache on both successful and failed npm execution"
+  ],
+  "architectural_invariants": [
+    "the support bundle remains a read-only, exact-set qualification input",
+    "offline installation still uses only dependencies bound into the prepared support bundle",
+    "cache isolation does not advance maturity or release authority"
+  ],
+  "state": {
+    "maturity": "DEV",
+    "authority": false,
+    "installed": false,
+    "production_adapter_set": false,
+    "wedge_executed": false
+  }
+}

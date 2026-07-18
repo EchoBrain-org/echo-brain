@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto';
 import {
+  existsSync,
   mkdtempSync,
   mkdirSync,
   readFileSync,
@@ -285,6 +286,7 @@ describe('product-only artifact', () => {
     expect(installEvidence.npm_stderr).not.toMatch(
       /download|nodejs\.org|header fetch/i,
     );
+    expect(existsSync(join(prefix, '.echo-offline-npm-cache'))).toBe(false);
     expect(
       readlinkSync(join(prefix, 'node_modules/.bin/echo-brain')),
     ).toContain('echo-brain/dist/product/cli.js');
@@ -366,6 +368,23 @@ describe('product-only artifact', () => {
           { adapter_id: 'jsonl-outbox', instance_id: 'qualification' },
         ],
       },
+    });
+
+    const reverified = await run(
+      process.execPath,
+      [
+        join(supportDir, 'verify-bundle.mjs'),
+        '--artifact-dir',
+        artifactDir,
+        '--support-dir',
+        supportDir,
+      ],
+      { cwd: temporaryRoot },
+    );
+    expect(reverified.status, reverified.stderr).toBe(0);
+    expect(JSON.parse(reverified.stdout)).toMatchObject({
+      ok: true,
+      errors: [],
     });
   }, 120_000);
 

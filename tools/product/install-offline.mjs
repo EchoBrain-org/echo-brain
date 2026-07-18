@@ -1,20 +1,26 @@
 #!/usr/bin/env node
 
 import { createHash } from 'node:crypto';
-import { existsSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync } from 'node:fs';
-import { basename, isAbsolute, join, resolve } from 'node:path';
+import {
+  cpSync,
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  readdirSync,
+  rmSync,
+  statSync,
+  writeFileSync,
+} from 'node:fs';
+import { dirname, isAbsolute, join, resolve } from 'node:path';
 import process from 'node:process';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { realpathSync } from 'node:fs';
 import { runToolchainPreflight } from './toolchain-preflight.mjs';
+import { verifyBundle } from './verify-bundle.mjs';
 
 const CREDENTIAL_KEY =
   /(?:API[_-]?KEY|TOKEN|SECRET|PASSWORD|PASSWD|CREDENTIAL|AUTH|GRANOLA|ANTHROPIC|OPENAI)/i;
-
-function readJson(path) {
-  return JSON.parse(readFileSync(path, 'utf8'));
-}
 
 function hashFile(path, algorithm = 'sha256', encoding = 'hex') {
   return createHash(algorithm).update(readFileSync(path)).digest(encoding);
@@ -42,20 +48,6 @@ function parseArgs(argv) {
     throw new Error('--evidence must be absolute');
   }
   return args;
-}
-
-function verifySupport(supportDir) {
-  const manifest = readJson(join(supportDir, 'support-manifest.json'));
-  for (const entry of manifest.entries) {
-    const path = join(supportDir, entry.path);
-    if (!existsSync(path) || !statSync(path).isFile()) {
-      throw new Error(`support entry is missing: ${entry.path}`);
-    }
-    if (statSync(path).size !== entry.size || hashFile(path) !== entry.sha256) {
-      throw new Error(`support entry hash mismatch: ${entry.path}`);
-    }
-  }
-  return manifest;
 }
 
 function readPackagedShrinkwrap(artifact) {
@@ -121,9 +113,15 @@ function rootInstallLock(artifact, artifactManifest, productLock) {
 
 export function installOffline(options) {
   const artifact = resolve(options.artifact);
-  const artifactManifest = readJson(resolve(options.artifactManifest));
+  const artifactManifestPath = resolve(options.artifactManifest);
   const supportDir = resolve(options.supportDir);
   const prefix = resolve(options.prefix);
+  if (
+    artifactManifestPath !==
+    join(dirname(artifactManifestPath), 'artifact-manifest.json')
+  ) {
+    throw new Error('--artifact-manifest must name artifact-manifest.json');
+  }
   if (existsSync(prefix)) {
     if (!statSync(prefix).isDirectory() || readdirSync(prefix).length > 0) {
       throw new Error(`install prefix must be absent or empty: ${prefix}`);
@@ -132,13 +130,22 @@ export function installOffline(options) {
     mkdirSync(prefix, { recursive: true });
   }
 
-  const supportManifest = verifySupport(supportDir);
+  const bundleVerification = verifyBundle({
+    artifactDir: dirname(artifactManifestPath),
+    supportDir,
+  });
+  if (!bundleVerification.ok) {
+    throw new Error(
+      `bundle verification failed: ${bundleVerification.errors.join('; ')}`,
+    );
+  }
+  if (resolve(bundleVerification.artifact_path) !== artifact) {
+    throw new Error('--artifact does not match artifact-manifest.json');
+  }
+  const artifactManifest = bundleVerification.artifact_manifest;
   const artifactSha256 = hashFile(artifact);
   if (artifactSha256 !== artifactManifest.artifact.sha256) {
     throw new Error('artifact SHA-256 does not match artifact-manifest.json');
-  }
-  if (supportManifest.dependency_lock_sha256 !== artifactManifest.dependency_lock_sha256) {
-    throw new Error('support and artifact dependency-lock identities disagree');
   }
 
   const expectedNode = artifactManifest.declared_platform.node;
@@ -177,24 +184,31 @@ export function installOffline(options) {
   if (npmExecutable === null || npmExecutable === undefined) {
     throw new Error('preflight did not resolve npm');
   }
-  const install = spawnSync(
-    npmExecutable,
-    [
-      'ci',
-      '--prefix',
-      prefix,
-      '--offline',
-      '--no-audit',
-      '--no-fund',
-      '--cache',
-      join(supportDir, 'npm-cache'),
-    ],
-    {
-      encoding: 'utf8',
-      env: sanitizedInstallEnvironment(supportDir),
-      timeout: 180_000,
-    },
-  );
+  const installCache = join(prefix, '.echo-offline-npm-cache');
+  let install;
+  try {
+    cpSync(join(supportDir, 'npm-cache'), installCache, { recursive: true });
+    install = spawnSync(
+      npmExecutable,
+      [
+        'ci',
+        '--prefix',
+        prefix,
+        '--offline',
+        '--no-audit',
+        '--no-fund',
+        '--cache',
+        installCache,
+      ],
+      {
+        encoding: 'utf8',
+        env: sanitizedInstallEnvironment(supportDir),
+        timeout: 180_000,
+      },
+    );
+  } finally {
+    rmSync(installCache, { recursive: true, force: true });
+  }
   return {
     ok: install.status === 0,
     stage: 'npm-ci',

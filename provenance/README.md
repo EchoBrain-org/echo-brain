@@ -34,3 +34,5 @@ while keeping managed code-version rollback explicitly pending.
 `0010-qualification-runner-portability.v1.json` records PATH-portable Git/npm
 invocation and checkout-local npm cache binding for the macOS arm64 DEV
 qualification workflow.
+`0011-immutable-offline-support.v1.json` records per-install cache isolation so
+offline qualification cannot mutate its hashed support bundle.
