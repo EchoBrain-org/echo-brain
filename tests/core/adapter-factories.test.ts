@@ -118,4 +118,25 @@ describe('product adapter factories', () => {
       createConfiguredAdapterRegistry(config(), new ProductAdapterFactoryRegistry()),
     ).rejects.toThrow(/meeting-source adapter factory 'meeting-fixture' is not installed/);
   });
+
+  it('bundles the llm decision processor in the default composition root', async () => {
+    const { createDefaultAdapterFactories } = await import(
+      '../../src/product/default-adapters.js'
+    );
+    const factory = createDefaultAdapterFactories().get('decision-processor', 'llm');
+    expect(factory).toBeDefined();
+    const adapter = await factory!.create(
+      { adapter_id: 'llm', instance_id: 'primary', settings: { model: 'qwen3:4b' } },
+      {
+        stateDirectory: '/tmp/unused',
+        environment: {},
+        now: () => '2026-07-17T00:00:00.000Z',
+      },
+    );
+    expect(adapter.identity).toMatchObject({
+      kind: 'decision-processor',
+      adapter_id: 'llm',
+      instance_id: 'primary',
+    });
+  });
 });

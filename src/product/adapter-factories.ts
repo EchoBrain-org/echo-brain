@@ -100,6 +100,9 @@ export async function createConfiguredAdapterRegistry(
       kind: 'communication-channel' as const,
       config: adapterConfig,
     })),
+    ...(config.approval_mode === 'adapter'
+      ? [{ kind: 'approval-surface' as const, config: config.approval_surface }]
+      : []),
   ];
   const missing = requested
     .filter(

@@ -111,7 +111,25 @@ describe('product runtime configuration', () => {
     ['no communication channel', { communication_channels: [] }],
     ['wrong lane', { lane: 'dogfood' }],
     ['non-manual approval', { approval_mode: 'automatic' }],
+    [
+      'adapter approval without a surface',
+      { approval_mode: 'adapter' },
+    ],
+    [
+      'manual approval with a surface',
+      {
+        approval_mode: 'manual',
+        approval_surface: {
+          adapter_id: 'slack-reactions',
+          instance_id: 'founder',
+          credential_ref: 'env:SLACK_BOT_TOKEN',
+          settings: {},
+        },
+      },
+    ],
     ['too-frequent cycle', { cycle_interval_ms: 999 }],
+    ['too-short extraction timeout', { extraction_timeout_ms: 999 }],
+    ['too-long extraction timeout', { extraction_timeout_ms: 600_001 }],
   ])('rejects %s', (_name, overrides) => {
     const value = validConfig(overrides as Record<string, unknown>);
     if (
@@ -123,6 +141,37 @@ describe('product runtime configuration', () => {
     expect(() => validateProductRuntimeConfig(value)).toThrow(
       /invalid product runtime configuration/,
     );
+  });
+
+  it('accepts adapter approval mode paired with an approval surface', () => {
+    expect(
+      validateProductRuntimeConfig(
+        validConfig({
+          approval_mode: 'adapter',
+          approval_surface: {
+            adapter_id: 'slack-reactions',
+            instance_id: 'founder',
+            credential_ref: 'env:SLACK_BOT_TOKEN',
+            settings: { channel_id: 'C123' },
+          },
+        }),
+      ),
+    ).toMatchObject({
+      approval_mode: 'adapter',
+      approval_surface: {
+        adapter_id: 'slack-reactions',
+        instance_id: 'founder',
+        credential_ref: 'env:SLACK_BOT_TOKEN',
+      },
+    });
+  });
+
+  it('accepts an explicit extraction timeout for slow decision processors', () => {
+    expect(
+      validateProductRuntimeConfig(
+        validConfig({ extraction_timeout_ms: 300_000 }),
+      ),
+    ).toMatchObject({ extraction_timeout_ms: 300_000 });
   });
 
   it('rejects duplicate adapter instances within one capability', () => {

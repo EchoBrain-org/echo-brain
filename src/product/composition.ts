@@ -14,7 +14,8 @@ import type {
   ClassifyStateFilesystem,
   ProductRuntimeConfig,
 } from './config.js';
-import { ManualApprovalQueue } from './manual-approval.js';
+import { DecisionNodeStore } from './approval/decision-node-store.js';
+import { StoreBackedApprovalGate } from './approval/store-backed-approval-gate.js';
 import { resolveProductStatePaths, type ProductStatePaths } from './paths.js';
 import {
   ProductRuntimeFailure,
@@ -43,7 +44,7 @@ export interface ProductCycleResult {
 export interface ProductComposition {
   paths: ProductStatePaths;
   adapters: ProductRuntimeAdapters;
-  approvals: ManualApprovalQueue;
+  approvals: DecisionNodeStore;
   runOnce(options?: ProductCycleRunOptions): Promise<ProductCycleResult>;
   close(): void;
 }
@@ -56,7 +57,7 @@ export interface PrepareProductCompositionOptions {
   classifyStateFilesystem: ClassifyStateFilesystem;
   state?: CoreStateStore & { close?: () => void };
   approvalGate?: ApprovalGate;
-  approvals?: ManualApprovalQueue;
+  approvals?: DecisionNodeStore;
   now?: () => string;
   createId?: () => string;
   healthTimeoutMs?: number;
@@ -68,6 +69,7 @@ function allAdapters(adapters: ProductRuntimeAdapters) {
     ...adapters.meetingSources,
     adapters.decisionProcessor,
     ...adapters.communicationChannels,
+    ...(adapters.approvalSurface === undefined ? [] : [adapters.approvalSurface]),
   ];
 }
 
@@ -200,8 +202,16 @@ export async function prepareProductComposition(
   const state = options.state ?? new SqliteCoreStateStore(paths.database);
   const approvals =
     options.approvals ??
-    new ManualApprovalQueue(paths.root, { now: options.now });
-  const approvalGate = options.approvalGate ?? approvals;
+    new DecisionNodeStore(paths.root, {
+      now: options.now,
+      createId: options.createId,
+    });
+  await approvals.initialize();
+  const approvalGate =
+    options.approvalGate ??
+    (config.approval_mode === 'adapter'
+      ? (adapters.approvalSurface as ApprovalGate)
+      : new StoreBackedApprovalGate(approvals));
   const now = options.now ?? (() => new Date().toISOString());
   const createId = options.createId ?? randomUUID;
   let closed = false;
@@ -223,7 +233,14 @@ export async function prepareProductComposition(
           now,
           createId,
           signal: runOptions.signal,
-          deadlines: options.operationDeadlines,
+          deadlines: {
+            // Config-level knob for slow (e.g. model-backed) processors;
+            // explicit composition options still win.
+            ...(config.extraction_timeout_ms === undefined
+              ? {}
+              : { extractMs: config.extraction_timeout_ms }),
+            ...options.operationDeadlines,
+          },
         });
         sources.push({ source: source.identity, result });
       } catch (error) {

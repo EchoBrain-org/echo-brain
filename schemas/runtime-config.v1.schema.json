@@ -33,8 +33,24 @@
       "minimum": 1000,
       "maximum": 3600000
     },
-    "approval_mode": { "const": "manual" }
+    "extraction_timeout_ms": {
+      "type": "integer",
+      "minimum": 1000,
+      "maximum": 600000
+    },
+    "approval_mode": { "enum": ["manual", "adapter"] },
+    "approval_surface": { "$ref": "#/definitions/adapterInstance" }
   },
+  "allOf": [
+    {
+      "if": { "properties": { "approval_mode": { "const": "adapter" } } },
+      "then": { "required": ["approval_surface"] }
+    },
+    {
+      "if": { "properties": { "approval_mode": { "const": "manual" } } },
+      "then": { "not": { "required": ["approval_surface"] } }
+    }
+  ],
   "definitions": {
     "adapterInstance": {
       "type": "object",

@@ -246,4 +246,78 @@ describe('standalone composed cycle', () => {
     });
     expect(readFileSync(outboxPath, 'utf8').trim().split('\n')).toHaveLength(1);
   });
+
+  it('applies the configured extraction timeout to the processing stage', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'echo-brain-cycle-'));
+    roots.push(root);
+    const registry = factories();
+    registry.register({
+      kind: 'decision-processor',
+      adapter_id: 'slow-processor',
+      create: (config) => ({
+        identity: {
+          kind: 'decision-processor',
+          adapter_id: config.adapter_id,
+          instance_id: config.instance_id,
+          version: '1.0.0',
+        },
+        validateConfig: () => ({ ok: true, errors: [] }),
+        healthCheck: async () => ({ status: 'healthy', checked_at: fixedTime }),
+        extract: () =>
+          new Promise((resolve) => {
+            const timer = setTimeout(resolve, 5_000);
+            timer.unref?.();
+          }) as never,
+      }),
+    });
+    const configPath = join(root, 'config.json');
+    writeFileSync(
+      configPath,
+      `${JSON.stringify(
+        {
+          schema_version: 1,
+          lane: 'team-product',
+          state_dir: join(root, 'state'),
+          extraction_timeout_ms: 1_000,
+          meeting_sources: [
+            { adapter_id: 'fixture-notes', instance_id: 'primary', settings: {} },
+          ],
+          decision_processor: {
+            adapter_id: 'slow-processor',
+            instance_id: 'primary',
+            settings: {},
+          },
+          communication_channels: [
+            {
+              adapter_id: 'jsonl-outbox',
+              instance_id: 'primary',
+              settings: {
+                path: join(root, 'state', 'outbox.jsonl'),
+                destination_id: 'reviewed-briefs',
+              },
+            },
+          ],
+          approval_mode: 'manual',
+        },
+        null,
+        2,
+      )}\n`,
+    );
+
+    const out = output();
+    const err = output();
+    await runProductCli(['run-once', '--config', configPath], {
+      adapterFactories: registry,
+      classifyStateFilesystem: async () => ({
+        kind: 'local' as const,
+        raw: 'test-local',
+      }),
+      now: () => fixedTime,
+      stdout: out.stream,
+      stderr: err.stream,
+    });
+    // A failed cycle is reported on stderr with a non-zero exit.
+    const failures = JSON.parse(err.read()).cycle.sources[0].result.failures;
+    expect(failures[0].message).toContain('timed out after 1000ms');
+  });
 });

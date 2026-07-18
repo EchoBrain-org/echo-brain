@@ -7,7 +7,8 @@
     "src/adapters/index.ts",
     "src/adapters/meeting-sources/granola/index.ts",
     "src/adapters/decision-processors/structured-text/index.ts",
-    "src/adapters/communication-channels/jsonl-outbox/index.ts"
+    "src/adapters/communication-channels/jsonl-outbox/index.ts",
+    "src/adapters/approval-surfaces/slack-reactions/index.ts"
   ],
   "allowed_internal_paths": [
     "src/product/**",
@@ -19,6 +20,7 @@
     "src/storage/migrate.ts",
     "src/storage/source-match.ts",
     "src/infrastructure/filesystem/atomic-write.ts",
+    "src/infrastructure/filesystem/atomic-create.ts",
     "src/logging/index.ts",
     "src/guards.ts",
     "src/util/json.ts",

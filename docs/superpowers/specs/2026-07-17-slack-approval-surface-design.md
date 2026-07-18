@@ -1,7 +1,8 @@
 # Slack Approval Surface — Design
 
 Date: 2026-07-17
-Status: approved-in-conversation, pending written review
+Status: implemented (see "Implementation refinements" for deltas from the
+original draft, adopted after an external implementation consultation)
 
 ## Goal
 
@@ -181,6 +182,40 @@ Slack Web API access uses injected `fetchImpl` (LLM-adapter pattern) against
   validation (mode/surface pairing, reaction distinctness, reviewer
   non-emptiness); full `runCoreCycle` test with the Slack gate wired
   (pending → approved → delivered).
+
+## Implementation refinements (supersede conflicting sections above)
+
+- **Slot files, not numbered events.** Node directories hold create-once
+  semantic slots — `requested.json`, `published-<surface>.json`,
+  `resolved.json` — with no ordering semantics. Resolution never requires
+  publication (the CLI can win first). Slots are written with a no-clobber
+  atomic create (temp file + hard link), not rename-over.
+- **Config shape.** `approval_mode: "manual" | "adapter"` (tool names stay
+  inside adapter-owned config), paired with a top-level `approval_surface`
+  adapter-instance block required iff mode is `adapter`. The bot token uses
+  the existing `credential_ref: "env:SLACK_BOT_TOKEN"` mechanism, not a
+  `token_env` setting.
+- **Exactly one reviewer in v1.** Slack reactions carry no timestamps, so
+  multi-reviewer attribution has no defined winner. `settings.reviewer` is a
+  single `{slack_user_id, name}` object.
+- **Node identity.** `node_id` is a UUID distinct from the storage key
+  `sha256(processing_key)` (still exposed as `approval_id` for CLI
+  compatibility), so future chain nodes for the same processing key are
+  representable.
+- **Failure surfacing.** Slack failures during `review()` throw typed
+  retryable `AdapterError`s after the node is safely staged, so they appear
+  in the run summary as approval-stage failures instead of silently reading
+  as `pending`. Reaction rosters that Slack reports incomplete
+  (`count !== users.length`) fail closed to pending.
+- **Reason capture ordering.** The posted message instructs: reply in the
+  thread *before* reacting — polling resolves irreversibly on the reaction.
+- **Posting is at-least-once.** Slack post + local `published` record is a
+  dual write; a crash between them can duplicate the message on retry. The
+  recorded reference always wins as the polled message.
+- **SQLite caveat.** The core state store keeps its own monotonic approval
+  snapshot; once a resolution is copied there, the cycle stops consulting the
+  gate for that node. The node store is the source of truth for surfaces; the
+  SQLite copy is a derived cache.
 
 ## Out of scope (v1)
 

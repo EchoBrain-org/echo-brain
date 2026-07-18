@@ -5,7 +5,7 @@ import type { AdapterInstanceConfig } from '../core/index.js';
 import { parseJson } from '../util/json.js';
 import { spawnSanitizedChild } from './spawn-sanitized-child.js';
 
-export interface ProductRuntimeConfig {
+interface ProductRuntimeConfigBase {
   schema_version: 1;
   lane: 'team-product';
   state_dir: string;
@@ -13,8 +13,14 @@ export interface ProductRuntimeConfig {
   decision_processor: AdapterInstanceConfig;
   communication_channels: readonly AdapterInstanceConfig[];
   cycle_interval_ms?: number;
-  approval_mode: 'manual';
+  extraction_timeout_ms?: number;
 }
+
+export type ProductRuntimeConfig = ProductRuntimeConfigBase &
+  (
+    | { approval_mode: 'manual'; approval_surface?: undefined }
+    | { approval_mode: 'adapter'; approval_surface: AdapterInstanceConfig }
+  );
 
 export interface StateFilesystemClassification {
   kind: 'local' | 'network' | 'unknown';
@@ -138,6 +144,8 @@ export function validateProductRuntimeConfig(
       ),
     ]);
   }
+  // The schema's if/then pairing guarantees approval_mode and
+  // approval_surface agree, which the spread cannot express structurally.
   return Object.freeze({
     ...value,
     state_dir: resolve(value.state_dir),
@@ -148,7 +156,10 @@ export function validateProductRuntimeConfig(
     communication_channels: Object.freeze(
       value.communication_channels.map(freezeAdapterConfig),
     ),
-  });
+    ...(value.approval_surface === undefined
+      ? {}
+      : { approval_surface: freezeAdapterConfig(value.approval_surface) }),
+  } as ProductRuntimeConfig);
 }
 
 export function loadProductRuntimeConfig(

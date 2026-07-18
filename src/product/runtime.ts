@@ -2,6 +2,7 @@ import type {
   Adapter,
   AdapterInstanceConfig,
   AdapterRegistry,
+  ApprovalSurfaceAdapter,
   CommunicationChannelAdapter,
   DecisionProcessorAdapter,
   MeetingSourceAdapter,
@@ -29,6 +30,7 @@ export interface ProductRuntimeAdapters {
   meetingSources: readonly MeetingSourceAdapter[];
   decisionProcessor: DecisionProcessorAdapter;
   communicationChannels: readonly CommunicationChannelAdapter[];
+  approvalSurface?: ApprovalSurfaceAdapter;
 }
 
 export interface ProductRuntimeContext {
@@ -235,6 +237,15 @@ export function resolveConfiguredAdapters(
       return adapter;
     },
   );
+  let approvalSurface: ApprovalSurfaceAdapter | undefined;
+  if (config.approval_mode === 'adapter') {
+    approvalSurface = registry.getApprovalSurface(config.approval_surface);
+    if (approvalSurface === undefined) {
+      missing.push(
+        unavailableAdapterDetail('approval-surface', config.approval_surface),
+      );
+    }
+  }
   if (missing.length > 0) {
     return new ProductRuntimeFailure(
       'adapter_unavailable',
@@ -262,6 +273,13 @@ export function resolveConfiguredAdapters(
         communicationChannels[index] as CommunicationChannelAdapter,
       ),
     ),
+    ...(config.approval_mode === 'adapter'
+      ? validateConfiguredAdapter(
+          'approval-surface',
+          config.approval_surface,
+          approvalSurface as ApprovalSurfaceAdapter,
+        )
+      : []),
   ];
   if (invalid.length > 0) {
     return new ProductRuntimeFailure(
@@ -275,6 +293,7 @@ export function resolveConfiguredAdapters(
     decisionProcessor: decisionProcessor as DecisionProcessorAdapter,
     communicationChannels:
       communicationChannels as CommunicationChannelAdapter[],
+    ...(approvalSurface === undefined ? {} : { approvalSurface }),
   };
 }
 

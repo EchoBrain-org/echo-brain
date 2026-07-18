@@ -17,6 +17,7 @@ import type {
   MeetingDocument,
   MeetingPullRequest,
 } from '../contracts/meeting.js';
+import type { ApprovalGate } from '../approval/approval-gate.js';
 
 export interface MeetingSourceAdapter extends Adapter {
   readonly identity: AdapterIdentity & { kind: 'meeting-source' };
@@ -44,7 +45,12 @@ export interface CommunicationChannelAdapter extends Adapter {
   ): Promise<DeliveryReceipt>;
 }
 
+export interface ApprovalSurfaceAdapter extends Adapter, ApprovalGate {
+  readonly identity: AdapterIdentity & { kind: 'approval-surface' };
+}
+
 export type AnyAdapter =
   | MeetingSourceAdapter
   | DecisionProcessorAdapter
-  | CommunicationChannelAdapter;
+  | CommunicationChannelAdapter
+  | ApprovalSurfaceAdapter;

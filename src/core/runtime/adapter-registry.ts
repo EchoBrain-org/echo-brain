@@ -5,6 +5,7 @@ import {
 } from '../contracts/adapter.js';
 import type {
   AnyAdapter,
+  ApprovalSurfaceAdapter,
   CommunicationChannelAdapter,
   DecisionProcessorAdapter,
   MeetingSourceAdapter,
@@ -41,6 +42,12 @@ export class AdapterRegistry {
   getCommunicationChannel(config: AdapterConfig): CommunicationChannelAdapter | undefined {
     return this.get('communication-channel', config.adapter_id, config.instance_id) as
       | CommunicationChannelAdapter
+      | undefined;
+  }
+
+  getApprovalSurface(config: AdapterConfig): ApprovalSurfaceAdapter | undefined {
+    return this.get('approval-surface', config.adapter_id, config.instance_id) as
+      | ApprovalSurfaceAdapter
       | undefined;
   }
 

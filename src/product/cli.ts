@@ -22,7 +22,7 @@ import {
   type ProductRuntimeConfig,
 } from './config.js';
 import { createDefaultAdapterFactories } from './default-adapters.js';
-import { ManualApprovalQueue } from './manual-approval.js';
+import { DecisionNodeStore } from './approval/decision-node-store.js';
 import {
   ProductRuntimeFailure,
   startProductRuntime,
@@ -337,11 +337,15 @@ export async function runProductCli(
     }
     try {
       prepareProductStateRoot(config.state_dir);
-      const approvals = new ManualApprovalQueue(config.state_dir, {
+      // The CLI resolves against the shared decision node store directly, so
+      // a misconfigured or unreachable approval surface (e.g. Slack) can
+      // never block a manual approval or rejection.
+      const approvals = new DecisionNodeStore(config.state_dir, {
         now: dependencies.now,
       });
+      await approvals.initialize();
       if (parsed.command === 'approvals') {
-        const records = approvals.list().map((record) => ({
+        const records = (await approvals.list()).map((record) => ({
           approval_id: record.approval_id,
           status: record.status,
           requested_at: record.requested_at,
@@ -358,6 +362,7 @@ export async function runProductCli(
         status: parsed.command === 'approve' ? 'approved' : 'rejected',
         reviewedBy: parsed.reviewer!,
         reason: parsed.reason,
+        surface: 'cli',
       });
       print(stdout, {
         ok: true,
@@ -391,8 +396,7 @@ export async function runProductCli(
     }
     try {
       const cycle = await composition.runOnce();
-      const pending = composition.approvals
-        .list()
+      const pending = (await composition.approvals.list())
         .filter((record) => record.status === 'pending')
         .map((record) => record.approval_id);
       print(cycle.ok ? stdout : stderr, {

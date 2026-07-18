@@ -32,6 +32,10 @@
       "types": "./dist/adapters/communication-channels/jsonl-outbox/index.d.ts",
       "import": "./dist/adapters/communication-channels/jsonl-outbox/index.js"
     },
+    "./adapters/approval-surfaces/slack-reactions": {
+      "types": "./dist/adapters/approval-surfaces/slack-reactions/index.d.ts",
+      "import": "./dist/adapters/approval-surfaces/slack-reactions/index.js"
+    },
     "./schemas/meeting-context.v1.schema.json": "./schemas/meeting-context.v1.schema.json",
     "./schemas/runtime-config.v1.schema.json": "./schemas/runtime-config.v1.schema.json"
   },
