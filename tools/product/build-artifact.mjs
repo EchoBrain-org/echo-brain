@@ -263,7 +263,19 @@ function main() {
     const packOutput = run(
       'npm',
       ['pack', '--ignore-scripts', '--json', '--pack-destination', temporary],
-      { cwd: packageDir },
+      {
+        cwd: packageDir,
+        // npm pack does not need network or the user's ambient cache. Keep its
+        // bookkeeping inside the disposable build root so read-only homes and
+        // host-owned cache entries cannot affect an otherwise hermetic build.
+        env: {
+          ...process.env,
+          npm_config_cache: join(work, 'npm-cache'),
+          npm_config_audit: 'false',
+          npm_config_fund: 'false',
+          npm_config_update_notifier: 'false',
+        },
+      },
     );
     const packResult = JSON.parse(packOutput);
     if (!Array.isArray(packResult) || packResult.length !== 1) {

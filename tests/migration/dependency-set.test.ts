@@ -5,6 +5,7 @@ import {
   copyFileSync,
   mkdirSync,
   mkdtempSync,
+  readFileSync,
   rmSync,
   writeFileSync,
 } from 'node:fs';
@@ -32,13 +33,13 @@ function cloneRepo(): string {
   const dir = mkdtempSync(join(tmpdir(), 'echo-brain-dep-'));
   tmpDirs.push(dir);
   const clone = join(dir, 'echo-brain');
-  expect(spawnSync('/usr/local/bin/git', ['clone', '--quiet', REPO, clone], { encoding: 'utf8' }).status).toBe(0);
+  expect(spawnSync('git', ['clone', '--quiet', REPO, clone], { encoding: 'utf8' }).status).toBe(0);
   return clone;
 }
 function commitFixture(clone: string, relPath: string, content: string): void {
   writeFileSync(join(clone, relPath), content);
-  spawnSync('/usr/local/bin/git', ['-C', clone, 'add', relPath], { encoding: 'utf8' });
-  spawnSync('/usr/local/bin/git', ['-C', clone, 'commit', '-q', '-m', 'fixture', '--no-gpg-sign'], {
+  spawnSync('git', ['-C', clone, 'add', relPath], { encoding: 'utf8' });
+  spawnSync('git', ['-C', clone, 'commit', '-q', '-m', 'fixture', '--no-gpg-sign'], {
     encoding: 'utf8',
     env: { ...process.env, GIT_AUTHOR_NAME: 't', GIT_AUTHOR_EMAIL: 't@t', GIT_COMMITTER_NAME: 't', GIT_COMMITTER_EMAIL: 't@t' },
   });
@@ -110,8 +111,20 @@ describe('dependency partition', () => {
     expect(out.used_commands).toEqual(expect.arrayContaining(['clang++', 'xcode-select', 'xcrun']));
   });
 
+  it('live tools and tests do not hard-code host-specific Homebrew Git or npm paths', () => {
+    const listed = spawnSync('git', ['-C', REPO, 'ls-files', '-z'], { encoding: 'buffer' });
+    expect(listed.status, listed.stderr?.toString('utf8') ?? listed.error?.message).toBe(0);
+    const hostPrefix = ['/usr', 'local', 'bin'].join('/');
+    const forbidden = new RegExp(`${hostPrefix}/(?:git|npm)\\b`);
+    const executableSources = listed.stdout.toString('utf8').split('\0')
+      .filter((path) => /^(src|tools|tests)\/.*\.(?:ts|mts|mjs)$/.test(path));
+    for (const path of executableSources) {
+      expect(readFileSync(join(REPO, path), 'utf8'), path).not.toMatch(forbidden);
+    }
+  });
+
   it('the reviewed computed-command owners remain explicit and the committed target stays green', () => {
-    const manifest = JSON.parse(spawnSync('/usr/local/bin/git', ['-C', REPO, 'show', 'HEAD:provenance/dependency-toolchain.v1.json'], {
+    const manifest = JSON.parse(spawnSync('git', ['-C', REPO, 'show', 'HEAD:provenance/dependency-toolchain.v1.json'], {
       encoding: 'utf8',
     }).stdout) as { computed_command_owners: string[] };
     expect(manifest.computed_command_owners).toEqual([
@@ -147,7 +160,7 @@ describe('dependency partition', () => {
     const clone = cloneRepo();
     // remove clang++ from the manifest while toolchain-preflight still invokes it
     const manifestPath = 'provenance/dependency-toolchain.v1.json';
-    const m = JSON.parse(spawnSync('/usr/local/bin/git', ['-C', clone, 'show', `HEAD:${manifestPath}`], { encoding: 'utf8' }).stdout) as {
+    const m = JSON.parse(spawnSync('git', ['-C', clone, 'show', `HEAD:${manifestPath}`], { encoding: 'utf8' }).stdout) as {
       system_helpers: Array<{ name: string }>;
     };
     m.system_helpers = m.system_helpers.filter((h) => h.name !== 'clang++');

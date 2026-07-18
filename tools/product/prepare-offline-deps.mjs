@@ -13,7 +13,6 @@ import {
   statSync,
   writeFileSync,
 } from 'node:fs';
-import { homedir } from 'node:os';
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import process from 'node:process';
 import { fileURLToPath, pathToFileURL } from 'node:url';
@@ -145,7 +144,7 @@ function main() {
       readJson(shrinkwrapPath),
     );
     const cacheSource = resolve(
-      args['cache-source'] ?? process.env.npm_config_cache ?? join(homedir(), '.npm'),
+      args['cache-source'] ?? process.env.npm_config_cache ?? join(REPO_ROOT, '.npm-cache'),
     );
     const cacheTarget = join(temporary, 'npm-cache');
 

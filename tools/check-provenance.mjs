@@ -27,8 +27,12 @@ function selectedCommit(argv) {
 }
 
 function git(...args) {
-  const r = spawnSync('/usr/local/bin/git', ['-C', REPO, ...args], { encoding: 'buffer', maxBuffer: 1 << 28 });
-  if (r.status !== 0) throw new Error(`git ${args.join(' ')} failed: ${r.stderr}`);
+  const r = spawnSync('git', ['-C', REPO, ...args], { encoding: 'buffer', maxBuffer: 1 << 28 });
+  if (r.status !== 0) {
+    throw new Error(
+      `git ${args.join(' ')} failed: ${r.stderr?.toString('utf8') ?? r.error?.message ?? 'unknown error'}`,
+    );
+  }
   return r.stdout;
 }
 function commitTree(commit) {

@@ -146,7 +146,9 @@ jobs:
           set -euo pipefail
           bundle="$RUNNER_TEMP/qualification-bundle"
           mkdir -p "$bundle"
-          node tools/product/prepare-offline-deps.mjs --out-dir "$bundle/qualification-support"
+          node tools/product/prepare-offline-deps.mjs \
+            --out-dir "$bundle/qualification-support" \
+            --cache-source "$GITHUB_WORKSPACE/.npm-cache"
       - name: Build product artifact exactly once
         id: builder
         continue-on-error: true

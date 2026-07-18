@@ -58,10 +58,10 @@ describe('provenance records', () => {
     tmpDirs.push(dir);
     const clone = join(dir, 'echo-brain');
     // clone the committed repo so HEAD is intact, then mutate a tracked file + commit
-    expect(spawnSync('/usr/local/bin/git', ['clone', '--quiet', REPO, clone], { encoding: 'utf8' }).status).toBe(0);
+    expect(spawnSync('git', ['clone', '--quiet', REPO, clone], { encoding: 'utf8' }).status).toBe(0);
     const victim = join(clone, 'src/guards.ts');
     writeFileSync(victim, readFileSync(victim, 'utf8') + '\n// tamper\n');
-    spawnSync('/usr/local/bin/git', ['-C', clone, 'commit', '-am', 'tamper', '--no-gpg-sign'], {
+    spawnSync('git', ['-C', clone, 'commit', '-am', 'tamper', '--no-gpg-sign'], {
       encoding: 'utf8',
       env: { ...process.env, GIT_AUTHOR_NAME: 't', GIT_AUTHOR_EMAIL: 't@t', GIT_COMMITTER_NAME: 't', GIT_COMMITTER_EMAIL: 't@t' },
     });

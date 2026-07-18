@@ -39,7 +39,7 @@ function envelopeGit(gitDir, args, { input } = {}) {
     GIT_CONFIG_NOSYSTEM: '1', GIT_CONFIG_GLOBAL: '/dev/null',
     GIT_ATTR_NOSYSTEM: '1', GIT_NO_REPLACE_OBJECTS: '1',
   };
-  const r = spawnSync('/usr/local/bin/git', [`--git-dir=${gitDir}`, ...args],
+  const r = spawnSync('git', [`--git-dir=${gitDir}`, ...args],
     { env, input, encoding: 'buffer', maxBuffer: 1 << 28 });
   if (r.status !== 0) throw new Error(`git ${args.join(' ')} @ ${gitDir} failed: ${r.stderr}`);
   return r.stdout;

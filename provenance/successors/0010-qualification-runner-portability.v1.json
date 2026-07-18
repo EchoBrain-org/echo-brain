@@ -1,0 +1,24 @@
+{
+  "schema_version": 1,
+  "kind": "successor_change_record",
+  "predecessor": "provenance/successors/0009-product-operator-recovery.v1.json",
+  "decision": "Make the DEV qualification workflow portable to the macOS arm64 hosted runner by resolving Git and npm through the reviewed PATH and binding offline dependency preparation to the checkout-local npm cache.",
+  "implemented_capabilities": [
+    "PATH-portable Git and npm invocation across live repository checks and package-install tests",
+    "checkout-local npm cache selection for exact offline qualification support preparation",
+    "disposable build-local npm cache isolation for artifact packing",
+    "regression enforcement against host-specific Homebrew Git and npm paths in executable source and tests"
+  ],
+  "architectural_invariants": [
+    "the immutable extraction provenance records retain their historical toolchain paths",
+    "qualification still fails closed on missing dependencies, unexpected skips, or incomplete evidence",
+    "runner portability does not advance maturity or release authority"
+  ],
+  "state": {
+    "maturity": "DEV",
+    "authority": false,
+    "installed": false,
+    "production_adapter_set": false,
+    "wedge_executed": false
+  }
+}

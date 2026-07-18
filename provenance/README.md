@@ -31,3 +31,6 @@ adapted to the standalone core/adapters boundary and root dependency lock.
 `0009-product-operator-recovery.v1.json` records the standalone onboarding,
 LaunchAgent lifecycle, credential, and stopped-service state recovery path
 while keeping managed code-version rollback explicitly pending.
+`0010-qualification-runner-portability.v1.json` records PATH-portable Git/npm
+invocation and checkout-local npm cache binding for the macOS arm64 DEV
+qualification workflow.

@@ -8,7 +8,7 @@ const REPO = resolve(import.meta.dirname, '../..');
 const SIBLING_MARKERS = ['Project_echo', 'echo-loop', 'echo-context', 'echo-dev-platform'];
 
 function git(...args: string[]): string {
-  const r = spawnSync('/usr/local/bin/git', ['-C', REPO, ...args], { encoding: 'utf8', maxBuffer: 1 << 28 });
+  const r = spawnSync('git', ['-C', REPO, ...args], { encoding: 'utf8', maxBuffer: 1 << 28 });
   if (r.status !== 0) throw new Error(`git ${args.join(' ')} failed: ${r.stderr}`);
   return r.stdout;
 }
@@ -46,7 +46,7 @@ describe('source independence', () => {
   });
 
   it('git fsck is clean with no dangling or unreachable objects', () => {
-    const r = spawnSync('/usr/local/bin/git', ['-C', REPO, 'fsck', '--full', '--no-reflogs', '--unreachable'], { encoding: 'utf8' });
+    const r = spawnSync('git', ['-C', REPO, 'fsck', '--full', '--no-reflogs', '--unreachable'], { encoding: 'utf8' });
     expect(r.status).toBe(0);
     expect(r.stdout.trim() + r.stderr.replace(/^Checking.*$/gm, '').trim()).toBe('');
   });

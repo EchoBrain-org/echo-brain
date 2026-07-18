@@ -42,7 +42,7 @@ function run(
 beforeAll(() => {
   mkdirSync(artifactDirectory, { recursive: true });
   const packed = run(
-    '/usr/local/bin/npm',
+    'npm',
     ['pack', '--json', '--pack-destination', artifactDirectory],
     { env: npmEnvironment },
   );
@@ -176,7 +176,7 @@ describe('ordinary npm package', () => {
       )}\n`,
     );
     const installed = run(
-      '/usr/local/bin/npm',
+      'npm',
       ['ci', '--offline', '--omit=dev', '--no-audit', '--no-fund'],
       { cwd: prefix, env: { ...npmEnvironment, npm_config_offline: 'true' } },
     );

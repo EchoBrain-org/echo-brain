@@ -4,12 +4,14 @@ import { join } from 'node:path';
 
 export function repositoryWorktree(root) {
   const listed = spawnSync(
-    '/usr/local/bin/git',
+    'git',
     ['-C', root, 'ls-files', '-z', '--cached', '--others', '--exclude-standard'],
     { encoding: 'buffer' },
   );
   if (listed.status !== 0) {
-    throw new Error(`git ls-files failed: ${listed.stderr.toString('utf8')}`);
+    throw new Error(
+      `git ls-files failed: ${listed.stderr?.toString('utf8') ?? listed.error?.message ?? 'unknown error'}`,
+    );
   }
 
   const files = new Map();
@@ -35,4 +37,3 @@ export function repositoryWorktree(root) {
 export function textFile(files, path) {
   return files.get(path)?.bytes.toString('utf8') ?? null;
 }
-
