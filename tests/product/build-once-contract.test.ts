@@ -71,7 +71,10 @@ describe('Git-object product builder', () => {
     const ready = join(temporaryRoot, 'preflight-ready');
     const resume = join(temporaryRoot, 'preflight-continue');
     const closurePath = join(REPO_ROOT, 'src/product/paths.ts');
-    const ignoredPath = join(REPO_ROOT, 'src/product/ignored-artifact-sentinel.log');
+    const ignoredPath = join(
+      REPO_ROOT,
+      'src/product/ignored-artifact-sentinel.log',
+    );
     const original = readFileSync(closurePath, 'utf8');
     const marker = 'WORKTREE_MUTATION_MUST_NOT_SHIP_132';
     const child = spawnSanitizedChild(
@@ -101,14 +104,18 @@ describe('Git-object product builder', () => {
     child.stdout.on('data', (chunk: string) => (stdout += chunk));
     child.stderr.on('data', (chunk: string) => (stderr += chunk));
     try {
-      await vi.waitFor(() => expect(existsSync(ready)).toBe(true), { timeout: 10_000 });
+      await vi.waitFor(() => expect(existsSync(ready)).toBe(true), {
+        timeout: 10_000,
+      });
       writeFileSync(closurePath, `${original}\n// ${marker}\n`);
       writeFileSync(ignoredPath, `${marker}\n`);
       writeFileSync(resume, 'continue\n');
-      const status = await new Promise<number | null>((resolveStatus, reject) => {
-        child.once('error', reject);
-        child.once('close', resolveStatus);
-      });
+      const status = await new Promise<number | null>(
+        (resolveStatus, reject) => {
+          child.once('error', reject);
+          child.once('close', resolveStatus);
+        },
+      );
       expect(status, stderr).toBe(0);
     } finally {
       writeFileSync(closurePath, original);
@@ -134,19 +141,23 @@ describe('Git-object product builder', () => {
     const packageFiles = readdirSync(join(extracted, 'package/dist/product'));
     expect(packageFiles).not.toContain(basename(ignoredPath));
     for (const path of packageFiles.filter((name) => name.endsWith('.js'))) {
-      expect(readFileSync(join(extracted, 'package/dist/product', path), 'utf8')).not.toContain(
-        marker,
-      );
+      expect(
+        readFileSync(join(extracted, 'package/dist/product', path), 'utf8'),
+      ).not.toContain(marker);
     }
 
-    const manifest = JSON.parse(readFileSync(join(outDir, 'artifact-manifest.json'), 'utf8')) as {
+    const manifest = JSON.parse(
+      readFileSync(join(outDir, 'artifact-manifest.json'), 'utf8'),
+    ) as {
       source_sha: string;
       package_files: Array<{ path: string }>;
     };
     expect(manifest.source_sha).toBe(await headSha());
-    expect(manifest.package_files.some((entry) => entry.path.includes('ignored-artifact'))).toBe(
-      false,
-    );
+    expect(
+      manifest.package_files.some((entry) =>
+        entry.path.includes('ignored-artifact'),
+      ),
+    ).toBe(false);
 
     const overwrite = await run(
       process.execPath,
@@ -167,15 +178,22 @@ describe('Git-object product builder', () => {
 });
 
 describe('qualification workflow build-once and terminal contracts', () => {
-  const workflowPath = join(REPO_ROOT, '.github/workflows/product-qualification.yml');
+  const workflowPath = join(
+    REPO_ROOT,
+    '.github/workflows/product-qualification.yml',
+  );
 
   it('has one pack producer and no downstream checkout, pack, or rebuild', () => {
     const workflow = readFileSync(workflowPath, 'utf8');
-    expect(workflow.match(/tools\/product\/build-artifact\.mjs/g)).toHaveLength(1);
+    expect(workflow.match(/tools\/product\/build-artifact\.mjs/g)).toHaveLength(
+      1,
+    );
     expect(workflow).not.toContain('npm pack');
     expect(workflow).toContain('ref: ${{ steps.expected.outputs.sha }}');
     expect(workflow).toContain('${{ github.event.pull_request.head.sha }}');
-    const target = workflow.split('\n  target:\n')[1]!.split('\n  aggregate:\n')[0]!;
+    const target = workflow
+      .split('\n  target:\n')[1]!
+      .split('\n  aggregate:\n')[0]!;
     const aggregate = workflow.split('\n  aggregate:\n')[1]!;
     for (const downstream of [target, aggregate]) {
       expect(downstream).not.toContain('actions/checkout@');
@@ -183,8 +201,27 @@ describe('qualification workflow build-once and terminal contracts', () => {
       expect(downstream).not.toContain('npm pack');
     }
     expect(target.indexOf('Verify exact bytes before install')).toBeLessThan(
-      target.indexOf('Run clean install'),
+      target.indexOf('Run the shipped installer'),
     );
+    expect(target).toContain('run-target-cell.mjs');
+    expect(
+      readFileSync(
+        join(REPO_ROOT, 'tools/product/prepare-offline-deps.mjs'),
+        'utf8',
+      ),
+    ).toContain("'install-bundle.mjs'");
+    expect(
+      readFileSync(
+        join(REPO_ROOT, 'tools/product/prepare-offline-deps.mjs'),
+        'utf8',
+      ),
+    ).toContain("'install-archive.mjs'");
+    expect(
+      readFileSync(
+        join(REPO_ROOT, 'tools/product/prepare-offline-deps.mjs'),
+        'utf8',
+      ),
+    ).toContain("'install-echo-brain.command'");
   });
 
   it('keeps evidence uploads always-running and puts the terminal gate last', () => {
@@ -196,7 +233,9 @@ describe('qualification workflow build-once and terminal contracts', () => {
     ]) {
       const at = workflow.indexOf(`- name: ${uploadName}`);
       expect(at, uploadName).toBeGreaterThan(-1);
-      expect(workflow.slice(at, at + 180), uploadName).toContain('if: always()');
+      expect(workflow.slice(at, at + 180), uploadName).toContain(
+        'if: always()',
+      );
     }
     expect(workflow.indexOf('- name: Final terminal gate')).toBeGreaterThan(
       workflow.indexOf('- name: Upload immutable final DEV report'),
@@ -207,7 +246,10 @@ describe('qualification workflow build-once and terminal contracts', () => {
   it('uses only standalone repository paths and the authoritative root lock', () => {
     const workflow = readFileSync(workflowPath, 'utf8');
     const readme = readFileSync(join(REPO_ROOT, 'product/README.md'), 'utf8');
-    const builder = readFileSync(join(REPO_ROOT, 'tools/product/build-artifact.mjs'), 'utf8');
+    const builder = readFileSync(
+      join(REPO_ROOT, 'tools/product/build-artifact.mjs'),
+      'utf8',
+    );
     const template = JSON.parse(
       readFileSync(join(REPO_ROOT, 'product/package.template.json'), 'utf8'),
     ) as { files: string[] };
@@ -295,7 +337,11 @@ describe('qualification workflow build-once and terminal contracts', () => {
           source_sha: '1'.repeat(40),
           version: '0.1.0-dev.workflow',
           product_boundary_version: 1,
-          declared_platform: { os: 'darwin', architecture: 'arm64', node: '22.22.1' },
+          declared_platform: {
+            os: 'darwin',
+            architecture: 'arm64',
+            node: '22.22.1',
+          },
           dependency_lock_sha256: 'b'.repeat(64),
           artifact: { path: 'echo-brain.tgz', size: 1, sha256: 'a'.repeat(64) },
         },
@@ -366,7 +412,9 @@ describe('qualification workflow build-once and terminal contracts', () => {
       cells: Array<{ id: string; status: string }>;
     };
     expect(report).toMatchObject({ maturity: 'DEV', result: 'incomplete' });
-    expect(report.cells.find((cell) => cell.id === 'clean-install')).toMatchObject({
+    expect(
+      report.cells.find((cell) => cell.id === 'clean-install'),
+    ).toMatchObject({
       status: 'fail',
     });
     for (const unimplemented of [
@@ -378,7 +426,9 @@ describe('qualification workflow build-once and terminal contracts', () => {
       'disable-uninstall-recovery',
       'restoration-health',
     ]) {
-      expect(report.cells.find((cell) => cell.id === unimplemented)).toMatchObject({
+      expect(
+        report.cells.find((cell) => cell.id === unimplemented),
+      ).toMatchObject({
         status: 'pending',
       });
     }
@@ -407,7 +457,11 @@ describe('qualification workflow build-once and terminal contracts', () => {
     expect(validated.status, validated.stderr).toBe(0);
     const gated = await run(
       process.execPath,
-      [join(REPO_ROOT, 'tools/product/terminal-gate.mjs'), '--terminal-status', terminal],
+      [
+        join(REPO_ROOT, 'tools/product/terminal-gate.mjs'),
+        '--terminal-status',
+        terminal,
+      ],
       { cwd: REPO_ROOT },
     );
     expect(gated.status).toBe(1);

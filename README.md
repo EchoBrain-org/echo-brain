@@ -71,40 +71,80 @@ npm run check:dependencies
 migrations under `dist/`. `npm pack` runs that build automatically and includes
 the CLI, runtime schema, migrations, license, README, and shrinkwrap.
 
-## Install the local tarball
+## Install a release bundle
 
-After `npm pack`, install the exact tarball into a user-controlled prefix:
-
-```sh
-npm install --global ./echo-brain-0.0.0-dev.0.tgz
-```
-
-Or keep it isolated:
+The founder-beta path is one command from a trusted checkout. Give it the
+downloaded GitHub Actions ZIP and the outer digest shown by GitHub:
 
 ```sh
-npm install --prefix "$HOME/.local/share/echo-brain" ./echo-brain-0.0.0-dev.0.tgz
-"$HOME/.local/share/echo-brain/node_modules/.bin/echo-brain" --help
+./tools/product/install-echo-brain.command \
+  --archive "$HOME/Downloads/echo-brain-dev-<sha>-run-<id>.zip" \
+  --expected-archive-sha256 <trusted-github-artifact-sha256> \
+  --install-root "$HOME/.local/share/echo-brain" \
+  --onboard \
+  --config "$HOME/.config/echo-brain/runtime.json" \
+  --state-dir "$HOME/.local/state/echo-brain"
 ```
+
+That command verifies the ZIP before extracting or executing anything from it,
+uses a private temporary directory, and removes the extraction when it exits.
+It then verifies every bundled file before writing, enforces the declared
+darwin/arm64 Node toolchain, installs from the bundled offline dependency
+cache, retains and seals the exact artifact under a versioned release,
+atomically selects `releases/current`, writes private evidence, and creates the
+stable launcher at
+`$HOME/.local/share/echo-brain/bin/echo-brain`. An exact rerun is a verified
+no-op.
+
+Installer v1 is intentionally fresh-install/idempotent-only. If the install
+root already selects a different release, it stops before changing bytes. A
+future updater must coordinate service stop, lifecycle locking, state backup,
+compatibility checks, activation, restart, and rollback as one operation.
+
+`--onboard` creates only the private, secret-free configuration skeleton. The
+installer never accepts credentials, contacts Granola or Slack, runs `init`, or
+enables the LaunchAgent. The trusted outer digest authenticates the complete
+GitHub artifact; a checksum contained inside that same ZIP would prove only
+internal consistency, not publisher authenticity.
+
+The founder beta still requires native Node `22.22.1`, npm `10.9.4`, and the
+macOS build toolchain. The client-grade destination is a signed and notarized
+package with its runtime and native dependencies bundled, so a client does not
+need NVM, npm, or Xcode.
+
+For local package development only, `npm pack` can still be installed into a
+disposable prefix with `npm install --prefix <path> <tarball>`; that is not the
+release onboarding path.
 
 ## First-time onboarding and service lifecycle
 
-Choose separate absolute paths for configuration and state. `onboard` creates a
-private, secret-free baseline and tells you where to place the Granola token; it
-never creates or prints a credential value.
+Choose separate absolute paths for configuration and state. The bundle
+installer can call `onboard` through `--onboard`; running it directly remains
+available for operators. It creates a private, secret-free baseline and tells
+you where to place the Granola token; it never creates or prints a credential
+value.
 
 ```sh
-echo-brain onboard \
+ECHO_BRAIN_CLI="$HOME/.local/share/echo-brain/bin/echo-brain"
+
+"$ECHO_BRAIN_CLI" onboard \
   --config /Users/you/.config/echo-brain/runtime.json \
   --state-dir /Users/you/Library/Application\ Support/echo-brain/state
 
 # Put only the token in the reported credential path, then:
 chmod 600 /Users/you/Library/Application\ Support/echo-brain/state/credentials/granola-api-key
 
-echo-brain init --config /Users/you/.config/echo-brain/runtime.json
-echo-brain service install --config /Users/you/.config/echo-brain/runtime.json
-echo-brain doctor --config /Users/you/.config/echo-brain/runtime.json
-echo-brain status --config /Users/you/.config/echo-brain/runtime.json
+"$ECHO_BRAIN_CLI" init --config /Users/you/.config/echo-brain/runtime.json
+"$ECHO_BRAIN_CLI" run-once --config /Users/you/.config/echo-brain/runtime.json
+
+# Only after supervised approval/delivery and recovery checks succeed:
+"$ECHO_BRAIN_CLI" service install --config /Users/you/.config/echo-brain/runtime.json
+"$ECHO_BRAIN_CLI" doctor --config /Users/you/.config/echo-brain/runtime.json
 ```
+
+If you prefer bare `echo-brain` commands for the current terminal session, run
+`export PATH="$HOME/.local/share/echo-brain/bin:$PATH"`. The installer does not
+silently edit shell startup files.
 
 The persistent service is a per-user LaunchAgent on the phase-one macOS arm64
 target. `start`, `stop`, `restart`, `status`, and `uninstall` are explicit and

@@ -13,7 +13,15 @@ import {
   statSync,
   writeFileSync,
 } from 'node:fs';
-import { basename, dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
+import {
+  basename,
+  dirname,
+  isAbsolute,
+  join,
+  relative,
+  resolve,
+  sep,
+} from 'node:path';
 import process from 'node:process';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { runToolchainPreflight } from './toolchain-preflight.mjs';
@@ -38,16 +46,21 @@ function parseArgs(argv) {
       throw new Error(`unknown argument: ${flag}`);
     }
     const value = argv[++index];
-    if (value === undefined || value.startsWith('--')) throw new Error(`${flag} requires a value`);
+    if (value === undefined || value.startsWith('--'))
+      throw new Error(`${flag} requires a value`);
     args[flag.slice(2)] = value;
   }
-  if (!isAbsolute(args['out-dir'] ?? '')) throw new Error('--out-dir must be absolute');
+  if (!isAbsolute(args['out-dir'] ?? ''))
+    throw new Error('--out-dir must be absolute');
   return args;
 }
 
 function integrityContentPath(cacheRoot, integrity) {
-  if (!integrity.startsWith('sha512-')) throw new Error(`unsupported lock integrity: ${integrity}`);
-  const hex = Buffer.from(integrity.slice('sha512-'.length), 'base64').toString('hex');
+  if (!integrity.startsWith('sha512-'))
+    throw new Error(`unsupported lock integrity: ${integrity}`);
+  const hex = Buffer.from(integrity.slice('sha512-'.length), 'base64').toString(
+    'hex',
+  );
   return join(
     cacheRoot,
     '_cacache/content-v2/sha512',
@@ -60,7 +73,13 @@ function integrityContentPath(cacheRoot, integrity) {
 function indexPath(cacheRoot, resolvedUrl) {
   const key = `make-fetch-happen:request-cache:${resolvedUrl}`;
   const hex = createHash('sha256').update(key).digest('hex');
-  return join(cacheRoot, '_cacache/index-v5', hex.slice(0, 2), hex.slice(2, 4), hex.slice(4));
+  return join(
+    cacheRoot,
+    '_cacache/index-v5',
+    hex.slice(0, 2),
+    hex.slice(2, 4),
+    hex.slice(4),
+  );
 }
 
 function copyRequired(source, destination) {
@@ -99,7 +118,9 @@ function locateHeaders(explicit) {
   for (const candidate of candidates) {
     if (existsSync(join(candidate, 'node.h'))) return candidate;
   }
-  throw new Error(`matching Node headers were not found; checked: ${candidates.join(', ')}`);
+  throw new Error(
+    `matching Node headers were not found; checked: ${candidates.join(', ')}`,
+  );
 }
 
 function filesUnder(root) {
@@ -109,7 +130,8 @@ function filesUnder(root) {
       const path = join(directory, entry.name);
       if (entry.isDirectory()) visit(path);
       else if (entry.isFile()) files.push(path);
-      else throw new Error(`offline support contains a non-file entry: ${path}`);
+      else
+        throw new Error(`offline support contains a non-file entry: ${path}`);
     }
   }
   visit(root);
@@ -127,16 +149,21 @@ function safeRemoveTemporary(path, parent) {
 function main() {
   const args = parseArgs(process.argv.slice(2));
   const outDir = resolve(args['out-dir']);
-  if (existsSync(outDir)) throw new Error(`--out-dir already exists: ${outDir}`);
+  if (existsSync(outDir))
+    throw new Error(`--out-dir already exists: ${outDir}`);
   const parent = dirname(outDir);
   mkdirSync(parent, { recursive: true });
   const temporary = mkdtempSync(join(parent, `.${basename(outDir)}.prepare-`));
 
   try {
-    const boundary = readJson(join(REPO_ROOT, 'product/source-boundary.v1.json'));
+    const boundary = readJson(
+      join(REPO_ROOT, 'product/source-boundary.v1.json'),
+    );
     const expectedNode = boundary.phase_1_platform.node;
     if (process.versions.node !== expectedNode) {
-      throw new Error(`Node ${expectedNode} is required, received ${process.versions.node}`);
+      throw new Error(
+        `Node ${expectedNode} is required, received ${process.versions.node}`,
+      );
     }
     const shrinkwrapPath = join(REPO_ROOT, 'npm-shrinkwrap.json');
     const shrinkwrap = productShrinkwrap(
@@ -144,28 +171,47 @@ function main() {
       readJson(shrinkwrapPath),
     );
     const cacheSource = resolve(
-      args['cache-source'] ?? process.env.npm_config_cache ?? join(REPO_ROOT, '.npm-cache'),
+      args['cache-source'] ??
+        process.env.npm_config_cache ??
+        join(REPO_ROOT, '.npm-cache'),
     );
     const cacheTarget = join(temporary, 'npm-cache');
 
     for (const [packagePath, metadata] of Object.entries(shrinkwrap.packages)) {
       if (packagePath === '') continue;
-      if (typeof metadata.integrity !== 'string' || typeof metadata.resolved !== 'string') {
-        throw new Error(`shrinkwrapped package lacks resolved integrity: ${packagePath}`);
+      if (
+        typeof metadata.integrity !== 'string' ||
+        typeof metadata.resolved !== 'string'
+      ) {
+        throw new Error(
+          `shrinkwrapped package lacks resolved integrity: ${packagePath}`,
+        );
       }
-      const contentSource = integrityContentPath(cacheSource, metadata.integrity);
-      const contentTarget = integrityContentPath(cacheTarget, metadata.integrity);
+      const contentSource = integrityContentPath(
+        cacheSource,
+        metadata.integrity,
+      );
+      const contentTarget = integrityContentPath(
+        cacheTarget,
+        metadata.integrity,
+      );
       copyRequired(contentSource, contentTarget);
       copyIndexedCacheEntry(cacheSource, cacheTarget, metadata.resolved);
     }
     const headersSource = locateHeaders(args['headers-source']);
     const nodedir = join(temporary, 'node-headers');
     mkdirSync(join(nodedir, 'include'), { recursive: true });
-    cpSync(headersSource, join(nodedir, 'include/node'), { recursive: true, dereference: true });
+    cpSync(headersSource, join(nodedir, 'include/node'), {
+      recursive: true,
+      dereference: true,
+    });
     writeFileSync(join(nodedir, 'node-version.txt'), `${expectedNode}\n`);
     for (const script of [
       'toolchain-preflight.mjs',
       'install-offline.mjs',
+      'install-archive.mjs',
+      'install-bundle.mjs',
+      'install-echo-brain.command',
       'verify-bundle.mjs',
       'run-target-cell.mjs',
       'create-draft-report.mjs',
@@ -176,7 +222,10 @@ function main() {
       cpSync(join(TOOL_DIR, script), join(temporary, script));
     }
     mkdirSync(join(temporary, 'schemas/product'), { recursive: true });
-    for (const schema of ['qualification-report.v1.schema.json', 'qualification-matrix.v1.json']) {
+    for (const schema of [
+      'qualification-report.v1.schema.json',
+      'qualification-matrix.v1.json',
+    ]) {
       cpSync(
         join(REPO_ROOT, 'schemas/product', schema),
         join(temporary, 'schemas/product', schema),
@@ -194,7 +243,9 @@ function main() {
       `${JSON.stringify({ ...preflight, nodedir: 'node-headers' }, null, 2)}\n`,
     );
     if (!preflight.ok) {
-      throw new Error('toolchain preflight failed while preparing offline dependencies');
+      throw new Error(
+        'toolchain preflight failed while preparing offline dependencies',
+      );
     }
 
     const manifestPath = join(temporary, 'support-manifest.json');
@@ -227,7 +278,10 @@ function main() {
   }
 }
 
-if (process.argv[1] !== undefined && import.meta.url === pathToFileURL(process.argv[1]).href) {
+if (
+  process.argv[1] !== undefined &&
+  import.meta.url === pathToFileURL(process.argv[1]).href
+) {
   try {
     main();
   } catch (error) {

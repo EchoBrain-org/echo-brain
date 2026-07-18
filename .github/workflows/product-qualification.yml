@@ -257,7 +257,7 @@ jobs:
           node "$RUNNER_TEMP/qualification-bundle/qualification-support/verify-bundle.mjs"
           --artifact-dir "$RUNNER_TEMP/qualification-bundle/artifact"
           --support-dir "$RUNNER_TEMP/qualification-bundle/qualification-support"
-      - name: Run clean install, packaged selftests, onboarding/init, and isolation smoke
+      - name: Run the shipped installer, packaged selftests, onboarding/init, and isolation smoke
         id: target_cell
         continue-on-error: true
         run: >-

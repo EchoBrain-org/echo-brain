@@ -51,8 +51,11 @@ export function runToolchainPreflight(options) {
   const run = options.run ?? defaultRun;
   const exists = options.exists ?? existsSync;
   const read = options.read ?? ((path) => readFileSync(path, 'utf8'));
+  const canonical = options.realpath ?? realpathSync;
   const nodeVersion = options.nodeVersion ?? process.versions.node;
+  const executingNodePath = options.executingNodePath ?? process.execPath;
   let npmVersion = '';
+  let resolvedNodePath = null;
   const checks = [];
 
   const commandChecks = [
@@ -87,8 +90,35 @@ export function runToolchainPreflight(options) {
       resolved,
       version: firstLine(result.stdout || result.stderr),
     });
+    if (name === 'node') resolvedNodePath = resolved;
     if (name === 'npm') npmVersion = firstLine(result.stdout || result.stderr);
   }
+
+  let nodePathIdentity;
+  try {
+    const pathNode =
+      resolvedNodePath === null ? null : canonical(resolvedNodePath);
+    const executingNode = canonical(executingNodePath);
+    nodePathIdentity =
+      pathNode !== null && pathNode === executingNode
+        ? {
+            name: 'path-node-identity',
+            status: 'pass',
+            resolved: pathNode,
+          }
+        : {
+            name: 'path-node-identity',
+            status: 'fail',
+            reason: `PATH node ${pathNode ?? 'unavailable'} does not match executing Node ${executingNode}`,
+          };
+  } catch (error) {
+    nodePathIdentity = {
+      name: 'path-node-identity',
+      status: 'fail',
+      reason: `could not canonicalize Node executables: ${error.message}`,
+    };
+  }
+  checks.push(nodePathIdentity);
 
   checks.push(
     nodeVersion === expectedNode
@@ -150,6 +180,7 @@ export function runToolchainPreflight(options) {
     ok: checks.every((check) => check.status === 'pass'),
     expected_node: expectedNode,
     executing_node: nodeVersion,
+    executing_node_path: executingNodePath,
     expected_npm: expectedNpm,
     executing_npm: npmVersion,
     nodedir,

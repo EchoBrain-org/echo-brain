@@ -185,6 +185,14 @@ describe('product-only artifact', () => {
   });
 
   it('runs the hashed verification and DEV-draft tools without a checkout', async () => {
+    expect(existsSync(join(supportDir, 'install-bundle.mjs'))).toBe(true);
+    expect(existsSync(join(supportDir, 'install-archive.mjs'))).toBe(true);
+    expect(existsSync(join(supportDir, 'install-echo-brain.command'))).toBe(
+      true,
+    );
+    expect(
+      statSync(join(supportDir, 'install-echo-brain.command')).mode & 0o111,
+    ).not.toBe(0);
     const verified = await run(
       process.execPath,
       [
@@ -252,6 +260,12 @@ describe('product-only artifact', () => {
   it('installs from the exact cache and runs config validation plus offline selftest', async () => {
     const prefix = join(temporaryRoot, 'installed-prefix');
     const evidence = join(temporaryRoot, 'install-evidence.json');
+    const hostileHome = join(temporaryRoot, 'hostile-home');
+    mkdirSync(hostileHome, { mode: 0o700 });
+    writeFileSync(
+      join(hostileHome, '.npmrc'),
+      'ignore-scripts=true\nprefix=/tmp/hostile-prefix\nnode-options=--require hostile-module\n',
+    );
     const installed = await run(
       process.execPath,
       [
@@ -267,7 +281,15 @@ describe('product-only artifact', () => {
         '--evidence',
         evidence,
       ],
-      { cwd: temporaryRoot },
+      {
+        cwd: temporaryRoot,
+        env: {
+          HOME: hostileHome,
+          npm_config_ignore_scripts: 'true',
+          npm_config_prefix: '/tmp/hostile-prefix',
+          NODE_PATH: '/tmp/hostile-node-path',
+        },
+      },
     );
     expect(installed.status, installed.stderr).toBe(0);
     const installEvidence = JSON.parse(readFileSync(evidence, 'utf8')) as {
@@ -442,7 +464,9 @@ describe('toolchain preflight fixtures', () => {
     }),
     exists: (path: string) => headerFiles.has(path),
     read: () => '22.22.1\n',
+    realpath: (path: string) => path,
     nodeVersion: '22.22.1',
+    executingNodePath: '/bin/node',
   };
 
   it.each(commands)('rejects a missing %s prerequisite', (missing) => {
@@ -514,6 +538,20 @@ describe('toolchain preflight fixtures', () => {
       name: 'executing-npm-version',
       status: 'fail',
       reason: 'expected 10.9.4, received 11.0.0',
+    });
+  });
+
+  it('rejects a PATH Node that differs from the executing runtime', () => {
+    const result = runToolchainPreflight({
+      ...passing,
+      executingNodePath: '/native-arm64/node',
+    });
+    expect(result.ok).toBe(false);
+    expect(result.checks).toContainEqual({
+      name: 'path-node-identity',
+      status: 'fail',
+      reason:
+        'PATH node /bin/node does not match executing Node /native-arm64/node',
     });
   });
 });

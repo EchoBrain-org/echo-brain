@@ -17,7 +17,9 @@ export interface ToolchainPreflightOptions {
   ) => { status: number | null; stdout: string; stderr: string };
   exists?: (path: string) => boolean;
   read?: (path: string) => string;
+  realpath?: (path: string) => string;
   nodeVersion?: string;
+  executingNodePath?: string;
 }
 
 export interface ToolchainPreflightResult {
@@ -25,6 +27,7 @@ export interface ToolchainPreflightResult {
   ok: boolean;
   expected_node: string;
   executing_node: string;
+  executing_node_path: string;
   expected_npm: string;
   executing_npm: string;
   nodedir: string;

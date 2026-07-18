@@ -4,7 +4,9 @@
   "predecessor": "provenance/dependency-toolchain.v1.json",
   "computed_command_owners": [
     "tools/product/build-artifact.mjs",
+    "tools/product/install-archive.mjs",
     "tools/product/install-offline.mjs",
+    "tools/product/install-bundle.mjs",
     "tools/product/run-target-cell.mjs"
   ],
   "system_helpers": [

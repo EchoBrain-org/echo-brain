@@ -27,6 +27,25 @@ The artifact includes both canonical runtime schemas: `meeting-context.v1.schema
 
 `prepare-offline-deps.mjs` makes a separate, hashed support bundle containing the exact runtime dependency cache, matching Node headers, synthetic data, and the scripts and schemas needed to verify, install and assess the tarball without a repository checkout. The installer forces npm offline and points proxies at a dead local port, but the hosted runner is not yet under OS-level egress denial; network-isolation/security cells therefore stay pending.
 
+The repository and support bundle carry `install-echo-brain.command`, the
+founder-facing bootstrap, `install-archive.mjs`, its bounded safe ZIP extractor, and
+`install-bundle.mjs`, its fail-closed installation engine. That
+path verifies before writing, retains the exact tarball, seals a versioned
+release, switches the stable `current` pointer only after verification, and can
+optionally run secret-free `onboard`. It deliberately cannot accept
+credentials, initialize live state, contact an adapter, or enable the service.
+The same installation engine—not a hand-reconstructed npm command—is exercised
+by the no-checkout target job. Installer v1 supports a fresh install and exact
+rerun only; a different-current upgrade is refused until the service, backup,
+compatibility, and rollback lifecycle is coordinated end to end.
+
+The archive bootstrap is trusted only when run from a pinned checkout or a
+separately authenticated sidecar; a copy taken from the ZIP cannot authenticate
+itself. It remains a DEV convenience rather than a distribution trust root. The
+outer download still needs an authenticated digest/signature, and client-grade
+macOS distribution still requires a signed/notarized package containing the
+pinned runtime and native dependency rather than relying on NVM and Xcode.
+
 ## Qualification records
 
 The versioned matrix is `schemas/product/qualification-matrix.v1.json`; the report contract is `schemas/product/qualification-report.v1.schema.json`.
