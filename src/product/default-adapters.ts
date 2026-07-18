@@ -19,7 +19,7 @@ export function createDefaultAdapterFactories(): ProductAdapterFactoryRegistry {
     adapter_id: 'granola',
     create: (config, context) =>
       createGranolaMeetingSourceAdapter(config, {
-        env: context.environment,
+        credentialResolver: context.credentialResolver,
         now: context.now,
       }),
   });
@@ -52,6 +52,7 @@ export function createDefaultAdapterFactories(): ProductAdapterFactoryRegistry {
           now: context.now,
         }),
         environment: context.environment,
+        credentialResolver: context.credentialResolver,
         now: context.now,
       }),
   });

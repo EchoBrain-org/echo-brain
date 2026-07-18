@@ -8,7 +8,10 @@ import { spawnSanitizedChild } from '../../src/product/spawn-sanitized-child.js'
 const REPO_ROOT = resolve(import.meta.dirname, '../..');
 const VALIDATOR = join(REPO_ROOT, 'tools/product/validate-qualification.mjs');
 const MATRIX = JSON.parse(
-  readFileSync(join(REPO_ROOT, 'schemas/product/qualification-matrix.v1.json'), 'utf8'),
+  readFileSync(
+    join(REPO_ROOT, 'schemas/product/qualification-matrix.v1.json'),
+    'utf8',
+  ),
 ) as {
   cells: Array<{
     id: string;
@@ -29,7 +32,7 @@ function completeDraft(): Record<string, unknown> {
     schema_version: 1,
     report_kind: 'ci-draft',
     capability_id: 'team-meeting-to-brief',
-    spec_id: '2026-07-13-132-product-graduation-foundation',
+    spec_id: 'standalone-product-qualification-v1',
     product_boundary_version: 1,
     source_sha: sourceSha,
     reviewed_qualification_sha: null,
@@ -72,11 +75,15 @@ function completeDraft(): Record<string, unknown> {
 async function validate(
   report: Record<string, unknown>,
   artifactManifest?: string,
-): Promise<{ status: number | null; result: { ok: boolean; errors: string[] } }> {
+): Promise<{
+  status: number | null;
+  result: { ok: boolean; errors: string[] };
+}> {
   const reportPath = join(temporaryRoot, `report-${sequence++}.json`);
   writeFileSync(reportPath, `${JSON.stringify(report, null, 2)}\n`);
   const args = [VALIDATOR, '--report', reportPath];
-  if (artifactManifest !== undefined) args.push('--artifact-manifest', artifactManifest);
+  if (artifactManifest !== undefined)
+    args.push('--artifact-manifest', artifactManifest);
   const child = spawnSanitizedChild(process.execPath, args, { cwd: REPO_ROOT });
   let stdout = '';
   let stderr = '';
@@ -89,10 +96,15 @@ async function validate(
     child.once('close', resolveStatus);
   });
   expect(stderr).toBe('');
-  return { status, result: JSON.parse(stdout) as { ok: boolean; errors: string[] } };
+  return {
+    status,
+    result: JSON.parse(stdout) as { ok: boolean; errors: string[] },
+  };
 }
 
-function cells(report: Record<string, unknown>): Array<Record<string, unknown>> {
+function cells(
+  report: Record<string, unknown>,
+): Array<Record<string, unknown>> {
   return report.cells as Array<Record<string, unknown>>;
 }
 
@@ -111,7 +123,9 @@ describe('qualification report validator', () => {
     report.cells = cells(report).filter((cell) => cell.id !== 'distribution');
     const response = await validate(report);
     expect(response.status).toBe(1);
-    expect(response.result.errors).toContain('missing mandatory matrix cell: distribution');
+    expect(response.result.errors).toContain(
+      'missing mandatory matrix cell: distribution',
+    );
   });
 
   it('enforces nested schema closure without checkout dependencies', async () => {
@@ -126,7 +140,9 @@ describe('qualification report validator', () => {
 
   it('rejects a CI-authored pass in a human-authority cell', async () => {
     const report = completeDraft();
-    const cell = cells(report).find((candidate) => candidate.id === 'release-authorization')!;
+    const cell = cells(report).find(
+      (candidate) => candidate.id === 'release-authorization',
+    )!;
     Object.assign(cell, {
       status: 'pass',
       evidence_refs: ['ci:false-human-pass'],
@@ -150,32 +166,40 @@ describe('qualification report validator', () => {
 
   it('rejects illegal not_applicable and permits only approved first-release upgrade N/A', async () => {
     const illegal = completeDraft();
-    Object.assign(cells(illegal).find((cell) => cell.id === 'product-tests')!, {
-      status: 'not_applicable',
-      reason: 'fixture waiver',
-      evidence_refs: [],
-      not_applicable_approvals: [
-        { authority: 'founder', rationale: 'fixture' },
-        { authority: 'independent-reviewer', rationale: 'fixture' },
-      ],
-    });
+    Object.assign(
+      cells(illegal).find((cell) => cell.id === 'product-tests')!,
+      {
+        status: 'not_applicable',
+        reason: 'fixture waiver',
+        evidence_refs: [],
+        not_applicable_approvals: [
+          { authority: 'founder', rationale: 'fixture' },
+          { authority: 'independent-reviewer', rationale: 'fixture' },
+        ],
+      },
+    );
     const rejected = await validate(illegal);
     expect(rejected.status).toBe(1);
-    expect(rejected.result.errors).toContain('product-tests: not_applicable is forbidden');
+    expect(rejected.result.errors).toContain(
+      'product-tests: not_applicable is forbidden',
+    );
 
     const controlled = completeDraft();
-    Object.assign(cells(controlled).find((cell) => cell.id === 'upgrade-from-previous')!, {
-      status: 'not_applicable',
-      reason: 'first release has no previous qualified artifact',
-      evidence_refs: [],
-      not_applicable_approvals: [
-        { authority: 'founder', rationale: 'no predecessor exists' },
-        {
-          authority: 'independent-reviewer',
-          rationale: 'confirmed first-release lineage',
-        },
-      ],
-    });
+    Object.assign(
+      cells(controlled).find((cell) => cell.id === 'upgrade-from-previous')!,
+      {
+        status: 'not_applicable',
+        reason: 'first release has no previous qualified artifact',
+        evidence_refs: [],
+        not_applicable_approvals: [
+          { authority: 'founder', rationale: 'no predecessor exists' },
+          {
+            authority: 'independent-reviewer',
+            rationale: 'confirmed first-release lineage',
+          },
+        ],
+      },
+    );
     expect(await validate(controlled)).toEqual({
       status: 0,
       result: { ok: true, errors: [] },
@@ -184,12 +208,18 @@ describe('qualification report validator', () => {
 
   it('rejects CI/source and CI/artifact identity disagreement', async () => {
     const report = completeDraft();
-    (report.ci as { source_sha: string; artifact_sha256: string }).source_sha = '2'.repeat(40);
-    (report.ci as { source_sha: string; artifact_sha256: string }).artifact_sha256 = 'd'.repeat(64);
+    (report.ci as { source_sha: string; artifact_sha256: string }).source_sha =
+      '2'.repeat(40);
+    (
+      report.ci as { source_sha: string; artifact_sha256: string }
+    ).artifact_sha256 = 'd'.repeat(64);
     const response = await validate(report);
     expect(response.status).toBe(1);
     expect(response.result.errors).toEqual(
-      expect.arrayContaining(['CI/source identity mismatch', 'CI/artifact identity mismatch']),
+      expect.arrayContaining([
+        'CI/source identity mismatch',
+        'CI/artifact identity mismatch',
+      ]),
     );
   });
 
@@ -198,7 +228,9 @@ describe('qualification report validator', () => {
     report.unexpected_skip_count = 1;
     const response = await validate(report);
     expect(response.status).toBe(1);
-    expect(response.result.errors).toContain('unexpected_skip_count must be zero, received 1');
+    expect(response.result.errors).toContain(
+      'unexpected_skip_count must be zero, received 1',
+    );
   });
 
   it('rejects a premature QUALIFIED result while required cells remain pending', async () => {
@@ -211,6 +243,7 @@ describe('qualification report validator', () => {
     expect(response.status).toBe(1);
     expect(response.result.errors).toEqual(
       expect.arrayContaining([
+        'this DEV validator rejects release authority until authenticated founder/reviewer evidence sealing is implemented',
         'qualified result has a non-green cell: founder-live-evidence',
         'qualified result has a non-green cell: independent-evidence-review',
         'qualified result has a non-green cell: release-authorization',
@@ -226,13 +259,15 @@ describe('qualification report validator', () => {
       version: (report.artifact as { version: string }).version,
       product_boundary_version: report.product_boundary_version,
       declared_platform: report.declared_platform,
-      dependency_lock_sha256: (report.artifact as { dependency_lock_sha256: string })
-        .dependency_lock_sha256,
+      dependency_lock_sha256: (
+        report.artifact as { dependency_lock_sha256: string }
+      ).dependency_lock_sha256,
       artifact: { sha256: (report.artifact as { sha256: string }).sha256 },
     };
     const serialized = `${JSON.stringify(manifest, null, 2)}\n`;
     writeFileSync(manifestPath, serialized);
-    (report.artifact as { manifest_sha256: string }).manifest_sha256 = hash(serialized);
+    (report.artifact as { manifest_sha256: string }).manifest_sha256 =
+      hash(serialized);
     expect(await validate(report, manifestPath)).toEqual({
       status: 0,
       result: { ok: true, errors: [] },
@@ -245,6 +280,8 @@ describe('qualification report validator', () => {
     );
     const mismatch = await validate(report, manifestPath);
     expect(mismatch.status).toBe(1);
-    expect(mismatch.result.errors).toContain('artifact-manifest/source identity mismatch');
+    expect(mismatch.result.errors).toContain(
+      'artifact-manifest/source identity mismatch',
+    );
   });
 });

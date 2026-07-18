@@ -64,6 +64,10 @@ export interface PrepareProductCompositionOptions {
   operationDeadlines?: Partial<CoreCycleDeadlines>;
 }
 
+export function resolveProductClock(now?: () => string): () => string {
+  return now ?? (() => new Date().toISOString());
+}
+
 function allAdapters(adapters: ProductRuntimeAdapters) {
   return [
     ...adapters.meetingSources,
@@ -212,7 +216,7 @@ export async function prepareProductComposition(
     (config.approval_mode === 'adapter'
       ? (adapters.approvalSurface as ApprovalGate)
       : new StoreBackedApprovalGate(approvals));
-  const now = options.now ?? (() => new Date().toISOString());
+  const now = resolveProductClock(options.now);
   const createId = options.createId ?? randomUUID;
   let closed = false;
   let active: Promise<ProductCycleResult> | null = null;

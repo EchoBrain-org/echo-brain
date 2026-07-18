@@ -86,12 +86,33 @@ describe('product hermeticity setup', () => {
     expect(process.env.ECHO_LOG_LEVEL).toBeUndefined();
   });
 
-  it('keeps real wall-clock reads out of product modules', () => {
+  it('keeps wall-clock reads confined to the three injectable runtime defaults', () => {
     const offenders = productSourceFiles(join(REPO_ROOT, 'src/product')).filter((path) => {
       const source = readFileSync(path, 'utf8');
       return /\bDate\.now\s*\(|\bnew\s+Date\s*\(/.test(source);
     });
-    expect(offenders).toEqual([]);
+    const productRoot = join(REPO_ROOT, 'src/product');
+    const relativeOffenders = offenders
+      .map((path) => path.slice(`${productRoot}/`.length))
+      .sort();
+    expect(relativeOffenders).toEqual([
+      'adapter-factories.ts',
+      'approval/decision-node-store.ts',
+      'composition.ts',
+    ]);
+    expect(readFileSync(join(productRoot, 'adapter-factories.ts'), 'utf8')).toMatch(
+      /now: options\.now \?\? \(\(\) => new Date\(\)\.toISOString\(\)\)/,
+    );
+    expect(
+      readFileSync(join(productRoot, 'approval/decision-node-store.ts'), 'utf8'),
+    ).toMatch(
+      /this\.now = options\.now \?\? \(\(\) => new Date\(\)\.toISOString\(\)\)/,
+    );
+    const composition = readFileSync(join(productRoot, 'composition.ts'), 'utf8');
+    expect(composition).toMatch(
+      /return now \?\? \(\(\) => new Date\(\)\.toISOString\(\)\)/,
+    );
+    expect(composition).toContain('resolveProductClock(options.now)');
   });
 });
 

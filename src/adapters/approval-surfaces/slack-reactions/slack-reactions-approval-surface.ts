@@ -66,6 +66,7 @@ export interface ApprovalDecisionStore {
 export interface SlackReactionsApprovalSurfaceOptions {
   store: ApprovalDecisionStore;
   environment?: NodeJS.ProcessEnv;
+  credentialResolver?: (reference: string) => string | undefined;
   now?: () => string;
   fetchImpl?: typeof fetch;
 }
@@ -214,6 +215,7 @@ export class SlackReactionsApprovalSurface implements ApprovalSurfaceAdapter {
   private readonly settings: SlackReactionsSettings;
   private readonly store: ApprovalDecisionStore;
   private readonly environment: NodeJS.ProcessEnv;
+  private readonly credentialResolver: (reference: string) => string | undefined;
   private readonly now: () => string;
   private readonly fetchImpl: typeof fetch | undefined;
   private client: SlackWebApiClient | undefined;
@@ -231,6 +233,14 @@ export class SlackReactionsApprovalSurface implements ApprovalSurfaceAdapter {
     });
     this.store = options.store;
     this.environment = options.environment ?? process.env;
+    this.credentialResolver =
+      options.credentialResolver ??
+      ((reference) => {
+        const variable = reference.startsWith('env:')
+          ? reference.slice('env:'.length)
+          : undefined;
+        return variable === undefined ? undefined : this.environment[variable];
+      });
     this.now = options.now ?? (() => new Date().toISOString());
     this.fetchImpl = options.fetchImpl;
   }
@@ -251,8 +261,11 @@ export class SlackReactionsApprovalSurface implements ApprovalSurfaceAdapter {
     }
     if (!isNonEmptyString(config.credential_ref)) {
       errors.push('credential_ref is required');
-    } else if (!config.credential_ref.startsWith('env:')) {
-      errors.push('credential_ref must be an env: reference');
+    } else if (
+      !config.credential_ref.startsWith('env:') &&
+      !config.credential_ref.startsWith('file:')
+    ) {
+      errors.push('credential_ref must be an env: or file: reference');
     }
     const allowedSettings = new Set([
       'channel_id',
@@ -570,12 +583,8 @@ export class SlackReactionsApprovalSurface implements ApprovalSurfaceAdapter {
   private apiClient(): SlackWebApiClient {
     if (this.client !== undefined) return this.client;
     const reference = this.config.credential_ref;
-    const variable =
-      reference !== undefined && reference.startsWith('env:')
-        ? reference.slice('env:'.length)
-        : undefined;
     const token =
-      variable === undefined ? undefined : this.environment[variable];
+      reference === undefined ? undefined : this.credentialResolver(reference);
     if (!isNonEmptyString(token)) {
       throw new AdapterError(
         'unauthorized',

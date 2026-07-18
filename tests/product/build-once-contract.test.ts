@@ -204,27 +204,32 @@ describe('qualification workflow build-once and terminal contracts', () => {
     expect(workflow).not.toMatch(/\b(?:tags|release):/);
   });
 
-  it('keeps inherited generic-package debt explicit and outside the product claim', () => {
+  it('uses only standalone repository paths and the authoritative root lock', () => {
     const workflow = readFileSync(workflowPath, 'utf8');
     const readme = readFileSync(join(REPO_ROOT, 'product/README.md'), 'utf8');
-    const sharedDispositions = [
+    const builder = readFileSync(join(REPO_ROOT, 'tools/product/build-artifact.mjs'), 'utf8');
+    const template = JSON.parse(
+      readFileSync(join(REPO_ROOT, 'product/package.template.json'), 'utf8'),
+    ) as { files: string[] };
+    for (const obsolete of [
+      'src/capture/',
+      'src/enrich/',
+      'src/echo-home/',
+      'package-lock.json',
       'tools/install-echo-codex-skills.sh',
-      'dev-platform package maintainer',
-      'before the next generic `echoctl` tag or the `echo-dev-platform` extraction, whichever comes first',
-      'Windows onboarding/validation `EBUSY` and filesystem-event failures',
-      'green before any Windows product support claim',
-      'macOS Node 22 PID-lock/selftest race and Ubuntu Node 22 packaging-cleanup `ENOTEMPTY` race',
-      'owned by QA',
-      'blocking red cell',
-      'retry-based waiver',
-    ];
-    for (const disposition of sharedDispositions) {
-      expect(readme, disposition).toContain(disposition);
-      expect(workflow.replaceAll('`', ''), disposition).toContain(disposition.replaceAll('`', ''));
+      'Project_echo',
+    ]) {
+      expect(workflow, obsolete).not.toContain(obsolete);
+      expect(readme, obsolete).not.toContain(obsolete);
     }
-    expect(readme).toContain('`backlog/_followups.md` remains the owner');
-    expect(readme).toContain('does not imply that the repository is globally green');
-    expect(workflow).not.toContain('windows-');
+    expect(workflow).toContain("- 'npm-shrinkwrap.json'");
+    expect(builder).toContain("join(source, 'npm-shrinkwrap.json')");
+    expect(template.files).toEqual(
+      expect.arrayContaining([
+        'schemas/meeting-context.v1.schema.json',
+        'schemas/runtime-config.v1.schema.json',
+      ]),
+    );
   });
 
   it('keeps the foundation private, DEV-only, and ordered before later gates', () => {
@@ -252,23 +257,23 @@ describe('qualification workflow build-once and terminal contracts', () => {
     for (const excludedTransition of [
       'no tag',
       'GitHub Release',
-      'package publication',
+      'registry publication',
       'protected-environment approval',
       'client installation',
       'real meeting',
       'credential change',
-      'repository transition',
       'release authorization',
     ]) {
       expect(readme, excludedTransition).toContain(excludedTransition);
     }
 
     const orderedGates = [
-      'rank 2 first-run cutoff and newest-first behavior',
-      'rank 3 API-key brain adapter',
-      'V2 authentication probes and A2 cold-state grading',
-      'exact-artifact isolated FOUNDER LIVE',
-      'repository extraction and cutover before full qualification',
+      'keep the standalone product boundary',
+      'qualify the implemented onboarding',
+      'add and drill a managed exact-artifact upgrade',
+      'run the exact artifact',
+      'complete independent review',
+      'install the same bytes',
     ];
     let prior = -1;
     for (const gate of orderedGates) {
@@ -312,7 +317,7 @@ describe('qualification workflow build-once and terminal contracts', () => {
         '--capability-id',
         'team-meeting-to-brief',
         '--spec-id',
-        '2026-07-13-132-product-graduation-foundation',
+        'standalone-product-qualification-v1',
         '--ci-run-id',
         'forced-failure-run',
         '--ci-run-attempt',
@@ -364,6 +369,19 @@ describe('qualification workflow build-once and terminal contracts', () => {
     expect(report.cells.find((cell) => cell.id === 'clean-install')).toMatchObject({
       status: 'fail',
     });
+    for (const unimplemented of [
+      'runtime-isolation',
+      'state-fresh',
+      'state-populated',
+      'backup-restore',
+      'state-preservation',
+      'disable-uninstall-recovery',
+      'restoration-health',
+    ]) {
+      expect(report.cells.find((cell) => cell.id === unimplemented)).toMatchObject({
+        status: 'pending',
+      });
+    }
     const terminalResult = JSON.parse(readFileSync(terminal, 'utf8')) as {
       ok: boolean;
       dependency_failures: string[];

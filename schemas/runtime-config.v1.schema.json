@@ -73,7 +73,7 @@
     },
     "secretReference": {
       "type": "string",
-      "pattern": "^(env|keychain):[A-Za-z][A-Za-z0-9_.-]*$"
+      "pattern": "^(env:[A-Za-z][A-Za-z0-9_.-]*|file:/[^\\u0000]+)$"
     }
   }
 }

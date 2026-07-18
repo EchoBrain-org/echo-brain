@@ -48,6 +48,21 @@ function main() {
   const pkg = JSON.parse(textFile(tree, 'package.json'));
   const toolchain = tree.has('provenance/dependency-toolchain.v1.json')
     ? JSON.parse(textFile(tree, 'provenance/dependency-toolchain.v1.json')) : { javascript_clis: [], system_helpers: [] };
+  const successorToolchain = tree.has('product/runtime-toolchain.v1.json')
+    ? JSON.parse(textFile(tree, 'product/runtime-toolchain.v1.json'))
+    : { system_helpers: [], computed_command_owners: [] };
+
+  if (tree.has('product/runtime-toolchain.v1.json')) {
+    if (successorToolchain.schema_version !== 1) {
+      errors.push('product runtime toolchain schema_version must be 1');
+    }
+    if (successorToolchain.kind !== 'successor_toolchain_overlay') {
+      errors.push('product runtime toolchain kind must be successor_toolchain_overlay');
+    }
+    if (successorToolchain.predecessor !== 'provenance/dependency-toolchain.v1.json') {
+      errors.push('product runtime toolchain predecessor must name the extraction manifest');
+    }
+  }
 
   const lockedNames = new Set();
   for (const p of Object.keys(lock.packages ?? {})) {
@@ -118,9 +133,39 @@ function main() {
   // executable expression is allowed only for an explicitly reviewed
   // computed_command_owner. Binding syntax is not provenance: scope shadowing or later
   // mutation can change an identifier's value, so non-owner identifiers always fail closed.
-  const helperByPath = new Map((toolchain.system_helpers ?? []).map((h) => [h.absolute_path, h.name]));
-  const helperByName = new Set((toolchain.system_helpers ?? []).map((h) => h.name));
-  const computedOwners = new Set(toolchain.computed_command_owners ?? []);
+  const successorHelpers = successorToolchain.system_helpers ?? [];
+  const allHelpers = [...(toolchain.system_helpers ?? []), ...successorHelpers];
+  const helperByPath = new Map();
+  const helperByName = new Set();
+  for (const helper of allHelpers) {
+    if (
+      typeof helper?.name !== 'string' ||
+      helper.name === '' ||
+      typeof helper?.absolute_path !== 'string' ||
+      !helper.absolute_path.startsWith('/')
+    ) {
+      errors.push('toolchain system helpers require a name and absolute_path');
+      continue;
+    }
+    const priorName = helperByPath.get(helper.absolute_path);
+    if (priorName !== undefined && priorName !== helper.name) {
+      errors.push(`system helper path ${helper.absolute_path} has conflicting names`);
+    }
+    if (helperByName.has(helper.name) && priorName === undefined) {
+      errors.push(`system helper name ${helper.name} has conflicting paths`);
+    }
+    helperByPath.set(helper.absolute_path, helper.name);
+    helperByName.add(helper.name);
+  }
+  const computedOwners = new Set([
+    ...(toolchain.computed_command_owners ?? []),
+    ...(successorToolchain.computed_command_owners ?? []),
+  ]);
+  for (const owner of successorToolchain.computed_command_owners ?? []) {
+    if (typeof owner !== 'string' || !tree.has(owner)) {
+      errors.push(`product runtime toolchain computed owner is not tracked: ${String(owner)}`);
+    }
+  }
   const usedCommands = new Set();
   const classifyCmd = (tok, path) => {
     usedCommands.add(tok);

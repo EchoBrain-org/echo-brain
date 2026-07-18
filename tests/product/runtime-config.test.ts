@@ -38,7 +38,7 @@ function validConfig(
       {
         adapter_id: 'fixture-channel',
         instance_id: 'team',
-        credential_ref: 'keychain:ECHO_CHANNEL_KEY',
+        credential_ref: 'env:ECHO_CHANNEL_KEY',
         settings: { destination: 'synthetic' },
       },
     ],
@@ -84,7 +84,7 @@ describe('product runtime configuration', () => {
         {
           adapter_id: 'fixture-channel',
           instance_id: 'team',
-          credential_ref: 'keychain:ECHO_CHANNEL_KEY',
+          credential_ref: 'env:ECHO_CHANNEL_KEY',
         },
       ],
     });
@@ -110,6 +110,19 @@ describe('product runtime configuration', () => {
     ['missing decision processor', { decision_processor: undefined }],
     ['no communication channel', { communication_channels: [] }],
     ['wrong lane', { lane: 'dogfood' }],
+    [
+      'unsupported keychain credential',
+      {
+        communication_channels: [
+          {
+            adapter_id: 'fixture-channel',
+            instance_id: 'team',
+            credential_ref: 'keychain:ECHO_CHANNEL_KEY',
+            settings: {},
+          },
+        ],
+      },
+    ],
     ['non-manual approval', { approval_mode: 'automatic' }],
     [
       'adapter approval without a surface',

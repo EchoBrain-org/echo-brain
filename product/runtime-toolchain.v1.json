@@ -1,0 +1,20 @@
+{
+  "schema_version": 1,
+  "kind": "successor_toolchain_overlay",
+  "predecessor": "provenance/dependency-toolchain.v1.json",
+  "computed_command_owners": [
+    "tools/product/build-artifact.mjs",
+    "tools/product/install-offline.mjs",
+    "tools/product/run-target-cell.mjs"
+  ],
+  "system_helpers": [
+    {
+      "name": "tar",
+      "absolute_path": "/usr/bin/tar"
+    },
+    {
+      "name": "launchctl",
+      "absolute_path": "/bin/launchctl"
+    }
+  ]
+}

@@ -64,7 +64,11 @@ beforeAll(async () => {
     supportDir = join(temporaryRoot, 'qualification-support');
     const prepared = await run(
       process.execPath,
-      [join(REPO_ROOT, 'tools/product/prepare-offline-deps.mjs'), '--out-dir', supportDir],
+      [
+        join(REPO_ROOT, 'tools/product/prepare-offline-deps.mjs'),
+        '--out-dir',
+        supportDir,
+      ],
       { cwd: REPO_ROOT },
     );
     expect(prepared.status, prepared.stderr).toBe(0);
@@ -110,7 +114,11 @@ describe('product-only artifact', () => {
         .map((path) => basename(path))
         .sort(),
     ).toEqual(
-      ['artifact-manifest.json', manifest.artifact.path, `${manifest.artifact.path}.sha256`].sort(),
+      [
+        'artifact-manifest.json',
+        manifest.artifact.path,
+        `${manifest.artifact.path}.sha256`,
+      ].sort(),
     );
     expect(statSync(artifactPath).size).toBe(manifest.artifact.size);
     expect(sha256(artifactPath)).toBe(manifest.artifact.sha256);
@@ -129,7 +137,9 @@ describe('product-only artifact', () => {
     const actualPaths = filesUnder(packageRoot)
       .map((path) => relative(packageRoot, path).split(sep).join('/'))
       .sort();
-    expect(actualPaths).toEqual(manifest.package_files.map((entry) => entry.path));
+    expect(actualPaths).toEqual(
+      manifest.package_files.map((entry) => entry.path),
+    );
     for (const entry of manifest.package_files) {
       const path = join(packageRoot, entry.path);
       expect(statSync(path).size, entry.path).toBe(entry.size);
@@ -142,6 +152,14 @@ describe('product-only artifact', () => {
       package_files: Array<{ path: string }>;
     };
     const paths = manifest.package_files.map((entry) => entry.path);
+    expect(paths).toEqual(
+      expect.arrayContaining([
+        'schemas/meeting-context.v1.schema.json',
+        'schemas/runtime-config.v1.schema.json',
+        'dist/product/lifecycle-lock.js',
+        'dist/product/state-backup.js',
+      ]),
+    );
     for (const forbidden of [
       'dist/daemon/',
       'dist/mcp/',
@@ -160,7 +178,8 @@ describe('product-only artifact', () => {
     const extractedPackage = join(temporaryRoot, 'extracted/package');
     for (const path of filesUnder(extractedPackage)) {
       const content = readFileSync(path);
-      if (!content.includes(0)) expect(content.toString('utf8')).not.toContain(REPO_ROOT);
+      if (!content.includes(0))
+        expect(content.toString('utf8')).not.toContain(REPO_ROOT);
     }
   });
 
@@ -193,7 +212,7 @@ describe('product-only artifact', () => {
         '--capability-id',
         'team-meeting-to-brief',
         '--spec-id',
-        '2026-07-13-132-product-graduation-foundation',
+        'standalone-product-qualification-v1',
         '--ci-run-id',
         'standalone-fixture',
         '--ci-run-attempt',
@@ -263,10 +282,12 @@ describe('product-only artifact', () => {
       npm_status: 0,
       preflight: { ok: true },
     });
-    expect(installEvidence.npm_stderr).not.toMatch(/download|nodejs\.org|header fetch/i);
-    expect(readlinkSync(join(prefix, 'node_modules/.bin/echo-brain'))).toContain(
-      'echo-brain/dist/product/cli.js',
+    expect(installEvidence.npm_stderr).not.toMatch(
+      /download|nodejs\.org|header fetch/i,
     );
+    expect(
+      readlinkSync(join(prefix, 'node_modules/.bin/echo-brain')),
+    ).toContain('echo-brain/dist/product/cli.js');
 
     const stateDir = join(temporaryRoot, 'synthetic-state');
     const configPath = join(temporaryRoot, 'runtime-config.json');
@@ -277,15 +298,28 @@ describe('product-only artifact', () => {
           schema_version: 1,
           lane: 'team-product',
           state_dir: stateDir,
-          granola: {
-            workspace_id: 'synthetic-workspace',
-            input: 'api',
-            credential_ref: 'keychain:synthetic-granola',
+          meeting_sources: [
+            {
+              adapter_id: 'granola',
+              instance_id: 'primary',
+              settings: { page_size: 30 },
+            },
+          ],
+          decision_processor: {
+            adapter_id: 'structured-text',
+            instance_id: 'primary',
+            settings: {},
           },
-          brain_adapter: {
-            id: 'rank-3-pending',
-            credential_ref: 'keychain:synthetic-brain',
-          },
+          communication_channels: [
+            {
+              adapter_id: 'jsonl-outbox',
+              instance_id: 'qualification',
+              settings: {
+                path: join(stateDir, 'outbox.jsonl'),
+                destination_id: 'synthetic-qualification',
+              },
+            },
+          ],
           approval_mode: 'manual',
         },
         null,
@@ -293,23 +327,45 @@ describe('product-only artifact', () => {
       )}\n`,
     );
     const bin = join(prefix, 'node_modules/.bin/echo-brain');
-    const validated = await run(bin, ['validate-config', '--config', configPath], {
-      cwd: prefix,
-    });
+    const help = await run(bin, ['--help'], { cwd: prefix });
+    expect(help.status, help.stderr).toBe(0);
+    expect(help.stdout).toContain('echo-brain onboard');
+    expect(help.stdout).toContain('echo-brain service');
+    expect(help.stdout).toContain('echo-brain backup');
+    expect(help.stdout).toContain('echo-brain restore');
+    const validated = await run(
+      bin,
+      ['validate-config', '--config', configPath],
+      {
+        cwd: prefix,
+      },
+    );
     expect(validated.status, validated.stderr).toBe(0);
     expect(JSON.parse(validated.stdout)).toMatchObject({
       ok: true,
       command: 'validate-config',
       lane: 'team-product',
     });
-    const selftest = await run(bin, ['selftest', '--config', configPath], { cwd: prefix });
+    const selftest = await run(bin, ['selftest', '--config', configPath], {
+      cwd: prefix,
+    });
     expect(selftest.status, selftest.stderr).toBe(0);
     expect(JSON.parse(selftest.stdout)).toMatchObject({
       ok: true,
       command: 'selftest',
       maturity: 'DEV',
       wedge_executed: false,
-      brain_adapter: { status: 'pending' },
+      adapters_loaded: false,
+      adapter_references: {
+        meeting_sources: [{ adapter_id: 'granola', instance_id: 'primary' }],
+        decision_processor: {
+          adapter_id: 'structured-text',
+          instance_id: 'primary',
+        },
+        communication_channels: [
+          { adapter_id: 'jsonl-outbox', instance_id: 'qualification' },
+        ],
+      },
     });
   }, 120_000);
 
@@ -339,7 +395,16 @@ describe('product-only artifact', () => {
 });
 
 describe('toolchain preflight fixtures', () => {
-  const commands = ['python3', 'make', 'clang', 'clang++', 'xcode-select', 'xcrun', 'node', 'npm'];
+  const commands = [
+    'python3',
+    'make',
+    'clang',
+    'clang++',
+    'xcode-select',
+    'xcrun',
+    'node',
+    'npm',
+  ];
   const headerFiles = new Set([
     '/headers/include/node/node.h',
     '/headers/include/node/common.gypi',
@@ -348,9 +413,14 @@ describe('toolchain preflight fixtures', () => {
   ]);
   const passing = {
     expectedNode: '22.22.1',
+    expectedNpm: '10.9.4',
     nodedir: '/headers',
     which: (command: string) => `/bin/${command}`,
-    run: () => ({ status: 0, stdout: 'fixture-version\n', stderr: '' }),
+    run: (command: string) => ({
+      status: 0,
+      stdout: command.endsWith('/npm') ? '10.9.4\n' : 'fixture-version\n',
+      stderr: '',
+    }),
     exists: (path: string) => headerFiles.has(path),
     read: () => '22.22.1\n',
     nodeVersion: '22.22.1',
@@ -359,7 +429,8 @@ describe('toolchain preflight fixtures', () => {
   it.each(commands)('rejects a missing %s prerequisite', (missing) => {
     const result = runToolchainPreflight({
       ...passing,
-      which: (command: string) => (command === missing ? null : `/bin/${command}`),
+      which: (command: string) =>
+        command === missing ? null : `/bin/${command}`,
     });
     expect(result.ok).toBe(false);
     expect(result.checks).toContainEqual({
@@ -369,31 +440,61 @@ describe('toolchain preflight fixtures', () => {
     });
   });
 
-  it.each(['node.h', 'common.gypi', 'config.gypi'])('rejects a missing %s header', (missing) => {
-    const result = runToolchainPreflight({
-      ...passing,
-      exists: (path: string) => headerFiles.has(path) && !path.endsWith(missing),
-    });
-    expect(result.ok).toBe(false);
-    expect(
-      result.checks.some((check) => check.name.endsWith(missing) && check.status === 'fail'),
-    ).toBe(true);
-  });
+  it.each(['node.h', 'common.gypi', 'config.gypi'])(
+    'rejects a missing %s header',
+    (missing) => {
+      const result = runToolchainPreflight({
+        ...passing,
+        exists: (path: string) =>
+          headerFiles.has(path) && !path.endsWith(missing),
+      });
+      expect(result.ok).toBe(false);
+      expect(
+        result.checks.some(
+          (check) => check.name.endsWith(missing) && check.status === 'fail',
+        ),
+      ).toBe(true);
+    },
+  );
 
   it('rejects executing-runtime and header-version mismatches', () => {
-    const runtimeMismatch = runToolchainPreflight({ ...passing, nodeVersion: '22.21.0' });
+    const runtimeMismatch = runToolchainPreflight({
+      ...passing,
+      nodeVersion: '22.21.0',
+    });
     expect(runtimeMismatch.ok).toBe(false);
     expect(runtimeMismatch.checks).toContainEqual({
       name: 'executing-node-version',
       status: 'fail',
       reason: 'expected 22.22.1, received 22.21.0',
     });
-    const headerMismatch = runToolchainPreflight({ ...passing, read: () => '22.20.0\n' });
+    const headerMismatch = runToolchainPreflight({
+      ...passing,
+      read: () => '22.20.0\n',
+    });
     expect(headerMismatch.ok).toBe(false);
     expect(
       headerMismatch.checks.some(
-        (check) => check.name === 'header-node-version' && check.status === 'fail',
+        (check) =>
+          check.name === 'header-node-version' && check.status === 'fail',
       ),
     ).toBe(true);
+  });
+
+  it('rejects an npm version outside the qualified toolchain', () => {
+    const result = runToolchainPreflight({
+      ...passing,
+      run: (command: string) => ({
+        status: 0,
+        stdout: command.endsWith('/npm') ? '11.0.0\n' : 'fixture-version\n',
+        stderr: '',
+      }),
+    });
+    expect(result.ok).toBe(false);
+    expect(result.checks).toContainEqual({
+      name: 'executing-npm-version',
+      status: 'fail',
+      reason: 'expected 10.9.4, received 11.0.0',
+    });
   });
 });

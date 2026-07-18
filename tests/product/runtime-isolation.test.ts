@@ -59,7 +59,7 @@ function config() {
       {
         adapter_id: 'fixture-channel',
         instance_id: 'team',
-        credential_ref: 'keychain:COMMUNICATION_CHANNEL_KEY',
+        credential_ref: 'env:COMMUNICATION_CHANNEL_KEY',
         settings: {},
       },
     ],

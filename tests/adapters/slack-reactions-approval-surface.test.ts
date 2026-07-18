@@ -466,12 +466,18 @@ describe('slack reactions approval surface', () => {
     const { surface } = build(slack);
     const valid = surfaceConfig();
     expect(surface.validateConfig(valid).ok).toBe(true);
+    expect(
+      surface.validateConfig({
+        ...valid,
+        credential_ref: 'file:/tmp/slack-token',
+      }).ok,
+    ).toBe(true);
 
     const failures: Array<
       [Partial<AdapterConfig> | Record<string, unknown>, RegExp]
     > = [
       [{ credential_ref: undefined }, /credential_ref is required/],
-      [{ credential_ref: 'keychain:slack' }, /env: reference/],
+      [{ credential_ref: 'keychain:slack' }, /env: or file: reference/],
       [
         { settings: { ...valid.settings, extra: true } },
         /settings.extra is not supported/,

@@ -1,4 +1,12 @@
-import { existsSync, readFileSync, realpathSync } from 'node:fs';
+import {
+  closeSync,
+  constants,
+  existsSync,
+  fstatSync,
+  openSync,
+  readFileSync,
+  realpathSync,
+} from 'node:fs';
 import { dirname, isAbsolute, normalize, parse, resolve, sep } from 'node:path';
 import { Ajv, type ErrorObject, type ValidateFunction } from 'ajv';
 import type { AdapterInstanceConfig } from '../core/index.js';
@@ -63,6 +71,7 @@ const ajv = new Ajv({ allErrors: true, strict: false });
 const validateRuntimeSchema = ajv.compile<ProductRuntimeConfig>(
   runtimeSchema as object,
 );
+const MAX_RUNTIME_CONFIG_BYTES = 1024 * 1024;
 
 function formatSchemaErrors(errors: ValidateFunction['errors']): string[] {
   return (errors ?? []).map((error: ErrorObject) => {
@@ -105,6 +114,30 @@ function duplicateAdapterInstances(
   return [...duplicates];
 }
 
+function credentialReferenceIssues(
+  configs: ReadonlyArray<{
+    path: string;
+    config: AdapterInstanceConfig;
+  }>,
+): string[] {
+  const issues: string[] = [];
+  for (const { path, config } of configs) {
+    const reference = config.credential_ref;
+    if (reference === undefined || !reference.startsWith('file:')) continue;
+    const credentialPath = reference.slice('file:'.length);
+    if (
+      !isAbsolute(credentialPath) ||
+      containsTraversal(credentialPath) ||
+      normalize(credentialPath) === parse(normalize(credentialPath)).root
+    ) {
+      issues.push(
+        `${path}/credential_ref file reference must name an absolute non-traversing file below the filesystem root`,
+      );
+    }
+  }
+  return issues;
+}
+
 export function validateProductRuntimeConfig(
   value: unknown,
 ): ProductRuntimeConfig {
@@ -144,6 +177,26 @@ export function validateProductRuntimeConfig(
       ),
     ]);
   }
+  const credentialIssues = credentialReferenceIssues([
+    ...value.meeting_sources.map((config, index) => ({
+      path: `/meeting_sources/${index}`,
+      config,
+    })),
+    { path: '/decision_processor', config: value.decision_processor },
+    ...value.communication_channels.map((config, index) => ({
+      path: `/communication_channels/${index}`,
+      config,
+    })),
+    ...(value.approval_surface === undefined
+      ? []
+      : [{ path: '/approval_surface', config: value.approval_surface }]),
+  ]);
+  if (credentialIssues.length > 0) {
+    throw new ProductConfigError(
+      'invalid product runtime configuration',
+      credentialIssues,
+    );
+  }
   // The schema's if/then pairing guarantees approval_mode and
   // approval_surface agree, which the spread cannot express structurally.
   return Object.freeze({
@@ -166,12 +219,49 @@ export function loadProductRuntimeConfig(
   filePath: string,
 ): ProductRuntimeConfig {
   let raw: string;
+  let descriptor: number | undefined;
   try {
-    raw = readFileSync(filePath, 'utf8');
+    descriptor = openSync(
+      filePath,
+      constants.O_RDONLY |
+        (constants.O_NOFOLLOW ?? 0) |
+        (constants.O_NONBLOCK ?? 0),
+    );
+    const before = fstatSync(descriptor);
+    const currentUid = process.getuid?.();
+    if (!before.isFile()) {
+      throw new Error('configuration path is not a regular file');
+    }
+    if (currentUid === undefined || before.uid !== currentUid) {
+      throw new Error('configuration file must be owned by the current user');
+    }
+    if ((before.mode & 0o022) !== 0) {
+      throw new Error(
+        'configuration file must not be group- or world-writable',
+      );
+    }
+    if (before.size === 0 || before.size > MAX_RUNTIME_CONFIG_BYTES) {
+      throw new Error(
+        `configuration file size must be between 1 and ${MAX_RUNTIME_CONFIG_BYTES} bytes`,
+      );
+    }
+    raw = readFileSync(descriptor, 'utf8');
+    const after = fstatSync(descriptor);
+    if (
+      before.dev !== after.dev ||
+      before.ino !== after.ino ||
+      before.size !== after.size ||
+      before.mtimeMs !== after.mtimeMs ||
+      Buffer.byteLength(raw) !== after.size
+    ) {
+      throw new Error('configuration file changed while it was being read');
+    }
   } catch (error) {
     throw new ProductConfigError(
       `cannot read product runtime configuration: ${(error as Error).message}`,
     );
+  } finally {
+    if (descriptor !== undefined) closeSync(descriptor);
   }
   let parsed: unknown;
   try {

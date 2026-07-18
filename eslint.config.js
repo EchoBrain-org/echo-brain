@@ -13,9 +13,9 @@ export default [
       'tests/core/**/*.ts',
       'tests/adapters/**/*.ts',
       'tests/infrastructure/**/*.ts',
-      'tests/product/runtime-config.test.ts',
-      'tests/product/runtime-isolation.test.ts',
+      'tests/product/**/*.ts',
       'vitest.config.ts',
+      'vitest.product.config.ts',
     ],
     languageOptions: {
       parser: tsParser,

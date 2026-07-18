@@ -130,6 +130,7 @@ describe('product adapter factories', () => {
       {
         stateDirectory: '/tmp/unused',
         environment: {},
+        credentialResolver: () => undefined,
         now: () => '2026-07-17T00:00:00.000Z',
       },
     );

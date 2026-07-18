@@ -6,10 +6,15 @@ import {
   type AnyAdapter,
 } from '../core/index.js';
 import type { ProductRuntimeConfig } from './config.js';
+import {
+  createProductCredentialResolver,
+  type ProductCredentialResolver,
+} from './credentials.js';
 
 export interface ProductAdapterFactoryContext {
   stateDirectory: string;
   environment: NodeJS.ProcessEnv;
+  credentialResolver: ProductCredentialResolver;
   now: () => string;
 }
 
@@ -48,6 +53,7 @@ export class ProductAdapterFactoryRegistry {
 
 export interface CreateConfiguredAdapterRegistryOptions {
   environment?: NodeJS.ProcessEnv;
+  credentialResolver?: ProductCredentialResolver;
   now?: () => string;
 }
 
@@ -85,9 +91,12 @@ export async function createConfiguredAdapterRegistry(
   factories: ProductAdapterFactoryRegistry,
   options: CreateConfiguredAdapterRegistryOptions = {},
 ): Promise<AdapterRegistry> {
+  const environment = options.environment ?? process.env;
   const context: ProductAdapterFactoryContext = {
     stateDirectory: config.state_dir,
-    environment: options.environment ?? process.env,
+    environment,
+    credentialResolver:
+      options.credentialResolver ?? createProductCredentialResolver(environment),
     now: options.now ?? (() => new Date().toISOString()),
   };
   const requested: Array<{ kind: AdapterKind; config: AdapterConfig }> = [

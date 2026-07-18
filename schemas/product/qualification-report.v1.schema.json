@@ -1,0 +1,132 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://echo.local/schemas/product/qualification-report.v1.schema.json",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "report_kind",
+    "capability_id",
+    "spec_id",
+    "product_boundary_version",
+    "source_sha",
+    "reviewed_qualification_sha",
+    "artifact",
+    "ci",
+    "declared_platform",
+    "unexpected_skip_count",
+    "maturity",
+    "result",
+    "cells"
+  ],
+  "properties": {
+    "schema_version": { "const": 1 },
+    "report_kind": { "enum": ["ci-draft", "qualified-release"] },
+    "capability_id": { "type": "string", "minLength": 1 },
+    "spec_id": { "type": "string", "minLength": 1 },
+    "product_boundary_version": { "type": "integer", "minimum": 1 },
+    "source_sha": { "$ref": "#/definitions/sha" },
+    "reviewed_qualification_sha": {
+      "oneOf": [{ "$ref": "#/definitions/sha" }, { "type": "null" }]
+    },
+    "artifact": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["version", "sha256", "manifest_sha256", "dependency_lock_sha256"],
+      "properties": {
+        "version": {
+          "type": "string",
+          "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+-[0-9A-Za-z]+(?:[.-][0-9A-Za-z]+)*$"
+        },
+        "sha256": { "$ref": "#/definitions/hash" },
+        "manifest_sha256": { "$ref": "#/definitions/hash" },
+        "dependency_lock_sha256": { "$ref": "#/definitions/hash" }
+      }
+    },
+    "ci": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["run_id", "run_attempt", "workflow", "source_sha", "artifact_sha256"],
+      "properties": {
+        "run_id": { "type": "string", "minLength": 1 },
+        "run_attempt": { "type": "integer", "minimum": 1 },
+        "workflow": { "type": "string", "minLength": 1 },
+        "source_sha": { "$ref": "#/definitions/sha" },
+        "artifact_sha256": { "$ref": "#/definitions/hash" }
+      }
+    },
+    "declared_platform": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["os", "architecture", "node"],
+      "properties": {
+        "os": { "const": "darwin" },
+        "architecture": { "const": "arm64" },
+        "node": { "type": "string", "pattern": "^22\\.[0-9]+\\.[0-9]+$" }
+      }
+    },
+    "unexpected_skip_count": { "type": "integer", "minimum": 0 },
+    "maturity": { "enum": ["DEV", "FOUNDER LIVE", "QUALIFIED", "CLIENT LIVE"] },
+    "result": { "enum": ["incomplete", "qualified"] },
+    "cells": {
+      "type": "array",
+      "items": { "$ref": "#/definitions/cell" }
+    }
+  },
+  "definitions": {
+    "sha": { "type": "string", "pattern": "^[0-9a-f]{40}$" },
+    "hash": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+    "binding": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["source_sha", "artifact_version", "artifact_sha256"],
+      "properties": {
+        "source_sha": { "$ref": "#/definitions/sha" },
+        "artifact_version": { "type": "string", "minLength": 1 },
+        "artifact_sha256": { "$ref": "#/definitions/hash" }
+      }
+    },
+    "approval": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["authority", "rationale"],
+      "properties": {
+        "authority": { "enum": ["founder", "independent-reviewer"] },
+        "rationale": { "type": "string", "minLength": 1 }
+      }
+    },
+    "attestation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["actor", "authority", "binding"],
+      "properties": {
+        "actor": { "type": "string", "minLength": 1 },
+        "authority": { "enum": ["independent-reviewer", "founder"] },
+        "binding": { "$ref": "#/definitions/binding" }
+      }
+    },
+    "cell": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "authority", "status", "evidence_refs"],
+      "properties": {
+        "id": { "type": "string", "minLength": 1 },
+        "authority": { "enum": ["machine", "independent-reviewer", "founder"] },
+        "status": { "enum": ["pass", "fail", "pending", "not_applicable"] },
+        "evidence_refs": {
+          "type": "array",
+          "items": { "type": "string", "minLength": 1 },
+          "uniqueItems": true
+        },
+        "reason": { "type": "string", "minLength": 1 },
+        "attestation": { "$ref": "#/definitions/attestation" },
+        "not_applicable_approvals": {
+          "type": "array",
+          "items": { "$ref": "#/definitions/approval" },
+          "minItems": 2,
+          "maxItems": 2
+        }
+      }
+    }
+  }
+}

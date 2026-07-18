@@ -25,3 +25,9 @@ enrichment pipeline and its synthetic extraction witness in favor of the
 canonical adapter/core cycle. `0007-granola-compatibility-retirement.v1.json`
 records removal of the Granola raw-event compatibility export so Granola
 ingress is only the canonical meeting-source adapter.
+`0008-product-qualification-restoration.v1.json` records restoration of the
+build-once qualification foundation from Project ECHO commit `f316d565`,
+adapted to the standalone core/adapters boundary and root dependency lock.
+`0009-product-operator-recovery.v1.json` records the standalone onboarding,
+LaunchAgent lifecycle, credential, and stopped-service state recovery path
+while keeping managed code-version rollback explicitly pending.

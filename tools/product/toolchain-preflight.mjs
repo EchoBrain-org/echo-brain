@@ -32,7 +32,10 @@ function defaultWhich(command) {
 }
 
 function defaultRun(command, args) {
-  const result = spawnSync(command, args, { encoding: 'utf8', timeout: 10_000 });
+  const result = spawnSync(command, args, {
+    encoding: 'utf8',
+    timeout: 10_000,
+  });
   return {
     status: result.status,
     stdout: result.stdout ?? '',
@@ -42,12 +45,14 @@ function defaultRun(command, args) {
 
 export function runToolchainPreflight(options) {
   const expectedNode = options.expectedNode;
+  const expectedNpm = options.expectedNpm ?? '10.9.4';
   const nodedir = resolve(options.nodedir);
   const which = options.which ?? defaultWhich;
   const run = options.run ?? defaultRun;
   const exists = options.exists ?? existsSync;
   const read = options.read ?? ((path) => readFileSync(path, 'utf8'));
   const nodeVersion = options.nodeVersion ?? process.versions.node;
+  let npmVersion = '';
   const checks = [];
 
   const commandChecks = [
@@ -82,6 +87,7 @@ export function runToolchainPreflight(options) {
       resolved,
       version: firstLine(result.stdout || result.stderr),
     });
+    if (name === 'npm') npmVersion = firstLine(result.stdout || result.stderr);
   }
 
   checks.push(
@@ -91,6 +97,15 @@ export function runToolchainPreflight(options) {
           name: 'executing-node-version',
           status: 'fail',
           reason: `expected ${expectedNode}, received ${nodeVersion}`,
+        },
+  );
+  checks.push(
+    npmVersion === expectedNpm
+      ? { name: 'executing-npm-version', status: 'pass', version: npmVersion }
+      : {
+          name: 'executing-npm-version',
+          status: 'fail',
+          reason: `expected ${expectedNpm}, received ${npmVersion || 'unavailable'}`,
         },
   );
 
@@ -108,12 +123,20 @@ export function runToolchainPreflight(options) {
   }
   const markerPath = join(nodedir, 'node-version.txt');
   if (!exists(markerPath)) {
-    checks.push({ name: 'header-node-version', status: 'fail', reason: 'marker missing' });
+    checks.push({
+      name: 'header-node-version',
+      status: 'fail',
+      reason: 'marker missing',
+    });
   } else {
     const headerVersion = read(markerPath).trim();
     checks.push(
       headerVersion === expectedNode && headerVersion === nodeVersion
-        ? { name: 'header-node-version', status: 'pass', version: headerVersion }
+        ? {
+            name: 'header-node-version',
+            status: 'pass',
+            version: headerVersion,
+          }
         : {
             name: 'header-node-version',
             status: 'fail',
@@ -127,6 +150,8 @@ export function runToolchainPreflight(options) {
     ok: checks.every((check) => check.status === 'pass'),
     expected_node: expectedNode,
     executing_node: nodeVersion,
+    expected_npm: expectedNpm,
+    executing_npm: npmVersion,
     nodedir,
     checks,
   };
@@ -136,15 +161,22 @@ function parseArgs(argv) {
   const args = {};
   for (let index = 0; index < argv.length; index += 1) {
     const flag = argv[index];
-    if (!['--nodedir', '--expected-node', '--output'].includes(flag)) {
+    if (
+      !['--nodedir', '--expected-node', '--expected-npm', '--output'].includes(
+        flag,
+      )
+    ) {
       throw new Error(`unknown argument: ${flag}`);
     }
     const value = argv[++index];
-    if (value === undefined || value.startsWith('--')) throw new Error(`${flag} requires a value`);
+    if (value === undefined || value.startsWith('--'))
+      throw new Error(`${flag} requires a value`);
     args[flag.slice(2)] = value;
   }
-  if (!isAbsolute(args.nodedir ?? '')) throw new Error('--nodedir must be absolute');
-  if (args['expected-node'] === undefined) throw new Error('--expected-node is required');
+  if (!isAbsolute(args.nodedir ?? ''))
+    throw new Error('--nodedir must be absolute');
+  if (args['expected-node'] === undefined)
+    throw new Error('--expected-node is required');
   return args;
 }
 
@@ -153,6 +185,7 @@ function main() {
   const result = runToolchainPreflight({
     nodedir: args.nodedir,
     expectedNode: args['expected-node'],
+    expectedNpm: args['expected-npm'] ?? '10.9.4',
   });
   const output = `${JSON.stringify(result, null, 2)}\n`;
   if (args.output === undefined) process.stdout.write(output);

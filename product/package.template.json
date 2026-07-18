@@ -1,7 +1,7 @@
 {
   "name": "echo-brain",
   "version": "0.0.0-dev.0",
-  "description": "Tool-agnostic meeting-to-decision core with replaceable source, processor, and delivery adapters",
+  "description": "DEV-only standalone ECHO meeting-to-decision product candidate",
   "private": true,
   "license": "MIT",
   "type": "module",
@@ -54,38 +54,12 @@
     "dist/**",
     "schemas/meeting-context.v1.schema.json",
     "schemas/runtime-config.v1.schema.json",
-    "docs/architecture/core-and-adapters.md",
     "npm-shrinkwrap.json",
     "README.md",
     "LICENSE"
   ],
-  "scripts": {
-    "clean": "node tools/build.mjs --clean",
-    "build": "node tools/build.mjs",
-    "typecheck": "tsc --noEmit -p tsconfig.json",
-    "lint": "eslint . --max-warnings 0",
-    "test": "vitest run --config vitest.config.ts",
-    "test:qualification": "vitest run --config vitest.product.config.ts",
-    "check:boundary": "node tools/check-boundary.mjs",
-    "check:dependencies": "node tools/check-dependencies.mjs",
-    "check:provenance": "node tools/check-provenance.mjs && node tools/check-successor-provenance.mjs",
-    "product:check-boundary": "node tools/product/check-boundary.mjs",
-    "product:prepare-offline-deps": "node tools/product/prepare-offline-deps.mjs",
-    "product:build-artifact": "node tools/product/build-artifact.mjs",
-    "check": "npm run check:provenance && npm run check:boundary && npm run check:dependencies && npm run typecheck && npm run lint && npm test && npm run test:qualification",
-    "prepack": "npm run build"
-  },
   "dependencies": {
     "ajv": "8.20.0",
     "better-sqlite3": "12.10.0"
-  },
-  "devDependencies": {
-    "@types/better-sqlite3": "7.6.11",
-    "@types/node": "22.15.3",
-    "@typescript-eslint/eslint-plugin": "8.60.1",
-    "@typescript-eslint/parser": "8.60.1",
-    "eslint": "9.39.4",
-    "typescript": "5.9.2",
-    "vitest": "4.1.10"
   }
 }

@@ -1,0 +1,33 @@
+{
+  "schema_version": 1,
+  "cells": [
+    { "id": "product-source-boundary", "authority": "machine", "not_applicable": false },
+    { "id": "product-tests", "authority": "machine", "not_applicable": false },
+    { "id": "product-only-boot", "authority": "machine", "not_applicable": false },
+    { "id": "runtime-isolation", "authority": "machine", "not_applicable": false },
+    { "id": "wedge-behavior", "authority": "machine", "not_applicable": false },
+    { "id": "auth-failure-honesty", "authority": "machine", "not_applicable": false },
+    { "id": "platform-runtime", "authority": "machine", "not_applicable": false },
+    { "id": "clean-install", "authority": "machine", "not_applicable": false },
+    { "id": "state-fresh", "authority": "machine", "not_applicable": false },
+    { "id": "state-populated", "authority": "machine", "not_applicable": false },
+    { "id": "backup-restore", "authority": "machine", "not_applicable": false },
+    { "id": "state-preservation", "authority": "machine", "not_applicable": false },
+    { "id": "disable-uninstall-recovery", "authority": "machine", "not_applicable": false },
+    { "id": "restoration-health", "authority": "machine", "not_applicable": false },
+    { "id": "upgrade-from-previous", "authority": "machine", "not_applicable": true },
+    { "id": "packaging-closure", "authority": "machine", "not_applicable": false },
+    { "id": "security-data", "authority": "machine", "not_applicable": false },
+    { "id": "operations", "authority": "machine", "not_applicable": false },
+    { "id": "artifact-provenance-machine", "authority": "machine", "not_applicable": false },
+    { "id": "distribution", "authority": "machine", "not_applicable": false },
+    { "id": "founder-live-evidence", "authority": "founder", "not_applicable": false },
+    {
+      "id": "independent-evidence-review",
+      "authority": "independent-reviewer",
+      "not_applicable": false
+    },
+    { "id": "founder-staging-smoke", "authority": "founder", "not_applicable": false },
+    { "id": "release-authorization", "authority": "founder", "not_applicable": false }
+  ]
+}

@@ -86,6 +86,45 @@ npm install --prefix "$HOME/.local/share/echo-brain" ./echo-brain-0.0.0-dev.0.tg
 "$HOME/.local/share/echo-brain/node_modules/.bin/echo-brain" --help
 ```
 
+## First-time onboarding and service lifecycle
+
+Choose separate absolute paths for configuration and state. `onboard` creates a
+private, secret-free baseline and tells you where to place the Granola token; it
+never creates or prints a credential value.
+
+```sh
+echo-brain onboard \
+  --config /Users/you/.config/echo-brain/runtime.json \
+  --state-dir /Users/you/Library/Application\ Support/echo-brain/state
+
+# Put only the token in the reported credential path, then:
+chmod 600 /Users/you/Library/Application\ Support/echo-brain/state/credentials/granola-api-key
+
+echo-brain init --config /Users/you/.config/echo-brain/runtime.json
+echo-brain service install --config /Users/you/.config/echo-brain/runtime.json
+echo-brain doctor --config /Users/you/.config/echo-brain/runtime.json
+echo-brain status --config /Users/you/.config/echo-brain/runtime.json
+```
+
+The persistent service is a per-user LaunchAgent on the phase-one macOS arm64
+target. `start`, `stop`, `restart`, `status`, and `uninstall` are explicit and
+idempotent where the underlying state already matches. The plist contains only
+paths—never secret values. Persistent credentials must be canonical, private,
+user-owned files below `state_dir/credentials`; `env:` references remain useful
+for interactive runs but service installation rejects them.
+
+The service binds the validated configuration hash into its installation
+record. To change adapter settings or rotate a credential reference, stop the
+service, edit the same config without changing `state_dir`, then refresh and
+restart it:
+
+```sh
+echo-brain service stop --config /absolute/path/runtime-config.json
+echo-brain reconfigure --config /absolute/path/runtime-config.json
+echo-brain service start --config /absolute/path/runtime-config.json
+echo-brain doctor --config /absolute/path/runtime-config.json
+```
+
 ## Runtime configuration
 
 Operational commands require an absolute JSON config path. A DEV example:
@@ -126,10 +165,10 @@ Operational commands require an absolute JSON config path. A DEV example:
 }
 ```
 
-Credential values do not belong in this file. The schema accepts `env:` and
-`keychain:` references; the bundled Granola adapter resolves `env:` by default
-and accepts an injected resolver for other credential stores. A credential
-reference is optional because some adapters do not require authentication.
+Credential values do not belong in this file. The bundled product accepts
+`env:` references for interactive use and private `file:` references for a
+persistent service. A credential reference is optional because some adapters
+do not require authentication.
 `settings` is deliberately opaque to the core and is validated by the selected
 adapter. Adapter IDs select an implementation; instance IDs distinguish
 multiple configured instances of the same capability.
@@ -173,6 +212,40 @@ echo-brain approvals --config /absolute/path/runtime-config.json
 echo-brain approve --config /absolute/path/runtime-config.json --id <id> --reviewer <name>
 echo-brain run --config /absolute/path/runtime-config.json
 ```
+
+## Backup and state rollback
+
+Backups and restores are maintenance operations. Stop the LaunchAgent first;
+the CLI then proves it is unloaded and acquires the same crash-recoverable locks
+used by runtime and approval commands. Backup directories must live outside
+`state_dir`.
+
+```sh
+echo-brain service stop --config /absolute/path/runtime-config.json
+
+echo-brain backup \
+  --config /absolute/path/runtime-config.json \
+  --backup-root /absolute/path/echo-brain-backups \
+  --id before-change
+
+echo-brain restore \
+  --config /absolute/path/runtime-config.json \
+  --backup /absolute/path/echo-brain-backups/before-change \
+  --backup-root /absolute/path/echo-brain-backups \
+  --id restore-before-change
+
+echo-brain service start --config /absolute/path/runtime-config.json
+echo-brain doctor --config /absolute/path/runtime-config.json
+```
+
+Each snapshot has a checksummed manifest and an online SQLite snapshot; restore
+validates the source and creates a pre-restore safety backup. Because managed
+credentials live under state, a snapshot can contain secrets: protect the
+backup root like the live state and use encrypted storage for off-machine
+copies. This is an operational state rollback. Version rollback across database
+migrations still requires the managed installer to bind an old exact artifact
+to its matching pre-upgrade snapshot; that release-level drill remains a red
+qualification cell.
 
 - `validate-config` validates the schema and local-filesystem requirement.
 - `selftest` is offline. It verifies that SQLite can open and load the packaged
@@ -242,9 +315,18 @@ adapter `settings` and must not become required core semantics.
    first real team communication-channel adapter using the same contracts.
 2. Bound first-run processing to seven days and serve newest meetings first,
    independent of the selected meeting adapter.
-3. Add install/status/doctor/service lifecycle and rollback behavior.
+3. Qualify onboarding, LaunchAgent lifecycle, backup/restore crash recovery,
+   and the managed exact-artifact-plus-state rollback drill on macOS arm64.
 4. Run the exact artifact through isolated FOUNDER LIVE before advancing beyond
    `DEV`.
+
+## Qualification machinery
+
+The restored build-once and evidence gates are documented in
+[`product/README.md`](product/README.md). `npm run check` includes the hermetic
+qualification suite. A clean committed checkout can build a source-SHA-bound
+tarball and offline support bundle, but CI may emit only an incomplete `DEV`
+draft; it cannot grant founder or release authority.
 
 ## Extraction provenance
 
