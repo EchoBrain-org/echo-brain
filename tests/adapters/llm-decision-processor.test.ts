@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   AdapterError,
+  assertCanonicalDecisionSet,
   type AdapterConfig,
   type MeetingDocument,
 } from '../../src/core/index.js';
@@ -214,6 +215,35 @@ describe('llm decision processor extraction', () => {
     const instance = processor(new FakeLlmClient(hallucinated));
     const result = await instance.extract(meeting, extractionContext(instance));
     expect(result.signals).toEqual([]);
+  });
+
+  it('normalizes parseable due dates and clears invalid ones', async () => {
+    const dueDates = JSON.stringify({
+      signals: [
+        {
+          kind: 'action',
+          text: 'Send the contract',
+          due_at: '2026-07-24',
+          evidence_quote: 'Zhen will send the contract by Friday',
+        },
+        {
+          kind: 'action',
+          text: 'Confirm the hosting choice',
+          due_at: 'not-a-date',
+          evidence_quote: 'The team agreed to use vendor X for hosting',
+        },
+      ],
+    });
+    const instance = processor(new FakeLlmClient(dueDates));
+    const result = await instance.extract(meeting, extractionContext(instance));
+
+    expect(result.signals).toMatchObject([
+      { kind: 'action', due_at: '2026-07-24T00:00:00.000Z' },
+      { kind: 'action', due_at: null },
+    ]);
+    expect(() =>
+      assertCanonicalDecisionSet(result, meeting, instance.identity),
+    ).not.toThrow();
   });
 
   it('rejects malformed model output with a retryable taxonomy error', async () => {

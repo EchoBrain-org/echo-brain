@@ -254,6 +254,35 @@ describe('product runtime configuration', () => {
     }
   });
 
+  it('reports the configured approval surface without loading adapters', async () => {
+    const configPath = writeConfig(
+      validConfig({
+        approval_mode: 'adapter',
+        approval_surface: {
+          adapter_id: 'slack-reactions',
+          instance_id: 'founder',
+          credential_ref: 'env:SLACK_BOT_TOKEN',
+          settings: {
+            channel_id: 'C123',
+            reviewer: { slack_user_id: 'U123', name: 'founder' },
+          },
+        },
+      }),
+    );
+    let stdout = '';
+    const status = await runProductCli(['selftest', '--config', configPath], {
+      classifyStateFilesystem: async () => ({ kind: 'local', raw: 'apfs' }),
+      stdout: { write: (chunk) => ((stdout += String(chunk)), true) },
+      stderr: { write: () => true },
+    });
+
+    expect(status).toBe(0);
+    expect(JSON.parse(stdout).adapter_references.approval_surface).toEqual({
+      adapter_id: 'slack-reactions',
+      instance_id: 'founder',
+    });
+  });
+
   it('makes production run report every unavailable adapter before probing state', async () => {
     const configPath = writeConfig(validConfig());
     let probes = 0;

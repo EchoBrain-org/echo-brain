@@ -25,6 +25,10 @@ const DEFAULT_REJECT_REACTION = 'x';
 const REACTION_NAME_RE = /^[a-z0-9_+-]+$/;
 const MAX_SUMMARY_ITEMS = 10;
 const MAX_ITEM_CHARS = 240;
+const SLACK_HEADER_MAX_CHARS = 150;
+const SLACK_SECTION_MAX_CHARS = 3_000;
+
+type ReviewerReactionState = 'present' | 'absent' | 'unknown';
 
 /**
  * The store port this surface resolves against. Implemented by the product
@@ -73,7 +77,6 @@ interface SlackReactionsSettings {
   approveReaction: string;
   rejectReaction: string;
   requestTimeoutMs: number | undefined;
-  baseUrl: string | undefined;
 }
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {
@@ -86,7 +89,9 @@ function isNonEmptyString(value: unknown): value is string {
 
 function settingsFrom(config: AdapterConfig): SlackReactionsSettings {
   const settings = config.settings;
-  const reviewer = isPlainObject(settings['reviewer']) ? settings['reviewer'] : {};
+  const reviewer = isPlainObject(settings['reviewer'])
+    ? settings['reviewer']
+    : {};
   return {
     channelId:
       typeof settings['channel_id'] === 'string' ? settings['channel_id'] : '',
@@ -107,24 +112,43 @@ function settingsFrom(config: AdapterConfig): SlackReactionsSettings {
       typeof settings['request_timeout_ms'] === 'number'
         ? settings['request_timeout_ms']
         : undefined,
-    baseUrl:
-      typeof settings['base_url'] === 'string' ? settings['base_url'] : undefined,
   };
 }
 
-function truncate(value: string): string {
-  const flat = value.replace(/\s+/g, ' ').trim();
-  return flat.length <= MAX_ITEM_CHARS ? flat : `${flat.slice(0, MAX_ITEM_CHARS - 1)}…`;
+function truncateCharacters(value: string, maximum: number): string {
+  const characters = [...value];
+  return characters.length <= maximum
+    ? value
+    : `${characters.slice(0, maximum - 1).join('')}…`;
 }
 
-function summaryLines(label: string, statements: readonly string[]): string[] {
-  if (statements.length === 0) return [];
+function boundedSingleLine(value: string, maximum: number): string {
+  return truncateCharacters(value.replace(/\s+/g, ' ').trim(), maximum);
+}
+
+function escapeSlackControlText(value: string): string {
+  return value
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;');
+}
+
+function summaryText(
+  label: string,
+  statements: readonly string[],
+): string | undefined {
+  if (statements.length === 0) return undefined;
   const shown = statements.slice(0, MAX_SUMMARY_ITEMS);
-  const lines = [`*${label}:*`, ...shown.map((statement) => `• ${truncate(statement)}`)];
+  const lines = [
+    `${label}:`,
+    ...shown.map(
+      (statement) => `• ${boundedSingleLine(statement, MAX_ITEM_CHARS)}`,
+    ),
+  ];
   if (statements.length > shown.length) {
     lines.push(`… and ${statements.length - shown.length} more`);
   }
-  return lines;
+  return truncateCharacters(lines.join('\n'), SLACK_SECTION_MAX_CHARS);
 }
 
 function mapSlackError(error: unknown): AdapterError {
@@ -219,7 +243,9 @@ export class SlackReactionsApprovalSurface implements ApprovalSurfaceAdapter {
       );
     }
     if (!/^[a-z][a-z0-9-]*$/.test(config.instance_id)) {
-      errors.push('instance_id must use lowercase letters, numbers, and hyphens');
+      errors.push(
+        'instance_id must use lowercase letters, numbers, and hyphens',
+      );
     } else if (config.instance_id !== this.identity.instance_id) {
       errors.push('instance_id does not match the registered adapter instance');
     }
@@ -234,10 +260,10 @@ export class SlackReactionsApprovalSurface implements ApprovalSurfaceAdapter {
       'approve_reaction',
       'reject_reaction',
       'request_timeout_ms',
-      'base_url',
     ]);
     for (const key of Object.keys(config.settings)) {
-      if (!allowedSettings.has(key)) errors.push(`settings.${key} is not supported`);
+      if (!allowedSettings.has(key))
+        errors.push(`settings.${key} is not supported`);
     }
     const settings = settingsFrom(config);
     if (!isNonEmptyString(settings.channelId)) {
@@ -246,7 +272,10 @@ export class SlackReactionsApprovalSurface implements ApprovalSurfaceAdapter {
     // Exactly one reviewer: Slack reactions carry no timestamps, so a
     // multi-reviewer race has no defined winner and attribution would be
     // arbitrary. Multi-reviewer support needs an interaction model upgrade.
-    if (!isNonEmptyString(settings.reviewerUserId) || !isNonEmptyString(settings.reviewerName)) {
+    if (
+      !isNonEmptyString(settings.reviewerUserId) ||
+      !isNonEmptyString(settings.reviewerName)
+    ) {
       errors.push(
         'settings.reviewer must name one reviewer with slack_user_id and name',
       );
@@ -268,22 +297,16 @@ export class SlackReactionsApprovalSurface implements ApprovalSurfaceAdapter {
         settings.requestTimeoutMs < 1_000 ||
         settings.requestTimeoutMs > 60_000)
     ) {
-      errors.push('settings.request_timeout_ms must be 1000-60000 milliseconds');
-    }
-    if (settings.baseUrl !== undefined) {
-      try {
-        const url = new URL(settings.baseUrl);
-        if (url.protocol !== 'http:' && url.protocol !== 'https:') {
-          errors.push('settings.base_url must be an HTTP(S) URL');
-        }
-      } catch {
-        errors.push('settings.base_url must be an HTTP(S) URL');
-      }
+      errors.push(
+        'settings.request_timeout_ms must be 1000-60000 milliseconds',
+      );
     }
     return { ok: errors.length === 0, errors };
   }
 
-  async healthCheck(operation?: AdapterOperationContext): Promise<AdapterHealth> {
+  async healthCheck(
+    operation?: AdapterOperationContext,
+  ): Promise<AdapterHealth> {
     const checkedAt = this.now();
     const validation = this.validateConfig(this.config);
     if (!validation.ok) {
@@ -336,8 +359,14 @@ export class SlackReactionsApprovalSurface implements ApprovalSurfaceAdapter {
     if (staged.status !== 'pending') return decision(staged);
 
     try {
-      const published = await this.ensurePublished(request, staged, operation);
-      const posted = published.published.find((entry) => entry.surface === SURFACE);
+      const published = await this.ensurePublished(
+        request.processing_key,
+        staged,
+        operation,
+      );
+      const posted = published.published.find(
+        (entry) => entry.surface === SURFACE,
+      );
       if (posted === undefined || published.status !== 'pending') {
         return decision(published);
       }
@@ -350,14 +379,20 @@ export class SlackReactionsApprovalSurface implements ApprovalSurfaceAdapter {
           false,
         );
       }
-      return await this.pollReactions(request, published, channel, messageTs, operation);
+      return await this.pollReactions(
+        request,
+        published,
+        channel,
+        messageTs,
+        operation,
+      );
     } catch (error) {
       throw mapSlackError(error);
     }
   }
 
   private async ensurePublished(
-    request: ApprovalRequest,
+    processingKey: string,
     staged: ApprovalDecisionStoreView,
     operation?: AdapterOperationContext,
   ): Promise<ApprovalDecisionStoreView> {
@@ -370,13 +405,13 @@ export class SlackReactionsApprovalSurface implements ApprovalSurfaceAdapter {
     const posted = await this.apiClient().postMessage(
       {
         channel: this.settings.channelId,
-        text: this.messageText(request.brief),
-        blocks: this.messageBlocks(request.brief),
+        text: this.messageText(staged.brief),
+        blocks: this.messageBlocks(staged.brief),
       },
       operation?.signal,
     );
     return await this.store.recordPublished({
-      processingKey: request.processing_key,
+      processingKey,
       surface: SURFACE,
       reference: { channel_id: posted.channel, message_ts: posted.ts },
     });
@@ -394,19 +429,34 @@ export class SlackReactionsApprovalSurface implements ApprovalSurfaceAdapter {
       messageTs,
       operation?.signal,
     );
-    const approved = this.reviewerReacted(reactions, this.settings.approveReaction);
-    const rejected = this.reviewerReacted(reactions, this.settings.rejectReaction);
+    const approved = this.reviewerReactionState(
+      reactions,
+      this.settings.approveReaction,
+    );
+    const rejected = this.reviewerReactionState(
+      reactions,
+      this.settings.rejectReaction,
+    );
+    // Slack may truncate either decisive reaction's user roster. Treating an
+    // unknown as absent could make the opposite reaction win, so any unknown
+    // keeps the node pending.
+    if (approved === 'unknown' || rejected === 'unknown')
+      return decision(state);
     // Both reactions present is a human conflict with no orderable winner
     // (Slack reactions carry no timestamps): fail closed and stay pending
     // until the channel or the CLI sorts it out.
     if (approved === rejected) return decision(state);
 
-    const reason = await this.latestReviewerReply(channel, messageTs, operation);
+    const reason = await this.latestReviewerReply(
+      channel,
+      messageTs,
+      operation,
+    );
     let resolved: ApprovalDecisionStoreView;
     try {
       resolved = await this.store.resolve({
         approvalId: state.approval_id,
-        status: approved ? 'approved' : 'rejected',
+        status: approved === 'present' ? 'approved' : 'rejected',
         reviewedBy: this.settings.reviewerName,
         reason,
         surface: SURFACE,
@@ -433,18 +483,21 @@ export class SlackReactionsApprovalSurface implements ApprovalSurfaceAdapter {
     return decision(resolved);
   }
 
-  private reviewerReacted(
+  private reviewerReactionState(
     reactions: readonly SlackReaction[],
     name: string,
-  ): boolean {
+  ): ReviewerReactionState {
     const reaction = reactions.find((entry) => entry.name === name);
-    if (reaction === undefined) return false;
+    if (reaction === undefined) return 'absent';
     // Slack may omit reactors from `users` while `count` stays complete.
-    // An incomplete roster cannot prove who reacted, so it stays pending.
+    // Absence cannot be proven from an incomplete roster, and treating the
+    // entry as false could let the opposite decision resolve incorrectly.
     if (reaction.count !== new Set(reaction.users).size) {
-      return false;
+      return 'unknown';
     }
-    return reaction.users.includes(this.settings.reviewerUserId);
+    return reaction.users.includes(this.settings.reviewerUserId)
+      ? 'present'
+      : 'absent';
   }
 
   private async latestReviewerReply(
@@ -470,34 +523,38 @@ export class SlackReactionsApprovalSurface implements ApprovalSurfaceAdapter {
 
   private messageText(brief: DecisionBrief): string {
     const title = brief.meeting.title ?? brief.meeting.id;
-    return `Decision brief awaiting approval: ${title}`;
+    return `Decision brief awaiting approval: ${escapeSlackControlText(
+      boundedSingleLine(title, SLACK_HEADER_MAX_CHARS),
+    )}`;
   }
 
   private messageBlocks(brief: DecisionBrief): readonly unknown[] {
     const title = brief.meeting.title ?? brief.meeting.id;
-    const lines = [
-      ...summaryLines(
+    const summaries = [
+      summaryText(
         'Decisions',
         brief.decisions.map((signal) => signal.text),
       ),
-      ...summaryLines(
+      summaryText(
         'Actions',
         brief.actions.map((signal) => signal.text),
       ),
-    ];
+    ].filter((text): text is string => text !== undefined);
     return [
       {
         type: 'header',
-        text: { type: 'plain_text', text: truncate(title), emoji: true },
+        text: {
+          type: 'plain_text',
+          text: boundedSingleLine(title, SLACK_HEADER_MAX_CHARS),
+          emoji: true,
+        },
       },
-      ...(lines.length === 0
-        ? []
-        : [
-            {
-              type: 'section',
-              text: { type: 'mrkdwn', text: lines.join('\n') },
-            },
-          ]),
+      ...summaries.map((text) => ({
+        type: 'section',
+        // Meeting-derived content remains plain text so strings such as
+        // <!channel> or <@U123> cannot become active Slack mentions.
+        text: { type: 'plain_text', text, emoji: true },
+      })),
       {
         type: 'context',
         elements: [
@@ -517,7 +574,8 @@ export class SlackReactionsApprovalSurface implements ApprovalSurfaceAdapter {
       reference !== undefined && reference.startsWith('env:')
         ? reference.slice('env:'.length)
         : undefined;
-    const token = variable === undefined ? undefined : this.environment[variable];
+    const token =
+      variable === undefined ? undefined : this.environment[variable];
     if (!isNonEmptyString(token)) {
       throw new AdapterError(
         'unauthorized',
@@ -526,7 +584,6 @@ export class SlackReactionsApprovalSurface implements ApprovalSurfaceAdapter {
       );
     }
     this.client = new SlackWebApiClient(token, {
-      ...(this.settings.baseUrl === undefined ? {} : { baseUrl: this.settings.baseUrl }),
       ...(this.settings.requestTimeoutMs === undefined
         ? {}
         : { requestTimeoutMs: this.settings.requestTimeoutMs }),

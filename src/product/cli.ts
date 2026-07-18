@@ -165,6 +165,9 @@ function configuredAdapterReferences(config: ProductRuntimeConfig) {
     meeting_sources: config.meeting_sources.map(adapterReference),
     decision_processor: adapterReference(config.decision_processor),
     communication_channels: config.communication_channels.map(adapterReference),
+    ...(config.approval_mode === 'adapter'
+      ? { approval_surface: adapterReference(config.approval_surface) }
+      : {}),
   };
 }
 

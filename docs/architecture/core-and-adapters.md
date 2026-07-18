@@ -58,6 +58,8 @@ not share one vague `execute` operation. Each direction has a typed capability:
   documents plus an opaque continuation cursor.
 - A decision-processor adapter transforms one canonical meeting revision into a
   canonical decision set with evidence.
+- An approval-surface adapter presents the exact staged brief snapshot and
+  returns an explicit approval decision without becoming a delivery channel.
 - A communication-channel adapter publishes an approved, channel-neutral
   delivery envelope and returns a delivery receipt.
 

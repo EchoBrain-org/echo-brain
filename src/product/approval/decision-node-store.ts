@@ -36,6 +36,7 @@ const LOCK_RETRY_MS = 20;
 const APPROVAL_ID_RE = /^[a-f0-9]{64}$/;
 const REQUESTED_FILE = 'requested.json';
 const RESOLVED_FILE = 'resolved.json';
+const LEGACY_IMPORT_MARKER = '.legacy-approvals-imported-v1';
 const PUBLISHED_FILE_RE = /^published-([a-z][a-z0-9-]*)\.json$/;
 
 export interface DecisionNodeStoreOptions {
@@ -286,6 +287,8 @@ export class DecisionNodeStore {
    * in place afterwards and ignored.
    */
   private async importLegacyRecords(): Promise<void> {
+    const markerPath = join(this.directory, LEGACY_IMPORT_MARKER);
+    if (existsSync(markerPath)) return;
     const records = readLegacyManualApprovalRecords(this.legacyDirectory);
     for (const record of records) {
       const nodeDirectory = this.nodePath(record.approval_id);
@@ -326,6 +329,10 @@ export class DecisionNodeStore {
         await release();
       }
     }
+    atomicCreate({
+      filePath: markerPath,
+      content: `${JSON.stringify({ schema_version: 1, imported_at: this.now() })}\n`,
+    });
   }
 
   private async acquireLock(approvalId: string): Promise<() => Promise<void>> {

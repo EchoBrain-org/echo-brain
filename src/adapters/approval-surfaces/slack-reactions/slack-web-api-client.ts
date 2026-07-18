@@ -62,9 +62,12 @@ const AUTH_ERRORS = new Set([
   'not_allowed_token_type',
 ]);
 
-const TRANSIENT_ERRORS = new Set([
+const RATE_LIMIT_ERRORS = new Set([
   'ratelimited',
   'rate_limited',
+]);
+
+const TRANSIENT_ERRORS = new Set([
   'service_unavailable',
   'fatal_error',
   'internal_error',
@@ -230,12 +233,16 @@ export class SlackWebApiClient {
       () => controller.abort(new Error(`Slack ${method} timed out`)),
       this.requestTimeoutMs,
     );
-    let response: Response;
     try {
       let url = `${this.baseUrl}/${method}`;
       const init: RequestInit = {
         method: httpMethod,
         signal: controller.signal,
+        // Slack API methods are not expected to redirect. Refusing redirects
+        // prevents fetch from forwarding the bearer credential to a different
+        // endpoint if Slack, a proxy, or a configured test endpoint responds
+        // with a redirect.
+        redirect: 'error',
         headers: { authorization: `Bearer ${this.token}` },
       };
       if (httpMethod === 'GET') {
@@ -251,73 +258,92 @@ export class SlackWebApiClient {
         };
         init.body = JSON.stringify(parameters);
       }
-      response = await this.fetchImpl(url, init);
-    } catch (error) {
-      throw new SlackApiError(
-        transportFailureCode,
-        `Slack ${method} transport failed: ${(error as Error).message}`,
-        true,
-      );
-    } finally {
-      clearTimeout(timer);
-      options.signal?.removeEventListener('abort', abortUpstream);
-    }
-
-    if (response.status === 429) {
-      const retryAfter = Number(response.headers.get('retry-after'));
-      throw new SlackApiError(
-        'rate_limited',
-        `Slack ${method} is rate limited`,
-        true,
-        Number.isFinite(retryAfter) && retryAfter > 0 ? retryAfter : undefined,
-      );
-    }
-    if (response.status >= 500) {
-      throw new SlackApiError(
-        transportFailureCode,
-        `Slack ${method} failed with HTTP ${response.status}`,
-        true,
-      );
-    }
-    if (!response.ok) {
-      throw new SlackApiError(
-        'invalid',
-        `Slack ${method} failed with HTTP ${response.status}`,
-        false,
-      );
-    }
-
-    let body: unknown;
-    try {
-      body = await response.json();
-    } catch {
-      throw new SlackApiError(
-        transportFailureCode,
-        `Slack ${method} returned an unreadable body`,
-        true,
-      );
-    }
-    if (!isPlainObject(body)) {
-      throw new SlackApiError(
-        'invalid',
-        `Slack ${method} returned an unexpected body`,
-        false,
-      );
-    }
-    if (body['ok'] !== true) {
-      const error = isNonEmptyString(body['error']) ? body['error'] : 'unknown_error';
-      if (AUTH_ERRORS.has(error)) {
-        throw new SlackApiError('auth', `Slack ${method} failed: ${error}`, false);
-      }
-      if (TRANSIENT_ERRORS.has(error)) {
+      let response: Response;
+      try {
+        response = await this.fetchImpl(url, init);
+      } catch (error) {
         throw new SlackApiError(
-          'rate_limited',
-          `Slack ${method} failed: ${error}`,
+          transportFailureCode,
+          `Slack ${method} transport failed: ${(error as Error).message}`,
           true,
         );
       }
-      throw new SlackApiError('invalid', `Slack ${method} failed: ${error}`, false);
+
+      if (response.status === 429) {
+        const retryAfter = Number(response.headers.get('retry-after'));
+        throw new SlackApiError(
+          'rate_limited',
+          `Slack ${method} is rate limited`,
+          true,
+          Number.isFinite(retryAfter) && retryAfter > 0 ? retryAfter : undefined,
+        );
+      }
+      if (response.status >= 500) {
+        throw new SlackApiError(
+          transportFailureCode,
+          `Slack ${method} failed with HTTP ${response.status}`,
+          true,
+        );
+      }
+      if (!response.ok) {
+        throw new SlackApiError(
+          'invalid',
+          `Slack ${method} failed with HTTP ${response.status}`,
+          false,
+        );
+      }
+
+      let body: unknown;
+      try {
+        body = await response.json();
+      } catch {
+        throw new SlackApiError(
+          transportFailureCode,
+          `Slack ${method} returned an unreadable body`,
+          true,
+        );
+      }
+      if (!isPlainObject(body)) {
+        throw new SlackApiError(
+          'invalid',
+          `Slack ${method} returned an unexpected body`,
+          false,
+        );
+      }
+      if (body['ok'] !== true) {
+        const error = isNonEmptyString(body['error'])
+          ? body['error']
+          : 'unknown_error';
+        if (AUTH_ERRORS.has(error)) {
+          throw new SlackApiError('auth', `Slack ${method} failed: ${error}`, false);
+        }
+        if (RATE_LIMIT_ERRORS.has(error)) {
+          throw new SlackApiError(
+            'rate_limited',
+            `Slack ${method} failed: ${error}`,
+            true,
+          );
+        }
+        if (TRANSIENT_ERRORS.has(error)) {
+          throw new SlackApiError(
+            'transient',
+            `Slack ${method} failed: ${error}`,
+            true,
+          );
+        }
+        throw new SlackApiError(
+          'invalid',
+          `Slack ${method} failed: ${error}`,
+          false,
+        );
+      }
+      return body;
+    } finally {
+      // Keep both deadline and upstream cancellation connected until the
+      // complete response body has been consumed, not merely until headers
+      // arrive. Fetch resolves as soon as headers are available.
+      clearTimeout(timer);
+      options.signal?.removeEventListener('abort', abortUpstream);
     }
-    return body;
   }
 }

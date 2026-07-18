@@ -259,7 +259,8 @@ function normalizedConfidence(value: unknown): number | null {
 
 function normalizedDueAt(value: unknown): string | null {
   if (!isNonEmptyString(value)) return null;
-  return Number.isNaN(new Date(value).getTime()) ? null : value;
+  const parsed = new Date(value);
+  return Number.isNaN(parsed.getTime()) ? null : parsed.toISOString();
 }
 
 function rawSignals(content: string): RawSignal[] {

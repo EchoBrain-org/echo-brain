@@ -2,24 +2,25 @@
 
 `echo-brain` is ECHO's standalone, tool-agnostic connection layer for turning
 meeting material into reviewed decisions and delivering those decisions to the
-places where a team works. Meeting tools, decision-processing providers, and
-communication tools are adapters around a stable core; no vendor defines the
-core product model.
+places where a team works. Meeting tools, decision-processing providers,
+approval surfaces, and communication tools are adapters around a stable core;
+no vendor defines the core product model.
 
 ```text
 meeting-source adapter(s)
         -> canonical meeting documents
         -> decision-processing core
         -> canonical decisions, actions, and briefs
-        -> manual approval
+        -> explicit approval (local CLI or approval-surface adapter)
         -> communication-channel adapter(s)
         -> delivery receipts
 ```
 
 The repository contains canonical contracts, an adapter/factory registry,
-durable SQLite core state, a resumable manual-approval queue, processing and
-brief-building primitives, and a composed CLI without importing Project
-ECHO's daemon, MCP, Machine capture, or Fleet orchestration.
+durable SQLite core state, an append-only decision-node store shared by local
+and remote approval surfaces, processing and brief-building primitives, and a
+composed CLI without importing Project ECHO's daemon, MCP, Machine capture, or
+Fleet orchestration.
 
 This repository is now self-building and installable as a local DEV package. It
 is not yet the authoritative live product:
@@ -27,7 +28,8 @@ is not yet the authoritative live product:
 - maturity: `DEV`
 - authority: `false`
 - production adapter composition: implemented
-- bundled semantic/model processor and team-channel adapters: pending
+- bundled model processor and Slack approval surface: implemented
+- qualified team delivery adapter: pending
 - real meeting / FOUNDER LIVE evidence: pending
 - registry publication: disabled (`private: true`)
 
@@ -132,6 +134,33 @@ reference is optional because some adapters do not require authentication.
 adapter. Adapter IDs select an implementation; instance IDs distinguish
 multiple configured instances of the same capability.
 
+For remote Slack approval, replace `"approval_mode": "manual"` with an adapter
+descriptor. The token remains outside the file:
+
+```json
+{
+  "approval_mode": "adapter",
+  "approval_surface": {
+    "adapter_id": "slack-reactions",
+    "instance_id": "founder-approvals",
+    "credential_ref": "env:SLACK_BOT_TOKEN",
+    "settings": {
+      "channel_id": "C0123ABCD",
+      "reviewer": {
+        "slack_user_id": "U0456EFGH",
+        "name": "founder"
+      },
+      "approve_reaction": "white_check_mark",
+      "reject_reaction": "x"
+    }
+  }
+}
+```
+
+The Slack bot needs `chat:write`, `reactions:read`, and the appropriate channel
+history scope (`channels:history` for public channels or `groups:history` for
+private channels). Only the configured reviewer can resolve a brief.
+
 `state_dir` is the single authority for current product state. The standalone
 product does not read `ECHO_HOME`; adapter integrations receive concrete paths
 from their caller.
@@ -154,10 +183,12 @@ echo-brain run --config /absolute/path/runtime-config.json
   cursor and processing state in SQLite. Every adapter operation has a host
   deadline and receives an `AbortSignal`; a non-settling adapter cannot hold the
   process open forever.
-- An unreviewed brief is written to `state_dir/approvals/` with private file
-  permissions. `approvals`, `approve`, and `reject` operate that durable queue.
+- An unreviewed brief is written as an immutable node under
+  `state_dir/decisions/` with private file permissions. `approvals`, `approve`,
+  `reject`, and the configured approval-surface adapter resolve the same store.
   The next cycle delivers the exact approved snapshot; pending work never
-  advances the source cursor.
+  advances the source cursor. `state_dir/approvals/` is read only for one-way
+  import of records created by older versions.
 - `run` performs the same cycle immediately and repeats it at
   `cycle_interval_ms` until `SIGINT` or `SIGTERM`. Shutdown aborts the active
   adapter operation before closing durable state.
@@ -171,10 +202,11 @@ resolved approvals, extracted decision sets, and adapter-version cursors are
 monotonic across restarts.
 
 The bundled `structured-text` processor intentionally extracts only lines that
-begin with `Decision:`, `Action:`, or `Rationale:`. It is an honest offline
-baseline, not a semantic or model-backed extractor. The bundled
-`jsonl-outbox` channel is a durable, idempotent local delivery reference, not a
-substitute for a team's communication adapter.
+begin with `Decision:`, `Action:`, or `Rationale:`. It remains the deterministic
+offline baseline. The bundled `llm` processor provides model-backed extraction
+through a local Ollama endpoint. The bundled `jsonl-outbox` channel is a durable,
+idempotent local delivery reference, not a substitute for a team's communication
+adapter.
 
 ## Stable core and adapter boundaries
 
@@ -197,7 +229,7 @@ Adapters own authentication, vendor APIs, pagination, rate-limit handling,
 vendor error translation, and mapping to or from the canonical shapes. All
 adapters share identity, configuration, lifecycle, health, and error contracts;
 their directional capabilities remain typed as meeting source, decision
-processor, or communication channel.
+processor, approval surface, or communication channel.
 
 Future PM, engineering, and other surfaces should be introduced as capability
 adapters over the same canonical artifacts. Portable concepts belong in typed
@@ -206,8 +238,8 @@ adapter `settings` and must not become required core semantics.
 
 ## What remains before advancing beyond DEV
 
-1. Add and qualify a semantic decision-processor adapter and the first real
-   team communication-channel adapter using the same contracts.
+1. Qualify the model-backed processor and Slack approval surface, then add the
+   first real team communication-channel adapter using the same contracts.
 2. Bound first-run processing to seven days and serve newest meetings first,
    independent of the selected meeting adapter.
 3. Add install/status/doctor/service lifecycle and rollback behavior.

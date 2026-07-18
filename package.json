@@ -28,6 +28,10 @@
       "types": "./dist/adapters/decision-processors/structured-text/index.d.ts",
       "import": "./dist/adapters/decision-processors/structured-text/index.js"
     },
+    "./adapters/decision-processors/llm": {
+      "types": "./dist/adapters/decision-processors/llm/index.d.ts",
+      "import": "./dist/adapters/decision-processors/llm/index.js"
+    },
     "./adapters/communication-channels/jsonl-outbox": {
       "types": "./dist/adapters/communication-channels/jsonl-outbox/index.d.ts",
       "import": "./dist/adapters/communication-channels/jsonl-outbox/index.js"

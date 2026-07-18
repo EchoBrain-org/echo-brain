@@ -190,6 +190,44 @@ describe('decision node store', () => {
     ).rejects.toThrow(/64-character/);
   });
 
+  it('serializes conflicting resolutions across independent store instances', async () => {
+    const root = newRoot('decision-store-race-');
+    const first = new DecisionNodeStore(root, {
+      now: () => '2026-07-16T21:00:00.000Z',
+    });
+    const second = new DecisionNodeStore(root, {
+      now: () => '2026-07-16T21:00:01.000Z',
+    });
+    await first.ensureRequested(request());
+    const approvalId = decisionApprovalId(request().processing_key);
+
+    const attempts = await Promise.allSettled([
+      first.resolve({
+        approvalId,
+        status: 'approved',
+        reviewedBy: 'slack-reviewer',
+        surface: 'slack',
+      }),
+      second.resolve({
+        approvalId,
+        status: 'rejected',
+        reviewedBy: 'cli-reviewer',
+        surface: 'cli',
+      }),
+    ]);
+
+    expect(attempts.filter((attempt) => attempt.status === 'fulfilled')).toHaveLength(1);
+    expect(attempts.filter((attempt) => attempt.status === 'rejected')).toHaveLength(1);
+    const [winner] = await new DecisionNodeStore(root).list();
+    expect(winner!.status).toMatch(/^(approved|rejected)$/);
+    expect(
+      attempts.some(
+        (attempt) =>
+          attempt.status === 'fulfilled' && attempt.value.status === winner!.status,
+      ),
+    ).toBe(true);
+  });
+
   it('records publications create-once per surface and folds them into state', async () => {
     const root = newRoot('decision-store-');
     const store = new DecisionNodeStore(root, {
@@ -271,5 +309,25 @@ describe('decision node store', () => {
     const listed = await second.list();
     expect(listed).toHaveLength(1);
     expect(listed[0]).toEqual(imported);
+
+    // Once the first-open migration completes, later legacy records are ignored.
+    const ignoredProcessingKey = `${processingKey}:late`;
+    const ignoredApprovalId = decisionApprovalId(ignoredProcessingKey);
+    writeFileSync(
+      join(legacyDirectory, `${ignoredApprovalId}.json`),
+      `${JSON.stringify({
+        schema_version: 1,
+        approval_id: ignoredApprovalId,
+        processing_key: ignoredProcessingKey,
+        status: 'pending',
+        requested_at: '2026-07-15T22:00:00.000Z',
+        reviewed_at: null,
+        reviewed_by: null,
+        reason: null,
+        brief: request().brief,
+      })}\n`,
+      { mode: 0o600 },
+    );
+    expect(await new DecisionNodeStore(root).list()).toEqual([imported]);
   });
 });
