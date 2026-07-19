@@ -9,6 +9,7 @@
     "src/adapters/decision-processors/structured-text/index.ts",
     "src/adapters/decision-processors/llm/index.ts",
     "src/adapters/delivery-surfaces/jsonl-outbox/index.ts",
+    "src/adapters/delivery-surfaces/slack/index.ts",
     "src/adapters/approval-surfaces/slack-reactions/index.ts"
   ],
   "allowed_internal_paths": [

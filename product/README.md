@@ -56,7 +56,7 @@ The workflow uploads evidence even after a red cell, then runs a terminal gate l
 
 ## Deliberate limits
 
-This machinery performs no tag, GitHub Release, registry publication, protected-environment approval, credential change, real meeting, client installation, or release authorization. It does not claim a team delivery adapter exists. Those remain separate evidence and human-authority gates.
+This machinery performs no tag, GitHub Release, registry publication, protected-environment approval, credential change, real meeting, client installation, or release authorization. A Slack team delivery adapter exists in the DEV package, but this machinery does not claim that it is live-qualified or promoted. Those remain separate evidence and human-authority gates.
 
 The active order is:
 

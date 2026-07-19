@@ -1,0 +1,26 @@
+{
+  "schema_version": 1,
+  "kind": "successor_change_record",
+  "predecessor": "provenance/successors/0012-delivery-surface-terminology.v1.json",
+  "decision": "Add Slack as the first external team delivery-surface implementation while keeping Slack approval and Slack delivery as independently configured capabilities over the canonical DeliveryEnvelope and DeliveryReceipt boundary.",
+  "implemented_capabilities": [
+    "a bundled slack delivery-surface adapter publishes approved briefs to one configured Slack channel",
+    "confirmed Slack channel and message identities become canonical delivery receipts",
+    "durable idempotency state replays confirmed deliveries and pins ambiguous outcomes without automatically posting duplicates",
+    "approval and delivery adapters share only capability-neutral Slack HTTP plumbing"
+  ],
+  "architectural_invariants": [
+    "Slack delivery never interprets approval reactions or reviewer identity",
+    "Slack approval never performs post-approval delivery",
+    "adapter credentials remain external references and are never copied into delivery records",
+    "a Slack API acknowledgement is required before a delivered receipt is returned",
+    "the adapter remains DEV and unqualified until supervised live delivery evidence is recorded"
+  ],
+  "state": {
+    "maturity": "DEV",
+    "authority": false,
+    "installed": false,
+    "production_adapter_set": false,
+    "wedge_executed": false
+  }
+}

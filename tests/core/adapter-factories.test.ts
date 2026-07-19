@@ -140,4 +140,58 @@ describe('product adapter factories', () => {
       instance_id: 'primary',
     });
   });
+
+  it('bundles independent Slack delivery and approval surface factories', async () => {
+    const { createDefaultAdapterFactories } = await import(
+      '../../src/product/default-adapters.js'
+    );
+    const factories = createDefaultAdapterFactories();
+    const deliveryFactory = factories.get('delivery-surface', 'slack');
+    const approvalFactory = factories.get(
+      'approval-surface',
+      'slack-reactions',
+    );
+    expect(deliveryFactory).toBeDefined();
+    expect(approvalFactory).toBeDefined();
+
+    const context = {
+      stateDirectory: '/tmp/adapter-factory-test/state',
+      environment: { SLACK_BOT_TOKEN: 'xoxb-test' },
+      credentialResolver: () => 'xoxb-test',
+      now: () => '2026-07-18T00:00:00.000Z',
+    };
+    const delivery = await deliveryFactory!.create(
+      {
+        adapter_id: 'slack',
+        instance_id: 'team-decisions',
+        credential_ref: 'env:SLACK_BOT_TOKEN',
+        settings: { channel_id: 'C123' },
+      },
+      context,
+    );
+    const approval = await approvalFactory!.create(
+      {
+        adapter_id: 'slack-reactions',
+        instance_id: 'founder-approval',
+        credential_ref: 'env:SLACK_BOT_TOKEN',
+        settings: {
+          channel_id: 'C123',
+          reviewer: { slack_user_id: 'U123', name: 'zhenye' },
+        },
+      },
+      context,
+    );
+
+    expect(delivery).not.toBe(approval);
+    expect(delivery.identity).toMatchObject({
+      kind: 'delivery-surface',
+      adapter_id: 'slack',
+      instance_id: 'team-decisions',
+    });
+    expect(approval.identity).toMatchObject({
+      kind: 'approval-surface',
+      adapter_id: 'slack-reactions',
+      instance_id: 'founder-approval',
+    });
+  });
 });

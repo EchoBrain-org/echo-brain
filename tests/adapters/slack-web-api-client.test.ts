@@ -134,6 +134,25 @@ describe('SlackWebApiClient', () => {
     });
   });
 
+  it.each([
+    'service_unavailable',
+    'fatal_error',
+    'internal_error',
+    'request_timeout',
+  ])("treats Slack post body error '%s' as an unknown outcome", async (error) => {
+    const client = new SlackWebApiClient('xoxb-test', {
+      fetchImpl: fetchReturning(() => jsonResponse({ ok: false, error })),
+    });
+
+    await expect(
+      client.postMessage({ channel: 'C123', text: 'approved brief' }),
+    ).rejects.toMatchObject({
+      name: 'SlackApiError',
+      code: 'unknown_outcome',
+      retryable: true,
+    });
+  });
+
   it('preserves HTTP rate-limit metadata', async () => {
     const client = new SlackWebApiClient('xoxb-test', {
       fetchImpl: fetchReturning(() =>
@@ -188,6 +207,24 @@ describe('SlackWebApiClient', () => {
     );
   });
 
+  it('suppresses link and media unfurls when posting meeting-derived content', async () => {
+    let requestBody: unknown;
+    const fetchImpl = (async (_input, init) => {
+      requestBody = JSON.parse(String(init?.body));
+      return jsonResponse({ ok: true, channel: 'C123', ts: '1700.100' });
+    }) as typeof fetch;
+    const client = new SlackWebApiClient('xoxb-test', { fetchImpl });
+
+    await expect(
+      client.postMessage({ channel: 'C123', text: 'https://sensitive.example' }),
+    ).resolves.toEqual({ channel: 'C123', ts: '1700.100' });
+    expect(requestBody).toMatchObject({
+      channel: 'C123',
+      unfurl_links: false,
+      unfurl_media: false,
+    });
+  });
+
   it('preserves typed authentication and invalid-response errors', async () => {
     const unauthorized = new SlackWebApiClient('xoxb-test', {
       fetchImpl: fetchReturning(() =>
@@ -214,5 +251,24 @@ describe('SlackWebApiClient', () => {
         retryable: false,
       }),
     );
+  });
+
+  it('keeps malformed reads invalid while treating malformed post responses as unknown', async () => {
+    const client = new SlackWebApiClient('xoxb-test', {
+      fetchImpl: fetchReturning(() => jsonResponse(null)),
+    });
+
+    await expect(client.authTest()).rejects.toMatchObject({
+      name: 'SlackApiError',
+      code: 'invalid',
+      retryable: false,
+    });
+    await expect(
+      client.postMessage({ channel: 'C123', text: 'approved brief' }),
+    ).rejects.toMatchObject({
+      name: 'SlackApiError',
+      code: 'unknown_outcome',
+      retryable: true,
+    });
   });
 });

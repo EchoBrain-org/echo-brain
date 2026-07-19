@@ -2,6 +2,8 @@ import { createGranolaMeetingSourceAdapter } from '../adapters/meeting-sources/g
 import { createLlmDecisionProcessor } from '../adapters/decision-processors/llm/llm-decision-processor.js';
 import { createStructuredTextDecisionProcessor } from '../adapters/decision-processors/structured-text/structured-text-decision-processor.js';
 import { createJsonlOutboxDeliverySurface } from '../adapters/delivery-surfaces/jsonl-outbox/jsonl-outbox-delivery-surface.js';
+import { createSlackDeliverySurface } from '../adapters/delivery-surfaces/slack/slack-delivery-surface.js';
+import { FileSlackDeliveryReceiptStore } from '../adapters/delivery-surfaces/slack/slack-delivery-receipt-store.js';
 import { createSlackReactionsApprovalSurface } from '../adapters/approval-surfaces/slack-reactions/slack-reactions-approval-surface.js';
 import { DecisionNodeStore } from './approval/decision-node-store.js';
 import { ProductAdapterFactoryRegistry } from './adapter-factories.js';
@@ -40,6 +42,20 @@ export function createDefaultAdapterFactories(): ProductAdapterFactoryRegistry {
     adapter_id: 'jsonl-outbox',
     create: (config, context) =>
       createJsonlOutboxDeliverySurface(config, { now: context.now }),
+  });
+  factories.register({
+    kind: 'delivery-surface',
+    adapter_id: 'slack',
+    create: (config, context) =>
+      createSlackDeliverySurface(config, {
+        receiptStore: new FileSlackDeliveryReceiptStore(
+          context.stateDirectory,
+          config.instance_id,
+        ),
+        environment: context.environment,
+        credentialResolver: context.credentialResolver,
+        now: context.now,
+      }),
   });
   factories.register({
     kind: 'approval-surface',

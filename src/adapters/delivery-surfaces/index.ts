@@ -18,3 +18,4 @@ export type {
 } from '../../core/index.js';
 
 export * from './jsonl-outbox/index.js';
+export * from './slack/index.js';

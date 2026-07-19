@@ -36,6 +36,10 @@
       "types": "./dist/adapters/delivery-surfaces/jsonl-outbox/index.d.ts",
       "import": "./dist/adapters/delivery-surfaces/jsonl-outbox/index.js"
     },
+    "./adapters/delivery-surfaces/slack": {
+      "types": "./dist/adapters/delivery-surfaces/slack/index.d.ts",
+      "import": "./dist/adapters/delivery-surfaces/slack/index.js"
+    },
     "./adapters/approval-surfaces/slack-reactions": {
       "types": "./dist/adapters/approval-surfaces/slack-reactions/index.d.ts",
       "import": "./dist/adapters/approval-surfaces/slack-reactions/index.js"

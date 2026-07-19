@@ -28,7 +28,8 @@ is not yet the authoritative live product:
 - maturity: `DEV`
 - authority: `false`
 - production adapter composition: implemented
-- bundled model processor and Slack approval surface: implemented
+- bundled model processor, Slack approval surface, and Slack delivery surface:
+  implemented
 - qualified team delivery adapter: pending
 - real meeting / FOUNDER LIVE evidence: pending
 - registry publication: disabled (`private: true`)
@@ -240,6 +241,41 @@ The Slack bot needs `chat:write`, `reactions:read`, and the appropriate channel
 history scope (`channels:history` for public channels or `groups:history` for
 private channels). Only the configured reviewer can resolve a brief.
 
+Slack delivery is configured independently from Slack approval. The two
+capabilities may use the same token and channel, but neither setting implies the
+other:
+
+```json
+{
+  "delivery_surfaces": [
+    {
+      "adapter_id": "jsonl-outbox",
+      "instance_id": "local",
+      "settings": {
+        "path": "/Users/you/.echo-brain/outbox.jsonl",
+        "destination_id": "local-outbox"
+      }
+    },
+    {
+      "adapter_id": "slack",
+      "instance_id": "team-decisions",
+      "credential_ref": "file:/Users/you/.echo-brain/credentials/slack-bot-token",
+      "settings": {
+        "channel_id": "C0123ABCD",
+        "request_timeout_ms": 30000
+      }
+    }
+  ]
+}
+```
+
+Slack delivery needs only `chat:write` when the bot is already a member of the
+target channel. It publishes the approved brief without approval controls and
+returns the acknowledged Slack channel/message identity as a delivery receipt.
+Keeping `jsonl-outbox` beside Slack provides an independent local audit copy;
+the core requires every configured delivery surface to finish safely before it
+advances the source cursor.
+
 `state_dir` is the single authority for current product state. The standalone
 product does not read `ECHO_HOME`; adapter integrations receive concrete paths
 from their caller.
@@ -318,8 +354,10 @@ The bundled `structured-text` processor intentionally extracts only lines that
 begin with `Decision:`, `Action:`, or `Rationale:`. It remains the deterministic
 offline baseline. The bundled `llm` processor provides model-backed extraction
 through a local Ollama endpoint. The bundled `jsonl-outbox` delivery surface is
-a durable, idempotent local reference, not a substitute for a team's delivery
-integration.
+a durable, idempotent local reference. The bundled `slack` delivery surface is
+the first external team destination. It durably replays confirmed delivery
+identities and pins ambiguous post outcomes for operator repair instead of
+automatically risking a duplicate message.
 
 ## Stable core and adapter boundaries
 
@@ -351,8 +389,8 @@ adapter `settings` and must not become required core semantics.
 
 ## What remains before advancing beyond DEV
 
-1. Qualify the model-backed processor and Slack approval surface, then add the
-   first real team delivery-surface adapter using the same contracts.
+1. Qualify the model-backed processor, Slack approval surface, and Slack
+   delivery surface with supervised founder evidence.
 2. Bound first-run processing to seven days and serve newest meetings first,
    independent of the selected meeting adapter.
 3. Qualify onboarding, LaunchAgent lifecycle, backup/restore crash recovery,

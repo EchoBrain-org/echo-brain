@@ -204,13 +204,23 @@ client and provider types live directly under the Granola adapter
 raw-event compatibility surface, have been removed. Product code enters
 Granola only through the canonical meeting-source adapter.
 
-The package also includes two vendor-neutral reference implementations:
+The package includes two vendor-neutral reference implementations:
 
 - `structured-text` extracts only explicitly labeled decision, action, and
   rationale lines. It demonstrates the processor contract without pretending
   to provide semantic extraction.
 - `jsonl-outbox` provides durable, idempotent local delivery. It demonstrates
   delivery receipt and retry behavior without becoming a team integration.
+
+The bundled `slack` delivery surface is the first external team integration.
+It consumes the same destination-neutral `DeliveryEnvelope`, renders an
+approved brief for one configured Slack channel, and returns the acknowledged
+channel/message identity in a canonical `DeliveryReceipt`. Its configuration,
+rendering, state, and behavior remain independent from the `slack-reactions`
+approval surface; the two share only capability-neutral Slack HTTP plumbing.
+Confirmed deliveries replay from durable idempotency state across retries and
+restarts. A timeout or crash that makes the remote outcome ambiguous is pinned
+as unknown and is not automatically posted again.
 
 ## Conformance requirements
 

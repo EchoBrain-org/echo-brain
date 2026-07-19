@@ -14,7 +14,7 @@ import {
   SlackApiError,
   SlackWebApiClient,
   type SlackReaction,
-} from './slack-web-api-client.js';
+} from '../../shared/slack/slack-web-api-client.js';
 
 export const SLACK_REACTIONS_APPROVAL_SURFACE_ADAPTER_ID = 'slack-reactions';
 export const SLACK_REACTIONS_APPROVAL_SURFACE_ADAPTER_VERSION = '1.0.0';
