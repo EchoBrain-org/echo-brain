@@ -1,12 +1,21 @@
 #!/usr/bin/env node
 
-import { chmodSync, cpSync, existsSync, rmSync } from 'node:fs';
+import { chmodSync, cpSync, existsSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
 import { join, resolve } from 'node:path';
 import process from 'node:process';
 
 const repo = resolve(import.meta.dirname, '..');
 const dist = join(repo, 'dist');
+
+function gitOutput(args) {
+  const result = spawnSync('git', args, { cwd: repo, encoding: 'utf8' });
+  if (result.status !== 0) {
+    process.stderr.write(result.stderr || 'git failed\n');
+    process.exit(result.status ?? 1);
+  }
+  return result.stdout.trim();
+}
 
 function clean() {
   rmSync(dist, { recursive: true, force: true });
@@ -38,5 +47,20 @@ if (compiled.status !== 0) {
 cpSync(join(repo, 'src', 'storage', 'migrations'), join(dist, 'storage', 'migrations'), {
   recursive: true,
 });
+const packageVersion = JSON.parse(readFileSync(join(repo, 'package.json'), 'utf8')).version;
+const sourceSha = gitOutput(['rev-parse', 'HEAD']).toLowerCase();
+if (!/^[a-f0-9]{40}$/.test(sourceSha)) {
+  process.stderr.write('git did not return a full lowercase source SHA\n');
+  process.exit(1);
+}
+writeFileSync(
+  join(dist, 'product', 'build-identity.v1.json'),
+  `${JSON.stringify({
+    schema_version: 1,
+    kind: 'echo-packaged-build-identity',
+    product_version: packageVersion,
+    source_sha: sourceSha,
+    source_kind: 'worktree-head-unverified',
+  })}\n`,
+);
 chmodSync(join(dist, 'product', 'cli.js'), 0o755);
-

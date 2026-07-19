@@ -13,6 +13,11 @@ import type {
   StateFilesystemClassification,
 } from './config.js';
 import { resolveProductStatePaths, type ProductStatePaths } from './paths.js';
+import {
+  assertFounderIdentityAllowsPipeline,
+  FounderIdentityGateError,
+  type IdentityCheckDependencies,
+} from './federation/identity-check.js';
 
 export type ProductComponentName =
   | 'product-state'
@@ -64,6 +69,7 @@ export interface ProductRuntimeDependencies {
   components: readonly ProductRuntimeComponent[];
   deadlines?: Partial<ProductRuntimeDeadlines>;
   withDeadline?: DeadlineRunner;
+  identityCheck?: IdentityCheckDependencies;
 }
 
 export interface ProductRuntimeShutdownResult {
@@ -88,6 +94,7 @@ export class ProductRuntimeFailure extends Error {
       | 'adapter_unavailable'
       | 'adapter_invalid_config'
       | 'state_not_local'
+      | 'identity_not_seed_grade'
       | 'startup_failed',
     message: string,
     public readonly details: readonly string[] = [],
@@ -317,12 +324,39 @@ export async function startProductRuntime(
   );
   if (adapters instanceof ProductRuntimeFailure)
     return { ok: false, error: adapters };
-
   const classification = await dependencies.classifyStateFilesystem(
     config.state_dir,
   );
   if (classification.kind !== 'local') {
     return { ok: false, error: stateClassificationFailure(classification) };
+  }
+
+  try {
+    await assertFounderIdentityAllowsPipeline(
+      config.state_dir,
+      { ...dependencies.identityCheck, runtimeConfig: config },
+    );
+  } catch (error) {
+    if (error instanceof FounderIdentityGateError) {
+      return {
+        ok: false,
+        error: new ProductRuntimeFailure(
+          'identity_not_seed_grade',
+          error.message,
+          error.report.checks
+            .filter((item) => !item.ok)
+            .map((item) => `${item.id}: ${item.detail}`),
+        ),
+      };
+    }
+    return {
+      ok: false,
+      error: new ProductRuntimeFailure(
+        'identity_not_seed_grade',
+        `identity check failed: ${(error as Error).message}`,
+        [(error as Error).message],
+      ),
+    };
   }
 
   const paths = resolveProductStatePaths(config.state_dir);

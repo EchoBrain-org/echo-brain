@@ -45,7 +45,8 @@
       "import": "./dist/adapters/approval-surfaces/slack-reactions/index.js"
     },
     "./schemas/meeting-context.v1.schema.json": "./schemas/meeting-context.v1.schema.json",
-    "./schemas/runtime-config.v1.schema.json": "./schemas/runtime-config.v1.schema.json"
+    "./schemas/runtime-config.v1.schema.json": "./schemas/runtime-config.v1.schema.json",
+    "./schemas/product/*": "./schemas/product/*"
   },
   "bin": {
     "echo-brain": "dist/product/cli.js"
@@ -58,6 +59,7 @@
     "dist/**",
     "schemas/meeting-context.v1.schema.json",
     "schemas/runtime-config.v1.schema.json",
+    "schemas/product/*.schema.json",
     "npm-shrinkwrap.json",
     "README.md",
     "LICENSE"

@@ -9,11 +9,17 @@ export interface ProductStatePaths {
   drafts: string;
   briefs: string;
   database: string;
+  identityRoot: string;
+  activeIdentityBundle: string;
+  identityManifests: string;
+  identityRegistries: string;
+  identityPolicies: string;
 }
 
 export function resolveProductStatePaths(stateDir: string): ProductStatePaths {
   const root = resolve(stateDir);
   const checkpoints = join(root, 'checkpoints');
+  const identityRoot = join(root, 'identity');
   return Object.freeze({
     root,
     logs: join(root, 'logs'),
@@ -23,5 +29,13 @@ export function resolveProductStatePaths(stateDir: string): ProductStatePaths {
     drafts: join(root, 'drafts'),
     briefs: join(root, 'briefs'),
     database: join(root, 'echo-brain.sqlite'),
+    identityRoot,
+    activeIdentityBundle: join(
+      identityRoot,
+      'active-identity-bundle.v1.json',
+    ),
+    identityManifests: join(identityRoot, 'manifests'),
+    identityRegistries: join(identityRoot, 'registries'),
+    identityPolicies: join(identityRoot, 'policies'),
   });
 }

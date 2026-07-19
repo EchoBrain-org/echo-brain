@@ -1,0 +1,284 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://echo.local/schemas/product/approval-federation-metadata.v1.schema.json",
+  "title": "ECHO approval federation candidate metadata",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "identity_manifest_id",
+    "source_attribution_ref",
+    "processor",
+    "approval_surface",
+    "publication",
+    "candidate_context_sha256"
+  ],
+  "properties": {
+    "schema_version": { "const": 1 },
+    "identity_manifest_id": { "$ref": "#/definitions/manifestId" },
+    "source_attribution_ref": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "source_adapter_id",
+        "source_instance_id",
+        "external_id",
+        "meeting_revision",
+        "attribution_sha256"
+      ],
+      "properties": {
+        "source_adapter_id": { "$ref": "#/definitions/adapterName" },
+        "source_instance_id": { "$ref": "#/definitions/adapterName" },
+        "external_id": { "$ref": "#/definitions/nonEmptyString" },
+        "meeting_revision": { "$ref": "#/definitions/nonEmptyString" },
+        "attribution_sha256": { "$ref": "#/definitions/digest" }
+      }
+    },
+    "processor": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "adapter_binding_id",
+        "adapter",
+        "configuration_snapshot",
+        "configuration_sha256",
+        "attribution_sha256"
+      ],
+      "properties": {
+        "adapter_binding_id": { "$ref": "#/definitions/bindingId" },
+        "adapter": { "$ref": "#/definitions/processorAdapter" },
+        "configuration_snapshot": { "$ref": "#/definitions/jsonObject" },
+        "configuration_sha256": { "$ref": "#/definitions/digest" },
+        "attribution_sha256": { "$ref": "#/definitions/digest" }
+      }
+    },
+    "approval_surface": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["binding", "connection"],
+      "properties": {
+        "binding": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "adapter_binding_id",
+            "adapter",
+            "configuration_snapshot",
+            "configuration_sha256"
+          ],
+          "properties": {
+            "adapter_binding_id": { "$ref": "#/definitions/bindingId" },
+            "adapter": { "$ref": "#/definitions/approvalAdapter" },
+            "configuration_snapshot": { "$ref": "#/definitions/jsonObject" },
+            "configuration_sha256": { "$ref": "#/definitions/digest" }
+          }
+        },
+        "connection": {
+          "oneOf": [
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "connection_id",
+                "generation",
+                "owner",
+                "provider_identity"
+              ],
+              "properties": {
+                "connection_id": { "$ref": "#/definitions/connectionId" },
+                "generation": { "type": "integer", "minimum": 1 },
+                "owner": { "$ref": "#/definitions/owner" },
+                "provider_identity": { "$ref": "#/definitions/slackProviderIdentity" }
+              }
+            },
+            { "type": "null" }
+          ]
+        }
+      }
+    },
+    "publication": { "$ref": "#/definitions/publicationSnapshot" },
+    "candidate_context_sha256": { "$ref": "#/definitions/digest" }
+  },
+  "definitions": {
+    "manifestId": {
+      "type": "string",
+      "pattern": "^idm_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+    },
+    "organizationId": {
+      "type": "string",
+      "pattern": "^org_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+    },
+    "membershipId": {
+      "type": "string",
+      "pattern": "^mem_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+    },
+    "installationId": {
+      "type": "string",
+      "pattern": "^ins_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+    },
+    "policyId": {
+      "type": "string",
+      "pattern": "^pol_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+    },
+    "bindingId": {
+      "type": "string",
+      "pattern": "^bnd_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+    },
+    "connectionId": {
+      "type": "string",
+      "pattern": "^con_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+    },
+    "adapterName": {
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9-]*$"
+    },
+    "nonEmptyString": { "type": "string", "minLength": 1 },
+    "digest": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" },
+    "processorAdapter": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "adapter_id", "instance_id", "version"],
+      "properties": {
+        "kind": { "const": "decision-processor" },
+        "adapter_id": { "$ref": "#/definitions/adapterName" },
+        "instance_id": { "$ref": "#/definitions/adapterName" },
+        "version": { "$ref": "#/definitions/nonEmptyString" }
+      }
+    },
+    "approvalAdapter": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "adapter_id", "instance_id", "version"],
+      "properties": {
+        "kind": { "const": "approval-surface" },
+        "adapter_id": { "$ref": "#/definitions/adapterName" },
+        "instance_id": { "$ref": "#/definitions/adapterName" },
+        "version": { "$ref": "#/definitions/nonEmptyString" }
+      }
+    },
+    "owner": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "id"],
+          "properties": {
+            "kind": { "const": "organization" },
+            "id": { "$ref": "#/definitions/organizationId" }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "id"],
+          "properties": {
+            "kind": { "const": "membership" },
+            "id": { "$ref": "#/definitions/membershipId" }
+          }
+        }
+      ]
+    },
+    "slackProviderIdentity": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["provider", "team_id", "enterprise_id", "bot_user_id", "bot_id", "app_id"],
+      "properties": {
+        "provider": { "const": "slack" },
+        "team_id": { "$ref": "#/definitions/nonEmptyString" },
+        "enterprise_id": {
+          "oneOf": [{ "$ref": "#/definitions/nonEmptyString" }, { "type": "null" }]
+        },
+        "bot_user_id": { "$ref": "#/definitions/nonEmptyString" },
+        "bot_id": {
+          "oneOf": [{ "$ref": "#/definitions/nonEmptyString" }, { "type": "null" }]
+        },
+        "app_id": {
+          "oneOf": [{ "$ref": "#/definitions/nonEmptyString" }, { "type": "null" }]
+        }
+      }
+    },
+    "retention": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind"],
+          "properties": { "kind": { "const": "indefinite" } }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "days"],
+          "properties": {
+            "kind": { "const": "duration" },
+            "days": { "type": "integer", "minimum": 1 }
+          }
+        }
+      ]
+    },
+    "publicationSnapshot": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "policy_id",
+        "version",
+        "policy_sha256",
+        "identity_manifest_id",
+        "signer_installation_id",
+        "signer_key_id",
+        "payload_scope",
+        "audience",
+        "sensitivity",
+        "retention",
+        "raw_meeting_content",
+        "participant_observations"
+      ],
+      "properties": {
+        "policy_id": { "$ref": "#/definitions/policyId" },
+        "version": { "type": "integer", "minimum": 1 },
+        "policy_sha256": { "$ref": "#/definitions/digest" },
+        "identity_manifest_id": { "$ref": "#/definitions/manifestId" },
+        "signer_installation_id": { "$ref": "#/definitions/installationId" },
+        "signer_key_id": { "$ref": "#/definitions/digest" },
+        "payload_scope": {
+          "const": "approved-signal-with-meeting-context-brief-digest-and-bounded-evidence"
+        },
+        "audience": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["scope", "subjects"],
+          "properties": {
+            "scope": { "enum": ["organization", "named-subjects"] },
+            "subjects": {
+              "type": "array",
+              "minItems": 1,
+              "uniqueItems": true,
+              "items": { "$ref": "#/definitions/owner" }
+            }
+          }
+        },
+        "sensitivity": { "enum": ["internal", "confidential", "restricted"] },
+        "retention": { "$ref": "#/definitions/retention" },
+        "raw_meeting_content": { "const": "local-only" },
+        "participant_observations": {
+          "enum": ["included-namespaced", "excluded"]
+        }
+      }
+    },
+    "jsonObject": {
+      "type": "object",
+      "additionalProperties": false,
+      "patternProperties": { "^.*$": { "$ref": "#/definitions/jsonValue" } }
+    },
+    "jsonValue": {
+      "oneOf": [
+        { "type": "null" },
+        { "type": "boolean" },
+        { "type": "number" },
+        { "type": "string" },
+        { "type": "array", "items": { "$ref": "#/definitions/jsonValue" } },
+        { "$ref": "#/definitions/jsonObject" }
+      ]
+    }
+  }
+}

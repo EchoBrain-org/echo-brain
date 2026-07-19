@@ -157,6 +157,9 @@ describe('product-only artifact', () => {
       expect.arrayContaining([
         'schemas/meeting-context.v1.schema.json',
         'schemas/runtime-config.v1.schema.json',
+        'schemas/product/active-identity-bundle.v1.schema.json',
+        'schemas/product/federated-record-envelope.v1.schema.json',
+        'dist/product/build-identity.v1.json',
         'dist/product/lifecycle-lock.js',
         'dist/product/state-backup.js',
       ]),

@@ -1,0 +1,113 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://echo.local/schemas/product/processor-attribution.v1.schema.json",
+  "title": "ECHO processor attribution",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "kind",
+    "identity_manifest_id",
+    "meeting",
+    "processor",
+    "produced_by",
+    "captured_at"
+  ],
+  "properties": {
+    "schema_version": { "const": 1 },
+    "kind": { "const": "echo-processor-attribution" },
+    "identity_manifest_id": { "$ref": "#/definitions/manifestId" },
+    "meeting": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "source_adapter_id",
+        "source_instance_id",
+        "external_id",
+        "meeting_revision"
+      ],
+      "properties": {
+        "source_adapter_id": { "$ref": "#/definitions/adapterName" },
+        "source_instance_id": { "$ref": "#/definitions/adapterName" },
+        "external_id": { "$ref": "#/definitions/nonEmptyString" },
+        "meeting_revision": { "$ref": "#/definitions/nonEmptyString" }
+      }
+    },
+    "processor": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "adapter_binding_id",
+        "adapter",
+        "configuration_snapshot",
+        "configuration_sha256",
+        "decision_set_sha256"
+      ],
+      "properties": {
+        "adapter_binding_id": { "$ref": "#/definitions/bindingId" },
+        "adapter": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "adapter_id", "instance_id", "version"],
+          "properties": {
+            "kind": { "const": "decision-processor" },
+            "adapter_id": { "$ref": "#/definitions/adapterName" },
+            "instance_id": { "$ref": "#/definitions/adapterName" },
+            "version": { "$ref": "#/definitions/nonEmptyString" }
+          }
+        },
+        "configuration_snapshot": { "$ref": "#/definitions/jsonObject" },
+        "configuration_sha256": { "$ref": "#/definitions/digest" },
+        "decision_set_sha256": { "$ref": "#/definitions/digest" }
+      }
+    },
+    "produced_by": { "$ref": "#/definitions/productArtifact" },
+    "captured_at": { "$ref": "#/definitions/timestamp" }
+  },
+  "definitions": {
+    "manifestId": {
+      "type": "string",
+      "pattern": "^idm_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+    },
+    "bindingId": {
+      "type": "string",
+      "pattern": "^bnd_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+    },
+    "adapterName": {
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9-]*$"
+    },
+    "nonEmptyString": { "type": "string", "minLength": 1 },
+    "digest": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" },
+    "timestamp": {
+      "type": "string",
+      "format": "utc-millisecond-timestamp",
+      "pattern": "^[0-9]{4}-(?:0[1-9]|1[0-2])-(?:0[1-9]|[12][0-9]|3[01])T(?:[01][0-9]|2[0-3]):[0-5][0-9]:[0-5][0-9]\\.[0-9]{3}Z$"
+    },
+    "productArtifact": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["product_version", "source_sha", "artifact_sha256"],
+      "properties": {
+        "product_version": { "$ref": "#/definitions/nonEmptyString" },
+        "source_sha": { "type": "string", "pattern": "^[0-9a-f]{40}$" },
+        "artifact_sha256": { "$ref": "#/definitions/digest" }
+      }
+    },
+    "jsonObject": {
+      "type": "object",
+      "additionalProperties": false,
+      "patternProperties": { "^.*$": { "$ref": "#/definitions/jsonValue" } }
+    },
+    "jsonValue": {
+      "oneOf": [
+        { "type": "null" },
+        { "type": "boolean" },
+        { "type": "number" },
+        { "type": "string" },
+        { "type": "array", "items": { "$ref": "#/definitions/jsonValue" } },
+        { "$ref": "#/definitions/jsonObject" }
+      ]
+    }
+  }
+}

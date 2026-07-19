@@ -50,6 +50,13 @@ import {
   createProductStateBackup,
   restoreProductStateBackup,
 } from './state-backup.js';
+import {
+  assertFounderIdentityAllowsPipeline,
+  checkFounderIdentity,
+  type IdentityCheckDependencies,
+} from './federation/identity-check.js';
+import { MacOsSecureEnclaveInstallationSigner } from './federation/macos-installation-signer.js';
+import { bundledProductHelperAvailable } from './spawn-sanitized-child.js';
 
 export interface ProductCliProcess {
   once: (event: 'SIGINT' | 'SIGTERM', listener: () => void) => unknown;
@@ -74,6 +81,7 @@ export interface ProductCliDependencies {
   >;
   operator?: Partial<ProductOperatorDependencies>;
   doctorHealthTimeoutMs?: number;
+  identityCheck?: IdentityCheckDependencies;
   acquireLifecycleLock?: (
     stateDirectory: string,
     kind: ProductLifecycleLockKind,
@@ -93,6 +101,7 @@ interface ParsedCommand {
     | 'reconfigure'
     | 'status'
     | 'doctor'
+    | 'identity-check'
     | 'service'
     | 'backup'
     | 'restore'
@@ -108,6 +117,7 @@ interface ParsedCommand {
   backupRoot?: string;
   backupDirectory?: string;
   operationId?: string;
+  strictIdentityCheck?: boolean;
 }
 
 const PRODUCT_VERSION = (
@@ -127,6 +137,7 @@ Usage:
   echo-brain reconfigure --config <absolute-path>
   echo-brain status --config <absolute-path>
   echo-brain doctor --config <absolute-path>
+  echo-brain identity-check --config <absolute-path> [--strict]
   echo-brain service <install|start|stop|restart|status|uninstall> --config <absolute-path>
   echo-brain backup --config <absolute-path> --backup-root <absolute-path> [--id <operation-id>]
   echo-brain restore --config <absolute-path> --backup <absolute-path> --backup-root <absolute-path> --id <operation-id>
@@ -154,6 +165,7 @@ function parseCommand(argv: readonly string[]): ParsedCommand {
     command !== 'reconfigure' &&
     command !== 'status' &&
     command !== 'doctor' &&
+    command !== 'identity-check' &&
     command !== 'service' &&
     command !== 'backup' &&
     command !== 'restore' &&
@@ -166,7 +178,7 @@ function parseCommand(argv: readonly string[]): ParsedCommand {
     command !== 'run'
   ) {
     throw new Error(
-      'usage: echo-brain <onboard|init|reconfigure|status|doctor|service|backup|restore|validate-config|selftest|run-once|run|approvals|approve|reject> --config <absolute-path>',
+      'usage: echo-brain <onboard|init|reconfigure|status|doctor|identity-check|service|backup|restore|validate-config|selftest|run-once|run|approvals|approve|reject> --config <absolute-path>',
     );
   }
   let serviceAction: ProductServiceAction | undefined;
@@ -200,16 +212,21 @@ function parseCommand(argv: readonly string[]): ParsedCommand {
       'state-dir': { type: 'string' },
       'backup-root': { type: 'string' },
       backup: { type: 'string' },
+      strict: { type: 'boolean' },
     },
   });
   if (parsed.values.config === undefined)
     throw new Error('--config is required');
+  if (parsed.values.strict !== undefined && command !== 'identity-check') {
+    throw new Error('--strict is only valid with identity-check');
+  }
   if (
     (command === 'onboard' ||
       command === 'init' ||
       command === 'reconfigure' ||
       command === 'status' ||
       command === 'doctor' ||
+      command === 'identity-check' ||
       command === 'service' ||
       command === 'service-run' ||
       command === 'backup' ||
@@ -271,6 +288,7 @@ function parseCommand(argv: readonly string[]): ParsedCommand {
     parsed.values.id === undefined
       ? {}
       : { operationId: parsed.values.id }),
+    ...(parsed.values.strict === true ? { strictIdentityCheck: true } : {}),
   };
 }
 
@@ -381,8 +399,31 @@ async function createCliComposition(
   return await prepareProductComposition(config, registry, {
     ...dependencies.composition,
     classifyStateFilesystem: classifier,
+    identityCheck:
+      dependencies.composition?.identityCheck ??
+      resolveIdentityCheckDependencies(dependencies.identityCheck, config),
     ...(now === undefined ? {} : { now }),
   });
+}
+
+function resolveIdentityCheckDependencies(
+  configured: IdentityCheckDependencies | undefined,
+  runtimeConfig?: ProductRuntimeConfig,
+): IdentityCheckDependencies {
+  if (configured?.signer !== undefined) {
+    return { ...configured, ...(runtimeConfig === undefined ? {} : { runtimeConfig }) };
+  }
+  if (!bundledProductHelperAvailable('installation-signer')) {
+    return {
+      ...configured,
+      ...(runtimeConfig === undefined ? {} : { runtimeConfig }),
+    };
+  }
+  return {
+    ...configured,
+    ...(runtimeConfig === undefined ? {} : { runtimeConfig }),
+    signer: new MacOsSecureEnclaveInstallationSigner(),
+  };
 }
 
 function createProductOperator(
@@ -528,6 +569,33 @@ export async function runProductCli(
       ).preflightServiceRun();
     } catch (error) {
       printOperatorError(stderr, parsed.command, error);
+      return 1;
+    }
+  }
+  if (parsed.command === 'identity-check') {
+    try {
+      const report = await checkFounderIdentity(
+        config.state_dir,
+        resolveIdentityCheckDependencies(dependencies.identityCheck, config),
+      );
+      const strictFailure =
+        parsed.strictIdentityCheck === true && !report.seed_grade_ready;
+      const activeFailure =
+        report.mode === 'identity_enabled' && !report.foundation_ok;
+      const status = strictFailure || activeFailure ? 1 : 0;
+      print(status === 0 ? stdout : stderr, {
+        ok: status === 0,
+        command: parsed.command,
+        strict: parsed.strictIdentityCheck === true,
+        ...report,
+      });
+      return status;
+    } catch (error) {
+      print(stderr, {
+        ok: false,
+        command: parsed.command,
+        error: (error as Error).message,
+      });
       return 1;
     }
   }
@@ -920,6 +988,10 @@ export async function runProductCli(
             approvals: records,
           };
         } else {
+          await assertFounderIdentityAllowsPipeline(
+            config.state_dir,
+            resolveIdentityCheckDependencies(dependencies.identityCheck, config),
+          );
           const record = await approvals.resolve({
             approvalId: parsed.approvalId!,
             status: parsed.command === 'approve' ? 'approved' : 'rejected',
@@ -1026,6 +1098,9 @@ export async function runProductCli(
         runtime = await startProductRuntime(config, {
           ...dependencies.runtime,
           classifyStateFilesystem: classifier,
+          identityCheck:
+            dependencies.runtime.identityCheck ??
+            resolveIdentityCheckDependencies(dependencies.identityCheck, config),
         });
       } catch (error) {
         signalWaiter.cancel();

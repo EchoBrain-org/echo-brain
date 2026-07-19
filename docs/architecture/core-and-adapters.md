@@ -174,6 +174,9 @@ src/
     decision-processors/
       <adapter-id>/
         index.ts
+    approval-surfaces/
+      <adapter-id>/
+        index.ts
     delivery-surfaces/
       <adapter-id>/
         index.ts
@@ -246,6 +249,8 @@ test, not a core test.
 
 ### Meeting source
 
+- State the strongest account/tenant identity this provider's API can prove,
+  and the assurance recorded when it cannot.
 - Map every available source component into canonical context blocks, artifacts,
   participants, time, and context without fabricating absent values.
 - Report capture coverage explicitly, including empty, pending, forbidden,
@@ -260,6 +265,8 @@ test, not a core test.
 
 ### Decision processor
 
+- State the strongest account/tenant identity this provider's API can prove,
+  and the assurance recorded when it cannot.
 - Accept only canonical meeting documents, never a meeting-tool payload.
 - Emit canonical decisions, actions, rationale, confidence, and evidence.
 - Declare implementation and model version without making a provider core state.
@@ -268,8 +275,31 @@ test, not a core test.
 - Honor the operation `AbortSignal` and make late results disposable.
 - Pass the decision-processor conformance suite.
 
+### Approval surface
+
+- State the strongest account/tenant identity this provider's API can prove,
+  and the assurance recorded when it cannot.
+- Present the exact first-staged brief and policy snapshot; never regenerate a
+  pending approval from current source, processor, or policy state.
+- Retain a stable provider publication reference and a digest of the exact
+  rendered approval presentation.
+- Resolve only an explicit, unambiguous action by an enrolled or allowlisted
+  actor; incomplete rosters and conflicting actions remain pending.
+- Namespace every approval actor by the provider tenant/account. For Slack,
+  actor identity is at least `(team_id, user_id)` and never a bare user ID.
+- Retain review time, reason, provider evidence, and identity assurance while
+  keeping the existing `reviewed_by` field display-only.
+- Remain independent from delivery even when approval and delivery share a
+  provider connection or destination.
+- Honor the operation `AbortSignal` and host timeout without turning an unknown
+  provider outcome into an approval or rejection.
+- Pass the shared adapter lifecycle conformance suite plus capability-specific
+  approval fixtures.
+
 ### Delivery surface
 
+- State the strongest account/tenant identity this provider's API can prove,
+  and the assurance recorded when it cannot.
 - Accept only approved, destination-neutral delivery envelopes.
 - Keep channel/workspace/thread identifiers inside adapter-owned destinations.
 - Honor the supplied idempotency key and return a durable external receipt.
@@ -281,6 +311,8 @@ test, not a core test.
 
 ### Project-management surface
 
+- State the strongest account/tenant identity this provider's API can prove,
+  and the assurance recorded when it cannot.
 - Start with a typed capability proposal (for example issue creation or status
   synchronization); do not overload the delivery-surface interface.
 - Define canonical command and receipt shapes without tool-specific fields.
@@ -290,6 +322,8 @@ test, not a core test.
 
 ### Engineering surface
 
+- State the strongest account/tenant identity this provider's API can prove,
+  and the assurance recorded when it cannot.
 - Define the precise capability (for example change reference, build status, or
   deployment observation) rather than a generic engineering adapter.
 - Separate read observations from state-changing commands.

@@ -224,6 +224,16 @@ function main() {
       [join(source, 'node_modules/typescript/bin/tsc'), '--project', buildConfigPath],
       { cwd: source },
     );
+    writeFileSync(
+      join(packageDir, 'dist', 'product', 'build-identity.v1.json'),
+      `${JSON.stringify({
+        schema_version: 1,
+        kind: 'echo-packaged-build-identity',
+        product_version: version,
+        source_sha: sourceSha,
+        source_kind: 'materialized-commit',
+      })}\n`,
+    );
 
     for (const asset of closure.runtime_assets ?? []) {
       const destination = asset.startsWith('src/')

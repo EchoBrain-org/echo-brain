@@ -1,0 +1,295 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://echo.local/schemas/product/source-attribution.v1.schema.json",
+  "title": "ECHO source attribution",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "kind",
+    "source_observation_id",
+    "organization_id",
+    "identity_manifest_id",
+    "source",
+    "connection",
+    "meeting",
+    "participant_observations",
+    "captured_by",
+    "captured_at"
+  ],
+  "properties": {
+    "schema_version": { "const": 1 },
+    "kind": { "const": "echo-source-attribution" },
+    "source_observation_id": { "$ref": "#/definitions/observationId" },
+    "organization_id": { "$ref": "#/definitions/organizationId" },
+    "identity_manifest_id": { "$ref": "#/definitions/manifestId" },
+    "source": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "adapter_binding_id",
+        "adapter",
+        "configuration_snapshot",
+        "configuration_sha256"
+      ],
+      "properties": {
+        "adapter_binding_id": { "$ref": "#/definitions/bindingId" },
+        "adapter": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "adapter_id", "instance_id", "version"],
+          "properties": {
+            "kind": { "const": "meeting-source" },
+            "adapter_id": {
+              "type": "string",
+              "pattern": "^[a-z][a-z0-9-]*$"
+            },
+            "instance_id": {
+              "type": "string",
+              "pattern": "^[a-z][a-z0-9-]*$"
+            },
+            "version": { "$ref": "#/definitions/nonEmptyString" }
+          }
+        },
+        "configuration_snapshot": { "$ref": "#/definitions/jsonObject" },
+        "configuration_sha256": { "$ref": "#/definitions/digest" }
+      }
+    },
+    "connection": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "connection_id",
+        "generation",
+        "owner",
+        "provider",
+        "provider_identity"
+      ],
+      "properties": {
+        "connection_id": { "$ref": "#/definitions/connectionId" },
+        "generation": { "type": "integer", "minimum": 1 },
+        "owner": { "$ref": "#/definitions/owner" },
+        "provider": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9-]*$"
+        },
+        "provider_identity": {
+          "oneOf": [
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["tenant", "subject", "verification_method", "assurance"],
+              "properties": {
+                "tenant": {
+                  "oneOf": [
+                    { "$ref": "#/definitions/providerTenant" },
+                    { "type": "null" }
+                  ]
+                },
+                "subject": {
+                  "oneOf": [
+                    { "$ref": "#/definitions/providerSubject" },
+                    { "type": "null" }
+                  ]
+                },
+                "verification_method": { "const": "slack_auth_test" },
+                "assurance": { "const": "provider_verified" }
+              }
+            },
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["tenant", "subject", "verification_method", "assurance"],
+              "properties": {
+                "tenant": {
+                  "oneOf": [
+                    { "$ref": "#/definitions/providerTenant" },
+                    { "type": "null" }
+                  ]
+                },
+                "subject": {
+                  "oneOf": [
+                    { "$ref": "#/definitions/providerSubject" },
+                    { "type": "null" }
+                  ]
+                },
+                "verification_method": { "const": "provider_first_capture" },
+                "assurance": { "const": "credential_observed" }
+              }
+            },
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["tenant", "subject", "verification_method", "assurance"],
+              "properties": {
+                "tenant": {
+                  "oneOf": [
+                    { "$ref": "#/definitions/providerTenant" },
+                    { "type": "null" }
+                  ]
+                },
+                "subject": {
+                  "oneOf": [
+                    { "$ref": "#/definitions/providerSubject" },
+                    { "type": "null" }
+                  ]
+                },
+                "verification_method": { "const": "operator_attestation" },
+                "assurance": { "const": "operator_attested" }
+              }
+            }
+          ]
+        }
+      }
+    },
+    "meeting": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["external_id", "canonical_revision", "document_sha256"],
+      "properties": {
+        "external_id": { "$ref": "#/definitions/nonEmptyString" },
+        "canonical_revision": { "$ref": "#/definitions/nonEmptyString" },
+        "document_sha256": { "$ref": "#/definitions/digest" }
+      }
+    },
+    "participant_observations": {
+      "type": "array",
+      "items": { "$ref": "#/definitions/participantObservation" }
+    },
+    "captured_by": { "$ref": "#/definitions/productArtifact" },
+    "captured_at": { "$ref": "#/definitions/timestamp" }
+  },
+  "definitions": {
+    "observationId": {
+      "type": "string",
+      "pattern": "^obs_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+    },
+    "organizationId": {
+      "type": "string",
+      "pattern": "^org_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+    },
+    "membershipId": {
+      "type": "string",
+      "pattern": "^mem_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+    },
+    "manifestId": {
+      "type": "string",
+      "pattern": "^idm_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+    },
+    "bindingId": {
+      "type": "string",
+      "pattern": "^bnd_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+    },
+    "connectionId": {
+      "type": "string",
+      "pattern": "^con_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+    },
+    "digest": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" },
+    "timestamp": {
+      "type": "string",
+      "format": "utc-millisecond-timestamp",
+      "pattern": "^[0-9]{4}-(?:0[1-9]|1[0-2])-(?:0[1-9]|[12][0-9]|3[01])T(?:[01][0-9]|2[0-3]):[0-5][0-9]:[0-5][0-9]\\.[0-9]{3}Z$"
+    },
+    "nonEmptyString": { "type": "string", "minLength": 1 },
+    "owner": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "id"],
+          "properties": {
+            "kind": { "const": "organization" },
+            "id": { "$ref": "#/definitions/organizationId" }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "id"],
+          "properties": {
+            "kind": { "const": "membership" },
+            "id": { "$ref": "#/definitions/membershipId" }
+          }
+        }
+      ]
+    },
+    "providerTenant": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "id", "enterprise_id"],
+      "properties": {
+        "kind": { "$ref": "#/definitions/nonEmptyString" },
+        "id": { "$ref": "#/definitions/nonEmptyString" },
+        "enterprise_id": {
+          "oneOf": [{ "$ref": "#/definitions/nonEmptyString" }, { "type": "null" }]
+        }
+      }
+    },
+    "providerSubject": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "id", "bot_id", "app_id"],
+      "properties": {
+        "kind": { "$ref": "#/definitions/nonEmptyString" },
+        "id": { "$ref": "#/definitions/nonEmptyString" },
+        "bot_id": {
+          "oneOf": [{ "$ref": "#/definitions/nonEmptyString" }, { "type": "null" }]
+        },
+        "app_id": {
+          "oneOf": [{ "$ref": "#/definitions/nonEmptyString" }, { "type": "null" }]
+        }
+      }
+    },
+    "participantObservation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["meeting_participant_id", "display_name", "observed_claims"],
+      "properties": {
+        "meeting_participant_id": { "$ref": "#/definitions/nonEmptyString" },
+        "display_name": {
+          "oneOf": [{ "$ref": "#/definitions/nonEmptyString" }, { "type": "null" }]
+        },
+        "observed_claims": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["namespace", "kind", "value"],
+            "properties": {
+              "namespace": { "$ref": "#/definitions/nonEmptyString" },
+              "kind": {
+                "enum": ["source", "email", "phone", "other"]
+              },
+              "value": { "$ref": "#/definitions/nonEmptyString" }
+            }
+          }
+        }
+      }
+    },
+    "productArtifact": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["product_version", "source_sha", "artifact_sha256"],
+      "properties": {
+        "product_version": { "$ref": "#/definitions/nonEmptyString" },
+        "source_sha": { "type": "string", "pattern": "^[0-9a-f]{40}$" },
+        "artifact_sha256": { "$ref": "#/definitions/digest" }
+      }
+    },
+    "jsonObject": {
+      "type": "object",
+      "additionalProperties": false,
+      "patternProperties": { "^.*$": { "$ref": "#/definitions/jsonValue" } }
+    },
+    "jsonValue": {
+      "oneOf": [
+        { "type": "null" },
+        { "type": "boolean" },
+        { "type": "number" },
+        { "type": "string" },
+        { "type": "array", "items": { "$ref": "#/definitions/jsonValue" } },
+        { "$ref": "#/definitions/jsonObject" }
+      ]
+    }
+  }
+}

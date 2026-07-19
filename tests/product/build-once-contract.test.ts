@@ -270,6 +270,7 @@ describe('qualification workflow build-once and terminal contracts', () => {
       expect.arrayContaining([
         'schemas/meeting-context.v1.schema.json',
         'schemas/runtime-config.v1.schema.json',
+        'schemas/product/*.schema.json',
       ]),
     );
   });

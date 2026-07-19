@@ -1,0 +1,333 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://echo.local/schemas/product/local-connection-registry.v1.schema.json",
+  "title": "ECHO local connection and adapter-binding registry",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "kind",
+    "registry_id",
+    "identity_manifest_id",
+    "revision",
+    "previous_registry_sha256",
+    "updated_at",
+    "connections",
+    "bindings",
+    "integrity"
+  ],
+  "properties": {
+    "schema_version": { "const": 1 },
+    "kind": { "const": "echo-local-connection-registry" },
+    "registry_id": { "$ref": "#/definitions/registryId" },
+    "identity_manifest_id": { "$ref": "#/definitions/manifestId" },
+    "revision": { "type": "integer", "minimum": 1 },
+    "previous_registry_sha256": {
+      "oneOf": [{ "$ref": "#/definitions/digest" }, { "type": "null" }]
+    },
+    "updated_at": { "$ref": "#/definitions/timestamp" },
+    "connections": {
+      "type": "array",
+      "items": { "$ref": "#/definitions/toolConnection" }
+    },
+    "bindings": {
+      "type": "array",
+      "items": { "$ref": "#/definitions/adapterBinding" }
+    },
+    "integrity": { "$ref": "#/definitions/integrity" }
+  },
+  "definitions": {
+    "registryId": {
+      "type": "string",
+      "pattern": "^reg_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+    },
+    "manifestId": {
+      "type": "string",
+      "pattern": "^idm_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+    },
+    "organizationId": {
+      "type": "string",
+      "pattern": "^org_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+    },
+    "membershipId": {
+      "type": "string",
+      "pattern": "^mem_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+    },
+    "connectionId": {
+      "type": "string",
+      "pattern": "^con_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+    },
+    "bindingId": {
+      "type": "string",
+      "pattern": "^bnd_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+    },
+    "digest": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" },
+    "timestamp": {
+      "type": "string",
+      "format": "utc-millisecond-timestamp",
+      "pattern": "^[0-9]{4}-(?:0[1-9]|1[0-2])-(?:0[1-9]|[12][0-9]|3[01])T(?:[01][0-9]|2[0-3]):[0-5][0-9]:[0-5][0-9]\\.[0-9]{3}Z$"
+    },
+    "nonEmptyString": { "type": "string", "minLength": 1 },
+    "base64": {
+      "type": "string",
+      "minLength": 4,
+      "pattern": "^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$"
+    },
+    "owner": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "id"],
+          "properties": {
+            "kind": { "const": "organization" },
+            "id": { "$ref": "#/definitions/organizationId" }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "id"],
+          "properties": {
+            "kind": { "const": "membership" },
+            "id": { "$ref": "#/definitions/membershipId" }
+          }
+        }
+      ]
+    },
+    "providerTenant": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "id", "enterprise_id"],
+      "properties": {
+        "kind": { "$ref": "#/definitions/nonEmptyString" },
+        "id": { "$ref": "#/definitions/nonEmptyString" },
+        "enterprise_id": {
+          "oneOf": [{ "$ref": "#/definitions/nonEmptyString" }, { "type": "null" }]
+        }
+      }
+    },
+    "providerSubject": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "id", "bot_id", "app_id"],
+      "properties": {
+        "kind": { "$ref": "#/definitions/nonEmptyString" },
+        "id": { "$ref": "#/definitions/nonEmptyString" },
+        "bot_id": {
+          "oneOf": [{ "$ref": "#/definitions/nonEmptyString" }, { "type": "null" }]
+        },
+        "app_id": {
+          "oneOf": [{ "$ref": "#/definitions/nonEmptyString" }, { "type": "null" }]
+        }
+      }
+    },
+    "providerIdentity": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["tenant", "subject", "verification"],
+      "properties": {
+        "tenant": {
+          "oneOf": [{ "$ref": "#/definitions/providerTenant" }, { "type": "null" }]
+        },
+        "subject": {
+          "oneOf": [{ "$ref": "#/definitions/providerSubject" }, { "type": "null" }]
+        },
+        "verification": {
+          "oneOf": [
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["method", "assurance", "verified_at", "evidence_sha256"],
+              "properties": {
+                "method": { "const": "slack_auth_test" },
+                "assurance": { "const": "provider_verified" },
+                "verified_at": { "$ref": "#/definitions/timestamp" },
+                "evidence_sha256": { "$ref": "#/definitions/digest" }
+              }
+            },
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["method", "assurance", "verified_at", "evidence_sha256"],
+              "properties": {
+                "method": { "const": "provider_first_capture" },
+                "assurance": { "const": "credential_observed" },
+                "verified_at": { "$ref": "#/definitions/timestamp" },
+                "evidence_sha256": { "$ref": "#/definitions/digest" }
+              }
+            },
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["method", "assurance", "verified_at", "evidence_sha256"],
+              "properties": {
+                "method": { "const": "operator_attestation" },
+                "assurance": { "const": "operator_attested" },
+                "verified_at": { "$ref": "#/definitions/timestamp" },
+                "evidence_sha256": { "$ref": "#/definitions/digest" }
+              }
+            }
+          ]
+        }
+      }
+    },
+    "connectionGeneration": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "generation",
+        "active_from",
+        "ended_at",
+        "provider_identity",
+        "local_credential_guard"
+      ],
+      "properties": {
+        "generation": { "type": "integer", "minimum": 1 },
+        "active_from": { "$ref": "#/definitions/timestamp" },
+        "ended_at": {
+          "oneOf": [{ "$ref": "#/definitions/timestamp" }, { "type": "null" }]
+        },
+        "provider_identity": { "$ref": "#/definitions/providerIdentity" },
+        "local_credential_guard": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["reference", "algorithm", "salt_base64", "digest", "exportable"],
+          "properties": {
+            "reference": {
+              "type": "string",
+              "pattern": "^(?:env:[A-Za-z][A-Za-z0-9_.-]*|file:/[^\\u0000]+)$"
+            },
+            "algorithm": { "const": "sha256-salted" },
+            "salt_base64": { "$ref": "#/definitions/base64" },
+            "digest": { "$ref": "#/definitions/digest" },
+            "exportable": { "const": false }
+          }
+        }
+      }
+    },
+    "toolConnection": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "connection_id",
+        "organization_id",
+        "owner",
+        "provider",
+        "generations"
+      ],
+      "properties": {
+        "connection_id": { "$ref": "#/definitions/connectionId" },
+        "organization_id": { "$ref": "#/definitions/organizationId" },
+        "owner": { "$ref": "#/definitions/owner" },
+        "provider": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9-]*$"
+        },
+        "generations": {
+          "type": "array",
+          "minItems": 1,
+          "items": { "$ref": "#/definitions/connectionGeneration" }
+        }
+      }
+    },
+    "adapterBinding": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "adapter_binding_id",
+        "capability",
+        "adapter_id",
+        "instance_id",
+        "connection_id",
+        "connection_generation",
+        "configuration_snapshot",
+        "configuration_sha256",
+        "created_at",
+        "ended_at",
+        "status"
+      ],
+      "properties": {
+        "adapter_binding_id": { "$ref": "#/definitions/bindingId" },
+        "capability": {
+          "enum": [
+            "meeting-source",
+            "decision-processor",
+            "approval-surface",
+            "delivery-surface"
+          ]
+        },
+        "adapter_id": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9-]*$"
+        },
+        "instance_id": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9-]*$"
+        },
+        "connection_id": {
+          "oneOf": [{ "$ref": "#/definitions/connectionId" }, { "type": "null" }]
+        },
+        "connection_generation": {
+          "oneOf": [{ "type": "integer", "minimum": 1 }, { "type": "null" }]
+        },
+        "configuration_snapshot": { "$ref": "#/definitions/jsonObject" },
+        "configuration_sha256": { "$ref": "#/definitions/digest" },
+        "created_at": { "$ref": "#/definitions/timestamp" },
+        "ended_at": {
+          "oneOf": [{ "$ref": "#/definitions/timestamp" }, { "type": "null" }]
+        },
+        "status": { "enum": ["active", "retired"] }
+      },
+      "oneOf": [
+        {
+          "properties": {
+            "connection_id": { "$ref": "#/definitions/connectionId" },
+            "connection_generation": { "type": "integer", "minimum": 1 }
+          }
+        },
+        {
+          "properties": {
+            "connection_id": { "type": "null" },
+            "connection_generation": { "type": "null" }
+          }
+        }
+      ]
+    },
+    "jsonObject": {
+      "type": "object",
+      "additionalProperties": false,
+      "patternProperties": {
+        "^.*$": { "$ref": "#/definitions/jsonValue" }
+      }
+    },
+    "jsonValue": {
+      "oneOf": [
+        { "type": "null" },
+        { "type": "boolean" },
+        { "type": "number" },
+        { "type": "string" },
+        { "type": "array", "items": { "$ref": "#/definitions/jsonValue" } },
+        { "$ref": "#/definitions/jsonObject" }
+      ]
+    },
+    "integrity": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "canonicalization",
+        "payload_sha256",
+        "signature_algorithm",
+        "key_id",
+        "signature_base64"
+      ],
+      "properties": {
+        "canonicalization": { "const": "RFC8785" },
+        "payload_sha256": { "$ref": "#/definitions/digest" },
+        "signature_algorithm": { "const": "ecdsa-p256-sha256-der-low-s" },
+        "key_id": { "$ref": "#/definitions/digest" },
+        "signature_base64": { "$ref": "#/definitions/base64" }
+      }
+    }
+  }
+}

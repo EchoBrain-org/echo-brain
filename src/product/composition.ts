@@ -16,6 +16,11 @@ import type {
 } from './config.js';
 import { DecisionNodeStore } from './approval/decision-node-store.js';
 import { StoreBackedApprovalGate } from './approval/store-backed-approval-gate.js';
+import {
+  assertFounderIdentityAllowsPipeline,
+  FounderIdentityGateError,
+  type IdentityCheckDependencies,
+} from './federation/identity-check.js';
 import { resolveProductStatePaths, type ProductStatePaths } from './paths.js';
 import {
   ProductRuntimeFailure,
@@ -62,6 +67,7 @@ export interface PrepareProductCompositionOptions {
   createId?: () => string;
   healthTimeoutMs?: number;
   operationDeadlines?: Partial<CoreCycleDeadlines>;
+  identityCheck?: IdentityCheckDependencies;
 }
 
 export function resolveProductClock(now?: () => string): () => string {
@@ -188,9 +194,6 @@ export async function prepareProductComposition(
   registry: AdapterRegistry,
   options: PrepareProductCompositionOptions,
 ): Promise<ProductComposition> {
-  const adapters = resolveConfiguredAdapters(config, registry);
-  if (adapters instanceof ProductRuntimeFailure) throw adapters;
-
   const classification = await options.classifyStateFilesystem(config.state_dir);
   if (classification.kind !== 'local') {
     throw new ProductRuntimeFailure(
@@ -202,6 +205,25 @@ export async function prepareProductComposition(
 
   const paths = resolveProductStatePaths(config.state_dir);
   prepareProductStateRoot(paths.root);
+  try {
+    await assertFounderIdentityAllowsPipeline(
+      config.state_dir,
+      { ...options.identityCheck, runtimeConfig: config },
+    );
+  } catch (error) {
+    if (error instanceof FounderIdentityGateError) {
+      throw new ProductRuntimeFailure(
+        'identity_not_seed_grade',
+        error.message,
+        error.report.checks
+          .filter((item) => !item.ok)
+          .map((item) => `${item.id}: ${item.detail}`),
+      );
+    }
+    throw error;
+  }
+  const adapters = resolveConfiguredAdapters(config, registry);
+  if (adapters instanceof ProductRuntimeFailure) throw adapters;
   await assertAdapterHealth(adapters, options.healthTimeoutMs ?? 10_000);
   const state = options.state ?? new SqliteCoreStateStore(paths.database);
   const approvals =

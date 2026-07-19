@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<!--
+	  This restricted entitlement must be replaced at build time with the exact
+	  stable access group authorized by the embedded provisioning profile.
+	  Never check a concrete Apple Team ID or signing asset into this directory.
+	-->
+	<key>keychain-access-groups</key>
+	<array>
+		<string>__ECHO_SIGNER_KEYCHAIN_ACCESS_GROUP_REQUIRED__</string>
+	</array>
+</dict>
+</plist>

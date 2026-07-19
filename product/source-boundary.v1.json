@@ -57,6 +57,16 @@
   "runtime_assets": [
     "schemas/meeting-context.v1.schema.json",
     "schemas/runtime-config.v1.schema.json",
+    "schemas/product/active-identity-bundle.v1.schema.json",
+    "schemas/product/local-identity-manifest.v1.schema.json",
+    "schemas/product/local-connection-registry.v1.schema.json",
+    "schemas/product/publication-policy.v1.schema.json",
+    "schemas/product/source-attribution.v1.schema.json",
+    "schemas/product/processor-attribution.v1.schema.json",
+    "schemas/product/approval-federation-metadata.v1.schema.json",
+    "schemas/product/federated-record-envelope.v1.schema.json",
+    "schemas/product/federated-export.v1.schema.json",
+    "schemas/product/federated-recovery-report.v1.schema.json",
     "src/storage/migrations/0001_initial.sql",
     "src/storage/migrations/0002_core_state.sql"
   ],

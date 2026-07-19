@@ -5,6 +5,9 @@ import {
   type SpawnOptionsWithoutStdio,
 } from 'node:child_process';
 import { syncBuiltinESMExports } from 'node:module';
+import { existsSync, lstatSync, realpathSync } from 'node:fs';
+import { dirname, delimiter } from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 const CREDENTIAL_KEY =
   /(?:API[_-]?KEY|TOKEN|SECRET|PASSWORD|PASSWD|CREDENTIAL|AUTH|GRANOLA|ANTHROPIC|OPENAI)/i;
@@ -28,6 +31,7 @@ export function sanitizedChildEnvironment(
   overrides: NodeJS.ProcessEnv = {},
   base: NodeJS.ProcessEnv = process.env,
 ): NodeJS.ProcessEnv {
+  const requestedPath = overrides.PATH;
   const env: NodeJS.ProcessEnv = {};
   for (const [key, value] of Object.entries(base)) {
     if (value === undefined || CREDENTIAL_KEY.test(key) || key.startsWith('ECHO_')) continue;
@@ -39,6 +43,9 @@ export function sanitizedChildEnvironment(
   }
   return {
     ...env,
+    PATH:
+      requestedPath ??
+      [dirname(process.execPath), '/usr/bin', '/bin', '/usr/sbin', '/sbin'].join(delimiter),
     [SANITIZED_CHILD_MARKER]: '1',
     HTTP_PROXY: 'http://127.0.0.1:9',
     HTTPS_PROXY: 'http://127.0.0.1:9',
@@ -61,6 +68,43 @@ export function spawnSanitizedChild(
     env: sanitizedChildEnvironment(options.env),
     stdio: 'pipe',
   });
+}
+
+export type BundledProductHelper = 'installation-signer';
+
+const BUNDLED_PRODUCT_HELPERS: Readonly<Record<BundledProductHelper, URL>> =
+  Object.freeze({
+    'installation-signer': new URL(
+      '../native/EchoBrainSigningHelper.app/Contents/MacOS/EchoBrainSigningHelper',
+      import.meta.url,
+    ),
+  });
+
+export function bundledProductHelperPath(helper: BundledProductHelper): string {
+  return fileURLToPath(BUNDLED_PRODUCT_HELPERS[helper]);
+}
+
+export function bundledProductHelperAvailable(helper: BundledProductHelper): boolean {
+  const path = bundledProductHelperPath(helper);
+  if (!existsSync(path)) return false;
+  const state = lstatSync(path);
+  return (
+    !state.isSymbolicLink() &&
+    state.isFile() &&
+    (state.mode & 0o111) !== 0 &&
+    realpathSync(path) === path
+  );
+}
+
+/** Launch one finite, package-owned native helper; arbitrary paths are forbidden. */
+export function spawnBundledProductHelper(
+  helper: BundledProductHelper,
+): ChildProcessWithoutNullStreams {
+  const path = bundledProductHelperPath(helper);
+  if (!bundledProductHelperAvailable(helper)) {
+    throw new Error(`bundled product helper is unavailable or unsafe: ${helper}`);
+  }
+  return spawnSanitizedChild(path, [], { cwd: fileURLToPath(new URL('../../', import.meta.url)) });
 }
 
 /**

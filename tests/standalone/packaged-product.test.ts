@@ -5,18 +5,21 @@ import {
   mkdtempSync,
   mkdirSync,
   readFileSync,
+  realpathSync,
   rmSync,
   writeFileSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join, resolve } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
 const REPO = resolve(import.meta.dirname, '../..');
 const temporaryRoot = mkdtempSync(join(tmpdir(), 'echo-brain-package-'));
 const artifactDirectory = join(temporaryRoot, 'artifact');
+const npmCli = realpathSync(join(dirname(process.execPath), 'npm'));
 const npmEnvironment = {
   ...process.env,
+  PATH: `${dirname(process.execPath)}:${process.env.PATH ?? ''}`,
   npm_config_cache: join(REPO, '.npm-cache'),
 };
 let artifactPath: string;
@@ -42,8 +45,8 @@ function run(
 beforeAll(() => {
   mkdirSync(artifactDirectory, { recursive: true });
   const packed = run(
-    'npm',
-    ['pack', '--json', '--pack-destination', artifactDirectory],
+    process.execPath,
+    [npmCli, 'pack', '--json', '--pack-destination', artifactDirectory],
     { env: npmEnvironment },
   );
   expect(packed.status, packed.stdout + packed.stderr).toBe(0);
@@ -68,6 +71,7 @@ describe('ordinary npm package', () => {
       'package/dist/product/cli.js',
       'package/dist/product/index.js',
       'package/dist/product/index.d.ts',
+      'package/dist/product/build-identity.v1.json',
       'package/dist/core/index.js',
       'package/dist/core/index.d.ts',
       'package/dist/adapters/meeting-sources/granola/index.js',
@@ -86,6 +90,16 @@ describe('ordinary npm package', () => {
       'package/dist/storage/migrations/0002_core_state.sql',
       'package/schemas/meeting-context.v1.schema.json',
       'package/schemas/runtime-config.v1.schema.json',
+      'package/schemas/product/active-identity-bundle.v1.schema.json',
+      'package/schemas/product/local-identity-manifest.v1.schema.json',
+      'package/schemas/product/local-connection-registry.v1.schema.json',
+      'package/schemas/product/publication-policy.v1.schema.json',
+      'package/schemas/product/source-attribution.v1.schema.json',
+      'package/schemas/product/processor-attribution.v1.schema.json',
+      'package/schemas/product/approval-federation-metadata.v1.schema.json',
+      'package/schemas/product/federated-record-envelope.v1.schema.json',
+      'package/schemas/product/federated-export.v1.schema.json',
+      'package/schemas/product/federated-recovery-report.v1.schema.json',
       'package/docs/architecture/core-and-adapters.md',
       'package/LICENSE',
       'package/README.md',
@@ -185,8 +199,8 @@ describe('ordinary npm package', () => {
       )}\n`,
     );
     const installed = run(
-      'npm',
-      ['ci', '--offline', '--omit=dev', '--no-audit', '--no-fund'],
+      process.execPath,
+      [npmCli, 'ci', '--offline', '--omit=dev', '--no-audit', '--no-fund'],
       { cwd: prefix, env: { ...npmEnvironment, npm_config_offline: 'true' } },
     );
     expect(installed.status, installed.stdout + installed.stderr).toBe(0);
@@ -225,10 +239,19 @@ describe('ordinary npm package', () => {
       )}\n`,
     );
 
-    const cli = join(prefix, 'node_modules', '.bin', 'echo-brain');
-    const validated = run(cli, ['validate-config', '--config', configPath], {
-      cwd: prefix,
-    });
+    const cli = join(
+      prefix,
+      'node_modules',
+      'echo-brain',
+      'dist',
+      'product',
+      'cli.js',
+    );
+    const validated = run(
+      process.execPath,
+      [cli, 'validate-config', '--config', configPath],
+      { cwd: prefix },
+    );
     expect(validated.status, validated.stderr).toBe(0);
     expect(JSON.parse(validated.stdout)).toMatchObject({
       ok: true,
@@ -236,9 +259,11 @@ describe('ordinary npm package', () => {
       lane: 'team-product',
     });
 
-    const selftest = run(cli, ['selftest', '--config', configPath], {
-      cwd: prefix,
-    });
+    const selftest = run(
+      process.execPath,
+      [cli, 'selftest', '--config', configPath],
+      { cwd: prefix },
+    );
     expect(selftest.status, selftest.stderr).toBe(0);
     expect(JSON.parse(selftest.stdout)).toMatchObject({
       ok: true,
