@@ -13,7 +13,7 @@ import type {
   AdapterConfigValidation,
   AdapterHealth,
   AdapterOperationContext,
-  CommunicationChannelAdapter,
+  DeliverySurfaceAdapter,
   DeliveryEnvelope,
   DeliveryReceipt,
 } from '../../../core/index.js';
@@ -26,15 +26,15 @@ import {
   ProcessFileLockError,
 } from '../../../util/process-file-lock.js';
 
-export const JSONL_OUTBOX_COMMUNICATION_CHANNEL_ADAPTER_ID = 'jsonl-outbox';
-export const JSONL_OUTBOX_COMMUNICATION_CHANNEL_ADAPTER_VERSION = '1.0.0';
+export const JSONL_OUTBOX_DELIVERY_SURFACE_ADAPTER_ID = 'jsonl-outbox';
+export const JSONL_OUTBOX_DELIVERY_SURFACE_ADAPTER_VERSION = '1.0.0';
 
 const MAX_RECORD_BYTES = 8 * 1024 * 1024;
 const LOCK_RETRY_MS = 20;
 const LOCK_TIMEOUT_MS = 2_000;
 const LOCK_STALE_MS = 30_000;
 
-export interface JsonlOutboxChannelOptions {
+export interface JsonlOutboxDeliverySurfaceOptions {
   now?: () => string;
 }
 
@@ -139,22 +139,22 @@ async function syncDirectory(path: string): Promise<void> {
   }
 }
 
-export class JsonlOutboxCommunicationChannel implements CommunicationChannelAdapter {
-  readonly identity: CommunicationChannelAdapter['identity'];
-  readonly destination: CommunicationChannelAdapter['destination'];
+export class JsonlOutboxDeliverySurface implements DeliverySurfaceAdapter {
+  readonly identity: DeliverySurfaceAdapter['identity'];
+  readonly destination: DeliverySurfaceAdapter['destination'];
   private readonly settings: JsonlOutboxSettings;
   private readonly now: () => string;
 
   constructor(
     private readonly config: AdapterConfig,
-    options: JsonlOutboxChannelOptions = {},
+    options: JsonlOutboxDeliverySurfaceOptions = {},
   ) {
     this.settings = settingsFrom(config);
     this.identity = Object.freeze({
-      kind: 'communication-channel' as const,
-      adapter_id: JSONL_OUTBOX_COMMUNICATION_CHANNEL_ADAPTER_ID,
+      kind: 'delivery-surface' as const,
+      adapter_id: JSONL_OUTBOX_DELIVERY_SURFACE_ADAPTER_ID,
       instance_id: config.instance_id,
-      version: JSONL_OUTBOX_COMMUNICATION_CHANNEL_ADAPTER_VERSION,
+      version: JSONL_OUTBOX_DELIVERY_SURFACE_ADAPTER_VERSION,
     });
     this.destination = Object.freeze({
       adapter_id: this.identity.adapter_id,
@@ -166,8 +166,8 @@ export class JsonlOutboxCommunicationChannel implements CommunicationChannelAdap
 
   validateConfig(config: AdapterConfig): AdapterConfigValidation {
     const errors: string[] = [];
-    if (config.adapter_id !== JSONL_OUTBOX_COMMUNICATION_CHANNEL_ADAPTER_ID) {
-      errors.push(`adapter_id must be '${JSONL_OUTBOX_COMMUNICATION_CHANNEL_ADAPTER_ID}'`);
+    if (config.adapter_id !== JSONL_OUTBOX_DELIVERY_SURFACE_ADAPTER_ID) {
+      errors.push(`adapter_id must be '${JSONL_OUTBOX_DELIVERY_SURFACE_ADAPTER_ID}'`);
     }
     if (!/^[a-z][a-z0-9-]*$/.test(config.instance_id)) {
       errors.push('instance_id must use lowercase letters, numbers, and hyphens');
@@ -628,9 +628,9 @@ export class JsonlOutboxCommunicationChannel implements CommunicationChannelAdap
   }
 }
 
-export function createJsonlOutboxCommunicationChannel(
+export function createJsonlOutboxDeliverySurface(
   config: AdapterConfig,
-  options: JsonlOutboxChannelOptions = {},
-): JsonlOutboxCommunicationChannel {
-  return new JsonlOutboxCommunicationChannel(config, options);
+  options: JsonlOutboxDeliverySurfaceOptions = {},
+): JsonlOutboxDeliverySurface {
+  return new JsonlOutboxDeliverySurface(config, options);
 }

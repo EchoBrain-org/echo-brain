@@ -329,7 +329,7 @@ export function onboardProduct(
       instance_id: 'primary',
       settings: {},
     },
-    communication_channels: [
+    delivery_surfaces: [
       {
         adapter_id: 'jsonl-outbox',
         instance_id: 'local',
@@ -571,7 +571,7 @@ export class ProductOperator {
     return [
       ...this.config.meeting_sources,
       this.config.decision_processor,
-      ...this.config.communication_channels,
+      ...this.config.delivery_surfaces,
       ...(this.config.approval_mode === 'adapter'
         ? [this.config.approval_surface]
         : []),

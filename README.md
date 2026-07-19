@@ -3,7 +3,7 @@
 `echo-brain` is ECHO's standalone, tool-agnostic connection layer for turning
 meeting material into reviewed decisions and delivering those decisions to the
 places where a team works. Meeting tools, decision-processing providers,
-approval surfaces, and communication tools are adapters around a stable core;
+approval surfaces, and delivery tools are adapters around a stable core;
 no vendor defines the core product model.
 
 ```text
@@ -12,7 +12,7 @@ meeting-source adapter(s)
         -> decision-processing core
         -> canonical decisions, actions, and briefs
         -> explicit approval (local CLI or approval-surface adapter)
-        -> communication-channel adapter(s)
+        -> delivery-surface adapter(s)
         -> delivery receipts
 ```
 
@@ -190,7 +190,7 @@ Operational commands require an absolute JSON config path. A DEV example:
     "instance_id": "primary",
     "settings": {}
   },
-  "communication_channels": [
+  "delivery_surfaces": [
     {
       "adapter_id": "jsonl-outbox",
       "instance_id": "team-primary",
@@ -317,9 +317,9 @@ monotonic across restarts.
 The bundled `structured-text` processor intentionally extracts only lines that
 begin with `Decision:`, `Action:`, or `Rationale:`. It remains the deterministic
 offline baseline. The bundled `llm` processor provides model-backed extraction
-through a local Ollama endpoint. The bundled `jsonl-outbox` channel is a durable,
-idempotent local delivery reference, not a substitute for a team's communication
-adapter.
+through a local Ollama endpoint. The bundled `jsonl-outbox` delivery surface is
+a durable, idempotent local reference, not a substitute for a team's delivery
+integration.
 
 ## Stable core and adapter boundaries
 
@@ -342,7 +342,7 @@ Adapters own authentication, vendor APIs, pagination, rate-limit handling,
 vendor error translation, and mapping to or from the canonical shapes. All
 adapters share identity, configuration, lifecycle, health, and error contracts;
 their directional capabilities remain typed as meeting source, decision
-processor, approval surface, or communication channel.
+processor, approval surface, or delivery surface.
 
 Future PM, engineering, and other surfaces should be introduced as capability
 adapters over the same canonical artifacts. Portable concepts belong in typed
@@ -352,7 +352,7 @@ adapter `settings` and must not become required core semantics.
 ## What remains before advancing beyond DEV
 
 1. Qualify the model-backed processor and Slack approval surface, then add the
-   first real team communication-channel adapter using the same contracts.
+   first real team delivery-surface adapter using the same contracts.
 2. Bound first-run processing to seven days and serve newest meetings first,
    independent of the selected meeting adapter.
 3. Qualify onboarding, LaunchAgent lifecycle, backup/restore crash recovery,

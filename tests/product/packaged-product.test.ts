@@ -334,7 +334,7 @@ describe('product-only artifact', () => {
             instance_id: 'primary',
             settings: {},
           },
-          communication_channels: [
+          delivery_surfaces: [
             {
               adapter_id: 'jsonl-outbox',
               instance_id: 'qualification',
@@ -386,7 +386,7 @@ describe('product-only artifact', () => {
           adapter_id: 'structured-text',
           instance_id: 'primary',
         },
-        communication_channels: [
+        delivery_surfaces: [
           { adapter_id: 'jsonl-outbox', instance_id: 'qualification' },
         ],
       },

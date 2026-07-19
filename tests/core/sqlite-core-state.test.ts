@@ -109,9 +109,9 @@ const approval: ApprovalDecision = {
 const envelope: DeliveryEnvelope = {
   schema_version: 1,
   id: 'envelope-1',
-  idempotency_key: 'delivery:processing-1:channel-alpha:primary:team-1',
+  idempotency_key: 'delivery:processing-1:delivery-alpha:primary:team-1',
   destination: {
-    adapter_id: 'channel-alpha',
+    adapter_id: 'delivery-alpha',
     instance_id: 'primary',
     external_id: 'team-1',
   },

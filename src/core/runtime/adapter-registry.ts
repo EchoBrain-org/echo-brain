@@ -6,7 +6,7 @@ import {
 import type {
   AnyAdapter,
   ApprovalSurfaceAdapter,
-  CommunicationChannelAdapter,
+  DeliverySurfaceAdapter,
   DecisionProcessorAdapter,
   MeetingSourceAdapter,
 } from '../ports/adapters.js';
@@ -39,9 +39,9 @@ export class AdapterRegistry {
       | undefined;
   }
 
-  getCommunicationChannel(config: AdapterConfig): CommunicationChannelAdapter | undefined {
-    return this.get('communication-channel', config.adapter_id, config.instance_id) as
-      | CommunicationChannelAdapter
+  getDeliverySurface(config: AdapterConfig): DeliverySurfaceAdapter | undefined {
+    return this.get('delivery-surface', config.adapter_id, config.instance_id) as
+      | DeliverySurfaceAdapter
       | undefined;
   }
 

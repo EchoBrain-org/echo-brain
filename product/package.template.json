@@ -32,9 +32,9 @@
       "types": "./dist/adapters/decision-processors/llm/index.d.ts",
       "import": "./dist/adapters/decision-processors/llm/index.js"
     },
-    "./adapters/communication-channels/jsonl-outbox": {
-      "types": "./dist/adapters/communication-channels/jsonl-outbox/index.d.ts",
-      "import": "./dist/adapters/communication-channels/jsonl-outbox/index.js"
+    "./adapters/delivery-surfaces/jsonl-outbox": {
+      "types": "./dist/adapters/delivery-surfaces/jsonl-outbox/index.d.ts",
+      "import": "./dist/adapters/delivery-surfaces/jsonl-outbox/index.js"
     },
     "./adapters/approval-surfaces/slack-reactions": {
       "types": "./dist/adapters/approval-surfaces/slack-reactions/index.d.ts",

@@ -76,7 +76,7 @@ describe('ordinary npm package', () => {
       'package/dist/adapters/decision-processors/structured-text/index.js',
       'package/dist/adapters/decision-processors/llm/index.js',
       'package/dist/adapters/decision-processors/llm/llm-decision-processor.js',
-      'package/dist/adapters/communication-channels/jsonl-outbox/index.js',
+      'package/dist/adapters/delivery-surfaces/jsonl-outbox/index.js',
       'package/dist/infrastructure/filesystem/atomic-write.js',
       'package/dist/storage/migrations/0001_initial.sql',
       'package/dist/storage/migrations/0002_core_state.sql',
@@ -104,6 +104,11 @@ describe('ordinary npm package', () => {
     expect(
       [...members].some((member) =>
         member.includes('/granola/compatibility/'),
+      ),
+    ).toBe(false);
+    expect(
+      [...members].some((member) =>
+        member.startsWith('package/dist/adapters/communication-channels/'),
       ),
     ).toBe(false);
     const digest = createHash('sha256')
@@ -202,9 +207,9 @@ describe('ordinary npm package', () => {
             instance_id: 'primary',
             settings: {},
           },
-          communication_channels: [
+          delivery_surfaces: [
             {
-              adapter_id: 'fixture-channel',
+              adapter_id: 'fixture-delivery',
               instance_id: 'team',
               settings: {},
             },
@@ -243,8 +248,8 @@ describe('ordinary npm package', () => {
           adapter_id: 'fixture-processor',
           instance_id: 'primary',
         },
-        communication_channels: [
-          { adapter_id: 'fixture-channel', instance_id: 'team' },
+        delivery_surfaces: [
+          { adapter_id: 'fixture-delivery', instance_id: 'team' },
         ],
       },
       wedge_executed: false,
@@ -290,7 +295,7 @@ describe('ordinary npm package', () => {
           "const granola = await import('echo-brain/adapters/meeting-sources/granola');",
           "const processor = await import('echo-brain/adapters/decision-processors/structured-text');",
           "const llm = await import('echo-brain/adapters/decision-processors/llm');",
-          "const channel = await import('echo-brain/adapters/communication-channels/jsonl-outbox');",
+          "const surface = await import('echo-brain/adapters/delivery-surfaces/jsonl-outbox');",
           'const registry = new core.AdapterRegistry();',
           'console.log(JSON.stringify({',
           "  ok: typeof registry.get === 'function' &&",
@@ -300,7 +305,7 @@ describe('ordinary npm package', () => {
           "    typeof processor.StructuredTextDecisionProcessor === 'function' &&",
           "    typeof llm.LlmDecisionProcessor === 'function' &&",
           "    typeof llm.OllamaClient === 'function' &&",
-          "    typeof channel.JsonlOutboxCommunicationChannel === 'function'",
+          "    typeof surface.JsonlOutboxDeliverySurface === 'function'",
           '}));',
         ].join('\n'),
       ],

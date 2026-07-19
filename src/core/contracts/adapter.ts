@@ -3,7 +3,7 @@ import type { JsonObject } from './json.js';
 export type AdapterKind =
   | 'meeting-source'
   | 'decision-processor'
-  | 'communication-channel'
+  | 'delivery-surface'
   | 'approval-surface';
 
 export interface AdapterIdentity {

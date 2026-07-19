@@ -36,9 +36,9 @@ meeting-source adapter
   -> revision persistence and stabilization
   -> decision-processor adapter
   -> canonical decisions, actions, rationale, and evidence
-  -> channel-neutral brief
+  -> destination-neutral brief
   -> durable explicit approval of an exact brief snapshot
-  -> communication-channel adapter(s)
+  -> delivery-surface adapter(s)
   -> durable delivery receipt(s)
 ```
 
@@ -59,8 +59,8 @@ not share one vague `execute` operation. Each direction has a typed capability:
 - A decision-processor adapter transforms one canonical meeting revision into a
   canonical decision set with evidence.
 - An approval-surface adapter presents the exact staged brief snapshot and
-  returns an explicit approval decision without becoming a delivery channel.
-- A communication-channel adapter publishes an approved, channel-neutral
+  returns an explicit approval decision without becoming a delivery surface.
+- A delivery-surface adapter publishes an approved, destination-neutral
   delivery envelope and returns a delivery receipt.
 
 The interfaces and canonical records live in `src/core/**`. Adapter packages
@@ -174,7 +174,7 @@ src/
     decision-processors/
       <adapter-id>/
         index.ts
-    communication-channels/
+    delivery-surfaces/
       <adapter-id>/
         index.ts
   product/
@@ -210,7 +210,7 @@ The package also includes two vendor-neutral reference implementations:
   rationale lines. It demonstrates the processor contract without pretending
   to provide semantic extraction.
 - `jsonl-outbox` provides durable, idempotent local delivery. It demonstrates
-  channel receipt and retry behavior without becoming a team-channel model.
+  delivery receipt and retry behavior without becoming a team integration.
 
 ## Conformance requirements
 
@@ -229,7 +229,7 @@ test fake must pass the same contract fixtures. At minimum, the suite verifies:
 - no vendor-shaped values leaking into canonical required fields.
 
 The core end-to-end suite uses only fakes for meeting input, processing, and
-communication. A vendor-specific end-to-end test is an adapter qualification
+delivery. A vendor-specific end-to-end test is an adapter qualification
 test, not a core test.
 
 ## Extension checklists
@@ -258,21 +258,21 @@ test, not a core test.
 - Honor the operation `AbortSignal` and make late results disposable.
 - Pass the decision-processor conformance suite.
 
-### Communication channel
+### Delivery surface
 
-- Accept only approved, channel-neutral delivery envelopes.
+- Accept only approved, destination-neutral delivery envelopes.
 - Keep channel/workspace/thread identifiers inside adapter-owned destinations.
 - Honor the supplied idempotency key and return a durable external receipt.
 - Distinguish rejection, unknown outcome, rate limiting, and temporary failure.
 - Never mark an artifact delivered before external acknowledgement.
 - Honor the operation `AbortSignal`; retain idempotency when a timeout makes the
   external outcome unknown.
-- Pass the communication-channel conformance suite.
+- Pass the delivery-surface conformance suite.
 
 ### Project-management surface
 
 - Start with a typed capability proposal (for example issue creation or status
-  synchronization); do not overload the communication interface.
+  synchronization); do not overload the delivery-surface interface.
 - Define canonical command and receipt shapes without tool-specific fields.
 - Specify conflict, update, and reconciliation semantics before implementation.
 - Reuse common identity, provenance, idempotency, health, and error contracts.

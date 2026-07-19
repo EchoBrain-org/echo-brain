@@ -49,7 +49,7 @@ function config(credentialRef: string) {
       instance_id: 'primary',
       settings: {},
     },
-    communication_channels: [
+    delivery_surfaces: [
       {
         adapter_id: 'jsonl-outbox',
         instance_id: 'primary',

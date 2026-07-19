@@ -22,7 +22,7 @@ export interface DecisionBrief {
   };
 }
 
-export interface ChannelDestination {
+export interface DeliveryDestination {
   adapter_id: string;
   instance_id: string;
   external_id: string;
@@ -33,7 +33,7 @@ export interface DeliveryEnvelope {
   schema_version: 1;
   id: string;
   idempotency_key: string;
-  destination: ChannelDestination;
+  destination: DeliveryDestination;
   brief: DecisionBrief;
   approved_at: string;
 }

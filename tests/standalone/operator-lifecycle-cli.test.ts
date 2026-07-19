@@ -109,7 +109,7 @@ function fixtures(root: string, credentialRef?: string) {
           instance_id: 'primary',
           settings: {},
         },
-        communication_channels: [
+        delivery_surfaces: [
           {
             adapter_id: 'jsonl-outbox',
             instance_id: 'local',
@@ -226,7 +226,7 @@ describe('operator onboarding and lifecycle CLI', () => {
       `file:${report.credential_path}`,
     );
     expect(config.decision_processor.adapter_id).toBe('structured-text');
-    expect(config.communication_channels[0].adapter_id).toBe('jsonl-outbox');
+    expect(config.delivery_surfaces[0].adapter_id).toBe('jsonl-outbox');
 
     const repeated = await command(
       ['onboard', '--config', configPath, '--state-dir', stateDirectory],
@@ -555,7 +555,7 @@ describe('operator onboarding and lifecycle CLI', () => {
           status: 'healthy',
         }),
         expect.objectContaining({
-          kind: 'communication-channel',
+          kind: 'delivery-surface',
           status: 'healthy',
         }),
       ]),

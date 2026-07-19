@@ -36,10 +36,10 @@ function configuredAdapters(
       config: config.decision_processor,
       adapter: registry.getDecisionProcessor(config.decision_processor),
     },
-    ...config.communication_channels.map((adapterConfig) => ({
-      kind: 'communication-channel' as const,
+    ...config.delivery_surfaces.map((adapterConfig) => ({
+      kind: 'delivery-surface' as const,
       config: adapterConfig,
-      adapter: registry.getCommunicationChannel(adapterConfig),
+      adapter: registry.getDeliverySurface(adapterConfig),
     })),
     ...(config.approval_mode === 'adapter'
       ? [

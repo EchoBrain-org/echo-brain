@@ -10,7 +10,7 @@ import {
   type ApprovalDecision,
   type ApprovalGate,
   type ApprovalRequest,
-  type CommunicationChannelAdapter,
+  type DeliverySurfaceAdapter,
   type CoreStateStore,
   type DecisionExtractionContext,
   type DecisionProcessorAdapter,
@@ -170,10 +170,10 @@ class InvalidEvidenceProcessor extends ProcessorFake {
   }
 }
 
-class ChannelFake implements CommunicationChannelAdapter {
+class DeliverySurfaceFake implements DeliverySurfaceAdapter {
   readonly identity = {
-    kind: 'communication-channel' as const,
-    adapter_id: 'channel-alpha',
+    kind: 'delivery-surface' as const,
+    adapter_id: 'delivery-alpha',
     instance_id: 'team-primary',
     version: '1.0.0',
   };
@@ -202,7 +202,7 @@ class ChannelFake implements CommunicationChannelAdapter {
   }
 }
 
-class InvalidReceiptChannel extends ChannelFake {
+class InvalidReceiptDeliverySurface extends DeliverySurfaceFake {
   override async publish(envelope: DeliveryEnvelope): Promise<DeliveryReceipt> {
     this.envelopes.push(envelope);
     return {
@@ -216,14 +216,18 @@ class InvalidReceiptChannel extends ChannelFake {
   }
 }
 
-class UnauthorizedChannel extends ChannelFake {
+class UnauthorizedDeliverySurface extends DeliverySurfaceFake {
   override async publish(envelope: DeliveryEnvelope): Promise<DeliveryReceipt> {
     this.envelopes.push(envelope);
-    throw new AdapterError('unauthorized', 'channel credentials expired', false);
+    throw new AdapterError(
+      'unauthorized',
+      'delivery-surface credentials expired',
+      false,
+    );
   }
 }
 
-class HangingChannel extends ChannelFake {
+class HangingDeliverySurface extends DeliverySurfaceFake {
   observedSignal: AbortSignal | undefined;
   private announceStarted!: () => void;
   readonly started = new Promise<void>((resolve) => {
@@ -399,10 +403,10 @@ describe('tool-agnostic adapter registry', () => {
     const registry = new AdapterRegistry();
     const source = new SourceFake();
     const processor = new ProcessorFake();
-    const channel = new ChannelFake();
+    const surface = new DeliverySurfaceFake();
     registry.register(source);
     registry.register(processor);
-    registry.register(channel);
+    registry.register(surface);
 
     const settings = {};
     expect(
@@ -412,12 +416,12 @@ describe('tool-agnostic adapter registry', () => {
       registry.getDecisionProcessor({ adapter_id: 'processor-alpha', instance_id: 'primary', settings }),
     ).toBe(processor);
     expect(
-      registry.getCommunicationChannel({
-        adapter_id: 'channel-alpha',
+      registry.getDeliverySurface({
+        adapter_id: 'delivery-alpha',
         instance_id: 'team-primary',
         settings,
       }),
-    ).toBe(channel);
+    ).toBe(surface);
     expect(() => registry.register(source)).toThrow(/already registered/);
   });
 });
@@ -429,7 +433,7 @@ describe('tool-agnostic core cycle', () => {
       runCoreCycle({
         meetingSource: new InvalidCursorSource(),
         decisionProcessor: new ProcessorFake(),
-        communicationChannels: [new ChannelFake()],
+        deliverySurfaces: [new DeliverySurfaceFake()],
         approvalGate: new GateFake('approved'),
         state,
       }),
@@ -441,12 +445,12 @@ describe('tool-agnostic core cycle', () => {
   it('processes an approved revision and stores an idempotent delivery receipt', async () => {
     const source = new SourceFake();
     const processor = new ProcessorFake();
-    const channel = new ChannelFake();
+    const surface = new DeliverySurfaceFake();
     const state = new StateFake();
     const result = await runCoreCycle({
       meetingSource: source,
       decisionProcessor: processor,
-      communicationChannels: [channel],
+      deliverySurfaces: [surface],
       approvalGate: new GateFake('approved'),
       state,
       now: () => '2026-07-16T17:03:30.000Z',
@@ -468,9 +472,9 @@ describe('tool-agnostic core cycle', () => {
     expect(state.meetings).toEqual([meeting]);
     expect(state.decisions).toHaveLength(1);
     expect(state.receipts).toHaveLength(1);
-    expect(channel.envelopes[0]!.brief.decisions[0]!.text).toBe('Ship the adapter contract');
+    expect(surface.envelopes[0]!.brief.decisions[0]!.text).toBe('Ship the adapter contract');
     const deliveryParts = JSON.parse(
-      channel.envelopes[0]!.idempotency_key.slice('delivery:v1:'.length),
+      surface.envelopes[0]!.idempotency_key.slice('delivery:v1:'.length),
     ) as string[];
     const processingParts = JSON.parse(
       deliveryParts[0]!.slice('processing:v1:'.length),
@@ -484,28 +488,28 @@ describe('tool-agnostic core cycle', () => {
   });
 
   it('records a rejection without publishing', async () => {
-    const channel = new ChannelFake();
+    const surface = new DeliverySurfaceFake();
     const state = new StateFake();
     const result = await runCoreCycle({
       meetingSource: new SourceFake(),
       decisionProcessor: new ProcessorFake(),
-      communicationChannels: [channel],
+      deliverySurfaces: [surface],
       approvalGate: new GateFake('rejected'),
       state,
     });
 
     expect(result).toMatchObject({ ok: true, meetings_rejected: 1, deliveries: 0 });
-    expect(channel.envelopes).toHaveLength(0);
+    expect(surface.envelopes).toHaveLength(0);
     expect(state.processed.size).toBe(1);
   });
 
   it('keeps the source cursor pinned while manual approval is pending', async () => {
-    const channel = new ChannelFake();
+    const surface = new DeliverySurfaceFake();
     const state = new StateFake();
     const result = await runCoreCycle({
       meetingSource: new SourceFake(),
       decisionProcessor: new ProcessorFake(),
-      communicationChannels: [channel],
+      deliverySurfaces: [surface],
       approvalGate: new PendingGateFake(),
       state,
     });
@@ -517,7 +521,7 @@ describe('tool-agnostic core cycle', () => {
       deliveries: 0,
       cursor_advanced: false,
     });
-    expect(channel.envelopes).toHaveLength(0);
+    expect(surface.envelopes).toHaveLength(0);
     expect(state.processed.size).toBe(0);
     expect(state.cursor).toBe('cursor-1');
   });
@@ -525,19 +529,19 @@ describe('tool-agnostic core cycle', () => {
   it('reuses the persisted decision set while a pending approval resumes', async () => {
     const source = new SourceFake();
     const processor = new ProcessorFake();
-    const channel = new ChannelFake();
+    const surface = new DeliverySurfaceFake();
     const state = new StateFake();
     await runCoreCycle({
       meetingSource: source,
       decisionProcessor: processor,
-      communicationChannels: [channel],
+      deliverySurfaces: [surface],
       approvalGate: new PendingGateFake(),
       state,
     });
     const resumed = await runCoreCycle({
       meetingSource: source,
       decisionProcessor: processor,
-      communicationChannels: [channel],
+      deliverySurfaces: [surface],
       approvalGate: new GateFake('approved'),
       state,
     });
@@ -548,13 +552,13 @@ describe('tool-agnostic core cycle', () => {
   });
 
   it('does not mark or advance a revision whose delivery is unresolved', async () => {
-    const channel = new ChannelFake();
-    channel.nextStatus = 'unknown';
+    const surface = new DeliverySurfaceFake();
+    surface.nextStatus = 'unknown';
     const state = new StateFake();
     const result = await runCoreCycle({
       meetingSource: new SourceFake(),
       decisionProcessor: new ProcessorFake(),
-      communicationChannels: [channel],
+      deliverySurfaces: [surface],
       approvalGate: new GateFake('approved'),
       state,
     });
@@ -573,7 +577,7 @@ describe('tool-agnostic core cycle', () => {
     const result = await runCoreCycle({
       meetingSource: new SourceFake(),
       decisionProcessor: new InvalidEvidenceProcessor(),
-      communicationChannels: [new ChannelFake()],
+      deliverySurfaces: [new DeliverySurfaceFake()],
       approvalGate: new GateFake('approved'),
       state,
     });
@@ -591,7 +595,7 @@ describe('tool-agnostic core cycle', () => {
     const result = await runCoreCycle({
       meetingSource: new SourceFake(),
       decisionProcessor: new ProcessorFake(),
-      communicationChannels: [new InvalidReceiptChannel()],
+      deliverySurfaces: [new InvalidReceiptDeliverySurface()],
       approvalGate: new GateFake('approved'),
       state,
     });
@@ -609,7 +613,7 @@ describe('tool-agnostic core cycle', () => {
     const result = await runCoreCycle({
       meetingSource: new SourceFake(),
       decisionProcessor: new ProcessorFake(),
-      communicationChannels: [new ChannelFake()],
+      deliverySurfaces: [new DeliverySurfaceFake()],
       approvalGate: new InvalidRejectedGate(),
       state,
     });
@@ -623,11 +627,11 @@ describe('tool-agnostic core cycle', () => {
 
   it('does not publish a malformed approved brief', async () => {
     const state = new StateFake();
-    const channel = new ChannelFake();
+    const surface = new DeliverySurfaceFake();
     const result = await runCoreCycle({
       meetingSource: new SourceFake(),
       decisionProcessor: new ProcessorFake(),
-      communicationChannels: [channel],
+      deliverySurfaces: [surface],
       approvalGate: new InvalidApprovedBriefGate(),
       state,
     });
@@ -636,7 +640,7 @@ describe('tool-agnostic core cycle', () => {
     expect(result.failures).toEqual([
       expect.objectContaining({ stage: 'approval', meeting_id: 'meeting-1' }),
     ]);
-    expect(channel.envelopes).toHaveLength(0);
+    expect(surface.envelopes).toHaveLength(0);
     expect(state.processed.size).toBe(0);
   });
 
@@ -645,7 +649,7 @@ describe('tool-agnostic core cycle', () => {
     const result = await runCoreCycle({
       meetingSource: new SourceFake(),
       decisionProcessor: new ProcessorFake(),
-      communicationChannels: [new UnauthorizedChannel()],
+      deliverySurfaces: [new UnauthorizedDeliverySurface()],
       approvalGate: new GateFake('approved'),
       state,
     });
@@ -659,13 +663,13 @@ describe('tool-agnostic core cycle', () => {
     expect(state.processed.size).toBe(0);
   });
 
-  it('bounds a non-settling channel operation and aborts its adapter context', async () => {
-    const channel = new HangingChannel();
+  it('bounds a non-settling delivery-surface operation and aborts its adapter context', async () => {
+    const surface = new HangingDeliverySurface();
     const state = new StateFake();
     const result = await runCoreCycle({
       meetingSource: new SourceFake(),
       decisionProcessor: new ProcessorFake(),
-      communicationChannels: [channel],
+      deliverySurfaces: [surface],
       approvalGate: new GateFake('approved'),
       state,
       deadlines: { publishMs: 5 },
@@ -673,69 +677,69 @@ describe('tool-agnostic core cycle', () => {
 
     expect(result).toMatchObject({ ok: false, cursor_advanced: false });
     expect(result.failures[0]?.message).toMatch(/timed out/);
-    expect(channel.observedSignal?.aborted).toBe(true);
+    expect(surface.observedSignal?.aborted).toBe(true);
     expect(state.processed.size).toBe(0);
   });
 
   it('propagates host cancellation into an active adapter operation', async () => {
-    const channel = new HangingChannel();
+    const surface = new HangingDeliverySurface();
     const controller = new AbortController();
     const cycle = runCoreCycle({
       meetingSource: new SourceFake(),
       decisionProcessor: new ProcessorFake(),
-      communicationChannels: [channel],
+      deliverySurfaces: [surface],
       approvalGate: new GateFake('approved'),
       state: new StateFake(),
       signal: controller.signal,
     });
-    await channel.started;
+    await surface.started;
     controller.abort(new Error('test shutdown'));
     const result = await cycle;
 
     expect(result).toMatchObject({ ok: false, cursor_advanced: false });
     expect(result.failures[0]?.message).toBe('test shutdown');
-    expect(channel.observedSignal?.aborted).toBe(true);
+    expect(surface.observedSignal?.aborted).toBe(true);
   });
 
   it('reuses one persisted approved snapshot and delivery key across retries', async () => {
-    const channel = new ChannelFake();
+    const surface = new DeliverySurfaceFake();
     const gate = new GateFake('approved');
     const state = new StateFake();
-    channel.nextStatus = 'unknown';
+    surface.nextStatus = 'unknown';
     await runCoreCycle({
       meetingSource: new SourceFake(),
       decisionProcessor: new ProcessorFake(),
-      communicationChannels: [channel],
+      deliverySurfaces: [surface],
       approvalGate: gate,
       state,
     });
-    channel.nextStatus = 'delivered';
+    surface.nextStatus = 'delivered';
     const resumed = await runCoreCycle({
       meetingSource: new SourceFake(),
       decisionProcessor: new ProcessorFake(),
-      communicationChannels: [channel],
+      deliverySurfaces: [surface],
       approvalGate: gate,
       state,
     });
 
     expect(gate.requests).toHaveLength(1);
-    expect(channel.envelopes).toHaveLength(2);
-    expect(channel.envelopes[1]!.brief).toEqual(channel.envelopes[0]!.brief);
-    expect(channel.envelopes[1]!.idempotency_key).toBe(
-      channel.envelopes[0]!.idempotency_key,
+    expect(surface.envelopes).toHaveLength(2);
+    expect(surface.envelopes[1]!.brief).toEqual(surface.envelopes[0]!.brief);
+    expect(surface.envelopes[1]!.idempotency_key).toBe(
+      surface.envelopes[0]!.idempotency_key,
     );
     expect(resumed).toMatchObject({ ok: true, meetings_processed: 1 });
   });
 
   it('dead-letters a permanent delivery rejection and advances the batch', async () => {
-    const channel = new ChannelFake();
-    channel.nextStatus = 'rejected';
-    channel.nextRetryable = false;
+    const surface = new DeliverySurfaceFake();
+    surface.nextStatus = 'rejected';
+    surface.nextRetryable = false;
     const state = new StateFake();
     const result = await runCoreCycle({
       meetingSource: new SourceFake(),
       decisionProcessor: new ProcessorFake(),
-      communicationChannels: [channel],
+      deliverySurfaces: [surface],
       approvalGate: new GateFake('approved'),
       state,
     });
@@ -749,8 +753,8 @@ describe('tool-agnostic core cycle', () => {
       dead_letters: [
         {
           meeting_id: 'meeting-1',
-          channel_adapter_id: 'channel-alpha',
-          channel_instance_id: 'team-primary',
+          delivery_surface_adapter_id: 'delivery-alpha',
+          delivery_surface_instance_id: 'team-primary',
         },
       ],
     });

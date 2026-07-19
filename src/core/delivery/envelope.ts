@@ -4,7 +4,7 @@ import type {
   DeliveryEnvelope,
   DeliveryReceipt,
 } from '../contracts/delivery.js';
-import type { CommunicationChannelAdapter } from '../ports/adapters.js';
+import type { DeliverySurfaceAdapter } from '../ports/adapters.js';
 
 function canonicalJson(value: unknown): string {
   if (value === null) return 'null';
@@ -30,36 +30,44 @@ export function approvedBriefDigest(brief: DecisionBrief): string {
 
 export function deliveryIdempotencyKey(
   processingKey: string,
-  channel: CommunicationChannelAdapter,
+  deliverySurface: DeliverySurfaceAdapter,
   brief: DecisionBrief,
 ): string {
   return `delivery:v1:${JSON.stringify([
     processingKey,
     approvedBriefDigest(brief),
-    channel.identity.adapter_id,
-    channel.identity.instance_id,
-    channel.destination.external_id,
+    deliverySurface.identity.adapter_id,
+    deliverySurface.identity.instance_id,
+    deliverySurface.destination.external_id,
   ])}`;
 }
 
 export function createDeliveryEnvelope(
   id: string,
   processingKey: string,
-  channel: CommunicationChannelAdapter,
+  deliverySurface: DeliverySurfaceAdapter,
   brief: DecisionBrief,
   approvedAt: string,
 ): DeliveryEnvelope {
   if (
-    channel.destination.adapter_id !== channel.identity.adapter_id ||
-    channel.destination.instance_id !== channel.identity.instance_id
+    deliverySurface.destination.adapter_id !==
+      deliverySurface.identity.adapter_id ||
+    deliverySurface.destination.instance_id !==
+      deliverySurface.identity.instance_id
   ) {
-    throw new Error('channel destination does not match the configured adapter instance');
+    throw new Error(
+      'delivery-surface destination does not match the configured adapter instance',
+    );
   }
   return {
     schema_version: 1,
     id,
-    idempotency_key: deliveryIdempotencyKey(processingKey, channel, brief),
-    destination: channel.destination,
+    idempotency_key: deliveryIdempotencyKey(
+      processingKey,
+      deliverySurface,
+      brief,
+    ),
+    destination: deliverySurface.destination,
     brief,
     approved_at: approvedAt,
   };
@@ -86,6 +94,8 @@ export function assertDeliveryReceipt(
         receipt.external_id.trim() === '' ||
         receipt.retryable))
   ) {
-    throw new Error('communication-channel adapter returned an invalid delivery receipt');
+    throw new Error(
+      'delivery-surface adapter returned an invalid delivery receipt',
+    );
   }
 }

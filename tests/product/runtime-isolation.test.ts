@@ -21,7 +21,7 @@ import {
 import { prepareProductComposition } from '../../src/product/composition.js';
 import {
   AdapterRegistry,
-  type CommunicationChannelAdapter,
+  type DeliverySurfaceAdapter,
   type DecisionProcessorAdapter,
   type MeetingSourceAdapter,
 } from '../../src/core/index.js';
@@ -31,7 +31,7 @@ const COMPONENTS: readonly ProductComponentName[] = [
   'meeting-ingestion',
   'decision-processing',
   'manual-approval',
-  'communication-delivery',
+  'delivery',
   'product-health',
 ];
 const directories: string[] = [];
@@ -55,11 +55,11 @@ function config() {
       credential_ref: 'env:DECISION_PROCESSOR_KEY',
       settings: {},
     },
-    communication_channels: [
+    delivery_surfaces: [
       {
-        adapter_id: 'fixture-channel',
+        adapter_id: 'fixture-delivery',
         instance_id: 'team',
-        credential_ref: 'env:COMMUNICATION_CHANNEL_KEY',
+        credential_ref: 'env:DELIVERY_SURFACE_KEY',
         settings: {},
       },
     ],
@@ -89,7 +89,7 @@ interface RegisteredFixtures {
   registry: AdapterRegistry;
   meetingSource: MeetingSourceAdapter;
   decisionProcessor: DecisionProcessorAdapter;
-  communicationChannel: CommunicationChannelAdapter;
+  deliverySurface: DeliverySurfaceAdapter;
 }
 
 function registeredFixtures(): RegisteredFixtures {
@@ -128,15 +128,15 @@ function registeredFixtures(): RegisteredFixtures {
       signals: [],
     }),
   };
-  const communicationChannel: CommunicationChannelAdapter = {
+  const deliverySurface: DeliverySurfaceAdapter = {
     identity: {
-      kind: 'communication-channel',
-      adapter_id: 'fixture-channel',
+      kind: 'delivery-surface',
+      adapter_id: 'fixture-delivery',
       instance_id: 'team',
       version: '1.0.0',
     },
     destination: {
-      adapter_id: 'fixture-channel',
+      adapter_id: 'fixture-delivery',
       instance_id: 'team',
       external_id: 'synthetic-team',
     },
@@ -153,8 +153,8 @@ function registeredFixtures(): RegisteredFixtures {
   };
   registry.register(meetingSource);
   registry.register(decisionProcessor);
-  registry.register(communicationChannel);
-  return { registry, meetingSource, decisionProcessor, communicationChannel };
+  registry.register(deliverySurface);
+  return { registry, meetingSource, decisionProcessor, deliverySurface };
 }
 
 function dependencies(
@@ -185,9 +185,9 @@ function fixtureFactories(
     create: () => fixtures.decisionProcessor,
   });
   factories.register({
-    kind: 'communication-channel',
-    adapter_id: fixtures.communicationChannel.identity.adapter_id,
-    create: () => fixtures.communicationChannel,
+    kind: 'delivery-surface',
+    adapter_id: fixtures.deliverySurface.identity.adapter_id,
+    create: () => fixtures.deliverySurface,
   });
   return factories;
 }
@@ -267,8 +267,8 @@ describe('isolated product runtime', () => {
         expect(context.adapters.decisionProcessor).toBe(
           fixtures.decisionProcessor,
         );
-        expect(context.adapters.communicationChannels).toEqual([
-          fixtures.communicationChannel,
+        expect(context.adapters.deliverySurfaces).toEqual([
+          fixtures.deliverySurface,
         ]);
         return { stop: async () => void stops.push('decision-processing') };
       },
@@ -313,7 +313,7 @@ describe('isolated product runtime', () => {
     expect(result.error.details).toEqual([
       "meeting-source adapter 'fixture-meetings' instance 'primary' is unavailable",
       "decision-processor adapter 'fixture-processor' instance 'primary' is unavailable",
-      "communication-channel adapter 'fixture-channel' instance 'team' is unavailable",
+      "delivery-surface adapter 'fixture-delivery' instance 'team' is unavailable",
     ]);
     expect(probes).toBe(0);
     expect(starts).toEqual([]);
@@ -329,7 +329,7 @@ describe('isolated product runtime', () => {
       ok: false,
       errors: ['model setting is unsupported'],
     });
-    fixtures.communicationChannel.validateConfig = () => ({
+    fixtures.deliverySurface.validateConfig = () => ({
       ok: false,
       errors: [],
     });
@@ -351,10 +351,10 @@ describe('isolated product runtime', () => {
     expect(result.error.details).toEqual([
       "meeting-source adapter 'fixture-meetings' instance 'primary': workspace setting is required",
       "decision-processor adapter 'fixture-processor' instance 'primary': model setting is unsupported",
-      "communication-channel adapter 'fixture-channel' instance 'team': configuration is invalid",
+      "delivery-surface adapter 'fixture-delivery' instance 'team': configuration is invalid",
     ]);
     expect(JSON.stringify(result.error)).not.toMatch(
-      /MEETING_SOURCE_KEY|DECISION_PROCESSOR_KEY|COMMUNICATION_CHANNEL_KEY/,
+      /MEETING_SOURCE_KEY|DECISION_PROCESSOR_KEY|DELIVERY_SURFACE_KEY/,
     );
     expect(probes).toBe(0);
     expect(starts).toEqual([]);

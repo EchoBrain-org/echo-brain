@@ -15,7 +15,7 @@ export interface AdapterConformanceOptions<T extends Adapter> {
 
 /**
  * Shared lifecycle contract for every adapter implementation. Capability
- * suites build on this helper with source-, processor-, or channel-specific
+ * suites build on this helper with source-, processor-, or delivery-specific
  * fixtures.
  */
 export function adapterConformance<T extends Adapter>(

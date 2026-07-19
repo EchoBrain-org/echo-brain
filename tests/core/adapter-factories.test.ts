@@ -23,8 +23,8 @@ function config(adapterId = 'meeting-fixture') {
       instance_id: 'primary',
       settings: {},
     },
-    communication_channels: [
-      { adapter_id: 'channel-fixture', instance_id: 'primary', settings: {} },
+    delivery_surfaces: [
+      { adapter_id: 'delivery-fixture', instance_id: 'primary', settings: {} },
     ],
     approval_mode: 'manual',
   });
@@ -82,11 +82,11 @@ describe('product adapter factories', () => {
       }),
     });
     factories.register({
-      kind: 'communication-channel',
-      adapter_id: 'channel-fixture',
+      kind: 'delivery-surface',
+      adapter_id: 'delivery-fixture',
       create: (adapterConfig) => ({
         identity: {
-          kind: 'communication-channel',
+          kind: 'delivery-surface',
           adapter_id: adapterConfig.adapter_id,
           instance_id: adapterConfig.instance_id,
           version: '1',

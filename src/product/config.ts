@@ -19,7 +19,7 @@ interface ProductRuntimeConfigBase {
   state_dir: string;
   meeting_sources: readonly AdapterInstanceConfig[];
   decision_processor: AdapterInstanceConfig;
-  communication_channels: readonly AdapterInstanceConfig[];
+  delivery_surfaces: readonly AdapterInstanceConfig[];
   cycle_interval_ms?: number;
   extraction_timeout_ms?: number;
 }
@@ -162,18 +162,18 @@ export function validateProductRuntimeConfig(
     ]);
   }
   const duplicateSources = duplicateAdapterInstances(value.meeting_sources);
-  const duplicateChannels = duplicateAdapterInstances(
-    value.communication_channels,
+  const duplicateSurfaces = duplicateAdapterInstances(
+    value.delivery_surfaces,
   );
-  if (duplicateSources.length > 0 || duplicateChannels.length > 0) {
+  if (duplicateSources.length > 0 || duplicateSurfaces.length > 0) {
     throw new ProductConfigError('invalid product runtime configuration', [
       ...duplicateSources.map(
         (key) =>
           `/meeting_sources contains duplicate adapter instance '${key}'`,
       ),
-      ...duplicateChannels.map(
+      ...duplicateSurfaces.map(
         (key) =>
-          `/communication_channels contains duplicate adapter instance '${key}'`,
+          `/delivery_surfaces contains duplicate adapter instance '${key}'`,
       ),
     ]);
   }
@@ -183,8 +183,8 @@ export function validateProductRuntimeConfig(
       config,
     })),
     { path: '/decision_processor', config: value.decision_processor },
-    ...value.communication_channels.map((config, index) => ({
-      path: `/communication_channels/${index}`,
+    ...value.delivery_surfaces.map((config, index) => ({
+      path: `/delivery_surfaces/${index}`,
       config,
     })),
     ...(value.approval_surface === undefined
@@ -206,8 +206,8 @@ export function validateProductRuntimeConfig(
       value.meeting_sources.map(freezeAdapterConfig),
     ),
     decision_processor: freezeAdapterConfig(value.decision_processor),
-    communication_channels: Object.freeze(
-      value.communication_channels.map(freezeAdapterConfig),
+    delivery_surfaces: Object.freeze(
+      value.delivery_surfaces.map(freezeAdapterConfig),
     ),
     ...(value.approval_surface === undefined
       ? {}

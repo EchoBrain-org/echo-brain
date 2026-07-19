@@ -105,8 +105,8 @@ export async function createConfiguredAdapterRegistry(
       config: adapterConfig,
     })),
     { kind: 'decision-processor', config: config.decision_processor },
-    ...config.communication_channels.map((adapterConfig) => ({
-      kind: 'communication-channel' as const,
+    ...config.delivery_surfaces.map((adapterConfig) => ({
+      kind: 'delivery-surface' as const,
       config: adapterConfig,
     })),
     ...(config.approval_mode === 'adapter'

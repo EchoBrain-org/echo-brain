@@ -72,7 +72,7 @@ function allAdapters(adapters: ProductRuntimeAdapters) {
   return [
     ...adapters.meetingSources,
     adapters.decisionProcessor,
-    ...adapters.communicationChannels,
+    ...adapters.deliverySurfaces,
     ...(adapters.approvalSurface === undefined ? [] : [adapters.approvalSurface]),
   ];
 }
@@ -231,7 +231,7 @@ export async function prepareProductComposition(
         const result = await runCoreCycle({
           meetingSource: source,
           decisionProcessor: adapters.decisionProcessor,
-          communicationChannels: adapters.communicationChannels,
+          deliverySurfaces: adapters.deliverySurfaces,
           approvalGate,
           state,
           now,

@@ -13,7 +13,7 @@ import {
   createDeliveryEnvelope,
 } from '../delivery/envelope.js';
 import type {
-  CommunicationChannelAdapter,
+  DeliverySurfaceAdapter,
   DecisionProcessorAdapter,
   MeetingSourceAdapter,
 } from '../ports/adapters.js';
@@ -23,7 +23,7 @@ import { compileDecisionBrief } from './brief.js';
 export interface CoreCycleDependencies {
   meetingSource: MeetingSourceAdapter;
   decisionProcessor: DecisionProcessorAdapter;
-  communicationChannels: readonly CommunicationChannelAdapter[];
+  deliverySurfaces: readonly DeliverySurfaceAdapter[];
   approvalGate: ApprovalGate;
   state: CoreStateStore;
   now?: () => string;
@@ -89,8 +89,8 @@ export interface CoreCycleFailure {
 
 export interface CoreCycleDeadLetter {
   meeting_id: string;
-  channel_adapter_id: string;
-  channel_instance_id: string;
+  delivery_surface_adapter_id: string;
+  delivery_surface_instance_id: string;
   message: string;
 }
 
@@ -144,8 +144,8 @@ export async function runCoreCycle(
   dependencies: CoreCycleDependencies,
   request: MeetingPullRequest = {},
 ): Promise<CoreCycleResult> {
-  if (dependencies.communicationChannels.length === 0) {
-    throw new Error('at least one communication-channel adapter is required');
+  if (dependencies.deliverySurfaces.length === 0) {
+    throw new Error('at least one delivery-surface adapter is required');
   }
   const now = dependencies.now ?? (() => new Date().toISOString());
   const createId = dependencies.createId ?? randomUUID;
@@ -250,7 +250,7 @@ export async function runCoreCycle(
         });
         await dependencies.state.saveApproval(processingKey, reviewed);
         // Re-read after the monotonic save so concurrent cycles use the same
-        // winning resolved snapshot instead of diverging across channels.
+        // winning resolved snapshot instead of diverging across delivery surfaces.
         approval =
           (await dependencies.state.getApproval(processingKey)) ?? reviewed;
       }
@@ -271,20 +271,21 @@ export async function runCoreCycle(
       stage = 'delivery';
       let retryableDeliveryFailed = false;
       let terminalDeliveryFailed = false;
-      for (const channel of dependencies.communicationChannels) {
+      for (const deliverySurface of dependencies.deliverySurfaces) {
         const envelope = createDeliveryEnvelope(
           createId(),
           processingKey,
-          channel,
+          deliverySurface,
           approval.approved_brief,
           approval.reviewed_at,
         );
         try {
           const receipt = await runBounded(
-            'communication-channel publish',
+            'delivery-surface publish',
             deadlines.publishMs,
             dependencies.signal,
-            async (signal) => await channel.publish(envelope, { signal }),
+            async (signal) =>
+              await deliverySurface.publish(envelope, { signal }),
           );
           assertDeliveryReceipt(envelope, receipt);
           await dependencies.state.saveDeliveryReceipt(envelope, receipt);
@@ -295,8 +296,10 @@ export async function runCoreCycle(
               terminalDeliveryFailed = true;
               deadLetters.push({
                 meeting_id: meeting.id,
-                channel_adapter_id: channel.identity.adapter_id,
-                channel_instance_id: channel.identity.instance_id,
+                delivery_surface_adapter_id:
+                  deliverySurface.identity.adapter_id,
+                delivery_surface_instance_id:
+                  deliverySurface.identity.instance_id,
                 message,
               });
             } else {

@@ -8,7 +8,7 @@
     "src/adapters/meeting-sources/granola/index.ts",
     "src/adapters/decision-processors/structured-text/index.ts",
     "src/adapters/decision-processors/llm/index.ts",
-    "src/adapters/communication-channels/jsonl-outbox/index.ts",
+    "src/adapters/delivery-surfaces/jsonl-outbox/index.ts",
     "src/adapters/approval-surfaces/slack-reactions/index.ts"
   ],
   "allowed_internal_paths": [
@@ -39,13 +39,15 @@
     "src/surfaces/ceo-slack-responder/",
     "src/enrich/",
     "src/adapters/meeting-sources/granola/compatibility/",
+    "src/adapters/communication-channels/",
     "src/cli/commands/orchestration.ts"
   ],
   "removed_internal_roots": [
     "src/capture/",
     "src/echo-home/",
     "src/enrich/",
-    "src/adapters/meeting-sources/granola/compatibility/"
+    "src/adapters/meeting-sources/granola/compatibility/",
+    "src/adapters/communication-channels/"
   ],
   "allowed_external_runtime_packages": [
     "ajv",

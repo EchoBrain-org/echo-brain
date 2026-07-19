@@ -8,7 +8,7 @@ import type {
   DecisionSet,
 } from '../contracts/decision.js';
 import type {
-  ChannelDestination,
+  DeliveryDestination,
   DeliveryEnvelope,
   DeliveryReceipt,
 } from '../contracts/delivery.js';
@@ -36,9 +36,9 @@ export interface DecisionProcessorAdapter extends Adapter {
   ): Promise<DecisionSet>;
 }
 
-export interface CommunicationChannelAdapter extends Adapter {
-  readonly identity: AdapterIdentity & { kind: 'communication-channel' };
-  readonly destination: ChannelDestination;
+export interface DeliverySurfaceAdapter extends Adapter {
+  readonly identity: AdapterIdentity & { kind: 'delivery-surface' };
+  readonly destination: DeliveryDestination;
   publish(
     envelope: DeliveryEnvelope,
     context?: AdapterOperationContext,
@@ -52,5 +52,5 @@ export interface ApprovalSurfaceAdapter extends Adapter, ApprovalGate {
 export type AnyAdapter =
   | MeetingSourceAdapter
   | DecisionProcessorAdapter
-  | CommunicationChannelAdapter
+  | DeliverySurfaceAdapter
   | ApprovalSurfaceAdapter;

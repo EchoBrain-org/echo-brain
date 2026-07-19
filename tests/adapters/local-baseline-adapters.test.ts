@@ -12,9 +12,9 @@ import {
   StructuredTextDecisionProcessor,
 } from '../../src/adapters/decision-processors/structured-text/index.js';
 import {
-  JsonlOutboxCommunicationChannel,
+  JsonlOutboxDeliverySurface,
   type JsonlOutboxRecord,
-} from '../../src/adapters/communication-channels/jsonl-outbox/index.js';
+} from '../../src/adapters/delivery-surfaces/jsonl-outbox/index.js';
 import { adapterConformance } from '../core/adapter-conformance.js';
 
 const processorConfig: AdapterConfig = {
@@ -231,7 +231,7 @@ function decisionBrief(id: string): DecisionBrief {
 }
 
 function envelopeFor(
-  channel: JsonlOutboxCommunicationChannel,
+  surface: JsonlOutboxDeliverySurface,
   id: string,
   idempotencyKey = 'delivery:fixture:jsonl-outbox:local',
 ): DeliveryEnvelope {
@@ -239,7 +239,7 @@ function envelopeFor(
     schema_version: 1,
     id,
     idempotency_key: idempotencyKey,
-    destination: channel.destination,
+    destination: surface.destination,
     brief: decisionBrief(`brief-${id}`),
     approved_at: '2026-07-16T17:03:00.000Z',
   };
@@ -252,10 +252,10 @@ afterEach(async () => {
 });
 
 adapterConformance({
-  name: 'JSONL outbox communication channel',
-  kind: 'communication-channel',
+  name: 'JSONL outbox delivery surface',
+  kind: 'delivery-surface',
   create: () =>
-    new JsonlOutboxCommunicationChannel(
+    new JsonlOutboxDeliverySurface(
       outboxConfig(join(tmpdir(), `echo-brain-outbox-conformance-${process.pid}.jsonl`)),
       { now: () => '2026-07-16T17:02:00.000Z' },
     ),
@@ -270,15 +270,15 @@ adapterConformance({
   },
 });
 
-describe('JSONL outbox communication channel', () => {
+describe('JSONL outbox delivery surface', () => {
   it('honors cancellation before touching the outbox', async () => {
     const outbox = await temporaryOutbox();
-    const channel = new JsonlOutboxCommunicationChannel(outboxConfig(outbox.path));
+    const surface = new JsonlOutboxDeliverySurface(outboxConfig(outbox.path));
     const controller = new AbortController();
     controller.abort(new Error('shutdown'));
 
     await expect(
-      channel.publish(envelopeFor(channel, 'cancelled'), {
+      surface.publish(envelopeFor(surface, 'cancelled'), {
         signal: controller.signal,
       }),
     ).rejects.toMatchObject({ code: 'timeout', retryable: true });
@@ -287,11 +287,11 @@ describe('JSONL outbox communication channel', () => {
 
   it('durably appends an approved envelope with a stable receipt and private permissions', async () => {
     const outbox = await temporaryOutbox();
-    const channel = new JsonlOutboxCommunicationChannel(outboxConfig(outbox.path), {
+    const surface = new JsonlOutboxDeliverySurface(outboxConfig(outbox.path), {
       now: () => '2026-07-16T17:04:00.000Z',
     });
-    const envelope = envelopeFor(channel, 'envelope-1');
-    const receipt = await channel.publish(envelope);
+    const envelope = envelopeFor(surface, 'envelope-1');
+    const receipt = await surface.publish(envelope);
     const record = JSON.parse((await readFile(outbox.path, 'utf8')).trim()) as JsonlOutboxRecord;
 
     expect(receipt).toEqual({
@@ -317,17 +317,17 @@ describe('JSONL outbox communication channel', () => {
   it('deduplicates the idempotency key across concurrent adapter instances and restarts', async () => {
     const outbox = await temporaryOutbox();
     const config = outboxConfig(outbox.path);
-    const first = new JsonlOutboxCommunicationChannel(config, {
+    const first = new JsonlOutboxDeliverySurface(config, {
       now: () => '2026-07-16T17:04:00.000Z',
     });
-    const second = new JsonlOutboxCommunicationChannel(config, {
+    const second = new JsonlOutboxDeliverySurface(config, {
       now: () => '2026-07-16T18:04:00.000Z',
     });
     const [firstReceipt, secondReceipt] = await Promise.all([
       first.publish(envelopeFor(first, 'attempt-1')),
       second.publish(envelopeFor(second, 'attempt-2')),
     ]);
-    const restarted = new JsonlOutboxCommunicationChannel(config, {
+    const restarted = new JsonlOutboxDeliverySurface(config, {
       now: () => '2026-07-17T18:04:00.000Z',
     });
     const restartReceipt = await restarted.publish(envelopeFor(restarted, 'attempt-3'));
@@ -351,7 +351,7 @@ describe('JSONL outbox communication channel', () => {
     const link = join(outbox.directory, 'link.jsonl');
     await writeFile(target, '', { mode: 0o600 });
     await symlink(target, link);
-    const linked = new JsonlOutboxCommunicationChannel(outboxConfig(link));
+    const linked = new JsonlOutboxDeliverySurface(outboxConfig(link));
     expect(await linked.healthCheck()).toMatchObject({ status: 'unavailable' });
     await expect(linked.publish(envelopeFor(linked, 'linked'))).rejects.toMatchObject({
       code: 'permanently_rejected',
@@ -359,7 +359,7 @@ describe('JSONL outbox communication channel', () => {
     });
 
     await writeFile(outbox.path, 'not-json\n', { mode: 0o600 });
-    const malformed = new JsonlOutboxCommunicationChannel(outboxConfig(outbox.path));
+    const malformed = new JsonlOutboxDeliverySurface(outboxConfig(outbox.path));
     await expect(malformed.publish(envelopeFor(malformed, 'malformed'))).rejects.toMatchObject({
       code: 'permanently_rejected',
       retryable: false,
@@ -369,19 +369,19 @@ describe('JSONL outbox communication channel', () => {
   it('repairs only an incomplete final line left by an interrupted append', async () => {
     const outbox = await temporaryOutbox();
     const config = outboxConfig(outbox.path);
-    const channel = new JsonlOutboxCommunicationChannel(config, {
+    const surface = new JsonlOutboxDeliverySurface(config, {
       now: () => '2026-07-16T17:04:00.000Z',
     });
-    const first = envelopeFor(channel, 'first', 'delivery:first');
-    await channel.publish(first);
+    const first = envelopeFor(surface, 'first', 'delivery:first');
+    await surface.publish(first);
     await writeFile(outbox.path, '{"partial":', { flag: 'a', mode: 0o600 });
 
-    const second = envelopeFor(channel, 'second', 'delivery:second');
-    await expect(channel.publish(second)).rejects.toMatchObject({
+    const second = envelopeFor(surface, 'second', 'delivery:second');
+    await expect(surface.publish(second)).rejects.toMatchObject({
       code: 'unknown_outcome',
       retryable: true,
     });
-    await expect(channel.publish(second)).resolves.toMatchObject({
+    await expect(surface.publish(second)).resolves.toMatchObject({
       status: 'delivered',
       envelope_id: 'second',
     });
@@ -395,15 +395,15 @@ describe('JSONL outbox communication channel', () => {
 
   it('preserves and deduplicates a complete final record missing only its newline', async () => {
     const outbox = await temporaryOutbox();
-    const channel = new JsonlOutboxCommunicationChannel(outboxConfig(outbox.path), {
+    const surface = new JsonlOutboxDeliverySurface(outboxConfig(outbox.path), {
       now: () => '2026-07-16T17:04:00.000Z',
     });
-    const envelope = envelopeFor(channel, 'first', 'delivery:first');
-    const first = await channel.publish(envelope);
+    const envelope = envelopeFor(surface, 'first', 'delivery:first');
+    const first = await surface.publish(envelope);
     const withoutNewline = (await readFile(outbox.path, 'utf8')).trimEnd();
     await writeFile(outbox.path, withoutNewline, { mode: 0o600 });
 
-    await expect(channel.publish(envelope)).resolves.toEqual(first);
+    await expect(surface.publish(envelope)).resolves.toEqual(first);
     const contents = await readFile(outbox.path, 'utf8');
     expect(contents.endsWith('\n')).toBe(true);
     expect(contents.trim().split('\n')).toHaveLength(1);
@@ -411,10 +411,10 @@ describe('JSONL outbox communication channel', () => {
 
   it('returns an explicit terminal rejection for an oversized artifact', async () => {
     const outbox = await temporaryOutbox();
-    const channel = new JsonlOutboxCommunicationChannel(outboxConfig(outbox.path), {
+    const surface = new JsonlOutboxDeliverySurface(outboxConfig(outbox.path), {
       now: () => '2026-07-16T17:04:00.000Z',
     });
-    const envelope = envelopeFor(channel, 'oversized', 'delivery:oversized');
+    const envelope = envelopeFor(surface, 'oversized', 'delivery:oversized');
     envelope.brief = {
       ...envelope.brief,
       decisions: [
@@ -436,7 +436,7 @@ describe('JSONL outbox communication channel', () => {
       ],
     };
 
-    await expect(channel.publish(envelope)).resolves.toMatchObject({
+    await expect(surface.publish(envelope)).resolves.toMatchObject({
       status: 'rejected',
       external_id: null,
       retryable: false,

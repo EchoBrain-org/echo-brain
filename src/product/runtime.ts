@@ -3,7 +3,7 @@ import type {
   AdapterInstanceConfig,
   AdapterRegistry,
   ApprovalSurfaceAdapter,
-  CommunicationChannelAdapter,
+  DeliverySurfaceAdapter,
   DecisionProcessorAdapter,
   MeetingSourceAdapter,
 } from '../core/index.js';
@@ -19,7 +19,7 @@ export type ProductComponentName =
   | 'meeting-ingestion'
   | 'decision-processing'
   | 'manual-approval'
-  | 'communication-delivery'
+  | 'delivery'
   | 'product-health';
 
 export interface ProductComponentHandle {
@@ -29,7 +29,7 @@ export interface ProductComponentHandle {
 export interface ProductRuntimeAdapters {
   meetingSources: readonly MeetingSourceAdapter[];
   decisionProcessor: DecisionProcessorAdapter;
-  communicationChannels: readonly CommunicationChannelAdapter[];
+  deliverySurfaces: readonly DeliverySurfaceAdapter[];
   approvalSurface?: ApprovalSurfaceAdapter;
 }
 
@@ -109,7 +109,7 @@ const EXPECTED_COMPONENTS: readonly ProductComponentName[] = [
   'meeting-ingestion',
   'decision-processing',
   'manual-approval',
-  'communication-delivery',
+  'delivery',
   'product-health',
 ];
 
@@ -226,12 +226,12 @@ export function resolveConfiguredAdapters(
       unavailableAdapterDetail('decision-processor', config.decision_processor),
     );
   }
-  const communicationChannels = config.communication_channels.map(
+  const deliverySurfaces = config.delivery_surfaces.map(
     (adapterConfig) => {
-      const adapter = registry.getCommunicationChannel(adapterConfig);
+      const adapter = registry.getDeliverySurface(adapterConfig);
       if (adapter === undefined) {
         missing.push(
-          unavailableAdapterDetail('communication-channel', adapterConfig),
+          unavailableAdapterDetail('delivery-surface', adapterConfig),
         );
       }
       return adapter;
@@ -266,11 +266,11 @@ export function resolveConfiguredAdapters(
       config.decision_processor,
       decisionProcessor as DecisionProcessorAdapter,
     ),
-    ...config.communication_channels.flatMap((adapterConfig, index) =>
+    ...config.delivery_surfaces.flatMap((adapterConfig, index) =>
       validateConfiguredAdapter(
-        'communication-channel',
+        'delivery-surface',
         adapterConfig,
-        communicationChannels[index] as CommunicationChannelAdapter,
+        deliverySurfaces[index] as DeliverySurfaceAdapter,
       ),
     ),
     ...(config.approval_mode === 'adapter'
@@ -291,8 +291,7 @@ export function resolveConfiguredAdapters(
   return {
     meetingSources: meetingSources as MeetingSourceAdapter[],
     decisionProcessor: decisionProcessor as DecisionProcessorAdapter,
-    communicationChannels:
-      communicationChannels as CommunicationChannelAdapter[],
+    deliverySurfaces: deliverySurfaces as DeliverySurfaceAdapter[],
     ...(approvalSurface === undefined ? {} : { approvalSurface }),
   };
 }

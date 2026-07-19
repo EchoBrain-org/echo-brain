@@ -34,9 +34,9 @@ function validConfig(
       credential_ref: 'env:DECISION_PROCESSOR_KEY',
       settings: { model: 'synthetic' },
     },
-    communication_channels: [
+    delivery_surfaces: [
       {
-        adapter_id: 'fixture-channel',
+        adapter_id: 'fixture-delivery',
         instance_id: 'team',
         credential_ref: 'env:ECHO_CHANNEL_KEY',
         settings: { destination: 'synthetic' },
@@ -63,7 +63,8 @@ afterEach(() => {
 
 describe('product runtime configuration', () => {
   it('accepts tool-agnostic adapter descriptors and secret references', () => {
-    expect(validateProductRuntimeConfig(validConfig())).toMatchObject({
+    const config = validateProductRuntimeConfig(validConfig());
+    expect(config).toMatchObject({
       schema_version: 1,
       lane: 'team-product',
       approval_mode: 'manual',
@@ -80,14 +81,37 @@ describe('product runtime configuration', () => {
         instance_id: 'primary',
         credential_ref: 'env:DECISION_PROCESSOR_KEY',
       },
-      communication_channels: [
+      delivery_surfaces: [
         {
-          adapter_id: 'fixture-channel',
+          adapter_id: 'fixture-delivery',
           instance_id: 'team',
           credential_ref: 'env:ECHO_CHANNEL_KEY',
         },
       ],
     });
+    expect(Object.isFrozen(config.delivery_surfaces)).toBe(true);
+    expect(Object.isFrozen(config.delivery_surfaces[0])).toBe(true);
+    expect(Object.isFrozen(config.delivery_surfaces[0]!.settings)).toBe(true);
+  });
+
+  it('rejects the retired communication_channels key', () => {
+    const value = validConfig();
+    value.communication_channels = value.delivery_surfaces;
+    delete value.delivery_surfaces;
+
+    expect(() => validateProductRuntimeConfig(value)).toThrow(
+      /invalid product runtime configuration/,
+    );
+  });
+
+  it('rejects configs that contain both delivery vocabularies', () => {
+    const value = validConfig({
+      communication_channels: validConfig().delivery_surfaces,
+    });
+
+    expect(() => validateProductRuntimeConfig(value)).toThrow(
+      /invalid product runtime configuration/,
+    );
   });
 
   it.each([
@@ -108,14 +132,14 @@ describe('product runtime configuration', () => {
     ['unknown field', { surprise: true }],
     ['no meeting source', { meeting_sources: [] }],
     ['missing decision processor', { decision_processor: undefined }],
-    ['no communication channel', { communication_channels: [] }],
+    ['no delivery surface', { delivery_surfaces: [] }],
     ['wrong lane', { lane: 'dogfood' }],
     [
       'unsupported keychain credential',
       {
-        communication_channels: [
+        delivery_surfaces: [
           {
-            adapter_id: 'fixture-channel',
+            adapter_id: 'fixture-delivery',
             instance_id: 'team',
             credential_ref: 'keychain:ECHO_CHANNEL_KEY',
             settings: {},
@@ -206,6 +230,25 @@ describe('product runtime configuration', () => {
     }
   });
 
+  it('reports duplicate delivery surfaces at the canonical config path', () => {
+    const duplicate = {
+      adapter_id: 'fixture-delivery',
+      instance_id: 'team',
+      settings: {},
+    };
+    try {
+      validateProductRuntimeConfig(
+        validConfig({ delivery_surfaces: [duplicate, duplicate] }),
+      );
+      throw new Error('expected duplicate adapter instance to fail validation');
+    } catch (error) {
+      expect(error).toBeInstanceOf(ProductConfigError);
+      expect((error as ProductConfigError).issues).toContain(
+        "/delivery_surfaces contains duplicate adapter instance 'fixture-delivery/team'",
+      );
+    }
+  });
+
   it('fails invalid CLI config before the filesystem probe or any state side effect', async () => {
     const configPath = writeConfig(validConfig({ state_dir: 'relative' }));
     let probes = 0;
@@ -243,7 +286,7 @@ describe('product runtime configuration', () => {
         adapter_references: {
           meeting_sources: Array<{ adapter_id: string; instance_id: string }>;
           decision_processor: { adapter_id: string; instance_id: string };
-          communication_channels: Array<{
+          delivery_surfaces: Array<{
             adapter_id: string;
             instance_id: string;
           }>;
@@ -260,8 +303,8 @@ describe('product runtime configuration', () => {
           adapter_id: 'fixture-processor',
           instance_id: 'primary',
         },
-        communication_channels: [
-          { adapter_id: 'fixture-channel', instance_id: 'team' },
+        delivery_surfaces: [
+          { adapter_id: 'fixture-delivery', instance_id: 'team' },
         ],
       });
     }
@@ -313,7 +356,7 @@ describe('product runtime configuration', () => {
     expect(stderr).toContain('adapter_unavailable');
     expect(stderr).toContain('fixture-meetings');
     expect(stderr).toContain('fixture-processor');
-    expect(stderr).toContain('fixture-channel');
+    expect(stderr).toContain('fixture-delivery');
   });
 });
 

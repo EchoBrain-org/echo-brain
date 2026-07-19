@@ -1,7 +1,7 @@
 import { createGranolaMeetingSourceAdapter } from '../adapters/meeting-sources/granola/meeting-source-adapter.js';
 import { createLlmDecisionProcessor } from '../adapters/decision-processors/llm/llm-decision-processor.js';
 import { createStructuredTextDecisionProcessor } from '../adapters/decision-processors/structured-text/structured-text-decision-processor.js';
-import { createJsonlOutboxCommunicationChannel } from '../adapters/communication-channels/jsonl-outbox/jsonl-outbox-channel.js';
+import { createJsonlOutboxDeliverySurface } from '../adapters/delivery-surfaces/jsonl-outbox/jsonl-outbox-delivery-surface.js';
 import { createSlackReactionsApprovalSurface } from '../adapters/approval-surfaces/slack-reactions/slack-reactions-approval-surface.js';
 import { DecisionNodeStore } from './approval/decision-node-store.js';
 import { ProductAdapterFactoryRegistry } from './adapter-factories.js';
@@ -36,10 +36,10 @@ export function createDefaultAdapterFactories(): ProductAdapterFactoryRegistry {
       createLlmDecisionProcessor(config, { now: context.now }),
   });
   factories.register({
-    kind: 'communication-channel',
+    kind: 'delivery-surface',
     adapter_id: 'jsonl-outbox',
     create: (config, context) =>
-      createJsonlOutboxCommunicationChannel(config, { now: context.now }),
+      createJsonlOutboxDeliverySurface(config, { now: context.now }),
   });
   factories.register({
     kind: 'approval-surface',

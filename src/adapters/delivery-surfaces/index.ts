@@ -1,8 +1,8 @@
 /**
- * Communication-channel adapter implementations belong under this namespace.
+ * Delivery-surface adapter implementations belong under this namespace.
  *
  * The bundled JSONL outbox is a durable local delivery target and reference
- * implementation for external channel adapters.
+ * implementation for external delivery adapters.
  */
 export type {
   Adapter,
@@ -10,8 +10,8 @@ export type {
   AdapterConfigValidation,
   AdapterHealth,
   AdapterIdentity,
-  ChannelDestination,
-  CommunicationChannelAdapter,
+  DeliveryDestination,
+  DeliverySurfaceAdapter,
   DecisionBrief,
   DeliveryEnvelope,
   DeliveryReceipt,

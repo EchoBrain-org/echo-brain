@@ -10,7 +10,7 @@
     "state_dir",
     "meeting_sources",
     "decision_processor",
-    "communication_channels",
+    "delivery_surfaces",
     "approval_mode"
   ],
   "properties": {
@@ -23,7 +23,7 @@
       "items": { "$ref": "#/definitions/adapterInstance" }
     },
     "decision_processor": { "$ref": "#/definitions/adapterInstance" },
-    "communication_channels": {
+    "delivery_surfaces": {
       "type": "array",
       "minItems": 1,
       "items": { "$ref": "#/definitions/adapterInstance" }

@@ -91,7 +91,7 @@ describe('product lifecycle locks', () => {
         instance_id: 'primary',
         settings: {},
       },
-      communication_channels: [
+      delivery_surfaces: [
         {
           adapter_id: 'jsonl-outbox',
           instance_id: 'local',
@@ -105,7 +105,7 @@ describe('product lifecycle locks', () => {
     } as const;
     const reordered = {
       approval_mode: base.approval_mode,
-      communication_channels: base.communication_channels,
+      delivery_surfaces: base.delivery_surfaces,
       decision_processor: base.decision_processor,
       meeting_sources: base.meeting_sources,
       state_dir: base.state_dir,
