@@ -17,6 +17,7 @@ import {
   ActiveIdentityBundleStore,
   type VerifiedActiveIdentityBundle,
 } from './active-identity-bundle-store.js';
+import { requiresFounderFederation } from './cutover-fence.js';
 import {
   SqliteFederatedAttributionStore,
   type AttributionStorageEvidenceVerifier,
@@ -458,7 +459,9 @@ export class AttributingCoreStateStore implements CoreStateStore {
 
   private activeBundle(): VerifiedActiveIdentityBundle | null {
     if (!this.identity.hasActiveBundle()) {
-      if (this.identity.hasIdentityMaterial()) {
+      if (
+        requiresFounderFederation(this.options.stateDirectory, this.identity)
+      ) {
         fail('identity material exists without a valid active bundle');
       }
       return null;

@@ -17,6 +17,14 @@
     {
       "name": "launchctl",
       "absolute_path": "/bin/launchctl"
+    },
+    {
+      "name": "diskutil",
+      "absolute_path": "/usr/sbin/diskutil"
+    },
+    {
+      "name": "plutil",
+      "absolute_path": "/usr/bin/plutil"
     }
   ]
 }

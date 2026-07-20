@@ -14,6 +14,14 @@ import {
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import type { GranolaApiClient } from '../../src/adapters/meeting-sources/granola/index.js';
+import type {
+  SlackAuthIdentity,
+  SlackDirectMessage,
+  SlackPostMessageInput,
+  SlackPostedMessage,
+  SlackReaction,
+} from '../../src/adapters/shared/slack/slack-web-api-client.js';
 import type { ApprovalRequest } from '../../src/core/index.js';
 import { ProductAdapterFactoryRegistry } from '../../src/product/adapter-factories.js';
 import type { ProductRuntimeConfig } from '../../src/product/config.js';
@@ -22,19 +30,11 @@ import type { DecisionNodeState } from '../../src/product/approval/decision-node
 import { DecisionNodeStore } from '../../src/product/approval/decision-node-store.js';
 import { FederatedApprovalCapture } from '../../src/product/federation/approval-capture.js';
 import {
-  commitFounderBootstrap,
-  mintFounderBootstrapIds,
-  planFounderBootstrap,
-  type FounderBootstrapInput,
-} from '../../src/product/federation/bootstrap.js';
-import { canonicalSha256 } from '../../src/product/federation/canonical-json.js';
-import type {
-  AdapterBindingV1,
-  PublicationSnapshotV1,
-  ToolConnectionV1,
-} from '../../src/product/federation/contracts.js';
-import { createLocalCredentialGuard } from '../../src/product/federation/credential-guard.js';
-import { federationId } from '../../src/product/federation/identifiers.js';
+  beginFounderBootstrap,
+  commitFounderBootstrapCeremony,
+  statusFounderBootstrap,
+  type FounderBootstrapCeremonyDependencies,
+} from '../../src/product/federation/founder-bootstrap-ceremony.js';
 import type {
   InstallationKeyDescriptor,
   InstallationSigner,
@@ -44,6 +44,7 @@ import {
   normalizeP256LowS,
   p256KeyId,
 } from '../../src/product/federation/signature-profile.js';
+import type { SlackDmChallengeApi } from '../../src/product/federation/slack-dm-challenge.js';
 
 const NOW = '2026-07-19T23:30:00.000Z';
 const roots: string[] = [];
@@ -120,103 +121,8 @@ function output() {
   };
 }
 
-function binding(
-  capability: AdapterBindingV1['capability'],
-  adapterId: string,
-  instanceId: string,
-  connectionId: string | null,
-): AdapterBindingV1 {
-  const configuration = {};
-  return {
-    adapter_binding_id: federationId('bnd'),
-    capability,
-    adapter_id: adapterId,
-    instance_id: instanceId,
-    connection_id: connectionId,
-    connection_generation: connectionId === null ? null : 1,
-    configuration_snapshot: configuration,
-    configuration_sha256: canonicalSha256(configuration),
-    created_at: NOW,
-    ended_at: null,
-    status: 'active',
-  };
-}
-
-function granolaConnection(
-  organizationId: string,
-  membershipId: string,
-): ToolConnectionV1 {
-  return {
-    connection_id: federationId('con'),
-    organization_id: organizationId,
-    owner: { kind: 'membership', id: membershipId },
-    provider: 'granola',
-    generations: [
-      {
-        generation: 1,
-        active_from: NOW,
-        ended_at: null,
-        provider_identity: {
-          tenant: null,
-          subject: null,
-          verification: {
-            method: 'provider_first_capture',
-            assurance: 'credential_observed',
-            verified_at: NOW,
-            evidence_sha256: `sha256:${'1'.repeat(64)}`,
-          },
-        },
-        local_credential_guard: createLocalCredentialGuard(
-          'file:/private/local/granola-api-key',
-          'granola-test-token',
-          Buffer.alloc(16, 2),
-        ),
-      },
-    ],
-  };
-}
-
-function slackConnection(organizationId: string): ToolConnectionV1 {
-  return {
-    connection_id: federationId('con'),
-    organization_id: organizationId,
-    owner: { kind: 'organization', id: organizationId },
-    provider: 'slack',
-    generations: [
-      {
-        generation: 1,
-        active_from: NOW,
-        ended_at: null,
-        provider_identity: {
-          tenant: {
-            kind: 'slack-team',
-            id: 'T123',
-            enterprise_id: null,
-          },
-          subject: {
-            kind: 'bot-installation',
-            id: 'U_BOT',
-            bot_id: 'B123',
-            app_id: 'A123',
-          },
-          verification: {
-            method: 'slack_auth_test',
-            assurance: 'provider_verified',
-            verified_at: NOW,
-            evidence_sha256: `sha256:${'2'.repeat(64)}`,
-          },
-        },
-        local_credential_guard: createLocalCredentialGuard(
-          'file:/private/local/slack-bot-token',
-          'slack-test-token',
-          Buffer.alloc(16, 3),
-        ),
-      },
-    ],
-  };
-}
-
 function runtimeConfigFor(stateDirectory: string): ProductRuntimeConfig {
+  const credentialDirectory = join(stateDirectory, 'credentials');
   return {
     schema_version: 1,
     lane: 'team-product',
@@ -225,8 +131,8 @@ function runtimeConfigFor(stateDirectory: string): ProductRuntimeConfig {
       {
         adapter_id: 'granola',
         instance_id: 'primary',
-        credential_ref: 'file:/private/local/granola-api-key',
-        settings: {},
+        credential_ref: `file:${join(credentialDirectory, 'granola-api-key')}`,
+        settings: { page_size: 1 },
       },
     ],
     decision_processor: {
@@ -235,72 +141,89 @@ function runtimeConfigFor(stateDirectory: string): ProductRuntimeConfig {
       settings: {},
     },
     delivery_surfaces: [
-      { adapter_id: 'jsonl-outbox', instance_id: 'local', settings: {} },
+      {
+        adapter_id: 'jsonl-outbox',
+        instance_id: 'local',
+        settings: { path: join(stateDirectory, 'delivery', 'decisions.jsonl') },
+      },
     ],
     approval_mode: 'adapter',
     approval_surface: {
       adapter_id: 'slack-reactions',
       instance_id: 'founder-approval',
-      credential_ref: 'file:/private/local/slack-bot-token',
-      settings: {},
+      credential_ref: `file:${join(credentialDirectory, 'slack-bot-token')}`,
+      settings: {
+        channel_id: 'C123APPROVALS',
+        reviewer: { slack_user_id: 'U123FOUNDER', name: 'Founder' },
+      },
     },
   };
 }
 
+class BootstrapSlackApi implements SlackDmChallengeApi {
+  readonly identity: SlackAuthIdentity = {
+    team_id: 'T123TEAM',
+    enterprise_id: null,
+    user_id: 'U123BOT',
+    bot_id: 'B123BOT',
+    app_id: 'A123APP',
+  };
+
+  async authIdentity(): Promise<SlackAuthIdentity> {
+    return this.identity;
+  }
+
+  async openDirectMessage(userId: string): Promise<SlackDirectMessage> {
+    return { channel_id: 'D123FOUNDER', user_id: userId };
+  }
+
+  async postMessage(
+    _input: SlackPostMessageInput,
+  ): Promise<SlackPostedMessage> {
+    return { channel: 'D123FOUNDER', ts: '1752966000.000001' };
+  }
+
+  async reactionsGet(): Promise<readonly SlackReaction[]> {
+    return [
+      {
+        name: 'white_check_mark',
+        users: ['U123FOUNDER'],
+        count: 1,
+      },
+    ];
+  }
+}
+
+class BootstrapGranolaApi implements GranolaApiClient {
+  async listNotes() {
+    return {
+      notes: [{ id: 'not_bootstrap_evidence' }],
+      hasMore: false,
+      cursor: null,
+    };
+  }
+
+  async getNote(): Promise<never> {
+    throw new Error('bootstrap must not fetch Granola note detail');
+  }
+}
+
 async function bootstrapIdentity(stateDirectory: string) {
   const runtimeConfig = runtimeConfigFor(stateDirectory);
-  const ids = mintFounderBootstrapIds();
-  const granola = granolaConnection(ids.organization_id, ids.membership_id);
-  const slack = slackConnection(ids.organization_id);
-  const publication: PublicationSnapshotV1 = {
-    payload_scope:
-      'approved-signal-with-meeting-context-brief-digest-and-bounded-evidence',
-    audience: {
-      scope: 'organization',
-      subjects: [{ kind: 'organization', id: ids.organization_id }],
-    },
-    sensitivity: 'internal',
-    retention: { kind: 'indefinite' },
-    raw_meeting_content: 'local-only',
-    participant_observations: 'included-namespaced',
-  };
-  const input = {
-    ids,
-    organization_display_name: 'EchoBrain',
-    principal_display_name: 'Founder',
-    device_class: 'byod',
-    created_at: NOW,
-    identity_claims: [
-      {
-        claim_id: federationId('clm'),
-        principal_id: ids.principal_id,
-        issuer: { kind: 'provider', provider: 'slack', tenant_id: 'T123' },
-        subject: { kind: 'user', id: 'U123' },
-        verification: {
-          method: 'slack_dm_challenge',
-          assurance: 'provider_challenge_observed',
-          verified_at: NOW,
-          evidence_sha256: `sha256:${'3'.repeat(64)}`,
-        },
-      },
-    ],
-    connections: [granola, slack],
-    bindings: [
-      binding('meeting-source', 'granola', 'primary', granola.connection_id),
-      binding('decision-processor', 'structured-text', 'primary', null),
-      binding('delivery-surface', 'jsonl-outbox', 'local', null),
-      binding(
-        'approval-surface',
-        'slack-reactions',
-        'founder-approval',
-        slack.connection_id,
-      ),
-    ],
-    publication,
-  } satisfies FounderBootstrapInput;
   const signer = new TestHardwareSigner();
-  const descriptor = await signer.generate(ids.installation_id);
-  const build = {
+  const slack = new BootstrapSlackApi();
+  const granola = new BootstrapGranolaApi();
+  const credentialResolver = (reference: string) =>
+    reference.endsWith('/granola-api-key')
+      ? 'granola-test-token'
+      : reference.endsWith('/slack-bot-token')
+        ? 'slack-test-token'
+        : undefined;
+  const dependencies: FounderBootstrapCeremonyDependencies = {
+    signer,
+    credentialResolver,
+    slackApiFactory: () => slack,
+    granolaApiFactory: () => granola,
     loadBuildIdentity: () => ({
       schema_version: 1 as const,
       kind: 'echo-packaged-build-identity' as const,
@@ -308,9 +231,32 @@ async function bootstrapIdentity(stateDirectory: string) {
       source_sha: 'a'.repeat(40),
       source_kind: 'materialized-commit' as const,
     }),
+    now: () => NOW,
+    sessionIdFactory: () => 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+    authorizeSeedCutover: async () => undefined,
+    finalizeSeedCutover: async () => undefined,
   };
-  const plan = planFounderBootstrap(input, descriptor, build);
-  await commitFounderBootstrap(runtimeConfig, plan, signer, build);
+  const begun = await beginFounderBootstrap(
+    runtimeConfig,
+    {
+      organizationDisplayName: 'EchoBrain',
+      principalDisplayName: 'Founder',
+      slackUserId: 'U123FOUNDER',
+    },
+    dependencies,
+  );
+  const ready = await statusFounderBootstrap(
+    runtimeConfig,
+    begun.session_id,
+    {},
+    dependencies,
+  );
+  await commitFounderBootstrapCeremony(
+    runtimeConfig,
+    begun.session_id,
+    ready.confirmation!.confirmation_sha256,
+    dependencies,
+  );
   return { runtimeConfig, signer };
 }
 
@@ -510,6 +456,89 @@ function emptyCycleFactories(): ProductAdapterFactoryRegistry {
 }
 
 describe('identity-active CLI approval projection retry', () => {
+  it('runs the CLI export repair route and rechecks strict identity readiness', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'echo-federation-cli-export-'));
+    roots.push(root);
+    const stateDirectory = join(realpathSync(root), 'state');
+    mkdirSync(stateDirectory, { mode: 0o700 });
+    chmodSync(stateDirectory, 0o700);
+    const { runtimeConfig, signer } = await bootstrapIdentity(stateDirectory);
+    const configPath = join(root, 'runtime.json');
+    writeFileSync(configPath, `${JSON.stringify(runtimeConfig)}\n`, {
+      mode: 0o600,
+    });
+    let repaired = false;
+    let closed = false;
+    const ready = async () => ({ ok: true, detail: 'ready' });
+    const federationRuntime: FounderFederationRuntime = {
+      identityEnabled: true,
+      approvalCapture: {} as never,
+      signer,
+      createDecisionNodeStore: () =>
+        new DecisionNodeStore(stateDirectory) as never,
+      wrapCoreState: (state) => state,
+      projectApproved: async () => [],
+      ensureIndependentCopy: async () => {
+        repaired = true;
+        return {
+          ok: true,
+          detail: 'protected copy repaired and reverified',
+          copied_installations: 1,
+          copied_events: 3,
+        };
+      },
+      identityChecks: (configured = {}) => ({
+        ...configured,
+        signer,
+        legacyBoundaryReady: ready,
+        approvalCaptureReady: ready,
+        attributionStorageReady: ready,
+        signedOutboxReady: ready,
+        independentCopyReady: async () =>
+          repaired
+            ? { ok: true, detail: 'protected copy repaired' }
+            : { ok: false, detail: 'protected copy is stale' },
+      }),
+      close: async () => {
+        closed = true;
+      },
+    };
+    const credentialResolver = (reference: string) =>
+      reference.endsWith('/granola-api-key')
+        ? 'granola-test-token'
+        : reference.endsWith('/slack-bot-token')
+          ? 'slack-test-token'
+          : undefined;
+    const stdout = output();
+    const stderr = output();
+
+    expect(
+      await runProductCli(['export', '--config', configPath], {
+        federationRuntime,
+        identityCheck: { signer, credentialResolver },
+        classifyStateFilesystem: async () => ({
+          kind: 'local',
+          raw: 'apfs',
+        }),
+        stdout: stdout.stream,
+        stderr: stderr.stream,
+      }),
+    ).toBe(0);
+    expect(stderr.read()).toBe('');
+    expect(JSON.parse(stdout.read())).toMatchObject({
+      ok: true,
+      command: 'export',
+      independent_copy: {
+        detail: 'protected copy repaired and reverified',
+        copied_installations: 1,
+        copied_events: 3,
+      },
+      identity: { seed_grade_ready: true },
+    });
+    expect(repaired).toBe(true);
+    expect(closed).toBe(true);
+  });
+
   it('lists DEV.6 approvals and completes an empty cycle after identity activation', async () => {
     const root = mkdtempSync(join(tmpdir(), 'echo-federation-cli-legacy-'));
     roots.push(root);
@@ -543,9 +572,16 @@ describe('identity-active CLI approval projection retry', () => {
       createDecisionNodeStore: () => approvals,
       wrapCoreState: (state) => state,
       projectApproved: async () => [],
+      ensureIndependentCopy: async () => ({
+        ok: true,
+        detail: 'ready',
+        copied_installations: 0,
+        copied_events: 0,
+      }),
       identityChecks: (configured = {}) => ({
         ...configured,
         signer,
+        legacyBoundaryReady: ready,
         approvalCaptureReady: ready,
         attributionStorageReady: ready,
         signedOutboxReady: ready,
@@ -554,9 +590,9 @@ describe('identity-active CLI approval projection retry', () => {
       close: async () => undefined,
     };
     const credentialResolver = (reference: string) =>
-      reference === 'file:/private/local/granola-api-key'
+      reference.endsWith('/granola-api-key')
         ? 'granola-test-token'
-        : reference === 'file:/private/local/slack-bot-token'
+        : reference.endsWith('/slack-bot-token')
           ? 'slack-test-token'
           : undefined;
     const common = {
@@ -701,9 +737,16 @@ describe('identity-active CLI approval projection retry', () => {
         projected = true;
         return [];
       }),
+      ensureIndependentCopy: async () => ({
+        ok: true,
+        detail: 'ready',
+        copied_installations: 0,
+        copied_events: 0,
+      }),
       identityChecks: (configured = {}) => ({
         ...configured,
         signer,
+        legacyBoundaryReady: ready,
         approvalCaptureReady: ready,
         attributionStorageReady: ready,
         signedOutboxReady: async () =>
@@ -718,9 +761,9 @@ describe('identity-active CLI approval projection retry', () => {
       close: vi.fn(async () => undefined),
     };
     const credentialResolver = (reference: string) =>
-      reference === 'file:/private/local/granola-api-key'
+      reference.endsWith('/granola-api-key')
         ? 'granola-test-token'
-        : reference === 'file:/private/local/slack-bot-token'
+        : reference.endsWith('/slack-bot-token')
           ? 'slack-test-token'
           : undefined;
     const common = {
@@ -783,6 +826,173 @@ describe('identity-active CLI approval projection retry', () => {
     });
     expect(projected).toBe(true);
     expect(projectionAttempts).toBe(2);
+  });
+
+  it('retries a failed independent copy without duplicating the signed projection', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'echo-federation-cli-copy-retry-'));
+    roots.push(root);
+    const stateDirectory = join(realpathSync(root), 'state');
+    mkdirSync(stateDirectory, { mode: 0o700 });
+    chmodSync(stateDirectory, 0o700);
+    const { runtimeConfig, signer } = await bootstrapIdentity(stateDirectory);
+    const configPath = join(root, 'runtime.json');
+    writeFileSync(configPath, `${JSON.stringify(runtimeConfig)}\n`, {
+      mode: 0o600,
+    });
+
+    let node = pendingNode();
+    let reviewTransitions = 0;
+    let signedProjectionAppends = 0;
+    let signedProjectionExists = false;
+    let independentCopyAttempts = 0;
+    let independentCopyVerified = false;
+    const approvals = {
+      initialize: vi.fn(async () => undefined),
+      listFederated: vi.fn(async () => [node]),
+      resolve: vi.fn(
+        async (input: {
+          status: 'approved' | 'rejected';
+          reviewedBy: string;
+          reason?: string | null;
+        }) => {
+          if (node.status === 'pending') {
+            reviewTransitions += 1;
+            node = {
+              ...node,
+              status: input.status,
+              reviewed_at: NOW,
+              reviewed_by: input.reviewedBy,
+              reason: input.reason ?? null,
+              resolved_surface: 'cli',
+              resolved_metadata: { federation: {} },
+            };
+          }
+          return node;
+        },
+      ),
+    } as unknown as DecisionNodeStore;
+    const ready = async () => ({ ok: true, detail: 'ready' });
+    const federationRuntime: FounderFederationRuntime = {
+      identityEnabled: true,
+      approvalCapture: {} as never,
+      signer,
+      createDecisionNodeStore: () => approvals,
+      wrapCoreState: (state) => state,
+      projectApproved: vi.fn(async () => {
+        if (!signedProjectionExists) {
+          signedProjectionExists = true;
+          signedProjectionAppends += 1;
+        }
+        independentCopyAttempts += 1;
+        if (independentCopyAttempts === 1) {
+          throw new Error('simulated protected-copy interruption');
+        }
+        independentCopyVerified = true;
+        return [];
+      }),
+      ensureIndependentCopy: async () => ({
+        ok: independentCopyVerified,
+        detail: independentCopyVerified
+          ? 'ready'
+          : 'protected independent copy is stale',
+        copied_installations: independentCopyVerified ? 1 : 0,
+        copied_events: independentCopyVerified ? 1 : 0,
+      }),
+      identityChecks: (configured = {}) => ({
+        ...configured,
+        signer,
+        legacyBoundaryReady: ready,
+        approvalCaptureReady: ready,
+        attributionStorageReady: ready,
+        signedOutboxReady: async () =>
+          node.status === 'approved' && !signedProjectionExists
+            ? {
+                ok: false,
+                detail: `projection pending: approval ${node.approval_id} has no signed outbox group`,
+              }
+            : { ok: true, detail: 'ready' },
+        independentCopyReady: async () =>
+          signedProjectionExists && !independentCopyVerified
+            ? {
+                ok: false,
+                detail: 'protected independent copy is stale',
+              }
+            : { ok: true, detail: 'ready' },
+      }),
+      close: vi.fn(async () => undefined),
+    };
+    const credentialResolver = (reference: string) =>
+      reference.endsWith('/granola-api-key')
+        ? 'granola-test-token'
+        : reference.endsWith('/slack-bot-token')
+          ? 'slack-test-token'
+          : undefined;
+    const common = {
+      classifyStateFilesystem: async () => ({
+        kind: 'local' as const,
+        raw: 'apfs',
+      }),
+      now: () => NOW,
+      identityCheck: { signer, credentialResolver },
+      federationRuntime,
+    };
+    const argv = [
+      'approve',
+      '--config',
+      configPath,
+      '--id',
+      node.approval_id,
+      '--reviewer',
+      'founder',
+    ];
+
+    const firstOut = output();
+    const firstErr = output();
+    expect(
+      await runProductCli(argv, {
+        ...common,
+        stdout: firstOut.stream,
+        stderr: firstErr.stream,
+      }),
+    ).toBe(1);
+    expect(firstOut.read()).toBe('');
+    expect(JSON.parse(firstErr.read())).toMatchObject({
+      ok: false,
+      command: 'approve',
+      error: expect.stringContaining(
+        'approval recorded; federated projection pending',
+      ),
+    });
+    expect(node.status).toBe('approved');
+    expect(reviewTransitions).toBe(1);
+    expect(signedProjectionAppends).toBe(1);
+    expect(independentCopyAttempts).toBe(1);
+    expect(independentCopyVerified).toBe(false);
+
+    const retryOut = output();
+    const retryErr = output();
+    expect(
+      await runProductCli(argv, {
+        ...common,
+        stdout: retryOut.stream,
+        stderr: retryErr.stream,
+      }),
+    ).toBe(0);
+    expect(retryErr.read()).toBe('');
+    expect(JSON.parse(retryOut.read())).toMatchObject({
+      ok: true,
+      command: 'approve',
+      approval: {
+        approval_id: node.approval_id,
+        status: 'approved',
+        reviewed_by: 'founder',
+      },
+    });
+    expect(reviewTransitions).toBe(1);
+    expect(signedProjectionAppends).toBe(1);
+    expect(independentCopyAttempts).toBe(2);
+    expect(independentCopyVerified).toBe(true);
+    expect(federationRuntime.projectApproved).toHaveBeenCalledTimes(2);
   });
 
   it('rejects partial composition and legacy runtime seams after cutover', async () => {

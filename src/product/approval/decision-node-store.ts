@@ -18,6 +18,7 @@ import { atomicCreate } from '../../infrastructure/filesystem/atomic-create.js';
 import { parseJson } from '../../util/json.js';
 import { acquireProcessFileLock } from '../../util/process-file-lock.js';
 import { ActiveIdentityBundleStore } from '../federation/active-identity-bundle-store.js';
+import { requiresFounderFederation } from '../federation/cutover-fence.js';
 import {
   assertDecisionPublishedEvent,
   assertDecisionRequestedEvent,
@@ -446,8 +447,7 @@ export class DecisionNodeStore {
 
   private assertFederationCaptureAvailable(): boolean {
     const identity = new ActiveIdentityBundleStore(this.stateDirectory);
-    const required =
-      identity.hasActiveBundle() || identity.hasIdentityMaterial();
+    const required = requiresFounderFederation(this.stateDirectory, identity);
     if (required && this.federationCapture === undefined) {
       throw new Error(
         'identity-enabled decision capture is unavailable; legacy approval mutation is forbidden',

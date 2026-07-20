@@ -9,6 +9,10 @@ import {
   ActiveIdentityBundleStore,
   type VerifiedActiveIdentityBundle,
 } from './active-identity-bundle-store.js';
+import {
+  inspectFounderCutoverFence,
+  requiresFounderFederation,
+} from './cutover-fence.js';
 import { ApprovalProjectingCoreStateStore } from './approval-projecting-core-state-store.js';
 import {
   FederatedApprovalCapture,
@@ -24,6 +28,12 @@ import { SqliteFederatedAttributionStore } from './attribution-store.js';
 import type { IdentityCheckDependencies } from './identity-check.js';
 import { IdentityLineageStore } from './identity-lineage-store.js';
 import type { VerifiedHistoricalIdentityManifest } from './identity-lineage-store.js';
+import type { FederatedExportIdentitySource } from './export-bundle.js';
+import {
+  FounderIndependentCopyStore,
+  type IndependentCopyPlatformInspector,
+  type IndependentCopyReadiness,
+} from './independent-copy-store.js';
 import type { InstallationSigner } from './installation-signer.js';
 import { verifyInstallationKeyDescriptor } from './installation-signer.js';
 import { FederatedOutboxStore } from './outbox-store.js';
@@ -34,9 +44,15 @@ import {
 import { canonicalJson, canonicalSha256 } from './canonical-json.js';
 import type {
   ApprovalFederationMetadataV1,
+  FederationId,
   ProductArtifactIdentityV1,
 } from './contracts.js';
 import { validateFederationDocument } from './schema-validation.js';
+import {
+  assertLegacyProcessingBoundaryReady,
+  verifyLegacyClassificationReport,
+  type LegacyDecisionNodeReader,
+} from './legacy-classification.js';
 
 export interface FounderFederationRuntimeOptions {
   runtimeConfig: ProductRuntimeConfig;
@@ -51,10 +67,17 @@ export interface FounderFederationRuntimeOptions {
   attributionStore?: SqliteFederatedAttributionStore;
   outbox?: FederatedOutboxStore;
   projectionDecisionNodes?: Pick<DecisionNodeStore, 'listFederated'>;
+  legacyDecisionNodes?: LegacyDecisionNodeReader;
+  independentCopyStore?: Pick<
+    FounderIndependentCopyStore,
+    'ensure' | 'check'
+  >;
+  independentCopyInspector?: IndependentCopyPlatformInspector;
+  createExportId?: () => FederationId;
 }
 
 type FounderFederationLineageReader = ApprovalIdentityLineageReader &
-  Pick<IdentityLineageStore, 'loadVerifiedManifestBySha256'>;
+  FederatedExportIdentitySource;
 
 export interface FounderFederationIdentityReader {
   hasActiveBundle(): boolean;
@@ -76,6 +99,7 @@ export interface FounderFederationRuntime {
   projectApproved(
     state: DecisionNodeState,
   ): ReturnType<FederatedRecordProjector['projectApproved']>;
+  ensureIndependentCopy(): Promise<IndependentCopyReadiness>;
   identityChecks(
     configured?: IdentityCheckDependencies,
   ): IdentityCheckDependencies;
@@ -375,7 +399,7 @@ export async function openFounderFederationRuntime(
   const identity =
     options.identityStore ?? new ActiveIdentityBundleStore(stateDirectory);
   const active = identity.loadVerified(options.runtimeConfig);
-  if (active === null && identity.hasIdentityMaterial()) {
+  if (active === null && requiresFounderFederation(stateDirectory, identity)) {
     fail('identity material exists without a valid active bundle');
   }
 
@@ -398,6 +422,8 @@ export async function openFounderFederationRuntime(
       wrapCoreState: (base) => base,
       projectApproved: async () =>
         fail('inactive rehearsal records cannot enter the federated outbox'),
+      ensureIndependentCopy: async () =>
+        fail('inactive rehearsal mode has no federated records to copy'),
       identityChecks: (configured = {}) => ({
         ...configured,
         ...(configured.signer === undefined && options.signer !== undefined
@@ -427,13 +453,15 @@ export async function openFounderFederationRuntime(
       attributionProvider: attribution,
       artifactProvider: artifact,
     });
+    const defaultDecisionNodes = new DecisionNodeStore(stateDirectory, {
+      now: options.now,
+      createId: options.createId,
+      federationCapture: capture,
+    });
     const projectionDecisionNodes =
-      options.projectionDecisionNodes ??
-      new DecisionNodeStore(stateDirectory, {
-        now: options.now,
-        createId: options.createId,
-        federationCapture: capture,
-      });
+      options.projectionDecisionNodes ?? defaultDecisionNodes;
+    const legacyDecisionNodes =
+      options.legacyDecisionNodes ?? defaultDecisionNodes;
     const projector =
       signer === undefined
         ? undefined
@@ -445,6 +473,23 @@ export async function openFounderFederationRuntime(
             lineage,
             now: options.now,
           });
+    const independentCopy =
+      options.independentCopyStore ??
+      (signer === undefined
+        ? undefined
+        : new FounderIndependentCopyStore({
+            stateDirectory,
+            outbox,
+            identitySource: lineage,
+            signer,
+            ...(options.independentCopyInspector === undefined
+              ? {}
+              : { inspector: options.independentCopyInspector }),
+            ...(options.now === undefined ? {} : { now: options.now }),
+            ...(options.createExportId === undefined
+              ? {}
+              : { createExportId: options.createExportId }),
+          }));
     const attributionEvidence = createAttributionStorageEvidenceVerifier(
       lineage,
       artifact,
@@ -552,6 +597,64 @@ export async function openFounderFederationRuntime(
         };
       }
     };
+    const independentCopyReady = async () => {
+      if (independentCopy === undefined) {
+        return {
+          ok: false,
+          detail:
+            'protected independent-copy runtime is unavailable without the installation signer',
+        };
+      }
+      const result = await independentCopy.check();
+      return { ok: result.ok, detail: result.detail };
+    };
+    const legacyBoundaryReady = async () => {
+      try {
+        const fence = inspectFounderCutoverFence(stateDirectory);
+        if (fence.state !== 'committing' && fence.state !== 'complete') {
+          throw new Error('no irreversible founder cutover session exists');
+        }
+        await assertLegacyProcessingBoundaryReady({
+          decision_nodes: legacyDecisionNodes,
+          core_database_path: options.databasePath,
+        });
+        const verified = await verifyLegacyClassificationReport({
+          state_directory: stateDirectory,
+          bootstrap_session_id: fence.session.session_id,
+          decision_nodes: legacyDecisionNodes,
+          core_database_path: options.databasePath,
+          cutover_at: active.manifest.legacy_cutover.declared_at,
+        });
+        const counts = verified.document.classification.counts;
+        return {
+          ok: true,
+          detail: `verified immutable legacy boundary: ${counts.disposable_test} disposable rehearsal${counts.disposable_test === 1 ? '' : 's'} and ${counts.legacy_imported_unverified} delivered unverified record${counts.legacy_imported_unverified === 1 ? '' : 's'}`,
+        };
+      } catch (error) {
+        return {
+          ok: false,
+          detail: `legacy cutover boundary is unavailable or invalid: ${(error as Error).message}`,
+        };
+      }
+    };
+    const ensureIndependentCopy = async (): Promise<IndependentCopyReadiness> => {
+      if (independentCopy === undefined) {
+        fail(
+          'protected independent-copy runtime is unavailable without the installation signer',
+        );
+      }
+      const result = await independentCopy.ensure();
+      if (!result.ok) fail(result.detail);
+      return result;
+    };
+    const projectAndCopy = async (state: DecisionNodeState) => {
+      if (projector === undefined) {
+        fail('identity-enabled projection requires the installation signer');
+      }
+      const projected = await projector.projectApproved(state);
+      await ensureIndependentCopy();
+      return projected;
+    };
     return {
       identityEnabled: true,
       approvalCapture: capture,
@@ -578,18 +681,13 @@ export async function openFounderFederationRuntime(
           attributing,
           decisions,
           projector,
+          async () => {
+            await ensureIndependentCopy();
+          },
         );
       },
-      projectApproved(state) {
-        if (projector === undefined) {
-          return Promise.reject(
-            new Error(
-              'founder federation runtime failed: identity-enabled projection requires the installation signer',
-            ),
-          );
-        }
-        return projector.projectApproved(state);
-      },
+      projectApproved: projectAndCopy,
+      ensureIndependentCopy,
       identityChecks(configured = {}) {
         return {
           ...configured,
@@ -597,9 +695,11 @@ export async function openFounderFederationRuntime(
           // resources. Callers may still supply the independent-copy probe
           // until WS5 installs its concrete protected-copy verifier.
           signer: signer ?? configured.signer,
+          legacyBoundaryReady,
           approvalCaptureReady,
           attributionStorageReady,
           signedOutboxReady,
+          independentCopyReady,
         };
       },
       async close() {

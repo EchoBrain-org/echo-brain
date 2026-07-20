@@ -35,6 +35,11 @@ import {
   assertProductMaintenanceLease,
   type ProductMaintenanceLease,
 } from './lifecycle-lock.js';
+import {
+  assertFounderCutoverGuardMatchesSession,
+  inspectFounderCutoverFence,
+  readFounderCutoverGuard,
+} from './federation/cutover-fence.js';
 
 const BACKUP_MANIFEST = 'backup-manifest.json';
 const PRODUCT_DATABASE = 'echo-brain.sqlite';
@@ -160,6 +165,45 @@ interface StateBackupPreparation {
   created_at: string;
   source_state_path_sha256: string;
   canonical_config_sha256: string;
+}
+
+function assertRestorePreservesFounderCutover(
+  currentStateDirectory: string,
+  restoredStateDirectory: string,
+): void {
+  const guard = readFounderCutoverGuard(currentStateDirectory);
+  const current = inspectFounderCutoverFence(currentStateDirectory);
+  const currentIrreversible =
+    current.state === 'committing' || current.state === 'complete';
+  if (guard === null && !currentIrreversible) return;
+  const restored = inspectFounderCutoverFence(restoredStateDirectory);
+  if (restored.state !== 'committing' && restored.state !== 'complete') {
+    throw new Error(
+      'restore would remove or replace the irreversible founder identity cutover',
+    );
+  }
+  try {
+    if (guard !== null) {
+      assertFounderCutoverGuardMatchesSession(guard, restored.session);
+    } else if (
+      current.state === 'committing' ||
+      current.state === 'complete'
+    ) {
+      if (
+        current.session.session_id !== restored.session.session_id ||
+        current.session.commit?.plan_sha256 !==
+          restored.session.commit?.plan_sha256 ||
+        current.session.signing_key?.key_id !==
+          restored.session.signing_key?.key_id
+      ) {
+        throw new Error('restored cutover identity differs');
+      }
+    }
+  } catch {
+    throw new Error(
+      'restore would remove or replace the irreversible founder identity cutover',
+    );
+  }
 }
 
 function assertIsoInstant(value: string, label: string): void {
@@ -1168,6 +1212,23 @@ export async function restoreProductStateBackup(
     throw new Error(
       'backup canonical config hash does not match this installation',
     );
+  }
+  try {
+    assertRestorePreservesFounderCutover(stateDir, validated.backupDirectory);
+  } catch (error) {
+    if (
+      pendingTransaction !== undefined &&
+      pathEntryExists(replacedDirectory)
+    ) {
+      rollbackReplacedState(
+        stateDir,
+        stageDirectory,
+        replacedDirectory,
+        markerPath,
+        parent,
+      );
+    }
+    throw error;
   }
 
   const requestedAutomaticBackupRoot = canonicalLocalPath(

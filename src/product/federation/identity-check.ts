@@ -1,5 +1,10 @@
 import { randomBytes } from "node:crypto";
 import { ActiveIdentityBundleStore } from "./active-identity-bundle-store.js";
+import {
+  assertFounderCutoverReceiptMatchesActiveBundle,
+  inspectFounderCutoverFence,
+  readFounderCutoverGuard,
+} from "./cutover-fence.js";
 import type { InstallationSigner } from "./installation-signer.js";
 import { verifyInstallationKeyDescriptor } from "./installation-signer.js";
 import { verifyP256LowSSignature } from "./signature-profile.js";
@@ -11,6 +16,8 @@ import { assertLocalCredentialGuardMatches } from "./credential-guard.js";
 export type IdentityCheckId =
   | "active-bundle"
   | "bundle-integrity"
+  | "seed-cutover"
+  | "legacy-boundary"
   | "installation-key"
   | "provider-identities"
   | "connection-credentials"
@@ -45,6 +52,9 @@ export interface IdentityCheckDependencies {
   attributionStorageReady?: () => Promise<{ ok: boolean; detail: string }>;
   signedOutboxReady?: () => Promise<{ ok: boolean; detail: string }>;
   independentCopyReady?: () => Promise<{ ok: boolean; detail: string }>;
+  legacyBoundaryReady?: () => Promise<{ ok: boolean; detail: string }>;
+  /** Recovery-only: lets the bootstrap finalizer validate before completion. */
+  allowCommittingCutoverFinalization?: boolean;
 }
 
 export interface ActiveCredentialGuardCheck {
@@ -158,9 +168,17 @@ export async function checkFounderIdentity(
   const store = new ActiveIdentityBundleStore(stateDirectory);
   if (!store.hasActiveBundle()) {
     let identityMaterial = false;
+    let irreversibleCutover = false;
     let inspectionFailure: string | null = null;
     try {
       identityMaterial = store.hasIdentityMaterial();
+      const fence = inspectFounderCutoverFence(stateDirectory);
+      const guard = readFounderCutoverGuard(stateDirectory);
+      irreversibleCutover =
+        guard !== null ||
+        fence.state === "committing" ||
+        fence.state === "complete";
+      identityMaterial ||= irreversibleCutover;
     } catch (error) {
       inspectionFailure = (error as Error).message;
     }
@@ -178,11 +196,23 @@ export async function checkFounderIdentity(
             "active-bundle",
             false,
             inspectionFailure === null
-              ? "identity material exists but the active bundle pointer is missing"
+              ? irreversibleCutover
+                ? "an irreversible founder cutover guard or receipt exists but the active bundle pointer is missing"
+                : "identity material exists but the active bundle pointer is missing"
               : `identity material could not be inspected: ${inspectionFailure}`,
           ),
           check(
             "bundle-integrity",
+            false,
+            "not checked without an active bundle",
+          ),
+          check(
+            "seed-cutover",
+            false,
+            "not checked without an active bundle",
+          ),
+          check(
+            "legacy-boundary",
             false,
             "not checked without an active bundle",
           ),
@@ -236,6 +266,16 @@ export async function checkFounderIdentity(
         ),
         check(
           "bundle-integrity",
+          false,
+          "not checked without an active bundle",
+        ),
+        check(
+          "seed-cutover",
+          false,
+          "not checked without an active bundle",
+        ),
+        check(
+          "legacy-boundary",
           false,
           "not checked without an active bundle",
         ),
@@ -302,6 +342,36 @@ export async function checkFounderIdentity(
       checks,
     };
   }
+
+  try {
+    const receipt = assertFounderCutoverReceiptMatchesActiveBundle(
+      stateDirectory,
+      verified,
+      {
+        allowCommittingFinalization:
+          dependencies.allowCommittingCutoverFinalization === true,
+      },
+    );
+    checks.push(
+      check(
+        "seed-cutover",
+        true,
+        receipt.phase === "complete"
+          ? "signed founder cutover receipt matches the active identity bundle"
+          : "signed committing receipt matches the active bundle for crash finalization",
+      ),
+    );
+  } catch (error) {
+    checks.push(check("seed-cutover", false, (error as Error).message));
+  }
+
+  checks.push(
+    await optionalCapabilityCheck(
+      "legacy-boundary",
+      dependencies.legacyBoundaryReady,
+      "legacy cutover classification is not installed yet",
+    ),
+  );
 
   const signer = dependencies.signer;
   if (signer === undefined) {

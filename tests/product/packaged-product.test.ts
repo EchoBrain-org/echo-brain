@@ -160,6 +160,12 @@ describe('product-only artifact', () => {
         'schemas/product/active-identity-bundle.v1.schema.json',
         'schemas/product/federated-record-envelope.v1.schema.json',
         'dist/product/build-identity.v1.json',
+        'dist/product/federation/cutover-fence.js',
+        'dist/product/federation/cutover-fence.d.ts',
+        'dist/product/federation/independent-copy-store.js',
+        'dist/product/federation/independent-copy-store.d.ts',
+        'dist/product/federation/legacy-classification.js',
+        'dist/product/federation/legacy-classification.d.ts',
         'dist/product/lifecycle-lock.js',
         'dist/product/state-backup.js',
       ]),
@@ -360,6 +366,9 @@ describe('product-only artifact', () => {
     expect(help.stdout).toContain('echo-brain service');
     expect(help.stdout).toContain('echo-brain backup');
     expect(help.stdout).toContain('echo-brain restore');
+    expect(help.stdout).toContain('echo-brain export');
+    expect(help.stdout).toContain('echo-brain identity-bootstrap commit');
+    expect(help.stdout).toContain('--independent-copy-root <absolute-path>');
     const validated = await run(
       bin,
       ['validate-config', '--config', configPath],

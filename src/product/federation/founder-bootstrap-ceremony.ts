@@ -21,6 +21,7 @@ import { identityBindingConfigurationSnapshot } from "./binding-configuration.js
 import {
   commitFounderBootstrap as commitFounderIdentityBundle,
   mintFounderBootstrapIds,
+  type FounderBootstrapResult,
   type FounderBootstrapIds,
   type FounderBootstrapPlan,
 } from "./bootstrap.js";
@@ -62,6 +63,10 @@ import {
   type CapturedSlackProviderIdentityV1,
 } from "./slack-provider-identity.js";
 import { createSignedDocument } from "./signed-document.js";
+import {
+  commitFounderCutoverGuard,
+  readFounderCutoverGuard,
+} from "./cutover-fence.js";
 
 const DEFAULT_CHALLENGE_LIFETIME_MS = 10 * 60 * 1_000;
 const STATUS_POLL_INTERVAL_MS = 1_000;
@@ -85,6 +90,16 @@ export interface FounderBootstrapCeremonyDependencies {
   federationIdFactory?: (prefix: "clm" | "con" | "bnd") => string;
   challengeLifetimeMs?: number;
   /**
+   * Recover a cutover timestamp already frozen by a durable authorization
+   * side effect. Production uses the immutable legacy-classification report
+   * so a crash after that report is written but before the signed session
+   * enters `committing` rederives the exact same activation plan.
+   */
+  recoverSeedCutoverConfirmedAt?: (input: {
+    config: ProductRuntimeConfig;
+    session: FounderBootstrapSessionV1;
+  }) => Promise<string | null>;
+  /**
    * Test seam until the signed outbox and independent-copy gate land. Product
    * bootstrap deliberately has no default authorization in Workstream 2.
    */
@@ -92,6 +107,17 @@ export interface FounderBootstrapCeremonyDependencies {
     config: ProductRuntimeConfig;
     session: FounderBootstrapSessionV1;
     plan: FounderBootstrapPlan;
+  }) => Promise<void>;
+  /**
+   * Runs after the active pointer is durable but before the signed bootstrap
+   * session becomes complete. Production uses this recovery-safe window to
+   * prove the full strict gate, including the independent-copy target.
+   */
+  finalizeSeedCutover?: (input: {
+    config: ProductRuntimeConfig;
+    session: FounderBootstrapSessionV1;
+    plan: FounderBootstrapPlan;
+    result: FounderBootstrapResult;
   }) => Promise<void>;
 }
 
@@ -136,8 +162,14 @@ interface CeremonyContext {
   idsFactory: () => FounderBootstrapIds;
   federationIdFactory: (prefix: "clm" | "con" | "bnd") => string;
   challengeLifetimeMs: number;
+  recoverSeedCutoverConfirmedAt: NonNullable<
+    FounderBootstrapCeremonyDependencies["recoverSeedCutoverConfirmedAt"]
+  >;
   authorizeSeedCutover: NonNullable<
     FounderBootstrapCeremonyDependencies["authorizeSeedCutover"]
+  >;
+  finalizeSeedCutover: NonNullable<
+    FounderBootstrapCeremonyDependencies["finalizeSeedCutover"]
   >;
 }
 
@@ -164,6 +196,7 @@ function context(
   ) {
     throw new Error("founder bootstrap challenge lifetime must be 1-900000ms");
   }
+  const customAuthorization = dependencies.authorizeSeedCutover !== undefined;
   return {
     signer: requireSigner(dependencies),
     credentialResolver:
@@ -186,6 +219,8 @@ function context(
     federationIdFactory:
       dependencies.federationIdFactory ?? ((prefix) => federationId(prefix)),
     challengeLifetimeMs,
+    recoverSeedCutoverConfirmedAt:
+      dependencies.recoverSeedCutoverConfirmedAt ?? (async () => null),
     authorizeSeedCutover:
       dependencies.authorizeSeedCutover ??
       (async () => {
@@ -193,6 +228,15 @@ function context(
           "seed_cutover_unavailable: approval attribution, signed outbox, and verified independent copy are not installed",
         );
       }),
+    finalizeSeedCutover:
+      dependencies.finalizeSeedCutover ??
+      (customAuthorization
+        ? async () => undefined
+        : async () => {
+            throw new Error(
+              "seed_cutover_unavailable: post-activation strict verification is not installed",
+            );
+          }),
   };
 }
 
@@ -742,7 +786,11 @@ export async function beginFounderBootstrap(
 ): Promise<FounderBootstrapProgress> {
   const ceremony = context(dependencies);
   const identity = new ActiveIdentityBundleStore(config.state_dir);
-  if (identity.hasActiveBundle() || identity.hasIdentityMaterial()) {
+  if (
+    readFounderCutoverGuard(config.state_dir) !== null ||
+    identity.hasActiveBundle() ||
+    identity.hasIdentityMaterial()
+  ) {
     throw new Error("this state directory already contains identity material");
   }
   const store = new FounderBootstrapSessionStore(config.state_dir);
@@ -875,7 +923,11 @@ export async function abortFounderBootstrap(
 ): Promise<FounderBootstrapAbortResult> {
   const ceremony = context(dependencies);
   const identity = new ActiveIdentityBundleStore(config.state_dir);
-  if (identity.hasActiveBundle() || identity.hasIdentityMaterial()) {
+  if (
+    readFounderCutoverGuard(config.state_dir) !== null ||
+    identity.hasActiveBundle() ||
+    identity.hasIdentityMaterial()
+  ) {
     throw new Error(
       "founder bootstrap cannot be aborted after identity material exists",
     );
@@ -1017,19 +1069,24 @@ export async function commitFounderBootstrapCeremony(
     throw new Error("Slack provider identity changed before bootstrap commit");
   }
   if (session.phase === "ready_for_confirmation") {
-    const confirmedAt = ceremony.now();
+    const confirmedAt =
+      (await ceremony.recoverSeedCutoverConfirmedAt({ config, session })) ??
+      ceremony.now();
     const plan = deriveFounderBootstrapPlanFromSession(session, confirmedAt);
     await ceremony.authorizeSeedCutover({ config, session, plan });
+    const planSha256 = canonicalSha256(plan);
+    commitFounderCutoverGuard(config.state_dir, session, planSha256);
     session = await transition(store, session, ceremony.signer, {
       phase: "committing",
       commit: {
         confirmed_at: confirmedAt,
         confirmation_sha256: session.confirmation.confirmation_sha256,
-        plan_sha256: canonicalSha256(plan),
+        plan_sha256: planSha256,
         plan,
       },
     });
   }
+  commitFounderCutoverGuard(config.state_dir, session);
   await ceremony.authorizeSeedCutover({
     config,
     session,
@@ -1041,6 +1098,12 @@ export async function commitFounderBootstrapCeremony(
     ceremony.signer,
     { loadBuildIdentity: ceremony.loadBuildIdentity },
   );
+  await ceremony.finalizeSeedCutover({
+    config,
+    session,
+    plan: session.commit!.plan,
+    result,
+  });
   const completedAt = ceremony.now();
   session = await transition(store, session, ceremony.signer, {
     phase: "complete",

@@ -718,10 +718,16 @@ describe("Founder identity bundle foundation", () => {
     );
     expect(report.mode).toBe("identity_enabled");
     expect(report.foundation_ok).toBe(true);
-    expect(report.seed_grade_ready).toBe(true);
+    expect(report.seed_grade_ready).toBe(false);
     expect(
       report.checks.find((item) => item.id === "bundle-integrity")?.ok,
     ).toBe(true);
+    expect(
+      report.checks.find((item) => item.id === "seed-cutover"),
+    ).toMatchObject({
+      ok: false,
+      detail: expect.stringContaining("no irreversible bootstrap receipt"),
+    });
     expect(
       report.checks.find((item) => item.id === "installation-key")?.ok,
     ).toBe(true);

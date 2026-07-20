@@ -16,7 +16,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { LLM_DECISION_PROCESSOR_PROMPT_VERSION } from "../../src/adapters/decision-processors/llm/llm-decision-processor.js";
 import type { GranolaApiClient } from "../../src/adapters/meeting-sources/granola/index.js";
@@ -29,6 +29,13 @@ import type {
 } from "../../src/adapters/shared/slack/slack-web-api-client.js";
 import type { ProductRuntimeConfig } from "../../src/product/config.js";
 import { runProductCli } from "../../src/product/cli.js";
+import { DecisionNodeStore } from "../../src/product/approval/decision-node-store.js";
+import { resolveProductStatePaths } from "../../src/product/paths.js";
+import {
+  createProductStateBackup,
+  restoreProductStateBackup,
+} from "../../src/product/state-backup.js";
+import { canonicalProductConfigSha256 } from "../../src/product/lifecycle-lock.js";
 import {
   abortFounderBootstrap,
   beginFounderBootstrap,
@@ -40,9 +47,21 @@ import { ActiveIdentityBundleStore } from "../../src/product/federation/active-i
 import { checkFounderIdentity } from "../../src/product/federation/identity-check.js";
 import { FounderBootstrapSessionStore } from "../../src/product/federation/bootstrap-session-store.js";
 import {
+  assertFounderCutoverReceiptMatchesActiveBundle,
+  founderCutoverGuardPath,
+  inspectFounderCutoverFence,
+  readFounderCutoverGuard,
+  requiresFounderFederation,
+} from "../../src/product/federation/cutover-fence.js";
+import {
   canonicalJson,
   canonicalSha256,
 } from "../../src/product/federation/canonical-json.js";
+import {
+  commitLegacyClassificationReport,
+  recoverLegacyClassificationCutoverAt,
+} from "../../src/product/federation/legacy-classification.js";
+import { createSignedDocument } from "../../src/product/federation/signed-document.js";
 import type {
   InstallationKeyDescriptor,
   InstallationSigner,
@@ -870,6 +889,252 @@ describe("founder bootstrap ceremony", () => {
     expect(existsSync(join(stateDir, "identity"))).toBe(false);
   });
 
+  it("recovers the exact legacy cutover plan after authorization is durable but the session transition crashes", async () => {
+    const stateDir = privateState();
+    const test = fixture(stateDir);
+    let clock = NOW;
+    let crashAfterReport = true;
+    const decisionNodes = new DecisionNodeStore(stateDir, {
+      now: () => clock,
+    });
+    const dependencies: FounderBootstrapCeremonyDependencies = {
+      ...test.dependencies,
+      now: () => clock,
+      recoverSeedCutoverConfirmedAt: async ({ config, session }) =>
+        recoverLegacyClassificationCutoverAt({
+          state_directory: config.state_dir,
+          bootstrap_session_id: session.session_id,
+        }),
+      authorizeSeedCutover: async ({ config, session, plan }) => {
+        await commitLegacyClassificationReport({
+          state_directory: config.state_dir,
+          bootstrap_session_id: session.session_id,
+          decision_nodes: decisionNodes,
+          core_database_path: resolveProductStatePaths(config.state_dir)
+            .database,
+          cutover_at: plan.manifest.legacy_cutover.declared_at,
+        });
+        if (crashAfterReport) {
+          crashAfterReport = false;
+          throw new Error("simulated crash after durable legacy report");
+        }
+      },
+    };
+    const begun = await beginFounderBootstrap(
+      test.config,
+      {
+        organizationDisplayName: "EchoBrain",
+        principalDisplayName: "Zhenye",
+        slackUserId: "U123FOUNDER",
+      },
+      dependencies,
+    );
+    test.slack.reactionObserved = true;
+    const ready = await statusFounderBootstrap(
+      test.config,
+      begun.session_id,
+      {},
+      dependencies,
+    );
+
+    const firstCommitAt = "2026-07-19T23:01:00.000Z";
+    clock = firstCommitAt;
+    await expect(
+      commitFounderBootstrapCeremony(
+        test.config,
+        begun.session_id,
+        ready.confirmation!.confirmation_sha256,
+        dependencies,
+      ),
+    ).rejects.toThrow(/simulated crash after durable legacy report/);
+    expect(
+      new FounderBootstrapSessionStore(stateDir).read(begun.session_id).phase,
+    ).toBe("ready_for_confirmation");
+    expect(
+      recoverLegacyClassificationCutoverAt({
+        state_directory: stateDir,
+        bootstrap_session_id: begun.session_id,
+      }),
+    ).toBe(firstCommitAt);
+
+    clock = "2026-07-19T23:02:00.000Z";
+    const completed = await commitFounderBootstrapCeremony(
+      test.config,
+      begun.session_id,
+      ready.confirmation!.confirmation_sha256,
+      dependencies,
+    );
+    expect(completed.phase).toBe("complete");
+    const session = new FounderBootstrapSessionStore(stateDir).read(
+      begun.session_id,
+    );
+    expect(session.commit!.confirmed_at).toBe(firstCommitAt);
+    expect(session.commit!.plan.manifest.legacy_cutover.declared_at).toBe(
+      firstCommitAt,
+    );
+  });
+
+  it("writes the external fail-closed guard before the committing transition", async () => {
+    const stateDir = privateState();
+    const test = fixture(stateDir);
+    const dependencies: FounderBootstrapCeremonyDependencies = {
+      ...test.dependencies,
+      authorizeSeedCutover: async () => undefined,
+    };
+    const begun = await beginFounderBootstrap(
+      test.config,
+      {
+        organizationDisplayName: "EchoBrain",
+        principalDisplayName: "Zhenye",
+        slackUserId: "U123FOUNDER",
+      },
+      dependencies,
+    );
+    test.slack.reactionObserved = true;
+    const ready = await statusFounderBootstrap(
+      test.config,
+      begun.session_id,
+      {},
+      dependencies,
+    );
+    const originalSign = test.signer.sign.bind(test.signer);
+    let crashAfterGuard = true;
+    test.signer.sign = async (...args) => {
+      if (crashAfterGuard && readFounderCutoverGuard(stateDir) !== null) {
+        crashAfterGuard = false;
+        throw new Error("simulated crash after external guard");
+      }
+      return await originalSign(...args);
+    };
+
+    await expect(
+      commitFounderBootstrapCeremony(
+        test.config,
+        begun.session_id,
+        ready.confirmation!.confirmation_sha256,
+        dependencies,
+      ),
+    ).rejects.toThrow(/simulated crash after external guard/);
+    expect(
+      new FounderBootstrapSessionStore(stateDir).read(begun.session_id).phase,
+    ).toBe("ready_for_confirmation");
+    expect(readFounderCutoverGuard(stateDir)).toMatchObject({
+      session_id: begun.session_id,
+    });
+    expect(requiresFounderFederation(stateDir)).toBe(true);
+    await expect(checkFounderIdentity(stateDir)).resolves.toMatchObject({
+      mode: "identity_enabled",
+      foundation_ok: false,
+      seed_grade_ready: false,
+    });
+    await expect(
+      abortFounderBootstrap(
+        test.config,
+        begun.session_id,
+        new FounderBootstrapSessionStore(stateDir).read(begun.session_id)
+          .signing_key!.key_id,
+        dependencies,
+      ),
+    ).rejects.toThrow(/identity material/);
+    await expect(
+      beginFounderBootstrap(
+        test.config,
+        {
+          organizationDisplayName: "Other",
+          principalDisplayName: "Other",
+          slackUserId: "UOTHER",
+        },
+        dependencies,
+      ),
+    ).rejects.toThrow(/identity material/);
+
+    await expect(
+      commitFounderBootstrapCeremony(
+        test.config,
+        begun.session_id,
+        ready.confirmation!.confirmation_sha256,
+        dependencies,
+      ),
+    ).resolves.toMatchObject({ phase: "complete" });
+
+    const slackCalls = test.slack.authCalls;
+    rmSync(stateDir, { recursive: true });
+    mkdirSync(stateDir, { mode: 0o700 });
+    expect(requiresFounderFederation(stateDir)).toBe(true);
+    await expect(
+      beginFounderBootstrap(
+        test.config,
+        {
+          organizationDisplayName: "Replacement",
+          principalDisplayName: "Replacement",
+          slackUserId: "UREPLACEMENT",
+        },
+        dependencies,
+      ),
+    ).rejects.toThrow(/identity material/);
+    expect(test.slack.authCalls).toBe(slackCalls);
+  });
+
+  it("keeps an active cutover in committing until post-activation verification succeeds", async () => {
+    const stateDir = privateState();
+    const test = fixture(stateDir);
+    let finalizationCalls = 0;
+    const dependencies: FounderBootstrapCeremonyDependencies = {
+      ...test.dependencies,
+      authorizeSeedCutover: async () => undefined,
+      finalizeSeedCutover: async ({ result, session }) => {
+        finalizationCalls += 1;
+        expect(result.manifest.installation.installation_id).toBe(
+          session.request.ids.installation_id,
+        );
+        if (finalizationCalls === 1) {
+          throw new Error("independent copy verification failed");
+        }
+      },
+    };
+    const begun = await beginFounderBootstrap(
+      test.config,
+      {
+        organizationDisplayName: "EchoBrain",
+        principalDisplayName: "Zhenye",
+        slackUserId: "U123FOUNDER",
+      },
+      dependencies,
+    );
+    test.slack.reactionObserved = true;
+    const ready = await statusFounderBootstrap(
+      test.config,
+      begun.session_id,
+      {},
+      dependencies,
+    );
+
+    await expect(
+      commitFounderBootstrapCeremony(
+        test.config,
+        begun.session_id,
+        ready.confirmation!.confirmation_sha256,
+        dependencies,
+      ),
+    ).rejects.toThrow(/independent copy verification failed/);
+    expect(
+      new FounderBootstrapSessionStore(stateDir).read(begun.session_id).phase,
+    ).toBe("committing");
+    expect(
+      existsSync(join(stateDir, "identity", "active-identity-bundle.v1.json")),
+    ).toBe(true);
+
+    await expect(
+      commitFounderBootstrapCeremony(
+        test.config,
+        begun.session_id,
+        ready.confirmation!.confirmation_sha256,
+        dependencies,
+      ),
+    ).resolves.toMatchObject({ phase: "complete" });
+    expect(finalizationCalls).toBe(2);
+  });
+
   it("never reports a completed session when its active bundle is missing", async () => {
     const stateDir = privateState();
     const test = fixture(stateDir);
@@ -1000,5 +1265,369 @@ describe("founder bootstrap ceremony", () => {
     });
     expect(existsSync(join(stateDir, "bootstrap"))).toBe(false);
     expect(existsSync(join(stateDir, "identity"))).toBe(false);
+  });
+
+  it("requires a protected independent-copy target before production commit", async () => {
+    const stateDir = privateState();
+    const test = fixture(stateDir);
+    const configPath = join(stateDir, "runtime.json");
+    writeFileSync(configPath, `${JSON.stringify(test.config)}\n`, {
+      mode: 0o600,
+    });
+    let stdout = "";
+    let stderr = "";
+
+    const status = await runProductCli(
+      [
+        "identity-bootstrap",
+        "commit",
+        "--config",
+        configPath,
+        "--session",
+        "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+        "--confirm",
+        `sha256:${"1".repeat(64)}`,
+      ],
+      {
+        founderBootstrap: test.dependencies,
+        stdout: {
+          write: (value: string | Uint8Array) => (
+            (stdout += value.toString()),
+            true
+          ),
+        },
+        stderr: {
+          write: (value: string | Uint8Array) => (
+            (stderr += value.toString()),
+            true
+          ),
+        },
+      },
+    );
+
+    expect(status).toBe(2);
+    expect(stdout).toBe("");
+    expect(JSON.parse(stderr)).toMatchObject({
+      ok: false,
+      command: "identity-bootstrap",
+      action: "commit",
+      error: expect.stringContaining("--independent-copy-root"),
+    });
+    expect(existsSync(join(stateDir, "identity"))).toBe(false);
+  });
+});
+
+describe("founder seed cutover fence", () => {
+  it("keeps precommit enrollment in rehearsal and complete enrollment fenced after identity loss", async () => {
+    const stateDir = privateState();
+    const test = fixture(stateDir);
+    const dependencies: FounderBootstrapCeremonyDependencies = {
+      ...test.dependencies,
+      authorizeSeedCutover: async () => undefined,
+    };
+
+    expect(inspectFounderCutoverFence(stateDir)).toEqual({
+      state: "none",
+      session: null,
+    });
+    const begun = await beginFounderBootstrap(
+      test.config,
+      {
+        organizationDisplayName: "EchoBrain",
+        principalDisplayName: "Zhenye",
+        slackUserId: "U123FOUNDER",
+      },
+      dependencies,
+    );
+    expect(inspectFounderCutoverFence(stateDir).state).toBe("precommit");
+    expect(requiresFounderFederation(stateDir)).toBe(false);
+
+    test.slack.reactionObserved = true;
+    const ready = await statusFounderBootstrap(
+      test.config,
+      begun.session_id,
+      {},
+      dependencies,
+    );
+    expect(inspectFounderCutoverFence(stateDir).state).toBe("precommit");
+    await commitFounderBootstrapCeremony(
+      test.config,
+      begun.session_id,
+      ready.confirmation!.confirmation_sha256,
+      dependencies,
+    );
+
+    const activeStore = new ActiveIdentityBundleStore(stateDir);
+    const active = activeStore.loadVerified(test.config)!;
+    expect(inspectFounderCutoverFence(stateDir).state).toBe("complete");
+    expect(requiresFounderFederation(stateDir)).toBe(true);
+    expect(
+      assertFounderCutoverReceiptMatchesActiveBundle(stateDir, active).phase,
+    ).toBe("complete");
+    expect(() =>
+      assertFounderCutoverReceiptMatchesActiveBundle(
+        stateDir,
+        active,
+        {},
+        { list: () => [] },
+      ),
+    ).toThrow(/no irreversible bootstrap receipt/);
+    expect(() =>
+      assertFounderCutoverReceiptMatchesActiveBundle(stateDir, {
+        ...active,
+        pointer: {
+          ...active.pointer,
+          activated_at: "2026-07-19T23:00:00.001Z",
+        },
+      }),
+    ).toThrow(/does not match the active identity pointer/);
+
+    rmSync(join(stateDir, "identity"), { recursive: true, force: true });
+    expect(requiresFounderFederation(stateDir)).toBe(true);
+    const identityCheck = await checkFounderIdentity(stateDir);
+    expect(identityCheck).toMatchObject({
+      mode: "identity_enabled",
+      foundation_ok: false,
+      seed_grade_ready: false,
+    });
+    expect(
+      identityCheck.checks.find((item) => item.id === "active-bundle"),
+    ).toMatchObject({
+      ok: false,
+      detail: expect.stringContaining("irreversible founder cutover"),
+    });
+  });
+
+  it("rejects a pre-cutover restore even when the adjacent guard is missing", async () => {
+    const stateDir = privateState();
+    const test = fixture(stateDir);
+    const backupRoot = join(dirname(stateDir), "backups");
+    const configSha256 = canonicalProductConfigSha256(test.config);
+    const preCutover = await createProductStateBackup({
+      stateDir,
+      backupRoot,
+      backupId: "pre-founder-cutover",
+      createdAt: "2026-07-19T22:58:00.000Z",
+      canonicalConfigSha256: configSha256,
+    });
+    const dependencies: FounderBootstrapCeremonyDependencies = {
+      ...test.dependencies,
+      authorizeSeedCutover: async () => undefined,
+    };
+    const begun = await beginFounderBootstrap(
+      test.config,
+      {
+        organizationDisplayName: "EchoBrain",
+        principalDisplayName: "Zhenye",
+        slackUserId: "U123FOUNDER",
+      },
+      dependencies,
+    );
+    test.slack.reactionObserved = true;
+    const ready = await statusFounderBootstrap(
+      test.config,
+      begun.session_id,
+      {},
+      dependencies,
+    );
+    await commitFounderBootstrapCeremony(
+      test.config,
+      begun.session_id,
+      ready.confirmation!.confirmation_sha256,
+      dependencies,
+    );
+    const recoverySentinel = join(stateDir, "identity-recovery-sentinel.txt");
+    writeFileSync(recoverySentinel, "trusted\n", { mode: 0o600 });
+    const activeBackup = await createProductStateBackup({
+      stateDir,
+      backupRoot,
+      backupId: "active-founder-cutover",
+      createdAt: "2026-07-19T23:01:00.000Z",
+      canonicalConfigSha256: configSha256,
+    });
+    writeFileSync(recoverySentinel, "mutated\n", { mode: 0o600 });
+    await restoreProductStateBackup({
+      stateDir,
+      backupDirectory: activeBackup.backupDirectory,
+      automaticBackupRoot: backupRoot,
+      operationId: "restore-matching-founder-cutover",
+      restoredAt: "2026-07-19T23:03:00.000Z",
+      preRestoreBackupId: "pre-restore-matching-founder-cutover",
+      preRestoreBackupCreatedAt: "2026-07-19T23:02:00.000Z",
+      canonicalConfigSha256: configSha256,
+    });
+    expect(readFileSync(recoverySentinel, "utf8")).toBe("trusted\n");
+    rmSync(founderCutoverGuardPath(stateDir));
+
+    await expect(
+      restoreProductStateBackup({
+        stateDir,
+        backupDirectory: preCutover.backupDirectory,
+        automaticBackupRoot: backupRoot,
+        operationId: "reject-missing-guard-downgrade",
+        restoredAt: "2026-07-19T23:05:00.000Z",
+        preRestoreBackupId: "must-not-create-missing-guard-pre-backup",
+        preRestoreBackupCreatedAt: "2026-07-19T23:04:00.000Z",
+        canonicalConfigSha256: configSha256,
+      }),
+    ).rejects.toThrow(/irreversible founder identity cutover/);
+    expect(
+      new FounderBootstrapSessionStore(stateDir).read(begun.session_id).phase,
+    ).toBe("complete");
+
+    const sessionPath = join(
+      resolveProductStatePaths(stateDir).bootstrapRoot,
+      "founder-identity",
+      `session.${begun.session_id}.v1.json`,
+    );
+    writeFileSync(sessionPath, "{}", { mode: 0o600 });
+    await expect(
+      restoreProductStateBackup({
+        stateDir,
+        backupDirectory: preCutover.backupDirectory,
+        automaticBackupRoot: backupRoot,
+        operationId: "reject-malformed-fence-downgrade",
+        restoredAt: "2026-07-19T23:07:00.000Z",
+        preRestoreBackupId: "must-not-create-malformed-pre-backup",
+        preRestoreBackupCreatedAt: "2026-07-19T23:06:00.000Z",
+        canonicalConfigSha256: configSha256,
+      }),
+    ).rejects.toThrow(/bootstrap session|canonical|shape|signature/i);
+  });
+
+  it("accepts committing only for explicit crash finalization", async () => {
+    const stateDir = privateState();
+    const test = fixture(stateDir);
+    const dependencies: FounderBootstrapCeremonyDependencies = {
+      ...test.dependencies,
+      authorizeSeedCutover: async () => undefined,
+    };
+    const begun = await beginFounderBootstrap(
+      test.config,
+      {
+        organizationDisplayName: "EchoBrain",
+        principalDisplayName: "Zhenye",
+        slackUserId: "U123FOUNDER",
+      },
+      dependencies,
+    );
+    test.slack.reactionObserved = true;
+    const ready = await statusFounderBootstrap(
+      test.config,
+      begun.session_id,
+      {},
+      dependencies,
+    );
+    const originalSign = test.signer.sign.bind(test.signer);
+    let failCompletion = true;
+    test.signer.sign = async (...args) => {
+      if (
+        failCompletion &&
+        existsSync(join(stateDir, "identity", "active-identity-bundle.v1.json"))
+      ) {
+        failCompletion = false;
+        throw new Error("simulated crash before complete receipt");
+      }
+      return await originalSign(...args);
+    };
+
+    await expect(
+      commitFounderBootstrapCeremony(
+        test.config,
+        begun.session_id,
+        ready.confirmation!.confirmation_sha256,
+        dependencies,
+      ),
+    ).rejects.toThrow(/simulated crash before complete receipt/);
+    expect(inspectFounderCutoverFence(stateDir).state).toBe("committing");
+    expect(requiresFounderFederation(stateDir)).toBe(true);
+    const active = new ActiveIdentityBundleStore(stateDir).loadVerified(
+      test.config,
+    )!;
+    expect(() =>
+      assertFounderCutoverReceiptMatchesActiveBundle(stateDir, active),
+    ).toThrow(/must be finalized/);
+    expect(
+      assertFounderCutoverReceiptMatchesActiveBundle(stateDir, active, {
+        allowCommittingFinalization: true,
+      }).phase,
+    ).toBe("committing");
+
+    await commitFounderBootstrapCeremony(
+      test.config,
+      begun.session_id,
+      ready.confirmation!.confirmation_sha256,
+      dependencies,
+    );
+    expect(inspectFounderCutoverFence(stateDir).state).toBe("complete");
+  });
+
+  it("fails closed on malformed or multiple irreversible receipts", async () => {
+    const malformedState = privateState();
+    const malformedDirectory = join(
+      malformedState,
+      "bootstrap",
+      "founder-identity",
+    );
+    mkdirSync(malformedDirectory, { recursive: true, mode: 0o700 });
+    writeFileSync(
+      join(
+        malformedDirectory,
+        "session.aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa.v1.json",
+      ),
+      "{}",
+      { mode: 0o600 },
+    );
+    expect(() => inspectFounderCutoverFence(malformedState)).toThrow();
+    expect(() => requiresFounderFederation(malformedState)).toThrow();
+
+    const stateDir = privateState();
+    const test = fixture(stateDir);
+    const dependencies: FounderBootstrapCeremonyDependencies = {
+      ...test.dependencies,
+      authorizeSeedCutover: async () => undefined,
+    };
+    const begun = await beginFounderBootstrap(
+      test.config,
+      {
+        organizationDisplayName: "EchoBrain",
+        principalDisplayName: "Zhenye",
+        slackUserId: "U123FOUNDER",
+      },
+      dependencies,
+    );
+    test.slack.reactionObserved = true;
+    const ready = await statusFounderBootstrap(
+      test.config,
+      begun.session_id,
+      {},
+      dependencies,
+    );
+    await commitFounderBootstrapCeremony(
+      test.config,
+      begun.session_id,
+      ready.confirmation!.confirmation_sha256,
+      dependencies,
+    );
+    const store = new FounderBootstrapSessionStore(stateDir);
+    const existing = store.read(begun.session_id);
+    const { integrity: _integrity, ...payload } = existing;
+    const duplicate = await createSignedDocument(
+      {
+        ...payload,
+        session_id: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
+        revision: 1,
+      },
+      test.signer,
+      existing.signing_key!.installation_id,
+      existing.signing_key!.key_id,
+    );
+    store.write(duplicate);
+    expect(() => inspectFounderCutoverFence(stateDir)).toThrow(
+      /multiple irreversible bootstrap sessions/,
+    );
+    expect(() => requiresFounderFederation(stateDir)).toThrow(
+      /multiple irreversible bootstrap sessions/,
+    );
   });
 });

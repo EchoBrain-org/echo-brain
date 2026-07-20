@@ -152,10 +152,15 @@ describe('ApprovalProjectingCoreStateStore', () => {
       expect(state).toBe(storedNode);
       return [];
     });
+    const afterProjection = vi.fn(async (state: DecisionNodeState) => {
+      order.push('copy');
+      expect(state).toBe(storedNode);
+    });
     const state = new ApprovalProjectingCoreStateStore(
       base,
       decisionNodes,
       projector(projectApproved),
+      afterProjection,
     );
 
     const first = await state.getApproval(PROCESSING_KEY);
@@ -169,15 +174,39 @@ describe('ApprovalProjectingCoreStateStore', () => {
       'cache',
       'node',
       'project',
+      'copy',
       'returned',
       'cache',
       'node',
       'project',
+      'copy',
       'returned',
     ]);
     expect(decisionNodes.getState).toHaveBeenCalledTimes(2);
     expect(decisionNodes.getState).toHaveBeenNthCalledWith(1, PROCESSING_KEY);
     expect(projectApproved).toHaveBeenCalledTimes(2);
+    expect(afterProjection).toHaveBeenCalledTimes(2);
+  });
+
+  it('withholds an approved cache when the post-projection copy gate fails', async () => {
+    const base = delegate(async () => approved);
+    const storedNode = node();
+    const projectApproved = vi.fn(async () => []);
+    const afterProjection = vi.fn(async () => {
+      throw new Error('independent copy is unavailable');
+    });
+    const state = new ApprovalProjectingCoreStateStore(
+      base,
+      { getState: vi.fn(async () => storedNode) },
+      projector(projectApproved),
+      afterProjection,
+    );
+
+    await expect(state.getApproval(PROCESSING_KEY)).rejects.toThrow(
+      'independent copy is unavailable',
+    );
+    expect(projectApproved).toHaveBeenCalledOnce();
+    expect(afterProjection).toHaveBeenCalledOnce();
   });
 
   it('fails closed when an approved cache has no durable decision node', async () => {

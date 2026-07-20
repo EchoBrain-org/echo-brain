@@ -177,6 +177,14 @@ describe('dependency partition', () => {
     expect(out.used_commands).toContain('/sbin/mount');
   });
 
+  it('the independent-copy macOS helper edges are declared and enforced', () => {
+    const r = spawnSync(process.execPath, [join(REPO, 'tools/check-dependencies.mjs')], { cwd: REPO, encoding: 'utf8' });
+    const out = JSON.parse(r.stdout) as { used_commands: string[]; errors: string[] };
+    expect(out.errors).toEqual([]);
+    expect(out.used_commands).toContain('/usr/sbin/diskutil');
+    expect(out.used_commands).toContain('/usr/bin/plutil');
+  });
+
   it('N2 spawnSanitizedChild edge: an undeclared command via the sanctioned spawner fails the checker', () => {
     const clone = cloneRepo();
     // No import needed — the command-partition scan is textual; an import string would only

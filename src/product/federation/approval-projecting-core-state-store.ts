@@ -23,6 +23,14 @@ type ApprovedRecordProjector = Pick<
   FederatedRecordProjector,
   'projectApproved'
 >;
+type ProjectedApprovalGroup = Awaited<
+  ReturnType<ApprovedRecordProjector['projectApproved']>
+>;
+
+export type ApprovedProjectionCommitGate = (
+  state: DecisionNodeState,
+  projected: ProjectedApprovalGroup,
+) => Promise<void>;
 
 function fail(message: string): never {
   throw new Error(`approved record projection gate failed: ${message}`);
@@ -48,6 +56,7 @@ export class ApprovalProjectingCoreStateStore implements CoreStateStore {
     private readonly delegate: CoreStateStore & { close?: () => void },
     private readonly decisionNodes: DecisionNodeReader,
     private readonly projector: ApprovedRecordProjector,
+    private readonly afterProjection?: ApprovedProjectionCommitGate,
   ) {}
 
   async getSourceCursor(
@@ -102,7 +111,8 @@ export class ApprovalProjectingCoreStateStore implements CoreStateStore {
       fail(`approved cache diverges from decision node (${processingKey})`);
     }
 
-    await this.projector.projectApproved(node);
+    const projected = await this.projector.projectApproved(node);
+    await this.afterProjection?.(node, projected);
     return cached;
   }
 

@@ -426,6 +426,12 @@ describe('founder federation runtime wiring', () => {
       artifact_sha256: `sha256:${'b'.repeat(64)}` as const,
     };
     const verifyArtifact = vi.fn();
+    const runtimeCopyCheck = vi.fn(async () => ({
+      ok: true,
+      detail: 'runtime-owned protected-copy evidence',
+      copied_installations: 0,
+      copied_events: 0,
+    }));
     const runtime = await openFounderFederationRuntime({
       runtimeConfig: config(stateDir),
       databasePath: ':memory:',
@@ -438,6 +444,15 @@ describe('founder federation runtime wiring', () => {
       lineage: {} as never,
       attributionStore: attribution,
       outbox,
+      independentCopyStore: {
+        check: runtimeCopyCheck,
+        ensure: vi.fn(async () => ({
+          ok: true,
+          detail: 'runtime-owned protected-copy evidence',
+          copied_installations: 0,
+          copied_events: 0,
+        })),
+      },
       artifactProvider: {
         current: () => artifact,
         verify: verifyArtifact,
@@ -473,7 +488,8 @@ describe('founder federation runtime wiring', () => {
       ok: true,
     });
     expect(callerProbe).not.toHaveBeenCalled();
-    expect(independentCopyReady).toHaveBeenCalledOnce();
+    expect(independentCopyReady).not.toHaveBeenCalled();
+    expect(runtimeCopyCheck).toHaveBeenCalledOnce();
     expect(verifyArtifact).toHaveBeenCalledWith(artifact);
 
     const base = baseState();

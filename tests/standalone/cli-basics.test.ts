@@ -15,6 +15,9 @@ describe('standalone CLI basics', () => {
     expect(await runProductCli([], { stdout: stdout.stream })).toBe(0);
     expect(stdout.read()).toContain('Usage:');
     expect(stdout.read()).toContain('echo-brain selftest');
+    expect(stdout.read()).toContain('echo-brain export');
+    expect(stdout.read()).toContain('echo-brain identity-bootstrap commit');
+    expect(stdout.read()).toContain('--independent-copy-root <absolute-path>');
   });
 
   it('prints the package version without requiring a config', async () => {
@@ -23,4 +26,3 @@ describe('standalone CLI basics', () => {
     expect(stdout.read()).toBe('0.0.0-dev.0\n');
   });
 });
-

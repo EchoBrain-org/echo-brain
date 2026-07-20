@@ -76,6 +76,18 @@ import {
   type FounderFederationRuntime,
 } from "./federation/runtime-wiring.js";
 import { ActiveIdentityBundleStore } from "./federation/active-identity-bundle-store.js";
+import { requiresFounderFederation } from "./federation/cutover-fence.js";
+import {
+  FounderIndependentCopyStore,
+  type IndependentCopyPlatformInspector,
+} from "./federation/independent-copy-store.js";
+import { IdentityLineageStore } from "./federation/identity-lineage-store.js";
+import { FederatedOutboxStore } from "./federation/outbox-store.js";
+import {
+  assertLegacyProcessingBoundaryReady,
+  commitLegacyClassificationReport,
+  recoverLegacyClassificationCutoverAt,
+} from "./federation/legacy-classification.js";
 import { resolveProductStatePaths } from "./paths.js";
 import { SqliteCoreStateStore } from "../storage/core-state-sqlite.js";
 
@@ -106,6 +118,8 @@ export interface ProductCliDependencies {
   /** Complete command-scoped federation seam for identity-active tests/hosts. */
   federationRuntime?: FounderFederationRuntime;
   founderBootstrap?: FounderBootstrapCeremonyDependencies;
+  /** Test/platform seam for the protected independent-copy volume proof. */
+  independentCopyInspector?: IndependentCopyPlatformInspector;
   acquireLifecycleLock?: (
     stateDirectory: string,
     kind: ProductLifecycleLockKind,
@@ -127,6 +141,7 @@ interface ParsedCommand {
     | "doctor"
     | "identity-check"
     | "identity-bootstrap"
+    | "export"
     | "service"
     | "backup"
     | "restore"
@@ -151,6 +166,7 @@ interface ParsedCommand {
   bootstrapSessionId?: string;
   confirmationSha256?: string;
   renewChallenge?: boolean;
+  independentCopyRoot?: string;
 }
 
 const PRODUCT_VERSION = (
@@ -173,8 +189,9 @@ Usage:
   echo-brain identity-check --config <absolute-path> [--strict]
   echo-brain identity-bootstrap begin --config <absolute-path> --organization-name <name> --principal-name <name> --slack-user-id <U...> [--device-class <byod|managed>]
   echo-brain identity-bootstrap status --config <absolute-path> --session <uuid> [--renew-challenge]
-  echo-brain identity-bootstrap commit --config <absolute-path> --session <uuid> --confirm <sha256:...>
+  echo-brain identity-bootstrap commit --config <absolute-path> --session <uuid> --confirm <sha256:...> --independent-copy-root <absolute-path>
   echo-brain identity-bootstrap abort --config <absolute-path> --session <uuid> --confirm <installation-key-sha256>
+  echo-brain export --config <absolute-path>
   echo-brain service <install|start|stop|restart|status|uninstall> --config <absolute-path>
   echo-brain backup --config <absolute-path> --backup-root <absolute-path> [--id <operation-id>]
   echo-brain restore --config <absolute-path> --backup <absolute-path> --backup-root <absolute-path> --id <operation-id>
@@ -204,6 +221,7 @@ function parseCommand(argv: readonly string[]): ParsedCommand {
     command !== "doctor" &&
     command !== "identity-check" &&
     command !== "identity-bootstrap" &&
+    command !== "export" &&
     command !== "service" &&
     command !== "backup" &&
     command !== "restore" &&
@@ -216,7 +234,7 @@ function parseCommand(argv: readonly string[]): ParsedCommand {
     command !== "run"
   ) {
     throw new Error(
-      "usage: echo-brain <onboard|init|reconfigure|status|doctor|identity-check|identity-bootstrap|service|backup|restore|validate-config|selftest|run-once|run|approvals|approve|reject> --config <absolute-path>",
+      "usage: echo-brain <onboard|init|reconfigure|status|doctor|identity-check|identity-bootstrap|export|service|backup|restore|validate-config|selftest|run-once|run|approvals|approve|reject> --config <absolute-path>",
     );
   }
   let serviceAction: ProductServiceAction | undefined;
@@ -275,6 +293,7 @@ function parseCommand(argv: readonly string[]): ParsedCommand {
       session: { type: "string" },
       confirm: { type: "string" },
       "renew-challenge": { type: "boolean" },
+      "independent-copy-root": { type: "string" },
     },
   });
   if (parsed.values.config === undefined)
@@ -290,6 +309,7 @@ function parseCommand(argv: readonly string[]): ParsedCommand {
       command === "doctor" ||
       command === "identity-check" ||
       command === "identity-bootstrap" ||
+      command === "export" ||
       command === "service" ||
       command === "service-run" ||
       command === "backup" ||
@@ -345,6 +365,25 @@ function parseCommand(argv: readonly string[]): ParsedCommand {
         "--renew-challenge is only valid with identity-bootstrap status",
       );
     }
+    if (
+      parsed.values["independent-copy-root"] !== undefined &&
+      identityBootstrapAction !== "commit"
+    ) {
+      throw new Error(
+        "--independent-copy-root is only valid with identity-bootstrap commit",
+      );
+    }
+    if (
+      identityBootstrapAction === "commit" &&
+      parsed.values["independent-copy-root"] !== undefined &&
+      !isAbsolute(parsed.values["independent-copy-root"])
+    ) {
+      throw new Error("--independent-copy-root must be an absolute path");
+    }
+  } else if (parsed.values["independent-copy-root"] !== undefined) {
+    throw new Error(
+      "--independent-copy-root is only valid with identity-bootstrap commit",
+    );
   }
   if (command === "approve" || command === "reject") {
     if (parsed.values.id === undefined) throw new Error("--id is required");
@@ -420,6 +459,9 @@ function parseCommand(argv: readonly string[]): ParsedCommand {
     ...(parsed.values["renew-challenge"] === true
       ? { renewChallenge: true }
       : {}),
+    ...(parsed.values["independent-copy-root"] === undefined
+      ? {}
+      : { independentCopyRoot: parsed.values["independent-copy-root"] }),
   };
 }
 
@@ -517,7 +559,7 @@ function printRuntimeFailure(
 
 function identityRequiresFederation(stateDirectory: string): boolean {
   const identity = new ActiveIdentityBundleStore(stateDirectory);
-  return identity.hasActiveBundle() || identity.hasIdentityMaterial();
+  return requiresFounderFederation(stateDirectory, identity);
 }
 
 async function createCliComposition(
@@ -620,6 +662,11 @@ async function createCliComposition(
         runtimeConfig: config,
         databasePath: paths.database,
         signer: identityBase.signer,
+        ...(dependencies.independentCopyInspector === undefined
+          ? {}
+          : {
+              independentCopyInspector: dependencies.independentCopyInspector,
+            }),
         ...(now === undefined ? {} : { now }),
         ...(customComposition?.createId === undefined
           ? {}
@@ -768,11 +815,13 @@ function isOnlyTargetProjectionPending(
 ): boolean {
   if (!(error instanceof FounderIdentityGateError)) return false;
   const failures = error.report.checks.filter((item) => !item.ok);
-  return (
-    failures.length === 1 &&
-    failures[0]!.id === "signed-outbox" &&
-    failures[0]!.detail ===
-      `projection pending: approval ${approvalId} has no signed outbox group`
+  if (failures.length === 0) return false;
+  return failures.every(
+    (failure) =>
+      (failure.id === "signed-outbox" &&
+        failure.detail ===
+          `projection pending: approval ${approvalId} has no signed outbox group`) ||
+      failure.id === "independent-copy",
   );
 }
 
@@ -793,6 +842,115 @@ function resolveFounderBootstrapDependencies(
       configured.credentialResolver ??
       createProductCredentialResolver(dependencies.environment ?? process.env),
     now: configured.now ?? resolveProductClock(dependencies.now),
+  };
+}
+
+async function configureFounderIndependentCopyTarget(
+  config: ProductRuntimeConfig,
+  signer: NonNullable<FounderBootstrapCeremonyDependencies["signer"]>,
+  targetRoot: string,
+  dependencies: ProductCliDependencies,
+): Promise<void> {
+  const databasePath = resolveProductStatePaths(config.state_dir).database;
+  const outbox = new FederatedOutboxStore(databasePath);
+  try {
+    const store = new FounderIndependentCopyStore({
+      stateDirectory: config.state_dir,
+      outbox,
+      identitySource: new IdentityLineageStore(config.state_dir),
+      signer,
+      ...(dependencies.independentCopyInspector === undefined
+        ? {}
+        : { inspector: dependencies.independentCopyInspector }),
+      ...(dependencies.now === undefined ? {} : { now: dependencies.now }),
+    });
+    await store.configure(targetRoot);
+  } finally {
+    await outbox.close();
+  }
+}
+
+function withProductionFounderSeedCutover(
+  configured: FounderBootstrapCeremonyDependencies,
+  dependencies: ProductCliDependencies,
+  independentCopyRoot: string,
+): FounderBootstrapCeremonyDependencies {
+  const signer = configured.signer;
+  if (signer === undefined) return configured;
+  return {
+    ...configured,
+    recoverSeedCutoverConfirmedAt: async ({ config, session }) =>
+      recoverLegacyClassificationCutoverAt({
+        state_directory: config.state_dir,
+        bootstrap_session_id: session.session_id,
+      }),
+    authorizeSeedCutover: async ({ config, session, plan }) => {
+      const capture = new FederatedApprovalCapture({
+        stateDirectory: config.state_dir,
+        runtimeConfig: config,
+      });
+      const decisionNodes = new DecisionNodeStore(config.state_dir, {
+        now: dependencies.now,
+        federationCapture: capture,
+      });
+      const coreDatabasePath = resolveProductStatePaths(
+        config.state_dir,
+      ).database;
+      await assertLegacyProcessingBoundaryReady({
+        decision_nodes: decisionNodes,
+        core_database_path: coreDatabasePath,
+      });
+      await commitLegacyClassificationReport({
+        state_directory: config.state_dir,
+        bootstrap_session_id: session.session_id,
+        decision_nodes: decisionNodes,
+        core_database_path: coreDatabasePath,
+        cutover_at: plan.manifest.legacy_cutover.declared_at,
+      });
+      await configureFounderIndependentCopyTarget(
+        config,
+        signer,
+        independentCopyRoot,
+        dependencies,
+      );
+    },
+    finalizeSeedCutover:
+      configured.finalizeSeedCutover ??
+      (async ({ config }) => {
+        const identityBase = resolveIdentityCheckDependencies(
+          {
+            ...dependencies.identityCheck,
+            signer,
+            credentialResolver: configured.credentialResolver,
+          },
+          config,
+          dependencies.environment,
+        );
+        const federation = await openFounderFederationRuntime({
+          runtimeConfig: config,
+          databasePath: resolveProductStatePaths(config.state_dir).database,
+          signer,
+          ...(dependencies.independentCopyInspector === undefined
+            ? {}
+            : {
+                independentCopyInspector:
+                  dependencies.independentCopyInspector,
+              }),
+          ...(dependencies.now === undefined ? {} : { now: dependencies.now }),
+        });
+        try {
+          await federation.ensureIndependentCopy();
+          await assertFounderIdentityAllowsPipeline(
+            config.state_dir,
+            federation.identityChecks({
+              ...identityBase,
+              allowCommittingCutoverFinalization: true,
+            }),
+          );
+        } finally {
+          await federation.close();
+        }
+      }),
   };
 }
 
@@ -932,7 +1090,10 @@ export async function runProductCli(
     dependencies.classifyStateFilesystem ?? classifyStateFilesystem;
   if (parsed.command === "identity-bootstrap") {
     const action = parsed.identityBootstrapAction!;
-    const bootstrapDependencies =
+    const productionSeedCutover =
+      action === "commit" &&
+      dependencies.founderBootstrap?.authorizeSeedCutover === undefined;
+    let bootstrapDependencies =
       resolveFounderBootstrapDependencies(dependencies);
     if (bootstrapDependencies.signer === undefined) {
       print(stderr, {
@@ -943,6 +1104,23 @@ export async function runProductCli(
           "signer_unavailable: seed-grade bootstrap requires the verified packaged Secure Enclave helper",
       });
       return 1;
+    }
+    if (productionSeedCutover) {
+      if (parsed.independentCopyRoot === undefined) {
+        print(stderr, {
+          ok: false,
+          command: parsed.command,
+          action,
+          error:
+            "identity-bootstrap commit requires --independent-copy-root for the protected seed copy",
+        });
+        return 2;
+      }
+      bootstrapDependencies = withProductionFounderSeedCutover(
+        bootstrapDependencies,
+        dependencies,
+        parsed.independentCopyRoot,
+      );
     }
     const probe = await probeConfig(config, classifier);
     if (!probe.ok) {
@@ -1089,6 +1267,12 @@ export async function runProductCli(
           runtimeConfig: config,
           databasePath: resolveProductStatePaths(config.state_dir).database,
           signer: identityBase.signer,
+          ...(dependencies.independentCopyInspector === undefined
+            ? {}
+            : {
+                independentCopyInspector:
+                  dependencies.independentCopyInspector,
+              }),
           ...(dependencies.now === undefined ? {} : { now: dependencies.now }),
         });
         report = await checkFounderIdentity(
@@ -1127,6 +1311,84 @@ export async function runProductCli(
         return 1;
       }
     }
+  }
+  if (parsed.command === "export") {
+    let releases: readonly ReleaseProductLifecycleLock[] = [];
+    let federation:
+      | Awaited<ReturnType<typeof openFounderFederationRuntime>>
+      | undefined;
+    let result: Record<string, unknown> | undefined;
+    let failure: unknown;
+    try {
+      releases = await acquireMaintenanceWindow(
+        config.state_dir,
+        dependencies,
+        0,
+      );
+      prepareProductStateRoot(config.state_dir);
+      const identityBase = resolveIdentityCheckDependencies(
+        dependencies.identityCheck,
+        config,
+        dependencies.environment,
+      );
+      federation =
+        dependencies.federationRuntime ??
+        (await openFounderFederationRuntime({
+          runtimeConfig: config,
+          databasePath: resolveProductStatePaths(config.state_dir).database,
+          signer: identityBase.signer,
+          ...(dependencies.independentCopyInspector === undefined
+            ? {}
+            : {
+                independentCopyInspector:
+                  dependencies.independentCopyInspector,
+              }),
+          ...(dependencies.now === undefined ? {} : { now: dependencies.now }),
+        }));
+      if (
+        !federation.identityEnabled ||
+        !identityRequiresFederation(config.state_dir)
+      ) {
+        throw new Error(
+          "federated export is unavailable before the founder identity cutover",
+        );
+      }
+      const copy = await federation.ensureIndependentCopy();
+      const identity = await assertFounderIdentityAllowsPipeline(
+        config.state_dir,
+        federation.identityChecks(identityBase),
+      );
+      result = {
+        ok: true,
+        command: parsed.command,
+        independent_copy: copy,
+        identity,
+      };
+    } catch (error) {
+      failure = error;
+    }
+    try {
+      await federation?.close();
+    } catch (error) {
+      failure ??= new Error(
+        `federation resource close failed: ${(error as Error).message}`,
+      );
+    }
+    try {
+      await releaseLifecycleLocks(releases);
+    } catch (error) {
+      failure ??= error;
+    }
+    if (failure !== undefined) {
+      print(stderr, {
+        ok: false,
+        command: parsed.command,
+        error: (failure as Error).message,
+      });
+      return 1;
+    }
+    print(stdout, result!);
+    return 0;
   }
   if (parsed.command === "backup" || parsed.command === "restore") {
     const probe = await probeConfig(config, classifier);
@@ -1533,6 +1795,12 @@ export async function runProductCli(
               runtimeConfig: config,
               databasePath: resolveProductStatePaths(config.state_dir).database,
               signer: identityBase.signer,
+              ...(dependencies.independentCopyInspector === undefined
+                ? {}
+                : {
+                    independentCopyInspector:
+                      dependencies.independentCopyInspector,
+                  }),
               ...(dependencies.now === undefined
                 ? {}
                 : { now: dependencies.now }),

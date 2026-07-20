@@ -23,6 +23,8 @@ import {
 } from '../../src/product/state-backup.js';
 import { canonicalLocalPath } from '../../src/product/secure-local-files.js';
 import { acquireProductLifecycleLock } from '../../src/product/lifecycle-lock.js';
+import { founderCutoverGuardPath } from '../../src/product/federation/cutover-fence.js';
+import { canonicalJson } from '../../src/product/federation/canonical-json.js';
 
 const CONFIG_SHA = 'c'.repeat(64);
 const CREATED_AT = '2026-07-18T01:02:03.000Z';
@@ -383,6 +385,124 @@ describe('product state backup and restore', () => {
     expect(
       readFileSync(join(safetyBackup.backupDirectory, 'status.txt'), 'utf8'),
     ).toBe('current-live');
+  });
+
+  it('rejects restoring a pre-cutover backup over an irreversible founder cutover', async () => {
+    const root = temporaryRoot();
+    const stateDir = join(root, 'state');
+    const backupRoot = join(root, 'backups');
+    writeStateDatabase(stateDir, 'pre-cutover');
+    const preCutover = await createProductStateBackup({
+      stateDir,
+      backupRoot,
+      backupId: 'pre-cutover-source',
+      createdAt: CREATED_AT,
+      canonicalConfigSha256: CONFIG_SHA,
+    });
+
+    writeStateDatabase(stateDir, 'seed-live');
+    const guardPath = founderCutoverGuardPath(stateDir);
+    writeFileSync(
+      guardPath,
+      canonicalJson({
+        schema_version: 1,
+        kind: 'echo-founder-cutover-guard',
+        state_path_sha256: `sha256:${productStatePathIdentity(
+          canonicalLocalPath(stateDir, 'state directory', true),
+        )}`,
+        session_id: '123e4567-e89b-42d3-a456-426614174000',
+        plan_sha256: `sha256:${'a'.repeat(64)}`,
+        installation_key_id: `sha256:${'b'.repeat(64)}`,
+      }),
+      { mode: 0o600 },
+    );
+
+    await expect(
+      restoreProductStateBackup({
+        stateDir,
+        backupDirectory: preCutover.backupDirectory,
+        automaticBackupRoot: backupRoot,
+        operationId: 'reject-pre-cutover-downgrade',
+        restoredAt: RESTORED_AT,
+        preRestoreBackupId: 'must-not-create-pre-backup',
+        preRestoreBackupCreatedAt: '2026-07-18T02:02:00.000Z',
+        canonicalConfigSha256: CONFIG_SHA,
+      }),
+    ).rejects.toThrow(/irreversible founder identity cutover/);
+    expect(readStateDatabase(join(stateDir, 'echo-brain.sqlite'))).toBe(
+      'seed-live',
+    );
+    expect(existsSync(guardPath)).toBe(true);
+    expect(existsSync(join(backupRoot, 'must-not-create-pre-backup'))).toBe(
+      false,
+    );
+  });
+
+  it('backs up the complete local cutover and independent-copy evidence without copying a private signing key', async () => {
+    const root = temporaryRoot();
+    const stateDir = join(root, 'state');
+    const backupRoot = join(root, 'backups');
+    writeStateDatabase(stateDir, 'seed-cutover');
+
+    const sessionId = '123e4567-e89b-42d3-a456-426614174000';
+    const evidence = new Map<string, string>([
+      [
+        `bootstrap/founder-identity/session.${sessionId}.v1.json`,
+        '{"kind":"echo-founder-bootstrap-session","phase":"complete","signing_key":{"protection":"secure-enclave","public_key_spki_der_base64":"PUBLIC-ONLY"}}\n',
+      ],
+      [
+        `bootstrap/legacy-classification/report.${sessionId}.v1.json`,
+        '{"kind":"echo-founder-legacy-classification-report","ok":true}\n',
+      ],
+      [
+        'federation/independent-copy/target.v1.json',
+        '{"kind":"echo-founder-independent-copy-target","volume_id":"encrypted-volume"}\n',
+      ],
+      [
+        `federation/independent-copy/intents/intent.ins_founder.1.${'a'.repeat(64)}.v1.json`,
+        '{"kind":"echo-founder-independent-copy-intent","sequence":{"last":1}}\n',
+      ],
+      [
+        `federation/independent-copy/receipts/receipt.ins_founder.1.${'a'.repeat(64)}.v1.json`,
+        '{"kind":"echo-founder-independent-copy-receipt","sequence":{"last":1}}\n',
+      ],
+    ]);
+    for (const [relativePath, bytes] of evidence) {
+      const path = join(stateDir, relativePath);
+      mkdirSync(join(path, '..'), { recursive: true, mode: 0o700 });
+      writeFileSync(path, bytes, { mode: 0o600 });
+    }
+
+    const privateKeySentinel = 'PRIVATE-SIGNING-KEY-MUST-NOT-BE-EXPORTED';
+    const secureEnclaveMaterial = join(root, 'secure-enclave-private-key');
+    writeFileSync(secureEnclaveMaterial, privateKeySentinel, { mode: 0o600 });
+
+    const created = await createProductStateBackup({
+      stateDir,
+      backupRoot,
+      backupId: 'seed-cutover-evidence',
+      createdAt: CREATED_AT,
+      canonicalConfigSha256: CONFIG_SHA,
+    });
+    const backedUpPaths = created.manifest.files.map((file) => file.path);
+    expect(backedUpPaths).toEqual(
+      expect.arrayContaining([...evidence.keys()]),
+    );
+    expect(backedUpPaths).not.toContain('secure-enclave-private-key');
+    for (const relativePath of evidence.keys()) {
+      expect(
+        readFileSync(join(created.backupDirectory, relativePath), 'utf8'),
+      ).toBe(evidence.get(relativePath));
+    }
+    expect(
+      created.manifest.files.some((file) =>
+        readFileSync(join(created.backupDirectory, file.path)).includes(
+          privateKeySentinel,
+        ),
+      ),
+    ).toBe(false);
+
+    expect(readFileSync(secureEnclaveMaterial, 'utf8')).toBe(privateKeySentinel);
   });
 
   it('verifies the requested backup before touching or pre-backing up live state', async () => {

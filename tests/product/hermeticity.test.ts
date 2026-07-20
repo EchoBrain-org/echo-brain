@@ -128,6 +128,7 @@ describe('product hermeticity setup', () => {
       'approval/decision-node-store.ts',
       'composition.ts',
       'federation/attributing-core-state-store.ts',
+      'federation/independent-copy-store.ts',
       'federation/record-projector.ts',
     ]);
     expect(
@@ -158,6 +159,16 @@ describe('product hermeticity setup', () => {
       ),
     ).toMatch(
       /this\.now = options\.now \?\? \(\(\) => new Date\(\)\.toISOString\(\)\)/,
+    );
+    const independentCopyStore = readFileSync(
+      join(productRoot, 'federation/independent-copy-store.ts'),
+      'utf8',
+    );
+    expect(independentCopyStore).toMatch(
+      /this\.now = options\.now \?\? \(\(\) => new Date\(\)\.toISOString\(\)\)/,
+    );
+    expect(independentCopyStore).toMatch(
+      /this\.createExportId\s*=\s*options\.createExportId\s*\?\?\s*\(\(\)\s*=>\s*federationId\(["']exp["']\)\)/,
     );
     expect(
       readFileSync(join(productRoot, 'federation/record-projector.ts'), 'utf8'),

@@ -21,6 +21,7 @@ import {
   ActiveIdentityBundleStore,
   type VerifiedActiveIdentityBundle,
 } from './active-identity-bundle-store.js';
+import { requiresFounderFederation } from './cutover-fence.js';
 import {
   IdentityLineageStore,
   type HistoricalBindingReference,
@@ -927,10 +928,7 @@ export class FederatedApprovalCapture implements DecisionNodeFederationCapture {
   private activeBundle(): VerifiedActiveIdentityBundle | null {
     const bundle = this.identity.loadVerified(this.options.runtimeConfig);
     if (bundle !== null) return bundle;
-    if (
-      this.identity.hasActiveBundle() ||
-      this.identity.hasIdentityMaterial()
-    ) {
+    if (requiresFounderFederation(this.options.stateDirectory, this.identity)) {
       fail('identity material exists without a valid active identity bundle');
     }
     return null;
