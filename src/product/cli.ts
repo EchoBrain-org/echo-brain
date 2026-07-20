@@ -5,8 +5,9 @@ import { isAbsolute } from "node:path";
 import { parseArgs } from "node:util";
 import type { Writable } from "node:stream";
 import { fileURLToPath } from "node:url";
-import type { AdapterInstanceConfig } from "../core/index.js";
+import type { AdapterInstanceConfig, CoreStateStore } from "../core/index.js";
 import {
+  assertConfiguredAdapterFactoriesAvailable,
   createConfiguredAdapterRegistry,
   type ProductAdapterFactoryRegistry,
 } from "./adapter-factories.js";
@@ -56,6 +57,7 @@ import {
 import {
   assertFounderIdentityAllowsPipeline,
   checkFounderIdentity,
+  FounderIdentityGateError,
   type IdentityCheckDependencies,
 } from "./federation/identity-check.js";
 import { MacOsSecureEnclaveInstallationSigner } from "./federation/macos-installation-signer.js";
@@ -69,6 +71,13 @@ import {
   type FounderBootstrapCeremonyDependencies,
 } from "./federation/founder-bootstrap-ceremony.js";
 import { FederatedApprovalCapture } from "./federation/approval-capture.js";
+import {
+  openFounderFederationRuntime,
+  type FounderFederationRuntime,
+} from "./federation/runtime-wiring.js";
+import { ActiveIdentityBundleStore } from "./federation/active-identity-bundle-store.js";
+import { resolveProductStatePaths } from "./paths.js";
+import { SqliteCoreStateStore } from "../storage/core-state-sqlite.js";
 
 export interface ProductCliProcess {
   once: (event: "SIGINT" | "SIGTERM", listener: () => void) => unknown;
@@ -94,6 +103,8 @@ export interface ProductCliDependencies {
   operator?: Partial<ProductOperatorDependencies>;
   doctorHealthTimeoutMs?: number;
   identityCheck?: IdentityCheckDependencies;
+  /** Complete command-scoped federation seam for identity-active tests/hosts. */
+  federationRuntime?: FounderFederationRuntime;
   founderBootstrap?: FounderBootstrapCeremonyDependencies;
   acquireLifecycleLock?: (
     stateDirectory: string,
@@ -504,6 +515,11 @@ function printRuntimeFailure(
   });
 }
 
+function identityRequiresFederation(stateDirectory: string): boolean {
+  const identity = new ActiveIdentityBundleStore(stateDirectory);
+  return identity.hasActiveBundle() || identity.hasIdentityMaterial();
+}
+
 async function createCliComposition(
   config: ProductRuntimeConfig,
   classifier: ClassifyStateFilesystem,
@@ -512,26 +528,195 @@ async function createCliComposition(
   const factories =
     dependencies.adapterFactories ?? createDefaultAdapterFactories();
   const now = dependencies.composition?.now ?? dependencies.now;
-  const approvalFederationCapture = resolveApprovalFederationCapture(
-    config,
-    dependencies,
-  );
-  const registry = await createConfiguredAdapterRegistry(config, factories, {
-    environment: dependencies.environment,
-    now,
-    approvalFederationCapture,
-  });
-  return await prepareProductComposition(config, registry, {
-    ...dependencies.composition,
-    classifyStateFilesystem: classifier,
-    identityCheck: resolveIdentityCheckDependencies(
-      dependencies.composition?.identityCheck ?? dependencies.identityCheck,
+  const customComposition = dependencies.composition;
+  const hasCustomFederationWiring =
+    customComposition?.state !== undefined ||
+    customComposition?.approvals !== undefined ||
+    customComposition?.approvalFederationCapture !== undefined ||
+    customComposition?.approvalGate !== undefined;
+  const requiresFederation = identityRequiresFederation(config.state_dir);
+  if (requiresFederation && customComposition?.approvalGate !== undefined) {
+    throw new ProductRuntimeFailure(
+      "identity_not_seed_grade",
+      "identity-active mode rejects a caller-owned approval gate",
+      [
+        "the federation-owned approval store and capture path must observe every post-cutover resolution",
+      ],
+    );
+  }
+  if (requiresFederation && customComposition?.approvals !== undefined) {
+    throw new ProductRuntimeFailure(
+      "identity_not_seed_grade",
+      "identity-active mode rejects a caller-owned approval store",
+      [
+        "the complete federation runtime must own the approval store used by projection readiness",
+      ],
+    );
+  }
+  if (
+    hasCustomFederationWiring &&
+    requiresFederation &&
+    dependencies.federationRuntime === undefined
+  ) {
+    throw new ProductRuntimeFailure(
+      "identity_not_seed_grade",
+      "identity-active mode rejects partial custom composition wiring; supply one complete command-scoped federation runtime",
+      [
+        "custom state, approval store, or approval capture cannot bypass signed attribution and projection",
+      ],
+    );
+  }
+  if (
+    hasCustomFederationWiring &&
+    !requiresFederation &&
+    dependencies.federationRuntime === undefined
+  ) {
+    const approvalFederationCapture = resolveApprovalFederationCapture(
       config,
-      dependencies.environment,
-    ),
-    approvalFederationCapture,
-    ...(now === undefined ? {} : { now }),
-  });
+      dependencies,
+    );
+    const registry = await createConfiguredAdapterRegistry(config, factories, {
+      environment: dependencies.environment,
+      now,
+      approvalFederationCapture,
+    });
+    return await prepareProductComposition(config, registry, {
+      ...customComposition,
+      classifyStateFilesystem: classifier,
+      identityCheck: resolveIdentityCheckDependencies(
+        customComposition?.identityCheck ?? dependencies.identityCheck,
+        config,
+        dependencies.environment,
+      ),
+      approvalFederationCapture,
+      ...(now === undefined ? {} : { now }),
+    });
+  }
+
+  // Preserve the existing "adapters first" diagnostic without constructing
+  // adapters or resolving credentials before the strict identity gate.
+  assertConfiguredAdapterFactoriesAvailable(config, factories);
+  const classification = await classifier(config.state_dir);
+  if (classification.kind !== "local") {
+    throw new ProductRuntimeFailure(
+      "state_not_local",
+      `product state filesystem is ${classification.kind}: ${classification.raw}`,
+      [`kind=${classification.kind}`, `raw=${classification.raw}`],
+    );
+  }
+  prepareProductStateRoot(config.state_dir);
+  const identityBase = resolveIdentityCheckDependencies(
+    customComposition?.identityCheck ?? dependencies.identityCheck,
+    config,
+    dependencies.environment,
+  );
+  const paths = resolveProductStatePaths(config.state_dir);
+  let federation:
+    Awaited<ReturnType<typeof openFounderFederationRuntime>> | undefined;
+  try {
+    federation =
+      dependencies.federationRuntime ??
+      (await openFounderFederationRuntime({
+        runtimeConfig: config,
+        databasePath: paths.database,
+        signer: identityBase.signer,
+        ...(now === undefined ? {} : { now }),
+        ...(customComposition?.createId === undefined
+          ? {}
+          : { createId: customComposition.createId }),
+      }));
+    if (federation.identityEnabled !== requiresFederation) {
+      throw new Error(
+        "supplied federation runtime identity mode does not match the state root",
+      );
+    }
+    if (
+      customComposition?.approvalFederationCapture !== undefined &&
+      customComposition.approvalFederationCapture !== federation.approvalCapture
+    ) {
+      throw new Error(
+        "custom approval capture does not belong to the supplied complete federation runtime",
+      );
+    }
+  } catch (error) {
+    let closeFailure: unknown;
+    try {
+      await federation?.close();
+    } catch (closeError) {
+      closeFailure = closeError;
+    }
+    const detail = (error as Error).message;
+    throw new ProductRuntimeFailure(
+      "identity_not_seed_grade",
+      `identity-enabled profile cannot initialize federation resources: ${detail}`,
+      [
+        detail,
+        ...(closeFailure === undefined
+          ? []
+          : [
+              `federation resource close failed: ${(closeFailure as Error).message}`,
+            ]),
+      ],
+    );
+  }
+  if (federation === undefined) {
+    throw new ProductRuntimeFailure(
+      "identity_not_seed_grade",
+      "identity-enabled profile did not initialize federation resources",
+      ["command-scoped federation runtime is unavailable"],
+    );
+  }
+  const identityCheck = federation.identityChecks(identityBase);
+  let baseState: (CoreStateStore & { close?: () => void }) | undefined;
+  let state: (CoreStateStore & { close?: () => void }) | undefined;
+  try {
+    // Keep adapter construction and provider contact behind the identity gate.
+    await assertFounderIdentityAllowsPipeline(config.state_dir, identityCheck);
+    const approvals =
+      requiresFederation || customComposition?.approvals === undefined
+        ? federation.createDecisionNodeStore()
+        : customComposition.approvals;
+    baseState =
+      customComposition?.state ?? new SqliteCoreStateStore(paths.database);
+    state = federation.wrapCoreState(baseState, approvals);
+    const registry = await createConfiguredAdapterRegistry(config, factories, {
+      environment: dependencies.environment,
+      now,
+      approvalFederationCapture: federation.approvalCapture,
+    });
+    const configuredClose = customComposition?.closeResources;
+    return await prepareProductComposition(config, registry, {
+      ...customComposition,
+      classifyStateFilesystem: async () => classification,
+      state,
+      approvals,
+      identityCheck,
+      approvalFederationCapture: federation.approvalCapture,
+      closeResources: async () => {
+        let failure: unknown;
+        try {
+          await configuredClose?.();
+        } catch (error) {
+          failure = error;
+        }
+        try {
+          await federation.close();
+        } catch (error) {
+          failure ??= error;
+        }
+        if (failure !== undefined) throw failure;
+      },
+      ...(now === undefined ? {} : { now }),
+    });
+  } catch (error) {
+    try {
+      if (state !== undefined) state.close?.();
+      else if (baseState !== undefined) baseState.close?.();
+    } finally {
+      await federation.close();
+    }
+    throw error;
+  }
 }
 
 function resolveApprovalFederationCapture(
@@ -555,18 +740,10 @@ function resolveIdentityCheckDependencies(
   const credentialResolver =
     configured?.credentialResolver ??
     createProductCredentialResolver(environment ?? process.env);
-  const approvalCaptureReady =
-    configured?.approvalCaptureReady ??
-    (async () => ({
-      ok: false,
-      detail:
-        "approval capture hooks are installed; durable attribution and trusted artifact evidence are not wired yet",
-    }));
   if (configured?.signer !== undefined) {
     return {
       ...configured,
       credentialResolver,
-      approvalCaptureReady,
       ...(runtimeConfig === undefined ? {} : { runtimeConfig }),
     };
   }
@@ -574,25 +751,44 @@ function resolveIdentityCheckDependencies(
     return {
       ...configured,
       credentialResolver,
-      approvalCaptureReady,
       ...(runtimeConfig === undefined ? {} : { runtimeConfig }),
     };
   }
   return {
     ...configured,
     credentialResolver,
-    approvalCaptureReady,
     ...(runtimeConfig === undefined ? {} : { runtimeConfig }),
     signer: new MacOsSecureEnclaveInstallationSigner(),
   };
+}
+
+function isOnlyTargetProjectionPending(
+  error: unknown,
+  approvalId: string,
+): boolean {
+  if (!(error instanceof FounderIdentityGateError)) return false;
+  const failures = error.report.checks.filter((item) => !item.ok);
+  return (
+    failures.length === 1 &&
+    failures[0]!.id === "signed-outbox" &&
+    failures[0]!.detail ===
+      `projection pending: approval ${approvalId} has no signed outbox group`
+  );
 }
 
 function resolveFounderBootstrapDependencies(
   dependencies: ProductCliDependencies,
 ): FounderBootstrapCeremonyDependencies {
   const configured = dependencies.founderBootstrap ?? {};
+  const signer =
+    configured.signer ??
+    dependencies.identityCheck?.signer ??
+    (bundledProductHelperAvailable("installation-signer")
+      ? new MacOsSecureEnclaveInstallationSigner()
+      : undefined);
   return {
     ...configured,
+    ...(signer === undefined ? {} : { signer }),
     credentialResolver:
       configured.credentialResolver ??
       createProductCredentialResolver(dependencies.environment ?? process.env),
@@ -871,15 +1067,35 @@ export async function runProductCli(
     }
   }
   if (parsed.command === "identity-check") {
+    let federation:
+      Awaited<ReturnType<typeof openFounderFederationRuntime>> | undefined;
     try {
-      const report = await checkFounderIdentity(
-        config.state_dir,
-        resolveIdentityCheckDependencies(
-          dependencies.identityCheck,
-          config,
-          dependencies.environment,
-        ),
+      const identityBase = resolveIdentityCheckDependencies(
+        dependencies.identityCheck,
+        config,
+        dependencies.environment,
       );
+      const foundationReport = await checkFounderIdentity(
+        config.state_dir,
+        identityBase,
+      );
+      const bundleVerified =
+        foundationReport.mode === "identity_enabled" &&
+        foundationReport.checks.find((item) => item.id === "bundle-integrity")
+          ?.ok === true;
+      let report = foundationReport;
+      if (bundleVerified) {
+        federation = await openFounderFederationRuntime({
+          runtimeConfig: config,
+          databasePath: resolveProductStatePaths(config.state_dir).database,
+          signer: identityBase.signer,
+          ...(dependencies.now === undefined ? {} : { now: dependencies.now }),
+        });
+        report = await checkFounderIdentity(
+          config.state_dir,
+          federation.identityChecks(identityBase),
+        );
+      }
       const strictFailure =
         parsed.strictIdentityCheck === true && !report.seed_grade_ready;
       const activeFailure =
@@ -899,6 +1115,17 @@ export async function runProductCli(
         error: (error as Error).message,
       });
       return 1;
+    } finally {
+      try {
+        await federation?.close();
+      } catch (error) {
+        print(stderr, {
+          ok: false,
+          command: parsed.command,
+          error: `federation resource close failed: ${(error as Error).message}`,
+        });
+        return 1;
+      }
     }
   }
   if (parsed.command === "backup" || parsed.command === "restore") {
@@ -1258,6 +1485,8 @@ export async function runProductCli(
       return 1;
     }
     let approvalResult: Record<string, unknown> | undefined;
+    let federation:
+      Awaited<ReturnType<typeof openFounderFederationRuntime>> | undefined;
     try {
       const release = await lifecycleLock(
         dependencies,
@@ -1267,16 +1496,74 @@ export async function runProductCli(
       );
       try {
         prepareProductStateRoot(config.state_dir);
+        const customFederationWiring =
+          dependencies.composition?.state !== undefined ||
+          dependencies.composition?.approvals !== undefined ||
+          dependencies.composition?.approvalFederationCapture !== undefined;
+        const identityBase = resolveIdentityCheckDependencies(
+          dependencies.identityCheck,
+          config,
+          dependencies.environment,
+        );
+        const requiresFederation = identityRequiresFederation(config.state_dir);
+        if (
+          customFederationWiring &&
+          requiresFederation &&
+          dependencies.federationRuntime === undefined
+        ) {
+          throw new Error(
+            "identity-active mode rejects partial custom approval wiring; supply one complete command-scoped federation runtime",
+          );
+        }
+        if (
+          requiresFederation &&
+          dependencies.composition?.approvals !== undefined
+        ) {
+          throw new Error(
+            "identity-active mode rejects a caller-owned approval store; the complete federation runtime must own approval projection readiness",
+          );
+        }
+        if (
+          !customFederationWiring ||
+          dependencies.federationRuntime !== undefined
+        ) {
+          federation =
+            dependencies.federationRuntime ??
+            (await openFounderFederationRuntime({
+              runtimeConfig: config,
+              databasePath: resolveProductStatePaths(config.state_dir).database,
+              signer: identityBase.signer,
+              ...(dependencies.now === undefined
+                ? {}
+                : { now: dependencies.now }),
+            }));
+          if (federation.identityEnabled !== requiresFederation) {
+            throw new Error(
+              "supplied federation runtime identity mode does not match the state root",
+            );
+          }
+          if (
+            dependencies.composition?.approvalFederationCapture !== undefined &&
+            dependencies.composition.approvalFederationCapture !==
+              federation.approvalCapture
+          ) {
+            throw new Error(
+              "custom approval capture does not belong to the supplied complete federation runtime",
+            );
+          }
+        }
         // The CLI resolves against the shared decision node store directly, so
         // a misconfigured or unreachable approval surface (e.g. Slack) can
         // never block a manual approval or rejection.
-        const approvals = new DecisionNodeStore(config.state_dir, {
-          now: dependencies.now,
-          federationCapture: resolveApprovalFederationCapture(
-            config,
-            dependencies,
-          ),
-        });
+        const approvals =
+          federation?.createDecisionNodeStore() ??
+          new DecisionNodeStore(config.state_dir, {
+            now: dependencies.now,
+            federationCapture: resolveApprovalFederationCapture(
+              config,
+              dependencies,
+            ),
+          });
         await approvals.initialize();
         if (parsed.command === "approvals") {
           const records = (await approvals.list()).map((record) => ({
@@ -1302,14 +1589,29 @@ export async function runProductCli(
             approvals: records,
           };
         } else {
-          await assertFounderIdentityAllowsPipeline(
-            config.state_dir,
-            resolveIdentityCheckDependencies(
-              dependencies.identityCheck,
-              config,
-              dependencies.environment,
-            ),
-          );
+          let exactApprovedProjectionRetry = false;
+          if (parsed.command === "approve" && federation?.identityEnabled) {
+            const existing = (await approvals.listFederated()).find(
+              (record) => record.approval_id === parsed.approvalId,
+            );
+            exactApprovedProjectionRetry =
+              existing?.status === "approved" &&
+              existing.reviewed_by === parsed.reviewer &&
+              existing.reason === (parsed.reason ?? null);
+          }
+          try {
+            await assertFounderIdentityAllowsPipeline(
+              config.state_dir,
+              federation?.identityChecks(identityBase) ?? identityBase,
+            );
+          } catch (error) {
+            if (
+              !exactApprovedProjectionRetry ||
+              !isOnlyTargetProjectionPending(error, parsed.approvalId!)
+            ) {
+              throw error;
+            }
+          }
           const record = await approvals.resolve({
             approvalId: parsed.approvalId!,
             status: parsed.command === "approve" ? "approved" : "rejected",
@@ -1317,6 +1619,15 @@ export async function runProductCli(
             reason: parsed.reason,
             surface: "cli",
           });
+          if (record.status === "approved" && federation?.identityEnabled) {
+            try {
+              await federation.projectApproved(record);
+            } catch (error) {
+              throw new Error(
+                `approval recorded; federated projection pending: ${(error as Error).message}`,
+              );
+            }
+          }
           approvalResult = {
             ok: true,
             command: parsed.command,
@@ -1330,7 +1641,18 @@ export async function runProductCli(
           };
         }
       } finally {
-        await release();
+        let closeFailure: unknown;
+        try {
+          await federation?.close();
+        } catch (error) {
+          closeFailure = error;
+        }
+        try {
+          await release();
+        } catch (error) {
+          closeFailure ??= error;
+        }
+        if (closeFailure !== undefined) throw closeFailure;
       }
     } catch (error) {
       print(stderr, {
@@ -1374,7 +1696,7 @@ export async function runProductCli(
             pending_approval_ids: pending,
           };
         } finally {
-          composition.close();
+          await composition.close();
         }
       } finally {
         await release();
@@ -1407,6 +1729,24 @@ export async function runProductCli(
       signalWaiter = createSignalWaiter(processLike);
     } catch (error) {
       printRuntimeFailure(stderr, error);
+      return 1;
+    }
+
+    if (
+      dependencies.runtime !== undefined &&
+      identityRequiresFederation(config.state_dir)
+    ) {
+      signalWaiter.cancel();
+      printRuntimeFailure(
+        stderr,
+        new ProductRuntimeFailure(
+          "identity_not_seed_grade",
+          "identity-active mode rejects legacy custom runtime wiring",
+          [
+            "use command composition with one complete command-scoped federation runtime",
+          ],
+        ),
+      );
       return 1;
     }
 
@@ -1501,14 +1841,14 @@ export async function runProductCli(
       const signal = signalWaiter.received ?? (await signalWaiter.promise);
       if (interval !== undefined) clearInterval(interval);
       if (active !== null) await active;
-      composition.close();
+      await composition.close();
       print(stdout, { ok: true, signal, shutdown: { ok: true } });
       return 0;
     } catch (error) {
       signalWaiter.cancel();
       if (interval !== undefined) clearInterval(interval);
       try {
-        composition.close();
+        await composition.close();
       } catch {
         // Preserve the original lifecycle failure in the CLI report.
       }

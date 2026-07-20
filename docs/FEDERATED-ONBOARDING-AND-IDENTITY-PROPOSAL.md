@@ -1,6 +1,6 @@
 # Federated Onboarding and Identity Layer — Accepted Direction and Founder Live Minimum
 
-**Status:** Approved for implementation. ADR-FL-IDENTITY-001 through 014 are approved as written; ADR-FL-IDENTITY-015 is approved with the seed-grade amendment recorded below.
+**Status:** Approved for implementation. ADR-FL-IDENTITY-001 through 014 are approved as written; ADR-FL-IDENTITY-015 is approved with the seed-grade amendment recorded below; ADR-FL-IDENTITY-016 is approved with the separate Slack publication/observation snapshots recorded below; ADR-FL-IDENTITY-017 is approved with the complete export verification closure recorded below.
 **Date:** 2026-07-19
 **Current-code baseline:** DEV.6 at `a8c8ddc`
 **Scope:** Organization adoption, employee enrollment, machine and tool identity, record attribution, lifecycle failures, and the minimum identity facts required before trusted Founder Live records are created.
@@ -1208,6 +1208,8 @@ The decision-node event files already provide immutable `metadata` objects. Use 
 
 The first `requested.json` stores:
 
+Its top-level `identity_manifest_id` is the approval-time identity manifest. The referenced source and processor sidecars retain their own capture-time manifest IDs. Those IDs may differ after a verified rotation, but every one must resolve through the same active predecessor lineage and organization.
+
 ```json
 {
   "metadata": {
@@ -1393,6 +1395,8 @@ CLI approval remains available for Founder Live recovery and testing. Its free-f
 
 A record is eligible for `native_attributed` projection only when its source and processor sidecars, requested candidate metadata, published presentation/tool reference, and resolved actor/tool metadata all exist and reference the same organization/manifest lineage. Timestamp alone is never enough.
 
+Rotation is allowed between those stages. The signed event therefore records both `identity_manifest_id` and `identity_manifest_sha256` inside its source and processor snapshots, while the event-level `identity_manifest_sha256` binds the approval/producer manifest. For example, source A, processor B, and approval/producer C are valid only when A → B → C is one verified predecessor lineage in one organization; the exact A, B, and C bytes all become part of the export verification closure.
+
 ### Versioned federated record envelope
 
 The minimum emits one immutable event per approved decision, action, or rationale. It does not add a separate parent-approval event: every signal event carries its own exact signal, the approved-brief digest/signal manifest, and the approval snapshot, while `approval_id` groups them. A future brain can materialize a parent approval row without changing the signed bytes.
@@ -1424,6 +1428,8 @@ The minimum emits one immutable event per approved decision, action, or rational
     }
   },
   "source": {
+    "identity_manifest_id": "idm_SOURCE_CAPTURE_MANIFEST",
+    "identity_manifest_sha256": "sha256:SOURCE_CAPTURE_MANIFEST_DIGEST",
     "binding": {
       "adapter_binding_id": "bnd_granola_f0a2",
       "adapter": {
@@ -1484,6 +1490,8 @@ The minimum emits one immutable event per approved decision, action, or rational
     }
   },
   "processor": {
+    "identity_manifest_id": "idm_PROCESSOR_CAPTURE_MANIFEST",
+    "identity_manifest_sha256": "sha256:PROCESSOR_CAPTURE_MANIFEST_DIGEST",
     "adapter_binding_id": "bnd_processor_3df1",
     "adapter": {
       "kind": "decision-processor",
@@ -1601,6 +1609,44 @@ The minimum emits one immutable event per approved decision, action, or rational
         "rendered_blocks_sha256": "sha256:EXACT_SLACK_BLOCKS_DIGEST"
       }
     },
+    "observation": {
+      "binding": {
+        "adapter_binding_id": "bnd_approval_8f21",
+        "adapter": {
+          "kind": "approval-surface",
+          "adapter_id": "slack-reactions",
+          "instance_id": "founder-approval",
+          "version": "1.0.0"
+        },
+        "configuration_snapshot": {
+          "channel_id": "C123",
+          "approve_reaction": "white_check_mark",
+          "reject_reaction": "x"
+        },
+        "configuration_sha256": "sha256:APPROVAL_CONFIG_DIGEST"
+      },
+      "connection": {
+        "connection_id": "con_12ae847b-86a7-4ad3-8618-0f08d7d4c153",
+        "generation": 2,
+        "owner": {
+          "kind": "organization",
+          "id": "org_a1f69299-dfd8-440a-b0bc-777a184ff265"
+        },
+        "provider_identity": {
+          "provider": "slack",
+          "team_id": "T123",
+          "enterprise_id": null,
+          "bot_user_id": "U_BOT",
+          "bot_id": "B123",
+          "app_id": "A123"
+        }
+      },
+      "observed_by": {
+        "product_version": "CURRENT_PRODUCT_VERSION",
+        "source_sha": "CURRENT_SOURCE_SHA",
+        "artifact_sha256": "sha256:CURRENT_ARTIFACT_DIGEST"
+      }
+    },
     "approver": {
       "principal_id": "prn_8db1aa37-6b34-4204-9da1-d0221d5cc20d",
       "membership_id": "mem_4b27987c-9ab7-46b9-933f-57cf338b9f91",
@@ -1629,12 +1675,7 @@ The minimum emits one immutable event per approved decision, action, or rational
     "reviewed_at": "2026-07-19T20:30:00.000Z",
     "reason": "Matches the agreed next step",
     "approved_brief_sha256": "sha256:APPROVED_BRIEF_DIGEST",
-    "approved_context_sha256": "sha256:CANDIDATE_PLUS_PRESENTATION_DIGEST",
-    "observed_by": {
-      "product_version": "CURRENT_PRODUCT_VERSION",
-      "source_sha": "CURRENT_SOURCE_SHA",
-      "artifact_sha256": "sha256:CURRENT_ARTIFACT_DIGEST"
-    }
+    "approved_context_sha256": "sha256:CANDIDATE_PLUS_PRESENTATION_DIGEST"
   },
   "publication": {
     "policy_id": "pol_805c94e8-51c9-4e3a-88ef-777a9d2626ef",
@@ -1705,7 +1746,8 @@ SQLite is the only source of truth for the outbox. There is no “sent” or “
 ```text
 echo-org-export-<installation_id>-<first_sequence>-<last_sequence>/
   export-manifest.v1.json
-  identity-manifest.v1.json
+  identity-manifests/
+    identity-manifest.<manifest_id>.v1.json
   publication-policies/
     publication-policy.<policy_id>.v<version>.json
   records.v1.jsonl
@@ -1721,9 +1763,10 @@ echo-org-export-<installation_id>-<first_sequence>-<last_sequence>/
   "organization_id": "org_a1f69299-dfd8-440a-b0bc-777a184ff265",
   "installation_id": "ins_304f5ef4-bc72-48d2-9073-0eb694873130",
   "key_id": "sha256:PUBLIC_KEY_FINGERPRINT",
+  "signing_identity_manifest_id": "idm_11111111-1111-4111-8111-111111111111",
   "artifacts": [
     {
-      "path": "identity-manifest.v1.json",
+      "path": "identity-manifests/identity-manifest.idm_11111111-1111-4111-8111-111111111111.v1.json",
       "kind": "echo-local-identity-manifest",
       "sha256": "sha256:MANIFEST_FILE_DIGEST"
     },
@@ -1755,7 +1798,7 @@ echo-org-export-<installation_id>-<first_sequence>-<last_sequence>/
 }
 ```
 
-An export range is for one installation chain and includes every identity manifest and policy version referenced by its events; the `artifacts` inventory commits their exact paths and digests. It never substitutes the currently active policy for a historical one.
+An export range is for one installation chain and includes the minimal deterministic identity-manifest verification closure: every identity manifest referenced by an event or included signed policy, the manifest named by `signing_identity_manifest_id` that binds the export-signing key, and every transitive predecessor needed to verify those manifests. The `artifacts` inventory commits exact ID-addressed paths and digests in bytewise path order. Missing, conflicting, duplicate, unrelated, or non-deterministically ordered manifest artifacts fail verification. Every referenced historical policy version is included; export never substitutes the currently active policy for a historical one.
 
 The raw connection registry is deliberately not exported because it contains local credential guards. Every envelope carries the complete secret-free source and approval binding, connection-owner/generation, provider-identity, and configuration snapshots needed for provenance.
 
@@ -1854,13 +1897,13 @@ An installation with no active identity bundle keeps the current DEV behavior an
 
 This is the complete build slice; central membership management, server sync, revocation service, search/LLM brain, multi-user invitation, OIDC, email delivery, SCIM, RBAC, and participant resolution remain out of scope.
 
-| Workstream                            | Concrete output                                                                                                                                                              |   Estimate |
-| ------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------: |
+| Workstream                            | Concrete output                                                                                                                                                                       |   Estimate |
+| ------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------: |
 | 1. Contracts and local identity       | Ten exact-key JSON Schemas; typed contracts; canonical JSON/digest utilities; provisioned Secure Enclave helper; immutable bundle stores/pointer; bootstrap and strict identity check | 5.5–8 days |
-| 2. Connections and provider snapshots | Signed registry; Slack `auth.test` identity; Slack DM challenge; Granola lower-assurance first-capture and credential-drift rule; adapter-binding config snapshots           |   2–3 days |
-| 3. Approval intent and actor capture  | Fail-closed source/processor/policy metadata; complete card digest; namespaced Slack actor/tool snapshots; honest CLI assurance                                              |   2–3 days |
-| 4. Attribution, outbox, and export    | Additive source + processor attribution migration; state-store decorator; transactional signer/chain; retryable projector; deterministically ordered export and verification | 4–5.5 days |
-| 5. Legacy boundary and qualification  | Cutover classification; legacy events; backup/restore/package checks; failure injection; fresh-install and current-state live tests                                          |   2–3 days |
+| 2. Connections and provider snapshots | Signed registry; Slack `auth.test` identity; Slack DM challenge; Granola lower-assurance first-capture and credential-drift rule; adapter-binding config snapshots                    |   2–3 days |
+| 3. Approval intent and actor capture  | Fail-closed source/processor/policy metadata; complete card digest; namespaced Slack actor/tool snapshots; honest CLI assurance                                                       |   2–3 days |
+| 4. Attribution, outbox, and export    | Additive source + processor attribution migration; state-store decorator; transactional signer/chain; retryable projector; deterministically ordered export and verification          | 4–5.5 days |
+| 5. Legacy boundary and qualification  | Cutover classification; legacy events; backup/restore/package checks; failure injection; fresh-install and current-state live tests                                                   |   2–3 days |
 
 Expected total: **16–23 engineering days for one engineer**, including tests and one founder live rehearsal, excluding Apple Developer account/profile issuance latency. The crypto, signed-helper distribution, crash consistency, fail-closed capture, and upgrade-boundary tests—not the JSON interfaces—drive the range.
 
@@ -1958,6 +2001,8 @@ Each line is intentionally a standalone decision:
 13. **ADR-FL-IDENTITY-013:** Meeting participants remain unresolved source observations during Founder Live; future resolutions are append-only central facts and never rewrite envelopes.
 14. **ADR-FL-IDENTITY-014:** Pre-cutover and structurally incomplete records are disposable or explicitly `legacy_imported_unverified`/`founder_attested_retrospective`; Echo never upgrades them to native attribution.
 15. **ADR-FL-IDENTITY-015 (approved amendment):** Seed-grade cutover and every record after it require both a green strict identity check and a protected, verified independent copy of the signed outbox until central ingest exists; disposable pre-cutover rehearsals do not.
+16. **ADR-FL-IDENTITY-016:** Slack approval envelopes preserve publication and reaction-observation tool snapshots separately; different credential generations are permitted only when validation proves the same enrolled Slack workspace, connection, adapter identity and configuration, and provider identity.
+17. **ADR-FL-IDENTITY-017:** A federated export includes the complete identity-manifest verification closure required by the export: every manifest referenced by an exported event or included signed policy, the manifest binding the key that signs the export manifest, and every transitive predecessor of those manifests. Files are stored under `identity-manifests/identity-manifest.<manifest_id>.v1.json`. Every manifest ID and digest reference must resolve to exactly one matching exported file; missing, conflicting, or unreferenced manifest artifacts fail verification. The closure is minimal and deterministic: duplicate IDs, one ID resolving to different digests, unrelated manifests, and non-deterministic artifact ordering are forbidden.
 
 Operational narrowing for this cutover: although ADR-FL-IDENTITY-014 preserves the general design vocabulary as approved, this founder installation will not exercise `founder_attested_retrospective`; its pre-cutover records are only `disposable_test` or, where already delivered, `legacy_imported_unverified`, and neither enters the federated outbox.
 

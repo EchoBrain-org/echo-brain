@@ -1,5 +1,6 @@
 import type { AdapterInstanceConfig } from "../../core/index.js";
 import type { ProductRuntimeConfig } from "../config.js";
+import { identityBindingConfigurationSnapshot } from "./binding-configuration.js";
 import { canonicalSha256 } from "./canonical-json.js";
 import type {
   LocalConnectionRegistryV1,
@@ -335,10 +336,13 @@ export function validateIdentityDocumentSemantics(
     }
   }
 
-  const allowedAudience = new Set([organizationId, membershipId]);
   if (
     policy.publication.audience.subjects.some(
-      (subject) => !allowedAudience.has(subject.id),
+      (subject) =>
+        !(
+          (subject.kind === "organization" && subject.id === organizationId) ||
+          (subject.kind === "membership" && subject.id === membershipId)
+        ),
     )
   ) {
     fail("publication audience contains an unknown local subject");
@@ -382,10 +386,13 @@ export function validateRegistryAgainstRuntime(
       );
     }
     const binding = matches[0]!;
+    const expectedConfiguration = identityBindingConfigurationSnapshot(
+      expected.capability,
+      expected.config,
+    );
     if (
-      canonicalSha256(expected.config.settings) !==
-        binding.configuration_sha256 ||
-      canonicalSha256(expected.config.settings) !==
+      canonicalSha256(expectedConfiguration) !== binding.configuration_sha256 ||
+      canonicalSha256(expectedConfiguration) !==
         canonicalSha256(binding.configuration_snapshot)
     ) {
       fail(

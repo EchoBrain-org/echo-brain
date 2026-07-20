@@ -95,15 +95,25 @@ export async function signWithInstallationKey(
   const descriptor = await signer.inspect(installationId);
   if (descriptor === null)
     throw new Error("installation signing key is unavailable");
+  if (descriptor.installation_id !== installationId) {
+    throw new Error(
+      "installation signing key descriptor belongs to a different installation",
+    );
+  }
   const publicKey = verifyInstallationKeyDescriptor(descriptor);
   if (descriptor.key_id !== expectedKeyId) {
     throw new Error(
       "installation signing key does not match the active identity",
     );
   }
-  const signature = await signer.sign(installationId, message, expectedKeyId);
+  const verificationMessage = Buffer.from(message);
+  const signature = await signer.sign(
+    installationId,
+    Buffer.from(verificationMessage),
+    expectedKeyId,
+  );
   assertP256LowS(signature);
-  if (!verifyP256LowSSignature(publicKey, message, signature)) {
+  if (!verifyP256LowSSignature(publicKey, verificationMessage, signature)) {
     throw new Error("installation signer returned an invalid signature");
   }
   return signature;

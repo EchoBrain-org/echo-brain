@@ -48,6 +48,7 @@ import { verifySignedDocument } from './signed-document.js';
 
 const REGISTRY_FILENAME =
   /^connection-registry\.(reg_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12})\.r([1-9][0-9]*)\.v1\.json$/;
+const SHA256_DIGEST = /^sha256:[0-9a-f]{64}$/;
 
 export interface HistoricalPublicationPolicyReference {
   policy_id: string;
@@ -224,13 +225,15 @@ function assertPolicySemantics(
   ) {
     fail('historical policy belongs to another identity lineage');
   }
-  const allowedAudience = new Set([
-    manifest.organization.organization_id,
-    manifest.membership.membership_id,
-  ]);
   if (
     policy.publication.audience.subjects.some(
-      (subject) => !allowedAudience.has(subject.id),
+      (subject) =>
+        !(
+          (subject.kind === 'organization' &&
+            subject.id === manifest.organization.organization_id) ||
+          (subject.kind === 'membership' &&
+            subject.id === manifest.membership.membership_id)
+        ),
     )
   ) {
     fail('historical policy contains an unknown local audience subject');
@@ -454,7 +457,9 @@ function assertRegistrySemantics(
       'historical binding created_at',
     );
     if (binding.created_at > registry.updated_at) {
-      fail(`binding ${binding.adapter_binding_id} postdates its registry record`);
+      fail(
+        `binding ${binding.adapter_binding_id} postdates its registry record`,
+      );
     }
     if (
       (binding.status === 'active' && binding.ended_at !== null) ||
@@ -627,6 +632,72 @@ export class IdentityLineageStore {
     const material = this.loadAnchoredManifestMaterial(manifestId);
     const { publicKey: _publicKey, ...verified } = material;
     return verified;
+  }
+
+  loadVerifiedActiveManifest(): VerifiedHistoricalIdentityManifest {
+    const material = this.loadActiveManifestLineage()[0];
+    if (material === undefined) {
+      fail('there is no verified active identity manifest');
+    }
+    const { publicKey: _publicKey, ...verified } = material;
+    return verified;
+  }
+
+  loadVerifiedManifestBySha256(
+    sha256: Sha256Digest,
+  ): VerifiedHistoricalIdentityManifest {
+    if (!SHA256_DIGEST.test(sha256)) {
+      fail('historical manifest digest is not a canonical SHA-256 digest');
+    }
+    const matches = this.loadActiveManifestLineage().filter(
+      (material) => material.sha256 === sha256,
+    );
+    if (matches.length !== 1) {
+      fail(
+        matches.length === 0
+          ? `manifest digest ${sha256} is not reachable from the active identity lineage`
+          : `manifest digest ${sha256} resolves to more than one active-lineage manifest`,
+      );
+    }
+    const { publicKey: _publicKey, ...verified } = matches[0]!;
+    return verified;
+  }
+
+  /**
+   * Proves ordering inside the one signed predecessor chain anchored by the
+   * active identity bundle. Equality is valid; a newer manifest can never be
+   * used to justify an earlier processing stage.
+   */
+  assertManifestAncestorOrEqual(
+    ancestorManifestId: string,
+    descendantManifestId: string,
+  ): void {
+    assertFederationId(
+      ancestorManifestId,
+      'idm',
+      'ancestor_identity_manifest_id',
+    );
+    assertFederationId(
+      descendantManifestId,
+      'idm',
+      'descendant_identity_manifest_id',
+    );
+    const lineage = this.loadActiveManifestLineage();
+    const ancestorIndex = lineage.findIndex(
+      (material) => material.manifest.manifest_id === ancestorManifestId,
+    );
+    const descendantIndex = lineage.findIndex(
+      (material) => material.manifest.manifest_id === descendantManifestId,
+    );
+    if (ancestorIndex === -1 || descendantIndex === -1) {
+      fail('manifest order references identity outside the active lineage');
+    }
+    // `loadActiveManifestLineage` is ordered active/newest to root/oldest.
+    if (ancestorIndex < descendantIndex) {
+      fail(
+        `manifest ${ancestorManifestId} is not an ancestor of ${descendantManifestId}`,
+      );
+    }
   }
 
   loadVerifiedPolicy(
@@ -920,13 +991,13 @@ export class IdentityLineageStore {
     return { manifest, canonical: raw, sha256: sha256Digest(raw), publicKey };
   }
 
-  private loadAnchoredManifestMaterial(manifestId: string): ManifestMaterial {
-    assertFederationId(manifestId, 'idm', 'manifest_id');
+  private loadActiveManifestLineage(): readonly ManifestMaterial[] {
     const active = this.activeBundle.loadVerified();
     if (active === null) {
       fail('there is no verified active identity bundle to anchor history');
     }
     const seen = new Set<string>();
+    const lineage: ManifestMaterial[] = [];
     let currentId: string | null = active.manifest.manifest_id;
     let successor: LocalIdentityManifestV1 | undefined;
     while (currentId !== null) {
@@ -955,10 +1026,19 @@ export class IdentityLineageStore {
           fail('identity manifest predecessor continuity is inconsistent');
         }
       }
-      if (currentId === manifestId) return current;
+      lineage.push(current);
       successor = current.manifest;
       currentId = current.manifest.predecessor_manifest_id;
     }
+    return lineage;
+  }
+
+  private loadAnchoredManifestMaterial(manifestId: string): ManifestMaterial {
+    assertFederationId(manifestId, 'idm', 'manifest_id');
+    const material = this.loadActiveManifestLineage().find(
+      (candidate) => candidate.manifest.manifest_id === manifestId,
+    );
+    if (material !== undefined) return material;
     fail(
       `manifest ${manifestId} is not reachable from the active identity lineage`,
     );

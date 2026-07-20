@@ -1,6 +1,12 @@
 import dgram from 'node:dgram';
 import dns from 'node:dns';
-import { mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
+import {
+  mkdtempSync,
+  readFileSync,
+  readdirSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs';
 import http from 'node:http';
 import http2 from 'node:http2';
 import https from 'node:https';
@@ -61,36 +67,58 @@ afterEach(() => {
 
 describe('product hermeticity setup', () => {
   it('is registered for every product test file', () => {
-    expect(globalThis.__ECHO_PRODUCT_HERMETICITY_GUARD__).toMatchObject({ active: true });
+    expect(globalThis.__ECHO_PRODUCT_HERMETICITY_GUARD__).toMatchObject({
+      active: true,
+    });
     const config = readFileSync(PRODUCT_CONFIG, 'utf8');
     expect(config).toContain("include: ['tests/product/**/*.test.ts']");
     expect(config).toContain("setupFiles: ['tests/product/setup.ts']");
   });
 
   it('blocks every enumerated in-worker network surface', () => {
-    expect(() => fetch('https://example.invalid')).toThrow('product hermeticity guard');
-    expect(() => net.connect(443, 'example.invalid')).toThrow('product hermeticity guard');
-    expect(() => tls.connect(443, 'example.invalid')).toThrow('product hermeticity guard');
-    expect(() => http.request('http://example.invalid')).toThrow('product hermeticity guard');
-    expect(() => https.request('https://example.invalid')).toThrow('product hermeticity guard');
-    expect(() => http2.connect('https://example.invalid')).toThrow('product hermeticity guard');
-    expect(() => dgram.createSocket('udp4')).toThrow('product hermeticity guard');
+    expect(() => fetch('https://example.invalid')).toThrow(
+      'product hermeticity guard',
+    );
+    expect(() => net.connect(443, 'example.invalid')).toThrow(
+      'product hermeticity guard',
+    );
+    expect(() => tls.connect(443, 'example.invalid')).toThrow(
+      'product hermeticity guard',
+    );
+    expect(() => http.request('http://example.invalid')).toThrow(
+      'product hermeticity guard',
+    );
+    expect(() => https.request('https://example.invalid')).toThrow(
+      'product hermeticity guard',
+    );
+    expect(() => http2.connect('https://example.invalid')).toThrow(
+      'product hermeticity guard',
+    );
+    expect(() => dgram.createSocket('udp4')).toThrow(
+      'product hermeticity guard',
+    );
     expect(() => dns.lookup('example.invalid', () => undefined)).toThrow(
       'product hermeticity guard',
     );
-    expect(() => dns.promises.lookup('example.invalid')).toThrow('product hermeticity guard');
+    expect(() => dns.promises.lookup('example.invalid')).toThrow(
+      'product hermeticity guard',
+    );
   });
 
   it('blocks credential environment reads and clears product overrides', () => {
-    expect(() => process.env.ANTHROPIC_API_KEY).toThrow('credential environment access');
+    expect(() => process.env.ANTHROPIC_API_KEY).toThrow(
+      'credential environment access',
+    );
     expect(process.env.ECHO_LOG_LEVEL).toBeUndefined();
   });
 
-  it('keeps wall-clock reads confined to the three injectable runtime defaults', () => {
-    const offenders = productSourceFiles(join(REPO_ROOT, 'src/product')).filter((path) => {
-      const source = readFileSync(path, 'utf8');
-      return /\bDate\.now\s*\(|\bnew\s+Date\s*\(/.test(source);
-    });
+  it('keeps wall-clock reads confined to injectable runtime defaults', () => {
+    const offenders = productSourceFiles(join(REPO_ROOT, 'src/product')).filter(
+      (path) => {
+        const source = readFileSync(path, 'utf8');
+        return /\bDate\.now\s*\(|\bnew\s+Date\s*\(/.test(source);
+      },
+    );
     const productRoot = join(REPO_ROOT, 'src/product');
     const relativeOffenders = offenders
       .map((path) => path.slice(`${productRoot}/`.length))
@@ -99,20 +127,43 @@ describe('product hermeticity setup', () => {
       'adapter-factories.ts',
       'approval/decision-node-store.ts',
       'composition.ts',
+      'federation/attributing-core-state-store.ts',
+      'federation/record-projector.ts',
     ]);
-    expect(readFileSync(join(productRoot, 'adapter-factories.ts'), 'utf8')).toMatch(
+    expect(
+      readFileSync(join(productRoot, 'adapter-factories.ts'), 'utf8'),
+    ).toMatch(
       /now: options\.now \?\? \(\(\) => new Date\(\)\.toISOString\(\)\)/,
     );
     expect(
-      readFileSync(join(productRoot, 'approval/decision-node-store.ts'), 'utf8'),
+      readFileSync(
+        join(productRoot, 'approval/decision-node-store.ts'),
+        'utf8',
+      ),
     ).toMatch(
       /this\.now = options\.now \?\? \(\(\) => new Date\(\)\.toISOString\(\)\)/,
     );
-    const composition = readFileSync(join(productRoot, 'composition.ts'), 'utf8');
+    const composition = readFileSync(
+      join(productRoot, 'composition.ts'),
+      'utf8',
+    );
     expect(composition).toMatch(
       /return now \?\? \(\(\) => new Date\(\)\.toISOString\(\)\)/,
     );
     expect(composition).toContain('resolveProductClock(options.now)');
+    expect(
+      readFileSync(
+        join(productRoot, 'federation/attributing-core-state-store.ts'),
+        'utf8',
+      ),
+    ).toMatch(
+      /this\.now = options\.now \?\? \(\(\) => new Date\(\)\.toISOString\(\)\)/,
+    );
+    expect(
+      readFileSync(join(productRoot, 'federation/record-projector.ts'), 'utf8'),
+    ).toMatch(
+      /this\.now = options\.now \?\? \(\(\) => new Date\(\)\.toISOString\(\)\)/,
+    );
   });
 });
 
@@ -164,7 +215,9 @@ describe('sanitized child process boundary', () => {
       { cwd: cache },
     );
     expect(result.status).not.toBe(0);
-    expect(`${result.stdout}\n${result.stderr}`).toMatch(/cache miss|offline mode|ENOTCACHED/i);
+    expect(`${result.stdout}\n${result.stderr}`).toMatch(
+      /cache miss|offline mode|ENOTCACHED/i,
+    );
   });
 
   it('fails red fixture files for direct spawn, dgram, and DNS access', async () => {

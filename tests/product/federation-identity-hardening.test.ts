@@ -382,3 +382,53 @@ describe("Slack human claim workspace semantics", () => {
     ).toThrow(/requires exactly one active slack-reactions approval binding/);
   });
 });
+
+describe("publication audience identity semantics", () => {
+  it("accepts an exact named membership subject", () => {
+    const fixture = semanticFixture("T_APPROVAL");
+    fixture.policy.publication.audience = {
+      scope: "named-subjects",
+      subjects: [
+        {
+          kind: "membership",
+          id: fixture.manifest.membership.membership_id,
+        },
+      ],
+    };
+
+    expect(() =>
+      validateIdentityDocumentSemantics(
+        fixture.manifest,
+        fixture.registry,
+        fixture.policy,
+      ),
+    ).not.toThrow();
+  });
+
+  it.each([
+    { kind: "membership" as const, idFrom: "organization" as const },
+    { kind: "organization" as const, idFrom: "membership" as const },
+  ])("rejects a $kind subject carrying the $idFrom ID", ({ kind, idFrom }) => {
+    const fixture = semanticFixture("T_APPROVAL");
+    fixture.policy.publication.audience = {
+      scope: "named-subjects",
+      subjects: [
+        {
+          kind,
+          id:
+            idFrom === "organization"
+              ? fixture.manifest.organization.organization_id
+              : fixture.manifest.membership.membership_id,
+        },
+      ],
+    };
+
+    expect(() =>
+      validateIdentityDocumentSemantics(
+        fixture.manifest,
+        fixture.registry,
+        fixture.policy,
+      ),
+    ).toThrow(/unknown local subject/);
+  });
+});

@@ -88,6 +88,7 @@ describe('ordinary npm package', () => {
       'package/dist/infrastructure/filesystem/atomic-write.js',
       'package/dist/storage/migrations/0001_initial.sql',
       'package/dist/storage/migrations/0002_core_state.sql',
+      'package/dist/storage/migrations/0003_federated_founder_identity.sql',
       'package/schemas/meeting-context.v1.schema.json',
       'package/schemas/runtime-config.v1.schema.json',
       'package/schemas/product/active-identity-bundle.v1.schema.json',
@@ -114,15 +115,15 @@ describe('ordinary npm package', () => {
       [...members].some((member) => member.startsWith('package/dist/capture/')),
     ).toBe(false);
     expect(
-      [...members].some((member) => member.startsWith('package/dist/echo-home/')),
+      [...members].some((member) =>
+        member.startsWith('package/dist/echo-home/'),
+      ),
     ).toBe(false);
     expect(
       [...members].some((member) => member.startsWith('package/dist/enrich/')),
     ).toBe(false);
     expect(
-      [...members].some((member) =>
-        member.includes('/granola/compatibility/'),
-      ),
+      [...members].some((member) => member.includes('/granola/compatibility/')),
     ).toBe(false);
     expect(
       [...members].some((member) =>

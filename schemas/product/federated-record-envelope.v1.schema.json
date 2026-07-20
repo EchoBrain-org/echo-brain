@@ -190,7 +190,10 @@
         "kind": { "$ref": "#/definitions/nonEmptyString" },
         "id": { "$ref": "#/definitions/nonEmptyString" },
         "enterprise_id": {
-          "oneOf": [{ "$ref": "#/definitions/nonEmptyString" }, { "type": "null" }]
+          "oneOf": [
+            { "$ref": "#/definitions/nonEmptyString" },
+            { "type": "null" }
+          ]
         }
       }
     },
@@ -202,10 +205,16 @@
         "kind": { "$ref": "#/definitions/nonEmptyString" },
         "id": { "$ref": "#/definitions/nonEmptyString" },
         "bot_id": {
-          "oneOf": [{ "$ref": "#/definitions/nonEmptyString" }, { "type": "null" }]
+          "oneOf": [
+            { "$ref": "#/definitions/nonEmptyString" },
+            { "type": "null" }
+          ]
         },
         "app_id": {
-          "oneOf": [{ "$ref": "#/definitions/nonEmptyString" }, { "type": "null" }]
+          "oneOf": [
+            { "$ref": "#/definitions/nonEmptyString" },
+            { "type": "null" }
+          ]
         }
       }
     },
@@ -216,7 +225,10 @@
       "properties": {
         "meeting_participant_id": { "$ref": "#/definitions/nonEmptyString" },
         "display_name": {
-          "oneOf": [{ "$ref": "#/definitions/nonEmptyString" }, { "type": "null" }]
+          "oneOf": [
+            { "$ref": "#/definitions/nonEmptyString" },
+            { "type": "null" }
+          ]
         },
         "observed_claims": {
           "type": "array",
@@ -237,6 +249,8 @@
       "type": "object",
       "additionalProperties": false,
       "required": [
+        "identity_manifest_id",
+        "identity_manifest_sha256",
         "binding",
         "connection",
         "meeting",
@@ -245,6 +259,8 @@
         "observed_by"
       ],
       "properties": {
+        "identity_manifest_id": { "$ref": "#/definitions/manifestId" },
+        "identity_manifest_sha256": { "$ref": "#/definitions/digest" },
         "binding": {
           "type": "object",
           "additionalProperties": false,
@@ -316,7 +332,11 @@
                   ]
                 },
                 "assurance": {
-                  "enum": ["provider_verified", "credential_observed", "operator_attested"]
+                  "enum": [
+                    "provider_verified",
+                    "credential_observed",
+                    "operator_attested"
+                  ]
                 }
               }
             }
@@ -325,7 +345,12 @@
         "meeting": {
           "type": "object",
           "additionalProperties": false,
-          "required": ["external_id", "revision", "source_observation_id", "document_sha256"],
+          "required": [
+            "external_id",
+            "revision",
+            "source_observation_id",
+            "document_sha256"
+          ],
           "properties": {
             "external_id": { "$ref": "#/definitions/nonEmptyString" },
             "revision": { "$ref": "#/definitions/nonEmptyString" },
@@ -345,6 +370,8 @@
       "type": "object",
       "additionalProperties": false,
       "required": [
+        "identity_manifest_id",
+        "identity_manifest_sha256",
         "adapter_binding_id",
         "adapter",
         "configuration_snapshot",
@@ -355,6 +382,8 @@
         "produced_by"
       ],
       "properties": {
+        "identity_manifest_id": { "$ref": "#/definitions/manifestId" },
+        "identity_manifest_sha256": { "$ref": "#/definitions/digest" },
         "adapter_binding_id": { "$ref": "#/definitions/bindingId" },
         "adapter": {
           "type": "object",
@@ -378,7 +407,13 @@
     "nativeLocalReference": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["processing_key", "approval_id", "node_id", "meeting_id", "signal_id"],
+      "required": [
+        "processing_key",
+        "approval_id",
+        "node_id",
+        "meeting_id",
+        "signal_id"
+      ],
       "properties": {
         "processing_key": { "$ref": "#/definitions/nonEmptyString" },
         "approval_id": { "$ref": "#/definitions/nonEmptyString" },
@@ -402,13 +437,24 @@
     "decisionSignal": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["id", "kind", "text", "subject", "confidence", "evidence", "status"],
+      "required": [
+        "id",
+        "kind",
+        "text",
+        "subject",
+        "confidence",
+        "evidence",
+        "status"
+      ],
       "properties": {
         "id": { "$ref": "#/definitions/signalId" },
         "kind": { "const": "decision" },
         "text": { "$ref": "#/definitions/nonEmptyString" },
         "subject": {
-          "oneOf": [{ "$ref": "#/definitions/nonEmptyString" }, { "type": "null" }]
+          "oneOf": [
+            { "$ref": "#/definitions/nonEmptyString" },
+            { "type": "null" }
+          ]
         },
         "confidence": {
           "oneOf": [
@@ -416,7 +462,10 @@
             { "type": "null" }
           ]
         },
-        "evidence": { "type": "array", "items": { "$ref": "#/definitions/evidence" } },
+        "evidence": {
+          "type": "array",
+          "items": { "$ref": "#/definitions/evidence" }
+        },
         "status": { "enum": ["proposed", "decided", "unresolved"] }
       }
     },
@@ -438,7 +487,10 @@
         "kind": { "const": "action" },
         "text": { "$ref": "#/definitions/nonEmptyString" },
         "subject": {
-          "oneOf": [{ "$ref": "#/definitions/nonEmptyString" }, { "type": "null" }]
+          "oneOf": [
+            { "$ref": "#/definitions/nonEmptyString" },
+            { "type": "null" }
+          ]
         },
         "confidence": {
           "oneOf": [
@@ -446,9 +498,15 @@
             { "type": "null" }
           ]
         },
-        "evidence": { "type": "array", "items": { "$ref": "#/definitions/evidence" } },
+        "evidence": {
+          "type": "array",
+          "items": { "$ref": "#/definitions/evidence" }
+        },
         "owner": {
-          "oneOf": [{ "$ref": "#/definitions/nonEmptyString" }, { "type": "null" }]
+          "oneOf": [
+            { "$ref": "#/definitions/nonEmptyString" },
+            { "type": "null" }
+          ]
         },
         "due_at": { "$ref": "#/definitions/nullableTimestamp" }
       }
@@ -470,7 +528,10 @@
         "kind": { "const": "rationale" },
         "text": { "$ref": "#/definitions/nonEmptyString" },
         "subject": {
-          "oneOf": [{ "$ref": "#/definitions/nonEmptyString" }, { "type": "null" }]
+          "oneOf": [
+            { "$ref": "#/definitions/nonEmptyString" },
+            { "type": "null" }
+          ]
         },
         "confidence": {
           "oneOf": [
@@ -478,7 +539,10 @@
             { "type": "null" }
           ]
         },
-        "evidence": { "type": "array", "items": { "$ref": "#/definitions/evidence" } },
+        "evidence": {
+          "type": "array",
+          "items": { "$ref": "#/definitions/evidence" }
+        },
         "supports_signal_ids": {
           "type": "array",
           "uniqueItems": true,
@@ -532,7 +596,9 @@
             ]
           }
         },
-        "response_status": { "enum": ["accepted", "declined", "tentative", "unknown"] },
+        "response_status": {
+          "enum": ["accepted", "declined", "tentative", "unknown"]
+        },
         "attendance": { "enum": ["attended", "no_show", "unknown"] },
         "organization": {
           "type": "object",
@@ -574,7 +640,12 @@
     "approvalGroup": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["brief_schema_version", "brief_id", "approved_brief_sha256", "signal_manifest"],
+      "required": [
+        "brief_schema_version",
+        "brief_id",
+        "approved_brief_sha256",
+        "signal_manifest"
+      ],
       "properties": {
         "brief_schema_version": { "const": 1 },
         "brief_id": { "$ref": "#/definitions/nonEmptyString" },
@@ -596,7 +667,14 @@
     "decisionRecord": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["record_id", "kind", "signal_id", "signal", "meeting_context", "approval_group"],
+      "required": [
+        "record_id",
+        "kind",
+        "signal_id",
+        "signal",
+        "meeting_context",
+        "approval_group"
+      ],
       "properties": {
         "record_id": { "$ref": "#/definitions/recordId" },
         "kind": { "const": "decision" },
@@ -609,7 +687,14 @@
     "actionRecord": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["record_id", "kind", "signal_id", "signal", "meeting_context", "approval_group"],
+      "required": [
+        "record_id",
+        "kind",
+        "signal_id",
+        "signal",
+        "meeting_context",
+        "approval_group"
+      ],
       "properties": {
         "record_id": { "$ref": "#/definitions/recordId" },
         "kind": { "const": "action" },
@@ -622,7 +707,14 @@
     "rationaleRecord": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["record_id", "kind", "signal_id", "signal", "meeting_context", "approval_group"],
+      "required": [
+        "record_id",
+        "kind",
+        "signal_id",
+        "signal",
+        "meeting_context",
+        "approval_group"
+      ],
       "properties": {
         "record_id": { "$ref": "#/definitions/recordId" },
         "kind": { "const": "rationale" },
@@ -635,19 +727,35 @@
     "slackProviderIdentity": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["provider", "team_id", "enterprise_id", "bot_user_id", "bot_id", "app_id"],
+      "required": [
+        "provider",
+        "team_id",
+        "enterprise_id",
+        "bot_user_id",
+        "bot_id",
+        "app_id"
+      ],
       "properties": {
         "provider": { "const": "slack" },
         "team_id": { "$ref": "#/definitions/nonEmptyString" },
         "enterprise_id": {
-          "oneOf": [{ "$ref": "#/definitions/nonEmptyString" }, { "type": "null" }]
+          "oneOf": [
+            { "$ref": "#/definitions/nonEmptyString" },
+            { "type": "null" }
+          ]
         },
         "bot_user_id": { "$ref": "#/definitions/nonEmptyString" },
         "bot_id": {
-          "oneOf": [{ "$ref": "#/definitions/nonEmptyString" }, { "type": "null" }]
+          "oneOf": [
+            { "$ref": "#/definitions/nonEmptyString" },
+            { "type": "null" }
+          ]
         },
         "app_id": {
-          "oneOf": [{ "$ref": "#/definitions/nonEmptyString" }, { "type": "null" }]
+          "oneOf": [
+            { "$ref": "#/definitions/nonEmptyString" },
+            { "type": "null" }
+          ]
         }
       }
     },
@@ -685,12 +793,19 @@
         "connection": {
           "type": "object",
           "additionalProperties": false,
-          "required": ["connection_id", "generation", "owner", "provider_identity"],
+          "required": [
+            "connection_id",
+            "generation",
+            "owner",
+            "provider_identity"
+          ],
           "properties": {
             "connection_id": { "$ref": "#/definitions/connectionId" },
             "generation": { "type": "integer", "minimum": 1 },
             "owner": { "$ref": "#/definitions/owner" },
-            "provider_identity": { "$ref": "#/definitions/slackProviderIdentity" }
+            "provider_identity": {
+              "$ref": "#/definitions/slackProviderIdentity"
+            }
           }
         },
         "presentation": {
@@ -706,6 +821,58 @@
             "rendered_blocks_sha256": { "$ref": "#/definitions/digest" }
           }
         }
+      }
+    },
+    "approvalObservation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["binding", "connection", "observed_by"],
+      "properties": {
+        "binding": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "adapter_binding_id",
+            "adapter",
+            "configuration_snapshot",
+            "configuration_sha256"
+          ],
+          "properties": {
+            "adapter_binding_id": { "$ref": "#/definitions/bindingId" },
+            "adapter": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["kind", "adapter_id", "instance_id", "version"],
+              "properties": {
+                "kind": { "const": "approval-surface" },
+                "adapter_id": { "$ref": "#/definitions/adapterName" },
+                "instance_id": { "$ref": "#/definitions/adapterName" },
+                "version": { "$ref": "#/definitions/nonEmptyString" }
+              }
+            },
+            "configuration_snapshot": { "$ref": "#/definitions/jsonObject" },
+            "configuration_sha256": { "$ref": "#/definitions/digest" }
+          }
+        },
+        "connection": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "connection_id",
+            "generation",
+            "owner",
+            "provider_identity"
+          ],
+          "properties": {
+            "connection_id": { "$ref": "#/definitions/connectionId" },
+            "generation": { "type": "integer", "minimum": 1 },
+            "owner": { "$ref": "#/definitions/owner" },
+            "provider_identity": {
+              "$ref": "#/definitions/slackProviderIdentity"
+            }
+          }
+        },
+        "observed_by": { "$ref": "#/definitions/productArtifact" }
       }
     },
     "slackRawActor": {
@@ -735,7 +902,9 @@
           "properties": {
             "kind": { "const": "reaction" },
             "name": { "$ref": "#/definitions/nonEmptyString" },
-            "provider_occurred_at": { "$ref": "#/definitions/nullableTimestamp" },
+            "provider_occurred_at": {
+              "$ref": "#/definitions/nullableTimestamp"
+            },
             "observed_at": { "$ref": "#/definitions/timestamp" }
           }
         },
@@ -746,7 +915,10 @@
               "additionalProperties": false,
               "required": ["message_ts", "author_subject_id", "text_sha256"],
               "properties": {
-                "message_ts": { "type": "string", "pattern": "^[0-9]+\\.[0-9]{6}$" },
+                "message_ts": {
+                  "type": "string",
+                  "pattern": "^[0-9]+\\.[0-9]{6}$"
+                },
                 "author_subject_id": { "$ref": "#/definitions/nonEmptyString" },
                 "text_sha256": { "$ref": "#/definitions/digest" }
               }
@@ -761,17 +933,18 @@
       "additionalProperties": false,
       "required": [
         "surface",
+        "observation",
         "approver",
         "raw_actor_assertion",
         "assurance",
         "reviewed_at",
         "reason",
         "approved_brief_sha256",
-        "approved_context_sha256",
-        "observed_by"
+        "approved_context_sha256"
       ],
       "properties": {
         "surface": { "$ref": "#/definitions/approvalSurface" },
+        "observation": { "$ref": "#/definitions/approvalObservation" },
         "approver": {
           "type": "object",
           "additionalProperties": false,
@@ -783,14 +956,18 @@
           }
         },
         "raw_actor_assertion": { "$ref": "#/definitions/slackRawActor" },
-        "assurance": { "enum": ["provider_challenge_observed", "provider_verified"] },
+        "assurance": {
+          "enum": ["provider_challenge_observed", "provider_verified"]
+        },
         "reviewed_at": { "$ref": "#/definitions/timestamp" },
         "reason": {
-          "oneOf": [{ "$ref": "#/definitions/nonEmptyString" }, { "type": "null" }]
+          "oneOf": [
+            { "$ref": "#/definitions/nonEmptyString" },
+            { "type": "null" }
+          ]
         },
         "approved_brief_sha256": { "$ref": "#/definitions/digest" },
-        "approved_context_sha256": { "$ref": "#/definitions/digest" },
-        "observed_by": { "$ref": "#/definitions/productArtifact" }
+        "approved_context_sha256": { "$ref": "#/definitions/digest" }
       }
     },
     "cliRawActor": {
@@ -841,7 +1018,10 @@
         "assurance": { "const": "installation_holder_self_attested" },
         "reviewed_at": { "$ref": "#/definitions/timestamp" },
         "reason": {
-          "oneOf": [{ "$ref": "#/definitions/nonEmptyString" }, { "type": "null" }]
+          "oneOf": [
+            { "$ref": "#/definitions/nonEmptyString" },
+            { "type": "null" }
+          ]
         },
         "approved_brief_sha256": { "$ref": "#/definitions/digest" },
         "approved_context_sha256": { "$ref": "#/definitions/digest" },
@@ -917,7 +1097,9 @@
         "sensitivity": { "enum": ["internal", "confidential", "restricted"] },
         "retention": { "$ref": "#/definitions/retention" },
         "raw_meeting_content": { "const": "local-only" },
-        "participant_observations": { "enum": ["included-namespaced", "excluded"] }
+        "participant_observations": {
+          "enum": ["included-namespaced", "excluded"]
+        }
       }
     },
     "jsonObject": {

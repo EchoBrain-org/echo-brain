@@ -17,6 +17,7 @@ import {
   type ProductCredentialResolver,
 } from "../credentials.js";
 import { ActiveIdentityBundleStore } from "./active-identity-bundle-store.js";
+import { identityBindingConfigurationSnapshot } from "./binding-configuration.js";
 import {
   commitFounderBootstrap as commitFounderIdentityBundle,
   mintFounderBootstrapIds,
@@ -402,6 +403,10 @@ function createRequest(
   const bindings: AdapterBindingV1[] = configuration.capabilities.map(
     ({ capability, config: adapter }) => {
       const provider = providerForAdapter(adapter.adapter_id);
+      const configurationSnapshot = identityBindingConfigurationSnapshot(
+        capability,
+        adapter,
+      );
       return {
         adapter_binding_id: ceremony.federationIdFactory("bnd"),
         capability,
@@ -410,8 +415,8 @@ function createRequest(
         connection_id:
           provider === null ? null : connectionByProvider[provider],
         connection_generation: provider === null ? null : 1,
-        configuration_snapshot: adapter.settings,
-        configuration_sha256: canonicalSha256(adapter.settings),
+        configuration_snapshot: configurationSnapshot,
+        configuration_sha256: canonicalSha256(configurationSnapshot),
         created_at: createdAt,
         ended_at: null,
         status: "active",

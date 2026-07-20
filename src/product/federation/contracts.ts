@@ -22,8 +22,7 @@ export type IdentityAssurance =
 
 export type KeyProtection = 'secure-enclave' | 'keychain-this-device-only';
 export type KeyProtectionAssurance =
-  | 'hardware_bound'
-  | 'platform_key_device_only';
+  'hardware_bound' | 'platform_key_device_only';
 
 export interface SignedIntegrity {
   canonicalization: 'RFC8785';
@@ -56,7 +55,8 @@ export interface ActiveIdentityBundleV1 extends SignedDocument {
   };
   active_installation_id: FederationId;
   activated_at: string;
-  activation_reason: 'founder-bootstrap' | 'installation-reenrollment' | 'bundle-update';
+  activation_reason:
+    'founder-bootstrap' | 'installation-reenrollment' | 'bundle-update';
 }
 
 export interface OrganizationIdentityV1 {
@@ -396,6 +396,8 @@ export interface FederatedParticipantObservationV1 {
 }
 
 export interface FederatedSourceSnapshotV1 {
+  identity_manifest_id: FederationId;
+  identity_manifest_sha256: Sha256Digest;
   binding: {
     adapter_binding_id: FederationId;
     adapter: AdapterIdentity & { kind: 'meeting-source' };
@@ -426,6 +428,8 @@ export interface FederatedSourceSnapshotV1 {
 }
 
 export interface FederatedProcessorSnapshotV1 {
+  identity_manifest_id: FederationId;
+  identity_manifest_sha256: Sha256Digest;
   adapter_binding_id: FederationId;
   adapter: AdapterIdentity & { kind: 'decision-processor' };
   configuration_snapshot: JsonObject;
@@ -493,8 +497,15 @@ export interface SlackApprovalSurfaceSnapshotV1 extends ApprovalSurfaceCandidate
   };
 }
 
+export interface SlackApprovalObservationSnapshotV1 {
+  binding: ApprovalBindingSnapshotV1;
+  connection: NonNullable<ApprovalSurfaceCandidateV1['connection']>;
+  observed_by: ProductArtifactIdentityV1;
+}
+
 export interface SlackApprovalSnapshotV1 {
   surface: SlackApprovalSurfaceSnapshotV1;
+  observation: SlackApprovalObservationSnapshotV1;
   approver: {
     principal_id: FederationId;
     membership_id: FederationId;
@@ -524,7 +535,6 @@ export interface SlackApprovalSnapshotV1 {
   reason: string | null;
   approved_brief_sha256: Sha256Digest;
   approved_context_sha256: Sha256Digest;
-  observed_by: ProductArtifactIdentityV1;
 }
 
 export interface CliApprovalSnapshotV1 {
@@ -550,8 +560,7 @@ export interface CliApprovalSnapshotV1 {
 }
 
 export type FederatedApprovalSnapshotV1 =
-  | SlackApprovalSnapshotV1
-  | CliApprovalSnapshotV1;
+  SlackApprovalSnapshotV1 | CliApprovalSnapshotV1;
 
 export interface FederatedPublicationSnapshotV1 extends PublicationSnapshotV1 {
   policy_id: FederationId;
@@ -589,6 +598,7 @@ export interface FederatedExportManifestV1 extends SignedDocument {
   organization_id: FederationId;
   installation_id: FederationId;
   key_id: Sha256Digest;
+  signing_identity_manifest_id: FederationId;
   artifacts: readonly {
     path: string;
     kind: string;

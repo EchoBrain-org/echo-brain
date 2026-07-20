@@ -1,6 +1,7 @@
 export {
   LLM_DECISION_PROCESSOR_ADAPTER_ID,
   LLM_DECISION_PROCESSOR_ADAPTER_VERSION,
+  LLM_DECISION_PROCESSOR_PROMPT_VERSION,
   LlmDecisionProcessor,
   OllamaClient,
   createLlmDecisionProcessor,

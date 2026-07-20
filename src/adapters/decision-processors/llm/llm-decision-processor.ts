@@ -17,6 +17,8 @@ import {
 
 export const LLM_DECISION_PROCESSOR_ADAPTER_ID = 'llm';
 export const LLM_DECISION_PROCESSOR_ADAPTER_VERSION = '1.0.0';
+/** Bump with the adapter version whenever prompt/output semantics change. */
+export const LLM_DECISION_PROCESSOR_PROMPT_VERSION = 'decision-extraction-v1';
 
 const DEFAULT_OLLAMA_BASE_URL = 'http://127.0.0.1:11434';
 const DEFAULT_REQUEST_TIMEOUT_MS = 120_000;
@@ -56,10 +58,18 @@ export interface OllamaClientOptions {
 
 function taxonomyErrorForStatus(status: number, body: string): AdapterError {
   if (status === 401 || status === 403) {
-    return new AdapterError('unauthorized', 'Ollama rejected the request as unauthorized', false);
+    return new AdapterError(
+      'unauthorized',
+      'Ollama rejected the request as unauthorized',
+      false,
+    );
   }
   if (status === 429) {
-    return new AdapterError('rate_limited', 'Ollama rate limited the request', true);
+    return new AdapterError(
+      'rate_limited',
+      'Ollama rate limited the request',
+      true,
+    );
   }
   if (status >= 500) {
     return new AdapterError(
@@ -81,8 +91,12 @@ export class OllamaClient implements LlmClient {
   private readonly fetchImpl: typeof fetch;
 
   constructor(options: OllamaClientOptions = {}) {
-    this.baseUrl = (options.baseUrl ?? DEFAULT_OLLAMA_BASE_URL).replace(/\/+$/, '');
-    this.requestTimeoutMs = options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS;
+    this.baseUrl = (options.baseUrl ?? DEFAULT_OLLAMA_BASE_URL).replace(
+      /\/+$/,
+      '',
+    );
+    this.requestTimeoutMs =
+      options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS;
     this.fetchImpl = options.fetchImpl ?? fetch;
   }
 
@@ -145,8 +159,9 @@ export class OllamaClient implements LlmClient {
     const content =
       typeof payload === 'object' &&
       payload !== null &&
-      typeof (payload as { message?: { content?: unknown } }).message?.content === 'string'
-        ? ((payload as { message: { content: string } }).message.content)
+      typeof (payload as { message?: { content?: unknown } }).message
+        ?.content === 'string'
+        ? (payload as { message: { content: string } }).message.content
         : null;
     if (content === null) {
       throw new AdapterError(
@@ -161,13 +176,17 @@ export class OllamaClient implements LlmClient {
   async listModels(signal?: AbortSignal): Promise<readonly string[]> {
     const payload = await this.request('/api/tags', { method: 'GET' }, signal);
     const models =
-      typeof payload === 'object' && payload !== null && Array.isArray((payload as { models?: unknown }).models)
-        ? ((payload as { models: unknown[] }).models)
+      typeof payload === 'object' &&
+      payload !== null &&
+      Array.isArray((payload as { models?: unknown }).models)
+        ? (payload as { models: unknown[] }).models
         : [];
     return models
       .map((entry) =>
-        typeof entry === 'object' && entry !== null && typeof (entry as { name?: unknown }).name === 'string'
-          ? ((entry as { name: string }).name)
+        typeof entry === 'object' &&
+        entry !== null &&
+        typeof (entry as { name?: unknown }).name === 'string'
+          ? (entry as { name: string }).name
           : null,
       )
       .filter((name): name is string => name !== null);
@@ -188,12 +207,18 @@ const EXTRACTION_FORMAT: JsonObject = {
         properties: {
           kind: { type: 'string', enum: ['decision', 'action', 'rationale'] },
           text: { type: 'string' },
-          status: { type: 'string', enum: ['proposed', 'decided', 'unresolved'] },
+          status: {
+            type: 'string',
+            enum: ['proposed', 'decided', 'unresolved'],
+          },
           owner: { type: ['string', 'null'] },
           due_at: { type: ['string', 'null'] },
           confidence: { type: ['number', 'null'] },
           evidence_quote: { type: 'string' },
-          supports_decision_indexes: { type: 'array', items: { type: 'integer' } },
+          supports_decision_indexes: {
+            type: 'array',
+            items: { type: 'integer' },
+          },
         },
       },
     },
@@ -225,7 +250,10 @@ interface RawSignal {
   supports: readonly number[];
 }
 
-function assertNotCancelled(signal: AbortSignal | undefined, operation: string): void {
+function assertNotCancelled(
+  signal: AbortSignal | undefined,
+  operation: string,
+): void {
   if (signal?.aborted === true) {
     throw new AdapterError('timeout', `LLM ${operation} was cancelled`, true);
   }
@@ -241,7 +269,8 @@ function renderMeeting(meeting: MeetingDocument): string {
   const participants = meeting.participants
     .map((participant) => participant.display_name ?? participant.id)
     .filter(isNonEmptyString);
-  if (participants.length > 0) lines.push(`Participants: ${participants.join(', ')}`);
+  if (participants.length > 0)
+    lines.push(`Participants: ${participants.join(', ')}`);
   for (const block of meeting.content) {
     if (!isNonEmptyString(block.text)) continue;
     lines.push('');
@@ -252,7 +281,10 @@ function renderMeeting(meeting: MeetingDocument): string {
 }
 
 function normalizedConfidence(value: unknown): number | null {
-  return typeof value === 'number' && Number.isFinite(value) && value >= 0 && value <= 1
+  return typeof value === 'number' &&
+    Number.isFinite(value) &&
+    value >= 0 &&
+    value <= 1
     ? value
     : null;
 }
@@ -275,8 +307,10 @@ function rawSignals(content: string): RawSignal[] {
     );
   }
   const items =
-    typeof parsed === 'object' && parsed !== null && Array.isArray((parsed as { signals?: unknown }).signals)
-      ? ((parsed as { signals: unknown[] }).signals)
+    typeof parsed === 'object' &&
+    parsed !== null &&
+    Array.isArray((parsed as { signals?: unknown }).signals)
+      ? (parsed as { signals: unknown[] }).signals
       : null;
   if (items === null) {
     throw new AdapterError(
@@ -290,14 +324,18 @@ function rawSignals(content: string): RawSignal[] {
     if (typeof item !== 'object' || item === null) continue;
     const record = item as Record<string, unknown>;
     const kind = record['kind'];
-    if (kind !== 'decision' && kind !== 'action' && kind !== 'rationale') continue;
-    if (!isNonEmptyString(record['text']) || !isNonEmptyString(record['evidence_quote'])) {
+    if (kind !== 'decision' && kind !== 'action' && kind !== 'rationale')
+      continue;
+    if (
+      !isNonEmptyString(record['text']) ||
+      !isNonEmptyString(record['evidence_quote'])
+    ) {
       continue;
     }
     const status = record['status'];
     const supports = Array.isArray(record['supports_decision_indexes'])
-      ? record['supports_decision_indexes'].filter(
-          (value): value is number => Number.isInteger(value),
+      ? record['supports_decision_indexes'].filter((value): value is number =>
+          Number.isInteger(value),
         )
       : [];
     signals.push({
@@ -324,7 +362,8 @@ function evidenceBlockFor(
   quote: string,
 ): MeetingContentBlock | null {
   for (const block of meeting.content) {
-    if (isNonEmptyString(block.text) && block.text.includes(quote)) return block;
+    if (isNonEmptyString(block.text) && block.text.includes(quote))
+      return block;
   }
   return null;
 }
@@ -389,16 +428,25 @@ export class LlmDecisionProcessor implements DecisionProcessorAdapter {
       errors.push(`adapter_id must be '${LLM_DECISION_PROCESSOR_ADAPTER_ID}'`);
     }
     if (!/^[a-z][a-z0-9-]*$/.test(config.instance_id)) {
-      errors.push('instance_id must use lowercase letters, numbers, and hyphens');
+      errors.push(
+        'instance_id must use lowercase letters, numbers, and hyphens',
+      );
     } else if (config.instance_id !== this.identity.instance_id) {
       errors.push('instance_id does not match the registered adapter instance');
     }
     if (config.credential_ref !== undefined) {
-      errors.push('credential_ref is not supported by the local Ollama provider');
+      errors.push(
+        'credential_ref is not supported by the local Ollama provider',
+      );
     }
-    const allowedSettings = new Set(['model', 'base_url', 'request_timeout_ms']);
+    const allowedSettings = new Set([
+      'model',
+      'base_url',
+      'request_timeout_ms',
+    ]);
     for (const key of Object.keys(config.settings)) {
-      if (!allowedSettings.has(key)) errors.push(`settings.${key} is not supported`);
+      if (!allowedSettings.has(key))
+        errors.push(`settings.${key} is not supported`);
     }
     if (!isNonEmptyString(config.settings['model'])) {
       errors.push('settings.model is required');
@@ -417,7 +465,12 @@ export class LlmDecisionProcessor implements DecisionProcessorAdapter {
     const timeout = config.settings['request_timeout_ms'];
     if (
       timeout !== undefined &&
-      !(Number.isInteger(timeout) && typeof timeout === 'number' && timeout > 0 && timeout <= MAX_REQUEST_TIMEOUT_MS)
+      !(
+        Number.isInteger(timeout) &&
+        typeof timeout === 'number' &&
+        timeout > 0 &&
+        timeout <= MAX_REQUEST_TIMEOUT_MS
+      )
     ) {
       errors.push(
         `settings.request_timeout_ms must be an integer from 1 to ${MAX_REQUEST_TIMEOUT_MS}`,
@@ -426,7 +479,9 @@ export class LlmDecisionProcessor implements DecisionProcessorAdapter {
     return { ok: errors.length === 0, errors };
   }
 
-  async healthCheck(operation?: AdapterOperationContext): Promise<AdapterHealth> {
+  async healthCheck(
+    operation?: AdapterOperationContext,
+  ): Promise<AdapterHealth> {
     assertNotCancelled(operation?.signal, 'health check');
     const checkedAt = this.now();
     const validation = this.validateConfig(this.config);
@@ -469,13 +524,21 @@ export class LlmDecisionProcessor implements DecisionProcessorAdapter {
     assertNotCancelled(operation?.signal, 'extraction');
     const validation = this.validateConfig(this.config);
     if (!validation.ok) {
-      throw new AdapterError('invalid_config', 'LLM processor configuration is invalid', false);
+      throw new AdapterError(
+        'invalid_config',
+        'LLM processor configuration is invalid',
+        false,
+      );
     }
     if (
       context.processor_version !== this.identity.version ||
       context.input_fingerprint.trim().length === 0
     ) {
-      throw new AdapterError('invalid_config', 'decision extraction context is invalid', false);
+      throw new AdapterError(
+        'invalid_config',
+        'decision extraction context is invalid',
+        false,
+      );
     }
     const response = await this.client.chat({
       model: this.model,
@@ -489,7 +552,8 @@ export class LlmDecisionProcessor implements DecisionProcessorAdapter {
     assertNotCancelled(operation?.signal, 'extraction');
 
     // Anti-hallucination gate: a signal survives only with verbatim evidence.
-    const verified: { raw: RawSignal; id: string; evidence: EvidenceSpan }[] = [];
+    const verified: { raw: RawSignal; id: string; evidence: EvidenceSpan }[] =
+      [];
     for (const raw of rawSignals(response.content)) {
       const block = evidenceBlockFor(meeting, raw.quote);
       if (block === null) continue;
@@ -500,7 +564,9 @@ export class LlmDecisionProcessor implements DecisionProcessorAdapter {
           meeting_id: meeting.id,
           block_id: block.id,
           quote: raw.quote,
-          ...(block.started_at === undefined ? {} : { started_at: block.started_at }),
+          ...(block.started_at === undefined
+            ? {}
+            : { started_at: block.started_at }),
           ...(block.ended_at === undefined ? {} : { ended_at: block.ended_at }),
         },
       });
@@ -522,7 +588,12 @@ export class LlmDecisionProcessor implements DecisionProcessorAdapter {
         case 'decision':
           return { ...base, kind: 'decision' as const, status: raw.status };
         case 'action':
-          return { ...base, kind: 'action' as const, owner: raw.owner, due_at: raw.dueAt };
+          return {
+            ...base,
+            kind: 'action' as const,
+            owner: raw.owner,
+            due_at: raw.dueAt,
+          };
         case 'rationale':
           return {
             ...base,

@@ -41,6 +41,10 @@ const RESOLVED_FILE = 'resolved.json';
 const LEGACY_IMPORT_MARKER = '.legacy-approvals-imported-v1';
 const PUBLISHED_FILE_RE = /^published-([a-z][a-z0-9-]*)\.json$/;
 
+function isFederatedDecisionNode(events: DecisionNodeEvents): boolean {
+  return Object.hasOwn(events.requested.metadata, 'federation');
+}
+
 export interface DecisionNodeStoreOptions {
   now?: () => string;
   createId?: () => string;
@@ -198,9 +202,14 @@ export class DecisionNodeStore {
     const approvalId = decisionApprovalId(input.processingKey);
     const release = await this.acquireLock(approvalId);
     try {
-      this.assertFederationCaptureAvailable();
+      const identityEnabled = this.assertFederationCaptureAvailable();
       const events = this.readEvents(approvalId);
       await this.validateCapturedEvents(events);
+      if (identityEnabled && !isFederatedDecisionNode(events)) {
+        throw new Error(
+          'pre-cutover decision node is immutable after identity activation',
+        );
+      }
       const state = foldDecisionNode(events);
       const path = join(
         this.nodePath(approvalId),
@@ -258,9 +267,14 @@ export class DecisionNodeStore {
       if (!existsSync(join(this.nodePath(approvalId), REQUESTED_FILE))) {
         throw new Error(`decision node not found: ${approvalId}`);
       }
-      this.assertFederationCaptureAvailable();
+      const identityEnabled = this.assertFederationCaptureAvailable();
       const events = this.readEvents(approvalId);
       await this.validateCapturedEvents(events);
+      if (identityEnabled && !isFederatedDecisionNode(events)) {
+        throw new Error(
+          'pre-cutover decision node is immutable after identity activation',
+        );
+      }
       const current = foldDecisionNode(events);
       if (current.status !== 'pending') {
         // The full requested/published/resolved history was authenticated by
@@ -341,6 +355,23 @@ export class DecisionNodeStore {
       .filter((entry) => APPROVAL_ID_RE.test(entry))
       .sort()
       .map((entry) => this.readEvents(entry));
+    for (const item of events) await this.validateCapturedEvents(item);
+    return events.map(foldDecisionNode);
+  }
+
+  /**
+   * Enumerate only structurally federated nodes for integrity/reconciliation
+   * checks. Pre-cutover nodes intentionally have no `metadata.federation` and
+   * remain local disposable/legacy evidence after identity activation, so a
+   * verifier must not reinterpret or reject them as native records.
+   */
+  async listFederated(): Promise<readonly DecisionNodeState[]> {
+    await this.initialize();
+    const events = readdirSync(this.directory)
+      .filter((entry) => APPROVAL_ID_RE.test(entry))
+      .sort()
+      .map((entry) => this.readEvents(entry))
+      .filter(isFederatedDecisionNode);
     for (const item of events) await this.validateCapturedEvents(item);
     return events.map(foldDecisionNode);
   }
@@ -428,13 +459,17 @@ export class DecisionNodeStore {
   private async validateCapturedEvents(
     events: DecisionNodeEvents,
   ): Promise<void> {
-    if (this.federationCapture === undefined) {
-      if (Object.hasOwn(events.requested.metadata, 'federation')) {
-        throw new Error(
-          'stored federated approval cannot be read without identity capture validation',
-        );
-      }
+    if (!isFederatedDecisionNode(events)) {
+      // The immutable requested event is the classification boundary. Later
+      // surface references and resolution metadata are opaque legacy fields;
+      // a federation-shaped value there must never retroactively promote a
+      // pre-cutover node into the federated/exportable record set.
       return;
+    }
+    if (this.federationCapture === undefined) {
+      throw new Error(
+        'stored federated approval cannot be read without identity capture validation',
+      );
     }
     await this.federationCapture.validateRequested(events.requested);
     for (const event of events.published) {

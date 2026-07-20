@@ -18,6 +18,7 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
+import { LLM_DECISION_PROCESSOR_PROMPT_VERSION } from "../../src/adapters/decision-processors/llm/llm-decision-processor.js";
 import type { GranolaApiClient } from "../../src/adapters/meeting-sources/granola/index.js";
 import type {
   SlackAuthIdentity,
@@ -35,9 +36,13 @@ import {
   statusFounderBootstrap,
   type FounderBootstrapCeremonyDependencies,
 } from "../../src/product/federation/founder-bootstrap-ceremony.js";
+import { ActiveIdentityBundleStore } from "../../src/product/federation/active-identity-bundle-store.js";
 import { checkFounderIdentity } from "../../src/product/federation/identity-check.js";
 import { FounderBootstrapSessionStore } from "../../src/product/federation/bootstrap-session-store.js";
-import { canonicalJson } from "../../src/product/federation/canonical-json.js";
+import {
+  canonicalJson,
+  canonicalSha256,
+} from "../../src/product/federation/canonical-json.js";
 import type {
   InstallationKeyDescriptor,
   InstallationSigner,
@@ -276,6 +281,75 @@ function fixture(stateDir: string) {
 }
 
 describe("founder bootstrap ceremony", () => {
+  it("derives the code-owned LLM prompt version into the signed binding snapshot", async () => {
+    const stateDir = privateState();
+    const test = fixture(stateDir);
+    const llmConfig: ProductRuntimeConfig = {
+      ...test.config,
+      decision_processor: {
+        adapter_id: "llm",
+        instance_id: "ollama-qwen3-4b",
+        settings: {
+          model: "qwen3:4b",
+          base_url: "http://127.0.0.1:11434",
+          request_timeout_ms: 240_000,
+        },
+      },
+    };
+    const dependencies: FounderBootstrapCeremonyDependencies = {
+      ...test.dependencies,
+      authorizeSeedCutover: async () => undefined,
+    };
+
+    const begun = await beginFounderBootstrap(
+      llmConfig,
+      {
+        organizationDisplayName: "EchoBrain",
+        principalDisplayName: "Zhenye",
+        slackUserId: "U123FOUNDER",
+      },
+      dependencies,
+    );
+    const session = new FounderBootstrapSessionStore(stateDir).read(
+      begun.session_id,
+    );
+    const processor = session.request.bindings.find(
+      (binding) => binding.capability === "decision-processor",
+    )!;
+    expect(llmConfig.decision_processor.settings).not.toHaveProperty(
+      "prompt_version",
+    );
+    expect(processor.configuration_snapshot).toEqual({
+      ...llmConfig.decision_processor.settings,
+      prompt_version: LLM_DECISION_PROCESSOR_PROMPT_VERSION,
+    });
+    expect(processor.configuration_sha256).toBe(
+      canonicalSha256(processor.configuration_snapshot),
+    );
+
+    test.slack.reactionObserved = true;
+    const ready = await statusFounderBootstrap(
+      llmConfig,
+      begun.session_id,
+      {},
+      dependencies,
+    );
+    await commitFounderBootstrapCeremony(
+      llmConfig,
+      begun.session_id,
+      ready.confirmation!.confirmation_sha256,
+      dependencies,
+    );
+    const verified = new ActiveIdentityBundleStore(stateDir).loadVerified(
+      llmConfig,
+    )!;
+    expect(
+      verified.connectionRegistry.bindings.find(
+        (binding) => binding.capability === "decision-processor",
+      )?.configuration_snapshot,
+    ).toEqual(processor.configuration_snapshot);
+  });
+
   it("keeps rehearsal inactive through Slack verification until the seed cutover gate lands", async () => {
     const stateDir = privateState();
     const test = fixture(stateDir);

@@ -468,6 +468,123 @@ describe('decision node store', () => {
     );
   });
 
+  it('lists structurally federated nodes without reclassifying legacy nodes', async () => {
+    const root = newRoot('decision-store-federated-list-');
+    const legacy = await new DecisionNodeStore(root).ensureRequested(request());
+    const capture: DecisionNodeFederationCapture = {
+      async captureRequested() {
+        return { federation: { candidate: true } };
+      },
+      async validateRequested() {},
+      async capturePublished({ reference }) {
+        return reference;
+      },
+      async validatePublished() {},
+      async captureResolved({ legacyMetadata }) {
+        return legacyMetadata;
+      },
+      async validateResolved() {},
+    };
+    const nativeRequest = request();
+    nativeRequest.processing_key = `${nativeRequest.processing_key}:native`;
+    const activeStore = new DecisionNodeStore(root, {
+      federationCapture: capture,
+    });
+    const native = await activeStore.ensureRequested(nativeRequest);
+
+    expect(
+      (await activeStore.listFederated()).map((item) => item.approval_id),
+    ).toEqual([native.approval_id]);
+    expect(native.approval_id).not.toBe(legacy.approval_id);
+  });
+
+  it('keeps DEV.6 nodes readable but immutable after identity activation', async () => {
+    const root = newRoot('decision-store-cutover-legacy-');
+    const legacyStore = new DecisionNodeStore(root, {
+      now: () => '2026-07-16T21:00:00.000Z',
+    });
+    const legacy = await legacyStore.ensureRequested(request());
+    await legacyStore.recordPublished({
+      processingKey: request().processing_key,
+      surface: 'slack',
+      reference: { channel_id: 'C123', message_ts: '1700.001' },
+    });
+    await legacyStore.resolve({
+      approvalId: legacy.approval_id,
+      status: 'approved',
+      reviewedBy: 'founder',
+      surface: 'slack',
+      metadata: {
+        slack: {
+          channel_id: 'C123',
+          message_ts: '1700.001',
+          reviewer_user_id: 'U123',
+        },
+      },
+    });
+
+    const manifests = join(root, 'identity', 'manifests');
+    mkdirSync(manifests, { recursive: true, mode: 0o700 });
+    writeFileSync(join(manifests, 'cutover-marker.json'), '{}\n', {
+      mode: 0o600,
+    });
+    const capture: DecisionNodeFederationCapture = {
+      async captureRequested() {
+        return { federation: { candidate: true } };
+      },
+      async validateRequested() {},
+      async capturePublished({ reference }) {
+        return reference;
+      },
+      async validatePublished() {},
+      async captureResolved({ legacyMetadata }) {
+        return legacyMetadata;
+      },
+      async validateResolved() {},
+    };
+    const activeStore = new DecisionNodeStore(root, {
+      federationCapture: capture,
+    });
+
+    await expect(
+      activeStore.getState(request().processing_key),
+    ).resolves.toMatchObject({
+      approval_id: legacy.approval_id,
+      status: 'approved',
+      requested_metadata: {},
+    });
+    await expect(activeStore.list()).resolves.toHaveLength(1);
+    await expect(activeStore.listFederated()).resolves.toEqual([]);
+
+    await expect(
+      activeStore.recordPublished({
+        processingKey: request().processing_key,
+        surface: 'terminal',
+        reference: { output: 'must-not-be-written' },
+      }),
+    ).rejects.toThrow(/pre-cutover decision node is immutable/);
+    await expect(
+      activeStore.resolve({
+        approvalId: legacy.approval_id,
+        status: 'approved',
+        reviewedBy: 'founder',
+        surface: 'slack',
+      }),
+    ).rejects.toThrow(/pre-cutover decision node is immutable/);
+    expect(
+      existsSync(
+        join(root, 'decisions', legacy.approval_id, 'published-terminal.json'),
+      ),
+    ).toBe(false);
+
+    const nativeRequest = request();
+    nativeRequest.processing_key = `${nativeRequest.processing_key}:native`;
+    const native = await activeStore.ensureRequested(nativeRequest);
+    expect(
+      (await activeStore.listFederated()).map((item) => item.approval_id),
+    ).toEqual([native.approval_id]);
+  });
+
   it('leaves no decision-node residue when requested federation capture fails', async () => {
     for (const failingStage of ['capture', 'validate'] as const) {
       const root = newRoot(`decision-store-request-${failingStage}-`);

@@ -674,8 +674,29 @@ describe("Founder bootstrap persisted-session exact shape", () => {
       model: "qwen3:4b",
       base_url: "http://127.0.0.1:11434",
       request_timeout_ms: 240_000,
+      prompt_version: "decision-extraction-v1",
     });
     expect(() => assertExactFounderBootstrapSessionShape(llm)).not.toThrow();
+
+    const missingPromptVersion = JSON.parse(JSON.stringify(llm)) as JsonRecord;
+    const missingLlmSnapshot = (
+      (missingPromptVersion["request"] as JsonRecord)[
+        "bindings"
+      ] as JsonRecord[]
+    )[1]!["configuration_snapshot"] as JsonRecord;
+    delete missingLlmSnapshot["prompt_version"];
+    expect(() =>
+      assertExactFounderBootstrapSessionShape(missingPromptVersion),
+    ).toThrow(/prompt_version/);
+
+    const wrongPromptVersion = JSON.parse(JSON.stringify(llm)) as JsonRecord;
+    const wrongLlmSnapshot = (
+      (wrongPromptVersion["request"] as JsonRecord)["bindings"] as JsonRecord[]
+    )[1]!["configuration_snapshot"] as JsonRecord;
+    wrongLlmSnapshot["prompt_version"] = "operator-supplied";
+    expect(() =>
+      assertExactFounderBootstrapSessionShape(wrongPromptVersion),
+    ).toThrow(/unsupported value/);
 
     const jsonl = cloneSession();
     setAtPath(jsonl, ["request", "bindings", 2, "adapter_id"], "jsonl-outbox");

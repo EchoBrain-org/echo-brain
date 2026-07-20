@@ -1,3 +1,5 @@
+import { LLM_DECISION_PROCESSOR_PROMPT_VERSION } from "../../adapters/decision-processors/llm/llm-decision-processor.js";
+
 type JsonRecord = Record<string, unknown>;
 type Shape = (value: unknown, label: string) => void;
 
@@ -192,7 +194,10 @@ function granolaSettingsShape(value: unknown, label: string): void {
 const structuredTextSettingsShape = objectShape({});
 
 const llmSettingsShape = objectShape(
-  { model: stringShape },
+  {
+    model: stringShape,
+    prompt_version: literalShape(LLM_DECISION_PROCESSOR_PROMPT_VERSION),
+  },
   {
     base_url: (value, label) =>
       assertSafeBaseUrl(value, ["http:", "https:"], label),

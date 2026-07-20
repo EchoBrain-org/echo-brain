@@ -54,7 +54,7 @@ export interface ProductComposition {
   adapters: ProductRuntimeAdapters;
   approvals: DecisionNodeStore;
   runOnce(options?: ProductCycleRunOptions): Promise<ProductCycleResult>;
-  close(): void;
+  close(): void | Promise<void>;
 }
 
 export interface ProductCycleRunOptions {
@@ -72,6 +72,8 @@ export interface PrepareProductCompositionOptions {
   operationDeadlines?: Partial<CoreCycleDeadlines>;
   identityCheck?: IdentityCheckDependencies;
   approvalFederationCapture?: DecisionNodeFederationCapture;
+  /** Command-scoped resources not owned by the CoreStateStore. */
+  closeResources?: () => void | Promise<void>;
 }
 
 export function resolveProductClock(now?: () => string): () => string {
@@ -214,11 +216,13 @@ export async function prepareProductComposition(
 
   const paths = resolveProductStatePaths(config.state_dir);
   prepareProductStateRoot(paths.root);
+  let identityEnabled = false;
   try {
-    await assertFounderIdentityAllowsPipeline(config.state_dir, {
+    const report = await assertFounderIdentityAllowsPipeline(config.state_dir, {
       ...options.identityCheck,
       runtimeConfig: config,
     });
+    identityEnabled = report.mode === 'identity_enabled';
   } catch (error) {
     if (error instanceof FounderIdentityGateError) {
       throw new ProductRuntimeFailure(
@@ -230,6 +234,15 @@ export async function prepareProductComposition(
       );
     }
     throw error;
+  }
+  if (identityEnabled && options.approvalGate !== undefined) {
+    throw new ProductRuntimeFailure(
+      'identity_not_seed_grade',
+      'identity-active mode rejects a caller-owned approval gate',
+      [
+        'the federation-owned approval store and capture path must observe every post-cutover resolution',
+      ],
+    );
   }
   const adapters = resolveConfiguredAdapters(config, registry);
   if (adapters instanceof ProductRuntimeFailure) throw adapters;
@@ -310,7 +323,24 @@ export async function prepareProductComposition(
         );
       }
       closed = true;
-      state.close?.();
+      let stateFailure: unknown;
+      try {
+        state.close?.();
+      } catch (error) {
+        stateFailure = error;
+      }
+      if (options.closeResources === undefined) {
+        if (stateFailure !== undefined) throw stateFailure;
+        return;
+      }
+      return Promise.resolve()
+        .then(async () => await options.closeResources!())
+        .catch((error: unknown) => {
+          stateFailure ??= error;
+        })
+        .then(() => {
+          if (stateFailure !== undefined) throw stateFailure;
+        });
     },
   };
 }

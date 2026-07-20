@@ -63,14 +63,17 @@ const IDS = {
   device: 'dev_00000000-0000-4000-8000-000000000004',
   installation: 'ins_00000000-0000-4000-8000-000000000005',
   manifest: 'idm_00000000-0000-4000-8000-000000000006',
+  successorManifest: 'idm_10000000-0000-4000-8000-000000000006',
   unanchoredManifest: 'idm_00000000-0000-4000-8000-00000000000e',
   claim: 'clm_00000000-0000-4000-8000-000000000007',
   connection: 'con_00000000-0000-4000-8000-000000000008',
   oldBinding: 'bnd_00000000-0000-4000-8000-000000000009',
   newBinding: 'bnd_00000000-0000-4000-8000-00000000000a',
   registry: 'reg_00000000-0000-4000-8000-00000000000b',
+  successorRegistry: 'reg_10000000-0000-4000-8000-00000000000b',
   secondRegistry: 'reg_00000000-0000-4000-8000-00000000000c',
   policy: 'pol_00000000-0000-4000-8000-00000000000d',
+  successorPolicy: 'pol_10000000-0000-4000-8000-00000000000d',
   wrongProviderConnection: 'con_00000000-0000-4000-8000-00000000000f',
 } as const;
 
@@ -448,6 +451,102 @@ function bindingReference(
   };
 }
 
+async function activateSuccessorManifest(fixture: Fixture): Promise<void> {
+  const descriptor = await fixture.signer.inspect(IDS.installation);
+  if (descriptor === null) throw new Error('test descriptor disappeared');
+  const paths = resolveProductStatePaths(fixture.stateDirectory);
+
+  const { integrity: _manifestIntegrity, ...manifestPayload } =
+    fixture.manifest;
+  void _manifestIntegrity;
+  const successorManifest = await signDocument(
+    {
+      ...manifestPayload,
+      manifest_id: IDS.successorManifest,
+      predecessor_manifest_id: IDS.manifest,
+      created_at: REVISION_TWO_AT,
+    },
+    fixture.signer,
+    descriptor.key_id,
+  );
+  const successorManifestRaw = canonicalJson(successorManifest);
+  new IdentityManifestStore(paths).create(
+    identityManifestFilename(IDS.successorManifest),
+    successorManifestRaw,
+  );
+
+  const { integrity: _registryIntegrity, ...registryPayload } =
+    fixture.registryOne;
+  void _registryIntegrity;
+  const successorRegistry = await signDocument(
+    {
+      ...registryPayload,
+      registry_id: IDS.successorRegistry,
+      identity_manifest_id: IDS.successorManifest,
+      updated_at: REVISION_TWO_AT,
+    },
+    fixture.signer,
+    descriptor.key_id,
+  );
+  const successorRegistryRaw = canonicalJson(successorRegistry);
+  new ConnectionRegistryStore(paths).create(
+    connectionRegistryFilename(IDS.successorRegistry, 1),
+    successorRegistryRaw,
+  );
+
+  const { integrity: _policyIntegrity, ...policyPayload } = fixture.policy;
+  void _policyIntegrity;
+  const successorPolicy = await signDocument(
+    {
+      ...policyPayload,
+      policy_id: IDS.successorPolicy,
+      identity_manifest_id: IDS.successorManifest,
+      effective_at: REVISION_TWO_AT,
+    },
+    fixture.signer,
+    descriptor.key_id,
+  );
+  const successorPolicyRaw = canonicalJson(successorPolicy);
+  new PublicationPolicyStore(paths).create(
+    publicationPolicyFilename(IDS.successorPolicy, 1),
+    successorPolicyRaw,
+  );
+
+  const pointerPayload: Omit<ActiveIdentityBundleV1, 'integrity'> = {
+    schema_version: 1,
+    kind: 'echo-active-identity-bundle',
+    manifest: {
+      manifest_id: IDS.successorManifest,
+      path: `manifests/${identityManifestFilename(IDS.successorManifest)}`,
+      sha256: sha256Digest(successorManifestRaw),
+    },
+    connection_registry: {
+      registry_id: IDS.successorRegistry,
+      revision: 1,
+      path: `registries/${connectionRegistryFilename(IDS.successorRegistry, 1)}`,
+      sha256: sha256Digest(successorRegistryRaw),
+    },
+    default_publication_policy: {
+      policy_id: IDS.successorPolicy,
+      version: 1,
+      path: `policies/${publicationPolicyFilename(IDS.successorPolicy, 1)}`,
+      sha256: sha256Digest(successorPolicyRaw),
+    },
+    active_installation_id: IDS.installation,
+    activated_at: REVISION_TWO_AT,
+    activation_reason: 'bundle-update',
+  };
+  const pointer = await signDocument(
+    pointerPayload,
+    fixture.signer,
+    descriptor.key_id,
+  );
+  writeFileSync(paths.activeIdentityBundle, canonicalJson(pointer), {
+    encoding: 'utf8',
+    mode: 0o600,
+  });
+}
+
 async function addSecondRevision(
   fixture: Fixture,
   previousDigest = sha256Digest(fixture.registryOneRaw),
@@ -488,6 +587,25 @@ async function addSecondRevision(
 }
 
 describe('historical identity lineage store', () => {
+  it('proves order against the active signed predecessor chain', async () => {
+    const fixture = await createFixture();
+    await activateSuccessorManifest(fixture);
+    const store = new IdentityLineageStore(fixture.stateDirectory);
+
+    expect(() =>
+      store.assertManifestAncestorOrEqual(IDS.manifest, IDS.successorManifest),
+    ).not.toThrow();
+    expect(() =>
+      store.assertManifestAncestorOrEqual(
+        IDS.successorManifest,
+        IDS.successorManifest,
+      ),
+    ).not.toThrow();
+    expect(() =>
+      store.assertManifestAncestorOrEqual(IDS.successorManifest, IDS.manifest),
+    ).toThrow(/is not an ancestor/);
+  });
+
   it('loads canonical signed manifests and exact historical policy bytes', async () => {
     const fixture = await createFixture();
     const store = new IdentityLineageStore(fixture.stateDirectory);
@@ -495,6 +613,15 @@ describe('historical identity lineage store', () => {
     const manifest = store.loadVerifiedManifest(IDS.manifest);
     expect(manifest.manifest.manifest_id).toBe(IDS.manifest);
     expect(manifest.sha256).toBe(sha256Digest(manifest.canonical));
+    expect(store.loadVerifiedActiveManifest()).toEqual(manifest);
+    const manifestByDigest = store.loadVerifiedManifestBySha256(
+      manifest.sha256,
+    );
+    expect(manifestByDigest.manifest.manifest_id).toBe(IDS.manifest);
+    expect(manifestByDigest.canonical).toBe(manifest.canonical);
+    expect(() =>
+      store.assertManifestAncestorOrEqual(IDS.manifest, IDS.manifest),
+    ).not.toThrow();
 
     const policy = store.loadVerifiedPolicy(
       {
@@ -553,7 +680,75 @@ describe('historical identity lineage store', () => {
     expect(() => store.loadVerifiedManifest(IDS.unanchoredManifest)).toThrow(
       /not reachable from the active identity lineage/,
     );
+    expect(() =>
+      store.assertManifestAncestorOrEqual(IDS.manifest, IDS.unanchoredManifest),
+    ).toThrow(/outside the active lineage/);
+    expect(() =>
+      store.loadVerifiedManifestBySha256(
+        sha256Digest(canonicalJson(unanchored)),
+      ),
+    ).toThrow(/not reachable from the active identity lineage/);
   });
+
+  it.each([
+    { kind: 'membership' as const, idFrom: 'organization' as const },
+    { kind: 'organization' as const, idFrom: 'membership' as const },
+  ])(
+    'rejects a historical $kind audience subject carrying the $idFrom ID',
+    async ({ kind, idFrom }) => {
+      const fixture = await createFixture();
+      const descriptor = await fixture.signer.inspect(IDS.installation);
+      if (descriptor === null) throw new Error('test descriptor disappeared');
+      const { integrity: _integrity, ...policyPayload } = fixture.policy;
+      void _integrity;
+      const invalidPolicy = await signDocument(
+        {
+          ...policyPayload,
+          version: 2,
+          effective_at: REVISION_TWO_AT,
+          publication: {
+            ...policyPayload.publication,
+            audience: {
+              scope: 'named-subjects' as const,
+              subjects: [
+                {
+                  kind,
+                  id:
+                    idFrom === 'organization'
+                      ? IDS.organization
+                      : IDS.membership,
+                },
+              ],
+            },
+          },
+        },
+        fixture.signer,
+        descriptor.key_id,
+      );
+      const invalidPolicyRaw = canonicalJson(invalidPolicy);
+      const paths = resolveProductStatePaths(fixture.stateDirectory);
+      new PublicationPolicyStore(paths).create(
+        publicationPolicyFilename(IDS.policy, 2),
+        invalidPolicyRaw,
+      );
+
+      expect(() =>
+        new IdentityLineageStore(fixture.stateDirectory).loadVerifiedPolicy(
+          {
+            policy_id: IDS.policy,
+            version: 2,
+            policy_sha256: sha256Digest(invalidPolicyRaw),
+            identity_manifest_id: IDS.manifest,
+            signer_installation_id: IDS.installation,
+            signer_key_id: descriptor.key_id,
+          },
+          OBSERVED_NEW,
+        ),
+      ).toThrow(
+        /invalid publication-policy document|unknown local audience subject/,
+      );
+    },
+  );
 
   it('rejects future-dated signed Slack claim and provider verification evidence', async () => {
     const futureClaim = await createFixture({

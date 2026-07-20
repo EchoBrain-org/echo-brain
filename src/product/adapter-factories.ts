@@ -60,6 +60,56 @@ export interface CreateConfiguredAdapterRegistryOptions {
   approvalFederationCapture?: DecisionNodeFederationCapture;
 }
 
+interface ConfiguredAdapterRequest {
+  kind: AdapterKind;
+  config: AdapterConfig;
+}
+
+function configuredAdapterRequests(
+  config: ProductRuntimeConfig,
+): readonly ConfiguredAdapterRequest[] {
+  return [
+    ...config.meeting_sources.map((adapterConfig) => ({
+      kind: 'meeting-source' as const,
+      config: adapterConfig,
+    })),
+    { kind: 'decision-processor', config: config.decision_processor },
+    ...config.delivery_surfaces.map((adapterConfig) => ({
+      kind: 'delivery-surface' as const,
+      config: adapterConfig,
+    })),
+    ...(config.approval_mode === 'adapter'
+      ? [{ kind: 'approval-surface' as const, config: config.approval_surface }]
+      : []),
+  ];
+}
+
+/**
+ * Pure availability preflight. This proves every requested factory exists
+ * without constructing an adapter, resolving a credential, or contacting a
+ * provider. Product startup uses it before touching state while keeping actual
+ * adapter construction behind the Founder identity gate.
+ */
+export function assertConfiguredAdapterFactoriesAvailable(
+  config: ProductRuntimeConfig,
+  factories: ProductAdapterFactoryRegistry,
+): void {
+  const missing = configuredAdapterRequests(config)
+    .filter(
+      (request) =>
+        factories.get(request.kind, request.config.adapter_id) === undefined,
+    )
+    .map(
+      (request) =>
+        `${request.kind} adapter factory '${request.config.adapter_id}' is not installed`,
+    );
+  if (missing.length > 0) {
+    throw new Error(
+      `configured adapter factories are unavailable: ${missing.join('; ')}`,
+    );
+  }
+}
+
 async function createAdapter(
   factories: ProductAdapterFactoryRegistry,
   kind: AdapterKind,
@@ -106,34 +156,8 @@ export async function createConfiguredAdapterRegistry(
       ? {}
       : { approvalFederationCapture: options.approvalFederationCapture }),
   };
-  const requested: Array<{ kind: AdapterKind; config: AdapterConfig }> = [
-    ...config.meeting_sources.map((adapterConfig) => ({
-      kind: 'meeting-source' as const,
-      config: adapterConfig,
-    })),
-    { kind: 'decision-processor', config: config.decision_processor },
-    ...config.delivery_surfaces.map((adapterConfig) => ({
-      kind: 'delivery-surface' as const,
-      config: adapterConfig,
-    })),
-    ...(config.approval_mode === 'adapter'
-      ? [{ kind: 'approval-surface' as const, config: config.approval_surface }]
-      : []),
-  ];
-  const missing = requested
-    .filter(
-      (request) =>
-        factories.get(request.kind, request.config.adapter_id) === undefined,
-    )
-    .map(
-      (request) =>
-        `${request.kind} adapter factory '${request.config.adapter_id}' is not installed`,
-    );
-  if (missing.length > 0) {
-    throw new Error(
-      `configured adapter factories are unavailable: ${missing.join('; ')}`,
-    );
-  }
+  const requested = configuredAdapterRequests(config);
+  assertConfiguredAdapterFactoriesAvailable(config, factories);
   const registry = new AdapterRegistry();
   for (const request of requested) {
     registry.register(

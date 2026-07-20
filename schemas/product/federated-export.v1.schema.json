@@ -11,6 +11,7 @@
     "organization_id",
     "installation_id",
     "key_id",
+    "signing_identity_manifest_id",
     "artifacts",
     "sequence",
     "records",
@@ -24,6 +25,7 @@
     "organization_id": { "$ref": "#/definitions/organizationId" },
     "installation_id": { "$ref": "#/definitions/installationId" },
     "key_id": { "$ref": "#/definitions/digest" },
+    "signing_identity_manifest_id": { "$ref": "#/definitions/manifestId" },
     "artifacts": {
       "type": "array",
       "minItems": 2,
@@ -34,7 +36,10 @@
             "additionalProperties": false,
             "required": ["path", "kind", "sha256"],
             "properties": {
-              "path": { "const": "identity-manifest.v1.json" },
+              "path": {
+                "type": "string",
+                "pattern": "^identity-manifests/identity-manifest\\.idm_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\\.v1\\.json$"
+              },
               "kind": { "const": "echo-local-identity-manifest" },
               "sha256": { "$ref": "#/definitions/digest" }
             }
@@ -63,7 +68,7 @@
         "properties": {
           "path": {
             "type": "string",
-            "pattern": "^(?:identity-manifest\\.v1\\.json|publication-policies/publication-policy\\.pol_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\\.v[1-9][0-9]*\\.json)$"
+            "pattern": "^(?:identity-manifests/identity-manifest\\.idm_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\\.v1\\.json|publication-policies/publication-policy\\.pol_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\\.v[1-9][0-9]*\\.json)$"
           },
           "kind": {
             "enum": ["echo-local-identity-manifest", "echo-publication-policy"]
@@ -110,6 +115,10 @@
     "installationId": {
       "type": "string",
       "pattern": "^ins_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+    },
+    "manifestId": {
+      "type": "string",
+      "pattern": "^idm_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
     },
     "digest": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" },
     "timestamp": {

@@ -99,6 +99,10 @@ export interface ProductArtifactEvidenceProvider {
 }
 
 export interface ApprovalIdentityLineageReader {
+  assertManifestAncestorOrEqual(
+    ancestorManifestId: string,
+    descendantManifestId: string,
+  ): void;
   loadVerifiedManifest(manifestId: string): VerifiedHistoricalIdentityManifest;
   loadVerifiedPolicy(
     reference: HistoricalPublicationPolicyReference,
@@ -823,6 +827,9 @@ export class FederatedApprovalCapture implements DecisionNodeFederationCapture {
     if (Object.keys(input.legacyMetadata).length !== 0) {
       fail('legacy resolution metadata is forbidden after identity activation');
     }
+    if (input.reason !== null && input.reason.trim().length === 0) {
+      fail('identity-enabled approval reason must be null or non-blank text');
+    }
     assertUtcMillisecondTimestamp(input.reviewedAt, 'approval reviewed_at');
     if (input.reviewedAt < input.events.requested.requested_at) {
       fail('approval resolution predates its requested candidate');
@@ -1126,7 +1133,7 @@ export class FederatedApprovalCapture implements DecisionNodeFederationCapture {
     this.assertAttributionFacts(bundle.manifest, request, source, processor);
     this.verifyProductArtifact(source.captured_by);
     this.verifyProductArtifact(processor.produced_by);
-    this.assertAttributionBinding(bundle.connectionRegistry, source, processor);
+    this.assertAttributionLineage(bundle.manifest, source, processor);
   }
 
   private assertAttributionFacts(
@@ -1135,11 +1142,9 @@ export class FederatedApprovalCapture implements DecisionNodeFederationCapture {
     source: SourceAttributionV1,
     processor: ProcessorAttributionV1,
   ): void {
-    const manifestId = manifest.manifest_id;
     const provenance = request.meeting.provenance;
     if (
       source.organization_id !== manifest.organization.organization_id ||
-      source.identity_manifest_id !== manifestId ||
       source.source.adapter.kind !== 'meeting-source' ||
       source.source.adapter.adapter_id !== provenance.source.adapter_id ||
       source.source.adapter.instance_id !== provenance.source.instance_id ||
@@ -1154,7 +1159,6 @@ export class FederatedApprovalCapture implements DecisionNodeFederationCapture {
       );
     }
     if (
-      processor.identity_manifest_id !== manifestId ||
       processor.meeting.source_adapter_id !== provenance.source.adapter_id ||
       processor.meeting.source_instance_id !== provenance.source.instance_id ||
       processor.meeting.external_id !== provenance.external_id ||
@@ -1168,7 +1172,8 @@ export class FederatedApprovalCapture implements DecisionNodeFederationCapture {
         request.decisions.processor.version ||
       processor.processor.decision_set_sha256 !==
         canonicalSha256(request.decisions) ||
-      processor.captured_at > request.requested_at
+      processor.captured_at > request.requested_at ||
+      processor.captured_at < source.captured_at
     ) {
       fail(
         'processor attribution does not describe the requested decision set',
@@ -1186,7 +1191,6 @@ export class FederatedApprovalCapture implements DecisionNodeFederationCapture {
     const sourceRef = stored.source_attribution_ref;
     if (
       source.organization_id !== manifest.organization.organization_id ||
-      source.identity_manifest_id !== stored.identity_manifest_id ||
       source.source.adapter.adapter_id !== sourceRef.source_adapter_id ||
       source.source.adapter.instance_id !== sourceRef.source_instance_id ||
       source.meeting.external_id !== sourceRef.external_id ||
@@ -1196,7 +1200,6 @@ export class FederatedApprovalCapture implements DecisionNodeFederationCapture {
       fail('stored source attribution reference does not resolve exactly');
     }
     if (
-      processor.identity_manifest_id !== stored.identity_manifest_id ||
       processor.meeting.source_adapter_id !== sourceRef.source_adapter_id ||
       processor.meeting.source_instance_id !== sourceRef.source_instance_id ||
       processor.meeting.external_id !== sourceRef.external_id ||
@@ -1221,9 +1224,42 @@ export class FederatedApprovalCapture implements DecisionNodeFederationCapture {
     }
     this.verifyProductArtifact(source.captured_by);
     this.verifyProductArtifact(processor.produced_by);
+    this.assertAttributionLineage(manifest, source, processor);
+  }
+
+  private assertAttributionLineage(
+    approvalManifest: LocalIdentityManifestV1,
+    source: SourceAttributionV1,
+    processor: ProcessorAttributionV1,
+  ): void {
+    this.lineage.assertManifestAncestorOrEqual(
+      source.identity_manifest_id,
+      processor.identity_manifest_id,
+    );
+    this.lineage.assertManifestAncestorOrEqual(
+      processor.identity_manifest_id,
+      approvalManifest.manifest_id,
+    );
+    const sourceManifest = this.lineage.loadVerifiedManifest(
+      source.identity_manifest_id,
+    ).manifest;
+    const processorManifest = this.lineage.loadVerifiedManifest(
+      processor.identity_manifest_id,
+    ).manifest;
+    const organizationId = approvalManifest.organization.organization_id;
+    if (
+      source.organization_id !== organizationId ||
+      sourceManifest.organization.organization_id !== organizationId ||
+      processorManifest.organization.organization_id !== organizationId ||
+      processor.captured_at < source.captured_at
+    ) {
+      fail(
+        'source, processor, and approval do not share one ordered organization identity lineage',
+      );
+    }
     const resolvedSource = this.lineage.resolveBindingAt(
       {
-        identity_manifest_id: stored.identity_manifest_id,
+        identity_manifest_id: source.identity_manifest_id,
         adapter_binding_id: source.source.adapter_binding_id,
         capability: 'meeting-source',
         adapter_id: source.source.adapter.adapter_id,
@@ -1237,7 +1273,7 @@ export class FederatedApprovalCapture implements DecisionNodeFederationCapture {
     );
     const resolvedProcessor = this.lineage.resolveBindingAt(
       {
-        identity_manifest_id: stored.identity_manifest_id,
+        identity_manifest_id: processor.identity_manifest_id,
         adapter_binding_id: processor.processor.adapter_binding_id,
         capability: 'decision-processor',
         adapter_id: processor.processor.adapter.adapter_id,
@@ -1272,70 +1308,6 @@ export class FederatedApprovalCapture implements DecisionNodeFederationCapture {
       resolvedProcessor.generation !== null
     ) {
       fail('processor attribution unexpectedly resolves through a connection');
-    }
-  }
-
-  private assertAttributionBinding(
-    registry: LocalConnectionRegistryV1,
-    source: SourceAttributionV1,
-    processor: ProcessorAttributionV1,
-  ): void {
-    const sourceBinding = registry.bindings.find(
-      (item) => item.adapter_binding_id === source.source.adapter_binding_id,
-    );
-    if (
-      sourceBinding === undefined ||
-      sourceBinding.capability !== 'meeting-source' ||
-      sourceBinding.adapter_id !== source.source.adapter.adapter_id ||
-      sourceBinding.instance_id !== source.source.adapter.instance_id ||
-      sourceBinding.configuration_sha256 !==
-        source.source.configuration_sha256 ||
-      canonicalSha256(source.source.configuration_snapshot) !==
-        source.source.configuration_sha256 ||
-      sourceBinding.connection_id !== source.connection.connection_id ||
-      sourceBinding.connection_generation !== source.connection.generation
-    ) {
-      fail('source attribution binding snapshot is not enrolled');
-    }
-    const sourceConnection = registry.connections.find(
-      (item) => item.connection_id === source.connection.connection_id,
-    );
-    const sourceGeneration = sourceConnection?.generations.find(
-      (item) => item.generation === source.connection.generation,
-    );
-    if (
-      sourceConnection === undefined ||
-      sourceGeneration === undefined ||
-      sourceConnection.provider !== source.connection.provider ||
-      canonicalJson(sourceConnection.owner) !==
-        canonicalJson(source.connection.owner) ||
-      canonicalSha256(source.connection.provider_identity) !==
-        canonicalSha256({
-          tenant: sourceGeneration.provider_identity.tenant,
-          subject: sourceGeneration.provider_identity.subject,
-          verification_method:
-            sourceGeneration.provider_identity.verification.method,
-          assurance: sourceGeneration.provider_identity.verification.assurance,
-        })
-    ) {
-      fail('source attribution connection snapshot is not enrolled');
-    }
-    const processorBinding = registry.bindings.find(
-      (item) =>
-        item.adapter_binding_id === processor.processor.adapter_binding_id,
-    );
-    if (
-      processorBinding === undefined ||
-      processorBinding.capability !== 'decision-processor' ||
-      processorBinding.adapter_id !== processor.processor.adapter.adapter_id ||
-      processorBinding.instance_id !==
-        processor.processor.adapter.instance_id ||
-      processorBinding.configuration_sha256 !==
-        processor.processor.configuration_sha256 ||
-      canonicalSha256(processor.processor.configuration_snapshot) !==
-        processor.processor.configuration_sha256
-    ) {
-      fail('processor attribution binding snapshot is not enrolled');
     }
   }
 

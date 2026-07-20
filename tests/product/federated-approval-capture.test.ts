@@ -27,6 +27,8 @@ import type {
 import type { ResolvedHistoricalBinding } from '../../src/product/federation/identity-lineage-store.js';
 
 const NOW = '2026-07-19T20:30:00.000Z';
+const SOURCE_CAPTURED_AT = '2026-07-19T20:28:00.000Z';
+const PROCESSOR_CAPTURED_AT = '2026-07-19T20:29:00.000Z';
 const SOURCE_SHA = '1'.repeat(40);
 const ARTIFACT: ProductArtifactIdentityV1 = {
   product_version: '0.1.0-dev.6',
@@ -444,6 +446,56 @@ function bundle(config = runtime()): VerifiedActiveIdentityBundle {
   };
 }
 
+function lineageBundle(input: {
+  manifestId: string;
+  predecessorManifestId: string | null;
+  registryId: string;
+  createdAt: string;
+  sourceBindingId: string;
+  processorBindingId: string;
+}): VerifiedActiveIdentityBundle {
+  const value = structuredClone(bundle(runtime()));
+  value.manifest.manifest_id = input.manifestId;
+  value.manifest.predecessor_manifest_id = input.predecessorManifestId;
+  value.manifest.created_at = input.createdAt;
+  value.manifest.organization.created_at = SOURCE_CAPTURED_AT;
+  value.manifest.membership.valid_from = SOURCE_CAPTURED_AT;
+  value.manifest.installation.enrolled_at = SOURCE_CAPTURED_AT;
+  value.manifest.legacy_cutover.declared_at = SOURCE_CAPTURED_AT;
+  value.manifest.identity_claims[0]!.verification.verified_at =
+    SOURCE_CAPTURED_AT;
+  value.pointer.manifest.manifest_id = input.manifestId;
+  value.pointer.manifest.sha256 = canonicalSha256(value.manifest);
+  value.pointer.connection_registry.registry_id = input.registryId;
+  value.pointer.activated_at = input.createdAt;
+  value.connectionRegistry.registry_id = input.registryId;
+  value.connectionRegistry.identity_manifest_id = input.manifestId;
+  value.connectionRegistry.updated_at = input.createdAt;
+  for (const connection of value.connectionRegistry.connections) {
+    for (const generation of connection.generations) {
+      generation.active_from = SOURCE_CAPTURED_AT;
+      generation.provider_identity.verification.verified_at =
+        SOURCE_CAPTURED_AT;
+    }
+  }
+  for (const binding of value.connectionRegistry.bindings) {
+    binding.created_at = SOURCE_CAPTURED_AT;
+  }
+  value.connectionRegistry.bindings[0]!.adapter_binding_id =
+    input.sourceBindingId;
+  value.connectionRegistry.bindings[1]!.adapter_binding_id =
+    input.processorBindingId;
+  value.pointer.connection_registry.sha256 = canonicalSha256(
+    value.connectionRegistry,
+  );
+  value.publicationPolicy.identity_manifest_id = input.manifestId;
+  value.publicationPolicy.effective_at = SOURCE_CAPTURED_AT;
+  value.pointer.default_publication_policy.sha256 = canonicalSha256(
+    value.publicationPolicy,
+  );
+  return value;
+}
+
 function attributions(input = request()): {
   source: SourceAttributionV1;
   processor: ProcessorAttributionV1;
@@ -517,18 +569,17 @@ function lifecycleContains(
 }
 
 function lineageReader(
-  historical: VerifiedActiveIdentityBundle,
+  ...historicals: VerifiedActiveIdentityBundle[]
 ): ApprovalIdentityLineageReader {
-  const revision = {
-    registry: historical.connectionRegistry,
-    canonical: historical.canonical.connectionRegistry,
-    sha256: historical.pointer.connection_registry.sha256,
-  };
-  const chain = {
-    registry_id: historical.connectionRegistry.registry_id,
-    identity_manifest_id: historical.manifest.manifest_id,
-    revisions: [revision],
-  };
+  function historicalFor(manifestId: string): VerifiedActiveIdentityBundle {
+    const historical = historicals.find(
+      (item) => item.manifest.manifest_id === manifestId,
+    );
+    if (historical === undefined) {
+      throw new Error('test lineage: unknown identity manifest');
+    }
+    return historical;
+  }
 
   function resolveBinding(
     locator: {
@@ -540,9 +591,17 @@ function lineageReader(
     },
     observedAt: string,
   ): ResolvedHistoricalBinding {
-    if (locator.identity_manifest_id !== historical.manifest.manifest_id) {
-      throw new Error('test lineage: unknown identity manifest');
-    }
+    const historical = historicalFor(locator.identity_manifest_id);
+    const revision = {
+      registry: historical.connectionRegistry,
+      canonical: historical.canonical.connectionRegistry,
+      sha256: historical.pointer.connection_registry.sha256,
+    };
+    const chain = {
+      registry_id: historical.connectionRegistry.registry_id,
+      identity_manifest_id: historical.manifest.manifest_id,
+      revisions: [revision],
+    };
     const binding = historical.connectionRegistry.bindings.find(
       (item) => item.adapter_binding_id === locator.adapter_binding_id,
     );
@@ -590,10 +649,21 @@ function lineageReader(
   }
 
   return {
-    loadVerifiedManifest(manifestId) {
-      if (manifestId !== historical.manifest.manifest_id) {
-        throw new Error('test lineage: unknown identity manifest');
+    assertManifestAncestorOrEqual(ancestorManifestId, descendantManifestId) {
+      const seen = new Set<string>();
+      let current = historicalFor(descendantManifestId);
+      while (true) {
+        if (current.manifest.manifest_id === ancestorManifestId) return;
+        if (seen.has(current.manifest.manifest_id)) break;
+        seen.add(current.manifest.manifest_id);
+        const predecessor = current.manifest.predecessor_manifest_id;
+        if (predecessor === null) break;
+        current = historicalFor(predecessor);
       }
+      throw new Error('test lineage: manifest order is reversed');
+    },
+    loadVerifiedManifest(manifestId) {
+      const historical = historicalFor(manifestId);
       return {
         manifest: historical.manifest,
         canonical: historical.canonical.manifest,
@@ -601,6 +671,7 @@ function lineageReader(
       };
     },
     loadVerifiedPolicy(reference, observedAt) {
+      const historical = historicalFor(reference.identity_manifest_id);
       const policy = historical.publicationPolicy;
       const expected = {
         policy_id: policy.policy_id,
@@ -649,11 +720,14 @@ function activeCapture(
     artifactProvider?: ProductArtifactEvidenceProvider | undefined;
     activeBundle?: VerifiedActiveIdentityBundle;
     historicalBundle?: VerifiedActiveIdentityBundle;
+    historicalBundles?: readonly VerifiedActiveIdentityBundle[];
   } = {},
 ): FederatedApprovalCapture {
   const config = runtime();
   const activeIdentity = overrides.activeBundle ?? bundle(config);
-  const historicalIdentity = overrides.historicalBundle ?? activeIdentity;
+  const historicalIdentities = overrides.historicalBundles ?? [
+    overrides.historicalBundle ?? activeIdentity,
+  ];
   const artifactProvider =
     'artifactProvider' in overrides
       ? overrides.artifactProvider
@@ -676,7 +750,7 @@ function activeCapture(
             getAttributionsForMetadata: async () => attributions(),
           },
     ...(artifactProvider === undefined ? {} : { artifactProvider }),
-    identityLineageReader: lineageReader(historicalIdentity),
+    identityLineageReader: lineageReader(...historicalIdentities),
     identityBundleReader: {
       hasActiveBundle: () => true,
       hasIdentityMaterial: () => true,
@@ -820,6 +894,175 @@ describe('federated approval capture', () => {
     await expect(
       capture.validateRequested(requestedEvent(tampered)),
     ).rejects.toThrow(/candidate context digest is invalid/);
+  });
+
+  it('accepts source A and processor B when approval is captured under current manifest C', async () => {
+    const sourceIdentity = lineageBundle({
+      manifestId: 'idm_a0000000-0000-4000-8000-000000000006',
+      predecessorManifestId: null,
+      registryId: 'reg_a0000000-0000-4000-8000-000000000007',
+      createdAt: '2026-07-19T20:27:00.000Z',
+      sourceBindingId: 'bnd_a0000000-0000-4000-8000-000000000010',
+      processorBindingId: 'bnd_a0000000-0000-4000-8000-000000000011',
+    });
+    const processorIdentity = lineageBundle({
+      manifestId: 'idm_b0000000-0000-4000-8000-000000000006',
+      predecessorManifestId: sourceIdentity.manifest.manifest_id,
+      registryId: 'reg_b0000000-0000-4000-8000-000000000007',
+      createdAt: '2026-07-19T20:28:30.000Z',
+      sourceBindingId: 'bnd_b0000000-0000-4000-8000-000000000010',
+      processorBindingId: 'bnd_b0000000-0000-4000-8000-000000000011',
+    });
+    const approvalIdentity = lineageBundle({
+      manifestId: 'idm_c0000000-0000-4000-8000-000000000006',
+      predecessorManifestId: processorIdentity.manifest.manifest_id,
+      registryId: 'reg_c0000000-0000-4000-8000-000000000007',
+      createdAt: NOW,
+      sourceBindingId: 'bnd_c0000000-0000-4000-8000-000000000010',
+      processorBindingId: 'bnd_c0000000-0000-4000-8000-000000000011',
+    });
+    const frozen = attributions();
+    frozen.source.identity_manifest_id = sourceIdentity.manifest.manifest_id;
+    frozen.source.source.adapter_binding_id =
+      sourceIdentity.connectionRegistry.bindings[0]!.adapter_binding_id;
+    frozen.source.captured_at = SOURCE_CAPTURED_AT;
+    frozen.processor.identity_manifest_id =
+      processorIdentity.manifest.manifest_id;
+    frozen.processor.processor.adapter_binding_id =
+      processorIdentity.connectionRegistry.bindings[1]!.adapter_binding_id;
+    frozen.processor.captured_at = PROCESSOR_CAPTURED_AT;
+    const capture = activeCapture({
+      activeBundle: approvalIdentity,
+      historicalBundles: [sourceIdentity, processorIdentity, approvalIdentity],
+      provider: {
+        getAttributions: async () => frozen,
+        getAttributionsForMetadata: async () => frozen,
+      },
+    });
+
+    const requested = requestedEvent(await capture.captureRequested(request()));
+    expect(
+      (requested.metadata['federation'] as JsonObject)['identity_manifest_id'],
+    ).toBe(approvalIdentity.manifest.manifest_id);
+    await expect(
+      capture.validateRequested(requested, request()),
+    ).resolves.toBeUndefined();
+
+    const baseEvents = nodeEvents(requested);
+    const blocks = renderedBlocks(requested);
+    const publishedReference = await capture.capturePublished({
+      events: baseEvents,
+      surface: 'slack',
+      reference: { channel_id: 'C123', message_ts: '1752956990.000100' },
+      presentationEvidence: {
+        rendered_blocks_sha256: canonicalSha256(blocks),
+        rendered_blocks: blocks,
+        provider_identity: LIVE_SLACK,
+      },
+      postedAt: NOW,
+    });
+    const published: DecisionPublishedEvent = {
+      schema_version: 1,
+      event_type: 'published',
+      node_id: 'node-1',
+      surface: 'slack',
+      posted_at: NOW,
+      reference: publishedReference,
+    };
+    const events = { ...baseEvents, published: [published] };
+    const resolvedMetadata = await capture.captureResolved({
+      events,
+      status: 'approved',
+      reviewedAt: NOW,
+      reviewedBy: 'Founder',
+      reason: null,
+      surface: 'slack',
+      legacyMetadata: {},
+      resolutionEvidence: {
+        provider_identity: LIVE_SLACK,
+        actor: {
+          team_id: 'T123',
+          user_id: 'U123',
+          display_name: 'Founder',
+          reaction_name: 'white_check_mark',
+          channel_id: 'C123',
+          message_ts: '1752956990.000100',
+          provider_occurred_at: null,
+          reason_reply: null,
+        },
+      },
+    });
+    await expect(
+      capture.validateResolved({
+        events,
+        event: {
+          schema_version: 1,
+          event_type: 'resolved',
+          node_id: 'node-1',
+          status: 'approved',
+          reviewed_at: NOW,
+          reviewed_by: 'Founder',
+          reason: null,
+          surface: 'slack',
+          metadata: resolvedMetadata,
+        },
+      }),
+    ).resolves.toBeUndefined();
+
+    const foreignProcessorIdentity = structuredClone(processorIdentity);
+    const foreignOrganization = 'org_f0000000-0000-4000-8000-000000000001';
+    foreignProcessorIdentity.manifest.organization.organization_id =
+      foreignOrganization;
+    foreignProcessorIdentity.manifest.principal.organization_id =
+      foreignOrganization;
+    foreignProcessorIdentity.manifest.membership.organization_id =
+      foreignOrganization;
+    foreignProcessorIdentity.manifest.installation.organization_id =
+      foreignOrganization;
+    for (const connection of foreignProcessorIdentity.connectionRegistry
+      .connections) {
+      connection.organization_id = foreignOrganization;
+    }
+    await expect(
+      activeCapture({
+        activeBundle: approvalIdentity,
+        historicalBundles: [
+          sourceIdentity,
+          foreignProcessorIdentity,
+          approvalIdentity,
+        ],
+        provider: {
+          getAttributions: async () => frozen,
+          getAttributionsForMetadata: async () => frozen,
+        },
+      }).captureRequested(request()),
+    ).rejects.toThrow(/ordered organization identity lineage/);
+
+    const reversed = structuredClone(frozen);
+    reversed.source.identity_manifest_id =
+      processorIdentity.manifest.manifest_id;
+    reversed.source.source.adapter_binding_id =
+      processorIdentity.connectionRegistry.bindings[0]!.adapter_binding_id;
+    reversed.source.captured_at = PROCESSOR_CAPTURED_AT;
+    reversed.processor.identity_manifest_id =
+      sourceIdentity.manifest.manifest_id;
+    reversed.processor.processor.adapter_binding_id =
+      sourceIdentity.connectionRegistry.bindings[1]!.adapter_binding_id;
+    reversed.processor.captured_at = PROCESSOR_CAPTURED_AT;
+    await expect(
+      activeCapture({
+        activeBundle: approvalIdentity,
+        historicalBundles: [
+          sourceIdentity,
+          processorIdentity,
+          approvalIdentity,
+        ],
+        provider: {
+          getAttributions: async () => reversed,
+          getAttributionsForMetadata: async () => reversed,
+        },
+      }).captureRequested(request()),
+    ).rejects.toThrow(/manifest order is reversed/);
   });
 
   it('durably rejects a configured Slack reviewer that is the bot itself', async () => {
@@ -1225,6 +1468,19 @@ describe('federated approval capture', () => {
       ],
     ).toBe('provider_challenge_observed');
 
+    await expect(
+      capture.captureResolved({
+        events,
+        status: 'approved',
+        reviewedAt: NOW,
+        reviewedBy: 'Founder',
+        reason: '   ',
+        surface: 'slack',
+        legacyMetadata: {},
+        resolutionEvidence: evidence,
+      }),
+    ).rejects.toThrow(/reason must be null or non-blank text/);
+
     const wrongWorkspace = structuredClone(evidence);
     wrongWorkspace.actor.team_id = 'T999';
     await expect(
@@ -1428,9 +1684,7 @@ describe('federated approval capture', () => {
       resolutionEvidence: evidence,
     });
     expect(
-      (metadata['federation'] as JsonObject)[
-        'approval_surface_observation'
-      ],
+      (metadata['federation'] as JsonObject)['approval_surface_observation'],
     ).toMatchObject({
       adapter_binding_id: IDS.reboundApprovalBinding,
       connection_id: IDS.slackConnection,
