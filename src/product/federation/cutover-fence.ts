@@ -1,17 +1,17 @@
-import { ActiveIdentityBundleStore } from './active-identity-bundle-store.js';
-import type { VerifiedActiveIdentityBundle } from './active-identity-bundle-store.js';
+import { ActiveIdentityBundleStore } from './identity/active-identity-bundle-store.js';
+import type { VerifiedActiveIdentityBundle } from './identity/active-identity-bundle-store.js';
 import {
   FounderBootstrapSessionStore,
   validateFounderBootstrapSession,
   type FounderBootstrapSessionV1,
-} from './bootstrap-session-store.js';
+} from './bootstrap/bootstrap-session-store.js';
 import {
   canonicalJson,
   canonicalSha256,
   parseCanonicalJson,
   sha256Digest,
-} from './canonical-json.js';
-import { signedPayload } from './signed-document.js';
+} from './foundation/canonical-json.js';
+import { signedPayload } from './foundation/signed-document.js';
 
 export type FounderCutoverFenceState =
   'none' | 'precommit' | 'committing' | 'complete';

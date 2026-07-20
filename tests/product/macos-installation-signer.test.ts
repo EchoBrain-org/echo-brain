@@ -10,9 +10,9 @@ vi.mock("../../src/product/spawn-sanitized-child.js", () => ({
   spawnBundledProductHelper: helper.spawn,
 }));
 
-import { MacOsSecureEnclaveInstallationSigner } from "../../src/product/federation/macos-installation-signer.js";
-import type { InstallationKeyDescriptor } from "../../src/product/federation/installation-signer.js";
-import { p256KeyId } from "../../src/product/federation/signature-profile.js";
+import { MacOsSecureEnclaveInstallationSigner } from "../../src/product/federation/foundation/macos-installation-signer.js";
+import type { InstallationKeyDescriptor } from "../../src/product/federation/foundation/installation-signer.js";
+import { p256KeyId } from "../../src/product/federation/foundation/signature-profile.js";
 
 const INSTALLATION_ID = "ins_11111111-1111-4111-8111-111111111111";
 const KEY_ID = `sha256:${"a".repeat(64)}` as const;

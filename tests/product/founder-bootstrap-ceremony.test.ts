@@ -25,10 +25,10 @@ import {
   commitFounderBootstrapCeremony,
   statusFounderBootstrap,
   type FounderBootstrapCeremonyDependencies,
-} from "../../src/product/federation/founder-bootstrap-ceremony.js";
-import { ActiveIdentityBundleStore } from "../../src/product/federation/active-identity-bundle-store.js";
-import { checkFounderIdentity } from "../../src/product/federation/identity-check.js";
-import { FounderBootstrapSessionStore } from "../../src/product/federation/bootstrap-session-store.js";
+} from "../../src/product/federation/bootstrap/founder-bootstrap-ceremony.js";
+import { ActiveIdentityBundleStore } from "../../src/product/federation/identity/active-identity-bundle-store.js";
+import { checkFounderIdentity } from "../../src/product/federation/bootstrap/identity-check.js";
+import { FounderBootstrapSessionStore } from "../../src/product/federation/bootstrap/bootstrap-session-store.js";
 import {
   assertFounderCutoverReceiptMatchesActiveBundle,
   founderCutoverGuardPath,
@@ -39,12 +39,12 @@ import {
 import {
   canonicalJson,
   canonicalSha256,
-} from "../../src/product/federation/canonical-json.js";
+} from "../../src/product/federation/foundation/canonical-json.js";
 import {
   commitLegacyClassificationReport,
   recoverLegacyClassificationCutoverAt,
 } from "../../src/product/federation/legacy-classification.js";
-import { createSignedDocument } from "../../src/product/federation/signed-document.js";
+import { createSignedDocument } from "../../src/product/federation/foundation/signed-document.js";
 import {
   createPrivateTestState,
   founderCeremonyFixture,

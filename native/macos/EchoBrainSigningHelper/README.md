@@ -6,7 +6,7 @@ or prebuilt executable.
 
 The helper is the only process allowed to use an installation private key. It
 supports the version-1 JSON protocol consumed by
-`src/product/federation/macos-installation-signer.ts`:
+`src/product/federation/foundation/macos-installation-signer.ts`:
 
 - `create` creates or reuses the installation's Secure Enclave P-256 key.
 - `describe` returns its public descriptor or `null` when it is absent.

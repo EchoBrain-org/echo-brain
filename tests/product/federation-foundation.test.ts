@@ -17,13 +17,13 @@ import {
   canonicalJson,
   canonicalSha256,
   parseCanonicalJson,
-} from "../../src/product/federation/canonical-json.js";
+} from "../../src/product/federation/foundation/canonical-json.js";
 import {
   commitFounderBootstrap,
   mintFounderBootstrapIds,
   planFounderBootstrap,
   type FounderBootstrapInput,
-} from "../../src/product/federation/bootstrap.js";
+} from "../../src/product/federation/bootstrap/bootstrap.js";
 import type {
   AdapterBindingV1,
   PublicationSnapshotV1,
@@ -32,20 +32,20 @@ import type {
 import {
   assertFounderIdentityAllowsPipeline,
   checkFounderIdentity,
-} from "../../src/product/federation/identity-check.js";
-import { createLocalCredentialGuard } from "../../src/product/federation/credential-guard.js";
+} from "../../src/product/federation/bootstrap/identity-check.js";
+import { createLocalCredentialGuard } from "../../src/product/federation/identity/credential-guard.js";
 import {
   assertUtcMillisecondTimestamp,
   federationId,
-} from "../../src/product/federation/identifiers.js";
+} from "../../src/product/federation/foundation/identifiers.js";
 import { validateFederationDocument } from "../../src/product/federation/schema-validation.js";
-import { verifyInstallationKeyDescriptor } from "../../src/product/federation/installation-signer.js";
+import { verifyInstallationKeyDescriptor } from "../../src/product/federation/foundation/installation-signer.js";
 import {
   decodeStrictP256DerSignature,
   encodeP256DerSignature,
   p256KeyId,
   verifyP256LowSSignature,
-} from "../../src/product/federation/signature-profile.js";
+} from "../../src/product/federation/foundation/signature-profile.js";
 import {
   createPrivateTestState,
   manualRuntimeConfig,

@@ -1950,13 +1950,13 @@ schemas/product/federated-export.v1.schema.json
 schemas/product/federated-recovery-report.v1.schema.json
 
 src/product/federation/contracts.ts
-src/product/federation/canonical-json.ts
-src/product/federation/active-identity-bundle-store.ts
-src/product/federation/identity-manifest-store.ts
-src/product/federation/connection-registry-store.ts
-src/product/federation/publication-policy-store.ts
-src/product/federation/installation-signer.ts
-src/product/federation/macos-signing-helper.swift
+src/product/federation/foundation/canonical-json.ts
+src/product/federation/identity/active-identity-bundle-store.ts
+src/product/federation/identity/identity-manifest-store.ts
+src/product/federation/identity/connection-registry-store.ts
+src/product/federation/identity/publication-policy-store.ts
+src/product/federation/foundation/installation-signer.ts
+native/macos/EchoBrainSigningHelper/Sources/main.swift
 src/product/federation/attributing-core-state-store.ts
 src/product/federation/outbox-store.ts
 src/product/federation/record-projector.ts

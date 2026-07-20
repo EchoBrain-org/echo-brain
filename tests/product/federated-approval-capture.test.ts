@@ -8,14 +8,14 @@ import type {
   DecisionResolvedEvent,
 } from '../../src/product/approval/decision-node.js';
 import { renderSlackApprovalBlocks } from '../../src/adapters/approval-surfaces/slack-reactions/slack-reactions-approval-surface.js';
-import type { VerifiedActiveIdentityBundle } from '../../src/product/federation/active-identity-bundle-store.js';
+import type { VerifiedActiveIdentityBundle } from '../../src/product/federation/identity/active-identity-bundle-store.js';
 import {
   FederatedApprovalCapture,
   type ApprovalAttributionProvider,
   type ApprovalIdentityLineageReader,
   type ProductArtifactEvidenceProvider,
 } from '../../src/product/federation/approval-capture.js';
-import { canonicalSha256 } from '../../src/product/federation/canonical-json.js';
+import { canonicalSha256 } from '../../src/product/federation/foundation/canonical-json.js';
 import type {
   AdapterBindingV1,
   ProcessorAttributionV1,

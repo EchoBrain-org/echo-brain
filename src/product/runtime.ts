@@ -17,7 +17,7 @@ import {
   assertFounderIdentityAllowsPipeline,
   FounderIdentityGateError,
   type IdentityCheckDependencies,
-} from './federation/identity-check.js';
+} from './federation/bootstrap/identity-check.js';
 
 export type ProductComponentName =
   | 'product-state'

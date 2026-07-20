@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { DecisionNodeState } from '../../src/product/approval/decision-node.js';
-import { canonicalSha256 } from '../../src/product/federation/canonical-json.js';
+import { canonicalSha256 } from '../../src/product/federation/foundation/canonical-json.js';
 import type {
   ApprovalFederationMetadataV1,
   LocalIdentityManifestV1,
@@ -8,7 +8,7 @@ import type {
   ProductArtifactIdentityV1,
   SourceAttributionV1,
 } from '../../src/product/federation/contracts.js';
-import type { InstallationSigner } from '../../src/product/federation/installation-signer.js';
+import type { InstallationSigner } from '../../src/product/federation/foundation/installation-signer.js';
 import type {
   AppendFederatedApprovalGroupRequest,
   FederatedOutboxStore,

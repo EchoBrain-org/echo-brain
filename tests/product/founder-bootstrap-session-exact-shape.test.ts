@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { assertExactFounderBootstrapSessionShape } from "../../src/product/federation/bootstrap-session-exact-shape.js";
+import { assertExactFounderBootstrapSessionShape } from "../../src/product/federation/bootstrap/bootstrap-session-exact-shape.js";
 import {
   completeBootstrapSessionShapeFixture as completeSession,
   exactSessionBindings as fullBindings,

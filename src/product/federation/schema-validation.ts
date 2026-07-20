@@ -1,7 +1,7 @@
 import { readFileSync } from 'node:fs';
 import { Ajv, type ErrorObject, type ValidateFunction } from 'ajv';
 import { parseJson } from '../../util/json.js';
-import { assertUtcMillisecondTimestamp } from './identifiers.js';
+import { assertUtcMillisecondTimestamp } from './foundation/identifiers.js';
 
 export type FederationSchemaKind =
   | 'active-identity-bundle'

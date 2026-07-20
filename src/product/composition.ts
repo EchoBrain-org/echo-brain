@@ -23,7 +23,7 @@ import {
   assertFounderIdentityAllowsPipeline,
   FounderIdentityGateError,
   type IdentityCheckDependencies,
-} from './federation/identity-check.js';
+} from './federation/bootstrap/identity-check.js';
 import { resolveProductStatePaths, type ProductStatePaths } from './paths.js';
 import {
   ProductRuntimeFailure,

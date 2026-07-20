@@ -2,14 +2,14 @@ import type { DecisionNodeState } from '../approval/decision-node.js';
 import type {
   ApprovalAttributionProvider,
   ProductArtifactEvidenceProvider,
-} from './approval-capture-support.js';
-import { canonicalJson, canonicalSha256 } from './canonical-json.js';
+} from './approval/approval-capture-support.js';
+import { canonicalJson, canonicalSha256 } from './foundation/canonical-json.js';
 import type {
   ApprovalFederationMetadataV1,
   FederatedPublicationSnapshotV1,
   ProductArtifactIdentityV1,
 } from './contracts.js';
-import type { InstallationSigner } from './installation-signer.js';
+import type { InstallationSigner } from './foundation/installation-signer.js';
 import {
   FederatedOutboxStore,
   type StoredFederatedOutboxEvent,
@@ -18,23 +18,23 @@ import { validateFederationDocument } from './schema-validation.js';
 import {
   buildFederatedProjectionSnapshots,
   type RecordProjectorLineageReader,
-} from './record-projection-snapshots.js';
+} from './records/record-projection-snapshots.js';
 import {
   buildProjectionSignalManifest,
   buildRecordProjectionDrafts,
   createHistoricalVerificationKeyResolver,
   orderedProjectionItems,
   projectionSubject,
-} from './record-projection-drafts.js';
+} from './records/record-projection-drafts.js';
 
 export {
   buildFederatedApprovalSnapshot,
   buildFederatedProjectionSnapshots,
-} from './record-projection-snapshots.js';
+} from './records/record-projection-snapshots.js';
 export type {
   FederatedProjectionSnapshots,
   RecordProjectorLineageReader,
-} from './record-projection-snapshots.js';
+} from './records/record-projection-snapshots.js';
 
 interface RecordProjectorOutboxWriter {
   appendApprovalGroup(

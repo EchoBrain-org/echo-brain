@@ -1,12 +1,12 @@
 import { rmSync } from "node:fs";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { federationId } from "../../src/product/federation/identifiers.js";
+import { federationId } from "../../src/product/federation/foundation/identifiers.js";
 import {
   checkFounderIdentity,
   verifyActiveConnectionCredentialGuards,
-} from "../../src/product/federation/identity-check.js";
-import { createLocalCredentialGuard } from "../../src/product/federation/credential-guard.js";
-import { validateIdentityDocumentSemantics } from "../../src/product/federation/bundle-semantics.js";
+} from "../../src/product/federation/bootstrap/identity-check.js";
+import { createLocalCredentialGuard } from "../../src/product/federation/identity/credential-guard.js";
+import { validateIdentityDocumentSemantics } from "../../src/product/federation/identity/bundle-semantics.js";
 import {
   createPrivateTestState,
   slackConnectionFixture,

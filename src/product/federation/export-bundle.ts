@@ -14,7 +14,7 @@ import {
   pathEntryExists,
   writeFileExclusive,
 } from '../secure-local-files.js';
-import { canonicalJson, sha256Digest } from './canonical-json.js';
+import { canonicalJson, sha256Digest } from './foundation/canonical-json.js';
 import type {
   FederatedExportManifestV1,
   Sha256Digest,
@@ -31,16 +31,16 @@ import {
   publicKeyForManifest,
   RECORDS_FILENAME,
   type VerifiedFederatedExportBundle,
-} from './export-bundle-material.js';
+} from './export/export-bundle-material.js';
 import {
   assertApprovalGroups,
   verifyFederatedExportBundleInternal,
-} from './export-bundle-verification.js';
+} from './export/export-bundle-verification.js';
 import {
   assertFederationId,
   assertUtcMillisecondTimestamp,
-} from './identifiers.js';
-import { verifyInstallationKeyDescriptor } from './installation-signer.js';
+} from './foundation/identifiers.js';
+import { verifyInstallationKeyDescriptor } from './foundation/installation-signer.js';
 import type {
   StoredFederatedOutboxEvent,
   VerifiedFederatedChain,
@@ -53,7 +53,7 @@ import {
   createSignedDocument,
   signedPayload,
   verifySignedDocument,
-} from './signed-document.js';
+} from './foundation/signed-document.js';
 
 export type {
   CreateFederatedExportBundleRequest,
@@ -61,7 +61,7 @@ export type {
   FederatedExportIdentitySource,
   FederatedExportOutboxSource,
   VerifiedFederatedExportBundle,
-} from './export-bundle-material.js';
+} from './export/export-bundle-material.js';
 
 export function verifyFederatedExportBundle(
   bundlePath: string,

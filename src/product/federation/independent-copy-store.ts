@@ -14,7 +14,7 @@ import {
   canonicalJson,
   canonicalSha256,
   sha256Digest,
-} from "./canonical-json.js";
+} from "./foundation/canonical-json.js";
 import type { FederationId, Sha256Digest } from "./contracts.js";
 import {
   createFederatedExportBundle,
@@ -41,12 +41,12 @@ import {
   sameHeads,
   statePathDigest,
   TARGET_FILENAME,
-} from "./independent-copy-documents.js";
+} from "./independent-copy/independent-copy-documents.js";
 import {
   assertLocalHeadsCanExtendProtectedHistory,
   assertProtectedHeadsMatchLocal,
   protectedIndependentCopyExportHeads,
-} from "./independent-copy-history.js";
+} from "./independent-copy/independent-copy-history.js";
 import {
   assertIndependentCopyTargetBinding,
   assertPreparedIndependentCopyLocalState,
@@ -60,16 +60,16 @@ import {
   readIndependentCopyIntent,
   readIndependentCopyReceipt,
   readIndependentCopyTargetRecord,
-} from "./independent-copy-local-state.js";
+} from "./independent-copy/independent-copy-local-state.js";
 import {
   assertIndependentCopyInspection,
   MacOsEncryptedVolumeInspector,
-} from "./independent-copy-macos-inspector.js";
+} from "./independent-copy/independent-copy-macos-inspector.js";
 import {
   assertFederationId,
   assertUtcMillisecondTimestamp,
   federationId,
-} from "./identifiers.js";
+} from "./foundation/identifiers.js";
 
 export type {
   ConfigureIndependentCopyResult,
@@ -83,7 +83,7 @@ export type {
   IndependentCopyTargetInspection,
   IndependentCopyTargetRecordV1,
   MacOsEncryptedVolumeInspectorOptions,
-} from "./independent-copy-documents.js";
+} from "./independent-copy/independent-copy-documents.js";
 
 export { MacOsEncryptedVolumeInspector };
 

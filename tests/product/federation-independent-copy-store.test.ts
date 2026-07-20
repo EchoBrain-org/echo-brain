@@ -25,7 +25,7 @@ import {
 import {
   canonicalJson,
   sha256Digest,
-} from "../../src/product/federation/canonical-json.js";
+} from "../../src/product/federation/foundation/canonical-json.js";
 import type {
   CreatedFederatedExportBundle,
   FederatedExportIdentitySource,
@@ -36,7 +36,7 @@ import type {
   FederationId,
   Sha256Digest,
 } from "../../src/product/federation/contracts.js";
-import type { InstallationSigner } from "../../src/product/federation/installation-signer.js";
+import type { InstallationSigner } from "../../src/product/federation/foundation/installation-signer.js";
 import type {
   FederatedChainHead,
   StoredFederatedOutboxEvent,

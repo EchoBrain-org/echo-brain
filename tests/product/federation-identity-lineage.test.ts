@@ -5,15 +5,15 @@ import {
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { resolveProductStatePaths } from '../../src/product/paths.js';
-import { ActiveIdentityBundleStore } from '../../src/product/federation/active-identity-bundle-store.js';
+import { ActiveIdentityBundleStore } from '../../src/product/federation/identity/active-identity-bundle-store.js';
 import {
   canonicalJson,
   sha256Digest,
-} from '../../src/product/federation/canonical-json.js';
+} from '../../src/product/federation/foundation/canonical-json.js';
 import {
   connectionRegistryFilename,
   ConnectionRegistryStore,
-} from '../../src/product/federation/connection-registry-store.js';
+} from '../../src/product/federation/identity/connection-registry-store.js';
 import type {
   AdapterBindingV1,
   LocalConnectionRegistryV1,
@@ -25,16 +25,16 @@ import type {
 import {
   identityManifestFilename,
   IdentityManifestStore,
-} from '../../src/product/federation/identity-manifest-store.js';
+} from '../../src/product/federation/identity/identity-manifest-store.js';
 import {
   IdentityLineageStore,
   type HistoricalBindingReference,
 } from '../../src/product/federation/identity-lineage-store.js';
-import { createSignedDocument } from '../../src/product/federation/signed-document.js';
+import { createSignedDocument } from '../../src/product/federation/foundation/signed-document.js';
 import {
   publicationPolicyFilename,
   PublicationPolicyStore,
-} from '../../src/product/federation/publication-policy-store.js';
+} from '../../src/product/federation/identity/publication-policy-store.js';
 import {
   createPrivateTestState,
   slackConnectionFixture,

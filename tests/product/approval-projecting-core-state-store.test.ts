@@ -3,7 +3,7 @@ import type { ApprovalDecision } from '../../src/core/approval/approval-gate.js'
 import type { DecisionBrief } from '../../src/core/contracts/delivery.js';
 import type { CoreStateStore } from '../../src/core/storage/core-state-store.js';
 import type { DecisionNodeState } from '../../src/product/approval/decision-node.js';
-import { ApprovalProjectingCoreStateStore } from '../../src/product/federation/approval-projecting-core-state-store.js';
+import { ApprovalProjectingCoreStateStore } from '../../src/product/federation/records/approval-projecting-core-state-store.js';
 import type { FederatedRecordProjector } from '../../src/product/federation/record-projector.js';
 
 const PROCESSING_KEY = 'processing-key-1';

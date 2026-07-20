@@ -59,8 +59,8 @@ import {
   checkFounderIdentity,
   FounderIdentityGateError,
   type IdentityCheckDependencies,
-} from "./federation/identity-check.js";
-import { MacOsSecureEnclaveInstallationSigner } from "./federation/macos-installation-signer.js";
+} from "./federation/bootstrap/identity-check.js";
+import { MacOsSecureEnclaveInstallationSigner } from "./federation/foundation/macos-installation-signer.js";
 import { bundledProductHelperAvailable } from "./spawn-sanitized-child.js";
 import { createProductCredentialResolver } from "./credentials.js";
 import {
@@ -69,13 +69,13 @@ import {
   commitFounderBootstrapCeremony,
   statusFounderBootstrap,
   type FounderBootstrapCeremonyDependencies,
-} from "./federation/founder-bootstrap-ceremony.js";
+} from "./federation/bootstrap/founder-bootstrap-ceremony.js";
 import { FederatedApprovalCapture } from "./federation/approval-capture.js";
 import {
   openFounderFederationRuntime,
   type FounderFederationRuntime,
 } from "./federation/runtime-wiring.js";
-import { ActiveIdentityBundleStore } from "./federation/active-identity-bundle-store.js";
+import { ActiveIdentityBundleStore } from "./federation/identity/active-identity-bundle-store.js";
 import { requiresFounderFederation } from "./federation/cutover-fence.js";
 import {
   FounderIndependentCopyStore,

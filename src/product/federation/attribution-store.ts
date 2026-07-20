@@ -11,7 +11,7 @@ import {
   canonicalJson,
   canonicalSha256,
   parseCanonicalJson,
-} from './canonical-json.js';
+} from './foundation/canonical-json.js';
 import type {
   ApprovalFederationMetadataV1,
   ProcessorAttributionV1,

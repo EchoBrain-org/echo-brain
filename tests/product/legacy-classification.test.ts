@@ -30,7 +30,7 @@ import {
   canonicalJson,
   canonicalSha256,
   sha256Digest,
-} from "../../src/product/federation/canonical-json.js";
+} from "../../src/product/federation/foundation/canonical-json.js";
 import {
   assertLegacyProcessingBoundaryReady,
   classifyLegacyRecords,

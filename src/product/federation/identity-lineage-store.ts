@@ -1,10 +1,10 @@
 import { resolveProductStatePaths, type ProductStatePaths } from "../paths.js";
-import { canonicalJson, canonicalSha256 } from "./canonical-json.js";
+import { canonicalJson, canonicalSha256 } from "./foundation/canonical-json.js";
 import type { AdapterBindingV1, Sha256Digest } from "./contracts.js";
 import {
   assertFederationId,
   assertUtcMillisecondTimestamp,
-} from "./identifiers.js";
+} from "./foundation/identifiers.js";
 import {
   IdentityDocumentLineage,
   identityLineageFailure,
@@ -15,8 +15,8 @@ import {
   type VerifiedHistoricalIdentityManifest,
   type VerifiedHistoricalPublicationPolicy,
   type VerifiedHistoricalRegistryChain,
-} from "./identity-lineage-documents.js";
-import { IdentityRegistryLineage } from "./identity-lineage-registries.js";
+} from "./identity/identity-lineage-documents.js";
+import { IdentityRegistryLineage } from "./identity/identity-lineage-registries.js";
 
 export type {
   HistoricalBindingReference,
@@ -27,7 +27,7 @@ export type {
   VerifiedHistoricalPublicationPolicy,
   VerifiedHistoricalRegistryChain,
   VerifiedHistoricalRegistryRevision,
-} from "./identity-lineage-documents.js";
+} from "./identity/identity-lineage-documents.js";
 
 function lifecycleContains(
   observedAt: string,

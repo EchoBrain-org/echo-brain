@@ -4,12 +4,12 @@ import {
   type KeyObject,
 } from 'node:crypto';
 import type { ApprovalRequest } from '../../../src/core/approval/approval-gate.js';
-import type { VerifiedActiveIdentityBundle } from '../../../src/product/federation/active-identity-bundle-store.js';
+import type { VerifiedActiveIdentityBundle } from '../../../src/product/federation/identity/active-identity-bundle-store.js';
 import {
   canonicalJson,
   canonicalSha256,
   sha256Digest,
-} from '../../../src/product/federation/canonical-json.js';
+} from '../../../src/product/federation/foundation/canonical-json.js';
 import type {
   ActiveIdentityBundleV1,
   AdapterBindingV1,
@@ -26,8 +26,8 @@ import type {
 import type {
   InstallationKeyDescriptor,
   InstallationSigner,
-} from '../../../src/product/federation/installation-signer.js';
-import { createSignedDocument } from '../../../src/product/federation/signed-document.js';
+} from '../../../src/product/federation/foundation/installation-signer.js';
+import { createSignedDocument } from '../../../src/product/federation/foundation/signed-document.js';
 import type {
   FederatedEventDraftV1,
   FederatedOutboxEventDraft,
@@ -36,7 +36,7 @@ import type {
 import {
   normalizeP256LowS,
   p256KeyId,
-} from '../../../src/product/federation/signature-profile.js';
+} from '../../../src/product/federation/foundation/signature-profile.js';
 import { testPublication } from './founder-identity.js';
 
 export function federationFixtureId(prefix: string, suffix: number): string {

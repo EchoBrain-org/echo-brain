@@ -10,19 +10,19 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { CoreStateStore } from '../../src/core/storage/core-state-store.js';
 import type { ProductRuntimeConfig } from '../../src/product/config.js';
 import type { DecisionNodeState } from '../../src/product/approval/decision-node.js';
-import type { VerifiedActiveIdentityBundle } from '../../src/product/federation/active-identity-bundle-store.js';
-import { ApprovalProjectingCoreStateStore } from '../../src/product/federation/approval-projecting-core-state-store.js';
+import type { VerifiedActiveIdentityBundle } from '../../src/product/federation/identity/active-identity-bundle-store.js';
+import { ApprovalProjectingCoreStateStore } from '../../src/product/federation/records/approval-projecting-core-state-store.js';
 import { SqliteFederatedAttributionStore } from '../../src/product/federation/attribution-store.js';
 import type {
   InstallationKeyDescriptor,
   InstallationSigner,
-} from '../../src/product/federation/installation-signer.js';
+} from '../../src/product/federation/foundation/installation-signer.js';
 import { FederatedOutboxStore } from '../../src/product/federation/outbox-store.js';
 import type { StoredFederatedOutboxEvent } from '../../src/product/federation/outbox-store.js';
 import {
   canonicalJson,
   canonicalSha256,
-} from '../../src/product/federation/canonical-json.js';
+} from '../../src/product/federation/foundation/canonical-json.js';
 import type {
   ApprovalFederationMetadataV1,
   ProcessorAttributionV1,
@@ -32,7 +32,7 @@ import type {
 import {
   normalizeP256LowS,
   p256KeyId,
-} from '../../src/product/federation/signature-profile.js';
+} from '../../src/product/federation/foundation/signature-profile.js';
 import { openFounderFederationRuntime } from '../../src/product/federation/runtime-wiring.js';
 import { buildFederatedProjectionSnapshots } from '../../src/product/federation/record-projector.js';
 

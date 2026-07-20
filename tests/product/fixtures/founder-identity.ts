@@ -29,14 +29,14 @@ import type {
   PublicationSnapshotV1,
   ToolConnectionV1,
 } from "../../../src/product/federation/contracts.js";
-import type { FounderBootstrapCeremonyDependencies } from "../../../src/product/federation/founder-bootstrap-ceremony.js";
+import type { FounderBootstrapCeremonyDependencies } from "../../../src/product/federation/bootstrap/founder-bootstrap-ceremony.js";
 import type {
   InstallationKeyDescriptor,
   InstallationSigner,
-} from "../../../src/product/federation/installation-signer.js";
-import { canonicalSha256 } from "../../../src/product/federation/canonical-json.js";
-import { normalizeP256LowS, p256KeyId } from "../../../src/product/federation/signature-profile.js";
-import type { SlackDmChallengeApi } from "../../../src/product/federation/slack-dm-challenge.js";
+} from "../../../src/product/federation/foundation/installation-signer.js";
+import { canonicalSha256 } from "../../../src/product/federation/foundation/canonical-json.js";
+import { normalizeP256LowS, p256KeyId } from "../../../src/product/federation/foundation/signature-profile.js";
+import type { SlackDmChallengeApi } from "../../../src/product/federation/bootstrap/slack-dm-challenge.js";
 
 export type JsonRecord = Record<string, unknown>;
 

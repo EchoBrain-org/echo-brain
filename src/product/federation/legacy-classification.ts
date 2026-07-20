@@ -18,12 +18,12 @@ export {
   type RecoverLegacyClassificationCutoverInput,
   type VerifiedLegacyClassificationReport,
   type VerifyLegacyClassificationReportInput,
-} from "./legacy-cutover-evidence.js";
-export { classifyLegacyRecords } from "./legacy-record-classifier.js";
+} from "./legacy/legacy-cutover-evidence.js";
+export { classifyLegacyRecords } from "./legacy/legacy-record-classifier.js";
 export {
   commitLegacyClassificationReport,
   legacyClassificationReportFilename,
   legacyClassificationReportPath,
   recoverLegacyClassificationCutoverAt,
   verifyLegacyClassificationReport,
-} from "./legacy-classification-report.js";
+} from "./legacy/legacy-classification-report.js";

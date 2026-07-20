@@ -10,7 +10,7 @@ import { LLM_DECISION_PROCESSOR_PROMPT_VERSION } from '../../adapters/decision-p
 import {
   ActiveIdentityBundleStore,
   type VerifiedActiveIdentityBundle,
-} from './active-identity-bundle-store.js';
+} from './identity/active-identity-bundle-store.js';
 import { requiresFounderFederation } from './cutover-fence.js';
 import {
   SqliteFederatedAttributionStore,
@@ -18,7 +18,7 @@ import {
   type ProcessorAttributionKey,
   type SourceAttributionKey,
 } from './attribution-store.js';
-import { canonicalJson, canonicalSha256 } from './canonical-json.js';
+import { canonicalJson, canonicalSha256 } from './foundation/canonical-json.js';
 import type {
   AdapterBindingV1,
   ProcessorAttributionV1,
@@ -27,13 +27,13 @@ import type {
   ToolConnectionGenerationV1,
   ToolConnectionV1,
 } from './contracts.js';
-import { federationId, assertUtcMillisecondTimestamp } from './identifiers.js';
+import { federationId, assertUtcMillisecondTimestamp } from './foundation/identifiers.js';
 import {
   IdentityLineageStore,
   type HistoricalBindingReference,
   type ResolvedHistoricalBinding,
 } from './identity-lineage-store.js';
-import { DelegatingCoreStateStore } from './delegating-core-state-store.js';
+import { DelegatingCoreStateStore } from './records/delegating-core-state-store.js';
 
 interface AttributionIdentityBundleReader {
   hasActiveBundle(): boolean;

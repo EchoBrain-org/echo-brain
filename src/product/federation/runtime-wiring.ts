@@ -8,12 +8,12 @@ import type { DecisionNodeState } from '../approval/decision-node.js';
 import {
   ActiveIdentityBundleStore,
   type VerifiedActiveIdentityBundle,
-} from './active-identity-bundle-store.js';
+} from './identity/active-identity-bundle-store.js';
 import {
   inspectFounderCutoverFence,
   requiresFounderFederation,
 } from './cutover-fence.js';
-import { ApprovalProjectingCoreStateStore } from './approval-projecting-core-state-store.js';
+import { ApprovalProjectingCoreStateStore } from './records/approval-projecting-core-state-store.js';
 import {
   FederatedApprovalCapture,
   type ApprovalIdentityLineageReader,
@@ -25,7 +25,7 @@ import {
   createAttributionStorageEvidenceVerifier,
 } from './attributing-core-state-store.js';
 import { SqliteFederatedAttributionStore } from './attribution-store.js';
-import type { IdentityCheckDependencies } from './identity-check.js';
+import type { IdentityCheckDependencies } from './bootstrap/identity-check.js';
 import { IdentityLineageStore } from './identity-lineage-store.js';
 import type { VerifiedHistoricalIdentityManifest } from './identity-lineage-store.js';
 import type { FederatedExportIdentitySource } from './export-bundle.js';
@@ -34,14 +34,14 @@ import {
   type IndependentCopyPlatformInspector,
   type IndependentCopyReadiness,
 } from './independent-copy-store.js';
-import type { InstallationSigner } from './installation-signer.js';
-import { verifyInstallationKeyDescriptor } from './installation-signer.js';
+import type { InstallationSigner } from './foundation/installation-signer.js';
+import { verifyInstallationKeyDescriptor } from './foundation/installation-signer.js';
 import { FederatedOutboxStore } from './outbox-store.js';
 import {
   buildFederatedProjectionSnapshots,
   FederatedRecordProjector,
 } from './record-projector.js';
-import { canonicalJson, canonicalSha256 } from './canonical-json.js';
+import { canonicalJson, canonicalSha256 } from './foundation/canonical-json.js';
 import type {
   ApprovalFederationMetadataV1,
   FederationId,

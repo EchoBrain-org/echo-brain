@@ -24,7 +24,7 @@ import {
 import { canonicalLocalPath } from '../../src/product/secure-local-files.js';
 import { acquireProductLifecycleLock } from '../../src/product/lifecycle-lock.js';
 import { founderCutoverGuardPath } from '../../src/product/federation/cutover-fence.js';
-import { canonicalJson } from '../../src/product/federation/canonical-json.js';
+import { canonicalJson } from '../../src/product/federation/foundation/canonical-json.js';
 
 const CONFIG_SHA = 'c'.repeat(64);
 const CREATED_AT = '2026-07-18T01:02:03.000Z';

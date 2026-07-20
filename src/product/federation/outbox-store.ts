@@ -9,8 +9,8 @@ import {
   canonicalSha256,
   parseCanonicalJson,
   sha256Digest,
-} from './canonical-json.js';
-import { analyzeApprovalGroup } from './approval-group-invariants.js';
+} from './foundation/canonical-json.js';
+import { analyzeApprovalGroup } from './records/approval-group-invariants.js';
 import type {
   FederatedEventV1,
   FederationId,
@@ -19,9 +19,9 @@ import type {
 import {
   assertFederationId,
   assertUtcMillisecondTimestamp,
-} from './identifiers.js';
-import type { InstallationSigner } from './installation-signer.js';
-import { verifyInstallationKeyDescriptor } from './installation-signer.js';
+} from './foundation/identifiers.js';
+import type { InstallationSigner } from './foundation/installation-signer.js';
+import { verifyInstallationKeyDescriptor } from './foundation/installation-signer.js';
 import {
   assertFederationDocumentSize,
   validateFederationDocument,
@@ -30,8 +30,8 @@ import {
   createSignedDocument,
   signedPayload,
   verifySignedDocument,
-} from './signed-document.js';
-import { p256KeyId } from './signature-profile.js';
+} from './foundation/signed-document.js';
+import { p256KeyId } from './foundation/signature-profile.js';
 
 const MIGRATIONS_DIR = join(
   dirname(fileURLToPath(import.meta.url)),

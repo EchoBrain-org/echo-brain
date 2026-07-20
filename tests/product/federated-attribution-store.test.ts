@@ -9,7 +9,7 @@ import type { CoreStateStore } from '../../src/core/storage/core-state-store.js'
 import type { DecisionSet } from '../../src/core/contracts/decision.js';
 import type { MeetingDocument } from '../../src/core/contracts/meeting.js';
 import { SqliteCoreStateStore } from '../../src/storage/core-state-sqlite.js';
-import type { VerifiedActiveIdentityBundle } from '../../src/product/federation/active-identity-bundle-store.js';
+import type { VerifiedActiveIdentityBundle } from '../../src/product/federation/identity/active-identity-bundle-store.js';
 import { SqliteFederatedAttributionStore } from '../../src/product/federation/attribution-store.js';
 import {
   AttributingCoreStateStore,
@@ -20,7 +20,7 @@ import {
 import {
   canonicalJson,
   canonicalSha256,
-} from '../../src/product/federation/canonical-json.js';
+} from '../../src/product/federation/foundation/canonical-json.js';
 import type {
   ApprovalFederationMetadataV1,
   ProductArtifactIdentityV1,

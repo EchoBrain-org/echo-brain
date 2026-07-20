@@ -7,15 +7,15 @@ import {
   canonicalJson,
   parseCanonicalJson,
   sha256Digest,
-} from '../../src/product/federation/canonical-json.js';
+} from '../../src/product/federation/foundation/canonical-json.js';
 import type { FederatedEventV1 } from '../../src/product/federation/contracts.js';
 import {
   FederatedOutboxStore,
   type AppendFederatedApprovalGroupRequest,
   type FederatedOutboxEventDraft,
 } from '../../src/product/federation/outbox-store.js';
-import type { InstallationSigner } from '../../src/product/federation/installation-signer.js';
-import { signWithInstallationKey } from '../../src/product/federation/installation-signer.js';
+import type { InstallationSigner } from '../../src/product/federation/foundation/installation-signer.js';
+import { signWithInstallationKey } from '../../src/product/federation/foundation/installation-signer.js';
 import {
   CountingInstallationSigner as TestInstallationSigner,
   federatedApprovalGroupDrafts,

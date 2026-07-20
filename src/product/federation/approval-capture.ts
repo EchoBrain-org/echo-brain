@@ -13,13 +13,13 @@ import type {
 import {
   ActiveIdentityBundleStore,
   type VerifiedActiveIdentityBundle,
-} from './active-identity-bundle-store.js';
+} from './identity/active-identity-bundle-store.js';
 import { requiresFounderFederation } from './cutover-fence.js';
 import {
   IdentityLineageStore,
   type ResolvedHistoricalBinding,
 } from './identity-lineage-store.js';
-import { canonicalJson, canonicalSha256 } from './canonical-json.js';
+import { canonicalJson, canonicalSha256 } from './foundation/canonical-json.js';
 import type {
   ApprovalFederationMetadataV1,
   LocalIdentityManifestV1,
@@ -27,9 +27,9 @@ import type {
   ProductArtifactIdentityV1,
   SourceAttributionV1,
 } from './contracts.js';
-import { assertUtcMillisecondTimestamp } from './identifiers.js';
+import { assertUtcMillisecondTimestamp } from './foundation/identifiers.js';
 import { validateFederationDocument } from './schema-validation.js';
-import { ApprovalResolutionEvidence } from './approval-resolution-evidence.js';
+import { ApprovalResolutionEvidence } from './approval/approval-resolution-evidence.js';
 import {
   approvalCandidate,
   approvalConnection,
@@ -54,7 +54,7 @@ import {
   type IdentityBundleReader,
   type ProductArtifactEvidenceProvider,
   type ValidatedStoredApproval,
-} from './approval-capture-support.js';
+} from './approval/approval-capture-support.js';
 
 export type {
   ApprovalAttributionProvider,
@@ -63,7 +63,7 @@ export type {
   ProductArtifactEvidenceProvider,
   SlackApprovalPresentationEvidence,
   SlackApprovalResolutionEvidence,
-} from './approval-capture-support.js';
+} from './approval/approval-capture-support.js';
 
 export class FederatedApprovalCapture implements DecisionNodeFederationCapture {
   private readonly identity: IdentityBundleReader;

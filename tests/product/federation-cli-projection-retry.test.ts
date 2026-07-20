@@ -29,9 +29,9 @@ import {
   commitFounderBootstrapCeremony,
   statusFounderBootstrap,
   type FounderBootstrapCeremonyDependencies,
-} from '../../src/product/federation/founder-bootstrap-ceremony.js';
+} from '../../src/product/federation/bootstrap/founder-bootstrap-ceremony.js';
 import type { FounderFederationRuntime } from '../../src/product/federation/runtime-wiring.js';
-import type { SlackDmChallengeApi } from '../../src/product/federation/slack-dm-challenge.js';
+import type { SlackDmChallengeApi } from '../../src/product/federation/bootstrap/slack-dm-challenge.js';
 import {
   founderRuntimeConfig,
   TestHardwareSigner,

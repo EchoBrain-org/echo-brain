@@ -22,7 +22,7 @@ import {
 import {
   canonicalJson,
   sha256Digest,
-} from '../../src/product/federation/canonical-json.js';
+} from '../../src/product/federation/foundation/canonical-json.js';
 import type {
   FederatedEventV1,
   FederatedExportManifestV1,
@@ -43,7 +43,7 @@ import type {
 import {
   createSignedDocument,
   signedPayload,
-} from '../../src/product/federation/signed-document.js';
+} from '../../src/product/federation/foundation/signed-document.js';
 import {
   CountingInstallationSigner as TestSigner,
   federatedApprovalGroupDrafts,
