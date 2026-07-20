@@ -1,8 +1,3 @@
-import {
-  generateKeyPairSync,
-  sign as signMessage,
-  type KeyObject,
-} from 'node:crypto';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
@@ -10,7 +5,6 @@ import Database from 'better-sqlite3';
 import { afterEach, describe, expect, it } from 'vitest';
 import {
   canonicalJson,
-  canonicalSha256,
   parseCanonicalJson,
   sha256Digest,
 } from '../../src/product/federation/canonical-json.js';
@@ -18,18 +12,15 @@ import type { FederatedEventV1 } from '../../src/product/federation/contracts.js
 import {
   FederatedOutboxStore,
   type AppendFederatedApprovalGroupRequest,
-  type FederatedEventDraftV1,
   type FederatedOutboxEventDraft,
 } from '../../src/product/federation/outbox-store.js';
-import type {
-  InstallationKeyDescriptor,
-  InstallationSigner,
-} from '../../src/product/federation/installation-signer.js';
+import type { InstallationSigner } from '../../src/product/federation/installation-signer.js';
 import { signWithInstallationKey } from '../../src/product/federation/installation-signer.js';
 import {
-  normalizeP256LowS,
-  p256KeyId,
-} from '../../src/product/federation/signature-profile.js';
+  CountingInstallationSigner as TestInstallationSigner,
+  federatedApprovalGroupDrafts,
+  federationFixtureId as fixtureId,
+} from './fixtures/federated-records.js';
 
 const NOW = '2026-07-19T22:00:00.000Z';
 const LATER = '2026-07-19T22:01:00.000Z';
@@ -47,69 +38,6 @@ afterEach(() => {
     rmSync(path, { recursive: true, force: true });
   }
 });
-
-function fixtureId(prefix: string, suffix: number): string {
-  return `${prefix}_00000000-0000-4000-8000-${suffix.toString().padStart(12, '0')}`;
-}
-
-class TestInstallationSigner implements InstallationSigner {
-  private readonly privateKey: KeyObject;
-  readonly descriptor: InstallationKeyDescriptor;
-  signCalls = 0;
-  failOnSignCall: number | undefined;
-
-  constructor() {
-    const { privateKey, publicKey } = generateKeyPairSync('ec', {
-      namedCurve: 'prime256v1',
-    });
-    const publicKeyDer = publicKey.export({ type: 'spki', format: 'der' });
-    this.privateKey = privateKey;
-    this.descriptor = {
-      installation_id: INSTALLATION_ID,
-      key_id: p256KeyId(publicKeyDer),
-      algorithm: 'ecdsa-p256-sha256-der-low-s',
-      public_key_spki_der_base64: publicKeyDer.toString('base64'),
-      protection: 'secure-enclave',
-      assurance: 'hardware_bound',
-      private_key_exportable: false,
-    };
-  }
-
-  async generate(installationId: string): Promise<InstallationKeyDescriptor> {
-    if (installationId !== INSTALLATION_ID)
-      throw new Error('unknown test installation');
-    return this.descriptor;
-  }
-
-  async inspect(
-    installationId: string,
-  ): Promise<InstallationKeyDescriptor | null> {
-    return installationId === INSTALLATION_ID ? this.descriptor : null;
-  }
-
-  async sign(
-    installationId: string,
-    message: Buffer,
-    expectedKeyId?: `sha256:${string}`,
-  ): Promise<Buffer> {
-    if (
-      installationId !== INSTALLATION_ID ||
-      expectedKeyId !== this.descriptor.key_id
-    ) {
-      throw new Error('test signing identity mismatch');
-    }
-    this.signCalls += 1;
-    if (this.signCalls === this.failOnSignCall) {
-      throw new Error('injected signing failure');
-    }
-    return normalizeP256LowS(
-      signMessage('sha256', message, {
-        key: this.privateKey,
-        dsaEncoding: 'der',
-      }),
-    );
-  }
-}
 
 function databasePath(): string {
   const directory = mkdtempSync(join(tmpdir(), 'echo-federated-outbox-'));
@@ -136,220 +64,15 @@ function draftGroup(
     signals?: readonly (typeof SIGNAL_ONE | typeof SIGNAL_TWO)[];
   } = {},
 ): FederatedOutboxEventDraft[] {
-  const approvalId = options.approvalId ?? APPROVAL_ID;
-  const offset = options.idOffset ?? 0;
-  const signals = options.signals ?? [SIGNAL_ONE, SIGNAL_TWO];
-  const organizationId = fixtureId('org', 1);
-  const principalId = fixtureId('prn', 1);
-  const membershipId = fixtureId('mem', 1);
-  const manifestId = fixtureId('idm', 1);
-  const sourceBindingId = fixtureId('bnd', 1);
-  const processorBindingId = fixtureId('bnd', 2);
-  const sourceConnectionId = fixtureId('con', 1);
-  const policyId = fixtureId('pol', 1);
-  const artifact = {
-    product_version: '0.1.0-dev.6',
-    source_sha: '1'.repeat(40),
-    artifact_sha256: DIGEST_A,
-  } as const;
-  const decisionSignal = {
-    id: SIGNAL_ONE,
-    kind: 'decision',
-    text: 'Ship the signed founder record.',
-    subject: null,
-    confidence: 0.9,
-    evidence: [],
-    status: 'decided',
-  } as const;
-  const actionSignal = {
-    id: SIGNAL_TWO,
-    kind: 'action',
-    text: 'Export the signed founder record.',
-    subject: null,
-    confidence: 0.8,
-    evidence: [],
-    owner: null,
-    due_at: null,
-  } as const;
-  const manifest = [
-    {
-      signal_id: SIGNAL_ONE,
-      kind: 'decision' as const,
-      position_within_kind: 0,
-      sha256: canonicalSha256(decisionSignal),
-    },
-    {
-      signal_id: SIGNAL_TWO,
-      kind: 'action' as const,
-      position_within_kind: 0,
-      sha256: canonicalSha256(actionSignal),
-    },
-  ];
-
-  return signals.map((signalId, index) => {
-    const record: FederatedEventDraftV1['record'] =
-      signalId === SIGNAL_ONE
-        ? {
-            record_id: fixtureId('rec', offset + index + 1),
-            kind: 'decision',
-            signal_id: signalId,
-            signal: decisionSignal,
-            meeting_context: {
-              id: 'meeting-fixture',
-              title: 'Founder fixture',
-              participants: [],
-            },
-            approval_group: {
-              brief_schema_version: 1,
-              brief_id: 'brief-fixture',
-              approved_brief_sha256: DIGEST_A,
-              signal_manifest: manifest,
-            },
-          }
-        : {
-            record_id: fixtureId('rec', offset + index + 1),
-            kind: 'action',
-            signal_id: signalId,
-            signal: actionSignal,
-            meeting_context: {
-              id: 'meeting-fixture',
-              title: 'Founder fixture',
-              participants: [],
-            },
-            approval_group: {
-              brief_schema_version: 1,
-              brief_id: 'brief-fixture',
-              approved_brief_sha256: DIGEST_A,
-              signal_manifest: manifest,
-            },
-          };
-    const envelope = {
-      schema_version: 1,
-      kind: 'echo-federated-event',
-      event_type: 'approved-org-record',
-      event_id: fixtureId('evt', offset + index + 1),
-      organization_id: organizationId,
-      occurred_at: NOW,
-      producer: {
-        principal_id: principalId,
-        membership_id: membershipId,
-        installation_id: INSTALLATION_ID,
-        key_id: signer.descriptor.key_id,
-        membership_assertion: {
-          status: 'active',
-          authority: 'local-founder-bootstrap',
-          assurance: 'founder_attested',
-        },
-        product_artifact: artifact,
-      },
-      source: {
-        identity_manifest_id: manifestId,
-        identity_manifest_sha256: DIGEST_A,
-        binding: {
-          adapter_binding_id: sourceBindingId,
-          adapter: {
-            kind: 'meeting-source',
-            adapter_id: 'granola',
-            instance_id: 'primary',
-            version: '2.2.0',
-          },
-          configuration_snapshot: { page_size: 100 },
-          configuration_sha256: DIGEST_A,
-        },
-        connection: {
-          connection_id: sourceConnectionId,
-          generation: 1,
-          owner: { kind: 'membership', id: membershipId },
-          provider_identity: {
-            provider: 'granola',
-            tenant: null,
-            subject: null,
-            verification_method: 'provider_first_capture',
-            assurance: 'credential_observed',
-          },
-        },
-        meeting: {
-          external_id: 'meeting-external-1',
-          revision: 'revision-1',
-          source_observation_id: fixtureId('obs', 1),
-          document_sha256: DIGEST_A,
-        },
-        participant_observations: [],
-        attribution_sha256: DIGEST_B,
-        observed_by: artifact,
-      },
-      processor: {
-        identity_manifest_id: manifestId,
-        identity_manifest_sha256: DIGEST_A,
-        adapter_binding_id: processorBindingId,
-        adapter: {
-          kind: 'decision-processor',
-          adapter_id: 'llm',
-          instance_id: 'ollama',
-          version: '1.0.0',
-        },
-        configuration_snapshot: { model: 'qwen3:4b' },
-        configuration_sha256: DIGEST_B,
-        attribution_sha256: DIGEST_C,
-        decision_set_sha256: DIGEST_A,
-        generated_at: NOW,
-        produced_by: artifact,
-      },
-      local_reference: {
-        processing_key: 'processing-fixture',
-        approval_id: approvalId,
-        node_id: 'node-fixture',
-        meeting_id: 'meeting-fixture',
-        signal_id: signalId,
-      },
-      record,
-      approval: {
-        surface: null,
-        approver: {
-          principal_id: principalId,
-          membership_id: membershipId,
-          claim_id: null,
-        },
-        raw_actor_assertion: {
-          surface: 'cli',
-          installation_id: INSTALLATION_ID,
-          reviewer_label: 'founder',
-          command: 'approve',
-          observed_at: NOW,
-        },
-        assurance: 'installation_holder_self_attested',
-        reviewed_at: NOW,
-        reason: 'Founder approved.',
-        approved_brief_sha256: DIGEST_A,
-        approved_context_sha256: DIGEST_B,
-        observed_by: artifact,
-      },
-      publication: {
-        policy_id: policyId,
-        version: 1,
-        policy_sha256: DIGEST_C,
-        identity_manifest_id: manifestId,
-        signer_installation_id: INSTALLATION_ID,
-        signer_key_id: signer.descriptor.key_id,
-        payload_scope:
-          'approved-signal-with-meeting-context-brief-digest-and-bounded-evidence',
-        audience: {
-          scope: 'organization',
-          subjects: [{ kind: 'organization', id: organizationId }],
-        },
-        sensitivity: 'internal',
-        retention: { kind: 'indefinite' },
-        raw_meeting_content: 'local-only',
-        participant_observations: 'included-namespaced',
-      },
-      classification: 'native_attributed',
-      identity_manifest_sha256: DIGEST_A,
-    } satisfies FederatedEventDraftV1;
-
-    return {
-      local_subject_key: `approved-org-record:${approvalId}:${signalId}`,
-      envelope,
-    };
+  return federatedApprovalGroupDrafts({
+    signer,
+    occurredAt: NOW,
+    approvalId: options.approvalId ?? APPROVAL_ID,
+    decisionId: SIGNAL_ONE,
+    actionId: SIGNAL_TWO,
+    digests: { a: DIGEST_A, b: DIGEST_B, c: DIGEST_C },
+    ...(options.idOffset === undefined ? {} : { idOffset: options.idOffset }),
+    ...(options.signals === undefined ? {} : { signals: options.signals }),
   });
 }
 
@@ -391,6 +114,27 @@ function singleDecisionGroup(
 }
 
 describe('federated signed outbox store', () => {
+  it('locks the shared approval-group fixture bytes', () => {
+    const signer = new TestInstallationSigner();
+    const normalized = draftGroup(signer).map(
+      ({ local_subject_key, envelope }) => ({
+        local_subject_key,
+        envelope: {
+          ...envelope,
+          producer: { ...envelope.producer, key_id: DIGEST_A },
+          publication: {
+            ...envelope.publication,
+            signer_key_id: DIGEST_A,
+          },
+        },
+      }),
+    );
+
+    expect(sha256Digest(canonicalJson(normalized))).toBe(
+      'sha256:3adb9cfb999921eb2d583746900395582aafd12c12949f1a04d673bb3f84da7e',
+    );
+  });
+
   it('atomically signs a complete approval group into one contiguous chain', async () => {
     const path = databasePath();
     const signer = new TestInstallationSigner();
@@ -1023,6 +767,27 @@ describe('federated signed outbox store', () => {
     await expect(
       store.appendApprovalGroup(appendRequest(signer, [drafts[0]!])),
     ).rejects.toThrow('complete signal manifest');
+
+    const duplicateManifest = drafts.map((item) => ({
+      ...item,
+      envelope: {
+        ...item.envelope,
+        record: {
+          ...item.envelope.record,
+          approval_group: {
+            ...item.envelope.record.approval_group,
+            signal_manifest: [
+              ...item.envelope.record.approval_group.signal_manifest,
+              item.envelope.record.approval_group.signal_manifest[0]!,
+            ],
+          },
+        },
+      },
+    }));
+    await expect(
+      store.appendApprovalGroup(appendRequest(signer, duplicateManifest)),
+    ).rejects.toThrow('signal manifest contains duplicates');
+
     await expect(
       store.appendApprovalGroup(
         appendRequest(signer, [drafts[1]!, drafts[0]!]),

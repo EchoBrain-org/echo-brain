@@ -137,17 +137,9 @@ export function readFounderCutoverGuard(
 ): FounderCutoverGuardV1 | null {
   const path = founderCutoverGuardPath(stateDirectory);
   if (!pathEntryExists(path)) return null;
-  const state = lstatSync(path);
-  const currentUid = process.getuid?.();
-  if (
-    state.isSymbolicLink() ||
-    !state.isFile() ||
-    (state.mode & 0o777) !== 0o600 ||
-    currentUid === undefined ||
-    state.uid !== currentUid
-  ) {
+  assertPrivateOwnedRegularFile(path, 0o600, () => {
     fail('external cutover guard must be a private current-user file');
-  }
+  });
   const guard = assertGuard(
     parseCanonicalJson(
       readFileNoFollow(path, 'founder cutover guard').toString('utf8'),
@@ -366,11 +358,11 @@ export function assertFounderCutoverReceiptMatchesActiveBundle(
   }
   return session;
 }
-import { lstatSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { atomicCreate } from '../../infrastructure/filesystem/atomic-create.js';
 import {
   assertOwnerControlledDirectory,
+  assertPrivateOwnedRegularFile,
   canonicalLocalPath,
   pathEntryExists,
   readFileNoFollow,

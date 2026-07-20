@@ -337,162 +337,80 @@ export function deriveFounderBootstrapPlanFromSession(
   });
 }
 
-function isObject(value: unknown): value is Record<string, unknown> {
-  return value !== null && typeof value === "object" && !Array.isArray(value);
-}
-
-function exactKeys(
-  value: Record<string, unknown>,
-  expected: readonly string[],
-  label: string,
-): void {
-  const actual = Object.keys(value).sort().join(",");
-  if (actual !== [...expected].sort().join(",")) {
-    throw new Error(`${label} has unsupported keys`);
-  }
-}
-
-function nonBlank(value: unknown, label: string): asserts value is string {
-  if (typeof value !== "string" || value.trim() === "" || value.length > 200) {
+function nonBlank(value: string, label: string): void {
+  if (value.trim() === "" || value.length > 200) {
     throw new Error(`${label} must contain 1-200 characters`);
   }
 }
 
-function validateOwner(
-  value: unknown,
-  label: string,
-): asserts value is IdentityOwnerV1 {
-  if (!isObject(value)) throw new Error(`${label} must be an object`);
-  exactKeys(value, ["kind", "id"], label);
-  if (value["kind"] !== "organization" && value["kind"] !== "membership") {
+function validateOwner(value: IdentityOwnerV1, label: string): void {
+  if (value.kind !== "organization" && value.kind !== "membership") {
     throw new Error(`${label} kind is invalid`);
   }
-  if (typeof value["id"] !== "string")
-    throw new Error(`${label} ID is invalid`);
   assertFederationId(
-    value["id"],
-    value["kind"] === "organization" ? "org" : "mem",
+    value.id,
+    value.kind === "organization" ? "org" : "mem",
     `${label}.id`,
   );
 }
 
-function validatePublication(
-  value: unknown,
-): asserts value is PublicationSnapshotV1 {
-  if (!isObject(value))
-    throw new Error("bootstrap publication must be an object");
-  exactKeys(
-    value,
-    [
-      "payload_scope",
-      "audience",
-      "sensitivity",
-      "retention",
-      "raw_meeting_content",
-      "participant_observations",
-    ],
-    "bootstrap publication",
-  );
+function validatePublication(value: PublicationSnapshotV1): void {
   if (
-    value["payload_scope"] !==
+    value.payload_scope !==
       "approved-signal-with-meeting-context-brief-digest-and-bounded-evidence" ||
-    (value["sensitivity"] !== "internal" &&
-      value["sensitivity"] !== "confidential" &&
-      value["sensitivity"] !== "restricted") ||
-    value["raw_meeting_content"] !== "local-only" ||
-    (value["participant_observations"] !== "included-namespaced" &&
-      value["participant_observations"] !== "excluded")
+    (value.sensitivity !== "internal" &&
+      value.sensitivity !== "confidential" &&
+      value.sensitivity !== "restricted") ||
+    value.raw_meeting_content !== "local-only" ||
+    (value.participant_observations !== "included-namespaced" &&
+      value.participant_observations !== "excluded")
   ) {
     throw new Error("bootstrap publication values are invalid");
   }
-  const audience = value["audience"];
-  if (!isObject(audience)) throw new Error("bootstrap audience is invalid");
-  exactKeys(audience, ["scope", "subjects"], "bootstrap audience");
   if (
-    (audience["scope"] !== "organization" &&
-      audience["scope"] !== "named-subjects") ||
-    !Array.isArray(audience["subjects"]) ||
-    audience["subjects"].length === 0
+    value.audience.scope !== "organization" &&
+    value.audience.scope !== "named-subjects"
   ) {
     throw new Error("bootstrap audience is invalid");
   }
-  for (const subject of audience["subjects"]) {
+  for (const subject of value.audience.subjects) {
     validateOwner(subject, "bootstrap audience subject");
   }
-  const retention = value["retention"];
-  if (!isObject(retention)) throw new Error("bootstrap retention is invalid");
-  if (retention["kind"] === "indefinite") {
-    exactKeys(retention, ["kind"], "bootstrap retention");
-  } else if (
-    retention["kind"] === "duration" &&
-    Number.isSafeInteger(retention["days"]) &&
-    Number(retention["days"]) > 0
-  ) {
-    exactKeys(retention, ["kind", "days"], "bootstrap retention");
-  } else {
+  if (value.retention.kind === "duration" && value.retention.days <= 0) {
     throw new Error("bootstrap retention is invalid");
   }
 }
 
-function validateBinding(value: unknown): asserts value is AdapterBindingV1 {
-  if (!isObject(value)) throw new Error("bootstrap binding must be an object");
-  exactKeys(
-    value,
-    [
-      "adapter_binding_id",
-      "capability",
-      "adapter_id",
-      "instance_id",
-      "connection_id",
-      "connection_generation",
-      "configuration_snapshot",
-      "configuration_sha256",
-      "created_at",
-      "ended_at",
-      "status",
-    ],
-    "bootstrap binding",
-  );
-  if (typeof value["adapter_binding_id"] !== "string") {
-    throw new Error("bootstrap binding ID is invalid");
-  }
-  assertFederationId(value["adapter_binding_id"], "bnd", "adapter_binding_id");
+function validateBinding(value: AdapterBindingV1): void {
+  assertFederationId(value.adapter_binding_id, "bnd", "adapter_binding_id");
   if (
     ![
       "meeting-source",
       "decision-processor",
       "approval-surface",
       "delivery-surface",
-    ].includes(String(value["capability"])) ||
-    typeof value["adapter_id"] !== "string" ||
-    value["adapter_id"].trim() === "" ||
-    typeof value["instance_id"] !== "string" ||
-    value["instance_id"].trim() === "" ||
-    !isObject(value["configuration_snapshot"]) ||
-    typeof value["configuration_sha256"] !== "string" ||
-    !DIGEST_RE.test(value["configuration_sha256"]) ||
-    canonicalSha256(value["configuration_snapshot"]) !==
-      value["configuration_sha256"] ||
-    value["status"] !== "active" ||
-    value["ended_at"] !== null ||
-    typeof value["created_at"] !== "string"
+    ].includes(value.capability) ||
+    value.adapter_id.trim() === "" ||
+    value.instance_id.trim() === "" ||
+    !DIGEST_RE.test(value.configuration_sha256) ||
+    canonicalSha256(value.configuration_snapshot) !==
+      value.configuration_sha256 ||
+    value.status !== "active" ||
+    value.ended_at !== null
   ) {
     throw new Error("bootstrap binding is invalid");
   }
   assertUtcMillisecondTimestamp(
-    value["created_at"],
+    value.created_at,
     "bootstrap binding created_at",
   );
-  if (value["connection_id"] === null) {
-    if (value["connection_generation"] !== null) {
+  if (value.connection_id === null) {
+    if (value.connection_generation !== null) {
       throw new Error("bootstrap binding has a dangling credential generation");
     }
   } else {
-    if (typeof value["connection_id"] !== "string") {
-      throw new Error("bootstrap binding connection ID is invalid");
-    }
-    assertFederationId(value["connection_id"], "con", "connection_id");
-    if (value["connection_generation"] !== 1) {
+    assertFederationId(value.connection_id, "con", "connection_id");
+    if (value.connection_generation !== 1) {
       throw new Error(
         "bootstrap binding must use initial connection generation",
       );
@@ -500,52 +418,20 @@ function validateBinding(value: unknown): asserts value is AdapterBindingV1 {
   }
 }
 
-function validateRequest(
-  value: unknown,
-): asserts value is FounderBootstrapRequestV1 {
-  if (!isObject(value))
-    throw new Error("bootstrap session request must be an object");
-  exactKeys(
-    value,
-    [
-      "config_sha256",
-      "build",
-      "created_at",
-      "organization_display_name",
-      "principal_display_name",
-      "device_class",
-      "slack_user_id",
-      "ids",
-      "claim_id",
-      "connection_seeds",
-      "bindings",
-      "publication",
-    ],
-    "bootstrap session request",
-  );
-  if (
-    typeof value["config_sha256"] !== "string" ||
-    !DIGEST_RE.test(value["config_sha256"])
-  ) {
+function validateRequest(value: FounderBootstrapRequestV1): void {
+  if (!DIGEST_RE.test(value.config_sha256)) {
     throw new Error("bootstrap session config digest is invalid");
   }
-  validatePackagedBuildIdentity(value["build"]);
-  if (typeof value["created_at"] !== "string")
-    throw new Error("bootstrap created_at is invalid");
-  assertUtcMillisecondTimestamp(value["created_at"], "bootstrap created_at");
-  nonBlank(value["organization_display_name"], "organization display name");
-  nonBlank(value["principal_display_name"], "principal display name");
-  if (value["device_class"] !== "byod" && value["device_class"] !== "managed") {
+  validatePackagedBuildIdentity(value.build);
+  assertUtcMillisecondTimestamp(value.created_at, "bootstrap created_at");
+  nonBlank(value.organization_display_name, "organization display name");
+  nonBlank(value.principal_display_name, "principal display name");
+  if (value.device_class !== "byod" && value.device_class !== "managed") {
     throw new Error("bootstrap device class is invalid");
   }
-  if (
-    typeof value["slack_user_id"] !== "string" ||
-    !/^[UW][A-Z0-9]{2,}$/.test(value["slack_user_id"])
-  ) {
+  if (!/^[UW][A-Z0-9]{2,}$/.test(value.slack_user_id)) {
     throw new Error("bootstrap Slack user ID is invalid");
   }
-  if (!isObject(value["ids"])) throw new Error("bootstrap IDs are invalid");
-  const ids = value["ids"] as unknown as FounderBootstrapIds;
   for (const [key, prefix] of [
     ["organization_id", "org"],
     ["principal_id", "prn"],
@@ -556,55 +442,29 @@ function validateRequest(
     ["registry_id", "reg"],
     ["policy_id", "pol"],
   ] as const) {
-    const id = (ids as unknown as Record<string, unknown>)[key];
-    if (typeof id !== "string") throw new Error(`bootstrap ${key} is invalid`);
-    assertFederationId(id, prefix, key);
+    assertFederationId(value.ids[key], prefix, key);
   }
-  if (typeof value["claim_id"] !== "string")
-    throw new Error("bootstrap claim ID is invalid");
-  assertFederationId(value["claim_id"], "clm", "claim_id");
-  if (
-    !Array.isArray(value["connection_seeds"]) ||
-    value["connection_seeds"].length !== 2
-  ) {
-    throw new Error(
-      "bootstrap requires exactly Slack and Granola connection seeds",
-    );
-  }
+  assertFederationId(value.claim_id, "clm", "claim_id");
   const providers = new Set<string>();
   const connectionIds = new Set<string>();
-  for (const seed of value["connection_seeds"]) {
-    if (!isObject(seed))
-      throw new Error("bootstrap connection seed is invalid");
-    exactKeys(
-      seed,
-      ["provider", "connection_id", "owner", "credential_guard"],
-      "bootstrap connection seed",
-    );
-    if (seed["provider"] !== "slack" && seed["provider"] !== "granola") {
+  for (const seed of value.connection_seeds) {
+    if (seed.provider !== "slack" && seed.provider !== "granola") {
       throw new Error("bootstrap connection provider is invalid");
     }
-    providers.add(seed["provider"]);
-    if (typeof seed["connection_id"] !== "string")
-      throw new Error("connection ID is invalid");
-    assertFederationId(seed["connection_id"], "con", "connection_id");
-    if (connectionIds.has(seed["connection_id"])) {
+    providers.add(seed.provider);
+    assertFederationId(seed.connection_id, "con", "connection_id");
+    if (connectionIds.has(seed.connection_id)) {
       throw new Error("bootstrap connection IDs must be unique");
     }
-    connectionIds.add(seed["connection_id"]);
-    validateOwner(seed["owner"], "bootstrap connection owner");
-    assertLocalCredentialGuard(
-      seed["credential_guard"] as LocalCredentialGuardV1,
-    );
+    connectionIds.add(seed.connection_id);
+    validateOwner(seed.owner, "bootstrap connection owner");
+    assertLocalCredentialGuard(seed.credential_guard);
   }
   if (!providers.has("slack") || !providers.has("granola")) {
     throw new Error("bootstrap connection seeds must cover Slack and Granola");
   }
-  if (!Array.isArray(value["bindings"]) || value["bindings"].length < 4) {
-    throw new Error("bootstrap binding snapshot is incomplete");
-  }
   const bindingIds = new Set<string>();
-  for (const binding of value["bindings"]) {
+  for (const binding of value.bindings) {
     validateBinding(binding);
     if (bindingIds.has(binding.adapter_binding_id)) {
       throw new Error("bootstrap binding IDs must be unique");
@@ -617,7 +477,7 @@ function validateRequest(
       throw new Error("bootstrap binding refers to an unknown connection seed");
     }
   }
-  validatePublication(value["publication"]);
+  validatePublication(value.publication);
 }
 
 function assertPhaseShape(session: FounderBootstrapSessionV1): void {
@@ -696,9 +556,7 @@ function validateObservedState(session: FounderBootstrapSessionV1): void {
   const confirmation = session.confirmation;
   if (confirmation !== null) {
     if (
-      canonicalSha256(confirmation.summary) !==
-        confirmation.confirmation_sha256 ||
-      typeof confirmation.ready_at !== "string"
+      canonicalSha256(confirmation.summary) !== confirmation.confirmation_sha256
     ) {
       throw new Error("bootstrap confirmation digest is invalid");
     }
@@ -726,7 +584,6 @@ function validateObservedState(session: FounderBootstrapSessionV1): void {
   const commit = session.commit;
   if (commit !== null) {
     if (
-      typeof commit.confirmed_at !== "string" ||
       commit.confirmation_sha256 !== confirmation?.confirmation_sha256 ||
       commit.plan_sha256 !== canonicalSha256(commit.plan)
     ) {
@@ -748,7 +605,6 @@ function validateObservedState(session: FounderBootstrapSessionV1): void {
   const result = session.result;
   if (result !== null) {
     if (
-      typeof result.completed_at !== "string" ||
       result.organization_id !== session.request.ids.organization_id ||
       result.installation_id !== session.request.ids.installation_id ||
       result.manifest_id !== session.request.ids.manifest_id ||
@@ -775,34 +631,12 @@ export function validateFounderBootstrapSession(
   value: unknown,
 ): FounderBootstrapSessionV1 {
   assertExactFounderBootstrapSessionShape(value);
-  if (!isObject(value)) throw new Error("bootstrap session must be an object");
-  exactKeys(
-    value,
-    [
-      "schema_version",
-      "kind",
-      "session_id",
-      "revision",
-      "phase",
-      "request",
-      "signing_key",
-      "provider_observations",
-      "challenge",
-      "verification",
-      "confirmation",
-      "commit",
-      "result",
-      "integrity",
-    ],
-    "bootstrap session",
-  );
+  const session = value as FounderBootstrapSessionV1;
   if (
-    value["schema_version"] !== 1 ||
-    value["kind"] !== "echo-founder-bootstrap-session" ||
-    typeof value["session_id"] !== "string" ||
-    !SESSION_ID_RE.test(value["session_id"]) ||
-    !Number.isSafeInteger(value["revision"]) ||
-    Number(value["revision"]) < 1 ||
+    session.schema_version !== 1 ||
+    session.kind !== "echo-founder-bootstrap-session" ||
+    !SESSION_ID_RE.test(session.session_id) ||
+    session.revision < 1 ||
     ![
       "planned",
       "key_ready",
@@ -810,12 +644,11 @@ export function validateFounderBootstrapSession(
       "ready_for_confirmation",
       "committing",
       "complete",
-    ].includes(String(value["phase"]))
+    ].includes(session.phase)
   ) {
     throw new Error("bootstrap session header is invalid");
   }
-  validateRequest(value["request"]);
-  const session = value as unknown as FounderBootstrapSessionV1;
+  validateRequest(session.request);
   assertPhaseShape(session);
   if (session.signing_key !== null) {
     const publicKey = verifyInstallationKeyDescriptor(session.signing_key);

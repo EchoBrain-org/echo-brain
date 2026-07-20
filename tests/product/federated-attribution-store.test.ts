@@ -25,6 +25,8 @@ import type {
   ApprovalFederationMetadataV1,
   ProductArtifactIdentityV1,
 } from '../../src/product/federation/contracts.js';
+import { testBinding, testConnection } from './fixtures/founder-identity.js';
+import { activeIdentityBundleFixture } from './fixtures/federated-records.js';
 
 const BEFORE = '2026-07-19T20:00:00.000Z';
 const NOW = '2026-07-19T20:30:00.000Z';
@@ -112,202 +114,71 @@ const decisions: DecisionSet = {
 function bundle(): VerifiedActiveIdentityBundle {
   const sourceConfiguration = { page_size: 100 };
   const processorConfiguration = { prompt_version: 'structured-text-v1' };
-  const manifest: VerifiedActiveIdentityBundle['manifest'] = {
-    schema_version: 1,
-    kind: 'echo-local-identity-manifest',
-    manifest_id: IDS.manifest,
-    predecessor_manifest_id: null,
-    created_at: BEFORE,
-    authority: {
-      kind: 'local-founder-bootstrap',
-      assurance: 'founder_attested',
+  return activeIdentityBundleFixture({
+    ids: IDS,
+    at: BEFORE,
+    artifact: ARTIFACT,
+    signingKey: {
+      key_id: INTEGRITY.key_id,
+      algorithm: 'ecdsa-p256-sha256-der-low-s',
+      public_key_spki_der_base64: 'AQ==',
+      protection: 'secure-enclave',
+      assurance: 'hardware_bound',
     },
-    organization: {
-      organization_id: IDS.organization,
-      display_name: 'Echo',
-      created_at: BEFORE,
-    },
-    principal: {
-      principal_id: IDS.principal,
-      organization_id: IDS.organization,
-      kind: 'human',
-      display_name: 'Founder',
-    },
-    membership: {
-      membership_id: IDS.membership,
-      organization_id: IDS.organization,
-      principal_id: IDS.principal,
-      type: 'owner',
-      status: 'active',
-      valid_from: BEFORE,
-    },
-    installation: {
-      installation_id: IDS.installation,
-      organization_id: IDS.organization,
-      membership_id: IDS.membership,
-      device_id: IDS.device,
-      device_class: 'byod',
-      enrolled_at: BEFORE,
-      product: {
-        name: 'echo-brain',
-        version: ARTIFACT.product_version,
-        source_sha: ARTIFACT.source_sha,
-      },
-      signing_key: {
-        key_id: INTEGRITY.key_id,
-        algorithm: 'ecdsa-p256-sha256-der-low-s',
-        public_key_spki_der_base64: 'AQ==',
-        protection: 'secure-enclave',
-        assurance: 'hardware_bound',
-      },
-    },
-    identity_claims: [],
-    legacy_cutover: {
-      declared_at: BEFORE,
-      pre_cutover_default: 'disposable_test',
-      native_records_require: [
-        'source-attribution-v1',
-        'processor-attribution-v1',
-        'approval-context-v1',
-        'signed-outbox-v1',
-      ],
-    },
-    integrity: INTEGRITY,
-  };
-  const registry: VerifiedActiveIdentityBundle['connectionRegistry'] = {
-    schema_version: 1,
-    kind: 'echo-local-connection-registry',
-    registry_id: IDS.registry,
-    identity_manifest_id: IDS.manifest,
-    revision: 1,
-    previous_registry_sha256: null,
-    updated_at: BEFORE,
     connections: [
-      {
-        connection_id: IDS.sourceConnection,
-        organization_id: IDS.organization,
+      testConnection({
+        connectionId: IDS.sourceConnection,
+        organizationId: IDS.organization,
         owner: { kind: 'membership', id: IDS.membership },
         provider: 'granola',
-        generations: [
-          {
-            generation: 1,
-            active_from: BEFORE,
-            ended_at: null,
-            provider_identity: {
-              tenant: null,
-              subject: null,
-              verification: {
-                method: 'provider_first_capture',
-                assurance: 'credential_observed',
-                verified_at: BEFORE,
-                evidence_sha256: `sha256:${'5'.repeat(64)}`,
-              },
-            },
-            local_credential_guard: {
-              reference: 'file:/private/tmp/granola-token',
-              algorithm: 'sha256-salted',
-              salt_base64: 'AQ==',
-              digest: `sha256:${'6'.repeat(64)}`,
-              exportable: false,
-            },
+        activeAt: BEFORE,
+        providerIdentity: {
+          tenant: null,
+          subject: null,
+          verification: {
+            method: 'provider_first_capture',
+            assurance: 'credential_observed',
+            verified_at: BEFORE,
+            evidence_sha256: `sha256:${'5'.repeat(64)}`,
           },
-        ],
-      },
+        },
+        credentialGuard: {
+          reference: 'file:/private/tmp/granola-token',
+          algorithm: 'sha256-salted',
+          salt_base64: 'AQ==',
+          digest: `sha256:${'6'.repeat(64)}`,
+          exportable: false,
+        },
+      }),
     ],
     bindings: [
-      {
-        adapter_binding_id: IDS.sourceBinding,
+      testBinding({
+        adapterBindingId: IDS.sourceBinding,
         capability: 'meeting-source',
-        adapter_id: 'granola',
-        instance_id: 'primary',
-        connection_id: IDS.sourceConnection,
-        connection_generation: 1,
-        configuration_snapshot: sourceConfiguration,
-        configuration_sha256: canonicalSha256(sourceConfiguration),
-        created_at: BEFORE,
-        ended_at: null,
-        status: 'active',
-      },
-      {
-        adapter_binding_id: IDS.processorBinding,
+        adapterId: 'granola',
+        instanceId: 'primary',
+        connectionId: IDS.sourceConnection,
+        createdAt: BEFORE,
+        configuration: sourceConfiguration,
+      }),
+      testBinding({
+        adapterBindingId: IDS.processorBinding,
         capability: 'decision-processor',
-        adapter_id: 'structured-text',
-        instance_id: 'primary',
-        connection_id: null,
-        connection_generation: null,
-        configuration_snapshot: processorConfiguration,
-        configuration_sha256: canonicalSha256(processorConfiguration),
-        created_at: BEFORE,
-        ended_at: null,
-        status: 'active',
-      },
+        adapterId: 'structured-text',
+        instanceId: 'primary',
+        connectionId: null,
+        createdAt: BEFORE,
+        configuration: processorConfiguration,
+      }),
     ],
     integrity: INTEGRITY,
-  };
-  const publicationPolicy: VerifiedActiveIdentityBundle['publicationPolicy'] = {
-    schema_version: 1,
-    kind: 'echo-publication-policy',
-    policy_id: IDS.policy,
-    organization_id: IDS.organization,
-    identity_manifest_id: IDS.manifest,
-    issued_by: {
-      installation_id: IDS.installation,
-      key_id: INTEGRITY.key_id,
+    referenceDigests: {
+      manifest: `sha256:${'7'.repeat(64)}`,
+      registry: `sha256:${'8'.repeat(64)}`,
+      policy: `sha256:${'9'.repeat(64)}`,
     },
-    version: 1,
-    effective_at: BEFORE,
-    publication: {
-      payload_scope:
-        'approved-signal-with-meeting-context-brief-digest-and-bounded-evidence',
-      audience: {
-        scope: 'organization',
-        subjects: [{ kind: 'organization', id: IDS.organization }],
-      },
-      sensitivity: 'internal',
-      retention: { kind: 'indefinite' },
-      raw_meeting_content: 'local-only',
-      participant_observations: 'included-namespaced',
-    },
-    integrity: INTEGRITY,
-  };
-  return {
-    pointer: {
-      schema_version: 1,
-      kind: 'echo-active-identity-bundle',
-      manifest: {
-        manifest_id: IDS.manifest,
-        path: 'manifests/manifest.json',
-        sha256: `sha256:${'7'.repeat(64)}`,
-      },
-      connection_registry: {
-        registry_id: IDS.registry,
-        revision: 1,
-        path: 'registries/registry.json',
-        sha256: `sha256:${'8'.repeat(64)}`,
-      },
-      default_publication_policy: {
-        policy_id: IDS.policy,
-        version: 1,
-        path: 'policies/policy.json',
-        sha256: `sha256:${'9'.repeat(64)}`,
-      },
-      active_installation_id: IDS.installation,
-      activated_at: BEFORE,
-      activation_reason: 'founder-bootstrap',
-      integrity: INTEGRITY,
-    },
-    manifest,
-    connectionRegistry: registry,
-    publicationPolicy,
-    canonical: {
-      pointer: '{}',
-      manifest: '{}',
-      connectionRegistry: '{}',
-      publicationPolicy: '{}',
-    },
-  };
+  });
 }
-
 function artifactProvider(): AttributionArtifactProvider {
   return {
     current: () => ARTIFACT,

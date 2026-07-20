@@ -1,24 +1,13 @@
 import {
-  generateKeyPairSync,
-  sign as signMessage,
-  type KeyObject,
-} from 'node:crypto';
-import {
-  chmodSync,
-  mkdtempSync,
-  mkdirSync,
-  realpathSync,
   rmSync,
   writeFileSync,
 } from 'node:fs';
-import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { resolveProductStatePaths } from '../../src/product/paths.js';
 import { ActiveIdentityBundleStore } from '../../src/product/federation/active-identity-bundle-store.js';
 import {
   canonicalJson,
-  canonicalSha256,
   sha256Digest,
 } from '../../src/product/federation/canonical-json.js';
 import {
@@ -26,7 +15,6 @@ import {
   ConnectionRegistryStore,
 } from '../../src/product/federation/connection-registry-store.js';
 import type {
-  ActiveIdentityBundleV1,
   AdapterBindingV1,
   LocalConnectionRegistryV1,
   LocalIdentityManifestV1,
@@ -42,19 +30,21 @@ import {
   IdentityLineageStore,
   type HistoricalBindingReference,
 } from '../../src/product/federation/identity-lineage-store.js';
-import type {
-  InstallationKeyDescriptor,
-  InstallationSigner,
-} from '../../src/product/federation/installation-signer.js';
 import { createSignedDocument } from '../../src/product/federation/signed-document.js';
-import {
-  normalizeP256LowS,
-  p256KeyId,
-} from '../../src/product/federation/signature-profile.js';
 import {
   publicationPolicyFilename,
   PublicationPolicyStore,
 } from '../../src/product/federation/publication-policy-store.js';
+import {
+  createPrivateTestState,
+  slackConnectionFixture,
+  testBinding,
+  testManifest,
+  testPointer,
+  testPolicy,
+  testRegistry,
+  TestHardwareSigner,
+} from './fixtures/founder-identity.js';
 
 const IDS = {
   organization: 'org_00000000-0000-4000-8000-000000000001',
@@ -93,66 +83,11 @@ afterEach(() => {
   }
 });
 
-class TestInstallationSigner implements InstallationSigner {
-  private privateKey: KeyObject | undefined;
-  private descriptor: InstallationKeyDescriptor | undefined;
-
-  async generate(installationId: string): Promise<InstallationKeyDescriptor> {
-    if (this.descriptor !== undefined) return this.descriptor;
-    const { publicKey, privateKey } = generateKeyPairSync('ec', {
-      namedCurve: 'prime256v1',
-    });
-    const publicKeyDer = publicKey.export({ type: 'spki', format: 'der' });
-    this.privateKey = privateKey;
-    this.descriptor = {
-      installation_id: installationId,
-      key_id: p256KeyId(publicKeyDer),
-      algorithm: 'ecdsa-p256-sha256-der-low-s',
-      public_key_spki_der_base64: publicKeyDer.toString('base64'),
-      protection: 'secure-enclave',
-      assurance: 'hardware_bound',
-      private_key_exportable: false,
-    };
-    return this.descriptor;
-  }
-
-  async inspect(
-    installationId: string,
-  ): Promise<InstallationKeyDescriptor | null> {
-    return this.descriptor?.installation_id === installationId
-      ? this.descriptor
-      : null;
-  }
-
-  async sign(
-    installationId: string,
-    message: Buffer,
-    expectedKeyId?: `sha256:${string}`,
-  ): Promise<Buffer> {
-    if (
-      this.privateKey === undefined ||
-      this.descriptor?.installation_id !== installationId
-    ) {
-      throw new Error('test installation key is unavailable');
-    }
-    if (
-      expectedKeyId !== undefined &&
-      expectedKeyId !== this.descriptor.key_id
-    ) {
-      throw new Error('test installation key fingerprint mismatch');
-    }
-    return normalizeP256LowS(
-      signMessage('sha256', message, {
-        key: this.privateKey,
-        dsaEncoding: 'der',
-      }),
-    );
-  }
-}
+const TestInstallationSigner = TestHardwareSigner;
 
 interface Fixture {
   stateDirectory: string;
-  signer: TestInstallationSigner;
+  signer: TestHardwareSigner;
   manifest: LocalIdentityManifestV1;
   policy: PublicationPolicyV1;
   policyRaw: string;
@@ -163,58 +98,34 @@ interface Fixture {
 }
 
 function privateState(): string {
-  const root = mkdtempSync(join(tmpdir(), 'echo-identity-lineage-'));
-  temporary.push(root);
-  const state = join(realpathSync(root), 'state');
-  mkdirSync(state, { mode: 0o700 });
-  chmodSync(state, 0o700);
-  return state;
+  return createPrivateTestState(temporary, 'echo-identity-lineage-');
 }
 
 async function signDocument<T extends object>(
   payload: T,
-  signer: TestInstallationSigner,
+  signer: TestHardwareSigner,
   keyId: `sha256:${string}`,
 ): Promise<T & { integrity: SignedIntegrity }> {
   return createSignedDocument(payload, signer, IDS.installation, keyId);
 }
 
 function connection(providerVerifiedAt = REVISION_ONE_AT): ToolConnectionV1 {
-  return {
-    connection_id: IDS.connection,
-    organization_id: IDS.organization,
-    owner: { kind: 'organization', id: IDS.organization },
-    provider: 'slack',
-    generations: [
-      {
-        generation: 1,
-        active_from: REVISION_ONE_AT,
-        ended_at: null,
-        provider_identity: {
-          tenant: { kind: 'slack-team', id: 'T123', enterprise_id: null },
-          subject: {
-            kind: 'bot-installation',
-            id: 'U123',
-            bot_id: 'B123',
-            app_id: 'A123',
-          },
-          verification: {
-            method: 'slack_auth_test',
-            assurance: 'provider_verified',
-            verified_at: providerVerifiedAt,
-            evidence_sha256: DIGEST,
-          },
-        },
-        local_credential_guard: {
-          reference: 'file:/private/slack-token',
-          algorithm: 'sha256-salted',
-          salt_base64: 'AQ==',
-          digest: DIGEST,
-          exportable: false,
-        },
-      },
-    ],
-  };
+  return slackConnectionFixture({
+    connectionId: IDS.connection,
+    organizationId: IDS.organization,
+    activeAt: REVISION_ONE_AT,
+    tenantId: 'T123',
+    subject: { id: 'U123', bot_id: 'B123', app_id: 'A123' },
+    verifiedAt: providerVerifiedAt,
+    evidenceSha256: DIGEST,
+    credentialGuard: {
+      reference: 'file:/private/slack-token',
+      algorithm: 'sha256-salted',
+      salt_base64: 'AQ==',
+      digest: DIGEST,
+      exportable: false,
+    },
+  });
 }
 
 function binding(
@@ -227,22 +138,20 @@ function binding(
     channel_id: 'C123',
     reviewer: { slack_user_id: 'UFOUNDER' },
   };
-  return {
-    adapter_binding_id: adapterBindingId,
+  return testBinding({
+    adapterBindingId,
     capability: 'approval-surface',
-    adapter_id: 'slack-reactions',
-    instance_id:
+    adapterId: 'slack-reactions',
+    instanceId:
       adapterBindingId === IDS.oldBinding
         ? 'founder-approval'
         : 'founder-approval-v2',
-    connection_id: IDS.connection,
-    connection_generation: 1,
-    configuration_snapshot: configuration,
-    configuration_sha256: canonicalSha256(configuration),
-    created_at: createdAt,
-    ended_at: endedAt,
+    connectionId: IDS.connection,
+    configuration,
+    createdAt,
+    endedAt,
     status,
-  };
+  });
 }
 
 async function createFixture(
@@ -254,80 +163,19 @@ async function createFixture(
   const stateDirectory = privateState();
   const signer = new TestInstallationSigner();
   const descriptor = await signer.generate(IDS.installation);
-  const manifestPayload: Omit<LocalIdentityManifestV1, 'integrity'> = {
-    schema_version: 1,
-    kind: 'echo-local-identity-manifest',
-    manifest_id: IDS.manifest,
-    predecessor_manifest_id: null,
-    created_at: CUTOVER,
-    authority: {
-      kind: 'local-founder-bootstrap',
-      assurance: 'founder_attested',
+  const manifestPayload = testManifest({
+    ids: IDS,
+    at: CUTOVER,
+    claimTenant: 'T123',
+    claimVerifiedAt: options.claimVerifiedAt,
+    key: {
+      key_id: descriptor.key_id,
+      algorithm: descriptor.algorithm,
+      public_key_spki_der_base64: descriptor.public_key_spki_der_base64,
+      protection: 'secure-enclave',
+      assurance: 'hardware_bound',
     },
-    organization: {
-      organization_id: IDS.organization,
-      display_name: 'EchoBrain',
-      created_at: CUTOVER,
-    },
-    principal: {
-      principal_id: IDS.principal,
-      organization_id: IDS.organization,
-      kind: 'human',
-      display_name: 'Founder',
-    },
-    membership: {
-      membership_id: IDS.membership,
-      organization_id: IDS.organization,
-      principal_id: IDS.principal,
-      type: 'owner',
-      status: 'active',
-      valid_from: CUTOVER,
-    },
-    installation: {
-      installation_id: IDS.installation,
-      organization_id: IDS.organization,
-      membership_id: IDS.membership,
-      device_id: IDS.device,
-      device_class: 'byod',
-      enrolled_at: CUTOVER,
-      product: {
-        name: 'echo-brain',
-        version: '0.1.0-dev.6',
-        source_sha: 'a'.repeat(40),
-      },
-      signing_key: {
-        key_id: descriptor.key_id,
-        algorithm: descriptor.algorithm,
-        public_key_spki_der_base64: descriptor.public_key_spki_der_base64,
-        protection: 'secure-enclave',
-        assurance: 'hardware_bound',
-      },
-    },
-    identity_claims: [
-      {
-        claim_id: IDS.claim,
-        principal_id: IDS.principal,
-        issuer: { kind: 'provider', provider: 'slack', tenant_id: 'T123' },
-        subject: { kind: 'user', id: 'UFOUNDER' },
-        verification: {
-          method: 'slack_dm_challenge',
-          assurance: 'provider_challenge_observed',
-          verified_at: options.claimVerifiedAt ?? CUTOVER,
-          evidence_sha256: DIGEST,
-        },
-      },
-    ],
-    legacy_cutover: {
-      declared_at: CUTOVER,
-      pre_cutover_default: 'disposable_test',
-      native_records_require: [
-        'source-attribution-v1',
-        'processor-attribution-v1',
-        'approval-context-v1',
-        'signed-outbox-v1',
-      ],
-    },
-  };
+  });
   const manifest = await signDocument(
     manifestPayload,
     signer,
@@ -339,31 +187,14 @@ async function createFixture(
     canonicalJson(manifest),
   );
 
-  const policyPayload: Omit<PublicationPolicyV1, 'integrity'> = {
-    schema_version: 1,
-    kind: 'echo-publication-policy',
-    policy_id: IDS.policy,
-    organization_id: IDS.organization,
-    identity_manifest_id: IDS.manifest,
-    issued_by: {
-      installation_id: IDS.installation,
-      key_id: descriptor.key_id,
-    },
-    version: 1,
-    effective_at: REVISION_ONE_AT,
-    publication: {
-      payload_scope:
-        'approved-signal-with-meeting-context-brief-digest-and-bounded-evidence',
-      audience: {
-        scope: 'organization',
-        subjects: [{ kind: 'organization', id: IDS.organization }],
-      },
-      sensitivity: 'internal',
-      retention: { kind: 'indefinite' },
-      raw_meeting_content: 'local-only',
-      participant_observations: 'included-namespaced',
-    },
-  };
+  const policyPayload = testPolicy({
+    policyId: IDS.policy,
+    organizationId: IDS.organization,
+    manifestId: IDS.manifest,
+    installationId: IDS.installation,
+    keyId: descriptor.key_id,
+    effectiveAt: REVISION_ONE_AT,
+  });
   const policy = await signDocument(policyPayload, signer, descriptor.key_id);
   const policyRaw = canonicalJson(policy);
   new PublicationPolicyStore(paths).create(
@@ -373,17 +204,13 @@ async function createFixture(
 
   const enrolledConnection = connection(options.providerVerifiedAt);
   const oldBinding = binding(IDS.oldBinding, REVISION_ONE_AT);
-  const registryPayload: Omit<LocalConnectionRegistryV1, 'integrity'> = {
-    schema_version: 1,
-    kind: 'echo-local-connection-registry',
-    registry_id: IDS.registry,
-    identity_manifest_id: IDS.manifest,
-    revision: 1,
-    previous_registry_sha256: null,
-    updated_at: REVISION_ONE_AT,
+  const registryPayload = testRegistry({
+    registryId: IDS.registry,
+    manifestId: IDS.manifest,
+    updatedAt: REVISION_ONE_AT,
     connections: [enrolledConnection],
     bindings: [oldBinding],
-  };
+  });
   const registryOne = await signDocument(
     registryPayload,
     signer,
@@ -394,30 +221,19 @@ async function createFixture(
     connectionRegistryFilename(IDS.registry, 1),
     registryOneRaw,
   );
-  const pointerPayload: Omit<ActiveIdentityBundleV1, 'integrity'> = {
-    schema_version: 1,
-    kind: 'echo-active-identity-bundle',
-    manifest: {
-      manifest_id: IDS.manifest,
-      path: `manifests/${identityManifestFilename(IDS.manifest)}`,
-      sha256: sha256Digest(canonicalJson(manifest)),
-    },
-    connection_registry: {
-      registry_id: IDS.registry,
-      revision: 1,
-      path: `registries/${connectionRegistryFilename(IDS.registry, 1)}`,
-      sha256: sha256Digest(registryOneRaw),
-    },
-    default_publication_policy: {
-      policy_id: IDS.policy,
-      version: 1,
-      path: `policies/${publicationPolicyFilename(IDS.policy, 1)}`,
-      sha256: sha256Digest(policyRaw),
-    },
-    active_installation_id: IDS.installation,
-    activated_at: REVISION_ONE_AT,
-    activation_reason: 'founder-bootstrap',
-  };
+  const pointerPayload = testPointer({
+    manifestId: IDS.manifest,
+    manifestPath: `manifests/${identityManifestFilename(IDS.manifest)}`,
+    manifestSha256: sha256Digest(canonicalJson(manifest)),
+    registryId: IDS.registry,
+    registryPath: `registries/${connectionRegistryFilename(IDS.registry, 1)}`,
+    registrySha256: sha256Digest(registryOneRaw),
+    policyId: IDS.policy,
+    policyPath: `policies/${publicationPolicyFilename(IDS.policy, 1)}`,
+    policySha256: sha256Digest(policyRaw),
+    installationId: IDS.installation,
+    activatedAt: REVISION_ONE_AT,
+  });
   const pointer = await signDocument(pointerPayload, signer, descriptor.key_id);
   new ActiveIdentityBundleStore(stateDirectory).createInitialPointer(
     canonicalJson(pointer),
@@ -512,30 +328,20 @@ async function activateSuccessorManifest(fixture: Fixture): Promise<void> {
     successorPolicyRaw,
   );
 
-  const pointerPayload: Omit<ActiveIdentityBundleV1, 'integrity'> = {
-    schema_version: 1,
-    kind: 'echo-active-identity-bundle',
-    manifest: {
-      manifest_id: IDS.successorManifest,
-      path: `manifests/${identityManifestFilename(IDS.successorManifest)}`,
-      sha256: sha256Digest(successorManifestRaw),
-    },
-    connection_registry: {
-      registry_id: IDS.successorRegistry,
-      revision: 1,
-      path: `registries/${connectionRegistryFilename(IDS.successorRegistry, 1)}`,
-      sha256: sha256Digest(successorRegistryRaw),
-    },
-    default_publication_policy: {
-      policy_id: IDS.successorPolicy,
-      version: 1,
-      path: `policies/${publicationPolicyFilename(IDS.successorPolicy, 1)}`,
-      sha256: sha256Digest(successorPolicyRaw),
-    },
-    active_installation_id: IDS.installation,
-    activated_at: REVISION_TWO_AT,
-    activation_reason: 'bundle-update',
-  };
+  const pointerPayload = testPointer({
+    manifestId: IDS.successorManifest,
+    manifestPath: `manifests/${identityManifestFilename(IDS.successorManifest)}`,
+    manifestSha256: sha256Digest(successorManifestRaw),
+    registryId: IDS.successorRegistry,
+    registryPath: `registries/${connectionRegistryFilename(IDS.successorRegistry, 1)}`,
+    registrySha256: sha256Digest(successorRegistryRaw),
+    policyId: IDS.successorPolicy,
+    policyPath: `policies/${publicationPolicyFilename(IDS.successorPolicy, 1)}`,
+    policySha256: sha256Digest(successorPolicyRaw),
+    installationId: IDS.installation,
+    activatedAt: REVISION_TWO_AT,
+    activationReason: 'bundle-update',
+  });
   const pointer = await signDocument(
     pointerPayload,
     fixture.signer,

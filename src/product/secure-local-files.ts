@@ -142,6 +142,22 @@ export function assertPrivateOwnedDirectory(path: string, label: string): void {
   }
 }
 
+export function assertPrivateOwnedRegularFile(
+  path: string,
+  mode: number,
+  invalid: () => never,
+): void {
+  const state = lstatSync(path);
+  if (
+    state.isSymbolicLink() ||
+    !state.isFile() ||
+    (state.mode & 0o777) !== mode ||
+    state.uid !== process.getuid?.()
+  ) {
+    invalid();
+  }
+}
+
 /** Require rename/entry creation in this directory to be controlled by us. */
 export function assertOwnerControlledDirectory(
   path: string,

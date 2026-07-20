@@ -1,21 +1,5 @@
-import {
-  chmodSync,
-  mkdtempSync,
-  mkdirSync,
-  realpathSync,
-  rmSync,
-} from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { rmSync } from "node:fs";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type {
-  AdapterBindingV1,
-  LocalConnectionRegistryV1,
-  LocalIdentityManifestV1,
-  PublicationPolicyV1,
-  ToolConnectionV1,
-} from "../../src/product/federation/contracts.js";
-import { canonicalSha256 } from "../../src/product/federation/canonical-json.js";
 import { federationId } from "../../src/product/federation/identifiers.js";
 import {
   checkFounderIdentity,
@@ -23,6 +7,14 @@ import {
 } from "../../src/product/federation/identity-check.js";
 import { createLocalCredentialGuard } from "../../src/product/federation/credential-guard.js";
 import { validateIdentityDocumentSemantics } from "../../src/product/federation/bundle-semantics.js";
+import {
+  createPrivateTestState,
+  slackConnectionFixture,
+  testBinding,
+  testManifest,
+  testPolicy,
+  testRegistry,
+} from "./fixtures/founder-identity.js";
 
 const NOW = "2026-07-19T20:00:00.000Z";
 const DIGEST = `sha256:${"1".repeat(64)}` as const;
@@ -36,12 +28,7 @@ afterEach(() => {
 });
 
 function privateState(): string {
-  const root = mkdtempSync(join(tmpdir(), "echo-identity-hardening-"));
-  temporary.push(root);
-  const state = join(realpathSync(root), "state");
-  mkdirSync(state, { mode: 0o700 });
-  chmodSync(state, 0o700);
-  return state;
+  return createPrivateTestState(temporary, "echo-identity-hardening-");
 }
 
 function slackConnection(
@@ -49,211 +36,101 @@ function slackConnection(
   tenantId: string,
   reference: string,
   credential: string,
-): ToolConnectionV1 {
-  return {
-    connection_id: federationId("con"),
-    organization_id: organizationId,
-    owner: { kind: "organization", id: organizationId },
-    provider: "slack",
-    generations: [
-      {
-        generation: 1,
-        active_from: NOW,
-        ended_at: null,
-        provider_identity: {
-          tenant: { kind: "slack-team", id: tenantId, enterprise_id: null },
-          subject: {
-            kind: "bot-installation",
-            id: `U_${tenantId}`,
-            bot_id: `B_${tenantId}`,
-            app_id: `A_${tenantId}`,
-          },
-          verification: {
-            method: "slack_auth_test",
-            assurance: "provider_verified",
-            verified_at: NOW,
-            evidence_sha256: DIGEST,
-          },
-        },
-        local_credential_guard: createLocalCredentialGuard(
-          reference,
-          credential,
-          Buffer.alloc(16, tenantId === "T_APPROVAL" ? 1 : 2),
-        ),
-      },
-    ],
-  };
+) {
+  return slackConnectionFixture({
+    connectionId: federationId("con"),
+    organizationId,
+    activeAt: NOW,
+    tenantId,
+    evidenceSha256: DIGEST,
+    credentialGuard: createLocalCredentialGuard(
+      reference,
+      credential,
+      Buffer.alloc(16, tenantId === "T_APPROVAL" ? 1 : 2),
+    ),
+  });
 }
 
 function activeBinding(
-  capability: AdapterBindingV1["capability"],
+  capability: "approval-surface" | "delivery-surface",
   adapterId: string,
   instanceId: string,
   connectionId: string,
-): AdapterBindingV1 {
-  return {
-    adapter_binding_id: federationId("bnd"),
+) {
+  return testBinding({
+    adapterBindingId: federationId("bnd"),
     capability,
-    adapter_id: adapterId,
-    instance_id: instanceId,
-    connection_id: connectionId,
-    connection_generation: 1,
-    configuration_snapshot: {},
-    configuration_sha256: canonicalSha256({}),
-    created_at: NOW,
-    ended_at: null,
-    status: "active",
-  };
+    adapterId,
+    instanceId,
+    connectionId,
+    createdAt: NOW,
+  });
 }
 
-function semanticFixture(claimTenant: string): {
-  manifest: Omit<LocalIdentityManifestV1, "integrity">;
-  registry: Omit<LocalConnectionRegistryV1, "integrity">;
-  policy: Omit<PublicationPolicyV1, "integrity">;
-} {
-  const organizationId = federationId("org");
-  const principalId = federationId("prn");
-  const membershipId = federationId("mem");
-  const installationId = federationId("ins");
-  const manifestId = federationId("idm");
+function semanticFixture(claimTenant: string) {
+  const ids = {
+    organization: federationId("org"),
+    principal: federationId("prn"),
+    membership: federationId("mem"),
+    device: federationId("dev"),
+    installation: federationId("ins"),
+    manifest: federationId("idm"),
+    claim: federationId("clm"),
+  };
   const approval = slackConnection(
-    organizationId,
+    ids.organization,
     "T_APPROVAL",
     "file:/private/slack-approval-token",
     "approval-token",
   );
   const decoy = slackConnection(
-    organizationId,
+    ids.organization,
     "T_DECOY",
     "file:/private/slack-decoy-token",
     "decoy-token",
   );
-  return {
-    manifest: {
-      schema_version: 1,
-      kind: "echo-local-identity-manifest",
-      manifest_id: manifestId,
-      predecessor_manifest_id: null,
-      created_at: NOW,
-      authority: {
-        kind: "local-founder-bootstrap",
-        assurance: "founder_attested",
-      },
-      organization: {
-        organization_id: organizationId,
-        display_name: "EchoBrain",
-        created_at: NOW,
-      },
-      principal: {
-        principal_id: principalId,
-        organization_id: organizationId,
-        kind: "human",
-        display_name: "Founder",
-      },
-      membership: {
-        membership_id: membershipId,
-        organization_id: organizationId,
-        principal_id: principalId,
-        type: "owner",
-        status: "active",
-        valid_from: NOW,
-      },
-      installation: {
-        installation_id: installationId,
-        organization_id: organizationId,
-        membership_id: membershipId,
-        device_id: federationId("dev"),
-        device_class: "byod",
-        enrolled_at: NOW,
-        product: {
-          name: "echo-brain",
-          version: "0.1.0-dev.6",
-          source_sha: "a".repeat(40),
-        },
-        signing_key: {
-          key_id: DIGEST,
-          algorithm: "ecdsa-p256-sha256-der-low-s",
-          public_key_spki_der_base64: "AQ==",
-          protection: "secure-enclave",
-          assurance: "hardware_bound",
-        },
-      },
-      identity_claims: [
-        {
-          claim_id: federationId("clm"),
-          principal_id: principalId,
-          issuer: {
-            kind: "provider",
-            provider: "slack",
-            tenant_id: claimTenant,
-          },
-          subject: { kind: "user", id: "U_FOUNDER" },
-          verification: {
-            method: "slack_dm_challenge",
-            assurance: "provider_challenge_observed",
-            verified_at: NOW,
-            evidence_sha256: DIGEST,
-          },
-        },
-      ],
-      legacy_cutover: {
-        declared_at: NOW,
-        pre_cutover_default: "disposable_test",
-        native_records_require: [
-          "source-attribution-v1",
-          "processor-attribution-v1",
-          "approval-context-v1",
-          "signed-outbox-v1",
-        ],
-      },
+  const manifest = testManifest({
+    ids,
+    at: NOW,
+    claimTenant,
+    claimSubject: "U_FOUNDER",
+    key: {
+      key_id: DIGEST,
+      algorithm: "ecdsa-p256-sha256-der-low-s",
+      public_key_spki_der_base64: "AQ==",
+      protection: "secure-enclave",
+      assurance: "hardware_bound",
     },
-    registry: {
-      schema_version: 1,
-      kind: "echo-local-connection-registry",
-      registry_id: federationId("reg"),
-      identity_manifest_id: manifestId,
-      revision: 1,
-      previous_registry_sha256: null,
-      updated_at: NOW,
-      connections: [approval, decoy],
-      bindings: [
-        activeBinding(
-          "approval-surface",
-          "slack-reactions",
-          "founder-approval",
-          approval.connection_id,
-        ),
-        activeBinding(
-          "delivery-surface",
-          "slack",
-          "decoy-delivery",
-          decoy.connection_id,
-        ),
-      ],
-    },
-    policy: {
-      schema_version: 1,
-      kind: "echo-publication-policy",
-      policy_id: federationId("pol"),
-      organization_id: organizationId,
-      identity_manifest_id: manifestId,
-      issued_by: { installation_id: installationId, key_id: DIGEST },
-      version: 1,
-      effective_at: NOW,
-      publication: {
-        payload_scope:
-          "approved-signal-with-meeting-context-brief-digest-and-bounded-evidence",
-        audience: {
-          scope: "organization",
-          subjects: [{ kind: "organization", id: organizationId }],
-        },
-        sensitivity: "internal",
-        retention: { kind: "indefinite" },
-        raw_meeting_content: "local-only",
-        participant_observations: "included-namespaced",
-      },
-    },
-  };
+  });
+  const registry = testRegistry({
+    registryId: federationId("reg"),
+    manifestId: ids.manifest,
+    updatedAt: NOW,
+    connections: [approval, decoy],
+    bindings: [
+      activeBinding(
+        "approval-surface",
+        "slack-reactions",
+        "founder-approval",
+        approval.connection_id,
+      ),
+      activeBinding(
+        "delivery-surface",
+        "slack",
+        "decoy-delivery",
+        decoy.connection_id,
+      ),
+    ],
+  });
+  const policy = testPolicy({
+    policyId: federationId("pol"),
+    organizationId: ids.organization,
+    manifestId: ids.manifest,
+    installationId: ids.installation,
+    keyId: DIGEST,
+    effectiveAt: NOW,
+  });
+  return { manifest, registry, policy };
 }
 
 describe("active connection credential continuity", () => {

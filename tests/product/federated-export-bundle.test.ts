@@ -1,9 +1,4 @@
 import {
-  generateKeyPairSync,
-  sign as signMessage,
-  type KeyObject,
-} from 'node:crypto';
-import {
   chmodSync,
   lstatSync,
   mkdtempSync,
@@ -26,7 +21,6 @@ import {
 } from '../../src/product/federation/export-bundle.js';
 import {
   canonicalJson,
-  canonicalSha256,
   sha256Digest,
 } from '../../src/product/federation/canonical-json.js';
 import type {
@@ -34,7 +28,6 @@ import type {
   FederatedExportManifestV1,
   FederationId,
   LocalIdentityManifestV1,
-  ProductArtifactIdentityV1,
   PublicationPolicyV1,
   Sha256Digest,
 } from '../../src/product/federation/contracts.js';
@@ -44,21 +37,18 @@ import type {
   VerifiedHistoricalPublicationPolicy,
 } from '../../src/product/federation/identity-lineage-store.js';
 import type {
-  InstallationKeyDescriptor,
-  InstallationSigner,
-} from '../../src/product/federation/installation-signer.js';
-import type {
   StoredFederatedOutboxEvent,
   VerifiedFederatedChain,
 } from '../../src/product/federation/outbox-store.js';
 import {
-  normalizeP256LowS,
-  p256KeyId,
-} from '../../src/product/federation/signature-profile.js';
-import {
   createSignedDocument,
   signedPayload,
 } from '../../src/product/federation/signed-document.js';
+import {
+  CountingInstallationSigner as TestSigner,
+  federatedApprovalGroupDrafts,
+  signFederatedApprovalGroupDrafts,
+} from './fixtures/federated-records.js';
 
 const ROOT_TIME = '2026-07-19T20:00:00.000Z';
 const CURRENT_TIME = '2026-07-19T20:10:00.000Z';
@@ -81,7 +71,6 @@ const EARLY_POLICY_ID = 'pol_00000000-0000-4000-8000-000000000002';
 const SOURCE_BINDING_ID = 'bnd_00000000-0000-4000-8000-000000000001';
 const PROCESSOR_BINDING_ID = 'bnd_00000000-0000-4000-8000-000000000002';
 const SOURCE_CONNECTION_ID = 'con_00000000-0000-4000-8000-000000000001';
-const OBSERVATION_ID = 'obs_00000000-0000-4000-8000-000000000001';
 const EXPORT_ID = 'exp_00000000-0000-4000-8000-000000000001';
 const DIGEST_A = `sha256:${'a'.repeat(64)}` as const;
 const DIGEST_B = `sha256:${'b'.repeat(64)}` as const;
@@ -99,61 +88,6 @@ afterEach(() => {
     rmSync(path, { recursive: true, force: true });
   }
 });
-
-class TestSigner implements InstallationSigner {
-  private readonly privateKey: KeyObject;
-  readonly descriptor: InstallationKeyDescriptor;
-  signCalls = 0;
-
-  constructor(private readonly installationId = INSTALLATION_ID) {
-    const { privateKey, publicKey } = generateKeyPairSync('ec', {
-      namedCurve: 'prime256v1',
-    });
-    const publicKeyDer = publicKey.export({ type: 'spki', format: 'der' });
-    this.privateKey = privateKey;
-    this.descriptor = {
-      installation_id: installationId,
-      key_id: p256KeyId(publicKeyDer),
-      algorithm: 'ecdsa-p256-sha256-der-low-s',
-      public_key_spki_der_base64: publicKeyDer.toString('base64'),
-      protection: 'secure-enclave',
-      assurance: 'hardware_bound',
-      private_key_exportable: false,
-    };
-  }
-
-  async generate(installationId: string): Promise<InstallationKeyDescriptor> {
-    if (installationId !== this.installationId)
-      throw new Error('unknown installation');
-    return this.descriptor;
-  }
-
-  async inspect(
-    installationId: string,
-  ): Promise<InstallationKeyDescriptor | null> {
-    return installationId === this.installationId ? this.descriptor : null;
-  }
-
-  async sign(
-    installationId: string,
-    message: Buffer,
-    expectedKeyId?: Sha256Digest,
-  ): Promise<Buffer> {
-    if (
-      installationId !== this.installationId ||
-      expectedKeyId !== this.descriptor.key_id
-    ) {
-      throw new Error('test signer identity mismatch');
-    }
-    this.signCalls += 1;
-    return normalizeP256LowS(
-      signMessage('sha256', message, {
-        key: this.privateKey,
-        dsaEncoding: 'der',
-      }),
-    );
-  }
-}
 
 class FixtureIdentitySource implements FederatedExportIdentitySource {
   private readonly activeManifestId: string;
@@ -390,14 +324,6 @@ async function signedPolicy(
   );
 }
 
-function productArtifact(): ProductArtifactIdentityV1 {
-  return {
-    product_version: '0.1.0-dev.7',
-    source_sha: '1'.repeat(40),
-    artifact_sha256: DIGEST_A,
-  };
-}
-
 async function signedEventGroup(
   signer: TestSigner,
   manifest: LocalIdentityManifestV1,
@@ -424,351 +350,62 @@ async function signedEventGroup(
     mutate_approval?: (approval: FederatedEventV1['approval']) => void;
   } = {},
 ): Promise<StoredFederatedOutboxEvent[]> {
-  const sequenceOffset = options.sequence_offset ?? 0;
   const approvalId = options.approval_id ?? APPROVAL_ID;
   const eventTime = options.event_time ?? EVENT_TIME;
-  const decision = {
-    id: options.decision_id ?? DECISION_ID,
-    kind: 'decision',
-    text: 'Ship the deterministic federated export.',
-    subject: null,
-    confidence: 0.95,
-    evidence: [],
-    status: 'decided',
-  } as const;
-  const action = {
-    id: options.action_id ?? ACTION_ID,
-    kind: 'action',
-    text: 'Verify the exact exported bytes.',
-    subject: null,
-    confidence: 0.9,
-    evidence: [],
-    owner: null,
-    due_at: null,
-  } as const;
-  const signalManifest = [
-    {
-      signal_id: decision.id,
-      kind: decision.kind,
-      position_within_kind: 0,
-      sha256: canonicalSha256(decision),
+  const drafts = federatedApprovalGroupDrafts({
+    signer,
+    occurredAt: eventTime,
+    approvalId,
+    decisionId: options.decision_id ?? DECISION_ID,
+    actionId: options.action_id ?? ACTION_ID,
+    digests: { a: DIGEST_A, b: DIGEST_B, c: DIGEST_C },
+    organizationId: ORG_ID,
+    principalId: PRINCIPAL_ID,
+    membershipId: MEMBERSHIP_ID,
+    manifestId: manifest.manifest_id,
+    manifestSha256,
+    sourceManifestId: options.source_identity?.manifest_id,
+    sourceManifestSha256: options.source_identity?.sha256,
+    processorManifestId: options.processor_identity?.manifest_id,
+    processorManifestSha256: options.processor_identity?.sha256,
+    sourceBindingId: SOURCE_BINDING_ID,
+    processorBindingId: PROCESSOR_BINDING_ID,
+    sourceConnectionId: SOURCE_CONNECTION_ID,
+    policy: {
+      policyId: policy.policy_id,
+      version: policy.version,
+      sha256: sha256Digest(canonicalJson(policy)),
+      identityManifestId: policy.identity_manifest_id,
+      signerInstallationId: policy.issued_by.installation_id,
+      signerKeyId: policy.issued_by.key_id,
+      publication: policy.publication,
     },
-    {
-      signal_id: action.id,
-      kind: action.kind,
-      position_within_kind: 0,
-      sha256: canonicalSha256(action),
-    },
-  ] as const;
-  const approvedBriefSha256 = canonicalSha256({
-    meeting: MEETING_ID,
-    signals: signalManifest,
+    productVersion: '0.1.0-dev.7',
+    idOffset: options.sequence_offset,
+    meetingId: MEETING_ID,
+    meetingTitle: 'Federated export fixture',
+    briefId: 'brief-export-fixture',
+    nodeId: `${NODE_ID}-${approvalId}`,
+    processingKey: PROCESSING_KEY,
+    sourceExternalId: 'granola-note-1',
+    sourceRevision: 'revision-1',
+    decisionText: 'Ship the deterministic federated export.',
+    actionText: 'Verify the exact exported bytes.',
+    approvalReason: 'Founder approved the fixture.',
+    slackClaimId: options.slack_claim_id,
   });
-  const artifact = productArtifact();
-  const signals = [decision, action] as const;
-  const stored: StoredFederatedOutboxEvent[] = [];
-  let previousHash: Sha256Digest | null = options.previous_event_hash ?? null;
-
-  for (let index = 0; index < signals.length; index += 1) {
-    const signal = signals[index]!;
-    const sequence = sequenceOffset + index + 1;
-    const eventId = `evt_00000000-0000-4000-8000-${sequence
-      .toString()
-      .padStart(12, '0')}`;
-    const recordId = `rec_00000000-0000-4000-8000-${sequence
-      .toString()
-      .padStart(12, '0')}`;
-    const record: FederatedEventV1['record'] =
-      signal.kind === 'decision'
-        ? {
-            record_id: recordId,
-            kind: 'decision',
-            signal_id: signal.id,
-            signal,
-            meeting_context: {
-              id: MEETING_ID,
-              title: 'Federated export fixture',
-              participants: [],
-            },
-            approval_group: {
-              brief_schema_version: 1,
-              brief_id: 'brief-export-fixture',
-              approved_brief_sha256: approvedBriefSha256,
-              signal_manifest: signalManifest,
-            },
-          }
-        : {
-            record_id: recordId,
-            kind: 'action',
-            signal_id: signal.id,
-            signal,
-            meeting_context: {
-              id: MEETING_ID,
-              title: 'Federated export fixture',
-              participants: [],
-            },
-            approval_group: {
-              brief_schema_version: 1,
-              brief_id: 'brief-export-fixture',
-              approved_brief_sha256: approvedBriefSha256,
-              signal_manifest: signalManifest,
-            },
-          };
-    const payload = {
-      schema_version: 1,
-      kind: 'echo-federated-event',
-      event_type: 'approved-org-record',
-      event_id: eventId,
-      organization_id: ORG_ID,
-      sequence,
-      previous_event_hash: previousHash,
-      occurred_at: eventTime,
-      producer: {
-        principal_id: PRINCIPAL_ID,
-        membership_id: MEMBERSHIP_ID,
-        installation_id: manifest.installation.installation_id,
-        key_id: signer.descriptor.key_id,
-        membership_assertion: {
-          status: 'active',
-          authority: 'local-founder-bootstrap',
-          assurance: 'founder_attested',
-        },
-        product_artifact: artifact,
-      },
-      source: {
-        identity_manifest_id:
-          options.source_identity?.manifest_id ?? manifest.manifest_id,
-        identity_manifest_sha256:
-          options.source_identity?.sha256 ?? manifestSha256,
-        binding: {
-          adapter_binding_id: SOURCE_BINDING_ID,
-          adapter: {
-            kind: 'meeting-source',
-            adapter_id: 'granola',
-            instance_id: 'primary',
-            version: '2.2.0',
-          },
-          configuration_snapshot: { page_size: 100 },
-          configuration_sha256: canonicalSha256({ page_size: 100 }),
-        },
-        connection: {
-          connection_id: SOURCE_CONNECTION_ID,
-          generation: 1,
-          owner: { kind: 'membership', id: MEMBERSHIP_ID },
-          provider_identity: {
-            provider: 'granola',
-            tenant: null,
-            subject: null,
-            verification_method: 'provider_first_capture',
-            assurance: 'credential_observed',
-          },
-        },
-        meeting: {
-          external_id: 'granola-note-1',
-          revision: 'revision-1',
-          source_observation_id: OBSERVATION_ID,
-          document_sha256: DIGEST_A,
-        },
-        participant_observations: [],
-        attribution_sha256: DIGEST_B,
-        observed_by: artifact,
-      },
-      processor: {
-        identity_manifest_id:
-          options.processor_identity?.manifest_id ?? manifest.manifest_id,
-        identity_manifest_sha256:
-          options.processor_identity?.sha256 ?? manifestSha256,
-        adapter_binding_id: PROCESSOR_BINDING_ID,
-        adapter: {
-          kind: 'decision-processor',
-          adapter_id: 'llm',
-          instance_id: 'ollama',
-          version: '1.0.0',
-        },
-        configuration_snapshot: { model: 'qwen3:4b' },
-        configuration_sha256: canonicalSha256({ model: 'qwen3:4b' }),
-        attribution_sha256: DIGEST_C,
-        decision_set_sha256: DIGEST_A,
-        generated_at: eventTime,
-        produced_by: artifact,
-      },
-      local_reference: {
-        processing_key: PROCESSING_KEY,
-        approval_id: approvalId,
-        node_id: `${NODE_ID}-${approvalId}`,
-        meeting_id: MEETING_ID,
-        signal_id: signal.id,
-      },
-      record,
-      approval:
-        options.slack_claim_id === undefined
-          ? {
-              surface: null,
-              approver: {
-                principal_id: PRINCIPAL_ID,
-                membership_id: MEMBERSHIP_ID,
-                claim_id: null,
-              },
-              raw_actor_assertion: {
-                surface: 'cli',
-                installation_id: manifest.installation.installation_id,
-                reviewer_label: 'founder',
-                command: 'approve',
-                observed_at: eventTime,
-              },
-              assurance: 'installation_holder_self_attested',
-              reviewed_at: eventTime,
-              reason: 'Founder approved the fixture.',
-              approved_brief_sha256: approvedBriefSha256,
-              approved_context_sha256: DIGEST_B,
-              observed_by: artifact,
-            }
-          : {
-              surface: {
-                binding: {
-                  adapter_binding_id:
-                    'bnd_00000000-0000-4000-8000-000000000003',
-                  adapter: {
-                    kind: 'approval-surface',
-                    adapter_id: 'slack-reactions',
-                    instance_id: 'founder-approval',
-                    version: '1.0.0',
-                  },
-                  configuration_snapshot: {
-                    channel_id: 'C123',
-                    approve_reaction: 'white_check_mark',
-                    reject_reaction: 'x',
-                  },
-                  configuration_sha256: canonicalSha256({
-                    channel_id: 'C123',
-                    approve_reaction: 'white_check_mark',
-                    reject_reaction: 'x',
-                  }),
-                },
-                connection: {
-                  connection_id: 'con_00000000-0000-4000-8000-000000000002',
-                  generation: 1,
-                  owner: { kind: 'organization', id: ORG_ID },
-                  provider_identity: {
-                    provider: 'slack',
-                    team_id: 'T123',
-                    enterprise_id: null,
-                    bot_user_id: 'U999',
-                    bot_id: 'B123',
-                    app_id: 'A123',
-                  },
-                },
-                presentation: {
-                  channel_id: 'C123',
-                  message_ts: '1752956990.000100',
-                  rendered_blocks_sha256: DIGEST_A,
-                },
-              },
-              observation: {
-                binding: {
-                  adapter_binding_id:
-                    'bnd_00000000-0000-4000-8000-000000000003',
-                  adapter: {
-                    kind: 'approval-surface',
-                    adapter_id: 'slack-reactions',
-                    instance_id: 'founder-approval',
-                    version: '1.0.0',
-                  },
-                  configuration_snapshot: {
-                    channel_id: 'C123',
-                    approve_reaction: 'white_check_mark',
-                    reject_reaction: 'x',
-                  },
-                  configuration_sha256: canonicalSha256({
-                    channel_id: 'C123',
-                    approve_reaction: 'white_check_mark',
-                    reject_reaction: 'x',
-                  }),
-                },
-                connection: {
-                  connection_id: 'con_00000000-0000-4000-8000-000000000002',
-                  generation: 1,
-                  owner: { kind: 'organization', id: ORG_ID },
-                  provider_identity: {
-                    provider: 'slack',
-                    team_id: 'T123',
-                    enterprise_id: null,
-                    bot_user_id: 'U999',
-                    bot_id: 'B123',
-                    app_id: 'A123',
-                  },
-                },
-                observed_by: artifact,
-              },
-              approver: {
-                principal_id: PRINCIPAL_ID,
-                membership_id: MEMBERSHIP_ID,
-                claim_id: options.slack_claim_id,
-              },
-              raw_actor_assertion: {
-                provider: 'slack',
-                tenant_id: 'T123',
-                subject_id: 'U123',
-                display_name: 'Founder',
-                channel_id: 'C123',
-                message_ts: '1752956990.000100',
-                action: {
-                  kind: 'reaction',
-                  name: 'white_check_mark',
-                  provider_occurred_at: null,
-                  observed_at: eventTime,
-                },
-                reason_reply: null,
-              },
-              assurance: 'provider_challenge_observed',
-              reviewed_at: eventTime,
-              reason: null,
-              approved_brief_sha256: approvedBriefSha256,
-              approved_context_sha256: DIGEST_B,
-            },
-      publication: {
-        policy_id: policy.policy_id,
-        version: policy.version,
-        policy_sha256: sha256Digest(canonicalJson(policy)),
-        identity_manifest_id: policy.identity_manifest_id,
-        signer_installation_id: policy.issued_by.installation_id,
-        signer_key_id: policy.issued_by.key_id,
-        ...policy.publication,
-      },
-      classification: 'native_attributed',
-      identity_manifest_sha256: manifestSha256,
-    } satisfies Omit<FederatedEventV1, 'integrity'>;
-    options.mutate_source?.(payload.source as FederatedEventV1['source']);
-    options.mutate_processor?.(
-      payload.processor as FederatedEventV1['processor'],
-    );
-    options.mutate_approval?.(payload.approval as FederatedEventV1['approval']);
-    const envelope = await createSignedDocument(
-      payload,
-      signer,
-      manifest.installation.installation_id,
-      signer.descriptor.key_id,
-    );
-    const envelopeJson = canonicalJson(envelope);
-    const eventHash = sha256Digest(envelopeJson);
-    stored.push({
-      event_id: eventId,
-      installation_id: manifest.installation.installation_id,
-      sequence,
-      event_type: 'approved-org-record',
-      local_subject_key: `approved-org-record:${approvalId}:${signal.id}`,
-      previous_event_hash: previousHash,
-      event_hash: eventHash,
-      envelope_json: envelopeJson,
-      envelope_bytes: Buffer.from(envelopeJson, 'utf8'),
-      envelope,
-      created_at: eventTime,
-    });
-    previousHash = eventHash;
+  for (const draft of drafts) {
+    options.mutate_source?.(draft.envelope.source);
+    options.mutate_processor?.(draft.envelope.processor);
+    options.mutate_approval?.(draft.envelope.approval);
   }
-  return stored;
+  return signFederatedApprovalGroupDrafts({
+    signer,
+    drafts,
+    sequenceOffset: options.sequence_offset,
+    previousEventHash: options.previous_event_hash,
+  });
 }
-
 async function fixture(): Promise<Fixture> {
   const signer = new TestSigner();
   const rootManifest = await createSignedDocument(
@@ -965,6 +602,68 @@ describe('deterministic federated export bundle', () => {
     ).rejects.toThrow('incomplete in the export range');
     expect(value.signer.signCalls).toBe(signCalls);
     expect(readdirSync(value.root)).toEqual([]);
+  });
+
+  it('preserves export errors for each signal-manifest invariant', async () => {
+    const value = await fixture();
+    const cases = [
+      {
+        message: 'duplicate signal IDs',
+        mutate: (
+          manifest: FederatedEventV1['record']['approval_group']['signal_manifest'],
+        ) => [...manifest, manifest[0]!],
+      },
+      {
+        message: 'non-contiguous signal positions',
+        mutate: (
+          manifest: FederatedEventV1['record']['approval_group']['signal_manifest'],
+        ) => [
+          { ...manifest[0]!, position_within_kind: 1 },
+          ...manifest.slice(1),
+        ],
+      },
+      {
+        message: 'non-canonical signal manifest',
+        mutate: (
+          manifest: FederatedEventV1['record']['approval_group']['signal_manifest'],
+        ) => [...manifest].reverse(),
+      },
+    ];
+
+    for (const item of cases) {
+      const events = value.events.map((stored) => ({
+        ...stored,
+        envelope: {
+          ...stored.envelope,
+          record: {
+            ...stored.envelope.record,
+            approval_group: {
+              ...stored.envelope.record.approval_group,
+              signal_manifest: item.mutate(
+                stored.envelope.record.approval_group.signal_manifest,
+              ),
+            },
+          },
+        } as FederatedEventV1,
+      }));
+      const signCalls = value.signer.signCalls;
+      await expect(
+        createFederatedExportBundle({
+          ...value.request,
+          output_root: outputRoot(),
+          outbox: new FixtureOutbox({
+            head: {
+              installation_id: INSTALLATION_ID,
+              last_sequence: events.length,
+              last_event_hash: events.at(-1)!.event_hash,
+              updated_at: EVENT_TIME,
+            },
+            events,
+          }),
+        }),
+      ).rejects.toThrow(item.message);
+      expect(value.signer.signCalls).toBe(signCalls);
+    }
   });
 
   it('rejects creation and offline verification when generated_at precedes an exported event', async () => {

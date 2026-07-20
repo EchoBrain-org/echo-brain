@@ -1,9 +1,4 @@
 import {
-  generateKeyPairSync,
-  sign as signMessage,
-  type KeyObject,
-} from 'node:crypto';
-import {
   chmodSync,
   mkdirSync,
   mkdtempSync,
@@ -35,16 +30,13 @@ import {
   statusFounderBootstrap,
   type FounderBootstrapCeremonyDependencies,
 } from '../../src/product/federation/founder-bootstrap-ceremony.js';
-import type {
-  InstallationKeyDescriptor,
-  InstallationSigner,
-} from '../../src/product/federation/installation-signer.js';
 import type { FounderFederationRuntime } from '../../src/product/federation/runtime-wiring.js';
-import {
-  normalizeP256LowS,
-  p256KeyId,
-} from '../../src/product/federation/signature-profile.js';
 import type { SlackDmChallengeApi } from '../../src/product/federation/slack-dm-challenge.js';
+import {
+  founderRuntimeConfig,
+  TestHardwareSigner,
+} from './fixtures/founder-identity.js';
+import { approvalRequestFixture } from './fixtures/federated-records.js';
 
 const NOW = '2026-07-19T23:30:00.000Z';
 const roots: string[] = [];
@@ -54,59 +46,6 @@ afterEach(() => {
     rmSync(root, { recursive: true, force: true });
   }
 });
-
-class TestHardwareSigner implements InstallationSigner {
-  private readonly keys = new Map<
-    string,
-    { privateKey: KeyObject; descriptor: InstallationKeyDescriptor }
-  >();
-
-  async generate(installationId: string): Promise<InstallationKeyDescriptor> {
-    const existing = this.keys.get(installationId);
-    if (existing !== undefined) return existing.descriptor;
-    const { privateKey, publicKey } = generateKeyPairSync('ec', {
-      namedCurve: 'prime256v1',
-    });
-    const publicKeyDer = publicKey.export({ type: 'spki', format: 'der' });
-    const descriptor: InstallationKeyDescriptor = {
-      installation_id: installationId,
-      key_id: p256KeyId(publicKeyDer),
-      algorithm: 'ecdsa-p256-sha256-der-low-s',
-      public_key_spki_der_base64: publicKeyDer.toString('base64'),
-      protection: 'secure-enclave',
-      assurance: 'hardware_bound',
-      private_key_exportable: false,
-    };
-    this.keys.set(installationId, { privateKey, descriptor });
-    return descriptor;
-  }
-
-  async inspect(
-    installationId: string,
-  ): Promise<InstallationKeyDescriptor | null> {
-    return this.keys.get(installationId)?.descriptor ?? null;
-  }
-
-  async sign(
-    installationId: string,
-    message: Buffer,
-    expectedKeyId?: `sha256:${string}`,
-  ): Promise<Buffer> {
-    const key = this.keys.get(installationId);
-    if (
-      key === undefined ||
-      (expectedKeyId !== undefined && expectedKeyId !== key.descriptor.key_id)
-    ) {
-      throw new Error('test installation signing identity mismatch');
-    }
-    return normalizeP256LowS(
-      signMessage('sha256', message, {
-        key: key.privateKey,
-        dsaEncoding: 'der',
-      }),
-    );
-  }
-}
 
 function output() {
   let value = '';
@@ -122,42 +61,19 @@ function output() {
 }
 
 function runtimeConfigFor(stateDirectory: string): ProductRuntimeConfig {
-  const credentialDirectory = join(stateDirectory, 'credentials');
-  return {
-    schema_version: 1,
-    lane: 'team-product',
-    state_dir: stateDirectory,
-    meeting_sources: [
-      {
-        adapter_id: 'granola',
-        instance_id: 'primary',
-        credential_ref: `file:${join(credentialDirectory, 'granola-api-key')}`,
-        settings: { page_size: 1 },
-      },
-    ],
-    decision_processor: {
-      adapter_id: 'structured-text',
-      instance_id: 'primary',
-      settings: {},
+  const config = founderRuntimeConfig(stateDirectory);
+  config.delivery_surfaces = [
+    {
+      adapter_id: 'jsonl-outbox',
+      instance_id: 'local',
+      settings: { path: join(stateDirectory, 'delivery', 'decisions.jsonl') },
     },
-    delivery_surfaces: [
-      {
-        adapter_id: 'jsonl-outbox',
-        instance_id: 'local',
-        settings: { path: join(stateDirectory, 'delivery', 'decisions.jsonl') },
-      },
-    ],
-    approval_mode: 'adapter',
-    approval_surface: {
-      adapter_id: 'slack-reactions',
-      instance_id: 'founder-approval',
-      credential_ref: `file:${join(credentialDirectory, 'slack-bot-token')}`,
-      settings: {
-        channel_id: 'C123APPROVALS',
-        reviewer: { slack_user_id: 'U123FOUNDER', name: 'Founder' },
-      },
-    },
+  ];
+  config.approval_surface!.settings = {
+    channel_id: 'C123APPROVALS',
+    reviewer: { slack_user_id: 'U123FOUNDER', name: 'Founder' },
   };
+  return config;
 }
 
 class BootstrapSlackApi implements SlackDmChallengeApi {
@@ -261,45 +177,34 @@ async function bootstrapIdentity(stateDirectory: string) {
 }
 
 function pendingNode(): DecisionNodeState {
+  const brief = approvalRequestFixture({
+    now: NOW,
+    meetingId: 'meeting-cli-retry',
+    externalId: 'meeting-cli-retry',
+    revision: 'revision-cli-retry',
+    title: 'Projection retry',
+    processingKey: 'processing:v1:cli-retry',
+    briefId: 'brief-cli-retry',
+    actualStartAt: NOW,
+  }).brief;
+  brief.decisions = [
+    {
+      id: 'decision-cli-retry',
+      kind: 'decision',
+      text: 'Retry the exact approved projection',
+      subject: null,
+      confidence: 1,
+      evidence: [],
+      status: 'decided',
+    },
+  ];
   return {
     approval_id: 'a'.repeat(64),
     node_id: 'node-cli-retry',
     processing_key: 'processing:v1:cli-retry',
     requested_at: NOW,
     requested_metadata: { federation: { identity_manifest_id: 'test' } },
-    brief: {
-      schema_version: 1,
-      id: 'brief-cli-retry',
-      meeting: {
-        id: 'meeting-cli-retry',
-        title: 'Projection retry',
-        time: { actual_start_at: NOW },
-        participants: [],
-      },
-      decisions: [
-        {
-          id: 'decision-cli-retry',
-          kind: 'decision',
-          text: 'Retry the exact approved projection',
-          subject: null,
-          confidence: 1,
-          evidence: [],
-          status: 'decided',
-        },
-      ],
-      actions: [],
-      rationales: [],
-      provenance: {
-        meeting_revision: 'revision-cli-retry',
-        processor: {
-          kind: 'decision-processor',
-          adapter_id: 'structured-text',
-          instance_id: 'primary',
-          version: '1.0.0',
-        },
-        generated_at: NOW,
-      },
-    },
+    brief,
     alternatives: [],
     links: { parent: null, supersedes: null },
     status: 'pending',
@@ -311,71 +216,18 @@ function pendingNode(): DecisionNodeState {
     published: [],
   };
 }
-
 function legacyApprovalRequest(): ApprovalRequest {
-  return {
-    processing_key: 'legacy:dev6:meeting:revision:processor:primary:1.0.0',
-    requested_at: NOW,
-    meeting: {
-      schema_version: 1,
-      id: 'legacy-meeting',
-      title: 'DEV.6 rehearsal',
-      time: { actual_start_at: NOW },
-      capture: { state: 'complete', components: [] },
-      participants: [],
-      content: [],
-      artifacts: [],
-      provenance: {
-        source: {
-          kind: 'meeting-source',
-          adapter_id: 'granola',
-          instance_id: 'primary',
-          version: '2.2.0',
-        },
-        external_id: 'legacy-external',
-        canonical_revision: 'legacy-revision',
-        observed_at: NOW,
-        normalizer_version: '1.0.0',
-        source_updated_at: NOW,
-      },
-    },
-    decisions: {
-      schema_version: 1,
-      meeting_id: 'legacy-meeting',
-      meeting_revision: 'legacy-revision',
-      processor: {
-        kind: 'decision-processor',
-        adapter_id: 'structured-text',
-        instance_id: 'primary',
-        version: '1.0.0',
-      },
-      generated_at: NOW,
-      signals: [],
-    },
-    brief: {
-      schema_version: 1,
-      id: 'legacy-brief',
-      meeting: {
-        id: 'legacy-meeting',
-        title: 'DEV.6 rehearsal',
-        time: { actual_start_at: NOW },
-        participants: [],
-      },
-      decisions: [],
-      actions: [],
-      rationales: [],
-      provenance: {
-        meeting_revision: 'legacy-revision',
-        processor: {
-          kind: 'decision-processor',
-          adapter_id: 'structured-text',
-          instance_id: 'primary',
-          version: '1.0.0',
-        },
-        generated_at: NOW,
-      },
-    },
-  };
+  return approvalRequestFixture({
+    now: NOW,
+    meetingId: 'legacy-meeting',
+    externalId: 'legacy-external',
+    revision: 'legacy-revision',
+    title: 'DEV.6 rehearsal',
+    processingKey: 'legacy:dev6:meeting:revision:processor:primary:1.0.0',
+    briefId: 'legacy-brief',
+    actualStartAt: NOW,
+    sourceUpdatedAt: NOW,
+  });
 }
 
 function emptyCycleFactories(): ProductAdapterFactoryRegistry {

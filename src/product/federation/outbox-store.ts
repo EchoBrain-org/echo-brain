@@ -10,6 +10,7 @@ import {
   parseCanonicalJson,
   sha256Digest,
 } from './canonical-json.js';
+import { analyzeApprovalGroup } from './approval-group-invariants.js';
 import type {
   FederatedEventV1,
   FederationId,
@@ -223,31 +224,6 @@ function expectedLocalSubjectKey(
   return `${EVENT_TYPE}:${event.local_reference.approval_id}:${event.local_reference.signal_id}`;
 }
 
-function signalPosition(
-  event: FederatedEventV1 | FederatedEventDraftV1,
-): number {
-  const matches = event.record.approval_group.signal_manifest.filter(
-    (item) => item.signal_id === event.record.signal_id,
-  );
-  if (matches.length !== 1 || matches[0]!.kind !== event.record.kind) {
-    throw new Error(
-      'federated approval group must identify each record exactly once',
-    );
-  }
-  return matches[0]!.position_within_kind;
-}
-
-function kindOrder(kind: FederatedEventV1['record']['kind']): number {
-  switch (kind) {
-    case 'decision':
-      return 0;
-    case 'action':
-      return 1;
-    case 'rationale':
-      return 2;
-  }
-}
-
 function retryComparableEnvelope(
   event: FederatedEventV1 | FederatedEventDraftV1,
 ): string {
@@ -330,54 +306,6 @@ function exactPersistedRetry(
   return undefined;
 }
 
-function siblingSharedFacts(
-  event: FederatedEventV1 | FederatedEventDraftV1,
-): string {
-  const { signal_id: _signalId, ...sharedLocalReference } =
-    event.local_reference;
-  return canonicalJson({
-    schema_version: event.schema_version,
-    kind: event.kind,
-    event_type: event.event_type,
-    organization_id: event.organization_id,
-    occurred_at: event.occurred_at,
-    producer: event.producer,
-    source: event.source,
-    processor: event.processor,
-    local_reference: sharedLocalReference,
-    meeting_context: event.record.meeting_context,
-    approval: event.approval,
-    publication: event.publication,
-    classification: event.classification,
-    identity_manifest_sha256: event.identity_manifest_sha256,
-  });
-}
-
-function assertCanonicalSignalManifest(
-  event: FederatedEventV1 | FederatedEventDraftV1,
-): void {
-  const nextPosition = new Map<FederatedEventV1['record']['kind'], number>([
-    ['decision', 0],
-    ['action', 0],
-    ['rationale', 0],
-  ]);
-  let previousKind = -1;
-  for (const item of event.record.approval_group.signal_manifest) {
-    const currentKind = kindOrder(item.kind);
-    const expectedPosition = nextPosition.get(item.kind)!;
-    if (
-      currentKind < previousKind ||
-      item.position_within_kind !== expectedPosition
-    ) {
-      throw new Error(
-        'federated approval group signal manifest is not canonically positioned',
-      );
-    }
-    nextPosition.set(item.kind, expectedPosition + 1);
-    previousKind = currentKind;
-  }
-}
-
 function assertCompleteApprovalGroup(
   events: readonly {
     local_subject_key: string;
@@ -387,86 +315,69 @@ function assertCompleteApprovalGroup(
   if (events.length === 0) {
     throw new Error('federated approval group must contain at least one event');
   }
-
-  const first = events[0]!.envelope;
-  const approvalId = first.local_reference.approval_id;
-  const manifestCanonical = canonicalJson(first.record.approval_group);
-  const sharedFactsCanonical = siblingSharedFacts(first);
-  const expectedSignals = new Set(
-    first.record.approval_group.signal_manifest.map((item) => item.signal_id),
+  const analysis = analyzeApprovalGroup(
+    events.map((item) => item.envelope),
   );
-  const seenSignals = new Set<string>();
   const seenSubjects = new Set<string>();
   const seenEventIds = new Set<string>();
   const seenRecordIds = new Set<string>();
-  let previousOrder: readonly [number, number] | undefined;
+  const firstSignal = analysis.items[0]!.signal;
 
-  if (
-    expectedSignals.size !== first.record.approval_group.signal_manifest.length
-  ) {
+  if (firstSignal.has_duplicate_signal_ids) {
     throw new Error(
       'federated approval group signal manifest contains duplicates',
     );
   }
-  if (expectedSignals.size !== events.length) {
+  if (!analysis.event_count_matches_manifest) {
     throw new Error(
       'federated approval group must contain its complete signal manifest',
     );
   }
-  assertCanonicalSignalManifest(first);
+  if (firstSignal.first_ordering_violation !== null) {
+    throw new Error(
+      'federated approval group signal manifest is not canonically positioned',
+    );
+  }
 
-  for (const item of events) {
+  for (let index = 0; index < events.length; index += 1) {
+    const item = events[index]!;
+    const invariant = analysis.items[index]!;
     const event = item.envelope;
     if (event.event_type !== EVENT_TYPE) {
       throw new Error(
         'federated outbox supports approved organization records only',
       );
     }
-    if (event.local_reference.approval_id !== approvalId) {
+    if (!invariant.approval_id_matches) {
       throw new Error(
         'federated outbox transaction may contain only one approval group',
       );
     }
-    if (canonicalJson(event.record.approval_group) !== manifestCanonical) {
+    if (!invariant.approval_group_matches) {
       throw new Error(
         'federated approval group sibling manifests must be identical',
       );
     }
-    if (siblingSharedFacts(event) !== sharedFactsCanonical) {
+    if (!invariant.shared_facts_match) {
       throw new Error(
         'federated approval group siblings must preserve the same shared facts',
       );
     }
-    if (
-      event.record.signal_id !== event.local_reference.signal_id ||
-      event.record.signal.id !== event.record.signal_id ||
-      event.record.signal.kind !== event.record.kind
-    ) {
+    if (!invariant.signal_identity_consistent) {
       throw new Error('federated record signal identities are inconsistent');
     }
-    if (
-      !expectedSignals.has(event.record.signal_id) ||
-      seenSignals.has(event.record.signal_id)
-    ) {
+    if (!invariant.signal_expected || invariant.signal_repeated) {
       throw new Error(
         'federated approval group signals must match its manifest exactly',
       );
     }
-    seenSignals.add(event.record.signal_id);
 
-    const manifestItem = event.record.approval_group.signal_manifest.find(
-      (candidate) => candidate.signal_id === event.record.signal_id,
-    )!;
-    if (canonicalSha256(event.record.signal) !== manifestItem.sha256) {
+    if (!invariant.signal.own_entry_digest_matches) {
       throw new Error(
         'federated approval group signal digest does not match its record',
       );
     }
-    if (
-      event.approval.approved_brief_sha256 !==
-        event.record.approval_group.approved_brief_sha256 ||
-      event.record.meeting_context.id !== event.local_reference.meeting_id
-    ) {
+    if (!invariant.references_consistent) {
       throw new Error(
         'federated approval group brief or meeting references are inconsistent',
       );
@@ -496,20 +407,16 @@ function assertCompleteApprovalGroup(
     seenEventIds.add(event.event_id);
     seenRecordIds.add(event.record.record_id);
 
-    const order = [
-      kindOrder(event.record.kind),
-      signalPosition(event),
-    ] as const;
-    if (
-      previousOrder !== undefined &&
-      (order[0] < previousOrder[0] ||
-        (order[0] === previousOrder[0] && order[1] <= previousOrder[1]))
-    ) {
+    if (!invariant.signal.own_entry_kind_matches) {
+      throw new Error(
+        'federated approval group must identify each record exactly once',
+      );
+    }
+    if (!invariant.order_is_canonical) {
       throw new Error(
         'federated approval group must use canonical kind and position order',
       );
     }
-    previousOrder = order;
   }
 }
 

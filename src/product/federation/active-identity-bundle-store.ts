@@ -5,6 +5,7 @@ import type { JsonValue } from '../../core/index.js';
 import { resolveProductStatePaths, type ProductStatePaths } from '../paths.js';
 import {
   assertPrivateOwnedDirectory,
+  assertPrivateOwnedRegularFile,
   ensureDirectory,
   pathEntryExists,
   readFileNoFollow,
@@ -58,17 +59,9 @@ function portableRelative(root: string, path: string): string {
 }
 
 function readActivePointer(paths: ProductStatePaths): string {
-  const state = lstatSync(paths.activeIdentityBundle);
-  const currentUid = process.getuid?.();
-  if (
-    state.isSymbolicLink() ||
-    !state.isFile() ||
-    (state.mode & 0o777) !== 0o600 ||
-    currentUid === undefined ||
-    state.uid !== currentUid
-  ) {
+  assertPrivateOwnedRegularFile(paths.activeIdentityBundle, 0o600, () => {
     throw new Error('active identity bundle must be a current-user regular file with mode 0600');
-  }
+  });
   const raw = readFileNoFollow(paths.activeIdentityBundle, 'active identity bundle');
   assertFederationDocumentSize(raw, 'active identity bundle');
   return raw.toString('utf8');

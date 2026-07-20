@@ -1,20 +1,11 @@
 import {
-  generateKeyPairSync,
-  sign as signMessage,
-  type KeyObject,
-} from "node:crypto";
-import {
-  chmodSync,
   existsSync,
   mkdirSync,
-  mkdtempSync,
   readFileSync,
-  realpathSync,
   rmSync,
   unlinkSync,
   writeFileSync,
 } from "node:fs";
-import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { Ajv } from "ajv";
@@ -48,18 +39,20 @@ import {
   federationId,
 } from "../../src/product/federation/identifiers.js";
 import { validateFederationDocument } from "../../src/product/federation/schema-validation.js";
-import type {
-  InstallationKeyDescriptor,
-  InstallationSigner,
-} from "../../src/product/federation/installation-signer.js";
 import { verifyInstallationKeyDescriptor } from "../../src/product/federation/installation-signer.js";
 import {
   decodeStrictP256DerSignature,
   encodeP256DerSignature,
-  normalizeP256LowS,
   p256KeyId,
   verifyP256LowSSignature,
 } from "../../src/product/federation/signature-profile.js";
+import {
+  createPrivateTestState,
+  manualRuntimeConfig,
+  slackConnectionFixture,
+  testBinding,
+  TestHardwareSigner,
+} from "./fixtures/founder-identity.js";
 
 const temporary: string[] = [];
 const NOW = "2026-07-19T20:10:00.000Z";
@@ -74,142 +67,30 @@ afterEach(() => {
   }
 });
 
-class FakeHardwareSigner implements InstallationSigner {
-  private readonly keys = new Map<
-    string,
-    { privateKey: KeyObject; descriptor: InstallationKeyDescriptor }
-  >();
-
-  constructor(
-    private readonly protection: Pick<
-      InstallationKeyDescriptor,
-      "protection" | "assurance"
-    > = {
-      protection: "secure-enclave",
-      assurance: "hardware_bound",
-    },
-  ) {}
-
-  async generate(installationId: string): Promise<InstallationKeyDescriptor> {
-    const existing = this.keys.get(installationId);
-    if (existing !== undefined) return existing.descriptor;
-    const { publicKey, privateKey } = generateKeyPairSync("ec", {
-      namedCurve: "prime256v1",
-    });
-    const spki = publicKey.export({ type: "spki", format: "der" });
-    const descriptor: InstallationKeyDescriptor = {
-      installation_id: installationId,
-      key_id: p256KeyId(spki),
-      algorithm: "ecdsa-p256-sha256-der-low-s",
-      public_key_spki_der_base64: spki.toString("base64"),
-      protection: this.protection.protection,
-      assurance: this.protection.assurance,
-      private_key_exportable: false,
-    };
-    this.keys.set(installationId, { privateKey, descriptor });
-    return descriptor;
-  }
-
-  async inspect(
-    installationId: string,
-  ): Promise<InstallationKeyDescriptor | null> {
-    return this.keys.get(installationId)?.descriptor ?? null;
-  }
-
-  async sign(
-    installationId: string,
-    message: Buffer,
-    expectedKeyId?: `sha256:${string}`,
-  ): Promise<Buffer> {
-    const key = this.keys.get(installationId);
-    if (key === undefined) throw new Error("test key is unavailable");
-    if (
-      expectedKeyId !== undefined &&
-      expectedKeyId !== key.descriptor.key_id
-    ) {
-      throw new Error("test key fingerprint mismatch");
-    }
-    return normalizeP256LowS(
-      signMessage("sha256", message, {
-        key: key.privateKey,
-        dsaEncoding: "der",
-      }),
-    );
-  }
-}
+const FakeHardwareSigner = TestHardwareSigner;
 
 function privateState(): string {
-  const root = mkdtempSync(join(tmpdir(), "echo-federation-foundation-"));
-  temporary.push(root);
-  const state = join(realpathSync(root), "state");
-  mkdirSync(state, { mode: 0o700 });
-  chmodSync(state, 0o700);
-  return state;
+  return createPrivateTestState(temporary, "echo-federation-foundation-");
 }
 
 function config(stateDir: string): ProductRuntimeConfig {
-  return {
-    schema_version: 1,
-    lane: "team-product",
-    state_dir: stateDir,
-    meeting_sources: [
-      {
-        adapter_id: "granola",
-        instance_id: "primary",
-        credential_ref: "file:/private/local/granola-api-key",
-        settings: {},
-      },
-    ],
-    decision_processor: {
-      adapter_id: "structured-text",
-      instance_id: "primary",
-      settings: {},
-    },
-    delivery_surfaces: [
-      { adapter_id: "jsonl-outbox", instance_id: "local", settings: {} },
-    ],
-    approval_mode: "manual",
-  };
+  return manualRuntimeConfig(stateDir);
 }
 
 function slackConnection(organizationId: string): ToolConnectionV1 {
-  return {
-    connection_id: federationId("con"),
-    organization_id: organizationId,
-    owner: { kind: "organization", id: organizationId },
-    provider: "slack",
-    generations: [
-      {
-        generation: 1,
-        active_from: NOW,
-        ended_at: null,
-        provider_identity: {
-          tenant: {
-            kind: "slack-team",
-            id: "T123",
-            enterprise_id: null,
-          },
-          subject: {
-            kind: "bot-installation",
-            id: "U_BOT",
-            bot_id: "B123",
-            app_id: "A123",
-          },
-          verification: {
-            method: "slack_auth_test",
-            assurance: "provider_verified",
-            verified_at: NOW,
-            evidence_sha256: `sha256:${"4".repeat(64)}`,
-          },
-        },
-        local_credential_guard: createLocalCredentialGuard(
-          "file:/private/local/slack-bot-token",
-          "slack-test-token",
-          Buffer.alloc(16, 4),
-        ),
-      },
-    ],
-  };
+  return slackConnectionFixture({
+    connectionId: federationId("con"),
+    organizationId,
+    activeAt: NOW,
+    tenantId: "T123",
+    subject: { id: "U_BOT", bot_id: "B123", app_id: "A123" },
+    evidenceSha256: `sha256:${"4".repeat(64)}`,
+    credentialGuard: createLocalCredentialGuard(
+      "file:/private/local/slack-bot-token",
+      "slack-test-token",
+      Buffer.alloc(16, 4),
+    ),
+  });
 }
 
 function binding(
@@ -218,20 +99,14 @@ function binding(
   instanceId: string,
   connectionId: string | null,
 ): AdapterBindingV1 {
-  const snapshot = {};
-  return {
-    adapter_binding_id: federationId("bnd"),
+  return testBinding({
+    adapterBindingId: federationId("bnd"),
     capability,
-    adapter_id: adapterId,
-    instance_id: instanceId,
-    connection_id: connectionId,
-    connection_generation: connectionId === null ? null : 1,
-    configuration_snapshot: snapshot,
-    configuration_sha256: canonicalSha256(snapshot),
-    created_at: NOW,
-    ended_at: null,
-    status: "active",
-  };
+    adapterId,
+    instanceId,
+    connectionId,
+    createdAt: NOW,
+  });
 }
 
 function granolaConnection(

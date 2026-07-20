@@ -5,6 +5,7 @@ import {
   assertDirectory,
   assertDisjointPaths,
   assertPrivateOwnedDirectory,
+  assertPrivateOwnedRegularFile,
   assertSafeRelativePath,
   canonicalLocalPath,
   ensureDirectory,
@@ -216,17 +217,9 @@ function assertDigest(
 }
 
 function assertPrivateCanonicalFile(path: string, label: string): string {
-  const state = lstatSync(path);
-  const currentUid = process.getuid?.();
-  if (
-    state.isSymbolicLink() ||
-    !state.isFile() ||
-    (state.mode & 0o777) !== 0o600 ||
-    currentUid === undefined ||
-    state.uid !== currentUid
-  ) {
+  assertPrivateOwnedRegularFile(path, 0o600, () => {
     fail(`${label} must be a current-user regular file with mode 0600`);
-  }
+  });
   return readFileNoFollow(path, label).toString("utf8");
 }
 
@@ -242,10 +235,70 @@ function statePathDigest(path: string): Sha256Digest {
   return sha256Digest(`${path}\n`);
 }
 
-function assertTargetRecord(value: unknown): IndependentCopyTargetRecordV1 {
-  if (!isRecord(value)) fail("independent-copy target must be an object");
+function assertDocumentRecord(
+  value: unknown,
+  label: string,
+  kind: string,
+  fields: readonly string[],
+  stringFields: readonly string[],
+  recordFields: readonly string[] = [],
+): asserts value is Record<string, unknown> {
+  if (!isRecord(value)) fail(`${label} must be an object`);
+  exactKeys(value, fields, label);
+  if (
+    value["schema_version"] !== 1 ||
+    value["kind"] !== kind ||
+    stringFields.some((field) => typeof value[field] !== "string") ||
+    recordFields.some((field) => !isRecord(value[field]))
+  ) {
+    fail(`${label} has invalid field types or version`);
+  }
+}
+
+function assertCopyEvidence(
+  value: IndependentCopyIntentV1 | IndependentCopyReceiptV1,
+  label: "intent" | "receipt",
+  timestamp: string,
+): void {
+  assertFederationId(value.organization_id, "org", `${label} organization_id`);
+  assertFederationId(value.installation_id, "ins", `${label} installation_id`);
+  if (label === "intent") {
+    assertFederationId(
+      (value as IndependentCopyIntentV1).signing_identity_manifest_id,
+      "idm",
+      "intent signing_identity_manifest_id",
+    );
+  }
+  assertFederationId(value.export_id, "exp", `${label} export_id`);
+  assertUtcMillisecondTimestamp(
+    timestamp,
+    `${label} ${label === "intent" ? "generated_at" : "verified_at"}`,
+  );
+  assertSafeRelativePath(
+    value.bundle_relative_path,
+    `${label} bundle_relative_path`,
+  );
+  const sequence = value.sequence as unknown as Record<string, unknown>;
   exactKeys(
+    sequence,
+    ["first", "last", "head_hash"],
+    `independent-copy ${label} sequence`,
+  );
+  if (
+    sequence["first"] !== 1 ||
+    !Number.isSafeInteger(sequence["last"]) ||
+    (sequence["last"] as number) < 1
+  ) {
+    fail(`independent-copy ${label} sequence is invalid`);
+  }
+  assertDigest(sequence["head_hash"], `${label} sequence head_hash`);
+}
+
+function assertTargetRecord(value: unknown): IndependentCopyTargetRecordV1 {
+  assertDocumentRecord(
     value,
+    "independent-copy target",
+    "echo-founder-independent-copy-target",
     [
       "schema_version",
       "kind",
@@ -256,47 +309,39 @@ function assertTargetRecord(value: unknown): IndependentCopyTargetRecordV1 {
       "protection",
       "configured_at",
     ],
-    "independent-copy target",
+    ["target_root", "mount_point", "volume_id", "configured_at"],
+    ["protection"],
   );
-  if (
-    value["schema_version"] !== 1 ||
-    value["kind"] !== "echo-founder-independent-copy-target" ||
-    typeof value["target_root"] !== "string" ||
-    typeof value["mount_point"] !== "string" ||
-    typeof value["volume_id"] !== "string" ||
-    typeof value["configured_at"] !== "string" ||
-    !isRecord(value["protection"])
-  ) {
-    fail("independent-copy target has invalid field types or version");
-  }
-  assertDigest(value["state_path_sha256"], "target state_path_sha256");
+  const target = value as unknown as IndependentCopyTargetRecordV1;
+  assertDigest(target.state_path_sha256, "target state_path_sha256");
   exactKeys(
-    value["protection"],
+    value["protection"] as Record<string, unknown>,
     ["kind", "assurance"],
     "independent-copy target protection",
   );
   if (
-    value["protection"]["kind"] !== "encrypted-volume" ||
-    value["protection"]["assurance"] !== "platform_verified"
+    target.protection.kind !== "encrypted-volume" ||
+    target.protection.assurance !== "platform_verified"
   ) {
     fail(
       "independent-copy target protection is not platform-verified encryption",
     );
   }
-  if (!NON_BLANK_IDENTITY.test(value["volume_id"])) {
+  if (!NON_BLANK_IDENTITY.test(target.volume_id)) {
     fail("independent-copy target volume identity is invalid");
   }
   assertUtcMillisecondTimestamp(
-    value["configured_at"],
+    target.configured_at,
     "independent-copy target configured_at",
   );
-  return value as unknown as IndependentCopyTargetRecordV1;
+  return target;
 }
 
 function assertIntent(value: unknown): IndependentCopyIntentV1 {
-  if (!isRecord(value)) fail("independent-copy intent must be an object");
-  exactKeys(
+  assertDocumentRecord(
     value,
+    "independent-copy intent",
+    "echo-founder-independent-copy-intent",
     [
       "schema_version",
       "kind",
@@ -310,56 +355,28 @@ function assertIntent(value: unknown): IndependentCopyIntentV1 {
       "generated_at",
       "bundle_relative_path",
     ],
-    "independent-copy intent",
+    [
+      "organization_id",
+      "installation_id",
+      "signing_identity_manifest_id",
+      "export_id",
+      "generated_at",
+      "bundle_relative_path",
+    ],
+    ["sequence"],
   );
-  if (
-    value["schema_version"] !== 1 ||
-    value["kind"] !== "echo-founder-independent-copy-intent" ||
-    typeof value["organization_id"] !== "string" ||
-    typeof value["installation_id"] !== "string" ||
-    typeof value["signing_identity_manifest_id"] !== "string" ||
-    typeof value["export_id"] !== "string" ||
-    typeof value["generated_at"] !== "string" ||
-    typeof value["bundle_relative_path"] !== "string" ||
-    !isRecord(value["sequence"])
-  ) {
-    fail("independent-copy intent has invalid field types or version");
-  }
-  assertDigest(value["state_path_sha256"], "intent state_path_sha256");
-  assertDigest(value["target_record_sha256"], "intent target_record_sha256");
-  assertFederationId(value["organization_id"], "org", "intent organization_id");
-  assertFederationId(value["installation_id"], "ins", "intent installation_id");
-  assertFederationId(
-    value["signing_identity_manifest_id"],
-    "idm",
-    "intent signing_identity_manifest_id",
-  );
-  assertFederationId(value["export_id"], "exp", "intent export_id");
-  assertUtcMillisecondTimestamp(value["generated_at"], "intent generated_at");
-  assertSafeRelativePath(
-    value["bundle_relative_path"],
-    "intent bundle_relative_path",
-  );
-  exactKeys(
-    value["sequence"],
-    ["first", "last", "head_hash"],
-    "independent-copy intent sequence",
-  );
-  if (
-    value["sequence"]["first"] !== 1 ||
-    !Number.isSafeInteger(value["sequence"]["last"]) ||
-    (value["sequence"]["last"] as number) < 1
-  ) {
-    fail("independent-copy intent sequence is invalid");
-  }
-  assertDigest(value["sequence"]["head_hash"], "intent sequence head_hash");
-  return value as unknown as IndependentCopyIntentV1;
+  const intent = value as unknown as IndependentCopyIntentV1;
+  assertDigest(intent.state_path_sha256, "intent state_path_sha256");
+  assertDigest(intent.target_record_sha256, "intent target_record_sha256");
+  assertCopyEvidence(intent, "intent", intent.generated_at);
+  return intent;
 }
 
 function assertReceipt(value: unknown): IndependentCopyReceiptV1 {
-  if (!isRecord(value)) fail("independent-copy receipt must be an object");
-  exactKeys(
+  assertDocumentRecord(
     value,
+    "independent-copy receipt",
+    "echo-founder-independent-copy-receipt",
     [
       "schema_version",
       "kind",
@@ -374,57 +391,25 @@ function assertReceipt(value: unknown): IndependentCopyReceiptV1 {
       "records_sha256",
       "verified_at",
     ],
-    "independent-copy receipt",
+    [
+      "organization_id",
+      "installation_id",
+      "export_id",
+      "bundle_relative_path",
+      "verified_at",
+    ],
+    ["sequence"],
   );
-  if (
-    value["schema_version"] !== 1 ||
-    value["kind"] !== "echo-founder-independent-copy-receipt" ||
-    typeof value["organization_id"] !== "string" ||
-    typeof value["installation_id"] !== "string" ||
-    typeof value["export_id"] !== "string" ||
-    typeof value["bundle_relative_path"] !== "string" ||
-    typeof value["verified_at"] !== "string" ||
-    !isRecord(value["sequence"])
-  ) {
-    fail("independent-copy receipt has invalid field types or version");
-  }
-  assertDigest(value["intent_sha256"], "receipt intent_sha256");
-  assertDigest(value["target_record_sha256"], "receipt target_record_sha256");
+  const receipt = value as unknown as IndependentCopyReceiptV1;
+  assertDigest(receipt.intent_sha256, "receipt intent_sha256");
+  assertDigest(receipt.target_record_sha256, "receipt target_record_sha256");
   assertDigest(
-    value["export_manifest_sha256"],
+    receipt.export_manifest_sha256,
     "receipt export_manifest_sha256",
   );
-  assertDigest(value["records_sha256"], "receipt records_sha256");
-  assertFederationId(
-    value["organization_id"],
-    "org",
-    "receipt organization_id",
-  );
-  assertFederationId(
-    value["installation_id"],
-    "ins",
-    "receipt installation_id",
-  );
-  assertFederationId(value["export_id"], "exp", "receipt export_id");
-  assertUtcMillisecondTimestamp(value["verified_at"], "receipt verified_at");
-  assertSafeRelativePath(
-    value["bundle_relative_path"],
-    "receipt bundle_relative_path",
-  );
-  exactKeys(
-    value["sequence"],
-    ["first", "last", "head_hash"],
-    "independent-copy receipt sequence",
-  );
-  if (
-    value["sequence"]["first"] !== 1 ||
-    !Number.isSafeInteger(value["sequence"]["last"]) ||
-    (value["sequence"]["last"] as number) < 1
-  ) {
-    fail("independent-copy receipt sequence is invalid");
-  }
-  assertDigest(value["sequence"]["head_hash"], "receipt sequence head_hash");
-  return value as unknown as IndependentCopyReceiptV1;
+  assertDigest(receipt.records_sha256, "receipt records_sha256");
+  assertCopyEvidence(receipt, "receipt", receipt.verified_at);
+  return receipt;
 }
 
 function bytewiseCompare(left: string, right: string): number {
@@ -1205,17 +1190,9 @@ export class FounderIndependentCopyStore {
     for (const entry of readdirSync(outputRoot, { withFileTypes: true })) {
       const path = join(outputRoot, entry.name);
       if (BINDING_TEMP_PATTERN.test(entry.name)) {
-        const state = lstatSync(path);
-        const currentUid = process.getuid?.();
-        if (
-          entry.isSymbolicLink() ||
-          !entry.isFile() ||
-          (state.mode & 0o777) !== 0o600 ||
-          currentUid === undefined ||
-          state.uid !== currentUid
-        ) {
+        assertPrivateOwnedRegularFile(path, 0o600, () => {
           fail("independent-copy binding residue is not a private regular file");
-        }
+        });
         unlinkSync(path);
         changed = true;
         continue;
@@ -1252,17 +1229,9 @@ export class FounderIndependentCopyStore {
     for (const entry of readdirSync(directory, { withFileTypes: true })) {
       if (!pattern.test(entry.name)) continue;
       const path = join(directory, entry.name);
-      const state = lstatSync(path);
-      const currentUid = process.getuid?.();
-      if (
-        entry.isSymbolicLink() ||
-        !entry.isFile() ||
-        (state.mode & 0o777) !== 0o600 ||
-        currentUid === undefined ||
-        state.uid !== currentUid
-      ) {
+      assertPrivateOwnedRegularFile(path, 0o600, () => {
         fail(`${label} is not a private regular file`);
-      }
+      });
       unlinkSync(path);
       changed = true;
     }
@@ -1373,6 +1342,22 @@ export class FounderIndependentCopyStore {
     const path = this.receiptPath(head);
     if (!pathEntryExists(path)) return undefined;
     return assertReceipt(readCanonical(path, "independent-copy receipt"));
+  }
+
+  private createOrRead<T>(
+    path: string,
+    value: T,
+    read: () => T | undefined,
+    missing: string,
+  ): T {
+    const created = atomicCreate({
+      filePath: path,
+      content: canonicalJson(value),
+      mode: 0o600,
+    });
+    const durable = created ? value : read();
+    if (durable === undefined) fail(missing);
+    return durable;
   }
 
   private expectedBundleRelativePath(
@@ -1527,14 +1512,13 @@ export class FounderIndependentCopyStore {
       head,
       organizationId,
     );
-    const created = atomicCreate({
-      filePath: this.intentPath(head),
-      content: canonicalJson(intent),
-      mode: 0o600,
-    });
-    const durableIntent = created ? intent : this.readIntent(head);
+    const durableIntent = this.createOrRead(
+      this.intentPath(head),
+      intent,
+      () => this.readIntent(head),
+      "recovered independent-copy intent conflicts with local evidence",
+    );
     if (
-      durableIntent === undefined ||
       canonicalJson(durableIntent) !== canonicalJson(intent)
     ) {
       fail("recovered independent-copy intent conflicts with local evidence");
@@ -1566,15 +1550,12 @@ export class FounderIndependentCopyStore {
       durableIntent,
       receipt,
     );
-    const receiptCreated = atomicCreate({
-      filePath: this.receiptPath(head),
-      content: canonicalJson(receipt),
-      mode: 0o600,
-    });
-    const durableReceipt = receiptCreated ? receipt : this.readReceipt(head);
-    if (durableReceipt === undefined) {
-      fail("recovered independent-copy receipt disappeared during commit");
-    }
+    const durableReceipt = this.createOrRead(
+      this.receiptPath(head),
+      receipt,
+      () => this.readReceipt(head),
+      "recovered independent-copy receipt disappeared during commit",
+    );
     return this.verifiedReceipt(
       target,
       targetDigest,
@@ -1653,15 +1634,14 @@ export class FounderIndependentCopyStore {
         generated_at: generatedAt,
         bundle_relative_path: this.expectedBundleRelativePath(target, head),
       };
-      const created = atomicCreate({
-        filePath: this.intentPath(head),
-        content: canonicalJson(intent),
-        mode: 0o600,
-      });
-      if (!created) {
-        const raced = this.readIntent(head);
-        if (raced === undefined) fail("independent-copy intent disappeared");
-        intent = raced;
+      const candidate = intent;
+      intent = this.createOrRead(
+        this.intentPath(head),
+        candidate,
+        () => this.readIntent(head),
+        "independent-copy intent disappeared",
+      );
+      if (intent !== candidate) {
         this.assertIntentMatches(
           intent,
           target,
@@ -1721,15 +1701,12 @@ export class FounderIndependentCopyStore {
       "independent-copy receipt verified_at",
     );
     this.verifiedReceipt(target, targetDigest, head, intent, receipt);
-    const receiptCreated = atomicCreate({
-      filePath: this.receiptPath(head),
-      content: canonicalJson(receipt),
-      mode: 0o600,
-    });
-    const durableReceipt = receiptCreated ? receipt : this.readReceipt(head);
-    if (durableReceipt === undefined) {
-      fail("independent-copy receipt disappeared during commit");
-    }
+    const durableReceipt = this.createOrRead(
+      this.receiptPath(head),
+      receipt,
+      () => this.readReceipt(head),
+      "independent-copy receipt disappeared during commit",
+    );
     return this.verifiedReceipt(
       target,
       targetDigest,

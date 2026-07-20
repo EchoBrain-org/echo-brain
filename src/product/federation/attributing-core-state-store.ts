@@ -1,13 +1,7 @@
-import type { ApprovalDecision } from '../../core/approval/approval-gate.js';
 import type { AdapterIdentity } from '../../core/contracts/adapter.js';
 import type { DecisionSet } from '../../core/contracts/decision.js';
-import type {
-  DeliveryEnvelope,
-  DeliveryReceipt,
-} from '../../core/contracts/delivery.js';
 import type { JsonObject } from '../../core/contracts/json.js';
 import type {
-  AdapterCursor,
   MeetingDocument,
   MeetingParticipantIdentityKind,
 } from '../../core/contracts/meeting.js';
@@ -39,6 +33,7 @@ import {
   type HistoricalBindingReference,
   type ResolvedHistoricalBinding,
 } from './identity-lineage-store.js';
+import { DelegatingCoreStateStore } from './delegating-core-state-store.js';
 
 interface AttributionIdentityBundleReader {
   hasActiveBundle(): boolean;
@@ -299,7 +294,7 @@ export function createAttributionStorageEvidenceVerifier(
  * byte-for-byte to the existing state store. Once identity is active, immutable
  * sidecars are committed before the unchanged core upserts.
  */
-export class AttributingCoreStateStore implements CoreStateStore {
+export class AttributingCoreStateStore extends DelegatingCoreStateStore {
   readonly attributions: SqliteFederatedAttributionStore;
   private readonly identity: AttributionIdentityBundleReader;
   private readonly lineage: AttributionIdentityLineageReader;
@@ -310,9 +305,10 @@ export class AttributingCoreStateStore implements CoreStateStore {
     AttributionStorageEvidenceVerifier | undefined;
 
   constructor(
-    private readonly delegate: CoreStateStore & { close?: () => void },
+    delegate: CoreStateStore & { close?: () => void },
     private readonly options: AttributingCoreStateStoreOptions,
   ) {
+    super(delegate);
     this.identity =
       options.identityBundleReader ??
       new ActiveIdentityBundleStore(options.stateDirectory);
@@ -333,23 +329,6 @@ export class AttributingCoreStateStore implements CoreStateStore {
             this.lineage,
             options.artifactProvider,
           );
-  }
-
-  async getSourceCursor(
-    source: AdapterIdentity & { kind: 'meeting-source' },
-  ): Promise<AdapterCursor | undefined> {
-    return await this.delegate.getSourceCursor(source);
-  }
-
-  async setSourceCursor(
-    source: AdapterIdentity & { kind: 'meeting-source' },
-    cursor: AdapterCursor,
-  ): Promise<void> {
-    await this.delegate.setSourceCursor(source, cursor);
-  }
-
-  async hasProcessed(processingKey: string): Promise<boolean> {
-    return await this.delegate.hasProcessed(processingKey);
   }
 
   async saveMeeting(meeting: MeetingDocument): Promise<void> {
@@ -423,30 +402,6 @@ export class AttributingCoreStateStore implements CoreStateStore {
     this.verifyAttributionPair(source, attribution);
     this.attributions.preflightOrInsertProcessorAttribution(attribution);
     await this.delegate.saveDecisionSet(meeting, decisions);
-  }
-
-  async getApproval(
-    processingKey: string,
-  ): Promise<ApprovalDecision | undefined> {
-    return await this.delegate.getApproval(processingKey);
-  }
-
-  async saveApproval(
-    processingKey: string,
-    decision: ApprovalDecision,
-  ): Promise<void> {
-    await this.delegate.saveApproval(processingKey, decision);
-  }
-
-  async saveDeliveryReceipt(
-    envelope: DeliveryEnvelope,
-    receipt: DeliveryReceipt,
-  ): Promise<void> {
-    await this.delegate.saveDeliveryReceipt(envelope, receipt);
-  }
-
-  async markProcessed(processingKey: string): Promise<void> {
-    await this.delegate.markProcessed(processingKey);
   }
 
   close(): void {

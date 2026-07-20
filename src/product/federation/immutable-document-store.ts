@@ -1,8 +1,8 @@
-import { lstatSync } from 'node:fs';
 import { basename, join } from 'node:path';
 import { atomicCreate } from '../../infrastructure/filesystem/atomic-create.js';
 import {
   assertPrivateOwnedDirectory,
+  assertPrivateOwnedRegularFile,
   ensureDirectory,
   pathEntryExists,
   readFileNoFollow,
@@ -29,17 +29,9 @@ export class ImmutableFederationDocumentStore {
 
   read(filename: string): string {
     const path = this.pathFor(filename);
-    const state = lstatSync(path);
-    const currentUid = process.getuid?.();
-    if (
-      state.isSymbolicLink() ||
-      !state.isFile() ||
-      (state.mode & 0o777) !== 0o600 ||
-      currentUid === undefined ||
-      state.uid !== currentUid
-    ) {
+    assertPrivateOwnedRegularFile(path, 0o600, () => {
       throw new Error(`${this.label} must be a current-user regular file with mode 0600`);
-    }
+    });
     const raw = readFileNoFollow(path, this.label);
     assertFederationDocumentSize(raw, this.label);
     return raw.toString('utf8');

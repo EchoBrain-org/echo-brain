@@ -25,6 +25,10 @@ import {
   parseCanonicalJson,
   sha256Digest,
 } from './canonical-json.js';
+import {
+  analyzeApprovalGroup,
+  analyzeApprovalSignal,
+} from './approval-group-invariants.js';
 import type {
   FederatedEventV1,
   FederatedExportManifestV1,
@@ -691,75 +695,30 @@ function assertApprovalIdentity(
   }
 }
 
-function kindOrder(kind: FederatedEventV1['record']['kind']): number {
-  if (kind === 'decision') return 0;
-  if (kind === 'action') return 1;
-  return 2;
-}
-
 function assertSignalManifest(event: FederatedEventV1): void {
-  const entries = event.record.approval_group.signal_manifest;
-  const ids = new Set<string>();
-  const nextPosition = new Map<string, number>();
-  let previousOrder: readonly [number, number] | undefined;
-  for (const entry of entries) {
-    if (ids.has(entry.signal_id)) {
+  const analysis = analyzeApprovalSignal(event);
+  switch (analysis.first_manifest_violation) {
+    case 'duplicate-signal-id':
       fail(
         `approval ${event.local_reference.approval_id} has duplicate signal IDs`,
       );
-    }
-    ids.add(entry.signal_id);
-    const expectedPosition = nextPosition.get(entry.kind) ?? 0;
-    if (entry.position_within_kind !== expectedPosition) {
+    case 'non-contiguous-position':
       fail(
         `approval ${event.local_reference.approval_id} has non-contiguous signal positions`,
       );
-    }
-    nextPosition.set(entry.kind, expectedPosition + 1);
-    const order = [kindOrder(entry.kind), entry.position_within_kind] as const;
-    if (
-      previousOrder !== undefined &&
-      (order[0] < previousOrder[0] ||
-        (order[0] === previousOrder[0] && order[1] <= previousOrder[1]))
-    ) {
+    case 'non-canonical-order':
       fail(
         `approval ${event.local_reference.approval_id} has a non-canonical signal manifest`,
       );
-    }
-    previousOrder = order;
+    case null:
+      break;
   }
-  const own = entries.filter(
-    (entry) => entry.signal_id === event.record.signal_id,
-  );
   if (
-    own.length !== 1 ||
-    own[0]!.kind !== event.record.kind ||
-    own[0]!.sha256 !== sha256Digest(canonicalJson(event.record.signal))
+    !analysis.own_entry_kind_matches ||
+    !analysis.own_entry_digest_matches
   ) {
     fail(`event ${event.event_id} does not match its signal manifest digest`);
   }
-}
-
-function sharedApprovalFacts(event: FederatedEventV1): unknown {
-  return {
-    organization_id: event.organization_id,
-    occurred_at: event.occurred_at,
-    producer: event.producer,
-    source: event.source,
-    processor: event.processor,
-    local_reference: {
-      processing_key: event.local_reference.processing_key,
-      approval_id: event.local_reference.approval_id,
-      node_id: event.local_reference.node_id,
-      meeting_id: event.local_reference.meeting_id,
-    },
-    meeting_context: event.record.meeting_context,
-    approval_group: event.record.approval_group,
-    approval: event.approval,
-    publication: event.publication,
-    classification: event.classification,
-    identity_manifest_sha256: event.identity_manifest_sha256,
-  };
 }
 
 function assertApprovalGroups(events: readonly FederatedEventV1[]): void {
@@ -797,51 +756,29 @@ function assertApprovalGroups(events: readonly FederatedEventV1[]): void {
 
   for (const [approvalId, group] of groups) {
     const first = group[0]!;
-    const shared = canonicalJson(sharedApprovalFacts(first.event));
-    const presentIds = new Set<string>();
-    let previousOrder: readonly [number, number] | undefined;
+    const analysis = analyzeApprovalGroup(group.map((item) => item.event));
     for (let offset = 0; offset < group.length; offset += 1) {
       const item = group[offset]!;
+      const invariant = analysis.items[offset]!;
       if (
         item.index !== first.index + offset ||
-        canonicalJson(sharedApprovalFacts(item.event)) !== shared
+        !invariant.approval_group_matches ||
+        !invariant.shared_facts_match
       ) {
         fail(
           `approval ${approvalId} is non-contiguous or has divergent sibling facts`,
         );
       }
-      if (presentIds.has(item.event.record.signal_id)) {
+      if (invariant.signal_repeated) {
         fail(`approval ${approvalId} repeats an exported signal`);
       }
-      presentIds.add(item.event.record.signal_id);
-      const manifestEntry =
-        item.event.record.approval_group.signal_manifest.find(
-          (entry) => entry.signal_id === item.event.record.signal_id,
-        )!;
-      const order = [
-        kindOrder(manifestEntry.kind),
-        manifestEntry.position_within_kind,
-      ] as const;
-      if (
-        previousOrder !== undefined &&
-        (order[0] < previousOrder[0] ||
-          (order[0] === previousOrder[0] && order[1] <= previousOrder[1]))
-      ) {
+      if (!invariant.order_is_canonical) {
         fail(
           `approval ${approvalId} records are not in canonical signal order`,
         );
       }
-      previousOrder = order;
     }
-    const manifestIds = new Set(
-      first.event.record.approval_group.signal_manifest.map(
-        (entry) => entry.signal_id,
-      ),
-    );
-    const complete =
-      manifestIds.size === presentIds.size &&
-      [...manifestIds].every((signalId) => presentIds.has(signalId));
-    if (!complete) {
+    if (!analysis.present_signals_match_manifest) {
       fail(`approval ${approvalId} is incomplete in the export range`);
     }
   }

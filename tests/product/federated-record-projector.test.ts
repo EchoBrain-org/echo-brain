@@ -15,6 +15,10 @@ import type {
 } from '../../src/product/federation/outbox-store.js';
 import { FederatedRecordProjector } from '../../src/product/federation/record-projector.js';
 import { validateFederationDocument } from '../../src/product/federation/schema-validation.js';
+import {
+  activeIdentityBundleFixture,
+  approvalRequestFixture,
+} from './fixtures/federated-records.js';
 
 const NOW = '2026-07-19T22:00:00.000Z';
 const ARTIFACT: ProductArtifactIdentityV1 = {
@@ -70,69 +74,34 @@ const SLACK_PROVIDER = {
 };
 
 function manifest(manifestId: string = IDS.manifest): LocalIdentityManifestV1 {
-  return {
-    schema_version: 1,
-    kind: 'echo-local-identity-manifest',
-    manifest_id: manifestId,
-    predecessor_manifest_id:
+  return activeIdentityBundleFixture({
+    ids: {
+      ...IDS,
+      manifest: manifestId,
+      registry: 'reg_00000000-0000-4000-8000-000000000001',
+    },
+    at: NOW,
+    artifact: ARTIFACT,
+    predecessorManifestId:
       manifestId === IDS.sourceManifest
         ? null
         : manifestId === IDS.processorManifest
           ? IDS.sourceManifest
           : IDS.processorManifest,
-    created_at: NOW,
-    authority: {
-      kind: 'local-founder-bootstrap',
-      assurance: 'founder_attested',
+    signingKey: {
+      key_id: KEY_ID,
+      algorithm: 'ecdsa-p256-sha256-der-low-s',
+      public_key_spki_der_base64: 'AQ==',
+      protection: 'secure-enclave',
+      assurance: 'hardware_bound',
     },
-    organization: {
-      organization_id: IDS.organization,
-      display_name: 'Echo',
-      created_at: NOW,
-    },
-    principal: {
-      principal_id: IDS.principal,
-      organization_id: IDS.organization,
-      kind: 'human',
-      display_name: 'Founder',
-    },
-    membership: {
-      membership_id: IDS.membership,
-      organization_id: IDS.organization,
-      principal_id: IDS.principal,
-      type: 'owner',
-      status: 'active',
-      valid_from: NOW,
-    },
-    installation: {
-      installation_id: IDS.installation,
-      organization_id: IDS.organization,
-      membership_id: IDS.membership,
-      device_id: IDS.device,
-      device_class: 'byod',
-      enrolled_at: NOW,
-      product: {
-        name: 'echo-brain',
-        version: ARTIFACT.product_version,
-        source_sha: ARTIFACT.source_sha,
-      },
-      signing_key: {
-        key_id: KEY_ID,
-        algorithm: 'ecdsa-p256-sha256-der-low-s',
-        public_key_spki_der_base64: 'AQ==',
-        protection: 'secure-enclave',
-        assurance: 'hardware_bound',
-      },
-    },
-    identity_claims: [
+    connections: [],
+    bindings: [],
+    identityClaims: [
       {
         claim_id: IDS.claim,
         principal_id: IDS.principal,
-        issuer: {
-          kind: 'provider',
-          provider: 'slack',
-          tenant_id: 'T123',
-        },
+        issuer: { kind: 'provider', provider: 'slack', tenant_id: 'T123' },
         subject: { kind: 'user', id: 'U123' },
         verification: {
           method: 'slack_dm_challenge',
@@ -142,16 +111,6 @@ function manifest(manifestId: string = IDS.manifest): LocalIdentityManifestV1 {
         },
       },
     ],
-    legacy_cutover: {
-      declared_at: NOW,
-      pre_cutover_default: 'disposable_test',
-      native_records_require: [
-        'source-attribution-v1',
-        'processor-attribution-v1',
-        'approval-context-v1',
-        'signed-outbox-v1',
-      ],
-    },
     integrity: {
       canonicalization: 'RFC8785',
       payload_sha256: `sha256:${'e'.repeat(64)}`,
@@ -159,9 +118,13 @@ function manifest(manifestId: string = IDS.manifest): LocalIdentityManifestV1 {
       key_id: KEY_ID,
       signature_base64: 'AQ==',
     },
-  };
+    referenceDigests: {
+      manifest: `sha256:${'e'.repeat(64)}`,
+      registry: `sha256:${'e'.repeat(64)}`,
+      policy: `sha256:${'e'.repeat(64)}`,
+    },
+  }).manifest;
 }
-
 function source(): SourceAttributionV1 {
   return {
     schema_version: 1,
@@ -311,6 +274,33 @@ function metadata(
 }
 
 function state(meta: ApprovalFederationMetadataV1): DecisionNodeState {
+  const processorIdentity = {
+    kind: 'decision-processor' as const,
+    adapter_id: 'llm',
+    instance_id: 'ollama',
+    version: '1.0.0',
+  };
+  const brief = approvalRequestFixture({
+    now: NOW,
+    meetingId: 'granola:primary:not_123',
+    externalId: 'not_123',
+    revision: 'rev_1',
+    title: 'Founder meeting',
+    processingKey: 'processing:v1:fixture',
+    briefId: 'brief-1',
+    processor: processorIdentity,
+  }).brief;
+  brief.decisions = [
+    {
+      id: SIGNAL_ID,
+      kind: 'decision',
+      text: 'Ship the founder wedge.',
+      subject: null,
+      confidence: 0.9,
+      evidence: [],
+      status: 'decided',
+    },
+  ];
   const presentation = {
     channel_id: 'C123',
     message_ts: '1752956990.000100',
@@ -322,38 +312,7 @@ function state(meta: ApprovalFederationMetadataV1): DecisionNodeState {
     processing_key: 'processing:v1:fixture',
     requested_at: NOW,
     requested_metadata: { federation: meta as unknown as never },
-    brief: {
-      schema_version: 1,
-      id: 'brief-1',
-      meeting: {
-        id: 'granola:primary:not_123',
-        title: 'Founder meeting',
-        participants: [],
-      },
-      decisions: [
-        {
-          id: SIGNAL_ID,
-          kind: 'decision',
-          text: 'Ship the founder wedge.',
-          subject: null,
-          confidence: 0.9,
-          evidence: [],
-          status: 'decided',
-        },
-      ],
-      actions: [],
-      rationales: [],
-      provenance: {
-        meeting_revision: 'rev_1',
-        processor: {
-          kind: 'decision-processor',
-          adapter_id: 'llm',
-          instance_id: 'ollama',
-          version: '1.0.0',
-        },
-        generated_at: NOW,
-      },
-    },
+    brief,
     alternatives: [],
     links: { parent: null, supersedes: null },
     status: 'approved',

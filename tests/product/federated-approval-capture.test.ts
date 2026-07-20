@@ -25,6 +25,16 @@ import type {
   ToolConnectionV1,
 } from '../../src/product/federation/contracts.js';
 import type { ResolvedHistoricalBinding } from '../../src/product/federation/identity-lineage-store.js';
+import {
+  founderRuntimeConfig,
+  slackConnectionFixture,
+  testBinding,
+  testConnection,
+} from './fixtures/founder-identity.js';
+import {
+  activeIdentityBundleFixture,
+  approvalRequestFixture,
+} from './fixtures/federated-records.js';
 
 const NOW = '2026-07-19T20:30:00.000Z';
 const SOURCE_CAPTURED_AT = '2026-07-19T20:28:00.000Z';
@@ -60,174 +70,134 @@ const IDS = {
 };
 
 function runtime(): ProductRuntimeConfig {
-  return {
-    schema_version: 1,
-    lane: 'team-product',
-    state_dir: '/private/tmp/echo-federated-approval',
-    meeting_sources: [
-      {
-        adapter_id: 'granola',
-        instance_id: 'primary',
-        credential_ref: 'file:/private/tmp/granola-token',
-        settings: { page_size: 100 },
-      },
-    ],
-    decision_processor: {
-      adapter_id: 'structured-text',
-      instance_id: 'primary',
-      settings: { prompt_version: 'structured-text-v1' },
-    },
-    delivery_surfaces: [],
-    approval_mode: 'adapter',
-    approval_surface: {
-      adapter_id: 'slack-reactions',
-      instance_id: 'founder-approval',
-      credential_ref: 'file:/private/tmp/slack-token',
-      settings: {
-        channel_id: 'C123',
-        reviewer: { slack_user_id: 'U123', name: 'Founder' },
-        approve_reaction: 'white_check_mark',
-        reject_reaction: 'x',
-      },
-    },
+  const config = founderRuntimeConfig('/private/tmp/echo-federated-approval');
+  config.meeting_sources[0]!.credential_ref =
+    'file:/private/tmp/granola-token';
+  config.meeting_sources[0]!.settings = { page_size: 100 };
+  config.decision_processor.settings = {
+    prompt_version: 'structured-text-v1',
   };
+  config.delivery_surfaces = [];
+  config.approval_surface!.credential_ref = 'file:/private/tmp/slack-token';
+  config.approval_surface!.settings = {
+    channel_id: 'C123',
+    reviewer: { slack_user_id: 'U123', name: 'Founder' },
+    approve_reaction: 'white_check_mark',
+    reject_reaction: 'x',
+  };
+  return config;
 }
 
 function request(): ApprovalRequest {
-  return {
-    processing_key: 'granola:primary:not-1:rev-1:structured-text:primary:1.0.0',
-    requested_at: NOW,
-    meeting: {
-      schema_version: 1,
-      id: 'granola:primary:not-1',
-      title: 'Founder planning',
-      time: { actual_start_at: '2026-07-19T19:00:00.000Z' },
-      capture: { state: 'complete', components: [] },
-      participants: [],
-      content: [],
-      artifacts: [],
-      provenance: {
-        source: {
-          kind: 'meeting-source',
-          adapter_id: 'granola',
-          instance_id: 'primary',
-          version: '2.2.0',
-        },
-        external_id: 'not-1',
-        canonical_revision: 'rev-1',
-        observed_at: NOW,
-        normalizer_version: '1',
-        source_updated_at: NOW,
-      },
-    },
-    decisions: {
-      schema_version: 1,
-      meeting_id: 'granola:primary:not-1',
-      meeting_revision: 'rev-1',
-      processor: {
-        kind: 'decision-processor',
-        adapter_id: 'structured-text',
-        instance_id: 'primary',
-        version: '1.0.0',
-      },
-      generated_at: NOW,
-      signals: [],
-    },
-    brief: {
-      schema_version: 1,
-      id: 'brief-1',
-      meeting: {
-        id: 'granola:primary:not-1',
-        title: 'Founder planning',
-        time: { actual_start_at: '2026-07-19T19:00:00.000Z' },
-        participants: [],
-      },
-      decisions: [],
-      actions: [],
-      rationales: [],
-      provenance: {
-        meeting_revision: 'rev-1',
-        processor: {
-          kind: 'decision-processor',
-          adapter_id: 'structured-text',
-          instance_id: 'primary',
-          version: '1.0.0',
-        },
-        generated_at: NOW,
-      },
-    },
-  };
+  return approvalRequestFixture({
+    now: NOW,
+    meetingId: 'granola:primary:not-1',
+    externalId: 'not-1',
+    revision: 'rev-1',
+    title: 'Founder planning',
+    processingKey:
+      'granola:primary:not-1:rev-1:structured-text:primary:1.0.0',
+    briefId: 'brief-1',
+    actualStartAt: '2026-07-19T19:00:00.000Z',
+    sourceNormalizerVersion: '1',
+    sourceUpdatedAt: NOW,
+  });
 }
 
 function bundle(config = runtime()): VerifiedActiveIdentityBundle {
   const sourceSettings = config.meeting_sources[0]!.settings;
   const processorSettings = config.decision_processor.settings;
   const approvalSettings = config.approval_surface!.settings;
-  const slackProvider = {
-    tenant: { kind: 'slack-team', id: 'T123', enterprise_id: null },
-    subject: {
-      kind: 'bot-installation',
-      id: 'U999BOT',
-      bot_id: 'B999BOT',
-      app_id: 'A999APP',
-    },
-    verification: {
-      method: 'slack_auth_test' as const,
-      assurance: 'provider_verified' as const,
-      verified_at: NOW,
-      evidence_sha256: `sha256:${'9'.repeat(64)}` as const,
-    },
-  };
-  const manifest: VerifiedActiveIdentityBundle['manifest'] = {
-    schema_version: 1,
-    kind: 'echo-local-identity-manifest',
-    manifest_id: IDS.manifest,
-    predecessor_manifest_id: null,
-    created_at: NOW,
-    authority: {
-      kind: 'local-founder-bootstrap',
-      assurance: 'founder_attested',
-    },
-    organization: {
-      organization_id: IDS.organization,
-      display_name: 'Echo',
-      created_at: NOW,
-    },
-    principal: {
-      principal_id: IDS.principal,
-      organization_id: IDS.organization,
-      kind: 'human',
-      display_name: 'Founder',
-    },
-    membership: {
-      membership_id: IDS.membership,
-      organization_id: IDS.organization,
-      principal_id: IDS.principal,
-      type: 'owner',
-      status: 'active',
-      valid_from: NOW,
-    },
-    installation: {
-      installation_id: IDS.installation,
-      organization_id: IDS.organization,
-      membership_id: IDS.membership,
-      device_id: IDS.device,
-      device_class: 'byod',
-      enrolled_at: NOW,
-      product: {
-        name: 'echo-brain',
-        version: ARTIFACT.product_version,
-        source_sha: ARTIFACT.source_sha,
-      },
-      signing_key: {
-        key_id: `sha256:${'8'.repeat(64)}`,
-        algorithm: 'ecdsa-p256-sha256-der-low-s',
-        public_key_spki_der_base64: 'AQ==',
-        protection: 'secure-enclave',
-        assurance: 'hardware_bound',
+  const keyId = `sha256:${'8'.repeat(64)}` as const;
+  const integrity = (digit: string) => ({
+    canonicalization: 'RFC8785' as const,
+    payload_sha256: `sha256:${digit.repeat(64)}` as const,
+    signature_algorithm: 'ecdsa-p256-sha256-der-low-s' as const,
+    key_id: keyId,
+    signature_base64: 'AQ==',
+  });
+  const sourceConnection = testConnection({
+    connectionId: IDS.sourceConnection,
+    organizationId: IDS.organization,
+    owner: { kind: 'membership', id: IDS.membership },
+    provider: 'granola',
+    activeAt: NOW,
+    providerIdentity: {
+      tenant: null,
+      subject: null,
+      verification: {
+        method: 'provider_first_capture',
+        assurance: 'credential_observed',
+        verified_at: NOW,
+        evidence_sha256: `sha256:${'2'.repeat(64)}`,
       },
     },
-    identity_claims: [
+    credentialGuard: {
+      reference: 'file:/private/tmp/granola-token',
+      algorithm: 'sha256-salted',
+      salt_base64: 'AQ==',
+      digest: `sha256:${'3'.repeat(64)}`,
+      exportable: false,
+    },
+  });
+  const slackConnection = slackConnectionFixture({
+    connectionId: IDS.slackConnection,
+    organizationId: IDS.organization,
+    activeAt: NOW,
+    tenantId: 'T123',
+    subject: { id: 'U999BOT', bot_id: 'B999BOT', app_id: 'A999APP' },
+    verifiedAt: NOW,
+    evidenceSha256: `sha256:${'9'.repeat(64)}`,
+    credentialGuard: {
+      reference: 'file:/private/tmp/slack-token',
+      algorithm: 'sha256-salted',
+      salt_base64: 'Ag==',
+      digest: `sha256:${'4'.repeat(64)}`,
+      exportable: false,
+    },
+  });
+  return activeIdentityBundleFixture({
+    ids: IDS,
+    at: NOW,
+    artifact: ARTIFACT,
+    signingKey: {
+      key_id: keyId,
+      algorithm: 'ecdsa-p256-sha256-der-low-s',
+      public_key_spki_der_base64: 'AQ==',
+      protection: 'secure-enclave',
+      assurance: 'hardware_bound',
+    },
+    connections: [sourceConnection, slackConnection],
+    bindings: [
+      testBinding({
+        adapterBindingId: IDS.sourceBinding,
+        capability: 'meeting-source',
+        adapterId: 'granola',
+        instanceId: 'primary',
+        connectionId: IDS.sourceConnection,
+        createdAt: NOW,
+        configuration: sourceSettings,
+      }),
+      testBinding({
+        adapterBindingId: IDS.processorBinding,
+        capability: 'decision-processor',
+        adapterId: 'structured-text',
+        instanceId: 'primary',
+        connectionId: null,
+        createdAt: NOW,
+        configuration: processorSettings,
+      }),
+      testBinding({
+        adapterBindingId: IDS.approvalBinding,
+        capability: 'approval-surface',
+        adapterId: 'slack-reactions',
+        instanceId: 'founder-approval',
+        connectionId: IDS.slackConnection,
+        createdAt: NOW,
+        configuration: approvalSettings,
+      }),
+    ],
+    identityClaims: [
       {
         claim_id: IDS.claim,
         principal_id: IDS.principal,
@@ -242,210 +212,19 @@ function bundle(config = runtime()): VerifiedActiveIdentityBundle {
         },
       },
     ],
-    legacy_cutover: {
-      declared_at: NOW,
-      pre_cutover_default: 'disposable_test',
-      native_records_require: [
-        'source-attribution-v1',
-        'processor-attribution-v1',
-        'approval-context-v1',
-        'signed-outbox-v1',
-      ],
-    },
     integrity: {
-      canonicalization: 'RFC8785',
-      payload_sha256: `sha256:${'1'.repeat(64)}`,
-      signature_algorithm: 'ecdsa-p256-sha256-der-low-s',
-      key_id: `sha256:${'8'.repeat(64)}`,
-      signature_base64: 'AQ==',
+      manifest: integrity('1'),
+      registry: integrity('5'),
+      policy: integrity('6'),
+      pointer: integrity('0'),
     },
-  };
-  const registry: VerifiedActiveIdentityBundle['connectionRegistry'] = {
-    schema_version: 1,
-    kind: 'echo-local-connection-registry',
-    registry_id: IDS.registry,
-    identity_manifest_id: IDS.manifest,
-    revision: 1,
-    previous_registry_sha256: null,
-    updated_at: NOW,
-    connections: [
-      {
-        connection_id: IDS.sourceConnection,
-        organization_id: IDS.organization,
-        owner: { kind: 'membership', id: IDS.membership },
-        provider: 'granola',
-        generations: [
-          {
-            generation: 1,
-            active_from: NOW,
-            ended_at: null,
-            provider_identity: {
-              tenant: null,
-              subject: null,
-              verification: {
-                method: 'provider_first_capture',
-                assurance: 'credential_observed',
-                verified_at: NOW,
-                evidence_sha256: `sha256:${'2'.repeat(64)}`,
-              },
-            },
-            local_credential_guard: {
-              reference: 'file:/private/tmp/granola-token',
-              algorithm: 'sha256-salted',
-              salt_base64: 'AQ==',
-              digest: `sha256:${'3'.repeat(64)}`,
-              exportable: false,
-            },
-          },
-        ],
-      },
-      {
-        connection_id: IDS.slackConnection,
-        organization_id: IDS.organization,
-        owner: { kind: 'organization', id: IDS.organization },
-        provider: 'slack',
-        generations: [
-          {
-            generation: 1,
-            active_from: NOW,
-            ended_at: null,
-            provider_identity: slackProvider,
-            local_credential_guard: {
-              reference: 'file:/private/tmp/slack-token',
-              algorithm: 'sha256-salted',
-              salt_base64: 'Ag==',
-              digest: `sha256:${'4'.repeat(64)}`,
-              exportable: false,
-            },
-          },
-        ],
-      },
-    ],
-    bindings: [
-      {
-        adapter_binding_id: IDS.sourceBinding,
-        capability: 'meeting-source',
-        adapter_id: 'granola',
-        instance_id: 'primary',
-        connection_id: IDS.sourceConnection,
-        connection_generation: 1,
-        configuration_snapshot: sourceSettings,
-        configuration_sha256: canonicalSha256(sourceSettings),
-        created_at: NOW,
-        ended_at: null,
-        status: 'active',
-      },
-      {
-        adapter_binding_id: IDS.processorBinding,
-        capability: 'decision-processor',
-        adapter_id: 'structured-text',
-        instance_id: 'primary',
-        connection_id: null,
-        connection_generation: null,
-        configuration_snapshot: processorSettings,
-        configuration_sha256: canonicalSha256(processorSettings),
-        created_at: NOW,
-        ended_at: null,
-        status: 'active',
-      },
-      {
-        adapter_binding_id: IDS.approvalBinding,
-        capability: 'approval-surface',
-        adapter_id: 'slack-reactions',
-        instance_id: 'founder-approval',
-        connection_id: IDS.slackConnection,
-        connection_generation: 1,
-        configuration_snapshot: approvalSettings,
-        configuration_sha256: canonicalSha256(approvalSettings),
-        created_at: NOW,
-        ended_at: null,
-        status: 'active',
-      },
-    ],
-    integrity: {
-      canonicalization: 'RFC8785',
-      payload_sha256: `sha256:${'5'.repeat(64)}`,
-      signature_algorithm: 'ecdsa-p256-sha256-der-low-s',
-      key_id: `sha256:${'8'.repeat(64)}`,
-      signature_base64: 'AQ==',
+    referenceDigests: {
+      manifest: `sha256:${'1'.repeat(64)}`,
+      registry: `sha256:${'5'.repeat(64)}`,
+      policy: `sha256:${'6'.repeat(64)}`,
     },
-  };
-  const policy: VerifiedActiveIdentityBundle['publicationPolicy'] = {
-    schema_version: 1,
-    kind: 'echo-publication-policy',
-    policy_id: IDS.policy,
-    organization_id: IDS.organization,
-    identity_manifest_id: IDS.manifest,
-    issued_by: {
-      installation_id: IDS.installation,
-      key_id: `sha256:${'8'.repeat(64)}`,
-    },
-    version: 1,
-    effective_at: NOW,
-    publication: {
-      payload_scope:
-        'approved-signal-with-meeting-context-brief-digest-and-bounded-evidence',
-      audience: {
-        scope: 'organization',
-        subjects: [{ kind: 'organization', id: IDS.organization }],
-      },
-      sensitivity: 'internal',
-      retention: { kind: 'indefinite' },
-      raw_meeting_content: 'local-only',
-      participant_observations: 'included-namespaced',
-    },
-    integrity: {
-      canonicalization: 'RFC8785',
-      payload_sha256: `sha256:${'6'.repeat(64)}`,
-      signature_algorithm: 'ecdsa-p256-sha256-der-low-s',
-      key_id: `sha256:${'8'.repeat(64)}`,
-      signature_base64: 'AQ==',
-    },
-  };
-  return {
-    pointer: {
-      schema_version: 1,
-      kind: 'echo-active-identity-bundle',
-      manifest: {
-        path: 'manifests/manifest.json',
-        sha256: `sha256:${'1'.repeat(64)}`,
-        manifest_id: IDS.manifest,
-      },
-      connection_registry: {
-        path: 'registries/registry.json',
-        sha256: `sha256:${'5'.repeat(64)}`,
-        registry_id: IDS.registry,
-        revision: 1,
-      },
-      default_publication_policy: {
-        path: 'policies/policy.json',
-        sha256: `sha256:${'6'.repeat(64)}`,
-        policy_id: IDS.policy,
-        version: 1,
-      },
-      active_installation_id: IDS.installation,
-      activated_at: NOW,
-      activation_reason: 'founder-bootstrap',
-      integrity: {
-        canonicalization: 'RFC8785',
-        payload_sha256: `sha256:${'0'.repeat(64)}`,
-        signature_algorithm: 'ecdsa-p256-sha256-der-low-s',
-        key_id: `sha256:${'8'.repeat(64)}`,
-        signature_base64: 'AQ==',
-      },
-    },
-    manifest,
-    connectionRegistry: registry,
-    publicationPolicy: policy,
-    canonical: {
-      pointer: '{}',
-      manifest: '{}',
-      connectionRegistry: '{}',
-      publicationPolicy: '{}',
-    },
-  };
+  });
 }
-
 function lineageBundle(input: {
   manifestId: string;
   predecessorManifestId: string | null;

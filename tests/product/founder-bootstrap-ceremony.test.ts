@@ -1,32 +1,15 @@
 import {
-  generateKeyPairSync,
-  sign as signMessage,
-  type KeyObject,
-} from "node:crypto";
-import {
-  chmodSync,
   existsSync,
   mkdirSync,
-  mkdtempSync,
   readFileSync,
   readdirSync,
-  realpathSync,
   renameSync,
   rmSync,
   writeFileSync,
 } from "node:fs";
-import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { LLM_DECISION_PROCESSOR_PROMPT_VERSION } from "../../src/adapters/decision-processors/llm/llm-decision-processor.js";
-import type { GranolaApiClient } from "../../src/adapters/meeting-sources/granola/index.js";
-import type {
-  SlackAuthIdentity,
-  SlackDirectMessage,
-  SlackPostMessageInput,
-  SlackPostedMessage,
-  SlackReaction,
-} from "../../src/adapters/shared/slack/slack-web-api-client.js";
 import type { ProductRuntimeConfig } from "../../src/product/config.js";
 import { runProductCli } from "../../src/product/cli.js";
 import { DecisionNodeStore } from "../../src/product/approval/decision-node-store.js";
@@ -62,15 +45,11 @@ import {
   recoverLegacyClassificationCutoverAt,
 } from "../../src/product/federation/legacy-classification.js";
 import { createSignedDocument } from "../../src/product/federation/signed-document.js";
-import type {
-  InstallationKeyDescriptor,
-  InstallationSigner,
-} from "../../src/product/federation/installation-signer.js";
 import {
-  normalizeP256LowS,
-  p256KeyId,
-} from "../../src/product/federation/signature-profile.js";
-import type { SlackDmChallengeApi } from "../../src/product/federation/slack-dm-challenge.js";
+  createPrivateTestState,
+  founderCeremonyFixture,
+  founderRuntimeConfig,
+} from "./fixtures/founder-identity.js";
 
 const NOW = "2026-07-19T23:00:00.000Z";
 const temporary: string[] = [];
@@ -81,222 +60,16 @@ afterEach(() => {
   }
 });
 
-class FakeHardwareSigner implements InstallationSigner {
-  private readonly keys = new Map<
-    string,
-    { privateKey: KeyObject; descriptor: InstallationKeyDescriptor }
-  >();
-  failSignOnce = false;
-  failGenerateOnce = false;
-  reportDeleteWithoutDeleting = false;
-  generateCalls = 0;
-
-  async generate(installationId: string): Promise<InstallationKeyDescriptor> {
-    this.generateCalls += 1;
-    if (this.failGenerateOnce) {
-      this.failGenerateOnce = false;
-      throw new Error("simulated crash before key generation");
-    }
-    const existing = this.keys.get(installationId);
-    if (existing !== undefined) return existing.descriptor;
-    const { publicKey, privateKey } = generateKeyPairSync("ec", {
-      namedCurve: "prime256v1",
-    });
-    const spki = publicKey.export({ type: "spki", format: "der" });
-    const descriptor: InstallationKeyDescriptor = {
-      installation_id: installationId,
-      key_id: p256KeyId(spki),
-      algorithm: "ecdsa-p256-sha256-der-low-s",
-      public_key_spki_der_base64: spki.toString("base64"),
-      protection: "secure-enclave",
-      assurance: "hardware_bound",
-      private_key_exportable: false,
-    };
-    this.keys.set(installationId, { privateKey, descriptor });
-    return descriptor;
-  }
-
-  async inspect(
-    installationId: string,
-  ): Promise<InstallationKeyDescriptor | null> {
-    return this.keys.get(installationId)?.descriptor ?? null;
-  }
-
-  async sign(
-    installationId: string,
-    message: Buffer,
-    expectedKeyId?: `sha256:${string}`,
-  ): Promise<Buffer> {
-    if (this.failSignOnce) {
-      this.failSignOnce = false;
-      throw new Error("simulated crash after key generation");
-    }
-    const key = this.keys.get(installationId);
-    if (key === undefined || key.descriptor.key_id !== expectedKeyId) {
-      throw new Error("test key is unavailable or mismatched");
-    }
-    return normalizeP256LowS(
-      signMessage("sha256", message, {
-        key: key.privateKey,
-        dsaEncoding: "der",
-      }),
-    );
-  }
-
-  async deleteOrphan(
-    installationId: string,
-    expectedKeyId: `sha256:${string}`,
-  ): Promise<boolean> {
-    const key = this.keys.get(installationId);
-    if (key === undefined) return false;
-    if (key.descriptor.key_id !== expectedKeyId) {
-      throw new Error("test key fingerprint mismatch");
-    }
-    if (this.reportDeleteWithoutDeleting) return true;
-    return this.keys.delete(installationId);
-  }
-}
-
-class FakeSlackApi implements SlackDmChallengeApi {
-  readonly identity: SlackAuthIdentity = {
-    team_id: "T123TEAM",
-    enterprise_id: null,
-    user_id: "U123BOT",
-    bot_id: "B123BOT",
-    app_id: "A123APP",
-  };
-  reactionObserved = false;
-  authCalls = 0;
-  readonly posted: SlackPostMessageInput[] = [];
-
-  async authIdentity(): Promise<SlackAuthIdentity> {
-    this.authCalls += 1;
-    return this.identity;
-  }
-
-  async openDirectMessage(userId: string): Promise<SlackDirectMessage> {
-    return { channel_id: "D123FOUNDER", user_id: userId };
-  }
-
-  async postMessage(input: SlackPostMessageInput): Promise<SlackPostedMessage> {
-    this.posted.push(input);
-    return { channel: String(input.channel), ts: "1752966000.000001" };
-  }
-
-  async reactionsGet(): Promise<readonly SlackReaction[]> {
-    return this.reactionObserved
-      ? [{ name: "white_check_mark", users: ["U123FOUNDER"], count: 1 }]
-      : [];
-  }
-}
-
-class FakeGranolaApi implements GranolaApiClient {
-  listCalls = 0;
-  failNext = false;
-
-  async listNotes() {
-    this.listCalls += 1;
-    if (this.failNext) {
-      this.failNext = false;
-      throw new Error("temporary Granola bootstrap failure");
-    }
-    return {
-      notes: [{ id: "not_bootstrap_evidence" }],
-      hasMore: true,
-      cursor: "not-persisted",
-    };
-  }
-
-  async getNote(): Promise<never> {
-    throw new Error("bootstrap must not fetch Granola note detail");
-  }
-}
-
 function privateState(): string {
-  const root = mkdtempSync(join(tmpdir(), "echo-founder-bootstrap-"));
-  temporary.push(root);
-  const state = join(realpathSync(root), "state");
-  mkdirSync(state, { mode: 0o700 });
-  chmodSync(state, 0o700);
-  return state;
+  return createPrivateTestState(temporary, "echo-founder-bootstrap-");
 }
 
 function config(stateDir: string): ProductRuntimeConfig {
-  return {
-    schema_version: 1,
-    lane: "team-product",
-    state_dir: stateDir,
-    meeting_sources: [
-      {
-        adapter_id: "granola",
-        instance_id: "primary",
-        credential_ref: `file:${join(stateDir, "credentials", "granola-api-key")}`,
-        settings: { page_size: 1 },
-      },
-    ],
-    decision_processor: {
-      adapter_id: "structured-text",
-      instance_id: "primary",
-      settings: {},
-    },
-    delivery_surfaces: [
-      {
-        adapter_id: "slack",
-        instance_id: "team-decisions",
-        credential_ref: `file:${join(stateDir, "credentials", "slack-bot-token")}`,
-        settings: { channel_id: "C123DECISIONS" },
-      },
-    ],
-    approval_mode: "adapter",
-    approval_surface: {
-      adapter_id: "slack-reactions",
-      instance_id: "founder-approval",
-      credential_ref: `file:${join(stateDir, "credentials", "slack-bot-token")}`,
-      settings: {
-        channel_id: "C123APPROVALS",
-        reviewer: { slack_user_id: "U123FOUNDER", name: "Zhenye" },
-      },
-    },
-  };
+  return founderRuntimeConfig(stateDir);
 }
 
 function fixture(stateDir: string) {
-  const slack = new FakeSlackApi();
-  const granola = new FakeGranolaApi();
-  const signer = new FakeHardwareSigner();
-  const credentials = new Map([
-    [
-      `file:${join(stateDir, "credentials", "slack-bot-token")}`,
-      "xoxb-test-slack",
-    ],
-    [
-      `file:${join(stateDir, "credentials", "granola-api-key")}`,
-      "grn_test_granola",
-    ],
-  ]);
-  const dependencies: FounderBootstrapCeremonyDependencies = {
-    signer,
-    credentialResolver: (reference) => credentials.get(reference),
-    slackApiFactory: () => slack,
-    granolaApiFactory: () => granola,
-    loadBuildIdentity: () => ({
-      schema_version: 1,
-      kind: "echo-packaged-build-identity",
-      product_version: "0.1.0-dev.6",
-      source_sha: "a".repeat(40),
-      source_kind: "materialized-commit",
-    }),
-    now: () => NOW,
-    sessionIdFactory: () => "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
-  };
-  return {
-    config: config(stateDir),
-    slack,
-    granola,
-    signer,
-    credentials,
-    dependencies,
-  };
+  return founderCeremonyFixture(stateDir, NOW);
 }
 
 describe("founder bootstrap ceremony", () => {
