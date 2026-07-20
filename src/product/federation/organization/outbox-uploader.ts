@@ -192,9 +192,12 @@ export class OrganizationOutboxUploader {
   async uploadPending(): Promise<OrganizationOutboxUploadResult> {
     return this.runExclusive(async () => {
       const { state, events } = await this.verifiedLocalState();
-      if (state.terminal_status === 'quarantined') {
+      if (
+        state.terminal_status === 'quarantined' ||
+        state.terminal_status === 'rejected'
+      ) {
         return {
-          status: 'quarantined',
+          status: state.terminal_status,
           attempted_events: 0,
           acknowledged_sequence: state.acknowledged_sequence,
           acknowledged_event_hash: state.acknowledged_event_hash,
@@ -204,7 +207,7 @@ export class OrganizationOutboxUploader {
       const pending = events.slice(state.acknowledged_sequence);
       if (pending.length === 0) {
         return {
-          status: state.terminal_status === 'rejected' ? 'rejected' : 'idle',
+          status: 'idle',
           attempted_events: 0,
           acknowledged_sequence: state.acknowledged_sequence,
           acknowledged_event_hash: state.acknowledged_event_hash,

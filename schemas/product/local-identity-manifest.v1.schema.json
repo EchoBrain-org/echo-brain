@@ -28,13 +28,26 @@
     },
     "created_at": { "$ref": "#/definitions/timestamp" },
     "authority": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": ["kind", "assurance"],
-      "properties": {
-        "kind": { "const": "local-founder-bootstrap" },
-        "assurance": { "const": "founder_attested" }
-      }
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "assurance"],
+          "properties": {
+            "kind": { "const": "local-founder-bootstrap" },
+            "assurance": { "const": "founder_attested" }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "assurance"],
+          "properties": {
+            "kind": { "const": "organization-authority-enrollment" },
+            "assurance": { "const": "authority_preprovisioned" }
+          }
+        }
+      ]
     },
     "organization": {
       "type": "object",
@@ -103,13 +116,16 @@
     },
     "identity_claims": {
       "type": "array",
-      "minItems": 1,
       "items": { "$ref": "#/definitions/identityClaim" }
     },
     "legacy_cutover": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["declared_at", "pre_cutover_default", "native_records_require"],
+      "required": [
+        "declared_at",
+        "pre_cutover_default",
+        "native_records_require"
+      ],
       "properties": {
         "declared_at": { "$ref": "#/definitions/timestamp" },
         "pre_cutover_default": { "const": "disposable_test" },
@@ -228,13 +244,37 @@
             "protection": { "const": "keychain-this-device-only" },
             "assurance": { "const": "platform_key_device_only" }
           }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "key_id",
+            "algorithm",
+            "public_key_spki_der_base64",
+            "protection",
+            "assurance"
+          ],
+          "properties": {
+            "key_id": { "$ref": "#/definitions/digest" },
+            "algorithm": { "const": "ecdsa-p256-sha256-der-low-s" },
+            "public_key_spki_der_base64": { "$ref": "#/definitions/base64" },
+            "protection": { "const": "development-file" },
+            "assurance": { "const": "software_key_development_only" }
+          }
         }
       ]
     },
     "identityClaim": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["claim_id", "principal_id", "issuer", "subject", "verification"],
+      "required": [
+        "claim_id",
+        "principal_id",
+        "issuer",
+        "subject",
+        "verification"
+      ],
       "properties": {
         "claim_id": { "$ref": "#/definitions/claimId" },
         "principal_id": { "$ref": "#/definitions/principalId" },
@@ -278,9 +318,16 @@
             {
               "type": "object",
               "additionalProperties": false,
-              "required": ["method", "assurance", "verified_at", "evidence_sha256"],
+              "required": [
+                "method",
+                "assurance",
+                "verified_at",
+                "evidence_sha256"
+              ],
               "properties": {
-                "method": { "enum": ["slack_dm_challenge", "email_magic_link"] },
+                "method": {
+                  "enum": ["slack_dm_challenge", "email_magic_link"]
+                },
                 "assurance": {
                   "enum": ["provider_challenge_observed", "provider_verified"]
                 },

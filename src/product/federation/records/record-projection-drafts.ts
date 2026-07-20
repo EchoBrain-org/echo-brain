@@ -123,7 +123,7 @@ export function buildRecordProjectionDrafts(options: {
   manifest: LocalIdentityManifestV1;
   identityManifestSha256: Sha256Digest;
   projectionArtifact: ProductArtifactIdentityV1;
-  metadata: ApprovalFederationMetadataV1;
+  metadata: Pick<ApprovalFederationMetadataV1, 'publication'>;
   snapshots: FederatedProjectionSnapshots;
   approvedBriefSha256: `sha256:${string}`;
   signalManifest: ReturnType<typeof buildProjectionSignalManifest>;
@@ -165,11 +165,18 @@ export function buildRecordProjectionDrafts(options: {
         membership_id: options.manifest.membership.membership_id,
         installation_id: installationId,
         key_id: options.manifest.installation.signing_key.key_id,
-        membership_assertion: {
-          status: 'active',
-          authority: 'local-founder-bootstrap',
-          assurance: 'founder_attested',
-        },
+        membership_assertion:
+          options.manifest.authority.kind === 'local-founder-bootstrap'
+            ? {
+                status: 'active',
+                authority: 'local-founder-bootstrap',
+                assurance: 'founder_attested',
+              }
+            : {
+                status: 'active',
+                authority: 'organization-authority-enrollment',
+                assurance: 'authority_preprovisioned',
+              },
         product_artifact: clone(options.projectionArtifact),
       },
       source: clone(options.snapshots.source),

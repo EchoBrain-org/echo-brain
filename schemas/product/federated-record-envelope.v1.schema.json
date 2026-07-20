@@ -148,14 +148,30 @@
         "installation_id": { "$ref": "#/definitions/installationId" },
         "key_id": { "$ref": "#/definitions/digest" },
         "membership_assertion": {
-          "type": "object",
-          "additionalProperties": false,
-          "required": ["status", "authority", "assurance"],
-          "properties": {
-            "status": { "const": "active" },
-            "authority": { "const": "local-founder-bootstrap" },
-            "assurance": { "const": "founder_attested" }
-          }
+          "oneOf": [
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["status", "authority", "assurance"],
+              "properties": {
+                "status": { "const": "active" },
+                "authority": { "const": "local-founder-bootstrap" },
+                "assurance": { "const": "founder_attested" }
+              }
+            },
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["status", "authority", "assurance"],
+              "properties": {
+                "status": { "const": "active" },
+                "authority": {
+                  "const": "organization-authority-enrollment"
+                },
+                "assurance": { "const": "authority_preprovisioned" }
+              }
+            }
+          ]
         },
         "product_artifact": { "$ref": "#/definitions/productArtifact" }
       }

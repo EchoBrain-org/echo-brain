@@ -12,7 +12,7 @@ authority for exact fields, paths, commands, and implementation details.
 - [Identity, onboarding, and federation](architecture/identity-onboarding-and-federation.md):
   how records remain attributable across people, tools, and installations.
 - [Organization authority foundation](architecture/organization-authority-foundation.md):
-  the N=2 enrollment, revocation, ingest, and receipt boundary.
+  the experimental N=2 enrollment, revocation, ingest, and receipt boundary.
 
 ## Direction and decisions
 

@@ -2041,6 +2041,9 @@ export class OrganizationAuthorityStore {
         producer.membership_id !== installation.membership_id ||
         producer.installation_id !== installation.installation_id ||
         producer.key_id !== installation.key_id ||
+        producer.membership_assertion.authority !== manifest.authority.kind ||
+        producer.membership_assertion.assurance !==
+          manifest.authority.assurance ||
         envelope.source.identity_manifest_id !==
           installation.identity_manifest_id ||
         envelope.source.identity_manifest_sha256 !==

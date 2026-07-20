@@ -11,8 +11,9 @@ general-purpose home for new files.
 - `runtime-wiring.ts` is the composition root.
 - `approval-capture.ts`, `identity-lineage-store.ts`, `record-projector.ts`,
   `export-bundle.ts`, `independent-copy-store.ts`, and
-  `legacy-classification.ts`, `authority.ts`, and `organization-sync.ts` are
-  stable capability facades.
+  `legacy-classification.ts` are stable capability facades.
+- `authority.ts` and `organization-sync.ts` are experimental N=2 pilot
+  facades. Do not treat their current documents or state machines as frozen.
 - `cutover-fence.ts` and `build-identity.ts` are bootstrap-owned root anchors;
   `attributing-core-state-store.ts`, `attribution-store.ts`, and
   `outbox-store.ts` are records-owned root anchors; `artifact-evidence.ts` is

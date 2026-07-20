@@ -17,7 +17,7 @@ export interface InstallationKeyDescriptor {
   public_key_spki_der_base64: string;
   protection: KeyProtection;
   assurance: KeyProtectionAssurance;
-  private_key_exportable: false;
+  private_key_exportable: boolean;
 }
 
 export interface InstallationSigner {
@@ -40,15 +40,17 @@ export function verifyInstallationKeyDescriptor(
   if (descriptor.algorithm !== "ecdsa-p256-sha256-der-low-s") {
     throw new Error("installation signing algorithm is unsupported");
   }
-  if (descriptor.private_key_exportable !== false) {
-    throw new Error("installation private key must be non-exportable");
-  }
-  if (
+  const supportedProtection =
     (descriptor.protection === "secure-enclave" &&
-      descriptor.assurance !== "hardware_bound") ||
+      descriptor.assurance === "hardware_bound" &&
+      descriptor.private_key_exportable === false) ||
     (descriptor.protection === "keychain-this-device-only" &&
-      descriptor.assurance !== "platform_key_device_only")
-  ) {
+      descriptor.assurance === "platform_key_device_only" &&
+      descriptor.private_key_exportable === false) ||
+    (descriptor.protection === "development-file" &&
+      descriptor.assurance === "software_key_development_only" &&
+      descriptor.private_key_exportable === true);
+  if (!supportedProtection) {
     throw new Error("installation key protection assurance is inconsistent");
   }
   const publicKey = Buffer.from(

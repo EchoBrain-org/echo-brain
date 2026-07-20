@@ -1,8 +1,13 @@
 # Organization authority foundation
 
-**Status:** implemented N=2 foundation
+**Status:** experimental N=2 protocol prototype
 
-This slice adds one organization authority around the existing signed local
+This is a disposable pilot, not a stable wire protocol or production runtime
+integration. The current qualification target is one manual two-installation
+walkthrough: enroll A and B, accept a signed record from each, revoke A, then
+prove that A no longer advances while B still does.
+
+This prototype adds one organization authority around the existing signed local
 boundary. It does not change core processing, local approval, delivery, record
 IDs, event bytes, or the meaning of a Founder Live identity manifest.
 
@@ -143,14 +148,21 @@ occurrence time.
 
 ## Deliberate limits
 
-This foundation provides a storage/protocol capability with an injected
+The library foundation provides a storage/protocol capability with an injected
 transport and injected authority signer. It does not add an HTTP server, secret
-key file format, browser enrollment UI, invitation-delivery service, IdP/OIDC,
+key service, browser enrollment UI, invitation-delivery service, IdP/OIDC,
 SCIM, general IAM, dashboards, distributed services, participant resolution,
 raw-transcript sync, search, embeddings, or an LLM brain. It centralizes
 membership, installation revocation, chain acceptance, and receipts only.
 Existing independent-copy requirements remain in force until a separate
 operational cutover explicitly replaces them with central durability evidence.
+
+The manual N=2 tool deliberately uses unencrypted, exportable file-backed keys
+and file handoffs. Its records are synthetic pilot records used to exercise the
+organization trust path; it does not activate an employee identity in the
+normal meeting-to-decision runtime. Secure Enclave provisioning, key rotation,
+recovery, authenticated transport, and runtime integration wait until the
+walkthrough demonstrates concrete demand.
 
 This first authority registration supports one exact manifest/key/policy epoch
 per installation. Every uploaded event, source snapshot, processor snapshot,

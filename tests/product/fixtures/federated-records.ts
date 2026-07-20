@@ -16,6 +16,7 @@ import type {
   FederationId,
   LocalConnectionRegistryV1,
   LocalIdentityManifestV1,
+  NativeProducerV1,
   ProductArtifactIdentityV1,
   PublicationPolicyV1,
   PublicationSnapshotV1,
@@ -104,6 +105,10 @@ export class CountingInstallationSigner implements InstallationSigner {
     );
   }
 }
+
+type FixtureInstallationSigner = InstallationSigner & {
+  readonly descriptor: InstallationKeyDescriptor;
+};
 
 interface ActiveIdentityBundleFixtureOptions {
   ids: {
@@ -362,7 +367,7 @@ export function approvalRequestFixture(
 }
 
 interface EventGroupFixtureOptions {
-  signer: CountingInstallationSigner;
+  signer: FixtureInstallationSigner;
   occurredAt: string;
   approvalId: string;
   decisionId: string;
@@ -405,6 +410,7 @@ interface EventGroupFixtureOptions {
   actionText?: string;
   approvalReason?: string | null;
   slackClaimId?: FederationId;
+  membershipAssertion?: NativeProducerV1['membership_assertion'];
 }
 
 export function federatedApprovalGroupDrafts(
@@ -501,7 +507,7 @@ export function federatedApprovalGroupDrafts(
         membership_id: membershipId,
         installation_id: options.signer.descriptor.installation_id,
         key_id: options.signer.descriptor.key_id,
-        membership_assertion: {
+        membership_assertion: options.membershipAssertion ?? {
           status: 'active',
           authority: 'local-founder-bootstrap',
           assurance: 'founder_attested',
@@ -715,7 +721,7 @@ function slackApproval(input: {
 }
 
 export async function signFederatedApprovalGroupDrafts(options: {
-  signer: CountingInstallationSigner;
+  signer: FixtureInstallationSigner;
   drafts: readonly FederatedOutboxEventDraft[];
   sequenceOffset?: number;
   previousEventHash?: Sha256Digest | null;

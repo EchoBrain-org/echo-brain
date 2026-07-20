@@ -1,6 +1,6 @@
 # Identity, onboarding, and federation
 
-**Status:** Founder Live architecture accepted; N=2 protocol foundation implemented; operational adoption proposed
+**Status:** Founder Live architecture accepted; N=2 protocol prototype under manual qualification
 
 Echo uses local processing with durable organization attribution. The local
 installation keeps credentials and raw source data, runs the core, freezes facts
@@ -84,9 +84,9 @@ Neither erases history. Rehire creates a new membership. Account changes create
 a new connection, bindings, source instance, and cursor lineage unless the
 provider proves continuity.
 
-## N=2 foundation
+## N=2 pilot
 
-The implemented N=2 foundation is deliberately small: one organization
+The experimental N=2 prototype is deliberately small: one organization
 authority, one database, one-time invitation grants and enrollment challenges,
 one local uploader, signed ingest receipts, exact signed publication-policy
 evaluation, and enforced membership and installation revocation. It reuses the
@@ -105,6 +105,13 @@ participant resolution, raw-transcript sync, search, and the LLM brain remain
 outside that slice. New defensive machinery must protect a non-backfillable
 fact, prevent an unauthorized external effect, or cover a qualification failure;
 otherwise it waits.
+
+For the first human walkthrough, the organization authority and installation
+keys are ordinary development files and the artifact exchange is manual. A
+synthetic record path exercises enrollment, signed ingest receipts, local
+cursor advancement, and per-installation revocation without claiming that the
+normal product runtime has adopted the employee identity. That integration is
+a later step if the two-person walkthrough is useful.
 
 The accepted decision register is
 [Founder identity decisions](../decisions/founder-identity-decisions.md).

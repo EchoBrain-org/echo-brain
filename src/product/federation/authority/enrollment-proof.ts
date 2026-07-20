@@ -45,7 +45,7 @@ export function verifiedManifestPublicKey(
     public_key_spki_der_base64: signingKey.public_key_spki_der_base64,
     protection: signingKey.protection,
     assurance: signingKey.assurance,
-    private_key_exportable: false,
+    private_key_exportable: signingKey.protection === 'development-file',
   });
   verifySignedDocument(manifest, publicKey, signingKey.key_id);
   return publicKey;

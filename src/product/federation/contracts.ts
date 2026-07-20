@@ -14,15 +14,19 @@ export type FederationId = string;
 
 export type IdentityAssurance =
   | 'founder_attested'
+  | 'authority_preprovisioned'
   | 'provider_challenge_observed'
   | 'provider_verified'
   | 'credential_observed'
   | 'operator_attested'
   | 'installation_holder_self_attested';
 
-export type KeyProtection = 'secure-enclave' | 'keychain-this-device-only';
+export type KeyProtection =
+  'secure-enclave' | 'keychain-this-device-only' | 'development-file';
 export type KeyProtectionAssurance =
-  'hardware_bound' | 'platform_key_device_only';
+  | 'hardware_bound'
+  | 'platform_key_device_only'
+  | 'software_key_development_only';
 
 export interface SignedIntegrity {
   canonicalization: 'RFC8785';
@@ -137,10 +141,15 @@ export interface LocalIdentityManifestV1 extends SignedDocument {
   manifest_id: FederationId;
   predecessor_manifest_id: FederationId | null;
   created_at: string;
-  authority: {
-    kind: 'local-founder-bootstrap';
-    assurance: 'founder_attested';
-  };
+  authority:
+    | {
+        kind: 'local-founder-bootstrap';
+        assurance: 'founder_attested';
+      }
+    | {
+        kind: 'organization-authority-enrollment';
+        assurance: 'authority_preprovisioned';
+      };
   organization: OrganizationIdentityV1;
   principal: PrincipalIdentityV1;
   membership: MembershipIdentityV1;
@@ -377,11 +386,17 @@ export interface NativeProducerV1 {
   membership_id: FederationId;
   installation_id: FederationId;
   key_id: Sha256Digest;
-  membership_assertion: {
-    status: 'active';
-    authority: 'local-founder-bootstrap';
-    assurance: 'founder_attested';
-  };
+  membership_assertion:
+    | {
+        status: 'active';
+        authority: 'local-founder-bootstrap';
+        assurance: 'founder_attested';
+      }
+    | {
+        status: 'active';
+        authority: 'organization-authority-enrollment';
+        assurance: 'authority_preprovisioned';
+      };
   product_artifact: ProductArtifactIdentityV1;
 }
 
