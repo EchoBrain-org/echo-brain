@@ -1,43 +1,43 @@
 #!/usr/bin/env node
 
-import { readFileSync, realpathSync } from 'node:fs';
-import { isAbsolute } from 'node:path';
-import { parseArgs } from 'node:util';
-import type { Writable } from 'node:stream';
-import { fileURLToPath } from 'node:url';
-import type { AdapterInstanceConfig } from '../core/index.js';
+import { readFileSync, realpathSync } from "node:fs";
+import { isAbsolute } from "node:path";
+import { parseArgs } from "node:util";
+import type { Writable } from "node:stream";
+import { fileURLToPath } from "node:url";
+import type { AdapterInstanceConfig } from "../core/index.js";
 import {
   createConfiguredAdapterRegistry,
   type ProductAdapterFactoryRegistry,
-} from './adapter-factories.js';
+} from "./adapter-factories.js";
 import {
   prepareProductComposition,
   prepareProductStateRoot,
   resolveProductClock,
   type PrepareProductCompositionOptions,
   type ProductComposition,
-} from './composition.js';
+} from "./composition.js";
 import {
   classifyStateFilesystem,
   loadProductRuntimeConfig,
   type ClassifyStateFilesystem,
   type ProductRuntimeConfig,
-} from './config.js';
-import { createDefaultAdapterFactories } from './default-adapters.js';
-import { DecisionNodeStore } from './approval/decision-node-store.js';
+} from "./config.js";
+import { createDefaultAdapterFactories } from "./default-adapters.js";
+import { DecisionNodeStore } from "./approval/decision-node-store.js";
 import {
   ProductRuntimeFailure,
   startProductRuntime,
   type ProductRuntimeDependencies,
-} from './runtime.js';
-import { diagnoseConfiguredAdapters } from './adapter-diagnostics.js';
+} from "./runtime.js";
+import { diagnoseConfiguredAdapters } from "./adapter-diagnostics.js";
 import {
   onboardProduct,
   ProductOperator,
   ProductOperatorError,
   type ProductOperatorDependencies,
   type ProductServiceAction,
-} from './operator-lifecycle.js';
+} from "./operator-lifecycle.js";
 import {
   acquireProductLifecycleLock,
   acquireProductMaintenanceLease,
@@ -45,23 +45,31 @@ import {
   type ProductMaintenanceLease,
   type ProductLifecycleLockKind,
   type ReleaseProductLifecycleLock,
-} from './lifecycle-lock.js';
+} from "./lifecycle-lock.js";
 import {
   createProductStateBackup,
   restoreProductStateBackup,
-} from './state-backup.js';
+} from "./state-backup.js";
 import {
   assertFounderIdentityAllowsPipeline,
   checkFounderIdentity,
   type IdentityCheckDependencies,
-} from './federation/identity-check.js';
-import { MacOsSecureEnclaveInstallationSigner } from './federation/macos-installation-signer.js';
-import { bundledProductHelperAvailable } from './spawn-sanitized-child.js';
+} from "./federation/identity-check.js";
+import { MacOsSecureEnclaveInstallationSigner } from "./federation/macos-installation-signer.js";
+import { bundledProductHelperAvailable } from "./spawn-sanitized-child.js";
+import { createProductCredentialResolver } from "./credentials.js";
+import {
+  abortFounderBootstrap,
+  beginFounderBootstrap,
+  commitFounderBootstrapCeremony,
+  statusFounderBootstrap,
+  type FounderBootstrapCeremonyDependencies,
+} from "./federation/founder-bootstrap-ceremony.js";
 
 export interface ProductCliProcess {
-  once: (event: 'SIGINT' | 'SIGTERM', listener: () => void) => unknown;
+  once: (event: "SIGINT" | "SIGTERM", listener: () => void) => unknown;
   removeListener: (
-    event: 'SIGINT' | 'SIGTERM',
+    event: "SIGINT" | "SIGTERM",
     listener: () => void,
   ) => unknown;
 }
@@ -70,18 +78,19 @@ export interface ProductCliDependencies {
   classifyStateFilesystem?: ClassifyStateFilesystem;
   runtime?: ProductRuntimeDependencies;
   process?: ProductCliProcess;
-  stdout?: Pick<Writable, 'write'>;
-  stderr?: Pick<Writable, 'write'>;
+  stdout?: Pick<Writable, "write">;
+  stderr?: Pick<Writable, "write">;
   adapterFactories?: ProductAdapterFactoryRegistry;
   environment?: NodeJS.ProcessEnv;
   now?: () => string;
   composition?: Omit<
     PrepareProductCompositionOptions,
-    'classifyStateFilesystem'
+    "classifyStateFilesystem"
   >;
   operator?: Partial<ProductOperatorDependencies>;
   doctorHealthTimeoutMs?: number;
   identityCheck?: IdentityCheckDependencies;
+  founderBootstrap?: FounderBootstrapCeremonyDependencies;
   acquireLifecycleLock?: (
     stateDirectory: string,
     kind: ProductLifecycleLockKind,
@@ -91,23 +100,24 @@ export interface ProductCliDependencies {
 
 interface ParsedCommand {
   command:
-    | 'validate-config'
-    | 'selftest'
-    | 'run-once'
-    | 'run'
-    | 'service-run'
-    | 'onboard'
-    | 'init'
-    | 'reconfigure'
-    | 'status'
-    | 'doctor'
-    | 'identity-check'
-    | 'service'
-    | 'backup'
-    | 'restore'
-    | 'approvals'
-    | 'approve'
-    | 'reject';
+    | "validate-config"
+    | "selftest"
+    | "run-once"
+    | "run"
+    | "service-run"
+    | "onboard"
+    | "init"
+    | "reconfigure"
+    | "status"
+    | "doctor"
+    | "identity-check"
+    | "identity-bootstrap"
+    | "service"
+    | "backup"
+    | "restore"
+    | "approvals"
+    | "approve"
+    | "reject";
   configPath: string;
   approvalId?: string;
   reviewer?: string;
@@ -118,11 +128,19 @@ interface ParsedCommand {
   backupDirectory?: string;
   operationId?: string;
   strictIdentityCheck?: boolean;
+  identityBootstrapAction?: "begin" | "status" | "commit" | "abort";
+  organizationName?: string;
+  principalName?: string;
+  slackUserId?: string;
+  deviceClass?: "byod" | "managed";
+  bootstrapSessionId?: string;
+  confirmationSha256?: string;
+  renewChallenge?: boolean;
 }
 
 const PRODUCT_VERSION = (
   JSON.parse(
-    readFileSync(new URL('../../package.json', import.meta.url), 'utf8'),
+    readFileSync(new URL("../../package.json", import.meta.url), "utf8"),
   ) as {
     version: string;
   }
@@ -138,6 +156,10 @@ Usage:
   echo-brain status --config <absolute-path>
   echo-brain doctor --config <absolute-path>
   echo-brain identity-check --config <absolute-path> [--strict]
+  echo-brain identity-bootstrap begin --config <absolute-path> --organization-name <name> --principal-name <name> --slack-user-id <U...> [--device-class <byod|managed>]
+  echo-brain identity-bootstrap status --config <absolute-path> --session <uuid> [--renew-challenge]
+  echo-brain identity-bootstrap commit --config <absolute-path> --session <uuid> --confirm <sha256:...>
+  echo-brain identity-bootstrap abort --config <absolute-path> --session <uuid> --confirm <installation-key-sha256>
   echo-brain service <install|start|stop|restart|status|uninstall> --config <absolute-path>
   echo-brain backup --config <absolute-path> --backup-root <absolute-path> [--id <operation-id>]
   echo-brain restore --config <absolute-path> --backup <absolute-path> --backup-root <absolute-path> --id <operation-id>
@@ -152,52 +174,70 @@ Usage:
   echo-brain --help
 `;
 
-function print(stream: Pick<Writable, 'write'>, value: unknown): void {
+function print(stream: Pick<Writable, "write">, value: unknown): void {
   stream.write(`${JSON.stringify(value)}\n`);
 }
 
 function parseCommand(argv: readonly string[]): ParsedCommand {
   const command = argv[0];
   if (
-    command !== 'validate-config' &&
-    command !== 'onboard' &&
-    command !== 'init' &&
-    command !== 'reconfigure' &&
-    command !== 'status' &&
-    command !== 'doctor' &&
-    command !== 'identity-check' &&
-    command !== 'service' &&
-    command !== 'backup' &&
-    command !== 'restore' &&
-    command !== 'selftest' &&
-    command !== 'run-once' &&
-    command !== 'service-run' &&
-    command !== 'approvals' &&
-    command !== 'approve' &&
-    command !== 'reject' &&
-    command !== 'run'
+    command !== "validate-config" &&
+    command !== "onboard" &&
+    command !== "init" &&
+    command !== "reconfigure" &&
+    command !== "status" &&
+    command !== "doctor" &&
+    command !== "identity-check" &&
+    command !== "identity-bootstrap" &&
+    command !== "service" &&
+    command !== "backup" &&
+    command !== "restore" &&
+    command !== "selftest" &&
+    command !== "run-once" &&
+    command !== "service-run" &&
+    command !== "approvals" &&
+    command !== "approve" &&
+    command !== "reject" &&
+    command !== "run"
   ) {
     throw new Error(
-      'usage: echo-brain <onboard|init|reconfigure|status|doctor|identity-check|service|backup|restore|validate-config|selftest|run-once|run|approvals|approve|reject> --config <absolute-path>',
+      "usage: echo-brain <onboard|init|reconfigure|status|doctor|identity-check|identity-bootstrap|service|backup|restore|validate-config|selftest|run-once|run|approvals|approve|reject> --config <absolute-path>",
     );
   }
   let serviceAction: ProductServiceAction | undefined;
+  let identityBootstrapAction:
+    "begin" | "status" | "commit" | "abort" | undefined;
   let optionOffset = 1;
-  if (command === 'service') {
+  if (command === "service") {
     const action = argv[1];
     if (
-      action !== 'install' &&
-      action !== 'start' &&
-      action !== 'stop' &&
-      action !== 'restart' &&
-      action !== 'status' &&
-      action !== 'uninstall'
+      action !== "install" &&
+      action !== "start" &&
+      action !== "stop" &&
+      action !== "restart" &&
+      action !== "status" &&
+      action !== "uninstall"
     ) {
       throw new Error(
-        'usage: echo-brain service <install|start|stop|restart|status|uninstall> --config <absolute-path>',
+        "usage: echo-brain service <install|start|stop|restart|status|uninstall> --config <absolute-path>",
       );
     }
     serviceAction = action;
+    optionOffset = 2;
+  }
+  if (command === "identity-bootstrap") {
+    const action = argv[1];
+    if (
+      action !== "begin" &&
+      action !== "status" &&
+      action !== "commit" &&
+      action !== "abort"
+    ) {
+      throw new Error(
+        "usage: echo-brain identity-bootstrap <begin|status|commit|abort> --config <absolute-path>",
+      );
+    }
+    identityBootstrapAction = action;
     optionOffset = 2;
   }
   const parsed = parseArgs({
@@ -205,64 +245,114 @@ function parseCommand(argv: readonly string[]): ParsedCommand {
     strict: true,
     allowPositionals: false,
     options: {
-      config: { type: 'string' },
-      id: { type: 'string' },
-      reviewer: { type: 'string' },
-      reason: { type: 'string' },
-      'state-dir': { type: 'string' },
-      'backup-root': { type: 'string' },
-      backup: { type: 'string' },
-      strict: { type: 'boolean' },
+      config: { type: "string" },
+      id: { type: "string" },
+      reviewer: { type: "string" },
+      reason: { type: "string" },
+      "state-dir": { type: "string" },
+      "backup-root": { type: "string" },
+      backup: { type: "string" },
+      strict: { type: "boolean" },
+      "organization-name": { type: "string" },
+      "principal-name": { type: "string" },
+      "slack-user-id": { type: "string" },
+      "device-class": { type: "string" },
+      session: { type: "string" },
+      confirm: { type: "string" },
+      "renew-challenge": { type: "boolean" },
     },
   });
   if (parsed.values.config === undefined)
-    throw new Error('--config is required');
-  if (parsed.values.strict !== undefined && command !== 'identity-check') {
-    throw new Error('--strict is only valid with identity-check');
+    throw new Error("--config is required");
+  if (parsed.values.strict !== undefined && command !== "identity-check") {
+    throw new Error("--strict is only valid with identity-check");
   }
   if (
-    (command === 'onboard' ||
-      command === 'init' ||
-      command === 'reconfigure' ||
-      command === 'status' ||
-      command === 'doctor' ||
-      command === 'identity-check' ||
-      command === 'service' ||
-      command === 'service-run' ||
-      command === 'backup' ||
-      command === 'restore') &&
+    (command === "onboard" ||
+      command === "init" ||
+      command === "reconfigure" ||
+      command === "status" ||
+      command === "doctor" ||
+      command === "identity-check" ||
+      command === "identity-bootstrap" ||
+      command === "service" ||
+      command === "service-run" ||
+      command === "backup" ||
+      command === "restore") &&
     !isAbsolute(parsed.values.config)
   ) {
-    throw new Error('--config must be an absolute path');
+    throw new Error("--config must be an absolute path");
   }
-  if (command === 'onboard') {
-    if (parsed.values['state-dir'] === undefined)
-      throw new Error('--state-dir is required');
-    if (!isAbsolute(parsed.values['state-dir']))
-      throw new Error('--state-dir must be an absolute path');
+  if (command === "onboard") {
+    if (parsed.values["state-dir"] === undefined)
+      throw new Error("--state-dir is required");
+    if (!isAbsolute(parsed.values["state-dir"]))
+      throw new Error("--state-dir must be an absolute path");
   }
-  if (command === 'approve' || command === 'reject') {
-    if (parsed.values.id === undefined) throw new Error('--id is required');
+  if (command === "identity-bootstrap") {
+    const deviceClass = parsed.values["device-class"];
     if (
-      parsed.values.reviewer === undefined ||
-      parsed.values.reviewer.trim() === ''
+      deviceClass !== undefined &&
+      deviceClass !== "byod" &&
+      deviceClass !== "managed"
     ) {
-      throw new Error('--reviewer is required');
+      throw new Error("--device-class must be byod or managed");
+    }
+    if (identityBootstrapAction === "begin") {
+      if (
+        parsed.values["organization-name"] === undefined ||
+        parsed.values["principal-name"] === undefined ||
+        parsed.values["slack-user-id"] === undefined
+      ) {
+        throw new Error(
+          "identity-bootstrap begin requires --organization-name, --principal-name, and --slack-user-id",
+        );
+      }
+    } else if (parsed.values.session === undefined) {
+      throw new Error(
+        `identity-bootstrap ${identityBootstrapAction} requires --session`,
+      );
+    }
+    if (
+      (identityBootstrapAction === "commit" ||
+        identityBootstrapAction === "abort") &&
+      parsed.values.confirm === undefined
+    ) {
+      throw new Error(
+        `identity-bootstrap ${identityBootstrapAction} requires --confirm`,
+      );
+    }
+    if (
+      parsed.values["renew-challenge"] === true &&
+      identityBootstrapAction !== "status"
+    ) {
+      throw new Error(
+        "--renew-challenge is only valid with identity-bootstrap status",
+      );
     }
   }
-  if (command === 'backup' || command === 'restore') {
-    if (parsed.values['backup-root'] === undefined)
-      throw new Error('--backup-root is required');
-    if (!isAbsolute(parsed.values['backup-root']))
-      throw new Error('--backup-root must be an absolute path');
+  if (command === "approve" || command === "reject") {
+    if (parsed.values.id === undefined) throw new Error("--id is required");
+    if (
+      parsed.values.reviewer === undefined ||
+      parsed.values.reviewer.trim() === ""
+    ) {
+      throw new Error("--reviewer is required");
+    }
   }
-  if (command === 'restore') {
+  if (command === "backup" || command === "restore") {
+    if (parsed.values["backup-root"] === undefined)
+      throw new Error("--backup-root is required");
+    if (!isAbsolute(parsed.values["backup-root"]))
+      throw new Error("--backup-root must be an absolute path");
+  }
+  if (command === "restore") {
     if (parsed.values.backup === undefined)
-      throw new Error('--backup is required');
+      throw new Error("--backup is required");
     if (!isAbsolute(parsed.values.backup))
-      throw new Error('--backup must be an absolute path');
+      throw new Error("--backup must be an absolute path");
     if (parsed.values.id === undefined)
-      throw new Error('--id is required for crash-resumable restore');
+      throw new Error("--id is required for crash-resumable restore");
   }
   return {
     command,
@@ -274,21 +364,47 @@ function parseCommand(argv: readonly string[]): ParsedCommand {
     ...(parsed.values.reason === undefined
       ? {}
       : { reason: parsed.values.reason }),
-    ...(parsed.values['state-dir'] === undefined
+    ...(parsed.values["state-dir"] === undefined
       ? {}
-      : { stateDirectory: parsed.values['state-dir'] }),
+      : { stateDirectory: parsed.values["state-dir"] }),
     ...(serviceAction === undefined ? {} : { serviceAction }),
-    ...(parsed.values['backup-root'] === undefined
+    ...(identityBootstrapAction === undefined
       ? {}
-      : { backupRoot: parsed.values['backup-root'] }),
+      : { identityBootstrapAction }),
+    ...(parsed.values["backup-root"] === undefined
+      ? {}
+      : { backupRoot: parsed.values["backup-root"] }),
     ...(parsed.values.backup === undefined
       ? {}
       : { backupDirectory: parsed.values.backup }),
-    ...((command !== 'backup' && command !== 'restore') ||
+    ...((command !== "backup" && command !== "restore") ||
     parsed.values.id === undefined
       ? {}
       : { operationId: parsed.values.id }),
     ...(parsed.values.strict === true ? { strictIdentityCheck: true } : {}),
+    ...(parsed.values["organization-name"] === undefined
+      ? {}
+      : { organizationName: parsed.values["organization-name"] }),
+    ...(parsed.values["principal-name"] === undefined
+      ? {}
+      : { principalName: parsed.values["principal-name"] }),
+    ...(parsed.values["slack-user-id"] === undefined
+      ? {}
+      : { slackUserId: parsed.values["slack-user-id"] }),
+    ...(parsed.values["device-class"] === undefined
+      ? {}
+      : {
+          deviceClass: parsed.values["device-class"] as "byod" | "managed",
+        }),
+    ...(parsed.values.session === undefined
+      ? {}
+      : { bootstrapSessionId: parsed.values.session }),
+    ...(parsed.values.confirm === undefined
+      ? {}
+      : { confirmationSha256: parsed.values.confirm }),
+    ...(parsed.values["renew-challenge"] === true
+      ? { renewChallenge: true }
+      : {}),
   };
 }
 
@@ -300,7 +416,7 @@ async function probeConfig(
   filesystem: Awaited<ReturnType<ClassifyStateFilesystem>>;
 }> {
   const filesystem = await classifier(config.state_dir);
-  return { ok: filesystem.kind === 'local', filesystem };
+  return { ok: filesystem.kind === "local", filesystem };
 }
 
 function adapterReference(config: AdapterInstanceConfig): {
@@ -315,42 +431,42 @@ function configuredAdapterReferences(config: ProductRuntimeConfig) {
     meeting_sources: config.meeting_sources.map(adapterReference),
     decision_processor: adapterReference(config.decision_processor),
     delivery_surfaces: config.delivery_surfaces.map(adapterReference),
-    ...(config.approval_mode === 'adapter'
+    ...(config.approval_mode === "adapter"
       ? { approval_surface: adapterReference(config.approval_surface) }
       : {}),
   };
 }
 
 interface SignalWaiter {
-  readonly promise: Promise<'SIGINT' | 'SIGTERM'>;
-  readonly received: 'SIGINT' | 'SIGTERM' | undefined;
+  readonly promise: Promise<"SIGINT" | "SIGTERM">;
+  readonly received: "SIGINT" | "SIGTERM" | undefined;
   cancel(): void;
 }
 
 function createSignalWaiter(processLike: ProductCliProcess): SignalWaiter {
   let active = true;
-  let received: 'SIGINT' | 'SIGTERM' | undefined;
-  let resolveSignal: (signal: 'SIGINT' | 'SIGTERM') => void = () => undefined;
-  const promise = new Promise<'SIGINT' | 'SIGTERM'>((resolve) => {
+  let received: "SIGINT" | "SIGTERM" | undefined;
+  let resolveSignal: (signal: "SIGINT" | "SIGTERM") => void = () => undefined;
+  const promise = new Promise<"SIGINT" | "SIGTERM">((resolve) => {
     resolveSignal = resolve;
   });
   const cleanup = () => {
     if (!active) return;
     active = false;
-    processLike.removeListener('SIGINT', onInterrupt);
-    processLike.removeListener('SIGTERM', onTerminate);
+    processLike.removeListener("SIGINT", onInterrupt);
+    processLike.removeListener("SIGTERM", onTerminate);
   };
-  const receive = (signal: 'SIGINT' | 'SIGTERM') => {
+  const receive = (signal: "SIGINT" | "SIGTERM") => {
     if (!active) return;
     received = signal;
     cleanup();
     resolveSignal(signal);
   };
-  const onInterrupt = () => receive('SIGINT');
-  const onTerminate = () => receive('SIGTERM');
+  const onInterrupt = () => receive("SIGINT");
+  const onTerminate = () => receive("SIGTERM");
   try {
-    processLike.once('SIGINT', onInterrupt);
-    processLike.once('SIGTERM', onTerminate);
+    processLike.once("SIGINT", onInterrupt);
+    processLike.once("SIGTERM", onTerminate);
   } catch (error) {
     cleanup();
     throw error;
@@ -365,14 +481,14 @@ function createSignalWaiter(processLike: ProductCliProcess): SignalWaiter {
 }
 
 function printRuntimeFailure(
-  stderr: Pick<Writable, 'write'>,
+  stderr: Pick<Writable, "write">,
   error: unknown,
 ): void {
   const failure =
     error instanceof ProductRuntimeFailure
       ? error
       : new ProductRuntimeFailure(
-          'adapter_unavailable',
+          "adapter_unavailable",
           (error as Error).message,
           [(error as Error).message],
         );
@@ -399,9 +515,11 @@ async function createCliComposition(
   return await prepareProductComposition(config, registry, {
     ...dependencies.composition,
     classifyStateFilesystem: classifier,
-    identityCheck:
-      dependencies.composition?.identityCheck ??
-      resolveIdentityCheckDependencies(dependencies.identityCheck, config),
+    identityCheck: resolveIdentityCheckDependencies(
+      dependencies.composition?.identityCheck ?? dependencies.identityCheck,
+      config,
+      dependencies.environment,
+    ),
     ...(now === undefined ? {} : { now }),
   });
 }
@@ -409,20 +527,43 @@ async function createCliComposition(
 function resolveIdentityCheckDependencies(
   configured: IdentityCheckDependencies | undefined,
   runtimeConfig?: ProductRuntimeConfig,
+  environment?: NodeJS.ProcessEnv,
 ): IdentityCheckDependencies {
+  const credentialResolver =
+    configured?.credentialResolver ??
+    createProductCredentialResolver(environment ?? process.env);
   if (configured?.signer !== undefined) {
-    return { ...configured, ...(runtimeConfig === undefined ? {} : { runtimeConfig }) };
-  }
-  if (!bundledProductHelperAvailable('installation-signer')) {
     return {
       ...configured,
+      credentialResolver,
+      ...(runtimeConfig === undefined ? {} : { runtimeConfig }),
+    };
+  }
+  if (!bundledProductHelperAvailable("installation-signer")) {
+    return {
+      ...configured,
+      credentialResolver,
       ...(runtimeConfig === undefined ? {} : { runtimeConfig }),
     };
   }
   return {
     ...configured,
+    credentialResolver,
     ...(runtimeConfig === undefined ? {} : { runtimeConfig }),
     signer: new MacOsSecureEnclaveInstallationSigner(),
+  };
+}
+
+function resolveFounderBootstrapDependencies(
+  dependencies: ProductCliDependencies,
+): FounderBootstrapCeremonyDependencies {
+  const configured = dependencies.founderBootstrap ?? {};
+  return {
+    ...configured,
+    credentialResolver:
+      configured.credentialResolver ??
+      createProductCredentialResolver(dependencies.environment ?? process.env),
+    now: configured.now ?? resolveProductClock(dependencies.now),
   };
 }
 
@@ -472,14 +613,14 @@ async function acquireMaintenanceWindow(
   const runtime = await lifecycleLock(
     dependencies,
     stateDirectory,
-    'runtime',
+    "runtime",
     timeoutMs,
   );
   try {
     const maintenance = await lifecycleLock(
       dependencies,
       stateDirectory,
-      'maintenance',
+      "maintenance",
       timeoutMs,
     );
     return [runtime, maintenance];
@@ -490,23 +631,23 @@ async function acquireMaintenanceWindow(
 }
 
 function operationId(
-  prefix: 'backup' | 'restore' | 'pre-restore',
+  prefix: "backup" | "restore" | "pre-restore",
   timestamp: string,
   requested?: string,
 ): string {
   if (requested !== undefined) {
     if (!/^[A-Za-z0-9][A-Za-z0-9._-]{0,99}$/.test(requested)) {
       throw new Error(
-        'operation id must be 1-100 letters, numbers, dots, underscores, or hyphens',
+        "operation id must be 1-100 letters, numbers, dots, underscores, or hyphens",
       );
     }
     return requested;
   }
-  return `${prefix}-${timestamp.replace(/[^0-9A-Za-z]/g, '')}`;
+  return `${prefix}-${timestamp.replace(/[^0-9A-Za-z]/g, "")}`;
 }
 
 function printOperatorError(
-  stderr: Pick<Writable, 'write'>,
+  stderr: Pick<Writable, "write">,
   command: string,
   error: unknown,
 ): void {
@@ -524,11 +665,11 @@ export async function runProductCli(
 ): Promise<number> {
   const stdout = dependencies.stdout ?? process.stdout;
   const stderr = dependencies.stderr ?? process.stderr;
-  if (argv.length === 0 || argv[0] === '--help' || argv[0] === '-h') {
+  if (argv.length === 0 || argv[0] === "--help" || argv[0] === "-h") {
     stdout.write(HELP);
     return 0;
   }
-  if (argv[0] === '--version' || argv[0] === '-v') {
+  if (argv[0] === "--version" || argv[0] === "-v") {
     stdout.write(`${PRODUCT_VERSION}\n`);
     return 0;
   }
@@ -539,7 +680,7 @@ export async function runProductCli(
     print(stderr, { ok: false, error: (error as Error).message });
     return 2;
   }
-  if (parsed.command === 'onboard') {
+  if (parsed.command === "onboard") {
     try {
       const result = onboardProduct(parsed.configPath, parsed.stateDirectory!, {
         fileSystem: dependencies.operator?.fileSystem,
@@ -560,7 +701,131 @@ export async function runProductCli(
   }
   const classifier =
     dependencies.classifyStateFilesystem ?? classifyStateFilesystem;
-  if (parsed.command === 'service-run') {
+  if (parsed.command === "identity-bootstrap") {
+    const action = parsed.identityBootstrapAction!;
+    const bootstrapDependencies =
+      resolveFounderBootstrapDependencies(dependencies);
+    if (bootstrapDependencies.signer === undefined) {
+      print(stderr, {
+        ok: false,
+        command: parsed.command,
+        action,
+        error:
+          "signer_unavailable: seed-grade bootstrap requires the verified packaged Secure Enclave helper",
+      });
+      return 1;
+    }
+    const probe = await probeConfig(config, classifier);
+    if (!probe.ok) {
+      print(stderr, {
+        ok: false,
+        command: parsed.command,
+        action,
+        filesystem: probe.filesystem,
+      });
+      return 1;
+    }
+    let releases: readonly ReleaseProductLifecycleLock[] = [];
+    let result:
+      | Awaited<ReturnType<typeof beginFounderBootstrap>>
+      | Awaited<ReturnType<typeof abortFounderBootstrap>>
+      | undefined;
+    let operationFailure: unknown;
+    try {
+      if (action === "commit") {
+        releases = await acquireMaintenanceWindow(
+          config.state_dir,
+          dependencies,
+          0,
+        );
+        const operator = createProductOperator(
+          parsed.configPath,
+          config,
+          dependencies,
+        );
+        const status = await operator.status();
+        if (!status.service.supported) {
+          throw new ProductOperatorError(
+            "unsupported_platform",
+            "cannot prove the product service is stopped on this platform",
+          );
+        }
+        if (status.service.loaded) {
+          throw new ProductOperatorError(
+            "service_command_failed",
+            "service is loaded; stop it before committing founder identity",
+          );
+        }
+      } else {
+        releases = [
+          await lifecycleLock(dependencies, config.state_dir, "maintenance", 0),
+        ];
+      }
+      result =
+        action === "begin"
+          ? await beginFounderBootstrap(
+              config,
+              {
+                organizationDisplayName: parsed.organizationName!,
+                principalDisplayName: parsed.principalName!,
+                slackUserId: parsed.slackUserId!,
+                ...(parsed.deviceClass === undefined
+                  ? {}
+                  : { deviceClass: parsed.deviceClass }),
+              },
+              bootstrapDependencies,
+            )
+          : action === "status"
+            ? await statusFounderBootstrap(
+                config,
+                parsed.bootstrapSessionId!,
+                { renewChallenge: parsed.renewChallenge === true },
+                bootstrapDependencies,
+              )
+            : action === "abort"
+              ? await abortFounderBootstrap(
+                  config,
+                  parsed.bootstrapSessionId!,
+                  parsed.confirmationSha256!,
+                  bootstrapDependencies,
+                )
+              : await commitFounderBootstrapCeremony(
+                  config,
+                  parsed.bootstrapSessionId!,
+                  parsed.confirmationSha256!,
+                  bootstrapDependencies,
+                );
+    } catch (error) {
+      operationFailure = error;
+    }
+    try {
+      await releaseLifecycleLocks(releases);
+    } catch (error) {
+      operationFailure ??= new Error(
+        `lifecycle lock release failed: ${(error as Error).message}`,
+      );
+    }
+    if (operationFailure !== undefined) {
+      print(stderr, {
+        ok: false,
+        command: parsed.command,
+        action,
+        ...(operationFailure instanceof ProductOperatorError
+          ? { code: operationFailure.code }
+          : {}),
+        error: (operationFailure as Error).message,
+      });
+      return 1;
+    }
+    print(stdout, {
+      ok: true,
+      command: parsed.command,
+      action,
+      ...result!,
+    });
+    return 0;
+  }
+  if (parsed.command === "service-run") {
     try {
       createProductOperator(
         parsed.configPath,
@@ -572,16 +837,20 @@ export async function runProductCli(
       return 1;
     }
   }
-  if (parsed.command === 'identity-check') {
+  if (parsed.command === "identity-check") {
     try {
       const report = await checkFounderIdentity(
         config.state_dir,
-        resolveIdentityCheckDependencies(dependencies.identityCheck, config),
+        resolveIdentityCheckDependencies(
+          dependencies.identityCheck,
+          config,
+          dependencies.environment,
+        ),
       );
       const strictFailure =
         parsed.strictIdentityCheck === true && !report.seed_grade_ready;
       const activeFailure =
-        report.mode === 'identity_enabled' && !report.foundation_ok;
+        report.mode === "identity_enabled" && !report.foundation_ok;
       const status = strictFailure || activeFailure ? 1 : 0;
       print(status === 0 ? stdout : stderr, {
         ok: status === 0,
@@ -599,7 +868,7 @@ export async function runProductCli(
       return 1;
     }
   }
-  if (parsed.command === 'backup' || parsed.command === 'restore') {
+  if (parsed.command === "backup" || parsed.command === "restore") {
     const probe = await probeConfig(config, classifier);
     if (!probe.ok) {
       print(stderr, {
@@ -626,29 +895,29 @@ export async function runProductCli(
       const status = await operator.status();
       if (!status.service.supported) {
         throw new ProductOperatorError(
-          'unsupported_platform',
-          'cannot prove the product service is stopped on this platform',
+          "unsupported_platform",
+          "cannot prove the product service is stopped on this platform",
         );
       }
       if (status.service.loaded) {
         throw new ProductOperatorError(
-          'service_command_failed',
-          'service is loaded; run `echo-brain service stop --config <absolute-path>` before maintenance',
+          "service_command_failed",
+          "service is loaded; run `echo-brain service stop --config <absolute-path>` before maintenance",
         );
       }
-      if (parsed.command === 'backup' && !status.initialized) {
+      if (parsed.command === "backup" && !status.initialized) {
         throw new ProductOperatorError(
-          'not_initialized',
-          'run `echo-brain init --config <absolute-path>` before backup',
+          "not_initialized",
+          "run `echo-brain init --config <absolute-path>` before backup",
         );
       }
       const timestamp = resolveProductClock(dependencies.now)();
       const canonicalConfigSha256 = canonicalProductConfigSha256(config);
-      if (parsed.command === 'backup') {
+      if (parsed.command === "backup") {
         const created = await createProductStateBackup({
           stateDir: config.state_dir,
           backupRoot: parsed.backupRoot!,
-          backupId: operationId('backup', timestamp, parsed.operationId),
+          backupId: operationId("backup", timestamp, parsed.operationId),
           createdAt: timestamp,
           canonicalConfigSha256,
           maintenanceLease,
@@ -660,7 +929,7 @@ export async function runProductCli(
           evidence: created.evidence,
         };
       } else {
-        const restoreId = operationId('restore', timestamp, parsed.operationId);
+        const restoreId = operationId("restore", timestamp, parsed.operationId);
         const restored = await restoreProductStateBackup({
           stateDir: config.state_dir,
           backupDirectory: parsed.backupDirectory!,
@@ -697,11 +966,11 @@ export async function runProductCli(
     return 0;
   }
   if (
-    parsed.command === 'init' ||
-    parsed.command === 'reconfigure' ||
-    parsed.command === 'status' ||
-    parsed.command === 'doctor' ||
-    parsed.command === 'service'
+    parsed.command === "init" ||
+    parsed.command === "reconfigure" ||
+    parsed.command === "status" ||
+    parsed.command === "doctor" ||
+    parsed.command === "service"
   ) {
     let operator: ProductOperator;
     try {
@@ -710,7 +979,7 @@ export async function runProductCli(
       printOperatorError(stderr, parsed.command, error);
       return 1;
     }
-    if (parsed.command === 'status') {
+    if (parsed.command === "status") {
       try {
         const status = await operator.status();
         print(stdout, { ok: true, command: parsed.command, ...status });
@@ -720,13 +989,13 @@ export async function runProductCli(
         return 1;
       }
     }
-    if (parsed.command === 'doctor') {
+    if (parsed.command === "doctor") {
       let filesystem: Awaited<ReturnType<ClassifyStateFilesystem>>;
       try {
         filesystem = await classifier(config.state_dir);
       } catch (error) {
         filesystem = {
-          kind: 'unknown',
+          kind: "unknown",
           raw: `filesystem probe failed: ${(error as Error).message}`,
         };
       }
@@ -767,7 +1036,7 @@ export async function runProductCli(
         return 1;
       }
     }
-    if (parsed.command === 'init') {
+    if (parsed.command === "init") {
       const probe = await probeConfig(config, classifier);
       if (!probe.ok) {
         print(stderr, {
@@ -783,7 +1052,7 @@ export async function runProductCli(
           dependencies,
           0,
         );
-        let result: Awaited<ReturnType<ProductOperator['init']>>;
+        let result: Awaited<ReturnType<ProductOperator["init"]>>;
         try {
           prepareProductStateRoot(config.state_dir);
           result = await operator.init();
@@ -797,7 +1066,7 @@ export async function runProductCli(
         return 1;
       }
     }
-    if (parsed.command === 'reconfigure') {
+    if (parsed.command === "reconfigure") {
       const probe = await probeConfig(config, classifier);
       if (!probe.ok) {
         print(stderr, {
@@ -813,7 +1082,7 @@ export async function runProductCli(
           dependencies,
           0,
         );
-        let result: Awaited<ReturnType<ProductOperator['reconfigure']>>;
+        let result: Awaited<ReturnType<ProductOperator["reconfigure"]>>;
         try {
           result = await operator.reconfigure();
         } finally {
@@ -827,7 +1096,7 @@ export async function runProductCli(
       }
     }
     const action = parsed.serviceAction!;
-    if (action === 'install' || action === 'start' || action === 'restart') {
+    if (action === "install" || action === "start" || action === "restart") {
       const probe = await probeConfig(config, classifier);
       if (!probe.ok) {
         print(stderr, {
@@ -840,23 +1109,23 @@ export async function runProductCli(
       }
     }
     try {
-      let result: Awaited<ReturnType<ProductOperator['service']>>;
-      if (action === 'restart') {
+      let result: Awaited<ReturnType<ProductOperator["service"]>>;
+      if (action === "restart") {
         operator.preflightServiceStart();
-        await operator.service('stop');
+        await operator.service("stop");
         const release = await lifecycleLock(
           dependencies,
           config.state_dir,
-          'runtime',
+          "runtime",
           15_000,
         );
         try {
-          const started = await operator.service('start');
-          result = { ...started, action: 'restart', changed: true };
+          const started = await operator.service("start");
+          result = { ...started, action: "restart", changed: true };
         } finally {
           await release();
         }
-      } else if (action === 'install' || action === 'start') {
+      } else if (action === "install" || action === "start") {
         const before = await operator.status();
         if (before.service.running) {
           result = await operator.service(action);
@@ -864,7 +1133,7 @@ export async function runProductCli(
           const release = await lifecycleLock(
             dependencies,
             config.state_dir,
-            'runtime',
+            "runtime",
             15_000,
           );
           try {
@@ -873,12 +1142,12 @@ export async function runProductCli(
             await release();
           }
         }
-      } else if (action === 'stop' || action === 'uninstall') {
+      } else if (action === "stop" || action === "uninstall") {
         result = await operator.service(action);
         const release = await lifecycleLock(
           dependencies,
           config.state_dir,
-          'runtime',
+          "runtime",
           15_000,
         );
         await release();
@@ -896,7 +1165,7 @@ export async function runProductCli(
       return 1;
     }
   }
-  if (parsed.command === 'validate-config' || parsed.command === 'selftest') {
+  if (parsed.command === "validate-config" || parsed.command === "selftest") {
     const probe = await probeConfig(config, classifier);
     if (!probe.ok) {
       print(stderr, {
@@ -907,17 +1176,17 @@ export async function runProductCli(
       return 1;
     }
     let storage:
-      { status: 'ok'; kind: 'sqlite-memory'; migrations: 'loaded' } | undefined;
-    if (parsed.command === 'selftest') {
+      { status: "ok"; kind: "sqlite-memory"; migrations: "loaded" } | undefined;
+    if (parsed.command === "selftest") {
       try {
-        const { SqliteStorage } = await import('../storage/sqlite.js');
+        const { SqliteStorage } = await import("../storage/sqlite.js");
         const { SqliteCoreStateStore } =
-          await import('../storage/core-state-sqlite.js');
-        const sqlite = new SqliteStorage(':memory:');
-        const coreState = new SqliteCoreStateStore(':memory:');
+          await import("../storage/core-state-sqlite.js");
+        const sqlite = new SqliteStorage(":memory:");
+        const coreState = new SqliteCoreStateStore(":memory:");
         coreState.close();
         sqlite.close();
-        storage = { status: 'ok', kind: 'sqlite-memory', migrations: 'loaded' };
+        storage = { status: "ok", kind: "sqlite-memory", migrations: "loaded" };
       } catch (error) {
         print(stderr, {
           ok: false,
@@ -932,7 +1201,7 @@ export async function runProductCli(
       command: parsed.command,
       lane: config.lane,
       filesystem: probe.filesystem,
-      maturity: 'DEV',
+      maturity: "DEV",
       adapter_references: configuredAdapterReferences(config),
       adapters_loaded: false,
       ...(storage === undefined ? {} : { storage }),
@@ -942,9 +1211,9 @@ export async function runProductCli(
   }
 
   if (
-    parsed.command === 'approvals' ||
-    parsed.command === 'approve' ||
-    parsed.command === 'reject'
+    parsed.command === "approvals" ||
+    parsed.command === "approve" ||
+    parsed.command === "reject"
   ) {
     const probe = await probeConfig(config, classifier);
     if (!probe.ok) {
@@ -960,7 +1229,7 @@ export async function runProductCli(
       const release = await lifecycleLock(
         dependencies,
         config.state_dir,
-        'maintenance',
+        "maintenance",
         15_000,
       );
       try {
@@ -972,7 +1241,7 @@ export async function runProductCli(
           now: dependencies.now,
         });
         await approvals.initialize();
-        if (parsed.command === 'approvals') {
+        if (parsed.command === "approvals") {
           const records = (await approvals.list()).map((record) => ({
             approval_id: record.approval_id,
             status: record.status,
@@ -990,14 +1259,18 @@ export async function runProductCli(
         } else {
           await assertFounderIdentityAllowsPipeline(
             config.state_dir,
-            resolveIdentityCheckDependencies(dependencies.identityCheck, config),
+            resolveIdentityCheckDependencies(
+              dependencies.identityCheck,
+              config,
+              dependencies.environment,
+            ),
           );
           const record = await approvals.resolve({
             approvalId: parsed.approvalId!,
-            status: parsed.command === 'approve' ? 'approved' : 'rejected',
+            status: parsed.command === "approve" ? "approved" : "rejected",
             reviewedBy: parsed.reviewer!,
             reason: parsed.reason,
-            surface: 'cli',
+            surface: "cli",
           });
           approvalResult = {
             ok: true,
@@ -1026,14 +1299,14 @@ export async function runProductCli(
     return 0;
   }
 
-  if (parsed.command === 'run-once') {
+  if (parsed.command === "run-once") {
     let cycleResult: Record<string, unknown> | undefined;
     let cycleStatus = 1;
     try {
       const release = await lifecycleLock(
         dependencies,
         config.state_dir,
-        'runtime',
+        "runtime",
         15_000,
       );
       try {
@@ -1046,7 +1319,7 @@ export async function runProductCli(
         try {
           const cycle = await composition.runOnce();
           const pending = (await composition.approvals.list())
-            .filter((record) => record.status === 'pending')
+            .filter((record) => record.status === "pending")
             .map((record) => record.approval_id);
           cycleStatus = cycle.ok ? 0 : 1;
           cycleResult = {
@@ -1074,7 +1347,7 @@ export async function runProductCli(
     releaseRuntime = await lifecycleLock(
       dependencies,
       config.state_dir,
-      'runtime',
+      "runtime",
       15_000,
     );
   } catch (error) {
@@ -1098,9 +1371,11 @@ export async function runProductCli(
         runtime = await startProductRuntime(config, {
           ...dependencies.runtime,
           classifyStateFilesystem: classifier,
-          identityCheck:
-            dependencies.runtime.identityCheck ??
-            resolveIdentityCheckDependencies(dependencies.identityCheck, config),
+          identityCheck: resolveIdentityCheckDependencies(
+            dependencies.runtime.identityCheck ?? dependencies.identityCheck,
+            config,
+            dependencies.environment,
+          ),
         });
       } catch (error) {
         signalWaiter.cancel();
@@ -1149,16 +1424,16 @@ export async function runProductCli(
         .then((cycle) => {
           print(cycle.ok ? stdout : stderr, {
             ok: cycle.ok,
-            command: 'run',
-            status: 'cycle-complete',
+            command: "run",
+            status: "cycle-complete",
             cycle,
           });
         })
         .catch((error: unknown) => {
           print(stderr, {
             ok: false,
-            command: 'run',
-            status: 'cycle-failed',
+            command: "run",
+            status: "cycle-failed",
             error: (error as Error).message,
           });
         })

@@ -1,19 +1,23 @@
-import { randomBytes } from 'node:crypto';
-import { ActiveIdentityBundleStore } from './active-identity-bundle-store.js';
-import type { InstallationSigner } from './installation-signer.js';
-import { verifyInstallationKeyDescriptor } from './installation-signer.js';
-import { verifyP256LowSSignature } from './signature-profile.js';
-import type { ProductRuntimeConfig } from '../config.js';
+import { randomBytes } from "node:crypto";
+import { ActiveIdentityBundleStore } from "./active-identity-bundle-store.js";
+import type { InstallationSigner } from "./installation-signer.js";
+import { verifyInstallationKeyDescriptor } from "./installation-signer.js";
+import { verifyP256LowSSignature } from "./signature-profile.js";
+import type { ProductRuntimeConfig } from "../config.js";
+import type { ProductCredentialResolver } from "../credentials.js";
+import type { LocalConnectionRegistryV1 } from "./contracts.js";
+import { assertLocalCredentialGuardMatches } from "./credential-guard.js";
 
 export type IdentityCheckId =
-  | 'active-bundle'
-  | 'bundle-integrity'
-  | 'installation-key'
-  | 'provider-identities'
-  | 'approval-capture'
-  | 'attribution-storage'
-  | 'signed-outbox'
-  | 'independent-copy';
+  | "active-bundle"
+  | "bundle-integrity"
+  | "installation-key"
+  | "provider-identities"
+  | "connection-credentials"
+  | "approval-capture"
+  | "attribution-storage"
+  | "signed-outbox"
+  | "independent-copy";
 
 export interface IdentityCheckResult {
   id: IdentityCheckId;
@@ -24,8 +28,8 @@ export interface IdentityCheckResult {
 
 export interface IdentityCheckReport {
   schema_version: 1;
-  kind: 'echo-founder-identity-check';
-  mode: 'local_only_unattributed' | 'identity_enabled';
+  kind: "echo-founder-identity-check";
+  mode: "local_only_unattributed" | "identity_enabled";
   foundation_ok: boolean;
   seed_grade_ready: boolean;
   organization_id: string | null;
@@ -36,10 +40,81 @@ export interface IdentityCheckReport {
 export interface IdentityCheckDependencies {
   signer?: InstallationSigner;
   runtimeConfig?: ProductRuntimeConfig;
+  credentialResolver?: ProductCredentialResolver;
   approvalCaptureReady?: () => Promise<{ ok: boolean; detail: string }>;
   attributionStorageReady?: () => Promise<{ ok: boolean; detail: string }>;
   signedOutboxReady?: () => Promise<{ ok: boolean; detail: string }>;
   independentCopyReady?: () => Promise<{ ok: boolean; detail: string }>;
+}
+
+export interface ActiveCredentialGuardCheck {
+  ok: boolean;
+  detail: string;
+}
+
+/**
+ * Verify local credential continuity for every non-retired connection
+ * generation. Provider tokens never enter the report, even when resolution or
+ * comparison fails.
+ */
+export function verifyActiveConnectionCredentialGuards(
+  registry: Pick<LocalConnectionRegistryV1, "connections">,
+  credentialResolver: ProductCredentialResolver | undefined,
+): ActiveCredentialGuardCheck {
+  const active = registry.connections.flatMap((connection) =>
+    connection.generations
+      .filter((generation) => generation.ended_at === null)
+      .map((generation) => ({ connection, generation })),
+  );
+  if (active.length === 0) {
+    return {
+      ok: true,
+      detail:
+        "no active connection credential generations require verification",
+    };
+  }
+  if (credentialResolver === undefined) {
+    return {
+      ok: false,
+      detail:
+        "current credential resolver is unavailable for active connections",
+    };
+  }
+
+  const failures: string[] = [];
+  for (const { connection, generation } of active) {
+    const label = `${connection.provider} connection ${connection.connection_id} generation ${generation.generation}`;
+    let credential: string | undefined;
+    try {
+      credential = credentialResolver(
+        generation.local_credential_guard.reference,
+      );
+    } catch {
+      failures.push(`${label} current credential is unreadable`);
+      continue;
+    }
+    if (credential === undefined) {
+      failures.push(`${label} current credential is unavailable`);
+      continue;
+    }
+    try {
+      assertLocalCredentialGuardMatches(
+        generation.local_credential_guard,
+        generation.local_credential_guard.reference,
+        credential,
+      );
+    } catch {
+      failures.push(
+        `${label} current credential does not match its enrolled guard`,
+      );
+    }
+  }
+  return failures.length === 0
+    ? {
+        ok: true,
+        detail: `verified ${active.length} active connection credential generation${active.length === 1 ? "" : "s"}`,
+      }
+    : { ok: false, detail: failures.join("; ") };
 }
 
 export class FounderIdentityGateError extends Error {
@@ -48,9 +123,9 @@ export class FounderIdentityGateError extends Error {
       .filter((item) => !item.ok)
       .map((item) => `${item.id}: ${item.detail}`);
     super(
-      `identity-enabled profile is not seed-grade ready: ${failures.join('; ')}`,
+      `identity-enabled profile is not seed-grade ready: ${failures.join("; ")}`,
     );
-    this.name = 'FounderIdentityGateError';
+    this.name = "FounderIdentityGateError";
   }
 }
 
@@ -92,75 +167,134 @@ export async function checkFounderIdentity(
     if (identityMaterial || inspectionFailure !== null) {
       return {
         schema_version: 1,
-        kind: 'echo-founder-identity-check',
-        mode: 'identity_enabled',
+        kind: "echo-founder-identity-check",
+        mode: "identity_enabled",
         foundation_ok: false,
         seed_grade_ready: false,
         organization_id: null,
         installation_id: null,
         checks: [
           check(
-            'active-bundle',
+            "active-bundle",
             false,
             inspectionFailure === null
-              ? 'identity material exists but the active bundle pointer is missing'
+              ? "identity material exists but the active bundle pointer is missing"
               : `identity material could not be inspected: ${inspectionFailure}`,
           ),
-          check('bundle-integrity', false, 'not checked without an active bundle'),
-          check('installation-key', false, 'not checked without an active bundle'),
-          check('provider-identities', false, 'not checked without an active bundle'),
-          check('approval-capture', false, 'not checked without an active bundle'),
-          check('attribution-storage', false, 'not checked without an active bundle'),
-          check('signed-outbox', false, 'not checked without an active bundle'),
-          check('independent-copy', false, 'not checked without an active bundle'),
+          check(
+            "bundle-integrity",
+            false,
+            "not checked without an active bundle",
+          ),
+          check(
+            "installation-key",
+            false,
+            "not checked without an active bundle",
+          ),
+          check(
+            "provider-identities",
+            false,
+            "not checked without an active bundle",
+          ),
+          check(
+            "connection-credentials",
+            false,
+            "not checked without an active bundle",
+          ),
+          check(
+            "approval-capture",
+            false,
+            "not checked without an active bundle",
+          ),
+          check(
+            "attribution-storage",
+            false,
+            "not checked without an active bundle",
+          ),
+          check("signed-outbox", false, "not checked without an active bundle"),
+          check(
+            "independent-copy",
+            false,
+            "not checked without an active bundle",
+          ),
         ],
       };
     }
     return {
       schema_version: 1,
-      kind: 'echo-founder-identity-check',
-      mode: 'local_only_unattributed',
+      kind: "echo-founder-identity-check",
+      mode: "local_only_unattributed",
       foundation_ok: true,
       seed_grade_ready: false,
       organization_id: null,
       installation_id: null,
       checks: [
         check(
-          'active-bundle',
+          "active-bundle",
           false,
-          'no active identity bundle; current runs remain disposable rehearsals',
+          "no active identity bundle; current runs remain disposable rehearsals",
         ),
-        check('bundle-integrity', false, 'not checked without an active bundle'),
-        check('installation-key', false, 'not checked without an active bundle'),
-        check('provider-identities', false, 'not checked without an active bundle'),
-        check('approval-capture', false, 'not checked without an active bundle'),
-        check('attribution-storage', false, 'not checked without an active bundle'),
-        check('signed-outbox', false, 'not checked without an active bundle'),
-        check('independent-copy', false, 'not checked without an active bundle'),
+        check(
+          "bundle-integrity",
+          false,
+          "not checked without an active bundle",
+        ),
+        check(
+          "installation-key",
+          false,
+          "not checked without an active bundle",
+        ),
+        check(
+          "provider-identities",
+          false,
+          "not checked without an active bundle",
+        ),
+        check(
+          "connection-credentials",
+          false,
+          "not checked without an active bundle",
+        ),
+        check(
+          "approval-capture",
+          false,
+          "not checked without an active bundle",
+        ),
+        check(
+          "attribution-storage",
+          false,
+          "not checked without an active bundle",
+        ),
+        check("signed-outbox", false, "not checked without an active bundle"),
+        check(
+          "independent-copy",
+          false,
+          "not checked without an active bundle",
+        ),
       ],
     };
   }
 
   const checks: IdentityCheckResult[] = [
-    check('active-bundle', true, 'active identity bundle pointer exists'),
+    check("active-bundle", true, "active identity bundle pointer exists"),
   ];
-  let verified: ReturnType<ActiveIdentityBundleStore['loadVerified']>;
+  let verified: ReturnType<ActiveIdentityBundleStore["loadVerified"]>;
   try {
     verified = store.loadVerified(dependencies.runtimeConfig);
-    if (verified === null) throw new Error('active pointer disappeared during validation');
+    if (verified === null)
+      throw new Error("active pointer disappeared during validation");
     checks.push(
       check(
-        'bundle-integrity',
+        "bundle-integrity",
         true,
-        'manifest, registry, policy, pointer, digests, signatures, and cross-identities verify',
+        "manifest, registry, policy, pointer, digests, signatures, and cross-identities verify",
       ),
     );
   } catch (error) {
-    checks.push(check('bundle-integrity', false, (error as Error).message));
+    checks.push(check("bundle-integrity", false, (error as Error).message));
     return {
       schema_version: 1,
-      kind: 'echo-founder-identity-check',
-      mode: 'identity_enabled',
+      kind: "echo-founder-identity-check",
+      mode: "identity_enabled",
       foundation_ok: false,
       seed_grade_ready: false,
       organization_id: null,
@@ -173,16 +307,17 @@ export async function checkFounderIdentity(
   if (signer === undefined) {
     checks.push(
       check(
-        'installation-key',
+        "installation-key",
         false,
-        'signed Secure Enclave helper is unavailable; seed-grade signing is disabled',
+        "signed Secure Enclave helper is unavailable; seed-grade signing is disabled",
       ),
     );
   } else {
     try {
       const installationId = verified.manifest.installation.installation_id;
       const descriptor = await signer.inspect(installationId);
-      if (descriptor === null) throw new Error('installation signing key is unavailable');
+      if (descriptor === null)
+        throw new Error("installation signing key is unavailable");
       const publicKey = verifyInstallationKeyDescriptor(descriptor);
       const manifestKey = verified.manifest.installation.signing_key;
       if (
@@ -193,10 +328,12 @@ export async function checkFounderIdentity(
           manifestKey.public_key_spki_der_base64 ||
         descriptor.protection !== manifestKey.protection ||
         descriptor.assurance !== manifestKey.assurance ||
-        descriptor.protection !== 'secure-enclave' ||
-        descriptor.assurance !== 'hardware_bound'
+        descriptor.protection !== "secure-enclave" ||
+        descriptor.assurance !== "hardware_bound"
       ) {
-        throw new Error('live installation key does not match the hardware-bound manifest key');
+        throw new Error(
+          "live installation key does not match the hardware-bound manifest key",
+        );
       }
       const challenge = randomBytes(32);
       const signature = await signer.sign(
@@ -205,103 +342,115 @@ export async function checkFounderIdentity(
         descriptor.key_id,
       );
       if (!verifyP256LowSSignature(publicKey, challenge, signature)) {
-        throw new Error('installation signing challenge did not verify');
+        throw new Error("installation signing challenge did not verify");
       }
       checks.push(
         check(
-          'installation-key',
+          "installation-key",
           true,
-          'matching non-exportable Secure Enclave key signed a fresh challenge',
+          "matching non-exportable Secure Enclave key signed a fresh challenge",
         ),
       );
     } catch (error) {
-      checks.push(check('installation-key', false, (error as Error).message));
+      checks.push(check("installation-key", false, (error as Error).message));
     }
   }
 
   const hasSlackClaim = verified.manifest.identity_claims.some(
     (claim) =>
-      claim.issuer.kind === 'provider' &&
-      claim.issuer.provider === 'slack' &&
-      claim.verification.method === 'slack_dm_challenge' &&
-      claim.verification.assurance === 'provider_challenge_observed',
+      claim.issuer.kind === "provider" &&
+      claim.issuer.provider === "slack" &&
+      claim.verification.method === "slack_dm_challenge" &&
+      claim.verification.assurance === "provider_challenge_observed",
   );
   const hasSlackConnection = verified.connectionRegistry.connections.some(
     (connection) =>
-      connection.provider === 'slack' &&
+      connection.provider === "slack" &&
       connection.generations.some(
         (generation) =>
           generation.ended_at === null &&
-          generation.provider_identity.verification.method === 'slack_auth_test' &&
-          generation.provider_identity.verification.assurance === 'provider_verified' &&
+          generation.provider_identity.verification.method ===
+            "slack_auth_test" &&
+          generation.provider_identity.verification.assurance ===
+            "provider_verified" &&
           generation.provider_identity.tenant !== null,
       ),
   );
   const hasGranolaConnection = verified.connectionRegistry.connections.some(
     (connection) =>
-      connection.provider === 'granola' &&
+      connection.provider === "granola" &&
       connection.generations.some(
         (generation) =>
           generation.ended_at === null &&
-          generation.provider_identity.verification.method === 'provider_first_capture' &&
-          generation.provider_identity.verification.assurance === 'credential_observed',
+          generation.provider_identity.verification.method ===
+            "provider_first_capture" &&
+          generation.provider_identity.verification.assurance ===
+            "credential_observed",
       ),
   );
   const configuredCapabilities = new Set(
     verified.connectionRegistry.bindings
-      .filter((binding) => binding.status === 'active')
+      .filter((binding) => binding.status === "active")
       .map((binding) => binding.capability),
   );
   const providerReady =
     hasSlackClaim &&
     hasSlackConnection &&
     hasGranolaConnection &&
-    configuredCapabilities.has('meeting-source') &&
-    configuredCapabilities.has('decision-processor') &&
-    configuredCapabilities.has('approval-surface') &&
-    configuredCapabilities.has('delivery-surface');
+    configuredCapabilities.has("meeting-source") &&
+    configuredCapabilities.has("decision-processor") &&
+    configuredCapabilities.has("approval-surface") &&
+    configuredCapabilities.has("delivery-surface");
   checks.push(
     check(
-      'provider-identities',
+      "provider-identities",
       providerReady,
       providerReady
-        ? 'Slack tenant/actor and Granola first-capture assurance are frozen with all bindings'
-        : 'verified Slack tenant/actor, Granola first-capture assurance, or required binding is missing',
+        ? "Slack tenant/actor and Granola first-capture assurance are frozen with all bindings"
+        : "verified Slack tenant/actor, Granola first-capture assurance, or required binding is missing",
     ),
+  );
+  const credentialGuard = verifyActiveConnectionCredentialGuards(
+    verified.connectionRegistry,
+    dependencies.credentialResolver,
+  );
+  checks.push(
+    check("connection-credentials", credentialGuard.ok, credentialGuard.detail),
   );
   checks.push(
     await optionalCapabilityCheck(
-      'approval-capture',
+      "approval-capture",
       dependencies.approvalCaptureReady,
-      'approval federation capture is not installed yet',
+      "approval federation capture is not installed yet",
     ),
     await optionalCapabilityCheck(
-      'attribution-storage',
+      "attribution-storage",
       dependencies.attributionStorageReady,
-      'source and processor attribution storage is not installed yet',
+      "source and processor attribution storage is not installed yet",
     ),
     await optionalCapabilityCheck(
-      'signed-outbox',
+      "signed-outbox",
       dependencies.signedOutboxReady,
-      'signed outbox projection is not installed yet',
+      "signed outbox projection is not installed yet",
     ),
     await optionalCapabilityCheck(
-      'independent-copy',
+      "independent-copy",
       dependencies.independentCopyReady,
-      'no verified protected independent outbox copy is recorded',
+      "no verified protected independent outbox copy is recorded",
     ),
   );
   const foundationOk = checks
-    .filter((item) =>
-      item.id === 'active-bundle' ||
-      item.id === 'bundle-integrity' ||
-      item.id === 'installation-key',
+    .filter(
+      (item) =>
+        item.id === "active-bundle" ||
+        item.id === "bundle-integrity" ||
+        item.id === "installation-key",
     )
     .every((item) => item.ok);
   return {
     schema_version: 1,
-    kind: 'echo-founder-identity-check',
-    mode: 'identity_enabled',
+    kind: "echo-founder-identity-check",
+    mode: "identity_enabled",
     foundation_ok: foundationOk,
     seed_grade_ready: checks.every((item) => item.ok),
     organization_id: verified.manifest.organization.organization_id,
@@ -316,7 +465,7 @@ export async function assertFounderIdentityAllowsPipeline(
   dependencies: IdentityCheckDependencies = {},
 ): Promise<IdentityCheckReport> {
   const report = await checkFounderIdentity(stateDirectory, dependencies);
-  if (report.mode === 'identity_enabled' && !report.seed_grade_ready) {
+  if (report.mode === "identity_enabled" && !report.seed_grade_ready) {
     throw new FounderIdentityGateError(report);
   }
   return report;

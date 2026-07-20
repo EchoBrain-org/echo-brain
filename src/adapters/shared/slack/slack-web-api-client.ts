@@ -1,14 +1,10 @@
-const DEFAULT_BASE_URL = 'https://slack.com/api';
+const DEFAULT_BASE_URL = "https://slack.com/api";
 const DEFAULT_REQUEST_TIMEOUT_MS = 10_000;
 const REPLIES_PAGE_LIMIT = 200;
 const MAX_REPLY_PAGES = 25;
 
 export type SlackApiErrorCode =
-  | 'auth'
-  | 'rate_limited'
-  | 'transient'
-  | 'unknown_outcome'
-  | 'invalid';
+  "auth" | "rate_limited" | "transient" | "unknown_outcome" | "invalid";
 
 export class SlackApiError extends Error {
   constructor(
@@ -18,7 +14,7 @@ export class SlackApiError extends Error {
     public readonly retryAfterSeconds?: number,
   ) {
     super(message);
-    this.name = 'SlackApiError';
+    this.name = "SlackApiError";
   }
 }
 
@@ -35,6 +31,20 @@ export interface SlackPostMessageInput {
 export interface SlackPostedMessage {
   channel: string;
   ts: string;
+}
+
+/** Stable provider identifiers returned by Slack's `auth.test`. */
+export interface SlackAuthIdentity {
+  team_id: string;
+  enterprise_id: string | null;
+  user_id: string;
+  bot_id: string | null;
+  app_id: string | null;
+}
+
+export interface SlackDirectMessage {
+  channel_id: string;
+  user_id: string;
 }
 
 export interface SlackReaction {
@@ -56,34 +66,73 @@ export interface SlackWebApiClientOptions {
 }
 
 const AUTH_ERRORS = new Set([
-  'not_authed',
-  'invalid_auth',
-  'account_inactive',
-  'token_revoked',
-  'token_expired',
-  'no_permission',
-  'missing_scope',
-  'not_allowed_token_type',
+  "not_authed",
+  "invalid_auth",
+  "account_inactive",
+  "token_revoked",
+  "token_expired",
+  "no_permission",
+  "missing_scope",
+  "not_allowed_token_type",
 ]);
 
-const RATE_LIMIT_ERRORS = new Set([
-  'ratelimited',
-  'rate_limited',
-]);
+const RATE_LIMIT_ERRORS = new Set(["ratelimited", "rate_limited"]);
 
 const TRANSIENT_ERRORS = new Set([
-  'service_unavailable',
-  'fatal_error',
-  'internal_error',
-  'request_timeout',
+  "service_unavailable",
+  "fatal_error",
+  "internal_error",
+  "request_timeout",
 ]);
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {
-  return typeof value === 'object' && value !== null && !Array.isArray(value);
+  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 function isNonEmptyString(value: unknown): value is string {
-  return typeof value === 'string' && value.trim().length > 0;
+  return typeof value === "string" && value.trim().length > 0;
+}
+
+const SLACK_TEAM_ID_RE = /^T[A-Z0-9]{2,}$/;
+const SLACK_ENTERPRISE_ID_RE = /^E[A-Z0-9]{2,}$/;
+const SLACK_USER_ID_RE = /^[UW][A-Z0-9]{2,}$/;
+const SLACK_BOT_ID_RE = /^B[A-Z0-9]{2,}$/;
+const SLACK_APP_ID_RE = /^A[A-Z0-9]{2,}$/;
+const SLACK_DM_ID_RE = /^D[A-Z0-9]{2,}$/;
+
+function requiredSlackId(
+  body: Record<string, unknown>,
+  key: string,
+  pattern: RegExp,
+  method: string,
+): string {
+  const value = body[key];
+  if (!isNonEmptyString(value) || !pattern.test(value)) {
+    throw new SlackApiError(
+      "invalid",
+      `Slack ${method} returned no valid ${key}`,
+      false,
+    );
+  }
+  return value;
+}
+
+function optionalSlackId(
+  body: Record<string, unknown>,
+  key: string,
+  pattern: RegExp,
+  method: string,
+): string | null {
+  const value = body[key];
+  if (value === undefined || value === null) return null;
+  if (!isNonEmptyString(value) || !pattern.test(value)) {
+    throw new SlackApiError(
+      "invalid",
+      `Slack ${method} returned an invalid ${key}`,
+      false,
+    );
+  }
+  return value;
 }
 
 /**
@@ -100,15 +149,93 @@ export class SlackWebApiClient {
     private readonly token: string,
     options: SlackWebApiClientOptions = {},
   ) {
-    this.baseUrl = (options.baseUrl ?? DEFAULT_BASE_URL).replace(/\/$/, '');
-    this.requestTimeoutMs = options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS;
+    this.baseUrl = (options.baseUrl ?? DEFAULT_BASE_URL).replace(/\/$/, "");
+    this.requestTimeoutMs =
+      options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS;
     this.fetchImpl = options.fetchImpl ?? fetch;
   }
 
   async authTest(signal?: AbortSignal): Promise<{ user_id: string | null }> {
-    const body = await this.call('auth.test', {}, { signal });
-    const userId = body['user_id'];
+    const body = await this.call("auth.test", {}, { signal });
+    const userId = body["user_id"];
     return { user_id: isNonEmptyString(userId) ? userId : null };
+  }
+
+  /**
+   * Capture the strongest stable tenant and installation-subject identifiers
+   * exposed by `auth.test`. This is intentionally separate from `authTest()`:
+   * adapter health checks retain their historical permissive return shape,
+   * while identity enrollment fails closed on malformed or absent IDs.
+   */
+  async authIdentity(signal?: AbortSignal): Promise<SlackAuthIdentity> {
+    const body = await this.call("auth.test", {}, { signal });
+    return {
+      team_id: requiredSlackId(body, "team_id", SLACK_TEAM_ID_RE, "auth.test"),
+      enterprise_id: optionalSlackId(
+        body,
+        "enterprise_id",
+        SLACK_ENTERPRISE_ID_RE,
+        "auth.test",
+      ),
+      user_id: requiredSlackId(body, "user_id", SLACK_USER_ID_RE, "auth.test"),
+      bot_id: optionalSlackId(body, "bot_id", SLACK_BOT_ID_RE, "auth.test"),
+      // `app_id` is not promised by auth.test, but retain it when Slack does
+      // supply it rather than inferring it from the token or configuration.
+      app_id: optionalSlackId(body, "app_id", SLACK_APP_ID_RE, "auth.test"),
+    };
+  }
+
+  async openDirectMessage(
+    userId: string,
+    signal?: AbortSignal,
+  ): Promise<SlackDirectMessage> {
+    if (!SLACK_USER_ID_RE.test(userId)) {
+      throw new SlackApiError(
+        "invalid",
+        "Slack conversations.open requires one canonical user ID",
+        false,
+      );
+    }
+    const body = await this.call(
+      "conversations.open",
+      { users: userId, return_im: true },
+      { signal },
+    );
+    const channel = body["channel"];
+    if (!isPlainObject(channel)) {
+      throw new SlackApiError(
+        "invalid",
+        "Slack conversations.open returned no direct-message identity",
+        false,
+      );
+    }
+    const channelId = requiredSlackId(
+      channel,
+      "id",
+      SLACK_DM_ID_RE,
+      "conversations.open",
+    );
+    if (channel["is_im"] !== true) {
+      throw new SlackApiError(
+        "invalid",
+        "Slack conversations.open did not prove a one-person direct message",
+        false,
+      );
+    }
+    const responseUserId = requiredSlackId(
+      channel,
+      "user",
+      SLACK_USER_ID_RE,
+      "conversations.open",
+    );
+    if (responseUserId !== userId) {
+      throw new SlackApiError(
+        "invalid",
+        "Slack conversations.open returned a different direct-message user",
+        false,
+      );
+    }
+    return { channel_id: channelId, user_id: responseUserId };
   }
 
   async postMessage(
@@ -119,7 +246,7 @@ export class SlackWebApiClient {
     // the message even though no response arrived. Callers must treat posting
     // as at-least-once.
     const body = await this.call(
-      'chat.postMessage',
+      "chat.postMessage",
       {
         channel: input.channel,
         text: input.text,
@@ -129,12 +256,12 @@ export class SlackWebApiClient {
       },
       { signal, unknownOutcomeOnTransportFailure: true },
     );
-    const channel = body['channel'];
-    const ts = body['ts'];
+    const channel = body["channel"];
+    const ts = body["ts"];
     if (!isNonEmptyString(channel) || !isNonEmptyString(ts)) {
       throw new SlackApiError(
-        'unknown_outcome',
-        'Slack accepted the message but returned no channel/ts identity',
+        "unknown_outcome",
+        "Slack accepted the message but returned no channel/ts identity",
         true,
       );
     }
@@ -147,24 +274,24 @@ export class SlackWebApiClient {
     signal?: AbortSignal,
   ): Promise<readonly SlackReaction[]> {
     const body = await this.call(
-      'reactions.get',
+      "reactions.get",
       { channel, timestamp, full: true },
-      { signal, method: 'GET' },
+      { signal, method: "GET" },
     );
-    const message = body['message'];
+    const message = body["message"];
     if (!isPlainObject(message)) return [];
-    const reactions = message['reactions'];
+    const reactions = message["reactions"];
     if (!Array.isArray(reactions)) return [];
     return reactions.flatMap((entry) => {
       if (!isPlainObject(entry)) return [];
-      const name = entry['name'];
-      const users = entry['users'];
-      const count = entry['count'];
+      const name = entry["name"];
+      const users = entry["users"];
+      const count = entry["count"];
       if (
         !isNonEmptyString(name) ||
         !Array.isArray(users) ||
         !users.every(isNonEmptyString) ||
-        typeof count !== 'number'
+        typeof count !== "number"
       ) {
         return [];
       }
@@ -181,38 +308,40 @@ export class SlackWebApiClient {
     let cursor: string | undefined;
     for (let page = 0; page < MAX_REPLY_PAGES; page += 1) {
       const body = await this.call(
-        'conversations.replies',
+        "conversations.replies",
         {
           channel,
           ts: parentTs,
           limit: REPLIES_PAGE_LIMIT,
           ...(cursor === undefined ? {} : { cursor }),
         },
-        { signal, method: 'GET' },
+        { signal, method: "GET" },
       );
-      const messages = body['messages'];
+      const messages = body["messages"];
       if (Array.isArray(messages)) {
         for (const message of messages) {
           if (!isPlainObject(message)) continue;
-          const ts = message['ts'];
-          const user = message['user'];
-          const text = message['text'];
+          const ts = message["ts"];
+          const user = message["user"];
+          const text = message["text"];
           // The response includes the parent message itself; only true
           // thread replies with an attributable author count as reasons.
           if (ts === parentTs) continue;
           if (!isNonEmptyString(ts) || !isNonEmptyString(user)) continue;
-          if (typeof text !== 'string') continue;
+          if (typeof text !== "string") continue;
           replies.push({ user, text, ts });
         }
       }
-      const metadata = body['response_metadata'];
-      const nextCursor = isPlainObject(metadata) ? metadata['next_cursor'] : undefined;
+      const metadata = body["response_metadata"];
+      const nextCursor = isPlainObject(metadata)
+        ? metadata["next_cursor"]
+        : undefined;
       if (!isNonEmptyString(nextCursor)) return replies;
       cursor = nextCursor;
     }
     throw new SlackApiError(
-      'invalid',
-      'Slack thread pagination exceeded the supported page budget',
+      "invalid",
+      "Slack thread pagination exceeded the supported page budget",
       false,
     );
   }
@@ -222,18 +351,18 @@ export class SlackWebApiClient {
     parameters: Record<string, unknown>,
     options: {
       signal?: AbortSignal | undefined;
-      method?: 'GET' | 'POST';
+      method?: "GET" | "POST";
       unknownOutcomeOnTransportFailure?: boolean;
     },
   ): Promise<Record<string, unknown>> {
-    const httpMethod = options.method ?? 'POST';
+    const httpMethod = options.method ?? "POST";
     const transportFailureCode: SlackApiErrorCode =
       options.unknownOutcomeOnTransportFailure === true
-        ? 'unknown_outcome'
-        : 'transient';
+        ? "unknown_outcome"
+        : "transient";
     const controller = new AbortController();
     const abortUpstream = () => controller.abort(options.signal?.reason);
-    options.signal?.addEventListener('abort', abortUpstream, { once: true });
+    options.signal?.addEventListener("abort", abortUpstream, { once: true });
     if (options.signal?.aborted === true) abortUpstream();
     const timer = setTimeout(
       () => controller.abort(new Error(`Slack ${method} timed out`)),
@@ -248,10 +377,10 @@ export class SlackWebApiClient {
         // prevents fetch from forwarding the bearer credential to a different
         // endpoint if Slack, a proxy, or a configured test endpoint responds
         // with a redirect.
-        redirect: 'error',
+        redirect: "error",
         headers: { authorization: `Bearer ${this.token}` },
       };
-      if (httpMethod === 'GET') {
+      if (httpMethod === "GET") {
         const query = new URLSearchParams();
         for (const [key, value] of Object.entries(parameters)) {
           query.set(key, String(value));
@@ -260,7 +389,7 @@ export class SlackWebApiClient {
       } else {
         init.headers = {
           ...init.headers,
-          'content-type': 'application/json; charset=utf-8',
+          "content-type": "application/json; charset=utf-8",
         };
         init.body = JSON.stringify(parameters);
       }
@@ -276,12 +405,14 @@ export class SlackWebApiClient {
       }
 
       if (response.status === 429) {
-        const retryAfter = Number(response.headers.get('retry-after'));
+        const retryAfter = Number(response.headers.get("retry-after"));
         throw new SlackApiError(
-          'rate_limited',
+          "rate_limited",
           `Slack ${method} is rate limited`,
           true,
-          Number.isFinite(retryAfter) && retryAfter > 0 ? retryAfter : undefined,
+          Number.isFinite(retryAfter) && retryAfter > 0
+            ? retryAfter
+            : undefined,
         );
       }
       if (response.status >= 500) {
@@ -293,7 +424,7 @@ export class SlackWebApiClient {
       }
       if (!response.ok) {
         throw new SlackApiError(
-          'invalid',
+          "invalid",
           `Slack ${method} failed with HTTP ${response.status}`,
           false,
         );
@@ -312,24 +443,28 @@ export class SlackWebApiClient {
       if (!isPlainObject(body)) {
         const responseShapeCode: SlackApiErrorCode =
           options.unknownOutcomeOnTransportFailure === true
-            ? 'unknown_outcome'
-            : 'invalid';
+            ? "unknown_outcome"
+            : "invalid";
         throw new SlackApiError(
           responseShapeCode,
           `Slack ${method} returned an unexpected body`,
-          responseShapeCode === 'unknown_outcome',
+          responseShapeCode === "unknown_outcome",
         );
       }
-      if (body['ok'] !== true) {
-        const error = isNonEmptyString(body['error'])
-          ? body['error']
-          : 'unknown_error';
+      if (body["ok"] !== true) {
+        const error = isNonEmptyString(body["error"])
+          ? body["error"]
+          : "unknown_error";
         if (AUTH_ERRORS.has(error)) {
-          throw new SlackApiError('auth', `Slack ${method} failed: ${error}`, false);
+          throw new SlackApiError(
+            "auth",
+            `Slack ${method} failed: ${error}`,
+            false,
+          );
         }
         if (RATE_LIMIT_ERRORS.has(error)) {
           throw new SlackApiError(
-            'rate_limited',
+            "rate_limited",
             `Slack ${method} failed: ${error}`,
             true,
           );
@@ -342,7 +477,7 @@ export class SlackWebApiClient {
           );
         }
         throw new SlackApiError(
-          'invalid',
+          "invalid",
           `Slack ${method} failed: ${error}`,
           false,
         );
@@ -353,7 +488,7 @@ export class SlackWebApiClient {
       // complete response body has been consumed, not merely until headers
       // arrive. Fetch resolves as soon as headers are available.
       clearTimeout(timer);
-      options.signal?.removeEventListener('abort', abortUpstream);
+      options.signal?.removeEventListener("abort", abortUpstream);
     }
   }
 }

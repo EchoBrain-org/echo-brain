@@ -12,10 +12,14 @@ supports the version-1 JSON protocol consumed by
 - `describe` returns its public descriptor or `null` when it is absent.
 - `sign` checks `expected_key_id`, signs the supplied message bytes with
   ECDSA-P256/SHA-256, and returns strict low-S X9.62 DER.
+- `delete` is an abort-only cleanup command. It recomputes and checks
+  `expected_key_id` before deleting the exact verified key reference, returns
+  `false` when no key exists, and refuses a fingerprint mismatch without
+  deleting.
 
 Every request is one JSON object on standard input. Every response is one JSON
-object on standard output. The helper has no software-key fallback and no
-private-key export or delete command.
+object on standard output. The helper has no software-key fallback, private-key
+export, or unrestricted delete command.
 
 ## Required signing configuration
 

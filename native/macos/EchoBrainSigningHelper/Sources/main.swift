@@ -59,6 +59,7 @@ private enum Request {
     case create(installationID: String)
     case describe(installationID: String)
     case sign(installationID: String, expectedKeyID: String, message: Data)
+    case delete(installationID: String, expectedKeyID: String)
 }
 
 private func boundedMessage(_ value: String) -> String {
@@ -229,6 +230,23 @@ private func parseRequest(_ data: Data) throws -> Request {
             installationID: installationID,
             expectedKeyID: expectedKeyID,
             message: message
+        )
+    case "delete":
+        try exactKeys(
+            object,
+            expected: [
+                "schema_version",
+                "command",
+                "installation_id",
+                "expected_key_id",
+            ]
+        )
+        let expectedKeyID = try validatedKeyID(
+            requiredString(object, key: "expected_key_id")
+        )
+        return .delete(
+            installationID: installationID,
+            expectedKeyID: expectedKeyID
         )
     default:
         throw SignerFailure(code: "invalid_request", message: "unsupported command")
@@ -541,6 +559,43 @@ private func sign(_ message: Data, with key: SecKey) throws -> Data {
     return try normalizeP256LowS(signature)
 }
 
+private func deleteKey(
+    installationID: String,
+    expectedKeyID: String,
+    accessGroup: String
+) throws -> Bool {
+    guard let key = try loadKey(installationID: installationID, accessGroup: accessGroup) else {
+        return false
+    }
+    let actual = try descriptor(for: key, installationID: installationID)
+    guard actual.keyID == expectedKeyID else {
+        throw SignerFailure(
+            code: "key_mismatch",
+            message: "installation signing key does not match expected_key_id"
+        )
+    }
+
+    // Delete only the exact transient SecKey reference whose fingerprint was
+    // just checked. A tag-only query would delete every matching item.
+    let query: [CFString: Any] = [
+        kSecClass: kSecClassKey,
+        kSecAttrAccessGroup: accessGroup,
+        kSecUseDataProtectionKeychain: true,
+        kSecMatchItemList: [key],
+    ]
+    let status = SecItemDelete(query as CFDictionary)
+    if status == errSecItemNotFound { return false }
+    guard status == errSecSuccess else {
+        throw SignerFailure(
+            code: status == errSecInteractionNotAllowed
+                ? "keychain_unavailable"
+                : "keychain_failed",
+            message: securityStatusMessage(status)
+        )
+    }
+    return true
+}
+
 private func success(_ fields: [String: Any] = [:]) -> [String: Any] {
     var response: [String: Any] = ["schema_version": protocolVersion, "ok": true]
     for (key, value) in fields { response[key] = value }
@@ -579,6 +634,14 @@ private func handle(_ request: Request) throws -> [String: Any] {
             )
         }
         return success(["signature_base64": try sign(message, with: key).base64EncodedString()])
+    case .delete(let installationID, let expectedKeyID):
+        return success([
+            "deleted": try deleteKey(
+                installationID: installationID,
+                expectedKeyID: expectedKeyID,
+                accessGroup: accessGroup
+            ),
+        ])
     }
 }
 

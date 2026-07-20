@@ -1,11 +1,11 @@
-import type { ProductRuntimeConfig } from '../config.js';
+import type { ProductRuntimeConfig } from "../config.js";
 import {
   canonicalJson,
   parseCanonicalJson,
   sha256Digest,
-} from './canonical-json.js';
-import { ActiveIdentityBundleStore } from './active-identity-bundle-store.js';
-import { connectionRegistryFilename } from './connection-registry-store.js';
+} from "./canonical-json.js";
+import { ActiveIdentityBundleStore } from "./active-identity-bundle-store.js";
+import { connectionRegistryFilename } from "./connection-registry-store.js";
 import type {
   ActiveIdentityBundleV1,
   AdapterBindingV1,
@@ -16,29 +16,32 @@ import type {
   PublicationSnapshotV1,
   SignedDocument,
   ToolConnectionV1,
-} from './contracts.js';
-import { federationId } from './identifiers.js';
-import { identityManifestFilename } from './identity-manifest-store.js';
-import type { InstallationSigner } from './installation-signer.js';
-import { verifyInstallationKeyDescriptor } from './installation-signer.js';
-import { publicationPolicyFilename } from './publication-policy-store.js';
+} from "./contracts.js";
+import { federationId } from "./identifiers.js";
+import { identityManifestFilename } from "./identity-manifest-store.js";
+import type {
+  InstallationKeyDescriptor,
+  InstallationSigner,
+} from "./installation-signer.js";
+import { verifyInstallationKeyDescriptor } from "./installation-signer.js";
+import { publicationPolicyFilename } from "./publication-policy-store.js";
 import {
   loadPackagedBuildIdentity,
   type PackagedBuildIdentityV1,
-} from './build-identity.js';
+} from "./build-identity.js";
 import {
   validateFederationDocument,
   type FederationSchemaKind,
-} from './schema-validation.js';
+} from "./schema-validation.js";
 import {
   createSignedDocument,
   signedPayload,
   verifySignedDocument,
-} from './signed-document.js';
+} from "./signed-document.js";
 import {
   validateIdentityDocumentSemantics,
   validateRegistryAgainstRuntime,
-} from './bundle-semantics.js';
+} from "./bundle-semantics.js";
 
 export interface FounderBootstrapIds {
   organization_id: string;
@@ -55,7 +58,7 @@ export interface FounderBootstrapInput {
   ids?: FounderBootstrapIds;
   organization_display_name: string;
   principal_display_name: string;
-  device_class: 'byod' | 'managed';
+  device_class: "byod" | "managed";
   created_at: string;
   identity_claims: readonly IdentityClaimV1[];
   connections: readonly ToolConnectionV1[];
@@ -68,14 +71,21 @@ export interface FounderBootstrapDependencies {
   loadBuildIdentity?: () => PackagedBuildIdentityV1;
 }
 
-type UnsignedIdentityManifest = Omit<LocalIdentityManifestV1, 'integrity' | 'installation'> & {
-  installation: Omit<LocalIdentityManifestV1['installation'], 'signing_key'>;
+type UnsignedIdentityManifest = Omit<
+  LocalIdentityManifestV1,
+  "integrity" | "installation"
+> & {
+  installation: Omit<LocalIdentityManifestV1["installation"], "signing_key">;
 };
-type UnsignedConnectionRegistry = Omit<LocalConnectionRegistryV1, 'integrity'>;
-type UnsignedPublicationPolicy = Omit<PublicationPolicyV1, 'integrity' | 'issued_by'>;
+type UnsignedConnectionRegistry = Omit<LocalConnectionRegistryV1, "integrity">;
+type UnsignedPublicationPolicy = Omit<
+  PublicationPolicyV1,
+  "integrity" | "issued_by"
+>;
 
 export interface FounderBootstrapPlan {
   ids: FounderBootstrapIds;
+  expected_signing_key: InstallationKeyDescriptor;
   manifest: UnsignedIdentityManifest;
   registry: UnsignedConnectionRegistry;
   policy: UnsignedPublicationPolicy;
@@ -103,7 +113,7 @@ async function createOrReuseSignedImmutable<T extends SignedDocument>(options: {
   };
   filename: string;
   schema: FederationSchemaKind;
-  payload: Omit<T, 'integrity'>;
+  payload: Omit<T, "integrity">;
   signer: InstallationSigner;
   installationId: string;
   keyId: `sha256:${string}`;
@@ -116,7 +126,9 @@ async function createOrReuseSignedImmutable<T extends SignedDocument>(options: {
       parseCanonicalJson(raw),
     );
     verifySignedDocument(document, options.publicKey, options.keyId);
-    if (canonicalJson(signedPayload(document)) !== canonicalJson(options.payload)) {
+    if (
+      canonicalJson(signedPayload(document)) !== canonicalJson(options.payload)
+    ) {
       throw new Error(
         `${options.schema} already exists with a different bootstrap payload`,
       );
@@ -140,14 +152,14 @@ async function createOrReuseSignedImmutable<T extends SignedDocument>(options: {
 
 export function mintFounderBootstrapIds(): FounderBootstrapIds {
   return {
-    organization_id: federationId('org'),
-    principal_id: federationId('prn'),
-    membership_id: federationId('mem'),
-    device_id: federationId('dev'),
-    installation_id: federationId('ins'),
-    manifest_id: federationId('idm'),
-    registry_id: federationId('reg'),
-    policy_id: federationId('pol'),
+    organization_id: federationId("org"),
+    principal_id: federationId("prn"),
+    membership_id: federationId("mem"),
+    device_id: federationId("dev"),
+    installation_id: federationId("ins"),
+    manifest_id: federationId("idm"),
+    registry_id: federationId("reg"),
+    policy_id: federationId("pol"),
   };
 }
 
@@ -160,12 +172,15 @@ function nonBlank(value: string, label: string): string {
 }
 
 function assertBuildIdentity(build: PackagedBuildIdentityV1): void {
-  if (build.product_version.trim() === '') throw new Error('product version is required');
+  if (build.product_version.trim() === "")
+    throw new Error("product version is required");
   if (!/^[a-f0-9]{40}$/.test(build.source_sha)) {
-    throw new Error('bootstrap requires the full lowercase source commit SHA');
+    throw new Error("bootstrap requires the full lowercase source commit SHA");
   }
-  if (build.source_kind !== 'materialized-commit') {
-    throw new Error('bootstrap requires a package built from one materialized commit');
+  if (build.source_kind !== "materialized-commit") {
+    throw new Error(
+      "bootstrap requires a package built from one materialized commit",
+    );
   }
 }
 
@@ -179,45 +194,92 @@ function founderBuildIdentity(
 
 function assertFounderBootstrapPlanIds(plan: FounderBootstrapPlan): void {
   const expected: ReadonlyArray<readonly [string, string, string]> = [
-    ['organization_id', plan.ids.organization_id, plan.manifest.organization.organization_id],
-    ['principal_id', plan.ids.principal_id, plan.manifest.principal.principal_id],
-    ['membership_id', plan.ids.membership_id, plan.manifest.membership.membership_id],
-    ['device_id', plan.ids.device_id, plan.manifest.installation.device_id],
-    ['installation_id', plan.ids.installation_id, plan.manifest.installation.installation_id],
-    ['manifest_id', plan.ids.manifest_id, plan.manifest.manifest_id],
-    ['registry_id', plan.ids.registry_id, plan.registry.registry_id],
-    ['policy_id', plan.ids.policy_id, plan.policy.policy_id],
+    [
+      "organization_id",
+      plan.ids.organization_id,
+      plan.manifest.organization.organization_id,
+    ],
+    [
+      "principal_id",
+      plan.ids.principal_id,
+      plan.manifest.principal.principal_id,
+    ],
+    [
+      "membership_id",
+      plan.ids.membership_id,
+      plan.manifest.membership.membership_id,
+    ],
+    ["device_id", plan.ids.device_id, plan.manifest.installation.device_id],
+    [
+      "installation_id",
+      plan.ids.installation_id,
+      plan.manifest.installation.installation_id,
+    ],
+    [
+      "signing_key.installation_id",
+      plan.ids.installation_id,
+      plan.expected_signing_key.installation_id,
+    ],
+    ["manifest_id", plan.ids.manifest_id, plan.manifest.manifest_id],
+    ["registry_id", plan.ids.registry_id, plan.registry.registry_id],
+    ["policy_id", plan.ids.policy_id, plan.policy.policy_id],
   ];
   const mismatches = expected
     .filter(([, planned, embedded]) => planned !== embedded)
     .map(([label]) => label);
   if (mismatches.length > 0) {
     throw new Error(
-      `bootstrap plan IDs do not match their embedded documents: ${mismatches.join(', ')}`,
+      `bootstrap plan IDs do not match their embedded documents: ${mismatches.join(", ")}`,
     );
   }
 }
 
+export function assertFounderBootstrapPlan(plan: FounderBootstrapPlan): void {
+  assertFounderBootstrapPlanIds(plan);
+  verifyInstallationKeyDescriptor(plan.expected_signing_key);
+  if (
+    plan.expected_signing_key.protection !== "secure-enclave" ||
+    plan.expected_signing_key.assurance !== "hardware_bound"
+  ) {
+    throw new Error("founder bootstrap plan does not use a Secure Enclave key");
+  }
+  validateIdentityDocumentSemantics(plan.manifest, plan.registry, plan.policy);
+}
+
 export function planFounderBootstrap(
   input: FounderBootstrapInput,
+  expectedSigningKey: InstallationKeyDescriptor,
   dependencies: FounderBootstrapDependencies = {},
 ): FounderBootstrapPlan {
   const ids = input.ids ?? mintFounderBootstrapIds();
   const build = founderBuildIdentity(dependencies);
+  verifyInstallationKeyDescriptor(expectedSigningKey);
+  if (
+    expectedSigningKey.installation_id !== ids.installation_id ||
+    expectedSigningKey.protection !== "secure-enclave" ||
+    expectedSigningKey.assurance !== "hardware_bound"
+  ) {
+    throw new Error(
+      "founder bootstrap plan requires the expected installation Secure Enclave key",
+    );
+  }
   const organizationName = nonBlank(
     input.organization_display_name,
-    'organization display name',
+    "organization display name",
   );
-  const principalName = nonBlank(input.principal_display_name, 'principal display name');
+  const principalName = nonBlank(
+    input.principal_display_name,
+    "principal display name",
+  );
   const manifest: UnsignedIdentityManifest = {
     schema_version: 1,
-    kind: 'echo-local-identity-manifest',
+    kind: "echo-local-identity-manifest",
     manifest_id: ids.manifest_id,
     predecessor_manifest_id: null,
     created_at: input.created_at,
     authority: {
-      kind: 'local-founder-bootstrap',
-      assurance: 'founder_attested',
+      kind: "local-founder-bootstrap",
+      assurance: "founder_attested",
     },
     organization: {
       organization_id: ids.organization_id,
@@ -227,15 +289,15 @@ export function planFounderBootstrap(
     principal: {
       principal_id: ids.principal_id,
       organization_id: ids.organization_id,
-      kind: 'human',
+      kind: "human",
       display_name: principalName,
     },
     membership: {
       membership_id: ids.membership_id,
       organization_id: ids.organization_id,
       principal_id: ids.principal_id,
-      type: 'owner',
-      status: 'active',
+      type: "owner",
+      status: "active",
       valid_from: input.created_at,
     },
     installation: {
@@ -246,7 +308,7 @@ export function planFounderBootstrap(
       device_class: input.device_class,
       enrolled_at: input.created_at,
       product: {
-        name: 'echo-brain',
+        name: "echo-brain",
         version: build.product_version,
         source_sha: build.source_sha,
       },
@@ -254,18 +316,18 @@ export function planFounderBootstrap(
     identity_claims: input.identity_claims,
     legacy_cutover: {
       declared_at: input.created_at,
-      pre_cutover_default: 'disposable_test',
+      pre_cutover_default: "disposable_test",
       native_records_require: [
-        'source-attribution-v1',
-        'processor-attribution-v1',
-        'approval-context-v1',
-        'signed-outbox-v1',
+        "source-attribution-v1",
+        "processor-attribution-v1",
+        "approval-context-v1",
+        "signed-outbox-v1",
       ],
     },
   };
   const registry: UnsignedConnectionRegistry = {
     schema_version: 1,
-    kind: 'echo-local-connection-registry',
+    kind: "echo-local-connection-registry",
     registry_id: ids.registry_id,
     identity_manifest_id: ids.manifest_id,
     revision: 1,
@@ -276,7 +338,7 @@ export function planFounderBootstrap(
   };
   const policy: UnsignedPublicationPolicy = {
     schema_version: 1,
-    kind: 'echo-publication-policy',
+    kind: "echo-publication-policy",
     policy_id: ids.policy_id,
     organization_id: ids.organization_id,
     identity_manifest_id: ids.manifest_id,
@@ -284,7 +346,28 @@ export function planFounderBootstrap(
     effective_at: input.created_at,
     publication: input.publication,
   };
-  return { ids, manifest, registry, policy };
+  return {
+    ids,
+    expected_signing_key: expectedSigningKey,
+    manifest,
+    registry,
+    policy,
+  };
+}
+
+function sameInstallationKey(
+  left: InstallationKeyDescriptor,
+  right: InstallationKeyDescriptor,
+): boolean {
+  return (
+    left.installation_id === right.installation_id &&
+    left.key_id === right.key_id &&
+    left.algorithm === right.algorithm &&
+    left.public_key_spki_der_base64 === right.public_key_spki_der_base64 &&
+    left.protection === right.protection &&
+    left.assurance === right.assurance &&
+    left.private_key_exportable === right.private_key_exportable
+  );
 }
 
 export async function commitFounderBootstrap(
@@ -294,23 +377,24 @@ export async function commitFounderBootstrap(
   dependencies: FounderBootstrapDependencies = {},
 ): Promise<FounderBootstrapResult> {
   const store = new ActiveIdentityBundleStore(config.state_dir);
-  assertFounderBootstrapPlanIds(plan);
-  validateIdentityDocumentSemantics(plan.manifest, plan.registry, plan.policy);
+  assertFounderBootstrapPlan(plan);
   validateRegistryAgainstRuntime(config, plan.registry);
   const build = founderBuildIdentity(dependencies);
   if (
-    plan.manifest.installation.product.name !== 'echo-brain' ||
+    plan.manifest.installation.product.name !== "echo-brain" ||
     plan.manifest.installation.product.version !== build.product_version ||
     plan.manifest.installation.product.source_sha !== build.source_sha
   ) {
     throw new Error(
-      'bootstrap plan product identity does not match the packaged build',
+      "bootstrap plan product identity does not match the packaged build",
     );
   }
   if (store.hasActiveBundle()) {
     const verified = store.loadVerified(config);
     if (verified === null) {
-      throw new Error('active identity bundle disappeared during bootstrap recovery');
+      throw new Error(
+        "active identity bundle disappeared during bootstrap recovery",
+      );
     }
     const manifestPayload = signedPayload(verified.manifest);
     const registryPayload = signedPayload(verified.connectionRegistry);
@@ -330,9 +414,13 @@ export async function commitFounderBootstrap(
       canonicalJson(manifestPayload) !== canonicalJson(expectedManifest) ||
       canonicalJson(registryPayload) !== canonicalJson(plan.registry) ||
       canonicalJson(policyPayload) !== canonicalJson(expectedPolicy) ||
-      verified.pointer.active_installation_id !== plan.ids.installation_id
+      verified.pointer.active_installation_id !== plan.ids.installation_id ||
+      verified.manifest.installation.signing_key.key_id !==
+        plan.expected_signing_key.key_id ||
+      verified.manifest.installation.signing_key.public_key_spki_der_base64 !==
+        plan.expected_signing_key.public_key_spki_der_base64
     ) {
-      throw new Error('another identity bootstrap is already active');
+      throw new Error("another identity bootstrap is already active");
     }
     return {
       active: verified.pointer,
@@ -346,19 +434,27 @@ export async function commitFounderBootstrap(
   const key = await signer.generate(plan.ids.installation_id);
   const publicKey = verifyInstallationKeyDescriptor(key);
   if (key.installation_id !== plan.ids.installation_id) {
-    throw new Error('installation signer generated a key for a different installation');
+    throw new Error(
+      "installation signer generated a key for a different installation",
+    );
   }
   if (
-    key.protection !== 'secure-enclave' ||
-    key.assurance !== 'hardware_bound'
+    key.protection !== "secure-enclave" ||
+    key.assurance !== "hardware_bound"
   ) {
     throw new Error(
-      'founder seed bootstrap requires a non-exportable Secure Enclave key',
+      "founder seed bootstrap requires a non-exportable Secure Enclave key",
+    );
+  }
+  if (!sameInstallationKey(key, plan.expected_signing_key)) {
+    throw new Error(
+      "installation signer key does not match the founder-confirmed fingerprint",
     );
   }
   // Parsing the descriptor validates the key fingerprint and P-256 SPKI before
   // any immutable identity file is written.
-  if (publicKey.length === 0) throw new Error('installation public key is empty');
+  if (publicKey.length === 0)
+    throw new Error("installation public key is empty");
 
   const manifestFilename = identityManifestFilename(plan.ids.manifest_id);
   const registryFilename = connectionRegistryFilename(plan.ids.registry_id, 1);
@@ -367,7 +463,7 @@ export async function commitFounderBootstrap(
     await createOrReuseSignedImmutable<LocalIdentityManifestV1>({
       store: store.manifests,
       filename: manifestFilename,
-      schema: 'local-identity-manifest',
+      schema: "local-identity-manifest",
       payload: {
         ...plan.manifest,
         installation: {
@@ -390,30 +486,29 @@ export async function commitFounderBootstrap(
     await createOrReuseSignedImmutable<LocalConnectionRegistryV1>({
       store: store.registries,
       filename: registryFilename,
-      schema: 'local-connection-registry',
+      schema: "local-connection-registry",
       payload: plan.registry,
       signer,
       installationId: plan.ids.installation_id,
       keyId: key.key_id,
       publicKey,
     });
-  const policyResult =
-    await createOrReuseSignedImmutable<PublicationPolicyV1>({
-      store: store.policies,
-      filename: policyFilename,
-      schema: 'publication-policy',
-      payload: {
-        ...plan.policy,
-        issued_by: {
-          installation_id: plan.ids.installation_id,
-          key_id: key.key_id,
-        },
+  const policyResult = await createOrReuseSignedImmutable<PublicationPolicyV1>({
+    store: store.policies,
+    filename: policyFilename,
+    schema: "publication-policy",
+    payload: {
+      ...plan.policy,
+      issued_by: {
+        installation_id: plan.ids.installation_id,
+        key_id: key.key_id,
       },
-      signer,
-      installationId: plan.ids.installation_id,
-      keyId: key.key_id,
-      publicKey,
-    });
+    },
+    signer,
+    installationId: plan.ids.installation_id,
+    keyId: key.key_id,
+    publicKey,
+  });
   const manifest = manifestResult.document;
   const registry = registryResult.document;
   const policy = policyResult.document;
@@ -431,9 +526,9 @@ export async function commitFounderBootstrap(
     createdPaths.push(store.policies.pathFor(policyFilename));
   }
 
-  const activePayload: Omit<ActiveIdentityBundleV1, 'integrity'> = {
+  const activePayload: Omit<ActiveIdentityBundleV1, "integrity"> = {
     schema_version: 1,
-    kind: 'echo-active-identity-bundle',
+    kind: "echo-active-identity-bundle",
     manifest: {
       manifest_id: plan.ids.manifest_id,
       path: `manifests/${manifestFilename}`,
@@ -453,7 +548,7 @@ export async function commitFounderBootstrap(
     },
     active_installation_id: plan.ids.installation_id,
     activated_at: plan.manifest.created_at,
-    activation_reason: 'founder-bootstrap',
+    activation_reason: "founder-bootstrap",
   };
   const active = await createSignedDocument(
     activePayload,
@@ -462,7 +557,7 @@ export async function commitFounderBootstrap(
     key.key_id,
   );
   validateFederationDocument<ActiveIdentityBundleV1>(
-    'active-identity-bundle',
+    "active-identity-bundle",
     active,
   );
   store.createInitialPointer(canonicalJson(active));
