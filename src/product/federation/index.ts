@@ -16,6 +16,8 @@ export * from "./identity-check.js";
 export * from "./build-identity.js";
 export * from "./credential-guard.js";
 export * from "./granola-connection-evidence.js";
+export * from "./approval-capture.js";
+export * from "./identity-lineage-store.js";
 
 // Founder bootstrap mutation primitives remain package-internal until WS5
 // supplies the strict seed-cutover authorization and maintenance authority.

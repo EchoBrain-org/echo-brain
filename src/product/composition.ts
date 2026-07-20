@@ -14,7 +14,10 @@ import type {
   ClassifyStateFilesystem,
   ProductRuntimeConfig,
 } from './config.js';
-import { DecisionNodeStore } from './approval/decision-node-store.js';
+import {
+  DecisionNodeStore,
+  type DecisionNodeFederationCapture,
+} from './approval/decision-node-store.js';
 import { StoreBackedApprovalGate } from './approval/store-backed-approval-gate.js';
 import {
   assertFounderIdentityAllowsPipeline,
@@ -68,6 +71,7 @@ export interface PrepareProductCompositionOptions {
   healthTimeoutMs?: number;
   operationDeadlines?: Partial<CoreCycleDeadlines>;
   identityCheck?: IdentityCheckDependencies;
+  approvalFederationCapture?: DecisionNodeFederationCapture;
 }
 
 export function resolveProductClock(now?: () => string): () => string {
@@ -79,7 +83,9 @@ function allAdapters(adapters: ProductRuntimeAdapters) {
     ...adapters.meetingSources,
     adapters.decisionProcessor,
     ...adapters.deliverySurfaces,
-    ...(adapters.approvalSurface === undefined ? [] : [adapters.approvalSurface]),
+    ...(adapters.approvalSurface === undefined
+      ? []
+      : [adapters.approvalSurface]),
   ];
 }
 
@@ -165,7 +171,9 @@ export function prepareProductStateRoot(path: string): void {
   }
 }
 
-function summarize(sources: readonly ProductSourceCycleResult[]): ProductCycleResult {
+function summarize(
+  sources: readonly ProductSourceCycleResult[],
+): ProductCycleResult {
   const results = sources.flatMap((source) =>
     source.result === undefined ? [] : [source.result],
   );
@@ -175,10 +183,9 @@ function summarize(sources: readonly ProductSourceCycleResult[]): ProductCycleRe
       return total + (typeof value === 'number' ? value : 0);
     }, 0);
   return {
-    ok:
-      sources.every(
-        (source) => source.error === undefined && source.result?.ok === true,
-      ),
+    ok: sources.every(
+      (source) => source.error === undefined && source.result?.ok === true,
+    ),
     sources,
     meetings_seen: sum('meetings_seen'),
     meetings_processed: sum('meetings_processed'),
@@ -194,7 +201,9 @@ export async function prepareProductComposition(
   registry: AdapterRegistry,
   options: PrepareProductCompositionOptions,
 ): Promise<ProductComposition> {
-  const classification = await options.classifyStateFilesystem(config.state_dir);
+  const classification = await options.classifyStateFilesystem(
+    config.state_dir,
+  );
   if (classification.kind !== 'local') {
     throw new ProductRuntimeFailure(
       'state_not_local',
@@ -206,10 +215,10 @@ export async function prepareProductComposition(
   const paths = resolveProductStatePaths(config.state_dir);
   prepareProductStateRoot(paths.root);
   try {
-    await assertFounderIdentityAllowsPipeline(
-      config.state_dir,
-      { ...options.identityCheck, runtimeConfig: config },
-    );
+    await assertFounderIdentityAllowsPipeline(config.state_dir, {
+      ...options.identityCheck,
+      runtimeConfig: config,
+    });
   } catch (error) {
     if (error instanceof FounderIdentityGateError) {
       throw new ProductRuntimeFailure(
@@ -231,6 +240,9 @@ export async function prepareProductComposition(
     new DecisionNodeStore(paths.root, {
       now: options.now,
       createId: options.createId,
+      ...(options.approvalFederationCapture === undefined
+        ? {}
+        : { federationCapture: options.approvalFederationCapture }),
     });
   await approvals.initialize();
   const approvalGate =
@@ -293,7 +305,9 @@ export async function prepareProductComposition(
     close() {
       if (closed) return;
       if (active !== null) {
-        throw new Error('cannot close product composition during an active cycle');
+        throw new Error(
+          'cannot close product composition during an active cycle',
+        );
       }
       closed = true;
       state.close?.();

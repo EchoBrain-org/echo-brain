@@ -57,6 +57,7 @@ export interface DecisionNodeState {
   node_id: string;
   processing_key: string;
   requested_at: string;
+  requested_metadata: JsonObject;
   brief: DecisionBrief;
   alternatives: readonly JsonObject[];
   links: DecisionNodeLinks;
@@ -65,6 +66,7 @@ export interface DecisionNodeState {
   reviewed_by: string | null;
   reason: string | null;
   resolved_surface: string | null;
+  resolved_metadata: JsonObject | null;
   published: readonly DecisionPublishedEvent[];
 }
 
@@ -107,11 +109,15 @@ function assertLinks(value: unknown, file: string): DecisionNodeLinks {
   if (!isPlainObject(value)) throw invalid(file, 'links');
   const parent = value['parent'];
   const supersedes = value['supersedes'];
-  if (parent !== null && !isNonEmptyString(parent)) throw invalid(file, 'links.parent');
+  if (parent !== null && !isNonEmptyString(parent))
+    throw invalid(file, 'links.parent');
   if (supersedes !== null && !isNonEmptyString(supersedes)) {
     throw invalid(file, 'links.supersedes');
   }
-  return { parent: parent as string | null, supersedes: supersedes as string | null };
+  return {
+    parent: parent as string | null,
+    supersedes: supersedes as string | null,
+  };
 }
 
 export function assertDecisionRequestedEvent(
@@ -146,10 +152,14 @@ export function assertDecisionPublishedEvent(
   file: string,
 ): DecisionPublishedEvent {
   const record = assertEventEnvelope(value, 'published', file);
-  if (typeof record['surface'] !== 'string' || !SURFACE_RE.test(record['surface'])) {
+  if (
+    typeof record['surface'] !== 'string' ||
+    !SURFACE_RE.test(record['surface'])
+  ) {
     throw invalid(file, 'surface');
   }
-  if (!isCanonicalTimestamp(record['posted_at'])) throw invalid(file, 'posted_at');
+  if (!isCanonicalTimestamp(record['posted_at']))
+    throw invalid(file, 'posted_at');
   if (!isJsonObjectValue(record['reference'])) throw invalid(file, 'reference');
   return record as unknown as DecisionPublishedEvent;
 }
@@ -162,12 +172,17 @@ export function assertDecisionResolvedEvent(
   if (record['status'] !== 'approved' && record['status'] !== 'rejected') {
     throw invalid(file, 'status');
   }
-  if (!isCanonicalTimestamp(record['reviewed_at'])) throw invalid(file, 'reviewed_at');
-  if (!isNonEmptyString(record['reviewed_by'])) throw invalid(file, 'reviewed_by');
+  if (!isCanonicalTimestamp(record['reviewed_at']))
+    throw invalid(file, 'reviewed_at');
+  if (!isNonEmptyString(record['reviewed_by']))
+    throw invalid(file, 'reviewed_by');
   if (record['reason'] !== null && typeof record['reason'] !== 'string') {
     throw invalid(file, 'reason');
   }
-  if (typeof record['surface'] !== 'string' || !SURFACE_RE.test(record['surface'])) {
+  if (
+    typeof record['surface'] !== 'string' ||
+    !SURFACE_RE.test(record['surface'])
+  ) {
     throw invalid(file, 'surface');
   }
   if (!isJsonObjectValue(record['metadata'])) throw invalid(file, 'metadata');
@@ -186,17 +201,24 @@ export interface DecisionNodeEvents {
  * not chronological: a CLI resolution may exist without (or before) any
  * publication, and publications never gate resolution.
  */
-export function foldDecisionNode(events: DecisionNodeEvents): DecisionNodeState {
+export function foldDecisionNode(
+  events: DecisionNodeEvents,
+): DecisionNodeState {
   const { approval_id: approvalId, requested, published, resolved } = events;
   if (!APPROVAL_ID_RE.test(approvalId)) {
-    throw new Error('decision node approval id must be a 64-character hex digest');
+    throw new Error(
+      'decision node approval id must be a 64-character hex digest',
+    );
   }
   if (decisionApprovalId(requested.processing_key) !== approvalId) {
     throw new Error(
       `decision node identity mismatch: approval id does not match processing key digest (${approvalId})`,
     );
   }
-  for (const event of [...published, ...(resolved === undefined ? [] : [resolved])]) {
+  for (const event of [
+    ...published,
+    ...(resolved === undefined ? [] : [resolved]),
+  ]) {
     if (event.node_id !== requested.node_id) {
       throw new Error(
         `decision node identity mismatch: event node_id diverges (${approvalId})`,
@@ -208,6 +230,7 @@ export function foldDecisionNode(events: DecisionNodeEvents): DecisionNodeState 
     node_id: requested.node_id,
     processing_key: requested.processing_key,
     requested_at: requested.requested_at,
+    requested_metadata: requested.metadata,
     brief: requested.brief,
     alternatives: requested.alternatives,
     links: requested.links,
@@ -216,6 +239,7 @@ export function foldDecisionNode(events: DecisionNodeEvents): DecisionNodeState 
     reviewed_by: resolved?.reviewed_by ?? null,
     reason: resolved?.reason ?? null,
     resolved_surface: resolved?.surface ?? null,
+    resolved_metadata: resolved?.metadata ?? null,
     published,
   };
 }

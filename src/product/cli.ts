@@ -24,7 +24,10 @@ import {
   type ProductRuntimeConfig,
 } from "./config.js";
 import { createDefaultAdapterFactories } from "./default-adapters.js";
-import { DecisionNodeStore } from "./approval/decision-node-store.js";
+import {
+  DecisionNodeStore,
+  type DecisionNodeFederationCapture,
+} from "./approval/decision-node-store.js";
 import {
   ProductRuntimeFailure,
   startProductRuntime,
@@ -65,6 +68,7 @@ import {
   statusFounderBootstrap,
   type FounderBootstrapCeremonyDependencies,
 } from "./federation/founder-bootstrap-ceremony.js";
+import { FederatedApprovalCapture } from "./federation/approval-capture.js";
 
 export interface ProductCliProcess {
   once: (event: "SIGINT" | "SIGTERM", listener: () => void) => unknown;
@@ -508,9 +512,14 @@ async function createCliComposition(
   const factories =
     dependencies.adapterFactories ?? createDefaultAdapterFactories();
   const now = dependencies.composition?.now ?? dependencies.now;
+  const approvalFederationCapture = resolveApprovalFederationCapture(
+    config,
+    dependencies,
+  );
   const registry = await createConfiguredAdapterRegistry(config, factories, {
     environment: dependencies.environment,
     now,
+    approvalFederationCapture,
   });
   return await prepareProductComposition(config, registry, {
     ...dependencies.composition,
@@ -520,8 +529,22 @@ async function createCliComposition(
       config,
       dependencies.environment,
     ),
+    approvalFederationCapture,
     ...(now === undefined ? {} : { now }),
   });
+}
+
+function resolveApprovalFederationCapture(
+  config: ProductRuntimeConfig,
+  dependencies: ProductCliDependencies,
+): DecisionNodeFederationCapture {
+  return (
+    dependencies.composition?.approvalFederationCapture ??
+    new FederatedApprovalCapture({
+      stateDirectory: config.state_dir,
+      runtimeConfig: config,
+    })
+  );
 }
 
 function resolveIdentityCheckDependencies(
@@ -532,10 +555,18 @@ function resolveIdentityCheckDependencies(
   const credentialResolver =
     configured?.credentialResolver ??
     createProductCredentialResolver(environment ?? process.env);
+  const approvalCaptureReady =
+    configured?.approvalCaptureReady ??
+    (async () => ({
+      ok: false,
+      detail:
+        "approval capture hooks are installed; durable attribution and trusted artifact evidence are not wired yet",
+    }));
   if (configured?.signer !== undefined) {
     return {
       ...configured,
       credentialResolver,
+      approvalCaptureReady,
       ...(runtimeConfig === undefined ? {} : { runtimeConfig }),
     };
   }
@@ -543,12 +574,14 @@ function resolveIdentityCheckDependencies(
     return {
       ...configured,
       credentialResolver,
+      approvalCaptureReady,
       ...(runtimeConfig === undefined ? {} : { runtimeConfig }),
     };
   }
   return {
     ...configured,
     credentialResolver,
+    approvalCaptureReady,
     ...(runtimeConfig === undefined ? {} : { runtimeConfig }),
     signer: new MacOsSecureEnclaveInstallationSigner(),
   };
@@ -1239,6 +1272,10 @@ export async function runProductCli(
         // never block a manual approval or rejection.
         const approvals = new DecisionNodeStore(config.state_dir, {
           now: dependencies.now,
+          federationCapture: resolveApprovalFederationCapture(
+            config,
+            dependencies,
+          ),
         });
         await approvals.initialize();
         if (parsed.command === "approvals") {
@@ -1250,6 +1287,14 @@ export async function runProductCli(
             reviewed_by: record.reviewed_by,
             reason: record.reason,
             brief: record.brief,
+            ...(Object.hasOwn(record.requested_metadata, "federation")
+              ? {
+                  federation: {
+                    requested: record.requested_metadata["federation"],
+                    resolved: record.resolved_metadata?.["federation"] ?? null,
+                  },
+                }
+              : {}),
           }));
           approvalResult = {
             ok: true,

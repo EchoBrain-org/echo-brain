@@ -6,6 +6,7 @@ import {
   type AnyAdapter,
 } from '../core/index.js';
 import type { ProductRuntimeConfig } from './config.js';
+import type { DecisionNodeFederationCapture } from './approval/decision-node-store.js';
 import {
   createProductCredentialResolver,
   type ProductCredentialResolver,
@@ -16,6 +17,7 @@ export interface ProductAdapterFactoryContext {
   environment: NodeJS.ProcessEnv;
   credentialResolver: ProductCredentialResolver;
   now: () => string;
+  approvalFederationCapture?: DecisionNodeFederationCapture;
 }
 
 export interface ProductAdapterFactory {
@@ -55,6 +57,7 @@ export interface CreateConfiguredAdapterRegistryOptions {
   environment?: NodeJS.ProcessEnv;
   credentialResolver?: ProductCredentialResolver;
   now?: () => string;
+  approvalFederationCapture?: DecisionNodeFederationCapture;
 }
 
 async function createAdapter(
@@ -96,8 +99,12 @@ export async function createConfiguredAdapterRegistry(
     stateDirectory: config.state_dir,
     environment,
     credentialResolver:
-      options.credentialResolver ?? createProductCredentialResolver(environment),
+      options.credentialResolver ??
+      createProductCredentialResolver(environment),
     now: options.now ?? (() => new Date().toISOString()),
+    ...(options.approvalFederationCapture === undefined
+      ? {}
+      : { approvalFederationCapture: options.approvalFederationCapture }),
   };
   const requested: Array<{ kind: AdapterKind; config: AdapterConfig }> = [
     ...config.meeting_sources.map((adapterConfig) => ({
@@ -123,17 +130,14 @@ export async function createConfiguredAdapterRegistry(
         `${request.kind} adapter factory '${request.config.adapter_id}' is not installed`,
     );
   if (missing.length > 0) {
-    throw new Error(`configured adapter factories are unavailable: ${missing.join('; ')}`);
+    throw new Error(
+      `configured adapter factories are unavailable: ${missing.join('; ')}`,
+    );
   }
   const registry = new AdapterRegistry();
   for (const request of requested) {
     registry.register(
-      await createAdapter(
-        factories,
-        request.kind,
-        request.config,
-        context,
-      ),
+      await createAdapter(factories, request.kind, request.config, context),
     );
   }
   return registry;

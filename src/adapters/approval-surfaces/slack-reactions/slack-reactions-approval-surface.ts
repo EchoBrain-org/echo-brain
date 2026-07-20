@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import type {
   AdapterConfig,
   AdapterConfigValidation,
@@ -8,11 +9,13 @@ import type {
   ApprovalSurfaceAdapter,
   DecisionBrief,
   JsonObject,
+  JsonValue,
 } from '../../../core/index.js';
 import { AdapterError } from '../../../core/index.js';
 import {
   SlackApiError,
   SlackWebApiClient,
+  type SlackAuthIdentity,
   type SlackReaction,
 } from '../../shared/slack/slack-web-api-client.js';
 
@@ -20,8 +23,8 @@ export const SLACK_REACTIONS_APPROVAL_SURFACE_ADAPTER_ID = 'slack-reactions';
 export const SLACK_REACTIONS_APPROVAL_SURFACE_ADAPTER_VERSION = '1.0.0';
 
 const SURFACE = 'slack';
-const DEFAULT_APPROVE_REACTION = 'white_check_mark';
-const DEFAULT_REJECT_REACTION = 'x';
+export const DEFAULT_APPROVE_REACTION = 'white_check_mark';
+export const DEFAULT_REJECT_REACTION = 'x';
 const REACTION_NAME_RE = /^[a-z0-9_+-]+$/;
 const MAX_SUMMARY_ITEMS = 10;
 const MAX_ITEM_CHARS = 240;
@@ -43,8 +46,44 @@ export interface ApprovalDecisionStoreView {
   reviewed_by: string | null;
   reason: string | null;
   brief: DecisionBrief;
+  requested_metadata?: JsonObject;
   published: readonly { surface: string; reference: JsonObject }[];
 }
+
+export type SlackPresentationEvidence = JsonObject & {
+  rendered_blocks_sha256: string;
+  rendered_blocks: JsonValue;
+  provider_identity: SlackProviderIdentityEvidence;
+};
+
+export type SlackProviderIdentityEvidence = JsonObject & {
+  provider: 'slack';
+  team_id: string;
+  enterprise_id: string | null;
+  bot_user_id: string;
+  bot_id: string | null;
+  app_id: string | null;
+};
+
+export type SlackResolutionEvidence = JsonObject & {
+  provider_identity: SlackProviderIdentityEvidence;
+  actor: JsonObject & {
+    team_id: string;
+    user_id: string;
+    display_name: string;
+    reaction_name: string;
+    channel_id: string;
+    message_ts: string;
+    provider_occurred_at: null;
+    reason_reply:
+      | (JsonObject & {
+          message_ts: string;
+          author_user_id: string;
+          text: string;
+        })
+      | null;
+  };
+};
 
 export interface ApprovalDecisionStore {
   ensureRequested(request: ApprovalRequest): Promise<ApprovalDecisionStoreView>;
@@ -52,6 +91,8 @@ export interface ApprovalDecisionStore {
     processingKey: string;
     surface: string;
     reference: JsonObject;
+    /** Raw adapter evidence; the product store owns durable enrichment. */
+    presentationEvidence?: SlackPresentationEvidence;
   }): Promise<ApprovalDecisionStoreView>;
   resolve(input: {
     approvalId: string;
@@ -60,6 +101,8 @@ export interface ApprovalDecisionStore {
     reason?: string | null;
     surface: string;
     metadata?: JsonObject;
+    /** Raw adapter evidence; the product store owns durable enrichment. */
+    resolutionEvidence?: SlackResolutionEvidence;
   }): Promise<ApprovalDecisionStoreView>;
 }
 
@@ -79,6 +122,33 @@ interface SlackReactionsSettings {
   rejectReaction: string;
   requestTimeoutMs: number | undefined;
 }
+
+interface ActiveFederationPresentation {
+  candidateContextSha256: string;
+  providerIdentity: SlackProviderIdentityEvidence;
+  publication: {
+    payloadScope: string;
+    audience: string;
+    sensitivity: string;
+    retention: string;
+    rawMeetingContent: string;
+    participantObservations: string;
+  };
+}
+
+export interface RenderSlackApprovalBlocksInput {
+  brief: DecisionBrief;
+  approvalId?: string;
+  requestedMetadata?: JsonObject;
+  approveReaction: string;
+  rejectReaction: string;
+}
+
+type ReviewerReplyEvidence = JsonObject & {
+  user: string;
+  text: string;
+  ts: string;
+};
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
@@ -134,6 +204,216 @@ function escapeSlackControlText(value: string): string {
     .replace(/>/g, '&gt;');
 }
 
+function invalidFederationPresentation(detail: string): AdapterError {
+  return new AdapterError(
+    'permanently_rejected',
+    `Slack approval federation presentation is invalid: ${detail}`,
+    false,
+  );
+}
+
+function requiredPresentationString(
+  object: Record<string, unknown>,
+  key: string,
+): string {
+  const value = object[key];
+  if (!isNonEmptyString(value)) throw invalidFederationPresentation(key);
+  return value;
+}
+
+function nullablePresentationString(
+  object: Record<string, unknown>,
+  key: string,
+): string | null {
+  const value = object[key];
+  if (value === null) return null;
+  if (!isNonEmptyString(value)) throw invalidFederationPresentation(key);
+  return value;
+}
+
+function activeFederationPresentation(
+  requestedMetadata: JsonObject | undefined,
+): ActiveFederationPresentation | undefined {
+  const federation = requestedMetadata?.['federation'];
+  if (federation === undefined) return undefined;
+  if (!isPlainObject(federation)) {
+    throw invalidFederationPresentation('federation');
+  }
+  const publication = federation['publication'];
+  if (!isPlainObject(publication)) {
+    throw invalidFederationPresentation('publication');
+  }
+  const audience = publication['audience'];
+  if (!isPlainObject(audience)) {
+    throw invalidFederationPresentation('publication.audience');
+  }
+  const audienceScope = requiredPresentationString(audience, 'scope');
+  const subjects = audience['subjects'];
+  if (!Array.isArray(subjects) || subjects.length === 0) {
+    throw invalidFederationPresentation('publication.audience.subjects');
+  }
+  const renderedSubjects = subjects.map((subject, index) => {
+    if (!isPlainObject(subject)) {
+      throw invalidFederationPresentation(
+        `publication.audience.subjects[${index}]`,
+      );
+    }
+    return `${requiredPresentationString(
+      subject,
+      'kind',
+    )}:${requiredPresentationString(subject, 'id')}`;
+  });
+  const retention = publication['retention'];
+  if (!isPlainObject(retention)) {
+    throw invalidFederationPresentation('publication.retention');
+  }
+  const retentionKind = requiredPresentationString(retention, 'kind');
+  let renderedRetention: string;
+  if (retentionKind === 'indefinite') {
+    renderedRetention = 'indefinite';
+  } else if (
+    retentionKind === 'duration' &&
+    Number.isSafeInteger(retention['days']) &&
+    Number(retention['days']) > 0
+  ) {
+    renderedRetention = `duration (${String(retention['days'])} days)`;
+  } else {
+    throw invalidFederationPresentation('publication.retention');
+  }
+
+  const approvalSurface = federation['approval_surface'];
+  const connection = isPlainObject(approvalSurface)
+    ? approvalSurface['connection']
+    : undefined;
+  const providerIdentity = isPlainObject(connection)
+    ? connection['provider_identity']
+    : undefined;
+  if (!isPlainObject(providerIdentity)) {
+    throw invalidFederationPresentation(
+      'approval_surface.connection.provider_identity',
+    );
+  }
+  if (providerIdentity['provider'] !== 'slack') {
+    throw invalidFederationPresentation(
+      'approval_surface.connection.provider_identity.provider',
+    );
+  }
+
+  const botUserId = requiredPresentationString(providerIdentity, 'bot_user_id');
+
+  return {
+    candidateContextSha256: requiredPresentationString(
+      federation,
+      'candidate_context_sha256',
+    ),
+    providerIdentity: {
+      provider: 'slack',
+      team_id: requiredPresentationString(providerIdentity, 'team_id'),
+      enterprise_id: nullablePresentationString(
+        providerIdentity,
+        'enterprise_id',
+      ),
+      bot_user_id: botUserId,
+      bot_id: nullablePresentationString(providerIdentity, 'bot_id'),
+      app_id: nullablePresentationString(providerIdentity, 'app_id'),
+    },
+    publication: {
+      payloadScope: requiredPresentationString(publication, 'payload_scope'),
+      audience: `${audienceScope} [${renderedSubjects.join(', ')}]`,
+      sensitivity: requiredPresentationString(publication, 'sensitivity'),
+      retention: renderedRetention,
+      rawMeetingContent: requiredPresentationString(
+        publication,
+        'raw_meeting_content',
+      ),
+      participantObservations: requiredPresentationString(
+        publication,
+        'participant_observations',
+      ),
+    },
+  };
+}
+
+function liveProviderEvidence(
+  identity: SlackAuthIdentity,
+): SlackProviderIdentityEvidence {
+  return {
+    provider: 'slack',
+    team_id: identity.team_id,
+    enterprise_id: identity.enterprise_id,
+    bot_user_id: identity.user_id,
+    bot_id: identity.bot_id,
+    app_id: identity.app_id,
+  };
+}
+
+function assertSameProviderIdentity(
+  frozen: SlackProviderIdentityEvidence,
+  live: SlackProviderIdentityEvidence,
+): void {
+  if (!jsonEquivalent(frozen, live)) {
+    throw new AdapterError(
+      'unauthorized',
+      'Slack approval credential identity no longer matches the frozen connection',
+      false,
+    );
+  }
+}
+
+function assertReviewerIsNotBot(
+  federation: ActiveFederationPresentation,
+  reviewerUserId: string,
+): void {
+  if (federation.providerIdentity.bot_user_id === reviewerUserId) {
+    throw new AdapterError(
+      'permanently_rejected',
+      'Slack approval reviewer must be a human distinct from the bot user',
+      false,
+    );
+  }
+}
+
+function sortedJsonValue(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(sortedJsonValue);
+  if (!isPlainObject(value)) return value;
+  return Object.fromEntries(
+    Object.keys(value)
+      .sort()
+      .map((key) => [key, sortedJsonValue(value[key])]),
+  );
+}
+
+function jsonEquivalent(left: unknown, right: unknown): boolean {
+  return (
+    JSON.stringify(sortedJsonValue(left)) ===
+    JSON.stringify(sortedJsonValue(right))
+  );
+}
+
+function jsonSha256(value: unknown): string {
+  return `sha256:${createHash('sha256')
+    .update(JSON.stringify(sortedJsonValue(value)))
+    .digest('hex')}`;
+}
+
+function slackReference(
+  reference: JsonObject,
+): { channel: string; messageTs: string } | undefined {
+  const nested = reference['slack'];
+  if (isPlainObject(nested)) {
+    const channel = nested['channel_id'];
+    const messageTs = nested['message_ts'];
+    if (isNonEmptyString(channel) && isNonEmptyString(messageTs)) {
+      return { channel, messageTs };
+    }
+  }
+  const channel = reference['channel_id'];
+  const messageTs = reference['message_ts'];
+  return isNonEmptyString(channel) && isNonEmptyString(messageTs)
+    ? { channel, messageTs }
+    : undefined;
+}
+
 function summaryText(
   label: string,
   statements: readonly string[],
@@ -150,6 +430,84 @@ function summaryText(
     lines.push(`… and ${statements.length - shown.length} more`);
   }
   return truncateCharacters(lines.join('\n'), SLACK_SECTION_MAX_CHARS);
+}
+
+/**
+ * Version-1 approval-card renderer. Identity-enabled capture calls this same
+ * pure function when validating durable presentation evidence, so changing a
+ * stored block and merely recomputing its digest cannot rewrite what the
+ * reviewer was asked to approve.
+ */
+export function renderSlackApprovalBlocks(
+  input: RenderSlackApprovalBlocksInput,
+): JsonValue[] {
+  const federation = activeFederationPresentation(input.requestedMetadata);
+  const title = input.brief.meeting.title ?? input.brief.meeting.id;
+  const summaries = [
+    summaryText(
+      'Decisions',
+      input.brief.decisions.map((signal) => signal.text),
+    ),
+    summaryText(
+      'Actions',
+      input.brief.actions.map((signal) => signal.text),
+    ),
+  ].filter((value): value is string => value !== undefined);
+  const active = federation !== undefined && input.approvalId !== undefined;
+  const federationSummary = !active
+    ? []
+    : [
+        {
+          type: 'section',
+          text: {
+            type: 'plain_text',
+            text: [
+              'Publication:',
+              `• Payload scope: ${federation.publication.payloadScope}`,
+              `• Audience: ${federation.publication.audience}`,
+              `• Sensitivity: ${federation.publication.sensitivity}`,
+              `• Retention: ${federation.publication.retention}`,
+              `• Raw meeting content: ${federation.publication.rawMeetingContent}`,
+              `• Participant observations: ${federation.publication.participantObservations}`,
+              `• Candidate digest: ${federation.candidateContextSha256}`,
+              `• Approval ID: ${input.approvalId}`,
+            ].join('\n'),
+            emoji: true,
+          },
+        },
+      ];
+  const blocks: JsonValue[] = [
+    {
+      type: 'header',
+      text: {
+        type: 'plain_text',
+        text: boundedSingleLine(title, SLACK_HEADER_MAX_CHARS),
+        emoji: true,
+      },
+    },
+    ...summaries.map((text) => ({
+      type: 'section',
+      // Meeting-derived content remains plain text so strings such as
+      // <!channel> or <@U123> cannot become active Slack mentions.
+      text: { type: 'plain_text', text, emoji: true },
+    })),
+    ...federationSummary,
+    {
+      type: 'context',
+      elements: [
+        {
+          type: 'mrkdwn',
+          text: `React :${input.approveReaction}: to approve or :${input.rejectReaction}: to reject. To record a reason, reply in this thread *before* reacting.`,
+          ...(active ? { verbatim: false } : {}),
+        },
+      ],
+    },
+  ];
+  if (!active) return blocks;
+  return blocks.map((block, index) => ({
+    ...(block as JsonObject),
+    block_id: `echo-approval-${input.approvalId}-${index}`,
+  }));
 }
 
 function mapSlackError(error: unknown): AdapterError {
@@ -215,7 +573,9 @@ export class SlackReactionsApprovalSurface implements ApprovalSurfaceAdapter {
   private readonly settings: SlackReactionsSettings;
   private readonly store: ApprovalDecisionStore;
   private readonly environment: NodeJS.ProcessEnv;
-  private readonly credentialResolver: (reference: string) => string | undefined;
+  private readonly credentialResolver: (
+    reference: string,
+  ) => string | undefined;
   private readonly now: () => string;
   private readonly fetchImpl: typeof fetch | undefined;
   private client: SlackWebApiClient | undefined;
@@ -383,9 +743,8 @@ export class SlackReactionsApprovalSurface implements ApprovalSurfaceAdapter {
       if (posted === undefined || published.status !== 'pending') {
         return decision(published);
       }
-      const channel = posted.reference['channel_id'];
-      const messageTs = posted.reference['message_ts'];
-      if (!isNonEmptyString(channel) || !isNonEmptyString(messageTs)) {
+      const reference = slackReference(posted.reference);
+      if (reference === undefined) {
         throw new AdapterError(
           'permanently_rejected',
           'Slack publication reference is malformed',
@@ -395,8 +754,8 @@ export class SlackReactionsApprovalSurface implements ApprovalSurfaceAdapter {
       return await this.pollReactions(
         request,
         published,
-        channel,
-        messageTs,
+        reference.channel,
+        reference.messageTs,
         operation,
       );
     } catch (error) {
@@ -415,18 +774,58 @@ export class SlackReactionsApprovalSurface implements ApprovalSurfaceAdapter {
     // Posting then recording is a dual write: a crash between the two can
     // produce a duplicate message on retry. Posting is at-least-once by
     // design; the recorded reference always wins as the polled message.
+    const federation = activeFederationPresentation(staged.requested_metadata);
+    let liveProviderIdentity: SlackProviderIdentityEvidence | undefined;
+    if (federation !== undefined) {
+      assertReviewerIsNotBot(federation, this.settings.reviewerUserId);
+      liveProviderIdentity = liveProviderEvidence(
+        await this.apiClient().authIdentity(operation?.signal),
+      );
+      assertSameProviderIdentity(
+        federation.providerIdentity,
+        liveProviderIdentity,
+      );
+    }
+    const blocks = renderSlackApprovalBlocks({
+      brief: staged.brief,
+      approvalId: staged.approval_id,
+      requestedMetadata: staged.requested_metadata,
+      approveReaction: this.settings.approveReaction,
+      rejectReaction: this.settings.rejectReaction,
+    });
     const posted = await this.apiClient().postMessage(
       {
         channel: this.settings.channelId,
         text: this.messageText(staged.brief),
-        blocks: this.messageBlocks(staged.brief),
+        blocks,
+        strictEvidence: federation !== undefined,
       },
       operation?.signal,
     );
+    let presentationEvidence: SlackPresentationEvidence | undefined;
+    if (federation !== undefined) {
+      if (
+        posted.blocks === undefined ||
+        !jsonEquivalent(blocks, posted.blocks)
+      ) {
+        throw new AdapterError(
+          'unknown_outcome',
+          'Slack did not acknowledge the exact approval presentation',
+          true,
+        );
+      }
+      presentationEvidence = {
+        rendered_blocks_sha256: jsonSha256(posted.blocks),
+        rendered_blocks: JSON.parse(JSON.stringify(posted.blocks)) as JsonValue,
+        provider_identity:
+          liveProviderIdentity as SlackProviderIdentityEvidence,
+      };
+    }
     return await this.store.recordPublished({
       processingKey,
       surface: SURFACE,
       reference: { channel_id: posted.channel, message_ts: posted.ts },
+      ...(presentationEvidence === undefined ? {} : { presentationEvidence }),
     });
   }
 
@@ -437,10 +836,15 @@ export class SlackReactionsApprovalSurface implements ApprovalSurfaceAdapter {
     messageTs: string,
     operation?: AdapterOperationContext,
   ): Promise<ApprovalDecision> {
+    const federation = activeFederationPresentation(state.requested_metadata);
+    if (federation !== undefined) {
+      assertReviewerIsNotBot(federation, this.settings.reviewerUserId);
+    }
     const reactions = await this.apiClient().reactionsGet(
       channel,
       messageTs,
       operation?.signal,
+      { strict: federation !== undefined },
     );
     const approved = this.reviewerReactionState(
       reactions,
@@ -460,11 +864,27 @@ export class SlackReactionsApprovalSurface implements ApprovalSurfaceAdapter {
     // until the channel or the CLI sorts it out.
     if (approved === rejected) return decision(state);
 
-    const reason = await this.latestReviewerReply(
+    const latestReply = await this.latestReviewerReply(
       channel,
       messageTs,
       operation,
+      federation !== undefined,
     );
+    const reason = latestReply === null ? null : latestReply.text.trim();
+    const reactionName =
+      approved === 'present'
+        ? this.settings.approveReaction
+        : this.settings.rejectReaction;
+    let liveProviderIdentity: SlackProviderIdentityEvidence | undefined;
+    if (federation !== undefined) {
+      liveProviderIdentity = liveProviderEvidence(
+        await this.apiClient().authIdentity(operation?.signal),
+      );
+      assertSameProviderIdentity(
+        federation.providerIdentity,
+        liveProviderIdentity,
+      );
+    }
     let resolved: ApprovalDecisionStoreView;
     try {
       resolved = await this.store.resolve({
@@ -473,13 +893,39 @@ export class SlackReactionsApprovalSurface implements ApprovalSurfaceAdapter {
         reviewedBy: this.settings.reviewerName,
         reason,
         surface: SURFACE,
-        metadata: {
-          slack: {
-            channel_id: channel,
-            message_ts: messageTs,
-            reviewer_user_id: this.settings.reviewerUserId,
-          },
-        },
+        ...(federation === undefined
+          ? {
+              metadata: {
+                slack: {
+                  channel_id: channel,
+                  message_ts: messageTs,
+                  reviewer_user_id: this.settings.reviewerUserId,
+                },
+              },
+            }
+          : {
+              resolutionEvidence: {
+                provider_identity:
+                  liveProviderIdentity as SlackProviderIdentityEvidence,
+                actor: {
+                  team_id: federation.providerIdentity.team_id,
+                  user_id: this.settings.reviewerUserId,
+                  display_name: this.settings.reviewerName,
+                  reaction_name: reactionName,
+                  channel_id: channel,
+                  message_ts: messageTs,
+                  provider_occurred_at: null,
+                  reason_reply:
+                    latestReply === null
+                      ? null
+                      : {
+                          message_ts: latestReply.ts,
+                          author_user_id: latestReply.user,
+                          text: latestReply.text,
+                        },
+                },
+              },
+            }),
       });
     } catch {
       // Another surface (e.g. the CLI) resolved this node first. The store
@@ -517,11 +963,13 @@ export class SlackReactionsApprovalSurface implements ApprovalSurfaceAdapter {
     channel: string,
     messageTs: string,
     operation?: AdapterOperationContext,
-  ): Promise<string | null> {
+    strict = false,
+  ): Promise<ReviewerReplyEvidence | null> {
     const replies = await this.apiClient().conversationsReplies(
       channel,
       messageTs,
       operation?.signal,
+      { strict },
     );
     const reviewerReplies = replies
       .filter(
@@ -531,7 +979,9 @@ export class SlackReactionsApprovalSurface implements ApprovalSurfaceAdapter {
       )
       .sort((left, right) => Number(left.ts) - Number(right.ts));
     const latest = reviewerReplies[reviewerReplies.length - 1];
-    return latest === undefined ? null : latest.text.trim();
+    return latest === undefined
+      ? null
+      : { user: latest.user, text: latest.text, ts: latest.ts };
   }
 
   private messageText(brief: DecisionBrief): string {
@@ -539,45 +989,6 @@ export class SlackReactionsApprovalSurface implements ApprovalSurfaceAdapter {
     return `Decision brief awaiting approval: ${escapeSlackControlText(
       boundedSingleLine(title, SLACK_HEADER_MAX_CHARS),
     )}`;
-  }
-
-  private messageBlocks(brief: DecisionBrief): readonly unknown[] {
-    const title = brief.meeting.title ?? brief.meeting.id;
-    const summaries = [
-      summaryText(
-        'Decisions',
-        brief.decisions.map((signal) => signal.text),
-      ),
-      summaryText(
-        'Actions',
-        brief.actions.map((signal) => signal.text),
-      ),
-    ].filter((text): text is string => text !== undefined);
-    return [
-      {
-        type: 'header',
-        text: {
-          type: 'plain_text',
-          text: boundedSingleLine(title, SLACK_HEADER_MAX_CHARS),
-          emoji: true,
-        },
-      },
-      ...summaries.map((text) => ({
-        type: 'section',
-        // Meeting-derived content remains plain text so strings such as
-        // <!channel> or <@U123> cannot become active Slack mentions.
-        text: { type: 'plain_text', text, emoji: true },
-      })),
-      {
-        type: 'context',
-        elements: [
-          {
-            type: 'mrkdwn',
-            text: `React :${this.settings.approveReaction}: to approve or :${this.settings.rejectReaction}: to reject. To record a reason, reply in this thread *before* reacting.`,
-          },
-        ],
-      },
-    ];
   }
 
   private apiClient(): SlackWebApiClient {

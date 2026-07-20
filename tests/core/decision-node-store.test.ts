@@ -1,4 +1,5 @@
 import {
+  existsSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
@@ -14,6 +15,7 @@ import type { ApprovalRequest } from '../../src/core/index.js';
 import {
   DecisionNodeStore,
   decisionApprovalId,
+  type DecisionNodeFederationCapture,
 } from '../../src/product/index.js';
 
 const roots: string[] = [];
@@ -216,14 +218,19 @@ describe('decision node store', () => {
       }),
     ]);
 
-    expect(attempts.filter((attempt) => attempt.status === 'fulfilled')).toHaveLength(1);
-    expect(attempts.filter((attempt) => attempt.status === 'rejected')).toHaveLength(1);
+    expect(
+      attempts.filter((attempt) => attempt.status === 'fulfilled'),
+    ).toHaveLength(1);
+    expect(
+      attempts.filter((attempt) => attempt.status === 'rejected'),
+    ).toHaveLength(1);
     const [winner] = await new DecisionNodeStore(root).list();
     expect(winner!.status).toMatch(/^(approved|rejected)$/);
     expect(
       attempts.some(
         (attempt) =>
-          attempt.status === 'fulfilled' && attempt.value.status === winner!.status,
+          attempt.status === 'fulfilled' &&
+          attempt.value.status === winner!.status,
       ),
     ).toBe(true);
   });
@@ -329,5 +336,337 @@ describe('decision node store', () => {
       { mode: 0o600 },
     );
     expect(await new DecisionNodeStore(root).list()).toEqual([imported]);
+  });
+
+  it('captures and exposes immutable federation slot metadata without changing node identity', async () => {
+    const root = newRoot('decision-store-federation-');
+    const calls: string[] = [];
+    const capture: DecisionNodeFederationCapture = {
+      async captureRequested() {
+        calls.push('capture-requested');
+        return { federation: { candidate_context_sha256: 'sha256:candidate' } };
+      },
+      async validateRequested() {
+        calls.push('validate-requested');
+      },
+      async capturePublished({ reference }) {
+        calls.push('capture-published');
+        return {
+          slack: reference,
+          federation: { rendered_blocks_sha256: 'sha256:blocks' },
+        };
+      },
+      async validatePublished() {
+        calls.push('validate-published');
+      },
+      async captureResolved() {
+        calls.push('capture-resolved');
+        return { federation: { assurance: 'provider_challenge_observed' } };
+      },
+      async validateResolved() {
+        calls.push('validate-resolved');
+      },
+    };
+    const store = new DecisionNodeStore(root, {
+      now: () => '2026-07-16T21:00:00.000Z',
+      federationCapture: capture,
+    });
+    const first = await store.ensureRequested(request());
+    const approvalId = decisionApprovalId(request().processing_key);
+    expect(first.approval_id).toBe(approvalId);
+    expect(first.requested_metadata).toEqual({
+      federation: { candidate_context_sha256: 'sha256:candidate' },
+    });
+    expect(calls).toEqual([
+      'capture-requested',
+      'validate-requested',
+      'validate-requested',
+    ]);
+    calls.length = 0;
+
+    await store.ensureRequested(request());
+    expect(calls).toEqual(['validate-requested', 'validate-requested']);
+    calls.length = 0;
+    await store.recordPublished({
+      processingKey: request().processing_key,
+      surface: 'slack',
+      reference: { channel_id: 'C123', message_ts: '1700.001' },
+      presentationEvidence: { rendered_blocks_sha256: 'sha256:blocks' },
+    });
+    expect(calls).toEqual([
+      'validate-requested',
+      'capture-published',
+      'validate-published',
+      'validate-requested',
+      'validate-published',
+    ]);
+    calls.length = 0;
+    await store.recordPublished({
+      processingKey: request().processing_key,
+      surface: 'slack',
+      reference: { channel_id: 'C123', message_ts: 'ignored' },
+    });
+    expect(calls).toEqual(['validate-requested', 'validate-published']);
+    calls.length = 0;
+    const resolved = await store.resolve({
+      approvalId,
+      status: 'approved',
+      reviewedBy: 'operator',
+      surface: 'slack',
+      resolutionEvidence: { reviewer_user_id: 'U123' },
+    });
+    expect(resolved.resolved_metadata).toEqual({
+      federation: { assurance: 'provider_challenge_observed' },
+    });
+    expect(calls).toEqual([
+      'validate-requested',
+      'validate-published',
+      'capture-resolved',
+      'validate-resolved',
+      'validate-requested',
+      'validate-published',
+      'validate-resolved',
+    ]);
+    calls.length = 0;
+    await store.resolve({
+      approvalId,
+      status: 'approved',
+      reviewedBy: 'operator',
+      surface: 'slack',
+    });
+    expect(calls).toEqual([
+      'validate-requested',
+      'validate-published',
+      'validate-resolved',
+    ]);
+  });
+
+  it('cannot read stored federation metadata without federation validation', async () => {
+    const root = newRoot('decision-store-federation-reader-guard-');
+    const capture: DecisionNodeFederationCapture = {
+      async captureRequested() {
+        return { federation: { candidate_context_sha256: 'sha256:candidate' } };
+      },
+      async validateRequested() {},
+      async capturePublished({ reference }) {
+        return reference;
+      },
+      async validatePublished() {},
+      async captureResolved({ legacyMetadata }) {
+        return legacyMetadata;
+      },
+      async validateResolved() {},
+    };
+    await new DecisionNodeStore(root, {
+      federationCapture: capture,
+    }).ensureRequested(request());
+
+    await expect(
+      new DecisionNodeStore(root).getState(request().processing_key),
+    ).rejects.toThrow(
+      /stored federated approval cannot be read without identity capture validation/,
+    );
+  });
+
+  it('leaves no decision-node residue when requested federation capture fails', async () => {
+    for (const failingStage of ['capture', 'validate'] as const) {
+      const root = newRoot(`decision-store-request-${failingStage}-`);
+      const approvalId = decisionApprovalId(request().processing_key);
+      const capture: DecisionNodeFederationCapture = {
+        async captureRequested() {
+          if (failingStage === 'capture') throw new Error('capture failed');
+          return { federation: { candidate: true } };
+        },
+        async validateRequested() {
+          if (failingStage === 'validate') throw new Error('validate failed');
+        },
+        async capturePublished({ reference }) {
+          return reference;
+        },
+        async validatePublished() {},
+        async captureResolved({ legacyMetadata }) {
+          return legacyMetadata;
+        },
+        async validateResolved() {},
+      };
+      const store = new DecisionNodeStore(root, { federationCapture: capture });
+
+      await expect(store.ensureRequested(request())).rejects.toThrow(
+        new RegExp(`${failingStage} failed`),
+      );
+      expect(existsSync(join(root, 'decisions', approvalId))).toBe(false);
+      expect(existsSync(join(root, 'decisions', '.locks', approvalId))).toBe(
+        false,
+      );
+    }
+  });
+
+  it('does not create a publication slot when federation validation fails', async () => {
+    const root = newRoot('decision-store-publication-reject-');
+    let rejectPublication = false;
+    const capture: DecisionNodeFederationCapture = {
+      async captureRequested() {
+        return { federation: { candidate: true } };
+      },
+      async validateRequested() {},
+      async capturePublished({ reference }) {
+        return reference;
+      },
+      async validatePublished() {
+        if (rejectPublication) throw new Error('publication evidence invalid');
+      },
+      async captureResolved({ legacyMetadata }) {
+        return legacyMetadata;
+      },
+      async validateResolved() {},
+    };
+    const store = new DecisionNodeStore(root, { federationCapture: capture });
+    const staged = await store.ensureRequested(request());
+    rejectPublication = true;
+
+    await expect(
+      store.recordPublished({
+        processingKey: request().processing_key,
+        surface: 'slack',
+        reference: { channel_id: 'C123', message_ts: '1700.001' },
+      }),
+    ).rejects.toThrow(/publication evidence invalid/);
+    expect(
+      existsSync(
+        join(root, 'decisions', staged.approval_id, 'published-slack.json'),
+      ),
+    ).toBe(false);
+    rejectPublication = false;
+    expect((await store.getState(request().processing_key))?.status).toBe(
+      'pending',
+    );
+  });
+
+  it('revalidates every existing federation slot before returning a node', async () => {
+    const root = newRoot('decision-store-existing-validation-');
+    let failingStage: 'requested' | 'published' | 'resolved' | null = null;
+    const capture: DecisionNodeFederationCapture = {
+      async captureRequested() {
+        return { federation: { candidate: true } };
+      },
+      async validateRequested() {
+        if (failingStage === 'requested') throw new Error('requested corrupt');
+      },
+      async capturePublished({ reference }) {
+        return reference;
+      },
+      async validatePublished() {
+        if (failingStage === 'published') throw new Error('published corrupt');
+      },
+      async captureResolved({ legacyMetadata }) {
+        return legacyMetadata;
+      },
+      async validateResolved() {
+        if (failingStage === 'resolved') throw new Error('resolved corrupt');
+      },
+    };
+    const store = new DecisionNodeStore(root, { federationCapture: capture });
+    const staged = await store.ensureRequested(request());
+    await store.recordPublished({
+      processingKey: request().processing_key,
+      surface: 'slack',
+      reference: { channel_id: 'C123', message_ts: '1700.001' },
+    });
+    await store.resolve({
+      approvalId: staged.approval_id,
+      status: 'approved',
+      reviewedBy: 'operator',
+      surface: 'slack',
+    });
+
+    for (const stage of ['requested', 'published', 'resolved'] as const) {
+      failingStage = stage;
+      await expect(store.ensureRequested(request())).rejects.toThrow(
+        new RegExp(`${stage} corrupt`),
+      );
+    }
+
+    failingStage = 'published';
+    await expect(
+      store.recordPublished({
+        processingKey: request().processing_key,
+        surface: 'terminal',
+        reference: { output: 'must-not-be-written' },
+      }),
+    ).rejects.toThrow(/published corrupt/);
+    expect(
+      existsSync(
+        join(root, 'decisions', staged.approval_id, 'published-terminal.json'),
+      ),
+    ).toBe(false);
+
+    failingStage = 'resolved';
+    await expect(
+      store.resolve({
+        approvalId: staged.approval_id,
+        status: 'approved',
+        reviewedBy: 'operator',
+        surface: 'slack',
+      }),
+    ).rejects.toThrow(/resolved corrupt/);
+
+    failingStage = null;
+    expect((await store.getState(request().processing_key))?.status).toBe(
+      'approved',
+    );
+  });
+
+  it('refuses legacy decision mutation when identity material exists without capture hooks', async () => {
+    const root = newRoot('decision-store-identity-guard-');
+    const manifests = join(root, 'identity', 'manifests');
+    mkdirSync(manifests, { recursive: true, mode: 0o700 });
+    writeFileSync(join(manifests, 'interrupted-bootstrap.json'), '{}\n', {
+      mode: 0o600,
+    });
+
+    await expect(
+      new DecisionNodeStore(root).ensureRequested(request()),
+    ).rejects.toThrow(/identity-enabled decision capture is unavailable/);
+  });
+
+  it('does not create a resolution slot when federation validation fails', async () => {
+    const root = newRoot('decision-store-federation-reject-');
+    const capture: DecisionNodeFederationCapture = {
+      async captureRequested() {
+        return { federation: { candidate_context_sha256: 'sha256:candidate' } };
+      },
+      async validateRequested() {},
+      async capturePublished({ reference }) {
+        return reference;
+      },
+      async validatePublished() {},
+      async captureResolved() {
+        return { federation: { actor: 'untrusted' } };
+      },
+      async validateResolved() {
+        throw new Error('actor evidence is invalid');
+      },
+    };
+    const store = new DecisionNodeStore(root, {
+      now: () => '2026-07-16T21:00:00.000Z',
+      federationCapture: capture,
+    });
+    const staged = await store.ensureRequested(request());
+
+    await expect(
+      store.resolve({
+        approvalId: staged.approval_id,
+        status: 'approved',
+        reviewedBy: 'operator',
+        surface: 'cli',
+      }),
+    ).rejects.toThrow(/actor evidence is invalid/);
+    expect(
+      existsSync(join(root, 'decisions', staged.approval_id, 'resolved.json')),
+    ).toBe(false);
+    capture.validateResolved = async () => {};
+    expect((await store.getState(request().processing_key))?.status).toBe(
+      'pending',
+    );
   });
 });

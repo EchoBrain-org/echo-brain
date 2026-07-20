@@ -327,6 +327,197 @@ describe("SlackWebApiClient", () => {
     });
   });
 
+  it("binds strict acknowledged blocks to the exact posted Slack message", async () => {
+    const blocks = [{ type: "context", block_id: "approval-0" }];
+    const client = new SlackWebApiClient("xoxb-test", {
+      fetchImpl: fetchReturning(() =>
+        jsonResponse({
+          ok: true,
+          channel: "C123",
+          ts: "1700.100000",
+          message: { ts: "1700.100000", blocks },
+        }),
+      ),
+    });
+
+    await expect(
+      client.postMessage({
+        channel: "C123",
+        text: "approval",
+        blocks,
+        strictEvidence: true,
+      }),
+    ).resolves.toEqual({ channel: "C123", ts: "1700.100000", blocks });
+  });
+
+  it.each([
+    {
+      name: "missing message timestamp",
+      body: {
+        ok: true,
+        channel: "C123",
+        ts: "1700.100000",
+        message: { blocks: [] },
+      },
+    },
+    {
+      name: "mismatched message timestamp",
+      body: {
+        ok: true,
+        channel: "C123",
+        ts: "1700.100000",
+        message: { ts: "1700.999999", blocks: [] },
+      },
+    },
+    {
+      name: "mismatched channel",
+      body: {
+        ok: true,
+        channel: "C999",
+        ts: "1700.100000",
+        message: { ts: "1700.100000", blocks: [] },
+      },
+    },
+    {
+      name: "noncanonical timestamp",
+      body: {
+        ok: true,
+        channel: "C123",
+        ts: "1700.100",
+        message: { ts: "1700.100", blocks: [] },
+      },
+    },
+    {
+      name: "missing acknowledged blocks",
+      body: {
+        ok: true,
+        channel: "C123",
+        ts: "1700.100000",
+        message: { ts: "1700.100000" },
+      },
+    },
+  ])("rejects strict post evidence with $name", async ({ body }) => {
+    const client = new SlackWebApiClient("xoxb-test", {
+      fetchImpl: fetchReturning(() => jsonResponse(body)),
+    });
+
+    await expect(
+      client.postMessage({
+        channel: "C123",
+        text: "approval",
+        blocks: [],
+        strictEvidence: true,
+      }),
+    ).rejects.toMatchObject({
+      name: "SlackApiError",
+      code: "unknown_outcome",
+      retryable: true,
+    });
+  });
+
+  it("binds strict replies to the requested parent thread", async () => {
+    const client = new SlackWebApiClient("xoxb-test", {
+      fetchImpl: fetchReturning(() =>
+        jsonResponse({
+          ok: true,
+          messages: [
+            { ts: "1700.100000", user: "U111", text: "parent" },
+            {
+              ts: "1700.200000",
+              thread_ts: "1700.100000",
+              user: "U222",
+              text: "reason",
+            },
+          ],
+        }),
+      ),
+    });
+
+    await expect(
+      client.conversationsReplies("C123", "1700.100000", undefined, {
+        strict: true,
+      }),
+    ).resolves.toEqual([{ user: "U222", text: "reason", ts: "1700.200000" }]);
+  });
+
+  it.each([
+    {
+      name: "missing parent",
+      messages: [
+        {
+          ts: "1700.200000",
+          thread_ts: "1700.100000",
+          user: "U222",
+          text: "reason",
+        },
+      ],
+    },
+    {
+      name: "wrong reply thread",
+      messages: [
+        { ts: "1700.100000", user: "U111", text: "parent" },
+        {
+          ts: "1700.200000",
+          thread_ts: "1700.999999",
+          user: "U222",
+          text: "reason",
+        },
+      ],
+    },
+    {
+      name: "duplicate reply timestamp",
+      messages: [
+        { ts: "1700.100000", user: "U111", text: "parent" },
+        {
+          ts: "1700.200000",
+          thread_ts: "1700.100000",
+          user: "U222",
+          text: "one",
+        },
+        {
+          ts: "1700.200000",
+          thread_ts: "1700.100000",
+          user: "U333",
+          text: "two",
+        },
+      ],
+    },
+  ])("rejects strict $name evidence", async ({ messages }) => {
+    const client = new SlackWebApiClient("xoxb-test", {
+      fetchImpl: fetchReturning(() => jsonResponse({ ok: true, messages })),
+    });
+
+    await expect(
+      client.conversationsReplies("C123", "1700.100000", undefined, {
+        strict: true,
+      }),
+    ).rejects.toMatchObject({
+      name: "SlackApiError",
+      code: "invalid",
+      retryable: false,
+    });
+  });
+
+  it("retains permissive legacy reply parsing when strict evidence is off", async () => {
+    const client = new SlackWebApiClient("xoxb-test", {
+      fetchImpl: fetchReturning(() =>
+        jsonResponse({
+          ok: true,
+          messages: [
+            { ts: "1700.100", user: "U111", text: "parent" },
+            { ts: "1700.200", user: "legacy-user", text: "reason" },
+          ],
+        }),
+      ),
+    });
+
+    await expect(
+      client.conversationsReplies("C123", "1700.100"),
+    ).resolves.toEqual([
+      { user: "legacy-user", text: "reason", ts: "1700.200" },
+    ]);
+  });
+
   it("preserves typed authentication and invalid-response errors", async () => {
     const unauthorized = new SlackWebApiClient("xoxb-test", {
       fetchImpl: fetchReturning(() =>

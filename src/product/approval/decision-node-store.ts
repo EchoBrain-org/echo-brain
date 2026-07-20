@@ -17,12 +17,14 @@ import {
 import { atomicCreate } from '../../infrastructure/filesystem/atomic-create.js';
 import { parseJson } from '../../util/json.js';
 import { acquireProcessFileLock } from '../../util/process-file-lock.js';
+import { ActiveIdentityBundleStore } from '../federation/active-identity-bundle-store.js';
 import {
   assertDecisionPublishedEvent,
   assertDecisionRequestedEvent,
   assertDecisionResolvedEvent,
   decisionApprovalId,
   foldDecisionNode,
+  type DecisionNodeEvents,
   type DecisionNodeState,
   type DecisionPublishedEvent,
   type DecisionRequestedEvent,
@@ -42,12 +44,15 @@ const PUBLISHED_FILE_RE = /^published-([a-z][a-z0-9-]*)\.json$/;
 export interface DecisionNodeStoreOptions {
   now?: () => string;
   createId?: () => string;
+  federationCapture?: DecisionNodeFederationCapture;
 }
 
 export interface RecordPublishedInput {
   processingKey: string;
   surface: string;
   reference: JsonObject;
+  /** Provider evidence used only by identity-enabled capture. */
+  presentationEvidence?: JsonObject;
 }
 
 export interface ResolveDecisionNodeInput {
@@ -57,6 +62,41 @@ export interface ResolveDecisionNodeInput {
   reason?: string | null;
   surface: string;
   metadata?: JsonObject;
+  /** Provider actor/tool evidence used only by identity-enabled capture. */
+  resolutionEvidence?: JsonObject;
+}
+
+export interface DecisionNodeFederationCapture {
+  captureRequested(request: ApprovalRequest): Promise<JsonObject>;
+  validateRequested(
+    event: DecisionRequestedEvent,
+    request?: ApprovalRequest,
+  ): Promise<void>;
+  capturePublished(input: {
+    events: DecisionNodeEvents;
+    surface: string;
+    reference: JsonObject;
+    presentationEvidence?: JsonObject;
+    postedAt: string;
+  }): Promise<JsonObject>;
+  validatePublished(input: {
+    events: DecisionNodeEvents;
+    event: DecisionPublishedEvent;
+  }): Promise<void>;
+  captureResolved(input: {
+    events: DecisionNodeEvents;
+    status: 'approved' | 'rejected';
+    reviewedAt: string;
+    reviewedBy: string;
+    reason: string | null;
+    surface: string;
+    legacyMetadata: JsonObject;
+    resolutionEvidence?: JsonObject;
+  }): Promise<JsonObject>;
+  validateResolved(input: {
+    events: DecisionNodeEvents;
+    event: DecisionResolvedEvent;
+  }): Promise<void>;
 }
 
 /**
@@ -73,6 +113,7 @@ export class DecisionNodeStore {
   private readonly legacyDirectory: string;
   private readonly now: () => string;
   private readonly createId: () => string;
+  private readonly federationCapture: DecisionNodeFederationCapture | undefined;
   private initialized = false;
 
   constructor(stateDirectory: string, options: DecisionNodeStoreOptions = {}) {
@@ -82,6 +123,7 @@ export class DecisionNodeStore {
     this.legacyDirectory = resolve(this.stateDirectory, 'approvals');
     this.now = options.now ?? (() => new Date().toISOString());
     this.createId = options.createId ?? randomUUID;
+    this.federationCapture = options.federationCapture;
   }
 
   async initialize(): Promise<void> {
@@ -89,7 +131,8 @@ export class DecisionNodeStore {
     this.ensureDirectory(this.stateDirectory, 'decision store state root');
     this.ensureDirectory(this.directory, 'decision store');
     this.ensureDirectory(this.locksDirectory, 'decision store locks');
-    await this.importLegacyRecords();
+    const identityEnabled = this.assertFederationCaptureAvailable();
+    if (!identityEnabled) await this.importLegacyRecords();
     this.initialized = true;
   }
 
@@ -108,11 +151,15 @@ export class DecisionNodeStore {
     try {
       const nodeDirectory = this.nodePath(approvalId);
       const requestedPath = join(nodeDirectory, REQUESTED_FILE);
+      this.assertFederationCaptureAvailable();
       if (!existsSync(requestedPath)) {
-        this.ensureDirectory(nodeDirectory, 'decision node');
         // The core cycle recompiles the brief with a fresh id on every
         // pending retry. The first stored request is the reviewed artifact;
         // retry differences are intentionally ignored.
+        const metadata =
+          this.federationCapture === undefined
+            ? {}
+            : await this.federationCapture.captureRequested(request);
         const event: DecisionRequestedEvent = {
           schema_version: 1,
           event_type: 'requested',
@@ -122,36 +169,82 @@ export class DecisionNodeStore {
           brief: request.brief,
           alternatives: [],
           links: { parent: null, supersedes: null },
-          metadata: {},
+          metadata,
         };
+        if (this.federationCapture !== undefined) {
+          await this.federationCapture.validateRequested(event, request);
+        }
+        this.ensureDirectory(nodeDirectory, 'decision node');
         this.createSlot(requestedPath, event);
+      } else if (this.federationCapture !== undefined) {
+        const existing = assertDecisionRequestedEvent(
+          this.readSlot(requestedPath),
+          requestedPath,
+        );
+        await this.federationCapture.validateRequested(existing, request);
       }
-      return this.fold(approvalId);
+      const events = this.readEvents(approvalId);
+      await this.validateCapturedEvents(events);
+      return foldDecisionNode(events);
     } finally {
       await release();
     }
   }
 
-  async recordPublished(input: RecordPublishedInput): Promise<DecisionNodeState> {
+  async recordPublished(
+    input: RecordPublishedInput,
+  ): Promise<DecisionNodeState> {
     await this.initialize();
     const approvalId = decisionApprovalId(input.processingKey);
     const release = await this.acquireLock(approvalId);
     try {
-      const state = this.fold(approvalId);
-      const path = join(this.nodePath(approvalId), `published-${input.surface}.json`);
+      this.assertFederationCaptureAvailable();
+      const events = this.readEvents(approvalId);
+      await this.validateCapturedEvents(events);
+      const state = foldDecisionNode(events);
+      const path = join(
+        this.nodePath(approvalId),
+        `published-${input.surface}.json`,
+      );
       if (!existsSync(path)) {
+        const postedAt = this.now();
+        const reference =
+          this.federationCapture === undefined
+            ? input.reference
+            : await this.federationCapture.capturePublished({
+                events,
+                surface: input.surface,
+                reference: input.reference,
+                ...(input.presentationEvidence === undefined
+                  ? {}
+                  : { presentationEvidence: input.presentationEvidence }),
+                postedAt,
+              });
         const event: DecisionPublishedEvent = {
           schema_version: 1,
           event_type: 'published',
           node_id: state.node_id,
           surface: input.surface,
-          posted_at: this.now(),
-          reference: input.reference,
+          posted_at: postedAt,
+          reference,
         };
         assertDecisionPublishedEvent(event, path);
+        if (this.federationCapture !== undefined) {
+          await this.federationCapture.validatePublished({
+            events: { ...events, published: [...events.published, event] },
+            event,
+          });
+        }
         this.createSlot(path, event);
+      } else {
+        // `validateCapturedEvents(events)` above already authenticated this
+        // immutable slot. Return those exact bytes without a redundant second
+        // read/validation pass.
+        return state;
       }
-      return this.fold(approvalId);
+      const updated = this.readEvents(approvalId);
+      await this.validateCapturedEvents(updated);
+      return foldDecisionNode(updated);
     } finally {
       await release();
     }
@@ -165,8 +258,13 @@ export class DecisionNodeStore {
       if (!existsSync(join(this.nodePath(approvalId), REQUESTED_FILE))) {
         throw new Error(`decision node not found: ${approvalId}`);
       }
-      const current = this.fold(approvalId);
+      this.assertFederationCaptureAvailable();
+      const events = this.readEvents(approvalId);
+      await this.validateCapturedEvents(events);
+      const current = foldDecisionNode(events);
       if (current.status !== 'pending') {
+        // The full requested/published/resolved history was authenticated by
+        // `validateCapturedEvents` immediately above.
         // Same idempotent-retry contract as the pre-store manual queue:
         // repeating the winning resolution succeeds, conflicting ones fail.
         if (
@@ -179,45 +277,79 @@ export class DecisionNodeStore {
         throw new Error(`decision node is already ${current.status}`);
       }
       const path = join(this.nodePath(approvalId), RESOLVED_FILE);
+      const reviewedAt = this.now();
+      const reason = input.reason ?? null;
+      const legacyMetadata = input.metadata ?? {};
+      const metadata =
+        this.federationCapture === undefined
+          ? legacyMetadata
+          : await this.federationCapture.captureResolved({
+              events,
+              status: input.status,
+              reviewedAt,
+              reviewedBy: input.reviewedBy,
+              reason,
+              surface: input.surface,
+              legacyMetadata,
+              ...(input.resolutionEvidence === undefined
+                ? {}
+                : { resolutionEvidence: input.resolutionEvidence }),
+            });
       const event: DecisionResolvedEvent = {
         schema_version: 1,
         event_type: 'resolved',
         node_id: current.node_id,
         status: input.status,
-        reviewed_at: this.now(),
+        reviewed_at: reviewedAt,
         reviewed_by: input.reviewedBy,
-        reason: input.reason ?? null,
+        reason,
         surface: input.surface,
-        metadata: input.metadata ?? {},
+        metadata,
       };
       assertDecisionResolvedEvent(event, path);
+      if (this.federationCapture !== undefined) {
+        await this.federationCapture.validateResolved({
+          events: { ...events, resolved: event },
+          event,
+        });
+      }
       this.createSlot(path, event);
-      return this.fold(approvalId);
+      const updated = this.readEvents(approvalId);
+      await this.validateCapturedEvents(updated);
+      return foldDecisionNode(updated);
     } finally {
       await release();
     }
   }
 
-  async getState(processingKey: string): Promise<DecisionNodeState | undefined> {
+  async getState(
+    processingKey: string,
+  ): Promise<DecisionNodeState | undefined> {
     await this.initialize();
     const approvalId = decisionApprovalId(processingKey);
     if (!existsSync(join(this.nodePath(approvalId), REQUESTED_FILE))) {
       return undefined;
     }
-    return this.fold(approvalId);
+    const events = this.readEvents(approvalId);
+    await this.validateCapturedEvents(events);
+    return foldDecisionNode(events);
   }
 
   async list(): Promise<readonly DecisionNodeState[]> {
     await this.initialize();
-    return readdirSync(this.directory)
+    const events = readdirSync(this.directory)
       .filter((entry) => APPROVAL_ID_RE.test(entry))
       .sort()
-      .map((entry) => this.fold(entry));
+      .map((entry) => this.readEvents(entry));
+    for (const item of events) await this.validateCapturedEvents(item);
+    return events.map(foldDecisionNode);
   }
 
   private assertApprovalId(id: string): string {
     if (!APPROVAL_ID_RE.test(id)) {
-      throw new Error('approval id must be a 64-character lowercase hex digest');
+      throw new Error(
+        'approval id must be a 64-character lowercase hex digest',
+      );
     }
     return id;
   }
@@ -246,7 +378,7 @@ export class DecisionNodeStore {
     return parseJson(readFileSync(path, 'utf8'));
   }
 
-  private fold(approvalId: string): DecisionNodeState {
+  private readEvents(approvalId: string): DecisionNodeEvents {
     const nodeDirectory = this.nodePath(approvalId);
     const requestedPath = join(nodeDirectory, REQUESTED_FILE);
     const requested = assertDecisionRequestedEvent(
@@ -254,7 +386,9 @@ export class DecisionNodeStore {
       requestedPath,
     );
     if (decisionApprovalId(requested.processing_key) !== approvalId) {
-      throw new Error(`decision node directory identity mismatch: ${approvalId}`);
+      throw new Error(
+        `decision node directory identity mismatch: ${approvalId}`,
+      );
     }
     const published = readdirSync(nodeDirectory)
       .filter((entry) => PUBLISHED_FILE_RE.test(entry))
@@ -271,12 +405,47 @@ export class DecisionNodeStore {
     const resolved = existsSync(resolvedPath)
       ? assertDecisionResolvedEvent(this.readSlot(resolvedPath), resolvedPath)
       : undefined;
-    return foldDecisionNode({
+    return {
       approval_id: approvalId,
       requested,
       published,
       resolved,
-    });
+    };
+  }
+
+  private assertFederationCaptureAvailable(): boolean {
+    const identity = new ActiveIdentityBundleStore(this.stateDirectory);
+    const required =
+      identity.hasActiveBundle() || identity.hasIdentityMaterial();
+    if (required && this.federationCapture === undefined) {
+      throw new Error(
+        'identity-enabled decision capture is unavailable; legacy approval mutation is forbidden',
+      );
+    }
+    return required;
+  }
+
+  private async validateCapturedEvents(
+    events: DecisionNodeEvents,
+  ): Promise<void> {
+    if (this.federationCapture === undefined) {
+      if (Object.hasOwn(events.requested.metadata, 'federation')) {
+        throw new Error(
+          'stored federated approval cannot be read without identity capture validation',
+        );
+      }
+      return;
+    }
+    await this.federationCapture.validateRequested(events.requested);
+    for (const event of events.published) {
+      await this.federationCapture.validatePublished({ events, event });
+    }
+    if (events.resolved !== undefined) {
+      await this.federationCapture.validateResolved({
+        events,
+        event: events.resolved,
+      });
+    }
   }
 
   /**

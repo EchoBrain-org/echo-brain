@@ -66,6 +66,9 @@ export function createDefaultAdapterFactories(): ProductAdapterFactoryRegistry {
         // as the CLI; the composition root owns that store choice.
         store: new DecisionNodeStore(context.stateDirectory, {
           now: context.now,
+          ...(context.approvalFederationCapture === undefined
+            ? {}
+            : { federationCapture: context.approvalFederationCapture }),
         }),
         environment: context.environment,
         credentialResolver: context.credentialResolver,
