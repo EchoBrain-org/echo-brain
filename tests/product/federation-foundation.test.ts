@@ -221,7 +221,7 @@ describe("RFC 8785 foundation", () => {
 });
 
 describe("federation wire schemas", () => {
-  it("compiles all ten exact-key schemas and forbids extras on every typed object", () => {
+  it("compiles every exact-key schema and forbids extras on every typed object", () => {
     const names = [
       "active-identity-bundle",
       "local-identity-manifest",
@@ -233,6 +233,10 @@ describe("federation wire schemas", () => {
       "federated-record-envelope",
       "federated-export",
       "federated-recovery-report",
+      "organization-enrollment-challenge",
+      "organization-enrollment-proof",
+      "organization-enrollment-receipt",
+      "org-ingest-receipt",
     ];
     const ajv = new Ajv({ strict: true, allErrors: true });
     ajv.addFormat("utc-millisecond-timestamp", {

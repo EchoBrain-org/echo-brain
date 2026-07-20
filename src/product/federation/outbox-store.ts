@@ -264,7 +264,7 @@ function exactPersistedRetry(
     const persistedGroup = events.filter(
       (event) => event.envelope.local_reference.approval_id === approvalId,
     );
-    assertCompleteApprovalGroup(persistedGroup);
+    assertCompleteFederatedApprovalGroup(persistedGroup);
     const persistedSubjects = new Set(
       persistedGroup.map((event) => event.local_subject_key),
     );
@@ -306,7 +306,7 @@ function exactPersistedRetry(
   return undefined;
 }
 
-function assertCompleteApprovalGroup(
+export function assertCompleteFederatedApprovalGroup(
   events: readonly {
     local_subject_key: string;
     envelope: FederatedEventV1 | FederatedEventDraftV1;
@@ -596,7 +596,7 @@ function verifyChainShape(
     approvalGroups.set(approvalId, group);
   }
   for (const group of approvalGroups.values()) {
-    assertCompleteApprovalGroup(group);
+    assertCompleteFederatedApprovalGroup(group);
     if (new Set(group.map((event) => event.created_at)).size !== 1) {
       throw new Error(
         'federated approval group siblings must share one creation time',
@@ -722,7 +722,7 @@ export class FederatedOutboxStore {
       'federated outbox creation time',
     );
     assertDigest(snapshot.key_id, 'federated outbox signing key');
-    assertCompleteApprovalGroup(snapshot.events);
+    assertCompleteFederatedApprovalGroup(snapshot.events);
 
     for (const item of snapshot.events) {
       assertUtcMillisecondTimestamp(

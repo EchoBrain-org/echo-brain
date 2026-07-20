@@ -47,6 +47,11 @@ if (compiled.status !== 0) {
 cpSync(join(repo, 'src', 'storage', 'migrations'), join(dist, 'storage', 'migrations'), {
   recursive: true,
 });
+cpSync(
+  join(repo, 'src', 'product', 'federation', 'authority', 'migrations'),
+  join(dist, 'product', 'federation', 'authority', 'migrations'),
+  { recursive: true },
+);
 const packageVersion = JSON.parse(readFileSync(join(repo, 'package.json'), 'utf8')).version;
 const sourceSha = gitOutput(['rev-parse', 'HEAD']).toLowerCase();
 if (!/^[a-f0-9]{40}$/.test(sourceSha)) {

@@ -11,6 +11,8 @@ authority for exact fields, paths, commands, and implementation details.
   hosts, persists, and operates that pipeline.
 - [Identity, onboarding, and federation](architecture/identity-onboarding-and-federation.md):
   how records remain attributable across people, tools, and installations.
+- [Organization authority foundation](architecture/organization-authority-foundation.md):
+  the N=2 enrollment, revocation, ingest, and receipt boundary.
 
 ## Direction and decisions
 

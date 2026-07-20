@@ -11,7 +11,8 @@ general-purpose home for new files.
 - `runtime-wiring.ts` is the composition root.
 - `approval-capture.ts`, `identity-lineage-store.ts`, `record-projector.ts`,
   `export-bundle.ts`, `independent-copy-store.ts`, and
-  `legacy-classification.ts` are stable capability facades.
+  `legacy-classification.ts`, `authority.ts`, and `organization-sync.ts` are
+  stable capability facades.
 - `cutover-fence.ts` and `build-identity.ts` are bootstrap-owned root anchors;
   `attributing-core-state-store.ts`, `attribution-store.ts`, and
   `outbox-store.ts` are records-owned root anchors; `artifact-evidence.ts` is
@@ -33,6 +34,10 @@ general-purpose home for new files.
 - `independent-copy/`: protected-copy documents, local evidence, history, and
   macOS volume inspection.
 - `legacy/`: pre-cutover evidence, deterministic classification, and reports.
+- `authority/`: central organization registry, enrollment, revocation, ingest,
+  and authority signing boundaries.
+- `organization/`: local authority pinning, receipt persistence, and outbox
+  upload coordination.
 
 ## Dependency rule
 
@@ -44,6 +49,8 @@ foundation + identity + bootstrap <- approval <- records
 foundation + identity + records <- export <- independent-copy
 foundation <- legacy
 all capabilities <- runtime-wiring
+foundation + records <- authority
+foundation + records <- organization
 ```
 
 Internal modules import the specific file they need. `index.ts` retains its

@@ -3,7 +3,7 @@ import { canonicalJsonBytes, canonicalSha256 } from './canonical-json.js';
 import type { Sha256Digest, SignedDocument, SignedIntegrity } from '../contracts.js';
 import type { InstallationSigner } from './installation-signer.js';
 import { signWithInstallationKey } from './installation-signer.js';
-import { verifyP256LowSSignature } from './signature-profile.js';
+import { assertP256LowS, verifyP256LowSSignature } from './signature-profile.js';
 
 export function signedPayload<T extends SignedDocument>(document: T): JsonObject {
   const { integrity: _integrity, ...payload } = document;
@@ -16,13 +16,23 @@ export async function createSignedDocument<T extends object>(
   installationId: string,
   keyId: Sha256Digest,
 ): Promise<T & { integrity: SignedIntegrity }> {
-  const bytes = canonicalJsonBytes(payload);
-  const signature = await signWithInstallationKey(
-    signer,
-    installationId,
-    keyId,
-    bytes,
+  return createSignedDocumentWithKey(payload, keyId, (bytes) =>
+    signWithInstallationKey(signer, installationId, keyId, bytes),
   );
+}
+
+/**
+ * Shared canonical signed-document primitive. Capability-specific wrappers
+ * remain responsible for key lookup, identity binding, and verification.
+ */
+export async function createSignedDocumentWithKey<T extends object>(
+  payload: T,
+  keyId: Sha256Digest,
+  sign: (bytes: Buffer) => Promise<Buffer>,
+): Promise<T & { integrity: SignedIntegrity }> {
+  const bytes = canonicalJsonBytes(payload);
+  const signature = await sign(Buffer.from(bytes));
+  assertP256LowS(signature);
   return {
     ...payload,
     integrity: {

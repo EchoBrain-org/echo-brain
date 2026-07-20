@@ -1,11 +1,12 @@
 # Identity, onboarding, and federation
 
-**Status:** Founder Live architecture accepted; N=2 direction proposed
+**Status:** Founder Live architecture accepted; N=2 protocol foundation implemented; operational adoption proposed
 
 Echo uses local processing with durable organization attribution. The local
 installation keeps credentials and raw source data, runs the core, freezes facts
-when they become knowable, and signs approved records. A future organization
-authority owns shared membership, revocation, and ingest acceptance.
+when they become knowable, and signs approved records. The organization
+authority foundation owns shared membership, revocation, and ingest acceptance
+when an installation is explicitly enrolled into it.
 
 ```text
 employee installation
@@ -83,12 +84,21 @@ Neither erases history. Rehire creates a new membership. Account changes create
 a new connection, bindings, source instance, and cursor lineage unless the
 provider proves continuity.
 
-## N=2 direction
+## N=2 foundation
 
-The proposed next step is deliberately small: one organization authority, one
-database, one enrollment challenge, one local uploader, signed ingest receipts,
-and enforced membership and installation revocation. It reuses the current
-manifests, envelopes, signatures, outbox, and verification rules.
+The implemented N=2 foundation is deliberately small: one organization
+authority, one database, one-time invitation grants and enrollment challenges,
+one local uploader, signed ingest receipts, exact signed publication-policy
+evaluation, and enforced membership and installation revocation. It reuses the
+current manifests, policies, envelopes, signatures, outbox, and verification
+rules without rewriting historical evidence.
+
+The first registration protocol supports one exact manifest/key/policy epoch
+per installation. Pending outbox history that refers to earlier key epochs or a
+cross-manifest source/processor lineage remains locally verifiable but is not
+yet centrally ingestible; upload fails closed until a future authority lineage
+registration protocol can verify that closure. See
+[Organization authority foundation](organization-authority-foundation.md).
 
 IdP integration, SCIM, general IAM, admin dashboards, distributed services,
 participant resolution, raw-transcript sync, search, and the LLM brain remain

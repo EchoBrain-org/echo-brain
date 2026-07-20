@@ -13,7 +13,11 @@ export type FederationSchemaKind =
   | 'approval-federation-metadata'
   | 'federated-record-envelope'
   | 'federated-export'
-  | 'federated-recovery-report';
+  | 'federated-recovery-report'
+  | 'organization-enrollment-challenge'
+  | 'organization-enrollment-proof'
+  | 'organization-enrollment-receipt'
+  | 'org-ingest-receipt';
 
 const SCHEMA_FILES: Readonly<Record<FederationSchemaKind, string>> = Object.freeze({
   'active-identity-bundle': 'active-identity-bundle.v1.schema.json',
@@ -26,6 +30,10 @@ const SCHEMA_FILES: Readonly<Record<FederationSchemaKind, string>> = Object.free
   'federated-record-envelope': 'federated-record-envelope.v1.schema.json',
   'federated-export': 'federated-export.v1.schema.json',
   'federated-recovery-report': 'federated-recovery-report.v1.schema.json',
+  'organization-enrollment-challenge': 'organization-enrollment-challenge.v1.schema.json',
+  'organization-enrollment-proof': 'organization-enrollment-proof.v1.schema.json',
+  'organization-enrollment-receipt': 'organization-enrollment-receipt.v1.schema.json',
+  'org-ingest-receipt': 'org-ingest-receipt.v1.schema.json',
 });
 
 const MAX_FEDERATION_DOCUMENT_BYTES = 4 * 1024 * 1024;

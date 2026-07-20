@@ -29,6 +29,8 @@ export * from "./outbox-store.js";
 export * from "./record-projector.js";
 export * from "./export-bundle.js";
 export * from "./runtime-wiring.js";
+export * from "./authority.js";
+export * from "./organization-sync.js";
 
 // Founder bootstrap mutation primitives remain package-internal until WS5
 // supplies the strict seed-cutover authorization and maintenance authority.

@@ -128,6 +128,8 @@ describe('product hermeticity setup', () => {
       'approval/decision-node-store.ts',
       'composition.ts',
       'federation/attributing-core-state-store.ts',
+      'federation/authority/enrollment-proof.ts',
+      'federation/authority/organization-authority-store.ts',
       'federation/independent-copy-store.ts',
       'federation/record-projector.ts',
     ]);
@@ -152,6 +154,23 @@ describe('product hermeticity setup', () => {
       /return now \?\? \(\(\) => new Date\(\)\.toISOString\(\)\)/,
     );
     expect(composition).toContain('resolveProductClock(options.now)');
+    expect(
+      readFileSync(
+        join(productRoot, 'federation/authority/enrollment-proof.ts'),
+        'utf8',
+      ),
+    ).toMatch(/request\.now \?\? new Date\(\)\.toISOString\(\)/);
+    expect(
+      readFileSync(
+        join(
+          productRoot,
+          'federation/authority/organization-authority-store.ts',
+        ),
+        'utf8',
+      ),
+    ).toMatch(
+      /this\.clock = options\.now \?\? \(\(\) => new Date\(\)\.toISOString\(\)\)/,
+    );
     expect(
       readFileSync(
         join(productRoot, 'federation/attributing-core-state-store.ts'),
