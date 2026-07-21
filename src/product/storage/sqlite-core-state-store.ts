@@ -1,16 +1,11 @@
-import { chmodSync, existsSync, lstatSync, mkdirSync } from 'node:fs';
-import { dirname, join } from 'node:path';
-import { fileURLToPath } from 'node:url';
-import Database from 'better-sqlite3';
-import type { ApprovalDecision } from '../core/approval/approval-gate.js';
-import type { AdapterIdentity } from '../core/contracts/adapter.js';
-import type { DecisionSet } from '../core/contracts/decision.js';
-import type { DeliveryEnvelope, DeliveryReceipt } from '../core/contracts/delivery.js';
-import type { AdapterCursor, MeetingDocument } from '../core/contracts/meeting.js';
-import type { CoreStateStore } from '../core/storage/core-state-store.js';
-import { migrate } from './migrate.js';
-
-const MIGRATIONS_DIR = join(dirname(fileURLToPath(import.meta.url)), 'migrations');
+import type Database from 'better-sqlite3';
+import type { ApprovalDecision } from '../../core/approval/approval-gate.js';
+import type { AdapterIdentity } from '../../core/contracts/adapter.js';
+import type { DecisionSet } from '../../core/contracts/decision.js';
+import type { DeliveryEnvelope, DeliveryReceipt } from '../../core/contracts/delivery.js';
+import type { AdapterCursor, MeetingDocument } from '../../core/contracts/meeting.js';
+import type { CoreStateStore } from '../../core/storage/core-state-store.js';
+import { openProductDatabase } from './open-product-database.js';
 
 interface CursorRow {
   cursor: string;
@@ -46,22 +41,7 @@ export class SqliteCoreStateStore implements CoreStateStore {
   private readonly markProcessedStatement: Database.Statement;
 
   constructor(dbPath: string) {
-    if (dbPath !== ':memory:') {
-      mkdirSync(dirname(dbPath), { recursive: true });
-      if (existsSync(dbPath)) {
-        const state = lstatSync(dbPath);
-        if (state.isSymbolicLink() || !state.isFile()) {
-          throw new Error('core state database must be a regular file');
-        }
-      }
-    }
-    this.db = new Database(dbPath);
-    if (dbPath !== ':memory:') chmodSync(dbPath, 0o600);
-    this.db.pragma('journal_mode = WAL');
-    this.db.pragma('synchronous = NORMAL');
-    this.db.pragma('foreign_keys = ON');
-    this.db.pragma('busy_timeout = 5000');
-    migrate(this.db, MIGRATIONS_DIR);
+    this.db = openProductDatabase(dbPath, { durability: 'operational' });
 
     this.getCursorStatement = this.db.prepare(
       `SELECT cursor, source_version

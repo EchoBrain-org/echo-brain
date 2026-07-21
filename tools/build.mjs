@@ -44,9 +44,11 @@ if (compiled.status !== 0) {
   process.exit(compiled.status ?? 1);
 }
 
-cpSync(join(repo, 'src', 'storage', 'migrations'), join(dist, 'storage', 'migrations'), {
-  recursive: true,
-});
+cpSync(
+  join(repo, 'src', 'product', 'storage', 'migrations'),
+  join(dist, 'product', 'storage', 'migrations'),
+  { recursive: true },
+);
 cpSync(
   join(repo, 'src', 'experimental', 'n2', 'authority', 'migrations'),
   join(dist, 'experimental', 'n2', 'authority', 'migrations'),

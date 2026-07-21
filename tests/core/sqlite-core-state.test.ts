@@ -1,6 +1,7 @@
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import Database from 'better-sqlite3';
 import { afterEach, describe, expect, it } from 'vitest';
 import type { ApprovalDecision } from '../../src/core/approval/approval-gate.js';
@@ -11,8 +12,24 @@ import type {
   DeliveryReceipt,
 } from '../../src/core/contracts/delivery.js';
 import type { MeetingDocument } from '../../src/core/contracts/meeting.js';
-import { SqliteCoreStateStore } from '../../src/storage/core-state-sqlite.js';
-import { SqliteStorage } from '../../src/storage/sqlite.js';
+import { SqliteCoreStateStore } from '../../src/product/storage/sqlite-core-state-store.js';
+
+const PRODUCT_MIGRATIONS_DIRECTORY = fileURLToPath(
+  new URL('../../src/product/storage/migrations/', import.meta.url),
+);
+
+const PRODUCT_TABLES = [
+  'core_approvals',
+  'core_decision_sets',
+  'core_delivery_receipts',
+  'core_meeting_documents',
+  'core_processed_markers',
+  'core_source_cursors',
+  'federated_chain_heads',
+  'federated_outbox_events',
+  'federated_processor_attributions',
+  'federated_source_attributions',
+];
 
 const source = {
   kind: 'meeting-source' as const,
@@ -372,25 +389,93 @@ describe('SqliteCoreStateStore', () => {
     db.close();
   });
 
-  it('shares one migrated database safely with the existing atom storage', async () => {
+  it('installs schema v4 with only the ten product-state tables', () => {
     const databasePath = temporaryDatabase();
-    const atoms = new SqliteStorage(databasePath);
-    await atoms.append({
-      source: 'test:core-state',
-      timestamp: '2026-07-16T17:05:00.000Z',
-      content: 'migration compatibility',
-    });
-    atoms.close();
+    const store = new SqliteCoreStateStore(databasePath);
+    store.close();
 
-    const core = new SqliteCoreStateStore(databasePath);
-    await core.setSourceCursor(source, 'cursor-shared');
-    core.close();
+    const db = new Database(databasePath, { readonly: true });
+    expect(db.pragma('user_version', { simple: true })).toBe(4);
+    const tables = db
+      .prepare(
+        `SELECT name FROM sqlite_master
+         WHERE type = 'table' AND name NOT LIKE 'sqlite_%'
+         ORDER BY name`,
+      )
+      .all() as { name: string }[];
+    expect(tables.map(({ name }) => name)).toEqual(PRODUCT_TABLES);
+    expect(
+      db
+        .prepare("SELECT name FROM sqlite_master WHERE name LIKE 'idx_events_%'")
+        .all(),
+    ).toEqual([]);
+    db.close();
+  });
 
-    const reopenedAtoms = new SqliteStorage(databasePath);
-    expect(await reopenedAtoms.count()).toBe(1);
-    reopenedAtoms.close();
-    const reopenedCore = new SqliteCoreStateStore(databasePath);
-    expect(await reopenedCore.getSourceCursor(source)).toBe('cursor-shared');
-    reopenedCore.close();
+  it('upgrades v3 by deleting legacy event data without changing product state', async () => {
+    const databasePath = temporaryDatabase();
+    const legacy = new Database(databasePath);
+    for (const filename of [
+      '0001_initial.sql',
+      '0002_core_state.sql',
+      '0003_federated_founder_identity.sql',
+    ]) {
+      legacy.exec(
+        readFileSync(join(PRODUCT_MIGRATIONS_DIRECTORY, filename), 'utf8'),
+      );
+    }
+    legacy.pragma('user_version = 3');
+    legacy
+      .prepare(
+        `INSERT INTO events (id, source, timestamp, content)
+         VALUES (?, ?, ?, ?)`,
+      )
+      .run(
+        'legacy-event-1',
+        'test:legacy',
+        '2026-07-16T17:05:00.000Z',
+        'retired capture data',
+      );
+    legacy
+      .prepare(
+        `INSERT INTO core_source_cursors (
+           source_adapter_id, source_instance_id, source_version, cursor
+         ) VALUES (?, ?, ?, ?)`,
+      )
+      .run(source.adapter_id, source.instance_id, source.version, 'cursor-v3');
+    legacy
+      .prepare(
+        `INSERT INTO federated_chain_heads (
+           installation_id, last_sequence, last_event_hash, updated_at
+         ) VALUES (?, ?, ?, ?)`,
+      )
+      .run('installation-v3', 0, null, '2026-07-16T17:06:00.000Z');
+    legacy.close();
+
+    const upgraded = new SqliteCoreStateStore(databasePath);
+    expect(await upgraded.getSourceCursor(source)).toBe('cursor-v3');
+    upgraded.close();
+
+    const db = new Database(databasePath, { readonly: true });
+    expect(db.pragma('user_version', { simple: true })).toBe(4);
+    expect(
+      db
+        .prepare(
+          `SELECT name FROM sqlite_master
+           WHERE type = 'table' AND name NOT LIKE 'sqlite_%'
+           ORDER BY name`,
+        )
+        .all()
+        .map((row) => (row as { name: string }).name),
+    ).toEqual(PRODUCT_TABLES);
+    expect(
+      db
+        .prepare(
+          `SELECT last_sequence FROM federated_chain_heads
+           WHERE installation_id = ?`,
+        )
+        .get('installation-v3'),
+    ).toEqual({ last_sequence: 0 });
+    db.close();
   });
 });

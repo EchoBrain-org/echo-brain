@@ -214,6 +214,40 @@ do not require authentication.
 adapter. Adapter IDs select an implementation; instance IDs distinguish
 multiple configured instances of the same capability.
 
+The bundled `llm` decision processor keeps prompting, extraction validation,
+and evidence verification independent of the selected model provider. Ollama
+is the backward-compatible default when `settings.provider` is omitted. Hosted
+providers require a credential reference and use fixed vendor endpoints:
+
+```json
+{
+  "decision_processor": {
+    "adapter_id": "llm",
+    "instance_id": "primary",
+    "credential_ref": "file:/Users/you/.echo-brain/credentials/openai-api-key",
+    "settings": {
+      "provider": "openai",
+      "model": "YOUR_STRUCTURED_OUTPUT_MODEL",
+      "max_output_tokens": 4096,
+      "request_timeout_ms": 240000
+    }
+  }
+}
+```
+
+Supported providers are `ollama`, `openai`, `anthropic`, and `openrouter`.
+OpenRouter model names use `author/model-slug`. Only Ollama accepts
+`settings.base_url`; hosted providers reject it so a configured API key cannot
+be sent to an arbitrary endpoint. Provider and model changes alter the runtime
+processor version, forcing fresh extraction instead of reusing cached decisions
+or approvals.
+
+Hosted providers are currently supported for local product processing, approval,
+and delivery. Founder federation remains fail-closed for hosted processors until
+processor-attribution records carry credential-connection evidence end to end.
+Founder bootstrap therefore still requires Ollama or another uncredentialed
+decision processor.
+
 For remote Slack approval, replace `"approval_mode": "manual"` with an adapter
 descriptor. The token remains outside the file:
 
@@ -353,11 +387,12 @@ monotonic across restarts.
 The bundled `structured-text` processor intentionally extracts only lines that
 begin with `Decision:`, `Action:`, or `Rationale:`. It remains the deterministic
 offline baseline. The bundled `llm` processor provides model-backed extraction
-through a local Ollama endpoint. The bundled `jsonl-outbox` delivery surface is
-a durable, idempotent local reference. The bundled `slack` delivery surface is
-the first external team destination. It durably replays confirmed delivery
-identities and pins ambiguous post outcomes for operator repair instead of
-automatically risking a duplicate message.
+through Ollama, OpenAI, Anthropic, or OpenRouter while retaining one canonical
+prompt, output schema, decision validator, and evidence verifier. The bundled
+`jsonl-outbox` delivery surface is a durable, idempotent local reference. The
+bundled `slack` delivery surface is the first external team destination. It
+durably replays confirmed delivery identities and pins ambiguous post outcomes
+for operator repair instead of automatically risking a duplicate message.
 
 ## Stable core and adapter boundaries
 
@@ -418,7 +453,9 @@ standalone changes are successor work and are not relabeled as copied source.
 `node tools/check-provenance.mjs` therefore verifies the immutable extraction
 commit by default.
 
-The first successor restores the byte-identical
-`src/storage/migrations/0001_initial.sql`, which the extracted SQLite runtime
-requires but the one-time artifact closure accidentally omitted. The standalone
-core state is added separately by `0002_core_state.sql`.
+The first successor restored the byte-identical historical
+`0001_initial.sql`, which the extracted SQLite runtime required but the one-time
+artifact closure accidentally omitted. The migration sequence now lives under
+`src/product/storage/migrations/`: `0002_core_state.sql` adds standalone core
+state, `0003_federated_founder_identity.sql` adds local federation state, and
+`0004_remove_legacy_events.sql` removes the retired generic event table.

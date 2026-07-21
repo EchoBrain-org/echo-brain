@@ -9,7 +9,10 @@ import {
 } from "node:fs";
 import { dirname, join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { LLM_DECISION_PROCESSOR_PROMPT_VERSION } from "../../src/adapters/decision-processors/llm/llm-decision-processor.js";
+import {
+  LLM_DECISION_PROCESSOR_PROMPT_VERSION,
+  LLM_DECISION_PROCESSOR_SCHEMA_VERSION,
+} from "../../src/adapters/decision-processors/llm/llm-decision-processor.js";
 import type { ProductRuntimeConfig } from "../../src/product/config.js";
 import { runProductCli } from "../../src/product/cli.js";
 import { DecisionNodeStore } from "../../src/product/approval/decision-node-store.js";
@@ -114,6 +117,7 @@ describe("founder bootstrap ceremony", () => {
     expect(processor.configuration_snapshot).toEqual({
       ...llmConfig.decision_processor.settings,
       prompt_version: LLM_DECISION_PROCESSOR_PROMPT_VERSION,
+      output_schema_version: LLM_DECISION_PROCESSOR_SCHEMA_VERSION,
     });
     expect(processor.configuration_sha256).toBe(
       canonicalSha256(processor.configuration_snapshot),

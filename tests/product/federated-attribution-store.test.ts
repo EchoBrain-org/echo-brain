@@ -3,12 +3,15 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import Database from 'better-sqlite3';
 import { afterEach, describe, expect, it } from 'vitest';
-import { LLM_DECISION_PROCESSOR_PROMPT_VERSION } from '../../src/adapters/decision-processors/llm/llm-decision-processor.js';
+import {
+  LLM_DECISION_PROCESSOR_PROMPT_VERSION,
+  LLM_DECISION_PROCESSOR_SCHEMA_VERSION,
+} from '../../src/adapters/decision-processors/llm/llm-decision-processor.js';
 import type { ApprovalRequest } from '../../src/core/approval/approval-gate.js';
 import type { CoreStateStore } from '../../src/core/storage/core-state-store.js';
 import type { DecisionSet } from '../../src/core/contracts/decision.js';
 import type { MeetingDocument } from '../../src/core/contracts/meeting.js';
-import { SqliteCoreStateStore } from '../../src/storage/core-state-sqlite.js';
+import { SqliteCoreStateStore } from '../../src/product/storage/sqlite-core-state-store.js';
 import type { VerifiedActiveIdentityBundle } from '../../src/product/federation/identity/active-identity-bundle-store.js';
 import { SqliteFederatedAttributionStore } from '../../src/product/federation/attribution-store.js';
 import {
@@ -416,7 +419,7 @@ describe('Founder Live attribution persistence', () => {
     state.close();
 
     const db = new Database(paths.database, { readonly: true });
-    expect(db.pragma('user_version', { simple: true })).toBe(3);
+    expect(db.pragma('user_version', { simple: true })).toBe(4);
     const tables = db
       .prepare(
         `SELECT name FROM sqlite_master
@@ -639,6 +642,7 @@ describe('Founder Live attribution persistence', () => {
       base_url: 'http://127.0.0.1:11434',
       request_timeout_ms: 240_000,
       prompt_version: LLM_DECISION_PROCESSOR_PROMPT_VERSION,
+      output_schema_version: LLM_DECISION_PROCESSOR_SCHEMA_VERSION,
     };
     processorBinding.configuration_sha256 = canonicalSha256(
       processorBinding.configuration_snapshot,
@@ -663,6 +667,28 @@ describe('Founder Live attribution persistence', () => {
       createObservationId: () => IDS.observation,
     });
     await state.saveMeeting(meeting);
+
+    processorBinding.connection_id =
+      current.connectionRegistry.connections[0]!.connection_id;
+    processorBinding.connection_generation = 1;
+    await expect(state.saveDecisionSet(meeting, llmDecisions)).rejects.toThrow(
+      /processor attribution requires a local uncredentialed binding/,
+    );
+    processorBinding.connection_id = null;
+    processorBinding.connection_generation = null;
+
+    processorBinding.configuration_snapshot['provider'] = 'openai';
+    processorBinding.configuration_sha256 = canonicalSha256(
+      processorBinding.configuration_snapshot,
+    );
+    await expect(state.saveDecisionSet(meeting, llmDecisions)).rejects.toThrow(
+      /hosted LLM federation requires connection-aware processor attribution/,
+    );
+    delete processorBinding.configuration_snapshot['provider'];
+    processorBinding.configuration_sha256 = canonicalSha256(
+      processorBinding.configuration_snapshot,
+    );
+
     const promptVersion =
       processorBinding.configuration_snapshot['prompt_version'];
     delete processorBinding.configuration_snapshot['prompt_version'];
@@ -670,7 +696,7 @@ describe('Founder Live attribution persistence', () => {
       processorBinding.configuration_snapshot,
     );
     await expect(state.saveDecisionSet(meeting, llmDecisions)).rejects.toThrow(
-      /lacks the code-owned prompt version/,
+      /lacks the code-owned prompt or output-schema version/,
     );
     processorBinding.configuration_snapshot['prompt_version'] = promptVersion!;
     processorBinding.configuration_sha256 = canonicalSha256(

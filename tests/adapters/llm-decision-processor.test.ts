@@ -2,14 +2,16 @@ import { describe, expect, it } from 'vitest';
 import {
   AdapterError,
   assertCanonicalDecisionSet,
+  meetingProcessingKey,
   type AdapterConfig,
   type MeetingDocument,
 } from '../../src/core/index.js';
 import {
   LlmDecisionProcessor,
   OllamaClient,
-  type LlmChatRequest,
-  type LlmClient,
+  llmProcessingVersion,
+  type LlmProviderClient,
+  type StructuredGenerationRequest,
 } from '../../src/adapters/decision-processors/llm/index.js';
 import { adapterConformance } from '../core/adapter-conformance.js';
 
@@ -63,28 +65,37 @@ const meeting: MeetingDocument = {
   },
 };
 
-class FakeLlmClient implements LlmClient {
-  readonly requests: LlmChatRequest[] = [];
+class FakeLlmClient implements LlmProviderClient {
+  readonly provider = 'ollama' as const;
+  readonly requests: StructuredGenerationRequest[] = [];
   constructor(
     private readonly content: string,
     private readonly models: readonly string[] = ['qwen3:4b'],
     private readonly failure?: Error,
   ) {}
 
-  async chat(request: LlmChatRequest): Promise<{ content: string }> {
+  async generateStructured(
+    request: StructuredGenerationRequest,
+  ): Promise<{ content: string }> {
     if (this.failure !== undefined) throw this.failure;
     this.requests.push(request);
     return { content: this.content };
   }
 
-  async listModels(): Promise<readonly string[]> {
+  async verifyModel(model: string): Promise<void> {
     if (this.failure !== undefined) throw this.failure;
-    return this.models;
+    if (!this.models.includes(model)) {
+      throw new AdapterError(
+        'permanently_rejected',
+        `Model '${model}' is not installed in Ollama`,
+        false,
+      );
+    }
   }
 }
 
 function processor(
-  client: LlmClient,
+  client: LlmProviderClient,
   config: AdapterConfig = processorConfig,
 ): LlmDecisionProcessor {
   return new LlmDecisionProcessor(config, {
@@ -194,8 +205,31 @@ describe('llm decision processor extraction', () => {
 
     // The model was asked for structured output over the meeting content.
     expect(client.requests[0]!.model).toBe('qwen3:4b');
-    expect(client.requests[0]!.format).toMatchObject({ type: 'object' });
-    const rendered = client.requests[0]!.messages.map((m) => m.content).join('\n');
+    expect(client.requests[0]!.schema).toMatchObject({ type: 'object' });
+    expect(client.requests[0]!.schema).toMatchObject({
+      additionalProperties: false,
+      properties: {
+        signals: {
+          items: {
+            additionalProperties: false,
+            required: expect.arrayContaining([
+              'kind',
+              'text',
+              'status',
+              'owner',
+              'due_at',
+              'confidence',
+              'evidence_quote',
+              'supports_decision_indexes',
+            ]),
+          },
+        },
+      },
+    });
+    const rendered = [
+      client.requests[0]!.systemPrompt,
+      client.requests[0]!.userPrompt,
+    ].join('\n');
     expect(rendered).toContain('The team agreed to use vendor X for hosting');
     expect(rendered).toContain('Let us just go with vendor X');
   });
@@ -307,6 +341,106 @@ describe('llm decision processor configuration', () => {
     ).toEqual({ ok: true, errors: [] });
   });
 
+  it('requires credentials only for hosted providers and fixes their endpoints', () => {
+    const instance = processor(new FakeLlmClient(validModelOutput));
+    for (const provider of ['openai', 'anthropic'] as const) {
+      expect(
+        instance.validateConfig({
+          adapter_id: 'llm',
+          instance_id: 'local',
+          credential_ref: `env:${provider.toUpperCase()}_API_KEY`,
+          settings: { provider, model: `${provider}-model` },
+        }),
+      ).toEqual({ ok: true, errors: [] });
+    }
+    expect(
+      instance.validateConfig({
+        adapter_id: 'llm',
+        instance_id: 'local',
+        credential_ref: 'env:OPENROUTER_API_KEY',
+        settings: {
+          provider: 'openrouter',
+          model: 'anthropic/claude-model',
+        },
+      }),
+    ).toEqual({ ok: true, errors: [] });
+    expect(
+      instance.validateConfig({
+        adapter_id: 'llm',
+        instance_id: 'local',
+        settings: { provider: 'openai', model: 'gpt-model' },
+      }).errors,
+    ).toContain('credential_ref is required by the openai provider');
+    expect(
+      instance.validateConfig({
+        adapter_id: 'llm',
+        instance_id: 'local',
+        credential_ref: 'env:OPENAI_API_KEY',
+        settings: {
+          provider: 'openai',
+          model: 'gpt-model',
+          base_url: 'https://attacker.invalid',
+        },
+      }).errors,
+    ).toContain('settings.base_url is supported only by the Ollama provider');
+  });
+
+  it('changes processing identity for provider, model, or schema-affecting settings', () => {
+    const ollama = processorConfig;
+    const explicitOllama: AdapterConfig = {
+      ...processorConfig,
+      settings: { provider: 'ollama', model: 'qwen3:4b' },
+    };
+    const differentTimeout: AdapterConfig = {
+      ...processorConfig,
+      settings: {
+        model: 'qwen3:4b',
+        request_timeout_ms: 60_000,
+      },
+    };
+    const differentModel: AdapterConfig = {
+      ...processorConfig,
+      settings: { model: 'qwen3:8b' },
+    };
+    const openai: AdapterConfig = {
+      ...processorConfig,
+      credential_ref: 'env:OPENAI_API_KEY',
+      settings: { provider: 'openai', model: 'qwen3:4b' },
+    };
+    const moreOutput: AdapterConfig = {
+      ...processorConfig,
+      settings: { model: 'qwen3:4b', max_output_tokens: 8192 },
+    };
+
+    expect(llmProcessingVersion(explicitOllama)).toBe(
+      llmProcessingVersion(ollama),
+    );
+    expect(llmProcessingVersion(differentTimeout)).toBe(
+      llmProcessingVersion(ollama),
+    );
+    expect(llmProcessingVersion(differentModel)).not.toBe(
+      llmProcessingVersion(ollama),
+    );
+    expect(llmProcessingVersion(openai)).not.toBe(llmProcessingVersion(ollama));
+    expect(llmProcessingVersion(moreOutput)).not.toBe(
+      llmProcessingVersion(ollama),
+    );
+    const localProcessor = processor(
+      new FakeLlmClient(validModelOutput),
+      ollama,
+    );
+    const hostedProcessor = processor(
+      new FakeLlmClient(validModelOutput),
+      openai,
+    );
+    expect(hostedProcessor.identity.version).not.toBe(
+      localProcessor.identity.version,
+    );
+    expect(meetingProcessingKey(meeting, hostedProcessor)).not.toBe(
+      meetingProcessingKey(meeting, localProcessor),
+    );
+  });
+
   it('reports unavailable health when the configured model is not installed', async () => {
     const instance = processor(
       new FakeLlmClient(validModelOutput, ['some-other-model']),
@@ -327,9 +461,22 @@ describe('llm decision processor configuration', () => {
     const health = await instance.healthCheck();
     expect(health.status).toBe('unavailable');
   });
+
+  it('reports unauthorized before transport when a hosted credential cannot resolve', async () => {
+    const instance = new LlmDecisionProcessor({
+      adapter_id: 'llm',
+      instance_id: 'hosted',
+      credential_ref: 'env:OPENAI_API_KEY',
+      settings: { provider: 'openai', model: 'gpt-model' },
+    });
+    await expect(instance.healthCheck()).resolves.toMatchObject({
+      status: 'unauthorized',
+      details: { provider: 'openai', model: 'gpt-model' },
+    });
+  });
 });
 
-describe('ollama client', () => {
+describe('ollama provider client', () => {
   it('posts a non-streaming chat request and returns the message content', async () => {
     const calls: { url: string; init: RequestInit }[] = [];
     const client = new OllamaClient({
@@ -337,15 +484,19 @@ describe('ollama client', () => {
       fetchImpl: async (url, init) => {
         calls.push({ url: String(url), init: init ?? {} });
         return new Response(
-          JSON.stringify({ message: { role: 'assistant', content: '{"signals":[]}' } }),
+          JSON.stringify({
+            message: { role: 'assistant', content: '{"signals":[]}' },
+          }),
           { status: 200 },
         );
       },
     });
-    const response = await client.chat({
+    const response = await client.generateStructured({
       model: 'qwen3:4b',
-      messages: [{ role: 'user', content: 'hello' }],
-      format: { type: 'object' },
+      systemPrompt: 'extract decisions',
+      userPrompt: 'hello',
+      schema: { type: 'object' },
+      maxOutputTokens: 4096,
     });
     expect(response.content).toBe('{"signals":[]}');
     expect(calls[0]!.url).toBe('http://127.0.0.1:11434/api/chat');
@@ -356,7 +507,7 @@ describe('ollama client', () => {
       format: { type: 'object' },
       // Deterministic decoding and a context window large enough for a full
       // meeting transcript; Ollama's default num_ctx silently truncates.
-      options: { temperature: 0, num_ctx: 32_768 },
+      options: { temperature: 0, num_ctx: 32_768, num_predict: 4096 },
     });
   });
 
@@ -366,10 +517,12 @@ describe('ollama client', () => {
       fetchImpl: async () => new Response('overloaded', { status: 500 }),
     });
     await expect(
-      client.chat({
+      client.generateStructured({
         model: 'qwen3:4b',
-        messages: [{ role: 'user', content: 'hello' }],
-        format: { type: 'object' },
+        systemPrompt: 'extract decisions',
+        userPrompt: 'hello',
+        schema: { type: 'object' },
+        maxOutputTokens: 4096,
       }),
     ).rejects.toMatchObject({
       name: 'AdapterError',
@@ -378,17 +531,22 @@ describe('ollama client', () => {
     });
   });
 
-  it('lists installed model names from the tags endpoint', async () => {
+  it('verifies installed model names from the tags endpoint', async () => {
     const client = new OllamaClient({
       baseUrl: 'http://127.0.0.1:11434',
       fetchImpl: async (url) => {
         expect(String(url)).toBe('http://127.0.0.1:11434/api/tags');
         return new Response(
-          JSON.stringify({ models: [{ name: 'qwen3:4b' }, { name: 'gemma2:2b' }] }),
+          JSON.stringify({
+            models: [{ name: 'qwen3:4b' }, { name: 'gemma2:2b' }],
+          }),
           { status: 200 },
         );
       },
     });
-    expect(await client.listModels()).toEqual(['qwen3:4b', 'gemma2:2b']);
+    await expect(client.verifyModel('qwen3:4b')).resolves.toBeUndefined();
+    await expect(client.verifyModel('missing:latest')).rejects.toMatchObject({
+      code: 'permanently_rejected',
+    });
   });
 });

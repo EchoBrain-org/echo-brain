@@ -92,9 +92,13 @@ describe('ordinary npm package', () => {
       'package/dist/adapters/delivery-surfaces/slack/slack-delivery-receipt-store.js',
       'package/dist/adapters/shared/slack/slack-web-api-client.js',
       'package/dist/infrastructure/filesystem/atomic-write.js',
-      'package/dist/storage/migrations/0001_initial.sql',
-      'package/dist/storage/migrations/0002_core_state.sql',
-      'package/dist/storage/migrations/0003_federated_founder_identity.sql',
+      'package/dist/infrastructure/sqlite/migrate.js',
+      'package/dist/product/storage/open-product-database.js',
+      'package/dist/product/storage/sqlite-core-state-store.js',
+      'package/dist/product/storage/migrations/0001_initial.sql',
+      'package/dist/product/storage/migrations/0002_core_state.sql',
+      'package/dist/product/storage/migrations/0003_federated_founder_identity.sql',
+      'package/dist/product/storage/migrations/0004_remove_legacy_events.sql',
       'package/schemas/meeting-context.v1.schema.json',
       'package/schemas/runtime-config.v1.schema.json',
       'package/schemas/product/active-identity-bundle.v1.schema.json',
@@ -299,7 +303,7 @@ describe('ordinary npm package', () => {
       'product',
       'index.js',
     );
-    const sqliteSmoke = run(
+    const productStorageSmoke = run(
       process.execPath,
       [
         '--input-type=module',
@@ -307,18 +311,16 @@ describe('ordinary npm package', () => {
         [
           "import { pathToFileURL } from 'node:url';",
           'const product = await import(pathToFileURL(process.argv[1]).href);',
-          "const storage = new product.SqliteStorage(':memory:');",
-          "await storage.append({ source: 'synthetic:test', timestamp: '2026-07-16T00:00:00.000Z', content: 'ok' });",
-          'const count = await storage.count();',
+          "const storage = new product.SqliteCoreStateStore(':memory:');",
           'storage.close();',
-          'console.log(JSON.stringify({ ok: count === 1, count }));',
+          "console.log(JSON.stringify({ ok: typeof product.SqliteStorage === 'undefined' }));",
         ].join('\n'),
         modulePath,
       ],
       { cwd: prefix },
     );
-    expect(sqliteSmoke.status, sqliteSmoke.stderr).toBe(0);
-    expect(JSON.parse(sqliteSmoke.stdout)).toEqual({ ok: true, count: 1 });
+    expect(productStorageSmoke.status, productStorageSmoke.stderr).toBe(0);
+    expect(JSON.parse(productStorageSmoke.stdout)).toEqual({ ok: true });
 
     const coreSmoke = run(
       process.execPath,

@@ -3,6 +3,7 @@
 import { spawnSync } from 'node:child_process';
 import {
   copyFileSync,
+  existsSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
@@ -23,6 +24,7 @@ const CHILD_PROCESS_NS = `child${'Process'}`;
 const tmpDirs: string[] = [];
 const REMOVED_INTERNAL_ROOTS = [
   'capture',
+  'storage',
   'echo-home',
   'enrich',
   'adapters/meeting-sources/granola/compatibility',
@@ -117,7 +119,8 @@ describe('dependency partition', () => {
     const hostPrefix = ['/usr', 'local', 'bin'].join('/');
     const forbidden = new RegExp(`${hostPrefix}/(?:git|npm)\\b`);
     const executableSources = listed.stdout.toString('utf8').split('\0')
-      .filter((path) => /^(src|tools|tests)\/.*\.(?:ts|mts|mjs)$/.test(path));
+      .filter((path) => /^(src|tools|tests)\/.*\.(?:ts|mts|mjs)$/.test(path))
+      .filter((path) => existsSync(join(REPO, path)));
     for (const path of executableSources) {
       expect(readFileSync(join(REPO, path), 'utf8'), path).not.toMatch(forbidden);
     }

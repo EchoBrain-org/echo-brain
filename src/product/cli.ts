@@ -89,7 +89,7 @@ import {
   recoverLegacyClassificationCutoverAt,
 } from "./federation/legacy-classification.js";
 import { resolveProductStatePaths } from "./paths.js";
-import { SqliteCoreStateStore } from "../storage/core-state-sqlite.js";
+import { SqliteCoreStateStore } from "./storage/sqlite-core-state-store.js";
 
 export interface ProductCliProcess {
   once: (event: "SIGINT" | "SIGTERM", listener: () => void) => unknown;
@@ -1698,17 +1698,21 @@ export async function runProductCli(
       return 1;
     }
     let storage:
-      { status: "ok"; kind: "sqlite-memory"; migrations: "loaded" } | undefined;
+      | {
+          status: "ok";
+          kind: "product-state-sqlite-memory";
+          migrations: "loaded";
+        }
+      | undefined;
     if (parsed.command === "selftest") {
       try {
-        const { SqliteStorage } = await import("../storage/sqlite.js");
-        const { SqliteCoreStateStore } =
-          await import("../storage/core-state-sqlite.js");
-        const sqlite = new SqliteStorage(":memory:");
         const coreState = new SqliteCoreStateStore(":memory:");
         coreState.close();
-        sqlite.close();
-        storage = { status: "ok", kind: "sqlite-memory", migrations: "loaded" };
+        storage = {
+          status: "ok",
+          kind: "product-state-sqlite-memory",
+          migrations: "loaded",
+        };
       } catch (error) {
         print(stderr, {
           ok: false,

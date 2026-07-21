@@ -80,6 +80,18 @@ function expectedProvider(adapterId: string): string | null {
   return null;
 }
 
+function hostedLlmProvider(
+  binding: LocalConnectionRegistryV1["bindings"][number],
+): string | null {
+  if (binding.adapter_id !== "llm") return null;
+  const provider = binding.configuration_snapshot["provider"];
+  return provider === "openai" ||
+    provider === "anthropic" ||
+    provider === "openrouter"
+    ? provider
+    : null;
+}
+
 export function validateIdentityDocumentSemantics(
   manifest: ManifestSemanticShape,
   registry: RegistrySemanticShape,
@@ -251,6 +263,12 @@ export function validateIdentityDocumentSemantics(
     "active adapter binding slots",
   );
   for (const binding of registry.bindings) {
+    const hostedProvider = hostedLlmProvider(binding);
+    if (hostedProvider !== null) {
+      fail(
+        `binding ${binding.adapter_binding_id} uses hosted LLM provider ${hostedProvider} before connection-aware processor attribution is supported`,
+      );
+    }
     if (
       canonicalSha256(binding.configuration_snapshot) !==
       binding.configuration_sha256
@@ -276,7 +294,18 @@ export function validateIdentityDocumentSemantics(
       if (binding.connection_generation !== null) {
         fail(`binding ${binding.adapter_binding_id} has a dangling generation`);
       }
+      if (expectedProvider(binding.adapter_id) !== null) {
+        fail(
+          `binding ${binding.adapter_binding_id} requires a provider connection`,
+        );
+      }
       continue;
+    }
+    const provider = expectedProvider(binding.adapter_id);
+    if (provider === null) {
+      fail(
+        `binding ${binding.adapter_binding_id} must not use a provider connection`,
+      );
     }
     const connection = connectionById.get(binding.connection_id);
     const generation = connection?.generations.find(
@@ -292,8 +321,7 @@ export function validateIdentityDocumentSemantics(
         `binding ${binding.adapter_binding_id} refers to a retired credential generation`,
       );
     }
-    const provider = expectedProvider(binding.adapter_id);
-    if (provider !== null && connection.provider !== provider) {
+    if (connection.provider !== provider) {
       fail(
         `binding ${binding.adapter_binding_id} uses the wrong provider connection`,
       );

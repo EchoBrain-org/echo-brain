@@ -14,184 +14,28 @@ import {
   type MeetingContentBlock,
   type MeetingDocument,
 } from '../../../core/index.js';
+import { AnthropicClient } from './anthropic-client.js';
+import {
+  DEFAULT_MAX_OUTPUT_TOKENS,
+  LLM_PROVIDER_IDS,
+  MAX_LLM_REQUEST_TIMEOUT_MS,
+  MAX_OUTPUT_TOKENS,
+  type LlmCredentialResolver,
+  type LlmProviderClient,
+  type LlmProviderId,
+} from './llm-provider.js';
+import { OllamaClient, DEFAULT_OLLAMA_BASE_URL } from './ollama-client.js';
+import { OpenAiClient } from './openai-client.js';
+import { OpenRouterClient } from './openrouter-client.js';
 
 export const LLM_DECISION_PROCESSOR_ADAPTER_ID = 'llm';
-export const LLM_DECISION_PROCESSOR_ADAPTER_VERSION = '1.0.0';
+export const LLM_DECISION_PROCESSOR_ADAPTER_VERSION = '1.1.0';
 /** Bump with the adapter version whenever prompt/output semantics change. */
-export const LLM_DECISION_PROCESSOR_PROMPT_VERSION = 'decision-extraction-v1';
+export const LLM_DECISION_PROCESSOR_PROMPT_VERSION = 'decision-extraction-v2';
+export const LLM_DECISION_PROCESSOR_SCHEMA_VERSION =
+  'decision-extraction-schema-v2';
 
-const DEFAULT_OLLAMA_BASE_URL = 'http://127.0.0.1:11434';
-const DEFAULT_REQUEST_TIMEOUT_MS = 120_000;
-const MAX_REQUEST_TIMEOUT_MS = 600_000;
-
-export interface LlmChatMessage {
-  role: 'system' | 'user';
-  content: string;
-}
-
-export interface LlmChatRequest {
-  model: string;
-  messages: readonly LlmChatMessage[];
-  format: JsonObject;
-  signal?: AbortSignal;
-}
-
-export interface LlmChatResponse {
-  content: string;
-}
-
-/**
- * Transport port between the llm decision processor and a model provider.
- * The processor owns prompting, parsing, and evidence verification; a client
- * only moves messages. Ollama is the first implementation.
- */
-export interface LlmClient {
-  chat(request: LlmChatRequest): Promise<LlmChatResponse>;
-  listModels(signal?: AbortSignal): Promise<readonly string[]>;
-}
-
-export interface OllamaClientOptions {
-  baseUrl?: string;
-  requestTimeoutMs?: number;
-  fetchImpl?: typeof fetch;
-}
-
-function taxonomyErrorForStatus(status: number, body: string): AdapterError {
-  if (status === 401 || status === 403) {
-    return new AdapterError(
-      'unauthorized',
-      'Ollama rejected the request as unauthorized',
-      false,
-    );
-  }
-  if (status === 429) {
-    return new AdapterError(
-      'rate_limited',
-      'Ollama rate limited the request',
-      true,
-    );
-  }
-  if (status >= 500) {
-    return new AdapterError(
-      'temporarily_unavailable',
-      `Ollama responded with status ${status}`,
-      true,
-    );
-  }
-  return new AdapterError(
-    'permanently_rejected',
-    `Ollama rejected the request with status ${status}: ${body.slice(0, 200)}`,
-    false,
-  );
-}
-
-export class OllamaClient implements LlmClient {
-  private readonly baseUrl: string;
-  private readonly requestTimeoutMs: number;
-  private readonly fetchImpl: typeof fetch;
-
-  constructor(options: OllamaClientOptions = {}) {
-    this.baseUrl = (options.baseUrl ?? DEFAULT_OLLAMA_BASE_URL).replace(
-      /\/+$/,
-      '',
-    );
-    this.requestTimeoutMs =
-      options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS;
-    this.fetchImpl = options.fetchImpl ?? fetch;
-  }
-
-  private async request(
-    path: string,
-    init: RequestInit,
-    signal?: AbortSignal,
-  ): Promise<unknown> {
-    const signals = [AbortSignal.timeout(this.requestTimeoutMs)];
-    if (signal !== undefined) signals.push(signal);
-    let response: Response;
-    try {
-      response = await this.fetchImpl(`${this.baseUrl}${path}`, {
-        ...init,
-        signal: AbortSignal.any(signals),
-      });
-    } catch (error) {
-      if (error instanceof Error && error.name === 'TimeoutError') {
-        throw new AdapterError('timeout', 'Ollama request timed out', true);
-      }
-      if (error instanceof Error && error.name === 'AbortError') {
-        throw new AdapterError('timeout', 'Ollama request was cancelled', true);
-      }
-      throw new AdapterError(
-        'temporarily_unavailable',
-        'Ollama is unreachable; is the local daemon running?',
-        true,
-      );
-    }
-    if (!response.ok) {
-      throw taxonomyErrorForStatus(response.status, await response.text());
-    }
-    try {
-      return await response.json();
-    } catch {
-      throw new AdapterError(
-        'temporarily_unavailable',
-        'Ollama returned a non-JSON response body',
-        true,
-      );
-    }
-  }
-
-  async chat(request: LlmChatRequest): Promise<LlmChatResponse> {
-    const payload = await this.request(
-      '/api/chat',
-      {
-        method: 'POST',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({
-          model: request.model,
-          messages: request.messages,
-          stream: false,
-          format: request.format,
-          options: { temperature: 0, num_ctx: 32_768 },
-        }),
-      },
-      request.signal,
-    );
-    const content =
-      typeof payload === 'object' &&
-      payload !== null &&
-      typeof (payload as { message?: { content?: unknown } }).message
-        ?.content === 'string'
-        ? (payload as { message: { content: string } }).message.content
-        : null;
-    if (content === null) {
-      throw new AdapterError(
-        'temporarily_unavailable',
-        'Ollama chat response did not contain message content',
-        true,
-      );
-    }
-    return { content };
-  }
-
-  async listModels(signal?: AbortSignal): Promise<readonly string[]> {
-    const payload = await this.request('/api/tags', { method: 'GET' }, signal);
-    const models =
-      typeof payload === 'object' &&
-      payload !== null &&
-      Array.isArray((payload as { models?: unknown }).models)
-        ? (payload as { models: unknown[] }).models
-        : [];
-    return models
-      .map((entry) =>
-        typeof entry === 'object' &&
-        entry !== null &&
-        typeof (entry as { name?: unknown }).name === 'string'
-          ? (entry as { name: string }).name
-          : null,
-      )
-      .filter((name): name is string => name !== null);
-  }
-}
+const DEFAULT_PROVIDER: LlmProviderId = 'ollama';
 
 /** JSON schema handed to the provider as a structured-output constraint. */
 const EXTRACTION_FORMAT: JsonObject = {
@@ -203,7 +47,17 @@ const EXTRACTION_FORMAT: JsonObject = {
       type: 'array',
       items: {
         type: 'object',
-        required: ['kind', 'text', 'evidence_quote'],
+        required: [
+          'kind',
+          'text',
+          'status',
+          'owner',
+          'due_at',
+          'confidence',
+          'evidence_quote',
+          'supports_decision_indexes',
+        ],
+        additionalProperties: false,
         properties: {
           kind: { type: 'string', enum: ['decision', 'action', 'rationale'] },
           text: { type: 'string' },
@@ -235,6 +89,8 @@ const SYSTEM_PROMPT = [
   '- A rationale explains why a decision was made; reference the decisions it supports by their',
   '  zero-based index within your own signals array via supports_decision_indexes.',
   '- Set confidence between 0 and 1 for every signal.',
+  '- Return every schema field for every signal. Use null for an inapplicable owner or due_at,',
+  '  unresolved for an inapplicable status, and [] for inapplicable supports_decision_indexes.',
   '- If the meeting contains no decisions, actions, or rationales, return {"signals": []}.',
 ].join('\n');
 
@@ -384,14 +240,91 @@ function stableSignalId(meeting: MeetingDocument, raw: RawSignal): string {
   return `${raw.kind}:sha256:${digest}`;
 }
 
+export function configuredLlmProvider(config: AdapterConfig): LlmProviderId {
+  const provider = config.settings['provider'];
+  return typeof provider === 'string' &&
+    LLM_PROVIDER_IDS.includes(provider as LlmProviderId)
+    ? (provider as LlmProviderId)
+    : DEFAULT_PROVIDER;
+}
+
+function configuredRequestTimeout(config: AdapterConfig): number | undefined {
+  const timeout = config.settings['request_timeout_ms'];
+  return typeof timeout === 'number' ? timeout : undefined;
+}
+
+function configuredMaxOutputTokens(config: AdapterConfig): number {
+  const value = config.settings['max_output_tokens'];
+  return typeof value === 'number' ? value : DEFAULT_MAX_OUTPUT_TOKENS;
+}
+
+/**
+ * Runtime processing identity. Provider/model changes must not reuse cached
+ * decision sets or approvals even though all providers share adapter_id=llm.
+ */
+export function llmProcessingVersion(config: AdapterConfig): string {
+  const provider = configuredLlmProvider(config);
+  const digest = createHash('sha256')
+    .update(
+      JSON.stringify([
+        LLM_DECISION_PROCESSOR_ADAPTER_VERSION,
+        LLM_DECISION_PROCESSOR_PROMPT_VERSION,
+        LLM_DECISION_PROCESSOR_SCHEMA_VERSION,
+        provider,
+        config.settings['model'] ?? null,
+        configuredMaxOutputTokens(config),
+        provider === 'ollama'
+          ? (config.settings['base_url'] ?? DEFAULT_OLLAMA_BASE_URL)
+          : null,
+      ]),
+    )
+    .digest('hex')
+    .slice(0, 16);
+  return `${LLM_DECISION_PROCESSOR_ADAPTER_VERSION}+processing.${digest}`;
+}
+
+function createProviderClient(
+  config: AdapterConfig,
+  options: LlmDecisionProcessorOptions,
+): LlmProviderClient {
+  const provider = configuredLlmProvider(config);
+  const requestTimeoutMs = configuredRequestTimeout(config);
+  const fetchImpl = options.fetchImpl;
+  if (provider === 'ollama') {
+    return new OllamaClient({
+      ...(typeof config.settings['base_url'] === 'string'
+        ? { baseUrl: config.settings['base_url'] }
+        : {}),
+      ...(requestTimeoutMs === undefined ? {} : { requestTimeoutMs }),
+      ...(fetchImpl === undefined ? {} : { fetchImpl }),
+    });
+  }
+  const hostedOptions = {
+    credentialRef: config.credential_ref ?? '',
+    credentialResolver: options.credentialResolver ?? (() => undefined),
+    ...(requestTimeoutMs === undefined ? {} : { requestTimeoutMs }),
+    ...(fetchImpl === undefined ? {} : { fetchImpl }),
+  };
+  switch (provider) {
+    case 'openai':
+      return new OpenAiClient(hostedOptions);
+    case 'anthropic':
+      return new AnthropicClient(hostedOptions);
+    case 'openrouter':
+      return new OpenRouterClient(hostedOptions);
+  }
+}
+
 export interface LlmDecisionProcessorOptions {
-  client?: LlmClient;
+  client?: LlmProviderClient;
+  credentialResolver?: LlmCredentialResolver;
+  fetchImpl?: typeof fetch;
   now?: () => string;
 }
 
 export class LlmDecisionProcessor implements DecisionProcessorAdapter {
   readonly identity: DecisionProcessorAdapter['identity'];
-  private readonly client: LlmClient;
+  private readonly client: LlmProviderClient;
   private readonly now: () => string;
 
   constructor(
@@ -402,19 +335,10 @@ export class LlmDecisionProcessor implements DecisionProcessorAdapter {
       kind: 'decision-processor' as const,
       adapter_id: LLM_DECISION_PROCESSOR_ADAPTER_ID,
       instance_id: config.instance_id,
-      version: LLM_DECISION_PROCESSOR_ADAPTER_VERSION,
+      version: llmProcessingVersion(config),
     });
     this.now = options.now ?? (() => new Date().toISOString());
-    this.client =
-      options.client ??
-      new OllamaClient({
-        ...(typeof config.settings['base_url'] === 'string'
-          ? { baseUrl: config.settings['base_url'] }
-          : {}),
-        ...(typeof config.settings['request_timeout_ms'] === 'number'
-          ? { requestTimeoutMs: config.settings['request_timeout_ms'] }
-          : {}),
-      });
+    this.client = options.client ?? createProviderClient(config, options);
   }
 
   private get model(): string {
@@ -434,15 +358,12 @@ export class LlmDecisionProcessor implements DecisionProcessorAdapter {
     } else if (config.instance_id !== this.identity.instance_id) {
       errors.push('instance_id does not match the registered adapter instance');
     }
-    if (config.credential_ref !== undefined) {
-      errors.push(
-        'credential_ref is not supported by the local Ollama provider',
-      );
-    }
     const allowedSettings = new Set([
+      'provider',
       'model',
       'base_url',
       'request_timeout_ms',
+      'max_output_tokens',
     ]);
     for (const key of Object.keys(config.settings)) {
       if (!allowedSettings.has(key))
@@ -451,8 +372,27 @@ export class LlmDecisionProcessor implements DecisionProcessorAdapter {
     if (!isNonEmptyString(config.settings['model'])) {
       errors.push('settings.model is required');
     }
+    const configuredProvider = config.settings['provider'];
+    if (
+      configuredProvider !== undefined &&
+      (!isNonEmptyString(configuredProvider) ||
+        !LLM_PROVIDER_IDS.includes(configuredProvider as LlmProviderId))
+    ) {
+      errors.push(
+        `settings.provider must be one of ${LLM_PROVIDER_IDS.join(', ')}`,
+      );
+    }
+    const provider = configuredLlmProvider(config);
+    if (provider === 'ollama' && config.credential_ref !== undefined) {
+      errors.push('credential_ref is not supported by the Ollama provider');
+    }
+    if (provider !== 'ollama' && !isNonEmptyString(config.credential_ref)) {
+      errors.push(`credential_ref is required by the ${provider} provider`);
+    }
     const baseUrl = config.settings['base_url'];
-    if (baseUrl !== undefined) {
+    if (provider !== 'ollama' && baseUrl !== undefined) {
+      errors.push('settings.base_url is supported only by the Ollama provider');
+    } else if (baseUrl !== undefined) {
       try {
         const url = new URL(String(baseUrl));
         if (url.protocol !== 'http:' && url.protocol !== 'https:') {
@@ -469,11 +409,34 @@ export class LlmDecisionProcessor implements DecisionProcessorAdapter {
         Number.isInteger(timeout) &&
         typeof timeout === 'number' &&
         timeout > 0 &&
-        timeout <= MAX_REQUEST_TIMEOUT_MS
+        timeout <= MAX_LLM_REQUEST_TIMEOUT_MS
       )
     ) {
       errors.push(
-        `settings.request_timeout_ms must be an integer from 1 to ${MAX_REQUEST_TIMEOUT_MS}`,
+        `settings.request_timeout_ms must be an integer from 1 to ${MAX_LLM_REQUEST_TIMEOUT_MS}`,
+      );
+    }
+    const maxOutputTokens = config.settings['max_output_tokens'];
+    if (
+      maxOutputTokens !== undefined &&
+      !(
+        Number.isInteger(maxOutputTokens) &&
+        typeof maxOutputTokens === 'number' &&
+        maxOutputTokens > 0 &&
+        maxOutputTokens <= MAX_OUTPUT_TOKENS
+      )
+    ) {
+      errors.push(
+        `settings.max_output_tokens must be an integer from 1 to ${MAX_OUTPUT_TOKENS}`,
+      );
+    }
+    if (
+      provider === 'openrouter' &&
+      isNonEmptyString(config.settings['model']) &&
+      !/^[^/\s]+\/[^/\s]+$/u.test(config.settings['model'])
+    ) {
+      errors.push(
+        'settings.model must use the author/model-slug form for OpenRouter',
       );
     }
     return { ok: errors.length === 0, errors };
@@ -493,27 +456,27 @@ export class LlmDecisionProcessor implements DecisionProcessorAdapter {
         details: { error_count: validation.errors.length },
       };
     }
-    let models: readonly string[];
     try {
-      models = await this.client.listModels(operation?.signal);
+      await this.client.verifyModel(this.model, operation?.signal);
     } catch (error) {
       return {
-        status: 'unavailable',
+        status:
+          error instanceof AdapterError && error.code === 'unauthorized'
+            ? 'unauthorized'
+            : 'unavailable',
         checked_at: checkedAt,
         message:
           error instanceof AdapterError
             ? error.message
-            : 'LLM provider is unreachable',
+            : `${this.client.provider} provider health check failed`,
+        details: { provider: this.client.provider, model: this.model },
       };
     }
-    if (!models.includes(this.model)) {
-      return {
-        status: 'unavailable',
-        checked_at: checkedAt,
-        message: `Model '${this.model}' is not installed on the provider`,
-      };
-    }
-    return { status: 'healthy', checked_at: checkedAt };
+    return {
+      status: 'healthy',
+      checked_at: checkedAt,
+      details: { provider: this.client.provider, model: this.model },
+    };
   }
 
   async extract(
@@ -540,13 +503,12 @@ export class LlmDecisionProcessor implements DecisionProcessorAdapter {
         false,
       );
     }
-    const response = await this.client.chat({
+    const response = await this.client.generateStructured({
       model: this.model,
-      messages: [
-        { role: 'system', content: SYSTEM_PROMPT },
-        { role: 'user', content: renderMeeting(meeting) },
-      ],
-      format: EXTRACTION_FORMAT,
+      systemPrompt: SYSTEM_PROMPT,
+      userPrompt: renderMeeting(meeting),
+      schema: EXTRACTION_FORMAT,
+      maxOutputTokens: configuredMaxOutputTokens(this.config),
       ...(operation?.signal === undefined ? {} : { signal: operation.signal }),
     });
     assertNotCancelled(operation?.signal, 'extraction');

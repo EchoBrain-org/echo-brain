@@ -711,6 +711,76 @@ describe('historical identity lineage store', () => {
     ).toThrow(/uses the wrong provider/);
   });
 
+  it.each([
+    {
+      label: 'local processor with a provider connection',
+      adapterId: 'structured-text',
+      instanceId: 'primary',
+      connectionId: IDS.connection,
+      configuration: {} as AdapterBindingV1['configuration_snapshot'],
+      expected: /must not use a provider connection/,
+    },
+    {
+      label: 'hosted LLM without attributable connection evidence',
+      adapterId: 'llm',
+      instanceId: 'openai-primary',
+      connectionId: null,
+      configuration: {
+        provider: 'openai',
+        model: 'gpt-test',
+        prompt_version: 'decision-extraction-v2',
+        output_schema_version: 'decision-extraction-schema-v2',
+      } as AdapterBindingV1['configuration_snapshot'],
+      expected:
+        /hosted LLM provider openai.*before connection-aware processor attribution/,
+    },
+  ])('rejects a signed $label', async (testCase) => {
+    const fixture = await createFixture();
+    const descriptor = await fixture.signer.inspect(IDS.installation);
+    if (descriptor === null) throw new Error('test descriptor disappeared');
+    const retiredBinding: AdapterBindingV1 = {
+      ...fixture.oldBinding,
+      status: 'retired',
+      ended_at: RETIRED_AT,
+    };
+    const invalidBinding = testBinding({
+      adapterBindingId: IDS.newBinding,
+      capability: 'decision-processor',
+      adapterId: testCase.adapterId,
+      instanceId: testCase.instanceId,
+      connectionId: testCase.connectionId,
+      configuration: testCase.configuration,
+      createdAt: RETIRED_AT,
+    });
+    const payload: Omit<LocalConnectionRegistryV1, 'integrity'> = {
+      schema_version: 1,
+      kind: 'echo-local-connection-registry',
+      registry_id: IDS.registry,
+      identity_manifest_id: IDS.manifest,
+      revision: 2,
+      previous_registry_sha256: sha256Digest(fixture.registryOneRaw),
+      updated_at: REVISION_TWO_AT,
+      connections: [fixture.connection],
+      bindings: [retiredBinding, invalidBinding],
+    };
+    const signed = await signDocument(
+      payload,
+      fixture.signer,
+      descriptor.key_id,
+    );
+    const paths = resolveProductStatePaths(fixture.stateDirectory);
+    new ConnectionRegistryStore(paths).create(
+      connectionRegistryFilename(IDS.registry, 2),
+      canonicalJson(signed),
+    );
+
+    expect(() =>
+      new IdentityLineageStore(
+        fixture.stateDirectory,
+      ).loadVerifiedRegistryChain(IDS.manifest, IDS.registry),
+    ).toThrow(testCase.expected);
+  });
+
   it('rejects binding IDs that resolve in more than one verified registry chain', async () => {
     const fixture = await createFixture();
     const descriptor = await fixture.signer.inspect(IDS.installation);

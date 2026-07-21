@@ -1,5 +1,8 @@
 import type { AdapterInstanceConfig, JsonObject } from '../../../core/index.js';
-import { LLM_DECISION_PROCESSOR_PROMPT_VERSION } from '../../../adapters/decision-processors/llm/llm-decision-processor.js';
+import {
+  LLM_DECISION_PROCESSOR_PROMPT_VERSION,
+  LLM_DECISION_PROCESSOR_SCHEMA_VERSION,
+} from '../../../adapters/decision-processors/llm/llm-decision-processor.js';
 import { canonicalJson } from '../foundation/canonical-json.js';
 import type { AdapterCapability } from '../contracts.js';
 
@@ -16,6 +19,7 @@ export function identityBindingConfigurationSnapshot(
     return {
       ...settings,
       prompt_version: LLM_DECISION_PROCESSOR_PROMPT_VERSION,
+      output_schema_version: LLM_DECISION_PROCESSOR_SCHEMA_VERSION,
     };
   }
   return settings;

@@ -3,7 +3,7 @@ import { chmodSync, existsSync, lstatSync, mkdirSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import Database from "better-sqlite3";
-import { migrate } from "../../../storage/migrate.js";
+import { migrate } from "../../../infrastructure/sqlite/migrate.js";
 import type {
   FederatedEventV1,
   FederationId,

@@ -107,6 +107,14 @@ adapter.
   input identity.
 - Reject malformed output and bound retries and execution time.
 
+The bundled `llm` processor is one semantic adapter with narrow provider
+drivers. The shared processor owns the prompt, canonical structured-output
+schema, parsing, decision validation, and verbatim evidence gate. Ollama,
+OpenAI, Anthropic, and OpenRouter drivers own only authentication, wire-format
+translation, model capability checks, response extraction, and error
+normalization. A provider driver must not weaken or specialize the semantic
+prompt or evidence rules for an individual vendor or model.
+
 ### Approval surface
 
 - State the strongest provider account or tenant identity the API can prove and

@@ -1,12 +1,9 @@
-import { chmodSync, existsSync, lstatSync, mkdirSync } from 'node:fs';
-import { dirname, join } from 'node:path';
-import { fileURLToPath } from 'node:url';
-import Database from 'better-sqlite3';
+import type Database from 'better-sqlite3';
 import type { ApprovalRequest } from '../../core/approval/approval-gate.js';
 import type { JsonValue } from '../../core/contracts/json.js';
 import type { MeetingDocument } from '../../core/contracts/meeting.js';
 import type { DecisionSet } from '../../core/contracts/decision.js';
-import { migrate } from '../../storage/migrate.js';
+import { openProductDatabase } from '../storage/open-product-database.js';
 import {
   canonicalJson,
   canonicalSha256,
@@ -18,11 +15,6 @@ import type {
   SourceAttributionV1,
 } from './contracts.js';
 import { validateFederationDocument } from './schema-validation.js';
-
-const MIGRATIONS_DIR = join(
-  dirname(fileURLToPath(import.meta.url)),
-  '../../storage/migrations',
-);
 
 export interface SourceAttributionKey {
   source_adapter_id: string;
@@ -148,23 +140,8 @@ export class SqliteFederatedAttributionStore {
   private readonly readCoreDecisionSetStatement: Database.Statement;
 
   constructor(databasePath: string) {
-    if (databasePath !== ':memory:') {
-      mkdirSync(dirname(databasePath), { recursive: true });
-      if (existsSync(databasePath)) {
-        const state = lstatSync(databasePath);
-        if (state.isSymbolicLink() || !state.isFile()) {
-          throw new Error('attribution database must be a regular file');
-        }
-      }
-    }
-    this.db = new Database(databasePath);
-    if (databasePath !== ':memory:') chmodSync(databasePath, 0o600);
-    this.db.pragma('journal_mode = WAL');
     // Attribution must survive before the separately-owned core upsert runs.
-    this.db.pragma('synchronous = FULL');
-    this.db.pragma('foreign_keys = ON');
-    this.db.pragma('busy_timeout = 5000');
-    migrate(this.db, MIGRATIONS_DIR);
+    this.db = openProductDatabase(databasePath, { durability: 'evidence' });
 
     this.readSourceStatement = this.db.prepare(
       `SELECT * FROM federated_source_attributions

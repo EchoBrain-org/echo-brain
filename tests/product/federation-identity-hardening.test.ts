@@ -260,6 +260,62 @@ describe("Slack human claim workspace semantics", () => {
   });
 });
 
+describe("decision-processor connection semantics", () => {
+  it("rejects a local processor binding that carries a provider connection", () => {
+    const fixture = semanticFixture("T_APPROVAL");
+    fixture.registry.bindings = [
+      ...fixture.registry.bindings,
+      testBinding({
+        adapterBindingId: federationId("bnd"),
+        capability: "decision-processor",
+        adapterId: "structured-text",
+        instanceId: "primary",
+        connectionId: fixture.registry.connections[0]!.connection_id,
+        createdAt: NOW,
+      }),
+    ];
+
+    expect(() =>
+      validateIdentityDocumentSemantics(
+        fixture.manifest,
+        fixture.registry,
+        fixture.policy,
+      ),
+    ).toThrow(/must not use a provider connection/);
+  });
+
+  it("rejects a hosted LLM before processor attribution carries connection evidence", () => {
+    const fixture = semanticFixture("T_APPROVAL");
+    fixture.registry.bindings = [
+      ...fixture.registry.bindings,
+      testBinding({
+        adapterBindingId: federationId("bnd"),
+        capability: "decision-processor",
+        adapterId: "llm",
+        instanceId: "openai-primary",
+        connectionId: null,
+        configuration: {
+          provider: "openai",
+          model: "gpt-test",
+          prompt_version: "decision-extraction-v2",
+          output_schema_version: "decision-extraction-schema-v2",
+        },
+        createdAt: NOW,
+      }),
+    ];
+
+    expect(() =>
+      validateIdentityDocumentSemantics(
+        fixture.manifest,
+        fixture.registry,
+        fixture.policy,
+      ),
+    ).toThrow(
+      /hosted LLM provider openai.*before connection-aware processor attribution/,
+    );
+  });
+});
+
 describe("publication audience identity semantics", () => {
   it("accepts an exact named membership subject", () => {
     const fixture = semanticFixture("T_APPROVAL");

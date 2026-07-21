@@ -48,6 +48,16 @@ function expectedProvider(adapterId: string): string | null {
   return null;
 }
 
+function hostedLlmProvider(binding: AdapterBindingV1): string | null {
+  if (binding.adapter_id !== "llm") return null;
+  const provider = binding.configuration_snapshot["provider"];
+  return provider === "openai" ||
+    provider === "anthropic" ||
+    provider === "openrouter"
+    ? provider
+    : null;
+}
+
 function connectionIdentity(connection: ToolConnectionV1) {
   return {
     connection_id: connection.connection_id,
@@ -237,6 +247,12 @@ function assertRegistrySemantics(
   const bindings = new Map<string, AdapterBindingV1>();
   const activeSlots = new Set<string>();
   for (const binding of registry.bindings) {
+    const hostedProvider = hostedLlmProvider(binding);
+    if (hostedProvider !== null) {
+      identityLineageFailure(
+        `binding ${binding.adapter_binding_id} uses hosted LLM provider ${hostedProvider} before connection-aware processor attribution is supported`,
+      );
+    }
     if (bindings.has(binding.adapter_binding_id)) {
       identityLineageFailure("registry contains duplicate binding IDs");
     }
@@ -282,7 +298,18 @@ function assertRegistrySemantics(
           `binding ${binding.adapter_binding_id} has a dangling generation`,
         );
       }
+      if (expectedProvider(binding.adapter_id) !== null) {
+        identityLineageFailure(
+          `binding ${binding.adapter_binding_id} requires a provider connection`,
+        );
+      }
       continue;
+    }
+    const provider = expectedProvider(binding.adapter_id);
+    if (provider === null) {
+      identityLineageFailure(
+        `binding ${binding.adapter_binding_id} must not use a provider connection`,
+      );
     }
     const connection = connections.get(binding.connection_id);
     const generation = connection?.generations.find(
@@ -298,8 +325,7 @@ function assertRegistrySemantics(
         `binding ${binding.adapter_binding_id} uses a retired generation`,
       );
     }
-    const provider = expectedProvider(binding.adapter_id);
-    if (provider !== null && connection.provider !== provider) {
+    if (connection.provider !== provider) {
       identityLineageFailure(
         `binding ${binding.adapter_binding_id} uses the wrong provider`,
       );

@@ -38,7 +38,7 @@ import {
   legacyClassificationReportPath,
   verifyLegacyClassificationReport,
 } from "../../src/product/federation/legacy-classification.js";
-import { SqliteCoreStateStore } from "../../src/storage/core-state-sqlite.js";
+import { SqliteCoreStateStore } from "../../src/product/storage/sqlite-core-state-store.js";
 
 const CUTOVER_AT = "2026-07-20T00:00:00.000Z";
 const BEFORE_CUTOVER = "2026-07-19T23:00:00.000Z";

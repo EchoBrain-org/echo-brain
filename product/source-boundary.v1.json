@@ -16,13 +16,9 @@
     "src/product/**",
     "src/core/**",
     "src/adapters/**",
-    "src/storage/interface.ts",
-    "src/storage/sqlite.ts",
-    "src/storage/core-state-sqlite.ts",
-    "src/storage/migrate.ts",
-    "src/storage/source-match.ts",
     "src/infrastructure/filesystem/atomic-write.ts",
     "src/infrastructure/filesystem/atomic-create.ts",
+    "src/infrastructure/sqlite/migrate.ts",
     "src/logging/index.ts",
     "src/guards.ts",
     "src/util/json.ts",
@@ -36,6 +32,7 @@
     "src/coord/",
     "src/trace/",
     "src/capture/",
+    "src/storage/",
     "src/echo-home/",
     "src/surfaces/ceo-slack-responder/",
     "src/enrich/",
@@ -45,6 +42,7 @@
   ],
   "removed_internal_roots": [
     "src/capture/",
+    "src/storage/",
     "src/echo-home/",
     "src/enrich/",
     "src/adapters/meeting-sources/granola/compatibility/",
@@ -64,9 +62,10 @@
     "schemas/product/federated-record-envelope.v1.schema.json",
     "schemas/product/federated-export.v1.schema.json",
     "schemas/product/federated-recovery-report.v1.schema.json",
-    "src/storage/migrations/0001_initial.sql",
-    "src/storage/migrations/0002_core_state.sql",
-    "src/storage/migrations/0003_federated_founder_identity.sql"
+    "src/product/storage/migrations/0001_initial.sql",
+    "src/product/storage/migrations/0002_core_state.sql",
+    "src/product/storage/migrations/0003_federated_founder_identity.sql",
+    "src/product/storage/migrations/0004_remove_legacy_events.sql"
   ],
   "layer_rules": [
     {

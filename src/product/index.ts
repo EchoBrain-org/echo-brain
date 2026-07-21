@@ -1,6 +1,5 @@
 export * from '../core/index.js';
-export { SqliteStorage } from '../storage/sqlite.js';
-export { SqliteCoreStateStore } from '../storage/core-state-sqlite.js';
+export { SqliteCoreStateStore } from './storage/sqlite-core-state-store.js';
 export * from './adapter-factories.js';
 export * from './composition.js';
 export * from './config.js';
