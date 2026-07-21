@@ -1,71 +1,77 @@
-import { randomBytes, timingSafeEqual } from 'node:crypto';
-import { chmodSync, existsSync, lstatSync, mkdirSync } from 'node:fs';
-import { dirname, join } from 'node:path';
-import { fileURLToPath } from 'node:url';
-import Database from 'better-sqlite3';
-import { migrate } from '../../../storage/migrate.js';
+import { randomBytes, timingSafeEqual } from "node:crypto";
+import { chmodSync, existsSync, lstatSync, mkdirSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
+import Database from "better-sqlite3";
+import { migrate } from "../../../storage/migrate.js";
 import type {
   FederatedEventV1,
   FederationId,
   LocalIdentityManifestV1,
-  OrganizationAuthorityDescriptorV1,
-  OrganizationEnrollmentChallengeV1,
-  OrganizationEnrollmentProofV1,
-  OrganizationEnrollmentReceiptV1,
-  OrganizationIngestBatchV1,
-  OrgIngestReason,
-  OrgIngestReceiptStatus,
-  OrgIngestReceiptV1,
   PublicationPolicyV1,
   Sha256Digest,
-} from '../contracts.js';
+} from '../../../product/federation/contracts.js';
+import type {
+  OrganizationAuthorityDescriptorV1,
+  OrganizationBatchReceiptStatus,
+  OrganizationBatchReceiptV1,
+  OrganizationBatchRejectionReason,
+  OrganizationChainHeadV1,
+  OrganizationEnrollmentRequestV1,
+  OrganizationEnrollmentReceiptV1,
+  OrganizationIngestBatchV1,
+} from "../contracts.js";
 import {
   canonicalJson,
   canonicalSha256,
   parseCanonicalJson,
   sha256Digest,
-} from '../foundation/canonical-json.js';
+} from "../../../product/federation/foundation/canonical-json.js";
 import {
   assertFederationId,
   assertUtcMillisecondTimestamp,
   federationId,
   type FederationIdPrefix,
-} from '../foundation/identifiers.js';
+} from "../../../product/federation/foundation/identifiers.js";
 import {
   createSignedDocumentWithKey,
   verifySignedDocument,
-} from '../foundation/signed-document.js';
+} from "../../../product/federation/foundation/signed-document.js";
 import {
   assertFederationDocumentSize,
   type FederationSchemaKind,
   validateFederationDocument,
-} from '../schema-validation.js';
-import { assertCompleteFederatedApprovalGroup } from '../outbox-store.js';
+} from "../../../product/federation/schema-validation.js";
+import {
+  type N2SchemaKind,
+  validateN2Document,
+} from "../schema-validation.js";
+import { assertCompleteFederatedApprovalGroup } from "../../../product/federation/outbox-store.js";
 import {
   signWithOrganizationAuthority,
   type OrganizationAuthoritySigner,
   verifyOrganizationAuthorityDescriptor,
-} from './authority-signer.js';
-import { verifiedManifestPublicKey } from './enrollment-proof.js';
+} from "./authority-signer.js";
+import {
+  organizationEnrollmentGrantSha256,
+  verifiedManifestPublicKey,
+} from "./enrollment-request.js";
 
 const MIGRATIONS_DIR = join(
   dirname(fileURLToPath(import.meta.url)),
-  'migrations',
+  "migrations",
 );
 const DIGEST_PATTERN = /^sha256:[0-9a-f]{64}$/;
-const MAX_CHALLENGE_LIFETIME_MS = 15 * 60 * 1000;
 const MAX_ENROLLMENT_GRANT_LIFETIME_MS = 7 * 24 * 60 * 60 * 1000;
 const MAX_INGEST_EVENTS = 256;
 const MAX_INGEST_CANONICAL_BYTES = 16 * 1024 * 1024;
 
-type AuthorityGeneratedIdPrefix = 'ech' | 'enr' | 'igr';
+type AuthorityGeneratedIdPrefix = "enr" | "igr";
 
 export interface OrganizationAuthorityStoreOptions {
   databasePath: string;
   signer: OrganizationAuthoritySigner;
   now?: () => string;
-  createId?: (prefix: AuthorityGeneratedIdPrefix) => FederationId;
-  createNonce?: (size: number) => Buffer;
 }
 
 export interface ProvisionOrganizationRequest {
@@ -81,7 +87,7 @@ export interface ProvisionMembershipRequest {
   principal_id: FederationId;
   principal_display_name: string;
   membership_id: FederationId;
-  membership_type: 'owner' | 'employee' | 'contractor';
+  membership_type: "owner" | "employee";
   provisioned_at: string;
 }
 
@@ -89,19 +95,11 @@ export interface ProvisionedMembership {
   organization_id: FederationId;
   principal_id: FederationId;
   membership_id: FederationId;
-  membership_type: 'owner' | 'employee' | 'contractor';
-  status: 'active' | 'revoked';
-  version: number;
+  membership_type: "owner" | "employee";
+  status: "active" | "revoked";
   provisioned_at: string;
   revoked_at: string | null;
   revocation_reason: string | null;
-}
-
-export interface IssueEnrollmentChallengeRequest {
-  manifest: LocalIdentityManifestV1;
-  publication_policy: PublicationPolicyV1;
-  enrollment_grant: string;
-  expires_at: string;
 }
 
 export interface IssueEnrollmentGrantRequest {
@@ -119,9 +117,10 @@ export interface IssuedEnrollmentGrant {
 }
 
 export interface CompleteEnrollmentRequest {
-  challenge: OrganizationEnrollmentChallengeV1;
-  proof: OrganizationEnrollmentProofV1;
+  enrollment_request: OrganizationEnrollmentRequestV1;
+  enrollment_grant: string;
   manifest: LocalIdentityManifestV1;
+  publication_policy: PublicationPolicyV1;
 }
 
 export interface RevokeAuthoritySubjectRequest {
@@ -140,8 +139,7 @@ export interface StoredAuthorityInstallation {
   publication_policy_version: number;
   publication_policy_sha256: Sha256Digest;
   enrollment_receipt_sha256: Sha256Digest;
-  status: 'active' | 'revoked';
-  version: number;
+  status: "active" | "revoked";
   enrolled_at: string;
   revoked_at: string | null;
   revocation_reason: string | null;
@@ -164,10 +162,10 @@ export interface OrganizationAuthorityCounts {
   organizations: number;
   principals: number;
   memberships: number;
-  challenges: number;
+  enrollment_requests: number;
   installations: number;
   accepted_events: number;
-  ingest_receipts: number;
+  batch_receipts: number;
 }
 
 interface MetadataRow {
@@ -179,19 +177,15 @@ interface MetadataRow {
 export interface OrganizationRow {
   organization_id: string;
   display_name: string;
-  status: 'active' | 'revoked';
-  policy_version: number;
   provisioned_at: string;
-  revoked_at: string | null;
 }
 
 interface MembershipRow {
   membership_id: string;
   organization_id: string;
   principal_id: string;
-  membership_type: 'owner' | 'employee' | 'contractor';
-  status: 'active' | 'revoked';
-  version: number;
+  membership_type: "owner" | "employee";
+  status: "active" | "revoked";
   provisioned_at: string;
   revoked_at: string | null;
   revocation_reason: string | null;
@@ -213,20 +207,17 @@ interface EnrollmentGrantRow {
   issued_at: string;
   expires_at: string;
   consumed_at: string | null;
-  challenge_id: string | null;
+  request_sha256: string | null;
 }
 
-interface ChallengeRow {
-  challenge_id: string;
-  challenge_sha256: string;
-  challenge_json: string;
+interface EnrollmentRequestRow {
+  request_sha256: string;
+  grant_sha256: string;
+  request_json: string;
   publication_policy_sha256: string;
   publication_policy_json: string;
-  expires_at: string;
-  consumed_at: string | null;
-  proof_sha256: string | null;
-  enrollment_receipt_sha256: string | null;
-  enrollment_receipt_json: string | null;
+  enrollment_receipt_sha256: string;
+  enrollment_receipt_json: string;
 }
 
 interface InstallationRow {
@@ -244,8 +235,7 @@ interface InstallationRow {
   publication_policy_sha256: string;
   enrollment_receipt_sha256: string;
   enrollment_receipt_json: string;
-  status: 'active' | 'revoked';
-  version: number;
+  status: "active" | "revoked";
   enrolled_at: string;
   revoked_at: string | null;
   revocation_reason: string | null;
@@ -263,16 +253,25 @@ interface AcceptedEventRow {
   accepted_at: string;
 }
 
-interface AuthorityIngestReceiptRow {
+interface AuthorityBatchReceiptRow {
   receipt_id: string;
-  event_id: string;
+  batch_sha256: string;
+  batch_json: string;
   organization_id: string;
   installation_id: string;
-  status: OrgIngestReceiptStatus;
+  status: OrganizationBatchReceiptStatus;
   receipt_sha256: string;
   receipt_json: string;
   server_received_at: string;
 }
+
+type OrganizationIngestConflictReason =
+  | "sequence_gap"
+  | "sequence_fork"
+  | "previous_event_hash_mismatch"
+  | "event_id_conflict"
+  | "record_id_conflict"
+  | "local_subject_conflict";
 
 interface ParsedIncomingEvent {
   envelope: FederatedEventV1;
@@ -292,6 +291,16 @@ function validatedDocumentSnapshot<T>(
   const raw = canonicalJson(value);
   assertFederationDocumentSize(raw, label);
   return validateFederationDocument<T>(kind, parseCanonicalJson(raw));
+}
+
+function validatedN2DocumentSnapshot<T>(
+  kind: N2SchemaKind,
+  value: unknown,
+  label: string,
+): T {
+  const raw = canonicalJson(value);
+  assertFederationDocumentSize(raw, label);
+  return validateN2Document<T>(kind, parseCanonicalJson(raw));
 }
 
 function assertDigest(
@@ -322,22 +331,9 @@ function assertExactKeys(
   }
 }
 
-function enrollmentGrantBytes(secret: string): Buffer {
-  if (typeof secret !== 'string') {
-    throw new Error('organization enrollment grant must be text');
-  }
-  const decoded = Buffer.from(secret, 'base64');
-  if (decoded.length !== 32 || decoded.toString('base64') !== secret) {
-    throw new Error(
-      'organization enrollment grant must be canonical base64 for 32 bytes',
-    );
-  }
-  return decoded;
-}
-
 function matchingDigest(left: string, right: string): boolean {
-  const leftBytes = Buffer.from(left, 'utf8');
-  const rightBytes = Buffer.from(right, 'utf8');
+  const leftBytes = Buffer.from(left, "utf8");
+  const rightBytes = Buffer.from(right, "utf8");
   return (
     leftBytes.length === rightBytes.length &&
     timingSafeEqual(leftBytes, rightBytes)
@@ -354,15 +350,15 @@ function assertManifestSemantics(manifest: LocalIdentityManifestV1): void {
     manifest.installation.organization_id !== organizationId ||
     manifest.installation.membership_id !== manifest.membership.membership_id
   ) {
-    throw new Error('identity manifest has an inconsistent identity graph');
+    throw new Error("identity manifest has an inconsistent identity graph");
   }
   for (const [label, timestamp] of [
-    ['identity manifest created_at', manifest.created_at],
-    ['identity organization created_at', manifest.organization.created_at],
-    ['identity membership valid_from', manifest.membership.valid_from],
-    ['identity installation enrolled_at', manifest.installation.enrolled_at],
+    ["identity manifest created_at", manifest.created_at],
+    ["identity organization created_at", manifest.organization.created_at],
+    ["identity membership valid_from", manifest.membership.valid_from],
+    ["identity installation enrolled_at", manifest.installation.enrolled_at],
     [
-      'identity legacy cutover declared_at',
+      "identity legacy cutover declared_at",
       manifest.legacy_cutover.declared_at,
     ],
   ] as const) {
@@ -374,37 +370,37 @@ function assertManifestSemantics(manifest: LocalIdentityManifestV1): void {
   const claimIds = new Set<string>();
   for (const claim of manifest.identity_claims) {
     if (claimIds.has(claim.claim_id)) {
-      throw new Error('identity manifest contains duplicate claim IDs');
+      throw new Error("identity manifest contains duplicate claim IDs");
     }
     claimIds.add(claim.claim_id);
     assertUtcMillisecondTimestamp(
       claim.verification.verified_at,
-      'identity claim verified_at',
+      "identity claim verified_at",
     );
     if (
       claim.principal_id !== manifest.principal.principal_id ||
       claim.verification.verified_at > manifest.created_at
     ) {
       throw new Error(
-        'identity manifest contains a claim outside its principal or chronology',
+        "identity manifest contains a claim outside its principal or chronology",
       );
     }
     if (
-      claim.verification.method === 'slack_dm_challenge' &&
-      (claim.issuer.kind !== 'provider' ||
-        claim.issuer.provider !== 'slack' ||
-        claim.subject.kind !== 'user' ||
-        claim.verification.assurance !== 'provider_challenge_observed')
+      claim.verification.method === "slack_dm_challenge" &&
+      (claim.issuer.kind !== "provider" ||
+        claim.issuer.provider !== "slack" ||
+        claim.subject.kind !== "user" ||
+        claim.verification.assurance !== "provider_challenge_observed")
     ) {
-      throw new Error('identity manifest contains an invalid Slack claim');
+      throw new Error("identity manifest contains an invalid Slack claim");
     }
     if (
-      claim.verification.method === 'oidc_id_token' &&
-      (claim.issuer.kind !== 'oidc' ||
-        claim.subject.kind !== 'oidc_sub' ||
-        claim.verification.assurance !== 'provider_verified')
+      claim.verification.method === "oidc_id_token" &&
+      (claim.issuer.kind !== "oidc" ||
+        claim.subject.kind !== "oidc_sub" ||
+        claim.verification.assurance !== "provider_verified")
     ) {
-      throw new Error('identity manifest contains an invalid OIDC claim');
+      throw new Error("identity manifest contains an invalid OIDC claim");
     }
   }
 }
@@ -422,16 +418,16 @@ function verifiedEnrollmentMaterial(input: {
   policySha256: Sha256Digest;
 } {
   const manifest = validatedDocumentSnapshot<LocalIdentityManifestV1>(
-    'local-identity-manifest',
+    "local-identity-manifest",
     input.manifest,
-    'organization enrollment identity manifest',
+    "organization enrollment identity manifest",
   );
   assertManifestSemantics(manifest);
   const publicKey = verifiedManifestPublicKey(manifest);
   const policy = validatedDocumentSnapshot<PublicationPolicyV1>(
-    'publication-policy',
+    "publication-policy",
     input.publication_policy,
-    'organization enrollment publication policy',
+    "organization enrollment publication policy",
   );
   if (
     policy.organization_id !== manifest.organization.organization_id ||
@@ -441,7 +437,7 @@ function verifiedEnrollmentMaterial(input: {
     policy.issued_by.key_id !== manifest.installation.signing_key.key_id
   ) {
     throw new Error(
-      'organization enrollment policy does not match its identity manifest',
+      "organization enrollment policy does not match its identity manifest",
     );
   }
   verifySignedDocument(
@@ -465,39 +461,39 @@ function verifiedEnrollmentMaterial(input: {
 function snapshotIngestBatch(
   input: OrganizationIngestBatchV1,
 ): OrganizationIngestBatchV1 {
-  if (typeof input !== 'object' || input === null || Array.isArray(input)) {
-    throw new Error('organization ingest batch must be an object');
+  if (typeof input !== "object" || input === null || Array.isArray(input)) {
+    throw new Error("organization ingest batch must be an object");
   }
   assertExactKeys(
     input,
     [
-      'schema_version',
-      'kind',
-      'authority_id',
-      'organization_id',
-      'installation_id',
-      'enrollment_receipt_sha256',
-      'events',
+      "schema_version",
+      "kind",
+      "authority_id",
+      "organization_id",
+      "installation_id",
+      "enrollment_receipt_sha256",
+      "events",
     ],
-    'organization ingest batch',
+    "organization ingest batch",
   );
   if (
     input.schema_version !== 1 ||
-    input.kind !== 'echo-organization-ingest-batch' ||
+    input.kind !== "echo-organization-ingest-batch" ||
     !Array.isArray(input.events) ||
     input.events.length === 0 ||
     input.events.length > MAX_INGEST_EVENTS
   ) {
-    throw new Error('organization ingest batch is invalid or empty');
+    throw new Error("organization ingest batch is invalid or empty");
   }
   let canonicalBytes = 0;
   const events = input.events.map((event) => {
-    if (typeof event !== 'string') {
-      throw new Error('organization ingest batch events must be text');
+    if (typeof event !== "string") {
+      throw new Error("organization ingest batch events must be text");
     }
     canonicalBytes += Buffer.byteLength(event);
     if (canonicalBytes > MAX_INGEST_CANONICAL_BYTES) {
-      throw new Error('organization ingest batch exceeds the byte limit');
+      throw new Error("organization ingest batch exceeds the byte limit");
     }
     return event;
   });
@@ -513,22 +509,19 @@ function snapshotIngestBatch(
 }
 
 function asMembership(row: MembershipRow): ProvisionedMembership {
-  assertFederationId(row.organization_id, 'org', 'stored organization');
-  assertFederationId(row.principal_id, 'prn', 'stored principal');
-  assertFederationId(row.membership_id, 'mem', 'stored membership');
-  if (!Number.isSafeInteger(row.version) || row.version < 1) {
-    throw new Error('stored membership version is invalid');
-  }
+  assertFederationId(row.organization_id, "org", "stored organization");
+  assertFederationId(row.principal_id, "prn", "stored principal");
+  assertFederationId(row.membership_id, "mem", "stored membership");
   return { ...row };
 }
 
 function begin(database: Database.Database): void {
-  database.exec('BEGIN IMMEDIATE');
+  database.exec("BEGIN IMMEDIATE");
 }
 
 function rollback(database: Database.Database): void {
   try {
-    database.exec('ROLLBACK');
+    database.exec("ROLLBACK");
   } catch {
     // Preserve the operation failure if SQLite already rolled back.
   }
@@ -548,55 +541,35 @@ function assertManifestCoordinates(
     installation.membership_id !== membership.membership_id ||
     manifest.integrity.key_id !== installation.signing_key.key_id
   ) {
-    throw new Error('identity manifest graph is inconsistent');
+    throw new Error("identity manifest graph is inconsistent");
   }
 }
 
-function assertChallengeBindings(
-  challenge: OrganizationEnrollmentChallengeV1,
+function assertEnrollmentRequestBindings(
+  request: OrganizationEnrollmentRequestV1,
   descriptor: OrganizationAuthorityDescriptorV1,
   manifest: LocalIdentityManifestV1,
   policy: PublicationPolicyV1,
+  grantSha256: Sha256Digest,
 ): void {
   if (
-    challenge.authority_id !== descriptor.authority_id ||
-    challenge.organization_id !== descriptor.organization_id ||
-    challenge.organization_id !== manifest.organization.organization_id ||
-    challenge.principal_id !== manifest.principal.principal_id ||
-    challenge.membership_id !== manifest.membership.membership_id ||
-    challenge.installation_id !== manifest.installation.installation_id ||
-    challenge.installation_key_id !==
-      manifest.installation.signing_key.key_id ||
-    challenge.identity_manifest_id !== manifest.manifest_id ||
-    challenge.identity_manifest_sha256 !== canonicalSha256(manifest) ||
-    challenge.publication_policy_id !== policy.policy_id ||
-    challenge.publication_policy_version !== policy.version ||
-    challenge.publication_policy_sha256 !== canonicalSha256(policy)
+    request.enrollment_grant_sha256 !== grantSha256 ||
+    request.authority_id !== descriptor.authority_id ||
+    request.organization_id !== descriptor.organization_id ||
+    request.organization_id !== manifest.organization.organization_id ||
+    request.principal_id !== manifest.principal.principal_id ||
+    request.membership_id !== manifest.membership.membership_id ||
+    request.installation_id !== manifest.installation.installation_id ||
+    request.installation_key_id !== manifest.installation.signing_key.key_id ||
+    request.identity_manifest_id !== manifest.manifest_id ||
+    request.identity_manifest_sha256 !== canonicalSha256(manifest) ||
+    request.publication_policy_id !== policy.policy_id ||
+    request.publication_policy_version !== policy.version ||
+    request.publication_policy_sha256 !== canonicalSha256(policy)
   ) {
-    throw new Error('enrollment challenge binding does not match the manifest');
-  }
-}
-
-function assertProofBindings(
-  proof: OrganizationEnrollmentProofV1,
-  challenge: OrganizationEnrollmentChallengeV1,
-): void {
-  if (
-    proof.challenge_id !== challenge.challenge_id ||
-    proof.challenge_sha256 !== canonicalSha256(challenge) ||
-    proof.authority_id !== challenge.authority_id ||
-    proof.organization_id !== challenge.organization_id ||
-    proof.principal_id !== challenge.principal_id ||
-    proof.membership_id !== challenge.membership_id ||
-    proof.installation_id !== challenge.installation_id ||
-    proof.installation_key_id !== challenge.installation_key_id ||
-    proof.identity_manifest_id !== challenge.identity_manifest_id ||
-    proof.identity_manifest_sha256 !== challenge.identity_manifest_sha256 ||
-    proof.publication_policy_id !== challenge.publication_policy_id ||
-    proof.publication_policy_version !== challenge.publication_policy_version ||
-    proof.publication_policy_sha256 !== challenge.publication_policy_sha256
-  ) {
-    throw new Error('enrollment proof does not answer the exact challenge');
+    throw new Error(
+      "organization enrollment request does not bind the supplied material",
+    );
   }
 }
 
@@ -627,7 +600,7 @@ function assertCompleteContiguousGroups(
         completed.add(currentId);
       }
       if (completed.has(approvalId)) {
-        throw new Error('ingest approval groups must be contiguous');
+        throw new Error("ingest approval groups must be contiguous");
       }
       currentId = approvalId;
       current = [];
@@ -639,25 +612,25 @@ function assertCompleteContiguousGroups(
 
 function incomingChainReason(
   events: readonly ParsedIncomingEvent[],
-): OrgIngestReason | null {
+): OrganizationIngestConflictReason | null {
   const eventIds = new Set<string>();
   const recordIds = new Set<string>();
   for (let index = 0; index < events.length; index += 1) {
     const current = events[index]!;
     const event = current.envelope;
-    if (eventIds.has(event.event_id)) return 'event_id_conflict';
-    if (recordIds.has(event.record.record_id)) return 'record_id_conflict';
+    if (eventIds.has(event.event_id)) return "event_id_conflict";
+    if (recordIds.has(event.record.record_id)) return "record_id_conflict";
     eventIds.add(event.event_id);
     recordIds.add(event.record.record_id);
     if (index > 0) {
       const previous = events[index - 1]!;
       if (event.sequence !== previous.envelope.sequence + 1) {
         return event.sequence > previous.envelope.sequence + 1
-          ? 'sequence_gap'
-          : 'sequence_fork';
+          ? "sequence_gap"
+          : "sequence_fork";
       }
       if (event.previous_event_hash !== previous.event_sha256) {
-        return 'previous_event_hash_mismatch';
+        return "previous_event_hash_mismatch";
       }
     }
   }
@@ -668,8 +641,8 @@ function parseStoredReceipt(
   raw: string,
   descriptor: OrganizationAuthorityDescriptorV1,
 ): OrganizationEnrollmentReceiptV1 {
-  const receipt = validateFederationDocument<OrganizationEnrollmentReceiptV1>(
-    'organization-enrollment-receipt',
+  const receipt = validateN2Document<OrganizationEnrollmentReceiptV1>(
+    "organization-enrollment-receipt",
     parseCanonicalJson(raw),
   );
   verifySignedDocument(
@@ -682,7 +655,7 @@ function parseStoredReceipt(
 
 function publicationSnapshot(
   event: FederatedEventV1,
-): PublicationPolicyV1['publication'] {
+): PublicationPolicyV1["publication"] {
   return {
     payload_scope: event.publication.payload_scope,
     audience: event.publication.audience,
@@ -695,16 +668,16 @@ function publicationSnapshot(
 
 function identityOwnsConnection(
   manifest: LocalIdentityManifestV1,
-  owner: FederatedEventV1['source']['connection']['owner'],
+  owner: FederatedEventV1["source"]["connection"]["owner"],
 ): boolean {
-  return owner.kind === 'organization'
+  return owner.kind === "organization"
     ? owner.id === manifest.organization.organization_id
     : owner.id === manifest.membership.membership_id;
 }
 
 function copiedSlackReasonDigest(reason: string): Sha256Digest {
   return canonicalSha256({
-    domain: 'echo.slack-copied-reason.v1',
+    domain: "echo.slack-copied-reason.v1",
     text: reason,
   });
 }
@@ -718,7 +691,7 @@ function assertApprovalSemantics(
     approval.approver.principal_id !== manifest.principal.principal_id ||
     approval.approver.membership_id !== manifest.membership.membership_id
   ) {
-    throw new Error('ingest event approval actor belongs to another identity');
+    throw new Error("ingest event approval actor belongs to another identity");
   }
   if (approval.surface === null) {
     if (
@@ -727,7 +700,7 @@ function assertApprovalSemantics(
         event.producer.installation_id ||
       approval.raw_actor_assertion.observed_at !== approval.reviewed_at
     ) {
-      throw new Error('ingest event has an invalid CLI approval actor');
+      throw new Error("ingest event has an invalid CLI approval actor");
     }
     return;
   }
@@ -745,13 +718,13 @@ function assertApprovalSemantics(
     !identityOwnsConnection(manifest, surface.connection.owner)
   ) {
     throw new Error(
-      'ingest event Slack publication and observation snapshots diverge',
+      "ingest event Slack publication and observation snapshots diverge",
     );
   }
   const configuredChannel =
-    surface.binding.configuration_snapshot['channel_id'];
+    surface.binding.configuration_snapshot["channel_id"];
   const configuredApprovalReaction =
-    surface.binding.configuration_snapshot['approve_reaction'];
+    surface.binding.configuration_snapshot["approve_reaction"];
   const reasonReply = approval.raw_actor_assertion.reason_reply;
   const claim = manifest.identity_claims.find(
     (candidate) => candidate.claim_id === approval.approver.claim_id,
@@ -759,14 +732,14 @@ function assertApprovalSemantics(
   if (
     claim === undefined ||
     claim.principal_id !== approval.approver.principal_id ||
-    claim.issuer.kind !== 'provider' ||
-    claim.issuer.provider !== 'slack' ||
+    claim.issuer.kind !== "provider" ||
+    claim.issuer.provider !== "slack" ||
     claim.issuer.tenant_id !== approval.raw_actor_assertion.tenant_id ||
-    claim.subject.kind !== 'user' ||
+    claim.subject.kind !== "user" ||
     claim.subject.id !== approval.raw_actor_assertion.subject_id ||
-    claim.verification.method !== 'slack_dm_challenge' ||
-    claim.verification.assurance !== 'provider_challenge_observed' ||
-    approval.assurance !== 'provider_challenge_observed' ||
+    claim.verification.method !== "slack_dm_challenge" ||
+    claim.verification.assurance !== "provider_challenge_observed" ||
+    approval.assurance !== "provider_challenge_observed" ||
     claim.verification.verified_at > approval.reviewed_at ||
     surface.connection.provider_identity.team_id !==
       approval.raw_actor_assertion.tenant_id ||
@@ -785,7 +758,7 @@ function assertApprovalSemantics(
         approval.reason === null ||
         reasonReply.text_sha256 !== copiedSlackReasonDigest(approval.reason)))
   ) {
-    throw new Error('ingest event has invalid Slack approval evidence');
+    throw new Error("ingest event has invalid Slack approval evidence");
   }
 }
 
@@ -809,7 +782,7 @@ function assertEventSemantics(
     event.processor.generated_at > event.occurred_at
   ) {
     throw new Error(
-      'ingest event source, processor, or approval chronology is inconsistent',
+      "ingest event source, processor, or approval chronology is inconsistent",
     );
   }
   if (
@@ -826,7 +799,7 @@ function assertEventSemantics(
       canonicalJson(policy.publication)
   ) {
     throw new Error(
-      'ingest event does not match its registered publication policy',
+      "ingest event does not match its registered publication policy",
     );
   }
   assertApprovalSemantics(event, manifest);
@@ -840,72 +813,37 @@ export class OrganizationAuthorityStore {
   private readonly database: Database.Database;
   private readonly signer: OrganizationAuthoritySigner;
   private readonly clock: () => string;
-  private readonly idFactory: (
-    prefix: AuthorityGeneratedIdPrefix,
-  ) => FederationId;
-  private readonly nonceFactory: (size: number) => Buffer;
   private operationTail: Promise<void> = Promise.resolve();
   private closed = false;
 
-  constructor(options: OrganizationAuthorityStoreOptions);
-  constructor(
-    databasePath: string,
-    signer: OrganizationAuthoritySigner,
-    options?: Omit<
-      OrganizationAuthorityStoreOptions,
-      'databasePath' | 'signer'
-    >,
-  );
-  constructor(
-    optionsOrPath: OrganizationAuthorityStoreOptions | string,
-    suppliedSigner?: OrganizationAuthoritySigner,
-    overrides: Omit<
-      OrganizationAuthorityStoreOptions,
-      'databasePath' | 'signer'
-    > = {},
-  ) {
-    const options =
-      typeof optionsOrPath === 'string'
-        ? {
-            databasePath: optionsOrPath,
-            signer: suppliedSigner,
-            ...overrides,
-          }
-        : optionsOrPath;
-    if (options.signer === undefined) {
-      throw new Error('organization authority signer is required');
-    }
+  constructor(options: OrganizationAuthorityStoreOptions) {
     const databasePath = options.databasePath;
-    if (databasePath !== ':memory:') {
+    if (databasePath !== ":memory:") {
       mkdirSync(dirname(databasePath), { recursive: true });
       if (existsSync(databasePath)) {
         const state = lstatSync(databasePath);
         if (state.isSymbolicLink() || !state.isFile()) {
           throw new Error(
-            'organization authority database must be a regular file',
+            "organization authority database must be a regular file",
           );
         }
       }
     }
     this.database = new Database(databasePath);
-    if (databasePath !== ':memory:') chmodSync(databasePath, 0o600);
-    this.database.pragma('journal_mode = WAL');
-    this.database.pragma('synchronous = FULL');
-    this.database.pragma('foreign_keys = ON');
-    this.database.pragma('busy_timeout = 5000');
+    if (databasePath !== ":memory:") chmodSync(databasePath, 0o600);
+    this.database.pragma("journal_mode = WAL");
+    this.database.pragma("synchronous = FULL");
+    this.database.pragma("foreign_keys = ON");
+    this.database.pragma("busy_timeout = 5000");
     migrate(this.database, MIGRATIONS_DIR);
     this.signer = options.signer;
     this.clock = options.now ?? (() => new Date().toISOString());
-    this.idFactory =
-      options.createId ??
-      ((prefix) => federationId(prefix as FederationIdPrefix));
-    this.nonceFactory = options.createNonce ?? randomBytes;
   }
 
   private runExclusive<T>(operation: () => Promise<T> | T): Promise<T> {
     const result = this.operationTail.then(async () => {
       if (this.closed)
-        throw new Error('organization authority store is closed');
+        throw new Error("organization authority store is closed");
       return operation();
     });
     this.operationTail = result.then(
@@ -922,7 +860,7 @@ export class OrganizationAuthorityStore {
   }
 
   private nextId(prefix: AuthorityGeneratedIdPrefix): FederationId {
-    const value = this.idFactory(prefix);
+    const value = federationId(prefix as FederationIdPrefix);
     assertFederationId(value, prefix, `generated ${prefix} identifier`);
     return value;
   }
@@ -948,7 +886,7 @@ export class OrganizationAuthorityStore {
           inspected.authority_id,
           inspected.organization_id,
           descriptorJson,
-          this.currentTime('authority initialization time'),
+          this.currentTime("authority initialization time"),
         );
     } else if (
       existing.authority_id !== inspected.authority_id ||
@@ -956,7 +894,7 @@ export class OrganizationAuthorityStore {
       existing.descriptor_json !== descriptorJson
     ) {
       throw new Error(
-        'organization authority signer differs from stored authority',
+        "organization authority signer differs from stored authority",
       );
     }
     return inspected;
@@ -965,7 +903,7 @@ export class OrganizationAuthorityStore {
   private async authorityDocument<T extends object>(
     descriptor: OrganizationAuthorityDescriptorV1,
     payload: T,
-  ): Promise<T & { integrity: OrgIngestReceiptV1['integrity'] }> {
+  ): Promise<T & { integrity: OrganizationBatchReceiptV1["integrity"] }> {
     return createSignedDocumentWithKey(
       payload,
       descriptor.signing_key.key_id,
@@ -973,41 +911,34 @@ export class OrganizationAuthorityStore {
     );
   }
 
-  async getDescriptor(): Promise<OrganizationAuthorityDescriptorV1> {
-    return this.runExclusive(async () =>
-      canonicalClone(await this.authority()),
-    );
-  }
-
   async provisionOrganization(
     request: ProvisionOrganizationRequest,
   ): Promise<ProvisionedMembership> {
     const snapshot = canonicalClone(request);
-    assertFederationId(snapshot.organization_id, 'org', 'organization');
-    assertFederationId(snapshot.principal_id, 'prn', 'first principal');
-    assertFederationId(snapshot.membership_id, 'mem', 'first membership');
-    assertNonempty(snapshot.display_name, 'organization display name');
-    assertNonempty(snapshot.principal_display_name, 'principal display name');
-    assertUtcMillisecondTimestamp(snapshot.provisioned_at, 'provisioning time');
+    assertFederationId(snapshot.organization_id, "org", "organization");
+    assertFederationId(snapshot.principal_id, "prn", "first principal");
+    assertFederationId(snapshot.membership_id, "mem", "first membership");
+    assertNonempty(snapshot.display_name, "organization display name");
+    assertNonempty(snapshot.principal_display_name, "principal display name");
+    assertUtcMillisecondTimestamp(snapshot.provisioned_at, "provisioning time");
     return this.runExclusive(async () => {
       const descriptor = await this.authority();
       if (snapshot.organization_id !== descriptor.organization_id) {
-        throw new Error('provisioned organization does not match authority');
+        throw new Error("provisioned organization does not match authority");
       }
       begin(this.database);
       try {
         const organization = this.database
           .prepare(
-            'SELECT * FROM authority_organizations WHERE organization_id = ?',
+            "SELECT * FROM authority_organizations WHERE organization_id = ?",
           )
           .get(snapshot.organization_id) as OrganizationRow | undefined;
         if (organization === undefined) {
           this.database
             .prepare(
               `INSERT INTO authority_organizations (
-                 organization_id, display_name, status, policy_version,
-                 provisioned_at, revoked_at
-               ) VALUES (?, ?, 'active', 1, ?, NULL)`,
+                 organization_id, display_name, provisioned_at
+               ) VALUES (?, ?, ?)`,
             )
             .run(
               snapshot.organization_id,
@@ -1016,24 +947,22 @@ export class OrganizationAuthorityStore {
             );
         } else if (
           organization.display_name !== snapshot.display_name ||
-          organization.provisioned_at !== snapshot.provisioned_at ||
-          organization.status !== 'active' ||
-          organization.policy_version !== 1
+          organization.provisioned_at !== snapshot.provisioned_at
         ) {
-          throw new Error('organization is already provisioned differently');
+          throw new Error("organization is already provisioned differently");
         }
         this.ensurePrincipalAndMembership(
           {
             principal_id: snapshot.principal_id,
             principal_display_name: snapshot.principal_display_name,
             membership_id: snapshot.membership_id,
-            membership_type: 'owner',
+            membership_type: "owner",
             provisioned_at: snapshot.provisioned_at,
           },
           snapshot.organization_id,
         );
         const result = this.membershipRow(snapshot.membership_id)!;
-        this.database.exec('COMMIT');
+        this.database.exec("COMMIT");
         return asMembership(result);
       } catch (error) {
         rollback(this.database);
@@ -1046,23 +975,21 @@ export class OrganizationAuthorityStore {
     request: ProvisionMembershipRequest,
   ): Promise<ProvisionedMembership> {
     const snapshot = canonicalClone(request);
-    assertFederationId(snapshot.principal_id, 'prn', 'principal');
-    assertFederationId(snapshot.membership_id, 'mem', 'membership');
-    assertNonempty(snapshot.principal_display_name, 'principal display name');
-    assertUtcMillisecondTimestamp(snapshot.provisioned_at, 'provisioning time');
+    assertFederationId(snapshot.principal_id, "prn", "principal");
+    assertFederationId(snapshot.membership_id, "mem", "membership");
+    assertNonempty(snapshot.principal_display_name, "principal display name");
+    assertUtcMillisecondTimestamp(snapshot.provisioned_at, "provisioning time");
     return this.runExclusive(async () => {
       const descriptor = await this.authority();
       begin(this.database);
       try {
         const organization = this.organizationRow(descriptor.organization_id);
-        if (organization === undefined || organization.status !== 'active') {
-          throw new Error(
-            'organization must be active before provisioning membership',
-          );
+        if (organization === undefined) {
+          throw new Error("organization must exist before provisioning membership");
         }
         this.ensurePrincipalAndMembership(snapshot, descriptor.organization_id);
         const result = this.membershipRow(snapshot.membership_id)!;
-        this.database.exec('COMMIT');
+        this.database.exec("COMMIT");
         return asMembership(result);
       } catch (error) {
         rollback(this.database);
@@ -1105,7 +1032,7 @@ export class OrganizationAuthorityStore {
       principal.organization_id !== organizationId ||
       principal.display_name !== request.principal_display_name
     ) {
-      throw new Error('principal is already provisioned differently');
+      throw new Error("principal is already provisioned differently");
     }
     const membership = this.membershipRow(request.membership_id);
     if (membership === undefined) {
@@ -1113,8 +1040,8 @@ export class OrganizationAuthorityStore {
         .prepare(
           `INSERT INTO authority_memberships (
              membership_id, organization_id, principal_id, membership_type,
-             status, version, provisioned_at, revoked_at, revocation_reason
-           ) VALUES (?, ?, ?, ?, 'active', 1, ?, NULL, NULL)`,
+             status, provisioned_at, revoked_at, revocation_reason
+           ) VALUES (?, ?, ?, ?, 'active', ?, NULL, NULL)`,
         )
         .run(
           request.membership_id,
@@ -1128,37 +1055,36 @@ export class OrganizationAuthorityStore {
       membership.principal_id !== request.principal_id ||
       membership.membership_type !== request.membership_type ||
       membership.provisioned_at !== request.provisioned_at ||
-      membership.status !== 'active' ||
-      membership.version !== 1
+      membership.status !== "active"
     ) {
-      throw new Error('membership is already provisioned differently');
+      throw new Error("membership is already provisioned differently");
     }
   }
 
   private organizationRow(organizationId: string): OrganizationRow | undefined {
     return this.database
       .prepare(
-        'SELECT * FROM authority_organizations WHERE organization_id = ?',
+        "SELECT * FROM authority_organizations WHERE organization_id = ?",
       )
       .get(organizationId) as OrganizationRow | undefined;
   }
 
   private membershipRow(membershipId: string): MembershipRow | undefined {
     return this.database
-      .prepare('SELECT * FROM authority_memberships WHERE membership_id = ?')
+      .prepare("SELECT * FROM authority_memberships WHERE membership_id = ?")
       .get(membershipId) as MembershipRow | undefined;
   }
 
   private principalRow(principalId: string): PrincipalRow | undefined {
     return this.database
-      .prepare('SELECT * FROM authority_principals WHERE principal_id = ?')
+      .prepare("SELECT * FROM authority_principals WHERE principal_id = ?")
       .get(principalId) as PrincipalRow | undefined;
   }
 
   private installationRow(installationId: string): InstallationRow | undefined {
     return this.database
       .prepare(
-        'SELECT * FROM authority_installations WHERE installation_id = ?',
+        "SELECT * FROM authority_installations WHERE installation_id = ?",
       )
       .get(installationId) as InstallationRow | undefined;
   }
@@ -1168,31 +1094,25 @@ export class OrganizationAuthorityStore {
     manifest: LocalIdentityManifestV1,
     policy: PublicationPolicyV1,
     evaluatedAt: string,
-  ): { organization: OrganizationRow; membership: MembershipRow } {
+  ): void {
     assertManifestCoordinates(descriptor, manifest);
     const organization = this.organizationRow(descriptor.organization_id);
     const principal = this.principalRow(manifest.principal.principal_id);
     const membership = this.membershipRow(manifest.membership.membership_id);
     if (
       organization === undefined ||
-      organization.status !== 'active' ||
       organization.display_name !== manifest.organization.display_name ||
       principal === undefined ||
       principal.organization_id !== descriptor.organization_id ||
       principal.display_name !== manifest.principal.display_name ||
       membership === undefined ||
-      membership.status !== 'active' ||
+      membership.status !== "active" ||
       membership.organization_id !== descriptor.organization_id ||
       membership.principal_id !== manifest.principal.principal_id ||
       membership.membership_type !== manifest.membership.type
     ) {
       throw new Error(
-        'identity manifest does not match active preprovisioned authority facts',
-      );
-    }
-    if (policy.version !== organization.policy_version) {
-      throw new Error(
-        'publication policy is not the active authority policy version',
+        "identity manifest does not match active preprovisioned authority facts",
       );
     }
     if (
@@ -1200,24 +1120,24 @@ export class OrganizationAuthorityStore {
       policy.effective_at > evaluatedAt
     ) {
       throw new Error(
-        'publication policy is outside its manifest and authority chronology',
+        "publication policy is outside its manifest and authority chronology",
       );
     }
     if (
-      policy.publication.audience.scope === 'organization' &&
+      policy.publication.audience.scope === "organization" &&
       (policy.publication.audience.subjects.length !== 1 ||
-        policy.publication.audience.subjects[0]?.kind !== 'organization' ||
+        policy.publication.audience.subjects[0]?.kind !== "organization" ||
         policy.publication.audience.subjects[0].id !==
           descriptor.organization_id)
     ) {
       throw new Error(
-        'organization publication audience must name exactly the authority organization',
+        "organization publication audience must name exactly the authority organization",
       );
     }
     for (const subject of policy.publication.audience.subjects) {
-      if (subject.kind === 'organization') {
+      if (subject.kind === "organization") {
         if (subject.id !== descriptor.organization_id) {
-          throw new Error('publication policy audience crosses organizations');
+          throw new Error("publication policy audience crosses organizations");
         }
         continue;
       }
@@ -1225,55 +1145,53 @@ export class OrganizationAuthorityStore {
       if (
         audienceMembership === undefined ||
         audienceMembership.organization_id !== descriptor.organization_id ||
-        audienceMembership.status !== 'active'
+        audienceMembership.status !== "active"
       ) {
         throw new Error(
-          'publication policy audience is not an active organization membership',
+          "publication policy audience is not an active organization membership",
         );
       }
     }
-    return { organization, membership };
   }
 
   async issueEnrollmentGrant(
     membershipId: FederationId,
     request: IssueEnrollmentGrantRequest,
   ): Promise<IssuedEnrollmentGrant> {
-    assertFederationId(membershipId, 'mem', 'enrollment grant membership');
+    assertFederationId(membershipId, "mem", "enrollment grant membership");
     const expiresAt = request.expires_at;
-    assertUtcMillisecondTimestamp(expiresAt, 'enrollment grant expiry');
+    assertUtcMillisecondTimestamp(expiresAt, "enrollment grant expiry");
     return this.runExclusive(async () => {
       const descriptor = await this.authority();
       begin(this.database);
       try {
-        const now = this.currentTime('enrollment grant issue time');
+        const now = this.currentTime("enrollment grant issue time");
         const lifetime = Date.parse(expiresAt) - Date.parse(now);
         const organization = this.organizationRow(descriptor.organization_id);
         const membership = this.membershipRow(membershipId);
         if (
           organization === undefined ||
-          organization.status !== 'active' ||
           membership === undefined ||
-          membership.status !== 'active' ||
+          membership.status !== "active" ||
           membership.organization_id !== descriptor.organization_id ||
           lifetime <= 0 ||
           lifetime > MAX_ENROLLMENT_GRANT_LIFETIME_MS
         ) {
           throw new Error(
-            'an active membership and a positive grant lifetime of at most 7 days are required',
+            "an active membership and a positive grant lifetime of at most 7 days are required",
           );
         }
-        const secretBytes = this.nonceFactory(32);
+        const secretBytes = randomBytes(32);
         if (!Buffer.isBuffer(secretBytes) || secretBytes.length !== 32) {
-          throw new Error('enrollment grant source must return 32 bytes');
+          throw new Error("enrollment grant source must return 32 bytes");
         }
-        const enrollmentGrant = Buffer.from(secretBytes).toString('base64');
+        const enrollmentGrant = Buffer.from(secretBytes).toString("base64");
         const grantSha = sha256Digest(Buffer.from(secretBytes));
         this.database
           .prepare(
             `INSERT INTO authority_enrollment_grants (
                grant_sha256, authority_id, organization_id, principal_id,
-               membership_id, issued_at, expires_at, consumed_at, challenge_id
+               membership_id, issued_at, expires_at, consumed_at, request_sha256
              ) VALUES (?, ?, ?, ?, ?, ?, ?, NULL, NULL)`,
           )
           .run(
@@ -1285,7 +1203,7 @@ export class OrganizationAuthorityStore {
             now,
             expiresAt,
           );
-        this.database.exec('COMMIT');
+        this.database.exec("COMMIT");
         return {
           authority_id: descriptor.authority_id,
           organization_id: descriptor.organization_id,
@@ -1302,33 +1220,47 @@ export class OrganizationAuthorityStore {
     });
   }
 
-  async issueEnrollmentChallenge(
-    request: IssueEnrollmentChallengeRequest,
-  ): Promise<OrganizationEnrollmentChallengeV1> {
-    const material = verifiedEnrollmentMaterial(request);
-    const { manifest, policy } = material;
-    const grantSha = sha256Digest(
-      enrollmentGrantBytes(request.enrollment_grant),
-    );
-    const expiresAt = request.expires_at;
-    assertUtcMillisecondTimestamp(expiresAt, 'enrollment challenge expiry');
+  async completeEnrollment(
+    input: CompleteEnrollmentRequest,
+  ): Promise<OrganizationEnrollmentReceiptV1> {
+    const enrollmentRequest =
+      validatedN2DocumentSnapshot<OrganizationEnrollmentRequestV1>(
+        "organization-enrollment-request",
+        input.enrollment_request,
+        "organization enrollment request",
+      );
+    const material = verifiedEnrollmentMaterial({
+      manifest: input.manifest,
+      publication_policy: input.publication_policy,
+    });
+    const { manifest, policy, publicKey: installationPublicKey } = material;
+    const grantSha = organizationEnrollmentGrantSha256(input.enrollment_grant);
+    const requestJson = canonicalJson(enrollmentRequest);
+    const requestSha = sha256Digest(requestJson);
+
     return this.runExclusive(async () => {
       const descriptor = await this.authority();
+      assertEnrollmentRequestBindings(
+        enrollmentRequest,
+        descriptor,
+        manifest,
+        policy,
+        grantSha,
+      );
+      verifySignedDocument(
+        enrollmentRequest,
+        installationPublicKey,
+        enrollmentRequest.installation_key_id,
+      );
+
       begin(this.database);
       try {
-        const now = this.currentTime('enrollment challenge issue time');
-        const lifetime = Date.parse(expiresAt) - Date.parse(now);
-        if (lifetime <= 0 || lifetime > MAX_CHALLENGE_LIFETIME_MS) {
-          throw new Error(
-            'a positive challenge lifetime of at most 15 minutes is required',
-          );
-        }
-        this.assertEnrollmentAuthorityFacts(descriptor, manifest, policy, now);
+        const now = this.currentTime("enrollment completion time");
         const grant = this.database
           .prepare(
             `SELECT grant_sha256, authority_id, organization_id, principal_id,
                     membership_id, issued_at, expires_at, consumed_at,
-                    challenge_id
+                    request_sha256
              FROM authority_enrollment_grants WHERE grant_sha256 = ?`,
           )
           .get(grantSha) as EnrollmentGrantRow | undefined;
@@ -1337,64 +1269,69 @@ export class OrganizationAuthorityStore {
           !matchingDigest(grant.grant_sha256, grantSha) ||
           grant.authority_id !== descriptor.authority_id ||
           grant.organization_id !== descriptor.organization_id ||
-          grant.principal_id !== manifest.principal.principal_id ||
-          grant.membership_id !== manifest.membership.membership_id
+          grant.principal_id !== enrollmentRequest.principal_id ||
+          grant.membership_id !== enrollmentRequest.membership_id
         ) {
           throw new Error(
-            'organization enrollment grant does not authorize this membership',
+            "organization enrollment grant does not authorize this membership",
           );
         }
+
         if (grant.consumed_at !== null) {
-          if (grant.challenge_id === null) {
+          if (grant.request_sha256 !== requestSha) {
             throw new Error(
-              'consumed organization enrollment grant has no challenge',
+              "organization enrollment grant was already consumed by a different request",
             );
           }
-          const existingRow = this.database
+          const row = this.database
             .prepare(
-              `SELECT challenge_json FROM authority_enrollment_challenges
-               WHERE challenge_id = ? AND grant_sha256 = ?`,
+              `SELECT request_sha256, grant_sha256, request_json,
+                      publication_policy_sha256, publication_policy_json,
+                      enrollment_receipt_sha256, enrollment_receipt_json
+               FROM authority_enrollment_requests
+               WHERE request_sha256 = ? AND grant_sha256 = ?`,
             )
-            .get(grant.challenge_id, grantSha) as
-            { challenge_json: string } | undefined;
-          if (existingRow === undefined) {
+            .get(requestSha, grantSha) as EnrollmentRequestRow | undefined;
+          if (
+            row === undefined ||
+            row.request_json !== requestJson ||
+            row.publication_policy_sha256 !== material.policySha256 ||
+            row.publication_policy_json !== material.policyJson ||
+            row.enrollment_receipt_sha256 !==
+              sha256Digest(row.enrollment_receipt_json)
+          ) {
             throw new Error(
-              'consumed organization enrollment grant is inconsistent',
+              "stored organization enrollment request is inconsistent",
             );
           }
-          const existing =
-            validateFederationDocument<OrganizationEnrollmentChallengeV1>(
-              'organization-enrollment-challenge',
-              parseCanonicalJson(existingRow.challenge_json),
-            );
-          assertChallengeBindings(existing, descriptor, manifest, policy);
-          if (existing.expires_at !== expiresAt) {
-            throw new Error(
-              'organization enrollment grant was already consumed differently',
-            );
-          }
-          verifySignedDocument(
-            existing,
-            verifyOrganizationAuthorityDescriptor(descriptor),
-            descriptor.signing_key.key_id,
+          const existing = parseStoredReceipt(
+            row.enrollment_receipt_json,
+            descriptor,
           );
-          this.database.exec('COMMIT');
+          if (existing.request_sha256 !== requestSha) {
+            throw new Error(
+              "stored organization enrollment receipt names another request",
+            );
+          }
+          this.database.exec("COMMIT");
           return canonicalClone(existing);
         }
-        if (
-          now < grant.issued_at ||
-          now >= grant.expires_at ||
-          expiresAt > grant.expires_at
-        ) {
+
+        if (now < grant.issued_at || now >= grant.expires_at) {
           throw new Error(
-            'organization enrollment grant is not currently valid',
+            "organization enrollment grant is expired or not yet valid",
           );
         }
+        this.assertEnrollmentAuthorityFacts(
+          descriptor,
+          manifest,
+          policy,
+          now,
+        );
         if (
-          this.installationRow(manifest.installation.installation_id) !==
-          undefined
+          this.installationRow(enrollmentRequest.installation_id) !== undefined
         ) {
-          throw new Error('installation is already enrolled');
+          throw new Error("installation identifier is already enrolled");
         }
         const registeredManifest = this.database
           .prepare(
@@ -1403,251 +1340,50 @@ export class OrganizationAuthorityStore {
              LIMIT 1`,
           )
           .get(
-            manifest.manifest_id,
+            enrollmentRequest.identity_manifest_id,
             material.manifestSha256,
-            manifest.installation.signing_key.key_id,
+            enrollmentRequest.installation_key_id,
           );
         if (registeredManifest !== undefined) {
           throw new Error(
-            'identity manifest ID, digest, or key is already registered',
+            "identity manifest ID, digest, or key is already registered",
           );
         }
-        const nonce = this.nonceFactory(32);
-        if (!Buffer.isBuffer(nonce) || nonce.length !== 32) {
-          throw new Error(
-            'enrollment challenge nonce source must return 32 bytes',
-          );
-        }
-        const challenge = await this.authorityDocument(descriptor, {
+
+        const receipt = await this.authorityDocument(descriptor, {
           schema_version: 1,
-          kind: 'echo-organization-enrollment-challenge',
-          challenge_id: this.nextId('ech'),
+          kind: "echo-organization-enrollment-receipt",
+          enrollment_id: this.nextId("enr"),
           authority_id: descriptor.authority_id,
+          authority_key_id: descriptor.signing_key.key_id,
           organization_id: descriptor.organization_id,
-          principal_id: manifest.principal.principal_id,
-          membership_id: manifest.membership.membership_id,
-          installation_id: manifest.installation.installation_id,
-          installation_key_id: manifest.installation.signing_key.key_id,
-          identity_manifest_id: manifest.manifest_id,
-          identity_manifest_sha256: material.manifestSha256,
-          publication_policy_id: policy.policy_id,
-          publication_policy_version: policy.version,
-          publication_policy_sha256: material.policySha256,
-          nonce_base64: Buffer.from(nonce).toString('base64'),
-          issued_at: now,
-          expires_at: expiresAt,
+          principal_id: enrollmentRequest.principal_id,
+          membership_id: enrollmentRequest.membership_id,
+          installation_id: enrollmentRequest.installation_id,
+          installation_key_id: enrollmentRequest.installation_key_id,
+          identity_manifest_id: enrollmentRequest.identity_manifest_id,
+          identity_manifest_sha256: enrollmentRequest.identity_manifest_sha256,
+          publication_policy_id: enrollmentRequest.publication_policy_id,
+          publication_policy_version:
+            enrollmentRequest.publication_policy_version,
+          publication_policy_sha256:
+            enrollmentRequest.publication_policy_sha256,
+          request_sha256: requestSha,
+          enrolled_at: now,
         });
         const validated =
-          validateFederationDocument<OrganizationEnrollmentChallengeV1>(
-            'organization-enrollment-challenge',
-            challenge,
+          validateN2Document<OrganizationEnrollmentReceiptV1>(
+            "organization-enrollment-receipt",
+            receipt,
           );
         verifySignedDocument(
           validated,
           verifyOrganizationAuthorityDescriptor(descriptor),
           descriptor.signing_key.key_id,
         );
-        const raw = canonicalJson(validated);
-        assertFederationDocumentSize(raw, 'organization enrollment challenge');
-        this.database
-          .prepare(
-            `INSERT INTO authority_enrollment_challenges (
-               challenge_id, grant_sha256, authority_id, organization_id,
-               principal_id, membership_id, installation_id,
-               installation_key_id, identity_manifest_id,
-               identity_manifest_sha256, publication_policy_id,
-               publication_policy_version, publication_policy_sha256,
-               publication_policy_json, challenge_sha256, challenge_json,
-               issued_at, expires_at
-             ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-          )
-          .run(
-            validated.challenge_id,
-            grantSha,
-            validated.authority_id,
-            validated.organization_id,
-            validated.principal_id,
-            validated.membership_id,
-            validated.installation_id,
-            validated.installation_key_id,
-            validated.identity_manifest_id,
-            validated.identity_manifest_sha256,
-            validated.publication_policy_id,
-            validated.publication_policy_version,
-            validated.publication_policy_sha256,
-            material.policyJson,
-            canonicalSha256(validated),
-            raw,
-            validated.issued_at,
-            validated.expires_at,
-          );
-        const consumed = this.database
-          .prepare(
-            `UPDATE authority_enrollment_grants
-             SET consumed_at = ?, challenge_id = ?
-             WHERE grant_sha256 = ? AND consumed_at IS NULL`,
-          )
-          .run(now, validated.challenge_id, grantSha);
-        if (consumed.changes !== 1) {
-          throw new Error(
-            'organization enrollment grant was consumed concurrently',
-          );
-        }
-        this.database.exec('COMMIT');
-        return canonicalClone(validated);
-      } catch (error) {
-        rollback(this.database);
-        throw error;
-      }
-    });
-  }
-
-  async completeEnrollment(
-    request: CompleteEnrollmentRequest,
-  ): Promise<OrganizationEnrollmentReceiptV1> {
-    const challenge =
-      validatedDocumentSnapshot<OrganizationEnrollmentChallengeV1>(
-        'organization-enrollment-challenge',
-        request.challenge,
-        'organization enrollment challenge',
-      );
-    const proof = validatedDocumentSnapshot<OrganizationEnrollmentProofV1>(
-      'organization-enrollment-proof',
-      request.proof,
-      'organization enrollment proof',
-    );
-    const manifest = validatedDocumentSnapshot<LocalIdentityManifestV1>(
-      'local-identity-manifest',
-      request.manifest,
-      'organization enrollment identity manifest',
-    );
-    assertManifestSemantics(manifest);
-    const installationPublicKey = verifiedManifestPublicKey(manifest);
-    return this.runExclusive(async () => {
-      const descriptor = await this.authority();
-      const authorityPublicKey =
-        verifyOrganizationAuthorityDescriptor(descriptor);
-      assertProofBindings(proof, challenge);
-      verifySignedDocument(
-        challenge,
-        authorityPublicKey,
-        descriptor.signing_key.key_id,
-      );
-      verifySignedDocument(
-        proof,
-        installationPublicKey,
-        challenge.installation_key_id,
-      );
-      begin(this.database);
-      try {
-        const now = this.currentTime('enrollment completion time');
-        const row = this.database
-          .prepare(
-            'SELECT * FROM authority_enrollment_challenges WHERE challenge_id = ?',
-          )
-          .get(challenge.challenge_id) as ChallengeRow | undefined;
-        if (
-          row === undefined ||
-          row.challenge_sha256 !== canonicalSha256(challenge) ||
-          row.challenge_json !== canonicalJson(challenge)
-        ) {
-          throw new Error(
-            'enrollment challenge is unknown or differs from stored bytes',
-          );
-        }
-        assertFederationDocumentSize(
-          row.publication_policy_json,
-          'stored organization enrollment publication policy',
-        );
-        const policy = validateFederationDocument<PublicationPolicyV1>(
-          'publication-policy',
-          parseCanonicalJson(row.publication_policy_json),
-        );
-        if (
-          row.publication_policy_sha256 !==
-            sha256Digest(row.publication_policy_json) ||
-          row.publication_policy_sha256 !== challenge.publication_policy_sha256
-        ) {
-          throw new Error(
-            'stored enrollment publication policy is inconsistent',
-          );
-        }
-        verifySignedDocument(
-          policy,
-          installationPublicKey,
-          challenge.installation_key_id,
-        );
-        assertChallengeBindings(challenge, descriptor, manifest, policy);
-        const proofSha = canonicalSha256(proof);
-        if (row.consumed_at !== null) {
-          if (
-            row.proof_sha256 === proofSha &&
-            row.enrollment_receipt_json !== null &&
-            row.enrollment_receipt_sha256 ===
-              sha256Digest(row.enrollment_receipt_json)
-          ) {
-            const existing = parseStoredReceipt(
-              row.enrollment_receipt_json,
-              descriptor,
-            );
-            this.database.exec('COMMIT');
-            return canonicalClone(existing);
-          }
-          throw new Error(
-            'enrollment challenge was already consumed by different proof bytes',
-          );
-        }
-        if (now >= row.expires_at || now < challenge.issued_at) {
-          throw new Error('enrollment challenge is expired or not yet valid');
-        }
-        const { membership } = this.assertEnrollmentAuthorityFacts(
-          descriptor,
-          manifest,
-          policy,
-          now,
-        );
-        assertDigest(row.challenge_sha256, 'stored enrollment challenge');
-        const preexisting = this.installationRow(challenge.installation_id);
-        if (preexisting !== undefined) {
-          throw new Error('installation identifier is already enrolled');
-        }
-        const receipt = await this.authorityDocument(descriptor, {
-          schema_version: 1,
-          kind: 'echo-organization-enrollment-receipt',
-          enrollment_id: this.nextId('enr'),
-          authority_id: descriptor.authority_id,
-          authority_key_id: descriptor.signing_key.key_id,
-          organization_id: descriptor.organization_id,
-          principal_id: challenge.principal_id,
-          membership_id: challenge.membership_id,
-          membership_version: membership.version,
-          installation_id: challenge.installation_id,
-          installation_key_id: challenge.installation_key_id,
-          installation_version: 1,
-          identity_manifest_id: challenge.identity_manifest_id,
-          identity_manifest_sha256: challenge.identity_manifest_sha256,
-          publication_policy_id: challenge.publication_policy_id,
-          publication_policy_version: challenge.publication_policy_version,
-          publication_policy_sha256: challenge.publication_policy_sha256,
-          challenge_id: challenge.challenge_id,
-          challenge_sha256: row.challenge_sha256 as Sha256Digest,
-          proof_sha256: proofSha,
-          status: 'enrolled',
-          enrolled_at: now,
-        });
-        const validated =
-          validateFederationDocument<OrganizationEnrollmentReceiptV1>(
-            'organization-enrollment-receipt',
-            receipt,
-          );
-        verifySignedDocument(
-          validated,
-          authorityPublicKey,
-          descriptor.signing_key.key_id,
-        );
         const receiptJson = canonicalJson(validated);
         const receiptSha = sha256Digest(receiptJson);
-        const manifestJson = canonicalJson(manifest);
+
         this.database
           .prepare(
             `INSERT INTO authority_identity_manifests (
@@ -1657,14 +1393,14 @@ export class OrganizationAuthorityStore {
              ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
           )
           .run(
-            challenge.identity_manifest_id,
-            challenge.identity_manifest_sha256,
-            challenge.organization_id,
-            challenge.principal_id,
-            challenge.membership_id,
-            challenge.installation_id,
-            challenge.installation_key_id,
-            manifestJson,
+            enrollmentRequest.identity_manifest_id,
+            enrollmentRequest.identity_manifest_sha256,
+            enrollmentRequest.organization_id,
+            enrollmentRequest.principal_id,
+            enrollmentRequest.membership_id,
+            enrollmentRequest.installation_id,
+            enrollmentRequest.installation_key_id,
+            material.manifestJson,
             now,
           );
         this.database
@@ -1675,14 +1411,14 @@ export class OrganizationAuthorityStore {
              ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
           )
           .run(
-            challenge.publication_policy_id,
-            challenge.publication_policy_version,
-            challenge.publication_policy_sha256,
-            challenge.organization_id,
-            challenge.identity_manifest_id,
-            challenge.installation_id,
-            challenge.installation_key_id,
-            row.publication_policy_json,
+            enrollmentRequest.publication_policy_id,
+            enrollmentRequest.publication_policy_version,
+            enrollmentRequest.publication_policy_sha256,
+            enrollmentRequest.organization_id,
+            enrollmentRequest.identity_manifest_id,
+            enrollmentRequest.installation_id,
+            enrollmentRequest.installation_key_id,
+            material.policyJson,
             now,
           );
         this.database
@@ -1694,43 +1430,59 @@ export class OrganizationAuthorityStore {
                publication_policy_id, publication_policy_version,
                publication_policy_sha256,
                enrollment_receipt_sha256, enrollment_receipt_json, status,
-               version, enrolled_at, revoked_at, revocation_reason,
+               enrolled_at, revoked_at, revocation_reason,
                last_sequence, last_event_hash
-             ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'active', 1, ?, NULL, NULL, 0, NULL)`,
+             ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'active', ?, NULL, NULL, 0, NULL)`,
           )
           .run(
-            challenge.installation_id,
-            challenge.organization_id,
-            challenge.principal_id,
-            challenge.membership_id,
-            challenge.installation_key_id,
+            enrollmentRequest.installation_id,
+            enrollmentRequest.organization_id,
+            enrollmentRequest.principal_id,
+            enrollmentRequest.membership_id,
+            enrollmentRequest.installation_key_id,
             manifest.installation.signing_key.public_key_spki_der_base64,
-            challenge.identity_manifest_id,
-            challenge.identity_manifest_sha256,
-            manifestJson,
-            challenge.publication_policy_id,
-            challenge.publication_policy_version,
-            challenge.publication_policy_sha256,
+            enrollmentRequest.identity_manifest_id,
+            enrollmentRequest.identity_manifest_sha256,
+            material.manifestJson,
+            enrollmentRequest.publication_policy_id,
+            enrollmentRequest.publication_policy_version,
+            enrollmentRequest.publication_policy_sha256,
             receiptSha,
             receiptJson,
             now,
           );
         this.database
           .prepare(
-            `UPDATE authority_enrollment_challenges
-             SET consumed_at = ?, proof_sha256 = ?, proof_json = ?,
-                 enrollment_receipt_sha256 = ?, enrollment_receipt_json = ?
-             WHERE challenge_id = ? AND consumed_at IS NULL`,
+            `INSERT INTO authority_enrollment_requests (
+               request_sha256, grant_sha256, request_json,
+               publication_policy_sha256, publication_policy_json,
+               enrollment_receipt_sha256, enrollment_receipt_json, enrolled_at
+             ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
           )
           .run(
-            now,
-            proofSha,
-            canonicalJson(proof),
+            requestSha,
+            grantSha,
+            requestJson,
+            material.policySha256,
+            material.policyJson,
             receiptSha,
             receiptJson,
-            challenge.challenge_id,
+            now,
           );
-        this.database.exec('COMMIT');
+        const consumed = this.database
+          .prepare(
+            `UPDATE authority_enrollment_grants
+             SET consumed_at = ?, request_sha256 = ?
+             WHERE grant_sha256 = ? AND consumed_at IS NULL`,
+          )
+          .run(now, requestSha, grantSha);
+        if (consumed.changes !== 1) {
+          throw new Error(
+            "organization enrollment grant was consumed concurrently",
+          );
+        }
+
+        this.database.exec("COMMIT");
         return canonicalClone(validated);
       } catch (error) {
         rollback(this.database);
@@ -1738,47 +1490,45 @@ export class OrganizationAuthorityStore {
       }
     });
   }
-
   async revokeMembership(
     membershipId: FederationId,
     request: RevokeAuthoritySubjectRequest,
   ): Promise<ProvisionedMembership> {
-    assertFederationId(membershipId, 'mem', 'membership');
+    assertFederationId(membershipId, "mem", "membership");
     const snapshot = canonicalClone({ reason: request.reason });
-    assertNonempty(snapshot.reason, 'membership revocation reason');
+    assertNonempty(snapshot.reason, "membership revocation reason");
     return this.runExclusive(async () => {
       const descriptor = await this.authority();
       begin(this.database);
       try {
-        const revokedAt = this.currentTime('membership revocation time');
+        const revokedAt = this.currentTime("membership revocation time");
         const row = this.membershipRow(membershipId);
         if (
           row === undefined ||
           row.organization_id !== descriptor.organization_id
         ) {
-          throw new Error('membership is not provisioned by this authority');
+          throw new Error("membership is not provisioned by this authority");
         }
-        if (row.status === 'active') {
+        if (row.status === "active") {
           if (revokedAt < row.provisioned_at) {
             throw new Error(
-              'membership revocation cannot predate provisioning',
+              "membership revocation cannot predate provisioning",
             );
           }
           this.database
             .prepare(
               `UPDATE authority_memberships
-               SET status = 'revoked', version = version + 1,
-                   revoked_at = ?, revocation_reason = ?
+               SET status = 'revoked', revoked_at = ?, revocation_reason = ?
                WHERE membership_id = ? AND status = 'active'`,
             )
             .run(revokedAt, snapshot.reason, membershipId);
         } else if (row.revocation_reason !== snapshot.reason) {
           throw new Error(
-            'membership revocation is monotonic and already differs',
+            "membership revocation is monotonic and already differs",
           );
         }
         const result = asMembership(this.membershipRow(membershipId)!);
-        this.database.exec('COMMIT');
+        this.database.exec("COMMIT");
         return result;
       } catch (error) {
         rollback(this.database);
@@ -1791,44 +1541,43 @@ export class OrganizationAuthorityStore {
     installationId: FederationId,
     request: RevokeAuthoritySubjectRequest,
   ): Promise<StoredAuthorityInstallation> {
-    assertFederationId(installationId, 'ins', 'installation');
+    assertFederationId(installationId, "ins", "installation");
     const snapshot = canonicalClone({ reason: request.reason });
-    assertNonempty(snapshot.reason, 'installation revocation reason');
+    assertNonempty(snapshot.reason, "installation revocation reason");
     return this.runExclusive(async () => {
       const descriptor = await this.authority();
       begin(this.database);
       try {
-        const revokedAt = this.currentTime('installation revocation time');
+        const revokedAt = this.currentTime("installation revocation time");
         const row = this.installationRow(installationId);
         if (
           row === undefined ||
           row.organization_id !== descriptor.organization_id
         ) {
-          throw new Error('installation is not enrolled with this authority');
+          throw new Error("installation is not enrolled with this authority");
         }
-        if (row.status === 'active') {
+        if (row.status === "active") {
           if (revokedAt < row.enrolled_at) {
             throw new Error(
-              'installation revocation cannot predate enrollment',
+              "installation revocation cannot predate enrollment",
             );
           }
           this.database
             .prepare(
               `UPDATE authority_installations
-               SET status = 'revoked', version = version + 1,
-                   revoked_at = ?, revocation_reason = ?
+               SET status = 'revoked', revoked_at = ?, revocation_reason = ?
                WHERE installation_id = ? AND status = 'active'`,
             )
             .run(revokedAt, snapshot.reason, installationId);
         } else if (row.revocation_reason !== snapshot.reason) {
           throw new Error(
-            'installation revocation is monotonic and already differs',
+            "installation revocation is monotonic and already differs",
           );
         }
         const result = this.toStoredInstallation(
           this.installationRow(installationId)!,
         );
-        this.database.exec('COMMIT');
+        this.database.exec("COMMIT");
         return result;
       } catch (error) {
         rollback(this.database);
@@ -1840,44 +1589,42 @@ export class OrganizationAuthorityStore {
   private toStoredInstallation(
     row: InstallationRow,
   ): StoredAuthorityInstallation {
-    assertFederationId(row.installation_id, 'ins', 'stored installation');
+    assertFederationId(row.installation_id, "ins", "stored installation");
     assertFederationId(
       row.organization_id,
-      'org',
-      'stored installation organization',
+      "org",
+      "stored installation organization",
     );
     assertFederationId(
       row.principal_id,
-      'prn',
-      'stored installation principal',
+      "prn",
+      "stored installation principal",
     );
     assertFederationId(
       row.membership_id,
-      'mem',
-      'stored installation membership',
+      "mem",
+      "stored installation membership",
     );
-    assertDigest(row.key_id, 'stored installation key');
-    assertDigest(row.identity_manifest_sha256, 'stored identity manifest');
+    assertDigest(row.key_id, "stored installation key");
+    assertDigest(row.identity_manifest_sha256, "stored identity manifest");
     assertFederationId(
       row.publication_policy_id,
-      'pol',
-      'stored publication policy',
+      "pol",
+      "stored publication policy",
     );
-    assertDigest(row.publication_policy_sha256, 'stored publication policy');
-    assertDigest(row.enrollment_receipt_sha256, 'stored enrollment receipt');
+    assertDigest(row.publication_policy_sha256, "stored publication policy");
+    assertDigest(row.enrollment_receipt_sha256, "stored enrollment receipt");
     if (row.last_event_hash !== null) {
-      assertDigest(row.last_event_hash, 'stored installation head hash');
+      assertDigest(row.last_event_hash, "stored installation head hash");
     }
     if (
-      !Number.isSafeInteger(row.version) ||
-      row.version < 1 ||
       !Number.isSafeInteger(row.publication_policy_version) ||
       row.publication_policy_version < 1 ||
       !Number.isSafeInteger(row.last_sequence) ||
       row.last_sequence < 0 ||
       (row.last_sequence === 0) !== (row.last_event_hash === null)
     ) {
-      throw new Error('stored installation state is invalid');
+      throw new Error("stored installation state is invalid");
     }
     return {
       installation_id: row.installation_id,
@@ -1892,7 +1639,6 @@ export class OrganizationAuthorityStore {
       publication_policy_sha256: row.publication_policy_sha256,
       enrollment_receipt_sha256: row.enrollment_receipt_sha256,
       status: row.status,
-      version: row.version,
       enrolled_at: row.enrolled_at,
       revoked_at: row.revoked_at,
       revocation_reason: row.revocation_reason,
@@ -1911,7 +1657,7 @@ export class OrganizationAuthorityStore {
   } {
     this.toStoredInstallation(installation);
     const manifest = validateFederationDocument<LocalIdentityManifestV1>(
-      'local-identity-manifest',
+      "local-identity-manifest",
       parseCanonicalJson(installation.identity_manifest_json),
     );
     if (
@@ -1922,7 +1668,7 @@ export class OrganizationAuthorityStore {
       manifest.installation.signing_key.public_key_spki_der_base64 !==
         installation.public_key_spki_der_base64
     ) {
-      throw new Error('stored enrolled identity manifest is inconsistent');
+      throw new Error("stored enrolled identity manifest is inconsistent");
     }
     const publicKey = verifiedManifestPublicKey(manifest);
     const enrollmentReceipt = parseStoredReceipt(
@@ -1950,7 +1696,7 @@ export class OrganizationAuthorityStore {
       enrollmentReceipt.publication_policy_sha256 !==
         installation.publication_policy_sha256
     ) {
-      throw new Error('stored enrollment receipt is inconsistent');
+      throw new Error("stored enrollment receipt is inconsistent");
     }
     return { manifest, publicKey, enrollmentReceipt };
   }
@@ -1965,8 +1711,8 @@ export class OrganizationAuthorityStore {
       descriptor,
     );
     const organization = this.organizationRow(installation.organization_id);
-    if (organization === undefined || organization.status !== 'active') {
-      throw new Error('ingest organization is not active');
+    if (organization === undefined) {
+      throw new Error("ingest organization does not exist");
     }
     const policyRow = this.database
       .prepare(
@@ -1989,14 +1735,14 @@ export class OrganizationAuthorityStore {
         }
       | undefined;
     if (policyRow === undefined) {
-      throw new Error('stored installation publication policy is missing');
+      throw new Error("stored installation publication policy is missing");
     }
     assertFederationDocumentSize(
       policyRow.policy_json,
-      'stored installation publication policy',
+      "stored installation publication policy",
     );
     const policy = validateFederationDocument<PublicationPolicyV1>(
-      'publication-policy',
+      "publication-policy",
       parseCanonicalJson(policyRow.policy_json),
     );
     if (
@@ -2014,7 +1760,7 @@ export class OrganizationAuthorityStore {
       policy.issued_by.installation_id !== installation.installation_id ||
       policy.issued_by.key_id !== installation.key_id
     ) {
-      throw new Error('stored installation publication policy is inconsistent');
+      throw new Error("stored installation publication policy is inconsistent");
     }
     verifySignedDocument(
       policy,
@@ -2022,9 +1768,9 @@ export class OrganizationAuthorityStore {
       installation.key_id as Sha256Digest,
     );
     const parsed = batch.events.map((raw): ParsedIncomingEvent => {
-      assertFederationDocumentSize(raw, 'organization ingest event');
+      assertFederationDocumentSize(raw, "organization ingest event");
       const envelope = validateFederationDocument<FederatedEventV1>(
-        'federated-record-envelope',
+        "federated-record-envelope",
         parseCanonicalJson(raw),
       );
       verifySignedDocument(
@@ -2056,22 +1802,15 @@ export class OrganizationAuthorityStore {
           installation.identity_manifest_id ||
         envelope.publication.signer_installation_id !==
           installation.installation_id ||
-        envelope.publication.signer_key_id !== installation.key_id ||
-        envelope.approval.approver.principal_id !== installation.principal_id ||
-        envelope.approval.approver.membership_id !== installation.membership_id
+        envelope.publication.signer_key_id !== installation.key_id
       ) {
-        throw new Error('ingest event identity does not match enrollment');
-      }
-      if (envelope.publication.version !== organization.policy_version) {
-        throw new Error(
-          'ingest event publication policy version is not active',
-        );
+        throw new Error("ingest event identity does not match enrollment");
       }
       for (const subject of envelope.publication.audience.subjects) {
-        if (subject.kind === 'organization') {
+        if (subject.kind === "organization") {
           if (subject.id !== installation.organization_id) {
             throw new Error(
-              'ingest event publication audience crosses organizations',
+              "ingest event publication audience crosses organizations",
             );
           }
           continue;
@@ -2082,18 +1821,18 @@ export class OrganizationAuthorityStore {
           audienceMembership.organization_id !== installation.organization_id
         ) {
           throw new Error(
-            'ingest event publication audience is not organization-scoped',
+            "ingest event publication audience is not organization-scoped",
           );
         }
       }
       if (
-        envelope.publication.audience.scope === 'organization' &&
+        envelope.publication.audience.scope === "organization" &&
         (envelope.publication.audience.subjects.length !== 1 ||
-          envelope.publication.audience.subjects[0]?.kind !== 'organization' ||
+          envelope.publication.audience.subjects[0]?.kind !== "organization" ||
           envelope.publication.audience.subjects[0].id !==
             installation.organization_id)
       ) {
-        throw new Error('ingest event organization audience is not canonical');
+        throw new Error("ingest event organization audience is not canonical");
       }
       assertEventSemantics(envelope, manifest, policy);
       return {
@@ -2119,7 +1858,7 @@ export class OrganizationAuthorityStore {
   private conflictReason(
     events: readonly ParsedIncomingEvent[],
     installation: InstallationRow,
-  ): OrgIngestReason | null {
+  ): OrganizationIngestConflictReason | null {
     const internalConflict = incomingChainReason(events);
     if (internalConflict !== null) return internalConflict;
     for (const incoming of events) {
@@ -2133,7 +1872,7 @@ export class OrganizationAuthorityStore {
           byEvent.event_sha256 !== incoming.event_sha256 ||
           byEvent.envelope_json !== incoming.envelope_json
         ) {
-          return 'event_id_conflict';
+          return "event_id_conflict";
         }
         continue;
       }
@@ -2144,13 +1883,13 @@ export class OrganizationAuthorityStore {
         )
         .get(installation.installation_id, expectedLocalSubjectKey(event)) as
         { event_id: string } | undefined;
-      if (byLocalSubject !== undefined) return 'local_subject_conflict';
+      if (byLocalSubject !== undefined) return "local_subject_conflict";
       const byRecord = this.database
         .prepare(
-          'SELECT event_id FROM authority_accepted_events WHERE record_id = ?',
+          "SELECT event_id FROM authority_accepted_events WHERE record_id = ?",
         )
         .get(event.record.record_id) as { event_id: string } | undefined;
-      if (byRecord !== undefined) return 'record_id_conflict';
+      if (byRecord !== undefined) return "record_id_conflict";
       const bySequence = this.database
         .prepare(
           `SELECT event_id FROM authority_accepted_events
@@ -2162,7 +1901,7 @@ export class OrganizationAuthorityStore {
         bySequence !== undefined ||
         event.sequence <= installation.last_sequence
       ) {
-        return 'sequence_fork';
+        return "sequence_fork";
       }
     }
 
@@ -2179,62 +1918,100 @@ export class OrganizationAuthorityStore {
             this.acceptedEventById(envelope.event_id) !== undefined,
         )
     ) {
-      return 'sequence_fork';
+      return "sequence_fork";
     }
     if (firstNew.envelope.sequence !== installation.last_sequence + 1) {
       return firstNew.envelope.sequence > installation.last_sequence + 1
-        ? 'sequence_gap'
-        : 'sequence_fork';
+        ? "sequence_gap"
+        : "sequence_fork";
     }
     if (
       firstNew.envelope.previous_event_hash !== installation.last_event_hash
     ) {
-      return 'previous_event_hash_mismatch';
+      return "previous_event_hash_mismatch";
     }
     return null;
   }
 
-  private async persistReceipt(
+  private parseStoredBatchReceipt(
+    row: AuthorityBatchReceiptRow,
     descriptor: OrganizationAuthorityDescriptorV1,
-    organization: OrganizationRow,
+  ): OrganizationBatchReceiptV1 {
+    assertDigest(row.batch_sha256, "stored organization ingest batch");
+    assertDigest(row.receipt_sha256, "stored organization batch receipt");
+    const batch = snapshotIngestBatch(
+      parseCanonicalJson(
+        row.batch_json,
+      ) as unknown as OrganizationIngestBatchV1,
+    );
+    if (
+      canonicalJson(batch) !== row.batch_json ||
+      sha256Digest(row.batch_json) !== row.batch_sha256
+    ) {
+      throw new Error("stored organization ingest batch row is inconsistent");
+    }
+    const receipt = validateN2Document<OrganizationBatchReceiptV1>(
+      "organization-batch-receipt",
+      parseCanonicalJson(row.receipt_json),
+    );
+    verifySignedDocument(
+      receipt,
+      verifyOrganizationAuthorityDescriptor(descriptor),
+      descriptor.signing_key.key_id,
+    );
+    if (
+      sha256Digest(row.receipt_json) !== row.receipt_sha256 ||
+      receipt.receipt_id !== row.receipt_id ||
+      receipt.authority_id !== descriptor.authority_id ||
+      receipt.authority_key_id !== descriptor.signing_key.key_id ||
+      receipt.organization_id !== descriptor.organization_id ||
+      receipt.organization_id !== row.organization_id ||
+      receipt.installation_id !== row.installation_id ||
+      receipt.installation_id !== batch.installation_id ||
+      receipt.enrollment_receipt_sha256 !== batch.enrollment_receipt_sha256 ||
+      receipt.batch_sha256 !== row.batch_sha256 ||
+      receipt.event_count !== batch.events.length ||
+      receipt.status !== row.status ||
+      receipt.server_received_at !== row.server_received_at
+    ) {
+      throw new Error("stored organization batch receipt row is inconsistent");
+    }
+    return canonicalClone(receipt);
+  }
+
+  private async persistBatchReceipt(
+    descriptor: OrganizationAuthorityDescriptorV1,
     membership: MembershipRow,
     installation: InstallationRow,
-    event: ParsedIncomingEvent,
+    batch: OrganizationIngestBatchV1,
+    batchJson: string,
     batchSha: Sha256Digest,
-    status: OrgIngestReceiptStatus,
-    reason: OrgIngestReason | null,
-    head: { last_sequence: number; last_event_hash: Sha256Digest | null },
+    status: OrganizationBatchReceiptStatus,
+    reason: OrganizationBatchRejectionReason | null,
+    previousHead: OrganizationChainHeadV1,
+    resultingHead: OrganizationChainHeadV1,
     receivedAt: string,
-  ): Promise<OrgIngestReceiptV1> {
+  ): Promise<OrganizationBatchReceiptV1> {
     const receipt = await this.authorityDocument(descriptor, {
       schema_version: 1,
-      kind: 'echo-org-ingest-receipt',
-      receipt_id: this.nextId('igr'),
+      kind: "echo-organization-batch-receipt",
+      receipt_id: this.nextId("igr"),
       authority_id: descriptor.authority_id,
       authority_key_id: descriptor.signing_key.key_id,
       organization_id: descriptor.organization_id,
       membership_id: membership.membership_id,
-      membership_version: membership.version,
       installation_id: installation.installation_id,
-      installation_version: installation.version,
       enrollment_receipt_sha256: installation.enrollment_receipt_sha256,
-      event_id: event.envelope.event_id,
-      record_id: event.envelope.record.record_id,
-      sequence: event.envelope.sequence,
-      event_sha256: event.event_sha256,
       batch_sha256: batchSha,
+      event_count: batch.events.length,
       status,
-      canonical_record_id:
-        status === 'accepted' || status === 'duplicate'
-          ? event.envelope.record.record_id
-          : null,
-      server_received_at: receivedAt,
-      policy_version: organization.policy_version,
       reason,
-      authority_head: head,
+      server_received_at: receivedAt,
+      previous_head: previousHead,
+      resulting_head: resultingHead,
     });
-    const validated = validateFederationDocument<OrgIngestReceiptV1>(
-      'org-ingest-receipt',
+    const validated = validateN2Document<OrganizationBatchReceiptV1>(
+      "organization-batch-receipt",
       receipt,
     );
     verifySignedDocument(
@@ -2243,17 +2020,19 @@ export class OrganizationAuthorityStore {
       descriptor.signing_key.key_id,
     );
     const raw = canonicalJson(validated);
-    assertFederationDocumentSize(raw, 'organization ingest receipt');
+    assertFederationDocumentSize(raw, "organization batch receipt");
     this.database
       .prepare(
-        `INSERT INTO authority_ingest_receipts (
-           receipt_id, event_id, organization_id, installation_id,
-           status, receipt_sha256, receipt_json, server_received_at
-         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+        `INSERT INTO authority_batch_receipts (
+           receipt_id, batch_sha256, batch_json, organization_id,
+           installation_id, status, receipt_sha256, receipt_json,
+           server_received_at
+         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .run(
         validated.receipt_id,
-        validated.event_id,
+        validated.batch_sha256,
+        batchJson,
         validated.organization_id,
         validated.installation_id,
         validated.status,
@@ -2266,35 +2045,51 @@ export class OrganizationAuthorityStore {
 
   async ingestBatch(
     requestedBatch: OrganizationIngestBatchV1,
-  ): Promise<readonly OrgIngestReceiptV1[]> {
+  ): Promise<OrganizationBatchReceiptV1> {
     const batch = snapshotIngestBatch(requestedBatch);
-    assertFederationId(batch.authority_id, 'oau', 'ingest authority');
-    assertFederationId(batch.organization_id, 'org', 'ingest organization');
-    assertFederationId(batch.installation_id, 'ins', 'ingest installation');
-    assertDigest(batch.enrollment_receipt_sha256, 'ingest enrollment receipt');
-    const batchSha = canonicalSha256(batch);
+    assertFederationId(batch.authority_id, "oau", "ingest authority");
+    assertFederationId(batch.organization_id, "org", "ingest organization");
+    assertFederationId(batch.installation_id, "ins", "ingest installation");
+    assertDigest(batch.enrollment_receipt_sha256, "ingest enrollment receipt");
+    const batchJson = canonicalJson(batch);
+    const batchSha = sha256Digest(batchJson);
     return this.runExclusive(async () => {
       const descriptor = await this.authority();
       if (
         batch.authority_id !== descriptor.authority_id ||
         batch.organization_id !== descriptor.organization_id
       ) {
-        throw new Error('ingest batch belongs to another authority');
+        throw new Error("ingest batch belongs to another authority");
       }
       begin(this.database);
       try {
-        const receivedAt = this.currentTime('organization ingest receipt time');
-        const organization = this.organizationRow(descriptor.organization_id);
+        const prior = this.database
+          .prepare(
+            `SELECT receipt_id, batch_sha256, batch_json, organization_id,
+                    installation_id, status, receipt_sha256, receipt_json,
+                    server_received_at
+             FROM authority_batch_receipts WHERE batch_sha256 = ?`,
+          )
+          .get(batchSha) as AuthorityBatchReceiptRow | undefined;
+        if (prior !== undefined) {
+          if (prior.batch_json !== batchJson) {
+            throw new Error(
+              "organization ingest batch digest conflicts with stored bytes",
+            );
+          }
+          const receipt = this.parseStoredBatchReceipt(prior, descriptor);
+          this.database.exec("COMMIT");
+          return receipt;
+        }
         const installation = this.installationRow(batch.installation_id);
         if (
-          organization === undefined ||
           installation === undefined ||
           installation.organization_id !== descriptor.organization_id ||
           installation.enrollment_receipt_sha256 !==
             batch.enrollment_receipt_sha256
         ) {
           throw new Error(
-            'ingest batch does not name an enrolled installation',
+            "ingest batch does not name an enrolled installation",
           );
         }
         const membership = this.membershipRow(installation.membership_id);
@@ -2303,18 +2098,19 @@ export class OrganizationAuthorityStore {
           membership.organization_id !== descriptor.organization_id ||
           membership.principal_id !== installation.principal_id
         ) {
-          throw new Error('enrolled installation membership is inconsistent');
+          throw new Error("enrolled installation membership is inconsistent");
         }
         const events = this.parseAndVerifyIncomingEvents(
           batch,
           installation,
           descriptor,
         );
-        const rejectionReason: OrgIngestReason | null =
-          membership.status === 'revoked'
-            ? 'membership_revoked'
-            : installation.status === 'revoked'
-              ? 'installation_revoked'
+        const receivedAt = this.currentTime("organization batch receipt time");
+        const rejectionReason: OrganizationBatchRejectionReason | null =
+          membership.status === "revoked"
+            ? "membership_revoked"
+            : installation.status === "revoked"
+              ? "installation_revoked"
               : null;
         if (rejectionReason !== null) {
           const head = {
@@ -2322,62 +2118,34 @@ export class OrganizationAuthorityStore {
             last_event_hash:
               installation.last_event_hash as Sha256Digest | null,
           };
-          const receipts: OrgIngestReceiptV1[] = [];
-          for (const event of events) {
-            receipts.push(
-              await this.persistReceipt(
-                descriptor,
-                organization,
-                membership,
-                installation,
-                event,
-                batchSha,
-                'rejected',
-                rejectionReason,
-                head,
-                receivedAt,
-              ),
-            );
-          }
-          this.database.exec('COMMIT');
-          return receipts;
+          const receipt = await this.persistBatchReceipt(
+            descriptor,
+            membership,
+            installation,
+            batch,
+            batchJson,
+            batchSha,
+            "rejected",
+            rejectionReason,
+            head,
+            head,
+            receivedAt,
+          );
+          this.database.exec("COMMIT");
+          return receipt;
         }
         const conflict = this.conflictReason(events, installation);
         if (conflict !== null) {
-          const head = {
-            last_sequence: installation.last_sequence,
-            last_event_hash:
-              installation.last_event_hash as Sha256Digest | null,
-          };
-          const receipts: OrgIngestReceiptV1[] = [];
-          for (const event of events) {
-            receipts.push(
-              await this.persistReceipt(
-                descriptor,
-                organization,
-                membership,
-                installation,
-                event,
-                batchSha,
-                'quarantined',
-                conflict,
-                head,
-                receivedAt,
-              ),
-            );
-          }
-          this.database.exec('COMMIT');
-          return receipts;
+          throw new Error(`organization ingest conflict: ${conflict}`);
         }
 
         let lastSequence = installation.last_sequence;
         let lastHash = installation.last_event_hash as Sha256Digest | null;
-        const receipts: OrgIngestReceiptV1[] = [];
+        let acceptedAny = false;
         for (const event of events) {
           const duplicate = this.acceptedEventById(event.envelope.event_id);
-          let status: OrgIngestReceiptStatus = 'duplicate';
           if (duplicate === undefined) {
-            status = 'accepted';
+            acceptedAny = true;
             this.database
               .prepare(
                 `INSERT INTO authority_accepted_events (
@@ -2402,34 +2170,40 @@ export class OrganizationAuthorityStore {
               );
             lastSequence = event.envelope.sequence;
             lastHash = event.event_sha256;
-            this.database
-              .prepare(
-                `UPDATE authority_installations
-                 SET last_sequence = ?, last_event_hash = ?
-                 WHERE installation_id = ?`,
-              )
-              .run(lastSequence, lastHash, installation.installation_id);
           }
-          receipts.push(
-            await this.persistReceipt(
-              descriptor,
-              organization,
-              membership,
-              installation,
-              event,
-              batchSha,
-              status,
-              null,
-              {
-                last_sequence: event.envelope.sequence,
-                last_event_hash: event.event_sha256,
-              },
-              receivedAt,
-            ),
-          );
         }
-        this.database.exec('COMMIT');
-        return receipts;
+        if (acceptedAny) {
+          this.database
+            .prepare(
+              `UPDATE authority_installations
+               SET last_sequence = ?, last_event_hash = ?
+               WHERE installation_id = ?`,
+            )
+            .run(lastSequence, lastHash, installation.installation_id);
+        }
+        const first = events[0]!;
+        const last = events.at(-1)!;
+        const receipt = await this.persistBatchReceipt(
+          descriptor,
+          membership,
+          installation,
+          batch,
+          batchJson,
+          batchSha,
+          acceptedAny ? "accepted" : "duplicate",
+          null,
+          {
+            last_sequence: first.envelope.sequence - 1,
+            last_event_hash: first.envelope.previous_event_hash,
+          },
+          {
+            last_sequence: last.envelope.sequence,
+            last_event_hash: last.event_sha256,
+          },
+          receivedAt,
+        );
+        this.database.exec("COMMIT");
+        return receipt;
       } catch (error) {
         rollback(this.database);
         throw error;
@@ -2437,25 +2211,10 @@ export class OrganizationAuthorityStore {
     });
   }
 
-  /** Alias for transport adapters that expose the operation simply as ingest. */
-  async ingest(
-    batch: OrganizationIngestBatchV1,
-  ): Promise<readonly OrgIngestReceiptV1[]> {
-    return this.ingestBatch(batch);
-  }
-
-  async inspectOrganization(): Promise<OrganizationRow | null> {
-    return this.runExclusive(async () => {
-      const descriptor = await this.authority();
-      const row = this.organizationRow(descriptor.organization_id);
-      return row === undefined ? null : canonicalClone(row);
-    });
-  }
-
   async inspectMembership(
     membershipId: FederationId,
   ): Promise<ProvisionedMembership | null> {
-    assertFederationId(membershipId, 'mem', 'membership');
+    assertFederationId(membershipId, "mem", "membership");
     return this.runExclusive(() => {
       const row = this.membershipRow(membershipId);
       return row === undefined ? null : asMembership(row);
@@ -2465,7 +2224,7 @@ export class OrganizationAuthorityStore {
   async inspectInstallation(
     installationId: FederationId,
   ): Promise<StoredAuthorityInstallation | null> {
-    assertFederationId(installationId, 'ins', 'installation');
+    assertFederationId(installationId, "ins", "installation");
     return this.runExclusive(() => {
       const row = this.installationRow(installationId);
       return row === undefined ? null : this.toStoredInstallation(row);
@@ -2475,7 +2234,7 @@ export class OrganizationAuthorityStore {
   async readEnrollmentReceipt(
     installationId: FederationId,
   ): Promise<OrganizationEnrollmentReceiptV1 | null> {
-    assertFederationId(installationId, 'ins', 'installation');
+    assertFederationId(installationId, "ins", "installation");
     return this.runExclusive(async () => {
       const descriptor = await this.authority();
       const row = this.installationRow(installationId);
@@ -2488,14 +2247,14 @@ export class OrganizationAuthorityStore {
   async readAcceptedEvent(
     eventId: FederationId,
   ): Promise<StoredAuthorityEvent | null> {
-    assertFederationId(eventId, 'evt', 'event');
+    assertFederationId(eventId, "evt", "event");
     return this.runExclusive(async () => {
       const descriptor = await this.authority();
       const row = this.acceptedEventById(eventId);
       if (row === undefined) return null;
-      assertDigest(row.event_sha256, 'stored accepted event');
+      assertDigest(row.event_sha256, "stored accepted event");
       const envelope = validateFederationDocument<FederatedEventV1>(
-        'federated-record-envelope',
+        "federated-record-envelope",
         parseCanonicalJson(row.envelope_json),
       );
       if (
@@ -2505,11 +2264,11 @@ export class OrganizationAuthorityStore {
         envelope.sequence !== row.sequence ||
         sha256Digest(row.envelope_json) !== row.event_sha256
       ) {
-        throw new Error('stored accepted event row is inconsistent');
+        throw new Error("stored accepted event row is inconsistent");
       }
       const installation = this.installationRow(row.installation_id);
       if (installation === undefined) {
-        throw new Error('stored accepted event installation is missing');
+        throw new Error("stored accepted event installation is missing");
       }
       const { publicKey } = this.verifiedInstallationIdentity(
         installation,
@@ -2524,47 +2283,22 @@ export class OrganizationAuthorityStore {
     });
   }
 
-  async listIngestReceipts(
-    eventId: FederationId,
-  ): Promise<readonly OrgIngestReceiptV1[]> {
-    assertFederationId(eventId, 'evt', 'event');
+  async listBatchReceipts(
+    installationId: FederationId,
+  ): Promise<readonly OrganizationBatchReceiptV1[]> {
+    assertFederationId(installationId, "ins", "installation");
     return this.runExclusive(async () => {
       const descriptor = await this.authority();
-      const publicKey = verifyOrganizationAuthorityDescriptor(descriptor);
       const rows = this.database
         .prepare(
-          `SELECT receipt_id, event_id, organization_id, installation_id,
-                  status, receipt_sha256, receipt_json, server_received_at
-           FROM authority_ingest_receipts
-           WHERE event_id = ? ORDER BY rowid ASC`,
+          `SELECT receipt_id, batch_sha256, batch_json, organization_id,
+                  installation_id, status, receipt_sha256, receipt_json,
+                  server_received_at
+           FROM authority_batch_receipts
+           WHERE installation_id = ? ORDER BY rowid ASC`,
         )
-        .all(eventId) as AuthorityIngestReceiptRow[];
-      return rows.map((row) => {
-        assertDigest(row.receipt_sha256, 'stored organization ingest receipt');
-        const receipt = validateFederationDocument<OrgIngestReceiptV1>(
-          'org-ingest-receipt',
-          parseCanonicalJson(row.receipt_json),
-        );
-        verifySignedDocument(receipt, publicKey, descriptor.signing_key.key_id);
-        if (
-          sha256Digest(row.receipt_json) !== row.receipt_sha256 ||
-          receipt.receipt_id !== row.receipt_id ||
-          receipt.event_id !== eventId ||
-          receipt.event_id !== row.event_id ||
-          receipt.authority_id !== descriptor.authority_id ||
-          receipt.authority_key_id !== descriptor.signing_key.key_id ||
-          receipt.organization_id !== descriptor.organization_id ||
-          receipt.organization_id !== row.organization_id ||
-          receipt.installation_id !== row.installation_id ||
-          receipt.status !== row.status ||
-          receipt.server_received_at !== row.server_received_at
-        ) {
-          throw new Error(
-            'stored organization ingest receipt row is inconsistent',
-          );
-        }
-        return receipt;
-      });
+        .all(installationId) as AuthorityBatchReceiptRow[];
+      return rows.map((row) => this.parseStoredBatchReceipt(row, descriptor));
     });
   }
 
@@ -2579,13 +2313,13 @@ export class OrganizationAuthorityStore {
         return row.count;
       };
       return {
-        organizations: count('authority_organizations'),
-        principals: count('authority_principals'),
-        memberships: count('authority_memberships'),
-        challenges: count('authority_enrollment_challenges'),
-        installations: count('authority_installations'),
-        accepted_events: count('authority_accepted_events'),
-        ingest_receipts: count('authority_ingest_receipts'),
+        organizations: count("authority_organizations"),
+        principals: count("authority_principals"),
+        memberships: count("authority_memberships"),
+        enrollment_requests: count("authority_enrollment_requests"),
+        installations: count("authority_installations"),
+        accepted_events: count("authority_accepted_events"),
+        batch_receipts: count("authority_batch_receipts"),
       };
     });
   }

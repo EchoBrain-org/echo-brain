@@ -9,10 +9,7 @@ CREATE TABLE authority_metadata (
 CREATE TABLE authority_organizations (
   organization_id TEXT PRIMARY KEY,
   display_name TEXT NOT NULL,
-  status TEXT NOT NULL CHECK (status IN ('active', 'revoked')),
-  policy_version INTEGER NOT NULL CHECK (policy_version > 0),
-  provisioned_at TEXT NOT NULL,
-  revoked_at TEXT
+  provisioned_at TEXT NOT NULL
 ) STRICT;
 
 CREATE TABLE authority_principals (
@@ -27,9 +24,8 @@ CREATE TABLE authority_memberships (
   membership_id TEXT PRIMARY KEY,
   organization_id TEXT NOT NULL REFERENCES authority_organizations(organization_id),
   principal_id TEXT NOT NULL REFERENCES authority_principals(principal_id),
-  membership_type TEXT NOT NULL CHECK (membership_type IN ('owner', 'employee', 'contractor')),
+  membership_type TEXT NOT NULL CHECK (membership_type IN ('owner', 'employee')),
   status TEXT NOT NULL CHECK (status IN ('active', 'revoked')),
-  version INTEGER NOT NULL CHECK (version > 0),
   provisioned_at TEXT NOT NULL,
   revoked_at TEXT,
   revocation_reason TEXT,
@@ -45,7 +41,7 @@ CREATE TABLE authority_enrollment_grants (
   issued_at TEXT NOT NULL,
   expires_at TEXT NOT NULL,
   consumed_at TEXT,
-  challenge_id TEXT UNIQUE
+  request_sha256 TEXT UNIQUE
 ) STRICT;
 
 CREATE INDEX authority_enrollment_grants_membership
@@ -77,36 +73,17 @@ CREATE TABLE authority_publication_policies (
   PRIMARY KEY (policy_id, version)
 ) STRICT;
 
-CREATE TABLE authority_enrollment_challenges (
-  challenge_id TEXT PRIMARY KEY,
-  grant_sha256 TEXT NOT NULL UNIQUE REFERENCES authority_enrollment_grants(grant_sha256),
-  authority_id TEXT NOT NULL,
-  organization_id TEXT NOT NULL REFERENCES authority_organizations(organization_id),
-  principal_id TEXT NOT NULL REFERENCES authority_principals(principal_id),
-  membership_id TEXT NOT NULL REFERENCES authority_memberships(membership_id),
-  installation_id TEXT NOT NULL,
-  installation_key_id TEXT NOT NULL,
-  identity_manifest_id TEXT NOT NULL,
-  identity_manifest_sha256 TEXT NOT NULL,
-  publication_policy_id TEXT NOT NULL,
-  publication_policy_version INTEGER NOT NULL CHECK (publication_policy_version > 0),
+CREATE TABLE authority_enrollment_requests (
+  request_sha256 TEXT PRIMARY KEY,
+  grant_sha256 TEXT NOT NULL UNIQUE
+    REFERENCES authority_enrollment_grants(grant_sha256),
+  request_json TEXT NOT NULL CHECK (json_valid(request_json)),
   publication_policy_sha256 TEXT NOT NULL,
   publication_policy_json TEXT NOT NULL CHECK (json_valid(publication_policy_json)),
-  challenge_sha256 TEXT NOT NULL UNIQUE,
-  challenge_json TEXT NOT NULL CHECK (json_valid(challenge_json)),
-  issued_at TEXT NOT NULL,
-  expires_at TEXT NOT NULL,
-  consumed_at TEXT,
-  proof_sha256 TEXT,
-  proof_json TEXT CHECK (proof_json IS NULL OR json_valid(proof_json)),
-  enrollment_receipt_sha256 TEXT,
-  enrollment_receipt_json TEXT CHECK (
-    enrollment_receipt_json IS NULL OR json_valid(enrollment_receipt_json)
-  )
+  enrollment_receipt_sha256 TEXT NOT NULL UNIQUE,
+  enrollment_receipt_json TEXT NOT NULL CHECK (json_valid(enrollment_receipt_json)),
+  enrolled_at TEXT NOT NULL
 ) STRICT;
-
-CREATE INDEX authority_challenges_installation
-  ON authority_enrollment_challenges (installation_id, issued_at);
 
 CREATE TABLE authority_installations (
   installation_id TEXT PRIMARY KEY,
@@ -124,7 +101,6 @@ CREATE TABLE authority_installations (
   enrollment_receipt_sha256 TEXT NOT NULL UNIQUE,
   enrollment_receipt_json TEXT NOT NULL CHECK (json_valid(enrollment_receipt_json)),
   status TEXT NOT NULL CHECK (status IN ('active', 'revoked')),
-  version INTEGER NOT NULL CHECK (version > 0),
   enrolled_at TEXT NOT NULL,
   revoked_at TEXT,
   revocation_reason TEXT,
@@ -156,18 +132,19 @@ CREATE TABLE authority_accepted_events (
   UNIQUE (installation_id, local_subject_key)
 ) STRICT;
 
-CREATE TABLE authority_ingest_receipts (
+CREATE TABLE authority_batch_receipts (
   receipt_id TEXT PRIMARY KEY,
-  event_id TEXT NOT NULL,
+  batch_sha256 TEXT NOT NULL UNIQUE,
+  batch_json TEXT NOT NULL CHECK (json_valid(batch_json)),
   organization_id TEXT NOT NULL,
   installation_id TEXT NOT NULL,
   status TEXT NOT NULL CHECK (
-    status IN ('accepted', 'duplicate', 'rejected', 'quarantined')
+    status IN ('accepted', 'duplicate', 'rejected')
   ),
   receipt_sha256 TEXT NOT NULL UNIQUE,
   receipt_json TEXT NOT NULL CHECK (json_valid(receipt_json)),
   server_received_at TEXT NOT NULL
 ) STRICT;
 
-CREATE INDEX authority_receipts_event
-  ON authority_ingest_receipts (event_id, server_received_at);
+CREATE INDEX authority_batch_receipts_installation
+  ON authority_batch_receipts (installation_id, server_received_at);

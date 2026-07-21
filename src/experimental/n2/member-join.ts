@@ -1,5 +1,5 @@
-import type { PackagedBuildIdentityV1 } from "../build-identity.js";
-import { validatePackagedBuildIdentity } from "../build-identity.js";
+import type { PackagedBuildIdentityV1 } from "../../product/federation/build-identity.js";
+import { validatePackagedBuildIdentity } from "../../product/federation/build-identity.js";
 import type {
   IdentityClaimV1,
   LocalIdentityManifestV1,
@@ -8,21 +8,21 @@ import type {
   PrincipalIdentityV1,
   PublicationPolicyV1,
   PublicationSnapshotV1,
-} from "../contracts.js";
+} from "../../product/federation/contracts.js";
 import {
   assertFederationId,
   assertUtcMillisecondTimestamp,
-} from "../foundation/identifiers.js";
+} from "../../product/federation/foundation/identifiers.js";
 import type {
   InstallationKeyDescriptor,
   InstallationSigner,
-} from "../foundation/installation-signer.js";
-import { verifyInstallationKeyDescriptor } from "../foundation/installation-signer.js";
+} from "../../product/federation/foundation/installation-signer.js";
+import { verifyInstallationKeyDescriptor } from "../../product/federation/foundation/installation-signer.js";
 import {
   createSignedDocument,
   verifySignedDocument,
-} from "../foundation/signed-document.js";
-import { validateFederationDocument } from "../schema-validation.js";
+} from "../../product/federation/foundation/signed-document.js";
+import { validateFederationDocument } from "../../product/federation/schema-validation.js";
 
 export interface AuthorityAssignedMemberIdentity {
   organization: OrganizationIdentityV1;

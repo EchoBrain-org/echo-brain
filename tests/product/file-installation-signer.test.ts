@@ -10,7 +10,7 @@ import {
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
-import { FileInstallationSigner } from '../../src/product/federation/foundation/file-installation-signer.js';
+import { FileInstallationSigner } from '../../src/experimental/n2/file-installation-signer.js';
 import { canonicalJson } from '../../src/product/federation/foundation/canonical-json.js';
 import {
   assertP256LowS,

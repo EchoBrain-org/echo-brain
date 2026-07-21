@@ -6,7 +6,7 @@ import {
   type KeyObject,
 } from "node:crypto";
 import { join } from "node:path";
-import { atomicCreate } from "../../../infrastructure/filesystem/atomic-create.js";
+import { atomicCreate } from "../../infrastructure/filesystem/atomic-create.js";
 import {
   assertPrivateOwnedDirectory,
   assertPrivateOwnedRegularFile,
@@ -14,16 +14,16 @@ import {
   ensureDirectory,
   pathEntryExists,
   readFileNoFollow,
-} from "../../secure-local-files.js";
-import type { Sha256Digest } from "../contracts.js";
-import { canonicalJson, parseCanonicalJson } from "./canonical-json.js";
-import { assertFederationId } from "./identifiers.js";
+} from "../../product/secure-local-files.js";
+import type { Sha256Digest } from "../../product/federation/contracts.js";
+import { canonicalJson, parseCanonicalJson } from "../../product/federation/foundation/canonical-json.js";
+import { assertFederationId } from "../../product/federation/foundation/identifiers.js";
 import type {
   InstallationKeyDescriptor,
   InstallationSigner,
-} from "./installation-signer.js";
-import { verifyInstallationKeyDescriptor } from "./installation-signer.js";
-import { normalizeP256LowS, p256KeyId } from "./signature-profile.js";
+} from "../../product/federation/foundation/installation-signer.js";
+import { verifyInstallationKeyDescriptor } from "../../product/federation/foundation/installation-signer.js";
+import { normalizeP256LowS, p256KeyId } from "../../product/federation/foundation/signature-profile.js";
 
 const PRIVATE_KEY_SUFFIX = ".private.pk8";
 const DESCRIPTOR_SUFFIX = ".descriptor.v1.json";

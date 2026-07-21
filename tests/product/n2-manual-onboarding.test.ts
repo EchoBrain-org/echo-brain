@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { canonicalJson } from "../../src/product/federation/foundation/canonical-json.js";
-import { runManualN2Onboarding } from "../../src/product/n2-manual-onboarding.js";
+import { runManualN2Onboarding } from "../../src/experimental/n2/manual-onboarding.js";
 
 const roots: string[] = [];
 
@@ -59,8 +59,6 @@ describe("manual N=2 onboarding", () => {
     ) => {
       const invite = join(root, `${label}-invite.json`);
       const request = join(root, `${label}-request.json`);
-      const challenge = join(root, `${label}-challenge.json`);
-      const proof = join(root, `${label}-proof.json`);
       const receipt = join(root, `${label}-receipt.json`);
       await command(
         "invite-create",
@@ -84,35 +82,11 @@ describe("manual N=2 onboarding", () => {
         request,
       );
       await command(
-        "challenge-issue",
-        "--state",
-        authority,
-        "--request",
-        request,
-        "--out",
-        challenge,
-      );
-      await command(
-        "proof-create",
-        "--state",
-        state,
-        "--request",
-        request,
-        "--challenge",
-        challenge,
-        "--out",
-        proof,
-      );
-      await command(
         "enrollment-complete",
         "--state",
         authority,
         "--request",
         request,
-        "--challenge",
-        challenge,
-        "--proof",
-        proof,
         "--out",
         receipt,
       );
@@ -168,8 +142,8 @@ describe("manual N=2 onboarding", () => {
 
     const ownerFirst = await ingest(ownerState, "owner-first");
     const employeeFirst = await ingest(employeeState, "employee-first");
-    expect(ownerFirst.authorityResult["statuses"]).toEqual(["accepted"]);
-    expect(employeeFirst.authorityResult["statuses"]).toEqual(["accepted"]);
+    expect(ownerFirst.authorityResult["status"]).toBe("accepted");
+    expect(employeeFirst.authorityResult["status"]).toBe("accepted");
     expect(ownerFirst.localResult["acknowledged_sequence"]).toBe(1);
     expect(employeeFirst.localResult["acknowledged_sequence"]).toBe(1);
 
@@ -189,12 +163,12 @@ describe("manual N=2 onboarding", () => {
       employeeState,
       "employee-after-owner-revocation",
     );
-    expect(ownerAfter.authorityResult["statuses"]).toEqual(["rejected"]);
+    expect(ownerAfter.authorityResult["status"]).toBe("rejected");
     expect(ownerAfter.localResult).toMatchObject({
       acknowledged_sequence: 1,
-      terminal_status: "rejected",
+      terminal_status: "revoked",
     });
-    expect(employeeAfter.authorityResult["statuses"]).toEqual(["accepted"]);
+    expect(employeeAfter.authorityResult["status"]).toBe("accepted");
     expect(employeeAfter.localResult).toMatchObject({
       acknowledged_sequence: 2,
       terminal_status: "active",

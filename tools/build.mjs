@@ -48,8 +48,17 @@ cpSync(join(repo, 'src', 'storage', 'migrations'), join(dist, 'storage', 'migrat
   recursive: true,
 });
 cpSync(
-  join(repo, 'src', 'product', 'federation', 'authority', 'migrations'),
-  join(dist, 'product', 'federation', 'authority', 'migrations'),
+  join(repo, 'src', 'experimental', 'n2', 'authority', 'migrations'),
+  join(dist, 'experimental', 'n2', 'authority', 'migrations'),
+  { recursive: true },
+);
+cpSync(
+  join(repo, 'src', 'experimental', 'n2', 'organization', 'organization-sync-schema.sql'),
+  join(dist, 'experimental', 'n2', 'organization', 'organization-sync-schema.sql'),
+);
+cpSync(
+  join(repo, 'src', 'experimental', 'n2', 'schemas'),
+  join(dist, 'experimental', 'n2', 'schemas'),
   { recursive: true },
 );
 const packageVersion = JSON.parse(readFileSync(join(repo, 'package.json'), 'utf8')).version;

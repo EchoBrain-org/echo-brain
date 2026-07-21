@@ -1,14 +1,12 @@
 import { createPublicKey } from 'node:crypto';
-import type {
-  OrganizationAuthorityDescriptorV1,
-  Sha256Digest,
-} from '../contracts.js';
-import { assertFederationId } from '../foundation/identifiers.js';
+import type { Sha256Digest } from '../../../product/federation/contracts.js';
+import type { OrganizationAuthorityDescriptorV1 } from '../contracts.js';
+import { assertFederationId } from '../../../product/federation/foundation/identifiers.js';
 import {
   assertP256LowS,
   p256KeyId,
   verifyP256LowSSignature,
-} from '../foundation/signature-profile.js';
+} from '../../../product/federation/foundation/signature-profile.js';
 
 export interface OrganizationAuthoritySigner {
   inspect(): Promise<OrganizationAuthorityDescriptorV1>;

@@ -14,6 +14,11 @@ authority for exact fields, paths, commands, and implementation details.
 - [Organization authority foundation](architecture/organization-authority-foundation.md):
   the experimental N=2 enrollment, revocation, ingest, and receipt boundary.
 
+## Runbooks
+
+- [Manual N=2 pilot](runbooks/manual-n2-pilot.md): the artifact-bound two-role
+  ceremony for the experimental organization-authority walkthrough.
+
 ## Direction and decisions
 
 - [Organization brain direction](product/org-brain-direction.md): the intended

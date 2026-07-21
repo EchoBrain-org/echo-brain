@@ -1,4 +1,4 @@
-CREATE TABLE organization_sync_authorities (
+CREATE TABLE IF NOT EXISTS organization_sync_authorities (
   singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
   authority_id TEXT NOT NULL UNIQUE,
   organization_id TEXT NOT NULL UNIQUE,
@@ -7,7 +7,7 @@ CREATE TABLE organization_sync_authorities (
   descriptor_json TEXT NOT NULL CHECK (json_valid(descriptor_json))
 ) STRICT;
 
-CREATE TABLE organization_sync_enrollments (
+CREATE TABLE IF NOT EXISTS organization_sync_enrollments (
   enrollment_id TEXT PRIMARY KEY,
   authority_id TEXT NOT NULL,
   organization_id TEXT NOT NULL,
@@ -19,7 +19,7 @@ CREATE TABLE organization_sync_enrollments (
   UNIQUE (authority_id, installation_id)
 ) STRICT;
 
-CREATE TABLE organization_sync_states (
+CREATE TABLE IF NOT EXISTS organization_sync_states (
   authority_id TEXT NOT NULL,
   installation_id TEXT NOT NULL,
   enrollment_id TEXT NOT NULL,
@@ -28,8 +28,7 @@ CREATE TABLE organization_sync_states (
     CHECK (acknowledged_sequence >= 0),
   acknowledged_event_hash TEXT,
   terminal_status TEXT NOT NULL DEFAULT 'active'
-    CHECK (terminal_status IN ('active', 'rejected', 'quarantined')),
-  last_receipt_id TEXT,
+    CHECK (terminal_status IN ('active', 'revoked')),
   PRIMARY KEY (authority_id, installation_id),
   FOREIGN KEY (enrollment_id) REFERENCES organization_sync_enrollments(enrollment_id),
   CHECK (
@@ -38,26 +37,18 @@ CREATE TABLE organization_sync_states (
   )
 ) STRICT;
 
-CREATE TABLE organization_sync_ingest_receipts (
+CREATE TABLE IF NOT EXISTS organization_sync_batch_receipts (
   receipt_id TEXT PRIMARY KEY,
   authority_id TEXT NOT NULL,
   installation_id TEXT NOT NULL,
-  event_id TEXT NOT NULL,
-  record_id TEXT NOT NULL,
-  sequence INTEGER NOT NULL CHECK (sequence > 0),
-  event_sha256 TEXT NOT NULL,
-  batch_sha256 TEXT NOT NULL,
+  batch_sha256 TEXT NOT NULL UNIQUE,
   status TEXT NOT NULL
-    CHECK (status IN ('accepted', 'duplicate', 'rejected', 'quarantined')),
+    CHECK (status IN ('accepted', 'duplicate', 'rejected')),
   receipt_sha256 TEXT NOT NULL UNIQUE,
   receipt_json TEXT NOT NULL CHECK (json_valid(receipt_json)),
   FOREIGN KEY (authority_id, installation_id)
     REFERENCES organization_sync_states(authority_id, installation_id)
 ) STRICT;
 
-CREATE INDEX organization_sync_receipts_installation_sequence
-  ON organization_sync_ingest_receipts (
-    authority_id,
-    installation_id,
-    sequence
-  );
+CREATE INDEX IF NOT EXISTS organization_sync_batch_receipts_installation
+  ON organization_sync_batch_receipts (authority_id, installation_id);

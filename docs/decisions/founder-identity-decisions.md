@@ -16,7 +16,7 @@ A changed choice requires an explicit superseding decision.
 9. **ADR-FL-IDENTITY-009:** Identity-enabled approval fails closed while the request freezes candidate/tool/policy context, publication freezes presentation, and resolution freezes namespaced actor/tool assurance, without changing approval IDs or `reviewed_by` semantics.
 10. **ADR-FL-IDENTITY-010:** Each approved signal receives one immutable signed envelope around unchanged local IDs containing only that signal, meeting context, bounded evidence, and approval-group digests; raw meeting and sibling signal content are not copied into it.
 11. **ADR-FL-IDENTITY-011:** The SQLite outbox is an append-only source of pending organization records with per-installation sequence/hash chaining; manual exports are repeatable and never imply server acceptance.
-12. **ADR-FL-IDENTITY-012:** `DeliveryReceipt` and `OrgIngestReceipt` are separate outcomes, and no organization-ingest receipt exists until a real organization authority issues it.
+12. **ADR-FL-IDENTITY-012:** `DeliveryReceipt` and `OrganizationBatchReceipt` are separate outcomes, and no `OrganizationBatchReceipt` exists until a real organization authority issues it.
 13. **ADR-FL-IDENTITY-013:** Meeting participants remain unresolved source observations during Founder Live; future resolutions are append-only central facts and never rewrite envelopes.
 14. **ADR-FL-IDENTITY-014:** Pre-cutover and structurally incomplete records are disposable or explicitly `legacy_imported_unverified`/`founder_attested_retrospective`; Echo never upgrades them to native attribution.
 15. **ADR-FL-IDENTITY-015 (approved amendment):** Seed-grade cutover and every record after it require both a green strict identity check and a protected, verified independent copy of the signed outbox until central ingest exists; disposable pre-cutover rehearsals do not.
@@ -27,5 +27,5 @@ The current cutover does not promote retrospective founder attestations.
 Pre-cutover records are only disposable or already-delivered unverified local
 evidence, and neither enters the federated outbox.
 
-The N=2 minimum remains proposed direction, not an accepted amendment to these
-decisions.
+The experimental N=2 trust outcome is pilot-qualified, but its protocol does
+not amend the Founder Live decisions above.

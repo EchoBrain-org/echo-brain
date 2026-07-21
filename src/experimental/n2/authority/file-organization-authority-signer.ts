@@ -1,12 +1,12 @@
 import type {
   FederationId,
-  OrganizationAuthorityDescriptorV1,
   Sha256Digest,
-} from '../contracts.js';
-import { FileInstallationSigner } from '../foundation/file-installation-signer.js';
-import { assertFederationId } from '../foundation/identifiers.js';
-import type { InstallationKeyDescriptor } from '../foundation/installation-signer.js';
-import { signWithInstallationKey } from '../foundation/installation-signer.js';
+} from '../../../product/federation/contracts.js';
+import type { OrganizationAuthorityDescriptorV1 } from '../contracts.js';
+import { FileInstallationSigner } from '../file-installation-signer.js';
+import { assertFederationId } from '../../../product/federation/foundation/identifiers.js';
+import type { InstallationKeyDescriptor } from '../../../product/federation/foundation/installation-signer.js';
+import { signWithInstallationKey } from '../../../product/federation/foundation/installation-signer.js';
 import type { OrganizationAuthoritySigner } from './authority-signer.js';
 
 export interface OpenFileOrganizationAuthoritySignerOptions {

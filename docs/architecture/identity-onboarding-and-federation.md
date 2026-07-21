@@ -1,6 +1,6 @@
 # Identity, onboarding, and federation
 
-**Status:** Founder Live architecture accepted; N=2 protocol prototype under manual qualification
+**Status:** Founder Live architecture accepted; experimental N=2 trust outcome pilot-qualified
 
 Echo uses local processing with durable organization attribution. The local
 installation keeps credentials and raw source data, runs the core, freezes facts
@@ -67,8 +67,9 @@ export, or organization receipt. Exports are repeatable verification artifacts,
 not proof of server acceptance.
 
 A `DeliveryReceipt` proves output reached a delivery surface. An
-`OrgIngestReceipt` proves a real organization authority accepted or rejected a
-record. They remain separate and never mutate the approved envelope.
+`OrganizationBatchReceipt` proves how a real organization authority disposed of
+one exact ingest batch. They remain separate and never mutate an approved
+envelope.
 
 ## Cutover and lifecycle
 
@@ -87,11 +88,12 @@ provider proves continuity.
 ## N=2 pilot
 
 The experimental N=2 prototype is deliberately small: one organization
-authority, one database, one-time invitation grants and enrollment challenges,
-one local uploader, signed ingest receipts, exact signed publication-policy
-evaluation, and enforced membership and installation revocation. It reuses the
-current manifests, policies, envelopes, signatures, outbox, and verification
-rules without rewriting historical evidence.
+authority, one-time invitation grants, installation-signed enrollment requests,
+authority-signed enrollment receipts, manual batch handoff and receipt
+acceptance, one signed receipt per atomic ingest batch, exact signed
+publication-policy evaluation, and enforced membership and installation
+revocation. It reuses the current manifests, policies, envelopes, signatures,
+outbox, and verification rules without rewriting historical evidence.
 
 The first registration protocol supports one exact manifest/key/policy epoch
 per installation. Pending outbox history that refers to earlier key epochs or a
@@ -106,12 +108,19 @@ outside that slice. New defensive machinery must protect a non-backfillable
 fact, prevent an unauthorized external effect, or cover a qualification failure;
 otherwise it waits.
 
-For the first human walkthrough, the organization authority and installation
-keys are ordinary development files and the artifact exchange is manual. A
-synthetic record path exercises enrollment, signed ingest receipts, local
-cursor advancement, and per-installation revocation without claiming that the
-normal product runtime has adopted the employee identity. That integration is
-a later step if the two-person walkthrough is useful.
+The July 20, 2026 two-Mac walkthrough qualified the narrow trust outcome: both
+installations advanced independently, revoking A stopped A, and B continued.
+The walkthrough used the earlier wire format, so it is not evidence that the
+later lean request and batch-receipt bytes ran on those machines. The bounded
+evidence and protocol limits are recorded in
+[Organization authority foundation](organization-authority-foundation.md).
+
+The organization authority and installation keys remain ordinary development
+files and artifact exchange remains manual. A synthetic record path exercises
+enrollment, signed batch receipts, local cursor advancement, and
+per-installation revocation without claiming that the normal product runtime
+has adopted the employee identity. The exact ceremony is in the
+[Manual N=2 pilot runbook](../runbooks/manual-n2-pilot.md).
 
 The accepted decision register is
 [Founder identity decisions](../decisions/founder-identity-decisions.md).

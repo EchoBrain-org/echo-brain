@@ -4,49 +4,50 @@ import { chmodSync, existsSync, mkdirSync, readFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { parseArgs } from "node:util";
-import { atomicCreate } from "../infrastructure/filesystem/atomic-create.js";
-import { addUtcMilliseconds } from "../util/timestamp.js";
-import type { DecisionNodeState } from "./approval/decision-node.js";
-import { resolveProductClock } from "./composition.js";
-import { buildAuthorityMemberJoinPlan } from "./federation/authority/member-join.js";
-import { createOrganizationEnrollmentProof } from "./federation/authority/enrollment-proof.js";
-import { FileOrganizationAuthoritySigner } from "./federation/authority/file-organization-authority-signer.js";
-import { OrganizationAuthorityStore } from "./federation/authority/organization-authority-store.js";
+import { atomicCreate } from "../../infrastructure/filesystem/atomic-create.js";
+import { addUtcMilliseconds } from "../../util/timestamp.js";
+import type { DecisionNodeState } from "../../product/approval/decision-node.js";
+import { resolveProductClock } from "../../product/composition.js";
+import { buildAuthorityMemberJoinPlan } from "./member-join.js";
+import { createOrganizationEnrollmentRequest } from "./authority/enrollment-request.js";
+import { FileOrganizationAuthoritySigner } from "./authority/file-organization-authority-signer.js";
+import { OrganizationAuthorityStore } from "./authority/organization-authority-store.js";
 import {
   loadPackagedBuildIdentity,
   validatePackagedBuildIdentity,
-} from "./federation/build-identity.js";
+} from "../../product/federation/build-identity.js";
 import type {
   LocalIdentityManifestV1,
   MembershipIdentityV1,
-  OrganizationIngestBatchV1,
-  OrganizationAuthorityDescriptorV1,
-  OrganizationEnrollmentChallengeV1,
-  OrganizationEnrollmentProofV1,
-  OrganizationEnrollmentReceiptV1,
   OrganizationIdentityV1,
-  OrgIngestReceiptV1,
   PrincipalIdentityV1,
   ProductArtifactIdentityV1,
   PublicationPolicyV1,
   PublicationSnapshotV1,
-} from "./federation/contracts.js";
+} from "../../product/federation/contracts.js";
+import type {
+  OrganizationAuthorityDescriptorV1,
+  OrganizationBatchReceiptV1,
+  OrganizationEnrollmentRequestV1,
+  OrganizationEnrollmentReceiptV1,
+  OrganizationIngestBatchV1,
+} from "./contracts.js";
 import {
   canonicalJson,
   canonicalSha256,
   parseCanonicalJson,
-} from "./federation/foundation/canonical-json.js";
-import { FileInstallationSigner } from "./federation/foundation/file-installation-signer.js";
-import { federationId } from "./federation/foundation/identifiers.js";
-import { OrganizationSyncStore } from "./federation/organization/organization-sync-store.js";
-import { FederatedOutboxStore } from "./federation/outbox-store.js";
+} from "../../product/federation/foundation/canonical-json.js";
+import { FileInstallationSigner } from "./file-installation-signer.js";
+import { federationId } from "../../product/federation/foundation/identifiers.js";
+import { OrganizationSyncStore } from "./organization/organization-sync-store.js";
+import { FederatedOutboxStore } from "../../product/federation/outbox-store.js";
 import {
   buildProjectionSignalManifest,
   buildRecordProjectionDrafts,
   orderedProjectionItems,
-} from "./federation/records/record-projection-drafts.js";
-import type { FederatedProjectionSnapshots } from "./federation/records/record-projection-snapshots.js";
-import { validateFederationDocument } from "./federation/schema-validation.js";
+} from "../../product/federation/records/record-projection-drafts.js";
+import type { FederatedProjectionSnapshots } from "../../product/federation/records/record-projection-snapshots.js";
+import { validateN2Document } from "./schema-validation.js";
 
 type Args = Record<string, string | boolean | undefined>;
 type MembershipType = "owner" | "employee";
@@ -81,6 +82,7 @@ interface JoinRequest {
   invite: Invite;
   identity_manifest: LocalIdentityManifestV1;
   publication_policy: PublicationPolicyV1;
+  enrollment_request: OrganizationEnrollmentRequestV1;
 }
 
 interface MemberBundle {
@@ -98,14 +100,15 @@ interface ManualIngestResponse {
   kind: "echo-manual-n2-ingest-response";
   experimental: true;
   batch: OrganizationIngestBatchV1;
-  receipts: readonly OrgIngestReceiptV1[];
+  receipt: OrganizationBatchReceiptV1;
 }
 
 const STATE_FILE = "authority-state.v1.json";
-const AUTHORITY_DB = "authority.sqlite";
+const AUTHORITY_DB = "n2-authority.sqlite";
 const AUTHORITY_KEYS = "authority-keys";
 const INSTALLATION_KEYS = "installation-keys";
-const SYNC_DB = "organization-sync.sqlite";
+const SYNC_DB = "n2-sync.sqlite";
+const OUTBOX_DB = "outbox.sqlite";
 const MEMBER_FILE = "member-bundle.v1.json";
 const clock = resolveProductClock();
 
@@ -510,6 +513,7 @@ async function joinPrepare(args: Args) {
         )
       : loadPackagedBuildIdentity();
   const createdAt = utcNow();
+  const signer = new FileInstallationSigner(join(directory, INSTALLATION_KEYS));
   const plan = await buildAuthorityMemberJoinPlan({
     authority_identity: {
       organization: invite.organization,
@@ -526,7 +530,14 @@ async function joinPrepare(args: Args) {
     },
     publication: publication(invite.organization.organization_id),
     build_identity: build,
-    signer: new FileInstallationSigner(join(directory, INSTALLATION_KEYS)),
+    signer,
+  });
+  const enrollmentRequest = await createOrganizationEnrollmentRequest({
+    authority: invite.authority,
+    manifest: plan.identity_manifest,
+    publication_policy: plan.publication_policy,
+    enrollment_grant: invite.enrollment_grant,
+    signer,
   });
   const request: JoinRequest = {
     schema_version: 1,
@@ -535,83 +546,27 @@ async function joinPrepare(args: Args) {
     invite,
     identity_manifest: plan.identity_manifest,
     publication_policy: plan.publication_policy,
+    enrollment_request: enrollmentRequest,
   };
   writeCanonical(need(args, "out"), request);
   return {
     membership_id: invite.membership.membership_id,
     installation_id: plan.identity_manifest.installation.installation_id,
     installation_key_id: plan.signing_key.key_id,
-    request_sha256: canonicalSha256(request),
-  };
-}
-
-async function challengeIssue(args: Args) {
-  const directory = privateDirectory(need(args, "state"));
-  const request = readCanonical<JoinRequest>(need(args, "request"));
-  const authority = await openAuthority(directory);
-  try {
-    const expiresAt = (args["expires-at"] as string) ?? expiresIn(600_000);
-    const challenge = await authority.store.issueEnrollmentChallenge({
-      manifest: request.identity_manifest,
-      publication_policy: request.publication_policy,
-      enrollment_grant: request.invite.enrollment_grant,
-      expires_at:
-        expiresAt < request.invite.expires_at
-          ? expiresAt
-          : request.invite.expires_at,
-    });
-    writeCanonical(need(args, "out"), challenge);
-    return {
-      challenge_id: challenge.challenge_id,
-      challenge_sha256: canonicalSha256(challenge),
-      expires_at: challenge.expires_at,
-    };
-  } finally {
-    await authority.store.close();
-  }
-}
-
-async function proofCreate(args: Args) {
-  const directory = privateDirectory(need(args, "state"));
-  const request = readCanonical<JoinRequest>(need(args, "request"));
-  const challenge =
-    validateFederationDocument<OrganizationEnrollmentChallengeV1>(
-      "organization-enrollment-challenge",
-      readCanonical(need(args, "challenge")),
-    );
-  const proof = await createOrganizationEnrollmentProof({
-    challenge,
-    authority: request.invite.authority,
-    manifest: request.identity_manifest,
-    publication_policy: request.publication_policy,
-    signer: new FileInstallationSigner(join(directory, INSTALLATION_KEYS)),
-  });
-  writeCanonical(need(args, "out"), proof);
-  return {
-    challenge_id: proof.challenge_id,
-    installation_id: proof.installation_id,
-    proof_sha256: canonicalSha256(proof),
+    request_sha256: canonicalSha256(enrollmentRequest),
   };
 }
 
 async function enrollmentComplete(args: Args) {
   const directory = privateDirectory(need(args, "state"));
   const request = readCanonical<JoinRequest>(need(args, "request"));
-  const challenge =
-    validateFederationDocument<OrganizationEnrollmentChallengeV1>(
-      "organization-enrollment-challenge",
-      readCanonical(need(args, "challenge")),
-    );
-  const proof = validateFederationDocument<OrganizationEnrollmentProofV1>(
-    "organization-enrollment-proof",
-    readCanonical(need(args, "proof")),
-  );
   const authority = await openAuthority(directory);
   try {
     const receipt = await authority.store.completeEnrollment({
-      challenge,
-      proof,
+      enrollment_request: request.enrollment_request,
+      enrollment_grant: request.invite.enrollment_grant,
       manifest: request.identity_manifest,
+      publication_policy: request.publication_policy,
     });
     writeCanonical(need(args, "out"), receipt);
     return {
@@ -619,17 +574,15 @@ async function enrollmentComplete(args: Args) {
       membership_id: receipt.membership_id,
       installation_id: receipt.installation_id,
       receipt_sha256: canonicalSha256(receipt),
-      status: receipt.status,
     };
   } finally {
     await authority.store.close();
   }
 }
-
 async function enrollmentAccept(args: Args) {
   const directory = privateDirectory(need(args, "state"));
   const request = readCanonical<JoinRequest>(need(args, "request"));
-  const receipt = validateFederationDocument<OrganizationEnrollmentReceiptV1>(
+  const receipt = validateN2Document<OrganizationEnrollmentReceiptV1>(
     "organization-enrollment-receipt",
     readCanonical(need(args, "receipt")),
   );
@@ -681,7 +634,7 @@ async function recordCreate(args: Args) {
     typeof args["text"] === "string" && args["text"].trim().length > 0
       ? args["text"]
       : "Prove the synthetic manual N=2 record path.";
-  const outbox = new FederatedOutboxStore(join(directory, SYNC_DB));
+  const outbox = new FederatedOutboxStore(join(directory, OUTBOX_DB));
   try {
     const stored = await outbox.appendApprovalGroup({
       installation_id: installation.installation_id,
@@ -708,7 +661,7 @@ async function batchCreate(args: Args) {
   const directory = privateDirectory(need(args, "state"));
   const bundle = readMemberBundle(directory);
   const installationId = bundle.identity_manifest.installation.installation_id;
-  const outbox = new FederatedOutboxStore(join(directory, SYNC_DB));
+  const outbox = new FederatedOutboxStore(join(directory, OUTBOX_DB));
   const sync = new OrganizationSyncStore(
     join(directory, SYNC_DB),
     bundle.authority,
@@ -748,19 +701,19 @@ async function authorityIngest(args: Args) {
   const batch = readCanonical<OrganizationIngestBatchV1>(need(args, "batch"));
   const authority = await openAuthority(directory);
   try {
-    const receipts = await authority.store.ingestBatch(batch);
+    const receipt = await authority.store.ingestBatch(batch);
     const response: ManualIngestResponse = {
       schema_version: 1,
       kind: "echo-manual-n2-ingest-response",
       experimental: true,
       batch,
-      receipts,
+      receipt,
     };
     writeCanonical(need(args, "out"), response);
     return {
       installation_id: batch.installation_id,
       event_count: batch.events.length,
-      statuses: receipts.map(({ status }) => status),
+      status: receipt.status,
       response_sha256: canonicalSha256(response),
     };
   } finally {
@@ -783,10 +736,11 @@ async function receiptAccept(args: Args) {
     bundle.authority,
   );
   try {
-    const state = await sync.storeIngestReceipts(
+    const accepted = await sync.storeBatchReceipt(
       response.batch,
-      response.receipts.map((receipt) => canonicalJson(receipt)),
+      canonicalJson(response.receipt),
     );
+    const state = accepted.state;
     return {
       installation_id: state.installation_id,
       acknowledged_sequence: state.acknowledged_sequence,
@@ -814,7 +768,6 @@ async function authorityRevokeInstallation(args: Args) {
     return {
       installation_id: installation.installation_id,
       status: installation.status,
-      version: installation.version,
       revoked_at: installation.revoked_at,
     };
   } finally {
@@ -832,8 +785,6 @@ export async function runManualN2Onboarding(argv: readonly string[]) {
       out: { type: "string" },
       invite: { type: "string" },
       request: { type: "string" },
-      challenge: { type: "string" },
-      proof: { type: "string" },
       receipt: { type: "string" },
       batch: { type: "string" },
       response: { type: "string" },
@@ -854,8 +805,6 @@ export async function runManualN2Onboarding(argv: readonly string[]) {
     "authority-init": authorityInit,
     "invite-create": inviteCreate,
     "join-prepare": joinPrepare,
-    "challenge-issue": challengeIssue,
-    "proof-create": proofCreate,
     "enrollment-complete": enrollmentComplete,
     "enrollment-accept": enrollmentAccept,
     "record-create": recordCreate,

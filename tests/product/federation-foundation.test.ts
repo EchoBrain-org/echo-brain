@@ -222,7 +222,7 @@ describe("RFC 8785 foundation", () => {
 
 describe("federation wire schemas", () => {
   it("compiles every exact-key schema and forbids extras on every typed object", () => {
-    const names = [
+    const productSchemas = [
       "active-identity-bundle",
       "local-identity-manifest",
       "local-connection-registry",
@@ -233,10 +233,11 @@ describe("federation wire schemas", () => {
       "federated-record-envelope",
       "federated-export",
       "federated-recovery-report",
-      "organization-enrollment-challenge",
-      "organization-enrollment-proof",
+    ];
+    const experimentalSchemas = [
+      "organization-enrollment-request",
       "organization-enrollment-receipt",
-      "org-ingest-receipt",
+      "organization-batch-receipt",
     ];
     const ajv = new Ajv({ strict: true, allErrors: true });
     ajv.addFormat("utc-millisecond-timestamp", {
@@ -256,15 +257,17 @@ describe("federation wire schemas", () => {
       for (const [key, item] of Object.entries(record))
         visit(item, `${path}/${key}`);
     };
-    for (const name of names) {
-      const schema = JSON.parse(
-        readFileSync(
-          join(REPO, "schemas", "product", `${name}.v1.schema.json`),
-          "utf8",
-        ),
-      ) as object;
-      expect(() => ajv.compile(schema), name).not.toThrow();
-      visit(schema, name);
+    for (const [directory, names] of [
+      [join(REPO, "schemas", "product"), productSchemas],
+      [join(REPO, "src", "experimental", "n2", "schemas"), experimentalSchemas],
+    ] as const) {
+      for (const name of names) {
+        const schema = JSON.parse(
+          readFileSync(join(directory, `${name}.v1.schema.json`), "utf8"),
+        ) as object;
+        expect(() => ajv.compile(schema), name).not.toThrow();
+        visit(schema, name);
+      }
     }
   });
 

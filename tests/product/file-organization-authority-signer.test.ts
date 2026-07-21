@@ -2,8 +2,8 @@ import { mkdtempSync, realpathSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
-import { FileOrganizationAuthoritySigner } from '../../src/product/federation/authority/file-organization-authority-signer.js';
-import { signWithOrganizationAuthority } from '../../src/product/federation/authority/authority-signer.js';
+import { FileOrganizationAuthoritySigner } from '../../src/experimental/n2/authority/file-organization-authority-signer.js';
+import { signWithOrganizationAuthority } from '../../src/experimental/n2/authority/authority-signer.js';
 
 const AUTHORITY_ID = 'oau_00000000-0000-4000-8000-000000000001';
 const ORGANIZATION_ID = 'org_00000000-0000-4000-8000-000000000002';
