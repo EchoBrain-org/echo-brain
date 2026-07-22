@@ -13,7 +13,7 @@ import { isAbsolute, join, normalize } from 'node:path';
 import {
   acquireProcessFileLock,
   ProcessFileLockError,
-} from '../../../util/process-file-lock.js';
+} from '../../../infrastructure/filesystem/process-file-lock.js';
 
 const MAX_RECORD_BYTES = 64 * 1024;
 const LOCK_RETRY_MS = 20;
@@ -60,7 +60,9 @@ export interface SlackDeliveryReceiptStore {
     operation: () => Promise<T>,
   ): Promise<T>;
   get(idempotencyKey: string): Promise<SlackStoredDelivery | undefined>;
-  createAttempt(record: SlackStoredDelivery & { status: 'unknown' }): Promise<void>;
+  createAttempt(
+    record: SlackStoredDelivery & { status: 'unknown' },
+  ): Promise<void>;
   recordOutcome(record: SlackStoredDelivery): Promise<void>;
   clearAttempt(idempotencyKey: string): Promise<void>;
 }
@@ -146,9 +148,7 @@ async function writeAndSync(handle: FileHandle, value: string): Promise<void> {
  * therefore stop delivery, but cannot silently turn an uncertain attempt into
  * a duplicate post on restart.
  */
-export class FileSlackDeliveryReceiptStore
-  implements SlackDeliveryReceiptStore
-{
+export class FileSlackDeliveryReceiptStore implements SlackDeliveryReceiptStore {
   private readonly root: string;
   private readonly directoryChain: readonly string[];
 
@@ -186,17 +186,24 @@ export class FileSlackDeliveryReceiptStore
     const digest = createHash('sha256').update(idempotencyKey).digest('hex');
     let release: (() => Promise<void>) | undefined;
     try {
-      release = await acquireProcessFileLock(join(this.root, `${digest}.lock`), {
-        timeoutMs: LOCK_TIMEOUT_MS,
-        staleMs: LOCK_STALE_MS,
-        retryMs: LOCK_RETRY_MS,
-      });
+      release = await acquireProcessFileLock(
+        join(this.root, `${digest}.lock`),
+        {
+          timeoutMs: LOCK_TIMEOUT_MS,
+          staleMs: LOCK_STALE_MS,
+          retryMs: LOCK_RETRY_MS,
+        },
+      );
       return await operation();
     } catch (error) {
       if (error instanceof SlackDeliveryReceiptStoreError) throw error;
       if (error instanceof ProcessFileLockError) {
         throw new SlackDeliveryReceiptStoreError(
-          error.code === 'busy' ? 'busy' : error.code === 'io' ? 'io' : 'unsafe',
+          error.code === 'busy'
+            ? 'busy'
+            : error.code === 'io'
+              ? 'io'
+              : 'unsafe',
           error.code === 'busy'
             ? 'Slack delivery receipt store is busy'
             : 'Slack delivery receipt store lock is unavailable',

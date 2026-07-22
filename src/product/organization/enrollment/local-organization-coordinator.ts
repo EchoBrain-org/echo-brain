@@ -6,30 +6,30 @@ import {
 } from '@echo-brain/federation-protocol';
 import {
   createOrganizationAccessLeaseRequest,
-  type CompletedOrganizationEnrollmentV1,
+  validateCompletedOrganizationEnrollment,
+  validateOrganizationAccessLeaseResponse,
+  validateOrganizationAuthorityDescriptorResponse,
   type OrganizationAccessLeaseResponseV1,
-  type OrganizationAuthorityDescriptorResponseV1,
 } from '@echo-brain/organization-api';
 import {
   createOrganizationEnrollmentRequest,
   organizationEnrollmentGrantSha256,
-  validateOrganizationAuthorityDescriptor,
   type OrganizationAuthorityDescriptorV1,
   type OrganizationEnrollmentRequestV1,
   type OrganizationInstallationAccessDecisionV1,
 } from '@echo-brain/organization-protocol';
-import type { InstallationSigner } from '../../federation/foundation/installation-signer.js';
+import type { InstallationSigner } from '../../machine/security/installation-signer.js';
 import {
   signWithInstallationKey,
   verifyInstallationKeyDescriptor,
-} from '../../federation/foundation/installation-signer.js';
+} from '../../machine/security/installation-signer.js';
 import type { OrganizationAuthorityClient } from '../client/authority-client.js';
 import { OrganizationAuthorityConflictError } from '../client/authority-client.js';
 import type {
   OrganizationAccessVerificationPolicy,
   OrganizationStateStore,
   StoredOrganizationEnrollment,
-} from '../state/sqlite-organization-state-store.js';
+} from '../state/organization-state-store.js';
 
 export interface LocalOrganizationClock {
   now(): string;
@@ -56,59 +56,6 @@ export interface EnrollLocalInstallationInput {
   principalId: string;
   membershipId: string;
   installationId: string;
-}
-
-function exactObject(
-  value: unknown,
-  keys: readonly string[],
-  label: string,
-): Record<string, unknown> {
-  if (
-    typeof value !== 'object' ||
-    value === null ||
-    Array.isArray(value) ||
-    Object.getPrototypeOf(value) !== Object.prototype
-  ) {
-    throw new Error(`${label} must be one plain object`);
-  }
-  const actual = Object.keys(value).sort();
-  const expected = [...keys].sort();
-  if (
-    actual.length !== expected.length ||
-    actual.some((key, index) => key !== expected[index])
-  ) {
-    throw new Error(`${label} has an unexpected shape`);
-  }
-  return value as Record<string, unknown>;
-}
-
-function descriptorResponse(value: unknown): OrganizationAuthorityDescriptorV1 {
-  const response = exactObject(
-    value,
-    ['authority_descriptor'],
-    'organization authority descriptor response',
-  ) as unknown as OrganizationAuthorityDescriptorResponseV1;
-  return validateOrganizationAuthorityDescriptor(response.authority_descriptor);
-}
-
-function completedEnrollmentResponse(
-  value: unknown,
-): CompletedOrganizationEnrollmentV1 {
-  return exactObject(
-    value,
-    ['enrollment_receipt', 'access_state'],
-    'completed organization enrollment response',
-  ) as unknown as CompletedOrganizationEnrollmentV1;
-}
-
-function accessLeaseResponse(
-  value: unknown,
-): OrganizationAccessLeaseResponseV1 {
-  return exactObject(
-    value,
-    ['access_state'],
-    'organization access lease response',
-  ) as unknown as OrganizationAccessLeaseResponseV1;
 }
 
 function protocolSigningKey(
@@ -185,9 +132,9 @@ export class LocalOrganizationCoordinator {
   private async assertRemoteAuthority(
     expected: OrganizationAuthorityDescriptorV1,
   ): Promise<void> {
-    const observed = descriptorResponse(
+    const observed = validateOrganizationAuthorityDescriptorResponse(
       await this.options.authorityClient.readAuthorityDescriptor(),
-    );
+    ).authority_descriptor;
     if (canonicalJson(observed) !== canonicalJson(expected)) {
       throw new Error(
         'organization authority endpoint does not match the independently pinned descriptor',
@@ -273,7 +220,7 @@ export class LocalOrganizationCoordinator {
 
     await this.assertRemoteAuthority(input.authorityDescriptor);
     const request = await this.prepareRequest(input, grantSha256);
-    const response = completedEnrollmentResponse(
+    const response = validateCompletedOrganizationEnrollment(
       await this.options.authorityClient.completeEnrollment({
         enrollmentGrant: Uint8Array.from(input.enrollmentGrant),
         enrollmentRequest: request,
@@ -330,7 +277,7 @@ export class LocalOrganizationCoordinator {
 
     let response: OrganizationAccessLeaseResponseV1;
     try {
-      response = accessLeaseResponse(
+      response = validateOrganizationAccessLeaseResponse(
         await this.options.authorityClient.issueAccessLease(command),
       );
     } catch (error) {
@@ -340,7 +287,9 @@ export class LocalOrganizationCoordinator {
       ) {
         throw error;
       }
-      response = accessLeaseResponse(error.conflict.response);
+      response = validateOrganizationAccessLeaseResponse(
+        error.conflict.response,
+      );
     }
     return this.options.state.acceptAccessState(
       response.access_state,

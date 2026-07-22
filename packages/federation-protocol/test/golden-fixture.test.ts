@@ -11,6 +11,8 @@ import {
   canonicalJsonBytes,
   canonicalSha256,
   createSignedDocumentWithKey,
+  decodeStrictP256DerSignature,
+  encodeP256DerSignature,
   federationId,
   normalizeP256LowS,
   p256KeyId,
@@ -127,8 +129,11 @@ describe("federation protocol golden fixture", () => {
   });
 
   it("fixes the P-256 key ID, DER encoding, and low-S profile", () => {
+    const decoded = decodeStrictP256DerSignature(lowSSignature);
+
     expect(p256KeyId(publicKey)).toBe(fixture.key_id);
     expect(lowSSignature.toString("hex")).toBe(fixture.signature_der_hex);
+    expect(encodeP256DerSignature(decoded.r, decoded.s)).toEqual(lowSSignature);
     expect(() => assertP256LowS(lowSSignature)).not.toThrow();
     expect(() => assertP256LowS(highSSignature)).toThrow(
       "ECDSA P-256 signature is not low-S",
@@ -515,6 +520,8 @@ describe("federation protocol golden fixture", () => {
       "canonicalJsonBytes",
       "canonicalSha256",
       "createSignedDocumentWithKey",
+      "decodeStrictP256DerSignature",
+      "encodeP256DerSignature",
       "federationId",
       "normalizeP256LowS",
       "p256KeyId",

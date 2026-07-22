@@ -58,7 +58,8 @@
       ],
       "allowed_workspace_packages": [
         "@echo-brain/federation-protocol",
-        "@echo-brain/organization-protocol"
+        "@echo-brain/organization-protocol",
+        "@echo-brain/organization-api"
       ],
       "allowed_external_packages": [],
       "allowed_node_builtins": ["buffer"]

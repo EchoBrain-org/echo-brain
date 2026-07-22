@@ -7,15 +7,12 @@ import type {
   DecisionBrief,
   DeliveryEnvelope,
 } from '../../src/core/index.js';
-import {
-  AdapterError,
-  assertDeliveryReceipt,
-} from '../../src/core/index.js';
+import { AdapterError, assertDeliveryReceipt } from '../../src/core/index.js';
 import {
   FileSlackDeliveryReceiptStore,
   SlackDeliverySurface,
 } from '../../src/adapters/delivery-surfaces/slack/index.js';
-import { adapterConformance } from '../core/adapter-conformance.js';
+import { adapterConformance } from '../support/adapter-conformance.js';
 
 const roots: string[] = [];
 
@@ -117,7 +114,9 @@ function fakeSlack(): FakeSlack {
       if (method === 'chat.postMessage') {
         slack.postCalls += 1;
         if (typeof init?.body === 'string') {
-          slack.postBodies.push(JSON.parse(init.body) as Record<string, unknown>);
+          slack.postBodies.push(
+            JSON.parse(init.body) as Record<string, unknown>,
+          );
         }
         if (slack.postMode === 'transport') throw new Error('socket reset');
         if (slack.postMode === 'rate-limited') {
@@ -154,7 +153,9 @@ function build(root: string, slack: FakeSlack, adapterConfig = config()) {
 
 afterEach(async () => {
   await Promise.all(
-    roots.splice(0).map(async (root) => await rm(root, { recursive: true, force: true })),
+    roots
+      .splice(0)
+      .map(async (root) => await rm(root, { recursive: true, force: true })),
   );
 });
 
@@ -196,7 +197,9 @@ describe('Slack delivery surface', () => {
     const body = slack.postBodies[0];
     expect(body?.['channel']).toBe('C123');
     expect(String(body?.['text'])).toContain('&lt;!channel&gt;');
-    expect(JSON.stringify(body?.['blocks'])).toContain('Ship the founder wedge');
+    expect(JSON.stringify(body?.['blocks'])).toContain(
+      'Ship the founder wedge',
+    );
     expect(JSON.stringify(body?.['blocks'])).not.toMatch(
       /awaiting approval|to approve|to reject|react :/i,
     );
@@ -263,7 +266,10 @@ describe('Slack delivery surface', () => {
       return url.endsWith('/chat.postMessage')
         ? new Response(
             JSON.stringify({ ok: true, channel: 'C999', ts: '1700.200' }),
-            { status: 200, headers: { 'content-type': 'application/json' } },
+            {
+              status: 200,
+              headers: { 'content-type': 'application/json' },
+            },
           )
         : response;
     }) as typeof fetch;
@@ -277,7 +283,9 @@ describe('Slack delivery surface', () => {
     });
     await expect(
       build(root, slack).publish(envelope(surface, 'attempt-2')),
-    ).resolves.toMatchObject({ status: 'unknown' });
+    ).resolves.toMatchObject({
+      status: 'unknown',
+    });
     expect(slack.postCalls).toBe(1);
   });
 
@@ -292,7 +300,9 @@ describe('Slack delivery surface', () => {
       retryable: true,
     });
     slack.postMode = 'success';
-    await expect(surface.publish(envelope(surface, 'attempt-2'))).resolves.toMatchObject({
+    await expect(
+      surface.publish(envelope(surface, 'attempt-2')),
+    ).resolves.toMatchObject({
       status: 'delivered',
     });
     expect(slack.postCalls).toBe(2);
@@ -384,7 +394,9 @@ describe('Slack delivery surface', () => {
       config({ credential_ref: undefined }),
       config({ credential_ref: 'keychain:slack' }),
       config({ settings: { channel_id: 'general' } }),
-      config({ settings: { channel_id: 'C123', base_url: 'https://evil.invalid' } }),
+      config({
+        settings: { channel_id: 'C123', base_url: 'https://evil.invalid' },
+      }),
       config({ settings: { channel_id: 'C123', request_timeout_ms: 1 } }),
     ]) {
       expect(surface.validateConfig(candidate).ok).toBe(false);
@@ -398,7 +410,9 @@ describe('Slack delivery surface', () => {
     await expect(missingCredential.healthCheck()).resolves.toMatchObject({
       status: 'unauthorized',
     });
-    await expect(missingCredential.publish(envelope(missingCredential))).rejects.toMatchObject({
+    await expect(
+      missingCredential.publish(envelope(missingCredential)),
+    ).rejects.toMatchObject({
       code: 'unauthorized',
       retryable: false,
     });

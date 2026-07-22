@@ -8,10 +8,9 @@ import {
   verifyP256SigningKeyDescriptor,
   verifySignedDocument,
 } from '@echo-brain/federation-protocol';
-import type {
-  Sha256Digest,
-  SignedDocument,
-} from '@echo-brain/federation-protocol';
+import type { Sha256Digest } from '@echo-brain/federation-protocol';
+import { validateOrganizationAccessLeaseRequest } from '@echo-brain/organization-api';
+import type { OrganizationAccessLeaseRequestV1 } from '@echo-brain/organization-api';
 import {
   createOrganizationEnrollmentReceipt,
   createOrganizationInstallationAccessState,
@@ -62,22 +61,6 @@ import type {
 } from './ports/runtime-ports.js';
 
 const MAX_TRANSITION_RETRIES = 16;
-const ACCESS_REQUEST_ID_PATTERN =
-  /^alr_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
-
-export interface OrganizationAccessLeaseCommand extends SignedDocument {
-  schema_version: 1;
-  kind: 'echo-organization-access-lease-request';
-  request_id: string;
-  authority_id: string;
-  authority_key_id: Sha256Digest;
-  organization_id: string;
-  enrollment_id: string;
-  installation_id: string;
-  installation_key_id: Sha256Digest;
-  previous_access_state_sha256: Sha256Digest;
-  requested_at: string;
-}
 
 export interface IssuedEnrollmentGrant {
   authority_id: string;
@@ -268,10 +251,10 @@ export class OrganizationAuthorityApplication {
         actor_kind: 'admin',
         action: 'membership.provisioned',
         subject_id: membership.membership_id,
-        detail_json: canonicalJson({
+        detail: {
           membership_type: membership.membership_type,
           principal_id: membership.principal_id,
-        }),
+        },
       });
       return membership;
     });
@@ -321,10 +304,10 @@ export class OrganizationAuthorityApplication {
         actor_kind: 'admin',
         action: 'enrollment_grant.issued',
         subject_id: membership.membership_id,
-        detail_json: canonicalJson({
+        detail: {
           expires_at: expiresAt,
           grant_sha256: grantSha256,
-        }),
+        },
       });
       return {
         authority_id: this.descriptorValue.authority_id,
@@ -552,10 +535,10 @@ export class OrganizationAuthorityApplication {
         actor_kind: 'enrollment_grant',
         action: 'installation.enrolled',
         subject_id: request.installation_id,
-        detail_json: canonicalJson({
+        detail: {
           enrollment_id: enrollmentId,
           request_sha256: requestSha256,
-        }),
+        },
       });
       return {
         enrollment_receipt: receipt,
@@ -565,21 +548,16 @@ export class OrganizationAuthorityApplication {
   }
 
   private authenticateAccessCommand(
-    command: OrganizationAccessLeaseCommand,
+    command: OrganizationAccessLeaseRequestV1,
     enrollment: StoredAuthorityEnrollment,
-  ): { requestSha256: Sha256Digest; requestJson: string } {
+  ): Sha256Digest {
     if (
-      command.schema_version !== 1 ||
-      command.kind !== 'echo-organization-access-lease-request' ||
-      !ACCESS_REQUEST_ID_PATTERN.test(command.request_id) ||
       command.authority_id !== enrollment.authority_id ||
       command.authority_key_id !== this.descriptorValue.signing_key.key_id ||
       command.organization_id !== enrollment.organization_id ||
       command.enrollment_id !== enrollment.enrollment_id ||
       command.installation_id !== enrollment.installation_id ||
-      command.installation_key_id !==
-        enrollment.installation_signing_key.key_id ||
-      command.integrity.key_id !== enrollment.installation_signing_key.key_id
+      command.installation_key_id !== enrollment.installation_signing_key.key_id
     ) {
       throw new AuthorityOperationError(
         'unauthorized',
@@ -601,20 +579,17 @@ export class OrganizationAuthorityApplication {
         'access lease request authentication failed',
       );
     }
-    return {
-      requestSha256: canonicalSha256(command),
-      requestJson: canonicalJson(command),
-    };
+    return canonicalSha256(command);
   }
 
   private storedLeaseResponse(
     transaction: AuthorityReadTransaction,
     requestSha256: Sha256Digest,
-    requestJson: string,
+    request: OrganizationAccessLeaseRequestV1,
   ): OrganizationInstallationAccessStateV1 | undefined {
     const stored = transaction.accessLeaseRequestByDigest(requestSha256);
     if (stored === undefined) return undefined;
-    if (stored.request_json !== requestJson) {
+    if (canonicalJson(stored.request) !== canonicalJson(request)) {
       throw new Error('stored access request digest is inconsistent');
     }
     const state = transaction.accessStateByDigest(
@@ -627,20 +602,18 @@ export class OrganizationAuthorityApplication {
   }
 
   async issueAccessLease(
-    command: OrganizationAccessLeaseCommand,
+    command: OrganizationAccessLeaseRequestV1,
   ): Promise<OrganizationInstallationAccessStateV1> {
+    command = validateOrganizationAccessLeaseRequest(command);
     command = JSON.parse(
       canonicalJson(command),
-    ) as OrganizationAccessLeaseCommand;
+    ) as OrganizationAccessLeaseRequestV1;
     const enrollment = this.repository.read((transaction) =>
       requireEnrollment(transaction, command.enrollment_id),
     );
-    const { requestSha256, requestJson } = this.authenticateAccessCommand(
-      command,
-      enrollment,
-    );
+    const requestSha256 = this.authenticateAccessCommand(command, enrollment);
     const replay = this.repository.read((transaction) =>
-      this.storedLeaseResponse(transaction, requestSha256, requestJson),
+      this.storedLeaseResponse(transaction, requestSha256, command),
     );
     if (replay !== undefined) return replay;
     const requestedAt = this.now('access lease request receipt time');
@@ -744,7 +717,7 @@ export class OrganizationAuthorityApplication {
       const exact = this.storedLeaseResponse(
         transaction,
         requestSha256,
-        requestJson,
+        command,
       );
       if (exact !== undefined) return exact;
       const duplicateId = transaction.accessLeaseRequestById(
@@ -785,7 +758,7 @@ export class OrganizationAuthorityApplication {
       const requestRecord: StoredAccessLeaseRequest = {
         request_id: command.request_id,
         request_sha256: requestSha256,
-        request_json: requestJson,
+        request: command,
         enrollment_id: command.enrollment_id,
         previous_access_state_sha256: command.previous_access_state_sha256,
         resulting_state_sha256: resulting.state_sha256,
@@ -800,10 +773,10 @@ export class OrganizationAuthorityApplication {
             ? 'access_lease.issued'
             : 'access_lease.revoked_state_returned',
         subject_id: currentEnrollment.installation_id,
-        detail_json: canonicalJson({
-          access_state_sequence: resulting.state.access_state_sequence,
+        detail: {
           request_id: command.request_id,
-        }),
+          access_state_sequence: resulting.state.access_state_sequence,
+        },
       });
       return resulting.state;
     });
@@ -893,7 +866,7 @@ export class OrganizationAuthorityApplication {
           actor_kind: 'admin',
           action: 'installation.revoked',
           subject_id: installationId,
-          detail_json: canonicalJson({ reason }),
+          detail: { reason },
         });
         return state;
       });
@@ -1035,7 +1008,7 @@ export class OrganizationAuthorityApplication {
           actor_kind: 'admin',
           action: 'membership.revoked',
           subject_id: membershipId,
-          detail_json: canonicalJson({ reason }),
+          detail: { reason },
         });
         const storedMembership = transaction.membership(membershipId);
         if (storedMembership === undefined) {

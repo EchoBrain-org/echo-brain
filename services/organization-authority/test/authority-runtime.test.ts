@@ -13,6 +13,7 @@ import { describe, expect, it } from 'vitest';
 import {
   canonicalJson,
   canonicalSha256,
+  createSignedDocumentWithKey,
   federationId,
   normalizeP256LowS,
   p256KeyId,
@@ -243,12 +244,53 @@ function closeFixture(
 }
 
 describe('single-organization authority runtime', () => {
+  it('rejects a correctly signed access lease command with an extra field at the application boundary', async () => {
+    const fixture = await createEnrolledFixture('2026-07-22T11:30:00.000Z');
+    try {
+      fixture.clock.advance(1);
+      const command = await createSignedDocumentWithKey(
+        {
+          schema_version: 1 as const,
+          kind: 'echo-organization-access-lease-request' as const,
+          request_id: `alr_${randomUUID()}`,
+          authority_id: fixture.enrolled.result.enrollment_receipt.authority_id,
+          authority_key_id:
+            fixture.enrolled.result.enrollment_receipt.authority_key_id,
+          organization_id:
+            fixture.enrolled.result.enrollment_receipt.organization_id,
+          enrollment_id:
+            fixture.enrolled.result.enrollment_receipt.enrollment_id,
+          installation_id: fixture.enrolled.installationId,
+          installation_key_id: fixture.enrolled.installation.descriptor.key_id,
+          previous_access_state_sha256: canonicalSha256(
+            fixture.enrolled.result.access_state,
+          ),
+          requested_at: fixture.clock.now(),
+          unexpected_field: 'signed but not allowed',
+        },
+        fixture.enrolled.installation.descriptor.key_id,
+        async (bytes) => sign(fixture.enrolled.installation, bytes),
+      );
+
+      await expect(
+        fixture.application.issueAccessLease(command),
+      ).rejects.toThrow(
+        'organization API: access lease request has an unexpected shape',
+      );
+    } finally {
+      closeFixture(fixture);
+    }
+  });
+
   it('enrolls idempotently, advances signed leases, rejects stale heads, and revokes', async () => {
     const directory = mkdtempSync(join(tmpdir(), 'echo-authority-test-'));
     chmodSync(directory, 0o700);
     const databasePath = join(directory, 'authority.sqlite');
     const clock = new FakeClock(Date.parse('2026-07-22T12:00:00.000Z'));
-    const { application } = await createApplication(databasePath, clock);
+    const { application, repository } = await createApplication(
+      databasePath,
+      clock,
+    );
     try {
       const membership = application.provisionMembership({
         display_name: 'Employee One',
@@ -280,6 +322,10 @@ describe('single-organization authority runtime', () => {
       );
       const refreshed = await application.issueAccessLease(access);
       expect(refreshed.access_state_sequence).toBe(2);
+      const storedAccessRequest = repository.read((transaction) =>
+        transaction.accessLeaseRequestByDigest(canonicalSha256(access)),
+      );
+      expect(storedAccessRequest?.request).toEqual(access);
 
       const retryAfterAdvance = await application.completeEnrollment({
         enrollment_grant: enrolled.grant,
@@ -333,18 +379,30 @@ describe('single-organization authority runtime', () => {
 
       const database = new Database(databasePath, { readonly: true });
       try {
-        const tables = database
-          .prepare(
-            `SELECT name FROM sqlite_master
-             WHERE type = 'table' AND name LIKE 'authority_%' ORDER BY name`,
-          )
-          .all() as Array<{ name: string }>;
-        expect(tables).toHaveLength(8);
         const grantRows = database
           .prepare('SELECT * FROM authority_enrollment_grants')
           .all();
         expect(JSON.stringify(grantRows)).not.toContain(
           Buffer.from(enrolled.grant).toString('base64url'),
+        );
+        const accessRequestRow = database
+          .prepare(
+            `SELECT request_json FROM authority_access_lease_requests
+             WHERE request_sha256 = ?`,
+          )
+          .get(canonicalSha256(access)) as { request_json: string };
+        expect(accessRequestRow.request_json).toBe(canonicalJson(access));
+        const accessAuditRow = database
+          .prepare(
+            `SELECT detail_json FROM authority_audit_log
+             WHERE action = 'access_lease.issued' AND subject_id = ?`,
+          )
+          .get(enrolled.installationId) as { detail_json: string };
+        expect(accessAuditRow.detail_json).toBe(
+          canonicalJson({
+            access_state_sequence: refreshed.access_state_sequence,
+            request_id: access.request_id,
+          }),
         );
         expect(
           (

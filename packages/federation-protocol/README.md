@@ -7,8 +7,9 @@ organization authority must execute identically:
 
 - RFC 8785 canonical JSON bytes and SHA-256 digests;
 - federation identifier and UTC timestamp validation;
-- the ECDSA P-256 DER low-S signature profile and fingerprints over canonical
-  uncompressed named-curve SPKI public keys;
+- the ECDSA P-256 DER low-S signature profile, strict DER compatibility
+  encode/decode helpers, and fingerprints over canonical uncompressed
+  named-curve SPKI public keys;
 - public installation-key descriptor verification; and
 - generic signed-document creation and verification.
 
@@ -28,8 +29,10 @@ consistency but are metadata claims, not hardware attestation.
 
 It owns no filesystem store, private-key provider, macOS implementation,
 database, HTTP transport, UI, schema, or organization-specific document or
-workflow. The root product remains on its compatibility implementation until a
-later artifact-staging cutover can package this workspace dependency exactly.
+workflow. The root product's federation foundation keeps compatibility exports
+for existing imports and delegates these portable operations to this package;
+machine signer lifecycle and capability-specific behavior remain in the
+product.
 
 The package has no workspace dependencies. `src/index.ts` is its only public
 code entry point; modules are separated by protocol responsibility rather than

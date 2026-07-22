@@ -1,16 +1,16 @@
 import { Buffer } from 'node:buffer';
 import { createHash } from 'node:crypto';
 import { once } from 'node:events';
-import type { IncomingMessage, Server } from 'node:http';
+import type { Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { describe, expect, it } from 'vitest';
-import type { OrganizationAuthorityApplication } from '../src/application/organization-authority.js';
 import { AuthorityOperationError } from '../src/domain/errors.js';
 import {
   createOrganizationAuthorityHttpServer,
   decodeOrganizationApiJsonBody,
   InMemoryPostRequestRateLimiter,
 } from '../src/presentation/http-server.js';
+import type { OrganizationAuthorityHttpApplication } from '../src/presentation/organization-authority-http-application.js';
 import {
   AuthenticatedProxyClientIdentityResolver,
   TRUSTED_PROXY_AUTHORIZATION_HEADER,
@@ -46,9 +46,21 @@ async function close(server: Server): Promise<void> {
 }
 
 function testApplication(
-  overrides: Record<string, unknown> = {},
-): OrganizationAuthorityApplication {
-  return overrides as unknown as OrganizationAuthorityApplication;
+  overrides: Partial<OrganizationAuthorityHttpApplication> = {},
+): OrganizationAuthorityHttpApplication {
+  const unexpectedCall = (): never => {
+    throw new Error('unexpected authority application call');
+  };
+  return {
+    descriptor: unexpectedCall,
+    provisionMembership: unexpectedCall,
+    issueEnrollmentGrant: unexpectedCall,
+    completeEnrollment: unexpectedCall,
+    issueAccessLease: unexpectedCall,
+    revokeMembership: unexpectedCall,
+    revokeInstallation: unexpectedCall,
+    ...overrides,
+  };
 }
 
 describe('authority HTTP presentation', () => {
@@ -87,7 +99,7 @@ describe('authority HTTP presentation', () => {
         TRUSTED_PROXY_CLIENT_ID_HEADER,
         identity,
       ],
-    } as unknown as IncomingMessage;
+    };
     expect(resolver.resolve(request)).toBe(identity);
 
     request.rawHeaders[1] =

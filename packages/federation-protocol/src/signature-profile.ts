@@ -7,7 +7,7 @@ const P256_ORDER = BigInt(
 );
 const P256_HALF_ORDER = P256_ORDER / 2n;
 
-interface DecodedEcdsaSignature {
+export interface DecodedEcdsaSignature {
   r: bigint;
   s: bigint;
 }
@@ -44,7 +44,7 @@ function readInteger(
   return { value, next: end };
 }
 
-function decodeStrictP256DerSignature(
+export function decodeStrictP256DerSignature(
   signature: Buffer,
 ): DecodedEcdsaSignature {
   if (signature.length < 8 || signature.length > 72 || signature[0] !== 0x30) {
@@ -83,7 +83,7 @@ function encodeInteger(value: bigint): Buffer {
   return Buffer.concat([Buffer.from([0x02, magnitude.length]), magnitude]);
 }
 
-function encodeP256DerSignature(r: bigint, s: bigint): Buffer {
+export function encodeP256DerSignature(r: bigint, s: bigint): Buffer {
   if (r <= 0n || r >= P256_ORDER || s <= 0n || s >= P256_ORDER) {
     throw new Error("ECDSA signature scalar is outside the P-256 group");
   }

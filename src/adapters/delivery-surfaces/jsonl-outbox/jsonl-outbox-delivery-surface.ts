@@ -1,11 +1,6 @@
 import { createHash } from 'node:crypto';
 import { constants } from 'node:fs';
-import {
-  access,
-  lstat,
-  open,
-  type FileHandle,
-} from 'node:fs/promises';
+import { access, lstat, open, type FileHandle } from 'node:fs/promises';
 import { dirname, isAbsolute, normalize } from 'node:path';
 import { createInterface } from 'node:readline';
 import type {
@@ -24,7 +19,7 @@ import {
 import {
   acquireProcessFileLock,
   ProcessFileLockError,
-} from '../../../util/process-file-lock.js';
+} from '../../../infrastructure/filesystem/process-file-lock.js';
 
 export const JSONL_OUTBOX_DELIVERY_SURFACE_ADAPTER_ID = 'jsonl-outbox';
 export const JSONL_OUTBOX_DELIVERY_SURFACE_ADAPTER_VERSION = '1.0.0';
@@ -62,7 +57,9 @@ function isNonEmptyString(value: unknown): value is string {
 
 function normalizedTimestamp(value: string): string | null {
   const milliseconds = new Date(value).getTime();
-  return Number.isNaN(milliseconds) ? null : new Date(milliseconds).toISOString();
+  return Number.isNaN(milliseconds)
+    ? null
+    : new Date(milliseconds).toISOString();
 }
 
 function settingsFrom(config: AdapterConfig): JsonlOutboxSettings {
@@ -104,7 +101,10 @@ function errnoCode(error: unknown): string | undefined {
     : undefined;
 }
 
-function mapFilesystemError(error: unknown, outcomeMayBeUnknown = false): AdapterError {
+function mapFilesystemError(
+  error: unknown,
+  outcomeMayBeUnknown = false,
+): AdapterError {
   if (error instanceof AdapterError) return error;
   const code = errnoCode(error);
   if (
@@ -167,10 +167,14 @@ export class JsonlOutboxDeliverySurface implements DeliverySurfaceAdapter {
   validateConfig(config: AdapterConfig): AdapterConfigValidation {
     const errors: string[] = [];
     if (config.adapter_id !== JSONL_OUTBOX_DELIVERY_SURFACE_ADAPTER_ID) {
-      errors.push(`adapter_id must be '${JSONL_OUTBOX_DELIVERY_SURFACE_ADAPTER_ID}'`);
+      errors.push(
+        `adapter_id must be '${JSONL_OUTBOX_DELIVERY_SURFACE_ADAPTER_ID}'`,
+      );
     }
     if (!/^[a-z][a-z0-9-]*$/.test(config.instance_id)) {
-      errors.push('instance_id must use lowercase letters, numbers, and hyphens');
+      errors.push(
+        'instance_id must use lowercase letters, numbers, and hyphens',
+      );
     } else if (config.instance_id !== this.identity.instance_id) {
       errors.push('instance_id does not match the registered adapter instance');
     }
@@ -179,7 +183,8 @@ export class JsonlOutboxDeliverySurface implements DeliverySurfaceAdapter {
     }
     const allowedSettings = new Set(['path', 'destination_id']);
     for (const key of Object.keys(config.settings)) {
-      if (!allowedSettings.has(key)) errors.push(`settings.${key} is not supported`);
+      if (!allowedSettings.has(key))
+        errors.push(`settings.${key} is not supported`);
     }
     const filePath = config.settings['path'];
     if (
@@ -197,7 +202,9 @@ export class JsonlOutboxDeliverySurface implements DeliverySurfaceAdapter {
         destinationId.length > 256 ||
         /[\u0000-\u001f\u007f]/.test(destinationId))
     ) {
-      errors.push('settings.destination_id must be a non-empty printable string');
+      errors.push(
+        'settings.destination_id must be a non-empty printable string',
+      );
     }
     return { ok: errors.length === 0, errors };
   }
@@ -246,12 +253,20 @@ export class JsonlOutboxDeliverySurface implements DeliverySurfaceAdapter {
     this.assertNotCancelled(operation?.signal, 'delivery');
     const validation = this.validateConfig(this.config);
     if (!validation.ok) {
-      throw new AdapterError('invalid_config', 'JSONL outbox configuration is invalid', false);
+      throw new AdapterError(
+        'invalid_config',
+        'JSONL outbox configuration is invalid',
+        false,
+      );
     }
     this.assertEnvelope(envelope);
     const recordedAt = normalizedTimestamp(this.now());
     if (recordedAt === null) {
-      throw new AdapterError('temporarily_unavailable', 'JSONL outbox clock is invalid', true);
+      throw new AdapterError(
+        'temporarily_unavailable',
+        'JSONL outbox clock is invalid',
+        true,
+      );
     }
 
     await this.assertFilesystemReady();
@@ -274,7 +289,11 @@ export class JsonlOutboxDeliverySurface implements DeliverySurfaceAdapter {
           operation?.signal,
         );
         if (existing !== undefined) {
-          return this.receipt(envelope.id, existing.external_id, existing.recorded_at);
+          return this.receipt(
+            envelope.id,
+            existing.external_id,
+            existing.recorded_at,
+          );
         }
 
         const record: JsonlOutboxRecord = {
@@ -297,7 +316,11 @@ export class JsonlOutboxDeliverySurface implements DeliverySurfaceAdapter {
         await this.writeAll(handle, bytes);
         await handle.sync();
         if (!fileExisted) await syncDirectory(dirname(this.settings.path));
-        return this.receipt(envelope.id, record.external_id, record.recorded_at);
+        return this.receipt(
+          envelope.id,
+          record.external_id,
+          record.recorded_at,
+        );
       } finally {
         await handle.close();
       }
@@ -383,7 +406,11 @@ export class JsonlOutboxDeliverySurface implements DeliverySurfaceAdapter {
       const parent = dirname(this.settings.path);
       const parentStat = await lstat(parent);
       if (!parentStat.isDirectory()) {
-        throw new AdapterError('permanently_rejected', 'JSONL outbox parent is not a directory', false);
+        throw new AdapterError(
+          'permanently_rejected',
+          'JSONL outbox parent is not a directory',
+          false,
+        );
       }
       await access(parent, constants.W_OK | constants.X_OK);
       try {
@@ -457,7 +484,11 @@ export class JsonlOutboxDeliverySurface implements DeliverySurfaceAdapter {
     idempotencyKey: string,
     signal?: AbortSignal,
   ): Promise<JsonlOutboxRecord | undefined> {
-    const input = handle.createReadStream({ autoClose: false, start: 0, encoding: 'utf8' });
+    const input = handle.createReadStream({
+      autoClose: false,
+      start: 0,
+      encoding: 'utf8',
+    });
     const lines = createInterface({ input, crlfDelay: Infinity });
     let lineNumber = 0;
     let existing: JsonlOutboxRecord | undefined;
@@ -483,7 +514,10 @@ export class JsonlOutboxDeliverySurface implements DeliverySurfaceAdapter {
             false,
           );
         }
-        if (parsed.idempotency_key === idempotencyKey && existing === undefined) {
+        if (
+          parsed.idempotency_key === idempotencyKey &&
+          existing === undefined
+        ) {
           existing = parsed;
         }
       }
@@ -579,9 +613,18 @@ export class JsonlOutboxDeliverySurface implements DeliverySurfaceAdapter {
   private async writeAll(handle: FileHandle, bytes: Buffer): Promise<void> {
     let offset = 0;
     while (offset < bytes.byteLength) {
-      const result = await handle.write(bytes, offset, bytes.byteLength - offset, null);
+      const result = await handle.write(
+        bytes,
+        offset,
+        bytes.byteLength - offset,
+        null,
+      );
       if (result.bytesWritten === 0) {
-        throw new AdapterError('unknown_outcome', 'JSONL outbox write made no progress', true);
+        throw new AdapterError(
+          'unknown_outcome',
+          'JSONL outbox write made no progress',
+          true,
+        );
       }
       offset += result.bytesWritten;
     }

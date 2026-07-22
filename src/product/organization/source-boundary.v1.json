@@ -9,11 +9,8 @@
   "owned_source_paths": ["src/product/organization/**"],
   "allowed_internal_paths": [
     "src/product/organization/**",
-    "src/product/federation/**",
-    "src/product/storage/**",
-    "src/product/paths.ts",
-    "src/product/secure-local-files.ts",
-    "src/infrastructure/filesystem/**"
+    "src/product/machine/security/installation-signer.ts",
+    "src/product/storage/open-product-database.ts"
   ],
   "forbidden_repository_roots": [
     "src/experimental/n2/",
@@ -46,11 +43,7 @@
       "from": "src/product/organization/composition.ts",
       "allowed_imports": [
         "src/product/organization/**",
-        "src/product/federation/**",
-        "src/product/storage/**",
-        "src/product/paths.ts",
-        "src/product/secure-local-files.ts",
-        "src/infrastructure/filesystem/**"
+        "src/product/machine/security/installation-signer.ts"
       ],
       "allowed_workspace_packages": [
         "@echo-brain/federation-protocol",
@@ -76,7 +69,7 @@
       "from": "src/product/organization/state/**",
       "allowed_imports": [
         "src/product/organization/state/**",
-        "src/product/storage/**"
+        "src/product/storage/open-product-database.ts"
       ],
       "allowed_workspace_packages": [
         "@echo-brain/federation-protocol",
@@ -92,8 +85,7 @@
         "src/product/organization/enrollment/**",
         "src/product/organization/client/**",
         "src/product/organization/state/**",
-        "src/product/federation/**",
-        "src/product/secure-local-files.ts"
+        "src/product/machine/security/installation-signer.ts"
       ],
       "allowed_workspace_packages": [
         "@echo-brain/federation-protocol",

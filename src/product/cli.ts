@@ -60,7 +60,7 @@ import {
   FounderIdentityGateError,
   type IdentityCheckDependencies,
 } from "./federation/bootstrap/identity-check.js";
-import { MacOsSecureEnclaveInstallationSigner } from "./federation/foundation/macos-installation-signer.js";
+import { MacOsSecureEnclaveInstallationSigner } from "./machine/security/macos-installation-signer.js";
 import { bundledProductHelperAvailable } from "./spawn-sanitized-child.js";
 import { createProductCredentialResolver } from "./credentials.js";
 import {
@@ -933,8 +933,7 @@ function withProductionFounderSeedCutover(
           ...(dependencies.independentCopyInspector === undefined
             ? {}
             : {
-                independentCopyInspector:
-                  dependencies.independentCopyInspector,
+                independentCopyInspector: dependencies.independentCopyInspector,
               }),
           ...(dependencies.now === undefined ? {} : { now: dependencies.now }),
         });
@@ -1270,8 +1269,7 @@ export async function runProductCli(
           ...(dependencies.independentCopyInspector === undefined
             ? {}
             : {
-                independentCopyInspector:
-                  dependencies.independentCopyInspector,
+                independentCopyInspector: dependencies.independentCopyInspector,
               }),
           ...(dependencies.now === undefined ? {} : { now: dependencies.now }),
         });
@@ -1315,8 +1313,7 @@ export async function runProductCli(
   if (parsed.command === "export") {
     let releases: readonly ReleaseProductLifecycleLock[] = [];
     let federation:
-      | Awaited<ReturnType<typeof openFounderFederationRuntime>>
-      | undefined;
+      Awaited<ReturnType<typeof openFounderFederationRuntime>> | undefined;
     let result: Record<string, unknown> | undefined;
     let failure: unknown;
     try {
@@ -1340,8 +1337,7 @@ export async function runProductCli(
           ...(dependencies.independentCopyInspector === undefined
             ? {}
             : {
-                independentCopyInspector:
-                  dependencies.independentCopyInspector,
+                independentCopyInspector: dependencies.independentCopyInspector,
               }),
           ...(dependencies.now === undefined ? {} : { now: dependencies.now }),
         }));

@@ -31,9 +31,9 @@ import {
   OrganizationClockRollbackError,
   OrganizationStateConflictError,
   OrganizationStateCorruptionError,
-  SqliteOrganizationStateStore,
   type OrganizationAccessVerificationPolicy,
-} from '../../src/product/organization/state/sqlite-organization-state-store.js';
+} from '../../src/product/organization/state/organization-state-store.js';
+import { SqliteOrganizationStateStore } from '../../src/product/organization/state/sqlite-organization-state-store.js';
 
 const MAX_TTL_MS = 5 * 60 * 1000;
 const ENROLLED_AT = '2026-07-22T00:00:00.000Z';

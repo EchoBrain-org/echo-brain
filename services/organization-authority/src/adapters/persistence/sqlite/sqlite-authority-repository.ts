@@ -783,11 +783,14 @@ class SqliteAuthorityTransaction
       'access request result postdates its committed receipt',
     );
     return {
-      ...row,
+      request_id: row.request_id,
       request_sha256: row.request_sha256 as Sha256Digest,
+      request,
+      enrollment_id: row.enrollment_id,
       previous_access_state_sha256:
         row.previous_access_state_sha256 as Sha256Digest,
       resulting_state_sha256: row.resulting_state_sha256 as Sha256Digest,
+      received_at: row.received_at,
     };
   }
 
@@ -933,6 +936,7 @@ class SqliteAuthorityTransaction
   }
 
   insertAccessLeaseRequest(request: StoredAccessLeaseRequest): void {
+    const requestJson = canonicalJson(request.request);
     this.database
       .prepare(
         `INSERT INTO authority_access_lease_requests (
@@ -943,7 +947,7 @@ class SqliteAuthorityTransaction
       .run(
         request.request_sha256,
         request.request_id,
-        request.request_json,
+        requestJson,
         request.enrollment_id,
         request.previous_access_state_sha256,
         request.resulting_state_sha256,
@@ -986,7 +990,7 @@ class SqliteAuthorityTransaction
   }
 
   appendAudit(entry: AuthorityAuditEntry): void {
-    parseStoredJson(entry.detail_json);
+    const detailJson = canonicalJson(entry.detail);
     this.database
       .prepare(
         `INSERT INTO authority_audit_log (
@@ -998,7 +1002,7 @@ class SqliteAuthorityTransaction
         entry.actor_kind,
         entry.action,
         entry.subject_id,
-        entry.detail_json,
+        detailJson,
       );
   }
 }

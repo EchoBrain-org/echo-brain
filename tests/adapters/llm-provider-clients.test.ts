@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   AnthropicClient,
+  OllamaClient,
   OpenAiClient,
   OpenRouterClient,
   type StructuredGenerationRequest,
@@ -22,6 +23,72 @@ const generationRequest: StructuredGenerationRequest = {
 function headers(init: RequestInit): Headers {
   return new Headers(init.headers);
 }
+
+describe('Ollama provider client', () => {
+  it('posts a deterministic non-streaming chat request', async () => {
+    const calls: { url: string; init: RequestInit }[] = [];
+    const client = new OllamaClient({
+      baseUrl: 'http://127.0.0.1:11434',
+      fetchImpl: async (url, init) => {
+        calls.push({ url: String(url), init: init ?? {} });
+        return new Response(
+          JSON.stringify({
+            message: { role: 'assistant', content: '{"signals":[]}' },
+          }),
+          { status: 200 },
+        );
+      },
+    });
+
+    const response = await client.generateStructured({
+      ...generationRequest,
+      model: 'qwen3:4b',
+    });
+
+    expect(response.content).toBe('{"signals":[]}');
+    expect(calls[0]!.url).toBe('http://127.0.0.1:11434/api/chat');
+    expect(JSON.parse(String(calls[0]!.init.body))).toMatchObject({
+      model: 'qwen3:4b',
+      stream: false,
+      format: generationRequest.schema,
+      options: { temperature: 0, num_ctx: 32_768, num_predict: 4096 },
+    });
+  });
+
+  it('maps transport failures onto the shared adapter taxonomy', async () => {
+    const client = new OllamaClient({
+      baseUrl: 'http://127.0.0.1:11434',
+      fetchImpl: async () => new Response('overloaded', { status: 500 }),
+    });
+
+    await expect(
+      client.generateStructured({ ...generationRequest, model: 'qwen3:4b' }),
+    ).rejects.toMatchObject({
+      name: 'AdapterError',
+      code: 'temporarily_unavailable',
+      retryable: true,
+    });
+  });
+
+  it('verifies installed model names from the tags endpoint', async () => {
+    const client = new OllamaClient({
+      baseUrl: 'http://127.0.0.1:11434',
+      fetchImpl: async (url) => {
+        expect(String(url)).toBe('http://127.0.0.1:11434/api/tags');
+        return new Response(
+          JSON.stringify({
+            models: [{ name: 'qwen3:4b' }, { name: 'gemma2:2b' }],
+          }),
+          { status: 200 },
+        );
+      },
+    });
+    await expect(client.verifyModel('qwen3:4b')).resolves.toBeUndefined();
+    await expect(client.verifyModel('missing:latest')).rejects.toMatchObject({
+      code: 'permanently_rejected',
+    });
+  });
+});
 
 describe('OpenAI provider client', () => {
   it('uses Responses structured output without provider-side storage', async () => {

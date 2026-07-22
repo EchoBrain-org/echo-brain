@@ -1,24 +1,29 @@
 import type {
+  CompletedOrganizationEnrollmentV1,
   OrganizationAccessLeaseRequestV1,
   OrganizationAccessLeaseResponseV1,
+  OrganizationAuthorityDescriptorResponseV1,
 } from '@echo-brain/organization-api';
 import type { OrganizationEnrollmentRequestV1 } from '@echo-brain/organization-protocol';
 
 /**
  * Transport boundary for one organization authority.
  *
- * Every response remains unknown until the enrollment/state layer verifies
- * its exact signed protocol document. Transport success is never permission.
+ * Response envelopes are syntax-validated at the transport boundary. The
+ * enrollment/state layer still authenticates the signed protocol documents;
+ * transport success is never permission.
  */
 export interface OrganizationAuthorityClient {
-  readAuthorityDescriptor(): Promise<unknown>;
+  readAuthorityDescriptor(): Promise<OrganizationAuthorityDescriptorResponseV1>;
 
   completeEnrollment(input: {
     enrollmentGrant: Uint8Array;
     enrollmentRequest: OrganizationEnrollmentRequestV1;
-  }): Promise<unknown>;
+  }): Promise<CompletedOrganizationEnrollmentV1>;
 
-  issueAccessLease(request: OrganizationAccessLeaseRequestV1): Promise<unknown>;
+  issueAccessLease(
+    request: OrganizationAccessLeaseRequestV1,
+  ): Promise<OrganizationAccessLeaseResponseV1>;
 }
 
 export interface OrganizationAuthorityConflict {

@@ -10,7 +10,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, join, resolve } from "node:path";
+import { join, resolve } from "node:path";
 import { afterAll, describe, expect, it, vi } from "vitest";
 import {
   spawnSanitizedChild,
@@ -47,23 +47,6 @@ function run(
   };
 }
 
-function copyOwnedBuildSlice(fixture: string): void {
-  for (const path of [
-    "release/organization-authority",
-    "tools/organization-authority",
-  ]) {
-    cpSync(join(REPO_ROOT, path), join(fixture, path), { recursive: true });
-  }
-  for (const path of [
-    "tools/release/runtime-shrinkwrap.mjs",
-    "tools/product/sync-shrinkwrap.mjs",
-  ]) {
-    const destination = join(fixture, path);
-    mkdirSync(dirname(destination), { recursive: true });
-    cpSync(join(REPO_ROOT, path), destination);
-  }
-}
-
 function linkBuildDependencies(fixture: string): void {
   const installed = join(REPO_ROOT, "node_modules");
   const target = join(fixture, "node_modules");
@@ -92,34 +75,9 @@ function prepareCommittedFixture(): { root: string; sha: string } {
     { cwd: temporaryRoot },
   );
   expect(cloned.status, cloned.stderr).toBe(0);
-  copyOwnedBuildSlice(fixture);
-  const added = run(
-    "git",
-    [
-      "add",
-      "release/organization-authority",
-      "tools/release/runtime-shrinkwrap.mjs",
-      "tools/organization-authority",
-      "tools/product/sync-shrinkwrap.mjs",
-    ],
-    { cwd: fixture },
-  );
-  expect(added.status, added.stderr).toBe(0);
-  const committed = run(
-    "git",
-    [
-      "-c",
-      "user.name=ECHO Test",
-      "-c",
-      "user.email=echo-test@example.invalid",
-      "commit",
-      "--quiet",
-      "-m",
-      "test: materialize authority artifact slice",
-    ],
-    { cwd: fixture },
-  );
-  expect(committed.status, committed.stderr).toBe(0);
+  const status = run("git", ["status", "--short"], { cwd: fixture });
+  expect(status.status, status.stderr).toBe(0);
+  expect(status.stdout).toBe("");
   linkBuildDependencies(fixture);
   const head = run("git", ["rev-parse", "HEAD"], { cwd: fixture });
   expect(head.status, head.stderr).toBe(0);

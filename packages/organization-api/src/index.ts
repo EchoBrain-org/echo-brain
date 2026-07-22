@@ -20,10 +20,18 @@ export {
   MAX_ENROLLMENT_GRANT_LIFETIME_SECONDS,
   MAX_ORGANIZATION_API_BODY_BYTES,
   validateCompleteOrganizationEnrollmentRequest,
+  validateCompletedOrganizationEnrollment,
+  validateIssuedOrganizationEnrollmentGrant,
   validateIssueOrganizationEnrollmentGrantRequest,
   validateOrganizationAccessLeaseRequest,
+  validateOrganizationAccessLeaseResponse,
+  validateOrganizationApiError,
+  validateOrganizationAuthorityDescriptorResponse,
+  validateProvisionedOrganizationMembership,
   validateProvisionOrganizationMembershipRequest,
   validateRevokeOrganizationSubjectRequest,
+  validateRevokedOrganizationInstallation,
+  validateRevokedOrganizationMembership,
 } from './validation.js';
 export {
   createOrganizationAccessLeaseRequest,

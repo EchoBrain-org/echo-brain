@@ -20,9 +20,8 @@
     "src/infrastructure/filesystem/atomic-create.ts",
     "src/infrastructure/sqlite/migrate.ts",
     "src/logging/index.ts",
-    "src/guards.ts",
     "src/util/json.ts",
-    "src/util/process-file-lock.ts",
+    "src/infrastructure/filesystem/process-file-lock.ts",
     "src/util/subject.ts",
     "src/util/timestamp.ts"
   ],
@@ -79,7 +78,64 @@
     {
       "name": "core-is-tool-agnostic",
       "from": "src/core/**",
-      "allowed_imports": ["src/core/**"]
+      "allowed_imports": ["src/core/**"],
+      "allowed_packages": [],
+      "allowed_node_builtins": ["crypto"]
+    },
+    {
+      "name": "adapters-depend-on-contracts-and-narrow-infrastructure",
+      "from": "src/adapters/**",
+      "allowed_imports": [
+        "src/adapters/**",
+        "src/core/**",
+        "src/infrastructure/filesystem/process-file-lock.ts"
+      ],
+      "allowed_packages": [],
+      "allowed_node_builtins": [
+        "crypto",
+        "fs",
+        "fs/promises",
+        "path",
+        "readline"
+      ]
+    },
+    {
+      "name": "infrastructure-is-product-independent",
+      "from": "src/infrastructure/**",
+      "allowed_imports": ["src/infrastructure/**"],
+      "allowed_packages": ["better-sqlite3"],
+      "allowed_node_builtins": ["crypto", "fs", "fs/promises", "path"]
+    },
+    {
+      "name": "product-storage-implements-core-ports",
+      "from": "src/product/storage/**",
+      "allowed_imports": [
+        "src/product/storage/**",
+        "src/core/**",
+        "src/infrastructure/sqlite/**"
+      ],
+      "allowed_packages": ["better-sqlite3"],
+      "allowed_node_builtins": ["fs", "path", "url"]
+    },
+    {
+      "name": "machine-security-owns-os-key-lifecycle",
+      "from": "src/product/machine/**",
+      "allowed_imports": [
+        "src/product/machine/**",
+        "src/product/spawn-sanitized-child.ts"
+      ],
+      "allowed_packages": ["@echo-brain/federation-protocol"],
+      "allowed_node_builtins": []
+    },
+    {
+      "name": "llm-provider-drivers-own-only-transport",
+      "from": "src/adapters/decision-processors/llm/*-client.ts",
+      "allowed_imports": [
+        "src/core/**",
+        "src/adapters/decision-processors/llm/llm-provider.ts"
+      ],
+      "allowed_packages": [],
+      "allowed_node_builtins": []
     },
     {
       "name": "granola-canonical-adapter-avoids-compatibility",
@@ -87,7 +143,9 @@
       "allowed_imports": [
         "src/core/**",
         "src/adapters/meeting-sources/granola/granola-api-client.ts"
-      ]
+      ],
+      "allowed_packages": [],
+      "allowed_node_builtins": ["crypto"]
     }
   ],
   "adapter_architecture": {

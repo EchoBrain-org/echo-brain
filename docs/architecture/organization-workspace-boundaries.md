@@ -30,6 +30,9 @@ an explicit architecture change.
 ```text
 src/                              employee-machine product
   core/                           organization-agnostic processing
+  product/machine/                installation and operating-system ports
+  product/storage/                installation-owned database policy
+  product/federation/             stable local trust and permission gate
   product/organization/           local enrollment/client/access state
 
 packages/                         contracts shared across trust boundaries
@@ -40,7 +43,7 @@ packages/                         contracts shared across trust boundaries
 services/
   organization-authority/         one centrally hosted org=1 deployable
 
-src/experimental/n2/              frozen until full experimental-pilot parity
+src/experimental/n2/              frozen, separately compiled/tested reference
 ```
 
 The root package remains the local Echo Brain product. Workspaces are built by
@@ -50,6 +53,15 @@ dependencies. The central authority is deliberately not bundled into the
 employee-machine product. It has a separate exact-commit release boundary under
 `release/organization-authority/`, with its own artifact manifest, tarball, and
 checksum.
+
+The stable TypeScript build excludes `src/experimental/`, and the product
+builder copies no experimental migration, schema, or SQL asset into `dist/`.
+The frozen pilot is compiled, linted, and behavior-tested through its own
+TypeScript, ESLint, and Vitest lanes. Its tests live under
+`tests/experimental/n2/`, not in stable product qualification. Repository-wide
+dependency hygiene still applies to every checked-in source file. The separate
+`experimental-n2.yml` workflow reports regressions without blocking the stable
+release gate.
 
 ## Dependency direction
 
@@ -70,11 +82,12 @@ product     service
 - Stable code never imports `src/experimental/n2`.
 - Signed trust documents and ordinary HTTP DTOs remain different contracts.
 
-The dedicated federation protocol package is required because the experimental
-N=2 code currently reaches into local federation canonicalization and signing
-primitives. Extracting the pure behavior prevents the future server from
-depending on laptop-product implementation or duplicating security-sensitive
-logic.
+The federation protocol package is the single implementation owner for
+canonicalization, identifiers, descriptor validation, and signature profiles.
+Product compatibility modules delegate to it; neither the laptop nor the
+authority service carries a second security-sensitive implementation. The
+private-key lifecycle remains a machine port because protocol packages handle
+public facts, not operating-system key custody.
 
 ## Central service layers
 
@@ -142,7 +155,8 @@ the exact recorded artifact bytes.
 1. **Complete:** establish workspaces, build references, manifests, import
    fences, and test ownership without runtime behavior.
 2. **Complete:** promote federation primitives with golden byte/signature
-   fixtures and compatibility tests against the current product behavior.
+   fixtures, cut the product over to that implementation, and remove the
+   temporary parity implementation/tests.
 3. **Complete:** promote the self-contained authority descriptor, enrollment
    request, enrollment receipt, and fresh installation access-state protocol
    with schemas and frozen fixtures.

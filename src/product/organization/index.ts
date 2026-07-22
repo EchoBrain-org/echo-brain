@@ -20,13 +20,13 @@ export {
   OrganizationStateConflictError,
   OrganizationStateCorruptionError,
   OrganizationStateUnavailableError,
-  SqliteOrganizationStateStore,
-} from './state/sqlite-organization-state-store.js';
+} from './state/organization-state-store.js';
 export type {
   OrganizationAccessVerificationPolicy,
   OrganizationStateStore,
   StoredOrganizationEnrollment,
-} from './state/sqlite-organization-state-store.js';
+} from './state/organization-state-store.js';
+export { SqliteOrganizationStateStore } from './state/sqlite-organization-state-store.js';
 export {
   createLocalOrganizationRuntime,
   DEFAULT_LOCAL_ORGANIZATION_LEASE_TTL_MS,

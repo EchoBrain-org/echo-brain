@@ -1,7 +1,9 @@
 import type {
+  JsonValue,
   P256SigningKeyDescriptor,
   Sha256Digest,
 } from '@echo-brain/federation-protocol';
+import type { OrganizationAccessLeaseRequestV1 } from '@echo-brain/organization-api';
 import type {
   OrganizationAuthorityDescriptorV1,
   OrganizationEnrollmentReceiptV1,
@@ -74,7 +76,7 @@ export interface StoredAuthorityAccessState {
 export interface StoredAccessLeaseRequest {
   request_id: string;
   request_sha256: Sha256Digest;
-  request_json: string;
+  request: OrganizationAccessLeaseRequestV1;
   enrollment_id: string;
   previous_access_state_sha256: Sha256Digest;
   resulting_state_sha256: Sha256Digest;
@@ -91,7 +93,7 @@ export interface AuthorityAuditEntry {
   actor_kind: 'admin' | 'enrollment_grant' | 'installation';
   action: string;
   subject_id: string;
-  detail_json: string;
+  detail: JsonValue;
 }
 
 export interface AuthorityReadTransaction {

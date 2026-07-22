@@ -8,8 +8,21 @@ import type {
   MeetingTime,
   RationaleSignal,
 } from '../../core/index.js';
+import type {
+  KeyProtection,
+  KeyProtectionAssurance,
+  Sha256Digest,
+  SignedDocument,
+} from '@echo-brain/federation-protocol';
 
-export type Sha256Digest = `sha256:${string}`;
+export type {
+  KeyProtection,
+  KeyProtectionAssurance,
+  Sha256Digest,
+  SignedDocument,
+  SignedIntegrity,
+} from '@echo-brain/federation-protocol';
+
 export type FederationId = string;
 
 export type IdentityAssurance =
@@ -20,25 +33,6 @@ export type IdentityAssurance =
   | 'credential_observed'
   | 'operator_attested'
   | 'installation_holder_self_attested';
-
-export type KeyProtection =
-  'secure-enclave' | 'keychain-this-device-only' | 'development-file';
-export type KeyProtectionAssurance =
-  | 'hardware_bound'
-  | 'platform_key_device_only'
-  | 'software_key_development_only';
-
-export interface SignedIntegrity {
-  canonicalization: 'RFC8785';
-  payload_sha256: Sha256Digest;
-  signature_algorithm: 'ecdsa-p256-sha256-der-low-s';
-  key_id: Sha256Digest;
-  signature_base64: string;
-}
-
-export interface SignedDocument {
-  integrity: SignedIntegrity;
-}
 
 export interface BundleDocumentReference {
   path: string;

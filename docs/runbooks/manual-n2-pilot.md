@@ -2,6 +2,12 @@
 
 **Status:** experimental, artifact-bound walkthrough
 
+> This is a historical walkthrough for the frozen pre-promotion pilot. The
+> normal product build no longer emits `src/experimental/n2` or its assets.
+> Current source changes are validated with `npm run check:experimental`; use
+> only a separately preserved pilot artifact for the commands below. Do not
+> treat that artifact as the stable employee product or organization service.
+
 This runbook exercises one organization authority and two independently keyed
 installations. It uses development file-backed keys, synthetic records, and
 manual JSON file exchange. It does not install or qualify the normal
@@ -62,15 +68,15 @@ Keep the extracted folder in place for the whole walkthrough.
 Only the named exchange artifacts move between Macs. Never send an installation
 state directory.
 
-| Step | Direction | File |
-| --- | --- | --- |
-| Invite | A to B | `teammate-invite.json` with the built `app` artifact |
-| Join | B to A | `teammate-request.json` |
-| Enrollment | A to B | `teammate-enrollment-receipt.json` |
-| Initial ingest | B to A | `teammate-batch-1.json` |
-| Initial result | A to B | `teammate-response-1.json` |
-| Post-revocation ingest | B to A | `teammate-batch-2.json` |
-| Post-revocation result | A to B | `teammate-response-2.json` |
+| Step                   | Direction | File                                                 |
+| ---------------------- | --------- | ---------------------------------------------------- |
+| Invite                 | A to B    | `teammate-invite.json` with the built `app` artifact |
+| Join                   | B to A    | `teammate-request.json`                              |
+| Enrollment             | A to B    | `teammate-enrollment-receipt.json`                   |
+| Initial ingest         | B to A    | `teammate-batch-1.json`                              |
+| Initial result         | A to B    | `teammate-response-1.json`                           |
+| Post-revocation ingest | B to A    | `teammate-batch-2.json`                              |
+| Post-revocation result | A to B    | `teammate-response-2.json`                           |
 
 Each ingest response contains exactly one authority-signed
 `OrganizationBatchReceipt` for the submitted batch.

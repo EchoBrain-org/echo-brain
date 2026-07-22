@@ -22,7 +22,6 @@ import {
   type MeetingPullRequest,
   type MeetingSourceAdapter,
 } from '../../src/core/index.js';
-import { adapterConformance } from './adapter-conformance.js';
 
 const meeting: MeetingDocument = {
   schema_version: 1,
@@ -33,9 +32,7 @@ const meeting: MeetingDocument = {
     state: 'complete',
     components: [{ kind: 'transcript', state: 'available' }],
   },
-  participants: [
-    { id: 'participant-1', display_name: 'Operator' },
-  ],
+  participants: [{ id: 'participant-1', display_name: 'Operator' }],
   content: [
     {
       id: 'block-1',
@@ -328,7 +325,10 @@ class StateFake implements CoreStateStore {
     return this.cursor;
   }
 
-  async setSourceCursor(_source: MeetingSourceAdapter['identity'], cursor: string): Promise<void> {
+  async setSourceCursor(
+    _source: MeetingSourceAdapter['identity'],
+    cursor: string,
+  ): Promise<void> {
     this.cursor = cursor;
   }
 
@@ -340,7 +340,10 @@ class StateFake implements CoreStateStore {
     this.meetings.push(value);
   }
 
-  async saveDecisionSet(meeting: MeetingDocument, value: DecisionSet): Promise<void> {
+  async saveDecisionSet(
+    meeting: MeetingDocument,
+    value: DecisionSet,
+  ): Promise<void> {
     this.decisions.push(value);
     this.decisionEntries.push({ meeting, decisions: value });
   }
@@ -351,24 +354,36 @@ class StateFake implements CoreStateStore {
   ): Promise<DecisionSet | undefined> {
     return this.decisionEntries.find(
       (entry) =>
-        entry.meeting.provenance.source.adapter_id === meeting.provenance.source.adapter_id &&
-        entry.meeting.provenance.source.instance_id === meeting.provenance.source.instance_id &&
-        entry.meeting.provenance.external_id === meeting.provenance.external_id &&
-        entry.meeting.provenance.canonical_revision === meeting.provenance.canonical_revision &&
+        entry.meeting.provenance.source.adapter_id ===
+          meeting.provenance.source.adapter_id &&
+        entry.meeting.provenance.source.instance_id ===
+          meeting.provenance.source.instance_id &&
+        entry.meeting.provenance.external_id ===
+          meeting.provenance.external_id &&
+        entry.meeting.provenance.canonical_revision ===
+          meeting.provenance.canonical_revision &&
         entry.decisions.processor.adapter_id === processor.adapter_id &&
         entry.decisions.processor.instance_id === processor.instance_id &&
         entry.decisions.processor.version === processor.version,
     )?.decisions;
   }
 
-  async getApproval(processingKey: string): Promise<ApprovalDecision | undefined> {
+  async getApproval(
+    processingKey: string,
+  ): Promise<ApprovalDecision | undefined> {
     return this.approvalsByKey.get(processingKey);
   }
 
-  async saveApproval(processingKey: string, value: ApprovalDecision): Promise<void> {
+  async saveApproval(
+    processingKey: string,
+    value: ApprovalDecision,
+  ): Promise<void> {
     this.approvals.push(value);
     const current = this.approvalsByKey.get(processingKey);
-    if (current === undefined || (current.status === 'pending' && value.status !== 'pending')) {
+    if (
+      current === undefined ||
+      (current.status === 'pending' && value.status !== 'pending')
+    ) {
       this.approvalsByKey.set(processingKey, value);
     }
   }
@@ -385,19 +400,6 @@ class StateFake implements CoreStateStore {
   }
 }
 
-adapterConformance({
-  name: 'meeting source fake',
-  kind: 'meeting-source',
-  create: () => new SourceFake(),
-  validConfig: { adapter_id: 'source-alpha', instance_id: 'primary', settings: {} },
-  invalidConfig: {
-    adapter_id: '',
-    instance_id: 'primary',
-    credential_ref: 'env:DO_NOT_RENDER',
-    settings: {},
-  },
-});
-
 describe('tool-agnostic adapter registry', () => {
   it('registers typed capabilities and rejects duplicate instances', () => {
     const registry = new AdapterRegistry();
@@ -410,10 +412,18 @@ describe('tool-agnostic adapter registry', () => {
 
     const settings = {};
     expect(
-      registry.getMeetingSource({ adapter_id: 'source-alpha', instance_id: 'primary', settings }),
+      registry.getMeetingSource({
+        adapter_id: 'source-alpha',
+        instance_id: 'primary',
+        settings,
+      }),
     ).toBe(source);
     expect(
-      registry.getDecisionProcessor({ adapter_id: 'processor-alpha', instance_id: 'primary', settings }),
+      registry.getDecisionProcessor({
+        adapter_id: 'processor-alpha',
+        instance_id: 'primary',
+        settings,
+      }),
     ).toBe(processor);
     expect(
       registry.getDeliverySurface({
@@ -472,7 +482,9 @@ describe('tool-agnostic core cycle', () => {
     expect(state.meetings).toEqual([meeting]);
     expect(state.decisions).toHaveLength(1);
     expect(state.receipts).toHaveLength(1);
-    expect(surface.envelopes[0]!.brief.decisions[0]!.text).toBe('Ship the adapter contract');
+    expect(surface.envelopes[0]!.brief.decisions[0]!.text).toBe(
+      'Ship the adapter contract',
+    );
     const deliveryParts = JSON.parse(
       surface.envelopes[0]!.idempotency_key.slice('delivery:v1:'.length),
     ) as string[];
@@ -498,7 +510,11 @@ describe('tool-agnostic core cycle', () => {
       state,
     });
 
-    expect(result).toMatchObject({ ok: true, meetings_rejected: 1, deliveries: 0 });
+    expect(result).toMatchObject({
+      ok: true,
+      meetings_rejected: 1,
+      deliveries: 0,
+    });
     expect(surface.envelopes).toHaveLength(0);
     expect(state.processed.size).toBe(1);
   });

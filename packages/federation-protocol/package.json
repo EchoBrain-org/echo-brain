@@ -23,7 +23,8 @@
   ],
   "scripts": {
     "build": "tsc -b",
-    "clean": "tsc -b --clean"
+    "clean": "tsc -b --clean",
+    "test": "vitest run --root . --config ../../vitest.package.config.ts"
   },
   "engines": {
     "node": "22.22.1",

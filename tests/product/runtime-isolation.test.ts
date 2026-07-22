@@ -26,13 +26,34 @@ import {
   type MeetingSourceAdapter,
 } from '../../src/core/index.js';
 
-const COMPONENTS: readonly ProductComponentName[] = [
-  'product-state',
-  'meeting-ingestion',
-  'decision-processing',
-  'manual-approval',
-  'delivery',
-  'product-health',
+const BASELINE_COMPONENTS = [
+  { name: 'product-state', dependsOn: [] },
+  { name: 'meeting-ingestion', dependsOn: ['product-state'] },
+  { name: 'decision-processing', dependsOn: ['meeting-ingestion'] },
+  { name: 'manual-approval', dependsOn: ['decision-processing'] },
+  { name: 'delivery', dependsOn: ['manual-approval'] },
+  { name: 'product-health', dependsOn: ['delivery'] },
+] as const satisfies readonly Pick<
+  ProductRuntimeComponent,
+  'name' | 'dependsOn'
+>[];
+const COMPONENTS: readonly ProductComponentName[] = BASELINE_COMPONENTS.map(
+  (component) => component.name,
+);
+const ROLLBACK_COMPONENTS = [
+  { name: 'publication', dependsOn: ['brain'] },
+  { name: 'brain', dependsOn: ['observation'] },
+  { name: 'foundation', dependsOn: [] },
+  { name: 'observation', dependsOn: ['foundation'] },
+] as const satisfies readonly Pick<
+  ProductRuntimeComponent,
+  'name' | 'dependsOn'
+>[];
+const ROLLBACK_ORDER: readonly ProductComponentName[] = [
+  'foundation',
+  'observation',
+  'brain',
+  'publication',
 ];
 const directories: string[] = [];
 
@@ -73,14 +94,18 @@ function components(
   overrides: Partial<
     Record<ProductComponentName, ProductRuntimeComponent['start']>
   > = {},
+  definitions: readonly Pick<
+    ProductRuntimeComponent,
+    'name' | 'dependsOn'
+  >[] = BASELINE_COMPONENTS,
 ): ProductRuntimeComponent[] {
-  return COMPONENTS.map((name) => ({
-    name,
+  return definitions.map((component) => ({
+    ...component,
     start:
-      overrides[name] ??
+      overrides[component.name] ??
       (async () => {
-        starts.push(name);
-        return { stop: async () => void stops.push(name) };
+        starts.push(component.name);
+        return { stop: async () => void stops.push(component.name) };
       }),
   }));
 }
@@ -236,13 +261,11 @@ describe('isolated product runtime', () => {
       ),
     ).rejects.toMatchObject({
       code: 'adapter_unavailable',
-      details: [
-        expect.stringContaining('health check timed out after 5ms'),
-      ],
+      details: [expect.stringContaining('health check timed out after 5ms')],
     });
   });
 
-  it('starts exactly the six generic components in order with typed registered adapters', async () => {
+  it('starts the baseline composition in dependency order with typed registered adapters', async () => {
     const starts: string[] = [];
     const stops: string[] = [];
     const fixtures = registeredFixtures();
@@ -275,7 +298,9 @@ describe('isolated product runtime', () => {
     });
     const result = await startProductRuntime(
       config(),
-      dependencies(runtimeComponents, { adapterRegistry: fixtures.registry }),
+      dependencies([...runtimeComponents].reverse(), {
+        adapterRegistry: fixtures.registry,
+      }),
     );
     expect(result.ok).toBe(true);
     if (!result.ok) throw result.error;
@@ -360,29 +385,36 @@ describe('isolated product runtime', () => {
     expect(starts).toEqual([]);
   });
 
-  it.each(COMPONENTS.map((_name, index) => index))(
-    'rolls back all prior components in reverse order when start %i fails',
+  it.each(ROLLBACK_ORDER.map((_name, index) => index))(
+    'rolls back an arbitrary component graph in reverse actual-start order when start %i fails',
     async (failureIndex) => {
       const starts: string[] = [];
       const stops: string[] = [];
-      const failing = COMPONENTS[failureIndex]!;
+      const failing = ROLLBACK_ORDER[failureIndex]!;
       const result = await startProductRuntime(
         config(),
         dependencies(
-          components(starts, stops, {
-            [failing]: async () => {
-              starts.push(failing);
-              throw new Error(`${failing} failed`);
+          components(
+            starts,
+            stops,
+            {
+              [failing]: async () => {
+                starts.push(failing);
+                throw new Error(`${failing} failed`);
+              },
             },
-          }),
+            ROLLBACK_COMPONENTS,
+          ),
         ),
       );
       expect(result).toMatchObject({
         ok: false,
         error: { code: 'startup_failed' },
       });
-      expect(starts).toEqual(COMPONENTS.slice(0, failureIndex + 1));
-      expect(stops).toEqual([...COMPONENTS.slice(0, failureIndex)].reverse());
+      expect(starts).toEqual(ROLLBACK_ORDER.slice(0, failureIndex + 1));
+      expect(stops).toEqual(
+        [...ROLLBACK_ORDER.slice(0, failureIndex)].reverse(),
+      );
     },
   );
 
@@ -486,29 +518,97 @@ describe('isolated product runtime', () => {
     expect(stops.filter((name) => name === 'product-state')).toHaveLength(1);
   });
 
-  it('rejects missing, duplicate, reordered, and forbidden component dependencies', async () => {
+  it('accepts arbitrary component names and uses a stable topological order', async () => {
     const starts: string[] = [];
-    const baseline = components(starts, []);
-    const variants = [
-      baseline.slice(1),
-      [...baseline, baseline[0]!],
-      [...baseline].reverse(),
-      [
-        ...baseline,
-        {
-          name: 'remote-delivery' as ProductComponentName,
-          start: async () => ({ stop() {} }),
-        },
-      ],
+    const stops: string[] = [];
+    const runtimeComponents = components(starts, stops, {}, [
+      { name: 'publication', dependsOn: ['brain'] },
+      { name: 'telemetry', dependsOn: ['foundation'] },
+      { name: 'brain', dependsOn: ['foundation'] },
+      { name: 'foundation', dependsOn: [] },
+    ]);
+
+    const result = await startProductRuntime(
+      config(),
+      dependencies(runtimeComponents),
+    );
+    if (!result.ok) throw result.error;
+    expect(starts).toEqual(['foundation', 'telemetry', 'brain', 'publication']);
+    expect(await result.handle.shutdown()).toEqual({
+      ok: true,
+      errors: [],
+      remaining: [],
+    });
+    expect(stops).toEqual(['publication', 'brain', 'telemetry', 'foundation']);
+  });
+
+  it('rejects invalid names, duplicates, missing dependencies, and cycles before side effects', async () => {
+    const starts: string[] = [];
+    let filesystemProbes = 0;
+    const fixture = (
+      name: ProductComponentName,
+      dependsOn: readonly ProductComponentName[] = [],
+    ): ProductRuntimeComponent => ({
+      name,
+      dependsOn,
+      start: async () => {
+        starts.push(name);
+        return { stop() {} };
+      },
+    });
+    const variants: Array<{
+      components: ProductRuntimeComponent[];
+      detail: string;
+    }> = [
+      {
+        components: [fixture('Brain Node')],
+        detail: "component at index 0 has invalid name 'Brain Node'",
+      },
+      {
+        components: [fixture('foundation'), fixture('foundation')],
+        detail: "component name 'foundation' must be unique",
+      },
+      {
+        components: [fixture('brain', ['missing-foundation'])],
+        detail:
+          "component 'brain' depends on missing component 'missing-foundation'",
+      },
+      {
+        components: [
+          fixture('foundation'),
+          fixture('brain', ['foundation', 'foundation']),
+        ],
+        detail: "component 'brain' declares duplicate dependency 'foundation'",
+      },
+      {
+        components: [
+          fixture('brain', ['publication']),
+          fixture('publication', ['brain']),
+        ],
+        detail:
+          'component dependency cycle detected: brain -> publication -> brain',
+      },
     ];
     for (const variant of variants) {
-      const result = await startProductRuntime(config(), dependencies(variant));
+      const result = await startProductRuntime(
+        config(),
+        dependencies(variant.components, {
+          classifyStateFilesystem: async () => {
+            filesystemProbes += 1;
+            return { kind: 'local', raw: 'apfs' };
+          },
+        }),
+      );
       expect(result).toMatchObject({
         ok: false,
-        error: { code: 'invalid_dependencies' },
+        error: {
+          code: 'invalid_dependencies',
+          details: expect.arrayContaining([variant.detail]),
+        },
       });
     }
     expect(starts).toEqual([]);
+    expect(filesystemProbes).toBe(0);
   });
 
   it('fails closed for network and unknown state filesystems before component startup', async () => {
@@ -557,8 +657,7 @@ describe('isolated product runtime', () => {
       stdout: { write: () => true },
       stderr: { write: () => true },
     });
-    while (starts.length === 0)
-      await new Promise(setImmediate);
+    while (starts.length === 0) await new Promise(setImmediate);
     expect(emitter.listenerCount('SIGTERM')).toBe(1);
     emitter.emit('SIGTERM');
     releaseStart();

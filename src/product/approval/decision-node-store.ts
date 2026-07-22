@@ -16,7 +16,7 @@ import {
 } from '../../core/index.js';
 import { atomicCreate } from '../../infrastructure/filesystem/atomic-create.js';
 import { parseJson } from '../../util/json.js';
-import { acquireProcessFileLock } from '../../util/process-file-lock.js';
+import { acquireProcessFileLock } from '../../infrastructure/filesystem/process-file-lock.js';
 import { ActiveIdentityBundleStore } from '../federation/identity/active-identity-bundle-store.js';
 import { requiresFounderFederation } from '../federation/cutover-fence.js';
 import {

@@ -7,7 +7,8 @@
 // escapes the repository; classifies node: / bare-core specifiers against the
 // pinned Node 22 built-in set (never as npm rows); requires the full transitive
 // closure to resolve locally. Bare npm imports/package CLIs are handed to
-// check-dependencies.mjs (this tool only asserts they are declared external).
+// check-dependencies.mjs after this tool enforces product-wide and per-layer
+// package and Node-builtin allowlists.
 //
 import { dirname, posix } from 'node:path';
 import process from 'node:process';
@@ -34,9 +35,23 @@ const WORKSPACE_BOUNDARY_REGISTRY = 'tools/workspace-source-boundaries.v1.json';
 const SOURCE_FILE_RE = /\.(?:[cm]?[jt]sx?)$/;
 
 function matchesGlob(path, pattern) {
-  if (pattern.endsWith('/**')) return path.startsWith(pattern.slice(0, -2));
   if (pattern.endsWith('/')) return path.startsWith(pattern);
-  return path === pattern;
+  if (!pattern.includes('*')) return path === pattern;
+  let expression = '^';
+  for (let index = 0; index < pattern.length; index += 1) {
+    const character = pattern[index];
+    if (character === '*') {
+      if (pattern[index + 1] === '*') {
+        expression += '.*';
+        index += 1;
+      } else {
+        expression += '[^/]*';
+      }
+    } else {
+      expression += character.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    }
+  }
+  return new RegExp(`${expression}$`).test(path);
 }
 
 function isRepositoryPath(path) {
@@ -575,6 +590,33 @@ function main() {
   const isAllowed = (p) => allowed.some((g) => matchesGlob(p, g));
   const isForbidden = (p) => forbidden.some((g) => matchesGlob(p, g));
 
+  for (const rule of layerRules) {
+    if (
+      !isStringArray(rule.allowed_imports) ||
+      !isStringArray(rule.allowed_packages) ||
+      !isStringArray(rule.allowed_node_builtins)
+    ) {
+      errors.push(`layer rule '${String(rule.name)}' has an invalid allowlist`);
+      continue;
+    }
+    for (const dependency of rule.allowed_packages) {
+      if (!external.has(dependency)) {
+        errors.push(
+          `layer rule '${rule.name}' allows package outside the product boundary: ${dependency}`,
+        );
+      }
+    }
+    for (const builtin of rule.allowed_node_builtins.map((name) =>
+      name.replace(/^node:/, ''),
+    )) {
+      if (!NODE22_BUILTINS.has(builtin)) {
+        errors.push(
+          `layer rule '${rule.name}' allows unknown Node builtin: ${builtin}`,
+        );
+      }
+    }
+  }
+
   for (const [path] of tree) {
     if (removed.some((root) => matchesGlob(path, root))) {
       errors.push(`module remains under removed internal root: ${path}`);
@@ -616,12 +658,51 @@ function main() {
     const source = textFile(tree, path);
     for (const reference of moduleReferences(path, source)) {
       const spec = reference.specifier;
-      if (!spec?.startsWith('.')) continue;
-      const resolved = resolveRelative(tree, path, spec);
-      if (resolved === null) continue;
+      if (spec === null) {
+        errors.push(
+          `layer rule rejects non-literal module loading from ${path}:${reference.line}`,
+        );
+        continue;
+      }
+      if (spec.startsWith('.')) {
+        const resolved = resolveRelative(tree, path, spec);
+        if (resolved === null) continue;
+        for (const rule of matchingRules) {
+          if (
+            !rule.allowed_imports.some((pattern) =>
+              matchesGlob(resolved, pattern),
+            )
+          ) {
+            errors.push(
+              `layer rule '${rule.name}' rejects edge: ${path} -> ${resolved}`,
+            );
+          }
+        }
+        continue;
+      }
+
+      const builtin = spec.replace(/^node:/, '');
+      if (spec.startsWith('node:') || NODE22_BUILTINS.has(spec)) {
+        for (const rule of matchingRules) {
+          if (
+            !(rule.allowed_node_builtins ?? [])
+              .map((name) => name.replace(/^node:/, ''))
+              .includes(builtin)
+          ) {
+            errors.push(
+              `layer rule '${rule.name}' rejects Node builtin ${spec} in ${path}`,
+            );
+          }
+        }
+        continue;
+      }
+
+      const importedPackage = packageName(spec);
       for (const rule of matchingRules) {
-        if (!rule.allowed_imports.some((pattern) => matchesGlob(resolved, pattern))) {
-          errors.push(`layer rule '${rule.name}' rejects edge: ${path} -> ${resolved}`);
+        if (!(rule.allowed_packages ?? []).includes(importedPackage)) {
+          errors.push(
+            `layer rule '${rule.name}' rejects package ${importedPackage} in ${path}`,
+          );
         }
       }
     }

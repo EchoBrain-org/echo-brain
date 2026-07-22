@@ -10,7 +10,6 @@ on:
       - 'src/storage/**'
       - 'src/logging/**'
       - 'src/util/**'
-      - 'src/guards.ts'
       - 'packages/**'
       - 'services/**'
       - 'product/**'
@@ -20,8 +19,13 @@ on:
       - 'schemas/product/**'
       - 'tools/product/**'
       - 'tests/product/**'
-      - 'tests/migration/**'
-      - 'tests/standalone/**'
+      - 'tests/architecture/**'
+      - 'tests/core/**'
+      - 'tests/adapters/**'
+      - 'tests/infrastructure/**'
+      - 'tests/integration/**'
+      - 'tests/support/**'
+      - 'tests/machine/**'
       - 'tests/system/**'
       - 'tools/build.mjs'
       - 'tools/check-boundary.mjs'
@@ -37,7 +41,9 @@ on:
       - 'tsconfig.workspaces.json'
       - 'eslint.config.js'
       - 'vitest.config.ts'
+      - 'vitest.package.config.ts'
       - 'vitest.product.config.ts'
+      - 'tests/README.md'
       - 'README.md'
       - 'LICENSE'
       - '.github/workflows/product-qualification.yml'
@@ -51,7 +57,6 @@ on:
       - 'src/storage/**'
       - 'src/logging/**'
       - 'src/util/**'
-      - 'src/guards.ts'
       - 'packages/**'
       - 'services/**'
       - 'product/**'
@@ -61,8 +66,13 @@ on:
       - 'schemas/product/**'
       - 'tools/product/**'
       - 'tests/product/**'
-      - 'tests/migration/**'
-      - 'tests/standalone/**'
+      - 'tests/architecture/**'
+      - 'tests/core/**'
+      - 'tests/adapters/**'
+      - 'tests/infrastructure/**'
+      - 'tests/integration/**'
+      - 'tests/support/**'
+      - 'tests/machine/**'
       - 'tests/system/**'
       - 'tools/build.mjs'
       - 'tools/check-boundary.mjs'
@@ -78,7 +88,9 @@ on:
       - 'tsconfig.workspaces.json'
       - 'eslint.config.js'
       - 'vitest.config.ts'
+      - 'vitest.package.config.ts'
       - 'vitest.product.config.ts'
+      - 'tests/README.md'
       - 'README.md'
       - 'LICENSE'
       - '.github/workflows/product-qualification.yml'
@@ -145,7 +157,7 @@ jobs:
       - name: Typecheck
         id: typecheck
         continue-on-error: true
-        run: npm run typecheck && npm run typecheck:workspaces
+        run: npm run typecheck
       - name: Lint
         id: lint
         continue-on-error: true

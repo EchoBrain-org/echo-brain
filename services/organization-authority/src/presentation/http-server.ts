@@ -18,11 +18,11 @@ import type {
   ProvisionedOrganizationMembershipV1,
   RevokedOrganizationMembershipV1,
 } from '@echo-brain/organization-api';
-import type { OrganizationAuthorityApplication } from '../application/organization-authority.js';
 import {
   AuthorityOperationError,
   StaleAccessStateError,
 } from '../domain/errors.js';
+import type { OrganizationAuthorityHttpApplication } from './organization-authority-http-application.js';
 import {
   TrustedProxyIdentityError,
   type RequestClientIdentityResolver,
@@ -237,7 +237,9 @@ function decodeEnrollmentGrant(header: string | undefined): Uint8Array {
 }
 
 function membershipResponse(
-  value: ReturnType<OrganizationAuthorityApplication['provisionMembership']>,
+  value: ReturnType<
+    OrganizationAuthorityHttpApplication['provisionMembership']
+  >,
 ): ProvisionedOrganizationMembershipV1 {
   return {
     organization_id: value.organization_id,
@@ -252,7 +254,7 @@ function membershipResponse(
 }
 
 export interface OrganizationAuthorityHttpServerOptions {
-  application: OrganizationAuthorityApplication;
+  application: OrganizationAuthorityHttpApplication;
   adminAuthenticator: AdminRequestAuthenticator;
   clientIdentityResolver: RequestClientIdentityResolver;
   rateLimiter?: PostRequestRateLimiter;

@@ -16,10 +16,13 @@ export { verifyInstallationKeyDescriptor } from "./installation-key-descriptor.j
 export { verifyP256SigningKeyDescriptor } from "./p256-signing-key-descriptor.js";
 export {
   assertP256LowS,
+  decodeStrictP256DerSignature,
+  encodeP256DerSignature,
   normalizeP256LowS,
   p256KeyId,
   verifyP256LowSSignature,
 } from "./signature-profile.js";
+export type { DecodedEcdsaSignature } from "./signature-profile.js";
 export {
   createSignedDocumentWithKey,
   signedPayload,

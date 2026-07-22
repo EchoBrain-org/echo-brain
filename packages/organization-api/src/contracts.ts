@@ -1,4 +1,8 @@
 import type {
+  Sha256Digest,
+  SignedIntegrity,
+} from '@echo-brain/federation-protocol';
+import type {
   OrganizationAuthorityDescriptorV1,
   OrganizationEnrollmentReceiptV1,
   OrganizationEnrollmentRequestV1,
@@ -6,15 +10,8 @@ import type {
   OrganizationMembershipTypeV1,
 } from '@echo-brain/organization-protocol';
 
-export type OrganizationApiSha256Digest = `sha256:${string}`;
-
-export interface OrganizationApiSignedIntegrityV1 {
-  canonicalization: 'RFC8785';
-  payload_sha256: OrganizationApiSha256Digest;
-  signature_algorithm: 'ecdsa-p256-sha256-der-low-s';
-  key_id: OrganizationApiSha256Digest;
-  signature_base64: string;
-}
+export type OrganizationApiSha256Digest = Sha256Digest;
+export type OrganizationApiSignedIntegrityV1 = SignedIntegrity;
 
 export interface OrganizationAccessLeaseRequestPayloadV1 {
   schema_version: 1;

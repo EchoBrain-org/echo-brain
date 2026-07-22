@@ -9,7 +9,7 @@ import {
   type GranolaListResponse,
   type GranolaNoteDetail,
 } from "../../src/adapters/meeting-sources/granola/index.js";
-import { adapterConformance } from "../core/adapter-conformance.js";
+import { adapterConformance } from "../support/adapter-conformance.js";
 
 const config: AdapterConfig = {
   adapter_id: "granola",
@@ -194,7 +194,9 @@ describe("Granola canonical meeting mapping", () => {
           options?.signal?.addEventListener(
             "abort",
             () => reject(new GranolaApiError("cancelled", "timeout")),
-            { once: true },
+            {
+              once: true,
+            },
           );
         });
       },
@@ -361,7 +363,9 @@ describe("Granola canonical meeting mapping", () => {
       transcript: [],
     };
     const response: GranolaListResponse = {
-      notes: [{ id: bothFormsDetail.id, updated_at: bothFormsDetail.updated_at }],
+      notes: [
+        { id: bothFormsDetail.id, updated_at: bothFormsDetail.updated_at },
+      ],
       hasMore: false,
       cursor: null,
     };
@@ -395,7 +399,9 @@ describe("Granola canonical meeting mapping", () => {
       transcript: [],
     };
     const response: GranolaListResponse = {
-      notes: [{ id: plainOnlyDetail.id, updated_at: plainOnlyDetail.updated_at }],
+      notes: [
+        { id: plainOnlyDetail.id, updated_at: plainOnlyDetail.updated_at },
+      ],
       hasMore: false,
       cursor: null,
     };

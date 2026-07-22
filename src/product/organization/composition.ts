@@ -1,4 +1,4 @@
-import type { InstallationSigner } from '../federation/foundation/installation-signer.js';
+import type { InstallationSigner } from '../machine/security/installation-signer.js';
 import { HttpOrganizationAuthorityClient } from './client/http-organization-authority-client.js';
 import { LocalOrganizationCoordinator } from './enrollment/local-organization-coordinator.js';
 import { SqliteOrganizationStateStore } from './state/sqlite-organization-state-store.js';

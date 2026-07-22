@@ -1,17 +1,23 @@
 import { Buffer } from 'node:buffer';
 import {
   MAX_ORGANIZATION_API_BODY_BYTES,
+  validateCompletedOrganizationEnrollment,
   validateOrganizationAccessLeaseRequest,
+  validateOrganizationAccessLeaseResponse,
+  validateOrganizationApiError,
+  validateOrganizationAuthorityDescriptorResponse,
   type CompleteOrganizationEnrollmentRequestV1,
+  type CompletedOrganizationEnrollmentV1,
   type OrganizationAccessLeaseRequestV1,
   type OrganizationAccessLeaseResponseV1,
-  type OrganizationApiErrorV1,
+  type OrganizationAuthorityDescriptorResponseV1,
 } from '@echo-brain/organization-api';
 import type { OrganizationAuthorityClient } from './authority-client.js';
 import { OrganizationAuthorityConflictError } from './authority-client.js';
 
 const MAX_RESPONSE_BYTES = 64 * 1024;
 const DEFAULT_TIMEOUT_MS = 15_000;
+type ConflictHandling = 'transport-error' | 'stale-access-state';
 
 export interface HttpOrganizationAuthorityClientOptions {
   baseUrl: string;
@@ -76,33 +82,33 @@ function canonicalGrantBase64Url(grant: Uint8Array): string {
   return Buffer.from(grant).toString('base64url');
 }
 
-function errorCode(value: unknown): string | null {
-  if (
-    typeof value !== 'object' ||
-    value === null ||
-    !('error' in value) ||
-    typeof value.error !== 'object' ||
-    value.error === null ||
-    !('code' in value.error) ||
-    typeof value.error.code !== 'string'
-  ) {
-    return null;
-  }
-  return (value as OrganizationApiErrorV1).error.code;
+function invalidResponse(status: number): OrganizationAuthorityTransportError {
+  return new OrganizationAuthorityTransportError(
+    'invalid_response',
+    'organization authority returned a malformed response',
+    status,
+  );
 }
 
-function staleStateResponse(
+function tryValidate<T>(
   value: unknown,
-): OrganizationAccessLeaseResponseV1 | null {
-  if (
-    typeof value !== 'object' ||
-    value === null ||
-    Object.keys(value).length !== 1 ||
-    !('access_state' in value)
-  ) {
+  validate: (candidate: unknown) => T,
+): T | null {
+  try {
+    return validate(value);
+  } catch {
     return null;
   }
-  return value as OrganizationAccessLeaseResponseV1;
+}
+
+function validateResponse<T>(
+  value: unknown,
+  status: number,
+  validate: (candidate: unknown) => T,
+): T {
+  const validated = tryValidate(value, validate);
+  if (validated === null) throw invalidResponse(status);
+  return validated;
 }
 
 export class HttpOrganizationAuthorityClient implements OrganizationAuthorityClient {
@@ -209,10 +215,12 @@ export class HttpOrganizationAuthorityClient implements OrganizationAuthorityCli
     }
   }
 
-  private async request(
+  private async request<T>(
     path: string,
     init: Omit<RequestInit, 'redirect' | 'signal'>,
-  ): Promise<unknown> {
+    validateSuccess: (value: unknown) => T,
+    conflictHandling: ConflictHandling = 'transport-error',
+  ): Promise<T> {
     let response: Response;
     try {
       response = await this.fetchImpl(this.endpoint(path), {
@@ -227,30 +235,49 @@ export class HttpOrganizationAuthorityClient implements OrganizationAuthorityCli
       );
     }
     const value = await this.readJson(response);
-    if (response.status === 409) {
-      throw new OrganizationAuthorityConflictError(staleStateResponse(value));
-    }
-    if (!response.ok) {
+    if (response.status === 409 && conflictHandling === 'stale-access-state') {
+      const staleState = tryValidate(
+        value,
+        validateOrganizationAccessLeaseResponse,
+      );
+      if (staleState !== null) {
+        throw new OrganizationAuthorityConflictError(staleState);
+      }
+      const apiError = tryValidate(value, validateOrganizationApiError);
+      if (apiError === null) throw invalidResponse(response.status);
       throw new OrganizationAuthorityTransportError(
-        errorCode(value) ?? 'request_rejected',
+        apiError.error.code,
         'organization authority rejected the request',
         response.status,
       );
     }
-    return value;
+    if (!response.ok) {
+      const apiError = tryValidate(value, validateOrganizationApiError);
+      if (apiError === null) throw invalidResponse(response.status);
+      throw new OrganizationAuthorityTransportError(
+        apiError.error.code,
+        'organization authority rejected the request',
+        response.status,
+      );
+    }
+    return validateResponse(value, response.status, validateSuccess);
   }
 
-  readAuthorityDescriptor(): Promise<unknown> {
-    return this.request('/v1/authority-descriptor', {
-      method: 'GET',
-      headers: { accept: 'application/json' },
-    });
+  readAuthorityDescriptor(): Promise<OrganizationAuthorityDescriptorResponseV1> {
+    return this.request(
+      '/v1/authority-descriptor',
+      {
+        method: 'GET',
+        headers: { accept: 'application/json' },
+      },
+      validateOrganizationAuthorityDescriptorResponse,
+    );
   }
 
   completeEnrollment(input: {
     enrollmentGrant: Uint8Array;
     enrollmentRequest: CompleteOrganizationEnrollmentRequestV1['enrollment_request'];
-  }): Promise<unknown> {
+  }): Promise<CompletedOrganizationEnrollmentV1> {
     const body = JSON.stringify({
       enrollment_request: input.enrollmentRequest,
     } satisfies CompleteOrganizationEnrollmentRequestV1);
@@ -259,32 +286,41 @@ export class HttpOrganizationAuthorityClient implements OrganizationAuthorityCli
         'organization enrollment request exceeds the API body limit',
       );
     }
-    return this.request('/v1/enrollments', {
-      method: 'POST',
-      headers: {
-        accept: 'application/json',
-        authorization: `Echo-Enrollment ${canonicalGrantBase64Url(input.enrollmentGrant)}`,
-        'content-type': 'application/json',
+    return this.request(
+      '/v1/enrollments',
+      {
+        method: 'POST',
+        headers: {
+          accept: 'application/json',
+          authorization: `Echo-Enrollment ${canonicalGrantBase64Url(input.enrollmentGrant)}`,
+          'content-type': 'application/json',
+        },
+        body,
       },
-      body,
-    });
+      validateCompletedOrganizationEnrollment,
+    );
   }
 
   issueAccessLease(
     request: OrganizationAccessLeaseRequestV1,
-  ): Promise<unknown> {
+  ): Promise<OrganizationAccessLeaseResponseV1> {
     const validated = validateOrganizationAccessLeaseRequest(request);
     const body = JSON.stringify(validated);
     if (Buffer.byteLength(body) > MAX_ORGANIZATION_API_BODY_BYTES) {
       throw new Error('organization access request exceeds the API body limit');
     }
-    return this.request('/v1/access-leases', {
-      method: 'POST',
-      headers: {
-        accept: 'application/json',
-        'content-type': 'application/json',
+    return this.request(
+      '/v1/access-leases',
+      {
+        method: 'POST',
+        headers: {
+          accept: 'application/json',
+          'content-type': 'application/json',
+        },
+        body,
       },
-      body,
-    });
+      validateOrganizationAccessLeaseResponse,
+      'stale-access-state',
+    );
   }
 }

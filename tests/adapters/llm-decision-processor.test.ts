@@ -8,12 +8,11 @@ import {
 } from '../../src/core/index.js';
 import {
   LlmDecisionProcessor,
-  OllamaClient,
   llmProcessingVersion,
   type LlmProviderClient,
   type StructuredGenerationRequest,
 } from '../../src/adapters/decision-processors/llm/index.js';
-import { adapterConformance } from '../core/adapter-conformance.js';
+import { adapterConformance } from '../support/adapter-conformance.js';
 
 const processorConfig: AdapterConfig = {
   adapter_id: 'llm',
@@ -472,81 +471,6 @@ describe('llm decision processor configuration', () => {
     await expect(instance.healthCheck()).resolves.toMatchObject({
       status: 'unauthorized',
       details: { provider: 'openai', model: 'gpt-model' },
-    });
-  });
-});
-
-describe('ollama provider client', () => {
-  it('posts a non-streaming chat request and returns the message content', async () => {
-    const calls: { url: string; init: RequestInit }[] = [];
-    const client = new OllamaClient({
-      baseUrl: 'http://127.0.0.1:11434',
-      fetchImpl: async (url, init) => {
-        calls.push({ url: String(url), init: init ?? {} });
-        return new Response(
-          JSON.stringify({
-            message: { role: 'assistant', content: '{"signals":[]}' },
-          }),
-          { status: 200 },
-        );
-      },
-    });
-    const response = await client.generateStructured({
-      model: 'qwen3:4b',
-      systemPrompt: 'extract decisions',
-      userPrompt: 'hello',
-      schema: { type: 'object' },
-      maxOutputTokens: 4096,
-    });
-    expect(response.content).toBe('{"signals":[]}');
-    expect(calls[0]!.url).toBe('http://127.0.0.1:11434/api/chat');
-    const body = JSON.parse(String(calls[0]!.init.body));
-    expect(body).toMatchObject({
-      model: 'qwen3:4b',
-      stream: false,
-      format: { type: 'object' },
-      // Deterministic decoding and a context window large enough for a full
-      // meeting transcript; Ollama's default num_ctx silently truncates.
-      options: { temperature: 0, num_ctx: 32_768, num_predict: 4096 },
-    });
-  });
-
-  it('maps provider failures onto the adapter error taxonomy', async () => {
-    const client = new OllamaClient({
-      baseUrl: 'http://127.0.0.1:11434',
-      fetchImpl: async () => new Response('overloaded', { status: 500 }),
-    });
-    await expect(
-      client.generateStructured({
-        model: 'qwen3:4b',
-        systemPrompt: 'extract decisions',
-        userPrompt: 'hello',
-        schema: { type: 'object' },
-        maxOutputTokens: 4096,
-      }),
-    ).rejects.toMatchObject({
-      name: 'AdapterError',
-      code: 'temporarily_unavailable',
-      retryable: true,
-    });
-  });
-
-  it('verifies installed model names from the tags endpoint', async () => {
-    const client = new OllamaClient({
-      baseUrl: 'http://127.0.0.1:11434',
-      fetchImpl: async (url) => {
-        expect(String(url)).toBe('http://127.0.0.1:11434/api/tags');
-        return new Response(
-          JSON.stringify({
-            models: [{ name: 'qwen3:4b' }, { name: 'gemma2:2b' }],
-          }),
-          { status: 200 },
-        );
-      },
-    });
-    await expect(client.verifyModel('qwen3:4b')).resolves.toBeUndefined();
-    await expect(client.verifyModel('missing:latest')).rejects.toMatchObject({
-      code: 'permanently_rejected',
     });
   });
 });

@@ -1,6 +1,5 @@
 import { Buffer } from 'node:buffer';
 import { createHash, timingSafeEqual } from 'node:crypto';
-import type { IncomingMessage } from 'node:http';
 
 export class TrustedProxyIdentityError extends Error {
   constructor() {
@@ -12,13 +11,17 @@ export class TrustedProxyIdentityError extends Error {
 export const TRUSTED_PROXY_AUTHORIZATION_HEADER = 'x-echo-proxy-authorization';
 export const TRUSTED_PROXY_CLIENT_ID_HEADER = 'x-echo-authenticated-client-id';
 
+export interface RawHeaderRequest {
+  readonly rawHeaders: readonly string[];
+}
+
 export interface RequestClientIdentityResolver {
   /** Returns one stable, non-secret key suitable for a bounded rate-limit map. */
-  resolve(request: IncomingMessage): string;
+  resolve(request: RawHeaderRequest): string;
 }
 
 function uniqueRawHeader(
-  request: IncomingMessage,
+  request: RawHeaderRequest,
   expectedName: string,
 ): string | undefined {
   let value: string | undefined;
@@ -53,7 +56,7 @@ export class AuthenticatedProxyClientIdentityResolver implements RequestClientId
       .digest();
   }
 
-  resolve(request: IncomingMessage): string {
+  resolve(request: RawHeaderRequest): string {
     const authorization = uniqueRawHeader(
       request,
       TRUSTED_PROXY_AUTHORIZATION_HEADER,
