@@ -1,0 +1,202 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://echo.local/schemas/phase5/one-machine-rehearsal-report.v1.schema.json",
+  "title": "ECHO Phase 5 one-machine rehearsal report",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "kind",
+    "result",
+    "phase5_gate",
+    "source_sha",
+    "run_id",
+    "started_at",
+    "completed_at",
+    "host",
+    "artifacts",
+    "topology",
+    "unexpected_skip_count",
+    "checks"
+  ],
+  "properties": {
+    "schema_version": { "const": 1 },
+    "kind": { "const": "echo-phase5-one-machine-rehearsal" },
+    "result": { "const": "rehearsal_passed" },
+    "phase5_gate": { "const": "incomplete" },
+    "source_sha": { "$ref": "#/definitions/sourceSha" },
+    "run_id": { "$ref": "#/definitions/runId" },
+    "started_at": { "$ref": "#/definitions/timestamp" },
+    "completed_at": { "$ref": "#/definitions/timestamp" },
+    "host": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["os", "architecture", "node"],
+      "properties": {
+        "os": { "enum": ["darwin", "linux", "win32"] },
+        "architecture": { "enum": ["arm64", "x64"] },
+        "node": {
+          "type": "string",
+          "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$"
+        }
+      }
+    },
+    "artifacts": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["employee", "authority", "ceremony_driver"],
+      "properties": {
+        "employee": { "$ref": "#/definitions/runtimeArtifact" },
+        "authority": { "$ref": "#/definitions/runtimeArtifact" },
+        "ceremony_driver": { "$ref": "#/definitions/driverIdentity" }
+      }
+    },
+    "topology": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["mode", "authority_id", "organization_id", "installations"],
+      "properties": {
+        "mode": { "const": "one-machine-isolated" },
+        "authority_id": { "$ref": "#/definitions/authorityId" },
+        "organization_id": { "$ref": "#/definitions/organizationId" },
+        "installations": {
+          "type": "array",
+          "minItems": 2,
+          "maxItems": 2,
+          "items": { "$ref": "#/definitions/installation" }
+        }
+      }
+    },
+    "unexpected_skip_count": { "const": 0 },
+    "checks": {
+      "type": "array",
+      "minItems": 28,
+      "maxItems": 28,
+      "items": {
+        "oneOf": [
+          { "$ref": "#/definitions/passingCheck" },
+          { "$ref": "#/definitions/blockedCheck" }
+        ]
+      }
+    }
+  },
+  "definitions": {
+    "sourceSha": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{40}$"
+    },
+    "hash": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "protocolHash": {
+      "type": "string",
+      "pattern": "^sha256:[0-9a-f]{64}$"
+    },
+    "timestamp": {
+      "type": "string",
+      "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}\\.[0-9]{3}Z$"
+    },
+    "runId": {
+      "type": "string",
+      "pattern": "^p5r_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+    },
+    "authorityId": {
+      "type": "string",
+      "pattern": "^oau_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+    },
+    "organizationId": {
+      "type": "string",
+      "pattern": "^org_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+    },
+    "principalId": {
+      "type": "string",
+      "pattern": "^prn_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+    },
+    "membershipId": {
+      "type": "string",
+      "pattern": "^mem_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+    },
+    "installationId": {
+      "type": "string",
+      "pattern": "^ins_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+    },
+    "version": {
+      "type": "string",
+      "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+-[0-9A-Za-z]+(?:[.-][0-9A-Za-z]+)*$"
+    },
+    "runtimeArtifact": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "version",
+        "source_sha",
+        "artifact_sha256",
+        "manifest_sha256"
+      ],
+      "properties": {
+        "version": { "$ref": "#/definitions/version" },
+        "source_sha": { "$ref": "#/definitions/sourceSha" },
+        "artifact_sha256": { "$ref": "#/definitions/hash" },
+        "manifest_sha256": { "$ref": "#/definitions/hash" }
+      }
+    },
+    "driverIdentity": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["source_sha", "sha256"],
+      "properties": {
+        "source_sha": { "$ref": "#/definitions/sourceSha" },
+        "sha256": { "$ref": "#/definitions/hash" }
+      }
+    },
+    "installation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "label",
+        "principal_id",
+        "membership_id",
+        "installation_id",
+        "installation_key_id"
+      ],
+      "properties": {
+        "label": { "enum": ["A", "B"] },
+        "principal_id": { "$ref": "#/definitions/principalId" },
+        "membership_id": { "$ref": "#/definitions/membershipId" },
+        "installation_id": { "$ref": "#/definitions/installationId" },
+        "installation_key_id": { "$ref": "#/definitions/protocolHash" }
+      }
+    },
+    "passingCheck": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "status", "observed_at", "evidence_sha256"],
+      "properties": {
+        "id": { "type": "string", "pattern": "^P5-[A-Z]+-[0-9]{3}$" },
+        "status": { "const": "pass" },
+        "observed_at": { "$ref": "#/definitions/timestamp" },
+        "evidence_sha256": { "$ref": "#/definitions/hash" }
+      }
+    },
+    "blockedCheck": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "status", "observed_at", "reason_code"],
+      "properties": {
+        "id": { "type": "string", "pattern": "^P5-[A-Z]+-[0-9]{3}$" },
+        "status": { "const": "blocked" },
+        "observed_at": { "$ref": "#/definitions/timestamp" },
+        "reason_code": {
+          "enum": [
+            "declared_arm64_runtime_unavailable",
+            "secure_enclave_unavailable",
+            "single_physical_host",
+            "rehearsal_edge_not_production_tls",
+            "pin_handoff_not_independent"
+          ]
+        }
+      }
+    }
+  }
+}

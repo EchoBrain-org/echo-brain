@@ -1,6 +1,7 @@
 # Organization authority decisions
 
-**Status:** Phase 4 onboarding/access runtime accepted; live gate pending
+**Status:** Phase 4 onboarding/access runtime accepted; Phase 5 one-machine
+rehearsal accepted as non-qualifying evidence; physical gate pending
 
 This register records the choices approved for the N=2/org=1 onboarding/access
 slice. A changed choice requires an explicit superseding decision.
@@ -24,6 +25,7 @@ slice. A changed choice requires an explicit superseding decision.
 17. **ADR-OA-017:** The built-in authority HTTP server binds only to loopback behind an authenticated TLS terminator. Administrator mutations require a bearer token; bodies, headers, request age, and authenticated-client request rates are bounded. The proxy-origin and administrator credentials are distinct.
 18. **ADR-OA-018:** The local product artifact bundles exactly `federation-protocol`, `organization-protocol`, and `organization-api` from its materialized commit. It never bundles the central authority deployable.
 19. **ADR-OA-019:** Phase 4 includes only an explicitly enabled, 0600 development-file authority signer. Hosted key protection is implemented later through the existing signer port without changing domain or protocol code.
+20. **ADR-OA-020:** The Phase 5 one-machine rehearsal is a closed, non-qualifying evidence lane. A valid report contains exactly 23 passing checks and five blocked target/physical checks, records `phase5_gate: incomplete`, and cannot waive or relabel those blocks. Phase 5 completes only with the same exact artifact bytes on two physical `darwin/arm64` installations using Secure Enclave keys, production authenticated TLS termination, and an independent authority-pin handoff.
 
 The shared protocols retain frozen compatibility vectors and strict schemas.
 The Phase 4 runtime now implements the narrow single-organization enrollment,

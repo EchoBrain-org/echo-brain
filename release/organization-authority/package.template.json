@@ -1,0 +1,37 @@
+{
+  "name": "@echo-brain/organization-authority",
+  "version": "0.0.0-dev.0",
+  "description": "Exact-artifact single-organization ECHO authority runtime",
+  "private": true,
+  "license": "MIT",
+  "type": "module",
+  "main": "dist/main.js",
+  "bin": {
+    "echo-organization-authority": "bin/echo-organization-authority.mjs"
+  },
+  "engines": {
+    "node": "22.22.1",
+    "npm": "10.9.4"
+  },
+  "files": [
+    "bin/**",
+    "dist/**/*.js",
+    "dist/**/*.js.map",
+    "dist/build-identity.v1.json",
+    "migrations/**",
+    "npm-shrinkwrap.json",
+    "README.md",
+    "LICENSE"
+  ],
+  "bundleDependencies": [
+    "@echo-brain/federation-protocol",
+    "@echo-brain/organization-protocol",
+    "@echo-brain/organization-api"
+  ],
+  "dependencies": {
+    "@echo-brain/federation-protocol": "0.0.0-dev.0",
+    "@echo-brain/organization-protocol": "0.0.0-dev.0",
+    "@echo-brain/organization-api": "0.0.0-dev.0",
+    "better-sqlite3": "12.10.0"
+  }
+}

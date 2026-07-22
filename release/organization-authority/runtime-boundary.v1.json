@@ -1,0 +1,26 @@
+{
+  "schema_version": 1,
+  "kind": "echo-runtime-release-boundary",
+  "target": "organization-authority",
+  "package": "@echo-brain/organization-authority",
+  "source_boundary": "services/organization-authority/source-boundary.v1.json",
+  "entrypoint": "dist/main.js",
+  "launcher": "bin/echo-organization-authority.mjs",
+  "bundled_workspace_packages": [
+    "@echo-brain/federation-protocol",
+    "@echo-brain/organization-protocol",
+    "@echo-brain/organization-api"
+  ],
+  "external_runtime_packages": ["better-sqlite3"],
+  "declared_platform": {
+    "os": "darwin",
+    "architecture": "arm64",
+    "node": "22.22.1",
+    "npm": "10.9.4"
+  },
+  "mutable_state": {
+    "packaged": false,
+    "owned_paths": ["authority SQLite database", "authority signing keys"],
+    "rule": "Mutable authority state must live outside the immutable installation prefix."
+  }
+}

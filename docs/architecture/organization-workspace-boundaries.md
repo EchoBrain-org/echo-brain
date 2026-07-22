@@ -1,6 +1,7 @@
 # N=2/org=1 onboarding/access workspace boundaries
 
-**Status:** Phase 4 runtime complete; live N=2/org=1 gate is next
+**Status:** Phase 4 runtime complete; Phase 5 one-machine rehearsal available;
+physical N=2/org=1 gate pending
 
 This architecture establishes explicit package and deployable boundaries before
 moving any implementation. The first implementation slice enrolls two
@@ -46,7 +47,9 @@ The root package remains the local Echo Brain product. Workspaces are built by
 `tsconfig.workspaces.json`. Its artifact now compiles and packs the three shared
 workspace packages from the exact materialized source commit as bundled npm
 dependencies. The central authority is deliberately not bundled into the
-employee-machine product.
+employee-machine product. It has a separate exact-commit release boundary under
+`release/organization-authority/`, with its own artifact manifest, tarball, and
+checksum.
 
 ## Dependency direction
 
@@ -117,6 +120,23 @@ corrupt, expired, rolled-back, or post-revocation state fails closed.
 Event ingest, batch receipts, meetings, decisions, reasoning state, embeddings,
 and organization knowledge are outside the onboarding slice.
 
+## Phase 5 evidence boundary
+
+The [one-machine rehearsal](../runbooks/phase5-one-machine-rehearsal.md) builds
+the employee and authority artifacts from one commit and installs two isolated
+employee copies plus the authority on a `darwin/x64` host. Its closed evidence
+vector has 23 passing checks and five visibly blocked physical/target checks.
+A valid report is always `rehearsal_passed` with `phase5_gate: incomplete`; the
+unsupported-host acknowledgement is permission to rehearse, not a platform
+waiver.
+
+The rehearsal tooling is an operator and qualification boundary, not a runtime
+dependency of either deployable. Its loopback authenticated edges model the
+identity-injection contract but do not claim production TLS. Final Phase 5
+requires two physical `darwin/arm64` installations, Secure Enclave keys, a real
+authenticated TLS terminator, and an independent authority-pin handoff using
+the exact recorded artifact bytes.
+
 ## Promotion sequence
 
 1. **Complete:** establish workspaces, build references, manifests, import
@@ -133,8 +153,11 @@ and organization knowledge are outside the onboarding slice.
    closed and requires recovery or re-enrollment. It must persist the authority
    descriptor and its independently authenticated pin as separate trust inputs,
    then reconstruct the process-local pinned-authority handle on every start.
-5. **Next:** run the live N=2/org=1 onboarding, access-state, and revocation
-   gate against the exact built artifacts.
+5. **In progress:** the exact-artifact one-machine N=2/org=1 rehearsal covers
+   every locally provable onboarding, access-state, restart, corruption, and
+   revocation check. The phase completes only after the remaining five checks
+   pass on two physical target machines; the one-machine report cannot be
+   promoted or edited into qualification evidence.
 6. Place the Brain above the verified federation permission gate and run the
    separate N=2 reasoning test.
 7. Promote organization ingest and batch receipts, then pass their live parity

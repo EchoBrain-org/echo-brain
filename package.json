@@ -96,7 +96,12 @@
     "product:check-boundary": "node tools/product/check-boundary.mjs",
     "product:prepare-offline-deps": "node tools/product/prepare-offline-deps.mjs",
     "product:build-artifact": "node tools/product/build-artifact.mjs",
-    "check": "npm run check:provenance && npm run check:boundary && npm run check:dependencies && npm run typecheck && npm run typecheck:workspaces && npm run lint && npm test && npm run test:qualification",
+    "organization-authority:check-shrinkwrap": "node tools/organization-authority/sync-shrinkwrap.mjs --check",
+    "organization-authority:build-artifact": "node tools/organization-authority/build-artifact.mjs",
+    "organization-authority:verify-artifact": "node tools/organization-authority/verify-artifact.mjs",
+    "organization:phase5-rehearse": "node tools/phase5/run-one-machine.mjs",
+    "organization:phase5-validate-report": "node tools/phase5/validate-report.mjs",
+    "check": "npm run check:provenance && npm run check:boundary && npm run check:dependencies && npm run organization-authority:check-shrinkwrap && npm run typecheck && npm run typecheck:workspaces && npm run lint && npm test && npm run test:qualification",
     "prepack": "npm run build"
   },
   "dependencies": {
