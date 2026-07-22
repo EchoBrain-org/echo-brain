@@ -1,0 +1,107 @@
+{
+  "boundary_version": 1,
+  "kind": "echo-workspace-source-boundary",
+  "name": "echo-brain/local-organization",
+  "workspace": false,
+  "boundary_root": "src/product/organization",
+  "source_root": "src/product/organization",
+  "entry_points": ["src/product/organization/index.ts"],
+  "owned_source_paths": ["src/product/organization/**"],
+  "allowed_internal_paths": [
+    "src/product/organization/**",
+    "src/product/federation/**",
+    "src/product/storage/**",
+    "src/product/paths.ts",
+    "src/product/secure-local-files.ts",
+    "src/infrastructure/filesystem/**"
+  ],
+  "forbidden_repository_roots": [
+    "src/experimental/n2/",
+    "services/",
+    "packages/"
+  ],
+  "allowed_workspace_packages": [
+    "@echo-brain/federation-protocol",
+    "@echo-brain/organization-protocol",
+    "@echo-brain/organization-api"
+  ],
+  "allowed_external_packages": [],
+  "allowed_node_builtins": [],
+  "runtime_assets": [],
+  "layer_rules": [
+    {
+      "name": "local-organization-public-entry",
+      "from": "src/product/organization/index.ts",
+      "allowed_imports": ["src/product/organization/**"],
+      "allowed_workspace_packages": [
+        "@echo-brain/federation-protocol",
+        "@echo-brain/organization-protocol",
+        "@echo-brain/organization-api"
+      ],
+      "allowed_external_packages": [],
+      "allowed_node_builtins": []
+    },
+    {
+      "name": "local-organization-composition-wires-stable-modules",
+      "from": "src/product/organization/composition.ts",
+      "allowed_imports": [
+        "src/product/organization/**",
+        "src/product/federation/**",
+        "src/product/storage/**",
+        "src/product/paths.ts",
+        "src/product/secure-local-files.ts",
+        "src/infrastructure/filesystem/**"
+      ],
+      "allowed_workspace_packages": [
+        "@echo-brain/federation-protocol",
+        "@echo-brain/organization-protocol",
+        "@echo-brain/organization-api"
+      ],
+      "allowed_external_packages": [],
+      "allowed_node_builtins": []
+    },
+    {
+      "name": "local-organization-client-uses-public-api",
+      "from": "src/product/organization/client/**",
+      "allowed_imports": ["src/product/organization/client/**"],
+      "allowed_workspace_packages": [
+        "@echo-brain/organization-protocol",
+        "@echo-brain/organization-api"
+      ],
+      "allowed_external_packages": [],
+      "allowed_node_builtins": []
+    },
+    {
+      "name": "local-organization-state-is-installation-owned",
+      "from": "src/product/organization/state/**",
+      "allowed_imports": [
+        "src/product/organization/state/**",
+        "src/product/storage/**"
+      ],
+      "allowed_workspace_packages": [
+        "@echo-brain/federation-protocol",
+        "@echo-brain/organization-protocol"
+      ],
+      "allowed_external_packages": [],
+      "allowed_node_builtins": []
+    },
+    {
+      "name": "local-enrollment-composes-client-and-state",
+      "from": "src/product/organization/enrollment/**",
+      "allowed_imports": [
+        "src/product/organization/enrollment/**",
+        "src/product/organization/client/**",
+        "src/product/organization/state/**",
+        "src/product/federation/**",
+        "src/product/secure-local-files.ts"
+      ],
+      "allowed_workspace_packages": [
+        "@echo-brain/federation-protocol",
+        "@echo-brain/organization-protocol",
+        "@echo-brain/organization-api"
+      ],
+      "allowed_external_packages": [],
+      "allowed_node_builtins": []
+    }
+  ]
+}

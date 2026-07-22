@@ -1,0 +1,9 @@
+{
+  "files": [],
+  "references": [
+    { "path": "./packages/federation-protocol" },
+    { "path": "./packages/organization-protocol" },
+    { "path": "./packages/organization-api" },
+    { "path": "./services/organization-authority" }
+  ]
+}

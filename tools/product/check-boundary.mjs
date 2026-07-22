@@ -5,6 +5,10 @@ import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, isAbsolute, relative, resolve, sep } from 'node:path';
 import process from 'node:process';
 import ts from 'typescript';
+import {
+  collectModuleReferences,
+  literalText,
+} from '../lib/module-references.mjs';
 
 const BUILTINS = new Set(
   builtinModules.flatMap((name) => {
@@ -142,92 +146,6 @@ function compilerOptions(projectRoot) {
     throw new BoundaryError(ts.flattenDiagnosticMessageText(config.error.messageText, '\n'));
   }
   return ts.parseJsonConfigFileContent(config.config, ts.sys, dirname(configPath)).options;
-}
-
-function literalText(node) {
-  return ts.isStringLiteral(node) || ts.isNoSubstitutionTemplateLiteral(node) ? node.text : null;
-}
-
-function collectModuleReferences(sourceFile) {
-  const references = [];
-  const createRequireFactories = new Set(['createRequire']);
-  const requireAliases = new Set();
-
-  function record(node, expression, kind) {
-    references.push({
-      specifier: literalText(expression),
-      kind,
-      line: sourceFile.getLineAndCharacterOfPosition(node.getStart(sourceFile)).line + 1,
-    });
-  }
-
-  function visit(node) {
-    if (
-      (ts.isImportDeclaration(node) || ts.isExportDeclaration(node)) &&
-      node.moduleSpecifier !== undefined
-    ) {
-      record(node, node.moduleSpecifier, ts.isImportDeclaration(node) ? 'import' : 're-export');
-      if (
-        ts.isImportDeclaration(node) &&
-        literalText(node.moduleSpecifier)?.replace(/^node:/, '') === 'module' &&
-        node.importClause?.namedBindings !== undefined &&
-        ts.isNamedImports(node.importClause.namedBindings)
-      ) {
-        for (const element of node.importClause.namedBindings.elements) {
-          if ((element.propertyName?.text ?? element.name.text) === 'createRequire') {
-            createRequireFactories.add(element.name.text);
-          }
-        }
-      }
-    } else if (
-      ts.isImportEqualsDeclaration(node) &&
-      ts.isExternalModuleReference(node.moduleReference) &&
-      node.moduleReference.expression !== undefined
-    ) {
-      record(node, node.moduleReference.expression, 'import-equals');
-    } else if (ts.isVariableDeclaration(node) && node.initializer !== undefined) {
-      if (
-        ts.isCallExpression(node.initializer) &&
-        ts.isIdentifier(node.initializer.expression) &&
-        createRequireFactories.has(node.initializer.expression.text) &&
-        ts.isIdentifier(node.name)
-      ) {
-        requireAliases.add(node.name.text);
-      }
-      if (
-        ts.isObjectBindingPattern(node.name) &&
-        ts.isCallExpression(node.initializer) &&
-        ts.isIdentifier(node.initializer.expression) &&
-        node.initializer.expression.text === 'require' &&
-        literalText(node.initializer.arguments[0])?.replace(/^node:/, '') === 'module'
-      ) {
-        for (const element of node.name.elements) {
-          if (
-            (element.propertyName?.getText(sourceFile) ?? element.name.getText(sourceFile)) ===
-            'createRequire'
-          ) {
-            createRequireFactories.add(element.name.getText(sourceFile));
-          }
-        }
-      }
-    } else if (ts.isCallExpression(node)) {
-      if (node.expression.kind === ts.SyntaxKind.ImportKeyword) {
-        record(node, node.arguments[0] ?? node.expression, 'dynamic-import');
-      } else if (
-        ts.isIdentifier(node.expression) &&
-        (node.expression.text === 'require' || requireAliases.has(node.expression.text))
-      ) {
-        record(
-          node,
-          node.arguments[0] ?? node.expression,
-          requireAliases.has(node.expression.text) ? 'createRequire' : 'require',
-        );
-      }
-    }
-    ts.forEachChild(node, visit);
-  }
-  visit(sourceFile);
-  return references;
 }
 
 function collectBuiltinChildProcessAccesses(sourceFile) {

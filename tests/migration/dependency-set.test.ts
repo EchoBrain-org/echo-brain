@@ -8,6 +8,7 @@ import {
   mkdtempSync,
   readFileSync,
   rmSync,
+  symlinkSync,
   writeFileSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -81,6 +82,11 @@ describe('dependency partition', () => {
         join(REPO, 'tools/check-boundary.mjs'),
         join(clone, 'tools/check-boundary.mjs'),
       );
+      copyFileSync(
+        join(REPO, 'tools/lib/module-references.mjs'),
+        join(clone, 'tools/lib/module-references.mjs'),
+      );
+      symlinkSync(join(REPO, 'node_modules'), join(clone, 'node_modules'), 'dir');
       copyFileSync(
         join(REPO, 'product/source-boundary.v1.json'),
         join(clone, 'product/source-boundary.v1.json'),

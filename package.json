@@ -3,6 +3,12 @@
   "version": "0.0.0-dev.0",
   "description": "Tool-agnostic meeting-to-decision core with replaceable source, processor, and delivery adapters",
   "private": true,
+  "workspaces": [
+    "packages/federation-protocol",
+    "packages/organization-protocol",
+    "packages/organization-api",
+    "services/organization-authority"
+  ],
   "license": "MIT",
   "type": "module",
   "main": "dist/product/index.js",
@@ -67,8 +73,11 @@
   ],
   "scripts": {
     "clean": "node tools/build.mjs --clean",
+    "clean:workspaces": "tsc -b tsconfig.workspaces.json --clean",
     "build": "node tools/build.mjs",
+    "build:workspaces": "tsc -b tsconfig.workspaces.json",
     "typecheck": "tsc --noEmit -p tsconfig.json",
+    "typecheck:workspaces": "tsc -b tsconfig.workspaces.json",
     "lint": "eslint . --max-warnings 0",
     "test": "vitest run --config vitest.config.ts",
     "test:qualification": "vitest run --config vitest.product.config.ts",
@@ -78,7 +87,7 @@
     "product:check-boundary": "node tools/product/check-boundary.mjs",
     "product:prepare-offline-deps": "node tools/product/prepare-offline-deps.mjs",
     "product:build-artifact": "node tools/product/build-artifact.mjs",
-    "check": "npm run check:provenance && npm run check:boundary && npm run check:dependencies && npm run typecheck && npm run lint && npm test && npm run test:qualification",
+    "check": "npm run check:provenance && npm run check:boundary && npm run check:dependencies && npm run typecheck && npm run typecheck:workspaces && npm run lint && npm test && npm run test:qualification",
     "prepack": "npm run build"
   },
   "dependencies": {

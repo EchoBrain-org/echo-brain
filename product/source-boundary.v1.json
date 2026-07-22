@@ -27,6 +27,7 @@
     "src/util/timestamp.ts"
   ],
   "forbidden_internal_roots": [
+    "src/experimental/n2/",
     "src/daemon/",
     "src/mcp/",
     "src/coord/",

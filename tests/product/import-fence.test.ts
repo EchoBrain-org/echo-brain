@@ -125,6 +125,22 @@ describe('product transitive import fence', () => {
       expected: 'non-literal module loading',
     },
     {
+      name: 'direct createRequire loader',
+      files: {
+        'src/product/index.ts':
+          "import { createRequire } from 'node:module';\ncreateRequire(import.meta.url)('left-pad');\n",
+      },
+      expected: "package 'left-pad' is not allowlisted",
+    },
+    {
+      name: 'namespace createRequire loader',
+      files: {
+        'src/product/index.ts':
+          "import * as Module from 'node:module';\nconst load = Module.createRequire(import.meta.url);\nload('left-pad');\n",
+      },
+      expected: "package 'left-pad' is not allowlisted",
+    },
+    {
       name: 'direct child process import',
       files: {
         'src/product/index.ts': "import { spawn } from 'node:child_process';\nvoid spawn;\n",

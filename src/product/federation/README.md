@@ -38,6 +38,12 @@ The disposable organization-authority pilot lives under
 `src/experimental/n2/`, including its contracts, schemas, SQLite state, and
 manual CLI. It is not part of this stable federation layout or package API.
 
+The accepted promotion scaffold keeps installation-side organization
+orchestration in the sibling `src/product/organization/` module. Portable trust
+primitives and signed organization documents will be promoted through the
+`federation-protocol` and `organization-protocol` workspaces. None of those
+scaffolds is exported by this module today.
+
 ## Dependency rule
 
 Lower-level folders must not import higher-level orchestration:
