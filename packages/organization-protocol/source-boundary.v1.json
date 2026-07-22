@@ -16,8 +16,13 @@
   ],
   "allowed_workspace_packages": ["@echo-brain/federation-protocol"],
   "allowed_external_packages": [],
-  "allowed_node_builtins": [],
-  "runtime_assets": [],
+  "allowed_node_builtins": ["buffer"],
+  "runtime_assets": [
+    "packages/organization-protocol/schemas/organization-authority-descriptor.v1.schema.json",
+    "packages/organization-protocol/schemas/organization-enrollment-request.v1.schema.json",
+    "packages/organization-protocol/schemas/organization-enrollment-receipt.v1.schema.json",
+    "packages/organization-protocol/schemas/organization-installation-access-state.v1.schema.json"
+  ],
   "layer_rules": [
     {
       "name": "organization-protocol-depends-only-on-federation-protocol",
@@ -25,7 +30,7 @@
       "allowed_imports": ["packages/organization-protocol/src/**"],
       "allowed_workspace_packages": ["@echo-brain/federation-protocol"],
       "allowed_external_packages": [],
-      "allowed_node_builtins": []
+      "allowed_node_builtins": ["buffer"]
     }
   ]
 }

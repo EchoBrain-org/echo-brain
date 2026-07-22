@@ -1,4 +1,7 @@
 # Organization protocol tests
 
-Future tests cover exact document validation, signature binding, version
-compatibility, size limits, and rejection of ambiguous or stale access facts.
+The package suite covers exact document and schema validation, public-key and
+signature binding, frozen canonical bytes, document bounds, enrollment
+cross-bindings, active-lease freshness, monotonic sequence handling, and
+terminal revocation. Migration tests document the intentional wire break from
+the ingest-coupled experimental enrollment format.

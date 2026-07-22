@@ -1,6 +1,6 @@
 # N=2/org=1 onboarding/access workspace boundaries
 
-**Status:** Workspace scaffold and federation primitives complete; no organization runtime behavior
+**Status:** Shared onboarding/access protocols complete; no organization runtime behavior
 
 This architecture establishes explicit package and deployable boundaries before
 moving any implementation. The first implementation slice enrolls two
@@ -114,8 +114,16 @@ and organization knowledge are outside the onboarding slice.
    fences, and test ownership without runtime behavior.
 2. **Complete:** promote federation primitives with golden byte/signature
    fixtures and compatibility tests against the current product behavior.
-3. **Next:** promote signed organization documents and schemas.
-4. Implement the single-organization authority and local enrollment client.
+3. **Complete:** promote the self-contained authority descriptor, enrollment
+   request, enrollment receipt, and fresh installation access-state protocol
+   with schemas and frozen fixtures.
+4. **Next:** add workspace-package artifact staging, then implement the
+   single-organization authority and local enrollment client. The client must
+   atomically retain each verified access-state high-watermark before treating
+   an active lease as permission; missing or corrupt retained state fails
+   closed and requires recovery or re-enrollment. It must persist the authority
+   descriptor and its independently authenticated pin as separate trust inputs,
+   then reconstruct the process-local pinned-authority handle on every start.
 5. Run the live N=2/org=1 onboarding, access-state, and revocation gate.
 6. Place the Brain above the verified federation permission gate and run the
    separate N=2 reasoning test.

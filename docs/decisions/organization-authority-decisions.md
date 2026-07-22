@@ -1,6 +1,6 @@
 # Organization authority decisions
 
-**Status:** Accepted boundaries and promoted federation primitives; no organization runtime accepted
+**Status:** Accepted boundaries and promoted onboarding/access protocols; no organization runtime accepted
 
 This register records the choices approved for the N=2/org=1 onboarding/access
 slice. A changed choice requires an explicit superseding decision.
@@ -15,9 +15,13 @@ slice. A changed choice requires an explicit superseding decision.
 8. **ADR-OA-008:** Stable source never imports `src/experimental/n2`; the pilot remains frozen through the onboarding/access slice and until the later organization-ingest and batch-receipt parity gate passes.
 9. **ADR-OA-009:** Central authority persistence and installation-local organization state are separate ownership boundaries; exact records, tables, counts, migrations, and persistence providers remain deferred.
 10. **ADR-OA-010:** The live N=2/org=1 onboarding/access and revocation gate passes before the reasoning Brain is integrated behind the federation permission gate; a separate later ingest-and-receipt gate is required before claiming full parity with the experimental pilot.
+11. **ADR-OA-011:** Stable enrollment is self-contained: the request carries the installation public signing key and binds the exact pinned authority key; product-local identity-manifest and publication-policy evidence is deferred to the later ingest registration protocol rather than copied from the experiment.
+12. **ADR-OA-012:** Current installation access is an authority-signed, per-enrollment monotonic state. Active state is a caller-policy-bounded lease that fails closed on expiry; revoked state is terminal. Administrative transition/audit documents remain a separate deferred contract.
+13. **ADR-OA-013:** Organization cryptographic operations require a process-local pinned-authority handle created by comparing the descriptor with an independently authenticated digest. The handle is never serialized or copied; each process reconstructs it from separately retained descriptor and pin inputs.
 
-The federation protocol now implements ADR-OA-003 with frozen compatibility
-vectors. No organization migration, endpoint, transport specification,
-generated client, organization JSON schema, authentication provider,
-persistence provider, private-key implementation, or UI behavior is accepted
-yet.
+The federation protocol implements ADR-OA-003, and the organization protocol
+implements ADR-OA-004, ADR-OA-011, and ADR-OA-012 with frozen compatibility
+vectors and strict JSON Schemas; its downstream API also implements ADR-OA-013.
+No organization migration, endpoint, transport specification, generated client,
+authentication provider, persistence provider, private-key implementation, or
+UI behavior is accepted yet.

@@ -19,6 +19,7 @@ import {
   signedPayload,
   verifyInstallationKeyDescriptor,
   verifyP256LowSSignature,
+  verifyP256SigningKeyDescriptor,
   verifySignedDocument,
 } from "../src/index.js";
 import type {
@@ -162,8 +163,44 @@ describe("federation protocol golden fixture", () => {
 
   it("verifies the public installation-key descriptor", () => {
     expect(
+      verifyP256SigningKeyDescriptor({
+        key_id: fixture.key_id,
+        algorithm: "ecdsa-p256-sha256-der-low-s",
+        public_key_spki_der_base64: fixture.public_key_spki_der_base64,
+      }),
+    ).toEqual(publicKey);
+    expect(
       verifyInstallationKeyDescriptor(fixture.installation_key_descriptor),
     ).toEqual(publicKey);
+    expect(() =>
+      verifyP256SigningKeyDescriptor({
+        key_id: fixture.key_id,
+        algorithm: "ecdsa-p256-sha256-der-low-s",
+        public_key_spki_der_base64: fixture.public_key_spki_der_base64,
+        extra: true,
+      } as never),
+    ).toThrow("P-256 signing key descriptor has an unexpected shape");
+
+    const uncompressedPoint = publicKey.subarray(-65);
+    expect(uncompressedPoint[0]).toBe(0x04);
+    const compressedSpki = Buffer.concat([
+      Buffer.from(
+        "3039301306072a8648ce3d020106082a8648ce3d030107032200",
+        "hex",
+      ),
+      Buffer.from([
+        (uncompressedPoint[64] & 1) === 0 ? 0x02 : 0x03,
+        ...uncompressedPoint.subarray(1, 33),
+      ]),
+    ]);
+    expect(compressedSpki).toHaveLength(59);
+    expect(() =>
+      verifyP256SigningKeyDescriptor({
+        key_id: p256KeyId(compressedSpki),
+        algorithm: "ecdsa-p256-sha256-der-low-s",
+        public_key_spki_der_base64: compressedSpki.toString("base64"),
+      }),
+    ).toThrow("public key must use canonical P-256 SPKI DER bytes");
   });
 
   it("replays deterministic signing over the exact canonical bytes", async () => {
@@ -486,6 +523,7 @@ describe("federation protocol golden fixture", () => {
       "signedPayload",
       "verifyInstallationKeyDescriptor",
       "verifyP256LowSSignature",
+      "verifyP256SigningKeyDescriptor",
       "verifySignedDocument",
     ]);
   });

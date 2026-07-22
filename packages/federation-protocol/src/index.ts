@@ -13,6 +13,7 @@ export {
 } from "./identifiers.js";
 export type { FederationIdPrefix } from "./identifiers.js";
 export { verifyInstallationKeyDescriptor } from "./installation-key-descriptor.js";
+export { verifyP256SigningKeyDescriptor } from "./p256-signing-key-descriptor.js";
 export {
   assertP256LowS,
   normalizeP256LowS,
@@ -31,6 +32,7 @@ export type {
   JsonValue,
   KeyProtection,
   KeyProtectionAssurance,
+  P256SigningKeyDescriptor,
   Sha256Digest,
   SignedDocument,
   SignedIntegrity,

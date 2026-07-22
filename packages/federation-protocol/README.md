@@ -7,7 +7,8 @@ organization authority must execute identically:
 
 - RFC 8785 canonical JSON bytes and SHA-256 digests;
 - federation identifier and UTC timestamp validation;
-- the ECDSA P-256 DER low-S signature profile and public-key fingerprints;
+- the ECDSA P-256 DER low-S signature profile and fingerprints over canonical
+  uncompressed named-curve SPKI public keys;
 - public installation-key descriptor verification; and
 - generic signed-document creation and verification.
 

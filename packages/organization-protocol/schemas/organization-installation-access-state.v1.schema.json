@@ -1,0 +1,159 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://echo.local/schemas/organization-protocol/organization-installation-access-state.v1.schema.json",
+  "title": "ECHO organization installation access state",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "kind",
+    "authority_id",
+    "authority_key_id",
+    "organization_id",
+    "enrollment_id",
+    "enrollment_receipt_sha256",
+    "principal_id",
+    "membership_id",
+    "membership_type",
+    "installation_id",
+    "installation_key_id",
+    "access_state_sequence",
+    "status",
+    "revocation_reason",
+    "evaluated_at",
+    "valid_until",
+    "integrity"
+  ],
+  "properties": {
+    "schema_version": { "const": 1 },
+    "kind": { "const": "echo-organization-installation-access-state" },
+    "authority_id": { "$ref": "#/definitions/authorityId" },
+    "authority_key_id": { "$ref": "#/definitions/digest" },
+    "organization_id": { "$ref": "#/definitions/organizationId" },
+    "enrollment_id": { "$ref": "#/definitions/enrollmentId" },
+    "enrollment_receipt_sha256": { "$ref": "#/definitions/digest" },
+    "principal_id": { "$ref": "#/definitions/principalId" },
+    "membership_id": { "$ref": "#/definitions/membershipId" },
+    "membership_type": { "$ref": "#/definitions/membershipType" },
+    "installation_id": { "$ref": "#/definitions/installationId" },
+    "installation_key_id": { "$ref": "#/definitions/digest" },
+    "access_state_sequence": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 9007199254740991
+    },
+    "status": { "enum": ["active", "revoked"] },
+    "revocation_reason": {
+      "type": ["string", "null"],
+      "enum": [null, "membership_revoked", "installation_revoked"]
+    },
+    "evaluated_at": { "$ref": "#/definitions/timestamp" },
+    "valid_until": {
+      "anyOf": [{ "$ref": "#/definitions/timestamp" }, { "type": "null" }]
+    },
+    "integrity": { "$ref": "#/definitions/integrity" }
+  },
+  "allOf": [
+    {
+      "oneOf": [
+        {
+          "properties": {
+            "status": { "const": "active" },
+            "revocation_reason": { "type": "null" },
+            "valid_until": { "$ref": "#/definitions/timestamp" }
+          }
+        },
+        {
+          "properties": {
+            "status": { "const": "revoked" },
+            "revocation_reason": {
+              "enum": ["membership_revoked", "installation_revoked"]
+            },
+            "valid_until": { "type": "null" }
+          }
+        }
+      ]
+    }
+  ],
+  "definitions": {
+    "authorityId": {
+      "type": "string",
+      "minLength": 40,
+      "maxLength": 40,
+      "pattern": "^oau_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+    },
+    "organizationId": {
+      "type": "string",
+      "minLength": 40,
+      "maxLength": 40,
+      "pattern": "^org_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+    },
+    "principalId": {
+      "type": "string",
+      "minLength": 40,
+      "maxLength": 40,
+      "pattern": "^prn_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+    },
+    "membershipId": {
+      "type": "string",
+      "minLength": 40,
+      "maxLength": 40,
+      "pattern": "^mem_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+    },
+    "membershipType": {
+      "type": "string",
+      "enum": ["owner", "employee"]
+    },
+    "installationId": {
+      "type": "string",
+      "minLength": 40,
+      "maxLength": 40,
+      "pattern": "^ins_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+    },
+    "enrollmentId": {
+      "type": "string",
+      "minLength": 40,
+      "maxLength": 40,
+      "pattern": "^enr_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+    },
+    "digest": {
+      "type": "string",
+      "minLength": 71,
+      "maxLength": 71,
+      "pattern": "^sha256:[0-9a-f]{64}$"
+    },
+    "timestamp": {
+      "type": "string",
+      "minLength": 24,
+      "maxLength": 24,
+      "pattern": "^[0-9]{4}-(?:0[1-9]|1[0-2])-(?:0[1-9]|[12][0-9]|3[01])T(?:[01][0-9]|2[0-3]):[0-5][0-9]:[0-5][0-9]\\.[0-9]{3}Z$"
+    },
+    "base64": {
+      "type": "string",
+      "pattern": "^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$"
+    },
+    "integrity": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "canonicalization",
+        "payload_sha256",
+        "signature_algorithm",
+        "key_id",
+        "signature_base64"
+      ],
+      "properties": {
+        "canonicalization": { "const": "RFC8785" },
+        "payload_sha256": { "$ref": "#/definitions/digest" },
+        "signature_algorithm": { "const": "ecdsa-p256-sha256-der-low-s" },
+        "key_id": { "$ref": "#/definitions/digest" },
+        "signature_base64": {
+          "type": "string",
+          "allOf": [{ "$ref": "#/definitions/base64" }],
+          "minLength": 8,
+          "maxLength": 96
+        }
+      }
+    }
+  }
+}

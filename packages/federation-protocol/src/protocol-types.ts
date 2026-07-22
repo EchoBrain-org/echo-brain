@@ -7,6 +7,12 @@ export type JsonObject = { [key: string]: JsonValue };
 
 export type Sha256Digest = `sha256:${string}`;
 
+export interface P256SigningKeyDescriptor {
+  key_id: Sha256Digest;
+  algorithm: "ecdsa-p256-sha256-der-low-s";
+  public_key_spki_der_base64: string;
+}
+
 export type KeyProtection =
   "secure-enclave" | "keychain-this-device-only" | "development-file";
 
@@ -27,11 +33,8 @@ export interface SignedDocument {
   integrity: SignedIntegrity;
 }
 
-export interface InstallationKeyDescriptor {
+export interface InstallationKeyDescriptor extends P256SigningKeyDescriptor {
   installation_id: string;
-  key_id: Sha256Digest;
-  algorithm: "ecdsa-p256-sha256-der-low-s";
-  public_key_spki_der_base64: string;
   protection: KeyProtection;
   assurance: KeyProtectionAssurance;
   private_key_exportable: boolean;
