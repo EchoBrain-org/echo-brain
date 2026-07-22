@@ -415,7 +415,7 @@ function main() {
             paths: Object.fromEntries(
               BUNDLED_WORKSPACES.map(({ name, directory }) => [
                 name,
-                [`${directory}/src/index.ts`],
+                [`${directory}/dist/index.d.ts`],
               ]),
             ),
           },
