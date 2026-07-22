@@ -1,5 +1,6 @@
 # Organization state
 
-Future installation-local authority evidence and verified access state belong
-here. Exact records, tables, counts, indexes, migrations, rollback behavior, and
-persistence providers remain deferred.
+The SQLite organization state store owns installation-local authority pin,
+enrollment evidence, access-state sequence/hash, and trusted-clock
+high-watermark invariants. Missing, corrupt, expired, rolled-back, or divergent
+state fails closed; revoked state is terminal.

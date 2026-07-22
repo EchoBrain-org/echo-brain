@@ -1,6 +1,5 @@
 # Generated clients
 
-If client generation is selected, reproducible admin and installation artifacts
-will live here. The scaffold selects neither a generator nor an artifact
-commit policy; future accepted contracts must not acquire hand-maintained
-duplicate transport types.
+Phase 4 uses the hand-reviewed client port and HTTP adapter in the local
+product; it generates no code. If generation is selected later, reproducible
+artifacts live here and must not introduce duplicate canonical DTOs.

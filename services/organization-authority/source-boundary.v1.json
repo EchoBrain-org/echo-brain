@@ -15,9 +15,20 @@
     "@echo-brain/organization-protocol",
     "@echo-brain/organization-api"
   ],
-  "allowed_external_packages": [],
-  "allowed_node_builtins": [],
-  "runtime_assets": [],
+  "allowed_external_packages": ["better-sqlite3"],
+  "allowed_node_builtins": [
+    "buffer",
+    "crypto",
+    "events",
+    "fs",
+    "http",
+    "net",
+    "path",
+    "util"
+  ],
+  "runtime_assets": [
+    "services/organization-authority/migrations/0001_single_org_authority.sql"
+  ],
   "layer_rules": [
     {
       "name": "authority-entrypoint-calls-composition",
@@ -50,7 +61,7 @@
         "@echo-brain/organization-protocol"
       ],
       "allowed_external_packages": [],
-      "allowed_node_builtins": []
+      "allowed_node_builtins": ["buffer"]
     },
     {
       "name": "authority-adapters-implement-application-ports",
@@ -65,8 +76,8 @@
         "@echo-brain/organization-protocol",
         "@echo-brain/organization-api"
       ],
-      "allowed_external_packages": [],
-      "allowed_node_builtins": []
+      "allowed_external_packages": ["better-sqlite3"],
+      "allowed_node_builtins": ["crypto", "fs", "path"]
     },
     {
       "name": "authority-presentation-calls-application",
@@ -81,7 +92,7 @@
         "@echo-brain/organization-api"
       ],
       "allowed_external_packages": [],
-      "allowed_node_builtins": []
+      "allowed_node_builtins": ["buffer", "crypto", "http", "util"]
     },
     {
       "name": "authority-composition-may-wire-all-layers",
@@ -93,7 +104,7 @@
         "@echo-brain/organization-api"
       ],
       "allowed_external_packages": [],
-      "allowed_node_builtins": []
+      "allowed_node_builtins": ["events", "net"]
     }
   ]
 }

@@ -1,6 +1,6 @@
 # Application
 
-Commands, queries, and capability-shaped ports belong here. Each use case will
-own one transaction-sized workflow; it will not expose table-level CRUD as the
-domain API. Application code may use domain rules and ports but never concrete
-adapters.
+Commands and capability-shaped ports live here. The authority application owns
+transaction-sized membership, grant, enrollment, lease, and revocation
+workflows without exposing table CRUD. It uses domain rules and ports but no
+concrete adapter.

@@ -129,6 +129,7 @@ function rootInstallLock(artifact, artifactManifest, productLock) {
         resolved: dependency,
         integrity: `sha512-${hashFile(artifact, 'sha512', 'base64')}`,
         dependencies: packageMetadata.dependencies,
+        bundleDependencies: packageMetadata.bundleDependencies,
         bin: packageMetadata.bin,
         engines: packageMetadata.engines,
       },

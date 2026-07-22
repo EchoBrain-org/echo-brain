@@ -1,5 +1,6 @@
-# Candidate OpenAPI source
+# OpenAPI boundary
 
-If OpenAPI is selected for the organization transport, its reviewed source will
-live here. The scaffold does not select OpenAPI or declare an endpoint or
-transport schema.
+Phase 4 uses reviewed TypeScript DTOs and validators as the canonical transport
+contract. No OpenAPI document or generated client is accepted yet. If one is
+added later, its source and reproducibility evidence live here and must remain
+behaviorally identical to the package contract.

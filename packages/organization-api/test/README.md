@@ -1,5 +1,5 @@
 # Organization API tests
 
-Future tests will verify whichever transport specification, client artifacts,
-public errors, authentication declarations, and server conformance are later
-accepted. This scaffold selects none of them.
+The Phase 4 suite verifies exact request shape, canonical installation signing,
+signature verification, and request hashing. Server transport behavior is
+tested with the authority service.

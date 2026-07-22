@@ -7,6 +7,11 @@
     "": {
       "name": "echo-brain",
       "version": "0.0.0-dev.0",
+      "bundleDependencies": [
+        "@echo-brain/federation-protocol",
+        "@echo-brain/organization-protocol",
+        "@echo-brain/organization-api"
+      ],
       "license": "MIT",
       "workspaces": [
         "packages/federation-protocol",
@@ -15,6 +20,9 @@
         "services/organization-authority"
       ],
       "dependencies": {
+        "@echo-brain/federation-protocol": "0.0.0-dev.0",
+        "@echo-brain/organization-api": "0.0.0-dev.0",
+        "@echo-brain/organization-protocol": "0.0.0-dev.0",
         "ajv": "8.20.0",
         "better-sqlite3": "12.10.0"
       },
@@ -3536,6 +3544,7 @@
       "version": "0.0.0-dev.0",
       "license": "MIT",
       "dependencies": {
+        "@echo-brain/federation-protocol": "0.0.0-dev.0",
         "@echo-brain/organization-protocol": "0.0.0-dev.0"
       },
       "engines": {
@@ -3562,7 +3571,8 @@
       "dependencies": {
         "@echo-brain/federation-protocol": "0.0.0-dev.0",
         "@echo-brain/organization-api": "0.0.0-dev.0",
-        "@echo-brain/organization-protocol": "0.0.0-dev.0"
+        "@echo-brain/organization-protocol": "0.0.0-dev.0",
+        "better-sqlite3": "12.10.0"
       },
       "engines": {
         "node": "22.22.1",

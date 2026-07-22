@@ -77,7 +77,13 @@ describe('product transitive import fence', () => {
     expect(second).toEqual(first);
     const result = JSON.parse(first.stdout) as { closure: string[]; external_packages: string[] };
     expect(result.closure).toEqual([...result.closure].sort());
-    expect(result.external_packages).toEqual(['ajv', 'better-sqlite3']);
+    expect(result.external_packages).toEqual([
+      '@echo-brain/federation-protocol',
+      '@echo-brain/organization-api',
+      '@echo-brain/organization-protocol',
+      'ajv',
+      'better-sqlite3',
+    ]);
     expect(result.closure.some((path) => path.startsWith('src/capture/'))).toBe(false);
     expect(result.closure).not.toContain('src/brain/brain.ts');
     expect(result.closure).not.toContain('src/cli/commands/brief.ts');

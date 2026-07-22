@@ -29,6 +29,9 @@ const PRODUCT_TABLES = [
   'federated_outbox_events',
   'federated_processor_attributions',
   'federated_source_attributions',
+  'organization_access_high_watermarks',
+  'organization_authority_pins',
+  'organization_enrollments',
 ];
 
 const source = {
@@ -389,13 +392,13 @@ describe('SqliteCoreStateStore', () => {
     db.close();
   });
 
-  it('installs schema v4 with only the ten product-state tables', () => {
+  it('installs schema v5 with only the thirteen product-state tables', () => {
     const databasePath = temporaryDatabase();
     const store = new SqliteCoreStateStore(databasePath);
     store.close();
 
     const db = new Database(databasePath, { readonly: true });
-    expect(db.pragma('user_version', { simple: true })).toBe(4);
+    expect(db.pragma('user_version', { simple: true })).toBe(5);
     const tables = db
       .prepare(
         `SELECT name FROM sqlite_master
@@ -457,7 +460,7 @@ describe('SqliteCoreStateStore', () => {
     upgraded.close();
 
     const db = new Database(databasePath, { readonly: true });
-    expect(db.pragma('user_version', { simple: true })).toBe(4);
+    expect(db.pragma('user_version', { simple: true })).toBe(5);
     expect(
       db
         .prepare(

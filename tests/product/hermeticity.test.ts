@@ -130,6 +130,7 @@ describe('product hermeticity setup', () => {
       'federation/attributing-core-state-store.ts',
       'federation/independent-copy-store.ts',
       'federation/record-projector.ts',
+      'organization/enrollment/local-organization-coordinator.ts',
     ]);
     expect(
       readFileSync(join(productRoot, 'adapter-factories.ts'), 'utf8'),
@@ -185,6 +186,17 @@ describe('product hermeticity setup', () => {
       readFileSync(join(productRoot, 'federation/record-projector.ts'), 'utf8'),
     ).toMatch(
       /this\.now = options\.now \?\? \(\(\) => new Date\(\)\.toISOString\(\)\)/,
+    );
+    expect(
+      readFileSync(
+        join(
+          productRoot,
+          'organization/enrollment/local-organization-coordinator.ts',
+        ),
+        'utf8',
+      ),
+    ).toMatch(
+      /this\.clock = options\.clock \?\? \{ now: \(\) => new Date\(\)\.toISOString\(\) \}/,
     );
   });
 });

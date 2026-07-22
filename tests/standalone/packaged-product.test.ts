@@ -12,6 +12,13 @@ import {
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { productShrinkwrap } from '../../tools/product/sync-shrinkwrap.mjs';
+
+const BUNDLED_WORKSPACE_PACKAGES = [
+  '@echo-brain/federation-protocol',
+  '@echo-brain/organization-protocol',
+  '@echo-brain/organization-api',
+] as const;
 
 const REPO = resolve(import.meta.dirname, '../..');
 const temporaryRoot = mkdtempSync(join(tmpdir(), 'echo-brain-package-'));
@@ -23,6 +30,7 @@ const npmEnvironment = {
   npm_config_cache: join(REPO, '.npm-cache'),
 };
 let artifactPath: string;
+let packReport: { filename: string; bundled?: string[] };
 
 function run(
   command: string,
@@ -50,9 +58,13 @@ beforeAll(() => {
     { env: npmEnvironment },
   );
   expect(packed.status, packed.stdout + packed.stderr).toBe(0);
-  const report = JSON.parse(packed.stdout) as Array<{ filename: string }>;
+  const report = JSON.parse(packed.stdout) as Array<{
+    filename: string;
+    bundled?: string[];
+  }>;
   expect(report).toHaveLength(1);
-  artifactPath = join(artifactDirectory, report[0]!.filename);
+  packReport = report[0]!;
+  artifactPath = join(artifactDirectory, packReport.filename);
   expect(existsSync(artifactPath)).toBe(true);
 }, 180_000);
 
@@ -62,6 +74,9 @@ afterAll(() => {
 
 describe('ordinary npm package', () => {
   it('contains the CLI, public schema, SQLite migrations, adapters, license, and metadata', () => {
+    expect([...(packReport.bundled ?? [])].sort()).toEqual(
+      [...BUNDLED_WORKSPACE_PACKAGES].sort(),
+    );
     const listed = run('/usr/bin/tar', ['-tzf', artifactPath], {
       cwd: temporaryRoot,
     });
@@ -99,6 +114,7 @@ describe('ordinary npm package', () => {
       'package/dist/product/storage/migrations/0002_core_state.sql',
       'package/dist/product/storage/migrations/0003_federated_founder_identity.sql',
       'package/dist/product/storage/migrations/0004_remove_legacy_events.sql',
+      'package/dist/product/storage/migrations/0005_organization_access.sql',
       'package/schemas/meeting-context.v1.schema.json',
       'package/schemas/runtime-config.v1.schema.json',
       'package/schemas/product/active-identity-bundle.v1.schema.json',
@@ -112,6 +128,13 @@ describe('ordinary npm package', () => {
       'package/schemas/product/federated-export.v1.schema.json',
       'package/schemas/product/federated-recovery-report.v1.schema.json',
       'package/docs/architecture/core-and-adapters.md',
+      'package/node_modules/@echo-brain/federation-protocol/dist/index.js',
+      'package/node_modules/@echo-brain/federation-protocol/package.json',
+      'package/node_modules/@echo-brain/organization-protocol/dist/index.js',
+      'package/node_modules/@echo-brain/organization-protocol/package.json',
+      'package/node_modules/@echo-brain/organization-api/dist/index.js',
+      'package/node_modules/@echo-brain/organization-api/openapi/README.md',
+      'package/node_modules/@echo-brain/organization-api/package.json',
       'package/LICENSE',
       'package/README.md',
       'package/package.json',
@@ -140,6 +163,20 @@ describe('ordinary npm package', () => {
         member.startsWith('package/dist/adapters/communication-channels/'),
       ),
     ).toBe(false);
+    expect(
+      [...members].some((member) =>
+        member.startsWith(
+          'package/node_modules/@echo-brain/organization-authority/',
+        ),
+      ),
+    ).toBe(false);
+    expect(
+      [...members].some(
+        (member) =>
+          member.startsWith('package/node_modules/@echo-brain/') &&
+          (member.includes('/src/') || member.endsWith('.tsbuildinfo')),
+      ),
+    ).toBe(false);
     const digest = createHash('sha256')
       .update(readFileSync(artifactPath))
       .digest('hex');
@@ -156,6 +193,7 @@ describe('ordinary npm package', () => {
       version: string;
       license: string;
       dependencies: Record<string, string>;
+      bundleDependencies: string[];
       bin: Record<string, string>;
       engines: Record<string, string>;
     };
@@ -164,6 +202,7 @@ describe('ordinary npm package', () => {
     ) as {
       packages: Record<string, Record<string, unknown>>;
     };
+    const productLock = productShrinkwrap(packageManifest, shrinkwrap);
     const artifactSpec = `file:${artifactPath}`;
     writeFileSync(
       join(prefix, 'package.json'),
@@ -178,7 +217,7 @@ describe('ordinary npm package', () => {
         2,
       )}\n`,
     );
-    const { '': _sourceRoot, ...lockedPackages } = shrinkwrap.packages;
+    const { '': _sourceRoot, ...lockedPackages } = productLock.packages;
     writeFileSync(
       join(prefix, 'package-lock.json'),
       `${JSON.stringify(
@@ -200,6 +239,7 @@ describe('ordinary npm package', () => {
               integrity: `sha512-${createHash('sha512').update(readFileSync(artifactPath)).digest('base64')}`,
               license: packageManifest.license,
               dependencies: packageManifest.dependencies,
+              bundleDependencies: packageManifest.bundleDependencies,
               bin: packageManifest.bin,
               engines: packageManifest.engines,
             },

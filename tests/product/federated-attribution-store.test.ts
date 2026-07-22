@@ -419,7 +419,7 @@ describe('Founder Live attribution persistence', () => {
     state.close();
 
     const db = new Database(paths.database, { readonly: true });
-    expect(db.pragma('user_version', { simple: true })).toBe(4);
+    expect(db.pragma('user_version', { simple: true })).toBe(5);
     const tables = db
       .prepare(
         `SELECT name FROM sqlite_master

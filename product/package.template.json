@@ -44,6 +44,10 @@
       "types": "./dist/adapters/approval-surfaces/slack-reactions/index.d.ts",
       "import": "./dist/adapters/approval-surfaces/slack-reactions/index.js"
     },
+    "./organization": {
+      "types": "./dist/product/organization/index.d.ts",
+      "import": "./dist/product/organization/index.js"
+    },
     "./schemas/meeting-context.v1.schema.json": "./schemas/meeting-context.v1.schema.json",
     "./schemas/runtime-config.v1.schema.json": "./schemas/runtime-config.v1.schema.json",
     "./schemas/product/*": "./schemas/product/*"
@@ -64,7 +68,15 @@
     "README.md",
     "LICENSE"
   ],
+  "bundleDependencies": [
+    "@echo-brain/federation-protocol",
+    "@echo-brain/organization-protocol",
+    "@echo-brain/organization-api"
+  ],
   "dependencies": {
+    "@echo-brain/federation-protocol": "0.0.0-dev.0",
+    "@echo-brain/organization-api": "0.0.0-dev.0",
+    "@echo-brain/organization-protocol": "0.0.0-dev.0",
     "ajv": "8.20.0",
     "better-sqlite3": "12.10.0"
   }

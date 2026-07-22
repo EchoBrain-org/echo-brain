@@ -26,7 +26,7 @@
     "@echo-brain/organization-api"
   ],
   "allowed_external_packages": [],
-  "allowed_node_builtins": [],
+  "allowed_node_builtins": ["node:buffer", "node:crypto"],
   "runtime_assets": [],
   "layer_rules": [
     {
@@ -69,7 +69,7 @@
         "@echo-brain/organization-api"
       ],
       "allowed_external_packages": [],
-      "allowed_node_builtins": []
+      "allowed_node_builtins": ["node:buffer"]
     },
     {
       "name": "local-organization-state-is-installation-owned",
@@ -101,7 +101,7 @@
         "@echo-brain/organization-api"
       ],
       "allowed_external_packages": [],
-      "allowed_node_builtins": []
+      "allowed_node_builtins": ["node:crypto"]
     }
   ]
 }

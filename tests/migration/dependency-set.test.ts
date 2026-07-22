@@ -70,7 +70,13 @@ describe('dependency partition', () => {
     expect(r.stdout + r.stderr, r.stdout + r.stderr).toContain('"ok": true');
     expect(r.status).toBe(0);
     const out = JSON.parse(r.stdout) as { external_packages: string[]; closure: string[] };
-    expect(out.external_packages.sort()).toEqual(['ajv', 'better-sqlite3']);
+    expect(out.external_packages.sort()).toEqual([
+      '@echo-brain/federation-protocol',
+      '@echo-brain/organization-api',
+      '@echo-brain/organization-protocol',
+      'ajv',
+      'better-sqlite3',
+    ]);
     expect(out.closure.every((p) => p.startsWith('src/'))).toBe(true);
   });
 

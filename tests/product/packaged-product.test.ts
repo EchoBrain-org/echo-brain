@@ -168,8 +168,36 @@ describe('product-only artifact', () => {
         'dist/product/federation/legacy-classification.d.ts',
         'dist/product/lifecycle-lock.js',
         'dist/product/state-backup.js',
+        'node_modules/@echo-brain/federation-protocol/dist/index.js',
+        'node_modules/@echo-brain/federation-protocol/fixtures/signed-document-p256-rfc8785.v1.json',
+        'node_modules/@echo-brain/organization-protocol/dist/index.js',
+        'node_modules/@echo-brain/organization-protocol/schemas/organization-enrollment-request.v1.schema.json',
+        'node_modules/@echo-brain/organization-api/dist/index.js',
+        'node_modules/@echo-brain/organization-api/openapi/README.md',
       ]),
     );
+    const bundledPackageRoots = [
+      ...new Set(
+        paths.flatMap((path) => {
+          const matched = /^node_modules\/@echo-brain\/([^/]+)\//.exec(path);
+          return matched === null ? [] : [`@echo-brain/${matched[1]}`];
+        }),
+      ),
+    ].sort();
+    expect(bundledPackageRoots).toEqual(
+      [
+        '@echo-brain/federation-protocol',
+        '@echo-brain/organization-api',
+        '@echo-brain/organization-protocol',
+      ].sort(),
+    );
+    expect(
+      paths.some(
+        (path) =>
+          path.startsWith('node_modules/@echo-brain/') &&
+          (path.includes('/src/') || path.endsWith('.tsbuildinfo')),
+      ),
+    ).toBe(false);
     for (const forbidden of [
       'dist/daemon/',
       'dist/mcp/',

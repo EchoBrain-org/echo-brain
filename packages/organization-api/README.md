@@ -1,13 +1,16 @@
 # Organization API
 
-**Status:** Accepted workspace boundary; no transport contract selected
+**Status:** Phase 4 onboarding/access transport contract
 
-This package reserves ownership for a future versioned transport contract and
-any reproducible client artifacts selected with it. It may reference signed
-organization protocol documents, but database rows and authority domain objects
-must never become transport types.
+This package owns the versioned ordinary transport DTOs for the narrow
+single-organization onboarding/access slice. It references signed organization
+protocol documents, but database rows and authority domain objects never become
+transport types.
 
-No protocol, endpoint, invitation exchange, authentication semantics,
-specification format, generator, or client runtime is accepted yet. This
-package contains no server implementation, authentication provider,
-persistence, UI, or signing code.
+It also owns creation and verification of the installation-signed access-lease
+request. That request is an authenticated API command, not a durable
+organization trust fact. Exact replays are idempotency keys; the authority
+rejects divergent request-ID reuse and stale previous-state heads.
+
+The package contains no server implementation, authentication provider,
+persistence, UI, administrator secret, or private-key implementation.

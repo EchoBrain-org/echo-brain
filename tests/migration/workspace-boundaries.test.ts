@@ -64,6 +64,7 @@ function fixtureRepository(): string {
     'tools/workspace-source-boundaries.v1.json',
     'tools/lib/module-references.mjs',
     'tools/lib/repository-files.mjs',
+    'src/product/storage/migrations/0005_organization_access.sql',
   ]) {
     mkdirSync(join(clone, path, '..'), { recursive: true });
     cpSync(join(REPO, path), join(clone, path), { force: true });
@@ -126,7 +127,10 @@ describe('workspace source boundaries', () => {
 
     expect(graph).toEqual({
       '@echo-brain/federation-protocol': [],
-      '@echo-brain/organization-api': ['@echo-brain/organization-protocol'],
+      '@echo-brain/organization-api': [
+        '@echo-brain/federation-protocol',
+        '@echo-brain/organization-protocol',
+      ],
       '@echo-brain/organization-authority': [
         '@echo-brain/federation-protocol',
         '@echo-brain/organization-api',
@@ -174,7 +178,11 @@ describe('workspace source boundaries', () => {
         '',
       ].join('\n'),
     );
-    expect(runBoundary(fixture).status).toBe(0);
+    const passingResult = runBoundary(fixture);
+    expect(
+      passingResult.status,
+      passingResult.stdout + passingResult.stderr,
+    ).toBe(0);
 
     writeFileSync(entry, `export { value } from /* boundary */ '@forbidden/pkg';\n`);
     const result = runBoundary(fixture);

@@ -459,3 +459,7 @@ artifact closure accidentally omitted. The migration sequence now lives under
 `src/product/storage/migrations/`: `0002_core_state.sql` adds standalone core
 state, `0003_federated_founder_identity.sql` adds local federation state, and
 `0004_remove_legacy_events.sql` removes the retired generic event table.
+`0005_organization_access.sql` adds the Phase 4 local authority pin,
+enrollment, and access high-watermark state. The separately deployable
+single-organization authority lives under `services/organization-authority`;
+it is never bundled into the employee-machine product.

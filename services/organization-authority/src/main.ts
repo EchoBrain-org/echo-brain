@@ -1,6 +1,9 @@
-/**
- * Reserved executable boundary for the single-organization authority service.
- *
- * The scaffold starts no process, reads no configuration, and opens no store.
- */
-export {};
+import { runOrganizationAuthorityCli } from './composition/cli.js';
+
+void runOrganizationAuthorityCli(process.argv.slice(2), process.env).catch(
+  (error: unknown) => {
+    const message = error instanceof Error ? error.message : 'authority failed';
+    process.stderr.write(`${message}\n`);
+    process.exitCode = 1;
+  },
+);

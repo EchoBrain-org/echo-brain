@@ -9,5 +9,8 @@
     "types": []
   },
   "include": ["src/**/*.ts"],
-  "references": [{ "path": "../organization-protocol" }]
+  "references": [
+    { "path": "../federation-protocol" },
+    { "path": "../organization-protocol" }
+  ]
 }
