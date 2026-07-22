@@ -1,4 +1,7 @@
 # Federation protocol tests
 
-Future tests cover canonical bytes, hashes, signature verification, schema
-compatibility, and package isolation. The scaffold adds no skipped tests.
+Package tests execute the frozen canonical-byte and signature fixture, strict
+negative cases, identifier and timestamp validation, and signed-document
+creation and verification. Root migration tests separately prove behavioral
+parity with the existing product implementation while the product cutover is
+deferred.

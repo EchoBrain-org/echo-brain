@@ -7,6 +7,7 @@
   },
   "include": [
     "src/**/*.ts",
+    "packages/*/test/**/*.ts",
     "tests/migration/**/*.ts",
     "tests/standalone/**/*.ts",
     "tests/core/**/*.ts",

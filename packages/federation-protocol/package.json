@@ -10,10 +10,14 @@
     ".": {
       "types": "./dist/index.d.ts",
       "import": "./dist/index.js"
-    }
+    },
+    "./fixtures/signed-document-p256-rfc8785.v1.json": "./fixtures/signed-document-p256-rfc8785.v1.json"
   },
   "files": [
-    "dist/**",
+    "dist/**/*.js",
+    "dist/**/*.js.map",
+    "dist/**/*.d.ts",
+    "dist/**/*.d.ts.map",
     "schemas/*.schema.json",
     "fixtures/**"
   ],

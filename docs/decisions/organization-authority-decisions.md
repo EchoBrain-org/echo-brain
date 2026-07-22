@@ -1,6 +1,6 @@
 # Organization authority decisions
 
-**Status:** Accepted scaffold boundary; no production runtime accepted
+**Status:** Accepted boundaries and promoted federation primitives; no organization runtime accepted
 
 This register records the choices approved for the N=2/org=1 onboarding/access
 slice. A changed choice requires an explicit superseding decision.
@@ -16,6 +16,8 @@ slice. A changed choice requires an explicit superseding decision.
 9. **ADR-OA-009:** Central authority persistence and installation-local organization state are separate ownership boundaries; exact records, tables, counts, migrations, and persistence providers remain deferred.
 10. **ADR-OA-010:** The live N=2/org=1 onboarding/access and revocation gate passes before the reasoning Brain is integrated behind the federation permission gate; a separate later ingest-and-receipt gate is required before claiming full parity with the experimental pilot.
 
-No migration, endpoint, transport specification, generated client, JSON schema,
-authentication provider, persistence provider, signing implementation, or UI
-behavior is accepted by this scaffold.
+The federation protocol now implements ADR-OA-003 with frozen compatibility
+vectors. No organization migration, endpoint, transport specification,
+generated client, organization JSON schema, authentication provider,
+persistence provider, private-key implementation, or UI behavior is accepted
+yet.

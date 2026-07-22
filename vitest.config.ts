@@ -3,6 +3,7 @@ import { defineConfig } from 'vitest/config';
 export default defineConfig({
   test: {
     include: [
+      'packages/*/test/**/*.test.ts',
       'tests/migration/**/*.test.ts',
       'tests/standalone/**/*.test.ts',
       'tests/core/**/*.test.ts',

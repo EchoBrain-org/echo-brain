@@ -1,6 +1,6 @@
 # N=2/org=1 onboarding/access workspace boundaries
 
-**Status:** Accepted scaffold; no organization runtime behavior
+**Status:** Workspace scaffold and federation primitives complete; no organization runtime behavior
 
 This architecture establishes explicit package and deployable boundaries before
 moving any implementation. The first implementation slice enrolls two
@@ -110,10 +110,11 @@ and organization knowledge are outside the onboarding slice.
 
 ## Promotion sequence
 
-1. Establish workspaces, build references, manifests, import fences, and test
-   ownership without runtime behavior.
-2. Promote federation primitives with golden byte/signature fixtures.
-3. Promote signed organization documents and schemas.
+1. **Complete:** establish workspaces, build references, manifests, import
+   fences, and test ownership without runtime behavior.
+2. **Complete:** promote federation primitives with golden byte/signature
+   fixtures and compatibility tests against the current product behavior.
+3. **Next:** promote signed organization documents and schemas.
 4. Implement the single-organization authority and local enrollment client.
 5. Run the live N=2/org=1 onboarding, access-state, and revocation gate.
 6. Place the Brain above the verified federation permission gate and run the

@@ -1,9 +1,9 @@
 import type { JsonObject } from '../../../core/index.js';
-import { canonicalJsonBytes, canonicalSha256 } from './canonical-json.js';
+import { canonicalJsonBytes, sha256Digest } from './canonical-json.js';
 import type { Sha256Digest, SignedDocument, SignedIntegrity } from '../contracts.js';
 import type { InstallationSigner } from './installation-signer.js';
 import { signWithInstallationKey } from './installation-signer.js';
-import { assertP256LowS, verifyP256LowSSignature } from './signature-profile.js';
+import { assertP256LowS, p256KeyId, verifyP256LowSSignature } from './signature-profile.js';
 
 export function signedPayload<T extends SignedDocument>(document: T): JsonObject {
   const { integrity: _integrity, ...payload } = document;
@@ -31,13 +31,16 @@ export async function createSignedDocumentWithKey<T extends object>(
   sign: (bytes: Buffer) => Promise<Buffer>,
 ): Promise<T & { integrity: SignedIntegrity }> {
   const bytes = canonicalJsonBytes(payload);
+  // Freeze the exact JSON value before control passes to an async key provider.
+  const payloadSnapshot = JSON.parse(bytes.toString('utf8')) as T;
+  const payloadDigest = sha256Digest(bytes);
   const signature = await sign(Buffer.from(bytes));
   assertP256LowS(signature);
   return {
-    ...payload,
+    ...payloadSnapshot,
     integrity: {
       canonicalization: 'RFC8785',
-      payload_sha256: canonicalSha256(payload),
+      payload_sha256: payloadDigest,
       signature_algorithm: 'ecdsa-p256-sha256-der-low-s',
       key_id: keyId,
       signature_base64: signature.toString('base64'),
@@ -59,9 +62,12 @@ export function verifySignedDocument(
   if (document.integrity.key_id !== expectedKeyId) {
     throw new Error('signed document key does not match the active installation');
   }
+  if (p256KeyId(publicKeySpkiDer) !== expectedKeyId) {
+    throw new Error('signed document public key does not match its expected key id');
+  }
   const payload = signedPayload(document);
   const bytes = canonicalJsonBytes(payload);
-  if (canonicalSha256(payload) !== document.integrity.payload_sha256) {
+  if (sha256Digest(bytes) !== document.integrity.payload_sha256) {
     throw new Error('signed document payload digest does not match');
   }
   const signature = Buffer.from(document.integrity.signature_base64, 'base64');

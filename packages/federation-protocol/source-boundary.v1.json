@@ -17,7 +17,7 @@
   ],
   "allowed_workspace_packages": [],
   "allowed_external_packages": [],
-  "allowed_node_builtins": [],
+  "allowed_node_builtins": ["buffer", "crypto"],
   "runtime_assets": [],
   "layer_rules": [
     {
@@ -26,7 +26,7 @@
       "allowed_imports": ["packages/federation-protocol/src/**"],
       "allowed_workspace_packages": [],
       "allowed_external_packages": [],
-      "allowed_node_builtins": []
+      "allowed_node_builtins": ["buffer", "crypto"]
     }
   ]
 }

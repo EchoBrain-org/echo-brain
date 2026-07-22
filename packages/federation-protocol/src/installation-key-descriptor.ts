@@ -1,40 +1,13 @@
+import { Buffer } from "node:buffer";
 import { createPublicKey } from "node:crypto";
-import type {
-  KeyProtection,
-  KeyProtectionAssurance,
-  Sha256Digest,
-} from "../contracts.js";
-import {
-  assertP256LowS,
-  p256KeyId,
-  verifyP256LowSSignature,
-} from "./signature-profile.js";
 import { assertFederationId } from "./identifiers.js";
+import type { InstallationKeyDescriptor } from "./protocol-types.js";
+import { p256KeyId } from "./signature-profile.js";
 
-export interface InstallationKeyDescriptor {
-  installation_id: string;
-  key_id: Sha256Digest;
-  algorithm: "ecdsa-p256-sha256-der-low-s";
-  public_key_spki_der_base64: string;
-  protection: KeyProtection;
-  assurance: KeyProtectionAssurance;
-  private_key_exportable: boolean;
-}
-
-export interface InstallationSigner {
-  generate(installationId: string): Promise<InstallationKeyDescriptor>;
-  inspect(installationId: string): Promise<InstallationKeyDescriptor | null>;
-  sign(
-    installationId: string,
-    message: Buffer,
-    expectedKeyId?: Sha256Digest,
-  ): Promise<Buffer>;
-  deleteOrphan?(
-    installationId: string,
-    expectedKeyId: Sha256Digest,
-  ): Promise<boolean>;
-}
-
+/**
+ * Validates descriptor syntax, public-key bytes, and protection-field
+ * consistency. Protection and assurance values are claims, not attestation.
+ */
 export function verifyInstallationKeyDescriptor(
   descriptor: InstallationKeyDescriptor,
 ): Buffer {
@@ -88,37 +61,4 @@ export function verifyInstallationKeyDescriptor(
     );
   }
   return publicKey;
-}
-
-export async function signWithInstallationKey(
-  signer: InstallationSigner,
-  installationId: string,
-  expectedKeyId: Sha256Digest,
-  message: Buffer,
-): Promise<Buffer> {
-  const descriptor = await signer.inspect(installationId);
-  if (descriptor === null)
-    throw new Error("installation signing key is unavailable");
-  if (descriptor.installation_id !== installationId) {
-    throw new Error(
-      "installation signing key descriptor belongs to a different installation",
-    );
-  }
-  const publicKey = verifyInstallationKeyDescriptor(descriptor);
-  if (descriptor.key_id !== expectedKeyId) {
-    throw new Error(
-      "installation signing key does not match the active identity",
-    );
-  }
-  const verificationMessage = Buffer.from(message);
-  const signature = await signer.sign(
-    installationId,
-    Buffer.from(verificationMessage),
-    expectedKeyId,
-  );
-  assertP256LowS(signature);
-  if (!verifyP256LowSSignature(publicKey, verificationMessage, signature)) {
-    throw new Error("installation signer returned an invalid signature");
-  }
-  return signature;
 }

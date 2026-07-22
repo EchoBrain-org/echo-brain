@@ -1,0 +1,79 @@
+{
+  "fixture_version": 1,
+  "kind": "echo-federation-protocol-golden-fixture",
+  "payload": {
+    "schema_version": 1,
+    "kind": "echo-federation-protocol-fixture",
+    "fixture_id": "evt_00000000-0000-4000-8000-000000000001",
+    "issued_at": "2026-07-21T00:00:00.000Z",
+    "claims": {
+      "unicode": "€",
+      "numbers": [333333333.3333333, 1e30, 4.5, 0.002, 1e-27],
+      "control": "\u000f\n",
+      "active": true,
+      "empty": null
+    }
+  },
+  "canonical_payload": "{\"claims\":{\"active\":true,\"control\":\"\\u000f\\n\",\"empty\":null,\"numbers\":[333333333.3333333,1e+30,4.5,0.002,1e-27],\"unicode\":\"€\"},\"fixture_id\":\"evt_00000000-0000-4000-8000-000000000001\",\"issued_at\":\"2026-07-21T00:00:00.000Z\",\"kind\":\"echo-federation-protocol-fixture\",\"schema_version\":1}",
+  "canonical_payload_utf8_base64": "eyJjbGFpbXMiOnsiYWN0aXZlIjp0cnVlLCJjb250cm9sIjoiXHUwMDBmXG4iLCJlbXB0eSI6bnVsbCwibnVtYmVycyI6WzMzMzMzMzMzMy4zMzMzMzMzLDFlKzMwLDQuNSwwLjAwMiwxZS0yN10sInVuaWNvZGUiOiLigqwifSwiZml4dHVyZV9pZCI6ImV2dF8wMDAwMDAwMC0wMDAwLTQwMDAtODAwMC0wMDAwMDAwMDAwMDEiLCJpc3N1ZWRfYXQiOiIyMDI2LTA3LTIxVDAwOjAwOjAwLjAwMFoiLCJraW5kIjoiZWNoby1mZWRlcmF0aW9uLXByb3RvY29sLWZpeHR1cmUiLCJzY2hlbWFfdmVyc2lvbiI6MX0=",
+  "canonical_payload_sha256": "sha256:f4c3e28f6373b1ac09943e4231bd2e7286d3cd17a5e9a8e813a9d209504171f4",
+  "public_key_spki_der_base64": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEaxfR8uEsQkf4vOblY6RA8ncDfYEt6zOg9KE5RdiYwpZP40Li/hp/m47n60p8D54WK84zV2sxXs7LtkBoN79R9Q==",
+  "key_id": "sha256:5cd252fb0ce8932436faf8ccd1040981b89ee4ad6b9fe9e2a2b7e71aacb27cd3",
+  "signature_der_base64": "MEUCIQDcGebuxlId2Hu1COQGHEB48crdkxrvtD1YZVdvr3QpuwIgRC/qOrM6WJ7hHQDVAmYSxzOexiOIpfc0urPhdKTlduk=",
+  "signature_der_hex": "3045022100dc19e6eec6521dd87bb508e4061c4078f1cadd931aefb43d5865576faf7429bb0220442fea3ab33a589ee11d00d5026612c7339ec62388a5f734bab3e174a4e576e9",
+  "high_s_signature_der_base64": "MEYCIQDcGebuxlId2Hu1COQGHEB48crdkxrvtD1YZVdvr3QpuwIhALvQFcRMxadiHuL/Kv2Z7TiJSDSKHnGnUDkF6U5Xfa5o",
+  "alternate_p256_key_vector": {
+    "public_key_spki_der_base64": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEGnGBM7wDX0Pmga2ko3mFko+F9+t9y/4iPe3/UWDbcRaugMMl4alXC9CL7uarWStJlmnKuRkM5wTJSlcyuPMhvQ==",
+    "key_id": "sha256:affd6598b746b0f1dcc85f46feb5e11c612829592a7c9a25b07eb2bf6549e9e2",
+    "signature_der_base64": "MEQCIGkASOgU3KX7nq1s0f3oXCjGahgMq6pNoslETyY9yp1fAiB94d02z3bBFm6V9ZwvpHd4oljLNHMXQ8jaxObaPf1O8A=="
+  },
+  "non_p256_key_vector": {
+    "public_key_spki_der_base64": "MHYwEAYHKoZIzj0CAQYFK4EEACIDYgAEt51MaBShYx14J0IVjTrN7qqkGReqK1b2rsjMvAc80dKwQsZ5l7MU/ErRKhxHt3t7ed9OOays9sp3UrBEQbOUGNkB5IXKBgkAKPZSG3wMr4IHyBjvwUMPTuHYqXH/nLiT",
+    "key_id": "sha256:27f4e690a7259bcdbfe57b2768d7926b5c92289becb217a8a9840a5dc6f378ec"
+  },
+  "installation_key_descriptor": {
+    "installation_id": "ins_00000000-0000-4000-8000-000000000001",
+    "key_id": "sha256:5cd252fb0ce8932436faf8ccd1040981b89ee4ad6b9fe9e2a2b7e71aacb27cd3",
+    "algorithm": "ecdsa-p256-sha256-der-low-s",
+    "public_key_spki_der_base64": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEaxfR8uEsQkf4vOblY6RA8ncDfYEt6zOg9KE5RdiYwpZP40Li/hp/m47n60p8D54WK84zV2sxXs7LtkBoN79R9Q==",
+    "protection": "development-file",
+    "assurance": "software_key_development_only",
+    "private_key_exportable": true
+  },
+  "signed_document": {
+    "schema_version": 1,
+    "kind": "echo-federation-protocol-fixture",
+    "fixture_id": "evt_00000000-0000-4000-8000-000000000001",
+    "issued_at": "2026-07-21T00:00:00.000Z",
+    "claims": {
+      "unicode": "€",
+      "numbers": [333333333.3333333, 1e30, 4.5, 0.002, 1e-27],
+      "control": "\u000f\n",
+      "active": true,
+      "empty": null
+    },
+    "integrity": {
+      "canonicalization": "RFC8785",
+      "payload_sha256": "sha256:f4c3e28f6373b1ac09943e4231bd2e7286d3cd17a5e9a8e813a9d209504171f4",
+      "signature_algorithm": "ecdsa-p256-sha256-der-low-s",
+      "key_id": "sha256:5cd252fb0ce8932436faf8ccd1040981b89ee4ad6b9fe9e2a2b7e71aacb27cd3",
+      "signature_base64": "MEUCIQDcGebuxlId2Hu1COQGHEB48crdkxrvtD1YZVdvr3QpuwIgRC/qOrM6WJ7hHQDVAmYSxzOexiOIpfc0urPhdKTlduk="
+    }
+  },
+  "canonical_signed_document_utf8_base64": "eyJjbGFpbXMiOnsiYWN0aXZlIjp0cnVlLCJjb250cm9sIjoiXHUwMDBmXG4iLCJlbXB0eSI6bnVsbCwibnVtYmVycyI6WzMzMzMzMzMzMy4zMzMzMzMzLDFlKzMwLDQuNSwwLjAwMiwxZS0yN10sInVuaWNvZGUiOiLigqwifSwiZml4dHVyZV9pZCI6ImV2dF8wMDAwMDAwMC0wMDAwLTQwMDAtODAwMC0wMDAwMDAwMDAwMDEiLCJpbnRlZ3JpdHkiOnsiY2Fub25pY2FsaXphdGlvbiI6IlJGQzg3ODUiLCJrZXlfaWQiOiJzaGEyNTY6NWNkMjUyZmIwY2U4OTMyNDM2ZmFmOGNjZDEwNDA5ODFiODllZTRhZDZiOWZlOWUyYTJiN2U3MWFhY2IyN2NkMyIsInBheWxvYWRfc2hhMjU2Ijoic2hhMjU2OmY0YzNlMjhmNjM3M2IxYWMwOTk0M2U0MjMxYmQyZTcyODZkM2NkMTdhNWU5YThlODEzYTlkMjA5NTA0MTcxZjQiLCJzaWduYXR1cmVfYWxnb3JpdGhtIjoiZWNkc2EtcDI1Ni1zaGEyNTYtZGVyLWxvdy1zIiwic2lnbmF0dXJlX2Jhc2U2NCI6Ik1FVUNJUURjR2VidXhsSWQySHUxQ09RR0hFQjQ4Y3Jka3hydnREMVlaVmR2cjNRcHV3SWdSQy9xT3JNNldKN2hIUURWQW1ZU3h6T2V4aU9JcGZjMHVyUGhkS1RsZHVrPSJ9LCJpc3N1ZWRfYXQiOiIyMDI2LTA3LTIxVDAwOjAwOjAwLjAwMFoiLCJraW5kIjoiZWNoby1mZWRlcmF0aW9uLXByb3RvY29sLWZpeHR1cmUiLCJzY2hlbWFfdmVyc2lvbiI6MX0=",
+  "canonical_signed_document_sha256": "sha256:ca72c48dcca9d3120a3411121ef9e96c4f3f75997968f894ab9369abf42d5e74",
+  "utf16_property_order": {
+    "value": {
+      "€": "Euro Sign",
+      "\r": "Carriage Return",
+      "דּ": "Hebrew Letter Dalet With Dagesh",
+      "1": "One",
+      "😀": "Emoji: Grinning Face",
+      "\u0080": "Control",
+      "ö": "Latin Small Letter O With Diaeresis"
+    },
+    "canonical": "{\"\\r\":\"Carriage Return\",\"1\":\"One\",\"\":\"Control\",\"ö\":\"Latin Small Letter O With Diaeresis\",\"€\":\"Euro Sign\",\"😀\":\"Emoji: Grinning Face\",\"דּ\":\"Hebrew Letter Dalet With Dagesh\"}",
+    "canonical_utf8_base64": "eyJcciI6IkNhcnJpYWdlIFJldHVybiIsIjEiOiJPbmUiLCLCgCI6IkNvbnRyb2wiLCLDtiI6IkxhdGluIFNtYWxsIExldHRlciBPIFdpdGggRGlhZXJlc2lzIiwi4oKsIjoiRXVybyBTaWduIiwi8J+YgCI6IkVtb2ppOiBHcmlubmluZyBGYWNlIiwi76yzIjoiSGVicmV3IExldHRlciBEYWxldCBXaXRoIERhZ2VzaCJ9",
+    "sha256": "sha256:5e321556d22018a9656991a9e94f77ec175fa193e52a2429d312f8419ec8b08c"
+  }
+}

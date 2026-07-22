@@ -1,7 +1,37 @@
-/**
- * Public boundary reserved for portable federation protocol primitives.
- *
- * The implementation remains empty until existing canonicalization and
- * signature behavior is promoted with byte-for-byte compatibility fixtures.
- */
-export {};
+export {
+  CanonicalJsonError,
+  canonicalJson,
+  canonicalJsonBytes,
+  canonicalSha256,
+  parseCanonicalJson,
+  sha256Digest,
+} from "./canonical-json.js";
+export {
+  assertFederationId,
+  assertUtcMillisecondTimestamp,
+  federationId,
+} from "./identifiers.js";
+export type { FederationIdPrefix } from "./identifiers.js";
+export { verifyInstallationKeyDescriptor } from "./installation-key-descriptor.js";
+export {
+  assertP256LowS,
+  normalizeP256LowS,
+  p256KeyId,
+  verifyP256LowSSignature,
+} from "./signature-profile.js";
+export {
+  createSignedDocumentWithKey,
+  signedPayload,
+  verifySignedDocument,
+} from "./signed-document.js";
+export type {
+  InstallationKeyDescriptor,
+  JsonObject,
+  JsonPrimitive,
+  JsonValue,
+  KeyProtection,
+  KeyProtectionAssurance,
+  Sha256Digest,
+  SignedDocument,
+  SignedIntegrity,
+} from "./protocol-types.js";
