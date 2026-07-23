@@ -2,9 +2,15 @@ import { Buffer } from "node:buffer";
 import { createHash } from "node:crypto";
 import { createServer, request as httpRequest } from "node:http";
 import { TextDecoder } from "node:util";
+import {
+  TRUSTED_PROXY_AUTHORIZATION_HEADER,
+  TRUSTED_PROXY_CLIENT_ID_HEADER,
+} from "@echo-brain/organization-api";
 
-export const TRUSTED_PROXY_AUTHORIZATION_HEADER = "x-echo-proxy-authorization";
-export const TRUSTED_PROXY_CLIENT_ID_HEADER = "x-echo-authenticated-client-id";
+export {
+  TRUSTED_PROXY_AUTHORIZATION_HEADER,
+  TRUSTED_PROXY_CLIENT_ID_HEADER,
+};
 export const MAX_PHASE5_EDGE_BUFFERED_RESPONSE_BYTES = 256 * 1024;
 
 const DEFAULT_BUFFERED_RESPONSE_BYTES = 64 * 1024;

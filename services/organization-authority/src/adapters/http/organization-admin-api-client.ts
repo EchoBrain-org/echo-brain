@@ -2,6 +2,8 @@ import {
   MAX_ORGANIZATION_API_BODY_BYTES,
   MAX_ORGANIZATION_API_CURSOR_CHARACTERS,
   MAX_ORGANIZATION_API_PAGE_ITEMS,
+  TRUSTED_PROXY_AUTHORIZATION_HEADER,
+  TRUSTED_PROXY_CLIENT_ID_HEADER,
   validateIssuedOrganizationEnrollmentGrant,
   validateOrganizationAdminOverview,
   validateOrganizationApiError,
@@ -37,8 +39,6 @@ const DEFAULT_TIMEOUT_MS = 15_000;
 const MAXIMUM_TIMEOUT_MS = 120_000;
 export const MAX_ORGANIZATION_ADMIN_API_RESPONSE_BYTES = 512 * 1024;
 
-const TRUSTED_PROXY_AUTHORIZATION_HEADER = 'x-echo-proxy-authorization';
-const TRUSTED_PROXY_CLIENT_ID_HEADER = 'x-echo-authenticated-client-id';
 const UUID_V4_SOURCE =
   '[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}';
 const MEMBERSHIP_ID_PATTERN = new RegExp(`^mem_${UUID_V4_SOURCE}$`);

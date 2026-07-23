@@ -61,6 +61,10 @@ export {
   validateRevokedOrganizationMembership,
 } from './validation.js';
 export {
+  TRUSTED_PROXY_AUTHORIZATION_HEADER,
+  TRUSTED_PROXY_CLIENT_ID_HEADER,
+} from './http.js';
+export {
   createOrganizationAccessLeaseRequest,
   organizationAccessLeaseRequestSha256,
   verifyOrganizationAccessLeaseRequest,

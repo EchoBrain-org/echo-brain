@@ -1,5 +1,9 @@
 import { Buffer } from 'node:buffer';
 import { createHash, timingSafeEqual } from 'node:crypto';
+import {
+  TRUSTED_PROXY_AUTHORIZATION_HEADER,
+  TRUSTED_PROXY_CLIENT_ID_HEADER,
+} from '@echo-brain/organization-api';
 
 export class TrustedProxyIdentityError extends Error {
   constructor() {
@@ -8,8 +12,10 @@ export class TrustedProxyIdentityError extends Error {
   }
 }
 
-export const TRUSTED_PROXY_AUTHORIZATION_HEADER = 'x-echo-proxy-authorization';
-export const TRUSTED_PROXY_CLIENT_ID_HEADER = 'x-echo-authenticated-client-id';
+export {
+  TRUSTED_PROXY_AUTHORIZATION_HEADER,
+  TRUSTED_PROXY_CLIENT_ID_HEADER,
+};
 
 export interface RawHeaderRequest {
   readonly rawHeaders: readonly string[];
