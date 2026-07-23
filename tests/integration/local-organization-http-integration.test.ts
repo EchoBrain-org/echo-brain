@@ -1,13 +1,22 @@
 import {
   createHash,
   generateKeyPairSync,
+  randomUUID,
   sign as signMessage,
   type KeyObject,
 } from 'node:crypto';
-import { chmodSync, mkdtempSync, realpathSync, rmSync } from 'node:fs';
+import {
+  chmodSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  realpathSync,
+  rmSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
+import { validateOrganizationEnrollmentInvitation } from '@echo-brain/organization-api';
 import {
   normalizeP256LowS,
   p256KeyId,
@@ -23,6 +32,11 @@ import { LocalOrganizationCoordinator } from '../../src/product/organization/enr
 import { SqliteOrganizationStateStore } from '../../src/product/organization/state/sqlite-organization-state-store.js';
 import { DevelopmentFileOrganizationAuthoritySigner } from '../../services/organization-authority/src/adapters/security/development-file-authority-signer.js';
 import { SqliteOrganizationAuthorityRepository } from '../../services/organization-authority/src/adapters/persistence/sqlite/sqlite-authority-repository.js';
+import { OrganizationAdminApiClient } from '../../services/organization-authority/src/adapters/http/organization-admin-api-client.js';
+import {
+  prepareOrganizationInvitation,
+  recordOrganizationInvitationIssued,
+} from '../../services/organization-authority/src/adapters/files/private-organization-invitation.js';
 import { startOrganizationAuthority } from '../../services/organization-authority/src/composition/runtime.js';
 import {
   TRUSTED_PROXY_AUTHORIZATION_HEADER,
@@ -105,26 +119,6 @@ class MemoryInstallationSigner implements InstallationSigner {
   }
 }
 
-async function adminPost(
-  origin: string,
-  path: string,
-  body: unknown,
-): Promise<unknown> {
-  const response = await proxyFetch(new URL(path, origin), {
-    method: 'POST',
-    headers: {
-      authorization: `Bearer ${ADMIN_TOKEN}`,
-      'content-type': 'application/json',
-    },
-    body: JSON.stringify(body),
-  });
-  const value = (await response.json()) as unknown;
-  if (!response.ok) {
-    throw new Error(`test admin request failed with ${response.status}`);
-  }
-  return value;
-}
-
 function objectRecord(value: unknown): Record<string, unknown> {
   if (typeof value !== 'object' || value === null || Array.isArray(value)) {
     throw new Error('test authority response is not an object');
@@ -184,24 +178,89 @@ describe('local organization over the central HTTP authority', () => {
       access_request_maximum_age_ms: 60_000,
     });
     const origin = `http://127.0.0.1:${runtime.address.port}/`;
+    const admin = new OrganizationAdminApiClient({
+      base_url: origin,
+      admin_token: ADMIN_TOKEN,
+      trusted_proxy_token: PROXY_TOKEN,
+      client_identity: PROXY_CLIENT_ID,
+    });
     const state = new SqliteOrganizationStateStore(
       join(directory, 'installation.sqlite'),
     );
     try {
+      const consoleLogin = await proxyFetch(new URL('/admin/login', origin));
+      expect(consoleLogin.status).toBe(200);
+      expect(consoleLogin.headers.get('content-security-policy')).toContain(
+        "default-src 'none'",
+      );
+      expect(await consoleLogin.text()).toContain('Organization authority');
+      expect(await admin.overview()).toMatchObject({
+        counts: {
+          memberships: 0,
+          installations: 0,
+          enrollment_grants: 0,
+        },
+      });
+      const wrongCursor = Buffer.from(
+        '{"kind":"audit","value":1}',
+        'utf8',
+      ).toString('base64url');
+      await expect(
+        admin.listMemberships({ cursor: wrongCursor }),
+      ).rejects.toMatchObject({
+        status: 400,
+        code: 'invalid_request',
+      });
       const membership = objectRecord(
-        await adminPost(origin, '/v1/admin/memberships', {
+        await admin.provisionMembership({
+          command_id: `adm_${randomUUID()}`,
           display_name: 'Employee One',
           membership_type: 'employee',
         }),
       );
       const membershipId = String(membership.membership_id);
+      const invitationDirectory = join(directory, 'invitations');
+      mkdirSync(invitationDirectory, { mode: 0o700 });
+      const invitationPath = join(invitationDirectory, 'employee-one.json');
+      const preparedInvitation = prepareOrganizationInvitation({
+        output_path: invitationPath,
+        authority_base_url: new URL(origin).origin,
+        authority_id: AUTHORITY_ID,
+        authority_pin_sha256: authorityPin,
+        organization_id: ORGANIZATION_ID,
+        membership_id: membershipId,
+        lifetime_seconds: 3600,
+      });
       const grant = objectRecord(
-        await adminPost(
-          origin,
-          `/v1/admin/memberships/${membershipId}/enrollment-grants`,
-          { lifetime_seconds: 3600 },
-        ),
+        await admin.registerEnrollmentGrant(membershipId, {
+          command_id: preparedInvitation.envelope.command_id,
+          enrollment_grant_sha256:
+            preparedInvitation.envelope.enrollment_grant_sha256,
+          lifetime_seconds: preparedInvitation.envelope.lifetime_seconds,
+        }),
       );
+      recordOrganizationInvitationIssued(preparedInvitation, grant);
+      const invitation = validateOrganizationEnrollmentInvitation(
+        JSON.parse(readFileSync(invitationPath, 'utf8')) as unknown,
+      );
+      expect(invitation).toMatchObject({
+        status: 'issued',
+        authority_pin_verification: 'independent_pin_required',
+        membership_id: membershipId,
+      });
+      if (invitation.issued === null) {
+        throw new Error('issued invitation did not contain its registration');
+      }
+      const enrollmentGrant = Buffer.from(
+        invitation.enrollment_grant_base64url,
+        'base64url',
+      );
+      await expect(admin.listMemberships()).resolves.toMatchObject({
+        items: [{ membership_id: membershipId, status: 'active' }],
+      });
+      await expect(admin.listEnrollmentGrants()).resolves.toMatchObject({
+        items: [{ membership_id: membershipId, status: 'pending' }],
+      });
       const coordinator = new LocalOrganizationCoordinator({
         state,
         authorityClient: new HttpOrganizationAuthorityClient({
@@ -212,35 +271,67 @@ describe('local organization over the central HTTP authority', () => {
         installationSigner: new MemoryInstallationSigner(),
         maximumActiveLeaseTtlMs: 60_000,
       });
-      const enrollmentGrant = Buffer.from(
-        String(grant.enrollment_grant_base64url),
-        'base64url',
+      expect(grant.enrollment_grant_sha256).toBe(
+        invitation.enrollment_grant_sha256,
       );
       const enrolled = await coordinator.enroll({
         authorityDescriptor,
         independentlyTrustedAuthorityPin: authorityPin,
         enrollmentGrant,
-        principalId: String(grant.principal_id),
-        membershipId,
+        principalId: invitation.issued.principal_id,
+        membershipId: invitation.membership_id,
         installationId: INSTALLATION_ID,
       });
       expect(enrolled.permitted).toBe(true);
       expect(state.readEnrollment()?.accepted_access_sequence).toBe(1);
+      await expect(admin.overview()).resolves.toMatchObject({
+        counts: {
+          memberships: 1,
+          installations: 1,
+          enrollment_grants: 1,
+          consumed_enrollment_grants: 1,
+        },
+      });
+      await expect(admin.listInstallations()).resolves.toMatchObject({
+        items: [
+          {
+            membership_id: membershipId,
+            installation_id: INSTALLATION_ID,
+            status: 'active',
+          },
+        ],
+      });
 
       const refreshed = await coordinator.refreshAccess();
       expect(refreshed.permitted).toBe(true);
       expect(refreshed.state.access_state_sequence).toBe(2);
 
-      await adminPost(
-        origin,
-        `/v1/admin/installations/${INSTALLATION_ID}/revocations`,
-        { reason: 'Device retired' },
-      );
+      await admin.revokeInstallation(INSTALLATION_ID, {
+        reason: 'Device retired',
+      });
       const revoked = await coordinator.refreshAccess();
       expect(revoked.permitted).toBe(false);
       expect(revoked.state.status).toBe('revoked');
       expect(revoked.state.access_state_sequence).toBe(3);
       expect(coordinator.currentAccess().permitted).toBe(false);
+      await expect(admin.listInstallations()).resolves.toMatchObject({
+        items: [
+          {
+            installation_id: INSTALLATION_ID,
+            status: 'revoked',
+            current_access_status: 'revoked',
+          },
+        ],
+      });
+      const audit = await admin.listAudit();
+      expect(audit.items.map(({ action }) => action)).toEqual(
+        expect.arrayContaining([
+          'membership.provisioned',
+          'enrollment_grant.issued',
+          'installation.enrolled',
+          'installation.revoked',
+        ]),
+      );
     } finally {
       state.close();
       await runtime.close();

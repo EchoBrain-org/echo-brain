@@ -26,13 +26,26 @@ path and complete runtime configuration. The included file signer remains
 development-only.
 
 After a runtime installation resolves the integrity-locked native dependency,
-the packaged `echo-organization-authority` binary is self-contained from the
-employee product. Its supported Phase 1 operator flow is
+the packaged authority is self-contained from the employee product. The
+`echo-organization-authority` binary owns initialization, status, and serving;
+its operator flow is
 `init-development --config ... --state-dir ... --organization-name ...`,
 `status --config ...`, and foreground `serve --config ...`. Ctrl-C/SIGTERM or
-the deployment supervisor owns stopping it. The artifact intentionally does
-not include a daemon, PID-file controller, launchd/systemd unit, TLS
-terminator, or production signer.
+the deployment supervisor owns stopping it.
+
+The same exact artifact includes `echo-organization-admin`, an HTTP-only
+org-scoped operator client for overview/list/create/invite/revoke commands. It
+first verifies the private runtime ownership proof, then uses the configured
+loopback API; it never opens SQLite. Invitation creation requires the separate
+employee-reachable public HTTPS authority origin and atomically publishes a
+private retry-safe invitation envelope. The raw one-time grant exists only in
+that `0600` file, never in the authority API or database.
+
+The server-rendered `/admin` console is part of the same authority listener and
+database boundary. It requires the authenticated HTTPS edge and keeps only
+short-lived in-memory sessions. The artifact intentionally does not include a
+daemon, PID-file controller, launchd/systemd unit, TLS terminator, global
+multi-organization control plane, or production signer.
 
 The internal `/_echo/runtime-status` ownership-proof route is for the private
 loopback hop and must not be forwarded by a future TLS terminator.

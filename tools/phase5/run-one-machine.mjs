@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 
-import { createHash, randomUUID } from "node:crypto";
+import { createHash, randomBytes, randomUUID } from "node:crypto";
 import { spawnSync } from "node:child_process";
 import {
   chmodSync,
@@ -412,6 +412,7 @@ async function provisionEmployee(origin, adminToken, label) {
     adminToken,
     path: "/v1/admin/memberships",
     body: {
+      command_id: `adm_${randomUUID()}`,
       display_name: `Phase 5 Employee ${label}`,
       membership_type: "employee",
     },
@@ -426,24 +427,31 @@ async function provisionEmployee(origin, adminToken, label) {
     "prn",
     `${label} principal ID`,
   );
+  const enrollmentGrant = randomBytes(32);
+  const enrollmentGrantSha256 = `sha256:${createHash("sha256")
+    .update(enrollmentGrant)
+    .digest("hex")}`;
   const grant = await adminPost({
     origin,
     adminToken,
     path: `/v1/admin/memberships/${membershipId}/enrollment-grants`,
-    body: { lifetime_seconds: 3600 },
+    body: {
+      command_id: `adm_${randomUUID()}`,
+      enrollment_grant_sha256: enrollmentGrantSha256,
+      lifetime_seconds: 3600,
+    },
   });
   if (
     grant.membership_id !== membershipId ||
     grant.principal_id !== principalId ||
-    typeof grant.enrollment_grant_base64url !== "string" ||
-    !/^[A-Za-z0-9_-]{43}$/.test(grant.enrollment_grant_base64url)
+    grant.enrollment_grant_sha256 !== enrollmentGrantSha256
   ) {
     throw new Error(`${label} enrollment grant response is invalid`);
   }
   return {
     membershipId,
     principalId,
-    grant: grant.enrollment_grant_base64url,
+    grant: enrollmentGrant.toString("base64url"),
   };
 }
 

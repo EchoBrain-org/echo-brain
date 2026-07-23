@@ -6,6 +6,8 @@
   "source_boundary": "services/organization-authority/source-boundary.v1.json",
   "entrypoint": "dist/main.js",
   "launcher": "bin/echo-organization-authority.mjs",
+  "admin_entrypoint": "dist/admin-main.js",
+  "admin_launcher": "bin/echo-organization-admin.mjs",
   "bundled_workspace_packages": [
     "@echo-brain/federation-protocol",
     "@echo-brain/organization-protocol",

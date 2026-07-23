@@ -9,8 +9,22 @@ import {
   verifySignedDocument,
 } from '@echo-brain/federation-protocol';
 import type { Sha256Digest } from '@echo-brain/federation-protocol';
-import { validateOrganizationAccessLeaseRequest } from '@echo-brain/organization-api';
-import type { OrganizationAccessLeaseRequestV1 } from '@echo-brain/organization-api';
+import {
+  validateIssueOrganizationEnrollmentGrantRequest,
+  validateOrganizationAccessLeaseRequest,
+  validateProvisionOrganizationMembershipRequest,
+} from '@echo-brain/organization-api';
+import type {
+  IssueOrganizationEnrollmentGrantRequestV1,
+  OrganizationAccessLeaseRequestV1,
+  OrganizationAdminOverviewV1,
+  OrganizationAuditPageV1,
+  OrganizationEnrollmentGrantPageV1,
+  OrganizationInstallationPageV1,
+  OrganizationMembershipPageV1,
+  ProvisionedOrganizationMembershipV1,
+  ProvisionOrganizationMembershipRequestV1,
+} from '@echo-brain/organization-api';
 import {
   createOrganizationEnrollmentReceipt,
   createOrganizationInstallationAccessState,
@@ -27,7 +41,6 @@ import type {
   OrganizationEnrollmentReceiptV1,
   OrganizationEnrollmentRequestV1,
   OrganizationInstallationAccessStateV1,
-  OrganizationMembershipTypeV1,
   PinnedOrganizationAuthority,
 } from '@echo-brain/organization-protocol';
 import {
@@ -52,13 +65,17 @@ import type {
   StoredAuthorityAccessState,
   StoredAuthorityEnrollment,
   StoredAuthorityMembership,
+  StoredEnrollmentGrant,
 } from './ports/authority-repository.js';
 import type {
   AuthorityClock,
   AuthorityIdentifierGenerator,
-  EnrollmentGrantGenerator,
   OrganizationAuthoritySigner,
 } from './ports/runtime-ports.js';
+import {
+  OrganizationAuthorityAdminQueries,
+  type AdminPageRequest,
+} from './admin-queries.js';
 
 const MAX_TRANSITION_RETRIES = 16;
 
@@ -68,7 +85,7 @@ export interface IssuedEnrollmentGrant {
   organization_id: string;
   principal_id: string;
   membership_id: string;
-  enrollment_grant: Uint8Array;
+  enrollment_grant_sha256: Sha256Digest;
   issued_at: string;
   expires_at: string;
 }
@@ -91,7 +108,6 @@ export interface CreateOrganizationAuthorityApplicationOptions {
   signer: OrganizationAuthoritySigner;
   clock: AuthorityClock;
   identifiers: AuthorityIdentifierGenerator;
-  grants: EnrollmentGrantGenerator;
   independently_trusted_authority_pin: Sha256Digest;
   organization_display_name: string;
   active_lease_ttl_ms: number;
@@ -128,17 +144,23 @@ function requireEnrollment(
 }
 
 export class OrganizationAuthorityApplication {
+  private readonly adminQueries: OrganizationAuthorityAdminQueries;
+
   private constructor(
     private readonly repository: OrganizationAuthorityRepository,
     private readonly signer: OrganizationAuthoritySigner,
     private readonly clock: AuthorityClock,
     private readonly identifiers: AuthorityIdentifierGenerator,
-    private readonly grants: EnrollmentGrantGenerator,
     private readonly descriptorValue: OrganizationAuthorityDescriptorV1,
     private readonly pinnedAuthority: PinnedOrganizationAuthority,
     private readonly activeLeaseTtlMs: number,
     private readonly accessRequestMaximumAgeMs: number,
-  ) {}
+  ) {
+    this.adminQueries = new OrganizationAuthorityAdminQueries(
+      repository,
+      clock,
+    );
+  }
 
   static async create(
     options: CreateOrganizationAuthorityApplicationOptions,
@@ -167,7 +189,6 @@ export class OrganizationAuthorityApplication {
       options.signer,
       options.clock,
       options.identifiers,
-      options.grants,
       descriptor,
       pinnedAuthority,
       options.active_lease_ttl_ms,
@@ -183,6 +204,30 @@ export class OrganizationAuthorityApplication {
 
   authorityPinSha256(): Sha256Digest {
     return this.pinnedAuthority.authority_pin_sha256;
+  }
+
+  adminOverview(): OrganizationAdminOverviewV1 {
+    return this.adminQueries.overview();
+  }
+
+  listMemberships(request?: AdminPageRequest): OrganizationMembershipPageV1 {
+    return this.adminQueries.memberships(request);
+  }
+
+  listInstallations(
+    request?: AdminPageRequest,
+  ): OrganizationInstallationPageV1 {
+    return this.adminQueries.installations(request);
+  }
+
+  listEnrollmentGrants(
+    request?: AdminPageRequest,
+  ): OrganizationEnrollmentGrantPageV1 {
+    return this.adminQueries.enrollmentGrants(request);
+  }
+
+  listAudit(request?: AdminPageRequest): OrganizationAuditPageV1 {
+    return this.adminQueries.audit(request);
   }
 
   close(): void {
@@ -222,12 +267,43 @@ export class OrganizationAuthorityApplication {
     return Buffer.from(signature);
   }
 
-  provisionMembership(input: {
-    display_name: string;
-    membership_type: OrganizationMembershipTypeV1;
-  }): StoredAuthorityMembership {
-    assertDisplayName(input.display_name);
-    assertMembershipType(input.membership_type);
+  private provisionedMembership(
+    membership: StoredAuthorityMembership,
+  ): ProvisionedOrganizationMembershipV1 {
+    if (membership.organization_id !== this.descriptorValue.organization_id) {
+      throw new Error('stored membership belongs to another organization');
+    }
+    return {
+      organization_id: membership.organization_id,
+      principal_id: membership.principal_id,
+      membership_id: membership.membership_id,
+      display_name: membership.display_name,
+      membership_type: membership.membership_type,
+      status: 'active',
+      provisioned_at: membership.provisioned_at,
+      revoked_at: null,
+    };
+  }
+
+  provisionMembership(
+    input: ProvisionOrganizationMembershipRequestV1,
+  ): ProvisionedOrganizationMembershipV1 {
+    const command = validateProvisionOrganizationMembershipRequest(input);
+    const commandSha256 = canonicalSha256(command);
+    const replay = this.repository.read((transaction) =>
+      transaction.membershipByAdminCommand(command.command_id),
+    );
+    if (replay !== undefined) {
+      if (replay.admin_command_sha256 !== commandSha256) {
+        throw new AuthorityOperationError(
+          'conflict',
+          'administrator command ID was reused with different membership input',
+        );
+      }
+      return this.provisionedMembership(replay);
+    }
+    assertDisplayName(command.display_name);
+    assertMembershipType(command.membership_type);
     const provisionedAt = this.now('membership provisioning time');
     const principalId = this.identifiers.next('prn');
     const membershipId = this.identifiers.next('mem');
@@ -237,14 +313,28 @@ export class OrganizationAuthorityApplication {
       organization_id: this.descriptorValue.organization_id,
       principal_id: principalId,
       membership_id: membershipId,
-      display_name: input.display_name,
-      membership_type: input.membership_type,
+      display_name: command.display_name,
+      membership_type: command.membership_type,
       status: 'active',
       provisioned_at: provisionedAt,
       revoked_at: null,
       revocation_reason: null,
+      admin_command_id: command.command_id,
+      admin_command_sha256: commandSha256,
     };
-    return this.repository.write(provisionedAt, (transaction) => {
+    const stored = this.repository.write(provisionedAt, (transaction) => {
+      const concurrent = transaction.membershipByAdminCommand(
+        command.command_id,
+      );
+      if (concurrent !== undefined) {
+        if (concurrent.admin_command_sha256 !== commandSha256) {
+          throw new AuthorityOperationError(
+            'conflict',
+            'administrator command ID was reused with different membership input',
+          );
+        }
+        return concurrent;
+      }
       transaction.insertMembership(membership);
       transaction.appendAudit({
         occurred_at: provisionedAt,
@@ -252,31 +342,84 @@ export class OrganizationAuthorityApplication {
         action: 'membership.provisioned',
         subject_id: membership.membership_id,
         detail: {
+          command_id: command.command_id,
           membership_type: membership.membership_type,
           principal_id: membership.principal_id,
         },
       });
       return membership;
     });
+    return this.provisionedMembership(stored);
+  }
+
+  private issuedEnrollmentGrant(
+    grant: StoredEnrollmentGrant,
+  ): IssuedEnrollmentGrant {
+    if (
+      grant.authority_id !== this.descriptorValue.authority_id ||
+      grant.organization_id !== this.descriptorValue.organization_id
+    ) {
+      throw new Error('stored enrollment grant belongs to another authority');
+    }
+    return {
+      authority_id: grant.authority_id,
+      authority_pin_sha256: this.pinnedAuthority.authority_pin_sha256,
+      organization_id: grant.organization_id,
+      principal_id: grant.principal_id,
+      membership_id: grant.membership_id,
+      enrollment_grant_sha256: grant.grant_sha256,
+      issued_at: grant.issued_at,
+      expires_at: grant.expires_at,
+    };
   }
 
   issueEnrollmentGrant(
     membershipId: string,
-    lifetimeSeconds: number,
+    input: IssueOrganizationEnrollmentGrantRequestV1,
   ): IssuedEnrollmentGrant {
     assertFederationId(membershipId, 'mem', 'enrollment grant membership');
-    assertGrantLifetimeSeconds(lifetimeSeconds);
-    const secret = this.grants.generate();
-    if (!(secret instanceof Uint8Array) || secret.byteLength !== 32) {
-      throw new Error(
-        'enrollment grant generator must return exactly 32 bytes',
-      );
+    const command = validateIssueOrganizationEnrollmentGrantRequest(input);
+    assertGrantLifetimeSeconds(command.lifetime_seconds);
+    const grantSha256 = command.enrollment_grant_sha256;
+    const commandSha256 = canonicalSha256({
+      membership_id: membershipId,
+      ...command,
+    });
+    const replay = this.repository.read((transaction) =>
+      transaction.grantByAdminCommand(command.command_id),
+    );
+    if (replay !== undefined) {
+      if (replay.admin_command_sha256 !== commandSha256) {
+        throw new AuthorityOperationError(
+          'conflict',
+          'administrator command ID was reused with different invitation input',
+        );
+      }
+      return this.issuedEnrollmentGrant(replay);
     }
-    const secretSnapshot = Uint8Array.from(secret);
-    const grantSha256 = organizationEnrollmentGrantSha256(secretSnapshot);
     const issuedAt = this.now('enrollment grant issue time');
-    const expiresAt = addMilliseconds(issuedAt, lifetimeSeconds * 1000);
+    const expiresAt = addMilliseconds(
+      issuedAt,
+      command.lifetime_seconds * 1000,
+    );
     return this.repository.write(issuedAt, (transaction) => {
+      const concurrent = transaction.grantByAdminCommand(command.command_id);
+      if (concurrent !== undefined) {
+        if (concurrent.admin_command_sha256 !== commandSha256) {
+          throw new AuthorityOperationError(
+            'conflict',
+            'administrator command ID was reused with different invitation input',
+          );
+        }
+        return this.issuedEnrollmentGrant(concurrent);
+      }
+      const digestCollision = transaction.grant(grantSha256);
+      if (digestCollision !== undefined) {
+        throw new AuthorityOperationError(
+          'conflict',
+          'enrollment grant digest is already registered',
+        );
+      }
       const membership = transaction.membership(membershipId);
       if (
         membership === undefined ||
@@ -288,7 +431,7 @@ export class OrganizationAuthorityApplication {
           'active membership was not found',
         );
       }
-      transaction.insertGrant({
+      const stored: StoredEnrollmentGrant = {
         grant_sha256: grantSha256,
         authority_id: this.descriptorValue.authority_id,
         organization_id: this.descriptorValue.organization_id,
@@ -298,27 +441,22 @@ export class OrganizationAuthorityApplication {
         expires_at: expiresAt,
         consumed_at: null,
         request_sha256: null,
-      });
+        admin_command_id: command.command_id,
+        admin_command_sha256: commandSha256,
+      };
+      transaction.insertGrant(stored);
       transaction.appendAudit({
         occurred_at: issuedAt,
         actor_kind: 'admin',
         action: 'enrollment_grant.issued',
         subject_id: membership.membership_id,
         detail: {
+          command_id: command.command_id,
           expires_at: expiresAt,
           grant_sha256: grantSha256,
         },
       });
-      return {
-        authority_id: this.descriptorValue.authority_id,
-        authority_pin_sha256: this.pinnedAuthority.authority_pin_sha256,
-        organization_id: this.descriptorValue.organization_id,
-        principal_id: membership.principal_id,
-        membership_id: membership.membership_id,
-        enrollment_grant: secretSnapshot,
-        issued_at: issuedAt,
-        expires_at: expiresAt,
-      };
+      return this.issuedEnrollmentGrant(stored);
     });
   }
 

@@ -29,6 +29,8 @@ import {
   type AuthorityRuntimeStatusV1,
 } from '../domain/runtime-status.js';
 import type { OrganizationAuthorityHttpApplication } from './organization-authority-http-application.js';
+import { handleAdminConsoleRequest } from './admin-console/routes.js';
+import type { AdminConsoleSessionStore } from './admin-console/sessions.js';
 import {
   TrustedProxyIdentityError,
   type RequestClientIdentityResolver,
@@ -259,10 +261,60 @@ function membershipResponse(
   };
 }
 
+function adminPageRequest(url: URL): { cursor?: string; limit?: number } {
+  const keys = [...url.searchParams.keys()];
+  if (
+    keys.some((key) => key !== 'cursor' && key !== 'limit') ||
+    keys.filter((key) => key === 'cursor').length > 1 ||
+    keys.filter((key) => key === 'limit').length > 1
+  ) {
+    throw new AuthorityOperationError(
+      'invalid_request',
+      'admin page query is invalid',
+    );
+  }
+  const cursor = url.searchParams.get('cursor');
+  const rawLimit = url.searchParams.get('limit');
+  if (
+    cursor !== null &&
+    (cursor.length === 0 ||
+      cursor.length > 512 ||
+      !/^[A-Za-z0-9_-]+$/.test(cursor))
+  ) {
+    throw new AuthorityOperationError(
+      'invalid_request',
+      'admin page cursor is invalid',
+    );
+  }
+  let limit: number | undefined;
+  if (rawLimit !== null) {
+    if (!/^[1-9][0-9]{0,2}$/.test(rawLimit)) {
+      throw new AuthorityOperationError(
+        'invalid_request',
+        'admin page limit is invalid',
+      );
+    }
+    limit = Number(rawLimit);
+    if (limit > 100) {
+      throw new AuthorityOperationError(
+        'invalid_request',
+        'admin page limit is invalid',
+      );
+    }
+  }
+  return {
+    ...(cursor === null ? {} : { cursor }),
+    ...(limit === undefined ? {} : { limit }),
+  };
+}
+
 export interface OrganizationAuthorityHttpServerOptions {
   application: OrganizationAuthorityHttpApplication;
   adminAuthenticator: AdminRequestAuthenticator;
   clientIdentityResolver: RequestClientIdentityResolver;
+  adminConsole?: {
+    sessions: AdminConsoleSessionStore;
+  };
   runtimeStatus?: {
     respond(nonce: string): AuthorityRuntimeStatusV1;
   };
@@ -320,38 +372,119 @@ export function createOrganizationAuthorityHttpServer(
           sendJson(response, 200, options.runtimeStatus.respond(nonce));
           return;
         }
-        if (url.search !== '') {
-          throw new AuthorityOperationError(
-            'invalid_request',
-            'query parameters are not supported',
-          );
-        }
         const clientIdentity = options.clientIdentityResolver.resolve(request);
-        authenticationChallenge =
-          method === 'POST' && url.pathname.startsWith('/v1/admin/')
-            ? 'Bearer'
-            : method === 'POST' && url.pathname === '/v1/enrollments'
-              ? 'Echo-Enrollment'
-              : undefined;
+        authenticationChallenge = url.pathname.startsWith('/v1/admin/')
+          ? 'Bearer'
+          : method === 'POST' && url.pathname === '/v1/enrollments'
+            ? 'Echo-Enrollment'
+            : undefined;
         if (method === 'POST') {
-          const routeClass = url.pathname.startsWith('/v1/admin/')
-            ? 'admin'
-            : url.pathname === '/v1/enrollments'
-              ? 'enrollment'
-              : url.pathname === '/v1/access-leases'
-                ? 'access'
-                : 'other';
+          const routeClass =
+            url.pathname === '/admin' || url.pathname.startsWith('/admin/')
+              ? 'admin-console'
+              : url.pathname.startsWith('/v1/admin/')
+                ? 'admin'
+                : url.pathname === '/v1/enrollments'
+                  ? 'enrollment'
+                  : url.pathname === '/v1/access-leases'
+                    ? 'access'
+                    : 'other';
           const limit = rateLimiter.consume(`${clientIdentity}:${routeClass}`);
           if (!limit.allowed) {
             throw new RateLimitedError(limit.retry_after_seconds);
           }
         }
 
+        if (
+          options.adminConsole !== undefined &&
+          (url.pathname === '/admin' || url.pathname.startsWith('/admin/'))
+        ) {
+          await handleAdminConsoleRequest({
+            application: options.application,
+            sessions: options.adminConsole.sessions,
+            authenticateCredential: (credential) =>
+              options.adminAuthenticator.authenticate(`Bearer ${credential}`),
+            clientIdentity,
+            request,
+            response,
+            url,
+          });
+          return;
+        }
+
         if (method === 'GET' && url.pathname === '/v1/authority-descriptor') {
+          if (url.search !== '') {
+            throw new AuthorityOperationError(
+              'invalid_request',
+              'query parameters are not supported',
+            );
+          }
           sendJson(response, 200, {
             authority_descriptor: options.application.descriptor(),
           });
           return;
+        }
+
+        if (method === 'GET' && url.pathname === '/v1/admin/overview') {
+          requireAdmin(request);
+          if (url.search !== '') {
+            throw new AuthorityOperationError(
+              'invalid_request',
+              'overview query parameters are not supported',
+            );
+          }
+          sendJson(response, 200, options.application.adminOverview());
+          return;
+        }
+
+        if (method === 'GET' && url.pathname === '/v1/admin/memberships') {
+          requireAdmin(request);
+          sendJson(
+            response,
+            200,
+            options.application.listMemberships(adminPageRequest(url)),
+          );
+          return;
+        }
+
+        if (method === 'GET' && url.pathname === '/v1/admin/installations') {
+          requireAdmin(request);
+          sendJson(
+            response,
+            200,
+            options.application.listInstallations(adminPageRequest(url)),
+          );
+          return;
+        }
+
+        if (
+          method === 'GET' &&
+          url.pathname === '/v1/admin/enrollment-grants'
+        ) {
+          requireAdmin(request);
+          sendJson(
+            response,
+            200,
+            options.application.listEnrollmentGrants(adminPageRequest(url)),
+          );
+          return;
+        }
+
+        if (method === 'GET' && url.pathname === '/v1/admin/audit') {
+          requireAdmin(request);
+          sendJson(
+            response,
+            200,
+            options.application.listAudit(adminPageRequest(url)),
+          );
+          return;
+        }
+
+        if (url.search !== '') {
+          throw new AuthorityOperationError(
+            'invalid_request',
+            'query parameters are not supported',
+          );
         }
 
         if (method === 'POST' && url.pathname === '/v1/admin/memberships') {
@@ -375,7 +508,7 @@ export function createOrganizationAuthorityHttpServer(
           );
           const issued = options.application.issueEnrollmentGrant(
             grantRoute[1]!,
-            body.lifetime_seconds,
+            body,
           );
           const result: IssuedOrganizationEnrollmentGrantV1 = {
             authority_id: issued.authority_id,
@@ -383,9 +516,7 @@ export function createOrganizationAuthorityHttpServer(
             organization_id: issued.organization_id,
             principal_id: issued.principal_id,
             membership_id: issued.membership_id,
-            enrollment_grant_base64url: Buffer.from(
-              issued.enrollment_grant,
-            ).toString('base64url'),
+            enrollment_grant_sha256: issued.enrollment_grant_sha256,
             issued_at: issued.issued_at,
             expires_at: issued.expires_at,
           };

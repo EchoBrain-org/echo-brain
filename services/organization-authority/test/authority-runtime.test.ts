@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
   generateKeyPairSync,
+  randomBytes,
   randomUUID,
   sign as signMessage,
 } from 'node:crypto';
@@ -38,7 +39,6 @@ import { OrganizationAuthorityApplication } from '../src/application/organizatio
 import type {
   AuthorityClock,
   AuthorityIdentifierGenerator,
-  EnrollmentGrantGenerator,
   OrganizationAuthoritySigner,
 } from '../src/application/ports/runtime-ports.js';
 import { SqliteOrganizationAuthorityRepository } from '../src/adapters/persistence/sqlite/sqlite-authority-repository.js';
@@ -63,17 +63,6 @@ class FakeClock implements AuthorityClock {
 class RandomIdentifiers implements AuthorityIdentifierGenerator {
   next(prefix: 'prn' | 'mem' | 'enr'): string {
     return federationId(prefix);
-  }
-}
-
-class UniqueGrants implements EnrollmentGrantGenerator {
-  private nextValue = 1;
-
-  generate(): Uint8Array {
-    const result = new Uint8Array(32);
-    result[0] = this.nextValue;
-    this.nextValue += 1;
-    return result;
   }
 }
 
@@ -148,7 +137,6 @@ async function createApplication(
     signer,
     clock,
     identifiers: new RandomIdentifiers(),
-    grants: new UniqueGrants(),
     independently_trusted_authority_pin: organizationAuthorityPinSha256(
       signer.descriptor,
     ),
@@ -174,10 +162,14 @@ async function enroll(
     ReturnType<OrganizationAuthorityApplication['completeEnrollment']>
   >;
 }> {
-  const issued = application.issueEnrollmentGrant(
-    membership.membership_id,
-    3600,
-  );
+  const grant = Uint8Array.from(randomBytes(32));
+  const grantSha256 = organizationEnrollmentGrantSha256(grant);
+  const issued = application.issueEnrollmentGrant(membership.membership_id, {
+    command_id: `adm_${randomUUID()}`,
+    enrollment_grant_sha256: grantSha256,
+    lifetime_seconds: 3600,
+  });
+  expect(issued.enrollment_grant_sha256).toBe(grantSha256);
   const installation = testKey();
   const installationId = federationId('ins');
   const pinned = verifyOrganizationAuthorityPin(
@@ -186,9 +178,7 @@ async function enroll(
   );
   const request = await createOrganizationEnrollmentRequest(
     {
-      enrollment_grant_sha256: organizationEnrollmentGrantSha256(
-        issued.enrollment_grant,
-      ),
+      enrollment_grant_sha256: grantSha256,
       principal_id: membership.principal_id,
       membership_id: membership.membership_id,
       installation_id: installationId,
@@ -199,13 +189,13 @@ async function enroll(
   );
   clock.advance(1);
   const result = await application.completeEnrollment({
-    enrollment_grant: issued.enrollment_grant,
+    enrollment_grant: grant,
     enrollment_request: request,
   });
   return {
     installation,
     installationId,
-    grant: issued.enrollment_grant,
+    grant,
     request,
     result,
   };
@@ -221,6 +211,7 @@ async function createEnrolledFixture(at: string) {
     clock,
   );
   const membership = application.provisionMembership({
+    command_id: `adm_${randomUUID()}`,
     display_name: 'Tamper Test Employee',
     membership_type: 'employee',
   });
@@ -244,6 +235,91 @@ function closeFixture(
 }
 
 describe('single-organization authority runtime', () => {
+  it('replays exact admin commands and rejects divergent command reuse', async () => {
+    const directory = mkdtempSync(join(tmpdir(), 'echo-authority-admin-'));
+    chmodSync(directory, 0o700);
+    const clock = new FakeClock(Date.parse('2026-07-22T11:00:00.000Z'));
+    const { application } = await createApplication(
+      join(directory, 'authority.sqlite'),
+      clock,
+    );
+    try {
+      const membershipCommandId = `adm_${randomUUID()}`;
+      const membershipInput = {
+        command_id: membershipCommandId,
+        display_name: 'Retry Safe Employee',
+        membership_type: 'employee' as const,
+      };
+      const membership = application.provisionMembership(membershipInput);
+      expect(application.provisionMembership(membershipInput)).toEqual(
+        membership,
+      );
+      expect(() =>
+        application.provisionMembership({
+          ...membershipInput,
+          display_name: 'Different Employee',
+        }),
+      ).toThrow(/command ID was reused/);
+
+      const grantBytes = Uint8Array.from(randomBytes(32));
+      const grantDigest = organizationEnrollmentGrantSha256(grantBytes);
+      const grantCommandId = `adm_${randomUUID()}`;
+      const grantInput = {
+        command_id: grantCommandId,
+        enrollment_grant_sha256: grantDigest,
+        lifetime_seconds: 3600,
+      };
+      const issued = application.issueEnrollmentGrant(
+        membership.membership_id,
+        grantInput,
+      );
+      expect(
+        application.issueEnrollmentGrant(membership.membership_id, grantInput),
+      ).toEqual(issued);
+      expect(issued.enrollment_grant_sha256).toBe(grantDigest);
+      expect(() =>
+        application.issueEnrollmentGrant(membership.membership_id, {
+          ...grantInput,
+          lifetime_seconds: 7200,
+        }),
+      ).toThrow(/command ID was reused/);
+      expect(() =>
+        application.issueEnrollmentGrant(membership.membership_id, {
+          ...grantInput,
+          command_id: `adm_${randomUUID()}`,
+        }),
+      ).toThrow(/digest is already registered/);
+
+      expect(application.adminOverview().counts).toMatchObject({
+        memberships: 1,
+        active_memberships: 1,
+        enrollment_grants: 1,
+        pending_enrollment_grants: 1,
+        audit_entries: 2,
+      });
+      expect(application.listMemberships({ limit: 1 }).items).toHaveLength(1);
+      expect(application.listEnrollmentGrants({ limit: 1 }).items).toEqual([
+        expect.objectContaining({
+          enrollment_grant_sha256: grantDigest,
+          status: 'pending',
+        }),
+      ]);
+      expect(application.listAudit({ limit: 10 }).items).toHaveLength(2);
+
+      clock.advance(1);
+      await application.revokeMembership(
+        membership.membership_id,
+        'Retry result must remain immutable',
+      );
+      expect(application.provisionMembership(membershipInput)).toEqual(
+        membership,
+      );
+    } finally {
+      application.close();
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
   it('rejects a correctly signed access lease command with an extra field at the application boundary', async () => {
     const fixture = await createEnrolledFixture('2026-07-22T11:30:00.000Z');
     try {
@@ -293,6 +369,7 @@ describe('single-organization authority runtime', () => {
     );
     try {
       const membership = application.provisionMembership({
+        command_id: `adm_${randomUUID()}`,
         display_name: 'Employee One',
         membership_type: 'employee',
       });
@@ -418,6 +495,7 @@ describe('single-organization authority runtime', () => {
       clock.regress(60 * 60 * 1000);
       expect(() =>
         application.provisionMembership({
+          command_id: `adm_${randomUUID()}`,
           display_name: 'Clock Regression',
           membership_type: 'employee',
         }),
@@ -438,6 +516,7 @@ describe('single-organization authority runtime', () => {
     );
     try {
       const membership = application.provisionMembership({
+        command_id: `adm_${randomUUID()}`,
         display_name: 'Employee Two',
         membership_type: 'employee' as OrganizationMembershipTypeV1,
       });

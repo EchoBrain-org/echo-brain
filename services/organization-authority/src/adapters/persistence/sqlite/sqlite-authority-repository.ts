@@ -22,6 +22,7 @@ import { verifyOrganizationAccessLeaseRequest } from '@echo-brain/organization-a
 import type Database from 'better-sqlite3';
 import { timestampMillis } from '../../../domain/rules.js';
 import type {
+  AuthorityAdminCounts,
   AuthorityAuditEntry,
   AuthorityReadTransaction,
   AuthorityWriteTransaction,
@@ -30,6 +31,7 @@ import type {
   OrganizationAuthorityRepository,
   StoredAccessLeaseRequest,
   StoredAuthorityAccessState,
+  StoredAuthorityAuditEntry,
   StoredAuthorityEnrollment,
   StoredAuthorityMembership,
   StoredAuthorityMetadata,
@@ -61,6 +63,8 @@ interface MembershipRow {
   provisioned_at: string;
   revoked_at: string | null;
   revocation_reason: string | null;
+  admin_command_id: string | null;
+  admin_command_sha256: string | null;
 }
 
 interface GrantRow {
@@ -73,6 +77,17 @@ interface GrantRow {
   expires_at: string;
   consumed_at: string | null;
   request_sha256: string | null;
+  admin_command_id: string | null;
+  admin_command_sha256: string | null;
+}
+
+interface AuditRow {
+  audit_sequence: number;
+  occurred_at: string;
+  actor_kind: string;
+  action: string;
+  subject_id: string;
+  detail_json: string;
 }
 
 interface EnrollmentRow {
@@ -135,6 +150,25 @@ function assertDigest(
   label: string,
 ): asserts value is Sha256Digest {
   invariant(/^sha256:[0-9a-f]{64}$/.test(value), `${label} is not a digest`);
+}
+
+function assertAdminCommandPair(
+  commandId: string | null,
+  commandSha256: string | null,
+  label: string,
+): asserts commandSha256 is Sha256Digest | null {
+  invariant(
+    (commandId === null) === (commandSha256 === null),
+    `${label} admin command columns are inconsistent`,
+  );
+  if (commandId === null || commandSha256 === null) return;
+  invariant(
+    /^adm_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(
+      commandId,
+    ),
+    `${label} admin command ID is invalid`,
+  );
+  assertDigest(commandSha256, `${label} admin command`);
 }
 
 function parseStoredJson(value: string): unknown {
@@ -241,20 +275,11 @@ class SqliteAuthorityTransaction
     };
   }
 
-  membership(membershipId: string): StoredAuthorityMembership | undefined {
-    const trust = this.trust();
-    const row = this.database
-      .prepare(
-        `SELECT m.organization_id, p.organization_id AS principal_organization_id,
-                m.principal_id, m.membership_id,
-                p.display_name, m.membership_type, m.status,
-                m.provisioned_at, m.revoked_at, m.revocation_reason
-         FROM authority_memberships m
-         JOIN authority_principals p ON p.principal_id = m.principal_id
-         WHERE m.membership_id = ?`,
-      )
-      .get(membershipId) as MembershipRow | undefined;
+  private membershipFromRow(
+    row: MembershipRow | undefined,
+  ): StoredAuthorityMembership | undefined {
     if (row === undefined) return undefined;
+    const trust = this.trust();
     invariant(
       row.membership_type === 'owner' || row.membership_type === 'employee',
       'membership type is invalid',
@@ -288,6 +313,11 @@ class SqliteAuthorityTransaction
           row.revocation_reason !== null),
       'membership status columns are inconsistent',
     );
+    assertAdminCommandPair(
+      row.admin_command_id,
+      row.admin_command_sha256,
+      'membership',
+    );
     return {
       organization_id: row.organization_id,
       principal_id: row.principal_id,
@@ -298,20 +328,78 @@ class SqliteAuthorityTransaction
       provisioned_at: row.provisioned_at,
       revoked_at: row.revoked_at,
       revocation_reason: row.revocation_reason,
+      admin_command_id: row.admin_command_id,
+      admin_command_sha256: row.admin_command_sha256,
     };
   }
 
-  grant(grantSha256: Sha256Digest): StoredEnrollmentGrant | undefined {
-    const trust = this.trust();
+  private membershipWhere(
+    column: 'm.membership_id' | 'm.admin_command_id',
+    value: string,
+  ): StoredAuthorityMembership | undefined {
     const row = this.database
       .prepare(
-        `SELECT grant_sha256, authority_id, organization_id, principal_id,
-                membership_id, issued_at, expires_at, consumed_at,
-                request_sha256
-         FROM authority_enrollment_grants WHERE grant_sha256 = ?`,
+        `SELECT m.organization_id, p.organization_id AS principal_organization_id,
+                m.principal_id, m.membership_id,
+                p.display_name, m.membership_type, m.status,
+                m.provisioned_at, m.revoked_at, m.revocation_reason,
+                m.admin_command_id, m.admin_command_sha256
+         FROM authority_memberships m
+         JOIN authority_principals p ON p.principal_id = m.principal_id
+         WHERE ${column} = ?`,
       )
-      .get(grantSha256) as GrantRow | undefined;
+      .get(value) as MembershipRow | undefined;
+    return this.membershipFromRow(row);
+  }
+
+  membership(membershipId: string): StoredAuthorityMembership | undefined {
+    return this.membershipWhere('m.membership_id', membershipId);
+  }
+
+  membershipByAdminCommand(
+    commandId: string,
+  ): StoredAuthorityMembership | undefined {
+    return this.membershipWhere('m.admin_command_id', commandId);
+  }
+
+  membershipsAfter(
+    membershipId: string | undefined,
+    limit: number,
+  ): StoredAuthorityMembership[] {
+    invariant(
+      Number.isSafeInteger(limit) && limit > 0 && limit <= 101,
+      'membership page limit is invalid',
+    );
+    const rows = this.database
+      .prepare(
+        `SELECT m.organization_id, p.organization_id AS principal_organization_id,
+                m.principal_id, m.membership_id,
+                p.display_name, m.membership_type, m.status,
+                m.provisioned_at, m.revoked_at, m.revocation_reason,
+                m.admin_command_id, m.admin_command_sha256
+         FROM authority_memberships m
+         JOIN authority_principals p ON p.principal_id = m.principal_id
+         WHERE (? IS NULL OR m.membership_id > ?)
+         ORDER BY m.membership_id
+         LIMIT ?`,
+      )
+      .all(
+        membershipId ?? null,
+        membershipId ?? null,
+        limit,
+      ) as MembershipRow[];
+    return rows.map((row) => {
+      const membership = this.membershipFromRow(row);
+      invariant(membership !== undefined, 'membership row disappeared');
+      return membership;
+    });
+  }
+
+  private grantFromRow(
+    row: GrantRow | undefined,
+  ): StoredEnrollmentGrant | undefined {
     if (row === undefined) return undefined;
+    const trust = this.trust();
     assertDigest(row.grant_sha256, 'enrollment grant');
     if (row.request_sha256 !== null) {
       assertDigest(row.request_sha256, 'enrollment request');
@@ -345,6 +433,11 @@ class SqliteAuthorityTransaction
         (row.consumed_at !== null && row.request_sha256 !== null),
       'enrollment grant consumption columns are inconsistent',
     );
+    assertAdminCommandPair(
+      row.admin_command_id,
+      row.admin_command_sha256,
+      'enrollment grant',
+    );
     const membership = this.membership(row.membership_id);
     invariant(
       membership !== undefined &&
@@ -356,7 +449,57 @@ class SqliteAuthorityTransaction
       ...row,
       grant_sha256: row.grant_sha256 as Sha256Digest,
       request_sha256: row.request_sha256 as Sha256Digest | null,
+      admin_command_sha256: row.admin_command_sha256,
     };
+  }
+
+  private grantWhere(
+    column: 'grant_sha256' | 'admin_command_id',
+    value: string,
+  ): StoredEnrollmentGrant | undefined {
+    const row = this.database
+      .prepare(
+        `SELECT grant_sha256, authority_id, organization_id, principal_id,
+                membership_id, issued_at, expires_at, consumed_at,
+                request_sha256, admin_command_id, admin_command_sha256
+         FROM authority_enrollment_grants WHERE ${column} = ?`,
+      )
+      .get(value) as GrantRow | undefined;
+    return this.grantFromRow(row);
+  }
+
+  grant(grantSha256: Sha256Digest): StoredEnrollmentGrant | undefined {
+    return this.grantWhere('grant_sha256', grantSha256);
+  }
+
+  grantByAdminCommand(commandId: string): StoredEnrollmentGrant | undefined {
+    return this.grantWhere('admin_command_id', commandId);
+  }
+
+  grantsAfter(
+    grantSha256: Sha256Digest | undefined,
+    limit: number,
+  ): StoredEnrollmentGrant[] {
+    invariant(
+      Number.isSafeInteger(limit) && limit > 0 && limit <= 101,
+      'enrollment grant page limit is invalid',
+    );
+    const rows = this.database
+      .prepare(
+        `SELECT grant_sha256, authority_id, organization_id, principal_id,
+                membership_id, issued_at, expires_at, consumed_at,
+                request_sha256, admin_command_id, admin_command_sha256
+         FROM authority_enrollment_grants
+         WHERE (? IS NULL OR grant_sha256 > ?)
+         ORDER BY grant_sha256
+         LIMIT ?`,
+      )
+      .all(grantSha256 ?? null, grantSha256 ?? null, limit) as GrantRow[];
+    return rows.map((row) => {
+      const grant = this.grantFromRow(row);
+      invariant(grant !== undefined, 'enrollment grant row disappeared');
+      return grant;
+    });
   }
 
   private enrollmentFromRow(
@@ -546,6 +689,33 @@ class SqliteAuthorityTransaction
          WHERE membership_id = ? ORDER BY enrollment_id`,
       )
       .all(membershipId) as EnrollmentRow[];
+    return rows.map((row) => {
+      const enrollment = this.enrollmentFromRow(row);
+      invariant(enrollment !== undefined, 'enrollment row disappeared');
+      return enrollment;
+    });
+  }
+
+  enrollmentsAfter(
+    enrollmentId: string | undefined,
+    limit: number,
+  ): StoredAuthorityEnrollment[] {
+    invariant(
+      Number.isSafeInteger(limit) && limit > 0 && limit <= 101,
+      'installation page limit is invalid',
+    );
+    const rows = this.database
+      .prepare(
+        `SELECT * FROM authority_enrollments
+         WHERE (? IS NULL OR enrollment_id > ?)
+         ORDER BY enrollment_id
+         LIMIT ?`,
+      )
+      .all(
+        enrollmentId ?? null,
+        enrollmentId ?? null,
+        limit,
+      ) as EnrollmentRow[];
     return rows.map((row) => {
       const enrollment = this.enrollmentFromRow(row);
       invariant(enrollment !== undefined, 'enrollment row disappeared');
@@ -821,6 +991,100 @@ class SqliteAuthorityTransaction
     return this.leaseRequestFromRow(row);
   }
 
+  recentAuditBefore(
+    auditSequence: number | undefined,
+    limit: number,
+  ): StoredAuthorityAuditEntry[] {
+    invariant(
+      Number.isSafeInteger(limit) && limit > 0 && limit <= 101,
+      'audit page limit is invalid',
+    );
+    if (auditSequence !== undefined) {
+      invariant(
+        Number.isSafeInteger(auditSequence) && auditSequence > 0,
+        'audit cursor is invalid',
+      );
+    }
+    const rows = this.database
+      .prepare(
+        `SELECT audit_sequence, occurred_at, actor_kind, action, subject_id,
+                detail_json
+         FROM authority_audit_log
+         WHERE (? IS NULL OR audit_sequence < ?)
+         ORDER BY audit_sequence DESC
+         LIMIT ?`,
+      )
+      .all(auditSequence ?? null, auditSequence ?? null, limit) as AuditRow[];
+    return rows.map((row) => {
+      invariant(
+        Number.isSafeInteger(row.audit_sequence) && row.audit_sequence > 0,
+        'audit sequence is invalid',
+      );
+      timestampMillis(row.occurred_at, 'stored audit time');
+      invariant(
+        row.actor_kind === 'admin' ||
+          row.actor_kind === 'enrollment_grant' ||
+          row.actor_kind === 'installation',
+        'audit actor kind is invalid',
+      );
+      invariant(
+        row.action.length > 0 &&
+          row.action.length <= 200 &&
+          row.subject_id.length > 0 &&
+          row.subject_id.length <= 200,
+        'audit labels are invalid',
+      );
+      return {
+        audit_sequence: row.audit_sequence,
+        occurred_at: row.occurred_at,
+        actor_kind: row.actor_kind,
+        action: row.action,
+        subject_id: row.subject_id,
+        detail: parseStoredJson(row.detail_json) as never,
+      };
+    });
+  }
+
+  adminCounts(now: string): AuthorityAdminCounts {
+    timestampMillis(now, 'admin overview time');
+    const row = this.database
+      .prepare(
+        `SELECT
+           (SELECT COUNT(*) FROM authority_memberships) AS memberships,
+           (SELECT COUNT(*) FROM authority_memberships WHERE status = 'active') AS active_memberships,
+           (SELECT COUNT(*) FROM authority_memberships WHERE status = 'revoked') AS revoked_memberships,
+           (SELECT COUNT(*) FROM authority_enrollments) AS installations,
+           (SELECT COUNT(*) FROM authority_enrollments WHERE status = 'active') AS active_installations,
+           (SELECT COUNT(*) FROM authority_enrollments WHERE status = 'revoked') AS revoked_installations,
+           (SELECT COUNT(*) FROM authority_enrollment_grants) AS enrollment_grants,
+           (SELECT COUNT(*) FROM authority_enrollment_grants
+             WHERE consumed_at IS NULL AND expires_at > ?) AS pending_enrollment_grants,
+           (SELECT COUNT(*) FROM authority_enrollment_grants
+             WHERE consumed_at IS NOT NULL) AS consumed_enrollment_grants,
+           (SELECT COUNT(*) FROM authority_enrollment_grants
+             WHERE consumed_at IS NULL AND expires_at <= ?) AS expired_enrollment_grants,
+           (SELECT COUNT(*) FROM authority_audit_log) AS audit_entries`,
+      )
+      .get(now, now) as AuthorityAdminCounts;
+    for (const value of Object.values(row)) {
+      invariant(
+        Number.isSafeInteger(value) && value >= 0,
+        'admin overview count is invalid',
+      );
+    }
+    invariant(
+      row.memberships === row.active_memberships + row.revoked_memberships &&
+        row.installations ===
+          row.active_installations + row.revoked_installations &&
+        row.enrollment_grants ===
+          row.pending_enrollment_grants +
+            row.consumed_enrollment_grants +
+            row.expired_enrollment_grants,
+      'admin overview counts are inconsistent',
+    );
+    return { ...row };
+  }
+
   insertMembership(membership: StoredAuthorityMembership): void {
     this.database
       .prepare(
@@ -838,8 +1102,9 @@ class SqliteAuthorityTransaction
       .prepare(
         `INSERT INTO authority_memberships (
            membership_id, organization_id, principal_id, membership_type,
-           status, provisioned_at, revoked_at, revocation_reason
-         ) VALUES (?, ?, ?, ?, 'active', ?, NULL, NULL)`,
+           status, provisioned_at, revoked_at, revocation_reason,
+           admin_command_id, admin_command_sha256
+         ) VALUES (?, ?, ?, ?, 'active', ?, NULL, NULL, ?, ?)`,
       )
       .run(
         membership.membership_id,
@@ -847,6 +1112,8 @@ class SqliteAuthorityTransaction
         membership.principal_id,
         membership.membership_type,
         membership.provisioned_at,
+        membership.admin_command_id,
+        membership.admin_command_sha256,
       );
   }
 
@@ -855,8 +1122,9 @@ class SqliteAuthorityTransaction
       .prepare(
         `INSERT INTO authority_enrollment_grants (
            grant_sha256, authority_id, organization_id, principal_id,
-           membership_id, issued_at, expires_at, consumed_at, request_sha256
-         ) VALUES (?, ?, ?, ?, ?, ?, ?, NULL, NULL)`,
+           membership_id, issued_at, expires_at, consumed_at, request_sha256,
+           admin_command_id, admin_command_sha256
+         ) VALUES (?, ?, ?, ?, ?, ?, ?, NULL, NULL, ?, ?)`,
       )
       .run(
         grant.grant_sha256,
@@ -866,6 +1134,8 @@ class SqliteAuthorityTransaction
         grant.membership_id,
         grant.issued_at,
         grant.expires_at,
+        grant.admin_command_id,
+        grant.admin_command_sha256,
       );
   }
 

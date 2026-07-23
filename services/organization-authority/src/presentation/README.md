@@ -4,8 +4,14 @@ The bounded loopback JSON/HTTP server lives here. The local installation still
 owns signing, private-key use, authority-result verification, and evidence storage.
 Presentation depends only on `OrganizationAuthorityHttpApplication`, the narrow
 set of application use cases its routes expose. It never queries persistence,
-signs documents, or treats hidden controls as authorization. No browser UI or
-rendering framework is selected.
+signs documents, or treats hidden controls as authorization.
+
+The minimal `/admin` browser console also lives here as isolated routes,
+escaped server-rendered views, static CSP-safe assets, and bounded in-memory
+sessions. It calls the same application use cases as JSON HTTP; it does not
+open SQLite or create a second server. The login credential is exchanged for a
+proxy-identity-bound process session, every mutation requires CSRF and a
+matching HTTPS origin, and raw invitation grants remain browser-local.
 
 Every request must carry a canonical client-identity digest asserted by the
 authenticated TLS terminator. The origin authenticates that loopback proxy hop

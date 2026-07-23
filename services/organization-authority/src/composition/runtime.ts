@@ -3,13 +3,13 @@ import type { AddressInfo } from 'node:net';
 import { AdminBearerAuthenticator } from '../adapters/security/admin-bearer-authenticator.js';
 import { DevelopmentFileOrganizationAuthoritySigner } from '../adapters/security/development-file-authority-signer.js';
 import {
-  CryptoEnrollmentGrantGenerator,
   RandomAuthorityIdentifierGenerator,
   SystemAuthorityClock,
 } from '../adapters/runtime/system-runtime-ports.js';
 import { SqliteOrganizationAuthorityRepository } from '../adapters/persistence/sqlite/sqlite-authority-repository.js';
 import { OrganizationAuthorityApplication } from '../application/organization-authority.js';
 import { createOrganizationAuthorityHttpServer } from '../presentation/http-server.js';
+import { InMemoryAdminConsoleSessionStore } from '../presentation/admin-console/sessions.js';
 import { AuthenticatedProxyClientIdentityResolver } from '../presentation/trusted-proxy-client-identity.js';
 import { acquireAuthorityRuntimeLock } from '../adapters/runtime/singleton-runtime-lock.js';
 import { authorityRuntimeFingerprint } from '../adapters/runtime/runtime-fingerprint.js';
@@ -27,6 +27,8 @@ export interface RunningOrganizationAuthority {
 }
 
 const GRACEFUL_SHUTDOWN_DEADLINE_MS = 10_000;
+const ADMIN_CONSOLE_SESSION_TTL_MS = 8 * 60 * 60 * 1000;
+const MAXIMUM_ADMIN_CONSOLE_SESSIONS = 256;
 
 type OrganizationAuthorityHttpServer = ReturnType<
   typeof createOrganizationAuthorityHttpServer
@@ -107,7 +109,6 @@ export async function startOrganizationAuthority(
       signer,
       clock: new SystemAuthorityClock(),
       identifiers: new RandomAuthorityIdentifierGenerator(),
-      grants: new CryptoEnrollmentGrantGenerator(),
       independently_trusted_authority_pin: config.authority_pin_sha256,
       organization_display_name: config.organization_display_name,
       active_lease_ttl_ms: config.active_lease_ttl_ms,
@@ -123,6 +124,12 @@ export async function startOrganizationAuthority(
       application,
       adminAuthenticator,
       clientIdentityResolver,
+      adminConsole: {
+        sessions: new InMemoryAdminConsoleSessionStore({
+          session_ttl_ms: ADMIN_CONSOLE_SESSION_TTL_MS,
+          maximum_sessions: MAXIMUM_ADMIN_CONSOLE_SESSIONS,
+        }),
+      },
       runtimeStatus: {
         respond: (nonce) =>
           createAuthorityRuntimeStatus({

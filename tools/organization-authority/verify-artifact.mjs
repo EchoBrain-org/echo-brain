@@ -22,6 +22,17 @@ const EXPECTED_BUNDLES = Object.freeze([
   "@echo-brain/organization-api",
 ]);
 const EXPECTED_EXTERNALS = Object.freeze(["better-sqlite3"]);
+const REQUIRED_PACKAGE_PATHS = Object.freeze([
+  "package.json",
+  "npm-shrinkwrap.json",
+  "bin/echo-organization-authority.mjs",
+  "bin/echo-organization-admin.mjs",
+  "dist/main.js",
+  "dist/admin-main.js",
+  "dist/build-identity.v1.json",
+  "migrations/0001_single_org_authority.sql",
+  "migrations/0002_admin_command_idempotency.sql",
+]);
 
 function sha256(value) {
   return createHash("sha256").update(value).digest("hex");
@@ -108,6 +119,8 @@ function assertManifestShape(manifest) {
     manifest.source_kind !== "materialized-commit" ||
     manifest.entrypoint !== "dist/main.js" ||
     manifest.launcher !== "bin/echo-organization-authority.mjs" ||
+    manifest.admin_entrypoint !== "dist/admin-main.js" ||
+    manifest.admin_launcher !== "bin/echo-organization-admin.mjs" ||
     JSON.stringify(manifest.bundled_workspace_packages) !==
       JSON.stringify(EXPECTED_BUNDLES) ||
     JSON.stringify(manifest.external_runtime_packages) !==
@@ -163,6 +176,14 @@ function assertManifestShape(manifest) {
     }
     previous = entry.path;
   }
+  const packagePaths = new Set(manifest.package_files.map(({ path }) => path));
+  for (const requiredPath of REQUIRED_PACKAGE_PATHS) {
+    if (!packagePaths.has(requiredPath)) {
+      throw new Error(
+        `authority artifact package_files omit required runtime path: ${requiredPath}`,
+      );
+    }
+  }
 }
 
 function verifyPackagedContracts(artifactPath, manifest, errors) {
@@ -205,6 +226,7 @@ function verifyPackagedContracts(artifactPath, manifest, errors) {
     packageJson.version !== manifest.version ||
     packageJson.main !== manifest.entrypoint ||
     packageJson.bin?.["echo-organization-authority"] !== manifest.launcher ||
+    packageJson.bin?.["echo-organization-admin"] !== manifest.admin_launcher ||
     JSON.stringify(packageJson.bundleDependencies) !==
       JSON.stringify(EXPECTED_BUNDLES)
   ) {

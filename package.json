@@ -114,6 +114,7 @@
     "product:build-artifact": "node tools/product/build-artifact.mjs",
     "organization-authority:check-shrinkwrap": "node tools/organization-authority/sync-shrinkwrap.mjs --check",
     "organization-authority:cli": "node services/organization-authority/dist/main.js",
+    "organization-authority:admin": "node services/organization-authority/dist/admin-main.js",
     "organization-authority:build-artifact": "node tools/organization-authority/build-artifact.mjs",
     "organization-authority:verify-artifact": "node tools/organization-authority/verify-artifact.mjs",
     "organization:phase5-rehearse": "node tools/phase5/run-one-machine.mjs",

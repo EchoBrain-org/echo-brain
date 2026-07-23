@@ -10,10 +10,6 @@ export interface AuthorityIdentifierGenerator {
   next(prefix: 'prn' | 'mem' | 'enr'): string;
 }
 
-export interface EnrollmentGrantGenerator {
-  generate(): Uint8Array;
-}
-
 export interface OrganizationAuthoritySigner {
   inspect(): Promise<OrganizationAuthorityDescriptorV1>;
   sign(message: Buffer, expectedKeyId: Sha256Digest): Promise<Buffer>;

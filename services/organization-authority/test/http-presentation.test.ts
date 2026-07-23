@@ -53,6 +53,11 @@ function testApplication(
   };
   return {
     descriptor: unexpectedCall,
+    adminOverview: unexpectedCall,
+    listMemberships: unexpectedCall,
+    listInstallations: unexpectedCall,
+    listEnrollmentGrants: unexpectedCall,
+    listAudit: unexpectedCall,
     provisionMembership: unexpectedCall,
     issueEnrollmentGrant: unexpectedCall,
     completeEnrollment: unexpectedCall,

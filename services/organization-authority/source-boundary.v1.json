@@ -6,7 +6,10 @@
   "boundary_root": "services/organization-authority",
   "source_root": "services/organization-authority/src",
   "package_json": "services/organization-authority/package.json",
-  "entry_points": ["services/organization-authority/src/main.ts"],
+  "entry_points": [
+    "services/organization-authority/src/main.ts",
+    "services/organization-authority/src/admin-main.ts"
+  ],
   "owned_source_paths": ["services/organization-authority/src/**"],
   "allowed_internal_paths": ["services/organization-authority/src/**"],
   "forbidden_repository_roots": ["src/", "packages/"],
@@ -27,12 +30,21 @@
     "util"
   ],
   "runtime_assets": [
-    "services/organization-authority/migrations/0001_single_org_authority.sql"
+    "services/organization-authority/migrations/0001_single_org_authority.sql",
+    "services/organization-authority/migrations/0002_admin_command_idempotency.sql"
   ],
   "layer_rules": [
     {
       "name": "authority-entrypoint-calls-composition",
       "from": "services/organization-authority/src/main.ts",
+      "allowed_imports": ["services/organization-authority/src/composition/**"],
+      "allowed_workspace_packages": [],
+      "allowed_external_packages": [],
+      "allowed_node_builtins": []
+    },
+    {
+      "name": "authority-admin-entrypoint-calls-composition",
+      "from": "services/organization-authority/src/admin-main.ts",
       "allowed_imports": ["services/organization-authority/src/composition/**"],
       "allowed_workspace_packages": [],
       "allowed_external_packages": [],

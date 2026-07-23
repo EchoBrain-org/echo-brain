@@ -37,7 +37,10 @@ import {
   inspectInitializedAuthorityState,
 } from '../src/composition/operator-state.js';
 import { startOrganizationAuthority } from '../src/composition/runtime.js';
-import { inspectAuthorityStatus } from '../src/composition/status.js';
+import {
+  inspectAuthorityRuntimeOwnership,
+  inspectAuthorityStatus,
+} from '../src/composition/status.js';
 
 const temporaryRoots: string[] = [];
 
@@ -248,6 +251,9 @@ describe('organization authority operator lifecycle', () => {
       'differ from the initialized intent',
     );
     await expect(
+      inspectAuthorityRuntimeOwnership(copiedConfigPath),
+    ).resolves.toMatchObject({ ok: false, initialized: false });
+    await expect(
       inspectAuthorityServePreflight(copiedConfigPath, original),
     ).rejects.toThrow('differ from the initialized intent');
     await expect(
@@ -331,6 +337,27 @@ describe('organization authority operator lifecycle', () => {
       healthy: false,
     });
     expect(after).toEqual(before);
+  });
+
+  it('can prove runtime ownership inputs without opening SQLite', async () => {
+    const fixture = await initializedFixture();
+    const paths = authorityStatePaths(fixture.stateDirectory);
+    writeFileSync(paths.database_path, 'not a SQLite database', 'utf8');
+
+    await expect(
+      inspectAuthorityRuntimeOwnership(fixture.configPath),
+    ).resolves.toMatchObject({
+      ok: true,
+      initialized: true,
+      running: false,
+      healthy: false,
+    });
+    await expect(
+      inspectAuthorityStatus(fixture.configPath),
+    ).resolves.toMatchObject({
+      ok: false,
+      initialized: false,
+    });
   });
 
   it('does not contact an unrelated listener while no runtime owner exists', async () => {

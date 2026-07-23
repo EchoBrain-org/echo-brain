@@ -240,7 +240,9 @@ function assertExactReleaseContract(boundary, template) {
     boundary.source_boundary !==
       "services/organization-authority/source-boundary.v1.json" ||
     boundary.entrypoint !== "dist/main.js" ||
-    boundary.launcher !== "bin/echo-organization-authority.mjs"
+    boundary.launcher !== "bin/echo-organization-authority.mjs" ||
+    boundary.admin_entrypoint !== "dist/admin-main.js" ||
+    boundary.admin_launcher !== "bin/echo-organization-admin.mjs"
   ) {
     throw new Error("organization authority runtime boundary is invalid");
   }
@@ -258,6 +260,7 @@ function assertExactReleaseContract(boundary, template) {
     template.name !== boundary.package ||
     template.main !== boundary.entrypoint ||
     template.bin?.["echo-organization-authority"] !== boundary.launcher ||
+    template.bin?.["echo-organization-admin"] !== boundary.admin_launcher ||
     template.engines?.node !== boundary.declared_platform?.node ||
     template.engines?.npm !== boundary.declared_platform?.npm
   ) {
@@ -468,13 +471,18 @@ function main() {
         source_kind: "materialized-commit",
       })}\n`,
     );
-    const launcherPath = join(packageDir, boundary.launcher);
-    mkdirSync(dirname(launcherPath), { recursive: true });
-    writeFileSync(
-      launcherPath,
-      "#!/usr/bin/env node\nawait import(new URL('../dist/' + 'main.js', import.meta.url));\n",
-    );
-    chmodSync(launcherPath, 0o755);
+    for (const [launcher, entrypoint] of [
+      [boundary.launcher, boundary.entrypoint],
+      [boundary.admin_launcher, boundary.admin_entrypoint],
+    ]) {
+      const launcherPath = join(packageDir, launcher);
+      mkdirSync(dirname(launcherPath), { recursive: true });
+      writeFileSync(
+        launcherPath,
+        `#!/usr/bin/env node\nawait import(new URL('../${entrypoint}', import.meta.url));\n`,
+      );
+      chmodSync(launcherPath, 0o755);
+    }
 
     const packageJson = { ...template, version };
     writeFileSync(
@@ -545,8 +553,11 @@ function main() {
       "npm-shrinkwrap.json",
       boundary.entrypoint,
       boundary.launcher,
+      boundary.admin_entrypoint,
+      boundary.admin_launcher,
       "dist/build-identity.v1.json",
       "migrations/0001_single_org_authority.sql",
+      "migrations/0002_admin_command_idempotency.sql",
     ]) {
       if (!packedPaths.includes(required)) {
         throw new Error(
@@ -594,6 +605,8 @@ function main() {
       declared_platform: boundary.declared_platform,
       entrypoint: boundary.entrypoint,
       launcher: boundary.launcher,
+      admin_entrypoint: boundary.admin_entrypoint,
+      admin_launcher: boundary.admin_launcher,
       bundled_workspace_packages: boundary.bundled_workspace_packages,
       external_runtime_packages: boundary.external_runtime_packages,
       dependency_lock_sha256: sha256File(committedShrinkwrapPath),

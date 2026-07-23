@@ -9,8 +9,10 @@ security mechanisms. `cli.ts` owns strict command parsing, `operator-config.ts`
 owns the secret-free versioned file contract, `operator-state.ts` coordinates
 explicit initialization and read-only state verification, `status.ts` probes
 the instance-bound loopback runtime proof, and `runtime.ts` wires the
-foreground server. Concrete key, credential, lock, proof, and SQLite behavior
-remains in `adapters/`.
+foreground server. `admin-cli.ts` owns the separate HTTP-only organization
+administrator command surface and verifies the runtime ownership proof before
+using credentials. Concrete key, credential, invitation-file, lock, proof, and
+SQLite behavior remains in `adapters/`.
 
 Serving composition is deliberately stricter than direct repository tests: it
 requires a persistent database path and an authenticated loopback-proxy client

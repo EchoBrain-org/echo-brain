@@ -532,10 +532,13 @@ describe("exact-commit organization authority artifact", () => {
     expect(paths).toEqual([...paths].sort());
     expect(paths).toEqual(
       expect.arrayContaining([
+        "bin/echo-organization-admin.mjs",
         "bin/echo-organization-authority.mjs",
+        "dist/admin-main.js",
         "dist/main.js",
         "dist/build-identity.v1.json",
         "migrations/0001_single_org_authority.sql",
+        "migrations/0002_admin_command_idempotency.sql",
         "node_modules/@echo-brain/federation-protocol/dist/index.js",
         "node_modules/@echo-brain/organization-protocol/dist/index.js",
         "node_modules/@echo-brain/organization-api/dist/index.js",
@@ -643,7 +646,18 @@ process.stdout.write(JSON.stringify(result) + "\\n");`;
       installPrefix,
       "node_modules/.bin/echo-organization-authority",
     );
+    const adminExecutable = join(
+      installPrefix,
+      "node_modules/.bin/echo-organization-admin",
+    );
     expect(existsSync(authorityExecutable)).toBe(true);
+    expect(existsSync(adminExecutable)).toBe(true);
+    const adminHelp = runLifecycleCommand(adminExecutable, ["--help"], {
+      cwd: operatorRoot,
+      env: lifecycleEnvironment,
+    });
+    expect(adminHelp.status, adminHelp.stderr).toBe(0);
+    expect(adminHelp.stdout).toContain("echo-organization-admin");
     const installedTreeBeforeLifecycle = hashInstalledTree(installPrefix);
     const configPath = join(operatorRoot, "authority.json");
     const stateDirectory = join(operatorRoot, "authority-state");
@@ -715,6 +729,23 @@ process.stdout.write(JSON.stringify(result) + "\\n");`;
           healthy: true,
           ...expectedIdentity,
         });
+        const overview = parseCommandJson<{
+          organization_id: string;
+          authority_id: string;
+          counts: { memberships: number; installations: number };
+        }>(
+          runLifecycleCommand(
+            adminExecutable,
+            ["overview", "--config", configPath],
+            { cwd: operatorRoot, env: lifecycleEnvironment },
+          ),
+          `${generation} installed administrator overview`,
+        );
+        expect(overview).toMatchObject({
+          organization_id: expectedIdentity.organization_id,
+          authority_id: expectedIdentity.authority_id,
+          counts: { memberships: 0, installations: 0 },
+        });
         await stopInstalledAuthority(authority);
         authority = undefined;
         expect(readStatus(`${generation} stopped status`)).toMatchObject({
@@ -768,6 +799,32 @@ process.stdout.write(JSON.stringify(result) + "\\n");`;
     expect(swapped.status).toBe(1);
     expect(swapped.stderr).toContain(
       "authority artifact manifest identity is invalid",
+    );
+
+    const incompleteDir = join(temporaryRoot, "incomplete-authority-artifact");
+    cpSync(outDir, incompleteDir, { recursive: true });
+    const incompleteManifestPath = join(
+      incompleteDir,
+      "artifact-manifest.json",
+    );
+    const incompleteManifest = JSON.parse(
+      readFileSync(incompleteManifestPath, "utf8"),
+    ) as { package_files: Array<{ path: string }> };
+    incompleteManifest.package_files = incompleteManifest.package_files.filter(
+      ({ path }) => path !== "dist/admin-main.js",
+    );
+    writeFileSync(
+      incompleteManifestPath,
+      `${JSON.stringify(incompleteManifest, null, 2)}\n`,
+    );
+    const incomplete = run(
+      process.execPath,
+      [verifier, "--artifact-dir", incompleteDir],
+      { cwd: fixture.root },
+    );
+    expect(incomplete.status).toBe(1);
+    expect(incomplete.stderr).toContain(
+      "authority artifact package_files omit required runtime path: dist/admin-main.js",
     );
 
     const overwrite = run(

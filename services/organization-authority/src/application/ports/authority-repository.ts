@@ -32,6 +32,10 @@ export interface StoredAuthorityMembership {
   provisioned_at: string;
   revoked_at: string | null;
   revocation_reason: string | null;
+  /** Null only for rows created before the Phase 2 retry-safe admin API. */
+  admin_command_id: string | null;
+  /** Canonical hash of the complete admin command, including its target. */
+  admin_command_sha256: Sha256Digest | null;
 }
 
 export interface StoredEnrollmentGrant {
@@ -44,6 +48,10 @@ export interface StoredEnrollmentGrant {
   expires_at: string;
   consumed_at: string | null;
   request_sha256: Sha256Digest | null;
+  /** Null only for rows created before the Phase 2 retry-safe admin API. */
+  admin_command_id: string | null;
+  /** Distinct from request_sha256, which names the employee enrollment. */
+  admin_command_sha256: Sha256Digest | null;
 }
 
 export interface StoredAuthorityEnrollment {
@@ -96,10 +104,40 @@ export interface AuthorityAuditEntry {
   detail: JsonValue;
 }
 
+export interface StoredAuthorityAuditEntry extends AuthorityAuditEntry {
+  audit_sequence: number;
+}
+
+export interface AuthorityAdminCounts {
+  memberships: number;
+  active_memberships: number;
+  revoked_memberships: number;
+  installations: number;
+  active_installations: number;
+  revoked_installations: number;
+  enrollment_grants: number;
+  pending_enrollment_grants: number;
+  consumed_enrollment_grants: number;
+  expired_enrollment_grants: number;
+  audit_entries: number;
+}
+
 export interface AuthorityReadTransaction {
   metadata(): StoredAuthorityMetadata;
   membership(membershipId: string): StoredAuthorityMembership | undefined;
+  membershipByAdminCommand(
+    commandId: string,
+  ): StoredAuthorityMembership | undefined;
+  membershipsAfter(
+    membershipId: string | undefined,
+    limit: number,
+  ): StoredAuthorityMembership[];
   grant(grantSha256: Sha256Digest): StoredEnrollmentGrant | undefined;
+  grantByAdminCommand(commandId: string): StoredEnrollmentGrant | undefined;
+  grantsAfter(
+    grantSha256: Sha256Digest | undefined,
+    limit: number,
+  ): StoredEnrollmentGrant[];
   enrollmentByGrant(
     grantSha256: Sha256Digest,
   ): StoredAuthorityEnrollment | undefined;
@@ -112,6 +150,10 @@ export interface AuthorityReadTransaction {
   ): StoredAuthorityEnrollment | undefined;
   enrollmentByKey(keyId: Sha256Digest): StoredAuthorityEnrollment | undefined;
   enrollmentsForMembership(membershipId: string): StoredAuthorityEnrollment[];
+  enrollmentsAfter(
+    enrollmentId: string | undefined,
+    limit: number,
+  ): StoredAuthorityEnrollment[];
   currentAccessState(
     enrollmentId: string,
   ): StoredAuthorityAccessState | undefined;
@@ -129,6 +171,11 @@ export interface AuthorityReadTransaction {
   accessStateByDigest(
     stateSha256: Sha256Digest,
   ): StoredAuthorityAccessState | undefined;
+  recentAuditBefore(
+    auditSequence: number | undefined,
+    limit: number,
+  ): StoredAuthorityAuditEntry[];
+  adminCounts(now: string): AuthorityAdminCounts;
 }
 
 export interface AuthorityWriteTransaction extends AuthorityReadTransaction {

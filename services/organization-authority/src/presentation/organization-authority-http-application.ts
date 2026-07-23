@@ -1,6 +1,12 @@
 import type {
   CompletedOrganizationEnrollmentV1,
+  IssueOrganizationEnrollmentGrantRequestV1,
   OrganizationAccessLeaseRequestV1,
+  OrganizationAdminOverviewV1,
+  OrganizationAuditPageV1,
+  OrganizationEnrollmentGrantPageV1,
+  OrganizationInstallationPageV1,
+  OrganizationMembershipPageV1,
   OrganizationApiSha256Digest,
   ProvisionedOrganizationMembershipV1,
   ProvisionOrganizationMembershipRequestV1,
@@ -18,7 +24,7 @@ export interface HttpIssuedOrganizationEnrollmentGrant {
   organization_id: string;
   principal_id: string;
   membership_id: string;
-  enrollment_grant: Uint8Array;
+  enrollment_grant_sha256: OrganizationApiSha256Digest;
   issued_at: string;
   expires_at: string;
 }
@@ -26,12 +32,29 @@ export interface HttpIssuedOrganizationEnrollmentGrant {
 /** The use cases exposed to the JSON/HTTP presentation adapter. */
 export interface OrganizationAuthorityHttpApplication {
   descriptor(): OrganizationAuthorityDescriptorV1;
+  adminOverview(): OrganizationAdminOverviewV1;
+  listMemberships(input?: {
+    cursor?: string;
+    limit?: number;
+  }): OrganizationMembershipPageV1;
+  listInstallations(input?: {
+    cursor?: string;
+    limit?: number;
+  }): OrganizationInstallationPageV1;
+  listEnrollmentGrants(input?: {
+    cursor?: string;
+    limit?: number;
+  }): OrganizationEnrollmentGrantPageV1;
+  listAudit(input?: {
+    cursor?: string;
+    limit?: number;
+  }): OrganizationAuditPageV1;
   provisionMembership(
     input: ProvisionOrganizationMembershipRequestV1,
   ): ProvisionedOrganizationMembershipV1;
   issueEnrollmentGrant(
     membershipId: string,
-    lifetimeSeconds: number,
+    input: IssueOrganizationEnrollmentGrantRequestV1,
   ): HttpIssuedOrganizationEnrollmentGrant;
   completeEnrollment(input: {
     enrollment_grant: Uint8Array;

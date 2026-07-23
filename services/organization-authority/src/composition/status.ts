@@ -14,7 +14,10 @@ import {
   resolveAuthorityServeConfig,
   type AuthorityRuntimeConfigV1,
 } from './operator-config.js';
-import { inspectInitializedAuthorityState } from './operator-state.js';
+import {
+  inspectInitializedAuthorityFiles,
+  inspectInitializedAuthorityState,
+} from './operator-state.js';
 
 const MAX_STATUS_RESPONSE_BYTES = 64 * 1024;
 const STATUS_DEADLINE_MS = 2_000;
@@ -173,8 +176,9 @@ function baseReport(
   };
 }
 
-export async function inspectAuthorityStatus(
+async function inspectAuthorityStatusWithPolicy(
   configPath: string,
+  inspectDatabaseState: boolean,
 ): Promise<AuthorityStatusReport> {
   const checks: AuthorityStatusCheck[] = [];
   let config: AuthorityRuntimeConfigV1;
@@ -188,14 +192,18 @@ export async function inspectAuthorityStatus(
   }
 
   try {
-    await inspectInitializedAuthorityState(configPath, config);
+    if (inspectDatabaseState)
+      await inspectInitializedAuthorityState(configPath, config);
+    else await inspectInitializedAuthorityFiles(configPath, config);
     runtimeFingerprint = authorityRuntimeFingerprint(
       resolveAuthorityServeConfig(config),
     );
     checks.push({
       id: 'initialized-state',
       ok: true,
-      detail: 'key, credentials, identity, and database agree',
+      detail: inspectDatabaseState
+        ? 'key, credentials, identity, and database agree'
+        : 'runtime fingerprint inputs are valid',
     });
   } catch (error) {
     checks.push({
@@ -334,6 +342,22 @@ export async function inspectAuthorityStatus(
     listener: listenerOrigin(config),
     checks,
   };
+}
+
+export async function inspectAuthorityStatus(
+  configPath: string,
+): Promise<AuthorityStatusReport> {
+  return await inspectAuthorityStatusWithPolicy(configPath, true);
+}
+
+/**
+ * Proves the configured live process without opening the authority database.
+ * The running process owns database validation; the admin CLI owns transport.
+ */
+export async function inspectAuthorityRuntimeOwnership(
+  configPath: string,
+): Promise<AuthorityStatusReport> {
+  return await inspectAuthorityStatusWithPolicy(configPath, false);
 }
 
 export function canonicalAuthorityStatus(

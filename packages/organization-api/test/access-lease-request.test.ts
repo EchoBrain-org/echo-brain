@@ -249,7 +249,7 @@ describe('organization API response envelopes', () => {
         organization_id: fixture.authorityDescriptor.organization_id,
         principal_id: fixture.enrollmentReceipt.principal_id,
         membership_id: fixture.enrollmentReceipt.membership_id,
-        enrollment_grant_base64url: 'A'.repeat(43),
+        enrollment_grant_sha256: digest('f'),
         issued_at: '2026-07-22T11:00:00.000Z',
         expires_at: '2026-07-22T12:00:00.000Z',
       }),
@@ -289,13 +289,13 @@ describe('organization API response envelopes', () => {
       organization_id: fixture.authorityDescriptor.organization_id,
       principal_id: fixture.enrollmentReceipt.principal_id,
       membership_id: fixture.enrollmentReceipt.membership_id,
-      enrollment_grant_base64url: `${'A'.repeat(42)}B`,
+      enrollment_grant_sha256: `sha256:${'A'.repeat(64)}`,
       issued_at: '2026-07-22T11:00:00.000Z',
       expires_at: '2026-07-22T12:00:00.000Z',
     };
 
     expect(() => validateIssuedOrganizationEnrollmentGrant(grant)).toThrow(
-      'canonical base64url',
+      'canonical SHA-256 digest',
     );
     expect(() =>
       validateRevokedOrganizationInstallation({
