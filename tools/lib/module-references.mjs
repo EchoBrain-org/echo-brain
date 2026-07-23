@@ -55,7 +55,39 @@ export function collectModuleReferences(sourceFile) {
     });
   }
 
+  function isTrackedLoader(node) {
+    return (
+      ts.isIdentifier(node) &&
+      (node.text === 'require' ||
+        createRequireFactories.has(node.text) ||
+        requireAliases.has(node.text))
+    );
+  }
+
+  function isDeclarationOrMemberName(node) {
+    const parent = node.parent;
+    return (
+      (ts.isPropertyAccessExpression(parent) && parent.name === node) ||
+      ts.isImportSpecifier(parent) ||
+      ts.isExportSpecifier(parent) ||
+      (ts.isImportClause(parent) && parent.name === node) ||
+      (ts.isBindingElement(parent) &&
+        (parent.name === node || parent.propertyName === node)) ||
+      ((ts.isVariableDeclaration(parent) || ts.isParameter(parent)) &&
+        parent.name === node)
+    );
+  }
+
+  function escapesDirectCallPosition(node) {
+    if (!isTrackedLoader(node)) return false;
+    if (ts.isCallExpression(node.parent) && node.parent.expression === node) return false;
+    return !isDeclarationOrMemberName(node);
+  }
+
   function visit(node) {
+    if (escapesDirectCallPosition(node)) {
+      record(node, node, createRequireFactories.has(node.text) ? 'createRequire' : 'require');
+    }
     if (
       (ts.isImportDeclaration(node) || ts.isExportDeclaration(node)) &&
       node.moduleSpecifier !== undefined

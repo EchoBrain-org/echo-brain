@@ -261,6 +261,59 @@ describe('workspace source boundaries', () => {
     );
   });
 
+  it('rejects loader identifiers that escape direct call position', () => {
+    const fixture = fixtureRepository();
+    const entry = join(fixture, 'packages/federation-protocol/src/index.ts');
+
+    writeFileSync(
+      entry,
+      [
+        `import { createRequire } from 'node:module';`,
+        'const load = createRequire(import.meta.url);',
+        'const indirect = load;',
+        `indirect('@forbidden/pkg');`,
+        '',
+      ].join('\n'),
+    );
+    let result = runBoundary(fixture);
+    expect(result.status).not.toBe(0);
+    expect(result.stdout + result.stderr).toContain(
+      'non-literal module loading is forbidden',
+    );
+
+    writeFileSync(
+      entry,
+      [
+        `import { createRequire } from 'node:module';`,
+        'const load = createRequire(import.meta.url);',
+        'const forward = (loader) => loader(\'@forbidden/pkg\');',
+        'forward(load);',
+        '',
+      ].join('\n'),
+    );
+    result = runBoundary(fixture);
+    expect(result.status).not.toBe(0);
+    expect(result.stdout + result.stderr).toContain(
+      'non-literal module loading is forbidden',
+    );
+
+    writeFileSync(
+      entry,
+      [
+        `import { createRequire } from 'node:module';`,
+        'const load = createRequire(import.meta.url);',
+        'const expose = () => load;',
+        `expose()('@forbidden/pkg');`,
+        '',
+      ].join('\n'),
+    );
+    result = runBoundary(fixture);
+    expect(result.status).not.toBe(0);
+    expect(result.stdout + result.stderr).toContain(
+      'non-literal module loading is forbidden',
+    );
+  });
+
   it('rejects workspace deep imports that are not package exports', () => {
     const fixture = fixtureRepository();
     writeFileSync(
