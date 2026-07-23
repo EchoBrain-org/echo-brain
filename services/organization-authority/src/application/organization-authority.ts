@@ -279,9 +279,9 @@ export class OrganizationAuthorityApplication {
       membership_id: membership.membership_id,
       display_name: membership.display_name,
       membership_type: membership.membership_type,
-      status: 'active',
+      status: membership.status,
       provisioned_at: membership.provisioned_at,
-      revoked_at: null,
+      revoked_at: membership.revoked_at,
     };
   }
 
