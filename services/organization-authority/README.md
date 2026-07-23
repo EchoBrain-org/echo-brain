@@ -25,8 +25,11 @@ multi-organization operation require a later persistence design.
 
 The built-in JSON HTTP presentation binds only to loopback for use behind an
 authenticated TLS terminator. The terminator-to-origin hop is authenticated
-with `X-Echo-Proxy-Authorization: Echo-Proxy <token>`, configured through
-`ECHO_ORGANIZATION_AUTHORITY_TRUSTED_PROXY_TOKEN`. The terminator must strip
+with `X-Echo-Proxy-Authorization: Echo-Proxy <token>`. The token is supplied
+through the `trusted_proxy_token_ref` `file:` reference in `authority.json`,
+which points at the `0600` credential file; the
+`ECHO_ORGANIZATION_AUTHORITY_TRUSTED_PROXY_TOKEN` environment variable remains
+only for the legacy Phase-5 rehearsal form. The terminator must strip
 both ECHO proxy headers supplied by external clients, then set that header and
 `X-Echo-Authenticated-Client-Id: cid_<base64url-sha256>`. The client ID is a
 canonical 32-byte SHA-256 digest of the terminator's stable authenticated
