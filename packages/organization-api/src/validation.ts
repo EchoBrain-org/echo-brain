@@ -49,8 +49,21 @@ const BASE64URL_PATTERN = /^[A-Za-z0-9_-]+$/;
 const BASE64URL_TWO_CHARACTER_TAIL_PATTERN = /^[AQgw]$/;
 const BASE64URL_THREE_CHARACTER_TAIL_PATTERN = /^[AEIMQUYcgkosw048]$/;
 
-function fail(message: string): never {
-  throw new Error(`organization API: ${message}`);
+export class OrganizationApiValidationError extends Error {
+  constructor(detail: string, options?: { cause?: unknown }) {
+    super(`organization API: ${detail}`, options);
+    this.name = 'OrganizationApiValidationError';
+  }
+}
+
+export function isOrganizationApiValidationError(
+  value: unknown,
+): value is OrganizationApiValidationError {
+  return value instanceof OrganizationApiValidationError;
+}
+
+function fail(message: string, cause?: unknown): never {
+  throw new OrganizationApiValidationError(message, { cause });
 }
 
 function asRecord(value: unknown, label: string): Record<string, unknown> {
@@ -263,8 +276,8 @@ function assertTimestamp(
 function validateInnerDocument<T>(label: string, validate: () => T): T {
   try {
     return validate();
-  } catch {
-    fail(`${label} is invalid`);
+  } catch (error) {
+    fail(`${label} is invalid`, error);
   }
 }
 
@@ -431,8 +444,8 @@ export function validateCompleteOrganizationEnrollmentRequest(
         record.enrollment_request,
       ),
     };
-  } catch {
-    fail('enrollment_request is invalid');
+  } catch (error) {
+    fail('enrollment_request is invalid', error);
   }
 }
 

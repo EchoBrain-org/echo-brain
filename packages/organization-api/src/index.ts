@@ -35,6 +35,8 @@ export {
   MAX_ORGANIZATION_API_PAGE_ITEMS,
   MAX_ORGANIZATION_AUDIT_DETAIL_DEPTH,
   MAX_ORGANIZATION_AUDIT_DETAIL_NODES,
+  isOrganizationApiValidationError,
+  OrganizationApiValidationError,
   validateCompleteOrganizationEnrollmentRequest,
   validateCompletedOrganizationEnrollment,
   validateIssuedOrganizationEnrollmentGrant,

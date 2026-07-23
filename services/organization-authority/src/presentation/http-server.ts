@@ -3,6 +3,7 @@ import { createServer } from 'node:http';
 import type { IncomingMessage, Server, ServerResponse } from 'node:http';
 import { TextDecoder } from 'node:util';
 import {
+  isOrganizationApiValidationError,
   MAX_ORGANIZATION_API_BODY_BYTES,
   ORGANIZATION_API_ACCESS_LEASES_PATH,
   ORGANIZATION_API_ADMIN_AUDIT_PATH,
@@ -689,10 +690,7 @@ export function createOrganizationAuthorityHttpServer(
           );
           return;
         }
-        if (
-          error instanceof Error &&
-          error.message.startsWith('organization API:')
-        ) {
+        if (isOrganizationApiValidationError(error)) {
           sendJson(
             response,
             400,

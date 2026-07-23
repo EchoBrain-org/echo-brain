@@ -1,5 +1,6 @@
 import { Buffer } from 'node:buffer';
 import {
+  isOrganizationApiValidationError,
   MAX_ORGANIZATION_API_BODY_BYTES,
   ORGANIZATION_API_ACCESS_LEASES_PATH,
   ORGANIZATION_API_AUTHORITY_DESCRIPTOR_PATH,
@@ -100,8 +101,9 @@ function tryValidate<T>(
 ): T | null {
   try {
     return validate(value);
-  } catch {
-    return null;
+  } catch (error) {
+    if (isOrganizationApiValidationError(error)) return null;
+    throw error;
   }
 }
 

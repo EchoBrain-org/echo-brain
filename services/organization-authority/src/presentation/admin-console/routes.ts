@@ -2,6 +2,7 @@ import { Buffer } from 'node:buffer';
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import { TextDecoder } from 'node:util';
 import {
+  isOrganizationApiValidationError,
   MAX_ORGANIZATION_API_BODY_BYTES,
   validateIssueOrganizationEnrollmentGrantRequest,
   validateProvisionOrganizationMembershipRequest,
@@ -541,7 +542,7 @@ function mappedError(error: unknown): AdminConsoleHttpError {
       status === 401 ? 'Authorization failed.' : error.message,
     );
   }
-  if (error instanceof Error && error.message.startsWith('organization API:')) {
+  if (isOrganizationApiValidationError(error)) {
     return new AdminConsoleHttpError(
       400,
       'invalid_request',
