@@ -1,9 +1,10 @@
-import { mkdtempSync, rmSync } from 'node:fs';
+import { existsSync, mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import Database from 'better-sqlite3';
 import { afterEach, describe, expect, it } from 'vitest';
 import { openAuthorityDatabase } from '../src/adapters/persistence/sqlite/open-database.js';
+import { SqliteOrganizationAuthorityRepository } from '../src/adapters/persistence/sqlite/sqlite-authority-repository.js';
 
 const AUTHORITY_TABLES = [
   'authority_access_lease_requests',
@@ -51,6 +52,18 @@ describe('organization authority database migrations', () => {
     const path = databasePath();
     openAuthorityDatabase(path).close();
     expect(() => openAuthorityDatabase(path).close()).not.toThrow();
+  });
+
+  it('does not create a missing database when an existing file is required', () => {
+    const path = databasePath();
+
+    expect(
+      () =>
+        new SqliteOrganizationAuthorityRepository(path, {
+          fileMustExist: true,
+        }),
+    ).toThrow();
+    expect(existsSync(path)).toBe(false);
   });
 
   it('rejects a database newer than this authority binary', () => {

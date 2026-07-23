@@ -1,16 +1,21 @@
+import { createHash } from "node:crypto";
 import {
   cpSync,
   existsSync,
+  lstatSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
+  readlinkSync,
   readdirSync,
+  realpathSync,
   rmSync,
   symlinkSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { join, resolve } from "node:path";
+import { join, relative, resolve } from "node:path";
+import { pathToFileURL } from "node:url";
 import { afterAll, describe, expect, it, vi } from "vitest";
 import {
   spawnSanitizedChild,
@@ -18,9 +23,13 @@ import {
 } from "../../src/product/spawn-sanitized-child.js";
 
 const REPO_ROOT = resolve(import.meta.dirname, "../..");
-const temporaryRoot = mkdtempSync(
-  join(tmpdir(), "echo-organization-authority-artifact-"),
+const temporaryRoot = realpathSync(
+  mkdtempSync(join(tmpdir(), "echo-organization-authority-artifact-")),
 );
+const MAX_LIFECYCLE_OUTPUT_BYTES = 64 * 1024;
+const LIFECYCLE_COMMAND_TIMEOUT_MS = 15_000;
+const READINESS_TIMEOUT_MS = 15_000;
+const SHUTDOWN_DEADLINE_MS = 10_000;
 
 interface CommandResult {
   status: number | null;
@@ -31,20 +40,281 @@ interface CommandResult {
 function run(
   command: string,
   args: readonly string[],
-  options: { cwd?: string; env?: NodeJS.ProcessEnv } = {},
+  options: {
+    cwd?: string;
+    env?: NodeJS.ProcessEnv;
+    maxBuffer?: number;
+    timeout?: number;
+  } = {},
 ): CommandResult {
   const result = spawnSanitizedChildSync(command, args, {
     cwd: options.cwd ?? REPO_ROOT,
     encoding: "utf8",
     env: options.env,
-    maxBuffer: 64 * 1024 * 1024,
-    timeout: 180_000,
+    maxBuffer: options.maxBuffer ?? 64 * 1024 * 1024,
+    timeout: options.timeout ?? 180_000,
   });
   return {
     status: result.status,
     stdout: result.stdout ?? "",
     stderr: result.stderr || result.error?.message || "",
   };
+}
+
+function runLifecycleCommand(
+  command: string,
+  args: readonly string[],
+  options: { cwd: string; env: NodeJS.ProcessEnv },
+): CommandResult {
+  return run(command, args, {
+    ...options,
+    maxBuffer: MAX_LIFECYCLE_OUTPUT_BYTES,
+    timeout: LIFECYCLE_COMMAND_TIMEOUT_MS,
+  });
+}
+
+function parseCommandJson<T>(result: CommandResult, label: string): T {
+  expect(result.status, `${label}: ${result.stderr || result.stdout}`).toBe(0);
+  expect(
+    Buffer.byteLength(result.stdout),
+    `${label} stdout`,
+  ).toBeLessThanOrEqual(MAX_LIFECYCLE_OUTPUT_BYTES);
+  expect(
+    Buffer.byteLength(result.stderr),
+    `${label} stderr`,
+  ).toBeLessThanOrEqual(MAX_LIFECYCLE_OUTPUT_BYTES);
+  return JSON.parse(result.stdout) as T;
+}
+
+function reserveLoopbackPort(environment: NodeJS.ProcessEnv): number {
+  const script = `
+import { createServer } from "node:net";
+const server = createServer();
+server.once("error", (error) => {
+  process.stderr.write(error.message + "\\n");
+  process.exitCode = 1;
+});
+server.listen(0, "127.0.0.1", () => {
+  const address = server.address();
+  if (address === null || typeof address === "string") {
+    process.stderr.write("could not reserve a loopback port\\n");
+    process.exitCode = 1;
+    server.close();
+    return;
+  }
+  process.stdout.write(String(address.port) + "\\n");
+  server.close();
+});`;
+  const result = runLifecycleCommand(
+    process.execPath,
+    ["--input-type=module", "--eval", script],
+    { cwd: temporaryRoot, env: environment },
+  );
+  expect(result.status, result.stderr).toBe(0);
+  expect(result.stdout.trim()).toMatch(/^[1-9][0-9]{0,4}$/);
+  const port = Number(result.stdout.trim());
+  expect(port).toBeLessThanOrEqual(65_535);
+  return port;
+}
+
+function hashInstalledTree(root: string): string {
+  const hash = createHash("sha256");
+  const visit = (directory: string, prefix = ""): void => {
+    const entries = readdirSync(directory, { withFileTypes: true }).sort(
+      (left, right) => left.name.localeCompare(right.name),
+    );
+    for (const entry of entries) {
+      const path = join(directory, entry.name);
+      const relativePath =
+        prefix === "" ? entry.name : `${prefix}/${entry.name}`;
+      const state = lstatSync(path);
+      if (state.isDirectory()) {
+        hash.update(
+          `directory\0${relativePath}\0${String(state.mode & 0o777)}\0`,
+        );
+        visit(path, relativePath);
+      } else if (state.isFile()) {
+        hash.update(
+          `file\0${relativePath}\0${String(state.mode & 0o777)}\0${String(
+            state.size,
+          )}\0`,
+        );
+        hash.update(readFileSync(path));
+      } else if (state.isSymbolicLink()) {
+        hash.update(`link\0${relativePath}\0${readlinkSync(path)}\0`);
+      } else {
+        throw new Error(`unsupported entry in installed tree: ${relativePath}`);
+      }
+    }
+  };
+  visit(root);
+  return hash.digest("hex");
+}
+
+interface AuthorityInitializationOutput {
+  kind: "echo-organization-authority-development-initialization";
+  created: boolean;
+  authority_descriptor: {
+    authority_id: string;
+    organization_id: string;
+  };
+}
+
+interface AuthorityStatusOutput {
+  kind: "echo-organization-authority-status";
+  ok: boolean;
+  initialized: boolean;
+  running: boolean;
+  healthy: boolean;
+  authority_id: string | null;
+  organization_id: string | null;
+}
+
+interface AuthorityReadinessOutput {
+  schema_version: 1;
+  kind: "echo-organization-authority-ready";
+  host: string;
+  port: number;
+  message: string;
+}
+
+interface CapturedAuthorityProcess {
+  child: ReturnType<typeof spawnSanitizedChild>;
+  logs: { stdout: string; stderr: string };
+  readiness: Promise<AuthorityReadinessOutput>;
+  closed: Promise<{ status: number | null; signal: NodeJS.Signals | null }>;
+}
+
+function startInstalledAuthority(
+  executable: string,
+  configPath: string,
+  options: { cwd: string; env: NodeJS.ProcessEnv },
+): CapturedAuthorityProcess {
+  const child = spawnSanitizedChild(
+    executable,
+    ["serve", "--config", configPath],
+    options,
+  );
+  const logs = { stdout: "", stderr: "" };
+  let readinessBuffer = "";
+  let readinessSettled = false;
+  let rejectReadiness: (error: Error) => void = () => undefined;
+  let resolveReadiness: (value: AuthorityReadinessOutput) => void = () =>
+    undefined;
+  const readiness = new Promise<AuthorityReadinessOutput>(
+    (resolveReady, reject) => {
+      resolveReadiness = resolveReady;
+      rejectReadiness = reject;
+    },
+  );
+  const settleReadinessFailure = (message: string): void => {
+    if (readinessSettled) return;
+    readinessSettled = true;
+    clearTimeout(readinessTimer);
+    rejectReadiness(new Error(`${message}: ${logs.stderr || logs.stdout}`));
+  };
+  const append = (stream: "stdout" | "stderr", chunk: string): boolean => {
+    const value = logs[stream] + chunk;
+    if (Buffer.byteLength(value) > MAX_LIFECYCLE_OUTPUT_BYTES) {
+      logs[stream] = value.slice(0, MAX_LIFECYCLE_OUTPUT_BYTES);
+      settleReadinessFailure(`authority ${stream} exceeded its output limit`);
+      child.kill("SIGKILL");
+      return false;
+    }
+    logs[stream] = value;
+    return true;
+  };
+  child.stdout.setEncoding("utf8");
+  child.stderr.setEncoding("utf8");
+  child.stdout.on("data", (chunk: string) => {
+    append("stdout", chunk);
+  });
+  child.stderr.on("data", (chunk: string) => {
+    if (!append("stderr", chunk) || readinessSettled) return;
+    readinessBuffer += chunk;
+    for (;;) {
+      const newline = readinessBuffer.indexOf("\n");
+      if (newline < 0) break;
+      const line = readinessBuffer.slice(0, newline);
+      readinessBuffer = readinessBuffer.slice(newline + 1);
+      try {
+        const value = JSON.parse(line) as Partial<AuthorityReadinessOutput>;
+        if (
+          Object.keys(value).sort().join(",") ===
+            "host,kind,message,port,schema_version" &&
+          value.schema_version === 1 &&
+          value.kind === "echo-organization-authority-ready" &&
+          typeof value.host === "string" &&
+          typeof value.port === "number" &&
+          typeof value.message === "string"
+        ) {
+          readinessSettled = true;
+          clearTimeout(readinessTimer);
+          resolveReadiness(value as AuthorityReadinessOutput);
+          return;
+        }
+      } catch {
+        // A non-JSON diagnostic is retained in the bounded log for failure output.
+      }
+    }
+  });
+  child.once("error", (error) => {
+    settleReadinessFailure(
+      `authority process failed to launch: ${error.message}`,
+    );
+  });
+  const closed = new Promise<{
+    status: number | null;
+    signal: NodeJS.Signals | null;
+  }>((resolveClosed) => {
+    child.once("close", (status, signal) => {
+      settleReadinessFailure(
+        `authority process exited before readiness (${String(status)}, ${String(signal)})`,
+      );
+      resolveClosed({ status, signal });
+    });
+  });
+  const readinessTimer = setTimeout(() => {
+    settleReadinessFailure("authority readiness deadline exceeded");
+    child.kill("SIGKILL");
+  }, READINESS_TIMEOUT_MS);
+  return { child, logs, readiness, closed };
+}
+
+async function stopInstalledAuthority(
+  authority: CapturedAuthorityProcess,
+): Promise<void> {
+  const startedAt = Date.now();
+  expect(authority.child.kill("SIGTERM"), authority.logs.stderr).toBe(true);
+  let shutdownTimer: ReturnType<typeof setTimeout> | undefined;
+  const timedOut = Symbol("authority-shutdown-timeout");
+  const outcome = await Promise.race([
+    authority.closed,
+    new Promise<typeof timedOut>((resolveTimeout) => {
+      shutdownTimer = setTimeout(
+        () => resolveTimeout(timedOut),
+        SHUTDOWN_DEADLINE_MS,
+      );
+    }),
+  ]);
+  if (shutdownTimer !== undefined) clearTimeout(shutdownTimer);
+  if (outcome === timedOut) {
+    authority.child.kill("SIGKILL");
+    await authority.closed;
+    throw new Error(
+      `installed authority did not stop within ${String(SHUTDOWN_DEADLINE_MS)}ms: ${authority.logs.stderr}`,
+    );
+  }
+  expect(outcome, authority.logs.stderr).toEqual({ status: 0, signal: null });
+  expect(Date.now() - startedAt).toBeLessThanOrEqual(SHUTDOWN_DEADLINE_MS);
+}
+
+async function cleanUpOwnedAuthority(
+  authority: CapturedAuthorityProcess | undefined,
+): Promise<void> {
+  if (authority === undefined || authority.child.exitCode !== null) return;
+  authority.child.kill("SIGKILL");
+  await authority.closed;
 }
 
 function linkBuildDependencies(fixture: string): void {
@@ -305,6 +575,161 @@ describe("exact-commit organization authority artifact", () => {
       target: "organization-authority",
     });
 
+    const operatorRootPath = join(temporaryRoot, "authority-operator");
+    mkdirSync(operatorRootPath, { mode: 0o700 });
+    const operatorRoot = realpathSync(operatorRootPath);
+    const isolatedHome = join(operatorRoot, "home");
+    const isolatedTmp = join(operatorRoot, "tmp");
+    mkdirSync(isolatedHome, { mode: 0o700 });
+    mkdirSync(isolatedTmp, { mode: 0o700 });
+    const lifecycleEnvironment: NodeJS.ProcessEnv = {
+      HOME: isolatedHome,
+      TMPDIR: isolatedTmp,
+      NODE_OPTIONS: "",
+      NODE_PATH: "",
+    };
+    const installPrefix = join(temporaryRoot, "installed-authority");
+    const installScript = `
+const { installRehearsalArtifact } = await import(process.argv[1]);
+const result = installRehearsalArtifact({
+  artifactDirectory: process.argv[2],
+  prefix: process.argv[3],
+  cacheDirectory: process.argv[4],
+  expectedPackage: "@echo-brain/organization-authority",
+  expectedTarget: "organization-authority",
+  acknowledgeUnsupportedHost: true,
+});
+process.stdout.write(JSON.stringify(result) + "\\n");`;
+    const installed = parseCommandJson<{
+      packageName: string;
+      packageRoot: string;
+      sourceSha: string;
+    }>(
+      run(
+        process.execPath,
+        [
+          "--input-type=module",
+          "--eval",
+          installScript,
+          "--",
+          pathToFileURL(
+            join(fixture.root, "tools/phase5/install-rehearsal-artifact.mjs"),
+          ).href,
+          outDir,
+          installPrefix,
+          join(REPO_ROOT, ".npm-cache"),
+        ],
+        {
+          cwd: operatorRoot,
+          env: lifecycleEnvironment,
+          maxBuffer: MAX_LIFECYCLE_OUTPUT_BYTES,
+          // The installer gives its inner npm ci 180 seconds. The wrapper must
+          // outlive that child so it can reap native-build failures cleanly.
+          timeout: 240_000,
+        },
+      ),
+      "authority rehearsal install",
+    );
+    expect(installed).toMatchObject({
+      packageName: "@echo-brain/organization-authority",
+      packageRoot: join(
+        installPrefix,
+        "node_modules/@echo-brain/organization-authority",
+      ),
+      sourceSha: fixture.sha,
+    });
+
+    const authorityExecutable = join(
+      installPrefix,
+      "node_modules/.bin/echo-organization-authority",
+    );
+    expect(existsSync(authorityExecutable)).toBe(true);
+    const installedTreeBeforeLifecycle = hashInstalledTree(installPrefix);
+    const configPath = join(operatorRoot, "authority.json");
+    const stateDirectory = join(operatorRoot, "authority-state");
+    expect(relative(installPrefix, configPath).startsWith("..")).toBe(true);
+    expect(relative(installPrefix, stateDirectory).startsWith("..")).toBe(true);
+    const port = reserveLoopbackPort(lifecycleEnvironment);
+    const initialization = parseCommandJson<AuthorityInitializationOutput>(
+      runLifecycleCommand(
+        authorityExecutable,
+        [
+          "init-development",
+          "--config",
+          configPath,
+          "--state-dir",
+          stateDirectory,
+          "--organization-name",
+          "Artifact Lifecycle Company",
+          "--port",
+          String(port),
+        ],
+        { cwd: operatorRoot, env: lifecycleEnvironment },
+      ),
+      "installed authority initialization",
+    );
+    expect(initialization).toMatchObject({
+      kind: "echo-organization-authority-development-initialization",
+      created: true,
+    });
+    const expectedIdentity = {
+      authority_id: initialization.authority_descriptor.authority_id,
+      organization_id: initialization.authority_descriptor.organization_id,
+    };
+    const readStatus = (label: string): AuthorityStatusOutput =>
+      parseCommandJson<AuthorityStatusOutput>(
+        runLifecycleCommand(
+          authorityExecutable,
+          ["status", "--config", configPath],
+          { cwd: operatorRoot, env: lifecycleEnvironment },
+        ),
+        label,
+      );
+    expect(readStatus("initial stopped status")).toMatchObject({
+      kind: "echo-organization-authority-status",
+      ok: true,
+      initialized: true,
+      running: false,
+      healthy: false,
+      ...expectedIdentity,
+    });
+
+    let authority: CapturedAuthorityProcess | undefined;
+    try {
+      for (const generation of ["first", "restarted"] as const) {
+        authority = startInstalledAuthority(authorityExecutable, configPath, {
+          cwd: operatorRoot,
+          env: lifecycleEnvironment,
+        });
+        expect(await authority.readiness).toEqual({
+          schema_version: 1,
+          kind: "echo-organization-authority-ready",
+          host: "127.0.0.1",
+          port,
+          message: expect.any(String),
+        });
+        expect(readStatus(`${generation} healthy status`)).toMatchObject({
+          ok: true,
+          initialized: true,
+          running: true,
+          healthy: true,
+          ...expectedIdentity,
+        });
+        await stopInstalledAuthority(authority);
+        authority = undefined;
+        expect(readStatus(`${generation} stopped status`)).toMatchObject({
+          ok: true,
+          initialized: true,
+          running: false,
+          healthy: false,
+          ...expectedIdentity,
+        });
+      }
+    } finally {
+      await cleanUpOwnedAuthority(authority);
+    }
+    expect(hashInstalledTree(installPrefix)).toBe(installedTreeBeforeLifecycle);
+
     const tamperedDir = join(temporaryRoot, "tampered-authority-artifact");
     cpSync(outDir, tamperedDir, { recursive: true });
     writeFileSync(join(tamperedDir, built.artifact), "tampered\n", {
@@ -360,5 +785,5 @@ describe("exact-commit organization authority artifact", () => {
     );
     expect(overwrite.status).toBe(1);
     expect(overwrite.stderr).toContain("--out-dir already exists");
-  }, 120_000);
+  }, 420_000);
 });

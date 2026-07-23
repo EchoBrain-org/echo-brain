@@ -35,7 +35,10 @@ import type {
   StoredAuthorityMetadata,
   StoredEnrollmentGrant,
 } from '../../../application/ports/authority-repository.js';
-import { openAuthorityDatabase } from './open-database.js';
+import {
+  openAuthorityDatabase,
+  type OpenAuthorityDatabaseOptions,
+} from './open-database.js';
 
 interface MetadataRow {
   authority_id: string;
@@ -1010,11 +1013,18 @@ class SqliteAuthorityTransaction
 export class SqliteOrganizationAuthorityRepository implements OrganizationAuthorityRepository {
   private readonly database: Database.Database;
   private readonly transaction: SqliteAuthorityTransaction;
+  private readonly allowInitialization: boolean;
   private closed = false;
 
-  constructor(databasePath: string) {
-    this.database = openAuthorityDatabase(databasePath);
+  constructor(
+    databasePath: string,
+    options: OpenAuthorityDatabaseOptions & {
+      allowInitialization?: boolean;
+    } = {},
+  ) {
+    this.database = openAuthorityDatabase(databasePath, options);
     this.transaction = new SqliteAuthorityTransaction(this.database);
+    this.allowInitialization = options.allowInitialization ?? true;
   }
 
   initialize(input: InitializeAuthorityRepositoryInput): void {
@@ -1044,6 +1054,11 @@ export class SqliteOrganizationAuthorityRepository implements OrganizationAuthor
         )
         .get() as MetadataRow | undefined;
       if (existing === undefined) {
+        if (!this.allowInitialization) {
+          throw new Error(
+            'authority database must already contain initialized metadata when serving',
+          );
+        }
         this.database
           .prepare(
             `INSERT INTO authority_metadata (

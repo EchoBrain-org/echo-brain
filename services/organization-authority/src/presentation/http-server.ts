@@ -22,6 +22,12 @@ import {
   AuthorityOperationError,
   StaleAccessStateError,
 } from '../domain/errors.js';
+import {
+  assertAuthorityRuntimeStatusNonce,
+  AUTHORITY_RUNTIME_STATUS_NONCE_HEADER,
+  AUTHORITY_RUNTIME_STATUS_PATH,
+  type AuthorityRuntimeStatusV1,
+} from '../domain/runtime-status.js';
 import type { OrganizationAuthorityHttpApplication } from './organization-authority-http-application.js';
 import {
   TrustedProxyIdentityError,
@@ -257,6 +263,9 @@ export interface OrganizationAuthorityHttpServerOptions {
   application: OrganizationAuthorityHttpApplication;
   adminAuthenticator: AdminRequestAuthenticator;
   clientIdentityResolver: RequestClientIdentityResolver;
+  runtimeStatus?: {
+    respond(nonce: string): AuthorityRuntimeStatusV1;
+  };
   rateLimiter?: PostRequestRateLimiter;
 }
 
@@ -283,6 +292,34 @@ export function createOrganizationAuthorityHttpServer(
       try {
         const method = request.method ?? '';
         const url = new URL(request.url ?? '/', 'http://authority.invalid');
+        if (
+          method === 'GET' &&
+          url.pathname === AUTHORITY_RUNTIME_STATUS_PATH
+        ) {
+          if (url.search !== '' || options.runtimeStatus === undefined) {
+            throw new AuthorityOperationError(
+              'invalid_request',
+              'runtime status request is invalid',
+            );
+          }
+          const nonce = request.headers[AUTHORITY_RUNTIME_STATUS_NONCE_HEADER];
+          if (typeof nonce !== 'string') {
+            throw new AuthorityOperationError(
+              'invalid_request',
+              'runtime status nonce is unavailable',
+            );
+          }
+          try {
+            assertAuthorityRuntimeStatusNonce(nonce);
+          } catch {
+            throw new AuthorityOperationError(
+              'invalid_request',
+              'runtime status nonce is invalid',
+            );
+          }
+          sendJson(response, 200, options.runtimeStatus.respond(nonce));
+          return;
+        }
         if (url.search !== '') {
           throw new AuthorityOperationError(
             'invalid_request',

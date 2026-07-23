@@ -4,7 +4,7 @@ import {
   sign as signMessage,
   type KeyObject,
 } from 'node:crypto';
-import { chmodSync, mkdtempSync, rmSync } from 'node:fs';
+import { chmodSync, mkdtempSync, realpathSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
@@ -22,6 +22,7 @@ import { HttpOrganizationAuthorityClient } from '../../src/product/organization/
 import { LocalOrganizationCoordinator } from '../../src/product/organization/enrollment/local-organization-coordinator.js';
 import { SqliteOrganizationStateStore } from '../../src/product/organization/state/sqlite-organization-state-store.js';
 import { DevelopmentFileOrganizationAuthoritySigner } from '../../services/organization-authority/src/adapters/security/development-file-authority-signer.js';
+import { SqliteOrganizationAuthorityRepository } from '../../services/organization-authority/src/adapters/persistence/sqlite/sqlite-authority-repository.js';
 import { startOrganizationAuthority } from '../../services/organization-authority/src/composition/runtime.js';
 import {
   TRUSTED_PROXY_AUTHORIZATION_HEADER,
@@ -139,10 +140,12 @@ afterEach(() => {
 
 describe('local organization over the central HTTP authority', () => {
   it('enrolls, refreshes, persists permission, and receives terminal revocation', async () => {
-    const directory = mkdtempSync(join(tmpdir(), 'echo-org-http-'));
+    const directory = realpathSync(
+      mkdtempSync(join(tmpdir(), 'echo-org-http-')),
+    );
     temporaryDirectories.push(directory);
     chmodSync(directory, 0o700);
-    const keyDirectory = join(directory, 'authority-key');
+    const keyDirectory = join(directory, 'keys');
     const signer = DevelopmentFileOrganizationAuthoritySigner.open({
       directory: keyDirectory,
       authority_id: AUTHORITY_ID,
@@ -150,13 +153,29 @@ describe('local organization over the central HTTP authority', () => {
     });
     const authorityDescriptor = await signer.inspect();
     const authorityPin = organizationAuthorityPinSha256(authorityDescriptor);
+    const authorityDatabasePath = join(directory, 'authority.sqlite');
+    const authorityRepository = new SqliteOrganizationAuthorityRepository(
+      authorityDatabasePath,
+    );
+    try {
+      authorityRepository.initialize({
+        descriptor: authorityDescriptor,
+        authority_pin_sha256: authorityPin,
+        organization_display_name: 'Example Company',
+        maximum_active_lease_ttl_ms: 60_000,
+        initialized_at: new Date().toISOString(),
+      });
+    } finally {
+      authorityRepository.close();
+    }
     const runtime = await startOrganizationAuthority({
+      state_directory: directory,
       authority_id: AUTHORITY_ID,
       organization_id: ORGANIZATION_ID,
       key_directory: keyDirectory,
       organization_display_name: 'Example Company',
       authority_pin_sha256: authorityPin,
-      database_path: join(directory, 'authority.sqlite'),
+      database_path: authorityDatabasePath,
       admin_token: ADMIN_TOKEN,
       trusted_proxy_token: PROXY_TOKEN,
       host: '127.0.0.1',

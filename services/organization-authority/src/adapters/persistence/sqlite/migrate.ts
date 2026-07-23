@@ -37,6 +37,10 @@ function authorityMigrations(): readonly AuthorityMigration[] {
   return migrations;
 }
 
+export function currentAuthoritySchemaVersion(): number {
+  return authorityMigrations().length;
+}
+
 export function migrateAuthorityDatabase(database: Database.Database): void {
   const migrations = authorityMigrations();
   const currentSchemaVersion = migrations.length;

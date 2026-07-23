@@ -78,7 +78,7 @@
         "@echo-brain/organization-api"
       ],
       "allowed_external_packages": ["better-sqlite3"],
-      "allowed_node_builtins": ["crypto", "fs", "path"]
+      "allowed_node_builtins": ["crypto", "events", "fs", "net", "path"]
     },
     {
       "name": "authority-presentation-calls-application",
@@ -105,7 +105,7 @@
         "@echo-brain/organization-api"
       ],
       "allowed_external_packages": [],
-      "allowed_node_builtins": ["events", "net"]
+      "allowed_node_builtins": ["crypto", "events", "fs", "http", "net", "path"]
     }
   ]
 }

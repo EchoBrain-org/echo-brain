@@ -3,12 +3,22 @@ import { dirname } from 'node:path';
 import Database from 'better-sqlite3';
 import { migrateAuthorityDatabase } from './migrate.js';
 
-export function openAuthorityDatabase(databasePath: string): Database.Database {
+export interface OpenAuthorityDatabaseOptions {
+  fileMustExist?: boolean;
+}
+
+export function openAuthorityDatabase(
+  databasePath: string,
+  options: OpenAuthorityDatabaseOptions = {},
+): Database.Database {
+  const fileMustExist = options.fileMustExist ?? false;
   if (databasePath !== ':memory:') {
     const databaseDirectory = dirname(databasePath);
-    const directoryExisted = existsSync(databaseDirectory);
-    mkdirSync(databaseDirectory, { recursive: true, mode: 0o700 });
-    if (!directoryExisted) chmodSync(databaseDirectory, 0o700);
+    if (!fileMustExist) {
+      const directoryExisted = existsSync(databaseDirectory);
+      mkdirSync(databaseDirectory, { recursive: true, mode: 0o700 });
+      if (!directoryExisted) chmodSync(databaseDirectory, 0o700);
+    }
     const directoryState = lstatSync(databaseDirectory);
     const currentUid = process.getuid?.();
     if (
@@ -34,16 +44,20 @@ export function openAuthorityDatabase(databasePath: string): Database.Database {
       }
     }
   }
-  const database = new Database(databasePath);
+  const database = new Database(databasePath, { fileMustExist });
   try {
     if (databasePath !== ':memory:') chmodSync(databasePath, 0o600);
-    database.pragma('journal_mode = WAL');
+    database.pragma('trusted_schema = OFF');
+    // The Phase 1 authority is explicitly one process on one volume. DELETE
+    // journaling lets a stopped authority be inspected through SQLite's true
+    // read-only mode without creating WAL/SHM coordination files. A future
+    // multi-replica storage design must choose its own concurrency contract.
+    database.pragma('journal_mode = DELETE');
     database.pragma('synchronous = FULL');
     database.pragma('foreign_keys = ON');
     database.pragma('busy_timeout = 5000');
     database.pragma('temp_store = MEMORY');
     migrateAuthorityDatabase(database);
-    database.pragma('trusted_schema = OFF');
     return database;
   } catch (error) {
     database.close();

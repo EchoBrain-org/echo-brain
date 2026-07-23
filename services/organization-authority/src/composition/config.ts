@@ -1,4 +1,5 @@
 import { assertFederationId } from '@echo-brain/federation-protocol';
+import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import {
   MAX_AUTHORITY_ACCESS_REQUEST_AGE_MS,
   MAX_AUTHORITY_ACTIVE_LEASE_TTL_MS,
@@ -11,6 +12,7 @@ export interface DevelopmentSignerConfig {
 }
 
 export interface AuthorityServeConfig extends DevelopmentSignerConfig {
+  state_directory: string;
   organization_display_name: string;
   authority_pin_sha256: `sha256:${string}`;
   database_path: string;
@@ -93,6 +95,9 @@ export function loadAuthorityServeConfig(
     'ECHO_ORGANIZATION_AUTHORITY_DATABASE_PATH',
   );
   assertPersistentAuthorityDatabasePath(databasePath);
+  const stateDirectory =
+    environment.ECHO_ORGANIZATION_AUTHORITY_STATE_DIRECTORY ??
+    dirname(databasePath);
   const adminToken = required(
     environment,
     'ECHO_ORGANIZATION_AUTHORITY_ADMIN_TOKEN',
@@ -102,8 +107,9 @@ export function loadAuthorityServeConfig(
     'ECHO_ORGANIZATION_AUTHORITY_TRUSTED_PROXY_TOKEN',
   );
   assertIndependentAuthorityTokens(adminToken, trustedProxyToken);
-  return {
+  const config: AuthorityServeConfig = {
     ...signer,
+    state_directory: stateDirectory,
     organization_display_name: required(
       environment,
       'ECHO_ORGANIZATION_DISPLAY_NAME',
@@ -135,6 +141,61 @@ export function loadAuthorityServeConfig(
       MAX_AUTHORITY_ACCESS_REQUEST_AGE_MS,
     ),
   };
+  assertAuthorityServeStateBoundary(config);
+  return config;
+}
+
+function normalizedAbsolute(path: string): boolean {
+  return (
+    path.length > 0 &&
+    !path.includes('\0') &&
+    isAbsolute(path) &&
+    resolve(path) === path
+  );
+}
+
+function pathIsWithin(path: string, parent: string): boolean {
+  const difference = relative(parent, path);
+  return (
+    difference !== '' &&
+    difference !== '..' &&
+    !difference.startsWith(`..${sep}`) &&
+    !isAbsolute(difference)
+  );
+}
+
+export function assertAuthorityServeStateBoundary(
+  config: Pick<
+    AuthorityServeConfig,
+    'state_directory' | 'database_path' | 'key_directory'
+  >,
+): void {
+  if (
+    !normalizedAbsolute(config.state_directory) ||
+    config.state_directory === resolve('/')
+  ) {
+    throw new Error(
+      'authority state directory must be a normalized absolute path',
+    );
+  }
+  if (
+    !normalizedAbsolute(config.database_path) ||
+    !pathIsWithin(config.database_path, config.state_directory) ||
+    config.database_path !== join(config.state_directory, 'authority.sqlite')
+  ) {
+    throw new Error(
+      'authority database must use the canonical state-directory path',
+    );
+  }
+  if (
+    !normalizedAbsolute(config.key_directory) ||
+    !pathIsWithin(config.key_directory, config.state_directory) ||
+    config.key_directory !== join(config.state_directory, 'keys')
+  ) {
+    throw new Error(
+      'authority key directory must use the canonical state-directory path',
+    );
+  }
 }
 
 export function assertPersistentAuthorityDatabasePath(

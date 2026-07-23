@@ -20,7 +20,15 @@
   },
   "mutable_state": {
     "packaged": false,
-    "owned_paths": ["authority SQLite database", "authority signing keys"],
+    "owned_paths": [
+      "secret-free authority runtime config",
+      "private initialization manifest binding config path and runtime config",
+      "authority SQLite database",
+      "authority public identity record",
+      "authority signing keys",
+      "administrator and trusted-proxy credential files",
+      "ephemeral authority runtime coordination lock"
+    ],
     "rule": "Mutable authority state must live outside the immutable installation prefix."
   }
 }

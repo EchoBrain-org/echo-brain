@@ -31,7 +31,8 @@ import { validateOrganizationAuthorityDescriptor } from '@echo-brain/organizatio
 import type { OrganizationAuthorityDescriptorV1 } from '@echo-brain/organization-protocol';
 import type { OrganizationAuthoritySigner } from '../../application/ports/runtime-ports.js';
 
-const KEY_FILENAME = 'authority-development-key.v1.json';
+export const DEVELOPMENT_AUTHORITY_KEY_FILENAME =
+  'authority-development-key.v1.json';
 const MAX_KEY_FILE_BYTES = 8 * 1024;
 
 interface StoredDevelopmentKey {
@@ -159,7 +160,11 @@ export class DevelopmentFileOrganizationAuthoritySigner implements OrganizationA
     private readonly pinnedDescriptor: OrganizationAuthorityDescriptorV1,
   ) {}
 
-  static open(options: {
+  /**
+   * Creates the development identity exactly once, or reopens the exact same
+   * identity. Only explicit initialization paths may call this method.
+   */
+  static initialize(options: {
     directory: string;
     authority_id: string;
     organization_id: string;
@@ -179,7 +184,7 @@ export class DevelopmentFileOrganizationAuthoritySigner implements OrganizationA
       }
     }
     assertPrivateDirectory(options.directory);
-    const keyPath = join(options.directory, KEY_FILENAME);
+    const keyPath = join(options.directory, DEVELOPMENT_AUTHORITY_KEY_FILENAME);
     if (!existsSync(keyPath)) {
       const pair = generateKeyPairSync('ec', { namedCurve: 'prime256v1' });
       const publicBytes = pair.publicKey.export({
@@ -211,7 +216,7 @@ export class DevelopmentFileOrganizationAuthoritySigner implements OrganizationA
         private_key_pkcs8_der_base64: privateBytes.toString('base64'),
       };
       const noFollow = fsConstants.O_NOFOLLOW ?? 0;
-      let file: number;
+      let file: number | undefined;
       try {
         file = openSync(
           keyPath,
@@ -223,17 +228,14 @@ export class DevelopmentFileOrganizationAuthoritySigner implements OrganizationA
         );
       } catch (error) {
         if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error;
-        const concurrent = readKeyFile(keyPath);
-        return new DevelopmentFileOrganizationAuthoritySigner(
-          keyPath,
-          concurrent.descriptor,
-        );
       }
-      try {
-        writeFileSync(file, canonicalJson(stored), 'utf8');
-        fsyncSync(file);
-      } finally {
-        closeSync(file);
+      if (file !== undefined) {
+        try {
+          writeFileSync(file, canonicalJson(stored), 'utf8');
+          fsyncSync(file);
+        } finally {
+          closeSync(file);
+        }
       }
     }
     const stored = readKeyFile(keyPath);
@@ -247,6 +249,51 @@ export class DevelopmentFileOrganizationAuthoritySigner implements OrganizationA
       keyPath,
       stored.descriptor,
     );
+  }
+
+  /**
+   * Opens a pre-existing identity without creating directories or key files.
+   * Runtime and diagnostic paths use this fail-closed entrypoint.
+   */
+  static openExisting(options: {
+    directory: string;
+    authority_id: string;
+    organization_id: string;
+  }): DevelopmentFileOrganizationAuthoritySigner {
+    assertFederationId(options.authority_id, 'oau', 'development authority_id');
+    assertFederationId(
+      options.organization_id,
+      'org',
+      'development organization_id',
+    );
+    if (!existsSync(options.directory)) {
+      fail('directory does not exist; run init-development first');
+    }
+    assertPrivateDirectory(options.directory);
+    const keyPath = join(options.directory, DEVELOPMENT_AUTHORITY_KEY_FILENAME);
+    if (!existsSync(keyPath)) {
+      fail('key file does not exist; run init-development first');
+    }
+    const stored = readKeyFile(keyPath);
+    if (
+      stored.descriptor.authority_id !== options.authority_id ||
+      stored.descriptor.organization_id !== options.organization_id
+    ) {
+      fail('persisted key belongs to another authority or organization');
+    }
+    return new DevelopmentFileOrganizationAuthoritySigner(
+      keyPath,
+      stored.descriptor,
+    );
+  }
+
+  /** @deprecated Use initialize or openExisting to make mutation explicit. */
+  static open(options: {
+    directory: string;
+    authority_id: string;
+    organization_id: string;
+  }): DevelopmentFileOrganizationAuthoritySigner {
+    return DevelopmentFileOrganizationAuthoritySigner.initialize(options);
   }
 
   async inspect(): Promise<OrganizationAuthorityDescriptorV1> {

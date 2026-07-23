@@ -1,6 +1,7 @@
 # Organization authority service
 
-**Status:** Phase 4 single-organization onboarding/access runtime
+**Status:** single-organization onboarding/access runtime with a standalone
+operator lifecycle
 
 This service is centrally hosted for exactly one configured organization. It
 implements administrator-authenticated membership and one-time enrollment-grant
@@ -30,6 +31,8 @@ client identity; raw client identifiers and `X-Forwarded-For` are not trusted.
 Missing, duplicated, malformed, or incorrectly authenticated proxy identity
 fails closed before routing. POST rate limits are isolated by authenticated
 client and route class, so clients do not share the loopback proxy's bucket.
+The terminator must keep `/_echo/runtime-status` on the private origin hop; it
+is an operator ownership proof and is not an external API route.
 
 Administrator routes use
 `Authorization: Bearer <token>`. Enrollment uses
@@ -65,19 +68,78 @@ the signer port. Enrollment signing, installation private-key use,
 authority-result verification, and local high-watermark storage remain
 installation-owned.
 
-## Development lifecycle
+## Development operator lifecycle
 
-Run `node dist/main.js init-development` once with the explicit development
-signer opt-in, authority/organization IDs, and private key directory. It emits
-the descriptor and pin for independent retention. Then run
-`node dist/main.js serve` with that same identity plus the pin, database path,
-organization display name, a 32-character-or-longer admin token, and an
-independent 32-character-or-longer trusted-proxy token. The serving process
-requires those two tokens to be different credentials and rejects SQLite
-`:memory:`; its authority database must live on persistent storage.
-Configuration uses the `ECHO_ORGANIZATION_AUTHORITY_*` variables defined and
-validated in `src/composition/config.ts`; no default enables the file signer,
-permits an unauthenticated proxy hop, or exposes a non-loopback listener.
+From the repository, build the workspaces once and use the authority-specific
+CLI without starting the employee product:
+
+```sh
+npm run build:workspaces
+npm run organization-authority:cli -- init-development \
+  --config /absolute/operator/authority.json \
+  --state-dir /absolute/operator/authority-state \
+  --organization-name "Example Company"
+npm run organization-authority:cli -- status \
+  --config /absolute/operator/authority.json
+npm run organization-authority:cli -- serve \
+  --config /absolute/operator/authority.json
+```
+
+The packaged `echo-organization-authority` binary accepts the same commands.
+Initialization creates a new organization and authority identity, two distinct
+private credential files, the development signing key, the eight-table SQLite
+database, a public identity record, and a private initialization manifest. The
+manifest binds the state to the exact normalized config path and complete
+runtime config before state publication; initialization writes the external
+secret-free config last.
+
+The resulting layout is:
+
+```text
+authority.json                         0600, outside mutable state
+authority-state/                       0700
+  .echo-authority-runtime.lock         0600, present only while serving
+  authority.sqlite                     0600
+  authority-identity.v1.json           0600
+  authority-initialization.v1.json     0600
+  keys/                                0700
+    authority-development-key.v1.json  0600
+  credentials/                         0700
+    admin-token                        0600
+    trusted-proxy-token                0600
+```
+
+Repeating the exact initialization is read-only and returns `created:false`;
+different paths, config contents, organization name, port, or partial state
+fail closed. If state publication completed but external config publication did
+not, recovery republishes only the runtime config and pathname already bound by
+the private manifest. Copied or edited configs cannot adopt existing state.
+`serve` requires that binding and initialized identity and never creates a
+replacement key or credential. It binds only to loopback, holds a singleton
+lock for the state directory, and emits a JSON readiness record. `status`
+checks the config-to-initialization binding, private file contracts, signing
+identity, database identity/schema, private runtime ownership, and a
+credential-free nonce proof bound to that runtime's exact database/key files,
+listener, credentials, and policy. A cleanly stopped server reports
+`initialized:true`, `running:false`, and exits successfully.
+
+The authority remains a foreground process. Use Ctrl-C or SIGTERM during local
+operation; a future systemd/container/launchd deployment adapter owns service
+start and stop. The application does not daemonize itself or expose a PID-file
+stop controller. Its private runtime ownership record is only a singleton and
+crash-recovery record; a kernel-held loopback guard proves ownership with a
+fresh token-bound HMAC challenge and is released automatically if the process
+crashes. Port occupancy alone is not ownership. A provably unrelated listener
+is bypassed through a deterministic authenticated recovery guard; an ambiguous
+silent listener fails closed. The record is never used to signal an arbitrary
+process.
+
+The environment-only `init-development` and `serve` form remains temporarily
+available to the exact-artifact Phase 5 rehearsal. Only that env-only serve
+path prepares its missing legacy database before entering the same strict
+runtime; it never replaces an existing database. New operator workflows use
+the versioned config file and bounded `file:` credential references. No
+default permits an unauthenticated proxy hop or a non-loopback listener.
 
 Revocation is monotonic, but an already issued active lease remains usable only
 until its signed `valid_until`; with the accepted configuration that propagation
