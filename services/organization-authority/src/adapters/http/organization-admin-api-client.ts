@@ -2,6 +2,16 @@ import {
   MAX_ORGANIZATION_API_BODY_BYTES,
   MAX_ORGANIZATION_API_CURSOR_CHARACTERS,
   MAX_ORGANIZATION_API_PAGE_ITEMS,
+  ORGANIZATION_API_ADMIN_AUDIT_PATH,
+  ORGANIZATION_API_ADMIN_AUTH_SCHEME,
+  ORGANIZATION_API_ADMIN_ENROLLMENT_GRANTS_PATH,
+  ORGANIZATION_API_ADMIN_INSTALLATIONS_PATH,
+  ORGANIZATION_API_ADMIN_MEMBERSHIPS_PATH,
+  ORGANIZATION_API_ADMIN_OVERVIEW_PATH,
+  ORGANIZATION_API_PROXY_AUTH_SCHEME,
+  organizationApiInstallationRevocationsPath,
+  organizationApiMembershipEnrollmentGrantsPath,
+  organizationApiMembershipRevocationsPath,
   TRUSTED_PROXY_AUTHORIZATION_HEADER,
   TRUSTED_PROXY_CLIENT_ID_HEADER,
   validateIssuedOrganizationEnrollmentGrant,
@@ -349,8 +359,8 @@ export class OrganizationAdminApiClient {
   private async request<T>(request: AdminRequest<T>): Promise<T> {
     const headers: Record<string, string> = {
       accept: 'application/json',
-      authorization: `Bearer ${this.adminToken}`,
-      [TRUSTED_PROXY_AUTHORIZATION_HEADER]: `Echo-Proxy ${this.trustedProxyToken}`,
+      authorization: `${ORGANIZATION_API_ADMIN_AUTH_SCHEME} ${this.adminToken}`,
+      [TRUSTED_PROXY_AUTHORIZATION_HEADER]: `${ORGANIZATION_API_PROXY_AUTH_SCHEME} ${this.trustedProxyToken}`,
       [TRUSTED_PROXY_CLIENT_ID_HEADER]: this.clientIdentity,
     };
     let serializedBody: string | undefined;
@@ -410,7 +420,7 @@ export class OrganizationAdminApiClient {
   overview(): Promise<OrganizationAdminOverviewV1> {
     return this.request({
       method: 'GET',
-      path: '/v1/admin/overview',
+      path: ORGANIZATION_API_ADMIN_OVERVIEW_PATH,
       expected_status: 200,
       validate: validateOrganizationAdminOverview,
     });
@@ -421,7 +431,7 @@ export class OrganizationAdminApiClient {
   ): Promise<OrganizationMembershipPageV1> {
     return this.request({
       method: 'GET',
-      path: `/v1/admin/memberships${pageQuery(page)}`,
+      path: `${ORGANIZATION_API_ADMIN_MEMBERSHIPS_PATH}${pageQuery(page)}`,
       expected_status: 200,
       validate: validateOrganizationMembershipPage,
     });
@@ -432,7 +442,7 @@ export class OrganizationAdminApiClient {
   ): Promise<OrganizationInstallationPageV1> {
     return this.request({
       method: 'GET',
-      path: `/v1/admin/installations${pageQuery(page)}`,
+      path: `${ORGANIZATION_API_ADMIN_INSTALLATIONS_PATH}${pageQuery(page)}`,
       expected_status: 200,
       validate: validateOrganizationInstallationPage,
     });
@@ -443,7 +453,7 @@ export class OrganizationAdminApiClient {
   ): Promise<OrganizationEnrollmentGrantPageV1> {
     return this.request({
       method: 'GET',
-      path: `/v1/admin/enrollment-grants${pageQuery(page)}`,
+      path: `${ORGANIZATION_API_ADMIN_ENROLLMENT_GRANTS_PATH}${pageQuery(page)}`,
       expected_status: 200,
       validate: validateOrganizationEnrollmentGrantPage,
     });
@@ -454,7 +464,7 @@ export class OrganizationAdminApiClient {
   ): Promise<OrganizationAuditPageV1> {
     return this.request({
       method: 'GET',
-      path: `/v1/admin/audit${pageQuery(page)}`,
+      path: `${ORGANIZATION_API_ADMIN_AUDIT_PATH}${pageQuery(page)}`,
       expected_status: 200,
       validate: validateOrganizationAuditPage,
     });
@@ -466,7 +476,7 @@ export class OrganizationAdminApiClient {
     const body = validateProvisionOrganizationMembershipRequest(input);
     return this.request({
       method: 'POST',
-      path: '/v1/admin/memberships',
+      path: ORGANIZATION_API_ADMIN_MEMBERSHIPS_PATH,
       expected_status: 201,
       body,
       validate: validateProvisionedOrganizationMembership,
@@ -485,7 +495,7 @@ export class OrganizationAdminApiClient {
     const body = validateIssueOrganizationEnrollmentGrantRequest(input);
     return this.request({
       method: 'POST',
-      path: `/v1/admin/memberships/${membership}/enrollment-grants`,
+      path: organizationApiMembershipEnrollmentGrantsPath(membership),
       expected_status: 201,
       body,
       validate: validateIssuedOrganizationEnrollmentGrant,
@@ -504,7 +514,7 @@ export class OrganizationAdminApiClient {
     const body = validateRevokeOrganizationSubjectRequest(input);
     return this.request({
       method: 'POST',
-      path: `/v1/admin/memberships/${membership}/revocations`,
+      path: organizationApiMembershipRevocationsPath(membership),
       expected_status: 200,
       body,
       validate: validateRevokedOrganizationMembership,
@@ -523,7 +533,7 @@ export class OrganizationAdminApiClient {
     const body = validateRevokeOrganizationSubjectRequest(input);
     return this.request({
       method: 'POST',
-      path: `/v1/admin/installations/${installation}/revocations`,
+      path: organizationApiInstallationRevocationsPath(installation),
       expected_status: 200,
       body,
       validate: validateRevokedOrganizationInstallation,

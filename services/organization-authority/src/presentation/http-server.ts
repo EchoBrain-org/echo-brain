@@ -4,6 +4,16 @@ import type { IncomingMessage, Server, ServerResponse } from 'node:http';
 import { TextDecoder } from 'node:util';
 import {
   MAX_ORGANIZATION_API_BODY_BYTES,
+  ORGANIZATION_API_ACCESS_LEASES_PATH,
+  ORGANIZATION_API_ADMIN_AUDIT_PATH,
+  ORGANIZATION_API_ADMIN_AUTH_SCHEME,
+  ORGANIZATION_API_ADMIN_ENROLLMENT_GRANTS_PATH,
+  ORGANIZATION_API_ADMIN_INSTALLATIONS_PATH,
+  ORGANIZATION_API_ADMIN_MEMBERSHIPS_PATH,
+  ORGANIZATION_API_ADMIN_OVERVIEW_PATH,
+  ORGANIZATION_API_AUTHORITY_DESCRIPTOR_PATH,
+  ORGANIZATION_API_ENROLLMENT_AUTH_SCHEME,
+  ORGANIZATION_API_ENROLLMENTS_PATH,
   validateCompleteOrganizationEnrollmentRequest,
   validateIssueOrganizationEnrollmentGrantRequest,
   validateOrganizationAccessLeaseRequest,
@@ -45,13 +55,13 @@ class PayloadTooLargeError extends Error {}
 const UUID_V4_SOURCE =
   '[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}';
 const GRANT_ROUTE = new RegExp(
-  `^/v1/admin/memberships/(mem_${UUID_V4_SOURCE})/enrollment-grants$`,
+  `^${ORGANIZATION_API_ADMIN_MEMBERSHIPS_PATH}/(mem_${UUID_V4_SOURCE})/enrollment-grants$`,
 );
 const MEMBERSHIP_REVOCATION_ROUTE = new RegExp(
-  `^/v1/admin/memberships/(mem_${UUID_V4_SOURCE})/revocations$`,
+  `^${ORGANIZATION_API_ADMIN_MEMBERSHIPS_PATH}/(mem_${UUID_V4_SOURCE})/revocations$`,
 );
 const INSTALLATION_REVOCATION_ROUTE = new RegExp(
-  `^/v1/admin/installations/(ins_${UUID_V4_SOURCE})/revocations$`,
+  `^${ORGANIZATION_API_ADMIN_INSTALLATIONS_PATH}/(ins_${UUID_V4_SOURCE})/revocations$`,
 );
 
 class RateLimitedError extends Error {
@@ -227,7 +237,9 @@ export function decodeOrganizationApiJsonBody(bytes: Uint8Array): unknown {
 }
 
 function decodeEnrollmentGrant(header: string | undefined): Uint8Array {
-  const match = /^Echo-Enrollment ([A-Za-z0-9_-]{43})$/.exec(header ?? '');
+  const match = new RegExp(
+    `^${ORGANIZATION_API_ENROLLMENT_AUTH_SCHEME} ([A-Za-z0-9_-]{43})$`,
+  ).exec(header ?? '');
   if (match === null) {
     throw new AuthorityOperationError(
       'unauthorized',
@@ -340,7 +352,10 @@ export function createOrganizationAuthorityHttpServer(
   const server = createServer(
     { maxHeaderSize: 16 * 1024 },
     async (request, response) => {
-      let authenticationChallenge: 'Bearer' | 'Echo-Enrollment' | undefined;
+      let authenticationChallenge:
+        | typeof ORGANIZATION_API_ADMIN_AUTH_SCHEME
+        | typeof ORGANIZATION_API_ENROLLMENT_AUTH_SCHEME
+        | undefined;
       try {
         const method = request.method ?? '';
         const url = new URL(request.url ?? '/', 'http://authority.invalid');
@@ -374,9 +389,10 @@ export function createOrganizationAuthorityHttpServer(
         }
         const clientIdentity = options.clientIdentityResolver.resolve(request);
         authenticationChallenge = url.pathname.startsWith('/v1/admin/')
-          ? 'Bearer'
-          : method === 'POST' && url.pathname === '/v1/enrollments'
-            ? 'Echo-Enrollment'
+          ? ORGANIZATION_API_ADMIN_AUTH_SCHEME
+          : method === 'POST' &&
+              url.pathname === ORGANIZATION_API_ENROLLMENTS_PATH
+            ? ORGANIZATION_API_ENROLLMENT_AUTH_SCHEME
             : undefined;
         if (method === 'POST') {
           const routeClass =
@@ -384,9 +400,9 @@ export function createOrganizationAuthorityHttpServer(
               ? 'admin-console'
               : url.pathname.startsWith('/v1/admin/')
                 ? 'admin'
-                : url.pathname === '/v1/enrollments'
+                : url.pathname === ORGANIZATION_API_ENROLLMENTS_PATH
                   ? 'enrollment'
-                  : url.pathname === '/v1/access-leases'
+                  : url.pathname === ORGANIZATION_API_ACCESS_LEASES_PATH
                     ? 'access'
                     : 'other';
           const limit = rateLimiter.consume(`${clientIdentity}:${routeClass}`);
@@ -403,7 +419,9 @@ export function createOrganizationAuthorityHttpServer(
             application: options.application,
             sessions: options.adminConsole.sessions,
             authenticateCredential: (credential) =>
-              options.adminAuthenticator.authenticate(`Bearer ${credential}`),
+              options.adminAuthenticator.authenticate(
+                `${ORGANIZATION_API_ADMIN_AUTH_SCHEME} ${credential}`,
+              ),
             clientIdentity,
             request,
             response,
@@ -412,7 +430,10 @@ export function createOrganizationAuthorityHttpServer(
           return;
         }
 
-        if (method === 'GET' && url.pathname === '/v1/authority-descriptor') {
+        if (
+          method === 'GET' &&
+          url.pathname === ORGANIZATION_API_AUTHORITY_DESCRIPTOR_PATH
+        ) {
           if (url.search !== '') {
             throw new AuthorityOperationError(
               'invalid_request',
@@ -425,7 +446,10 @@ export function createOrganizationAuthorityHttpServer(
           return;
         }
 
-        if (method === 'GET' && url.pathname === '/v1/admin/overview') {
+        if (
+          method === 'GET' &&
+          url.pathname === ORGANIZATION_API_ADMIN_OVERVIEW_PATH
+        ) {
           requireAdmin(request);
           if (url.search !== '') {
             throw new AuthorityOperationError(
@@ -437,7 +461,10 @@ export function createOrganizationAuthorityHttpServer(
           return;
         }
 
-        if (method === 'GET' && url.pathname === '/v1/admin/memberships') {
+        if (
+          method === 'GET' &&
+          url.pathname === ORGANIZATION_API_ADMIN_MEMBERSHIPS_PATH
+        ) {
           requireAdmin(request);
           sendJson(
             response,
@@ -447,7 +474,10 @@ export function createOrganizationAuthorityHttpServer(
           return;
         }
 
-        if (method === 'GET' && url.pathname === '/v1/admin/installations') {
+        if (
+          method === 'GET' &&
+          url.pathname === ORGANIZATION_API_ADMIN_INSTALLATIONS_PATH
+        ) {
           requireAdmin(request);
           sendJson(
             response,
@@ -459,7 +489,7 @@ export function createOrganizationAuthorityHttpServer(
 
         if (
           method === 'GET' &&
-          url.pathname === '/v1/admin/enrollment-grants'
+          url.pathname === ORGANIZATION_API_ADMIN_ENROLLMENT_GRANTS_PATH
         ) {
           requireAdmin(request);
           sendJson(
@@ -470,7 +500,10 @@ export function createOrganizationAuthorityHttpServer(
           return;
         }
 
-        if (method === 'GET' && url.pathname === '/v1/admin/audit') {
+        if (
+          method === 'GET' &&
+          url.pathname === ORGANIZATION_API_ADMIN_AUDIT_PATH
+        ) {
           requireAdmin(request);
           sendJson(
             response,
@@ -487,7 +520,10 @@ export function createOrganizationAuthorityHttpServer(
           );
         }
 
-        if (method === 'POST' && url.pathname === '/v1/admin/memberships') {
+        if (
+          method === 'POST' &&
+          url.pathname === ORGANIZATION_API_ADMIN_MEMBERSHIPS_PATH
+        ) {
           requireAdmin(request);
           const body = validateProvisionOrganizationMembershipRequest(
             await readJsonBody(request),
@@ -524,7 +560,10 @@ export function createOrganizationAuthorityHttpServer(
           return;
         }
 
-        if (method === 'POST' && url.pathname === '/v1/enrollments') {
+        if (
+          method === 'POST' &&
+          url.pathname === ORGANIZATION_API_ENROLLMENTS_PATH
+        ) {
           const grant = decodeEnrollmentGrant(request.headers.authorization);
           const body = validateCompleteOrganizationEnrollmentRequest(
             await readJsonBody(request),
@@ -538,7 +577,10 @@ export function createOrganizationAuthorityHttpServer(
           return;
         }
 
-        if (method === 'POST' && url.pathname === '/v1/access-leases') {
+        if (
+          method === 'POST' &&
+          url.pathname === ORGANIZATION_API_ACCESS_LEASES_PATH
+        ) {
           const command = validateOrganizationAccessLeaseRequest(
             await readJsonBody(request),
           );

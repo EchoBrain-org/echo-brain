@@ -1,6 +1,10 @@
 import { Buffer } from 'node:buffer';
 import {
   MAX_ORGANIZATION_API_BODY_BYTES,
+  ORGANIZATION_API_ACCESS_LEASES_PATH,
+  ORGANIZATION_API_AUTHORITY_DESCRIPTOR_PATH,
+  ORGANIZATION_API_ENROLLMENT_AUTH_SCHEME,
+  ORGANIZATION_API_ENROLLMENTS_PATH,
   validateCompletedOrganizationEnrollment,
   validateOrganizationAccessLeaseRequest,
   validateOrganizationAccessLeaseResponse,
@@ -265,7 +269,7 @@ export class HttpOrganizationAuthorityClient implements OrganizationAuthorityCli
 
   readAuthorityDescriptor(): Promise<OrganizationAuthorityDescriptorResponseV1> {
     return this.request(
-      '/v1/authority-descriptor',
+      ORGANIZATION_API_AUTHORITY_DESCRIPTOR_PATH,
       {
         method: 'GET',
         headers: { accept: 'application/json' },
@@ -287,12 +291,12 @@ export class HttpOrganizationAuthorityClient implements OrganizationAuthorityCli
       );
     }
     return this.request(
-      '/v1/enrollments',
+      ORGANIZATION_API_ENROLLMENTS_PATH,
       {
         method: 'POST',
         headers: {
           accept: 'application/json',
-          authorization: `Echo-Enrollment ${canonicalGrantBase64Url(input.enrollmentGrant)}`,
+          authorization: `${ORGANIZATION_API_ENROLLMENT_AUTH_SCHEME} ${canonicalGrantBase64Url(input.enrollmentGrant)}`,
           'content-type': 'application/json',
         },
         body,
@@ -310,7 +314,7 @@ export class HttpOrganizationAuthorityClient implements OrganizationAuthorityCli
       throw new Error('organization access request exceeds the API body limit');
     }
     return this.request(
-      '/v1/access-leases',
+      ORGANIZATION_API_ACCESS_LEASES_PATH,
       {
         method: 'POST',
         headers: {
