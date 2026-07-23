@@ -146,6 +146,97 @@
       ],
       "allowed_packages": [],
       "allowed_node_builtins": ["crypto"]
+    },
+    {
+      "name": "product-root-composes-the-runtime",
+      "from": "src/product/*.ts",
+      "allowed_imports": [
+        "src/product/*.ts",
+        "src/product/approval/**",
+        "src/product/federation/**",
+        "src/product/machine/**",
+        "src/product/organization/**",
+        "src/product/storage/**",
+        "src/core/**",
+        "src/adapters/**",
+        "src/infrastructure/**",
+        "src/util/**"
+      ],
+      "allowed_packages": ["ajv", "better-sqlite3"],
+      "allowed_node_builtins": [
+        "child_process",
+        "crypto",
+        "fs",
+        "module",
+        "os",
+        "path",
+        "stream",
+        "url",
+        "util"
+      ]
+    },
+    {
+      "name": "federation-owns-identity-and-record-projection",
+      "from": "src/product/federation/**",
+      "allowed_imports": [
+        "src/product/*.ts",
+        "src/product/approval/**",
+        "src/product/federation/**",
+        "src/product/machine/**",
+        "src/product/storage/**",
+        "src/core/**",
+        "src/adapters/**",
+        "src/infrastructure/**",
+        "src/util/**"
+      ],
+      "allowed_packages": [
+        "@echo-brain/federation-protocol",
+        "ajv",
+        "better-sqlite3"
+      ],
+      "allowed_node_builtins": ["crypto", "fs", "path", "url"]
+    },
+    {
+      "name": "organization-client-speaks-only-the-authority-protocols",
+      "from": "src/product/organization/**",
+      "allowed_imports": [
+        "src/product/organization/**",
+        "src/product/machine/**",
+        "src/product/storage/**"
+      ],
+      "allowed_packages": [
+        "@echo-brain/federation-protocol",
+        "@echo-brain/organization-api",
+        "@echo-brain/organization-protocol"
+      ],
+      "allowed_node_builtins": ["buffer", "crypto"]
+    },
+    {
+      "name": "approval-gates-project-federation-records",
+      "from": "src/product/approval/**",
+      "allowed_imports": [
+        "src/product/approval/**",
+        "src/product/federation/**",
+        "src/core/**",
+        "src/infrastructure/**",
+        "src/util/**"
+      ],
+      "allowed_packages": [],
+      "allowed_node_builtins": ["crypto", "fs", "path"]
+    },
+    {
+      "name": "logging-is-self-contained",
+      "from": "src/logging/**",
+      "allowed_imports": [],
+      "allowed_packages": [],
+      "allowed_node_builtins": []
+    },
+    {
+      "name": "util-is-leaf-shared-code",
+      "from": "src/util/**",
+      "allowed_imports": [],
+      "allowed_packages": [],
+      "allowed_node_builtins": ["fs"]
     }
   ],
   "adapter_architecture": {

@@ -653,8 +653,14 @@ function main() {
   // happen to be reachable from today's public entry points. This makes the
   // dependency direction durable as new core files are added.
   for (const [path] of tree) {
+    if (!SOURCE_FILE_RE.test(path)) continue;
     const matchingRules = layerRules.filter((rule) => matchesGlob(path, rule.from));
-    if (matchingRules.length === 0 || !SOURCE_FILE_RE.test(path)) continue;
+    if (matchingRules.length === 0) {
+      if (isAllowed(path)) {
+        errors.push(`product source file has no layer rule: ${path}`);
+      }
+      continue;
+    }
     const source = textFile(tree, path);
     for (const reference of moduleReferences(path, source)) {
       const spec = reference.specifier;

@@ -340,6 +340,18 @@ describe('workspace source boundaries', () => {
     );
   });
 
+  it('rejects product source files that do not belong to a declared layer', () => {
+    const fixture = fixtureRepository();
+    const orphan = join(fixture, 'src/product/unlayered/orphan.ts');
+    mkdirSync(dirname(orphan), { recursive: true });
+    writeFileSync(orphan, 'export {};\n');
+    const result = runBoundary(fixture);
+    expect(result.status).not.toBe(0);
+    expect(result.stdout + result.stderr).toContain(
+      'product source file has no layer rule',
+    );
+  });
+
   it('applies package and builtin allowlists to root product layers', () => {
     const fixture = fixtureRepository();
     writeFileSync(
