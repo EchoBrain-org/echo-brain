@@ -143,8 +143,22 @@ function run(command, arguments_, options = {}) {
     throw new Error("Phase 5 command is outside the finite dispatcher");
   }
   if (result.status !== 0) {
+    const stderr =
+      typeof result.stderr === "string"
+        ? result.stderr
+        : (result.stderr?.toString("utf8") ?? "");
+    const stdout =
+      typeof result.stdout === "string"
+        ? result.stdout
+        : (result.stdout?.toString("utf8") ?? "");
+    const detail = (
+      stderr.trim() ||
+      stdout.trim() ||
+      result.error?.message ||
+      "no output"
+    ).slice(-2000);
     throw new Error(
-      `${basename(command)} failed with code ${String(result.status)}${result.error === undefined ? "" : " before completion"}`,
+      `${basename(command)} failed with code ${String(result.status)}: ${detail}`,
     );
   }
   return result.stdout;
