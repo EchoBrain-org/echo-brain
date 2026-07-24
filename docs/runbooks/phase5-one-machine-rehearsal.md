@@ -21,23 +21,30 @@ Run from the repository root with:
 - Node `22.22.1` and npm `10.9.4`;
 - a `darwin/x64` Node process;
 - the intended Phase 5 sources committed at `HEAD`;
-- dependencies installed and the repository-local `.npm-cache` populated; and
+- dependencies installed, the repository-local `.npm-cache` populated, and the
+  workspace packages built; and
 - a new absolute output path whose parent is writable.
 
-Prepare dependencies before freezing the commit if necessary:
+Prepare dependencies and workspace build output before freezing the commit if
+necessary:
 
 ```sh
 npm ci --cache .npm-cache
+npm run build:workspaces
 node --version
 npm --version
 git status --short
 ```
 
-The version checks must print `v22.22.1` and `10.9.4`. Review a non-empty Git
-status before running. All Phase 5, artifact-builder, release-boundary, and
-report-schema files must be committed; unrelated work may remain only when it
-does not overlap those files. The ceremony driver compares that complete
-execution set byte-for-byte with the supplied source SHA.
+The version checks must print `v22.22.1` and `10.9.4`. The workspace build is
+not optional: the ceremony driver imports the organization API package by name,
+and that specifier resolves to compiled output the repository does not track.
+That output stays untracked, so building does not change the Git status
+reviewed next. Review a non-empty Git status before running. All Phase 5,
+artifact-builder, release-boundary, and report-schema files must be committed;
+unrelated work may remain only when it does not overlap those files. The
+ceremony driver compares that complete execution set byte-for-byte with the
+supplied source SHA.
 
 The rehearsal uses npm's cache-only mode and preflights npm, Node headers,
 Python, Make, and Clang before rebuilding the native SQLite dependency. This is
