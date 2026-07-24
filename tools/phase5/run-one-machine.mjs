@@ -72,6 +72,7 @@ export const CEREMONY_SOURCE_PATHS = Object.freeze([
   "tools/lib/module-references.mjs",
   "tools/product/build-artifact.mjs",
   "tools/product/sync-shrinkwrap.mjs",
+  "tools/release/artifact-builder.mjs",
   "tools/release/runtime-shrinkwrap.mjs",
   "tools/organization-authority/build-artifact.mjs",
   "tools/organization-authority/sync-shrinkwrap.mjs",
