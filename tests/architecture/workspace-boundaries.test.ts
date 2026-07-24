@@ -210,11 +210,12 @@ describe('workspace source boundaries', () => {
   it('rejects commented require syntax and non-literal module loading', () => {
     const fixture = fixtureRepository();
     const entry = join(fixture, 'packages/federation-protocol/src/index.ts');
+    // Punctuation between the loader and its call cannot hide the name.
     writeFileSync(entry, `require /* boundary */ ('@forbidden/pkg');\n`);
     let result = runBoundary(fixture);
     expect(result.status).not.toBe(0);
     expect(result.stdout + result.stderr).toContain(
-      'external import @forbidden/pkg is not allowed',
+      'module loaders are forbidden',
     );
 
     writeFileSync(
@@ -242,9 +243,12 @@ describe('workspace source boundaries', () => {
     let result = runBoundary(fixture);
     expect(result.status).not.toBe(0);
     expect(result.stdout + result.stderr).toContain(
-      'external import @forbidden/pkg is not allowed',
+      'module loaders are forbidden',
     );
 
+    // The namespace form never names `createRequire` at an import specifier, so
+    // it is refused at the property name instead — which is why the exemption
+    // for `require` member names is not extended to `createRequire`.
     writeFileSync(
       entry,
       [
@@ -257,7 +261,7 @@ describe('workspace source boundaries', () => {
     result = runBoundary(fixture);
     expect(result.status).not.toBe(0);
     expect(result.stdout + result.stderr).toContain(
-      'external import @forbidden/pkg is not allowed',
+      'module loaders are forbidden',
     );
   });
 
@@ -278,7 +282,7 @@ describe('workspace source boundaries', () => {
     let result = runBoundary(fixture);
     expect(result.status).not.toBe(0);
     expect(result.stdout + result.stderr).toContain(
-      'non-literal module loading is forbidden',
+      'module loaders are forbidden',
     );
 
     writeFileSync(
@@ -294,7 +298,7 @@ describe('workspace source boundaries', () => {
     result = runBoundary(fixture);
     expect(result.status).not.toBe(0);
     expect(result.stdout + result.stderr).toContain(
-      'non-literal module loading is forbidden',
+      'module loaders are forbidden',
     );
 
     writeFileSync(
@@ -310,7 +314,65 @@ describe('workspace source boundaries', () => {
     result = runBoundary(fixture);
     expect(result.status).not.toBe(0);
     expect(result.stdout + result.stderr).toContain(
-      'non-literal module loading is forbidden',
+      'module loaders are forbidden',
+    );
+  });
+
+  // Tracking where a loader value travels is undecidable in general, and the
+  // repository uses no loader anywhere, so the rule is refusal at the source:
+  // naming a loader is the violation, whatever is done with it afterwards.
+  it.each([
+    [
+      'direct call with an allowlisted target',
+      [
+        `import { createRequire } from 'node:module';`,
+        `createRequire(import.meta.url)('@echo-brain/federation-protocol');`,
+      ],
+    ],
+    [
+      'assignment after a bare declaration',
+      [
+        `import { createRequire } from 'node:module';`,
+        'let load;',
+        'load = createRequire(import.meta.url);',
+        `load('@forbidden/pkg');`,
+      ],
+    ],
+    [
+      'loader stored in an object',
+      [
+        `import { createRequire } from 'node:module';`,
+        'const loaders = { load: createRequire(import.meta.url) };',
+        `loaders.load('@forbidden/pkg');`,
+      ],
+    ],
+    [
+      'loader stored in an array',
+      [
+        `import { createRequire } from 'node:module';`,
+        'const loaders = [createRequire(import.meta.url)];',
+        `loaders[0]('@forbidden/pkg');`,
+      ],
+    ],
+    [
+      'loader returned from a function',
+      [
+        `import { createRequire } from 'node:module';`,
+        'const make = () => createRequire(import.meta.url);',
+        `make()('@forbidden/pkg');`,
+      ],
+    ],
+    ['bare require call', [`require('@forbidden/pkg');`]],
+  ])('rejects a module loader: %s', (_name, lines) => {
+    const fixture = fixtureRepository();
+    writeFileSync(
+      join(fixture, 'packages/federation-protocol/src/index.ts'),
+      `${lines.join('\n')}\n`,
+    );
+    const result = runBoundary(fixture);
+    expect(result.status).not.toBe(0);
+    expect(result.stdout + result.stderr).toContain(
+      'module loaders are forbidden',
     );
   });
 
@@ -420,7 +482,7 @@ describe('workspace source boundaries', () => {
       const result = runBoundary(fixture);
       expect(result.status, `${label}: ${result.stdout + result.stderr}`).not.toBe(0);
       expect(result.stdout + result.stderr, label).toContain(
-        'non-literal module loading is forbidden',
+        'module loaders are forbidden',
       );
     }
   });

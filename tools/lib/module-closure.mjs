@@ -34,12 +34,10 @@ export function collectExecutedModuleClosure({ projectRoot, entryPoints, readSou
     const sourceFile = ts.createSourceFile(absolute, read(absolute), ts.ScriptTarget.Latest, true);
     for (const reference of collectModuleReferences(sourceFile)) {
       const label = `${current}:${reference.line} (${reference.kind})`;
-      if (reference.specifier === null) {
-        if (reference.kind === 'require' || reference.kind === 'createRequire') {
-          throw new Error(`${label}: escaped module loader is forbidden in ceremony sources`);
-        }
-        continue;
+      if (reference.kind === 'module-loader') {
+        throw new Error(`${label}: module loaders are forbidden in ceremony sources`);
       }
+      if (reference.specifier === null) continue;
       if (!isRelativeSpecifier(reference.specifier)) continue;
       const resolvedRelative = toProjectRelative(
         root,

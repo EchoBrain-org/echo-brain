@@ -248,6 +248,12 @@ function scanGraph({ projectRoot, roots, manifest }) {
     );
     for (const reference of collectModuleReferences(sourceFile)) {
       const label = `${current}:${reference.line} (${reference.kind})`;
+      if (reference.kind === 'module-loader') {
+        violations.push(
+          `${label}: module loaders are forbidden; use a static import or import()`,
+        );
+        continue;
+      }
       if (reference.specifier === null) {
         violations.push(`${label}: non-literal module loading is forbidden`);
         continue;

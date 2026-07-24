@@ -453,6 +453,12 @@ function checkWorkspaceBoundaries(tree, errors) {
       }
       for (const reference of moduleReferences(path, source)) {
         const specifier = reference.specifier;
+        if (reference.kind === 'module-loader') {
+          errors.push(
+            `${manifest.name}: module loaders are forbidden; use a static import or import() in ${path}:${reference.line}`,
+          );
+          continue;
+        }
         if (specifier === null) {
           errors.push(
             `${manifest.name}: non-literal module loading is forbidden in ${path}:${reference.line} (${reference.kind})`,

@@ -106,12 +106,12 @@ describe('phase 5 ceremony attestation closure', () => {
     ).not.toThrow();
   });
 
-  it('fails closed when a ceremony source escapes a module loader', () => {
+  it('fails closed when a ceremony source names a module loader', () => {
     const dir = fixture({
       'escaper.mjs': 'const alias = require;\nexport const escaper = alias;\n',
     });
     expect(() =>
       collectExecutedModuleClosure({ projectRoot: dir, entryPoints: ['escaper.mjs'] }),
-    ).toThrow(/escaped module loader/);
+    ).toThrow(/module loaders are forbidden/);
   });
 });

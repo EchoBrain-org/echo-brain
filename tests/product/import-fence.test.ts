@@ -120,7 +120,7 @@ describe('product transitive import fence', () => {
     {
       name: 'opaque require',
       files: { 'src/product/index.ts': "const name = './safe.js';\nrequire(name);\n" },
-      expected: 'non-literal module loading',
+      expected: 'module loaders are forbidden',
     },
     {
       name: 'opaque createRequire',
@@ -128,7 +128,7 @@ describe('product transitive import fence', () => {
         'src/product/index.ts':
           "import { createRequire } from 'node:module';\nconst load = createRequire(import.meta.url);\nconst name = './safe.js';\nload(name);\n",
       },
-      expected: 'non-literal module loading',
+      expected: 'module loaders are forbidden',
     },
     {
       name: 'direct createRequire loader',
@@ -136,7 +136,7 @@ describe('product transitive import fence', () => {
         'src/product/index.ts':
           "import { createRequire } from 'node:module';\ncreateRequire(import.meta.url)('left-pad');\n",
       },
-      expected: "package 'left-pad' is not allowlisted",
+      expected: 'module loaders are forbidden',
     },
     {
       name: 'namespace createRequire loader',
@@ -144,7 +144,7 @@ describe('product transitive import fence', () => {
         'src/product/index.ts':
           "import * as Module from 'node:module';\nconst load = Module.createRequire(import.meta.url);\nload('left-pad');\n",
       },
-      expected: "package 'left-pad' is not allowlisted",
+      expected: 'module loaders are forbidden',
     },
     {
       name: 'direct child process import',
@@ -169,7 +169,11 @@ describe('product transitive import fence', () => {
     expect(result.stderr).toContain(expected);
   });
 
-  it('resolves literal require and createRequire edges transitively', async () => {
+  // Loader edges used to be resolved and followed when the specifier was a
+  // literal. They are refused now: a transparent loader is indistinguishable at
+  // the syntax level from one whose target is decided elsewhere, and the
+  // repository reaches every module by static import or import() instead.
+  it('refuses loader edges even when every specifier is literal', async () => {
     const root = fixture({
       'src/product/index.ts':
         "import { createRequire } from 'node:module';\nconst load = createRequire(import.meta.url);\nrequire('./a.js');\nload('./b.js');\n",
@@ -177,12 +181,19 @@ describe('product transitive import fence', () => {
       'src/product/b.ts': 'export const b = true;\n',
     });
     const result = await run(['--project-root', root, '--manifest', 'boundary.json']);
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain('module loaders are forbidden');
+  });
+
+  // node:module is not banned, only its loader factory: the product imports
+  // syncBuiltinESMExports from it in spawn-sanitized-child.ts.
+  it('accepts node:module imports that are not the loader factory', async () => {
+    const root = fixture({
+      'src/product/index.ts':
+        "import { syncBuiltinESMExports } from 'node:module';\nsyncBuiltinESMExports();\n",
+    });
+    const result = await run(['--project-root', root, '--manifest', 'boundary.json']);
     expect(result.status, result.stderr).toBe(0);
-    expect(JSON.parse(result.stdout).closure).toEqual([
-      'src/product/a.ts',
-      'src/product/b.ts',
-      'src/product/index.ts',
-    ]);
   });
 
   it('emits deterministic seed inventories', async () => {
