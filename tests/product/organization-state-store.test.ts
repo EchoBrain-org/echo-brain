@@ -33,10 +33,8 @@ import {
   OrganizationStateCorruptionError,
   type OrganizationAccessVerificationPolicy,
 } from '../../src/product/organization/state/organization-state-store.js';
-import {
-  corruptStoredOrganizationAccessStateForRehearsal,
-  SqliteOrganizationStateStore,
-} from '../../src/product/organization/state/sqlite-organization-state-store.js';
+import { corruptStoredOrganizationAccessStateForRehearsal } from '../../src/product/organization/state/rehearsal-fault-injection.js';
+import { SqliteOrganizationStateStore } from '../../src/product/organization/state/sqlite-organization-state-store.js';
 
 const MAX_TTL_MS = 5 * 60 * 1000;
 const ENROLLED_AT = '2026-07-22T00:00:00.000Z';

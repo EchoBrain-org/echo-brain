@@ -1145,7 +1145,6 @@ async function main() {
     await corruptClosedOrganizationDatabase({
       source: employeeA.databasePath,
       destination: corruptDatabasePath,
-      packageRoot: employeeA.packageRoot,
     });
     const corruptResult = await runEmployeeProcess(
       {

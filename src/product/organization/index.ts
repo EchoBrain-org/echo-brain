@@ -26,10 +26,10 @@ export type {
   OrganizationStateStore,
   StoredOrganizationEnrollment,
 } from './state/organization-state-store.js';
-export {
-  corruptStoredOrganizationAccessStateForRehearsal,
-  SqliteOrganizationStateStore,
-} from './state/sqlite-organization-state-store.js';
+// Rehearsal fault injection is deliberately absent from this surface. It lives
+// in ./state/rehearsal-fault-injection.ts, unreachable from the product entry
+// points, so the shipped artifact never carries it.
+export { SqliteOrganizationStateStore } from './state/sqlite-organization-state-store.js';
 export {
   createLocalOrganizationRuntime,
   DEFAULT_LOCAL_ORGANIZATION_LEASE_TTL_MS,

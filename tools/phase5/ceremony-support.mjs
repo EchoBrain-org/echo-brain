@@ -11,7 +11,16 @@ import { basename, dirname, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
 const TOOL_DIRECTORY = dirname(fileURLToPath(import.meta.url));
+const REPO_ROOT = resolve(TOOL_DIRECTORY, "..", "..");
 const EMPLOYEE_DRIVER = join(TOOL_DIRECTORY, "employee-driver.mjs");
+const REHEARSAL_FAULT_INJECTION = join(
+  REPO_ROOT,
+  "dist",
+  "product",
+  "organization",
+  "state",
+  "rehearsal-fault-injection.js",
+);
 const MAX_RESPONSE_BYTES = 128 * 1024;
 const CHILD_TIMEOUT_MS = 30_000;
 
@@ -257,12 +266,14 @@ export async function corruptClosedOrganizationDatabase(options) {
   mkdirSync(dirname(options.destination), { recursive: true, mode: 0o700 });
   copyFileSync(options.source, options.destination);
   chmodSync(options.destination, 0o600);
-  const organization = await import(
-    pathToFileURL(
-      join(options.packageRoot, "dist", "product", "organization", "index.js"),
-    ).href
+  // Loaded from the repository build, never from the installed package: the
+  // fault injector is outside the product boundary closure precisely so a
+  // client artifact cannot carry a hook that destroys stored state. Both come
+  // from the same source SHA, which the ceremony asserts before this runs.
+  const faultInjection = await import(
+    pathToFileURL(REHEARSAL_FAULT_INJECTION).href
   );
-  organization.corruptStoredOrganizationAccessStateForRehearsal(
+  faultInjection.corruptStoredOrganizationAccessStateForRehearsal(
     options.destination,
   );
 }

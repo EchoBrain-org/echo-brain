@@ -27,7 +27,6 @@ export function assertIsolatedPaths(paths: string[]): void;
 export function corruptClosedOrganizationDatabase(options: {
   source: string;
   destination: string;
-  packageRoot: string;
 }): Promise<void>;
 
 export function assertPrivateStatePermissions(roots: string[]): number;

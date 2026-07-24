@@ -21,24 +21,28 @@ Run from the repository root with:
 - Node `22.22.1` and npm `10.9.4`;
 - a `darwin/x64` Node process;
 - the intended Phase 5 sources committed at `HEAD`;
-- dependencies installed, the repository-local `.npm-cache` populated, and the
-  workspace packages built; and
+- dependencies installed, the repository-local `.npm-cache` populated, and both
+  the workspace packages and the repository build output built; and
 - a new absolute output path whose parent is writable.
 
-Prepare dependencies and workspace build output before freezing the commit if
-necessary:
+Prepare dependencies and build output before freezing the commit if necessary:
 
 ```sh
 npm ci --cache .npm-cache
 npm run build:workspaces
+npm run build
 node --version
 npm --version
 git status --short
 ```
 
-The version checks must print `v22.22.1` and `10.9.4`. The workspace build is
-not optional: the ceremony driver imports the organization API package by name,
-and that specifier resolves to compiled output the repository does not track.
+The version checks must print `v22.22.1` and `10.9.4`. Neither build is
+optional. The ceremony driver imports the organization API package by name, and
+that specifier resolves to compiled output the repository does not track. The
+repository build supplies the rehearsal fault injector, which is deliberately
+outside the product boundary closure so no client artifact can carry a hook that
+destroys stored state; the ceremony therefore loads it from `dist/` rather than
+from the installed package it exercises.
 That output stays untracked, so building does not change the Git status
 reviewed next. Review a non-empty Git status before running. All Phase 5,
 artifact-builder, release-boundary, and report-schema files must be committed;
