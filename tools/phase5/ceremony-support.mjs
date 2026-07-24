@@ -7,9 +7,8 @@ import {
   readFileSync,
   readdirSync,
 } from "node:fs";
-import { createRequire } from "node:module";
 import { basename, dirname, join, relative, resolve, sep } from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 
 const TOOL_DIRECTORY = dirname(fileURLToPath(import.meta.url));
 const EMPLOYEE_DRIVER = join(TOOL_DIRECTORY, "employee-driver.mjs");
@@ -162,6 +161,28 @@ export async function adminPost(options) {
   } catch {
     throw new Error("ADMIN_RESULT_AMBIGUOUS");
   }
+  return readAdminJsonResponse(response);
+}
+
+export async function adminGet(options) {
+  let response;
+  try {
+    response = await fetch(new URL(options.path, options.origin), {
+      method: "GET",
+      redirect: "error",
+      signal: AbortSignal.timeout(15_000),
+      headers: {
+        accept: "application/json",
+        authorization: `Bearer ${options.adminToken}`,
+      },
+    });
+  } catch {
+    throw new Error("ADMIN_RESULT_AMBIGUOUS");
+  }
+  return readAdminJsonResponse(response);
+}
+
+async function readAdminJsonResponse(response) {
   const declared = response.headers.get("content-length");
   if (
     declared !== null &&
@@ -232,36 +253,18 @@ export function assertIsolatedPaths(paths) {
   }
 }
 
-export function corruptClosedOrganizationDatabase(options) {
+export async function corruptClosedOrganizationDatabase(options) {
   mkdirSync(dirname(options.destination), { recursive: true, mode: 0o700 });
   copyFileSync(options.source, options.destination);
   chmodSync(options.destination, 0o600);
-  const require = createRequire(join(options.packageRoot, "package.json"));
-  const Database = require("better-sqlite3");
-  const database = new Database(options.destination);
-  try {
-    const row = database
-      .prepare(
-        `SELECT request_sha256, state_json
-         FROM organization_access_high_watermarks
-         LIMIT 1`,
-      )
-      .get();
-    if (row === undefined) {
-      throw new Error("organization database has no state to corrupt");
-    }
-    const parsed = JSON.parse(row.state_json);
-    parsed.evaluated_at = "2000-01-01T00:00:00.000Z";
-    database
-      .prepare(
-        `UPDATE organization_access_high_watermarks
-         SET state_json = ?
-         WHERE request_sha256 = ?`,
-      )
-      .run(JSON.stringify(parsed), row.request_sha256);
-  } finally {
-    database.close();
-  }
+  const organization = await import(
+    pathToFileURL(
+      join(options.packageRoot, "dist", "product", "organization", "index.js"),
+    ).href
+  );
+  organization.corruptStoredOrganizationAccessStateForRehearsal(
+    options.destination,
+  );
 }
 
 function filesUnder(root) {

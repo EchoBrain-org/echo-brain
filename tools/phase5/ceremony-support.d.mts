@@ -16,13 +16,19 @@ export function adminPost(options: {
   body: unknown;
 }): Promise<unknown>;
 
+export function adminGet(options: {
+  origin: string;
+  adminToken: string;
+  path: string;
+}): Promise<unknown>;
+
 export function assertIsolatedPaths(paths: string[]): void;
 
 export function corruptClosedOrganizationDatabase(options: {
   source: string;
   destination: string;
   packageRoot: string;
-}): void;
+}): Promise<void>;
 
 export function assertPrivateStatePermissions(roots: string[]): number;
 

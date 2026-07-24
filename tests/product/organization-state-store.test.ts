@@ -33,7 +33,10 @@ import {
   OrganizationStateCorruptionError,
   type OrganizationAccessVerificationPolicy,
 } from '../../src/product/organization/state/organization-state-store.js';
-import { SqliteOrganizationStateStore } from '../../src/product/organization/state/sqlite-organization-state-store.js';
+import {
+  corruptStoredOrganizationAccessStateForRehearsal,
+  SqliteOrganizationStateStore,
+} from '../../src/product/organization/state/sqlite-organization-state-store.js';
 
 const MAX_TTL_MS = 5 * 60 * 1000;
 const ENROLLED_AT = '2026-07-22T00:00:00.000Z';
@@ -502,6 +505,25 @@ describe('SQLite organization installation state', () => {
         chain.activeThree,
         policy('2026-07-22T00:03:30.000Z'),
       ),
+    ).toThrow(OrganizationStateCorruptionError);
+  });
+
+  it('the rehearsal corruption hook makes a fresh read fail closed', async () => {
+    const chain = await onboardingChain();
+    const databasePath = temporaryDatabase();
+    const store = openStore(databasePath);
+    seedEnrollment(store, chain);
+    store.acceptAccessState(
+      chain.activeOne,
+      policy('2026-07-22T00:02:00.000Z'),
+    );
+    store.close();
+
+    corruptStoredOrganizationAccessStateForRehearsal(databasePath);
+
+    const reopened = openStore(databasePath);
+    expect(() =>
+      reopened.verifyCurrentAccess(policy('2026-07-22T00:03:00.000Z')),
     ).toThrow(OrganizationStateCorruptionError);
   });
 

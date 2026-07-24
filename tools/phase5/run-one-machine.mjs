@@ -16,7 +16,6 @@ import {
   rmSync,
   writeFileSync,
 } from "node:fs";
-import { createRequire } from "node:module";
 import {
   basename,
   dirname,
@@ -35,6 +34,7 @@ import {
   startAuthorityProcess,
 } from "./authority-process.mjs";
 import {
+  adminGet,
   adminPost,
   assertIsolatedPaths,
   assertPrivateStatePermissions,
@@ -56,6 +56,10 @@ import {
 } from "./report.mjs";
 import { validateOneMachineRehearsalReport } from "./validate-report.mjs";
 import { verifyOrganizationAuthorityArtifact } from "../organization-authority/verify-artifact.mjs";
+import {
+  ORGANIZATION_API_ADMIN_OVERVIEW_PATH,
+  ORGANIZATION_API_AUTHORITY_DESCRIPTOR_PATH,
+} from "@echo-brain/organization-api";
 
 const TOOL_DIRECTORY = dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = resolve(TOOL_DIRECTORY, "../..");
@@ -288,41 +292,25 @@ function requireSequence(decision, sequence, permitted, status, label) {
   return decision;
 }
 
-function authorityDatabaseSummary(packageRoot, databasePath) {
-  const require = createRequire(join(packageRoot, "package.json"));
-  const Database = require("better-sqlite3");
-  const database = new Database(databasePath, {
-    readonly: true,
-    fileMustExist: true,
+async function authorityRuntimeSummary(origin, adminToken) {
+  const overview = await adminGet({
+    origin,
+    adminToken,
+    path: ORGANIZATION_API_ADMIN_OVERVIEW_PATH,
   });
-  try {
-    const metadata = database
-      .prepare(
-        `SELECT authority_id, organization_id, authority_pin_sha256,
-                descriptor_json
-         FROM authority_metadata WHERE singleton = 1`,
-      )
-      .get();
-    const counts = database
-      .prepare(
-        `SELECT
-           (SELECT COUNT(*) FROM authority_memberships) AS memberships,
-           (SELECT COUNT(*) FROM authority_enrollments) AS enrollments,
-           (SELECT COUNT(*) FROM authority_access_states) AS access_states`,
-      )
-      .get();
-    return {
-      authority_id: metadata.authority_id,
-      organization_id: metadata.organization_id,
-      authority_pin_sha256: metadata.authority_pin_sha256,
-      descriptor_sha256: sha256(metadata.descriptor_json),
-      memberships: counts.memberships,
-      enrollments: counts.enrollments,
-      access_states: counts.access_states,
-    };
-  } finally {
-    database.close();
-  }
+  const descriptor = await adminGet({
+    origin,
+    adminToken,
+    path: ORGANIZATION_API_AUTHORITY_DESCRIPTOR_PATH,
+  });
+  return {
+    authority_id: overview.authority_id,
+    organization_id: overview.organization_id,
+    authority_pin_sha256: overview.authority_pin_sha256,
+    descriptor_sha256: sha256(stableJson(descriptor.authority_descriptor)),
+    memberships: overview.counts.memberships,
+    enrollments: overview.counts.active_installations,
+  };
 }
 
 async function startEdges({ targetOrigin, proxyToken, runId, faults = {} }) {
@@ -1031,9 +1019,9 @@ async function main() {
     process.stderr.write(
       "phase5: restarting the full local process topology\n",
     );
-    const beforeRestart = authorityDatabaseSummary(
-      authorityInstall.packageRoot,
-      authorityDatabasePath,
+    const beforeRestart = await authorityRuntimeSummary(
+      edges.admin.origin,
+      adminToken,
     );
     await closeEdges(edges);
     edges = null;
@@ -1056,9 +1044,9 @@ async function main() {
       proxyToken,
       runId,
     });
-    const afterRestart = authorityDatabaseSummary(
-      authorityInstall.packageRoot,
-      authorityDatabasePath,
+    const afterRestart = await authorityRuntimeSummary(
+      edges.admin.origin,
+      adminToken,
     );
     if (
       beforeRestart.authority_pin_sha256 !==
@@ -1139,7 +1127,7 @@ async function main() {
     });
 
     const corruptDatabasePath = join(corruptRoot, "echo-corrupt.sqlite");
-    corruptClosedOrganizationDatabase({
+    await corruptClosedOrganizationDatabase({
       source: employeeA.databasePath,
       destination: corruptDatabasePath,
       packageRoot: employeeA.packageRoot,
