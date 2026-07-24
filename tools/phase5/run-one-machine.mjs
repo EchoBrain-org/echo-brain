@@ -42,6 +42,7 @@ import {
   runEmployeeProcess,
   scanFilesForKnownSecrets,
 } from "./ceremony-support.mjs";
+import { assertCeremonyAttestationClosure } from "../lib/module-closure.mjs";
 import { installRehearsalArtifact } from "./install-rehearsal-artifact.mjs";
 import {
   phase5ProxyClientId,
@@ -62,7 +63,9 @@ const EMPLOYEE_PACKAGE = "echo-brain";
 const AUTHORITY_PACKAGE = "@echo-brain/organization-authority";
 const LEASE_TTL_MS = 5 * 60 * 1000;
 const REQUEST_MAXIMUM_AGE_MS = 5 * 60 * 1000;
-const CEREMONY_SOURCE_PATHS = Object.freeze([
+export const CEREMONY_SOURCE_PATHS = Object.freeze([
+  "tools/lib/module-closure.mjs",
+  "tools/lib/module-references.mjs",
   "tools/product/build-artifact.mjs",
   "tools/product/sync-shrinkwrap.mjs",
   "tools/release/runtime-shrinkwrap.mjs",
@@ -82,6 +85,15 @@ const CEREMONY_SOURCE_PATHS = Object.freeze([
   "release/organization-authority/runtime-boundary.v1.json",
   "schemas/phase5/one-machine-rehearsal-report.v1.schema.json",
 ]);
+export const CEREMONY_ENTRY_POINTS = Object.freeze([
+  "tools/phase5/run-one-machine.mjs",
+  "tools/phase5/employee-driver.mjs",
+  "tools/product/build-artifact.mjs",
+  "tools/product/sync-shrinkwrap.mjs",
+  "tools/organization-authority/build-artifact.mjs",
+  "tools/organization-authority/sync-shrinkwrap.mjs",
+]);
+const CEREMONY_MODULE_EXTENSIONS = [".mjs", ".cjs", ".js", ".mts", ".cts", ".ts"];
 
 function sha256(value) {
   return createHash("sha256").update(value).digest("hex");
@@ -175,6 +187,13 @@ function assertCommittedCeremony(sourceSha) {
   if (head !== sourceSha) {
     throw new Error("Phase 5 source SHA is not the current HEAD");
   }
+  assertCeremonyAttestationClosure({
+    projectRoot: REPO_ROOT,
+    entryPoints: CEREMONY_ENTRY_POINTS,
+    attestedSourcePaths: CEREMONY_SOURCE_PATHS.filter((path) =>
+      CEREMONY_MODULE_EXTENSIONS.some((extension) => path.endsWith(extension)),
+    ),
+  });
   const entries = [];
   for (const path of CEREMONY_SOURCE_PATHS) {
     const local = readFileSync(join(REPO_ROOT, path));
