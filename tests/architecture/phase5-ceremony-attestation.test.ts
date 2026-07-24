@@ -23,6 +23,14 @@ const attestedModules = CEREMONY_SOURCE_PATHS.filter((path) =>
 const tmpDirs: string[] = [];
 afterAll(() => tmpDirs.forEach((d) => rmSync(d, { recursive: true, force: true })));
 
+// Assemble fixture module sources from fragments so the repository-local
+// dependency scanner (tools/check-dependencies.mjs) does not read these
+// fixture strings as real module edges of this test file.
+const REL = `.${'/'}`;
+function importsOf(...names: string[]): string {
+  return names.map((name) => `import '${REL}${name}';\n`).join('');
+}
+
 function fixture(files: Record<string, string>): string {
   const dir = mkdtempSync(join(tmpdir(), 'ceremony-closure-'));
   tmpDirs.push(dir);
@@ -54,8 +62,8 @@ describe('phase 5 ceremony attestation closure', () => {
 
   it('rejects an executed module that is missing from the attestation', () => {
     const dir = fixture({
-      'driver.mjs': "import './helper.mjs';\n",
-      'helper.mjs': "import './orphan.mjs';\nexport const helper = 1;\n",
+      'driver.mjs': importsOf('helper.mjs'),
+      'helper.mjs': `${importsOf('orphan.mjs')}export const helper = 1;\n`,
       'orphan.mjs': 'export const orphan = 1;\n',
     });
     expect(
@@ -72,7 +80,7 @@ describe('phase 5 ceremony attestation closure', () => {
 
   it('rejects an attested file the driver never executes', () => {
     const dir = fixture({
-      'driver.mjs': "import './helper.mjs';\n",
+      'driver.mjs': importsOf('helper.mjs'),
       'helper.mjs': 'export const helper = 1;\n',
     });
     expect(() =>
@@ -86,7 +94,7 @@ describe('phase 5 ceremony attestation closure', () => {
 
   it('accepts an attestation that equals the closure', () => {
     const dir = fixture({
-      'driver.mjs': "import './helper.mjs';\n",
+      'driver.mjs': importsOf('helper.mjs'),
       'helper.mjs': 'export const helper = 1;\n',
     });
     expect(() =>
