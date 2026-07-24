@@ -314,6 +314,117 @@ describe('workspace source boundaries', () => {
     );
   });
 
+  it('accepts loader words used only as declaration-only member names', () => {
+    const fixture = fixtureRepository();
+    const entry = join(fixture, 'packages/federation-protocol/src/index.ts');
+
+    // Every `require` / `createRequire` below sits in a member-name position:
+    // it names a property and is never evaluated as a value. Modelling a
+    // package.json exports entry is the ordinary reason to write these.
+    writeFileSync(
+      entry,
+      [
+        'export interface PackageEntryPoint {',
+        '  require: string;',
+        '  import: string;',
+        '}',
+        'export interface LoaderApi {',
+        '  require(specifier: string): unknown;',
+        '  createRequire: string;',
+        '}',
+        'export type ExportsMap = { require: string };',
+        'export const entryPoint = {',
+        `  exports: { require: './index.cjs', import: './index.mjs' },`,
+        `  createRequire: 'documented',`,
+        '};',
+        'export const literalMembers = {',
+        '  require() {',
+        `    return 'name only';`,
+        '  },',
+        '  get createRequire() {',
+        `    return 'name only';`,
+        '  },',
+        '};',
+        'export class Manifest {',
+        `  require = './index.cjs';`,
+        '  createRequire(): string {',
+        '    return this.require;',
+        '  }',
+        '}',
+        'export class Accessors {',
+        `  private value = './index.cjs';`,
+        '  get require(): string {',
+        '    return this.value;',
+        '  }',
+        '  set require(next: string) {',
+        '    this.value = next;',
+        '  }',
+        '  get createRequire(): string {',
+        '    return this.value;',
+        '  }',
+        '}',
+        'export enum LoaderKind {',
+        `  require = 'require',`,
+        `  createRequire = 'createRequire',`,
+        '}',
+        '',
+      ].join('\n'),
+    );
+
+    const result = runBoundary(fixture);
+    expect(result.status, result.stdout + result.stderr).toBe(0);
+  });
+
+  it('still rejects loader words in evaluated property positions', () => {
+    const fixture = fixtureRepository();
+    const entry = join(fixture, 'packages/federation-protocol/src/index.ts');
+
+    // A computed name and a shorthand property both *evaluate* the identifier,
+    // so the member-name exemption must not reach them.
+    const escapes: ReadonlyArray<readonly [string, string]> = [
+      ['object shorthand property', ['export const bundle = { require };', ''].join('\n')],
+      ['computed object key', ['export const table = { [require]: 1 };', ''].join('\n')],
+      [
+        'computed object key via createRequire',
+        [
+          `import { createRequire } from 'node:module';`,
+          'export const table = { [createRequire]: 1 };',
+          '',
+        ].join('\n'),
+      ],
+      [
+        'computed class member',
+        [
+          `import { createRequire } from 'node:module';`,
+          'export class Loaders {',
+          '  [createRequire]() {',
+          '    return 1;',
+          '  }',
+          '}',
+          '',
+        ].join('\n'),
+      ],
+      [
+        'shorthand property carrying a createRequire alias',
+        [
+          `import { createRequire } from 'node:module';`,
+          'const load = createRequire(import.meta.url);',
+          'export const bundle = { load };',
+          '',
+        ].join('\n'),
+      ],
+    ];
+
+    for (const [label, source] of escapes) {
+      writeFileSync(entry, source);
+      const result = runBoundary(fixture);
+      expect(result.status, `${label}: ${result.stdout + result.stderr}`).not.toBe(0);
+      expect(result.stdout + result.stderr, label).toContain(
+        'non-literal module loading is forbidden',
+      );
+    }
+  });
+
   it('rejects workspace deep imports that are not package exports', () => {
     const fixture = fixtureRepository();
     writeFileSync(

@@ -1,5 +1,27 @@
 import ts from 'typescript';
 
+// Positions whose `name` is a member name: it labels a property inside a
+// container's member list and is never evaluated as a value, so a tracked
+// loader word appearing there is not a module load. Callers must guard on
+// `parent.name === node`, which is what keeps computed names out: in
+// `{ [require]: 1 }` the identifier's parent is the ComputedPropertyName, so it
+// never matches and stays flagged — correctly, because there it *is* evaluated.
+//
+// ShorthandPropertyAssignment is deliberately absent. `{ require }` desugars to
+// `{ require: require }`, so the identifier is simultaneously the member name
+// and a live reference to the loader binding; exempting it would let the loader
+// escape inside an object literal, which is exactly the hole this rule closes.
+const MEMBER_NAME_PARENT_KINDS = new Set([
+  ts.SyntaxKind.PropertyAssignment,
+  ts.SyntaxKind.PropertySignature,
+  ts.SyntaxKind.PropertyDeclaration,
+  ts.SyntaxKind.MethodSignature,
+  ts.SyntaxKind.MethodDeclaration,
+  ts.SyntaxKind.GetAccessor,
+  ts.SyntaxKind.SetAccessor,
+  ts.SyntaxKind.EnumMember,
+]);
+
 export function literalText(node) {
   return ts.isStringLiteral(node) || ts.isNoSubstitutionTemplateLiteral(node)
     ? node.text
@@ -67,6 +89,7 @@ export function collectModuleReferences(sourceFile) {
   function isDeclarationOrMemberName(node) {
     const parent = node.parent;
     return (
+      (MEMBER_NAME_PARENT_KINDS.has(parent.kind) && parent.name === node) ||
       (ts.isPropertyAccessExpression(parent) && parent.name === node) ||
       ts.isImportSpecifier(parent) ||
       ts.isExportSpecifier(parent) ||
