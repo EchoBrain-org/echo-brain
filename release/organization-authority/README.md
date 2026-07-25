@@ -42,13 +42,17 @@ private retry-safe invitation envelope. The raw one-time grant exists only in
 that `0600` file, never in the authority API or database.
 
 The server-rendered `/admin` console is part of the same authority listener and
-database boundary. It requires the authenticated HTTPS edge and keeps only
-short-lived in-memory sessions. The artifact intentionally does not include a
-daemon, PID-file controller, launchd/systemd unit, TLS terminator, global
-multi-organization control plane, or production signer.
+database boundary. It requires the separately packaged organization
+administrator HTTPS edge and keeps only short-lived in-memory sessions. That
+edge supplies the non-secret employee authority locator used by browser-created
+invitations; it remains a different exact artifact and is never bundled here.
+The authority artifact intentionally does not include a daemon, PID-file
+controller, launchd/systemd unit, TLS terminator, global multi-organization
+control plane, or production signer.
 
 The internal `/_echo/runtime-status` ownership-proof route is for the private
-loopback hop and must not be forwarded by a future TLS terminator.
+loopback hop and must not be forwarded by either the administrator edge or any
+employee-facing TLS terminator.
 
 `declared_platform` records the accepted release cell. Building or inspecting
 the artifact on another host does not qualify that host as the target runtime.

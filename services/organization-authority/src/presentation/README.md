@@ -11,7 +11,11 @@ escaped server-rendered views, static CSP-safe assets, and bounded in-memory
 sessions. It calls the same application use cases as JSON HTTP; it does not
 open SQLite or create a second server. The login credential is exchanged for a
 proxy-identity-bound process session, every mutation requires CSRF and a
-matching HTTPS origin, and raw invitation grants remain browser-local.
+matching HTTPS origin, and raw invitation grants remain browser-local. The
+browser obtains the employee-facing authority origin from the administrator
+edge's local `GET /admin/edge-config` deployment-metadata response before
+creating an invitation; this authority presentation neither serves that route
+nor infers an employee origin from the administrator request Host.
 
 Every request must carry a canonical client-identity digest asserted by the
 authenticated TLS terminator. The origin authenticates that loopback proxy hop

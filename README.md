@@ -394,6 +394,42 @@ bundled `slack` delivery surface is the first external team destination. It
 durably replays confirmed delivery identities and pins ambiguous post outcomes
 for operator repair instead of automatically risking a duplicate message.
 
+## Organization administrator edge
+
+The organization administrator edge is a third, exact-commit deployable,
+separate from both the employee-machine product and the single-organization
+authority. It terminates HTTPS for one configured administrator hostname,
+requires a trusted client certificate plus an explicit client-SPKI SHA-256
+allowlist match, and forwards only the exact server-rendered `/admin` console
+surface to a bare loopback authority origin. It owns no organization
+authorization, database, membership, grant, enrollment, lease, session, or
+revocation behavior.
+
+The edge runtime configuration and all TLS, client-CA, and trusted-proxy
+material are external private files. It also requires a canonical
+`employee_authority_base_url`. The edge serves that non-secret deployment
+locator locally at `GET /admin/edge-config` so browser-created invitations
+refer to the separate employee-facing HTTPS authority origin instead of the
+administrator hostname. Employee enrollment and lease routes are never exposed
+on the administrator host.
+
+Build and verify one candidate from an exact committed source SHA:
+
+```sh
+node tools/organization-admin-edge/build-artifact.mjs \
+  --version 0.1.0-dev.admin-edge \
+  --source-sha "$(git rev-parse HEAD)" \
+  --out-dir /absolute/path/to/admin-edge-artifact
+
+node tools/organization-admin-edge/verify-artifact.mjs \
+  --artifact-dir /absolute/path/to/admin-edge-artifact
+```
+
+These commands produce and inspect a local development artifact; they do not
+install or deploy it and do not close Phase 5 `P5-NET-001`. Configuration,
+startup, rotation, rollback, and the exact request-boundary rules are in the
+[organization administrator edge runbook](docs/runbooks/organization-admin-edge.md).
+
 ## Stable core and adapter boundaries
 
 The governing extension rules and per-capability checklists are documented in

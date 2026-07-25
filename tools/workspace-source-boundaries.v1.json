@@ -6,6 +6,7 @@
     "packages/organization-protocol/source-boundary.v1.json",
     "packages/organization-api/source-boundary.v1.json",
     "services/organization-authority/source-boundary.v1.json",
+    "services/organization-admin-edge/source-boundary.v1.json",
     "src/product/federation/source-boundary.v1.json",
     "src/product/organization/source-boundary.v1.json"
   ]

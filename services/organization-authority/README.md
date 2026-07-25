@@ -72,14 +72,19 @@ invitation before the request, so a retry after an ambiguous response reuses
 the same command and one-time secret.
 
 The same listener also owns a small server-rendered console under `/admin`.
-It must be reached through the authenticated HTTPS edge described above. The
-administrator credential is consumed only by the login POST and is exchanged
-for a bounded, process-local, proxy-identity-bound session with CSRF protection.
-It is not stored in browser JavaScript, a cookie, or SQLite. Console invitation
-material is generated with Web Crypto in the browser; only its digest reaches
-the authority, and the one-time secret cannot be recovered after the page is
-reloaded. The console is deliberately an org-scoped operational surface, not a
-global ECHO control plane.
+It must be reached through the separately deployed organization administrator
+HTTPS edge described above. The administrator credential is consumed only by
+the login POST and is exchanged for a bounded, process-local,
+proxy-identity-bound session with CSRF protection. It is not stored in browser
+JavaScript, a cookie, or SQLite. Console invitation material is generated with
+Web Crypto in the browser; only its digest reaches the authority, and the
+one-time secret cannot be recovered after the page is reloaded. Before
+generating that secret, the browser reads the separate employee-facing
+authority origin from the edge-owned `GET /admin/edge-config` deployment
+metadata endpoint. The authority does not implement that endpoint, and the
+administrator edge does not expose employee enrollment or access routes. The
+console is deliberately an org-scoped operational surface, not a global ECHO
+control plane.
 
 The only included private-key adapter is an explicitly enabled, unencrypted
 development-file signer. Production hosting must replace that adapter behind

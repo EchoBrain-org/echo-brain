@@ -316,7 +316,9 @@ describe('administrator console presentation', () => {
         "kind: 'echo-organization-enrollment-invitation'",
       );
       expect(source).toContain("status: 'issued'");
-      expect(source).toContain('authority_base_url: window.location.origin');
+      expect(source).toContain("fetch('/admin/edge-config'");
+      expect(source).toContain('authority_base_url: state.authority_base_url');
+      expect(source).not.toContain('window.location.origin');
       expect(source).toContain('command_id: state.command_id');
       expect(source).toContain('lifetime_seconds: state.lifetime_seconds');
       expect(source).toContain('lastInvitationText = canonicalJson(envelope)');
@@ -448,6 +450,7 @@ describe('administrator console presentation', () => {
       },
     };
     const requestBodies: string[] = [];
+    let edgeConfigRequests = 0;
     let copied = '';
 
     runInNewContext(ADMIN_CONSOLE_JAVASCRIPT, {
@@ -487,7 +490,27 @@ describe('administrator console presentation', () => {
         querySelectorAll: (selector: string) =>
           selector === 'form[data-invitation-form]' ? [form] : [],
       },
-      fetch: async (_url: string, init: { body: string }) => {
+      fetch: async (
+        url: string,
+        init?: { body?: string },
+      ): Promise<{
+        ok: boolean;
+        status: number;
+        json(): Promise<unknown>;
+      }> => {
+        if (url === '/admin/edge-config') {
+          edgeConfigRequests += 1;
+          return {
+            ok: true,
+            status: 200,
+            json: async () => ({
+              authority_base_url: 'https://employee-authority.example',
+            }),
+          };
+        }
+        if (typeof init?.body !== 'string') {
+          throw new Error('unexpected bodyless administrator request');
+        }
         requestBodies.push(init.body);
         if (requestBodies.length === 1) {
           throw new Error('connection closed after delivery');
@@ -520,7 +543,6 @@ describe('administrator console presentation', () => {
         },
       },
       setTimeout,
-      window: { location: { origin: 'https://authority.example' } },
     });
 
     expect(submit).toBeTypeOf('function');
@@ -530,6 +552,7 @@ describe('administrator console presentation', () => {
     await submit!({ preventDefault: () => undefined });
     expect(requestBodies).toHaveLength(2);
     expect(requestBodies[1]).toBe(requestBodies[0]);
+    expect(edgeConfigRequests).toBe(1);
 
     const request = JSON.parse(requestBodies[0]!) as Record<string, unknown>;
     expect(Object.keys(request).sort()).toEqual([
@@ -571,7 +594,7 @@ describe('administrator console presentation', () => {
       schema_version: 1,
       kind: 'echo-organization-enrollment-invitation',
       status: 'issued',
-      authority_base_url: 'https://authority.example',
+      authority_base_url: 'https://employee-authority.example',
       authority_id: IDS.authority,
       authority_pin_sha256: DIGESTS.pin,
       authority_pin_verification: 'independent_pin_required',
@@ -592,6 +615,98 @@ describe('administrator console presentation', () => {
 
     await copyButton.listeners.get('click')!();
     expect(copied).toBe(`${canonicalJson(envelope)}\n`);
+  });
+
+  it('refuses invitation registration before generating a grant when edge deployment metadata is invalid', async () => {
+    class Element {
+      className = '';
+      hidden = true;
+      textContent = '';
+    }
+    class InputElement extends Element {
+      value = '3600';
+    }
+    class ButtonElement extends Element {
+      disabled = false;
+    }
+
+    const status = new Element();
+    const submitButton = new ButtonElement();
+    const lifetime = new InputElement();
+    let submit:
+      ((event: { preventDefault(): void }) => Promise<void>) | undefined;
+    const form = {
+      action: `https://admin.example/admin/memberships/${IDS.membership}/enrollment-grants`,
+      elements: {
+        namedItem: (name: string) =>
+          name === 'lifetime_seconds' ? lifetime : null,
+      },
+      querySelector: (selector: string) =>
+        selector === 'button[type="submit"]' ? submitButton : null,
+      addEventListener: (
+        name: string,
+        listener: (event: { preventDefault(): void }) => Promise<void>,
+      ) => {
+        if (name === 'submit') submit = listener;
+      },
+    };
+    let edgeConfigRequests = 0;
+    let grantRegistrationRequests = 0;
+    let randomGrantRequests = 0;
+
+    runInNewContext(ADMIN_CONSOLE_JAVASCRIPT, {
+      Blob,
+      Error,
+      HTMLButtonElement: ButtonElement,
+      HTMLElement: Element,
+      HTMLInputElement: InputElement,
+      HTMLMetaElement: Element,
+      URL,
+      btoa: (value: string) => Buffer.from(value, 'binary').toString('base64'),
+      crypto: {
+        randomUUID: () => '00000000-0000-4000-8000-000000000099',
+        getRandomValues: (bytes: Uint8Array) => {
+          randomGrantRequests += 1;
+          return bytes.fill(7);
+        },
+        subtle: {
+          digest: async () => new Uint8Array(32).buffer,
+        },
+      },
+      document: {
+        body: { append: () => undefined },
+        createElement: () => new Element(),
+        querySelector: (selector: string) =>
+          selector === '[data-invitation-status]' ? status : null,
+        querySelectorAll: (selector: string) =>
+          selector === 'form[data-invitation-form]' ? [form] : [],
+      },
+      fetch: async (url: string) => {
+        if (url === '/admin/edge-config') {
+          edgeConfigRequests += 1;
+          return {
+            ok: true,
+            status: 200,
+            json: async () => ({
+              authority_base_url: 'http://employee-authority.example',
+            }),
+          };
+        }
+        grantRegistrationRequests += 1;
+        throw new Error('grant registration must not be reached');
+      },
+      navigator: {},
+      setTimeout,
+    });
+
+    expect(submit).toBeTypeOf('function');
+    await submit!({ preventDefault: () => undefined });
+    expect(edgeConfigRequests).toBe(1);
+    expect(grantRegistrationRequests).toBe(0);
+    expect(randomGrantRequests).toBe(0);
+    expect(status.textContent).toContain('invalid employee authority address');
+    expect(status.className).toBe('error');
+    expect(submitButton.disabled).toBe(false);
   });
 
   it('requires a strict HTTPS Origin/Host match and bounded fatal body decoding', async () => {

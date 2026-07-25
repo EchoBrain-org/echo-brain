@@ -17,6 +17,7 @@ behavior belongs in `tests/integration/`.
 | `tests/integration/`                    | deliberate local-product/service crossings                                    | `npm run test:integration`                                                        |
 | `packages/*/test/`                      | shared trust-boundary contracts                                               | `npm run test:protocols`                                                          |
 | `services/organization-authority/test/` | central org=1 authority                                                       | `npm run test:authority`                                                          |
+| `services/organization-admin-edge/test/` | authenticated HTTPS administrator boundary                                   | `npm run test:admin-edge`                                                         |
 | `tests/experimental/n2/`                | frozen pre-promotion N=2 reference                                            | `npm run test:experimental:n2`                                                    |
 
 The stable compiler and stable Vitest configurations exclude

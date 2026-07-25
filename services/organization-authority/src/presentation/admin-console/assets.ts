@@ -319,10 +319,52 @@ export const ADMIN_CONSOLE_JAVASCRIPT = String.raw`
     target.hidden = false;
   }
 
+  async function configuredEnrollmentAuthorityOrigin() {
+    let response;
+    try {
+      response = await fetch('/admin/edge-config', {
+        method: 'GET',
+        credentials: 'same-origin',
+        cache: 'no-store',
+        redirect: 'error',
+      });
+    } catch {
+      throw new Error('The employee authority address is unavailable. Retry after the administrator edge is restored.');
+    }
+    let config;
+    try {
+      config = await response.json();
+    } catch {
+      throw new Error('The administrator edge returned an invalid employee authority address.');
+    }
+    if (!response.ok || typeof config !== 'object' || config === null ||
+        Array.isArray(config) || Object.keys(config).join(',') !== 'authority_base_url' ||
+        typeof config.authority_base_url !== 'string' ||
+        config.authority_base_url.length === 0 ||
+        config.authority_base_url.length > 2048) {
+      throw new Error('The administrator edge returned an invalid employee authority address.');
+    }
+    let origin;
+    try {
+      const parsed = new URL(config.authority_base_url);
+      if (parsed.protocol !== 'https:' || parsed.username !== '' ||
+          parsed.password !== '' || parsed.pathname !== '/' ||
+          parsed.search !== '' || parsed.hash !== '' ||
+          parsed.origin !== config.authority_base_url) {
+        throw new Error('invalid origin');
+      }
+      origin = parsed.origin;
+    } catch {
+      throw new Error('The administrator edge returned an invalid employee authority address.');
+    }
+    return origin;
+  }
+
   async function invitationState(form) {
     const retained = invitationStates.get(form);
     if (retained !== undefined) return retained;
 
+    const authorityBaseUrl = await configuredEnrollmentAuthorityOrigin();
     const lifetimeInput = form.elements.namedItem('lifetime_seconds');
     if (!(lifetimeInput instanceof HTMLInputElement)) {
       throw new Error('Invitation lifetime is unavailable.');
@@ -337,6 +379,7 @@ export const ADMIN_CONSOLE_JAVASCRIPT = String.raw`
     const secret = bytesToBase64url(secretBytes);
     const digestBytes = new Uint8Array(await crypto.subtle.digest('SHA-256', secretBytes));
     const state = Object.freeze({
+      authority_base_url: authorityBaseUrl,
       command_id: newCommandId(),
       enrollment_grant_base64url: secret,
       enrollment_grant_sha256: 'sha256:' + bytesToHex(digestBytes),
@@ -389,7 +432,7 @@ export const ADMIN_CONSOLE_JAVASCRIPT = String.raw`
       schema_version: 1,
       kind: 'echo-organization-enrollment-invitation',
       status: 'issued',
-      authority_base_url: window.location.origin,
+      authority_base_url: state.authority_base_url,
       authority_id: issued.authority_id,
       authority_pin_sha256: issued.authority_pin_sha256,
       authority_pin_verification: 'independent_pin_required',
