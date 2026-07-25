@@ -191,7 +191,11 @@ jobs:
       - name: Repository tests
         id: repo_tests
         continue-on-error: true
-        run: npm test -- --reporter=json --outputFile="$RUNNER_TEMP/repository-results.json"
+        run: >-
+          npm test --
+          --reporter=default
+          --reporter=json
+          --outputFile.json="$RUNNER_TEMP/repository-results.json"
       - name: Prepare exact offline dependencies
         id: prepare
         continue-on-error: true
@@ -221,7 +225,11 @@ jobs:
       - name: Product tests against the built artifact
         id: product_tests
         continue-on-error: true
-        run: npm run test:qualification -- --reporter=json --outputFile="$RUNNER_TEMP/product-results.json"
+        run: >-
+          npm run test:qualification --
+          --reporter=default
+          --reporter=json
+          --outputFile.json="$RUNNER_TEMP/product-results.json"
       - name: Count unexpected repository and product-test skips
         id: skips
         if: always()

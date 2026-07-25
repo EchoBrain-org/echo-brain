@@ -43,7 +43,52 @@ function canonicalPackagePath(packageName) {
   return `node_modules/${packageName}`;
 }
 
-function rootInstallLock(artifact, manifest, packagedLock, packageJson) {
+function installedDependencyLockEntries(packages, installedPackagePath) {
+  const packagedEntries = Object.entries(packages).filter(
+    ([path]) => path !== "",
+  );
+  for (const [path, metadata] of packagedEntries) {
+    if (
+      metadata === null ||
+      typeof metadata !== "object" ||
+      Array.isArray(metadata)
+    ) {
+      throw new Error(`packaged dependency lock entry is invalid: ${path}`);
+    }
+  }
+  const bundledRoots = packagedEntries
+    .filter(([, metadata]) => metadata.inBundle === true)
+    .map(([path]) => path);
+  const entries = {};
+  for (const [path, metadata] of packagedEntries) {
+    const bundled = bundledRoots.some(
+      (root) => path === root || path.startsWith(`${root}/node_modules/`),
+    );
+    const installedPath = bundled ? `${installedPackagePath}/${path}` : path;
+    if (
+      bundled &&
+      (!path.startsWith("node_modules/") ||
+        path.includes("\\") ||
+        path
+          .split("/")
+          .some((part) => part === "" || part === "." || part === ".."))
+    ) {
+      throw new Error(`packaged bundled dependency path is unsafe: ${path}`);
+    }
+    if (
+      installedPath === installedPackagePath ||
+      Object.hasOwn(entries, installedPath)
+    ) {
+      throw new Error(
+        `packaged dependency lock path collides after installation: ${path}`,
+      );
+    }
+    entries[installedPath] = metadata;
+  }
+  return entries;
+}
+
+export function rootInstallLock(artifact, manifest, packagedLock, packageJson) {
   const dependency = `file:${artifact}`;
   const packagePath = canonicalPackagePath(packageJson.name);
   return {
@@ -68,9 +113,7 @@ function rootInstallLock(artifact, manifest, packagedLock, packageJson) {
           ? {}
           : { engines: packageJson.engines }),
       },
-      ...Object.fromEntries(
-        Object.entries(packagedLock.packages).filter(([path]) => path !== ""),
-      ),
+      ...installedDependencyLockEntries(packagedLock.packages, packagePath),
     },
   };
 }

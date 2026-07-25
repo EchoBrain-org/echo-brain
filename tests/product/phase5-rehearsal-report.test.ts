@@ -3,6 +3,8 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { afterAll, describe, expect, it } from "vitest";
 import { spawnSanitizedChild } from "../../src/product/spawn-sanitized-child.js";
+// @ts-expect-error Phase 5 installation tools are repository-owned JavaScript.
+import { rootInstallLock as rehearsalRootInstallLock } from "../../tools/phase5/install-rehearsal-artifact.mjs";
 // @ts-expect-error Phase 5 orchestration tools are repository-owned JavaScript.
 import * as phase5Report from "../../tools/phase5/report.mjs";
 // @ts-expect-error Phase 5 orchestration tools are repository-owned JavaScript.
@@ -125,6 +127,64 @@ afterAll(() => {
 });
 
 describe("Phase 5 one-machine rehearsal report", () => {
+  it("nests bundled dependency subtrees in the rehearsal install lock", () => {
+    const artifact = join(TEMPORARY_ROOT, "authority-rehearsal.tgz");
+    writeFileSync(artifact, "synthetic authority artifact\n");
+    const bundledRoot = "node_modules/@echo-brain/organization-protocol";
+    const bundledDescendant = `${bundledRoot}/node_modules/synthetic-child`;
+    const externalPath = "node_modules/ajv";
+    const packagedLock = {
+      packages: {
+        "": {
+          dependencies: {
+            "@echo-brain/organization-protocol": "0.0.0-dev.0",
+            ajv: "8.20.0",
+          },
+          bundleDependencies: ["@echo-brain/organization-protocol"],
+        },
+        [bundledRoot]: {
+          version: "0.0.0-dev.0",
+          inBundle: true,
+        },
+        [bundledDescendant]: {
+          version: "1.0.0",
+        },
+        [externalPath]: {
+          version: "8.20.0",
+          resolved: "https://registry.npmjs.org/ajv/-/ajv-8.20.0.tgz",
+          integrity: `sha512-${"a".repeat(88)}`,
+        },
+      },
+    };
+
+    const lock = rehearsalRootInstallLock(
+      artifact,
+      { version: "0.1.0-dev.test" },
+      packagedLock,
+      {
+        name: "@echo-brain/organization-authority",
+        bin: {
+          "echo-organization-authority": "dist/organization-authority/cli.js",
+        },
+      },
+    ) as {
+      packages: Record<string, Record<string, unknown>>;
+    };
+    const installedPackagePath =
+      "node_modules/@echo-brain/organization-authority";
+    expect(lock.packages[`${installedPackagePath}/${bundledRoot}`]).toEqual(
+      packagedLock.packages[bundledRoot],
+    );
+    expect(
+      lock.packages[`${installedPackagePath}/${bundledDescendant}`],
+    ).toEqual(packagedLock.packages[bundledDescendant]);
+    expect(lock.packages[bundledRoot]).toBeUndefined();
+    expect(lock.packages[bundledDescendant]).toBeUndefined();
+    expect(lock.packages[externalPath]).toEqual(
+      packagedLock.packages[externalPath],
+    );
+  });
+
   it("accepts the exact passing and blocked vector without claiming Phase 5 completion", () => {
     const report = validReport();
 

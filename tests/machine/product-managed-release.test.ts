@@ -132,8 +132,16 @@ function packageContents(
       '': {
         name: 'echo-brain',
         version,
+        dependencies: {
+          '@echo-brain/organization-protocol': '0.0.0-dev.0',
+        },
+        bundleDependencies: ['@echo-brain/organization-protocol'],
         bin: { 'echo-brain': 'dist/product/cli.js' },
         engines: { node: '22.22.1' },
+      },
+      'node_modules/@echo-brain/organization-protocol': {
+        version: '0.0.0-dev.0',
+        inBundle: true,
       },
     },
   })}\n`;
@@ -243,9 +251,15 @@ function stageRelease(
           version,
           resolved: artifactDependency,
           integrity: sha512Integrity(artifactBytes),
+          dependencies: productMetadata['dependencies'],
+          bundleDependencies: productMetadata['bundleDependencies'],
           bin: productMetadata['bin'],
           engines: productMetadata['engines'],
         },
+        'node_modules/echo-brain/node_modules/@echo-brain/organization-protocol':
+          productLock.packages[
+            'node_modules/@echo-brain/organization-protocol'
+          ],
       },
     })}\n`,
     { mode: 0o600 },
@@ -473,15 +487,40 @@ describe('managed installed product releases', () => {
     );
 
     const fourth = createManagedRoot();
-    const unauthenticated = stageRelease(
+    const misplacedBundle = stageRelease(
       fourth.managedRoot,
+      'misplaced-bundle',
+    );
+    const misplacedLockPath = join(
+      misplacedBundle.releaseDirectory,
+      'prefix/package-lock.json',
+    );
+    const misplacedLock = JSON.parse(
+      readFileSync(misplacedLockPath, 'utf8'),
+    ) as {
+      packages: Record<string, Record<string, unknown>>;
+    };
+    const nestedBundlePath =
+      'node_modules/echo-brain/node_modules/@echo-brain/organization-protocol';
+    misplacedLock.packages[
+      'node_modules/@echo-brain/organization-protocol'
+    ] = misplacedLock.packages[nestedBundlePath]!;
+    delete misplacedLock.packages[nestedBundlePath];
+    writeFileSync(misplacedLockPath, `${JSON.stringify(misplacedLock)}\n`);
+    expect(() => prepare(fourth.managedRoot, misplacedBundle)).toThrow(
+      /installation lock does not match/,
+    );
+
+    const fifth = createManagedRoot();
+    const unauthenticated = stageRelease(
+      fifth.managedRoot,
       'unauthenticated-qualification',
     );
     writeFileSync(
       join(unauthenticated.releaseDirectory, 'qualification-report.json'),
       '{"result":"qualified"}\n',
     );
-    expect(() => prepare(fourth.managedRoot, unauthenticated)).toThrow(
+    expect(() => prepare(fifth.managedRoot, unauthenticated)).toThrow(
       /unexpected top-level entries/,
     );
   });
