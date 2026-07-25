@@ -267,7 +267,7 @@ export class OrganizationAuthorityApplication {
     return Buffer.from(signature);
   }
 
-  private provisionedMembership(
+  private originalProvisionedMembership(
     membership: StoredAuthorityMembership,
   ): ProvisionedOrganizationMembershipV1 {
     if (membership.organization_id !== this.descriptorValue.organization_id) {
@@ -279,9 +279,9 @@ export class OrganizationAuthorityApplication {
       membership_id: membership.membership_id,
       display_name: membership.display_name,
       membership_type: membership.membership_type,
-      status: membership.status,
+      status: 'active',
       provisioned_at: membership.provisioned_at,
-      revoked_at: membership.revoked_at,
+      revoked_at: null,
     };
   }
 
@@ -300,7 +300,7 @@ export class OrganizationAuthorityApplication {
           'administrator command ID was reused with different membership input',
         );
       }
-      return this.provisionedMembership(replay);
+      return this.originalProvisionedMembership(replay);
     }
     assertDisplayName(command.display_name);
     assertMembershipType(command.membership_type);
@@ -349,7 +349,7 @@ export class OrganizationAuthorityApplication {
       });
       return membership;
     });
-    return this.provisionedMembership(stored);
+    return this.originalProvisionedMembership(stored);
   }
 
   private issuedEnrollmentGrant(

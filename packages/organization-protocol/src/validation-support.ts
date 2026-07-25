@@ -3,6 +3,7 @@ import {
   assertFederationId,
   assertUtcMillisecondTimestamp,
   canonicalJsonBytes,
+  isFederationProtocolValidationError,
   verifyP256SigningKeyDescriptor,
 } from "@echo-brain/federation-protocol";
 import type {
@@ -12,6 +13,7 @@ import type {
   SignedIntegrity,
 } from "@echo-brain/federation-protocol";
 import type { OrganizationMembershipTypeV1 } from "./contracts.js";
+import { organizationProtocolValidationFailure } from "./validation-error.js";
 
 export const MAX_ORGANIZATION_PROTOCOL_DOCUMENT_BYTES = 16 * 1024;
 
@@ -19,12 +21,23 @@ const DIGEST_PATTERN = /^sha256:[0-9a-f]{64}$/;
 const CANONICAL_BASE64_PATTERN =
   /^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/;
 
+function translateFederationValidation<T>(validate: () => T): T {
+  try {
+    return validate();
+  } catch (error) {
+    if (isFederationProtocolValidationError(error)) {
+      organizationProtocolValidationFailure(error.message, error);
+    }
+    throw error;
+  }
+}
+
 export function asRecord(
   value: unknown,
   label: string,
 ): Record<string, unknown> {
   if (typeof value !== "object" || value === null || Array.isArray(value)) {
-    throw new Error(`${label} must be an object`);
+    organizationProtocolValidationFailure(`${label} must be an object`);
   }
   return value as Record<string, unknown>;
 }
@@ -40,7 +53,7 @@ export function assertExactKeys(
     actual.length !== wanted.length ||
     actual.some((key, index) => key !== wanted[index])
   ) {
-    throw new Error(`${label} has an unexpected shape`);
+    organizationProtocolValidationFailure(`${label} has an unexpected shape`);
   }
 }
 
@@ -49,7 +62,9 @@ export function assertLiteral<T extends string | number>(
   expected: T,
   label: string,
 ): asserts value is T {
-  if (value !== expected) throw new Error(`${label} is unsupported`);
+  if (value !== expected) {
+    organizationProtocolValidationFailure(`${label} is unsupported`);
+  }
 }
 
 export function assertDigest(
@@ -57,7 +72,9 @@ export function assertDigest(
   label: string,
 ): asserts value is Sha256Digest {
   if (typeof value !== "string" || !DIGEST_PATTERN.test(value)) {
-    throw new Error(`${label} must be a canonical SHA-256 digest`);
+    organizationProtocolValidationFailure(
+      `${label} must be a canonical SHA-256 digest`,
+    );
   }
 }
 
@@ -67,9 +84,11 @@ export function assertId(
   label: string,
 ): asserts value is string {
   if (typeof value !== "string") {
-    throw new Error(`${label} must be a canonical ${prefix} identifier`);
+    organizationProtocolValidationFailure(
+      `${label} must be a canonical ${prefix} identifier`,
+    );
   }
-  assertFederationId(value, prefix, label);
+  translateFederationValidation(() => assertFederationId(value, prefix, label));
 }
 
 export function assertTimestamp(
@@ -77,16 +96,22 @@ export function assertTimestamp(
   label: string,
 ): asserts value is string {
   if (typeof value !== "string") {
-    throw new Error(`${label} must be a UTC millisecond timestamp`);
+    organizationProtocolValidationFailure(
+      `${label} must be a UTC millisecond timestamp`,
+    );
   }
-  assertUtcMillisecondTimestamp(value, label);
+  translateFederationValidation(() =>
+    assertUtcMillisecondTimestamp(value, label),
+  );
 }
 
 export function timestampMillis(value: string, label: string): number {
   assertTimestamp(value, label);
   const milliseconds = Date.parse(value);
   if (!Number.isFinite(milliseconds)) {
-    throw new Error(`${label} is not a real UTC timestamp`);
+    organizationProtocolValidationFailure(
+      `${label} is not a real UTC timestamp`,
+    );
   }
   return milliseconds;
 }
@@ -96,7 +121,9 @@ export function assertPositiveSafeInteger(
   label: string,
 ): asserts value is number {
   if (!Number.isSafeInteger(value) || (value as number) < 1) {
-    throw new Error(`${label} must be a positive safe integer`);
+    organizationProtocolValidationFailure(
+      `${label} must be a positive safe integer`,
+    );
   }
 }
 
@@ -105,7 +132,9 @@ export function assertNonnegativeSafeInteger(
   label: string,
 ): asserts value is number {
   if (!Number.isSafeInteger(value) || (value as number) < 0) {
-    throw new Error(`${label} must be a nonnegative safe integer`);
+    organizationProtocolValidationFailure(
+      `${label} must be a nonnegative safe integer`,
+    );
   }
 }
 
@@ -114,7 +143,9 @@ export function assertMembershipType(
   label: string,
 ): asserts value is OrganizationMembershipTypeV1 {
   if (value !== "owner" && value !== "employee") {
-    throw new Error(`${label} must be owner or employee`);
+    organizationProtocolValidationFailure(
+      `${label} must be owner or employee`,
+    );
   }
 }
 
@@ -135,10 +166,14 @@ export function validateP256SigningKey(
     `${label} algorithm`,
   );
   if (typeof record.public_key_spki_der_base64 !== "string") {
-    throw new Error(`${label} public key must be canonical base64`);
+    organizationProtocolValidationFailure(
+      `${label} public key must be canonical base64`,
+    );
   }
   const descriptor = record as unknown as P256SigningKeyDescriptor;
-  verifyP256SigningKeyDescriptor(descriptor);
+  translateFederationValidation(() =>
+    verifyP256SigningKeyDescriptor(descriptor),
+  );
   return canonicalSnapshot(descriptor, label);
 }
 
@@ -177,22 +212,26 @@ export function validateSignedIntegrity(
     signature.length > 96 ||
     !CANONICAL_BASE64_PATTERN.test(signature)
   ) {
-    throw new Error(`${label} signature must be bounded canonical base64`);
+    organizationProtocolValidationFailure(
+      `${label} signature must be bounded canonical base64`,
+    );
   }
   const decoded = Buffer.from(signature, "base64");
   if (decoded.toString("base64") !== signature) {
-    throw new Error(`${label} signature must be bounded canonical base64`);
+    organizationProtocolValidationFailure(
+      `${label} signature must be bounded canonical base64`,
+    );
   }
   return canonicalSnapshot(record as unknown as SignedIntegrity, label);
 }
 
 export function canonicalSnapshot<T>(value: T, label: string): T {
-  const bytes = canonicalJsonBytes(value);
+  const bytes = translateFederationValidation(() => canonicalJsonBytes(value));
   if (
     bytes.length === 0 ||
     bytes.length > MAX_ORGANIZATION_PROTOCOL_DOCUMENT_BYTES
   ) {
-    throw new Error(
+    organizationProtocolValidationFailure(
       `${label} must be between 1 and ${MAX_ORGANIZATION_PROTOCOL_DOCUMENT_BYTES} canonical bytes`,
     );
   }

@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { federationProtocolValidationFailure } from "./validation-error.js";
 
 export type FederationIdPrefix =
   | "org"
@@ -37,7 +38,9 @@ export function assertFederationId(
     !value.startsWith(`${prefix}_`) ||
     !UUID_PATTERN.test(value.slice(prefix.length + 1))
   ) {
-    throw new Error(`${label} must be a canonical ${prefix} identifier`);
+    federationProtocolValidationFailure(
+      `${label} must be a canonical ${prefix} identifier`,
+    );
   }
 }
 
@@ -48,7 +51,9 @@ export function assertUtcMillisecondTimestamp(
   const match =
     /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})\.(\d{3})Z$/.exec(value);
   if (match === null) {
-    throw new Error(`${label} must be a UTC millisecond timestamp`);
+    federationProtocolValidationFailure(
+      `${label} must be a UTC millisecond timestamp`,
+    );
   }
   const year = Number(match[1]);
   const month = Number(match[2]);
@@ -80,6 +85,8 @@ export function assertUtcMillisecondTimestamp(
     minute > 59 ||
     second > 59
   ) {
-    throw new Error(`${label} is not a real UTC timestamp`);
+    federationProtocolValidationFailure(
+      `${label} is not a real UTC timestamp`,
+    );
   }
 }

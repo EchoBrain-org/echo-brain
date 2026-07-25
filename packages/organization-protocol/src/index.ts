@@ -31,6 +31,10 @@ export type {
   VerifyOrganizationInstallationAccessStateInput,
 } from "./installation-access-state.js";
 export { MAX_ORGANIZATION_PROTOCOL_DOCUMENT_BYTES } from "./validation-support.js";
+export {
+  isOrganizationProtocolValidationError,
+  OrganizationProtocolValidationError,
+} from "./validation-error.js";
 export type {
   ActiveOrganizationInstallationAccessStatePayloadV1,
   ActiveOrganizationInstallationAccessStateV1,

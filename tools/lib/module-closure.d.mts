@@ -2,6 +2,11 @@ export interface CeremonyClosureOptions {
   projectRoot: string;
   entryPoints: readonly string[];
   readSource?: (absolutePath: string) => string;
+  allowedExternalPackages?: readonly string[];
+  allowedExternalDynamicImports?: readonly {
+    sourcePath: string;
+    expression: string;
+  }[];
 }
 
 export interface CeremonyAttestationOptions extends CeremonyClosureOptions {

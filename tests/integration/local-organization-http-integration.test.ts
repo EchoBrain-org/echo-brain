@@ -16,7 +16,10 @@ import {
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
-import { validateOrganizationEnrollmentInvitation } from '@echo-brain/organization-api';
+import {
+  ORGANIZATION_API_PROXY_AUTH_SCHEME,
+  validateOrganizationEnrollmentInvitation,
+} from '@echo-brain/organization-api';
 import {
   normalizeP256LowS,
   p256KeyId,
@@ -56,7 +59,10 @@ const temporaryDirectories: string[] = [];
 
 const proxyFetch: typeof fetch = (input, init) => {
   const headers = new Headers(init?.headers);
-  headers.set(TRUSTED_PROXY_AUTHORIZATION_HEADER, `Echo-Proxy ${PROXY_TOKEN}`);
+  headers.set(
+    TRUSTED_PROXY_AUTHORIZATION_HEADER,
+    `${ORGANIZATION_API_PROXY_AUTH_SCHEME} ${PROXY_TOKEN}`,
+  );
   headers.set(TRUSTED_PROXY_CLIENT_ID_HEADER, PROXY_CLIENT_ID);
   return fetch(input, { ...init, headers });
 };

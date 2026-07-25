@@ -13,6 +13,8 @@ import {
 } from "@echo-brain/federation-protocol";
 import * as protocol from "../src/index.js";
 import {
+  isOrganizationProtocolValidationError,
+  OrganizationProtocolValidationError,
   createOrganizationEnrollmentReceipt,
   createOrganizationEnrollmentRequest,
   createOrganizationInstallationAccessState,
@@ -720,9 +722,11 @@ describe("organization onboarding and access golden chain", () => {
     expect(Object.keys(protocol).sort()).toEqual([
       "MAX_ORGANIZATION_ACCESS_CLOCK_SKEW_MS",
       "MAX_ORGANIZATION_PROTOCOL_DOCUMENT_BYTES",
+      "OrganizationProtocolValidationError",
       "createOrganizationEnrollmentReceipt",
       "createOrganizationEnrollmentRequest",
       "createOrganizationInstallationAccessState",
+      "isOrganizationProtocolValidationError",
       "organizationAuthorityPinSha256",
       "organizationAuthorityPublicKey",
       "organizationEnrollmentGrantSha256",
@@ -737,6 +741,28 @@ describe("organization onboarding and access golden chain", () => {
       "verifyOrganizationEnrollmentRequest",
       "verifyOrganizationInstallationAccessState",
     ]);
+  });
+
+  it("types malformed organization documents without typing unrelated faults", () => {
+    const validators = [
+      validateOrganizationAuthorityDescriptor,
+      validateOrganizationEnrollmentRequest,
+      validateOrganizationEnrollmentReceipt,
+      validateOrganizationInstallationAccessState,
+    ];
+    for (const validate of validators) {
+      let thrown: unknown;
+      try {
+        validate({ malformed: true });
+      } catch (error) {
+        thrown = error;
+      }
+      expect(thrown).toBeInstanceOf(OrganizationProtocolValidationError);
+      expect(isOrganizationProtocolValidationError(thrown)).toBe(true);
+    }
+    expect(
+      isOrganizationProtocolValidationError(new TypeError("internal fault")),
+    ).toBe(false);
   });
 
   it("bounds canonical protocol documents before signing or storage", () => {

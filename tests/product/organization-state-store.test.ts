@@ -33,7 +33,7 @@ import {
   OrganizationStateCorruptionError,
   type OrganizationAccessVerificationPolicy,
 } from '../../src/product/organization/state/organization-state-store.js';
-import { corruptStoredOrganizationAccessStateForRehearsal } from '../../src/product/organization/state/rehearsal-fault-injection.js';
+import { corruptStoredOrganizationAccessStateForRehearsal } from '../../tools/phase5/rehearsal-fault-injection.mjs';
 import { SqliteOrganizationStateStore } from '../../src/product/organization/state/sqlite-organization-state-store.js';
 
 const MAX_TTL_MS = 5 * 60 * 1000;

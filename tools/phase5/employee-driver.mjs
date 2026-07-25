@@ -44,20 +44,11 @@ function decodeGrant(value) {
 
 async function loadExactRuntime(packageRoot) {
   const organization = await import(
-    pathToFileURL(
-      join(packageRoot, "dist", "product", "organization", "index.js"),
-    ).href
+    pathToFileURL(join(packageRoot, "dist/product/organization/index.js")).href
   );
   const federation = await import(
     pathToFileURL(
-      join(
-        packageRoot,
-        "node_modules",
-        "@echo-brain",
-        "federation-protocol",
-        "dist",
-        "index.js",
-      ),
+      join(packageRoot, "node_modules/@echo-brain/federation-protocol/dist/index.js"),
     ).href
   );
   return { organization, federation };

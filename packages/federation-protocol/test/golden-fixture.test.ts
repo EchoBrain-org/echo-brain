@@ -4,6 +4,7 @@ import { describe, expect, it } from "vitest";
 import * as protocol from "../src/index.js";
 import {
   CanonicalJsonError,
+  FederationProtocolValidationError,
   assertFederationId,
   assertP256LowS,
   assertUtcMillisecondTimestamp,
@@ -14,6 +15,7 @@ import {
   decodeStrictP256DerSignature,
   encodeP256DerSignature,
   federationId,
+  isFederationProtocolValidationError,
   normalizeP256LowS,
   p256KeyId,
   parseCanonicalJson,
@@ -513,6 +515,7 @@ describe("federation protocol golden fixture", () => {
   it("exposes only the intended protocol surface", () => {
     expect(Object.keys(protocol).sort()).toEqual([
       "CanonicalJsonError",
+      "FederationProtocolValidationError",
       "assertFederationId",
       "assertP256LowS",
       "assertUtcMillisecondTimestamp",
@@ -523,6 +526,7 @@ describe("federation protocol golden fixture", () => {
       "decodeStrictP256DerSignature",
       "encodeP256DerSignature",
       "federationId",
+      "isFederationProtocolValidationError",
       "normalizeP256LowS",
       "p256KeyId",
       "parseCanonicalJson",
@@ -533,5 +537,32 @@ describe("federation protocol golden fixture", () => {
       "verifyP256SigningKeyDescriptor",
       "verifySignedDocument",
     ]);
+  });
+
+  it("types expected validation failures without classifying unrelated faults", () => {
+    let thrown: unknown;
+    try {
+      assertFederationId("not-an-id", "ins", "installation_id");
+    } catch (error) {
+      thrown = error;
+    }
+    expect(thrown).toBeInstanceOf(FederationProtocolValidationError);
+    expect(isFederationProtocolValidationError(thrown)).toBe(true);
+    expect(isFederationProtocolValidationError(new TypeError("fault"))).toBe(
+      false,
+    );
+  });
+
+  it("rejects excessive nesting as a typed canonical JSON failure", () => {
+    let nested: unknown = 0;
+    for (let depth = 0; depth < 256; depth += 1) {
+      nested = [nested];
+    }
+    expect(() => canonicalJson(nested)).toThrow(CanonicalJsonError);
+    try {
+      canonicalJson(nested);
+    } catch (error) {
+      expect(isFederationProtocolValidationError(error)).toBe(true);
+    }
   });
 });

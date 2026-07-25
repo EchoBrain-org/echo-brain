@@ -21,34 +21,29 @@ Run from the repository root with:
 - Node `22.22.1` and npm `10.9.4`;
 - a `darwin/x64` Node process;
 - the intended Phase 5 sources committed at `HEAD`;
-- dependencies installed, the repository-local `.npm-cache` populated, and both
-  the workspace packages and the repository build output built; and
+- dependencies installed and the repository-local `.npm-cache` populated; and
 - a new absolute output path whose parent is writable.
 
-Prepare dependencies and build output before freezing the commit if necessary:
+Prepare dependencies before freezing the commit if necessary:
 
 ```sh
 npm ci --cache .npm-cache
-npm run build:workspaces
-npm run build
 node --version
 npm --version
 git status --short
 ```
 
-The version checks must print `v22.22.1` and `10.9.4`. Neither build is
-optional. The ceremony driver imports the organization API package by name, and
-that specifier resolves to compiled output the repository does not track. The
-repository build supplies the rehearsal fault injector, which is deliberately
-outside the product boundary closure so no client artifact can carry a hook that
-destroys stored state; the ceremony therefore loads it from `dist/` rather than
-from the installed package it exercises.
-That output stays untracked, so building does not change the Git status
-reviewed next. Review a non-empty Git status before running. All Phase 5,
-artifact-builder, release-boundary, and report-schema files must be committed;
-unrelated work may remain only when it does not overlap those files. The
-ceremony driver compares that complete execution set byte-for-byte with the
-supplied source SHA.
+The version checks must print `v22.22.1` and `10.9.4`. The ceremony does not
+load workspace or repository build output: its small organization HTTP contract
+surface and rehearsal-only fault injector are tracked ceremony sources. Review
+a non-empty Git status before running. All Phase 5, artifact-builder,
+release-boundary, and report-schema files must be committed; unrelated work may
+remain only when it does not overlap those files. The ceremony driver verifies
+its reviewed, statically declared repository module closure byte-for-byte
+against the supplied source SHA and refuses recognized runtime-loader
+capabilities; this is source-integrity evidence, not a sandbox for hostile
+JavaScript. Employee runtime modules are loaded only from artifacts built from
+that materialized commit and verified before use.
 
 The rehearsal uses npm's cache-only mode and preflights npm, Node headers,
 Python, Make, and Clang before rebuilding the native SQLite dependency. This is

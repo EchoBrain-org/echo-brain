@@ -26,6 +26,7 @@ import {
   canonicalSnapshot,
   validateSignedIntegrity,
 } from "./validation-support.js";
+import { organizationProtocolValidationFailure } from "./validation-error.js";
 
 export interface CreateOrganizationEnrollmentReceiptInput {
   enrollment_id: string;
@@ -91,7 +92,7 @@ export function validateOrganizationEnrollmentReceipt(
     "enrollment receipt integrity",
   );
   if (integrity.key_id !== record.authority_key_id) {
-    throw new Error(
+    organizationProtocolValidationFailure(
       "enrollment receipt signature key does not match the authority key",
     );
   }

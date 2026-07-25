@@ -3,7 +3,12 @@ import { createHash } from 'node:crypto';
 import { once } from 'node:events';
 import type { Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
+import {
+  ORGANIZATION_API_ADMIN_AUTH_SCHEME,
+  ORGANIZATION_API_PROXY_AUTH_SCHEME,
+} from '@echo-brain/organization-api';
+import { AdminBearerAuthenticator } from '../src/adapters/security/admin-bearer-authenticator.js';
 import { AuthorityOperationError } from '../src/domain/errors.js';
 import {
   createOrganizationAuthorityHttpServer,
@@ -17,6 +22,7 @@ import {
   TRUSTED_PROXY_CLIENT_ID_HEADER,
 } from '../src/presentation/trusted-proxy-client-identity.js';
 
+const ADMIN_TOKEN = 'test-admin-token-with-at-least-32-bytes';
 const PROXY_TOKEN = 'test-proxy-origin-token-with-at-least-32-bytes';
 
 function clientId(label: string): string {
@@ -26,7 +32,7 @@ function clientId(label: string): string {
 function proxyHeaders(identity: string): Record<string, string> {
   return {
     connection: 'close',
-    [TRUSTED_PROXY_AUTHORIZATION_HEADER]: `Echo-Proxy ${PROXY_TOKEN}`,
+    [TRUSTED_PROXY_AUTHORIZATION_HEADER]: `${ORGANIZATION_API_PROXY_AUTH_SCHEME} ${PROXY_TOKEN}`,
     [TRUSTED_PROXY_CLIENT_ID_HEADER]: identity,
   };
 }
@@ -94,25 +100,45 @@ describe('authority HTTP presentation', () => {
     expect(limiter.consume('127.0.0.3:admin')).toEqual({ allowed: true });
   });
 
+  it('authenticates only the shared administrator authorization scheme', () => {
+    const authenticator = new AdminBearerAuthenticator(ADMIN_TOKEN);
+    expect(
+      authenticator.authenticate(
+        `${ORGANIZATION_API_ADMIN_AUTH_SCHEME} ${ADMIN_TOKEN}`,
+      ),
+    ).toBe(true);
+    expect(authenticator.authenticate(`Basic ${ADMIN_TOKEN}`)).toBe(false);
+    expect(
+      authenticator.authenticate(
+        `${ORGANIZATION_API_ADMIN_AUTH_SCHEME.toLowerCase()} ${ADMIN_TOKEN}`,
+      ),
+    ).toBe(false);
+  });
+
   it('authenticates canonical proxy client identities', () => {
     const resolver = new AuthenticatedProxyClientIdentityResolver(PROXY_TOKEN);
     const identity = clientId('employee-one');
     const request = {
       rawHeaders: [
         TRUSTED_PROXY_AUTHORIZATION_HEADER,
-        `Echo-Proxy ${PROXY_TOKEN}`,
+        `${ORGANIZATION_API_PROXY_AUTH_SCHEME} ${PROXY_TOKEN}`,
         TRUSTED_PROXY_CLIENT_ID_HEADER,
         identity,
       ],
     };
     expect(resolver.resolve(request)).toBe(identity);
 
-    request.rawHeaders[1] =
-      'Echo-Proxy wrong-token-with-at-least-32-visible-bytes';
+    request.rawHeaders[1] = `Basic ${PROXY_TOKEN}`;
     expect(() => resolver.resolve(request)).toThrow(
       'trusted proxy identity is unavailable',
     );
-    request.rawHeaders[1] = `Echo-Proxy ${PROXY_TOKEN}`;
+    request.rawHeaders[1] =
+      `${ORGANIZATION_API_PROXY_AUTH_SCHEME} wrong-token-with-at-least-32-visible-bytes`;
+    expect(() => resolver.resolve(request)).toThrow(
+      'trusted proxy identity is unavailable',
+    );
+    request.rawHeaders[1] =
+      `${ORGANIZATION_API_PROXY_AUTH_SCHEME} ${PROXY_TOKEN}`;
     request.rawHeaders[3] = 'employee-one@example.com';
     expect(() => resolver.resolve(request)).toThrow(
       'trusted proxy identity is unavailable',
@@ -228,5 +254,82 @@ describe('authority HTTP presentation', () => {
     } finally {
       await close(server);
     }
+  });
+
+  it('returns 400 for a genuinely malformed nested protocol document', async () => {
+    const server = createOrganizationAuthorityHttpServer({
+      application: testApplication(),
+      adminAuthenticator: { authenticate: () => false },
+      clientIdentityResolver: new AuthenticatedProxyClientIdentityResolver(
+        PROXY_TOKEN,
+      ),
+    });
+    const origin = await listen(server);
+    try {
+      const response = await fetch(`${origin}/v1/enrollments`, {
+        method: 'POST',
+        headers: {
+          ...proxyHeaders(clientId('malformed-enrollment')),
+          authorization: `Echo-Enrollment ${Buffer.alloc(32).toString('base64url')}`,
+          'content-type': 'application/json',
+        },
+        body: JSON.stringify({
+          enrollment_request: { malformed: true },
+        }),
+      });
+      expect(response.status).toBe(400);
+      expect(await response.json()).toEqual({
+        error: {
+          code: 'invalid_request',
+          message: 'request body is invalid',
+        },
+      });
+    } finally {
+      await close(server);
+    }
+  });
+
+  it('returns 500 when a nested protocol validator faults unexpectedly', async () => {
+    const fault = new TypeError('nested protocol validator fault');
+    const enrollmentRequest = Object.create(null) as Record<string, unknown>;
+    Object.defineProperty(enrollmentRequest, 'schema_version', {
+      enumerable: true,
+      get() {
+        throw fault;
+      },
+    });
+    const parse = vi.spyOn(JSON, 'parse').mockReturnValue({
+      enrollment_request: enrollmentRequest,
+    });
+    const server = createOrganizationAuthorityHttpServer({
+      application: testApplication(),
+      adminAuthenticator: { authenticate: () => false },
+      clientIdentityResolver: new AuthenticatedProxyClientIdentityResolver(
+        PROXY_TOKEN,
+      ),
+    });
+    const origin = await listen(server);
+    let response: Response;
+    try {
+      response = await fetch(`${origin}/v1/enrollments`, {
+        method: 'POST',
+        headers: {
+          ...proxyHeaders(clientId('faulting-enrollment')),
+          authorization: `Echo-Enrollment ${Buffer.alloc(32).toString('base64url')}`,
+          'content-type': 'application/json',
+        },
+        body: '{}',
+      });
+    } finally {
+      parse.mockRestore();
+      await close(server);
+    }
+    expect(response.status).toBe(500);
+    expect(await response.json()).toEqual({
+      error: {
+        code: 'internal_error',
+        message: 'authority operation failed',
+      },
+    });
   });
 });

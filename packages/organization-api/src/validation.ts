@@ -1,4 +1,5 @@
 import {
+  isOrganizationProtocolValidationError,
   organizationEnrollmentGrantSha256,
   validateOrganizationAuthorityDescriptor,
   validateOrganizationEnrollmentReceipt,
@@ -277,7 +278,10 @@ function validateInnerDocument<T>(label: string, validate: () => T): T {
   try {
     return validate();
   } catch (error) {
-    fail(`${label} is invalid`, error);
+    if (isOrganizationProtocolValidationError(error)) {
+      fail(`${label} is invalid`, error);
+    }
+    throw error;
   }
 }
 
@@ -438,15 +442,13 @@ export function validateCompleteOrganizationEnrollmentRequest(
     ['enrollment_request'],
     'complete enrollment request',
   );
-  try {
-    return {
-      enrollment_request: validateOrganizationEnrollmentRequest(
-        record.enrollment_request,
-      ),
-    };
-  } catch (error) {
-    fail('enrollment_request is invalid', error);
-  }
+  return {
+    enrollment_request: validateInnerDocument(
+      'enrollment_request',
+      () =>
+        validateOrganizationEnrollmentRequest(record.enrollment_request),
+    ),
+  };
 }
 
 export function validateRevokeOrganizationSubjectRequest(

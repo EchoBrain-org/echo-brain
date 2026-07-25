@@ -26,9 +26,9 @@ export type {
   OrganizationStateStore,
   StoredOrganizationEnrollment,
 } from './state/organization-state-store.js';
-// Rehearsal fault injection is deliberately absent from this surface. It lives
-// in ./state/rehearsal-fault-injection.ts, unreachable from the product entry
-// points, so the shipped artifact never carries it.
+// Rehearsal fault injection is deliberately absent from this surface. Its
+// private-schema statement is owned beside this module, while the executable
+// lives under tools/phase5 and is never copied into the shipped artifact.
 export { SqliteOrganizationStateStore } from './state/sqlite-organization-state-store.js';
 export {
   createLocalOrganizationRuntime,

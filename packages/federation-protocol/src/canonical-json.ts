@@ -1,8 +1,11 @@
 import { Buffer } from "node:buffer";
 import { createHash } from "node:crypto";
 import type { JsonValue, Sha256Digest } from "./protocol-types.js";
+import { FederationProtocolValidationError } from "./validation-error.js";
 
-export class CanonicalJsonError extends Error {
+const MAX_CANONICAL_JSON_DEPTH = 128;
+
+export class CanonicalJsonError extends FederationProtocolValidationError {
   constructor(message: string) {
     super(message);
     this.name = "CanonicalJsonError";
@@ -26,7 +29,15 @@ function assertUnicodeScalarString(value: string, label: string): void {
   }
 }
 
-function canonicalize(value: unknown, path: string, seen: Set<object>): string {
+function canonicalize(
+  value: unknown,
+  path: string,
+  seen: Set<object>,
+  depth: number,
+): string {
+  if (depth > MAX_CANONICAL_JSON_DEPTH) {
+    throw new CanonicalJsonError(`${path} exceeds the maximum nesting depth`);
+  }
   if (value === null) return "null";
   if (typeof value === "boolean") return value ? "true" : "false";
   if (typeof value === "string") {
@@ -55,7 +66,9 @@ function canonicalize(value: unknown, path: string, seen: Set<object>): string {
             `${path}/${index} is a sparse array slot`,
           );
         }
-        items.push(canonicalize(value[index], `${path}/${index}`, seen));
+        items.push(
+          canonicalize(value[index], `${path}/${index}`, seen, depth + 1),
+        );
       }
       return `[${items.join(",")}]`;
     }
@@ -68,7 +81,12 @@ function canonicalize(value: unknown, path: string, seen: Set<object>): string {
     return `{${keys
       .map((key) => {
         assertUnicodeScalarString(key, `${path} key`);
-        return `${JSON.stringify(key)}:${canonicalize(record[key], `${path}/${key}`, seen)}`;
+        return `${JSON.stringify(key)}:${canonicalize(
+          record[key],
+          `${path}/${key}`,
+          seen,
+          depth + 1,
+        )}`;
       })
       .join(",")}}`;
   } finally {
@@ -78,7 +96,7 @@ function canonicalize(value: unknown, path: string, seen: Set<object>): string {
 
 /** RFC 8785 / JSON Canonicalization Scheme bytes for an I-JSON value. */
 export function canonicalJson(value: JsonValue | unknown): string {
-  return canonicalize(value, "$", new Set<object>());
+  return canonicalize(value, "$", new Set<object>(), 0);
 }
 
 export function canonicalJsonBytes(value: JsonValue | unknown): Buffer {

@@ -59,7 +59,7 @@ import { verifyOrganizationAuthorityArtifact } from "../organization-authority/v
 import {
   ORGANIZATION_API_ADMIN_OVERVIEW_PATH,
   ORGANIZATION_API_AUTHORITY_DESCRIPTOR_PATH,
-} from "@echo-brain/organization-api";
+} from "./organization-api-contract.mjs";
 
 const TOOL_DIRECTORY = dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = resolve(TOOL_DIRECTORY, "../..");
@@ -84,11 +84,32 @@ export const CEREMONY_SOURCE_PATHS = Object.freeze([
   "tools/phase5/employee-driver.mjs",
   "tools/phase5/install-rehearsal-artifact.mjs",
   "tools/phase5/loopback-authenticated-edge.mjs",
+  "tools/phase5/organization-api-contract.mjs",
+  "tools/phase5/rehearsal-fault-injection.mjs",
+  "src/product/organization/state/rehearsal-corrupt-access-state.mjs",
   "tools/phase5/report.mjs",
   "tools/phase5/validate-report.mjs",
   "release/organization-authority/package.template.json",
   "release/organization-authority/runtime-boundary.v1.json",
   "schemas/phase5/one-machine-rehearsal-report.v1.schema.json",
+]);
+export const CEREMONY_ALLOWED_EXTERNAL_PACKAGES = Object.freeze([
+  "ajv",
+  "better-sqlite3",
+  "typescript",
+]);
+export const CEREMONY_ALLOWED_EXTERNAL_DYNAMIC_IMPORTS = Object.freeze([
+  Object.freeze({
+    sourcePath: "tools/phase5/employee-driver.mjs",
+    expression:
+      'pathToFileURL(join(packageRoot, "dist/product/organization/index.js")).href',
+  }),
+  Object.freeze({
+    sourcePath: "tools/phase5/employee-driver.mjs",
+    expression: `pathToFileURL(
+      join(packageRoot, "node_modules/@echo-brain/federation-protocol/dist/index.js"),
+    ).href`,
+  }),
 ]);
 export const CEREMONY_ENTRY_POINTS = Object.freeze([
   "tools/phase5/run-one-machine.mjs",
@@ -212,6 +233,9 @@ function assertCommittedCeremony(sourceSha) {
     attestedSourcePaths: CEREMONY_SOURCE_PATHS.filter((path) =>
       CEREMONY_MODULE_EXTENSIONS.some((extension) => path.endsWith(extension)),
     ),
+    allowedExternalPackages: CEREMONY_ALLOWED_EXTERNAL_PACKAGES,
+    allowedExternalDynamicImports:
+      CEREMONY_ALLOWED_EXTERNAL_DYNAMIC_IMPORTS,
   });
   const entries = [];
   for (const path of CEREMONY_SOURCE_PATHS) {

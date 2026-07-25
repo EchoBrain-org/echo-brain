@@ -4,10 +4,10 @@
 // module the product boundary closure reaches is compiled into the shipped
 // package. Keeping such a hook out of that closure is what keeps it out of the
 // artifact, and this test is the thing that notices when it drifts back in.
-import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { mkdtempSync, readFileSync, readdirSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
-import { afterAll, describe, expect, it } from 'vitest';
+import { describe, expect, it } from 'vitest';
 import { spawnSanitizedChild } from '../../src/product/spawn-sanitized-child.js';
 
 const REPO_ROOT = resolve(import.meta.dirname, '../..');
@@ -21,37 +21,33 @@ const REHEARSAL_HOOK = /\b(?:\w*ForRehearsal|corrupt\w*)\b/;
 const EXPORTED_NAME =
   /export\s+(?:async\s+)?(?:function|const|let|var|class)\s+([A-Za-z_$][\w$]*)/g;
 
-const temporaryDirectories: string[] = [];
-afterAll(() => {
-  for (const directory of temporaryDirectories) {
-    rmSync(directory, { recursive: true, force: true });
-  }
-});
-
 interface BoundaryResult {
   closure: string[];
 }
 
-async function productClosure(): Promise<string[]> {
-  const output = join(
-    mkdtempSync(join(tmpdir(), 'echo-shipped-closure-')),
-    'closure.json',
+async function productClosure(temporaryParent = tmpdir()): Promise<string[]> {
+  const temporaryDirectory = mkdtempSync(
+    join(temporaryParent, 'echo-shipped-closure-'),
   );
-  temporaryDirectories.push(output);
-  const child = spawnSanitizedChild(
-    process.execPath,
-    [CHECK_BOUNDARY, '--manifest', MANIFEST, '--output', output],
-    { cwd: REPO_ROOT },
-  );
-  let stderr = '';
-  child.stderr.setEncoding('utf8');
-  child.stderr.on('data', (chunk: string) => (stderr += chunk));
-  const status = await new Promise<number | null>((resolveStatus, reject) => {
-    child.once('error', reject);
-    child.once('close', resolveStatus);
-  });
-  expect(status, stderr).toBe(0);
-  return (JSON.parse(readFileSync(output, 'utf8')) as BoundaryResult).closure;
+  const output = join(temporaryDirectory, 'closure.json');
+  try {
+    const child = spawnSanitizedChild(
+      process.execPath,
+      [CHECK_BOUNDARY, '--manifest', MANIFEST, '--output', output],
+      { cwd: REPO_ROOT },
+    );
+    let stderr = '';
+    child.stderr.setEncoding('utf8');
+    child.stderr.on('data', (chunk: string) => (stderr += chunk));
+    const status = await new Promise<number | null>((resolveStatus, reject) => {
+      child.once('error', reject);
+      child.once('close', resolveStatus);
+    });
+    expect(status, stderr).toBe(0);
+    return (JSON.parse(readFileSync(output, 'utf8')) as BoundaryResult).closure;
+  } finally {
+    rmSync(temporaryDirectory, { recursive: true, force: true });
+  }
 }
 
 function exportedNames(source: string): string[] {
@@ -60,14 +56,22 @@ function exportedNames(source: string): string[] {
 
 describe('shipped product artifact', () => {
   it('reaches no rehearsal fault-injection hook from its entry points', async () => {
-    const closure = await productClosure();
-    expect(closure).not.toEqual([]);
-    const shipped = closure.flatMap((path) =>
-      exportedNames(readFileSync(join(REPO_ROOT, path), 'utf8'))
-        .filter((name) => REHEARSAL_HOOK.test(name))
-        .map((name) => `${path}: ${name}`),
+    const temporaryParent = mkdtempSync(
+      join(tmpdir(), 'echo-shipped-closure-test-'),
     );
-    expect(shipped).toEqual([]);
+    try {
+      const closure = await productClosure(temporaryParent);
+      expect(readdirSync(temporaryParent)).toEqual([]);
+      expect(closure).not.toEqual([]);
+      const shipped = closure.flatMap((path) =>
+        exportedNames(readFileSync(join(REPO_ROOT, path), 'utf8'))
+          .filter((name) => REHEARSAL_HOOK.test(name))
+          .map((name) => `${path}: ${name}`),
+      );
+      expect(shipped).toEqual([]);
+    } finally {
+      rmSync(temporaryParent, { recursive: true, force: true });
+    }
   });
 
   it('keeps the hook off the organization export surface', () => {

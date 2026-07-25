@@ -33,6 +33,7 @@ import {
   timestampMillis,
   validateSignedIntegrity,
 } from "./validation-support.js";
+import { organizationProtocolValidationFailure } from "./validation-error.js";
 
 export const MAX_ORGANIZATION_ACCESS_CLOCK_SKEW_MS = 5 * 60 * 1000;
 
@@ -128,7 +129,9 @@ export function validateOrganizationInstallationAccessState(
   assertTimestamp(record.evaluated_at, "access state evaluated_at");
   if (record.status === "active") {
     if (record.revocation_reason !== null) {
-      throw new Error("active access state must not have a revocation reason");
+      organizationProtocolValidationFailure(
+        "active access state must not have a revocation reason",
+      );
     }
     assertTimestamp(record.valid_until, "active access state valid_until");
   } else if (record.status === "revoked") {
@@ -136,20 +139,26 @@ export function validateOrganizationInstallationAccessState(
       record.revocation_reason !== "membership_revoked" &&
       record.revocation_reason !== "installation_revoked"
     ) {
-      throw new Error("revoked access state must have a supported reason");
+      organizationProtocolValidationFailure(
+        "revoked access state must have a supported reason",
+      );
     }
     if (record.valid_until !== null) {
-      throw new Error("revoked access state must not expire");
+      organizationProtocolValidationFailure(
+        "revoked access state must not expire",
+      );
     }
   } else {
-    throw new Error("organization installation access status is unsupported");
+    organizationProtocolValidationFailure(
+      "organization installation access status is unsupported",
+    );
   }
   const integrity = validateSignedIntegrity(
     record.integrity,
     "organization installation access state integrity",
   );
   if (integrity.key_id !== record.authority_key_id) {
-    throw new Error(
+    organizationProtocolValidationFailure(
       "access state signature key does not match the authority key",
     );
   }

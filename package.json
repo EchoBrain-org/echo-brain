@@ -117,7 +117,7 @@
     "organization-authority:admin": "node services/organization-authority/dist/admin-main.js",
     "organization-authority:build-artifact": "node tools/organization-authority/build-artifact.mjs",
     "organization-authority:verify-artifact": "node tools/organization-authority/verify-artifact.mjs",
-    "organization:phase5-rehearse": "npm run build:workspaces && npm run build && node tools/phase5/run-one-machine.mjs",
+    "organization:phase5-rehearse": "node tools/phase5/run-one-machine.mjs",
     "organization:phase5-validate-report": "node tools/phase5/validate-report.mjs",
     "check:experimental": "npm run typecheck:experimental && npm run lint:experimental && npm run test:experimental:n2",
     "check": "npm run check:provenance && npm run check:boundary && npm run check:dependencies && npm run organization-authority:check-shrinkwrap && npm run typecheck && npm run lint && npm test && npm run test:qualification",

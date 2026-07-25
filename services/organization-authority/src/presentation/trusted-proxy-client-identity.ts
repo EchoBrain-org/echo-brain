@@ -1,9 +1,13 @@
 import { Buffer } from 'node:buffer';
 import { createHash, timingSafeEqual } from 'node:crypto';
 import {
+  ORGANIZATION_API_PROXY_AUTH_SCHEME,
   TRUSTED_PROXY_AUTHORIZATION_HEADER,
   TRUSTED_PROXY_CLIENT_ID_HEADER,
 } from '@echo-brain/organization-api';
+
+const PROXY_AUTHORIZATION_PREFIX = `${ORGANIZATION_API_PROXY_AUTH_SCHEME} `;
+const VISIBLE_PROXY_TOKEN_PATTERN = /^[\x21-\x7e]{32,4096}$/;
 
 export class TrustedProxyIdentityError extends Error {
   constructor() {
@@ -51,7 +55,7 @@ export class AuthenticatedProxyClientIdentityResolver implements RequestClientId
   constructor(proxyToken: string) {
     if (
       typeof proxyToken !== 'string' ||
-      !/^[\x21-\x7e]{32,4096}$/.test(proxyToken)
+      !VISIBLE_PROXY_TOKEN_PATTERN.test(proxyToken)
     ) {
       throw new Error(
         'trusted proxy token must be 32-4096 visible ASCII bytes',
@@ -67,12 +71,18 @@ export class AuthenticatedProxyClientIdentityResolver implements RequestClientId
       request,
       TRUSTED_PROXY_AUTHORIZATION_HEADER,
     );
-    const match = /^Echo-Proxy ([\x21-\x7e]{32,4096})$/.exec(
-      authorization ?? '',
-    );
-    if (match === null) throw new TrustedProxyIdentityError();
+    if (
+      authorization === undefined ||
+      !authorization.startsWith(PROXY_AUTHORIZATION_PREFIX)
+    ) {
+      throw new TrustedProxyIdentityError();
+    }
+    const token = authorization.slice(PROXY_AUTHORIZATION_PREFIX.length);
+    if (!VISIBLE_PROXY_TOKEN_PATTERN.test(token)) {
+      throw new TrustedProxyIdentityError();
+    }
     const actualTokenDigest = createHash('sha256')
-      .update(match[1]!, 'utf8')
+      .update(token, 'utf8')
       .digest();
     if (!timingSafeEqual(actualTokenDigest, this.expectedTokenDigest)) {
       throw new TrustedProxyIdentityError();

@@ -27,6 +27,7 @@ import {
   validateP256SigningKey,
   validateSignedIntegrity,
 } from "./validation-support.js";
+import { organizationProtocolValidationFailure } from "./validation-error.js";
 
 export interface CreateOrganizationEnrollmentRequestInput {
   enrollment_grant_sha256: Sha256Digest;
@@ -99,7 +100,7 @@ export function validateOrganizationEnrollmentRequest(
     "enrollment request integrity",
   );
   if (integrity.key_id !== signingKey.key_id) {
-    throw new Error(
+    organizationProtocolValidationFailure(
       "enrollment request signature key does not match the installation key",
     );
   }

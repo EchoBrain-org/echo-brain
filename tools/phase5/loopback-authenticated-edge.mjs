@@ -5,7 +5,7 @@ import { TextDecoder } from "node:util";
 import {
   TRUSTED_PROXY_AUTHORIZATION_HEADER,
   TRUSTED_PROXY_CLIENT_ID_HEADER,
-} from "@echo-brain/organization-api";
+} from "./organization-api-contract.mjs";
 
 export {
   TRUSTED_PROXY_AUTHORIZATION_HEADER,

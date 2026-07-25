@@ -229,7 +229,7 @@ describe('workspace source boundaries', () => {
     );
   });
 
-  it('rejects direct and namespace createRequire loader forms', () => {
+  it('rejects direct and disguised node:module loader capabilities', () => {
     const fixture = fixtureRepository();
     const entry = join(fixture, 'packages/federation-protocol/src/index.ts');
     writeFileSync(
@@ -246,15 +246,158 @@ describe('workspace source boundaries', () => {
       'module loaders are forbidden',
     );
 
-    // The namespace form never names `createRequire` at an import specifier, so
-    // it is refused at the property name instead — which is why the exemption
-    // for `require` member names is not extended to `createRequire`.
+    // A node:module namespace exposes several loaders and is refused at the
+    // import edge, before reflection or computed property access can hide which
+    // loader is selected.
     writeFileSync(
       entry,
       [
         `import * as Module from 'node:module';`,
         'const load = Module.createRequire(import.meta.url);',
         `load('@forbidden/pkg');`,
+        '',
+      ].join('\n'),
+    );
+    result = runBoundary(fixture);
+    expect(result.status).not.toBe(0);
+    expect(result.stdout + result.stderr).toContain(
+      'module loaders are forbidden',
+    );
+
+    writeFileSync(
+      entry,
+      [
+        `import * as Module from 'node:module';`,
+        `const load = Module['createRequire'](import.meta.url);`,
+        `load('@forbidden/pkg');`,
+        '',
+      ].join('\n'),
+    );
+    result = runBoundary(fixture);
+    expect(result.status).not.toBe(0);
+    expect(result.stdout + result.stderr).toContain(
+      'module loaders are forbidden',
+    );
+
+    writeFileSync(
+      entry,
+      [
+        `import * as Module from 'node:module';`,
+        `const make = Reflect.get(Module, 'createRequire');`,
+        `make(import.meta.url)('@forbidden/pkg');`,
+        '',
+      ].join('\n'),
+    );
+    result = runBoundary(fixture);
+    expect(result.status).not.toBe(0);
+    expect(result.stdout + result.stderr).toContain(
+      'module loaders are forbidden',
+    );
+
+    writeFileSync(
+      entry,
+      [
+        `import * as Module from 'node:module';`,
+        `const { ['create' + 'Require']: make } = Module;`,
+        `make(import.meta.url)('@forbidden/pkg');`,
+        '',
+      ].join('\n'),
+    );
+    result = runBoundary(fixture);
+    expect(result.status).not.toBe(0);
+    expect(result.stdout + result.stderr).toContain(
+      'module loaders are forbidden',
+    );
+
+    writeFileSync(
+      entry,
+      [
+        `import { _load as load } from 'module';`,
+        `load('@forbidden/pkg');`,
+        '',
+      ].join('\n'),
+    );
+    result = runBoundary(fixture);
+    expect(result.status).not.toBe(0);
+    expect(result.stdout + result.stderr).toContain(
+      'module loaders are forbidden',
+    );
+
+    writeFileSync(
+      entry,
+      [
+        `const get = process['get' + 'BuiltinModule'];`,
+        `get('module').createRequire(import.meta.url)('@forbidden/pkg');`,
+        '',
+      ].join('\n'),
+    );
+    result = runBoundary(fixture);
+    expect(result.status).not.toBe(0);
+    expect(result.stdout + result.stderr).toContain(
+      'module loaders are forbidden',
+    );
+
+    writeFileSync(
+      entry,
+      [
+        `const { 'getBuiltinModule': get } = process;`,
+        `const { 'createRequire': make } = get('module');`,
+        `make(import.meta.url)('@forbidden/pkg');`,
+        '',
+      ].join('\n'),
+    );
+    result = runBoundary(fixture);
+    expect(result.status).not.toBe(0);
+    expect(result.stdout + result.stderr).toContain(
+      'module loaders are forbidden',
+    );
+
+    writeFileSync(
+      entry,
+      [
+        'let get;',
+        '({ getBuiltinModule: get } = process);',
+        'let make;',
+        `({ createRequire: make } = get('module'));`,
+        `make(import.meta.url)('@forbidden/pkg');`,
+        '',
+      ].join('\n'),
+    );
+    result = runBoundary(fixture);
+    expect(result.status).not.toBe(0);
+    expect(result.stdout + result.stderr).toContain(
+      'module loaders are forbidden',
+    );
+
+    writeFileSync(
+      entry,
+      ['const load = module._load;', `load('@forbidden/pkg');`, ''].join('\n'),
+    );
+    result = runBoundary(fixture);
+    expect(result.status).not.toBe(0);
+    expect(result.stdout + result.stderr).toContain(
+      'module loaders are forbidden',
+    );
+
+    writeFileSync(
+      entry,
+      [
+        `const Module = Reflect.get(globalThis, 'module');`,
+        `Module._load('@forbidden/pkg');`,
+        '',
+      ].join('\n'),
+    );
+    result = runBoundary(fixture);
+    expect(result.status).not.toBe(0);
+    expect(result.stdout + result.stderr).toContain(
+      'module loaders are forbidden',
+    );
+
+    writeFileSync(
+      entry,
+      [
+        `import { 'getBuiltinModule' as get } from 'node:process';`,
+        `get('module')._load('@forbidden/pkg');`,
         '',
       ].join('\n'),
     );
@@ -290,7 +433,7 @@ describe('workspace source boundaries', () => {
       [
         `import { createRequire } from 'node:module';`,
         'const load = createRequire(import.meta.url);',
-        'const forward = (loader) => loader(\'@forbidden/pkg\');',
+        "const forward = (loader) => loader('@forbidden/pkg');",
         'forward(load);',
         '',
       ].join('\n'),
@@ -444,8 +587,14 @@ describe('workspace source boundaries', () => {
     // A computed name and a shorthand property both *evaluate* the identifier,
     // so the member-name exemption must not reach them.
     const escapes: ReadonlyArray<readonly [string, string]> = [
-      ['object shorthand property', ['export const bundle = { require };', ''].join('\n')],
-      ['computed object key', ['export const table = { [require]: 1 };', ''].join('\n')],
+      [
+        'object shorthand property',
+        ['export const bundle = { require };', ''].join('\n'),
+      ],
+      [
+        'computed object key',
+        ['export const table = { [require]: 1 };', ''].join('\n'),
+      ],
       [
         'computed object key via createRequire',
         [
@@ -480,7 +629,10 @@ describe('workspace source boundaries', () => {
     for (const [label, source] of escapes) {
       writeFileSync(entry, source);
       const result = runBoundary(fixture);
-      expect(result.status, `${label}: ${result.stdout + result.stderr}`).not.toBe(0);
+      expect(
+        result.status,
+        `${label}: ${result.stdout + result.stderr}`,
+      ).not.toBe(0);
       expect(result.stdout + result.stderr, label).toContain(
         'module loaders are forbidden',
       );
@@ -547,13 +699,9 @@ describe('workspace source boundaries', () => {
     );
 
     writeFileSync(join(fixture, 'src/core/index.ts'), 'export {};\n');
-    const forbiddenAdapterPath =
-      '../../delivery-surfaces/slack/index.js';
+    const forbiddenAdapterPath = '../../delivery-surfaces/slack/index.js';
     writeFileSync(
-      join(
-        fixture,
-        'src/adapters/decision-processors/llm/anthropic-client.ts',
-      ),
+      join(fixture, 'src/adapters/decision-processors/llm/anthropic-client.ts'),
       `export * from '${forbiddenAdapterPath}';\n`,
     );
     const narrowDriverResult = runBoundary(fixture);

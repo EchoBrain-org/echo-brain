@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { OrganizationAuthorityConflictError } from '../../src/product/organization/client/authority-client.js';
 import {
   HttpOrganizationAuthorityClient,
@@ -160,10 +160,7 @@ describe('HTTP organization authority client', () => {
     }> = [
       {
         status: 200,
-        body: {
-          authority_descriptor: authority.descriptor,
-          extra: true,
-        },
+        body: { authority_descriptor: { malformed: true } },
         invoke: (client) => client.readAuthorityDescriptor(),
       },
       {
@@ -220,5 +217,31 @@ describe('HTTP organization authority client', () => {
     await expect(client.readAuthorityDescriptor()).rejects.toMatchObject({
       code: 'response_too_large',
     });
+  });
+
+  it('propagates an unexpected nested validator fault to the caller', async () => {
+    const fault = new TypeError('nested protocol validator fault');
+    const descriptor = Object.create(null) as Record<string, unknown>;
+    Object.defineProperty(descriptor, 'schema_version', {
+      enumerable: true,
+      get() {
+        throw fault;
+      },
+    });
+    const parse = vi.spyOn(JSON, 'parse').mockReturnValue({
+      authority_descriptor: descriptor,
+    });
+    const client = new HttpOrganizationAuthorityClient({
+      baseUrl: 'https://authority.example',
+      fetch: async () =>
+        new Response('{}', {
+          headers: { 'content-type': 'application/json' },
+        }),
+    });
+    try {
+      await expect(client.readAuthorityDescriptor()).rejects.toBe(fault);
+    } finally {
+      parse.mockRestore();
+    }
   });
 });

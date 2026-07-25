@@ -245,6 +245,9 @@ describe('qualification workflow build-once and terminal contracts', () => {
 
   it('uses only standalone repository paths and the authoritative root lock', () => {
     const workflow = readFileSync(workflowPath, 'utf8');
+    const workflowSections = workflow.split('\npermissions:\n');
+    expect(workflowSections).toHaveLength(2);
+    const [triggers = '', execution = ''] = workflowSections;
     const readme = readFileSync(join(REPO_ROOT, 'product/README.md'), 'utf8');
     const builder = readFileSync(
       join(REPO_ROOT, 'tools/product/build-artifact.mjs'),
@@ -253,10 +256,22 @@ describe('qualification workflow build-once and terminal contracts', () => {
     const template = JSON.parse(
       readFileSync(join(REPO_ROOT, 'product/package.template.json'), 'utf8'),
     ) as { files: string[] };
-    for (const obsolete of [
+    for (const removedRoot of [
       'src/capture/',
-      'src/enrich/',
       'src/echo-home/',
+      'src/enrich/',
+    ]) {
+      expect(triggers.split(`${removedRoot}**`)).toHaveLength(3);
+      expect(execution, removedRoot).not.toContain(removedRoot);
+      expect(readme, removedRoot).not.toContain(removedRoot);
+    }
+    for (const phase5Input of [
+      'docs/runbooks/phase5-one-machine-rehearsal.md',
+      'schemas/phase5/**',
+    ]) {
+      expect(triggers.split(phase5Input)).toHaveLength(3);
+    }
+    for (const obsolete of [
       'package-lock.json',
       'tools/install-echo-codex-skills.sh',
       'Project_echo',

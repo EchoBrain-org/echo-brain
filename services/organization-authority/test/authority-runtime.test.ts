@@ -309,13 +309,18 @@ describe('single-organization authority runtime', () => {
       clock.advance(1);
       const revoked = await application.revokeMembership(
         membership.membership_id,
-        'Replay must reflect the revoked membership',
+        'Retry result must remain immutable',
       );
-      expect(application.provisionMembership(membershipInput)).toEqual({
-        ...membership,
-        status: 'revoked',
-        revoked_at: revoked.membership.revoked_at,
-      });
+      expect(application.listMemberships({ limit: 1 }).items).toEqual([
+        expect.objectContaining({
+          membership_id: membership.membership_id,
+          status: 'revoked',
+          revoked_at: revoked.membership.revoked_at,
+        }),
+      ]);
+      expect(application.provisionMembership(membershipInput)).toEqual(
+        membership,
+      );
     } finally {
       application.close();
       rmSync(directory, { recursive: true, force: true });

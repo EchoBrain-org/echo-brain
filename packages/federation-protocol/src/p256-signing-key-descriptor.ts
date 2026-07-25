@@ -2,6 +2,7 @@ import { Buffer } from "node:buffer";
 import { createPublicKey } from "node:crypto";
 import type { P256SigningKeyDescriptor } from "./protocol-types.js";
 import { p256KeyId } from "./signature-profile.js";
+import { federationProtocolValidationFailure } from "./validation-error.js";
 
 /**
  * Verifies the encoding and fingerprint of a public P-256 signing key.
@@ -18,7 +19,9 @@ export function verifyP256SigningKeyDescriptor(
     descriptor === null ||
     Array.isArray(descriptor)
   ) {
-    throw new Error(`${label} signing key descriptor must be an object`);
+    federationProtocolValidationFailure(
+      `${label} signing key descriptor must be an object`,
+    );
   }
   const actualKeys = Object.keys(descriptor).sort();
   const expectedKeys = ["algorithm", "key_id", "public_key_spki_der_base64"];
@@ -26,32 +29,52 @@ export function verifyP256SigningKeyDescriptor(
     actualKeys.length !== expectedKeys.length ||
     actualKeys.some((key, index) => key !== expectedKeys[index])
   ) {
-    throw new Error(`${label} signing key descriptor has an unexpected shape`);
+    federationProtocolValidationFailure(
+      `${label} signing key descriptor has an unexpected shape`,
+    );
   }
   if (descriptor.algorithm !== "ecdsa-p256-sha256-der-low-s") {
-    throw new Error(`${label} signing algorithm is unsupported`);
+    federationProtocolValidationFailure(
+      `${label} signing algorithm is unsupported`,
+    );
   }
   const encoded = descriptor.public_key_spki_der_base64;
   if (typeof encoded !== "string" || encoded.length > 256) {
-    throw new Error(`${label} public key is not canonical base64`);
+    federationProtocolValidationFailure(
+      `${label} public key is not canonical base64`,
+    );
   }
   const publicKey = Buffer.from(encoded, "base64");
   if (publicKey.length === 0 || publicKey.toString("base64") !== encoded) {
-    throw new Error(`${label} public key is not canonical base64`);
+    federationProtocolValidationFailure(
+      `${label} public key is not canonical base64`,
+    );
   }
   if (p256KeyId(publicKey) !== descriptor.key_id) {
-    throw new Error(`${label} key fingerprint does not match its public key`);
+    federationProtocolValidationFailure(
+      `${label} key fingerprint does not match its public key`,
+    );
   }
-  const parsed = createPublicKey({
-    key: publicKey,
-    format: "der",
-    type: "spki",
-  });
+  let parsed;
+  try {
+    parsed = createPublicKey({
+      key: publicKey,
+      format: "der",
+      type: "spki",
+    });
+  } catch (error) {
+    federationProtocolValidationFailure(
+      `${label} public key must be P-256 SPKI DER`,
+      error,
+    );
+  }
   if (
     parsed.asymmetricKeyType !== "ec" ||
     parsed.asymmetricKeyDetails?.namedCurve !== "prime256v1"
   ) {
-    throw new Error(`${label} public key must be P-256 SPKI DER`);
+    federationProtocolValidationFailure(
+      `${label} public key must be P-256 SPKI DER`,
+    );
   }
   // OpenSSL preserves compressed EC points when it re-exports an imported
   // SPKI. Rebuild through JWK so the comparison is against the one canonical
@@ -63,7 +86,7 @@ export function verifyP256SigningKeyDescriptor(
     format: "jwk",
   }).export({ format: "der", type: "spki" });
   if (!Buffer.isBuffer(canonicalSpki) || !canonicalSpki.equals(publicKey)) {
-    throw new Error(
+    federationProtocolValidationFailure(
       `${label} public key must use canonical P-256 SPKI DER bytes`,
     );
   }

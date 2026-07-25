@@ -28,6 +28,10 @@ export {
   signedPayload,
   verifySignedDocument,
 } from "./signed-document.js";
+export {
+  FederationProtocolValidationError,
+  isFederationProtocolValidationError,
+} from "./validation-error.js";
 export type {
   InstallationKeyDescriptor,
   JsonObject,
