@@ -1,4 +1,5 @@
 import { execFileSync } from 'node:child_process';
+import { X509Certificate } from 'node:crypto';
 import {
   chmodSync,
   mkdtempSync,
@@ -33,6 +34,29 @@ function openssl(arguments_: readonly string[], directory: string): void {
     cwd: directory,
     stdio: ['ignore', 'ignore', 'pipe'],
   });
+}
+
+function assertTrustedCertificateChain(
+  caCertificate: Buffer,
+  issuedCertificates: readonly TestCertificate[],
+): void {
+  const ca = new X509Certificate(caCertificate);
+  if (!ca.ca) {
+    throw new Error('administrator edge test CA is not a valid CA certificate');
+  }
+  for (const issuedCertificate of issuedCertificates) {
+    const certificate = new X509Certificate(
+      issuedCertificate.certificate,
+    );
+    if (
+      !certificate.checkIssued(ca) ||
+      !certificate.verify(ca.publicKey)
+    ) {
+      throw new Error(
+        'administrator edge test certificate was not issued by the test CA',
+      );
+    }
+  }
 }
 
 function issueCertificate(input: {
@@ -109,6 +133,26 @@ export function createTestPki(
   );
   chmodSync(directory, 0o700);
   try {
+    writeFileSync(
+      join(directory, 'ca.cnf'),
+      [
+        '[req]',
+        'distinguished_name=ca_distinguished_name',
+        'x509_extensions=ca_extensions',
+        'prompt=no',
+        '',
+        '[ca_distinguished_name]',
+        'CN=ECHO Admin Edge Test CA',
+        '',
+        '[ca_extensions]',
+        'basicConstraints=critical,CA:TRUE',
+        'keyUsage=critical,keyCertSign,cRLSign',
+        'subjectKeyIdentifier=hash',
+        'authorityKeyIdentifier=keyid:always',
+        '',
+      ].join('\n'),
+      { encoding: 'utf8', mode: 0o600 },
+    );
     openssl(
       [
         'req',
@@ -119,12 +163,10 @@ export function createTestPki(
         '-sha256',
         '-days',
         '2',
-        '-subj',
-        '/CN=ECHO Admin Edge Test CA',
-        '-addext',
-        'basicConstraints=critical,CA:TRUE',
-        '-addext',
-        'keyUsage=critical,keyCertSign,cRLSign',
+        '-config',
+        'ca.cnf',
+        '-extensions',
+        'ca_extensions',
         '-keyout',
         'ca.key.pem',
         '-out',
@@ -147,6 +189,8 @@ export function createTestPki(
         'keyUsage=critical,digitalSignature,keyEncipherment',
         'extendedKeyUsage=serverAuth',
         `subjectAltName=DNS:${serverHostname}`,
+        'subjectKeyIdentifier=hash',
+        'authorityKeyIdentifier=keyid:always',
         '',
       ].join('\n'),
     });
@@ -159,6 +203,8 @@ export function createTestPki(
         'basicConstraints=critical,CA:FALSE',
         'keyUsage=critical,digitalSignature',
         'extendedKeyUsage=clientAuth',
+        'subjectKeyIdentifier=hash',
+        'authorityKeyIdentifier=keyid:always',
         '',
       ].join('\n'),
     });
@@ -171,6 +217,8 @@ export function createTestPki(
         'basicConstraints=critical,CA:FALSE',
         'keyUsage=critical,digitalSignature',
         'extendedKeyUsage=clientAuth',
+        'subjectKeyIdentifier=hash',
+        'authorityKeyIdentifier=keyid:always',
         '',
       ].join('\n'),
     });
@@ -207,10 +255,16 @@ export function createTestPki(
     );
     chmodSync(untrustedAdminCertificatePath, 0o600);
     chmodSync(untrustedAdminKeyPath, 0o600);
+    const caCertificate = readFileSync(caCertificatePath);
+    assertTrustedCertificateChain(caCertificate, [
+      server,
+      adminOne,
+      adminTwo,
+    ]);
     return {
       directory,
       ca_certificate_path: caCertificatePath,
-      ca_certificate: readFileSync(caCertificatePath),
+      ca_certificate: caCertificate,
       server,
       admin_one: adminOne,
       admin_two: adminTwo,

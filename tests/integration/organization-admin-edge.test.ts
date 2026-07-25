@@ -175,6 +175,8 @@ function issueAdditionalTrustedClient(pki: TestPki): TestCertificate {
       "basicConstraints=critical,CA:FALSE",
       "keyUsage=critical,digitalSignature",
       "extendedKeyUsage=clientAuth",
+      "subjectKeyIdentifier=hash",
+      "authorityKeyIdentifier=keyid:always",
       "",
     ].join("\n"),
     { encoding: "utf8", mode: 0o600 },
