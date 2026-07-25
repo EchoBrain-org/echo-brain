@@ -328,6 +328,25 @@ function respond(
 }
 
 describe('organization administrator HTTPS edge', () => {
+  it('rejects an employee authority URL on the administrator hostname at a different port', async () => {
+    const port = await reservePort();
+    await expect(
+      startOrganizationAdminEdge({
+        listener: { host: '127.0.0.1', port },
+        public_origin: `https://${HOSTNAME}:${String(port)}`,
+        employee_authority_base_url: `https://${HOSTNAME}`,
+        authority_origin: 'http://127.0.0.1:39479',
+        tls: {
+          certificate_chain: pki.server.certificate,
+          private_key: pki.server.private_key,
+          client_ca_bundle: pki.ca_certificate,
+        },
+        trusted_proxy_token: PROXY_TOKEN,
+        allowed_admin_client_spki_sha256: new Set([adminOnePin]),
+      }),
+    ).rejects.toThrow('hostname must differ');
+  });
+
   it('proxies only an allowed mTLS identity and replaces every untrusted edge header', async () => {
     const captured: CapturedRequest[] = [];
     const origin = await startOrigin(async (request, response) => {

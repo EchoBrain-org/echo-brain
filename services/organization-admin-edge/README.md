@@ -82,6 +82,23 @@ node services/organization-admin-edge/dist/main.js serve \
   --config /absolute/private/organization-admin-edge.json
 ```
 
+`serve` fails closed unless the runtime is the declared release cell:
+darwin/arm64 with Node 22.22.1. npm 10.9.4 remains the artifact build/install
+toolchain declaration and is not a service-runtime dependency. A local
+unsupported-host development or one-machine rehearsal may cross the runtime
+fence only with an exact loopback listener (`127.0.0.1` or `::1`) and the
+explicit acknowledgement:
+
+```sh
+node services/organization-admin-edge/dist/main.js serve \
+  --config /absolute/private/organization-admin-edge.json \
+  --acknowledge-unsupported-host-for-development
+```
+
+That acknowledgement emits a structured non-qualifying warning. It must never
+appear in a public deployment or service-supervisor command, and it is rejected
+when the process already runs on the declared release platform.
+
 The packaged artifact exposes the same command as
 `echo-organization-admin-edge`. The process prints one secret-free readiness
 record, stays in the foreground, and closes on SIGINT or SIGTERM. Service

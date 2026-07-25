@@ -249,9 +249,9 @@ function assertServeConfig(config: OrganizationAdminEdgeServeConfig): {
     false,
   );
   const authorityOrigin = canonicalAuthorityOrigin(config.authority_origin);
-  if (employeeAuthorityBaseUrl.origin === publicOrigin.origin) {
+  if (employeeAuthorityBaseUrl.hostname === publicOrigin.hostname) {
     throw new Error(
-      'employee authority base URL must differ from administrator public origin',
+      'employee authority base URL hostname must differ from administrator public origin hostname',
     );
   }
   let serverCertificate: X509Certificate;

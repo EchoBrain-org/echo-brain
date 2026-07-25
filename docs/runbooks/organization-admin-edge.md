@@ -170,6 +170,17 @@ supervisor:
   serve --config /absolute/private/admin-edge/admin-edge.json
 ```
 
+`serve` enforces the declared runtime cell (`darwin/arm64`, Node `22.22.1`)
+before it reads private runtime configuration or opens a listener. npm
+`10.9.4` remains the artifact build/install toolchain declaration; the running
+edge does not invoke a package manager.
+
+An unsupported developer host may run only a loopback-bound edge by adding
+`--acknowledge-unsupported-host-for-development`. That flag emits a structured
+non-qualifying warning and is rejected on the declared release cell. Never put
+the flag in a production supervisor command, and never use it to claim
+deployment or Phase 5 evidence.
+
 The supervisor owns start, stop, restart, resource limits, log destination, and
 crash policy. It must not place certificate, key, token, or configuration
 content in its unit definition. Missing or invalid configuration, TLS material,

@@ -37,5 +37,9 @@ proxy identity headers, inject the authenticated loopback-hop credential and a
 canonical privacy-preserving client identity, and keep private authority
 ownership routes off the public surface.
 
-`declared_platform` records the accepted release cell. Building or inspecting
-the artifact on another host does not qualify that host as the target runtime.
+`declared_platform` records the accepted release cell. The packaged `serve`
+command enforces its operating-system, architecture, and Node fields before
+reading private configuration. npm is the artifact build/install toolchain,
+not a service-runtime dependency. A loopback-only development override is
+explicitly non-qualifying; it must not appear in production supervision or
+Phase 5 evidence.

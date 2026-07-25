@@ -144,6 +144,12 @@ describe('organization administrator edge runtime config', () => {
         employee_authority_base_url: validConfig().public_origin,
       }),
     ).toThrow('must be distinct');
+    expect(() =>
+      validateOrganizationAdminEdgeRuntimeConfig({
+        ...validConfig(),
+        employee_authority_base_url: 'https://admin.edge.test',
+      }),
+    ).toThrow('hostname must be distinct');
   });
 
   it('rejects unexpected fields and noncanonical or duplicate client pins', () => {

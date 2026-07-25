@@ -416,9 +416,12 @@ export function validateOrganizationAdminEdgeRuntimeConfig(
     'employee_authority_base_url',
     false,
   );
-  if (employeeAuthorityBaseUrl === publicOrigin) {
+  if (
+    new URL(employeeAuthorityBaseUrl).hostname ===
+    new URL(publicOrigin).hostname
+  ) {
     fail(
-      'employee_authority_base_url must be distinct from the administrator public_origin',
+      'employee_authority_base_url hostname must be distinct from the administrator public_origin hostname',
     );
   }
   return Object.freeze({
