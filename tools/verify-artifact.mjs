@@ -13,7 +13,8 @@
 // mtime forced to 0). npm's own `pack` mtime behavior is NOT relied upon.
 //
 // Runtime assets are packaged at their canonical paths: the config schema at
-// schemas/runtime-config.v1.schema.json and SQLite migrations under dist/storage/.
+// schemas/runtime-config.v1.schema.json and SQLite migrations under
+// dist/product/storage/.
 import { createHash } from 'node:crypto';
 import { spawnSync } from 'node:child_process';
 import { cpSync, existsSync, mkdirSync, readFileSync, writeFileSync, readdirSync, statSync } from 'node:fs';
@@ -83,9 +84,11 @@ function compile(distDir) {
     cwd: REPO, encoding: 'utf8', env: { ...process.env, SOURCE_DATE_EPOCH: String(SOURCE_DATE_EPOCH) },
   });
   if (r.status !== 0) throw new Error(`tsc failed: ${r.stdout}\n${r.stderr}`);
-  cpSync(join(REPO, 'src', 'storage', 'migrations'), join(distDir, 'storage', 'migrations'), {
-    recursive: true,
-  });
+  cpSync(
+    join(REPO, 'src', 'product', 'storage', 'migrations'),
+    join(distDir, 'product', 'storage', 'migrations'),
+    { recursive: true },
+  );
 }
 function collectDist(distDir) {
   const files = [];

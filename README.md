@@ -214,6 +214,40 @@ do not require authentication.
 adapter. Adapter IDs select an implementation; instance IDs distinguish
 multiple configured instances of the same capability.
 
+The bundled `llm` decision processor keeps prompting, extraction validation,
+and evidence verification independent of the selected model provider. Ollama
+is the backward-compatible default when `settings.provider` is omitted. Hosted
+providers require a credential reference and use fixed vendor endpoints:
+
+```json
+{
+  "decision_processor": {
+    "adapter_id": "llm",
+    "instance_id": "primary",
+    "credential_ref": "file:/Users/you/.echo-brain/credentials/openai-api-key",
+    "settings": {
+      "provider": "openai",
+      "model": "YOUR_STRUCTURED_OUTPUT_MODEL",
+      "max_output_tokens": 4096,
+      "request_timeout_ms": 240000
+    }
+  }
+}
+```
+
+Supported providers are `ollama`, `openai`, `anthropic`, and `openrouter`.
+OpenRouter model names use `author/model-slug`. Only Ollama accepts
+`settings.base_url`; hosted providers reject it so a configured API key cannot
+be sent to an arbitrary endpoint. Provider and model changes alter the runtime
+processor version, forcing fresh extraction instead of reusing cached decisions
+or approvals.
+
+Hosted providers are currently supported for local product processing, approval,
+and delivery. Founder federation remains fail-closed for hosted processors until
+processor-attribution records carry credential-connection evidence end to end.
+Founder bootstrap therefore still requires Ollama or another uncredentialed
+decision processor.
+
 For remote Slack approval, replace `"approval_mode": "manual"` with an adapter
 descriptor. The token remains outside the file:
 
@@ -353,11 +387,48 @@ monotonic across restarts.
 The bundled `structured-text` processor intentionally extracts only lines that
 begin with `Decision:`, `Action:`, or `Rationale:`. It remains the deterministic
 offline baseline. The bundled `llm` processor provides model-backed extraction
-through a local Ollama endpoint. The bundled `jsonl-outbox` delivery surface is
-a durable, idempotent local reference. The bundled `slack` delivery surface is
-the first external team destination. It durably replays confirmed delivery
-identities and pins ambiguous post outcomes for operator repair instead of
-automatically risking a duplicate message.
+through Ollama, OpenAI, Anthropic, or OpenRouter while retaining one canonical
+prompt, output schema, decision validator, and evidence verifier. The bundled
+`jsonl-outbox` delivery surface is a durable, idempotent local reference. The
+bundled `slack` delivery surface is the first external team destination. It
+durably replays confirmed delivery identities and pins ambiguous post outcomes
+for operator repair instead of automatically risking a duplicate message.
+
+## Organization administrator edge
+
+The organization administrator edge is a third, exact-commit deployable,
+separate from both the employee-machine product and the single-organization
+authority. It terminates HTTPS for one configured administrator hostname,
+requires a trusted client certificate plus an explicit client-SPKI SHA-256
+allowlist match, and forwards only the exact server-rendered `/admin` console
+surface to a bare loopback authority origin. It owns no organization
+authorization, database, membership, grant, enrollment, lease, session, or
+revocation behavior.
+
+The edge runtime configuration and all TLS, client-CA, and trusted-proxy
+material are external private files. It also requires a canonical
+`employee_authority_base_url`. The edge serves that non-secret deployment
+locator locally at `GET /admin/edge-config` so browser-created invitations
+refer to the separate employee-facing HTTPS authority origin instead of the
+administrator hostname. Employee enrollment and lease routes are never exposed
+on the administrator host.
+
+Build and verify one candidate from an exact committed source SHA:
+
+```sh
+node tools/organization-admin-edge/build-artifact.mjs \
+  --version 0.1.0-dev.admin-edge \
+  --source-sha "$(git rev-parse HEAD)" \
+  --out-dir /absolute/path/to/admin-edge-artifact
+
+node tools/organization-admin-edge/verify-artifact.mjs \
+  --artifact-dir /absolute/path/to/admin-edge-artifact
+```
+
+These commands produce and inspect a local development artifact; they do not
+install or deploy it and do not close Phase 5 `P5-NET-001`. Configuration,
+startup, rotation, rollback, and the exact request-boundary rules are in the
+[organization administrator edge runbook](docs/runbooks/organization-admin-edge.md).
 
 ## Stable core and adapter boundaries
 
@@ -418,7 +489,13 @@ standalone changes are successor work and are not relabeled as copied source.
 `node tools/check-provenance.mjs` therefore verifies the immutable extraction
 commit by default.
 
-The first successor restores the byte-identical
-`src/storage/migrations/0001_initial.sql`, which the extracted SQLite runtime
-requires but the one-time artifact closure accidentally omitted. The standalone
-core state is added separately by `0002_core_state.sql`.
+The first successor restored the byte-identical historical
+`0001_initial.sql`, which the extracted SQLite runtime required but the one-time
+artifact closure accidentally omitted. The migration sequence now lives under
+`src/product/storage/migrations/`: `0002_core_state.sql` adds standalone core
+state, `0003_federated_founder_identity.sql` adds local federation state, and
+`0004_remove_legacy_events.sql` removes the retired generic event table.
+`0005_organization_access.sql` adds the Phase 4 local authority pin,
+enrollment, and access high-watermark state. The separately deployable
+single-organization authority lives under `services/organization-authority`;
+it is never bundled into the employee-machine product.

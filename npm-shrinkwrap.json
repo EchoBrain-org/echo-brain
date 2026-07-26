@@ -7,8 +7,23 @@
     "": {
       "name": "echo-brain",
       "version": "0.0.0-dev.0",
+      "bundleDependencies": [
+        "@echo-brain/federation-protocol",
+        "@echo-brain/organization-protocol",
+        "@echo-brain/organization-api"
+      ],
       "license": "MIT",
+      "workspaces": [
+        "packages/federation-protocol",
+        "packages/organization-protocol",
+        "packages/organization-api",
+        "services/organization-authority",
+        "services/organization-admin-edge"
+      ],
       "dependencies": {
+        "@echo-brain/federation-protocol": "0.0.0-dev.0",
+        "@echo-brain/organization-api": "0.0.0-dev.0",
+        "@echo-brain/organization-protocol": "0.0.0-dev.0",
         "ajv": "8.20.0",
         "better-sqlite3": "12.10.0"
       },
@@ -28,6 +43,26 @@
         "node": "22.22.1",
         "npm": "10.9.4"
       }
+    },
+    "node_modules/@echo-brain/federation-protocol": {
+      "resolved": "packages/federation-protocol",
+      "link": true
+    },
+    "node_modules/@echo-brain/organization-admin-edge": {
+      "resolved": "services/organization-admin-edge",
+      "link": true
+    },
+    "node_modules/@echo-brain/organization-api": {
+      "resolved": "packages/organization-api",
+      "link": true
+    },
+    "node_modules/@echo-brain/organization-authority": {
+      "resolved": "services/organization-authority",
+      "link": true
+    },
+    "node_modules/@echo-brain/organization-protocol": {
+      "resolved": "packages/organization-protocol",
+      "link": true
     },
     "node_modules/@emnapi/core": {
       "version": "1.11.1",
@@ -3498,6 +3533,67 @@
       },
       "funding": {
         "url": "https://github.com/sponsors/sindresorhus"
+      }
+    },
+    "packages/federation-protocol": {
+      "name": "@echo-brain/federation-protocol",
+      "version": "0.0.0-dev.0",
+      "license": "MIT",
+      "engines": {
+        "node": "22.22.1",
+        "npm": "10.9.4"
+      }
+    },
+    "packages/organization-api": {
+      "name": "@echo-brain/organization-api",
+      "version": "0.0.0-dev.0",
+      "license": "MIT",
+      "dependencies": {
+        "@echo-brain/federation-protocol": "0.0.0-dev.0",
+        "@echo-brain/organization-protocol": "0.0.0-dev.0"
+      },
+      "engines": {
+        "node": "22.22.1",
+        "npm": "10.9.4"
+      }
+    },
+    "packages/organization-protocol": {
+      "name": "@echo-brain/organization-protocol",
+      "version": "0.0.0-dev.0",
+      "license": "MIT",
+      "dependencies": {
+        "@echo-brain/federation-protocol": "0.0.0-dev.0"
+      },
+      "engines": {
+        "node": "22.22.1",
+        "npm": "10.9.4"
+      }
+    },
+    "services/organization-admin-edge": {
+      "name": "@echo-brain/organization-admin-edge",
+      "version": "0.0.0-dev.0",
+      "license": "MIT",
+      "dependencies": {
+        "@echo-brain/organization-api": "0.0.0-dev.0"
+      },
+      "engines": {
+        "node": "22.22.1",
+        "npm": "10.9.4"
+      }
+    },
+    "services/organization-authority": {
+      "name": "@echo-brain/organization-authority",
+      "version": "0.0.0-dev.0",
+      "license": "MIT",
+      "dependencies": {
+        "@echo-brain/federation-protocol": "0.0.0-dev.0",
+        "@echo-brain/organization-api": "0.0.0-dev.0",
+        "@echo-brain/organization-protocol": "0.0.0-dev.0",
+        "better-sqlite3": "12.10.0"
+      },
+      "engines": {
+        "node": "22.22.1",
+        "npm": "10.9.4"
       }
     }
   }

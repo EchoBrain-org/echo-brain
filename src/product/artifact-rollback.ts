@@ -863,7 +863,12 @@ function verifyDependencyInstallationLock(
     resolved: dependency,
     integrity: artifactSha512Integrity(retainedArtifactPath),
   };
-  for (const key of ['dependencies', 'bin', 'engines'] as const) {
+  for (const key of [
+    'dependencies',
+    'bundleDependencies',
+    'bin',
+    'engines',
+  ] as const) {
     if (productMetadata[key] !== undefined) {
       syntheticProduct[key] = productMetadata[key];
     }
@@ -876,8 +881,46 @@ function verifyDependencyInstallationLock(
     },
     'node_modules/echo-brain': syntheticProduct,
   };
-  for (const [path, entry] of Object.entries(productPackages)) {
-    if (path !== '') expectedPackages[path] = entry;
+  const packagedEntries = Object.entries(productPackages)
+    .filter(([path]) => path !== '')
+    .map(
+      ([path, entry]) =>
+        [
+          path,
+          requireRecord(
+            entry,
+            `installed product shrinkwrap package ${path}`,
+          ),
+        ] as const,
+    );
+  const bundledRoots = packagedEntries
+    .filter(([, metadata]) => metadata['inBundle'] === true)
+    .map(([path]) => path);
+  for (const [path, metadata] of packagedEntries) {
+    const bundled = bundledRoots.some(
+      (root) => path === root || path.startsWith(`${root}/node_modules/`),
+    );
+    const installedPath = bundled
+      ? `node_modules/echo-brain/${path}`
+      : path;
+    if (
+      bundled &&
+      (!path.startsWith('node_modules/') ||
+        path.includes('\\') ||
+        path
+          .split('/')
+          .some((part) => part === '' || part === '.' || part === '..'))
+    ) {
+      throw new Error(
+        `installed product bundled dependency path is unsafe: ${path}`,
+      );
+    }
+    if (Object.hasOwn(expectedPackages, installedPath)) {
+      throw new Error(
+        `installed product dependency lock path collides after installation: ${path}`,
+      );
+    }
+    expectedPackages[installedPath] = metadata;
   }
   const expectedRootLock = {
     name: 'echo-brain-offline-install',

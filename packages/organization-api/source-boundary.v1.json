@@ -1,0 +1,33 @@
+{
+  "boundary_version": 1,
+  "kind": "echo-workspace-source-boundary",
+  "name": "@echo-brain/organization-api",
+  "workspace": true,
+  "boundary_root": "packages/organization-api",
+  "source_root": "packages/organization-api/src",
+  "package_json": "packages/organization-api/package.json",
+  "entry_points": ["packages/organization-api/src/index.ts"],
+  "owned_source_paths": ["packages/organization-api/src/**"],
+  "allowed_internal_paths": ["packages/organization-api/src/**"],
+  "forbidden_repository_roots": ["src/", "services/"],
+  "allowed_workspace_packages": [
+    "@echo-brain/federation-protocol",
+    "@echo-brain/organization-protocol"
+  ],
+  "allowed_external_packages": [],
+  "allowed_node_builtins": [],
+  "runtime_assets": [],
+  "layer_rules": [
+    {
+      "name": "organization-api-has-no-implementation-dependencies",
+      "from": "packages/organization-api/src/**",
+      "allowed_imports": ["packages/organization-api/src/**"],
+      "allowed_workspace_packages": [
+        "@echo-brain/federation-protocol",
+        "@echo-brain/organization-protocol"
+      ],
+      "allowed_external_packages": [],
+      "allowed_node_builtins": []
+    }
+  ]
+}

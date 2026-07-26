@@ -10,26 +10,53 @@ on:
       - 'src/storage/**'
       - 'src/logging/**'
       - 'src/util/**'
-      - 'src/guards.ts'
+      - 'src/capture/**'
+      - 'src/echo-home/**'
+      - 'src/enrich/**'
+      - 'packages/**'
+      - 'services/**'
       - 'product/**'
       - 'provenance/**'
+      - 'release/**'
+      - 'docs/runbooks/phase5-one-machine-rehearsal.md'
+      - 'docs/runbooks/organization-admin-edge.md'
       - 'schemas/meeting-context.v1.schema.json'
       - 'schemas/runtime-config.v1.schema.json'
+      - 'schemas/phase5/**'
       - 'schemas/product/**'
       - 'tools/product/**'
       - 'tests/product/**'
-      - 'tests/standalone/**'
+      - 'tests/architecture/**'
+      - 'tests/core/**'
+      - 'tests/adapters/**'
+      - 'tests/infrastructure/**'
+      - 'tests/integration/**'
+      - 'tests/support/**'
+      - 'tests/machine/**'
+      - 'tests/system/**'
       - 'tools/build.mjs'
       - 'tools/check-boundary.mjs'
+      - 'tools/lib/**'
+      - 'tools/workspace-source-boundaries.v1.json'
       - 'tools/check-dependencies.mjs'
       - 'tools/check-provenance.mjs'
       - 'tools/check-successor-provenance.mjs'
+      - 'tools/verify-artifact.mjs'
+      - 'tools/organization-authority/**'
+      - 'tools/organization-admin-edge/**'
+      - 'tools/release/**'
+      - 'tools/phase5/**'
       - 'package.json'
       - 'npm-shrinkwrap.json'
+      - '.npmrc'
       - 'tsconfig.json'
+      - 'tsconfig.build.json'
+      - 'tsconfig.workspaces.json'
       - 'eslint.config.js'
       - 'vitest.config.ts'
+      - 'vitest.package.config.ts'
       - 'vitest.product.config.ts'
+      - 'tests/README.md'
       - 'README.md'
       - 'LICENSE'
       - '.github/workflows/product-qualification.yml'
@@ -43,26 +70,53 @@ on:
       - 'src/storage/**'
       - 'src/logging/**'
       - 'src/util/**'
-      - 'src/guards.ts'
+      - 'src/capture/**'
+      - 'src/echo-home/**'
+      - 'src/enrich/**'
+      - 'packages/**'
+      - 'services/**'
       - 'product/**'
       - 'provenance/**'
+      - 'release/**'
+      - 'docs/runbooks/phase5-one-machine-rehearsal.md'
+      - 'docs/runbooks/organization-admin-edge.md'
       - 'schemas/meeting-context.v1.schema.json'
       - 'schemas/runtime-config.v1.schema.json'
+      - 'schemas/phase5/**'
       - 'schemas/product/**'
       - 'tools/product/**'
       - 'tests/product/**'
-      - 'tests/standalone/**'
+      - 'tests/architecture/**'
+      - 'tests/core/**'
+      - 'tests/adapters/**'
+      - 'tests/infrastructure/**'
+      - 'tests/integration/**'
+      - 'tests/support/**'
+      - 'tests/machine/**'
+      - 'tests/system/**'
       - 'tools/build.mjs'
       - 'tools/check-boundary.mjs'
+      - 'tools/lib/**'
+      - 'tools/workspace-source-boundaries.v1.json'
       - 'tools/check-dependencies.mjs'
       - 'tools/check-provenance.mjs'
       - 'tools/check-successor-provenance.mjs'
+      - 'tools/verify-artifact.mjs'
+      - 'tools/organization-authority/**'
+      - 'tools/organization-admin-edge/**'
+      - 'tools/release/**'
+      - 'tools/phase5/**'
       - 'package.json'
       - 'npm-shrinkwrap.json'
+      - '.npmrc'
       - 'tsconfig.json'
+      - 'tsconfig.build.json'
+      - 'tsconfig.workspaces.json'
       - 'eslint.config.js'
       - 'vitest.config.ts'
+      - 'vitest.package.config.ts'
       - 'vitest.product.config.ts'
+      - 'tests/README.md'
       - 'README.md'
       - 'LICENSE'
       - '.github/workflows/product-qualification.yml'
@@ -137,7 +191,11 @@ jobs:
       - name: Repository tests
         id: repo_tests
         continue-on-error: true
-        run: npm test -- --reporter=json --outputFile="$RUNNER_TEMP/repository-results.json"
+        run: >-
+          npm test --
+          --reporter=default
+          --reporter=json
+          --outputFile.json="$RUNNER_TEMP/repository-results.json"
       - name: Prepare exact offline dependencies
         id: prepare
         continue-on-error: true
@@ -167,7 +225,11 @@ jobs:
       - name: Product tests against the built artifact
         id: product_tests
         continue-on-error: true
-        run: npm run test:qualification -- --reporter=json --outputFile="$RUNNER_TEMP/product-results.json"
+        run: >-
+          npm run test:qualification --
+          --reporter=default
+          --reporter=json
+          --outputFile.json="$RUNNER_TEMP/product-results.json"
       - name: Count unexpected repository and product-test skips
         id: skips
         if: always()

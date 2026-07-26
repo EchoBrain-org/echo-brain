@@ -1,4 +1,11 @@
-import { mkdtemp, readFile, rm, stat, symlink, writeFile } from 'node:fs/promises';
+import {
+  mkdtemp,
+  readFile,
+  rm,
+  stat,
+  symlink,
+  writeFile,
+} from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
@@ -8,14 +15,12 @@ import {
   type DeliveryEnvelope,
   type MeetingDocument,
 } from '../../src/core/index.js';
-import {
-  StructuredTextDecisionProcessor,
-} from '../../src/adapters/decision-processors/structured-text/index.js';
+import { StructuredTextDecisionProcessor } from '../../src/adapters/decision-processors/structured-text/index.js';
 import {
   JsonlOutboxDeliverySurface,
   type JsonlOutboxRecord,
 } from '../../src/adapters/delivery-surfaces/jsonl-outbox/index.js';
-import { adapterConformance } from '../core/adapter-conformance.js';
+import { adapterConformance } from '../support/adapter-conformance.js';
 
 const processorConfig: AdapterConfig = {
   adapter_id: 'structured-text',
@@ -156,9 +161,11 @@ describe('structured-text decision processor', () => {
       firstResult.signals.map((signal) => signal.id),
     );
     expect(secondResult.generated_at).not.toBe(firstResult.generated_at);
-    expect(firstResult.signals.every((signal) => /:sha256:[a-f0-9]{64}$/.test(signal.id))).toBe(
-      true,
-    );
+    expect(
+      firstResult.signals.every((signal) =>
+        /:sha256:[a-f0-9]{64}$/.test(signal.id),
+      ),
+    ).toBe(true);
   });
 
   it('rejects extraction contexts for another processor version', async () => {
@@ -247,7 +254,9 @@ function envelopeFor(
 
 afterEach(async () => {
   await Promise.all(
-    temporaryDirectories.splice(0).map((directory) => rm(directory, { recursive: true, force: true })),
+    temporaryDirectories
+      .splice(0)
+      .map((directory) => rm(directory, { recursive: true, force: true })),
   );
 });
 
@@ -256,8 +265,12 @@ adapterConformance({
   kind: 'delivery-surface',
   create: () =>
     new JsonlOutboxDeliverySurface(
-      outboxConfig(join(tmpdir(), `echo-brain-outbox-conformance-${process.pid}.jsonl`)),
-      { now: () => '2026-07-16T17:02:00.000Z' },
+      outboxConfig(
+        join(tmpdir(), `echo-brain-outbox-conformance-${process.pid}.jsonl`),
+      ),
+      {
+        now: () => '2026-07-16T17:02:00.000Z',
+      },
     ),
   validConfig: outboxConfig(
     join(tmpdir(), `echo-brain-outbox-conformance-${process.pid}.jsonl`),
@@ -292,7 +305,9 @@ describe('JSONL outbox delivery surface', () => {
     });
     const envelope = envelopeFor(surface, 'envelope-1');
     const receipt = await surface.publish(envelope);
-    const record = JSON.parse((await readFile(outbox.path, 'utf8')).trim()) as JsonlOutboxRecord;
+    const record = JSON.parse(
+      (await readFile(outbox.path, 'utf8')).trim(),
+    ) as JsonlOutboxRecord;
 
     expect(receipt).toEqual({
       schema_version: 1,
@@ -311,7 +326,9 @@ describe('JSONL outbox delivery surface', () => {
       envelope,
     });
     expect((await stat(outbox.path)).mode & 0o777).toBe(0o600);
-    await expect(stat(`${outbox.path}.lock`)).rejects.toMatchObject({ code: 'ENOENT' });
+    await expect(stat(`${outbox.path}.lock`)).rejects.toMatchObject({
+      code: 'ENOENT',
+    });
   });
 
   it('deduplicates the idempotency key across concurrent adapter instances and restarts', async () => {
@@ -330,7 +347,9 @@ describe('JSONL outbox delivery surface', () => {
     const restarted = new JsonlOutboxDeliverySurface(config, {
       now: () => '2026-07-17T18:04:00.000Z',
     });
-    const restartReceipt = await restarted.publish(envelopeFor(restarted, 'attempt-3'));
+    const restartReceipt = await restarted.publish(
+      envelopeFor(restarted, 'attempt-3'),
+    );
 
     expect(secondReceipt).toMatchObject({
       envelope_id: 'attempt-2',
@@ -342,7 +361,9 @@ describe('JSONL outbox delivery surface', () => {
       external_id: firstReceipt.external_id,
       recorded_at: firstReceipt.recorded_at,
     });
-    expect((await readFile(outbox.path, 'utf8')).trim().split('\n')).toHaveLength(1);
+    expect(
+      (await readFile(outbox.path, 'utf8')).trim().split('\n'),
+    ).toHaveLength(1);
   });
 
   it('fails closed for symbolic links and malformed existing outboxes', async () => {
@@ -353,14 +374,18 @@ describe('JSONL outbox delivery surface', () => {
     await symlink(target, link);
     const linked = new JsonlOutboxDeliverySurface(outboxConfig(link));
     expect(await linked.healthCheck()).toMatchObject({ status: 'unavailable' });
-    await expect(linked.publish(envelopeFor(linked, 'linked'))).rejects.toMatchObject({
+    await expect(
+      linked.publish(envelopeFor(linked, 'linked')),
+    ).rejects.toMatchObject({
       code: 'permanently_rejected',
       retryable: false,
     });
 
     await writeFile(outbox.path, 'not-json\n', { mode: 0o600 });
     const malformed = new JsonlOutboxDeliverySurface(outboxConfig(outbox.path));
-    await expect(malformed.publish(envelopeFor(malformed, 'malformed'))).rejects.toMatchObject({
+    await expect(
+      malformed.publish(envelopeFor(malformed, 'malformed')),
+    ).rejects.toMatchObject({
       code: 'permanently_rejected',
       retryable: false,
     });

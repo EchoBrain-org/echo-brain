@@ -1,4 +1,7 @@
-import { LLM_DECISION_PROCESSOR_PROMPT_VERSION } from "../../../adapters/decision-processors/llm/llm-decision-processor.js";
+import {
+  LLM_DECISION_PROCESSOR_PROMPT_VERSION,
+  LLM_DECISION_PROCESSOR_SCHEMA_VERSION,
+} from "../../../adapters/decision-processors/llm/llm-decision-processor.js";
 
 type JsonRecord = Record<string, unknown>;
 type Shape = (value: unknown, label: string) => void;
@@ -197,11 +200,14 @@ const llmSettingsShape = objectShape(
   {
     model: stringShape,
     prompt_version: literalShape(LLM_DECISION_PROCESSOR_PROMPT_VERSION),
+    output_schema_version: literalShape(LLM_DECISION_PROCESSOR_SCHEMA_VERSION),
   },
   {
+    provider: stringShape,
     base_url: (value, label) =>
       assertSafeBaseUrl(value, ["http:", "https:"], label),
     request_timeout_ms: integerShape,
+    max_output_tokens: integerShape,
   },
 );
 

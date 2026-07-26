@@ -1,0 +1,113 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://echo.local/schemas/organization-protocol/organization-enrollment-request.v1.schema.json",
+  "title": "ECHO organization enrollment request",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "kind",
+    "enrollment_grant_sha256",
+    "authority_id",
+    "authority_key_id",
+    "organization_id",
+    "principal_id",
+    "membership_id",
+    "installation_id",
+    "installation_signing_key",
+    "integrity"
+  ],
+  "properties": {
+    "schema_version": { "const": 1 },
+    "kind": { "const": "echo-organization-enrollment-request" },
+    "enrollment_grant_sha256": { "$ref": "#/definitions/digest" },
+    "authority_id": { "$ref": "#/definitions/authorityId" },
+    "authority_key_id": { "$ref": "#/definitions/digest" },
+    "organization_id": { "$ref": "#/definitions/organizationId" },
+    "principal_id": { "$ref": "#/definitions/principalId" },
+    "membership_id": { "$ref": "#/definitions/membershipId" },
+    "installation_id": { "$ref": "#/definitions/installationId" },
+    "installation_signing_key": { "$ref": "#/definitions/p256PublicKey" },
+    "integrity": { "$ref": "#/definitions/integrity" }
+  },
+  "definitions": {
+    "authorityId": {
+      "type": "string",
+      "minLength": 40,
+      "maxLength": 40,
+      "pattern": "^oau_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+    },
+    "organizationId": {
+      "type": "string",
+      "minLength": 40,
+      "maxLength": 40,
+      "pattern": "^org_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+    },
+    "principalId": {
+      "type": "string",
+      "minLength": 40,
+      "maxLength": 40,
+      "pattern": "^prn_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+    },
+    "membershipId": {
+      "type": "string",
+      "minLength": 40,
+      "maxLength": 40,
+      "pattern": "^mem_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+    },
+    "installationId": {
+      "type": "string",
+      "minLength": 40,
+      "maxLength": 40,
+      "pattern": "^ins_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+    },
+    "digest": {
+      "type": "string",
+      "minLength": 71,
+      "maxLength": 71,
+      "pattern": "^sha256:[0-9a-f]{64}$"
+    },
+    "base64": {
+      "type": "string",
+      "pattern": "^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$"
+    },
+    "p256PublicKey": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["key_id", "algorithm", "public_key_spki_der_base64"],
+      "properties": {
+        "key_id": { "$ref": "#/definitions/digest" },
+        "algorithm": { "const": "ecdsa-p256-sha256-der-low-s" },
+        "public_key_spki_der_base64": {
+          "type": "string",
+          "allOf": [{ "$ref": "#/definitions/base64" }],
+          "minLength": 124,
+          "maxLength": 124
+        }
+      }
+    },
+    "integrity": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "canonicalization",
+        "payload_sha256",
+        "signature_algorithm",
+        "key_id",
+        "signature_base64"
+      ],
+      "properties": {
+        "canonicalization": { "const": "RFC8785" },
+        "payload_sha256": { "$ref": "#/definitions/digest" },
+        "signature_algorithm": { "const": "ecdsa-p256-sha256-der-low-s" },
+        "key_id": { "$ref": "#/definitions/digest" },
+        "signature_base64": {
+          "type": "string",
+          "allOf": [{ "$ref": "#/definitions/base64" }],
+          "minLength": 8,
+          "maxLength": 96
+        }
+      }
+    }
+  }
+}

@@ -1,8 +1,5 @@
 import { createHash } from 'node:crypto';
-import { mkdtempSync, rmSync } from 'node:fs';
-import { tmpdir } from 'node:os';
-import { join } from 'node:path';
-import { afterEach, describe, expect, it } from 'vitest';
+import { describe, expect, it } from 'vitest';
 import type {
   AdapterConfig,
   ApprovalRequest,
@@ -16,12 +13,100 @@ import {
   type SlackPresentationEvidence,
   type SlackResolutionEvidence,
 } from '../../src/adapters/approval-surfaces/slack-reactions/slack-reactions-approval-surface.js';
-import {
-  DecisionNodeStore,
-  decisionApprovalId,
-} from '../../src/product/index.js';
+import { adapterConformance } from '../support/adapter-conformance.js';
 
-const roots: string[] = [];
+function decisionApprovalId(processingKey: string): string {
+  return createHash('sha256').update(processingKey).digest('hex');
+}
+
+class InMemoryApprovalDecisionStore implements ApprovalDecisionStore {
+  private readonly byProcessingKey = new Map<
+    string,
+    ApprovalDecisionStoreView
+  >();
+  private readonly processingKeyByApprovalId = new Map<string, string>();
+
+  constructor(private readonly now: () => string) {}
+
+  async ensureRequested(
+    candidate: ApprovalRequest,
+  ): Promise<ApprovalDecisionStoreView> {
+    const existing = this.byProcessingKey.get(candidate.processing_key);
+    if (existing !== undefined) return existing;
+    const view: ApprovalDecisionStoreView = {
+      approval_id: decisionApprovalId(candidate.processing_key),
+      status: 'pending',
+      reviewed_at: null,
+      reviewed_by: null,
+      reason: null,
+      brief: candidate.brief,
+      published: [],
+    };
+    this.byProcessingKey.set(candidate.processing_key, view);
+    this.processingKeyByApprovalId.set(
+      view.approval_id,
+      candidate.processing_key,
+    );
+    return view;
+  }
+
+  async recordPublished(input: {
+    processingKey: string;
+    surface: string;
+    reference: JsonObject;
+    presentationEvidence?: SlackPresentationEvidence;
+  }): Promise<ApprovalDecisionStoreView> {
+    const current = this.requiredByProcessingKey(input.processingKey);
+    if (current.published.some((entry) => entry.surface === input.surface)) {
+      return current;
+    }
+    const next = {
+      ...current,
+      published: [
+        ...current.published,
+        { surface: input.surface, reference: input.reference },
+      ],
+    };
+    this.byProcessingKey.set(input.processingKey, next);
+    return next;
+  }
+
+  async resolve(input: {
+    approvalId: string;
+    status: 'approved' | 'rejected';
+    reviewedBy: string;
+    reason?: string | null;
+    surface: string;
+    metadata?: JsonObject;
+    resolutionEvidence?: SlackResolutionEvidence;
+  }): Promise<ApprovalDecisionStoreView> {
+    const processingKey = this.processingKeyByApprovalId.get(input.approvalId);
+    if (processingKey === undefined) throw new Error('unknown approval');
+    const current = this.requiredByProcessingKey(processingKey);
+    if (current.status !== 'pending') return current;
+    const next = {
+      ...current,
+      status: input.status,
+      reviewed_at: this.now(),
+      reviewed_by: input.reviewedBy,
+      reason: input.reason ?? null,
+    } satisfies ApprovalDecisionStoreView;
+    this.byProcessingKey.set(processingKey, next);
+    return next;
+  }
+
+  async list(): Promise<readonly ApprovalDecisionStoreView[]> {
+    return [...this.byProcessingKey.values()];
+  }
+
+  private requiredByProcessingKey(
+    processingKey: string,
+  ): ApprovalDecisionStoreView {
+    const view = this.byProcessingKey.get(processingKey);
+    if (view === undefined) throw new Error('approval was not requested');
+    return view;
+  }
+}
 
 function request(): ApprovalRequest {
   return {
@@ -271,7 +356,7 @@ function withRequestedMetadata(
   return { ...view, requested_metadata: federationMetadata() };
 }
 
-function activeStore(underlying: DecisionNodeStore): {
+function activeStore(underlying: InMemoryApprovalDecisionStore): {
   store: ApprovalDecisionStore;
   capture: ActiveStoreCapture;
 } {
@@ -324,11 +409,9 @@ function activeStore(underlying: DecisionNodeStore): {
 }
 
 function buildActive(slack: FakeSlack, config = surfaceConfig()) {
-  const root = mkdtempSync(join(tmpdir(), 'slack-surface-active-'));
-  roots.push(root);
-  const underlying = new DecisionNodeStore(root, {
-    now: () => '2026-07-16T21:00:00.000Z',
-  });
+  const underlying = new InMemoryApprovalDecisionStore(
+    () => '2026-07-16T21:00:00.000Z',
+  );
   slack.authIdentities ??= [
     {
       team_id: 'T123',
@@ -385,11 +468,9 @@ function sortObjectKeys(value: unknown): unknown {
 }
 
 function build(slack: FakeSlack) {
-  const root = mkdtempSync(join(tmpdir(), 'slack-surface-'));
-  roots.push(root);
-  const store = new DecisionNodeStore(root, {
-    now: () => '2026-07-16T21:00:00.000Z',
-  });
+  const store = new InMemoryApprovalDecisionStore(
+    () => '2026-07-16T21:00:00.000Z',
+  );
   const surface = createSlackReactionsApprovalSurface(surfaceConfig(), {
     store,
     environment: { SLACK_BOT_TOKEN: 'xoxb-test' },
@@ -399,10 +480,17 @@ function build(slack: FakeSlack) {
   return { surface, store };
 }
 
-afterEach(() => {
-  while (roots.length > 0) {
-    rmSync(roots.pop()!, { recursive: true, force: true });
-  }
+adapterConformance({
+  name: 'Slack reactions approval surface',
+  kind: 'approval-surface',
+  create: () => build(fakeSlack()).surface,
+  validConfig: surfaceConfig(),
+  invalidConfig: {
+    adapter_id: 'wrong-adapter',
+    instance_id: 'founder',
+    credential_ref: 'env:DO_NOT_RENDER',
+    settings: surfaceConfig().settings,
+  },
 });
 
 describe('slack reactions approval surface', () => {

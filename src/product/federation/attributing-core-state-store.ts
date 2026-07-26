@@ -6,7 +6,10 @@ import type {
   MeetingParticipantIdentityKind,
 } from '../../core/contracts/meeting.js';
 import type { CoreStateStore } from '../../core/storage/core-state-store.js';
-import { LLM_DECISION_PROCESSOR_PROMPT_VERSION } from '../../adapters/decision-processors/llm/llm-decision-processor.js';
+import {
+  LLM_DECISION_PROCESSOR_PROMPT_VERSION,
+  LLM_DECISION_PROCESSOR_SCHEMA_VERSION,
+} from '../../adapters/decision-processors/llm/llm-decision-processor.js';
 import {
   ActiveIdentityBundleStore,
   type VerifiedActiveIdentityBundle,
@@ -589,18 +592,31 @@ export class AttributingCoreStateStore extends DelegatingCoreStateStore {
     );
     if (
       binding.adapter_id === 'llm' &&
-      binding.configuration_snapshot['prompt_version'] !==
-        LLM_DECISION_PROCESSOR_PROMPT_VERSION
+      (binding.configuration_snapshot['prompt_version'] !==
+        LLM_DECISION_PROCESSOR_PROMPT_VERSION ||
+        binding.configuration_snapshot['output_schema_version'] !==
+          LLM_DECISION_PROCESSOR_SCHEMA_VERSION)
     ) {
-      fail('LLM processor binding lacks the code-owned prompt version');
+      fail(
+        'LLM processor binding lacks the code-owned prompt or output-schema version',
+      );
+    }
+    const configuredProvider = binding.configuration_snapshot['provider'];
+    if (
+      binding.adapter_id === 'llm' &&
+      (configuredProvider === 'openai' ||
+        configuredProvider === 'anthropic' ||
+        configuredProvider === 'openrouter')
+    ) {
+      fail(
+        'hosted LLM federation requires connection-aware processor attribution',
+      );
     }
     if (
       binding.connection_id !== null ||
       binding.connection_generation !== null
     ) {
-      fail(
-        'Founder Live processor attribution requires a local uncredentialed binding',
-      );
+      fail('processor attribution requires a local uncredentialed binding');
     }
     const capturedAt = this.captureTime(existing?.captured_at);
     assertLifecycle(binding, undefined, capturedAt);

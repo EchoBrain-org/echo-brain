@@ -179,6 +179,12 @@ function main() {
 
     for (const [packagePath, metadata] of Object.entries(shrinkwrap.packages)) {
       if (packagePath === '') continue;
+      if (metadata.inBundle === true) continue;
+      if (metadata.link === true) {
+        throw new Error(
+          `product shrinkwrap must not contain workspace links: ${packagePath}`,
+        );
+      }
       if (
         typeof metadata.integrity !== 'string' ||
         typeof metadata.resolved !== 'string'

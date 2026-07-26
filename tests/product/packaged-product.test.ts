@@ -168,13 +168,42 @@ describe('product-only artifact', () => {
         'dist/product/federation/legacy-classification.d.ts',
         'dist/product/lifecycle-lock.js',
         'dist/product/state-backup.js',
+        'node_modules/@echo-brain/federation-protocol/dist/index.js',
+        'node_modules/@echo-brain/federation-protocol/fixtures/signed-document-p256-rfc8785.v1.json',
+        'node_modules/@echo-brain/organization-protocol/dist/index.js',
+        'node_modules/@echo-brain/organization-protocol/schemas/organization-enrollment-request.v1.schema.json',
+        'node_modules/@echo-brain/organization-api/dist/index.js',
+        'node_modules/@echo-brain/organization-api/openapi/README.md',
       ]),
     );
+    const bundledPackageRoots = [
+      ...new Set(
+        paths.flatMap((path) => {
+          const matched = /^node_modules\/@echo-brain\/([^/]+)\//.exec(path);
+          return matched === null ? [] : [`@echo-brain/${matched[1]}`];
+        }),
+      ),
+    ].sort();
+    expect(bundledPackageRoots).toEqual(
+      [
+        '@echo-brain/federation-protocol',
+        '@echo-brain/organization-api',
+        '@echo-brain/organization-protocol',
+      ].sort(),
+    );
+    expect(
+      paths.some(
+        (path) =>
+          path.startsWith('node_modules/@echo-brain/') &&
+          (path.includes('/src/') || path.endsWith('.tsbuildinfo')),
+      ),
+    ).toBe(false);
     for (const forbidden of [
       'dist/daemon/',
       'dist/mcp/',
       'dist/coord/',
       'dist/trace/',
+      'dist/experimental/',
       'tests/',
       'backlog/',
       'wiki/',
@@ -403,6 +432,63 @@ describe('product-only artifact', () => {
         ],
       },
     });
+
+    const productModule = join(
+      prefix,
+      'node_modules/echo-brain/dist/product/index.js',
+    );
+    const storageSmoke = await run(
+      process.execPath,
+      [
+        '--input-type=module',
+        '-e',
+        [
+          "import { pathToFileURL } from 'node:url';",
+          'const product = await import(pathToFileURL(process.argv[1]).href);',
+          "const storage = new product.SqliteCoreStateStore(':memory:');",
+          'storage.close();',
+          "console.log(JSON.stringify({ ok: typeof product.SqliteStorage === 'undefined' && typeof product.machine.MacOsSecureEnclaveInstallationSigner === 'function' }));",
+        ].join('\n'),
+        productModule,
+      ],
+      { cwd: prefix },
+    );
+    expect(storageSmoke.status, storageSmoke.stderr).toBe(0);
+    expect(JSON.parse(storageSmoke.stdout)).toEqual({ ok: true });
+
+    const publicExportsSmoke = await run(
+      process.execPath,
+      [
+        '--input-type=module',
+        '-e',
+        [
+          "const core = await import('echo-brain/core');",
+          "const adapters = await import('echo-brain/adapters');",
+          "const granola = await import('echo-brain/adapters/meeting-sources/granola');",
+          "const structured = await import('echo-brain/adapters/decision-processors/structured-text');",
+          "const llm = await import('echo-brain/adapters/decision-processors/llm');",
+          "const outbox = await import('echo-brain/adapters/delivery-surfaces/jsonl-outbox');",
+          "const slack = await import('echo-brain/adapters/delivery-surfaces/slack');",
+          "const approvals = await import('echo-brain/adapters/approval-surfaces/slack-reactions');",
+          'const registry = new core.AdapterRegistry();',
+          'console.log(JSON.stringify({',
+          "  ok: typeof registry.get === 'function' &&",
+          "    typeof adapters.decisionProcessors.LlmDecisionProcessor === 'function' &&",
+          "    typeof granola.GranolaMeetingSourceAdapter === 'function' &&",
+          "    typeof structured.StructuredTextDecisionProcessor === 'function' &&",
+          "    typeof llm.AnthropicClient === 'function' &&",
+          "    typeof llm.OpenAiClient === 'function' &&",
+          "    typeof llm.OpenRouterClient === 'function' &&",
+          "    typeof outbox.JsonlOutboxDeliverySurface === 'function' &&",
+          "    typeof slack.SlackDeliverySurface === 'function' &&",
+          "    typeof approvals.SlackReactionsApprovalSurface === 'function'",
+          '}));',
+        ].join('\n'),
+      ],
+      { cwd: prefix },
+    );
+    expect(publicExportsSmoke.status, publicExportsSmoke.stderr).toBe(0);
+    expect(JSON.parse(publicExportsSmoke.stdout)).toEqual({ ok: true });
 
     const reverified = await run(
       process.execPath,

@@ -21,7 +21,6 @@ import {
 } from '../../src/product/spawn-sanitized-child.js';
 
 const REPO_ROOT = resolve(import.meta.dirname, '../..');
-const PRODUCT_CONFIG = join(REPO_ROOT, 'vitest.product.config.ts');
 const PRODUCT_SETUP = join(REPO_ROOT, 'tests/product/setup.ts');
 const VITEST_CLI = join(REPO_ROOT, 'node_modules/vitest/vitest.mjs');
 const temporaryDirectories: string[] = [];
@@ -70,9 +69,6 @@ describe('product hermeticity setup', () => {
     expect(globalThis.__ECHO_PRODUCT_HERMETICITY_GUARD__).toMatchObject({
       active: true,
     });
-    const config = readFileSync(PRODUCT_CONFIG, 'utf8');
-    expect(config).toContain("include: ['tests/product/**/*.test.ts']");
-    expect(config).toContain("setupFiles: ['tests/product/setup.ts']");
   });
 
   it('blocks every enumerated in-worker network surface', () => {
@@ -130,6 +126,7 @@ describe('product hermeticity setup', () => {
       'federation/attributing-core-state-store.ts',
       'federation/independent-copy-store.ts',
       'federation/record-projector.ts',
+      'organization/enrollment/local-organization-coordinator.ts',
     ]);
     expect(
       readFileSync(join(productRoot, 'adapter-factories.ts'), 'utf8'),
@@ -154,17 +151,6 @@ describe('product hermeticity setup', () => {
     expect(composition).toContain('resolveProductClock(options.now)');
     expect(
       readFileSync(
-        join(
-          REPO_ROOT,
-          'src/experimental/n2/authority/organization-authority-store.ts',
-        ),
-        'utf8',
-      ),
-    ).toMatch(
-      /this\.clock = options\.now \?\? \(\(\) => new Date\(\)\.toISOString\(\)\)/,
-    );
-    expect(
-      readFileSync(
         join(productRoot, 'federation/attributing-core-state-store.ts'),
         'utf8',
       ),
@@ -185,6 +171,17 @@ describe('product hermeticity setup', () => {
       readFileSync(join(productRoot, 'federation/record-projector.ts'), 'utf8'),
     ).toMatch(
       /this\.now = options\.now \?\? \(\(\) => new Date\(\)\.toISOString\(\)\)/,
+    );
+    expect(
+      readFileSync(
+        join(
+          productRoot,
+          'organization/enrollment/local-organization-coordinator.ts',
+        ),
+        'utf8',
+      ),
+    ).toMatch(
+      /this\.clock = options\.clock \?\? \{ now: \(\) => new Date\(\)\.toISOString\(\) \}/,
     );
   });
 });

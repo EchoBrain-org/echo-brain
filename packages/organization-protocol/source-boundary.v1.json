@@ -1,0 +1,36 @@
+{
+  "boundary_version": 1,
+  "kind": "echo-workspace-source-boundary",
+  "name": "@echo-brain/organization-protocol",
+  "workspace": true,
+  "boundary_root": "packages/organization-protocol",
+  "source_root": "packages/organization-protocol/src",
+  "package_json": "packages/organization-protocol/package.json",
+  "entry_points": ["packages/organization-protocol/src/index.ts"],
+  "owned_source_paths": ["packages/organization-protocol/src/**"],
+  "allowed_internal_paths": ["packages/organization-protocol/src/**"],
+  "forbidden_repository_roots": [
+    "src/",
+    "services/",
+    "packages/organization-api/"
+  ],
+  "allowed_workspace_packages": ["@echo-brain/federation-protocol"],
+  "allowed_external_packages": [],
+  "allowed_node_builtins": ["buffer"],
+  "runtime_assets": [
+    "packages/organization-protocol/schemas/organization-authority-descriptor.v1.schema.json",
+    "packages/organization-protocol/schemas/organization-enrollment-request.v1.schema.json",
+    "packages/organization-protocol/schemas/organization-enrollment-receipt.v1.schema.json",
+    "packages/organization-protocol/schemas/organization-installation-access-state.v1.schema.json"
+  ],
+  "layer_rules": [
+    {
+      "name": "organization-protocol-depends-only-on-federation-protocol",
+      "from": "packages/organization-protocol/src/**",
+      "allowed_imports": ["packages/organization-protocol/src/**"],
+      "allowed_workspace_packages": ["@echo-brain/federation-protocol"],
+      "allowed_external_packages": [],
+      "allowed_node_builtins": ["buffer"]
+    }
+  ]
+}

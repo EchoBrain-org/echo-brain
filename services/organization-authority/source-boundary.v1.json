@@ -1,0 +1,123 @@
+{
+  "boundary_version": 1,
+  "kind": "echo-workspace-source-boundary",
+  "name": "@echo-brain/organization-authority",
+  "workspace": true,
+  "boundary_root": "services/organization-authority",
+  "source_root": "services/organization-authority/src",
+  "package_json": "services/organization-authority/package.json",
+  "entry_points": [
+    "services/organization-authority/src/main.ts",
+    "services/organization-authority/src/admin-main.ts"
+  ],
+  "owned_source_paths": ["services/organization-authority/src/**"],
+  "allowed_internal_paths": ["services/organization-authority/src/**"],
+  "forbidden_repository_roots": ["src/", "packages/"],
+  "allowed_workspace_packages": [
+    "@echo-brain/federation-protocol",
+    "@echo-brain/organization-protocol",
+    "@echo-brain/organization-api"
+  ],
+  "allowed_external_packages": ["better-sqlite3"],
+  "allowed_node_builtins": [
+    "buffer",
+    "crypto",
+    "events",
+    "fs",
+    "http",
+    "net",
+    "path",
+    "util"
+  ],
+  "runtime_assets": [
+    "services/organization-authority/migrations/0001_single_org_authority.sql",
+    "services/organization-authority/migrations/0002_admin_command_idempotency.sql"
+  ],
+  "layer_rules": [
+    {
+      "name": "authority-entrypoint-calls-composition",
+      "from": "services/organization-authority/src/main.ts",
+      "allowed_imports": ["services/organization-authority/src/composition/**"],
+      "allowed_workspace_packages": [],
+      "allowed_external_packages": [],
+      "allowed_node_builtins": []
+    },
+    {
+      "name": "authority-admin-entrypoint-calls-composition",
+      "from": "services/organization-authority/src/admin-main.ts",
+      "allowed_imports": ["services/organization-authority/src/composition/**"],
+      "allowed_workspace_packages": [],
+      "allowed_external_packages": [],
+      "allowed_node_builtins": []
+    },
+    {
+      "name": "authority-domain-is-pure",
+      "from": "services/organization-authority/src/domain/**",
+      "allowed_imports": ["services/organization-authority/src/domain/**"],
+      "allowed_workspace_packages": [
+        "@echo-brain/federation-protocol",
+        "@echo-brain/organization-protocol"
+      ],
+      "allowed_external_packages": [],
+      "allowed_node_builtins": []
+    },
+    {
+      "name": "authority-application-depends-inward",
+      "from": "services/organization-authority/src/application/**",
+      "allowed_imports": [
+        "services/organization-authority/src/domain/**",
+        "services/organization-authority/src/application/**"
+      ],
+      "allowed_workspace_packages": [
+        "@echo-brain/federation-protocol",
+        "@echo-brain/organization-protocol",
+        "@echo-brain/organization-api"
+      ],
+      "allowed_external_packages": [],
+      "allowed_node_builtins": ["buffer"]
+    },
+    {
+      "name": "authority-adapters-implement-application-ports",
+      "from": "services/organization-authority/src/adapters/**",
+      "allowed_imports": [
+        "services/organization-authority/src/domain/**",
+        "services/organization-authority/src/application/**",
+        "services/organization-authority/src/adapters/**"
+      ],
+      "allowed_workspace_packages": [
+        "@echo-brain/federation-protocol",
+        "@echo-brain/organization-protocol",
+        "@echo-brain/organization-api"
+      ],
+      "allowed_external_packages": ["better-sqlite3"],
+      "allowed_node_builtins": ["crypto", "events", "fs", "net", "path"]
+    },
+    {
+      "name": "authority-presentation-calls-application",
+      "from": "services/organization-authority/src/presentation/**",
+      "allowed_imports": [
+        "services/organization-authority/src/domain/**",
+        "services/organization-authority/src/application/**",
+        "services/organization-authority/src/presentation/**"
+      ],
+      "allowed_workspace_packages": [
+        "@echo-brain/organization-protocol",
+        "@echo-brain/organization-api"
+      ],
+      "allowed_external_packages": [],
+      "allowed_node_builtins": ["buffer", "crypto", "http", "util"]
+    },
+    {
+      "name": "authority-composition-may-wire-all-layers",
+      "from": "services/organization-authority/src/composition/**",
+      "allowed_imports": ["services/organization-authority/src/**"],
+      "allowed_workspace_packages": [
+        "@echo-brain/federation-protocol",
+        "@echo-brain/organization-protocol",
+        "@echo-brain/organization-api"
+      ],
+      "allowed_external_packages": [],
+      "allowed_node_builtins": ["crypto", "events", "fs", "http", "net", "path"]
+    }
+  ]
+}

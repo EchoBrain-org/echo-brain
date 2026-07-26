@@ -7,7 +7,10 @@ general-purpose home for new files.
 ## Root boundaries
 
 - `index.ts` is the only federation barrel exported by the product package.
-- `contracts.ts` owns the shared signed and persisted data contracts.
+- `source-boundary.v1.json` is the executable allowlist for this stable local
+  trust layer; organization, service, and experimental edges are forbidden.
+- `contracts.ts` owns product-specific persisted data contracts and re-exports
+  portable integrity/key types from `@echo-brain/federation-protocol`.
 - `runtime-wiring.ts` is the composition root.
 - `approval-capture.ts`, `identity-lineage-store.ts`, `record-projector.ts`,
   `export-bundle.ts`, `independent-copy-store.ts`, and
@@ -21,7 +24,9 @@ general-purpose home for new files.
 
 ## Capability folders
 
-- `foundation/`: canonical JSON, identifiers, immutable documents, and signing.
+- `foundation/`: compatibility exports for portable protocol primitives and
+  the machine-owned installation signer surface. Key lifecycle implementations
+  live under `src/product/machine/`.
 - `identity/`: identity bundles, manifests, connections, policies, credentials,
   provider identity, and lineage internals.
 - `bootstrap/`: founder enrollment, bootstrap sessions, challenge handling, and
@@ -37,6 +42,14 @@ general-purpose home for new files.
 The disposable organization-authority pilot lives under
 `src/experimental/n2/`, including its contracts, schemas, SQLite state, and
 manual CLI. It is not part of this stable federation layout or package API.
+
+Installation-side organization orchestration lives in the sibling
+`src/product/organization/` module. Portable canonicalization, identifiers,
+signature validation, installation-key descriptor validation, and generic
+signed documents are owned by `@echo-brain/federation-protocol`. Product
+foundation files preserve the existing import surface while delegating those
+operations to that package. Private-key creation, inspection, deletion, and
+signing remain machine-local product responsibilities.
 
 ## Dependency rule
 

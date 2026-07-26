@@ -1,5 +1,3 @@
-import { isNonEmptyString } from "../../../guards.js";
-
 export const GRANOLA_API_BASE_URL = "https://public-api.granola.ai/v1";
 export const DEFAULT_GRANOLA_REQUEST_TIMEOUT_MS = 15_000;
 // Granola caps page_size at 30; values above 30 return HTTP 400.
@@ -200,6 +198,10 @@ export class HttpGranolaApiClient implements GranolaApiClient {
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function isNonEmptyString(value: unknown): value is string {
+  return typeof value === "string" && value.length > 0;
 }
 
 function parseRetryAfterMs(value: string | null): number | undefined {

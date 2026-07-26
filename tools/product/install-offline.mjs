@@ -110,9 +110,57 @@ function sanitizedInstallEnvironment(supportDir, environmentRoot) {
   };
 }
 
-function rootInstallLock(artifact, artifactManifest, productLock) {
+function installedDependencyLockEntries(packages, installedPackagePath) {
+  const packagedEntries = Object.entries(packages).filter(
+    ([path]) => path !== '',
+  );
+  for (const [path, metadata] of packagedEntries) {
+    if (
+      metadata === null ||
+      typeof metadata !== 'object' ||
+      Array.isArray(metadata)
+    ) {
+      throw new Error(`packaged dependency lock entry is invalid: ${path}`);
+    }
+  }
+  const bundledRoots = packagedEntries
+    .filter(([, metadata]) => metadata.inBundle === true)
+    .map(([path]) => path);
+  const entries = {};
+  for (const [path, metadata] of packagedEntries) {
+    const bundled = bundledRoots.some(
+      (root) => path === root || path.startsWith(`${root}/node_modules/`),
+    );
+    const installedPath = bundled
+      ? `${installedPackagePath}/${path}`
+      : path;
+    if (
+      bundled &&
+      (!path.startsWith('node_modules/') ||
+        path.includes('\\') ||
+        path
+          .split('/')
+          .some((part) => part === '' || part === '.' || part === '..'))
+    ) {
+      throw new Error(`packaged bundled dependency path is unsafe: ${path}`);
+    }
+    if (
+      installedPath === installedPackagePath ||
+      Object.hasOwn(entries, installedPath)
+    ) {
+      throw new Error(
+        `packaged dependency lock path collides after installation: ${path}`,
+      );
+    }
+    entries[installedPath] = metadata;
+  }
+  return entries;
+}
+
+export function rootInstallLock(artifact, artifactManifest, productLock) {
   const dependency = `file:${artifact}`;
   const packageMetadata = productLock.packages[''];
+  const installedPackagePath = 'node_modules/echo-brain';
   return {
     name: 'echo-brain-offline-install',
     version: '0.0.0',
@@ -124,16 +172,18 @@ function rootInstallLock(artifact, artifactManifest, productLock) {
         version: '0.0.0',
         dependencies: { 'echo-brain': dependency },
       },
-      'node_modules/echo-brain': {
+      [installedPackagePath]: {
         version: artifactManifest.version,
         resolved: dependency,
         integrity: `sha512-${hashFile(artifact, 'sha512', 'base64')}`,
         dependencies: packageMetadata.dependencies,
+        bundleDependencies: packageMetadata.bundleDependencies,
         bin: packageMetadata.bin,
         engines: packageMetadata.engines,
       },
-      ...Object.fromEntries(
-        Object.entries(productLock.packages).filter(([path]) => path !== ''),
+      ...installedDependencyLockEntries(
+        productLock.packages,
+        installedPackagePath,
       ),
     },
   };

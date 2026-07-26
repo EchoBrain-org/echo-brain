@@ -23,8 +23,12 @@ authority for exact fields, paths, commands, and implementation details.
 
 - [Organization brain direction](product/org-brain-direction.md): the intended
   shared context and retrieval boundary; it is not current implementation.
+- [N=2/org=1 onboarding/access workspace boundaries](architecture/organization-workspace-boundaries.md):
+  the accepted repository and dependency skeleton for the first central slice.
 - [Founder identity decisions](decisions/founder-identity-decisions.md): the
   accepted Founder Live identity decision register.
+- [Organization authority decisions](decisions/organization-authority-decisions.md):
+  the accepted single-organization authority boundary register.
 
 ## Documentation rule
 

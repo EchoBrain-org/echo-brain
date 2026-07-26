@@ -1,9 +1,6 @@
 import { createPublicKey } from 'node:crypto';
-import { chmodSync, existsSync, lstatSync, mkdirSync } from 'node:fs';
-import { dirname, join } from 'node:path';
-import { fileURLToPath } from 'node:url';
-import Database from 'better-sqlite3';
-import { migrate } from '../../storage/migrate.js';
+import type Database from 'better-sqlite3';
+import { openProductDatabase } from '../storage/open-product-database.js';
 import {
   canonicalJson,
   canonicalSha256,
@@ -32,11 +29,6 @@ import {
   verifySignedDocument,
 } from './foundation/signed-document.js';
 import { p256KeyId } from './foundation/signature-profile.js';
-
-const MIGRATIONS_DIR = join(
-  dirname(fileURLToPath(import.meta.url)),
-  '../../storage/migrations',
-);
 
 const EVENT_TYPE = 'approved-org-record' as const;
 const SHA256_DIGEST_PATTERN = /^sha256:[0-9a-f]{64}$/;
@@ -619,22 +611,9 @@ export class FederatedOutboxStore {
   private closed = false;
 
   constructor(databasePath: string) {
-    if (databasePath !== ':memory:') {
-      mkdirSync(dirname(databasePath), { recursive: true });
-      if (existsSync(databasePath)) {
-        const state = lstatSync(databasePath);
-        if (state.isSymbolicLink() || !state.isFile()) {
-          throw new Error('federated outbox database must be a regular file');
-        }
-      }
-    }
-    this.database = new Database(databasePath);
-    if (databasePath !== ':memory:') chmodSync(databasePath, 0o600);
-    this.database.pragma('journal_mode = WAL');
-    this.database.pragma('synchronous = FULL');
-    this.database.pragma('foreign_keys = ON');
-    this.database.pragma('busy_timeout = 5000');
-    migrate(this.database, MIGRATIONS_DIR);
+    this.database = openProductDatabase(databasePath, {
+      durability: 'evidence',
+    });
   }
 
   private runExclusive<T>(operation: () => Promise<T> | T): Promise<T> {

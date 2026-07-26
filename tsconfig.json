@@ -7,13 +7,19 @@
   },
   "include": [
     "src/**/*.ts",
-    "tests/migration/**/*.ts",
-    "tests/standalone/**/*.ts",
+    "packages/*/test/**/*.ts",
+    "services/*/test/**/*.ts",
+    "tests/architecture/**/*.ts",
+    "tests/machine/**/*.ts",
     "tests/core/**/*.ts",
     "tests/adapters/**/*.ts",
     "tests/infrastructure/**/*.ts",
+    "tests/integration/**/*.ts",
     "tests/product/**/*.ts",
+    "tests/support/**/*.ts",
     "vitest.config.ts",
+    "vitest.package.config.ts",
     "vitest.product.config.ts"
-  ]
+  ],
+  "exclude": ["src/experimental/**", "tests/experimental/**"]
 }

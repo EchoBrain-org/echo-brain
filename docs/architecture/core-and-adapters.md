@@ -10,15 +10,37 @@ rules.
 
 ```text
 provider API -> adapter -> core contracts <- core orchestration
-                                      ^
+                    |                 ^
+                    v                 |
+         narrow infrastructure   product composition
                                       |
-                               product runtime
+                 machine ports + local stores + federation gate
 ```
 
 - Core never imports adapters or vendor SDKs.
 - Adapters implement core ports and do not orchestrate sibling adapters.
 - Product composition selects concrete adapters, credentials, and stores.
 - Core tests use vendor-neutral fakes.
+
+These directions are executable policy, not naming conventions:
+
+- `src/core/**` may import only core.
+- `src/adapters/**` may import adapters, core contracts, and specifically
+  declared infrastructure primitives.
+- `src/infrastructure/**` is product-independent.
+- `src/product/storage/**` implements core ports over narrow infrastructure.
+- `src/product/machine/**` owns operating-system and installation-bound
+  capabilities such as the private-key lifecycle.
+- Local organization code receives the machine signer port and product database
+  opener; it cannot import federation implementations wholesale.
+
+`npm run check:boundary` enforces these rules. Test directories mirror the same
+ownership, with deliberate crossings confined to `tests/integration/`.
+Every root layer rule independently allowlists relative imports, runtime
+packages, and Node builtins; a dependency being available to the overall
+product does not make it available to core, adapters, infrastructure, storage,
+or machine code. Stable federation and local organization also have their own
+non-workspace source-boundary manifests.
 
 ## Canonical flow
 
@@ -107,6 +129,14 @@ adapter.
   input identity.
 - Reject malformed output and bound retries and execution time.
 
+The bundled `llm` processor is one semantic adapter with narrow provider
+drivers. The shared processor owns the prompt, canonical structured-output
+schema, parsing, decision validation, and verbatim evidence gate. Ollama,
+OpenAI, Anthropic, and OpenRouter drivers own only authentication, wire-format
+translation, model capability checks, response extraction, and error
+normalization. A provider driver must not weaken or specialize the semantic
+prompt or evidence rules for an individual vendor or model.
+
 ### Approval surface
 
 - State the strongest provider account or tenant identity the API can prove and
@@ -136,3 +166,8 @@ A new integration begins as a typed capability, not a generic adapter. It must
 keep vendor types behind its boundary, declare identity and failure semantics,
 provide a conforming fake, and pass capability-level contract tests. The core
 must still compile and test when that adapter is removed.
+
+Runtime components declare dependencies and are topologically started by the
+generic supervisor. The supervisor does not contain a whitelist of product
+features, so a future reasoning/Brain component can be added by composition
+without weakening rollback or changing unrelated runtime tests.

@@ -1,6 +1,13 @@
 #!/usr/bin/env node
 
-import { chmodSync, cpSync, existsSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import {
+  chmodSync,
+  cpSync,
+  existsSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs';
 import { spawnSync } from 'node:child_process';
 import { join, resolve } from 'node:path';
 import process from 'node:process';
@@ -34,34 +41,50 @@ if (!existsSync(tsc)) {
   process.exit(1);
 }
 
-const compiled = spawnSync(process.execPath, [tsc, '-p', join(repo, 'tsconfig.build.json')], {
-  cwd: repo,
-  encoding: 'utf8',
-});
+const workspacesCompiled = spawnSync(
+  process.execPath,
+  [
+    tsc,
+    '-b',
+    join(repo, 'packages', 'federation-protocol'),
+    join(repo, 'packages', 'organization-protocol'),
+    join(repo, 'packages', 'organization-api'),
+  ],
+  {
+    cwd: repo,
+    encoding: 'utf8',
+  },
+);
+if (workspacesCompiled.status !== 0) {
+  process.stdout.write(workspacesCompiled.stdout);
+  process.stderr.write(workspacesCompiled.stderr);
+  process.exit(workspacesCompiled.status ?? 1);
+}
+
+const compiled = spawnSync(
+  process.execPath,
+  [tsc, '-p', join(repo, 'tsconfig.build.json')],
+  {
+    cwd: repo,
+    encoding: 'utf8',
+  },
+);
 if (compiled.status !== 0) {
   process.stdout.write(compiled.stdout);
   process.stderr.write(compiled.stderr);
   process.exit(compiled.status ?? 1);
 }
 
-cpSync(join(repo, 'src', 'storage', 'migrations'), join(dist, 'storage', 'migrations'), {
-  recursive: true,
-});
 cpSync(
-  join(repo, 'src', 'experimental', 'n2', 'authority', 'migrations'),
-  join(dist, 'experimental', 'n2', 'authority', 'migrations'),
-  { recursive: true },
+  join(repo, 'src', 'product', 'storage', 'migrations'),
+  join(dist, 'product', 'storage', 'migrations'),
+  {
+    recursive: true,
+  },
 );
-cpSync(
-  join(repo, 'src', 'experimental', 'n2', 'organization', 'organization-sync-schema.sql'),
-  join(dist, 'experimental', 'n2', 'organization', 'organization-sync-schema.sql'),
-);
-cpSync(
-  join(repo, 'src', 'experimental', 'n2', 'schemas'),
-  join(dist, 'experimental', 'n2', 'schemas'),
-  { recursive: true },
-);
-const packageVersion = JSON.parse(readFileSync(join(repo, 'package.json'), 'utf8')).version;
+const packageVersion = JSON.parse(
+  readFileSync(join(repo, 'package.json'), 'utf8'),
+).version;
 const sourceSha = gitOutput(['rev-parse', 'HEAD']).toLowerCase();
 if (!/^[a-f0-9]{40}$/.test(sourceSha)) {
   process.stderr.write('git did not return a full lowercase source SHA\n');

@@ -18,6 +18,11 @@ import {
   type SlackAuthIdentity,
   type SlackReaction,
 } from '../../shared/slack/slack-web-api-client.js';
+import {
+  boundedSlackLine as boundedSingleLine,
+  escapeSlackControlText,
+  slackSummaryText as summaryText,
+} from '../../shared/slack/message-format.js';
 
 export const SLACK_REACTIONS_APPROVAL_SURFACE_ADAPTER_ID = 'slack-reactions';
 export const SLACK_REACTIONS_APPROVAL_SURFACE_ADAPTER_VERSION = '1.0.0';
@@ -26,10 +31,7 @@ const SURFACE = 'slack';
 export const DEFAULT_APPROVE_REACTION = 'white_check_mark';
 export const DEFAULT_REJECT_REACTION = 'x';
 const REACTION_NAME_RE = /^[a-z0-9_+-]+$/;
-const MAX_SUMMARY_ITEMS = 10;
-const MAX_ITEM_CHARS = 240;
 const SLACK_HEADER_MAX_CHARS = 150;
-const SLACK_SECTION_MAX_CHARS = 3_000;
 
 type ReviewerReactionState = 'present' | 'absent' | 'unknown';
 
@@ -184,24 +186,6 @@ function settingsFrom(config: AdapterConfig): SlackReactionsSettings {
         ? settings['request_timeout_ms']
         : undefined,
   };
-}
-
-function truncateCharacters(value: string, maximum: number): string {
-  const characters = [...value];
-  return characters.length <= maximum
-    ? value
-    : `${characters.slice(0, maximum - 1).join('')}…`;
-}
-
-function boundedSingleLine(value: string, maximum: number): string {
-  return truncateCharacters(value.replace(/\s+/g, ' ').trim(), maximum);
-}
-
-function escapeSlackControlText(value: string): string {
-  return value
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;');
 }
 
 function invalidFederationPresentation(detail: string): AdapterError {
@@ -412,24 +396,6 @@ function slackReference(
   return isNonEmptyString(channel) && isNonEmptyString(messageTs)
     ? { channel, messageTs }
     : undefined;
-}
-
-function summaryText(
-  label: string,
-  statements: readonly string[],
-): string | undefined {
-  if (statements.length === 0) return undefined;
-  const shown = statements.slice(0, MAX_SUMMARY_ITEMS);
-  const lines = [
-    `${label}:`,
-    ...shown.map(
-      (statement) => `• ${boundedSingleLine(statement, MAX_ITEM_CHARS)}`,
-    ),
-  ];
-  if (statements.length > shown.length) {
-    lines.push(`… and ${statements.length - shown.length} more`);
-  }
-  return truncateCharacters(lines.join('\n'), SLACK_SECTION_MAX_CHARS);
 }
 
 /**

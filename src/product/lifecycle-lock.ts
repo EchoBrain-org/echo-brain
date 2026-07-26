@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto';
 import { basename, dirname, join } from 'node:path';
-import { acquireProcessFileLock } from '../util/process-file-lock.js';
+import { acquireProcessFileLock } from '../infrastructure/filesystem/process-file-lock.js';
 import {
   assertDirectory,
   assertOwnerControlledDirectory,

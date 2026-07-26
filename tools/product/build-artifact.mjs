@@ -1,162 +1,64 @@
 #!/usr/bin/env node
 
-import { createHash } from 'node:crypto';
 import {
-  closeSync,
-  copyFileSync,
   existsSync,
-  lstatSync,
   mkdirSync,
   mkdtempSync,
-  openSync,
-  readFileSync,
-  readdirSync,
   renameSync,
-  rmSync,
   statSync,
-  symlinkSync,
   writeFileSync,
 } from 'node:fs';
-import { basename, dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
+import { basename, dirname, join, relative, resolve, sep } from 'node:path';
 import process from 'node:process';
-import { fileURLToPath, pathToFileURL } from 'node:url';
-import { spawnSync } from 'node:child_process';
+import { pathToFileURL } from 'node:url';
+import { PRODUCT_BUNDLED_WORKSPACE_PACKAGES } from './sync-shrinkwrap.mjs';
+import {
+  ARTIFACT_BUNDLED_WORKSPACES,
+  REPO_ROOT,
+  assertPackageHasNoBuildPaths,
+  copyRequired,
+  filesUnder,
+  gitOutput,
+  isolatedNpmEnvironment,
+  linkMaterializedBuildDependencies,
+  materializeCommit,
+  parseArgs,
+  parseSinglePackResult,
+  readJson,
+  run,
+  safeRemoveTemporary,
+  sha256File,
+  stageBundledWorkspaces,
+  waitAtTestPreflightCheckpoint,
+} from '../release/artifact-builder.mjs';
 
-const TOOL_DIR = dirname(fileURLToPath(import.meta.url));
-const REPO_ROOT = resolve(TOOL_DIR, '../..');
-
-function readJson(path) {
-  return JSON.parse(readFileSync(path, 'utf8'));
-}
-
-function sha256(value) {
-  return createHash('sha256').update(value).digest('hex');
-}
-
-function sha256File(path) {
-  return sha256(readFileSync(path));
-}
-
-function parseArgs(argv) {
-  const args = {};
-  for (let index = 0; index < argv.length; index += 1) {
-    const flag = argv[index];
-    if (!['--version', '--source-sha', '--out-dir'].includes(flag)) {
-      throw new Error(`unknown argument: ${flag}`);
-    }
-    const value = argv[++index];
-    if (value === undefined || value.startsWith('--')) throw new Error(`${flag} requires a value`);
-    args[flag.slice(2)] = value;
-  }
-  for (const flag of ['version', 'source-sha', 'out-dir']) {
-    if (args[flag] === undefined) throw new Error(`--${flag} is required`);
-  }
-  if (!/^\d+\.\d+\.\d+-[0-9A-Za-z]+(?:[.-][0-9A-Za-z]+)*$/.test(args.version)) {
-    throw new Error('--version must be a valid prerelease version');
-  }
-  if (!/^[0-9a-fA-F]{40}$/.test(args['source-sha'])) {
-    throw new Error('--source-sha must be a full 40-character commit SHA');
-  }
-  if (!isAbsolute(args['out-dir'])) throw new Error('--out-dir must be absolute');
-  return args;
-}
-
-function run(command, args, options = {}) {
-  const result = spawnSync(command, args, {
-    cwd: options.cwd ?? REPO_ROOT,
-    encoding: options.encoding ?? 'utf8',
-    env: options.env ?? process.env,
-    maxBuffer: 20 * 1024 * 1024,
-    stdio: options.stdio,
-    timeout: options.timeout ?? 180_000,
-  });
-  if (result.status !== 0) {
-    const stderr = typeof result.stderr === 'string' ? result.stderr.trim() : '';
-    const stdout = typeof result.stdout === 'string' ? result.stdout.trim() : '';
+function assertExactBundleContract(template) {
+  const expected = [...PRODUCT_BUNDLED_WORKSPACE_PACKAGES];
+  const staged = ARTIFACT_BUNDLED_WORKSPACES.map(({ name }) => name);
+  if (JSON.stringify(staged) !== JSON.stringify(expected)) {
     throw new Error(
-      `${basename(command)} ${args.join(' ')} failed (${String(result.status)}): ${stderr || stdout || result.error?.message || 'no output'}`,
+      'artifact workspace staging and product shrinkwrap bundle contracts differ',
     );
   }
-  return typeof result.stdout === 'string' ? result.stdout : '';
-}
-
-function gitOutput(args) {
-  return run('git', args, { cwd: REPO_ROOT }).trim();
-}
-
-function materializeCommit(sourceSha, destination, archivePath) {
-  mkdirSync(destination, { recursive: true });
-  const archiveFd = openSync(archivePath, 'w');
-  try {
-    run('git', ['archive', '--format=tar', sourceSha], {
-      cwd: REPO_ROOT,
-      encoding: 'buffer',
-      stdio: ['ignore', archiveFd, 'pipe'],
-    });
-  } finally {
-    closeSync(archiveFd);
-  }
-  run('/usr/bin/tar', ['-xf', archivePath, '-C', destination]);
-}
-
-function filesUnder(root) {
-  const files = [];
-  function visit(directory) {
-    for (const entry of readdirSync(directory, { withFileTypes: true })) {
-      const path = join(directory, entry.name);
-      if (entry.isDirectory()) visit(path);
-      else if (entry.isFile()) files.push(path);
-      else throw new Error(`package staging contains a non-file entry: ${path}`);
-    }
-  }
-  visit(root);
-  return files.sort();
-}
-
-function copyRequired(source, destination) {
-  if (!existsSync(source) || !statSync(source).isFile()) {
-    throw new Error(`required product package input is missing: ${source}`);
-  }
-  mkdirSync(dirname(destination), { recursive: true });
-  copyFileSync(source, destination);
-}
-
-function safeRemoveTemporary(path, parent) {
-  const rel = relative(parent, path);
-  if (rel === '' || rel === '..' || rel.startsWith(`..${sep}`)) {
-    throw new Error(`refusing to remove unsafe temporary path: ${path}`);
-  }
-  rmSync(path, { recursive: true, force: true });
-}
-
-function assertPackageHasNoRepositoryPath(packageFiles, forbiddenPaths) {
-  for (const path of packageFiles) {
-    const content = readFileSync(path);
-    if (content.includes(0)) continue;
-    const text = content.toString('utf8');
-    for (const forbidden of forbiddenPaths) {
-      if (text.includes(forbidden)) {
-        throw new Error(`package file contains an absolute build/repository path: ${path}`);
-      }
-    }
+  if (
+    JSON.stringify(template.bundleDependencies) !== JSON.stringify(expected)
+  ) {
+    throw new Error(
+      `product bundleDependencies must be exactly: ${expected.join(', ')}`,
+    );
   }
 }
 
-function waitAtTestPreflightCheckpoint() {
-  if (process.env.NODE_ENV !== 'test') return;
-  const ready = process.env.PRODUCT_BUILD_TEST_PREFLIGHT_READY_FILE;
-  const resume = process.env.PRODUCT_BUILD_TEST_CONTINUE_FILE;
-  if (ready === undefined && resume === undefined) return;
-  if (!isAbsolute(ready ?? '') || !isAbsolute(resume ?? '')) {
-    throw new Error('product build test checkpoint paths must both be absolute');
-  }
-  writeFileSync(ready, 'ready\n');
-  const sleeper = new Int32Array(new SharedArrayBuffer(4));
-  for (let attempt = 0; attempt < 500; attempt += 1) {
-    if (existsSync(resume)) return;
-    Atomics.wait(sleeper, 0, 0, 20);
-  }
-  throw new Error('product build test checkpoint timed out');
+function buildBundledWorkspaces(source) {
+  run(
+    process.execPath,
+    [
+      join(REPO_ROOT, 'node_modules/typescript/bin/tsc'),
+      '-b',
+      ...ARTIFACT_BUNDLED_WORKSPACES.map(({ directory }) => join(source, directory)),
+    ],
+    { cwd: source },
+  );
 }
 
 function main() {
@@ -168,7 +70,8 @@ function main() {
   if (head !== sourceSha) {
     throw new Error(`source SHA mismatch: HEAD=${head} supplied=${sourceSha}`);
   }
-  if (existsSync(outDir)) throw new Error(`--out-dir already exists: ${outDir}`);
+  if (existsSync(outDir))
+    throw new Error(`--out-dir already exists: ${outDir}`);
 
   const parent = dirname(outDir);
   mkdirSync(parent, { recursive: true });
@@ -179,20 +82,30 @@ function main() {
   try {
     mkdirSync(work, { recursive: true });
     materializeCommit(sourceSha, source, join(work, 'source.tar'));
-    if (lstatSync(join(REPO_ROOT, 'node_modules')).isDirectory() === false) {
-      throw new Error('root node_modules is required after npm ci');
-    }
-    symlinkSync(join(REPO_ROOT, 'node_modules'), join(source, 'node_modules'), 'dir');
+    linkMaterializedBuildDependencies(source);
 
-    run(process.execPath, ['tools/product/sync-shrinkwrap.mjs', '--check'], { cwd: source });
+    run(process.execPath, ['tools/product/sync-shrinkwrap.mjs', '--check'], {
+      cwd: source,
+    });
     const closurePath = join(work, 'closure.json');
     run(
       process.execPath,
-      ['tools/product/check-boundary.mjs', '--project-root', source, '--output', closurePath],
+      [
+        'tools/product/check-boundary.mjs',
+        '--project-root',
+        source,
+        '--output',
+        closurePath,
+      ],
       { cwd: source },
     );
     const closure = readJson(closurePath);
-    waitAtTestPreflightCheckpoint();
+    waitAtTestPreflightCheckpoint({
+      readyEnvVar: 'PRODUCT_BUILD_TEST_PREFLIGHT_READY_FILE',
+      resumeEnvVar: 'PRODUCT_BUILD_TEST_CONTINUE_FILE',
+      label: 'product',
+    });
+    buildBundledWorkspaces(source);
 
     mkdirSync(packageDir, { recursive: true });
     const buildConfigPath = join(work, 'tsconfig.product-build.json');
@@ -210,6 +123,13 @@ function main() {
             tsBuildInfoFile: null,
             typeRoots: [join(source, 'node_modules/@types')],
             types: ['node'],
+            baseUrl: source,
+            paths: Object.fromEntries(
+              ARTIFACT_BUNDLED_WORKSPACES.map(({ name, directory }) => [
+                name,
+                [`${directory}/dist/index.d.ts`],
+              ]),
+            ),
           },
           files: closure.closure.map((path) => join(source, path)),
           include: [],
@@ -221,7 +141,11 @@ function main() {
     );
     run(
       process.execPath,
-      [join(source, 'node_modules/typescript/bin/tsc'), '--project', buildConfigPath],
+      [
+        join(source, 'node_modules/typescript/bin/tsc'),
+        '--project',
+        buildConfigPath,
+      ],
       { cwd: source },
     );
     writeFileSync(
@@ -239,14 +163,26 @@ function main() {
       const destination = asset.startsWith('src/')
         ? join(packageDir, 'dist', asset.slice('src/'.length))
         : join(packageDir, asset);
-      copyRequired(join(source, asset), destination);
+      copyRequired(join(source, asset), destination, 'product package input');
     }
-    copyRequired(join(source, 'product/README.md'), join(packageDir, 'README.md'));
-    copyRequired(join(source, 'LICENSE'), join(packageDir, 'LICENSE'));
+    copyRequired(
+      join(source, 'product/README.md'),
+      join(packageDir, 'README.md'),
+      'product package input',
+    );
+    copyRequired(
+      join(source, 'LICENSE'),
+      join(packageDir, 'LICENSE'),
+      'product package input',
+    );
 
     const template = readJson(join(source, 'product/package.template.json'));
+    assertExactBundleContract(template);
     const packageJson = { ...template, version };
-    writeFileSync(join(packageDir, 'package.json'), `${JSON.stringify(packageJson, null, 2)}\n`);
+    writeFileSync(
+      join(packageDir, 'package.json'),
+      `${JSON.stringify(packageJson, null, 2)}\n`,
+    );
     const committedShrinkwrapPath = join(source, 'npm-shrinkwrap.json');
     const packagedShrinkwrapPath = join(packageDir, 'npm-shrinkwrap.json');
     run(
@@ -261,9 +197,14 @@ function main() {
       packagedShrinkwrapPath,
       `${JSON.stringify(packagedShrinkwrap, null, 2)}\n`,
     );
+    stageBundledWorkspaces(source, packageDir, work);
 
     const packageFiles = filesUnder(packageDir);
-    assertPackageHasNoRepositoryPath(packageFiles, [REPO_ROOT, temporary, source]);
+    assertPackageHasNoBuildPaths(
+      packageFiles,
+      [REPO_ROOT, temporary, source],
+      'product package file',
+    );
     const packageEntries = packageFiles.map((path) => ({
       path: relative(packageDir, path).split(sep).join('/'),
       size: statSync(path).size,
@@ -278,28 +219,37 @@ function main() {
         // npm pack does not need network or the user's ambient cache. Keep its
         // bookkeeping inside the disposable build root so read-only homes and
         // host-owned cache entries cannot affect an otherwise hermetic build.
-        env: {
-          ...process.env,
-          npm_config_cache: join(work, 'npm-cache'),
-          npm_config_audit: 'false',
-          npm_config_fund: 'false',
-          npm_config_update_notifier: 'false',
-        },
+        env: isolatedNpmEnvironment(join(work, 'npm-cache')),
       },
     );
-    const packResult = JSON.parse(packOutput);
-    if (!Array.isArray(packResult) || packResult.length !== 1) {
-      throw new Error('npm pack did not emit exactly one artifact record');
+    const packResult = parseSinglePackResult(packOutput, 'npm pack');
+    const packedBundles = Array.isArray(packResult.bundled)
+      ? [...packResult.bundled].sort()
+      : [];
+    const expectedBundles = [...PRODUCT_BUNDLED_WORKSPACE_PACKAGES].sort();
+    if (JSON.stringify(packedBundles) !== JSON.stringify(expectedBundles)) {
+      throw new Error(
+        'npm pack did not bundle the exact product workspace package set',
+      );
     }
-    const packedPaths = packResult[0].files.map((entry) => entry.path).sort();
-    if (JSON.stringify(packedPaths) !== JSON.stringify(packageEntries.map((entry) => entry.path))) {
-      throw new Error('npm-packed file set differs from the staged product package');
+    const packedPaths = packResult.files.map((entry) => entry.path).sort();
+    if (
+      JSON.stringify(packedPaths) !==
+      JSON.stringify(packageEntries.map((entry) => entry.path))
+    ) {
+      throw new Error(
+        'npm-packed file set differs from the staged product package',
+      );
     }
-    const tarballName = packResult[0].filename;
+    const tarballName = packResult.filename;
     const tarballPath = join(temporary, tarballName);
-    if (!existsSync(tarballPath)) throw new Error(`npm pack output is missing: ${tarballName}`);
+    if (!existsSync(tarballPath))
+      throw new Error(`npm pack output is missing: ${tarballName}`);
     const tarballSha256 = sha256File(tarballPath);
-    writeFileSync(join(temporary, `${tarballName}.sha256`), `${tarballSha256}  ${tarballName}\n`);
+    writeFileSync(
+      join(temporary, `${tarballName}.sha256`),
+      `${tarballSha256}  ${tarballName}\n`,
+    );
 
     const manifest = {
       schema_version: 1,
@@ -333,7 +283,8 @@ function main() {
     );
 
     safeRemoveTemporary(work, temporary);
-    if (existsSync(outDir)) throw new Error(`--out-dir appeared during build: ${outDir}`);
+    if (existsSync(outDir))
+      throw new Error(`--out-dir appeared during build: ${outDir}`);
     renameSync(temporary, outDir);
     process.stdout.write(
       `${JSON.stringify({ ok: true, out_dir: outDir, artifact: tarballName, sha256: tarballSha256 })}\n`,
@@ -344,7 +295,10 @@ function main() {
   }
 }
 
-if (process.argv[1] !== undefined && import.meta.url === pathToFileURL(process.argv[1]).href) {
+if (
+  process.argv[1] !== undefined &&
+  import.meta.url === pathToFileURL(process.argv[1]).href
+) {
   try {
     main();
   } catch (error) {

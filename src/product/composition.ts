@@ -9,7 +9,7 @@ import type {
   CoreStateStore,
 } from '../core/index.js';
 import { runCoreCycle } from '../core/index.js';
-import { SqliteCoreStateStore } from '../storage/core-state-sqlite.js';
+import { SqliteCoreStateStore } from './storage/sqlite-core-state-store.js';
 import type {
   ClassifyStateFilesystem,
   ProductRuntimeConfig,

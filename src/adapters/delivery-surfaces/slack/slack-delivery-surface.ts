@@ -16,22 +16,23 @@ import {
   SlackApiError,
   SlackWebApiClient,
 } from '../../shared/slack/slack-web-api-client.js';
+import {
+  boundedSlackLine as boundedSingleLine,
+  escapeSlackControlText,
+  slackSummaryText as summaryText,
+  truncateSlackText as truncateCharacters,
+} from '../../shared/slack/message-format.js';
 import type {
   SlackDeliveryReceiptStore,
   SlackStoredDelivery,
 } from './slack-delivery-receipt-store.js';
-import {
-  SlackDeliveryReceiptStoreError,
-} from './slack-delivery-receipt-store.js';
+import { SlackDeliveryReceiptStoreError } from './slack-delivery-receipt-store.js';
 
 export const SLACK_DELIVERY_SURFACE_ADAPTER_ID = 'slack';
 export const SLACK_DELIVERY_SURFACE_ADAPTER_VERSION = '1.0.0';
 
 const SLACK_CHANNEL_ID_RE = /^[CGD][A-Z0-9]{2,}$/;
-const MAX_SUMMARY_ITEMS = 10;
-const MAX_ITEM_CHARS = 240;
 const SLACK_HEADER_MAX_CHARS = 150;
-const SLACK_SECTION_MAX_CHARS = 3_000;
 const SLACK_FALLBACK_MAX_CHARS = 4_000;
 const UNKNOWN_MESSAGE = 'Slack delivery outcome could not be confirmed';
 
@@ -72,42 +73,6 @@ function normalizedTimestamp(value: string): string | null {
     : new Date(milliseconds).toISOString();
 }
 
-function truncateCharacters(value: string, maximum: number): string {
-  const characters = [...value];
-  return characters.length <= maximum
-    ? value
-    : `${characters.slice(0, maximum - 1).join('')}…`;
-}
-
-function boundedSingleLine(value: string, maximum: number): string {
-  return truncateCharacters(value.replace(/\s+/g, ' ').trim(), maximum);
-}
-
-function escapeSlackControlText(value: string): string {
-  return value
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;');
-}
-
-function summaryText(
-  label: string,
-  statements: readonly string[],
-): string | undefined {
-  if (statements.length === 0) return undefined;
-  const shown = statements.slice(0, MAX_SUMMARY_ITEMS);
-  const lines = [
-    `${label}:`,
-    ...shown.map(
-      (statement) => `• ${boundedSingleLine(statement, MAX_ITEM_CHARS)}`,
-    ),
-  ];
-  if (statements.length > shown.length) {
-    lines.push(`… and ${statements.length - shown.length} more`);
-  }
-  return truncateCharacters(lines.join('\n'), SLACK_SECTION_MAX_CHARS);
-}
-
 function mapSlackError(error: unknown): AdapterError {
   if (error instanceof AdapterError) return error;
   if (error instanceof SlackApiError) {
@@ -145,7 +110,9 @@ export class SlackDeliverySurface implements DeliverySurfaceAdapter {
   private readonly settings: SlackDeliverySettings;
   private readonly receiptStore: SlackDeliveryReceiptStore;
   private readonly environment: NodeJS.ProcessEnv;
-  private readonly credentialResolver: (reference: string) => string | undefined;
+  private readonly credentialResolver: (
+    reference: string,
+  ) => string | undefined;
   private readonly now: () => string;
   private readonly fetchImpl: typeof fetch | undefined;
   private client: SlackWebApiClient | undefined;
@@ -186,7 +153,9 @@ export class SlackDeliverySurface implements DeliverySurfaceAdapter {
       errors.push(`adapter_id must be '${SLACK_DELIVERY_SURFACE_ADAPTER_ID}'`);
     }
     if (!/^[a-z][a-z0-9-]*$/.test(config.instance_id)) {
-      errors.push('instance_id must use lowercase letters, numbers, and hyphens');
+      errors.push(
+        'instance_id must use lowercase letters, numbers, and hyphens',
+      );
     } else if (config.instance_id !== this.identity.instance_id) {
       errors.push('instance_id does not match the registered adapter instance');
     }
@@ -317,7 +286,10 @@ export class SlackDeliverySurface implements DeliverySurfaceAdapter {
               {
                 channel: this.settings.channelId,
                 text: this.messageText(envelope.brief),
-                blocks: this.messageBlocks(envelope.brief, envelope.approved_at),
+                blocks: this.messageBlocks(
+                  envelope.brief,
+                  envelope.approved_at,
+                ),
               },
               operation?.signal,
             );
@@ -356,7 +328,9 @@ export class SlackDeliverySurface implements DeliverySurfaceAdapter {
           } catch (error) {
             const mapped = mapSlackError(error);
             if (mapped.code === 'unknown_outcome') {
-              await this.receiptStore.recordOutcome(attempt).catch(() => undefined);
+              await this.receiptStore
+                .recordOutcome(attempt)
+                .catch(() => undefined);
               return attempt;
             }
             try {

@@ -19,13 +19,7 @@ import {
   type IdentityCheckDependencies,
 } from './federation/bootstrap/identity-check.js';
 
-export type ProductComponentName =
-  | 'product-state'
-  | 'meeting-ingestion'
-  | 'decision-processing'
-  | 'manual-approval'
-  | 'delivery'
-  | 'product-health';
+export type ProductComponentName = string;
 
 export interface ProductComponentHandle {
   stop: () => void | Promise<void>;
@@ -46,6 +40,8 @@ export interface ProductRuntimeContext {
 
 export interface ProductRuntimeComponent {
   name: ProductComponentName;
+  /** Components that must finish starting before this component may start. */
+  dependsOn: readonly ProductComponentName[];
   start: (
     context: ProductRuntimeContext,
   ) => ProductComponentHandle | Promise<ProductComponentHandle>;
@@ -111,15 +107,6 @@ class DeadlineError extends Error {
   }
 }
 
-const EXPECTED_COMPONENTS: readonly ProductComponentName[] = [
-  'product-state',
-  'meeting-ingestion',
-  'decision-processing',
-  'manual-approval',
-  'delivery',
-  'product-health',
-];
-
 const DEFAULT_DEADLINES: ProductRuntimeDeadlines = {
   componentStartMs: 10_000,
   overallStartMs: 45_000,
@@ -151,26 +138,137 @@ export function withRuntimeDeadline<T>(
   });
 }
 
-function validateComponents(
+const MAX_COMPONENT_NAME_LENGTH = 64;
+const COMPONENT_NAME_PATTERN = /^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$/;
+
+interface ResolvedRuntimeComponents {
+  ordered: readonly ProductRuntimeComponent[];
+  errors: readonly string[];
+}
+
+function validComponentName(value: unknown): value is ProductComponentName {
+  return (
+    typeof value === 'string' &&
+    value.length <= MAX_COMPONENT_NAME_LENGTH &&
+    COMPONENT_NAME_PATTERN.test(value)
+  );
+}
+
+function findDependencyCycle(
   components: readonly ProductRuntimeComponent[],
-): string[] {
-  const names = components.map((component) => component.name);
+): readonly ProductComponentName[] | null {
+  const byName = new Map(
+    components.map((component) => [component.name, component] as const),
+  );
+  const states = new Map<ProductComponentName, 'visiting' | 'visited'>();
+  const path: ProductComponentName[] = [];
+
+  const visit = (
+    name: ProductComponentName,
+  ): readonly ProductComponentName[] | null => {
+    states.set(name, 'visiting');
+    path.push(name);
+    for (const dependency of byName.get(name)!.dependsOn) {
+      const state = states.get(dependency);
+      if (state === 'visiting') {
+        const cycleStart = path.lastIndexOf(dependency);
+        return [...path.slice(cycleStart), dependency];
+      }
+      if (state === undefined) {
+        const cycle = visit(dependency);
+        if (cycle !== null) return cycle;
+      }
+    }
+    path.pop();
+    states.set(name, 'visited');
+    return null;
+  };
+
+  for (const component of components) {
+    if (states.has(component.name)) continue;
+    const cycle = visit(component.name);
+    if (cycle !== null) return cycle;
+  }
+  return null;
+}
+
+function resolveComponentStartOrder(
+  components: readonly ProductRuntimeComponent[],
+): ResolvedRuntimeComponents {
   const errors: string[] = [];
-  for (const expected of EXPECTED_COMPONENTS) {
-    const count = names.filter((name) => name === expected).length;
-    if (count !== 1)
-      errors.push(`component '${expected}' must appear exactly once`);
+  const nameCounts = new Map<ProductComponentName, number>();
+
+  for (const [index, component] of components.entries()) {
+    if (!validComponentName(component.name)) {
+      errors.push(
+        `component at index ${index} has invalid name '${component.name}'`,
+      );
+    } else {
+      nameCounts.set(component.name, (nameCounts.get(component.name) ?? 0) + 1);
+    }
+    if (!Array.isArray(component.dependsOn)) {
+      errors.push(
+        `component '${component.name}' dependencies must be an array`,
+      );
+      continue;
+    }
+    const seenDependencies = new Set<ProductComponentName>();
+    for (const dependency of component.dependsOn) {
+      if (!validComponentName(dependency)) {
+        errors.push(
+          `component '${component.name}' has invalid dependency name '${dependency}'`,
+        );
+        continue;
+      }
+      if (seenDependencies.has(dependency)) {
+        errors.push(
+          `component '${component.name}' declares duplicate dependency '${dependency}'`,
+        );
+      }
+      seenDependencies.add(dependency);
+    }
   }
-  for (const name of names) {
-    if (!EXPECTED_COMPONENTS.includes(name))
-      errors.push(`forbidden component '${name}'`);
+
+  for (const [name, count] of nameCounts) {
+    if (count > 1) errors.push(`component name '${name}' must be unique`);
   }
-  if (names.join('\n') !== EXPECTED_COMPONENTS.join('\n')) {
-    errors.push(
-      `components must start in declared order: ${EXPECTED_COMPONENTS.join(', ')}`,
+
+  for (const component of components) {
+    if (!Array.isArray(component.dependsOn)) continue;
+    for (const dependency of new Set(component.dependsOn)) {
+      if (validComponentName(dependency) && !nameCounts.has(dependency)) {
+        errors.push(
+          `component '${component.name}' depends on missing component '${dependency}'`,
+        );
+      }
+    }
+  }
+
+  if (errors.length > 0) return { ordered: [], errors };
+
+  const cycle = findDependencyCycle(components);
+  if (cycle !== null) {
+    return {
+      ordered: [],
+      errors: [`component dependency cycle detected: ${cycle.join(' -> ')}`],
+    };
+  }
+
+  const remaining = new Set(components.map((component) => component.name));
+  const ordered: ProductRuntimeComponent[] = [];
+  while (remaining.size > 0) {
+    const next = components.find(
+      (component) =>
+        remaining.has(component.name) &&
+        component.dependsOn.every((dependency) => !remaining.has(dependency)),
     );
+    if (next === undefined) {
+      throw new Error('validated component graph could not be ordered');
+    }
+    ordered.push(next);
+    remaining.delete(next.name);
   }
-  return errors;
+  return { ordered, errors: [] };
 }
 
 function stateClassificationFailure(
@@ -233,17 +331,13 @@ export function resolveConfiguredAdapters(
       unavailableAdapterDetail('decision-processor', config.decision_processor),
     );
   }
-  const deliverySurfaces = config.delivery_surfaces.map(
-    (adapterConfig) => {
-      const adapter = registry.getDeliverySurface(adapterConfig);
-      if (adapter === undefined) {
-        missing.push(
-          unavailableAdapterDetail('delivery-surface', adapterConfig),
-        );
-      }
-      return adapter;
-    },
-  );
+  const deliverySurfaces = config.delivery_surfaces.map((adapterConfig) => {
+    const adapter = registry.getDeliverySurface(adapterConfig);
+    if (adapter === undefined) {
+      missing.push(unavailableAdapterDetail('delivery-surface', adapterConfig));
+    }
+    return adapter;
+  });
   let approvalSurface: ApprovalSurfaceAdapter | undefined;
   if (config.approval_mode === 'adapter') {
     approvalSurface = registry.getApprovalSurface(config.approval_surface);
@@ -307,14 +401,14 @@ export async function startProductRuntime(
   config: ProductRuntimeConfig,
   dependencies: ProductRuntimeDependencies,
 ): Promise<ProductRuntimeStartResult> {
-  const componentErrors = validateComponents(dependencies.components);
-  if (componentErrors.length > 0) {
+  const components = resolveComponentStartOrder(dependencies.components);
+  if (components.errors.length > 0) {
     return {
       ok: false,
       error: new ProductRuntimeFailure(
         'invalid_dependencies',
-        'product runtime dependencies are incomplete or out of scope',
-        componentErrors,
+        'product runtime component graph is invalid',
+        components.errors,
       ),
     };
   }
@@ -332,10 +426,10 @@ export async function startProductRuntime(
   }
 
   try {
-    await assertFounderIdentityAllowsPipeline(
-      config.state_dir,
-      { ...dependencies.identityCheck, runtimeConfig: config },
-    );
+    await assertFounderIdentityAllowsPipeline(config.state_dir, {
+      ...dependencies.identityCheck,
+      runtimeConfig: config,
+    });
   } catch (error) {
     if (error instanceof FounderIdentityGateError) {
       return {
@@ -389,7 +483,7 @@ export async function startProductRuntime(
   };
 
   const startAll = async (): Promise<void> => {
-    for (const component of dependencies.components) {
+    for (const component of components.ordered) {
       if (startupAbandoned) return;
       const startOperation = Promise.resolve().then(() =>
         component.start(context),

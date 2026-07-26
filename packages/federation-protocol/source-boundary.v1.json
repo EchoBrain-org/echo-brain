@@ -1,0 +1,32 @@
+{
+  "boundary_version": 1,
+  "kind": "echo-workspace-source-boundary",
+  "name": "@echo-brain/federation-protocol",
+  "workspace": true,
+  "boundary_root": "packages/federation-protocol",
+  "source_root": "packages/federation-protocol/src",
+  "package_json": "packages/federation-protocol/package.json",
+  "entry_points": ["packages/federation-protocol/src/index.ts"],
+  "owned_source_paths": ["packages/federation-protocol/src/**"],
+  "allowed_internal_paths": ["packages/federation-protocol/src/**"],
+  "forbidden_repository_roots": [
+    "src/",
+    "services/",
+    "packages/organization-protocol/",
+    "packages/organization-api/"
+  ],
+  "allowed_workspace_packages": [],
+  "allowed_external_packages": [],
+  "allowed_node_builtins": ["buffer", "crypto"],
+  "runtime_assets": [],
+  "layer_rules": [
+    {
+      "name": "federation-protocol-is-self-contained",
+      "from": "packages/federation-protocol/src/**",
+      "allowed_imports": ["packages/federation-protocol/src/**"],
+      "allowed_workspace_packages": [],
+      "allowed_external_packages": [],
+      "allowed_node_builtins": ["buffer", "crypto"]
+    }
+  ]
+}

@@ -35,7 +35,10 @@ export function createDefaultAdapterFactories(): ProductAdapterFactoryRegistry {
     kind: 'decision-processor',
     adapter_id: 'llm',
     create: (config, context) =>
-      createLlmDecisionProcessor(config, { now: context.now }),
+      createLlmDecisionProcessor(config, {
+        credentialResolver: context.credentialResolver,
+        now: context.now,
+      }),
   });
   factories.register({
     kind: 'delivery-surface',

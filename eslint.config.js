@@ -3,18 +3,28 @@ import tsPlugin from '@typescript-eslint/eslint-plugin';
 
 export default [
   {
-    ignores: ['node_modules/**', 'dist/**', 'coverage/**'],
+    ignores: ['node_modules/**', '**/dist/**', 'coverage/**'],
   },
   {
     files: [
       'src/**/*.ts',
-      'tests/migration/**/*.ts',
-      'tests/standalone/**/*.ts',
+      'tests/machine/**/*.ts',
+      'tests/architecture/**/*.ts',
       'tests/core/**/*.ts',
       'tests/adapters/**/*.ts',
       'tests/infrastructure/**/*.ts',
+      'tests/integration/**/*.ts',
       'tests/product/**/*.ts',
+      'tests/experimental/**/*.ts',
+      'tests/support/**/*.ts',
+      'tests/system/**/*.ts',
+      'packages/*/src/**/*.ts',
+      'packages/*/test/**/*.ts',
+      'services/*/src/**/*.ts',
+      'services/*/test/**/*.ts',
       'vitest.config.ts',
+      'vitest.experimental.config.ts',
+      'vitest.package.config.ts',
       'vitest.product.config.ts',
     ],
     languageOptions: {

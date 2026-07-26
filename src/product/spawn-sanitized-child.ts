@@ -1,7 +1,9 @@
 import {
   default as childProcess,
   spawn,
+  spawnSync,
   type ChildProcessWithoutNullStreams,
+  type SpawnSyncOptionsWithStringEncoding,
   type SpawnOptionsWithoutStdio,
 } from 'node:child_process';
 import { syncBuiltinESMExports } from 'node:module';
@@ -67,6 +69,17 @@ export function spawnSanitizedChild(
     ...options,
     env: sanitizedChildEnvironment(options.env),
     stdio: 'pipe',
+  });
+}
+
+export function spawnSanitizedChildSync(
+  command: string,
+  args: readonly string[],
+  options: SpawnSyncOptionsWithStringEncoding,
+) {
+  return spawnSync(command, [...args], {
+    ...options,
+    env: sanitizedChildEnvironment(options.env),
   });
 }
 

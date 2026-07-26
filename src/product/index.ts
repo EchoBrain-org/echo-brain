@@ -1,6 +1,5 @@
 export * from '../core/index.js';
-export { SqliteStorage } from '../storage/sqlite.js';
-export { SqliteCoreStateStore } from '../storage/core-state-sqlite.js';
+export { SqliteCoreStateStore } from './storage/sqlite-core-state-store.js';
 export * from './adapter-factories.js';
 export * from './composition.js';
 export * from './config.js';
@@ -14,4 +13,6 @@ export * from './runtime.js';
 export * from './spawn-sanitized-child.js';
 export * from './artifact-rollback.js';
 export * from './cli.js';
+export * as machine from './machine/index.js';
 export * from './federation/index.js';
+export * from './organization/index.js';
