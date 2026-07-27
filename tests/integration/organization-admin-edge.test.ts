@@ -39,7 +39,7 @@ import {
   createTestPki,
   type TestCertificate,
   type TestPki,
-} from "../../services/organization-admin-edge/test/support/pki.js";
+} from "../support/organization-admin-edge-pki.js";
 
 const AUTHORITY_ID = "oau_00000000-0000-4000-8000-000000000001";
 const ORGANIZATION_ID = "org_00000000-0000-4000-8000-000000000001";

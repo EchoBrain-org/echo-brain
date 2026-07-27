@@ -49,6 +49,7 @@ const EXPECTED_PACKAGE_FILES = Object.freeze([
   "dist/**/*.js",
   "dist/**/*.js.map",
   BUILD_IDENTITY,
+  "schemas/*.schema.json",
   "npm-shrinkwrap.json",
   "README.md",
   "LICENSE",
@@ -220,6 +221,10 @@ function main() {
 
     mkdirSync(packageDir, { recursive: true });
     copyDirectory(join(source, SERVICE_ROOT, "dist"), join(packageDir, "dist"));
+    copyDirectory(
+      join(source, SERVICE_ROOT, "schemas"),
+      join(packageDir, "schemas"),
+    );
     copyRequired(
       join(source, SERVICE_ROOT, "README.md"),
       join(packageDir, "README.md"),
@@ -320,6 +325,7 @@ function main() {
       boundary.entrypoint,
       boundary.launcher,
       BUILD_IDENTITY,
+      "schemas/organization-admin-edge-preflight.v1.schema.json",
       "README.md",
       "LICENSE",
     ]) {

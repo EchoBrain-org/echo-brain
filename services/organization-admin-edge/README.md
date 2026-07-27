@@ -72,6 +72,61 @@ Removing a pin and restarting the edge denies that certificate. Reissuing a
 certificate with a different key produces a different pin and client ID and
 therefore invalidates sessions bound to the old identity.
 
+## Preflight
+
+Run the packaged preflight before placing the edge under a supervisor:
+
+```sh
+echo-organization-admin-edge preflight \
+  --config /absolute/private/organization-admin-edge.json
+```
+
+Preflight requires the declared `darwin/arm64` Node 22.22.1 runtime. It reads
+the same external configuration and owner-only files as `serve`, validates the
+server certificate hostname, server-auth purpose, and current validity,
+verifies that its private key matches, validates every certificate in the
+client CA bundle as a current CA permitted for client authentication, and
+constructs the same TLS 1.3 context used by the listener. The CA bundle must
+contain only PEM certificate blocks separated by whitespace. Preflight does
+not open a listener, contact the authority, register signal handlers, or
+mutate runtime material.
+
+The command returns zero and writes one secret-free JSON record on success. An
+expected failure returns one and names only a bounded `failed_check` code. The
+record may contain non-secret deployment origins, listener metadata,
+certificate validity times, and counts. It never contains file paths, tokens,
+pins, certificate subjects or bodies, private keys, or raw Node/OpenSSL error
+text. The packaged
+`schemas/organization-admin-edge-preflight.v1.schema.json` file is the closed,
+machine-readable shape contract for this version 1 record.
+
+The version 1 failure codes are:
+
+- `release_platform`: the operating system, architecture, or Node version is
+  outside the release cell;
+- `runtime_config`: the external JSON configuration cannot be read or
+  validated;
+- `runtime_material`: a referenced owner-only file cannot be safely resolved;
+- `server_certificate_parse`: the server certificate cannot be parsed;
+- `server_certificate_hostname`: the server certificate does not cover the
+  configured administrator hostname;
+- `server_certificate_purpose`: the server certificate is a CA or its declared
+  extended usage does not permit TLS server authentication;
+- `server_certificate_not_yet_valid` and `server_certificate_expired`: the
+  server certificate is outside its validity window;
+- `server_private_key_parse` and `server_private_key_mismatch`: the private key
+  cannot be parsed or does not match the server certificate; and
+- `client_ca_or_tls_context`: the client CA bundle is malformed, contains a
+  certificate that is not a current client-auth-capable CA, or cannot form the
+  listener's TLS context.
+
+Preflight proves only that the local candidate is safe to attempt to start at
+that instant. It does not prove that the listener address and port are
+available or that the process may bind them. It also does not prove DNS,
+firewall, supervisor, authority health, proxy-token equality, public-chain
+acceptance, revocation, renewal monitoring, or the identity and validity of
+individual administrator client certificates.
+
 ## Run
 
 From the repository:
@@ -133,7 +188,7 @@ request bodies on GET, and every other path fail before an origin request.
 `GET /admin/edge-config` is answered by the edge itself with exact JSON:
 
 ```json
-{"authority_base_url":"https://authority.example.com"}
+{ "authority_base_url": "https://authority.example.com" }
 ```
 
 It is mTLS-, pin-, SNI-, and Host-protected; has no CORS or redirect behavior;

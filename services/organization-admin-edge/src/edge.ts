@@ -1,5 +1,5 @@
 import { Buffer } from 'node:buffer';
-import { createHash, X509Certificate } from 'node:crypto';
+import { createHash, createPrivateKey, X509Certificate } from 'node:crypto';
 import { once } from 'node:events';
 import { request as httpRequest } from 'node:http';
 import type {
@@ -12,6 +12,7 @@ import { createServer as createHttpsServer } from 'node:https';
 import { isIP } from 'node:net';
 import type { AddressInfo } from 'node:net';
 import { createSecureContext, TLSSocket } from 'node:tls';
+import type { SecureContext } from 'node:tls';
 import {
   MAX_ORGANIZATION_API_BODY_BYTES,
   ORGANIZATION_API_PROXY_AUTH_SCHEME,
@@ -39,6 +40,9 @@ const KEEP_ALIVE_TIMEOUT_MS = 5_000;
 const GRACEFUL_SHUTDOWN_TIMEOUT_MS = 10_000;
 const MAX_REQUESTS_PER_SOCKET = 100;
 const HSTS_VALUE = 'max-age=31536000';
+const SERVER_AUTH_EXTENDED_KEY_USAGE_OID = '1.3.6.1.5.5.7.3.1';
+const CLIENT_AUTH_EXTENDED_KEY_USAGE_OID = '1.3.6.1.5.5.7.3.2';
+const ANY_EXTENDED_KEY_USAGE_OID = '2.5.29.37.0';
 
 const HOP_BY_HOP_HEADERS = new Set([
   'connection',
@@ -106,6 +110,50 @@ export interface OrganizationAdminEdgeStartOptions {
    * override may only shorten, never extend, the built-in deadline.
    */
   readonly downstream_absolute_deadline_ms?: number;
+}
+
+export type OrganizationAdminEdgePreflightFailure =
+  | 'server_certificate_parse'
+  | 'server_certificate_hostname'
+  | 'server_certificate_purpose'
+  | 'server_certificate_not_yet_valid'
+  | 'server_certificate_expired'
+  | 'server_private_key_parse'
+  | 'server_private_key_mismatch'
+  | 'client_ca_or_tls_context';
+
+export interface OrganizationAdminEdgeServePreflightOptions {
+  readonly now?: Date;
+}
+
+export interface OrganizationAdminEdgeServePreflight {
+  readonly listener: {
+    readonly host: string;
+    readonly port: number;
+  };
+  readonly public_origin: string;
+  readonly employee_authority_base_url: string;
+  readonly authority_origin: string;
+  readonly allowed_admin_client_count: number;
+  readonly checked_at: string;
+  readonly server_certificate_not_before: string;
+  readonly server_certificate_not_after: string;
+  readonly client_ca_certificate_count: number;
+}
+
+export class OrganizationAdminEdgePreflightError extends Error {
+  constructor(readonly failed_check: OrganizationAdminEdgePreflightFailure) {
+    super('organization administrator edge preflight failed');
+    this.name = 'OrganizationAdminEdgePreflightError';
+  }
+}
+
+interface PreparedOrganizationAdminEdgeServeConfig {
+  readonly public_origin: URL;
+  readonly employee_authority_base_url: URL;
+  readonly authority_origin: URL;
+  readonly secure_context: SecureContext;
+  readonly preflight: OrganizationAdminEdgeServePreflight;
 }
 
 class EdgeRequestError extends Error {
@@ -200,6 +248,7 @@ function assertServeConfig(config: OrganizationAdminEdgeServeConfig): {
   readonly public_origin: URL;
   readonly employee_authority_base_url: URL;
   readonly authority_origin: URL;
+  readonly server_certificate: X509Certificate;
 } {
   if (
     config === null ||
@@ -258,22 +307,196 @@ function assertServeConfig(config: OrganizationAdminEdgeServeConfig): {
   try {
     serverCertificate = new X509Certificate(config.tls.certificate_chain);
   } catch {
-    throw new Error('organization admin edge certificate chain is invalid');
+    throw new OrganizationAdminEdgePreflightError('server_certificate_parse');
+  }
+  if (
+    serverCertificate.ca ||
+    !certificatePermitsExtendedKeyUsage(
+      serverCertificate,
+      SERVER_AUTH_EXTENDED_KEY_USAGE_OID,
+    )
+  ) {
+    throw new OrganizationAdminEdgePreflightError('server_certificate_purpose');
   }
   if (
     serverCertificate.checkHost(publicOrigin.hostname, {
       subject: 'never',
     }) === undefined
   ) {
-    throw new Error(
-      'organization admin edge certificate does not cover public hostname',
+    throw new OrganizationAdminEdgePreflightError(
+      'server_certificate_hostname',
     );
   }
   return {
     public_origin: publicOrigin,
     employee_authority_base_url: employeeAuthorityBaseUrl,
     authority_origin: authorityOrigin,
+    server_certificate: serverCertificate,
   };
+}
+
+function certificatePermitsExtendedKeyUsage(
+  certificate: X509Certificate,
+  requiredUsage: string,
+): boolean {
+  const usages = certificate.keyUsage as readonly string[] | undefined;
+  return (
+    usages === undefined ||
+    usages.includes(requiredUsage) ||
+    usages.includes(ANY_EXTENDED_KEY_USAGE_OID)
+  );
+}
+
+function preflightClock(value: Date | undefined): Date {
+  const now = value ?? new Date();
+  if (!(now instanceof Date) || !Number.isFinite(now.getTime())) {
+    throw new Error('organization admin edge preflight clock is invalid');
+  }
+  return now;
+}
+
+function certificateValidity(
+  certificate: X509Certificate,
+  now: Date,
+  failures: {
+    readonly not_yet_valid: OrganizationAdminEdgePreflightFailure;
+    readonly expired: OrganizationAdminEdgePreflightFailure;
+  },
+): {
+  readonly not_before: Date;
+  readonly not_after: Date;
+} {
+  const notBefore = certificate.validFromDate;
+  const notAfter = certificate.validToDate;
+  if (
+    !Number.isFinite(notBefore.getTime()) ||
+    !Number.isFinite(notAfter.getTime()) ||
+    notBefore.getTime() >= notAfter.getTime()
+  ) {
+    throw new OrganizationAdminEdgePreflightError(failures.expired);
+  }
+  if (now.getTime() < notBefore.getTime()) {
+    throw new OrganizationAdminEdgePreflightError(failures.not_yet_valid);
+  }
+  if (now.getTime() >= notAfter.getTime()) {
+    throw new OrganizationAdminEdgePreflightError(failures.expired);
+  }
+  return { not_before: notBefore, not_after: notAfter };
+}
+
+function clientCaCertificates(bundle: Buffer): readonly X509Certificate[] {
+  const text = bundle.toString('utf8');
+  if (!Buffer.from(text, 'utf8').equals(bundle)) {
+    throw new OrganizationAdminEdgePreflightError('client_ca_or_tls_context');
+  }
+  const pattern =
+    /-----BEGIN CERTIFICATE-----[\s\S]*?-----END CERTIFICATE-----/g;
+  const certificates: X509Certificate[] = [];
+  let offset = 0;
+  for (const match of text.matchAll(pattern)) {
+    const index = match.index;
+    if (
+      index === undefined ||
+      !/^[\t\n\r ]*$/.test(text.slice(offset, index))
+    ) {
+      throw new OrganizationAdminEdgePreflightError('client_ca_or_tls_context');
+    }
+    try {
+      certificates.push(new X509Certificate(match[0]));
+    } catch {
+      throw new OrganizationAdminEdgePreflightError('client_ca_or_tls_context');
+    }
+    offset = index + match[0].length;
+  }
+  if (certificates.length === 0 || !/^[\t\n\r ]*$/.test(text.slice(offset))) {
+    throw new OrganizationAdminEdgePreflightError('client_ca_or_tls_context');
+  }
+  return certificates;
+}
+
+function prepareOrganizationAdminEdgeServeConfig(
+  config: OrganizationAdminEdgeServeConfig,
+  options: OrganizationAdminEdgeServePreflightOptions = {},
+): PreparedOrganizationAdminEdgeServeConfig {
+  const validated = assertServeConfig(config);
+  const now = preflightClock(options.now);
+  const serverValidity = certificateValidity(
+    validated.server_certificate,
+    now,
+    {
+      not_yet_valid: 'server_certificate_not_yet_valid',
+      expired: 'server_certificate_expired',
+    },
+  );
+  let privateKey: ReturnType<typeof createPrivateKey>;
+  try {
+    privateKey = createPrivateKey(config.tls.private_key);
+  } catch {
+    throw new OrganizationAdminEdgePreflightError('server_private_key_parse');
+  }
+  let privateKeyMatches = false;
+  try {
+    privateKeyMatches =
+      validated.server_certificate.checkPrivateKey(privateKey);
+  } catch {
+    privateKeyMatches = false;
+  }
+  if (!privateKeyMatches) {
+    throw new OrganizationAdminEdgePreflightError(
+      'server_private_key_mismatch',
+    );
+  }
+  const clientCAs = clientCaCertificates(config.tls.client_ca_bundle);
+  for (const certificate of clientCAs) {
+    if (
+      !certificate.ca ||
+      !certificatePermitsExtendedKeyUsage(
+        certificate,
+        CLIENT_AUTH_EXTENDED_KEY_USAGE_OID,
+      )
+    ) {
+      throw new OrganizationAdminEdgePreflightError('client_ca_or_tls_context');
+    }
+    certificateValidity(certificate, now, {
+      not_yet_valid: 'client_ca_or_tls_context',
+      expired: 'client_ca_or_tls_context',
+    });
+  }
+  let secureContext: SecureContext;
+  try {
+    secureContext = createSecureContext({
+      key: config.tls.private_key,
+      cert: config.tls.certificate_chain,
+      ca: config.tls.client_ca_bundle,
+      minVersion: 'TLSv1.3',
+    });
+  } catch {
+    throw new OrganizationAdminEdgePreflightError('client_ca_or_tls_context');
+  }
+  return {
+    public_origin: validated.public_origin,
+    employee_authority_base_url: validated.employee_authority_base_url,
+    authority_origin: validated.authority_origin,
+    secure_context: secureContext,
+    preflight: Object.freeze({
+      listener: Object.freeze({ ...config.listener }),
+      public_origin: validated.public_origin.origin,
+      employee_authority_base_url: validated.employee_authority_base_url.origin,
+      authority_origin: validated.authority_origin.origin,
+      allowed_admin_client_count: config.allowed_admin_client_spki_sha256.size,
+      checked_at: now.toISOString(),
+      server_certificate_not_before: serverValidity.not_before.toISOString(),
+      server_certificate_not_after: serverValidity.not_after.toISOString(),
+      client_ca_certificate_count: clientCAs.length,
+    }),
+  };
+}
+
+export function preflightOrganizationAdminEdgeServeConfig(
+  config: OrganizationAdminEdgeServeConfig,
+  options: OrganizationAdminEdgeServePreflightOptions = {},
+): OrganizationAdminEdgeServePreflight {
+  return prepareOrganizationAdminEdgeServeConfig(config, options).preflight;
 }
 
 export function organizationAdminClientCertificateIdentity(
@@ -773,7 +996,7 @@ export async function startOrganizationAdminEdge(
   config: OrganizationAdminEdgeServeConfig,
   options: OrganizationAdminEdgeStartOptions = {},
 ): Promise<RunningOrganizationAdminEdge> {
-  const origins = assertServeConfig(config);
+  const prepared = prepareOrganizationAdminEdgeServeConfig(config);
   const upstreamAbsoluteDeadlineMs = shortenedDeadline(
     options.upstream_absolute_deadline_ms,
     UPSTREAM_ABSOLUTE_DEADLINE_MS,
@@ -788,12 +1011,6 @@ export async function startOrganizationAdminEdge(
     config.allowed_admin_client_spki_sha256,
   );
   const trustedProxyToken = config.trusted_proxy_token;
-  const secureContext = createSecureContext({
-    key: config.tls.private_key,
-    cert: config.tls.certificate_chain,
-    ca: config.tls.client_ca_bundle,
-    minVersion: 'TLSv1.3',
-  });
   const server = createHttpsServer(
     {
       key: config.tls.private_key,
@@ -806,11 +1023,11 @@ export async function startOrganizationAdminEdge(
       handshakeTimeout: TLS_HANDSHAKE_TIMEOUT_MS,
       maxHeaderSize: MAX_HEADER_BYTES,
       SNICallback: (servername, callback) => {
-        if (servername !== origins.public_origin.hostname) {
+        if (servername !== prepared.public_origin.hostname) {
           callback(new Error('unrecognized TLS server name'));
           return;
         }
-        callback(null, secureContext);
+        callback(null, prepared.secure_context);
       },
     },
     (request, response) => {
@@ -827,17 +1044,17 @@ export async function startOrganizationAdminEdge(
         const identity = requestClientIdentity(
           request,
           allowedClientPins,
-          origins.public_origin.hostname,
+          prepared.public_origin.hostname,
         );
         const validated = validateRequest(
           request,
-          origins.public_origin.host,
-          origins.public_origin.origin,
+          prepared.public_origin.host,
+          prepared.public_origin.origin,
         );
         if (validated.route.kind === 'local-config') {
           edgeConfigResponse(
             response,
-            origins.employee_authority_base_url.origin,
+            prepared.employee_authority_base_url.origin,
           );
           return;
         }
@@ -855,8 +1072,8 @@ export async function startOrganizationAdminEdge(
           response,
           validated,
           body,
-          authorityOrigin: origins.authority_origin,
-          publicHost: origins.public_origin.host,
+          authorityOrigin: prepared.authority_origin,
+          publicHost: prepared.public_origin.host,
           proxyToken: trustedProxyToken,
           clientId: identity.client_id,
           upstreamAbsoluteDeadlineMs,
@@ -879,7 +1096,7 @@ export async function startOrganizationAdminEdge(
   server.prependListener('secureConnection', (socket) => {
     if (
       (socket as ServerTlsSocket).servername !==
-      origins.public_origin.hostname
+      prepared.public_origin.hostname
     ) {
       socket.destroy();
     }

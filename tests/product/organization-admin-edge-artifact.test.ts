@@ -1,3 +1,4 @@
+import { createHash, X509Certificate } from "node:crypto";
 import {
   chmodSync,
   cpSync,
@@ -15,16 +16,20 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, posix, resolve } from "node:path";
+import { Ajv, type AnySchema } from "ajv";
 import { afterAll, describe, expect, it, vi } from "vitest";
 import {
   spawnSanitizedChild,
   spawnSanitizedChildSync,
 } from "../../src/product/spawn-sanitized-child.js";
+import { createTestPki } from "../support/organization-admin-edge-pki.js";
 
 const REPO_ROOT = resolve(import.meta.dirname, "../..");
 const BUILDER = "tools/organization-admin-edge/build-artifact.mjs";
 const VERIFIER = "tools/organization-admin-edge/verify-artifact.mjs";
 const EDGE_README = "services/organization-admin-edge/README.md";
+const PREFLIGHT_SCHEMA =
+  "schemas/organization-admin-edge-preflight.v1.schema.json";
 const BUNDLES = [
   "@echo-brain/federation-protocol",
   "@echo-brain/organization-protocol",
@@ -347,6 +352,7 @@ describe("exact-commit organization administrator edge artifact", () => {
         "bin/echo-organization-admin-edge.mjs",
         "dist/main.js",
         "dist/build-identity.v1.json",
+        "schemas/organization-admin-edge-preflight.v1.schema.json",
         "node_modules/@echo-brain/federation-protocol/dist/index.js",
         "node_modules/@echo-brain/organization-protocol/dist/index.js",
         "node_modules/@echo-brain/organization-api/dist/index.js",
@@ -400,6 +406,13 @@ describe("exact-commit organization administrator edge artifact", () => {
       { cwd: temporaryRoot },
     );
     expect(extracted.status, extracted.stderr).toBe(0);
+    const preflightSchema = JSON.parse(
+      readFileSync(join(installRoot, "package", PREFLIGHT_SCHEMA), "utf8"),
+    ) as AnySchema;
+    const validatePreflight = new Ajv({
+      allErrors: true,
+      strict: true,
+    }).compile(preflightSchema);
     const help = run(
       process.execPath,
       [
@@ -412,7 +425,97 @@ describe("exact-commit organization administrator edge artifact", () => {
     expect(help.stdout).toContain(
       "echo-organization-admin-edge serve --config <absolute-path>",
     );
+    expect(help.stdout).toContain(
+      "echo-organization-admin-edge preflight --config <absolute-path>",
+    );
     expect(help.stderr).toBe("");
+
+    const pki = createTestPki();
+    try {
+      const proxyToken = "packaged-preflight-proxy-token-00000000000000000001";
+      const proxyTokenPath = join(pki.directory, "trusted-proxy-token");
+      writeFileSync(proxyTokenPath, proxyToken, {
+        encoding: "ascii",
+        mode: 0o600,
+      });
+      const publicKey = new X509Certificate(
+        pki.admin_one.certificate,
+      ).publicKey.export({
+        format: "der",
+        type: "spki",
+      });
+      expect(Buffer.isBuffer(publicKey)).toBe(true);
+      const adminPin = `sha256:${createHash("sha256")
+        .update(publicKey)
+        .digest("hex")}`;
+      const configPath = join(pki.directory, "admin-edge.json");
+      writeFileSync(
+        configPath,
+        `${JSON.stringify({
+          schema_version: 1,
+          kind: "echo-organization-admin-edge-runtime-config",
+          listener: { host: "127.0.0.1", port: 443 },
+          public_origin: "https://admin.edge.test",
+          employee_authority_base_url: "https://authority.edge.test",
+          authority_origin: "http://127.0.0.1:39479",
+          tls: {
+            certificate_chain_ref: `file:${pki.server.certificate_path}`,
+            private_key_ref: `file:${pki.server.private_key_path}`,
+            client_ca_bundle_ref: `file:${pki.ca_certificate_path}`,
+          },
+          trusted_proxy_token_ref: `file:${proxyTokenPath}`,
+          allowed_admin_client_spki_sha256: [adminPin],
+        })}\n`,
+        { encoding: "utf8", mode: 0o600 },
+      );
+      const packagedPreflight = run(
+        process.execPath,
+        [
+          join(installRoot, "package/bin/echo-organization-admin-edge.mjs"),
+          "preflight",
+          "--config",
+          configPath,
+        ],
+        { cwd: installRoot, timeout: 10_000 },
+      );
+      const report = JSON.parse(packagedPreflight.stdout) as {
+        readonly ok: boolean;
+        readonly release_platform_qualified: boolean;
+        readonly failed_check?: string;
+      };
+      expect(
+        validatePreflight(report),
+        JSON.stringify(validatePreflight.errors),
+      ).toBe(true);
+      const releasePlatform =
+        process.platform === "darwin" &&
+        process.arch === "arm64" &&
+        process.versions.node === "22.22.1";
+      if (releasePlatform) {
+        expect(packagedPreflight.status, packagedPreflight.stderr).toBe(0);
+        expect(report).toMatchObject({
+          ok: true,
+          release_platform_qualified: true,
+          public_origin: "https://admin.edge.test",
+          listener: { host: "127.0.0.1", port: 443 },
+          allowed_admin_client_count: 1,
+          client_ca_certificate_count: 1,
+        });
+      } else {
+        expect(packagedPreflight.status).toBe(1);
+        expect(report).toMatchObject({
+          ok: false,
+          release_platform_qualified: false,
+          failed_check: "release_platform",
+        });
+      }
+      expect(packagedPreflight.stderr).toBe("");
+      expect(packagedPreflight.stdout).not.toContain(proxyToken);
+      expect(packagedPreflight.stdout).not.toContain(adminPin);
+      expect(packagedPreflight.stdout).not.toContain(pki.directory);
+    } finally {
+      pki.cleanup();
+    }
 
     const tamperedDir = join(temporaryRoot, "tampered-admin-edge-artifact");
     cpSync(outDir, tamperedDir, { recursive: true });

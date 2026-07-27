@@ -14,7 +14,11 @@ import {
   type OrganizationAdminEdgeCliIo,
   type OrganizationAdminEdgeObservedPlatform,
 } from '../src/cli.js';
-import type { RunningOrganizationAdminEdge } from '../src/edge.js';
+import {
+  OrganizationAdminEdgePreflightError,
+  type OrganizationAdminEdgeServePreflight,
+  type RunningOrganizationAdminEdge,
+} from '../src/edge.js';
 
 const UNSUPPORTED_PLATFORM: OrganizationAdminEdgeObservedPlatform = {
   os: ORGANIZATION_ADMIN_EDGE_DECLARED_PLATFORM.os,
@@ -80,6 +84,170 @@ describe('organization administrator edge CLI platform preflight', () => {
     expect(readRuntimeConfig).not.toHaveBeenCalled();
   });
 
+  it('preflights resolved material without opening a listener or registering signals', async () => {
+    const io = capturedIo();
+    const runtimeConfig = {
+      listener: { host: '0.0.0.0', port: 443 },
+      public_origin: 'https://admin.edge.test',
+    } as OrganizationAdminEdgeRuntimeConfigV1;
+    const serveConfig = {
+      trusted_proxy_token:
+        'must-not-appear-in-the-preflight-record-000000000001',
+    } as OrganizationAdminEdgeServeConfig;
+    const preflight: OrganizationAdminEdgeServePreflight = {
+      listener: { host: '0.0.0.0', port: 443 },
+      public_origin: 'https://admin.edge.test',
+      employee_authority_base_url: 'https://authority.edge.test',
+      authority_origin: 'http://127.0.0.1:39479',
+      allowed_admin_client_count: 1,
+      checked_at: '2026-07-26T12:00:00.000Z',
+      server_certificate_not_before: '2026-07-25T12:00:00.000Z',
+      server_certificate_not_after: '2026-08-25T12:00:00.000Z',
+      client_ca_certificate_count: 1,
+    };
+    const preflightWithUnexpectedSecret = {
+      ...preflight,
+      unexpected_secret:
+        'must-not-appear-from-the-preflight-result-000000000001',
+    } as OrganizationAdminEdgeServePreflight;
+    const readRuntimeConfig = vi.fn(() => runtimeConfig);
+    const resolveServeConfig = vi.fn(() => serveConfig);
+    const preflightServeConfig = vi.fn(() => preflightWithUnexpectedSecret);
+    const startEdge = vi.fn();
+    const registerShutdownSignal = vi.fn();
+
+    await expect(
+      runOrganizationAdminEdgeCli(
+        ['preflight', '--config', '/private/edge.json'],
+        io,
+        {
+          inspect_runtime_platform: () => SUPPORTED_RUNTIME_PLATFORM,
+          read_runtime_config: readRuntimeConfig,
+          resolve_serve_config: resolveServeConfig,
+          preflight_serve_config: preflightServeConfig,
+          start_edge: startEdge,
+          register_shutdown_signal: registerShutdownSignal,
+        },
+      ),
+    ).resolves.toBe(0);
+
+    expect(readRuntimeConfig).toHaveBeenCalledWith('/private/edge.json');
+    expect(resolveServeConfig).toHaveBeenCalledWith(runtimeConfig);
+    expect(preflightServeConfig).toHaveBeenCalledWith(serveConfig);
+    expect(startEdge).not.toHaveBeenCalled();
+    expect(registerShutdownSignal).not.toHaveBeenCalled();
+    expect(io.stderr_values).toEqual([]);
+    expect(io.stdout_values).toHaveLength(1);
+    expect(JSON.parse(io.stdout_values[0]!)).toEqual({
+      schema_version: 1,
+      kind: 'echo-organization-admin-edge-preflight',
+      ok: true,
+      release_platform_qualified: true,
+      declared_platform: ORGANIZATION_ADMIN_EDGE_DECLARED_PLATFORM,
+      observed_platform: SUPPORTED_RUNTIME_PLATFORM,
+      ...preflight,
+    });
+    expect(io.stdout_values[0]).not.toContain('must-not-appear');
+    expect(io.stdout_values[0]).not.toContain('/private/edge.json');
+  });
+
+  it('reports a bounded platform failure before reading private configuration', async () => {
+    const io = capturedIo();
+    const readRuntimeConfig = vi.fn(() => {
+      throw new Error('private path must not be read');
+    });
+
+    await expect(
+      runOrganizationAdminEdgeCli(
+        ['preflight', '--config', '/private/edge.json'],
+        io,
+        {
+          inspect_runtime_platform: () => UNSUPPORTED_PLATFORM,
+          read_runtime_config: readRuntimeConfig,
+        },
+      ),
+    ).resolves.toBe(1);
+
+    expect(readRuntimeConfig).not.toHaveBeenCalled();
+    expect(io.stderr_values).toEqual([]);
+    expect(io.stdout_values.map((value) => JSON.parse(value))).toEqual([
+      {
+        schema_version: 1,
+        kind: 'echo-organization-admin-edge-preflight',
+        ok: false,
+        release_platform_qualified: false,
+        declared_platform: ORGANIZATION_ADMIN_EDGE_DECLARED_PLATFORM,
+        observed_platform: UNSUPPORTED_PLATFORM,
+        failed_check: 'release_platform',
+      },
+    ]);
+  });
+
+  it('maps expected preflight failures without exposing exception text', async () => {
+    const runtimeConfig = {} as OrganizationAdminEdgeRuntimeConfigV1;
+    const serveConfig = {} as OrganizationAdminEdgeServeConfig;
+    const cases = [
+      {
+        failed_check: 'runtime_config',
+        dependencies: {
+          read_runtime_config: () => {
+            throw new Error(
+              '/private/config/secret.json token-value-must-not-leak',
+            );
+          },
+        },
+      },
+      {
+        failed_check: 'runtime_material',
+        dependencies: {
+          read_runtime_config: () => runtimeConfig,
+          resolve_serve_config: () => {
+            throw new Error(
+              '/private/tls/server-key.pem key-bytes-must-not-leak',
+            );
+          },
+        },
+      },
+      {
+        failed_check: 'server_certificate_expired',
+        dependencies: {
+          read_runtime_config: () => runtimeConfig,
+          resolve_serve_config: () => serveConfig,
+          preflight_serve_config: () => {
+            throw new OrganizationAdminEdgePreflightError(
+              'server_certificate_expired',
+            );
+          },
+        },
+      },
+    ] as const;
+
+    for (const candidate of cases) {
+      const io = capturedIo();
+      await expect(
+        runOrganizationAdminEdgeCli(
+          ['preflight', '--config', '/private/edge.json'],
+          io,
+          {
+            inspect_runtime_platform: () => SUPPORTED_RUNTIME_PLATFORM,
+            ...candidate.dependencies,
+          },
+        ),
+      ).resolves.toBe(1);
+      expect(io.stderr_values).toEqual([]);
+      expect(io.stdout_values).toHaveLength(1);
+      expect(JSON.parse(io.stdout_values[0]!)).toMatchObject({
+        schema_version: 1,
+        kind: 'echo-organization-admin-edge-preflight',
+        ok: false,
+        release_platform_qualified: true,
+        failed_check: candidate.failed_check,
+      });
+      expect(io.stdout_values[0]).not.toContain('/private/');
+      expect(io.stdout_values[0]).not.toContain('must-not-leak');
+    }
+  });
+
   it('rejects ambiguous or unknown serve arguments before platform inspection', async () => {
     for (const arguments_ of [
       ['serve', '--config', '/private/edge.json', '--config', '/other.json'],
@@ -91,6 +259,12 @@ describe('organization administrator edge CLI platform preflight', () => {
         '--acknowledge-unsupported-host-for-development',
       ],
       ['serve', '--config', '/private/edge.json', '--unknown'],
+      [
+        'preflight',
+        '--config',
+        '/private/edge.json',
+        '--acknowledge-unsupported-host-for-development',
+      ],
     ]) {
       await expect(
         runOrganizationAdminEdgeCli(arguments_, capturedIo(), {
@@ -168,10 +342,7 @@ describe('organization administrator edge CLI platform preflight', () => {
       assertOrganizationAdminEdgeDevelopmentListener('0.0.0.0'),
     ).toThrow('requires an exact loopback listener');
     expect(() =>
-      organizationAdminEdgePlatformPreflight(
-        SUPPORTED_RUNTIME_PLATFORM,
-        true,
-      ),
+      organizationAdminEdgePlatformPreflight(SUPPORTED_RUNTIME_PLATFORM, true),
     ).toThrow('acknowledgement is invalid on the declared release platform');
   });
 });

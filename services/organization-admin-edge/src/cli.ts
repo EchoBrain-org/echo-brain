@@ -5,11 +5,16 @@ import {
   type OrganizationAdminEdgeServeConfig,
 } from './config.js';
 import {
+  OrganizationAdminEdgePreflightError,
+  preflightOrganizationAdminEdgeServeConfig,
   startOrganizationAdminEdge,
+  type OrganizationAdminEdgePreflightFailure,
   type RunningOrganizationAdminEdge,
+  type OrganizationAdminEdgeServePreflight,
 } from './edge.js';
 
 const USAGE = `usage:
+  echo-organization-admin-edge preflight --config <absolute-path>
   echo-organization-admin-edge serve --config <absolute-path> [--acknowledge-unsupported-host-for-development]
   echo-organization-admin-edge --help`;
 
@@ -32,6 +37,9 @@ export interface OrganizationAdminEdgeCliDependencies {
   readonly resolve_serve_config?: (
     config: OrganizationAdminEdgeRuntimeConfigV1,
   ) => OrganizationAdminEdgeServeConfig;
+  readonly preflight_serve_config?: (
+    config: OrganizationAdminEdgeServeConfig,
+  ) => OrganizationAdminEdgeServePreflight;
   readonly start_edge?: (
     config: OrganizationAdminEdgeServeConfig,
   ) => Promise<RunningOrganizationAdminEdge>;
@@ -50,6 +58,12 @@ interface OrganizationAdminEdgeServeArguments {
   readonly config_path: string;
   readonly acknowledge_unsupported_host_for_development: boolean;
 }
+
+type OrganizationAdminEdgeCliPreflightFailure =
+  | 'release_platform'
+  | 'runtime_config'
+  | 'runtime_material'
+  | OrganizationAdminEdgePreflightFailure;
 
 export const ORGANIZATION_ADMIN_EDGE_DECLARED_PLATFORM = Object.freeze({
   os: 'darwin',
@@ -97,6 +111,25 @@ function serveArguments(
     acknowledge_unsupported_host_for_development:
       acknowledgeUnsupportedHostForDevelopment,
   };
+}
+
+function preflightFailure(
+  io: OrganizationAdminEdgeCliIo,
+  observedPlatform: OrganizationAdminEdgeObservedPlatform,
+  failedCheck: OrganizationAdminEdgeCliPreflightFailure,
+): number {
+  io.stdout(
+    `${JSON.stringify({
+      schema_version: 1,
+      kind: 'echo-organization-admin-edge-preflight',
+      ok: false,
+      release_platform_qualified: failedCheck !== 'release_platform',
+      declared_platform: ORGANIZATION_ADMIN_EDGE_DECLARED_PLATFORM,
+      observed_platform: observedPlatform,
+      failed_check: failedCheck,
+    })}\n`,
+  );
+  return 1;
 }
 
 export function inspectOrganizationAdminEdgeRuntimePlatform(): OrganizationAdminEdgeObservedPlatform {
@@ -168,21 +201,45 @@ export async function runOrganizationAdminEdgeCli(
     io.stdout(`${USAGE}\n`);
     return 0;
   }
-  if (command !== 'serve') throw new Error(USAGE);
+  if (command !== 'preflight' && command !== 'serve') {
+    throw new Error(USAGE);
+  }
 
   const serve = serveArguments(commandArguments);
+  if (
+    command === 'preflight' &&
+    serve.acknowledge_unsupported_host_for_development
+  ) {
+    throw new Error(USAGE);
+  }
   const observedPlatform = (
     dependencies.inspect_runtime_platform ??
     inspectOrganizationAdminEdgeRuntimePlatform
   )();
-  const platformPreflight = organizationAdminEdgePlatformPreflight(
-    observedPlatform,
-    serve.acknowledge_unsupported_host_for_development,
-  );
-  const runtimeConfig = (
-    dependencies.read_runtime_config ??
-    readOrganizationAdminEdgeRuntimeConfig
-  )(serve.config_path);
+  let platformPreflight: OrganizationAdminEdgePlatformPreflight;
+  try {
+    platformPreflight = organizationAdminEdgePlatformPreflight(
+      observedPlatform,
+      serve.acknowledge_unsupported_host_for_development,
+    );
+  } catch (error) {
+    if (command === 'preflight') {
+      return preflightFailure(io, observedPlatform, 'release_platform');
+    }
+    throw error;
+  }
+  let runtimeConfig: OrganizationAdminEdgeRuntimeConfigV1;
+  try {
+    runtimeConfig = (
+      dependencies.read_runtime_config ??
+      readOrganizationAdminEdgeRuntimeConfig
+    )(serve.config_path);
+  } catch (error) {
+    if (command === 'preflight') {
+      return preflightFailure(io, observedPlatform, 'runtime_config');
+    }
+    throw error;
+  }
   if (!platformPreflight.release_platform_qualified) {
     assertOrganizationAdminEdgeDevelopmentListener(
       runtimeConfig.listener.host,
@@ -198,9 +255,63 @@ export async function runOrganizationAdminEdgeCli(
       })}\n`,
     );
   }
+  let serveConfig: OrganizationAdminEdgeServeConfig;
+  try {
+    serveConfig = (
+      dependencies.resolve_serve_config ??
+      resolveOrganizationAdminEdgeServeConfig
+    )(runtimeConfig);
+  } catch (error) {
+    if (command === 'preflight') {
+      return preflightFailure(io, observedPlatform, 'runtime_material');
+    }
+    throw error;
+  }
+  if (command === 'preflight') {
+    let preflight: OrganizationAdminEdgeServePreflight;
+    try {
+      preflight = (
+        dependencies.preflight_serve_config ??
+        preflightOrganizationAdminEdgeServeConfig
+      )(serveConfig);
+    } catch (error) {
+      if (error instanceof OrganizationAdminEdgePreflightError) {
+        return preflightFailure(
+          io,
+          observedPlatform,
+          error.failed_check,
+        );
+      }
+      throw error;
+    }
+    io.stdout(
+      `${JSON.stringify({
+        schema_version: 1,
+        kind: 'echo-organization-admin-edge-preflight',
+        ok: true,
+        release_platform_qualified: true,
+        declared_platform: ORGANIZATION_ADMIN_EDGE_DECLARED_PLATFORM,
+        observed_platform: observedPlatform,
+        listener: preflight.listener,
+        public_origin: preflight.public_origin,
+        employee_authority_base_url:
+          preflight.employee_authority_base_url,
+        authority_origin: preflight.authority_origin,
+        allowed_admin_client_count:
+          preflight.allowed_admin_client_count,
+        checked_at: preflight.checked_at,
+        server_certificate_not_before:
+          preflight.server_certificate_not_before,
+        server_certificate_not_after:
+          preflight.server_certificate_not_after,
+        client_ca_certificate_count:
+          preflight.client_ca_certificate_count,
+      })}\n`,
+    );
+    return 0;
+  }
   const edge = await (dependencies.start_edge ?? startOrganizationAdminEdge)(
-    (dependencies.resolve_serve_config ??
-      resolveOrganizationAdminEdgeServeConfig)(runtimeConfig),
+    serveConfig,
   );
   io.stderr(
     `${JSON.stringify({

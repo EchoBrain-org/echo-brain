@@ -36,6 +36,7 @@ const REQUIRED_PACKAGE_PATHS = Object.freeze([
   EXPECTED_LAUNCHER,
   EXPECTED_ENTRYPOINT,
   "dist/build-identity.v1.json",
+  "schemas/organization-admin-edge-preflight.v1.schema.json",
   "README.md",
   "LICENSE",
 ]);

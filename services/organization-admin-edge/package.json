@@ -10,7 +10,8 @@
     "dist/**/*.js",
     "dist/**/*.js.map",
     "dist/**/*.d.ts",
-    "dist/**/*.d.ts.map"
+    "dist/**/*.d.ts.map",
+    "schemas/*.schema.json"
   ],
   "scripts": {
     "build": "tsc -b",

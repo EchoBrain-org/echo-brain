@@ -16,3 +16,9 @@ runtime artifact.
 
 Certificates, keys, credentials, configuration, logs, and mutable state are
 deployment inputs and are deliberately absent from this release lane.
+After verifying and extracting an artifact, use its packaged
+`echo-organization-admin-edge preflight --config <absolute-path>` command to
+validate the declared runtime cell, external private-file boundary, and local
+TLS material without opening a listener. Artifact verification and runtime
+preflight are intentionally separate: neither substitutes for live deployment
+or network qualification.

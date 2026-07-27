@@ -29,6 +29,11 @@ export interface TestPki {
   cleanup(): void;
 }
 
+export interface TestServerPurposeCertificates {
+  readonly ca_server: TestCertificate;
+  readonly client_auth_only: TestCertificate;
+}
+
 function openssl(arguments_: readonly string[], directory: string): void {
   execFileSync('openssl', arguments_, {
     cwd: directory,
@@ -45,13 +50,8 @@ function assertTrustedCertificateChain(
     throw new Error('administrator edge test CA is not a valid CA certificate');
   }
   for (const issuedCertificate of issuedCertificates) {
-    const certificate = new X509Certificate(
-      issuedCertificate.certificate,
-    );
-    if (
-      !certificate.checkIssued(ca) ||
-      !certificate.verify(ca.publicKey)
-    ) {
+    const certificate = new X509Certificate(issuedCertificate.certificate);
+    if (!certificate.checkIssued(ca) || !certificate.verify(ca.publicKey)) {
       throw new Error(
         'administrator edge test certificate was not issued by the test CA',
       );
@@ -125,9 +125,48 @@ function issueCertificate(input: {
   };
 }
 
-export function createTestPki(
+export function createTestServerPurposeCertificates(
+  pki: Pick<TestPki, 'directory' | 'ca_certificate'>,
   serverHostname = 'admin.edge.test',
-): TestPki {
+): TestServerPurposeCertificates {
+  const caServer = issueCertificate({
+    directory: pki.directory,
+    name: 'ca-server',
+    common_name: serverHostname,
+    serial: 1101,
+    extensions: [
+      'basicConstraints=critical,CA:TRUE,pathlen:0',
+      'keyUsage=critical,keyCertSign,cRLSign',
+      'extendedKeyUsage=serverAuth',
+      `subjectAltName=DNS:${serverHostname}`,
+      'subjectKeyIdentifier=hash',
+      'authorityKeyIdentifier=keyid:always',
+      '',
+    ].join('\n'),
+  });
+  const clientAuthOnly = issueCertificate({
+    directory: pki.directory,
+    name: 'client-auth-only',
+    common_name: serverHostname,
+    serial: 1102,
+    extensions: [
+      'basicConstraints=critical,CA:FALSE',
+      'keyUsage=critical,digitalSignature,keyEncipherment',
+      'extendedKeyUsage=clientAuth',
+      `subjectAltName=DNS:${serverHostname}`,
+      'subjectKeyIdentifier=hash',
+      'authorityKeyIdentifier=keyid:always',
+      '',
+    ].join('\n'),
+  });
+  assertTrustedCertificateChain(pki.ca_certificate, [caServer, clientAuthOnly]);
+  return {
+    ca_server: caServer,
+    client_auth_only: clientAuthOnly,
+  };
+}
+
+export function createTestPki(serverHostname = 'admin.edge.test'): TestPki {
   const directory = realpathSync(
     mkdtempSync(join(tmpdir(), 'echo-admin-edge-pki-')),
   );
@@ -174,9 +213,7 @@ export function createTestPki(
       ],
       directory,
     );
-    const caCertificatePath = realpathSync(
-      join(directory, 'ca.cert.pem'),
-    );
+    const caCertificatePath = realpathSync(join(directory, 'ca.cert.pem'));
     chmodSync(caCertificatePath, 0o600);
     chmodSync(realpathSync(join(directory, 'ca.key.pem')), 0o600);
     const server = issueCertificate({
@@ -256,11 +293,7 @@ export function createTestPki(
     chmodSync(untrustedAdminCertificatePath, 0o600);
     chmodSync(untrustedAdminKeyPath, 0o600);
     const caCertificate = readFileSync(caCertificatePath);
-    assertTrustedCertificateChain(caCertificate, [
-      server,
-      adminOne,
-      adminTwo,
-    ]);
+    assertTrustedCertificateChain(caCertificate, [server, adminOne, adminTwo]);
     return {
       directory,
       ca_certificate_path: caCertificatePath,

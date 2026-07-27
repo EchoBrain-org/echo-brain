@@ -26,7 +26,11 @@ import {
   startOrganizationAdminEdge,
   type OrganizationAdminEdgeStartOptions,
 } from '../src/edge.js';
-import { createTestPki, type TestCertificate, type TestPki } from './support/pki.js';
+import {
+  createTestPki,
+  type TestCertificate,
+  type TestPki,
+} from '../../../tests/support/organization-admin-edge-pki.js';
 
 const HOSTNAME = 'admin.edge.test';
 const EMPLOYEE_AUTHORITY_URL = 'https://authority.edge.test';
@@ -328,6 +332,27 @@ function respond(
 }
 
 describe('organization administrator HTTPS edge', () => {
+  it('runs shared TLS preparation before binding a listener', async () => {
+    const port = await reservePort();
+    await expect(
+      startOrganizationAdminEdge({
+        listener: { host: '127.0.0.1', port },
+        public_origin: `https://${HOSTNAME}:${String(port)}`,
+        employee_authority_base_url: EMPLOYEE_AUTHORITY_URL,
+        authority_origin: 'http://127.0.0.1:39479',
+        tls: {
+          certificate_chain: pki.server.certificate,
+          private_key: pki.admin_one.private_key,
+          client_ca_bundle: pki.ca_certificate,
+        },
+        trusted_proxy_token: PROXY_TOKEN,
+        allowed_admin_client_spki_sha256: new Set([adminOnePin]),
+      }),
+    ).rejects.toMatchObject({
+      failed_check: 'server_private_key_mismatch',
+    });
+  });
+
   it('rejects an employee authority URL on the administrator hostname at a different port', async () => {
     const port = await reservePort();
     await expect(
