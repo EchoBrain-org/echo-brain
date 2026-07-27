@@ -11,6 +11,7 @@ import {
   readdirSync,
   realpathSync,
   rmSync,
+  statSync,
   symlinkSync,
   writeFileSync,
 } from "node:fs";
@@ -30,6 +31,16 @@ const VERIFIER = "tools/organization-admin-edge/verify-artifact.mjs";
 const EDGE_README = "services/organization-admin-edge/README.md";
 const PREFLIGHT_SCHEMA =
   "schemas/organization-admin-edge-preflight.v1.schema.json";
+const FOUNDER_LIVE_EVIDENCE_SCHEMA =
+  "schemas/organization-admin-edge-founder-live-evidence.v1.schema.json";
+const OPERATOR_TOOLS = [
+  "tools/organization-admin-edge/verify-artifact.mjs",
+  "tools/organization-admin-edge/install-release.mjs",
+  "tools/organization-admin-edge/prepare-launchd.mjs",
+  "tools/organization-admin-edge/create-founder-live-plan.mjs",
+  "tools/organization-admin-edge/verify-founder-live-activation.mjs",
+  "tools/organization-admin-edge/validate-founder-live-evidence.mjs",
+] as const;
 const BUNDLES = [
   "@echo-brain/federation-protocol",
   "@echo-brain/organization-protocol",
@@ -202,6 +213,19 @@ function isPrivateRuntimeMaterial(path: string): boolean {
 }
 
 afterAll(() => {
+  function makeWritable(path: string): void {
+    const state = lstatSync(path);
+    if (state.isSymbolicLink()) return;
+    if (state.isDirectory()) {
+      chmodSync(path, 0o700);
+      for (const entry of readdirSync(path)) {
+        makeWritable(join(path, entry));
+      }
+    } else if (state.isFile()) {
+      chmodSync(path, 0o600);
+    }
+  }
+  makeWritable(temporaryRoot);
   rmSync(temporaryRoot, { recursive: true, force: true });
 });
 
@@ -317,6 +341,7 @@ describe("exact-commit organization administrator edge artifact", () => {
     const built = JSON.parse(stdout) as {
       readonly target: string;
       readonly artifact: string;
+      readonly sha256: string;
     };
     expect(built.target).toBe("organization-admin-edge");
     expect(readdirSync(outDir).sort()).toEqual(
@@ -332,8 +357,12 @@ describe("exact-commit organization administrator edge artifact", () => {
       readonly target: string;
       readonly package: string;
       readonly source_sha: string;
+      readonly founder_live_evidence_schema: string;
+      readonly operator_tools_runtime_imported: boolean;
+      readonly operator_tools: string[];
       readonly bundled_workspace_packages: string[];
       readonly external_runtime_packages: string[];
+      readonly artifact: { readonly sha256: string };
       readonly package_files: Array<{ readonly path: string }>;
     };
     expect(manifest).toMatchObject({
@@ -341,6 +370,9 @@ describe("exact-commit organization administrator edge artifact", () => {
       target: "organization-admin-edge",
       package: "@echo-brain/organization-admin-edge",
       source_sha: fixture.sha,
+      founder_live_evidence_schema: FOUNDER_LIVE_EVIDENCE_SCHEMA,
+      operator_tools_runtime_imported: false,
+      operator_tools: OPERATOR_TOOLS,
       external_runtime_packages: [],
     });
     expect(manifest.bundled_workspace_packages).toEqual(BUNDLES);
@@ -353,6 +385,8 @@ describe("exact-commit organization administrator edge artifact", () => {
         "dist/main.js",
         "dist/build-identity.v1.json",
         "schemas/organization-admin-edge-preflight.v1.schema.json",
+        FOUNDER_LIVE_EVIDENCE_SCHEMA,
+        ...OPERATOR_TOOLS,
         "node_modules/@echo-brain/federation-protocol/dist/index.js",
         "node_modules/@echo-brain/organization-protocol/dist/index.js",
         "node_modules/@echo-brain/organization-api/dist/index.js",
@@ -377,6 +411,10 @@ describe("exact-commit organization administrator edge artifact", () => {
     ).toEqual(new Set(BUNDLES));
 
     const tarball = join(outDir, built.artifact);
+    expect(
+      createHash("sha256").update(readFileSync(tarball)).digest("hex"),
+    ).toBe(built.sha256);
+    expect(built.sha256).toBe(manifest.artifact.sha256);
     const packagedReadme = run(
       "/usr/bin/tar",
       ["-xOf", tarball, "package/README.md"],
@@ -429,6 +467,82 @@ describe("exact-commit organization administrator edge artifact", () => {
       "echo-organization-admin-edge preflight --config <absolute-path>",
     );
     expect(help.stderr).toBe("");
+
+    const bootstrapRoot = join(temporaryRoot, "isolated-operator-bootstrap");
+    mkdirSync(bootstrapRoot, { mode: 0o700 });
+    for (const path of [...OPERATOR_TOOLS, FOUNDER_LIVE_EVIDENCE_SCHEMA]) {
+      const output = run("/usr/bin/tar", ["-xOf", tarball, `package/${path}`], {
+        cwd: temporaryRoot,
+      });
+      expect(output.status, output.stderr).toBe(0);
+      const destination = join(bootstrapRoot, "package", path);
+      mkdirSync(dirname(destination), { recursive: true });
+      writeFileSync(destination, output.stdout, { mode: 0o400, flag: "wx" });
+      const state = lstatSync(destination);
+      expect(state.isFile()).toBe(true);
+      expect(state.isSymbolicLink()).toBe(false);
+      expect(state.nlink).toBe(1);
+    }
+    const isolatedOperatorCwd = join(temporaryRoot, "isolated-operator-cwd");
+    mkdirSync(isolatedOperatorCwd);
+    const packagedVerifier = run(
+      process.execPath,
+      [
+        join(
+          bootstrapRoot,
+          "package/tools/organization-admin-edge/verify-artifact.mjs",
+        ),
+        "--artifact-dir",
+        outDir,
+      ],
+      { cwd: isolatedOperatorCwd },
+    );
+    expect(packagedVerifier.status, packagedVerifier.stderr).toBe(0);
+    expect(JSON.parse(packagedVerifier.stdout)).toMatchObject({
+      ok: true,
+      errors: [],
+      target: "organization-admin-edge",
+    });
+
+    const sealedInstallRoot = join(temporaryRoot, "isolated-operator-install");
+    const packagedInstaller = run(
+      process.execPath,
+      [
+        join(
+          bootstrapRoot,
+          "package/tools/organization-admin-edge/install-release.mjs",
+        ),
+        "--artifact-dir",
+        outDir,
+        "--expected-artifact-sha256",
+        manifest.artifact.sha256,
+        "--install-root",
+        sealedInstallRoot,
+      ],
+      { cwd: isolatedOperatorCwd },
+    );
+    expect(packagedInstaller.status, packagedInstaller.stderr).toBe(0);
+    expect(JSON.parse(packagedInstaller.stdout)).toMatchObject({
+      ok: true,
+      changed: true,
+      artifact: { sha256: manifest.artifact.sha256 },
+    });
+
+    for (const tool of [
+      "create-founder-live-plan.mjs",
+      "verify-founder-live-activation.mjs",
+      "validate-founder-live-evidence.mjs",
+    ]) {
+      const loadedWithoutRepository = run(
+        process.execPath,
+        [join(bootstrapRoot, `package/tools/organization-admin-edge/${tool}`)],
+        { cwd: isolatedOperatorCwd },
+      );
+      expect(loadedWithoutRepository.status).toBe(1);
+      expect(loadedWithoutRepository.stderr).not.toContain(
+        "ERR_MODULE_NOT_FOUND",
+      );
+    }
 
     const pki = createTestPki();
     try {
@@ -561,6 +675,60 @@ describe("exact-commit organization administrator edge artifact", () => {
     expect(incomplete.stderr).toContain(
       "package_files omit required runtime path: dist/main.js",
     );
+
+    const linkedDir = join(temporaryRoot, "linked-admin-edge-artifact");
+    cpSync(outDir, linkedDir, { recursive: true });
+    const linkedTree = join(temporaryRoot, "linked-admin-edge-tree");
+    mkdirSync(linkedTree);
+    const linkedArtifactPath = join(linkedDir, built.artifact);
+    const expandedLinked = run(
+      "/usr/bin/tar",
+      ["-xzf", linkedArtifactPath, "-C", linkedTree],
+      { cwd: temporaryRoot },
+    );
+    expect(expandedLinked.status, expandedLinked.stderr).toBe(0);
+    const linkedVerifierPath = join(
+      linkedTree,
+      "package/tools/organization-admin-edge/verify-artifact.mjs",
+    );
+    rmSync(linkedVerifierPath);
+    symlinkSync("/etc/passwd", linkedVerifierPath);
+    const repackedLinked = run(
+      "/usr/bin/tar",
+      ["-czf", linkedArtifactPath, "-C", linkedTree, "package"],
+      { cwd: temporaryRoot },
+    );
+    expect(repackedLinked.status, repackedLinked.stderr).toBe(0);
+    const linkedManifestPath = join(linkedDir, "artifact-manifest.json");
+    const linkedManifest = JSON.parse(
+      readFileSync(linkedManifestPath, "utf8"),
+    ) as {
+      artifact: { path: string; size: number; sha256: string };
+    };
+    linkedManifest.artifact.size = statSync(linkedArtifactPath).size;
+    linkedManifest.artifact.sha256 = createHash("sha256")
+      .update(readFileSync(linkedArtifactPath))
+      .digest("hex");
+    writeFileSync(
+      linkedManifestPath,
+      `${JSON.stringify(linkedManifest, null, 2)}\n`,
+    );
+    writeFileSync(
+      `${linkedArtifactPath}.sha256`,
+      `${linkedManifest.artifact.sha256}  ${linkedManifest.artifact.path}\n`,
+    );
+    const linked = run(
+      process.execPath,
+      [verifier, "--artifact-dir", linkedDir],
+      { cwd: fixture.root },
+    );
+    expect(linked.status).toBe(1);
+    expect(JSON.parse(linked.stdout)).toMatchObject({
+      ok: false,
+      errors: expect.arrayContaining([
+        "administrator edge tarball contains a non-regular, linked, or ambiguous entry",
+      ]),
+    });
 
     const overwrite = run(
       process.execPath,

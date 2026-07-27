@@ -6,6 +6,16 @@
   "source_boundary": "services/organization-admin-edge/source-boundary.v1.json",
   "entrypoint": "dist/main.js",
   "launcher": "bin/echo-organization-admin-edge.mjs",
+  "founder_live_evidence_schema": "schemas/organization-admin-edge-founder-live-evidence.v1.schema.json",
+  "operator_tools_runtime_imported": false,
+  "operator_tools": [
+    "tools/organization-admin-edge/verify-artifact.mjs",
+    "tools/organization-admin-edge/install-release.mjs",
+    "tools/organization-admin-edge/prepare-launchd.mjs",
+    "tools/organization-admin-edge/create-founder-live-plan.mjs",
+    "tools/organization-admin-edge/verify-founder-live-activation.mjs",
+    "tools/organization-admin-edge/validate-founder-live-evidence.mjs"
+  ],
   "bundled_workspace_packages": [
     "@echo-brain/federation-protocol",
     "@echo-brain/organization-protocol",

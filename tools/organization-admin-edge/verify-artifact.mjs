@@ -19,6 +19,27 @@ const TARGET = "organization-admin-edge";
 const EXPECTED_PACKAGE = "@echo-brain/organization-admin-edge";
 const EXPECTED_ENTRYPOINT = "dist/main.js";
 const EXPECTED_LAUNCHER = "bin/echo-organization-admin-edge.mjs";
+const EXPECTED_FOUNDER_LIVE_EVIDENCE_SCHEMA =
+  "schemas/organization-admin-edge-founder-live-evidence.v1.schema.json";
+const EXPECTED_OPERATOR_TOOLS = Object.freeze([
+  "tools/organization-admin-edge/verify-artifact.mjs",
+  "tools/organization-admin-edge/install-release.mjs",
+  "tools/organization-admin-edge/prepare-launchd.mjs",
+  "tools/organization-admin-edge/create-founder-live-plan.mjs",
+  "tools/organization-admin-edge/verify-founder-live-activation.mjs",
+  "tools/organization-admin-edge/validate-founder-live-evidence.mjs",
+]);
+const EXPECTED_PACKAGE_FILES = Object.freeze([
+  "bin/**",
+  "dist/**/*.js",
+  "dist/**/*.js.map",
+  "dist/build-identity.v1.json",
+  "schemas/*.schema.json",
+  ...EXPECTED_OPERATOR_TOOLS,
+  "npm-shrinkwrap.json",
+  "README.md",
+  "LICENSE",
+]);
 const EXPECTED_BUNDLES = Object.freeze([
   "@echo-brain/federation-protocol",
   "@echo-brain/organization-protocol",
@@ -37,6 +58,8 @@ const REQUIRED_PACKAGE_PATHS = Object.freeze([
   EXPECTED_ENTRYPOINT,
   "dist/build-identity.v1.json",
   "schemas/organization-admin-edge-preflight.v1.schema.json",
+  EXPECTED_FOUNDER_LIVE_EVIDENCE_SCHEMA,
+  ...EXPECTED_OPERATOR_TOOLS,
   "README.md",
   "LICENSE",
 ]);
@@ -147,6 +170,11 @@ function assertManifestShape(manifest) {
     manifest.runtime_boundary_version !== 1 ||
     manifest.entrypoint !== EXPECTED_ENTRYPOINT ||
     manifest.launcher !== EXPECTED_LAUNCHER ||
+    manifest.founder_live_evidence_schema !==
+      EXPECTED_FOUNDER_LIVE_EVIDENCE_SCHEMA ||
+    manifest.operator_tools_runtime_imported !== false ||
+    JSON.stringify(manifest.operator_tools) !==
+      JSON.stringify(EXPECTED_OPERATOR_TOOLS) ||
     JSON.stringify(manifest.bundled_workspace_packages) !==
       JSON.stringify(EXPECTED_BUNDLES) ||
     !Array.isArray(manifest.external_runtime_packages) ||
@@ -211,6 +239,17 @@ function assertManifestShape(manifest) {
       );
     }
   }
+  const packagedOperatorTools = [...packagePaths]
+    .filter((path) => path.startsWith("tools/organization-admin-edge/"))
+    .sort();
+  if (
+    JSON.stringify(packagedOperatorTools) !==
+    JSON.stringify([...EXPECTED_OPERATOR_TOOLS].sort())
+  ) {
+    throw new Error(
+      "administrator edge artifact package_files contain an unexpected operator tool",
+    );
+  }
 }
 
 function verifyPackageJson(artifactPath, manifest, errors) {
@@ -228,6 +267,8 @@ function verifyPackageJson(artifactPath, manifest, errors) {
     packageJson.peerDependencies !== undefined ||
     packageJson.main !== manifest.entrypoint ||
     packageJson.bin?.["echo-organization-admin-edge"] !== manifest.launcher ||
+    JSON.stringify(packageJson.files) !==
+      JSON.stringify(EXPECTED_PACKAGE_FILES) ||
     JSON.stringify(packageJson.engines) !==
       JSON.stringify({
         node: EXPECTED_PLATFORM.node,
@@ -313,10 +354,23 @@ function verifyShrinkwrap(artifactPath, manifest, errors) {
 }
 
 function verifyPackagedContracts(artifactPath, manifest, errors) {
-  const listed = String(tar(["-tzf", artifactPath]))
+  const listedEntries = String(tar(["-tzf", artifactPath]))
     .split(/\r?\n/)
-    .filter(Boolean)
-    .filter((path) => !path.endsWith("/"));
+    .filter(Boolean);
+  const verboseEntries = String(tar(["-tvzf", artifactPath]))
+    .split(/\r?\n/)
+    .filter(Boolean);
+  for (const path of listedEntries) {
+    const matching = verboseEntries.filter((line) => line.endsWith(` ${path}`));
+    const expectedType = path.endsWith("/") ? "d" : "-";
+    if (matching.length !== 1 || matching[0][0] !== expectedType) {
+      errors.push(
+        "administrator edge tarball contains a non-regular, linked, or ambiguous entry",
+      );
+      return;
+    }
+  }
+  const listed = listedEntries.filter((path) => !path.endsWith("/"));
   const archivePaths = listed.map((path) => {
     if (!path.startsWith("package/")) {
       throw new Error(

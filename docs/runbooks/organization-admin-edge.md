@@ -1,7 +1,7 @@
 # Organization administrator edge
 
-**Status:** development operator contract; no production deployment or Phase 5
-network qualification claimed
+**Status:** Founder Live deployment contract available; no live deployment,
+production qualification, or Phase 5 network qualification claimed
 
 This runbook describes how to build, configure, start, rotate, and roll back
 the organization administrator HTTPS edge. It defines a target operating
@@ -65,7 +65,7 @@ node tools/organization-admin-edge/build-artifact.mjs \
   --out-dir /absolute/path/to/admin-edge-artifact
 ```
 
-Verify the published directory before extracting or executing the candidate:
+Verify the published directory on the release workstation:
 
 ```sh
 node tools/organization-admin-edge/verify-artifact.mjs \
@@ -83,6 +83,103 @@ proxy token, log, or supervisor state. Installation and service supervision
 remain operator-owned. Retain the tarball, manifest, checksum, and verification
 record together so rollback can select exact previously verified bytes.
 
+The artifact also contains the exact verifier, installer, LaunchAgent
+preparer, Founder Live plan creator, evidence validator, and evidence schema.
+The service runtime never imports those operator tools. A target host does not
+need a repository checkout or `node_modules`.
+
+## Sealed Founder Live installation
+
+The minimum Founder Live lane uses one private Apple Silicon Mac, Node 22.22.1,
+a non-root high-port edge listener, private VPN forwarding from port 443, and a
+per-user LaunchAgent. Public internet exposure is outside this lane.
+
+Install only after obtaining the tarball SHA-256 through an independent
+operator channel. First compare that value to the tarball with the platform
+SHA-256 utility. Only after that comparison succeeds, extract the six
+operator tools and evidence schema into a new private bootstrap directory.
+Run the packaged verifier from that directory. This small bootstrap is the
+only pre-install extraction; its bytes are already covered by the
+independently verified tarball hash.
+
+```sh
+/usr/bin/shasum -a 256 \
+  /absolute/candidate/organization-admin-edge/echo-brain-organization-admin-edge-<version>.tgz
+
+/bin/mkdir -m 700 -p \
+  /absolute/private/bootstrap/package/tools/organization-admin-edge \
+  /absolute/private/bootstrap/package/schemas
+
+umask 077
+set -o noclobber
+/usr/bin/tar -xOf \
+  /absolute/candidate/organization-admin-edge/echo-brain-organization-admin-edge-<version>.tgz \
+  package/tools/organization-admin-edge/verify-artifact.mjs \
+  > /absolute/private/bootstrap/package/tools/organization-admin-edge/verify-artifact.mjs
+/usr/bin/tar -xOf \
+  /absolute/candidate/organization-admin-edge/echo-brain-organization-admin-edge-<version>.tgz \
+  package/tools/organization-admin-edge/install-release.mjs \
+  > /absolute/private/bootstrap/package/tools/organization-admin-edge/install-release.mjs
+/usr/bin/tar -xOf \
+  /absolute/candidate/organization-admin-edge/echo-brain-organization-admin-edge-<version>.tgz \
+  package/tools/organization-admin-edge/prepare-launchd.mjs \
+  > /absolute/private/bootstrap/package/tools/organization-admin-edge/prepare-launchd.mjs
+/usr/bin/tar -xOf \
+  /absolute/candidate/organization-admin-edge/echo-brain-organization-admin-edge-<version>.tgz \
+  package/tools/organization-admin-edge/create-founder-live-plan.mjs \
+  > /absolute/private/bootstrap/package/tools/organization-admin-edge/create-founder-live-plan.mjs
+/usr/bin/tar -xOf \
+  /absolute/candidate/organization-admin-edge/echo-brain-organization-admin-edge-<version>.tgz \
+  package/tools/organization-admin-edge/verify-founder-live-activation.mjs \
+  > /absolute/private/bootstrap/package/tools/organization-admin-edge/verify-founder-live-activation.mjs
+/usr/bin/tar -xOf \
+  /absolute/candidate/organization-admin-edge/echo-brain-organization-admin-edge-<version>.tgz \
+  package/tools/organization-admin-edge/validate-founder-live-evidence.mjs \
+  > /absolute/private/bootstrap/package/tools/organization-admin-edge/validate-founder-live-evidence.mjs
+/usr/bin/tar -xOf \
+  /absolute/candidate/organization-admin-edge/echo-brain-organization-admin-edge-<version>.tgz \
+  package/schemas/organization-admin-edge-founder-live-evidence.v1.schema.json \
+  > /absolute/private/bootstrap/package/schemas/organization-admin-edge-founder-live-evidence.v1.schema.json
+/bin/chmod 400 \
+  /absolute/private/bootstrap/package/tools/organization-admin-edge/*.mjs \
+  /absolute/private/bootstrap/package/schemas/*.json
+
+/absolute/canonical/node-22.22.1 \
+  /absolute/private/bootstrap/package/tools/organization-admin-edge/verify-artifact.mjs \
+  --artifact-dir /absolute/candidate/organization-admin-edge
+```
+
+Compare the first command's digest character-for-character with the
+independent value; do not treat the checksum sidecar delivered beside the
+tarball as independent evidence. The bootstrap uses `tar -xOf` plus exclusive
+regular-file creation; it never materializes archive links or metadata. The
+packaged verifier also rejects every non-regular, linked, duplicate, or
+ambiguous archive member before installation.
+
+Then run the packaged installer:
+
+```sh
+/absolute/canonical/node-22.22.1 \
+  /absolute/private/bootstrap/package/tools/organization-admin-edge/install-release.mjs \
+  --artifact-dir /absolute/candidate/organization-admin-edge \
+  --expected-artifact-sha256 <64-lowercase-hex-digest> \
+  --install-root "/Users/<service-user>/Library/Application Support/ECHO/organization-admin-edge-install"
+```
+
+The command returns the exact `release_directory`, `edge_cli_path`, artifact
+identity, and deployed-tree digest. Repeating it with the same artifact is
+read-only and verifies the existing release. It never replaces or mutates a
+release. Configuration, TLS material, client CA, client pins, proxy token,
+logs, evidence, and LaunchAgent files remain outside the install root.
+
+Create a separate current-user-owned mode-`0700` state directory with private
+`logs/`, `evidence/`, `preparations/`, and `network/` children. The
+administrator edge remains stateless; this directory contains only supervisor
+output and deployment evidence. Delete the bootstrap after the sealed release
+and its packaged verifier have re-verified successfully; use operator tools
+from `<release_directory>/runtime/package/tools/organization-admin-edge/`
+after that point.
+
 ## Runtime files and configuration
 
 Place runtime files outside the immutable installation prefix. Use normalized
@@ -98,8 +195,8 @@ The runtime configuration is exact-shaped. A representative outline is:
   "schema_version": 1,
   "kind": "echo-organization-admin-edge-runtime-config",
   "listener": {
-    "host": "0.0.0.0",
-    "port": 443
+    "host": "127.0.0.1",
+    "port": 8443
   },
   "public_origin": "https://admin.example.com",
   "employee_authority_base_url": "https://employee-authority.example.com",
@@ -120,6 +217,68 @@ The example pin is a placeholder and must never be deployed. Compute each pin
 from the DER-encoded subject public-key information of the intended
 administrator client key, then verify the certificate-to-person mapping
 through an independent operator channel.
+
+Founder Live uses one fixed ingress shape:
+
+```text
+administrator device on private VPN
+  -> VPN-only TCP 443
+  -> TLS pass-through forwarding
+  -> 127.0.0.1:8443 on the edge host
+```
+
+The edge must not bind a LAN or public interface. Before planning the live
+run, the operator must select and configure the actual VPN/L4 provider and
+write a secret-free policy record with
+`kind: echo-organization-admin-edge-vpn-ingress-policy`, its provider and
+policy identifiers, application time, `private-vpn-only` scope, public port
+443, loopback target `127.0.0.1:8443`, TLS `passthrough`, and the SHA-256 of a
+secret-free procedure record. The procedure fixes bounded argv for apply,
+disable, enabled verification, and disabled verification, plus the SHA-256 of
+their one canonical, executable, non-group/world-writable provider binary.
+Credentials must come from the provider's protected host binding, never argv.
+The plan hashes both records and re-hashes that executable. Provider selection
+and the applied target policy are target inputs; an example hostname or
+unapplied policy cannot satisfy this gate.
+
+```json
+{
+  "schema_version": 1,
+  "kind": "echo-organization-admin-edge-vpn-ingress-procedure",
+  "provider": "<selected-provider>",
+  "policy_id": "<applied-policy-id>",
+  "executable_sha256": "<sha256-of-exact-provider-cli>",
+  "apply_argv": ["/absolute/provider-cli", "apply", "<policy-id>"],
+  "disable_argv": ["/absolute/provider-cli", "disable", "<policy-id>"],
+  "verify_enabled_argv": [
+    "/absolute/provider-cli",
+    "verify-enabled",
+    "<policy-id>"
+  ],
+  "verify_disabled_argv": [
+    "/absolute/provider-cli",
+    "verify-disabled",
+    "<policy-id>"
+  ]
+}
+```
+
+```json
+{
+  "schema_version": 1,
+  "kind": "echo-organization-admin-edge-vpn-ingress-policy",
+  "provider": "<selected-provider>",
+  "policy_id": "<applied-policy-id>",
+  "applied_at": "2026-07-27T18:00:00.000Z",
+  "ingress_mode": "vpn-l4-forward-to-loopback",
+  "public_scope": "private-vpn-only",
+  "public_port": 443,
+  "forward_host": "127.0.0.1",
+  "forward_port": 8443,
+  "tls_mode": "passthrough",
+  "procedure_sha256": "<sha256-of-exact-procedure-record-bytes>"
+}
+```
 
 Configuration rules are fail-closed:
 
@@ -166,7 +325,7 @@ Run the packaged no-bind preflight after those operator checks and before
 installing the supervisor definition:
 
 ```sh
-/absolute/admin-edge-install/bin/echo-organization-admin-edge \
+/absolute/sealed/release/runtime/package/bin/echo-organization-admin-edge.mjs \
   preflight --config /absolute/private/admin-edge/admin-edge.json
 ```
 
@@ -198,7 +357,7 @@ The packaged binary is intended to run in the foreground under an external
 supervisor:
 
 ```sh
-/absolute/admin-edge-install/bin/echo-organization-admin-edge \
+/absolute/sealed/release/runtime/package/bin/echo-organization-admin-edge.mjs \
   serve --config /absolute/private/admin-edge/admin-edge.json
 ```
 
@@ -213,14 +372,247 @@ non-qualifying warning and is rejected on the declared release cell. Never put
 the flag in a production supervisor command, and never use it to claim
 deployment or Phase 5 evidence.
 
-The supervisor owns start, stop, restart, resource limits, log destination, and
-crash policy. It must not place certificate, key, token, or configuration
-content in its unit definition. Missing or invalid configuration, TLS material,
-client trust, allowlist, or loopback origin must prevent the public listener
-from becoming ready.
+The supervisor owns start, stop, restart, log destination, and crash policy.
+It must not place certificate, key, token, or configuration content in its unit
+definition. Missing or invalid configuration, TLS material, client trust,
+allowlist, or loopback origin must prevent the public listener from becoming
+ready. The generated LaunchAgent does not rotate its stdout/stderr files.
+Before unattended Founder Live operation, install and test a current-user log
+rotation or size-monitoring job with a bounded threshold and retention policy.
+
+### Prepare the Founder Live LaunchAgent
+
+On the target `darwin/arm64` host, invoke the **sealed release's** preparation
+tool with the canonical Node 22.22.1 executable and `release_directory`
+returned by the installer:
+
+```sh
+/absolute/canonical/node-22.22.1 \
+  /absolute/sealed/release/runtime/package/tools/organization-admin-edge/prepare-launchd.mjs \
+  --release-dir /absolute/sealed/release-directory \
+  --expected-artifact-sha256 <64-lowercase-hex-digest> \
+  --config /absolute/private/admin-edge/admin-edge.json \
+  --state-dir /absolute/private/admin-edge-state
+```
+
+This command re-verifies the sealed release, runs that exact candidate's
+preflight, hashes the unchanged config and exact Node executable, and creates
+a unique mode-`0700` attempt below `state/preparations/`. A successful attempt
+contains durable mode-`0600` `preflight.json`, `launch-agent.plist`, and
+`preparation.json` files. The command returns their paths and hashes. It opens
+no listener, never adds the development-only unsupported-host flag, and never
+writes into `~/Library/LaunchAgents`. A failed attempt retains its preflight
+record but no plist; retrying creates a new attempt, so failure evidence is
+never deleted or overwritten.
+
+The plist executes exactly:
+
+```text
+<canonical-node> <sealed-release>/runtime/package/bin/echo-organization-admin-edge.mjs serve --config <private-config>
+```
+
+It contains no secret value or environment variable. Its working directory
+and stdout/stderr logs are below the separate private state directory.
+
+### Freeze the plan before live access
+
+Do not bootstrap the service or connect a live client until the plan exists.
+After the target VPN/L4 policy has been applied and recorded, create the plan
+with the sealed release's tool:
+
+```sh
+/absolute/canonical/node-22.22.1 \
+  /absolute/sealed/release/runtime/package/tools/organization-admin-edge/create-founder-live-plan.mjs \
+  --preparation /absolute/private/admin-edge-state/preparations/<attempt>/preparation.json \
+  --restored-preparation /absolute/private/admin-edge-state/preparations/<attempt>/preparation.json \
+  --network-policy /absolute/private/admin-edge-state/network/vpn-policy.json \
+  --network-procedure /absolute/private/admin-edge-state/network/vpn-procedure.json \
+  --recovery-mode disable_restore_same_candidate \
+  --output /absolute/private/admin-edge-state/evidence/founder-live-plan.json
+```
+
+For a first deployment, `disable_restore_same_candidate` is the minimum
+recovery drill and `--restored-preparation` is the same exact preparation
+record. For a later upgrade, first create a fresh preparation for the
+previously sealed release against current runtime material, then use that
+distinct record with `rollback_previous_release`. The tool re-reads and hashes
+the preflight, plist, config, Node executable, network policy, network
+procedure, and both preparation records. It creates the plan exclusively as
+mode `0400` and refuses to overwrite it. Any new candidate, config, network
+policy or procedure, plist, Node binary, or recovery target requires a new
+plan.
+
+Before activation, publish the returned `plan_sha256` to an independent,
+append-only founder-controlled channel and export its receipt as:
+
+```json
+{
+  "schema_version": 1,
+  "kind": "echo-organization-admin-edge-founder-live-plan-commitment",
+  "plan_sha256": "<exact-plan-sha256>",
+  "committed_at": "2026-07-27T18:02:00.000Z",
+  "channel": "<append-only-channel-id>",
+  "receipt_id": "<immutable-receipt-id>"
+}
+```
+
+The receipt time must follow plan creation and precede `started_at`. Keep the
+receipt beside the private evidence; the final validator re-hashes it and
+requires its plan digest to match. A local timestamp or local mode `0400`
+alone is not a precommit.
+
+### Load, inspect, restart, and disable
+
+Immediately before any launchd or VPN mutation, re-verify all planned bytes:
+
+```sh
+/absolute/canonical/node-22.22.1 \
+  /absolute/sealed/release/runtime/package/tools/organization-admin-edge/verify-founder-live-activation.mjs \
+  --plan /absolute/private/admin-edge-state/evidence/founder-live-plan.json \
+  --commitment /absolute/private/admin-edge-state/evidence/plan-commitment.json \
+  --preparation /absolute/private/admin-edge-state/preparations/<attempt>/preparation.json \
+  --restored-preparation /absolute/private/admin-edge-state/preparations/<attempt>/preparation.json \
+  --network-policy /absolute/private/admin-edge-state/network/vpn-policy.json \
+  --network-procedure /absolute/private/admin-edge-state/network/vpn-procedure.json \
+  --release-dir /absolute/sealed/release-directory \
+  --output /absolute/private/admin-edge-state/evidence/activation-verification.json
+```
+
+This check is read-only apart from its exclusive evidence output. Any mismatch
+in the sealed release, config, Node path or bytes, staged plist, preflight,
+network policy/procedure, recovery preparation, plan, or independent
+commitment stops activation.
+
+Use the stable label
+`com.echo.brain.organization-admin-edge.founder-live`. Keep the label disabled
+while installing the planned plist. Copy the staged plist to a unique sibling
+of the stable target, lint it, compare its SHA-256 with `preparation.json`, and
+atomically rename it into place. Only then enable and bootstrap the label:
+
+```sh
+set -Eeuo pipefail
+service_domain="gui/$(id -u)"
+service_target="${service_domain}/com.echo.brain.organization-admin-edge.founder-live"
+staged_plist="/absolute/private/admin-edge-state/preparations/<attempt>/launch-agent.plist"
+incoming_plist="/Users/<service-user>/Library/LaunchAgents/com.echo.brain.organization-admin-edge.founder-live.<attempt>.incoming"
+installed_plist="/Users/<service-user>/Library/LaunchAgents/com.echo.brain.organization-admin-edge.founder-live.plist"
+
+abort_admin_edge_activation() {
+  trap - ERR INT TERM
+  set +e
+  cleanup_failed=0
+  /bin/launchctl disable "$service_target" || cleanup_failed=1
+  /bin/launchctl bootout "$service_target" >/dev/null 2>&1 || :
+  /bin/launchctl print "$service_target" >/dev/null 2>&1
+  service_status=$?
+  if [ "$service_status" -eq 0 ] || [ "$service_status" -ne 113 ]; then
+    cleanup_failed=1
+  fi
+  /absolute/provider-cli disable <policy-id> || cleanup_failed=1
+  /absolute/provider-cli verify-disabled <policy-id> || cleanup_failed=1
+  return "$cleanup_failed"
+}
+trap 'abort_admin_edge_activation; exit 1' ERR INT TERM
+
+/bin/launchctl print "$service_domain" >/dev/null
+/bin/launchctl disable "$service_target"
+
+set +e
+/bin/launchctl print "$service_target" >/dev/null 2>&1
+service_status=$?
+set -e
+if [ "$service_status" -eq 0 ]; then
+  /bin/launchctl bootout "$service_target"
+elif [ "$service_status" -ne 113 ]; then
+  unexpected_service_status="$service_status"
+  abort_admin_edge_activation || :
+  exit "$unexpected_service_status"
+fi
+
+/usr/bin/install -m 600 "$staged_plist" "$incoming_plist"
+
+/usr/bin/plutil -lint "$incoming_plist"
+/usr/bin/cmp -s "$staged_plist" "$incoming_plist"
+
+/bin/mv "$incoming_plist" "$installed_plist"
+/usr/bin/cmp -s "$staged_plist" "$installed_plist"
+
+/absolute/provider-cli verify-enabled <policy-id>
+
+/bin/launchctl enable "$service_target"
+
+/bin/launchctl bootstrap "$service_domain" "$installed_plist"
+
+/bin/launchctl print "$service_target"
+```
+
+The staged plist was already tied to the plan by the activation verifier, and
+both `cmp` calls make byte equality fail automatically before load. On this
+declared macOS cell, `launchctl print` status `113` is the only accepted
+not-loaded result on first deployment; any other status or command failure
+stops activation. Execute the exact precommitted `verify_enabled_argv`
+immediately before bootstrap. Record the live run's `started_at` immediately
+before the explicit `enable`/`bootstrap` checkpoint. That checkpoint is the
+first action permitted to open the listener. The abort trap independently
+attempts service disable, bootout, VPN disable, and disabled-state
+verification even if an earlier cleanup action fails. Keep it armed through
+all acceptance and recovery checks; clear it with `trap - ERR INT TERM` only
+after the complete passing evidence has been written. Substitute the exact
+precommitted `verify_enabled_argv`, `disable_argv`, and
+`verify_disabled_argv`; the placeholders above are not deployable commands.
+
+`launchctl print` showing a PID proves only that launchd has a process. It does
+not prove listener readiness, authority reachability, matching proxy tokens,
+or authenticated browser behavior. Run the live acceptance checks below from
+an independently configured administrator device.
+
+Restart:
+
+```sh
+launchctl bootout \
+  "gui/$(id -u)/com.echo.brain.organization-admin-edge.founder-live"
+
+launchctl bootstrap "gui/$(id -u)" \
+  "/Users/<service-user>/Library/LaunchAgents/com.echo.brain.organization-admin-edge.founder-live.plist"
+```
+
+Emergency disable and the first-deployment rollback command must persist
+across logout, login, and reboot. Disable the stable label before unloading
+the current process:
+
+```sh
+launchctl disable \
+  "gui/$(id -u)/com.echo.brain.organization-admin-edge.founder-live"
+
+launchctl bootout \
+  "gui/$(id -u)/com.echo.brain.organization-admin-edge.founder-live"
+```
+
+Run the network policy record's tested forwarding-disable procedure as part of
+the same emergency action. After disabling, prove both the loopback high-port
+listener and private port-443 forwarding are closed, and prove a non-VPN path
+never became reachable. Re-run the exact sealed release's preflight with the
+current config before restoring the same candidate. Restore requires
+re-applying the exact hashed network policy, then an explicit enable followed
+by bootstrap:
+
+```sh
+launchctl enable \
+  "gui/$(id -u)/com.echo.brain.organization-admin-edge.founder-live"
+
+launchctl bootstrap "gui/$(id -u)" \
+  "/Users/<service-user>/Library/LaunchAgents/com.echo.brain.organization-admin-edge.founder-live.plist"
+```
+
+Never restore a
+compromised pin, expired/revoked certificate, unsafe employee origin, or old
+proxy token to regain availability.
 
 After startup, use a deliberately authorized test client to verify:
 
+- private-VPN TCP 443 reaches the edge with TLS pass-through;
+- the same host and port are rejected outside the VPN, and port 8443 is not
+  reachable remotely through either path;
 - a valid client certificate and pin can reach `/admin/login`;
 - no client certificate, an untrusted chain, or a non-allowlisted SPKI cannot;
 - `GET /admin/edge-config` returns only the exact configured employee origin;
@@ -230,6 +622,24 @@ After startup, use a deliberately authorized test client to verify:
   and
 - private, employee, JSON-administrator, unknown, or malformed routes never
   reach the authority.
+
+Complete one bounded real administrator workflow: sign in as the designated
+founder test administrator, create one clearly named temporary test membership
+and invitation, verify the intended employee authority URL, then revoke that
+temporary membership before ending the run. Verify the invitation can no
+longer enroll, log out, and retain only secret-free hashes of the workflow
+record. The revocation and authority audit record are the cleanup; never use a
+real employee identity for this check.
+
+Also prove the certificate-expiry alert path, authority backup/restore
+procedure, secret-safe log allowlist, bounded stdout/stderr rotation or size
+monitoring, and named incident owner before marking their checks complete.
+Exercise the log control against disposable output and retain its secret-free
+configuration and result hashes as `log_rotation_ready` evidence. If no
+bounded log control is installed, leave that check incomplete and do not run
+the edge unattended. The current certificate lifecycle may remain manual as a
+declared limitation, but an expiry threshold and responsible person must still
+exist for Founder Live.
 
 Do not log request bodies or raw headers while performing these checks.
 
@@ -390,19 +800,60 @@ The edge has no database, so rollback does not restore or alter authority or
 employee state:
 
 1. Stop the edge and confirm the public listener is closed.
-2. Select a previously verified exact edge artifact and its compatible
-   external runtime config.
-3. Restore prior certificate, CA, allowlist, employee URL, and proxy-token
-   references only when their security validity has been rechecked.
-4. Start the prior artifact and repeat the mTLS, Host, local-config, header
+2. Select a previously installed sealed release and re-verify its retained
+   artifact, deployed tree, and out-of-band artifact SHA-256.
+3. Run that release's packaged preflight against the **current** config and
+   current certificate, CA, allowlist, employee URL, and proxy-token files. A
+   failed preflight leaves the service stopped.
+4. Create a unique private preparation attempt for that release. Keep the
+   stable label disabled and booted out; install the staged plist to a unique
+   `.incoming` file beside the stable plist, lint and hash it, then atomically
+   rename it over the stable path. The installed digest must equal the
+   predeclared recovery plist digest before `enable` and `bootstrap`.
+5. Repeat the mTLS, Host, local-config, header
    injection, forbidden-route, and session-isolation checks.
-5. Retain the failed candidate and logs as private diagnostic evidence.
+6. Record the restored release ID, artifact SHA-256, and plist SHA-256, then
+   retain the failed candidate and logs as private diagnostic evidence.
 
 Never roll back to a compromised client pin, expired/revoked certificate,
 untrusted employee origin, or old proxy token merely to restore availability.
 Security-policy failure stays fail-closed.
 
 ## Evidence boundary
+
+Use
+`schemas/organization-admin-edge-founder-live-evidence.v1.schema.json` for the
+commit-safe aggregate. Keep raw command output and logs private; the aggregate
+contains only their SHA-256 digests and observation times. Validate it with
+the dependency-free validator from the same sealed release:
+
+```sh
+/absolute/canonical/node-22.22.1 \
+  /absolute/sealed/release/runtime/package/tools/organization-admin-edge/validate-founder-live-evidence.mjs \
+  --report /absolute/private/admin-edge-state/evidence/founder-live.json \
+  --plan /absolute/private/admin-edge-state/evidence/founder-live-plan.json \
+  --commitment /absolute/private/admin-edge-state/evidence/plan-commitment.json
+```
+
+Install or preflight success alone must remain `DEV/incomplete`. The validator
+loads no caller-selected schema and permits `FOUNDER LIVE/pass` only when the
+report hashes the supplied predeclared plan, matches its exact artifact,
+config, Node, plist, network policy, run count, and recovery identity, and
+observes every fixed check between `started_at` and `completed_at`. Those
+checks cover artifact and target preflight, loopback authority, listener,
+VPN-only port 443 and three negative network paths, supervisor restart,
+positive pinned-client access, three negative certificate paths, edge config,
+injected proxy identity, a real cleaned-up administrator workflow,
+employee-authority readiness, cross-client replay rejection, forbidden-route
+rejection, secret-safe logging, bounded log rotation/size monitoring,
+certificate-expiry monitoring, authority backup/restore, named incident
+ownership, persistent disable, rollback preflight, and service restoration.
+
+The fixed known limitations
+`authority_development_file_signer`, `certificate_lifecycle_manual`,
+`phase5_physical_gate_open`, and `founder_pilot_only` are recorded separately
+from failures. They do not turn a successful controlled founder pilot into
+production qualification.
 
 Artifact build/verification, unit tests, local TLS integration, and a local
 operator smoke test demonstrate only that the candidate can satisfy locally
