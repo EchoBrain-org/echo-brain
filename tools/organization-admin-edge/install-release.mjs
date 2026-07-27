@@ -44,6 +44,11 @@ const ARTIFACT_DIRECTORY = "artifact";
 const RUNTIME_DIRECTORY = "runtime";
 const PACKAGE_DIRECTORY = "package";
 const EDGE_LAUNCHER = "bin/echo-organization-admin-edge.mjs";
+const PUBLICATION_WAIT_MILLISECONDS = 10;
+const PUBLICATION_WAIT_ATTEMPTS = 100;
+const PUBLICATION_WAIT_WORD = new Int32Array(
+  new SharedArrayBuffer(Int32Array.BYTES_PER_ELEMENT),
+);
 
 function fail(message) {
   throw new Error(`admin-edge-install-release: ${message}`);
@@ -105,6 +110,21 @@ function ensurePrivateDirectory(path, label) {
     fsyncDirectory(parent);
   }
   assertCanonicalDirectory(path, label, 0o700);
+}
+
+function waitForSealedPublishedRelease(path) {
+  for (let attempt = 0; attempt < PUBLICATION_WAIT_ATTEMPTS; attempt += 1) {
+    const state = assertCanonicalDirectory(path, "published release");
+    const mode = state.mode & 0o777;
+    if (mode === 0o500) return;
+    if (mode !== 0o700) {
+      fail("published release has an invalid intermediate mode");
+    }
+    if (attempt + 1 < PUBLICATION_WAIT_ATTEMPTS) {
+      Atomics.wait(PUBLICATION_WAIT_WORD, 0, 0, PUBLICATION_WAIT_MILLISECONDS);
+    }
+  }
+  fail("published release did not reach its sealed mode");
 }
 
 function fsyncDirectory(path) {
@@ -353,6 +373,31 @@ function makeStagingTreeRemovable(path, releasesRoot) {
     }
   }
   visit(path);
+}
+
+function removeFailedPublishedRelease(path, releasesRoot, releaseId) {
+  const expectedPath = join(releasesRoot, releaseId);
+  if (
+    path !== expectedPath ||
+    relative(releasesRoot, path) !== releaseId ||
+    basename(path) !== releaseId
+  ) {
+    fail("refusing to remove an unexpected published release path");
+  }
+  assertCanonicalDirectory(path, "failed published release");
+  function visit(directory) {
+    chmodSync(directory, 0o700);
+    for (const entry of readdirSync(directory, { withFileTypes: true })) {
+      const child = join(directory, entry.name);
+      const state = lstatSync(child);
+      if (state.isDirectory() && !state.isSymbolicLink()) visit(child);
+      else if (state.isFile() && !state.isSymbolicLink())
+        chmodSync(child, 0o600);
+    }
+  }
+  visit(path);
+  rmSync(path, { recursive: true, force: true });
+  fsyncDirectory(releasesRoot);
 }
 
 function releaseIdFor(manifest) {
@@ -616,11 +661,10 @@ function materializeArtifactPackage(
   }
 }
 
-export function installOrganizationAdminEdgeRelease({
-  artifactDirectory,
-  expectedArtifactSha256,
-  installRoot,
-}) {
+export function installOrganizationAdminEdgeRelease(
+  { artifactDirectory, expectedArtifactSha256, installRoot },
+  dependencies = {},
+) {
   const artifactRoot = normalizedAbsolutePath(
     artifactDirectory,
     "artifact directory",
@@ -644,6 +688,7 @@ export function installOrganizationAdminEdgeRelease({
   const releaseId = releaseIdFor(verification.artifact_manifest);
   const releaseDirectory = join(releasesRoot, releaseId);
   if (existsSync(releaseDirectory)) {
+    waitForSealedPublishedRelease(releaseDirectory);
     return verifyOrganizationAdminEdgeInstalledRelease({
       releaseDirectory,
       expectedArtifactSha256: expectedSha256,
@@ -654,6 +699,7 @@ export function installOrganizationAdminEdgeRelease({
     join(releasesRoot, `.staging-${releaseId}-`),
   );
   chmodSync(stagingDirectory, 0o700);
+  let publishedByThisCall = false;
   try {
     const retainedArtifactDirectory = join(
       stagingDirectory,
@@ -698,10 +744,21 @@ export function installOrganizationAdminEdgeRelease({
       0o600,
     );
     sealTree(stagingDirectory);
-    chmodSync(stagingDirectory, 0o500);
     fsyncSealedTree(stagingDirectory);
+    // Descendants are already sealed. Keep only the private staging root at
+    // 0700 through rename because macOS may reject renaming a 0500 directory.
+    // At the final path, 0700 means publication is still in progress; readers
+    // wait for the immediate 0500 seal and never verify the intermediate state.
     try {
       renameSync(stagingDirectory, releaseDirectory);
+      publishedByThisCall = true;
+      const sealPublishedReleaseRoot =
+        dependencies.sealPublishedReleaseRoot ??
+        ((path) => {
+          chmodSync(path, 0o500);
+          fsyncDirectory(path);
+        });
+      sealPublishedReleaseRoot(releaseDirectory);
     } catch (error) {
       if (
         (error?.code === "EEXIST" || error?.code === "ENOTEMPTY") &&
@@ -709,6 +766,7 @@ export function installOrganizationAdminEdgeRelease({
       ) {
         makeStagingTreeRemovable(stagingDirectory, releasesRoot);
         rmSync(stagingDirectory, { recursive: true, force: true });
+        waitForSealedPublishedRelease(releaseDirectory);
         const concurrentlyInstalled =
           verifyOrganizationAdminEdgeInstalledRelease({
             releaseDirectory,
@@ -720,19 +778,21 @@ export function installOrganizationAdminEdgeRelease({
       throw error;
     }
     fsyncDirectory(releasesRoot);
+    const installed = verifyOrganizationAdminEdgeInstalledRelease({
+      releaseDirectory,
+      expectedArtifactSha256: expectedSha256,
+    });
+    return Object.freeze({ ...installed, changed: true });
   } catch (error) {
     if (existsSync(stagingDirectory)) {
       makeStagingTreeRemovable(stagingDirectory, releasesRoot);
       rmSync(stagingDirectory, { recursive: true, force: true });
     }
+    if (publishedByThisCall && existsSync(releaseDirectory)) {
+      removeFailedPublishedRelease(releaseDirectory, releasesRoot, releaseId);
+    }
     throw error;
   }
-
-  const installed = verifyOrganizationAdminEdgeInstalledRelease({
-    releaseDirectory,
-    expectedArtifactSha256: expectedSha256,
-  });
-  return Object.freeze({ ...installed, changed: true });
 }
 
 function parseArgs(argv) {

@@ -27,10 +27,15 @@ export interface InstallOrganizationAdminEdgeReleaseOptions {
   readonly installRoot: string;
 }
 
+export interface InstallOrganizationAdminEdgeReleaseDependencies {
+  readonly sealPublishedReleaseRoot?: (releaseDirectory: string) => void;
+}
+
 export function verifyOrganizationAdminEdgeInstalledRelease(
   options: VerifyOrganizationAdminEdgeInstalledReleaseOptions,
 ): OrganizationAdminEdgeInstalledRelease;
 
 export function installOrganizationAdminEdgeRelease(
   options: InstallOrganizationAdminEdgeReleaseOptions,
+  dependencies?: InstallOrganizationAdminEdgeReleaseDependencies,
 ): OrganizationAdminEdgeInstalledRelease;

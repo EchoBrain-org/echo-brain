@@ -427,6 +427,34 @@ describe("organization administrator edge immutable Founder Live release", () =>
       release_id: installed.release_id,
       deployed_manifest_sha256: installed.deployed_manifest_sha256,
     });
+
+    chmodSync(installed.release_directory, 0o700);
+    expect(() =>
+      installOrganizationAdminEdgeRelease({
+        artifactDirectory: build.artifactDirectory,
+        expectedArtifactSha256: build.artifactSha256,
+        installRoot,
+      }),
+    ).toThrow(/did not reach its sealed mode/);
+
+    const failedPublishParent = join(temporaryRoot, "failed-publish-parent");
+    mkdirSync(failedPublishParent, { mode: 0o700 });
+    const failedPublishRoot = join(failedPublishParent, "admin-edge");
+    expect(() =>
+      installOrganizationAdminEdgeRelease(
+        {
+          artifactDirectory: build.artifactDirectory,
+          expectedArtifactSha256: build.artifactSha256,
+          installRoot: failedPublishRoot,
+        },
+        {
+          sealPublishedReleaseRoot: () => {
+            throw new Error("injected final seal failure");
+          },
+        },
+      ),
+    ).toThrow(/injected final seal failure/);
+    expect(readdirSync(join(failedPublishRoot, "releases"))).toEqual([]);
   }, 300_000);
 
   it("detects a changed installed file or sealed mode", () => {
