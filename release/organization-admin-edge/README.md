@@ -43,3 +43,13 @@ reading private configuration. npm is the artifact build/install toolchain,
 not a service-runtime dependency. A loopback-only development override is
 explicitly non-qualifying; it must not appear in production supervision or
 Phase 5 evidence.
+
+Before `serve`, the packaged `preflight --config <absolute-path>` command
+enforces the release cell and validates external configuration, private-file
+constraints, certificate validity and hostname, key matching, client CA
+material, and TLS-context construction without binding a socket. Its bounded
+JSON result contains no paths, credentials, pins, certificate identities, or
+raw cryptographic-library errors. This remains local candidate evidence, not a
+live deployment, listener-bindability result, or Phase 5 network result. The
+artifact ships the closed version 1 output shape contract at
+`schemas/organization-admin-edge-preflight.v1.schema.json`.

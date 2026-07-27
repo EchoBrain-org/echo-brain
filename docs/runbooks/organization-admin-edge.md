@@ -162,6 +162,38 @@ Before starting:
 6. Confirm the runtime config and referenced files satisfy ownership, mode,
    canonical-path, size, and distinct-file rules.
 
+Run the packaged no-bind preflight after those operator checks and before
+installing the supervisor definition:
+
+```sh
+/absolute/admin-edge-install/bin/echo-organization-admin-edge \
+  preflight --config /absolute/private/admin-edge/admin-edge.json
+```
+
+The command requires the declared `darwin/arm64` Node 22.22.1 runtime. It
+reuses the exact configuration, private-file, certificate, key, client-CA, and
+TLS-context preparation path used by `serve`, but it opens no listener and
+contacts no authority. Success writes one bounded secret-free JSON record and
+returns zero. Expected failure returns one with a fixed `failed_check` code;
+raw file paths, certificate identities, pins, tokens, private material, and
+Node/OpenSSL errors are never included.
+
+The version 1 failure-code set is `release_platform`, `runtime_config`,
+`runtime_material`, `server_certificate_parse`,
+`server_certificate_hostname`, `server_certificate_purpose`,
+`server_certificate_not_yet_valid`, `server_certificate_expired`,
+`server_private_key_parse`, `server_private_key_mismatch`, and
+`client_ca_or_tls_context`. The packaged README defines each code. A client CA
+bundle is accepted only when it contains PEM certificate blocks separated by
+whitespace.
+
+Preflight checks local material at one instant. It cannot prove DNS,
+firewalling, supervisor behavior, authority reachability or proxy-token
+equality, public-chain acceptance, individual administrator certificate
+identity or validity, revocation, renewal monitoring, rollback, listener
+address or port availability, or permission to bind that listener. Those
+remain explicit live acceptance steps.
+
 The packaged binary is intended to run in the foreground under an external
 supervisor:
 

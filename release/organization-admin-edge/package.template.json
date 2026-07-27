@@ -18,6 +18,7 @@
     "dist/**/*.js",
     "dist/**/*.js.map",
     "dist/build-identity.v1.json",
+    "schemas/*.schema.json",
     "npm-shrinkwrap.json",
     "README.md",
     "LICENSE"

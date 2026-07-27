@@ -16,7 +16,10 @@ import {
   type OrganizationAdminEdgeRuntimeConfigV1,
 } from '../src/config.js';
 import { organizationAdminClientCertificateIdentity } from '../src/edge.js';
-import { createTestPki, type TestPki } from './support/pki.js';
+import {
+  createTestPki,
+  type TestPki,
+} from '../../../tests/support/organization-admin-edge-pki.js';
 
 const PROXY_TOKEN = 'edge-test-proxy-token-000000000000000000000001';
 

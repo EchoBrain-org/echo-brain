@@ -23,7 +23,9 @@
     "path",
     "tls"
   ],
-  "runtime_assets": [],
+  "runtime_assets": [
+    "services/organization-admin-edge/schemas/organization-admin-edge-preflight.v1.schema.json"
+  ],
   "layer_rules": [
     {
       "name": "organization-admin-edge-is-an-isolated-transport",
