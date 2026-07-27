@@ -19,6 +19,12 @@
     "dist/**/*.js.map",
     "dist/build-identity.v1.json",
     "schemas/*.schema.json",
+    "tools/organization-admin-edge/verify-artifact.mjs",
+    "tools/organization-admin-edge/install-release.mjs",
+    "tools/organization-admin-edge/prepare-launchd.mjs",
+    "tools/organization-admin-edge/create-founder-live-plan.mjs",
+    "tools/organization-admin-edge/verify-founder-live-activation.mjs",
+    "tools/organization-admin-edge/validate-founder-live-evidence.mjs",
     "npm-shrinkwrap.json",
     "README.md",
     "LICENSE"

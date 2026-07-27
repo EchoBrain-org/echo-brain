@@ -41,6 +41,16 @@ const TOOL_ROOT = "tools/organization-admin-edge";
 const ENTRYPOINT = "dist/main.js";
 const LAUNCHER = "bin/echo-organization-admin-edge.mjs";
 const BUILD_IDENTITY = "dist/build-identity.v1.json";
+const FOUNDER_LIVE_EVIDENCE_SCHEMA =
+  "schemas/organization-admin-edge-founder-live-evidence.v1.schema.json";
+const EXPECTED_OPERATOR_TOOLS = Object.freeze([
+  "tools/organization-admin-edge/verify-artifact.mjs",
+  "tools/organization-admin-edge/install-release.mjs",
+  "tools/organization-admin-edge/prepare-launchd.mjs",
+  "tools/organization-admin-edge/create-founder-live-plan.mjs",
+  "tools/organization-admin-edge/verify-founder-live-activation.mjs",
+  "tools/organization-admin-edge/validate-founder-live-evidence.mjs",
+]);
 const EXPECTED_BUNDLES = Object.freeze(
   ARTIFACT_BUNDLED_WORKSPACES.map(({ name }) => name),
 );
@@ -50,6 +60,7 @@ const EXPECTED_PACKAGE_FILES = Object.freeze([
   "dist/**/*.js.map",
   BUILD_IDENTITY,
   "schemas/*.schema.json",
+  ...EXPECTED_OPERATOR_TOOLS,
   "npm-shrinkwrap.json",
   "README.md",
   "LICENSE",
@@ -85,6 +96,10 @@ function assertExactReleaseContract(boundary, template) {
     boundary.source_boundary !== `${SERVICE_ROOT}/source-boundary.v1.json` ||
     boundary.entrypoint !== ENTRYPOINT ||
     boundary.launcher !== LAUNCHER ||
+    boundary.founder_live_evidence_schema !== FOUNDER_LIVE_EVIDENCE_SCHEMA ||
+    boundary.operator_tools_runtime_imported !== false ||
+    JSON.stringify(boundary.operator_tools) !==
+      JSON.stringify(EXPECTED_OPERATOR_TOOLS) ||
     boundary.mutable_state?.packaged !== false
   ) {
     throw new Error(
@@ -226,6 +241,18 @@ function main() {
       join(packageDir, "schemas"),
     );
     copyRequired(
+      join(source, FOUNDER_LIVE_EVIDENCE_SCHEMA),
+      join(packageDir, FOUNDER_LIVE_EVIDENCE_SCHEMA),
+      "administrator edge Founder Live evidence schema",
+    );
+    for (const operatorTool of EXPECTED_OPERATOR_TOOLS) {
+      copyRequired(
+        join(source, operatorTool),
+        join(packageDir, operatorTool),
+        "administrator edge operator tool",
+      );
+    }
+    copyRequired(
       join(source, SERVICE_ROOT, "README.md"),
       join(packageDir, "README.md"),
       "administrator edge package input",
@@ -326,6 +353,8 @@ function main() {
       boundary.launcher,
       BUILD_IDENTITY,
       "schemas/organization-admin-edge-preflight.v1.schema.json",
+      boundary.founder_live_evidence_schema,
+      ...boundary.operator_tools,
       "README.md",
       "LICENSE",
     ]) {
@@ -373,6 +402,9 @@ function main() {
       declared_platform: boundary.declared_platform,
       entrypoint: boundary.entrypoint,
       launcher: boundary.launcher,
+      founder_live_evidence_schema: boundary.founder_live_evidence_schema,
+      operator_tools_runtime_imported: boundary.operator_tools_runtime_imported,
+      operator_tools: boundary.operator_tools,
       bundled_workspace_packages: boundary.bundled_workspace_packages,
       external_runtime_packages: boundary.external_runtime_packages,
       dependency_lock_sha256: sha256File(committedShrinkwrapPath),
