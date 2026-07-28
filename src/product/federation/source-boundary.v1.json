@@ -31,7 +31,6 @@
     "src/util/timestamp.ts"
   ],
   "forbidden_repository_roots": [
-    "src/experimental/n2/",
     "src/product/organization/",
     "services/",
     "packages/"

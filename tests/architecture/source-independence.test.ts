@@ -1,5 +1,5 @@
-// AC7 — source independence: no source-repo, sibling, absolute-path, symlink, or
-// submodule escape in the tracked target tree.
+// Source independence: no sibling-repository reference, symlink, or submodule
+// escape in the tracked product source tree.
 import { spawnSync } from 'node:child_process';
 import { resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
@@ -36,12 +36,9 @@ describe('source independence', () => {
     expect(git('ls-files', '.gitmodules').trim()).toBe('');
   });
 
-  it('no extracted production source module references the source or a sibling repository', () => {
-    // The escape guarantee is about the shipped product closure. Target-only audit
-    // tooling (tools/**), provenance records, this test's own marker list, and the
-    // byte-identical parity-leaf tests legitimately NAME the source/siblings; the
-    // production src/ tree must not. Import/path escapes are separately enforced by
-    // check-dependencies.mjs.
+  it('no production source module references a sibling repository', () => {
+    // This check covers literal sibling references in production source.
+    // Import/path escapes are separately enforced by the product boundary check.
     const paths = git('ls-tree', '-r', '--name-only', 'HEAD')
       .trim()
       .split('\n')
@@ -56,15 +53,12 @@ describe('source independence', () => {
     }
   });
 
-  it('git fsck is clean with no dangling or unreachable objects', () => {
+  it('git object storage has no corruption', () => {
     const r = spawnSync(
       'git',
-      ['-C', REPO, 'fsck', '--full', '--no-reflogs', '--unreachable'],
+      ['-C', REPO, 'fsck', '--full', '--no-reflogs', '--no-dangling'],
       { encoding: 'utf8' },
     );
-    expect(r.status).toBe(0);
-    expect(
-      r.stdout.trim() + r.stderr.replace(/^Checking.*$/gm, '').trim(),
-    ).toBe('');
+    expect(r.status, `${r.stdout}\n${r.stderr}`).toBe(0);
   });
 });

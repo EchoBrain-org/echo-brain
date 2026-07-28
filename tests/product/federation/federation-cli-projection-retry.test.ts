@@ -876,7 +876,7 @@ describe('identity-active CLI approval projection retry', () => {
     ).toBe(1);
     expect(JSON.parse(compositionError.read())).toMatchObject({
       ok: false,
-      code: 'identity_not_seed_grade',
+      code: 'identity_not_operationally_ready',
       error: expect.stringContaining('caller-owned approval store'),
     });
 
@@ -890,7 +890,7 @@ describe('identity-active CLI approval projection retry', () => {
     ).toBe(1);
     expect(JSON.parse(approvalGateError.read())).toMatchObject({
       ok: false,
-      code: 'identity_not_seed_grade',
+      code: 'identity_not_operationally_ready',
       error: expect.stringContaining('caller-owned approval gate'),
     });
 
@@ -904,7 +904,7 @@ describe('identity-active CLI approval projection retry', () => {
     ).toBe(1);
     expect(JSON.parse(runtimeError.read())).toMatchObject({
       ok: false,
-      code: 'identity_not_seed_grade',
+      code: 'identity_not_operationally_ready',
       error: expect.stringContaining('legacy custom runtime wiring'),
     });
   });

@@ -32,7 +32,7 @@ export interface StoredAuthorityMembership {
   provisioned_at: string;
   revoked_at: string | null;
   revocation_reason: string | null;
-  /** Null only for rows created before the Phase 2 retry-safe admin API. */
+  /** Null only for rows created before the retry-safe admin API. */
   admin_command_id: string | null;
   /** Canonical hash of the complete admin command, including its target. */
   admin_command_sha256: Sha256Digest | null;
@@ -48,7 +48,7 @@ export interface StoredEnrollmentGrant {
   expires_at: string;
   consumed_at: string | null;
   request_sha256: Sha256Digest | null;
-  /** Null only for rows created before the Phase 2 retry-safe admin API. */
+  /** Null only for rows created before the retry-safe admin API. */
   admin_command_id: string | null;
   /** Distinct from request_sha256, which names the employee enrollment. */
   admin_command_sha256: Sha256Digest | null;

@@ -33,7 +33,6 @@ import {
   OrganizationStateCorruptionError,
   type OrganizationAccessVerificationPolicy,
 } from '../../src/product/organization/state/organization-state-store.js';
-import { corruptStoredOrganizationAccessStateForRehearsal } from '../../tools/phase5/rehearsal-fault-injection.mjs';
 import { SqliteOrganizationStateStore } from '../../src/product/organization/state/sqlite-organization-state-store.js';
 
 const MAX_TTL_MS = 5 * 60 * 1000;
@@ -506,7 +505,7 @@ describe('SQLite organization installation state', () => {
     ).toThrow(OrganizationStateCorruptionError);
   });
 
-  it('the rehearsal corruption hook makes a fresh read fail closed', async () => {
+  it('fails closed when retained access state is tampered with', async () => {
     const chain = await onboardingChain();
     const databasePath = temporaryDatabase();
     const store = openStore(databasePath);
@@ -517,7 +516,21 @@ describe('SQLite organization installation state', () => {
     );
     store.close();
 
-    corruptStoredOrganizationAccessStateForRehearsal(databasePath);
+    const corrupted = new Database(databasePath);
+    try {
+      corrupted
+        .prepare(
+          `UPDATE organization_access_high_watermarks
+           SET state_json = json_set(
+             state_json,
+             '$.evaluated_at',
+             '2000-01-01T00:00:00.000Z'
+           )`,
+        )
+        .run();
+    } finally {
+      corrupted.close();
+    }
 
     const reopened = openStore(databasePath);
     expect(() =>

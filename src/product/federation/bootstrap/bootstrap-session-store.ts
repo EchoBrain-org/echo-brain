@@ -139,7 +139,7 @@ export interface FounderBootstrapConfirmationSummaryV1 {
     installation_id: string;
     device_id: string;
     key_id: `sha256:${string}`;
-    key_protection: "secure-enclave";
+    key_protection: InstallationKeyDescriptor["protection"];
   };
   providers: {
     slack: { team_id: string; assurance: "provider_verified" };
@@ -243,7 +243,7 @@ export function buildFounderBootstrapConfirmationSummary(
       installation_id: session.request.ids.installation_id,
       device_id: session.request.ids.device_id,
       key_id: signingKey.key_id,
-      key_protection: "secure-enclave",
+      key_protection: signingKey.protection,
     },
     providers: {
       slack: {
@@ -654,12 +654,10 @@ export function validateFounderBootstrapSession(
     const publicKey = verifyInstallationKeyDescriptor(session.signing_key);
     if (
       session.signing_key.installation_id !==
-        session.request.ids.installation_id ||
-      session.signing_key.protection !== "secure-enclave" ||
-      session.signing_key.assurance !== "hardware_bound"
+      session.request.ids.installation_id
     ) {
       throw new Error(
-        "bootstrap session is not bound to its Secure Enclave key",
+        "bootstrap session is not bound to its installation key",
       );
     }
     verifySignedDocument(

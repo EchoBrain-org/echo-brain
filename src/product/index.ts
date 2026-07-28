@@ -11,7 +11,6 @@ export * from './approval/legacy-manual-approval-import.js';
 export * from './paths.js';
 export * from './runtime.js';
 export * from './spawn-sanitized-child.js';
-export * from './artifact-rollback.js';
 export * from './cli.js';
 export * as machine from './machine/index.js';
 export * from './federation/index.js';

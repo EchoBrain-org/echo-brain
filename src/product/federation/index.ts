@@ -3,7 +3,6 @@ export * from "./foundation/canonical-json.js";
 export * from "./foundation/identifiers.js";
 export * from "./foundation/signature-profile.js";
 export * from "./foundation/installation-signer.js";
-export * from "./foundation/macos-installation-signer.js";
 export * from "./foundation/signed-document.js";
 export * from "./bootstrap/slack-dm-challenge.js";
 export * from "./identity/slack-provider-identity.js";

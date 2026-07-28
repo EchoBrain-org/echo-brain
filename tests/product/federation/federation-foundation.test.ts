@@ -143,11 +143,6 @@ describe("federation wire schemas", () => {
       "federated-export",
       "federated-recovery-report",
     ];
-    const experimentalSchemas = [
-      "organization-enrollment-request",
-      "organization-enrollment-receipt",
-      "organization-batch-receipt",
-    ];
     const ajv = new Ajv({ strict: true, allErrors: true });
     ajv.addFormat("utc-millisecond-timestamp", {
       type: "string",
@@ -166,17 +161,15 @@ describe("federation wire schemas", () => {
       for (const [key, item] of Object.entries(record))
         visit(item, `${path}/${key}`);
     };
-    for (const [directory, names] of [
-      [join(REPO, "schemas", "product"), productSchemas],
-      [join(REPO, "src", "experimental", "n2", "schemas"), experimentalSchemas],
-    ] as const) {
-      for (const name of names) {
-        const schema = JSON.parse(
-          readFileSync(join(directory, `${name}.v1.schema.json`), "utf8"),
-        ) as object;
-        expect(() => ajv.compile(schema), name).not.toThrow();
-        visit(schema, name);
-      }
+    for (const name of productSchemas) {
+      const schema = JSON.parse(
+        readFileSync(
+          join(REPO, "schemas", "product", `${name}.v1.schema.json`),
+          "utf8",
+        ),
+      ) as object;
+      expect(() => ajv.compile(schema), name).not.toThrow();
+      visit(schema, name);
     }
   });
 
@@ -319,7 +312,7 @@ describe("Founder identity bundle foundation", () => {
       prepareProductComposition(config(stateDir), new AdapterRegistry(), {
         classifyStateFilesystem: async () => ({ kind: "local", raw: "apfs" }),
       }),
-    ).rejects.toMatchObject({ code: "identity_not_seed_grade" });
+    ).rejects.toMatchObject({ code: "identity_not_operationally_ready" });
   });
 
   it("writes dependencies and pointer last, resumes them unchanged, and detects tampering", async () => {
@@ -475,7 +468,7 @@ describe("Founder identity bundle foundation", () => {
         }),
         bootstrapDependencies,
       ),
-    ).rejects.toThrow(/Secure Enclave/);
+    ).rejects.toThrow(/does not match/);
     const result = await commitFounderBootstrap(
       runtime,
       plan,
@@ -522,6 +515,27 @@ describe("Founder identity bundle foundation", () => {
     expect(
       report.checks.find((item) => item.id === "installation-key")?.ok,
     ).toBe(true);
+    const unavailableLegacySigner = {
+      generate: (installationId: string) => signer.generate(installationId),
+      inspect: async () => null,
+      sign: (
+        installationId: string,
+        message: Buffer,
+        expectedKeyId?: `sha256:${string}`,
+      ) => signer.sign(installationId, message, expectedKeyId),
+    };
+    const legacyBackendMissing = await checkFounderIdentity(stateDir, {
+      ...identityCheckDependencies,
+      signer: unavailableLegacySigner,
+    });
+    expect(
+      legacyBackendMissing.checks.find(
+        (item) => item.id === "installation-key",
+      ),
+    ).toMatchObject({
+      ok: false,
+      detail: expect.stringContaining("unsupported_legacy_key_backend"),
+    });
     expect(
       report.checks.find((item) => item.id === "provider-identities")?.ok,
     ).toBe(true);

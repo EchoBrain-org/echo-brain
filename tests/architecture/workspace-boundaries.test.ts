@@ -167,7 +167,6 @@ describe('workspace source boundaries', () => {
         '@echo-brain/organization-api',
         '@echo-brain/organization-protocol',
       ],
-      '@echo-brain/organization-admin-edge': ['@echo-brain/organization-api'],
       '@echo-brain/organization-protocol': ['@echo-brain/federation-protocol'],
       'echo-brain/stable-federation': ['@echo-brain/federation-protocol'],
       'echo-brain/local-organization': [

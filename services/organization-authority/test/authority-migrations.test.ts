@@ -59,7 +59,7 @@ describe('organization authority database migrations', () => {
     database.close();
   });
 
-  it('upgrades populated Phase 1 data without adding tables or inventing command metadata', () => {
+  it('upgrades populated legacy data without adding tables or inventing command metadata', () => {
     const path = databasePath();
     const legacy = new Database(path);
     legacy.exec(

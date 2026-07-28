@@ -226,10 +226,10 @@ export async function prepareProductComposition(
   } catch (error) {
     if (error instanceof FounderIdentityGateError) {
       throw new ProductRuntimeFailure(
-        'identity_not_seed_grade',
+        'identity_not_operationally_ready',
         error.message,
         error.report.checks
-          .filter((item) => !item.ok)
+          .filter((item) => item.required_for_operation && !item.ok)
           .map((item) => `${item.id}: ${item.detail}`),
       );
     }
@@ -237,7 +237,7 @@ export async function prepareProductComposition(
   }
   if (identityEnabled && options.approvalGate !== undefined) {
     throw new ProductRuntimeFailure(
-      'identity_not_seed_grade',
+      'identity_not_operationally_ready',
       'identity-active mode rejects a caller-owned approval gate',
       [
         'the federation-owned approval store and capture path must observe every post-cutover resolution',

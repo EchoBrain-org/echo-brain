@@ -1,9 +1,4 @@
-import { assertFederationId } from '@echo-brain/federation-protocol';
-import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
-import {
-  MAX_AUTHORITY_ACCESS_REQUEST_AGE_MS,
-  MAX_AUTHORITY_ACTIVE_LEASE_TTL_MS,
-} from '../domain/rules.js';
+import { isAbsolute, join, relative, resolve, sep } from 'node:path';
 
 export interface DevelopmentSignerConfig {
   authority_id: string;
@@ -22,127 +17,6 @@ export interface AuthorityServeConfig extends DevelopmentSignerConfig {
   port: number;
   active_lease_ttl_ms: number;
   access_request_maximum_age_ms: number;
-}
-
-function required(environment: NodeJS.ProcessEnv, name: string): string {
-  const value = environment[name];
-  if (value === undefined || value.length === 0) {
-    throw new Error(`${name} is required`);
-  }
-  return value;
-}
-
-function integer(
-  environment: NodeJS.ProcessEnv,
-  name: string,
-  fallback: number,
-  minimum: number,
-  maximum: number,
-): number {
-  const raw = environment[name];
-  const value = raw === undefined ? fallback : Number(raw);
-  if (!Number.isSafeInteger(value) || value < minimum || value > maximum) {
-    throw new Error(
-      `${name} must be an integer from ${minimum} through ${maximum}`,
-    );
-  }
-  return value;
-}
-
-export function loadDevelopmentSignerConfig(
-  environment: NodeJS.ProcessEnv,
-): DevelopmentSignerConfig {
-  if (
-    environment.ECHO_ORGANIZATION_AUTHORITY_ALLOW_DEVELOPMENT_FILE_SIGNER !==
-    'true'
-  ) {
-    throw new Error(
-      'development file authority signer requires explicit ECHO_ORGANIZATION_AUTHORITY_ALLOW_DEVELOPMENT_FILE_SIGNER=true',
-    );
-  }
-  const authorityId = required(environment, 'ECHO_ORGANIZATION_AUTHORITY_ID');
-  const organizationId = required(environment, 'ECHO_ORGANIZATION_ID');
-  assertFederationId(authorityId, 'oau', 'configured authority_id');
-  assertFederationId(organizationId, 'org', 'configured organization_id');
-  return {
-    authority_id: authorityId,
-    organization_id: organizationId,
-    key_directory: required(
-      environment,
-      'ECHO_ORGANIZATION_AUTHORITY_DEVELOPMENT_KEY_DIRECTORY',
-    ),
-  };
-}
-
-export function loadAuthorityServeConfig(
-  environment: NodeJS.ProcessEnv,
-): AuthorityServeConfig {
-  const signer = loadDevelopmentSignerConfig(environment);
-  const pin = required(environment, 'ECHO_ORGANIZATION_AUTHORITY_PIN_SHA256');
-  if (!/^sha256:[0-9a-f]{64}$/.test(pin)) {
-    throw new Error(
-      'ECHO_ORGANIZATION_AUTHORITY_PIN_SHA256 must be a canonical SHA-256 digest',
-    );
-  }
-  const host = environment.ECHO_ORGANIZATION_AUTHORITY_HOST ?? '127.0.0.1';
-  if (host !== '127.0.0.1' && host !== '::1') {
-    throw new Error(
-      'built-in authority HTTP must bind to loopback behind an authenticated TLS terminator',
-    );
-  }
-  const databasePath = required(
-    environment,
-    'ECHO_ORGANIZATION_AUTHORITY_DATABASE_PATH',
-  );
-  assertPersistentAuthorityDatabasePath(databasePath);
-  const stateDirectory =
-    environment.ECHO_ORGANIZATION_AUTHORITY_STATE_DIRECTORY ??
-    dirname(databasePath);
-  const adminToken = required(
-    environment,
-    'ECHO_ORGANIZATION_AUTHORITY_ADMIN_TOKEN',
-  );
-  const trustedProxyToken = required(
-    environment,
-    'ECHO_ORGANIZATION_AUTHORITY_TRUSTED_PROXY_TOKEN',
-  );
-  assertIndependentAuthorityTokens(adminToken, trustedProxyToken);
-  const config: AuthorityServeConfig = {
-    ...signer,
-    state_directory: stateDirectory,
-    organization_display_name: required(
-      environment,
-      'ECHO_ORGANIZATION_DISPLAY_NAME',
-    ),
-    authority_pin_sha256: pin as `sha256:${string}`,
-    database_path: databasePath,
-    admin_token: adminToken,
-    trusted_proxy_token: trustedProxyToken,
-    host,
-    port: integer(
-      environment,
-      'ECHO_ORGANIZATION_AUTHORITY_PORT',
-      39479,
-      1,
-      65535,
-    ),
-    active_lease_ttl_ms: integer(
-      environment,
-      'ECHO_ORGANIZATION_AUTHORITY_ACTIVE_LEASE_TTL_MS',
-      MAX_AUTHORITY_ACTIVE_LEASE_TTL_MS,
-      1,
-      MAX_AUTHORITY_ACTIVE_LEASE_TTL_MS,
-    ),
-    access_request_maximum_age_ms: integer(
-      environment,
-      'ECHO_ORGANIZATION_AUTHORITY_ACCESS_REQUEST_MAXIMUM_AGE_MS',
-      MAX_AUTHORITY_ACCESS_REQUEST_AGE_MS,
-      1,
-      MAX_AUTHORITY_ACCESS_REQUEST_AGE_MS,
-    ),
-  };
-  assertAuthorityServeStateBoundary(config);
-  return config;
 }
 
 function normalizedAbsolute(path: string): boolean {
@@ -203,7 +77,7 @@ export function assertPersistentAuthorityDatabasePath(
 ): void {
   if (databasePath === ':memory:') {
     throw new Error(
-      'ECHO_ORGANIZATION_AUTHORITY_DATABASE_PATH must use persistent storage when serving',
+      'authority config database_path must use persistent storage when serving',
     );
   }
 }

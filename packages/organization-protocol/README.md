@@ -1,6 +1,6 @@
 # Organization protocol
 
-**Status:** Phase 3 onboarding/access protocol promoted
+**Status:** stable onboarding/access protocol
 
 This package owns the stable facts that cross the installation/authority trust
 boundary:

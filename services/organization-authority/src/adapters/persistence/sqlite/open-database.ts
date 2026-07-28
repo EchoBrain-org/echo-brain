@@ -48,7 +48,7 @@ export function openAuthorityDatabase(
   try {
     if (databasePath !== ':memory:') chmodSync(databasePath, 0o600);
     database.pragma('trusted_schema = OFF');
-    // The Phase 1 authority is explicitly one process on one volume. DELETE
+    // The authority is explicitly one process on one volume. DELETE
     // journaling lets a stopped authority be inspected through SQLite's true
     // read-only mode without creating WAL/SHM coordination files. A future
     // multi-replica storage design must choose its own concurrency contract.

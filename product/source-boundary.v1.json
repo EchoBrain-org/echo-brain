@@ -26,7 +26,6 @@
     "src/util/timestamp.ts"
   ],
   "forbidden_internal_roots": [
-    "src/experimental/n2/",
     "src/daemon/",
     "src/mcp/",
     "src/coord/",
@@ -41,6 +40,7 @@
     "src/cli/commands/orchestration.ts"
   ],
   "removed_internal_roots": [
+    "src/experimental/",
     "src/capture/",
     "src/storage/",
     "src/echo-home/",
@@ -122,10 +122,13 @@
       "from": "src/product/machine/**",
       "allowed_imports": [
         "src/product/machine/**",
-        "src/product/spawn-sanitized-child.ts"
+        "src/product/secure-local-files.ts",
+        "src/product/federation/foundation/canonical-json.ts",
+        "src/product/federation/foundation/identifiers.ts",
+        "src/infrastructure/filesystem/atomic-create.ts"
       ],
       "allowed_packages": ["@echo-brain/federation-protocol"],
-      "allowed_node_builtins": []
+      "allowed_node_builtins": ["crypto", "fs", "path"]
     },
     {
       "name": "llm-provider-drivers-own-only-transport",
@@ -244,10 +247,5 @@
     "adapters_root": "src/adapters/",
     "forbid_discovered_adapter_ids_in_core": true
   },
-  "child_process_owner": "src/product/spawn-sanitized-child.ts",
-  "phase_1_platform": {
-    "os": "darwin",
-    "architecture": "arm64",
-    "node": "22.22.1"
-  }
+  "child_process_owner": "src/product/spawn-sanitized-child.ts"
 }

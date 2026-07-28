@@ -178,7 +178,7 @@ function requireSigner(
 ): InstallationSigner {
   if (dependencies.signer === undefined) {
     throw new Error(
-      "signer_unavailable: seed-grade bootstrap requires the verified packaged Secure Enclave helper",
+      "signer_unavailable: identity bootstrap requires an installation signer",
     );
   }
   return dependencies.signer;
@@ -576,11 +576,7 @@ async function assertLiveSessionKey(
     throw new Error("founder bootstrap installation key is unavailable");
   }
   verifyInstallationKeyDescriptor(live);
-  if (
-    !sameInstallationKey(live, expected) ||
-    live.protection !== "secure-enclave" ||
-    live.assurance !== "hardware_bound"
-  ) {
+  if (!sameInstallationKey(live, expected)) {
     throw new Error(
       "founder bootstrap live installation key does not match the signed session",
     );
@@ -651,12 +647,8 @@ async function ensureKeyReady(
   const installationId = session.request.ids.installation_id;
   const key = await signer.generate(installationId);
   verifyInstallationKeyDescriptor(key);
-  if (
-    key.installation_id !== installationId ||
-    key.protection !== "secure-enclave" ||
-    key.assurance !== "hardware_bound"
-  ) {
-    throw new Error("founder bootstrap did not receive a Secure Enclave key");
+  if (key.installation_id !== installationId) {
+    throw new Error("founder bootstrap received the wrong installation key");
   }
   return await transition(store, session, signer, {
     phase: "key_ready",
@@ -958,11 +950,7 @@ export async function abortFounderBootstrap(
       };
     }
     verifyInstallationKeyDescriptor(live);
-    if (
-      live.installation_id !== installationId ||
-      live.protection !== "secure-enclave" ||
-      live.assurance !== "hardware_bound"
-    ) {
+    if (live.installation_id !== installationId) {
       throw new Error(
         "planned bootstrap found an invalid installation key; session retained",
       );

@@ -1,10 +1,4 @@
 import { canonicalJson } from '@echo-brain/federation-protocol';
-import { organizationAuthorityPinSha256 } from '@echo-brain/organization-protocol';
-import { DevelopmentFileOrganizationAuthoritySigner } from '../adapters/security/development-file-authority-signer.js';
-import {
-  loadAuthorityServeConfig,
-  loadDevelopmentSignerConfig,
-} from './config.js';
 import {
   readAuthorityRuntimeConfig,
   resolveAuthorityServeConfig,
@@ -13,7 +7,6 @@ import {
   initializeDevelopmentAuthority,
   inspectAuthorityServePreflight,
 } from './operator-state.js';
-import { initializeMissingLegacyDevelopmentDatabase } from './legacy-development-state.js';
 import { startOrganizationAuthority } from './runtime.js';
 import { canonicalAuthorityStatus, inspectAuthorityStatus } from './status.js';
 
@@ -71,45 +64,13 @@ function parsePort(value: string | undefined): number | undefined {
   return port;
 }
 
-async function runLegacyDevelopmentInitialization(
-  environment: NodeJS.ProcessEnv,
-  io: AuthorityCliIo,
-): Promise<number> {
-  const config = loadDevelopmentSignerConfig(environment);
-  const signer = DevelopmentFileOrganizationAuthoritySigner.initialize({
-    directory: config.key_directory,
-    authority_id: config.authority_id,
-    organization_id: config.organization_id,
-  });
-  const descriptor = await signer.inspect();
-  io.stdout(
-    `${canonicalJson({
-      authority_descriptor: descriptor,
-      authority_pin_sha256: organizationAuthorityPinSha256(descriptor),
-    })}\n`,
-  );
-  return 0;
-}
-
 async function runServe(
-  configPath: string | undefined,
-  environment: NodeJS.ProcessEnv,
+  configPath: string,
   io: AuthorityCliIo,
 ): Promise<number> {
-  const runtimeConfig =
-    configPath === undefined
-      ? undefined
-      : readAuthorityRuntimeConfig(configPath);
-  if (runtimeConfig !== undefined && configPath !== undefined) {
-    await inspectAuthorityServePreflight(configPath, runtimeConfig);
-  }
-  const config =
-    runtimeConfig === undefined
-      ? loadAuthorityServeConfig(environment)
-      : resolveAuthorityServeConfig(runtimeConfig);
-  if (runtimeConfig === undefined) {
-    await initializeMissingLegacyDevelopmentDatabase(config);
-  }
+  const runtimeConfig = readAuthorityRuntimeConfig(configPath);
+  await inspectAuthorityServePreflight(configPath, runtimeConfig);
+  const config = resolveAuthorityServeConfig(runtimeConfig);
   const runtime = await startOrganizationAuthority(config);
   const listening =
     `organization authority listening on ${runtime.address.address}:` +
@@ -141,7 +102,7 @@ async function runServe(
 
 export async function runOrganizationAuthorityCli(
   arguments_: readonly string[],
-  environment: NodeJS.ProcessEnv,
+  _environment: NodeJS.ProcessEnv,
   io: AuthorityCliIo = PROCESS_IO,
 ): Promise<number> {
   const command = arguments_[0];
@@ -152,9 +113,6 @@ export async function runOrganizationAuthorityCli(
     return 0;
   }
   if (command === 'init-development') {
-    if (commandArguments.length === 0) {
-      return await runLegacyDevelopmentInitialization(environment, io);
-    }
     const flags = parseFlags(commandArguments, [
       '--config',
       '--state-dir',
@@ -172,11 +130,8 @@ export async function runOrganizationAuthorityCli(
     return 0;
   }
   if (command === 'serve') {
-    if (commandArguments.length === 0) {
-      return await runServe(undefined, environment, io);
-    }
     const flags = parseFlags(commandArguments, ['--config']);
-    return await runServe(requiredFlag(flags, '--config'), environment, io);
+    return await runServe(requiredFlag(flags, '--config'), io);
   }
   if (command === 'status') {
     const flags = parseFlags(commandArguments, ['--config']);

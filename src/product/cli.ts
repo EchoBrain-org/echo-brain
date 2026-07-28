@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
 import { readFileSync, realpathSync } from "node:fs";
-import { isAbsolute } from "node:path";
+import { isAbsolute, join } from "node:path";
 import { parseArgs } from "node:util";
 import type { Writable } from "node:stream";
 import { fileURLToPath } from "node:url";
@@ -60,8 +60,7 @@ import {
   FounderIdentityGateError,
   type IdentityCheckDependencies,
 } from "./federation/bootstrap/identity-check.js";
-import { MacOsSecureEnclaveInstallationSigner } from "./machine/security/macos-installation-signer.js";
-import { bundledProductHelperAvailable } from "./spawn-sanitized-child.js";
+import { FileInstallationSigner } from "./machine/security/file-installation-signer.js";
 import { createProductCredentialResolver } from "./credentials.js";
 import {
   abortFounderBootstrap,
@@ -167,6 +166,7 @@ interface ParsedCommand {
   confirmationSha256?: string;
   renewChallenge?: boolean;
   independentCopyRoot?: string;
+  allowExportableSoftwareKey?: boolean;
 }
 
 const PRODUCT_VERSION = (
@@ -187,7 +187,7 @@ Usage:
   echo-brain status --config <absolute-path>
   echo-brain doctor --config <absolute-path>
   echo-brain identity-check --config <absolute-path> [--strict]
-  echo-brain identity-bootstrap begin --config <absolute-path> --organization-name <name> --principal-name <name> --slack-user-id <U...> [--device-class <byod|managed>]
+  echo-brain identity-bootstrap begin --config <absolute-path> --organization-name <name> --principal-name <name> --slack-user-id <U...> --allow-exportable-software-key [--device-class <byod|managed>]
   echo-brain identity-bootstrap status --config <absolute-path> --session <uuid> [--renew-challenge]
   echo-brain identity-bootstrap commit --config <absolute-path> --session <uuid> --confirm <sha256:...> --independent-copy-root <absolute-path>
   echo-brain identity-bootstrap abort --config <absolute-path> --session <uuid> --confirm <installation-key-sha256>
@@ -294,6 +294,7 @@ function parseCommand(argv: readonly string[]): ParsedCommand {
       confirm: { type: "string" },
       "renew-challenge": { type: "boolean" },
       "independent-copy-root": { type: "string" },
+      "allow-exportable-software-key": { type: "boolean" },
     },
   });
   if (parsed.values.config === undefined)
@@ -380,10 +381,25 @@ function parseCommand(argv: readonly string[]): ParsedCommand {
     ) {
       throw new Error("--independent-copy-root must be an absolute path");
     }
-  } else if (parsed.values["independent-copy-root"] !== undefined) {
-    throw new Error(
-      "--independent-copy-root is only valid with identity-bootstrap commit",
-    );
+    if (
+      parsed.values["allow-exportable-software-key"] === true &&
+      identityBootstrapAction !== "begin"
+    ) {
+      throw new Error(
+        "--allow-exportable-software-key is only valid with identity-bootstrap begin",
+      );
+    }
+  } else {
+    if (parsed.values["independent-copy-root"] !== undefined) {
+      throw new Error(
+        "--independent-copy-root is only valid with identity-bootstrap commit",
+      );
+    }
+    if (parsed.values["allow-exportable-software-key"] === true) {
+      throw new Error(
+        "--allow-exportable-software-key is only valid with identity-bootstrap begin",
+      );
+    }
   }
   if (command === "approve" || command === "reject") {
     if (parsed.values.id === undefined) throw new Error("--id is required");
@@ -462,6 +478,9 @@ function parseCommand(argv: readonly string[]): ParsedCommand {
     ...(parsed.values["independent-copy-root"] === undefined
       ? {}
       : { independentCopyRoot: parsed.values["independent-copy-root"] }),
+    ...(parsed.values["allow-exportable-software-key"] === true
+      ? { allowExportableSoftwareKey: true }
+      : {}),
   };
 }
 
@@ -544,6 +563,14 @@ function printRuntimeFailure(
   const failure =
     error instanceof ProductRuntimeFailure
       ? error
+      : error instanceof FounderIdentityGateError
+        ? new ProductRuntimeFailure(
+            "identity_not_operationally_ready",
+            error.message,
+            error.report.checks
+              .filter((item) => item.required_for_operation && !item.ok)
+              .map((item) => `${item.id}: ${item.detail}`),
+          )
       : new ProductRuntimeFailure(
           "adapter_unavailable",
           (error as Error).message,
@@ -579,7 +606,7 @@ async function createCliComposition(
   const requiresFederation = identityRequiresFederation(config.state_dir);
   if (requiresFederation && customComposition?.approvalGate !== undefined) {
     throw new ProductRuntimeFailure(
-      "identity_not_seed_grade",
+      "identity_not_operationally_ready",
       "identity-active mode rejects a caller-owned approval gate",
       [
         "the federation-owned approval store and capture path must observe every post-cutover resolution",
@@ -588,7 +615,7 @@ async function createCliComposition(
   }
   if (requiresFederation && customComposition?.approvals !== undefined) {
     throw new ProductRuntimeFailure(
-      "identity_not_seed_grade",
+      "identity_not_operationally_ready",
       "identity-active mode rejects a caller-owned approval store",
       [
         "the complete federation runtime must own the approval store used by projection readiness",
@@ -601,7 +628,7 @@ async function createCliComposition(
     dependencies.federationRuntime === undefined
   ) {
     throw new ProductRuntimeFailure(
-      "identity_not_seed_grade",
+      "identity_not_operationally_ready",
       "identity-active mode rejects partial custom composition wiring; supply one complete command-scoped federation runtime",
       [
         "custom state, approval store, or approval capture cannot bypass signed attribution and projection",
@@ -694,7 +721,7 @@ async function createCliComposition(
     }
     const detail = (error as Error).message;
     throw new ProductRuntimeFailure(
-      "identity_not_seed_grade",
+      "identity_not_operationally_ready",
       `identity-enabled profile cannot initialize federation resources: ${detail}`,
       [
         detail,
@@ -708,7 +735,7 @@ async function createCliComposition(
   }
   if (federation === undefined) {
     throw new ProductRuntimeFailure(
-      "identity_not_seed_grade",
+      "identity_not_operationally_ready",
       "identity-enabled profile did not initialize federation resources",
       ["command-scoped federation runtime is unavailable"],
     );
@@ -794,18 +821,19 @@ function resolveIdentityCheckDependencies(
       ...(runtimeConfig === undefined ? {} : { runtimeConfig }),
     };
   }
-  if (!bundledProductHelperAvailable("installation-signer")) {
+  if (runtimeConfig === undefined) {
     return {
       ...configured,
       credentialResolver,
-      ...(runtimeConfig === undefined ? {} : { runtimeConfig }),
     };
   }
   return {
     ...configured,
     credentialResolver,
-    ...(runtimeConfig === undefined ? {} : { runtimeConfig }),
-    signer: new MacOsSecureEnclaveInstallationSigner(),
+    runtimeConfig,
+    signer: new FileInstallationSigner(
+      join(runtimeConfig.state_dir, "identity", "installation-keys"),
+    ),
   };
 }
 
@@ -814,7 +842,9 @@ function isOnlyTargetProjectionPending(
   approvalId: string,
 ): boolean {
   if (!(error instanceof FounderIdentityGateError)) return false;
-  const failures = error.report.checks.filter((item) => !item.ok);
+  const failures = error.report.checks.filter(
+    (item) => item.required_for_operation && !item.ok,
+  );
   if (failures.length === 0) return false;
   return failures.every(
     (failure) =>
@@ -825,19 +855,25 @@ function isOnlyTargetProjectionPending(
   );
 }
 
+type ResolvedFounderBootstrapDependencies =
+  FounderBootstrapCeremonyDependencies & {
+    signer: NonNullable<FounderBootstrapCeremonyDependencies["signer"]>;
+  };
+
 function resolveFounderBootstrapDependencies(
   dependencies: ProductCliDependencies,
-): FounderBootstrapCeremonyDependencies {
+  runtimeConfig: ProductRuntimeConfig,
+): ResolvedFounderBootstrapDependencies {
   const configured = dependencies.founderBootstrap ?? {};
   const signer =
     configured.signer ??
     dependencies.identityCheck?.signer ??
-    (bundledProductHelperAvailable("installation-signer")
-      ? new MacOsSecureEnclaveInstallationSigner()
-      : undefined);
+    new FileInstallationSigner(
+      join(runtimeConfig.state_dir, "identity", "installation-keys"),
+    );
   return {
     ...configured,
-    ...(signer === undefined ? {} : { signer }),
+    signer,
     credentialResolver:
       configured.credentialResolver ??
       createProductCredentialResolver(dependencies.environment ?? process.env),
@@ -871,12 +907,11 @@ async function configureFounderIndependentCopyTarget(
 }
 
 function withProductionFounderSeedCutover(
-  configured: FounderBootstrapCeremonyDependencies,
+  configured: ResolvedFounderBootstrapDependencies,
   dependencies: ProductCliDependencies,
   independentCopyRoot: string,
-): FounderBootstrapCeremonyDependencies {
+): ResolvedFounderBootstrapDependencies {
   const signer = configured.signer;
-  if (signer === undefined) return configured;
   return {
     ...configured,
     recoverSeedCutoverConfirmedAt: async ({ config, session }) =>
@@ -1089,21 +1124,29 @@ export async function runProductCli(
     dependencies.classifyStateFilesystem ?? classifyStateFilesystem;
   if (parsed.command === "identity-bootstrap") {
     const action = parsed.identityBootstrapAction!;
-    const productionSeedCutover =
-      action === "commit" &&
-      dependencies.founderBootstrap?.authorizeSeedCutover === undefined;
-    let bootstrapDependencies =
-      resolveFounderBootstrapDependencies(dependencies);
-    if (bootstrapDependencies.signer === undefined) {
+    const usesDefaultFileSigner =
+      dependencies.founderBootstrap?.signer === undefined &&
+      dependencies.identityCheck?.signer === undefined;
+    if (
+      action === "begin" &&
+      usesDefaultFileSigner &&
+      parsed.allowExportableSoftwareKey !== true
+    ) {
       print(stderr, {
         ok: false,
         command: parsed.command,
         action,
+        code: "software_key_acknowledgement_required",
         error:
-          "signer_unavailable: seed-grade bootstrap requires the verified packaged Secure Enclave helper",
+          "identity-bootstrap begin uses an exportable software key; repeat with --allow-exportable-software-key to acknowledge pilot-grade key assurance",
       });
-      return 1;
+      return 2;
     }
+    const productionSeedCutover =
+      action === "commit" &&
+      dependencies.founderBootstrap?.authorizeSeedCutover === undefined;
+    let bootstrapDependencies =
+      resolveFounderBootstrapDependencies(dependencies, config);
     if (productionSeedCutover) {
       if (parsed.independentCopyRoot === undefined) {
         print(stderr, {
@@ -1227,6 +1270,9 @@ export async function runProductCli(
       ok: true,
       command: parsed.command,
       action,
+      ...(action === "begin" && usesDefaultFileSigner
+        ? { key_assurance_policy: "software_key_development_only" }
+        : {}),
       ...result!,
     });
     return 0;
@@ -1281,7 +1327,7 @@ export async function runProductCli(
       const strictFailure =
         parsed.strictIdentityCheck === true && !report.seed_grade_ready;
       const activeFailure =
-        report.mode === "identity_enabled" && !report.foundation_ok;
+        report.mode === "identity_enabled" && !report.operational_ready;
       const status = strictFailure || activeFailure ? 1 : 0;
       print(status === 0 ? stdout : stderr, {
         ok: status === 0,
@@ -2008,7 +2054,7 @@ export async function runProductCli(
       printRuntimeFailure(
         stderr,
         new ProductRuntimeFailure(
-          "identity_not_seed_grade",
+          "identity_not_operationally_ready",
           "identity-active mode rejects legacy custom runtime wiring",
           [
             "use command composition with one complete command-scoped federation runtime",
