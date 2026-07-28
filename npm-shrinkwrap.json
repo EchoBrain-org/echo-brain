@@ -17,8 +17,7 @@
         "packages/federation-protocol",
         "packages/organization-protocol",
         "packages/organization-api",
-        "services/organization-authority",
-        "services/organization-admin-edge"
+        "services/organization-authority"
       ],
       "dependencies": {
         "@echo-brain/federation-protocol": "0.0.0-dev.0",
@@ -46,10 +45,6 @@
     },
     "node_modules/@echo-brain/federation-protocol": {
       "resolved": "packages/federation-protocol",
-      "link": true
-    },
-    "node_modules/@echo-brain/organization-admin-edge": {
-      "resolved": "services/organization-admin-edge",
       "link": true
     },
     "node_modules/@echo-brain/organization-api": {
@@ -3563,18 +3558,6 @@
       "license": "MIT",
       "dependencies": {
         "@echo-brain/federation-protocol": "0.0.0-dev.0"
-      },
-      "engines": {
-        "node": "22.22.1",
-        "npm": "10.9.4"
-      }
-    },
-    "services/organization-admin-edge": {
-      "name": "@echo-brain/organization-admin-edge",
-      "version": "0.0.0-dev.0",
-      "license": "MIT",
-      "dependencies": {
-        "@echo-brain/organization-api": "0.0.0-dev.0"
       },
       "engines": {
         "node": "22.22.1",

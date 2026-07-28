@@ -7,6 +7,7 @@ import {
   assertSha256,
   digestFileNoFollow,
   readFileNoFollow,
+  sha256Bytes,
 } from '../secure-local-files.js';
 import type { ProductArtifactEvidenceProvider } from './approval-capture.js';
 import { loadPackagedBuildIdentity } from './build-identity.js';
@@ -18,7 +19,8 @@ interface ArtifactEvidenceOptions {
   historicalArtifactManifestPaths?: () => readonly string[];
 }
 
-interface ArtifactManifestIdentity {
+interface RetainedArtifactManifestIdentity {
+  format: 'retained-tarball';
   version: string;
   sourceSha: string;
   artifactPath: string;
@@ -26,7 +28,40 @@ interface ArtifactManifestIdentity {
   artifactSha256: string;
 }
 
+interface PackagedFileIdentity {
+  path: string;
+  size: number;
+  sha256: string;
+}
+
+interface PackageArtifactManifestIdentity {
+  format: 'package-files';
+  version: string;
+  sourceSha: string;
+  files: readonly PackagedFileIdentity[];
+}
+
+type ArtifactManifestIdentity =
+  | RetainedArtifactManifestIdentity
+  | PackageArtifactManifestIdentity;
+
 const SOURCE_SHA_RE = /^[0-9a-f]{40}$/;
+const PACKAGE_EVIDENCE_FILE = 'package-artifact-evidence.v1.json';
+const MAX_PACKAGED_FILES = 4_096;
+const REQUIRED_PACKAGED_FILES = [
+  'dist/product/build-identity.v1.json',
+  'dist/product/cli.js',
+  'dist/product/federation/artifact-evidence.js',
+  'dist/product/index.js',
+  'node_modules/@echo-brain/federation-protocol/dist/index.js',
+  'node_modules/@echo-brain/federation-protocol/package.json',
+  'node_modules/@echo-brain/organization-api/dist/index.js',
+  'node_modules/@echo-brain/organization-api/package.json',
+  'node_modules/@echo-brain/organization-protocol/dist/index.js',
+  'node_modules/@echo-brain/organization-protocol/package.json',
+  'npm-shrinkwrap.json',
+  'package.json',
+] as const;
 
 function fail(message: string): never {
   throw new Error(`packaged product artifact evidence failed: ${message}`);
@@ -48,21 +83,85 @@ function nonEmpty(value: unknown, label: string): string {
 
 function defaultArtifactManifestPath(): string {
   // Installed layout:
-  // <release>/prefix/node_modules/echo-brain/dist/product/federation/*.js
+  // node_modules/echo-brain/dist/product/federation/*.js
   return resolve(
     dirname(fileURLToPath(import.meta.url)),
     '..',
     '..',
-    '..',
-    '..',
-    '..',
-    '..',
-    'artifact-manifest.json',
+    PACKAGE_EVIDENCE_FILE,
   );
 }
 
 function parseArtifactManifest(raw: Buffer): ArtifactManifestIdentity {
   const manifest = record(parseJson(raw.toString('utf8')), 'artifact manifest');
+  if (manifest['kind'] === 'echo-package-artifact-evidence') {
+    const keys = Object.keys(manifest).sort();
+    if (
+      keys.join(',') !==
+        'files,kind,package,schema_version,source_sha,version' ||
+      manifest['schema_version'] !== 1 ||
+      manifest['package'] !== 'echo-brain'
+    ) {
+      fail('package artifact manifest does not describe echo-brain v1');
+    }
+    const version = nonEmpty(manifest['version'], 'artifact version');
+    const sourceSha = nonEmpty(manifest['source_sha'], 'artifact source SHA');
+    if (!SOURCE_SHA_RE.test(sourceSha)) {
+      fail('artifact source SHA must be a full lowercase commit');
+    }
+    const rawFiles = manifest['files'];
+    if (
+      !Array.isArray(rawFiles) ||
+      rawFiles.length === 0 ||
+      rawFiles.length > MAX_PACKAGED_FILES
+    ) {
+      fail(
+        `package artifact files must contain 1-${String(MAX_PACKAGED_FILES)} entries`,
+      );
+    }
+    const files = rawFiles.map((value, index): PackagedFileIdentity => {
+      const file = record(value, `package artifact file ${String(index)}`);
+      if (Object.keys(file).sort().join(',') !== 'path,sha256,size') {
+        fail(`package artifact file ${String(index)} has unsupported fields`);
+      }
+      const path = nonEmpty(file['path'], 'package artifact file path');
+      assertSafeRelativePath(path, 'package artifact file path');
+      if (path === `dist/${PACKAGE_EVIDENCE_FILE}`) {
+        fail('package artifact manifest cannot hash itself');
+      }
+      const size = file['size'];
+      if (!Number.isSafeInteger(size) || (size as number) < 0) {
+        fail('package artifact file size must be a non-negative safe integer');
+      }
+      const sha256 = nonEmpty(
+        file['sha256'],
+        'package artifact file SHA-256',
+      );
+      assertSha256(sha256, 'package artifact file SHA-256');
+      return { path, size: size as number, sha256 };
+    });
+    for (let index = 1; index < files.length; index += 1) {
+      if (
+        Buffer.from(files[index - 1]!.path).compare(
+          Buffer.from(files[index]!.path),
+        ) >= 0
+      ) {
+        fail('package artifact files must be uniquely bytewise sorted');
+      }
+    }
+    const paths = new Set(files.map(({ path }) => path));
+    for (const required of REQUIRED_PACKAGED_FILES) {
+      if (!paths.has(required)) {
+        fail(`package artifact files are missing required path ${required}`);
+      }
+    }
+    return {
+      format: 'package-files',
+      version,
+      sourceSha,
+      files,
+    };
+  }
   if (
     manifest['schema_version'] !== 1 ||
     manifest['package'] !== 'echo-brain'
@@ -87,12 +186,35 @@ function parseArtifactManifest(raw: Buffer): ArtifactManifestIdentity {
   const artifactSha256 = nonEmpty(artifact['sha256'], 'artifact SHA-256');
   assertSha256(artifactSha256, 'artifact SHA-256');
   return {
+    format: 'retained-tarball',
     version,
     sourceSha,
     artifactPath,
     artifactSize: artifactSize as number,
     artifactSha256,
   };
+}
+
+function verifyPackageFiles(
+  manifestPath: string,
+  manifest: PackageArtifactManifestIdentity,
+): void {
+  if (
+    basename(manifestPath) !== PACKAGE_EVIDENCE_FILE ||
+    basename(dirname(manifestPath)) !== 'dist'
+  ) {
+    fail(`package artifact manifest must be installed at dist/${PACKAGE_EVIDENCE_FILE}`);
+  }
+  const root = resolve(dirname(manifestPath), '..');
+  for (const expected of manifest.files) {
+    const actual = digestFileNoFollow(
+      join(root, ...expected.path.split('/')),
+      `installed package file ${expected.path}`,
+    );
+    if (actual.size !== expected.size || actual.sha256 !== expected.sha256) {
+      fail(`installed package file ${expected.path} does not match its manifest`);
+    }
+  }
 }
 
 function defaultHistoricalManifestPaths(currentManifestPath: string): string[] {
@@ -122,9 +244,16 @@ function defaultHistoricalManifestPaths(currentManifestPath: string): string[] {
 function verifiedArtifactIdentity(
   manifestPath: string,
 ): ProductArtifactIdentityV1 {
-  const manifest = parseArtifactManifest(
-    readFileNoFollow(manifestPath, 'artifact manifest'),
-  );
+  const raw = readFileNoFollow(manifestPath, 'artifact manifest');
+  const manifest = parseArtifactManifest(raw);
+  if (manifest.format === 'package-files') {
+    verifyPackageFiles(manifestPath, manifest);
+    return {
+      product_version: manifest.version,
+      source_sha: manifest.sourceSha,
+      artifact_sha256: `sha256:${sha256Bytes(raw)}`,
+    };
+  }
   const artifact = digestFileNoFollow(
     join(dirname(manifestPath), manifest.artifactPath),
     'retained product artifact',
@@ -143,9 +272,9 @@ function verifiedArtifactIdentity(
 }
 
 /**
- * Reads the immutable release artifact identity installed beside the package.
- * The source/version must agree with the packaged build identity and the
- * retained tarball is re-hashed before any attribution snapshot is returned.
+ * Reads the release artifact identity installed with the package. Ordinary npm
+ * packages verify a self-excluding manifest over every npm-packed file.
+ * Explicit legacy manifest paths continue to verify retained release tarballs.
  */
 export class PackagedProductArtifactEvidenceProvider implements ProductArtifactEvidenceProvider {
   private readonly artifactManifestPath: string;

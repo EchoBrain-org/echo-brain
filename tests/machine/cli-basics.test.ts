@@ -23,6 +23,7 @@ describe('standalone CLI basics', () => {
     expect(stdout.read()).toContain('echo-brain export');
     expect(stdout.read()).toContain('echo-brain identity-bootstrap commit');
     expect(stdout.read()).toContain('--independent-copy-root <absolute-path>');
+    expect(stdout.read()).toContain('--allow-exportable-software-key');
   });
 
   it('prints the package version without requiring a config', async () => {

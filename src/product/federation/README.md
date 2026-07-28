@@ -8,7 +8,7 @@ general-purpose home for new files.
 
 - `index.ts` is the only federation barrel exported by the product package.
 - `source-boundary.v1.json` is the executable allowlist for this stable local
-  trust layer; organization, service, and experimental edges are forbidden.
+  trust layer; organization and service implementation edges are forbidden.
 - `contracts.ts` owns product-specific persisted data contracts and re-exports
   portable integrity/key types from `@echo-brain/federation-protocol`.
 - `runtime-wiring.ts` is the composition root.
@@ -18,9 +18,7 @@ general-purpose home for new files.
 - `cutover-fence.ts` and `build-identity.ts` are bootstrap-owned root anchors;
   `attributing-core-state-store.ts`, `attribution-store.ts`, and
   `outbox-store.ts` are records-owned root anchors; `artifact-evidence.ts` is
-  runtime-owned; and `schema-validation.ts` is foundation-owned. They remain at
-  the root because qualification or installed-resource resolution depends on
-  their location.
+  runtime-owned; and `schema-validation.ts` is foundation-owned.
 
 ## Capability folders
 
@@ -38,10 +36,6 @@ general-purpose home for new files.
 - `independent-copy/`: protected-copy documents, local evidence, history, and
   macOS volume inspection.
 - `legacy/`: pre-cutover evidence, deterministic classification, and reports.
-
-The disposable organization-authority pilot lives under
-`src/experimental/n2/`, including its contracts, schemas, SQLite state, and
-manual CLI. It is not part of this stable federation layout or package API.
 
 Installation-side organization orchestration lives in the sibling
 `src/product/organization/` module. Portable canonicalization, identifiers,

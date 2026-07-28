@@ -1,6 +1,6 @@
 # Organization API
 
-**Status:** Phase 4 onboarding/access transport contract
+**Status:** stable onboarding/access transport contract
 
 This package owns the versioned ordinary transport DTOs for the narrow
 single-organization onboarding/access slice. It references signed organization

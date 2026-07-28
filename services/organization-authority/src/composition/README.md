@@ -26,8 +26,5 @@ singleton state-directory lock until graceful SIGINT/SIGTERM shutdown. Its
 health proof is pinned to a fingerprint of the exact canonical database/key
 files, listener, credentials, and access policy.
 
-The environment-only Phase 5 compatibility branch may prepare only an absent
-legacy rehearsal database. It is isolated in `legacy-development-state.ts`;
-the config-backed lifecycle never calls it. Runtime ownership uses an
-authenticated kernel guard, so an unrelated process occupying a stale guard
-port cannot impersonate a live authority.
+Runtime ownership uses an authenticated kernel guard, so an unrelated process
+occupying a stale guard port cannot impersonate a live authority.

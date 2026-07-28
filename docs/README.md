@@ -1,38 +1,13 @@
-# Echo Brain documentation
+# Documentation
 
-These documents record durable design choices. Code and schemas remain the
-authority for exact fields, paths, commands, and implementation details.
+Code and schemas are authoritative for exact fields and behavior. These files
+cover only current architecture and near-term product direction:
 
-## Current architecture
+- [Core and adapters](architecture/core-and-adapters.md)
+- [Product runtime](architecture/product-runtime.md)
+- [Identity and onboarding](architecture/identity-onboarding-and-federation.md)
+- [One-organization boundaries](architecture/organization-workspace-boundaries.md)
+- [Organization brain direction](product/org-brain-direction.md)
 
-- [Core and adapters](architecture/core-and-adapters.md): the portable pipeline
-  and its replaceable tool boundaries.
-- [Product runtime](architecture/product-runtime.md): how one local installation
-  hosts, persists, and operates that pipeline.
-- [Identity, onboarding, and federation](architecture/identity-onboarding-and-federation.md):
-  how records remain attributable across people, tools, and installations.
-- [Organization authority foundation](architecture/organization-authority-foundation.md):
-  the experimental N=2 enrollment, revocation, ingest, and receipt boundary.
-
-## Runbooks
-
-- [Manual N=2 pilot](runbooks/manual-n2-pilot.md): the artifact-bound two-role
-  ceremony for the experimental organization-authority walkthrough.
-
-## Direction and decisions
-
-- [Organization brain direction](product/org-brain-direction.md): the intended
-  shared context and retrieval boundary; it is not current implementation.
-- [N=2/org=1 onboarding/access workspace boundaries](architecture/organization-workspace-boundaries.md):
-  the accepted repository and dependency skeleton for the first central slice.
-- [Founder identity decisions](decisions/founder-identity-decisions.md): the
-  accepted Founder Live identity decision register.
-- [Organization authority decisions](decisions/organization-authority-decisions.md):
-  the accepted single-organization authority boundary register.
-
-## Documentation rule
-
-Each concept has one maintained home. Current architecture, future direction,
-and accepted decisions stay visibly separate. Historical proposals,
-implementation diaries, and duplicated explanations belong in Git history,
-not alongside current documentation.
+Historical proposals, ceremonies, evidence reports, and implementation diaries
+belong in Git history rather than the active tree.

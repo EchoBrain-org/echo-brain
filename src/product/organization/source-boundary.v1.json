@@ -13,7 +13,6 @@
     "src/product/storage/open-product-database.ts"
   ],
   "forbidden_repository_roots": [
-    "src/experimental/n2/",
     "services/",
     "packages/"
   ],

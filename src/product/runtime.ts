@@ -90,7 +90,7 @@ export class ProductRuntimeFailure extends Error {
       | 'adapter_unavailable'
       | 'adapter_invalid_config'
       | 'state_not_local'
-      | 'identity_not_seed_grade'
+      | 'identity_not_operationally_ready'
       | 'startup_failed',
     message: string,
     public readonly details: readonly string[] = [],
@@ -435,10 +435,10 @@ export async function startProductRuntime(
       return {
         ok: false,
         error: new ProductRuntimeFailure(
-          'identity_not_seed_grade',
+          'identity_not_operationally_ready',
           error.message,
           error.report.checks
-            .filter((item) => !item.ok)
+            .filter((item) => item.required_for_operation && !item.ok)
             .map((item) => `${item.id}: ${item.detail}`),
         ),
       };
@@ -446,7 +446,7 @@ export async function startProductRuntime(
     return {
       ok: false,
       error: new ProductRuntimeFailure(
-        'identity_not_seed_grade',
+        'identity_not_operationally_ready',
         `identity check failed: ${(error as Error).message}`,
         [(error as Error).message],
       ),

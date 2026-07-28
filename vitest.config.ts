@@ -12,7 +12,6 @@ export default defineConfig({
       'tests/infrastructure/**/*.test.ts',
       'tests/integration/**/*.test.ts',
     ],
-    exclude: ['tests/machine/target/**/*.test.ts'],
     testTimeout: 180_000,
     hookTimeout: 180_000,
     fileParallelism: false,

@@ -6,5 +6,6 @@ node_modules/
 .npm-cache/
 dist/
 coverage/
+deploy/organization-authority/data/
 *.tgz
 *.log

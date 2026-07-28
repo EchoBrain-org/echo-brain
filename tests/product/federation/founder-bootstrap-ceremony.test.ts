@@ -30,8 +30,12 @@ import {
   type FounderBootstrapCeremonyDependencies,
 } from "../../../src/product/federation/bootstrap/founder-bootstrap-ceremony.js";
 import { ActiveIdentityBundleStore } from "../../../src/product/federation/identity/active-identity-bundle-store.js";
-import { checkFounderIdentity } from "../../../src/product/federation/bootstrap/identity-check.js";
+import {
+  assertFounderIdentityAllowsPipeline,
+  checkFounderIdentity,
+} from "../../../src/product/federation/bootstrap/identity-check.js";
 import { FounderBootstrapSessionStore } from "../../../src/product/federation/bootstrap/bootstrap-session-store.js";
+import { FileInstallationSigner } from "../../../src/product/machine/security/file-installation-signer.js";
 import {
   assertFounderCutoverReceiptMatchesActiveBundle,
   founderCutoverGuardPath,
@@ -51,7 +55,6 @@ import { createSignedDocument } from "../../../src/product/federation/foundation
 import {
   createPrivateTestState,
   founderCeremonyFixture,
-  founderRuntimeConfig,
 } from "./fixtures/founder-identity.js";
 
 const NOW = "2026-07-19T23:00:00.000Z";
@@ -65,10 +68,6 @@ afterEach(() => {
 
 function privateState(): string {
   return createPrivateTestState(temporary, "echo-founder-bootstrap-");
-}
-
-function config(stateDir: string): ProductRuntimeConfig {
-  return founderRuntimeConfig(stateDir);
 }
 
 function fixture(stateDir: string) {
@@ -236,6 +235,91 @@ describe("founder bootstrap ceremony", () => {
       foundation_ok: true,
       seed_grade_ready: false,
     });
+  });
+
+  it("separates operational and seed readiness by installation-key assurance", async () => {
+    for (const keyKind of ["software", "hardware"] as const) {
+      const stateDir = privateState();
+      const test = fixture(stateDir);
+      const signer =
+        keyKind === "software"
+          ? new FileInstallationSigner(
+              join(stateDir, "identity", "installation-keys"),
+            )
+          : test.signer;
+      const dependencies: FounderBootstrapCeremonyDependencies = {
+        ...test.dependencies,
+        signer,
+        authorizeSeedCutover: async () => undefined,
+      };
+      const begun = await beginFounderBootstrap(
+        test.config,
+        {
+          organizationDisplayName: "EchoBrain",
+          principalDisplayName: "Zhenye",
+          slackUserId: "U123FOUNDER",
+        },
+        dependencies,
+      );
+      test.slack.reactionObserved = true;
+      const readyToCommit = await statusFounderBootstrap(
+        test.config,
+        begun.session_id,
+        {},
+        dependencies,
+      );
+      await commitFounderBootstrapCeremony(
+        test.config,
+        begun.session_id,
+        readyToCommit.confirmation!.confirmation_sha256,
+        dependencies,
+      );
+
+      const ready = async () => ({ ok: true, detail: "ready" });
+      const identityDependencies = {
+        signer,
+        runtimeConfig: test.config,
+        credentialResolver: test.dependencies.credentialResolver,
+        legacyBoundaryReady: ready,
+        approvalCaptureReady: ready,
+        attributionStorageReady: ready,
+        signedOutboxReady: ready,
+        independentCopyReady: ready,
+      };
+      const report = await checkFounderIdentity(
+        stateDir,
+        identityDependencies,
+      );
+
+      expect(report).toMatchObject({
+        mode: "identity_enabled",
+        foundation_ok: true,
+        operational_ready: true,
+        seed_grade_ready: keyKind === "hardware",
+      });
+      expect(
+        report.checks.find(
+          (item) => item.id === "installation-key-assurance",
+        ),
+      ).toMatchObject({
+        ok: keyKind === "hardware",
+        required_for_operation: false,
+        required_for_seed: true,
+        ...(keyKind === "software"
+          ? {
+              detail: expect.stringContaining(
+                "pilot operation is allowed but seed-grade identity requires",
+              ),
+            }
+          : {}),
+      });
+      await expect(
+        assertFounderIdentityAllowsPipeline(stateDir, identityDependencies),
+      ).resolves.toMatchObject({
+        operational_ready: true,
+        seed_grade_ready: keyKind === "hardware",
+      });
+    }
   });
 
   it("detects credential replacement before another provider call", async () => {
@@ -990,60 +1074,6 @@ describe("founder bootstrap ceremony", () => {
     expect(existsSync(join(stateDir, "identity"))).toBe(false);
   });
 
-  it("keeps the packaged CLI bootstrap disabled before the trusted signer lands", async () => {
-    const stateDir = privateState();
-    const runtime = config(stateDir);
-    const configPath = join(stateDir, "runtime.json");
-    writeFileSync(configPath, `${JSON.stringify(runtime)}\n`, { mode: 0o600 });
-    let stdout = "";
-    let stderr = "";
-
-    const status = await runProductCli(
-      [
-        "identity-bootstrap",
-        "begin",
-        "--config",
-        configPath,
-        "--organization-name",
-        "EchoBrain",
-        "--principal-name",
-        "Zhenye",
-        "--slack-user-id",
-        "U123FOUNDER",
-      ],
-      {
-        classifyStateFilesystem: async () => ({
-          kind: "local",
-          raw: "apfs",
-        }),
-        stdout: {
-          write: (value: string | Uint8Array) => (
-            (stdout += value.toString()),
-            true
-          ),
-        },
-        stderr: {
-          write: (value: string | Uint8Array) => (
-            (stderr += value.toString()),
-            true
-          ),
-        },
-        now: () => NOW,
-      },
-    );
-
-    expect(status).toBe(1);
-    expect(stdout).toBe("");
-    expect(JSON.parse(stderr)).toMatchObject({
-      ok: false,
-      command: "identity-bootstrap",
-      action: "begin",
-      error: expect.stringContaining("signer_unavailable"),
-    });
-    expect(existsSync(join(stateDir, "bootstrap"))).toBe(false);
-    expect(existsSync(join(stateDir, "identity"))).toBe(false);
-  });
-
   it("requires a protected independent-copy target before production commit", async () => {
     const stateDir = privateState();
     const test = fixture(stateDir);
@@ -1091,6 +1121,72 @@ describe("founder bootstrap ceremony", () => {
       error: expect.stringContaining("--independent-copy-root"),
     });
     expect(existsSync(join(stateDir, "identity"))).toBe(false);
+  });
+
+  it("requires explicit acknowledgement before the default file signer is used", async () => {
+    const stateDir = privateState();
+    const test = fixture(stateDir);
+    const configPath = join(stateDir, "runtime.json");
+    writeFileSync(configPath, `${JSON.stringify(test.config)}\n`, {
+      mode: 0o600,
+    });
+    let stdout = "";
+    let stderr = "";
+    const argv = [
+      "identity-bootstrap",
+      "begin",
+      "--config",
+      configPath,
+      "--organization-name",
+      "EchoBrain",
+      "--principal-name",
+      "Zhenye",
+      "--slack-user-id",
+      "U123FOUNDER",
+    ];
+
+    const output = {
+      stdout: {
+        write: (value: string | Uint8Array) => (
+          (stdout += value.toString()),
+          true
+        ),
+      },
+      stderr: {
+        write: (value: string | Uint8Array) => (
+          (stderr += value.toString()),
+          true
+        ),
+      },
+    };
+    expect(await runProductCli(argv, output)).toBe(2);
+    expect(JSON.parse(stderr)).toMatchObject({
+      ok: false,
+      code: "software_key_acknowledgement_required",
+      error: expect.stringContaining("--allow-exportable-software-key"),
+    });
+    expect(existsSync(join(stateDir, "identity"))).toBe(false);
+
+    stdout = "";
+    stderr = "";
+    expect(
+      await runProductCli([...argv, "--allow-exportable-software-key"], {
+        ...output,
+        classifyStateFilesystem: async () => ({
+          kind: "local",
+          raw: "test",
+        }),
+        founderBootstrap: {
+          ...test.dependencies,
+          signer: undefined,
+        },
+      }),
+    ).toBe(0);
+    expect(stderr).toBe("");
+    expect(JSON.parse(stdout)).toMatchObject({
+      ok: true,
+      key_assurance_policy: "software_key_development_only",
+    });
   });
 });
 

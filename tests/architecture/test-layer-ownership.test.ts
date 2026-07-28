@@ -59,8 +59,7 @@ const rules: readonly TestLayerRule[] = [
   },
   {
     root: 'tests/product',
-    allows: (path) =>
-      !path.startsWith('src/experimental/') && !path.startsWith('services/'),
+    allows: (path) => !path.startsWith('services/'),
   },
 ];
 

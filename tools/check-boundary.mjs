@@ -6,9 +6,8 @@
 // edge outside allowed_internal_paths, into a forbidden_internal_root, or that
 // escapes the repository; classifies node: / bare-core specifiers against the
 // pinned Node 22 built-in set (never as npm rows); requires the full transitive
-// closure to resolve locally. Bare npm imports/package CLIs are handed to
-// check-dependencies.mjs after this tool enforces product-wide and per-layer
-// package and Node-builtin allowlists.
+// closure to resolve locally and enforces product-wide and per-layer package
+// and Node-builtin allowlists.
 //
 import { dirname, posix } from 'node:path';
 import process from 'node:process';
@@ -539,29 +538,6 @@ function checkWorkspaceBoundaries(tree, errors) {
             }
           }
         }
-      }
-    }
-  }
-
-  for (const [path] of tree) {
-    if (
-      !SOURCE_FILE_RE.test(path) ||
-      path.startsWith('src/experimental/') ||
-      !(path.startsWith('src/') || path.startsWith('packages/') || path.startsWith('services/'))
-    ) {
-      continue;
-    }
-    const source = textFile(tree, path);
-    for (const reference of moduleReferences(path, source)) {
-      const specifier = reference.specifier;
-      if (specifier?.startsWith('src/experimental/')) {
-        errors.push(`stable source imports experimental implementation: ${path} -> ${specifier}`);
-        continue;
-      }
-      if (!specifier?.startsWith('.')) continue;
-      const resolved = resolveRelative(tree, path, specifier);
-      if (resolved?.startsWith('src/experimental/')) {
-        errors.push(`stable source imports experimental implementation: ${path} -> ${resolved}`);
       }
     }
   }

@@ -19,6 +19,7 @@ export type IdentityCheckId =
   | "seed-cutover"
   | "legacy-boundary"
   | "installation-key"
+  | "installation-key-assurance"
   | "provider-identities"
   | "connection-credentials"
   | "approval-capture"
@@ -29,6 +30,7 @@ export type IdentityCheckId =
 export interface IdentityCheckResult {
   id: IdentityCheckId;
   ok: boolean;
+  required_for_operation: boolean;
   required_for_seed: boolean;
   detail: string;
 }
@@ -38,6 +40,7 @@ export interface IdentityCheckReport {
   kind: "echo-founder-identity-check";
   mode: "local_only_unattributed" | "identity_enabled";
   foundation_ok: boolean;
+  operational_ready: boolean;
   seed_grade_ready: boolean;
   organization_id: string | null;
   installation_id: string | null;
@@ -130,10 +133,10 @@ export function verifyActiveConnectionCredentialGuards(
 export class FounderIdentityGateError extends Error {
   constructor(public readonly report: IdentityCheckReport) {
     const failures = report.checks
-      .filter((item) => !item.ok)
+      .filter((item) => item.required_for_operation && !item.ok)
       .map((item) => `${item.id}: ${item.detail}`);
     super(
-      `identity-enabled profile is not seed-grade ready: ${failures.join("; ")}`,
+      `identity-enabled profile is not ready: ${failures.join("; ")}`,
     );
     this.name = "FounderIdentityGateError";
   }
@@ -143,8 +146,26 @@ function check(
   id: IdentityCheckId,
   ok: boolean,
   detail: string,
+  requirements: {
+    requiredForOperation?: boolean;
+    requiredForSeed?: boolean;
+  } = {},
 ): IdentityCheckResult {
-  return { id, ok, required_for_seed: true, detail };
+  return {
+    id,
+    ok,
+    required_for_operation: requirements.requiredForOperation ?? true,
+    required_for_seed: requirements.requiredForSeed ?? true,
+    detail,
+  };
+}
+
+function seedOnlyCheck(
+  id: IdentityCheckId,
+  ok: boolean,
+  detail: string,
+): IdentityCheckResult {
+  return check(id, ok, detail, { requiredForOperation: false });
 }
 
 async function optionalCapabilityCheck(
@@ -188,6 +209,7 @@ export async function checkFounderIdentity(
         kind: "echo-founder-identity-check",
         mode: "identity_enabled",
         foundation_ok: false,
+        operational_ready: false,
         seed_grade_ready: false,
         organization_id: null,
         installation_id: null,
@@ -218,6 +240,11 @@ export async function checkFounderIdentity(
           ),
           check(
             "installation-key",
+            false,
+            "not checked without an active bundle",
+          ),
+          seedOnlyCheck(
+            "installation-key-assurance",
             false,
             "not checked without an active bundle",
           ),
@@ -255,6 +282,7 @@ export async function checkFounderIdentity(
       kind: "echo-founder-identity-check",
       mode: "local_only_unattributed",
       foundation_ok: true,
+      operational_ready: true,
       seed_grade_ready: false,
       organization_id: null,
       installation_id: null,
@@ -263,24 +291,34 @@ export async function checkFounderIdentity(
           "active-bundle",
           false,
           "no active identity bundle; current runs remain disposable rehearsals",
+          { requiredForOperation: false },
         ),
         check(
           "bundle-integrity",
           false,
           "not checked without an active bundle",
+          { requiredForOperation: false },
         ),
         check(
           "seed-cutover",
           false,
           "not checked without an active bundle",
+          { requiredForOperation: false },
         ),
         check(
           "legacy-boundary",
           false,
           "not checked without an active bundle",
+          { requiredForOperation: false },
         ),
         check(
           "installation-key",
+          false,
+          "not checked without an active bundle",
+          { requiredForOperation: false },
+        ),
+        seedOnlyCheck(
+          "installation-key-assurance",
           false,
           "not checked without an active bundle",
         ),
@@ -288,27 +326,34 @@ export async function checkFounderIdentity(
           "provider-identities",
           false,
           "not checked without an active bundle",
+          { requiredForOperation: false },
         ),
         check(
           "connection-credentials",
           false,
           "not checked without an active bundle",
+          { requiredForOperation: false },
         ),
         check(
           "approval-capture",
           false,
           "not checked without an active bundle",
+          { requiredForOperation: false },
         ),
         check(
           "attribution-storage",
           false,
           "not checked without an active bundle",
+          { requiredForOperation: false },
         ),
-        check("signed-outbox", false, "not checked without an active bundle"),
+        check("signed-outbox", false, "not checked without an active bundle", {
+          requiredForOperation: false,
+        }),
         check(
           "independent-copy",
           false,
           "not checked without an active bundle",
+          { requiredForOperation: false },
         ),
       ],
     };
@@ -336,6 +381,7 @@ export async function checkFounderIdentity(
       kind: "echo-founder-identity-check",
       mode: "identity_enabled",
       foundation_ok: false,
+      operational_ready: false,
       seed_grade_ready: false,
       organization_id: null,
       installation_id: null,
@@ -379,17 +425,31 @@ export async function checkFounderIdentity(
       check(
         "installation-key",
         false,
-        "signed Secure Enclave helper is unavailable; seed-grade signing is disabled",
+        "installation signer is unavailable",
+      ),
+      seedOnlyCheck(
+        "installation-key-assurance",
+        false,
+        "not checked without an available installation signer",
       ),
     );
   } else {
     try {
       const installationId = verified.manifest.installation.installation_id;
+      const manifestKey = verified.manifest.installation.signing_key;
       const descriptor = await signer.inspect(installationId);
+      if (
+        descriptor === null &&
+        (manifestKey.protection !== "development-file" ||
+          manifestKey.assurance !== "software_key_development_only")
+      ) {
+        throw new Error(
+          `unsupported_legacy_key_backend: the active identity requires ${manifestKey.protection}/${manifestKey.assurance}, but this pilot build supports development-file/software_key_development_only; preserve the old state and signer or intentionally re-bootstrap without identity continuity`,
+        );
+      }
       if (descriptor === null)
         throw new Error("installation signing key is unavailable");
       const publicKey = verifyInstallationKeyDescriptor(descriptor);
-      const manifestKey = verified.manifest.installation.signing_key;
       if (
         descriptor.installation_id !== installationId ||
         descriptor.key_id !== manifestKey.key_id ||
@@ -397,12 +457,10 @@ export async function checkFounderIdentity(
         descriptor.public_key_spki_der_base64 !==
           manifestKey.public_key_spki_der_base64 ||
         descriptor.protection !== manifestKey.protection ||
-        descriptor.assurance !== manifestKey.assurance ||
-        descriptor.protection !== "secure-enclave" ||
-        descriptor.assurance !== "hardware_bound"
+        descriptor.assurance !== manifestKey.assurance
       ) {
         throw new Error(
-          "live installation key does not match the hardware-bound manifest key",
+          "live installation key does not match the manifest key",
         );
       }
       const challenge = randomBytes(32);
@@ -418,11 +476,29 @@ export async function checkFounderIdentity(
         check(
           "installation-key",
           true,
-          "matching non-exportable Secure Enclave key signed a fresh challenge",
+          "matching installation key signed a fresh challenge",
+        ),
+        seedOnlyCheck(
+          "installation-key-assurance",
+          descriptor.protection === "secure-enclave" &&
+            descriptor.assurance === "hardware_bound" &&
+            descriptor.private_key_exportable === false,
+          descriptor.protection === "secure-enclave" &&
+            descriptor.assurance === "hardware_bound" &&
+            descriptor.private_key_exportable === false
+            ? "installation key is hardware-bound and non-exportable"
+            : `installation key is ${descriptor.protection}/${descriptor.assurance} and exportable=${descriptor.private_key_exportable}; pilot operation is allowed but seed-grade identity requires a hardware-bound non-exportable key`,
         ),
       );
     } catch (error) {
-      checks.push(check("installation-key", false, (error as Error).message));
+      checks.push(
+        check("installation-key", false, (error as Error).message),
+        seedOnlyCheck(
+          "installation-key-assurance",
+          false,
+          "not checked without a valid installation key",
+        ),
+      );
     }
   }
 
@@ -522,20 +598,25 @@ export async function checkFounderIdentity(
     kind: "echo-founder-identity-check",
     mode: "identity_enabled",
     foundation_ok: foundationOk,
-    seed_grade_ready: checks.every((item) => item.ok),
+    operational_ready: checks
+      .filter((item) => item.required_for_operation)
+      .every((item) => item.ok),
+    seed_grade_ready: checks
+      .filter((item) => item.required_for_seed)
+      .every((item) => item.ok),
     organization_id: verified.manifest.organization.organization_id,
     installation_id: verified.manifest.installation.installation_id,
     checks,
   };
 }
 
-/** Disposable rehearsals pass; any identity material requires every seed gate. */
+/** Disposable rehearsals pass; identity-enabled operation requires every operational gate. */
 export async function assertFounderIdentityAllowsPipeline(
   stateDirectory: string,
   dependencies: IdentityCheckDependencies = {},
 ): Promise<IdentityCheckReport> {
   const report = await checkFounderIdentity(stateDirectory, dependencies);
-  if (report.mode === "identity_enabled" && !report.seed_grade_ready) {
+  if (report.mode === "identity_enabled" && !report.operational_ready) {
     throw new FounderIdentityGateError(report);
   }
   return report;

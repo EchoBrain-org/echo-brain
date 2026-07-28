@@ -291,7 +291,7 @@ export function validateAuthorityRuntimeConfig(
       paths.key_directory
   ) {
     throw new Error(
-      'Phase 1 signer must use the initialized development-file key directory',
+      'authority signer must use the initialized development-file key directory',
     );
   }
   if (

@@ -1,6 +1,6 @@
 # Local organization integration
 
-**Status:** Phase 4 local enrollment and access runtime
+**Status:** local enrollment and access runtime
 
 This module connects one installed Echo Brain to one organization authority. It
 owns enrollment preparation, authority pinning, bounded HTTP-client
@@ -13,5 +13,5 @@ adds three tables to the existing installation database for the write-once pin,
 exact enrollment evidence, and atomic access high-watermark. The raw bearer
 grant is never persisted.
 
-Stable files here never import `src/experimental/n2` or the central service.
-The product artifact bundles only the three shared protocol/API workspaces.
+Local product files never import the central service. The product package
+bundles only the three shared protocol/API workspaces.

@@ -1,0 +1,281 @@
+name: ci
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  PRODUCT_NODE_VERSION: '22.22.1'
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        with:
+          node-version: ${{ env.PRODUCT_NODE_VERSION }}
+          cache: npm
+      - run: npm ci
+      - run: npm run check
+
+  macos-launchagent:
+    name: macOS arm64 installed lifecycle and LaunchAgent
+    needs: check
+    runs-on: macos-15
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        with:
+          node-version: ${{ env.PRODUCT_NODE_VERSION }}
+          cache: npm
+      - run: npm ci
+      - name: Install package and exercise the real LaunchAgent
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(node -p 'process.platform')" = darwin
+          test "$(node -p 'process.arch')" = arm64
+
+          pack_dir="$RUNNER_TEMP/echo-brain-package"
+          prefix="$RUNNER_TEMP/echo-brain-install"
+          runtime_root="$RUNNER_TEMP/echo-brain-runtime"
+          mkdir -p "$pack_dir" "$runtime_root"
+          runtime_root="$(cd "$runtime_root" && pwd -P)"
+
+          npm pack --pack-destination "$pack_dir" >/dev/null
+          archive_count="$(find "$pack_dir" -maxdepth 1 -type f -name '*.tgz' | wc -l | tr -d ' ')"
+          test "$archive_count" = 1
+          archive="$(find "$pack_dir" -maxdepth 1 -type f -name '*.tgz' -print -quit)"
+
+          npm install --prefix "$prefix" "$archive"
+          cli="$prefix/node_modules/.bin/echo-brain"
+          config="$runtime_root/config/runtime.json"
+          state="$runtime_root/state"
+          status_file="$runtime_root/service-status.json"
+
+          cleanup() {
+            if [[ -x "${cli:-}" && -f "${config:-}" ]]; then
+              "$cli" service uninstall --config "$config" >/dev/null 2>&1 || true
+            fi
+          }
+          dump_launchagent() {
+            {
+              printf '%s\n' 'LaunchAgent status:'
+              if [[ -f "$status_file" ]]; then
+                cat "$status_file"
+              else
+                printf '%s\n' 'status file was not created'
+              fi
+              for log_key in stdout_path stderr_path; do
+                log_path="$(
+                  node -e '
+                    const fs = require("node:fs");
+                    try {
+                      const value = JSON.parse(fs.readFileSync(process.argv[1], "utf8"));
+                      process.stdout.write(value.service?.[process.argv[2]] ?? "");
+                    } catch {}
+                  ' "$status_file" "$log_key"
+                )"
+                printf '%s\n' "LaunchAgent $log_key:"
+                if [[ -n "$log_path" && -f "$log_path" ]]; then
+                  cat "$log_path"
+                else
+                  printf '%s\n' 'log file is unavailable'
+                fi
+              done
+            } >&2
+          }
+          trap cleanup EXIT
+
+          "$cli" onboard --config "$config" --state-dir "$state"
+          node -e '
+            const fs = require("node:fs");
+            const path = process.argv[1];
+            const value = JSON.parse(fs.readFileSync(path, "utf8"));
+            value.meeting_sources[0].settings = {
+              ...value.meeting_sources[0].settings,
+              base_url: "https://127.0.0.1:1",
+              request_timeout_ms: 1000,
+            };
+            fs.writeFileSync(path, `${JSON.stringify(value, null, 2)}\n`);
+          ' "$config"
+          chmod 600 "$config"
+          printf 'grn_ci_launchagent_smoke\n' > "$state/credentials/granola-api-key"
+          chmod 600 "$state/credentials/granola-api-key"
+          "$cli" init --config "$config"
+          "$cli" selftest --config "$config"
+          "$cli" service install --config "$config"
+
+          launchagent_pid=''
+          for _ in {1..20}; do
+            "$cli" status --config "$config" > "$status_file"
+            if launchagent_pid="$(
+              node -e '
+                const fs = require("node:fs");
+                const value = JSON.parse(fs.readFileSync(process.argv[1], "utf8"));
+                const pid = value.service?.pid;
+                if (
+                  !value.initialized ||
+                  !value.service?.installed ||
+                  !value.service?.loaded ||
+                  !value.service?.running ||
+                  !Number.isSafeInteger(pid) ||
+                  pid <= 0
+                ) {
+                  process.exit(1);
+                }
+                process.stdout.write(String(pid));
+              ' "$status_file"
+            )"; then
+              break
+            fi
+            launchagent_pid=''
+            sleep 1
+          done
+          if [[ -z "$launchagent_pid" ]]; then
+            dump_launchagent
+            exit 1
+          fi
+
+          sleep 2
+          "$cli" status --config "$config" > "$status_file"
+          stable_pid="$(
+            node -e '
+              const fs = require("node:fs");
+              const value = JSON.parse(fs.readFileSync(process.argv[1], "utf8"));
+              const pid = value.service?.pid;
+              if (
+                !value.initialized ||
+                !value.service?.installed ||
+                !value.service?.loaded ||
+                !value.service?.running ||
+                !Number.isSafeInteger(pid) ||
+                pid <= 0
+              ) {
+                process.exit(1);
+              }
+              process.stdout.write(String(pid));
+            ' "$status_file"
+          )" || {
+            dump_launchagent
+            exit 1
+          }
+          if [[ "$stable_pid" != "$launchagent_pid" ]]; then
+            dump_launchagent
+            printf 'LaunchAgent PID changed from %s to %s\n' \
+              "$launchagent_pid" "$stable_pid" >&2
+            exit 1
+          fi
+
+          plist="$(node -e '
+            const fs = require("node:fs");
+            const value = JSON.parse(fs.readFileSync(process.argv[1], "utf8"));
+            process.stdout.write(value.service.plist_path);
+          ' "$status_file")"
+          plutil -lint "$plist"
+
+          "$cli" service uninstall --config "$config"
+          "$cli" status --config "$config" > "$status_file"
+          node -e '
+            const fs = require("node:fs");
+            const value = JSON.parse(fs.readFileSync(process.argv[1], "utf8"));
+            if (
+              !value.initialized ||
+              value.service.installed ||
+              value.service.loaded ||
+              value.service.running
+            ) {
+              throw new Error(`LaunchAgent cleanup failed: ${JSON.stringify(value)}`);
+            }
+          ' "$status_file"
+
+  authority-container:
+    name: Organization authority container
+    needs: check
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - name: Build and initialize the authority image
+        shell: bash
+        run: |
+          set -euo pipefail
+          deployment="$GITHUB_WORKSPACE/deploy/organization-authority"
+          compose="$deployment/compose.yaml"
+          data="$deployment/data"
+          status_file="$RUNNER_TEMP/authority-status.json"
+          proxy_body="$RUNNER_TEMP/authority-proxy-body"
+          test ! -e "$data"
+          install -d -m 0700 "$data"
+          export ECHO_AUTHORITY_UID="$(id -u)"
+          export ECHO_AUTHORITY_GID="$(id -g)"
+          export ECHO_AUTHORITY_HOST=localhost
+          cleanup() {
+            docker compose --file "$compose" down --volumes >/dev/null 2>&1 || true
+          }
+          trap cleanup EXIT
+
+          docker compose --file "$compose" config --quiet
+          docker compose --file "$compose" build authority
+          docker compose --file "$compose" run --rm --no-deps authority \
+            init-development \
+            --config /echo/authority.json \
+            --state-dir /echo/state \
+            --organization-name 'CI Organization'
+          docker compose --file "$compose" run --rm --no-deps authority \
+            status --config /echo/authority.json > "$status_file"
+          node -e '
+            const fs = require("node:fs");
+            const value = JSON.parse(fs.readFileSync(process.argv[1], "utf8"));
+            if (
+              !value.ok ||
+              !value.initialized ||
+              value.running ||
+              value.healthy
+            ) {
+              throw new Error(`authority stopped status failed: ${JSON.stringify(value)}`);
+            }
+          ' "$status_file"
+
+          docker run --rm \
+            --env ECHO_AUTHORITY_HOST=localhost \
+            --env ECHO_PROXY_TOKEN=ci-trusted-proxy-token \
+            --env ECHO_PROXY_CLIENT_ID=cid_gS3zlZXMchZuDl7fUj-OTeoaQCMX8ee3CjgdkKkCBcM \
+            --volume "$deployment/Caddyfile:/etc/caddy/Caddyfile:ro" \
+            caddy:2.10.2-alpine@sha256:4c6e91c6ed0e2fa03efd5b44747b625fec79bc9cd06ac5235a779726618e530d \
+            caddy validate --config /etc/caddy/Caddyfile --adapter caddyfile
+
+          docker compose --file "$compose" up --detach
+          proxy_status=''
+          for _ in {1..30}; do
+            proxy_status="$(
+              curl \
+                --connect-timeout 2 \
+                --insecure \
+                --max-time 2 \
+                --output "$proxy_body" \
+                --silent \
+                --write-out '%{http_code}' \
+                https://localhost/admin ||
+                true
+            )"
+            if [[ "$proxy_status" = 303 ]]; then
+              break
+            fi
+            sleep 1
+          done
+          if [[ "$proxy_status" != 303 ]]; then
+            cat "$proxy_body" >&2 || true
+            docker compose --file "$compose" logs >&2
+            printf 'expected HTTPS /admin to return 303; received %s\n' \
+              "$proxy_status" >&2
+            exit 1
+          fi

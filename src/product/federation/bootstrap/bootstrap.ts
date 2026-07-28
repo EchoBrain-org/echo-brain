@@ -237,12 +237,6 @@ function assertFounderBootstrapPlanIds(plan: FounderBootstrapPlan): void {
 export function assertFounderBootstrapPlan(plan: FounderBootstrapPlan): void {
   assertFounderBootstrapPlanIds(plan);
   verifyInstallationKeyDescriptor(plan.expected_signing_key);
-  if (
-    plan.expected_signing_key.protection !== "secure-enclave" ||
-    plan.expected_signing_key.assurance !== "hardware_bound"
-  ) {
-    throw new Error("founder bootstrap plan does not use a Secure Enclave key");
-  }
   validateIdentityDocumentSemantics(plan.manifest, plan.registry, plan.policy);
 }
 
@@ -254,13 +248,9 @@ export function planFounderBootstrap(
   const ids = input.ids ?? mintFounderBootstrapIds();
   const build = founderBuildIdentity(dependencies);
   verifyInstallationKeyDescriptor(expectedSigningKey);
-  if (
-    expectedSigningKey.installation_id !== ids.installation_id ||
-    expectedSigningKey.protection !== "secure-enclave" ||
-    expectedSigningKey.assurance !== "hardware_bound"
-  ) {
+  if (expectedSigningKey.installation_id !== ids.installation_id) {
     throw new Error(
-      "founder bootstrap plan requires the expected installation Secure Enclave key",
+      "founder bootstrap plan requires the expected installation key",
     );
   }
   const organizationName = nonBlank(
@@ -436,14 +426,6 @@ export async function commitFounderBootstrap(
   if (key.installation_id !== plan.ids.installation_id) {
     throw new Error(
       "installation signer generated a key for a different installation",
-    );
-  }
-  if (
-    key.protection !== "secure-enclave" ||
-    key.assurance !== "hardware_bound"
-  ) {
-    throw new Error(
-      "founder seed bootstrap requires a non-exportable Secure Enclave key",
     );
   }
   if (!sameInstallationKey(key, plan.expected_signing_key)) {

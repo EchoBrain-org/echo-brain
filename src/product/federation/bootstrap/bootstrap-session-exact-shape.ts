@@ -346,7 +346,7 @@ const signingKeyShape = objectShape({
   public_key_spki_der_base64: stringShape,
   protection: stringShape,
   assurance: stringShape,
-  private_key_exportable: literalShape(false),
+  private_key_exportable: booleanShape,
 });
 
 const providerVerificationShape = objectShape({
