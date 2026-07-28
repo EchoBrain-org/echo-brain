@@ -166,7 +166,7 @@ function cliDependencies(root: string, cliPath: string, launchd: FakeLaunchd) {
       launchctl: launchd.runner,
       platform: 'darwin' as const,
       architecture: 'arm64',
-      uid: 501,
+      uid: statSync(root).uid,
       homeDirectory: join(root, 'home'),
       nodePath: realpathSync(process.execPath),
       nodeVersion: 'v22.22.1',
