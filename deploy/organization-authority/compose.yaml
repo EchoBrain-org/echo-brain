@@ -6,8 +6,11 @@ services:
     command: ["serve", "--config", "/echo/authority.json"]
     user: "${ECHO_AUTHORITY_UID:-1000}:${ECHO_AUTHORITY_GID:-1000}"
     restart: unless-stopped
+    environment:
+      ECHO_AUTHORITY_COORDINATION_ROOT: /echo-runtime
     volumes:
       - ./data:/echo
+      - authority_runtime:/echo-runtime
     ports:
       - "80:80"
       - "443:443"
@@ -36,3 +39,5 @@ services:
 volumes:
   caddy_data:
   caddy_config:
+  authority_runtime:
+    name: "${ECHO_AUTHORITY_RUNTIME_VOLUME:-echo-organization-authority-runtime}"

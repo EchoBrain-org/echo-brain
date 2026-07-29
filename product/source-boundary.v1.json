@@ -72,7 +72,9 @@
     "src/product/storage/migrations/0002_core_state.sql",
     "src/product/storage/migrations/0003_federated_founder_identity.sql",
     "src/product/storage/migrations/0004_remove_legacy_events.sql",
-    "src/product/storage/migrations/0005_organization_access.sql"
+    "src/product/storage/migrations/0005_organization_access.sql",
+    "src/product/storage/migrations/0006_organization_authority_connection.sql"
+    ,"src/product/storage/migrations/0007_organization_authority_rebind.sql"
   ],
   "layer_rules": [
     {
@@ -205,14 +207,15 @@
       "allowed_imports": [
         "src/product/organization/**",
         "src/product/machine/**",
-        "src/product/storage/**"
+        "src/product/storage/**",
+        "src/product/secure-local-files.ts"
       ],
       "allowed_packages": [
         "@echo-brain/federation-protocol",
         "@echo-brain/organization-api",
         "@echo-brain/organization-protocol"
       ],
-      "allowed_node_builtins": ["buffer", "crypto"]
+      "allowed_node_builtins": ["buffer", "crypto", "fs", "https", "path"]
     },
     {
       "name": "approval-gates-project-federation-records",

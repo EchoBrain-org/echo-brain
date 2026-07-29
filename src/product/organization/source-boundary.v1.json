@@ -10,7 +10,9 @@
   "allowed_internal_paths": [
     "src/product/organization/**",
     "src/product/machine/security/installation-signer.ts",
-    "src/product/storage/open-product-database.ts"
+    "src/product/storage/open-product-database.ts",
+    "src/product/secure-local-files.ts",
+    "src/product/spawn-sanitized-child.ts"
   ],
   "forbidden_repository_roots": [
     "services/",
@@ -22,7 +24,13 @@
     "@echo-brain/organization-api"
   ],
   "allowed_external_packages": [],
-  "allowed_node_builtins": ["node:buffer", "node:crypto"],
+  "allowed_node_builtins": [
+    "node:buffer",
+    "node:crypto",
+    "node:fs",
+    "node:https",
+    "node:path"
+  ],
   "runtime_assets": [],
   "layer_rules": [
     {
@@ -53,6 +61,16 @@
       "allowed_node_builtins": []
     },
     {
+      "name": "local-organization-runtime-access-renews-verified-state",
+      "from": "src/product/organization/runtime-access-controller.ts",
+      "allowed_imports": ["src/product/organization/**"],
+      "allowed_workspace_packages": [
+        "@echo-brain/organization-protocol"
+      ],
+      "allowed_external_packages": [],
+      "allowed_node_builtins": []
+    },
+    {
       "name": "local-organization-client-uses-public-api",
       "from": "src/product/organization/client/**",
       "allowed_imports": ["src/product/organization/client/**"],
@@ -61,7 +79,7 @@
         "@echo-brain/organization-api"
       ],
       "allowed_external_packages": [],
-      "allowed_node_builtins": ["node:buffer"]
+      "allowed_node_builtins": ["node:buffer", "node:https"]
     },
     {
       "name": "local-organization-state-is-installation-owned",
@@ -72,7 +90,8 @@
       ],
       "allowed_workspace_packages": [
         "@echo-brain/federation-protocol",
-        "@echo-brain/organization-protocol"
+        "@echo-brain/organization-protocol",
+        "@echo-brain/organization-api"
       ],
       "allowed_external_packages": [],
       "allowed_node_builtins": []
@@ -84,7 +103,9 @@
         "src/product/organization/enrollment/**",
         "src/product/organization/client/**",
         "src/product/organization/state/**",
-        "src/product/machine/security/installation-signer.ts"
+        "src/product/machine/security/installation-signer.ts",
+        "src/product/secure-local-files.ts",
+        "src/product/spawn-sanitized-child.ts"
       ],
       "allowed_workspace_packages": [
         "@echo-brain/federation-protocol",
@@ -92,7 +113,7 @@
         "@echo-brain/organization-api"
       ],
       "allowed_external_packages": [],
-      "allowed_node_builtins": ["node:crypto"]
+      "allowed_node_builtins": ["node:crypto", "node:fs", "node:path"]
     }
   ]
 }

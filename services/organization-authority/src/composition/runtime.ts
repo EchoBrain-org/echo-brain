@@ -89,7 +89,6 @@ export async function startOrganizationAuthority(
   const runtimeLock = await acquireAuthorityRuntimeLock(
     config.state_directory,
     runtimeFingerprint,
-    config.port,
   );
   let repository: SqliteOrganizationAuthorityRepository | undefined;
   let application: OrganizationAuthorityApplication | undefined;

@@ -50,6 +50,8 @@ export interface LocalOrganizationCoordinatorOptions {
 }
 
 export interface EnrollLocalInstallationInput {
+  authorityBaseUrl: string;
+  authorityCaPem?: string;
   authorityDescriptor: OrganizationAuthorityDescriptorV1;
   independentlyTrustedAuthorityPin: Sha256Digest;
   enrollmentGrant: Uint8Array;
@@ -215,10 +217,27 @@ export class LocalOrganizationCoordinator {
     const existing = this.options.state.readEnrollment();
     if (existing !== null && existing.accepted_access_sequence > 0) {
       assertExistingEnrollmentMatches(existing, input, grantSha256);
+      await this.assertRemoteAuthority(input.authorityDescriptor);
+      this.options.state.saveAuthorityConnection({
+        authority_id: input.authorityDescriptor.authority_id,
+        organization_id: input.authorityDescriptor.organization_id,
+        authority_base_url: input.authorityBaseUrl,
+        ...(input.authorityCaPem === undefined
+          ? {}
+          : { authority_ca_pem: input.authorityCaPem }),
+      });
       return this.options.state.verifyCurrentAccess(this.verificationPolicy());
     }
 
     await this.assertRemoteAuthority(input.authorityDescriptor);
+    this.options.state.saveAuthorityConnection({
+      authority_id: input.authorityDescriptor.authority_id,
+      organization_id: input.authorityDescriptor.organization_id,
+      authority_base_url: input.authorityBaseUrl,
+      ...(input.authorityCaPem === undefined
+        ? {}
+        : { authority_ca_pem: input.authorityCaPem }),
+    });
     const request = await this.prepareRequest(input, grantSha256);
     const response = validateCompletedOrganizationEnrollment(
       await this.options.authorityClient.completeEnrollment({

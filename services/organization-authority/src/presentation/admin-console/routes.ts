@@ -46,7 +46,9 @@ const ADMIN_SECURITY_HEADERS = Object.freeze({
   'Cross-Origin-Resource-Policy': 'same-origin',
   'Permissions-Policy':
     'camera=(), geolocation=(), microphone=(), payment=(), usb=()',
-  'Referrer-Policy': 'no-referrer',
+  // `no-referrer` makes browser form POSTs serialize Origin as `null`,
+  // preventing the strict same-origin mutation check from authenticating them.
+  'Referrer-Policy': 'same-origin',
   'X-Content-Type-Options': 'nosniff',
   'X-Frame-Options': 'DENY',
 });

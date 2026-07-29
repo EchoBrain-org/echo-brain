@@ -66,6 +66,17 @@ echo-brain onboard \
   --state-dir /absolute/path/state
 
 echo-brain init --config /absolute/path/runtime.json
+
+echo-brain organization enroll \
+  --config /absolute/path/runtime.json \
+  --invitation /absolute/path/echo-organization-invitation.json \
+  --authority-pin sha256:PIN_FROM_A_SEPARATE_TRUSTED_CHANNEL \
+  --authority-ca /absolute/path/internal-authority-ca.pem \
+  --allow-exportable-software-key
+
+echo-brain organization status --config /absolute/path/runtime.json
+echo-brain organization refresh --config /absolute/path/runtime.json
+
 echo-brain run-once --config /absolute/path/runtime.json
 echo-brain doctor --config /absolute/path/runtime.json
 ```
@@ -246,6 +257,29 @@ reverse proxy. See:
 The employee product owns its installation private key and pins the authority
 identity. The authority owns membership, enrollment grants, leases, and
 revocation; it never owns meeting or reasoning data.
+
+The administrator sends the private mode-0600 invitation file to the employee
+and communicates the displayed authority PIN through a separate trusted
+channel. `organization enroll` refuses to treat the PIN embedded in the
+invitation itself as independent verification. Enrollment retains the signed
+request, signed receipt, signed access state, and the authority's non-secret
+HTTPS origin plus any explicitly supplied internal CA; it never stores the
+bearer grant. `organization refresh` therefore works after the invitation is
+securely removed. Enrollment and founder bootstrap reuse one installation ID
+and signing key.
+
+Once the authority is pinned, product startup and every processing cycle check
+the signed access lease before adapter contact. The running service renews its
+short lease in the background. A transient authority outage can use only the
+remaining signed lease; expiration or revocation fails closed. Use
+`organization rebind` with the same independently verified authority PIN to
+prove the identical authority at a new HTTPS origin before changing the saved
+route.
+
+The current portable machine key is an exportable software key, so enrollment
+requires the explicit `--allow-exportable-software-key` acknowledgement.
+Enrollment, explicit rebind, and manual refresh require the product service to
+be stopped because they take the exclusive runtime maintenance window.
 
 ## Architecture
 

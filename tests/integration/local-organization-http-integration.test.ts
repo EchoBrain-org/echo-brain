@@ -281,6 +281,7 @@ describe('local organization over the central HTTP authority', () => {
         invitation.enrollment_grant_sha256,
       );
       const enrolled = await coordinator.enroll({
+        authorityBaseUrl: new URL(origin).origin,
         authorityDescriptor,
         independentlyTrustedAuthorityPin: authorityPin,
         enrollmentGrant,

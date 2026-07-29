@@ -21,6 +21,7 @@ const PRODUCT_TABLES = [
   'federated_processor_attributions',
   'federated_source_attributions',
   'organization_access_high_watermarks',
+  'organization_authority_connections',
   'organization_authority_pins',
   'organization_enrollments',
 ];
@@ -51,12 +52,12 @@ afterEach(() => {
 });
 
 describe('machine product database migrations', () => {
-  it('installs schema v5 with the complete product-state inventory', () => {
+  it('installs schema v7 with the complete product-state inventory', () => {
     const path = temporaryDatabase();
     openProductDatabase(path, { durability: 'operational' }).close();
 
     const database = new Database(path, { readonly: true });
-    expect(database.pragma('user_version', { simple: true })).toBe(5);
+    expect(database.pragma('user_version', { simple: true })).toBe(7);
     expect(tableNames(database)).toEqual(PRODUCT_TABLES);
     expect(
       database
@@ -111,7 +112,7 @@ describe('machine product database migrations', () => {
     openProductDatabase(path, { durability: 'operational' }).close();
 
     const database = new Database(path, { readonly: true });
-    expect(database.pragma('user_version', { simple: true })).toBe(5);
+    expect(database.pragma('user_version', { simple: true })).toBe(7);
     expect(tableNames(database)).toEqual(PRODUCT_TABLES);
     expect(
       database

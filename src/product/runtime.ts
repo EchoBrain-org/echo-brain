@@ -91,6 +91,7 @@ export class ProductRuntimeFailure extends Error {
       | 'adapter_invalid_config'
       | 'state_not_local'
       | 'identity_not_operationally_ready'
+      | 'organization_access_denied'
       | 'startup_failed',
     message: string,
     public readonly details: readonly string[] = [],

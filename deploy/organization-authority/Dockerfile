@@ -22,6 +22,7 @@ COPY --from=build /app/packages/organization-api/dist ./packages/organization-ap
 COPY --from=build /app/services/organization-authority/package.json ./services/organization-authority/package.json
 COPY --from=build /app/services/organization-authority/dist ./services/organization-authority/dist
 COPY --from=build /app/services/organization-authority/migrations ./services/organization-authority/migrations
+RUN install -d -m 1777 /echo-runtime
 USER node
 ENTRYPOINT ["node", "services/organization-authority/dist/main.js"]
 CMD ["help"]

@@ -6,6 +6,9 @@ import {
   type Sha256Digest,
 } from '@echo-brain/federation-protocol';
 import {
+  validateOrganizationAuthorityOrigin,
+} from '@echo-brain/organization-api';
+import {
   MAX_ORGANIZATION_ACCESS_CLOCK_SKEW_MS,
   organizationAuthorityPinSha256,
   organizationEnrollmentReceiptSha256,
@@ -31,6 +34,7 @@ import {
   OrganizationStateUnavailableError,
   type OrganizationAccessVerificationPolicy,
   type OrganizationStateStore,
+  type StoredOrganizationAuthorityConnection,
   type StoredOrganizationEnrollment,
 } from './organization-state-store.js';
 
@@ -41,6 +45,14 @@ interface AuthorityPinRow {
   descriptor_sha256: string;
   trusted_pin_sha256: string;
   descriptor_json: string;
+}
+
+interface AuthorityConnectionRow {
+  authority_id: string;
+  organization_id: string;
+  authority_base_url: string;
+  authority_ca_pem: string | null;
+  configured_at: string;
 }
 
 interface EnrollmentRow {
@@ -138,6 +150,21 @@ function timestampMillis(value: string, label: string): number {
     throw new OrganizationStateCorruptionError(`${label} is invalid`);
   }
   return milliseconds;
+}
+
+function validateAuthorityCaPem(value: unknown): string | null {
+  if (value === undefined || value === null) return null;
+  if (
+    typeof value !== 'string' ||
+    value.length === 0 ||
+    Buffer.byteLength(value, 'utf8') > 64 * 1024 ||
+    value.includes('\0') ||
+    !value.includes('-----BEGIN CERTIFICATE-----') ||
+    !value.includes('-----END CERTIFICATE-----')
+  ) {
+    throw new Error('organization authority CA PEM is invalid');
+  }
+  return value;
 }
 
 function policyClock(policy: OrganizationAccessVerificationPolicy): {
@@ -328,6 +355,186 @@ export class SqliteOrganizationStateStore implements OrganizationStateStore {
 
   readPinnedAuthority(): PinnedOrganizationAuthority | null {
     return this.readTransaction(() => this.loadAuthorityPin()?.handle ?? null);
+  }
+
+  private authorityConnectionRow(): AuthorityConnectionRow | undefined {
+    return this.database
+      .prepare(
+        `SELECT authority_id, organization_id, authority_base_url,
+                authority_ca_pem, configured_at
+         FROM organization_authority_connections
+         WHERE singleton = 1`,
+      )
+      .get() as AuthorityConnectionRow | undefined;
+  }
+
+  private loadAuthorityConnection(
+    authority: LoadedAuthorityPin,
+  ): StoredOrganizationAuthorityConnection | null {
+    const row = this.authorityConnectionRow();
+    if (row === undefined) return null;
+    try {
+      const authorityBaseUrl = validateOrganizationAuthorityOrigin(
+        row.authority_base_url,
+      );
+      const authorityCaPem = validateAuthorityCaPem(row.authority_ca_pem);
+      timestampMillis(
+        row.configured_at,
+        'stored organization authority connection time',
+      );
+      if (
+        row.authority_id !== authority.descriptor.authority_id ||
+        row.organization_id !== authority.descriptor.organization_id
+      ) {
+        throw new Error('connection columns do not match the pinned authority');
+      }
+      return {
+        authority_id: row.authority_id,
+        organization_id: row.organization_id,
+        authority_base_url: authorityBaseUrl,
+        authority_ca_pem: authorityCaPem,
+        configured_at: row.configured_at,
+      };
+    } catch (error) {
+      return corruption(
+        'stored organization authority connection is corrupt',
+        error,
+      );
+    }
+  }
+
+  saveAuthorityConnection(input: {
+    authority_id: string;
+    organization_id: string;
+    authority_base_url: string;
+    authority_ca_pem?: string | null;
+  }): StoredOrganizationAuthorityConnection {
+    const authorityBaseUrl = validateOrganizationAuthorityOrigin(
+      input.authority_base_url,
+    );
+    const authorityCaPem = validateAuthorityCaPem(input.authority_ca_pem);
+    return this.writeTransaction(() => {
+      const authority = this.loadAuthorityPin();
+      if (authority === null) {
+        throw new OrganizationStateUnavailableError(
+          'organization authority must be pinned before its connection is saved',
+        );
+      }
+      if (
+        input.authority_id !== authority.descriptor.authority_id ||
+        input.organization_id !== authority.descriptor.organization_id
+      ) {
+        throw new OrganizationStateConflictError(
+          'organization authority connection does not match the write-once local pin',
+        );
+      }
+      const existing = this.loadAuthorityConnection(authority);
+      if (existing !== null) {
+        if (
+          existing.authority_base_url !== authorityBaseUrl ||
+          existing.authority_ca_pem !== authorityCaPem
+        ) {
+          throw new OrganizationStateConflictError(
+            'organization authority connection conflicts with the write-once local origin',
+          );
+        }
+        return existing;
+      }
+      this.database
+        .prepare(
+          `INSERT INTO organization_authority_connections (
+             singleton, authority_id, organization_id, authority_base_url,
+             authority_ca_pem
+           ) VALUES (1, ?, ?, ?, ?)`,
+        )
+        .run(
+          input.authority_id,
+          input.organization_id,
+          authorityBaseUrl,
+          authorityCaPem,
+        );
+      const saved = this.loadAuthorityConnection(authority);
+      if (saved === null) {
+        throw new OrganizationStateCorruptionError(
+          'organization authority connection was not saved',
+        );
+      }
+      return saved;
+    });
+  }
+
+  readAuthorityConnection(): StoredOrganizationAuthorityConnection | null {
+    return this.readTransaction(() => {
+      const authority = this.loadAuthorityPin();
+      if (authority === null) return null;
+      return this.loadAuthorityConnection(authority);
+    });
+  }
+
+  rebindAuthorityConnection(input: {
+    authority_id: string;
+    organization_id: string;
+    authority_base_url: string;
+    authority_ca_pem?: string | null;
+  }): StoredOrganizationAuthorityConnection {
+    const authorityBaseUrl = validateOrganizationAuthorityOrigin(
+      input.authority_base_url,
+    );
+    const authorityCaPem = validateAuthorityCaPem(input.authority_ca_pem);
+    return this.writeTransaction(() => {
+      const authority = this.loadAuthorityPin();
+      if (authority === null) {
+        throw new OrganizationStateUnavailableError(
+          'organization authority pin is unavailable',
+        );
+      }
+      if (
+        input.authority_id !== authority.descriptor.authority_id ||
+        input.organization_id !== authority.descriptor.organization_id
+      ) {
+        throw new OrganizationStateConflictError(
+          'organization authority rebind does not match the write-once local pin',
+        );
+      }
+      const existing = this.loadAuthorityConnection(authority);
+      if (existing === null) {
+        throw new OrganizationStateUnavailableError(
+          'organization authority connection is unavailable',
+        );
+      }
+      if (
+        existing.authority_base_url === authorityBaseUrl &&
+        existing.authority_ca_pem === authorityCaPem
+      ) {
+        return existing;
+      }
+      const result = this.database
+        .prepare(
+          `UPDATE organization_authority_connections
+           SET authority_base_url = ?, authority_ca_pem = ?
+           WHERE singleton = 1 AND authority_id = ? AND organization_id = ?
+             AND authority_base_url = ?`,
+        )
+        .run(
+          authorityBaseUrl,
+          authorityCaPem,
+          input.authority_id,
+          input.organization_id,
+          existing.authority_base_url,
+        );
+      if (result.changes !== 1) {
+        throw new OrganizationStateConflictError(
+          'organization authority connection changed concurrently',
+        );
+      }
+      const rebound = this.loadAuthorityConnection(authority);
+      if (rebound === null) {
+        throw new OrganizationStateCorruptionError(
+          'organization authority connection disappeared during rebind',
+        );
+      }
+      return rebound;
+    });
   }
 
   private enrollmentRow(): EnrollmentRow | undefined {
@@ -588,6 +795,40 @@ export class SqliteOrganizationStateStore implements OrganizationStateStore {
           .accepted_access_sha256 as Sha256Digest | null,
         trusted_time_high_watermark: enrollment.row.trusted_time_high_watermark,
       };
+    });
+  }
+
+  abandonPendingEnrollment(): boolean {
+    return this.writeTransaction(() => {
+      const authority = this.loadAuthorityPin();
+      if (authority === null) return false;
+      const enrollment = this.loadEnrollment(authority);
+      if (
+        enrollment === null ||
+        enrollment.receipt !== null ||
+        enrollment.row.status !== 'pending' ||
+        enrollment.row.accepted_access_sequence !== 0 ||
+        enrollment.row.accepted_access_sha256 !== null ||
+        enrollment.row.trusted_time_high_watermark !== null
+      ) {
+        return false;
+      }
+      const result = this.database
+        .prepare(
+          `DELETE FROM organization_enrollments
+           WHERE singleton = 1 AND request_sha256 = ? AND status = 'pending'
+             AND enrollment_id IS NULL AND receipt_sha256 IS NULL
+             AND receipt_json IS NULL AND accepted_access_sequence = 0
+             AND accepted_access_sha256 IS NULL
+             AND trusted_time_high_watermark IS NULL`,
+        )
+        .run(enrollment.row.request_sha256);
+      if (result.changes !== 1) {
+        throw new OrganizationStateConflictError(
+          'pending organization enrollment changed concurrently',
+        );
+      }
+      return true;
     });
   }
 

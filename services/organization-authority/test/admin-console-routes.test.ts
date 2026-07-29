@@ -276,7 +276,7 @@ describe('administrator console presentation', () => {
       expect(loginPage.headers.get('cache-control')).toBe('no-store');
       expect(loginPage.headers.get('x-frame-options')).toBe('DENY');
       expect(loginPage.headers.get('x-content-type-options')).toBe('nosniff');
-      expect(loginPage.headers.get('referrer-policy')).toBe('no-referrer');
+      expect(loginPage.headers.get('referrer-policy')).toBe('same-origin');
       const csp = loginPage.headers.get('content-security-policy') ?? '';
       expect(csp).toContain("frame-ancestors 'none'");
       expect(csp).toContain("script-src 'self'");

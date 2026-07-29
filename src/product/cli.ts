@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 
+import { randomUUID } from "node:crypto";
 import { readFileSync, realpathSync } from "node:fs";
 import { isAbsolute, join } from "node:path";
 import { parseArgs } from "node:util";
@@ -12,10 +13,12 @@ import {
   type ProductAdapterFactoryRegistry,
 } from "./adapter-factories.js";
 import {
+  assertProductAccess,
   prepareProductComposition,
   prepareProductStateRoot,
   resolveProductClock,
   type PrepareProductCompositionOptions,
+  type ProductAccessGate,
   type ProductComposition,
 } from "./composition.js";
 import {
@@ -61,6 +64,20 @@ import {
   type IdentityCheckDependencies,
 } from "./federation/bootstrap/identity-check.js";
 import { FileInstallationSigner } from "./machine/security/file-installation-signer.js";
+import type { InstallationSigner } from "./machine/security/installation-signer.js";
+import {
+  createLocalOrganizationRuntime,
+  DEFAULT_LOCAL_ORGANIZATION_LEASE_TTL_MS,
+  HttpOrganizationAuthorityClient,
+  OrganizationRuntimeAccessController,
+  OrganizationAuthorityTransportError,
+  organizationEnrollmentGrantSha256,
+  readPrivateOrganizationEnrollmentInvitation,
+  SqliteOrganizationStateStore,
+  validateOrganizationAuthorityDescriptorResponse,
+  type OrganizationInstallationAccessDecisionV1,
+  verifyOrganizationAuthorityPin,
+} from "./organization/index.js";
 import { createProductCredentialResolver } from "./credentials.js";
 import {
   abortFounderBootstrap,
@@ -69,6 +86,10 @@ import {
   statusFounderBootstrap,
   type FounderBootstrapCeremonyDependencies,
 } from "./federation/bootstrap/founder-bootstrap-ceremony.js";
+import {
+  mintFounderBootstrapIds,
+  type FounderBootstrapIds,
+} from "./federation/bootstrap/bootstrap.js";
 import { FederatedApprovalCapture } from "./federation/approval-capture.js";
 import {
   openFounderFederationRuntime,
@@ -89,6 +110,7 @@ import {
 } from "./federation/legacy-classification.js";
 import { resolveProductStatePaths } from "./paths.js";
 import { SqliteCoreStateStore } from "./storage/sqlite-core-state-store.js";
+import { readFileNoFollow } from "./secure-local-files.js";
 
 export interface ProductCliProcess {
   once: (event: "SIGINT" | "SIGTERM", listener: () => void) => unknown;
@@ -124,6 +146,12 @@ export interface ProductCliDependencies {
     kind: ProductLifecycleLockKind,
     options: { timeoutMs: number },
   ) => Promise<ReleaseProductLifecycleLock>;
+  organization?: {
+    installationSigner?: InstallationSigner;
+    fetch?: typeof fetch;
+    createInstallationId?: () => string;
+    allowInsecureLoopback?: boolean;
+  };
 }
 
 interface ParsedCommand {
@@ -140,6 +168,7 @@ interface ParsedCommand {
     | "doctor"
     | "identity-check"
     | "identity-bootstrap"
+    | "organization"
     | "export"
     | "service"
     | "backup"
@@ -167,6 +196,11 @@ interface ParsedCommand {
   renewChallenge?: boolean;
   independentCopyRoot?: string;
   allowExportableSoftwareKey?: boolean;
+  organizationAction?: "enroll" | "status" | "refresh" | "rebind";
+  invitationPath?: string;
+  authorityPin?: string;
+  authorityUrl?: string;
+  authorityCaPath?: string;
 }
 
 const PRODUCT_VERSION = (
@@ -191,6 +225,10 @@ Usage:
   echo-brain identity-bootstrap status --config <absolute-path> --session <uuid> [--renew-challenge]
   echo-brain identity-bootstrap commit --config <absolute-path> --session <uuid> --confirm <sha256:...> --independent-copy-root <absolute-path>
   echo-brain identity-bootstrap abort --config <absolute-path> --session <uuid> --confirm <installation-key-sha256>
+  echo-brain organization enroll --config <absolute-path> --invitation <absolute-path> --authority-pin <sha256:...> [--authority-ca <absolute-path>] --allow-exportable-software-key
+  echo-brain organization status --config <absolute-path>
+  echo-brain organization refresh --config <absolute-path>
+  echo-brain organization rebind --config <absolute-path> --authority-url <https-origin> --authority-pin <sha256:...> [--authority-ca <absolute-path>]
   echo-brain export --config <absolute-path>
   echo-brain service <install|start|stop|restart|status|uninstall> --config <absolute-path>
   echo-brain backup --config <absolute-path> --backup-root <absolute-path> [--id <operation-id>]
@@ -221,6 +259,7 @@ function parseCommand(argv: readonly string[]): ParsedCommand {
     command !== "doctor" &&
     command !== "identity-check" &&
     command !== "identity-bootstrap" &&
+    command !== "organization" &&
     command !== "export" &&
     command !== "service" &&
     command !== "backup" &&
@@ -234,12 +273,14 @@ function parseCommand(argv: readonly string[]): ParsedCommand {
     command !== "run"
   ) {
     throw new Error(
-      "usage: echo-brain <onboard|init|reconfigure|status|doctor|identity-check|identity-bootstrap|export|service|backup|restore|validate-config|selftest|run-once|run|approvals|approve|reject> --config <absolute-path>",
+      "usage: echo-brain <onboard|init|reconfigure|status|doctor|identity-check|identity-bootstrap|organization|export|service|backup|restore|validate-config|selftest|run-once|run|approvals|approve|reject> --config <absolute-path>",
     );
   }
   let serviceAction: ProductServiceAction | undefined;
   let identityBootstrapAction:
     "begin" | "status" | "commit" | "abort" | undefined;
+  let organizationAction:
+    "enroll" | "status" | "refresh" | "rebind" | undefined;
   let optionOffset = 1;
   if (command === "service") {
     const action = argv[1];
@@ -273,6 +314,21 @@ function parseCommand(argv: readonly string[]): ParsedCommand {
     identityBootstrapAction = action;
     optionOffset = 2;
   }
+  if (command === "organization") {
+    const action = argv[1];
+    if (
+      action !== "enroll" &&
+      action !== "status" &&
+      action !== "refresh" &&
+      action !== "rebind"
+    ) {
+      throw new Error(
+        "usage: echo-brain organization <enroll|status|refresh|rebind> --config <absolute-path>",
+      );
+    }
+    organizationAction = action;
+    optionOffset = 2;
+  }
   const parsed = parseArgs({
     args: [...argv.slice(optionOffset)],
     strict: true,
@@ -295,6 +351,10 @@ function parseCommand(argv: readonly string[]): ParsedCommand {
       "renew-challenge": { type: "boolean" },
       "independent-copy-root": { type: "string" },
       "allow-exportable-software-key": { type: "boolean" },
+      invitation: { type: "string" },
+      "authority-pin": { type: "string" },
+      "authority-url": { type: "string" },
+      "authority-ca": { type: "string" },
     },
   });
   if (parsed.values.config === undefined)
@@ -310,6 +370,7 @@ function parseCommand(argv: readonly string[]): ParsedCommand {
       command === "doctor" ||
       command === "identity-check" ||
       command === "identity-bootstrap" ||
+      command === "organization" ||
       command === "export" ||
       command === "service" ||
       command === "service-run" ||
@@ -389,7 +450,7 @@ function parseCommand(argv: readonly string[]): ParsedCommand {
         "--allow-exportable-software-key is only valid with identity-bootstrap begin",
       );
     }
-  } else {
+  } else if (command !== "organization") {
     if (parsed.values["independent-copy-root"] !== undefined) {
       throw new Error(
         "--independent-copy-root is only valid with identity-bootstrap commit",
@@ -398,6 +459,94 @@ function parseCommand(argv: readonly string[]): ParsedCommand {
     if (parsed.values["allow-exportable-software-key"] === true) {
       throw new Error(
         "--allow-exportable-software-key is only valid with identity-bootstrap begin",
+      );
+    }
+  }
+  if (command === "organization") {
+    if (organizationAction === "enroll") {
+      if (parsed.values.invitation === undefined) {
+        throw new Error("organization enroll requires --invitation");
+      }
+      if (!isAbsolute(parsed.values.invitation)) {
+        throw new Error("--invitation must be an absolute path");
+      }
+      if (parsed.values["authority-pin"] === undefined) {
+        throw new Error(
+          "organization enroll requires --authority-pin from an independent trusted channel",
+        );
+      }
+      if (parsed.values["authority-url"] !== undefined) {
+        throw new Error("--authority-url is only valid with organization rebind");
+      }
+      if (
+        parsed.values["authority-ca"] !== undefined &&
+        !isAbsolute(parsed.values["authority-ca"])
+      ) {
+        throw new Error("--authority-ca must be an absolute path");
+      }
+    } else if (organizationAction === "rebind") {
+      if (
+        parsed.values["authority-url"] === undefined ||
+        parsed.values["authority-pin"] === undefined
+      ) {
+        throw new Error(
+          "organization rebind requires --authority-url and --authority-pin",
+        );
+      }
+      if (parsed.values.invitation !== undefined) {
+        throw new Error("--invitation is only valid with organization enroll");
+      }
+      if (parsed.values["allow-exportable-software-key"] === true) {
+        throw new Error(
+          "--allow-exportable-software-key is only valid with organization enroll",
+        );
+      }
+      if (
+        parsed.values["authority-ca"] !== undefined &&
+        !isAbsolute(parsed.values["authority-ca"])
+      ) {
+        throw new Error("--authority-ca must be an absolute path");
+      }
+    } else {
+      if (parsed.values.invitation !== undefined) {
+        throw new Error(
+          "--invitation is only valid with organization enroll",
+        );
+      }
+      if (parsed.values["authority-pin"] !== undefined) {
+        throw new Error(
+          "--authority-pin is only valid with organization enroll or rebind",
+        );
+      }
+      if (parsed.values["authority-url"] !== undefined) {
+        throw new Error("--authority-url is only valid with organization rebind");
+      }
+      if (parsed.values["authority-ca"] !== undefined) {
+        throw new Error(
+          "--authority-ca is only valid with organization enroll or rebind",
+        );
+      }
+      if (parsed.values["allow-exportable-software-key"] === true) {
+        throw new Error(
+          "--allow-exportable-software-key is only valid with organization enroll",
+        );
+      }
+    }
+  } else {
+    if (parsed.values.invitation !== undefined) {
+      throw new Error("--invitation is only valid with organization enroll");
+    }
+    if (parsed.values["authority-pin"] !== undefined) {
+      throw new Error(
+        "--authority-pin is only valid with organization enroll or rebind",
+      );
+    }
+    if (parsed.values["authority-url"] !== undefined) {
+      throw new Error("--authority-url is only valid with organization rebind");
+    }
+    if (parsed.values["authority-ca"] !== undefined) {
+      throw new Error(
+        "--authority-ca is only valid with organization enroll or rebind",
       );
     }
   }
@@ -481,6 +630,19 @@ function parseCommand(argv: readonly string[]): ParsedCommand {
     ...(parsed.values["allow-exportable-software-key"] === true
       ? { allowExportableSoftwareKey: true }
       : {}),
+    ...(organizationAction === undefined ? {} : { organizationAction }),
+    ...(parsed.values.invitation === undefined
+      ? {}
+      : { invitationPath: parsed.values.invitation }),
+    ...(parsed.values["authority-pin"] === undefined
+      ? {}
+      : { authorityPin: parsed.values["authority-pin"] }),
+    ...(parsed.values["authority-url"] === undefined
+      ? {}
+      : { authorityUrl: parsed.values["authority-url"] }),
+    ...(parsed.values["authority-ca"] === undefined
+      ? {}
+      : { authorityCaPath: parsed.values["authority-ca"] }),
   };
 }
 
@@ -589,6 +751,67 @@ function identityRequiresFederation(stateDirectory: string): boolean {
   return requiresFounderFederation(stateDirectory, identity);
 }
 
+function resolveOrganizationAccessGate(
+  config: ProductRuntimeConfig,
+  dependencies: ProductCliDependencies,
+): ProductAccessGate | undefined {
+  if (dependencies.composition?.accessGate !== undefined) {
+    return dependencies.composition.accessGate;
+  }
+  const databasePath = resolveProductStatePaths(config.state_dir).database;
+  const state = new SqliteOrganizationStateStore(databasePath);
+  let hasPin = false;
+  let authorityBaseUrl: string | null = null;
+  let authorityCaPem: string | null = null;
+  try {
+    hasPin = state.readPinnedAuthority() !== null;
+    const connection = state.readAuthorityConnection();
+    authorityBaseUrl = connection?.authority_base_url ?? null;
+    authorityCaPem = connection?.authority_ca_pem ?? null;
+  } finally {
+    state.close();
+  }
+  // Unenrolled profiles retain the disposable rehearsal behavior. Once an
+  // authority is pinned, authorization becomes mandatory and fail-closed.
+  if (!hasPin) return undefined;
+  if (authorityBaseUrl === null) {
+    return {
+      async assertAuthorized() {
+        throw new Error(
+          "organization authority connection is unavailable for the pinned organization",
+        );
+      },
+    };
+  }
+  const signer =
+    dependencies.organization?.installationSigner ??
+    new FileInstallationSigner(
+      join(config.state_dir, "installation", "keys"),
+    );
+  const now = resolveProductClock(dependencies.now);
+  return new OrganizationRuntimeAccessController({
+    now,
+    openRuntime: () =>
+      createLocalOrganizationRuntime({
+        databasePath,
+        authorityBaseUrl,
+        installationSigner: signer,
+        clock: { now },
+        ...(dependencies.organization?.fetch === undefined
+          ? authorityCaPem === null
+            ? {}
+            : { authorityCaPem }
+          : { fetch: dependencies.organization.fetch }),
+        ...(dependencies.organization?.allowInsecureLoopback === undefined
+          ? {}
+          : {
+              allowInsecureLoopback:
+                dependencies.organization.allowInsecureLoopback,
+            }),
+      }),
+  });
+}
+
 async function createCliComposition(
   config: ProductRuntimeConfig,
   classifier: ClassifyStateFilesystem,
@@ -598,6 +821,10 @@ async function createCliComposition(
     dependencies.adapterFactories ?? createDefaultAdapterFactories();
   const now = dependencies.composition?.now ?? dependencies.now;
   const customComposition = dependencies.composition;
+  const accessGate = resolveOrganizationAccessGate(config, dependencies);
+  // This check precedes adapter factories and credential resolution. The
+  // composition repeats it immediately before health checks and every cycle.
+  await assertProductAccess(accessGate);
   const hasCustomFederationWiring =
     customComposition?.state !== undefined ||
     customComposition?.approvals !== undefined ||
@@ -652,6 +879,7 @@ async function createCliComposition(
     return await prepareProductComposition(config, registry, {
       ...customComposition,
       classifyStateFilesystem: classifier,
+      accessGate,
       identityCheck: resolveIdentityCheckDependencies(
         customComposition?.identityCheck ?? dependencies.identityCheck,
         config,
@@ -762,6 +990,7 @@ async function createCliComposition(
     return await prepareProductComposition(config, registry, {
       ...customComposition,
       classifyStateFilesystem: async () => classification,
+      accessGate,
       state,
       approvals,
       identityCheck,
@@ -832,7 +1061,7 @@ function resolveIdentityCheckDependencies(
     credentialResolver,
     runtimeConfig,
     signer: new FileInstallationSigner(
-      join(runtimeConfig.state_dir, "identity", "installation-keys"),
+      join(runtimeConfig.state_dir, "installation", "keys"),
     ),
   };
 }
@@ -869,11 +1098,33 @@ function resolveFounderBootstrapDependencies(
     configured.signer ??
     dependencies.identityCheck?.signer ??
     new FileInstallationSigner(
-      join(runtimeConfig.state_dir, "identity", "installation-keys"),
+      join(runtimeConfig.state_dir, "installation", "keys"),
     );
+  const idsFactory =
+    configured.idsFactory ??
+    (() => {
+      const ids = mintFounderBootstrapIds();
+      const state = new SqliteOrganizationStateStore(
+        resolveProductStatePaths(runtimeConfig.state_dir).database,
+      );
+      try {
+        const enrollment = state.readEnrollment();
+        if (enrollment === null) return ids;
+        return {
+          ...ids,
+          organization_id: enrollment.request.organization_id,
+          principal_id: enrollment.request.principal_id,
+          membership_id: enrollment.request.membership_id,
+          installation_id: enrollment.request.installation_id,
+        } satisfies FounderBootstrapIds;
+      } finally {
+        state.close();
+      }
+    });
   return {
     ...configured,
     signer,
+    idsFactory,
     credentialResolver:
       configured.credentialResolver ??
       createProductCredentialResolver(dependencies.environment ?? process.env),
@@ -1080,6 +1331,61 @@ function printOperatorError(
   });
 }
 
+function organizationAccessSummary(
+  decision: OrganizationInstallationAccessDecisionV1,
+): Record<string, unknown> {
+  const state = decision.state;
+  return {
+    permitted: decision.permitted,
+    status: state.status,
+    authority_id: state.authority_id,
+    organization_id: state.organization_id,
+    principal_id: state.principal_id,
+    membership_id: state.membership_id,
+    membership_type: state.membership_type,
+    installation_id: state.installation_id,
+    enrollment_id: state.enrollment_id,
+    access_state_sequence: state.access_state_sequence,
+    evaluated_at: state.evaluated_at,
+    valid_until: state.valid_until,
+    revocation_reason: state.revocation_reason,
+  };
+}
+
+function organizationConnectionSummary(
+  connection: ReturnType<
+    SqliteOrganizationStateStore["readAuthorityConnection"]
+  >,
+): Record<string, unknown> | null {
+  if (connection === null) return null;
+  return {
+    authority_id: connection.authority_id,
+    organization_id: connection.organization_id,
+    authority_base_url: connection.authority_base_url,
+    authority_ca_configured: connection.authority_ca_pem !== null,
+    configured_at: connection.configured_at,
+  };
+}
+
+function readOrganizationAuthorityCa(path: string | undefined):
+  | string
+  | undefined {
+  if (path === undefined) return undefined;
+  const bytes = readFileNoFollow(path, "organization authority CA");
+  if (bytes.byteLength === 0 || bytes.byteLength > 64 * 1024) {
+    throw new Error("organization authority CA must contain 1-65536 bytes");
+  }
+  const value = bytes.toString("utf8");
+  if (
+    value.includes("\0") ||
+    !value.includes("-----BEGIN CERTIFICATE-----") ||
+    !value.includes("-----END CERTIFICATE-----")
+  ) {
+    throw new Error("organization authority CA is not a PEM certificate");
+  }
+  return value;
+}
+
 export async function runProductCli(
   argv: readonly string[],
   dependencies: ProductCliDependencies = {},
@@ -1122,6 +1428,389 @@ export async function runProductCli(
   }
   const classifier =
     dependencies.classifyStateFilesystem ?? classifyStateFilesystem;
+  if (parsed.command === "organization") {
+    const action = parsed.organizationAction!;
+    const usesDefaultFileSigner =
+      dependencies.organization?.installationSigner === undefined;
+    if (
+      action === "enroll" &&
+      usesDefaultFileSigner &&
+      parsed.allowExportableSoftwareKey !== true
+    ) {
+      print(stderr, {
+        ok: false,
+        command: parsed.command,
+        action,
+        code: "software_key_acknowledgement_required",
+        error:
+          "organization enroll uses an exportable software key; repeat with --allow-exportable-software-key to acknowledge pilot-grade key assurance",
+      });
+      return 2;
+    }
+    const probe = await probeConfig(config, classifier);
+    if (!probe.ok) {
+      print(stderr, {
+        ok: false,
+        command: parsed.command,
+        action,
+        filesystem: probe.filesystem,
+      });
+      return 1;
+    }
+    try {
+      const initialized = await createProductOperator(
+        parsed.configPath,
+        config,
+        dependencies,
+      ).status();
+      if (!initialized.initialized) {
+        throw new ProductOperatorError(
+          "not_initialized",
+          "run `echo-brain init --config <absolute-path>` before organization enrollment",
+        );
+      }
+    } catch (error) {
+      printOperatorError(stderr, `${parsed.command} ${action}`, error);
+      return 1;
+    }
+
+    let releases: readonly ReleaseProductLifecycleLock[] = [];
+    let organizationResult: Record<string, unknown> | undefined;
+    let operationFailure: unknown;
+    try {
+      releases =
+        action === "status"
+          ? [
+              await lifecycleLock(
+                dependencies,
+                config.state_dir,
+                "maintenance",
+                0,
+              ),
+            ]
+          : await acquireMaintenanceWindow(
+              config.state_dir,
+              dependencies,
+              0,
+            );
+      const paths = resolveProductStatePaths(config.state_dir);
+      const now = resolveProductClock(dependencies.now);
+
+      if (action === "status") {
+        const state = new SqliteOrganizationStateStore(paths.database);
+        try {
+          const connection = state.readAuthorityConnection();
+          const enrollment = state.readEnrollment();
+          if (enrollment === null) {
+            organizationResult = {
+              ok: true,
+              command: parsed.command,
+              action,
+              enrolled: false,
+              authority_connection: organizationConnectionSummary(connection),
+            };
+          } else if (
+            enrollment.receipt === null ||
+            enrollment.accepted_access_sequence === 0
+          ) {
+            organizationResult = {
+              ok: true,
+              command: parsed.command,
+              action,
+              enrolled: false,
+              enrollment_pending: true,
+              authority_connection: organizationConnectionSummary(connection),
+              installation_id: enrollment.request.installation_id,
+              membership_id: enrollment.request.membership_id,
+            };
+          } else {
+            const decision = state.verifyCurrentAccess({
+              now: now(),
+              maximum_active_ttl_ms:
+                DEFAULT_LOCAL_ORGANIZATION_LEASE_TTL_MS,
+            });
+            organizationResult = {
+              ok: true,
+              command: parsed.command,
+              action,
+              enrolled: true,
+              authority_connection: organizationConnectionSummary(connection),
+              access: organizationAccessSummary(decision),
+            };
+          }
+        } finally {
+          state.close();
+        }
+      } else if (action === "enroll") {
+        const invitation = readPrivateOrganizationEnrollmentInvitation(
+          parsed.invitationPath!,
+        );
+        if (invitation.status !== "issued" || invitation.issued === null) {
+          throw new Error(
+            "organization invitation has not been issued by its authority",
+          );
+        }
+        if (invitation.authority_pin_sha256 !== parsed.authorityPin) {
+          throw new Error(
+            "independently supplied authority PIN does not match the invitation",
+          );
+        }
+        const signer =
+          dependencies.organization?.installationSigner ??
+          new FileInstallationSigner(
+            join(config.state_dir, "installation", "keys"),
+          );
+        const authorityCaPem = readOrganizationAuthorityCa(
+          parsed.authorityCaPath,
+        );
+        const runtime = createLocalOrganizationRuntime({
+          databasePath: paths.database,
+          authorityBaseUrl: invitation.authority_base_url,
+          installationSigner: signer,
+          clock: { now },
+          ...(dependencies.organization?.fetch === undefined
+            ? authorityCaPem === undefined
+              ? {}
+              : { authorityCaPem }
+            : { fetch: dependencies.organization.fetch }),
+          ...(dependencies.organization?.allowInsecureLoopback === undefined
+            ? {}
+            : {
+                allowInsecureLoopback:
+                  dependencies.organization.allowInsecureLoopback,
+              }),
+        });
+        try {
+          const descriptor =
+            validateOrganizationAuthorityDescriptorResponse(
+              await runtime.authorityClient.readAuthorityDescriptor(),
+            ).authority_descriptor;
+          if (
+            descriptor.authority_id !== invitation.authority_id ||
+            descriptor.organization_id !== invitation.organization_id
+          ) {
+            throw new Error(
+              "organization invitation does not identify the authority at its configured origin",
+            );
+          }
+          const retained = runtime.state.readEnrollment();
+          const activeIdentity = new ActiveIdentityBundleStore(
+            config.state_dir,
+          ).loadVerified(config);
+          if (
+            activeIdentity !== null &&
+            (activeIdentity.manifest.organization.organization_id !==
+              invitation.organization_id ||
+              activeIdentity.manifest.principal.principal_id !==
+                invitation.issued.principal_id ||
+              activeIdentity.manifest.membership.membership_id !==
+                invitation.membership_id)
+          ) {
+            throw new Error(
+              "organization invitation does not match the active product identity",
+            );
+          }
+          const installationId =
+            activeIdentity?.manifest.installation.installation_id ??
+            retained?.request.installation_id ??
+            (dependencies.organization?.createInstallationId?.() ??
+              `ins_${randomUUID()}`);
+          const grant = Buffer.from(
+            invitation.enrollment_grant_base64url,
+            "base64url",
+          );
+          try {
+            const invitationExpired =
+              Date.parse(invitation.issued.expires_at) <= Date.parse(now());
+            const retainedMatchesInvitation =
+              retained !== null &&
+              retained.request.authority_id === invitation.authority_id &&
+              retained.request.organization_id ===
+                invitation.organization_id &&
+              retained.request.principal_id ===
+                invitation.issued.principal_id &&
+              retained.request.membership_id === invitation.membership_id &&
+              retained.request.enrollment_grant_sha256 ===
+                organizationEnrollmentGrantSha256(grant);
+            if (invitationExpired && !retainedMatchesInvitation) {
+              throw new Error("organization invitation has expired");
+            }
+            let decision: OrganizationInstallationAccessDecisionV1;
+            try {
+              decision = await runtime.coordinator.enroll({
+                authorityBaseUrl: invitation.authority_base_url,
+                ...(authorityCaPem === undefined
+                  ? {}
+                  : { authorityCaPem }),
+                authorityDescriptor: descriptor,
+                independentlyTrustedAuthorityPin: parsed.authorityPin!,
+                enrollmentGrant: grant,
+                principalId: invitation.issued.principal_id,
+                membershipId: invitation.membership_id,
+                installationId,
+              });
+            } catch (error) {
+              if (
+                invitationExpired &&
+                error instanceof OrganizationAuthorityTransportError &&
+                error.code === "unauthorized" &&
+                error.status === 401 &&
+                runtime.state.abandonPendingEnrollment()
+              ) {
+                throw new Error(
+                  "the expired invitation was not consumed by the authority; the pending local request was cleared, so obtain a fresh invitation and retry",
+                );
+              }
+              throw error;
+            }
+            organizationResult = {
+              ok: true,
+              command: parsed.command,
+              action,
+              enrolled: true,
+              invitation_expires_at: invitation.issued.expires_at,
+              ...(usesDefaultFileSigner
+                ? {
+                    key_assurance_policy:
+                      "software_key_development_only",
+                  }
+                : {}),
+              access: organizationAccessSummary(decision),
+              next_step: `echo-brain organization status --config ${parsed.configPath}`,
+            };
+          } finally {
+            grant.fill(0);
+          }
+        } finally {
+          runtime.close();
+        }
+      } else if (action === "rebind") {
+        const authorityCaPem = readOrganizationAuthorityCa(
+          parsed.authorityCaPath,
+        );
+        const state = new SqliteOrganizationStateStore(paths.database);
+        try {
+          const pinned = state.readPinnedAuthority();
+          const connection = state.readAuthorityConnection();
+          if (pinned === null || connection === null) {
+            throw new Error(
+              "organization authority connection is unavailable; enroll this machine first",
+            );
+          }
+          if (pinned.authority_pin_sha256 !== parsed.authorityPin) {
+            throw new Error(
+              "independently supplied authority PIN does not match the locally pinned authority",
+            );
+          }
+          const client = new HttpOrganizationAuthorityClient({
+            baseUrl: parsed.authorityUrl!,
+            ...(dependencies.organization?.fetch === undefined
+              ? authorityCaPem === undefined
+                ? {}
+                : { authorityCaPem }
+              : { fetch: dependencies.organization.fetch }),
+            ...(dependencies.organization?.allowInsecureLoopback === undefined
+              ? {}
+              : {
+                  allowInsecureLoopback:
+                    dependencies.organization.allowInsecureLoopback,
+                }),
+          });
+          const descriptor =
+            validateOrganizationAuthorityDescriptorResponse(
+              await client.readAuthorityDescriptor(),
+            ).authority_descriptor;
+          verifyOrganizationAuthorityPin(descriptor, parsed.authorityPin);
+          if (
+            descriptor.authority_id !== connection.authority_id ||
+            descriptor.organization_id !== connection.organization_id
+          ) {
+            throw new Error(
+              "new organization authority endpoint identifies a different authority",
+            );
+          }
+          const rebound = state.rebindAuthorityConnection({
+            authority_id: descriptor.authority_id,
+            organization_id: descriptor.organization_id,
+            authority_base_url: parsed.authorityUrl!,
+            ...(authorityCaPem === undefined
+              ? {}
+              : { authority_ca_pem: authorityCaPem }),
+          });
+          organizationResult = {
+            ok: true,
+            command: parsed.command,
+            action,
+            authority_connection: organizationConnectionSummary(rebound),
+          };
+        } finally {
+          state.close();
+        }
+      } else {
+        const state = new SqliteOrganizationStateStore(paths.database);
+        const connection = state.readAuthorityConnection();
+        state.close();
+        if (connection === null) {
+          throw new Error(
+            "organization authority connection is unavailable; enroll this machine first",
+          );
+        }
+        const signer =
+          dependencies.organization?.installationSigner ??
+          new FileInstallationSigner(
+            join(config.state_dir, "installation", "keys"),
+          );
+        const runtime = createLocalOrganizationRuntime({
+          databasePath: paths.database,
+          authorityBaseUrl: connection.authority_base_url,
+          installationSigner: signer,
+          clock: { now },
+          ...(dependencies.organization?.fetch === undefined
+            ? connection.authority_ca_pem === null
+              ? {}
+              : { authorityCaPem: connection.authority_ca_pem }
+            : { fetch: dependencies.organization.fetch }),
+          ...(dependencies.organization?.allowInsecureLoopback === undefined
+            ? {}
+            : {
+                allowInsecureLoopback:
+                  dependencies.organization.allowInsecureLoopback,
+              }),
+        });
+        try {
+          const decision = await runtime.coordinator.refreshAccess();
+          organizationResult = {
+            ok: true,
+            command: parsed.command,
+            action,
+            enrolled: true,
+            access: organizationAccessSummary(decision),
+          };
+        } finally {
+          runtime.close();
+        }
+      }
+    } catch (error) {
+      operationFailure = error;
+    }
+    try {
+      await releaseLifecycleLocks(releases);
+    } catch (error) {
+      operationFailure ??= new Error(
+        `lifecycle lock release failed: ${(error as Error).message}`,
+      );
+    }
+    if (operationFailure !== undefined) {
+      printOperatorError(
+        stderr,
+        `${parsed.command} ${action}`,
+        operationFailure,
+      );
+      return 1;
+    }
+    print(stdout, organizationResult!);
+    return 0;
+  }
   if (parsed.command === "identity-bootstrap") {
     const action = parsed.identityBootstrapAction!;
     const usesDefaultFileSigner =

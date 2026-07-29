@@ -26,5 +26,10 @@ singleton state-directory lock until graceful SIGINT/SIGTERM shutdown. Its
 health proof is pinned to a fingerprint of the exact canonical database/key
 files, listener, credentials, and access policy.
 
-Runtime ownership uses an authenticated kernel guard, so an unrelated process
-occupying a stale guard port cannot impersonate a live authority.
+Runtime ownership uses an authenticated, filesystem-visible Unix-socket guard.
+The Docker deployment places the socket and lock in a shared native
+coordination volume; direct process deployments default them to the state
+directory. The same ownership proof is therefore visible across container
+network namespaces without depending on a shared TCP namespace. An unrelated
+process cannot impersonate a live authority by occupying an abandoned socket
+pathname.

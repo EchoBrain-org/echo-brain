@@ -91,6 +91,15 @@ config/state binding, signing identity, database, and runtime ownership.
 The authority remains a foreground process. Process restart and persistent
 volume backup belong to the container or service manager.
 
+Runtime ownership is authenticated through a private Unix socket beside its
+lock. The portable Docker deployment sets
+`ECHO_AUTHORITY_COORDINATION_ROOT` to a dedicated shared Docker volume so the
+guard has native Linux socket semantics without placing ephemeral artifacts in
+durable organization state. A direct process deployment defaults to the state
+directory. An authenticated live owner is never replaced; an invalid or
+ambiguous proof fails closed. A stale lock is recovered only when the shared
+socket listener is absent.
+
 The separate administrator CLI speaks HTTP only and never opens SQLite:
 
 ```sh

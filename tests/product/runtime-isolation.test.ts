@@ -265,6 +265,42 @@ describe('isolated product runtime', () => {
     });
   });
 
+  it('checks organization access before contacting configured adapters', async () => {
+    const directory = mkdtempSync(join(tmpdir(), 'echo-access-gate-'));
+    directories.push(directory);
+    const fixtures = registeredFixtures();
+    let healthChecks = 0;
+    fixtures.meetingSource.healthCheck = async () => {
+      healthChecks += 1;
+      return {
+        status: 'healthy',
+        checked_at: '2026-07-28T20:00:00.000Z',
+      };
+    };
+
+    await expect(
+      prepareProductComposition(
+        { ...config(), state_dir: join(directory, 'state') },
+        fixtures.registry,
+        {
+          classifyStateFilesystem: async () => ({
+            kind: 'local',
+            raw: 'apfs',
+          }),
+          accessGate: {
+            async assertAuthorized() {
+              throw new Error('signed organization lease expired');
+            },
+          },
+        },
+      ),
+    ).rejects.toMatchObject({
+      code: 'organization_access_denied',
+      message: expect.stringContaining('signed organization lease expired'),
+    });
+    expect(healthChecks).toBe(0);
+  });
+
   it('starts the baseline composition in dependency order with typed registered adapters', async () => {
     const starts: string[] = [];
     const stops: string[] = [];

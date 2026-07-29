@@ -19,6 +19,7 @@ import {
 } from '@echo-brain/organization-api';
 import type { OrganizationAuthorityClient } from './authority-client.js';
 import { OrganizationAuthorityConflictError } from './authority-client.js';
+import { createOrganizationAuthorityCaFetch } from './authority-ca-fetch.js';
 
 const MAX_RESPONSE_BYTES = 64 * 1024;
 const DEFAULT_TIMEOUT_MS = 15_000;
@@ -27,6 +28,7 @@ type ConflictHandling = 'transport-error' | 'stale-access-state';
 export interface HttpOrganizationAuthorityClientOptions {
   baseUrl: string;
   fetch?: typeof fetch;
+  authorityCaPem?: string;
   timeoutMs?: number;
   /** Development/test only. Plain HTTP is restricted to loopback hosts. */
   allowInsecureLoopback?: boolean;
@@ -127,7 +129,16 @@ export class HttpOrganizationAuthorityClient implements OrganizationAuthorityCli
       options.baseUrl,
       options.allowInsecureLoopback === true,
     );
-    this.fetchImpl = options.fetch ?? globalThis.fetch;
+    if (options.fetch !== undefined && options.authorityCaPem !== undefined) {
+      throw new Error(
+        'organization authority custom fetch and CA PEM are mutually exclusive',
+      );
+    }
+    this.fetchImpl =
+      options.fetch ??
+      (options.authorityCaPem === undefined
+        ? globalThis.fetch
+        : createOrganizationAuthorityCaFetch(options.authorityCaPem));
     if (typeof this.fetchImpl !== 'function') {
       throw new Error('organization authority HTTP transport is unavailable');
     }

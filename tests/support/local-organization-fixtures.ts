@@ -316,6 +316,7 @@ export function mutableClock(value = NOW): MutableClock {
 
 export function enrollmentInput(authority: TestAuthority) {
   return {
+    authorityBaseUrl: 'https://authority.example.test',
     authorityDescriptor: authority.descriptor,
     independentlyTrustedAuthorityPin: authority.pin,
     enrollmentGrant: Uint8Array.from(GRANT),

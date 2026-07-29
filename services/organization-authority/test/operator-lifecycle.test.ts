@@ -1,4 +1,4 @@
-import { createHash } from 'node:crypto';
+import { createHash, createHmac } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
 import {
   chmodSync,
@@ -15,7 +15,7 @@ import {
 import { createServer as createHttpServer } from 'node:http';
 import { createServer as createNetServer, type Socket } from 'node:net';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { inspectAuthorityDatabaseReadOnly } from '../src/adapters/persistence/sqlite/read-only-inspection.js';
 import { openAuthorityDatabase } from '../src/adapters/persistence/sqlite/open-database.js';
@@ -120,6 +120,35 @@ afterEach(() => {
 });
 
 describe('organization authority operator lifecycle', () => {
+  it('places runtime ownership in a private directory below the configured shared root', async () => {
+    const fixture = await initializedFixture();
+    const coordinationRoot = realpathSync(
+      mkdtempSync('/tmp/echo-authority-coordination-'),
+    );
+    temporaryRoots.push(coordinationRoot);
+    chmodSync(coordinationRoot, 0o1777);
+    const previous = process.env.ECHO_AUTHORITY_COORDINATION_ROOT;
+    process.env.ECHO_AUTHORITY_COORDINATION_ROOT = coordinationRoot;
+    try {
+      const lockPath = authorityRuntimeLockPath(fixture.stateDirectory);
+      expect(dirname(lockPath)).not.toBe(fixture.stateDirectory);
+      expect(dirname(dirname(lockPath))).toBe(coordinationRoot);
+      expect(mode(dirname(lockPath))).toBe(0o700);
+      const runtimeLock = await acquireAuthorityRuntimeLock(
+        fixture.stateDirectory,
+        `sha256:${'a'.repeat(64)}`,
+      );
+      await runtimeLock.release();
+      expect(existsSync(lockPath)).toBe(false);
+    } finally {
+      if (previous === undefined) {
+        delete process.env.ECHO_AUTHORITY_COORDINATION_ROOT;
+      } else {
+        process.env.ECHO_AUTHORITY_COORDINATION_ROOT = previous;
+      }
+    }
+  });
+
   it('initializes private state once and writes a secret-free strict config last', async () => {
     const fixture = await initializedFixture();
     const firstConfig = readAuthorityRuntimeConfig(fixture.configPath);
@@ -396,7 +425,6 @@ describe('organization authority operator lifecycle', () => {
     const runtimeLock = await acquireAuthorityRuntimeLock(
       fixture.stateDirectory,
       authorityRuntimeFingerprint(runtimeConfig),
-      runtimeConfig.port,
     );
     const observedHeaders: Array<
       Record<string, string | string[] | undefined>
@@ -453,7 +481,6 @@ describe('organization authority operator lifecycle', () => {
     const runtimeLock = await acquireAuthorityRuntimeLock(
       fixture.stateDirectory,
       alternateFingerprint,
-      canonical.port,
     );
     try {
       const report = await inspectAuthorityStatus(fixture.configPath);
@@ -478,6 +505,13 @@ describe('organization authority operator lifecycle', () => {
     const serveConfig = resolveAuthorityServeConfig(config);
     const runtime = await startOrganizationAuthority(serveConfig);
     try {
+      const lock = JSON.parse(
+        readFileSync(authorityRuntimeLockPath(fixture.stateDirectory), 'utf8'),
+      ) as { schema_version: number; guard_socket: string };
+      expect(lock.schema_version).toBe(2);
+      expect(
+        statSync(join(fixture.stateDirectory, lock.guard_socket)).isSocket(),
+      ).toBe(true);
       await expect(startOrganizationAuthority(serveConfig)).rejects.toThrow(
         'already running for this state directory',
       );
@@ -498,6 +532,11 @@ describe('organization authority operator lifecycle', () => {
       ok: true,
       running: false,
     });
+    expect(
+      readdirSync(fixture.stateDirectory).some((name) =>
+        name.startsWith('.g-'),
+      ),
+    ).toBe(false);
   });
 
   it('abandons kernel ownership but preserves recovery state when shutdown fails', async () => {
@@ -580,15 +619,13 @@ describe('organization authority operator lifecycle', () => {
   it('recovers a stale runtime lock even when its pid has been reused', async () => {
     const fixture = await initializedFixture();
     const lockPath = authorityRuntimeLockPath(fixture.stateDirectory);
-    let guardPort = await reserveLoopbackPort();
-    while (guardPort === fixture.port) guardPort = await reserveLoopbackPort();
     writeFileSync(
       lockPath,
       `${JSON.stringify({
-        schema_version: 1,
+        schema_version: 2,
         pid: process.pid,
         token: 'a'.repeat(64),
-        guard_port: guardPort,
+        guard_socket: `.g-${'a'.repeat(6)}`,
         runtime_fingerprint_sha256: `sha256:${'b'.repeat(64)}`,
       })}\n`,
       { flag: 'wx', mode: 0o600 },
@@ -630,53 +667,125 @@ describe('organization authority operator lifecycle', () => {
     ).toBe(false);
   });
 
-  it('rejects a wrong guard proof and serializes concurrent recovery from an unrelated listener', async () => {
+  it('upgrades a proven-stale schema-1 TCP ownership lock', async () => {
     const fixture = await initializedFixture();
     const lockPath = authorityRuntimeLockPath(fixture.stateDirectory);
-    let guardPort = await reserveLoopbackPort();
-    while (guardPort === fixture.port) guardPort = await reserveLoopbackPort();
-    let challenges = 0;
-    const pendingRecoveryChallenges: Socket[] = [];
-    const unrelated = createNetServer((socket) => {
-      socket.once('data', () => {
-        challenges += 1;
-        const sendWrongProof = (target: Socket): void => {
-          target.end(
-            `echo-organization-authority-guard/1 proof ${'0'.repeat(64)}\n`,
-          );
-        };
-        if (challenges === 1) {
-          sendWrongProof(socket);
-          return;
-        }
-        pendingRecoveryChallenges.push(socket);
-        if (pendingRecoveryChallenges.length === 2) {
-          for (const pending of pendingRecoveryChallenges.splice(0)) {
-            sendWrongProof(pending);
-          }
-        }
-      });
-    });
-    await new Promise<void>((resolve, reject) => {
-      unrelated.once('error', reject);
-      unrelated.listen(guardPort, '127.0.0.1', resolve);
-    });
+    const stalePort = await reserveLoopbackPort();
     writeFileSync(
       lockPath,
       `${JSON.stringify({
         schema_version: 1,
         pid: process.pid,
         token: 'a'.repeat(64),
-        guard_port: guardPort,
+        guard_port: stalePort,
         runtime_fingerprint_sha256: `sha256:${'b'.repeat(64)}`,
       })}\n`,
       { flag: 'wx', mode: 0o600 },
     );
 
+    const lock = await acquireAuthorityRuntimeLock(
+      fixture.stateDirectory,
+      `sha256:${'c'.repeat(64)}`,
+    );
     try {
-      expect(
-        await inspectAuthorityRuntimeLock(fixture.stateDirectory),
-      ).toMatchObject({ present: true, active: false, pid: process.pid });
+      const upgraded = JSON.parse(readFileSync(lockPath, 'utf8')) as {
+        schema_version: number;
+      };
+      expect(upgraded.schema_version).toBe(2);
+    } finally {
+      await lock.release();
+    }
+  });
+
+  it('authenticates and preserves a live schema-1 TCP ownership lock', async () => {
+    const fixture = await initializedFixture();
+    const lockPath = authorityRuntimeLockPath(fixture.stateDirectory);
+    const token = 'a'.repeat(64);
+    const legacyGuard = createNetServer((socket) => {
+      socket.once('data', (bytes) => {
+        const line = bytes.toString('ascii').trimEnd();
+        const nonce = line.slice(line.lastIndexOf(' ') + 1);
+        const proof = createHmac('sha256', Buffer.from(token, 'hex'))
+          .update('echo-organization-authority-kernel-guard-v1\0', 'utf8')
+          .update(nonce, 'ascii')
+          .digest('hex');
+        socket.end(
+          `echo-organization-authority-guard/1 proof ${proof}\n`,
+        );
+      });
+    });
+    await new Promise<void>((resolve, reject) => {
+      legacyGuard.once('error', reject);
+      legacyGuard.listen(0, '127.0.0.1', resolve);
+    });
+    const address = legacyGuard.address();
+    if (address === null || typeof address === 'string') {
+      throw new Error('legacy guard did not bind TCP');
+    }
+    writeFileSync(
+      lockPath,
+      `${JSON.stringify({
+        schema_version: 1,
+        pid: process.pid,
+        token,
+        guard_port: address.port,
+        runtime_fingerprint_sha256: `sha256:${'b'.repeat(64)}`,
+      })}\n`,
+      { flag: 'wx', mode: 0o600 },
+    );
+    const original = readFileSync(lockPath, 'utf8');
+    try {
+      await expect(
+        acquireAuthorityRuntimeLock(
+          fixture.stateDirectory,
+          `sha256:${'c'.repeat(64)}`,
+        ),
+      ).rejects.toThrow('authenticated kernel ownership guard is active');
+      expect(readFileSync(lockPath, 'utf8')).toBe(original);
+    } finally {
+      await new Promise<void>((resolve, reject) => {
+        legacyGuard.close((error) =>
+          error === undefined ? resolve() : reject(error),
+        );
+      });
+    }
+  });
+
+  it('fails closed on a wrong guard proof without replacing ownership state', async () => {
+    const fixture = await initializedFixture();
+    const lockPath = authorityRuntimeLockPath(fixture.stateDirectory);
+    const guardSocket = `.g-${'a'.repeat(6)}`;
+    const guardPath = join(fixture.stateDirectory, guardSocket);
+    let challenges = 0;
+    const unrelated = createNetServer((socket) => {
+      socket.once('data', () => {
+        challenges += 1;
+        socket.end(
+          `echo-organization-authority-guard/1 proof ${'0'.repeat(64)}\n`,
+        );
+      });
+    });
+    await new Promise<void>((resolve, reject) => {
+      unrelated.once('error', reject);
+      unrelated.listen(guardPath, resolve);
+    });
+    writeFileSync(
+      lockPath,
+      `${JSON.stringify({
+        schema_version: 2,
+        pid: process.pid,
+        token: 'a'.repeat(64),
+        guard_socket: guardSocket,
+        runtime_fingerprint_sha256: `sha256:${'b'.repeat(64)}`,
+      })}\n`,
+      { flag: 'wx', mode: 0o600 },
+    );
+    const originalLock = readFileSync(lockPath, 'utf8');
+
+    try {
+      await expect(
+        inspectAuthorityRuntimeLock(fixture.stateDirectory),
+      ).rejects.toThrow('could not be authenticated safely');
 
       const config = readAuthorityRuntimeConfig(fixture.configPath);
       const serveConfig = resolveAuthorityServeConfig(config);
@@ -685,39 +794,11 @@ describe('organization authority operator lifecycle', () => {
         startOrganizationAuthority(serveConfig),
       ]);
       expect(
-        contenders.filter(({ status }) => status === 'fulfilled'),
-      ).toHaveLength(1);
-      expect(
         contenders.filter(({ status }) => status === 'rejected'),
-      ).toHaveLength(1);
-      const winner = contenders.find(
-        (
-          result,
-        ): result is PromiseFulfilledResult<
-          Awaited<ReturnType<typeof startOrganizationAuthority>>
-        > => result.status === 'fulfilled',
-      );
-      if (winner === undefined) {
-        throw new Error('wrong-proof recovery had no owner');
-      }
-      const currentLock = JSON.parse(readFileSync(lockPath, 'utf8')) as {
-        guard_port: number;
-      };
-      expect(currentLock.guard_port).not.toBe(guardPort);
-      try {
-        expect(
-          await inspectAuthorityRuntimeLock(fixture.stateDirectory),
-        ).toMatchObject({ present: true, active: true });
-        expect((await inspectAuthorityStatus(fixture.configPath)).healthy).toBe(
-          true,
-        );
-      } finally {
-        await winner.value.close();
-      }
-      expect(existsSync(lockPath)).toBe(false);
+      ).toHaveLength(2);
+      expect(readFileSync(lockPath, 'utf8')).toBe(originalLock);
       expect(challenges).toBeGreaterThanOrEqual(3);
     } finally {
-      for (const socket of pendingRecoveryChallenges) socket.destroy();
       await new Promise<void>((resolve, reject) => {
         unrelated.close((error) =>
           error === undefined ? resolve() : reject(error),
@@ -729,8 +810,8 @@ describe('organization authority operator lifecycle', () => {
   it('fails closed when a guard accepts a challenge but gives no answer', async () => {
     const fixture = await initializedFixture();
     const lockPath = authorityRuntimeLockPath(fixture.stateDirectory);
-    let guardPort = await reserveLoopbackPort();
-    while (guardPort === fixture.port) guardPort = await reserveLoopbackPort();
+    const guardSocket = `.g-${'a'.repeat(6)}`;
+    const guardPath = join(fixture.stateDirectory, guardSocket);
     const sockets = new Set<Socket>();
     const silent = createNetServer((socket) => {
       sockets.add(socket);
@@ -739,15 +820,15 @@ describe('organization authority operator lifecycle', () => {
     });
     await new Promise<void>((resolve, reject) => {
       silent.once('error', reject);
-      silent.listen(guardPort, '127.0.0.1', resolve);
+      silent.listen(guardPath, resolve);
     });
     writeFileSync(
       lockPath,
       `${JSON.stringify({
-        schema_version: 1,
+        schema_version: 2,
         pid: process.pid,
         token: 'a'.repeat(64),
-        guard_port: guardPort,
+        guard_socket: guardSocket,
         runtime_fingerprint_sha256: `sha256:${'b'.repeat(64)}`,
       })}\n`,
       { flag: 'wx', mode: 0o600 },
@@ -833,7 +914,6 @@ describe('organization authority operator lifecycle', () => {
     const runtimeLock = await acquireAuthorityRuntimeLock(
       fixture.stateDirectory,
       authorityRuntimeFingerprint(runtimeConfig),
-      runtimeConfig.port,
     );
     const intervals = new Set<NodeJS.Timeout>();
     const listener = createHttpServer((_request, response) => {
