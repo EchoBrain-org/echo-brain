@@ -594,7 +594,7 @@ function inspectUnanchoredIntegrationsPair(
   return { identity, marker };
 }
 
-function migrateUnanchoredIntegrationsDatabase(
+function migrateIntegrationsDatabase(
   config: AuthorityRuntimeConfigV1,
 ): OrganizationControlDatabaseIdentity {
   const databasePath = authorityStatePaths(
@@ -1192,7 +1192,10 @@ async function installAuthorityIntegrationsLocked(
       );
     }
     const marker = readIntegrationsInstallationMarker(config);
-    const identity = inspectOrganizationControlDatabaseReadOnly(
+    // An anchored installation may be on an authenticated older schema.
+    // Validate it read-only here; serve applies pending migrations after it
+    // acquires the same runtime singleton guard.
+    const identity = inspectOrganizationControlDatabaseForServe(
       paths.integrations_database_path,
     );
     assertIntegrationsInstallationBinding(
@@ -1215,7 +1218,7 @@ async function installAuthorityIntegrationsLocked(
     const { marker } = inspectUnanchoredIntegrationsPair(config);
     migrateAuthorityForIntegrationsInstallation(config);
     options.faultInjector?.('after_authority_migration');
-    const identity = migrateUnanchoredIntegrationsDatabase(config);
+    const identity = migrateIntegrationsDatabase(config);
     assertIntegrationsInstallationBinding(
       identity,
       marker,
@@ -1254,7 +1257,7 @@ async function installAuthorityIntegrationsLocked(
   );
   try {
     if (databaseExists) {
-      identity = migrateUnanchoredIntegrationsDatabase(config);
+      identity = migrateIntegrationsDatabase(config);
     } else {
       preparedPath = join(
         paths.state_directory,

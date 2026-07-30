@@ -20,6 +20,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import Database from 'better-sqlite3';
 import {
   initializeOrganizationControlDatabase,
+  inspectOrganizationControlDatabaseForServe,
   inspectOrganizationControlDatabaseReadOnly,
   type OrganizationControlDatabaseIdentity,
 } from '@echo-brain/organization-control-plane';
@@ -231,28 +232,31 @@ function replaceAuthorityDatabaseWithLegacyV2(databasePath: string): void {
   chmodSync(databasePath, 0o600);
 }
 
-function replaceIntegrationsDatabaseWithLegacyV1(
+function replaceIntegrationsDatabaseWithHistoricalMigrations(
   databasePath: string,
   identity: OrganizationControlDatabaseIdentity,
+  migrationFilenames: readonly string[],
 ): void {
   unlinkSync(databasePath);
-  const sql = readFileSync(
-    new URL(
-      '../../organization-control-plane/migrations/0001_organization_control_plane.sql',
-      import.meta.url,
-    ),
-    'utf8',
-  );
-  const migration: OrganizationControlMigration = {
-    version: 1,
-    filename: '0001_organization_control_plane.sql',
-    sql,
-    sha256: `sha256:${createHash('sha256').update(sql).digest('hex')}`,
-  };
+  const migrations = migrationFilenames.map((filename, index) => {
+    const sql = readFileSync(
+      new URL(
+        `../../organization-control-plane/migrations/${filename}`,
+        import.meta.url,
+      ),
+      'utf8',
+    );
+    return {
+      version: index + 1,
+      filename,
+      sql,
+      sha256: `sha256:${createHash('sha256').update(sql).digest('hex')}`,
+    } satisfies OrganizationControlMigration;
+  });
   const legacy = new Database(databasePath);
   try {
     legacy.pragma('foreign_keys = ON');
-    migrateOrganizationControlDatabaseWithMigrations(legacy, [migration]);
+    migrateOrganizationControlDatabaseWithMigrations(legacy, migrations);
     legacy
       .prepare(
         `INSERT INTO organization_control_plane_metadata (
@@ -271,6 +275,25 @@ function replaceIntegrationsDatabaseWithLegacyV1(
     legacy.close();
   }
   chmodSync(databasePath, 0o600);
+}
+
+function replaceIntegrationsDatabaseWithLegacyV1(
+  databasePath: string,
+  identity: OrganizationControlDatabaseIdentity,
+): void {
+  replaceIntegrationsDatabaseWithHistoricalMigrations(databasePath, identity, [
+    '0001_organization_control_plane.sql',
+  ]);
+}
+
+function replaceIntegrationsDatabaseWithLegacyV2(
+  databasePath: string,
+  identity: OrganizationControlDatabaseIdentity,
+): void {
+  replaceIntegrationsDatabaseWithHistoricalMigrations(databasePath, identity, [
+    '0001_organization_control_plane.sql',
+    '0002_organization_tool_public_configuration.sql',
+  ]);
 }
 
 afterEach(() => {
@@ -1202,6 +1225,49 @@ describe('organization authority operator lifecycle', () => {
       resolveAuthorityServeConfig(config),
     );
     await runtime.close();
+  });
+
+  it('accepts an anchored v2 database read-only before runtime migration', async () => {
+    const fixture = await initializedFixture();
+    const config = readAuthorityRuntimeConfig(fixture.configPath);
+    const paths = authorityStatePaths(fixture.stateDirectory);
+    const integrationsIdentity =
+      inspectOrganizationControlDatabaseReadOnly(
+        paths.integrations_database_path,
+      );
+    replaceIntegrationsDatabaseWithLegacyV2(
+      paths.integrations_database_path,
+      integrationsIdentity,
+    );
+    const beforeMaintenance = stateSnapshot(fixture.root);
+
+    const installed = await installAuthorityIntegrations(fixture.configPath);
+
+    expect(stateSnapshot(fixture.root)).toEqual(beforeMaintenance);
+    expect(installed).toMatchObject({
+      created: false,
+      control_plane_id: integrationsIdentity.control_plane_id,
+    });
+    expect(
+      inspectOrganizationControlDatabaseForServe(
+        paths.integrations_database_path,
+      ),
+    ).toMatchObject({
+      schema_version: 2,
+      control_plane_id: integrationsIdentity.control_plane_id,
+    });
+    const runtime = await startOrganizationAuthority(
+      resolveAuthorityServeConfig(config),
+    );
+    await runtime.close();
+    expect(
+      inspectOrganizationControlDatabaseReadOnly(
+        paths.integrations_database_path,
+      ),
+    ).toMatchObject({
+      schema_version: 3,
+      control_plane_id: integrationsIdentity.control_plane_id,
+    });
   });
 
   it.each(
