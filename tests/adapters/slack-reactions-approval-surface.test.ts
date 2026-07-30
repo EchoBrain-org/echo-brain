@@ -581,6 +581,7 @@ describe('slack reactions approval surface', () => {
             {
               type: 'mrkdwn',
               text: 'React :white_check_mark: to approve or :x: to reject. To record a reason, reply in this thread *before* reacting.',
+              verbatim: false,
             },
           ],
         },
@@ -919,7 +920,16 @@ describe('slack reactions approval surface', () => {
     });
     expect((await store.list())[0]?.published).toEqual([]);
 
-    slack.acknowledgeBlocks = (blocks) => blocks;
+    slack.acknowledgeBlocks = (blocks) => {
+      const acknowledged = structuredClone(blocks) as PostedBlock[];
+      const context = acknowledged.at(-1);
+      const instruction = context?.elements?.[0];
+      if (instruction === undefined) {
+        throw new Error('expected Slack approval instruction');
+      }
+      instruction.verbatim = false;
+      return acknowledged;
+    };
     await expect(surface.review(request())).resolves.toMatchObject({
       status: 'pending',
     });
@@ -929,6 +939,28 @@ describe('slack reactions approval surface', () => {
     expect((await store.list())[0]?.published[0]?.surface).toBe(
       'slack-authority-v1',
     );
+  });
+
+  it('rejects unexpected authority-marked block mutation before publication', async () => {
+    const slack = fakeSlack();
+    slack.acknowledgeBlocks = (blocks) =>
+      blocks.map((block, index) =>
+        index === 0
+          ? { ...(block as JsonObject), unexpected: true }
+          : block,
+      );
+    const { surface, store } = build(slack, {
+      authorize: async () => ({
+        allowed: true,
+        evidence: AUTHORIZATION_EVIDENCE,
+      }),
+    });
+
+    await expect(surface.review(request())).rejects.toMatchObject({
+      code: 'unknown_outcome',
+      retryable: true,
+    });
+    expect((await store.list())[0]?.published).toEqual([]);
   });
 
   it('reposts and durably supersedes a stored pre-marker Slack publication before centralized authorization', async () => {

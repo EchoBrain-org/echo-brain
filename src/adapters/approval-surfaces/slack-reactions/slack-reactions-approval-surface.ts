@@ -516,7 +516,7 @@ export function renderSlackApprovalBlocks(
         {
           type: 'mrkdwn',
           text: `React :${input.approveReaction}: to approve or :${input.rejectReaction}: to reject. To record a reason, reply in this thread *before* reacting.`,
-          ...(active ? { verbatim: false } : {}),
+          ...(identified ? { verbatim: false } : {}),
         },
       ],
     },
