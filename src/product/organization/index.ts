@@ -18,7 +18,11 @@ export {
   OrganizationApprovalActionAuthorizer,
   organizationApprovalResolutionRequiresAuthority,
 } from './approval-action-authorizer.js';
-export type { OrganizationApprovalActionAuthorizerOptions } from './approval-action-authorizer.js';
+export type {
+  OrganizationApprovalActionAuthorizationEvidence,
+  OrganizationApprovalActionAuthorizationResult,
+  OrganizationApprovalActionAuthorizerOptions,
+} from './approval-action-authorizer.js';
 export { createOrganizationAuthorityCaFetch } from './client/authority-ca-fetch.js';
 export { LocalOrganizationCoordinator } from './enrollment/local-organization-coordinator.js';
 export type {
@@ -27,6 +31,11 @@ export type {
   LocalOrganizationCoordinatorOptions,
   LocalOrganizationRequestIds,
 } from './enrollment/local-organization-coordinator.js';
+export { OrganizationSlackIdentityLinkCoordinator } from './slack-identity-link-coordinator.js';
+export type {
+  CompleteOrganizationSlackIdentityLinkInput,
+  OrganizationSlackIdentityLinkCoordinatorOptions,
+} from './slack-identity-link-coordinator.js';
 export { readPrivateOrganizationEnrollmentInvitation } from './enrollment/private-organization-invitation.js';
 export {
   OrganizationClockRollbackError,

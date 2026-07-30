@@ -7,9 +7,16 @@ import {
   ORGANIZATION_API_ADMIN_AUTH_SCHEME,
   ORGANIZATION_API_PERMISSION_CHECKS_PATH,
   ORGANIZATION_API_PROXY_AUTH_SCHEME,
+  ORGANIZATION_API_SLACK_LINK_CHALLENGES_PATH,
+  ORGANIZATION_API_SLACK_LINK_COMPLETIONS_PATH,
   organizationPermissionProviderEventSha256,
+  organizationSlackLinkChallengeCodeSha256,
   type OrganizationPermissionCheckDecisionV1,
   type OrganizationPermissionCheckRequestV1,
+  type OrganizationSlackLinkBeginRequestV1,
+  type OrganizationSlackLinkBeginResponseV1,
+  type OrganizationSlackLinkCompleteRequestV1,
+  type OrganizationSlackLinkResultV1,
 } from '@echo-brain/organization-api';
 import {
   beginOrganizationAuthorityHttpServerShutdown,
@@ -36,6 +43,8 @@ const ORGANIZATION_ID = 'org_22222222-2222-4222-8222-222222222222';
 const INSTALLATION_ID = 'ins_77777777-7777-4777-8777-777777777777';
 const ENROLLMENT_ID = 'enr_88888888-8888-4888-8888-888888888888';
 const INSTALLATION_KEY_ID = digest('installation-key');
+const AUTHORITY_KEY_ID = digest('authority-key');
+const SLACK_LINK_CODE = `${'A'.repeat(42)}E`;
 const NOW = '2026-07-29T20:00:00.000Z';
 
 function digest(value: string): `sha256:${string}` {
@@ -105,6 +114,8 @@ function integrationsApplication(
     })),
     onboardSlackOrganizationTool: vi.fn(),
     bootstrapSlackApproval: vi.fn(),
+    beginSlackIdentityLink: vi.fn(),
+    completeSlackIdentityLink: vi.fn(),
     checkPermission: vi.fn(),
     ...overrides,
   };
@@ -187,6 +198,94 @@ function permissionDecision(
     adapter_binding_id: null,
     permission_grant_id: null,
     evaluated_at: NOW,
+  };
+}
+
+function slackLinkBeginRequest(): OrganizationSlackLinkBeginRequestV1 {
+  return {
+    schema_version: 1,
+    kind: 'echo-organization-slack-link-begin-request',
+    request_id: 'slb_aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+    authority_id: AUTHORITY_ID,
+    authority_key_id: AUTHORITY_KEY_ID,
+    organization_id: ORGANIZATION_ID,
+    enrollment_id: ENROLLMENT_ID,
+    installation_id: INSTALLATION_ID,
+    installation_key_id: INSTALLATION_KEY_ID,
+    challenge_code_sha256:
+      organizationSlackLinkChallengeCodeSha256(SLACK_LINK_CODE),
+    requested_at: NOW,
+    integrity: {
+      canonicalization: 'RFC8785',
+      payload_sha256: digest('Slack-link-begin-payload'),
+      signature_algorithm: 'ecdsa-p256-sha256-der-low-s',
+      key_id: INSTALLATION_KEY_ID,
+      signature_base64: 'QUJDREVGR0g=',
+    },
+  };
+}
+
+function slackLinkBeginResponse(): OrganizationSlackLinkBeginResponseV1 {
+  return {
+    schema_version: 1,
+    kind: 'echo-organization-slack-link-begin-response',
+    challenge_attempt_id: 'cat_bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb',
+    provider: 'slack',
+    provider_tenant_id: 'T123ABC',
+    channel_id: 'C123ABC',
+    challenge_message_ts: '1753822800.000001',
+    expires_at: '2026-07-29T20:05:00.000Z',
+  };
+}
+
+function slackLinkCompleteRequest(): OrganizationSlackLinkCompleteRequestV1 {
+  return {
+    schema_version: 1,
+    kind: 'echo-organization-slack-link-complete-request',
+    request_id: 'slc_cccccccc-cccc-4ccc-8ccc-cccccccccccc',
+    authority_id: AUTHORITY_ID,
+    authority_key_id: AUTHORITY_KEY_ID,
+    organization_id: ORGANIZATION_ID,
+    enrollment_id: ENROLLMENT_ID,
+    installation_id: INSTALLATION_ID,
+    installation_key_id: INSTALLATION_KEY_ID,
+    challenge_attempt_id: slackLinkBeginResponse().challenge_attempt_id,
+    challenge_message_ts: slackLinkBeginResponse().challenge_message_ts,
+    challenge_code: SLACK_LINK_CODE,
+    expected_provider_subject_id: 'U123ABC',
+    adapter_id: 'slack-reactions',
+    adapter_instance_id: 'primary',
+    adapter_version: '1.0.0',
+    requested_at: NOW,
+    integrity: {
+      canonicalization: 'RFC8785',
+      payload_sha256: digest('Slack-link-complete-payload'),
+      signature_algorithm: 'ecdsa-p256-sha256-der-low-s',
+      key_id: INSTALLATION_KEY_ID,
+      signature_base64: 'QUJDREVGR0g=',
+    },
+  };
+}
+
+function slackLinkResult(): OrganizationSlackLinkResultV1 {
+  return {
+    schema_version: 1,
+    kind: 'echo-organization-slack-link-result',
+    identity_link_id: 'clm_dddddddd-dddd-4ddd-8ddd-dddddddddddd',
+    connection_id: 'con_eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee',
+    adapter_binding_id: 'bnd_ffffffff-ffff-4fff-8fff-ffffffffffff',
+    organization_id: ORGANIZATION_ID,
+    principal_id: 'prn_33333333-3333-4333-8333-333333333333',
+    membership_id: 'mem_44444444-4444-4444-8444-444444444444',
+    installation_id: INSTALLATION_ID,
+    provider: 'slack',
+    provider_tenant_id: 'T123ABC',
+    provider_subject_id: 'U123ZHEN',
+    channel_id: 'C123ABC',
+    linked_at: NOW,
+    identity_link_created: true,
+    adapter_binding_created: true,
+    permission_grants_created: 0,
   };
 }
 
@@ -368,6 +467,104 @@ describe('organization integrations HTTP routes', () => {
         expect.any(AbortSignal),
       );
       expect(responseBody).toEqual(permissionDecision(command));
+    } finally {
+      await close(server);
+    }
+  });
+
+  it('forwards signed Slack identity-link commands without administrator auth', async () => {
+    const beginCommand = slackLinkBeginRequest();
+    const completeCommand = slackLinkCompleteRequest();
+    const beginResult = slackLinkBeginResponse();
+    const completeResult = slackLinkResult();
+    const beginSlackIdentityLink = vi.fn(async () => beginResult);
+    const completeSlackIdentityLink = vi.fn(async () => completeResult);
+    const integrations = integrationsApplication({
+      beginSlackIdentityLink,
+      completeSlackIdentityLink,
+    });
+    const server = integrationServer(integrations);
+    const origin = await listen(server);
+    const post = (path: string, body: unknown) =>
+      fetch(`${origin}${path}`, {
+        method: 'POST',
+        headers: {
+          ...proxyHeaders(),
+          'content-type': 'application/json',
+        },
+        body: JSON.stringify(body),
+      });
+    try {
+      const beginResponse = await post(
+        ORGANIZATION_API_SLACK_LINK_CHALLENGES_PATH,
+        beginCommand,
+      );
+      const beginBody = await beginResponse.json();
+      expect(beginResponse.status, JSON.stringify(beginBody)).toBe(201);
+      expect(beginBody).toEqual(beginResult);
+      expect(beginSlackIdentityLink).toHaveBeenCalledWith(
+        beginCommand,
+        expect.any(AbortSignal),
+      );
+
+      const completeResponse = await post(
+        ORGANIZATION_API_SLACK_LINK_COMPLETIONS_PATH,
+        completeCommand,
+      );
+      const completeBody = await completeResponse.json();
+      expect(completeResponse.status, JSON.stringify(completeBody)).toBe(200);
+      expect(completeBody).toEqual(completeResult);
+      expect(completeSlackIdentityLink).toHaveBeenCalledWith(
+        completeCommand,
+        expect.any(AbortSignal),
+      );
+    } finally {
+      await close(server);
+    }
+  });
+
+  it('rejects unsigned Slack identity-link commands at the HTTP boundary', async () => {
+    const beginSlackIdentityLink = vi.fn();
+    const completeSlackIdentityLink = vi.fn();
+    const integrations = integrationsApplication({
+      beginSlackIdentityLink,
+      completeSlackIdentityLink,
+    });
+    const server = integrationServer(integrations);
+    const origin = await listen(server);
+    const unsignedBegin = {
+      ...slackLinkBeginRequest(),
+      integrity: undefined,
+    };
+    const unsignedComplete = {
+      ...slackLinkCompleteRequest(),
+      integrity: undefined,
+    };
+    const post = (path: string, body: unknown) =>
+      fetch(`${origin}${path}`, {
+        method: 'POST',
+        headers: {
+          ...proxyHeaders(),
+          'content-type': 'application/json',
+        },
+        body: JSON.stringify(body),
+      });
+    try {
+      for (const [path, body] of [
+        [ORGANIZATION_API_SLACK_LINK_CHALLENGES_PATH, unsignedBegin],
+        [ORGANIZATION_API_SLACK_LINK_COMPLETIONS_PATH, unsignedComplete],
+      ] as const) {
+        const response = await post(path, body);
+        expect(response.status).toBe(400);
+        await expect(response.json()).resolves.toEqual({
+          error: {
+            code: 'invalid_request',
+            message: 'request body is invalid',
+          },
+        });
+      }
+      expect(beginSlackIdentityLink).not.toHaveBeenCalled();
+      expect(completeSlackIdentityLink).not.toHaveBeenCalled();
     } finally {
       await close(server);
     }

@@ -37,6 +37,7 @@ import type {
 import {
   createOrganizationAccessLeaseRequest,
   createOrganizationPermissionCheckRequest,
+  createOrganizationSlackLinkBeginRequest,
 } from '@echo-brain/organization-api';
 import type { OrganizationPermissionCheckRequestV1 } from '@echo-brain/organization-api';
 import { OrganizationAuthorityApplication } from '../src/application/organization-authority.js';
@@ -277,6 +278,26 @@ async function permissionCheckRequest(
   );
 }
 
+async function slackLinkBeginRequest(
+  fixture: Awaited<ReturnType<typeof createEnrolledFixture>>,
+) {
+  const receipt = fixture.enrolled.result.enrollment_receipt;
+  return createOrganizationSlackLinkBeginRequest(
+    {
+      request_id: `slb_${randomUUID()}`,
+      authority_id: receipt.authority_id,
+      authority_key_id: receipt.authority_key_id,
+      organization_id: receipt.organization_id,
+      enrollment_id: receipt.enrollment_id,
+      installation_id: fixture.enrolled.installationId,
+      installation_signing_key: fixture.enrolled.installation.descriptor,
+      challenge_code_sha256: canonicalSha256('Slack-link-challenge'),
+      requested_at: fixture.clock.now(),
+    },
+    async (bytes) => sign(fixture.enrolled.installation, bytes),
+  );
+}
+
 function closeFixture(
   fixture: Awaited<ReturnType<typeof createEnrolledFixture>>,
 ): void {
@@ -474,6 +495,48 @@ describe('single-organization authority runtime', () => {
         target_membership_id: null,
         target_active: null,
       });
+    } finally {
+      closeFixture(fixture);
+    }
+  });
+
+  it('derives employee Slack-link identity only from the signed active enrollment', async () => {
+    const fixture = await createEnrolledFixture('2026-07-22T11:45:00.000Z');
+    try {
+      const request = await slackLinkBeginRequest(fixture);
+      expect(
+        fixture.application.integrationInstallationContext(
+          request,
+          'Slack identity link begin request',
+        ),
+      ).toMatchObject({
+        request_sha256: canonicalSha256(request),
+        authority_id: request.authority_id,
+        organization_id: request.organization_id,
+        enrollment_id: request.enrollment_id,
+        principal_id:
+          fixture.enrolled.result.enrollment_receipt.principal_id,
+        membership_id:
+          fixture.enrolled.result.enrollment_receipt.membership_id,
+        installation_id: request.installation_id,
+        installation_key_id: request.installation_key_id,
+      });
+
+      fixture.clock.advance(1);
+      await fixture.application.revokeInstallation(
+        fixture.enrolled.installationId,
+        'employee machine retired',
+      );
+      expect(() =>
+        fixture.application.integrationInstallationContext(
+          request,
+          'Slack identity link begin request',
+        ),
+      ).toThrow(
+        expect.objectContaining<Partial<AuthorityOperationError>>({
+          code: 'unauthorized',
+        }),
+      );
     } finally {
       closeFixture(fixture);
     }

@@ -5,29 +5,43 @@ import {
   canonicalSha256,
 } from '@echo-brain/federation-protocol';
 import {
+  organizationSlackLinkChallengeCodeSha256,
   validateOrganizationPermissionCheckDecision,
   validateOrganizationPermissionCheckRequest,
+  validateOrganizationSlackLinkBeginRequest,
+  validateOrganizationSlackLinkBeginResponse,
+  validateOrganizationSlackLinkCompleteRequest,
+  validateOrganizationSlackLinkResult,
   type OrganizationPermissionCheckDecisionV1,
   type OrganizationPermissionCheckRequestV1,
+  type OrganizationSlackLinkBeginRequestV1,
+  type OrganizationSlackLinkBeginResponseV1,
+  type OrganizationSlackLinkCompleteRequestV1,
+  type OrganizationSlackLinkResultV1,
 } from '@echo-brain/organization-api';
 import {
   AUTHORITY_FILE_SECRET_BACKEND,
+  OrganizationIntegrationConflictError,
   OrganizationIntegrationsRepository,
   SLACK_ORGANIZATION_TOOL_REQUIRED_SCOPES,
   SlackIntegrationProviderError,
   type BootstrapSlackApprovalInput,
   type BootstrapSlackApprovalResult,
+  type BeginSlackIdentityLinkChallengeInput,
+  type CompleteSlackIdentityLinkChallengeInput,
   type OnboardSlackOrganizationToolInput,
   type OnboardSlackOrganizationToolResult,
   type OrganizationIntegrationsOverview,
   type OrganizationPermissionReasonCode,
   type OrganizationSecretStore,
   type SlackApprovalPermissionCandidate,
+  type SlackApprovalPermissionLookup,
   type SlackIntegrationProvider,
 } from '@echo-brain/organization-control-plane';
 import {
   OrganizationAuthorityApplication,
   type OrganizationIntegrationAdminContext,
+  type OrganizationIntegrationInstallationContext,
   type OrganizationIntegrationOwnerContext,
   type OrganizationPermissionAuthorityStatus,
 } from '../application/organization-authority.js';
@@ -156,7 +170,7 @@ function validateBootstrapRequest(
     !/^[a-z0-9_+-]{1,64}$/.test(result.approve_reaction) ||
     !/^[a-z0-9_+-]{1,64}$/.test(result.reject_reaction) ||
     result.approve_reaction === result.reject_reaction ||
-    !/^U[A-Z0-9]{2,}$/.test(result.slack_user_id) ||
+    !/^[UW][A-Z0-9]{2,}$/.test(result.slack_user_id) ||
     !/^xoxb-[A-Za-z0-9-]{8,}$/.test(result.slack_bot_token)
   ) {
     throw new AuthorityOperationError(
@@ -239,6 +253,21 @@ function sameOwnerContext(
   );
 }
 
+function sameInstallationContext(
+  left: OrganizationIntegrationInstallationContext,
+  right: OrganizationIntegrationInstallationContext,
+): boolean {
+  return (
+    left.authority_id === right.authority_id &&
+    left.organization_id === right.organization_id &&
+    left.enrollment_id === right.enrollment_id &&
+    left.principal_id === right.principal_id &&
+    left.membership_id === right.membership_id &&
+    left.installation_id === right.installation_id &&
+    left.installation_key_id === right.installation_key_id
+  );
+}
+
 function throwSlackOnboardingError(error: unknown): never {
   if (!(error instanceof SlackIntegrationProviderError)) throw error;
   if (error.code === 'unavailable') {
@@ -251,6 +280,22 @@ function throwSlackOnboardingError(error: unknown): never {
     'invalid_request',
     'Slack could not verify the bot token and selected public channel',
   );
+}
+
+function runSlackIdentityLinkRepository<T>(operation: () => T): T {
+  try {
+    return operation();
+  } catch (error) {
+    if (
+      error instanceof OrganizationIntegrationConflictError ||
+      (error instanceof Error &&
+        error.message ===
+          'organization integration command ID was reused with different input')
+    ) {
+      throw new AuthorityOperationError('conflict', error.message);
+    }
+    throw error;
+  }
 }
 
 async function verifySlackOrganizationTool(
@@ -299,6 +344,28 @@ function evidenceSha256(
   status: OrganizationPermissionAuthorityStatus,
 ): `sha256:${string}` {
   return canonicalSha256(status);
+}
+
+function slackApprovalPermissionLookup(
+  request: OrganizationPermissionCheckRequestV1,
+): SlackApprovalPermissionLookup {
+  return {
+    organization_id: request.organization_id,
+    installation_id: request.installation_id,
+    installation_key_id: request.installation_key_id,
+    adapter_id: request.adapter_id,
+    adapter_instance_id: request.adapter_instance_id,
+    adapter_version: request.adapter_version,
+    channel_id: request.channel_id,
+    reaction_name: request.reaction_name,
+    slack_team_id: request.provider_tenant_id,
+    slack_user_id: request.provider_subject_id,
+    slack_enterprise_id: request.provider_enterprise_id,
+    slack_bot_user_id: request.provider_connection_subject_id,
+    slack_bot_id: request.provider_connection_bot_id,
+    slack_app_id: request.provider_connection_app_id,
+    action: request.action,
+  };
 }
 
 export function reconcileOrganizationIntegrationSecrets(
@@ -433,6 +500,323 @@ export class ComposedOrganizationIntegrationsApplication
         this.options.secrets.remove(secret);
       }
     }
+  }
+
+  async beginSlackIdentityLink(
+    value: OrganizationSlackLinkBeginRequestV1,
+    signal?: AbortSignal,
+  ): Promise<OrganizationSlackLinkBeginResponseV1> {
+    const request = validateOrganizationSlackLinkBeginRequest(value);
+    const before = this.options.authority.integrationInstallationContext(
+      request,
+      'Slack identity link begin request',
+    );
+    const activeTool =
+      this.options.repository.activeSlackOrganizationTool();
+    if (activeTool === null) {
+      throw new AuthorityOperationError(
+        'conflict',
+        'Slack is not active for this organization',
+      );
+    }
+    let token: string;
+    try {
+      token = this.options.secrets.read(activeTool.secret);
+    } catch {
+      throw new AuthorityOperationError(
+        'unavailable',
+        'The active organization Slack credential is unavailable',
+      );
+    }
+    const { connection, channel } = await verifySlackOrganizationTool(
+      this.options.slack,
+      token,
+      activeTool.channel_id,
+      signal,
+    );
+    if (
+      connection.team_id !== activeTool.team_id ||
+      connection.enterprise_id !== activeTool.enterprise_id ||
+      connection.bot_user_id !== activeTool.bot_user_id ||
+      connection.bot_id !== activeTool.bot_id ||
+      connection.app_id !== activeTool.app_id ||
+      channel.channel_id !== activeTool.channel_id
+    ) {
+      throw new AuthorityOperationError(
+        'conflict',
+        'The active organization Slack connection changed during employee linking',
+      );
+    }
+    const afterVerification =
+      this.options.authority.integrationInstallationContext(
+        request,
+        'Slack identity link begin request',
+      );
+    if (!sameInstallationContext(before, afterVerification)) {
+      throw new AuthorityOperationError(
+        'conflict',
+        'organization installation state changed during Slack verification',
+      );
+    }
+    const installation = {
+      authority_id: afterVerification.authority_id,
+      organization_id: afterVerification.organization_id,
+      enrollment_id: afterVerification.enrollment_id,
+      principal_id: afterVerification.principal_id,
+      membership_id: afterVerification.membership_id,
+      installation_id: afterVerification.installation_id,
+      installation_key_id: afterVerification.installation_key_id,
+    } satisfies BeginSlackIdentityLinkChallengeInput['installation'];
+    const begun = runSlackIdentityLinkRepository(() =>
+      this.options.repository.beginSlackIdentityLinkChallenge({
+        request_sha256: afterVerification.request_sha256,
+        challenge_code_sha256: request.challenge_code_sha256,
+        installation,
+        organization_tool: activeTool,
+        now: afterVerification.checked_at,
+      }),
+    );
+    let posted: Awaited<
+      ReturnType<SlackIntegrationProvider['postIdentityLinkChallenge']>
+    >;
+    try {
+      posted = await this.options.slack.postIdentityLinkChallenge(
+        token,
+        {
+          expected_team_id: activeTool.team_id,
+          expected_enterprise_id: activeTool.enterprise_id,
+          expected_bot_user_id: activeTool.bot_user_id,
+          expected_bot_id: activeTool.bot_id,
+          expected_app_id: activeTool.app_id,
+          challenge_attempt_id: begun.challenge_attempt_id,
+          channel_id: activeTool.channel_id,
+          issued_at: begun.created_at,
+          expires_at: begun.expires_at,
+        },
+        signal,
+      );
+    } catch (error) {
+      this.options.repository.failSlackIdentityLinkChallenge(
+        begun.challenge_attempt_id,
+        this.now(),
+        'provider_challenge_post_failed',
+      );
+      throwSlackOnboardingError(error);
+    }
+    const afterPost = this.options.authority.integrationInstallationContext(
+      request,
+      'Slack identity link begin request',
+    );
+    const currentTool =
+      this.options.repository.activeSlackOrganizationTool();
+    if (
+      !sameInstallationContext(afterVerification, afterPost) ||
+      afterPost.checked_at >= begun.expires_at ||
+      currentTool === null ||
+      canonicalJson(currentTool) !== canonicalJson(activeTool) ||
+      posted.team_id !== activeTool.team_id ||
+      posted.channel_id !== activeTool.channel_id
+    ) {
+      this.options.repository.failSlackIdentityLinkChallenge(
+        begun.challenge_attempt_id,
+        this.now(),
+        'authority_or_tool_changed_after_challenge_post',
+      );
+      throw new AuthorityOperationError(
+        'conflict',
+        'organization authority state changed while posting the Slack challenge',
+      );
+    }
+    runSlackIdentityLinkRepository(() =>
+      this.options.repository.slackIdentityLinkChallenge({
+        challenge_attempt_id: begun.challenge_attempt_id,
+        challenge_code_sha256: request.challenge_code_sha256,
+        installation,
+        organization_tool: currentTool,
+        now: afterPost.checked_at,
+      }),
+    );
+    return validateOrganizationSlackLinkBeginResponse({
+      schema_version: 1,
+      kind: 'echo-organization-slack-link-begin-response',
+      challenge_attempt_id: begun.challenge_attempt_id,
+      provider: 'slack',
+      provider_tenant_id: activeTool.team_id,
+      channel_id: activeTool.channel_id,
+      challenge_message_ts: posted.challenge_message_ts,
+      expires_at: begun.expires_at,
+    });
+  }
+
+  async completeSlackIdentityLink(
+    value: OrganizationSlackLinkCompleteRequestV1,
+    signal?: AbortSignal,
+  ): Promise<OrganizationSlackLinkResultV1> {
+    const request = validateOrganizationSlackLinkCompleteRequest(value);
+    const before = this.options.authority.integrationInstallationContext(
+      request,
+      'Slack identity link complete request',
+    );
+    const replay = runSlackIdentityLinkRepository(() =>
+      this.options.repository.slackIdentityLinkCompletionReplay(
+        request.request_id,
+        before.request_sha256,
+      ),
+    );
+    if (replay !== null) {
+      return validateOrganizationSlackLinkResult(replay);
+    }
+    const activeTool =
+      this.options.repository.activeSlackOrganizationTool();
+    if (activeTool === null) {
+      throw new AuthorityOperationError(
+        'conflict',
+        'Slack is not active for this organization',
+      );
+    }
+    const installation = {
+      authority_id: before.authority_id,
+      organization_id: before.organization_id,
+      enrollment_id: before.enrollment_id,
+      principal_id: before.principal_id,
+      membership_id: before.membership_id,
+      installation_id: before.installation_id,
+      installation_key_id: before.installation_key_id,
+    } satisfies CompleteSlackIdentityLinkChallengeInput['installation'];
+    const codeSha256 = organizationSlackLinkChallengeCodeSha256(
+      request.challenge_code,
+    );
+    const challengeReplay = runSlackIdentityLinkRepository(() =>
+      this.options.repository.slackIdentityLinkChallengeCompletionReplay({
+        challenge_attempt_id: request.challenge_attempt_id,
+        challenge_code_sha256: codeSha256,
+        challenge_message_ts: request.challenge_message_ts,
+        installation,
+        organization_tool: activeTool,
+        adapter_id: request.adapter_id,
+        adapter_instance_id: request.adapter_instance_id,
+        adapter_version: request.adapter_version,
+      }),
+    );
+    if (challengeReplay !== null) {
+      if (
+        challengeReplay.provider_subject_id !==
+        request.expected_provider_subject_id
+      ) {
+        throw new AuthorityOperationError(
+          'conflict',
+          'The completed Slack identity proof belongs to a different configured reviewer',
+        );
+      }
+      return validateOrganizationSlackLinkResult(challengeReplay);
+    }
+    const challenge = runSlackIdentityLinkRepository(() =>
+      this.options.repository.slackIdentityLinkChallenge({
+        challenge_attempt_id: request.challenge_attempt_id,
+        challenge_code_sha256: codeSha256,
+        installation,
+        organization_tool: activeTool,
+        now: before.checked_at,
+      }),
+    );
+    let token: string;
+    try {
+      token = this.options.secrets.read(activeTool.secret);
+    } catch {
+      throw new AuthorityOperationError(
+        'unavailable',
+        'The active organization Slack credential is unavailable',
+      );
+    }
+    let observed: Awaited<
+      ReturnType<SlackIntegrationProvider['observeIdentityLinkChallenge']>
+    >;
+    try {
+      observed = await this.options.slack.observeIdentityLinkChallenge(
+        token,
+        {
+          expected_team_id: activeTool.team_id,
+          expected_enterprise_id: activeTool.enterprise_id,
+          expected_bot_user_id: activeTool.bot_user_id,
+          expected_bot_id: activeTool.bot_id,
+          expected_app_id: activeTool.app_id,
+          challenge_attempt_id: request.challenge_attempt_id,
+          channel_id: activeTool.channel_id,
+          challenge_message_ts: request.challenge_message_ts,
+          challenge_code: request.challenge_code,
+          issued_at: challenge.created_at,
+          expires_at: challenge.expires_at,
+        },
+        signal,
+      );
+    } catch (error) {
+      if (
+        error instanceof SlackIntegrationProviderError &&
+        error.code === 'not_observed'
+      ) {
+        throw new AuthorityOperationError(
+          'unavailable',
+          'The exact Slack challenge reply has not been observed yet',
+        );
+      }
+      throwSlackOnboardingError(error);
+    }
+    if (observed.user_id !== request.expected_provider_subject_id) {
+      throw new AuthorityOperationError(
+        'conflict',
+        'The Slack challenge reply came from a different configured reviewer',
+      );
+    }
+    let currentChannel: Awaited<
+      ReturnType<SlackIntegrationProvider['verifyChannel']>
+    >;
+    try {
+      currentChannel = await this.options.slack.verifyChannel(
+        token,
+        activeTool.channel_id,
+        activeTool.team_id,
+        signal,
+      );
+    } catch (error) {
+      throwSlackOnboardingError(error);
+    }
+    const after = this.options.authority.integrationInstallationContext(
+      request,
+      'Slack identity link complete request',
+    );
+    const currentTool =
+      this.options.repository.activeSlackOrganizationTool();
+    if (
+      !sameInstallationContext(before, after) ||
+      currentTool === null ||
+      canonicalJson(currentTool) !== canonicalJson(activeTool) ||
+      currentChannel.team_id !== activeTool.team_id ||
+      currentChannel.channel_id !== activeTool.channel_id
+    ) {
+      throw new AuthorityOperationError(
+        'conflict',
+        'organization authority state changed during Slack identity proof',
+      );
+    }
+    return validateOrganizationSlackLinkResult(
+      runSlackIdentityLinkRepository(() =>
+        this.options.repository.completeSlackIdentityLinkChallenge({
+          command_id: request.request_id,
+          command_sha256: after.request_sha256,
+          challenge_attempt_id: request.challenge_attempt_id,
+          challenge_code_sha256: codeSha256,
+          challenge_message_ts: request.challenge_message_ts,
+          installation,
+          organization_tool: currentTool,
+          observed,
+          adapter_id: request.adapter_id,
+          adapter_instance_id: request.adapter_instance_id,
+          adapter_version: request.adapter_version,
+          authority_checked_at: after.checked_at,
+          now: after.checked_at,
+        }),
+      ),
+    );
   }
 
   async bootstrapSlackApproval(
@@ -582,24 +966,9 @@ export class ComposedOrganizationIntegrationsApplication
         'installation_inactive',
       );
     }
+    const lookup = slackApprovalPermissionLookup(request);
     const candidate =
-      this.options.repository.findSlackApprovalPermission({
-        organization_id: request.organization_id,
-        installation_id: request.installation_id,
-        installation_key_id: request.installation_key_id,
-        adapter_id: request.adapter_id,
-        adapter_instance_id: request.adapter_instance_id,
-        adapter_version: request.adapter_version,
-        channel_id: request.channel_id,
-        reaction_name: request.reaction_name,
-        slack_team_id: request.provider_tenant_id,
-        slack_user_id: request.provider_subject_id,
-        slack_enterprise_id: request.provider_enterprise_id,
-        slack_bot_user_id: request.provider_connection_subject_id,
-        slack_bot_id: request.provider_connection_bot_id,
-        slack_app_id: request.provider_connection_app_id,
-        action: request.action,
-      });
+      this.options.repository.findSlackApprovalPermission(lookup);
     if (candidate === null) {
       const current = this.options.authority.checkPermissionSubject(
         request,
@@ -652,6 +1021,20 @@ export class ComposedOrganizationIntegrationsApplication
         },
         signal,
       );
+      const human = await this.options.slack.verifyHuman(
+        secret,
+        request.provider_subject_id,
+        signal,
+      );
+      if (
+        human.team_id !== request.provider_tenant_id ||
+        human.user_id !== request.provider_subject_id
+      ) {
+        throw new SlackIntegrationProviderError(
+          'Slack reviewer identity changed during approval verification',
+          'unauthorized',
+        );
+      }
     } catch (error) {
       providerFailure =
         error instanceof SlackIntegrationProviderError &&
@@ -659,6 +1042,11 @@ export class ComposedOrganizationIntegrationsApplication
           ? 'provider_identity_mismatch'
           : 'provider_unavailable';
     }
+    const currentCandidate =
+      this.options.repository.findSlackApprovalPermission(lookup);
+    const candidateStillActive =
+      currentCandidate !== null &&
+      canonicalJson(currentCandidate) === canonicalJson(candidate);
     const current = this.options.authority.checkPermissionSubject(
       request,
       target,
@@ -679,6 +1067,15 @@ export class ComposedOrganizationIntegrationsApplication
         candidate,
         false,
         'target_membership_inactive',
+      );
+    }
+    if (!candidateStillActive) {
+      return this.recordDecision(
+        request,
+        current,
+        null,
+        false,
+        'no_active_link_binding_or_grant',
       );
     }
     if (providerFailure !== null) {

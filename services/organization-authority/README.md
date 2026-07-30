@@ -59,9 +59,31 @@ stored in JavaScript, cookies, or SQLite. The organization-tool form sends the
 bot token only to the same-origin Authority and never places it in browser
 storage or renders it back into the console.
 
-Employee linking/propagation, non-Slack organization tools, credential or
-channel rotation, and fine-grained integration lifecycle controls remain
-deferred. Membership and installation revocation are the v1 access controls.
+An enrolled installation can perform the minimum manual Slack identity-link
+challenge after the organization tool is active. The Authority derives the
+membership from the installation signature, derives the human from the exact
+Slack thread reply, requires that human to match the installation's configured
+Slack reviewer, and creates no permission grants. The configured approval
+surface must already use the organization-approved channel and contain one
+`reviewer.slack_user_id`.
+
+The manual ceremony is:
+
+1. run `echo-brain organization slack-link-begin --config '<path>'`;
+2. copy only the one-time code into a reply to the exact Slack challenge
+   thread;
+3. retain the returned attempt ID and Slack message timestamp;
+4. read the code without terminal echo using
+   `read -r -s ECHO_SLACK_LINK_CODE`, then run the emitted
+   `slack-link-complete` command and immediately
+   `unset ECHO_SLACK_LINK_CODE`;
+5. run `echo-brain doctor --config '<path>'` before restarting the service.
+
+Do not paste the one-time code into tickets, chat, logs, or a command-line
+argument. Automatic tool
+propagation, non-Slack tools, credential or channel rotation, and fine-grained
+integration lifecycle controls remain deferred. Membership and installation
+revocation are the v1 access controls.
 
 ## Ingress contract
 

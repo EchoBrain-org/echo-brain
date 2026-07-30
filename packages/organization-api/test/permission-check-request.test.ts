@@ -153,6 +153,23 @@ describe('organization permission check request', () => {
     ).toThrow('unexpected shape');
   });
 
+  it('accepts Enterprise Grid W IDs for both the Slack bot and human', async () => {
+    const key = installationKey();
+    const request = await createOrganizationPermissionCheckRequest(
+      {
+        ...requestInput(key.descriptor),
+        provider_connection_subject_id: 'W12345679',
+        provider_subject_id: 'W12345678',
+      },
+      (bytes) => key.sign(bytes),
+    );
+
+    expect(validateOrganizationPermissionCheckRequest(request)).toMatchObject({
+      provider_connection_subject_id: 'W12345679',
+      provider_subject_id: 'W12345678',
+    });
+  });
+
   it('derives provider-event identity from event fields, not retry metadata', async () => {
     const key = installationKey();
     const input = requestInput(key.descriptor);

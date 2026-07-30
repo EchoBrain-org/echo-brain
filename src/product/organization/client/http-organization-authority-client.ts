@@ -7,6 +7,8 @@ import {
   ORGANIZATION_API_ENROLLMENT_AUTH_SCHEME,
   ORGANIZATION_API_ENROLLMENTS_PATH,
   ORGANIZATION_API_PERMISSION_CHECKS_PATH,
+  ORGANIZATION_API_SLACK_LINK_CHALLENGES_PATH,
+  ORGANIZATION_API_SLACK_LINK_COMPLETIONS_PATH,
   validateCompletedOrganizationEnrollment,
   validateOrganizationAccessLeaseRequest,
   validateOrganizationAccessLeaseResponse,
@@ -14,6 +16,10 @@ import {
   validateOrganizationAuthorityDescriptorResponse,
   validateOrganizationPermissionCheckDecision,
   validateOrganizationPermissionCheckRequest,
+  validateOrganizationSlackLinkBeginRequest,
+  validateOrganizationSlackLinkBeginResponse,
+  validateOrganizationSlackLinkCompleteRequest,
+  validateOrganizationSlackLinkResult,
   type CompleteOrganizationEnrollmentRequestV1,
   type CompletedOrganizationEnrollmentV1,
   type OrganizationAccessLeaseRequestV1,
@@ -21,6 +27,10 @@ import {
   type OrganizationAuthorityDescriptorResponseV1,
   type OrganizationPermissionCheckDecisionV1,
   type OrganizationPermissionCheckRequestV1,
+  type OrganizationSlackLinkBeginRequestV1,
+  type OrganizationSlackLinkBeginResponseV1,
+  type OrganizationSlackLinkCompleteRequestV1,
+  type OrganizationSlackLinkResultV1,
 } from '@echo-brain/organization-api';
 import type { OrganizationAuthorityClient } from './authority-client.js';
 import { OrganizationAuthorityConflictError } from './authority-client.js';
@@ -28,6 +38,7 @@ import { createOrganizationAuthorityCaFetch } from './authority-ca-fetch.js';
 
 const MAX_RESPONSE_BYTES = 64 * 1024;
 const DEFAULT_TIMEOUT_MS = 15_000;
+const SLACK_LINK_TIMEOUT_MS = 75_000;
 const JSON_HEADERS = {
   accept: 'application/json',
   'content-type': 'application/json',
@@ -247,10 +258,11 @@ export class HttpOrganizationAuthorityClient implements OrganizationAuthorityCli
     validateSuccess: (value: unknown) => T,
     conflictHandling: ConflictHandling = 'transport-error',
     signal?: AbortSignal,
+    timeoutMs = this.timeoutMs,
   ): Promise<T> {
     let response: Response;
     try {
-      const deadline = AbortSignal.timeout(this.timeoutMs);
+      const deadline = AbortSignal.timeout(timeoutMs);
       response = await this.fetchImpl(this.endpoint(path), {
         ...init,
         redirect: 'error',
@@ -295,10 +307,11 @@ export class HttpOrganizationAuthorityClient implements OrganizationAuthorityCli
   private postJson<T>(
     path: string,
     value: unknown,
-    requestKind: 'access' | 'permission',
+    requestKind: 'access' | 'permission' | 'Slack link',
     validateSuccess: (value: unknown) => T,
     conflictHandling: ConflictHandling = 'transport-error',
     signal?: AbortSignal,
+    timeoutMs?: number,
   ): Promise<T> {
     const body = JSON.stringify(value);
     if (Buffer.byteLength(body) > MAX_ORGANIZATION_API_BODY_BYTES) {
@@ -310,6 +323,7 @@ export class HttpOrganizationAuthorityClient implements OrganizationAuthorityCli
       validateSuccess,
       conflictHandling,
       signal,
+      timeoutMs,
     );
   }
 
@@ -373,6 +387,36 @@ export class HttpOrganizationAuthorityClient implements OrganizationAuthorityCli
       validateOrganizationPermissionCheckDecision,
       'transport-error',
       signal,
+    );
+  }
+
+  beginSlackLink(
+    request: OrganizationSlackLinkBeginRequestV1,
+    signal?: AbortSignal,
+  ): Promise<OrganizationSlackLinkBeginResponseV1> {
+    return this.postJson(
+      ORGANIZATION_API_SLACK_LINK_CHALLENGES_PATH,
+      validateOrganizationSlackLinkBeginRequest(request),
+      'Slack link',
+      validateOrganizationSlackLinkBeginResponse,
+      'transport-error',
+      signal,
+      Math.max(this.timeoutMs, SLACK_LINK_TIMEOUT_MS),
+    );
+  }
+
+  completeSlackLink(
+    request: OrganizationSlackLinkCompleteRequestV1,
+    signal?: AbortSignal,
+  ): Promise<OrganizationSlackLinkResultV1> {
+    return this.postJson(
+      ORGANIZATION_API_SLACK_LINK_COMPLETIONS_PATH,
+      validateOrganizationSlackLinkCompleteRequest(request),
+      'Slack link',
+      validateOrganizationSlackLinkResult,
+      'transport-error',
+      signal,
+      Math.max(this.timeoutMs, SLACK_LINK_TIMEOUT_MS),
     );
   }
 }

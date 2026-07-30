@@ -48,6 +48,8 @@ describe('organization Authority runtime shutdown', () => {
         throw new Error('test handler released after forced shutdown');
       },
       bootstrapSlackApproval: unexpectedCall,
+      beginSlackIdentityLink: unexpectedCall,
+      completeSlackIdentityLink: unexpectedCall,
       checkPermission: unexpectedCall,
     };
     const server = createOrganizationAuthorityHttpServer({

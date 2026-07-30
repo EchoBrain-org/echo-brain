@@ -134,7 +134,7 @@ describe("organization integrations repository", () => {
         '["channels:history","channels:read","chat:write","reactions:read","users:read"]',
       status: "active",
       public_configuration_json:
-        '{"channel_id":"C123CHANNEL","organization_tool_profile":"slack-organization-tool-v1","schema_version":1,"slack_app_id":"A123APP","slack_bot_id":"B123BOT","slack_bot_user_id":"U123BOT","slack_enterprise_id":null}',
+        '{"approve_reaction":"white_check_mark","channel_id":"C123CHANNEL","organization_tool_profile":"slack-organization-tool-v1","reject_reaction":"x","schema_version":1,"slack_app_id":"A123APP","slack_bot_id":"B123BOT","slack_bot_user_id":"U123BOT","slack_enterprise_id":null}',
     });
     expect(overview.recent_audit).toEqual([
       expect.objectContaining({
@@ -189,6 +189,175 @@ describe("organization integrations repository", () => {
     expect(() => repository.overview()).toThrow(
       "stored organization tool configuration is invalid",
     );
+    repository.close();
+  });
+
+  it("links a Slack human to the enrolled installation without granting permission", () => {
+    const integrationDatabase = database();
+    const repository = new OrganizationIntegrationsRepository(
+      integrationDatabase,
+      {
+        organization_id: ORGANIZATION_ID,
+        authority_id: AUTHORITY_ID,
+      },
+    );
+    repository.onboardSlackOrganizationTool(
+      organizationToolInput(
+        "organization-slack-before-employee-link",
+        "sch_44444444-4444-4444-8444-444444444444",
+      ),
+    );
+    const organizationTool = repository.activeSlackOrganizationTool()!;
+    const installation = {
+      authority_id: AUTHORITY_ID,
+      organization_id: ORGANIZATION_ID,
+      enrollment_id: "enr_test-enrollment",
+      principal_id: PRINCIPAL_ID,
+      membership_id: MEMBERSHIP_ID,
+      installation_id: INSTALLATION_ID,
+      installation_key_id: digest("installation-key"),
+    } as const;
+    const begun = repository.beginSlackIdentityLinkChallenge({
+      request_sha256: digest("employee-link-begin-one"),
+      challenge_code_sha256: digest("challenge-one"),
+      installation,
+      organization_tool: organizationTool,
+      now: NOW,
+    });
+    expect(
+      repository.slackIdentityLinkChallenge({
+        challenge_attempt_id: begun.challenge_attempt_id,
+        challenge_code_sha256: digest("challenge-one"),
+        installation,
+        organization_tool: organizationTool,
+        now: NOW,
+      }),
+    ).toMatchObject({
+      membership_id: MEMBERSHIP_ID,
+      installation_id: INSTALLATION_ID,
+    });
+    const completion = {
+      command_id: "slc_employee-link-one",
+      command_sha256: digest("employee-link-complete-one"),
+      challenge_attempt_id: begun.challenge_attempt_id,
+      challenge_code_sha256: digest("challenge-one"),
+      challenge_message_ts: "1753822800.000001",
+      installation,
+      organization_tool: organizationTool,
+      observed: {
+        team_id: "T123TEAM",
+        user_id: "U_ZHEN",
+        channel_id: "C123CHANNEL",
+        challenge_message_ts: "1753822800.000001",
+        reply_message_ts: "1753822801.000001",
+        verification_evidence_sha256: digest("employee-link-observation"),
+      },
+      adapter_id: "slack-reactions",
+      adapter_instance_id: "founder-approvals",
+      adapter_version: "1.0.0",
+      authority_checked_at: NOW,
+      now: NOW,
+    } as const;
+    const completed =
+      repository.completeSlackIdentityLinkChallenge(completion);
+
+    expect(completed).toMatchObject({
+      membership_id: MEMBERSHIP_ID,
+      installation_id: INSTALLATION_ID,
+      provider_subject_id: "U_ZHEN",
+      identity_link_created: true,
+      adapter_binding_created: true,
+      permission_grants_created: 0,
+    });
+    expect(repository.overview()).toMatchObject({
+      identity_links: [expect.objectContaining({ membership_id: MEMBERSHIP_ID })],
+      adapter_bindings: [
+        expect.objectContaining({ installation_id: INSTALLATION_ID }),
+      ],
+      permission_grants: [],
+    });
+    expect(
+      repository.slackIdentityLinkCompletionReplay(
+        "slc_employee-link-one",
+        digest("employee-link-complete-one"),
+      ),
+    ).toEqual(completed);
+    expect(
+      repository.completeSlackIdentityLinkChallenge({
+        ...completion,
+        command_id: "slc_employee-link-response-loss-retry",
+        command_sha256: digest("employee-link-response-loss-retry"),
+      }),
+    ).toEqual(completed);
+
+    const secondBegun = repository.beginSlackIdentityLinkChallenge({
+      request_sha256: digest("employee-link-begin-two"),
+      challenge_code_sha256: digest("challenge-two"),
+      installation,
+      organization_tool: organizationTool,
+      now: "2026-07-29T20:01:00.000Z",
+    });
+    const reverified = repository.completeSlackIdentityLinkChallenge({
+      command_id: "slc_employee-link-two",
+      command_sha256: digest("employee-link-complete-two"),
+      challenge_attempt_id: secondBegun.challenge_attempt_id,
+      challenge_code_sha256: digest("challenge-two"),
+      challenge_message_ts: "1753822860.000001",
+      installation,
+      organization_tool: organizationTool,
+      observed: {
+        team_id: "T123TEAM",
+        user_id: "U_ZHEN",
+        channel_id: "C123CHANNEL",
+        challenge_message_ts: "1753822860.000001",
+        reply_message_ts: "1753822861.000001",
+        verification_evidence_sha256: digest("employee-link-reverification"),
+      },
+      adapter_id: "slack-reactions",
+      adapter_instance_id: "founder-approvals",
+      adapter_version: "1.0.0",
+      authority_checked_at: "2026-07-29T20:01:00.000Z",
+      now: "2026-07-29T20:01:00.000Z",
+    });
+    expect(reverified).toMatchObject({
+      identity_link_id: completed.identity_link_id,
+      adapter_binding_id: completed.adapter_binding_id,
+      identity_link_created: false,
+      adapter_binding_created: false,
+      permission_grants_created: 0,
+    });
+    expect(repository.overview().identity_links).toHaveLength(1);
+    expect(repository.overview().adapter_bindings).toHaveLength(1);
+    expect(repository.overview().permission_grants).toEqual([]);
+
+    const expiring = repository.beginSlackIdentityLinkChallenge({
+      request_sha256: digest("employee-link-begin-expiring"),
+      challenge_code_sha256: digest("challenge-expiring"),
+      installation,
+      organization_tool: organizationTool,
+      now: "2026-07-29T20:02:00.000Z",
+    });
+    expect(() =>
+      repository.slackIdentityLinkChallenge({
+        challenge_attempt_id: expiring.challenge_attempt_id,
+        challenge_code_sha256: digest("challenge-expiring"),
+        installation,
+        organization_tool: organizationTool,
+        now: "2026-07-29T20:17:00.000Z",
+      }),
+    ).toThrow("Slack identity link challenge expired");
+    expect(
+      integrationDatabase
+        .prepare(
+          `SELECT status, outcome_reason
+           FROM organization_connection_attempts
+           WHERE connection_attempt_id = ?`,
+        )
+        .get(expiring.challenge_attempt_id),
+    ).toEqual({
+      status: "expired",
+      outcome_reason: "challenge_expired",
+    });
     repository.close();
   });
 

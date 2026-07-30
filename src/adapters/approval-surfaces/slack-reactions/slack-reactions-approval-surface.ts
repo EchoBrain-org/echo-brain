@@ -90,6 +90,7 @@ export type SlackResolutionEvidence = JsonObject & {
         })
       | null;
   };
+  authorization?: JsonObject;
 };
 
 export interface ApprovalActionAuthorizationRequest {
@@ -108,6 +109,23 @@ export interface ApprovalActionAuthorizationRequest {
 }
 
 /**
+ * Non-secret, action-scoped authorization evidence. An allow decision must
+ * carry evidence so a newly persisted approval can always be attributed.
+ * Denials may omit it because they never resolve the approval.
+ */
+export type ApprovalActionAuthorizationResult =
+  | {
+      allowed: true;
+      evidence: JsonObject;
+      reason?: string;
+    }
+  | {
+      allowed: false;
+      evidence?: JsonObject;
+      reason?: string;
+    };
+
+/**
  * Action-time authorization port supplied by the product composition root.
  * Implementations may consult a central control plane, but the Slack adapter
  * owns the fail-closed ordering: an allow result is required before resolve.
@@ -116,7 +134,7 @@ export interface ApprovalActionAuthorizer {
   authorize(
     request: ApprovalActionAuthorizationRequest,
     signal?: AbortSignal,
-  ): Promise<{ allowed: boolean; reason?: string }>;
+  ): Promise<ApprovalActionAuthorizationResult>;
 }
 
 export interface ApprovalDecisionStore {
@@ -931,6 +949,7 @@ export class SlackReactionsApprovalSurface implements ApprovalSurfaceAdapter {
       );
     }
     const authorizer = this.approvalActionAuthorizer;
+    let authorizationEvidence: JsonObject | undefined;
     if (authorizer !== undefined) {
       const providerIdentity =
         liveProviderIdentity as SlackProviderIdentityEvidence;
@@ -958,7 +977,10 @@ export class SlackReactionsApprovalSurface implements ApprovalSurfaceAdapter {
       }
       if (
         !isPlainObject(authorization) ||
-        typeof authorization.allowed !== 'boolean'
+        typeof authorization.allowed !== 'boolean' ||
+        (authorization.evidence !== undefined &&
+          !isPlainObject(authorization.evidence)) ||
+        (authorization.allowed && !isPlainObject(authorization.evidence))
       ) {
         throw new AdapterError(
           'temporarily_unavailable',
@@ -977,6 +999,7 @@ export class SlackReactionsApprovalSurface implements ApprovalSurfaceAdapter {
           false,
         );
       }
+      authorizationEvidence = authorization.evidence;
     }
     operation?.signal?.throwIfAborted();
     let resolved: ApprovalDecisionStoreView;
@@ -995,6 +1018,9 @@ export class SlackReactionsApprovalSurface implements ApprovalSurfaceAdapter {
                   message_ts: messageTs,
                   reviewer_user_id: this.settings.reviewerUserId,
                 },
+                ...(authorizationEvidence === undefined
+                  ? {}
+                  : { authorization: authorizationEvidence }),
               },
             }
           : {
@@ -1018,6 +1044,9 @@ export class SlackReactionsApprovalSurface implements ApprovalSurfaceAdapter {
                           text: latestReply.text,
                         },
                 },
+                ...(authorizationEvidence === undefined
+                  ? {}
+                  : { authorization: authorizationEvidence }),
               },
             }),
       });

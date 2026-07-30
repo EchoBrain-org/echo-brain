@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 
-import { randomUUID } from "node:crypto";
+import { randomBytes, randomUUID } from "node:crypto";
 import { readFileSync, realpathSync } from "node:fs";
 import { isAbsolute, join } from "node:path";
 import { parseArgs } from "node:util";
@@ -114,6 +114,7 @@ import {
 import { resolveProductStatePaths } from "./paths.js";
 import { SqliteCoreStateStore } from "./storage/sqlite-core-state-store.js";
 import { readFileNoFollow } from "./secure-local-files.js";
+import { SLACK_REACTIONS_APPROVAL_SURFACE_ADAPTER_VERSION } from "../adapters/approval-surfaces/slack-reactions/slack-reactions-approval-surface.js";
 
 export interface ProductCliProcess {
   once: (event: "SIGINT" | "SIGTERM", listener: () => void) => unknown;
@@ -199,7 +200,15 @@ interface ParsedCommand {
   renewChallenge?: boolean;
   independentCopyRoot?: string;
   allowExportableSoftwareKey?: boolean;
-  organizationAction?: "enroll" | "status" | "refresh" | "rebind";
+  organizationAction?:
+    | "enroll"
+    | "status"
+    | "refresh"
+    | "rebind"
+    | "slack-link-begin"
+    | "slack-link-complete";
+  slackLinkAttemptId?: string;
+  slackLinkMessageTs?: string;
   invitationPath?: string;
   authorityPin?: string;
   authorityUrl?: string;
@@ -224,7 +233,7 @@ Usage:
   echo-brain status --config <absolute-path>
   echo-brain doctor --config <absolute-path>
   echo-brain identity-check --config <absolute-path> [--strict]
-  echo-brain identity-bootstrap begin --config <absolute-path> --organization-name <name> --principal-name <name> --slack-user-id <U...> --allow-exportable-software-key [--device-class <byod|managed>]
+  echo-brain identity-bootstrap begin --config <absolute-path> --organization-name <name> --principal-name <name> --slack-user-id <U...|W...> --allow-exportable-software-key [--device-class <byod|managed>]
   echo-brain identity-bootstrap status --config <absolute-path> --session <uuid> [--renew-challenge]
   echo-brain identity-bootstrap commit --config <absolute-path> --session <uuid> --confirm <sha256:...> --independent-copy-root <absolute-path>
   echo-brain identity-bootstrap abort --config <absolute-path> --session <uuid> --confirm <installation-key-sha256>
@@ -232,6 +241,8 @@ Usage:
   echo-brain organization status --config <absolute-path>
   echo-brain organization refresh --config <absolute-path>
   echo-brain organization rebind --config <absolute-path> --authority-url <https-origin> --authority-pin <sha256:...> [--authority-ca <absolute-path>]
+  echo-brain organization slack-link-begin --config <absolute-path>
+  echo-brain organization slack-link-complete --config <absolute-path> --challenge-attempt <cat_...> --challenge-message-ts <Slack timestamp>  # reads ECHO_SLACK_LINK_CODE
   echo-brain export --config <absolute-path>
   echo-brain service <install|start|stop|restart|status|uninstall> --config <absolute-path>
   echo-brain backup --config <absolute-path> --backup-root <absolute-path> [--id <operation-id>]
@@ -283,7 +294,13 @@ function parseCommand(argv: readonly string[]): ParsedCommand {
   let identityBootstrapAction:
     "begin" | "status" | "commit" | "abort" | undefined;
   let organizationAction:
-    "enroll" | "status" | "refresh" | "rebind" | undefined;
+    | "enroll"
+    | "status"
+    | "refresh"
+    | "rebind"
+    | "slack-link-begin"
+    | "slack-link-complete"
+    | undefined;
   let optionOffset = 1;
   if (command === "service") {
     const action = argv[1];
@@ -323,10 +340,12 @@ function parseCommand(argv: readonly string[]): ParsedCommand {
       action !== "enroll" &&
       action !== "status" &&
       action !== "refresh" &&
-      action !== "rebind"
+      action !== "rebind" &&
+      action !== "slack-link-begin" &&
+      action !== "slack-link-complete"
     ) {
       throw new Error(
-        "usage: echo-brain organization <enroll|status|refresh|rebind> --config <absolute-path>",
+        "usage: echo-brain organization <enroll|status|refresh|rebind|slack-link-begin|slack-link-complete> --config <absolute-path>",
       );
     }
     organizationAction = action;
@@ -358,6 +377,8 @@ function parseCommand(argv: readonly string[]): ParsedCommand {
       "authority-pin": { type: "string" },
       "authority-url": { type: "string" },
       "authority-ca": { type: "string" },
+      "challenge-attempt": { type: "string" },
+      "challenge-message-ts": { type: "string" },
     },
   });
   if (parsed.values.config === undefined)
@@ -535,6 +556,23 @@ function parseCommand(argv: readonly string[]): ParsedCommand {
         );
       }
     }
+    if (organizationAction === "slack-link-complete") {
+      if (
+        parsed.values["challenge-attempt"] === undefined ||
+        parsed.values["challenge-message-ts"] === undefined
+      ) {
+        throw new Error(
+          "organization slack-link-complete requires --challenge-attempt and --challenge-message-ts",
+        );
+      }
+    } else if (
+      parsed.values["challenge-attempt"] !== undefined ||
+      parsed.values["challenge-message-ts"] !== undefined
+    ) {
+      throw new Error(
+        "--challenge-attempt and --challenge-message-ts are only valid with organization slack-link-complete",
+      );
+    }
   } else {
     if (parsed.values.invitation !== undefined) {
       throw new Error("--invitation is only valid with organization enroll");
@@ -550,6 +588,14 @@ function parseCommand(argv: readonly string[]): ParsedCommand {
     if (parsed.values["authority-ca"] !== undefined) {
       throw new Error(
         "--authority-ca is only valid with organization enroll or rebind",
+      );
+    }
+    if (
+      parsed.values["challenge-attempt"] !== undefined ||
+      parsed.values["challenge-message-ts"] !== undefined
+    ) {
+      throw new Error(
+        "--challenge-attempt and --challenge-message-ts are only valid with organization slack-link-complete",
       );
     }
   }
@@ -634,6 +680,12 @@ function parseCommand(argv: readonly string[]): ParsedCommand {
       ? { allowExportableSoftwareKey: true }
       : {}),
     ...(organizationAction === undefined ? {} : { organizationAction }),
+    ...(parsed.values["challenge-attempt"] === undefined
+      ? {}
+      : { slackLinkAttemptId: parsed.values["challenge-attempt"] }),
+    ...(parsed.values["challenge-message-ts"] === undefined
+      ? {}
+      : { slackLinkMessageTs: parsed.values["challenge-message-ts"] }),
     ...(parsed.values.invitation === undefined
       ? {}
       : { invitationPath: parsed.values.invitation }),
@@ -675,6 +727,53 @@ function configuredAdapterReferences(config: ProductRuntimeConfig) {
     ...(config.approval_mode === "adapter"
       ? { approval_surface: adapterReference(config.approval_surface) }
       : {}),
+  };
+}
+
+function shellSingleQuote(value: string): string {
+  return "'" + value.replaceAll("'", "'\\''") + "'";
+}
+
+function configuredSlackApprovalSurface(config: ProductRuntimeConfig): {
+  instance_id: string;
+  channel_id: string;
+  reviewer_user_id: string;
+} {
+  if (
+    config.approval_mode !== "adapter" ||
+    config.approval_surface.adapter_id !== "slack-reactions"
+  ) {
+    throw new Error(
+      "this installation has no organization-linkable Slack approval surface",
+    );
+  }
+  const channelId = config.approval_surface.settings["channel_id"];
+  if (typeof channelId !== "string" || !/^C[A-Z0-9]{2,}$/.test(channelId)) {
+    throw new Error(
+      "the configured Slack approval surface has no valid channel",
+    );
+  }
+  const reviewer = config.approval_surface.settings["reviewer"];
+  const reviewerUserId =
+    typeof reviewer === "object" &&
+    reviewer !== null &&
+    !Array.isArray(reviewer) &&
+    typeof (reviewer as Record<string, unknown>)["slack_user_id"] ===
+      "string"
+      ? (reviewer as Record<string, string>)["slack_user_id"]
+      : undefined;
+  if (
+    typeof reviewerUserId !== "string" ||
+    !/^[UW][A-Z0-9]{2,}$/.test(reviewerUserId)
+  ) {
+    throw new Error(
+      "the configured Slack approval surface has no valid reviewer identity",
+    );
+  }
+  return {
+    instance_id: config.approval_surface.instance_id,
+    channel_id: channelId,
+    reviewer_user_id: reviewerUserId,
   };
 }
 
@@ -1812,14 +1911,80 @@ export async function runProductCli(
           ),
         });
         try {
-          const decision = await runtime.coordinator.refreshAccess();
-          organizationResult = {
-            ok: true,
-            command: parsed.command,
-            action,
-            enrolled: true,
-            access: organizationAccessSummary(decision),
-          };
+          if (action === "refresh") {
+            const decision = await runtime.coordinator.refreshAccess();
+            organizationResult = {
+              ok: true,
+              command: parsed.command,
+              action,
+              enrolled: true,
+              access: organizationAccessSummary(decision),
+            };
+          } else {
+            const approvalSurface = configuredSlackApprovalSurface(config);
+            if (action === "slack-link-begin") {
+              const challengeBytes = randomBytes(32);
+              const challengeCode = challengeBytes.toString("base64url");
+              challengeBytes.fill(0);
+              const challenge =
+                await runtime.slackIdentityLinks.begin(challengeCode);
+              if (challenge.channel_id !== approvalSurface.channel_id) {
+                throw new Error(
+                  "the organization-approved Slack channel does not match this installation's Slack approval surface",
+                );
+              }
+              organizationResult = {
+                ok: true,
+                command: parsed.command,
+                action,
+                challenge,
+                challenge_code: challengeCode,
+                next_steps: [
+                  "reply in the Slack challenge thread with challenge_code exactly",
+                  "capture challenge_attempt_id and challenge_message_ts from this output",
+                  "read -r -s ECHO_SLACK_LINK_CODE",
+                  `ECHO_SLACK_LINK_CODE="$ECHO_SLACK_LINK_CODE" echo-brain organization slack-link-complete --config ${shellSingleQuote(parsed.configPath)} --challenge-attempt ${challenge.challenge_attempt_id} --challenge-message-ts ${challenge.challenge_message_ts}`,
+                  "unset ECHO_SLACK_LINK_CODE",
+                ],
+              };
+            } else {
+              const challengeCode =
+                (dependencies.environment ?? process.env)[
+                  "ECHO_SLACK_LINK_CODE"
+                ];
+              if (
+                typeof challengeCode !== "string" ||
+                challengeCode.length === 0
+              ) {
+                throw new Error(
+                  "organization slack-link-complete requires ECHO_SLACK_LINK_CODE",
+                );
+              }
+              const result = await runtime.slackIdentityLinks.complete({
+                challenge_attempt_id: parsed.slackLinkAttemptId!,
+                challenge_message_ts: parsed.slackLinkMessageTs!,
+                challenge_code: challengeCode,
+                expected_provider_subject_id:
+                  approvalSurface.reviewer_user_id,
+                adapter_instance_id: approvalSurface.instance_id,
+                adapter_version:
+                  SLACK_REACTIONS_APPROVAL_SURFACE_ADAPTER_VERSION,
+              });
+              if (result.channel_id !== approvalSurface.channel_id) {
+                throw new Error(
+                  "the linked Slack channel does not match this installation's Slack approval surface",
+                );
+              }
+              organizationResult = {
+                ok: true,
+                command: parsed.command,
+                action,
+                linked: true,
+                result,
+                next_step: "unset ECHO_SLACK_LINK_CODE",
+              };
+            }
+          }
         } finally {
           runtime.close();
         }

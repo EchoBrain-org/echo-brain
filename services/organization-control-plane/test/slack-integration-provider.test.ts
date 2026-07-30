@@ -46,6 +46,35 @@ const REACTION_INPUT = {
   opposite_reaction_name: 'x',
   user_id: 'U123ZHEN',
 } as const;
+const CHALLENGE_ATTEMPT_ID =
+  'cat_12345678-1234-4123-8123-123456789abc';
+const CHALLENGE_ISSUED_AT = '2025-07-29T20:59:00.000Z';
+const CHALLENGE_EXPIRES_AT = '2025-07-29T21:04:00.000Z';
+const CHALLENGE_MESSAGE_TS = '1753822800.000001';
+const CHALLENGE_REPLY_TS = '1753822860.000002';
+const CHALLENGE_CODE = 'A'.repeat(43);
+const CHALLENGE_TEXT =
+  'Echo account connection requested. Reply in this thread with the ' +
+  `code shown by Echo before ${CHALLENGE_EXPIRES_AT}.`;
+const CHALLENGE_MARKER =
+  `echo-identity-link:${CHALLENGE_ATTEMPT_ID}:` +
+  CHALLENGE_EXPIRES_AT;
+const CHALLENGE_INPUT = {
+  expected_team_id: 'T123TEAM',
+  expected_enterprise_id: null,
+  expected_bot_user_id: 'U123BOT',
+  expected_bot_id: 'B123BOT',
+  expected_app_id: 'A123APP',
+  challenge_attempt_id: CHALLENGE_ATTEMPT_ID,
+  channel_id: 'C123CHANNEL',
+  issued_at: CHALLENGE_ISSUED_AT,
+  expires_at: CHALLENGE_EXPIRES_AT,
+} as const;
+const OBSERVE_CHALLENGE_INPUT = {
+  ...CHALLENGE_INPUT,
+  challenge_message_ts: CHALLENGE_MESSAGE_TS,
+  challenge_code: CHALLENGE_CODE,
+} as const;
 
 function slackResponse(
   value: unknown,
@@ -80,6 +109,46 @@ function approvalMessage(
       },
     ],
     reactions,
+  };
+}
+
+function challengeBlocks(
+  marker = CHALLENGE_MARKER,
+): readonly Record<string, unknown>[] {
+  return [
+    {
+      type: 'section',
+      block_id: marker,
+      text: { type: 'mrkdwn', text: CHALLENGE_TEXT },
+    },
+  ];
+}
+
+function challengeParent(
+  override: Readonly<Record<string, unknown>> = {},
+): Record<string, unknown> {
+  return {
+    type: 'message',
+    user: 'U123BOT',
+    bot_id: 'B123BOT',
+    app_id: 'A123APP',
+    ts: CHALLENGE_MESSAGE_TS,
+    text: CHALLENGE_TEXT,
+    blocks: challengeBlocks(),
+    ...override,
+  };
+}
+
+function challengeReply(
+  override: Readonly<Record<string, unknown>> = {},
+): Record<string, unknown> {
+  return {
+    type: 'message',
+    user: 'U123ZHEN',
+    text: CHALLENGE_CODE,
+    ts: CHALLENGE_REPLY_TS,
+    thread_ts: CHALLENGE_MESSAGE_TS,
+    ...override,
   };
 }
 
@@ -199,7 +268,7 @@ describe('Slack integration provider verification', () => {
       provider.verifyHuman(TOKEN, 'U123ZHEN'),
     ).rejects.toMatchObject({
       name: 'SlackIntegrationProviderError',
-      code: 'invalid_response',
+      code: 'unauthorized',
     });
   });
 
@@ -407,5 +476,421 @@ describe('Slack integration provider verification', () => {
         'e'.repeat(64),
       ).verifyReaction(TOKEN, REACTION_INPUT),
     ).rejects.toThrow(/marker does not match/);
+  });
+
+  it('posts a code-free, attempt-bound identity-link challenge as the exact bot', async () => {
+    const fetch = slackFetch(
+      slackResponse(CONNECTION),
+      slackResponse({
+        ok: true,
+        channel: 'C123CHANNEL',
+        ts: CHALLENGE_MESSAGE_TS,
+        message: challengeParent(),
+      }),
+    );
+    const provider = new SlackWebIntegrationProvider({ fetch });
+
+    await expect(
+      provider.postIdentityLinkChallenge(TOKEN, CHALLENGE_INPUT),
+    ).resolves.toMatchObject({
+      team_id: 'T123TEAM',
+      channel_id: 'C123CHANNEL',
+      challenge_message_ts: CHALLENGE_MESSAGE_TS,
+    });
+    const post = fetch.mock.calls[1];
+    expect(post?.[0]).toBe('https://slack.com/api/chat.postMessage');
+    const body = post?.[1]?.body;
+    expect(body).toBeInstanceOf(URLSearchParams);
+    expect((body as URLSearchParams).get('channel')).toBe('C123CHANNEL');
+    expect((body as URLSearchParams).get('text')).toBe(CHALLENGE_TEXT);
+    expect((body as URLSearchParams).get('blocks')).toBe(
+      JSON.stringify(challengeBlocks()),
+    );
+    expect(String(body)).not.toContain(CHALLENGE_CODE);
+  });
+
+  it('accepts Slack timestamps from a clock slightly behind the Authority', async () => {
+    const issuedAt = '2025-07-29T21:00:01.000Z';
+    const expiresAt = '2025-07-29T21:05:01.000Z';
+    const text =
+      'Echo account connection requested. Reply in this thread with the ' +
+      `code shown by Echo before ${expiresAt}.`;
+    const marker =
+      `echo-identity-link:${CHALLENGE_ATTEMPT_ID}:` + expiresAt;
+    const fetch = slackFetch(
+      slackResponse(CONNECTION),
+      slackResponse({
+        ok: true,
+        channel: 'C123CHANNEL',
+        ts: CHALLENGE_MESSAGE_TS,
+        message: challengeParent({
+          text,
+          blocks: [
+            {
+              type: 'section',
+              block_id: marker,
+              text: { type: 'mrkdwn', text },
+            },
+          ],
+        }),
+      }),
+    );
+
+    await expect(
+      new SlackWebIntegrationProvider({ fetch }).postIdentityLinkChallenge(
+        TOKEN,
+        {
+          ...CHALLENGE_INPUT,
+          issued_at: issuedAt,
+          expires_at: expiresAt,
+        },
+      ),
+    ).resolves.toMatchObject({
+      challenge_message_ts: CHALLENGE_MESSAGE_TS,
+    });
+  });
+
+  it('derives one human identity from a complete, unedited challenge thread', async () => {
+    const fetch = slackFetch(
+      slackResponse(CONNECTION),
+      slackResponse({
+        ok: true,
+        messages: [challengeParent(), challengeReply()],
+        has_more: false,
+        response_metadata: { next_cursor: '' },
+      }),
+      slackResponse({ ok: true, user: HUMAN }),
+    );
+    const provider = new SlackWebIntegrationProvider({ fetch });
+
+    await expect(
+      provider.observeIdentityLinkChallenge(
+        TOKEN,
+        OBSERVE_CHALLENGE_INPUT,
+      ),
+    ).resolves.toMatchObject({
+      team_id: 'T123TEAM',
+      user_id: 'U123ZHEN',
+      channel_id: 'C123CHANNEL',
+      challenge_message_ts: CHALLENGE_MESSAGE_TS,
+      reply_message_ts: CHALLENGE_REPLY_TS,
+      verification_evidence_sha256: expect.stringMatching(
+        /^sha256:[0-9a-f]{64}$/,
+      ),
+    });
+    expect(fetch).toHaveBeenNthCalledWith(
+      2,
+      'https://slack.com/api/conversations.replies',
+      expect.objectContaining({
+        body: new URLSearchParams({
+          channel: 'C123CHANNEL',
+          ts: CHALLENGE_MESSAGE_TS,
+          limit: '100',
+        }),
+      }),
+    );
+    expect(fetch).toHaveBeenNthCalledWith(
+      3,
+      'https://slack.com/api/users.info',
+      expect.objectContaining({
+        body: new URLSearchParams({ user: 'U123ZHEN' }),
+      }),
+    );
+  });
+
+  it('derives Enterprise Grid W bot and human identities from the challenge', async () => {
+    const gridConnection = {
+      ...CONNECTION,
+      user_id: 'W123BOT',
+    };
+    const gridHuman = {
+      ...HUMAN,
+      id: 'W123ZHEN',
+    };
+    const provider = new SlackWebIntegrationProvider({
+      fetch: slackFetch(
+        slackResponse(gridConnection),
+        slackResponse({
+          ok: true,
+          messages: [
+            challengeParent({ user: 'W123BOT' }),
+            challengeReply({ user: 'W123ZHEN' }),
+          ],
+          has_more: false,
+          response_metadata: { next_cursor: '' },
+        }),
+        slackResponse({ ok: true, user: gridHuman }),
+      ),
+    });
+
+    await expect(
+      provider.observeIdentityLinkChallenge(TOKEN, {
+        ...OBSERVE_CHALLENGE_INPUT,
+        expected_bot_user_id: 'W123BOT',
+      }),
+    ).resolves.toMatchObject({
+      team_id: 'T123TEAM',
+      user_id: 'W123ZHEN',
+    });
+  });
+
+  it('verifies Enterprise Grid W identities in an approval reaction', async () => {
+    const provider = new SlackWebIntegrationProvider({
+      fetch: slackFetch(
+        slackResponse({ ...CONNECTION, user_id: 'W123BOT' }),
+        slackResponse({
+          ok: true,
+          message: approvalMessage([
+            {
+              name: 'white_check_mark',
+              users: ['W123ZHEN'],
+              count: 1,
+            },
+          ]),
+        }),
+      ),
+    });
+
+    await expect(
+      provider.verifyReaction(TOKEN, {
+        ...REACTION_INPUT,
+        expected_bot_user_id: 'W123BOT',
+        user_id: 'W123ZHEN',
+      }),
+    ).resolves.toBe(true);
+  });
+
+  it('uses Slack-relative reply ordering when the Authority clock is ahead', async () => {
+    const issuedAt = '2025-07-29T21:00:01.000Z';
+    const expiresAt = '2025-07-29T21:05:01.000Z';
+    const text =
+      'Echo account connection requested. Reply in this thread with the ' +
+      `code shown by Echo before ${expiresAt}.`;
+    const marker =
+      `echo-identity-link:${CHALLENGE_ATTEMPT_ID}:` + expiresAt;
+    const provider = new SlackWebIntegrationProvider({
+      fetch: slackFetch(
+        slackResponse(CONNECTION),
+        slackResponse({
+          ok: true,
+          messages: [
+            challengeParent({
+              text,
+              blocks: [
+                {
+                  type: 'section',
+                  block_id: marker,
+                  text: { type: 'mrkdwn', text },
+                },
+              ],
+            }),
+            challengeReply(),
+          ],
+          has_more: false,
+        }),
+        slackResponse({ ok: true, user: HUMAN }),
+      ),
+    });
+
+    await expect(
+      provider.observeIdentityLinkChallenge(TOKEN, {
+        ...OBSERVE_CHALLENGE_INPUT,
+        issued_at: issuedAt,
+        expires_at: expiresAt,
+      }),
+    ).resolves.toMatchObject({
+      user_id: 'U123ZHEN',
+      reply_message_ts: CHALLENGE_REPLY_TS,
+    });
+  });
+
+  it('fails closed when the live Slack connection no longer matches the challenge', async () => {
+    const provider = new SlackWebIntegrationProvider({
+      fetch: slackFetch(
+        slackResponse({ ...CONNECTION, team_id: 'T999OTHER' }),
+      ),
+    });
+
+    await expect(
+      provider.observeIdentityLinkChallenge(
+        TOKEN,
+        OBSERVE_CHALLENGE_INPUT,
+      ),
+    ).rejects.toMatchObject({
+      name: 'SlackIntegrationProviderError',
+      code: 'unauthorized',
+    });
+  });
+
+  it.each([
+    {
+      label: 'edited',
+      parent: challengeParent({
+        edited: { user: 'U123BOT', ts: '1753822810.000001' },
+      }),
+    },
+    {
+      label: 're-marked',
+      parent: challengeParent({
+        blocks: challengeBlocks(
+          'echo-identity-link:cat_another:2025-07-29T21:04:00.000Z',
+        ),
+      }),
+    },
+  ])('rejects an $label challenge parent', async ({ parent }) => {
+    const provider = new SlackWebIntegrationProvider({
+      fetch: slackFetch(
+        slackResponse(CONNECTION),
+        slackResponse({
+          ok: true,
+          messages: [parent, challengeReply()],
+          has_more: false,
+        }),
+      ),
+    });
+
+    await expect(
+      provider.observeIdentityLinkChallenge(
+        TOKEN,
+        OBSERVE_CHALLENGE_INPUT,
+      ),
+    ).rejects.toMatchObject({
+      name: 'SlackIntegrationProviderError',
+      code: 'unauthorized',
+    });
+  });
+
+  it.each([
+    {
+      label: 'has_more',
+      response: {
+        ok: true,
+        messages: [challengeParent(), challengeReply()],
+        has_more: true,
+      },
+    },
+    {
+      label: 'next cursor',
+      response: {
+        ok: true,
+        messages: [challengeParent(), challengeReply()],
+        has_more: false,
+        response_metadata: { next_cursor: 'next-page' },
+      },
+    },
+  ])('does not infer identity from a truncated thread ($label)', async ({
+    response,
+  }) => {
+    const provider = new SlackWebIntegrationProvider({
+      fetch: slackFetch(
+        slackResponse(CONNECTION),
+        slackResponse(response),
+      ),
+    });
+
+    await expect(
+      provider.observeIdentityLinkChallenge(
+        TOKEN,
+        OBSERVE_CHALLENGE_INPUT,
+      ),
+    ).rejects.toMatchObject({
+      name: 'SlackIntegrationProviderError',
+      code: 'not_observed',
+    });
+  });
+
+  it('does not choose between two eligible humans who replied with the code', async () => {
+    const provider = new SlackWebIntegrationProvider({
+      fetch: slackFetch(
+        slackResponse(CONNECTION),
+        slackResponse({
+          ok: true,
+          messages: [
+            challengeParent(),
+            challengeReply(),
+            challengeReply({
+              user: 'U999OTHER',
+              ts: '1753822861.000003',
+            }),
+          ],
+          has_more: false,
+        }),
+      ),
+    });
+
+    await expect(
+      provider.observeIdentityLinkChallenge(
+        TOKEN,
+        OBSERVE_CHALLENGE_INPUT,
+      ),
+    ).rejects.toMatchObject({
+      name: 'SlackIntegrationProviderError',
+      code: 'not_observed',
+    });
+  });
+
+  it.each([
+    {
+      label: 'edited reply',
+      reply: challengeReply({
+        edited: { user: 'U123ZHEN', ts: '1753822862.000001' },
+      }),
+    },
+    {
+      label: 'bot reply',
+      reply: challengeReply({ bot_id: 'B999BOT' }),
+    },
+    {
+      label: 'reply timestamp before the parent',
+      reply: challengeReply({ ts: '1753822799.000001' }),
+    },
+  ])('does not accept an ineligible exact-code $label', async ({ reply }) => {
+    const provider = new SlackWebIntegrationProvider({
+      fetch: slackFetch(
+        slackResponse(CONNECTION),
+        slackResponse({
+          ok: true,
+          messages: [challengeParent(), reply],
+          has_more: false,
+        }),
+      ),
+    });
+
+    await expect(
+      provider.observeIdentityLinkChallenge(
+        TOKEN,
+        OBSERVE_CHALLENGE_INPUT,
+      ),
+    ).rejects.toMatchObject({
+      name: 'SlackIntegrationProviderError',
+      code: 'not_observed',
+    });
+  });
+
+  it('rejects a human whose Slack workspace does not match the connection', async () => {
+    const provider = new SlackWebIntegrationProvider({
+      fetch: slackFetch(
+        slackResponse(CONNECTION),
+        slackResponse({
+          ok: true,
+          messages: [challengeParent(), challengeReply()],
+          has_more: false,
+        }),
+        slackResponse({
+          ok: true,
+          user: { ...HUMAN, team_id: 'T999OTHER' },
+        }),
+      ),
+    });
+
+    await expect(
+      provider.observeIdentityLinkChallenge(
+        TOKEN,
+        OBSERVE_CHALLENGE_INPUT,
+      ),
+    ).rejects.toMatchObject({
+      name: 'SlackIntegrationProviderError',
+      code: 'unauthorized',
+    });
   });
 });

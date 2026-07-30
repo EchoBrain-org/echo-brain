@@ -70,11 +70,16 @@ database never receives the token.
 
 The `slack-organization-tool-v1` ready state is accepted only while its opaque
 credential reference resolves to a private readable secret during Authority
-startup. That ready profile establishes the organization-side prerequisite for
-a future employee connect experience. A profileless active connection is
-compatibility-only. General employee account linking and propagation of active
-organization tools into employee installations are not implemented in this
-milestone.
+startup. An enrolled installation can then start a manual Slack link: it keeps
+a one-time code locally, the Authority posts a code-free challenge through the
+organization bot, and Slack identifies the one human who replies with that
+code in the exact thread. The observed human must match the reviewer already
+configured for the installation's approval adapter. Completion creates or
+reuses that membership's identity link and the installation's exact adapter
+binding. It creates no permission grant. A profileless active connection is
+compatibility-only.
+Automatic tool discovery and configuration propagation into installations are
+not implemented in this milestone.
 
 The live database upgrade preserves one active organization-owned Slack
 connection. Migration `0002_organization_tool_public_configuration.sql` is an
@@ -92,6 +97,11 @@ scope set, and existing public channel. If every value still agrees, the same
 connection ID is promoted in place to `slack-organization-tool-v1`; its existing
 binding and grants continue to reference that connection. A mismatch fails
 closed. This ceremony is promotion, not credential or channel rotation.
+
+Migration `0004_slack_enterprise_grid_user_ids.sql` changes no table or
+persisted relationship. It replaces only the Slack connection guards so the
+bot and human user namespaces accept Slack's documented `U...` and Enterprise
+Grid `W...` IDs while retaining every other v3 invariant.
 
 ### Retained action-time permission path
 
@@ -171,13 +181,12 @@ The connection and permission service must preserve these rules:
   remains usable by its existing identity link, binding, and grants. Explicit
   organization-tool onboarding re-verifies its stored credential and channel
   and promotes that same connection ID; it never creates a parallel tool
-  connection. After Slack is explicitly ready, a new employee bootstrap
-  verifies one exact human user and commits only that identity link,
-  installation binding, and direct approve/reject grants. Organization-tool
-  onboarding does not create those employee-specific records.
-- OAuth state, nonce, PKCE, callback verification, employee account linking,
-  and organization-tool propagation remain requirements for a later
-  employee-facing connect flow.
+  connection. After Slack is explicitly ready, an installation-signed manual
+  challenge proves one exact Slack human and commits only that identity link
+  and installation binding. It creates zero grants. Organization-tool
+  onboarding does not create employee-specific records.
+- OAuth callbacks and automatic organization-tool discovery/configuration
+  propagation remain requirements for a later polished connect flow.
 - Normalize scopes, require the provider's granted scope set to contain every
   scope required by the selected flow, and create the terminal attempt plus
   resulting link or connection in the same database transaction.
@@ -236,8 +245,8 @@ when an accepted milestone has an externally observable behavior that cannot
 be implemented safely with the current model.
 
 No Teams, Granola, project-management, or other non-Slack organization-tool
-onboarding is implemented. General employee account linking and propagation
-are also explicitly deferred.
+onboarding is implemented. Automatic organization-tool propagation and a
+multi-provider employee connect catalog are also explicitly deferred.
 
 ## Schema growth rule
 

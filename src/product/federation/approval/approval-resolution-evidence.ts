@@ -6,6 +6,7 @@ import type {
   DecisionResolvedEvent,
   DecisionRequestedEvent,
 } from '../../approval/decision-node.js';
+import { decisionApprovalId } from '../../approval/decision-node.js';
 import type { VerifiedActiveIdentityBundle } from '../identity/active-identity-bundle-store.js';
 import { canonicalJson, canonicalSha256 } from '../foundation/canonical-json.js';
 import type {
@@ -38,6 +39,7 @@ import {
   providerSnapshot,
   publishedSlackEvent,
   type ApprovalIdentityLineageReader,
+  type OrganizationAuthorizationEvidence,
   type SlackApprovalResolutionEvidence,
   type ValidatedStoredApproval,
 } from './approval-capture-support.js';
@@ -198,6 +200,26 @@ export class ApprovalResolutionEvidence {
       fail('Slack resolution predates its immutable publication');
     }
     const evidence = this.parseResolutionEvidence(input.resolutionEvidence);
+    if (evidence.authorization === undefined) {
+      fail('Slack resolution requires organization authorization evidence');
+    }
+    if (
+      evidence.authorization.organization_id !==
+        bundle.manifest.organization.organization_id ||
+      evidence.authorization.principal_id !==
+        bundle.manifest.principal.principal_id ||
+      evidence.authorization.membership_id !==
+        bundle.manifest.membership.membership_id ||
+      evidence.authorization.installation_id !==
+        bundle.manifest.installation.installation_id ||
+      evidence.authorization.approval_id !==
+        decisionApprovalId(input.events.requested.processing_key) ||
+      evidence.authorization.evaluated_at > input.reviewedAt
+    ) {
+      fail(
+        'organization authorization evidence belongs to another local identity or time',
+      );
+    }
     const observation = approvalConnection(bundle, this.dependencies.runtimeConfig);
     const enrolledProvider = providerSnapshot(
       observation.generation.provider_identity,
@@ -315,6 +337,7 @@ export class ApprovalResolutionEvidence {
           connection_generation: observation.generation.generation,
           configuration_sha256: observation.binding.configuration_sha256,
           provider_identity_sha256: canonicalSha256(enrolledProvider),
+          authorization: evidence.authorization,
           observed_by: this.dependencies.productArtifact(),
         },
       },
@@ -371,9 +394,18 @@ export class ApprovalResolutionEvidence {
   private parseResolutionEvidence(
     evidence: unknown,
   ): SlackApprovalResolutionEvidence {
+    const evidenceRecord =
+      typeof evidence === 'object' && evidence !== null && !Array.isArray(evidence)
+        ? evidence
+        : {};
+    const hasAuthorization = Object.hasOwn(evidenceRecord, 'authorization');
     const root = exactKeys(
       evidence,
-      ['provider_identity', 'actor'],
+      [
+        'provider_identity',
+        'actor',
+        ...(hasAuthorization ? ['authorization'] : []),
+      ],
       'Slack resolution evidence',
     );
     const actor = exactKeys(
@@ -436,7 +468,79 @@ export class ApprovalResolutionEvidence {
         fail('Slack reason reply contains invalid provider identifiers');
       }
     }
+    if (hasAuthorization) {
+      result.authorization = this.parseAuthorizationEvidence(
+        root['authorization'],
+      );
+    }
     return result;
+  }
+
+  private parseAuthorizationEvidence(
+    value: unknown,
+  ): OrganizationAuthorizationEvidence {
+    const evidence = exactKeys(
+      value,
+      [
+        'schema_version',
+        'kind',
+        'authority_id',
+        'organization_id',
+        'enrollment_id',
+        'installation_id',
+        'request_id',
+        'approval_id',
+        'request_sha256',
+        'provider_event_sha256',
+        'allowed',
+        'reason_code',
+        'principal_id',
+        'membership_id',
+        'adapter_binding_id',
+        'permission_grant_id',
+        'evaluated_at',
+      ],
+      'organization authorization evidence',
+    );
+    if (
+      evidence['schema_version'] !== 1 ||
+      evidence['kind'] !== 'echo-organization-authorization-evidence' ||
+      evidence['allowed'] !== true
+    ) {
+      fail('organization authorization evidence is not an allow decision');
+    }
+    const required = (key: string): string =>
+      nonEmpty(evidence[key], `organization authorization ${key}`);
+    const evaluatedAt = required('evaluated_at');
+    assertUtcMillisecondTimestamp(
+      evaluatedAt,
+      'organization authorization evaluated_at',
+    );
+    return {
+      schema_version: 1,
+      kind: 'echo-organization-authorization-evidence',
+      authority_id: required('authority_id'),
+      organization_id: required('organization_id'),
+      enrollment_id: required('enrollment_id'),
+      installation_id: required('installation_id'),
+      request_id: required('request_id'),
+      approval_id: required('approval_id'),
+      request_sha256: digest(
+        evidence['request_sha256'],
+        'organization authorization request',
+      ),
+      provider_event_sha256: digest(
+        evidence['provider_event_sha256'],
+        'organization authorization provider event',
+      ),
+      allowed: true,
+      reason_code: required('reason_code'),
+      principal_id: required('principal_id'),
+      membership_id: required('membership_id'),
+      adapter_binding_id: required('adapter_binding_id'),
+      permission_grant_id: required('permission_grant_id'),
+      evaluated_at: evaluatedAt,
+    };
   }
 
   private slackActorClaim(
@@ -604,6 +708,16 @@ export class ApprovalResolutionEvidence {
         fail('stored Slack reason digest or author is invalid');
       }
     }
+    const observationRecord =
+      typeof observationValue === 'object' &&
+      observationValue !== null &&
+      !Array.isArray(observationValue)
+        ? observationValue
+        : {};
+    const hasAuthorization = Object.hasOwn(
+      observationRecord,
+      'authorization',
+    );
     const observation = exactKeys(
       observationValue,
       [
@@ -612,6 +726,7 @@ export class ApprovalResolutionEvidence {
         'connection_generation',
         'configuration_sha256',
         'provider_identity_sha256',
+        ...(hasAuthorization ? ['authorization'] : []),
         'observed_by',
       ],
       'Slack approval observation',
@@ -638,6 +753,26 @@ export class ApprovalResolutionEvidence {
         'observation provider identity',
       ),
     };
+    if (hasAuthorization) {
+      const authorization = this.parseAuthorizationEvidence(
+        observation['authorization'],
+      );
+      if (
+        authorization.organization_id !==
+          stored.manifest.organization.organization_id ||
+        authorization.principal_id !== actor['principal_id'] ||
+        authorization.membership_id !== actor['membership_id'] ||
+        authorization.installation_id !==
+          stored.manifest.installation.installation_id ||
+        authorization.approval_id !==
+          decisionApprovalId(events.requested.processing_key) ||
+        authorization.evaluated_at > event.reviewed_at
+      ) {
+        fail(
+          'stored organization authorization evidence belongs to another local identity or time',
+        );
+      }
+    }
     const observed = this.dependencies.lineage.resolveBindingSnapshotAt(
       {
         identity_manifest_id: stored.metadata.identity_manifest_id,

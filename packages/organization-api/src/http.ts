@@ -10,6 +10,10 @@ export const ORGANIZATION_API_AUTHORITY_DESCRIPTOR_PATH =
 export const ORGANIZATION_API_ENROLLMENTS_PATH = '/v1/enrollments';
 export const ORGANIZATION_API_ACCESS_LEASES_PATH = '/v1/access-leases';
 export const ORGANIZATION_API_PERMISSION_CHECKS_PATH = '/v1/permission-checks';
+export const ORGANIZATION_API_SLACK_LINK_CHALLENGES_PATH =
+  '/v1/integration-links/slack/challenges';
+export const ORGANIZATION_API_SLACK_LINK_COMPLETIONS_PATH =
+  '/v1/integration-links/slack/completions';
 export const ORGANIZATION_API_ADMIN_OVERVIEW_PATH = '/v1/admin/overview';
 export const ORGANIZATION_API_ADMIN_MEMBERSHIPS_PATH = '/v1/admin/memberships';
 export const ORGANIZATION_API_ADMIN_INSTALLATIONS_PATH =

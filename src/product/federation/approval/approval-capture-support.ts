@@ -83,6 +83,27 @@ export interface SlackApprovalResolutionEvidence {
       text: string;
     } | null;
   };
+  authorization?: OrganizationAuthorizationEvidence;
+}
+
+export interface OrganizationAuthorizationEvidence {
+  schema_version: 1;
+  kind: 'echo-organization-authorization-evidence';
+  authority_id: string;
+  organization_id: string;
+  enrollment_id: string;
+  installation_id: string;
+  request_id: string;
+  approval_id: string;
+  request_sha256: `sha256:${string}`;
+  provider_event_sha256: `sha256:${string}`;
+  allowed: true;
+  reason_code: string;
+  principal_id: string;
+  membership_id: string;
+  adapter_binding_id: string;
+  permission_grant_id: string;
+  evaluated_at: string;
 }
 
 export interface ProductArtifactEvidenceProvider {

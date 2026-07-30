@@ -1,5 +1,9 @@
 import { createHash } from 'node:crypto';
 import type {
+  ObservedSlackIdentityLinkChallenge,
+  ObserveSlackIdentityLinkChallengeInput,
+  PostedSlackIdentityLinkChallenge,
+  PostSlackIdentityLinkChallengeInput,
   SlackIntegrationProvider,
   VerifiedSlackChannel,
   VerifiedSlackConnection,
@@ -10,9 +14,15 @@ import type {
 const MAXIMUM_RESPONSE_BYTES = 512 * 1024;
 const DEFAULT_TIMEOUT_MS = 15_000;
 const SLACK_ID = /^[A-Z][A-Z0-9]{2,}$/;
+const SLACK_USER_ID = /^[UW][A-Z0-9]{2,}$/;
 const SLACK_TIMESTAMP = /^[0-9]{1,16}\.[0-9]{6}$/;
 const REACTION_NAME = /^[a-z0-9_+-]{1,64}$/;
 const APPROVAL_ID = /^[0-9a-f]{64}$/;
+const CONNECTION_ATTEMPT_ID = /^cat_[A-Za-z0-9][A-Za-z0-9_-]{0,95}$/;
+const CHALLENGE_CODE =
+  /^[A-Za-z0-9_-]{42}[AEIMQUYcgkosw048]$/;
+const MAXIMUM_CHALLENGE_LIFETIME_MS = 15 * 60 * 1_000;
+const MAXIMUM_CHALLENGE_THREAD_MESSAGES = 100;
 
 function stable(value: unknown): unknown {
   if (Array.isArray(value)) return value.map(stable);
@@ -59,6 +69,162 @@ function optionalId(
 ): string | null {
   if (value === undefined || value === null) return null;
   return requiredId(value, label, prefix);
+}
+
+function requiredSlackUserId(value: unknown, label: string): string {
+  if (typeof value !== 'string' || !SLACK_USER_ID.test(value)) {
+    throw new Error(`Slack ${label} is invalid`);
+  }
+  return value;
+}
+
+function requiredTimestamp(
+  value: unknown,
+  label: string,
+): number {
+  if (typeof value !== 'string') {
+    throw new SlackIntegrationProviderError(
+      `Slack ${label} is invalid`,
+      'invalid_response',
+    );
+  }
+  const milliseconds = Date.parse(value);
+  if (
+    !Number.isSafeInteger(milliseconds) ||
+    new Date(milliseconds).toISOString() !== value
+  ) {
+    throw new SlackIntegrationProviderError(
+      `Slack ${label} is invalid`,
+      'invalid_response',
+    );
+  }
+  return milliseconds;
+}
+
+function slackTimestampMicroseconds(value: unknown, label: string): bigint {
+  if (typeof value !== 'string' || !SLACK_TIMESTAMP.test(value)) {
+    throw new SlackIntegrationProviderError(
+      `Slack ${label} is invalid`,
+      'invalid_response',
+    );
+  }
+  const [seconds = '', fraction = ''] = value.split('.');
+  return BigInt(seconds) * 1_000_000n + BigInt(fraction);
+}
+
+interface ValidatedIdentityLinkChallenge {
+  marker: string;
+  text: string;
+}
+
+function validateIdentityLinkChallenge(
+  input: PostSlackIdentityLinkChallengeInput,
+): ValidatedIdentityLinkChallenge {
+  requiredId(input.expected_team_id, 'expected team_id', 'T');
+  if (
+    input.expected_enterprise_id !== null &&
+    !(
+      SLACK_ID.test(input.expected_enterprise_id) &&
+      input.expected_enterprise_id.startsWith('E')
+    )
+  ) {
+    throw new SlackIntegrationProviderError(
+      'Slack expected enterprise_id is invalid',
+      'invalid_response',
+    );
+  }
+  if (!SLACK_USER_ID.test(input.expected_bot_user_id)) {
+    throw new SlackIntegrationProviderError(
+      'Slack expected bot user_id is invalid',
+      'invalid_response',
+    );
+  }
+  requiredId(input.expected_bot_id, 'expected bot_id', 'B');
+  if (
+    input.expected_app_id !== null &&
+    !(
+      SLACK_ID.test(input.expected_app_id) &&
+      input.expected_app_id.startsWith('A')
+    )
+  ) {
+    throw new SlackIntegrationProviderError(
+      'Slack expected app_id is invalid',
+      'invalid_response',
+    );
+  }
+  requiredId(input.channel_id, 'challenge channel_id', 'C');
+  if (!CONNECTION_ATTEMPT_ID.test(input.challenge_attempt_id)) {
+    throw new SlackIntegrationProviderError(
+      'Slack identity-link challenge attempt is invalid',
+      'invalid_response',
+    );
+  }
+  const issuedMilliseconds = requiredTimestamp(
+    input.issued_at,
+    'identity-link challenge issued_at',
+  );
+  const expiresMilliseconds = requiredTimestamp(
+    input.expires_at,
+    'identity-link challenge expires_at',
+  );
+  if (
+    expiresMilliseconds <= issuedMilliseconds ||
+    expiresMilliseconds - issuedMilliseconds >
+      MAXIMUM_CHALLENGE_LIFETIME_MS
+  ) {
+    throw new SlackIntegrationProviderError(
+      'Slack identity-link challenge lifetime is invalid',
+      'invalid_response',
+    );
+  }
+  const marker =
+    `echo-identity-link:${input.challenge_attempt_id}:` +
+    input.expires_at;
+  return {
+    marker,
+    text:
+      'Echo account connection requested. Reply in this thread with the ' +
+      `code shown by Echo before ${input.expires_at}.`,
+  };
+}
+
+function challengeBlocks(marker: string, text: string): readonly unknown[] {
+  return Object.freeze([
+    Object.freeze({
+      type: 'section',
+      block_id: marker,
+      text: Object.freeze({ type: 'mrkdwn', text }),
+    }),
+  ]);
+}
+
+function verifyChallengeBlocks(
+  value: unknown,
+  marker: string,
+  text: string,
+): void {
+  if (!Array.isArray(value) || value.length !== 1) {
+    throw new SlackIntegrationProviderError(
+      'Slack identity-link challenge marker is unavailable',
+      'invalid_response',
+    );
+  }
+  const block = record(value[0], 'identity-link challenge block');
+  const blockText = record(
+    block['text'],
+    'identity-link challenge block text',
+  );
+  if (
+    block['type'] !== 'section' ||
+    block['block_id'] !== marker ||
+    blockText['type'] !== 'mrkdwn' ||
+    blockText['text'] !== text
+  ) {
+    throw new SlackIntegrationProviderError(
+      'Slack identity-link challenge marker changed',
+      'unauthorized',
+    );
+  }
 }
 
 function normalizedScopes(header: string | null): readonly string[] {
@@ -278,7 +444,7 @@ export class SlackWebIntegrationProvider implements SlackIntegrationProvider {
         'enterprise_id',
         'E',
       ),
-      bot_user_id: requiredId(response.value['user_id'], 'user_id', 'U'),
+      bot_user_id: requiredSlackUserId(response.value['user_id'], 'user_id'),
       bot_id: requiredId(response.value['bot_id'], 'bot_id', 'B'),
       app_id: optionalId(response.value['app_id'], 'app_id', 'A'),
       granted_scopes: response.scopes,
@@ -293,6 +459,34 @@ export class SlackWebIntegrationProvider implements SlackIntegrationProvider {
       }),
     } satisfies VerifiedSlackConnection;
     return Object.freeze(connection);
+  }
+
+  private async verifyExpectedConnection(
+    token: string,
+    input: Pick<
+      PostSlackIdentityLinkChallengeInput,
+      | 'expected_team_id'
+      | 'expected_enterprise_id'
+      | 'expected_bot_user_id'
+      | 'expected_bot_id'
+      | 'expected_app_id'
+    >,
+    signal?: AbortSignal,
+  ): Promise<VerifiedSlackConnection> {
+    const connection = await this.verifyConnection(token, signal);
+    if (
+      connection.team_id !== input.expected_team_id ||
+      connection.enterprise_id !== input.expected_enterprise_id ||
+      connection.bot_user_id !== input.expected_bot_user_id ||
+      connection.bot_id !== input.expected_bot_id ||
+      connection.app_id !== input.expected_app_id
+    ) {
+      throw new SlackIntegrationProviderError(
+        'Slack connection identity changed',
+        'unauthorized',
+      );
+    }
+    return connection;
   }
 
   async verifyChannel(
@@ -368,7 +562,7 @@ export class SlackWebIntegrationProvider implements SlackIntegrationProvider {
     userId: string,
     signal?: AbortSignal,
   ): Promise<VerifiedSlackHuman> {
-    requiredId(userId, 'reviewer user_id', 'U');
+    requiredSlackUserId(userId, 'reviewer user_id');
     const response = await this.call(
       token,
       'users.info',
@@ -376,7 +570,7 @@ export class SlackWebIntegrationProvider implements SlackIntegrationProvider {
       signal,
     );
     const user = record(response.value['user'], 'users.info user');
-    const observedUserId = requiredId(user['id'], 'user.id', 'U');
+    const observedUserId = requiredSlackUserId(user['id'], 'user.id');
     const teamId = requiredId(user['team_id'], 'user.team_id', 'T');
     const deleted = user['deleted'];
     const isBot = user['is_bot'];
@@ -398,7 +592,7 @@ export class SlackWebIntegrationProvider implements SlackIntegrationProvider {
     ) {
       throw new SlackIntegrationProviderError(
         'Slack reviewer is unavailable or is not a human user',
-        'invalid_response',
+        'unauthorized',
       );
     }
     return Object.freeze({
@@ -427,7 +621,7 @@ export class SlackWebIntegrationProvider implements SlackIntegrationProvider {
         (SLACK_ID.test(input.expected_enterprise_id) &&
           input.expected_enterprise_id.startsWith('E'))
       ) ||
-      !SLACK_ID.test(input.expected_bot_user_id) ||
+      !SLACK_USER_ID.test(input.expected_bot_user_id) ||
       !SLACK_ID.test(input.expected_bot_id) ||
       !(
         input.expected_app_id === null ||
@@ -440,26 +634,14 @@ export class SlackWebIntegrationProvider implements SlackIntegrationProvider {
       !REACTION_NAME.test(input.reaction_name) ||
       !REACTION_NAME.test(input.opposite_reaction_name) ||
       input.reaction_name === input.opposite_reaction_name ||
-      !SLACK_ID.test(input.user_id)
+      !SLACK_USER_ID.test(input.user_id)
     ) {
       throw new SlackIntegrationProviderError(
         'Slack reaction verification input is invalid',
         'invalid_response',
       );
     }
-    const connection = await this.verifyConnection(token, signal);
-    if (
-      connection.team_id !== input.expected_team_id ||
-      connection.enterprise_id !== input.expected_enterprise_id ||
-      connection.bot_user_id !== input.expected_bot_user_id ||
-      connection.bot_id !== input.expected_bot_id ||
-      connection.app_id !== input.expected_app_id
-    ) {
-      throw new SlackIntegrationProviderError(
-        'Slack connection identity changed',
-        'unauthorized',
-      );
-    }
+    await this.verifyExpectedConnection(token, input, signal);
     const response = await this.call(
       token,
       'reactions.get',
@@ -524,7 +706,9 @@ export class SlackWebIntegrationProvider implements SlackIntegrationProvider {
       if (
         !Array.isArray(users) ||
         !Number.isSafeInteger(count) ||
-        users.some((user) => typeof user !== 'string' || !SLACK_ID.test(user))
+        users.some(
+          (user) => typeof user !== 'string' || !SLACK_USER_ID.test(user),
+        )
       ) {
         throw new SlackIntegrationProviderError(
           'Slack reaction roster is invalid',
@@ -545,5 +729,254 @@ export class SlackWebIntegrationProvider implements SlackIntegrationProvider {
       }
     }
     return selectedPresent && !oppositePresent;
+  }
+
+  async postIdentityLinkChallenge(
+    token: string,
+    input: PostSlackIdentityLinkChallengeInput,
+    signal?: AbortSignal,
+  ): Promise<PostedSlackIdentityLinkChallenge> {
+    const challenge = validateIdentityLinkChallenge(input);
+    const connection = await this.verifyExpectedConnection(
+      token,
+      input,
+      signal,
+    );
+    const blocks = challengeBlocks(challenge.marker, challenge.text);
+    const response = await this.call(
+      token,
+      'chat.postMessage',
+      {
+        channel: input.channel_id,
+        text: challenge.text,
+        blocks: JSON.stringify(blocks),
+      },
+      signal,
+    );
+    const channelId = requiredId(
+      response.value['channel'],
+      'chat.postMessage channel',
+      'C',
+    );
+    const messageTs = response.value['ts'];
+    slackTimestampMicroseconds(messageTs, 'challenge message timestamp');
+    const message = record(
+      response.value['message'],
+      'chat.postMessage message',
+    );
+    if (
+      channelId !== input.channel_id ||
+      message['type'] !== 'message' ||
+      message['user'] !== input.expected_bot_user_id ||
+      message['bot_id'] !== input.expected_bot_id ||
+      message['ts'] !== messageTs ||
+      message['text'] !== challenge.text ||
+      message['edited'] !== undefined ||
+      (message['subtype'] !== undefined &&
+        message['subtype'] !== 'bot_message') ||
+      (input.expected_app_id !== null &&
+        message['app_id'] !== input.expected_app_id)
+    ) {
+      throw new SlackIntegrationProviderError(
+        'Slack did not return the exact bot-authored identity-link challenge',
+        'invalid_response',
+      );
+    }
+    verifyChallengeBlocks(
+      message['blocks'],
+      challenge.marker,
+      challenge.text,
+    );
+    return Object.freeze({
+      team_id: connection.team_id,
+      channel_id: channelId,
+      challenge_message_ts: messageTs as string,
+    });
+  }
+
+  async observeIdentityLinkChallenge(
+    token: string,
+    input: ObserveSlackIdentityLinkChallengeInput,
+    signal?: AbortSignal,
+  ): Promise<ObservedSlackIdentityLinkChallenge> {
+    const challenge = validateIdentityLinkChallenge(input);
+    if (!CHALLENGE_CODE.test(input.challenge_code)) {
+      throw new SlackIntegrationProviderError(
+        'Slack identity-link challenge code is invalid',
+        'invalid_response',
+      );
+    }
+    const challengeMessageMicroseconds = slackTimestampMicroseconds(
+      input.challenge_message_ts,
+      'challenge message timestamp',
+    );
+    const connection = await this.verifyExpectedConnection(
+      token,
+      input,
+      signal,
+    );
+    const response = await this.call(
+      token,
+      'conversations.replies',
+      {
+        channel: input.channel_id,
+        ts: input.challenge_message_ts,
+        limit: String(MAXIMUM_CHALLENGE_THREAD_MESSAGES),
+      },
+      signal,
+    );
+    const messages = response.value['messages'];
+    if (
+      !Array.isArray(messages) ||
+      messages.length === 0 ||
+      messages.length > MAXIMUM_CHALLENGE_THREAD_MESSAGES
+    ) {
+      throw new SlackIntegrationProviderError(
+        'Slack identity-link challenge thread is invalid',
+        'invalid_response',
+      );
+    }
+    const hasMore = response.value['has_more'];
+    if (hasMore !== undefined && typeof hasMore !== 'boolean') {
+      throw new SlackIntegrationProviderError(
+        'Slack identity-link challenge pagination is invalid',
+        'invalid_response',
+      );
+    }
+    const responseMetadata = response.value['response_metadata'];
+    let nextCursor = '';
+    if (responseMetadata !== undefined) {
+      const metadata = record(
+        responseMetadata,
+        'conversations.replies response_metadata',
+      );
+      if (
+        metadata['next_cursor'] !== undefined &&
+        typeof metadata['next_cursor'] !== 'string'
+      ) {
+        throw new SlackIntegrationProviderError(
+          'Slack identity-link challenge cursor is invalid',
+          'invalid_response',
+        );
+      }
+      nextCursor = (metadata['next_cursor'] as string | undefined) ?? '';
+    }
+    if (hasMore === true || nextCursor.length > 0) {
+      throw new SlackIntegrationProviderError(
+        'Slack identity-link challenge thread exceeds the verification bound',
+        'not_observed',
+      );
+    }
+
+    const parent = record(
+      messages[0],
+      'identity-link challenge parent message',
+    );
+    if (
+      parent['type'] !== 'message' ||
+      parent['ts'] !== input.challenge_message_ts ||
+      parent['thread_ts'] !== undefined ||
+      parent['user'] !== input.expected_bot_user_id ||
+      parent['bot_id'] !== input.expected_bot_id ||
+      parent['text'] !== challenge.text ||
+      parent['edited'] !== undefined ||
+      (parent['subtype'] !== undefined &&
+        parent['subtype'] !== 'bot_message') ||
+      (input.expected_app_id !== null &&
+        parent['app_id'] !== input.expected_app_id)
+    ) {
+      throw new SlackIntegrationProviderError(
+        'Slack identity-link challenge parent changed',
+        'unauthorized',
+      );
+    }
+    verifyChallengeBlocks(
+      parent['blocks'],
+      challenge.marker,
+      challenge.text,
+    );
+
+    const matchingReplies: Array<{
+      userId: string;
+      replyMessageTs: string;
+    }> = [];
+    for (const value of messages.slice(1)) {
+      const reply = record(value, 'identity-link challenge reply');
+      if (reply['text'] !== input.challenge_code) continue;
+      if (
+        reply['type'] !== 'message' ||
+        reply['thread_ts'] !== input.challenge_message_ts ||
+        reply['edited'] !== undefined ||
+        reply['bot_id'] !== undefined ||
+        reply['subtype'] !== undefined
+      ) {
+        continue;
+      }
+      let userId: string;
+      let replyMessageTs: string;
+      try {
+        userId = requiredSlackUserId(
+          reply['user'],
+          'identity-link reply user',
+        );
+        replyMessageTs =
+          typeof reply['ts'] === 'string'
+            ? reply['ts']
+            : '';
+        const replyMicroseconds = slackTimestampMicroseconds(
+          replyMessageTs,
+          'identity-link reply timestamp',
+        );
+        if (replyMicroseconds <= challengeMessageMicroseconds) {
+          continue;
+        }
+      } catch (error) {
+        if (error instanceof SlackIntegrationProviderError) continue;
+        throw error;
+      }
+      matchingReplies.push({ userId, replyMessageTs });
+    }
+    if (matchingReplies.length !== 1) {
+      throw new SlackIntegrationProviderError(
+        'Slack did not expose exactly one eligible identity-link reply',
+        'not_observed',
+      );
+    }
+    const [match] = matchingReplies;
+    if (match === undefined) {
+      throw new SlackIntegrationProviderError(
+        'Slack identity-link reply is unavailable',
+        'not_observed',
+      );
+    }
+    const human = await this.verifyHuman(token, match.userId, signal);
+    if (human.team_id !== input.expected_team_id) {
+      throw new SlackIntegrationProviderError(
+        'Slack identity-link reply came from another workspace',
+        'unauthorized',
+      );
+    }
+    return Object.freeze({
+      team_id: human.team_id,
+      user_id: human.user_id,
+      channel_id: input.channel_id,
+      challenge_message_ts: input.challenge_message_ts,
+      reply_message_ts: match.replyMessageTs,
+      verification_evidence_sha256: digest({
+        method: 'slack_conversations_replies_identity_link',
+        connection_evidence_sha256:
+          connection.verification_evidence_sha256,
+        human_evidence_sha256: human.verification_evidence_sha256,
+        challenge_attempt_id: input.challenge_attempt_id,
+        issued_at: input.issued_at,
+        expires_at: input.expires_at,
+        channel_id: input.channel_id,
+        challenge_message_ts: input.challenge_message_ts,
+        reply_message_ts: match.replyMessageTs,
+        user_id: human.user_id,
+        marker: challenge.marker,
+        challenge_code_sha256: digest(input.challenge_code),
+      }),
+    });
   }
 }

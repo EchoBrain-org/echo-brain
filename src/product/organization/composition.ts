@@ -8,6 +8,7 @@ import {
 } from './enrollment/local-organization-coordinator.js';
 import type { OrganizationStateStore } from './state/organization-state-store.js';
 import { SqliteOrganizationStateStore } from './state/sqlite-organization-state-store.js';
+import { OrganizationSlackIdentityLinkCoordinator } from './slack-identity-link-coordinator.js';
 
 export const DEFAULT_LOCAL_ORGANIZATION_LEASE_TTL_MS = 5 * 60 * 1000;
 
@@ -17,8 +18,12 @@ export interface CreateLocalOrganizationRuntimeOptions {
   installationSigner: InstallationSigner;
   maximumActiveLeaseTtlMs?: number;
   allowedClockSkewMs?: number;
-  clock?: LocalOrganizationClock;
+  clock: LocalOrganizationClock;
   requestIds?: LocalOrganizationRequestIds;
+  slackLinkRequestIds?: {
+    nextBeginRequestId(): string;
+    nextCompleteRequestId(): string;
+  };
   allowInsecureLoopback?: boolean;
   authorityCaPem?: string;
   fetch?: typeof fetch;
@@ -26,6 +31,7 @@ export interface CreateLocalOrganizationRuntimeOptions {
 
 export interface LocalOrganizationRuntime {
   coordinator: LocalOrganizationCoordinator;
+  slackIdentityLinks: OrganizationSlackIdentityLinkCoordinator;
   authorityClient: OrganizationAuthorityClient;
   state: OrganizationStateStore;
   close(): void;
@@ -57,13 +63,28 @@ export function createLocalOrganizationRuntime(
       ...(options.allowedClockSkewMs === undefined
         ? {}
         : { allowedClockSkewMs: options.allowedClockSkewMs }),
-      ...(options.clock === undefined ? {} : { clock: options.clock }),
+      clock: options.clock,
       ...(options.requestIds === undefined
         ? {}
         : { requestIds: options.requestIds }),
     });
+    const slackIdentityLinks = new OrganizationSlackIdentityLinkCoordinator({
+      state,
+      authorityClient,
+      installationSigner: options.installationSigner,
+      now: () => options.clock.now(),
+      ...(options.slackLinkRequestIds === undefined
+        ? {}
+        : {
+            nextBeginRequestId:
+              options.slackLinkRequestIds.nextBeginRequestId,
+            nextCompleteRequestId:
+              options.slackLinkRequestIds.nextCompleteRequestId,
+          }),
+    });
     return Object.freeze({
       coordinator,
+      slackIdentityLinks,
       authorityClient,
       state,
       close: () => state.close(),

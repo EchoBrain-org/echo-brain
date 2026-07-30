@@ -1,8 +1,11 @@
 import { createHash } from 'node:crypto';
 import { describe, expect, it, vi } from 'vitest';
 import {
+  organizationSlackLinkChallengeCodeSha256,
   organizationPermissionProviderEventSha256,
   type OrganizationPermissionCheckRequestV1,
+  type OrganizationSlackLinkBeginRequestV1,
+  type OrganizationSlackLinkCompleteRequestV1,
 } from '@echo-brain/organization-api';
 import {
   AUTHORITY_FILE_SECRET_BACKEND,
@@ -15,6 +18,7 @@ import {
 import {
   OrganizationAuthorityApplication,
   type OrganizationIntegrationAdminContext,
+  type OrganizationIntegrationInstallationContext,
   type OrganizationIntegrationOwnerContext,
   type OrganizationPermissionAuthorityStatus,
   type OrganizationPermissionAuthorityTarget,
@@ -37,6 +41,7 @@ const INSTALLATION_KEY_ID = digest('installation-key');
 const AUTHORITY_KEY_ID = digest('authority-key');
 const SLACK_TOKEN = 'xoxb-test-token-12345678';
 const SECRET_HANDLE_ID = 'sch_99999999-9999-4999-8999-999999999999';
+const SLACK_LINK_CODE = `${'A'.repeat(42)}E`;
 
 function digest(value: string): `sha256:${string}` {
   return `sha256:${createHash('sha256').update(value).digest('hex')}`;
@@ -107,6 +112,62 @@ function request(
   return { ...value, ...overrides };
 }
 
+function slackLinkBeginRequest(): OrganizationSlackLinkBeginRequestV1 {
+  return {
+    schema_version: 1,
+    kind: 'echo-organization-slack-link-begin-request',
+    request_id: 'slb_bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb',
+    authority_id: AUTHORITY_ID,
+    authority_key_id: AUTHORITY_KEY_ID,
+    organization_id: ORGANIZATION_ID,
+    enrollment_id: ENROLLMENT_ID,
+    installation_id: INSTALLATION_ID,
+    installation_key_id: INSTALLATION_KEY_ID,
+    challenge_code_sha256:
+      organizationSlackLinkChallengeCodeSha256(SLACK_LINK_CODE),
+    requested_at: NOW,
+    integrity: {
+      canonicalization: 'RFC8785',
+      payload_sha256: digest('Slack-link-begin-payload'),
+      signature_algorithm: 'ecdsa-p256-sha256-der-low-s',
+      key_id: INSTALLATION_KEY_ID,
+      signature_base64: 'QUJDREVGR0g=',
+    },
+  };
+}
+
+function slackLinkCompleteRequest(
+  challengeAttemptId: string,
+  challengeMessageTs: string,
+): OrganizationSlackLinkCompleteRequestV1 {
+  return {
+    schema_version: 1,
+    kind: 'echo-organization-slack-link-complete-request',
+    request_id: 'slc_cccccccc-cccc-4ccc-8ccc-cccccccccccc',
+    authority_id: AUTHORITY_ID,
+    authority_key_id: AUTHORITY_KEY_ID,
+    organization_id: ORGANIZATION_ID,
+    enrollment_id: ENROLLMENT_ID,
+    installation_id: INSTALLATION_ID,
+    installation_key_id: INSTALLATION_KEY_ID,
+    challenge_attempt_id: challengeAttemptId,
+    challenge_message_ts: challengeMessageTs,
+    challenge_code: SLACK_LINK_CODE,
+    expected_provider_subject_id: 'U123ZHEN',
+    adapter_id: 'slack-reactions',
+    adapter_instance_id: 'primary',
+    adapter_version: '1.0.0',
+    requested_at: NOW,
+    integrity: {
+      canonicalization: 'RFC8785',
+      payload_sha256: digest('Slack-link-complete-payload'),
+      signature_algorithm: 'ecdsa-p256-sha256-der-low-s',
+      key_id: INSTALLATION_KEY_ID,
+      signature_base64: 'QUJDREVGR0g=',
+    },
+  };
+}
+
 function adminContext(): OrganizationIntegrationAdminContext {
   return {
     administrator: {
@@ -133,6 +194,22 @@ function ownerContext(): OrganizationIntegrationOwnerContext {
       principal_id: ADMIN_PRINCIPAL_ID,
       membership_id: ADMIN_MEMBERSHIP_ID,
     },
+    checked_at: NOW,
+  };
+}
+
+function installationContext(
+  requestId: string,
+): OrganizationIntegrationInstallationContext {
+  return {
+    request_sha256: digest(`Slack-link:${requestId}`),
+    authority_id: AUTHORITY_ID,
+    organization_id: ORGANIZATION_ID,
+    enrollment_id: ENROLLMENT_ID,
+    principal_id: TARGET_PRINCIPAL_ID,
+    membership_id: TARGET_MEMBERSHIP_ID,
+    installation_id: INSTALLATION_ID,
+    installation_key_id: INSTALLATION_KEY_ID,
     checked_at: NOW,
   };
 }
@@ -221,6 +298,19 @@ function testDependencies(options: {
       if (options.reaction instanceof Error) throw options.reaction;
       return options.reaction ?? true;
     }),
+    postIdentityLinkChallenge: vi.fn(async () => ({
+      team_id: 'T123ABC',
+      channel_id: 'C123ABC',
+      challenge_message_ts: '1753822800.000001',
+    })),
+    observeIdentityLinkChallenge: vi.fn(async (_token, input) => ({
+      team_id: 'T123ABC',
+      user_id: 'U123ZHEN',
+      channel_id: 'C123ABC',
+      challenge_message_ts: input.challenge_message_ts,
+      reply_message_ts: '1753822801.000001',
+      verification_evidence_sha256: digest('slack-link-observation'),
+    })),
   };
   let ownerCheck = 0;
   const integrationOwnerContext = vi.fn(() => {
@@ -237,6 +327,9 @@ function testDependencies(options: {
     return ownerContext();
   });
   const integrationAdminContext = vi.fn(() => adminContext());
+  const integrationInstallationContext = vi.fn(
+    (value: { request_id: string }) => installationContext(value.request_id),
+  );
   const checkPermissionSubject = vi.fn(
     (
       value: OrganizationPermissionCheckRequestV1,
@@ -255,12 +348,14 @@ function testDependencies(options: {
     }),
     integrationOwnerContext,
     integrationAdminContext,
+    integrationInstallationContext,
     checkPermissionSubject,
   } as unknown as OrganizationAuthorityApplication;
   return {
     authority,
     integrationOwnerContext,
     integrationAdminContext,
+    integrationInstallationContext,
     checkPermissionSubject,
     secrets,
     slack,
@@ -374,6 +469,174 @@ describe('composed organization integrations application', () => {
           outcome: 'succeeded',
         }),
       ]);
+    } finally {
+      repository.close();
+    }
+  });
+
+  it('lets an enrolled installation prove its Slack human without creating grants', async () => {
+    const { repository, dependencies, application } = applicationFixture();
+    try {
+      await onboardSlackOrganizationTool(application);
+      const challenge = await application.beginSlackIdentityLink(
+        slackLinkBeginRequest(),
+      );
+      const completionRequest = slackLinkCompleteRequest(
+        challenge.challenge_attempt_id,
+        challenge.challenge_message_ts,
+      );
+      const result =
+        await application.completeSlackIdentityLink(completionRequest);
+      const replay =
+        await application.completeSlackIdentityLink(completionRequest);
+      const responseLossRetry =
+        await application.completeSlackIdentityLink({
+          ...completionRequest,
+          request_id: 'slc_eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee',
+          integrity: {
+            ...completionRequest.integrity,
+            payload_sha256: digest('Slack-link-complete-retry-payload'),
+          },
+        });
+      await expect(
+        application.completeSlackIdentityLink({
+          ...completionRequest,
+          request_id: 'slc_ffffffff-ffff-4fff-8fff-ffffffffffff',
+          challenge_code: `${'B'.repeat(42)}E`,
+          integrity: {
+            ...completionRequest.integrity,
+            payload_sha256: digest('Slack-link-wrong-code-payload'),
+          },
+        }),
+      ).rejects.toMatchObject({
+        name: 'AuthorityOperationError',
+        code: 'conflict',
+      });
+
+      expect(challenge).toMatchObject({
+        provider: 'slack',
+        provider_tenant_id: 'T123ABC',
+        channel_id: 'C123ABC',
+      });
+      expect(
+        dependencies.slack.postIdentityLinkChallenge,
+      ).toHaveBeenCalledWith(
+        SLACK_TOKEN,
+        expect.objectContaining({
+          challenge_attempt_id: challenge.challenge_attempt_id,
+          channel_id: 'C123ABC',
+        }),
+        undefined,
+      );
+      expect(
+        dependencies.slack.observeIdentityLinkChallenge,
+      ).toHaveBeenCalledWith(
+        SLACK_TOKEN,
+        expect.objectContaining({
+          challenge_attempt_id: challenge.challenge_attempt_id,
+          challenge_message_ts: challenge.challenge_message_ts,
+          challenge_code: SLACK_LINK_CODE,
+        }),
+        undefined,
+      );
+      expect(result).toMatchObject({
+        organization_id: ORGANIZATION_ID,
+        principal_id: TARGET_PRINCIPAL_ID,
+        membership_id: TARGET_MEMBERSHIP_ID,
+        installation_id: INSTALLATION_ID,
+        provider_subject_id: 'U123ZHEN',
+        identity_link_created: true,
+        adapter_binding_created: true,
+        permission_grants_created: 0,
+      });
+      expect(replay).toEqual(result);
+      expect(responseLossRetry).toEqual(result);
+      expect(
+        dependencies.slack.observeIdentityLinkChallenge,
+      ).toHaveBeenCalledTimes(1);
+      expect(application.overview().identity_links).toHaveLength(1);
+      expect(application.overview().adapter_bindings).toHaveLength(1);
+      expect(application.overview().permission_grants).toEqual([]);
+    } finally {
+      repository.close();
+    }
+  });
+
+  it('refuses to link a Slack human different from the configured reviewer', async () => {
+    const { repository, dependencies, application } = applicationFixture();
+    try {
+      await onboardSlackOrganizationTool(application);
+      vi.mocked(
+        dependencies.slack.observeIdentityLinkChallenge,
+      ).mockImplementationOnce(async (_token, input) => ({
+        team_id: 'T123ABC',
+        user_id: 'U999OTHER',
+        channel_id: 'C123ABC',
+        challenge_message_ts: input.challenge_message_ts,
+        reply_message_ts: '1753822801.000001',
+        verification_evidence_sha256: digest(
+          'other-slack-link-observation',
+        ),
+      }));
+      const challenge = await application.beginSlackIdentityLink(
+        slackLinkBeginRequest(),
+      );
+
+      await expect(
+        application.completeSlackIdentityLink(
+          slackLinkCompleteRequest(
+            challenge.challenge_attempt_id,
+            challenge.challenge_message_ts,
+          ),
+        ),
+      ).rejects.toMatchObject({
+        name: 'AuthorityOperationError',
+        code: 'conflict',
+      });
+      expect(application.overview().identity_links).toEqual([]);
+      expect(application.overview().adapter_bindings).toEqual([]);
+    } finally {
+      repository.close();
+    }
+  });
+
+  it('does not link an employee when the Slack channel becomes ineligible during completion', async () => {
+    const { repository, dependencies, application } = applicationFixture();
+    try {
+      await onboardSlackOrganizationTool(application);
+      const challenge = await application.beginSlackIdentityLink(
+        slackLinkBeginRequest(),
+      );
+      vi.mocked(dependencies.slack.verifyChannel).mockRejectedValueOnce(
+        new SlackIntegrationProviderError(
+          'Slack channel is archived',
+          'not_observed',
+        ),
+      );
+
+      await expect(
+        application.completeSlackIdentityLink(
+          slackLinkCompleteRequest(
+            challenge.challenge_attempt_id,
+            challenge.challenge_message_ts,
+          ),
+        ),
+      ).rejects.toMatchObject({
+        name: 'AuthorityOperationError',
+        code: 'invalid_request',
+      });
+      expect(
+        dependencies.slack.observeIdentityLinkChallenge,
+      ).toHaveBeenCalledOnce();
+      expect(dependencies.slack.verifyChannel).toHaveBeenLastCalledWith(
+        SLACK_TOKEN,
+        'C123ABC',
+        'T123ABC',
+        undefined,
+      );
+      expect(application.overview().identity_links).toEqual([]);
+      expect(application.overview().adapter_bindings).toEqual([]);
+      expect(application.overview().permission_grants).toEqual([]);
     } finally {
       repository.close();
     }
@@ -660,6 +923,30 @@ describe('composed organization integrations application', () => {
     }
   });
 
+  it('accepts an Enterprise Grid W user in the legacy bootstrap request', async () => {
+    const { repository, dependencies, application } = applicationFixture();
+    try {
+      await expect(
+        application.bootstrapSlackApproval({
+          command_id: 'adm_cccccccc-cccc-4ccc-8ccc-cccccccccccc',
+          administrator_membership_id: ADMIN_MEMBERSHIP_ID,
+          target_membership_id: TARGET_MEMBERSHIP_ID,
+          installation_id: INSTALLATION_ID,
+          adapter_instance_id: 'primary',
+          adapter_version: '1.0.0',
+          channel_id: 'C123ABC',
+          approve_reaction: 'white_check_mark',
+          reject_reaction: 'x',
+          slack_user_id: 'W123ZHEN',
+          slack_bot_token: SLACK_TOKEN,
+        }),
+      ).rejects.toThrow('Slack must be activated for the organization');
+      expect(dependencies.integrationAdminContext).not.toHaveBeenCalled();
+    } finally {
+      repository.close();
+    }
+  });
+
   it('allows the exact signed request only after Slack verifies its reaction', async () => {
     const { repository, dependencies, application } = applicationFixture();
     try {
@@ -691,6 +978,11 @@ describe('composed organization integrations application', () => {
           opposite_reaction_name: 'x',
           user_id: 'U123ZHEN',
         },
+        undefined,
+      );
+      expect(dependencies.slack.verifyHuman).toHaveBeenCalledWith(
+        SLACK_TOKEN,
+        'U123ZHEN',
         undefined,
       );
       expect(application.overview().recent_audit[0]).toMatchObject({
@@ -741,6 +1033,97 @@ describe('composed organization integrations application', () => {
           action: 'organization_tool.slack.onboarded',
         }),
       ]);
+    } finally {
+      repository.close();
+    }
+  });
+
+  it('denies when Slack no longer exposes the reacting user as an active human', async () => {
+    const { repository, dependencies, application } = applicationFixture();
+    try {
+      await bootstrap(application);
+      vi.mocked(dependencies.slack.verifyHuman).mockRejectedValueOnce(
+        new SlackIntegrationProviderError(
+          'Slack reviewer is deleted',
+          'unauthorized',
+        ),
+      );
+
+      await expect(application.checkPermission(request())).resolves.toMatchObject({
+        allowed: false,
+        reason_code: 'provider_identity_mismatch',
+        principal_id: TARGET_PRINCIPAL_ID,
+        membership_id: TARGET_MEMBERSHIP_ID,
+      });
+      expect(dependencies.slack.verifyReaction).toHaveBeenCalledOnce();
+      expect(dependencies.slack.verifyHuman).toHaveBeenCalledWith(
+        SLACK_TOKEN,
+        'U123ZHEN',
+        undefined,
+      );
+      expect(application.overview().recent_audit[0]).toMatchObject({
+        action: 'permission.approve',
+        outcome: 'denied',
+        reason_code: 'provider_identity_mismatch',
+      });
+    } finally {
+      repository.close();
+    }
+  });
+
+  it('denies when Slack resolves the reacting user outside the exact workspace identity', async () => {
+    const { repository, dependencies, application } = applicationFixture();
+    try {
+      await bootstrap(application);
+      vi.mocked(dependencies.slack.verifyHuman).mockResolvedValueOnce({
+        team_id: 'T999OTHER',
+        user_id: 'U123ZHEN',
+        verification_evidence_sha256: digest('other-workspace-human'),
+      });
+
+      await expect(application.checkPermission(request())).resolves.toMatchObject({
+        allowed: false,
+        reason_code: 'provider_identity_mismatch',
+      });
+      expect(application.overview().recent_audit[0]).toMatchObject({
+        action: 'permission.approve',
+        outcome: 'denied',
+        reason_code: 'provider_identity_mismatch',
+      });
+    } finally {
+      repository.close();
+    }
+  });
+
+  it('denies when the exact integration candidate is revoked during Slack verification', async () => {
+    const { repository, dependencies, application } = applicationFixture();
+    try {
+      await bootstrap(application);
+      vi.mocked(dependencies.slack.verifyHuman).mockClear();
+      const lookup =
+        OrganizationIntegrationsRepository.prototype
+          .findSlackApprovalPermission;
+      const find = vi
+        .spyOn(repository, 'findSlackApprovalPermission')
+        .mockImplementationOnce((input) => lookup.call(repository, input))
+        .mockReturnValueOnce(null);
+
+      await expect(application.checkPermission(request())).resolves.toMatchObject({
+        allowed: false,
+        reason_code: 'no_active_link_binding_or_grant',
+        principal_id: null,
+        membership_id: null,
+        adapter_binding_id: null,
+        permission_grant_id: null,
+      });
+      expect(find).toHaveBeenCalledTimes(2);
+      expect(dependencies.slack.verifyReaction).toHaveBeenCalledOnce();
+      expect(dependencies.slack.verifyHuman).toHaveBeenCalledOnce();
+      expect(application.overview().recent_audit[0]).toMatchObject({
+        action: 'permission.approve',
+        outcome: 'denied',
+        reason_code: 'no_active_link_binding_or_grant',
+      });
     } finally {
       repository.close();
     }

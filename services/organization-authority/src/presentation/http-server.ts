@@ -16,10 +16,14 @@ import {
   ORGANIZATION_API_ENROLLMENT_AUTH_SCHEME,
   ORGANIZATION_API_ENROLLMENTS_PATH,
   ORGANIZATION_API_PERMISSION_CHECKS_PATH,
+  ORGANIZATION_API_SLACK_LINK_CHALLENGES_PATH,
+  ORGANIZATION_API_SLACK_LINK_COMPLETIONS_PATH,
   validateCompleteOrganizationEnrollmentRequest,
   validateIssueOrganizationEnrollmentGrantRequest,
   validateOrganizationAccessLeaseRequest,
   validateOrganizationPermissionCheckRequest,
+  validateOrganizationSlackLinkBeginRequest,
+  validateOrganizationSlackLinkCompleteRequest,
   validateProvisionOrganizationMembershipRequest,
   validateRevokeOrganizationSubjectRequest,
 } from '@echo-brain/organization-api';
@@ -752,6 +756,42 @@ export function createOrganizationAuthorityHttpServer(
             response,
             200,
             await integrations.checkPermission(
+              command,
+              lifecycle.shutdownController.signal,
+            ),
+          );
+          return;
+        }
+
+        if (
+          method === 'POST' &&
+          url.pathname === ORGANIZATION_API_SLACK_LINK_CHALLENGES_PATH
+        ) {
+          const command = validateOrganizationSlackLinkBeginRequest(
+            await readJsonBody(request),
+          );
+          sendJson(
+            response,
+            201,
+            await requireIntegrations().beginSlackIdentityLink(
+              command,
+              lifecycle.shutdownController.signal,
+            ),
+          );
+          return;
+        }
+
+        if (
+          method === 'POST' &&
+          url.pathname === ORGANIZATION_API_SLACK_LINK_COMPLETIONS_PATH
+        ) {
+          const command = validateOrganizationSlackLinkCompleteRequest(
+            await readJsonBody(request),
+          );
+          sendJson(
+            response,
+            200,
+            await requireIntegrations().completeSlackIdentityLink(
               command,
               lifecycle.shutdownController.signal,
             ),

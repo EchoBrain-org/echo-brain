@@ -5,6 +5,10 @@ import type {
   OrganizationAuthorityDescriptorResponseV1,
   OrganizationPermissionCheckDecisionV1,
   OrganizationPermissionCheckRequestV1,
+  OrganizationSlackLinkBeginRequestV1,
+  OrganizationSlackLinkBeginResponseV1,
+  OrganizationSlackLinkCompleteRequestV1,
+  OrganizationSlackLinkResultV1,
 } from '@echo-brain/organization-api';
 import type { OrganizationEnrollmentRequestV1 } from '@echo-brain/organization-protocol';
 
@@ -31,6 +35,16 @@ export interface OrganizationAuthorityClient {
     request: OrganizationPermissionCheckRequestV1,
     signal?: AbortSignal,
   ): Promise<OrganizationPermissionCheckDecisionV1>;
+
+  beginSlackLink(
+    request: OrganizationSlackLinkBeginRequestV1,
+    signal?: AbortSignal,
+  ): Promise<OrganizationSlackLinkBeginResponseV1>;
+
+  completeSlackLink(
+    request: OrganizationSlackLinkCompleteRequestV1,
+    signal?: AbortSignal,
+  ): Promise<OrganizationSlackLinkResultV1>;
 }
 
 export interface OrganizationAuthorityConflict {

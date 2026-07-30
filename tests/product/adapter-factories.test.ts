@@ -41,7 +41,7 @@ describe('product adapter factories', () => {
   it('creates configured instances through one shared factory shape', async () => {
     const factories = new ProductAdapterFactoryRegistry();
     const approvalActionAuthorizer: ApprovalActionAuthorizer = {
-      authorize: async () => ({ allowed: true }),
+      authorize: async () => ({ allowed: true, evidence: { test: true } }),
     };
     let observedApprovalActionAuthorizer:
       | ApprovalActionAuthorizer
@@ -181,7 +181,7 @@ describe('product adapter factories', () => {
     expect(approvalFactory).toBeDefined();
 
     const approvalActionAuthorizer: ApprovalActionAuthorizer = {
-      authorize: async () => ({ allowed: true }),
+      authorize: async () => ({ allowed: true, evidence: { test: true } }),
     };
     const context = {
       stateDirectory: '/tmp/adapter-factory-test/state',

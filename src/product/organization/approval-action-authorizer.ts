@@ -1,7 +1,9 @@
 import { randomUUID } from 'node:crypto';
 import {
   canonicalSha256,
+  type JsonObject,
   type P256SigningKeyDescriptor,
+  type Sha256Digest,
 } from '@echo-brain/federation-protocol';
 import {
   createOrganizationPermissionCheckRequest,
@@ -49,6 +51,47 @@ export interface OrganizationApprovalActionAuthorizerOptions {
   now: () => string;
   nextRequestId?: () => string;
 }
+
+export type OrganizationApprovalActionAuthorizationEvidence = JsonObject & {
+  schema_version: 1;
+  kind: 'echo-organization-authorization-evidence';
+  authority_id: string;
+  organization_id: string;
+  enrollment_id: string;
+  installation_id: string;
+  request_id: string;
+  approval_id: string;
+  request_sha256: Sha256Digest;
+  provider_event_sha256: Sha256Digest;
+  allowed: boolean;
+  reason_code: string;
+  principal_id: string | null;
+  membership_id: string | null;
+  adapter_binding_id: string | null;
+  permission_grant_id: string | null;
+  evaluated_at: string;
+};
+
+type OrganizationApprovalActionAuthorizationAllowEvidence =
+  OrganizationApprovalActionAuthorizationEvidence & {
+    allowed: true;
+    principal_id: string;
+    membership_id: string;
+    adapter_binding_id: string;
+    permission_grant_id: string;
+  };
+
+export type OrganizationApprovalActionAuthorizationResult =
+  | {
+      allowed: true;
+      reason: string;
+      evidence: OrganizationApprovalActionAuthorizationAllowEvidence;
+    }
+  | {
+      allowed: false;
+      reason: string;
+      evidence?: OrganizationApprovalActionAuthorizationEvidence;
+    };
 
 /**
  * Once any Authority trust or enrollment intent is pinned, local approval
@@ -108,7 +151,7 @@ export class OrganizationApprovalActionAuthorizer {
   async authorize(
     input: OrganizationApprovalActionAuthorizationRequest,
     signal?: AbortSignal,
-  ): Promise<{ allowed: boolean; reason: string }> {
+  ): Promise<OrganizationApprovalActionAuthorizationResult> {
     const state = this.options.openState();
     try {
       const enrollment = state.readEnrollment();
@@ -191,9 +234,62 @@ export class OrganizationApprovalActionAuthorizer {
           'organization permission decision does not match the signed request',
         );
       }
+      const evidenceBase = {
+        schema_version: 1,
+        kind: 'echo-organization-authorization-evidence',
+        authority_id: requestIdentity.authority_id,
+        organization_id: requestIdentity.organization_id,
+        enrollment_id: enrollment.receipt.enrollment_id,
+        installation_id: requestIdentity.installation_id,
+        request_id: request.request_id,
+        approval_id: request.approval_id,
+        request_sha256: decision.request_sha256,
+        provider_event_sha256: decision.provider_event_sha256,
+        reason_code: decision.reason_code,
+        evaluated_at: decision.evaluated_at,
+      } as const;
+      const reason = decision.reason_code.replaceAll('_', ' ');
+      if (!decision.allowed) {
+        return {
+          allowed: false,
+          reason,
+          evidence: {
+            ...evidenceBase,
+            allowed: false,
+            principal_id: decision.principal_id,
+            membership_id: decision.membership_id,
+            adapter_binding_id: decision.adapter_binding_id,
+            permission_grant_id: decision.permission_grant_id,
+          },
+        };
+      }
+      if (
+        decision.principal_id !== requestIdentity.principal_id ||
+        decision.membership_id !== requestIdentity.membership_id
+      ) {
+        throw new Error(
+          'organization permission decision belongs to another enrolled member',
+        );
+      }
+      if (
+        decision.adapter_binding_id === null ||
+        decision.permission_grant_id === null
+      ) {
+        throw new Error(
+          'organization permission allow decision has no attribution evidence',
+        );
+      }
       return {
-        allowed: decision.allowed,
-        reason: decision.reason_code.replaceAll('_', ' '),
+        allowed: true,
+        reason,
+        evidence: {
+          ...evidenceBase,
+          allowed: true,
+          principal_id: decision.principal_id,
+          membership_id: decision.membership_id,
+          adapter_binding_id: decision.adapter_binding_id,
+          permission_grant_id: decision.permission_grant_id,
+        },
       };
     } finally {
       state.close();

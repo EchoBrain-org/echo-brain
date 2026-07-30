@@ -55,9 +55,13 @@ Organization tool onboarding precedes employee account linking. An
 administrator selects a supported tool and supplies its organization-owned
 provider setup. The Authority verifies the provider account, granted scopes,
 and required public settings before recording one active organization tool.
-An absent or failed setup is inactive. Employee installations may later offer
-only active organization tools for personal account linking; that propagation
-and employee connect experience is a separate milestone.
+An absent or failed setup is inactive. The minimum Slack flow lets an enrolled
+installation prove its Slack human through an Authority-posted thread
+challenge. The Slack-observed human must match the reviewer already configured
+for that installation's exact Slack approval adapter. Completion creates an
+identity link and exact adapter binding without granting an action.
+Automatically offering and configuring all active
+organization tools in employee installations remains a separate milestone.
 
 An administrator creates a membership and one-time enrollment invitation. The
 installation independently verifies the authority pin, creates its local key,

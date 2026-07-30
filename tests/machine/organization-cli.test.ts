@@ -1,5 +1,6 @@
 import {
   chmodSync,
+  mkdirSync,
   mkdtempSync,
   realpathSync,
   rmSync,
@@ -10,6 +11,13 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { canonicalJson } from '@echo-brain/federation-protocol';
+import {
+  organizationSlackLinkChallengeCodeSha256,
+  verifyOrganizationSlackLinkBeginRequest,
+  verifyOrganizationSlackLinkCompleteRequest,
+  type OrganizationSlackLinkBeginRequestV1,
+  type OrganizationSlackLinkCompleteRequestV1,
+} from '@echo-brain/organization-api';
 import {
   organizationEnrollmentGrantSha256,
   type OrganizationEnrollmentRequestV1,
@@ -58,12 +66,20 @@ async function command(
   return { status, stdout: stdout.read(), stderr: stderr.read() };
 }
 
-function writeRuntimeConfig(root: string): {
+function writeRuntimeConfig(
+  root: string,
+  options: { slackApproval?: boolean } = {},
+): {
   configPath: string;
   stateDirectory: string;
 } {
   const stateDirectory = join(root, 'state');
   const configPath = join(root, 'runtime.json');
+  const slackCredentialPath = join(
+    stateDirectory,
+    'credentials',
+    'slack-bot-token',
+  );
   writeFileSync(
     configPath,
     `${JSON.stringify({
@@ -92,7 +108,23 @@ function writeRuntimeConfig(root: string): {
           },
         },
       ],
-      approval_mode: 'manual',
+      ...(options.slackApproval === true
+        ? {
+            approval_mode: 'adapter',
+            approval_surface: {
+              adapter_id: 'slack-reactions',
+              instance_id: 'founder-approvals',
+              credential_ref: `file:${slackCredentialPath}`,
+              settings: {
+                channel_id: 'C123CHANNEL',
+                reviewer: {
+                  slack_user_id: 'U123ZHEN',
+                  name: 'Zhenye',
+                },
+              },
+            },
+          }
+        : { approval_mode: 'manual' }),
     })}\n`,
     { mode: 0o600 },
   );
@@ -569,5 +601,221 @@ describe('organization machine CLI', () => {
       enrolled: true,
       access: { permitted: true },
     });
+  });
+
+  it('links Slack with a signed installation flow and reads the one-time completion code only from the environment', async () => {
+    const temporaryRoot = realpathSync(
+      mkdtempSync(join(tmpdir(), 'echo-organization-slack-link-cli-')),
+    );
+    const root = join(temporaryRoot, 'Application Support');
+    mkdirSync(root, { mode: 0o700 });
+    chmodSync(root, 0o700);
+    roots.push(temporaryRoot);
+    const { configPath, stateDirectory } = writeRuntimeConfig(root, {
+      slackApproval: true,
+    });
+    const authority = new TestAuthority();
+    const invitePath = invitationPath(root, authority);
+    const environment: NodeJS.ProcessEnv = {};
+    let enrollmentRequest: OrganizationEnrollmentRequestV1 | null = null;
+    const beginRequests: OrganizationSlackLinkBeginRequestV1[] = [];
+    const completeRequests: OrganizationSlackLinkCompleteRequestV1[] = [];
+    let completionPosts = 0;
+    const fetchImpl: typeof fetch = async (input, init) => {
+      const url = new URL(String(input));
+      if (url.pathname === '/v1/authority-descriptor') {
+        return Response.json({
+          authority_descriptor: authority.descriptor,
+        });
+      }
+      if (url.pathname === '/v1/enrollments') {
+        const body = JSON.parse(String(init?.body)) as {
+          enrollment_request: OrganizationEnrollmentRequestV1;
+        };
+        enrollmentRequest = body.enrollment_request;
+        return Response.json(await authority.complete(enrollmentRequest), {
+          status: 201,
+        });
+      }
+      if (url.pathname === '/v1/integration-links/slack/challenges') {
+        expect(new Headers(init?.headers).get('authorization')).toBeNull();
+        const body = JSON.parse(
+          String(init?.body),
+        ) as OrganizationSlackLinkBeginRequestV1;
+        if (enrollmentRequest === null) {
+          throw new Error('enrollment must precede Slack linking');
+        }
+        expect(
+          verifyOrganizationSlackLinkBeginRequest(
+            body,
+            enrollmentRequest.installation_signing_key,
+          ),
+        ).toEqual(body);
+        expect(String(init?.body)).not.toContain('slack-bot-token');
+        beginRequests.push(body);
+        return Response.json({
+          schema_version: 1,
+          kind: 'echo-organization-slack-link-begin-response',
+          challenge_attempt_id:
+            'cat_00000000-0000-4000-8000-000000000001',
+          provider: 'slack',
+          provider_tenant_id: 'T123TEAM',
+          channel_id: 'C123CHANNEL',
+          challenge_message_ts: '1753891200.123456',
+          expires_at: '2026-07-22T00:07:00.000Z',
+        });
+      }
+      if (url.pathname === '/v1/integration-links/slack/completions') {
+        completionPosts += 1;
+        expect(new Headers(init?.headers).get('authorization')).toBeNull();
+        const body = JSON.parse(
+          String(init?.body),
+        ) as OrganizationSlackLinkCompleteRequestV1;
+        if (enrollmentRequest === null) {
+          throw new Error('enrollment must precede Slack linking');
+        }
+        expect(
+          verifyOrganizationSlackLinkCompleteRequest(
+            body,
+            enrollmentRequest.installation_signing_key,
+          ),
+        ).toEqual(body);
+        expect(String(init?.body)).not.toContain('slack-bot-token');
+        completeRequests.push(body);
+        return Response.json({
+          schema_version: 1,
+          kind: 'echo-organization-slack-link-result',
+          identity_link_id:
+            'clm_00000000-0000-4000-8000-000000000001',
+          connection_id: 'con_00000000-0000-4000-8000-000000000001',
+          adapter_binding_id:
+            'bnd_00000000-0000-4000-8000-000000000001',
+          organization_id: ORGANIZATION_IDS.organization,
+          principal_id: ORGANIZATION_IDS.principal,
+          membership_id: ORGANIZATION_IDS.membership,
+          installation_id: ORGANIZATION_IDS.installation,
+          provider: 'slack',
+          provider_tenant_id: 'T123TEAM',
+          provider_subject_id: 'U123ZHEN',
+          channel_id: 'C123CHANNEL',
+          linked_at: ENROLLMENT_TIME,
+          identity_link_created: true,
+          adapter_binding_created: true,
+          permission_grants_created: 0,
+        });
+      }
+      throw new Error(`unexpected organization authority path ${url.pathname}`);
+    };
+    const dependencies: ProductCliDependencies = {
+      classifyStateFilesystem: async () => ({
+        kind: 'local',
+        raw: 'apfs',
+      }),
+      environment,
+      now: () => ENROLLMENT_TIME,
+      operator: {
+        launchctl: async () => ({
+          status: 113,
+          stdout: '',
+          stderr: 'not loaded',
+        }),
+        platform: 'darwin',
+        architecture: 'arm64',
+        uid: statSync(root).uid,
+        homeDirectory: join(root, 'home'),
+        nodePath: realpathSync(process.execPath),
+        nodeVersion: process.version,
+        cliPath: realpathSync(import.meta.filename),
+      },
+      organization: {
+        fetch: fetchImpl,
+        createInstallationId: () => ORGANIZATION_IDS.installation,
+      },
+    };
+
+    expect(
+      (
+        await command(['init', '--config', configPath], dependencies)
+      ).status,
+    ).toBe(0);
+    const enrolled = await command(
+      [
+        'organization',
+        'enroll',
+        '--config',
+        configPath,
+        '--invitation',
+        invitePath,
+        '--authority-pin',
+        authority.pin,
+        '--allow-exportable-software-key',
+      ],
+      dependencies,
+    );
+    expect(enrolled.status, enrolled.stderr).toBe(0);
+
+    const begun = await command(
+      ['organization', 'slack-link-begin', '--config', configPath],
+      dependencies,
+    );
+    expect(begun.status, begun.stderr).toBe(0);
+    const begunResult = JSON.parse(begun.stdout) as {
+      challenge_code: string;
+      next_steps: string[];
+    };
+    expect(begunResult.challenge_code).toMatch(/^[A-Za-z0-9_-]{43}$/);
+    expect(beginRequests).toHaveLength(1);
+    expect(beginRequests[0]!.challenge_code_sha256).toBe(
+      organizationSlackLinkChallengeCodeSha256(
+        begunResult.challenge_code,
+      ),
+    );
+    expect(begunResult.next_steps).toContainEqual(
+      expect.stringContaining(`--config '${configPath}'`),
+    );
+
+    const completeArgs = [
+      'organization',
+      'slack-link-complete',
+      '--config',
+      configPath,
+      '--challenge-attempt',
+      'cat_00000000-0000-4000-8000-000000000001',
+      '--challenge-message-ts',
+      '1753891200.123456',
+    ] as const;
+    expect(completeArgs).not.toContain(begunResult.challenge_code);
+    const missingCode = await command(completeArgs, dependencies);
+    expect(missingCode.status).toBe(1);
+    expect(missingCode.stderr).toContain('requires ECHO_SLACK_LINK_CODE');
+    expect(completionPosts).toBe(0);
+
+    environment.ECHO_SLACK_LINK_CODE = begunResult.challenge_code;
+    const completed = await command(completeArgs, dependencies);
+    expect(completed.status, completed.stderr).toBe(0);
+    expect(JSON.parse(completed.stdout)).toMatchObject({
+      ok: true,
+      action: 'slack-link-complete',
+      linked: true,
+      result: {
+        membership_id: ORGANIZATION_IDS.membership,
+        provider_subject_id: 'U123ZHEN',
+        permission_grants_created: 0,
+      },
+    });
+    expect(completeRequests).toHaveLength(1);
+    expect(completeRequests[0]!.challenge_code).toBe(
+      begunResult.challenge_code,
+    );
+    expect(completeRequests[0]).toMatchObject({
+      expected_provider_subject_id: 'U123ZHEN',
+    });
+    expect(completeRequests[0]).not.toHaveProperty('provider_subject_id');
+    expect(completionPosts).toBe(1);
+    expect(
+      statSync(
+        join(stateDirectory, 'installation', 'keys'),
+      ).isDirectory(),
+    ).toBe(true);
   });
 });

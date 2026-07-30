@@ -7,6 +7,7 @@ import type {
   DecisionRequestedEvent,
   DecisionResolvedEvent,
 } from '../../../src/product/approval/decision-node.js';
+import { decisionApprovalId } from '../../../src/product/approval/decision-node.js';
 import { renderSlackApprovalBlocks } from '../../../src/adapters/approval-surfaces/slack-reactions/slack-reactions-approval-surface.js';
 import type { VerifiedActiveIdentityBundle } from '../../../src/product/federation/identity/active-identity-bundle-store.js';
 import {
@@ -100,6 +101,28 @@ function request(): ApprovalRequest {
     sourceNormalizerVersion: '1',
     sourceUpdatedAt: NOW,
   });
+}
+
+function authorizationEvidence(evaluatedAt = NOW) {
+  return {
+    schema_version: 1 as const,
+    kind: 'echo-organization-authorization-evidence' as const,
+    authority_id: 'oau_00000000-0000-4000-8000-000000000001',
+    organization_id: IDS.organization,
+    enrollment_id: 'enr_00000000-0000-4000-8000-000000000001',
+    installation_id: IDS.installation,
+    request_id: 'pcr_00000000-0000-4000-8000-000000000001',
+    approval_id: decisionApprovalId(request().processing_key),
+    request_sha256: `sha256:${'c'.repeat(64)}`,
+    provider_event_sha256: `sha256:${'d'.repeat(64)}`,
+    allowed: true as const,
+    reason_code: 'active_membership_and_direct_grant',
+    principal_id: IDS.principal,
+    membership_id: IDS.membership,
+    adapter_binding_id: IDS.approvalBinding,
+    permission_grant_id: 'pgr_00000000-0000-4000-8000-000000000001',
+    evaluated_at: evaluatedAt,
+  };
 }
 
 function bundle(config = runtime()): VerifiedActiveIdentityBundle {
@@ -767,6 +790,7 @@ describe('federated approval capture', () => {
           provider_occurred_at: null,
           reason_reply: null,
         },
+        authorization: authorizationEvidence(),
       },
     });
     await expect(
@@ -1214,6 +1238,7 @@ describe('federated approval capture', () => {
           text: '  Ship it  ',
         },
       },
+      authorization: authorizationEvidence(),
     };
     const metadata = await capture.captureResolved({
       events,
@@ -1244,6 +1269,39 @@ describe('federated approval capture', () => {
         'assurance'
       ],
     ).toBe('provider_challenge_observed');
+    expect(
+      (
+        (metadata['federation'] as JsonObject)[
+          'approval_surface_observation'
+        ] as JsonObject
+      )['authorization'],
+    ).toEqual(evidence.authorization);
+
+    const missingAuthorization = {
+      provider_identity: evidence.provider_identity,
+      actor: evidence.actor,
+    };
+    await expect(
+      capture.captureResolved({
+        events,
+        status: 'approved',
+        reviewedAt: NOW,
+        reviewedBy: 'Founder',
+        reason: 'Ship it',
+        surface: 'slack',
+        legacyMetadata: {},
+        resolutionEvidence: missingAuthorization,
+      }),
+    ).rejects.toThrow(/requires organization authorization evidence/);
+
+    const legacyResolved = structuredClone(resolved);
+    const legacyObservation = (
+      legacyResolved.metadata['federation'] as JsonObject
+    )['approval_surface_observation'] as JsonObject;
+    delete legacyObservation['authorization'];
+    await expect(
+      capture.validateResolved({ events, event: legacyResolved }),
+    ).resolves.toBeUndefined();
 
     await expect(
       capture.captureResolved({
@@ -1319,6 +1377,22 @@ describe('federated approval capture', () => {
       }),
     ).rejects.toThrow(/invalid provider identifiers/);
 
+    const wrongAuthorization = structuredClone(evidence);
+    wrongAuthorization.authorization.membership_id =
+      'mem_00000000-0000-4000-8000-000000000099';
+    await expect(
+      capture.captureResolved({
+        events,
+        status: 'approved',
+        reviewedAt: NOW,
+        reviewedBy: 'Founder',
+        reason: 'Ship it',
+        surface: 'slack',
+        legacyMetadata: {},
+        resolutionEvidence: wrongAuthorization,
+      }),
+    ).rejects.toThrow(/another local identity or time/);
+
     const changedMessage = structuredClone(resolved);
     const changedActor = (
       (changedMessage.metadata['federation'] as JsonObject)[
@@ -1329,6 +1403,16 @@ describe('federated approval capture', () => {
     await expect(
       capture.validateResolved({ events, event: changedMessage }),
     ).rejects.toThrow(/another published message/);
+
+    const changedAuthorization = structuredClone(resolved);
+    const changedObservation = (
+      changedAuthorization.metadata['federation'] as JsonObject
+    )['approval_surface_observation'] as JsonObject;
+    (changedObservation['authorization'] as JsonObject)['membership_id'] =
+      'mem_00000000-0000-4000-8000-000000000099';
+    await expect(
+      capture.validateResolved({ events, event: changedAuthorization }),
+    ).rejects.toThrow(/another local identity or time/);
   });
 
   it('rejects approval-configuration drift while allowing an exact-config Slack rebinding', async () => {
@@ -1374,6 +1458,7 @@ describe('federated approval capture', () => {
         provider_occurred_at: null,
         reason_reply: null,
       },
+      authorization: authorizationEvidence(),
     };
 
     const drifted = structuredClone(originalBundle);

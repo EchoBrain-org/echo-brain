@@ -2,14 +2,20 @@ import { createHash, randomUUID } from "node:crypto";
 import type Database from "better-sqlite3";
 import {
   AUTHORITY_FILE_SECRET_BACKEND,
+  SLACK_DEFAULT_APPROVE_REACTION,
+  SLACK_DEFAULT_REJECT_REACTION,
   SLACK_ORGANIZATION_TOOL_PROFILE,
   SLACK_ORGANIZATION_TOOL_REQUIRED_SCOPES,
   SLACK_PROVIDER,
   SLACK_PROVIDER_ISSUER,
   type ActiveSlackOrganizationTool,
+  type BeginSlackIdentityLinkChallengeInput,
+  type BegunSlackIdentityLinkChallenge,
   type LegacySlackOrganizationTool,
   type BootstrapSlackApprovalInput,
   type BootstrapSlackApprovalResult,
+  type CompleteSlackIdentityLinkChallengeInput,
+  type CompletedSlackIdentityLink,
   type OnboardSlackOrganizationToolInput,
   type OnboardSlackOrganizationToolResult,
   type OrganizationIntegrationsOverview,
@@ -18,6 +24,7 @@ import {
   type SlackApprovalPermissionCandidate,
   type SlackApprovalPermissionLookup,
   type OrganizationSecretReference,
+  type PendingSlackIdentityLinkChallenge,
 } from "../application/contracts.js";
 
 interface AuditTail {
@@ -46,6 +53,51 @@ interface ActiveSlackOrganizationToolRow extends ToolConnectionOverviewRow {
   secret_handle_id: string;
 }
 
+interface SlackIdentityLinkAttemptRow {
+  connection_attempt_id: string;
+  requested_by_principal_id: string;
+  requested_by_membership_id: string;
+  target_principal_id: string;
+  target_membership_id: string;
+  provider_tenant_id: string;
+  state_sha256: string;
+  pkce_challenge_sha256: string;
+  admin_session_sha256: string;
+  status: "pending" | "succeeded" | "failed" | "expired";
+  created_at: string;
+  expires_at: string;
+}
+
+interface ActiveSlackIdentityLinkRow {
+  identity_link_id: string;
+  principal_id: string;
+  membership_id: string;
+  provider_subject_id: string;
+}
+
+interface ActiveSlackBindingRow {
+  adapter_binding_id: string;
+  installation_id: string;
+  installation_key_id: string;
+  adapter_id: string;
+  adapter_instance_id: string;
+  adapter_version: string;
+  connection_id: string;
+  public_configuration_json: string;
+  public_configuration_sha256: string;
+}
+
+interface SlackIdentityLinkCompletionReplayKey {
+  challenge_attempt_id: string;
+  challenge_code_sha256: `sha256:${string}`;
+  challenge_message_ts: string;
+  installation: BeginSlackIdentityLinkChallengeInput["installation"];
+  organization_tool: ActiveSlackOrganizationTool;
+  adapter_id: "slack-reactions";
+  adapter_instance_id: string;
+  adapter_version: string;
+}
+
 interface CompleteSlackConnectionAttemptInput {
   attempt_id: string;
   administrator_principal_id: string;
@@ -65,6 +117,13 @@ interface CompleteSlackConnectionAttemptInput {
   digest_prefix: "" | "identity-";
   now: string;
   expires_at: string;
+}
+
+export class OrganizationIntegrationConflictError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "OrganizationIntegrationConflictError";
+  }
 }
 
 function stable(value: unknown): unknown {
@@ -176,6 +235,70 @@ function assertBootstrapUsesActiveOrganizationTool(
   }
 }
 
+function slackIdentityLinkSessionSha256(
+  input: BeginSlackIdentityLinkChallengeInput["installation"],
+): `sha256:${string}` {
+  return digest({
+    authority_id: input.authority_id,
+    organization_id: input.organization_id,
+    enrollment_id: input.enrollment_id,
+    principal_id: input.principal_id,
+    membership_id: input.membership_id,
+    installation_id: input.installation_id,
+    installation_key_id: input.installation_key_id,
+  });
+}
+
+function slackIdentityLinkToolSha256(
+  challengeAttemptId: string,
+  tool: ActiveSlackOrganizationTool,
+): `sha256:${string}` {
+  return digest({
+    challenge_attempt_id: challengeAttemptId,
+    connection_id: tool.connection_id,
+    team_id: tool.team_id,
+    enterprise_id: tool.enterprise_id,
+    bot_user_id: tool.bot_user_id,
+    bot_id: tool.bot_id,
+    app_id: tool.app_id,
+    channel_id: tool.channel_id,
+    approve_reaction: tool.approve_reaction,
+    reject_reaction: tool.reject_reaction,
+  });
+}
+
+function slackIdentityLinkCompletionSha256(
+  input: SlackIdentityLinkCompletionReplayKey,
+): `sha256:${string}` {
+  return digest({
+    challenge_attempt_id: input.challenge_attempt_id,
+    challenge_code_sha256: input.challenge_code_sha256,
+    challenge_message_ts: input.challenge_message_ts,
+    installation_sha256: slackIdentityLinkSessionSha256(input.installation),
+    organization_tool_sha256: slackIdentityLinkToolSha256(
+      input.challenge_attempt_id,
+      input.organization_tool,
+    ),
+    adapter_id: input.adapter_id,
+    adapter_instance_id: input.adapter_instance_id,
+    adapter_version: input.adapter_version,
+  });
+}
+
+function slackApprovalBindingConfiguration(
+  tool: ActiveSlackOrganizationTool,
+): Record<string, unknown> {
+  return {
+    approve_reaction: tool.approve_reaction,
+    channel_id: tool.channel_id,
+    reject_reaction: tool.reject_reaction,
+    slack_app_id: tool.app_id,
+    slack_bot_id: tool.bot_id,
+    slack_bot_user_id: tool.bot_user_id,
+    slack_enterprise_id: tool.enterprise_id,
+  };
+}
+
 export class OrganizationIntegrationsRepository {
   constructor(
     private readonly database: Database.Database,
@@ -224,6 +347,47 @@ export class OrganizationIntegrationsRepository {
       "organization_tool.slack.onboarded",
       "Slack organization tool",
     );
+  }
+
+  slackIdentityLinkCompletionReplay(
+    commandId: string,
+    commandSha256: `sha256:${string}`,
+  ): CompletedSlackIdentityLink | null {
+    return this.replay<CompletedSlackIdentityLink>(
+      commandId,
+      commandSha256,
+      "slack_identity_link.completed",
+      "Slack identity link completion",
+    );
+  }
+
+  slackIdentityLinkChallengeCompletionReplay(
+    input: SlackIdentityLinkCompletionReplayKey,
+  ): CompletedSlackIdentityLink | null {
+    const row = this.database
+      .prepare(
+        `SELECT detail_json
+         FROM organization_integration_audit
+         WHERE correlation_id = ?
+           AND action = 'slack_identity_link.completed'
+           AND outcome = 'succeeded'`,
+      )
+      .get(input.challenge_attempt_id) as AuditReplayRow | undefined;
+    if (row === undefined) return null;
+    const detail = JSON.parse(row.detail_json) as Record<string, unknown>;
+    if (
+      detail["completion_sha256"] !==
+      slackIdentityLinkCompletionSha256(input)
+    ) {
+      throw new OrganizationIntegrationConflictError(
+        "Slack identity link challenge was completed with different input",
+      );
+    }
+    const result = detail["result"];
+    if (result === null || typeof result !== "object" || Array.isArray(result)) {
+      throw new Error("stored Slack identity link audit result is invalid");
+    }
+    return result as CompletedSlackIdentityLink;
   }
 
   private replay<T>(
@@ -364,6 +528,12 @@ export class OrganizationIntegrationsRepository {
       configuration["schema_version"] !== 1 ||
       typeof configuration["channel_id"] !== "string" ||
       typeof configuration["slack_bot_id"] !== "string" ||
+      typeof configuration["approve_reaction"] !== "string" ||
+      !/^[a-z0-9_+-]{1,64}$/.test(configuration["approve_reaction"]) ||
+      typeof configuration["reject_reaction"] !== "string" ||
+      !/^[a-z0-9_+-]{1,64}$/.test(configuration["reject_reaction"]) ||
+      configuration["approve_reaction"] ===
+        configuration["reject_reaction"] ||
       configuration["slack_bot_user_id"] !== row.provider_subject_id ||
       !(
         configuration["slack_enterprise_id"] === null ||
@@ -385,11 +555,230 @@ export class OrganizationIntegrationsRepository {
       bot_id: configuration["slack_bot_id"],
       app_id: configuration["slack_app_id"],
       channel_id: configuration["channel_id"],
+      approve_reaction: configuration["approve_reaction"],
+      reject_reaction: configuration["reject_reaction"],
       granted_scopes: scopes,
       secret: Object.freeze({
         secret_backend_id: AUTHORITY_FILE_SECRET_BACKEND,
         secret_handle_id: row.secret_handle_id,
       }),
+    });
+  }
+
+  beginSlackIdentityLinkChallenge(
+    input: BeginSlackIdentityLinkChallengeInput,
+  ): BegunSlackIdentityLinkChallenge {
+    if (
+      input.installation.organization_id !== this.identity.organization_id ||
+      input.installation.authority_id !== this.identity.authority_id ||
+      input.organization_tool.team_id.length === 0
+    ) {
+      throw new Error("Slack identity link installation is inconsistent");
+    }
+    const requestedScopes = ["users:read"];
+    const requestedScopesJson = canonicalJson(requestedScopes);
+    const requestedScopesSha256 = digest(requestedScopes);
+    const expiresAt = addMinutes(input.now, 15);
+    const challengeAttemptId = id("cat");
+    return this.immediateTransaction(() => {
+      const activeTool = this.activeSlackOrganizationTool();
+      if (
+        activeTool === null ||
+        canonicalJson(activeTool) !==
+          canonicalJson(input.organization_tool)
+      ) {
+        throw new OrganizationIntegrationConflictError(
+          "active organization Slack tool changed before link challenge",
+        );
+      }
+      const existing = this.database
+        .prepare(
+          `SELECT connection_attempt_id
+           FROM organization_connection_attempts
+           WHERE nonce_sha256 = ?`,
+        )
+        .get(input.request_sha256) as
+        | { connection_attempt_id: string }
+        | undefined;
+      if (existing !== undefined) {
+        throw new OrganizationIntegrationConflictError(
+          "Slack identity link challenge already started",
+        );
+      }
+      this.database
+        .prepare(
+          `UPDATE organization_connection_attempts
+           SET status = 'expired', consumed_at = ?,
+               outcome_reason = 'superseded_by_new_challenge'
+           WHERE organization_id = ?
+             AND attempt_purpose = 'identity_link'
+             AND target_owner_kind = 'membership'
+             AND target_membership_id = ?
+             AND provider = ?
+             AND provider_issuer = ?
+             AND provider_tenant_kind = 'workspace'
+             AND status = 'pending'`,
+        )
+        .run(
+          input.now,
+          this.identity.organization_id,
+          input.installation.membership_id,
+          SLACK_PROVIDER,
+          SLACK_PROVIDER_ISSUER,
+        );
+      this.database
+        .prepare(
+          `INSERT INTO organization_connection_attempts (
+             connection_attempt_id, organization_id,
+             requested_by_principal_id, requested_by_membership_id,
+             attempt_purpose, target_owner_kind, target_principal_id,
+             target_membership_id, provider, provider_issuer,
+             provider_tenant_kind, provider_tenant_id, redirect_uri,
+             requested_scopes_json, requested_scopes_sha256, state_sha256,
+             nonce_sha256, pkce_challenge_sha256, admin_session_sha256,
+             status, provider_subject_kind, provider_subject_id,
+             granted_scopes_json, granted_scopes_sha256,
+             verification_evidence_sha256, created_at, expires_at,
+             consumed_at, outcome_reason
+           ) VALUES (
+             ?, ?, ?, ?, 'identity_link', 'membership', ?, ?, ?, ?,
+             'workspace', ?, ?, ?, ?, ?, ?, ?, ?, 'pending', NULL, NULL,
+             NULL, NULL, NULL, ?, ?, NULL, NULL
+           )`,
+        )
+        .run(
+          challengeAttemptId,
+          this.identity.organization_id,
+          input.installation.principal_id,
+          input.installation.membership_id,
+          input.installation.principal_id,
+          input.installation.membership_id,
+          SLACK_PROVIDER,
+          SLACK_PROVIDER_ISSUER,
+          activeTool.team_id,
+          "urn:echo:organization:employee:slack-channel-link",
+          requestedScopesJson,
+          requestedScopesSha256,
+          input.challenge_code_sha256,
+          input.request_sha256,
+          slackIdentityLinkToolSha256(challengeAttemptId, activeTool),
+          slackIdentityLinkSessionSha256(input.installation),
+          input.now,
+          expiresAt,
+        );
+      return Object.freeze({
+        challenge_attempt_id: challengeAttemptId,
+        created_at: input.now,
+        expires_at: expiresAt,
+      });
+    });
+  }
+
+  slackIdentityLinkChallenge(input: {
+    challenge_attempt_id: string;
+    challenge_code_sha256: `sha256:${string}`;
+    installation: BeginSlackIdentityLinkChallengeInput["installation"];
+    organization_tool: ActiveSlackOrganizationTool;
+    now: string;
+  }): PendingSlackIdentityLinkChallenge {
+    const challenge = this.immediateTransaction<
+      PendingSlackIdentityLinkChallenge | null
+    >(() => {
+      const row = this.database
+        .prepare(
+          `SELECT connection_attempt_id, requested_by_principal_id,
+                  requested_by_membership_id, target_principal_id,
+                  target_membership_id, provider_tenant_id, state_sha256,
+                  pkce_challenge_sha256, admin_session_sha256, status,
+                  created_at, expires_at
+           FROM organization_connection_attempts
+           WHERE connection_attempt_id = ?
+             AND organization_id = ?
+             AND attempt_purpose = 'identity_link'
+             AND target_owner_kind = 'membership'
+             AND provider = ?
+             AND provider_issuer = ?
+             AND provider_tenant_kind = 'workspace'`,
+        )
+        .get(
+          input.challenge_attempt_id,
+          this.identity.organization_id,
+          SLACK_PROVIDER,
+          SLACK_PROVIDER_ISSUER,
+        ) as SlackIdentityLinkAttemptRow | undefined;
+      if (row === undefined) {
+        throw new OrganizationIntegrationConflictError(
+          "Slack identity link challenge was not found",
+        );
+      }
+      if (row.status === "pending" && input.now >= row.expires_at) {
+        this.database
+          .prepare(
+            `UPDATE organization_connection_attempts
+             SET status = 'expired', consumed_at = ?,
+                 outcome_reason = 'challenge_expired'
+             WHERE connection_attempt_id = ? AND status = 'pending'`,
+          )
+          .run(input.now, input.challenge_attempt_id);
+        return null;
+      }
+      if (
+        row.status !== "pending" ||
+        row.requested_by_principal_id !== input.installation.principal_id ||
+        row.requested_by_membership_id !== input.installation.membership_id ||
+        row.target_principal_id !== input.installation.principal_id ||
+        row.target_membership_id !== input.installation.membership_id ||
+        row.provider_tenant_id !== input.organization_tool.team_id ||
+        row.state_sha256 !== input.challenge_code_sha256 ||
+        row.pkce_challenge_sha256 !==
+          slackIdentityLinkToolSha256(
+            input.challenge_attempt_id,
+            input.organization_tool,
+          ) ||
+        row.admin_session_sha256 !==
+          slackIdentityLinkSessionSha256(input.installation)
+      ) {
+        throw new OrganizationIntegrationConflictError(
+          "Slack identity link challenge does not match this installation",
+        );
+      }
+      return Object.freeze({
+        challenge_attempt_id: row.connection_attempt_id,
+        principal_id: row.target_principal_id,
+        membership_id: row.target_membership_id,
+        installation_id: input.installation.installation_id,
+        created_at: row.created_at,
+        expires_at: row.expires_at,
+      });
+    });
+    if (challenge === null) {
+      throw new OrganizationIntegrationConflictError(
+        "Slack identity link challenge expired",
+      );
+    }
+    return challenge;
+  }
+
+  failSlackIdentityLinkChallenge(
+    challengeAttemptId: string,
+    failedAt: string,
+    reason: string,
+  ): void {
+    this.immediateTransaction(() => {
+      this.database
+        .prepare(
+          `UPDATE organization_connection_attempts
+           SET status = 'failed', consumed_at = ?, outcome_reason = ?
+           WHERE connection_attempt_id = ?
+             AND organization_id = ?
+             AND status = 'pending'`,
+        )
+        .run(
+          failedAt,
+          reason,
+          challengeAttemptId,
+          this.identity.organization_id,
+        );
     });
   }
 
@@ -419,7 +808,7 @@ export class OrganizationIntegrationsRepository {
       typeof configuration["slack_bot_id"] !== "string" ||
       !/^B[A-Z0-9]{2,}$/.test(configuration["slack_bot_id"]) ||
       configuration["slack_bot_user_id"] !== row.provider_subject_id ||
-      !/^U[A-Z0-9]{2,}$/.test(row.provider_subject_id) ||
+      !/^[UW][A-Z0-9]{2,}$/.test(row.provider_subject_id) ||
       typeof configuration["approve_reaction"] !== "string" ||
       !/^[a-z0-9_+-]{1,64}$/.test(configuration["approve_reaction"]) ||
       typeof configuration["reject_reaction"] !== "string" ||
@@ -530,28 +919,19 @@ export class OrganizationIntegrationsRepository {
     const connectionScopes = [...input.connection.granted_scopes].sort();
     const connectionScopesJson = canonicalJson(connectionScopes);
     const connectionScopesSha256 = digest(connectionScopes);
-    const publicConfiguration =
-      legacy === null
-        ? {
-            channel_id: input.channel.channel_id,
-            organization_tool_profile: SLACK_ORGANIZATION_TOOL_PROFILE,
-            schema_version: 1,
-            slack_app_id: input.connection.app_id,
-            slack_bot_id: input.connection.bot_id,
-            slack_bot_user_id: input.connection.bot_user_id,
-            slack_enterprise_id: input.connection.enterprise_id,
-          }
-        : {
-            approve_reaction: legacy.approve_reaction,
-            channel_id: input.channel.channel_id,
-            organization_tool_profile: SLACK_ORGANIZATION_TOOL_PROFILE,
-            reject_reaction: legacy.reject_reaction,
-            schema_version: 1,
-            slack_app_id: input.connection.app_id,
-            slack_bot_id: input.connection.bot_id,
-            slack_bot_user_id: input.connection.bot_user_id,
-            slack_enterprise_id: input.connection.enterprise_id,
-          };
+    const publicConfiguration = {
+      approve_reaction:
+        legacy?.approve_reaction ?? SLACK_DEFAULT_APPROVE_REACTION,
+      channel_id: input.channel.channel_id,
+      organization_tool_profile: SLACK_ORGANIZATION_TOOL_PROFILE,
+      reject_reaction:
+        legacy?.reject_reaction ?? SLACK_DEFAULT_REJECT_REACTION,
+      schema_version: 1,
+      slack_app_id: input.connection.app_id,
+      slack_bot_id: input.connection.bot_id,
+      slack_bot_user_id: input.connection.bot_user_id,
+      slack_enterprise_id: input.connection.enterprise_id,
+    };
     const publicConfigurationJson = canonicalJson(publicConfiguration);
     const publicConfigurationSha256 = digest(publicConfiguration);
     const verificationEvidenceSha256 = digest({
@@ -942,6 +1322,351 @@ export class OrganizationIntegrationsRepository {
         correlation_id: input.command_id,
         detail: {
           command_sha256: input.command_sha256,
+          result,
+        },
+      });
+      return Object.freeze(result);
+    });
+  }
+
+  completeSlackIdentityLinkChallenge(
+    input: CompleteSlackIdentityLinkChallengeInput,
+  ): CompletedSlackIdentityLink {
+    if (
+      input.installation.organization_id !== this.identity.organization_id ||
+      input.installation.authority_id !== this.identity.authority_id ||
+      input.observed.team_id !== input.organization_tool.team_id ||
+      input.observed.channel_id !== input.organization_tool.channel_id ||
+      input.observed.challenge_message_ts !== input.challenge_message_ts
+    ) {
+      throw new OrganizationIntegrationConflictError(
+        "Slack identity link evidence is inconsistent",
+      );
+    }
+    const replay = this.slackIdentityLinkCompletionReplay(
+      input.command_id,
+      input.command_sha256,
+    );
+    if (replay !== null) return replay;
+    const challengeReplay =
+      this.slackIdentityLinkChallengeCompletionReplay(input);
+    if (challengeReplay !== null) return challengeReplay;
+    this.slackIdentityLinkChallenge({
+      challenge_attempt_id: input.challenge_attempt_id,
+      challenge_code_sha256: input.challenge_code_sha256,
+      installation: input.installation,
+      organization_tool: input.organization_tool,
+      now: input.now,
+    });
+
+    const publicConfiguration = slackApprovalBindingConfiguration(
+      input.organization_tool,
+    );
+    const publicConfigurationJson = canonicalJson(publicConfiguration);
+    const publicConfigurationSha256 = digest(publicConfiguration);
+    const identityScopes = ["users:read"];
+    const identityScopesJson = canonicalJson(identityScopes);
+    const identityScopesSha256 = digest(identityScopes);
+
+    return this.immediateTransaction(() => {
+      const concurrent = this.slackIdentityLinkCompletionReplay(
+        input.command_id,
+        input.command_sha256,
+      );
+      if (concurrent !== null) return concurrent;
+      const concurrentChallenge =
+        this.slackIdentityLinkChallengeCompletionReplay(input);
+      if (concurrentChallenge !== null) return concurrentChallenge;
+      const currentTool = this.activeSlackOrganizationTool();
+      if (
+        currentTool === null ||
+        canonicalJson(currentTool) !==
+          canonicalJson(input.organization_tool)
+      ) {
+        throw new OrganizationIntegrationConflictError(
+          "active organization Slack tool changed before identity link completion",
+        );
+      }
+      const attempt = this.database
+        .prepare(
+          `SELECT connection_attempt_id, requested_by_principal_id,
+                  requested_by_membership_id, target_principal_id,
+                  target_membership_id, provider_tenant_id, state_sha256,
+                  pkce_challenge_sha256, admin_session_sha256, status,
+                  created_at, expires_at
+           FROM organization_connection_attempts
+           WHERE connection_attempt_id = ?
+             AND organization_id = ?
+             AND attempt_purpose = 'identity_link'
+             AND target_owner_kind = 'membership'
+             AND provider = ?
+             AND provider_issuer = ?
+             AND provider_tenant_kind = 'workspace'`,
+        )
+        .get(
+          input.challenge_attempt_id,
+          this.identity.organization_id,
+          SLACK_PROVIDER,
+          SLACK_PROVIDER_ISSUER,
+        ) as SlackIdentityLinkAttemptRow | undefined;
+      if (
+        attempt === undefined ||
+        attempt.status !== "pending" ||
+        input.now >= attempt.expires_at ||
+        attempt.requested_by_principal_id !== input.installation.principal_id ||
+        attempt.requested_by_membership_id !==
+          input.installation.membership_id ||
+        attempt.target_principal_id !== input.installation.principal_id ||
+        attempt.target_membership_id !== input.installation.membership_id ||
+        attempt.provider_tenant_id !== currentTool.team_id ||
+        attempt.state_sha256 !== input.challenge_code_sha256 ||
+        attempt.pkce_challenge_sha256 !==
+          slackIdentityLinkToolSha256(
+            input.challenge_attempt_id,
+            currentTool,
+          ) ||
+        attempt.admin_session_sha256 !==
+          slackIdentityLinkSessionSha256(input.installation)
+      ) {
+        throw new OrganizationIntegrationConflictError(
+          "Slack identity link challenge cannot be completed by this installation",
+        );
+      }
+
+      const memberIdentity = this.database
+        .prepare(
+          `SELECT identity_link_id, principal_id, membership_id,
+                  provider_subject_id
+           FROM organization_external_identity_links
+           WHERE organization_id = ?
+             AND membership_id = ?
+             AND provider = ?
+             AND provider_issuer = ?
+             AND provider_tenant_kind = 'workspace'
+             AND provider_tenant_id = ?
+             AND status = 'active'`,
+        )
+        .get(
+          this.identity.organization_id,
+          input.installation.membership_id,
+          SLACK_PROVIDER,
+          SLACK_PROVIDER_ISSUER,
+          currentTool.team_id,
+        ) as ActiveSlackIdentityLinkRow | undefined;
+      const subjectIdentity = this.database
+        .prepare(
+          `SELECT identity_link_id, principal_id, membership_id,
+                  provider_subject_id
+           FROM organization_external_identity_links
+           WHERE organization_id = ?
+             AND provider = ?
+             AND provider_issuer = ?
+             AND provider_tenant_kind = 'workspace'
+             AND provider_tenant_id = ?
+             AND provider_subject_id = ?
+             AND status = 'active'`,
+        )
+        .get(
+          this.identity.organization_id,
+          SLACK_PROVIDER,
+          SLACK_PROVIDER_ISSUER,
+          currentTool.team_id,
+          input.observed.user_id,
+        ) as ActiveSlackIdentityLinkRow | undefined;
+      const existingIdentity = memberIdentity ?? subjectIdentity;
+      if (
+        (memberIdentity !== undefined &&
+          memberIdentity.provider_subject_id !== input.observed.user_id) ||
+        (subjectIdentity !== undefined &&
+          (subjectIdentity.principal_id !== input.installation.principal_id ||
+            subjectIdentity.membership_id !==
+              input.installation.membership_id)) ||
+        (memberIdentity !== undefined &&
+          subjectIdentity !== undefined &&
+          memberIdentity.identity_link_id !==
+            subjectIdentity.identity_link_id)
+      ) {
+        throw new OrganizationIntegrationConflictError(
+          "Slack identity is already linked to another active membership",
+        );
+      }
+
+      const binding = this.database
+        .prepare(
+          `SELECT adapter_binding_id, installation_id, installation_key_id,
+                  adapter_id, adapter_instance_id, adapter_version,
+                  connection_id, public_configuration_json,
+                  public_configuration_sha256
+           FROM organization_adapter_bindings
+           WHERE organization_id = ?
+             AND product_namespace = 'echo-brain'
+             AND installation_id = ?
+             AND adapter_kind = 'approval-surface'
+             AND adapter_id = ?
+             AND adapter_instance_id = ?
+             AND status = 'active'`,
+        )
+        .get(
+          this.identity.organization_id,
+          input.installation.installation_id,
+          input.adapter_id,
+          input.adapter_instance_id,
+        ) as ActiveSlackBindingRow | undefined;
+      if (
+        binding !== undefined &&
+        (binding.installation_key_id !==
+          input.installation.installation_key_id ||
+          binding.adapter_version !== input.adapter_version ||
+          binding.connection_id !== currentTool.connection_id ||
+          binding.public_configuration_json !== publicConfigurationJson ||
+          binding.public_configuration_sha256 !==
+            publicConfigurationSha256)
+      ) {
+        throw new OrganizationIntegrationConflictError(
+          "Slack approval adapter is already bound to different organization configuration",
+        );
+      }
+
+      const completedAttempt = this.database
+        .prepare(
+          `UPDATE organization_connection_attempts
+           SET status = 'succeeded', provider_subject_kind = 'human_user',
+               provider_subject_id = ?, granted_scopes_json = ?,
+               granted_scopes_sha256 = ?,
+               verification_evidence_sha256 = ?, consumed_at = ?
+           WHERE connection_attempt_id = ? AND status = 'pending'`,
+        )
+        .run(
+          input.observed.user_id,
+          identityScopesJson,
+          identityScopesSha256,
+          input.observed.verification_evidence_sha256,
+          input.now,
+          input.challenge_attempt_id,
+        );
+      if (completedAttempt.changes !== 1) {
+        throw new OrganizationIntegrationConflictError(
+          "Slack identity link challenge lost its completion race",
+        );
+      }
+
+      const identityLinkCreated = existingIdentity === undefined;
+      const identityLinkId = existingIdentity?.identity_link_id ?? id("clm");
+      if (identityLinkCreated) {
+        this.database
+          .prepare(
+            `INSERT INTO organization_external_identity_links (
+               identity_link_id, organization_id, principal_id, membership_id,
+               provider, provider_issuer, provider_tenant_kind,
+               provider_tenant_id, provider_subject_id,
+               verification_attempt_id, verification_evidence_sha256, status,
+               verified_at, revoked_at, revocation_reason
+             ) VALUES (
+               ?, ?, ?, ?, ?, ?, 'workspace', ?, ?, ?, ?, 'active', ?,
+               NULL, NULL
+             )`,
+          )
+          .run(
+            identityLinkId,
+            this.identity.organization_id,
+            input.installation.principal_id,
+            input.installation.membership_id,
+            SLACK_PROVIDER,
+            SLACK_PROVIDER_ISSUER,
+            currentTool.team_id,
+            input.observed.user_id,
+            input.challenge_attempt_id,
+            input.observed.verification_evidence_sha256,
+            input.now,
+          );
+      }
+
+      const adapterBindingCreated = binding === undefined;
+      const adapterBindingId = binding?.adapter_binding_id ?? id("bnd");
+      if (adapterBindingCreated) {
+        this.database
+          .prepare(
+            `INSERT INTO organization_adapter_bindings (
+               adapter_binding_id, organization_id, product_namespace,
+               installation_id, installation_key_id, adapter_kind,
+               adapter_id, adapter_instance_id, adapter_version,
+               connection_id, public_configuration_json,
+               public_configuration_sha256, status, created_by_principal_id,
+               created_by_membership_id, bound_at, revoked_at,
+               revocation_reason
+             ) VALUES (
+               ?, ?, 'echo-brain', ?, ?, 'approval-surface', ?, ?, ?, ?, ?,
+               ?, 'active', ?, ?, ?, NULL, NULL
+             )`,
+          )
+          .run(
+            adapterBindingId,
+            this.identity.organization_id,
+            input.installation.installation_id,
+            input.installation.installation_key_id,
+            input.adapter_id,
+            input.adapter_instance_id,
+            input.adapter_version,
+            currentTool.connection_id,
+            publicConfigurationJson,
+            publicConfigurationSha256,
+            input.installation.principal_id,
+            input.installation.membership_id,
+            input.now,
+          );
+      }
+
+      const result: CompletedSlackIdentityLink = {
+        schema_version: 1,
+        kind: "echo-organization-slack-link-result",
+        identity_link_id: identityLinkId,
+        connection_id: currentTool.connection_id,
+        adapter_binding_id: adapterBindingId,
+        organization_id: this.identity.organization_id,
+        principal_id: input.installation.principal_id,
+        membership_id: input.installation.membership_id,
+        installation_id: input.installation.installation_id,
+        provider: SLACK_PROVIDER,
+        provider_tenant_id: currentTool.team_id,
+        provider_subject_id: input.observed.user_id,
+        channel_id: currentTool.channel_id,
+        linked_at: input.now,
+        identity_link_created: identityLinkCreated,
+        adapter_binding_created: adapterBindingCreated,
+        permission_grants_created: 0,
+      };
+      this.appendAudit({
+        occurred_at: input.now,
+        actor_kind: "installation",
+        actor_principal_id: input.installation.principal_id,
+        actor_membership_id: input.installation.membership_id,
+        actor_identity_link_id: identityLinkId,
+        actor_installation_id: input.installation.installation_id,
+        command_id: input.command_id,
+        provider_event_sha256:
+          input.observed.verification_evidence_sha256,
+        action: "slack_identity_link.completed",
+        subject_kind: "identity_link",
+        subject_id: identityLinkId,
+        membership_id: input.installation.membership_id,
+        identity_link_id: identityLinkId,
+        connection_id: currentTool.connection_id,
+        adapter_binding_id: adapterBindingId,
+        permission_grant_id: null,
+        outcome: "succeeded",
+        reason_code: identityLinkCreated
+          ? "employee_proved_slack_identity"
+          : "employee_reverified_slack_identity",
+        idempotency_key: `slack-identity-link:${input.command_id}`,
+        authority_checked_at: input.authority_checked_at,
+        authority_evidence_sha256: input.command_sha256,
+        correlation_id: input.challenge_attempt_id,
+        detail: {
+          command_sha256: input.command_sha256,
+          completion_sha256: slackIdentityLinkCompletionSha256(input),
+          challenge_attempt_id: input.challenge_attempt_id,
+          challenge_message_ts: input.challenge_message_ts,
+          reply_message_ts: input.observed.reply_message_ts,
           result,
         },
       });

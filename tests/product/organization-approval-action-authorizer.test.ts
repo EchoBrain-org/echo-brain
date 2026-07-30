@@ -20,6 +20,7 @@ import {
   allowedPermissionDecision,
   descriptorClient,
   enrollmentInput,
+  fixtureId,
 } from '../support/local-organization-fixtures.js';
 
 const directories: string[] = [];
@@ -30,24 +31,57 @@ afterEach(() => {
   }
 });
 
+async function enrolledFixture() {
+  const directory = mkdtempSync(join(tmpdir(), 'echo-org-authorizer-'));
+  directories.push(directory);
+  const databasePath = join(directory, 'product.sqlite');
+  const authority = new TestAuthority();
+  const signer = new TestInstallationSigner();
+  const state = new SqliteOrganizationStateStore(databasePath);
+  const coordinator = new LocalOrganizationCoordinator({
+    state,
+    authorityClient: descriptorClient(authority),
+    installationSigner: signer,
+    maximumActiveLeaseTtlMs: MAX_TTL_MS,
+    clock: { now: () => NOW },
+  });
+  await coordinator.enroll(enrollmentInput(authority));
+  state.close();
+  return { authority, databasePath, signer };
+}
+
+function authorizationInput() {
+  return {
+    approval_id: 'f'.repeat(64),
+    action: 'approve' as const,
+    adapter_identity: {
+      kind: 'approval-surface' as const,
+      adapter_id: 'slack-reactions',
+      instance_id: 'primary',
+      version: '1.0.0',
+    },
+    provider_identity: {
+      provider: 'slack' as const,
+      team_id: 'T123TEAM',
+      enterprise_id: null,
+      bot_user_id: 'U123BOT',
+      bot_id: 'B123BOT',
+      app_id: 'A123APP',
+    },
+    actor: {
+      provider: 'slack' as const,
+      team_id: 'T123TEAM',
+      user_id: 'U123ZHEN',
+    },
+    channel_id: 'C123CHANNEL',
+    message_ts: '1753822800.000001',
+    reaction_name: 'white_check_mark',
+  };
+}
+
 describe('organization approval action authorizer', () => {
   it('signs the exact Slack action and returns only its correlated live decision', async () => {
-    const directory = mkdtempSync(join(tmpdir(), 'echo-org-authorizer-'));
-    directories.push(directory);
-    const databasePath = join(directory, 'product.sqlite');
-    const authority = new TestAuthority();
-    const signer = new TestInstallationSigner();
-    const state = new SqliteOrganizationStateStore(databasePath);
-    const enrollmentClient = descriptorClient(authority);
-    const coordinator = new LocalOrganizationCoordinator({
-      state,
-      authorityClient: enrollmentClient,
-      installationSigner: signer,
-      maximumActiveLeaseTtlMs: MAX_TTL_MS,
-      clock: { now: () => NOW },
-    });
-    await coordinator.enroll(enrollmentInput(authority));
-    state.close();
+    const { authority, databasePath, signer } = await enrolledFixture();
 
     let observed: OrganizationPermissionCheckRequestV1 | undefined;
     const cancellation = new AbortController();
@@ -66,36 +100,34 @@ describe('organization approval action authorizer', () => {
       nextRequestId: () =>
         'pcr_00000000-0000-4000-8000-000000000001',
     });
-    await expect(
-      authorizer.authorize({
-        approval_id: 'f'.repeat(64),
-        action: 'approve',
-        adapter_identity: {
-          kind: 'approval-surface',
-          adapter_id: 'slack-reactions',
-          instance_id: 'primary',
-          version: '1.0.0',
-        },
-        provider_identity: {
-          provider: 'slack',
-          team_id: 'T123TEAM',
-          enterprise_id: null,
-          bot_user_id: 'U123BOT',
-          bot_id: 'B123BOT',
-          app_id: 'A123APP',
-        },
-        actor: {
-          provider: 'slack',
-          team_id: 'T123TEAM',
-          user_id: 'U123ZHEN',
-        },
-        channel_id: 'C123CHANNEL',
-        message_ts: '1753822800.000001',
-        reaction_name: 'white_check_mark',
-      }, cancellation.signal),
-    ).resolves.toEqual({
+    const authorization = await authorizer.authorize(
+      authorizationInput(),
+      cancellation.signal,
+    );
+    expect(authorization).toEqual({
       allowed: true,
       reason: 'active membership and direct grant',
+      evidence: {
+        schema_version: 1,
+        kind: 'echo-organization-authorization-evidence',
+        authority_id: ORGANIZATION_IDS.authority,
+        organization_id: ORGANIZATION_IDS.organization,
+        enrollment_id: ORGANIZATION_IDS.enrollment,
+        installation_id: ORGANIZATION_IDS.installation,
+        request_id: 'pcr_00000000-0000-4000-8000-000000000001',
+        approval_id: 'f'.repeat(64),
+        request_sha256: expect.stringMatching(/^sha256:[0-9a-f]{64}$/),
+        provider_event_sha256: expect.stringMatching(
+          /^sha256:[0-9a-f]{64}$/,
+        ),
+        allowed: true,
+        reason_code: 'active_membership_and_direct_grant',
+        principal_id: ORGANIZATION_IDS.principal,
+        membership_id: ORGANIZATION_IDS.membership,
+        adapter_binding_id: fixtureId('bnd', 1),
+        permission_grant_id: fixtureId('pgr', 1),
+        evaluated_at: NOW,
+      },
     });
     expect(observed).toMatchObject({
       request_id: 'pcr_00000000-0000-4000-8000-000000000001',
@@ -121,4 +153,32 @@ describe('organization approval action authorizer', () => {
     );
     expect(signer.signCalls).toBeGreaterThan(1);
   });
+
+  it.each([
+    ['principal_id', fixtureId('prn', 2)],
+    ['membership_id', fixtureId('mem', 2)],
+  ] as const)(
+    'fails closed when an allow decision attributes another %s',
+    async (field, foreignId) => {
+      const { authority, databasePath, signer } = await enrolledFixture();
+      const client = descriptorClient(authority, {
+        checkPermission: async (request) => ({
+          ...allowedPermissionDecision(request),
+          [field]: foreignId,
+        }),
+      });
+      const authorizer = new OrganizationApprovalActionAuthorizer({
+        openState: () => new SqliteOrganizationStateStore(databasePath),
+        authorityClient: client,
+        installationSigner: signer,
+        now: () => NOW,
+      });
+
+      await expect(
+        authorizer.authorize(authorizationInput()),
+      ).rejects.toThrow(
+        'organization permission decision belongs to another enrolled member',
+      );
+    },
+  );
 });

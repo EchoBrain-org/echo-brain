@@ -30,6 +30,10 @@ import type {
   OrganizationMembershipSummaryV1,
   OrganizationPermissionCheckDecisionV1,
   OrganizationPermissionCheckRequestV1,
+  OrganizationSlackLinkBeginRequestV1,
+  OrganizationSlackLinkBeginResponseV1,
+  OrganizationSlackLinkCompleteRequestV1,
+  OrganizationSlackLinkResultV1,
   ProvisionedOrganizationMembershipV1,
   ProvisionOrganizationMembershipRequestV1,
   RevokeOrganizationSubjectRequestV1,
@@ -37,6 +41,7 @@ import type {
   RevokedOrganizationMembershipV1,
 } from './contracts.js';
 import { organizationPermissionProviderEventSha256 } from './permission-check-event.js';
+import { isCanonicalOrganizationSlackLinkChallengeCode } from './slack-link-challenge-code.js';
 
 export const MAX_ORGANIZATION_API_BODY_BYTES = 16 * 1024;
 export const MAX_ENROLLMENT_GRANT_LIFETIME_SECONDS = 7 * 24 * 60 * 60;
@@ -528,7 +533,7 @@ export function validateOrganizationPermissionCheckRequest(
     record.provider_connection_subject_id,
     'permission check request provider_connection_subject_id',
     128,
-    /^U[A-Z0-9]{2,}$/,
+    /^[UW][A-Z0-9]{2,}$/,
   );
   assertPatternString(
     record.provider_connection_bot_id,
@@ -692,6 +697,275 @@ export function validateOrganizationPermissionCheckDecision(
     'permission check decision evaluated_at',
   );
   return record as unknown as OrganizationPermissionCheckDecisionV1;
+}
+
+function validateSlackLinkRequestIdentity(
+  record: Record<string, unknown>,
+  label: string,
+  requestPrefix: 'slb' | 'slc',
+): OrganizationApiSignedIntegrityV1 {
+  assertId(record.request_id, requestPrefix, `${label} request_id`);
+  assertId(record.authority_id, 'oau', `${label} authority_id`);
+  assertDigest(record.authority_key_id, `${label} authority_key_id`);
+  assertId(record.organization_id, 'org', `${label} organization_id`);
+  assertId(record.enrollment_id, 'enr', `${label} enrollment_id`);
+  assertId(record.installation_id, 'ins', `${label} installation_id`);
+  assertDigest(record.installation_key_id, `${label} installation_key_id`);
+  assertTimestamp(record.requested_at, `${label} requested_at`);
+  const integrity = validateIntegrity(record.integrity, label);
+  if (integrity.key_id !== record.installation_key_id) {
+    fail(`${label} signature key does not match installation key`);
+  }
+  return integrity;
+}
+
+export function validateOrganizationSlackLinkBeginRequest(
+  value: unknown,
+): OrganizationSlackLinkBeginRequestV1 {
+  const label = 'Slack link begin request';
+  const record = asRecord(value, label);
+  assertExactKeys(
+    record,
+    [
+      'schema_version',
+      'kind',
+      'request_id',
+      'authority_id',
+      'authority_key_id',
+      'organization_id',
+      'enrollment_id',
+      'installation_id',
+      'installation_key_id',
+      'challenge_code_sha256',
+      'requested_at',
+      'integrity',
+    ],
+    label,
+  );
+  if (
+    record.schema_version !== 1 ||
+    record.kind !== 'echo-organization-slack-link-begin-request'
+  ) {
+    fail('Slack link begin request version or kind is unsupported');
+  }
+  assertDigest(
+    record.challenge_code_sha256,
+    'Slack link begin request challenge_code_sha256',
+  );
+  const integrity = validateSlackLinkRequestIdentity(record, label, 'slb');
+  return {
+    ...record,
+    integrity,
+  } as unknown as OrganizationSlackLinkBeginRequestV1;
+}
+
+export function validateOrganizationSlackLinkCompleteRequest(
+  value: unknown,
+): OrganizationSlackLinkCompleteRequestV1 {
+  const label = 'Slack link complete request';
+  const record = asRecord(value, label);
+  assertExactKeys(
+    record,
+    [
+      'schema_version',
+      'kind',
+      'request_id',
+      'authority_id',
+      'authority_key_id',
+      'organization_id',
+      'enrollment_id',
+      'installation_id',
+      'installation_key_id',
+      'challenge_attempt_id',
+      'challenge_message_ts',
+      'challenge_code',
+      'expected_provider_subject_id',
+      'adapter_id',
+      'adapter_instance_id',
+      'adapter_version',
+      'requested_at',
+      'integrity',
+    ],
+    label,
+  );
+  if (
+    record.schema_version !== 1 ||
+    record.kind !== 'echo-organization-slack-link-complete-request'
+  ) {
+    fail('Slack link complete request version or kind is unsupported');
+  }
+  assertId(
+    record.challenge_attempt_id,
+    'cat',
+    'Slack link complete request challenge_attempt_id',
+  );
+  assertPatternString(
+    record.challenge_message_ts,
+    'Slack link complete request challenge_message_ts',
+    64,
+    /^\d{1,16}\.\d{1,16}$/,
+  );
+  if (!isCanonicalOrganizationSlackLinkChallengeCode(record.challenge_code)) {
+    fail(
+      'Slack link complete request challenge_code must be canonical unpadded base64url for exactly 32 bytes',
+    );
+  }
+  assertPatternString(
+    record.expected_provider_subject_id,
+    'Slack link complete request expected_provider_subject_id',
+    128,
+    /^[UW][A-Z0-9]{2,}$/,
+  );
+  if (record.adapter_id !== 'slack-reactions') {
+    fail('Slack link complete request adapter_id is unsupported');
+  }
+  assertPatternString(
+    record.adapter_instance_id,
+    'Slack link complete request adapter_instance_id',
+    128,
+    /^[a-z][a-z0-9-]{0,127}$/,
+  );
+  assertPatternString(
+    record.adapter_version,
+    'Slack link complete request adapter_version',
+    64,
+    /^[0-9]+\.[0-9]+\.[0-9]+(?:-[0-9A-Za-z.-]+)?$/,
+  );
+  const integrity = validateSlackLinkRequestIdentity(record, label, 'slc');
+  return {
+    ...record,
+    integrity,
+  } as unknown as OrganizationSlackLinkCompleteRequestV1;
+}
+
+export function validateOrganizationSlackLinkBeginResponse(
+  value: unknown,
+): OrganizationSlackLinkBeginResponseV1 {
+  const label = 'Slack link begin response';
+  const record = asRecord(value, label);
+  assertExactKeys(
+    record,
+    [
+      'schema_version',
+      'kind',
+      'challenge_attempt_id',
+      'provider',
+      'provider_tenant_id',
+      'channel_id',
+      'challenge_message_ts',
+      'expires_at',
+    ],
+    label,
+  );
+  if (
+    record.schema_version !== 1 ||
+    record.kind !== 'echo-organization-slack-link-begin-response' ||
+    record.provider !== 'slack'
+  ) {
+    fail('Slack link begin response version, kind, or provider is unsupported');
+  }
+  assertId(
+    record.challenge_attempt_id,
+    'cat',
+    'Slack link begin response challenge_attempt_id',
+  );
+  assertPatternString(
+    record.provider_tenant_id,
+    'Slack link begin response provider_tenant_id',
+    128,
+    /^T[A-Z0-9]{2,}$/,
+  );
+  assertPatternString(
+    record.channel_id,
+    'Slack link begin response channel_id',
+    128,
+    /^C[A-Z0-9]{2,}$/,
+  );
+  assertPatternString(
+    record.challenge_message_ts,
+    'Slack link begin response challenge_message_ts',
+    64,
+    /^\d{1,16}\.\d{1,16}$/,
+  );
+  assertTimestamp(record.expires_at, 'Slack link begin response expires_at');
+  return record as unknown as OrganizationSlackLinkBeginResponseV1;
+}
+
+export function validateOrganizationSlackLinkResult(
+  value: unknown,
+): OrganizationSlackLinkResultV1 {
+  const label = 'Slack link result';
+  const record = asRecord(value, label);
+  assertExactKeys(
+    record,
+    [
+      'schema_version',
+      'kind',
+      'identity_link_id',
+      'connection_id',
+      'adapter_binding_id',
+      'organization_id',
+      'principal_id',
+      'membership_id',
+      'installation_id',
+      'provider',
+      'provider_tenant_id',
+      'provider_subject_id',
+      'channel_id',
+      'linked_at',
+      'identity_link_created',
+      'adapter_binding_created',
+      'permission_grants_created',
+    ],
+    label,
+  );
+  if (
+    record.schema_version !== 1 ||
+    record.kind !== 'echo-organization-slack-link-result' ||
+    record.provider !== 'slack'
+  ) {
+    fail('Slack link result version, kind, or provider is unsupported');
+  }
+  assertId(record.identity_link_id, 'clm', 'Slack link result identity_link_id');
+  assertId(record.connection_id, 'con', 'Slack link result connection_id');
+  assertId(
+    record.adapter_binding_id,
+    'bnd',
+    'Slack link result adapter_binding_id',
+  );
+  assertId(record.organization_id, 'org', 'Slack link result organization_id');
+  assertId(record.principal_id, 'prn', 'Slack link result principal_id');
+  assertId(record.membership_id, 'mem', 'Slack link result membership_id');
+  assertId(record.installation_id, 'ins', 'Slack link result installation_id');
+  assertPatternString(
+    record.provider_tenant_id,
+    'Slack link result provider_tenant_id',
+    128,
+    /^T[A-Z0-9]{2,}$/,
+  );
+  assertPatternString(
+    record.provider_subject_id,
+    'Slack link result provider_subject_id',
+    128,
+    /^[UW][A-Z0-9]{2,}$/,
+  );
+  assertPatternString(
+    record.channel_id,
+    'Slack link result channel_id',
+    128,
+    /^C[A-Z0-9]{2,}$/,
+  );
+  assertTimestamp(record.linked_at, 'Slack link result linked_at');
+  if (
+    typeof record.identity_link_created !== 'boolean' ||
+    typeof record.adapter_binding_created !== 'boolean'
+  ) {
+    fail('Slack link result creation flags must be boolean');
+  }
+  if (record.permission_grants_created !== 0) {
+    fail('Slack link result permission_grants_created must be zero');
+  }
+  return record as unknown as OrganizationSlackLinkResultV1;
 }
 
 export function validateProvisionOrganizationMembershipRequest(

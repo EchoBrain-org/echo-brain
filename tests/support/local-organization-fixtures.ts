@@ -363,6 +363,12 @@ export function descriptorClient(
     checkPermission: async () => {
       throw new Error('unexpected permission check');
     },
+    beginSlackLink: async () => {
+      throw new Error('unexpected Slack link begin');
+    },
+    completeSlackLink: async () => {
+      throw new Error('unexpected Slack link completion');
+    },
     ...overrides,
   };
 }

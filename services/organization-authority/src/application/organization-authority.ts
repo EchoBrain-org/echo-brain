@@ -157,7 +157,7 @@ export interface OrganizationIntegrationOwnerContext {
   checked_at: string;
 }
 
-interface InstallationSignedCommand {
+export interface InstallationSignedCommand {
   authority_id: string;
   authority_key_id: Sha256Digest;
   organization_id: string;
@@ -165,6 +165,18 @@ interface InstallationSignedCommand {
   installation_id: string;
   installation_key_id: Sha256Digest;
   integrity: SignedIntegrity;
+}
+
+export interface OrganizationIntegrationInstallationContext {
+  request_sha256: Sha256Digest;
+  authority_id: string;
+  organization_id: string;
+  enrollment_id: string;
+  principal_id: string;
+  membership_id: string;
+  installation_id: string;
+  installation_key_id: Sha256Digest;
+  checked_at: string;
 }
 
 export interface CreateOrganizationAuthorityApplicationOptions {
@@ -395,6 +407,76 @@ export class OrganizationAuthorityApplication {
           installation_id: enrollment.installation_id,
           installation_key_id: enrollment.installation_signing_key.key_id,
         },
+        checked_at: checkedAt,
+      };
+    });
+  }
+
+  integrationInstallationContext(
+    command: InstallationSignedCommand & { requested_at: string },
+    label: string,
+  ): OrganizationIntegrationInstallationContext {
+    const enrollment = this.repository.read((transaction) =>
+      transaction.enrollmentById(command.enrollment_id),
+    );
+    if (enrollment === undefined) {
+      throw new AuthorityOperationError(
+        'unauthorized',
+        `${label} authentication failed`,
+      );
+    }
+    const requestSha256 = this.authenticateInstallationCommand(
+      command,
+      enrollment,
+      label,
+    );
+    const checkedAt = this.now(`${label} evaluation time`);
+    assertFreshInstallationRequest(
+      command.requested_at,
+      checkedAt,
+      this.accessRequestMaximumAgeMs,
+      label,
+    );
+    return this.repository.read((transaction) => {
+      const currentEnrollment = transaction.enrollmentById(
+        command.enrollment_id,
+      );
+      if (currentEnrollment === undefined) {
+        throw new Error(`authenticated ${label} enrollment disappeared`);
+      }
+      const membership = transaction.membership(
+        currentEnrollment.membership_id,
+      );
+      const access = requireCurrentAccessState(
+        transaction,
+        currentEnrollment.enrollment_id,
+      );
+      if (
+        currentEnrollment.status !== 'active' ||
+        currentEnrollment.authority_id !== this.descriptorValue.authority_id ||
+        currentEnrollment.organization_id !==
+          this.descriptorValue.organization_id ||
+        membership === undefined ||
+        membership.organization_id !== currentEnrollment.organization_id ||
+        membership.principal_id !== currentEnrollment.principal_id ||
+        membership.status !== 'active' ||
+        access.state.status !== 'active'
+      ) {
+        throw new AuthorityOperationError(
+          'unauthorized',
+          `${label} requires an active enrolled installation`,
+        );
+      }
+      return {
+        request_sha256: requestSha256,
+        authority_id: currentEnrollment.authority_id,
+        organization_id: currentEnrollment.organization_id,
+        enrollment_id: currentEnrollment.enrollment_id,
+        principal_id: currentEnrollment.principal_id,
+        membership_id: currentEnrollment.membership_id,
+        installation_id: currentEnrollment.installation_id,
+        installation_key_id:
+          currentEnrollment.installation_signing_key.key_id,
         checked_at: checkedAt,
       };
     });

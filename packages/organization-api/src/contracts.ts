@@ -94,6 +94,87 @@ export interface OrganizationPermissionCheckDecisionV1 {
   evaluated_at: string;
 }
 
+export interface OrganizationSlackLinkBeginRequestPayloadV1 {
+  schema_version: 1;
+  kind: 'echo-organization-slack-link-begin-request';
+  request_id: string;
+  authority_id: string;
+  authority_key_id: OrganizationApiSha256Digest;
+  organization_id: string;
+  enrollment_id: string;
+  installation_id: string;
+  installation_key_id: OrganizationApiSha256Digest;
+  challenge_code_sha256: OrganizationApiSha256Digest;
+  requested_at: string;
+}
+
+/**
+ * A fresh command from one enrolled installation to begin proving control of
+ * its employee's Slack identity. It does not grant any adapter permission.
+ */
+export interface OrganizationSlackLinkBeginRequestV1 extends OrganizationSlackLinkBeginRequestPayloadV1 {
+  integrity: OrganizationApiSignedIntegrityV1;
+}
+
+export interface OrganizationSlackLinkCompleteRequestPayloadV1 {
+  schema_version: 1;
+  kind: 'echo-organization-slack-link-complete-request';
+  request_id: string;
+  authority_id: string;
+  authority_key_id: OrganizationApiSha256Digest;
+  organization_id: string;
+  enrollment_id: string;
+  installation_id: string;
+  installation_key_id: OrganizationApiSha256Digest;
+  challenge_attempt_id: string;
+  challenge_message_ts: string;
+  challenge_code: string;
+  expected_provider_subject_id: string;
+  adapter_id: 'slack-reactions';
+  adapter_instance_id: string;
+  adapter_version: string;
+  requested_at: string;
+}
+
+/**
+ * A fresh command that submits the exact Slack challenge observation for the
+ * enrolled installation. The Authority derives the Slack human from Slack.
+ */
+export interface OrganizationSlackLinkCompleteRequestV1 extends OrganizationSlackLinkCompleteRequestPayloadV1 {
+  integrity: OrganizationApiSignedIntegrityV1;
+}
+
+export interface OrganizationSlackLinkBeginResponseV1 {
+  schema_version: 1;
+  kind: 'echo-organization-slack-link-begin-response';
+  challenge_attempt_id: string;
+  provider: 'slack';
+  provider_tenant_id: string;
+  channel_id: string;
+  challenge_message_ts: string;
+  expires_at: string;
+}
+
+export interface OrganizationSlackLinkResultV1 {
+  schema_version: 1;
+  kind: 'echo-organization-slack-link-result';
+  identity_link_id: string;
+  connection_id: string;
+  adapter_binding_id: string;
+  organization_id: string;
+  principal_id: string;
+  membership_id: string;
+  installation_id: string;
+  provider: 'slack';
+  provider_tenant_id: string;
+  provider_subject_id: string;
+  channel_id: string;
+  linked_at: string;
+  identity_link_created: boolean;
+  adapter_binding_created: boolean;
+  permission_grants_created: 0;
+}
+
 export interface OrganizationAuthorityDescriptorResponseV1 {
   authority_descriptor: OrganizationAuthorityDescriptorV1;
 }

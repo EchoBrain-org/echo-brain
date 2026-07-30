@@ -1,6 +1,10 @@
 import type {
   OrganizationPermissionCheckDecisionV1,
   OrganizationPermissionCheckRequestV1,
+  OrganizationSlackLinkBeginRequestV1,
+  OrganizationSlackLinkBeginResponseV1,
+  OrganizationSlackLinkCompleteRequestV1,
+  OrganizationSlackLinkResultV1,
 } from '@echo-brain/organization-api';
 
 export interface BootstrapSlackApprovalResult {
@@ -72,6 +76,14 @@ export interface OrganizationIntegrationsHttpApplication {
     input: unknown,
     signal?: AbortSignal,
   ): Promise<BootstrapSlackApprovalResult>;
+  beginSlackIdentityLink(
+    input: OrganizationSlackLinkBeginRequestV1,
+    signal?: AbortSignal,
+  ): Promise<OrganizationSlackLinkBeginResponseV1>;
+  completeSlackIdentityLink(
+    input: OrganizationSlackLinkCompleteRequestV1,
+    signal?: AbortSignal,
+  ): Promise<OrganizationSlackLinkResultV1>;
   checkPermission(
     request: OrganizationPermissionCheckRequestV1,
     signal?: AbortSignal,

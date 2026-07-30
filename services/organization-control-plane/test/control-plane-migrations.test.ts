@@ -51,7 +51,7 @@ const TABLES_BY_OBSERVABLE_BEHAVIOR = {
 
 const TABLES = Object.values(TABLES_BY_OBSERVABLE_BEHAVIOR).flat().sort();
 const V1_SCHEMA_CONTRACT_SHA256 =
-  "sha256:5f6ef3d7154d7708a716d68042aa77978d5df3767f8ee558b31557dc21457571";
+  "sha256:6d4c0a81c7a3d2f59d394bae62d75a7f27395edafe6fcd8640213880beba3e32";
 
 const IDS = {
   authority: "oau_test-authority",
@@ -89,10 +89,11 @@ const FOUNDER_LIVE_SLACK_SCOPES_JSON =
 const REQUIRED_SLACK_SCOPES_JSON =
   '["channels:history","channels:read","chat:write","reactions:read","users:read"]';
 const AUTHORITY_SECRET_HANDLE = "sch_11111111-1111-4111-8111-111111111111";
-const IMMUTABLE_MIGRATION_SHA256 = [
+const MIGRATION_SHA256 = [
   "sha256:453291a88f61b2675c06bd2359af5cdc5b71097b85418b2ac5b32fe8d7e7060e",
   "sha256:b8dfb1a432ec709a7fa8298ad105e25987ab40aca6e238fa685cc01f2d5d7425",
   "sha256:83c7ad70666693deed991861dfe55e8e949127421c5e70d79127905c7264aa7b",
+  "sha256:8697e5d7c58097e07754e7715200b6a2beaffb5edc6ec30303bcac08bb899a0a",
 ] as const;
 
 const temporaryDirectories: string[] = [];
@@ -114,6 +115,25 @@ function controlPlaneMigrationsThroughV3(): readonly OrganizationControlMigratio
     return {
       version: index + 1,
       filename,
+      sql,
+      sha256: digest(sql),
+    };
+  });
+}
+
+function controlPlaneMigrationsThroughV4(): readonly OrganizationControlMigration[] {
+  return [
+    ...controlPlaneMigrationsThroughV3(),
+    "0004_slack_enterprise_grid_user_ids.sql",
+  ].map((migration, index) => {
+    if (typeof migration !== "string") return migration;
+    const sql = readFileSync(
+      new URL(`../migrations/${migration}`, import.meta.url),
+      "utf8",
+    );
+    return {
+      version: index + 1,
+      filename: migration,
       sql,
       sha256: digest(sql),
     };
@@ -411,6 +431,7 @@ function seedApprovalFlow(
   database: Database.Database,
   connectionScopes = REQUIRED_SLACK_SCOPES_JSON,
   bindingConfiguration = LEGACY_SLACK_PUBLIC_CONFIGURATION_JSON,
+  botUserId = "U123BOT",
 ): void {
   seedMetadata(database);
   insertPendingAttempt(database, {
@@ -431,10 +452,10 @@ function seedApprovalFlow(
   completeAttempt(database, {
     id: "cat_slack-app",
     subjectKind: "service_account",
-    subjectId: "U123BOT",
+    subjectId: botUserId,
     grantedScopes: connectionScopes,
   });
-  insertServiceConnection(database);
+  insertServiceConnection(database, { providerSubjectId: botUserId });
   insertBinding(database, { publicConfigurationJson: bindingConfiguration });
   insertGrant(database);
 }
@@ -507,8 +528,8 @@ describe("minimum organization control-plane v1 schema", () => {
   it("installs only tables assigned to observable v1 behavior", () => {
     const path = databasePath();
     const database = openOrganizationControlDatabase(path);
-    expect(currentOrganizationControlSchemaVersion()).toBe(3);
-    expect(database.pragma("user_version", { simple: true })).toBe(3);
+    expect(currentOrganizationControlSchemaVersion()).toBe(4);
+    expect(database.pragma("user_version", { simple: true })).toBe(4);
     expect(database.pragma("application_id", { simple: true })).toBe(
       organizationControlApplicationId(),
     );
@@ -574,11 +595,11 @@ describe("minimum organization control-plane v1 schema", () => {
 
     const futurePath = join(path, "..", "future.sqlite");
     const future = new Database(futurePath);
-    future.pragma("user_version = 4");
+    future.pragma("user_version = 5");
     future.close();
     chmodSync(futurePath, 0o600);
     expect(() => openOrganizationControlDatabase(futurePath)).toThrow(
-      "newer than supported schema 3",
+      "newer than supported schema 4",
     );
 
     const tamperedPath = join(path, "..", "tampered.sqlite");
@@ -649,7 +670,7 @@ describe("minimum organization control-plane v1 schema", () => {
     database.pragma("foreign_keys = ON");
     const migrations = controlPlaneMigrationsThroughV3();
     expect(migrations.map(({ sha256 }) => sha256)).toEqual(
-      IMMUTABLE_MIGRATION_SHA256,
+      MIGRATION_SHA256.slice(0, 3),
     );
     migrateOrganizationControlDatabaseWithMigrations(
       database,
@@ -673,7 +694,7 @@ describe("minimum organization control-plane v1 schema", () => {
            WHERE version = 2`,
         )
         .get(),
-    ).toEqual({ migration_sha256: IMMUTABLE_MIGRATION_SHA256[1] });
+    ).toEqual({ migration_sha256: MIGRATION_SHA256[1] });
     expect(
       database
         .prepare(
@@ -924,6 +945,162 @@ describe("minimum organization control-plane v1 schema", () => {
       reject_reaction: "x",
     });
     repository.close();
+  });
+
+  it("upgrades v3 in place and accepts Enterprise Grid W bot identities", () => {
+    const legacyWConfiguration =
+      LEGACY_SLACK_PUBLIC_CONFIGURATION_JSON.replace(
+        '"slack_bot_user_id":"U123BOT"',
+        '"slack_bot_user_id":"W123BOT"',
+      );
+    const migrations = controlPlaneMigrationsThroughV4();
+    expect(migrations.map(({ sha256 }) => sha256)).toEqual(MIGRATION_SHA256);
+
+    const legacy = new Database(databasePath());
+    legacy.pragma("foreign_keys = ON");
+    migrateOrganizationControlDatabaseWithMigrations(
+      legacy,
+      migrations.slice(0, 1),
+    );
+    seedApprovalFlow(
+      legacy,
+      FOUNDER_LIVE_SLACK_SCOPES_JSON,
+      legacyWConfiguration,
+      "W123BOT",
+    );
+    migrateOrganizationControlDatabaseWithMigrations(
+      legacy,
+      migrations.slice(0, 3),
+    );
+    const beforeUpgrade = legacy
+      .prepare(
+        `SELECT connection_id, provider_subject_id,
+                public_configuration_json
+         FROM organization_tool_connections`,
+      )
+      .get();
+
+    migrateOrganizationControlDatabaseWithMigrations(legacy, migrations);
+
+    expect(legacy.pragma("user_version", { simple: true })).toBe(4);
+    expect(
+      legacy
+        .prepare(
+          `SELECT connection_id, provider_subject_id,
+                  public_configuration_json
+           FROM organization_tool_connections`,
+        )
+        .get(),
+    ).toEqual(beforeUpgrade);
+
+    const legacyRepository = new OrganizationIntegrationsRepository(legacy, {
+      organization_id: IDS.organization,
+      authority_id: IDS.authority,
+    });
+    expect(legacyRepository.legacySlackOrganizationTool()).toMatchObject({
+      connection_id: IDS.connection,
+      bot_user_id: "W123BOT",
+    });
+    expect(
+      legacyRepository.onboardSlackOrganizationTool({
+        command_id: "cmd_reverify-enterprise-grid-slack",
+        command_sha256: digest("reverify-enterprise-grid-slack"),
+        organization_id: IDS.organization,
+        authority_id: IDS.authority,
+        administrator_principal_id: IDS.principal,
+        administrator_membership_id: IDS.membership,
+        connection: {
+          team_id: "T_TEST",
+          enterprise_id: null,
+          bot_user_id: "W123BOT",
+          bot_id: "B123BOT",
+          app_id: null,
+          granted_scopes: [
+            "channels:history",
+            "channels:read",
+            "chat:write",
+            "reactions:read",
+            "users:read",
+          ],
+          verification_evidence_sha256: digest(
+            "reverified-enterprise-grid-connection",
+          ),
+        },
+        channel: {
+          team_id: "T_TEST",
+          channel_id: "C123CHANNEL",
+          verification_evidence_sha256: digest(
+            "reverified-enterprise-grid-channel",
+          ),
+        },
+        secret: {
+          secret_backend_id: AUTHORITY_FILE_SECRET_BACKEND,
+          secret_handle_id: AUTHORITY_SECRET_HANDLE,
+        },
+        now: TIME.revoked,
+      }),
+    ).toMatchObject({
+      connection_id: IDS.connection,
+      slack_bot_user_id: "W123BOT",
+    });
+    expect(legacyRepository.activeSlackOrganizationTool()).toMatchObject({
+      connection_id: IDS.connection,
+      bot_user_id: "W123BOT",
+    });
+    legacyRepository.close();
+
+    const fresh = openOrganizationControlDatabase(":memory:");
+    seedMetadata(fresh);
+    const freshRepository = new OrganizationIntegrationsRepository(fresh, {
+      organization_id: IDS.organization,
+      authority_id: IDS.authority,
+    });
+    expect(
+      freshRepository.onboardSlackOrganizationTool({
+        command_id: "cmd_onboard-enterprise-grid-slack",
+        command_sha256: digest("onboard-enterprise-grid-slack"),
+        organization_id: IDS.organization,
+        authority_id: IDS.authority,
+        administrator_principal_id: IDS.principal,
+        administrator_membership_id: IDS.membership,
+        connection: {
+          team_id: "T_TEST",
+          enterprise_id: null,
+          bot_user_id: "W456BOT",
+          bot_id: "B456BOT",
+          app_id: "A456APP",
+          granted_scopes: [
+            "channels:history",
+            "channels:read",
+            "chat:write",
+            "reactions:read",
+            "users:read",
+          ],
+          verification_evidence_sha256: digest(
+            "fresh-enterprise-grid-connection",
+          ),
+        },
+        channel: {
+          team_id: "T_TEST",
+          channel_id: "C456CHANNEL",
+          verification_evidence_sha256: digest(
+            "fresh-enterprise-grid-channel",
+          ),
+        },
+        secret: {
+          secret_backend_id: AUTHORITY_FILE_SECRET_BACKEND,
+          secret_handle_id: AUTHORITY_SECRET_HANDLE,
+        },
+        now: TIME.completed,
+      }),
+    ).toMatchObject({
+      slack_bot_user_id: "W456BOT",
+      status: "active",
+    });
+    expect(freshRepository.activeSlackOrganizationTool()).toMatchObject({
+      bot_user_id: "W456BOT",
+    });
+    freshRepository.close();
   });
 
   it("rejects a null legacy Slack identity before it can reach promotion", () => {
