@@ -875,7 +875,8 @@ export class SlackWebIntegrationProvider implements SlackIntegrationProvider {
     if (
       parent['type'] !== 'message' ||
       parent['ts'] !== input.challenge_message_ts ||
-      parent['thread_ts'] !== undefined ||
+      (parent['thread_ts'] !== undefined &&
+        parent['thread_ts'] !== input.challenge_message_ts) ||
       parent['user'] !== input.expected_bot_user_id ||
       parent['bot_id'] !== input.expected_bot_id ||
       parent['text'] !== challenge.text ||

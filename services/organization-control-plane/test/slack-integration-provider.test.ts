@@ -598,6 +598,44 @@ describe('Slack integration provider verification', () => {
     );
   });
 
+  it('accepts Slack returning the challenge parent with its own thread timestamp', async () => {
+    const fetch = slackFetch(
+      slackResponse(CONNECTION),
+      slackResponse({
+        ok: true,
+        messages: [
+          challengeParent({
+            thread_ts: CHALLENGE_MESSAGE_TS,
+            blocks: [
+              {
+                type: 'section',
+                block_id: CHALLENGE_MARKER,
+                text: {
+                  type: 'mrkdwn',
+                  text: CHALLENGE_TEXT,
+                  verbatim: false,
+                },
+              },
+            ],
+          }),
+          challengeReply(),
+        ],
+        has_more: false,
+        response_metadata: { next_cursor: '' },
+      }),
+      slackResponse({ ok: true, user: HUMAN }),
+    );
+
+    await expect(
+      new SlackWebIntegrationProvider({
+        fetch,
+      }).observeIdentityLinkChallenge(TOKEN, OBSERVE_CHALLENGE_INPUT),
+    ).resolves.toMatchObject({
+      user_id: 'U123ZHEN',
+      challenge_message_ts: CHALLENGE_MESSAGE_TS,
+    });
+  });
+
   it('derives Enterprise Grid W bot and human identities from the challenge', async () => {
     const gridConnection = {
       ...CONNECTION,
@@ -735,6 +773,12 @@ describe('Slack integration provider verification', () => {
         blocks: challengeBlocks(
           'echo-identity-link:cat_another:2025-07-29T21:04:00.000Z',
         ),
+      }),
+    },
+    {
+      label: 'attached to another thread',
+      parent: challengeParent({
+        thread_ts: '1753822700.000001',
       }),
     },
   ])('rejects an $label challenge parent', async ({ parent }) => {
