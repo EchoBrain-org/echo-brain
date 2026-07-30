@@ -1,8 +1,3 @@
-import {
-  generateKeyPairSync,
-  sign as signMessage,
-  type KeyObject,
-} from 'node:crypto';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -13,10 +8,6 @@ import type { DecisionNodeState } from '../../../src/product/approval/decision-n
 import type { VerifiedActiveIdentityBundle } from '../../../src/product/federation/identity/active-identity-bundle-store.js';
 import { ApprovalProjectingCoreStateStore } from '../../../src/product/federation/records/approval-projecting-core-state-store.js';
 import { SqliteFederatedAttributionStore } from '../../../src/product/federation/attribution-store.js';
-import type {
-  InstallationKeyDescriptor,
-  InstallationSigner,
-} from '../../../src/product/federation/foundation/installation-signer.js';
 import { FederatedOutboxStore } from '../../../src/product/federation/outbox-store.js';
 import type { StoredFederatedOutboxEvent } from '../../../src/product/federation/outbox-store.js';
 import {
@@ -29,12 +20,9 @@ import type {
   ProductArtifactIdentityV1,
   SourceAttributionV1,
 } from '../../../src/product/federation/contracts.js';
-import {
-  normalizeP256LowS,
-  p256KeyId,
-} from '../../../src/product/federation/foundation/signature-profile.js';
 import { openFounderFederationRuntime } from '../../../src/product/federation/runtime-wiring.js';
 import { buildFederatedProjectionSnapshots } from '../../../src/product/federation/record-projector.js';
+import { CountingInstallationSigner as TestSigner } from './fixtures/federated-records.js';
 
 const NOW = '2026-07-19T23:30:00.000Z';
 const INSTALLATION_ID = 'ins_00000000-0000-4000-8000-000000000001';
@@ -81,57 +69,6 @@ function config(stateDir: string): ProductRuntimeConfig {
     delivery_surfaces: [],
     approval_mode: 'manual',
   };
-}
-
-class TestSigner implements InstallationSigner {
-  private readonly privateKey: KeyObject;
-  readonly descriptor: InstallationKeyDescriptor;
-
-  constructor() {
-    const { privateKey, publicKey } = generateKeyPairSync('ec', {
-      namedCurve: 'prime256v1',
-    });
-    const publicKeyDer = publicKey.export({ type: 'spki', format: 'der' });
-    this.privateKey = privateKey;
-    this.descriptor = {
-      installation_id: INSTALLATION_ID,
-      key_id: p256KeyId(publicKeyDer),
-      algorithm: 'ecdsa-p256-sha256-der-low-s',
-      public_key_spki_der_base64: publicKeyDer.toString('base64'),
-      protection: 'secure-enclave',
-      assurance: 'hardware_bound',
-      private_key_exportable: false,
-    };
-  }
-
-  async generate(): Promise<InstallationKeyDescriptor> {
-    return this.descriptor;
-  }
-
-  async inspect(
-    installationId: string,
-  ): Promise<InstallationKeyDescriptor | null> {
-    return installationId === INSTALLATION_ID ? this.descriptor : null;
-  }
-
-  async sign(
-    installationId: string,
-    message: Buffer,
-    expectedKeyId?: `sha256:${string}`,
-  ): Promise<Buffer> {
-    if (
-      installationId !== INSTALLATION_ID ||
-      expectedKeyId !== this.descriptor.key_id
-    ) {
-      throw new Error('test signing identity mismatch');
-    }
-    return normalizeP256LowS(
-      signMessage('sha256', message, {
-        key: this.privateKey,
-        dsaEncoding: 'der',
-      }),
-    );
-  }
 }
 
 function activeBundle(signer: TestSigner): VerifiedActiveIdentityBundle {
@@ -417,7 +354,7 @@ describe('founder federation runtime wiring', () => {
 
   it('shares active resources across readiness and the projection state gate', async () => {
     const stateDir = stateDirectory();
-    const signer = new TestSigner();
+    const signer = new TestSigner(INSTALLATION_ID);
     const attribution = new SqliteFederatedAttributionStore(':memory:');
     const outbox = new FederatedOutboxStore(':memory:');
     const artifact = {
@@ -508,7 +445,7 @@ describe('founder federation runtime wiring', () => {
 
   it('heals an exact projection retry but rejects divergent approval evidence and retired projection artifacts', async () => {
     const stateDir = stateDirectory();
-    const signer = new TestSigner();
+    const signer = new TestSigner(INSTALLATION_ID);
     const source = sourceAttribution();
     const processor = processorAttribution();
     const { node, metadata } = approvedNode(signer, source, processor);

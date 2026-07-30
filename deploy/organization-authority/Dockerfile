@@ -4,6 +4,7 @@ WORKDIR /app
 COPY package.json npm-shrinkwrap.json tsconfig*.json ./
 COPY packages ./packages
 COPY services/organization-authority ./services/organization-authority
+COPY services/organization-control-plane ./services/organization-control-plane
 RUN npm ci \
   && npm run build:workspaces \
   && npm prune --omit=dev
@@ -22,6 +23,9 @@ COPY --from=build /app/packages/organization-api/dist ./packages/organization-ap
 COPY --from=build /app/services/organization-authority/package.json ./services/organization-authority/package.json
 COPY --from=build /app/services/organization-authority/dist ./services/organization-authority/dist
 COPY --from=build /app/services/organization-authority/migrations ./services/organization-authority/migrations
+COPY --from=build /app/services/organization-control-plane/package.json ./services/organization-control-plane/package.json
+COPY --from=build /app/services/organization-control-plane/dist ./services/organization-control-plane/dist
+COPY --from=build /app/services/organization-control-plane/migrations ./services/organization-control-plane/migrations
 RUN install -d -m 1777 /echo-runtime
 USER node
 ENTRYPOINT ["node", "services/organization-authority/dist/main.js"]

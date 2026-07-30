@@ -1,5 +1,13 @@
 import { once } from 'node:events';
 import type { AddressInfo } from 'node:net';
+import { join } from 'node:path';
+import {
+  FileOrganizationSecretStore,
+  inspectOpenOrganizationControlDatabase,
+  openOrganizationControlDatabase,
+  OrganizationIntegrationsRepository,
+  SlackWebIntegrationProvider,
+} from '@echo-brain/organization-control-plane';
 import { AdminBearerAuthenticator } from '../adapters/security/admin-bearer-authenticator.js';
 import { DevelopmentFileOrganizationAuthoritySigner } from '../adapters/security/development-file-authority-signer.js';
 import {
@@ -8,25 +16,34 @@ import {
 } from '../adapters/runtime/system-runtime-ports.js';
 import { SqliteOrganizationAuthorityRepository } from '../adapters/persistence/sqlite/sqlite-authority-repository.js';
 import { OrganizationAuthorityApplication } from '../application/organization-authority.js';
-import { createOrganizationAuthorityHttpServer } from '../presentation/http-server.js';
+import {
+  beginOrganizationAuthorityHttpServerShutdown,
+  createOrganizationAuthorityHttpServer,
+  drainOrganizationAuthorityHttpServer,
+} from '../presentation/http-server.js';
 import { InMemoryAdminConsoleSessionStore } from '../presentation/admin-console/sessions.js';
 import { AuthenticatedProxyClientIdentityResolver } from '../presentation/trusted-proxy-client-identity.js';
 import { acquireAuthorityRuntimeLock } from '../adapters/runtime/singleton-runtime-lock.js';
 import { authorityRuntimeFingerprint } from '../adapters/runtime/runtime-fingerprint.js';
 import { createAuthorityRuntimeStatus } from '../adapters/runtime/runtime-status-proof.js';
 import {
+  ComposedOrganizationIntegrationsApplication,
+  reconcileOrganizationIntegrationSecrets,
+} from './organization-integrations.js';
+import {
   assertIndependentAuthorityTokens,
   assertAuthorityServeStateBoundary,
   assertPersistentAuthorityDatabasePath,
   type AuthorityServeConfig,
 } from './config.js';
+import { assertAuthorityRuntimeStateBinding } from './operator-state.js';
 
 export interface RunningOrganizationAuthority {
   address: AddressInfo;
   close(): Promise<void>;
 }
 
-const GRACEFUL_SHUTDOWN_DEADLINE_MS = 10_000;
+const GRACEFUL_SHUTDOWN_DEADLINE_MS = 30_000;
 const ADMIN_CONSOLE_SESSION_TTL_MS = 8 * 60 * 60 * 1000;
 const MAXIMUM_ADMIN_CONSOLE_SESSIONS = 256;
 
@@ -34,20 +51,46 @@ type OrganizationAuthorityHttpServer = ReturnType<
   typeof createOrganizationAuthorityHttpServer
 >;
 
-async function closeAuthorityServer(
+export async function closeAuthorityServer(
   server: OrganizationAuthorityHttpServer,
+  gracefulShutdownDeadlineMs = GRACEFUL_SHUTDOWN_DEADLINE_MS,
 ): Promise<void> {
-  if (!server.listening) return;
+  beginOrganizationAuthorityHttpServerShutdown(server);
+  const drained = drainOrganizationAuthorityHttpServer(server);
+  if (!server.listening) {
+    await drained;
+    return;
+  }
   const closeEvent = once(server, 'close');
-  const deadline = setTimeout(() => {
-    server.closeAllConnections();
-  }, GRACEFUL_SHUTDOWN_DEADLINE_MS);
-  deadline.unref?.();
+  let deadline: NodeJS.Timeout | undefined;
+  const forcedCloseFailure = new Promise<never>((_resolve, reject) => {
+    deadline = setTimeout(() => {
+      const deadlineFailure = new Error(
+        'organization authority graceful shutdown deadline exceeded',
+      );
+      try {
+        server.closeAllConnections();
+      } catch (error) {
+        reject(
+          new AggregateError(
+            [deadlineFailure, error],
+            'organization authority forced listener shutdown failed',
+          ),
+        );
+        return;
+      }
+      reject(deadlineFailure);
+    }, gracefulShutdownDeadlineMs);
+  });
+  deadline?.unref();
   try {
     server.close();
-    await closeEvent;
+    await Promise.race([
+      Promise.all([closeEvent, drained]).then(() => undefined),
+      forcedCloseFailure,
+    ]);
   } finally {
-    clearTimeout(deadline);
+    if (deadline !== undefined) clearTimeout(deadline);
   }
 }
 
@@ -55,6 +98,11 @@ function abandonUncertainServer(
   server: OrganizationAuthorityHttpServer,
   failures: unknown[],
 ): void {
+  try {
+    beginOrganizationAuthorityHttpServerShutdown(server);
+  } catch (error) {
+    failures.push(error);
+  }
   try {
     server.closeAllConnections();
   } catch (error) {
@@ -91,9 +139,13 @@ export async function startOrganizationAuthority(
     runtimeFingerprint,
   );
   let repository: SqliteOrganizationAuthorityRepository | undefined;
+  let integrationsDatabase:
+    | ReturnType<typeof openOrganizationControlDatabase>
+    | undefined;
   let application: OrganizationAuthorityApplication | undefined;
   let server: OrganizationAuthorityHttpServer | undefined;
   try {
+    assertAuthorityRuntimeStateBinding(config);
     const signer = DevelopmentFileOrganizationAuthoritySigner.openExisting({
       directory: config.key_directory,
       authority_id: config.authority_id,
@@ -103,6 +155,23 @@ export async function startOrganizationAuthority(
       config.database_path,
       { fileMustExist: true, allowInitialization: false },
     );
+    integrationsDatabase = openOrganizationControlDatabase(
+      config.integrations_database_path,
+      { fileMustExist: true },
+    );
+    const integrationsIdentity = inspectOpenOrganizationControlDatabase(
+      integrationsDatabase,
+    );
+    if (
+      integrationsIdentity.organization_id !== config.organization_id ||
+      integrationsIdentity.authority_id !== config.authority_id ||
+      integrationsIdentity.authority_descriptor_sha256 !==
+        config.authority_pin_sha256
+    ) {
+      throw new Error(
+        'organization integrations database identity differs from config',
+      );
+    }
     application = await OrganizationAuthorityApplication.create({
       repository,
       signer,
@@ -114,6 +183,26 @@ export async function startOrganizationAuthority(
       access_request_maximum_age_ms: config.access_request_maximum_age_ms,
     });
     repository = undefined;
+    const integrationsRepository = new OrganizationIntegrationsRepository(
+      integrationsDatabase,
+      {
+        organization_id: config.organization_id,
+        authority_id: config.authority_id,
+      },
+    );
+    const integrationSecrets = new FileOrganizationSecretStore(
+      join(config.state_directory, 'credentials', 'integrations'),
+    );
+    reconcileOrganizationIntegrationSecrets(
+      integrationsRepository,
+      integrationSecrets,
+    );
+    const integrations = new ComposedOrganizationIntegrationsApplication({
+      authority: application,
+      repository: integrationsRepository,
+      secrets: integrationSecrets,
+      slack: new SlackWebIntegrationProvider(),
+    });
     if (authorityRuntimeFingerprint(config) !== runtimeFingerprint) {
       throw new Error(
         'organization authority files changed while composing the runtime',
@@ -121,6 +210,7 @@ export async function startOrganizationAuthority(
     }
     server = createOrganizationAuthorityHttpServer({
       application,
+      integrations,
       adminAuthenticator,
       clientIdentityResolver,
       adminConsole: {
@@ -147,6 +237,7 @@ export async function startOrganizationAuthority(
       throw new Error('organization authority did not bind a TCP address');
     }
     const runningApplication = application;
+    const runningIntegrationsDatabase = integrationsDatabase;
     const runningServer = server;
     let closePromise: Promise<void> | undefined;
     return {
@@ -154,26 +245,40 @@ export async function startOrganizationAuthority(
       async close(): Promise<void> {
         closePromise ??= (async (): Promise<void> => {
           const failures: unknown[] = [];
-          let serverCleanupFailed = false;
           try {
             await closeAuthorityServer(runningServer);
           } catch (error) {
-            serverCleanupFailed = true;
             failures.push(error);
+            abandonUncertainServer(runningServer, failures);
+            try {
+              await runtimeLock.abandon();
+            } catch (abandonError) {
+              failures.push(abandonError);
+            }
+            // A failed listener drain means a handler may still hold either
+            // database. Leave both handles open and retain kernel exclusion
+            // until this process exits instead of creating a use-after-close
+            // race inside the Authority.
+            throwCleanupFailures(
+              failures,
+              'organization authority shutdown failed',
+            );
           }
           try {
             runningApplication.close();
           } catch (error) {
             failures.push(error);
           }
-          // Keep ownership until both the listener and SQLite application are
+          try {
+            runningIntegrationsDatabase.close();
+          } catch (error) {
+            failures.push(error);
+          }
+          // Keep ownership until the listener and both SQLite handles are
           // confirmed closed. On uncertain cleanup, unref live resources so a
           // terminal process may exit, but retain kernel exclusion until the
           // operating system actually releases this process's handles.
           if (failures.length > 0) {
-            if (serverCleanupFailed) {
-              abandonUncertainServer(runningServer, failures);
-            }
             try {
               await runtimeLock.abandon();
             } catch (error) {
@@ -202,6 +307,20 @@ export async function startOrganizationAuthority(
         failures.push(cleanupError);
       }
     }
+    if (serverCleanupFailed && server !== undefined) {
+      abandonUncertainServer(server, failures);
+      try {
+        await runtimeLock.abandon();
+      } catch (cleanupError) {
+        failures.push(cleanupError);
+      }
+      // The listener may still have a handler executing against either
+      // database. Do not close those handles or release singleton ownership.
+      throwCleanupFailures(
+        failures,
+        'organization authority startup and ownership cleanup failed',
+      );
+    }
     try {
       if (application !== undefined) application.close();
       else repository?.close();
@@ -209,8 +328,11 @@ export async function startOrganizationAuthority(
       cleanupFailed = true;
       failures.push(cleanupError);
     }
-    if (serverCleanupFailed && server !== undefined) {
-      abandonUncertainServer(server, failures);
+    try {
+      integrationsDatabase?.close();
+    } catch (cleanupError) {
+      cleanupFailed = true;
+      failures.push(cleanupError);
     }
     try {
       if (cleanupFailed) await runtimeLock.abandon();

@@ -69,12 +69,15 @@ import {
   createLocalOrganizationRuntime,
   DEFAULT_LOCAL_ORGANIZATION_LEASE_TTL_MS,
   HttpOrganizationAuthorityClient,
+  OrganizationApprovalActionAuthorizer,
+  organizationApprovalResolutionRequiresAuthority,
   OrganizationRuntimeAccessController,
   OrganizationAuthorityTransportError,
   organizationEnrollmentGrantSha256,
   readPrivateOrganizationEnrollmentInvitation,
   SqliteOrganizationStateStore,
   validateOrganizationAuthorityDescriptorResponse,
+  type HttpOrganizationAuthorityClientOptions,
   type OrganizationInstallationAccessDecisionV1,
   verifyOrganizationAuthorityPin,
 } from "./organization/index.js";
@@ -751,36 +754,58 @@ function identityRequiresFederation(stateDirectory: string): boolean {
   return requiresFounderFederation(stateDirectory, identity);
 }
 
-function resolveOrganizationAccessGate(
+function organizationAuthorityTransportOptions(
+  organization: ProductCliDependencies["organization"],
+  authorityCaPem: string | null | undefined,
+): Omit<HttpOrganizationAuthorityClientOptions, "baseUrl" | "timeoutMs"> {
+  return {
+    ...(organization?.fetch === undefined
+      ? authorityCaPem === null || authorityCaPem === undefined
+        ? {}
+        : { authorityCaPem }
+      : { fetch: organization.fetch }),
+    ...(organization?.allowInsecureLoopback === undefined
+      ? {}
+      : { allowInsecureLoopback: organization.allowInsecureLoopback }),
+  };
+}
+
+function resolveOrganizationAuthorization(
   config: ProductRuntimeConfig,
   dependencies: ProductCliDependencies,
-): ProductAccessGate | undefined {
-  if (dependencies.composition?.accessGate !== undefined) {
-    return dependencies.composition.accessGate;
-  }
+): {
+  accessGate: ProductAccessGate | undefined;
+  approvalActionAuthorizer: OrganizationApprovalActionAuthorizer | undefined;
+} {
   const databasePath = resolveProductStatePaths(config.state_dir).database;
   const state = new SqliteOrganizationStateStore(databasePath);
   let hasPin = false;
+  let enrolled = false;
   let authorityBaseUrl: string | null = null;
   let authorityCaPem: string | null = null;
   try {
     hasPin = state.readPinnedAuthority() !== null;
+    const enrollment = state.readEnrollment();
+    enrolled =
+      enrollment?.receipt !== null &&
+      enrollment?.receipt !== undefined &&
+      enrollment.accepted_access_sequence > 0;
     const connection = state.readAuthorityConnection();
     authorityBaseUrl = connection?.authority_base_url ?? null;
     authorityCaPem = connection?.authority_ca_pem ?? null;
   } finally {
     state.close();
   }
-  // Unenrolled profiles retain the disposable rehearsal behavior. Once an
-  // authority is pinned, authorization becomes mandatory and fail-closed.
-  if (!hasPin) return undefined;
-  if (authorityBaseUrl === null) {
+  if (enrolled && authorityBaseUrl === null) {
+    throw new Error(
+      "organization authority connection is unavailable for approval authorization",
+    );
+  }
+  const configuredAccessGate = dependencies.composition?.accessGate;
+  if (!enrolled && (configuredAccessGate !== undefined || !hasPin)) {
     return {
-      async assertAuthorized() {
-        throw new Error(
-          "organization authority connection is unavailable for the pinned organization",
-        );
-      },
+      accessGate: configuredAccessGate,
+      approvalActionAuthorizer: undefined,
     };
   }
   const signer =
@@ -789,27 +814,50 @@ function resolveOrganizationAccessGate(
       join(config.state_dir, "installation", "keys"),
     );
   const now = resolveProductClock(dependencies.now);
-  return new OrganizationRuntimeAccessController({
-    now,
-    openRuntime: () =>
-      createLocalOrganizationRuntime({
-        databasePath,
-        authorityBaseUrl,
-        installationSigner: signer,
-        clock: { now },
-        ...(dependencies.organization?.fetch === undefined
-          ? authorityCaPem === null
-            ? {}
-            : { authorityCaPem }
-          : { fetch: dependencies.organization.fetch }),
-        ...(dependencies.organization?.allowInsecureLoopback === undefined
-          ? {}
-          : {
-              allowInsecureLoopback:
-                dependencies.organization.allowInsecureLoopback,
+  const transport = organizationAuthorityTransportOptions(
+    dependencies.organization,
+    authorityCaPem,
+  );
+  // Unenrolled profiles retain the disposable rehearsal behavior. Once an
+  // authority is pinned, authorization becomes mandatory and fail-closed.
+  const accessGate =
+    configuredAccessGate ??
+    (!hasPin
+      ? undefined
+      : authorityBaseUrl === null
+        ? {
+            async assertAuthorized() {
+              throw new Error(
+                "organization authority connection is unavailable for the pinned organization",
+              );
+            },
+          }
+        : new OrganizationRuntimeAccessController({
+            now,
+            openRuntime: () =>
+              createLocalOrganizationRuntime({
+                databasePath,
+                authorityBaseUrl,
+                installationSigner: signer,
+                clock: { now },
+                ...transport,
+              }),
+          }));
+  return {
+    accessGate,
+    approvalActionAuthorizer:
+      !enrolled || authorityBaseUrl === null
+        ? undefined
+        : new OrganizationApprovalActionAuthorizer({
+            openState: () => new SqliteOrganizationStateStore(databasePath),
+            authorityClient: new HttpOrganizationAuthorityClient({
+              baseUrl: authorityBaseUrl,
+              ...transport,
             }),
-      }),
-  });
+            installationSigner: signer,
+            now,
+          }),
+  };
 }
 
 async function createCliComposition(
@@ -821,7 +869,8 @@ async function createCliComposition(
     dependencies.adapterFactories ?? createDefaultAdapterFactories();
   const now = dependencies.composition?.now ?? dependencies.now;
   const customComposition = dependencies.composition;
-  const accessGate = resolveOrganizationAccessGate(config, dependencies);
+  const { accessGate, approvalActionAuthorizer } =
+    resolveOrganizationAuthorization(config, dependencies);
   // This check precedes adapter factories and credential resolution. The
   // composition repeats it immediately before health checks and every cycle.
   await assertProductAccess(accessGate);
@@ -875,6 +924,9 @@ async function createCliComposition(
       environment: dependencies.environment,
       now,
       approvalFederationCapture,
+      ...(approvalActionAuthorizer === undefined
+        ? {}
+        : { approvalActionAuthorizer }),
     });
     return await prepareProductComposition(config, registry, {
       ...customComposition,
@@ -985,6 +1037,9 @@ async function createCliComposition(
       environment: dependencies.environment,
       now,
       approvalFederationCapture: federation.approvalCapture,
+      ...(approvalActionAuthorizer === undefined
+        ? {}
+        : { approvalActionAuthorizer }),
     });
     const configuredClose = customComposition?.closeResources;
     return await prepareProductComposition(config, registry, {
@@ -1568,17 +1623,10 @@ export async function runProductCli(
           authorityBaseUrl: invitation.authority_base_url,
           installationSigner: signer,
           clock: { now },
-          ...(dependencies.organization?.fetch === undefined
-            ? authorityCaPem === undefined
-              ? {}
-              : { authorityCaPem }
-            : { fetch: dependencies.organization.fetch }),
-          ...(dependencies.organization?.allowInsecureLoopback === undefined
-            ? {}
-            : {
-                allowInsecureLoopback:
-                  dependencies.organization.allowInsecureLoopback,
-              }),
+          ...organizationAuthorityTransportOptions(
+            dependencies.organization,
+            authorityCaPem,
+          ),
         });
         try {
           const descriptor =
@@ -1704,17 +1752,10 @@ export async function runProductCli(
           }
           const client = new HttpOrganizationAuthorityClient({
             baseUrl: parsed.authorityUrl!,
-            ...(dependencies.organization?.fetch === undefined
-              ? authorityCaPem === undefined
-                ? {}
-                : { authorityCaPem }
-              : { fetch: dependencies.organization.fetch }),
-            ...(dependencies.organization?.allowInsecureLoopback === undefined
-              ? {}
-              : {
-                  allowInsecureLoopback:
-                    dependencies.organization.allowInsecureLoopback,
-                }),
+            ...organizationAuthorityTransportOptions(
+              dependencies.organization,
+              authorityCaPem,
+            ),
           });
           const descriptor =
             validateOrganizationAuthorityDescriptorResponse(
@@ -1765,17 +1806,10 @@ export async function runProductCli(
           authorityBaseUrl: connection.authority_base_url,
           installationSigner: signer,
           clock: { now },
-          ...(dependencies.organization?.fetch === undefined
-            ? connection.authority_ca_pem === null
-              ? {}
-              : { authorityCaPem: connection.authority_ca_pem }
-            : { fetch: dependencies.organization.fetch }),
-          ...(dependencies.organization?.allowInsecureLoopback === undefined
-            ? {}
-            : {
-                allowInsecureLoopback:
-                  dependencies.organization.allowInsecureLoopback,
-              }),
+          ...organizationAuthorityTransportOptions(
+            dependencies.organization,
+            connection.authority_ca_pem,
+          ),
         });
         try {
           const decision = await runtime.coordinator.refreshAccess();
@@ -2555,9 +2589,9 @@ export async function runProductCli(
             );
           }
         }
-        // The CLI resolves against the shared decision node store directly, so
-        // a misconfigured or unreachable approval surface (e.g. Slack) can
-        // never block a manual approval or rejection.
+        // Listing remains local. Resolution is local only for standalone
+        // profiles; an enrolled organization must attribute and authorize the
+        // human through a centrally governed approval surface.
         const approvals =
           federation?.createDecisionNodeStore() ??
           new DecisionNodeStore(config.state_dir, {
@@ -2592,6 +2626,23 @@ export async function runProductCli(
             approvals: records,
           };
         } else {
+          const organizationState = new SqliteOrganizationStateStore(
+            resolveProductStatePaths(config.state_dir).database,
+          );
+          let organizationManaged = false;
+          try {
+            organizationManaged =
+              organizationApprovalResolutionRequiresAuthority(
+                organizationState,
+              );
+          } finally {
+            organizationState.close();
+          }
+          if (organizationManaged) {
+            throw new Error(
+              "CLI approval resolution is disabled after an organization Authority is pinned; use an organization-authorized approval surface",
+            );
+          }
           let exactApprovedProjectionRetry = false;
           if (parsed.command === "approve" && federation?.identityEnabled) {
             const existing = (await approvals.listFederated()).find(

@@ -10,6 +10,7 @@ import {
 } from '@echo-brain/organization-api';
 import { AuthorityOperationError } from '../../domain/errors.js';
 import type { OrganizationAuthorityHttpApplication } from '../organization-authority-http-application.js';
+import type { OrganizationIntegrationsHttpApplication } from '../organization-integrations-http-application.js';
 import {
   ADMIN_CONSOLE_CSS,
   ADMIN_CONSOLE_JAVASCRIPT,
@@ -37,6 +38,7 @@ const MEMBERSHIP_REVOCATION_ROUTE = new RegExp(
 const INSTALLATION_REVOCATION_ROUTE = new RegExp(
   `^/admin/installations/(ins_${UUID_V4_SOURCE})/revocations$`,
 );
+const ADMIN_SLACK_INTEGRATION_PATH = '/admin/integrations/slack';
 
 const ADMIN_SECURITY_HEADERS = Object.freeze({
   'Cache-Control': 'no-store',
@@ -76,6 +78,7 @@ class AdminConsoleHttpError extends Error {
 
 export interface HandleAdminConsoleRequestOptions {
   readonly application: OrganizationAuthorityHttpApplication;
+  readonly integrations?: OrganizationIntegrationsHttpApplication;
   readonly sessions: AdminConsoleSessionStore;
   readonly authenticateCredential: (
     rawToken: string,
@@ -84,6 +87,7 @@ export interface HandleAdminConsoleRequestOptions {
   readonly request: IncomingMessage;
   readonly response: ServerResponse;
   readonly url: URL;
+  readonly signal?: AbortSignal;
 }
 
 function responseHeaders(
@@ -537,6 +541,8 @@ function mappedError(error: unknown): AdminConsoleHttpError {
           ? 401
           : error.code === 'not_found'
             ? 404
+            : error.code === 'unavailable'
+              ? 503
             : 409;
     return new AdminConsoleHttpError(
       status,
@@ -716,6 +722,7 @@ export async function handleAdminConsoleRequest(
           audit: bounded(
             options.application.listAudit({ limit: ADMIN_PAGE_LIMIT }),
           ),
+          integrations: options.integrations?.overview(),
           csrf_token: csrfToken,
         }),
       );
@@ -760,6 +767,26 @@ export async function handleAdminConsoleRequest(
         validationPayload(body),
       );
       options.application.provisionMembership(command);
+      sendRedirect(options.response, '/admin');
+      return true;
+    }
+
+    if (pathname === ADMIN_SLACK_INTEGRATION_PATH) {
+      if (method !== 'POST') methodNotAllowed('POST');
+      const sessionCookieValue = requireSessionCookie(options);
+      const body = await readBody(options.request);
+      authorizeMutation(options, sessionCookieValue, body.value);
+      if (options.integrations === undefined) {
+        throw new AdminConsoleHttpError(
+          404,
+          'not_found',
+          'Organization integrations are unavailable.',
+        );
+      }
+      await options.integrations.onboardSlackOrganizationTool(
+        validationPayload(body),
+        options.signal,
+      );
       sendRedirect(options.response, '/admin');
       return true;
     }

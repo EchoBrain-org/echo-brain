@@ -20,7 +20,8 @@ packages/
   organization-api/             HTTP request/response contracts
 
 services/
-  organization-authority/       one centrally hosted organization
+  organization-authority/       one customer-hosted organization
+  organization-control-plane/   customer-owned Slack connection and policy
 ```
 
 The root package is the employee product. The authority is a separate
@@ -76,6 +77,11 @@ The central and local databases remain separate:
 - Local state owns the authority pin, verified network route and optional
   internal CA, enrollment evidence, and the access high-watermark alongside
   the meeting-to-decision product state.
+- Organization-control state references Authority IDs while owning verified
+  provider identities, opaque connection handles, exact product-adapter
+  bindings, direct membership grants, and integration audit. It never copies
+  Authority membership state or stores provider bearer credentials or product
+  content.
 
 The employee client stores its exact signed request before sending a grant and
 atomically commits verified access state before returning `permitted: true`.
@@ -87,7 +93,8 @@ The authority stores no meeting, decision, reasoning, or embedding data.
 
 ## Deployment
 
-The authority runs as one process with one persistent SQLite volume. The
+The authority runs as one process with one persistent state volume containing
+the Authority and integration-policy SQLite databases. The
 portable one-machine deployment is documented in
 [`deploy/organization-authority`](../../deploy/organization-authority/README.md).
 Multi-replica operation requires a later persistence and coordination design.
@@ -110,4 +117,12 @@ Future product work must preserve this trust boundary:
 
 That future entitlement is intentionally not present in the current runtime.
 The authority continues to operate solely from organization-owned state and
-the existing pinned enrollment/access protocol.
+the existing pinned enrollment/access protocol; it is not a hosting mode for a
+future ECHO entitlement.
+
+The customer-hosted organization control plane is described in
+[`organization-control-plane.md`](organization-control-plane.md). Minimum V1
+implements organization Slack activation and the exact signed Slack
+approve/reject permission path. General employee connection discovery,
+multi-tool projection, Teams, Granola, project-management tools, and broader
+authorization APIs remain later milestones.

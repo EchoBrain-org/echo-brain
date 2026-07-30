@@ -7,6 +7,7 @@ import type {
   OrganizationEnrollmentGrantPageV1,
   OrganizationInstallationPageV1,
   OrganizationMembershipPageV1,
+  OrganizationPermissionCheckRequestV1,
   OrganizationApiSha256Digest,
   ProvisionedOrganizationMembershipV1,
   ProvisionOrganizationMembershipRequestV1,
@@ -63,6 +64,12 @@ export interface OrganizationAuthorityHttpApplication {
   issueAccessLease(
     request: OrganizationAccessLeaseRequestV1,
   ): Promise<OrganizationInstallationAccessStateV1>;
+  checkPermissionSubject(
+    request: OrganizationPermissionCheckRequestV1,
+    target: null,
+  ): {
+    installation_id: string;
+  };
   revokeMembership(
     membershipId: string,
     reason: string,

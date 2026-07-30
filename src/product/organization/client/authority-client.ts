@@ -3,6 +3,8 @@ import type {
   OrganizationAccessLeaseRequestV1,
   OrganizationAccessLeaseResponseV1,
   OrganizationAuthorityDescriptorResponseV1,
+  OrganizationPermissionCheckDecisionV1,
+  OrganizationPermissionCheckRequestV1,
 } from '@echo-brain/organization-api';
 import type { OrganizationEnrollmentRequestV1 } from '@echo-brain/organization-protocol';
 
@@ -24,6 +26,11 @@ export interface OrganizationAuthorityClient {
   issueAccessLease(
     request: OrganizationAccessLeaseRequestV1,
   ): Promise<OrganizationAccessLeaseResponseV1>;
+
+  checkPermission(
+    request: OrganizationPermissionCheckRequestV1,
+    signal?: AbortSignal,
+  ): Promise<OrganizationPermissionCheckDecisionV1>;
 }
 
 export interface OrganizationAuthorityConflict {

@@ -9,6 +9,7 @@ export const ORGANIZATION_API_AUTHORITY_DESCRIPTOR_PATH =
   '/v1/authority-descriptor';
 export const ORGANIZATION_API_ENROLLMENTS_PATH = '/v1/enrollments';
 export const ORGANIZATION_API_ACCESS_LEASES_PATH = '/v1/access-leases';
+export const ORGANIZATION_API_PERMISSION_CHECKS_PATH = '/v1/permission-checks';
 export const ORGANIZATION_API_ADMIN_OVERVIEW_PATH = '/v1/admin/overview';
 export const ORGANIZATION_API_ADMIN_MEMBERSHIPS_PATH = '/v1/admin/memberships';
 export const ORGANIZATION_API_ADMIN_INSTALLATIONS_PATH =

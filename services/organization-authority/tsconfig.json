@@ -11,6 +11,7 @@
   "references": [
     { "path": "../../packages/federation-protocol" },
     { "path": "../../packages/organization-protocol" },
-    { "path": "../../packages/organization-api" }
+    { "path": "../../packages/organization-api" },
+    { "path": "../organization-control-plane" }
   ]
 }

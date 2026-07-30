@@ -1,0 +1,76 @@
+{
+  "boundary_version": 1,
+  "kind": "echo-workspace-source-boundary",
+  "name": "@echo-brain/organization-control-plane",
+  "workspace": true,
+  "boundary_root": "services/organization-control-plane",
+  "source_root": "services/organization-control-plane/src",
+  "package_json": "services/organization-control-plane/package.json",
+  "entry_points": ["services/organization-control-plane/src/index.ts"],
+  "owned_source_paths": ["services/organization-control-plane/src/**"],
+  "allowed_internal_paths": ["services/organization-control-plane/src/**"],
+  "forbidden_repository_roots": [
+    "src/",
+    "packages/",
+    "services/organization-authority/"
+  ],
+  "allowed_workspace_packages": [],
+  "allowed_external_packages": ["better-sqlite3"],
+  "allowed_node_builtins": ["crypto", "fs", "path"],
+  "runtime_assets": [
+    "services/organization-control-plane/migrations/0001_organization_control_plane.sql",
+    "services/organization-control-plane/migrations/0002_organization_tool_public_configuration.sql",
+    "services/organization-control-plane/migrations/0003_single_canonical_slack_promotion.sql"
+  ],
+  "layer_rules": [
+    {
+      "name": "control-plane-entrypoint-exports-public-api",
+      "from": "services/organization-control-plane/src/index.ts",
+      "allowed_imports": ["services/organization-control-plane/src/**"],
+      "allowed_workspace_packages": [],
+      "allowed_external_packages": [],
+      "allowed_node_builtins": []
+    },
+    {
+      "name": "control-plane-application-contracts-are-pure",
+      "from": "services/organization-control-plane/src/application/**",
+      "allowed_imports": ["services/organization-control-plane/src/application/**"],
+      "allowed_workspace_packages": [],
+      "allowed_external_packages": [],
+      "allowed_node_builtins": []
+    },
+    {
+      "name": "control-plane-persistence-depends-on-contracts",
+      "from": "services/organization-control-plane/src/persistence/**",
+      "allowed_imports": [
+        "services/organization-control-plane/src/application/**",
+        "services/organization-control-plane/src/persistence/**"
+      ],
+      "allowed_workspace_packages": [],
+      "allowed_external_packages": ["better-sqlite3"],
+      "allowed_node_builtins": ["crypto", "fs", "path"]
+    },
+    {
+      "name": "control-plane-adapters-implement-contracts",
+      "from": "services/organization-control-plane/src/adapters/**",
+      "allowed_imports": [
+        "services/organization-control-plane/src/adapters/**",
+        "services/organization-control-plane/src/application/**"
+      ],
+      "allowed_workspace_packages": [],
+      "allowed_external_packages": [],
+      "allowed_node_builtins": ["crypto"]
+    },
+    {
+      "name": "control-plane-security-implements-contracts",
+      "from": "services/organization-control-plane/src/security/**",
+      "allowed_imports": [
+        "services/organization-control-plane/src/application/**",
+        "services/organization-control-plane/src/security/**"
+      ],
+      "allowed_workspace_packages": [],
+      "allowed_external_packages": [],
+      "allowed_node_builtins": ["crypto", "fs", "path"]
+    }
+  ]
+}

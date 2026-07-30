@@ -11,6 +11,7 @@ export interface AuthorityServeConfig extends DevelopmentSignerConfig {
   organization_display_name: string;
   authority_pin_sha256: `sha256:${string}`;
   database_path: string;
+  integrations_database_path: string;
   admin_token: string;
   trusted_proxy_token: string;
   host: '127.0.0.1' | '::1';
@@ -41,7 +42,10 @@ function pathIsWithin(path: string, parent: string): boolean {
 export function assertAuthorityServeStateBoundary(
   config: Pick<
     AuthorityServeConfig,
-    'state_directory' | 'database_path' | 'key_directory'
+    | 'state_directory'
+    | 'database_path'
+    | 'integrations_database_path'
+    | 'key_directory'
   >,
 ): void {
   if (
@@ -68,6 +72,19 @@ export function assertAuthorityServeStateBoundary(
   ) {
     throw new Error(
       'authority key directory must use the canonical state-directory path',
+    );
+  }
+  if (
+    !normalizedAbsolute(config.integrations_database_path) ||
+    !pathIsWithin(
+      config.integrations_database_path,
+      config.state_directory,
+    ) ||
+    config.integrations_database_path !==
+      join(config.state_directory, 'integrations.sqlite')
+  ) {
+    throw new Error(
+      'authority integrations database must use the canonical state-directory path',
     );
   }
 }

@@ -108,6 +108,54 @@ describe("SlackWebApiClient", () => {
     });
   });
 
+  it("cancels an oversized streamed Slack response before buffering it all", async () => {
+    let cancelled = false;
+    const oversized = new ReadableStream<Uint8Array>({
+      pull(controller) {
+        controller.enqueue(new Uint8Array(300 * 1024));
+      },
+      cancel() {
+        cancelled = true;
+      },
+    });
+    const client = new SlackWebApiClient("xoxb-test", {
+      fetchImpl: fetchReturning(
+        () =>
+          new Response(oversized, {
+            status: 200,
+            headers: { "content-type": "application/json" },
+          }),
+      ),
+    });
+
+    await expect(client.authTest()).rejects.toMatchObject({
+      name: "SlackApiError",
+      code: "invalid",
+      retryable: false,
+    });
+    expect(cancelled).toBe(true);
+  });
+
+  it("treats an oversized post response as an unknown outcome", async () => {
+    const client = new SlackWebApiClient("xoxb-test", {
+      fetchImpl: fetchReturning(
+        () =>
+          new Response("{}", {
+            status: 200,
+            headers: { "content-length": String(600 * 1024) },
+          }),
+      ),
+    });
+
+    await expect(
+      client.postMessage({ channel: "C123", text: "approval request" }),
+    ).rejects.toMatchObject({
+      name: "SlackApiError",
+      code: "unknown_outcome",
+      retryable: true,
+    });
+  });
+
   it.each(["ratelimited", "rate_limited"])(
     "classifies Slack body error '%s' as rate limited",
     async (error) => {

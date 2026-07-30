@@ -10,6 +10,10 @@ const STATE_DIRECTORY = '/tmp/echo-authority-state';
 const VALID_BOUNDARY = {
   state_directory: STATE_DIRECTORY,
   database_path: join(STATE_DIRECTORY, 'authority.sqlite'),
+  integrations_database_path: join(
+    STATE_DIRECTORY,
+    'integrations.sqlite',
+  ),
   key_directory: join(STATE_DIRECTORY, 'keys'),
 };
 
@@ -54,5 +58,14 @@ describe('organization authority serve configuration guards', () => {
         key_directory: '/tmp/keys',
       }),
     ).toThrow('canonical state-directory path');
+    expect(() =>
+      assertAuthorityServeStateBoundary({
+        ...VALID_BOUNDARY,
+        integrations_database_path: join(
+          STATE_DIRECTORY,
+          'other-integrations.sqlite',
+        ),
+      }),
+    ).toThrow('integrations database');
   });
 });

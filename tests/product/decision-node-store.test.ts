@@ -235,7 +235,7 @@ describe('decision node store', () => {
     ).toBe(true);
   });
 
-  it('records publications create-once per surface and folds them into state', async () => {
+  it('records publications create-once per surface and durably retains a superseding surface', async () => {
     const root = newRoot('decision-store-');
     const store = new DecisionNodeStore(root, {
       now: () => '2026-07-16T21:00:00.000Z',
@@ -261,6 +261,18 @@ describe('decision node store', () => {
     });
     expect(repeated.published).toHaveLength(1);
     expect(repeated.published[0]!.reference['message_ts']).toBe('1700.001');
+
+    const replacement = await store.recordPublished({
+      processingKey: request().processing_key,
+      surface: 'slack-authority-v1',
+      reference: { channel_id: 'C123', message_ts: '1800.001' },
+    });
+    const [reloaded] = await new DecisionNodeStore(root).list();
+    expect(reloaded?.published).toEqual(replacement.published);
+    expect(replacement.published[0]).toMatchObject({
+      surface: 'slack-authority-v1',
+      reference: { channel_id: 'C123', message_ts: '1800.001' },
+    });
   });
 
   it('resolves without any publication (the CLI can win first)', async () => {

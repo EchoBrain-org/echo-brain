@@ -1,5 +1,6 @@
 import { Buffer } from 'node:buffer';
 import { createHash, timingSafeEqual } from 'node:crypto';
+import { isIP } from 'node:net';
 import {
   ORGANIZATION_API_PROXY_AUTH_SCHEME,
   TRUSTED_PROXY_AUTHORIZATION_HEADER,
@@ -8,6 +9,8 @@ import {
 
 const PROXY_AUTHORIZATION_PREFIX = `${ORGANIZATION_API_PROXY_AUTH_SCHEME} `;
 const VISIBLE_PROXY_TOKEN_PATTERN = /^[\x21-\x7e]{32,4096}$/;
+export const TRUSTED_PROXY_SOURCE_ADDRESS_HEADER =
+  'x-echo-proxy-source-address';
 
 export class TrustedProxyIdentityError extends Error {
   constructor() {
@@ -28,6 +31,11 @@ export interface RawHeaderRequest {
 export interface RequestClientIdentityResolver {
   /** Returns one stable, non-secret key suitable for a bounded rate-limit map. */
   resolve(request: RawHeaderRequest): string;
+  /** Separates unauthenticated admission by a proxy-authenticated source. */
+  permissionIngressKey?(
+    request: RawHeaderRequest,
+    clientIdentity: string,
+  ): string;
 }
 
 function uniqueRawHeader(
@@ -99,5 +107,25 @@ export class AuthenticatedProxyClientIdentityResolver implements RequestClientId
       throw new TrustedProxyIdentityError();
     }
     return clientId!;
+  }
+
+  permissionIngressKey(
+    request: RawHeaderRequest,
+    clientIdentity: string,
+  ): string {
+    const sourceAddress = uniqueRawHeader(
+      request,
+      TRUSTED_PROXY_SOURCE_ADDRESS_HEADER,
+    );
+    // Older trusted proxies did not supply a source address. Preserve their
+    // deployment-wide bucket until the proxy is upgraded rather than trusting
+    // any ordinary forwarding header from the external request.
+    if (sourceAddress === undefined) return clientIdentity;
+    if (isIP(sourceAddress) === 0) throw new TrustedProxyIdentityError();
+    return `cid_${createHash('sha256')
+      .update(clientIdentity, 'utf8')
+      .update('\0', 'utf8')
+      .update(sourceAddress, 'utf8')
+      .digest('base64url')}`;
   }
 }

@@ -528,9 +528,7 @@ export function assertCanonicalMeetingDocument(
   optionalNonEmptyString(provenance['previous_revision'], 'meeting.provenance.previous_revision');
   optionalTimestamp(provenance['source_created_at'], 'meeting.provenance.source_created_at');
   optionalTimestamp(provenance['source_updated_at'], 'meeting.provenance.source_updated_at');
-  if (provenance['source_url'] !== undefined) {
-    nonEmptyString(provenance['source_url'], 'meeting.provenance.source_url');
-  }
+  optionalNonEmptyString(provenance['source_url'], 'meeting.provenance.source_url');
   metadata(provenance['metadata'], 'meeting.provenance.metadata');
   if (
     expectedSource !== undefined &&
@@ -787,8 +785,8 @@ function assertSignalArray(
           throw new Error('signal evidence quote does not resolve to the meeting block');
         }
       }
-      if (evidence['started_at'] !== undefined) timestamp(evidence['started_at'], 'evidence.started_at');
-      if (evidence['ended_at'] !== undefined) timestamp(evidence['ended_at'], 'evidence.ended_at');
+      optionalTimestamp(evidence['started_at'], 'evidence.started_at');
+      optionalTimestamp(evidence['ended_at'], 'evidence.ended_at');
     }
     if (signal['kind'] === 'decision') {
       if (!['proposed', 'decided', 'unresolved'].includes(String(signal['status']))) {
@@ -948,12 +946,7 @@ export function assertCanonicalDecisionBrief(
   nonEmptyString(processor['adapter_id'], 'decision_brief.provenance.processor.adapter_id');
   nonEmptyString(processor['instance_id'], 'decision_brief.provenance.processor.instance_id');
   nonEmptyString(processor['version'], 'decision_brief.provenance.processor.version');
-  if (
-    processor['kind'] !== 'decision-processor' ||
-    typeof processor['adapter_id'] !== 'string' ||
-    typeof processor['instance_id'] !== 'string' ||
-    typeof processor['version'] !== 'string'
-  ) {
+  if (processor['kind'] !== 'decision-processor') {
     throw new Error('decision_brief.provenance.processor is invalid');
   }
   if (

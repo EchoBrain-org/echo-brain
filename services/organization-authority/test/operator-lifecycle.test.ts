@@ -17,7 +17,20 @@ import { createServer as createNetServer, type Socket } from 'node:net';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
-import { inspectAuthorityDatabaseReadOnly } from '../src/adapters/persistence/sqlite/read-only-inspection.js';
+import Database from 'better-sqlite3';
+import {
+  initializeOrganizationControlDatabase,
+  inspectOrganizationControlDatabaseReadOnly,
+  type OrganizationControlDatabaseIdentity,
+} from '@echo-brain/organization-control-plane';
+import {
+  migrateOrganizationControlDatabaseWithMigrations,
+  type OrganizationControlMigration,
+} from '../../organization-control-plane/src/persistence/migrate.js';
+import {
+  inspectAuthorityDatabaseForServe,
+  inspectAuthorityDatabaseReadOnly,
+} from '../src/adapters/persistence/sqlite/read-only-inspection.js';
 import { openAuthorityDatabase } from '../src/adapters/persistence/sqlite/open-database.js';
 import { authorityRuntimeFingerprint } from '../src/adapters/runtime/runtime-fingerprint.js';
 import {
@@ -33,8 +46,10 @@ import {
 } from '../src/composition/operator-config.js';
 import {
   initializeDevelopmentAuthority,
+  installAuthorityIntegrations,
   inspectAuthorityServePreflight,
   inspectInitializedAuthorityState,
+  type AuthorityIntegrationsInstallationFaultPoint,
 } from '../src/composition/operator-state.js';
 import { startOrganizationAuthority } from '../src/composition/runtime.js';
 import {
@@ -113,6 +128,151 @@ async function initializedFixture(): Promise<{
   return { root, configPath, stateDirectory, port };
 }
 
+function replaceAuthorityDatabaseWithLegacyV2(databasePath: string): void {
+  const current = new Database(databasePath, {
+    readonly: true,
+    fileMustExist: true,
+  });
+  const metadata = current
+    .prepare(
+      `SELECT authority_id, organization_id, organization_display_name,
+              authority_pin_sha256, descriptor_json, created_at,
+              last_observed_at
+       FROM authority_metadata WHERE singleton = 1`,
+    )
+    .get() as {
+    authority_id: string;
+    organization_id: string;
+    organization_display_name: string;
+    authority_pin_sha256: string;
+    descriptor_json: string;
+    created_at: string;
+    last_observed_at: string;
+  };
+  current.close();
+  unlinkSync(databasePath);
+
+  const legacy = new Database(databasePath);
+  try {
+    legacy.exec(
+      readFileSync(
+        new URL(
+          '../migrations/0001_single_org_authority.sql',
+          import.meta.url,
+        ),
+        'utf8',
+      ),
+    );
+    legacy.exec(
+      readFileSync(
+        new URL(
+          '../migrations/0002_admin_command_idempotency.sql',
+          import.meta.url,
+        ),
+        'utf8',
+      ),
+    );
+    legacy
+      .prepare(
+        `INSERT INTO authority_metadata (
+           singleton, authority_id, organization_id,
+           organization_display_name, authority_pin_sha256,
+           descriptor_json, created_at, last_observed_at
+         ) VALUES (1, ?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .run(
+        metadata.authority_id,
+        metadata.organization_id,
+        metadata.organization_display_name,
+        metadata.authority_pin_sha256,
+        metadata.descriptor_json,
+        metadata.created_at,
+        metadata.last_observed_at,
+      );
+    legacy
+      .prepare(
+        `INSERT INTO authority_principals (
+           principal_id, organization_id, display_name, provisioned_at
+         ) VALUES (?, ?, ?, ?)`,
+      )
+      .run(
+        'prn_legacy-preserved',
+        metadata.organization_id,
+        'Legacy Preserved Employee',
+        metadata.created_at,
+      );
+    legacy
+      .prepare(
+        `INSERT INTO authority_memberships (
+           membership_id, organization_id, principal_id, membership_type,
+           status, provisioned_at, revoked_at, revocation_reason,
+           admin_command_id, admin_command_sha256
+         ) VALUES (?, ?, ?, 'employee', 'active', ?, NULL, NULL, ?, ?)`,
+      )
+      .run(
+        'mem_legacy-preserved',
+        metadata.organization_id,
+        'prn_legacy-preserved',
+        metadata.created_at,
+        'adm_00000000-0000-4000-8000-000000000001',
+        `sha256:${'a'.repeat(64)}`,
+      );
+    legacy
+      .prepare(
+        `INSERT INTO authority_audit_log (
+           occurred_at, actor_kind, action, subject_id, detail_json
+         ) VALUES (?, 'admin', 'membership.provisioned', ?, '{}')`,
+      )
+      .run(metadata.created_at, 'mem_legacy-preserved');
+    legacy.pragma('user_version = 2');
+  } finally {
+    legacy.close();
+  }
+  chmodSync(databasePath, 0o600);
+}
+
+function replaceIntegrationsDatabaseWithLegacyV1(
+  databasePath: string,
+  identity: OrganizationControlDatabaseIdentity,
+): void {
+  unlinkSync(databasePath);
+  const sql = readFileSync(
+    new URL(
+      '../../organization-control-plane/migrations/0001_organization_control_plane.sql',
+      import.meta.url,
+    ),
+    'utf8',
+  );
+  const migration: OrganizationControlMigration = {
+    version: 1,
+    filename: '0001_organization_control_plane.sql',
+    sql,
+    sha256: `sha256:${createHash('sha256').update(sql).digest('hex')}`,
+  };
+  const legacy = new Database(databasePath);
+  try {
+    legacy.pragma('foreign_keys = ON');
+    migrateOrganizationControlDatabaseWithMigrations(legacy, [migration]);
+    legacy
+      .prepare(
+        `INSERT INTO organization_control_plane_metadata (
+           singleton, control_plane_id, organization_id, authority_id,
+           authority_descriptor_sha256, created_at
+         ) VALUES (1, ?, ?, ?, ?, ?)`,
+      )
+      .run(
+        identity.control_plane_id,
+        identity.organization_id,
+        identity.authority_id,
+        identity.authority_descriptor_sha256,
+        identity.created_at,
+      );
+  } finally {
+    legacy.close();
+  }
+  chmodSync(databasePath, 0o600);
+}
+
 afterEach(() => {
   for (const root of temporaryRoots.splice(0)) {
     rmSync(root, { recursive: true, force: true });
@@ -172,6 +332,8 @@ describe('organization authority operator lifecycle', () => {
     expect(mode(paths.admin_credential_path)).toBe(0o600);
     expect(mode(paths.proxy_credential_path)).toBe(0o600);
     expect(mode(paths.database_path)).toBe(0o600);
+    expect(mode(paths.integrations_database_path)).toBe(0o600);
+    expect(mode(paths.integrations_installation_marker_path)).toBe(0o600);
     expect(mode(paths.identity_path)).toBe(0o600);
     expect(mode(paths.initialization_manifest_path)).toBe(0o600);
     expect(manifest.config_path).toBe(fixture.configPath);
@@ -188,6 +350,35 @@ describe('organization authority operator lifecycle', () => {
     expect(database.organization_id).toBe(
       firstConfig.organization.organization_id,
     );
+    const integrations = inspectOrganizationControlDatabaseReadOnly(
+      paths.integrations_database_path,
+    );
+    expect(integrations).toMatchObject({
+      organization_id: firstConfig.organization.organization_id,
+      authority_id: firstConfig.authority.authority_id,
+      authority_descriptor_sha256: firstConfig.authority.authority_pin_sha256,
+    });
+    expect(database).toMatchObject({
+      integrations_control_plane_id: integrations.control_plane_id,
+      integrations_marker_sha256: expect.stringMatching(
+        /^sha256:[0-9a-f]{64}$/,
+      ),
+      integrations_installed_at: expect.any(String),
+    });
+    expect(
+      JSON.parse(
+        readFileSync(paths.integrations_installation_marker_path, 'utf8'),
+      ),
+    ).toMatchObject({
+      schema_version: 1,
+      kind: 'echo-organization-authority-integrations-installation-marker',
+      control_plane_id: integrations.control_plane_id,
+      organization_id: integrations.organization_id,
+      authority_id: integrations.authority_id,
+      authority_descriptor_sha256: integrations.authority_descriptor_sha256,
+      integrations_database_path: paths.integrations_database_path,
+      database_created_at: integrations.created_at,
+    });
 
     const repeated = await initializeDevelopmentAuthority({
       config_path: fixture.configPath,
@@ -865,6 +1056,416 @@ describe('organization authority operator lifecycle', () => {
     ).toBe(false);
   });
 
+  it('never recreates installed integration state when both sibling files are lost', async () => {
+    const fixture = await initializedFixture();
+    const config = readAuthorityRuntimeConfig(fixture.configPath);
+    const paths = authorityStatePaths(fixture.stateDirectory);
+    unlinkSync(paths.integrations_database_path);
+    unlinkSync(paths.integrations_installation_marker_path);
+
+    await expect(
+      inspectAuthorityServePreflight(fixture.configPath, config),
+    ).rejects.toThrow();
+    await expect(
+      inspectAuthorityStatus(fixture.configPath),
+    ).resolves.toMatchObject({ ok: false, initialized: false });
+    await expect(
+      startOrganizationAuthority(resolveAuthorityServeConfig(config)),
+    ).rejects.toThrow();
+    expect(existsSync(paths.integrations_database_path)).toBe(false);
+    expect(
+      (await inspectAuthorityRuntimeLock(fixture.stateDirectory)).present,
+    ).toBe(false);
+
+    await expect(
+      installAuthorityIntegrations(fixture.configPath),
+    ).rejects.toThrow(
+      'previously installed but the database or marker is missing',
+    );
+    expect(existsSync(paths.integrations_database_path)).toBe(false);
+    expect(existsSync(paths.integrations_installation_marker_path)).toBe(false);
+  });
+
+  it('installs integration state once for a verified legacy authority', async () => {
+    const fixture = await initializedFixture();
+    const config = readAuthorityRuntimeConfig(fixture.configPath);
+    const paths = authorityStatePaths(fixture.stateDirectory);
+    replaceAuthorityDatabaseWithLegacyV2(config.database_path);
+    unlinkSync(paths.integrations_database_path);
+    unlinkSync(paths.integrations_installation_marker_path);
+
+    const output: string[] = [];
+    expect(
+      await runOrganizationAuthorityCli(
+        ['install-integrations', '--config', fixture.configPath],
+        {},
+        {
+          stdout: (value) => output.push(value),
+          stderr: () => {},
+        },
+      ),
+    ).toBe(0);
+    const installed = JSON.parse(output.shift()!) as {
+      created: boolean;
+      control_plane_id: string;
+    };
+    expect(installed.created).toBe(true);
+    expect(existsSync(paths.integrations_database_path)).toBe(true);
+    expect(existsSync(paths.integrations_installation_marker_path)).toBe(true);
+    const marker = JSON.parse(
+      readFileSync(paths.integrations_installation_marker_path, 'utf8'),
+    ) as { control_plane_id: string };
+    expect(marker.control_plane_id).toBe(installed.control_plane_id);
+    const upgradedAuthority = new Database(config.database_path, {
+      readonly: true,
+      fileMustExist: true,
+    });
+    try {
+      expect(
+        upgradedAuthority
+          .prepare(
+            `SELECT membership_id, principal_id, status
+             FROM authority_memberships`,
+          )
+          .get(),
+      ).toEqual({
+        membership_id: 'mem_legacy-preserved',
+        principal_id: 'prn_legacy-preserved',
+        status: 'active',
+      });
+      expect(
+        upgradedAuthority
+          .prepare(
+            `SELECT action, subject_id FROM authority_audit_log`,
+          )
+          .get(),
+      ).toEqual({
+        action: 'membership.provisioned',
+        subject_id: 'mem_legacy-preserved',
+      });
+    } finally {
+      upgradedAuthority.close();
+    }
+
+    const repeated = await installAuthorityIntegrations(fixture.configPath);
+    expect(repeated).toMatchObject({
+      created: false,
+      control_plane_id: installed.control_plane_id,
+      organization_id: config.organization.organization_id,
+      authority_id: config.authority.authority_id,
+    });
+
+    const runtime = await startOrganizationAuthority(
+      resolveAuthorityServeConfig(config),
+    );
+    await runtime.close();
+  });
+
+  it('migrates and anchors a valid legacy v1 integrations pair', async () => {
+    const fixture = await initializedFixture();
+    const config = readAuthorityRuntimeConfig(fixture.configPath);
+    const paths = authorityStatePaths(fixture.stateDirectory);
+    const integrationsIdentity =
+      inspectOrganizationControlDatabaseReadOnly(
+        paths.integrations_database_path,
+      );
+    replaceAuthorityDatabaseWithLegacyV2(config.database_path);
+    replaceIntegrationsDatabaseWithLegacyV1(
+      paths.integrations_database_path,
+      integrationsIdentity,
+    );
+
+    const installed = await installAuthorityIntegrations(fixture.configPath);
+
+    expect(installed).toMatchObject({
+      created: false,
+      control_plane_id: integrationsIdentity.control_plane_id,
+    });
+    expect(
+      inspectOrganizationControlDatabaseReadOnly(
+        paths.integrations_database_path,
+      ),
+    ).toMatchObject({
+      schema_version: 3,
+      control_plane_id: integrationsIdentity.control_plane_id,
+    });
+    expect(
+      inspectAuthorityDatabaseReadOnly(config.database_path),
+    ).toMatchObject({
+      schema_version: 3,
+      integrations_control_plane_id: integrationsIdentity.control_plane_id,
+      integrations_marker_sha256: expect.stringMatching(
+        /^sha256:[0-9a-f]{64}$/,
+      ),
+    });
+    const runtime = await startOrganizationAuthority(
+      resolveAuthorityServeConfig(config),
+    );
+    await runtime.close();
+  });
+
+  it.each(
+    [
+      ['after_authority_migration', false, false, false, true],
+      ['after_database_published', true, false, false, false],
+      ['after_marker_published', true, true, false, false],
+      ['after_anchor_committed', true, true, true, false],
+    ] as const,
+  )(
+    'resumes install-integrations after fault point %s',
+    async (
+      faultPoint,
+      databaseAfterFault,
+      markerAfterFault,
+      anchoredAfterFault,
+      retryCreated,
+    ) => {
+      const fixture = await initializedFixture();
+      const config = readAuthorityRuntimeConfig(fixture.configPath);
+      const paths = authorityStatePaths(fixture.stateDirectory);
+      replaceAuthorityDatabaseWithLegacyV2(config.database_path);
+      unlinkSync(paths.integrations_database_path);
+      unlinkSync(paths.integrations_installation_marker_path);
+
+      await expect(
+        installAuthorityIntegrations(fixture.configPath, {
+          faultInjector: (
+            observed: AuthorityIntegrationsInstallationFaultPoint,
+          ) => {
+            if (observed === faultPoint) throw new Error(`fault:${faultPoint}`);
+          },
+        }),
+      ).rejects.toThrow(`fault:${faultPoint}`);
+
+      const interruptedAuthority = inspectAuthorityDatabaseReadOnly(
+        config.database_path,
+      );
+      expect(interruptedAuthority.schema_version).toBe(3);
+      expect(
+        interruptedAuthority.integrations_control_plane_id !== null,
+      ).toBe(anchoredAfterFault);
+      expect(existsSync(paths.integrations_database_path)).toBe(
+        databaseAfterFault,
+      );
+      expect(existsSync(paths.integrations_installation_marker_path)).toBe(
+        markerAfterFault,
+      );
+
+      const recovered = await installAuthorityIntegrations(fixture.configPath);
+      expect(recovered.created).toBe(retryCreated);
+      const recoveredAuthority = inspectAuthorityDatabaseReadOnly(
+        config.database_path,
+      );
+      expect(recoveredAuthority).toMatchObject({
+        schema_version: 3,
+        integrations_control_plane_id: recovered.control_plane_id,
+        integrations_marker_sha256: expect.stringMatching(
+          /^sha256:[0-9a-f]{64}$/,
+        ),
+        integrations_installed_at: expect.any(String),
+      });
+      expect(
+        inspectOrganizationControlDatabaseReadOnly(
+          paths.integrations_database_path,
+        ).control_plane_id,
+      ).toBe(recovered.control_plane_id);
+      expect(existsSync(paths.integrations_installation_marker_path)).toBe(true);
+      expect(
+        readdirSync(paths.state_directory).filter((name) =>
+          name.includes('.installing-'),
+        ),
+      ).toEqual([]);
+
+      const repeated = await installAuthorityIntegrations(fixture.configPath);
+      expect(repeated).toMatchObject({
+        created: false,
+        control_plane_id: recovered.control_plane_id,
+      });
+      const runtime = await startOrganizationAuthority(
+        resolveAuthorityServeConfig(config),
+      );
+      await runtime.close();
+    },
+  );
+
+  it('restarts a valid marker-only publication only for an exact current unanchored authority', async () => {
+    const fixture = await initializedFixture();
+    const config = readAuthorityRuntimeConfig(fixture.configPath);
+    const paths = authorityStatePaths(fixture.stateDirectory);
+    const abandonedMarker = JSON.parse(
+      readFileSync(paths.integrations_installation_marker_path, 'utf8'),
+    ) as { control_plane_id: string };
+    replaceAuthorityDatabaseWithLegacyV2(config.database_path);
+    unlinkSync(paths.integrations_database_path);
+    openAuthorityDatabase(config.database_path, {
+      fileMustExist: true,
+    }).close();
+
+    const recovered = await installAuthorityIntegrations(fixture.configPath);
+    expect(recovered.created).toBe(true);
+    expect(recovered.control_plane_id).not.toBe(
+      abandonedMarker.control_plane_id,
+    );
+    expect(
+      inspectAuthorityDatabaseReadOnly(config.database_path),
+    ).toMatchObject({
+      integrations_control_plane_id: recovered.control_plane_id,
+    });
+  });
+
+  it('refuses to adopt a foreign database-only publication in the current unanchored state', async () => {
+    const fixture = await initializedFixture();
+    const config = readAuthorityRuntimeConfig(fixture.configPath);
+    const paths = authorityStatePaths(fixture.stateDirectory);
+    replaceAuthorityDatabaseWithLegacyV2(config.database_path);
+    unlinkSync(paths.integrations_database_path);
+    unlinkSync(paths.integrations_installation_marker_path);
+    openAuthorityDatabase(config.database_path, {
+      fileMustExist: true,
+    }).close();
+    const foreign = initializeOrganizationControlDatabase(
+      paths.integrations_database_path,
+      {
+        organization_id: 'org_different',
+        authority_id: config.authority.authority_id,
+        authority_descriptor_sha256: config.authority.authority_pin_sha256,
+        created_at: new Date().toISOString(),
+      },
+    );
+
+    await expect(
+      installAuthorityIntegrations(fixture.configPath),
+    ).rejects.toThrow(
+      'organization integrations database identity differs from config',
+    );
+    expect(
+      inspectAuthorityDatabaseReadOnly(config.database_path),
+    ).toMatchObject({
+      integrations_control_plane_id: null,
+      integrations_marker_sha256: null,
+      integrations_installed_at: null,
+    });
+    expect(
+      inspectOrganizationControlDatabaseReadOnly(
+        paths.integrations_database_path,
+      ).control_plane_id,
+    ).toBe(foreign.control_plane_id);
+    expect(existsSync(paths.integrations_installation_marker_path)).toBe(false);
+  });
+
+  it('still refuses a partial integrations pair while the authority is legacy', async () => {
+    const fixture = await initializedFixture();
+    const config = readAuthorityRuntimeConfig(fixture.configPath);
+    const paths = authorityStatePaths(fixture.stateDirectory);
+    replaceAuthorityDatabaseWithLegacyV2(config.database_path);
+    unlinkSync(paths.integrations_installation_marker_path);
+
+    await expect(
+      installAuthorityIntegrations(fixture.configPath),
+    ).rejects.toThrow(
+      'legacy authority has only part of the integrations database-marker pair',
+    );
+    expect(
+      inspectAuthorityDatabaseForServe(config.database_path),
+    ).toMatchObject({ schema_version: 2 });
+    expect(existsSync(paths.integrations_database_path)).toBe(true);
+    expect(existsSync(paths.integrations_installation_marker_path)).toBe(false);
+  });
+
+  it('refuses to adopt an integration database whose immutable marker is missing', async () => {
+    const fixture = await initializedFixture();
+    const paths = authorityStatePaths(fixture.stateDirectory);
+    unlinkSync(paths.integrations_installation_marker_path);
+
+    await expect(
+      installAuthorityIntegrations(fixture.configPath),
+    ).rejects.toThrow('database or marker is missing');
+    expect(existsSync(paths.integrations_database_path)).toBe(true);
+    expect(existsSync(paths.integrations_installation_marker_path)).toBe(false);
+  });
+
+  it('rejects an integration database that differs from its installation marker', async () => {
+    const fixture = await initializedFixture();
+    const config = readAuthorityRuntimeConfig(fixture.configPath);
+    const paths = authorityStatePaths(fixture.stateDirectory);
+    const originalFingerprint = authorityRuntimeFingerprint(
+      resolveAuthorityServeConfig(config),
+    );
+    const marker = JSON.parse(
+      readFileSync(paths.integrations_installation_marker_path, 'utf8'),
+    ) as Record<string, unknown>;
+    marker.control_plane_id = 'ocp_00000000-0000-4000-8000-000000000000';
+    writeFileSync(
+      paths.integrations_installation_marker_path,
+      `${JSON.stringify(marker)}\n`,
+    );
+    expect(
+      authorityRuntimeFingerprint(resolveAuthorityServeConfig(config)),
+    ).not.toBe(originalFingerprint);
+
+    await expect(
+      inspectAuthorityServePreflight(fixture.configPath, config),
+    ).rejects.toThrow('authority installation anchor differ');
+    await expect(
+      startOrganizationAuthority(resolveAuthorityServeConfig(config)),
+    ).rejects.toThrow('authority installation anchor differ');
+    expect(
+      (await inspectAuthorityRuntimeLock(fixture.stateDirectory)).present,
+    ).toBe(false);
+    await expect(
+      installAuthorityIntegrations(fixture.configPath),
+    ).rejects.toThrow('authority installation anchor differ');
+  });
+
+  it('rejects integration state pinned to a different organization', async () => {
+    const fixture = await initializedFixture();
+    const config = readAuthorityRuntimeConfig(fixture.configPath);
+    const paths = authorityStatePaths(fixture.stateDirectory);
+    unlinkSync(paths.integrations_database_path);
+    initializeOrganizationControlDatabase(paths.integrations_database_path, {
+      organization_id: 'org_different',
+      authority_id: config.authority.authority_id,
+      authority_descriptor_sha256: config.authority.authority_pin_sha256,
+      created_at: new Date().toISOString(),
+    });
+
+    await expect(
+      inspectAuthorityServePreflight(fixture.configPath, config),
+    ).rejects.toThrow(
+      'organization integrations database identity differs from config',
+    );
+    const status = await inspectAuthorityStatus(fixture.configPath);
+    expect(status).toMatchObject({ ok: false, initialized: false });
+    expect(status.checks.at(-1)?.detail).toContain(
+      'organization integrations database identity differs from config',
+    );
+    await expect(
+      startOrganizationAuthority(resolveAuthorityServeConfig(config)),
+    ).rejects.toThrow(
+      'organization integrations database identity differs from config',
+    );
+    await expect(
+      installAuthorityIntegrations(fixture.configPath),
+    ).rejects.toThrow(
+      'organization integrations database identity differs from config',
+    );
+  });
+
+  it('refuses integration maintenance while the authority owns the state', async () => {
+    const fixture = await initializedFixture();
+    const config = readAuthorityRuntimeConfig(fixture.configPath);
+    const runtime = await startOrganizationAuthority(
+      resolveAuthorityServeConfig(config),
+    );
+    try {
+      await expect(
+        installAuthorityIntegrations(fixture.configPath),
+      ).rejects.toThrow('already running for this state directory');
+    } finally {
+      await runtime.close();
+    }
+  });
+
   it('never adopts an empty replacement database while serving', async () => {
     const fixture = await initializedFixture();
     const config = readAuthorityRuntimeConfig(fixture.configPath);
@@ -873,7 +1474,7 @@ describe('organization authority operator lifecycle', () => {
 
     await expect(
       startOrganizationAuthority(resolveAuthorityServeConfig(config)),
-    ).rejects.toThrow('must already contain initialized metadata');
+    ).rejects.toThrow('metadata');
     expect(() =>
       inspectAuthorityDatabaseReadOnly(config.database_path),
     ).toThrow('metadata is missing');

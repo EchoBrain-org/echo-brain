@@ -39,7 +39,10 @@ import type { AuthorityServeConfig } from './config.js';
 export const AUTHORITY_IDENTITY_FILENAME = 'authority-identity.v1.json';
 export const AUTHORITY_INITIALIZATION_MANIFEST_FILENAME =
   'authority-initialization.v1.json';
+export const AUTHORITY_INTEGRATIONS_INSTALLATION_MARKER_FILENAME =
+  'authority-integrations-installation.v1.json';
 export const AUTHORITY_DATABASE_FILENAME = 'authority.sqlite';
+export const AUTHORITY_INTEGRATIONS_DATABASE_FILENAME = 'integrations.sqlite';
 export const AUTHORITY_ADMIN_CREDENTIAL_FILENAME = 'admin-token';
 export const AUTHORITY_PROXY_CREDENTIAL_FILENAME = 'trusted-proxy-token';
 
@@ -83,6 +86,8 @@ export interface AuthorityStatePaths {
   admin_credential_path: string;
   proxy_credential_path: string;
   database_path: string;
+  integrations_database_path: string;
+  integrations_installation_marker_path: string;
   identity_path: string;
   initialization_manifest_path: string;
 }
@@ -165,6 +170,14 @@ export function authorityStatePaths(
       AUTHORITY_PROXY_CREDENTIAL_FILENAME,
     ),
     database_path: join(state, AUTHORITY_DATABASE_FILENAME),
+    integrations_database_path: join(
+      state,
+      AUTHORITY_INTEGRATIONS_DATABASE_FILENAME,
+    ),
+    integrations_installation_marker_path: join(
+      state,
+      AUTHORITY_INTEGRATIONS_INSTALLATION_MARKER_FILENAME,
+    ),
     identity_path: join(state, AUTHORITY_IDENTITY_FILENAME),
     initialization_manifest_path: join(
       state,
@@ -478,6 +491,7 @@ export function writeAuthorityRuntimeConfigExclusive(
 export function resolveAuthorityServeConfig(
   config: AuthorityRuntimeConfigV1,
 ): AuthorityServeConfig {
+  const paths = authorityStatePaths(config.state_dir);
   const adminToken = readPrivateAuthorityCredential(
     config.credentials.admin_token_ref,
   );
@@ -492,6 +506,7 @@ export function resolveAuthorityServeConfig(
     organization_display_name: config.organization.display_name,
     authority_pin_sha256: config.authority.authority_pin_sha256,
     database_path: config.database_path,
+    integrations_database_path: paths.integrations_database_path,
     admin_token: adminToken,
     trusted_proxy_token: trustedProxyToken,
     host: config.listener.host,

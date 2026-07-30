@@ -14,6 +14,11 @@ export {
   OrganizationAuthorityTransportError,
 } from './client/http-organization-authority-client.js';
 export type { HttpOrganizationAuthorityClientOptions } from './client/http-organization-authority-client.js';
+export {
+  OrganizationApprovalActionAuthorizer,
+  organizationApprovalResolutionRequiresAuthority,
+} from './approval-action-authorizer.js';
+export type { OrganizationApprovalActionAuthorizerOptions } from './approval-action-authorizer.js';
 export { createOrganizationAuthorityCaFetch } from './client/authority-ca-fetch.js';
 export { LocalOrganizationCoordinator } from './enrollment/local-organization-coordinator.js';
 export type {

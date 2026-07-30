@@ -28,12 +28,15 @@ import type {
   OrganizationInstallationSummaryV1,
   OrganizationMembershipPageV1,
   OrganizationMembershipSummaryV1,
+  OrganizationPermissionCheckDecisionV1,
+  OrganizationPermissionCheckRequestV1,
   ProvisionedOrganizationMembershipV1,
   ProvisionOrganizationMembershipRequestV1,
   RevokeOrganizationSubjectRequestV1,
   RevokedOrganizationInstallationV1,
   RevokedOrganizationMembershipV1,
 } from './contracts.js';
+import { organizationPermissionProviderEventSha256 } from './permission-check-event.js';
 
 export const MAX_ORGANIZATION_API_BODY_BYTES = 16 * 1024;
 export const MAX_ENROLLMENT_GRANT_LIFETIME_SECONDS = 7 * 24 * 60 * 60;
@@ -117,6 +120,16 @@ function assertString(
   ) {
     fail(`${label} is invalid`);
   }
+}
+
+function assertPatternString(
+  value: unknown,
+  label: string,
+  maximumLength: number,
+  pattern: RegExp,
+): asserts value is string {
+  assertString(value, label, maximumLength);
+  if (!pattern.test(value)) fail(`${label} is invalid`);
 }
 
 function assertDigest(value: unknown, label: string): asserts value is string {
@@ -261,6 +274,30 @@ function validatePage<T>(
   };
 }
 
+function validateUniquePage<T>(
+  value: unknown,
+  label: string,
+  validateItem: (item: unknown) => T,
+  identity: keyof T,
+  itemLabel: string,
+  organization: keyof T | null,
+): { items: T[]; next_cursor: string | null } {
+  const page = validatePage(value, label, validateItem);
+  if (
+    new Set(page.items.map((item) => item[identity])).size !==
+    page.items.length
+  ) {
+    fail(`${label} repeats ${itemLabel}`);
+  }
+  if (
+    organization !== null &&
+    new Set(page.items.map((item) => item[organization])).size > 1
+  ) {
+    fail(`${label} crosses organizations`);
+  }
+  return page;
+}
+
 function assertTimestamp(
   value: unknown,
   label: string,
@@ -291,8 +328,12 @@ function validateMembershipType(value: unknown, label: string): void {
   }
 }
 
-function validateIntegrity(value: unknown): OrganizationApiSignedIntegrityV1 {
-  const record = asRecord(value, 'access lease request integrity');
+function validateIntegrity(
+  value: unknown,
+  documentLabel = 'access lease request',
+): OrganizationApiSignedIntegrityV1 {
+  const label = `${documentLabel} integrity`;
+  const record = asRecord(value, label);
   assertExactKeys(
     record,
     [
@@ -302,23 +343,23 @@ function validateIntegrity(value: unknown): OrganizationApiSignedIntegrityV1 {
       'key_id',
       'signature_base64',
     ],
-    'access lease request integrity',
+    label,
   );
   if (record.canonicalization !== 'RFC8785') {
-    fail('access lease request canonicalization is unsupported');
+    fail(`${documentLabel} canonicalization is unsupported`);
   }
   if (record.signature_algorithm !== 'ecdsa-p256-sha256-der-low-s') {
-    fail('access lease request signature algorithm is unsupported');
+    fail(`${documentLabel} signature algorithm is unsupported`);
   }
-  assertDigest(record.payload_sha256, 'access lease request payload digest');
-  assertDigest(record.key_id, 'access lease request integrity key');
+  assertDigest(record.payload_sha256, `${documentLabel} payload digest`);
+  assertDigest(record.key_id, `${documentLabel} integrity key`);
   if (
     typeof record.signature_base64 !== 'string' ||
     record.signature_base64.length < 8 ||
     record.signature_base64.length > 256 ||
     !/^[A-Za-z0-9+/]+={0,2}$/.test(record.signature_base64)
   ) {
-    fail('access lease request signature is not bounded base64');
+    fail(`${documentLabel} signature is not bounded base64`);
   }
   return record as unknown as OrganizationApiSignedIntegrityV1;
 }
@@ -385,6 +426,272 @@ export function validateOrganizationAccessLeaseRequest(
     ...record,
     integrity,
   } as unknown as OrganizationAccessLeaseRequestV1;
+}
+
+export function validateOrganizationPermissionCheckRequest(
+  value: unknown,
+): OrganizationPermissionCheckRequestV1 {
+  const label = 'permission check request';
+  const record = asRecord(value, label);
+  assertExactKeys(
+    record,
+    [
+      'schema_version',
+      'kind',
+      'request_id',
+      'authority_id',
+      'authority_key_id',
+      'organization_id',
+      'enrollment_id',
+      'installation_id',
+      'installation_key_id',
+      'provider',
+      'provider_issuer',
+      'provider_tenant_kind',
+      'provider_tenant_id',
+      'provider_enterprise_id',
+      'provider_connection_subject_id',
+      'provider_connection_bot_id',
+      'provider_connection_app_id',
+      'provider_subject_kind',
+      'provider_subject_id',
+      'adapter_kind',
+      'adapter_id',
+      'adapter_instance_id',
+      'adapter_version',
+      'action',
+      'approval_id',
+      'channel_id',
+      'message_ts',
+      'reaction_name',
+      'provider_event_sha256',
+      'requested_at',
+      'integrity',
+    ],
+    label,
+  );
+  if (
+    record.schema_version !== 1 ||
+    record.kind !== 'echo-organization-permission-check-request'
+  ) {
+    fail('permission check request version or kind is unsupported');
+  }
+  assertId(record.request_id, 'pcr', 'permission check request request_id');
+  assertId(record.authority_id, 'oau', 'permission check request authority_id');
+  assertDigest(
+    record.authority_key_id,
+    'permission check request authority_key_id',
+  );
+  assertId(
+    record.organization_id,
+    'org',
+    'permission check request organization_id',
+  );
+  assertId(
+    record.enrollment_id,
+    'enr',
+    'permission check request enrollment_id',
+  );
+  assertId(
+    record.installation_id,
+    'ins',
+    'permission check request installation_id',
+  );
+  assertDigest(
+    record.installation_key_id,
+    'permission check request installation_key_id',
+  );
+  if (
+    record.provider !== 'slack' ||
+    record.provider_issuer !== 'https://slack.com' ||
+    record.provider_tenant_kind !== 'workspace' ||
+    record.provider_subject_kind !== 'human_user' ||
+    record.adapter_kind !== 'approval-surface'
+  ) {
+    fail('permission check request provider or adapter kind is unsupported');
+  }
+  assertPatternString(
+    record.provider_tenant_id,
+    'permission check request provider_tenant_id',
+    128,
+    /^T[A-Z0-9]{2,}$/,
+  );
+  if (record.provider_enterprise_id !== null) {
+    assertPatternString(
+      record.provider_enterprise_id,
+      'permission check request provider_enterprise_id',
+      128,
+      /^E[A-Z0-9]{2,}$/,
+    );
+  }
+  assertPatternString(
+    record.provider_connection_subject_id,
+    'permission check request provider_connection_subject_id',
+    128,
+    /^U[A-Z0-9]{2,}$/,
+  );
+  assertPatternString(
+    record.provider_connection_bot_id,
+    'permission check request provider_connection_bot_id',
+    128,
+    /^B[A-Z0-9]{2,}$/,
+  );
+  if (record.provider_connection_app_id !== null) {
+    assertPatternString(
+      record.provider_connection_app_id,
+      'permission check request provider_connection_app_id',
+      128,
+      /^A[A-Z0-9]{2,}$/,
+    );
+  }
+  assertPatternString(
+    record.provider_subject_id,
+    'permission check request provider_subject_id',
+    128,
+    /^[UW][A-Z0-9]{2,}$/,
+  );
+  assertString(record.adapter_id, 'permission check request adapter_id', 128);
+  assertString(
+    record.adapter_instance_id,
+    'permission check request adapter_instance_id',
+    128,
+  );
+  assertString(
+    record.adapter_version,
+    'permission check request adapter_version',
+    64,
+  );
+  if (record.action !== 'approve' && record.action !== 'reject') {
+    fail('permission check request action is unsupported');
+  }
+  assertPatternString(
+    record.approval_id,
+    'permission check request approval_id',
+    256,
+    /^[0-9a-f]{64}$/,
+  );
+  assertString(record.channel_id, 'permission check request channel_id', 128);
+  assertPatternString(
+    record.message_ts,
+    'permission check request message_ts',
+    64,
+    /^\d{1,16}\.\d{1,16}$/,
+  );
+  assertPatternString(
+    record.reaction_name,
+    'permission check request reaction_name',
+    64,
+    /^[a-z0-9_+-]+$/,
+  );
+  assertDigest(
+    record.provider_event_sha256,
+    'permission check request provider_event_sha256',
+  );
+  const derivedProviderEventSha256 =
+    organizationPermissionProviderEventSha256(
+      record as unknown as OrganizationPermissionCheckRequestV1,
+    );
+  if (record.provider_event_sha256 !== derivedProviderEventSha256) {
+    fail(
+      'permission check request provider_event_sha256 does not match its event',
+    );
+  }
+  assertTimestamp(
+    record.requested_at,
+    'permission check request requested_at',
+  );
+  const integrity = validateIntegrity(record.integrity, label);
+  if (integrity.key_id !== record.installation_key_id) {
+    fail(
+      'permission check request signature key does not match installation key',
+    );
+  }
+  return {
+    ...record,
+    integrity,
+  } as unknown as OrganizationPermissionCheckRequestV1;
+}
+
+export function validateOrganizationPermissionCheckDecision(
+  value: unknown,
+): OrganizationPermissionCheckDecisionV1 {
+  const label = 'permission check decision';
+  const record = asRecord(value, label);
+  assertExactKeys(
+    record,
+    [
+      'schema_version',
+      'kind',
+      'request_sha256',
+      'provider_event_sha256',
+      'allowed',
+      'reason_code',
+      'principal_id',
+      'membership_id',
+      'adapter_binding_id',
+      'permission_grant_id',
+      'evaluated_at',
+    ],
+    label,
+  );
+  if (
+    record.schema_version !== 1 ||
+    record.kind !== 'echo-organization-permission-check-decision'
+  ) {
+    fail('permission check decision version or kind is unsupported');
+  }
+  assertDigest(record.request_sha256, 'permission check decision request');
+  assertDigest(
+    record.provider_event_sha256,
+    'permission check decision provider event',
+  );
+  if (typeof record.allowed !== 'boolean') {
+    fail('permission check decision allowed must be boolean');
+  }
+  assertString(record.reason_code, 'permission check decision reason_code', 128);
+  if (
+    record.principal_id !== null ||
+    record.membership_id !== null
+  ) {
+    assertId(
+      record.principal_id,
+      'prn',
+      'permission check decision principal_id',
+    );
+    assertId(
+      record.membership_id,
+      'mem',
+      'permission check decision membership_id',
+    );
+  }
+  if (record.adapter_binding_id !== null) {
+    assertId(
+      record.adapter_binding_id,
+      'bnd',
+      'permission check decision adapter_binding_id',
+    );
+  }
+  if (record.permission_grant_id !== null) {
+    assertId(
+      record.permission_grant_id,
+      'pgr',
+      'permission check decision permission_grant_id',
+    );
+  }
+  if (
+    record.allowed &&
+    (record.principal_id === null ||
+      record.membership_id === null ||
+      record.adapter_binding_id === null ||
+      record.permission_grant_id === null)
+  ) {
+    fail('allowed permission check decision requires exact authorization IDs');
+  }
+  assertTimestamp(
+    record.evaluated_at,
+    'permission check decision evaluated_at',
+  );
+  return record as unknown as OrganizationPermissionCheckDecisionV1;
 }
 
 export function validateProvisionOrganizationMembershipRequest(
@@ -942,21 +1249,14 @@ export function validateOrganizationMembershipSummary(
 export function validateOrganizationMembershipPage(
   value: unknown,
 ): OrganizationMembershipPageV1 {
-  const page = validatePage(
+  return validateUniquePage(
     value,
     'membership page',
     validateOrganizationMembershipSummary,
+    'membership_id',
+    'a membership',
+    'organization_id',
   );
-  if (
-    new Set(page.items.map((item) => item.membership_id)).size !==
-    page.items.length
-  ) {
-    fail('membership page repeats a membership');
-  }
-  if (new Set(page.items.map((item) => item.organization_id)).size > 1) {
-    fail('membership page crosses organizations');
-  }
-  return page;
 }
 
 export function validateOrganizationInstallationSummary(
@@ -1045,21 +1345,14 @@ export function validateOrganizationInstallationSummary(
 export function validateOrganizationInstallationPage(
   value: unknown,
 ): OrganizationInstallationPageV1 {
-  const page = validatePage(
+  return validateUniquePage(
     value,
     'installation page',
     validateOrganizationInstallationSummary,
+    'installation_id',
+    'an installation',
+    'organization_id',
   );
-  if (
-    new Set(page.items.map((item) => item.installation_id)).size !==
-    page.items.length
-  ) {
-    fail('installation page repeats an installation');
-  }
-  if (new Set(page.items.map((item) => item.organization_id)).size > 1) {
-    fail('installation page crosses organizations');
-  }
-  return page;
 }
 
 export function validateOrganizationEnrollmentGrantSummary(
@@ -1114,21 +1407,14 @@ export function validateOrganizationEnrollmentGrantSummary(
 export function validateOrganizationEnrollmentGrantPage(
   value: unknown,
 ): OrganizationEnrollmentGrantPageV1 {
-  const page = validatePage(
+  return validateUniquePage(
     value,
     'enrollment grant page',
     validateOrganizationEnrollmentGrantSummary,
+    'enrollment_grant_sha256',
+    'a grant',
+    'organization_id',
   );
-  if (
-    new Set(page.items.map((item) => item.enrollment_grant_sha256)).size !==
-    page.items.length
-  ) {
-    fail('enrollment grant page repeats a grant');
-  }
-  if (new Set(page.items.map((item) => item.organization_id)).size > 1) {
-    fail('enrollment grant page crosses organizations');
-  }
-  return page;
 }
 
 export function validateOrganizationAuditEntrySummary(
@@ -1175,18 +1461,14 @@ export function validateOrganizationAuditEntrySummary(
 export function validateOrganizationAuditPage(
   value: unknown,
 ): OrganizationAuditPageV1 {
-  const page = validatePage(
+  return validateUniquePage(
     value,
     'audit page',
     validateOrganizationAuditEntrySummary,
+    'audit_sequence',
+    'an audit entry',
+    null,
   );
-  if (
-    new Set(page.items.map((item) => item.audit_sequence)).size !==
-    page.items.length
-  ) {
-    fail('audit page repeats an audit entry');
-  }
-  return page;
 }
 
 export function validateRevokedOrganizationInstallation(

@@ -21,10 +21,14 @@ employees. The repository contains:
 - local and Slack approval;
 - JSONL and Slack delivery;
 - SQLite product state, onboarding, backup, and restore;
-- one centrally hosted organization authority for enrollment and access.
+- one customer-hosted organization authority for enrollment and access; and
+- a minimum customer-owned organization control plane for one verified
+  organization Slack tool, exact provider identity links and adapter bindings,
+  and direct approve/reject permission checks.
 
-It does not contain multi-tenant control-plane, billing, fleet, or
-multi-replica authority infrastructure.
+It does not contain a multi-tenant vendor control plane, billing, fleet,
+multi-replica authority infrastructure, general employee tool propagation,
+non-Slack organization tools, or a vendor-visible organization data plane.
 
 ## Requirements
 
@@ -253,6 +257,7 @@ reverse proxy. See:
 - [authority service](services/organization-authority/README.md)
 - [portable one-machine deployment](deploy/organization-authority/README.md)
 - [organization protocol boundaries](docs/architecture/organization-workspace-boundaries.md)
+- [organization control-plane design](docs/architecture/organization-control-plane.md)
 
 The employee product owns its installation private key and pins the authority
 identity. The authority owns membership, enrollment grants, leases, and

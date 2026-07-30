@@ -20,6 +20,7 @@ import {
   AuthenticatedProxyClientIdentityResolver,
   TRUSTED_PROXY_AUTHORIZATION_HEADER,
   TRUSTED_PROXY_CLIENT_ID_HEADER,
+  TRUSTED_PROXY_SOURCE_ADDRESS_HEADER,
 } from '../src/presentation/trusted-proxy-client-identity.js';
 
 const ADMIN_TOKEN = 'test-admin-token-with-at-least-32-bytes';
@@ -68,6 +69,7 @@ function testApplication(
     issueEnrollmentGrant: unexpectedCall,
     completeEnrollment: unexpectedCall,
     issueAccessLease: unexpectedCall,
+    checkPermissionSubject: unexpectedCall,
     revokeMembership: unexpectedCall,
     revokeInstallation: unexpectedCall,
     ...overrides,
@@ -141,6 +143,32 @@ describe('authority HTTP presentation', () => {
       `${ORGANIZATION_API_PROXY_AUTH_SCHEME} ${PROXY_TOKEN}`;
     request.rawHeaders[3] = 'employee-one@example.com';
     expect(() => resolver.resolve(request)).toThrow(
+      'trusted proxy identity is unavailable',
+    );
+  });
+
+  it('isolates pre-authentication admission by proxy-authenticated source address', () => {
+    const resolver = new AuthenticatedProxyClientIdentityResolver(PROXY_TOKEN);
+    const identity = clientId('pilot-proxy');
+    const request = {
+      rawHeaders: [
+        TRUSTED_PROXY_AUTHORIZATION_HEADER,
+        `${ORGANIZATION_API_PROXY_AUTH_SCHEME} ${PROXY_TOKEN}`,
+        TRUSTED_PROXY_CLIENT_ID_HEADER,
+        identity,
+        TRUSTED_PROXY_SOURCE_ADDRESS_HEADER,
+        '203.0.113.10',
+      ],
+    };
+    const first = resolver.permissionIngressKey(request, identity);
+    request.rawHeaders[5] = '203.0.113.11';
+    const second = resolver.permissionIngressKey(request, identity);
+
+    expect(first).toMatch(/^cid_[A-Za-z0-9_-]{43}$/);
+    expect(second).toMatch(/^cid_[A-Za-z0-9_-]{43}$/);
+    expect(first).not.toBe(second);
+    request.rawHeaders[5] = 'not-an-ip';
+    expect(() => resolver.permissionIngressKey(request, identity)).toThrow(
       'trusted proxy identity is unavailable',
     );
   });

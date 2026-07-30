@@ -6,16 +6,21 @@ import {
   ORGANIZATION_API_AUTHORITY_DESCRIPTOR_PATH,
   ORGANIZATION_API_ENROLLMENT_AUTH_SCHEME,
   ORGANIZATION_API_ENROLLMENTS_PATH,
+  ORGANIZATION_API_PERMISSION_CHECKS_PATH,
   validateCompletedOrganizationEnrollment,
   validateOrganizationAccessLeaseRequest,
   validateOrganizationAccessLeaseResponse,
   validateOrganizationApiError,
   validateOrganizationAuthorityDescriptorResponse,
+  validateOrganizationPermissionCheckDecision,
+  validateOrganizationPermissionCheckRequest,
   type CompleteOrganizationEnrollmentRequestV1,
   type CompletedOrganizationEnrollmentV1,
   type OrganizationAccessLeaseRequestV1,
   type OrganizationAccessLeaseResponseV1,
   type OrganizationAuthorityDescriptorResponseV1,
+  type OrganizationPermissionCheckDecisionV1,
+  type OrganizationPermissionCheckRequestV1,
 } from '@echo-brain/organization-api';
 import type { OrganizationAuthorityClient } from './authority-client.js';
 import { OrganizationAuthorityConflictError } from './authority-client.js';
@@ -23,6 +28,10 @@ import { createOrganizationAuthorityCaFetch } from './authority-ca-fetch.js';
 
 const MAX_RESPONSE_BYTES = 64 * 1024;
 const DEFAULT_TIMEOUT_MS = 15_000;
+const JSON_HEADERS = {
+  accept: 'application/json',
+  'content-type': 'application/json',
+} as const;
 type ConflictHandling = 'transport-error' | 'stale-access-state';
 
 export interface HttpOrganizationAuthorityClientOptions {
@@ -237,13 +246,16 @@ export class HttpOrganizationAuthorityClient implements OrganizationAuthorityCli
     init: Omit<RequestInit, 'redirect' | 'signal'>,
     validateSuccess: (value: unknown) => T,
     conflictHandling: ConflictHandling = 'transport-error',
+    signal?: AbortSignal,
   ): Promise<T> {
     let response: Response;
     try {
+      const deadline = AbortSignal.timeout(this.timeoutMs);
       response = await this.fetchImpl(this.endpoint(path), {
         ...init,
         redirect: 'error',
-        signal: AbortSignal.timeout(this.timeoutMs),
+        signal:
+          signal === undefined ? deadline : AbortSignal.any([signal, deadline]),
       });
     } catch (error) {
       throw new OrganizationAuthorityTransportError(
@@ -280,6 +292,27 @@ export class HttpOrganizationAuthorityClient implements OrganizationAuthorityCli
     return validateResponse(value, response.status, validateSuccess);
   }
 
+  private postJson<T>(
+    path: string,
+    value: unknown,
+    requestKind: 'access' | 'permission',
+    validateSuccess: (value: unknown) => T,
+    conflictHandling: ConflictHandling = 'transport-error',
+    signal?: AbortSignal,
+  ): Promise<T> {
+    const body = JSON.stringify(value);
+    if (Buffer.byteLength(body) > MAX_ORGANIZATION_API_BODY_BYTES) {
+      throw new Error(`organization ${requestKind} request exceeds the API body limit`);
+    }
+    return this.request(
+      path,
+      { method: 'POST', headers: JSON_HEADERS, body },
+      validateSuccess,
+      conflictHandling,
+      signal,
+    );
+  }
+
   readAuthorityDescriptor(): Promise<OrganizationAuthorityDescriptorResponseV1> {
     return this.request(
       ORGANIZATION_API_AUTHORITY_DESCRIPTOR_PATH,
@@ -308,9 +341,8 @@ export class HttpOrganizationAuthorityClient implements OrganizationAuthorityCli
       {
         method: 'POST',
         headers: {
-          accept: 'application/json',
+          ...JSON_HEADERS,
           authorization: `${ORGANIZATION_API_ENROLLMENT_AUTH_SCHEME} ${canonicalGrantBase64Url(input.enrollmentGrant)}`,
-          'content-type': 'application/json',
         },
         body,
       },
@@ -321,23 +353,26 @@ export class HttpOrganizationAuthorityClient implements OrganizationAuthorityCli
   issueAccessLease(
     request: OrganizationAccessLeaseRequestV1,
   ): Promise<OrganizationAccessLeaseResponseV1> {
-    const validated = validateOrganizationAccessLeaseRequest(request);
-    const body = JSON.stringify(validated);
-    if (Buffer.byteLength(body) > MAX_ORGANIZATION_API_BODY_BYTES) {
-      throw new Error('organization access request exceeds the API body limit');
-    }
-    return this.request(
+    return this.postJson(
       ORGANIZATION_API_ACCESS_LEASES_PATH,
-      {
-        method: 'POST',
-        headers: {
-          accept: 'application/json',
-          'content-type': 'application/json',
-        },
-        body,
-      },
+      validateOrganizationAccessLeaseRequest(request),
+      'access',
       validateOrganizationAccessLeaseResponse,
       'stale-access-state',
+    );
+  }
+
+  checkPermission(
+    request: OrganizationPermissionCheckRequestV1,
+    signal?: AbortSignal,
+  ): Promise<OrganizationPermissionCheckDecisionV1> {
+    return this.postJson(
+      ORGANIZATION_API_PERMISSION_CHECKS_PATH,
+      validateOrganizationPermissionCheckRequest(request),
+      'permission',
+      validateOrganizationPermissionCheckDecision,
+      'transport-error',
+      signal,
     );
   }
 }

@@ -71,6 +71,20 @@
       "allowed_node_builtins": []
     },
     {
+      "name": "local-organization-approval-actions-use-authority",
+      "from": "src/product/organization/approval-action-authorizer.ts",
+      "allowed_imports": [
+        "src/product/organization/**",
+        "src/product/machine/security/installation-signer.ts"
+      ],
+      "allowed_workspace_packages": [
+        "@echo-brain/federation-protocol",
+        "@echo-brain/organization-api"
+      ],
+      "allowed_external_packages": [],
+      "allowed_node_builtins": ["node:crypto"]
+    },
+    {
       "name": "local-organization-client-uses-public-api",
       "from": "src/product/organization/client/**",
       "allowed_imports": ["src/product/organization/client/**"],

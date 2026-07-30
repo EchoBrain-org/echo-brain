@@ -12,15 +12,19 @@ import {
   readFileSync,
   realpathSync,
   rmSync,
+  writeFileSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
+import Database from 'better-sqlite3';
 import {
   ORGANIZATION_API_PROXY_AUTH_SCHEME,
   validateOrganizationEnrollmentInvitation,
 } from '@echo-brain/organization-api';
 import {
+  canonicalJson,
+  canonicalSha256,
   normalizeP256LowS,
   p256KeyId,
   type Sha256Digest,
@@ -33,6 +37,7 @@ import type {
 import { HttpOrganizationAuthorityClient } from '../../src/product/organization/client/http-organization-authority-client.js';
 import { LocalOrganizationCoordinator } from '../../src/product/organization/enrollment/local-organization-coordinator.js';
 import { SqliteOrganizationStateStore } from '../../src/product/organization/state/sqlite-organization-state-store.js';
+import { initializeOrganizationControlDatabase } from '../../services/organization-control-plane/src/index.js';
 import { DevelopmentFileOrganizationAuthoritySigner } from '../../services/organization-authority/src/adapters/security/development-file-authority-signer.js';
 import { SqliteOrganizationAuthorityRepository } from '../../services/organization-authority/src/adapters/persistence/sqlite/sqlite-authority-repository.js';
 import { OrganizationAdminApiClient } from '../../services/organization-authority/src/adapters/http/organization-admin-api-client.js';
@@ -154,6 +159,7 @@ describe('local organization over the central HTTP authority', () => {
     const authorityDescriptor = await signer.inspect();
     const authorityPin = organizationAuthorityPinSha256(authorityDescriptor);
     const authorityDatabasePath = join(directory, 'authority.sqlite');
+    const integrationsDatabasePath = join(directory, 'integrations.sqlite');
     const authorityRepository = new SqliteOrganizationAuthorityRepository(
       authorityDatabasePath,
     );
@@ -168,6 +174,50 @@ describe('local organization over the central HTTP authority', () => {
     } finally {
       authorityRepository.close();
     }
+    const integrationsCreatedAt = new Date().toISOString();
+    const integrationsIdentity = initializeOrganizationControlDatabase(
+      integrationsDatabasePath,
+      {
+      organization_id: ORGANIZATION_ID,
+      authority_id: AUTHORITY_ID,
+      authority_descriptor_sha256: authorityPin,
+        created_at: integrationsCreatedAt,
+      },
+    );
+    const integrationsMarker = {
+      schema_version: 1,
+      kind: 'echo-organization-authority-integrations-installation-marker',
+      control_plane_id: integrationsIdentity.control_plane_id,
+      organization_id: ORGANIZATION_ID,
+      authority_id: AUTHORITY_ID,
+      authority_descriptor_sha256: authorityPin,
+      integrations_database_path: integrationsDatabasePath,
+      database_created_at: integrationsIdentity.created_at,
+      installed_at: integrationsCreatedAt,
+    } as const;
+    writeFileSync(
+      join(directory, 'authority-integrations-installation.v1.json'),
+      `${canonicalJson(integrationsMarker)}\n`,
+      { flag: 'wx', mode: 0o600 },
+    );
+    const anchorDatabase = new Database(authorityDatabasePath);
+    try {
+      anchorDatabase
+        .prepare(
+          `UPDATE authority_metadata
+           SET integrations_control_plane_id = ?,
+               integrations_marker_sha256 = ?,
+               integrations_installed_at = ?
+           WHERE singleton = 1`,
+        )
+        .run(
+          integrationsIdentity.control_plane_id,
+          canonicalSha256(integrationsMarker),
+          integrationsCreatedAt,
+        );
+    } finally {
+      anchorDatabase.close();
+    }
     const runtime = await startOrganizationAuthority({
       state_directory: directory,
       authority_id: AUTHORITY_ID,
@@ -176,6 +226,7 @@ describe('local organization over the central HTTP authority', () => {
       organization_display_name: 'Example Company',
       authority_pin_sha256: authorityPin,
       database_path: authorityDatabasePath,
+      integrations_database_path: integrationsDatabasePath,
       admin_token: ADMIN_TOKEN,
       trusted_proxy_token: PROXY_TOKEN,
       host: '127.0.0.1',

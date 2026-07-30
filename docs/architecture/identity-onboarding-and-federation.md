@@ -1,9 +1,12 @@
 # Identity, onboarding, and federation
 
 Echo processes source data locally while preserving organization attribution.
-The installation owns credentials, raw source data, its private signing key,
-and the signed records it produces. The organization authority owns shared
-membership, enrollment, access leases, and revocation.
+The installation owns personal provider credentials, raw source data, its
+private signing key, and the signed records it produces. The organization
+authority owns shared membership, enrollment, access leases, revocation, and
+organization-level provider app credentials that an administrator explicitly
+onboards. Provider secret bytes remain in the customer-owned secret store at
+the boundary that uses them; SQLite stores only opaque secret handles.
 
 ## Durable identity
 
@@ -47,6 +50,14 @@ A delivery receipt proves an output reached a configured surface; it is not an
 organization enrollment or access fact.
 
 ## Onboarding and access
+
+Organization tool onboarding precedes employee account linking. An
+administrator selects a supported tool and supplies its organization-owned
+provider setup. The Authority verifies the provider account, granted scopes,
+and required public settings before recording one active organization tool.
+An absent or failed setup is inactive. Employee installations may later offer
+only active organization tools for personal account linking; that propagation
+and employee connect experience is a separate milestone.
 
 An administrator creates a membership and one-time enrollment invitation. The
 installation independently verifies the authority pin, creates its local key,

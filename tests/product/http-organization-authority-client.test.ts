@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
+import { createOrganizationPermissionCheckRequest } from '@echo-brain/organization-api';
 import { OrganizationAuthorityConflictError } from '../../src/product/organization/client/authority-client.js';
 import {
   HttpOrganizationAuthorityClient,
@@ -6,6 +7,10 @@ import {
 } from '../../src/product/organization/client/http-organization-authority-client.js';
 import {
   GRANT,
+  NOW,
+  ORGANIZATION_IDS,
+  allowedPermissionDecision,
+  protocolInstallationKey,
   signedAccessLeaseRequest,
   signedEnrollmentRequest,
   TestAuthority,
@@ -104,6 +109,93 @@ describe('HTTP organization authority client', () => {
       });
     }
     expect(postedBody).toEqual(accessRequest);
+  });
+
+  it('posts the exact signed permission request and validates its decision', async () => {
+    const authority = new TestAuthority();
+    const signer = new TestInstallationSigner();
+    const signingKey = protocolInstallationKey(signer);
+    const request = await createOrganizationPermissionCheckRequest(
+      {
+        request_id: 'pcr_00000000-0000-4000-8000-000000000001',
+        authority_id: ORGANIZATION_IDS.authority,
+        authority_key_id: authority.descriptor.signing_key.key_id,
+        organization_id: ORGANIZATION_IDS.organization,
+        enrollment_id: ORGANIZATION_IDS.enrollment,
+        installation_id: ORGANIZATION_IDS.installation,
+        installation_signing_key: signingKey,
+        provider: 'slack',
+        provider_issuer: 'https://slack.com',
+        provider_tenant_kind: 'workspace',
+        provider_tenant_id: 'T123TEAM',
+        provider_enterprise_id: null,
+        provider_connection_subject_id: 'U123BOT',
+        provider_connection_bot_id: 'B123BOT',
+        provider_connection_app_id: 'A123APP',
+        provider_subject_kind: 'human_user',
+        provider_subject_id: 'U123ZHEN',
+        adapter_kind: 'approval-surface',
+        adapter_id: 'slack-reactions',
+        adapter_instance_id: 'primary',
+        adapter_version: '1.0.0',
+        action: 'approve',
+        approval_id: 'f'.repeat(64),
+        channel_id: 'C123CHANNEL',
+        message_ts: '1753822800.000001',
+        reaction_name: 'white_check_mark',
+        requested_at: NOW,
+      },
+      (bytes) =>
+        signer.sign(
+          ORGANIZATION_IDS.installation,
+          bytes,
+          signingKey.key_id,
+        ),
+    );
+    const client = new HttpOrganizationAuthorityClient({
+      baseUrl: 'https://authority.example',
+      fetch: async (input, init) => {
+        expect(String(input)).toBe(
+          'https://authority.example/v1/permission-checks',
+        );
+        expect(init?.method).toBe('POST');
+        expect(JSON.parse(String(init?.body))).toEqual(request);
+        return new Response(
+          JSON.stringify(allowedPermissionDecision(request)),
+          {
+            status: 200,
+            headers: { 'content-type': 'application/json' },
+          },
+        );
+      },
+    });
+
+    await expect(client.checkPermission(request)).resolves.toMatchObject({
+      allowed: true,
+      membership_id: ORGANIZATION_IDS.membership,
+    });
+
+    const cancellation = new AbortController();
+    let combinedSignal: AbortSignal | undefined;
+    const cancelledClient = new HttpOrganizationAuthorityClient({
+      baseUrl: 'https://authority.example',
+      fetch: async (_input, init) =>
+        await new Promise<Response>((_resolve, reject) => {
+          combinedSignal = init?.signal as AbortSignal;
+          combinedSignal.addEventListener(
+            'abort',
+            () => reject(combinedSignal?.reason),
+            { once: true },
+          );
+        }),
+    });
+    const pending = cancelledClient.checkPermission(
+      request,
+      cancellation.signal,
+    );
+    cancellation.abort();
+    await expect(pending).rejects.toMatchObject({ code: 'transport_failed' });
+    expect(combinedSignal?.aborted).toBe(true);
   });
 
   it('does not classify a non-access 409 as a stale access-state conflict', async () => {

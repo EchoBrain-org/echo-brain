@@ -17,7 +17,8 @@
         "packages/federation-protocol",
         "packages/organization-protocol",
         "packages/organization-api",
-        "services/organization-authority"
+        "services/organization-authority",
+        "services/organization-control-plane"
       ],
       "dependencies": {
         "@echo-brain/federation-protocol": "0.0.0-dev.0",
@@ -53,6 +54,10 @@
     },
     "node_modules/@echo-brain/organization-authority": {
       "resolved": "services/organization-authority",
+      "link": true
+    },
+    "node_modules/@echo-brain/organization-control-plane": {
+      "resolved": "services/organization-control-plane",
       "link": true
     },
     "node_modules/@echo-brain/organization-protocol": {
@@ -1938,9 +1943,9 @@
       "license": "MIT"
     },
     "node_modules/fast-uri": {
-      "version": "3.1.2",
-      "resolved": "https://registry.npmjs.org/fast-uri/-/fast-uri-3.1.2.tgz",
-      "integrity": "sha512-rVjf7ArG3LTk+FS6Yw81V1DLuZl1bRbNrev6Tmd/9RaroeeRRJhAt7jg/6YFxbvAQXUCavSoZhPPj6oOx+5KjQ==",
+      "version": "3.1.4",
+      "resolved": "https://registry.npmjs.org/fast-uri/-/fast-uri-3.1.4.tgz",
+      "integrity": "sha512-8JnbkQ4juDyvYs4mgFGQqg4yCYtFDtUtmp2QIQq11ZZe5CFQ5wcqm1rqDgAh/QdMySuBnPzMUiJUNZG5N/AiQw==",
       "funding": [
         {
           "type": "github",
@@ -3571,7 +3576,20 @@
       "dependencies": {
         "@echo-brain/federation-protocol": "0.0.0-dev.0",
         "@echo-brain/organization-api": "0.0.0-dev.0",
+        "@echo-brain/organization-control-plane": "0.0.0-dev.0",
         "@echo-brain/organization-protocol": "0.0.0-dev.0",
+        "better-sqlite3": "12.10.0"
+      },
+      "engines": {
+        "node": "22.22.1",
+        "npm": "10.9.4"
+      }
+    },
+    "services/organization-control-plane": {
+      "name": "@echo-brain/organization-control-plane",
+      "version": "0.0.0-dev.0",
+      "license": "MIT",
+      "dependencies": {
         "better-sqlite3": "12.10.0"
       },
       "engines": {

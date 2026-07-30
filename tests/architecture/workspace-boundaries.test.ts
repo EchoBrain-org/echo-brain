@@ -5,6 +5,7 @@ import {
   lstatSync,
   mkdirSync,
   mkdtempSync,
+  readdirSync,
   readFileSync,
   rmSync,
   symlinkSync,
@@ -38,6 +39,7 @@ interface BoundaryManifest {
   allowed_external_packages: string[];
   allowed_node_builtins: string[];
   forbidden_repository_roots: string[];
+  runtime_assets?: string[];
 }
 
 function readJson<T>(path: string): T {
@@ -165,8 +167,10 @@ describe('workspace source boundaries', () => {
       '@echo-brain/organization-authority': [
         '@echo-brain/federation-protocol',
         '@echo-brain/organization-api',
+        '@echo-brain/organization-control-plane',
         '@echo-brain/organization-protocol',
       ],
+      '@echo-brain/organization-control-plane': [],
       '@echo-brain/organization-protocol': ['@echo-brain/federation-protocol'],
       'echo-brain/stable-federation': ['@echo-brain/federation-protocol'],
       'echo-brain/local-organization': [
@@ -175,6 +179,26 @@ describe('workspace source boundaries', () => {
         '@echo-brain/organization-protocol',
       ],
     });
+  });
+
+  it('lists every workspace SQL migration as a runtime asset', () => {
+    for (const root of [
+      'services/organization-authority',
+      'services/organization-control-plane',
+    ]) {
+      const manifest = readJson<BoundaryManifest>(
+        `${root}/source-boundary.v1.json`,
+      );
+      const migrations = readdirSync(join(REPO, root, 'migrations'))
+        .filter((path) => path.endsWith('.sql'))
+        .sort()
+        .map((path) => `${root}/migrations/${path}`);
+      expect(
+        [...(manifest.runtime_assets ?? [])]
+          .filter((path) => path.startsWith(`${root}/migrations/`))
+          .sort(),
+      ).toEqual(migrations);
+    }
   });
 
   it('parses real module syntax without treating comments or strings as imports', () => {

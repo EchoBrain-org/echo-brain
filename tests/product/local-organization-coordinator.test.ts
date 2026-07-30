@@ -20,6 +20,7 @@ import {
 } from '@echo-brain/organization-protocol';
 import type { OrganizationAuthorityClient } from '../../src/product/organization/client/authority-client.js';
 import { OrganizationAuthorityConflictError } from '../../src/product/organization/client/authority-client.js';
+import { organizationApprovalResolutionRequiresAuthority } from '../../src/product/organization/approval-action-authorizer.js';
 import { LocalOrganizationCoordinator } from '../../src/product/organization/enrollment/local-organization-coordinator.js';
 import type {
   OrganizationAccessVerificationPolicy,
@@ -302,6 +303,28 @@ describe('local organization coordinator', () => {
 
     expect(decision.permitted).toBe(true);
     expect(clientCalls).toBe(1);
+  });
+
+  it('keeps approval centrally governed when enrollment completion response is lost', async () => {
+    const authority = new TestAuthority();
+    const state = new MemoryOrganizationStateStore();
+    const installationSigner = new TestInstallationSigner();
+    const client = descriptorClient(authority, {
+      completeEnrollment: async ({ enrollmentRequest }) => {
+        await authority.complete(enrollmentRequest);
+        throw new Error('simulated response loss after Authority commit');
+      },
+    });
+
+    await expect(
+      coordinator(state, client, installationSigner, mutableClock()).enroll(
+        enrollmentInput(authority),
+      ),
+    ).rejects.toThrow('simulated response loss');
+    expect(state.readEnrollment()).toMatchObject({ receipt: null });
+    expect(
+      organizationApprovalResolutionRequiresAuthority(state),
+    ).toBe(true);
   });
 
   it('refuses a mismatched remote descriptor before signing or sending the grant', async () => {

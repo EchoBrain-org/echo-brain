@@ -1,5 +1,6 @@
 const DEFAULT_BASE_URL = "https://slack.com/api";
 const DEFAULT_REQUEST_TIMEOUT_MS = 10_000;
+const MAXIMUM_RESPONSE_BYTES = 512 * 1024;
 const REPLIES_PAGE_LIMIT = 200;
 const MAX_REPLY_PAGES = 25;
 
@@ -100,6 +101,56 @@ function isPlainObject(value: unknown): value is Record<string, unknown> {
 
 function isNonEmptyString(value: unknown): value is string {
   return typeof value === "string" && value.trim().length > 0;
+}
+
+async function readBoundedSlackJson(
+  response: Response,
+  method: string,
+  transportFailureCode: SlackApiErrorCode,
+  sizeFailureCode: SlackApiErrorCode,
+): Promise<unknown> {
+  const failure = (
+    detail: "oversized" | "unreadable",
+    code = transportFailureCode,
+  ) =>
+    new SlackApiError(
+      code,
+      `Slack ${method} returned an ${detail} body`,
+      code !== "invalid",
+    );
+  const declaredLength = response.headers.get("content-length");
+  if (
+    declaredLength !== null &&
+    (!/^\d+$/.test(declaredLength) ||
+      Number(declaredLength) > MAXIMUM_RESPONSE_BYTES)
+  ) {
+    await response.body?.cancel().catch(() => undefined);
+    throw failure("oversized", sizeFailureCode);
+  }
+  const body = response.body;
+  if (body === null) throw failure("unreadable");
+  const reader = body.getReader();
+  const decoder = new TextDecoder("utf-8", { fatal: true });
+  let totalBytes = 0;
+  let text = "";
+  try {
+    for (;;) {
+      const read = await reader.read();
+      if (read.done) break;
+      totalBytes += read.value.byteLength;
+      if (totalBytes > MAXIMUM_RESPONSE_BYTES) {
+        await reader.cancel().catch(() => undefined);
+        throw failure("oversized", sizeFailureCode);
+      }
+      text += decoder.decode(read.value, { stream: true });
+    }
+    return JSON.parse(text + decoder.decode()) as unknown;
+  } catch (error) {
+    if (error instanceof SlackApiError) throw error;
+    throw failure("unreadable");
+  } finally {
+    reader.releaseLock();
+  }
 }
 
 const SLACK_TEAM_ID_RE = /^T[A-Z0-9]{2,}$/;
@@ -599,6 +650,7 @@ export class SlackWebApiClient {
         );
       }
 
+      if (!response.ok) await response.body?.cancel().catch(() => undefined);
       if (response.status === 429) {
         const retryAfter = Number(response.headers.get("retry-after"));
         throw new SlackApiError(
@@ -625,16 +677,14 @@ export class SlackWebApiClient {
         );
       }
 
-      let body: unknown;
-      try {
-        body = await response.json();
-      } catch {
-        throw new SlackApiError(
-          transportFailureCode,
-          `Slack ${method} returned an unreadable body`,
-          true,
-        );
-      }
+      const body = await readBoundedSlackJson(
+        response,
+        method,
+        transportFailureCode,
+        options.unknownOutcomeOnTransportFailure === true
+          ? "unknown_outcome"
+          : "invalid",
+      );
       if (!isPlainObject(body)) {
         const responseShapeCode: SlackApiErrorCode =
           options.unknownOutcomeOnTransportFailure === true
