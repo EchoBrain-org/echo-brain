@@ -9,11 +9,6 @@
   "entry_points": ["services/organization-control-plane/src/index.ts"],
   "owned_source_paths": ["services/organization-control-plane/src/**"],
   "allowed_internal_paths": ["services/organization-control-plane/src/**"],
-  "forbidden_repository_roots": [
-    "src/",
-    "packages/",
-    "services/organization-authority/"
-  ],
   "allowed_workspace_packages": [],
   "allowed_external_packages": ["better-sqlite3"],
   "allowed_node_builtins": ["crypto", "fs", "path"],

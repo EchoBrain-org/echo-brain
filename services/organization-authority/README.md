@@ -23,6 +23,8 @@ origin:
 - `POST /v1/enrollments`
 - `POST /v1/access-leases`
 - `POST /v1/permission-checks`
+- `POST /v1/integration-links/slack/challenges`
+- `POST /v1/integration-links/slack/completions`
 - `GET /v1/admin/overview`
 - `GET /v1/admin/memberships`
 - `GET /v1/admin/installations`
@@ -35,8 +37,21 @@ origin:
 - `POST /v1/admin/installations/:installation_id/revocations`
 - `POST /v1/admin/integrations/slack`
 - `POST /v1/admin/integrations/slack-approval-bootstrap`
-- `/admin` browser console
+
+The browser administrator console occupies the `/admin` namespace:
+
+- `GET /admin` and `GET /admin/login`
+- `GET /admin/assets/admin.css` and `GET /admin/assets/admin.js`
+- `POST /admin/login`
+- `POST /admin/logout`
+- `POST /admin/memberships`
+- `POST /admin/memberships/:membership_id/enrollment-grants`
+- `POST /admin/memberships/:membership_id/revocations`
+- `POST /admin/installations/:installation_id/revocations`
 - `POST /admin/integrations/slack`
+
+`GET /_echo/runtime-status` is a private nonce-challenged liveness route that
+the ingress contract below keeps unreachable from outside.
 
 Administrator requests use `Authorization: Bearer <token>`. Enrollment uses
 `Authorization: Echo-Enrollment <grant>`. Lease refresh and permission checks
@@ -126,6 +141,7 @@ authority-state/
   integrations.sqlite
   authority-identity.v1.json
   authority-initialization.v1.json
+  authority-integrations-installation.v1.json
   keys/authority-development-key.v1.json
   credentials/admin-token
   credentials/trusted-proxy-token

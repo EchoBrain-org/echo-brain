@@ -141,7 +141,6 @@ describe("federation wire schemas", () => {
       "approval-federation-metadata",
       "federated-record-envelope",
       "federated-export",
-      "federated-recovery-report",
     ];
     const ajv = new Ajv({ strict: true, allErrors: true });
     ajv.addFormat("utc-millisecond-timestamp", {

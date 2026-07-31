@@ -10,7 +10,8 @@
     "src/adapters/decision-processors/llm/index.ts",
     "src/adapters/delivery-surfaces/jsonl-outbox/index.ts",
     "src/adapters/delivery-surfaces/slack/index.ts",
-    "src/adapters/approval-surfaces/slack-reactions/index.ts"
+    "src/adapters/approval-surfaces/slack-reactions/index.ts",
+    "src/product/organization/index.ts"
   ],
   "allowed_internal_paths": [
     "src/product/**",
@@ -19,10 +20,8 @@
     "src/infrastructure/filesystem/atomic-write.ts",
     "src/infrastructure/filesystem/atomic-create.ts",
     "src/infrastructure/sqlite/migrate.ts",
-    "src/logging/index.ts",
     "src/util/json.ts",
     "src/infrastructure/filesystem/process-file-lock.ts",
-    "src/util/subject.ts",
     "src/util/timestamp.ts"
   ],
   "forbidden_internal_roots": [
@@ -30,13 +29,7 @@
     "src/mcp/",
     "src/coord/",
     "src/trace/",
-    "src/capture/",
-    "src/storage/",
-    "src/echo-home/",
     "src/surfaces/ceo-slack-responder/",
-    "src/enrich/",
-    "src/adapters/meeting-sources/granola/compatibility/",
-    "src/adapters/communication-channels/",
     "src/cli/commands/orchestration.ts"
   ],
   "removed_internal_roots": [
@@ -67,14 +60,13 @@
     "schemas/product/approval-federation-metadata.v1.schema.json",
     "schemas/product/federated-record-envelope.v1.schema.json",
     "schemas/product/federated-export.v1.schema.json",
-    "schemas/product/federated-recovery-report.v1.schema.json",
     "src/product/storage/migrations/0001_initial.sql",
     "src/product/storage/migrations/0002_core_state.sql",
     "src/product/storage/migrations/0003_federated_founder_identity.sql",
     "src/product/storage/migrations/0004_remove_legacy_events.sql",
     "src/product/storage/migrations/0005_organization_access.sql",
-    "src/product/storage/migrations/0006_organization_authority_connection.sql"
-    ,"src/product/storage/migrations/0007_organization_authority_rebind.sql"
+    "src/product/storage/migrations/0006_organization_authority_connection.sql",
+    "src/product/storage/migrations/0007_organization_authority_rebind.sql"
   ],
   "layer_rules": [
     {
@@ -229,13 +221,6 @@
       ],
       "allowed_packages": [],
       "allowed_node_builtins": ["crypto", "fs", "path"]
-    },
-    {
-      "name": "logging-is-self-contained",
-      "from": "src/logging/**",
-      "allowed_imports": [],
-      "allowed_packages": [],
-      "allowed_node_builtins": []
     },
     {
       "name": "util-is-leaf-shared-code",

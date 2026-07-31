@@ -14,8 +14,7 @@ export type FederationSchemaKind =
   | 'processor-attribution'
   | 'approval-federation-metadata'
   | 'federated-record-envelope'
-  | 'federated-export'
-  | 'federated-recovery-report';
+  | 'federated-export';
 
 const SCHEMA_FILES: Readonly<Record<FederationSchemaKind, string>> = Object.freeze({
   'active-identity-bundle': 'active-identity-bundle.v1.schema.json',
@@ -27,7 +26,6 @@ const SCHEMA_FILES: Readonly<Record<FederationSchemaKind, string>> = Object.free
   'approval-federation-metadata': 'approval-federation-metadata.v1.schema.json',
   'federated-record-envelope': 'federated-record-envelope.v1.schema.json',
   'federated-export': 'federated-export.v1.schema.json',
-  'federated-recovery-report': 'federated-recovery-report.v1.schema.json',
 });
 
 function schemaUrl(kind: FederationSchemaKind): URL {

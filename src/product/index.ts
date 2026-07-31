@@ -10,7 +10,12 @@ export * from './approval/store-backed-approval-gate.js';
 export * from './approval/legacy-manual-approval-import.js';
 export * from './paths.js';
 export * from './runtime.js';
-export * from './spawn-sanitized-child.js';
+export {
+  SANITIZED_CHILD_MARKER,
+  sanitizedChildEnvironment,
+  spawnSanitizedChild,
+  spawnSanitizedChildSync,
+} from './spawn-sanitized-child.js';
 export * from './cli.js';
 export * as machine from './machine/index.js';
 export * from './federation/index.js';

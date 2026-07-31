@@ -11,12 +11,7 @@
     "src/product/organization/**",
     "src/product/machine/security/installation-signer.ts",
     "src/product/storage/open-product-database.ts",
-    "src/product/secure-local-files.ts",
-    "src/product/spawn-sanitized-child.ts"
-  ],
-  "forbidden_repository_roots": [
-    "services/",
-    "packages/"
+    "src/product/secure-local-files.ts"
   ],
   "allowed_workspace_packages": [
     "@echo-brain/federation-protocol",
@@ -25,11 +20,11 @@
   ],
   "allowed_external_packages": [],
   "allowed_node_builtins": [
-    "node:buffer",
-    "node:crypto",
-    "node:fs",
-    "node:https",
-    "node:path"
+    "buffer",
+    "crypto",
+    "fs",
+    "https",
+    "path"
   ],
   "runtime_assets": [],
   "layer_rules": [
@@ -82,7 +77,7 @@
         "@echo-brain/organization-api"
       ],
       "allowed_external_packages": [],
-      "allowed_node_builtins": ["node:crypto"]
+      "allowed_node_builtins": ["crypto"]
     },
     {
       "name": "local-organization-slack-link-uses-authority",
@@ -96,7 +91,7 @@
         "@echo-brain/organization-api"
       ],
       "allowed_external_packages": [],
-      "allowed_node_builtins": ["node:crypto"]
+      "allowed_node_builtins": ["crypto"]
     },
     {
       "name": "local-organization-client-uses-public-api",
@@ -107,7 +102,7 @@
         "@echo-brain/organization-api"
       ],
       "allowed_external_packages": [],
-      "allowed_node_builtins": ["node:buffer", "node:https"]
+      "allowed_node_builtins": ["buffer", "https"]
     },
     {
       "name": "local-organization-state-is-installation-owned",
@@ -132,8 +127,7 @@
         "src/product/organization/client/**",
         "src/product/organization/state/**",
         "src/product/machine/security/installation-signer.ts",
-        "src/product/secure-local-files.ts",
-        "src/product/spawn-sanitized-child.ts"
+        "src/product/secure-local-files.ts"
       ],
       "allowed_workspace_packages": [
         "@echo-brain/federation-protocol",
@@ -141,7 +135,7 @@
         "@echo-brain/organization-api"
       ],
       "allowed_external_packages": [],
-      "allowed_node_builtins": ["node:crypto", "node:fs", "node:path"]
+      "allowed_node_builtins": ["crypto", "fs", "path"]
     }
   ]
 }

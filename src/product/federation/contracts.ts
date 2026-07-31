@@ -3,7 +3,6 @@ import type {
   AdapterIdentity,
   DecisionSignal,
   JsonObject,
-  JsonValue,
   MeetingParticipant,
   MeetingTime,
   RationaleSignal,
@@ -622,24 +621,6 @@ export interface FederatedExportManifestV1 extends SignedDocument {
   records: {
     path: 'records.v1.jsonl';
     count: number;
-    sha256: Sha256Digest;
-  };
-  generated_at: string;
-}
-
-export interface FederatedRecoveryReportV1 {
-  schema_version: 1;
-  kind: 'echo-federated-recovery-report';
-  unsigned: true;
-  reason: 'installation-key-unavailable';
-  organization_id: FederationId;
-  installation_id: FederationId;
-  identity_manifest_sha256: Sha256Digest;
-  records: {
-    path: 'records.v1.jsonl';
-    count: number;
-    individually_verified: number;
-    verification_failures: readonly JsonValue[];
     sha256: Sha256Digest;
   };
   generated_at: string;

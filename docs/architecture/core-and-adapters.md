@@ -166,8 +166,3 @@ A new integration begins as a typed capability, not a generic adapter. It must
 keep vendor types behind its boundary, declare identity and failure semantics,
 provide a conforming fake, and pass capability-level contract tests. The core
 must still compile and test when that adapter is removed.
-
-Runtime components declare dependencies and are topologically started by the
-generic supervisor. The supervisor does not contain a whitelist of product
-features, so a future reasoning/Brain component can be added by composition
-without weakening rollback or changing unrelated runtime tests.

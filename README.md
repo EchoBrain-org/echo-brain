@@ -57,7 +57,7 @@ protocol packages. A package built from a clean commit records that commit and
 a content manifest for every npm-packed file except the manifest itself. A
 dirty or untracked worktree is marked unverified and cannot supply founder
 artifact evidence. The manifest detects package corruption or local tampering;
-it is not a publisher signature. This pre-1.0 installer does not preserve
+it is not a publisher signature. This pre-1.0 build does not preserve
 package history automatically, so retain an older installed package tree when
 its previously recorded artifact identity must remain verifiable after an
 upgrade.
@@ -93,6 +93,33 @@ requires `--allow-exportable-software-key` so pilot-grade assurance cannot be
 accepted silently. This signer can be operationally ready for a pilot, but it
 never makes `seed_grade_ready` true; `identity-check --strict` continues to
 require hardware-bound, non-exportable key assurance.
+
+Founder identity bootstrap is an explicit session-scoped ceremony:
+
+```sh
+echo-brain identity-bootstrap begin \
+  --config /absolute/path/runtime.json \
+  --organization-name "Example Company" \
+  --principal-name "Ada Lovelace" \
+  --slack-user-id U0456EFGH \
+  --allow-exportable-software-key
+
+echo-brain identity-bootstrap status \
+  --config /absolute/path/runtime.json --session <uuid>
+
+echo-brain identity-bootstrap commit \
+  --config /absolute/path/runtime.json --session <uuid> \
+  --confirm sha256:CONFIRMATION_DIGEST \
+  --independent-copy-root /absolute/path/independent-copy
+
+echo-brain identity-bootstrap abort \
+  --config /absolute/path/runtime.json --session <uuid> \
+  --confirm <installation-key-sha256>
+```
+
+`echo-brain export` is the federated export command. It fails with
+`federated export is unavailable before the founder identity cutover` until
+that ceremony has committed.
 
 This pre-1.0 build does not migrate a Secure Enclave identity to the portable
 file signer. `identity-check` reports `unsupported_legacy_key_backend` for that
@@ -220,15 +247,21 @@ duplicate a message.
 ```sh
 echo-brain validate-config --config /absolute/path/runtime.json
 echo-brain selftest --config /absolute/path/runtime.json
+echo-brain status --config /absolute/path/runtime.json
 echo-brain run-once --config /absolute/path/runtime.json
 echo-brain approvals --config /absolute/path/runtime.json
 echo-brain approve --config /absolute/path/runtime.json --id <id> --reviewer <name>
+echo-brain reject --config /absolute/path/runtime.json --id <id> --reviewer <name>
 echo-brain run --config /absolute/path/runtime.json
 ```
 
 `run-once` loads the configured adapters, processes available meetings,
 persists cursors and decisions, waits for approval, and delivers the exact
 approved snapshot. Failures conservatively pin the source cursor.
+
+`status` reports the recorded installation and the LaunchAgent state. `reject`
+takes the same `--id` and `--reviewer` as `approve` plus an optional
+`--reason <text>`.
 
 Backups and restores are explicit maintenance operations:
 
@@ -247,6 +280,26 @@ echo-brain restore \
 
 Backups can contain credentials and raw meeting state. Protect them like the
 live state.
+
+## Persistent service
+
+The per-user LaunchAgent is installed and controlled from the same CLI:
+
+```sh
+echo-brain service install --config /absolute/path/runtime.json
+echo-brain service start --config /absolute/path/runtime.json
+echo-brain service status --config /absolute/path/runtime.json
+echo-brain service restart --config /absolute/path/runtime.json
+echo-brain service stop --config /absolute/path/runtime.json
+echo-brain service uninstall --config /absolute/path/runtime.json
+```
+
+`install`, `start`, and `restart` re-check that every configured credential
+reference is a private `file:` path inside the managed credentials directory
+before touching launchd. `reconfigure` re-records the installation manifest
+after the configuration content or product version changes; it requires the
+service to be stopped and refuses to change the config path, state directory,
+Node, CLI, or service identity.
 
 ## Organization onboarding and access
 
@@ -281,6 +334,14 @@ remaining signed lease; expiration or revocation fails closed. Use
 prove the identical authority at a new HTTPS origin before changing the saved
 route.
 
+Once the organization Slack tool is active, an enrolled installation links its
+Slack identity with `organization slack-link-begin` and
+`organization slack-link-complete`. The one-time code travels through a reply
+in the exact Slack challenge thread and the `ECHO_SLACK_LINK_CODE` environment
+variable, never a command-line argument. The
+[authority service](services/organization-authority/README.md) README carries
+the exact steps.
+
 The current portable machine key is an exportable software key, so enrollment
 requires the explicit `--allow-exportable-software-key` acknowledgement.
 Enrollment, explicit rebind, and manual refresh require the product service to
@@ -292,6 +353,8 @@ The core owns canonical meeting, decision, brief, approval, delivery, receipt,
 and error shapes. Adapters own authentication, vendor APIs, pagination,
 rate-limit handling, and mapping to or from those shapes.
 
+The primary repository map is
+[organization-workspace-boundaries.md](docs/architecture/organization-workspace-boundaries.md).
 Extension rules are in
 [core-and-adapters.md](docs/architecture/core-and-adapters.md). The original
 source-extraction history remains available in Git; it is no longer active

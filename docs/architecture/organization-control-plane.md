@@ -9,10 +9,10 @@ platform. It exists to prove two customer-visible behaviors:
 1. A current Authority owner can make one organization-owned Slack connection
    active only after the Authority independently verifies its provider
    identity, scopes, and public channel access.
-2. The retained live permission path can prove a provider identity such as
-   Slack `U_ZHEN`, link it to Zhen's current Echo membership, grant one
-   explicit action on one exact adapter, and deny it after either the
-   membership or enrolled installation is revoked.
+2. The retained live permission path can prove a provider identity such as an
+   employee's Slack `U...` user ID, link it to that employee's current Echo
+   membership, grant one explicit action on one exact adapter, and deny it
+   after either the membership or enrolled installation is revoked.
 
 ## Ownership boundaries
 
@@ -247,6 +247,17 @@ be implemented safely with the current model.
 No Teams, Granola, project-management, or other non-Slack organization-tool
 onboarding is implemented. Automatic organization-tool propagation and a
 multi-provider employee connect catalog are also explicitly deferred.
+
+No operator tool creates a permission grant. `organization_permission_grants`
+receives rows from exactly one code path: the retained Slack approval
+bootstrap behind `POST /v1/admin/integrations/slack-approval-bootstrap`. That
+route is reachable only as a raw administrator-authenticated HTTP call; no
+administrator CLI verb, administrator console form, or product client invokes
+it. Completing an employee Slack identity link therefore always reports
+`permission_grants_created: 0`. An employee completes the link ceremony
+successfully and is then denied by the action-time permission path, which
+finds no active grant. Making grant creation reachable from a shipped
+operator interface is a later milestone.
 
 ## Schema growth rule
 

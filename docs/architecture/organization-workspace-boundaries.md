@@ -1,5 +1,7 @@
 # One-organization workspace boundaries
 
+**Status:** Current — the primary repository map
+
 The near-term topology is one organization with any practical number of
 employees and installations. A second organization is a later tenancy change,
 not a dormant branch.
@@ -10,9 +12,12 @@ not a dormant branch.
 src/
   core/                         vendor-neutral decision pipeline
   adapters/                     source, processor, approval, delivery
+  product/                      CLI, runtime composition, approval, storage
   product/machine/              installation key and OS ports
   product/federation/           local identity and signed records
   product/organization/         enrollment client and access state
+  infrastructure/               atomic writes, SQLite migration, file locks
+  logging/ util/                narrow shared primitives
 
 packages/
   federation-protocol/          canonical signatures and identifiers
@@ -25,8 +30,24 @@ services/
 ```
 
 The root package is the employee product. The authority is a separate
-workspace and deployment. They share only the three protocol/API packages and
-never import one another.
+workspace and deployment. They share the three protocol/API packages and never
+import one another. The authority additionally depends on the organization
+control plane, which the employee product does not.
+
+`organization-control-plane` is a library, not a service, despite its
+`services/` path. It declares no `bin`, has no process entry point of its own,
+opens no listener, and does not appear in
+`deploy/organization-authority/compose.yaml`, whose only two containers are
+`authority` and `proxy`. It is linked into the authority process and imported
+solely from `services/organization-authority/src/composition`. Read
+`services/` as two hosted workspaces, not as two running processes.
+
+The remaining tracked roots support that code rather than shipping in it:
+`product/` holds the root source-boundary manifest, `tools/` the build script
+and the boundary checker, `schemas/` the published JSON Schemas,
+`deploy/organization-authority/` the one-machine authority deployment,
+`tests/` the suites mirroring the ownership above, and `docs/` this map and
+its deep-dives.
 
 ## Dependency direction
 
@@ -37,16 +58,32 @@ organization-protocol
         ↑
 organization-api
       ↗          ↖
-product      authority
+product      authority → organization-control-plane
 ```
 
 - Protocol packages do not import product, service, database, or UI code.
+- `organization-control-plane` is a library with no workspace dependencies of
+  its own; only the authority's composition layer imports it.
 - Cross-workspace imports use package exports.
 - Signed trust documents and ordinary HTTP DTOs remain separate contracts.
 - Private-key lifecycle stays behind signer ports; protocol packages know only
   public descriptors and signatures.
 
-Checked source-boundary manifests enforce this graph.
+Checked source-boundary manifests enforce this graph, and they divide the tree
+between them. `product/source-boundary.v1.json` governs `src/` two ways at
+once. Its layer rules apply to every matching module in the worktree, reachable
+or not; its entry-point closure additionally requires each reachable module to
+sit inside the allowlist. The check closes the gap between the two in both
+directions: a reachable module outside the allowlist is an error, and so is an
+allowlisted module no entry point can reach. Every tracked module under `src/`
+is therefore both allowlisted and reachable, and dead weight cannot accumulate
+inside the packed artifact.
+`tools/workspace-source-boundaries.v1.json` registers seven manifests that
+govern `packages/*/src`, `services/*/src`, and two refinement sub-boundaries
+inside `src/product` by ownership: every file under a declared `source_root`
+must be owned and must match exactly one layer rule. Paths under
+`src/product/federation/` and `src/product/organization/` are the intersection
+of the two artifacts, and both checks must pass.
 
 ## Authority layers
 
@@ -98,6 +135,36 @@ the Authority and integration-policy SQLite databases. The
 portable one-machine deployment is documented in
 [`deploy/organization-authority`](../../deploy/organization-authority/README.md).
 Multi-replica operation requires a later persistence and coordination design.
+
+## Implemented but inactive on the pilot
+
+Founder identity cutover has not happened, and the federation lane is dormant
+because of it. `src/product/federation/` is implemented, compiled, and covered
+by tests, and it is inactive on a normal installation.
+`openFounderFederationRuntime` in `src/product/federation/runtime-wiring.ts`
+loads the active identity bundle; with no committed bundle it takes the
+`active === null` branch, returns `identityEnabled: false`, and supplies
+`projectApproved` and `ensureIndependentCopy` as failing stubs. Signed
+projection, the federated outbox, and independent-copy publication are
+unreachable until the `identity-bootstrap` ceremony is committed. That branch,
+not the active one, is the pilot's normal state.
+
+This is not a small corner of the tree. `src/product/federation/` is roughly
+20,700 lines, close to 30 percent of the repository's production TypeScript.
+Read the federation half of
+[identity, onboarding, and federation](identity-onboarding-and-federation.md)
+as a described capability rather than as observed pilot behavior; the
+onboarding and access half of that document describes what actually runs.
+
+None of it is dead code. It compiles, it is under test, and the federated
+approval capture is wired into the decision-node store in both the active and
+inactive lanes, so it sits on the approval path while inert. It is not removed
+because the runtime composes it unconditionally.
+
+The bundled `llm` decision processor is a different case and is not out of
+scope. The composition root registers it alongside `structured-text`, and the
+top-level `README.md` documents its supported provider configuration. It is a
+selectable processor that the baseline configuration happens not to select.
 
 ## Deferred product-control boundary
 

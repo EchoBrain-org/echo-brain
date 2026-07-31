@@ -24,6 +24,13 @@ uses one processor selection and one approval authority for a given runtime.
 Approval and delivery remain independently configured. One-shot and supervised
 execution use the same composition.
 
+Runtime components declare the components they must start after. The runtime
+validates that graph before anything starts, rejecting duplicate component
+names, unknown or repeated dependencies, and dependency cycles, then starts
+components in topological order. The ordering enumerates no product features,
+so a future reasoning component can be added by composition without weakening
+rollback or changing unrelated runtime tests.
+
 ## State authority
 
 One explicit private local state root is the installation's authority and
@@ -40,6 +47,8 @@ Every approval entry point shares one durable append-only approval history.
 - Only one active runtime operates on a state root.
 - Runtime and maintenance operations are mutually exclusive.
 - Identity and credential continuity are checked before provider contact.
+- An installation pinned to an organization authority proves current signed
+  access before adapter construction; denial fails startup closed.
 - Adapter health is checked before cycle work.
 - Provider operations are bounded and cancellable.
 - Partial startup unwinds cleanly and shutdown is bounded.
@@ -61,5 +70,6 @@ protected, verified independent copy of the signed outbox are durable.
 
 The current product is one user-owned local installation. It is not a central
 organization database, identity provider, distributed scheduler, or plugin
-platform. Multi-user enrollment and organization ingest should wrap the signed
-local boundary rather than replace the core or rewrite local history.
+platform. Multi-user enrollment and organization access wrap that signed local
+boundary: they gate the runtime without replacing the core or rewriting local
+history.

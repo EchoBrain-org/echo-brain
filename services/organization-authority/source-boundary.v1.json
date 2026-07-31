@@ -12,7 +12,6 @@
   ],
   "owned_source_paths": ["services/organization-authority/src/**"],
   "allowed_internal_paths": ["services/organization-authority/src/**"],
-  "forbidden_repository_roots": ["src/", "packages/"],
   "allowed_workspace_packages": [
     "@echo-brain/federation-protocol",
     "@echo-brain/organization-control-plane",

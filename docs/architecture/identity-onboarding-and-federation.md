@@ -1,5 +1,8 @@
 # Identity, onboarding, and federation
 
+**Status:** Current — onboarding and access are live; federation is
+implemented but not exercised on the current pilot
+
 Echo processes source data locally while preserving organization attribution.
 The installation owns personal provider credentials, raw source data, its
 private signing key, and the signed records it produces. The organization

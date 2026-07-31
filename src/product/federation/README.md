@@ -18,7 +18,8 @@ general-purpose home for new files.
 - `cutover-fence.ts` and `build-identity.ts` are bootstrap-owned root anchors;
   `attributing-core-state-store.ts`, `attribution-store.ts`, and
   `outbox-store.ts` are records-owned root anchors; `artifact-evidence.ts` is
-  runtime-owned; and `schema-validation.ts` is foundation-owned.
+  runtime-owned; and `schema-validation.ts` with its `schema-validator.ts`
+  Ajv backend is foundation-owned.
 
 ## Capability folders
 
