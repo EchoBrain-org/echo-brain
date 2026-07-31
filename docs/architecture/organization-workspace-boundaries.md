@@ -17,7 +17,7 @@ src/
   product/federation/           local identity and signed records
   product/organization/         enrollment client and access state
   infrastructure/               atomic writes, SQLite migration, file locks
-  logging/ util/                narrow shared primitives
+  util/                         narrow shared primitives
 
 packages/
   federation-protocol/          canonical signatures and identifiers
