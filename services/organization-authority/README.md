@@ -100,6 +100,19 @@ propagation, non-Slack tools, credential or channel rotation, and fine-grained
 integration lifecycle controls remain deferred. Membership and installation
 revocation are the v1 access controls.
 
+Approval authority itself is granted only by
+`POST /v1/admin/integrations/slack-approval-bootstrap`, an administrator
+bearer-token route with no console form or CLI verb yet. Its JSON body is
+eleven flat strings — `command_id` (`adm_` UUIDv4, the idempotency handle),
+`administrator_membership_id`, `target_membership_id`, `installation_id`,
+`adapter_instance_id`, `adapter_version`, `channel_id`, `approve_reaction`,
+`reject_reaction`, `slack_user_id`, and `slack_bot_token` — validated in
+`src/composition/organization-integrations.ts`. One call verifies the provider
+identities and creates the employee's identity link, adapter binding, and
+`approve`/`reject` grants together, so for pilot employees it replaces rather
+than follows the manual link ceremony, which by itself leaves every reaction
+denied. The call is audited as `slack_approval.bootstrap`.
+
 ## Ingress contract
 
 The built-in server listens on loopback. A standard TLS reverse proxy must:
