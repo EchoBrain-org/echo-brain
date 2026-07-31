@@ -10,6 +10,10 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import {
+  canonicalSha256,
+  sha256Digest,
+} from "../src/canonical/canonical-json.js";
+import {
   AUTHORITY_FILE_SECRET_BACKEND,
   FileOrganizationSecretStore,
   OrganizationIntegrationsRepository,
@@ -562,6 +566,92 @@ describe("organization integrations repository", () => {
       evaluated_at: "2026-07-29T20:00:01.000Z",
     });
     expect(repository.overview().recent_audit).toHaveLength(2);
+    repository.close();
+  });
+
+  it("writes an audit chain whose entries recompute from their stored columns", () => {
+    const integrationDatabase = database();
+    const repository = new OrganizationIntegrationsRepository(
+      integrationDatabase,
+      { organization_id: ORGANIZATION_ID, authority_id: AUTHORITY_ID },
+    );
+    repository.onboardSlackOrganizationTool(
+      organizationToolInput(
+        "organization-slack-audit-chain",
+        "sch_55555555-5555-4555-8555-555555555555",
+      ),
+    );
+    const organizationTool = repository.activeSlackOrganizationTool()!;
+    const installation = {
+      authority_id: AUTHORITY_ID,
+      organization_id: ORGANIZATION_ID,
+      enrollment_id: "enr_test-enrollment",
+      principal_id: PRINCIPAL_ID,
+      membership_id: MEMBERSHIP_ID,
+      installation_id: INSTALLATION_ID,
+      installation_key_id: digest("installation-key"),
+    } as const;
+    const begun = repository.beginSlackIdentityLinkChallenge({
+      request_sha256: digest("audit-chain-begin"),
+      challenge_code_sha256: digest("audit-chain-challenge"),
+      installation,
+      organization_tool: organizationTool,
+      now: NOW,
+    });
+    repository.completeSlackIdentityLinkChallenge({
+      command_id: "slc_audit-chain-link",
+      command_sha256: digest("audit-chain-link"),
+      challenge_attempt_id: begun.challenge_attempt_id,
+      challenge_code_sha256: digest("audit-chain-challenge"),
+      challenge_message_ts: "1753822800.000001",
+      installation,
+      organization_tool: organizationTool,
+      observed: {
+        team_id: "T123TEAM",
+        user_id: "U_ZHEN",
+        channel_id: "C123CHANNEL",
+        challenge_message_ts: "1753822800.000001",
+        reply_message_ts: "1753822801.000001",
+        verification_evidence_sha256: digest("audit-chain-observation"),
+      },
+      adapter_id: "slack-reactions",
+      adapter_instance_id: "founder-approvals",
+      adapter_version: "1.0.0",
+      authority_checked_at: NOW,
+      now: NOW,
+    });
+
+    const rows = integrationDatabase
+      .prepare(
+        `SELECT * FROM organization_integration_audit ORDER BY audit_sequence`,
+      )
+      .all() as Array<
+      Record<string, unknown> & {
+        entry_sha256: string;
+        previous_entry_sha256: string | null;
+        detail_json: string;
+        detail_sha256: string;
+      }
+    >;
+    expect(rows.map((row) => row["action"])).toEqual([
+      "organization_tool.slack.onboarded",
+      "slack_identity_link.completed",
+    ]);
+    let previous: string | null = null;
+    for (const row of rows) {
+      // entry_sha256 covers every stored column except itself and
+      // organization_id, plus the parsed detail object appendAudit hashed.
+      const entry: Record<string, unknown> = {
+        ...row,
+        detail: JSON.parse(row.detail_json) as Record<string, unknown>,
+      };
+      delete entry["entry_sha256"];
+      delete entry["organization_id"];
+      expect(row.previous_entry_sha256).toBe(previous);
+      expect(canonicalSha256(entry)).toBe(row.entry_sha256);
+      expect(sha256Digest(row.detail_json)).toBe(row.detail_sha256);
+      previous = row.entry_sha256;
+    }
     repository.close();
   });
 });

@@ -1,4 +1,4 @@
-import { createHash, randomUUID } from "node:crypto";
+import { randomUUID } from "node:crypto";
 import type Database from "better-sqlite3";
 import {
   AUTHORITY_FILE_SECRET_BACKEND,
@@ -26,6 +26,11 @@ import {
   type OrganizationSecretReference,
   type PendingSlackIdentityLinkChallenge,
 } from "../application/contracts.js";
+import {
+  canonicalJson,
+  canonicalSha256,
+  sha256Digest,
+} from "../canonical/canonical-json.js";
 
 interface AuditTail {
   audit_sequence: number;
@@ -126,23 +131,16 @@ export class OrganizationIntegrationConflictError extends Error {
   }
 }
 
-function stable(value: unknown): unknown {
-  if (Array.isArray(value)) return value.map(stable);
-  if (value === null || typeof value !== "object") return value;
-  return Object.fromEntries(
-    Object.entries(value as Record<string, unknown>)
-      .sort(([left], [right]) => left.localeCompare(right))
-      .map(([key, nested]) => [key, stable(nested)]),
-  );
-}
-
-function canonicalJson(value: unknown): string {
-  return JSON.stringify(stable(value));
-}
-
+/**
+ * Strings are hashed as their own bytes rather than as canonical JSON. Live
+ * `state_sha256`, `nonce_sha256`, `pkce_challenge_sha256`,
+ * `admin_session_sha256` and `public_configuration_sha256` values were written
+ * that way; quoting them here would break every stored digest.
+ */
 function digest(value: unknown): `sha256:${string}` {
-  const bytes = typeof value === "string" ? value : canonicalJson(value);
-  return `sha256:${createHash("sha256").update(bytes).digest("hex")}`;
+  return typeof value === "string"
+    ? sha256Digest(value)
+    : canonicalSha256(value);
 }
 
 function id(prefix: string): string {
@@ -161,8 +159,10 @@ function validatedPublicConfiguration(
   row: ToolConnectionOverviewRow,
 ): Record<string, unknown> {
   let parsed: unknown;
+  let canonical: string;
   try {
     parsed = JSON.parse(row.public_configuration_json);
+    canonical = canonicalJson(parsed);
   } catch {
     throw new Error("stored organization tool configuration is invalid");
   }
@@ -170,7 +170,7 @@ function validatedPublicConfiguration(
     parsed === null ||
     typeof parsed !== "object" ||
     Array.isArray(parsed) ||
-    canonicalJson(parsed) !== row.public_configuration_json ||
+    canonical !== row.public_configuration_json ||
     digest(row.public_configuration_json) !== row.public_configuration_sha256
   ) {
     throw new Error("stored organization tool configuration is invalid");
@@ -187,8 +187,10 @@ function validatedSlackToolData(
 } {
   const configuration = validatedPublicConfiguration(row);
   let scopes: unknown;
+  let canonicalScopes: string;
   try {
     scopes = JSON.parse(row.granted_scopes_json);
+    canonicalScopes = canonicalJson(scopes);
   } catch {
     throw new Error(error);
   }
@@ -196,7 +198,7 @@ function validatedSlackToolData(
     row.secret_backend_id !== AUTHORITY_FILE_SECRET_BACKEND ||
     !Array.isArray(scopes) ||
     !scopes.every((scope) => typeof scope === "string") ||
-    canonicalJson(scopes) !== row.granted_scopes_json ||
+    canonicalScopes !== row.granted_scopes_json ||
     digest(scopes) !== row.granted_scopes_sha256
   ) {
     throw new Error(error);

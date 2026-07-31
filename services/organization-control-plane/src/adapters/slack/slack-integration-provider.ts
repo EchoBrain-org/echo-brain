@@ -1,4 +1,4 @@
-import { createHash } from 'node:crypto';
+import { canonicalSha256 } from '../../canonical/canonical-json.js';
 import type {
   ObservedSlackIdentityLinkChallenge,
   ObserveSlackIdentityLinkChallengeInput,
@@ -23,22 +23,6 @@ const CHALLENGE_CODE =
   /^[A-Za-z0-9_-]{42}[AEIMQUYcgkosw048]$/;
 const MAXIMUM_CHALLENGE_LIFETIME_MS = 15 * 60 * 1_000;
 const MAXIMUM_CHALLENGE_THREAD_MESSAGES = 100;
-
-function stable(value: unknown): unknown {
-  if (Array.isArray(value)) return value.map(stable);
-  if (value === null || typeof value !== 'object') return value;
-  return Object.fromEntries(
-    Object.entries(value as Record<string, unknown>)
-      .sort(([left], [right]) => left.localeCompare(right))
-      .map(([key, nested]) => [key, stable(nested)]),
-  );
-}
-
-function digest(value: unknown): `sha256:${string}` {
-  return `sha256:${createHash('sha256')
-    .update(JSON.stringify(stable(value)))
-    .digest('hex')}`;
-}
 
 function record(value: unknown, label: string): Record<string, unknown> {
   if (value === null || typeof value !== 'object' || Array.isArray(value)) {
@@ -448,7 +432,7 @@ export class SlackWebIntegrationProvider implements SlackIntegrationProvider {
       bot_id: requiredId(response.value['bot_id'], 'bot_id', 'B'),
       app_id: optionalId(response.value['app_id'], 'app_id', 'A'),
       granted_scopes: response.scopes,
-      verification_evidence_sha256: digest({
+      verification_evidence_sha256: canonicalSha256({
         method: 'slack_auth_test',
         team_id: response.value['team_id'],
         enterprise_id: response.value['enterprise_id'] ?? null,
@@ -543,7 +527,7 @@ export class SlackWebIntegrationProvider implements SlackIntegrationProvider {
     return Object.freeze({
       channel_id: observedChannelId,
       team_id: contextTeamId,
-      verification_evidence_sha256: digest({
+      verification_evidence_sha256: canonicalSha256({
         method: 'slack_conversations_info',
         channel_id: observedChannelId,
         context_team_id: contextTeamId,
@@ -598,7 +582,7 @@ export class SlackWebIntegrationProvider implements SlackIntegrationProvider {
     return Object.freeze({
       team_id: teamId,
       user_id: observedUserId,
-      verification_evidence_sha256: digest({
+      verification_evidence_sha256: canonicalSha256({
         method: 'slack_users_info',
         team_id: teamId,
         user_id: observedUserId,
@@ -963,7 +947,7 @@ export class SlackWebIntegrationProvider implements SlackIntegrationProvider {
       channel_id: input.channel_id,
       challenge_message_ts: input.challenge_message_ts,
       reply_message_ts: match.replyMessageTs,
-      verification_evidence_sha256: digest({
+      verification_evidence_sha256: canonicalSha256({
         method: 'slack_conversations_replies_identity_link',
         connection_evidence_sha256:
           connection.verification_evidence_sha256,
@@ -976,7 +960,7 @@ export class SlackWebIntegrationProvider implements SlackIntegrationProvider {
         reply_message_ts: match.replyMessageTs,
         user_id: human.user_id,
         marker: challenge.marker,
-        challenge_code_sha256: digest(input.challenge_code),
+        challenge_code_sha256: canonicalSha256(input.challenge_code),
       }),
     });
   }

@@ -36,10 +36,19 @@
       "allowed_node_builtins": []
     },
     {
+      "name": "control-plane-canonical-json-is-self-contained",
+      "from": "services/organization-control-plane/src/canonical/**",
+      "allowed_imports": ["services/organization-control-plane/src/canonical/**"],
+      "allowed_workspace_packages": [],
+      "allowed_external_packages": [],
+      "allowed_node_builtins": ["crypto"]
+    },
+    {
       "name": "control-plane-persistence-depends-on-contracts",
       "from": "services/organization-control-plane/src/persistence/**",
       "allowed_imports": [
         "services/organization-control-plane/src/application/**",
+        "services/organization-control-plane/src/canonical/**",
         "services/organization-control-plane/src/persistence/**"
       ],
       "allowed_workspace_packages": [],
@@ -51,11 +60,12 @@
       "from": "services/organization-control-plane/src/adapters/**",
       "allowed_imports": [
         "services/organization-control-plane/src/adapters/**",
-        "services/organization-control-plane/src/application/**"
+        "services/organization-control-plane/src/application/**",
+        "services/organization-control-plane/src/canonical/**"
       ],
       "allowed_workspace_packages": [],
       "allowed_external_packages": [],
-      "allowed_node_builtins": ["crypto"]
+      "allowed_node_builtins": []
     },
     {
       "name": "control-plane-security-implements-contracts",
