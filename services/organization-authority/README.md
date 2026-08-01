@@ -111,7 +111,9 @@ eleven flat strings — `command_id` (`adm_` UUIDv4, the idempotency handle),
 identities and creates the employee's identity link, adapter binding, and
 `approve`/`reject` grants together, so for pilot employees it replaces rather
 than follows the manual link ceremony, which by itself leaves every reaction
-denied. The call is audited as `slack_approval.bootstrap`.
+denied. In v1 the target membership must own the enrolled installation;
+cross-member targets are rejected before any Slack call. The call is audited
+as `slack_approval.bootstrap`.
 
 ## Ingress contract
 

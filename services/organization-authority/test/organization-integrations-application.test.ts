@@ -904,6 +904,37 @@ describe('composed organization integrations application', () => {
     }
   });
 
+  it('refuses a bootstrap target that does not own the enrolled installation', async () => {
+    const { repository, dependencies, application } = applicationFixture();
+    const persist = vi.spyOn(repository, 'bootstrapSlackApproval');
+    try {
+      await onboardSlackOrganizationTool(application);
+      const context = adminContext();
+      dependencies.integrationAdminContext.mockReturnValue({
+        ...context,
+        installation: {
+          ...context.installation,
+          membership_id: 'mem_00000000-0000-4000-8000-000000000000',
+        },
+      });
+      await expect(bootstrapRequest(application)).rejects.toMatchObject({
+        name: 'AuthorityOperationError',
+        code: 'invalid_request',
+        message:
+          'Slack bootstrap target membership must own the enrolled installation',
+      });
+      expect(dependencies.slack.verifyConnection).toHaveBeenCalledTimes(1);
+      expect(dependencies.slack.verifyChannel).toHaveBeenCalledTimes(1);
+      expect(dependencies.slack.verifyHuman).not.toHaveBeenCalled();
+      expect(persist).not.toHaveBeenCalled();
+      expect(application.overview().identity_links).toEqual([]);
+      expect(application.overview().adapter_bindings).toEqual([]);
+      expect(application.overview().permission_grants).toEqual([]);
+    } finally {
+      repository.close();
+    }
+  });
+
   it('requires the organization Slack tool before employee approval linking', async () => {
     const { repository, dependencies, application } = applicationFixture();
     try {

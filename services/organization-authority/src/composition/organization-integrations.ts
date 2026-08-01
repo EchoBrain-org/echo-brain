@@ -874,6 +874,12 @@ export class ComposedOrganizationIntegrationsApplication
       request.target_membership_id,
       request.installation_id,
     );
+    if (before.target.membership_id !== before.installation.membership_id) {
+      throw new AuthorityOperationError(
+        'invalid_request',
+        'Slack bootstrap target membership must own the enrolled installation',
+      );
+    }
     const { connection, channel } = await verifySlackOrganizationTool(
       this.options.slack,
       organizationSlackToken,
