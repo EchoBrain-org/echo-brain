@@ -98,9 +98,11 @@ function canonicalize(
  *
  * This mirrors `packages/federation-protocol/src/canonical-json.ts`, which the
  * control plane may not import (`allowed_workspace_packages` is empty). The
- * two copies are not cross-checked against each other by any test; each is
- * pinned only by its own golden vectors, so a divergence between them would
- * have to be caught by reading both.
+ * two copies are cross-checked by
+ * `tests/architecture/canonical-json-conformance.test.ts`, which runs the same
+ * vectors and the same rejection cases through both and requires byte-identical
+ * output and matched refusal messages. Fix a divergence by correcting the copy
+ * that is wrong, never by importing the shared implementation here.
  */
 export function canonicalJson(value: unknown): string {
   return canonicalize(value, "$", new Set<object>(), 0);

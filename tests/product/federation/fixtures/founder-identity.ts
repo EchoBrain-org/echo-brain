@@ -11,17 +11,8 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { GranolaApiClient } from "../../../../src/adapters/meeting-sources/granola/index.js";
-import type {
-  SlackAuthIdentity,
-  SlackDirectMessage,
-  SlackPostMessageInput,
-  SlackPostedMessage,
-  SlackReaction,
-} from "../../../../src/adapters/shared/slack/slack-web-api-client.js";
 import type { ProductRuntimeConfig } from "../../../../src/product/config.js";
 import type {
-  ActiveIdentityBundleV1,
   AdapterBindingV1,
   LocalConnectionRegistryV1,
   LocalIdentityManifestV1,
@@ -29,14 +20,12 @@ import type {
   PublicationSnapshotV1,
   ToolConnectionV1,
 } from "../../../../src/product/federation/contracts.js";
-import type { FounderBootstrapCeremonyDependencies } from "../../../../src/product/federation/bootstrap/founder-bootstrap-ceremony.js";
 import type {
   InstallationKeyDescriptor,
   InstallationSigner,
 } from "../../../../src/product/federation/foundation/installation-signer.js";
 import { canonicalSha256 } from "../../../../src/product/federation/foundation/canonical-json.js";
 import { normalizeP256LowS, p256KeyId } from "../../../../src/product/federation/foundation/signature-profile.js";
-import type { SlackDmChallengeApi } from "../../../../src/product/federation/bootstrap/slack-dm-challenge.js";
 
 export type JsonRecord = Record<string, unknown>;
 
@@ -152,33 +141,7 @@ export function manualRuntimeConfig(stateDir: string): ProductRuntimeConfig {
   };
 }
 
-export function founderRuntimeConfig(stateDir: string): ProductRuntimeConfig {
-  const slackCredential = `file:${join(stateDir, "credentials", "slack-bot-token")}`;
-  return {
-    schema_version: 1,
-    lane: "team-product",
-    state_dir: stateDir,
-    meeting_sources: [{
-      adapter_id: "granola", instance_id: "primary",
-      credential_ref: `file:${join(stateDir, "credentials", "granola-api-key")}`,
-      settings: { page_size: 1 },
-    }],
-    decision_processor: { adapter_id: "structured-text", instance_id: "primary", settings: {} },
-    delivery_surfaces: [{
-      adapter_id: "slack", instance_id: "team-decisions",
-      credential_ref: slackCredential, settings: { channel_id: "C123DECISIONS" },
-    }],
-    approval_mode: "adapter",
-    approval_surface: {
-      adapter_id: "slack-reactions",
-      instance_id: "founder-approval",
-      credential_ref: slackCredential,
-      settings: { channel_id: "C123APPROVALS", reviewer: { slack_user_id: "U123FOUNDER", name: "Zhenye" } },
-    },
-  };
-}
-
-export function testPublication(
+function testPublication(
   organizationId: string,
 ): PublicationSnapshotV1 {
   return {
@@ -205,7 +168,7 @@ interface TestConnectionOptions {
   credentialGuard: ToolConnectionV1["generations"][number]["local_credential_guard"];
 }
 
-export function testConnection(options: TestConnectionOptions): ToolConnectionV1 {
+function testConnection(options: TestConnectionOptions): ToolConnectionV1 {
   return {
     connection_id: options.connectionId,
     organization_id: options.organizationId,
@@ -392,129 +355,9 @@ export function testRegistry(options: {
   };
 }
 
-export function testPointer(options: {
-  manifestId: string;
-  manifestPath: string;
-  manifestSha256: `sha256:${string}`;
-  registryId: string;
-  registryPath: string;
-  registrySha256: `sha256:${string}`;
-  policyId: string;
-  policyPath: string;
-  policySha256: `sha256:${string}`;
-  installationId: string;
-  activatedAt: string;
-  activationReason?: ActiveIdentityBundleV1["activation_reason"];
-}): Omit<ActiveIdentityBundleV1, "integrity"> {
-  return {
-    schema_version: 1,
-    kind: "echo-active-identity-bundle",
-    manifest: {
-      manifest_id: options.manifestId,
-      path: options.manifestPath,
-      sha256: options.manifestSha256,
-    },
-    connection_registry: {
-      registry_id: options.registryId,
-      revision: 1,
-      path: options.registryPath,
-      sha256: options.registrySha256,
-    },
-    default_publication_policy: {
-      policy_id: options.policyId,
-      version: 1,
-      path: options.policyPath,
-      sha256: options.policySha256,
-    },
-    active_installation_id: options.installationId,
-    activated_at: options.activatedAt,
-    activation_reason: options.activationReason ?? "founder-bootstrap",
-  };
-}
-
-export class TestSlackChallengeApi implements SlackDmChallengeApi {
-  readonly identity: SlackAuthIdentity = {
-    team_id: "T123TEAM",
-    enterprise_id: null,
-    user_id: "U123BOT",
-    bot_id: "B123BOT",
-    app_id: "A123APP",
-  };
-  reactionObserved = false;
-  authCalls = 0;
-  readonly posted: SlackPostMessageInput[] = [];
-
-  async authIdentity(): Promise<SlackAuthIdentity> {
-    this.authCalls += 1;
-    return this.identity;
-  }
-
-  async openDirectMessage(userId: string): Promise<SlackDirectMessage> {
-    return { channel_id: "D123FOUNDER", user_id: userId };
-  }
-
-  async postMessage(input: SlackPostMessageInput): Promise<SlackPostedMessage> {
-    this.posted.push(input);
-    return { channel: String(input.channel), ts: "1752966000.000001" };
-  }
-
-  async reactionsGet(): Promise<readonly SlackReaction[]> {
-    return this.reactionObserved
-      ? [{ name: "white_check_mark", users: ["U123FOUNDER"], count: 1 }]
-      : [];
-  }
-}
-
-export class TestGranolaApi implements GranolaApiClient {
-  listCalls = 0;
-  failNext = false;
-
-  async listNotes() {
-    this.listCalls += 1;
-    if (this.failNext) {
-      this.failNext = false;
-      throw new Error("temporary Granola bootstrap failure");
-    }
-    return {
-      notes: [{ id: "not_bootstrap_evidence" }],
-      hasMore: true,
-      cursor: "not-persisted",
-    };
-  }
-
-  async getNote(): Promise<never> {
-    throw new Error("bootstrap must not fetch Granola note detail");
-  }
-}
-
-export function founderCeremonyFixture(stateDir: string, now: string) {
-  const slack = new TestSlackChallengeApi();
-  const granola = new TestGranolaApi();
-  const signer = new TestHardwareSigner();
-  const credentials = new Map([
-    [`file:${join(stateDir, "credentials", "slack-bot-token")}`, "xoxb-test-slack"],
-    [`file:${join(stateDir, "credentials", "granola-api-key")}`, "grn_test_granola"],
-  ]);
-  const dependencies: FounderBootstrapCeremonyDependencies = {
-    signer,
-    credentialResolver: (reference) => credentials.get(reference),
-    slackApiFactory: () => slack,
-    granolaApiFactory: () => granola,
-    loadBuildIdentity: () => TEST_BUILD,
-    now: () => now,
-    sessionIdFactory: () => "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
-  };
-  return {
-    config: founderRuntimeConfig(stateDir),
-    slack,
-    granola,
-    signer,
-    credentials,
-    dependencies,
-  };
-}
-
 export const EXACT_SESSION_AT = "2026-07-19T23:00:00.000Z";
+/** Inside the 15-minute Slack DM challenge lifetime the ticket enforces. */
+export const EXACT_SESSION_EXPIRES_AT = "2026-07-19T23:05:00.000Z";
 export const EXACT_SESSION_DIGEST = `sha256:${"a".repeat(64)}`;
 export const EXACT_SESSION_IDS = {
   organization_id: "org_aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
@@ -531,7 +374,9 @@ function exactCredentialGuard(reference: string): JsonRecord {
   return {
     reference,
     algorithm: "sha256-salted",
-    salt_base64: "c2FsdC1zYWx0LXNhbHQ=",
+    // 17 bytes: the credential guard requires a 16-64 byte salt, so this stays
+    // long enough for full validation, not only the exact-key shape check.
+    salt_base64: "ZWNoby1mb3VuZGVyLXNhbHQ=",
     digest: EXACT_SESSION_DIGEST,
     exportable: false,
   };
@@ -568,7 +413,9 @@ function exactProviderIdentity(provider: "slack" | "granola"): JsonRecord {
 
 export function exactSessionBindings(at = EXACT_SESSION_AT): JsonRecord[] {
   const items = [
-    ["11111111-1111-4111-8111-111111111111", "meeting-source", "granola", "primary", "con_11111111-1111-4111-8111-111111111111", { base_url: "https://api.granola.test/v1", request_timeout_ms: 15_000, page_size: 1, cursor_overlap_ms: 0 }],
+    // The Granola meeting source must bind the Granola connection seed
+    // (con_2222...); the Slack seed (con_1111...) belongs to the Slack surfaces.
+    ["11111111-1111-4111-8111-111111111111", "meeting-source", "granola", "primary", "con_22222222-2222-4222-8222-222222222222", { base_url: "https://api.granola.test/v1", request_timeout_ms: 15_000, page_size: 1, cursor_overlap_ms: 0 }],
     ["22222222-2222-4222-8222-222222222222", "decision-processor", "structured-text", "primary", null, {}],
     ["33333333-3333-4333-8333-333333333333", "delivery-surface", "slack", "team-decisions", "con_11111111-1111-4111-8111-111111111111", { channel_id: "C123DECISIONS", request_timeout_ms: 60_000 }],
     ["44444444-4444-4444-8444-444444444444", "approval-surface", "slack-reactions", "founder-approval", "con_11111111-1111-4111-8111-111111111111", { channel_id: "C123APPROVALS", reviewer: { slack_user_id: "U123FOUNDER", name: "Founder" }, approve_reaction: "white_check_mark", reject_reaction: "x", request_timeout_ms: 60_000 }],
@@ -581,7 +428,9 @@ export function exactSessionBindings(at = EXACT_SESSION_AT): JsonRecord[] {
     connection_id: connection,
     connection_generation: connection === null ? null : 1,
     configuration_snapshot: settings,
-    configuration_sha256: EXACT_SESSION_DIGEST,
+    // Derived, not pinned: full session validation recomputes this digest from
+    // the snapshot, and the exact-shape contract only constrains the keys.
+    configuration_sha256: canonicalSha256(settings),
     created_at: at,
     ended_at: null,
     status: "active",
@@ -656,7 +505,7 @@ function exactPlan(): JsonRecord {
 
 export function completeBootstrapSessionShapeFixture(): JsonRecord {
   const bindings = exactSessionBindings();
-  const challenge = { schema_version: 1, kind: "echo-slack-dm-challenge-ticket", provider: "slack", tenant_id: "T123TEAM", enterprise_id: null, subject_id: "U123FOUNDER", bot_user_id: "U123BOT", bot_id: "B123BOT", app_id: "A123APP", auth_test_evidence_sha256: EXACT_SESSION_DIGEST, channel_id: "D123FOUNDER", message_ts: "1752966000.000001", reaction_name: "white_check_mark", challenge_sha256: EXACT_SESSION_DIGEST, issued_at: EXACT_SESSION_AT, expires_at: EXACT_SESSION_AT };
+  const challenge = { schema_version: 1, kind: "echo-slack-dm-challenge-ticket", provider: "slack", tenant_id: "T123TEAM", enterprise_id: null, subject_id: "U123FOUNDER", bot_user_id: "U123BOT", bot_id: "B123BOT", app_id: "A123APP", auth_test_evidence_sha256: EXACT_SESSION_DIGEST, channel_id: "D123FOUNDER", message_ts: "1752966000.000001", reaction_name: "white_check_mark", challenge_sha256: EXACT_SESSION_DIGEST, issued_at: EXACT_SESSION_AT, expires_at: EXACT_SESSION_EXPIRES_AT };
   const summaryBindings = bindings.map(({ created_at: _a, ended_at: _e, status: _s, ...binding }) => binding);
   return {
     schema_version: 1,
@@ -687,7 +536,7 @@ export function completeBootstrapSessionShapeFixture(): JsonRecord {
       granola: { provider: "granola", provider_identity: exactProviderIdentity("granola"), evidence: { schema_version: 1, kind: "echo-granola-first-capture-evidence", provider: "granola", operation: "list_notes", requested_page_size: 1, notes_observed: 1, observed_note_id_sha256: EXACT_SESSION_DIGEST, response_has_more: false, observed_at: EXACT_SESSION_AT } },
     },
     challenge,
-    verification: { evidence_input: { schema_version: 1, kind: "echo-slack-dm-challenge-evidence-input", provider: "slack", tenant: { team_id: "T123TEAM", enterprise_id: null }, subject: { user_id: "U123FOUNDER" }, bot: { user_id: "U123BOT", bot_id: "B123BOT", app_id: "A123APP", auth_test_evidence_sha256: EXACT_SESSION_DIGEST }, challenge: { channel_id: "D123FOUNDER", message_ts: "1752966000.000001", nonce_sha256: EXACT_SESSION_DIGEST, issued_at: EXACT_SESSION_AT, expires_at: EXACT_SESSION_AT }, assertion: { kind: "reaction", name: "white_check_mark", observed_at: EXACT_SESSION_AT } }, evidence_sha256: EXACT_SESSION_DIGEST, claim_assertion: exactClaim() },
+    verification: { evidence_input: { schema_version: 1, kind: "echo-slack-dm-challenge-evidence-input", provider: "slack", tenant: { team_id: "T123TEAM", enterprise_id: null }, subject: { user_id: "U123FOUNDER" }, bot: { user_id: "U123BOT", bot_id: "B123BOT", app_id: "A123APP", auth_test_evidence_sha256: EXACT_SESSION_DIGEST }, challenge: { channel_id: "D123FOUNDER", message_ts: "1752966000.000001", nonce_sha256: EXACT_SESSION_DIGEST, issued_at: EXACT_SESSION_AT, expires_at: EXACT_SESSION_EXPIRES_AT }, assertion: { kind: "reaction", name: "white_check_mark", observed_at: EXACT_SESSION_AT } }, evidence_sha256: EXACT_SESSION_DIGEST, claim_assertion: exactClaim() },
     confirmation: { summary: { organization: { organization_id: EXACT_SESSION_IDS.organization_id, display_name: "Echo" }, founder: { principal_id: EXACT_SESSION_IDS.principal_id, membership_id: EXACT_SESSION_IDS.membership_id, display_name: "Founder", slack_team_id: "T123TEAM", slack_user_id: "U123FOUNDER", assurance: "provider_challenge_observed" }, installation: { installation_id: EXACT_SESSION_IDS.installation_id, device_id: EXACT_SESSION_IDS.device_id, key_id: EXACT_SESSION_DIGEST, key_protection: "secure-enclave" }, providers: { slack: { team_id: "T123TEAM", assurance: "provider_verified" }, granola: { tenant: null, assurance: "credential_observed" } }, configuration: { runtime_config_sha256: EXACT_SESSION_DIGEST, bindings: summaryBindings }, publication: exactPublication(), cutover: { before: "disposable_test_or_legacy_imported_unverified", after: "native_attributed_only_when_strict_green" } }, confirmation_sha256: EXACT_SESSION_DIGEST, ready_at: EXACT_SESSION_AT },
     commit: { confirmed_at: EXACT_SESSION_AT, confirmation_sha256: EXACT_SESSION_DIGEST, plan_sha256: EXACT_SESSION_DIGEST, plan: exactPlan() },
     result: { completed_at: EXACT_SESSION_AT, organization_id: EXACT_SESSION_IDS.organization_id, installation_id: EXACT_SESSION_IDS.installation_id, manifest_id: EXACT_SESSION_IDS.manifest_id, active_bundle_sha256: EXACT_SESSION_DIGEST },

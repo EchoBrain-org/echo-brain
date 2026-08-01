@@ -6,7 +6,7 @@ import { isAbsolute, join } from "node:path";
 import { parseArgs } from "node:util";
 import type { Writable } from "node:stream";
 import { fileURLToPath } from "node:url";
-import type { AdapterInstanceConfig, CoreStateStore } from "../core/index.js";
+import type { AdapterInstanceConfig } from "../core/index.js";
 import {
   assertConfiguredAdapterFactoriesAvailable,
   createConfiguredAdapterRegistry,
@@ -14,6 +14,7 @@ import {
 } from "./adapter-factories.js";
 import {
   assertProductAccess,
+  assertRetiredFounderProvenanceRefused,
   prepareProductComposition,
   prepareProductStateRoot,
   resolveProductClock,
@@ -28,10 +29,7 @@ import {
   type ProductRuntimeConfig,
 } from "./config.js";
 import { createDefaultAdapterFactories } from "./default-adapters.js";
-import {
-  DecisionNodeStore,
-  type DecisionNodeFederationCapture,
-} from "./approval/decision-node-store.js";
+import { DecisionNodeStore } from "./approval/decision-node-store.js";
 import {
   ProductRuntimeFailure,
   startProductRuntime,
@@ -82,35 +80,8 @@ import {
   verifyOrganizationAuthorityPin,
 } from "./organization/index.js";
 import { createProductCredentialResolver } from "./credentials.js";
-import {
-  abortFounderBootstrap,
-  beginFounderBootstrap,
-  commitFounderBootstrapCeremony,
-  statusFounderBootstrap,
-  type FounderBootstrapCeremonyDependencies,
-} from "./federation/bootstrap/founder-bootstrap-ceremony.js";
-import {
-  mintFounderBootstrapIds,
-  type FounderBootstrapIds,
-} from "./federation/bootstrap/bootstrap.js";
-import { FederatedApprovalCapture } from "./federation/approval-capture.js";
-import {
-  openFounderFederationRuntime,
-  type FounderFederationRuntime,
-} from "./federation/runtime-wiring.js";
 import { ActiveIdentityBundleStore } from "./federation/identity/active-identity-bundle-store.js";
-import { requiresFounderFederation } from "./federation/cutover-fence.js";
-import {
-  FounderIndependentCopyStore,
-  type IndependentCopyPlatformInspector,
-} from "./federation/independent-copy-store.js";
-import { IdentityLineageStore } from "./federation/identity-lineage-store.js";
-import { FederatedOutboxStore } from "./federation/outbox-store.js";
-import {
-  assertLegacyProcessingBoundaryReady,
-  commitLegacyClassificationReport,
-  recoverLegacyClassificationCutoverAt,
-} from "./federation/legacy-classification.js";
+import { RETIRED_FOUNDER_PROVENANCE_MESSAGE } from "./federation/cutover-fence.js";
 import { resolveProductStatePaths } from "./paths.js";
 import { SqliteCoreStateStore } from "./storage/sqlite-core-state-store.js";
 import { readFileNoFollow } from "./secure-local-files.js";
@@ -140,11 +111,6 @@ export interface ProductCliDependencies {
   operator?: Partial<ProductOperatorDependencies>;
   doctorHealthTimeoutMs?: number;
   identityCheck?: IdentityCheckDependencies;
-  /** Complete command-scoped federation seam for identity-active tests/hosts. */
-  federationRuntime?: FounderFederationRuntime;
-  founderBootstrap?: FounderBootstrapCeremonyDependencies;
-  /** Test/platform seam for the protected independent-copy volume proof. */
-  independentCopyInspector?: IndependentCopyPlatformInspector;
   acquireLifecycleLock?: (
     stateDirectory: string,
     kind: ProductLifecycleLockKind,
@@ -171,9 +137,7 @@ interface ParsedCommand {
     | "status"
     | "doctor"
     | "identity-check"
-    | "identity-bootstrap"
     | "organization"
-    | "export"
     | "service"
     | "backup"
     | "restore"
@@ -190,15 +154,6 @@ interface ParsedCommand {
   backupDirectory?: string;
   operationId?: string;
   strictIdentityCheck?: boolean;
-  identityBootstrapAction?: "begin" | "status" | "commit" | "abort";
-  organizationName?: string;
-  principalName?: string;
-  slackUserId?: string;
-  deviceClass?: "byod" | "managed";
-  bootstrapSessionId?: string;
-  confirmationSha256?: string;
-  renewChallenge?: boolean;
-  independentCopyRoot?: string;
   allowExportableSoftwareKey?: boolean;
   organizationAction?:
     | "enroll"
@@ -233,17 +188,12 @@ Usage:
   echo-brain status --config <absolute-path>
   echo-brain doctor --config <absolute-path>
   echo-brain identity-check --config <absolute-path> [--strict]
-  echo-brain identity-bootstrap begin --config <absolute-path> --organization-name <name> --principal-name <name> --slack-user-id <U...|W...> --allow-exportable-software-key [--device-class <byod|managed>]
-  echo-brain identity-bootstrap status --config <absolute-path> --session <uuid> [--renew-challenge]
-  echo-brain identity-bootstrap commit --config <absolute-path> --session <uuid> --confirm <sha256:...> --independent-copy-root <absolute-path>
-  echo-brain identity-bootstrap abort --config <absolute-path> --session <uuid> --confirm <installation-key-sha256>
   echo-brain organization enroll --config <absolute-path> --invitation <absolute-path> --authority-pin <sha256:...> [--authority-ca <absolute-path>] --allow-exportable-software-key
   echo-brain organization status --config <absolute-path>
   echo-brain organization refresh --config <absolute-path>
   echo-brain organization rebind --config <absolute-path> --authority-url <https-origin> --authority-pin <sha256:...> [--authority-ca <absolute-path>]
   echo-brain organization slack-link-begin --config <absolute-path>
   echo-brain organization slack-link-complete --config <absolute-path> --challenge-attempt <cat_...> --challenge-message-ts <Slack timestamp>  # reads ECHO_SLACK_LINK_CODE
-  echo-brain export --config <absolute-path>
   echo-brain service <install|start|stop|restart|status|uninstall> --config <absolute-path>
   echo-brain backup --config <absolute-path> --backup-root <absolute-path> [--id <operation-id>]
   echo-brain restore --config <absolute-path> --backup <absolute-path> --backup-root <absolute-path> --id <operation-id>
@@ -272,9 +222,7 @@ function parseCommand(argv: readonly string[]): ParsedCommand {
     command !== "status" &&
     command !== "doctor" &&
     command !== "identity-check" &&
-    command !== "identity-bootstrap" &&
     command !== "organization" &&
-    command !== "export" &&
     command !== "service" &&
     command !== "backup" &&
     command !== "restore" &&
@@ -287,12 +235,10 @@ function parseCommand(argv: readonly string[]): ParsedCommand {
     command !== "run"
   ) {
     throw new Error(
-      "usage: echo-brain <onboard|init|reconfigure|status|doctor|identity-check|identity-bootstrap|organization|export|service|backup|restore|validate-config|selftest|run-once|run|approvals|approve|reject> --config <absolute-path>",
+      "usage: echo-brain <onboard|init|reconfigure|status|doctor|identity-check|organization|service|backup|restore|validate-config|selftest|run-once|run|approvals|approve|reject> --config <absolute-path>",
     );
   }
   let serviceAction: ProductServiceAction | undefined;
-  let identityBootstrapAction:
-    "begin" | "status" | "commit" | "abort" | undefined;
   let organizationAction:
     | "enroll"
     | "status"
@@ -317,21 +263,6 @@ function parseCommand(argv: readonly string[]): ParsedCommand {
       );
     }
     serviceAction = action;
-    optionOffset = 2;
-  }
-  if (command === "identity-bootstrap") {
-    const action = argv[1];
-    if (
-      action !== "begin" &&
-      action !== "status" &&
-      action !== "commit" &&
-      action !== "abort"
-    ) {
-      throw new Error(
-        "usage: echo-brain identity-bootstrap <begin|status|commit|abort> --config <absolute-path>",
-      );
-    }
-    identityBootstrapAction = action;
     optionOffset = 2;
   }
   if (command === "organization") {
@@ -367,11 +298,6 @@ function parseCommand(argv: readonly string[]): ParsedCommand {
       "organization-name": { type: "string" },
       "principal-name": { type: "string" },
       "slack-user-id": { type: "string" },
-      "device-class": { type: "string" },
-      session: { type: "string" },
-      confirm: { type: "string" },
-      "renew-challenge": { type: "boolean" },
-      "independent-copy-root": { type: "string" },
       "allow-exportable-software-key": { type: "boolean" },
       invitation: { type: "string" },
       "authority-pin": { type: "string" },
@@ -393,9 +319,7 @@ function parseCommand(argv: readonly string[]): ParsedCommand {
       command === "status" ||
       command === "doctor" ||
       command === "identity-check" ||
-      command === "identity-bootstrap" ||
       command === "organization" ||
-      command === "export" ||
       command === "service" ||
       command === "service-run" ||
       command === "backup" ||
@@ -410,81 +334,13 @@ function parseCommand(argv: readonly string[]): ParsedCommand {
     if (!isAbsolute(parsed.values["state-dir"]))
       throw new Error("--state-dir must be an absolute path");
   }
-  if (command === "identity-bootstrap") {
-    const deviceClass = parsed.values["device-class"];
-    if (
-      deviceClass !== undefined &&
-      deviceClass !== "byod" &&
-      deviceClass !== "managed"
-    ) {
-      throw new Error("--device-class must be byod or managed");
-    }
-    if (identityBootstrapAction === "begin") {
-      if (
-        parsed.values["organization-name"] === undefined ||
-        parsed.values["principal-name"] === undefined ||
-        parsed.values["slack-user-id"] === undefined
-      ) {
-        throw new Error(
-          "identity-bootstrap begin requires --organization-name, --principal-name, and --slack-user-id",
-        );
-      }
-    } else if (parsed.values.session === undefined) {
-      throw new Error(
-        `identity-bootstrap ${identityBootstrapAction} requires --session`,
-      );
-    }
-    if (
-      (identityBootstrapAction === "commit" ||
-        identityBootstrapAction === "abort") &&
-      parsed.values.confirm === undefined
-    ) {
-      throw new Error(
-        `identity-bootstrap ${identityBootstrapAction} requires --confirm`,
-      );
-    }
-    if (
-      parsed.values["renew-challenge"] === true &&
-      identityBootstrapAction !== "status"
-    ) {
-      throw new Error(
-        "--renew-challenge is only valid with identity-bootstrap status",
-      );
-    }
-    if (
-      parsed.values["independent-copy-root"] !== undefined &&
-      identityBootstrapAction !== "commit"
-    ) {
-      throw new Error(
-        "--independent-copy-root is only valid with identity-bootstrap commit",
-      );
-    }
-    if (
-      identityBootstrapAction === "commit" &&
-      parsed.values["independent-copy-root"] !== undefined &&
-      !isAbsolute(parsed.values["independent-copy-root"])
-    ) {
-      throw new Error("--independent-copy-root must be an absolute path");
-    }
-    if (
-      parsed.values["allow-exportable-software-key"] === true &&
-      identityBootstrapAction !== "begin"
-    ) {
-      throw new Error(
-        "--allow-exportable-software-key is only valid with identity-bootstrap begin",
-      );
-    }
-  } else if (command !== "organization") {
-    if (parsed.values["independent-copy-root"] !== undefined) {
-      throw new Error(
-        "--independent-copy-root is only valid with identity-bootstrap commit",
-      );
-    }
-    if (parsed.values["allow-exportable-software-key"] === true) {
-      throw new Error(
-        "--allow-exportable-software-key is only valid with identity-bootstrap begin",
-      );
-    }
+  if (
+    command !== "organization" &&
+    parsed.values["allow-exportable-software-key"] === true
+  ) {
+    throw new Error(
+      "--allow-exportable-software-key is only valid with organization enroll",
+    );
   }
   if (command === "organization") {
     if (organizationAction === "enroll") {
@@ -636,9 +492,6 @@ function parseCommand(argv: readonly string[]): ParsedCommand {
       ? {}
       : { stateDirectory: parsed.values["state-dir"] }),
     ...(serviceAction === undefined ? {} : { serviceAction }),
-    ...(identityBootstrapAction === undefined
-      ? {}
-      : { identityBootstrapAction }),
     ...(parsed.values["backup-root"] === undefined
       ? {}
       : { backupRoot: parsed.values["backup-root"] }),
@@ -650,32 +503,6 @@ function parseCommand(argv: readonly string[]): ParsedCommand {
       ? {}
       : { operationId: parsed.values.id }),
     ...(parsed.values.strict === true ? { strictIdentityCheck: true } : {}),
-    ...(parsed.values["organization-name"] === undefined
-      ? {}
-      : { organizationName: parsed.values["organization-name"] }),
-    ...(parsed.values["principal-name"] === undefined
-      ? {}
-      : { principalName: parsed.values["principal-name"] }),
-    ...(parsed.values["slack-user-id"] === undefined
-      ? {}
-      : { slackUserId: parsed.values["slack-user-id"] }),
-    ...(parsed.values["device-class"] === undefined
-      ? {}
-      : {
-          deviceClass: parsed.values["device-class"] as "byod" | "managed",
-        }),
-    ...(parsed.values.session === undefined
-      ? {}
-      : { bootstrapSessionId: parsed.values.session }),
-    ...(parsed.values.confirm === undefined
-      ? {}
-      : { confirmationSha256: parsed.values.confirm }),
-    ...(parsed.values["renew-challenge"] === true
-      ? { renewChallenge: true }
-      : {}),
-    ...(parsed.values["independent-copy-root"] === undefined
-      ? {}
-      : { independentCopyRoot: parsed.values["independent-copy-root"] }),
     ...(parsed.values["allow-exportable-software-key"] === true
       ? { allowExportableSoftwareKey: true }
       : {}),
@@ -848,9 +675,65 @@ function printRuntimeFailure(
   });
 }
 
-function identityRequiresFederation(stateDirectory: string): boolean {
-  const identity = new ActiveIdentityBundleStore(stateDirectory);
-  return requiresFounderFederation(stateDirectory, identity);
+/**
+ * The CLI shares the one retirement gate with composition, the runtime, and the
+ * decision store; it only maps the refusal onto the CLI's failure type.
+ */
+function refuseRetiredFounderProvenance(stateDirectory: string): void {
+  assertRetiredFounderProvenanceRefused(stateDirectory);
+}
+
+/**
+ * The single early dispatch policy for the retired founder-provenance fence.
+ *
+ * It gates product work: no product-work command, runtime start, or new
+ * processing cycle resumes on a fenced profile. `runProductCli` consults this
+ * once, as soon as the state path is known and before it constructs a
+ * `ProductOperator`, probes or classifies the filesystem, acquires a lifecycle
+ * lock, creates or chmods a directory, installs signal handlers, resolves
+ * credentials, opens or migrates SQLite, contacts a provider or the Authority,
+ * or invokes an injected callback.
+ *
+ * The listed exceptions are not "everything that does not write": several of
+ * them do write. They are the commands whose whole purpose is to diagnose,
+ * preserve, or quiesce a fenced profile, and each is safe only because of what
+ * its own implementation already does:
+ *
+ * - `--help` / `--version` never touch a state path at all;
+ * - `validate-config` and `selftest` report on configuration;
+ * - `status` reports operator/service state;
+ * - `identity-check` is the diagnostic that names the retirement;
+ * - `backup` and `restore` preserve and recover the profile, and keep their own
+ *   cutover-fence downgrade protection;
+ * - `service stop`, `status`, and `uninstall` quiesce a fenced machine.
+ *
+ * `organization status` is deliberately NOT an exception: it opens and migrates
+ * writable SQLite, so it is gated with every other organization action.
+ *
+ * `RETIRED_FOUNDER_PROVENANCE_MESSAGE` carries the recovery runbook. Its order
+ * matters: `backup` refuses while the service is loaded, so `service stop`
+ * comes first.
+ */
+function retiredProvenanceGateApplies(parsed: ParsedCommand): boolean {
+  switch (parsed.command) {
+    case "validate-config":
+    case "selftest":
+    case "status":
+    case "identity-check":
+    case "backup":
+    case "restore":
+      return false;
+    case "service":
+      return (
+        parsed.serviceAction === "install" ||
+        parsed.serviceAction === "start" ||
+        parsed.serviceAction === "restart"
+      );
+    default:
+      // onboard, init, reconfigure, doctor, organization (every action),
+      // approvals, approve, reject, run-once, run, service-run.
+      return true;
+  }
 }
 
 function organizationAuthorityTransportOptions(
@@ -964,6 +847,9 @@ async function createCliComposition(
   classifier: ClassifyStateFilesystem,
   dependencies: ProductCliDependencies,
 ): Promise<ProductComposition> {
+  // The retirement gate already ran in `runProductCli`'s early dispatch, and
+  // `prepareProductComposition` re-checks it as the public composition
+  // boundary, so this helper does not repeat it a third time.
   const factories =
     dependencies.adapterFactories ?? createDefaultAdapterFactories();
   const now = dependencies.composition?.now ?? dependencies.now;
@@ -973,73 +859,6 @@ async function createCliComposition(
   // This check precedes adapter factories and credential resolution. The
   // composition repeats it immediately before health checks and every cycle.
   await assertProductAccess(accessGate);
-  const hasCustomFederationWiring =
-    customComposition?.state !== undefined ||
-    customComposition?.approvals !== undefined ||
-    customComposition?.approvalFederationCapture !== undefined ||
-    customComposition?.approvalGate !== undefined;
-  const requiresFederation = identityRequiresFederation(config.state_dir);
-  if (requiresFederation && customComposition?.approvalGate !== undefined) {
-    throw new ProductRuntimeFailure(
-      "identity_not_operationally_ready",
-      "identity-active mode rejects a caller-owned approval gate",
-      [
-        "the federation-owned approval store and capture path must observe every post-cutover resolution",
-      ],
-    );
-  }
-  if (requiresFederation && customComposition?.approvals !== undefined) {
-    throw new ProductRuntimeFailure(
-      "identity_not_operationally_ready",
-      "identity-active mode rejects a caller-owned approval store",
-      [
-        "the complete federation runtime must own the approval store used by projection readiness",
-      ],
-    );
-  }
-  if (
-    hasCustomFederationWiring &&
-    requiresFederation &&
-    dependencies.federationRuntime === undefined
-  ) {
-    throw new ProductRuntimeFailure(
-      "identity_not_operationally_ready",
-      "identity-active mode rejects partial custom composition wiring; supply one complete command-scoped federation runtime",
-      [
-        "custom state, approval store, or approval capture cannot bypass signed attribution and projection",
-      ],
-    );
-  }
-  if (
-    hasCustomFederationWiring &&
-    !requiresFederation &&
-    dependencies.federationRuntime === undefined
-  ) {
-    const approvalFederationCapture = resolveApprovalFederationCapture(
-      config,
-      dependencies,
-    );
-    const registry = await createConfiguredAdapterRegistry(config, factories, {
-      environment: dependencies.environment,
-      now,
-      approvalFederationCapture,
-      ...(approvalActionAuthorizer === undefined
-        ? {}
-        : { approvalActionAuthorizer }),
-    });
-    return await prepareProductComposition(config, registry, {
-      ...customComposition,
-      classifyStateFilesystem: classifier,
-      accessGate,
-      identityCheck: resolveIdentityCheckDependencies(
-        customComposition?.identityCheck ?? dependencies.identityCheck,
-        config,
-        dependencies.environment,
-      ),
-      approvalFederationCapture,
-      ...(now === undefined ? {} : { now }),
-    });
-  }
 
   // Preserve the existing "adapters first" diagnostic without constructing
   // adapters or resolving credentials before the strict identity gate.
@@ -1053,140 +872,37 @@ async function createCliComposition(
     );
   }
   prepareProductStateRoot(config.state_dir);
-  const identityBase = resolveIdentityCheckDependencies(
+  const identityCheck = resolveIdentityCheckDependencies(
     customComposition?.identityCheck ?? dependencies.identityCheck,
     config,
     dependencies.environment,
   );
-  const paths = resolveProductStatePaths(config.state_dir);
-  let federation:
-    Awaited<ReturnType<typeof openFounderFederationRuntime>> | undefined;
-  try {
-    federation =
-      dependencies.federationRuntime ??
-      (await openFounderFederationRuntime({
-        runtimeConfig: config,
-        databasePath: paths.database,
-        signer: identityBase.signer,
-        ...(dependencies.independentCopyInspector === undefined
-          ? {}
-          : {
-              independentCopyInspector: dependencies.independentCopyInspector,
-            }),
-        ...(now === undefined ? {} : { now }),
-        ...(customComposition?.createId === undefined
-          ? {}
-          : { createId: customComposition.createId }),
-      }));
-    if (federation.identityEnabled !== requiresFederation) {
-      throw new Error(
-        "supplied federation runtime identity mode does not match the state root",
-      );
-    }
-    if (
-      customComposition?.approvalFederationCapture !== undefined &&
-      customComposition.approvalFederationCapture !== federation.approvalCapture
-    ) {
-      throw new Error(
-        "custom approval capture does not belong to the supplied complete federation runtime",
-      );
-    }
-  } catch (error) {
-    let closeFailure: unknown;
-    try {
-      await federation?.close();
-    } catch (closeError) {
-      closeFailure = closeError;
-    }
-    const detail = (error as Error).message;
-    throw new ProductRuntimeFailure(
-      "identity_not_operationally_ready",
-      `identity-enabled profile cannot initialize federation resources: ${detail}`,
-      [
-        detail,
-        ...(closeFailure === undefined
-          ? []
-          : [
-              `federation resource close failed: ${(closeFailure as Error).message}`,
-            ]),
-      ],
-    );
-  }
-  if (federation === undefined) {
-    throw new ProductRuntimeFailure(
-      "identity_not_operationally_ready",
-      "identity-enabled profile did not initialize federation resources",
-      ["command-scoped federation runtime is unavailable"],
-    );
-  }
-  const identityCheck = federation.identityChecks(identityBase);
-  let baseState: (CoreStateStore & { close?: () => void }) | undefined;
-  let state: (CoreStateStore & { close?: () => void }) | undefined;
-  try {
-    // Keep adapter construction and provider contact behind the identity gate.
-    await assertFounderIdentityAllowsPipeline(config.state_dir, identityCheck);
-    const approvals =
-      requiresFederation || customComposition?.approvals === undefined
-        ? federation.createDecisionNodeStore()
-        : customComposition.approvals;
-    baseState =
-      customComposition?.state ?? new SqliteCoreStateStore(paths.database);
-    state = federation.wrapCoreState(baseState, approvals);
-    const registry = await createConfiguredAdapterRegistry(config, factories, {
-      environment: dependencies.environment,
-      now,
-      approvalFederationCapture: federation.approvalCapture,
-      ...(approvalActionAuthorizer === undefined
-        ? {}
-        : { approvalActionAuthorizer }),
-    });
-    const configuredClose = customComposition?.closeResources;
-    return await prepareProductComposition(config, registry, {
-      ...customComposition,
-      classifyStateFilesystem: async () => classification,
-      accessGate,
-      state,
-      approvals,
-      identityCheck,
-      approvalFederationCapture: federation.approvalCapture,
-      closeResources: async () => {
-        let failure: unknown;
-        try {
-          await configuredClose?.();
-        } catch (error) {
-          failure = error;
-        }
-        try {
-          await federation.close();
-        } catch (error) {
-          failure ??= error;
-        }
-        if (failure !== undefined) throw failure;
-      },
-      ...(now === undefined ? {} : { now }),
-    });
-  } catch (error) {
-    try {
-      if (state !== undefined) state.close?.();
-      else if (baseState !== undefined) baseState.close?.();
-    } finally {
-      await federation.close();
-    }
-    throw error;
-  }
-}
-
-function resolveApprovalFederationCapture(
-  config: ProductRuntimeConfig,
-  dependencies: ProductCliDependencies,
-): DecisionNodeFederationCapture {
-  return (
-    dependencies.composition?.approvalFederationCapture ??
-    new FederatedApprovalCapture({
-      stateDirectory: config.state_dir,
-      runtimeConfig: config,
-    })
-  );
+  // Keep adapter construction and provider contact behind the identity gate.
+  await assertFounderIdentityAllowsPipeline(config.state_dir, identityCheck);
+  const registry = await createConfiguredAdapterRegistry(config, factories, {
+    environment: dependencies.environment,
+    now,
+    // No default capture exists in this build. A pristine profile composes the
+    // decision store with no federation capture at all, which is what keeps the
+    // store's own fail-closed guard meaningful; a permissive stub would defeat
+    // it. Hosts extending capture supply their own through this seam.
+    ...(customComposition?.approvalFederationCapture === undefined
+      ? {}
+      : {
+          approvalFederationCapture:
+            customComposition.approvalFederationCapture,
+        }),
+    ...(approvalActionAuthorizer === undefined
+      ? {}
+      : { approvalActionAuthorizer }),
+  });
+  return await prepareProductComposition(config, registry, {
+    ...customComposition,
+    classifyStateFilesystem: async () => classification,
+    accessGate,
+    identityCheck,
+    ...(now === undefined ? {} : { now }),
+  });
 }
 
 function resolveIdentityCheckDependencies(
@@ -1217,179 +933,6 @@ function resolveIdentityCheckDependencies(
     signer: new FileInstallationSigner(
       join(runtimeConfig.state_dir, "installation", "keys"),
     ),
-  };
-}
-
-function isOnlyTargetProjectionPending(
-  error: unknown,
-  approvalId: string,
-): boolean {
-  if (!(error instanceof FounderIdentityGateError)) return false;
-  const failures = error.report.checks.filter(
-    (item) => item.required_for_operation && !item.ok,
-  );
-  if (failures.length === 0) return false;
-  return failures.every(
-    (failure) =>
-      (failure.id === "signed-outbox" &&
-        failure.detail ===
-          `projection pending: approval ${approvalId} has no signed outbox group`) ||
-      failure.id === "independent-copy",
-  );
-}
-
-type ResolvedFounderBootstrapDependencies =
-  FounderBootstrapCeremonyDependencies & {
-    signer: NonNullable<FounderBootstrapCeremonyDependencies["signer"]>;
-  };
-
-function resolveFounderBootstrapDependencies(
-  dependencies: ProductCliDependencies,
-  runtimeConfig: ProductRuntimeConfig,
-): ResolvedFounderBootstrapDependencies {
-  const configured = dependencies.founderBootstrap ?? {};
-  const signer =
-    configured.signer ??
-    dependencies.identityCheck?.signer ??
-    new FileInstallationSigner(
-      join(runtimeConfig.state_dir, "installation", "keys"),
-    );
-  const idsFactory =
-    configured.idsFactory ??
-    (() => {
-      const ids = mintFounderBootstrapIds();
-      const state = new SqliteOrganizationStateStore(
-        resolveProductStatePaths(runtimeConfig.state_dir).database,
-      );
-      try {
-        const enrollment = state.readEnrollment();
-        if (enrollment === null) return ids;
-        return {
-          ...ids,
-          organization_id: enrollment.request.organization_id,
-          principal_id: enrollment.request.principal_id,
-          membership_id: enrollment.request.membership_id,
-          installation_id: enrollment.request.installation_id,
-        } satisfies FounderBootstrapIds;
-      } finally {
-        state.close();
-      }
-    });
-  return {
-    ...configured,
-    signer,
-    idsFactory,
-    credentialResolver:
-      configured.credentialResolver ??
-      createProductCredentialResolver(dependencies.environment ?? process.env),
-    now: configured.now ?? resolveProductClock(dependencies.now),
-  };
-}
-
-async function configureFounderIndependentCopyTarget(
-  config: ProductRuntimeConfig,
-  signer: NonNullable<FounderBootstrapCeremonyDependencies["signer"]>,
-  targetRoot: string,
-  dependencies: ProductCliDependencies,
-): Promise<void> {
-  const databasePath = resolveProductStatePaths(config.state_dir).database;
-  const outbox = new FederatedOutboxStore(databasePath);
-  try {
-    const store = new FounderIndependentCopyStore({
-      stateDirectory: config.state_dir,
-      outbox,
-      identitySource: new IdentityLineageStore(config.state_dir),
-      signer,
-      ...(dependencies.independentCopyInspector === undefined
-        ? {}
-        : { inspector: dependencies.independentCopyInspector }),
-      ...(dependencies.now === undefined ? {} : { now: dependencies.now }),
-    });
-    await store.configure(targetRoot);
-  } finally {
-    await outbox.close();
-  }
-}
-
-function withProductionFounderSeedCutover(
-  configured: ResolvedFounderBootstrapDependencies,
-  dependencies: ProductCliDependencies,
-  independentCopyRoot: string,
-): ResolvedFounderBootstrapDependencies {
-  const signer = configured.signer;
-  return {
-    ...configured,
-    recoverSeedCutoverConfirmedAt: async ({ config, session }) =>
-      recoverLegacyClassificationCutoverAt({
-        state_directory: config.state_dir,
-        bootstrap_session_id: session.session_id,
-      }),
-    authorizeSeedCutover: async ({ config, session, plan }) => {
-      const capture = new FederatedApprovalCapture({
-        stateDirectory: config.state_dir,
-        runtimeConfig: config,
-      });
-      const decisionNodes = new DecisionNodeStore(config.state_dir, {
-        now: dependencies.now,
-        federationCapture: capture,
-      });
-      const coreDatabasePath = resolveProductStatePaths(
-        config.state_dir,
-      ).database;
-      await assertLegacyProcessingBoundaryReady({
-        decision_nodes: decisionNodes,
-        core_database_path: coreDatabasePath,
-      });
-      await commitLegacyClassificationReport({
-        state_directory: config.state_dir,
-        bootstrap_session_id: session.session_id,
-        decision_nodes: decisionNodes,
-        core_database_path: coreDatabasePath,
-        cutover_at: plan.manifest.legacy_cutover.declared_at,
-      });
-      await configureFounderIndependentCopyTarget(
-        config,
-        signer,
-        independentCopyRoot,
-        dependencies,
-      );
-    },
-    finalizeSeedCutover:
-      configured.finalizeSeedCutover ??
-      (async ({ config }) => {
-        const identityBase = resolveIdentityCheckDependencies(
-          {
-            ...dependencies.identityCheck,
-            signer,
-            credentialResolver: configured.credentialResolver,
-          },
-          config,
-          dependencies.environment,
-        );
-        const federation = await openFounderFederationRuntime({
-          runtimeConfig: config,
-          databasePath: resolveProductStatePaths(config.state_dir).database,
-          signer,
-          ...(dependencies.independentCopyInspector === undefined
-            ? {}
-            : {
-                independentCopyInspector: dependencies.independentCopyInspector,
-              }),
-          ...(dependencies.now === undefined ? {} : { now: dependencies.now }),
-        });
-        try {
-          await federation.ensureIndependentCopy();
-          await assertFounderIdentityAllowsPipeline(
-            config.state_dir,
-            federation.identityChecks({
-              ...identityBase,
-              allowCommittingCutoverFinalization: true,
-            }),
-          );
-        } finally {
-          await federation.close();
-        }
-      }),
   };
 }
 
@@ -1562,6 +1105,16 @@ export async function runProductCli(
     return 2;
   }
   if (parsed.command === "onboard") {
+    // `onboard` learns its state path from `--state-dir`, not from a config
+    // file, and it is the one gated command whose target may not exist yet. An
+    // absent root whose adjacent external cutover guard survived is still
+    // fenced, so this runs before `onboardProduct` can create anything.
+    try {
+      refuseRetiredFounderProvenance(parsed.stateDirectory!);
+    } catch (error) {
+      printOperatorError(stderr, parsed.command, error);
+      return 1;
+    }
     try {
       const result = onboardProduct(parsed.configPath, parsed.stateDirectory!, {
         fileSystem: dependencies.operator?.fileSystem,
@@ -1579,6 +1132,28 @@ export async function runProductCli(
   } catch (error) {
     print(stderr, { ok: false, error: (error as Error).message });
     return 2;
+  }
+  // The state path is now known. This is the single early gate for every other
+  // gated command; nothing below it may construct, probe, lock, create, or call
+  // out on a fenced state root.
+  if (retiredProvenanceGateApplies(parsed)) {
+    try {
+      refuseRetiredFounderProvenance(config.state_dir);
+    } catch (error) {
+      print(stderr, {
+        ok: false,
+        command: parsed.command,
+        ...(parsed.serviceAction === undefined
+          ? {}
+          : { action: parsed.serviceAction }),
+        ...(parsed.organizationAction === undefined
+          ? {}
+          : { action: parsed.organizationAction }),
+        code: "identity_not_operationally_ready",
+        error: (error as Error).message,
+      });
+      return 1;
+    }
   }
   const classifier =
     dependencies.classifyStateFilesystem ?? classifyStateFilesystem;
@@ -2010,161 +1585,6 @@ export async function runProductCli(
     print(stdout, organizationResult!);
     return 0;
   }
-  if (parsed.command === "identity-bootstrap") {
-    const action = parsed.identityBootstrapAction!;
-    const usesDefaultFileSigner =
-      dependencies.founderBootstrap?.signer === undefined &&
-      dependencies.identityCheck?.signer === undefined;
-    if (
-      action === "begin" &&
-      usesDefaultFileSigner &&
-      parsed.allowExportableSoftwareKey !== true
-    ) {
-      print(stderr, {
-        ok: false,
-        command: parsed.command,
-        action,
-        code: "software_key_acknowledgement_required",
-        error:
-          "identity-bootstrap begin uses an exportable software key; repeat with --allow-exportable-software-key to acknowledge pilot-grade key assurance",
-      });
-      return 2;
-    }
-    const productionSeedCutover =
-      action === "commit" &&
-      dependencies.founderBootstrap?.authorizeSeedCutover === undefined;
-    let bootstrapDependencies =
-      resolveFounderBootstrapDependencies(dependencies, config);
-    if (productionSeedCutover) {
-      if (parsed.independentCopyRoot === undefined) {
-        print(stderr, {
-          ok: false,
-          command: parsed.command,
-          action,
-          error:
-            "identity-bootstrap commit requires --independent-copy-root for the protected seed copy",
-        });
-        return 2;
-      }
-      bootstrapDependencies = withProductionFounderSeedCutover(
-        bootstrapDependencies,
-        dependencies,
-        parsed.independentCopyRoot,
-      );
-    }
-    const probe = await probeConfig(config, classifier);
-    if (!probe.ok) {
-      print(stderr, {
-        ok: false,
-        command: parsed.command,
-        action,
-        filesystem: probe.filesystem,
-      });
-      return 1;
-    }
-    let releases: readonly ReleaseProductLifecycleLock[] = [];
-    let result:
-      | Awaited<ReturnType<typeof beginFounderBootstrap>>
-      | Awaited<ReturnType<typeof abortFounderBootstrap>>
-      | undefined;
-    let operationFailure: unknown;
-    try {
-      if (action === "commit") {
-        releases = await acquireMaintenanceWindow(
-          config.state_dir,
-          dependencies,
-          0,
-        );
-        const operator = createProductOperator(
-          parsed.configPath,
-          config,
-          dependencies,
-        );
-        const status = await operator.status();
-        if (!status.service.supported) {
-          throw new ProductOperatorError(
-            "unsupported_platform",
-            "cannot prove the product service is stopped on this platform",
-          );
-        }
-        if (status.service.loaded) {
-          throw new ProductOperatorError(
-            "service_command_failed",
-            "service is loaded; stop it before committing founder identity",
-          );
-        }
-      } else {
-        releases = [
-          await lifecycleLock(dependencies, config.state_dir, "maintenance", 0),
-        ];
-      }
-      result =
-        action === "begin"
-          ? await beginFounderBootstrap(
-              config,
-              {
-                organizationDisplayName: parsed.organizationName!,
-                principalDisplayName: parsed.principalName!,
-                slackUserId: parsed.slackUserId!,
-                ...(parsed.deviceClass === undefined
-                  ? {}
-                  : { deviceClass: parsed.deviceClass }),
-              },
-              bootstrapDependencies,
-            )
-          : action === "status"
-            ? await statusFounderBootstrap(
-                config,
-                parsed.bootstrapSessionId!,
-                { renewChallenge: parsed.renewChallenge === true },
-                bootstrapDependencies,
-              )
-            : action === "abort"
-              ? await abortFounderBootstrap(
-                  config,
-                  parsed.bootstrapSessionId!,
-                  parsed.confirmationSha256!,
-                  bootstrapDependencies,
-                )
-              : await commitFounderBootstrapCeremony(
-                  config,
-                  parsed.bootstrapSessionId!,
-                  parsed.confirmationSha256!,
-                  bootstrapDependencies,
-                );
-    } catch (error) {
-      operationFailure = error;
-    }
-    try {
-      await releaseLifecycleLocks(releases);
-    } catch (error) {
-      operationFailure ??= new Error(
-        `lifecycle lock release failed: ${(error as Error).message}`,
-      );
-    }
-    if (operationFailure !== undefined) {
-      print(stderr, {
-        ok: false,
-        command: parsed.command,
-        action,
-        ...(operationFailure instanceof ProductOperatorError
-          ? { code: operationFailure.code }
-          : {}),
-        error: (operationFailure as Error).message,
-      });
-      return 1;
-    }
-    print(stdout, {
-      ok: true,
-      command: parsed.command,
-      action,
-      ...(action === "begin" && usesDefaultFileSigner
-        ? { key_assurance_policy: "software_key_development_only" }
-        : {}),
-      ...result!,
-    });
-    return 0;
-  }
   if (parsed.command === "service-run") {
     try {
       createProductOperator(
@@ -2178,40 +1598,19 @@ export async function runProductCli(
     }
   }
   if (parsed.command === "identity-check") {
-    let federation:
-      Awaited<ReturnType<typeof openFounderFederationRuntime>> | undefined;
     try {
-      const identityBase = resolveIdentityCheckDependencies(
-        dependencies.identityCheck,
-        config,
-        dependencies.environment,
-      );
-      const foundationReport = await checkFounderIdentity(
+      // Reporting, not enabling. A state root holding founder identity or
+      // cutover material still reports `identity_enabled` and fails its
+      // required checks, so the retired mode stays visible and refused rather
+      // than silently downgraded to an unattributed local profile.
+      const report = await checkFounderIdentity(
         config.state_dir,
-        identityBase,
+        resolveIdentityCheckDependencies(
+          dependencies.identityCheck,
+          config,
+          dependencies.environment,
+        ),
       );
-      const bundleVerified =
-        foundationReport.mode === "identity_enabled" &&
-        foundationReport.checks.find((item) => item.id === "bundle-integrity")
-          ?.ok === true;
-      let report = foundationReport;
-      if (bundleVerified) {
-        federation = await openFounderFederationRuntime({
-          runtimeConfig: config,
-          databasePath: resolveProductStatePaths(config.state_dir).database,
-          signer: identityBase.signer,
-          ...(dependencies.independentCopyInspector === undefined
-            ? {}
-            : {
-                independentCopyInspector: dependencies.independentCopyInspector,
-              }),
-          ...(dependencies.now === undefined ? {} : { now: dependencies.now }),
-        });
-        report = await checkFounderIdentity(
-          config.state_dir,
-          federation.identityChecks(identityBase),
-        );
-      }
       const strictFailure =
         parsed.strictIdentityCheck === true && !report.seed_grade_ready;
       const activeFailure =
@@ -2221,6 +1620,9 @@ export async function runProductCli(
         ok: status === 0,
         command: parsed.command,
         strict: parsed.strictIdentityCheck === true,
+        ...(report.mode === "identity_enabled"
+          ? { unsupported_mode: RETIRED_FOUNDER_PROVENANCE_MESSAGE }
+          : {}),
         ...report,
       });
       return status;
@@ -2231,94 +1633,7 @@ export async function runProductCli(
         error: (error as Error).message,
       });
       return 1;
-    } finally {
-      try {
-        await federation?.close();
-      } catch (error) {
-        print(stderr, {
-          ok: false,
-          command: parsed.command,
-          error: `federation resource close failed: ${(error as Error).message}`,
-        });
-        return 1;
-      }
     }
-  }
-  if (parsed.command === "export") {
-    let releases: readonly ReleaseProductLifecycleLock[] = [];
-    let federation:
-      Awaited<ReturnType<typeof openFounderFederationRuntime>> | undefined;
-    let result: Record<string, unknown> | undefined;
-    let failure: unknown;
-    try {
-      releases = await acquireMaintenanceWindow(
-        config.state_dir,
-        dependencies,
-        0,
-      );
-      prepareProductStateRoot(config.state_dir);
-      const identityBase = resolveIdentityCheckDependencies(
-        dependencies.identityCheck,
-        config,
-        dependencies.environment,
-      );
-      federation =
-        dependencies.federationRuntime ??
-        (await openFounderFederationRuntime({
-          runtimeConfig: config,
-          databasePath: resolveProductStatePaths(config.state_dir).database,
-          signer: identityBase.signer,
-          ...(dependencies.independentCopyInspector === undefined
-            ? {}
-            : {
-                independentCopyInspector: dependencies.independentCopyInspector,
-              }),
-          ...(dependencies.now === undefined ? {} : { now: dependencies.now }),
-        }));
-      if (
-        !federation.identityEnabled ||
-        !identityRequiresFederation(config.state_dir)
-      ) {
-        throw new Error(
-          "federated export is unavailable before the founder identity cutover",
-        );
-      }
-      const copy = await federation.ensureIndependentCopy();
-      const identity = await assertFounderIdentityAllowsPipeline(
-        config.state_dir,
-        federation.identityChecks(identityBase),
-      );
-      result = {
-        ok: true,
-        command: parsed.command,
-        independent_copy: copy,
-        identity,
-      };
-    } catch (error) {
-      failure = error;
-    }
-    try {
-      await federation?.close();
-    } catch (error) {
-      failure ??= new Error(
-        `federation resource close failed: ${(error as Error).message}`,
-      );
-    }
-    try {
-      await releaseLifecycleLocks(releases);
-    } catch (error) {
-      failure ??= error;
-    }
-    if (failure !== undefined) {
-      print(stderr, {
-        ok: false,
-        command: parsed.command,
-        error: (failure as Error).message,
-      });
-      return 1;
-    }
-    print(stdout, result!);
-    return 0;
   }
   if (parsed.command === "backup" || parsed.command === "restore") {
     const probe = await probeConfig(config, classifier);
@@ -2681,8 +1996,6 @@ export async function runProductCli(
       return 1;
     }
     let approvalResult: Record<string, unknown> | undefined;
-    let federation:
-      Awaited<ReturnType<typeof openFounderFederationRuntime>> | undefined;
     try {
       const release = await lifecycleLock(
         dependencies,
@@ -2692,79 +2005,27 @@ export async function runProductCli(
       );
       try {
         prepareProductStateRoot(config.state_dir);
-        const customFederationWiring =
-          dependencies.composition?.state !== undefined ||
-          dependencies.composition?.approvals !== undefined ||
-          dependencies.composition?.approvalFederationCapture !== undefined;
         const identityBase = resolveIdentityCheckDependencies(
           dependencies.identityCheck,
           config,
           dependencies.environment,
         );
-        const requiresFederation = identityRequiresFederation(config.state_dir);
-        if (
-          customFederationWiring &&
-          requiresFederation &&
-          dependencies.federationRuntime === undefined
-        ) {
-          throw new Error(
-            "identity-active mode rejects partial custom approval wiring; supply one complete command-scoped federation runtime",
-          );
-        }
-        if (
-          requiresFederation &&
-          dependencies.composition?.approvals !== undefined
-        ) {
-          throw new Error(
-            "identity-active mode rejects a caller-owned approval store; the complete federation runtime must own approval projection readiness",
-          );
-        }
-        if (
-          !customFederationWiring ||
-          dependencies.federationRuntime !== undefined
-        ) {
-          federation =
-            dependencies.federationRuntime ??
-            (await openFounderFederationRuntime({
-              runtimeConfig: config,
-              databasePath: resolveProductStatePaths(config.state_dir).database,
-              signer: identityBase.signer,
-              ...(dependencies.independentCopyInspector === undefined
-                ? {}
-                : {
-                    independentCopyInspector:
-                      dependencies.independentCopyInspector,
-                  }),
-              ...(dependencies.now === undefined
-                ? {}
-                : { now: dependencies.now }),
-            }));
-          if (federation.identityEnabled !== requiresFederation) {
-            throw new Error(
-              "supplied federation runtime identity mode does not match the state root",
-            );
-          }
-          if (
-            dependencies.composition?.approvalFederationCapture !== undefined &&
-            dependencies.composition.approvalFederationCapture !==
-              federation.approvalCapture
-          ) {
-            throw new Error(
-              "custom approval capture does not belong to the supplied complete federation runtime",
-            );
-          }
-        }
         // Listing remains local. Resolution is local only for standalone
         // profiles; an enrolled organization must attribute and authorize the
         // human through a centrally governed approval surface.
         const approvals =
-          federation?.createDecisionNodeStore() ??
+          dependencies.composition?.approvals ??
           new DecisionNodeStore(config.state_dir, {
             now: dependencies.now,
-            federationCapture: resolveApprovalFederationCapture(
-              config,
-              dependencies,
-            ),
+            // No capture: the store's own guard refuses to mutate or even read
+            // a federated node without one, which is the fail-closed behavior
+            // a permissive stub would silently remove.
+            ...(dependencies.composition?.approvalFederationCapture === undefined
+              ? {}
+              : {
+                  federationCapture:
+                    dependencies.composition.approvalFederationCapture,
+                }),
           });
         await approvals.initialize();
         if (parsed.command === "approvals") {
@@ -2808,29 +2069,10 @@ export async function runProductCli(
               "CLI approval resolution is disabled after an organization Authority is pinned; use an organization-authorized approval surface",
             );
           }
-          let exactApprovedProjectionRetry = false;
-          if (parsed.command === "approve" && federation?.identityEnabled) {
-            const existing = (await approvals.listFederated()).find(
-              (record) => record.approval_id === parsed.approvalId,
-            );
-            exactApprovedProjectionRetry =
-              existing?.status === "approved" &&
-              existing.reviewed_by === parsed.reviewer &&
-              existing.reason === (parsed.reason ?? null);
-          }
-          try {
-            await assertFounderIdentityAllowsPipeline(
-              config.state_dir,
-              federation?.identityChecks(identityBase) ?? identityBase,
-            );
-          } catch (error) {
-            if (
-              !exactApprovedProjectionRetry ||
-              !isOnlyTargetProjectionPending(error, parsed.approvalId!)
-            ) {
-              throw error;
-            }
-          }
+          await assertFounderIdentityAllowsPipeline(
+            config.state_dir,
+            identityBase,
+          );
           const record = await approvals.resolve({
             approvalId: parsed.approvalId!,
             status: parsed.command === "approve" ? "approved" : "rejected",
@@ -2838,15 +2080,6 @@ export async function runProductCli(
             reason: parsed.reason,
             surface: "cli",
           });
-          if (record.status === "approved" && federation?.identityEnabled) {
-            try {
-              await federation.projectApproved(record);
-            } catch (error) {
-              throw new Error(
-                `approval recorded; federated projection pending: ${(error as Error).message}`,
-              );
-            }
-          }
           approvalResult = {
             ok: true,
             command: parsed.command,
@@ -2860,18 +2093,7 @@ export async function runProductCli(
           };
         }
       } finally {
-        let closeFailure: unknown;
-        try {
-          await federation?.close();
-        } catch (error) {
-          closeFailure = error;
-        }
-        try {
-          await release();
-        } catch (error) {
-          closeFailure ??= error;
-        }
-        if (closeFailure !== undefined) throw closeFailure;
+        await release();
       }
     } catch (error) {
       print(stderr, {
@@ -2948,24 +2170,6 @@ export async function runProductCli(
       signalWaiter = createSignalWaiter(processLike);
     } catch (error) {
       printRuntimeFailure(stderr, error);
-      return 1;
-    }
-
-    if (
-      dependencies.runtime !== undefined &&
-      identityRequiresFederation(config.state_dir)
-    ) {
-      signalWaiter.cancel();
-      printRuntimeFailure(
-        stderr,
-        new ProductRuntimeFailure(
-          "identity_not_operationally_ready",
-          "identity-active mode rejects legacy custom runtime wiring",
-          [
-            "use command composition with one complete command-scoped federation runtime",
-          ],
-        ),
-      );
       return 1;
     }
 

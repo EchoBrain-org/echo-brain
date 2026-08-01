@@ -5,35 +5,30 @@
   "workspace": false,
   "boundary_root": "src/product/federation",
   "source_root": "src/product/federation",
-  "entry_points": ["src/product/federation/index.ts"],
+  "entry_points": [
+    "src/product/federation/bootstrap/identity-check.ts",
+    "src/product/federation/cutover-fence.ts",
+    "src/product/federation/identity/active-identity-bundle-store.ts"
+  ],
   "owned_source_paths": ["src/product/federation/**"],
   "allowed_internal_paths": [
     "src/product/federation/**",
     "src/core/**",
-    "src/adapters/approval-surfaces/slack-reactions/slack-reactions-approval-surface.ts",
     "src/adapters/decision-processors/llm/llm-decision-processor.ts",
     "src/adapters/meeting-sources/granola/index.ts",
     "src/adapters/shared/slack/slack-web-api-client.ts",
     "src/infrastructure/filesystem/atomic-create.ts",
     "src/infrastructure/filesystem/atomic-write.ts",
-    "src/infrastructure/filesystem/process-file-lock.ts",
-    "src/product/adapter-factories.ts",
-    "src/product/approval/**",
     "src/product/config.ts",
     "src/product/credentials.ts",
-    "src/product/default-adapters.ts",
-    "src/product/lifecycle-lock.ts",
     "src/product/machine/security/**",
     "src/product/paths.ts",
     "src/product/secure-local-files.ts",
-    "src/product/spawn-sanitized-child.ts",
-    "src/product/storage/**",
-    "src/util/json.ts",
-    "src/util/timestamp.ts"
+    "src/util/json.ts"
   ],
   "allowed_workspace_packages": ["@echo-brain/federation-protocol"],
-  "allowed_external_packages": ["ajv", "better-sqlite3"],
-  "allowed_node_builtins": ["crypto", "fs", "path", "url"],
+  "allowed_external_packages": ["ajv"],
+  "allowed_node_builtins": ["crypto", "fs", "path"],
   "runtime_assets": [],
   "layer_rules": [
     {
@@ -42,30 +37,21 @@
       "allowed_imports": [
         "src/product/federation/**",
         "src/core/**",
-        "src/adapters/approval-surfaces/slack-reactions/slack-reactions-approval-surface.ts",
         "src/adapters/decision-processors/llm/llm-decision-processor.ts",
         "src/adapters/meeting-sources/granola/index.ts",
         "src/adapters/shared/slack/slack-web-api-client.ts",
         "src/infrastructure/filesystem/atomic-create.ts",
         "src/infrastructure/filesystem/atomic-write.ts",
-        "src/infrastructure/filesystem/process-file-lock.ts",
-        "src/product/adapter-factories.ts",
-        "src/product/approval/**",
         "src/product/config.ts",
         "src/product/credentials.ts",
-        "src/product/default-adapters.ts",
-        "src/product/lifecycle-lock.ts",
         "src/product/machine/security/**",
         "src/product/paths.ts",
         "src/product/secure-local-files.ts",
-        "src/product/spawn-sanitized-child.ts",
-        "src/product/storage/**",
-        "src/util/json.ts",
-        "src/util/timestamp.ts"
+        "src/util/json.ts"
       ],
       "allowed_workspace_packages": ["@echo-brain/federation-protocol"],
-      "allowed_external_packages": ["ajv", "better-sqlite3"],
-      "allowed_node_builtins": ["crypto", "fs", "path", "url"]
+      "allowed_external_packages": ["ajv"],
+      "allowed_node_builtins": ["crypto", "fs", "path"]
     }
   ]
 }

@@ -24,6 +24,10 @@ import {
   FounderIdentityGateError,
   type IdentityCheckDependencies,
 } from './federation/bootstrap/identity-check.js';
+import {
+  assertFounderProvenanceRetired,
+  FounderProvenanceGateError,
+} from './federation/cutover-fence.js';
 import { resolveProductStatePaths, type ProductStatePaths } from './paths.js';
 import {
   ProductRuntimeFailure,
@@ -232,11 +236,36 @@ function summarize(
   };
 }
 
+/**
+ * Map the shared retirement refusal onto this layer's failure type without
+ * letting the guard itself depend on runtime composition.
+ */
+export function assertRetiredFounderProvenanceRefused(
+  stateDirectory: string,
+): void {
+  try {
+    assertFounderProvenanceRetired(stateDirectory);
+  } catch (error) {
+    if (error instanceof FounderProvenanceGateError) {
+      throw new ProductRuntimeFailure(
+        'identity_not_operationally_ready',
+        error.message,
+        [...error.findings],
+      );
+    }
+    throw error;
+  }
+}
+
 export async function prepareProductComposition(
   config: ProductRuntimeConfig,
   registry: AdapterRegistry,
   options: PrepareProductCompositionOptions,
 ): Promise<ProductComposition> {
+  // First statement: before the caller-supplied filesystem classifier runs,
+  // before the state root is created, and before any injected identity check,
+  // approval store, approval capture, or access gate is consulted.
+  assertRetiredFounderProvenanceRefused(config.state_dir);
   const classification = await options.classifyStateFilesystem(
     config.state_dir,
   );
@@ -309,6 +338,11 @@ export async function prepareProductComposition(
     runOptions: ProductCycleRunOptions = {},
   ): Promise<ProductCycleResult> => {
     if (closed) throw new Error('product composition is closed');
+    // Re-checked every cycle, not only at construction. A composition built on
+    // a clean root must still refuse if founder residue or the adjacent guard
+    // appears underneath it before the next cycle, and it must refuse before
+    // the access gate, providers, state, approvals, or any caller callback.
+    assertRetiredFounderProvenanceRefused(config.state_dir);
     await assertProductAccess(options.accessGate);
     const sources: ProductSourceCycleResult[] = [];
     for (const source of adapters.meetingSources) {

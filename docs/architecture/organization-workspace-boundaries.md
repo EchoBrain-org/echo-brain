@@ -136,30 +136,47 @@ portable one-machine deployment is documented in
 [`deploy/organization-authority`](../../deploy/organization-authority/README.md).
 Multi-replica operation requires a later persistence and coordination design.
 
-## Implemented but inactive on the pilot
+## Retired founder-provenance surface
 
-Founder identity cutover has not happened, and the federation lane is dormant
-because of it. `src/product/federation/` is implemented, compiled, and covered
-by tests, and it is inactive on a normal installation.
-`openFounderFederationRuntime` in `src/product/federation/runtime-wiring.ts`
-loads the active identity bundle; with no committed bundle it takes the
-`active === null` branch, returns `identityEnabled: false`, and supplies
-`projectApproved` and `ensureIndependentCopy` as failing stubs. Signed
-projection, the federated outbox, and independent-copy publication are
-unreachable until the `identity-bootstrap` ceremony is committed. That branch,
-not the active one, is the pilot's normal state.
+Founder identity cutover never happened on the pilot, and the local
+founder-provenance surface built on it is retired. `src/product/federation/`
+previously held roughly 20,700 lines -- close to 30 percent of the repository's
+production TypeScript -- for a lane no installation ever entered. Approval
+capture, attribution, signed record projection, the federated outbox, export
+bundles, protected independent copies, legacy classification, the bootstrap
+ceremony, and the `openFounderFederationRuntime` composition root are deleted,
+along with the `identity-bootstrap` and `export` CLI commands and the root
+federation barrel export. Ordinary composition, `identity-check`, and the
+approval commands no longer open a federation runtime, and a pristine profile
+composes its decision store with no federation capture at all.
 
-This is not a small corner of the tree. `src/product/federation/` is roughly
-20,700 lines, close to 30 percent of the repository's production TypeScript.
+What remains is roughly 6,000 lines of identity/bootstrap/cutover security
+core: the identity bundle, manifest, registry, policy, credential-guard, and
+provider-identity documents; bootstrap sessions and their exact-shape
+validation; and `cutover-fence.ts`, which owns both the founder identity/cutover
+detector and the one shared retirement gate. No supported command or runtime
+path creates founder identity or cutover material, though the low-level
+`commitFounderBootstrap`, `commitFounderCutoverGuard`, and writable session-store
+APIs still compile. The gate exists so a state root left behind by the retired
+mode is detected and refused, never silently downgraded to an unattributed local
+profile. It gates *product work* -- runtime start and every processing cycle --
+and is called by `prepareProductComposition` (at construction and per cycle),
+`startProductRuntime`, `DecisionNodeStore`, and the CLI before any directory
+creation, component or adapter resolution, credential work, provider or
+Authority contact, approval read or mutation, or caller-supplied callback. It
+deliberately does not gate `identity-check`, `validate-config`, `selftest`,
+general `status`, `backup`/`restore`, or `service stop`/`status`/`uninstall`,
+which must stay usable to diagnose, preserve, and quiesce a fenced profile.
+It is a fail-closed gate on trusted in-process callers, not a sandbox. It is
+observational only -- `lstat`/`readdir`/path existence, never the recovering
+session reader -- so refusing cannot mutate forensic founder state. Its entry
+points are declared in `src/product/federation/source-boundary.v1.json`.
+
 Read the federation half of
 [identity, onboarding, and federation](identity-onboarding-and-federation.md)
-as a described capability rather than as observed pilot behavior; the
-onboarding and access half of that document describes what actually runs.
-
-None of it is dead code. It compiles, it is under test, and the federated
-approval capture is wired into the decision-node store in both the active and
-inactive lanes, so it sits on the approval path while inert. It is not removed
-because the runtime composes it unconditionally.
+as a persisted contract and a described future capability rather than as
+running code; the onboarding and access half of that document describes what
+actually runs.
 
 The bundled `llm` decision processor is a different case and is not out of
 scope. The composition root registers it alongside `structured-text`, and the

@@ -20,10 +20,26 @@ describe('standalone CLI basics', () => {
     expect(await runProductCli([], { stdout: stdout.stream })).toBe(0);
     expect(stdout.read()).toContain('Usage:');
     expect(stdout.read()).toContain('echo-brain selftest');
-    expect(stdout.read()).toContain('echo-brain export');
-    expect(stdout.read()).toContain('echo-brain identity-bootstrap commit');
-    expect(stdout.read()).toContain('--independent-copy-root <absolute-path>');
+    expect(stdout.read()).toContain('echo-brain identity-check');
+    expect(stdout.read()).toContain('echo-brain organization enroll');
     expect(stdout.read()).toContain('--allow-exportable-software-key');
+  });
+
+  it('no longer offers the retired founder-provenance commands', async () => {
+    const stdout = output();
+    expect(await runProductCli([], { stdout: stdout.stream })).toBe(0);
+    expect(stdout.read()).not.toContain('echo-brain export');
+    expect(stdout.read()).not.toContain('identity-bootstrap');
+    expect(stdout.read()).not.toContain('--independent-copy-root');
+
+    for (const argv of [
+      ['export', '--config', '/tmp/echo-missing.json'],
+      ['identity-bootstrap', 'begin', '--config', '/tmp/echo-missing.json'],
+    ]) {
+      const stderr = output();
+      expect(await runProductCli(argv, { stderr: stderr.stream })).toBe(2);
+      expect(stderr.read()).toContain('usage: echo-brain <onboard|');
+    }
   });
 
   it('prints the package version without requiring a config', async () => {

@@ -18,6 +18,10 @@ import {
   FounderIdentityGateError,
   type IdentityCheckDependencies,
 } from './federation/bootstrap/identity-check.js';
+import {
+  assertFounderProvenanceRetired,
+  FounderProvenanceGateError,
+} from './federation/cutover-fence.js';
 
 export type ProductComponentName = string;
 
@@ -402,6 +406,24 @@ export async function startProductRuntime(
   config: ProductRuntimeConfig,
   dependencies: ProductRuntimeDependencies,
 ): Promise<ProductRuntimeStartResult> {
+  // First statement: before the caller-supplied component graph is resolved or
+  // started, before adapters are resolved, and before any injected identity
+  // check runs.
+  try {
+    assertFounderProvenanceRetired(config.state_dir);
+  } catch (error) {
+    if (error instanceof FounderProvenanceGateError) {
+      return {
+        ok: false,
+        error: new ProductRuntimeFailure(
+          'identity_not_operationally_ready',
+          error.message,
+          [...error.findings],
+        ),
+      };
+    }
+    throw error;
+  }
   const components = resolveComponentStartOrder(dependencies.components);
   if (components.errors.length > 0) {
     return {

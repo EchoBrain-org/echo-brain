@@ -8,8 +8,11 @@ import {
 import { unlinkSync } from 'node:fs';
 import { join } from 'node:path';
 import {
+  assertFederationId,
+  canonicalJson,
   normalizeP256LowS,
   p256KeyId,
+  parseCanonicalJson,
   type Sha256Digest,
 } from '@echo-brain/federation-protocol';
 import { atomicCreate } from '../../../infrastructure/filesystem/atomic-create.js';
@@ -22,11 +25,6 @@ import {
   pathEntryExists,
   readFileNoFollow,
 } from '../../secure-local-files.js';
-import {
-  canonicalJson,
-  parseCanonicalJson,
-} from '../../federation/foundation/canonical-json.js';
-import { assertFederationId } from '../../federation/foundation/identifiers.js';
 import {
   verifyInstallationKeyDescriptor,
   type InstallationKeyDescriptor,

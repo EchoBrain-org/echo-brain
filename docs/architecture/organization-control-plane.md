@@ -202,10 +202,16 @@ The connection and permission service must preserve these rules:
 - Bind the exact channel plus approve/reject reaction names into the adapter
   binding. The product cannot reinterpret a reject reaction as approval.
 - Require an installation-signed `/v1/permission-checks` request and verify the
-  decisive Slack reaction live before returning an allow.
-- Sign the live Slack bot, app, workspace, human, channel, message, reaction,
-  and opaque approval digest. The Authority independently requires the bound
-  bot to have authored a message carrying that exact approval marker.
+  decisive Slack reaction live before returning an allow. The decision itself is
+  not signed. It carries `request_sha256` and `provider_event_sha256`, which
+  bind the response to the exact request but do not authenticate it; the
+  response is trusted because it arrives over the configured HTTPS origin
+  associated with the pinned Authority descriptor, and the product verifies both
+  digests before acting on it.
+- Bind the live Slack bot, app, workspace, human, channel, message, reaction,
+  and opaque approval digest into the installation-signed request. The Authority
+  independently requires the bound bot to have authored a message carrying that
+  exact approval marker.
 - Never send the product processing key, meeting identifier, meeting content,
   decision text, or reason text to the Authority. `approval_id` is an
   irreversible digest used only to name the approval card.

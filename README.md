@@ -88,43 +88,67 @@ echo-brain doctor --config /absolute/path/runtime.json
 The file-backed installation signer stores an exportable P-256 key below the
 private state directory and labels its assurance as
 `software_key_development_only`. The signer port remains replaceable by a
-hardware-backed implementation later. Beginning founder identity bootstrap
-requires `--allow-exportable-software-key` so pilot-grade assurance cannot be
-accepted silently. This signer can be operationally ready for a pilot, but it
-never makes `seed_grade_ready` true; `identity-check --strict` continues to
-require hardware-bound, non-exportable key assurance.
+hardware-backed implementation later. `organization enroll` requires
+`--allow-exportable-software-key` so pilot-grade assurance cannot be accepted
+silently. This signer can be operationally ready for a pilot, but it never
+makes `seed_grade_ready` true; `identity-check --strict` continues to require
+hardware-bound, non-exportable key assurance.
 
-Founder identity bootstrap is an explicit session-scoped ceremony:
+Central organization-admin bootstrap is the one supported v1 enrollment path.
+The local founder-provenance mode -- the `identity-bootstrap` ceremony, the
+federated `export` command, and the signed record projection and protected
+independent copy behind them -- is retired and removed from this build.
+
+A state root that still holds founder identity or cutover material is detected
+and refused, not downgraded. One early dispatch gate refuses `onboard`, `init`,
+`reconfigure`, `doctor`, every `organization` action, `approvals`, `approve`,
+`reject`, `run-once`, `run`, `service-run`, and `service
+install`/`start`/`restart` — before a `ProductOperator` is constructed, the
+filesystem is probed, a lifecycle lock is taken, a directory is created or
+chmodded, credentials are resolved, SQLite is opened or migrated, a provider or
+the Authority is contacted, or an injected callback runs. A custom identity
+check, approval capture, approval store, or runtime cannot bypass it.
+
+The exceptions are not "commands that do not write" — several of them do write.
+They are the commands whose purpose is to diagnose, preserve, or quiesce a
+fenced profile: `--help`/`--version`, `validate-config`, `selftest`, `status`,
+`identity-check`, `backup`, `restore`, and `service stop`/`status`/`uninstall`.
+`organization status` is **not** an exception: it opens and migrates writable
+SQLite, so it is gated with every other organization action.
+
+Recovery does not go through a restore. The cutover is irreversible, and a
+backup stays bound to the state path it was taken from, so no restore crosses
+the fence — a backup of a retired profile is preservation for that profile,
+nothing more.
+
+The executable order matters, because `backup` refuses to run while the service
+is loaded:
 
 ```sh
-echo-brain identity-bootstrap begin \
-  --config /absolute/path/runtime.json \
-  --organization-name "Example Company" \
-  --principal-name "Ada Lovelace" \
-  --slack-user-id U0456EFGH \
+echo-brain service stop --config /absolute/path/retired-runtime.json
+echo-brain backup --config /absolute/path/retired-runtime.json \
+  --backup-root /absolute/path/backups
+
+echo-brain onboard \
+  --config /absolute/path/new-runtime.json \
+  --state-dir /absolute/path/new-state
+# provision the Granola credential the new config references, then:
+echo-brain init --config /absolute/path/new-runtime.json
+echo-brain organization enroll \
+  --config /absolute/path/new-runtime.json \
+  --invitation /absolute/path/echo-organization-invitation.json \
+  --authority-pin sha256:PIN_FROM_A_SEPARATE_TRUSTED_CHANNEL \
   --allow-exportable-software-key
-
-echo-brain identity-bootstrap status \
-  --config /absolute/path/runtime.json --session <uuid>
-
-echo-brain identity-bootstrap commit \
-  --config /absolute/path/runtime.json --session <uuid> \
-  --confirm sha256:CONFIRMATION_DIGEST \
-  --independent-copy-root /absolute/path/independent-copy
-
-echo-brain identity-bootstrap abort \
-  --config /absolute/path/runtime.json --session <uuid> \
-  --confirm <installation-key-sha256>
 ```
 
-`echo-brain export` is the federated export command. It fails with
-`federated export is unavailable before the founder identity cutover` until
-that ceremony has committed.
+The new path must be free of founder residue — that is what the fence checks,
+not pristineness in general. `init` reports the credential recommendations for
+the configured adapters; `organization enroll` requires an initialized
+installation that is not already enrolled.
 
 This pre-1.0 build does not migrate a Secure Enclave identity to the portable
 file signer. `identity-check` reports `unsupported_legacy_key_backend` for that
-state. Preserve the prior state and signer when identity continuity matters;
-otherwise re-bootstrap only as an explicit continuity-breaking reset.
+state. Preserve the prior state and signer when identity continuity matters.
 
 ## Runtime configuration
 
@@ -323,8 +347,7 @@ invitation itself as independent verification. Enrollment retains the signed
 request, signed receipt, signed access state, and the authority's non-secret
 HTTPS origin plus any explicitly supplied internal CA; it never stores the
 bearer grant. `organization refresh` therefore works after the invitation is
-securely removed. Enrollment and founder bootstrap reuse one installation ID
-and signing key.
+securely removed.
 
 Once the authority is pinned, product startup and every processing cycle check
 the signed access lease before adapter contact. The running service renews its

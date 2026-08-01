@@ -21,8 +21,7 @@
     "src/infrastructure/filesystem/atomic-create.ts",
     "src/infrastructure/sqlite/migrate.ts",
     "src/util/json.ts",
-    "src/infrastructure/filesystem/process-file-lock.ts",
-    "src/util/timestamp.ts"
+    "src/infrastructure/filesystem/process-file-lock.ts"
   ],
   "forbidden_internal_roots": [
     "src/daemon/",
@@ -117,8 +116,6 @@
       "allowed_imports": [
         "src/product/machine/**",
         "src/product/secure-local-files.ts",
-        "src/product/federation/foundation/canonical-json.ts",
-        "src/product/federation/foundation/identifiers.ts",
         "src/infrastructure/filesystem/atomic-create.ts"
       ],
       "allowed_packages": ["@echo-brain/federation-protocol"],
@@ -173,7 +170,7 @@
       ]
     },
     {
-      "name": "federation-owns-identity-and-record-projection",
+      "name": "federation-owns-local-identity-and-the-cutover-fence",
       "from": "src/product/federation/**",
       "allowed_imports": [
         "src/product/*.ts",
@@ -210,7 +207,7 @@
       "allowed_node_builtins": ["buffer", "crypto", "fs", "https", "path"]
     },
     {
-      "name": "approval-gates-project-federation-records",
+      "name": "approval-gates-use-the-local-identity-fence",
       "from": "src/product/approval/**",
       "allowed_imports": [
         "src/product/approval/**",

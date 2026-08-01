@@ -6,13 +6,13 @@ import type {
   SlackPostedMessage,
   SlackReaction,
 } from "../../../src/adapters/shared/slack/slack-web-api-client.js";
+import { canonicalSha256 } from "../../../src/product/federation/foundation/canonical-json.js";
+import { captureSlackProviderIdentity } from "../../../src/product/federation/identity/slack-provider-identity.js";
 import {
-  canonicalSha256,
-  captureSlackProviderIdentity,
   issueSlackDmChallenge,
   pollSlackDmChallenge,
   type SlackDmChallengeApi,
-} from "../../../src/product/federation/index.js";
+} from "../../../src/product/federation/bootstrap/slack-dm-challenge.js";
 
 const ISSUED_AT = "2026-07-19T20:00:00.000Z";
 const EXPIRES_AT = "2026-07-19T20:05:00.000Z";

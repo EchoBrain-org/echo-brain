@@ -18,5 +18,4 @@ export {
 } from './spawn-sanitized-child.js';
 export * from './cli.js';
 export * as machine from './machine/index.js';
-export * from './federation/index.js';
 export * from './organization/index.js';

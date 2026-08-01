@@ -106,8 +106,11 @@ describe('decision node store', () => {
     mkdirSync(target);
     symlinkSync(target, link, 'dir');
 
+    // The shared retirement preflight refuses an uninspectable root before the
+    // store's own path check can run. Either refusal is correct; what matters
+    // is that a symlinked state root is never opened.
     await expect(new DecisionNodeStore(link).list()).rejects.toThrow(
-      /direct directory/,
+      /cannot be inspected|direct directory/,
     );
   });
 
@@ -510,7 +513,7 @@ describe('decision node store', () => {
     expect(native.approval_id).not.toBe(legacy.approval_id);
   });
 
-  it('keeps DEV.6 nodes readable but immutable after identity activation', async () => {
+  it('refuses every operation, including reads, once founder identity material appears', async () => {
     const root = newRoot('decision-store-cutover-legacy-');
     const legacyStore = new DecisionNodeStore(root, {
       now: () => '2026-07-16T21:00:00.000Z',
@@ -540,41 +543,49 @@ describe('decision node store', () => {
     writeFileSync(join(manifests, 'cutover-marker.json'), '{}\n', {
       mode: 0o600,
     });
+    // A maximally permissive custom capture: it accepts every event and
+    // validates nothing. It must not be able to revive the retired mode.
+    const captureCalls: string[] = [];
     const capture: DecisionNodeFederationCapture = {
       async captureRequested() {
+        captureCalls.push('captureRequested');
         return { federation: { candidate: true } };
       },
-      async validateRequested() {},
+      async validateRequested() {
+        captureCalls.push('validateRequested');
+      },
       async capturePublished({ reference }) {
+        captureCalls.push('capturePublished');
         return reference;
       },
-      async validatePublished() {},
+      async validatePublished() {
+        captureCalls.push('validatePublished');
+      },
       async captureResolved({ legacyMetadata }) {
+        captureCalls.push('captureResolved');
         return legacyMetadata;
       },
-      async validateResolved() {},
+      async validateResolved() {
+        captureCalls.push('validateResolved');
+      },
     };
     const activeStore = new DecisionNodeStore(root, {
       federationCapture: capture,
     });
 
+    const retired = /retired/;
     await expect(
       activeStore.getState(request().processing_key),
-    ).resolves.toMatchObject({
-      approval_id: legacy.approval_id,
-      status: 'approved',
-      requested_metadata: {},
-    });
-    await expect(activeStore.list()).resolves.toHaveLength(1);
-    await expect(activeStore.listFederated()).resolves.toEqual([]);
-
+    ).rejects.toThrow(retired);
+    await expect(activeStore.list()).rejects.toThrow(retired);
+    await expect(activeStore.listFederated()).rejects.toThrow(retired);
     await expect(
       activeStore.recordPublished({
         processingKey: request().processing_key,
         surface: 'terminal',
         reference: { output: 'must-not-be-written' },
       }),
-    ).rejects.toThrow(/pre-cutover decision node is immutable/);
+    ).rejects.toThrow(retired);
     await expect(
       activeStore.resolve({
         approvalId: legacy.approval_id,
@@ -582,19 +593,21 @@ describe('decision node store', () => {
         reviewedBy: 'founder',
         surface: 'slack',
       }),
-    ).rejects.toThrow(/pre-cutover decision node is immutable/);
+    ).rejects.toThrow(retired);
+    const nativeRequest = request();
+    nativeRequest.processing_key = `${nativeRequest.processing_key}:native`;
+    await expect(activeStore.ensureRequested(nativeRequest)).rejects.toThrow(
+      retired,
+    );
+
+    // Refused before the capture ran and before anything was written.
+    expect(captureCalls).toEqual([]);
     expect(
       existsSync(
         join(root, 'decisions', legacy.approval_id, 'published-terminal.json'),
       ),
     ).toBe(false);
-
-    const nativeRequest = request();
-    nativeRequest.processing_key = `${nativeRequest.processing_key}:native`;
-    const native = await activeStore.ensureRequested(nativeRequest);
-    expect(
-      (await activeStore.listFederated()).map((item) => item.approval_id),
-    ).toEqual([native.approval_id]);
+    expect(existsSync(join(root, 'decisions', legacy.approval_id))).toBe(true);
   });
 
   it('leaves no decision-node residue when requested federation capture fails', async () => {
@@ -753,9 +766,12 @@ describe('decision node store', () => {
       mode: 0o600,
     });
 
+    // The shared retirement gate is the first refusal now. The lower
+    // `identity-enabled decision capture is unavailable` guard remains in the
+    // store as defense in depth for any capture-less federated node.
     await expect(
       new DecisionNodeStore(root).ensureRequested(request()),
-    ).rejects.toThrow(/identity-enabled decision capture is unavailable/);
+    ).rejects.toThrow(/retired/);
   });
 
   it('does not create a resolution slot when federation validation fails', async () => {

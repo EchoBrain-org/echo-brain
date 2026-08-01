@@ -1,11 +1,15 @@
 # Identity, onboarding, and federation
 
-**Status:** Current — onboarding and access are live; federation is
-implemented but not exercised on the current pilot
+**Status:** Current — onboarding and access are live. The local
+founder-provenance federation surface (approval capture, attribution, signed
+record projection, export bundles, and protected independent copies) is retired
+and removed from this build; the "Evidence" and "Signed record boundary"
+sections below describe the persisted contracts and the design a future
+implementation would restore, not code that runs today.
 
 Echo processes source data locally while preserving organization attribution.
-The installation owns personal provider credentials, raw source data, its
-private signing key, and the signed records it produces. The organization
+The installation owns personal provider credentials, raw source data, and its
+private signing key. The organization
 authority owns shared membership, enrollment, access leases, revocation, and
 organization-level provider app credentials that an administrator explicitly
 onboards. Provider secret bytes remain in the customer-owned secret store at
@@ -29,7 +33,8 @@ installation profile while retaining immutable history.
 
 Identity claims are scoped by issuer, tenant, and subject and record their
 verification method. Display names, email addresses, token possession, and
-unscoped provider IDs are not canonical identity.
+unscoped provider IDs are not canonical identity. Claim scoping is live; the
+per-fact capture list below belongs to the retired provenance surface.
 
 Facts are captured when they become known:
 
@@ -42,7 +47,7 @@ Facts are captured when they become known:
 They are not reconstructed later from whichever account, model, or policy is
 currently configured.
 
-## Signed record boundary
+## Signed record boundary (persisted contract, not implemented in this build)
 
 Approved signals become immutable signed envelopes containing bounded
 attribution, approval, and publication evidence. Credentials, raw provider
@@ -83,8 +88,33 @@ hardware-backed adapter without changing the federation documents.
 
 Pre-1.0 Secure Enclave identities are not silently rewritten. A build without
 that backend reports `unsupported_legacy_key_backend`; operators must preserve
-the old signer for continuity or explicitly perform a continuity-breaking
-re-bootstrap.
+the old signer for continuity.
+
+A state root left behind by the retired founder-provenance mode is detected and
+refused, never downgraded: no product-work command, runtime start, or new
+processing cycle resumes on it. One shared observational gate in
+`cutover-fence.ts` runs before any directory creation, adapter or component
+resolution, credential work, provider or Authority contact, approval read or
+mutation, or caller-supplied callback, so a custom identity check, approval
+capture, approval store, or runtime cannot resume the mode. It is a fail-closed
+gate on trusted in-process callers, not a sandbox. The gate is re-run at every
+composition cycle, not only at construction, so residue appearing under a live
+composition still fails the next cycle closed; a background access-lease renewal
+started by an already-running composition may continue until that composition is
+closed.
+
+Diagnosis, preservation, and quiescing stay available on a fenced profile:
+`identity-check` still reports it as `identity_enabled` with
+`operational_ready: false`, and `validate-config`, `selftest`, general `status`,
+`backup`, `restore`, and `service stop`/`status`/`uninstall` remain reachable.
+Several of those write; the line is product work, not writes.
+
+Recovery does not cross the fence. The cutover is irreversible and a backup
+stays bound to its originating state path, so restore can only return a profile
+to itself. Because `backup` refuses while the service is loaded, the executable
+order is `service stop`, `backup`, `onboard` a founder-residue-free new state
+path, provision the Granola credential that config references, `init`, then
+`organization enroll` on that initialized, not-already-enrolled installation.
 
 Organization ingest, search, embeddings, participant resolution, IdP/SCIM,
 billing, and multi-organization tenancy are outside this onboarding/access

@@ -55,8 +55,8 @@ meeting source
 ```
 
 Core owns the canonical records, pipeline semantics, and persistence ports.
-Product owns concrete durable state, approval history, federation attribution,
-and runtime lifecycle. Adapters own provider authentication, API behavior,
+Product owns concrete durable state, approval history, local identity and the
+retired-founder cutover fence, and runtime lifecycle. Adapters own provider authentication, API behavior,
 mapping, pagination, and error translation.
 
 ## Typed capabilities
@@ -125,8 +125,8 @@ adapter.
   the assurance recorded when it cannot.
 - Accept only canonical meetings and emit only canonical signals with evidence.
 - Declare processor identity and, when model-backed, model and
-  prompt/configuration version so product attribution can capture them with the
-  input identity.
+  prompt/configuration version, so the persisted processor-attribution contract
+  can record them alongside the input identity.
 - Reject malformed output and bound retries and execution time.
 
 The bundled `llm` processor is one semantic adapter with narrow provider

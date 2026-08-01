@@ -18,6 +18,13 @@ import type { OrganizationEnrollmentRequestV1 } from '@echo-brain/organization-p
  * Response envelopes are syntax-validated at the transport boundary. The
  * enrollment/state layer still authenticates the signed protocol documents;
  * transport success is never permission.
+ *
+ * `checkPermission` is the exception to "signed document": the request is
+ * installation-signed, and the decision carries digests that bind it to that
+ * exact request without authenticating it. Authenticity comes from the
+ * transport -- the configured HTTPS origin associated with the pinned Authority
+ * descriptor -- so the caller must verify the request binding rather than
+ * trusting the response body on its own.
  */
 export interface OrganizationAuthorityClient {
   readAuthorityDescriptor(): Promise<OrganizationAuthorityDescriptorResponseV1>;

@@ -56,20 +56,59 @@ Every approval entry point shares one durable append-only approval history.
 
 ## Identity modes
 
-Pre-cutover use is rehearsal-grade and cannot be promoted retroactively.
-Identity cutover is irreversible. After cutover, strict identity checks precede
-provider contact, and partial wiring cannot bypass attribution, signed
-projection, or durability gates.
+Central organization-admin bootstrap is the one supported v1 path. Local use
+without an organization enrollment is rehearsal-grade and cannot be promoted
+retroactively.
 
-Federation is additive: existing processing keys, approval IDs, adapter
-contracts, and delivery idempotency remain unchanged. Seed-grade delivery waits
-until attribution, approval evidence, signed envelopes, the outbox, and the
-protected, verified independent copy of the signed outbox are durable.
+The local founder-provenance cutover mode is retired: no supported command or
+runtime path creates founder identity or cutover material, and the attribution,
+signed projection, outbox, and protected independent-copy implementations behind
+it are deleted. The low-level `commitFounderBootstrap`,
+`commitFounderCutoverGuard`, and writable bootstrap-session APIs still compile,
+so the product detects residue however it arrived rather than assuming it cannot
+exist.
+
+Identity cutover was irreversible, so a state root that still carries that
+material is detected and refused rather than downgraded. No product-work
+command, runtime start, or new processing cycle can resume on it. One shared
+gate in `cutover-fence.ts` is called by `prepareProductComposition` (at
+construction and at the start of every cycle), `startProductRuntime`,
+`DecisionNodeStore`, and the CLI before any directory creation, component or
+adapter resolution, credential work, provider or Authority contact, approval
+read or mutation, or caller-supplied callback, so a custom identity check,
+approval capture, approval store, or runtime cannot resume the retired mode.
+The gate is observational only, so refusing never mutates forensic founder
+state. It is a fail-closed gate on trusted in-process callers, not a sandbox:
+an injected component that bypasses the documented seams and writes to the
+state root directly is outside what it can prevent. One narrow carve-out: a
+background access-lease renewal started by an already-running composition can
+continue until that composition is closed, but every new processing cycle is
+gated.
+
+The CLI applies this as one early dispatch policy, as soon as the state path is
+known. `onboard`, `init`, `reconfigure`, `doctor`, every `organization` action
+(including `status`, which opens and migrates writable SQLite), `approvals`,
+`approve`, `reject`, `run-once`, `run`, `service-run`, and `service
+install`/`start`/`restart` are refused before any operator, probe, lock,
+directory, credential, database, network, or injected callback. The exceptions
+are the diagnose/preserve/quiesce commands -- `validate-config`, `selftest`,
+general `status`, `identity-check`, `backup`, `restore`, and `service
+stop`/`status`/`uninstall` -- not a claim that they never write.
+
+Recovery is not a restore. The cutover is irreversible and a backup stays bound
+to its originating state path, so a backup of a retired profile is preservation
+for that profile and never a way to cross the fence. Because `backup` refuses
+while the service is loaded, the executable order is: `service stop`, `backup`,
+`onboard` a founder-residue-free new state path, provision the Granola
+credential that config references, `init`, then `organization enroll` on that
+initialized, not-already-enrolled installation. The extension seams -- the
+decision store's federation capture port and the persisted document contracts
+under `schemas/product/` -- are retained.
 
 ## Product boundary
 
 The current product is one user-owned local installation. It is not a central
 organization database, identity provider, distributed scheduler, or plugin
-platform. Multi-user enrollment and organization access wrap that signed local
+platform. Multi-user enrollment and organization access wrap that local
 boundary: they gate the runtime without replacing the core or rewriting local
 history.

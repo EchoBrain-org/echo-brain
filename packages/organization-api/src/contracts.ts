@@ -80,6 +80,16 @@ export interface OrganizationPermissionCheckRequestV1 extends OrganizationPermis
   integrity: OrganizationApiSignedIntegrityV1;
 }
 
+/**
+ * The Authority's answer to one permission check. The decision itself is not
+ * signed. The request is installation-signed, and `request_sha256` plus
+ * `provider_event_sha256` bind the response to that exact request -- they do
+ * not authenticate it. Authenticity comes from the transport: the response
+ * arrives over the configured HTTPS origin associated with the pinned Authority
+ * descriptor. Callers must still compare both digests against the request they
+ * sent; anything else is a mismatch and fails closed. It is a decision for that
+ * one request, never a reusable or transferable authorization receipt.
+ */
 export interface OrganizationPermissionCheckDecisionV1 {
   schema_version: 1;
   kind: 'echo-organization-permission-check-decision';

@@ -18,5 +18,11 @@ authorization cache. The request carries only an opaque `approval_id`; raw
 product processing keys and meeting identifiers never cross the organization
 Authority boundary.
 
+The permission-check decision is not itself signed. The request is
+installation-signed; `request_sha256` and `provider_event_sha256` bind the
+decision to that exact request but do not authenticate it. Authenticity comes
+from the transport -- the configured HTTPS origin associated with the pinned
+Authority descriptor. Callers verify the request binding regardless.
+
 The package contains no server implementation, authentication provider,
 persistence, UI, administrator secret, or private-key implementation.
