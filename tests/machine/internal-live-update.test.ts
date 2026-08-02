@@ -644,6 +644,14 @@ describe('internal-live node operations', () => {
     expect(commands).toHaveLength(1);
     expect(commands[0]?.args).toContain('--prefix');
     expect(commands[0]?.args).toContain(prefix);
+    expect(commands[0]?.args).toContain(
+      `--userconfig=${join(internalLiveUpdateRoot(configPath), 'npm-no-config/user.npmrc')}`,
+    );
+    expect(commands[0]?.args).toContain(
+      `--globalconfig=${join(internalLiveUpdateRoot(configPath), 'npm-no-config/global.npmrc')}`,
+    );
+    expect(commands[0]?.args).not.toContain('--userconfig=/dev/null');
+    expect(commands[0]?.args).not.toContain('--globalconfig=/dev/null');
     expect(commands[0]?.args).not.toContain('--offline');
     expect(commands[0]?.args).not.toContain('--ignore-scripts');
     expect(commands[0]?.options?.cwd).toBe(internalLiveUpdateRoot(configPath));

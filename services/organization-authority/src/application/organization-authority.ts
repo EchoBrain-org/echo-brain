@@ -583,14 +583,19 @@ export class OrganizationAuthorityApplication {
             'internal-live rollout exceeds the minimum-v1 installation bound',
           );
         }
-        const rolloutIncomplete = activeInstallations.some(
-          (installation) =>
-            transaction.latestInternalLiveUpdateReceipt(
-              installation.installation_id,
-              current.directive_sequence,
-            )?.receipt.outcome !== 'healthy',
+        const rolloutReceipts = activeInstallations.map((installation) =>
+          transaction.latestInternalLiveUpdateReceipt(
+            installation.installation_id,
+            current.directive_sequence,
+          ),
         );
-        if (rolloutIncomplete) {
+        const rolloutStarted = rolloutReceipts.some(
+          (receipt) => receipt !== undefined,
+        );
+        const everyActiveInstallationHealthy = rolloutReceipts.every(
+          (receipt) => receipt?.receipt.outcome === 'healthy',
+        );
+        if (rolloutStarted && !everyActiveInstallationHealthy) {
           throw new AuthorityOperationError(
             'conflict',
             'current internal-live release is not healthy on every active installation',
