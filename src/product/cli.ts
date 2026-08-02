@@ -86,6 +86,15 @@ import { resolveProductStatePaths } from "./paths.js";
 import { SqliteCoreStateStore } from "./storage/sqlite-core-state-store.js";
 import { readFileNoFollow } from "./secure-local-files.js";
 import { SLACK_REACTIONS_APPROVAL_SURFACE_ADAPTER_VERSION } from "../adapters/approval-surfaces/slack-reactions/slack-reactions-approval-surface.js";
+import {
+  loadPackagedBuildIdentity,
+  type PackagedBuildIdentityV1,
+} from "./federation/build-identity.js";
+import {
+  runInternalLiveUpdate,
+  type RunInternalLiveUpdateOptions,
+} from "./update/internal-live-runner.js";
+import type { InternalLiveCommandRunner } from "./update/internal-live-node-operations.js";
 
 export interface ProductCliProcess {
   once: (event: "SIGINT" | "SIGTERM", listener: () => void) => unknown;
@@ -122,6 +131,16 @@ export interface ProductCliDependencies {
     createInstallationId?: () => string;
     allowInsecureLoopback?: boolean;
   };
+  internalLive?: {
+    execute?: (
+      options: RunInternalLiveUpdateOptions,
+    ) => ReturnType<typeof runInternalLiveUpdate>;
+    publicFetch?: typeof fetch;
+    commandRunner?: InternalLiveCommandRunner;
+    npmPath?: string;
+    nextDirectiveRequestId?: () => string;
+    nextTransactionId?: () => string;
+  };
 }
 
 interface ParsedCommand {
@@ -138,6 +157,7 @@ interface ParsedCommand {
     | "doctor"
     | "identity-check"
     | "organization"
+    | "update"
     | "service"
     | "backup"
     | "restore"
@@ -162,6 +182,9 @@ interface ParsedCommand {
     | "rebind"
     | "slack-link-begin"
     | "slack-link-complete";
+  updateAction?: "apply";
+  updateChannel?: "internal-live";
+  doctorLocalOnly?: boolean;
   slackLinkAttemptId?: string;
   slackLinkMessageTs?: string;
   invitationPath?: string;
@@ -178,6 +201,32 @@ const PRODUCT_VERSION = (
   }
 ).version;
 const CLI_PATH = realpathSync(fileURLToPath(import.meta.url));
+let cachedBuildIdentity: PackagedBuildIdentityV1 | undefined;
+
+function packagedBuildIdentity(): PackagedBuildIdentityV1 {
+  if (cachedBuildIdentity !== undefined) return cachedBuildIdentity;
+  try {
+    cachedBuildIdentity = loadPackagedBuildIdentity();
+  } catch (error) {
+    // Tests import the TypeScript source rather than the packaged CLI, so no
+    // generated build identity exists there. A distributed CLI must always
+    // carry the generated identity and fails closed if it is unavailable.
+    if (!CLI_PATH.endsWith(".ts")) throw error;
+    cachedBuildIdentity = {
+      schema_version: 1,
+      kind: "echo-packaged-build-identity",
+      product_version: PRODUCT_VERSION,
+      source_sha: "0".repeat(40),
+      source_kind: "worktree-head-unverified",
+    };
+  }
+  if (cachedBuildIdentity.product_version !== PRODUCT_VERSION) {
+    throw new Error(
+      "packaged build identity version does not match package.json",
+    );
+  }
+  return cachedBuildIdentity;
+}
 
 const HELP = `echo-brain ${PRODUCT_VERSION}
 
@@ -186,7 +235,7 @@ Usage:
   echo-brain init --config <absolute-path>
   echo-brain reconfigure --config <absolute-path>
   echo-brain status --config <absolute-path>
-  echo-brain doctor --config <absolute-path>
+  echo-brain doctor --config <absolute-path> [--local-only]
   echo-brain identity-check --config <absolute-path> [--strict]
   echo-brain organization enroll --config <absolute-path> --invitation <absolute-path> --authority-pin <sha256:...> [--authority-ca <absolute-path>] --allow-exportable-software-key
   echo-brain organization status --config <absolute-path>
@@ -194,6 +243,7 @@ Usage:
   echo-brain organization rebind --config <absolute-path> --authority-url <https-origin> --authority-pin <sha256:...> [--authority-ca <absolute-path>]
   echo-brain organization slack-link-begin --config <absolute-path>
   echo-brain organization slack-link-complete --config <absolute-path> --challenge-attempt <cat_...> --challenge-message-ts <Slack timestamp>  # reads ECHO_SLACK_LINK_CODE
+  echo-brain update apply --channel internal-live --config <absolute-path>
   echo-brain service <install|start|stop|restart|status|uninstall> --config <absolute-path>
   echo-brain backup --config <absolute-path> --backup-root <absolute-path> [--id <operation-id>]
   echo-brain restore --config <absolute-path> --backup <absolute-path> --backup-root <absolute-path> --id <operation-id>
@@ -223,6 +273,7 @@ function parseCommand(argv: readonly string[]): ParsedCommand {
     command !== "doctor" &&
     command !== "identity-check" &&
     command !== "organization" &&
+    command !== "update" &&
     command !== "service" &&
     command !== "backup" &&
     command !== "restore" &&
@@ -235,7 +286,7 @@ function parseCommand(argv: readonly string[]): ParsedCommand {
     command !== "run"
   ) {
     throw new Error(
-      "usage: echo-brain <onboard|init|reconfigure|status|doctor|identity-check|organization|service|backup|restore|validate-config|selftest|run-once|run|approvals|approve|reject> --config <absolute-path>",
+      "usage: echo-brain <onboard|init|reconfigure|status|doctor|identity-check|organization|update|service|backup|restore|validate-config|selftest|run-once|run|approvals|approve|reject> --config <absolute-path>",
     );
   }
   let serviceAction: ProductServiceAction | undefined;
@@ -247,6 +298,7 @@ function parseCommand(argv: readonly string[]): ParsedCommand {
     | "slack-link-begin"
     | "slack-link-complete"
     | undefined;
+  let updateAction: "apply" | undefined;
   let optionOffset = 1;
   if (command === "service") {
     const action = argv[1];
@@ -282,6 +334,15 @@ function parseCommand(argv: readonly string[]): ParsedCommand {
     organizationAction = action;
     optionOffset = 2;
   }
+  if (command === "update") {
+    if (argv[1] !== "apply") {
+      throw new Error(
+        "usage: echo-brain update apply --channel internal-live --config <absolute-path>",
+      );
+    }
+    updateAction = "apply";
+    optionOffset = 2;
+  }
   const parsed = parseArgs({
     args: [...argv.slice(optionOffset)],
     strict: true,
@@ -305,12 +366,20 @@ function parseCommand(argv: readonly string[]): ParsedCommand {
       "authority-ca": { type: "string" },
       "challenge-attempt": { type: "string" },
       "challenge-message-ts": { type: "string" },
+      channel: { type: "string" },
+      "local-only": { type: "boolean" },
     },
   });
   if (parsed.values.config === undefined)
     throw new Error("--config is required");
   if (parsed.values.strict !== undefined && command !== "identity-check") {
     throw new Error("--strict is only valid with identity-check");
+  }
+  if (
+    parsed.values["local-only"] !== undefined &&
+    command !== "doctor"
+  ) {
+    throw new Error("--local-only is only valid with doctor");
   }
   if (
     (command === "onboard" ||
@@ -320,6 +389,7 @@ function parseCommand(argv: readonly string[]): ParsedCommand {
       command === "doctor" ||
       command === "identity-check" ||
       command === "organization" ||
+      command === "update" ||
       command === "service" ||
       command === "service-run" ||
       command === "backup" ||
@@ -455,6 +525,15 @@ function parseCommand(argv: readonly string[]): ParsedCommand {
       );
     }
   }
+  if (command === "update") {
+    if (parsed.values.channel !== "internal-live") {
+      throw new Error(
+        "update apply requires --channel internal-live",
+      );
+    }
+  } else if (parsed.values.channel !== undefined) {
+    throw new Error("--channel is only valid with update apply");
+  }
   if (command === "approve" || command === "reject") {
     if (parsed.values.id === undefined) throw new Error("--id is required");
     if (
@@ -507,6 +586,12 @@ function parseCommand(argv: readonly string[]): ParsedCommand {
       ? { allowExportableSoftwareKey: true }
       : {}),
     ...(organizationAction === undefined ? {} : { organizationAction }),
+    ...(updateAction === undefined
+      ? {}
+      : { updateAction, updateChannel: "internal-live" as const }),
+    ...(parsed.values["local-only"] === true
+      ? { doctorLocalOnly: true }
+      : {}),
     ...(parsed.values["challenge-attempt"] === undefined
       ? {}
       : { slackLinkAttemptId: parsed.values["challenge-attempt"] }),
@@ -946,6 +1031,7 @@ function createProductOperator(
     ...configured,
     cliPath: configured.cliPath ?? CLI_PATH,
     productVersion: configured.productVersion ?? PRODUCT_VERSION,
+    buildIdentity: configured.buildIdentity ?? packagedBuildIdentity(),
   });
 }
 
@@ -1157,6 +1243,90 @@ export async function runProductCli(
   }
   const classifier =
     dependencies.classifyStateFilesystem ?? classifyStateFilesystem;
+  if (parsed.command === "update") {
+    const probe = await probeConfig(config, classifier);
+    if (!probe.ok) {
+      print(stderr, {
+        ok: false,
+        command: parsed.command,
+        action: parsed.updateAction,
+        channel: parsed.updateChannel,
+        filesystem: probe.filesystem,
+      });
+      return 1;
+    }
+    try {
+      const execute =
+        dependencies.internalLive?.execute ?? runInternalLiveUpdate;
+      const result = await execute({
+        configPath: parsed.configPath,
+        config,
+        cliPath: dependencies.operator?.cliPath ?? CLI_PATH,
+        productVersion:
+          dependencies.operator?.productVersion ?? PRODUCT_VERSION,
+        buildIdentity:
+          dependencies.operator?.buildIdentity === undefined
+            ? packagedBuildIdentity()
+            : {
+                schema_version: 1,
+                kind: "echo-packaged-build-identity",
+                product_version:
+                  dependencies.operator.productVersion ?? PRODUCT_VERSION,
+                ...dependencies.operator.buildIdentity,
+              },
+        now: resolveProductClock(dependencies.now),
+        ...(dependencies.organization?.installationSigner === undefined
+          ? {}
+          : {
+              installationSigner:
+                dependencies.organization.installationSigner,
+            }),
+        ...(dependencies.organization?.fetch === undefined
+          ? {}
+          : { authorityFetch: dependencies.organization.fetch }),
+        ...(dependencies.organization?.allowInsecureLoopback === undefined
+          ? {}
+          : {
+              allowInsecureLoopback:
+                dependencies.organization.allowInsecureLoopback,
+            }),
+        ...(dependencies.internalLive?.publicFetch === undefined
+          ? {}
+          : { publicFetch: dependencies.internalLive.publicFetch }),
+        ...(dependencies.internalLive?.commandRunner === undefined
+          ? {}
+          : { commandRunner: dependencies.internalLive.commandRunner }),
+        ...(dependencies.internalLive?.npmPath === undefined
+          ? {}
+          : { npmPath: dependencies.internalLive.npmPath }),
+        ...(dependencies.internalLive?.nextDirectiveRequestId === undefined
+          ? {}
+          : {
+              nextDirectiveRequestId:
+                dependencies.internalLive.nextDirectiveRequestId,
+            }),
+        ...(dependencies.internalLive?.nextTransactionId === undefined
+          ? {}
+          : {
+              nextTransactionId:
+                dependencies.internalLive.nextTransactionId,
+            }),
+      });
+      const ok = result.receipt.outcome === "healthy";
+      print(ok ? stdout : stderr, {
+        ok,
+        command: parsed.command,
+        action: parsed.updateAction,
+        channel: parsed.updateChannel,
+        directive_sequence: result.directive_sequence,
+        receipt: result.receipt,
+      });
+      return ok ? 0 : 1;
+    } catch (error) {
+      printOperatorError(stderr, "update apply", error);
+      return 1;
+    }
+  }
   if (parsed.command === "organization") {
     const action = parsed.organizationAction!;
     const usesDefaultFileSigner =
@@ -1768,29 +1938,32 @@ export async function runProductCli(
       }
       let adapters: Awaited<ReturnType<typeof diagnoseConfiguredAdapters>> = [];
       let adapterError: string | undefined;
-      try {
-        const factories =
-          dependencies.adapterFactories ?? createDefaultAdapterFactories();
-        const registry = await createConfiguredAdapterRegistry(
-          config,
-          factories,
-          {
-            environment: dependencies.environment,
-            now: dependencies.now,
-          },
-        );
-        adapters = await diagnoseConfiguredAdapters(
-          config,
-          registry,
-          dependencies.doctorHealthTimeoutMs ?? 10_000,
-        );
-      } catch (error) {
-        adapterError = (error as Error).message;
+      if (parsed.doctorLocalOnly !== true) {
+        try {
+          const factories =
+            dependencies.adapterFactories ?? createDefaultAdapterFactories();
+          const registry = await createConfiguredAdapterRegistry(
+            config,
+            factories,
+            {
+              environment: dependencies.environment,
+              now: dependencies.now,
+            },
+          );
+          adapters = await diagnoseConfiguredAdapters(
+            config,
+            registry,
+            dependencies.doctorHealthTimeoutMs ?? 10_000,
+          );
+        } catch (error) {
+          adapterError = (error as Error).message;
+        }
       }
       try {
         const report = await operator.doctor({
           filesystem,
           adapters,
+          includeAdapters: parsed.doctorLocalOnly !== true,
           ...(adapterError === undefined ? {} : { adapterError }),
         });
         print(report.ok ? stdout : stderr, {

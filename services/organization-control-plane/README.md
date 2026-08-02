@@ -22,7 +22,7 @@ requires the explicit `install-integrations` maintenance command; normal
 Raw Slack credentials live only in customer-owned mode-0600 secret storage.
 SQLite stores their opaque handles. Organization onboarding verifies the bot,
 workspace, required scopes, and public channel before activation. Existing
-profileless founder-live connections remain usable by their approval bindings
+profileless Internal Live connections remain usable by their approval bindings
 until the same credential and channel are explicitly reverified.
 
 ## Migration invariant

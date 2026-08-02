@@ -22,6 +22,9 @@ describe('standalone CLI basics', () => {
     expect(stdout.read()).toContain('echo-brain selftest');
     expect(stdout.read()).toContain('echo-brain identity-check');
     expect(stdout.read()).toContain('echo-brain organization enroll');
+    expect(stdout.read()).toContain(
+      'echo-brain update apply --channel internal-live',
+    );
     expect(stdout.read()).toContain('--allow-exportable-software-key');
   });
 
@@ -47,6 +50,6 @@ describe('standalone CLI basics', () => {
     expect(await runProductCli(['--version'], { stdout: stdout.stream })).toBe(
       0,
     );
-    expect(stdout.read()).toBe('0.0.0-dev.0\n');
+    expect(stdout.read()).toBe('0.1.0-internal.1\n');
   });
 });

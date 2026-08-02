@@ -7,6 +7,8 @@ import {
   MAX_ORGANIZATION_API_BODY_BYTES,
   ORGANIZATION_API_ACCESS_LEASES_PATH,
   ORGANIZATION_API_ADMIN_AUDIT_PATH,
+  ORGANIZATION_API_ADMIN_INTERNAL_LIVE_RELEASES_PATH,
+  ORGANIZATION_API_ADMIN_INTERNAL_LIVE_ROLLOUT_PATH,
   ORGANIZATION_API_ADMIN_AUTH_SCHEME,
   ORGANIZATION_API_ADMIN_ENROLLMENT_GRANTS_PATH,
   ORGANIZATION_API_ADMIN_INSTALLATIONS_PATH,
@@ -15,12 +17,17 @@ import {
   ORGANIZATION_API_AUTHORITY_DESCRIPTOR_PATH,
   ORGANIZATION_API_ENROLLMENT_AUTH_SCHEME,
   ORGANIZATION_API_ENROLLMENTS_PATH,
+  ORGANIZATION_API_INTERNAL_LIVE_DIRECTIVES_PATH,
+  ORGANIZATION_API_INTERNAL_LIVE_RECEIPTS_PATH,
   ORGANIZATION_API_PERMISSION_CHECKS_PATH,
   ORGANIZATION_API_SLACK_LINK_CHALLENGES_PATH,
   ORGANIZATION_API_SLACK_LINK_COMPLETIONS_PATH,
   validateCompleteOrganizationEnrollmentRequest,
+  validateApproveOrganizationInternalLiveReleaseRequest,
   validateIssueOrganizationEnrollmentGrantRequest,
   validateOrganizationAccessLeaseRequest,
+  validateOrganizationInternalLiveDirectiveRequest,
+  validateOrganizationInternalLiveUpdateReceipt,
   validateOrganizationPermissionCheckRequest,
   validateOrganizationSlackLinkBeginRequest,
   validateOrganizationSlackLinkCompleteRequest,
@@ -181,6 +188,15 @@ function sendJson(
     ...extraHeaders,
   });
   response.end(bytes);
+}
+
+function sendNoContent(response: ServerResponse): void {
+  response.writeHead(204, {
+    'Cache-Control': 'no-store',
+    'Content-Length': '0',
+    'X-Content-Type-Options': 'nosniff',
+  });
+  response.end();
 }
 
 function errorBody(code: string, message: string): OrganizationApiErrorV1 {
@@ -646,6 +662,25 @@ export function createOrganizationAuthorityHttpServer(
 
         if (
           method === 'GET' &&
+          url.pathname === ORGANIZATION_API_ADMIN_INTERNAL_LIVE_ROLLOUT_PATH
+        ) {
+          requireAdmin(request);
+          if (url.search !== '') {
+            throw new AuthorityOperationError(
+              'invalid_request',
+              'internal-live rollout query parameters are not supported',
+            );
+          }
+          sendJson(
+            response,
+            200,
+            options.application.internalLiveRolloutStatus(),
+          );
+          return;
+        }
+
+        if (
+          method === 'GET' &&
           url.pathname === ORGANIZATION_API_ADMIN_INTEGRATIONS_PATH
         ) {
           requireAdmin(request);
@@ -740,6 +775,33 @@ export function createOrganizationAuthorityHttpServer(
 
         if (
           method === 'POST' &&
+          url.pathname === ORGANIZATION_API_INTERNAL_LIVE_DIRECTIVES_PATH
+        ) {
+          const command = validateOrganizationInternalLiveDirectiveRequest(
+            await readJsonBody(request),
+          );
+          sendJson(
+            response,
+            200,
+            options.application.fetchInternalLiveDirective(command),
+          );
+          return;
+        }
+
+        if (
+          method === 'POST' &&
+          url.pathname === ORGANIZATION_API_INTERNAL_LIVE_RECEIPTS_PATH
+        ) {
+          const receipt = validateOrganizationInternalLiveUpdateReceipt(
+            await readJsonBody(request),
+          );
+          options.application.recordInternalLiveUpdateReceipt(receipt);
+          sendNoContent(response);
+          return;
+        }
+
+        if (
+          method === 'POST' &&
           url.pathname === ORGANIZATION_API_PERMISSION_CHECKS_PATH
         ) {
           const integrations = requireIntegrations();
@@ -811,6 +873,22 @@ export function createOrganizationAuthorityHttpServer(
               await readJsonBody(request),
               lifecycle.shutdownController.signal,
             ),
+          );
+          return;
+        }
+
+        if (
+          method === 'POST' &&
+          url.pathname === ORGANIZATION_API_ADMIN_INTERNAL_LIVE_RELEASES_PATH
+        ) {
+          requireAdmin(request);
+          const command = validateApproveOrganizationInternalLiveReleaseRequest(
+            await readJsonBody(request),
+          );
+          sendJson(
+            response,
+            201,
+            options.application.approveInternalLiveRelease(command),
           );
           return;
         }

@@ -24,6 +24,8 @@ const AUTHORITY_TABLES = Object.freeze([
   'authority_audit_log',
   'authority_enrollment_grants',
   'authority_enrollments',
+  'authority_internal_live_releases',
+  'authority_internal_live_update_receipts',
   'authority_memberships',
   'authority_metadata',
   'authority_principals',

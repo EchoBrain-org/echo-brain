@@ -21,6 +21,14 @@ export const ORGANIZATION_API_ADMIN_INSTALLATIONS_PATH =
 export const ORGANIZATION_API_ADMIN_ENROLLMENT_GRANTS_PATH =
   '/v1/admin/enrollment-grants';
 export const ORGANIZATION_API_ADMIN_AUDIT_PATH = '/v1/admin/audit';
+export const ORGANIZATION_API_ADMIN_INTERNAL_LIVE_RELEASES_PATH =
+  '/v1/admin/internal-live/releases';
+export const ORGANIZATION_API_ADMIN_INTERNAL_LIVE_ROLLOUT_PATH =
+  '/v1/admin/internal-live/rollout';
+export const ORGANIZATION_API_INTERNAL_LIVE_DIRECTIVES_PATH =
+  '/v1/internal-live/directives';
+export const ORGANIZATION_API_INTERNAL_LIVE_RECEIPTS_PATH =
+  '/v1/internal-live/receipts';
 
 export function organizationApiMembershipEnrollmentGrantsPath(
   membershipId: string,

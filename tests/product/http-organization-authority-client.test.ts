@@ -1,6 +1,8 @@
 import { Buffer } from 'node:buffer';
 import { describe, expect, it, vi } from 'vitest';
 import {
+  createOrganizationInternalLiveDirectiveRequest,
+  createOrganizationInternalLiveUpdateReceipt,
   createOrganizationPermissionCheckRequest,
   createOrganizationSlackLinkBeginRequest,
   createOrganizationSlackLinkCompleteRequest,
@@ -447,6 +449,96 @@ describe('HTTP organization authority client', () => {
     await expect(client.readAuthorityDescriptor()).rejects.toMatchObject({
       code: 'response_too_large',
     });
+  });
+
+  it('uses signed internal-live requests and accepts only a 204 receipt acknowledgement', async () => {
+    const authority = new TestAuthority();
+    const signer = new TestInstallationSigner();
+    const signingKey = protocolInstallationKey(signer);
+    const sign = (bytes: Buffer) =>
+      signer.sign(
+        ORGANIZATION_IDS.installation,
+        bytes,
+        signingKey.key_id,
+      );
+    const directiveRequest =
+      await createOrganizationInternalLiveDirectiveRequest(
+        {
+          request_id: 'udr_00000000-0000-4000-8000-000000000001',
+          authority_id: ORGANIZATION_IDS.authority,
+          authority_key_id: authority.descriptor.signing_key.key_id,
+          organization_id: ORGANIZATION_IDS.organization,
+          enrollment_id: ORGANIZATION_IDS.enrollment,
+          installation_id: ORGANIZATION_IDS.installation,
+          installation_signing_key: signingKey,
+          requested_at: NOW,
+        },
+        sign,
+      );
+    const receipt = await createOrganizationInternalLiveUpdateReceipt(
+      {
+        transaction_id: 'upd_00000000-0000-4000-8000-000000000001',
+        authority_id: ORGANIZATION_IDS.authority,
+        authority_key_id: authority.descriptor.signing_key.key_id,
+        organization_id: ORGANIZATION_IDS.organization,
+        enrollment_id: ORGANIZATION_IDS.enrollment,
+        installation_id: ORGANIZATION_IDS.installation,
+        directive_sequence: 1,
+        release_version: '0.1.0-internal.2',
+        manifest_sha256: 'a'.repeat(64),
+        artifact_sha256: 'b'.repeat(64),
+        source_sha: 'c'.repeat(40),
+        outcome: 'healthy',
+        doctor: { ok: true, passed: 11, total: 11 },
+        failure: null,
+        finished_at: NOW,
+        installation_signing_key: signingKey,
+      },
+      sign,
+    );
+    const directive = {
+      schema_version: 1,
+      kind: 'echo-internal-live-update-directive',
+      channel: 'internal-live',
+      directive_sequence: 1,
+      manifest_url:
+        'https://github.com/EchoBrain-org/echo-brain/releases/download/internal-v0.1.0-internal.2/internal-live-release-manifest.v1.json',
+      manifest_sha256: 'a'.repeat(64),
+      approved_at: NOW,
+      evaluated_at: NOW,
+    } as const;
+    let call = 0;
+    const client = new HttpOrganizationAuthorityClient({
+      baseUrl: 'https://authority.example',
+      fetch: async (input, init) => {
+        call += 1;
+        expect(init?.method).toBe('POST');
+        expect(new Headers(init?.headers).get('authorization')).toBeNull();
+        if (call === 1) {
+          expect(String(input)).toBe(
+            'https://authority.example/v1/internal-live/directives',
+          );
+          expect(JSON.parse(String(init?.body))).toEqual(directiveRequest);
+          return new Response(JSON.stringify(directive), {
+            status: 200,
+            headers: { 'content-type': 'application/json' },
+          });
+        }
+        expect(String(input)).toBe(
+          'https://authority.example/v1/internal-live/receipts',
+        );
+        expect(JSON.parse(String(init?.body))).toEqual(receipt);
+        return new Response(null, { status: 204 });
+      },
+    });
+
+    await expect(
+      client.fetchInternalLiveDirective(directiveRequest),
+    ).resolves.toEqual(directive);
+    await expect(
+      client.recordInternalLiveUpdateReceipt(receipt),
+    ).resolves.toBeUndefined();
+    expect(call).toBe(2);
   });
 
   it('propagates an unexpected nested validator fault to the caller', async () => {

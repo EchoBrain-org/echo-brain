@@ -61,6 +61,10 @@ function testApplication() {
   const application = {
     descriptor: unexpected,
     checkPermissionSubject: unexpected,
+    internalLiveRolloutStatus: unexpected,
+    approveInternalLiveRelease: unexpected,
+    fetchInternalLiveDirective: unexpected,
+    recordInternalLiveUpdateReceipt: unexpected,
     adminOverview: vi.fn(() => ({
       organization_id: IDS.organization,
       organization_display_name: '<script>alert("organization")</script>',

@@ -36,8 +36,11 @@ import type {
 } from '@echo-brain/organization-protocol';
 import {
   createOrganizationAccessLeaseRequest,
+  createOrganizationInternalLiveDirectiveRequest,
+  createOrganizationInternalLiveUpdateReceipt,
   createOrganizationPermissionCheckRequest,
   createOrganizationSlackLinkBeginRequest,
+  organizationInternalLiveManifestSha256,
 } from '@echo-brain/organization-api';
 import type { OrganizationPermissionCheckRequestV1 } from '@echo-brain/organization-api';
 import { OrganizationAuthorityApplication } from '../src/application/organization-authority.js';
@@ -306,6 +309,295 @@ function closeFixture(
 }
 
 describe('single-organization authority runtime', () => {
+  it('approves one immutable internal-live pointer and records signed redacted rollout receipts', async () => {
+    const fixture = await createEnrolledFixture('2026-08-02T20:00:00.000Z');
+    try {
+      const manifest = {
+        schema_version: 1 as const,
+        kind: 'echo-internal-live-release' as const,
+        channel: 'internal-live' as const,
+        release_version: '0.1.0-internal.1',
+        release_tag: 'internal-v0.1.0-internal.1',
+        source: {
+          sha: 'a'.repeat(40),
+          kind: 'materialized-commit' as const,
+        },
+        artifact: {
+          package: 'echo-brain' as const,
+          filename: 'echo-brain-0.1.0-internal.1.tgz',
+          download_url:
+            'https://github.com/EchoBrain-org/echo-brain/releases/download/internal-v0.1.0-internal.1/echo-brain-0.1.0-internal.1.tgz',
+          size_bytes: 1234,
+          sha256: 'b'.repeat(64),
+        },
+        compatibility: {
+          os: 'darwin' as const,
+          arch: 'arm64' as const,
+          node: '22.22.1',
+          npm: '10.9.4',
+        },
+        build: {
+          repository: 'EchoBrain-org/echo-brain',
+          workflow: 'internal-live-release.yml' as const,
+          run_id: '123456789',
+          run_attempt: 1,
+        },
+      };
+      expect(fixture.application.internalLiveRolloutStatus()).toMatchObject({
+        channel: 'internal-live',
+        approved_release: null,
+        installations: [
+          {
+            installation_id: fixture.enrolled.installationId,
+            rollout_state: 'no_release',
+            receipt: null,
+          },
+        ],
+      });
+
+      const approval = {
+        schema_version: 1 as const,
+        kind: 'echo-internal-live-release-approval-request' as const,
+        command_id: `adm_${randomUUID()}`,
+        manifest_url:
+          'https://github.com/EchoBrain-org/echo-brain/releases/download/internal-v0.1.0-internal.1/internal-live-release-manifest.v1.json',
+        manifest_sha256: organizationInternalLiveManifestSha256(manifest),
+        manifest,
+      };
+      const approvalForVersion = (
+        releaseVersion: string,
+        sourceCharacter: string,
+        artifactCharacter: string,
+      ) => {
+        const releaseTag = `internal-v${releaseVersion}`;
+        const candidateManifest = {
+          ...manifest,
+          release_version: releaseVersion,
+          release_tag: releaseTag,
+          source: {
+            ...manifest.source,
+            sha: sourceCharacter.repeat(40),
+          },
+          artifact: {
+            ...manifest.artifact,
+            filename: `echo-brain-${releaseVersion}.tgz`,
+            download_url: `https://github.com/EchoBrain-org/echo-brain/releases/download/${releaseTag}/echo-brain-${releaseVersion}.tgz`,
+            sha256: artifactCharacter.repeat(64),
+          },
+        };
+        return {
+          schema_version: 1 as const,
+          kind: 'echo-internal-live-release-approval-request' as const,
+          command_id: `adm_${randomUUID()}`,
+          manifest_url: `https://github.com/EchoBrain-org/echo-brain/releases/download/${releaseTag}/internal-live-release-manifest.v1.json`,
+          manifest_sha256:
+            organizationInternalLiveManifestSha256(candidateManifest),
+          manifest: candidateManifest,
+        };
+      };
+      fixture.clock.advance(1);
+      const approved = fixture.application.approveInternalLiveRelease(approval);
+      expect(approved).toMatchObject({
+        kind: 'echo-internal-live-update-directive',
+        channel: 'internal-live',
+        directive_sequence: 1,
+        manifest_url: approval.manifest_url,
+        manifest_sha256: approval.manifest_sha256,
+      });
+      expect(fixture.application.approveInternalLiveRelease(approval)).toEqual(
+        approved,
+      );
+      expect(() =>
+        fixture.application.approveInternalLiveRelease({
+          ...approval,
+          manifest_url: approval.manifest_url.replace(
+            'internal-live-release-manifest',
+            'different',
+          ),
+        }),
+      ).toThrow();
+      for (const candidate of [
+        approvalForVersion('0.1.0-internal.0', 'c', 'd'),
+        approvalForVersion('0.1.0-internal.1', 'd', 'e'),
+      ]) {
+        expect(() =>
+          fixture.application.approveInternalLiveRelease(candidate),
+        ).toThrow(/version must increase monotonically/);
+      }
+
+      fixture.clock.advance(1);
+      const directiveRequest =
+        await createOrganizationInternalLiveDirectiveRequest(
+          {
+            request_id: `udr_${randomUUID()}`,
+            authority_id:
+              fixture.enrolled.result.enrollment_receipt.authority_id,
+            authority_key_id:
+              fixture.enrolled.result.enrollment_receipt.authority_key_id,
+            organization_id:
+              fixture.enrolled.result.enrollment_receipt.organization_id,
+            enrollment_id:
+              fixture.enrolled.result.enrollment_receipt.enrollment_id,
+            installation_id: fixture.enrolled.installationId,
+            installation_signing_key: fixture.enrolled.installation.descriptor,
+            requested_at: fixture.clock.now(),
+          },
+          async (bytes) => sign(fixture.enrolled.installation, bytes),
+        );
+      expect(
+        fixture.application.fetchInternalLiveDirective(directiveRequest),
+      ).toMatchObject({
+        directive_sequence: 1,
+        manifest_sha256: approval.manifest_sha256,
+      });
+
+      const higherApproval = approvalForVersion(
+        '0.1.0-internal.2',
+        'e',
+        'f',
+      );
+      expect(() =>
+        fixture.application.approveInternalLiveRelease(higherApproval),
+      ).toThrow(/not healthy on every active installation/);
+
+      const rolledBackReceipt =
+        await createOrganizationInternalLiveUpdateReceipt(
+          {
+            authority_id:
+              fixture.enrolled.result.enrollment_receipt.authority_id,
+            authority_key_id:
+              fixture.enrolled.result.enrollment_receipt.authority_key_id,
+            organization_id:
+              fixture.enrolled.result.enrollment_receipt.organization_id,
+            enrollment_id:
+              fixture.enrolled.result.enrollment_receipt.enrollment_id,
+            installation_id: fixture.enrolled.installationId,
+            installation_signing_key:
+              fixture.enrolled.installation.descriptor,
+            transaction_id: `upd_${randomUUID()}`,
+            directive_sequence: 1,
+            release_version: manifest.release_version,
+            manifest_sha256: approval.manifest_sha256,
+            artifact_sha256: manifest.artifact.sha256,
+            source_sha: manifest.source.sha,
+            outcome: 'rolled_back',
+            doctor: { ok: true, passed: 10, total: 10 },
+            failure: { phase: 'doctor', code: 'doctor_failed' },
+            finished_at: fixture.clock.now(),
+          },
+          async (bytes) => sign(fixture.enrolled.installation, bytes),
+        );
+      fixture.application.recordInternalLiveUpdateReceipt(rolledBackReceipt);
+      expect(() =>
+        fixture.application.approveInternalLiveRelease(higherApproval),
+      ).toThrow(/not healthy on every active installation/);
+
+      const transactionId = `upd_${randomUUID()}`;
+      fixture.clock.advance(1);
+      const receiptPayload = {
+        authority_id:
+          fixture.enrolled.result.enrollment_receipt.authority_id,
+        authority_key_id:
+          fixture.enrolled.result.enrollment_receipt.authority_key_id,
+        organization_id:
+          fixture.enrolled.result.enrollment_receipt.organization_id,
+        enrollment_id:
+          fixture.enrolled.result.enrollment_receipt.enrollment_id,
+        installation_id: fixture.enrolled.installationId,
+        installation_signing_key: fixture.enrolled.installation.descriptor,
+        transaction_id: transactionId,
+        directive_sequence: 1,
+        release_version: manifest.release_version,
+        manifest_sha256: approval.manifest_sha256,
+        artifact_sha256: manifest.artifact.sha256,
+        source_sha: manifest.source.sha,
+        outcome: 'healthy' as const,
+        doctor: { ok: true, passed: 11, total: 11 },
+        failure: null,
+        finished_at: fixture.clock.now(),
+      };
+      const receipt = await createOrganizationInternalLiveUpdateReceipt(
+        receiptPayload,
+        async (bytes) => sign(fixture.enrolled.installation, bytes),
+      );
+      fixture.clock.advance(5 * 60 * 1000 + 1);
+      expect(() =>
+        fixture.application.recordInternalLiveUpdateReceipt(receipt),
+      ).not.toThrow();
+      const resignedReceipt = await createOrganizationInternalLiveUpdateReceipt(
+        receiptPayload,
+        async (bytes) => sign(fixture.enrolled.installation, bytes),
+      );
+      expect(() =>
+        fixture.application.recordInternalLiveUpdateReceipt(resignedReceipt),
+      ).not.toThrow();
+      const divergentReceipt = await createOrganizationInternalLiveUpdateReceipt(
+        {
+          ...receiptPayload,
+          outcome: 'failed',
+          doctor: null,
+          failure: { phase: 'doctor', code: 'doctor_failed' },
+          finished_at: fixture.clock.now(),
+        },
+        async (bytes) => sign(fixture.enrolled.installation, bytes),
+      );
+      expect(() =>
+        fixture.application.recordInternalLiveUpdateReceipt(divergentReceipt),
+      ).toThrow(/transaction ID was reused/);
+      const futureReceipt = await createOrganizationInternalLiveUpdateReceipt(
+        {
+          ...receiptPayload,
+          transaction_id: `upd_${randomUUID()}`,
+          finished_at: new Date(
+            Date.parse(fixture.clock.now()) + 1,
+          ).toISOString(),
+        },
+        async (bytes) => sign(fixture.enrolled.installation, bytes),
+      );
+      expect(() =>
+        fixture.application.recordInternalLiveUpdateReceipt(futureReceipt),
+      ).toThrow(/finished_at cannot be in the future/);
+      expect(fixture.application.internalLiveRolloutStatus()).toMatchObject({
+        approved_release: {
+          directive_sequence: 1,
+          release_version: manifest.release_version,
+        },
+        installations: [
+          {
+            installation_id: fixture.enrolled.installationId,
+            rollout_state: 'healthy',
+            receipt: {
+              release_version: manifest.release_version,
+              doctor: { ok: true, passed: 11, total: 11 },
+            },
+          },
+        ],
+      });
+      const higher =
+        fixture.application.approveInternalLiveRelease(higherApproval);
+      expect(higher.directive_sequence).toBe(2);
+
+      const database = new Database(fixture.databasePath, { readonly: true });
+      try {
+        const rows = database
+          .prepare(
+            `SELECT receipt_json FROM authority_internal_live_update_receipts`,
+          )
+          .all() as Array<{ receipt_json: string }>;
+        expect(rows).toHaveLength(2);
+        for (const row of rows) {
+          expect(row.receipt_json).not.toMatch(
+            /path|command|config|credential|meeting|transcript|log/i,
+          );
+        }
+      } finally {
+        database.close();
+      }
+    } finally {
+      closeFixture(fixture);
+    }
+  });
+
   it('replays exact admin commands and rejects divergent command reuse', async () => {
     const directory = mkdtempSync(join(tmpdir(), 'echo-authority-admin-'));
     chmodSync(directory, 0o700);

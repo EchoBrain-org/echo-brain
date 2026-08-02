@@ -48,19 +48,76 @@ foreground commands remain Node-based.
 npm ci
 npm run check
 npm pack
-npm install -g ./echo-brain-0.0.0-dev.0.tgz
+npm install -g ./echo-brain-0.1.0-internal.1.tgz
 ```
 
 `npm run check` runs the source-boundary check, TypeScript, ESLint, and the
 stable test suite. `npm pack` builds the CLI and includes its three local
 protocol packages. A package built from a clean commit records that commit and
 a content manifest for every npm-packed file except the manifest itself. A
-dirty or untracked worktree is marked unverified and cannot supply founder
-artifact evidence. The manifest detects package corruption or local tampering;
+dirty or untracked worktree is marked unverified and cannot supply Internal
+Live artifact evidence. The manifest detects package corruption or local tampering;
 it is not a publisher signature. This pre-1.0 build does not preserve
 package history automatically, so retain an older installed package tree when
 its previously recorded artifact identity must remain verifiable after an
 upgrade.
+
+## Internal Live releases and machine updates
+
+Internal Live is the small, controlled release lane for ECHO employees. It is
+not a client release. A manual GitHub workflow builds the npm package once from
+`main`, tests those exact bytes on macOS arm64, waits for approval in the
+protected `internal-live` environment, and publishes a prerelease bundle whose
+exact bytes are pinned by a manifest and checksums.
+
+The first Internal Live package is a one-time updater bootstrap and is installed
+from its checked release bundle. After that, an enrolled Mac updates with one
+command:
+
+```sh
+echo-brain update apply \
+  --channel internal-live \
+  --config /absolute/path/runtime.json
+```
+
+That command asks the organization Authority for the currently approved
+release, verifies the public manifest and package in full before stopping the
+service, backs up local state, retains the installed package, installs the new
+version, reapplies the existing configuration, starts the service, and runs
+a local-only `doctor` covering package identity, config/state, LaunchAgent,
+runtime, and credential files. It does not call Granola, Slack, or an LLM. If
+the candidate fails, it restores the previous package and state. The Authority
+receives only a signed, non-secret outcome receipt so the admin can see which
+enrolled Macs are pending, healthy, rolled back, or failed.
+
+The admin approves a tested manifest and reads rollout status from the
+organization-authority checkout:
+
+```sh
+npm run organization-authority:admin -- internal-live release approve \
+  --config /absolute/path/authority.json \
+  --manifest /absolute/path/internal-live-release-manifest.v1.json
+
+npm run organization-authority:admin -- internal-live rollout status \
+  --config /absolute/path/authority.json
+```
+
+Minimum V1 keeps one rollout current at a time: the Authority will not approve
+the next release until every active installation has reported healthy on the
+current one. Retry a rolled-back Mac, or explicitly revoke an installation that
+is no longer in service, before advancing. This keeps an interrupted command
+pinned to the manifest it was already applying without adding rollout rings or
+a remote recovery system.
+
+V1 does not install a second privileged updater. If power is lost during npm's
+own in-place package replacement and the `echo-brain` command itself is absent,
+reinstall the retained package from the config directory's
+`internal-live-updates/retained-packages/` folder, then rerun the same update
+command.
+
+The V1 intentionally has no background auto-update, remote shell, MDM,
+dashboard, rollout rings, or automatic live Granola/Slack test. A person starts
+each release and each machine update.
 
 Initialize private config and state:
 

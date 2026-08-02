@@ -7,17 +7,21 @@ import {
   readFileSync,
   realpathSync,
   rmSync,
+  symlinkSync,
   writeFileSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type {
+  ApproveOrganizationInternalLiveReleaseRequestV1,
   IssueOrganizationEnrollmentGrantRequestV1,
   IssuedOrganizationEnrollmentGrantV1,
+  OrganizationInternalLiveReleaseManifestV1,
   ProvisionOrganizationMembershipRequestV1,
   RevokeOrganizationSubjectRequestV1,
 } from '@echo-brain/organization-api';
+import { organizationInternalLiveManifestSha256 } from '@echo-brain/organization-api';
 import {
   runOrganizationAuthorityAdminCli,
   type OrganizationAdminCliClient,
@@ -45,6 +49,40 @@ const ADMIN_TOKEN = `admin-${'a'.repeat(40)}`;
 const PROXY_TOKEN = `proxy-${'p'.repeat(40)}`;
 const FIXED_UUID = '10000000-0000-4000-8000-000000000001';
 const AUTHORITY_URL = 'https://authority.example.com';
+
+function internalLiveManifest(): OrganizationInternalLiveReleaseManifestV1 {
+  return {
+    schema_version: 1,
+    kind: 'echo-internal-live-release',
+    channel: 'internal-live',
+    release_version: '0.1.0-internal.1',
+    release_tag: 'internal-v0.1.0-internal.1',
+    source: {
+      sha: 'a'.repeat(40),
+      kind: 'materialized-commit',
+    },
+    artifact: {
+      package: 'echo-brain',
+      filename: 'echo-brain-0.1.0-internal.1.tgz',
+      download_url:
+        'https://github.com/EchoBrain-org/echo-brain/releases/download/internal-v0.1.0-internal.1/echo-brain-0.1.0-internal.1.tgz',
+      size_bytes: 1234,
+      sha256: 'b'.repeat(64),
+    },
+    compatibility: {
+      os: 'darwin',
+      arch: 'arm64',
+      node: '22.22.1',
+      npm: '10.9.4',
+    },
+    build: {
+      repository: 'EchoBrain-org/echo-brain',
+      workflow: 'internal-live-release.yml',
+      run_id: '123456789',
+      run_attempt: 1,
+    },
+  };
+}
 
 interface Fixture {
   root: string;
@@ -137,6 +175,10 @@ function fakeClient(
     revokeMembership: async () => ({ operation: 'member-revoke' }) as never,
     revokeInstallation: async () =>
       ({ operation: 'installation-revoke' }) as never,
+    approveInternalLiveRelease: async () =>
+      ({ operation: 'internal-live-release-approve' }) as never,
+    internalLiveRolloutStatus: async () =>
+      ({ operation: 'internal-live-rollout-status' }) as never,
     ...overrides,
   };
 }
@@ -499,6 +541,208 @@ describe('organization invitation output safety and retry', () => {
     );
     expect(secondIo.stdout_values.join('')).not.toContain(ADMIN_TOKEN);
     expect(secondIo.stdout_values.join('')).not.toContain(PROXY_TOKEN);
+  });
+});
+
+describe('INTERNAL LIVE release administration', () => {
+  it('securely validates and approves the exact manifest with a computed digest', async () => {
+    const value = fixture();
+    const manifest = internalLiveManifest();
+    const manifestPath = join(
+      value.root,
+      'internal-live-release-manifest.v1.json',
+    );
+    privateFile(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
+    const requests: ApproveOrganizationInternalLiveReleaseRequestV1[] = [];
+    const client = fakeClient({
+      approveInternalLiveRelease: async (request) => {
+        requests.push(request);
+        return {
+          schema_version: 1,
+          kind: 'echo-internal-live-update-directive',
+          channel: 'internal-live',
+          directive_sequence: 7,
+          manifest_url: request.manifest_url,
+          manifest_sha256: request.manifest_sha256,
+          approved_at: '2026-08-02T20:00:00.000Z',
+          evaluated_at: '2026-08-02T20:00:00.001Z',
+        };
+      },
+    });
+    const io = capturedIo();
+
+    await expect(
+      runOrganizationAuthorityAdminCli(
+        [
+          'internal-live',
+          'release',
+          'approve',
+          ...configArguments(value),
+          '--manifest',
+          manifestPath,
+        ],
+        io,
+        successfulDependencies(client, { random_uuid: () => FIXED_UUID }),
+      ),
+    ).resolves.toBe(0);
+
+    const manifestSha256 = organizationInternalLiveManifestSha256(manifest);
+    expect(requests).toEqual([
+      {
+        schema_version: 1,
+        kind: 'echo-internal-live-release-approval-request',
+        command_id: `adm_${FIXED_UUID}`,
+        manifest_url:
+          'https://github.com/EchoBrain-org/echo-brain/releases/download/internal-v0.1.0-internal.1/internal-live-release-manifest.v1.json',
+        manifest_sha256: manifestSha256,
+        manifest,
+      },
+    ]);
+    const output = JSON.parse(io.stdout_values.join('')) as Record<
+      string,
+      unknown
+    >;
+    expect(output).toMatchObject({
+      schema_version: 1,
+      kind: 'echo-organization-internal-live-release-approved',
+      promotion_stage: 'INTERNAL LIVE',
+      command_id: `adm_${FIXED_UUID}`,
+      release: {
+        release_version: manifest.release_version,
+        source_sha: manifest.source.sha,
+        artifact_sha256: manifest.artifact.sha256,
+        manifest_sha256: manifestSha256,
+      },
+      directive: {
+        directive_sequence: 7,
+        channel: 'internal-live',
+      },
+    });
+    expect(io.stdout_values.join('')).not.toContain(value.root);
+    expect(io.stdout_values.join('')).not.toContain(ADMIN_TOKEN);
+    expect(io.stdout_values.join('')).not.toContain(PROXY_TOKEN);
+  });
+
+  it('uses a supplied idempotency command and returns validated rollout status', async () => {
+    const value = fixture();
+    const manifest = internalLiveManifest();
+    const manifestPath = join(value.root, 'release.json');
+    privateFile(manifestPath, JSON.stringify(manifest));
+    const approval = vi.fn(async (request) => ({
+      schema_version: 1 as const,
+      kind: 'echo-internal-live-update-directive' as const,
+      channel: 'internal-live' as const,
+      directive_sequence: 1,
+      manifest_url: request.manifest_url,
+      manifest_sha256: request.manifest_sha256,
+      approved_at: '2026-08-02T20:00:00.000Z',
+      evaluated_at: '2026-08-02T20:00:00.001Z',
+    }));
+    const status = {
+      schema_version: 1 as const,
+      kind: 'echo-internal-live-rollout-status' as const,
+      channel: 'internal-live' as const,
+      evaluated_at: '2026-08-02T20:01:00.000Z',
+      approved_release: null,
+      installations: [],
+    };
+    const client = fakeClient({
+      approveInternalLiveRelease: approval,
+      internalLiveRolloutStatus: async () => status,
+    });
+    const dependencies = successfulDependencies(client);
+
+    await runOrganizationAuthorityAdminCli(
+      [
+        'internal-live',
+        'release',
+        'approve',
+        ...configArguments(value),
+        '--manifest',
+        manifestPath,
+        '--command-id',
+        IDS.command,
+      ],
+      capturedIo(),
+      dependencies,
+    );
+    const statusIo = capturedIo();
+    await runOrganizationAuthorityAdminCli(
+      [
+        'internal-live',
+        'rollout',
+        'status',
+        ...configArguments(value),
+      ],
+      statusIo,
+      dependencies,
+    );
+
+    expect(approval).toHaveBeenCalledWith(
+      expect.objectContaining({ command_id: IDS.command }),
+    );
+    expect(JSON.parse(statusIo.stdout_values.join(''))).toEqual(status);
+  });
+
+  it('rejects symlinked, writable-by-others, and wrong-repository manifests before transport', async () => {
+    const value = fixture();
+    const manifest = internalLiveManifest();
+    const targetPath = join(value.root, 'manifest-target.json');
+    const symlinkPath = join(value.root, 'manifest-link.json');
+    privateFile(targetPath, JSON.stringify(manifest));
+    symlinkSync(targetPath, symlinkPath);
+    const publicPath = join(value.root, 'manifest-public.json');
+    writeFileSync(publicPath, JSON.stringify(manifest), { mode: 0o666 });
+    chmodSync(publicPath, 0o666);
+    const wrongRepositoryPath = join(value.root, 'manifest-wrong-repo.json');
+    privateFile(
+      wrongRepositoryPath,
+      JSON.stringify({
+        ...manifest,
+        artifact: {
+          ...manifest.artifact,
+          download_url:
+            'https://github.com/attacker/echo-brain/releases/download/internal-v0.1.0-internal.1/echo-brain-0.1.0-internal.1.tgz',
+        },
+        build: { ...manifest.build, repository: 'attacker/echo-brain' },
+      }),
+    );
+    const approve = vi.fn();
+    const dependencies = successfulDependencies(
+      fakeClient({ approveInternalLiveRelease: approve }),
+    );
+
+    for (const path of [symlinkPath, publicPath]) {
+      await expect(
+        runOrganizationAuthorityAdminCli(
+          [
+            'internal-live',
+            'release',
+            'approve',
+            ...configArguments(value),
+            '--manifest',
+            path,
+          ],
+          capturedIo(),
+          dependencies,
+        ),
+      ).rejects.toThrow(/bounded current-user canonical regular file/);
+    }
+    await expect(
+      runOrganizationAuthorityAdminCli(
+        [
+          'internal-live',
+          'release',
+          'approve',
+          ...configArguments(value),
+          '--manifest',
+          wrongRepositoryPath,
+        ],
+        capturedIo(),
+        dependencies,
+      ),
+    ).rejects.toThrow(/repository is unsupported/);
+    expect(approve).not.toHaveBeenCalled();
   });
 });
 

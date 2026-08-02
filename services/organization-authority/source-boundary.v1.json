@@ -32,7 +32,8 @@
   "runtime_assets": [
     "services/organization-authority/migrations/0001_single_org_authority.sql",
     "services/organization-authority/migrations/0002_admin_command_idempotency.sql",
-    "services/organization-authority/migrations/0003_integrations_installation_anchor.sql"
+    "services/organization-authority/migrations/0003_integrations_installation_anchor.sql",
+    "services/organization-authority/migrations/0004_internal_live_release_rollout.sql"
   ],
   "layer_rules": [
     {

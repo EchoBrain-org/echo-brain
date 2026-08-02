@@ -151,6 +151,7 @@
         "src/product/machine/**",
         "src/product/organization/**",
         "src/product/storage/**",
+        "src/product/update/**",
         "src/core/**",
         "src/adapters/**",
         "src/infrastructure/**",
@@ -168,6 +169,31 @@
         "url",
         "util"
       ]
+    },
+    {
+      "name": "internal-live-updater-owns-release-application",
+      "from": "src/product/update/**",
+      "allowed_imports": [
+        "src/product/update/**",
+        "src/product/config.ts",
+        "src/product/lifecycle-lock.ts",
+        "src/product/paths.ts",
+        "src/product/secure-local-files.ts",
+        "src/product/spawn-sanitized-child.ts",
+        "src/product/state-backup.ts",
+        "src/product/federation/build-identity.ts",
+        "src/product/federation/foundation/canonical-json.ts",
+        "src/product/machine/security/**",
+        "src/product/organization/client/**",
+        "src/product/organization/state/**",
+        "src/infrastructure/filesystem/atomic-write.ts",
+        "src/infrastructure/filesystem/process-file-lock.ts"
+      ],
+      "allowed_packages": [
+        "@echo-brain/federation-protocol",
+        "@echo-brain/organization-api"
+      ],
+      "allowed_node_builtins": ["crypto", "fs", "path"]
     },
     {
       "name": "federation-owns-local-identity-and-the-cutover-fence",

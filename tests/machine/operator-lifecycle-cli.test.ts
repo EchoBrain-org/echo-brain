@@ -171,6 +171,10 @@ function cliDependencies(root: string, cliPath: string, launchd: FakeLaunchd) {
       nodePath: realpathSync(process.execPath),
       nodeVersion: 'v22.22.1',
       cliPath,
+      buildIdentity: {
+        source_sha: '1'.repeat(40),
+        source_kind: 'materialized-commit' as const,
+      },
     },
   };
 }
@@ -255,6 +259,11 @@ describe('operator onboarding and lifecycle CLI', () => {
     expect(JSON.parse(first.stdout).created).toBe(true);
     expect(second.status, second.stderr).toBe(0);
     expect(JSON.parse(second.stdout).created).toBe(false);
+    expect(JSON.parse(first.stdout).installation).toMatchObject({
+      product_version: expect.any(String),
+      source_sha: '1'.repeat(40),
+      source_kind: 'materialized-commit',
+    });
     expect(statSync(fixture.stateDirectory).mode & 0o777).toBe(0o700);
     expect(
       statSync(
@@ -265,6 +274,118 @@ describe('operator onboarding and lifecycle CLI', () => {
         ),
       ).mode & 0o777,
     ).toBe(0o600);
+  });
+
+  it('dispatches an update even when package replacement made the install record stale', async () => {
+    const root = realpathSync(mkdtempSync(join(tmpdir(), 'echo-update-cli-')));
+    roots.push(root);
+    const fixture = fixtures(root);
+    const base = cliDependencies(root, fixture.cliPath, fakeLaunchd());
+    let observedConfigPath: string | undefined;
+    const dependencies: ProductCliDependencies = {
+      ...base,
+      internalLive: {
+        execute: async (options) => {
+          observedConfigPath = options.configPath;
+          return {
+            directive_sequence: 7,
+            receipt: {
+              schema_version: 1,
+              kind: 'echo-internal-live-update-receipt',
+              channel: 'internal-live',
+              transaction_id: 'upd_00000000-0000-4000-8000-000000000001',
+              release_version: '0.1.0-internal.2',
+              manifest_sha256: 'a'.repeat(64),
+              artifact_sha256: 'b'.repeat(64),
+              source_sha: 'c'.repeat(40),
+              previous: {
+                product_version: '0.1.0-internal.1',
+                source_sha: '1'.repeat(40),
+              },
+              outcome: 'healthy',
+              doctor: { ok: true, passed: 11, total: 11 },
+              failure: null,
+              started_at: fixedTime,
+              finished_at: fixedTime,
+            },
+          };
+        },
+      },
+    };
+    expect(
+      (await command(['init', '--config', fixture.configPath], base)).status,
+    ).toBe(0);
+    dependencies.operator = {
+      ...base.operator,
+      buildIdentity: {
+        source_sha: '2'.repeat(40),
+        source_kind: 'materialized-commit',
+      },
+    };
+
+    const result = await command(
+      [
+        'update',
+        'apply',
+        '--channel',
+        'internal-live',
+        '--config',
+        fixture.configPath,
+      ],
+      dependencies,
+    );
+
+    expect(result.status, result.stderr).toBe(0);
+    expect(observedConfigPath).toBe(fixture.configPath);
+    expect(JSON.parse(result.stdout)).toMatchObject({
+      ok: true,
+      command: 'update',
+      action: 'apply',
+      channel: 'internal-live',
+      directive_sequence: 7,
+      receipt: { outcome: 'healthy' },
+    });
+  });
+
+  it('upgrades a legacy installation manifest with exact build identity', async () => {
+    const root = realpathSync(
+      mkdtempSync(join(tmpdir(), 'echo-build-identity-upgrade-')),
+    );
+    roots.push(root);
+    const fixture = fixtures(root);
+    const dependencies = cliDependencies(root, fixture.cliPath, fakeLaunchd());
+    expect(
+      (await command(['init', '--config', fixture.configPath], dependencies))
+        .status,
+    ).toBe(0);
+
+    const installationPath = join(
+      fixture.stateDirectory,
+      'manifests',
+      'operator-installation.v1.json',
+    );
+    const legacy = JSON.parse(readFileSync(installationPath, 'utf8')) as Record<
+      string,
+      unknown
+    >;
+    delete legacy['source_sha'];
+    delete legacy['source_kind'];
+    writeFileSync(installationPath, `${JSON.stringify(legacy, null, 2)}\n`, {
+      mode: 0o600,
+    });
+
+    const result = await command(
+      ['reconfigure', '--config', fixture.configPath],
+      dependencies,
+    );
+    expect(result.status, result.stderr).toBe(0);
+    expect(JSON.parse(result.stdout)).toMatchObject({
+      updated: true,
+      installation: {
+        source_sha: '1'.repeat(40),
+        source_kind: 'materialized-commit',
+      },
+    });
   });
 
   it('requires a private readable credential file before installing the service', async () => {
@@ -376,6 +497,10 @@ describe('operator onboarding and lifecycle CLI', () => {
     );
     expect(JSON.parse(status.stdout)).toMatchObject({
       initialized: true,
+      package_identity: {
+        source_sha: '1'.repeat(40),
+        source_kind: 'materialized-commit',
+      },
       service: { installed: true, loaded: true, running: true },
     });
 
@@ -580,6 +705,37 @@ describe('operator onboarding and lifecycle CLI', () => {
         }),
       ]),
     );
+  });
+
+  it('runs local doctor checks without probing configured adapters', async () => {
+    const root = realpathSync(mkdtempSync(join(tmpdir(), 'echo-doctor-local-')));
+    roots.push(root);
+    const fixture = fixtures(root);
+    const launchd = fakeLaunchd();
+    const base = cliDependencies(root, fixture.cliPath, launchd);
+    const dependencies = {
+      ...base,
+      adapterFactories: adapterFactories('unavailable'),
+    };
+    await command(['init', '--config', fixture.configPath], dependencies);
+    await command(
+      ['service', 'install', '--config', fixture.configPath],
+      dependencies,
+    );
+
+    const local = await command(
+      ['doctor', '--local-only', '--config', fixture.configPath],
+      dependencies,
+    );
+
+    expect(local.status, local.stderr).toBe(0);
+    const report = JSON.parse(local.stdout);
+    expect(report.ok).toBe(true);
+    expect(report.checks).toHaveLength(10);
+    expect(report.checks).not.toEqual(
+      expect.arrayContaining([expect.objectContaining({ id: 'adapters' })]),
+    );
+    expect(report.adapters).toEqual([]);
   });
 
   it('backs up and restores stopped product state through the CLI', async () => {
