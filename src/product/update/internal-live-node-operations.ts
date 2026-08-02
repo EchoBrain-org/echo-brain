@@ -46,6 +46,7 @@ import type {
 } from './internal-live-update.js';
 
 const MAX_MANIFEST_BYTES = 64 * 1024;
+const MAX_PACKAGE_EVIDENCE_BYTES = 4 * 1024 * 1024;
 const MAX_ARTIFACT_BYTES = 512 * 1024 * 1024;
 const MAX_COMMAND_STDOUT_BYTES = 128 * 1024 * 1024;
 const MAX_COMMAND_STDERR_BYTES = 64 * 1024;
@@ -200,8 +201,12 @@ function requireCommandSuccess(
   return result.stdout;
 }
 
-function parseJsonBytes(bytes: Buffer, label: string): unknown {
-  if (bytes.byteLength === 0 || bytes.byteLength > MAX_MANIFEST_BYTES) {
+function parseJsonBytes(
+  bytes: Buffer,
+  label: string,
+  maximumBytes = MAX_MANIFEST_BYTES,
+): unknown {
+  if (bytes.byteLength === 0 || bytes.byteLength > maximumBytes) {
     throw new Error(`${label} is empty or oversized`);
   }
   try {
@@ -452,8 +457,14 @@ async function inspectPackageArchive(
   });
 
   const evidenceValue = parseJsonBytes(
-    await archiveEntry(runner, archive, EVIDENCE_ENTRY, 4 * 1024 * 1024),
+    await archiveEntry(
+      runner,
+      archive,
+      EVIDENCE_ENTRY,
+      MAX_PACKAGE_EVIDENCE_BYTES,
+    ),
     'internal-live package evidence',
+    MAX_PACKAGE_EVIDENCE_BYTES,
   );
   const evidence = parsePackageArtifactEvidence(evidenceValue);
   const expectedFiles = new Set([
