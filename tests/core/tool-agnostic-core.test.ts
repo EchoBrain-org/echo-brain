@@ -93,6 +93,13 @@ class InvalidCursorSource extends SourceFake {
   }
 }
 
+class EmptySource extends SourceFake {
+  override async pull(request: MeetingPullRequest): Promise<MeetingBatch> {
+    this.requests.push(request);
+    return { meetings: [], next_cursor: 'cursor-2' };
+  }
+}
+
 class ProcessorFake implements DecisionProcessorAdapter {
   readonly identity = {
     kind: 'decision-processor' as const,
@@ -460,6 +467,39 @@ describe('tool-agnostic core cycle', () => {
     ).rejects.toThrow(/next_cursor/);
     expect(state.meetings).toHaveLength(0);
     expect(state.cursor).toBe('cursor-1');
+  });
+
+  it('advances an empty source batch without downstream writes', async () => {
+    const source = new EmptySource();
+    const processor = new ProcessorFake();
+    const surface = new DeliverySurfaceFake();
+    const gate = new GateFake('approved');
+    const state = new StateFake();
+
+    const result = await runCoreCycle(cycleInput({
+      meetingSource: source,
+      decisionProcessor: processor,
+      deliverySurfaces: [surface],
+      approvalGate: gate,
+      state,
+    }));
+
+    expect(result).toMatchObject({
+      ok: true,
+      meetings_seen: 0,
+      deliveries: 0,
+      cursor_advanced: true,
+    });
+    expect(source.requests).toEqual([{ cursor: 'cursor-1' }]);
+    expect(state.cursor).toBe('cursor-2');
+    expect(state.meetings).toEqual([]);
+    expect(state.decisions).toEqual([]);
+    expect(state.approvals).toEqual([]);
+    expect(state.receipts).toEqual([]);
+    expect(state.processed.size).toBe(0);
+    expect(processor.contexts).toEqual([]);
+    expect(gate.requests).toEqual([]);
+    expect(surface.envelopes).toEqual([]);
   });
 
   it('processes an approved revision and stores an idempotent delivery receipt', async () => {

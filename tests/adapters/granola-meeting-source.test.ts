@@ -21,6 +21,14 @@ const config: AdapterConfig = {
   },
 };
 
+const ownerBoundaryConfig: AdapterConfig = {
+  ...config,
+  settings: {
+    ...config.settings,
+    owner_email: "audrey@echobrain.org",
+  },
+};
+
 const detail: GranolaNoteDetail = {
   id: "note-1",
   object: "note",
@@ -150,6 +158,20 @@ class FakeClient implements GranolaApiClient {
 
 function emptyClient(): GranolaApiClient {
   return new FakeClient([{ notes: [], hasMore: false, cursor: null }]);
+}
+
+function ownerBoundaryAdapter(
+  responses: GranolaListResponse[],
+  details?: ReadonlyMap<string, GranolaNoteDetail>,
+): { client: FakeClient; adapter: GranolaMeetingSourceAdapter } {
+  const client = new FakeClient(responses, details);
+  return {
+    client,
+    adapter: new GranolaMeetingSourceAdapter(ownerBoundaryConfig, {
+      client,
+      now: () => "2026-07-16T00:00:00.000Z",
+    }),
+  };
 }
 
 adapterConformance({
@@ -628,6 +650,198 @@ describe("Granola canonical meeting mapping", () => {
       { updated_after: "2026-07-15T16:59:59.000Z", page_size: 2 },
     ]);
     expect(result.next_cursor).toMatch(/^granola:v1:/);
+  });
+});
+
+describe("Granola owner boundary", () => {
+  it("fetches detail only for an exact canonical owner match", async () => {
+    const ownedDetail: GranolaNoteDetail = {
+      ...detail,
+      id: "note-audrey",
+      owner: undefined,
+    };
+    const { client, adapter } = ownerBoundaryAdapter(
+      [
+        {
+          notes: [
+            {
+              id: ownedDetail.id,
+              owner: { name: "Audrey Ng", email: " Audrey@ECHOBrain.org " },
+              updated_at: ownedDetail.updated_at,
+            },
+          ],
+          hasMore: false,
+          cursor: null,
+        },
+      ],
+      new Map([[ownedDetail.id, ownedDetail]]),
+    );
+
+    const result = await adapter.pull({});
+
+    expect(client.detailCalls).toEqual([ownedDetail.id]);
+    expect(result.meetings).toHaveLength(1);
+    expect(result.meetings[0]?.provenance.external_id).toBe(ownedDetail.id);
+    expect(result.meetings[0]?.extensions).toMatchObject({
+      granola: {
+        owner: { name: "Audrey Ng", email: " Audrey@ECHOBrain.org " },
+      },
+    });
+  });
+
+  it("skips other, missing, malformed, or non-canonical list owners before detail", async () => {
+    const { client, adapter } = ownerBoundaryAdapter([
+      {
+        notes: [
+          {
+            id: detail.id,
+            owner: { name: "Zhen", email: "zhen@echobrain.org" },
+            updated_at: detail.updated_at,
+          },
+          { id: "note-missing-owner", updated_at: detail.updated_at },
+          {
+            id: "note-missing-email",
+            owner: { name: "Audrey Ng" },
+            updated_at: detail.updated_at,
+          },
+          {
+            id: "note-whitespace-owner",
+            owner: { email: "audrey @echobrain.org" },
+            updated_at: detail.updated_at,
+          },
+          {
+            id: "note-malformed-owner",
+            owner: { email: "audrey@@echobrain.org" },
+            updated_at: detail.updated_at,
+          },
+        ],
+        hasMore: false,
+        cursor: null,
+      },
+    ]);
+
+    const result = await adapter.pull({});
+
+    expect(result.meetings).toEqual([]);
+    expect(client.detailCalls).toEqual([]);
+  });
+
+  it("discards detail responses with contradictory or malformed owners", async () => {
+    const contradictoryDetail: GranolaNoteDetail = {
+      ...detail,
+      id: "note-owner-changed",
+      owner: { name: "Zhen", email: "zhen@echobrain.org" },
+    };
+    const malformedDetail: GranolaNoteDetail = {
+      ...detail,
+      id: "note-owner-malformed",
+      owner: { name: "Audrey Ng", email: "audrey@@echobrain.org" },
+    };
+    const { client, adapter } = ownerBoundaryAdapter(
+      [
+        {
+          notes: [
+            {
+              id: contradictoryDetail.id,
+              owner: { name: "Audrey Ng", email: "audrey@echobrain.org" },
+              updated_at: contradictoryDetail.updated_at,
+            },
+            {
+              id: malformedDetail.id,
+              owner: { name: "Audrey Ng", email: "audrey@echobrain.org" },
+              updated_at: malformedDetail.updated_at,
+            },
+          ],
+          hasMore: false,
+          cursor: null,
+        },
+      ],
+      new Map([
+        [contradictoryDetail.id, contradictoryDetail],
+        [malformedDetail.id, malformedDetail],
+      ]),
+    );
+
+    const result = await adapter.pull({});
+
+    expect(client.detailCalls).toEqual([
+      contradictoryDetail.id,
+      malformedDetail.id,
+    ]);
+    expect(result.meetings).toEqual([]);
+  });
+
+  it("advances provider pagination and watermark across skipped owners", async () => {
+    const { client, adapter } = ownerBoundaryAdapter([
+      {
+        notes: [
+          {
+            id: "note-other-page-one",
+            owner: { email: "zhen@echobrain.org" },
+            updated_at: "2026-07-15T17:00:00.000Z",
+          },
+        ],
+        hasMore: true,
+        cursor: "private-page-token",
+      },
+      {
+        notes: [
+          {
+            id: "note-other-page-two",
+            owner: { email: "zhen@echobrain.org" },
+            updated_at: "2026-07-15T18:00:00.000Z",
+          },
+        ],
+        hasMore: false,
+        cursor: null,
+      },
+      { notes: [], hasMore: false, cursor: null },
+    ]);
+
+    const first = await adapter.pull({});
+    const second = await adapter.pull({ cursor: first.next_cursor });
+    await adapter.pull({ cursor: second.next_cursor });
+
+    expect(first.meetings).toEqual([]);
+    expect(second.meetings).toEqual([]);
+    expect(client.detailCalls).toEqual([]);
+    expect(client.listCalls).toEqual([
+      { page_size: 2 },
+      { cursor: "private-page-token", page_size: 2 },
+      { updated_after: "2026-07-15T17:59:59.000Z", page_size: 2 },
+    ]);
+  });
+
+  it("validates owner_email as a canonical lowercase email", () => {
+    const adapter = new GranolaMeetingSourceAdapter(ownerBoundaryConfig, {
+      client: emptyClient(),
+    });
+    expect(adapter.validateConfig(ownerBoundaryConfig)).toEqual({
+      ok: true,
+      errors: [],
+    });
+
+    for (const ownerEmail of [
+      "Audrey@echobrain.org",
+      " audrey@echobrain.org",
+      "audrey@@echobrain.org",
+      "audrey @echobrain.org",
+      42,
+    ]) {
+      const candidate: AdapterConfig = {
+        ...ownerBoundaryConfig,
+        settings: {
+          ...ownerBoundaryConfig.settings,
+          owner_email: ownerEmail,
+        },
+      };
+      expect(adapter.validateConfig(candidate)).toEqual({
+        ok: false,
+        errors: [
+          "settings.owner_email must be a canonical lowercase email address",
+        ],
+      });
+    }
   });
 });
 

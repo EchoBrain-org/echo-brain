@@ -166,6 +166,7 @@ baseline uses Granola, local manual approval, and a JSONL outbox:
       "instance_id": "primary",
       "credential_ref": "file:/Users/you/.echo-brain/credentials/granola-api-key",
       "settings": {
+        "owner_email": "you@example.com",
         "page_size": 30,
         "cursor_overlap_ms": 1000
       }
@@ -190,6 +191,14 @@ baseline uses Granola, local manual approval, and a JSONL outbox:
   "cycle_interval_ms": 60000
 }
 ```
+
+When `owner_email` is set, Granola list-owner emails are trimmed, lowercased,
+and compared with that canonical lowercase value. List metadata still reaches
+the adapter, but non-matches are skipped before detail/transcript retrieval or
+local persistence while the source cursor continues normally. This does not
+purge previously stored notes. Enabling the boundary on an existing source
+requires a fresh `instance_id` so its cursor and processing history start in a
+new scope.
 
 Credential values never belong in the config. Interactive runs may use `env:`;
 persistent service configuration requires private `file:` references.

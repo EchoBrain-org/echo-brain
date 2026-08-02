@@ -51,6 +51,7 @@ interface GranolaMeetingSourceSettings {
   requestTimeoutMs: number;
   pageSize: number;
   cursorOverlapMs: number;
+  ownerEmail?: string;
 }
 
 interface GranolaCursorState {
@@ -82,6 +83,30 @@ function nonNegativeInteger(value: unknown, maximum: number): value is number {
     (value as number) >= 0 &&
     (value as number) <= maximum
   );
+}
+
+function normalizedEmail(value: unknown): string | null {
+  if (typeof value !== "string") return null;
+  const normalized = value.trim().toLowerCase();
+  if (normalized.length === 0 || normalized.length > 254 || /\s/.test(normalized))
+    return null;
+  const [local, domain, extra] = normalized.split("@");
+  return local !== undefined &&
+    local.length > 0 &&
+    domain !== undefined &&
+    domain.length > 0 &&
+    extra === undefined
+    ? normalized
+    : null;
+}
+
+function isCanonicalLowercaseEmail(value: unknown): value is string {
+  return typeof value === "string" && normalizedEmail(value) === value;
+}
+
+function listOwnerEmail(owner: unknown): string | null {
+  if (!isPlainObject(owner)) return null;
+  return normalizedEmail(owner["email"]);
 }
 
 function normalizedIso(value: unknown): string | null {
@@ -301,6 +326,10 @@ function settingsFrom(config: AdapterConfig): GranolaMeetingSourceSettings {
       typeof settings["cursor_overlap_ms"] === "number"
         ? settings["cursor_overlap_ms"]
         : DEFAULT_GRANOLA_CURSOR_OVERLAP_MS,
+    ownerEmail:
+      typeof settings["owner_email"] === "string"
+        ? settings["owner_email"]
+        : undefined,
   };
 }
 
@@ -930,6 +959,7 @@ export class GranolaMeetingSourceAdapter implements MeetingSourceAdapter {
       "request_timeout_ms",
       "page_size",
       "cursor_overlap_ms",
+      "owner_email",
     ]);
     for (const key of Object.keys(config.settings)) {
       if (!allowedSettings.has(key))
@@ -971,6 +1001,15 @@ export class GranolaMeetingSourceAdapter implements MeetingSourceAdapter {
     ) {
       errors.push(
         `settings.cursor_overlap_ms must be an integer from 0 to ${MAX_CURSOR_OVERLAP_MS}`,
+      );
+    }
+    const ownerEmail = config.settings["owner_email"];
+    if (
+      ownerEmail !== undefined &&
+      !isCanonicalLowercaseEmail(ownerEmail)
+    ) {
+      errors.push(
+        "settings.owner_email must be a canonical lowercase email address",
       );
     }
     return { ok: errors.length === 0, errors };
@@ -1074,16 +1113,33 @@ export class GranolaMeetingSourceAdapter implements MeetingSourceAdapter {
       let pageHighWatermark = cursor.page_high_watermark;
       for (const listNote of response.notes) {
         this.assertNotCancelled(operation?.signal);
-        const detail = mergeNote(
-          listNote,
-          await client.getNote(listNote.id, { signal: operation?.signal }),
+        pageHighWatermark = maxIso(
+          pageHighWatermark,
+          listNote.updated_at,
+          listNote.created_at,
         );
+        if (
+          this.settings.ownerEmail !== undefined &&
+          listOwnerEmail(listNote.owner) !== this.settings.ownerEmail
+        ) {
+          continue;
+        }
+        const noteDetail = await client.getNote(listNote.id, {
+          signal: operation?.signal,
+        });
+        if (
+          this.settings.ownerEmail !== undefined &&
+          noteDetail.owner !== undefined &&
+          noteDetail.owner !== null &&
+          listOwnerEmail(noteDetail.owner) !== this.settings.ownerEmail
+        ) {
+          continue;
+        }
+        const detail = mergeNote(listNote, noteDetail);
         pageHighWatermark = maxIso(
           pageHighWatermark,
           detail.updated_at,
           detail.created_at,
-          listNote.updated_at,
-          listNote.created_at,
         );
         meetings.push(this.toMeeting(detail, observedAt));
       }
