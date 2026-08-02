@@ -277,7 +277,7 @@ function assertBundledConfigurationSnapshot(
       return;
     default:
       throw new Error(
-        `${label} names an adapter outside the bundled Founder Live set`,
+        `${label} names an adapter outside the bundled Internal Live set`,
       );
   }
 }
@@ -629,7 +629,7 @@ function connectionGenerationShape(provider: string): Shape {
         : undefined;
   if (providerIdentityShape === undefined) {
     throw new Error(
-      "connection belongs to an unsupported Founder Live provider",
+      "connection belongs to an unsupported Internal Live provider",
     );
   }
   return objectShape({
@@ -730,7 +730,7 @@ const sessionShape = objectShape({
 
 /**
  * Reject persisted bootstrap-session fields that are outside the deliberately
- * finite Founder Live format. This is a structural poison guard only: the
+ * finite Internal Live format. This is a structural poison guard only: the
  * session store remains responsible for identifiers, chronology, digests,
  * signatures, provider evidence agreement, and phase-transition semantics.
  */

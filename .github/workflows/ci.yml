@@ -41,161 +41,16 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          test "$(node -p 'process.platform')" = darwin
-          test "$(node -p 'process.arch')" = arm64
-
           pack_dir="$RUNNER_TEMP/echo-brain-package"
-          prefix="$RUNNER_TEMP/echo-brain-install"
-          runtime_root="$RUNNER_TEMP/echo-brain-runtime"
-          mkdir -p "$pack_dir" "$runtime_root"
-          runtime_root="$(cd "$runtime_root" && pwd -P)"
-
+          mkdir -p "$pack_dir"
           npm pack --pack-destination "$pack_dir" >/dev/null
           archive_count="$(find "$pack_dir" -maxdepth 1 -type f -name '*.tgz' | wc -l | tr -d ' ')"
           test "$archive_count" = 1
           archive="$(find "$pack_dir" -maxdepth 1 -type f -name '*.tgz' -print -quit)"
-
-          npm install --prefix "$prefix" "$archive"
-          cli="$prefix/node_modules/.bin/echo-brain"
-          config="$runtime_root/config/runtime.json"
-          state="$runtime_root/state"
-          status_file="$runtime_root/service-status.json"
-
-          cleanup() {
-            if [[ -x "${cli:-}" && -f "${config:-}" ]]; then
-              "$cli" service uninstall --config "$config" >/dev/null 2>&1 || true
-            fi
-          }
-          dump_launchagent() {
-            {
-              printf '%s\n' 'LaunchAgent status:'
-              if [[ -f "$status_file" ]]; then
-                cat "$status_file"
-              else
-                printf '%s\n' 'status file was not created'
-              fi
-              for log_key in stdout_path stderr_path; do
-                log_path="$(
-                  node -e '
-                    const fs = require("node:fs");
-                    try {
-                      const value = JSON.parse(fs.readFileSync(process.argv[1], "utf8"));
-                      process.stdout.write(value.service?.[process.argv[2]] ?? "");
-                    } catch {}
-                  ' "$status_file" "$log_key"
-                )"
-                printf '%s\n' "LaunchAgent $log_key:"
-                if [[ -n "$log_path" && -f "$log_path" ]]; then
-                  cat "$log_path"
-                else
-                  printf '%s\n' 'log file is unavailable'
-                fi
-              done
-            } >&2
-          }
-          trap cleanup EXIT
-
-          "$cli" onboard --config "$config" --state-dir "$state"
-          node -e '
-            const fs = require("node:fs");
-            const path = process.argv[1];
-            const value = JSON.parse(fs.readFileSync(path, "utf8"));
-            value.meeting_sources[0].settings = {
-              ...value.meeting_sources[0].settings,
-              base_url: "https://127.0.0.1:1",
-              request_timeout_ms: 1000,
-            };
-            fs.writeFileSync(path, `${JSON.stringify(value, null, 2)}\n`);
-          ' "$config"
-          chmod 600 "$config"
-          printf 'grn_ci_launchagent_smoke\n' > "$state/credentials/granola-api-key"
-          chmod 600 "$state/credentials/granola-api-key"
-          "$cli" init --config "$config"
-          "$cli" selftest --config "$config"
-          "$cli" service install --config "$config"
-
-          launchagent_pid=''
-          for _ in {1..20}; do
-            "$cli" status --config "$config" > "$status_file"
-            if launchagent_pid="$(
-              node -e '
-                const fs = require("node:fs");
-                const value = JSON.parse(fs.readFileSync(process.argv[1], "utf8"));
-                const pid = value.service?.pid;
-                if (
-                  !value.initialized ||
-                  !value.service?.installed ||
-                  !value.service?.loaded ||
-                  !value.service?.running ||
-                  !Number.isSafeInteger(pid) ||
-                  pid <= 0
-                ) {
-                  process.exit(1);
-                }
-                process.stdout.write(String(pid));
-              ' "$status_file"
-            )"; then
-              break
-            fi
-            launchagent_pid=''
-            sleep 1
-          done
-          if [[ -z "$launchagent_pid" ]]; then
-            dump_launchagent
-            exit 1
-          fi
-
-          sleep 2
-          "$cli" status --config "$config" > "$status_file"
-          stable_pid="$(
-            node -e '
-              const fs = require("node:fs");
-              const value = JSON.parse(fs.readFileSync(process.argv[1], "utf8"));
-              const pid = value.service?.pid;
-              if (
-                !value.initialized ||
-                !value.service?.installed ||
-                !value.service?.loaded ||
-                !value.service?.running ||
-                !Number.isSafeInteger(pid) ||
-                pid <= 0
-              ) {
-                process.exit(1);
-              }
-              process.stdout.write(String(pid));
-            ' "$status_file"
-          )" || {
-            dump_launchagent
-            exit 1
-          }
-          if [[ "$stable_pid" != "$launchagent_pid" ]]; then
-            dump_launchagent
-            printf 'LaunchAgent PID changed from %s to %s\n' \
-              "$launchagent_pid" "$stable_pid" >&2
-            exit 1
-          fi
-
-          plist="$(node -e '
-            const fs = require("node:fs");
-            const value = JSON.parse(fs.readFileSync(process.argv[1], "utf8"));
-            process.stdout.write(value.service.plist_path);
-          ' "$status_file")"
-          plutil -lint "$plist"
-
-          "$cli" service uninstall --config "$config"
-          "$cli" status --config "$config" > "$status_file"
-          node -e '
-            const fs = require("node:fs");
-            const value = JSON.parse(fs.readFileSync(process.argv[1], "utf8"));
-            if (
-              !value.initialized ||
-              value.service.installed ||
-              value.service.loaded ||
-              value.service.running
-            ) {
-              throw new Error(`LaunchAgent cleanup failed: ${JSON.stringify(value)}`);
-            }
-          ' "$status_file"
+          package_version="$(node -p 'require("./package.json").version')"
+          bash .github/scripts/internal-live-macos-smoke.sh \
+            "$archive" \
+            "$package_version"
 
   authority-container:
     name: Organization authority container

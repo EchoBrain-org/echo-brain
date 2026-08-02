@@ -84,7 +84,7 @@ const READY_SLACK_PUBLIC_CONFIGURATION_JSON =
   '{"channel_id":"C123CHANNEL","organization_tool_profile":"slack-organization-tool-v1","schema_version":1,"slack_app_id":"A123APP","slack_bot_id":"B123BOT","slack_bot_user_id":"U123BOT","slack_enterprise_id":null}';
 const READY_SLACK_APPROVAL_BINDING_CONFIGURATION_JSON =
   '{"approve_reaction":"white_check_mark","channel_id":"C123CHANNEL","organization_tool_profile":"slack-organization-tool-v1","reject_reaction":"x","schema_version":1,"slack_app_id":"A123APP","slack_bot_id":"B123BOT","slack_bot_user_id":"U123BOT","slack_enterprise_id":null}';
-const FOUNDER_LIVE_SLACK_SCOPES_JSON =
+const INTERNAL_LIVE_SLACK_SCOPES_JSON =
   '["channels:history","chat:write","groups:history","incoming-webhook","reactions:read","users:read"]';
 const REQUIRED_SLACK_SCOPES_JSON =
   '["channels:history","channels:read","chat:write","reactions:read","users:read"]';
@@ -664,7 +664,7 @@ describe("minimum organization control-plane v1 schema", () => {
     database.close();
   });
 
-  it("preserves and re-verifies the founder-live Slack approval path through immutable v2 and forward v3", () => {
+  it("preserves and re-verifies the Internal Live Slack approval path through immutable v2 and forward v3", () => {
     const path = databasePath();
     const database = new Database(path);
     database.pragma("foreign_keys = ON");
@@ -676,7 +676,7 @@ describe("minimum organization control-plane v1 schema", () => {
       database,
       migrations.slice(0, 1),
     );
-    seedApprovalFlow(database, FOUNDER_LIVE_SLACK_SCOPES_JSON);
+    seedApprovalFlow(database, INTERNAL_LIVE_SLACK_SCOPES_JSON);
 
     expect(effectivePermission(database)).toEqual({
       permission_grant_id: "pgr_zhen-approve",
@@ -730,7 +730,7 @@ describe("minimum organization control-plane v1 schema", () => {
       connection_id: IDS.connection,
       permission_grant_id: "pgr_zhen-approve",
       action: "approve",
-      granted_scopes_json: FOUNDER_LIVE_SLACK_SCOPES_JSON,
+      granted_scopes_json: INTERNAL_LIVE_SLACK_SCOPES_JSON,
       public_configuration_json: LEGACY_SLACK_PUBLIC_CONFIGURATION_JSON,
     });
     expect(effectivePermission(database)).toEqual({
@@ -834,8 +834,8 @@ describe("minimum organization control-plane v1 schema", () => {
     });
 
     const promoted = repository.onboardSlackOrganizationTool({
-      command_id: "cmd_reverify-founder-live-slack",
-      command_sha256: digest("reverify-founder-live-slack"),
+      command_id: "cmd_reverify-internal-live-slack",
+      command_sha256: digest("reverify-internal-live-slack"),
       organization_id: IDS.organization,
       authority_id: IDS.authority,
       administrator_principal_id: IDS.principal,
@@ -854,13 +854,13 @@ describe("minimum organization control-plane v1 schema", () => {
           "users:read",
         ],
         verification_evidence_sha256: digest(
-          "reverified-founder-live-connection",
+          "reverified-internal-live-connection",
         ),
       },
       channel: {
         team_id: "T_TEST",
         channel_id: "C123CHANNEL",
-        verification_evidence_sha256: digest("reverified-founder-live-channel"),
+        verification_evidence_sha256: digest("reverified-internal-live-channel"),
       },
       secret: {
         secret_backend_id: AUTHORITY_FILE_SECRET_BACKEND,
@@ -964,7 +964,7 @@ describe("minimum organization control-plane v1 schema", () => {
     );
     seedApprovalFlow(
       legacy,
-      FOUNDER_LIVE_SLACK_SCOPES_JSON,
+      INTERNAL_LIVE_SLACK_SCOPES_JSON,
       legacyWConfiguration,
       "W123BOT",
     );

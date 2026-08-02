@@ -1,0 +1,238 @@
+name: INTERNAL LIVE release
+run-name: INTERNAL LIVE ${{ inputs.version }} from ${{ github.sha }}
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Exact MAJOR.MINOR.PATCH-internal.SEQUENCE from package.json (for example 0.1.0-internal.1)
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: internal-live-release
+  cancel-in-progress: false
+
+env:
+  PRODUCT_NODE_VERSION: '22.22.1'
+
+jobs:
+  build_once:
+    name: Build and seal one artifact
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    outputs:
+      artifact_filename: ${{ steps.bundle.outputs.artifact_filename }}
+      bundle_name: ${{ steps.bundle.outputs.bundle_name }}
+      build_run_attempt: ${{ steps.bundle.outputs.build_run_attempt }}
+      release_tag: ${{ steps.bundle.outputs.release_tag }}
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        with:
+          node-version: ${{ env.PRODUCT_NODE_VERSION }}
+          cache: npm
+      - name: Verify canonical main and increasing INTERNAL version
+        env:
+          RELEASE_VERSION: ${{ inputs.version }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$GITHUB_REPOSITORY" = 'EchoBrain-org/echo-brain'
+          test "$GITHUB_REF" = 'refs/heads/main'
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          git merge-base --is-ancestor "$GITHUB_SHA" origin/main
+          node -e '
+            const fs = require("node:fs");
+            const packageJson = JSON.parse(fs.readFileSync("package.json", "utf8"));
+            if (packageJson.version !== process.argv[1]) {
+              throw new Error(
+                `workflow version ${process.argv[1]} does not match package.json ${packageJson.version}`,
+              );
+            }
+          ' "$RELEASE_VERSION"
+          existing_tags="$RUNNER_TEMP/internal-live-existing-tags.txt"
+          git ls-remote --refs origin 'refs/tags/internal-v*' \
+            | awk '{sub(/^refs\/tags\//, "", $2); print $2}' \
+            | LC_ALL=C sort -u > "$existing_tags"
+          # V1 has no downgrade or rollback override: every new release must
+          # increase the numeric INTERNAL LIVE tuple across canonical tags.
+          node tools/internal-live-release.mjs assert-monotonic \
+            --release-version "$RELEASE_VERSION" \
+            --existing-tags-file "$existing_tags"
+      - run: npm ci
+      - run: npm run check
+      - name: Pack exactly once and seal the release bundle
+        id: bundle
+        env:
+          RELEASE_VERSION: ${{ inputs.version }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          bundle="$RUNNER_TEMP/internal-live-release-bundle"
+          mkdir -p "$bundle"
+          npm pack --pack-destination "$bundle" \
+            > "$RUNNER_TEMP/internal-live-npm-pack-output"
+          archive_count="$(find "$bundle" -maxdepth 1 -type f -name '*.tgz' | wc -l | tr -d ' ')"
+          test "$archive_count" = 1
+          archive="$(find "$bundle" -maxdepth 1 -type f -name '*.tgz' -print -quit)"
+          node tools/internal-live-release.mjs create \
+            --artifact "$archive" \
+            --output-dir "$bundle" \
+            --release-version "$RELEASE_VERSION" \
+            --source-sha "$GITHUB_SHA" \
+            --repository "$GITHUB_REPOSITORY" \
+            --workflow-run-id "$GITHUB_RUN_ID" \
+            --workflow-run-attempt "$GITHUB_RUN_ATTEMPT"
+          node tools/internal-live-release.mjs verify \
+            --bundle-dir "$bundle" \
+            --release-version "$RELEASE_VERSION" \
+            --source-sha "$GITHUB_SHA" \
+            --repository "$GITHUB_REPOSITORY" \
+            --workflow-run-id "$GITHUB_RUN_ID" \
+            --workflow-run-attempt "$GITHUB_RUN_ATTEMPT"
+          node -e '
+            const fs = require("node:fs");
+            const manifest = JSON.parse(fs.readFileSync(process.argv[1], "utf8"));
+            fs.appendFileSync(
+              process.env.GITHUB_OUTPUT,
+              `artifact_filename=${manifest.artifact.filename}\n` +
+                `bundle_name=internal-live-release-bundle-${manifest.build.run_attempt}\n` +
+                `build_run_attempt=${manifest.build.run_attempt}\n` +
+                `release_tag=${manifest.release_tag}\n`,
+            );
+          ' "$bundle/internal-live-release-manifest.v1.json"
+      - name: Upload sealed release bundle
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: ${{ steps.bundle.outputs.bundle_name }}
+          path: ${{ runner.temp }}/internal-live-release-bundle/*
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 30
+
+  macos_exact_artifact:
+    name: macOS arm64 exact-artifact LaunchAgent gate
+    needs: build_once
+    runs-on: macos-15
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        with:
+          node-version: ${{ env.PRODUCT_NODE_VERSION }}
+      - name: Download the build-once bundle
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: ${{ needs.build_once.outputs.bundle_name }}
+          path: ${{ runner.temp }}/internal-live-release-bundle
+      - name: Verify exact artifact identity
+        env:
+          RELEASE_VERSION: ${{ inputs.version }}
+          BUILD_RUN_ATTEMPT: ${{ needs.build_once.outputs.build_run_attempt }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          node tools/internal-live-release.mjs verify \
+            --bundle-dir "$RUNNER_TEMP/internal-live-release-bundle" \
+            --release-version "$RELEASE_VERSION" \
+            --source-sha "$GITHUB_SHA" \
+            --repository "$GITHUB_REPOSITORY" \
+            --workflow-run-id "$GITHUB_RUN_ID" \
+            --workflow-run-attempt "$BUILD_RUN_ATTEMPT"
+      - name: Install exact artifact and exercise LaunchAgent
+        env:
+          RELEASE_VERSION: ${{ inputs.version }}
+          ARTIFACT_FILENAME: ${{ needs.build_once.outputs.artifact_filename }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash .github/scripts/internal-live-macos-smoke.sh \
+            "$RUNNER_TEMP/internal-live-release-bundle/$ARTIFACT_FILENAME" \
+            "$RELEASE_VERSION"
+
+  approve_and_publish:
+    name: Approve, attest, and publish prerelease
+    needs: [build_once, macos_exact_artifact]
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    environment:
+      name: internal-live
+      url: ${{ steps.publish.outputs.release_url }}
+    permissions:
+      contents: write
+      id-token: write
+      attestations: write
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - name: Download the exact tested bundle
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: ${{ needs.build_once.outputs.bundle_name }}
+          path: ${{ runner.temp }}/internal-live-release-bundle
+      - name: Reverify release identity after approval
+        env:
+          RELEASE_VERSION: ${{ inputs.version }}
+          BUILD_RUN_ATTEMPT: ${{ needs.build_once.outputs.build_run_attempt }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          node tools/internal-live-release.mjs verify \
+            --bundle-dir "$RUNNER_TEMP/internal-live-release-bundle" \
+            --release-version "$RELEASE_VERSION" \
+            --source-sha "$GITHUB_SHA" \
+            --repository "$GITHUB_REPOSITORY" \
+            --workflow-run-id "$GITHUB_RUN_ID" \
+            --workflow-run-attempt "$BUILD_RUN_ATTEMPT"
+      - name: Attest build provenance
+        uses: actions/attest-build-provenance@43d14bc2b83dec42d39ecae14e916627a18bb661 # v3
+        with:
+          subject-path: ${{ runner.temp }}/internal-live-release-bundle/${{ needs.build_once.outputs.artifact_filename }}
+      - name: Publish GitHub prerelease
+        id: publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_VERSION: ${{ inputs.version }}
+          RELEASE_TAG: ${{ needs.build_once.outputs.release_tag }}
+          ARTIFACT_FILENAME: ${{ needs.build_once.outputs.artifact_filename }}
+          BUILD_RUN_ATTEMPT: ${{ needs.build_once.outputs.build_run_attempt }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          bundle="$RUNNER_TEMP/internal-live-release-bundle"
+          notes="$RUNNER_TEMP/internal-live-release-notes.md"
+          artifact_sha="$(node -e '
+            const fs = require("node:fs");
+            const value = JSON.parse(fs.readFileSync(process.argv[1], "utf8"));
+            process.stdout.write(value.artifact.sha256);
+          ' "$bundle/internal-live-release-manifest.v1.json")"
+          {
+            printf 'INTERNAL LIVE candidate. This is not a client release.\n\n'
+            printf -- '- Version: `%s`\n' "$RELEASE_VERSION"
+            printf -- '- Source: `%s`\n' "$GITHUB_SHA"
+            printf -- '- Artifact SHA-256: `%s`\n' "$artifact_sha"
+            printf -- '- Workflow run: `%s`, attempt `%s`\n' \
+              "$GITHUB_RUN_ID" "$BUILD_RUN_ATTEMPT"
+          } > "$notes"
+          gh release create "$RELEASE_TAG" \
+            "$bundle/$ARTIFACT_FILENAME" \
+            "$bundle/internal-live-release-manifest.v1.json" \
+            "$bundle/SHA256SUMS" \
+            --repo "$GITHUB_REPOSITORY" \
+            --target "$GITHUB_SHA" \
+            --title "ECHO $RELEASE_VERSION — INTERNAL LIVE" \
+            --notes-file "$notes" \
+            --prerelease \
+            --latest=false
+          release_url="$(
+            gh release view "$RELEASE_TAG" \
+              --repo "$GITHUB_REPOSITORY" \
+              --json url \
+              --jq .url
+          )"
+          printf 'release_url=%s\n' "$release_url" >> "$GITHUB_OUTPUT"

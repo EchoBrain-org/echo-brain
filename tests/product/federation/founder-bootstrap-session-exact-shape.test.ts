@@ -98,7 +98,7 @@ const POISON_FIXTURES = [
 ] as const satisfies readonly MutationCase[];
 
 describe("Founder bootstrap persisted-session exact shape", () => {
-  it("accepts the complete Founder Live session shape", () => {
+  it("accepts the complete Internal Live session shape", () => {
     expect(() =>
       assertExactFounderBootstrapSessionShape(completeSession()),
     ).not.toThrow();
@@ -192,7 +192,7 @@ describe("Founder bootstrap persisted-session exact shape", () => {
     );
   });
 
-  it("rejects adapters outside the finite bundled Founder Live set", () => {
+  it("rejects adapters outside the finite bundled Internal Live set", () => {
     const session = cloneSession();
     setAtPath(
       session,
@@ -200,7 +200,7 @@ describe("Founder bootstrap persisted-session exact shape", () => {
       "remote-processor",
     );
     expect(() => assertExactFounderBootstrapSessionShape(session)).toThrow(
-      /outside the bundled Founder Live set/,
+      /outside the bundled Internal Live set/,
     );
   });
 
@@ -242,7 +242,7 @@ describe("Founder bootstrap persisted-session exact shape", () => {
       [],
     ],
   ] satisfies readonly MutationCase[])(
-    "bounds the Founder Live %s",
+    "bounds the Internal Live %s",
     (_name, path, value) => {
       const session = cloneSession();
       setAtPath(session, path, value);

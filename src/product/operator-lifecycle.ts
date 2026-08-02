@@ -31,6 +31,7 @@ import {
 } from './credentials.js';
 import { pathIsWithin } from './secure-local-files.js';
 import { canonicalProductConfigSha256 } from './lifecycle-lock.js';
+import type { PackagedBuildIdentityV1 } from './federation/build-identity.js';
 
 export type ProductServiceAction =
   'install' | 'start' | 'stop' | 'restart' | 'status' | 'uninstall';
@@ -64,6 +65,10 @@ export interface ProductOperatorDependencies {
   nodeVersion?: string;
   cliPath: string;
   productVersion: string;
+  buildIdentity: Pick<
+    PackagedBuildIdentityV1,
+    'source_sha' | 'source_kind'
+  >;
   resolveCredential?: ProductCredentialResolver;
 }
 
@@ -71,6 +76,9 @@ export interface ProductInstallationRecord {
   schema_version: 1;
   product: 'echo-brain';
   product_version: string;
+  /** Added in-place so an existing V1 installation can be upgraded by reconfigure. */
+  source_sha?: string;
+  source_kind?: PackagedBuildIdentityV1['source_kind'];
   config_sha256: string;
   config_path: string;
   state_dir: string;
@@ -87,6 +95,11 @@ export interface ProductInstallationRecord {
 
 export interface ProductOperatorStatus {
   initialized: boolean;
+  package_identity: {
+    product_version: string;
+    source_sha: string;
+    source_kind: PackagedBuildIdentityV1['source_kind'];
+  };
   installation_path: string;
   config_path: string;
   state_dir: string;
@@ -154,6 +167,12 @@ function isRecord(value: unknown): value is ProductInstallationRecord {
     record['schema_version'] === 1 &&
     record['product'] === 'echo-brain' &&
     typeof record['product_version'] === 'string' &&
+    ((record['source_sha'] === undefined &&
+      record['source_kind'] === undefined) ||
+      (typeof record['source_sha'] === 'string' &&
+        /^[a-f0-9]{40}$/.test(record['source_sha']) &&
+        (record['source_kind'] === 'materialized-commit' ||
+          record['source_kind'] === 'worktree-head-unverified'))) &&
     typeof record['config_sha256'] === 'string' &&
     typeof record['config_path'] === 'string' &&
     typeof record['state_dir'] === 'string' &&
@@ -406,6 +425,7 @@ export class ProductOperator {
   private readonly homeDirectory: string;
   private readonly nodeVersion: string;
   private readonly productVersion: string;
+  private readonly buildIdentity: ProductOperatorDependencies['buildIdentity'];
   private readonly resolveCredential: ProductCredentialResolver;
   private readonly context: OperatorContext;
 
@@ -421,6 +441,7 @@ export class ProductOperator {
     this.homeDirectory = dependencies.homeDirectory ?? homedir();
     this.nodeVersion = dependencies.nodeVersion ?? process.version;
     this.productVersion = dependencies.productVersion;
+    this.buildIdentity = dependencies.buildIdentity;
     this.resolveCredential =
       dependencies.resolveCredential ?? createProductCredentialResolver();
     this.context = this.createContext(
@@ -539,6 +560,8 @@ export class ProductOperator {
       schema_version: 1,
       product: 'echo-brain',
       product_version: this.productVersion,
+      source_sha: this.buildIdentity.source_sha,
+      source_kind: this.buildIdentity.source_kind,
       config_sha256: canonicalProductConfigSha256(this.config),
       config_path: context.configPath,
       state_dir: context.stateDirectory,
@@ -976,6 +999,11 @@ export class ProductOperator {
     }
     return {
       initialized,
+      package_identity: {
+        product_version: this.productVersion,
+        source_sha: this.buildIdentity.source_sha,
+        source_kind: this.buildIdentity.source_kind,
+      },
       installation_path: this.context.installationPath,
       config_path: this.context.configPath,
       state_dir: this.context.stateDirectory,
@@ -996,6 +1024,7 @@ export class ProductOperator {
     filesystem: StateFilesystemClassification;
     adapters: readonly AdapterDiagnostic[];
     adapterError?: string;
+    includeAdapters?: boolean;
   }): Promise<ProductDoctorReport> {
     const checks: ProductDoctorCheck[] = [];
     const platformOk =
@@ -1135,20 +1164,22 @@ export class ProductOperator {
             : credentialsError,
       ),
     );
-    const adaptersOk =
-      input.adapterError === undefined &&
-      input.adapters.length > 0 &&
-      input.adapters.every((adapter) => adapter.status === 'healthy');
-    checks.push(
-      check(
-        'adapters',
-        adaptersOk,
-        input.adapterError ??
-          (adaptersOk
-            ? `${input.adapters.length} configured adapters are healthy`
-            : 'one or more configured adapters are not healthy'),
-      ),
-    );
+    if (input.includeAdapters !== false) {
+      const adaptersOk =
+        input.adapterError === undefined &&
+        input.adapters.length > 0 &&
+        input.adapters.every((adapter) => adapter.status === 'healthy');
+      checks.push(
+        check(
+          'adapters',
+          adaptersOk,
+          input.adapterError ??
+            (adaptersOk
+              ? `${input.adapters.length} configured adapters are healthy`
+              : 'one or more configured adapters are not healthy'),
+        ),
+      );
+    }
     return {
       ok: checks.every((entry) => entry.ok),
       checks,

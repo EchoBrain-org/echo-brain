@@ -369,6 +369,12 @@ export function descriptorClient(
     completeSlackLink: async () => {
       throw new Error('unexpected Slack link completion');
     },
+    fetchInternalLiveDirective: async () => {
+      throw new Error('unexpected internal-live directive');
+    },
+    recordInternalLiveUpdateReceipt: async () => {
+      throw new Error('unexpected internal-live receipt');
+    },
     ...overrides,
   };
 }

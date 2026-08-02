@@ -11,6 +11,8 @@ import { dirname, delimiter } from 'node:path';
 
 const CREDENTIAL_KEY =
   /(?:API[_-]?KEY|TOKEN|SECRET|PASSWORD|PASSWD|CREDENTIAL|AUTH|GRANOLA|ANTHROPIC|OPENAI)/i;
+const PROXY_KEY = /^(?:HTTP|HTTPS|ALL|NO)_PROXY$/i;
+const NPM_CONFIG_KEY = /^NPM_CONFIG_/i;
 
 export const SANITIZED_CHILD_MARKER = 'ECHO_PRODUCT_SANITIZED_CHILD';
 
@@ -58,6 +60,48 @@ export function sanitizedChildEnvironment(
   };
 }
 
+/**
+ * The one product child environment allowed to reach the public internet.
+ *
+ * Internal-live installation needs npm lifecycle scripts so native dependencies
+ * can install on a cold machine. It still receives no parent credentials,
+ * proxies, custom registry, or npm configuration files. The caller must use a
+ * private working directory, which becomes this child's isolated HOME/cache.
+ */
+export function publicNpmInstallEnvironment(
+  workingDirectory: string,
+  base: NodeJS.ProcessEnv = process.env,
+): NodeJS.ProcessEnv {
+  const env = sanitizedChildEnvironment({ HOME: workingDirectory }, base);
+  for (const key of Object.keys(env)) {
+    if (
+      PROXY_KEY.test(key) ||
+      NPM_CONFIG_KEY.test(key) ||
+      key === 'NODE_OPTIONS' ||
+      key === 'NODE_EXTRA_CA_CERTS' ||
+      key === 'SSL_CERT_FILE' ||
+      key === 'SSL_CERT_DIR'
+    ) {
+      delete env[key];
+    }
+  }
+  return {
+    ...env,
+    HOME: workingDirectory,
+    [SANITIZED_CHILD_MARKER]: '1',
+    npm_config_registry: 'https://registry.npmjs.org/',
+    npm_config_userconfig: '/dev/null',
+    npm_config_globalconfig: '/dev/null',
+    npm_config_cache: `${workingDirectory}/npm-cache`,
+    npm_config_offline: 'false',
+    npm_config_audit: 'false',
+    npm_config_fund: 'false',
+    npm_config_update_notifier: 'false',
+    npm_config_always_auth: 'false',
+    npm_config_strict_ssl: 'true',
+  };
+}
+
 export function spawnSanitizedChild(
   command: string,
   args: readonly string[],
@@ -78,6 +122,18 @@ export function spawnSanitizedChildSync(
   return spawnSync(command, [...args], {
     ...options,
     env: sanitizedChildEnvironment(options.env),
+  });
+}
+
+export function spawnPublicNpmInstallChild(
+  command: string,
+  args: readonly string[],
+  options: SpawnOptionsWithoutStdio & { cwd: string },
+): ChildProcessWithoutNullStreams {
+  return spawn(command, [...args], {
+    ...options,
+    env: publicNpmInstallEnvironment(options.cwd, options.env ?? process.env),
+    stdio: 'pipe',
   });
 }
 

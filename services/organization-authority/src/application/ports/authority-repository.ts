@@ -3,7 +3,12 @@ import type {
   P256SigningKeyDescriptor,
   Sha256Digest,
 } from '@echo-brain/federation-protocol';
-import type { OrganizationAccessLeaseRequestV1 } from '@echo-brain/organization-api';
+import type {
+  ApproveOrganizationInternalLiveReleaseRequestV1,
+  OrganizationAccessLeaseRequestV1,
+  OrganizationInternalLiveReleaseManifestV1,
+  OrganizationInternalLiveUpdateReceiptV1,
+} from '@echo-brain/organization-api';
 import type {
   OrganizationAuthorityDescriptorV1,
   OrganizationEnrollmentReceiptV1,
@@ -91,6 +96,33 @@ export interface StoredAccessLeaseRequest {
   received_at: string;
 }
 
+export interface StoredInternalLiveRelease {
+  directive_sequence: number;
+  command_id: string;
+  command_sha256: Sha256Digest;
+  manifest_url: string;
+  manifest_sha256: string;
+  manifest: OrganizationInternalLiveReleaseManifestV1;
+  release_version: string;
+  release_tag: string;
+  source_sha: string;
+  artifact_sha256: string;
+  approved_at: string;
+}
+
+export interface NewInternalLiveRelease {
+  command: ApproveOrganizationInternalLiveReleaseRequestV1;
+  command_sha256: Sha256Digest;
+  approved_at: string;
+}
+
+export interface StoredInternalLiveUpdateReceipt {
+  receipt_sequence: number;
+  payload_sha256: Sha256Digest;
+  receipt: OrganizationInternalLiveUpdateReceiptV1;
+  received_at: string;
+}
+
 export interface NewAuthorityEnrollment {
   enrollment: StoredAuthorityEnrollment;
   initial_access_state: StoredAuthorityAccessState;
@@ -154,6 +186,7 @@ export interface AuthorityReadTransaction {
     enrollmentId: string | undefined,
     limit: number,
   ): StoredAuthorityEnrollment[];
+  activeEnrollments(limit: number): StoredAuthorityEnrollment[];
   currentAccessState(
     enrollmentId: string,
   ): StoredAuthorityAccessState | undefined;
@@ -171,6 +204,20 @@ export interface AuthorityReadTransaction {
   accessStateByDigest(
     stateSha256: Sha256Digest,
   ): StoredAuthorityAccessState | undefined;
+  internalLiveReleaseByCommand(
+    commandId: string,
+  ): StoredInternalLiveRelease | undefined;
+  internalLiveReleaseBySequence(
+    directiveSequence: number,
+  ): StoredInternalLiveRelease | undefined;
+  currentInternalLiveRelease(): StoredInternalLiveRelease | undefined;
+  internalLiveUpdateReceiptByTransaction(
+    transactionId: string,
+  ): StoredInternalLiveUpdateReceipt | undefined;
+  latestInternalLiveUpdateReceipt(
+    installationId: string,
+    directiveSequence: number,
+  ): StoredInternalLiveUpdateReceipt | undefined;
   recentAuditBefore(
     auditSequence: number | undefined,
     limit: number,
@@ -189,6 +236,10 @@ export interface AuthorityWriteTransaction extends AuthorityReadTransaction {
   ): boolean;
   insertAccessState(state: StoredAuthorityAccessState): void;
   insertAccessLeaseRequest(request: StoredAccessLeaseRequest): void;
+  insertInternalLiveRelease(release: NewInternalLiveRelease): void;
+  insertInternalLiveUpdateReceipt(
+    receipt: Omit<StoredInternalLiveUpdateReceipt, 'receipt_sequence'>,
+  ): void;
   revokeMembership(
     membershipId: string,
     revokedAt: string,

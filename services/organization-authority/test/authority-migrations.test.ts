@@ -12,6 +12,8 @@ const AUTHORITY_TABLES = [
   'authority_audit_log',
   'authority_enrollment_grants',
   'authority_enrollments',
+  'authority_internal_live_releases',
+  'authority_internal_live_update_receipts',
   'authority_memberships',
   'authority_metadata',
   'authority_principals',
@@ -36,7 +38,7 @@ describe('organization authority database migrations', () => {
     openAuthorityDatabase(path).close();
 
     const database = new Database(path, { readonly: true });
-    expect(database.pragma('user_version', { simple: true })).toBe(3);
+    expect(database.pragma('user_version', { simple: true })).toBe(4);
     const tables = database
       .prepare(
         `SELECT name FROM sqlite_master
@@ -59,7 +61,7 @@ describe('organization authority database migrations', () => {
     database.close();
   });
 
-  it('upgrades populated legacy data without adding tables or inventing command metadata', () => {
+  it('upgrades populated legacy data without changing legacy rows or inventing command metadata', () => {
     const path = databasePath();
     const legacy = new Database(path);
     legacy.exec(
@@ -123,7 +125,7 @@ describe('organization authority database migrations', () => {
 
     openAuthorityDatabase(path).close();
     const upgraded = new Database(path);
-    expect(upgraded.pragma('user_version', { simple: true })).toBe(3);
+    expect(upgraded.pragma('user_version', { simple: true })).toBe(4);
     const tables = upgraded
       .prepare(
         `SELECT name FROM sqlite_master
@@ -279,11 +281,11 @@ describe('organization authority database migrations', () => {
   it('rejects a database newer than this authority binary', () => {
     const path = databasePath();
     const future = new Database(path);
-    future.pragma('user_version = 4');
+    future.pragma('user_version = 5');
     future.close();
 
     expect(() => openAuthorityDatabase(path)).toThrow(
-      'newer than supported schema 3',
+      'newer than supported schema 4',
     );
   });
 });

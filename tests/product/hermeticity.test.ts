@@ -17,6 +17,7 @@ import tls from 'node:tls';
 import { afterEach, describe, expect, it } from 'vitest';
 import {
   SANITIZED_CHILD_MARKER,
+  spawnPublicNpmInstallChild,
   spawnSanitizedChild,
 } from '../../src/product/spawn-sanitized-child.js';
 
@@ -37,6 +38,26 @@ async function collectChild(
   options: Parameters<typeof spawnSanitizedChild>[2] = {},
 ): Promise<{ status: number | null; stdout: string; stderr: string }> {
   const child = spawnSanitizedChild(command, args, options);
+  let stdout = '';
+  let stderr = '';
+  child.stdout.setEncoding('utf8');
+  child.stderr.setEncoding('utf8');
+  child.stdout.on('data', (chunk: string) => (stdout += chunk));
+  child.stderr.on('data', (chunk: string) => (stderr += chunk));
+  const status = await new Promise<number | null>((resolveStatus, reject) => {
+    child.once('error', reject);
+    child.once('close', resolveStatus);
+  });
+  return { status, stdout, stderr };
+}
+
+async function collectPublicNpmInstallChild(
+  command: string,
+  args: readonly string[],
+  cwd: string,
+  base: NodeJS.ProcessEnv,
+): Promise<{ status: number | null; stdout: string; stderr: string }> {
+  const child = spawnPublicNpmInstallChild(command, args, { cwd, env: base });
   let stdout = '';
   let stderr = '';
   child.stdout.setEncoding('utf8');
@@ -266,5 +287,59 @@ describe('sanitized child process boundary', () => {
     expect(output).toContain('dgram-red.test.ts');
     expect(output).toContain('dns-red.test.ts');
     expect(output).toContain('product hermeticity guard');
+  });
+
+  it('gives only the updater npm child a credential-free public registry environment', async () => {
+    const cwd = temporaryDirectory('echo-public-npm-install-');
+    const keys = [
+      'ANTHROPIC_API_KEY',
+      'NPM_TOKEN',
+      'ECHO_TEST_OVERRIDE',
+      'HTTP_PROXY',
+      'https_proxy',
+      'ALL_PROXY',
+      'NPM_CONFIG_REGISTRY',
+      'npm_config_registry',
+      'npm_config_userconfig',
+      'npm_config_globalconfig',
+      'npm_config_offline',
+      'NODE_OPTIONS',
+      'NODE_EXTRA_CA_CERTS',
+      'SSL_CERT_FILE',
+      'SSL_CERT_DIR',
+      'HOME',
+      SANITIZED_CHILD_MARKER,
+    ];
+    const script = `console.log(JSON.stringify(Object.fromEntries(${JSON.stringify(
+      keys,
+    )}.map((key) => [key, process.env[key]]))))`;
+    const result = await collectPublicNpmInstallChild(
+      process.execPath,
+      ['-e', script],
+      cwd,
+      {
+        ANTHROPIC_API_KEY: 'secret',
+        NPM_TOKEN: 'secret',
+        ECHO_TEST_OVERRIDE: 'unsafe',
+        HTTP_PROXY: 'http://proxy.invalid',
+        https_proxy: 'http://proxy.invalid',
+        ALL_PROXY: 'http://proxy.invalid',
+        NPM_CONFIG_REGISTRY: 'https://registry.attacker.invalid/',
+        npm_config_registry: 'https://registry.attacker.invalid/',
+        NODE_OPTIONS: '--require=/tmp/attacker.cjs',
+        NODE_EXTRA_CA_CERTS: '/tmp/attacker-ca.pem',
+        SSL_CERT_FILE: '/tmp/attacker-ca.pem',
+        SSL_CERT_DIR: '/tmp/attacker-certs',
+      },
+    );
+    expect(result.status, result.stderr).toBe(0);
+    expect(JSON.parse(result.stdout)).toEqual({
+      npm_config_registry: 'https://registry.npmjs.org/',
+      npm_config_userconfig: '/dev/null',
+      npm_config_globalconfig: '/dev/null',
+      npm_config_offline: 'false',
+      HOME: cwd,
+      [SANITIZED_CHILD_MARKER]: '1',
+    });
   });
 });

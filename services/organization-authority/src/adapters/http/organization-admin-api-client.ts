@@ -3,6 +3,8 @@ import {
   MAX_ORGANIZATION_API_CURSOR_CHARACTERS,
   MAX_ORGANIZATION_API_PAGE_ITEMS,
   ORGANIZATION_API_ADMIN_AUDIT_PATH,
+  ORGANIZATION_API_ADMIN_INTERNAL_LIVE_RELEASES_PATH,
+  ORGANIZATION_API_ADMIN_INTERNAL_LIVE_ROLLOUT_PATH,
   ORGANIZATION_API_ADMIN_AUTH_SCHEME,
   ORGANIZATION_API_ADMIN_ENROLLMENT_GRANTS_PATH,
   ORGANIZATION_API_ADMIN_INSTALLATIONS_PATH,
@@ -15,11 +17,14 @@ import {
   TRUSTED_PROXY_AUTHORIZATION_HEADER,
   TRUSTED_PROXY_CLIENT_ID_HEADER,
   validateIssuedOrganizationEnrollmentGrant,
+  validateApproveOrganizationInternalLiveReleaseRequest,
   validateOrganizationAdminOverview,
   validateOrganizationApiError,
   validateOrganizationAuditPage,
   validateOrganizationEnrollmentGrantPage,
   validateOrganizationInstallationPage,
+  validateOrganizationInternalLiveRolloutStatus,
+  validateOrganizationInternalLiveUpdateDirective,
   validateOrganizationMembershipPage,
   validateProvisionedOrganizationMembership,
   validateProvisionOrganizationMembershipRequest,
@@ -29,6 +34,7 @@ import {
   validateRevokedOrganizationMembership,
 } from '@echo-brain/organization-api';
 import type {
+  ApproveOrganizationInternalLiveReleaseRequestV1,
   IssueOrganizationEnrollmentGrantRequestV1,
   IssuedOrganizationEnrollmentGrantV1,
   OrganizationAdminOverviewV1,
@@ -37,6 +43,8 @@ import type {
   OrganizationAuditPageV1,
   OrganizationEnrollmentGrantPageV1,
   OrganizationInstallationPageV1,
+  OrganizationInternalLiveRolloutStatusV1,
+  OrganizationInternalLiveUpdateDirectiveV1,
   OrganizationMembershipPageV1,
   ProvisionedOrganizationMembershipV1,
   ProvisionOrganizationMembershipRequestV1,
@@ -467,6 +475,28 @@ export class OrganizationAdminApiClient {
       path: `${ORGANIZATION_API_ADMIN_AUDIT_PATH}${pageQuery(page)}`,
       expected_status: 200,
       validate: validateOrganizationAuditPage,
+    });
+  }
+
+  internalLiveRolloutStatus(): Promise<OrganizationInternalLiveRolloutStatusV1> {
+    return this.request({
+      method: 'GET',
+      path: ORGANIZATION_API_ADMIN_INTERNAL_LIVE_ROLLOUT_PATH,
+      expected_status: 200,
+      validate: validateOrganizationInternalLiveRolloutStatus,
+    });
+  }
+
+  approveInternalLiveRelease(
+    input: ApproveOrganizationInternalLiveReleaseRequestV1,
+  ): Promise<OrganizationInternalLiveUpdateDirectiveV1> {
+    const body = validateApproveOrganizationInternalLiveReleaseRequest(input);
+    return this.request({
+      method: 'POST',
+      path: ORGANIZATION_API_ADMIN_INTERNAL_LIVE_RELEASES_PATH,
+      expected_status: 201,
+      body,
+      validate: validateOrganizationInternalLiveUpdateDirective,
     });
   }
 

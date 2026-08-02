@@ -7,6 +7,8 @@ import {
   ORGANIZATION_API_ENROLLMENT_AUTH_SCHEME,
   ORGANIZATION_API_ENROLLMENTS_PATH,
   ORGANIZATION_API_PERMISSION_CHECKS_PATH,
+  ORGANIZATION_API_INTERNAL_LIVE_DIRECTIVES_PATH,
+  ORGANIZATION_API_INTERNAL_LIVE_RECEIPTS_PATH,
   ORGANIZATION_API_SLACK_LINK_CHALLENGES_PATH,
   ORGANIZATION_API_SLACK_LINK_COMPLETIONS_PATH,
   validateCompletedOrganizationEnrollment,
@@ -16,6 +18,9 @@ import {
   validateOrganizationAuthorityDescriptorResponse,
   validateOrganizationPermissionCheckDecision,
   validateOrganizationPermissionCheckRequest,
+  validateOrganizationInternalLiveDirectiveRequest,
+  validateOrganizationInternalLiveUpdateDirective,
+  validateOrganizationInternalLiveUpdateReceipt,
   validateOrganizationSlackLinkBeginRequest,
   validateOrganizationSlackLinkBeginResponse,
   validateOrganizationSlackLinkCompleteRequest,
@@ -27,6 +32,9 @@ import {
   type OrganizationAuthorityDescriptorResponseV1,
   type OrganizationPermissionCheckDecisionV1,
   type OrganizationPermissionCheckRequestV1,
+  type OrganizationInternalLiveDirectiveRequestV1,
+  type OrganizationInternalLiveUpdateDirectiveV1,
+  type OrganizationInternalLiveUpdateReceiptV1,
   type OrganizationSlackLinkBeginRequestV1,
   type OrganizationSlackLinkBeginResponseV1,
   type OrganizationSlackLinkCompleteRequestV1,
@@ -260,21 +268,7 @@ export class HttpOrganizationAuthorityClient implements OrganizationAuthorityCli
     signal?: AbortSignal,
     timeoutMs = this.timeoutMs,
   ): Promise<T> {
-    let response: Response;
-    try {
-      const deadline = AbortSignal.timeout(timeoutMs);
-      response = await this.fetchImpl(this.endpoint(path), {
-        ...init,
-        redirect: 'error',
-        signal:
-          signal === undefined ? deadline : AbortSignal.any([signal, deadline]),
-      });
-    } catch (error) {
-      throw new OrganizationAuthorityTransportError(
-        'transport_failed',
-        `organization authority request failed: ${(error as Error).message}`,
-      );
-    }
+    const response = await this.send(path, init, signal, timeoutMs);
     const value = await this.readJson(response);
     if (response.status === 409 && conflictHandling === 'stale-access-state') {
       const staleState = tryValidate(
@@ -304,10 +298,37 @@ export class HttpOrganizationAuthorityClient implements OrganizationAuthorityCli
     return validateResponse(value, response.status, validateSuccess);
   }
 
+  private async send(
+    path: string,
+    init: Omit<RequestInit, 'redirect' | 'signal'>,
+    signal: AbortSignal | undefined,
+    timeoutMs: number,
+  ): Promise<Response> {
+    try {
+      const deadline = AbortSignal.timeout(timeoutMs);
+      return await this.fetchImpl(this.endpoint(path), {
+        ...init,
+        redirect: 'error',
+        signal:
+          signal === undefined ? deadline : AbortSignal.any([signal, deadline]),
+      });
+    } catch (error) {
+      throw new OrganizationAuthorityTransportError(
+        'transport_failed',
+        `organization authority request failed: ${(error as Error).message}`,
+      );
+    }
+  }
+
   private postJson<T>(
     path: string,
     value: unknown,
-    requestKind: 'access' | 'permission' | 'Slack link',
+    requestKind:
+      | 'access'
+      | 'permission'
+      | 'Slack link'
+      | 'internal-live directive'
+      | 'internal-live receipt',
     validateSuccess: (value: unknown) => T,
     conflictHandling: ConflictHandling = 'transport-error',
     signal?: AbortSignal,
@@ -325,6 +346,55 @@ export class HttpOrganizationAuthorityClient implements OrganizationAuthorityCli
       signal,
       timeoutMs,
     );
+  }
+
+  private async postJsonNoContent(
+    path: string,
+    value: unknown,
+    requestKind: 'internal-live receipt',
+    signal?: AbortSignal,
+  ): Promise<void> {
+    const body = JSON.stringify(value);
+    if (Buffer.byteLength(body) > MAX_ORGANIZATION_API_BODY_BYTES) {
+      throw new Error(
+        `organization ${requestKind} request exceeds the API body limit`,
+      );
+    }
+    const response = await this.send(
+      path,
+      { method: 'POST', headers: JSON_HEADERS, body },
+      signal,
+      this.timeoutMs,
+    );
+    if (!response.ok) {
+      const apiError = tryValidate(
+        await this.readJson(response),
+        validateOrganizationApiError,
+      );
+      if (apiError === null) throw invalidResponse(response.status);
+      throw new OrganizationAuthorityTransportError(
+        apiError.error.code,
+        'organization authority rejected the request',
+        response.status,
+      );
+    }
+    if (response.status !== 204) throw invalidResponse(response.status);
+    const declaredLength = response.headers.get('content-length');
+    if (declaredLength !== null && declaredLength !== '0') {
+      throw invalidResponse(response.status);
+    }
+    if (response.body !== null) {
+      const reader = response.body.getReader();
+      try {
+        const first = await reader.read();
+        if (!first.done || (first.value?.byteLength ?? 0) !== 0) {
+          await reader.cancel();
+          throw invalidResponse(response.status);
+        }
+      } finally {
+        reader.releaseLock();
+      }
+    }
   }
 
   readAuthorityDescriptor(): Promise<OrganizationAuthorityDescriptorResponseV1> {
@@ -417,6 +487,32 @@ export class HttpOrganizationAuthorityClient implements OrganizationAuthorityCli
       'transport-error',
       signal,
       Math.max(this.timeoutMs, SLACK_LINK_TIMEOUT_MS),
+    );
+  }
+
+  fetchInternalLiveDirective(
+    request: OrganizationInternalLiveDirectiveRequestV1,
+    signal?: AbortSignal,
+  ): Promise<OrganizationInternalLiveUpdateDirectiveV1> {
+    return this.postJson(
+      ORGANIZATION_API_INTERNAL_LIVE_DIRECTIVES_PATH,
+      validateOrganizationInternalLiveDirectiveRequest(request),
+      'internal-live directive',
+      validateOrganizationInternalLiveUpdateDirective,
+      'transport-error',
+      signal,
+    );
+  }
+
+  recordInternalLiveUpdateReceipt(
+    receipt: OrganizationInternalLiveUpdateReceiptV1,
+    signal?: AbortSignal,
+  ): Promise<void> {
+    return this.postJsonNoContent(
+      ORGANIZATION_API_INTERNAL_LIVE_RECEIPTS_PATH,
+      validateOrganizationInternalLiveUpdateReceipt(receipt),
+      'internal-live receipt',
+      signal,
     );
   }
 }

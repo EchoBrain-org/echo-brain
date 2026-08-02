@@ -5,6 +5,9 @@ import type {
   OrganizationAuthorityDescriptorResponseV1,
   OrganizationPermissionCheckDecisionV1,
   OrganizationPermissionCheckRequestV1,
+  OrganizationInternalLiveDirectiveRequestV1,
+  OrganizationInternalLiveUpdateDirectiveV1,
+  OrganizationInternalLiveUpdateReceiptV1,
   OrganizationSlackLinkBeginRequestV1,
   OrganizationSlackLinkBeginResponseV1,
   OrganizationSlackLinkCompleteRequestV1,
@@ -52,6 +55,16 @@ export interface OrganizationAuthorityClient {
     request: OrganizationSlackLinkCompleteRequestV1,
     signal?: AbortSignal,
   ): Promise<OrganizationSlackLinkResultV1>;
+
+  fetchInternalLiveDirective(
+    request: OrganizationInternalLiveDirectiveRequestV1,
+    signal?: AbortSignal,
+  ): Promise<OrganizationInternalLiveUpdateDirectiveV1>;
+
+  recordInternalLiveUpdateReceipt(
+    receipt: OrganizationInternalLiveUpdateReceiptV1,
+    signal?: AbortSignal,
+  ): Promise<void>;
 }
 
 export interface OrganizationAuthorityConflict {
