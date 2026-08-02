@@ -48,7 +48,7 @@ foreground commands remain Node-based.
 npm ci
 npm run check
 npm pack
-npm install -g ./echo-brain-0.1.0-internal.1.tgz
+npm install -g ./echo-brain-0.1.0-internal.2.tgz
 ```
 
 `npm run check` runs the source-boundary check, TypeScript, ESLint, and the
@@ -102,12 +102,14 @@ npm run organization-authority:admin -- internal-live rollout status \
   --config /absolute/path/authority.json
 ```
 
-Minimum V1 keeps one rollout current at a time: the Authority will not approve
-the next release until every active installation has reported healthy on the
-current one. Retry a rolled-back Mac, or explicitly revoke an installation that
-is no longer in service, before advancing. This keeps an interrupted command
-pinned to the manifest it was already applying without adding rollout rings or
-a remote recovery system.
+Minimum V1 keeps one rollout current at a time. Before any active installation
+reports a receipt, the admin may replace an approved release with a strictly
+newer one. After the first receipt, the Authority will not approve the next
+release until every active installation has reported healthy on the current
+one. Retry a rolled-back Mac, or explicitly revoke an installation that is no
+longer in service, before advancing. This keeps an interrupted command pinned
+to the manifest it was already applying without adding rollout rings or a
+remote recovery system.
 
 V1 does not install a second privileged updater. If power is lost during npm's
 own in-place package replacement and the `echo-brain` command itself is absent,

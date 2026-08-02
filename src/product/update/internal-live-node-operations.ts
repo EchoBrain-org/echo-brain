@@ -24,6 +24,7 @@ import {
   pathEntryExists,
 } from '../secure-local-files.js';
 import {
+  publicNpmInstallConfigPaths,
   spawnPublicNpmInstallChild,
   spawnSanitizedChild,
 } from '../spawn-sanitized-child.js';
@@ -778,6 +779,7 @@ export class NodeInternalLiveUpdateOperations
 
   private async install(path: string, operation: string): Promise<void> {
     assertPrivateRegularFile(path, 'internal-live install package');
+    const npmConfig = publicNpmInstallConfigPaths(this.root);
     requireCommandSuccess(
       await this.installRunner(
         this.options.npmPath,
@@ -788,8 +790,8 @@ export class NodeInternalLiveUpdateOperations
           '--no-fund',
           '--no-update-notifier',
           '--registry=https://registry.npmjs.org/',
-          '--userconfig=/dev/null',
-          '--globalconfig=/dev/null',
+          `--userconfig=${npmConfig.userconfig}`,
+          `--globalconfig=${npmConfig.globalconfig}`,
           '--prefix',
           this.installPrefix,
           path,
