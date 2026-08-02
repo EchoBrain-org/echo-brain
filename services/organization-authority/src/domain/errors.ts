@@ -5,7 +5,8 @@ export type AuthorityErrorCode =
   | 'invalid_request'
   | 'not_found'
   | 'stale_access_state'
-  | 'unauthorized';
+  | 'unauthorized'
+  | 'unavailable';
 
 export class AuthorityOperationError extends Error {
   constructor(

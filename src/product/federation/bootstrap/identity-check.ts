@@ -415,7 +415,7 @@ export async function checkFounderIdentity(
     await optionalCapabilityCheck(
       "legacy-boundary",
       dependencies.legacyBoundaryReady,
-      "legacy cutover classification is not installed yet",
+      "legacy cutover classification is retired; no supported build implements it",
     ),
   );
 
@@ -567,22 +567,22 @@ export async function checkFounderIdentity(
     await optionalCapabilityCheck(
       "approval-capture",
       dependencies.approvalCaptureReady,
-      "approval federation capture is not installed yet",
+      "approval federation capture is retired; no supported build implements it",
     ),
     await optionalCapabilityCheck(
       "attribution-storage",
       dependencies.attributionStorageReady,
-      "source and processor attribution storage is not installed yet",
+      "attribution storage is retired; no supported build implements it",
     ),
     await optionalCapabilityCheck(
       "signed-outbox",
       dependencies.signedOutboxReady,
-      "signed outbox projection is not installed yet",
+      "signed outbox projection is retired; no supported build implements it",
     ),
     await optionalCapabilityCheck(
       "independent-copy",
       dependencies.independentCopyReady,
-      "no verified protected independent outbox copy is recorded",
+      "protected independent outbox copies are retired; no supported build implements them",
     ),
   );
   const foundationOk = checks

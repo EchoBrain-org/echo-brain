@@ -38,6 +38,7 @@ import type {
   OrganizationEnrollmentReceiptV1,
   OrganizationEnrollmentRequestV1,
   OrganizationInstallationAccessStateV1,
+  VerifyOrganizationInstallationAccessStateInput,
 } from "../src/index.js";
 import { canonicalSnapshot } from "../src/validation-support.js";
 
@@ -137,6 +138,23 @@ function generatedSigner(): {
           dsaEncoding: "der",
         }),
       ),
+  };
+}
+
+function fixtureAccessVerification(
+  state: unknown,
+  previous_state: unknown | null,
+  overrides: Partial<VerifyOrganizationInstallationAccessStateInput> = {},
+): VerifyOrganizationInstallationAccessStateInput {
+  return {
+    state,
+    previous_state,
+    pinned_authority: pinnedFixtureAuthority,
+    enrollment_request: fixture.enrollment_request,
+    enrollment_receipt: fixture.enrollment_receipt,
+    now: "2026-07-22T00:03:00.000Z",
+    maximum_active_ttl_ms: 300_000,
+    ...overrides,
   };
 }
 
@@ -310,29 +328,20 @@ describe("organization onboarding and access golden chain", () => {
     expect(
       validateOrganizationInstallationAccessState(fixture.active_access_state),
     ).toEqual(fixture.active_access_state);
-    const active = verifyOrganizationInstallationAccessState({
-      state: fixture.active_access_state,
-      pinned_authority: pinnedFixtureAuthority,
-      enrollment_request: fixture.enrollment_request,
-      enrollment_receipt: fixture.enrollment_receipt,
-      previous_state: null,
-      now: "2026-07-22T00:03:00.000Z",
-      maximum_active_ttl_ms: 300_000,
-    });
+    const active = verifyOrganizationInstallationAccessState(
+      fixtureAccessVerification(fixture.active_access_state, null),
+    );
     expect(active).toEqual({
       permitted: true,
       state: fixture.active_access_state,
     });
 
-    const revoked = verifyOrganizationInstallationAccessState({
-      state: fixture.revoked_access_state,
-      previous_state: fixture.active_access_state,
-      pinned_authority: pinnedFixtureAuthority,
-      enrollment_request: fixture.enrollment_request,
-      enrollment_receipt: fixture.enrollment_receipt,
-      now: "2026-07-22T00:03:00.000Z",
-      maximum_active_ttl_ms: 300_000,
-    });
+    const revoked = verifyOrganizationInstallationAccessState(
+      fixtureAccessVerification(
+        fixture.revoked_access_state,
+        fixture.active_access_state,
+      ),
+    );
     expect(revoked).toEqual({
       permitted: false,
       state: fixture.revoked_access_state,
@@ -440,26 +449,18 @@ describe("organization onboarding and access golden chain", () => {
       }),
     ).toThrow("active access state must not have a revocation reason");
     expect(() =>
-      verifyOrganizationInstallationAccessState({
-        state: fixture.active_access_state,
-        pinned_authority: pinnedFixtureAuthority,
-        enrollment_request: fixture.enrollment_request,
-        enrollment_receipt: fixture.enrollment_receipt,
-        previous_state: null,
-        now: "2026-07-22T00:06:00.000Z",
-        maximum_active_ttl_ms: 300_000,
-      }),
+      verifyOrganizationInstallationAccessState(
+        fixtureAccessVerification(fixture.active_access_state, null, {
+          now: "2026-07-22T00:06:00.000Z",
+        }),
+      ),
     ).toThrow("lease has expired");
     expect(() =>
-      verifyOrganizationInstallationAccessState({
-        state: fixture.active_access_state,
-        pinned_authority: pinnedFixtureAuthority,
-        enrollment_request: fixture.enrollment_request,
-        enrollment_receipt: fixture.enrollment_receipt,
-        previous_state: null,
-        now: "2026-07-22T00:03:00.000Z",
-        maximum_active_ttl_ms: 299_999,
-      }),
+      verifyOrganizationInstallationAccessState(
+        fixtureAccessVerification(fixture.active_access_state, null, {
+          maximum_active_ttl_ms: 299_999,
+        }),
+      ),
     ).toThrow("exceeds the allowed TTL");
     expect(() =>
       verifyOrganizationInstallationAccessState({
@@ -472,40 +473,28 @@ describe("organization onboarding and access golden chain", () => {
       } as never),
     ).toThrow("must be supplied explicitly or set to null");
     expect(() =>
-      verifyOrganizationInstallationAccessState({
-        state: {
-          ...fixture.active_access_state,
-          enrollment_receipt_sha256: `sha256:${"0".repeat(64)}`,
-        },
-        pinned_authority: pinnedFixtureAuthority,
-        enrollment_request: fixture.enrollment_request,
-        enrollment_receipt: fixture.enrollment_receipt,
-        previous_state: null,
-        now: "2026-07-22T00:03:00.000Z",
-        maximum_active_ttl_ms: 300_000,
-      }),
+      verifyOrganizationInstallationAccessState(
+        fixtureAccessVerification(
+          {
+            ...fixture.active_access_state,
+            enrollment_receipt_sha256: `sha256:${"0".repeat(64)}`,
+          },
+          null,
+        ),
+      ),
     ).toThrow("does not bind the exact enrollment");
     expect(() =>
-      verifyOrganizationInstallationAccessState({
-        state: fixture.active_access_state,
-        previous_state: fixture.revoked_access_state,
-        pinned_authority: pinnedFixtureAuthority,
-        enrollment_request: fixture.enrollment_request,
-        enrollment_receipt: fixture.enrollment_receipt,
-        now: "2026-07-22T00:03:00.000Z",
-        maximum_active_ttl_ms: 300_000,
-      }),
+      verifyOrganizationInstallationAccessState(
+        fixtureAccessVerification(
+          fixture.active_access_state,
+          fixture.revoked_access_state,
+        ),
+      ),
     ).toThrow("sequence rolled back");
     expect(() =>
-      verifyOrganizationInstallationAccessState({
-        state: fixture.revoked_access_state,
-        previous_state: null,
-        pinned_authority: pinnedFixtureAuthority,
-        enrollment_request: fixture.enrollment_request,
-        enrollment_receipt: fixture.enrollment_receipt,
-        now: "2026-07-22T00:03:00.000Z",
-        maximum_active_ttl_ms: 300_000,
-      }),
+      verifyOrganizationInstallationAccessState(
+        fixtureAccessVerification(fixture.revoked_access_state, null),
+      ),
     ).toThrow("first verified organization access state sequence must be 1");
   });
 

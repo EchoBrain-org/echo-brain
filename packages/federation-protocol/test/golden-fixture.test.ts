@@ -100,6 +100,27 @@ function signedDocumentWithIntegrity(
   } as SignedDocument;
 }
 
+function expectInstallationKeyFailure(
+  patch: Record<string, unknown>,
+  message: string,
+): void {
+  expect(() =>
+    verifyInstallationKeyDescriptor({
+      ...fixture.installation_key_descriptor,
+      ...patch,
+    } as InstallationKeyDescriptor),
+  ).toThrow(message);
+}
+
+function expectSignedDocumentFailure(
+  document: SignedDocument,
+  message: string,
+  key = publicKey,
+  keyId = fixture.key_id,
+): void {
+  expect(() => verifySignedDocument(document, key, keyId)).toThrow(message);
+}
+
 describe("federation protocol golden fixture", () => {
   it("fixes canonical payload bytes and digests byte-for-byte", () => {
     const bytes = canonicalJsonBytes(fixture.payload);
@@ -326,59 +347,49 @@ describe("federation protocol golden fixture", () => {
       ),
     ).toThrow();
 
-    expect(() =>
-      verifyInstallationKeyDescriptor({
-        ...fixture.installation_key_descriptor,
-        private_key_exportable: false,
-      }),
-    ).toThrow("installation key protection assurance is inconsistent");
-    expect(() =>
-      verifyInstallationKeyDescriptor({
-        ...fixture.installation_key_descriptor,
-        key_id: `sha256:${"0".repeat(64)}`,
-      }),
-    ).toThrow("installation key fingerprint does not match its public key");
-    expect(() =>
-      verifyInstallationKeyDescriptor({
-        ...fixture.installation_key_descriptor,
-        installation_id: "installation-1",
-      }),
-    ).toThrow("installation_id must be a canonical ins identifier");
-    expect(() =>
-      verifyInstallationKeyDescriptor({
-        ...fixture.installation_key_descriptor,
-        algorithm: "not-supported",
-      } as unknown as InstallationKeyDescriptor),
-    ).toThrow("installation signing algorithm is unsupported");
-    expect(() =>
-      verifyInstallationKeyDescriptor({
-        ...fixture.installation_key_descriptor,
+    expectInstallationKeyFailure(
+      { private_key_exportable: false },
+      "installation key protection assurance is inconsistent",
+    );
+    expectInstallationKeyFailure(
+      { key_id: `sha256:${"0".repeat(64)}` },
+      "installation key fingerprint does not match its public key",
+    );
+    expectInstallationKeyFailure(
+      { installation_id: "installation-1" },
+      "installation_id must be a canonical ins identifier",
+    );
+    expectInstallationKeyFailure(
+      { algorithm: "not-supported" },
+      "installation signing algorithm is unsupported",
+    );
+    expectInstallationKeyFailure(
+      {
         public_key_spki_der_base64: `${fixture.public_key_spki_der_base64}\n`,
-      }),
-    ).toThrow("installation public key is not canonical base64");
+      },
+      "installation public key is not canonical base64",
+    );
 
     const publicKeyWithTrailingByte = Buffer.concat([
       publicKey,
       Buffer.from([0]),
     ]);
-    expect(() =>
-      verifyInstallationKeyDescriptor({
-        ...fixture.installation_key_descriptor,
+    expectInstallationKeyFailure(
+      {
         key_id: p256KeyId(publicKeyWithTrailingByte),
         public_key_spki_der_base64:
           publicKeyWithTrailingByte.toString("base64"),
-      }),
-    ).toThrow(
+      },
       "installation public key must use canonical P-256 SPKI DER bytes",
     );
-    expect(() =>
-      verifyInstallationKeyDescriptor({
-        ...fixture.installation_key_descriptor,
+    expectInstallationKeyFailure(
+      {
         key_id: fixture.non_p256_key_vector.key_id,
         public_key_spki_der_base64:
           fixture.non_p256_key_vector.public_key_spki_der_base64,
-      }),
-    ).toThrow("installation public key must be P-256 SPKI DER");
+      },
+      "installation public key must be P-256 SPKI DER",
+    );
 
     const tampered = structuredClone(fixture.signed_document);
     tampered.fixture_id = "evt_00000000-0000-4000-8000-000000000002";
@@ -392,48 +403,32 @@ describe("federation protocol golden fixture", () => {
         `sha256:${"0".repeat(64)}`,
       ),
     ).toThrow("signed document key does not match the active installation");
-    expect(() =>
-      verifySignedDocument(
-        signedDocumentWithIntegrity({ canonicalization: "not-supported" }),
-        publicKey,
-        fixture.key_id,
-      ),
-    ).toThrow("signed document canonicalization is unsupported");
-    expect(() =>
-      verifySignedDocument(
-        signedDocumentWithIntegrity({ signature_algorithm: "not-supported" }),
-        publicKey,
-        fixture.key_id,
-      ),
-    ).toThrow("signed document algorithm is unsupported");
-    expect(() =>
-      verifySignedDocument(
-        signedDocumentWithIntegrity({
-          signature_base64: `${fixture.signature_der_base64}\n`,
-        }),
-        publicKey,
-        fixture.key_id,
-      ),
-    ).toThrow("signed document signature is not canonical base64");
-    expect(() =>
-      verifySignedDocument(
-        signedDocumentWithIntegrity({
-          signature_base64: fixture.high_s_signature_der_base64,
-        }),
-        publicKey,
-        fixture.key_id,
-      ),
-    ).toThrow("ECDSA P-256 signature is not low-S");
-
-    expect(() =>
-      verifySignedDocument(
-        signedDocumentWithIntegrity({
-          signature_base64: invalidLowSSignature.toString("base64"),
-        }),
-        publicKey,
-        fixture.key_id,
-      ),
-    ).toThrow("signed document signature is invalid");
+    expectSignedDocumentFailure(
+      signedDocumentWithIntegrity({ canonicalization: "not-supported" }),
+      "signed document canonicalization is unsupported",
+    );
+    expectSignedDocumentFailure(
+      signedDocumentWithIntegrity({ signature_algorithm: "not-supported" }),
+      "signed document algorithm is unsupported",
+    );
+    expectSignedDocumentFailure(
+      signedDocumentWithIntegrity({
+        signature_base64: `${fixture.signature_der_base64}\n`,
+      }),
+      "signed document signature is not canonical base64",
+    );
+    expectSignedDocumentFailure(
+      signedDocumentWithIntegrity({
+        signature_base64: fixture.high_s_signature_der_base64,
+      }),
+      "ECDSA P-256 signature is not low-S",
+    );
+    expectSignedDocumentFailure(
+      signedDocumentWithIntegrity({
+        signature_base64: invalidLowSSignature.toString("base64"),
+      }),
+      "signed document signature is invalid",
+    );
 
     const tamperedWithMatchingDigest = structuredClone(fixture.signed_document);
     tamperedWithMatchingDigest.fixture_id =
@@ -441,13 +436,10 @@ describe("federation protocol golden fixture", () => {
     tamperedWithMatchingDigest.integrity.payload_sha256 = canonicalSha256(
       signedPayload(tamperedWithMatchingDigest),
     );
-    expect(() =>
-      verifySignedDocument(
-        tamperedWithMatchingDigest,
-        publicKey,
-        fixture.key_id,
-      ),
-    ).toThrow("signed document signature is invalid");
+    expectSignedDocumentFailure(
+      tamperedWithMatchingDigest,
+      "signed document signature is invalid",
+    );
 
     const alternateKeyDocument = signedDocumentWithIntegrity({
       key_id: fixture.alternate_p256_key_vector.key_id,
@@ -463,13 +455,11 @@ describe("federation protocol golden fixture", () => {
     const forgedKeyBinding = signedDocumentWithIntegrity({
       signature_base64: fixture.alternate_p256_key_vector.signature_der_base64,
     });
-    expect(() =>
-      verifySignedDocument(
-        forgedKeyBinding,
-        alternatePublicKey,
-        fixture.key_id,
-      ),
-    ).toThrow("signed document public key does not match its expected key id");
+    expectSignedDocumentFailure(
+      forgedKeyBinding,
+      "signed document public key does not match its expected key id",
+      alternatePublicKey,
+    );
   });
 
   it("validates canonical IDs and real UTC millisecond timestamps", () => {

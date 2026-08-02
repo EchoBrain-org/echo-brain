@@ -9,12 +9,6 @@
   "entry_points": ["packages/federation-protocol/src/index.ts"],
   "owned_source_paths": ["packages/federation-protocol/src/**"],
   "allowed_internal_paths": ["packages/federation-protocol/src/**"],
-  "forbidden_repository_roots": [
-    "src/",
-    "services/",
-    "packages/organization-protocol/",
-    "packages/organization-api/"
-  ],
   "allowed_workspace_packages": [],
   "allowed_external_packages": [],
   "allowed_node_builtins": ["buffer", "crypto"],

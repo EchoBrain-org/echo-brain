@@ -24,6 +24,10 @@ import {
   FounderIdentityGateError,
   type IdentityCheckDependencies,
 } from './federation/bootstrap/identity-check.js';
+import {
+  assertFounderProvenanceRetired,
+  FounderProvenanceGateError,
+} from './federation/cutover-fence.js';
 import { resolveProductStatePaths, type ProductStatePaths } from './paths.js';
 import {
   ProductRuntimeFailure,
@@ -61,6 +65,17 @@ export interface ProductCycleRunOptions {
   signal?: AbortSignal;
 }
 
+export interface ProductAccessGate {
+  /**
+   * Proves that this installation may perform product work now. Implementations
+   * must fail closed when their authorization evidence is expired or revoked.
+   */
+  assertAuthorized(): Promise<void>;
+  /** Starts any background renewal only after composition startup succeeds. */
+  start?(): void;
+  close?(): void | Promise<void>;
+}
+
 export interface PrepareProductCompositionOptions {
   classifyStateFilesystem: ClassifyStateFilesystem;
   state?: CoreStateStore & { close?: () => void };
@@ -71,6 +86,7 @@ export interface PrepareProductCompositionOptions {
   healthTimeoutMs?: number;
   operationDeadlines?: Partial<CoreCycleDeadlines>;
   identityCheck?: IdentityCheckDependencies;
+  accessGate?: ProductAccessGate;
   approvalFederationCapture?: DecisionNodeFederationCapture;
   /** Command-scoped resources not owned by the CoreStateStore. */
   closeResources?: () => void | Promise<void>;
@@ -173,6 +189,28 @@ export function prepareProductStateRoot(path: string): void {
   }
 }
 
+export async function assertProductAccess(
+  gate: ProductAccessGate | undefined,
+): Promise<void> {
+  if (gate === undefined) return;
+  try {
+    await gate.assertAuthorized();
+  } catch (error) {
+    if (
+      error instanceof ProductRuntimeFailure &&
+      error.code === 'organization_access_denied'
+    ) {
+      throw error;
+    }
+    const detail = (error as Error).message;
+    throw new ProductRuntimeFailure(
+      'organization_access_denied',
+      `organization access does not permit product work: ${detail}`,
+      [detail],
+    );
+  }
+}
+
 function summarize(
   sources: readonly ProductSourceCycleResult[],
 ): ProductCycleResult {
@@ -198,11 +236,36 @@ function summarize(
   };
 }
 
+/**
+ * Map the shared retirement refusal onto this layer's failure type without
+ * letting the guard itself depend on runtime composition.
+ */
+export function assertRetiredFounderProvenanceRefused(
+  stateDirectory: string,
+): void {
+  try {
+    assertFounderProvenanceRetired(stateDirectory);
+  } catch (error) {
+    if (error instanceof FounderProvenanceGateError) {
+      throw new ProductRuntimeFailure(
+        'identity_not_operationally_ready',
+        error.message,
+        [...error.findings],
+      );
+    }
+    throw error;
+  }
+}
+
 export async function prepareProductComposition(
   config: ProductRuntimeConfig,
   registry: AdapterRegistry,
   options: PrepareProductCompositionOptions,
 ): Promise<ProductComposition> {
+  // First statement: before the caller-supplied filesystem classifier runs,
+  // before the state root is created, and before any injected identity check,
+  // approval store, approval capture, or access gate is consulted.
+  assertRetiredFounderProvenanceRefused(config.state_dir);
   const classification = await options.classifyStateFilesystem(
     config.state_dir,
   );
@@ -244,6 +307,9 @@ export async function prepareProductComposition(
       ],
     );
   }
+  // Authorization is checked before adapter construction, credential
+  // resolution, health checks, or any provider contact.
+  await assertProductAccess(options.accessGate);
   const adapters = resolveConfiguredAdapters(config, registry);
   if (adapters instanceof ProductRuntimeFailure) throw adapters;
   await assertAdapterHealth(adapters, options.healthTimeoutMs ?? 10_000);
@@ -272,6 +338,12 @@ export async function prepareProductComposition(
     runOptions: ProductCycleRunOptions = {},
   ): Promise<ProductCycleResult> => {
     if (closed) throw new Error('product composition is closed');
+    // Re-checked every cycle, not only at construction. A composition built on
+    // a clean root must still refuse if founder residue or the adjacent guard
+    // appears underneath it before the next cycle, and it must refuse before
+    // the access gate, providers, state, approvals, or any caller callback.
+    assertRetiredFounderProvenanceRefused(config.state_dir);
+    await assertProductAccess(options.accessGate);
     const sources: ProductSourceCycleResult[] = [];
     for (const source of adapters.meetingSources) {
       try {
@@ -304,6 +376,7 @@ export async function prepareProductComposition(
     return summarize(sources);
   };
 
+  options.accessGate?.start?.();
   return {
     paths,
     adapters,
@@ -324,17 +397,19 @@ export async function prepareProductComposition(
       }
       closed = true;
       let stateFailure: unknown;
-      try {
-        state.close?.();
-      } catch (error) {
-        stateFailure = error;
-      }
-      if (options.closeResources === undefined) {
-        if (stateFailure !== undefined) throw stateFailure;
-        return;
-      }
       return Promise.resolve()
-        .then(async () => await options.closeResources!())
+        .then(async () => await options.accessGate?.close?.())
+        .catch((error: unknown) => {
+          stateFailure ??= error;
+        })
+        .then(() => {
+          try {
+            state.close?.();
+          } catch (error) {
+            stateFailure ??= error;
+          }
+        })
+        .then(async () => await options.closeResources?.())
         .catch((error: unknown) => {
           stateFailure ??= error;
         })

@@ -1,4 +1,10 @@
+import { Buffer } from 'node:buffer';
 import { describe, expect, it, vi } from 'vitest';
+import {
+  createOrganizationPermissionCheckRequest,
+  createOrganizationSlackLinkBeginRequest,
+  createOrganizationSlackLinkCompleteRequest,
+} from '@echo-brain/organization-api';
 import { OrganizationAuthorityConflictError } from '../../src/product/organization/client/authority-client.js';
 import {
   HttpOrganizationAuthorityClient,
@@ -6,6 +12,10 @@ import {
 } from '../../src/product/organization/client/http-organization-authority-client.js';
 import {
   GRANT,
+  NOW,
+  ORGANIZATION_IDS,
+  allowedPermissionDecision,
+  protocolInstallationKey,
   signedAccessLeaseRequest,
   signedEnrollmentRequest,
   TestAuthority,
@@ -104,6 +114,226 @@ describe('HTTP organization authority client', () => {
       });
     }
     expect(postedBody).toEqual(accessRequest);
+  });
+
+  it('posts the exact signed permission request and validates its decision', async () => {
+    const authority = new TestAuthority();
+    const signer = new TestInstallationSigner();
+    const signingKey = protocolInstallationKey(signer);
+    const request = await createOrganizationPermissionCheckRequest(
+      {
+        request_id: 'pcr_00000000-0000-4000-8000-000000000001',
+        authority_id: ORGANIZATION_IDS.authority,
+        authority_key_id: authority.descriptor.signing_key.key_id,
+        organization_id: ORGANIZATION_IDS.organization,
+        enrollment_id: ORGANIZATION_IDS.enrollment,
+        installation_id: ORGANIZATION_IDS.installation,
+        installation_signing_key: signingKey,
+        provider: 'slack',
+        provider_issuer: 'https://slack.com',
+        provider_tenant_kind: 'workspace',
+        provider_tenant_id: 'T123TEAM',
+        provider_enterprise_id: null,
+        provider_connection_subject_id: 'U123BOT',
+        provider_connection_bot_id: 'B123BOT',
+        provider_connection_app_id: 'A123APP',
+        provider_subject_kind: 'human_user',
+        provider_subject_id: 'U123ZHEN',
+        adapter_kind: 'approval-surface',
+        adapter_id: 'slack-reactions',
+        adapter_instance_id: 'primary',
+        adapter_version: '1.0.0',
+        action: 'approve',
+        approval_id: 'f'.repeat(64),
+        channel_id: 'C123CHANNEL',
+        message_ts: '1753822800.000001',
+        reaction_name: 'white_check_mark',
+        requested_at: NOW,
+      },
+      (bytes) =>
+        signer.sign(
+          ORGANIZATION_IDS.installation,
+          bytes,
+          signingKey.key_id,
+        ),
+    );
+    const client = new HttpOrganizationAuthorityClient({
+      baseUrl: 'https://authority.example',
+      fetch: async (input, init) => {
+        expect(String(input)).toBe(
+          'https://authority.example/v1/permission-checks',
+        );
+        expect(init?.method).toBe('POST');
+        expect(JSON.parse(String(init?.body))).toEqual(request);
+        return new Response(
+          JSON.stringify(allowedPermissionDecision(request)),
+          {
+            status: 200,
+            headers: { 'content-type': 'application/json' },
+          },
+        );
+      },
+    });
+
+    await expect(client.checkPermission(request)).resolves.toMatchObject({
+      allowed: true,
+      membership_id: ORGANIZATION_IDS.membership,
+    });
+
+    const cancellation = new AbortController();
+    let combinedSignal: AbortSignal | undefined;
+    const cancelledClient = new HttpOrganizationAuthorityClient({
+      baseUrl: 'https://authority.example',
+      fetch: async (_input, init) =>
+        await new Promise<Response>((_resolve, reject) => {
+          combinedSignal = init?.signal as AbortSignal;
+          combinedSignal.addEventListener(
+            'abort',
+            () => reject(combinedSignal?.reason),
+            { once: true },
+          );
+        }),
+    });
+    const pending = cancelledClient.checkPermission(
+      request,
+      cancellation.signal,
+    );
+    cancellation.abort();
+    await expect(pending).rejects.toMatchObject({ code: 'transport_failed' });
+    expect(combinedSignal?.aborted).toBe(true);
+  });
+
+  it('uses only signed installation requests for Slack linking and strictly validates both responses', async () => {
+    const authority = new TestAuthority();
+    const signer = new TestInstallationSigner();
+    const signingKey = protocolInstallationKey(signer);
+    const challengeCode = Buffer.alloc(32, 0xa5).toString('base64url');
+    const beginRequest = await createOrganizationSlackLinkBeginRequest(
+      {
+        request_id: 'slb_00000000-0000-4000-8000-000000000001',
+        authority_id: ORGANIZATION_IDS.authority,
+        authority_key_id: authority.descriptor.signing_key.key_id,
+        organization_id: ORGANIZATION_IDS.organization,
+        enrollment_id: ORGANIZATION_IDS.enrollment,
+        installation_id: ORGANIZATION_IDS.installation,
+        installation_signing_key: signingKey,
+        challenge_code_sha256: `sha256:${'a'.repeat(64)}`,
+        requested_at: NOW,
+      },
+      (bytes) =>
+        signer.sign(
+          ORGANIZATION_IDS.installation,
+          bytes,
+          signingKey.key_id,
+        ),
+    );
+    const completeRequest = await createOrganizationSlackLinkCompleteRequest(
+      {
+        request_id: 'slc_00000000-0000-4000-8000-000000000001',
+        authority_id: ORGANIZATION_IDS.authority,
+        authority_key_id: authority.descriptor.signing_key.key_id,
+        organization_id: ORGANIZATION_IDS.organization,
+        enrollment_id: ORGANIZATION_IDS.enrollment,
+        installation_id: ORGANIZATION_IDS.installation,
+        installation_signing_key: signingKey,
+        challenge_attempt_id:
+          'cat_00000000-0000-4000-8000-000000000001',
+        challenge_message_ts: '1753891200.123456',
+        challenge_code: challengeCode,
+        expected_provider_subject_id: 'U123ZHEN',
+        adapter_id: 'slack-reactions',
+        adapter_instance_id: 'founder-approvals',
+        adapter_version: '1.0.0',
+        requested_at: NOW,
+      },
+      (bytes) =>
+        signer.sign(
+          ORGANIZATION_IDS.installation,
+          bytes,
+          signingKey.key_id,
+        ),
+    );
+    const beginResponse = {
+      schema_version: 1 as const,
+      kind: 'echo-organization-slack-link-begin-response' as const,
+      challenge_attempt_id:
+        'cat_00000000-0000-4000-8000-000000000001',
+      provider: 'slack' as const,
+      provider_tenant_id: 'T123TEAM',
+      channel_id: 'C123CHANNEL',
+      challenge_message_ts: '1753891200.123456',
+      expires_at: '2026-07-22T00:07:00.000Z',
+    };
+    const result = {
+      schema_version: 1 as const,
+      kind: 'echo-organization-slack-link-result' as const,
+      identity_link_id: 'clm_00000000-0000-4000-8000-000000000001',
+      connection_id: 'con_00000000-0000-4000-8000-000000000001',
+      adapter_binding_id: 'bnd_00000000-0000-4000-8000-000000000001',
+      organization_id: ORGANIZATION_IDS.organization,
+      principal_id: ORGANIZATION_IDS.principal,
+      membership_id: ORGANIZATION_IDS.membership,
+      installation_id: ORGANIZATION_IDS.installation,
+      provider: 'slack' as const,
+      provider_tenant_id: 'T123TEAM',
+      provider_subject_id: 'U123ZHEN',
+      channel_id: 'C123CHANNEL',
+      linked_at: NOW,
+      identity_link_created: true,
+      adapter_binding_created: true,
+      permission_grants_created: 0 as const,
+    };
+    const expected = new Map<
+      string,
+      typeof beginRequest | typeof completeRequest
+    >([
+      ['/v1/integration-links/slack/challenges', beginRequest],
+      ['/v1/integration-links/slack/completions', completeRequest],
+    ]);
+    const client = new HttpOrganizationAuthorityClient({
+      baseUrl: 'https://authority.example',
+      fetch: async (input, init) => {
+        const url = new URL(String(input));
+        const request = expected.get(url.pathname);
+        expect(request).toBeDefined();
+        expect(init?.method).toBe('POST');
+        expect(new Headers(init?.headers).get('authorization')).toBeNull();
+        expect(JSON.parse(String(init?.body))).toEqual(request);
+        return Response.json(
+          url.pathname.endsWith('/challenges') ? beginResponse : result,
+        );
+      },
+    });
+
+    await expect(client.beginSlackLink(beginRequest)).resolves.toEqual(
+      beginResponse,
+    );
+    await expect(client.completeSlackLink(completeRequest)).resolves.toEqual(
+      result,
+    );
+
+    const malformedCases = [
+      {
+        invoke: (malformedClient: HttpOrganizationAuthorityClient) =>
+          malformedClient.beginSlackLink(beginRequest),
+        body: { ...beginResponse, bot_token: 'must-not-be-accepted' },
+      },
+      {
+        invoke: (malformedClient: HttpOrganizationAuthorityClient) =>
+          malformedClient.completeSlackLink(completeRequest),
+        body: { ...result, permission_grants_created: 1 },
+      },
+    ];
+    for (const testCase of malformedCases) {
+      const malformedClient = new HttpOrganizationAuthorityClient({
+        baseUrl: 'https://authority.example',
+        fetch: async () => Response.json(testCase.body),
+      });
+      await expect(testCase.invoke(malformedClient)).rejects.toMatchObject({
+        code: 'invalid_response',
+        status: 200,
+      });
+    }
   });
 
   it('does not classify a non-access 409 as a stale access-state conflict', async () => {

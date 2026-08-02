@@ -34,7 +34,12 @@ import type {
   OrganizationEnrollmentRequestV1,
   OrganizationMembershipTypeV1,
 } from '@echo-brain/organization-protocol';
-import { createOrganizationAccessLeaseRequest } from '@echo-brain/organization-api';
+import {
+  createOrganizationAccessLeaseRequest,
+  createOrganizationPermissionCheckRequest,
+  createOrganizationSlackLinkBeginRequest,
+} from '@echo-brain/organization-api';
+import type { OrganizationPermissionCheckRequestV1 } from '@echo-brain/organization-api';
 import { OrganizationAuthorityApplication } from '../src/application/organization-authority.js';
 import type {
   AuthorityClock,
@@ -42,7 +47,10 @@ import type {
   OrganizationAuthoritySigner,
 } from '../src/application/ports/runtime-ports.js';
 import { SqliteOrganizationAuthorityRepository } from '../src/adapters/persistence/sqlite/sqlite-authority-repository.js';
-import { StaleAccessStateError } from '../src/domain/errors.js';
+import {
+  AuthorityOperationError,
+  StaleAccessStateError,
+} from '../src/domain/errors.js';
 
 class FakeClock implements AuthorityClock {
   constructor(private current: number) {}
@@ -227,6 +235,69 @@ async function createEnrolledFixture(at: string) {
   };
 }
 
+async function permissionCheckRequest(
+  fixture: Awaited<ReturnType<typeof createEnrolledFixture>>,
+  overrides: Partial<{
+    enrollment_id: string;
+    requested_at: string;
+    request_id: string;
+  }> = {},
+): Promise<OrganizationPermissionCheckRequestV1> {
+  const receipt = fixture.enrolled.result.enrollment_receipt;
+  return createOrganizationPermissionCheckRequest(
+    {
+      request_id: overrides.request_id ?? `pcr_${randomUUID()}`,
+      authority_id: receipt.authority_id,
+      authority_key_id: receipt.authority_key_id,
+      organization_id: receipt.organization_id,
+      enrollment_id: overrides.enrollment_id ?? receipt.enrollment_id,
+      installation_id: fixture.enrolled.installationId,
+      installation_signing_key: fixture.enrolled.installation.descriptor,
+      provider: 'slack',
+      provider_issuer: 'https://slack.com',
+      provider_tenant_kind: 'workspace',
+      provider_tenant_id: 'T12345678',
+      provider_enterprise_id: null,
+      provider_connection_subject_id: 'U12345679',
+      provider_connection_bot_id: 'B12345678',
+      provider_connection_app_id: 'A12345678',
+      provider_subject_kind: 'human_user',
+      provider_subject_id: 'U12345678',
+      adapter_kind: 'approval-surface',
+      adapter_id: 'slack-reactions',
+      adapter_instance_id: 'primary',
+      adapter_version: '1.0.0',
+      action: 'approve',
+      approval_id: 'f'.repeat(64),
+      channel_id: 'C12345678',
+      message_ts: '1721678400.123456',
+      reaction_name: 'white_check_mark',
+      requested_at: overrides.requested_at ?? fixture.clock.now(),
+    },
+    async (bytes) => sign(fixture.enrolled.installation, bytes),
+  );
+}
+
+async function slackLinkBeginRequest(
+  fixture: Awaited<ReturnType<typeof createEnrolledFixture>>,
+) {
+  const receipt = fixture.enrolled.result.enrollment_receipt;
+  return createOrganizationSlackLinkBeginRequest(
+    {
+      request_id: `slb_${randomUUID()}`,
+      authority_id: receipt.authority_id,
+      authority_key_id: receipt.authority_key_id,
+      organization_id: receipt.organization_id,
+      enrollment_id: receipt.enrollment_id,
+      installation_id: fixture.enrolled.installationId,
+      installation_signing_key: fixture.enrolled.installation.descriptor,
+      challenge_code_sha256: canonicalSha256('Slack-link-challenge'),
+      requested_at: fixture.clock.now(),
+    },
+    async (bytes) => sign(fixture.enrolled.installation, bytes),
+  );
+}
+
 function closeFixture(
   fixture: Awaited<ReturnType<typeof createEnrolledFixture>>,
 ): void {
@@ -359,6 +430,162 @@ describe('single-organization authority runtime', () => {
         fixture.application.issueAccessLease(command),
       ).rejects.toThrow(
         'organization API: access lease request has an unexpected shape',
+      );
+    } finally {
+      closeFixture(fixture);
+    }
+  });
+
+  it('authenticates permission checks and reports current caller and target state', async () => {
+    const fixture = await createEnrolledFixture('2026-07-22T11:40:00.000Z');
+    try {
+      const target = fixture.application.provisionMembership({
+        command_id: `adm_${randomUUID()}`,
+        display_name: 'Approval Target',
+        membership_type: 'employee',
+      });
+      const request = await permissionCheckRequest(fixture);
+      const active = fixture.application.checkPermissionSubject(request, {
+        principal_id: target.principal_id,
+        membership_id: target.membership_id,
+      });
+      expect(active).toMatchObject({
+        provider_event_sha256: request.provider_event_sha256,
+        enrollment_id:
+          fixture.enrolled.result.enrollment_receipt.enrollment_id,
+        installation_id: fixture.enrolled.installationId,
+        installation_key_id:
+          fixture.enrolled.installation.descriptor.key_id,
+        installation_principal_id:
+          fixture.enrolled.result.enrollment_receipt.principal_id,
+        installation_membership_id:
+          fixture.enrolled.result.enrollment_receipt.membership_id,
+        installation_active: true,
+        target_principal_id: target.principal_id,
+        target_membership_id: target.membership_id,
+        target_active: true,
+      });
+      expect(active.request_sha256).toBe(canonicalSha256(request));
+
+      fixture.clock.advance(1);
+      await fixture.application.revokeMembership(
+        target.membership_id,
+        'Target access ended',
+      );
+      expect(
+        fixture.application.checkPermissionSubject(request, {
+          principal_id: target.principal_id,
+          membership_id: target.membership_id,
+        }),
+      ).toMatchObject({
+        installation_active: true,
+        target_active: false,
+      });
+
+      fixture.clock.advance(1);
+      await fixture.application.revokeInstallation(
+        fixture.enrolled.installationId,
+        'Caller installation retired',
+      );
+      expect(
+        fixture.application.checkPermissionSubject(request, null),
+      ).toMatchObject({
+        installation_active: false,
+        target_principal_id: null,
+        target_membership_id: null,
+        target_active: null,
+      });
+    } finally {
+      closeFixture(fixture);
+    }
+  });
+
+  it('derives employee Slack-link identity only from the signed active enrollment', async () => {
+    const fixture = await createEnrolledFixture('2026-07-22T11:45:00.000Z');
+    try {
+      const request = await slackLinkBeginRequest(fixture);
+      expect(
+        fixture.application.integrationInstallationContext(
+          request,
+          'Slack identity link begin request',
+        ),
+      ).toMatchObject({
+        request_sha256: canonicalSha256(request),
+        authority_id: request.authority_id,
+        organization_id: request.organization_id,
+        enrollment_id: request.enrollment_id,
+        principal_id:
+          fixture.enrolled.result.enrollment_receipt.principal_id,
+        membership_id:
+          fixture.enrolled.result.enrollment_receipt.membership_id,
+        installation_id: request.installation_id,
+        installation_key_id: request.installation_key_id,
+      });
+
+      fixture.clock.advance(1);
+      await fixture.application.revokeInstallation(
+        fixture.enrolled.installationId,
+        'employee machine retired',
+      );
+      expect(() =>
+        fixture.application.integrationInstallationContext(
+          request,
+          'Slack identity link begin request',
+        ),
+      ).toThrow(
+        expect.objectContaining<Partial<AuthorityOperationError>>({
+          code: 'unauthorized',
+        }),
+      );
+    } finally {
+      closeFixture(fixture);
+    }
+  });
+
+  it('rejects unknown, forged, and stale permission-check authentication', async () => {
+    const fixture = await createEnrolledFixture('2026-07-22T11:50:00.000Z');
+    try {
+      const unknownEnrollment = await permissionCheckRequest(fixture, {
+        enrollment_id: federationId('enr'),
+      });
+      expect(() =>
+        fixture.application.checkPermissionSubject(unknownEnrollment, null),
+      ).toThrow(
+        expect.objectContaining<Partial<AuthorityOperationError>>({
+          code: 'unauthorized',
+        }),
+      );
+
+      const request = await permissionCheckRequest(fixture);
+      const forged = {
+        ...request,
+        requested_at: '2026-07-22T11:50:01.000Z',
+      };
+      expect(() =>
+        fixture.application.checkPermissionSubject(forged, null),
+      ).toThrow(
+        expect.objectContaining<Partial<AuthorityOperationError>>({
+          code: 'unauthorized',
+        }),
+      );
+      expect(() =>
+        fixture.application.checkPermissionSubject(request, {
+          principal_id: 'prn_invalid',
+          membership_id: 'mem_invalid',
+        }),
+      ).toThrow(
+        expect.objectContaining<Partial<AuthorityOperationError>>({
+          code: 'invalid_request',
+        }),
+      );
+
+      fixture.clock.advance(5 * 60 * 1000 + 1);
+      expect(() =>
+        fixture.application.checkPermissionSubject(request, null),
+      ).toThrow(
+        expect.objectContaining<Partial<AuthorityOperationError>>({
+          code: 'unauthorized',
+        }),
       );
     } finally {
       closeFixture(fixture);

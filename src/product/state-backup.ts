@@ -38,6 +38,7 @@ import {
 import {
   assertFounderCutoverGuardMatchesSession,
   inspectFounderCutoverFence,
+  inspectFounderProvenanceResidue,
   readFounderCutoverGuard,
 } from './federation/cutover-fence.js';
 
@@ -175,7 +176,23 @@ function assertRestorePreservesFounderCutover(
   const current = inspectFounderCutoverFence(currentStateDirectory);
   const currentIrreversible =
     current.state === 'committing' || current.state === 'complete';
-  if (guard === null && !currentIrreversible) return;
+  if (guard === null && !currentIrreversible) {
+    // No guard and no irreversible receipt: 'none' or 'precommit'. Identity-only
+    // residue and a valid precommit session are still retired founder-provenance
+    // material, and no restore may erase them -- no restore crosses the
+    // retirement fence. There is no cutover identity to match at these phases,
+    // and inspecting the backup instead would prove nothing: the observational
+    // inspector can see artifacts restore never copies (a guard-named sibling
+    // of the backup directory, an empty unexpected identity entry), so a clean
+    // payload could impersonate a fenced one. Presence of any current residue
+    // -- including an uninspectable root -- therefore refuses outright;
+    // preservation of such a profile is `backup`, not restore.
+    const residue = inspectFounderProvenanceResidue(currentStateDirectory);
+    if (!residue.present) return;
+    throw new Error(
+      'restore would erase retired founder-provenance material',
+    );
+  }
   const restored = inspectFounderCutoverFence(restoredStateDirectory);
   if (restored.state !== 'committing' && restored.state !== 'complete') {
     throw new Error(

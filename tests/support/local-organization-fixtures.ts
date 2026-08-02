@@ -6,6 +6,7 @@ import {
 } from 'node:crypto';
 import {
   canonicalJson,
+  canonicalSha256,
   normalizeP256LowS,
   p256KeyId,
   type P256SigningKeyDescriptor,
@@ -15,6 +16,8 @@ import {
   createOrganizationAccessLeaseRequest,
   type CompletedOrganizationEnrollmentV1,
   type OrganizationAccessLeaseRequestV1,
+  type OrganizationPermissionCheckDecisionV1,
+  type OrganizationPermissionCheckRequestV1,
 } from '@echo-brain/organization-api';
 import {
   createOrganizationEnrollmentReceipt,
@@ -55,6 +58,24 @@ export const ORGANIZATION_IDS = {
   installation: fixtureId('ins', 1),
   enrollment: fixtureId('enr', 1),
 } as const;
+
+export function allowedPermissionDecision(
+  request: OrganizationPermissionCheckRequestV1,
+): OrganizationPermissionCheckDecisionV1 {
+  return {
+    schema_version: 1,
+    kind: 'echo-organization-permission-check-decision',
+    request_sha256: canonicalSha256(request),
+    provider_event_sha256: request.provider_event_sha256,
+    allowed: true,
+    reason_code: 'active_membership_and_direct_grant',
+    principal_id: ORGANIZATION_IDS.principal,
+    membership_id: ORGANIZATION_IDS.membership,
+    adapter_binding_id: fixtureId('bnd', 1),
+    permission_grant_id: fixtureId('pgr', 1),
+    evaluated_at: NOW,
+  };
+}
 
 interface GeneratedSigner {
   descriptor: P256SigningKeyDescriptor;
@@ -316,6 +337,7 @@ export function mutableClock(value = NOW): MutableClock {
 
 export function enrollmentInput(authority: TestAuthority) {
   return {
+    authorityBaseUrl: 'https://authority.example.test',
     authorityDescriptor: authority.descriptor,
     independentlyTrustedAuthorityPin: authority.pin,
     enrollmentGrant: Uint8Array.from(GRANT),
@@ -337,6 +359,15 @@ export function descriptorClient(
       authority.complete(enrollmentRequest),
     issueAccessLease: async () => {
       throw new Error('unexpected access refresh');
+    },
+    checkPermission: async () => {
+      throw new Error('unexpected permission check');
+    },
+    beginSlackLink: async () => {
+      throw new Error('unexpected Slack link begin');
+    },
+    completeSlackLink: async () => {
+      throw new Error('unexpected Slack link completion');
     },
     ...overrides,
   };

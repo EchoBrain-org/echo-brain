@@ -1,4 +1,9 @@
-import { createHmac, randomBytes, timingSafeEqual } from 'node:crypto';
+import {
+  createHash,
+  createHmac,
+  randomBytes,
+  timingSafeEqual,
+} from 'node:crypto';
 import { once } from 'node:events';
 import {
   closeSync,
@@ -7,6 +12,7 @@ import {
   fsyncSync,
   linkSync,
   lstatSync,
+  mkdirSync,
   openSync,
   readFileSync,
   realpathSync,
@@ -14,9 +20,17 @@ import {
   writeFileSync,
 } from 'node:fs';
 import { connect, createServer, type Server, type Socket } from 'node:net';
-import { basename, dirname, join } from 'node:path';
+import { basename, dirname, isAbsolute, join, resolve } from 'node:path';
 
-interface LockRecord {
+interface CurrentLockRecord {
+  schema_version: 2;
+  pid: number;
+  token: string;
+  guard_socket: string;
+  runtime_fingerprint_sha256: `sha256:${string}` | null;
+}
+
+interface LegacyLockRecord {
   schema_version: 1;
   pid: number;
   token: string;
@@ -24,16 +38,24 @@ interface LockRecord {
   runtime_fingerprint_sha256: `sha256:${string}` | null;
 }
 
-interface ReadLock {
-  record: LockRecord;
+type LockRecord = CurrentLockRecord | LegacyLockRecord;
+
+interface ReadLock<T extends LockRecord = LockRecord> {
+  record: T;
   device: number;
   inode: number;
 }
 
 interface OwnedLock {
   path: string;
-  lock: ReadLock;
-  guard: Server;
+  lock: ReadLock<CurrentLockRecord>;
+  guard: OwnedGuard;
+}
+
+interface OwnedGuard {
+  server: Server;
+  socketPath: string;
+  socketName: string;
 }
 
 type GuardProbe =
@@ -46,6 +68,9 @@ const GUARD_CHALLENGE_PREFIX = 'echo-organization-authority-guard/1 challenge ';
 const GUARD_PROOF_PREFIX = 'echo-organization-authority-guard/1 proof ';
 const GUARD_CHALLENGE_DEADLINE_MS = 500;
 const MAX_GUARD_MESSAGE_BYTES = 256;
+const MAX_GUARD_SOCKET_PATH_BYTES = 103;
+const GUARD_SOCKET_PATTERN = /^\.g-[a-f0-9]{6}$/;
+const COORDINATION_ROOT_ENV = 'ECHO_AUTHORITY_COORDINATION_ROOT';
 
 export interface AuthorityRuntimeLockInspection {
   present: boolean;
@@ -65,15 +90,15 @@ export interface AuthorityRuntimeLockHandle {
 }
 
 function lockRecord(input: {
-  guard_port: number;
+  guard_socket: string;
   runtime_fingerprint_sha256: `sha256:${string}` | null;
   token: string;
-}): LockRecord {
+}): CurrentLockRecord {
   return {
-    schema_version: 1,
+    schema_version: 2,
     pid: process.pid,
     token: input.token,
-    guard_port: input.guard_port,
+    guard_socket: input.guard_socket,
     runtime_fingerprint_sha256: input.runtime_fingerprint_sha256,
   };
 }
@@ -107,8 +132,55 @@ function assertPrivateCoordinationDirectory(path: string): void {
   }
 }
 
+function configuredCoordinationRoot(): string | null {
+  const root = process.env[COORDINATION_ROOT_ENV];
+  if (root === undefined) return null;
+  if (
+    root.length === 0 ||
+    root.includes('\0') ||
+    !isAbsolute(root) ||
+    resolve(root) !== root
+  ) {
+    throw new Error(
+      `${COORDINATION_ROOT_ENV} must be a normalized absolute path`,
+    );
+  }
+  const state = lstatSync(root);
+  if (
+    state.isSymbolicLink() ||
+    !state.isDirectory() ||
+    realpathSync(root) !== root ||
+    (state.mode & 0o1777) !== 0o1777
+  ) {
+    throw new Error(
+      'authority coordination root must be a canonical sticky mode-1777 directory',
+    );
+  }
+  return root;
+}
+
+function authorityCoordinationDirectory(stateDirectory: string): string {
+  const root = configuredCoordinationRoot();
+  if (root === null) return stateDirectory;
+  const identity = createHash('sha256')
+    .update(`${resolve(stateDirectory)}\n`)
+    .digest('hex')
+    .slice(0, 24);
+  const directory = join(root, `authority-${identity}`);
+  try {
+    mkdirSync(directory, { mode: 0o700 });
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error;
+  }
+  assertPrivateCoordinationDirectory(directory);
+  return directory;
+}
+
 /** Publishes only a complete, fsynced lock inode at the public pathname. */
-function createLock(path: string, record: LockRecord): ReadLock {
+function createLock(
+  path: string,
+  record: CurrentLockRecord,
+): ReadLock<CurrentLockRecord> {
   const parent = dirname(path);
   const noFollow = fsConstants.O_NOFOLLOW ?? 0;
   const preparedPath = `${path}.prepare-${randomBytes(16).toString('hex')}`;
@@ -117,7 +189,7 @@ function createLock(path: string, record: LockRecord): ReadLock {
     fsConstants.O_CREAT | fsConstants.O_EXCL | fsConstants.O_WRONLY | noFollow,
     0o600,
   );
-  let prepared: ReadLock;
+  let prepared: ReadLock<CurrentLockRecord>;
   try {
     writeFileSync(file, encodeLock(record), 'utf8');
     fsyncSync(file);
@@ -179,26 +251,33 @@ function readLock(path: string, label: string): ReadLock {
     if (
       parsed === null ||
       typeof parsed !== 'object' ||
-      Array.isArray(parsed) ||
-      Object.keys(parsed).sort().join(',') !==
-        'guard_port,pid,runtime_fingerprint_sha256,schema_version,token'
+      Array.isArray(parsed)
     ) {
       throw new Error(`${label} has an invalid shape`);
     }
     const record = parsed as Record<string, unknown>;
-    if (
-      record.schema_version !== 1 ||
+    const commonValid =
       !Number.isSafeInteger(record.pid) ||
       (record.pid as number) < 1 ||
       typeof record.token !== 'string' ||
       !/^[a-f0-9]{64}$/.test(record.token) ||
-      !Number.isSafeInteger(record.guard_port) ||
-      (record.guard_port as number) < 1 ||
-      (record.guard_port as number) > 65_535 ||
       (record.runtime_fingerprint_sha256 !== null &&
         (typeof record.runtime_fingerprint_sha256 !== 'string' ||
-          !/^sha256:[a-f0-9]{64}$/.test(record.runtime_fingerprint_sha256)))
-    ) {
+          !/^sha256:[a-f0-9]{64}$/.test(record.runtime_fingerprint_sha256)));
+    const current =
+      record.schema_version === 2 &&
+      Object.keys(record).sort().join(',') ===
+        'guard_socket,pid,runtime_fingerprint_sha256,schema_version,token' &&
+      typeof record.guard_socket === 'string' &&
+      GUARD_SOCKET_PATTERN.test(record.guard_socket);
+    const legacy =
+      record.schema_version === 1 &&
+      Object.keys(record).sort().join(',') ===
+        'guard_port,pid,runtime_fingerprint_sha256,schema_version,token' &&
+      Number.isSafeInteger(record.guard_port) &&
+      (record.guard_port as number) >= 1 &&
+      (record.guard_port as number) <= 65_535;
+    if (commonValid || (!current && !legacy)) {
       throw new Error(`${label} has invalid ownership data`);
     }
     return {
@@ -215,26 +294,40 @@ function sameLock(left: ReadLock, right: ReadLock): boolean {
   return (
     left.device === right.device &&
     left.inode === right.inode &&
-    left.record.pid === right.record.pid &&
-    left.record.token === right.record.token &&
-    left.record.guard_port === right.record.guard_port &&
-    left.record.runtime_fingerprint_sha256 ===
-      right.record.runtime_fingerprint_sha256
+    JSON.stringify(left.record) === JSON.stringify(right.record)
   );
 }
 
-async function closeGuard(server: Server): Promise<void> {
-  if (!server.listening) return;
-  const closed = once(server, 'close');
-  server.close();
-  await closed;
+function guardSocketPath(lockPath: string, socketName: string): string {
+  if (!GUARD_SOCKET_PATTERN.test(socketName)) {
+    throw new Error('authority ownership guard socket name is invalid');
+  }
+  return join(dirname(lockPath), socketName);
 }
 
-async function abandonGuard(server: Server): Promise<void> {
+function removeGuardSocket(socketPath: string): void {
+  try {
+    unlinkSync(socketPath);
+    fsyncDirectory(dirname(socketPath));
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+  }
+}
+
+async function closeGuard(guard: OwnedGuard): Promise<void> {
+  if (guard.server.listening) {
+    const closed = once(guard.server, 'close');
+    guard.server.close();
+    await closed;
+  }
+  removeGuardSocket(guard.socketPath);
+}
+
+async function abandonGuard(guard: OwnedGuard): Promise<void> {
   // Abandonment is used only when protected-resource cleanup is uncertain.
   // Stop the guard from keeping a terminal process alive, but retain kernel
   // exclusion until that process actually exits.
-  server.unref();
+  guard.server.unref();
 }
 
 function guardProof(token: string, nonce: string): string {
@@ -291,12 +384,16 @@ function createAuthenticatedGuard(token: string): Server {
 }
 
 async function probeAuthenticatedGuard(
+  lockPath: string,
   record: LockRecord,
 ): Promise<GuardProbe> {
   return await new Promise((resolve) => {
     const nonce = randomBytes(32).toString('hex');
     const expectedProof = Buffer.from(guardProof(record.token, nonce), 'hex');
-    const socket = connect({ host: '127.0.0.1', port: record.guard_port });
+    const socket =
+      record.schema_version === 2
+        ? connect(guardSocketPath(lockPath, record.guard_socket))
+        : connect({ host: '127.0.0.1', port: record.guard_port });
     let connected = false;
     let receivedBytes = false;
     let response = Buffer.alloc(0);
@@ -366,7 +463,11 @@ async function probeAuthenticatedGuard(
     });
     socket.once('error', (error: NodeJS.ErrnoException) => {
       if (settled) return;
-      if (!connected && error.code === 'ECONNREFUSED') {
+      if (
+        !connected &&
+        (error.code === 'ECONNREFUSED' ||
+          (record.schema_version === 2 && error.code === 'ENOENT'))
+      ) {
         finish({ kind: 'absent' });
         return;
       }
@@ -379,106 +480,47 @@ async function probeAuthenticatedGuard(
 }
 
 /**
- * The authenticated loopback listener is the kernel-released ownership
- * primitive. Port occupancy alone is not ownership: the listener must answer
- * a fresh HMAC challenge with the private token published in the lock file.
+ * Schema 2 uses an authenticated Unix socket as the kernel-released ownership
+ * primitive. Schema 1 TCP guards are read only so a direct-install upgrade can
+ * authenticate a live old owner or replace a proven-stale legacy lock.
+ * Its pathname lives beside the lock, so every process that can see shared
+ * authority state reaches the same guard across container network namespaces.
+ * Socket occupancy alone is not ownership: the listener must answer a fresh
+ * HMAC challenge with the private token published in the lock file.
  */
 async function acquireGuard(
+  lockPath: string,
   token: string,
-  port: number,
-  excludedPort?: number,
-): Promise<{ server: Server; port: number }> {
+): Promise<OwnedGuard> {
   for (let attempt = 0; attempt < 8; attempt += 1) {
+    const socketName = `.g-${randomBytes(3).toString('hex')}`;
+    const socketPath = guardSocketPath(lockPath, socketName);
+    if (Buffer.byteLength(socketPath, 'utf8') > MAX_GUARD_SOCKET_PATH_BYTES) {
+      throw new Error(
+        'authority coordination directory path is too long for a portable Unix ownership socket',
+      );
+    }
     const server = createAuthenticatedGuard(token);
-    server.listen({ host: '127.0.0.1', port, exclusive: true });
-    await once(server, 'listening');
-    const address = server.address();
-    if (address === null || typeof address === 'string') {
-      await closeGuard(server);
-      throw new Error('authority kernel ownership guard did not bind TCP');
-    }
-    if (port === 0 && address.port === excludedPort) {
-      await closeGuard(server);
-      continue;
-    }
-    return { server, port: address.port };
-  }
-  throw new Error('authority kernel ownership guard could not avoid listener');
-}
-
-function recoveryGuardToken(path: string, existing: ReadLock): string {
-  return createHmac('sha256', Buffer.from(existing.record.token, 'hex'))
-    .update('echo-organization-authority-lock-recovery-v1\0', 'utf8')
-    .update(path, 'utf8')
-    .update('\0', 'utf8')
-    .update(String(existing.device), 'ascii')
-    .update(':', 'ascii')
-    .update(String(existing.inode), 'ascii')
-    .digest('hex');
-}
-
-function recoveryGuardPort(token: string, attempt: number): number {
-  const digest = createHmac('sha256', Buffer.from(token, 'hex'))
-    .update('echo-organization-authority-lock-recovery-port-v1\0', 'utf8')
-    .update(String(attempt), 'ascii')
-    .digest();
-  return 20_000 + (digest.readUInt16BE(0) % 45_536);
-}
-
-/**
- * Serializes recovery when an unrelated process occupies the recorded port.
- * Every contender for the same stale inode derives the same authenticated
- * alternate guard. Only its kernel owner may pass the later unlink/create
- * sequence; unrelated collisions advance the shared deterministic sequence.
- */
-async function acquireRecoveryGuard(
-  path: string,
-  existing: ReadLock,
-  activeMessage: string,
-  excludedPort?: number,
-): Promise<{ server: Server; port: number; token: string }> {
-  const token = recoveryGuardToken(path, existing);
-  const attemptedPorts = new Set<number>();
-  for (let attempt = 0; attempt < 32; attempt += 1) {
-    const port = recoveryGuardPort(token, attempt);
-    if (
-      attemptedPorts.has(port) ||
-      port === existing.record.guard_port ||
-      port === excludedPort
-    ) {
-      continue;
-    }
-    attemptedPorts.add(port);
-    const candidate: LockRecord = {
-      ...existing.record,
-      token,
-      guard_port: port,
-    };
-    for (let raceAttempt = 0; raceAttempt < 4; raceAttempt += 1) {
-      const probe = await probeAuthenticatedGuard(candidate);
-      if (probe.kind === 'verified') {
+    try {
+      server.listen({ path: socketPath, exclusive: true });
+      await once(server, 'listening');
+      if (server.address() !== socketPath) {
         throw new Error(
-          `${activeMessage} (authenticated stale-lock recovery is active)`,
+          'authority kernel ownership guard did not bind its Unix socket',
         );
       }
-      if (probe.kind === 'ambiguous') {
-        throw new Error(
-          `${activeMessage} (recovery guard could not be authenticated safely: ${probe.detail})`,
-        );
+      fsyncDirectory(dirname(socketPath));
+      return { server, socketPath, socketName };
+    } catch (error) {
+      if (server.listening) {
+        await closeGuard({ server, socketPath, socketName });
       }
-      if (probe.kind === 'invalid') break;
-      try {
-        const guard = await acquireGuard(token, port, excludedPort);
-        return { ...guard, token };
-      } catch (error) {
-        if ((error as NodeJS.ErrnoException).code !== 'EADDRINUSE') {
-          throw error;
-        }
-      }
+      if ((error as NodeJS.ErrnoException).code === 'EADDRINUSE') continue;
+      throw error;
     }
   }
   throw new Error(
-    `${activeMessage} (no unambiguous authenticated recovery guard was available)`,
+    'authority kernel ownership guard could not allocate a unique Unix socket',
   );
 }
 
@@ -486,7 +528,6 @@ async function acquireOwnedLock(
   path: string,
   activeMessage: string,
   runtimeFingerprint: `sha256:${string}` | null,
-  excludedGuardPort?: number,
 ): Promise<OwnedLock> {
   assertPrivateCoordinationDirectory(dirname(path));
   for (let attempt = 0; attempt < 8; attempt += 1) {
@@ -499,7 +540,7 @@ async function acquireOwnedLock(
 
     let existingProbe: GuardProbe | undefined;
     if (existing !== undefined) {
-      existingProbe = await probeAuthenticatedGuard(existing.record);
+      existingProbe = await probeAuthenticatedGuard(path, existing.record);
       if (existingProbe.kind === 'verified') {
         throw new Error(
           `${activeMessage} (authenticated kernel ownership guard is active)`,
@@ -510,41 +551,24 @@ async function acquireOwnedLock(
           `${activeMessage} (kernel ownership guard could not be authenticated safely: ${existingProbe.detail})`,
         );
       }
+      if (existingProbe.kind === 'invalid') {
+        throw new Error(
+          `${activeMessage} (kernel ownership guard returned an invalid proof: ${existingProbe.detail})`,
+        );
+      }
+      if (existing.record.schema_version === 2) {
+        removeGuardSocket(
+          guardSocketPath(path, existing.record.guard_socket),
+        );
+      } else if (configuredCoordinationRoot() !== null) {
+        throw new Error(
+          `${activeMessage} (a legacy TCP ownership lock cannot be recovered safely across container network namespaces; stop the old deployment before upgrading)`,
+        );
+      }
     }
 
-    let token: string;
-    let guard: { server: Server; port: number };
-    if (existing === undefined) {
-      token = randomBytes(32).toString('hex');
-      guard = await acquireGuard(token, 0, excludedGuardPort);
-    } else if (
-      existingProbe?.kind === 'absent' &&
-      existing.record.guard_port !== excludedGuardPort
-    ) {
-      // Reusing the published token turns the recorded port into the recovery
-      // mutex: any losing contender authenticates this winner and cannot reach
-      // the unlink window.
-      token = existing.record.token;
-      try {
-        guard = await acquireGuard(
-          token,
-          existing.record.guard_port,
-          excludedGuardPort,
-        );
-      } catch (error) {
-        if ((error as NodeJS.ErrnoException).code === 'EADDRINUSE') continue;
-        throw error;
-      }
-    } else {
-      const recovery = await acquireRecoveryGuard(
-        path,
-        existing,
-        activeMessage,
-        excludedGuardPort,
-      );
-      token = recovery.token;
-      guard = recovery;
-    }
+    const token = randomBytes(32).toString('hex');
+    const guard = await acquireGuard(path, token);
     let retained = false;
     try {
       if (existing !== undefined) {
@@ -556,25 +580,29 @@ async function acquireOwnedLock(
           throw error;
         }
         if (!sameLock(existing, current)) continue;
-        unlinkSync(path);
+        try {
+          unlinkSync(path);
+        } catch (error) {
+          if ((error as NodeJS.ErrnoException).code === 'ENOENT') continue;
+          throw error;
+        }
         fsyncDirectory(dirname(path));
-        if (guard.port === excludedGuardPort) continue;
       }
 
       const record = lockRecord({
-        guard_port: guard.port,
+        guard_socket: guard.socketName,
         runtime_fingerprint_sha256: runtimeFingerprint,
         token,
       });
       try {
         const lock = createLock(path, record);
         retained = true;
-        return { path, lock, guard: guard.server };
+        return { path, lock, guard };
       } catch (error) {
         if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error;
       }
     } finally {
-      if (!retained) await closeGuard(guard.server);
+      if (!retained) await closeGuard(guard);
     }
   }
   throw new Error('authority operator lock changed repeatedly; retry later');
@@ -619,13 +647,36 @@ async function releaseOwnedLocks(ownedLocks: OwnedLock[]): Promise<void> {
 }
 
 export function authorityRuntimeLockPath(stateDirectory: string): string {
-  return join(stateDirectory, '.echo-authority-runtime.lock');
+  return join(
+    authorityCoordinationDirectory(stateDirectory),
+    '.echo-authority-runtime.lock',
+  );
 }
 
 function authorityInitializationLockPaths(
   configPath: string,
   stateDirectory: string,
 ): readonly string[] {
+  const coordinationDirectory =
+    configuredCoordinationRoot() === null
+      ? null
+      : authorityCoordinationDirectory(stateDirectory);
+  if (coordinationDirectory !== null) {
+    const configIdentity = createHash('sha256')
+      .update(`${resolve(configPath)}\n`)
+      .digest('hex')
+      .slice(0, 24);
+    return [
+      join(
+        coordinationDirectory,
+        `.config-${configIdentity}.echo-authority-initialization.lock`,
+      ),
+      join(
+        coordinationDirectory,
+        '.state.echo-authority-initialization.lock',
+      ),
+    ].sort();
+  }
   return [
     join(
       dirname(configPath),
@@ -678,23 +729,14 @@ export async function acquireAuthorityInitializationLock(
 export async function acquireAuthorityRuntimeLock(
   stateDirectory: string,
   runtimeFingerprint: `sha256:${string}`,
-  listenerPort: number,
 ): Promise<AuthorityRuntimeLockHandle> {
   if (!/^sha256:[a-f0-9]{64}$/.test(runtimeFingerprint)) {
     throw new Error('authority runtime fingerprint must be a SHA-256 digest');
-  }
-  if (
-    !Number.isSafeInteger(listenerPort) ||
-    listenerPort < 0 ||
-    listenerPort > 65_535
-  ) {
-    throw new Error('authority listener port is invalid for runtime ownership');
   }
   const owned = await acquireOwnedLock(
     authorityRuntimeLockPath(stateDirectory),
     'organization authority is already running for this state directory',
     runtimeFingerprint,
-    listenerPort === 0 ? undefined : listenerPort,
   );
   let settlement: Promise<void> | undefined;
   return {
@@ -727,7 +769,7 @@ export async function inspectAuthorityRuntimeLock(
       }
       throw error;
     }
-    const probe = await probeAuthenticatedGuard(lock.record);
+    const probe = await probeAuthenticatedGuard(path, lock.record);
     let current: ReadLock;
     try {
       current = readLock(path, 'organization authority runtime lock');
@@ -738,7 +780,7 @@ export async function inspectAuthorityRuntimeLock(
       throw error;
     }
     if (!sameLock(lock, current)) continue;
-    if (probe.kind === 'ambiguous') {
+    if (probe.kind === 'ambiguous' || probe.kind === 'invalid') {
       throw new Error(
         `authority runtime ownership could not be authenticated safely: ${probe.detail}`,
       );

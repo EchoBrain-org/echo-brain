@@ -36,7 +36,7 @@ describe('organization authority database migrations', () => {
     openAuthorityDatabase(path).close();
 
     const database = new Database(path, { readonly: true });
-    expect(database.pragma('user_version', { simple: true })).toBe(2);
+    expect(database.pragma('user_version', { simple: true })).toBe(3);
     const tables = database
       .prepare(
         `SELECT name FROM sqlite_master
@@ -123,7 +123,7 @@ describe('organization authority database migrations', () => {
 
     openAuthorityDatabase(path).close();
     const upgraded = new Database(path);
-    expect(upgraded.pragma('user_version', { simple: true })).toBe(2);
+    expect(upgraded.pragma('user_version', { simple: true })).toBe(3);
     const tables = upgraded
       .prepare(
         `SELECT name FROM sqlite_master
@@ -140,6 +140,20 @@ describe('organization authority database migrations', () => {
         )
         .get(),
     ).toEqual({ admin_command_id: null, admin_command_sha256: null });
+    expect(
+      upgraded
+        .prepare(
+          `SELECT integrations_control_plane_id,
+                  integrations_marker_sha256,
+                  integrations_installed_at
+           FROM authority_metadata WHERE singleton = 1`,
+        )
+        .get(),
+    ).toEqual({
+      integrations_control_plane_id: null,
+      integrations_marker_sha256: null,
+      integrations_installed_at: null,
+    });
     expect(
       upgraded
         .prepare(
@@ -219,6 +233,28 @@ describe('organization authority database migrations', () => {
           '2026-07-22T01:01:00.000Z',
         ),
     ).toThrow('enrollment grant admin command metadata is invalid');
+    upgraded
+      .prepare(
+        `UPDATE authority_metadata
+         SET integrations_control_plane_id = ?,
+             integrations_marker_sha256 = ?,
+             integrations_installed_at = ?
+         WHERE singleton = 1`,
+      )
+      .run(
+        'ocp_00000000-0000-4000-8000-000000000001',
+        `sha256:${'e'.repeat(64)}`,
+        '2026-07-22T00:02:00.000Z',
+      );
+    expect(() =>
+      upgraded
+        .prepare(
+          `UPDATE authority_metadata
+           SET integrations_control_plane_id = ?
+           WHERE singleton = 1`,
+        )
+        .run('ocp_00000000-0000-4000-8000-000000000002'),
+    ).toThrow('installation anchor is immutable');
     upgraded.close();
   });
 
@@ -243,11 +279,11 @@ describe('organization authority database migrations', () => {
   it('rejects a database newer than this authority binary', () => {
     const path = databasePath();
     const future = new Database(path);
-    future.pragma('user_version = 3');
+    future.pragma('user_version = 4');
     future.close();
 
     expect(() => openAuthorityDatabase(path)).toThrow(
-      'newer than supported schema 2',
+      'newer than supported schema 3',
     );
   });
 });

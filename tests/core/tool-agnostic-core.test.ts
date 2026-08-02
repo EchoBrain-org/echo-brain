@@ -93,6 +93,13 @@ class InvalidCursorSource extends SourceFake {
   }
 }
 
+class EmptySource extends SourceFake {
+  override async pull(request: MeetingPullRequest): Promise<MeetingBatch> {
+    this.requests.push(request);
+    return { meetings: [], next_cursor: 'cursor-2' };
+  }
+}
+
 class ProcessorFake implements DecisionProcessorAdapter {
   readonly identity = {
     kind: 'decision-processor' as const,
@@ -400,6 +407,19 @@ class StateFake implements CoreStateStore {
   }
 }
 
+function cycleInput(
+  overrides: Partial<Parameters<typeof runCoreCycle>[0]> = {},
+): Parameters<typeof runCoreCycle>[0] {
+  return {
+    meetingSource: new SourceFake(),
+    decisionProcessor: new ProcessorFake(),
+    deliverySurfaces: [new DeliverySurfaceFake()],
+    approvalGate: new GateFake('approved'),
+    state: new StateFake(),
+    ...overrides,
+  };
+}
+
 describe('tool-agnostic adapter registry', () => {
   it('registers typed capabilities and rejects duplicate instances', () => {
     const registry = new AdapterRegistry();
@@ -440,16 +460,46 @@ describe('tool-agnostic core cycle', () => {
   it('rejects a malformed source batch before writing core state', async () => {
     const state = new StateFake();
     await expect(
-      runCoreCycle({
+      runCoreCycle(cycleInput({
         meetingSource: new InvalidCursorSource(),
-        decisionProcessor: new ProcessorFake(),
-        deliverySurfaces: [new DeliverySurfaceFake()],
-        approvalGate: new GateFake('approved'),
         state,
-      }),
+      })),
     ).rejects.toThrow(/next_cursor/);
     expect(state.meetings).toHaveLength(0);
     expect(state.cursor).toBe('cursor-1');
+  });
+
+  it('advances an empty source batch without downstream writes', async () => {
+    const source = new EmptySource();
+    const processor = new ProcessorFake();
+    const surface = new DeliverySurfaceFake();
+    const gate = new GateFake('approved');
+    const state = new StateFake();
+
+    const result = await runCoreCycle(cycleInput({
+      meetingSource: source,
+      decisionProcessor: processor,
+      deliverySurfaces: [surface],
+      approvalGate: gate,
+      state,
+    }));
+
+    expect(result).toMatchObject({
+      ok: true,
+      meetings_seen: 0,
+      deliveries: 0,
+      cursor_advanced: true,
+    });
+    expect(source.requests).toEqual([{ cursor: 'cursor-1' }]);
+    expect(state.cursor).toBe('cursor-2');
+    expect(state.meetings).toEqual([]);
+    expect(state.decisions).toEqual([]);
+    expect(state.approvals).toEqual([]);
+    expect(state.receipts).toEqual([]);
+    expect(state.processed.size).toBe(0);
+    expect(processor.contexts).toEqual([]);
+    expect(gate.requests).toEqual([]);
+    expect(surface.envelopes).toEqual([]);
   });
 
   it('processes an approved revision and stores an idempotent delivery receipt', async () => {
@@ -457,18 +507,17 @@ describe('tool-agnostic core cycle', () => {
     const processor = new ProcessorFake();
     const surface = new DeliverySurfaceFake();
     const state = new StateFake();
-    const result = await runCoreCycle({
+    const result = await runCoreCycle(cycleInput({
       meetingSource: source,
       decisionProcessor: processor,
       deliverySurfaces: [surface],
-      approvalGate: new GateFake('approved'),
       state,
       now: () => '2026-07-16T17:03:30.000Z',
       createId: (() => {
         let id = 0;
         return () => `generated-${++id}`;
       })(),
-    });
+    }));
 
     expect(result).toMatchObject({
       ok: true,
@@ -502,13 +551,11 @@ describe('tool-agnostic core cycle', () => {
   it('records a rejection without publishing', async () => {
     const surface = new DeliverySurfaceFake();
     const state = new StateFake();
-    const result = await runCoreCycle({
-      meetingSource: new SourceFake(),
-      decisionProcessor: new ProcessorFake(),
+    const result = await runCoreCycle(cycleInput({
       deliverySurfaces: [surface],
       approvalGate: new GateFake('rejected'),
       state,
-    });
+    }));
 
     expect(result).toMatchObject({
       ok: true,
@@ -522,13 +569,11 @@ describe('tool-agnostic core cycle', () => {
   it('keeps the source cursor pinned while manual approval is pending', async () => {
     const surface = new DeliverySurfaceFake();
     const state = new StateFake();
-    const result = await runCoreCycle({
-      meetingSource: new SourceFake(),
-      decisionProcessor: new ProcessorFake(),
+    const result = await runCoreCycle(cycleInput({
       deliverySurfaces: [surface],
       approvalGate: new PendingGateFake(),
       state,
-    });
+    }));
 
     expect(result).toMatchObject({
       ok: true,
@@ -547,20 +592,19 @@ describe('tool-agnostic core cycle', () => {
     const processor = new ProcessorFake();
     const surface = new DeliverySurfaceFake();
     const state = new StateFake();
-    await runCoreCycle({
+    await runCoreCycle(cycleInput({
       meetingSource: source,
       decisionProcessor: processor,
       deliverySurfaces: [surface],
       approvalGate: new PendingGateFake(),
       state,
-    });
-    const resumed = await runCoreCycle({
+    }));
+    const resumed = await runCoreCycle(cycleInput({
       meetingSource: source,
       decisionProcessor: processor,
       deliverySurfaces: [surface],
-      approvalGate: new GateFake('approved'),
       state,
-    });
+    }));
 
     expect(processor.contexts).toHaveLength(1);
     expect(state.decisions).toHaveLength(1);
@@ -571,13 +615,10 @@ describe('tool-agnostic core cycle', () => {
     const surface = new DeliverySurfaceFake();
     surface.nextStatus = 'unknown';
     const state = new StateFake();
-    const result = await runCoreCycle({
-      meetingSource: new SourceFake(),
-      decisionProcessor: new ProcessorFake(),
+    const result = await runCoreCycle(cycleInput({
       deliverySurfaces: [surface],
-      approvalGate: new GateFake('approved'),
       state,
-    });
+    }));
 
     expect(result).toMatchObject({ ok: false, cursor_advanced: false });
     expect(result.failures).toEqual([
@@ -590,13 +631,10 @@ describe('tool-agnostic core cycle', () => {
 
   it('rejects processor evidence that cannot be resolved to the canonical meeting', async () => {
     const state = new StateFake();
-    const result = await runCoreCycle({
-      meetingSource: new SourceFake(),
+    const result = await runCoreCycle(cycleInput({
       decisionProcessor: new InvalidEvidenceProcessor(),
-      deliverySurfaces: [new DeliverySurfaceFake()],
-      approvalGate: new GateFake('approved'),
       state,
-    });
+    }));
 
     expect(result).toMatchObject({ ok: false, cursor_advanced: false });
     expect(result.failures).toEqual([
@@ -608,13 +646,10 @@ describe('tool-agnostic core cycle', () => {
 
   it('fails closed on a logically invalid delivered receipt', async () => {
     const state = new StateFake();
-    const result = await runCoreCycle({
-      meetingSource: new SourceFake(),
-      decisionProcessor: new ProcessorFake(),
+    const result = await runCoreCycle(cycleInput({
       deliverySurfaces: [new InvalidReceiptDeliverySurface()],
-      approvalGate: new GateFake('approved'),
       state,
-    });
+    }));
 
     expect(result).toMatchObject({ ok: false, cursor_advanced: false });
     expect(result.failures).toEqual([
@@ -626,13 +661,10 @@ describe('tool-agnostic core cycle', () => {
 
   it('does not mark a revision from a malformed rejected approval', async () => {
     const state = new StateFake();
-    const result = await runCoreCycle({
-      meetingSource: new SourceFake(),
-      decisionProcessor: new ProcessorFake(),
-      deliverySurfaces: [new DeliverySurfaceFake()],
+    const result = await runCoreCycle(cycleInput({
       approvalGate: new InvalidRejectedGate(),
       state,
-    });
+    }));
 
     expect(result).toMatchObject({ ok: false, cursor_advanced: false });
     expect(result.failures).toEqual([
@@ -644,13 +676,11 @@ describe('tool-agnostic core cycle', () => {
   it('does not publish a malformed approved brief', async () => {
     const state = new StateFake();
     const surface = new DeliverySurfaceFake();
-    const result = await runCoreCycle({
-      meetingSource: new SourceFake(),
-      decisionProcessor: new ProcessorFake(),
+    const result = await runCoreCycle(cycleInput({
       deliverySurfaces: [surface],
       approvalGate: new InvalidApprovedBriefGate(),
       state,
-    });
+    }));
 
     expect(result).toMatchObject({ ok: false, cursor_advanced: false });
     expect(result.failures).toEqual([
@@ -662,13 +692,10 @@ describe('tool-agnostic core cycle', () => {
 
   it('pins auth and configuration errors instead of misclassifying them as dead letters', async () => {
     const state = new StateFake();
-    const result = await runCoreCycle({
-      meetingSource: new SourceFake(),
-      decisionProcessor: new ProcessorFake(),
+    const result = await runCoreCycle(cycleInput({
       deliverySurfaces: [new UnauthorizedDeliverySurface()],
-      approvalGate: new GateFake('approved'),
       state,
-    });
+    }));
 
     expect(result).toMatchObject({
       ok: false,
@@ -682,14 +709,11 @@ describe('tool-agnostic core cycle', () => {
   it('bounds a non-settling delivery-surface operation and aborts its adapter context', async () => {
     const surface = new HangingDeliverySurface();
     const state = new StateFake();
-    const result = await runCoreCycle({
-      meetingSource: new SourceFake(),
-      decisionProcessor: new ProcessorFake(),
+    const result = await runCoreCycle(cycleInput({
       deliverySurfaces: [surface],
-      approvalGate: new GateFake('approved'),
       state,
       deadlines: { publishMs: 5 },
-    });
+    }));
 
     expect(result).toMatchObject({ ok: false, cursor_advanced: false });
     expect(result.failures[0]?.message).toMatch(/timed out/);
@@ -700,14 +724,11 @@ describe('tool-agnostic core cycle', () => {
   it('propagates host cancellation into an active adapter operation', async () => {
     const surface = new HangingDeliverySurface();
     const controller = new AbortController();
-    const cycle = runCoreCycle({
-      meetingSource: new SourceFake(),
-      decisionProcessor: new ProcessorFake(),
+    const cycle = runCoreCycle(cycleInput({
       deliverySurfaces: [surface],
-      approvalGate: new GateFake('approved'),
       state: new StateFake(),
       signal: controller.signal,
-    });
+    }));
     await surface.started;
     controller.abort(new Error('test shutdown'));
     const result = await cycle;
@@ -722,21 +743,17 @@ describe('tool-agnostic core cycle', () => {
     const gate = new GateFake('approved');
     const state = new StateFake();
     surface.nextStatus = 'unknown';
-    await runCoreCycle({
-      meetingSource: new SourceFake(),
-      decisionProcessor: new ProcessorFake(),
+    await runCoreCycle(cycleInput({
       deliverySurfaces: [surface],
       approvalGate: gate,
       state,
-    });
+    }));
     surface.nextStatus = 'delivered';
-    const resumed = await runCoreCycle({
-      meetingSource: new SourceFake(),
-      decisionProcessor: new ProcessorFake(),
+    const resumed = await runCoreCycle(cycleInput({
       deliverySurfaces: [surface],
       approvalGate: gate,
       state,
-    });
+    }));
 
     expect(gate.requests).toHaveLength(1);
     expect(surface.envelopes).toHaveLength(2);
@@ -752,13 +769,10 @@ describe('tool-agnostic core cycle', () => {
     surface.nextStatus = 'rejected';
     surface.nextRetryable = false;
     const state = new StateFake();
-    const result = await runCoreCycle({
-      meetingSource: new SourceFake(),
-      decisionProcessor: new ProcessorFake(),
+    const result = await runCoreCycle(cycleInput({
       deliverySurfaces: [surface],
-      approvalGate: new GateFake('approved'),
       state,
-    });
+    }));
 
     expect(result).toMatchObject({
       ok: false,

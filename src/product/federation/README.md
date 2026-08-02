@@ -1,44 +1,87 @@
 # Federation module layout
 
-This directory keeps the stable product/composition boundaries at the root and
-groups implementation details by capability. The root is intentionally not a
+This directory keeps the retained local identity trust layer: the founder
+identity/cutover detector and the fail-closed refusals built on it. The
+founder-provenance product surface that once lived here (approval capture,
+attribution, signed outbox and record projection, export bundles, protected
+independent copies, legacy classification, and the bootstrap ceremony that
+created them) is retired and deleted. The root is intentionally not a
 general-purpose home for new files.
 
 ## Root boundaries
 
-- `index.ts` is the only federation barrel exported by the product package.
 - `source-boundary.v1.json` is the executable allowlist for this stable local
-  trust layer; organization and service implementation edges are forbidden.
+  trust layer; organization and service implementation edges are forbidden. Its
+  entry points are the three modules the product actually enters through:
+  `bootstrap/identity-check.ts`, `cutover-fence.ts`, and
+  `identity/active-identity-bundle-store.ts`. There is no federation barrel;
+  callers import the specific file they need.
 - `contracts.ts` owns product-specific persisted data contracts and re-exports
-  portable integrity/key types from `@echo-brain/federation-protocol`.
-- `runtime-wiring.ts` is the composition root.
-- `approval-capture.ts`, `identity-lineage-store.ts`, `record-projector.ts`,
-  `export-bundle.ts`, `independent-copy-store.ts`, and
-  `legacy-classification.ts` are stable capability facades.
-- `cutover-fence.ts` and `build-identity.ts` are bootstrap-owned root anchors;
-  `attributing-core-state-store.ts`, `attribution-store.ts`, and
-  `outbox-store.ts` are records-owned root anchors; `artifact-evidence.ts` is
-  runtime-owned; and `schema-validation.ts` is foundation-owned.
+  portable integrity/key types from `@echo-brain/federation-protocol`. It still
+  describes the full persisted document set, including the record and export
+  shapes no code in this build produces, because those are wire contracts that
+  stored artifacts and the JSON schemas under `schemas/product/` depend on.
+- `cutover-fence.ts` and `build-identity.ts` are bootstrap-owned root anchors,
+  and `schema-validation.ts` with its `schema-validator.ts` Ajv backend is
+  foundation-owned.
+
+`cutover-fence.ts` holds the founder identity/cutover detector and the one
+shared retirement gate, `assertFounderProvenanceRetired`. No supported command
+or runtime path in this build creates founder identity or cutover material --
+the low-level `commitFounderBootstrap`, `commitFounderCutoverGuard`, and the
+writable session-store APIs still compile and are still reachable from tests,
+so the guard is written to detect residue however it arrived, not to assume it
+cannot exist.
+
+That gate is observational only: it uses `lstat`/`readdir`/path existence and
+deliberately avoids `inspectFounderCutoverFence`, `requiresFounderFederation`,
+and `FounderBootstrapSessionStore`, all of which recover interrupted writes by
+rename/unlink. Refusing must not mutate forensic founder state. The validating,
+recovering inspection stays available to the backup downgrade guard, the
+identity check, and legacy diagnostics.
+
+The gate covers *product work*: every entry point that starts the runtime or
+begins a cycle calls it before creating a directory, resolving adapters or
+components, resolving credentials, contacting a provider or the organization
+Authority, reading or mutating approvals, or invoking a caller-supplied
+callback. Those entry points are `prepareProductComposition` (at construction
+*and* at the start of every cycle), `startProductRuntime`, `DecisionNodeStore`,
+and one early dispatch policy in the CLI. A custom identity check, approval
+capture, approval store, or runtime cannot resume the retired mode through them.
+
+It deliberately does not gate the diagnosis, preservation, and quiescing
+commands -- `identity-check`, `validate-config`, `selftest`, general `status`,
+`backup`/`restore`, and `service stop`/`status`/`uninstall`. Several of those
+write; the line is product work, not writes. `src/product/cli.ts` owns the exact
+policy and the top-level `README.md` states it.
+
+Two honest limits. This is a fail-closed gate on trusted in-process callers, not
+a sandbox: an injected component that ignores the documented seams and writes to
+the state root itself is outside its reach. And a background access-lease
+renewal started by an already-running composition can continue until that
+composition closes, though every new processing cycle is gated.
+
+An uninspectable state path -- a symlink, a non-directory, or one whose adjacent
+guard or entries cannot be read -- is refused on its own terms rather than
+assumed clean; no caller relies on a later validator. `DecisionNodeStore` also
+keeps its own refusal for a federated node with no capture implementation; never
+satisfy that one with a permissive or no-op capture object -- it distinguishes
+`undefined` on purpose.
 
 ## Capability folders
 
 - `foundation/`: compatibility exports for portable protocol primitives and
   the machine-owned installation signer surface. Key lifecycle implementations
-  live under `src/product/machine/`.
+  live under `src/product/machine/`, which imports
+  `@echo-brain/federation-protocol` directly rather than through these shims.
 - `identity/`: identity bundles, manifests, connections, policies, credentials,
-  provider identity, and lineage internals.
-- `bootstrap/`: founder enrollment, bootstrap sessions, challenge handling, and
-  seed-readiness checks.
-- `approval/`: approval candidate/publication support and actor resolution.
-- `records/`: attribution/projection decorators, snapshots, drafts, and approval
-  group invariants.
-- `export/`: export artifact material and offline verification.
-- `independent-copy/`: protected-copy documents, local evidence, history, and
-  macOS volume inspection.
-- `legacy/`: pre-cutover evidence, deterministic classification, and reports.
+  and provider identity.
+- `bootstrap/`: bootstrap sessions, challenge handling, identity mutation
+  primitives, and the identity/seed readiness checks.
 
 Installation-side organization orchestration lives in the sibling
-`src/product/organization/` module. Portable canonicalization, identifiers,
+`src/product/organization/` module, and central organization-admin bootstrap is
+the supported enrollment path. Portable canonicalization, identifiers,
 signature validation, installation-key descriptor validation, and generic
 signed documents are owned by `@echo-brain/federation-protocol`. Product
 foundation files preserve the existing import surface while delegating those
@@ -51,14 +94,8 @@ Lower-level folders must not import higher-level orchestration:
 
 ```text
 foundation <- identity <- bootstrap
-foundation + identity + bootstrap <- approval <- records
-foundation + identity + records <- export <- independent-copy
-foundation <- legacy
-all capabilities <- runtime-wiring
 ```
 
-Internal modules import the specific file they need. `index.ts` retains its
-existing subfolder exports for package compatibility; do not add new internal
-helpers to that public surface. Do not add subfolder barrels. Add a new root
-file only when it is a package boundary, composition boundary, or verified
-physical path anchor.
+Internal modules import the specific file they need. Do not add subfolder
+barrels. Add a new root file only when it is a package boundary, composition
+boundary, or verified physical path anchor.

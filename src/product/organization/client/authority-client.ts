@@ -3,6 +3,12 @@ import type {
   OrganizationAccessLeaseRequestV1,
   OrganizationAccessLeaseResponseV1,
   OrganizationAuthorityDescriptorResponseV1,
+  OrganizationPermissionCheckDecisionV1,
+  OrganizationPermissionCheckRequestV1,
+  OrganizationSlackLinkBeginRequestV1,
+  OrganizationSlackLinkBeginResponseV1,
+  OrganizationSlackLinkCompleteRequestV1,
+  OrganizationSlackLinkResultV1,
 } from '@echo-brain/organization-api';
 import type { OrganizationEnrollmentRequestV1 } from '@echo-brain/organization-protocol';
 
@@ -12,6 +18,13 @@ import type { OrganizationEnrollmentRequestV1 } from '@echo-brain/organization-p
  * Response envelopes are syntax-validated at the transport boundary. The
  * enrollment/state layer still authenticates the signed protocol documents;
  * transport success is never permission.
+ *
+ * `checkPermission` is the exception to "signed document": the request is
+ * installation-signed, and the decision carries digests that bind it to that
+ * exact request without authenticating it. Authenticity comes from the
+ * transport -- the configured HTTPS origin associated with the pinned Authority
+ * descriptor -- so the caller must verify the request binding rather than
+ * trusting the response body on its own.
  */
 export interface OrganizationAuthorityClient {
   readAuthorityDescriptor(): Promise<OrganizationAuthorityDescriptorResponseV1>;
@@ -24,6 +37,21 @@ export interface OrganizationAuthorityClient {
   issueAccessLease(
     request: OrganizationAccessLeaseRequestV1,
   ): Promise<OrganizationAccessLeaseResponseV1>;
+
+  checkPermission(
+    request: OrganizationPermissionCheckRequestV1,
+    signal?: AbortSignal,
+  ): Promise<OrganizationPermissionCheckDecisionV1>;
+
+  beginSlackLink(
+    request: OrganizationSlackLinkBeginRequestV1,
+    signal?: AbortSignal,
+  ): Promise<OrganizationSlackLinkBeginResponseV1>;
+
+  completeSlackLink(
+    request: OrganizationSlackLinkCompleteRequestV1,
+    signal?: AbortSignal,
+  ): Promise<OrganizationSlackLinkResultV1>;
 }
 
 export interface OrganizationAuthorityConflict {

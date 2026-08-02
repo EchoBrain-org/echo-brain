@@ -28,6 +28,11 @@ export const SLACK_REACTIONS_APPROVAL_SURFACE_ADAPTER_ID = 'slack-reactions';
 export const SLACK_REACTIONS_APPROVAL_SURFACE_ADAPTER_VERSION = '1.0.0';
 
 const SURFACE = 'slack';
+// Decision publication slots are immutable and keyed by surface. This
+// versioned slot lets an organization-managed installation append one
+// authority-verifiable replacement for a pre-marker Slack card without
+// rewriting its audit history or weakening live Authority verification.
+const AUTHORITY_MARKED_SURFACE = 'slack-authority-v1';
 export const DEFAULT_APPROVE_REACTION = 'white_check_mark';
 export const DEFAULT_REJECT_REACTION = 'x';
 const REACTION_NAME_RE = /^[a-z0-9_+-]+$/;
@@ -85,7 +90,52 @@ export type SlackResolutionEvidence = JsonObject & {
         })
       | null;
   };
+  authorization?: JsonObject;
 };
+
+export interface ApprovalActionAuthorizationRequest {
+  approval_id: string;
+  action: 'approve' | 'reject';
+  adapter_identity: ApprovalSurfaceAdapter['identity'];
+  provider_identity: SlackProviderIdentityEvidence;
+  actor: {
+    provider: 'slack';
+    team_id: string;
+    user_id: string;
+  };
+  channel_id: string;
+  message_ts: string;
+  reaction_name: string;
+}
+
+/**
+ * Non-secret, action-scoped authorization evidence. An allow decision must
+ * carry evidence so a newly persisted approval can always be attributed.
+ * Denials may omit it because they never resolve the approval.
+ */
+export type ApprovalActionAuthorizationResult =
+  | {
+      allowed: true;
+      evidence: JsonObject;
+      reason?: string;
+    }
+  | {
+      allowed: false;
+      evidence?: JsonObject;
+      reason?: string;
+    };
+
+/**
+ * Action-time authorization port supplied by the product composition root.
+ * Implementations may consult a central control plane, but the Slack adapter
+ * owns the fail-closed ordering: an allow result is required before resolve.
+ */
+export interface ApprovalActionAuthorizer {
+  authorize(
+    request: ApprovalActionAuthorizationRequest,
+    signal?: AbortSignal,
+  ): Promise<ApprovalActionAuthorizationResult>;
+}
 
 export interface ApprovalDecisionStore {
   ensureRequested(request: ApprovalRequest): Promise<ApprovalDecisionStoreView>;
@@ -110,6 +160,7 @@ export interface ApprovalDecisionStore {
 
 export interface SlackReactionsApprovalSurfaceOptions {
   store: ApprovalDecisionStore;
+  approvalActionAuthorizer?: ApprovalActionAuthorizer;
   environment?: NodeJS.ProcessEnv;
   credentialResolver?: (reference: string) => string | undefined;
   now?: () => string;
@@ -419,7 +470,8 @@ export function renderSlackApprovalBlocks(
       input.brief.actions.map((signal) => signal.text),
     ),
   ].filter((value): value is string => value !== undefined);
-  const active = federation !== undefined && input.approvalId !== undefined;
+  const identified = input.approvalId !== undefined;
+  const active = federation !== undefined && identified;
   const federationSummary = !active
     ? []
     : [
@@ -464,12 +516,12 @@ export function renderSlackApprovalBlocks(
         {
           type: 'mrkdwn',
           text: `React :${input.approveReaction}: to approve or :${input.rejectReaction}: to reject. To record a reason, reply in this thread *before* reacting.`,
-          ...(active ? { verbatim: false } : {}),
+          ...(identified ? { verbatim: false } : {}),
         },
       ],
     },
   ];
-  if (!active) return blocks;
+  if (!identified) return blocks;
   return blocks.map((block, index) => ({
     ...(block as JsonObject),
     block_id: `echo-approval-${input.approvalId}-${index}`,
@@ -496,6 +548,22 @@ function mapSlackError(error: unknown): AdapterError {
     'temporarily_unavailable',
     `Slack approval surface failed: ${(error as Error).message}`,
     true,
+  );
+}
+
+function mapAuthorizationError(error: unknown): AdapterError {
+  const mapped =
+    error instanceof AdapterError
+      ? error
+      : new AdapterError(
+          'temporarily_unavailable',
+          error instanceof Error ? error.message : 'unknown error',
+          true,
+        );
+  return new AdapterError(
+    mapped.code,
+    `Slack approval action authorization failed: ${mapped.message}`,
+    mapped.retryable,
   );
 }
 
@@ -538,6 +606,9 @@ export class SlackReactionsApprovalSurface implements ApprovalSurfaceAdapter {
   readonly identity: ApprovalSurfaceAdapter['identity'];
   private readonly settings: SlackReactionsSettings;
   private readonly store: ApprovalDecisionStore;
+  private readonly approvalActionAuthorizer:
+    | ApprovalActionAuthorizer
+    | undefined;
   private readonly environment: NodeJS.ProcessEnv;
   private readonly credentialResolver: (
     reference: string,
@@ -558,6 +629,7 @@ export class SlackReactionsApprovalSurface implements ApprovalSurfaceAdapter {
       version: SLACK_REACTIONS_APPROVAL_SURFACE_ADAPTER_VERSION,
     });
     this.store = options.store;
+    this.approvalActionAuthorizer = options.approvalActionAuthorizer;
     this.environment = options.environment ?? process.env;
     this.credentialResolver =
       options.credentialResolver ??
@@ -698,13 +770,14 @@ export class SlackReactionsApprovalSurface implements ApprovalSurfaceAdapter {
     if (staged.status !== 'pending') return decision(staged);
 
     try {
+      const publicationSurface = this.publicationSurface(staged);
       const published = await this.ensurePublished(
         request.processing_key,
         staged,
         operation,
       );
       const posted = published.published.find(
-        (entry) => entry.surface === SURFACE,
+        (entry) => entry.surface === publicationSurface,
       );
       if (posted === undefined || published.status !== 'pending') {
         return decision(published);
@@ -734,13 +807,21 @@ export class SlackReactionsApprovalSurface implements ApprovalSurfaceAdapter {
     staged: ApprovalDecisionStoreView,
     operation?: AdapterOperationContext,
   ): Promise<ApprovalDecisionStoreView> {
-    if (staged.published.some((entry) => entry.surface === SURFACE)) {
+    const publicationSurface = this.publicationSurface(staged);
+    if (
+      staged.published.some(
+        (entry) => entry.surface === publicationSurface,
+      )
+    ) {
       return staged;
     }
     // Posting then recording is a dual write: a crash between the two can
     // produce a duplicate message on retry. Posting is at-least-once by
     // design; the recorded reference always wins as the polled message.
     const federation = activeFederationPresentation(staged.requested_metadata);
+    const requiresExactPostedBlocks =
+      federation !== undefined ||
+      publicationSurface === AUTHORITY_MARKED_SURFACE;
     let liveProviderIdentity: SlackProviderIdentityEvidence | undefined;
     if (federation !== undefined) {
       assertReviewerIsNotBot(federation, this.settings.reviewerUserId);
@@ -764,22 +845,22 @@ export class SlackReactionsApprovalSurface implements ApprovalSurfaceAdapter {
         channel: this.settings.channelId,
         text: this.messageText(staged.brief),
         blocks,
-        strictEvidence: federation !== undefined,
+        strictEvidence: requiresExactPostedBlocks,
       },
       operation?.signal,
     );
+    if (
+      requiresExactPostedBlocks &&
+      (posted.blocks === undefined || !jsonEquivalent(blocks, posted.blocks))
+    ) {
+      throw new AdapterError(
+        'unknown_outcome',
+        'Slack did not acknowledge the exact approval presentation',
+        true,
+      );
+    }
     let presentationEvidence: SlackPresentationEvidence | undefined;
     if (federation !== undefined) {
-      if (
-        posted.blocks === undefined ||
-        !jsonEquivalent(blocks, posted.blocks)
-      ) {
-        throw new AdapterError(
-          'unknown_outcome',
-          'Slack did not acknowledge the exact approval presentation',
-          true,
-        );
-      }
       presentationEvidence = {
         rendered_blocks_sha256: jsonSha256(posted.blocks),
         rendered_blocks: JSON.parse(JSON.stringify(posted.blocks)) as JsonValue,
@@ -789,10 +870,21 @@ export class SlackReactionsApprovalSurface implements ApprovalSurfaceAdapter {
     }
     return await this.store.recordPublished({
       processingKey,
-      surface: SURFACE,
+      surface: publicationSurface,
       reference: { channel_id: posted.channel, message_ts: posted.ts },
       ...(presentationEvidence === undefined ? {} : { presentationEvidence }),
     });
+  }
+
+  private publicationSurface(staged: ApprovalDecisionStoreView): string {
+    // Federation publications already authenticated their exact marked blocks
+    // before this organization-authority bridge existed. Plain pre-authority
+    // Slack slots did not, so central authorization uses a new append-only slot
+    // and thereafter polls only that durable replacement reference.
+    return this.approvalActionAuthorizer !== undefined &&
+      activeFederationPresentation(staged.requested_metadata) === undefined
+      ? AUTHORITY_MARKED_SURFACE
+      : SURFACE;
   }
 
   private async pollReactions(
@@ -803,6 +895,10 @@ export class SlackReactionsApprovalSurface implements ApprovalSurfaceAdapter {
     operation?: AdapterOperationContext,
   ): Promise<ApprovalDecision> {
     const federation = activeFederationPresentation(state.requested_metadata);
+    const centralizedAuthorization =
+      this.approvalActionAuthorizer !== undefined;
+    const strictEvidence =
+      federation !== undefined || centralizedAuthorization;
     if (federation !== undefined) {
       assertReviewerIsNotBot(federation, this.settings.reviewerUserId);
     }
@@ -810,7 +906,7 @@ export class SlackReactionsApprovalSurface implements ApprovalSurfaceAdapter {
       channel,
       messageTs,
       operation?.signal,
-      { strict: federation !== undefined },
+      { strict: strictEvidence },
     );
     const approved = this.reviewerReactionState(
       reactions,
@@ -834,23 +930,78 @@ export class SlackReactionsApprovalSurface implements ApprovalSurfaceAdapter {
       channel,
       messageTs,
       operation,
-      federation !== undefined,
+      strictEvidence,
     );
     const reason = latestReply === null ? null : latestReply.text.trim();
     const reactionName =
       approved === 'present'
         ? this.settings.approveReaction
         : this.settings.rejectReaction;
-    let liveProviderIdentity: SlackProviderIdentityEvidence | undefined;
+    const liveProviderIdentity = strictEvidence
+      ? liveProviderEvidence(
+          await this.apiClient().authIdentity(operation?.signal),
+        )
+      : undefined;
     if (federation !== undefined) {
-      liveProviderIdentity = liveProviderEvidence(
-        await this.apiClient().authIdentity(operation?.signal),
-      );
       assertSameProviderIdentity(
         federation.providerIdentity,
-        liveProviderIdentity,
+        liveProviderIdentity as SlackProviderIdentityEvidence,
       );
     }
+    const authorizer = this.approvalActionAuthorizer;
+    let authorizationEvidence: JsonObject | undefined;
+    if (authorizer !== undefined) {
+      const providerIdentity =
+        liveProviderIdentity as SlackProviderIdentityEvidence;
+      let authorization: Awaited<ReturnType<typeof authorizer.authorize>>;
+      try {
+        authorization = await authorizer.authorize(
+          {
+            approval_id: state.approval_id,
+            action: approved === 'present' ? 'approve' : 'reject',
+            adapter_identity: this.identity,
+            provider_identity: providerIdentity,
+            actor: {
+              provider: 'slack',
+              team_id: providerIdentity.team_id,
+              user_id: this.settings.reviewerUserId,
+            },
+            channel_id: channel,
+            message_ts: messageTs,
+            reaction_name: reactionName,
+          },
+          operation?.signal,
+        );
+      } catch (error) {
+        throw mapAuthorizationError(error);
+      }
+      if (
+        !isPlainObject(authorization) ||
+        typeof authorization.allowed !== 'boolean' ||
+        (authorization.evidence !== undefined &&
+          !isPlainObject(authorization.evidence)) ||
+        (authorization.allowed && !isPlainObject(authorization.evidence))
+      ) {
+        throw new AdapterError(
+          'temporarily_unavailable',
+          'Slack approval action authorization returned an invalid result',
+          true,
+        );
+      }
+      if (authorization.allowed !== true) {
+        throw new AdapterError(
+          'unauthorized',
+          `Slack approval action was denied${
+            isNonEmptyString(authorization.reason)
+              ? `: ${authorization.reason}`
+              : ''
+          }`,
+          false,
+        );
+      }
+      authorizationEvidence = authorization.evidence;
+    }
+    operation?.signal?.throwIfAborted();
     let resolved: ApprovalDecisionStoreView;
     try {
       resolved = await this.store.resolve({
@@ -867,6 +1018,9 @@ export class SlackReactionsApprovalSurface implements ApprovalSurfaceAdapter {
                   message_ts: messageTs,
                   reviewer_user_id: this.settings.reviewerUserId,
                 },
+                ...(authorizationEvidence === undefined
+                  ? {}
+                  : { authorization: authorizationEvidence }),
               },
             }
           : {
@@ -890,6 +1044,9 @@ export class SlackReactionsApprovalSurface implements ApprovalSurfaceAdapter {
                           text: latestReply.text,
                         },
                 },
+                ...(authorizationEvidence === undefined
+                  ? {}
+                  : { authorization: authorizationEvidence }),
               },
             }),
       });

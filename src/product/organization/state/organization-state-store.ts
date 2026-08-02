@@ -21,6 +21,14 @@ export interface StoredOrganizationEnrollment {
   trusted_time_high_watermark: string | null;
 }
 
+export interface StoredOrganizationAuthorityConnection {
+  authority_id: string;
+  organization_id: string;
+  authority_base_url: string;
+  authority_ca_pem: string | null;
+  configured_at: string;
+}
+
 /**
  * Installation-owned organization trust-state port.
  *
@@ -34,9 +42,27 @@ export interface OrganizationStateStore {
     independentlyTrustedPin: unknown,
   ): PinnedOrganizationAuthority;
   readPinnedAuthority(): PinnedOrganizationAuthority | null;
+  saveAuthorityConnection(input: {
+    authority_id: string;
+    organization_id: string;
+    authority_base_url: string;
+    authority_ca_pem?: string | null;
+  }): StoredOrganizationAuthorityConnection;
+  rebindAuthorityConnection(input: {
+    authority_id: string;
+    organization_id: string;
+    authority_base_url: string;
+    authority_ca_pem?: string | null;
+  }): StoredOrganizationAuthorityConnection;
+  readAuthorityConnection(): StoredOrganizationAuthorityConnection | null;
   saveEnrollmentRequest(request: unknown): OrganizationEnrollmentRequestV1;
   saveEnrollmentReceipt(receipt: unknown): OrganizationEnrollmentReceiptV1;
   readEnrollment(): StoredOrganizationEnrollment | null;
+  /**
+   * Removes only a request that never received authority evidence. Returns
+   * false when no safely abandonable request exists.
+   */
+  abandonPendingEnrollment(): boolean;
   acceptAccessState(
     state: unknown,
     policy: OrganizationAccessVerificationPolicy,

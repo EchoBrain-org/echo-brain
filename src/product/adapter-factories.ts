@@ -7,6 +7,7 @@ import {
 } from '../core/index.js';
 import type { ProductRuntimeConfig } from './config.js';
 import type { DecisionNodeFederationCapture } from './approval/decision-node-store.js';
+import type { ApprovalActionAuthorizer } from '../adapters/approval-surfaces/slack-reactions/slack-reactions-approval-surface.js';
 import {
   createProductCredentialResolver,
   type ProductCredentialResolver,
@@ -18,6 +19,7 @@ export interface ProductAdapterFactoryContext {
   credentialResolver: ProductCredentialResolver;
   now: () => string;
   approvalFederationCapture?: DecisionNodeFederationCapture;
+  approvalActionAuthorizer?: ApprovalActionAuthorizer;
 }
 
 export interface ProductAdapterFactory {
@@ -58,6 +60,7 @@ export interface CreateConfiguredAdapterRegistryOptions {
   credentialResolver?: ProductCredentialResolver;
   now?: () => string;
   approvalFederationCapture?: DecisionNodeFederationCapture;
+  approvalActionAuthorizer?: ApprovalActionAuthorizer;
 }
 
 interface ConfiguredAdapterRequest {
@@ -155,6 +158,9 @@ export async function createConfiguredAdapterRegistry(
     ...(options.approvalFederationCapture === undefined
       ? {}
       : { approvalFederationCapture: options.approvalFederationCapture }),
+    ...(options.approvalActionAuthorizer === undefined
+      ? {}
+      : { approvalActionAuthorizer: options.approvalActionAuthorizer }),
   };
   const requested = configuredAdapterRequests(config);
   assertConfiguredAdapterFactoriesAvailable(config, factories);

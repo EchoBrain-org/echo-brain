@@ -31,6 +31,8 @@ const NODE22_BUILTINS = new Set([
 ]);
 
 const WORKSPACE_BOUNDARY_REGISTRY = 'tools/workspace-source-boundaries.v1.json';
+const PRODUCT_BOUNDARY_MANIFEST = 'product/source-boundary.v1.json';
+const BOUNDARY_MANIFEST_RE = /(?:^|\/)source-boundary\.v1\.json$/;
 const SOURCE_FILE_RE = /\.(?:[cm]?[jt]sx?)$/;
 
 function matchesGlob(path, pattern) {
@@ -159,6 +161,15 @@ function checkWorkspaceBoundaries(tree, errors) {
   }
   if (new Set(registry.manifests).size !== registry.manifests.length) {
     errors.push(`workspace boundary registry contains duplicate manifest paths`);
+  }
+
+  // A manifest nobody enumerates is inert: it declares a boundary the gate
+  // never opens. Glob the worktree so a dropped-in manifest cannot go unnoticed.
+  const registeredManifests = new Set([...registry.manifests, PRODUCT_BOUNDARY_MANIFEST]);
+  for (const [path] of tree) {
+    if (BOUNDARY_MANIFEST_RE.test(path) && !registeredManifests.has(path)) {
+      errors.push(`source boundary manifest is not registered: ${path}`);
+    }
   }
 
   const boundaries = [];
@@ -555,7 +566,7 @@ function checkWorkspaceBoundaries(tree, errors) {
 
 function main() {
   const tree = repositoryWorktree(REPO);
-  const boundary = JSON.parse(textFile(tree, 'product/source-boundary.v1.json'));
+  const boundary = JSON.parse(textFile(tree, PRODUCT_BOUNDARY_MANIFEST));
   const allowed = boundary.allowed_internal_paths;
   const forbidden = boundary.forbidden_internal_roots;
   const removed = boundary.removed_internal_roots ?? [];
@@ -719,6 +730,11 @@ function main() {
         errors.push(`non-literal module loading from ${p}:${reference.line} (${reference.kind})`);
         continue;
       }
+      // A single module owns child process creation for the whole product, so
+      // the closure may reach child_process through that module and no other.
+      if (spec.replace(/^node:/, '') === 'child_process' && p !== boundary.child_process_owner) {
+        errors.push(`child_process is owned by ${boundary.child_process_owner}, not ${p}`);
+      }
       if (spec.startsWith('.')) {
         const r = resolveRelative(tree, p, spec);
         if (!r) { errors.push(`unresolved repository-local edge ${spec} from ${p}`); continue; }
@@ -740,6 +756,13 @@ function main() {
         if (!external.has(pkg)) errors.push(`undeclared external package ${pkg} from ${p}`);
       }
     }
+  }
+
+  // An allowlisted module no entry point can reach is dead weight: nothing
+  // imports it, yet it still ships inside the packed artifact.
+  for (const [path] of tree) {
+    if (!SOURCE_FILE_RE.test(path) || !isAllowed(path) || closure.has(path)) continue;
+    errors.push(`allowlisted module is unreachable from the product entry points: ${path}`);
   }
 
   const result = {

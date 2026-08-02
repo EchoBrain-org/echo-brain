@@ -6,6 +6,7 @@
 		reverse_proxy 127.0.0.1:39479 {
 			header_up X-Echo-Proxy-Authorization "Echo-Proxy {$ECHO_PROXY_TOKEN}"
 			header_up X-Echo-Authenticated-Client-Id "{$ECHO_PROXY_CLIENT_ID}"
+			header_up X-Echo-Proxy-Source-Address "{http.request.remote.host}"
 		}
 	}
 }

@@ -76,6 +76,11 @@ export function createDefaultAdapterFactories(): ProductAdapterFactoryRegistry {
         environment: context.environment,
         credentialResolver: context.credentialResolver,
         now: context.now,
+        ...(context.approvalActionAuthorizer === undefined
+          ? {}
+          : {
+              approvalActionAuthorizer: context.approvalActionAuthorizer,
+            }),
       }),
   });
   return factories;

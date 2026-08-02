@@ -1,21 +1,41 @@
 services:
   authority:
+    image: "${ECHO_AUTHORITY_IMAGE:-echo-organization-authority:local}"
     build:
       context: ../..
       dockerfile: deploy/organization-authority/Dockerfile
     command: ["serve", "--config", "/echo/authority.json"]
     user: "${ECHO_AUTHORITY_UID:-1000}:${ECHO_AUTHORITY_GID:-1000}"
     restart: unless-stopped
+    stop_grace_period: 45s
+    environment:
+      ECHO_AUTHORITY_COORDINATION_ROOT: /echo-runtime
     volumes:
       - ./data:/echo
+      - authority_runtime:/echo-runtime
     ports:
       - "80:80"
       - "443:443"
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "node",
+          "services/organization-authority/dist/main.js",
+          "status",
+          "--config",
+          "/echo/authority.json",
+        ]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
 
   proxy:
     image: caddy:2.10.2-alpine@sha256:4c6e91c6ed0e2fa03efd5b44747b625fec79bc9cd06ac5235a779726618e530d
     depends_on:
-      - authority
+      authority:
+        condition: service_healthy
     network_mode: service:authority
     restart: unless-stopped
     environment:
@@ -36,3 +56,5 @@ services:
 volumes:
   caddy_data:
   caddy_config:
+  authority_runtime:
+    name: "${ECHO_AUTHORITY_RUNTIME_VOLUME:-echo-organization-authority-runtime}"

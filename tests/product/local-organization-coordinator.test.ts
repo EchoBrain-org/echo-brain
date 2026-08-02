@@ -20,6 +20,7 @@ import {
 } from '@echo-brain/organization-protocol';
 import type { OrganizationAuthorityClient } from '../../src/product/organization/client/authority-client.js';
 import { OrganizationAuthorityConflictError } from '../../src/product/organization/client/authority-client.js';
+import { organizationApprovalResolutionRequiresAuthority } from '../../src/product/organization/approval-action-authorizer.js';
 import { LocalOrganizationCoordinator } from '../../src/product/organization/enrollment/local-organization-coordinator.js';
 import type {
   OrganizationAccessVerificationPolicy,
@@ -51,6 +52,8 @@ import {
  */
 class MemoryOrganizationStateStore implements OrganizationStateStore {
   private pinnedAuthority: PinnedOrganizationAuthority | null = null;
+  private authorityBaseUrl: string | null = null;
+  private authorityCaPem: string | null = null;
   private request: OrganizationEnrollmentRequestV1 | null = null;
   private receipt: OrganizationEnrollmentReceiptV1 | null = null;
   private acceptedState: OrganizationInstallationAccessStateV1 | null = null;
@@ -77,6 +80,59 @@ class MemoryOrganizationStateStore implements OrganizationStateStore {
 
   readPinnedAuthority(): PinnedOrganizationAuthority | null {
     return this.pinnedAuthority;
+  }
+
+  saveAuthorityConnection(input: {
+    authority_id: string;
+    organization_id: string;
+    authority_base_url: string;
+    authority_ca_pem?: string | null;
+  }) {
+    this.requirePinnedAuthority();
+    if (
+      this.authorityBaseUrl !== null &&
+      this.authorityBaseUrl !== input.authority_base_url
+    ) {
+      throw new Error('organization authority origin conflicts with state');
+    }
+    this.authorityBaseUrl = input.authority_base_url;
+    this.authorityCaPem = input.authority_ca_pem ?? null;
+    return {
+      authority_id: input.authority_id,
+      organization_id: input.organization_id,
+      authority_base_url: input.authority_base_url,
+      authority_ca_pem: this.authorityCaPem,
+      configured_at: '2026-07-22T00:00:00.000Z',
+    };
+  }
+
+  readAuthorityConnection() {
+    if (this.pinnedAuthority === null || this.authorityBaseUrl === null) {
+      return null;
+    }
+    return {
+      authority_id: ORGANIZATION_IDS.authority,
+      organization_id: ORGANIZATION_IDS.organization,
+      authority_base_url: this.authorityBaseUrl,
+      authority_ca_pem: this.authorityCaPem,
+      configured_at: '2026-07-22T00:00:00.000Z',
+    };
+  }
+
+  rebindAuthorityConnection(input: {
+    authority_id: string;
+    organization_id: string;
+    authority_base_url: string;
+    authority_ca_pem?: string | null;
+  }) {
+    this.requirePinnedAuthority();
+    this.authorityBaseUrl = input.authority_base_url;
+    this.authorityCaPem = input.authority_ca_pem ?? null;
+    return {
+      ...input,
+      authority_ca_pem: this.authorityCaPem,
+      configured_at: '2026-07-22T00:00:00.000Z',
+    };
   }
 
   saveEnrollmentRequest(
@@ -126,6 +182,12 @@ class MemoryOrganizationStateStore implements OrganizationStateStore {
           : canonicalSha256(this.acceptedState),
       trusted_time_high_watermark: this.trustedTimeHighWatermark,
     };
+  }
+
+  abandonPendingEnrollment(): boolean {
+    if (this.request === null || this.receipt !== null) return false;
+    this.request = null;
+    return true;
   }
 
   acceptAccessState(
@@ -241,6 +303,28 @@ describe('local organization coordinator', () => {
 
     expect(decision.permitted).toBe(true);
     expect(clientCalls).toBe(1);
+  });
+
+  it('keeps approval centrally governed when enrollment completion response is lost', async () => {
+    const authority = new TestAuthority();
+    const state = new MemoryOrganizationStateStore();
+    const installationSigner = new TestInstallationSigner();
+    const client = descriptorClient(authority, {
+      completeEnrollment: async ({ enrollmentRequest }) => {
+        await authority.complete(enrollmentRequest);
+        throw new Error('simulated response loss after Authority commit');
+      },
+    });
+
+    await expect(
+      coordinator(state, client, installationSigner, mutableClock()).enroll(
+        enrollmentInput(authority),
+      ),
+    ).rejects.toThrow('simulated response loss');
+    expect(state.readEnrollment()).toMatchObject({ receipt: null });
+    expect(
+      organizationApprovalResolutionRequiresAuthority(state),
+    ).toBe(true);
   });
 
   it('refuses a mismatched remote descriptor before signing or sending the grant', async () => {

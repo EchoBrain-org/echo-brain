@@ -5,6 +5,7 @@ import {
   lstatSync,
   mkdirSync,
   mkdtempSync,
+  readdirSync,
   readFileSync,
   rmSync,
   symlinkSync,
@@ -16,6 +17,7 @@ import { afterAll, describe, expect, it } from 'vitest';
 
 const REPO = resolve(import.meta.dirname, '../..');
 const REGISTRY = 'tools/workspace-source-boundaries.v1.json';
+const PRODUCT_BOUNDARY = 'product/source-boundary.v1.json';
 const tmpDirs: string[] = [];
 
 afterAll(() =>
@@ -28,20 +30,58 @@ interface Registry {
   manifests: string[];
 }
 
+interface LayerRule {
+  name: string;
+  from: string;
+  allowed_imports: string[];
+}
+
 interface BoundaryManifest {
   name: string;
   workspace: boolean;
   boundary_root: string;
   entry_points: string[];
   owned_source_paths: string[];
+  allowed_internal_paths: string[];
   allowed_workspace_packages: string[];
   allowed_external_packages: string[];
   allowed_node_builtins: string[];
-  forbidden_repository_roots: string[];
+  forbidden_repository_roots?: string[];
+  runtime_assets?: string[];
+  layer_rules: LayerRule[];
+}
+
+interface ProductBoundary {
+  allowed_internal_paths: string[];
+  runtime_assets: string[];
+  layer_rules: LayerRule[];
 }
 
 function readJson<T>(path: string): T {
   return JSON.parse(readFileSync(join(REPO, path), 'utf8')) as T;
+}
+
+// Mirrors matchesGlob in tools/check-boundary.mjs. The tool runs main() at
+// import time, so its matcher cannot be imported; a boundary pattern is
+// compared against another pattern exactly as the tool compares it to a path.
+function matchesGlob(path: string, pattern: string): boolean {
+  if (pattern.endsWith('/')) return path.startsWith(pattern);
+  if (!pattern.includes('*')) return path === pattern;
+  let expression = '^';
+  for (let index = 0; index < pattern.length; index += 1) {
+    const character = pattern[index];
+    if (character === '*') {
+      if (pattern[index + 1] === '*') {
+        expression += '.*';
+        index += 1;
+      } else {
+        expression += '[^/]*';
+      }
+    } else {
+      expression += character.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    }
+  }
+  return new RegExp(`${expression}$`).test(path);
 }
 
 function fixtureRepository(): string {
@@ -147,6 +187,57 @@ describe('workspace source boundaries', () => {
     }
   });
 
+  // Both rulesets govern src/product/{federation,organization}: the registry
+  // pass and the product closure walk. A nested manifest that permits what the
+  // product boundary forbids passes one and fails the other on the first real
+  // import, so containment is asserted before any such import exists.
+  it('keeps every nested boundary inside the product boundary', () => {
+    const registry = readJson<Registry>(REGISTRY);
+    const product = readJson<ProductBoundary>(PRODUCT_BOUNDARY);
+    const violations: string[] = [];
+
+    for (const manifestPath of registry.manifests) {
+      const manifest = readJson<BoundaryManifest>(manifestPath);
+      if (manifest.workspace) continue;
+      for (const path of manifest.allowed_internal_paths) {
+        if (
+          !product.allowed_internal_paths.some((allowed) =>
+            matchesGlob(path, allowed),
+          )
+        ) {
+          violations.push(
+            `${manifest.name}: allowed_internal_paths leaves the product boundary: ${path}`,
+          );
+        }
+      }
+      for (const rule of manifest.layer_rules) {
+        const productRules = product.layer_rules.filter((candidate) =>
+          matchesGlob(rule.from, candidate.from),
+        );
+        if (productRules.length !== 1) {
+          violations.push(
+            `${manifest.name}: layer rule '${rule.name}' matches ${productRules.length} product layer rules`,
+          );
+          continue;
+        }
+        const [productRule] = productRules;
+        for (const path of rule.allowed_imports) {
+          if (
+            !productRule.allowed_imports.some((allowed) =>
+              matchesGlob(path, allowed),
+            )
+          ) {
+            violations.push(
+              `${manifest.name}: layer rule '${rule.name}' allows an import product rule '${productRule.name}' rejects: ${path}`,
+            );
+          }
+        }
+      }
+    }
+
+    expect(violations).toEqual([]);
+  });
+
   it('locks the one-way workspace dependency graph', () => {
     const registry = readJson<Registry>(REGISTRY);
     const graph = Object.fromEntries(
@@ -165,8 +256,10 @@ describe('workspace source boundaries', () => {
       '@echo-brain/organization-authority': [
         '@echo-brain/federation-protocol',
         '@echo-brain/organization-api',
+        '@echo-brain/organization-control-plane',
         '@echo-brain/organization-protocol',
       ],
+      '@echo-brain/organization-control-plane': [],
       '@echo-brain/organization-protocol': ['@echo-brain/federation-protocol'],
       'echo-brain/stable-federation': ['@echo-brain/federation-protocol'],
       'echo-brain/local-organization': [
@@ -175,6 +268,31 @@ describe('workspace source boundaries', () => {
         '@echo-brain/organization-protocol',
       ],
     });
+  });
+
+  it('lists every SQL migration as a runtime asset', () => {
+    for (const [root, manifestPath] of [
+      [
+        'services/organization-authority',
+        'services/organization-authority/source-boundary.v1.json',
+      ],
+      [
+        'services/organization-control-plane',
+        'services/organization-control-plane/source-boundary.v1.json',
+      ],
+      ['src/product/storage', PRODUCT_BOUNDARY],
+    ]) {
+      const manifest = readJson<{ runtime_assets?: string[] }>(manifestPath);
+      const migrations = readdirSync(join(REPO, root, 'migrations'))
+        .filter((path) => path.endsWith('.sql'))
+        .sort()
+        .map((path) => `${root}/migrations/${path}`);
+      expect(
+        [...(manifest.runtime_assets ?? [])]
+          .filter((path) => path.startsWith(`${root}/migrations/`))
+          .sort(),
+      ).toEqual(migrations);
+    }
   });
 
   it('parses real module syntax without treating comments or strings as imports', () => {

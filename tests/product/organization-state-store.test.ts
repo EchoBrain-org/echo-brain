@@ -317,6 +317,62 @@ describe('SQLite organization installation state', () => {
     );
   });
 
+  it('retains an authority origin until an explicit verified rebind', async () => {
+    const chain = await onboardingChain();
+    const databasePath = temporaryDatabase();
+    const store = openStore(databasePath);
+    store.pinAuthority(chain.authority, chain.authorityPin);
+    const saved = store.saveAuthorityConnection({
+      authority_id: chain.authority.authority_id,
+      organization_id: chain.authority.organization_id,
+      authority_base_url: 'https://authority.example.test',
+    });
+    expect(saved).toMatchObject({
+      authority_id: chain.authority.authority_id,
+      organization_id: chain.authority.organization_id,
+      authority_base_url: 'https://authority.example.test',
+    });
+    expect(
+      store.saveAuthorityConnection({
+        authority_id: chain.authority.authority_id,
+        organization_id: chain.authority.organization_id,
+        authority_base_url: 'https://authority.example.test',
+      }),
+    ).toEqual(saved);
+    expect(() =>
+      store.saveAuthorityConnection({
+        authority_id: chain.authority.authority_id,
+        organization_id: chain.authority.organization_id,
+        authority_base_url: 'https://other-authority.example.test',
+      }),
+    ).toThrow(OrganizationStateConflictError);
+    store.close();
+
+    const reopened = openStore(databasePath);
+    expect(reopened.readAuthorityConnection()).toEqual(saved);
+    const rebound = reopened.rebindAuthorityConnection({
+      authority_id: chain.authority.authority_id,
+      organization_id: chain.authority.organization_id,
+      authority_base_url: 'https://relocated-authority.example.test',
+      authority_ca_pem:
+        '-----BEGIN CERTIFICATE-----\nZmFrZQ==\n-----END CERTIFICATE-----\n',
+    });
+    expect(rebound).toMatchObject({
+      authority_id: chain.authority.authority_id,
+      organization_id: chain.authority.organization_id,
+      authority_base_url: 'https://relocated-authority.example.test',
+      authority_ca_pem: expect.stringContaining('BEGIN CERTIFICATE'),
+      configured_at: saved.configured_at,
+    });
+    expect(() =>
+      reopened.rebindAuthorityConnection({
+        authority_id: fixtureId('oau', 999),
+        organization_id: chain.authority.organization_id,
+        authority_base_url: 'https://attacker.example.test',
+      }),
+    ).toThrow(OrganizationStateConflictError);
+  });
+
   it('retains one exact request before receipt without storing the raw grant', async () => {
     const chain = await onboardingChain();
     const databasePath = temporaryDatabase();
@@ -358,6 +414,21 @@ describe('SQLite organization installation state', () => {
       accepted_access_sha256: null,
       trusted_time_high_watermark: null,
     });
+  });
+
+  it('abandons only a request that has no authority receipt or access state', async () => {
+    const chain = await onboardingChain();
+    const store = openStore(temporaryDatabase());
+    store.pinAuthority(chain.authority, chain.authorityPin);
+    store.saveEnrollmentRequest(chain.request);
+    expect(store.abandonPendingEnrollment()).toBe(true);
+    expect(store.readEnrollment()).toBeNull();
+    expect(store.abandonPendingEnrollment()).toBe(false);
+
+    store.saveEnrollmentRequest(chain.request);
+    store.saveEnrollmentReceipt(chain.receipt);
+    expect(store.abandonPendingEnrollment()).toBe(false);
+    expect(store.readEnrollment()?.receipt).toEqual(chain.receipt);
   });
 
   it('accepts exact retries and monotonic jumps but rejects rollback and divergent sequence reuse', async () => {

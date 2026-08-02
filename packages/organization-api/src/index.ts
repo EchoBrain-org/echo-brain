@@ -22,6 +22,16 @@ export type {
   OrganizationInstallationSummaryV1,
   OrganizationMembershipPageV1,
   OrganizationMembershipSummaryV1,
+  OrganizationPermissionActionV1,
+  OrganizationPermissionCheckDecisionV1,
+  OrganizationPermissionCheckRequestPayloadV1,
+  OrganizationPermissionCheckRequestV1,
+  OrganizationSlackLinkBeginRequestPayloadV1,
+  OrganizationSlackLinkBeginRequestV1,
+  OrganizationSlackLinkBeginResponseV1,
+  OrganizationSlackLinkCompleteRequestPayloadV1,
+  OrganizationSlackLinkCompleteRequestV1,
+  OrganizationSlackLinkResultV1,
   ProvisionedOrganizationMembershipV1,
   ProvisionOrganizationMembershipRequestV1,
   RevokeOrganizationSubjectRequestV1,
@@ -56,6 +66,12 @@ export {
   validateOrganizationInstallationSummary,
   validateOrganizationMembershipPage,
   validateOrganizationMembershipSummary,
+  validateOrganizationPermissionCheckDecision,
+  validateOrganizationPermissionCheckRequest,
+  validateOrganizationSlackLinkBeginRequest,
+  validateOrganizationSlackLinkBeginResponse,
+  validateOrganizationSlackLinkCompleteRequest,
+  validateOrganizationSlackLinkResult,
   validateProvisionedOrganizationMembership,
   validateProvisionOrganizationMembershipRequest,
   validateRevokeOrganizationSubjectRequest,
@@ -73,7 +89,10 @@ export {
   ORGANIZATION_API_AUTHORITY_DESCRIPTOR_PATH,
   ORGANIZATION_API_ENROLLMENT_AUTH_SCHEME,
   ORGANIZATION_API_ENROLLMENTS_PATH,
+  ORGANIZATION_API_PERMISSION_CHECKS_PATH,
   ORGANIZATION_API_PROXY_AUTH_SCHEME,
+  ORGANIZATION_API_SLACK_LINK_CHALLENGES_PATH,
+  ORGANIZATION_API_SLACK_LINK_COMPLETIONS_PATH,
   organizationApiInstallationRevocationsPath,
   organizationApiMembershipEnrollmentGrantsPath,
   organizationApiMembershipRevocationsPath,
@@ -86,3 +105,24 @@ export {
   verifyOrganizationAccessLeaseRequest,
 } from './access-lease-request.js';
 export type { CreateOrganizationAccessLeaseRequestInput } from './access-lease-request.js';
+export {
+  createOrganizationPermissionCheckRequest,
+  organizationPermissionCheckRequestSha256,
+  verifyOrganizationPermissionCheckRequest,
+} from './permission-check-request.js';
+export type { CreateOrganizationPermissionCheckRequestInput } from './permission-check-request.js';
+export {
+  createOrganizationSlackLinkBeginRequest,
+  createOrganizationSlackLinkCompleteRequest,
+  organizationSlackLinkBeginRequestSha256,
+  organizationSlackLinkCompleteRequestSha256,
+  verifyOrganizationSlackLinkBeginRequest,
+  verifyOrganizationSlackLinkCompleteRequest,
+} from './slack-link-request.js';
+export type {
+  CreateOrganizationSlackLinkBeginRequestInput,
+  CreateOrganizationSlackLinkCompleteRequestInput,
+} from './slack-link-request.js';
+export { organizationSlackLinkChallengeCodeSha256 } from './slack-link-challenge-code.js';
+export { organizationPermissionProviderEventSha256 } from './permission-check-event.js';
+export type { OrganizationPermissionProviderEventInput } from './permission-check-event.js';

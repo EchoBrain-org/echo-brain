@@ -35,6 +35,9 @@ interface MetadataRow {
   organization_display_name: string;
   authority_pin_sha256: string;
   descriptor_json: string;
+  integrations_control_plane_id: string | null;
+  integrations_marker_sha256: string | null;
+  integrations_installed_at: string | null;
 }
 
 export interface AuthorityDatabaseInspection {
@@ -45,6 +48,9 @@ export interface AuthorityDatabaseInspection {
   organization_display_name: string;
   authority_pin_sha256: string;
   authority_descriptor: OrganizationAuthorityDescriptorV1;
+  integrations_control_plane_id: string | null;
+  integrations_marker_sha256: `sha256:${string}` | null;
+  integrations_installed_at: string | null;
 }
 
 export function assertPrivateAuthorityDatabaseFile(path: string): void {
@@ -120,10 +126,18 @@ function inspectAuthorityDatabase(
     ) {
       throw new Error('organization authority database table set is invalid');
     }
+    const integrationAnchorColumns =
+      schemaVersion >= 3
+        ? `integrations_control_plane_id, integrations_marker_sha256,
+           integrations_installed_at`
+        : `NULL AS integrations_control_plane_id,
+           NULL AS integrations_marker_sha256,
+           NULL AS integrations_installed_at`;
     const metadata = database
       .prepare(
         `SELECT authority_id, organization_id, organization_display_name,
-                authority_pin_sha256, descriptor_json
+                authority_pin_sha256, descriptor_json,
+                ${integrationAnchorColumns}
          FROM authority_metadata WHERE singleton = 1`,
       )
       .get() as MetadataRow | undefined;
@@ -143,6 +157,27 @@ function inspectAuthorityDatabase(
         'organization authority database metadata differs from its descriptor',
       );
     }
+    const integrationAnchorMissing =
+      metadata.integrations_control_plane_id === null &&
+      metadata.integrations_marker_sha256 === null &&
+      metadata.integrations_installed_at === null;
+    if (
+      !integrationAnchorMissing &&
+      (metadata.integrations_control_plane_id === null ||
+        !/^ocp_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(
+          metadata.integrations_control_plane_id,
+        ) ||
+        metadata.integrations_marker_sha256 === null ||
+        !/^sha256:[0-9a-f]{64}$/.test(
+          metadata.integrations_marker_sha256,
+        ) ||
+        metadata.integrations_installed_at === null ||
+        Number.isNaN(Date.parse(metadata.integrations_installed_at)))
+    ) {
+      throw new Error(
+        'organization authority integrations installation anchor is invalid',
+      );
+    }
     return Object.freeze({
       schema_version: schemaVersion,
       tables: Object.freeze([...tables]),
@@ -151,6 +186,11 @@ function inspectAuthorityDatabase(
       organization_display_name: metadata.organization_display_name,
       authority_pin_sha256: metadata.authority_pin_sha256,
       authority_descriptor: descriptor,
+      integrations_control_plane_id:
+        metadata.integrations_control_plane_id,
+      integrations_marker_sha256:
+        metadata.integrations_marker_sha256 as `sha256:${string}` | null,
+      integrations_installed_at: metadata.integrations_installed_at,
     });
   } finally {
     database.close();

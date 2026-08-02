@@ -15,9 +15,15 @@ import {
   ORGANIZATION_API_AUTHORITY_DESCRIPTOR_PATH,
   ORGANIZATION_API_ENROLLMENT_AUTH_SCHEME,
   ORGANIZATION_API_ENROLLMENTS_PATH,
+  ORGANIZATION_API_PERMISSION_CHECKS_PATH,
+  ORGANIZATION_API_SLACK_LINK_CHALLENGES_PATH,
+  ORGANIZATION_API_SLACK_LINK_COMPLETIONS_PATH,
   validateCompleteOrganizationEnrollmentRequest,
   validateIssueOrganizationEnrollmentGrantRequest,
   validateOrganizationAccessLeaseRequest,
+  validateOrganizationPermissionCheckRequest,
+  validateOrganizationSlackLinkBeginRequest,
+  validateOrganizationSlackLinkCompleteRequest,
   validateProvisionOrganizationMembershipRequest,
   validateRevokeOrganizationSubjectRequest,
 } from '@echo-brain/organization-api';
@@ -40,6 +46,7 @@ import {
   type AuthorityRuntimeStatusV1,
 } from '../domain/runtime-status.js';
 import type { OrganizationAuthorityHttpApplication } from './organization-authority-http-application.js';
+import type { OrganizationIntegrationsHttpApplication } from './organization-integrations-http-application.js';
 import { handleAdminConsoleRequest } from './admin-console/routes.js';
 import type { AdminConsoleSessionStore } from './admin-console/sessions.js';
 import {
@@ -64,6 +71,12 @@ const MEMBERSHIP_REVOCATION_ROUTE = new RegExp(
 const INSTALLATION_REVOCATION_ROUTE = new RegExp(
   `^${ORGANIZATION_API_ADMIN_INSTALLATIONS_PATH}/(ins_${UUID_V4_SOURCE})/revocations$`,
 );
+export const ORGANIZATION_API_ADMIN_INTEGRATIONS_PATH =
+  '/v1/admin/integrations';
+export const ORGANIZATION_API_ADMIN_SLACK_INTEGRATION_PATH =
+  '/v1/admin/integrations/slack';
+export const ORGANIZATION_API_ADMIN_SLACK_APPROVAL_BOOTSTRAP_PATH =
+  '/v1/admin/integrations/slack-approval-bootstrap';
 
 class RateLimitedError extends Error {
   constructor(readonly retryAfterSeconds: number) {
@@ -323,6 +336,7 @@ function adminPageRequest(url: URL): { cursor?: string; limit?: number } {
 
 export interface OrganizationAuthorityHttpServerOptions {
   application: OrganizationAuthorityHttpApplication;
+  integrations?: OrganizationIntegrationsHttpApplication;
   adminAuthenticator: AdminRequestAuthenticator;
   clientIdentityResolver: RequestClientIdentityResolver;
   adminConsole?: {
@@ -332,6 +346,69 @@ export interface OrganizationAuthorityHttpServerOptions {
     respond(nonce: string): AuthorityRuntimeStatusV1;
   };
   rateLimiter?: PostRequestRateLimiter;
+  permissionGlobalIngressRateLimiter?: PostRequestRateLimiter;
+  permissionIngressRateLimiter?: PostRequestRateLimiter;
+  permissionRateLimiter?: PostRequestRateLimiter;
+}
+
+function consumeRateLimit(
+  rateLimiter: PostRequestRateLimiter,
+  key: string,
+): void {
+  const result = rateLimiter.consume(key);
+  if (!result.allowed) {
+    throw new RateLimitedError(result.retry_after_seconds);
+  }
+}
+
+interface OrganizationAuthorityHttpServerLifecycle {
+  readonly shutdownController: AbortController;
+  readonly drainWaiters: Set<() => void>;
+  inFlightRequests: number;
+  shuttingDown: boolean;
+}
+
+const authorityHttpServerLifecycles = new WeakMap<
+  Server,
+  OrganizationAuthorityHttpServerLifecycle
+>();
+
+function authorityHttpServerLifecycle(
+  server: Server,
+): OrganizationAuthorityHttpServerLifecycle {
+  const lifecycle = authorityHttpServerLifecycles.get(server);
+  if (lifecycle === undefined) {
+    throw new Error(
+      'organization authority HTTP server lifecycle is unavailable',
+    );
+  }
+  return lifecycle;
+}
+
+export function beginOrganizationAuthorityHttpServerShutdown(
+  server: Server,
+): void {
+  const lifecycle = authorityHttpServerLifecycle(server);
+  if (lifecycle.shuttingDown) return;
+  lifecycle.shuttingDown = true;
+  lifecycle.shutdownController.abort(
+    new Error('organization authority HTTP server is shutting down'),
+  );
+}
+
+export async function drainOrganizationAuthorityHttpServer(
+  server: Server,
+): Promise<void> {
+  const lifecycle = authorityHttpServerLifecycle(server);
+  if (!lifecycle.shuttingDown) {
+    throw new Error(
+      'organization authority HTTP shutdown must begin before draining',
+    );
+  }
+  if (lifecycle.inFlightRequests === 0) return;
+  await new Promise<void>((resolve) => {
+    lifecycle.drainWaiters.add(resolve);
+  });
 }
 
 export function createOrganizationAuthorityHttpServer(
@@ -339,6 +416,22 @@ export function createOrganizationAuthorityHttpServer(
 ): Server {
   const rateLimiter =
     options.rateLimiter ?? new InMemoryPostRequestRateLimiter();
+  const permissionIngressRateLimiter =
+    options.permissionIngressRateLimiter ??
+    new InMemoryPostRequestRateLimiter({
+      maximum_requests_per_window: 600,
+      window_ms: 60_000,
+      maximum_keys: 4096,
+    });
+  const permissionGlobalIngressRateLimiter =
+    options.permissionGlobalIngressRateLimiter ??
+    new InMemoryPostRequestRateLimiter({
+      maximum_requests_per_window: 6000,
+      window_ms: 60_000,
+      maximum_keys: 1,
+    });
+  const permissionRateLimiter =
+    options.permissionRateLimiter ?? new InMemoryPostRequestRateLimiter();
   const requireAdmin = (request: IncomingMessage): void => {
     if (
       !options.adminAuthenticator.authenticate(request.headers.authorization)
@@ -349,53 +442,90 @@ export function createOrganizationAuthorityHttpServer(
       );
     }
   };
+  const requireIntegrations = (): OrganizationIntegrationsHttpApplication => {
+    if (options.integrations === undefined) {
+      throw new AuthorityOperationError(
+        'not_found',
+        'organization integrations are unavailable',
+      );
+    }
+    return options.integrations;
+  };
+  const lifecycle: OrganizationAuthorityHttpServerLifecycle = {
+    shutdownController: new AbortController(),
+    drainWaiters: new Set(),
+    inFlightRequests: 0,
+    shuttingDown: false,
+  };
 
-  const server = createServer(
-    { maxHeaderSize: 16 * 1024 },
-    async (request, response) => {
-      let authenticationChallenge:
-        | typeof ORGANIZATION_API_ADMIN_AUTH_SCHEME
-        | typeof ORGANIZATION_API_ENROLLMENT_AUTH_SCHEME
-        | undefined;
-      try {
-        const method = request.method ?? '';
-        const url = new URL(request.url ?? '/', 'http://authority.invalid');
-        if (
-          method === 'GET' &&
-          url.pathname === AUTHORITY_RUNTIME_STATUS_PATH
-        ) {
-          if (url.search !== '' || options.runtimeStatus === undefined) {
-            throw new AuthorityOperationError(
-              'invalid_request',
-              'runtime status request is invalid',
-            );
-          }
-          const nonce = request.headers[AUTHORITY_RUNTIME_STATUS_NONCE_HEADER];
-          if (typeof nonce !== 'string') {
-            throw new AuthorityOperationError(
-              'invalid_request',
-              'runtime status nonce is unavailable',
-            );
-          }
-          try {
-            assertAuthorityRuntimeStatusNonce(nonce);
-          } catch {
-            throw new AuthorityOperationError(
-              'invalid_request',
-              'runtime status nonce is invalid',
-            );
-          }
-          sendJson(response, 200, options.runtimeStatus.respond(nonce));
-          return;
+  const handleRequest = async (
+    request: IncomingMessage,
+    response: ServerResponse,
+  ): Promise<void> => {
+    let authenticationChallenge:
+      | typeof ORGANIZATION_API_ADMIN_AUTH_SCHEME
+      | typeof ORGANIZATION_API_ENROLLMENT_AUTH_SCHEME
+      | undefined;
+    try {
+      if (lifecycle.shuttingDown) {
+        throw new AuthorityOperationError(
+          'unavailable',
+          'organization authority is shutting down',
+        );
+      }
+      const method = request.method ?? '';
+      const url = new URL(request.url ?? '/', 'http://authority.invalid');
+      if (
+        method === 'GET' &&
+        url.pathname === AUTHORITY_RUNTIME_STATUS_PATH
+      ) {
+        if (url.search !== '' || options.runtimeStatus === undefined) {
+          throw new AuthorityOperationError(
+            'invalid_request',
+            'runtime status request is invalid',
+          );
         }
-        const clientIdentity = options.clientIdentityResolver.resolve(request);
-        authenticationChallenge = url.pathname.startsWith('/v1/admin/')
-          ? ORGANIZATION_API_ADMIN_AUTH_SCHEME
-          : method === 'POST' &&
-              url.pathname === ORGANIZATION_API_ENROLLMENTS_PATH
-            ? ORGANIZATION_API_ENROLLMENT_AUTH_SCHEME
-            : undefined;
-        if (method === 'POST') {
+        const nonce = request.headers[AUTHORITY_RUNTIME_STATUS_NONCE_HEADER];
+        if (typeof nonce !== 'string') {
+          throw new AuthorityOperationError(
+            'invalid_request',
+            'runtime status nonce is unavailable',
+          );
+        }
+        try {
+          assertAuthorityRuntimeStatusNonce(nonce);
+        } catch {
+          throw new AuthorityOperationError(
+            'invalid_request',
+            'runtime status nonce is invalid',
+          );
+        }
+        sendJson(response, 200, options.runtimeStatus.respond(nonce));
+        return;
+      }
+      const clientIdentity = options.clientIdentityResolver.resolve(request);
+      authenticationChallenge = url.pathname.startsWith('/v1/admin/')
+        ? ORGANIZATION_API_ADMIN_AUTH_SCHEME
+        : method === 'POST' &&
+            url.pathname === ORGANIZATION_API_ENROLLMENTS_PATH
+          ? ORGANIZATION_API_ENROLLMENT_AUTH_SCHEME
+          : undefined;
+      if (method === 'POST') {
+        if (url.pathname === ORGANIZATION_API_PERMISSION_CHECKS_PATH) {
+          consumeRateLimit(
+            permissionGlobalIngressRateLimiter,
+            'permission-ingress-global',
+          );
+          const permissionIngressKey =
+            options.clientIdentityResolver.permissionIngressKey?.(
+              request,
+              clientIdentity,
+            ) ?? clientIdentity;
+          consumeRateLimit(
+            permissionIngressRateLimiter,
+            `${permissionIngressKey}:permission-ingress`,
+          );
+        } else {
           const routeClass =
             url.pathname === '/admin' || url.pathname.startsWith('/admin/')
               ? 'admin-console'
@@ -406,30 +536,30 @@ export function createOrganizationAuthorityHttpServer(
                   : url.pathname === ORGANIZATION_API_ACCESS_LEASES_PATH
                     ? 'access'
                     : 'other';
-          const limit = rateLimiter.consume(`${clientIdentity}:${routeClass}`);
-          if (!limit.allowed) {
-            throw new RateLimitedError(limit.retry_after_seconds);
-          }
+          consumeRateLimit(rateLimiter, `${clientIdentity}:${routeClass}`);
         }
+      }
 
-        if (
-          options.adminConsole !== undefined &&
-          (url.pathname === '/admin' || url.pathname.startsWith('/admin/'))
-        ) {
-          await handleAdminConsoleRequest({
-            application: options.application,
-            sessions: options.adminConsole.sessions,
-            authenticateCredential: (credential) =>
-              options.adminAuthenticator.authenticate(
-                `${ORGANIZATION_API_ADMIN_AUTH_SCHEME} ${credential}`,
-              ),
-            clientIdentity,
-            request,
-            response,
-            url,
-          });
-          return;
-        }
+      if (
+        options.adminConsole !== undefined &&
+        (url.pathname === '/admin' || url.pathname.startsWith('/admin/'))
+      ) {
+        await handleAdminConsoleRequest({
+          application: options.application,
+          integrations: options.integrations,
+          sessions: options.adminConsole.sessions,
+          authenticateCredential: (credential) =>
+            options.adminAuthenticator.authenticate(
+              `${ORGANIZATION_API_ADMIN_AUTH_SCHEME} ${credential}`,
+            ),
+          clientIdentity,
+          request,
+          response,
+          url,
+          signal: lifecycle.shutdownController.signal,
+        });
+        return;
+      }
 
         if (
           method === 'GET' &&
@@ -514,6 +644,21 @@ export function createOrganizationAuthorityHttpServer(
           return;
         }
 
+        if (
+          method === 'GET' &&
+          url.pathname === ORGANIZATION_API_ADMIN_INTEGRATIONS_PATH
+        ) {
+          requireAdmin(request);
+          if (url.search !== '') {
+            throw new AuthorityOperationError(
+              'not_found',
+              'organization integrations are unavailable',
+            );
+          }
+          sendJson(response, 200, requireIntegrations().overview());
+          return;
+        }
+
         if (url.search !== '') {
           throw new AuthorityOperationError(
             'invalid_request',
@@ -590,6 +735,100 @@ export function createOrganizationAuthorityHttpServer(
             access_state: state,
           };
           sendJson(response, 200, result);
+          return;
+        }
+
+        if (
+          method === 'POST' &&
+          url.pathname === ORGANIZATION_API_PERMISSION_CHECKS_PATH
+        ) {
+          const integrations = requireIntegrations();
+          const command = validateOrganizationPermissionCheckRequest(
+            await readJsonBody(request),
+          );
+          const authenticated =
+            options.application.checkPermissionSubject(command, null);
+          consumeRateLimit(
+            permissionRateLimiter,
+            `installation:${authenticated.installation_id}`,
+          );
+          sendJson(
+            response,
+            200,
+            await integrations.checkPermission(
+              command,
+              lifecycle.shutdownController.signal,
+            ),
+          );
+          return;
+        }
+
+        if (
+          method === 'POST' &&
+          url.pathname === ORGANIZATION_API_SLACK_LINK_CHALLENGES_PATH
+        ) {
+          const command = validateOrganizationSlackLinkBeginRequest(
+            await readJsonBody(request),
+          );
+          sendJson(
+            response,
+            201,
+            await requireIntegrations().beginSlackIdentityLink(
+              command,
+              lifecycle.shutdownController.signal,
+            ),
+          );
+          return;
+        }
+
+        if (
+          method === 'POST' &&
+          url.pathname === ORGANIZATION_API_SLACK_LINK_COMPLETIONS_PATH
+        ) {
+          const command = validateOrganizationSlackLinkCompleteRequest(
+            await readJsonBody(request),
+          );
+          sendJson(
+            response,
+            200,
+            await requireIntegrations().completeSlackIdentityLink(
+              command,
+              lifecycle.shutdownController.signal,
+            ),
+          );
+          return;
+        }
+
+        if (
+          method === 'POST' &&
+          url.pathname === ORGANIZATION_API_ADMIN_SLACK_INTEGRATION_PATH
+        ) {
+          requireAdmin(request);
+          sendJson(
+            response,
+            201,
+            await requireIntegrations().onboardSlackOrganizationTool(
+              await readJsonBody(request),
+              lifecycle.shutdownController.signal,
+            ),
+          );
+          return;
+        }
+
+        if (
+          method === 'POST' &&
+          url.pathname ===
+            ORGANIZATION_API_ADMIN_SLACK_APPROVAL_BOOTSTRAP_PATH
+        ) {
+          requireAdmin(request);
+          sendJson(
+            response,
+            201,
+            await requireIntegrations().bootstrapSlackApproval(
+              await readJsonBody(request),
+              lifecycle.shutdownController.signal,
+            ),
+          );
           return;
         }
 
@@ -674,6 +913,8 @@ export function createOrganizationAuthorityHttpServer(
                 ? 401
                 : error.code === 'not_found'
                   ? 404
+                  : error.code === 'unavailable'
+                    ? 503
                   : 409;
           const headers =
             status === 401 && authenticationChallenge !== undefined
@@ -704,10 +945,27 @@ export function createOrganizationAuthorityHttpServer(
           errorBody('internal_error', 'authority operation failed'),
         );
       }
+  };
+  const server = createServer(
+    { maxHeaderSize: 16 * 1024 },
+    (request, response) => {
+      lifecycle.inFlightRequests += 1;
+      void handleRequest(request, response)
+        .finally(() => {
+          lifecycle.inFlightRequests -= 1;
+          if (lifecycle.inFlightRequests === 0) {
+            for (const resolve of lifecycle.drainWaiters) resolve();
+            lifecycle.drainWaiters.clear();
+          }
+        })
+        .catch(() => {
+          response.destroy();
+        });
     },
   );
   server.requestTimeout = 15_000;
   server.headersTimeout = 10_000;
   server.keepAliveTimeout = 5_000;
+  authorityHttpServerLifecycles.set(server, lifecycle);
   return server;
 }

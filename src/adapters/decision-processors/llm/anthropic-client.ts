@@ -1,12 +1,10 @@
 import { AdapterError } from '../../../core/index.js';
 import {
-  DEFAULT_LLM_REQUEST_TIMEOUT_MS,
+  createHostedLlmRequester,
   invalidProviderResponse,
   isRecord,
   nonEmptyString,
   optionalPositiveInteger,
-  requestProviderJson,
-  requiredCredential,
   type HostedLlmClientOptions,
   type LlmProviderClient,
   type StructuredGenerationRequest,
@@ -18,36 +16,17 @@ const ANTHROPIC_VERSION = '2023-06-01';
 
 export class AnthropicClient implements LlmProviderClient {
   readonly provider = 'anthropic' as const;
-  private readonly requestTimeoutMs: number;
-  private readonly fetchImpl: typeof fetch;
+  private readonly request;
 
-  constructor(private readonly options: HostedLlmClientOptions) {
-    this.requestTimeoutMs =
-      options.requestTimeoutMs ?? DEFAULT_LLM_REQUEST_TIMEOUT_MS;
-    this.fetchImpl = options.fetchImpl ?? fetch;
-  }
-
-  private async request(path: string, init: RequestInit, signal?: AbortSignal) {
-    const credential = requiredCredential(
+  constructor(options: HostedLlmClientOptions) {
+    this.request = createHostedLlmRequester(
       this.provider,
-      this.options.credentialRef,
-      this.options.credentialResolver,
-    );
-    return await requestProviderJson(
-      this.provider,
-      `${ANTHROPIC_BASE_URL}${path}`,
-      {
-        ...init,
-        headers: {
-          'x-api-key': credential,
-          'anthropic-version': ANTHROPIC_VERSION,
-          'content-type': 'application/json',
-          ...init.headers,
-        },
-      },
-      this.requestTimeoutMs,
-      signal,
-      this.fetchImpl,
+      ANTHROPIC_BASE_URL,
+      (credential) => ({
+        'x-api-key': credential,
+        'anthropic-version': ANTHROPIC_VERSION,
+      }),
+      options,
     );
   }
 

@@ -103,6 +103,43 @@ export function requiredCredential(
   return credential;
 }
 
+export function createHostedLlmRequester(
+  provider: LlmProviderId,
+  baseUrl: string,
+  credentialHeaders: (credential: string) => Record<string, string>,
+  options: HostedLlmClientOptions,
+) {
+  const requestTimeoutMs =
+    options.requestTimeoutMs ?? DEFAULT_LLM_REQUEST_TIMEOUT_MS;
+  const fetchImpl = options.fetchImpl ?? fetch;
+  return async (
+    path: string,
+    init: RequestInit,
+    signal?: AbortSignal,
+  ) => {
+    const credential = requiredCredential(
+      provider,
+      options.credentialRef,
+      options.credentialResolver,
+    );
+    return await requestProviderJson(
+      provider,
+      `${baseUrl}${path}`,
+      {
+        ...init,
+        headers: {
+          'content-type': 'application/json',
+          ...credentialHeaders(credential),
+          ...init.headers,
+        },
+      },
+      requestTimeoutMs,
+      signal,
+      fetchImpl,
+    );
+  };
+}
+
 export function providerLabel(provider: LlmProviderId): string {
   switch (provider) {
     case 'ollama':

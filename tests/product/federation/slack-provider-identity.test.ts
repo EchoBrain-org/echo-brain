@@ -6,17 +6,22 @@ import type {
   SlackPostedMessage,
   SlackReaction,
 } from "../../../src/adapters/shared/slack/slack-web-api-client.js";
+import { canonicalSha256 } from "../../../src/product/federation/foundation/canonical-json.js";
+import { captureSlackProviderIdentity } from "../../../src/product/federation/identity/slack-provider-identity.js";
 import {
-  canonicalSha256,
-  captureSlackProviderIdentity,
   issueSlackDmChallenge,
   pollSlackDmChallenge,
   type SlackDmChallengeApi,
-} from "../../../src/product/federation/index.js";
+} from "../../../src/product/federation/bootstrap/slack-dm-challenge.js";
 
 const ISSUED_AT = "2026-07-19T20:00:00.000Z";
 const EXPIRES_AT = "2026-07-19T20:05:00.000Z";
 const OBSERVED_AT = "2026-07-19T20:00:02.000Z";
+const FOUNDER_ACTOR = {
+  provider: "slack",
+  team_id: "T123ABC",
+  user_id: "U555CEO",
+} as const;
 
 async function providerIdentity() {
   return captureSlackProviderIdentity(
@@ -31,6 +36,22 @@ async function providerIdentity() {
     },
     ISSUED_AT,
   );
+}
+
+function issueChallenge(
+  api: SlackDmChallengeApi,
+  provider: Awaited<ReturnType<typeof providerIdentity>>,
+  actor: {
+    provider: "slack";
+    team_id: string;
+    user_id: string;
+  } = FOUNDER_ACTOR,
+) {
+  return issueSlackDmChallenge(api, provider, actor, {
+    issuedAt: ISSUED_AT,
+    expiresAt: EXPIRES_AT,
+    nonceFactory: () => Buffer.alloc(32, 7),
+  });
 }
 
 class FakeChallengeApi implements SlackDmChallengeApi {
@@ -156,16 +177,7 @@ describe("Slack founder DM challenge", () => {
     const nonce = Buffer.alloc(32, 7);
     const encodedNonce = nonce.toString("base64url");
 
-    const ticket = await issueSlackDmChallenge(
-      api,
-      provider,
-      { provider: "slack", team_id: "T123ABC", user_id: "U555CEO" },
-      {
-        issuedAt: ISSUED_AT,
-        expiresAt: EXPIRES_AT,
-        nonceFactory: () => nonce,
-      },
-    );
+    const ticket = await issueChallenge(api, provider);
 
     expect(api.openedUsers).toEqual(["U555CEO"]);
     expect(api.authIdentityCalls).toBe(1);
@@ -196,15 +208,10 @@ describe("Slack founder DM challenge", () => {
     const provider = await providerIdentity();
 
     await expect(
-      issueSlackDmChallenge(
+      issueChallenge(
         api,
         provider,
         { provider: "slack", team_id: "T999BAD", user_id: "U555CEO" },
-        {
-          issuedAt: ISSUED_AT,
-          expiresAt: EXPIRES_AT,
-          nonceFactory: () => Buffer.alloc(32, 7),
-        },
       ),
     ).rejects.toThrow(/different workspace/);
     expect(api.openedUsers).toEqual([]);
@@ -215,17 +222,11 @@ describe("Slack founder DM challenge", () => {
     const api = new FakeChallengeApi();
     const provider = await providerIdentity();
     await expect(
-      issueSlackDmChallenge(
+      issueChallenge(
         api,
         {
           ...provider,
           evidence_sha256: `sha256:${"0".repeat(64)}`,
-        },
-        { provider: "slack", team_id: "T123ABC", user_id: "U555CEO" },
-        {
-          issuedAt: ISSUED_AT,
-          expiresAt: EXPIRES_AT,
-          nonceFactory: () => Buffer.alloc(32, 7),
         },
       ),
     ).rejects.toThrow(/evidence does not match/);
@@ -236,16 +237,7 @@ describe("Slack founder DM challenge", () => {
       return { channel_id: "C_NOT_A_DM", user_id: userId };
     };
     await expect(
-      issueSlackDmChallenge(
-        api,
-        provider,
-        { provider: "slack", team_id: "T123ABC", user_id: "U555CEO" },
-        {
-          issuedAt: ISSUED_AT,
-          expiresAt: EXPIRES_AT,
-          nonceFactory: () => Buffer.alloc(32, 7),
-        },
-      ),
+      issueChallenge(api, provider),
     ).rejects.toThrow(/invalid direct message/);
     expect(api.posted).toEqual([]);
   });
@@ -259,16 +251,7 @@ describe("Slack founder DM challenge", () => {
     };
 
     await expect(
-      issueSlackDmChallenge(
-        api,
-        provider,
-        { provider: "slack", team_id: "T123ABC", user_id: "U555CEO" },
-        {
-          issuedAt: ISSUED_AT,
-          expiresAt: EXPIRES_AT,
-          nonceFactory: () => Buffer.alloc(32, 7),
-        },
-      ),
+      issueChallenge(api, provider),
     ).rejects.toThrow(/identity changed/);
     expect(api.openedUsers).toEqual([]);
     expect(api.posted).toEqual([]);
@@ -277,16 +260,7 @@ describe("Slack founder DM challenge", () => {
   it("ignores other actors, then emits exact evidence for the enrolled actor", async () => {
     const api = new FakeChallengeApi();
     const provider = await providerIdentity();
-    const ticket = await issueSlackDmChallenge(
-      api,
-      provider,
-      { provider: "slack", team_id: "T123ABC", user_id: "U555CEO" },
-      {
-        issuedAt: ISSUED_AT,
-        expiresAt: EXPIRES_AT,
-        nonceFactory: () => Buffer.alloc(32, 7),
-      },
-    );
+    const ticket = await issueChallenge(api, provider);
     api.reactionPages = [
       [{ name: "white_check_mark", users: ["U999OTHER"], count: 1 }],
       [{ name: "white_check_mark", users: ["U555CEO"], count: 1 }],
@@ -348,16 +322,7 @@ describe("Slack founder DM challenge", () => {
   it("refuses to read reactions after the Slack connection identity changes", async () => {
     const api = new FakeChallengeApi();
     const provider = await providerIdentity();
-    const ticket = await issueSlackDmChallenge(
-      api,
-      provider,
-      { provider: "slack", team_id: "T123ABC", user_id: "U555CEO" },
-      {
-        issuedAt: ISSUED_AT,
-        expiresAt: EXPIRES_AT,
-        nonceFactory: () => Buffer.alloc(32, 7),
-      },
-    );
+    const ticket = await issueChallenge(api, provider);
     api.authIdentityResult = {
       ...api.authIdentityResult,
       user_id: "U999OTHERBOT",
@@ -376,16 +341,7 @@ describe("Slack founder DM challenge", () => {
   it("stops at the exact poll budget and reports expiration without another API read", async () => {
     const api = new FakeChallengeApi();
     const provider = await providerIdentity();
-    const ticket = await issueSlackDmChallenge(
-      api,
-      provider,
-      { provider: "slack", team_id: "T123ABC", user_id: "U555CEO" },
-      {
-        issuedAt: ISSUED_AT,
-        expiresAt: EXPIRES_AT,
-        nonceFactory: () => Buffer.alloc(32, 7),
-      },
-    );
+    const ticket = await issueChallenge(api, provider);
     const sleeps: number[] = [];
     await expect(
       pollSlackDmChallenge(api, ticket, {
@@ -414,16 +370,7 @@ describe("Slack founder DM challenge", () => {
   it("rejects unbounded or overlong challenge schedules", async () => {
     const api = new FakeChallengeApi();
     const provider = await providerIdentity();
-    const ticket = await issueSlackDmChallenge(
-      api,
-      provider,
-      { provider: "slack", team_id: "T123ABC", user_id: "U555CEO" },
-      {
-        issuedAt: ISSUED_AT,
-        expiresAt: EXPIRES_AT,
-        nonceFactory: () => Buffer.alloc(32, 7),
-      },
-    );
+    const ticket = await issueChallenge(api, provider);
 
     await expect(
       pollSlackDmChallenge(api, ticket, {

@@ -9,6 +9,7 @@ import {
   ADMIN_CONSOLE_SCRIPT_PATH,
   ADMIN_CONSOLE_STYLESHEET_PATH,
 } from './assets.js';
+import type { OrganizationIntegrationsOverview } from '../organization-integrations-http-application.js';
 
 export interface AdminConsoleDashboardView {
   readonly overview: OrganizationAdminOverviewV1;
@@ -16,6 +17,7 @@ export interface AdminConsoleDashboardView {
   readonly installations: OrganizationInstallationPageV1;
   readonly enrollment_grants: OrganizationEnrollmentGrantPageV1;
   readonly audit: OrganizationAuditPageV1;
+  readonly integrations?: OrganizationIntegrationsOverview;
   readonly csrf_token: string;
 }
 
@@ -200,6 +202,188 @@ function auditRows(page: OrganizationAuditPageV1): string {
     .join('');
 }
 
+interface ActiveSlackOrganizationTool {
+  readonly connection_id: string;
+  readonly workspace_id: string;
+  readonly bot_user_id: string;
+  readonly channel_id: string;
+  readonly granted_scopes: readonly string[];
+  readonly activated_at: string;
+}
+
+const SLACK_ORGANIZATION_TOOL_PROFILE = 'slack-organization-tool-v1';
+const REQUIRED_SLACK_ORGANIZATION_TOOL_SCOPES = [
+  'channels:history',
+  'channels:read',
+  'chat:write',
+  'reactions:read',
+  'users:read',
+] as const;
+const PUBLIC_SLACK_CHANNEL_ID = /^C[A-Z0-9]{2,127}$/;
+
+function recordString(
+  value: Readonly<Record<string, unknown>>,
+  key: string,
+): string | null {
+  const candidate = value[key];
+  return typeof candidate === 'string' && candidate.length > 0
+    ? candidate
+    : null;
+}
+
+function jsonValue(value: unknown): unknown {
+  if (typeof value === 'string') {
+    try {
+      return JSON.parse(value) as unknown;
+    } catch {
+      return null;
+    }
+  }
+  return value;
+}
+
+function jsonRecord(value: unknown): Readonly<Record<string, unknown>> | null {
+  const candidate = jsonValue(value);
+  return candidate !== null &&
+    typeof candidate === 'object' &&
+    !Array.isArray(candidate)
+    ? (candidate as Readonly<Record<string, unknown>>)
+    : null;
+}
+
+function jsonStringArray(value: unknown): readonly string[] | null {
+  const candidate = jsonValue(value);
+  if (
+    !Array.isArray(candidate) ||
+    candidate.length === 0 ||
+    candidate.some(
+      (item) => typeof item !== 'string' || item.length === 0,
+    )
+  ) {
+    return null;
+  }
+  return candidate as readonly string[];
+}
+
+function activeSlackOrganizationTool(
+  overview: OrganizationIntegrationsOverview | undefined,
+): ActiveSlackOrganizationTool | null {
+  if (overview === undefined) return null;
+  for (const connection of overview.tool_connections) {
+    if (
+      recordString(connection, 'provider') !== 'slack' ||
+      recordString(connection, 'owner_kind') !== 'organization' ||
+      recordString(connection, 'status') !== 'active'
+    ) {
+      continue;
+    }
+    const configuration = jsonRecord(
+      connection['public_configuration_json'],
+    );
+    const scopes = jsonStringArray(connection['granted_scopes_json']);
+    const connectionId = recordString(connection, 'connection_id');
+    const workspaceId = recordString(connection, 'provider_tenant_id');
+    const botUserId = recordString(connection, 'provider_subject_id');
+    const activatedAt = recordString(connection, 'activated_at');
+    const channelId =
+      configuration === null
+        ? null
+        : recordString(configuration, 'channel_id');
+    const configuredBotUserId =
+      configuration === null
+        ? null
+        : recordString(configuration, 'slack_bot_user_id');
+    if (
+      connectionId !== null &&
+      workspaceId !== null &&
+      botUserId !== null &&
+      channelId !== null &&
+      scopes !== null &&
+      activatedAt !== null &&
+      configuration?.['schema_version'] === 1 &&
+      configuration['organization_tool_profile'] ===
+        SLACK_ORGANIZATION_TOOL_PROFILE &&
+      PUBLIC_SLACK_CHANNEL_ID.test(channelId) &&
+      configuredBotUserId === botUserId &&
+      REQUIRED_SLACK_ORGANIZATION_TOOL_SCOPES.every((scope) =>
+        scopes.includes(scope),
+      )
+    ) {
+      return {
+        connection_id: connectionId,
+        workspace_id: workspaceId,
+        bot_user_id: botUserId,
+        channel_id: channelId,
+        granted_scopes: scopes,
+        activated_at: activatedAt,
+      };
+    }
+  }
+  return null;
+}
+
+function slackOrganizationToolSection(data: AdminConsoleDashboardView): string {
+  if (data.integrations === undefined) {
+    return `<section class="panel">
+  <div class="section-heading"><h2>Organization tools</h2><span class="status">unavailable</span></div>
+  <p class="muted">Organization tool onboarding is unavailable in this Authority runtime.</p>
+</section>`;
+  }
+
+  const active = activeSlackOrganizationTool(data.integrations);
+  if (active !== null) {
+    return `<section class="panel">
+  <div class="section-heading"><h2>Organization tools</h2><span class="status">Slack active</span></div>
+  <p class="muted">The organization Slack connection passed provider verification.</p>
+  <dl class="tool-summary">
+    <div><dt>Workspace</dt><dd><code>${escapeAdminConsoleHtml(active.workspace_id)}</code></dd></div>
+    <div><dt>Bot user</dt><dd><code>${escapeAdminConsoleHtml(active.bot_user_id)}</code></dd></div>
+    <div><dt>Authorized channel</dt><dd><code>${escapeAdminConsoleHtml(active.channel_id)}</code></dd></div>
+    <div><dt>Granted scopes</dt><dd>${escapeAdminConsoleHtml(active.granted_scopes.join(', '))}</dd></div>
+    <div><dt>Activated</dt><dd>${escapeAdminConsoleHtml(active.activated_at)}</dd></div>
+    <div><dt>Connection</dt><dd><code>${escapeAdminConsoleHtml(active.connection_id)}</code></dd></div>
+  </dl>
+</section>`;
+  }
+
+  const owners = data.memberships.items.filter(
+    (membership) =>
+      membership.status === 'active' && membership.membership_type === 'owner',
+  );
+  if (owners.length === 0) {
+    return `<section class="panel">
+  <div class="section-heading"><h2>Organization tools</h2><span class="status">Slack inactive</span></div>
+  <p class="warning">An active organization owner is required before Slack can be activated.</p>
+</section>`;
+  }
+  const ownerOptions = owners
+    .map(
+      (owner) =>
+        `<option value="${escapeAdminConsoleHtml(owner.membership_id)}">${escapeAdminConsoleHtml(owner.display_name)}</option>`,
+    )
+    .join('');
+  return `<section class="panel">
+  <div class="section-heading"><h2>Organization tools</h2><span class="status">Slack inactive</span></div>
+  <p class="muted">Slack becomes active only after the Authority verifies the bot, workspace, required scopes, and selected channel.</p>
+  <form class="form-grid" data-command-form method="post" action="/admin/integrations/slack">
+    ${csrfInput(data.csrf_token)}
+    <input data-command-id name="command_id" type="hidden" value="">
+    <label>Acting organization owner
+      <select name="administrator_membership_id" required>${ownerOptions}</select>
+    </label>
+    <label>Slack bot token
+      <input name="slack_bot_token" type="password" autocomplete="off" spellcheck="false" maxlength="16384" required>
+    </label>
+    <label>Authorized public Slack channel ID
+      <input name="channel_id" autocomplete="off" spellcheck="false" pattern="C[A-Z0-9]{2,}" maxlength="128" placeholder="C0123456789" required>
+    </label>
+    <button type="submit">Verify and activate Slack</button>
+  </form>
+  <p class="hint">The raw bot token is kept in the Authority's private secret store, not in SQLite or browser storage.</p>
+  <noscript><p class="warning">JavaScript is required to generate the one-time administrator command ID for Slack activation.</p></noscript>
+</section>`;
+}
+
 export function renderAdminConsoleDashboard(
   data: AdminConsoleDashboardView,
 ): string {
@@ -228,6 +412,8 @@ export function renderAdminConsoleDashboard(
   </header>
 
   <section class="grid" aria-label="Organization overview">${metrics}</section>
+
+  ${slackOrganizationToolSection(data)}
 
   <section class="panel">
     <div class="section-heading"><h2>Add a member</h2><span class="hint">A command ID prevents duplicate creation during this submission.</span></div>

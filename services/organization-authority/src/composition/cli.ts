@@ -5,6 +5,7 @@ import {
 } from './operator-config.js';
 import {
   initializeDevelopmentAuthority,
+  installAuthorityIntegrations,
   inspectAuthorityServePreflight,
 } from './operator-state.js';
 import { startOrganizationAuthority } from './runtime.js';
@@ -12,6 +13,7 @@ import { canonicalAuthorityStatus, inspectAuthorityStatus } from './status.js';
 
 const USAGE = `usage:
   echo-organization-authority init-development --config <absolute-path> --state-dir <absolute-path> --organization-name <name> [--port <1-65535>]
+  echo-organization-authority install-integrations --config <absolute-path>
   echo-organization-authority serve --config <absolute-path>
   echo-organization-authority status --config <absolute-path>`;
 
@@ -132,6 +134,14 @@ export async function runOrganizationAuthorityCli(
   if (command === 'serve') {
     const flags = parseFlags(commandArguments, ['--config']);
     return await runServe(requiredFlag(flags, '--config'), io);
+  }
+  if (command === 'install-integrations') {
+    const flags = parseFlags(commandArguments, ['--config']);
+    const result = await installAuthorityIntegrations(
+      requiredFlag(flags, '--config'),
+    );
+    io.stdout(`${canonicalJson(result as never)}\n`);
+    return 0;
   }
   if (command === 'status') {
     const flags = parseFlags(commandArguments, ['--config']);

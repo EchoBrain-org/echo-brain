@@ -104,6 +104,30 @@ h2 {
   font-size: 1.55rem;
 }
 
+.tool-summary {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
+  gap: 0.8rem;
+  margin: 0;
+}
+
+.tool-summary div {
+  min-width: 0;
+}
+
+.tool-summary dt {
+  color: #52606d;
+  font-size: 0.78rem;
+  font-weight: 700;
+  letter-spacing: 0.025em;
+  text-transform: uppercase;
+}
+
+.tool-summary dd {
+  margin: 0.3rem 0 0;
+  overflow-wrap: anywhere;
+}
+
 .form-grid {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));

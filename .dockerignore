@@ -18,5 +18,7 @@ deploy/organization-authority/data
 **/.env.*
 *.tgz
 **/*.tgz
+organization-authority-data-*.tar.gz*
+**/organization-authority-data-*.tar.gz*
 *.log
 **/*.log

@@ -12,9 +12,9 @@
   ],
   "owned_source_paths": ["services/organization-authority/src/**"],
   "allowed_internal_paths": ["services/organization-authority/src/**"],
-  "forbidden_repository_roots": ["src/", "packages/"],
   "allowed_workspace_packages": [
     "@echo-brain/federation-protocol",
+    "@echo-brain/organization-control-plane",
     "@echo-brain/organization-protocol",
     "@echo-brain/organization-api"
   ],
@@ -31,7 +31,8 @@
   ],
   "runtime_assets": [
     "services/organization-authority/migrations/0001_single_org_authority.sql",
-    "services/organization-authority/migrations/0002_admin_command_idempotency.sql"
+    "services/organization-authority/migrations/0002_admin_command_idempotency.sql",
+    "services/organization-authority/migrations/0003_integrations_installation_anchor.sql"
   ],
   "layer_rules": [
     {
@@ -105,7 +106,7 @@
         "@echo-brain/organization-api"
       ],
       "allowed_external_packages": [],
-      "allowed_node_builtins": ["buffer", "crypto", "http", "util"]
+      "allowed_node_builtins": ["buffer", "crypto", "http", "net", "util"]
     },
     {
       "name": "authority-composition-may-wire-all-layers",
@@ -113,6 +114,7 @@
       "allowed_imports": ["services/organization-authority/src/**"],
       "allowed_workspace_packages": [
         "@echo-brain/federation-protocol",
+        "@echo-brain/organization-control-plane",
         "@echo-brain/organization-protocol",
         "@echo-brain/organization-api"
       ],

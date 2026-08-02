@@ -7,12 +7,14 @@ import type {
 import { GranolaApiError } from "../../../src/adapters/meeting-sources/granola/index.js";
 import {
   GranolaConnectionEvidenceError,
+  observeGranolaConnection,
+} from "../../../src/product/federation/identity/granola-connection-evidence.js";
+import {
   LocalCredentialGuardError,
   assertLocalCredentialGuardMatches,
   createLocalCredentialGuard,
   matchesLocalCredentialGuard,
-  observeGranolaConnection,
-} from "../../../src/product/federation/index.js";
+} from "../../../src/product/federation/identity/credential-guard.js";
 
 const OBSERVED_AT = "2026-07-19T20:12:00.000Z";
 

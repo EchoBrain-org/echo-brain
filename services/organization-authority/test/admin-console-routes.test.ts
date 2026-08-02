@@ -15,6 +15,7 @@ import {
 import { handleAdminConsoleRequest } from '../src/presentation/admin-console/routes.js';
 import { InMemoryAdminConsoleSessionStore } from '../src/presentation/admin-console/sessions.js';
 import type { OrganizationAuthorityHttpApplication } from '../src/presentation/organization-authority-http-application.js';
+import type { OrganizationIntegrationsHttpApplication } from '../src/presentation/organization-integrations-http-application.js';
 
 const ADMIN_CREDENTIAL = 'correct-test-administrator-credential';
 const CLIENT_A = `cid_${createHash('sha256').update('client-a').digest('base64url')}`;
@@ -59,6 +60,7 @@ function testApplication() {
   };
   const application = {
     descriptor: unexpected,
+    checkPermissionSubject: unexpected,
     adminOverview: vi.fn(() => ({
       organization_id: IDS.organization,
       organization_display_name: '<script>alert("organization")</script>',
@@ -169,13 +171,16 @@ async function listen(
   application: OrganizationAuthorityHttpApplication,
   sessions: InMemoryAdminConsoleSessionStore,
   authenticateCredential: (credential: string) => boolean | Promise<boolean>,
+  integrations?: OrganizationIntegrationsHttpApplication,
 ): Promise<{ server: Server; origin: string }> {
+  const signal = new AbortController().signal;
   const server = createServer(async (request, response) => {
     const host = request.headers.host ?? 'authority.invalid';
     const url = new URL(request.url ?? '/', `http://${host}`);
     const headerIdentity = request.headers['x-test-client-identity'];
     const handled = await handleAdminConsoleRequest({
       application,
+      integrations,
       sessions,
       authenticateCredential,
       clientIdentity:
@@ -183,6 +188,7 @@ async function listen(
       request,
       response,
       url,
+      signal,
     });
     if (!handled) {
       response.writeHead(418, { 'Content-Type': 'text/plain' });
@@ -259,6 +265,212 @@ function formHeaders(
 }
 
 describe('administrator console presentation', () => {
+  it('keeps Slack inactive until organization verification succeeds', async () => {
+    const application = testApplication();
+    vi.spyOn(application, 'listMemberships').mockReturnValue({
+      items: [
+        {
+          ...membership('Zhenye Owner'),
+          membership_type: 'owner',
+        },
+      ],
+      next_cursor: null,
+    });
+    let currentConnection: Readonly<Record<string, unknown>>;
+    const slackBotToken = 'xoxb-browser-secret-token-12345678';
+    const requiredScopes = [
+      'channels:history',
+      'channels:read',
+      'chat:write',
+      'reactions:read',
+      'users:read',
+    ] as const;
+    const baseConnection = {
+      connection_id: 'con_00000000-0000-4000-8000-000000000099',
+      provider: 'slack',
+      owner_kind: 'organization',
+      provider_tenant_id: 'T123ABC',
+      provider_subject_id: 'U123BOT',
+      status: 'active',
+      granted_scopes_json: JSON.stringify(requiredScopes),
+      secret_backend_id: 'authority-file-v1',
+      secret_handle_id: 'sch_must-never-render',
+      activated_at: TIMES.issued,
+      revoked_at: null,
+    } as const;
+    const readyConfiguration = {
+      schema_version: 1,
+      organization_tool_profile: 'slack-organization-tool-v1',
+      channel_id: 'C123CHANNEL',
+      slack_app_id: 'A123APP',
+      slack_bot_id: 'B123BOT',
+      slack_bot_user_id: 'U123BOT',
+      slack_enterprise_id: null,
+    } as const;
+    const configuredConnection = (
+      configuration: Readonly<Record<string, unknown>>,
+      overrides: Readonly<Record<string, unknown>> = {},
+    ) => ({
+      ...baseConnection,
+      ...overrides,
+      public_configuration_json: JSON.stringify(configuration),
+    });
+    const inactiveConnections = [
+      configuredConnection({
+        ...readyConfiguration,
+        organization_tool_profile: undefined,
+      }),
+      configuredConnection(readyConfiguration, {
+        granted_scopes_json: JSON.stringify(
+          requiredScopes.filter((scope) => scope !== 'channels:history'),
+        ),
+      }),
+      configuredConnection({ ...readyConfiguration, schema_version: 2 }),
+      configuredConnection({
+        ...readyConfiguration,
+        organization_tool_profile: 'legacy-slack-bootstrap',
+      }),
+      configuredConnection({
+        ...readyConfiguration,
+        slack_bot_user_id: 'UOTHERBOT',
+      }),
+      configuredConnection({ ...readyConfiguration, channel_id: 'GPRIVATE' }),
+    ];
+    const verifiedConnection = configuredConnection(readyConfiguration, {
+      connection_id: 'con_bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb',
+    });
+    currentConnection = inactiveConnections[0]!;
+    const onboardSlackOrganizationTool = vi.fn(async () => {
+      currentConnection = verifiedConnection;
+      return {
+        connection_attempt_id: 'cat_aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+        connection_id: verifiedConnection.connection_id,
+        organization_id: IDS.organization,
+        provider: 'slack' as const,
+        status: 'active' as const,
+        slack_team_id: 'T123ABC',
+        slack_bot_user_id: 'U123BOT',
+        channel_id: 'C123CHANNEL',
+        granted_scopes: requiredScopes,
+        activated_at: TIMES.issued,
+      };
+    });
+    const integrations = {
+      overview: vi.fn(() => ({
+        identity_links: [],
+        tool_connections: [currentConnection],
+        adapter_bindings: [],
+        permission_grants: [],
+        recent_audit: [],
+      })),
+      onboardSlackOrganizationTool,
+      bootstrapSlackApproval: vi.fn(),
+      checkPermission: vi.fn(),
+    } as unknown as OrganizationIntegrationsHttpApplication;
+    const { server, origin } = await listen(
+      application,
+      testSessions(),
+      (credential) => credential === ADMIN_CREDENTIAL,
+      integrations,
+    );
+    try {
+      const authenticated = await login(origin);
+      for (const candidate of inactiveConnections) {
+        currentConnection = candidate;
+        const inactiveDashboard = await fetch(`${origin}/admin`, {
+          headers: {
+            connection: 'close',
+            cookie: authenticated.cookies.header,
+          },
+        });
+        const inactiveHtml = await inactiveDashboard.text();
+        expect(inactiveDashboard.status).toBe(200);
+        for (const expected of [
+          'Slack inactive',
+          'action="/admin/integrations/slack"',
+          'type="password"',
+          'Authorized public Slack channel ID',
+          'pattern="C[A-Z0-9]{2,}"',
+          'JavaScript is required to generate the one-time administrator command ID',
+          'Zhenye Owner',
+        ]) {
+          expect(inactiveHtml).toContain(expected);
+        }
+        for (const secretMetadata of [
+          'sch_must-never-render',
+          'authority-file-v1',
+        ]) {
+          expect(inactiveHtml).not.toContain(secretMetadata);
+        }
+      }
+
+      const rejected = await fetch(`${origin}/admin/integrations/slack`, {
+        method: 'POST',
+        redirect: 'manual',
+        headers: formHeaders(origin, authenticated.cookies.header),
+        body: new URLSearchParams({
+          _csrf: Buffer.alloc(32, 99).toString('base64url'),
+          command_id: IDS.command,
+          administrator_membership_id: IDS.membership,
+          channel_id: 'C123CHANNEL',
+          slack_bot_token: slackBotToken,
+        }),
+      });
+      expect(rejected.status).toBe(403);
+      expect(onboardSlackOrganizationTool).not.toHaveBeenCalled();
+      expect(await rejected.text()).not.toContain(slackBotToken);
+
+      const activated = await fetch(`${origin}/admin/integrations/slack`, {
+        method: 'POST',
+        redirect: 'manual',
+        headers: formHeaders(origin, authenticated.cookies.header),
+        body: new URLSearchParams({
+          _csrf: authenticated.cookies.csrf,
+          command_id: IDS.command,
+          administrator_membership_id: IDS.membership,
+          channel_id: 'C123CHANNEL',
+          slack_bot_token: slackBotToken,
+        }),
+      });
+      expect(activated.status).toBe(303);
+      expect(activated.headers.get('location')).toBe('/admin');
+      expect(await activated.text()).not.toContain(slackBotToken);
+      expect(onboardSlackOrganizationTool).toHaveBeenCalledWith(
+        {
+          command_id: IDS.command,
+          administrator_membership_id: IDS.membership,
+          channel_id: 'C123CHANNEL',
+          slack_bot_token: slackBotToken,
+        },
+        expect.any(AbortSignal),
+      );
+
+      const activeDashboard = await fetch(`${origin}/admin`, {
+        headers: {
+          connection: 'close',
+          cookie: authenticated.cookies.header,
+        },
+      });
+      const activeHtml = await activeDashboard.text();
+      expect(activeDashboard.status).toBe(200);
+      expect(activeHtml).toContain('Slack active');
+      expect(activeHtml).toContain('T123ABC');
+      expect(activeHtml).toContain('U123BOT');
+      expect(activeHtml).toContain('C123CHANNEL');
+      expect(activeHtml).toContain('channels:history');
+      expect(activeHtml).toContain('channels:read, chat:write');
+      expect(activeHtml).toContain('users:read');
+      expect(activeHtml).not.toContain(
+        'action="/admin/integrations/slack"',
+      );
+      expect(activeHtml).not.toContain(slackBotToken);
+      expect(activeHtml).not.toContain('sch_must-never-render');
+      expect(activeHtml).not.toContain('authority-file-v1');
+    } finally {
+      await close(server);
+    }
+  });
+
   it('owns only /admin and serves a CSP-safe login plus static assets', async () => {
     const application = testApplication();
     const auth = vi.fn(() => false);
@@ -276,7 +488,7 @@ describe('administrator console presentation', () => {
       expect(loginPage.headers.get('cache-control')).toBe('no-store');
       expect(loginPage.headers.get('x-frame-options')).toBe('DENY');
       expect(loginPage.headers.get('x-content-type-options')).toBe('nosniff');
-      expect(loginPage.headers.get('referrer-policy')).toBe('no-referrer');
+      expect(loginPage.headers.get('referrer-policy')).toBe('same-origin');
       const csp = loginPage.headers.get('content-security-policy') ?? '';
       expect(csp).toContain("frame-ancestors 'none'");
       expect(csp).toContain("script-src 'self'");

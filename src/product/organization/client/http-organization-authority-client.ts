@@ -6,27 +6,49 @@ import {
   ORGANIZATION_API_AUTHORITY_DESCRIPTOR_PATH,
   ORGANIZATION_API_ENROLLMENT_AUTH_SCHEME,
   ORGANIZATION_API_ENROLLMENTS_PATH,
+  ORGANIZATION_API_PERMISSION_CHECKS_PATH,
+  ORGANIZATION_API_SLACK_LINK_CHALLENGES_PATH,
+  ORGANIZATION_API_SLACK_LINK_COMPLETIONS_PATH,
   validateCompletedOrganizationEnrollment,
   validateOrganizationAccessLeaseRequest,
   validateOrganizationAccessLeaseResponse,
   validateOrganizationApiError,
   validateOrganizationAuthorityDescriptorResponse,
+  validateOrganizationPermissionCheckDecision,
+  validateOrganizationPermissionCheckRequest,
+  validateOrganizationSlackLinkBeginRequest,
+  validateOrganizationSlackLinkBeginResponse,
+  validateOrganizationSlackLinkCompleteRequest,
+  validateOrganizationSlackLinkResult,
   type CompleteOrganizationEnrollmentRequestV1,
   type CompletedOrganizationEnrollmentV1,
   type OrganizationAccessLeaseRequestV1,
   type OrganizationAccessLeaseResponseV1,
   type OrganizationAuthorityDescriptorResponseV1,
+  type OrganizationPermissionCheckDecisionV1,
+  type OrganizationPermissionCheckRequestV1,
+  type OrganizationSlackLinkBeginRequestV1,
+  type OrganizationSlackLinkBeginResponseV1,
+  type OrganizationSlackLinkCompleteRequestV1,
+  type OrganizationSlackLinkResultV1,
 } from '@echo-brain/organization-api';
 import type { OrganizationAuthorityClient } from './authority-client.js';
 import { OrganizationAuthorityConflictError } from './authority-client.js';
+import { createOrganizationAuthorityCaFetch } from './authority-ca-fetch.js';
 
 const MAX_RESPONSE_BYTES = 64 * 1024;
 const DEFAULT_TIMEOUT_MS = 15_000;
+const SLACK_LINK_TIMEOUT_MS = 75_000;
+const JSON_HEADERS = {
+  accept: 'application/json',
+  'content-type': 'application/json',
+} as const;
 type ConflictHandling = 'transport-error' | 'stale-access-state';
 
 export interface HttpOrganizationAuthorityClientOptions {
   baseUrl: string;
   fetch?: typeof fetch;
+  authorityCaPem?: string;
   timeoutMs?: number;
   /** Development/test only. Plain HTTP is restricted to loopback hosts. */
   allowInsecureLoopback?: boolean;
@@ -127,7 +149,16 @@ export class HttpOrganizationAuthorityClient implements OrganizationAuthorityCli
       options.baseUrl,
       options.allowInsecureLoopback === true,
     );
-    this.fetchImpl = options.fetch ?? globalThis.fetch;
+    if (options.fetch !== undefined && options.authorityCaPem !== undefined) {
+      throw new Error(
+        'organization authority custom fetch and CA PEM are mutually exclusive',
+      );
+    }
+    this.fetchImpl =
+      options.fetch ??
+      (options.authorityCaPem === undefined
+        ? globalThis.fetch
+        : createOrganizationAuthorityCaFetch(options.authorityCaPem));
     if (typeof this.fetchImpl !== 'function') {
       throw new Error('organization authority HTTP transport is unavailable');
     }
@@ -226,13 +257,17 @@ export class HttpOrganizationAuthorityClient implements OrganizationAuthorityCli
     init: Omit<RequestInit, 'redirect' | 'signal'>,
     validateSuccess: (value: unknown) => T,
     conflictHandling: ConflictHandling = 'transport-error',
+    signal?: AbortSignal,
+    timeoutMs = this.timeoutMs,
   ): Promise<T> {
     let response: Response;
     try {
+      const deadline = AbortSignal.timeout(timeoutMs);
       response = await this.fetchImpl(this.endpoint(path), {
         ...init,
         redirect: 'error',
-        signal: AbortSignal.timeout(this.timeoutMs),
+        signal:
+          signal === undefined ? deadline : AbortSignal.any([signal, deadline]),
       });
     } catch (error) {
       throw new OrganizationAuthorityTransportError(
@@ -269,6 +304,29 @@ export class HttpOrganizationAuthorityClient implements OrganizationAuthorityCli
     return validateResponse(value, response.status, validateSuccess);
   }
 
+  private postJson<T>(
+    path: string,
+    value: unknown,
+    requestKind: 'access' | 'permission' | 'Slack link',
+    validateSuccess: (value: unknown) => T,
+    conflictHandling: ConflictHandling = 'transport-error',
+    signal?: AbortSignal,
+    timeoutMs?: number,
+  ): Promise<T> {
+    const body = JSON.stringify(value);
+    if (Buffer.byteLength(body) > MAX_ORGANIZATION_API_BODY_BYTES) {
+      throw new Error(`organization ${requestKind} request exceeds the API body limit`);
+    }
+    return this.request(
+      path,
+      { method: 'POST', headers: JSON_HEADERS, body },
+      validateSuccess,
+      conflictHandling,
+      signal,
+      timeoutMs,
+    );
+  }
+
   readAuthorityDescriptor(): Promise<OrganizationAuthorityDescriptorResponseV1> {
     return this.request(
       ORGANIZATION_API_AUTHORITY_DESCRIPTOR_PATH,
@@ -297,9 +355,8 @@ export class HttpOrganizationAuthorityClient implements OrganizationAuthorityCli
       {
         method: 'POST',
         headers: {
-          accept: 'application/json',
+          ...JSON_HEADERS,
           authorization: `${ORGANIZATION_API_ENROLLMENT_AUTH_SCHEME} ${canonicalGrantBase64Url(input.enrollmentGrant)}`,
-          'content-type': 'application/json',
         },
         body,
       },
@@ -310,23 +367,56 @@ export class HttpOrganizationAuthorityClient implements OrganizationAuthorityCli
   issueAccessLease(
     request: OrganizationAccessLeaseRequestV1,
   ): Promise<OrganizationAccessLeaseResponseV1> {
-    const validated = validateOrganizationAccessLeaseRequest(request);
-    const body = JSON.stringify(validated);
-    if (Buffer.byteLength(body) > MAX_ORGANIZATION_API_BODY_BYTES) {
-      throw new Error('organization access request exceeds the API body limit');
-    }
-    return this.request(
+    return this.postJson(
       ORGANIZATION_API_ACCESS_LEASES_PATH,
-      {
-        method: 'POST',
-        headers: {
-          accept: 'application/json',
-          'content-type': 'application/json',
-        },
-        body,
-      },
+      validateOrganizationAccessLeaseRequest(request),
+      'access',
       validateOrganizationAccessLeaseResponse,
       'stale-access-state',
+    );
+  }
+
+  checkPermission(
+    request: OrganizationPermissionCheckRequestV1,
+    signal?: AbortSignal,
+  ): Promise<OrganizationPermissionCheckDecisionV1> {
+    return this.postJson(
+      ORGANIZATION_API_PERMISSION_CHECKS_PATH,
+      validateOrganizationPermissionCheckRequest(request),
+      'permission',
+      validateOrganizationPermissionCheckDecision,
+      'transport-error',
+      signal,
+    );
+  }
+
+  beginSlackLink(
+    request: OrganizationSlackLinkBeginRequestV1,
+    signal?: AbortSignal,
+  ): Promise<OrganizationSlackLinkBeginResponseV1> {
+    return this.postJson(
+      ORGANIZATION_API_SLACK_LINK_CHALLENGES_PATH,
+      validateOrganizationSlackLinkBeginRequest(request),
+      'Slack link',
+      validateOrganizationSlackLinkBeginResponse,
+      'transport-error',
+      signal,
+      Math.max(this.timeoutMs, SLACK_LINK_TIMEOUT_MS),
+    );
+  }
+
+  completeSlackLink(
+    request: OrganizationSlackLinkCompleteRequestV1,
+    signal?: AbortSignal,
+  ): Promise<OrganizationSlackLinkResultV1> {
+    return this.postJson(
+      ORGANIZATION_API_SLACK_LINK_COMPLETIONS_PATH,
+      validateOrganizationSlackLinkCompleteRequest(request),
+      'Slack link',
+      validateOrganizationSlackLinkResult,
+      'transport-error',
+      signal,
+      Math.max(this.timeoutMs, SLACK_LINK_TIMEOUT_MS),
     );
   }
 }

@@ -1,3 +1,9 @@
+export { validateOrganizationAuthorityDescriptorResponse } from '@echo-brain/organization-api';
+export type { OrganizationInstallationAccessDecisionV1 } from '@echo-brain/organization-protocol';
+export {
+  organizationEnrollmentGrantSha256,
+  verifyOrganizationAuthorityPin,
+} from '@echo-brain/organization-protocol';
 export type {
   OrganizationAuthorityClient,
   OrganizationAuthorityConflict,
@@ -8,6 +14,16 @@ export {
   OrganizationAuthorityTransportError,
 } from './client/http-organization-authority-client.js';
 export type { HttpOrganizationAuthorityClientOptions } from './client/http-organization-authority-client.js';
+export {
+  OrganizationApprovalActionAuthorizer,
+  organizationApprovalResolutionRequiresAuthority,
+} from './approval-action-authorizer.js';
+export type {
+  OrganizationApprovalActionAuthorizationEvidence,
+  OrganizationApprovalActionAuthorizationResult,
+  OrganizationApprovalActionAuthorizerOptions,
+} from './approval-action-authorizer.js';
+export { createOrganizationAuthorityCaFetch } from './client/authority-ca-fetch.js';
 export { LocalOrganizationCoordinator } from './enrollment/local-organization-coordinator.js';
 export type {
   EnrollLocalInstallationInput,
@@ -15,6 +31,12 @@ export type {
   LocalOrganizationCoordinatorOptions,
   LocalOrganizationRequestIds,
 } from './enrollment/local-organization-coordinator.js';
+export { OrganizationSlackIdentityLinkCoordinator } from './slack-identity-link-coordinator.js';
+export type {
+  CompleteOrganizationSlackIdentityLinkInput,
+  OrganizationSlackIdentityLinkCoordinatorOptions,
+} from './slack-identity-link-coordinator.js';
+export { readPrivateOrganizationEnrollmentInvitation } from './enrollment/private-organization-invitation.js';
 export {
   OrganizationClockRollbackError,
   OrganizationStateConflictError,
@@ -24,6 +46,7 @@ export {
 export type {
   OrganizationAccessVerificationPolicy,
   OrganizationStateStore,
+  StoredOrganizationAuthorityConnection,
   StoredOrganizationEnrollment,
 } from './state/organization-state-store.js';
 export { SqliteOrganizationStateStore } from './state/sqlite-organization-state-store.js';
@@ -35,3 +58,5 @@ export type {
   CreateLocalOrganizationRuntimeOptions,
   LocalOrganizationRuntime,
 } from './composition.js';
+export { OrganizationRuntimeAccessController } from './runtime-access-controller.js';
+export type { OrganizationRuntimeAccessControllerOptions } from './runtime-access-controller.js';

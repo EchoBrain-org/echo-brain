@@ -18,7 +18,10 @@ import { atomicCreate } from '../../infrastructure/filesystem/atomic-create.js';
 import { parseJson } from '../../util/json.js';
 import { acquireProcessFileLock } from '../../infrastructure/filesystem/process-file-lock.js';
 import { ActiveIdentityBundleStore } from '../federation/identity/active-identity-bundle-store.js';
-import { requiresFounderFederation } from '../federation/cutover-fence.js';
+import {
+  assertFounderProvenanceRetired,
+  requiresFounderFederation,
+} from '../federation/cutover-fence.js';
 import {
   assertDecisionPublishedEvent,
   assertDecisionRequestedEvent,
@@ -132,6 +135,11 @@ export class DecisionNodeStore {
   }
 
   async initialize(): Promise<void> {
+    // Before the memoized early return and before any directory is created: a
+    // caller-supplied capture must never be able to open a retired
+    // founder-provenance state root, and founder material can also appear
+    // between operations on an already-initialized store.
+    assertFounderProvenanceRetired(this.stateDirectory);
     if (this.initialized) return;
     this.ensureDirectory(this.stateDirectory, 'decision store state root');
     this.ensureDirectory(this.directory, 'decision store');
@@ -446,6 +454,9 @@ export class DecisionNodeStore {
   }
 
   private assertFederationCaptureAvailable(): boolean {
+    // Repeated on every mutation, not only at initialize, so a long-lived store
+    // cannot keep writing after founder material appears underneath it.
+    assertFounderProvenanceRetired(this.stateDirectory);
     const identity = new ActiveIdentityBundleStore(this.stateDirectory);
     const required = requiresFounderFederation(this.stateDirectory, identity);
     if (required && this.federationCapture === undefined) {

@@ -25,6 +25,7 @@ import {
   resolve,
   sep,
 } from 'node:path';
+import { spawnSanitizedChildSync } from './spawn-sanitized-child.js';
 
 export const SHA256_PATTERN = /^[a-f0-9]{64}$/;
 export const SAFE_IDENTIFIER_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/;
@@ -41,6 +42,41 @@ export interface SecureFileDigest {
   mode: number;
   size: number;
   sha256: string;
+}
+
+export function permissiveDarwinAclEntries(output: string): string[] {
+  return output
+    .split(/\r?\n/u)
+    .filter(
+      (line) =>
+        /^\s*\d+:\s/u.test(line) &&
+        /\sallow\s/u.test(line),
+    )
+    .map((line) => line.trim());
+}
+
+/**
+ * POSIX mode bits do not include macOS extended ACL grants. Deny-only ACLs
+ * (for example Finder's common "everyone deny delete") do not expose bytes and
+ * are accepted; any explicit allow entry is rejected conservatively.
+ */
+export function assertNoPermissiveDarwinAcl(
+  path: string,
+  label: string,
+): void {
+  if (process.platform !== 'darwin') return;
+  const result = spawnSanitizedChildSync('/bin/ls', ['-lde', path], {
+    encoding: 'utf8',
+    stdio: ['ignore', 'pipe', 'pipe'],
+  });
+  if (result.status !== 0) {
+    throw new Error(`${label} access-control list could not be inspected`);
+  }
+  if (permissiveDarwinAclEntries(result.stdout).length > 0) {
+    throw new Error(
+      `${label} has a macOS ACL that grants additional access`,
+    );
+  }
 }
 
 export function pathEntryExists(path: string): boolean {
@@ -140,6 +176,7 @@ export function assertPrivateOwnedDirectory(path: string, label: string): void {
   if ((mode & 0o077) !== 0 || (mode & 0o700) !== 0o700) {
     throw new Error(`${label} must be private to its owner (mode 0700)`);
   }
+  assertNoPermissiveDarwinAcl(path, label);
 }
 
 export function assertPrivateOwnedRegularFile(
@@ -156,6 +193,7 @@ export function assertPrivateOwnedRegularFile(
   ) {
     invalid();
   }
+  assertNoPermissiveDarwinAcl(path, 'private file');
 }
 
 /** Require rename/entry creation in this directory to be controlled by us. */

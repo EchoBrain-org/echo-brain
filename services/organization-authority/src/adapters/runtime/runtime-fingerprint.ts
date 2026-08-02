@@ -13,6 +13,9 @@ import { canonicalJson } from '@echo-brain/federation-protocol';
 import { DEVELOPMENT_AUTHORITY_KEY_FILENAME } from '../security/development-file-authority-signer.js';
 
 const MAXIMUM_FINGERPRINTED_KEY_BYTES = 8 * 1024;
+const MAXIMUM_FINGERPRINTED_INSTALLATION_MARKER_BYTES = 64 * 1024;
+const INTEGRATIONS_INSTALLATION_MARKER_FILENAME =
+  'authority-integrations-installation.v1.json';
 
 export interface AuthorityRuntimeFingerprintInput {
   state_directory: string;
@@ -22,6 +25,7 @@ export interface AuthorityRuntimeFingerprintInput {
   organization_display_name: string;
   authority_pin_sha256: `sha256:${string}`;
   database_path: string;
+  integrations_database_path: string;
   admin_token: string;
   trusted_proxy_token: string;
   host: '127.0.0.1' | '::1';
@@ -57,22 +61,35 @@ function fileIdentity(
   };
 }
 
-function signingKeyIdentity(path: string): {
+function contentFileIdentity(
+  path: string,
+  label: string,
+  maximumBytes: number,
+  requirePrivateOwner = false,
+): {
   path: string;
   device: string;
   inode: string;
   content_sha256: `sha256:${string}`;
 } {
   const state = lstatSync(path, { bigint: true });
+  const currentUid = process.getuid?.();
+  const privateFileInvalid =
+    requirePrivateOwner &&
+    ((currentUid !== undefined && state.uid !== BigInt(currentUid)) ||
+      (state.mode & 0o777n) !== 0o600n);
   if (
     state.isSymbolicLink() ||
     !state.isFile() ||
     state.size <= 0n ||
-    state.size > BigInt(MAXIMUM_FINGERPRINTED_KEY_BYTES) ||
-    realpathSync(path) !== path
+    state.size > BigInt(maximumBytes) ||
+    realpathSync(path) !== path ||
+    privateFileInvalid
   ) {
     throw new Error(
-      'authority runtime signing key must be a bounded canonical regular file',
+      `${label} must be a bounded ${
+        requirePrivateOwner ? 'current-user 0600 canonical file' : 'canonical regular file'
+      }`,
     );
   }
   const noFollow = fsConstants.O_NOFOLLOW ?? 0;
@@ -84,11 +101,11 @@ function signingKeyIdentity(path: string): {
       opened.ino !== state.ino ||
       !opened.isFile() ||
       opened.size <= 0n ||
-      opened.size > BigInt(MAXIMUM_FINGERPRINTED_KEY_BYTES)
+      opened.size > BigInt(maximumBytes)
     ) {
-      throw new Error('authority runtime signing key changed while opening');
+      throw new Error(`${label} changed while opening`);
     }
-    const bytes = Buffer.alloc(MAXIMUM_FINGERPRINTED_KEY_BYTES + 1);
+    const bytes = Buffer.alloc(maximumBytes + 1);
     let length = 0;
     while (length < bytes.length) {
       const count = readSync(file, bytes, length, bytes.length - length, null);
@@ -98,14 +115,14 @@ function signingKeyIdentity(path: string): {
     const completed = fstatSync(file, { bigint: true });
     if (
       length === 0 ||
-      length > MAXIMUM_FINGERPRINTED_KEY_BYTES ||
+      length > maximumBytes ||
       completed.dev !== opened.dev ||
       completed.ino !== opened.ino ||
       completed.size !== BigInt(length) ||
       completed.mtimeNs !== opened.mtimeNs ||
       completed.ctimeNs !== opened.ctimeNs
     ) {
-      throw new Error('authority runtime signing key changed while reading');
+      throw new Error(`${label} changed while reading`);
     }
     return {
       path,
@@ -142,7 +159,25 @@ export function authorityRuntimeFingerprint(
         config.database_path,
         'authority runtime database',
       ),
-      signing_key_file: signingKeyIdentity(keyPath),
+      integrations_database_file: fileIdentity(
+        config.integrations_database_path,
+        'authority integrations runtime database',
+      ),
+      integrations_installation_marker_file:
+        contentFileIdentity(
+          join(
+            config.state_directory,
+            INTEGRATIONS_INSTALLATION_MARKER_FILENAME,
+          ),
+          'authority integrations installation marker',
+          MAXIMUM_FINGERPRINTED_INSTALLATION_MARKER_BYTES,
+          true,
+        ),
+      signing_key_file: contentFileIdentity(
+        keyPath,
+        'authority runtime signing key',
+        MAXIMUM_FINGERPRINTED_KEY_BYTES,
+      ),
       listener: { host: config.host, port: config.port },
       access: {
         active_lease_ttl_ms: config.active_lease_ttl_ms,
@@ -152,6 +187,36 @@ export function authorityRuntimeFingerprint(
         admin_token_sha256: sha256(config.admin_token),
         trusted_proxy_token_sha256: sha256(config.trusted_proxy_token),
       },
+    }),
+  );
+}
+
+export function authorityMaintenanceFingerprint(
+  config: AuthorityRuntimeFingerprintInput,
+  purpose: 'install-integrations',
+): `sha256:${string}` {
+  const keyPath = join(
+    config.key_directory,
+    DEVELOPMENT_AUTHORITY_KEY_FILENAME,
+  );
+  return sha256(
+    canonicalJson({
+      schema_version: 1,
+      kind: 'echo-organization-authority-maintenance-fingerprint-material',
+      purpose,
+      state_directory: config.state_directory,
+      authority_id: config.authority_id,
+      organization_id: config.organization_id,
+      authority_pin_sha256: config.authority_pin_sha256,
+      database_file: fileIdentity(
+        config.database_path,
+        'authority maintenance database',
+      ),
+      signing_key_file: contentFileIdentity(
+        keyPath,
+        'authority runtime signing key',
+        MAXIMUM_FINGERPRINTED_KEY_BYTES,
+      ),
     }),
   );
 }

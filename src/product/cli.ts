@@ -1,21 +1,25 @@
 #!/usr/bin/env node
 
+import { randomBytes, randomUUID } from "node:crypto";
 import { readFileSync, realpathSync } from "node:fs";
 import { isAbsolute, join } from "node:path";
 import { parseArgs } from "node:util";
 import type { Writable } from "node:stream";
 import { fileURLToPath } from "node:url";
-import type { AdapterInstanceConfig, CoreStateStore } from "../core/index.js";
+import type { AdapterInstanceConfig } from "../core/index.js";
 import {
   assertConfiguredAdapterFactoriesAvailable,
   createConfiguredAdapterRegistry,
   type ProductAdapterFactoryRegistry,
 } from "./adapter-factories.js";
 import {
+  assertProductAccess,
+  assertRetiredFounderProvenanceRefused,
   prepareProductComposition,
   prepareProductStateRoot,
   resolveProductClock,
   type PrepareProductCompositionOptions,
+  type ProductAccessGate,
   type ProductComposition,
 } from "./composition.js";
 import {
@@ -25,10 +29,7 @@ import {
   type ProductRuntimeConfig,
 } from "./config.js";
 import { createDefaultAdapterFactories } from "./default-adapters.js";
-import {
-  DecisionNodeStore,
-  type DecisionNodeFederationCapture,
-} from "./approval/decision-node-store.js";
+import { DecisionNodeStore } from "./approval/decision-node-store.js";
 import {
   ProductRuntimeFailure,
   startProductRuntime,
@@ -61,34 +62,30 @@ import {
   type IdentityCheckDependencies,
 } from "./federation/bootstrap/identity-check.js";
 import { FileInstallationSigner } from "./machine/security/file-installation-signer.js";
+import type { InstallationSigner } from "./machine/security/installation-signer.js";
+import {
+  createLocalOrganizationRuntime,
+  DEFAULT_LOCAL_ORGANIZATION_LEASE_TTL_MS,
+  HttpOrganizationAuthorityClient,
+  OrganizationApprovalActionAuthorizer,
+  organizationApprovalResolutionRequiresAuthority,
+  OrganizationRuntimeAccessController,
+  OrganizationAuthorityTransportError,
+  organizationEnrollmentGrantSha256,
+  readPrivateOrganizationEnrollmentInvitation,
+  SqliteOrganizationStateStore,
+  validateOrganizationAuthorityDescriptorResponse,
+  type HttpOrganizationAuthorityClientOptions,
+  type OrganizationInstallationAccessDecisionV1,
+  verifyOrganizationAuthorityPin,
+} from "./organization/index.js";
 import { createProductCredentialResolver } from "./credentials.js";
-import {
-  abortFounderBootstrap,
-  beginFounderBootstrap,
-  commitFounderBootstrapCeremony,
-  statusFounderBootstrap,
-  type FounderBootstrapCeremonyDependencies,
-} from "./federation/bootstrap/founder-bootstrap-ceremony.js";
-import { FederatedApprovalCapture } from "./federation/approval-capture.js";
-import {
-  openFounderFederationRuntime,
-  type FounderFederationRuntime,
-} from "./federation/runtime-wiring.js";
 import { ActiveIdentityBundleStore } from "./federation/identity/active-identity-bundle-store.js";
-import { requiresFounderFederation } from "./federation/cutover-fence.js";
-import {
-  FounderIndependentCopyStore,
-  type IndependentCopyPlatformInspector,
-} from "./federation/independent-copy-store.js";
-import { IdentityLineageStore } from "./federation/identity-lineage-store.js";
-import { FederatedOutboxStore } from "./federation/outbox-store.js";
-import {
-  assertLegacyProcessingBoundaryReady,
-  commitLegacyClassificationReport,
-  recoverLegacyClassificationCutoverAt,
-} from "./federation/legacy-classification.js";
+import { RETIRED_FOUNDER_PROVENANCE_MESSAGE } from "./federation/cutover-fence.js";
 import { resolveProductStatePaths } from "./paths.js";
 import { SqliteCoreStateStore } from "./storage/sqlite-core-state-store.js";
+import { readFileNoFollow } from "./secure-local-files.js";
+import { SLACK_REACTIONS_APPROVAL_SURFACE_ADAPTER_VERSION } from "../adapters/approval-surfaces/slack-reactions/slack-reactions-approval-surface.js";
 
 export interface ProductCliProcess {
   once: (event: "SIGINT" | "SIGTERM", listener: () => void) => unknown;
@@ -114,16 +111,17 @@ export interface ProductCliDependencies {
   operator?: Partial<ProductOperatorDependencies>;
   doctorHealthTimeoutMs?: number;
   identityCheck?: IdentityCheckDependencies;
-  /** Complete command-scoped federation seam for identity-active tests/hosts. */
-  federationRuntime?: FounderFederationRuntime;
-  founderBootstrap?: FounderBootstrapCeremonyDependencies;
-  /** Test/platform seam for the protected independent-copy volume proof. */
-  independentCopyInspector?: IndependentCopyPlatformInspector;
   acquireLifecycleLock?: (
     stateDirectory: string,
     kind: ProductLifecycleLockKind,
     options: { timeoutMs: number },
   ) => Promise<ReleaseProductLifecycleLock>;
+  organization?: {
+    installationSigner?: InstallationSigner;
+    fetch?: typeof fetch;
+    createInstallationId?: () => string;
+    allowInsecureLoopback?: boolean;
+  };
 }
 
 interface ParsedCommand {
@@ -139,8 +137,7 @@ interface ParsedCommand {
     | "status"
     | "doctor"
     | "identity-check"
-    | "identity-bootstrap"
-    | "export"
+    | "organization"
     | "service"
     | "backup"
     | "restore"
@@ -157,16 +154,20 @@ interface ParsedCommand {
   backupDirectory?: string;
   operationId?: string;
   strictIdentityCheck?: boolean;
-  identityBootstrapAction?: "begin" | "status" | "commit" | "abort";
-  organizationName?: string;
-  principalName?: string;
-  slackUserId?: string;
-  deviceClass?: "byod" | "managed";
-  bootstrapSessionId?: string;
-  confirmationSha256?: string;
-  renewChallenge?: boolean;
-  independentCopyRoot?: string;
   allowExportableSoftwareKey?: boolean;
+  organizationAction?:
+    | "enroll"
+    | "status"
+    | "refresh"
+    | "rebind"
+    | "slack-link-begin"
+    | "slack-link-complete";
+  slackLinkAttemptId?: string;
+  slackLinkMessageTs?: string;
+  invitationPath?: string;
+  authorityPin?: string;
+  authorityUrl?: string;
+  authorityCaPath?: string;
 }
 
 const PRODUCT_VERSION = (
@@ -187,11 +188,12 @@ Usage:
   echo-brain status --config <absolute-path>
   echo-brain doctor --config <absolute-path>
   echo-brain identity-check --config <absolute-path> [--strict]
-  echo-brain identity-bootstrap begin --config <absolute-path> --organization-name <name> --principal-name <name> --slack-user-id <U...> --allow-exportable-software-key [--device-class <byod|managed>]
-  echo-brain identity-bootstrap status --config <absolute-path> --session <uuid> [--renew-challenge]
-  echo-brain identity-bootstrap commit --config <absolute-path> --session <uuid> --confirm <sha256:...> --independent-copy-root <absolute-path>
-  echo-brain identity-bootstrap abort --config <absolute-path> --session <uuid> --confirm <installation-key-sha256>
-  echo-brain export --config <absolute-path>
+  echo-brain organization enroll --config <absolute-path> --invitation <absolute-path> --authority-pin <sha256:...> [--authority-ca <absolute-path>] --allow-exportable-software-key
+  echo-brain organization status --config <absolute-path>
+  echo-brain organization refresh --config <absolute-path>
+  echo-brain organization rebind --config <absolute-path> --authority-url <https-origin> --authority-pin <sha256:...> [--authority-ca <absolute-path>]
+  echo-brain organization slack-link-begin --config <absolute-path>
+  echo-brain organization slack-link-complete --config <absolute-path> --challenge-attempt <cat_...> --challenge-message-ts <Slack timestamp>  # reads ECHO_SLACK_LINK_CODE
   echo-brain service <install|start|stop|restart|status|uninstall> --config <absolute-path>
   echo-brain backup --config <absolute-path> --backup-root <absolute-path> [--id <operation-id>]
   echo-brain restore --config <absolute-path> --backup <absolute-path> --backup-root <absolute-path> --id <operation-id>
@@ -220,8 +222,7 @@ function parseCommand(argv: readonly string[]): ParsedCommand {
     command !== "status" &&
     command !== "doctor" &&
     command !== "identity-check" &&
-    command !== "identity-bootstrap" &&
-    command !== "export" &&
+    command !== "organization" &&
     command !== "service" &&
     command !== "backup" &&
     command !== "restore" &&
@@ -234,12 +235,18 @@ function parseCommand(argv: readonly string[]): ParsedCommand {
     command !== "run"
   ) {
     throw new Error(
-      "usage: echo-brain <onboard|init|reconfigure|status|doctor|identity-check|identity-bootstrap|export|service|backup|restore|validate-config|selftest|run-once|run|approvals|approve|reject> --config <absolute-path>",
+      "usage: echo-brain <onboard|init|reconfigure|status|doctor|identity-check|organization|service|backup|restore|validate-config|selftest|run-once|run|approvals|approve|reject> --config <absolute-path>",
     );
   }
   let serviceAction: ProductServiceAction | undefined;
-  let identityBootstrapAction:
-    "begin" | "status" | "commit" | "abort" | undefined;
+  let organizationAction:
+    | "enroll"
+    | "status"
+    | "refresh"
+    | "rebind"
+    | "slack-link-begin"
+    | "slack-link-complete"
+    | undefined;
   let optionOffset = 1;
   if (command === "service") {
     const action = argv[1];
@@ -258,19 +265,21 @@ function parseCommand(argv: readonly string[]): ParsedCommand {
     serviceAction = action;
     optionOffset = 2;
   }
-  if (command === "identity-bootstrap") {
+  if (command === "organization") {
     const action = argv[1];
     if (
-      action !== "begin" &&
+      action !== "enroll" &&
       action !== "status" &&
-      action !== "commit" &&
-      action !== "abort"
+      action !== "refresh" &&
+      action !== "rebind" &&
+      action !== "slack-link-begin" &&
+      action !== "slack-link-complete"
     ) {
       throw new Error(
-        "usage: echo-brain identity-bootstrap <begin|status|commit|abort> --config <absolute-path>",
+        "usage: echo-brain organization <enroll|status|refresh|rebind|slack-link-begin|slack-link-complete> --config <absolute-path>",
       );
     }
-    identityBootstrapAction = action;
+    organizationAction = action;
     optionOffset = 2;
   }
   const parsed = parseArgs({
@@ -289,12 +298,13 @@ function parseCommand(argv: readonly string[]): ParsedCommand {
       "organization-name": { type: "string" },
       "principal-name": { type: "string" },
       "slack-user-id": { type: "string" },
-      "device-class": { type: "string" },
-      session: { type: "string" },
-      confirm: { type: "string" },
-      "renew-challenge": { type: "boolean" },
-      "independent-copy-root": { type: "string" },
       "allow-exportable-software-key": { type: "boolean" },
+      invitation: { type: "string" },
+      "authority-pin": { type: "string" },
+      "authority-url": { type: "string" },
+      "authority-ca": { type: "string" },
+      "challenge-attempt": { type: "string" },
+      "challenge-message-ts": { type: "string" },
     },
   });
   if (parsed.values.config === undefined)
@@ -309,8 +319,7 @@ function parseCommand(argv: readonly string[]): ParsedCommand {
       command === "status" ||
       command === "doctor" ||
       command === "identity-check" ||
-      command === "identity-bootstrap" ||
-      command === "export" ||
+      command === "organization" ||
       command === "service" ||
       command === "service-run" ||
       command === "backup" ||
@@ -325,79 +334,124 @@ function parseCommand(argv: readonly string[]): ParsedCommand {
     if (!isAbsolute(parsed.values["state-dir"]))
       throw new Error("--state-dir must be an absolute path");
   }
-  if (command === "identity-bootstrap") {
-    const deviceClass = parsed.values["device-class"];
-    if (
-      deviceClass !== undefined &&
-      deviceClass !== "byod" &&
-      deviceClass !== "managed"
-    ) {
-      throw new Error("--device-class must be byod or managed");
-    }
-    if (identityBootstrapAction === "begin") {
-      if (
-        parsed.values["organization-name"] === undefined ||
-        parsed.values["principal-name"] === undefined ||
-        parsed.values["slack-user-id"] === undefined
-      ) {
+  if (
+    command !== "organization" &&
+    parsed.values["allow-exportable-software-key"] === true
+  ) {
+    throw new Error(
+      "--allow-exportable-software-key is only valid with organization enroll",
+    );
+  }
+  if (command === "organization") {
+    if (organizationAction === "enroll") {
+      if (parsed.values.invitation === undefined) {
+        throw new Error("organization enroll requires --invitation");
+      }
+      if (!isAbsolute(parsed.values.invitation)) {
+        throw new Error("--invitation must be an absolute path");
+      }
+      if (parsed.values["authority-pin"] === undefined) {
         throw new Error(
-          "identity-bootstrap begin requires --organization-name, --principal-name, and --slack-user-id",
+          "organization enroll requires --authority-pin from an independent trusted channel",
         );
       }
-    } else if (parsed.values.session === undefined) {
-      throw new Error(
-        `identity-bootstrap ${identityBootstrapAction} requires --session`,
-      );
+      if (parsed.values["authority-url"] !== undefined) {
+        throw new Error("--authority-url is only valid with organization rebind");
+      }
+      if (
+        parsed.values["authority-ca"] !== undefined &&
+        !isAbsolute(parsed.values["authority-ca"])
+      ) {
+        throw new Error("--authority-ca must be an absolute path");
+      }
+    } else if (organizationAction === "rebind") {
+      if (
+        parsed.values["authority-url"] === undefined ||
+        parsed.values["authority-pin"] === undefined
+      ) {
+        throw new Error(
+          "organization rebind requires --authority-url and --authority-pin",
+        );
+      }
+      if (parsed.values.invitation !== undefined) {
+        throw new Error("--invitation is only valid with organization enroll");
+      }
+      if (parsed.values["allow-exportable-software-key"] === true) {
+        throw new Error(
+          "--allow-exportable-software-key is only valid with organization enroll",
+        );
+      }
+      if (
+        parsed.values["authority-ca"] !== undefined &&
+        !isAbsolute(parsed.values["authority-ca"])
+      ) {
+        throw new Error("--authority-ca must be an absolute path");
+      }
+    } else {
+      if (parsed.values.invitation !== undefined) {
+        throw new Error(
+          "--invitation is only valid with organization enroll",
+        );
+      }
+      if (parsed.values["authority-pin"] !== undefined) {
+        throw new Error(
+          "--authority-pin is only valid with organization enroll or rebind",
+        );
+      }
+      if (parsed.values["authority-url"] !== undefined) {
+        throw new Error("--authority-url is only valid with organization rebind");
+      }
+      if (parsed.values["authority-ca"] !== undefined) {
+        throw new Error(
+          "--authority-ca is only valid with organization enroll or rebind",
+        );
+      }
+      if (parsed.values["allow-exportable-software-key"] === true) {
+        throw new Error(
+          "--allow-exportable-software-key is only valid with organization enroll",
+        );
+      }
     }
-    if (
-      (identityBootstrapAction === "commit" ||
-        identityBootstrapAction === "abort") &&
-      parsed.values.confirm === undefined
+    if (organizationAction === "slack-link-complete") {
+      if (
+        parsed.values["challenge-attempt"] === undefined ||
+        parsed.values["challenge-message-ts"] === undefined
+      ) {
+        throw new Error(
+          "organization slack-link-complete requires --challenge-attempt and --challenge-message-ts",
+        );
+      }
+    } else if (
+      parsed.values["challenge-attempt"] !== undefined ||
+      parsed.values["challenge-message-ts"] !== undefined
     ) {
       throw new Error(
-        `identity-bootstrap ${identityBootstrapAction} requires --confirm`,
-      );
-    }
-    if (
-      parsed.values["renew-challenge"] === true &&
-      identityBootstrapAction !== "status"
-    ) {
-      throw new Error(
-        "--renew-challenge is only valid with identity-bootstrap status",
-      );
-    }
-    if (
-      parsed.values["independent-copy-root"] !== undefined &&
-      identityBootstrapAction !== "commit"
-    ) {
-      throw new Error(
-        "--independent-copy-root is only valid with identity-bootstrap commit",
-      );
-    }
-    if (
-      identityBootstrapAction === "commit" &&
-      parsed.values["independent-copy-root"] !== undefined &&
-      !isAbsolute(parsed.values["independent-copy-root"])
-    ) {
-      throw new Error("--independent-copy-root must be an absolute path");
-    }
-    if (
-      parsed.values["allow-exportable-software-key"] === true &&
-      identityBootstrapAction !== "begin"
-    ) {
-      throw new Error(
-        "--allow-exportable-software-key is only valid with identity-bootstrap begin",
+        "--challenge-attempt and --challenge-message-ts are only valid with organization slack-link-complete",
       );
     }
   } else {
-    if (parsed.values["independent-copy-root"] !== undefined) {
+    if (parsed.values.invitation !== undefined) {
+      throw new Error("--invitation is only valid with organization enroll");
+    }
+    if (parsed.values["authority-pin"] !== undefined) {
       throw new Error(
-        "--independent-copy-root is only valid with identity-bootstrap commit",
+        "--authority-pin is only valid with organization enroll or rebind",
       );
     }
-    if (parsed.values["allow-exportable-software-key"] === true) {
+    if (parsed.values["authority-url"] !== undefined) {
+      throw new Error("--authority-url is only valid with organization rebind");
+    }
+    if (parsed.values["authority-ca"] !== undefined) {
       throw new Error(
-        "--allow-exportable-software-key is only valid with identity-bootstrap begin",
+        "--authority-ca is only valid with organization enroll or rebind",
+      );
+    }
+    if (
+      parsed.values["challenge-attempt"] !== undefined ||
+      parsed.values["challenge-message-ts"] !== undefined
+    ) {
+      throw new Error(
+        "--challenge-attempt and --challenge-message-ts are only valid with organization slack-link-complete",
       );
     }
   }
@@ -438,9 +492,6 @@ function parseCommand(argv: readonly string[]): ParsedCommand {
       ? {}
       : { stateDirectory: parsed.values["state-dir"] }),
     ...(serviceAction === undefined ? {} : { serviceAction }),
-    ...(identityBootstrapAction === undefined
-      ? {}
-      : { identityBootstrapAction }),
     ...(parsed.values["backup-root"] === undefined
       ? {}
       : { backupRoot: parsed.values["backup-root"] }),
@@ -452,35 +503,28 @@ function parseCommand(argv: readonly string[]): ParsedCommand {
       ? {}
       : { operationId: parsed.values.id }),
     ...(parsed.values.strict === true ? { strictIdentityCheck: true } : {}),
-    ...(parsed.values["organization-name"] === undefined
-      ? {}
-      : { organizationName: parsed.values["organization-name"] }),
-    ...(parsed.values["principal-name"] === undefined
-      ? {}
-      : { principalName: parsed.values["principal-name"] }),
-    ...(parsed.values["slack-user-id"] === undefined
-      ? {}
-      : { slackUserId: parsed.values["slack-user-id"] }),
-    ...(parsed.values["device-class"] === undefined
-      ? {}
-      : {
-          deviceClass: parsed.values["device-class"] as "byod" | "managed",
-        }),
-    ...(parsed.values.session === undefined
-      ? {}
-      : { bootstrapSessionId: parsed.values.session }),
-    ...(parsed.values.confirm === undefined
-      ? {}
-      : { confirmationSha256: parsed.values.confirm }),
-    ...(parsed.values["renew-challenge"] === true
-      ? { renewChallenge: true }
-      : {}),
-    ...(parsed.values["independent-copy-root"] === undefined
-      ? {}
-      : { independentCopyRoot: parsed.values["independent-copy-root"] }),
     ...(parsed.values["allow-exportable-software-key"] === true
       ? { allowExportableSoftwareKey: true }
       : {}),
+    ...(organizationAction === undefined ? {} : { organizationAction }),
+    ...(parsed.values["challenge-attempt"] === undefined
+      ? {}
+      : { slackLinkAttemptId: parsed.values["challenge-attempt"] }),
+    ...(parsed.values["challenge-message-ts"] === undefined
+      ? {}
+      : { slackLinkMessageTs: parsed.values["challenge-message-ts"] }),
+    ...(parsed.values.invitation === undefined
+      ? {}
+      : { invitationPath: parsed.values.invitation }),
+    ...(parsed.values["authority-pin"] === undefined
+      ? {}
+      : { authorityPin: parsed.values["authority-pin"] }),
+    ...(parsed.values["authority-url"] === undefined
+      ? {}
+      : { authorityUrl: parsed.values["authority-url"] }),
+    ...(parsed.values["authority-ca"] === undefined
+      ? {}
+      : { authorityCaPath: parsed.values["authority-ca"] }),
   };
 }
 
@@ -510,6 +554,53 @@ function configuredAdapterReferences(config: ProductRuntimeConfig) {
     ...(config.approval_mode === "adapter"
       ? { approval_surface: adapterReference(config.approval_surface) }
       : {}),
+  };
+}
+
+function shellSingleQuote(value: string): string {
+  return "'" + value.replaceAll("'", "'\\''") + "'";
+}
+
+function configuredSlackApprovalSurface(config: ProductRuntimeConfig): {
+  instance_id: string;
+  channel_id: string;
+  reviewer_user_id: string;
+} {
+  if (
+    config.approval_mode !== "adapter" ||
+    config.approval_surface.adapter_id !== "slack-reactions"
+  ) {
+    throw new Error(
+      "this installation has no organization-linkable Slack approval surface",
+    );
+  }
+  const channelId = config.approval_surface.settings["channel_id"];
+  if (typeof channelId !== "string" || !/^C[A-Z0-9]{2,}$/.test(channelId)) {
+    throw new Error(
+      "the configured Slack approval surface has no valid channel",
+    );
+  }
+  const reviewer = config.approval_surface.settings["reviewer"];
+  const reviewerUserId =
+    typeof reviewer === "object" &&
+    reviewer !== null &&
+    !Array.isArray(reviewer) &&
+    typeof (reviewer as Record<string, unknown>)["slack_user_id"] ===
+      "string"
+      ? (reviewer as Record<string, string>)["slack_user_id"]
+      : undefined;
+  if (
+    typeof reviewerUserId !== "string" ||
+    !/^[UW][A-Z0-9]{2,}$/.test(reviewerUserId)
+  ) {
+    throw new Error(
+      "the configured Slack approval surface has no valid reviewer identity",
+    );
+  }
+  return {
+    instance_id: config.approval_surface.instance_id,
+    channel_id: channelId,
+    reviewer_user_id: reviewerUserId,
   };
 }
 
@@ -584,9 +675,171 @@ function printRuntimeFailure(
   });
 }
 
-function identityRequiresFederation(stateDirectory: string): boolean {
-  const identity = new ActiveIdentityBundleStore(stateDirectory);
-  return requiresFounderFederation(stateDirectory, identity);
+/**
+ * The CLI shares the one retirement gate with composition, the runtime, and the
+ * decision store; it only maps the refusal onto the CLI's failure type.
+ */
+function refuseRetiredFounderProvenance(stateDirectory: string): void {
+  assertRetiredFounderProvenanceRefused(stateDirectory);
+}
+
+/**
+ * The single early dispatch policy for the retired founder-provenance fence.
+ *
+ * It gates product work: no product-work command, runtime start, or new
+ * processing cycle resumes on a fenced profile. `runProductCli` consults this
+ * once, as soon as the state path is known and before it constructs a
+ * `ProductOperator`, probes or classifies the filesystem, acquires a lifecycle
+ * lock, creates or chmods a directory, installs signal handlers, resolves
+ * credentials, opens or migrates SQLite, contacts a provider or the Authority,
+ * or invokes an injected callback.
+ *
+ * The listed exceptions are not "everything that does not write": several of
+ * them do write. They are the commands whose whole purpose is to diagnose,
+ * preserve, or quiesce a fenced profile, and each is safe only because of what
+ * its own implementation already does:
+ *
+ * - `--help` / `--version` never touch a state path at all;
+ * - `validate-config` and `selftest` report on configuration;
+ * - `status` reports operator/service state;
+ * - `identity-check` is the diagnostic that names the retirement;
+ * - `backup` and `restore` preserve and recover the profile, and keep their own
+ *   cutover-fence downgrade protection;
+ * - `service stop`, `status`, and `uninstall` quiesce a fenced machine.
+ *
+ * `organization status` is deliberately NOT an exception: it opens and migrates
+ * writable SQLite, so it is gated with every other organization action.
+ *
+ * `RETIRED_FOUNDER_PROVENANCE_MESSAGE` carries the recovery runbook. Its order
+ * matters: `backup` refuses while the service is loaded, so `service stop`
+ * comes first.
+ */
+function retiredProvenanceGateApplies(parsed: ParsedCommand): boolean {
+  switch (parsed.command) {
+    case "validate-config":
+    case "selftest":
+    case "status":
+    case "identity-check":
+    case "backup":
+    case "restore":
+      return false;
+    case "service":
+      return (
+        parsed.serviceAction === "install" ||
+        parsed.serviceAction === "start" ||
+        parsed.serviceAction === "restart"
+      );
+    default:
+      // onboard, init, reconfigure, doctor, organization (every action),
+      // approvals, approve, reject, run-once, run, service-run.
+      return true;
+  }
+}
+
+function organizationAuthorityTransportOptions(
+  organization: ProductCliDependencies["organization"],
+  authorityCaPem: string | null | undefined,
+): Omit<HttpOrganizationAuthorityClientOptions, "baseUrl" | "timeoutMs"> {
+  return {
+    ...(organization?.fetch === undefined
+      ? authorityCaPem === null || authorityCaPem === undefined
+        ? {}
+        : { authorityCaPem }
+      : { fetch: organization.fetch }),
+    ...(organization?.allowInsecureLoopback === undefined
+      ? {}
+      : { allowInsecureLoopback: organization.allowInsecureLoopback }),
+  };
+}
+
+function resolveOrganizationAuthorization(
+  config: ProductRuntimeConfig,
+  dependencies: ProductCliDependencies,
+): {
+  accessGate: ProductAccessGate | undefined;
+  approvalActionAuthorizer: OrganizationApprovalActionAuthorizer | undefined;
+} {
+  const databasePath = resolveProductStatePaths(config.state_dir).database;
+  const state = new SqliteOrganizationStateStore(databasePath);
+  let hasPin = false;
+  let enrolled = false;
+  let authorityBaseUrl: string | null = null;
+  let authorityCaPem: string | null = null;
+  try {
+    hasPin = state.readPinnedAuthority() !== null;
+    const enrollment = state.readEnrollment();
+    enrolled =
+      enrollment?.receipt !== null &&
+      enrollment?.receipt !== undefined &&
+      enrollment.accepted_access_sequence > 0;
+    const connection = state.readAuthorityConnection();
+    authorityBaseUrl = connection?.authority_base_url ?? null;
+    authorityCaPem = connection?.authority_ca_pem ?? null;
+  } finally {
+    state.close();
+  }
+  if (enrolled && authorityBaseUrl === null) {
+    throw new Error(
+      "organization authority connection is unavailable for approval authorization",
+    );
+  }
+  const configuredAccessGate = dependencies.composition?.accessGate;
+  if (!enrolled && (configuredAccessGate !== undefined || !hasPin)) {
+    return {
+      accessGate: configuredAccessGate,
+      approvalActionAuthorizer: undefined,
+    };
+  }
+  const signer =
+    dependencies.organization?.installationSigner ??
+    new FileInstallationSigner(
+      join(config.state_dir, "installation", "keys"),
+    );
+  const now = resolveProductClock(dependencies.now);
+  const transport = organizationAuthorityTransportOptions(
+    dependencies.organization,
+    authorityCaPem,
+  );
+  // Unenrolled profiles retain the disposable rehearsal behavior. Once an
+  // authority is pinned, authorization becomes mandatory and fail-closed.
+  const accessGate =
+    configuredAccessGate ??
+    (!hasPin
+      ? undefined
+      : authorityBaseUrl === null
+        ? {
+            async assertAuthorized() {
+              throw new Error(
+                "organization authority connection is unavailable for the pinned organization",
+              );
+            },
+          }
+        : new OrganizationRuntimeAccessController({
+            now,
+            openRuntime: () =>
+              createLocalOrganizationRuntime({
+                databasePath,
+                authorityBaseUrl,
+                installationSigner: signer,
+                clock: { now },
+                ...transport,
+              }),
+          }));
+  return {
+    accessGate,
+    approvalActionAuthorizer:
+      !enrolled || authorityBaseUrl === null
+        ? undefined
+        : new OrganizationApprovalActionAuthorizer({
+            openState: () => new SqliteOrganizationStateStore(databasePath),
+            authorityClient: new HttpOrganizationAuthorityClient({
+              baseUrl: authorityBaseUrl,
+              ...transport,
+            }),
+            installationSigner: signer,
+            now,
+          }),
+  };
 }
 
 async function createCliComposition(
@@ -594,73 +847,18 @@ async function createCliComposition(
   classifier: ClassifyStateFilesystem,
   dependencies: ProductCliDependencies,
 ): Promise<ProductComposition> {
+  // The retirement gate already ran in `runProductCli`'s early dispatch, and
+  // `prepareProductComposition` re-checks it as the public composition
+  // boundary, so this helper does not repeat it a third time.
   const factories =
     dependencies.adapterFactories ?? createDefaultAdapterFactories();
   const now = dependencies.composition?.now ?? dependencies.now;
   const customComposition = dependencies.composition;
-  const hasCustomFederationWiring =
-    customComposition?.state !== undefined ||
-    customComposition?.approvals !== undefined ||
-    customComposition?.approvalFederationCapture !== undefined ||
-    customComposition?.approvalGate !== undefined;
-  const requiresFederation = identityRequiresFederation(config.state_dir);
-  if (requiresFederation && customComposition?.approvalGate !== undefined) {
-    throw new ProductRuntimeFailure(
-      "identity_not_operationally_ready",
-      "identity-active mode rejects a caller-owned approval gate",
-      [
-        "the federation-owned approval store and capture path must observe every post-cutover resolution",
-      ],
-    );
-  }
-  if (requiresFederation && customComposition?.approvals !== undefined) {
-    throw new ProductRuntimeFailure(
-      "identity_not_operationally_ready",
-      "identity-active mode rejects a caller-owned approval store",
-      [
-        "the complete federation runtime must own the approval store used by projection readiness",
-      ],
-    );
-  }
-  if (
-    hasCustomFederationWiring &&
-    requiresFederation &&
-    dependencies.federationRuntime === undefined
-  ) {
-    throw new ProductRuntimeFailure(
-      "identity_not_operationally_ready",
-      "identity-active mode rejects partial custom composition wiring; supply one complete command-scoped federation runtime",
-      [
-        "custom state, approval store, or approval capture cannot bypass signed attribution and projection",
-      ],
-    );
-  }
-  if (
-    hasCustomFederationWiring &&
-    !requiresFederation &&
-    dependencies.federationRuntime === undefined
-  ) {
-    const approvalFederationCapture = resolveApprovalFederationCapture(
-      config,
-      dependencies,
-    );
-    const registry = await createConfiguredAdapterRegistry(config, factories, {
-      environment: dependencies.environment,
-      now,
-      approvalFederationCapture,
-    });
-    return await prepareProductComposition(config, registry, {
-      ...customComposition,
-      classifyStateFilesystem: classifier,
-      identityCheck: resolveIdentityCheckDependencies(
-        customComposition?.identityCheck ?? dependencies.identityCheck,
-        config,
-        dependencies.environment,
-      ),
-      approvalFederationCapture,
-      ...(now === undefined ? {} : { now }),
-    });
-  }
+  const { accessGate, approvalActionAuthorizer } =
+    resolveOrganizationAuthorization(config, dependencies);
+  // This check precedes adapter factories and credential resolution. The
+  // composition repeats it immediately before health checks and every cycle.
+  await assertProductAccess(accessGate);
 
   // Preserve the existing "adapters first" diagnostic without constructing
   // adapters or resolving credentials before the strict identity gate.
@@ -674,136 +872,37 @@ async function createCliComposition(
     );
   }
   prepareProductStateRoot(config.state_dir);
-  const identityBase = resolveIdentityCheckDependencies(
+  const identityCheck = resolveIdentityCheckDependencies(
     customComposition?.identityCheck ?? dependencies.identityCheck,
     config,
     dependencies.environment,
   );
-  const paths = resolveProductStatePaths(config.state_dir);
-  let federation:
-    Awaited<ReturnType<typeof openFounderFederationRuntime>> | undefined;
-  try {
-    federation =
-      dependencies.federationRuntime ??
-      (await openFounderFederationRuntime({
-        runtimeConfig: config,
-        databasePath: paths.database,
-        signer: identityBase.signer,
-        ...(dependencies.independentCopyInspector === undefined
-          ? {}
-          : {
-              independentCopyInspector: dependencies.independentCopyInspector,
-            }),
-        ...(now === undefined ? {} : { now }),
-        ...(customComposition?.createId === undefined
-          ? {}
-          : { createId: customComposition.createId }),
-      }));
-    if (federation.identityEnabled !== requiresFederation) {
-      throw new Error(
-        "supplied federation runtime identity mode does not match the state root",
-      );
-    }
-    if (
-      customComposition?.approvalFederationCapture !== undefined &&
-      customComposition.approvalFederationCapture !== federation.approvalCapture
-    ) {
-      throw new Error(
-        "custom approval capture does not belong to the supplied complete federation runtime",
-      );
-    }
-  } catch (error) {
-    let closeFailure: unknown;
-    try {
-      await federation?.close();
-    } catch (closeError) {
-      closeFailure = closeError;
-    }
-    const detail = (error as Error).message;
-    throw new ProductRuntimeFailure(
-      "identity_not_operationally_ready",
-      `identity-enabled profile cannot initialize federation resources: ${detail}`,
-      [
-        detail,
-        ...(closeFailure === undefined
-          ? []
-          : [
-              `federation resource close failed: ${(closeFailure as Error).message}`,
-            ]),
-      ],
-    );
-  }
-  if (federation === undefined) {
-    throw new ProductRuntimeFailure(
-      "identity_not_operationally_ready",
-      "identity-enabled profile did not initialize federation resources",
-      ["command-scoped federation runtime is unavailable"],
-    );
-  }
-  const identityCheck = federation.identityChecks(identityBase);
-  let baseState: (CoreStateStore & { close?: () => void }) | undefined;
-  let state: (CoreStateStore & { close?: () => void }) | undefined;
-  try {
-    // Keep adapter construction and provider contact behind the identity gate.
-    await assertFounderIdentityAllowsPipeline(config.state_dir, identityCheck);
-    const approvals =
-      requiresFederation || customComposition?.approvals === undefined
-        ? federation.createDecisionNodeStore()
-        : customComposition.approvals;
-    baseState =
-      customComposition?.state ?? new SqliteCoreStateStore(paths.database);
-    state = federation.wrapCoreState(baseState, approvals);
-    const registry = await createConfiguredAdapterRegistry(config, factories, {
-      environment: dependencies.environment,
-      now,
-      approvalFederationCapture: federation.approvalCapture,
-    });
-    const configuredClose = customComposition?.closeResources;
-    return await prepareProductComposition(config, registry, {
-      ...customComposition,
-      classifyStateFilesystem: async () => classification,
-      state,
-      approvals,
-      identityCheck,
-      approvalFederationCapture: federation.approvalCapture,
-      closeResources: async () => {
-        let failure: unknown;
-        try {
-          await configuredClose?.();
-        } catch (error) {
-          failure = error;
-        }
-        try {
-          await federation.close();
-        } catch (error) {
-          failure ??= error;
-        }
-        if (failure !== undefined) throw failure;
-      },
-      ...(now === undefined ? {} : { now }),
-    });
-  } catch (error) {
-    try {
-      if (state !== undefined) state.close?.();
-      else if (baseState !== undefined) baseState.close?.();
-    } finally {
-      await federation.close();
-    }
-    throw error;
-  }
-}
-
-function resolveApprovalFederationCapture(
-  config: ProductRuntimeConfig,
-  dependencies: ProductCliDependencies,
-): DecisionNodeFederationCapture {
-  return (
-    dependencies.composition?.approvalFederationCapture ??
-    new FederatedApprovalCapture({
-      stateDirectory: config.state_dir,
-      runtimeConfig: config,
-    })
-  );
+  // Keep adapter construction and provider contact behind the identity gate.
+  await assertFounderIdentityAllowsPipeline(config.state_dir, identityCheck);
+  const registry = await createConfiguredAdapterRegistry(config, factories, {
+    environment: dependencies.environment,
+    now,
+    // No default capture exists in this build. A pristine profile composes the
+    // decision store with no federation capture at all, which is what keeps the
+    // store's own fail-closed guard meaningful; a permissive stub would defeat
+    // it. Hosts extending capture supply their own through this seam.
+    ...(customComposition?.approvalFederationCapture === undefined
+      ? {}
+      : {
+          approvalFederationCapture:
+            customComposition.approvalFederationCapture,
+        }),
+    ...(approvalActionAuthorizer === undefined
+      ? {}
+      : { approvalActionAuthorizer }),
+  });
+  return await prepareProductComposition(config, registry, {
+    ...customComposition,
+    classifyStateFilesystem: async () => classification,
+    accessGate,
+    identityCheck,
+    ...(now === undefined ? {} : { now }),
+  });
 }
 
 function resolveIdentityCheckDependencies(
@@ -832,159 +931,8 @@ function resolveIdentityCheckDependencies(
     credentialResolver,
     runtimeConfig,
     signer: new FileInstallationSigner(
-      join(runtimeConfig.state_dir, "identity", "installation-keys"),
+      join(runtimeConfig.state_dir, "installation", "keys"),
     ),
-  };
-}
-
-function isOnlyTargetProjectionPending(
-  error: unknown,
-  approvalId: string,
-): boolean {
-  if (!(error instanceof FounderIdentityGateError)) return false;
-  const failures = error.report.checks.filter(
-    (item) => item.required_for_operation && !item.ok,
-  );
-  if (failures.length === 0) return false;
-  return failures.every(
-    (failure) =>
-      (failure.id === "signed-outbox" &&
-        failure.detail ===
-          `projection pending: approval ${approvalId} has no signed outbox group`) ||
-      failure.id === "independent-copy",
-  );
-}
-
-type ResolvedFounderBootstrapDependencies =
-  FounderBootstrapCeremonyDependencies & {
-    signer: NonNullable<FounderBootstrapCeremonyDependencies["signer"]>;
-  };
-
-function resolveFounderBootstrapDependencies(
-  dependencies: ProductCliDependencies,
-  runtimeConfig: ProductRuntimeConfig,
-): ResolvedFounderBootstrapDependencies {
-  const configured = dependencies.founderBootstrap ?? {};
-  const signer =
-    configured.signer ??
-    dependencies.identityCheck?.signer ??
-    new FileInstallationSigner(
-      join(runtimeConfig.state_dir, "identity", "installation-keys"),
-    );
-  return {
-    ...configured,
-    signer,
-    credentialResolver:
-      configured.credentialResolver ??
-      createProductCredentialResolver(dependencies.environment ?? process.env),
-    now: configured.now ?? resolveProductClock(dependencies.now),
-  };
-}
-
-async function configureFounderIndependentCopyTarget(
-  config: ProductRuntimeConfig,
-  signer: NonNullable<FounderBootstrapCeremonyDependencies["signer"]>,
-  targetRoot: string,
-  dependencies: ProductCliDependencies,
-): Promise<void> {
-  const databasePath = resolveProductStatePaths(config.state_dir).database;
-  const outbox = new FederatedOutboxStore(databasePath);
-  try {
-    const store = new FounderIndependentCopyStore({
-      stateDirectory: config.state_dir,
-      outbox,
-      identitySource: new IdentityLineageStore(config.state_dir),
-      signer,
-      ...(dependencies.independentCopyInspector === undefined
-        ? {}
-        : { inspector: dependencies.independentCopyInspector }),
-      ...(dependencies.now === undefined ? {} : { now: dependencies.now }),
-    });
-    await store.configure(targetRoot);
-  } finally {
-    await outbox.close();
-  }
-}
-
-function withProductionFounderSeedCutover(
-  configured: ResolvedFounderBootstrapDependencies,
-  dependencies: ProductCliDependencies,
-  independentCopyRoot: string,
-): ResolvedFounderBootstrapDependencies {
-  const signer = configured.signer;
-  return {
-    ...configured,
-    recoverSeedCutoverConfirmedAt: async ({ config, session }) =>
-      recoverLegacyClassificationCutoverAt({
-        state_directory: config.state_dir,
-        bootstrap_session_id: session.session_id,
-      }),
-    authorizeSeedCutover: async ({ config, session, plan }) => {
-      const capture = new FederatedApprovalCapture({
-        stateDirectory: config.state_dir,
-        runtimeConfig: config,
-      });
-      const decisionNodes = new DecisionNodeStore(config.state_dir, {
-        now: dependencies.now,
-        federationCapture: capture,
-      });
-      const coreDatabasePath = resolveProductStatePaths(
-        config.state_dir,
-      ).database;
-      await assertLegacyProcessingBoundaryReady({
-        decision_nodes: decisionNodes,
-        core_database_path: coreDatabasePath,
-      });
-      await commitLegacyClassificationReport({
-        state_directory: config.state_dir,
-        bootstrap_session_id: session.session_id,
-        decision_nodes: decisionNodes,
-        core_database_path: coreDatabasePath,
-        cutover_at: plan.manifest.legacy_cutover.declared_at,
-      });
-      await configureFounderIndependentCopyTarget(
-        config,
-        signer,
-        independentCopyRoot,
-        dependencies,
-      );
-    },
-    finalizeSeedCutover:
-      configured.finalizeSeedCutover ??
-      (async ({ config }) => {
-        const identityBase = resolveIdentityCheckDependencies(
-          {
-            ...dependencies.identityCheck,
-            signer,
-            credentialResolver: configured.credentialResolver,
-          },
-          config,
-          dependencies.environment,
-        );
-        const federation = await openFounderFederationRuntime({
-          runtimeConfig: config,
-          databasePath: resolveProductStatePaths(config.state_dir).database,
-          signer,
-          ...(dependencies.independentCopyInspector === undefined
-            ? {}
-            : {
-                independentCopyInspector: dependencies.independentCopyInspector,
-              }),
-          ...(dependencies.now === undefined ? {} : { now: dependencies.now }),
-        });
-        try {
-          await federation.ensureIndependentCopy();
-          await assertFounderIdentityAllowsPipeline(
-            config.state_dir,
-            federation.identityChecks({
-              ...identityBase,
-              allowCommittingCutoverFinalization: true,
-            }),
-          );
-        } finally {
-          await federation.close();
-        }
-      }),
   };
 }
 
@@ -1080,6 +1028,61 @@ function printOperatorError(
   });
 }
 
+function organizationAccessSummary(
+  decision: OrganizationInstallationAccessDecisionV1,
+): Record<string, unknown> {
+  const state = decision.state;
+  return {
+    permitted: decision.permitted,
+    status: state.status,
+    authority_id: state.authority_id,
+    organization_id: state.organization_id,
+    principal_id: state.principal_id,
+    membership_id: state.membership_id,
+    membership_type: state.membership_type,
+    installation_id: state.installation_id,
+    enrollment_id: state.enrollment_id,
+    access_state_sequence: state.access_state_sequence,
+    evaluated_at: state.evaluated_at,
+    valid_until: state.valid_until,
+    revocation_reason: state.revocation_reason,
+  };
+}
+
+function organizationConnectionSummary(
+  connection: ReturnType<
+    SqliteOrganizationStateStore["readAuthorityConnection"]
+  >,
+): Record<string, unknown> | null {
+  if (connection === null) return null;
+  return {
+    authority_id: connection.authority_id,
+    organization_id: connection.organization_id,
+    authority_base_url: connection.authority_base_url,
+    authority_ca_configured: connection.authority_ca_pem !== null,
+    configured_at: connection.configured_at,
+  };
+}
+
+function readOrganizationAuthorityCa(path: string | undefined):
+  | string
+  | undefined {
+  if (path === undefined) return undefined;
+  const bytes = readFileNoFollow(path, "organization authority CA");
+  if (bytes.byteLength === 0 || bytes.byteLength > 64 * 1024) {
+    throw new Error("organization authority CA must contain 1-65536 bytes");
+  }
+  const value = bytes.toString("utf8");
+  if (
+    value.includes("\0") ||
+    !value.includes("-----BEGIN CERTIFICATE-----") ||
+    !value.includes("-----END CERTIFICATE-----")
+  ) {
+    throw new Error("organization authority CA is not a PEM certificate");
+  }
+  return value;
+}
+
 export async function runProductCli(
   argv: readonly string[],
   dependencies: ProductCliDependencies = {},
@@ -1102,6 +1105,16 @@ export async function runProductCli(
     return 2;
   }
   if (parsed.command === "onboard") {
+    // `onboard` learns its state path from `--state-dir`, not from a config
+    // file, and it is the one gated command whose target may not exist yet. An
+    // absent root whose adjacent external cutover guard survived is still
+    // fenced, so this runs before `onboardProduct` can create anything.
+    try {
+      refuseRetiredFounderProvenance(parsed.stateDirectory!);
+    } catch (error) {
+      printOperatorError(stderr, parsed.command, error);
+      return 1;
+    }
     try {
       const result = onboardProduct(parsed.configPath, parsed.stateDirectory!, {
         fileSystem: dependencies.operator?.fileSystem,
@@ -1120,15 +1133,36 @@ export async function runProductCli(
     print(stderr, { ok: false, error: (error as Error).message });
     return 2;
   }
+  // The state path is now known. This is the single early gate for every other
+  // gated command; nothing below it may construct, probe, lock, create, or call
+  // out on a fenced state root.
+  if (retiredProvenanceGateApplies(parsed)) {
+    try {
+      refuseRetiredFounderProvenance(config.state_dir);
+    } catch (error) {
+      print(stderr, {
+        ok: false,
+        command: parsed.command,
+        ...(parsed.serviceAction === undefined
+          ? {}
+          : { action: parsed.serviceAction }),
+        ...(parsed.organizationAction === undefined
+          ? {}
+          : { action: parsed.organizationAction }),
+        code: "identity_not_operationally_ready",
+        error: (error as Error).message,
+      });
+      return 1;
+    }
+  }
   const classifier =
     dependencies.classifyStateFilesystem ?? classifyStateFilesystem;
-  if (parsed.command === "identity-bootstrap") {
-    const action = parsed.identityBootstrapAction!;
+  if (parsed.command === "organization") {
+    const action = parsed.organizationAction!;
     const usesDefaultFileSigner =
-      dependencies.founderBootstrap?.signer === undefined &&
-      dependencies.identityCheck?.signer === undefined;
+      dependencies.organization?.installationSigner === undefined;
     if (
-      action === "begin" &&
+      action === "enroll" &&
       usesDefaultFileSigner &&
       parsed.allowExportableSoftwareKey !== true
     ) {
@@ -1138,31 +1172,9 @@ export async function runProductCli(
         action,
         code: "software_key_acknowledgement_required",
         error:
-          "identity-bootstrap begin uses an exportable software key; repeat with --allow-exportable-software-key to acknowledge pilot-grade key assurance",
+          "organization enroll uses an exportable software key; repeat with --allow-exportable-software-key to acknowledge pilot-grade key assurance",
       });
       return 2;
-    }
-    const productionSeedCutover =
-      action === "commit" &&
-      dependencies.founderBootstrap?.authorizeSeedCutover === undefined;
-    let bootstrapDependencies =
-      resolveFounderBootstrapDependencies(dependencies, config);
-    if (productionSeedCutover) {
-      if (parsed.independentCopyRoot === undefined) {
-        print(stderr, {
-          ok: false,
-          command: parsed.command,
-          action,
-          error:
-            "identity-bootstrap commit requires --independent-copy-root for the protected seed copy",
-        });
-        return 2;
-      }
-      bootstrapDependencies = withProductionFounderSeedCutover(
-        bootstrapDependencies,
-        dependencies,
-        parsed.independentCopyRoot,
-      );
     }
     const probe = await probeConfig(config, classifier);
     if (!probe.ok) {
@@ -1174,76 +1186,384 @@ export async function runProductCli(
       });
       return 1;
     }
+    try {
+      const initialized = await createProductOperator(
+        parsed.configPath,
+        config,
+        dependencies,
+      ).status();
+      if (!initialized.initialized) {
+        throw new ProductOperatorError(
+          "not_initialized",
+          "run `echo-brain init --config <absolute-path>` before organization enrollment",
+        );
+      }
+    } catch (error) {
+      printOperatorError(stderr, `${parsed.command} ${action}`, error);
+      return 1;
+    }
+
     let releases: readonly ReleaseProductLifecycleLock[] = [];
-    let result:
-      | Awaited<ReturnType<typeof beginFounderBootstrap>>
-      | Awaited<ReturnType<typeof abortFounderBootstrap>>
-      | undefined;
+    let organizationResult: Record<string, unknown> | undefined;
     let operationFailure: unknown;
     try {
-      if (action === "commit") {
-        releases = await acquireMaintenanceWindow(
-          config.state_dir,
-          dependencies,
-          0,
+      releases =
+        action === "status"
+          ? [
+              await lifecycleLock(
+                dependencies,
+                config.state_dir,
+                "maintenance",
+                0,
+              ),
+            ]
+          : await acquireMaintenanceWindow(
+              config.state_dir,
+              dependencies,
+              0,
+            );
+      const paths = resolveProductStatePaths(config.state_dir);
+      const now = resolveProductClock(dependencies.now);
+
+      if (action === "status") {
+        const state = new SqliteOrganizationStateStore(paths.database);
+        try {
+          const connection = state.readAuthorityConnection();
+          const enrollment = state.readEnrollment();
+          if (enrollment === null) {
+            organizationResult = {
+              ok: true,
+              command: parsed.command,
+              action,
+              enrolled: false,
+              authority_connection: organizationConnectionSummary(connection),
+            };
+          } else if (
+            enrollment.receipt === null ||
+            enrollment.accepted_access_sequence === 0
+          ) {
+            organizationResult = {
+              ok: true,
+              command: parsed.command,
+              action,
+              enrolled: false,
+              enrollment_pending: true,
+              authority_connection: organizationConnectionSummary(connection),
+              installation_id: enrollment.request.installation_id,
+              membership_id: enrollment.request.membership_id,
+            };
+          } else {
+            const decision = state.verifyCurrentAccess({
+              now: now(),
+              maximum_active_ttl_ms:
+                DEFAULT_LOCAL_ORGANIZATION_LEASE_TTL_MS,
+            });
+            organizationResult = {
+              ok: true,
+              command: parsed.command,
+              action,
+              enrolled: true,
+              authority_connection: organizationConnectionSummary(connection),
+              access: organizationAccessSummary(decision),
+            };
+          }
+        } finally {
+          state.close();
+        }
+      } else if (action === "enroll") {
+        const invitation = readPrivateOrganizationEnrollmentInvitation(
+          parsed.invitationPath!,
         );
-        const operator = createProductOperator(
-          parsed.configPath,
-          config,
-          dependencies,
-        );
-        const status = await operator.status();
-        if (!status.service.supported) {
-          throw new ProductOperatorError(
-            "unsupported_platform",
-            "cannot prove the product service is stopped on this platform",
+        if (invitation.status !== "issued" || invitation.issued === null) {
+          throw new Error(
+            "organization invitation has not been issued by its authority",
           );
         }
-        if (status.service.loaded) {
-          throw new ProductOperatorError(
-            "service_command_failed",
-            "service is loaded; stop it before committing founder identity",
+        if (invitation.authority_pin_sha256 !== parsed.authorityPin) {
+          throw new Error(
+            "independently supplied authority PIN does not match the invitation",
           );
+        }
+        const signer =
+          dependencies.organization?.installationSigner ??
+          new FileInstallationSigner(
+            join(config.state_dir, "installation", "keys"),
+          );
+        const authorityCaPem = readOrganizationAuthorityCa(
+          parsed.authorityCaPath,
+        );
+        const runtime = createLocalOrganizationRuntime({
+          databasePath: paths.database,
+          authorityBaseUrl: invitation.authority_base_url,
+          installationSigner: signer,
+          clock: { now },
+          ...organizationAuthorityTransportOptions(
+            dependencies.organization,
+            authorityCaPem,
+          ),
+        });
+        try {
+          const descriptor =
+            validateOrganizationAuthorityDescriptorResponse(
+              await runtime.authorityClient.readAuthorityDescriptor(),
+            ).authority_descriptor;
+          if (
+            descriptor.authority_id !== invitation.authority_id ||
+            descriptor.organization_id !== invitation.organization_id
+          ) {
+            throw new Error(
+              "organization invitation does not identify the authority at its configured origin",
+            );
+          }
+          const retained = runtime.state.readEnrollment();
+          const activeIdentity = new ActiveIdentityBundleStore(
+            config.state_dir,
+          ).loadVerified(config);
+          if (
+            activeIdentity !== null &&
+            (activeIdentity.manifest.organization.organization_id !==
+              invitation.organization_id ||
+              activeIdentity.manifest.principal.principal_id !==
+                invitation.issued.principal_id ||
+              activeIdentity.manifest.membership.membership_id !==
+                invitation.membership_id)
+          ) {
+            throw new Error(
+              "organization invitation does not match the active product identity",
+            );
+          }
+          const installationId =
+            activeIdentity?.manifest.installation.installation_id ??
+            retained?.request.installation_id ??
+            (dependencies.organization?.createInstallationId?.() ??
+              `ins_${randomUUID()}`);
+          const grant = Buffer.from(
+            invitation.enrollment_grant_base64url,
+            "base64url",
+          );
+          try {
+            const invitationExpired =
+              Date.parse(invitation.issued.expires_at) <= Date.parse(now());
+            const retainedMatchesInvitation =
+              retained !== null &&
+              retained.request.authority_id === invitation.authority_id &&
+              retained.request.organization_id ===
+                invitation.organization_id &&
+              retained.request.principal_id ===
+                invitation.issued.principal_id &&
+              retained.request.membership_id === invitation.membership_id &&
+              retained.request.enrollment_grant_sha256 ===
+                organizationEnrollmentGrantSha256(grant);
+            if (invitationExpired && !retainedMatchesInvitation) {
+              throw new Error("organization invitation has expired");
+            }
+            let decision: OrganizationInstallationAccessDecisionV1;
+            try {
+              decision = await runtime.coordinator.enroll({
+                authorityBaseUrl: invitation.authority_base_url,
+                ...(authorityCaPem === undefined
+                  ? {}
+                  : { authorityCaPem }),
+                authorityDescriptor: descriptor,
+                independentlyTrustedAuthorityPin: parsed.authorityPin!,
+                enrollmentGrant: grant,
+                principalId: invitation.issued.principal_id,
+                membershipId: invitation.membership_id,
+                installationId,
+              });
+            } catch (error) {
+              if (
+                invitationExpired &&
+                error instanceof OrganizationAuthorityTransportError &&
+                error.code === "unauthorized" &&
+                error.status === 401 &&
+                runtime.state.abandonPendingEnrollment()
+              ) {
+                throw new Error(
+                  "the expired invitation was not consumed by the authority; the pending local request was cleared, so obtain a fresh invitation and retry",
+                );
+              }
+              throw error;
+            }
+            organizationResult = {
+              ok: true,
+              command: parsed.command,
+              action,
+              enrolled: true,
+              invitation_expires_at: invitation.issued.expires_at,
+              ...(usesDefaultFileSigner
+                ? {
+                    key_assurance_policy:
+                      "software_key_development_only",
+                  }
+                : {}),
+              access: organizationAccessSummary(decision),
+              next_step: `echo-brain organization status --config ${parsed.configPath}`,
+            };
+          } finally {
+            grant.fill(0);
+          }
+        } finally {
+          runtime.close();
+        }
+      } else if (action === "rebind") {
+        const authorityCaPem = readOrganizationAuthorityCa(
+          parsed.authorityCaPath,
+        );
+        const state = new SqliteOrganizationStateStore(paths.database);
+        try {
+          const pinned = state.readPinnedAuthority();
+          const connection = state.readAuthorityConnection();
+          if (pinned === null || connection === null) {
+            throw new Error(
+              "organization authority connection is unavailable; enroll this machine first",
+            );
+          }
+          if (pinned.authority_pin_sha256 !== parsed.authorityPin) {
+            throw new Error(
+              "independently supplied authority PIN does not match the locally pinned authority",
+            );
+          }
+          const client = new HttpOrganizationAuthorityClient({
+            baseUrl: parsed.authorityUrl!,
+            ...organizationAuthorityTransportOptions(
+              dependencies.organization,
+              authorityCaPem,
+            ),
+          });
+          const descriptor =
+            validateOrganizationAuthorityDescriptorResponse(
+              await client.readAuthorityDescriptor(),
+            ).authority_descriptor;
+          verifyOrganizationAuthorityPin(descriptor, parsed.authorityPin);
+          if (
+            descriptor.authority_id !== connection.authority_id ||
+            descriptor.organization_id !== connection.organization_id
+          ) {
+            throw new Error(
+              "new organization authority endpoint identifies a different authority",
+            );
+          }
+          const rebound = state.rebindAuthorityConnection({
+            authority_id: descriptor.authority_id,
+            organization_id: descriptor.organization_id,
+            authority_base_url: parsed.authorityUrl!,
+            ...(authorityCaPem === undefined
+              ? {}
+              : { authority_ca_pem: authorityCaPem }),
+          });
+          organizationResult = {
+            ok: true,
+            command: parsed.command,
+            action,
+            authority_connection: organizationConnectionSummary(rebound),
+          };
+        } finally {
+          state.close();
         }
       } else {
-        releases = [
-          await lifecycleLock(dependencies, config.state_dir, "maintenance", 0),
-        ];
-      }
-      result =
-        action === "begin"
-          ? await beginFounderBootstrap(
-              config,
-              {
-                organizationDisplayName: parsed.organizationName!,
-                principalDisplayName: parsed.principalName!,
-                slackUserId: parsed.slackUserId!,
-                ...(parsed.deviceClass === undefined
-                  ? {}
-                  : { deviceClass: parsed.deviceClass }),
-              },
-              bootstrapDependencies,
-            )
-          : action === "status"
-            ? await statusFounderBootstrap(
-                config,
-                parsed.bootstrapSessionId!,
-                { renewChallenge: parsed.renewChallenge === true },
-                bootstrapDependencies,
-              )
-            : action === "abort"
-              ? await abortFounderBootstrap(
-                  config,
-                  parsed.bootstrapSessionId!,
-                  parsed.confirmationSha256!,
-                  bootstrapDependencies,
-                )
-              : await commitFounderBootstrapCeremony(
-                  config,
-                  parsed.bootstrapSessionId!,
-                  parsed.confirmationSha256!,
-                  bootstrapDependencies,
+        const state = new SqliteOrganizationStateStore(paths.database);
+        const connection = state.readAuthorityConnection();
+        state.close();
+        if (connection === null) {
+          throw new Error(
+            "organization authority connection is unavailable; enroll this machine first",
+          );
+        }
+        const signer =
+          dependencies.organization?.installationSigner ??
+          new FileInstallationSigner(
+            join(config.state_dir, "installation", "keys"),
+          );
+        const runtime = createLocalOrganizationRuntime({
+          databasePath: paths.database,
+          authorityBaseUrl: connection.authority_base_url,
+          installationSigner: signer,
+          clock: { now },
+          ...organizationAuthorityTransportOptions(
+            dependencies.organization,
+            connection.authority_ca_pem,
+          ),
+        });
+        try {
+          if (action === "refresh") {
+            const decision = await runtime.coordinator.refreshAccess();
+            organizationResult = {
+              ok: true,
+              command: parsed.command,
+              action,
+              enrolled: true,
+              access: organizationAccessSummary(decision),
+            };
+          } else {
+            const approvalSurface = configuredSlackApprovalSurface(config);
+            if (action === "slack-link-begin") {
+              const challengeBytes = randomBytes(32);
+              const challengeCode = challengeBytes.toString("base64url");
+              challengeBytes.fill(0);
+              const challenge =
+                await runtime.slackIdentityLinks.begin(challengeCode);
+              if (challenge.channel_id !== approvalSurface.channel_id) {
+                throw new Error(
+                  "the organization-approved Slack channel does not match this installation's Slack approval surface",
                 );
+              }
+              organizationResult = {
+                ok: true,
+                command: parsed.command,
+                action,
+                challenge,
+                challenge_code: challengeCode,
+                next_steps: [
+                  "reply in the Slack challenge thread with challenge_code exactly",
+                  "capture challenge_attempt_id and challenge_message_ts from this output",
+                  "read -r -s ECHO_SLACK_LINK_CODE",
+                  `ECHO_SLACK_LINK_CODE="$ECHO_SLACK_LINK_CODE" echo-brain organization slack-link-complete --config ${shellSingleQuote(parsed.configPath)} --challenge-attempt ${challenge.challenge_attempt_id} --challenge-message-ts ${challenge.challenge_message_ts}`,
+                  "unset ECHO_SLACK_LINK_CODE",
+                ],
+              };
+            } else {
+              const challengeCode =
+                (dependencies.environment ?? process.env)[
+                  "ECHO_SLACK_LINK_CODE"
+                ];
+              if (
+                typeof challengeCode !== "string" ||
+                challengeCode.length === 0
+              ) {
+                throw new Error(
+                  "organization slack-link-complete requires ECHO_SLACK_LINK_CODE",
+                );
+              }
+              const result = await runtime.slackIdentityLinks.complete({
+                challenge_attempt_id: parsed.slackLinkAttemptId!,
+                challenge_message_ts: parsed.slackLinkMessageTs!,
+                challenge_code: challengeCode,
+                expected_provider_subject_id:
+                  approvalSurface.reviewer_user_id,
+                adapter_instance_id: approvalSurface.instance_id,
+                adapter_version:
+                  SLACK_REACTIONS_APPROVAL_SURFACE_ADAPTER_VERSION,
+              });
+              if (result.channel_id !== approvalSurface.channel_id) {
+                throw new Error(
+                  "the linked Slack channel does not match this installation's Slack approval surface",
+                );
+              }
+              organizationResult = {
+                ok: true,
+                command: parsed.command,
+                action,
+                linked: true,
+                result,
+                next_step: "unset ECHO_SLACK_LINK_CODE",
+              };
+            }
+          }
+        } finally {
+          runtime.close();
+        }
+      }
     } catch (error) {
       operationFailure = error;
     }
@@ -1255,26 +1575,14 @@ export async function runProductCli(
       );
     }
     if (operationFailure !== undefined) {
-      print(stderr, {
-        ok: false,
-        command: parsed.command,
-        action,
-        ...(operationFailure instanceof ProductOperatorError
-          ? { code: operationFailure.code }
-          : {}),
-        error: (operationFailure as Error).message,
-      });
+      printOperatorError(
+        stderr,
+        `${parsed.command} ${action}`,
+        operationFailure,
+      );
       return 1;
     }
-    print(stdout, {
-      ok: true,
-      command: parsed.command,
-      action,
-      ...(action === "begin" && usesDefaultFileSigner
-        ? { key_assurance_policy: "software_key_development_only" }
-        : {}),
-      ...result!,
-    });
+    print(stdout, organizationResult!);
     return 0;
   }
   if (parsed.command === "service-run") {
@@ -1290,40 +1598,19 @@ export async function runProductCli(
     }
   }
   if (parsed.command === "identity-check") {
-    let federation:
-      Awaited<ReturnType<typeof openFounderFederationRuntime>> | undefined;
     try {
-      const identityBase = resolveIdentityCheckDependencies(
-        dependencies.identityCheck,
-        config,
-        dependencies.environment,
-      );
-      const foundationReport = await checkFounderIdentity(
+      // Reporting, not enabling. A state root holding founder identity or
+      // cutover material still reports `identity_enabled` and fails its
+      // required checks, so the retired mode stays visible and refused rather
+      // than silently downgraded to an unattributed local profile.
+      const report = await checkFounderIdentity(
         config.state_dir,
-        identityBase,
+        resolveIdentityCheckDependencies(
+          dependencies.identityCheck,
+          config,
+          dependencies.environment,
+        ),
       );
-      const bundleVerified =
-        foundationReport.mode === "identity_enabled" &&
-        foundationReport.checks.find((item) => item.id === "bundle-integrity")
-          ?.ok === true;
-      let report = foundationReport;
-      if (bundleVerified) {
-        federation = await openFounderFederationRuntime({
-          runtimeConfig: config,
-          databasePath: resolveProductStatePaths(config.state_dir).database,
-          signer: identityBase.signer,
-          ...(dependencies.independentCopyInspector === undefined
-            ? {}
-            : {
-                independentCopyInspector: dependencies.independentCopyInspector,
-              }),
-          ...(dependencies.now === undefined ? {} : { now: dependencies.now }),
-        });
-        report = await checkFounderIdentity(
-          config.state_dir,
-          federation.identityChecks(identityBase),
-        );
-      }
       const strictFailure =
         parsed.strictIdentityCheck === true && !report.seed_grade_ready;
       const activeFailure =
@@ -1333,6 +1620,9 @@ export async function runProductCli(
         ok: status === 0,
         command: parsed.command,
         strict: parsed.strictIdentityCheck === true,
+        ...(report.mode === "identity_enabled"
+          ? { unsupported_mode: RETIRED_FOUNDER_PROVENANCE_MESSAGE }
+          : {}),
         ...report,
       });
       return status;
@@ -1343,94 +1633,7 @@ export async function runProductCli(
         error: (error as Error).message,
       });
       return 1;
-    } finally {
-      try {
-        await federation?.close();
-      } catch (error) {
-        print(stderr, {
-          ok: false,
-          command: parsed.command,
-          error: `federation resource close failed: ${(error as Error).message}`,
-        });
-        return 1;
-      }
     }
-  }
-  if (parsed.command === "export") {
-    let releases: readonly ReleaseProductLifecycleLock[] = [];
-    let federation:
-      Awaited<ReturnType<typeof openFounderFederationRuntime>> | undefined;
-    let result: Record<string, unknown> | undefined;
-    let failure: unknown;
-    try {
-      releases = await acquireMaintenanceWindow(
-        config.state_dir,
-        dependencies,
-        0,
-      );
-      prepareProductStateRoot(config.state_dir);
-      const identityBase = resolveIdentityCheckDependencies(
-        dependencies.identityCheck,
-        config,
-        dependencies.environment,
-      );
-      federation =
-        dependencies.federationRuntime ??
-        (await openFounderFederationRuntime({
-          runtimeConfig: config,
-          databasePath: resolveProductStatePaths(config.state_dir).database,
-          signer: identityBase.signer,
-          ...(dependencies.independentCopyInspector === undefined
-            ? {}
-            : {
-                independentCopyInspector: dependencies.independentCopyInspector,
-              }),
-          ...(dependencies.now === undefined ? {} : { now: dependencies.now }),
-        }));
-      if (
-        !federation.identityEnabled ||
-        !identityRequiresFederation(config.state_dir)
-      ) {
-        throw new Error(
-          "federated export is unavailable before the founder identity cutover",
-        );
-      }
-      const copy = await federation.ensureIndependentCopy();
-      const identity = await assertFounderIdentityAllowsPipeline(
-        config.state_dir,
-        federation.identityChecks(identityBase),
-      );
-      result = {
-        ok: true,
-        command: parsed.command,
-        independent_copy: copy,
-        identity,
-      };
-    } catch (error) {
-      failure = error;
-    }
-    try {
-      await federation?.close();
-    } catch (error) {
-      failure ??= new Error(
-        `federation resource close failed: ${(error as Error).message}`,
-      );
-    }
-    try {
-      await releaseLifecycleLocks(releases);
-    } catch (error) {
-      failure ??= error;
-    }
-    if (failure !== undefined) {
-      print(stderr, {
-        ok: false,
-        command: parsed.command,
-        error: (failure as Error).message,
-      });
-      return 1;
-    }
-    print(stdout, result!);
-    return 0;
   }
   if (parsed.command === "backup" || parsed.command === "restore") {
     const probe = await probeConfig(config, classifier);
@@ -1793,8 +1996,6 @@ export async function runProductCli(
       return 1;
     }
     let approvalResult: Record<string, unknown> | undefined;
-    let federation:
-      Awaited<ReturnType<typeof openFounderFederationRuntime>> | undefined;
     try {
       const release = await lifecycleLock(
         dependencies,
@@ -1804,79 +2005,27 @@ export async function runProductCli(
       );
       try {
         prepareProductStateRoot(config.state_dir);
-        const customFederationWiring =
-          dependencies.composition?.state !== undefined ||
-          dependencies.composition?.approvals !== undefined ||
-          dependencies.composition?.approvalFederationCapture !== undefined;
         const identityBase = resolveIdentityCheckDependencies(
           dependencies.identityCheck,
           config,
           dependencies.environment,
         );
-        const requiresFederation = identityRequiresFederation(config.state_dir);
-        if (
-          customFederationWiring &&
-          requiresFederation &&
-          dependencies.federationRuntime === undefined
-        ) {
-          throw new Error(
-            "identity-active mode rejects partial custom approval wiring; supply one complete command-scoped federation runtime",
-          );
-        }
-        if (
-          requiresFederation &&
-          dependencies.composition?.approvals !== undefined
-        ) {
-          throw new Error(
-            "identity-active mode rejects a caller-owned approval store; the complete federation runtime must own approval projection readiness",
-          );
-        }
-        if (
-          !customFederationWiring ||
-          dependencies.federationRuntime !== undefined
-        ) {
-          federation =
-            dependencies.federationRuntime ??
-            (await openFounderFederationRuntime({
-              runtimeConfig: config,
-              databasePath: resolveProductStatePaths(config.state_dir).database,
-              signer: identityBase.signer,
-              ...(dependencies.independentCopyInspector === undefined
-                ? {}
-                : {
-                    independentCopyInspector:
-                      dependencies.independentCopyInspector,
-                  }),
-              ...(dependencies.now === undefined
-                ? {}
-                : { now: dependencies.now }),
-            }));
-          if (federation.identityEnabled !== requiresFederation) {
-            throw new Error(
-              "supplied federation runtime identity mode does not match the state root",
-            );
-          }
-          if (
-            dependencies.composition?.approvalFederationCapture !== undefined &&
-            dependencies.composition.approvalFederationCapture !==
-              federation.approvalCapture
-          ) {
-            throw new Error(
-              "custom approval capture does not belong to the supplied complete federation runtime",
-            );
-          }
-        }
-        // The CLI resolves against the shared decision node store directly, so
-        // a misconfigured or unreachable approval surface (e.g. Slack) can
-        // never block a manual approval or rejection.
+        // Listing remains local. Resolution is local only for standalone
+        // profiles; an enrolled organization must attribute and authorize the
+        // human through a centrally governed approval surface.
         const approvals =
-          federation?.createDecisionNodeStore() ??
+          dependencies.composition?.approvals ??
           new DecisionNodeStore(config.state_dir, {
             now: dependencies.now,
-            federationCapture: resolveApprovalFederationCapture(
-              config,
-              dependencies,
-            ),
+            // No capture: the store's own guard refuses to mutate or even read
+            // a federated node without one, which is the fail-closed behavior
+            // a permissive stub would silently remove.
+            ...(dependencies.composition?.approvalFederationCapture === undefined
+              ? {}
+              : {
+                  federationCapture:
+                    dependencies.composition.approvalFederationCapture,
+                }),
           });
         await approvals.initialize();
         if (parsed.command === "approvals") {
@@ -1903,29 +2052,27 @@ export async function runProductCli(
             approvals: records,
           };
         } else {
-          let exactApprovedProjectionRetry = false;
-          if (parsed.command === "approve" && federation?.identityEnabled) {
-            const existing = (await approvals.listFederated()).find(
-              (record) => record.approval_id === parsed.approvalId,
-            );
-            exactApprovedProjectionRetry =
-              existing?.status === "approved" &&
-              existing.reviewed_by === parsed.reviewer &&
-              existing.reason === (parsed.reason ?? null);
-          }
+          const organizationState = new SqliteOrganizationStateStore(
+            resolveProductStatePaths(config.state_dir).database,
+          );
+          let organizationManaged = false;
           try {
-            await assertFounderIdentityAllowsPipeline(
-              config.state_dir,
-              federation?.identityChecks(identityBase) ?? identityBase,
-            );
-          } catch (error) {
-            if (
-              !exactApprovedProjectionRetry ||
-              !isOnlyTargetProjectionPending(error, parsed.approvalId!)
-            ) {
-              throw error;
-            }
+            organizationManaged =
+              organizationApprovalResolutionRequiresAuthority(
+                organizationState,
+              );
+          } finally {
+            organizationState.close();
           }
+          if (organizationManaged) {
+            throw new Error(
+              "CLI approval resolution is disabled after an organization Authority is pinned; use an organization-authorized approval surface",
+            );
+          }
+          await assertFounderIdentityAllowsPipeline(
+            config.state_dir,
+            identityBase,
+          );
           const record = await approvals.resolve({
             approvalId: parsed.approvalId!,
             status: parsed.command === "approve" ? "approved" : "rejected",
@@ -1933,15 +2080,6 @@ export async function runProductCli(
             reason: parsed.reason,
             surface: "cli",
           });
-          if (record.status === "approved" && federation?.identityEnabled) {
-            try {
-              await federation.projectApproved(record);
-            } catch (error) {
-              throw new Error(
-                `approval recorded; federated projection pending: ${(error as Error).message}`,
-              );
-            }
-          }
           approvalResult = {
             ok: true,
             command: parsed.command,
@@ -1955,18 +2093,7 @@ export async function runProductCli(
           };
         }
       } finally {
-        let closeFailure: unknown;
-        try {
-          await federation?.close();
-        } catch (error) {
-          closeFailure = error;
-        }
-        try {
-          await release();
-        } catch (error) {
-          closeFailure ??= error;
-        }
-        if (closeFailure !== undefined) throw closeFailure;
+        await release();
       }
     } catch (error) {
       print(stderr, {
@@ -2043,24 +2170,6 @@ export async function runProductCli(
       signalWaiter = createSignalWaiter(processLike);
     } catch (error) {
       printRuntimeFailure(stderr, error);
-      return 1;
-    }
-
-    if (
-      dependencies.runtime !== undefined &&
-      identityRequiresFederation(config.state_dir)
-    ) {
-      signalWaiter.cancel();
-      printRuntimeFailure(
-        stderr,
-        new ProductRuntimeFailure(
-          "identity_not_operationally_ready",
-          "identity-active mode rejects legacy custom runtime wiring",
-          [
-            "use command composition with one complete command-scoped federation runtime",
-          ],
-        ),
-      );
       return 1;
     }
 

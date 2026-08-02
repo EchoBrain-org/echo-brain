@@ -212,6 +212,7 @@ jobs:
           compose="$deployment/compose.yaml"
           data="$deployment/data"
           status_file="$RUNNER_TEMP/authority-status.json"
+          duplicate_log="$RUNNER_TEMP/authority-duplicate.log"
           proxy_body="$RUNNER_TEMP/authority-proxy-body"
           test ! -e "$data"
           install -d -m 0700 "$data"
@@ -279,3 +280,100 @@ jobs:
               "$proxy_status" >&2
             exit 1
           fi
+          caddy_ca="$RUNNER_TEMP/authority-caddy-root.crt"
+          docker compose --file "$compose" exec -T proxy \
+            cat /data/caddy/pki/authorities/local/root.crt > "$caddy_ca"
+          test "$(
+            curl \
+              --cacert "$caddy_ca" \
+              --connect-timeout 2 \
+              --max-time 2 \
+              --output /dev/null \
+              --silent \
+              --write-out '%{http_code}' \
+              https://localhost/v1/authority-descriptor
+          )" = 200
+
+          docker compose --file "$compose" exec -T authority \
+            node services/organization-authority/dist/main.js \
+            status --config /echo/authority.json > "$status_file"
+          node -e '
+            const fs = require("node:fs");
+            const value = JSON.parse(fs.readFileSync(process.argv[1], "utf8"));
+            if (
+              !value.ok ||
+              !value.initialized ||
+              !value.running ||
+              !value.healthy
+            ) {
+              throw new Error(`authority live status failed: ${JSON.stringify(value)}`);
+            }
+          ' "$status_file"
+
+          if docker compose --file "$compose" run --rm --no-deps authority \
+            serve --config /echo/authority.json > "$duplicate_log" 2>&1; then
+            cat "$duplicate_log" >&2
+            echo 'a second authority unexpectedly acquired the shared state' >&2
+            exit 1
+          fi
+          grep -q 'already running for this state directory' "$duplicate_log"
+
+          # A different Compose project name must still resolve the same
+          # deployment-stable coordination volume.
+          docker compose --project-name authority-alternate \
+            --file "$compose" build authority
+          if docker compose --project-name authority-alternate \
+            --file "$compose" run --rm --no-deps authority \
+            serve --config /echo/authority.json > "$duplicate_log" 2>&1; then
+            cat "$duplicate_log" >&2
+            echo 'an alternate Compose project acquired the same authority state' >&2
+            exit 1
+          fi
+          grep -q 'already running for this state directory' "$duplicate_log"
+
+          docker compose --file "$compose" exec -T authority \
+            node services/organization-authority/dist/main.js \
+            status --config /echo/authority.json > "$status_file"
+          node -e '
+            const fs = require("node:fs");
+            const value = JSON.parse(fs.readFileSync(process.argv[1], "utf8"));
+            if (!value.ok || !value.running || !value.healthy) {
+              throw new Error(`authority changed after duplicate rejection: ${JSON.stringify(value)}`);
+            }
+          ' "$status_file"
+
+          docker compose --file "$compose" kill authority
+          docker compose --file "$compose" up --detach --force-recreate
+          proxy_status=''
+          for _ in {1..30}; do
+            proxy_status="$(
+              curl \
+                --connect-timeout 2 \
+                --insecure \
+                --max-time 2 \
+                --output "$proxy_body" \
+                --silent \
+                --write-out '%{http_code}' \
+                https://localhost/admin ||
+                true
+            )"
+            if [[ "$proxy_status" = 303 ]]; then
+              break
+            fi
+            sleep 1
+          done
+          if [[ "$proxy_status" != 303 ]]; then
+            docker compose --file "$compose" logs >&2
+            echo 'authority did not recover after forced container death' >&2
+            exit 1
+          fi
+          docker compose --file "$compose" exec -T authority \
+            node services/organization-authority/dist/main.js \
+            status --config /echo/authority.json > "$status_file"
+          node -e '
+            const fs = require("node:fs");
+            const value = JSON.parse(fs.readFileSync(process.argv[1], "utf8"));
+            if (!value.ok || !value.running || !value.healthy) {
+              throw new Error(`authority forced-death recovery failed: ${JSON.stringify(value)}`);
+            }
+          ' "$status_file"

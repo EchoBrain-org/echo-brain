@@ -37,6 +37,154 @@ export interface OrganizationAccessLeaseRequestV1 extends OrganizationAccessLeas
   integrity: OrganizationApiSignedIntegrityV1;
 }
 
+export type OrganizationPermissionActionV1 = 'approve' | 'reject';
+
+export interface OrganizationPermissionCheckRequestPayloadV1 {
+  schema_version: 1;
+  kind: 'echo-organization-permission-check-request';
+  request_id: string;
+  authority_id: string;
+  authority_key_id: OrganizationApiSha256Digest;
+  organization_id: string;
+  enrollment_id: string;
+  installation_id: string;
+  installation_key_id: OrganizationApiSha256Digest;
+  provider: 'slack';
+  provider_issuer: 'https://slack.com';
+  provider_tenant_kind: 'workspace';
+  provider_tenant_id: string;
+  provider_enterprise_id: string | null;
+  provider_connection_subject_id: string;
+  provider_connection_bot_id: string;
+  provider_connection_app_id: string | null;
+  provider_subject_kind: 'human_user';
+  provider_subject_id: string;
+  adapter_kind: 'approval-surface';
+  adapter_id: string;
+  adapter_instance_id: string;
+  adapter_version: string;
+  action: OrganizationPermissionActionV1;
+  approval_id: string;
+  channel_id: string;
+  message_ts: string;
+  reaction_name: string;
+  provider_event_sha256: OrganizationApiSha256Digest;
+  requested_at: string;
+}
+
+/**
+ * A fresh permission query authenticated by the exact enrolled installation.
+ * It is an API command, not a reusable authorization receipt.
+ */
+export interface OrganizationPermissionCheckRequestV1 extends OrganizationPermissionCheckRequestPayloadV1 {
+  integrity: OrganizationApiSignedIntegrityV1;
+}
+
+/**
+ * The Authority's answer to one permission check. The decision itself is not
+ * signed. The request is installation-signed, and `request_sha256` plus
+ * `provider_event_sha256` bind the response to that exact request -- they do
+ * not authenticate it. Authenticity comes from the transport: the response
+ * arrives over the configured HTTPS origin associated with the pinned Authority
+ * descriptor. Callers must still compare both digests against the request they
+ * sent; anything else is a mismatch and fails closed. It is a decision for that
+ * one request, never a reusable or transferable authorization receipt.
+ */
+export interface OrganizationPermissionCheckDecisionV1 {
+  schema_version: 1;
+  kind: 'echo-organization-permission-check-decision';
+  request_sha256: OrganizationApiSha256Digest;
+  provider_event_sha256: OrganizationApiSha256Digest;
+  allowed: boolean;
+  reason_code: string;
+  principal_id: string | null;
+  membership_id: string | null;
+  adapter_binding_id: string | null;
+  permission_grant_id: string | null;
+  evaluated_at: string;
+}
+
+export interface OrganizationSlackLinkBeginRequestPayloadV1 {
+  schema_version: 1;
+  kind: 'echo-organization-slack-link-begin-request';
+  request_id: string;
+  authority_id: string;
+  authority_key_id: OrganizationApiSha256Digest;
+  organization_id: string;
+  enrollment_id: string;
+  installation_id: string;
+  installation_key_id: OrganizationApiSha256Digest;
+  challenge_code_sha256: OrganizationApiSha256Digest;
+  requested_at: string;
+}
+
+/**
+ * A fresh command from one enrolled installation to begin proving control of
+ * its employee's Slack identity. It does not grant any adapter permission.
+ */
+export interface OrganizationSlackLinkBeginRequestV1 extends OrganizationSlackLinkBeginRequestPayloadV1 {
+  integrity: OrganizationApiSignedIntegrityV1;
+}
+
+export interface OrganizationSlackLinkCompleteRequestPayloadV1 {
+  schema_version: 1;
+  kind: 'echo-organization-slack-link-complete-request';
+  request_id: string;
+  authority_id: string;
+  authority_key_id: OrganizationApiSha256Digest;
+  organization_id: string;
+  enrollment_id: string;
+  installation_id: string;
+  installation_key_id: OrganizationApiSha256Digest;
+  challenge_attempt_id: string;
+  challenge_message_ts: string;
+  challenge_code: string;
+  expected_provider_subject_id: string;
+  adapter_id: 'slack-reactions';
+  adapter_instance_id: string;
+  adapter_version: string;
+  requested_at: string;
+}
+
+/**
+ * A fresh command that submits the exact Slack challenge observation for the
+ * enrolled installation. The Authority derives the Slack human from Slack.
+ */
+export interface OrganizationSlackLinkCompleteRequestV1 extends OrganizationSlackLinkCompleteRequestPayloadV1 {
+  integrity: OrganizationApiSignedIntegrityV1;
+}
+
+export interface OrganizationSlackLinkBeginResponseV1 {
+  schema_version: 1;
+  kind: 'echo-organization-slack-link-begin-response';
+  challenge_attempt_id: string;
+  provider: 'slack';
+  provider_tenant_id: string;
+  channel_id: string;
+  challenge_message_ts: string;
+  expires_at: string;
+}
+
+export interface OrganizationSlackLinkResultV1 {
+  schema_version: 1;
+  kind: 'echo-organization-slack-link-result';
+  identity_link_id: string;
+  connection_id: string;
+  adapter_binding_id: string;
+  organization_id: string;
+  principal_id: string;
+  membership_id: string;
+  installation_id: string;
+  provider: 'slack';
+  provider_tenant_id: string;
+  provider_subject_id: string;
+  channel_id: string;
+  linked_at: string;
+  identity_link_created: boolean;
+  adapter_binding_created: boolean;
+  permission_grants_created: 0;
+}
+
 export interface OrganizationAuthorityDescriptorResponseV1 {
   authority_descriptor: OrganizationAuthorityDescriptorV1;
 }

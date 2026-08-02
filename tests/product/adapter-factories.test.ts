@@ -9,6 +9,7 @@ import {
   ProductAdapterFactoryRegistry,
 } from '../../src/product/adapter-factories.js';
 import { validateProductRuntimeConfig } from '../../src/product/config.js';
+import type { ApprovalActionAuthorizer } from '../../src/adapters/approval-surfaces/slack-reactions/slack-reactions-approval-surface.js';
 
 function config(adapterId = 'meeting-fixture') {
   return validateProductRuntimeConfig({
@@ -39,20 +40,30 @@ const healthy = async (): Promise<AdapterHealth> => ({
 describe('product adapter factories', () => {
   it('creates configured instances through one shared factory shape', async () => {
     const factories = new ProductAdapterFactoryRegistry();
+    const approvalActionAuthorizer: ApprovalActionAuthorizer = {
+      authorize: async () => ({ allowed: true, evidence: { test: true } }),
+    };
+    let observedApprovalActionAuthorizer:
+      | ApprovalActionAuthorizer
+      | undefined;
     factories.register({
       kind: 'meeting-source',
       adapter_id: 'meeting-fixture',
-      create: (adapterConfig): MeetingSourceAdapter => ({
-        identity: {
-          kind: 'meeting-source',
-          adapter_id: adapterConfig.adapter_id,
-          instance_id: adapterConfig.instance_id,
-          version: '1',
-        },
-        validateConfig: valid,
-        healthCheck: healthy,
-        pull: async () => ({ meetings: [] }),
-      }),
+      create: (adapterConfig, context): MeetingSourceAdapter => {
+        observedApprovalActionAuthorizer =
+          context.approvalActionAuthorizer;
+        return {
+          identity: {
+            kind: 'meeting-source',
+            adapter_id: adapterConfig.adapter_id,
+            instance_id: adapterConfig.instance_id,
+            version: '1',
+          },
+          validateConfig: valid,
+          healthCheck: healthy,
+          pull: async () => ({ meetings: [] }),
+        };
+      },
     });
     factories.register({
       kind: 'decision-processor',
@@ -109,8 +120,13 @@ describe('product adapter factories', () => {
       }),
     });
 
-    const registry = await createConfiguredAdapterRegistry(config(), factories);
+    const registry = await createConfiguredAdapterRegistry(
+      config(),
+      factories,
+      { approvalActionAuthorizer },
+    );
     expect(registry.list()).toHaveLength(3);
+    expect(observedApprovalActionAuthorizer).toBe(approvalActionAuthorizer);
   });
 
   it('fails before creating a partial runtime when a factory is absent', async () => {
@@ -164,11 +180,15 @@ describe('product adapter factories', () => {
     expect(deliveryFactory).toBeDefined();
     expect(approvalFactory).toBeDefined();
 
+    const approvalActionAuthorizer: ApprovalActionAuthorizer = {
+      authorize: async () => ({ allowed: true, evidence: { test: true } }),
+    };
     const context = {
       stateDirectory: '/tmp/adapter-factory-test/state',
       environment: { SLACK_BOT_TOKEN: 'xoxb-test' },
       credentialResolver: () => 'xoxb-test',
       now: () => '2026-07-18T00:00:00.000Z',
+      approvalActionAuthorizer,
     };
     const delivery = await deliveryFactory!.create(
       {
@@ -203,5 +223,12 @@ describe('product adapter factories', () => {
       adapter_id: 'slack-reactions',
       instance_id: 'founder-approval',
     });
+    expect(
+      (
+        approval as unknown as {
+          approvalActionAuthorizer?: ApprovalActionAuthorizer;
+        }
+      ).approvalActionAuthorizer,
+    ).toBe(approvalActionAuthorizer);
   });
 });

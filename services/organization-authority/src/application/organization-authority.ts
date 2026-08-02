@@ -8,10 +8,14 @@ import {
   verifyP256SigningKeyDescriptor,
   verifySignedDocument,
 } from '@echo-brain/federation-protocol';
-import type { Sha256Digest } from '@echo-brain/federation-protocol';
+import type {
+  Sha256Digest,
+  SignedIntegrity,
+} from '@echo-brain/federation-protocol';
 import {
   validateIssueOrganizationEnrollmentGrantRequest,
   validateOrganizationAccessLeaseRequest,
+  validateOrganizationPermissionCheckRequest,
   validateProvisionOrganizationMembershipRequest,
 } from '@echo-brain/organization-api';
 import type {
@@ -22,6 +26,7 @@ import type {
   OrganizationEnrollmentGrantPageV1,
   OrganizationInstallationPageV1,
   OrganizationMembershipPageV1,
+  OrganizationPermissionCheckRequestV1,
   ProvisionedOrganizationMembershipV1,
   ProvisionOrganizationMembershipRequestV1,
 } from '@echo-brain/organization-api';
@@ -53,6 +58,7 @@ import {
   assertConfiguredRequestAge,
   assertDisplayName,
   assertFreshAccessRequest,
+  assertFreshInstallationRequest,
   assertGrantLifetimeSeconds,
   assertMembershipType,
   assertRevocationReason,
@@ -101,6 +107,76 @@ export interface RevokedMembershipResult {
     installation_id: string;
     access_state: OrganizationInstallationAccessStateV1;
   }>;
+}
+
+export interface OrganizationPermissionAuthorityTarget {
+  principal_id: string;
+  membership_id: string;
+}
+
+export interface OrganizationPermissionAuthorityStatus {
+  request_sha256: Sha256Digest;
+  provider_event_sha256: Sha256Digest;
+  authority_id: string;
+  organization_id: string;
+  enrollment_id: string;
+  installation_id: string;
+  installation_key_id: Sha256Digest;
+  installation_principal_id: string;
+  installation_membership_id: string;
+  installation_active: boolean;
+  target_principal_id: string | null;
+  target_membership_id: string | null;
+  target_active: boolean | null;
+  evaluated_at: string;
+}
+
+export interface OrganizationIntegrationAdminContext {
+  administrator: {
+    principal_id: string;
+    membership_id: string;
+  };
+  target: {
+    principal_id: string;
+    membership_id: string;
+  };
+  installation: {
+    principal_id: string;
+    membership_id: string;
+    installation_id: string;
+    installation_key_id: Sha256Digest;
+  };
+  checked_at: string;
+}
+
+export interface OrganizationIntegrationOwnerContext {
+  administrator: {
+    principal_id: string;
+    membership_id: string;
+  };
+  checked_at: string;
+}
+
+export interface InstallationSignedCommand {
+  authority_id: string;
+  authority_key_id: Sha256Digest;
+  organization_id: string;
+  enrollment_id: string;
+  installation_id: string;
+  installation_key_id: Sha256Digest;
+  integrity: SignedIntegrity;
+}
+
+export interface OrganizationIntegrationInstallationContext {
+  request_sha256: Sha256Digest;
+  authority_id: string;
+  organization_id: string;
+  enrollment_id: string;
+  principal_id: string;
+  membership_id: string;
+  installation_id: string;
+  installation_key_id: Sha256Digest;
+  checked_at: string;
 }
 
 export interface CreateOrganizationAuthorityApplicationOptions {
@@ -228,6 +304,218 @@ export class OrganizationAuthorityApplication {
 
   listAudit(request?: AdminPageRequest): OrganizationAuditPageV1 {
     return this.adminQueries.audit(request);
+  }
+
+  integrationOwnerContext(
+    administratorMembershipId: string,
+  ): OrganizationIntegrationOwnerContext {
+    this.assertIntegrationIdentifiers([
+      [
+        administratorMembershipId,
+        'mem',
+        'integration administrator membership',
+      ],
+    ]);
+    const checkedAt = this.now('organization integration administrator check');
+    return this.repository.read((transaction) => {
+      const administrator = this.activeIntegrationOwner(
+        transaction,
+        administratorMembershipId,
+      );
+      return {
+        administrator: {
+          principal_id: administrator.principal_id,
+          membership_id: administrator.membership_id,
+        },
+        checked_at: checkedAt,
+      };
+    });
+  }
+
+  integrationAdminContext(
+    administratorMembershipId: string,
+    targetMembershipId: string,
+    installationId: string,
+  ): OrganizationIntegrationAdminContext {
+    this.assertIntegrationIdentifiers([
+      [
+        administratorMembershipId,
+        'mem',
+        'integration administrator membership',
+      ],
+      [targetMembershipId, 'mem', 'integration target membership'],
+      [installationId, 'ins', 'integration target installation'],
+    ]);
+    const checkedAt = this.now('organization integration administrator check');
+    return this.repository.read((transaction) => {
+      const administrator = this.activeIntegrationOwner(
+        transaction,
+        administratorMembershipId,
+      );
+      const target = transaction.membership(targetMembershipId);
+      if (
+        target === undefined ||
+        target.organization_id !== this.descriptorValue.organization_id ||
+        target.status !== 'active'
+      ) {
+        throw new AuthorityOperationError(
+          'not_found',
+          'integration target membership is not active',
+        );
+      }
+      const enrollment = transaction.enrollmentByInstallation(installationId);
+      if (
+        enrollment === undefined ||
+        enrollment.organization_id !== this.descriptorValue.organization_id ||
+        enrollment.status !== 'active'
+      ) {
+        throw new AuthorityOperationError(
+          'not_found',
+          'integration target installation is not active',
+        );
+      }
+      const installationMembership = transaction.membership(
+        enrollment.membership_id,
+      );
+      const access = requireCurrentAccessState(
+        transaction,
+        enrollment.enrollment_id,
+      );
+      if (
+        installationMembership === undefined ||
+        installationMembership.status !== 'active' ||
+        installationMembership.principal_id !== enrollment.principal_id ||
+        access.state.status !== 'active'
+      ) {
+        throw new AuthorityOperationError(
+          'not_found',
+          'integration target installation is not active',
+        );
+      }
+      return {
+        administrator: {
+          principal_id: administrator.principal_id,
+          membership_id: administrator.membership_id,
+        },
+        target: {
+          principal_id: target.principal_id,
+          membership_id: target.membership_id,
+        },
+        installation: {
+          principal_id: enrollment.principal_id,
+          membership_id: enrollment.membership_id,
+          installation_id: enrollment.installation_id,
+          installation_key_id: enrollment.installation_signing_key.key_id,
+        },
+        checked_at: checkedAt,
+      };
+    });
+  }
+
+  integrationInstallationContext(
+    command: InstallationSignedCommand & { requested_at: string },
+    label: string,
+  ): OrganizationIntegrationInstallationContext {
+    const enrollment = this.repository.read((transaction) =>
+      transaction.enrollmentById(command.enrollment_id),
+    );
+    if (enrollment === undefined) {
+      throw new AuthorityOperationError(
+        'unauthorized',
+        `${label} authentication failed`,
+      );
+    }
+    const requestSha256 = this.authenticateInstallationCommand(
+      command,
+      enrollment,
+      label,
+    );
+    const checkedAt = this.now(`${label} evaluation time`);
+    assertFreshInstallationRequest(
+      command.requested_at,
+      checkedAt,
+      this.accessRequestMaximumAgeMs,
+      label,
+    );
+    return this.repository.read((transaction) => {
+      const currentEnrollment = transaction.enrollmentById(
+        command.enrollment_id,
+      );
+      if (currentEnrollment === undefined) {
+        throw new Error(`authenticated ${label} enrollment disappeared`);
+      }
+      const membership = transaction.membership(
+        currentEnrollment.membership_id,
+      );
+      const access = requireCurrentAccessState(
+        transaction,
+        currentEnrollment.enrollment_id,
+      );
+      if (
+        currentEnrollment.status !== 'active' ||
+        currentEnrollment.authority_id !== this.descriptorValue.authority_id ||
+        currentEnrollment.organization_id !==
+          this.descriptorValue.organization_id ||
+        membership === undefined ||
+        membership.organization_id !== currentEnrollment.organization_id ||
+        membership.principal_id !== currentEnrollment.principal_id ||
+        membership.status !== 'active' ||
+        access.state.status !== 'active'
+      ) {
+        throw new AuthorityOperationError(
+          'unauthorized',
+          `${label} requires an active enrolled installation`,
+        );
+      }
+      return {
+        request_sha256: requestSha256,
+        authority_id: currentEnrollment.authority_id,
+        organization_id: currentEnrollment.organization_id,
+        enrollment_id: currentEnrollment.enrollment_id,
+        principal_id: currentEnrollment.principal_id,
+        membership_id: currentEnrollment.membership_id,
+        installation_id: currentEnrollment.installation_id,
+        installation_key_id:
+          currentEnrollment.installation_signing_key.key_id,
+        checked_at: checkedAt,
+      };
+    });
+  }
+
+  private assertIntegrationIdentifiers(
+    identifiers: ReadonlyArray<
+      readonly [value: string, prefix: 'mem' | 'ins', label: string]
+    >,
+  ): void {
+    try {
+      for (const [value, prefix, label] of identifiers) {
+        assertFederationId(value, prefix, label);
+      }
+    } catch {
+      throw new AuthorityOperationError(
+        'invalid_request',
+        'organization integration administrator input is invalid',
+      );
+    }
+  }
+
+  private activeIntegrationOwner(
+    transaction: AuthorityReadTransaction,
+    membershipId: string,
+  ): StoredAuthorityMembership {
+    const membership = transaction.membership(membershipId);
+    if (
+      membership === undefined ||
+      membership.organization_id !== this.descriptorValue.organization_id ||
+      membership.status !== 'active' ||
+      membership.membership_type !== 'owner'
+    ) {
+      throw new AuthorityOperationError(
+        'unauthorized',
+        'an active organization owner is required',
+      );
+    }
+    return membership;
   }
 
   close(): void {
@@ -685,9 +973,10 @@ export class OrganizationAuthorityApplication {
     });
   }
 
-  private authenticateAccessCommand(
-    command: OrganizationAccessLeaseRequestV1,
+  private authenticateInstallationCommand(
+    command: InstallationSignedCommand,
     enrollment: StoredAuthorityEnrollment,
+    label: string,
   ): Sha256Digest {
     if (
       command.authority_id !== enrollment.authority_id ||
@@ -699,7 +988,7 @@ export class OrganizationAuthorityApplication {
     ) {
       throw new AuthorityOperationError(
         'unauthorized',
-        'access lease request does not match the enrollment',
+        `${label} does not match the enrollment`,
       );
     }
     try {
@@ -714,10 +1003,122 @@ export class OrganizationAuthorityApplication {
     } catch {
       throw new AuthorityOperationError(
         'unauthorized',
-        'access lease request authentication failed',
+        `${label} authentication failed`,
       );
     }
     return canonicalSha256(command);
+  }
+
+  private authenticateAccessCommand(
+    command: OrganizationAccessLeaseRequestV1,
+    enrollment: StoredAuthorityEnrollment,
+  ): Sha256Digest {
+    return this.authenticateInstallationCommand(
+      command,
+      enrollment,
+      'access lease request',
+    );
+  }
+
+  checkPermissionSubject(
+    request: OrganizationPermissionCheckRequestV1,
+    target: OrganizationPermissionAuthorityTarget | null,
+  ): OrganizationPermissionAuthorityStatus {
+    request = validateOrganizationPermissionCheckRequest(request);
+    request = JSON.parse(
+      canonicalJson(request),
+    ) as OrganizationPermissionCheckRequestV1;
+    if (target !== null) {
+      try {
+        assertFederationId(
+          target.principal_id,
+          'prn',
+          'permission check target principal',
+        );
+        assertFederationId(
+          target.membership_id,
+          'mem',
+          'permission check target membership',
+        );
+      } catch {
+        throw new AuthorityOperationError(
+          'invalid_request',
+          'permission check target is invalid',
+        );
+      }
+    }
+    const enrollment = this.repository.read((transaction) =>
+      transaction.enrollmentById(request.enrollment_id),
+    );
+    if (enrollment === undefined) {
+      throw new AuthorityOperationError(
+        'unauthorized',
+        'permission check request authentication failed',
+      );
+    }
+    const requestSha256 = this.authenticateInstallationCommand(
+      request,
+      enrollment,
+      'permission check request',
+    );
+    const evaluatedAt = this.now('permission check evaluation time');
+    assertFreshInstallationRequest(
+      request.requested_at,
+      evaluatedAt,
+      this.accessRequestMaximumAgeMs,
+      'permission check request',
+    );
+    return this.repository.read((transaction) => {
+      const currentEnrollment = transaction.enrollmentById(
+        request.enrollment_id,
+      );
+      if (currentEnrollment === undefined) {
+        throw new Error(
+          'authenticated permission check enrollment disappeared',
+        );
+      }
+      const installationMembership = transaction.membership(
+        currentEnrollment.membership_id,
+      );
+      const currentAccess = requireCurrentAccessState(
+        transaction,
+        currentEnrollment.enrollment_id,
+      );
+      const installationActive =
+        currentEnrollment.status === 'active' &&
+        installationMembership?.organization_id === request.organization_id &&
+        installationMembership.principal_id ===
+          currentEnrollment.principal_id &&
+        installationMembership.status === 'active' &&
+        currentAccess.state.status === 'active';
+      const targetMembership =
+        target === null
+          ? undefined
+          : transaction.membership(target.membership_id);
+      const targetActive =
+        target === null
+          ? null
+          : targetMembership?.organization_id === request.organization_id &&
+            targetMembership.principal_id === target.principal_id &&
+            targetMembership.status === 'active';
+      return {
+        request_sha256: requestSha256,
+        provider_event_sha256: request.provider_event_sha256,
+        authority_id: request.authority_id,
+        organization_id: request.organization_id,
+        enrollment_id: currentEnrollment.enrollment_id,
+        installation_id: currentEnrollment.installation_id,
+        installation_key_id:
+          currentEnrollment.installation_signing_key.key_id,
+        installation_principal_id: currentEnrollment.principal_id,
+        installation_membership_id: currentEnrollment.membership_id,
+        installation_active: installationActive,
+        target_principal_id: target?.principal_id ?? null,
+        target_membership_id: target?.membership_id ?? null,
+        target_active: targetActive,
+        evaluated_at: evaluatedAt,
+      };
+    });
   }
 
   private storedLeaseResponse(

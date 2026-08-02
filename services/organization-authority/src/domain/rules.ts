@@ -59,14 +59,28 @@ export function assertFreshAccessRequest(
   now: string,
   maximumAgeMs: number,
 ): void {
+  assertFreshInstallationRequest(
+    requestedAt,
+    now,
+    maximumAgeMs,
+    'access lease request',
+  );
+}
+
+export function assertFreshInstallationRequest(
+  requestedAt: string,
+  now: string,
+  maximumAgeMs: number,
+  label: string,
+): void {
   const difference = Math.abs(
-    timestampMillis(requestedAt, 'access lease requested_at') -
-      timestampMillis(now, 'authority access request time'),
+    timestampMillis(requestedAt, `${label} requested_at`) -
+      timestampMillis(now, `authority ${label} time`),
   );
   if (difference > maximumAgeMs) {
     throw new AuthorityOperationError(
       'unauthorized',
-      'access lease request is outside the accepted time window',
+      `${label} is outside the accepted time window`,
     );
   }
 }
