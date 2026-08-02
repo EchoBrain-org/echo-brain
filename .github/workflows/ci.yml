@@ -281,7 +281,7 @@ jobs:
             exit 1
           fi
           caddy_ca="$RUNNER_TEMP/authority-caddy-root.crt"
-          docker compose --file "$compose" exec --no-tty proxy \
+          docker compose --file "$compose" exec -T proxy \
             cat /data/caddy/pki/authorities/local/root.crt > "$caddy_ca"
           test "$(
             curl \
@@ -294,7 +294,7 @@ jobs:
               https://localhost/v1/authority-descriptor
           )" = 200
 
-          docker compose --file "$compose" exec --no-tty authority \
+          docker compose --file "$compose" exec -T authority \
             node services/organization-authority/dist/main.js \
             status --config /echo/authority.json > "$status_file"
           node -e '
@@ -331,7 +331,7 @@ jobs:
           fi
           grep -q 'already running for this state directory' "$duplicate_log"
 
-          docker compose --file "$compose" exec --no-tty authority \
+          docker compose --file "$compose" exec -T authority \
             node services/organization-authority/dist/main.js \
             status --config /echo/authority.json > "$status_file"
           node -e '
@@ -367,7 +367,7 @@ jobs:
             echo 'authority did not recover after forced container death' >&2
             exit 1
           fi
-          docker compose --file "$compose" exec --no-tty authority \
+          docker compose --file "$compose" exec -T authority \
             node services/organization-authority/dist/main.js \
             status --config /echo/authority.json > "$status_file"
           node -e '

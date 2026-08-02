@@ -158,7 +158,7 @@ unsafe Compose defaults:
   compose up -d --no-build
   test "$(docker inspect --format '{{.Image}}' \
     "$(compose ps -q authority)")" = "$AUTHORITY_IMAGE_ID"
-  compose exec --no-tty authority \
+  compose exec -T authority \
     node services/organization-authority/dist/main.js \
     status --config /echo/authority.json
 )
@@ -195,7 +195,7 @@ installation anchor to force recreation.
 Check a running authority from inside its existing container:
 
 ```sh
-docker compose exec --no-tty authority \
+docker compose exec -T authority \
   node services/organization-authority/dist/main.js \
   status --config /echo/authority.json
 ```
@@ -243,7 +243,7 @@ For `localhost`, Caddy uses its local CA. Export its public root after the stack
 starts, then supply it during product enrollment:
 
 ```sh
-docker compose exec --no-tty proxy \
+docker compose exec -T proxy \
   cat /data/caddy/pki/authorities/local/root.crt \
   > data/caddy-local-root.crt
 chmod 0600 data/caddy-local-root.crt
