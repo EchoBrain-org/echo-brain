@@ -71,6 +71,7 @@ import {
   assertGrantLifetimeSeconds,
   assertMembershipType,
   assertRevocationReason,
+  MAX_AUTHORITY_ACCESS_REQUEST_AGE_MS,
   timestampMillis,
 } from '../domain/rules.js';
 import type {
@@ -227,6 +228,36 @@ function requireEnrollment(
     throw new AuthorityOperationError('not_found', 'enrollment was not found');
   }
   return enrollment;
+}
+
+function canRecoverExpiredStaleAccessHead(input: {
+  namedPrevious: StoredAuthorityAccessState;
+  current: StoredAuthorityAccessState;
+  commandRequestedAtMillis: number;
+  authorityReceivedAtMillis: number;
+}): boolean {
+  if (
+    input.namedPrevious.state.status !== 'active' ||
+    input.current.state.status !== 'active' ||
+    input.namedPrevious.state.access_state_sequence + 1 !==
+      input.current.state.access_state_sequence
+  ) {
+    return false;
+  }
+  const currentEvaluatedAtMillis = timestampMillis(
+    input.current.state.evaluated_at,
+    'current access state evaluation time',
+  );
+  const recoveryNotBeforeMillis =
+    currentEvaluatedAtMillis + MAX_AUTHORITY_ACCESS_REQUEST_AGE_MS;
+  return (
+    timestampMillis(
+      input.current.state.valid_until,
+      'current access state expiry',
+    ) <= input.authorityReceivedAtMillis &&
+    input.authorityReceivedAtMillis > recoveryNotBeforeMillis &&
+    input.commandRequestedAtMillis > recoveryNotBeforeMillis
+  );
 }
 
 export class OrganizationAuthorityApplication {
@@ -1489,6 +1520,14 @@ export class OrganizationAuthorityApplication {
       requestedAt,
       this.accessRequestMaximumAgeMs,
     );
+    const requestedAtMillis = timestampMillis(
+      requestedAt,
+      'access lease request receipt time',
+    );
+    const commandRequestedAtMillis = timestampMillis(
+      command.requested_at,
+      'access lease request requested_at',
+    );
 
     const snapshot = this.repository.read((transaction) => {
       const currentEnrollment = requireEnrollment(
@@ -1523,12 +1562,14 @@ export class OrganizationAuthorityApplication {
       return {
         enrollment: currentEnrollment,
         membership: transaction.membership(currentEnrollment.membership_id),
+        namedPrevious,
         current: requireCurrentAccessState(
           transaction,
           currentEnrollment.enrollment_id,
         ),
       };
     });
+    let recoveringExpiredStaleHead = false;
     if (snapshot.enrollment.status === 'active') {
       if (
         snapshot.membership === undefined ||
@@ -1539,7 +1580,19 @@ export class OrganizationAuthorityApplication {
       if (
         command.previous_access_state_sha256 !== snapshot.current.state_sha256
       ) {
-        throw new StaleAccessStateError(snapshot.current.state);
+        // V1 recovers exactly one skipped head. Allowing older ancestors would
+        // let a briefly held installation key pre-sign future renewals. If the
+        // recovery 409 is lost until its replacement expires, operator repair
+        // remains the deliberately narrow fallback.
+        recoveringExpiredStaleHead = canRecoverExpiredStaleAccessHead({
+          namedPrevious: snapshot.namedPrevious,
+          current: snapshot.current,
+          commandRequestedAtMillis,
+          authorityReceivedAtMillis: requestedAtMillis,
+        });
+        if (!recoveringExpiredStaleHead) {
+          throw new StaleAccessStateError(snapshot.current.state);
+        }
       }
     }
 
@@ -1580,13 +1633,15 @@ export class OrganizationAuthorityApplication {
         'access-state signing exceeded the active lease',
       );
     }
-    return this.repository.write(commitAt, (transaction) => {
+    const committed = this.repository.write(commitAt, (transaction) => {
       const exact = this.storedLeaseResponse(
         transaction,
         requestSha256,
         command,
       );
-      if (exact !== undefined) return exact;
+      if (exact !== undefined) {
+        return { kind: 'response' as const, state: exact };
+      }
       const duplicateId = transaction.accessLeaseRequestById(
         command.enrollment_id,
         command.request_id,
@@ -1613,7 +1668,27 @@ export class OrganizationAuthorityApplication {
         if (membership === undefined || membership.status !== 'active') {
           throw new Error('active enrollment has no active membership');
         }
-        if (current.state_sha256 !== command.previous_access_state_sha256) {
+        if (recoveringExpiredStaleHead) {
+          const namedPrevious = transaction.accessStateByDigest(
+            command.previous_access_state_sha256,
+          );
+          if (
+            current.state_sha256 !== snapshot.current.state_sha256 ||
+            current.state.status !== 'active' ||
+            namedPrevious === undefined ||
+            namedPrevious.enrollment_id !== currentEnrollment.enrollment_id ||
+            !canRecoverExpiredStaleAccessHead({
+              namedPrevious,
+              current,
+              commandRequestedAtMillis,
+              authorityReceivedAtMillis: requestedAtMillis,
+            })
+          ) {
+            throw new StaleAccessStateError(current.state);
+          }
+        } else if (
+          current.state_sha256 !== command.previous_access_state_sha256
+        ) {
           throw new StaleAccessStateError(current.state);
         }
         if (candidate === undefined) {
@@ -1621,6 +1696,24 @@ export class OrganizationAuthorityApplication {
         }
         transaction.insertAccessState(candidate);
         resulting = candidate;
+        if (recoveringExpiredStaleHead) {
+          transaction.appendAudit({
+            occurred_at: commitAt,
+            actor_kind: 'installation',
+            action: 'access_lease.recovered',
+            subject_id: currentEnrollment.installation_id,
+            detail: {
+              request_id: command.request_id,
+              request_sha256: requestSha256,
+              named_access_state_sha256:
+                command.previous_access_state_sha256,
+              recovered_access_state_sequence:
+                current.state.access_state_sequence,
+              access_state_sequence: candidate.state.access_state_sequence,
+            },
+          });
+          return { kind: 'stale_recovery' as const, state: candidate.state };
+        }
       }
       const requestRecord: StoredAccessLeaseRequest = {
         request_id: command.request_id,
@@ -1645,8 +1738,12 @@ export class OrganizationAuthorityApplication {
           access_state_sequence: resulting.state.access_state_sequence,
         },
       });
-      return resulting.state;
+      return { kind: 'response' as const, state: resulting.state };
     });
+    if (committed.kind === 'stale_recovery') {
+      throw new StaleAccessStateError(committed.state);
+    }
+    return committed.state;
   }
 
   async revokeInstallation(

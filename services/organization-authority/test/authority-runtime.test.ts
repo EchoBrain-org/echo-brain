@@ -958,7 +958,7 @@ describe('single-organization authority runtime', () => {
     }
   });
 
-  it('enrolls idempotently, advances signed leases, rejects stale heads, and revokes', async () => {
+  it('recovers an expired Authority lease from its known immediate predecessor', async () => {
     const directory = mkdtempSync(join(tmpdir(), 'echo-authority-test-'));
     chmodSync(directory, 0o700);
     const databasePath = join(directory, 'authority.sqlite');
@@ -1012,11 +1012,8 @@ describe('single-organization authority runtime', () => {
         canonicalJson(enrolled.result),
       );
 
-      clock.advance(6 * 60 * 1000);
-      const exactReplay = await application.issueAccessLease(access);
-      expect(canonicalJson(exactReplay)).toBe(canonicalJson(refreshed));
-
-      const stale = await createOrganizationAccessLeaseRequest(
+      clock.advance(60 * 1000);
+      const liveStale = await createOrganizationAccessLeaseRequest(
         {
           ...access,
           request_id: `alr_${randomUUID()}`,
@@ -1028,9 +1025,134 @@ describe('single-organization authority runtime', () => {
         },
         async (bytes) => sign(enrolled.installation, bytes),
       );
-      await expect(application.issueAccessLease(stale)).rejects.toBeInstanceOf(
-        StaleAccessStateError,
+      await expect(
+        application.issueAccessLease(liveStale),
+      ).rejects.toBeInstanceOf(StaleAccessStateError);
+
+      clock.advance(4 * 60 * 1000 + 1);
+      let heldRequestCurrent:
+        | InstanceType<typeof StaleAccessStateError>['currentState']
+        | undefined;
+      try {
+        await application.issueAccessLease(liveStale);
+      } catch (error) {
+        expect(error).toBeInstanceOf(StaleAccessStateError);
+        heldRequestCurrent = (error as StaleAccessStateError).currentState;
+      }
+      expect(heldRequestCurrent?.access_state_sequence).toBe(2);
+      expect(
+        repository.read(
+          (transaction) =>
+            transaction.currentAccessState(
+              enrolled.result.enrollment_receipt.enrollment_id,
+            )?.state.access_state_sequence,
+        ),
+      ).toBe(2);
+
+      clock.advance(1);
+      const exactReplay = await application.issueAccessLease(access);
+      expect(canonicalJson(exactReplay)).toBe(canonicalJson(refreshed));
+
+      const expiredStale = await createOrganizationAccessLeaseRequest(
+        {
+          ...access,
+          request_id: `alr_${randomUUID()}`,
+          installation_signing_key: enrolled.installation.descriptor,
+          previous_access_state_sha256: canonicalSha256(
+            enrolled.result.access_state,
+          ),
+          requested_at: clock.now(),
+        },
+        async (bytes) => sign(enrolled.installation, bytes),
       );
+      let recovered:
+        | InstanceType<typeof StaleAccessStateError>['currentState']
+        | undefined;
+      try {
+        await application.issueAccessLease(expiredStale);
+      } catch (error) {
+        expect(error).toBeInstanceOf(StaleAccessStateError);
+        recovered = (error as StaleAccessStateError).currentState;
+      }
+      if (recovered === undefined) {
+        throw new Error('expired stale-head recovery did not return a conflict');
+      }
+      expect(recovered).toMatchObject({
+        status: 'active',
+        access_state_sequence: 3,
+      });
+      const retryCurrents = [];
+      for (let attempt = 0; attempt < 2; attempt += 1) {
+        try {
+          await application.issueAccessLease(expiredStale);
+        } catch (error) {
+          expect(error).toBeInstanceOf(StaleAccessStateError);
+          retryCurrents.push((error as StaleAccessStateError).currentState);
+        }
+      }
+      expect(retryCurrents).toHaveLength(2);
+      expect(
+        retryCurrents.every(
+          (current) => canonicalJson(current) === canonicalJson(recovered),
+        ),
+      ).toBe(true);
+      expect(
+        repository.read(
+          (transaction) =>
+            transaction.currentAccessState(
+              enrolled.result.enrollment_receipt.enrollment_id,
+            )?.state.access_state_sequence,
+        ),
+      ).toBe(3);
+      const storedRecoveryRequest = repository.read((transaction) =>
+        transaction.accessLeaseRequestByDigest(
+          canonicalSha256(expiredStale),
+        ),
+      );
+      expect(storedRecoveryRequest).toBeUndefined();
+
+      clock.advance(6 * 60 * 1000);
+      const oldAncestorRequest =
+        await createOrganizationAccessLeaseRequest(
+          {
+            ...access,
+            request_id: `alr_${randomUUID()}`,
+            installation_signing_key: enrolled.installation.descriptor,
+            previous_access_state_sha256: canonicalSha256(
+              enrolled.result.access_state,
+            ),
+            requested_at: clock.now(),
+          },
+          async (bytes) => sign(enrolled.installation, bytes),
+        );
+      let oldAncestorCurrent:
+        | InstanceType<typeof StaleAccessStateError>['currentState']
+        | undefined;
+      try {
+        await application.issueAccessLease(oldAncestorRequest);
+      } catch (error) {
+        expect(error).toBeInstanceOf(StaleAccessStateError);
+        oldAncestorCurrent = (error as StaleAccessStateError).currentState;
+      }
+      expect(oldAncestorCurrent).toMatchObject({
+        status: 'active',
+        access_state_sequence: 3,
+      });
+      expect(
+        repository.read((transaction) =>
+          transaction.accessLeaseRequestByDigest(
+            canonicalSha256(oldAncestorRequest),
+          ),
+        ),
+      ).toBeUndefined();
+      expect(
+        repository.read(
+          (transaction) =>
+            transaction.currentAccessState(
+              enrolled.result.enrollment_receipt.enrollment_id,
+            )?.state.access_state_sequence,
+        ),
+      ).toBe(3);
 
       const revoked = await application.revokeInstallation(
         enrolled.installationId,
@@ -1038,7 +1160,7 @@ describe('single-organization authority runtime', () => {
       );
       expect(revoked.status).toBe('revoked');
       expect(revoked.revocation_reason).toBe('installation_revoked');
-      expect(revoked.access_state_sequence).toBe(3);
+      expect(revoked.access_state_sequence).toBe(4);
 
       const afterRevocation = await createOrganizationAccessLeaseRequest(
         {
@@ -1081,6 +1203,25 @@ describe('single-organization authority runtime', () => {
             request_id: access.request_id,
           }),
         );
+        const recoveryAuditRows = database
+          .prepare(
+            `SELECT detail_json FROM authority_audit_log
+             WHERE action = 'access_lease.recovered'
+               AND subject_id = ?
+             ORDER BY audit_sequence`,
+          )
+          .all(enrolled.installationId) as Array<{ detail_json: string }>;
+        expect(recoveryAuditRows.map((row) => row.detail_json)).toEqual([
+          canonicalJson({
+            access_state_sequence: recovered.access_state_sequence,
+            named_access_state_sha256: canonicalSha256(
+              enrolled.result.access_state,
+            ),
+            recovered_access_state_sequence: refreshed.access_state_sequence,
+            request_id: expiredStale.request_id,
+            request_sha256: canonicalSha256(expiredStale),
+          }),
+        ]);
         expect(
           (
             database
@@ -1100,6 +1241,66 @@ describe('single-organization authority runtime', () => {
           membership_type: 'employee',
         }),
       ).toThrow('clock regressed');
+    } finally {
+      application.close();
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
+  it('rejects unknown and cross-enrollment stale-head recovery requests', async () => {
+    const directory = mkdtempSync(join(tmpdir(), 'echo-authority-test-'));
+    chmodSync(directory, 0o700);
+    const clock = new FakeClock(Date.parse('2026-07-22T12:30:00.000Z'));
+    const { application } = await createApplication(
+      join(directory, 'authority.sqlite'),
+      clock,
+    );
+    try {
+      const firstMembership = application.provisionMembership({
+        command_id: `adm_${randomUUID()}`,
+        display_name: 'Employee One',
+        membership_type: 'employee',
+      });
+      const secondMembership = application.provisionMembership({
+        command_id: `adm_${randomUUID()}`,
+        display_name: 'Employee Two',
+        membership_type: 'employee',
+      });
+      const first = await enroll(application, firstMembership, clock);
+      const second = await enroll(application, secondMembership, clock);
+      clock.advance(6 * 60 * 1000);
+
+      const requestWithPrevious = (previousAccessStateSha256: Sha256Digest) =>
+        createOrganizationAccessLeaseRequest(
+          {
+            request_id: `alr_${randomUUID()}`,
+            authority_id: second.result.enrollment_receipt.authority_id,
+            authority_key_id:
+              second.result.enrollment_receipt.authority_key_id,
+            organization_id:
+              second.result.enrollment_receipt.organization_id,
+            enrollment_id: second.result.enrollment_receipt.enrollment_id,
+            installation_id: second.installationId,
+            installation_signing_key: second.installation.descriptor,
+            previous_access_state_sha256: previousAccessStateSha256,
+            requested_at: clock.now(),
+          },
+          async (bytes) => sign(second.installation, bytes),
+        );
+
+      const unknown = await requestWithPrevious(
+        canonicalSha256({ unknown_access_state: true }),
+      );
+      await expect(application.issueAccessLease(unknown)).rejects.toMatchObject(
+        { code: 'unauthorized' },
+      );
+
+      const crossEnrollment = await requestWithPrevious(
+        canonicalSha256(first.result.access_state),
+      );
+      await expect(
+        application.issueAccessLease(crossEnrollment),
+      ).rejects.toMatchObject({ code: 'unauthorized' });
     } finally {
       application.close();
       rmSync(directory, { recursive: true, force: true });
