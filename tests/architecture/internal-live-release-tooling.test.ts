@@ -17,6 +17,7 @@ const REPO = resolve(import.meta.dirname, '../..');
 const TOOL = join(REPO, 'tools', 'internal-live-release.mjs');
 const WORKFLOW = join(REPO, '.github', 'workflows', 'internal-live-release.yml');
 const CI_WORKFLOW = join(REPO, '.github', 'workflows', 'ci.yml');
+const README = join(REPO, 'README.md');
 const VERSION = '0.1.0-internal.4';
 const SOURCE_SHA = 'a'.repeat(40);
 const REPOSITORY = 'EchoBrain-org/echo-brain';
@@ -181,6 +182,75 @@ describe('INTERNAL LIVE release tooling', () => {
     const publish = workflow.indexOf('gh release create "$RELEASE_TAG"');
     expect(reverify).toBeGreaterThan(0);
     expect(publish).toBeGreaterThan(reverify);
+  });
+
+  it('documents one exact bootstrap bridge for clean and pre-updater Macs', () => {
+    const readme = readFileSync(README, 'utf8');
+    const start = readme.indexOf('### One-time updater bootstrap');
+    const end = readme.indexOf('### Normal enrolled-machine updates', start);
+    const bootstrap = readme.slice(start, end);
+    const attestation = bootstrap.indexOf(
+      'gh attestation verify "$BOOTSTRAP_ARTIFACT_PATH"',
+    );
+    const install = bootstrap.indexOf('"$BOOTSTRAP_NPM" install --global');
+
+    expect(start).toBeGreaterThan(0);
+    expect(end).toBeGreaterThan(start);
+    expect(bootstrap).toContain(
+      "BOOTSTRAP_VERSION='<exact MAJOR.MINOR.PATCH-internal.SEQUENCE>'",
+    );
+    expect(bootstrap).toContain(
+      'BOOTSTRAP_TAG="internal-v${BOOTSTRAP_VERSION}"',
+    );
+    expect(bootstrap).not.toMatch(
+      /BOOTSTRAP_VERSION='\d+\.\d+\.\d+-internal\.\d+'/u,
+    );
+    expect(bootstrap).not.toMatch(/releases\/(?:latest|download\/latest)/u);
+    expect(bootstrap).toContain(
+      'repos/${BOOTSTRAP_REPOSITORY}/actions/runs/${BOOTSTRAP_RUN_ID}/approvals',
+    );
+    expect(bootstrap).toContain('.name=="internal-live"');
+    expect(attestation).toBeGreaterThan(0);
+    expect(install).toBeGreaterThan(attestation);
+    expect(bootstrap).toContain(
+      '--signer-workflow "$BOOTSTRAP_REPOSITORY/.github/workflows/internal-live-release.yml"',
+    );
+    expect(bootstrap).toContain('--signer-digest "$BOOTSTRAP_SOURCE_SHA"');
+    expect(bootstrap).toContain('--deny-self-hosted-runners');
+    expect(bootstrap).toContain(
+      'BOOTSTRAP_NPM_PREFIX="${HOME}/.npm-global"',
+    );
+    expect(bootstrap).toContain('test "$(uname -m)" = arm64');
+    expect(bootstrap).toContain('test -x "$BOOTSTRAP_NODE"');
+    expect(bootstrap).toContain('test -x "$BOOTSTRAP_NPM"');
+    expect(bootstrap).toContain(
+      'test "$("$BOOTSTRAP_NODE" --version)" = v22.22.1',
+    );
+    expect(bootstrap).toContain(
+      `process.platform+"|"+process.arch')" = 'darwin|arm64'`,
+    );
+    expect(bootstrap).toContain(
+      'test "$("$BOOTSTRAP_NPM" --version)" = 10.9.4',
+    );
+    expect(bootstrap).toContain('HOME="$BOOTSTRAP_NPM_HOME"');
+    expect(bootstrap).toContain('cd "$BOOTSTRAP_DIRECTORY"');
+    expect(bootstrap).toContain(
+      'PATH="${BOOTSTRAP_RUNTIME_BIN}:/usr/bin:/bin:/usr/sbin:/sbin"',
+    );
+    expect(bootstrap).not.toContain('env -i HOME="$HOME" PATH="$PATH"');
+    expect(bootstrap).toContain(
+      'test "$(echo-brain --version)" = "$BOOTSTRAP_VERSION"',
+    );
+    expect(bootstrap).toContain(
+      '${BOOTSTRAP_VERSION}|${BOOTSTRAP_SOURCE_SHA}|materialized-commit',
+    );
+    expect(bootstrap).toContain("grep -q 'Mach-O 64-bit bundle arm64'");
+    expect(bootstrap).toContain('A clean Mac continues with');
+    expect(bootstrap).toContain('An already-enrolled Mac whose CLI predates');
+    expect(bootstrap).toContain(
+      "central\nrollout status records that installation's healthy receipt",
+    );
+    expect(readme.slice(end)).toContain('echo-brain update apply \\');
   });
 
   it('requires every new INTERNAL LIVE version to increase the numeric tuple', () => {
