@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import {
   chmodSync,
   lstatSync,
@@ -587,6 +588,132 @@ describe('internal-live node operations', () => {
       approval_mode: 'manual',
     };
   }
+
+  it('inspects package evidence larger than the manifest limit', async () => {
+    const root = realpathSync(
+      mkdtempSync(join(tmpdir(), 'echo-internal-live-evidence-')),
+    );
+    temporaryRoots.push(root);
+    const stateDir = join(root, 'state');
+    mkdirSync(stateDir, { mode: 0o700 });
+    const packageManifest = Buffer.from(
+      JSON.stringify({ name: 'echo-brain', version: MANIFEST.release_version }),
+    );
+    const buildIdentity = Buffer.from(
+      JSON.stringify({
+        schema_version: 1,
+        kind: 'echo-packaged-build-identity',
+        product_version: MANIFEST.release_version,
+        source_sha: SOURCE_SHA,
+        source_kind: 'materialized-commit',
+      }),
+    );
+    const generatedBytes = Buffer.from('x');
+    const sha256 = (bytes: Buffer) =>
+      createHash('sha256').update(bytes).digest('hex');
+    // Match the live .2 archive's 604-record, 92,771-byte evidence without
+    // checking release bytes into the test suite.
+    const generatedDirectory = `dist/generated/${'x'.repeat(27)}`;
+    const files = [
+      {
+        path: 'dist/product/build-identity.v1.json',
+        bytes: buildIdentity,
+      },
+      ...Array.from({ length: 602 }, (_, index) => ({
+        path: `${generatedDirectory}/file-${String(index).padStart(4, '0')}${
+          index === 0 ? 'y'.repeat(243) : ''
+        }.txt`,
+        bytes: generatedBytes,
+      })),
+      { path: 'package.json', bytes: packageManifest },
+    ].sort((left, right) =>
+      Buffer.from(left.path).compare(Buffer.from(right.path)),
+    );
+    const evidence = Buffer.from(
+      JSON.stringify({
+        schema_version: 1,
+        kind: 'echo-package-artifact-evidence',
+        package: 'echo-brain',
+        version: MANIFEST.release_version,
+        source_sha: SOURCE_SHA,
+        files: files.map((file) => ({
+          path: file.path,
+          size: file.bytes.byteLength,
+          sha256: sha256(file.bytes),
+        })),
+      }),
+    );
+    expect(files).toHaveLength(604);
+    expect(evidence.byteLength).toBe(92_771);
+    const evidenceEntry = 'package/dist/package-artifact-evidence.v1.json';
+    const entries = [
+      evidenceEntry,
+      ...files.map((file) => `package/${file.path}`),
+    ];
+    const entryBytes = new Map<string, Buffer>([
+      [evidenceEntry, evidence],
+      ...files.map((file) => [`package/${file.path}`, file.bytes] as const),
+    ]);
+    let evidenceOutputLimit: number | undefined;
+    const runner: InternalLiveCommandRunner = async (_command, args, options) => {
+      if (args[0] === '-tzf') {
+        return {
+          status: 0,
+          stdout: Buffer.from(`${entries.join('\n')}\n`),
+          stderr: '',
+        };
+      }
+      if (args[0] === '-tvzf') {
+        return {
+          status: 0,
+          stdout: Buffer.from(`${entries.map(() => '-').join('\n')}\n`),
+          stderr: '',
+        };
+      }
+      if (args[0] === '-xOzf') {
+        const entry = args[2]!;
+        if (entry === evidenceEntry) {
+          evidenceOutputLimit = options?.maxStdoutBytes;
+        }
+        const bytes = entryBytes.get(entry);
+        return bytes === undefined
+          ? { status: 1, stdout: Buffer.alloc(0), stderr: 'missing' }
+          : { status: 0, stdout: bytes, stderr: '' };
+      }
+      return { status: 1, stdout: Buffer.alloc(0), stderr: 'unsupported' };
+    };
+
+    const prefix = join(root, '.npm-global');
+    const operations = new NodeInternalLiveUpdateOperations({
+      configPath: join(root, 'config', 'runtime.json'),
+      config: runtimeConfig(stateDir),
+      cliPath: join(prefix, 'lib/node_modules/echo-brain/dist/product/cli.js'),
+      productVersion: '0.1.0-internal.1',
+      sourceSha: OLD_SOURCE_SHA,
+      directive: {
+        manifest_url:
+          'https://github.com/EchoBrain-org/echo-brain/releases/download/internal-v0.1.0-internal.2/internal-live-release-manifest.v1.json',
+        manifest_sha256: 'c'.repeat(64),
+      },
+      npmPath: join(prefix, 'bin/npm'),
+      npmVersion: '10.9.4',
+      now: () => '2026-08-02T20:00:00.000Z',
+      commandRunner: runner,
+    });
+
+    const inspected = await operations.inspectArtifact({
+      reference: {
+        kind: 'internal-live-local-artifact',
+        path: join(root, 'candidate.tgz'),
+      },
+    });
+    expect(inspected.artifact_evidence).toMatchObject({
+      version: MANIFEST.release_version,
+      files: expect.any(Array),
+    });
+    expect(inspected.package_files).toHaveLength(files.length);
+    expect(evidenceOutputLimit).toBe(4 * 1024 * 1024);
+  });
 
   it('uses the existing user prefix and enables install scripts', async () => {
     const root = realpathSync(
