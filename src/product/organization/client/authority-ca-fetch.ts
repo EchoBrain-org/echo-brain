@@ -2,6 +2,18 @@ import { request as httpsRequest } from 'node:https';
 
 const MAX_CA_FETCH_RESPONSE_BYTES = 64 * 1024;
 
+function responseMustNotHaveBody(
+  requestMethod: string | undefined,
+  status: number,
+): boolean {
+  return (
+    requestMethod?.toUpperCase() === 'HEAD' ||
+    status === 204 ||
+    status === 205 ||
+    status === 304
+  );
+}
+
 /**
  * Narrow fetch implementation for the organization client. It trusts the
  * supplied organization CA in addition to Node's normal roots while retaining
@@ -17,6 +29,8 @@ export function createOrganizationAuthorityCaFetch(
         : typeof input === 'string'
           ? new URL(input)
           : new URL(input.url);
+    const method =
+      init.method ?? (input instanceof Request ? input.method : undefined);
     if (url.protocol !== 'https:') {
       throw new Error('organization authority CA transport requires HTTPS');
     }
@@ -33,7 +47,7 @@ export function createOrganizationAuthorityCaFetch(
       const request = httpsRequest(
         url,
         {
-          method: init.method,
+          method,
           headers: Object.fromEntries(new Headers(init.headers).entries()),
           ca: authorityCaPem,
           rejectUnauthorized: true,
@@ -54,21 +68,40 @@ export function createOrganizationAuthorityCaFetch(
           });
           response.once('error', reject);
           response.once('end', () => {
-            const headers = new Headers();
-            for (const [name, value] of Object.entries(response.headers)) {
-              if (Array.isArray(value)) {
-                for (const item of value) headers.append(name, item);
-              } else if (value !== undefined) {
-                headers.set(name, value);
+            try {
+              const headers = new Headers();
+              for (const [name, value] of Object.entries(response.headers)) {
+                if (Array.isArray(value)) {
+                  for (const item of value) headers.append(name, item);
+                } else if (value !== undefined) {
+                  headers.set(name, value);
+                }
               }
+              const status = response.statusCode ?? 500;
+              const responseBody = Buffer.concat(chunks);
+              const mustNotHaveBody = responseMustNotHaveBody(method, status);
+              if (mustNotHaveBody && responseBody.byteLength !== 0) {
+                throw new Error(
+                  'organization authority returned a body for a bodyless response',
+                );
+              }
+              const fetchedResponse = new Response(
+                mustNotHaveBody ? null : responseBody,
+                {
+                  status,
+                  statusText: response.statusMessage,
+                  headers,
+                },
+              );
+              Object.defineProperty(fetchedResponse, 'url', {
+                configurable: true,
+                enumerable: true,
+                value: url.href,
+              });
+              resolve(fetchedResponse);
+            } catch (error) {
+              reject(error);
             }
-            resolve(
-              new Response(Buffer.concat(chunks), {
-                status: response.statusCode ?? 500,
-                statusText: response.statusMessage,
-                headers,
-              }),
-            );
           });
         },
       );

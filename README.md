@@ -48,7 +48,7 @@ foreground commands remain Node-based.
 npm ci
 npm run check
 npm pack
-npm install -g ./echo-brain-0.1.0-internal.3.tgz
+npm install -g ./echo-brain-0.1.0-internal.4.tgz
 ```
 
 `npm run check` runs the source-boundary check, TypeScript, ESLint, and the
