@@ -1,12 +1,12 @@
 {
   "name": "echo-brain",
-  "version": "0.1.0-internal.3",
+  "version": "0.1.0-internal.4",
   "lockfileVersion": 3,
   "requires": true,
   "packages": {
     "": {
       "name": "echo-brain",
-      "version": "0.1.0-internal.3",
+      "version": "0.1.0-internal.4",
       "bundleDependencies": [
         "@echo-brain/federation-protocol",
         "@echo-brain/organization-protocol",
