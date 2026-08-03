@@ -37,6 +37,8 @@ import {
 } from "./runtime.js";
 import { diagnoseConfiguredAdapters } from "./adapter-diagnostics.js";
 import {
+  createProductBootstrapCredential,
+  createProductOnboardConfig,
   onboardProduct,
   ProductOperator,
   ProductOperatorError,
@@ -85,7 +87,11 @@ import { RETIRED_FOUNDER_PROVENANCE_MESSAGE } from "./federation/cutover-fence.j
 import { resolveProductStatePaths } from "./paths.js";
 import { SqliteCoreStateStore } from "./storage/sqlite-core-state-store.js";
 import { readFileNoFollow } from "./secure-local-files.js";
-import { SLACK_REACTIONS_APPROVAL_SURFACE_ADAPTER_VERSION } from "../adapters/approval-surfaces/slack-reactions/slack-reactions-approval-surface.js";
+import {
+  DEFAULT_APPROVE_REACTION,
+  DEFAULT_REJECT_REACTION,
+  SLACK_REACTIONS_APPROVAL_SURFACE_ADAPTER_VERSION,
+} from "../adapters/approval-surfaces/slack-reactions/slack-reactions-approval-surface.js";
 import {
   loadPackagedBuildIdentity,
   type PackagedBuildIdentityV1,
@@ -95,6 +101,8 @@ import {
   type RunInternalLiveUpdateOptions,
 } from "./update/internal-live-runner.js";
 import type { InternalLiveCommandRunner } from "./update/internal-live-node-operations.js";
+import { parseJson } from "../util/json.js";
+import { nodeOperatorFileSystem } from "./operator-io.js";
 
 export interface ProductCliProcess {
   once: (event: "SIGINT" | "SIGTERM", listener: () => void) => unknown;
@@ -141,6 +149,12 @@ export interface ProductCliDependencies {
     nextDirectiveRequestId?: () => string;
     nextTransactionId?: () => string;
   };
+  bootstrap?: {
+    /** Test/host seam; the default reads a hidden value from the controlling TTY. */
+    readGranolaCredential?: () => string | Promise<string>;
+    /** Test/host seam; the default reads a second hidden value from the TTY. */
+    readSlackCredential?: () => string | Promise<string>;
+  };
 }
 
 interface ParsedCommand {
@@ -150,6 +164,7 @@ interface ParsedCommand {
     | "run-once"
     | "run"
     | "service-run"
+    | "bootstrap"
     | "onboard"
     | "init"
     | "reconfigure"
@@ -185,6 +200,10 @@ interface ParsedCommand {
   updateAction?: "apply";
   updateChannel?: "internal-live";
   doctorLocalOnly?: boolean;
+  ownerEmail?: string;
+  slackChannelId?: string;
+  slackReviewerUserId?: string;
+  slackReviewerName?: string;
   slackLinkAttemptId?: string;
   slackLinkMessageTs?: string;
   invitationPath?: string;
@@ -231,6 +250,7 @@ function packagedBuildIdentity(): PackagedBuildIdentityV1 {
 const HELP = `echo-brain ${PRODUCT_VERSION}
 
 Usage:
+  echo-brain bootstrap --config <new-absolute-path> --state-dir <new-absolute-path> --owner-email <canonical-lowercase-email> --slack-channel-id <C...> --slack-reviewer-user-id <U...> --slack-reviewer-name <name> --invitation <absolute-path> --authority-pin <sha256:...> [--authority-ca <absolute-path>] --allow-exportable-software-key
   echo-brain onboard --config <new-absolute-path> --state-dir <new-absolute-path>
   echo-brain init --config <absolute-path>
   echo-brain reconfigure --config <absolute-path>
@@ -266,6 +286,7 @@ function parseCommand(argv: readonly string[]): ParsedCommand {
   const command = argv[0];
   if (
     command !== "validate-config" &&
+    command !== "bootstrap" &&
     command !== "onboard" &&
     command !== "init" &&
     command !== "reconfigure" &&
@@ -286,7 +307,7 @@ function parseCommand(argv: readonly string[]): ParsedCommand {
     command !== "run"
   ) {
     throw new Error(
-      "usage: echo-brain <onboard|init|reconfigure|status|doctor|identity-check|organization|update|service|backup|restore|validate-config|selftest|run-once|run|approvals|approve|reject> --config <absolute-path>",
+      "usage: echo-brain <bootstrap|onboard|init|reconfigure|status|doctor|identity-check|organization|update|service|backup|restore|validate-config|selftest|run-once|run|approvals|approve|reject> --config <absolute-path>",
     );
   }
   let serviceAction: ProductServiceAction | undefined;
@@ -368,6 +389,10 @@ function parseCommand(argv: readonly string[]): ParsedCommand {
       "challenge-message-ts": { type: "string" },
       channel: { type: "string" },
       "local-only": { type: "boolean" },
+      "owner-email": { type: "string" },
+      "slack-channel-id": { type: "string" },
+      "slack-reviewer-user-id": { type: "string" },
+      "slack-reviewer-name": { type: "string" },
     },
   });
   if (parsed.values.config === undefined)
@@ -381,8 +406,20 @@ function parseCommand(argv: readonly string[]): ParsedCommand {
   ) {
     throw new Error("--local-only is only valid with doctor");
   }
+  if (parsed.values["owner-email"] !== undefined && command !== "bootstrap") {
+    throw new Error("--owner-email is only valid with bootstrap");
+  }
   if (
-    (command === "onboard" ||
+    command !== "bootstrap" &&
+    (parsed.values["slack-channel-id"] !== undefined ||
+      parsed.values["slack-reviewer-user-id"] !== undefined ||
+      parsed.values["slack-reviewer-name"] !== undefined)
+  ) {
+    throw new Error("Slack bootstrap options are only valid with bootstrap");
+  }
+  if (
+    (command === "bootstrap" ||
+      command === "onboard" ||
       command === "init" ||
       command === "reconfigure" ||
       command === "status" ||
@@ -398,7 +435,7 @@ function parseCommand(argv: readonly string[]): ParsedCommand {
   ) {
     throw new Error("--config must be an absolute path");
   }
-  if (command === "onboard") {
+  if (command === "onboard" || command === "bootstrap") {
     if (parsed.values["state-dir"] === undefined)
       throw new Error("--state-dir is required");
     if (!isAbsolute(parsed.values["state-dir"]))
@@ -406,13 +443,52 @@ function parseCommand(argv: readonly string[]): ParsedCommand {
   }
   if (
     command !== "organization" &&
+    command !== "bootstrap" &&
     parsed.values["allow-exportable-software-key"] === true
   ) {
     throw new Error(
       "--allow-exportable-software-key is only valid with organization enroll",
     );
   }
-  if (command === "organization") {
+  if (command === "bootstrap") {
+    const ownerEmail = parsed.values["owner-email"];
+    if (ownerEmail === undefined) {
+      throw new Error("bootstrap requires --owner-email");
+    }
+    const slackChannelId = parsed.values["slack-channel-id"];
+    if (slackChannelId === undefined) {
+      throw new Error("bootstrap requires --slack-channel-id");
+    }
+    const slackReviewerUserId =
+      parsed.values["slack-reviewer-user-id"];
+    if (slackReviewerUserId === undefined) {
+      throw new Error("bootstrap requires --slack-reviewer-user-id");
+    }
+    const slackReviewerName = parsed.values["slack-reviewer-name"];
+    if (slackReviewerName === undefined) {
+      throw new Error("bootstrap requires --slack-reviewer-name");
+    }
+    if (parsed.values.invitation === undefined) {
+      throw new Error("bootstrap requires --invitation");
+    }
+    if (!isAbsolute(parsed.values.invitation)) {
+      throw new Error("--invitation must be an absolute path");
+    }
+    if (parsed.values["authority-pin"] === undefined) {
+      throw new Error(
+        "bootstrap requires --authority-pin from an independent trusted channel",
+      );
+    }
+    if (parsed.values["authority-url"] !== undefined) {
+      throw new Error("--authority-url is not valid with bootstrap");
+    }
+    if (
+      parsed.values["authority-ca"] !== undefined &&
+      !isAbsolute(parsed.values["authority-ca"])
+    ) {
+      throw new Error("--authority-ca must be an absolute path");
+    }
+  } else if (command === "organization") {
     if (organizationAction === "enroll") {
       if (parsed.values.invitation === undefined) {
         throw new Error("organization enroll requires --invitation");
@@ -592,6 +668,18 @@ function parseCommand(argv: readonly string[]): ParsedCommand {
     ...(parsed.values["local-only"] === true
       ? { doctorLocalOnly: true }
       : {}),
+    ...(parsed.values["owner-email"] === undefined
+      ? {}
+      : { ownerEmail: parsed.values["owner-email"] }),
+    ...(parsed.values["slack-channel-id"] === undefined
+      ? {}
+      : { slackChannelId: parsed.values["slack-channel-id"] }),
+    ...(parsed.values["slack-reviewer-user-id"] === undefined
+      ? {}
+      : { slackReviewerUserId: parsed.values["slack-reviewer-user-id"] }),
+    ...(parsed.values["slack-reviewer-name"] === undefined
+      ? {}
+      : { slackReviewerName: parsed.values["slack-reviewer-name"] }),
     ...(parsed.values["challenge-attempt"] === undefined
       ? {}
       : { slackLinkAttemptId: parsed.values["challenge-attempt"] }),
@@ -1169,6 +1257,414 @@ function readOrganizationAuthorityCa(path: string | undefined):
   return value;
 }
 
+function capturedOutput(): {
+  stream: Pick<Writable, "write">;
+  read: () => string;
+} {
+  let value = "";
+  return {
+    stream: {
+      write: ((chunk: string | Uint8Array) => {
+        value += chunk.toString();
+        return true;
+      }) as Writable["write"],
+    },
+    read: () => value,
+  };
+}
+
+function capturedRecord(value: string, label: string): Record<string, unknown> {
+  const line = value.trim().split("\n").at(-1);
+  if (line === undefined || line.length === 0) {
+    throw new Error(`${label} returned no result`);
+  }
+  const parsed = parseJson(line);
+  if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) {
+    throw new Error(`${label} returned an invalid result`);
+  }
+  return parsed as Record<string, unknown>;
+}
+
+async function runCapturedCliStep(
+  label: string,
+  argv: readonly string[],
+  dependencies: ProductCliDependencies,
+): Promise<Record<string, unknown>> {
+  const stdout = capturedOutput();
+  const stderr = capturedOutput();
+  const status = await runProductCli(argv, {
+    ...dependencies,
+    stdout: stdout.stream,
+    stderr: stderr.stream,
+  });
+  if (status !== 0) {
+    const raw = stderr.read().trim();
+    let detail = raw;
+    try {
+      const error = capturedRecord(raw, label)["error"];
+      if (typeof error === "string") detail = error;
+    } catch {
+      // Preserve the raw diagnostic when a failed child did not emit JSON.
+    }
+    throw new Error(`${label} failed${detail.length === 0 ? "" : `: ${detail}`}`);
+  }
+  return capturedRecord(stdout.read(), label);
+}
+
+async function readHiddenCredential(
+  label: string,
+  stderr: Pick<Writable, "write">,
+): Promise<string> {
+  const input = process.stdin;
+  if (!input.isTTY || typeof input.setRawMode !== "function") {
+    throw new Error(
+      `bootstrap requires an interactive terminal for the hidden ${label} prompt`,
+    );
+  }
+  const wasRaw = input.isRaw;
+  const wasPaused = input.isPaused();
+  stderr.write(`${label} (hidden): `);
+  return await new Promise<string>((resolve, reject) => {
+    let value = "";
+    let settled = false;
+    const finish = (error?: Error) => {
+      if (settled) return;
+      settled = true;
+      input.off("data", onData);
+      input.setRawMode(wasRaw);
+      if (wasPaused) input.pause();
+      stderr.write("\n");
+      if (error === undefined) resolve(value);
+      else reject(error);
+    };
+    const onData = (chunk: Buffer | string) => {
+      for (const character of chunk.toString("utf8")) {
+        if (character === "\u0003" || character === "\u0004") {
+          finish(new Error(`${label} entry was cancelled`));
+          return;
+        }
+        if (character === "\r" || character === "\n") {
+          finish();
+          return;
+        }
+        if (character === "\u007f" || character === "\b") {
+          value = value.slice(0, -1);
+          continue;
+        }
+        value += character;
+        if (value.length > 4096) {
+          finish(new Error(`${label} is too long`));
+          return;
+        }
+      }
+    };
+    input.setRawMode(true);
+    input.resume();
+    input.on("data", onData);
+  });
+}
+
+async function runBootstrapCommand(
+  parsed: ParsedCommand,
+  dependencies: ProductCliDependencies,
+  stdout: Pick<Writable, "write">,
+  stderr: Pick<Writable, "write">,
+): Promise<number> {
+  try {
+    const buildIdentity =
+      dependencies.operator?.buildIdentity ?? packagedBuildIdentity();
+    if (buildIdentity.source_kind !== "materialized-commit") {
+      throw new Error(
+        "bootstrap requires a package built from a materialized-commit",
+      );
+    }
+    const platform = dependencies.operator?.platform ?? process.platform;
+    const architecture = dependencies.operator?.architecture ?? process.arch;
+    const nodeVersion = dependencies.operator?.nodeVersion ?? process.version;
+    if (platform !== "darwin" || architecture !== "arm64") {
+      throw new Error(
+        `bootstrap requires darwin/arm64; observed ${platform}/${architecture}`,
+      );
+    }
+    if (nodeVersion !== "v22.22.1") {
+      throw new Error(
+        `bootstrap requires Node v22.22.1; observed ${nodeVersion}`,
+      );
+    }
+    if (parsed.allowExportableSoftwareKey !== true) {
+      throw new Error(
+        "bootstrap requires --allow-exportable-software-key for the pilot-grade installation key",
+      );
+    }
+    const fileSystem =
+      dependencies.operator?.fileSystem ?? nodeOperatorFileSystem;
+    const pathExists = (path: string) => fileSystem.exists(path);
+    refuseRetiredFounderProvenance(parsed.stateDirectory!);
+    const classifier =
+      dependencies.classifyStateFilesystem ?? classifyStateFilesystem;
+    const filesystem = await classifier(parsed.stateDirectory!);
+    if (filesystem.kind !== "local") {
+      throw new Error(
+        `bootstrap requires a local state filesystem; observed ${filesystem.kind}: ${filesystem.raw}`,
+      );
+    }
+    const configExists = pathExists(parsed.configPath);
+    const stateExists = pathExists(parsed.stateDirectory!);
+    if (configExists && !stateExists) {
+      throw new Error(
+        "bootstrap found an incomplete config/state pair and will not guess ownership",
+      );
+    }
+    const invitation = readPrivateOrganizationEnrollmentInvitation(
+      parsed.invitationPath!,
+    );
+    if (invitation.status !== "issued" || invitation.issued === null) {
+      throw new Error("organization invitation has not been issued");
+    }
+    if (invitation.authority_pin_sha256 !== parsed.authorityPin) {
+      throw new Error(
+        "independently supplied authority PIN does not match the invitation",
+      );
+    }
+    const slackApproval = {
+      channelId: parsed.slackChannelId!,
+      reviewerUserId: parsed.slackReviewerUserId!,
+      reviewerName: parsed.slackReviewerName!,
+    };
+    const expectedConfig = createProductOnboardConfig(
+      parsed.stateDirectory!,
+      parsed.ownerEmail!,
+      slackApproval,
+    );
+    const credentialPath = join(
+      parsed.stateDirectory!,
+      "credentials",
+      "granola-api-key",
+    );
+    const slackCredentialPath = join(
+      parsed.stateDirectory!,
+      "credentials",
+      "slack-bot-token",
+    );
+    const readGranolaCredential =
+      dependencies.bootstrap?.readGranolaCredential ??
+      (() => readHiddenCredential("Granola API token", stderr));
+    const readSlackCredential =
+      dependencies.bootstrap?.readSlackCredential ??
+      (() => readHiddenCredential("Slack bot token", stderr));
+    if (!configExists) {
+      onboardProduct(
+        parsed.configPath,
+        parsed.stateDirectory!,
+        {
+          fileSystem,
+          granolaOwnerEmail: parsed.ownerEmail!,
+          slackApproval,
+        },
+      );
+    } else {
+      const existingConfig = loadProductRuntimeConfig(parsed.configPath);
+      if (
+        canonicalProductConfigSha256(existingConfig) !==
+        canonicalProductConfigSha256(expectedConfig)
+      ) {
+        throw new Error(
+          "bootstrap will resume only an exact owner-bound bootstrap profile",
+        );
+      }
+      const existingStatus = await runCapturedCliStep(
+        "bootstrap resume status",
+        ["status", "--config", parsed.configPath],
+        dependencies,
+      );
+      const service = existingStatus["service"];
+      if (
+        service === null ||
+        typeof service !== "object" ||
+        Array.isArray(service) ||
+        (service as Record<string, unknown>)["installed"] !== false ||
+        (service as Record<string, unknown>)["loaded"] !== false ||
+        (service as Record<string, unknown>)["running"] !== false
+      ) {
+        throw new Error(
+          "bootstrap will not resume an activated installation; use update apply",
+        );
+      }
+    }
+
+    if (!pathExists(credentialPath)) {
+      createProductBootstrapCredential(
+        credentialPath,
+        await readGranolaCredential(),
+        "granola",
+        fileSystem,
+      );
+    }
+    if (!pathExists(slackCredentialPath)) {
+      createProductBootstrapCredential(
+        slackCredentialPath,
+        await readSlackCredential(),
+        "slack",
+        fileSystem,
+      );
+    }
+
+    await runCapturedCliStep(
+      "initialize",
+      ["init", "--config", parsed.configPath],
+      dependencies,
+    );
+    const initializedConfig = loadProductRuntimeConfig(parsed.configPath);
+    createProductOperator(
+      parsed.configPath,
+      initializedConfig,
+      dependencies,
+    ).preflightServiceStart();
+    const enrollmentArgs = [
+      "organization",
+      "enroll",
+      "--config",
+      parsed.configPath,
+      "--invitation",
+      parsed.invitationPath!,
+      "--authority-pin",
+      parsed.authorityPin!,
+      "--allow-exportable-software-key",
+      ...(parsed.authorityCaPath === undefined
+        ? []
+        : ["--authority-ca", parsed.authorityCaPath]),
+    ];
+    const organizationState = new SqliteOrganizationStateStore(
+      resolveProductStatePaths(parsed.stateDirectory!).database,
+    );
+    let alreadyEnrolled = false;
+    try {
+      const enrollment = organizationState.readEnrollment();
+      if (
+        enrollment !== null &&
+        enrollment.receipt !== null &&
+        enrollment.accepted_access_sequence > 0
+      ) {
+        alreadyEnrolled = true;
+        const request = enrollment.request;
+        const connection = organizationState.readAuthorityConnection();
+        const pinned = organizationState.readPinnedAuthority();
+        if (
+          request.authority_id !== invitation.authority_id ||
+          request.organization_id !== invitation.organization_id ||
+          request.principal_id !== invitation.issued.principal_id ||
+          request.membership_id !== invitation.membership_id ||
+          request.enrollment_grant_sha256 !==
+            invitation.enrollment_grant_sha256 ||
+          connection?.authority_base_url !== invitation.authority_base_url ||
+          pinned?.authority_pin_sha256 !== invitation.authority_pin_sha256
+        ) {
+          throw new Error(
+            "bootstrap invitation does not match the enrolled organization identity",
+          );
+        }
+      }
+    } finally {
+      organizationState.close();
+    }
+    const organization = await runCapturedCliStep(
+      alreadyEnrolled
+        ? "organization access refresh"
+        : "organization enrollment",
+      alreadyEnrolled
+        ? ["organization", "refresh", "--config", parsed.configPath]
+        : enrollmentArgs,
+      dependencies,
+    );
+    const access = organization["access"];
+    if (
+      access === null ||
+      typeof access !== "object" ||
+      Array.isArray(access) ||
+      (access as Record<string, unknown>)["permitted"] !== true ||
+      (access as Record<string, unknown>)["status"] !== "active"
+    ) {
+      throw new Error("organization enrollment did not grant active access");
+    }
+    const inactiveService = await runCapturedCliStep(
+      "inactive service status",
+      ["status", "--config", parsed.configPath],
+      dependencies,
+    );
+    const service = inactiveService["service"];
+    const issues = inactiveService["issues"];
+    if (
+      inactiveService["initialized"] !== true ||
+      !Array.isArray(issues) ||
+      issues.length !== 0 ||
+      service === null ||
+      typeof service !== "object" ||
+      Array.isArray(service) ||
+      (service as Record<string, unknown>)["installed"] !== false ||
+      (service as Record<string, unknown>)["loaded"] !== false ||
+      (service as Record<string, unknown>)["running"] !== false
+    ) {
+      throw new Error(
+        "bootstrap local preflight did not leave an initialized, issue-free, stopped installation",
+      );
+    }
+    print(stdout, {
+      ok: true,
+      command: "bootstrap",
+      owner_email: parsed.ownerEmail,
+      config_path: parsed.configPath,
+      state_dir: parsed.stateDirectory,
+      credential_path: credentialPath,
+      slack_credential_path: slackCredentialPath,
+      organization: {
+        enrolled: organization["enrolled"],
+        access,
+        ...(organization["key_assurance_policy"] === undefined
+          ? {}
+          : {
+              key_assurance_policy:
+                organization["key_assurance_policy"],
+            }),
+      },
+      service,
+      local_preflight: { ok: true },
+      product_work_started: false,
+      approval_activation: {
+        required: true,
+        endpoint: "/v1/admin/integrations/slack-approval-bootstrap",
+        target_membership_id: (access as Record<string, unknown>)[
+          "membership_id"
+        ],
+        installation_id: (access as Record<string, unknown>)[
+          "installation_id"
+        ],
+        adapter_instance_id: "internal-approvals",
+        adapter_version:
+          SLACK_REACTIONS_APPROVAL_SURFACE_ADAPTER_VERSION,
+        channel_id: parsed.slackChannelId,
+        approve_reaction: DEFAULT_APPROVE_REACTION,
+        reject_reaction: DEFAULT_REJECT_REACTION,
+        slack_user_id: parsed.slackReviewerUserId,
+      },
+      next_steps: [
+        "administrator completes central Slack approval bootstrap using approval_activation; do not use organization slack-link-* because it creates no approval grants",
+        "create one controlled owner-visible meeting note with explicit Decision:, Action:, and Rationale: lines",
+        `echo-brain run-once --config ${parsed.configPath}`,
+        "react to the pending Slack card as the configured reviewer",
+        `echo-brain run-once --config ${parsed.configPath}`,
+        "inspect the JSONL outbox, then run once again and confirm no duplicate delivery",
+        `echo-brain service install --config ${parsed.configPath}`,
+        `echo-brain doctor --config ${parsed.configPath}`,
+        `echo-brain update apply --channel internal-live --config ${parsed.configPath}`,
+      ],
+    });
+    return 0;
+  } catch (error) {
+    printOperatorError(stderr, "bootstrap", error);
+    return 1;
+  }
+}
+
 export async function runProductCli(
   argv: readonly string[],
   dependencies: ProductCliDependencies = {},
@@ -1189,6 +1685,14 @@ export async function runProductCli(
   } catch (error) {
     print(stderr, { ok: false, error: (error as Error).message });
     return 2;
+  }
+  if (parsed.command === "bootstrap") {
+    return await runBootstrapCommand(
+      parsed,
+      dependencies,
+      stdout,
+      stderr,
+    );
   }
   if (parsed.command === "onboard") {
     // `onboard` learns its state path from `--state-dir`, not from a config
@@ -2036,7 +2540,11 @@ export async function runProductCli(
       }
     }
     const action = parsed.serviceAction!;
-    if (action === "install" || action === "start" || action === "restart") {
+    if (
+      action === "install" ||
+      action === "start" ||
+      action === "restart"
+    ) {
       const probe = await probeConfig(config, classifier);
       if (!probe.ok) {
         print(stderr, {
@@ -2065,7 +2573,10 @@ export async function runProductCli(
         } finally {
           await release();
         }
-      } else if (action === "install" || action === "start") {
+      } else if (
+        action === "install" ||
+        action === "start"
+      ) {
         const before = await operator.status();
         if (before.service.running) {
           result = await operator.service(action);

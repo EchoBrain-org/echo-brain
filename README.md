@@ -48,7 +48,7 @@ foreground commands remain Node-based.
 npm ci
 npm run check
 npm pack
-npm install -g ./echo-brain-0.1.0-internal.4.tgz
+npm install -g ./echo-brain-0.1.0-internal.5.tgz
 ```
 
 `npm run check` runs the source-boundary check, TypeScript, ESLint, and the
@@ -68,15 +68,27 @@ Internal Live is the small, controlled release lane for ECHO employees. It is
 not a client release. A manual GitHub workflow builds the npm package once from
 `main`, tests those exact bytes on macOS arm64, waits for approval in the
 protected `internal-live` environment, and publishes a prerelease bundle whose
-exact bytes are pinned by a manifest and checksums.
+exact bytes are pinned by a manifest and checksums, with bundled provenance
+evidence attached.
 
 ### One-time updater bootstrap
 
 A clean Mac needs one manual install of an updater-capable release. The
-administrator chooses one exact release as the bootstrap anchor and sends its
-version, source SHA, artifact SHA-256, workflow run ID, and run attempt over the
-trusted handoff channel. Those coordinates are immutable for that handoff;
-never substitute a moving `latest` release.
+administrator chooses one exact release as the bootstrap anchor and transfers
+that release's artifact, manifest, checksums, and attestation bundle as one
+directory. The version, source SHA, and artifact SHA-256 travel over
+the trusted handoff channel. Those coordinates are immutable for that handoff;
+never substitute a moving `latest` release. Downloading the private release may
+use an administrator's GitHub session on an admin workstation, but the employee
+Mac must not receive or require those credentials.
+
+Before a new employee runs `bootstrap` and becomes an active installation, the
+administrator must approve this exact manifest as the Authority's current
+Internal Live release. Version, source SHA, and artifact SHA-256 must match the
+transferred bundle. This ordering matters: the rollout gate may require every
+existing active installation to be healthy on the previous release before it
+accepts the next one. With no current directive the final update stops; it also
+refuses to install a lower Internal Live version than the one already installed.
 
 An already-enrolled Mac whose CLI predates `update apply` is a maintenance
 migration, not a clean bootstrap. Verify the release first, then use a reviewed
@@ -88,8 +100,15 @@ transition; future releases use the normal updater below.
 
 First perform every non-mutating trust check while any existing service remains
 running. On either kind of Mac, replace every angle-bracket value with the
-administrator's exact approved coordinates. This requires authenticated `gh`
-access to the repository's Actions approval records:
+administrator's exact approved coordinates and point `BOOTSTRAP_DIRECTORY` at
+the transferred release directory. The independently communicated artifact
+SHA-256 is the employee's bootstrap integrity anchor. The bundled Sigstore
+attestation is verified against the public trust root obtained by GitHub CLI
+and additionally checks provenance for the pinned GitHub workflow and source
+commit. It does not independently prove the approver's identity. The protected
+`internal-live` environment is the publisher-side approval gate. The employee
+Mac needs network access to the public trust service, but no GitHub login or
+Actions API access:
 
 ```sh
 set -euo pipefail
@@ -97,12 +116,13 @@ BOOTSTRAP_REPOSITORY='EchoBrain-org/echo-brain'
 BOOTSTRAP_VERSION='<exact MAJOR.MINOR.PATCH-internal.SEQUENCE>'
 BOOTSTRAP_SOURCE_SHA='<exact 40-character source SHA>'
 BOOTSTRAP_ARTIFACT_SHA256='<exact 64-character artifact SHA-256>'
-BOOTSTRAP_RUN_ID='<exact workflow run ID>'
-BOOTSTRAP_RUN_ATTEMPT='<exact workflow run attempt>'
 BOOTSTRAP_TAG="internal-v${BOOTSTRAP_VERSION}"
 BOOTSTRAP_ARTIFACT="echo-brain-${BOOTSTRAP_VERSION}.tgz"
-BOOTSTRAP_DIRECTORY="$(mktemp -d)"
+BOOTSTRAP_DIRECTORY='/absolute/path/to/transferred-release-directory'
 BOOTSTRAP_ARTIFACT_PATH="${BOOTSTRAP_DIRECTORY}/${BOOTSTRAP_ARTIFACT}"
+BOOTSTRAP_MANIFEST_PATH="${BOOTSTRAP_DIRECTORY}/internal-live-release-manifest.v1.json"
+BOOTSTRAP_ATTESTATION_PATH="${BOOTSTRAP_DIRECTORY}/internal-live-attestation-bundle.v1.json"
+BOOTSTRAP_GH_CONFIG="$(mktemp -d)"
 BOOTSTRAP_NODE="$(command -v node)"
 BOOTSTRAP_NPM="$(command -v npm)"
 BOOTSTRAP_RUNTIME_BIN="$(dirname "$BOOTSTRAP_NODE")"
@@ -115,30 +135,25 @@ test "$BOOTSTRAP_RUNTIME_BIN" = "$(dirname "$BOOTSTRAP_NPM")"
 test "$("$BOOTSTRAP_NODE" --version)" = v22.22.1
 test "$("$BOOTSTRAP_NODE" -p 'process.platform+"|"+process.arch')" = 'darwin|arm64'
 test "$("$BOOTSTRAP_NPM" --version)" = 10.9.4
+test -s "$BOOTSTRAP_ARTIFACT_PATH"
+test -s "$BOOTSTRAP_MANIFEST_PATH"
+test -s "${BOOTSTRAP_DIRECTORY}/SHA256SUMS"
+test -s "$BOOTSTRAP_ATTESTATION_PATH"
 
-gh release download "$BOOTSTRAP_TAG" \
-  --repo "$BOOTSTRAP_REPOSITORY" \
-  --dir "$BOOTSTRAP_DIRECTORY" \
-  --pattern "$BOOTSTRAP_ARTIFACT" \
-  --pattern SHA256SUMS
-
-test "$(gh release view "$BOOTSTRAP_TAG" \
-  --repo "$BOOTSTRAP_REPOSITORY" \
-  --json tagName,targetCommitish,isPrerelease \
-  --jq '[.tagName,.targetCommitish,(.isPrerelease|tostring)]|join("|")')" \
-  = "${BOOTSTRAP_TAG}|${BOOTSTRAP_SOURCE_SHA}|true"
-
-test "$(gh run view "$BOOTSTRAP_RUN_ID" \
-  --repo "$BOOTSTRAP_REPOSITORY" \
-  --attempt "$BOOTSTRAP_RUN_ATTEMPT" \
-  --json conclusion,event,headBranch,headSha,workflowName,jobs \
-  --jq '[.conclusion,.event,.headBranch,.headSha,.workflowName,([.jobs[]|select(.name=="Approve, attest, and publish prerelease")|.conclusion]|join(","))]|join("|")')" \
-  = "success|workflow_dispatch|main|${BOOTSTRAP_SOURCE_SHA}|INTERNAL LIVE release|success"
-
-test "$(gh api \
-  "repos/${BOOTSTRAP_REPOSITORY}/actions/runs/${BOOTSTRAP_RUN_ID}/approvals" \
-  --jq '[.[]|select(.state=="approved")|.environments[]|select(.name=="internal-live")]|length>0')" \
-  = true
+test "$("$BOOTSTRAP_NODE" -e '
+  const fs = require("node:fs");
+  const value = JSON.parse(fs.readFileSync(process.argv[1], "utf8"));
+  process.stdout.write([
+    value.release_version,
+    value.release_tag,
+    value.source?.sha,
+    value.artifact?.filename,
+    value.artifact?.sha256,
+    value.build?.repository,
+    value.build?.workflow,
+  ].join("|"));
+' "$BOOTSTRAP_MANIFEST_PATH")" \
+  = "${BOOTSTRAP_VERSION}|${BOOTSTRAP_TAG}|${BOOTSTRAP_SOURCE_SHA}|${BOOTSTRAP_ARTIFACT}|${BOOTSTRAP_ARTIFACT_SHA256}|${BOOTSTRAP_REPOSITORY}|internal-live-release.yml"
 
 test "$(awk 'NR==1{v=$1"|"$2} END{if(NR!=1)exit 1; print v}' \
   "${BOOTSTRAP_DIRECTORY}/SHA256SUMS")" \
@@ -147,13 +162,15 @@ test "$(awk 'NR==1{v=$1"|"$2} END{if(NR!=1)exit 1; print v}' \
   printf '%s  %s\n' "$BOOTSTRAP_ARTIFACT_SHA256" "$BOOTSTRAP_ARTIFACT" | \
   shasum -a 256 --check -)
 
-gh attestation verify "$BOOTSTRAP_ARTIFACT_PATH" \
-  --repo "$BOOTSTRAP_REPOSITORY" \
-  --signer-workflow "$BOOTSTRAP_REPOSITORY/.github/workflows/internal-live-release.yml" \
-  --signer-digest "$BOOTSTRAP_SOURCE_SHA" \
-  --source-digest "$BOOTSTRAP_SOURCE_SHA" \
-  --source-ref refs/heads/main \
-  --deny-self-hosted-runners
+env -u GH_TOKEN -u GITHUB_TOKEN GH_CONFIG_DIR="$BOOTSTRAP_GH_CONFIG" \
+  gh attestation verify "$BOOTSTRAP_ARTIFACT_PATH" \
+    --repo "$BOOTSTRAP_REPOSITORY" \
+    --bundle "$BOOTSTRAP_ATTESTATION_PATH" \
+    --signer-workflow "$BOOTSTRAP_REPOSITORY/.github/workflows/internal-live-release.yml" \
+    --signer-digest "$BOOTSTRAP_SOURCE_SHA" \
+    --source-digest "$BOOTSTRAP_SOURCE_SHA" \
+    --source-ref refs/heads/main \
+    --deny-self-hosted-runners
 ```
 
 Only after every check above exits zero may a clean-Mac installation begin.
@@ -197,12 +214,80 @@ file "${BOOTSTRAP_NPM_PREFIX}/lib/node_modules/echo-brain/node_modules/better-sq
 ```
 
 Persist `export PATH="$HOME/.npm-global/bin:$PATH"` once in `~/.zshrc`.
-A clean Mac continues with `onboard`, `init`, `organization enroll`, service
-setup, and a green local doctor. Bootstrap is complete only after it immediately
-runs native `update apply` for the Authority's current release and the central
-rollout status records that installation's healthy receipt. The manual first
-install is the sole pre-Authority exception; the native update performs the
-normal signed Authority request and full manifest/package verification.
+
+After the administrator supplies the employee's invitation and communicates
+the Authority PIN over an independent channel, the employee runs one ECHO
+command. Keep the invitation in a current-user `0700` directory as a `0600`
+file; it contains a one-time enrollment secret. The administrator also supplies
+the approved Slack channel and employee reviewer identity. The command prompts
+locally for the Granola token and organization Slack bot token without echoing
+either one:
+
+```sh
+ECHO_CONFIG="$HOME/.config/echo-brain/runtime.json"
+ECHO_STATE="$HOME/.local/share/echo-brain"
+ECHO_INVITATION="$HOME/.config/echo-brain/enrollment/echo-organization-invitation.json"
+
+echo-brain bootstrap \
+  --config "$ECHO_CONFIG" \
+  --state-dir "$ECHO_STATE" \
+  --owner-email '<employee canonical lowercase email>' \
+  --slack-channel-id '<C...>' \
+  --slack-reviewer-user-id '<U...>' \
+  --slack-reviewer-name '<employee display name>' \
+  --invitation "$ECHO_INVITATION" \
+  --authority-pin '<PIN from the independent channel>' \
+  --allow-exportable-software-key
+```
+
+`bootstrap` requires a materialized-commit build; release provenance is
+established by the artifact verification above. It creates an owner-bound
+Granola source with `page_size: 1`, configures the existing Slack-reaction
+approval adapter, stores both tokens in private local files, initializes and
+enrolls the installation, and runs an internal local preflight. It does not place an
+auto-start file in `~/Library/LaunchAgents`, construct product adapters, contact
+Granola, Slack, or an LLM, or start product work. The successful final service
+state is `installed: false`, `loaded: false`, `running: false`.
+
+The employee-supplied owner email is a local Granola boundary, not an
+Authority-issued identity claim. The central Slack approval bootstrap validates
+the supplied Slack human, channel, membership, and installation before it
+creates approve/reject grants. The bootstrap result prints a non-secret
+`approval_activation` object. An administrator uses those exact fields, a
+fresh command ID, the administrator and target membership IDs, and the same
+organization bot token with the existing authenticated
+`POST /v1/admin/integrations/slack-approval-bootstrap` route described in the
+[Authority runbook](services/organization-authority/README.md). Do not use
+`organization slack-link-*` for this pilot path; that identity proof creates no
+approval grants.
+
+Only after that central activation succeeds, run the stopped, controlled test:
+
+```sh
+# The note must be visible to the employee and contain explicit
+# Decision:, Action:, and Rationale: lines.
+echo-brain run-once --config "$ECHO_CONFIG"
+echo-brain approvals --config "$ECHO_CONFIG"
+# React to the new card in Slack as the configured reviewer.
+echo-brain run-once --config "$ECHO_CONFIG"
+test "$(wc -l < "$ECHO_STATE/outbox.jsonl" | tr -d ' ')" = 1
+echo-brain run-once --config "$ECHO_CONFIG"
+test "$(wc -l < "$ECHO_STATE/outbox.jsonl" | tr -d ' ')" = 1
+```
+
+The first pass creates and posts one pending approval. The reviewer reaction is
+checked live by the Authority; the second pass resolves and writes exactly one
+JSONL delivery; the third confirms it is not duplicated. Then run the normal
+`service install`, green doctor, and native `update apply`. That last command
+exercises the Authority's signed release path and records the installation's
+healthy receipt centrally. The manual first package install is the sole
+pre-Authority exception.
+
+```sh
+echo-brain service install --config "$ECHO_CONFIG"
+echo-brain doctor --config "$ECHO_CONFIG"
+echo-brain update apply --channel internal-live --config "$ECHO_CONFIG"
+```
 
 ### Normal enrolled-machine updates
 

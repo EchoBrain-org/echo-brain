@@ -19,6 +19,7 @@ describe('standalone CLI basics', () => {
     const stdout = output();
     expect(await runProductCli([], { stdout: stdout.stream })).toBe(0);
     expect(stdout.read()).toContain('Usage:');
+    expect(stdout.read()).toContain('echo-brain bootstrap');
     expect(stdout.read()).toContain('echo-brain selftest');
     expect(stdout.read()).toContain('echo-brain identity-check');
     expect(stdout.read()).toContain('echo-brain organization enroll');
@@ -41,7 +42,7 @@ describe('standalone CLI basics', () => {
     ]) {
       const stderr = output();
       expect(await runProductCli(argv, { stderr: stderr.stream })).toBe(2);
-      expect(stderr.read()).toContain('usage: echo-brain <onboard|');
+      expect(stderr.read()).toContain('usage: echo-brain <bootstrap|onboard|');
     }
   });
 
@@ -50,6 +51,6 @@ describe('standalone CLI basics', () => {
     expect(await runProductCli(['--version'], { stdout: stdout.stream })).toBe(
       0,
     );
-    expect(stdout.read()).toBe('0.1.0-internal.4\n');
+    expect(stdout.read()).toBe('0.1.0-internal.5\n');
   });
 });
