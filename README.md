@@ -70,9 +70,143 @@ not a client release. A manual GitHub workflow builds the npm package once from
 protected `internal-live` environment, and publishes a prerelease bundle whose
 exact bytes are pinned by a manifest and checksums.
 
-The first Internal Live package is a one-time updater bootstrap and is installed
-from its checked release bundle. After that, an enrolled Mac updates with one
-command:
+### One-time updater bootstrap
+
+A clean Mac needs one manual install of an updater-capable release. The
+administrator chooses one exact release as the bootstrap anchor and sends its
+version, source SHA, artifact SHA-256, workflow run ID, and run attempt over the
+trusted handoff channel. Those coordinates are immutable for that handoff;
+never substitute a moving `latest` release.
+
+An already-enrolled Mac whose CLI predates `update apply` is a maintenance
+migration, not a clean bootstrap. Verify the release first, then use a reviewed
+operator procedure that retains the old package, stops the service before
+backing up state, restores both on failure, and finishes with native
+`update apply`. Do not paste the clean-install command over a running enrolled
+installation. All current Internal Live pilot Macs have completed this
+transition; future releases use the normal updater below.
+
+First perform every non-mutating trust check while any existing service remains
+running. On either kind of Mac, replace every angle-bracket value with the
+administrator's exact approved coordinates. This requires authenticated `gh`
+access to the repository's Actions approval records:
+
+```sh
+set -euo pipefail
+BOOTSTRAP_REPOSITORY='EchoBrain-org/echo-brain'
+BOOTSTRAP_VERSION='<exact MAJOR.MINOR.PATCH-internal.SEQUENCE>'
+BOOTSTRAP_SOURCE_SHA='<exact 40-character source SHA>'
+BOOTSTRAP_ARTIFACT_SHA256='<exact 64-character artifact SHA-256>'
+BOOTSTRAP_RUN_ID='<exact workflow run ID>'
+BOOTSTRAP_RUN_ATTEMPT='<exact workflow run attempt>'
+BOOTSTRAP_TAG="internal-v${BOOTSTRAP_VERSION}"
+BOOTSTRAP_ARTIFACT="echo-brain-${BOOTSTRAP_VERSION}.tgz"
+BOOTSTRAP_DIRECTORY="$(mktemp -d)"
+BOOTSTRAP_ARTIFACT_PATH="${BOOTSTRAP_DIRECTORY}/${BOOTSTRAP_ARTIFACT}"
+BOOTSTRAP_NODE="$(command -v node)"
+BOOTSTRAP_NPM="$(command -v npm)"
+BOOTSTRAP_RUNTIME_BIN="$(dirname "$BOOTSTRAP_NODE")"
+
+test "$(uname -s)" = Darwin
+test "$(uname -m)" = arm64
+test -x "$BOOTSTRAP_NODE"
+test -x "$BOOTSTRAP_NPM"
+test "$BOOTSTRAP_RUNTIME_BIN" = "$(dirname "$BOOTSTRAP_NPM")"
+test "$("$BOOTSTRAP_NODE" --version)" = v22.22.1
+test "$("$BOOTSTRAP_NODE" -p 'process.platform+"|"+process.arch')" = 'darwin|arm64'
+test "$("$BOOTSTRAP_NPM" --version)" = 10.9.4
+
+gh release download "$BOOTSTRAP_TAG" \
+  --repo "$BOOTSTRAP_REPOSITORY" \
+  --dir "$BOOTSTRAP_DIRECTORY" \
+  --pattern "$BOOTSTRAP_ARTIFACT" \
+  --pattern SHA256SUMS
+
+test "$(gh release view "$BOOTSTRAP_TAG" \
+  --repo "$BOOTSTRAP_REPOSITORY" \
+  --json tagName,targetCommitish,isPrerelease \
+  --jq '[.tagName,.targetCommitish,(.isPrerelease|tostring)]|join("|")')" \
+  = "${BOOTSTRAP_TAG}|${BOOTSTRAP_SOURCE_SHA}|true"
+
+test "$(gh run view "$BOOTSTRAP_RUN_ID" \
+  --repo "$BOOTSTRAP_REPOSITORY" \
+  --attempt "$BOOTSTRAP_RUN_ATTEMPT" \
+  --json conclusion,event,headBranch,headSha,workflowName,jobs \
+  --jq '[.conclusion,.event,.headBranch,.headSha,.workflowName,([.jobs[]|select(.name=="Approve, attest, and publish prerelease")|.conclusion]|join(","))]|join("|")')" \
+  = "success|workflow_dispatch|main|${BOOTSTRAP_SOURCE_SHA}|INTERNAL LIVE release|success"
+
+test "$(gh api \
+  "repos/${BOOTSTRAP_REPOSITORY}/actions/runs/${BOOTSTRAP_RUN_ID}/approvals" \
+  --jq '[.[]|select(.state=="approved")|.environments[]|select(.name=="internal-live")]|length>0')" \
+  = true
+
+test "$(awk 'NR==1{v=$1"|"$2} END{if(NR!=1)exit 1; print v}' \
+  "${BOOTSTRAP_DIRECTORY}/SHA256SUMS")" \
+  = "${BOOTSTRAP_ARTIFACT_SHA256}|${BOOTSTRAP_ARTIFACT}"
+(cd "$BOOTSTRAP_DIRECTORY" && \
+  printf '%s  %s\n' "$BOOTSTRAP_ARTIFACT_SHA256" "$BOOTSTRAP_ARTIFACT" | \
+  shasum -a 256 --check -)
+
+gh attestation verify "$BOOTSTRAP_ARTIFACT_PATH" \
+  --repo "$BOOTSTRAP_REPOSITORY" \
+  --signer-workflow "$BOOTSTRAP_REPOSITORY/.github/workflows/internal-live-release.yml" \
+  --signer-digest "$BOOTSTRAP_SOURCE_SHA" \
+  --source-digest "$BOOTSTRAP_SOURCE_SHA" \
+  --source-ref refs/heads/main \
+  --deny-self-hosted-runners
+```
+
+Only after every check above exits zero may a clean-Mac installation begin.
+Continue in the same shell:
+
+```sh
+set -euo pipefail
+
+BOOTSTRAP_NPM_PREFIX="${HOME}/.npm-global"
+BOOTSTRAP_NPM_HOME="${BOOTSTRAP_DIRECTORY}/npm-home"
+BOOTSTRAP_NPM_CACHE="${BOOTSTRAP_DIRECTORY}/npm-cache"
+install -d -m 0700 "$BOOTSTRAP_NPM_PREFIX" "$BOOTSTRAP_NPM_HOME" \
+  "$BOOTSTRAP_NPM_CACHE"
+install -m 0600 /dev/null "${BOOTSTRAP_DIRECTORY}/user.npmrc"
+install -m 0600 /dev/null "${BOOTSTRAP_DIRECTORY}/global.npmrc"
+(
+  cd "$BOOTSTRAP_DIRECTORY"
+  env -i HOME="$BOOTSTRAP_NPM_HOME" \
+    PATH="${BOOTSTRAP_RUNTIME_BIN}:/usr/bin:/bin:/usr/sbin:/sbin" \
+    "$BOOTSTRAP_NPM" install --global \
+    --prefix "$BOOTSTRAP_NPM_PREFIX" \
+    --cache "$BOOTSTRAP_NPM_CACHE" \
+    --registry=https://registry.npmjs.org/ \
+    --userconfig="${BOOTSTRAP_DIRECTORY}/user.npmrc" \
+    --globalconfig="${BOOTSTRAP_DIRECTORY}/global.npmrc" \
+    --no-audit --no-fund --no-update-notifier \
+    "$BOOTSTRAP_ARTIFACT_PATH"
+)
+export PATH="${BOOTSTRAP_NPM_PREFIX}/bin:${PATH}"
+test "$(echo-brain --version)" = "$BOOTSTRAP_VERSION"
+test "$("$BOOTSTRAP_NODE" -e '
+  const fs = require("node:fs");
+  const identity = JSON.parse(fs.readFileSync(process.argv[1], "utf8"));
+  process.stdout.write(
+    `${identity.product_version}|${identity.source_sha}|${identity.source_kind}`,
+  );
+' "${BOOTSTRAP_NPM_PREFIX}/lib/node_modules/echo-brain/dist/product/build-identity.v1.json")" \
+  = "${BOOTSTRAP_VERSION}|${BOOTSTRAP_SOURCE_SHA}|materialized-commit"
+file "${BOOTSTRAP_NPM_PREFIX}/lib/node_modules/echo-brain/node_modules/better-sqlite3/build/Release/better_sqlite3.node" | \
+  grep -q 'Mach-O 64-bit bundle arm64'
+```
+
+Persist `export PATH="$HOME/.npm-global/bin:$PATH"` once in `~/.zshrc`.
+A clean Mac continues with `onboard`, `init`, `organization enroll`, service
+setup, and a green local doctor. Bootstrap is complete only after it immediately
+runs native `update apply` for the Authority's current release and the central
+rollout status records that installation's healthy receipt. The manual first
+install is the sole pre-Authority exception; the native update performs the
+normal signed Authority request and full manifest/package verification.
+
+### Normal enrolled-machine updates
+
+After the one-time bootstrap and enrollment, every later update is one command:
 
 ```sh
 echo-brain update apply \
