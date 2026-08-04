@@ -11,13 +11,18 @@ import {
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
-import type { MeetingSourceAdapter } from '../../src/core/index.js';
+import type {
+  DecisionProcessorAdapter,
+  MeetingSourceAdapter,
+} from '../../src/core/index.js';
 import { ProductAdapterFactoryRegistry } from '../../src/product/adapter-factories.js';
 import {
   runProductCli,
   type ProductCliDependencies,
 } from '../../src/product/cli.js';
 import { createDefaultAdapterFactories } from '../../src/product/default-adapters.js';
+import { validateProductRuntimeConfig } from '../../src/product/config.js';
+import { canonicalProductConfigSha256 } from '../../src/product/lifecycle-lock.js';
 import type {
   LaunchctlResult,
   LaunchctlRunner,
@@ -152,6 +157,102 @@ function adapterFactories(
     }),
   });
   return factories;
+}
+
+function processorGateFactories(
+  health: 'healthy' | 'unavailable',
+  healthCalls: { count: number },
+  staticError?: string,
+): ProductAdapterFactoryRegistry {
+  const factories = adapterFactories();
+  factories.register({
+    kind: 'decision-processor',
+    adapter_id: 'fixture-processor',
+    create: (config): DecisionProcessorAdapter => ({
+      identity: {
+        kind: 'decision-processor',
+        adapter_id: config.adapter_id,
+        instance_id: config.instance_id,
+        version: '1.0.0',
+      },
+      validateConfig: () =>
+        staticError === undefined
+          ? { ok: true, errors: [] }
+          : { ok: false, errors: [staticError] },
+      healthCheck: async () => {
+        healthCalls.count += 1;
+        return {
+          status: health,
+          checked_at: fixedTime,
+          ...(health === 'healthy'
+            ? {}
+            : { message: 'configured provider model is unreachable' }),
+        };
+      },
+      extract: async (meeting) => ({
+        schema_version: 1,
+        meeting_id: meeting.id,
+        meeting_revision: meeting.provenance.canonical_revision,
+        processor: {
+          kind: 'decision-processor',
+          adapter_id: config.adapter_id,
+          instance_id: config.instance_id,
+          version: '1.0.0',
+        },
+        generated_at: fixedTime,
+        signals: [],
+      }),
+    }),
+  });
+  return factories;
+}
+
+function rewriteSlackSurfaces(
+  configPath: string,
+  approvalChannel: string,
+  deliveryChannel: string,
+  credentialRef: string,
+): void {
+  const config = JSON.parse(readFileSync(configPath, 'utf8')) as Record<
+    string,
+    unknown
+  >;
+  config['delivery_surfaces'] = [
+    ...(config['delivery_surfaces'] as unknown[]),
+    {
+      adapter_id: 'slack',
+      instance_id: 'team',
+      credential_ref: credentialRef,
+      settings: { channel_id: deliveryChannel },
+    },
+  ];
+  config['approval_mode'] = 'adapter';
+  config['approval_surface'] = {
+    adapter_id: 'slack-reactions',
+    instance_id: 'internal-approvals',
+    credential_ref: credentialRef,
+    settings: {
+      channel_id: approvalChannel,
+      reviewer: { slack_user_id: 'U0456EFGH', name: 'founder' },
+    },
+  };
+  writeFileSync(configPath, `${JSON.stringify(config, null, 2)}\n`);
+}
+
+function rewriteDecisionProcessor(
+  configPath: string,
+  adapterId: string,
+): void {
+  const config = JSON.parse(readFileSync(configPath, 'utf8')) as Record<
+    string,
+    unknown
+  >;
+  config['decision_processor'] = {
+    adapter_id: adapterId,
+    instance_id: 'primary',
+    settings: {},
+  };
+  writeFileSync(configPath, `${JSON.stringify(config, null, 2)}\n`);
 }
 
 function cliDependencies(root: string, cliPath: string, launchd: FakeLaunchd) {
@@ -610,6 +711,450 @@ describe('operator onboarding and lifecycle CLI', () => {
       dependencies,
     );
     expect(started.status, started.stderr).toBe(0);
+  });
+
+  it('refuses a changed unsupported decision processor before re-pinning the manifest', async () => {
+    const root = realpathSync(
+      mkdtempSync(join(tmpdir(), 'echo-processor-unsupported-')),
+    );
+    roots.push(root);
+    const fixture = fixtures(root);
+    const dependencies = cliDependencies(root, fixture.cliPath, fakeLaunchd());
+    expect(
+      (await command(['init', '--config', fixture.configPath], dependencies))
+        .status,
+    ).toBe(0);
+    const installationPath = join(
+      fixture.stateDirectory,
+      'manifests',
+      'operator-installation.v1.json',
+    );
+    const before = readFileSync(installationPath, 'utf8');
+
+    rewriteDecisionProcessor(fixture.configPath, 'not-installed-processor');
+    const result = await command(
+      ['reconfigure', '--config', fixture.configPath],
+      dependencies,
+    );
+    expect(result.status).toBe(1);
+    const failure = JSON.parse(result.stderr);
+    expect(failure).toMatchObject({
+      ok: false,
+      command: 'reconfigure',
+      code: 'decision_processor_rejected',
+    });
+    expect(failure.error).toContain(
+      "decision processor 'not-installed-processor' is not installed in this package",
+    );
+    expect(readFileSync(installationPath, 'utf8')).toBe(before);
+  });
+
+  it('requires one live health check before a changed decision processor is accepted', async () => {
+    const root = realpathSync(
+      mkdtempSync(join(tmpdir(), 'echo-processor-health-')),
+    );
+    roots.push(root);
+    const fixture = fixtures(root);
+    const healthCalls = { count: 0 };
+    const unhealthy = {
+      ...cliDependencies(root, fixture.cliPath, fakeLaunchd()),
+      adapterFactories: processorGateFactories('unavailable', healthCalls),
+    };
+    expect(
+      (await command(['init', '--config', fixture.configPath], unhealthy))
+        .status,
+    ).toBe(0);
+    const installationPath = join(
+      fixture.stateDirectory,
+      'manifests',
+      'operator-installation.v1.json',
+    );
+    const before = readFileSync(installationPath, 'utf8');
+
+    rewriteDecisionProcessor(fixture.configPath, 'fixture-processor');
+    const refused = await command(
+      ['reconfigure', '--config', fixture.configPath],
+      unhealthy,
+    );
+    expect(refused.status).toBe(1);
+    const failure = JSON.parse(refused.stderr);
+    expect(failure.code).toBe('decision_processor_rejected');
+    expect(failure.error).toContain('configured provider model is unreachable');
+    expect(healthCalls.count).toBe(1);
+    expect(readFileSync(installationPath, 'utf8')).toBe(before);
+
+    const healthy = {
+      ...cliDependencies(root, fixture.cliPath, fakeLaunchd()),
+      adapterFactories: processorGateFactories('healthy', healthCalls),
+    };
+    const accepted = await command(
+      ['reconfigure', '--config', fixture.configPath],
+      healthy,
+    );
+    expect(accepted.status, accepted.stderr).toBe(0);
+    expect(JSON.parse(accepted.stdout)).toMatchObject({
+      ok: true,
+      command: 'reconfigure',
+      updated: true,
+    });
+    expect(healthCalls.count).toBe(2);
+    expect(
+      JSON.parse(readFileSync(installationPath, 'utf8')).config_sha256,
+    ).not.toBe(JSON.parse(before).config_sha256);
+  });
+
+  it('re-pins an unchanged configuration without any live processor health check', async () => {
+    const root = realpathSync(
+      mkdtempSync(join(tmpdir(), 'echo-processor-unchanged-')),
+    );
+    roots.push(root);
+    const fixture = fixtures(root);
+    rewriteDecisionProcessor(fixture.configPath, 'fixture-processor');
+    const healthCalls = { count: 0 };
+    const dependencies = {
+      ...cliDependencies(root, fixture.cliPath, fakeLaunchd()),
+      adapterFactories: processorGateFactories('unavailable', healthCalls),
+    };
+    expect(
+      (await command(['init', '--config', fixture.configPath], dependencies))
+        .status,
+    ).toBe(0);
+    const installationPath = join(
+      fixture.stateDirectory,
+      'manifests',
+      'operator-installation.v1.json',
+    );
+    const legacy = JSON.parse(readFileSync(installationPath, 'utf8')) as Record<
+      string,
+      unknown
+    >;
+    delete legacy['source_sha'];
+    delete legacy['source_kind'];
+    writeFileSync(installationPath, `${JSON.stringify(legacy, null, 2)}\n`, {
+      mode: 0o600,
+    });
+
+    const result = await command(
+      ['reconfigure', '--config', fixture.configPath],
+      dependencies,
+    );
+    expect(result.status, result.stderr).toBe(0);
+    expect(JSON.parse(result.stdout)).toMatchObject({ updated: true });
+    expect(healthCalls.count).toBe(0);
+  });
+
+  it('activates a changed processor through the operator credential resolver', async () => {
+    const root = realpathSync(
+      mkdtempSync(join(tmpdir(), 'echo-processor-resolver-')),
+    );
+    roots.push(root);
+    const fixture = fixtures(root);
+    const resolvedReferences: string[] = [];
+    let observedToken: string | undefined;
+    const factories = adapterFactories();
+    factories.register({
+      kind: 'decision-processor',
+      adapter_id: 'credentialed-processor',
+      create: (config, context): DecisionProcessorAdapter => ({
+        identity: {
+          kind: 'decision-processor',
+          adapter_id: config.adapter_id,
+          instance_id: config.instance_id,
+          version: '1.0.0',
+        },
+        validateConfig: () => ({ ok: true, errors: [] }),
+        healthCheck: async () => {
+          observedToken = context.credentialResolver(config.credential_ref!);
+          return { status: 'healthy', checked_at: fixedTime };
+        },
+        extract: async (meeting) => ({
+          schema_version: 1,
+          meeting_id: meeting.id,
+          meeting_revision: meeting.provenance.canonical_revision,
+          processor: {
+            kind: 'decision-processor',
+            adapter_id: config.adapter_id,
+            instance_id: config.instance_id,
+            version: '1.0.0',
+          },
+          generated_at: fixedTime,
+          signals: [],
+        }),
+      }),
+    });
+    const base = cliDependencies(root, fixture.cliPath, fakeLaunchd());
+    const dependencies = {
+      ...base,
+      adapterFactories: factories,
+      operator: {
+        ...base.operator,
+        resolveCredential: (reference: string) => {
+          resolvedReferences.push(reference);
+          return 'injected-token';
+        },
+      },
+    };
+    expect(
+      (await command(['init', '--config', fixture.configPath], dependencies))
+        .status,
+    ).toBe(0);
+
+    const credentialPath = join(
+      fixture.stateDirectory,
+      'credentials',
+      'processor-key',
+    );
+    writeFileSync(credentialPath, 'file-token\n', { mode: 0o600 });
+    const config = JSON.parse(
+      readFileSync(fixture.configPath, 'utf8'),
+    ) as Record<string, unknown>;
+    config['decision_processor'] = {
+      adapter_id: 'credentialed-processor',
+      instance_id: 'primary',
+      credential_ref: `file:${credentialPath}`,
+      settings: {},
+    };
+    writeFileSync(fixture.configPath, `${JSON.stringify(config, null, 2)}\n`);
+
+    const result = await command(
+      ['reconfigure', '--config', fixture.configPath],
+      dependencies,
+    );
+    expect(result.status, result.stderr).toBe(0);
+    expect(observedToken).toBe('injected-token');
+    expect(resolvedReferences).toContain(`file:${credentialPath}`);
+  });
+
+  it('refuses a fresh init when Slack approval and delivery share a channel', async () => {
+    const root = realpathSync(
+      mkdtempSync(join(tmpdir(), 'echo-channel-init-')),
+    );
+    roots.push(root);
+    const fixture = fixtures(root);
+    rewriteSlackSurfaces(
+      fixture.configPath,
+      'C0123ABCD',
+      'C0123ABCD',
+      'env:SLACK_BOT_TOKEN',
+    );
+    const result = await command(
+      ['init', '--config', fixture.configPath],
+      cliDependencies(root, fixture.cliPath, fakeLaunchd()),
+    );
+    expect(result.status).toBe(1);
+    const failure = JSON.parse(result.stderr);
+    expect(failure).toMatchObject({
+      ok: false,
+      command: 'init',
+      code: 'config_policy_rejected',
+    });
+    expect(failure.error).toContain(
+      '/approval_surface/settings/channel_id must differ',
+    );
+    expect(
+      existsSync(
+        join(
+          fixture.stateDirectory,
+          'manifests',
+          'operator-installation.v1.json',
+        ),
+      ),
+    ).toBe(false);
+  });
+
+  it('refuses a changed configuration with colliding Slack channels before any live proof', async () => {
+    const root = realpathSync(
+      mkdtempSync(join(tmpdir(), 'echo-channel-reconfigure-')),
+    );
+    roots.push(root);
+    const fixture = fixtures(root);
+    const healthCalls = { count: 0 };
+    const dependencies = {
+      ...cliDependencies(root, fixture.cliPath, fakeLaunchd()),
+      adapterFactories: processorGateFactories('unavailable', healthCalls),
+    };
+    expect(
+      (await command(['init', '--config', fixture.configPath], dependencies))
+        .status,
+    ).toBe(0);
+    const installationPath = join(
+      fixture.stateDirectory,
+      'manifests',
+      'operator-installation.v1.json',
+    );
+    const before = readFileSync(installationPath, 'utf8');
+    const slackCredentialPath = join(
+      fixture.stateDirectory,
+      'credentials',
+      'slack-bot-token',
+    );
+    writeFileSync(slackCredentialPath, 'xoxb-test-token\n', { mode: 0o600 });
+    rewriteSlackSurfaces(
+      fixture.configPath,
+      'C0123ABCD',
+      'C0123ABCD',
+      `file:${slackCredentialPath}`,
+    );
+    // The processor also changed to one whose live check would fail, proving
+    // the offline policy refusal comes first and no provider is contacted.
+    rewriteDecisionProcessor(fixture.configPath, 'fixture-processor');
+
+    const result = await command(
+      ['reconfigure', '--config', fixture.configPath],
+      dependencies,
+    );
+    expect(result.status).toBe(1);
+    const failure = JSON.parse(result.stderr);
+    expect(failure.code).toBe('config_policy_rejected');
+    expect(failure.error).toContain(
+      '/approval_surface/settings/channel_id must differ',
+    );
+    expect(healthCalls.count).toBe(0);
+    expect(readFileSync(installationPath, 'utf8')).toBe(before);
+  });
+
+  it('re-pins a grandfathered equal-channel config for a package-only update', async () => {
+    const root = realpathSync(
+      mkdtempSync(join(tmpdir(), 'echo-channel-grandfathered-')),
+    );
+    roots.push(root);
+    const fixture = fixtures(root);
+    const healthCalls = { count: 0 };
+    const dependencies = {
+      ...cliDependencies(root, fixture.cliPath, fakeLaunchd()),
+      adapterFactories: processorGateFactories('unavailable', healthCalls),
+    };
+    expect(
+      (await command(['init', '--config', fixture.configPath], dependencies))
+        .status,
+    ).toBe(0);
+    const slackCredentialPath = join(
+      fixture.stateDirectory,
+      'credentials',
+      'slack-bot-token',
+    );
+    writeFileSync(slackCredentialPath, 'xoxb-test-token\n', { mode: 0o600 });
+    rewriteSlackSurfaces(
+      fixture.configPath,
+      'C0123ABCD',
+      'C0123ABCD',
+      `file:${slackCredentialPath}`,
+    );
+    // Simulate a manifest accepted by an older build for this exact
+    // equal-channel config, whose package identity has since moved.
+    const installationPath = join(
+      fixture.stateDirectory,
+      'manifests',
+      'operator-installation.v1.json',
+    );
+    const legacy = JSON.parse(readFileSync(installationPath, 'utf8')) as Record<
+      string,
+      unknown
+    >;
+    legacy['config_sha256'] = canonicalProductConfigSha256(
+      validateProductRuntimeConfig(
+        JSON.parse(readFileSync(fixture.configPath, 'utf8')),
+      ),
+    );
+    delete legacy['source_sha'];
+    delete legacy['source_kind'];
+    writeFileSync(installationPath, `${JSON.stringify(legacy, null, 2)}\n`);
+
+    const result = await command(
+      ['reconfigure', '--config', fixture.configPath],
+      dependencies,
+    );
+    expect(result.status, result.stderr).toBe(0);
+    expect(JSON.parse(result.stdout)).toMatchObject({ updated: true });
+    expect(healthCalls.count).toBe(0);
+  });
+
+  it('refuses a package-only re-pin when the configured processor is missing from the package', async () => {
+    const root = realpathSync(
+      mkdtempSync(join(tmpdir(), 'echo-repin-missing-')),
+    );
+    roots.push(root);
+    const fixture = fixtures(root);
+    rewriteDecisionProcessor(fixture.configPath, 'not-installed-processor');
+    const dependencies = cliDependencies(root, fixture.cliPath, fakeLaunchd());
+    expect(
+      (await command(['init', '--config', fixture.configPath], dependencies))
+        .status,
+    ).toBe(0);
+    const installationPath = join(
+      fixture.stateDirectory,
+      'manifests',
+      'operator-installation.v1.json',
+    );
+    const legacy = JSON.parse(readFileSync(installationPath, 'utf8')) as Record<
+      string,
+      unknown
+    >;
+    delete legacy['source_sha'];
+    delete legacy['source_kind'];
+    writeFileSync(installationPath, `${JSON.stringify(legacy, null, 2)}\n`);
+    const before = readFileSync(installationPath, 'utf8');
+
+    const result = await command(
+      ['reconfigure', '--config', fixture.configPath],
+      dependencies,
+    );
+    expect(result.status).toBe(1);
+    const failure = JSON.parse(result.stderr);
+    expect(failure.code).toBe('decision_processor_rejected');
+    expect(failure.error).toContain('package re-pin was refused');
+    expect(failure.error).toContain(
+      "decision processor 'not-installed-processor' is not installed in this package",
+    );
+    expect(readFileSync(installationPath, 'utf8')).toBe(before);
+  });
+
+  it('refuses a package-only re-pin when the processor static config is invalid', async () => {
+    const root = realpathSync(
+      mkdtempSync(join(tmpdir(), 'echo-repin-invalid-')),
+    );
+    roots.push(root);
+    const fixture = fixtures(root);
+    rewriteDecisionProcessor(fixture.configPath, 'fixture-processor');
+    const healthCalls = { count: 0 };
+    const dependencies = {
+      ...cliDependencies(root, fixture.cliPath, fakeLaunchd()),
+      adapterFactories: processorGateFactories(
+        'healthy',
+        healthCalls,
+        'settings.model is required',
+      ),
+    };
+    expect(
+      (await command(['init', '--config', fixture.configPath], dependencies))
+        .status,
+    ).toBe(0);
+    const installationPath = join(
+      fixture.stateDirectory,
+      'manifests',
+      'operator-installation.v1.json',
+    );
+    const legacy = JSON.parse(readFileSync(installationPath, 'utf8')) as Record<
+      string,
+      unknown
+    >;
+    delete legacy['source_sha'];
+    delete legacy['source_kind'];
+    writeFileSync(installationPath, `${JSON.stringify(legacy, null, 2)}\n`);
+    const before = readFileSync(installationPath, 'utf8');
+
+    const result = await command(
+      ['reconfigure', '--config', fixture.configPath],
+      dependencies,
+    );
+    expect(result.status).toBe(1);
+    const failure = JSON.parse(result.stderr);
+    expect(failure.code).toBe('decision_processor_rejected');
+    expect(failure.error).toContain(
+      'configuration is invalid: settings.model is required',
+    );
+    expect(healthCalls.count).toBe(0);
+    expect(readFileSync(installationPath, 'utf8')).toBe(before);
   });
 
   it('fails closed when launchd cannot prove that the service is absent', async () => {

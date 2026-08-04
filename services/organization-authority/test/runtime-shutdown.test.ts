@@ -51,7 +51,7 @@ describe('organization Authority runtime shutdown', () => {
         await handlerFinished;
         throw new Error('test handler released after forced shutdown');
       },
-      bootstrapSlackApproval: unexpectedCall,
+      activateSlackApproval: unexpectedCall,
       beginSlackIdentityLink: unexpectedCall,
       completeSlackIdentityLink: unexpectedCall,
       checkPermission: unexpectedCall,

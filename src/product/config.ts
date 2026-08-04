@@ -138,6 +138,50 @@ function credentialReferenceIssues(
   return issues;
 }
 
+function slackChannelIdSetting(
+  config: AdapterInstanceConfig,
+): string | undefined {
+  const channel = config.settings['channel_id'];
+  if (typeof channel !== 'string') return undefined;
+  const trimmed = channel.trim();
+  return trimmed === '' ? undefined : trimmed;
+}
+
+/**
+ * Pure product policy: the Slack approval surface's channel must differ from
+ * every Slack delivery surface's channel. That separation — a disclosure and
+ * workflow boundary (review traffic stays in the review channel), not a
+ * delivery race concern — is all this helper proves; it only compares
+ * configured channel IDs. It cannot and does not verify that the approval
+ * channel is public or Authority-bound: in the Internal Live organization
+ * setup that fact is verified separately during organization Slack
+ * onboarding. Loading a config never enforces this policy: existing
+ * equal-channel installations stay readable and may re-pin unchanged or
+ * package-only updates for update/recovery, but must move the delivery
+ * channel before a changed configuration is accepted. Fresh installations
+ * are refused outright.
+ */
+export function approvalDeliveryChannelIssues(
+  config: ProductRuntimeConfig,
+): string[] {
+  if (
+    config.approval_mode !== 'adapter' ||
+    config.approval_surface.adapter_id !== 'slack-reactions'
+  ) {
+    return [];
+  }
+  const approvalChannel = slackChannelIdSetting(config.approval_surface);
+  if (approvalChannel === undefined) return [];
+  return config.delivery_surfaces.flatMap((surface, index) =>
+    surface.adapter_id === 'slack' &&
+    slackChannelIdSetting(surface) === approvalChannel
+      ? [
+          `/approval_surface/settings/channel_id must differ from the Slack delivery channel at /delivery_surfaces/${index}/settings/channel_id`,
+        ]
+      : [],
+  );
+}
+
 export function validateProductRuntimeConfig(
   value: unknown,
 ): ProductRuntimeConfig {
@@ -197,6 +241,11 @@ export function validateProductRuntimeConfig(
       credentialIssues,
     );
   }
+  // Channel-separation policy is deliberately NOT enforced here: loading and
+  // schema-validating a grandfathered equal-channel config must stay
+  // possible. `approvalDeliveryChannelIssues` is applied by the operator at
+  // fresh init and changed-config reconfigure, and reported by
+  // validate-config.
   // The schema's if/then pairing guarantees approval_mode and
   // approval_surface agree, which the spread cannot express structurally.
   return Object.freeze({

@@ -213,7 +213,7 @@ export interface CompletedSlackIdentityLink {
   permission_grants_created: 0;
 }
 
-export interface BootstrapSlackApprovalInput {
+export interface ActivateExistingSlackApprovalInput {
   command_id: string;
   command_sha256: `sha256:${string}`;
   organization_id: string;
@@ -224,34 +224,20 @@ export interface BootstrapSlackApprovalInput {
   target_membership_id: string;
   installation_id: string;
   installation_key_id: `sha256:${string}`;
-  adapter_id: "slack-reactions";
-  adapter_instance_id: string;
-  adapter_version: string;
-  channel_id: string;
-  approve_reaction: string;
-  reject_reaction: string;
-  organization_connection_id: string;
-  connection: VerifiedSlackConnection;
-  channel: VerifiedSlackChannel;
-  human: VerifiedSlackHuman;
+  identity_link_id: string;
+  adapter_binding_id: string;
   now: string;
 }
 
-export interface BootstrapSlackApprovalResult {
-  connection_attempt_id: string;
-  identity_attempt_id: string;
+export interface ActivateExistingSlackApprovalResult {
   identity_link_id: string;
-  connection_id: string;
   adapter_binding_id: string;
   approve_permission_grant_id: string;
   reject_permission_grant_id: string;
-  organization_id: string;
   membership_id: string;
   installation_id: string;
-  slack_team_id: string;
-  slack_user_id: string;
-  channel_id: string;
-  created_at: string;
+  activated_at: string;
+  permission_grants_created: 0 | 2;
 }
 
 export interface OnboardSlackOrganizationToolInput {

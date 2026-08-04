@@ -182,6 +182,8 @@ function fixture() {
   let accessState: OrganizationInstallationAccessStateV1 | null = null;
   let loseNextEnrollmentResponse = false;
   let granolaCredentialReads = 0;
+  let granolaOwnerObservations = 0;
+  let granolaOwnerObservationFailure: string | null = null;
   let slackCredentialReads = 0;
   let adapterConstructions = 0;
   const adapterFactories = new ProductAdapterFactoryRegistry();
@@ -242,6 +244,16 @@ function fixture() {
   const dependencies: ProductCliDependencies & {
     bootstrap: {
       readGranolaCredential: () => Promise<string>;
+      observeGranolaRecordOwner: (
+        credential: string,
+        ownerEmail: string,
+      ) => Promise<{
+        provider: 'granola';
+        relationship: 'record_owner';
+        subject: { kind: 'email'; value: string };
+        assurance: 'provider_record_owner_observed';
+        notes_examined: number;
+      }>;
       readSlackCredential: () => Promise<string>;
     };
   } = {
@@ -251,6 +263,22 @@ function fixture() {
       readGranolaCredential: async () => {
         granolaCredentialReads += 1;
         return GRANOLA_TOKEN;
+      },
+      observeGranolaRecordOwner: async (credential, ownerEmail) => {
+        granolaOwnerObservations += 1;
+        if (credential !== GRANOLA_TOKEN) {
+          throw new Error('Granola observation received another credential');
+        }
+        if (granolaOwnerObservationFailure !== null) {
+          throw new Error(granolaOwnerObservationFailure);
+        }
+        return {
+          provider: 'granola',
+          relationship: 'record_owner',
+          subject: { kind: 'email', value: ownerEmail },
+          assurance: 'provider_record_owner_observed',
+          notes_examined: 2,
+        };
       },
       readSlackCredential: async () => {
         slackCredentialReads += 1;
@@ -288,7 +316,11 @@ function fixture() {
     authorityPaths,
     adapterConstructions: () => adapterConstructions,
     granolaCredentialReads: () => granolaCredentialReads,
+    granolaOwnerObservations: () => granolaOwnerObservations,
     slackCredentialReads: () => slackCredentialReads,
+    failGranolaOwnerObservation: (message: string | null) => {
+      granolaOwnerObservationFailure = message;
+    },
     loseNextEnrollmentResponse: () => {
       loseNextEnrollmentResponse = true;
     },
@@ -334,19 +366,30 @@ describe('internal-live employee bootstrap CLI', () => {
         loaded: false,
         running: false,
       },
-      approval_activation: {
-        required: true,
-        endpoint: '/v1/admin/integrations/slack-approval-bootstrap',
-        target_membership_id: ORGANIZATION_IDS.membership,
-        installation_id: ORGANIZATION_IDS.installation,
-        adapter_instance_id: 'internal-approvals',
-        adapter_version: '1.0.0',
-        channel_id: SLACK_CHANNEL_ID,
-        approve_reaction: 'white_check_mark',
-        reject_reaction: 'x',
-        slack_user_id: SLACK_REVIEWER_USER_ID,
+      granola_record_owner: {
+        provider: 'granola',
+        relationship: 'record_owner',
+        subject: { kind: 'email', value: 'audrey@echobrain.org' },
+        assurance: 'provider_record_owner_observed',
+        notes_examined: 2,
       },
+      next_steps: [
+        `echo-brain organization slack-link-begin --config ${test.configPath}`,
+        expect.stringContaining('identity_link_id and adapter_binding_id'),
+        expect.stringContaining(
+          'echo-organization-admin slack approval activate',
+        ),
+        expect.any(String),
+        expect.any(String),
+        expect.any(String),
+        expect.any(String),
+        expect.any(String),
+        expect.any(String),
+        expect.any(String),
+        expect.any(String),
+      ],
     });
+    expect(report).not.toHaveProperty('approval_activation');
 
     const config = JSON.parse(readFileSync(test.configPath, 'utf8'));
     expect(config.meeting_sources).toHaveLength(1);
@@ -397,6 +440,7 @@ describe('internal-live employee bootstrap CLI', () => {
     expect(result.stdout).not.toContain(SLACK_TOKEN);
     expect(result.stderr).not.toContain(SLACK_TOKEN);
     expect(test.granolaCredentialReads()).toBe(1);
+    expect(test.granolaOwnerObservations()).toBe(1);
     expect(test.slackCredentialReads()).toBe(1);
     expect(test.authorityPaths).toEqual([
       '/v1/authority-descriptor',
@@ -426,10 +470,55 @@ describe('internal-live employee bootstrap CLI', () => {
     expect(readFileSync(test.configPath, 'utf8')).toBe(configBeforeRetry);
     expect(test.authorityPaths.at(-1)).toBe('/v1/access-leases');
     expect(test.granolaCredentialReads()).toBe(1);
+    expect(test.granolaOwnerObservations()).toBe(2);
     expect(test.slackCredentialReads()).toBe(1);
     expect(
       test.launchd.calls.every((args) => args[0] === 'print'),
     ).toBe(true);
+  });
+
+  it('stops before Slack and Authority work when Granola cannot observe the configured owner', async () => {
+    const test = fixture();
+    const argv = bootstrapArgv({
+      configPath: test.configPath,
+      stateDirectory: test.stateDirectory,
+      ownerEmail: 'audrey@echobrain.org',
+      invitationPath: test.invitation,
+      authorityPin: test.authority.pin,
+    });
+    test.failGranolaOwnerObservation(
+      'Granola did not return a record owned by audrey@echobrain.org',
+    );
+
+    const first = await command(argv, test.dependencies);
+
+    expect(first.status).toBe(1);
+    expect(first.stderr).toContain(
+      'Granola did not return a record owned by audrey@echobrain.org',
+    );
+    expect(test.granolaCredentialReads()).toBe(1);
+    expect(test.granolaOwnerObservations()).toBe(1);
+    expect(test.slackCredentialReads()).toBe(0);
+    expect(test.authorityPaths).toEqual([]);
+    expect(test.adapterConstructions()).toBe(0);
+    expect(
+      existsSync(
+        join(test.stateDirectory, 'credentials', 'granola-api-key'),
+      ),
+    ).toBe(false);
+
+    test.failGranolaOwnerObservation(null);
+    const retry = await command(argv, test.dependencies);
+
+    expect(retry.status, retry.stderr).toBe(0);
+    expect(test.granolaCredentialReads()).toBe(2);
+    expect(test.granolaOwnerObservations()).toBe(2);
+    expect(test.slackCredentialReads()).toBe(1);
+    expect(test.authorityPaths).toEqual([
+      '/v1/authority-descriptor',
+      '/v1/authority-descriptor',
+      '/v1/enrollments',
+    ]);
   });
 
   it('resumes an exact enrollment after the Authority response is lost', async () => {
@@ -449,6 +538,7 @@ describe('internal-live employee bootstrap CLI', () => {
     expect(existsSync(test.configPath)).toBe(true);
     expect(existsSync(test.stateDirectory)).toBe(true);
     expect(test.granolaCredentialReads()).toBe(1);
+    expect(test.granolaOwnerObservations()).toBe(1);
     expect(test.slackCredentialReads()).toBe(1);
 
     const resumed = await command(argv, test.dependencies);
@@ -465,6 +555,7 @@ describe('internal-live employee bootstrap CLI', () => {
       product_work_started: false,
     });
     expect(test.granolaCredentialReads()).toBe(1);
+    expect(test.granolaOwnerObservations()).toBe(2);
     expect(test.adapterConstructions()).toBe(0);
     expect(
       test.launchd.calls.every((args) => args[0] === 'print'),

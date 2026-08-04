@@ -36,7 +36,7 @@ origin:
 - `POST /v1/admin/memberships/:membership_id/revocations`
 - `POST /v1/admin/installations/:installation_id/revocations`
 - `POST /v1/admin/integrations/slack`
-- `POST /v1/admin/integrations/slack-approval-bootstrap`
+- `POST /v1/admin/integrations/slack-approval-activation`
 
 The browser administrator console occupies the `/admin` namespace:
 
@@ -92,7 +92,13 @@ The manual ceremony is:
    `read -r -s ECHO_SLACK_LINK_CODE`, then run the emitted
    `slack-link-complete` command and immediately
    `unset ECHO_SLACK_LINK_CODE`;
-5. run `echo-brain doctor --config '<path>'` before restarting the service.
+5. give the returned membership, installation, identity-link, and binding IDs
+   to an owner, who runs
+   `echo-organization-admin slack approval activate --config '<Authority
+   config>' --administrator-membership-id '<owner mem_...>'
+   --target-membership-id '<employee mem_...>' --installation-id '<ins_...>'
+   --identity-link-id '<clm_...>' --adapter-binding-id '<bnd_...>'`;
+6. run `echo-brain doctor --config '<path>'` before restarting the service.
 
 Do not paste the one-time code into tickets, chat, logs, or a command-line
 argument. Automatic tool
@@ -100,20 +106,17 @@ propagation, non-Slack tools, credential or channel rotation, and fine-grained
 integration lifecycle controls remain deferred. Membership and installation
 revocation are the v1 access controls.
 
-Approval authority itself is granted only by
-`POST /v1/admin/integrations/slack-approval-bootstrap`, an administrator
-bearer-token route with no console form or CLI verb yet. Its JSON body is
-eleven flat strings — `command_id` (`adm_` UUIDv4, the idempotency handle),
+Approval authority is activated only after the employee's manual ceremony has
+created an identity link and adapter binding. The administrator-authenticated
+`POST /v1/admin/integrations/slack-approval-activation` route accepts six flat
+strings: `command_id` (`adm_` UUIDv4, the idempotency handle),
 `administrator_membership_id`, `target_membership_id`, `installation_id`,
-`adapter_instance_id`, `adapter_version`, `channel_id`, `approve_reaction`,
-`reject_reaction`, `slack_user_id`, and `slack_bot_token` — validated in
-`src/composition/organization-integrations.ts`. One call verifies the provider
-identities and creates the employee's identity link, adapter binding, and
-`approve`/`reject` grants together, so for pilot employees it replaces rather
-than follows the manual link ceremony, which by itself leaves every reaction
-denied. In v1 the target membership must own the enrolled installation;
-cross-member targets are rejected before any Slack call. The call is audited
-as `slack_approval.bootstrap`.
+`identity_link_id`, and `adapter_binding_id`. It creates only the exact
+`approve` and `reject` grants for those existing records. It accepts no Slack
+credential or provider configuration, makes no Slack API call, and does not
+create or replace an identity link or adapter binding. In v1 the target
+membership must own the enrolled installation. The call is audited as
+`slack_approval.activated`.
 
 ## Ingress contract
 

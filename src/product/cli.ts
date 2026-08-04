@@ -23,6 +23,7 @@ import {
   type ProductComposition,
 } from "./composition.js";
 import {
+  approvalDeliveryChannelIssues,
   classifyStateFilesystem,
   loadProductRuntimeConfig,
   type ClassifyStateFilesystem,
@@ -36,6 +37,10 @@ import {
   type ProductRuntimeDependencies,
 } from "./runtime.js";
 import { diagnoseConfiguredAdapters } from "./adapter-diagnostics.js";
+import {
+  verifyDecisionProcessorActivation,
+  verifyDecisionProcessorCompatibility,
+} from "./processor-activation.js";
 import {
   createProductBootstrapCredential,
   createProductOnboardConfig,
@@ -81,17 +86,22 @@ import {
   type OrganizationInstallationAccessDecisionV1,
   verifyOrganizationAuthorityPin,
 } from "./organization/index.js";
-import { createProductCredentialResolver } from "./credentials.js";
+import {
+  createProductCredentialResolver,
+  readPrivateCredentialFile,
+} from "./credentials.js";
 import { ActiveIdentityBundleStore } from "./federation/identity/active-identity-bundle-store.js";
 import { RETIRED_FOUNDER_PROVENANCE_MESSAGE } from "./federation/cutover-fence.js";
 import { resolveProductStatePaths } from "./paths.js";
 import { SqliteCoreStateStore } from "./storage/sqlite-core-state-store.js";
 import { readFileNoFollow } from "./secure-local-files.js";
 import {
-  DEFAULT_APPROVE_REACTION,
-  DEFAULT_REJECT_REACTION,
-  SLACK_REACTIONS_APPROVAL_SURFACE_ADAPTER_VERSION,
-} from "../adapters/approval-surfaces/slack-reactions/slack-reactions-approval-surface.js";
+  GRANOLA_API_KEY_RE,
+  HttpGranolaApiClient,
+  observeGranolaRecordOwner,
+  type GranolaRecordOwnerObservation,
+} from "../adapters/meeting-sources/granola/index.js";
+import { SLACK_REACTIONS_APPROVAL_SURFACE_ADAPTER_VERSION } from "../adapters/approval-surfaces/slack-reactions/slack-reactions-approval-surface.js";
 import {
   loadPackagedBuildIdentity,
   type PackagedBuildIdentityV1,
@@ -152,6 +162,11 @@ export interface ProductCliDependencies {
   bootstrap?: {
     /** Test/host seam; the default reads a hidden value from the controlling TTY. */
     readGranolaCredential?: () => string | Promise<string>;
+    /** Test seam for the bounded, read-only Granola owner observation. */
+    observeGranolaRecordOwner?: (
+      credential: string,
+      ownerEmail: string,
+    ) => Promise<GranolaRecordOwnerObservation>;
     /** Test/host seam; the default reads a second hidden value from the TTY. */
     readSlackCredential?: () => string | Promise<string>;
   };
@@ -1115,11 +1130,41 @@ function createProductOperator(
   dependencies: ProductCliDependencies,
 ): ProductOperator {
   const configured = dependencies.operator ?? {};
+  const processorVerifierOptions = () => ({
+    ...(dependencies.environment === undefined
+      ? {}
+      : { environment: dependencies.environment }),
+    ...(dependencies.now === undefined ? {} : { now: dependencies.now }),
+    ...(configured.resolveCredential === undefined
+      ? {}
+      : { credentialResolver: configured.resolveCredential }),
+  });
   return new ProductOperator(configPath, config, {
     ...configured,
     cliPath: configured.cliPath ?? CLI_PATH,
     productVersion: configured.productVersion ?? PRODUCT_VERSION,
     buildIdentity: configured.buildIdentity ?? packagedBuildIdentity(),
+    verifyDecisionProcessorActivation:
+      configured.verifyDecisionProcessorActivation ??
+      (async (changedConfig) => {
+        await verifyDecisionProcessorActivation(
+          changedConfig,
+          dependencies.adapterFactories ?? createDefaultAdapterFactories(),
+          {
+            ...processorVerifierOptions(),
+            healthTimeoutMs: dependencies.doctorHealthTimeoutMs ?? 10_000,
+          },
+        );
+      }),
+    verifyDecisionProcessorCompatibility:
+      configured.verifyDecisionProcessorCompatibility ??
+      (async (repinnedConfig) => {
+        await verifyDecisionProcessorCompatibility(
+          repinnedConfig,
+          dependencies.adapterFactories ?? createDefaultAdapterFactories(),
+          processorVerifierOptions(),
+        );
+      }),
   });
 }
 
@@ -1492,10 +1537,31 @@ async function runBootstrapCommand(
       }
     }
 
-    if (!pathExists(credentialPath)) {
+    const granolaCredentialExists = pathExists(credentialPath);
+    const granolaCredential = granolaCredentialExists
+      ? readPrivateCredentialFile(
+          credentialPath,
+          dependencies.operator?.uid,
+        )
+      : await readGranolaCredential();
+    if (!GRANOLA_API_KEY_RE.test(granolaCredential)) {
+      throw new ProductOperatorError(
+        "installation_conflict",
+        "Granola credential is not a valid API token",
+      );
+    }
+    const granolaOwnerObservation = await (
+      dependencies.bootstrap?.observeGranolaRecordOwner ??
+      (async (credential: string, ownerEmail: string) =>
+        await observeGranolaRecordOwner(
+          new HttpGranolaApiClient(credential),
+          ownerEmail,
+        ))
+    )(granolaCredential, parsed.ownerEmail!);
+    if (!granolaCredentialExists) {
       createProductBootstrapCredential(
         credentialPath,
-        await readGranolaCredential(),
+        granolaCredential,
         "granola",
         fileSystem,
       );
@@ -1616,6 +1682,7 @@ async function runBootstrapCommand(
       state_dir: parsed.stateDirectory,
       credential_path: credentialPath,
       slack_credential_path: slackCredentialPath,
+      granola_record_owner: granolaOwnerObservation,
       organization: {
         enrolled: organization["enrolled"],
         access,
@@ -1629,26 +1696,11 @@ async function runBootstrapCommand(
       service,
       local_preflight: { ok: true },
       product_work_started: false,
-      approval_activation: {
-        required: true,
-        endpoint: "/v1/admin/integrations/slack-approval-bootstrap",
-        target_membership_id: (access as Record<string, unknown>)[
-          "membership_id"
-        ],
-        installation_id: (access as Record<string, unknown>)[
-          "installation_id"
-        ],
-        adapter_instance_id: "internal-approvals",
-        adapter_version:
-          SLACK_REACTIONS_APPROVAL_SURFACE_ADAPTER_VERSION,
-        channel_id: parsed.slackChannelId,
-        approve_reaction: DEFAULT_APPROVE_REACTION,
-        reject_reaction: DEFAULT_REJECT_REACTION,
-        slack_user_id: parsed.slackReviewerUserId,
-      },
       next_steps: [
-        "administrator completes central Slack approval bootstrap using approval_activation; do not use organization slack-link-* because it creates no approval grants",
-        "create one controlled owner-visible meeting note with explicit Decision:, Action:, and Rationale: lines",
+        `echo-brain organization slack-link-begin --config ${parsed.configPath}`,
+        "complete the emitted Slack identity-link instructions and give the administrator the non-secret identity_link_id and adapter_binding_id",
+        "administrator activates approve/reject permission for that verified link with echo-organization-admin slack approval activate",
+        "use the controlled owner-visible meeting note with explicit Decision:, Action:, and Rationale: lines",
         `echo-brain run-once --config ${parsed.configPath}`,
         "react to the pending Slack card as the configured reviewer",
         `echo-brain run-once --config ${parsed.configPath}`,
@@ -2230,7 +2282,10 @@ export async function runProductCli(
                 action,
                 linked: true,
                 result,
-                next_step: "unset ECHO_SLACK_LINK_CODE",
+                next_steps: [
+                  "unset ECHO_SLACK_LINK_CODE",
+                  `echo-organization-admin slack approval activate --config '<absolute-authority-config>' --administrator-membership-id '<active-owner-membership-id>' --target-membership-id ${result.membership_id} --installation-id ${result.installation_id} --identity-link-id ${result.identity_link_id} --adapter-binding-id ${result.adapter_binding_id}`,
+                ],
               };
             }
           }
@@ -2651,6 +2706,9 @@ export async function runProductCli(
         return 1;
       }
     }
+    // Channel-separation policy is reported, not enforced, so a
+    // grandfathered equal-channel profile can still diagnose itself offline.
+    const policyIssues = approvalDeliveryChannelIssues(config);
     print(stdout, {
       ok: true,
       command: parsed.command,
@@ -2659,6 +2717,15 @@ export async function runProductCli(
       maturity: "DEV",
       adapter_references: configuredAdapterReferences(config),
       adapters_loaded: false,
+      config_policy: {
+        ok: policyIssues.length === 0,
+        issues: policyIssues,
+      },
+      runtime_readiness: {
+        checked: false,
+        detail:
+          "offline validation only: configuration schema, credential reference shape, and state filesystem were checked; no adapter was constructed and no credential, provider, or service health was verified",
+      },
       ...(storage === undefined ? {} : { storage }),
       wedge_executed: false,
     });

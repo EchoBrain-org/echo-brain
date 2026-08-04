@@ -136,7 +136,8 @@
       "from": "src/adapters/meeting-sources/granola/meeting-source-adapter.ts",
       "allowed_imports": [
         "src/core/**",
-        "src/adapters/meeting-sources/granola/granola-api-client.ts"
+        "src/adapters/meeting-sources/granola/granola-api-client.ts",
+        "src/adapters/meeting-sources/granola/record-owner-observation.ts"
       ],
       "allowed_packages": [],
       "allowed_node_builtins": ["crypto"]

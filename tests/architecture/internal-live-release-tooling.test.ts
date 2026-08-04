@@ -302,10 +302,16 @@ describe('INTERNAL LIVE release tooling', () => {
       /installation's\s+healthy receipt centrally/u,
     );
     expect(bootstrap).toContain(
-      'POST /v1/admin/integrations/slack-approval-bootstrap',
+      'echo-brain organization slack-link-begin --config',
     );
     expect(bootstrap).toContain(
-      'that identity proof creates no\napproval grants',
+      'echo-organization-admin slack approval activate',
+    );
+    expect(bootstrap).toMatch(
+      /verified identity link[\s\S]+?prerequisite and audit reference/u,
+    );
+    expect(bootstrap).toMatch(
+      /two direct grants[\s\S]+?scoped to\s+the exact adapter binding, principal, and membership/u,
     );
     expect(bootstrap).toContain(
       'echo-brain approvals --config "$ECHO_CONFIG"',

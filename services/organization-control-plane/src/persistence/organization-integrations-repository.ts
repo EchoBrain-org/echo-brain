@@ -9,11 +9,11 @@ import {
   SLACK_PROVIDER,
   SLACK_PROVIDER_ISSUER,
   type ActiveSlackOrganizationTool,
+  type ActivateExistingSlackApprovalInput,
+  type ActivateExistingSlackApprovalResult,
   type BeginSlackIdentityLinkChallengeInput,
   type BegunSlackIdentityLinkChallenge,
   type LegacySlackOrganizationTool,
-  type BootstrapSlackApprovalInput,
-  type BootstrapSlackApprovalResult,
   type CompleteSlackIdentityLinkChallengeInput,
   type CompletedSlackIdentityLink,
   type OnboardSlackOrganizationToolInput,
@@ -92,6 +92,14 @@ interface ActiveSlackBindingRow {
   public_configuration_sha256: string;
 }
 
+interface ActiveSlackApprovalGrantRow {
+  permission_grant_id: string;
+  principal_id: string;
+  membership_id: string;
+  action: "approve" | "reject";
+  resource_scope_json: string;
+}
+
 interface SlackIdentityLinkCompletionReplayKey {
   challenge_attempt_id: string;
   challenge_code_sha256: `sha256:${string}`;
@@ -103,23 +111,16 @@ interface SlackIdentityLinkCompletionReplayKey {
   adapter_version: string;
 }
 
-interface CompleteSlackConnectionAttemptInput {
+interface CompleteSlackOrganizationToolAttemptInput {
   attempt_id: string;
   administrator_principal_id: string;
   administrator_membership_id: string;
-  purpose: "identity_link" | "tool_connection";
-  owner_kind: "membership" | "organization";
-  target_principal_id: string | null;
-  target_membership_id: string | null;
   team_id: string;
-  redirect_uri: string;
   scopes_json: string;
   scopes_sha256: string;
-  subject_kind: "human_user" | "service_account";
   subject_id: string;
   evidence_sha256: string;
   command_id: string;
-  digest_prefix: "" | "identity-";
   now: string;
   expires_at: string;
 }
@@ -156,7 +157,10 @@ function addMinutes(value: string, minutes: number): string {
 }
 
 function validatedPublicConfiguration(
-  row: ToolConnectionOverviewRow,
+  row: {
+    public_configuration_json: string;
+    public_configuration_sha256: string;
+  },
 ): Record<string, unknown> {
   let parsed: unknown;
   let canonical: string;
@@ -211,30 +215,6 @@ function hasSlackOrganizationToolScopes(scopes: readonly string[]): boolean {
   return SLACK_ORGANIZATION_TOOL_REQUIRED_SCOPES.every((scope) =>
     observed.has(scope),
   );
-}
-
-function assertBootstrapUsesActiveOrganizationTool(
-  input: BootstrapSlackApprovalInput,
-  active: ActiveSlackOrganizationTool | null,
-): asserts active is ActiveSlackOrganizationTool {
-  if (
-    active === null ||
-    active.connection_id !== input.organization_connection_id ||
-    active.team_id !== input.connection.team_id ||
-    active.enterprise_id !== input.connection.enterprise_id ||
-    active.bot_user_id !== input.connection.bot_user_id ||
-    active.bot_id !== input.connection.bot_id ||
-    active.app_id !== input.connection.app_id ||
-    active.channel_id !== input.channel_id ||
-    active.channel_id !== input.channel.channel_id ||
-    input.channel.team_id !== active.team_id ||
-    canonicalJson([...active.granted_scopes].sort()) !==
-      canonicalJson([...input.connection.granted_scopes].sort())
-  ) {
-    throw new Error(
-      "Slack bootstrap must use the active organization Slack tool",
-    );
-  }
 }
 
 function slackIdentityLinkSessionSha256(
@@ -301,6 +281,23 @@ function slackApprovalBindingConfiguration(
   };
 }
 
+function slackApprovalBindingMatchesTool(
+  binding: ActiveSlackBindingRow,
+  tool: ActiveSlackOrganizationTool,
+): boolean {
+  const configuration = validatedPublicConfiguration(binding);
+  const expected = slackApprovalBindingConfiguration(tool);
+  return (
+    canonicalJson(configuration) === canonicalJson(expected) ||
+    canonicalJson(configuration) ===
+      canonicalJson({
+        ...expected,
+        organization_tool_profile: SLACK_ORGANIZATION_TOOL_PROFILE,
+        schema_version: 1,
+      })
+  );
+}
+
 export class OrganizationIntegrationsRepository {
   constructor(
     private readonly database: Database.Database,
@@ -327,15 +324,15 @@ export class OrganizationIntegrationsRepository {
     }
   }
 
-  bootstrapReplay(
+  slackApprovalActivationReplay(
     commandId: string,
     commandSha256: `sha256:${string}`,
-  ): BootstrapSlackApprovalResult | null {
-    return this.replay<BootstrapSlackApprovalResult>(
+  ): ActivateExistingSlackApprovalResult | null {
+    return this.replay<ActivateExistingSlackApprovalResult>(
       commandId,
       commandSha256,
-      "slack_approval.bootstrap",
-      "Slack bootstrap",
+      "slack_approval.activated",
+      "Slack approval activation",
     );
   }
 
@@ -433,8 +430,8 @@ export class OrganizationIntegrationsRepository {
     }
   }
 
-  private completeSlackConnectionAttempt(
-    input: CompleteSlackConnectionAttemptInput,
+  private completeSlackOrganizationToolAttempt(
+    input: CompleteSlackOrganizationToolAttemptInput,
   ): void {
     this.database
       .prepare(
@@ -451,9 +448,9 @@ export class OrganizationIntegrationsRepository {
            expires_at, consumed_at, outcome_reason
          ) VALUES (
            @attempt_id, @organization_id, @administrator_principal_id,
-           @administrator_membership_id, @purpose, @owner_kind,
-           @target_principal_id, @target_membership_id, @provider,
-           @provider_issuer, 'workspace', @team_id, @redirect_uri,
+           @administrator_membership_id, 'tool_connection', 'organization',
+           NULL, NULL, @provider, @provider_issuer, 'workspace', @team_id,
+           'urn:echo:organization:admin:slack-tool-onboarding',
            @scopes_json, @scopes_sha256, @state_sha256, @nonce_sha256,
            @pkce_sha256, @admin_session_sha256, 'pending',
            NULL, NULL, NULL, NULL, NULL, @now, @expires_at, NULL, NULL
@@ -464,19 +461,15 @@ export class OrganizationIntegrationsRepository {
         organization_id: this.identity.organization_id,
         provider: SLACK_PROVIDER,
         provider_issuer: SLACK_PROVIDER_ISSUER,
-        state_sha256: digest(
-          `${input.digest_prefix}state:${input.command_id}`,
-        ),
-        nonce_sha256: digest(
-          `${input.digest_prefix}nonce:${input.command_id}`,
-        ),
-        pkce_sha256: digest(`${input.digest_prefix}pkce:${input.command_id}`),
+        state_sha256: digest(`state:${input.command_id}`),
+        nonce_sha256: digest(`nonce:${input.command_id}`),
+        pkce_sha256: digest(`pkce:${input.command_id}`),
         admin_session_sha256: digest(`admin:${input.command_id}`),
       });
     this.database
       .prepare(
         `UPDATE organization_connection_attempts
-         SET status = 'succeeded', provider_subject_kind = @subject_kind,
+         SET status = 'succeeded', provider_subject_kind = 'service_account',
              provider_subject_id = @subject_id,
              granted_scopes_json = @scopes_json,
              granted_scopes_sha256 = @scopes_sha256,
@@ -980,24 +973,16 @@ export class OrganizationIntegrationsRepository {
         throw new Error("Slack organization tool state changed during onboarding");
       }
 
-      this.completeSlackConnectionAttempt({
+      this.completeSlackOrganizationToolAttempt({
         attempt_id: connectionAttemptId,
         administrator_principal_id: input.administrator_principal_id,
         administrator_membership_id: input.administrator_membership_id,
-        purpose: "tool_connection",
-        owner_kind: "organization",
-        target_principal_id: null,
-        target_membership_id: null,
         team_id: input.connection.team_id,
-        redirect_uri:
-          "urn:echo:organization:admin:slack-tool-onboarding",
         scopes_json: connectionScopesJson,
         scopes_sha256: connectionScopesSha256,
-        subject_kind: "service_account",
         subject_id: input.connection.bot_user_id,
         evidence_sha256: verificationEvidenceSha256,
         command_id: input.command_id,
-        digest_prefix: "",
         now: input.now,
         expires_at: expiresAt,
       });
@@ -1111,194 +1096,183 @@ export class OrganizationIntegrationsRepository {
     });
   }
 
-  bootstrapSlackApproval(
-    input: BootstrapSlackApprovalInput,
-  ): BootstrapSlackApprovalResult {
+  activateExistingSlackApproval(
+    input: ActivateExistingSlackApprovalInput,
+  ): ActivateExistingSlackApprovalResult {
     if (
       input.organization_id !== this.identity.organization_id ||
-      input.authority_id !== this.identity.authority_id ||
-      input.connection.team_id !== input.human.team_id ||
-      input.connection.bot_user_id === input.human.user_id ||
-      input.channel.team_id !== input.connection.team_id ||
-      input.channel.channel_id !== input.channel_id ||
-      !/^con_[0-9a-f-]{36}$/.test(input.organization_connection_id) ||
-      !/^C[A-Z0-9]{2,}$/.test(input.channel_id) ||
-      !hasSlackOrganizationToolScopes(input.connection.granted_scopes)
+      input.authority_id !== this.identity.authority_id
     ) {
-      throw new Error("Slack bootstrap identities are inconsistent");
+      throw new OrganizationIntegrationConflictError(
+        "Slack approval activation Authority context is inconsistent",
+      );
     }
-    const replay = this.bootstrapReplay(input.command_id, input.command_sha256);
+    const replay = this.slackApprovalActivationReplay(
+      input.command_id,
+      input.command_sha256,
+    );
     if (replay !== null) return replay;
 
-    const activeOrganizationTool = this.activeSlackOrganizationTool();
-    assertBootstrapUsesActiveOrganizationTool(input, activeOrganizationTool);
-    const connectionAttemptId =
-      activeOrganizationTool.connection_attempt_id;
-    const identityAttemptId = id("cat");
-    const identityLinkId = id("clm");
-    const connectionId = activeOrganizationTool.connection_id;
-    const bindingId = id("bnd");
-    const approveGrantId = id("pgr");
-    const rejectGrantId = id("pgr");
-    const expiresAt = addMinutes(input.now, 15);
-    const identityScopes = ["users:read"];
-    const identityScopesJson = canonicalJson(identityScopes);
-    const identityScopesSha256 = digest(identityScopes);
-    const publicConfiguration = {
-      channel_id: input.channel_id,
-      organization_tool_profile: SLACK_ORGANIZATION_TOOL_PROFILE,
-      schema_version: 1,
-      approve_reaction: input.approve_reaction,
-      reject_reaction: input.reject_reaction,
-      slack_enterprise_id: input.connection.enterprise_id,
-      slack_bot_id: input.connection.bot_id,
-      slack_bot_user_id: input.connection.bot_user_id,
-      slack_app_id: input.connection.app_id,
-    };
-    const publicConfigurationJson = canonicalJson(publicConfiguration);
-    const publicConfigurationSha256 = digest(publicConfiguration);
-    const result: BootstrapSlackApprovalResult = {
-      connection_attempt_id: connectionAttemptId,
-      identity_attempt_id: identityAttemptId,
-      identity_link_id: identityLinkId,
-      connection_id: connectionId,
-      adapter_binding_id: bindingId,
-      approve_permission_grant_id: approveGrantId,
-      reject_permission_grant_id: rejectGrantId,
-      organization_id: input.organization_id,
-      membership_id: input.target_membership_id,
-      installation_id: input.installation_id,
-      slack_team_id: input.connection.team_id,
-      slack_user_id: input.human.user_id,
-      channel_id: input.channel_id,
-      created_at: input.now,
-    };
-
     return this.immediateTransaction(() => {
-      const concurrent = this.bootstrapReplay(
+      const concurrent = this.slackApprovalActivationReplay(
         input.command_id,
         input.command_sha256,
       );
       if (concurrent !== null) return concurrent;
-      const currentOrganizationTool = this.activeSlackOrganizationTool();
-      assertBootstrapUsesActiveOrganizationTool(
-        input,
-        currentOrganizationTool,
-      );
-      if (
-        currentOrganizationTool.connection_attempt_id !==
-        connectionAttemptId
-      ) {
-        throw new Error(
-          "active organization Slack tool changed during bootstrap",
+
+      const organizationTool = this.activeSlackOrganizationTool();
+      if (organizationTool === null) {
+        throw new OrganizationIntegrationConflictError(
+          "Slack approval activation requires the active organization Slack tool",
         );
       }
-      this.completeSlackConnectionAttempt({
-        attempt_id: identityAttemptId,
-        administrator_principal_id: input.administrator_principal_id,
-        administrator_membership_id: input.administrator_membership_id,
-        purpose: "identity_link",
-        owner_kind: "membership",
-        target_principal_id: input.target_principal_id,
-        target_membership_id: input.target_membership_id,
-        team_id: input.connection.team_id,
-        redirect_uri: "urn:echo:organization:admin:slack-bootstrap",
-        scopes_json: identityScopesJson,
-        scopes_sha256: identityScopesSha256,
-        subject_kind: "human_user",
-        subject_id: input.human.user_id,
-        evidence_sha256: input.human.verification_evidence_sha256,
-        command_id: input.command_id,
-        digest_prefix: "identity-",
-        now: input.now,
-        expires_at: expiresAt,
-      });
-
-      this.database
+      const identity = this.database
         .prepare(
-          `INSERT INTO organization_external_identity_links (
-             identity_link_id, organization_id, principal_id, membership_id,
-             provider, provider_issuer, provider_tenant_kind,
-             provider_tenant_id, provider_subject_id, verification_attempt_id,
-             verification_evidence_sha256, status, verified_at, revoked_at,
-             revocation_reason
-           ) VALUES (
-             ?, ?, ?, ?, 'slack', 'https://slack.com', 'workspace', ?, ?, ?,
-             ?, 'active', ?, NULL, NULL
-           )`,
+          `SELECT identity_link_id, principal_id, membership_id,
+                  provider_subject_id
+           FROM organization_external_identity_links
+           WHERE identity_link_id = ?
+             AND organization_id = ?
+             AND provider = ?
+             AND provider_issuer = ?
+             AND provider_tenant_kind = 'workspace'
+             AND provider_tenant_id = ?
+             AND status = 'active'`,
         )
-        .run(
-          identityLinkId,
+        .get(
+          input.identity_link_id,
           input.organization_id,
-          input.target_principal_id,
-          input.target_membership_id,
-          input.connection.team_id,
-          input.human.user_id,
-          identityAttemptId,
-          input.human.verification_evidence_sha256,
-          input.now,
+          SLACK_PROVIDER,
+          SLACK_PROVIDER_ISSUER,
+          organizationTool.team_id,
+        ) as ActiveSlackIdentityLinkRow | undefined;
+      if (
+        identity === undefined ||
+        identity.principal_id !== input.target_principal_id ||
+        identity.membership_id !== input.target_membership_id
+      ) {
+        throw new OrganizationIntegrationConflictError(
+          "Slack approval activation identity link does not match the active target membership",
         );
-      this.database
+      }
+
+      const binding = this.database
         .prepare(
-          `INSERT INTO organization_adapter_bindings (
-             adapter_binding_id, organization_id, product_namespace,
-             installation_id, installation_key_id, adapter_kind, adapter_id,
-             adapter_instance_id, adapter_version, connection_id,
-             public_configuration_json, public_configuration_sha256, status,
-             created_by_principal_id, created_by_membership_id, bound_at,
+          `SELECT adapter_binding_id, installation_id, installation_key_id,
+                  adapter_id, adapter_instance_id, adapter_version,
+                  connection_id, public_configuration_json,
+                  public_configuration_sha256
+           FROM organization_adapter_bindings
+           WHERE adapter_binding_id = ?
+             AND organization_id = ?
+             AND product_namespace = 'echo-brain'
+             AND adapter_kind = 'approval-surface'
+             AND status = 'active'`,
+        )
+        .get(input.adapter_binding_id, input.organization_id) as
+        | ActiveSlackBindingRow
+        | undefined;
+      if (
+        binding === undefined ||
+        binding.installation_id !== input.installation_id ||
+        binding.installation_key_id !== input.installation_key_id ||
+        binding.adapter_id !== "slack-reactions" ||
+        binding.connection_id !== organizationTool.connection_id ||
+        !slackApprovalBindingMatchesTool(binding, organizationTool)
+      ) {
+        throw new OrganizationIntegrationConflictError(
+          "Slack approval activation adapter binding does not match the active installation and organization tool",
+        );
+      }
+
+      const activeGrants = this.database
+        .prepare(
+          `SELECT permission_grant_id, principal_id, membership_id, action,
+                  resource_scope_json
+           FROM organization_permission_grants
+           WHERE organization_id = ?
+             AND adapter_binding_id = ?
+             AND action IN ('approve', 'reject')
+             AND status = 'active'
+           ORDER BY action, permission_grant_id`,
+        )
+        .all(input.organization_id, input.adapter_binding_id) as
+        ActiveSlackApprovalGrantRow[];
+      const exactExistingPair =
+        activeGrants.length === 2 &&
+        activeGrants.every(
+          (grant) =>
+            grant.principal_id === input.target_principal_id &&
+            grant.membership_id === input.target_membership_id &&
+            grant.resource_scope_json === "{}",
+        ) &&
+        activeGrants.some((grant) => grant.action === "approve") &&
+        activeGrants.some((grant) => grant.action === "reject");
+      if (activeGrants.length !== 0 && !exactExistingPair) {
+        throw new OrganizationIntegrationConflictError(
+          "Slack approval activation found conflicting existing direct grants",
+        );
+      }
+
+      let approveGrantId: string;
+      let rejectGrantId: string;
+      let reasonCode: string;
+      if (exactExistingPair) {
+        approveGrantId = activeGrants.find(
+          (grant) => grant.action === "approve",
+        )!.permission_grant_id;
+        rejectGrantId = activeGrants.find(
+          (grant) => grant.action === "reject",
+        )!.permission_grant_id;
+        reasonCode = "existing_direct_grants_reused";
+      } else {
+        approveGrantId = id("pgr");
+        rejectGrantId = id("pgr");
+        const insertGrant = this.database.prepare(
+          `INSERT INTO organization_permission_grants (
+             permission_grant_id, organization_id, adapter_binding_id,
+             principal_id, membership_id, action, resource_scope_json, status,
+             granted_by_principal_id, granted_by_membership_id, granted_at,
              revoked_at, revocation_reason
            ) VALUES (
-             ?, ?, 'echo-brain', ?, ?, 'approval-surface', ?, ?, ?, ?, ?, ?,
-             'active', ?, ?, ?, NULL, NULL
+             ?, ?, ?, ?, ?, ?, '{}', 'active', ?, ?, ?, NULL, NULL
            )`,
-        )
-        .run(
-          bindingId,
+        );
+        insertGrant.run(
+          approveGrantId,
           input.organization_id,
-          input.installation_id,
-          input.installation_key_id,
-          input.adapter_id,
-          input.adapter_instance_id,
-          input.adapter_version,
-          connectionId,
-          publicConfigurationJson,
-          publicConfigurationSha256,
+          input.adapter_binding_id,
+          input.target_principal_id,
+          input.target_membership_id,
+          "approve",
           input.administrator_principal_id,
           input.administrator_membership_id,
           input.now,
         );
-      const insertGrant = this.database.prepare(
-        `INSERT INTO organization_permission_grants (
-           permission_grant_id, organization_id, adapter_binding_id,
-           principal_id, membership_id, action, resource_scope_json, status,
-           granted_by_principal_id, granted_by_membership_id, granted_at,
-           revoked_at, revocation_reason
-         ) VALUES (
-           ?, ?, ?, ?, ?, ?, '{}', 'active', ?, ?, ?, NULL, NULL
-         )`,
-      );
-      insertGrant.run(
-        approveGrantId,
-        input.organization_id,
-        bindingId,
-        input.target_principal_id,
-        input.target_membership_id,
-        "approve",
-        input.administrator_principal_id,
-        input.administrator_membership_id,
-        input.now,
-      );
-      insertGrant.run(
-        rejectGrantId,
-        input.organization_id,
-        bindingId,
-        input.target_principal_id,
-        input.target_membership_id,
-        "reject",
-        input.administrator_principal_id,
-        input.administrator_membership_id,
-        input.now,
-      );
+        insertGrant.run(
+          rejectGrantId,
+          input.organization_id,
+          input.adapter_binding_id,
+          input.target_principal_id,
+          input.target_membership_id,
+          "reject",
+          input.administrator_principal_id,
+          input.administrator_membership_id,
+          input.now,
+        );
+        reasonCode = "direct_grants_created";
+      }
+
+      const result: ActivateExistingSlackApprovalResult = {
+        identity_link_id: identity.identity_link_id,
+        adapter_binding_id: binding.adapter_binding_id,
+        approve_permission_grant_id: approveGrantId,
+        reject_permission_grant_id: rejectGrantId,
+        membership_id: input.target_membership_id,
+        installation_id: input.installation_id,
+        activated_at: input.now,
+        permission_grants_created: exactExistingPair ? 0 : 2,
+      };
       this.appendAudit({
         occurred_at: input.now,
         actor_kind: "membership",
@@ -1308,17 +1282,17 @@ export class OrganizationIntegrationsRepository {
         actor_installation_id: null,
         command_id: input.command_id,
         provider_event_sha256: null,
-        action: "slack_approval.bootstrap",
+        action: "slack_approval.activated",
         subject_kind: "adapter_binding",
-        subject_id: bindingId,
+        subject_id: binding.adapter_binding_id,
         membership_id: input.target_membership_id,
-        identity_link_id: identityLinkId,
-        connection_id: connectionId,
-        adapter_binding_id: bindingId,
+        identity_link_id: identity.identity_link_id,
+        connection_id: organizationTool.connection_id,
+        adapter_binding_id: binding.adapter_binding_id,
         permission_grant_id: null,
         outcome: "succeeded",
-        reason_code: "provider_verified_and_grants_created",
-        idempotency_key: `bootstrap:${input.command_id}`,
+        reason_code: reasonCode,
+        idempotency_key: `slack-approval-activation:${input.command_id}`,
         authority_checked_at: input.now,
         authority_evidence_sha256: input.command_sha256,
         correlation_id: input.command_id,

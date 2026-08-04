@@ -176,15 +176,14 @@ The connection and permission service must preserve these rules:
   ceremony rather than OAuth. It verifies the bot, workspace, required scopes,
   and exact public channel access before creating an active organization tool
   connection.
-- The earlier combined Slack bootstrap is retained for compatibility and live
-  permission-path coverage. An existing profileless approval connection
-  remains usable by its existing identity link, binding, and grants. Explicit
-  organization-tool onboarding re-verifies its stored credential and channel
-  and promotes that same connection ID; it never creates a parallel tool
-  connection. After Slack is explicitly ready, an installation-signed manual
-  challenge proves one exact Slack human and commits only that identity link
-  and installation binding. It creates zero grants. Organization-tool
-  onboarding does not create employee-specific records.
+- Existing profileless approval connections and their links, bindings, and
+  grants remain usable. Explicit organization-tool onboarding re-verifies the
+  stored credential and channel and promotes that same connection ID; it never
+  creates a parallel tool connection. After Slack is explicitly ready, an
+  installation-signed challenge proves one exact Slack human and commits only
+  that identity link and installation binding. A separate owner-attributed
+  activation creates or reuses approve/reject grants for those exact existing
+  records. Organization-tool onboarding creates no employee-specific state.
 - OAuth callbacks and automatic organization-tool discovery/configuration
   propagation remain requirements for a later polished connect flow.
 - Normalize scopes, require the provider's granted scope set to contain every
@@ -254,16 +253,18 @@ No Teams, Granola, project-management, or other non-Slack organization-tool
 onboarding is implemented. Automatic organization-tool propagation and a
 multi-provider employee connect catalog are also explicitly deferred.
 
-No operator tool creates a permission grant. `organization_permission_grants`
-receives rows from exactly one code path: the retained Slack approval
-bootstrap behind `POST /v1/admin/integrations/slack-approval-bootstrap`. That
-route is reachable only as a raw administrator-authenticated HTTP call; no
-administrator CLI verb, administrator console form, or product client invokes
-it. Completing an employee Slack identity link therefore always reports
-`permission_grants_created: 0`. An employee completes the link ceremony
-successfully and is then denied by the action-time permission path, which
-finds no active grant. Making grant creation reachable from a shipped
-operator interface is a later milestone.
+`organization_permission_grants` receives NEW Slack approval grants only
+through the current installation-signed Slack identity-proof path: the
+employee first completes that proof, and the resulting identity link is the
+verified prerequisite and the audit reference for activation. The
+administrator command `echo-organization-admin slack approval activate`
+names that existing identity link and exact installation adapter binding.
+Its Authority route creates or reuses only the direct `approve` and `reject`
+grants; the grants themselves are scoped to the adapter binding plus the
+exact principal and membership. It does not call Slack, accept a bot token,
+create a provider identity, or create an adapter binding. Completing the
+employee link therefore still reports `permission_grants_created: 0`, and
+activation is the one separate owner-attributed permission step.
 
 ## Schema growth rule
 

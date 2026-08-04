@@ -368,7 +368,7 @@ describe('administrator console presentation', () => {
         recent_audit: [],
       })),
       onboardSlackOrganizationTool,
-      bootstrapSlackApproval: vi.fn(),
+      activateSlackApproval: vi.fn(),
       checkPermission: vi.fn(),
     } as unknown as OrganizationIntegrationsHttpApplication;
     const { server, origin } = await listen(

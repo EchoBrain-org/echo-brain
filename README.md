@@ -221,7 +221,10 @@ command. Keep the invitation in a current-user `0700` directory as a `0600`
 file; it contains a one-time enrollment secret. The administrator also supplies
 the approved Slack channel and employee reviewer identity. The command prompts
 locally for the Granola token and organization Slack bot token without echoing
-either one:
+either one. Before running it, make sure Granola has at least one accessible
+note whose provider-reported owner is the employee email among the first 30
+notes returned; creating one fresh owner-visible note is the simplest pilot
+setup for a shared team key:
 
 ```sh
 ECHO_CONFIG="$HOME/.config/echo-brain/runtime.json"
@@ -243,23 +246,46 @@ echo-brain bootstrap \
 `bootstrap` requires a materialized-commit build; release provenance is
 established by the artifact verification above. It creates an owner-bound
 Granola source with `page_size: 1`, configures the existing Slack-reaction
-approval adapter, stores both tokens in private local files, initializes and
-enrolls the installation, and runs an internal local preflight. It does not place an
-auto-start file in `~/Library/LaunchAgents`, construct product adapters, contact
-Granola, Slack, or an LLM, or start product work. The successful final service
-state is `installed: false`, `loaded: false`, `running: false`.
+approval adapter, then makes one bounded Granola `listNotes` request for at
+most 30 note headers and requires a provider-reported record-owner match. It
+never fetches a note body during this check, and a newly supplied Granola token
+is written to its private local file only after the match succeeds. It then
+reads and stores the Slack token, initializes and enrolls the installation, and
+runs an internal local preflight. It does not place an auto-start file in
+`~/Library/LaunchAgents`, construct product adapters, contact Slack or an LLM,
+or start product work. The successful final service state is
+`installed: false`, `loaded: false`, `running: false`.
 
-The employee-supplied owner email is a local Granola boundary, not an
-Authority-issued identity claim. The central Slack approval bootstrap validates
-the supplied Slack human, channel, membership, and installation before it
-creates approve/reject grants. The bootstrap result prints a non-secret
-`approval_activation` object. An administrator uses those exact fields, a
-fresh command ID, the administrator and target membership IDs, and the same
-organization bot token with the existing authenticated
-`POST /v1/admin/integrations/slack-approval-bootstrap` route described in the
-[Authority runbook](services/organization-authority/README.md). Do not use
-`organization slack-link-*` for this pilot path; that identity proof creates no
-approval grants.
+The observed owner email is a local Granola record boundary, not proof that the
+API key itself belongs to the employee and not an Authority-issued identity
+claim. After bootstrap, the employee proves the
+configured Slack reviewer through the installation-signed thread challenge:
+
+```sh
+echo-brain organization slack-link-begin --config "$ECHO_CONFIG"
+# Follow the emitted instructions to reply in Slack and run slack-link-complete.
+```
+
+The completion result contains non-secret `identity_link_id`,
+`adapter_binding_id`, `membership_id`, and `installation_id` values. The
+administrator activates approve/reject permission for that already-verified
+link from the Authority machine:
+
+```sh
+echo-organization-admin slack approval activate \
+  --config '<absolute Authority config path>' \
+  --administrator-membership-id '<active owner mem_...>' \
+  --target-membership-id '<employee mem_...>' \
+  --installation-id '<employee ins_...>' \
+  --identity-link-id '<verified clm_...>' \
+  --adapter-binding-id '<verified bnd_...>'
+```
+
+Activation neither calls Slack nor creates an identity link or adapter
+binding. The verified identity link the employee already proved is its
+prerequisite and audit reference; the two direct grants it adds are scoped to
+the exact adapter binding, principal, and membership. Exact retries reuse the
+existing grants.
 
 Only after that central activation succeeds, run the stopped, controlled test:
 
@@ -527,11 +553,18 @@ Slack remains a first-class internal surface. For reaction approval:
 }
 ```
 
-The bot needs `chat:write`, `reactions:read`, and the appropriate public or
-private channel history scope. Only the configured reviewer can resolve a
-brief.
+The approval channel is a separate PUBLIC organization review channel — the
+same Authority-bound public channel the organization verifies during Slack
+onboarding. V1 does not support private approval channels. The bot needs
+`chat:write`, `reactions:read`, and the public channel history scope. Only
+the configured reviewer can resolve a brief.
 
-Slack delivery is independent of Slack approval:
+Slack delivery is independent of Slack approval and must use a different
+channel than the approval surface. This is a disclosure and workflow
+boundary: review traffic stays in the review channel. Existing installations
+whose approval and delivery channels are equal remain loadable and can still
+re-pin unchanged or package-only updates for update/recovery, but the
+delivery channel must move before a changed configuration is accepted:
 
 ```json
 {
@@ -541,7 +574,7 @@ Slack delivery is independent of Slack approval:
       "instance_id": "team-decisions",
       "credential_ref": "file:/Users/you/.echo-brain/credentials/slack-bot-token",
       "settings": {
-        "channel_id": "C0123ABCD",
+        "channel_id": "C0789TEAMX",
         "request_timeout_ms": 30000
       }
     }
@@ -648,7 +681,9 @@ Once the organization Slack tool is active, an enrolled installation links its
 Slack identity with `organization slack-link-begin` and
 `organization slack-link-complete`. The one-time code travels through a reply
 in the exact Slack challenge thread and the `ECHO_SLACK_LINK_CODE` environment
-variable, never a command-line argument. The
+variable, never a command-line argument. Linking creates no permission grant;
+an organization owner must then run `echo-organization-admin slack approval
+activate` for the returned identity link and adapter binding. The
 [authority service](services/organization-authority/README.md) README carries
 the exact steps.
 

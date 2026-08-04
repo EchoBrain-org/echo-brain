@@ -15,6 +15,10 @@ const IDS = {
   principal: 'prn_00000000-0000-4000-8000-000000000001',
   membership: 'mem_00000000-0000-4000-8000-000000000001',
   installation: 'ins_00000000-0000-4000-8000-000000000001',
+  identityLink: 'clm_00000000-0000-4000-8000-000000000001',
+  adapterBinding: 'bnd_00000000-0000-4000-8000-000000000001',
+  approveGrant: 'pgr_00000000-0000-4000-8000-000000000001',
+  rejectGrant: 'pgr_00000000-0000-4000-8000-000000000002',
   command: 'adm_00000000-0000-4000-8000-000000000001',
 } as const;
 
@@ -96,6 +100,17 @@ const issuedGrant = {
   enrollment_grant_sha256: DIGESTS.grant,
   issued_at: '2026-07-22T00:00:00.000Z',
   expires_at: '2026-07-22T01:00:00.000Z',
+};
+
+const activatedSlackApproval = {
+  identity_link_id: IDS.identityLink,
+  adapter_binding_id: IDS.adapterBinding,
+  approve_permission_grant_id: IDS.approveGrant,
+  reject_permission_grant_id: IDS.rejectGrant,
+  membership_id: IDS.membership,
+  installation_id: IDS.installation,
+  activated_at: '2026-07-22T00:03:00.000Z',
+  permission_grants_created: 2 as const,
 };
 
 function jsonResponse(
@@ -217,6 +232,12 @@ describe('organization administrator API client requests', () => {
               : revokedMembership,
           );
         }
+        if (
+          url.pathname ===
+          '/v1/admin/integrations/slack-approval-activation'
+        ) {
+          return jsonResponse(activatedSlackApproval, 201);
+        }
         return jsonResponse(
           { error: { code: 'not_found', message: 'route was not found' } },
           404,
@@ -265,8 +286,18 @@ describe('organization administrator API client requests', () => {
         reason: 'device retired',
       }),
     ).resolves.toEqual(revokedInstallation);
+    await expect(
+      client.activateSlackApproval({
+        command_id: IDS.command,
+        administrator_membership_id: IDS.membership,
+        target_membership_id: IDS.membership,
+        installation_id: IDS.installation,
+        identity_link_id: IDS.identityLink,
+        adapter_binding_id: IDS.adapterBinding,
+      }),
+    ).resolves.toEqual(activatedSlackApproval);
 
-    expect(captured).toHaveLength(9);
+    expect(captured).toHaveLength(10);
     for (const { init } of captured) {
       const headers = new Headers(init.headers);
       expect(headers.get('accept')).toBe('application/json');
@@ -293,6 +324,19 @@ describe('organization administrator API client requests', () => {
     expect(String(grantRequest.init.body)).not.toContain(
       'enrollment_grant_base64url',
     );
+    const activationRequest = captured.find(
+      ({ url }) =>
+        url.pathname ===
+        '/v1/admin/integrations/slack-approval-activation',
+    )!;
+    expect(JSON.parse(String(activationRequest.init.body))).toEqual({
+      command_id: IDS.command,
+      administrator_membership_id: IDS.membership,
+      target_membership_id: IDS.membership,
+      installation_id: IDS.installation,
+      identity_link_id: IDS.identityLink,
+      adapter_binding_id: IDS.adapterBinding,
+    });
   });
 
   it('validates IDs, command bodies, cursors, and page sizes before fetch', async () => {
@@ -317,6 +361,16 @@ describe('organization administrator API client requests', () => {
         membership_type: 'employee',
       }),
     ).toThrow('canonical adm identifier');
+    expect(() =>
+      client.activateSlackApproval({
+        command_id: IDS.command,
+        administrator_membership_id: IDS.membership,
+        target_membership_id: IDS.membership,
+        installation_id: IDS.installation,
+        identity_link_id: '../identity-link',
+        adapter_binding_id: IDS.adapterBinding,
+      }),
+    ).toThrow('identity_link_id');
     expect(fetchImpl).not.toHaveBeenCalled();
   });
 
@@ -339,6 +393,29 @@ describe('organization administrator API client requests', () => {
       }),
     );
     await expect(wrongStatusClient.overview()).rejects.toMatchObject({
+      code: 'invalid_response',
+      status: 201,
+    });
+
+    const invalidActivationClient = new OrganizationAdminApiClient(
+      options({
+        fetch: (async () =>
+          jsonResponse(
+            { ...activatedSlackApproval, unexpected: true },
+            201,
+          )) as typeof fetch,
+      }),
+    );
+    await expect(
+      invalidActivationClient.activateSlackApproval({
+        command_id: IDS.command,
+        administrator_membership_id: IDS.membership,
+        target_membership_id: IDS.membership,
+        installation_id: IDS.installation,
+        identity_link_id: IDS.identityLink,
+        adapter_binding_id: IDS.adapterBinding,
+      }),
+    ).rejects.toMatchObject({
       code: 'invalid_response',
       status: 201,
     });

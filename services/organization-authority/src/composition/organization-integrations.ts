@@ -25,8 +25,8 @@ import {
   OrganizationIntegrationsRepository,
   SLACK_ORGANIZATION_TOOL_REQUIRED_SCOPES,
   SlackIntegrationProviderError,
-  type BootstrapSlackApprovalInput,
-  type BootstrapSlackApprovalResult,
+  type ActivateExistingSlackApprovalInput,
+  type ActivateExistingSlackApprovalResult,
   type BeginSlackIdentityLinkChallengeInput,
   type CompleteSlackIdentityLinkChallengeInput,
   type OnboardSlackOrganizationToolInput,
@@ -40,14 +40,13 @@ import {
 } from '@echo-brain/organization-control-plane';
 import {
   OrganizationAuthorityApplication,
-  type OrganizationIntegrationAdminContext,
   type OrganizationIntegrationInstallationContext,
   type OrganizationIntegrationOwnerContext,
   type OrganizationPermissionAuthorityStatus,
 } from '../application/organization-authority.js';
+import type { ActivateOrganizationSlackApprovalRequest } from '../application/slack-approval-activation.js';
 import { AuthorityOperationError } from '../domain/errors.js';
 import type {
-  BootstrapOrganizationSlackApprovalRequest,
   OnboardOrganizationSlackToolRequest,
   OrganizationIntegrationsHttpApplication,
 } from '../presentation/organization-integrations-http-application.js';
@@ -82,7 +81,7 @@ function stringField(
   ) {
     throw new AuthorityOperationError(
       'invalid_request',
-      `Slack bootstrap ${label} is invalid`,
+      `Slack integration ${label} is invalid`,
     );
   }
   return value;
@@ -114,27 +113,22 @@ function stringRequest<const T extends readonly (readonly [string, number])[]>(
   ) as StringRequest<T>;
 }
 
-const BOOTSTRAP_REQUEST_FIELDS = [
+const ACTIVATION_REQUEST_FIELDS = [
   ['command_id', 128],
   ['administrator_membership_id', 128],
   ['target_membership_id', 128],
   ['installation_id', 128],
-  ['adapter_instance_id', 128],
-  ['adapter_version', 64],
-  ['channel_id', 128],
-  ['approve_reaction', 64],
-  ['reject_reaction', 64],
-  ['slack_user_id', 128],
-  ['slack_bot_token', 16 * 1024],
+  ['identity_link_id', 128],
+  ['adapter_binding_id', 128],
 ] as const;
 
-function validateBootstrapRequest(
+function validateActivationRequest(
   value: unknown,
-): BootstrapOrganizationSlackApprovalRequest {
+): ActivateOrganizationSlackApprovalRequest {
   const result = stringRequest(
     value,
-    BOOTSTRAP_REQUEST_FIELDS,
-    'Slack bootstrap request has an unexpected shape',
+    ACTIVATION_REQUEST_FIELDS,
+    'Slack approval activation request has an unexpected shape',
   );
   try {
     if (!ADMIN_COMMAND_ID.test(result.command_id)) {
@@ -143,39 +137,32 @@ function validateBootstrapRequest(
     assertFederationId(
       result.administrator_membership_id,
       'mem',
-      'Slack bootstrap administrator membership',
+      'Slack approval activation administrator membership',
     );
     assertFederationId(
       result.target_membership_id,
       'mem',
-      'Slack bootstrap target membership',
+      'Slack approval activation target membership',
     );
     assertFederationId(
       result.installation_id,
       'ins',
-      'Slack bootstrap installation',
+      'Slack approval activation installation',
+    );
+    assertFederationId(
+      result.identity_link_id,
+      'clm',
+      'Slack approval activation identity link',
+    );
+    assertFederationId(
+      result.adapter_binding_id,
+      'bnd',
+      'Slack approval activation adapter binding',
     );
   } catch {
     throw new AuthorityOperationError(
       'invalid_request',
-      'Slack bootstrap organization identifiers are invalid',
-    );
-  }
-  if (
-    !/^[a-z][a-z0-9-]{0,127}$/.test(result.adapter_instance_id) ||
-    !/^[0-9]+\.[0-9]+\.[0-9]+(?:-[0-9A-Za-z.-]+)?$/.test(
-      result.adapter_version,
-    ) ||
-    !/^C[A-Z0-9]{2,}$/.test(result.channel_id) ||
-    !/^[a-z0-9_+-]{1,64}$/.test(result.approve_reaction) ||
-    !/^[a-z0-9_+-]{1,64}$/.test(result.reject_reaction) ||
-    result.approve_reaction === result.reject_reaction ||
-    !/^[UW][A-Z0-9]{2,}$/.test(result.slack_user_id) ||
-    !/^xoxb-[A-Za-z0-9-]{8,}$/.test(result.slack_bot_token)
-  ) {
-    throw new AuthorityOperationError(
-      'invalid_request',
-      'Slack bootstrap adapter or provider identifiers are invalid',
+      'Slack approval activation identifiers are invalid',
     );
   }
   return result;
@@ -232,16 +219,6 @@ function sameSecret(left: string, right: string): boolean {
     createHash('sha256').update(left).digest(),
     createHash('sha256').update(right).digest(),
   );
-}
-
-function sameAdminContext(
-  left: OrganizationIntegrationAdminContext,
-  right: OrganizationIntegrationAdminContext,
-): boolean {
-  return canonicalJson(left.administrator) ===
-    canonicalJson(right.administrator) &&
-    canonicalJson(left.target) === canonicalJson(right.target) &&
-    canonicalJson(left.installation) === canonicalJson(right.installation);
 }
 
 function sameOwnerContext(
@@ -819,139 +796,39 @@ export class ComposedOrganizationIntegrationsApplication
     );
   }
 
-  async bootstrapSlackApproval(
-    value: unknown,
-    signal?: AbortSignal,
-  ): Promise<BootstrapSlackApprovalResult> {
-    const request = validateBootstrapRequest(value);
-    const {
-      slack_bot_token: slackBotToken,
-      ...nonSecretRequest
-    } = request;
-    const commandSha256 = canonicalSha256({
-      ...nonSecretRequest,
-      slack_bot_token_sha256: rawSha256(slackBotToken),
-    });
-    const replay = this.options.repository.bootstrapReplay(
-      request.command_id,
-      commandSha256,
-    );
-    if (replay !== null) return replay;
-    const activeOrganizationTool =
-      this.options.repository.activeSlackOrganizationTool();
-    if (activeOrganizationTool === null) {
-      throw new AuthorityOperationError(
-        'conflict',
-        'Slack must be activated for the organization before employee approval linking',
-      );
-    }
-    if (request.channel_id !== activeOrganizationTool.channel_id) {
-      throw new AuthorityOperationError(
-        'conflict',
-        'Slack bootstrap channel differs from the active organization tool',
-      );
-    }
-    let organizationSlackToken: string;
-    try {
-      organizationSlackToken = this.options.secrets.read(
-        activeOrganizationTool.secret,
-      );
-    } catch {
-      throw new AuthorityOperationError(
-        'unavailable',
-        'The active organization Slack credential is unavailable',
-      );
-    }
-    if (!sameSecret(slackBotToken, organizationSlackToken)) {
-      throw new AuthorityOperationError(
-        'invalid_request',
-        'Slack bootstrap must use the active organization credential',
-      );
-    }
-
-    const before = this.options.authority.integrationAdminContext(
+  activateSlackApproval(value: unknown): ActivateExistingSlackApprovalResult {
+    const request = validateActivationRequest(value);
+    const context = this.options.authority.integrationAdminContext(
       request.administrator_membership_id,
       request.target_membership_id,
       request.installation_id,
     );
-    if (before.target.membership_id !== before.installation.membership_id) {
+    if (context.target.membership_id !== context.installation.membership_id) {
       throw new AuthorityOperationError(
         'invalid_request',
-        'Slack bootstrap target membership must own the enrolled installation',
-      );
-    }
-    const { connection, channel } = await verifySlackOrganizationTool(
-      this.options.slack,
-      organizationSlackToken,
-      request.channel_id,
-      signal,
-    );
-    if (
-      connection.team_id !== activeOrganizationTool.team_id ||
-      connection.enterprise_id !== activeOrganizationTool.enterprise_id ||
-      connection.bot_user_id !== activeOrganizationTool.bot_user_id ||
-      connection.bot_id !== activeOrganizationTool.bot_id ||
-      connection.app_id !== activeOrganizationTool.app_id ||
-      channel.channel_id !== activeOrganizationTool.channel_id
-    ) {
-      throw new AuthorityOperationError(
-        'conflict',
-        'The active organization Slack connection changed during verification',
-      );
-    }
-    let human: Awaited<ReturnType<SlackIntegrationProvider['verifyHuman']>>;
-    try {
-      human = await this.options.slack.verifyHuman(
-        organizationSlackToken,
-        request.slack_user_id,
-        signal,
-      );
-    } catch (error) {
-      throwSlackOnboardingError(error);
-    }
-    if (human.team_id !== connection.team_id) {
-      throw new AuthorityOperationError(
-        'invalid_request',
-        'Slack reviewer belongs to another workspace',
-      );
-    }
-    const after = this.options.authority.integrationAdminContext(
-      request.administrator_membership_id,
-      request.target_membership_id,
-      request.installation_id,
-    );
-    if (!sameAdminContext(before, after)) {
-      throw new AuthorityOperationError(
-        'conflict',
-        'organization integration authority state changed during verification',
+        'Slack approval activation target membership must own the enrolled installation',
       );
     }
 
     const descriptor = this.options.authority.descriptor();
-    const input: BootstrapSlackApprovalInput = {
+    const input: ActivateExistingSlackApprovalInput = {
       command_id: request.command_id,
-      command_sha256: commandSha256,
+      command_sha256: canonicalSha256(request),
       organization_id: descriptor.organization_id,
       authority_id: descriptor.authority_id,
-      administrator_principal_id: after.administrator.principal_id,
-      administrator_membership_id: after.administrator.membership_id,
-      target_principal_id: after.target.principal_id,
-      target_membership_id: after.target.membership_id,
-      installation_id: after.installation.installation_id,
-      installation_key_id: after.installation.installation_key_id,
-      adapter_id: 'slack-reactions',
-      adapter_instance_id: request.adapter_instance_id,
-      adapter_version: request.adapter_version,
-      channel_id: request.channel_id,
-      approve_reaction: request.approve_reaction,
-      reject_reaction: request.reject_reaction,
-      organization_connection_id: activeOrganizationTool.connection_id,
-      connection,
-      channel,
-      human,
+      administrator_principal_id: context.administrator.principal_id,
+      administrator_membership_id: context.administrator.membership_id,
+      target_principal_id: context.target.principal_id,
+      target_membership_id: context.target.membership_id,
+      installation_id: context.installation.installation_id,
+      installation_key_id: context.installation.installation_key_id,
+      identity_link_id: request.identity_link_id,
+      adapter_binding_id: request.adapter_binding_id,
       now: this.now(),
     };
-    return this.options.repository.bootstrapSlackApproval(input);
+    return runSlackIdentityLinkRepository(() =>
+      this.options.repository.activateExistingSlackApproval(input),
+    );
   }
 
   async checkPermission(

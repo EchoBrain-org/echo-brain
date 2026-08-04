@@ -793,7 +793,8 @@ describe('organization machine CLI', () => {
     environment.ECHO_SLACK_LINK_CODE = begunResult.challenge_code;
     const completed = await command(completeArgs, dependencies);
     expect(completed.status, completed.stderr).toBe(0);
-    expect(JSON.parse(completed.stdout)).toMatchObject({
+    const completedResult = JSON.parse(completed.stdout);
+    expect(completedResult).toMatchObject({
       ok: true,
       action: 'slack-link-complete',
       linked: true,
@@ -803,6 +804,14 @@ describe('organization machine CLI', () => {
         permission_grants_created: 0,
       },
     });
+    expect(completedResult.next_steps).toContainEqual(
+      expect.stringContaining(
+        'echo-organization-admin slack approval activate',
+      ),
+    );
+    expect(completedResult.next_steps).toContainEqual(
+      expect.stringContaining(ORGANIZATION_IDS.membership),
+    );
     expect(completeRequests).toHaveLength(1);
     expect(completeRequests[0]!.challenge_code).toBe(
       begunResult.challenge_code,

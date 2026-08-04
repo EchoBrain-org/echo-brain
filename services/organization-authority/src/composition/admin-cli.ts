@@ -43,6 +43,10 @@ import {
   type OrganizationAdminApiClientOptions,
   type OrganizationAdminPageRequest,
 } from '../adapters/http/organization-admin-api-client.js';
+import type {
+  ActivateOrganizationSlackApprovalRequest,
+  ActivatedOrganizationSlackApproval,
+} from '../application/slack-approval-activation.js';
 import {
   prepareOrganizationInvitation,
   recordOrganizationInvitationIssued,
@@ -67,6 +71,7 @@ const USAGE = `usage:
   echo-organization-admin invitation create --config <absolute-path> --authority-url <public-https-origin> --membership-id <mem_UUIDv4> --lifetime-seconds <1-${MAX_ENROLLMENT_GRANT_LIFETIME_SECONDS}> --out <absolute-path> [--command-id <adm_UUIDv4>]
   echo-organization-admin member revoke --config <absolute-path> --membership-id <mem_UUIDv4> --reason <reason>
   echo-organization-admin installation revoke --config <absolute-path> --installation-id <ins_UUIDv4> --reason <reason>
+  echo-organization-admin slack approval activate --config <absolute-path> --administrator-membership-id <mem_UUIDv4> --target-membership-id <mem_UUIDv4> --installation-id <ins_UUIDv4> --identity-link-id <clm_UUIDv4> --adapter-binding-id <bnd_UUIDv4> [--command-id <adm_UUIDv4>]
 
 INTERNAL LIVE:
   echo-organization-admin internal-live release approve --config <absolute-path> --manifest <absolute-path> [--command-id <adm_UUIDv4>]
@@ -77,6 +82,8 @@ const UUID_V4_SOURCE =
 const COMMAND_ID_PATTERN = new RegExp(`^adm_${UUID_V4_SOURCE}$`);
 const MEMBERSHIP_ID_PATTERN = new RegExp(`^mem_${UUID_V4_SOURCE}$`);
 const INSTALLATION_ID_PATTERN = new RegExp(`^ins_${UUID_V4_SOURCE}$`);
+const IDENTITY_LINK_ID_PATTERN = new RegExp(`^clm_${UUID_V4_SOURCE}$`);
+const ADAPTER_BINDING_ID_PATTERN = new RegExp(`^bnd_${UUID_V4_SOURCE}$`);
 const MAX_CLI_ARGUMENTS = 24;
 const MAX_CLI_ARGUMENT_CHARACTERS = 4096;
 const MAX_INTERNAL_LIVE_MANIFEST_BYTES = 64 * 1024;
@@ -117,6 +124,9 @@ export interface OrganizationAdminCliClient {
     installationId: string,
     input: RevokeOrganizationSubjectRequestV1,
   ): Promise<RevokedOrganizationInstallationV1>;
+  activateSlackApproval(
+    input: ActivateOrganizationSlackApprovalRequest,
+  ): Promise<ActivatedOrganizationSlackApproval>;
   approveInternalLiveRelease(
     input: ApproveOrganizationInternalLiveReleaseRequestV1,
   ): Promise<OrganizationInternalLiveUpdateDirectiveV1>;
@@ -609,6 +619,63 @@ async function runInstallationRevoke(
   return 0;
 }
 
+async function runSlackApprovalActivate(
+  arguments_: readonly string[],
+  io: OrganizationAdminCliIo,
+  dependencies: OrganizationAdminCliDependencies,
+): Promise<number> {
+  const flags = parseFlags(arguments_, [
+    '--config',
+    '--administrator-membership-id',
+    '--target-membership-id',
+    '--installation-id',
+    '--identity-link-id',
+    '--adapter-binding-id',
+    '--command-id',
+  ]);
+  const suppliedCommand = optionalCanonicalId(
+    flags['--command-id'],
+    COMMAND_ID_PATTERN,
+    'command_id',
+  );
+  const request: ActivateOrganizationSlackApprovalRequest = {
+    command_id:
+      suppliedCommand ??
+      generatedCommandId(dependencies.random_uuid ?? randomUUID),
+    administrator_membership_id: canonicalId(
+      requiredFlag(flags, '--administrator-membership-id'),
+      MEMBERSHIP_ID_PATTERN,
+      'administrator_membership_id',
+    ),
+    target_membership_id: canonicalId(
+      requiredFlag(flags, '--target-membership-id'),
+      MEMBERSHIP_ID_PATTERN,
+      'target_membership_id',
+    ),
+    installation_id: canonicalId(
+      requiredFlag(flags, '--installation-id'),
+      INSTALLATION_ID_PATTERN,
+      'installation_id',
+    ),
+    identity_link_id: canonicalId(
+      requiredFlag(flags, '--identity-link-id'),
+      IDENTITY_LINK_ID_PATTERN,
+      'identity_link_id',
+    ),
+    adapter_binding_id: canonicalId(
+      requiredFlag(flags, '--adapter-binding-id'),
+      ADAPTER_BINDING_ID_PATTERN,
+      'adapter_binding_id',
+    ),
+  };
+  const context = await commandContext(
+    requiredFlag(flags, '--config'),
+    dependencies,
+  );
+  outputJson(io, await context.client.activateSlackApproval(request));
+  return 0;
+}
+
 async function runInternalLiveReleaseApprove(
   arguments_: readonly string[],
   io: OrganizationAdminCliIo,
@@ -712,6 +779,14 @@ export async function runOrganizationAuthorityAdminCli(
     );
     outputJson(io, await context.client.overview());
     return 0;
+  }
+
+  if (first === 'slack' && second === 'approval' && third === 'activate') {
+    return await runSlackApprovalActivate(
+      arguments_.slice(3),
+      io,
+      dependencies,
+    );
   }
 
   if (
