@@ -93,10 +93,10 @@ the old signer for continuity.
 A state root left behind by the retired founder-provenance mode is detected and
 refused, never downgraded: no product-work command, runtime start, or new
 processing cycle resumes on it. One shared observational gate in
-`cutover-fence.ts` runs before any directory creation, adapter or component
+`cutover-fence.ts` runs before any directory creation, adapter
 resolution, credential work, provider or Authority contact, approval read or
 mutation, or caller-supplied callback, so a custom identity check, approval
-capture, approval store, or runtime cannot resume the mode. It is a fail-closed
+capture, or approval store cannot resume the mode. It is a fail-closed
 gate on trusted in-process callers, not a sandbox. The gate is re-run at every
 composition cycle, not only at construction, so residue appearing under a live
 composition still fails the next cycle closed; a background access-lease renewal

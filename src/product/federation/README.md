@@ -41,13 +41,13 @@ recovering inspection stays available to the backup downgrade guard, the
 identity check, and legacy diagnostics.
 
 The gate covers *product work*: every entry point that starts the runtime or
-begins a cycle calls it before creating a directory, resolving adapters or
-components, resolving credentials, contacting a provider or the organization
-Authority, reading or mutating approvals, or invoking a caller-supplied
-callback. Those entry points are `prepareProductComposition` (at construction
-*and* at the start of every cycle), `startProductRuntime`, `DecisionNodeStore`,
-and one early dispatch policy in the CLI. A custom identity check, approval
-capture, approval store, or runtime cannot resume the retired mode through them.
+begins a cycle calls it before creating a directory, resolving adapters,
+resolving credentials, contacting a provider or the organization Authority,
+reading or mutating approvals, or invoking a caller-supplied callback. Those
+entry points are `prepareProductComposition` (at construction *and* at the
+start of every cycle), `DecisionNodeStore`, and one early dispatch policy in
+the CLI. A custom identity check, approval capture, or approval store cannot
+resume the retired mode through them.
 
 It deliberately does not gate the diagnosis, preservation, and quiescing
 commands -- `identity-check`, `validate-config`, general `status`,
@@ -56,8 +56,8 @@ write; the line is product work, not writes. `src/product/cli.ts` owns the exact
 policy and the top-level `README.md` states it.
 
 Two honest limits. This is a fail-closed gate on trusted in-process callers, not
-a sandbox: an injected component that ignores the documented seams and writes to
-the state root itself is outside its reach. And a background access-lease
+a sandbox: a caller-supplied implementation that ignores the documented seams
+and writes to the state root itself is outside its reach. And a background access-lease
 renewal started by an already-running composition can continue until that
 composition closes, though every new processing cycle is gated.
 

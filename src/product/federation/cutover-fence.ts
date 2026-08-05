@@ -478,11 +478,11 @@ export function inspectFounderProvenanceResidue(
  * The one shared retirement gate for *product work*.
  *
  * Every entry point that starts the runtime, begins a processing cycle, or
- * otherwise creates directories, resolves adapters or components, resolves
+ * otherwise creates directories, resolves adapters, resolves
  * credentials, contacts a provider or the organization Authority, reads or
  * mutates approvals, or invokes a caller-supplied callback calls this first, so
- * a custom identity check, approval capture, approval store, or runtime cannot
- * resume the retired mode.
+ * a custom identity check, approval capture, or approval store cannot resume
+ * the retired mode.
  *
  * It is deliberately NOT called by the diagnosis, preservation, and quiescing
  * commands, which must stay usable on a fenced profile: `identity-check`,
@@ -492,8 +492,8 @@ export function inspectFounderProvenanceResidue(
  * policy.
  *
  * This is a fail-closed gate on trusted in-process callers, not a sandbox: an
- * injected component that reaches past the documented seams and touches the
- * state root directly is outside what this can prevent.
+ * caller-supplied implementation that reaches past the documented seams and
+ * touches the state root directly is outside what this can prevent.
  */
 export function assertFounderProvenanceRetired(stateDirectory: string): void {
   const residue = inspectFounderProvenanceResidue(stateDirectory);

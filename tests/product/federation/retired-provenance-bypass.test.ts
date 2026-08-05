@@ -15,7 +15,6 @@ import type {
   MeetingSourceAdapter,
 } from "../../../src/core/index.js";
 import { prepareProductComposition } from "../../../src/product/composition.js";
-import { startProductRuntime } from "../../../src/product/runtime.js";
 import { DecisionNodeStore } from "../../../src/product/approval/decision-node-store.js";
 import type { DecisionNodeFederationCapture } from "../../../src/product/approval/decision-node-store.js";
 import { resolveProductStatePaths } from "../../../src/product/paths.js";
@@ -27,11 +26,10 @@ import {
 
 /**
  * The retirement gate has to hold at the retained *public* seams, not only in
- * the CLI. `prepareProductComposition`, `startProductRuntime`, and
- * `DecisionNodeStore` all still accept caller-supplied identity checks,
- * approval stores, approval captures, and runtime components; every one of
- * those is a way to hand the product a "ready" answer for a state root the
- * retired founder-provenance mode left behind.
+ * the CLI. `prepareProductComposition` and `DecisionNodeStore` still accept
+ * caller-supplied identity checks, approval stores, and approval captures;
+ * every one of those is a way to hand the product a "ready" answer for a state
+ * root the retired founder-provenance mode left behind.
  *
  * Each case below supplies the most permissive seam it can and proves the
  * refusal happens *before* that seam is consulted and before anything is
@@ -238,44 +236,11 @@ describe("retired founder provenance cannot be revived through a public seam", (
     expect(existsSync(resolveProductStatePaths(stateDir).database)).toBe(false);
   });
 
-  it("refuses startProductRuntime before components or adapters are resolved", async () => {
-    const stateDir = withFounderIdentityMaterial(privateState());
-    const calls: string[] = [];
-    let classified = false;
-
-    const result = await startProductRuntime(manualRuntimeConfig(stateDir), {
-      adapterRegistry: new AdapterRegistry(),
-      classifyStateFilesystem: async () => {
-        classified = true;
-        return { kind: "local", raw: "apfs" };
-      },
-      identityCheck: permissiveIdentityCheck(calls),
-      components: [
-        {
-          name: "must-not-start",
-          dependsOn: [],
-          start: async () => {
-            calls.push("componentStart");
-            return { stop: async () => undefined };
-          },
-        },
-      ],
-    });
-
-    expect(result.ok).toBe(false);
-    expect(result.ok === false && result.error.code).toBe(
-      "identity_not_operationally_ready",
-    );
-    expect(result.ok === false && result.error.message).toMatch(/is retired/);
-    expect(classified).toBe(false);
-    expect(calls).toEqual([]);
-  });
-
-  it("refuses a guard-only state path replaced by a symlink, at both public seams", async () => {
+  it("refuses a guard-only state path replaced by a symlink", async () => {
     // The fenced path is deleted and replaced by a symlink to a clean
     // directory. The adjacent cutover guard cannot be derived from an
     // uncanonicalizable root, so the preflight must refuse on its own rather
-    // than defer to a later validator -- `startProductRuntime` has none.
+    // than defer to a later validator.
     const stateDir = privateState();
     writeFileSync(founderCutoverGuardPath(stateDir), "{}", { mode: 0o600 });
     const decoy = join(stateDir, "..", "decoy-clean-root");
@@ -285,49 +250,23 @@ describe("retired founder provenance cannot be revived through a public seam", (
 
     const calls: string[] = [];
     let classified = false;
-    const result = await startProductRuntime(manualRuntimeConfig(stateDir), {
-      adapterRegistry: new AdapterRegistry(),
-      classifyStateFilesystem: async () => {
-        classified = true;
-        return { kind: "local", raw: "apfs" };
-      },
-      identityCheck: permissiveIdentityCheck(calls),
-      components: [
-        {
-          name: "must-not-start",
-          dependsOn: [],
-          start: async () => {
-            calls.push("componentStart");
-            return { stop: async () => undefined };
-          },
-        },
-      ],
-    });
-    expect(result.ok).toBe(false);
-    expect(result.ok === false && result.error.code).toBe(
-      "identity_not_operationally_ready",
-    );
-    expect(result.ok === false && result.error.message).toMatch(
-      /cannot be inspected/,
-    );
-    expect(classified).toBe(false);
-    expect(calls).toEqual([]);
-
-    let compositionClassified = false;
     await expect(
       prepareProductComposition(
         manualRuntimeConfig(stateDir),
         new AdapterRegistry(),
         {
           classifyStateFilesystem: async () => {
-            compositionClassified = true;
+            classified = true;
             return { kind: "local", raw: "apfs" };
           },
           identityCheck: permissiveIdentityCheck(calls),
         },
       ),
-    ).rejects.toMatchObject({ code: "identity_not_operationally_ready" });
-    expect(compositionClassified).toBe(false);
+    ).rejects.toMatchObject({
+      code: "identity_not_operationally_ready",
+      message: expect.stringMatching(/cannot be inspected/),
+    });
+    expect(classified).toBe(false);
     expect(calls).toEqual([]);
     // The decoy target was never opened.
     expect(readdirSync(decoy)).toEqual([]);

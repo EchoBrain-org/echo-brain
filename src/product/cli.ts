@@ -644,8 +644,8 @@ function printRuntimeFailure(
 }
 
 /**
- * The CLI shares the one retirement gate with composition, the runtime, and the
- * decision store; it only maps the refusal onto the CLI's failure type.
+ * The CLI shares the one retirement gate with composition and the decision
+ * store; it only maps the refusal onto the CLI's failure type.
  */
 function refuseRetiredFounderProvenance(stateDirectory: string): void {
   assertRetiredFounderProvenanceRefused(stateDirectory);

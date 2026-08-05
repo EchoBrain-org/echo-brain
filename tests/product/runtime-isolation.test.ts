@@ -12,13 +12,8 @@ import { ProductAdapterFactoryRegistry } from '../../src/product/adapter-factori
 import { validateProductRuntimeConfig } from '../../src/product/config.js';
 import type { LaunchctlRunner } from '../../src/product/launchd-service.js';
 import {
-  startProductRuntime,
-  withRuntimeDeadline,
-  type DeadlineRunner,
-  type ProductComponentHandle,
-  type ProductComponentName,
-  type ProductRuntimeComponent,
-  type ProductRuntimeDependencies,
+  ProductRuntimeFailure,
+  resolveConfiguredAdapters,
 } from '../../src/product/runtime.js';
 import { prepareProductComposition } from '../../src/product/composition.js';
 import {
@@ -28,35 +23,6 @@ import {
   type MeetingSourceAdapter,
 } from '../../src/core/index.js';
 
-const BASELINE_COMPONENTS = [
-  { name: 'product-state', dependsOn: [] },
-  { name: 'meeting-ingestion', dependsOn: ['product-state'] },
-  { name: 'decision-processing', dependsOn: ['meeting-ingestion'] },
-  { name: 'manual-approval', dependsOn: ['decision-processing'] },
-  { name: 'delivery', dependsOn: ['manual-approval'] },
-  { name: 'product-health', dependsOn: ['delivery'] },
-] as const satisfies readonly Pick<
-  ProductRuntimeComponent,
-  'name' | 'dependsOn'
->[];
-const COMPONENTS: readonly ProductComponentName[] = BASELINE_COMPONENTS.map(
-  (component) => component.name,
-);
-const ROLLBACK_COMPONENTS = [
-  { name: 'publication', dependsOn: ['brain'] },
-  { name: 'brain', dependsOn: ['observation'] },
-  { name: 'foundation', dependsOn: [] },
-  { name: 'observation', dependsOn: ['foundation'] },
-] as const satisfies readonly Pick<
-  ProductRuntimeComponent,
-  'name' | 'dependsOn'
->[];
-const ROLLBACK_ORDER: readonly ProductComponentName[] = [
-  'foundation',
-  'observation',
-  'brain',
-  'publication',
-];
 const directories: string[] = [];
 
 function config() {
@@ -88,28 +54,6 @@ function config() {
     ],
     approval_mode: 'manual',
   });
-}
-
-function components(
-  starts: string[],
-  stops: string[],
-  overrides: Partial<
-    Record<ProductComponentName, ProductRuntimeComponent['start']>
-  > = {},
-  definitions: readonly Pick<
-    ProductRuntimeComponent,
-    'name' | 'dependsOn'
-  >[] = BASELINE_COMPONENTS,
-): ProductRuntimeComponent[] {
-  return definitions.map((component) => ({
-    ...component,
-    start:
-      overrides[component.name] ??
-      (async () => {
-        starts.push(component.name);
-        return { stop: async () => void stops.push(component.name) };
-      }),
-  }));
 }
 
 interface RegisteredFixtures {
@@ -182,19 +126,6 @@ function registeredFixtures(): RegisteredFixtures {
   registry.register(decisionProcessor);
   registry.register(deliverySurface);
   return { registry, meetingSource, decisionProcessor, deliverySurface };
-}
-
-function dependencies(
-  runtimeComponents: readonly ProductRuntimeComponent[],
-  extra: Partial<ProductRuntimeDependencies> = {},
-): ProductRuntimeDependencies {
-  const { registry } = registeredFixtures();
-  return {
-    classifyStateFilesystem: async () => ({ kind: 'local', raw: 'apfs' }),
-    adapterRegistry: registry,
-    components: runtimeComponents,
-    ...extra,
-  };
 }
 
 function fixtureFactories(
@@ -306,16 +237,6 @@ afterEach(() => {
 });
 
 describe('isolated product runtime', () => {
-  it('keeps the runtime deadline alive for a never-settling operation', async () => {
-    await expect(
-      withRuntimeDeadline(
-        new Promise<never>(() => {}),
-        5,
-        'never-settling operation',
-      ),
-    ).rejects.toThrow('never-settling operation timed out after 5ms');
-  });
-
   it('keeps adapter health deadlines alive for never-settling checks', async () => {
     const directory = mkdtempSync(join(tmpdir(), 'echo-health-deadline-'));
     directories.push(directory);
@@ -376,86 +297,21 @@ describe('isolated product runtime', () => {
     expect(healthChecks).toBe(0);
   });
 
-  it('starts the baseline composition in dependency order with typed registered adapters', async () => {
-    const starts: string[] = [];
-    const stops: string[] = [];
-    const fixtures = registeredFixtures();
-    const runtimeComponents = components(starts, stops, {
-      'product-state': async (context) => {
-        starts.push('product-state');
-        expect(
-          Object.values(context.paths).every((path) =>
-            path.startsWith(config().state_dir),
-          ),
-        ).toBe(true);
-        expect(JSON.stringify(context.paths)).not.toMatch(
-          /MEETING_SOURCE_KEY|PROCESSOR_KEY|CHANNEL_KEY/,
-        );
-        return { stop: async () => void stops.push('product-state') };
-      },
-      'decision-processing': async (context) => {
-        starts.push('decision-processing');
-        expect(context.adapters.meetingSources).toEqual([
-          fixtures.meetingSource,
-        ]);
-        expect(context.adapters.decisionProcessor).toBe(
-          fixtures.decisionProcessor,
-        );
-        expect(context.adapters.deliverySurfaces).toEqual([
-          fixtures.deliverySurface,
-        ]);
-        return { stop: async () => void stops.push('decision-processing') };
-      },
-    });
-    const result = await startProductRuntime(
-      config(),
-      dependencies([...runtimeComponents].reverse(), {
-        adapterRegistry: fixtures.registry,
-      }),
-    );
-    expect(result.ok).toBe(true);
-    if (!result.ok) throw result.error;
-    expect(starts).toEqual(COMPONENTS);
-    expect(result.handle.paths.database).toBe(
-      '/tmp/echo-product-runtime/state/echo-brain.sqlite',
-    );
-    expect(result.handle.paths.briefs).toBe(
-      '/tmp/echo-product-runtime/state/briefs',
-    );
-    expect(await result.handle.shutdown()).toEqual({
-      ok: true,
-      errors: [],
-      remaining: [],
-    });
-    expect(stops).toEqual([...COMPONENTS].reverse());
-  });
-
-  it('fails before the filesystem probe or any component when the production adapter is absent', async () => {
-    const starts: string[] = [];
-    let probes = 0;
-    const result = await startProductRuntime(config(), {
-      classifyStateFilesystem: async () => {
-        probes += 1;
-        return { kind: 'local', raw: 'apfs' };
-      },
-      adapterRegistry: new AdapterRegistry(),
-      components: components(starts, []),
-    });
-    expect(result).toMatchObject({
-      ok: false,
-      error: { code: 'adapter_unavailable' },
-    });
-    if (result.ok) throw new Error('expected failure');
-    expect(result.error.details).toEqual([
+  it('reports every unavailable configured adapter', () => {
+    const result = resolveConfiguredAdapters(config(), new AdapterRegistry());
+    expect(result).toBeInstanceOf(ProductRuntimeFailure);
+    if (!(result instanceof ProductRuntimeFailure)) {
+      throw new Error('expected failure');
+    }
+    expect(result.code).toBe('adapter_unavailable');
+    expect(result.details).toEqual([
       "meeting-source adapter 'fixture-meetings' instance 'primary' is unavailable",
       "decision-processor adapter 'fixture-processor' instance 'primary' is unavailable",
       "delivery-surface adapter 'fixture-delivery' instance 'team' is unavailable",
     ]);
-    expect(probes).toBe(0);
-    expect(starts).toEqual([]);
   });
 
-  it('aggregates adapter-owned config errors before filesystem or component side effects', async () => {
+  it('aggregates adapter-owned config errors without leaking credential references', () => {
     const fixtures = registeredFixtures();
     fixtures.meetingSource.validateConfig = () => ({
       ok: false,
@@ -469,277 +325,20 @@ describe('isolated product runtime', () => {
       ok: false,
       errors: [],
     });
-    let probes = 0;
-    const starts: string[] = [];
-    const result = await startProductRuntime(config(), {
-      classifyStateFilesystem: async () => {
-        probes += 1;
-        return { kind: 'local', raw: 'apfs' };
-      },
-      adapterRegistry: fixtures.registry,
-      components: components(starts, []),
-    });
-    expect(result).toMatchObject({
-      ok: false,
-      error: { code: 'adapter_invalid_config' },
-    });
-    if (result.ok) throw new Error('expected failure');
-    expect(result.error.details).toEqual([
+    const result = resolveConfiguredAdapters(config(), fixtures.registry);
+    expect(result).toBeInstanceOf(ProductRuntimeFailure);
+    if (!(result instanceof ProductRuntimeFailure)) {
+      throw new Error('expected failure');
+    }
+    expect(result.code).toBe('adapter_invalid_config');
+    expect(result.details).toEqual([
       "meeting-source adapter 'fixture-meetings' instance 'primary': workspace setting is required",
       "decision-processor adapter 'fixture-processor' instance 'primary': model setting is unsupported",
       "delivery-surface adapter 'fixture-delivery' instance 'team': configuration is invalid",
     ]);
-    expect(JSON.stringify(result.error)).not.toMatch(
+    expect(JSON.stringify(result)).not.toMatch(
       /MEETING_SOURCE_KEY|DECISION_PROCESSOR_KEY|DELIVERY_SURFACE_KEY/,
     );
-    expect(probes).toBe(0);
-    expect(starts).toEqual([]);
-  });
-
-  it.each(ROLLBACK_ORDER.map((_name, index) => index))(
-    'rolls back an arbitrary component graph in reverse actual-start order when start %i fails',
-    async (failureIndex) => {
-      const starts: string[] = [];
-      const stops: string[] = [];
-      const failing = ROLLBACK_ORDER[failureIndex]!;
-      const result = await startProductRuntime(
-        config(),
-        dependencies(
-          components(
-            starts,
-            stops,
-            {
-              [failing]: async () => {
-                starts.push(failing);
-                throw new Error(`${failing} failed`);
-              },
-            },
-            ROLLBACK_COMPONENTS,
-          ),
-        ),
-      );
-      expect(result).toMatchObject({
-        ok: false,
-        error: { code: 'startup_failed' },
-      });
-      expect(starts).toEqual(ROLLBACK_ORDER.slice(0, failureIndex + 1));
-      expect(stops).toEqual(
-        [...ROLLBACK_ORDER.slice(0, failureIndex)].reverse(),
-      );
-    },
-  );
-
-  it('times out a never-settling start and aggregates rollback errors', async () => {
-    const starts: string[] = [];
-    const stops: string[] = [];
-    const deadline: DeadlineRunner = async (operation, _timeout, label) => {
-      if (label === 'decision-processing start')
-        throw new Error('decision-processing start timed out');
-      if (label === 'meeting-ingestion rollback')
-        throw new Error('meeting rollback failed');
-      return await operation;
-    };
-    const result = await startProductRuntime(
-      config(),
-      dependencies(
-        components(starts, stops, {
-          'decision-processing': () => new Promise(() => {}),
-        }),
-        { withDeadline: deadline },
-      ),
-    );
-    expect(result.ok).toBe(false);
-    if (result.ok) throw new Error('expected failure');
-    expect(result.error.details).toContain(
-      'decision-processing start timed out',
-    );
-    expect(result.error.details).toContain('meeting rollback failed');
-    expect(stops).toContain('product-state');
-  });
-
-  it('cancels startup after the overall deadline and cleans up a late handle once', async () => {
-    const starts: string[] = [];
-    const stops: string[] = [];
-    let resolveLate!: (handle: ProductComponentHandle) => void;
-    const lateStart = new Promise<ProductComponentHandle>((resolve) => {
-      resolveLate = resolve;
-    });
-
-    const result = await startProductRuntime(
-      config(),
-      dependencies(
-        components(starts, stops, {
-          'meeting-ingestion': () => {
-            starts.push('meeting-ingestion');
-            return lateStart;
-          },
-        }),
-        {
-          deadlines: {
-            componentStartMs: 1_000,
-            overallStartMs: 5,
-            shutdownMs: 1_000,
-          },
-        },
-      ),
-    );
-
-    expect(result).toMatchObject({
-      ok: false,
-      error: {
-        code: 'startup_failed',
-        details: ['product runtime startup timed out after 5ms'],
-      },
-    });
-    expect(starts).toEqual(['product-state', 'meeting-ingestion']);
-    expect(stops).toEqual(['product-state']);
-
-    resolveLate({
-      stop: () => void stops.push('meeting-ingestion'),
-    });
-    for (let attempt = 0; attempt < 20 && stops.length < 2; attempt += 1) {
-      await new Promise(setImmediate);
-    }
-
-    expect(starts).toEqual(['product-state', 'meeting-ingestion']);
-    expect(stops).toEqual(['product-state', 'meeting-ingestion']);
-  });
-
-  it('makes shutdown idempotent, bounded, and explicit about remaining handles', async () => {
-    const starts: string[] = [];
-    const stops: string[] = [];
-    const deadline: DeadlineRunner = async (operation, _timeout, label) => {
-      if (label === 'meeting-ingestion shutdown')
-        throw new Error('meeting shutdown timed out');
-      return await operation;
-    };
-    const result = await startProductRuntime(
-      config(),
-      dependencies(components(starts, stops), { withDeadline: deadline }),
-    );
-    if (!result.ok) throw result.error;
-    const first = result.handle.shutdown();
-    const second = result.handle.shutdown();
-    expect(second).toBe(first);
-    expect(await first).toEqual({
-      ok: false,
-      errors: ['meeting shutdown timed out'],
-      remaining: ['meeting-ingestion'],
-    });
-    expect(stops.filter((name) => name === 'product-state')).toHaveLength(1);
-  });
-
-  it('accepts arbitrary component names and uses a stable topological order', async () => {
-    const starts: string[] = [];
-    const stops: string[] = [];
-    const runtimeComponents = components(starts, stops, {}, [
-      { name: 'publication', dependsOn: ['brain'] },
-      { name: 'telemetry', dependsOn: ['foundation'] },
-      { name: 'brain', dependsOn: ['foundation'] },
-      { name: 'foundation', dependsOn: [] },
-    ]);
-
-    const result = await startProductRuntime(
-      config(),
-      dependencies(runtimeComponents),
-    );
-    if (!result.ok) throw result.error;
-    expect(starts).toEqual(['foundation', 'telemetry', 'brain', 'publication']);
-    expect(await result.handle.shutdown()).toEqual({
-      ok: true,
-      errors: [],
-      remaining: [],
-    });
-    expect(stops).toEqual(['publication', 'brain', 'telemetry', 'foundation']);
-  });
-
-  it('rejects invalid names, duplicates, missing dependencies, and cycles before side effects', async () => {
-    const starts: string[] = [];
-    let filesystemProbes = 0;
-    const fixture = (
-      name: ProductComponentName,
-      dependsOn: readonly ProductComponentName[] = [],
-    ): ProductRuntimeComponent => ({
-      name,
-      dependsOn,
-      start: async () => {
-        starts.push(name);
-        return { stop() {} };
-      },
-    });
-    const variants: Array<{
-      components: ProductRuntimeComponent[];
-      detail: string;
-    }> = [
-      {
-        components: [fixture('Brain Node')],
-        detail: "component at index 0 has invalid name 'Brain Node'",
-      },
-      {
-        components: [fixture('foundation'), fixture('foundation')],
-        detail: "component name 'foundation' must be unique",
-      },
-      {
-        components: [fixture('brain', ['missing-foundation'])],
-        detail:
-          "component 'brain' depends on missing component 'missing-foundation'",
-      },
-      {
-        components: [
-          fixture('foundation'),
-          fixture('brain', ['foundation', 'foundation']),
-        ],
-        detail: "component 'brain' declares duplicate dependency 'foundation'",
-      },
-      {
-        components: [
-          fixture('brain', ['publication']),
-          fixture('publication', ['brain']),
-        ],
-        detail:
-          'component dependency cycle detected: brain -> publication -> brain',
-      },
-    ];
-    for (const variant of variants) {
-      const result = await startProductRuntime(
-        config(),
-        dependencies(variant.components, {
-          classifyStateFilesystem: async () => {
-            filesystemProbes += 1;
-            return { kind: 'local', raw: 'apfs' };
-          },
-        }),
-      );
-      expect(result).toMatchObject({
-        ok: false,
-        error: {
-          code: 'invalid_dependencies',
-          details: expect.arrayContaining([variant.detail]),
-        },
-      });
-    }
-    expect(starts).toEqual([]);
-    expect(filesystemProbes).toBe(0);
-  });
-
-  it('fails closed for network and unknown state filesystems before component startup', async () => {
-    for (const classification of [
-      { kind: 'network', raw: 'nfs' },
-      { kind: 'unknown', raw: 'ext4' },
-    ] as const) {
-      const starts: string[] = [];
-      const result = await startProductRuntime(
-        config(),
-        dependencies(components(starts, []), {
-          classifyStateFilesystem: async () => classification,
-        }),
-      );
-      expect(result).toMatchObject({
-        ok: false,
-        error: { code: 'state_not_local' },
-      });
-      expect(starts).toEqual([]);
-    }
   });
 
   it('runs no service-run cycle when SIGINT arrives during composition health setup', async () => {

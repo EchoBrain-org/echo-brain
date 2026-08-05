@@ -161,9 +161,9 @@ APIs still compile. The gate exists so a state root left behind by the retired
 mode is detected and refused, never silently downgraded to an unattributed local
 profile. It gates *product work* -- runtime start and every processing cycle --
 and is called by `prepareProductComposition` (at construction and per cycle),
-`startProductRuntime`, `DecisionNodeStore`, and the CLI before any directory
-creation, component or adapter resolution, credential work, provider or
-Authority contact, approval read or mutation, or caller-supplied callback. It
+`DecisionNodeStore`, and the CLI before any directory creation, adapter
+resolution, credential work, provider or Authority contact, approval read or
+mutation, or caller-supplied callback. It
 deliberately does not gate `identity-check`, `validate-config`, general
 `status`, `backup`/`restore`, or `service stop`/`status`/`uninstall`,
 which must stay usable to diagnose, preserve, and quiesce a fenced profile.

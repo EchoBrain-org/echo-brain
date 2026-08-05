@@ -24,13 +24,6 @@ uses one processor selection and one approval authority for a given runtime.
 Approval and delivery remain independently configured. One-shot and supervised
 execution use the same composition.
 
-Runtime components declare the components they must start after. The runtime
-validates that graph before anything starts, rejecting duplicate component
-names, unknown or repeated dependencies, and dependency cycles, then starts
-components in topological order. The ordering enumerates no product features,
-so a future reasoning component can be added by composition without weakening
-rollback or changing unrelated runtime tests.
-
 ## State authority
 
 One explicit private local state root is the installation's authority and
@@ -51,7 +44,6 @@ Every approval entry point shares one durable append-only approval history.
   access before adapter construction; denial fails startup closed.
 - Adapter health is checked before cycle work.
 - Provider operations are bounded and cancellable.
-- Partial startup unwinds cleanly and shutdown is bounded.
 - Unknown external outcomes never become fabricated success.
 
 ## Identity modes
@@ -72,15 +64,15 @@ Identity cutover was irreversible, so a state root that still carries that
 material is detected and refused rather than downgraded. No product-work
 command, runtime start, or new processing cycle can resume on it. One shared
 gate in `cutover-fence.ts` is called by `prepareProductComposition` (at
-construction and at the start of every cycle), `startProductRuntime`,
-`DecisionNodeStore`, and the CLI before any directory creation, component or
-adapter resolution, credential work, provider or Authority contact, approval
-read or mutation, or caller-supplied callback, so a custom identity check,
-approval capture, approval store, or runtime cannot resume the retired mode.
+construction and at the start of every cycle), `DecisionNodeStore`, and the
+CLI before any directory creation, adapter resolution, credential work,
+provider or Authority contact, approval read or mutation, or caller-supplied
+callback, so a custom identity check, approval capture, or approval store
+cannot resume the retired mode.
 The gate is observational only, so refusing never mutates forensic founder
 state. It is a fail-closed gate on trusted in-process callers, not a sandbox:
-an injected component that bypasses the documented seams and writes to the
-state root directly is outside what it can prevent. One narrow carve-out: a
+caller-supplied implementation that bypasses the documented seams and writes
+to the state root directly is outside what it can prevent. One narrow carve-out: a
 background access-lease renewal started by an already-running composition can
 continue until that composition is closed, but every new processing cycle is
 gated.
