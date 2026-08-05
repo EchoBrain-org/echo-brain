@@ -30,15 +30,12 @@ import {
   type DecisionRequestedEvent,
   type DecisionResolvedEvent,
 } from './decision-node.js';
-import { readLegacyManualApprovalRecords } from './legacy-manual-approval-import.js';
-
 const LOCK_TIMEOUT_MS = 2_000;
 const LOCK_STALE_MS = 30_000;
 const LOCK_RETRY_MS = 20;
 const APPROVAL_ID_RE = /^[a-f0-9]{64}$/;
 const REQUESTED_FILE = 'requested.json';
 const RESOLVED_FILE = 'resolved.json';
-const LEGACY_IMPORT_MARKER = '.legacy-approvals-imported-v1';
 const PUBLISHED_FILE_RE = /^published-([a-z][a-z0-9-]*)\.json$/;
 
 export interface DecisionNodeStoreOptions {
@@ -72,7 +69,6 @@ export class DecisionNodeStore {
   readonly directory: string;
   private readonly stateDirectory: string;
   private readonly locksDirectory: string;
-  private readonly legacyDirectory: string;
   private readonly now: () => string;
   private readonly createId: () => string;
   private initialized = false;
@@ -81,7 +77,6 @@ export class DecisionNodeStore {
     this.stateDirectory = resolve(stateDirectory);
     this.directory = resolve(this.stateDirectory, 'decisions');
     this.locksDirectory = resolve(this.directory, '.locks');
-    this.legacyDirectory = resolve(this.stateDirectory, 'approvals');
     this.now = options.now ?? (() => new Date().toISOString());
     this.createId = options.createId ?? randomUUID;
   }
@@ -95,7 +90,6 @@ export class DecisionNodeStore {
     this.ensureDirectory(this.stateDirectory, 'decision store state root');
     this.ensureDirectory(this.directory, 'decision store');
     this.ensureDirectory(this.locksDirectory, 'decision store locks');
-    await this.importLegacyRecords();
     this.initialized = true;
   }
 
@@ -326,62 +320,6 @@ export class DecisionNodeStore {
         'decision node uses retired federation metadata and cannot be read or mutated',
       );
     }
-  }
-
-  /**
-   * One-time conversion of pre-store `<state>/approvals/*.json` records.
-   * Idempotent: a node that already has a requested slot is never touched,
-   * so re-running an import can only fill gaps, not overwrite decisions.
-   * Old binaries must be stopped during cutover; the legacy files are left
-   * in place afterwards and ignored.
-   */
-  private async importLegacyRecords(): Promise<void> {
-    const markerPath = join(this.directory, LEGACY_IMPORT_MARKER);
-    if (existsSync(markerPath)) return;
-    const records = readLegacyManualApprovalRecords(this.legacyDirectory);
-    for (const record of records) {
-      const nodeDirectory = this.nodePath(record.approval_id);
-      const requestedPath = join(nodeDirectory, REQUESTED_FILE);
-      const release = await this.acquireLock(record.approval_id);
-      try {
-        if (!existsSync(requestedPath)) {
-          this.ensureDirectory(nodeDirectory, 'decision node');
-          const requested: DecisionRequestedEvent = {
-            schema_version: 1,
-            event_type: 'requested',
-            node_id: record.approval_id,
-            processing_key: record.processing_key,
-            requested_at: record.requested_at,
-            brief: record.brief,
-            alternatives: [],
-            links: { parent: null, supersedes: null },
-            metadata: { imported_from: 'manual-approval-queue' },
-          };
-          this.createSlot(requestedPath, requested);
-        }
-        const resolvedPath = join(nodeDirectory, RESOLVED_FILE);
-        if (record.status !== 'pending' && !existsSync(resolvedPath)) {
-          const resolved: DecisionResolvedEvent = {
-            schema_version: 1,
-            event_type: 'resolved',
-            node_id: record.approval_id,
-            status: record.status,
-            reviewed_at: record.reviewed_at as string,
-            reviewed_by: record.reviewed_by as string,
-            reason: record.reason,
-            surface: 'cli',
-            metadata: { imported_from: 'manual-approval-queue' },
-          };
-          this.createSlot(resolvedPath, resolved);
-        }
-      } finally {
-        await release();
-      }
-    }
-    atomicCreate({
-      filePath: markerPath,
-      content: `${JSON.stringify({ schema_version: 1, imported_at: this.now() })}\n`,
-    });
   }
 
   private async acquireLock(approvalId: string): Promise<() => Promise<void>> {

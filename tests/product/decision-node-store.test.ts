@@ -291,67 +291,6 @@ describe('decision node store', () => {
     expect(resolved.published).toHaveLength(0);
   });
 
-  it('imports legacy manual approval records idempotently', async () => {
-    const root = newRoot('decision-store-legacy-');
-    const processingKey = request().processing_key;
-    const approvalId = decisionApprovalId(processingKey);
-    const legacyDirectory = join(root, 'approvals');
-    mkdirSync(legacyDirectory, { recursive: true, mode: 0o700 });
-    writeFileSync(
-      join(legacyDirectory, `${approvalId}.json`),
-      `${JSON.stringify({
-        schema_version: 1,
-        approval_id: approvalId,
-        processing_key: processingKey,
-        status: 'approved',
-        requested_at: '2026-07-15T20:00:00.000Z',
-        reviewed_at: '2026-07-15T21:00:00.000Z',
-        reviewed_by: 'operator',
-        reason: 'ship it',
-        brief: request().brief,
-      })}\n`,
-      { mode: 0o600 },
-    );
-
-    const store = new DecisionNodeStore(root);
-    const [imported] = await store.list();
-    expect(imported).toMatchObject({
-      approval_id: approvalId,
-      node_id: approvalId,
-      status: 'approved',
-      reviewed_at: '2026-07-15T21:00:00.000Z',
-      reviewed_by: 'operator',
-      reason: 'ship it',
-      resolved_surface: 'cli',
-    });
-
-    // Re-initialization on a second store instance changes nothing.
-    const second = new DecisionNodeStore(root);
-    const listed = await second.list();
-    expect(listed).toHaveLength(1);
-    expect(listed[0]).toEqual(imported);
-
-    // Once the first-open migration completes, later legacy records are ignored.
-    const ignoredProcessingKey = `${processingKey}:late`;
-    const ignoredApprovalId = decisionApprovalId(ignoredProcessingKey);
-    writeFileSync(
-      join(legacyDirectory, `${ignoredApprovalId}.json`),
-      `${JSON.stringify({
-        schema_version: 1,
-        approval_id: ignoredApprovalId,
-        processing_key: ignoredProcessingKey,
-        status: 'pending',
-        requested_at: '2026-07-15T22:00:00.000Z',
-        reviewed_at: null,
-        reviewed_by: null,
-        reason: null,
-        brief: request().brief,
-      })}\n`,
-      { mode: 0o600 },
-    );
-    expect(await new DecisionNodeStore(root).list()).toEqual([imported]);
-  });
-
   it('keeps ordinary nodes local while treating later federation-shaped fields as opaque', async () => {
     const root = newRoot('decision-store-local-metadata-');
     const store = new DecisionNodeStore(root, {
