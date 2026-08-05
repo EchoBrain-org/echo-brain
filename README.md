@@ -48,7 +48,7 @@ foreground commands remain Node-based.
 npm ci
 npm run check
 npm pack
-npm install -g ./echo-brain-0.1.0-internal.4.tgz
+npm install -g ./echo-brain-0.1.0-internal.5.tgz
 ```
 
 `npm run check` runs the source-boundary check, TypeScript, ESLint, and the
@@ -68,15 +68,27 @@ Internal Live is the small, controlled release lane for ECHO employees. It is
 not a client release. A manual GitHub workflow builds the npm package once from
 `main`, tests those exact bytes on macOS arm64, waits for approval in the
 protected `internal-live` environment, and publishes a prerelease bundle whose
-exact bytes are pinned by a manifest and checksums.
+exact bytes are pinned by a manifest and checksums, with bundled provenance
+evidence attached.
 
 ### One-time updater bootstrap
 
 A clean Mac needs one manual install of an updater-capable release. The
-administrator chooses one exact release as the bootstrap anchor and sends its
-version, source SHA, artifact SHA-256, workflow run ID, and run attempt over the
-trusted handoff channel. Those coordinates are immutable for that handoff;
-never substitute a moving `latest` release.
+administrator chooses one exact release as the bootstrap anchor and transfers
+that release's artifact, manifest, checksums, and attestation bundle as one
+directory. The version, source SHA, and artifact SHA-256 travel over
+the trusted handoff channel. Those coordinates are immutable for that handoff;
+never substitute a moving `latest` release. Downloading the private release may
+use an administrator's GitHub session on an admin workstation, but the employee
+Mac must not receive or require those credentials.
+
+Before a new employee runs `bootstrap` and becomes an active installation, the
+administrator must approve this exact manifest as the Authority's current
+Internal Live release. Version, source SHA, and artifact SHA-256 must match the
+transferred bundle. This ordering matters: the rollout gate may require every
+existing active installation to be healthy on the previous release before it
+accepts the next one. With no current directive the final update stops; it also
+refuses to install a lower Internal Live version than the one already installed.
 
 An already-enrolled Mac whose CLI predates `update apply` is a maintenance
 migration, not a clean bootstrap. Verify the release first, then use a reviewed
@@ -88,8 +100,15 @@ transition; future releases use the normal updater below.
 
 First perform every non-mutating trust check while any existing service remains
 running. On either kind of Mac, replace every angle-bracket value with the
-administrator's exact approved coordinates. This requires authenticated `gh`
-access to the repository's Actions approval records:
+administrator's exact approved coordinates and point `BOOTSTRAP_DIRECTORY` at
+the transferred release directory. The independently communicated artifact
+SHA-256 is the employee's bootstrap integrity anchor. The bundled Sigstore
+attestation is verified against the public trust root obtained by GitHub CLI
+and additionally checks provenance for the pinned GitHub workflow and source
+commit. It does not independently prove the approver's identity. The protected
+`internal-live` environment is the publisher-side approval gate. The employee
+Mac needs network access to the public trust service, but no GitHub login or
+Actions API access:
 
 ```sh
 set -euo pipefail
@@ -97,12 +116,13 @@ BOOTSTRAP_REPOSITORY='EchoBrain-org/echo-brain'
 BOOTSTRAP_VERSION='<exact MAJOR.MINOR.PATCH-internal.SEQUENCE>'
 BOOTSTRAP_SOURCE_SHA='<exact 40-character source SHA>'
 BOOTSTRAP_ARTIFACT_SHA256='<exact 64-character artifact SHA-256>'
-BOOTSTRAP_RUN_ID='<exact workflow run ID>'
-BOOTSTRAP_RUN_ATTEMPT='<exact workflow run attempt>'
 BOOTSTRAP_TAG="internal-v${BOOTSTRAP_VERSION}"
 BOOTSTRAP_ARTIFACT="echo-brain-${BOOTSTRAP_VERSION}.tgz"
-BOOTSTRAP_DIRECTORY="$(mktemp -d)"
+BOOTSTRAP_DIRECTORY='/absolute/path/to/transferred-release-directory'
 BOOTSTRAP_ARTIFACT_PATH="${BOOTSTRAP_DIRECTORY}/${BOOTSTRAP_ARTIFACT}"
+BOOTSTRAP_MANIFEST_PATH="${BOOTSTRAP_DIRECTORY}/internal-live-release-manifest.v1.json"
+BOOTSTRAP_ATTESTATION_PATH="${BOOTSTRAP_DIRECTORY}/internal-live-attestation-bundle.v1.json"
+BOOTSTRAP_GH_CONFIG="$(mktemp -d)"
 BOOTSTRAP_NODE="$(command -v node)"
 BOOTSTRAP_NPM="$(command -v npm)"
 BOOTSTRAP_RUNTIME_BIN="$(dirname "$BOOTSTRAP_NODE")"
@@ -115,30 +135,25 @@ test "$BOOTSTRAP_RUNTIME_BIN" = "$(dirname "$BOOTSTRAP_NPM")"
 test "$("$BOOTSTRAP_NODE" --version)" = v22.22.1
 test "$("$BOOTSTRAP_NODE" -p 'process.platform+"|"+process.arch')" = 'darwin|arm64'
 test "$("$BOOTSTRAP_NPM" --version)" = 10.9.4
+test -s "$BOOTSTRAP_ARTIFACT_PATH"
+test -s "$BOOTSTRAP_MANIFEST_PATH"
+test -s "${BOOTSTRAP_DIRECTORY}/SHA256SUMS"
+test -s "$BOOTSTRAP_ATTESTATION_PATH"
 
-gh release download "$BOOTSTRAP_TAG" \
-  --repo "$BOOTSTRAP_REPOSITORY" \
-  --dir "$BOOTSTRAP_DIRECTORY" \
-  --pattern "$BOOTSTRAP_ARTIFACT" \
-  --pattern SHA256SUMS
-
-test "$(gh release view "$BOOTSTRAP_TAG" \
-  --repo "$BOOTSTRAP_REPOSITORY" \
-  --json tagName,targetCommitish,isPrerelease \
-  --jq '[.tagName,.targetCommitish,(.isPrerelease|tostring)]|join("|")')" \
-  = "${BOOTSTRAP_TAG}|${BOOTSTRAP_SOURCE_SHA}|true"
-
-test "$(gh run view "$BOOTSTRAP_RUN_ID" \
-  --repo "$BOOTSTRAP_REPOSITORY" \
-  --attempt "$BOOTSTRAP_RUN_ATTEMPT" \
-  --json conclusion,event,headBranch,headSha,workflowName,jobs \
-  --jq '[.conclusion,.event,.headBranch,.headSha,.workflowName,([.jobs[]|select(.name=="Approve, attest, and publish prerelease")|.conclusion]|join(","))]|join("|")')" \
-  = "success|workflow_dispatch|main|${BOOTSTRAP_SOURCE_SHA}|INTERNAL LIVE release|success"
-
-test "$(gh api \
-  "repos/${BOOTSTRAP_REPOSITORY}/actions/runs/${BOOTSTRAP_RUN_ID}/approvals" \
-  --jq '[.[]|select(.state=="approved")|.environments[]|select(.name=="internal-live")]|length>0')" \
-  = true
+test "$("$BOOTSTRAP_NODE" -e '
+  const fs = require("node:fs");
+  const value = JSON.parse(fs.readFileSync(process.argv[1], "utf8"));
+  process.stdout.write([
+    value.release_version,
+    value.release_tag,
+    value.source?.sha,
+    value.artifact?.filename,
+    value.artifact?.sha256,
+    value.build?.repository,
+    value.build?.workflow,
+  ].join("|"));
+' "$BOOTSTRAP_MANIFEST_PATH")" \
+  = "${BOOTSTRAP_VERSION}|${BOOTSTRAP_TAG}|${BOOTSTRAP_SOURCE_SHA}|${BOOTSTRAP_ARTIFACT}|${BOOTSTRAP_ARTIFACT_SHA256}|${BOOTSTRAP_REPOSITORY}|internal-live-release.yml"
 
 test "$(awk 'NR==1{v=$1"|"$2} END{if(NR!=1)exit 1; print v}' \
   "${BOOTSTRAP_DIRECTORY}/SHA256SUMS")" \
@@ -147,13 +162,15 @@ test "$(awk 'NR==1{v=$1"|"$2} END{if(NR!=1)exit 1; print v}' \
   printf '%s  %s\n' "$BOOTSTRAP_ARTIFACT_SHA256" "$BOOTSTRAP_ARTIFACT" | \
   shasum -a 256 --check -)
 
-gh attestation verify "$BOOTSTRAP_ARTIFACT_PATH" \
-  --repo "$BOOTSTRAP_REPOSITORY" \
-  --signer-workflow "$BOOTSTRAP_REPOSITORY/.github/workflows/internal-live-release.yml" \
-  --signer-digest "$BOOTSTRAP_SOURCE_SHA" \
-  --source-digest "$BOOTSTRAP_SOURCE_SHA" \
-  --source-ref refs/heads/main \
-  --deny-self-hosted-runners
+env -u GH_TOKEN -u GITHUB_TOKEN GH_CONFIG_DIR="$BOOTSTRAP_GH_CONFIG" \
+  gh attestation verify "$BOOTSTRAP_ARTIFACT_PATH" \
+    --repo "$BOOTSTRAP_REPOSITORY" \
+    --bundle "$BOOTSTRAP_ATTESTATION_PATH" \
+    --signer-workflow "$BOOTSTRAP_REPOSITORY/.github/workflows/internal-live-release.yml" \
+    --signer-digest "$BOOTSTRAP_SOURCE_SHA" \
+    --source-digest "$BOOTSTRAP_SOURCE_SHA" \
+    --source-ref refs/heads/main \
+    --deny-self-hosted-runners
 ```
 
 Only after every check above exits zero may a clean-Mac installation begin.
@@ -197,12 +214,106 @@ file "${BOOTSTRAP_NPM_PREFIX}/lib/node_modules/echo-brain/node_modules/better-sq
 ```
 
 Persist `export PATH="$HOME/.npm-global/bin:$PATH"` once in `~/.zshrc`.
-A clean Mac continues with `onboard`, `init`, `organization enroll`, service
-setup, and a green local doctor. Bootstrap is complete only after it immediately
-runs native `update apply` for the Authority's current release and the central
-rollout status records that installation's healthy receipt. The manual first
-install is the sole pre-Authority exception; the native update performs the
-normal signed Authority request and full manifest/package verification.
+
+After the administrator supplies the employee's invitation and communicates
+the Authority PIN over an independent channel, the employee runs one ECHO
+command. Keep the invitation in a current-user `0700` directory as a `0600`
+file; it contains a one-time enrollment secret. The administrator also supplies
+the approved Slack channel and employee reviewer identity. The command prompts
+locally for the Granola token and organization Slack bot token without echoing
+either one. Before running it, make sure Granola has at least one accessible
+note whose provider-reported owner is the employee email among the first 30
+notes returned; creating one fresh owner-visible note is the simplest pilot
+setup for a shared team key:
+
+```sh
+ECHO_CONFIG="$HOME/.config/echo-brain/runtime.json"
+ECHO_STATE="$HOME/.local/share/echo-brain"
+ECHO_INVITATION="$HOME/.config/echo-brain/enrollment/echo-organization-invitation.json"
+
+echo-brain bootstrap \
+  --config "$ECHO_CONFIG" \
+  --state-dir "$ECHO_STATE" \
+  --owner-email '<employee canonical lowercase email>' \
+  --slack-channel-id '<C...>' \
+  --slack-reviewer-user-id '<U...>' \
+  --slack-reviewer-name '<employee display name>' \
+  --invitation "$ECHO_INVITATION" \
+  --authority-pin '<PIN from the independent channel>' \
+  --allow-exportable-software-key
+```
+
+`bootstrap` requires a materialized-commit build; release provenance is
+established by the artifact verification above. It creates an owner-bound
+Granola source with `page_size: 1`, configures the existing Slack-reaction
+approval adapter, then makes one bounded Granola `listNotes` request for at
+most 30 note headers and requires a provider-reported record-owner match. It
+never fetches a note body during this check, and a newly supplied Granola token
+is written to its private local file only after the match succeeds. It then
+reads and stores the Slack token, initializes and enrolls the installation, and
+runs an internal local preflight. It does not place an auto-start file in
+`~/Library/LaunchAgents`, construct product adapters, contact Slack or an LLM,
+or start product work. The successful final service state is
+`installed: false`, `loaded: false`, `running: false`.
+
+The observed owner email is a local Granola record boundary, not proof that the
+API key itself belongs to the employee and not an Authority-issued identity
+claim. After bootstrap, the employee proves the
+configured Slack reviewer through the installation-signed thread challenge:
+
+```sh
+echo-brain organization slack-link-begin --config "$ECHO_CONFIG"
+# Follow the emitted instructions to reply in Slack and run slack-link-complete.
+```
+
+The completion result contains non-secret `identity_link_id`,
+`adapter_binding_id`, `membership_id`, and `installation_id` values. The
+administrator activates approve/reject permission for that already-verified
+link from the Authority machine:
+
+```sh
+echo-organization-admin slack approval activate \
+  --config '<absolute Authority config path>' \
+  --administrator-membership-id '<active owner mem_...>' \
+  --target-membership-id '<employee mem_...>' \
+  --installation-id '<employee ins_...>' \
+  --identity-link-id '<verified clm_...>' \
+  --adapter-binding-id '<verified bnd_...>'
+```
+
+Activation neither calls Slack nor creates an identity link or adapter
+binding. The verified identity link the employee already proved is its
+prerequisite and audit reference; the two direct grants it adds are scoped to
+the exact adapter binding, principal, and membership. Exact retries reuse the
+existing grants.
+
+Only after that central activation succeeds, run the stopped, controlled test:
+
+```sh
+# The note must be visible to the employee and contain explicit
+# Decision:, Action:, and Rationale: lines.
+echo-brain run-once --config "$ECHO_CONFIG"
+echo-brain approvals --config "$ECHO_CONFIG"
+# React to the new card in Slack as the configured reviewer.
+echo-brain run-once --config "$ECHO_CONFIG"
+test "$(wc -l < "$ECHO_STATE/outbox.jsonl" | tr -d ' ')" = 1
+echo-brain run-once --config "$ECHO_CONFIG"
+test "$(wc -l < "$ECHO_STATE/outbox.jsonl" | tr -d ' ')" = 1
+```
+
+The first pass creates and posts one pending approval. The reviewer reaction is
+checked live by the Authority; the second pass resolves and writes exactly one
+JSONL delivery; the third confirms it is not duplicated. Then run the normal
+`service install`, green doctor, and native `update apply`. That last command
+exercises the Authority's signed release path and records the installation's
+healthy receipt centrally. The manual first package install is the sole
+pre-Authority exception.
+
+```sh
+echo-brain service install --config "$ECHO_CONFIG"
+echo-brain doctor --config "$ECHO_CONFIG"
+echo-brain update apply --channel internal-live --config "$ECHO_CONFIG"
+```
 
 ### Normal enrolled-machine updates
 
@@ -255,22 +366,12 @@ The V1 intentionally has no background auto-update, remote shell, MDM,
 dashboard, rollout rings, or automatic live Granola/Slack test. A person starts
 each release and each machine update.
 
-Initialize private config and state:
+`bootstrap` is the only supported v1 setup path: it writes the private config
+and state, provisions the credentials, initializes, and enrolls in one command.
+After it succeeds, the individual commands stay available for inspection and
+maintenance:
 
 ```sh
-echo-brain onboard \
-  --config /absolute/path/runtime.json \
-  --state-dir /absolute/path/state
-
-echo-brain init --config /absolute/path/runtime.json
-
-echo-brain organization enroll \
-  --config /absolute/path/runtime.json \
-  --invitation /absolute/path/echo-organization-invitation.json \
-  --authority-pin sha256:PIN_FROM_A_SEPARATE_TRUSTED_CHANNEL \
-  --authority-ca /absolute/path/internal-authority-ca.pem \
-  --allow-exportable-software-key
-
 echo-brain organization status --config /absolute/path/runtime.json
 echo-brain organization refresh --config /absolute/path/runtime.json
 
@@ -283,9 +384,9 @@ private state directory and labels its assurance as
 `software_key_development_only`. The signer port remains replaceable by a
 hardware-backed implementation later. `organization enroll` requires
 `--allow-exportable-software-key` so pilot-grade assurance cannot be accepted
-silently. This signer can be operationally ready for a pilot, but it never
-makes `seed_grade_ready` true; `identity-check --strict` continues to require
-hardware-bound, non-exportable key assurance.
+silently. That key authenticates the supported organization enrollment and
+Authority flows. It is not used to revive or qualify retired local founder
+identity; any founder residue is refused before product work begins.
 
 Central organization-admin bootstrap is the one supported v1 enrollment path.
 The local founder-provenance mode -- the `identity-bootstrap` ceremony, the
@@ -293,26 +394,33 @@ federated `export` command, and the signed record projection and protected
 independent copy behind them -- is retired and removed from this build.
 
 A state root that still holds founder identity or cutover material is detected
-and refused, not downgraded. One early dispatch gate refuses `onboard`, `init`,
-`reconfigure`, `doctor`, every `organization` action, `approvals`, `approve`,
-`reject`, `run-once`, `run`, `service-run`, and `service
+and refused, not downgraded. One early dispatch gate refuses `bootstrap`,
+`init`, `reconfigure`, `doctor`, `update`, every `organization` action,
+`approvals`, `run-once`, the launchd `service-run` child, and `service
 install`/`start`/`restart` — before a `ProductOperator` is constructed, the
 filesystem is probed, a lifecycle lock is taken, a directory is created or
 chmodded, credentials are resolved, SQLite is opened or migrated, a provider or
-the Authority is contacted, or an injected callback runs. A custom identity
-check, approval capture, approval store, or runtime cannot bypass it.
+the Authority is contacted, or an injected callback runs. An injected approval
+store or callback cannot bypass it.
 
 The exceptions are not "commands that do not write" — several of them do write.
-They are the commands whose purpose is to diagnose, preserve, or quiesce a
-fenced profile: `--help`/`--version`, `validate-config`, `selftest`, `status`,
-`identity-check`, `backup`, `restore`, and `service stop`/`status`/`uninstall`.
+They are the commands whose purpose is to inspect, preserve, or quiesce a
+fenced profile: `--help`/`--version`, `validate-config`, `status`, `backup`,
+`restore`, and `service stop`/`status`/`uninstall`.
 `organization status` is **not** an exception: it opens and migrates writable
 SQLite, so it is gated with every other organization action.
 
-Recovery does not go through a restore. The cutover is irreversible, and a
-backup stays bound to the state path it was taken from, so no restore crosses
-the fence — a backup of a retired profile is preservation for that profile,
-nothing more.
+Old founder state is never parsed: the code that read, validated, or recovered
+it is deleted, and detection is presence-only. `backup` of a fenced profile
+stays available: regular state-tree files are copied byte-for-byte, the SQLite
+database is captured as a consistent SQLite backup, and the external cutover
+guard remains beside the original state path, outside the backup. Recovery
+does not go through a
+restore: `restore` refuses — before its safety pre-backup, its durable marker,
+staging, or any live change — whenever the live target holds founder residue
+*or* the validated backup payload would reintroduce it, and it will not
+recover, roll back, or report success over interrupted restore artifacts that
+involve that residue.
 
 The executable order matters, because `backup` refuses to run while the service
 is loaded:
@@ -322,68 +430,36 @@ echo-brain service stop --config /absolute/path/retired-runtime.json
 echo-brain backup --config /absolute/path/retired-runtime.json \
   --backup-root /absolute/path/backups
 
-echo-brain onboard \
+echo-brain bootstrap \
   --config /absolute/path/new-runtime.json \
-  --state-dir /absolute/path/new-state
-# provision the Granola credential the new config references, then:
-echo-brain init --config /absolute/path/new-runtime.json
-echo-brain organization enroll \
-  --config /absolute/path/new-runtime.json \
+  --state-dir /absolute/path/new-state \
+  --owner-email '<employee canonical lowercase email>' \
+  --slack-channel-id '<C...>' \
+  --slack-reviewer-user-id '<U...>' \
+  --slack-reviewer-name '<employee display name>' \
   --invitation /absolute/path/echo-organization-invitation.json \
   --authority-pin sha256:PIN_FROM_A_SEPARATE_TRUSTED_CHANNEL \
   --allow-exportable-software-key
 ```
 
-The new path must be free of founder residue — that is what the fence checks,
-not pristineness in general. `init` reports the credential recommendations for
-the configured adapters; `organization enroll` requires an initialized
-installation that is not already enrolled.
+Recovery is a fresh central bootstrap, not a repair of the fenced profile. The
+new path must be free of founder residue — that is what the fence checks, not
+pristineness in general. `bootstrap` prompts for the Granola and Slack tokens,
+initializes the installation, and enrolls it against a not-yet-enrolled
+membership.
 
-This pre-1.0 build does not migrate a Secure Enclave identity to the portable
-file signer. `identity-check` reports `unsupported_legacy_key_backend` for that
-state. Preserve the prior state and signer when identity continuity matters.
+This pre-1.0 build does not migrate, exercise, or provide a readiness diagnostic
+for a retired founder identity. Preserve the prior state when identity
+continuity matters; fresh central bootstrap is the supported way forward.
 
 ## Runtime configuration
 
-Operational commands require an absolute JSON config path. This offline
-baseline uses Granola, local manual approval, and a JSONL outbox:
-
-```json
-{
-  "schema_version": 1,
-  "lane": "team-product",
-  "state_dir": "/Users/you/.echo-brain",
-  "meeting_sources": [
-    {
-      "adapter_id": "granola",
-      "instance_id": "primary",
-      "credential_ref": "file:/Users/you/.echo-brain/credentials/granola-api-key",
-      "settings": {
-        "owner_email": "you@example.com",
-        "page_size": 30,
-        "cursor_overlap_ms": 1000
-      }
-    }
-  ],
-  "decision_processor": {
-    "adapter_id": "structured-text",
-    "instance_id": "primary",
-    "settings": {}
-  },
-  "delivery_surfaces": [
-    {
-      "adapter_id": "jsonl-outbox",
-      "instance_id": "local",
-      "settings": {
-        "path": "/Users/you/.echo-brain/outbox.jsonl",
-        "destination_id": "reviewed-briefs"
-      }
-    }
-  ],
-  "approval_mode": "manual",
-  "cycle_interval_ms": 60000
-}
-```
+Operational commands require an absolute JSON config path. `bootstrap` writes
+the supported Internal Live configuration: Granola as the meeting source, the
+`structured-text` decision processor, the local JSONL outbox, and Slack
+reaction approval. There is no hand-written baseline to copy — the sections
+below document the fields that profile uses and the alternatives the composition
+root also bundles.
 
 When `owner_email` is set, Granola list-owner emails are trimmed, lowercased,
 and compared with that canonical lowercase value. List metadata still reaches
@@ -418,7 +494,7 @@ retaining one canonical output schema and validator:
 Only Ollama accepts a custom `base_url`; hosted credentials cannot be redirected
 to an arbitrary endpoint.
 
-## Slack approval and delivery
+## Slack approval
 
 Slack remains a first-class internal surface. For reaction approval:
 
@@ -442,52 +518,49 @@ Slack remains a first-class internal surface. For reaction approval:
 }
 ```
 
-The bot needs `chat:write`, `reactions:read`, and the appropriate public or
-private channel history scope. Only the configured reviewer can resolve a
-brief.
+The approval channel is a separate PUBLIC organization review channel — the
+same Authority-bound public channel the organization verifies during Slack
+onboarding. V1 does not support private approval channels. The bot needs
+`chat:write`, `reactions:read`, and the public channel history scope. Only
+the configured reviewer can resolve a brief.
 
-Slack delivery is independent of Slack approval:
-
-```json
-{
-  "delivery_surfaces": [
-    {
-      "adapter_id": "slack",
-      "instance_id": "team-decisions",
-      "credential_ref": "file:/Users/you/.echo-brain/credentials/slack-bot-token",
-      "settings": {
-        "channel_id": "C0123ABCD",
-        "request_timeout_ms": 30000
-      }
-    }
-  ]
-}
-```
-
-Confirmed Slack message identities are persisted as delivery receipts.
-Ambiguous post outcomes stop automatic retry so the product does not knowingly
-duplicate a message.
+V1 delivers approved briefs to the local JSONL outbox; Slack carries approval
+only. Generic Slack delivery already exists but is not enabled in the Internal
+Live V1 profile. If it is enabled later it must use a different channel than
+the approval surface, so review traffic stays in the review channel: `init` and
+a configuration-changing `reconfigure` refuse a config that points both at one
+channel. The rule reads only the configuration — it contacts no provider and
+discovers no Slack channel — and a package-only re-pin of an unchanged
+configuration recorded before the rule existed is still allowed.
 
 ## Day-to-day commands
 
 ```sh
 echo-brain validate-config --config /absolute/path/runtime.json
-echo-brain selftest --config /absolute/path/runtime.json
 echo-brain status --config /absolute/path/runtime.json
 echo-brain run-once --config /absolute/path/runtime.json
 echo-brain approvals --config /absolute/path/runtime.json
-echo-brain approve --config /absolute/path/runtime.json --id <id> --reviewer <name>
-echo-brain reject --config /absolute/path/runtime.json --id <id> --reviewer <name>
-echo-brain run --config /absolute/path/runtime.json
 ```
+
+Every command takes an absolute `--config` path and rejects any option that
+command does not define.
 
 `run-once` loads the configured adapters, processes available meetings,
 persists cursors and decisions, waits for approval, and delivers the exact
-approved snapshot. Failures conservatively pin the source cursor.
+approved snapshot. Failures conservatively pin the source cursor. The installed
+LaunchAgent runs the same cycle continuously; there is no foreground `run`.
 
-`status` reports the recorded installation and the LaunchAgent state. `reject`
-takes the same `--id` and `--reviewer` as `approve` plus an optional
-`--reason <text>`.
+`approvals` lists local decision records without a federation projection. It
+cannot resolve one — the organization
+Slack approval surface is the single v1 resolver, so every approve/reject is
+centrally attributed and authorized — but it is not a fully read-only command
+either: listing opens the local decision store, which initializes or migrates
+that state on first use. A historical node whose requested metadata owns a
+`federation` field is from the retired capture path and is refused rather than
+reinterpreted; similarly named publication or resolution fields remain opaque
+local metadata.
+
+`status` reports the recorded installation and the LaunchAgent state.
 
 Backups and restores are explicit maintenance operations:
 
@@ -522,10 +595,20 @@ echo-brain service uninstall --config /absolute/path/runtime.json
 
 `install`, `start`, and `restart` re-check that every configured credential
 reference is a private `file:` path inside the managed credentials directory
-before touching launchd. `reconfigure` re-records the installation manifest
-after the configuration content or product version changes; it requires the
-service to be stopped and refuses to change the config path, state directory,
-Node, CLI, or service identity.
+before touching launchd. The LaunchAgent invokes a hidden `service-run` child
+that re-proves the immutable service identity and then runs the cycle loop.
+
+`reconfigure` re-records the installation manifest after the configuration
+content or product version changes. Before rewriting the manifest it proves
+statically that this package can run the recorded configuration: every
+configured adapter factory exists and each one's own static validator accepts
+its configuration. That proof constructs no adapter and reads no credential,
+environment, state store, or provider, so update and recovery never depend on
+provider uptime or on anything outside the config file. A factory that exposes
+no static validator is refused rather than skipped, and every rejection in a
+pass is reported together. `reconfigure` requires the service to be stopped and
+refuses to change the config path, state directory, Node, CLI, or service
+identity.
 
 ## Organization onboarding and access
 
@@ -563,7 +646,9 @@ Once the organization Slack tool is active, an enrolled installation links its
 Slack identity with `organization slack-link-begin` and
 `organization slack-link-complete`. The one-time code travels through a reply
 in the exact Slack challenge thread and the `ECHO_SLACK_LINK_CODE` environment
-variable, never a command-line argument. The
+variable, never a command-line argument. Linking creates no permission grant;
+an organization owner must then run `echo-organization-admin slack approval
+activate` for the returned identity link and adapter binding. The
 [authority service](services/organization-authority/README.md) README carries
 the exact steps.
 

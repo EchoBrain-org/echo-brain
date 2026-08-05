@@ -7,7 +7,6 @@
     "packages/organization-api/source-boundary.v1.json",
     "services/organization-authority/source-boundary.v1.json",
     "services/organization-control-plane/source-boundary.v1.json",
-    "src/product/federation/source-boundary.v1.json",
     "src/product/organization/source-boundary.v1.json"
   ]
 }

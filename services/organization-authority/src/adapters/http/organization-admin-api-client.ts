@@ -52,6 +52,11 @@ import type {
   RevokedOrganizationInstallationV1,
   RevokedOrganizationMembershipV1,
 } from '@echo-brain/organization-api';
+import {
+  ORGANIZATION_API_ADMIN_SLACK_APPROVAL_ACTIVATION_PATH,
+  type ActivateOrganizationSlackApprovalRequest,
+  type ActivatedOrganizationSlackApproval,
+} from '../../application/slack-approval-activation.js';
 
 const DEFAULT_TIMEOUT_MS = 15_000;
 const MAXIMUM_TIMEOUT_MS = 120_000;
@@ -59,8 +64,28 @@ export const MAX_ORGANIZATION_ADMIN_API_RESPONSE_BYTES = 512 * 1024;
 
 const UUID_V4_SOURCE =
   '[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}';
+const COMMAND_ID_PATTERN = new RegExp(`^adm_${UUID_V4_SOURCE}$`);
 const MEMBERSHIP_ID_PATTERN = new RegExp(`^mem_${UUID_V4_SOURCE}$`);
 const INSTALLATION_ID_PATTERN = new RegExp(`^ins_${UUID_V4_SOURCE}$`);
+const IDENTITY_LINK_ID_PATTERN = new RegExp(`^clm_${UUID_V4_SOURCE}$`);
+const ADAPTER_BINDING_ID_PATTERN = new RegExp(`^bnd_${UUID_V4_SOURCE}$`);
+const PERMISSION_GRANT_ID_PATTERN = new RegExp(`^pgr_${UUID_V4_SOURCE}$`);
+const SLACK_APPROVAL_ACTIVATION_REQUEST_IDS = {
+  command_id: COMMAND_ID_PATTERN,
+  administrator_membership_id: MEMBERSHIP_ID_PATTERN,
+  target_membership_id: MEMBERSHIP_ID_PATTERN,
+  installation_id: INSTALLATION_ID_PATTERN,
+  identity_link_id: IDENTITY_LINK_ID_PATTERN,
+  adapter_binding_id: ADAPTER_BINDING_ID_PATTERN,
+} as const;
+const SLACK_APPROVAL_ACTIVATION_RESULT_IDS = {
+  identity_link_id: IDENTITY_LINK_ID_PATTERN,
+  adapter_binding_id: ADAPTER_BINDING_ID_PATTERN,
+  approve_permission_grant_id: PERMISSION_GRANT_ID_PATTERN,
+  reject_permission_grant_id: PERMISSION_GRANT_ID_PATTERN,
+  membership_id: MEMBERSHIP_ID_PATTERN,
+  installation_id: INSTALLATION_ID_PATTERN,
+} as const;
 
 export interface OrganizationAdminApiClientOptions {
   base_url: string;
@@ -242,6 +267,75 @@ function validateSubjectId(
     throw new Error(`${label} must be a canonical identifier`);
   }
   return value;
+}
+
+function exactRecord(
+  value: unknown,
+  keys: readonly string[],
+  label: string,
+): Record<string, unknown> {
+  if (
+    value === null ||
+    typeof value !== 'object' ||
+    Array.isArray(value) ||
+    Object.keys(value).length !== keys.length ||
+    keys.some((key) => !Object.hasOwn(value, key))
+  ) {
+    throw new Error(`${label} has an unexpected shape`);
+  }
+  return value as Record<string, unknown>;
+}
+
+function identifierRecord(
+  value: unknown,
+  identifiers: Readonly<Record<string, RegExp>>,
+  additionalKeys: readonly string[],
+  label: string,
+): Record<string, unknown> {
+  const record = exactRecord(
+    value,
+    [...Object.keys(identifiers), ...additionalKeys],
+    label,
+  );
+  for (const [key, pattern] of Object.entries(identifiers)) {
+    validateSubjectId(record[key] as string, pattern, key);
+  }
+  return record;
+}
+
+function validateSlackApprovalActivationRequest(
+  value: ActivateOrganizationSlackApprovalRequest,
+): ActivateOrganizationSlackApprovalRequest {
+  return identifierRecord(
+    value,
+    SLACK_APPROVAL_ACTIVATION_REQUEST_IDS,
+    [],
+    'Slack approval activation request',
+  ) as unknown as ActivateOrganizationSlackApprovalRequest;
+}
+
+function validateActivatedOrganizationSlackApproval(
+  value: unknown,
+): ActivatedOrganizationSlackApproval {
+  const record = identifierRecord(
+    value,
+    SLACK_APPROVAL_ACTIVATION_RESULT_IDS,
+    ['activated_at', 'permission_grants_created'],
+    'Slack approval activation response',
+  );
+  const activatedAt = record['activated_at'];
+  if (
+    typeof activatedAt !== 'string' ||
+    !Number.isFinite(Date.parse(activatedAt)) ||
+    new Date(Date.parse(activatedAt)).toISOString() !== activatedAt
+  ) {
+    throw new Error('activated_at must be a canonical timestamp');
+  }
+  const grantsCreated = record['permission_grants_created'];
+  if (grantsCreated !== 0 && grantsCreated !== 2) {
+    throw new Error('permission_grants_created must be 0 or 2');
+  }
+  return record as unknown as ActivatedOrganizationSlackApproval;
 }
 
 async function readBoundedJson(response: Response): Promise<unknown> {
@@ -497,6 +591,19 @@ export class OrganizationAdminApiClient {
       expected_status: 201,
       body,
       validate: validateOrganizationInternalLiveUpdateDirective,
+    });
+  }
+
+  activateSlackApproval(
+    input: ActivateOrganizationSlackApprovalRequest,
+  ): Promise<ActivatedOrganizationSlackApproval> {
+    const body = validateSlackApprovalActivationRequest(input);
+    return this.request({
+      method: 'POST',
+      path: ORGANIZATION_API_ADMIN_SLACK_APPROVAL_ACTIVATION_PATH,
+      expected_status: 201,
+      body,
+      validate: validateActivatedOrganizationSlackApproval,
     });
   }
 

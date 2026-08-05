@@ -15,12 +15,12 @@ import {
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
-import { FileInstallationSigner } from '../../src/product/machine/security/file-installation-signer.js';
-import { canonicalJson } from '../../src/product/federation/foundation/canonical-json.js';
 import {
   assertP256LowS,
+  canonicalJson,
   verifyP256LowSSignature,
-} from '../../src/product/federation/foundation/signature-profile.js';
+} from '@echo-brain/federation-protocol';
+import { FileInstallationSigner } from '../../src/product/machine/security/file-installation-signer.js';
 
 const INSTALLATION_ID = 'ins_00000000-0000-4000-8000-000000000001';
 const OTHER_INSTALLATION_ID = 'ins_00000000-0000-4000-8000-000000000002';

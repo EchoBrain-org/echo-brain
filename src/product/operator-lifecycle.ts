@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto';
 import { homedir } from 'node:os';
 import { dirname, isAbsolute, join, resolve } from 'node:path';
+import type { AdapterInstanceConfig } from '../core/index.js';
 import type { AdapterDiagnostic } from './adapter-diagnostics.js';
 import {
   validateProductRuntimeConfig,
@@ -29,12 +30,25 @@ import {
   productFileCredentialPath,
   type ProductCredentialResolver,
 } from './credentials.js';
-import { pathIsWithin } from './secure-local-files.js';
+import {
+  assertNoPermissiveDarwinAcl,
+  pathIsWithin,
+} from './secure-local-files.js';
 import { canonicalProductConfigSha256 } from './lifecycle-lock.js';
-import type { PackagedBuildIdentityV1 } from './federation/build-identity.js';
+import type { PackagedBuildIdentityV1 } from './build-identity.js';
+import { GRANOLA_API_KEY_RE } from '../adapters/meeting-sources/granola/granola-api-client.js';
+import {
+  DEFAULT_APPROVE_REACTION,
+  DEFAULT_REJECT_REACTION,
+} from '../adapters/approval-surfaces/slack-reactions/slack-reactions-approval-surface.js';
 
 export type ProductServiceAction =
-  'install' | 'start' | 'stop' | 'restart' | 'status' | 'uninstall';
+  | 'install'
+  | 'start'
+  | 'stop'
+  | 'restart'
+  | 'status'
+  | 'uninstall';
 
 export type OperatorFailureCode =
   | 'unsupported_platform'
@@ -42,7 +56,8 @@ export type OperatorFailureCode =
   | 'not_initialized'
   | 'installation_conflict'
   | 'service_conflict'
-  | 'service_command_failed';
+  | 'service_command_failed'
+  | 'adapter_unavailable';
 
 export class ProductOperatorError extends Error {
   constructor(
@@ -70,6 +85,17 @@ export interface ProductOperatorDependencies {
     'source_sha' | 'source_kind'
   >;
   resolveCredential?: ProductCredentialResolver;
+  /**
+   * Offline package safety check reconfigure runs before rewriting the
+   * installation record: every configured adapter factory must exist in the
+   * installed package and must statically accept its own configuration. It
+   * constructs no adapter and must not resolve a credential, open state, run
+   * a health check, or contact a provider, so update and recovery never
+   * depend on provider uptime. Re-pinning an exactly unchanged record skips
+   * it. The CLI always supplies the default implementation; when absent the
+   * operator fails closed rather than re-pinning an unverified package.
+   */
+  verifyConfiguredAdapters?: (config: ProductRuntimeConfig) => void | Promise<void>;
 }
 
 export interface ProductInstallationRecord {
@@ -228,8 +254,161 @@ export interface ProductOnboardResult {
   config_path: string;
   state_dir: string;
   credential_path: string;
+  slack_credential_path: string;
   config: ProductRuntimeConfig;
-  next_steps: readonly string[];
+}
+
+export interface ProductSlackApprovalBootstrapProfile {
+  channelId: string;
+  reviewerUserId: string;
+  reviewerName: string;
+}
+
+export type ProductBootstrapCredentialKind = 'granola' | 'slack';
+
+const SLACK_BOT_TOKEN_RE = /^xoxb-[A-Za-z0-9-]{8,}$/;
+
+export interface ProductOnboardOptions {
+  fileSystem?: OperatorFileSystem;
+  /** The canonical employee owner the created Granola source is bound to. */
+  granolaOwnerEmail: string;
+  slackApproval: ProductSlackApprovalBootstrapProfile;
+}
+
+function canonicalLowercaseEmail(value: string): boolean {
+  if (value.length === 0 || value.length > 254 || /\s/u.test(value)) return false;
+  const [local, domain, extra] = value.split('@');
+  return (
+    value === value.toLowerCase() &&
+    value === value.trim() &&
+    local !== undefined &&
+    local.length > 0 &&
+    domain !== undefined &&
+    domain.length > 0 &&
+    extra === undefined
+  );
+}
+
+export function createProductOnboardConfig(
+  stateDirectory: string,
+  granolaOwnerEmail: string,
+  slackApproval: ProductSlackApprovalBootstrapProfile,
+): ProductRuntimeConfig {
+  if (!canonicalLowercaseEmail(granolaOwnerEmail)) {
+    throw new ProductOperatorError(
+      'installation_conflict',
+      'Granola owner must be a canonical lowercase email address',
+    );
+  }
+  if (!/^C[A-Z0-9]{2,}$/.test(slackApproval.channelId)) {
+    throw new ProductOperatorError(
+      'installation_conflict',
+      'Slack approval channel must be a canonical Slack channel ID',
+    );
+  }
+  if (!/^[UW][A-Z0-9]{2,}$/.test(slackApproval.reviewerUserId)) {
+    throw new ProductOperatorError(
+      'installation_conflict',
+      'Slack approval reviewer must be a canonical Slack user ID',
+    );
+  }
+  if (
+    slackApproval.reviewerName !== slackApproval.reviewerName.trim() ||
+    slackApproval.reviewerName.length === 0 ||
+    slackApproval.reviewerName.length > 256
+  ) {
+    throw new ProductOperatorError(
+      'installation_conflict',
+      'Slack approval reviewer name must be a trimmed non-empty name',
+    );
+  }
+  const credentialPath = join(stateDirectory, 'credentials', 'granola-api-key');
+  const slackCredentialPath = join(
+    stateDirectory,
+    'credentials',
+    'slack-bot-token',
+  );
+  return validateProductRuntimeConfig({
+    schema_version: 1,
+    lane: 'team-product',
+    state_dir: stateDirectory,
+    meeting_sources: [
+      {
+        adapter_id: 'granola',
+        instance_id: 'owner-bound-v1',
+        credential_ref: `file:${credentialPath}`,
+        settings: {
+          owner_email: granolaOwnerEmail,
+          page_size: 1,
+        },
+      },
+    ],
+    decision_processor: {
+      adapter_id: 'structured-text',
+      instance_id: 'primary',
+      settings: {},
+    },
+    delivery_surfaces: [
+      {
+        adapter_id: 'jsonl-outbox',
+        instance_id: 'local',
+        settings: {
+          path: join(stateDirectory, 'outbox.jsonl'),
+          destination_id: 'local-outbox',
+        },
+      },
+    ],
+    approval_mode: 'adapter',
+    approval_surface: {
+      adapter_id: 'slack-reactions',
+      instance_id: 'internal-approvals',
+      credential_ref: `file:${slackCredentialPath}`,
+      settings: {
+        channel_id: slackApproval.channelId,
+        reviewer: {
+          slack_user_id: slackApproval.reviewerUserId,
+          name: slackApproval.reviewerName,
+        },
+        approve_reaction: DEFAULT_APPROVE_REACTION,
+        reject_reaction: DEFAULT_REJECT_REACTION,
+      },
+    },
+  });
+}
+
+function slackChannelId(adapter: AdapterInstanceConfig): string | undefined {
+  const value = adapter.settings['channel_id'];
+  return typeof value === 'string' && value.length > 0 ? value : undefined;
+}
+
+/**
+ * Pure configuration rule: the Slack approval surface and generic Slack
+ * delivery may not share one channel, so review traffic stays in the review
+ * channel and a delivery post can never be mistaken for an approval card. It
+ * reads only the configuration -- it contacts no provider and discovers no
+ * Slack channel.
+ */
+export function assertSeparateSlackChannels(config: ProductRuntimeConfig): void {
+  if (
+    config.approval_mode !== 'adapter' ||
+    config.approval_surface.adapter_id !== 'slack-reactions'
+  ) {
+    return;
+  }
+  const approvalChannel = slackChannelId(config.approval_surface);
+  if (approvalChannel === undefined) return;
+  const conflicts = config.delivery_surfaces.filter(
+    (surface) =>
+      surface.adapter_id === 'slack' &&
+      slackChannelId(surface) === approvalChannel,
+  );
+  if (conflicts.length === 0) return;
+  throw new ProductOperatorError(
+    'installation_conflict',
+    `Slack approval channel ${approvalChannel} is also configured for Slack delivery (${conflicts
+      .map((surface) => `delivery-surface '${surface.instance_id}'`)
+      .join(', ')}); give generic Slack delivery its own channel`,
+  );
 }
 
 function normalizedAbsolute(path: string): boolean {
@@ -268,6 +447,62 @@ function assertCanonicalDirectoryPath(
       `${description} must use canonical paths without symbolic-link ancestors`,
     );
   }
+  const currentUid = process.getuid?.();
+  if (
+    currentUid === undefined ||
+    info.uid !== currentUid ||
+    (info.mode & 0o022) !== 0
+  ) {
+    throw new ProductOperatorError(
+      'installation_conflict',
+      `${description} ancestor must be owned by the current user and not group- or world-writable: ${ancestor}`,
+    );
+  }
+  assertNoPermissiveDarwinAcl(ancestor, `${description} ancestor`);
+}
+
+function assertBootstrapCredential(
+  kind: ProductBootstrapCredentialKind,
+  value: string,
+): void {
+  const valid =
+    kind === 'granola'
+      ? GRANOLA_API_KEY_RE.test(value)
+      : SLACK_BOT_TOKEN_RE.test(value);
+  if (!valid) {
+    throw new ProductOperatorError(
+      'installation_conflict',
+      `${kind === 'granola' ? 'Granola' : 'Slack'} credential is not a valid API token`,
+    );
+  }
+}
+
+export function createProductBootstrapCredential(
+  path: string,
+  value: string,
+  kind: ProductBootstrapCredentialKind,
+  providedFileSystem?: OperatorFileSystem,
+): void {
+  assertBootstrapCredential(kind, value);
+  const fileSystem = providedFileSystem ?? nodeOperatorFileSystem;
+  const credentialsDirectory = dirname(path);
+  fileSystem.mkdir(credentialsDirectory, { recursive: true, mode: 0o700 });
+  fileSystem.chmod(credentialsDirectory, 0o700);
+  assertNoPermissiveDarwinAcl(
+    credentialsDirectory,
+    'onboard credentials directory',
+  );
+  if (!fileSystem.createExclusive(path, value, 0o600)) {
+    throw new ProductOperatorError(
+      'installation_conflict',
+      `refusing to replace existing credential: ${path}`,
+    );
+  }
+  fileSystem.chmod(path, 0o600);
+  assertNoPermissiveDarwinAcl(
+    path,
+    kind === 'granola' ? 'Granola credential' : 'Slack credential',
+  );
 }
 
 /**
@@ -277,9 +512,9 @@ function assertCanonicalDirectoryPath(
 export function onboardProduct(
   configPath: string,
   stateDirectory: string,
-  dependencies: { fileSystem?: OperatorFileSystem } = {},
+  options: ProductOnboardOptions,
 ): ProductOnboardResult {
-  const fileSystem = dependencies.fileSystem ?? nodeOperatorFileSystem;
+  const fileSystem = options.fileSystem ?? nodeOperatorFileSystem;
   if (!normalizedAbsolute(configPath)) {
     throw new ProductOperatorError(
       'invalid_operator_path',
@@ -331,35 +566,16 @@ export function onboardProduct(
     }
   }
   const credentialPath = join(stateDirectory, 'credentials', 'granola-api-key');
-  const config = validateProductRuntimeConfig({
-    schema_version: 1,
-    lane: 'team-product',
-    state_dir: stateDirectory,
-    meeting_sources: [
-      {
-        adapter_id: 'granola',
-        instance_id: 'primary',
-        credential_ref: `file:${credentialPath}`,
-        settings: {},
-      },
-    ],
-    decision_processor: {
-      adapter_id: 'structured-text',
-      instance_id: 'primary',
-      settings: {},
-    },
-    delivery_surfaces: [
-      {
-        adapter_id: 'jsonl-outbox',
-        instance_id: 'local',
-        settings: {
-          path: join(stateDirectory, 'outbox.jsonl'),
-          destination_id: 'local-outbox',
-        },
-      },
-    ],
-    approval_mode: 'manual',
-  });
+  const slackCredentialPath = join(
+    stateDirectory,
+    'credentials',
+    'slack-bot-token',
+  );
+  const config = createProductOnboardConfig(
+    stateDirectory,
+    options.granolaOwnerEmail,
+    options.slackApproval,
+  );
   const configParent = dirname(configPath);
   if (!fileSystem.exists(configParent)) {
     fileSystem.mkdir(configParent, { recursive: true, mode: 0o700 });
@@ -385,9 +601,7 @@ export function onboardProduct(
     );
   }
   fileSystem.chmod(stateDirectory, 0o700);
-  const credentialsDirectory = dirname(credentialPath);
-  fileSystem.mkdir(credentialsDirectory, { recursive: true, mode: 0o700 });
-  fileSystem.chmod(credentialsDirectory, 0o700);
+  assertNoPermissiveDarwinAcl(stateDirectory, 'onboard state directory');
   const created = fileSystem.createExclusive(
     configPath,
     `${JSON.stringify(config, null, 2)}\n`,
@@ -400,6 +614,13 @@ export function onboardProduct(
     );
   }
   fileSystem.chmod(configPath, 0o600);
+  const credentialsDirectory = dirname(credentialPath);
+  fileSystem.mkdir(credentialsDirectory, { recursive: true, mode: 0o700 });
+  fileSystem.chmod(credentialsDirectory, 0o700);
+  assertNoPermissiveDarwinAcl(
+    credentialsDirectory,
+    'onboard credentials directory',
+  );
   const loaded = validateProductRuntimeConfig(
     parseJson(fileSystem.readText(configPath)),
   );
@@ -407,13 +628,8 @@ export function onboardProduct(
     config_path: configPath,
     state_dir: stateDirectory,
     credential_path: credentialPath,
+    slack_credential_path: slackCredentialPath,
     config: loaded,
-    next_steps: [
-      `create ${credentialPath} as a mode-0600 regular file containing only the Granola API token`,
-      `echo-brain init --config ${configPath}`,
-      `echo-brain service install --config ${configPath}`,
-      `echo-brain doctor --config ${configPath}`,
-    ],
   };
 }
 
@@ -427,6 +643,9 @@ export class ProductOperator {
   private readonly productVersion: string;
   private readonly buildIdentity: ProductOperatorDependencies['buildIdentity'];
   private readonly resolveCredential: ProductCredentialResolver;
+  private readonly verifyConfiguredAdapters: (
+    config: ProductRuntimeConfig,
+  ) => void | Promise<void>;
   private readonly context: OperatorContext;
 
   constructor(
@@ -444,6 +663,13 @@ export class ProductOperator {
     this.buildIdentity = dependencies.buildIdentity;
     this.resolveCredential =
       dependencies.resolveCredential ?? createProductCredentialResolver();
+    this.verifyConfiguredAdapters =
+      dependencies.verifyConfiguredAdapters ??
+      (() => {
+        throw new Error(
+          'no configured-adapter verifier is installed for this operator',
+        );
+      });
     this.context = this.createContext(
       configPath,
       dependencies.nodePath ?? process.execPath,
@@ -689,6 +915,10 @@ export class ProductOperator {
             'managed credentials directory must be canonical, owned by the service user, and private',
           );
         }
+        assertNoPermissiveDarwinAcl(
+          this.context.credentialsDirectory,
+          'managed credentials directory',
+        );
         let parent = dirname(path);
         while (parent !== this.context.credentialsDirectory) {
           if (
@@ -708,6 +938,7 @@ export class ProductOperator {
               'credential parent directories must be canonical, owned by the service user, and private',
             );
           }
+          assertNoPermissiveDarwinAcl(parent, 'credential parent directory');
           parent = dirname(parent);
         }
         const credentialInfo = this.fileSystem.lstat(path);
@@ -721,6 +952,7 @@ export class ProductOperator {
             'credential file must be regular, owned by the service user, and private',
           );
         }
+        assertNoPermissiveDarwinAcl(path, 'credential file');
         const value = this.resolveCredential(reference);
         if (value === undefined || value.length === 0) {
           throw new Error('credential resolved to an empty value');
@@ -875,6 +1107,7 @@ export class ProductOperator {
         'an incompatible operator installation already owns this state directory',
       );
     }
+    if (existing === null) assertSeparateSlackChannels(this.config);
     const statePaths = resolveProductStatePaths(this.context.stateDirectory);
     for (const directory of [
       statePaths.root,
@@ -944,6 +1177,25 @@ export class ProductOperator {
     this.assertServiceCredentialsReadable();
     const updated = !sameRecord(existing, expected);
     if (updated) {
+      // A changed configuration must satisfy the pure channel-separation rule.
+      // A package-only re-pin carries the configuration it already had, so an
+      // installation grandfathered before the rule existed can still be
+      // re-pinned onto a new package instead of being stranded.
+      if (existing.config_sha256 !== expected.config_sha256) {
+        assertSeparateSlackChannels(this.config);
+      }
+      // Any rewrite of the installation record — changed configuration content
+      // or a package/build re-pin — first proves offline that this package can
+      // run the recorded configuration. No health check runs and no provider
+      // is contacted; an exactly unchanged record skips the check.
+      try {
+        await this.verifyConfiguredAdapters(this.config);
+      } catch (error) {
+        throw new ProductOperatorError(
+          'adapter_unavailable',
+          `reconfigure was refused before the installation manifest was updated: ${(error as Error).message}`,
+        );
+      }
       this.fileSystem.writePrivate(
         this.context.installationPath,
         `${JSON.stringify(expected, null, 2)}\n`,
@@ -1053,6 +1305,12 @@ export class ProductOperator {
         info.isDirectory() &&
         !info.isSymbolicLink() &&
         modeIsPrivate(info.mode, 0o700);
+      if (stateOk) {
+        assertNoPermissiveDarwinAcl(
+          this.context.stateDirectory,
+          'state directory',
+        );
+      }
     } catch {
       stateOk = false;
     }
@@ -1199,7 +1457,11 @@ export class ProductOperator {
     } else {
       this.requireCurrentRecord();
     }
-    if (action === 'install' || action === 'start' || action === 'restart') {
+    if (
+      action === 'install' ||
+      action === 'start' ||
+      action === 'restart'
+    ) {
       this.assertServiceCredentialsReadable();
     }
     const context = this.context;

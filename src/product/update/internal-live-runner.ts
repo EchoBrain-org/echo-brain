@@ -8,7 +8,7 @@ import {
   type OrganizationInternalLiveUpdateFailurePhaseV1,
 } from '@echo-brain/organization-api';
 import type { ProductRuntimeConfig } from '../config.js';
-import type { PackagedBuildIdentityV1 } from '../federation/build-identity.js';
+import type { PackagedBuildIdentityV1 } from '../build-identity.js';
 import { FileInstallationSigner } from '../machine/security/file-installation-signer.js';
 import {
   signWithInstallationKey,

@@ -147,6 +147,7 @@ function operationFixture(options: {
   doctors?: readonly InternalLiveDoctorSummary[];
   inspection?: InspectedInternalLivePackage;
   artifactSha?: string;
+  currentVersion?: string;
 } = {}): OperationFixture {
   const events: string[] = [];
   const backupTimestamps: string[] = [];
@@ -185,7 +186,7 @@ function operationFixture(options: {
     currentInstallation: async () => {
       events.push('current');
       return {
-        product_version: '0.1.0-internal.1',
+        product_version: options.currentVersion ?? '0.1.0-internal.1',
         source_sha: OLD_SOURCE_SHA,
       };
     },
@@ -367,6 +368,28 @@ describe('internal-live release manifest', () => {
 });
 
 describe('internal-live update transaction', () => {
+  it('refuses to downgrade an installed INTERNAL LIVE version', async () => {
+    const { operations, events } = operationFixture({
+      currentVersion: '0.1.0-internal.3',
+    });
+
+    await expect(
+      applyInternalLiveUpdate(
+        { transactionId: 'transaction-1' },
+        operations,
+        new MemoryStore(),
+      ),
+    ).rejects.toMatchObject({
+      code: 'release_verification_failed',
+      message: expect.stringContaining(
+        'refuses downgrade from 0.1.0-internal.3 to 0.1.0-internal.2',
+      ),
+    });
+    expect(events).not.toContain('stop');
+    expect(events).not.toContain('backup');
+    expect(events).not.toContain('install-candidate');
+  });
+
   it('verifies completely before stopping, then backs up and reaches healthy', async () => {
     const { operations, events, backupTimestamps } = operationFixture();
     const store = new MemoryStore();

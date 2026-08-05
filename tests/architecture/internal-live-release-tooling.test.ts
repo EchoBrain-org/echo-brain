@@ -17,8 +17,14 @@ const REPO = resolve(import.meta.dirname, '../..');
 const TOOL = join(REPO, 'tools', 'internal-live-release.mjs');
 const WORKFLOW = join(REPO, '.github', 'workflows', 'internal-live-release.yml');
 const CI_WORKFLOW = join(REPO, '.github', 'workflows', 'ci.yml');
+const MACOS_SMOKE = join(
+  REPO,
+  '.github',
+  'scripts',
+  'internal-live-macos-smoke.sh',
+);
 const README = join(REPO, 'README.md');
-const VERSION = '0.1.0-internal.4';
+const VERSION = '0.1.0-internal.5';
 const SOURCE_SHA = 'a'.repeat(40);
 const REPOSITORY = 'EchoBrain-org/echo-brain';
 const RUN_ID = '12345678901234567890';
@@ -167,8 +173,11 @@ describe('INTERNAL LIVE release tooling', () => {
         '            "$archive" \\\n' +
         '            "$package_version"',
     );
-    expect(job).not.toContain('"$cli" onboard');
-    expect(job).not.toContain('"$cli" service install');
+    const smoke = readFileSync(MACOS_SMOKE, 'utf8');
+    expect(smoke).toContain('"$cli" init --config "$config"');
+    expect(smoke).toContain('"$cli" service install --config "$config"');
+    expect(smoke).not.toContain('"$cli" onboard');
+    expect(smoke).not.toContain('"$cli" selftest');
   });
 
   it('keeps one lean publication behind approval and exact-bundle verification', () => {
@@ -179,9 +188,27 @@ describe('INTERNAL LIVE release tooling', () => {
     expect(workflow).not.toContain('--draft');
     expect(workflow.match(/gh release create/g)).toHaveLength(1);
     const reverify = workflow.indexOf('Reverify release identity after approval');
+    const attest = workflow.indexOf('id: attest');
+    const offlineVerify = workflow.indexOf(
+      'gh attestation verify "$bundle/$ARTIFACT_FILENAME"',
+    );
     const publish = workflow.indexOf('gh release create "$RELEASE_TAG"');
     expect(reverify).toBeGreaterThan(0);
+    expect(attest).toBeGreaterThan(reverify);
+    expect(offlineVerify).toBeGreaterThan(attest);
     expect(publish).toBeGreaterThan(reverify);
+    expect(publish).toBeGreaterThan(offlineVerify);
+    expect(workflow).toContain(
+      'ATTESTATION_BUNDLE_PATH: ${{ steps.attest.outputs.bundle-path }}',
+    );
+    expect(workflow).toContain(
+      'env -u GH_TOKEN -u GITHUB_TOKEN GH_CONFIG_DIR="$clean_config"',
+    );
+    expect(workflow).not.toContain('--custom-trusted-root');
+    expect(workflow).toContain(
+      '"$bundle/internal-live-attestation-bundle.v1.json"',
+    );
+    expect(workflow).not.toContain('internal-live-trusted-root.v1.jsonl');
   });
 
   it('documents one exact bootstrap bridge for clean and pre-updater Macs', () => {
@@ -193,6 +220,10 @@ describe('INTERNAL LIVE release tooling', () => {
       'gh attestation verify "$BOOTSTRAP_ARTIFACT_PATH"',
     );
     const install = bootstrap.indexOf('"$BOOTSTRAP_NPM" install --global');
+    const authorityApproval = bootstrap.indexOf(
+      'administrator must approve this exact manifest',
+    );
+    const employeeBootstrap = bootstrap.indexOf('echo-brain bootstrap \\');
 
     expect(start).toBeGreaterThan(0);
     expect(end).toBeGreaterThan(start);
@@ -206,12 +237,32 @@ describe('INTERNAL LIVE release tooling', () => {
       /BOOTSTRAP_VERSION='\d+\.\d+\.\d+-internal\.\d+'/u,
     );
     expect(bootstrap).not.toMatch(/releases\/(?:latest|download\/latest)/u);
+    expect(bootstrap).not.toContain('gh release download');
+    expect(bootstrap).not.toContain('gh release view');
+    expect(bootstrap).not.toContain('gh run view');
+    expect(bootstrap).not.toContain('gh api');
     expect(bootstrap).toContain(
-      'repos/${BOOTSTRAP_REPOSITORY}/actions/runs/${BOOTSTRAP_RUN_ID}/approvals',
+      "independently communicated artifact\nSHA-256 is the employee's bootstrap integrity anchor",
     );
-    expect(bootstrap).toContain('.name=="internal-live"');
+    expect(bootstrap).toContain(
+      'verified against the public trust root obtained by GitHub CLI',
+    );
+    expect(bootstrap).toContain(
+      "BOOTSTRAP_DIRECTORY='/absolute/path/to/transferred-release-directory'",
+    );
+    expect(bootstrap).toContain(
+      'BOOTSTRAP_ATTESTATION_PATH="${BOOTSTRAP_DIRECTORY}/internal-live-attestation-bundle.v1.json"',
+    );
+    expect(bootstrap).not.toContain('BOOTSTRAP_TRUSTED_ROOT_PATH');
     expect(attestation).toBeGreaterThan(0);
     expect(install).toBeGreaterThan(attestation);
+    expect(authorityApproval).toBeGreaterThan(0);
+    expect(employeeBootstrap).toBeGreaterThan(authorityApproval);
+    expect(bootstrap).toContain(
+      'env -u GH_TOKEN -u GITHUB_TOKEN GH_CONFIG_DIR="$BOOTSTRAP_GH_CONFIG"',
+    );
+    expect(bootstrap).toContain('--bundle "$BOOTSTRAP_ATTESTATION_PATH"');
+    expect(bootstrap).not.toContain('--custom-trusted-root');
     expect(bootstrap).toContain(
       '--signer-workflow "$BOOTSTRAP_REPOSITORY/.github/workflows/internal-live-release.yml"',
     );
@@ -245,10 +296,31 @@ describe('INTERNAL LIVE release tooling', () => {
       '${BOOTSTRAP_VERSION}|${BOOTSTRAP_SOURCE_SHA}|materialized-commit',
     );
     expect(bootstrap).toContain("grep -q 'Mach-O 64-bit bundle arm64'");
-    expect(bootstrap).toContain('A clean Mac continues with');
+    expect(bootstrap).toContain('echo-brain bootstrap \\');
+    expect(bootstrap).toContain('--slack-channel-id');
+    expect(bootstrap).toContain('--slack-reviewer-user-id');
+    expect(bootstrap).toContain('--slack-reviewer-name');
+    expect(bootstrap).toMatch(
+      /product work\. The successful final service\s+state is/u,
+    );
+    expect(bootstrap).toMatch(
+      /`installed: false`, `loaded: false`,\s+`running: false`/u,
+    );
     expect(bootstrap).toContain('An already-enrolled Mac whose CLI predates');
+    expect(bootstrap).toMatch(
+      /installation's\s+healthy receipt centrally/u,
+    );
     expect(bootstrap).toContain(
-      "central\nrollout status records that installation's healthy receipt",
+      'echo-brain organization slack-link-begin --config',
+    );
+    expect(bootstrap).toContain(
+      'echo-organization-admin slack approval activate',
+    );
+    expect(bootstrap).toContain(
+      'echo-brain approvals --config "$ECHO_CONFIG"',
+    );
+    expect(bootstrap).toContain(
+      'test "$(wc -l < "$ECHO_STATE/outbox.jsonl" | tr -d \' \')" = 1',
     );
     expect(readme.slice(end)).toContain('echo-brain update apply \\');
   });

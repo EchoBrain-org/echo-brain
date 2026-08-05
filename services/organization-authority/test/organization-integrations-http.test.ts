@@ -24,7 +24,7 @@ import {
   drainOrganizationAuthorityHttpServer,
   InMemoryPostRequestRateLimiter,
   ORGANIZATION_API_ADMIN_SLACK_INTEGRATION_PATH,
-  ORGANIZATION_API_ADMIN_SLACK_APPROVAL_BOOTSTRAP_PATH,
+  ORGANIZATION_API_ADMIN_SLACK_APPROVAL_ACTIVATION_PATH,
   type OrganizationAuthorityHttpServerOptions,
 } from '../src/presentation/http-server.js';
 import { AuthorityOperationError } from '../src/domain/errors.js';
@@ -117,7 +117,7 @@ function integrationsApplication(
       recent_audit: [],
     })),
     onboardSlackOrganizationTool: vi.fn(),
-    bootstrapSlackApproval: vi.fn(),
+    activateSlackApproval: vi.fn(),
     beginSlackIdentityLink: vi.fn(),
     completeSlackIdentityLink: vi.fn(),
     checkPermission: vi.fn(),
@@ -377,10 +377,10 @@ describe('organization integrations HTTP routes', () => {
     }
   });
 
-  it('requires the administrator bearer before forwarding Slack bootstrap', async () => {
-    const bootstrapSlackApproval = vi.fn(async () => ({}) as never);
+  it('requires the administrator bearer before forwarding Slack approval activation', async () => {
+    const activateSlackApproval = vi.fn(() => ({}) as never);
     const integrations = integrationsApplication({
-      bootstrapSlackApproval,
+      activateSlackApproval,
     });
     const server = integrationServer(integrations, {}, {
       adminAuthenticator: {
@@ -391,12 +391,17 @@ describe('organization integrations HTTP routes', () => {
     });
     const origin = await listen(server);
     const body = {
-      marker: 'exact-bootstrap-body',
-      slack_bot_token: 'xoxb-test-token-12345678',
+      command_id: 'adm_cccccccc-cccc-4ccc-8ccc-cccccccccccc',
+      administrator_membership_id:
+        'mem_44444444-4444-4444-8444-444444444444',
+      target_membership_id: 'mem_66666666-6666-4666-8666-666666666666',
+      installation_id: INSTALLATION_ID,
+      identity_link_id: 'clm_aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+      adapter_binding_id: 'bnd_bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb',
     };
     try {
       const unauthorized = await fetch(
-        `${origin}${ORGANIZATION_API_ADMIN_SLACK_APPROVAL_BOOTSTRAP_PATH}`,
+        `${origin}${ORGANIZATION_API_ADMIN_SLACK_APPROVAL_ACTIVATION_PATH}`,
         {
           method: 'POST',
           headers: {
@@ -408,11 +413,11 @@ describe('organization integrations HTTP routes', () => {
       );
       expect(unauthorized.status).toBe(401);
       expect(unauthorized.headers.get('www-authenticate')).toBe('Bearer');
-      expect(bootstrapSlackApproval).not.toHaveBeenCalled();
+      expect(activateSlackApproval).not.toHaveBeenCalled();
       await unauthorized.arrayBuffer();
 
       const authorized = await fetch(
-        `${origin}${ORGANIZATION_API_ADMIN_SLACK_APPROVAL_BOOTSTRAP_PATH}`,
+        `${origin}${ORGANIZATION_API_ADMIN_SLACK_APPROVAL_ACTIVATION_PATH}`,
         {
           method: 'POST',
           headers: {
@@ -425,11 +430,8 @@ describe('organization integrations HTTP routes', () => {
         },
       );
       expect(authorized.status).toBe(201);
-      expect(bootstrapSlackApproval).toHaveBeenCalledOnce();
-      expect(bootstrapSlackApproval).toHaveBeenCalledWith(
-        body,
-        expect.any(AbortSignal),
-      );
+      expect(activateSlackApproval).toHaveBeenCalledOnce();
+      expect(activateSlackApproval).toHaveBeenCalledWith(body);
       await authorized.arrayBuffer();
     } finally {
       await close(server);

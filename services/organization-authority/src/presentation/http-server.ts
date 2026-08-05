@@ -42,6 +42,8 @@ import type {
   ProvisionedOrganizationMembershipV1,
   RevokedOrganizationMembershipV1,
 } from '@echo-brain/organization-api';
+import { ORGANIZATION_API_ADMIN_SLACK_APPROVAL_ACTIVATION_PATH } from '../application/slack-approval-activation.js';
+export { ORGANIZATION_API_ADMIN_SLACK_APPROVAL_ACTIVATION_PATH } from '../application/slack-approval-activation.js';
 import {
   AuthorityOperationError,
   StaleAccessStateError,
@@ -82,8 +84,6 @@ export const ORGANIZATION_API_ADMIN_INTEGRATIONS_PATH =
   '/v1/admin/integrations';
 export const ORGANIZATION_API_ADMIN_SLACK_INTEGRATION_PATH =
   '/v1/admin/integrations/slack';
-export const ORGANIZATION_API_ADMIN_SLACK_APPROVAL_BOOTSTRAP_PATH =
-  '/v1/admin/integrations/slack-approval-bootstrap';
 
 class RateLimitedError extends Error {
   constructor(readonly retryAfterSeconds: number) {
@@ -896,15 +896,14 @@ export function createOrganizationAuthorityHttpServer(
         if (
           method === 'POST' &&
           url.pathname ===
-            ORGANIZATION_API_ADMIN_SLACK_APPROVAL_BOOTSTRAP_PATH
+            ORGANIZATION_API_ADMIN_SLACK_APPROVAL_ACTIVATION_PATH
         ) {
           requireAdmin(request);
           sendJson(
             response,
             201,
-            await requireIntegrations().bootstrapSlackApproval(
+            requireIntegrations().activateSlackApproval(
               await readJsonBody(request),
-              lifecycle.shutdownController.signal,
             ),
           );
           return;

@@ -2,10 +2,9 @@
 
 **Status:** Current — onboarding and access are live. The local
 founder-provenance federation surface (approval capture, attribution, signed
-record projection, export bundles, and protected independent copies) is retired
-and removed from this build; the "Evidence" and "Signed record boundary"
-sections below describe the persisted contracts and the design a future
-implementation would restore, not code that runs today.
+record projection, export bundles, and protected independent copies) is
+retired and deleted from this build, with no plan to restore that local lane;
+what remains of it is presence-only residue detection and refusal.
 
 Echo processes source data locally while preserving organization attribution.
 The installation owns personal provider credentials, raw source data, and its
@@ -33,29 +32,9 @@ installation profile while retaining immutable history.
 
 Identity claims are scoped by issuer, tenant, and subject and record their
 verification method. Display names, email addresses, token possession, and
-unscoped provider IDs are not canonical identity. Claim scoping is live; the
-per-fact capture list below belongs to the retired provenance surface.
-
-Facts are captured when they become known:
-
-- source attribution when a meeting revision is observed;
-- processor, model, prompt, and output attribution at extraction;
-- candidate and policy at approval request;
-- exact presentation and connection at publication;
-- actor, reason, and assurance at resolution.
-
-They are not reconstructed later from whichever account, model, or policy is
-currently configured.
-
-## Signed record boundary (persisted contract, not implemented in this build)
-
-Approved signals become immutable signed envelopes containing bounded
-attribution, approval, and publication evidence. Credentials, raw provider
-payloads, complete transcripts, and sibling signal bodies remain outside.
-
-Per-installation sequencing and hash chaining make gaps and forks detectable.
-A delivery receipt proves an output reached a configured surface; it is not an
-organization enrollment or access fact.
+unscoped provider IDs are not canonical identity. The retired provenance
+surface's per-fact capture pipeline and signed-record projection are deleted
+with it; only claim scoping is live.
 
 ## Onboarding and access
 
@@ -86,35 +65,44 @@ records software-key assurance. The CLI requires an explicit acknowledgement
 before creating that exportable key. The signer interface permits a later
 hardware-backed adapter without changing the federation documents.
 
-Pre-1.0 Secure Enclave identities are not silently rewritten. A build without
-that backend reports `unsupported_legacy_key_backend`; operators must preserve
-the old signer for continuity.
+Pre-1.0 Secure Enclave identities are not silently rewritten, exercised, or
+diagnosed for readiness. Their residue is sufficient to refuse product work;
+operators must preserve the old state for continuity.
 
 A state root left behind by the retired founder-provenance mode is detected and
 refused, never downgraded: no product-work command, runtime start, or new
-processing cycle resumes on it. One shared observational gate in
-`cutover-fence.ts` runs before any directory creation, adapter or component
+processing cycle resumes on it. Old founder state is never parsed — the readers
+that validated or recovered it are deleted, and detection is presence-only. One
+shared observational gate in `src/product/retired-founder-provenance.ts` runs
+before any directory creation, adapter
 resolution, credential work, provider or Authority contact, approval read or
-mutation, or caller-supplied callback, so a custom identity check, approval
-capture, approval store, or runtime cannot resume the mode. It is a fail-closed
+mutation, or caller-supplied callback, so an injected approval store or callback
+cannot resume the mode. It is a fail-closed
 gate on trusted in-process callers, not a sandbox. The gate is re-run at every
 composition cycle, not only at construction, so residue appearing under a live
 composition still fails the next cycle closed; a background access-lease renewal
 started by an already-running composition may continue until that composition is
 closed.
 
-Diagnosis, preservation, and quiescing stay available on a fenced profile:
-`identity-check` still reports it as `identity_enabled` with
-`operational_ready: false`, and `validate-config`, `selftest`, general `status`,
-`backup`, `restore`, and `service stop`/`status`/`uninstall` remain reachable.
+Inspection, preservation, and quiescing stay available on a fenced profile:
+`validate-config`, general `status`, `backup`, `restore`, and `service
+stop`/`status`/`uninstall` remain reachable.
 Several of those write; the line is product work, not writes.
 
-Recovery does not cross the fence. The cutover is irreversible and a backup
-stays bound to its originating state path, so restore can only return a profile
-to itself. Because `backup` refuses while the service is loaded, the executable
-order is `service stop`, `backup`, `onboard` a founder-residue-free new state
-path, provision the Granola credential that config references, `init`, then
-`organization enroll` on that initialized, not-already-enrolled installation.
+Recovery does not cross the fence. `backup` stays available for a fenced
+profile: regular state-tree files are copied byte-for-byte and the SQLite
+database is captured as a consistent SQLite backup, while the external cutover
+guard remains beside the original state path, outside the backup. `restore`
+refuses — before its safety pre-backup, durable
+marker, staging, or any live change — whenever the live target holds founder
+residue or the validated backup payload would reintroduce it, and it stops
+without touching interrupted restore artifacts that involve that residue.
+Because `backup` refuses while the service is loaded, the executable
+order is `service stop`, `backup`, then `bootstrap` onto a founder-residue-free
+new config and state path with the administrator-issued invitation and
+Authority PIN; that one command provisions the credentials, initializes, and
+enrolls the new installation. Fresh central bootstrap is the only forward
+path.
 
 Organization ingest, search, embeddings, participant resolution, IdP/SCIM,
 billing, and multi-organization tenancy are outside this onboarding/access

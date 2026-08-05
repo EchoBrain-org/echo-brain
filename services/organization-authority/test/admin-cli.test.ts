@@ -39,7 +39,12 @@ const IDS = {
   organization: 'org_00000000-0000-4000-8000-000000000001',
   principal: 'prn_00000000-0000-4000-8000-000000000001',
   membership: 'mem_00000000-0000-4000-8000-000000000001',
+  targetMembership: 'mem_00000000-0000-4000-8000-000000000002',
   installation: 'ins_00000000-0000-4000-8000-000000000001',
+  identityLink: 'clm_00000000-0000-4000-8000-000000000001',
+  adapterBinding: 'bnd_00000000-0000-4000-8000-000000000001',
+  approveGrant: 'pgr_00000000-0000-4000-8000-000000000001',
+  rejectGrant: 'pgr_00000000-0000-4000-8000-000000000002',
   command: 'adm_00000000-0000-4000-8000-000000000001',
 } as const;
 
@@ -175,6 +180,8 @@ function fakeClient(
     revokeMembership: async () => ({ operation: 'member-revoke' }) as never,
     revokeInstallation: async () =>
       ({ operation: 'installation-revoke' }) as never,
+    activateSlackApproval: async () =>
+      ({ operation: 'slack-approval-activate' }) as never,
     approveInternalLiveRelease: async () =>
       ({ operation: 'internal-live-release-approve' }) as never,
     internalLiveRolloutStatus: async () =>
@@ -437,6 +444,64 @@ describe('organization administrator CLI transport boundary', () => {
         request: { reason: 'Device retired' },
       },
     ]);
+  });
+
+  it('activates Slack approval from existing employee link IDs only', async () => {
+    const value = fixture();
+    const requests: unknown[] = [];
+    const result = {
+      identity_link_id: IDS.identityLink,
+      adapter_binding_id: IDS.adapterBinding,
+      approve_permission_grant_id: IDS.approveGrant,
+      reject_permission_grant_id: IDS.rejectGrant,
+      membership_id: IDS.targetMembership,
+      installation_id: IDS.installation,
+      activated_at: '2026-07-22T00:03:00.000Z',
+      permission_grants_created: 2 as const,
+    };
+    const client = fakeClient({
+      activateSlackApproval: async (request) => {
+        requests.push(request);
+        return result;
+      },
+    });
+    const io = capturedIo();
+
+    await expect(
+      runOrganizationAuthorityAdminCli(
+        [
+          'slack',
+          'approval',
+          'activate',
+          ...configArguments(value),
+          '--administrator-membership-id',
+          IDS.membership,
+          '--target-membership-id',
+          IDS.targetMembership,
+          '--installation-id',
+          IDS.installation,
+          '--identity-link-id',
+          IDS.identityLink,
+          '--adapter-binding-id',
+          IDS.adapterBinding,
+        ],
+        io,
+        successfulDependencies(client, { random_uuid: () => FIXED_UUID }),
+      ),
+    ).resolves.toBe(0);
+
+    expect(requests).toEqual([
+      {
+        command_id: `adm_${FIXED_UUID}`,
+        administrator_membership_id: IDS.membership,
+        target_membership_id: IDS.targetMembership,
+        installation_id: IDS.installation,
+        identity_link_id: IDS.identityLink,
+        adapter_binding_id: IDS.adapterBinding,
+      },
+    ]);
+    expect(JSON.parse(io.stdout_values.join(''))).toEqual(result);
+    expect(io.stdout_values.join('')).not.toContain('xoxb-');
   });
 });
 

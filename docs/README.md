@@ -18,8 +18,8 @@ The rest are subordinate deep-dives into one part of that map:
 - [Product runtime](architecture/product-runtime.md) — the local host around
   the core: composition, durable state, lifecycle, and safety.
 - [Identity and onboarding](architecture/identity-onboarding-and-federation.md)
-  — installation identity, organization enrollment and access, and the signed
-  federated records.
+  — installation identity, organization enrollment and access, and provider
+  identity linking.
 - [Organization control plane](architecture/organization-control-plane.md) —
   the customer-owned Slack connection, the identity link, and the action-time
   permission path.

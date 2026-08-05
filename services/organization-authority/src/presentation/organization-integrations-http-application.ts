@@ -6,23 +6,9 @@ import type {
   OrganizationSlackLinkCompleteRequestV1,
   OrganizationSlackLinkResultV1,
 } from '@echo-brain/organization-api';
-
-export interface BootstrapSlackApprovalResult {
-  connection_attempt_id: string;
-  identity_attempt_id: string;
-  identity_link_id: string;
-  connection_id: string;
-  adapter_binding_id: string;
-  approve_permission_grant_id: string;
-  reject_permission_grant_id: string;
-  organization_id: string;
-  membership_id: string;
-  installation_id: string;
-  slack_team_id: string;
-  slack_user_id: string;
-  channel_id: string;
-  created_at: string;
-}
+import type {
+  ActivatedOrganizationSlackApproval,
+} from '../application/slack-approval-activation.js';
 
 export interface OnboardOrganizationSlackToolRequest {
   command_id: string;
@@ -52,30 +38,15 @@ export interface OrganizationIntegrationsOverview {
   recent_audit: readonly Readonly<Record<string, unknown>>[];
 }
 
-export interface BootstrapOrganizationSlackApprovalRequest {
-  command_id: string;
-  administrator_membership_id: string;
-  target_membership_id: string;
-  installation_id: string;
-  adapter_instance_id: string;
-  adapter_version: string;
-  channel_id: string;
-  approve_reaction: string;
-  reject_reaction: string;
-  slack_user_id: string;
-  slack_bot_token: string;
-}
-
 export interface OrganizationIntegrationsHttpApplication {
   overview(): OrganizationIntegrationsOverview;
   onboardSlackOrganizationTool(
     input: unknown,
     signal?: AbortSignal,
   ): Promise<OnboardSlackOrganizationToolResult>;
-  bootstrapSlackApproval(
+  activateSlackApproval(
     input: unknown,
-    signal?: AbortSignal,
-  ): Promise<BootstrapSlackApprovalResult>;
+  ): ActivatedOrganizationSlackApproval;
   beginSlackIdentityLink(
     input: OrganizationSlackLinkBeginRequestV1,
     signal?: AbortSignal,

@@ -11,15 +11,14 @@ import {
 } from "node:fs";
 import { dirname, join, relative } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { AdapterRegistry } from "../../../src/core/index.js";
-import { runProductCli } from "../../../src/product/cli.js";
-import type { ProductCliDependencies } from "../../../src/product/cli.js";
-import { resolveProductStatePaths } from "../../../src/product/paths.js";
-import { founderCutoverGuardPath } from "../../../src/product/federation/cutover-fence.js";
+import { runProductCli } from "../../src/product/cli.js";
+import type { ProductCliDependencies } from "../../src/product/cli.js";
+import { resolveProductStatePaths } from "../../src/product/paths.js";
+import { founderCutoverGuardPath } from "../../src/product/retired-founder-provenance.js";
 import {
   createPrivateTestState,
   manualRuntimeConfig,
-} from "./fixtures/founder-identity.js";
+} from "./fixtures/retired-provenance.js";
 
 /**
  * Ordering, not just outcome.
@@ -50,10 +49,8 @@ interface TouchLog {
 /**
  * Every injectable seam records its own name. None of them may fire on a
  * gated branch: the classifier, lifecycle-lock acquisition, operator
- * filesystem, credential resolvers, adapter factories, the top-level and
- * composition-level identity callbacks, approval capture/gate, the
- * caller-owned state and approval stores, the custom runtime (classifier,
- * components, deadline runner, identity callbacks), and signal handlers.
+ * filesystem, credential resolvers, adapter factories, approval gate, the
+ * caller-owned state and approval stores, and signal handlers.
  */
 function instrumented(): TouchLog {
   const calls: string[] = [];
@@ -68,10 +65,6 @@ function instrumented(): TouchLog {
   const trap = (name: string): never => {
     calls.push(name);
     throw new Error(`seam ${name} must not run on a fenced state root`);
-  };
-  const ready = (name: string) => async () => {
-    calls.push(name);
-    return { ok: true, detail: "ready" };
   };
   return {
     calls,
@@ -110,21 +103,6 @@ function instrumented(): TouchLog {
         calls.push("now");
         return "2026-07-19T23:00:00.000Z";
       },
-      // Every identity readiness callback, so no permissive "ready" answer is
-      // invisible to this test.
-      identityCheck: {
-        credentialResolver: () => {
-          calls.push("identityCheck.credentialResolver");
-          return "token";
-        },
-        approvalCaptureReady: ready("identityCheck.approvalCaptureReady"),
-        attributionStorageReady: ready(
-          "identityCheck.attributionStorageReady",
-        ),
-        signedOutboxReady: ready("identityCheck.signedOutboxReady"),
-        independentCopyReady: ready("identityCheck.independentCopyReady"),
-        legacyBoundaryReady: ready("identityCheck.legacyBoundaryReady"),
-      },
       operator: {
         fileSystem: new Proxy(
           {},
@@ -139,6 +117,9 @@ function instrumented(): TouchLog {
           return "token";
         },
       },
+      internalLive: {
+        execute: (async () => trap("internalLive.execute")) as never,
+      },
       organization: {
         fetch: (async () => trap("organization.fetch")) as never,
         installationSigner: new Proxy(
@@ -150,14 +131,9 @@ function instrumented(): TouchLog {
           return "ins_forged";
         },
       },
-      // The complete custom-composition surface: a permissive capture, an
-      // auto-approving gate, a caller-owned state store and approval store, a
-      // composition-scoped identity check, and the clock/id/teardown seams.
+      // The custom-composition surface: an auto-approving gate, caller-owned
+      // state and approval stores, and the clock/id/teardown seams.
       composition: {
-        approvalFederationCapture: new Proxy(
-          {},
-          { get: () => trap("composition.approvalFederationCapture") },
-        ) as never,
         state: new Proxy(
           {},
           { get: () => trap("composition.state") },
@@ -166,27 +142,6 @@ function instrumented(): TouchLog {
           {},
           { get: () => trap("composition.approvals") },
         ) as never,
-        identityCheck: {
-          credentialResolver: () => {
-            calls.push("composition.identityCheck.credentialResolver");
-            return "token";
-          },
-          approvalCaptureReady: ready(
-            "composition.identityCheck.approvalCaptureReady",
-          ),
-          attributionStorageReady: ready(
-            "composition.identityCheck.attributionStorageReady",
-          ),
-          signedOutboxReady: ready(
-            "composition.identityCheck.signedOutboxReady",
-          ),
-          independentCopyReady: ready(
-            "composition.identityCheck.independentCopyReady",
-          ),
-          legacyBoundaryReady: ready(
-            "composition.identityCheck.legacyBoundaryReady",
-          ),
-        },
         approvalGate: {
           review: async (request) => {
             calls.push("composition.approvalGate.review");
@@ -214,41 +169,6 @@ function instrumented(): TouchLog {
         },
         closeResources: () => {
           calls.push("composition.closeResources");
-        },
-      },
-      // Custom runtime wiring: with this present the `run` branch would take
-      // the startProductRuntime path, so its classifier, components, deadline
-      // runner, and identity callbacks must all stay untouched behind the gate.
-      runtime: {
-        classifyStateFilesystem: async () => {
-          calls.push("runtime.classifyStateFilesystem");
-          return { kind: "local" as const, raw: "apfs" };
-        },
-        adapterRegistry: new AdapterRegistry(),
-        components: [
-          {
-            name: "instrumented-component",
-            dependsOn: [],
-            start: async () => trap("runtime.componentStart"),
-          },
-        ],
-        withDeadline: (() => trap("runtime.withDeadline")) as never,
-        identityCheck: {
-          credentialResolver: () => {
-            calls.push("runtime.identityCheck.credentialResolver");
-            return "token";
-          },
-          approvalCaptureReady: ready(
-            "runtime.identityCheck.approvalCaptureReady",
-          ),
-          attributionStorageReady: ready(
-            "runtime.identityCheck.attributionStorageReady",
-          ),
-          signedOutboxReady: ready("runtime.identityCheck.signedOutboxReady"),
-          independentCopyReady: ready(
-            "runtime.identityCheck.independentCopyReady",
-          ),
-          legacyBoundaryReady: ready("runtime.identityCheck.legacyBoundaryReady"),
         },
       },
     },
@@ -296,12 +216,15 @@ function snapshot(stateDirectory: string): string[] {
  * A fenced state root: leftover identity material under `identity/manifests`.
  * The observational gate checks presence, never content, so an unsigned
  * placeholder document fences exactly like the signed ones the retired mode
- * left behind; the guard-only variant is exercised by the onboard case below.
+ * left behind; the guard-only variant is exercised by the bootstrap case below.
  * The runtime config lives outside `state_dir`, which the operator requires.
  */
 function fencedProfile(): { stateDir: string; configPath: string } {
   const stateDir = createPrivateTestState(temporary, "echo-cli-dispatch-");
-  const manifests = resolveProductStatePaths(stateDir).identityManifests;
+  const manifests = join(
+    resolveProductStatePaths(stateDir).identityRoot,
+    "manifests",
+  );
   mkdirSync(manifests, { recursive: true, mode: 0o700 });
   writeFileSync(join(manifests, "idm_founder.v1.json"), "{}", { mode: 0o600 });
   chmodSync(manifests, 0o700);
@@ -314,14 +237,20 @@ function fencedProfile(): { stateDir: string; configPath: string } {
   return { stateDir, configPath };
 }
 
-const APPROVAL_ID = "a".repeat(64);
-
 /** Every gated dispatch branch, by the argv it is reached through. */
 const GATED: readonly (readonly [string, (configPath: string) => string[]])[] =
   [
     ["init", (c) => ["init", "--config", c]],
     ["reconfigure", (c) => ["reconfigure", "--config", c]],
     ["doctor", (c) => ["doctor", "--config", c]],
+    ["update apply internal-live", (c) => [
+      "update",
+      "apply",
+      "--channel",
+      "internal-live",
+      "--config",
+      c,
+    ]],
     ["organization enroll", (c) => [
       "organization",
       "enroll",
@@ -362,26 +291,7 @@ const GATED: readonly (readonly [string, (configPath: string) => string[]])[] =
       "1752966000.000001",
     ]],
     ["approvals", (c) => ["approvals", "--config", c]],
-    ["approve", (c) => [
-      "approve",
-      "--config",
-      c,
-      "--id",
-      APPROVAL_ID,
-      "--reviewer",
-      "founder",
-    ]],
-    ["reject", (c) => [
-      "reject",
-      "--config",
-      c,
-      "--id",
-      APPROVAL_ID,
-      "--reviewer",
-      "founder",
-    ]],
     ["run-once", (c) => ["run-once", "--config", c]],
-    ["run", (c) => ["run", "--config", c]],
     ["service-run", (c) => ["service-run", "--config", c]],
     ["service install", (c) => ["service", "install", "--config", c]],
     ["service start", (c) => ["service", "start", "--config", c]],
@@ -425,26 +335,6 @@ const EXCEPTIONS: readonly (readonly [
     }),
   ],
   [
-    "selftest",
-    (c) => ({
-      argv: ["selftest", "--config", c],
-      expectReached: (output, calls) => {
-        expect(calls).toContain("classifyStateFilesystem");
-        // The in-memory SQLite selftest is downstream of dispatch and unique
-        // to this branch.
-        expect(lastJson(output)).toMatchObject({
-          ok: true,
-          command: "selftest",
-          storage: {
-            status: "ok",
-            kind: "product-state-sqlite-memory",
-            migrations: "loaded",
-          },
-        });
-      },
-    }),
-  ],
-  [
     "status",
     (c) => ({
       argv: ["status", "--config", c],
@@ -453,22 +343,6 @@ const EXCEPTIONS: readonly (readonly [
         expect(lastJson(output)).toMatchObject({
           command: "status",
           code: "invalid_operator_path",
-        });
-      },
-    }),
-  ],
-  [
-    "identity-check",
-    (c) => ({
-      argv: ["identity-check", "--config", c],
-      expectReached: (output) => {
-        // The full identity report is computed and returned: the retirement is
-        // reported here, not refused at dispatch.
-        expect(lastJson(output)).toMatchObject({
-          command: "identity-check",
-          kind: "echo-founder-identity-check",
-          mode: "identity_enabled",
-          operational_ready: false,
         });
       },
     }),
@@ -547,10 +421,12 @@ describe("retired-provenance CLI dispatch gate", () => {
     },
   );
 
-  it("refuses onboard into a path whose adjacent cutover guard survived", async () => {
-    // The state root itself is gone; only the adjacent guard remains. Onboard
-    // takes its path from --state-dir, before any config exists, so this is the
-    // one gated command whose target legitimately does not exist yet.
+  it("refuses bootstrap into a path whose adjacent cutover guard survived", async () => {
+    // The state root itself is gone; only the adjacent guard remains.
+    // `bootstrap` takes its path from --state-dir, before any config exists, so
+    // it is the one gated command whose target legitimately does not exist yet.
+    // Its package and platform preconditions are satisfied here precisely so
+    // the refusal that follows can only come from the fence.
     const { stateDir, configPath } = fencedProfile();
     const parent = join(stateDir, "..");
     rmSync(stateDir, { recursive: true, force: true });
@@ -561,19 +437,44 @@ describe("retired-provenance CLI dispatch gate", () => {
     const log = instrumented();
     const code = await runProductCli(
       [
-        "onboard",
+        "bootstrap",
         "--config",
-        join(parent, "onboarded.json"),
+        join(parent, "bootstrapped.json"),
         "--state-dir",
         stateDir,
+        "--owner-email",
+        "founder@example.test",
+        "--slack-channel-id",
+        "C0BFRT0E9L2",
+        "--slack-reviewer-user-id",
+        "U0BFVNMRW65",
+        "--slack-reviewer-name",
+        "Founder",
+        "--invitation",
+        join(parent, "absent-invitation.json"),
+        "--authority-pin",
+        `sha256:${"1".repeat(64)}`,
+        "--allow-exportable-software-key",
       ],
-      log.dependencies,
+      {
+        ...log.dependencies,
+        operator: {
+          ...log.dependencies.operator,
+          platform: "darwin",
+          architecture: "arm64",
+          nodeVersion: "v22.22.1",
+          buildIdentity: {
+            source_sha: "1".repeat(40),
+            source_kind: "materialized-commit",
+          },
+        },
+      },
     );
 
     expect(code).toBe(1);
     expect(log.err()).toMatch(/retired|cannot be inspected/);
     expect(log.calls).toEqual([]);
-    // Onboard created neither the state root nor the config it was asked for.
+    // Bootstrap created neither the state root nor the config it was asked for.
     expect(lstatSync(stateDir, { throwIfNoEntry: false })).toBeUndefined();
     expect(snapshot(stateDir)).toEqual(before);
   });

@@ -14,20 +14,12 @@ import type {
   ClassifyStateFilesystem,
   ProductRuntimeConfig,
 } from './config.js';
-import {
-  DecisionNodeStore,
-  type DecisionNodeFederationCapture,
-} from './approval/decision-node-store.js';
+import { DecisionNodeStore } from './approval/decision-node-store.js';
 import { StoreBackedApprovalGate } from './approval/store-backed-approval-gate.js';
-import {
-  assertFounderIdentityAllowsPipeline,
-  FounderIdentityGateError,
-  type IdentityCheckDependencies,
-} from './federation/bootstrap/identity-check.js';
 import {
   assertFounderProvenanceRetired,
   FounderProvenanceGateError,
-} from './federation/cutover-fence.js';
+} from './retired-founder-provenance.js';
 import { resolveProductStatePaths, type ProductStatePaths } from './paths.js';
 import {
   ProductRuntimeFailure,
@@ -85,9 +77,7 @@ export interface PrepareProductCompositionOptions {
   createId?: () => string;
   healthTimeoutMs?: number;
   operationDeadlines?: Partial<CoreCycleDeadlines>;
-  identityCheck?: IdentityCheckDependencies;
   accessGate?: ProductAccessGate;
-  approvalFederationCapture?: DecisionNodeFederationCapture;
   /** Command-scoped resources not owned by the CoreStateStore. */
   closeResources?: () => void | Promise<void>;
 }
@@ -248,7 +238,7 @@ export function assertRetiredFounderProvenanceRefused(
   } catch (error) {
     if (error instanceof FounderProvenanceGateError) {
       throw new ProductRuntimeFailure(
-        'identity_not_operationally_ready',
+        'retired_founder_provenance',
         error.message,
         [...error.findings],
       );
@@ -263,8 +253,8 @@ export async function prepareProductComposition(
   options: PrepareProductCompositionOptions,
 ): Promise<ProductComposition> {
   // First statement: before the caller-supplied filesystem classifier runs,
-  // before the state root is created, and before any injected identity check,
-  // approval store, approval capture, or access gate is consulted.
+  // before the state root is created, and before any approval store or access
+  // gate is consulted.
   assertRetiredFounderProvenanceRefused(config.state_dir);
   const classification = await options.classifyStateFilesystem(
     config.state_dir,
@@ -279,34 +269,9 @@ export async function prepareProductComposition(
 
   const paths = resolveProductStatePaths(config.state_dir);
   prepareProductStateRoot(paths.root);
-  let identityEnabled = false;
-  try {
-    const report = await assertFounderIdentityAllowsPipeline(config.state_dir, {
-      ...options.identityCheck,
-      runtimeConfig: config,
-    });
-    identityEnabled = report.mode === 'identity_enabled';
-  } catch (error) {
-    if (error instanceof FounderIdentityGateError) {
-      throw new ProductRuntimeFailure(
-        'identity_not_operationally_ready',
-        error.message,
-        error.report.checks
-          .filter((item) => item.required_for_operation && !item.ok)
-          .map((item) => `${item.id}: ${item.detail}`),
-      );
-    }
-    throw error;
-  }
-  if (identityEnabled && options.approvalGate !== undefined) {
-    throw new ProductRuntimeFailure(
-      'identity_not_operationally_ready',
-      'identity-active mode rejects a caller-owned approval gate',
-      [
-        'the federation-owned approval store and capture path must observe every post-cutover resolution',
-      ],
-    );
-  }
+  // Re-check after filesystem classification and root preparation so residue
+  // appearing after the entry gate cannot reach authorization or adapters.
+  assertRetiredFounderProvenanceRefused(config.state_dir);
   // Authorization is checked before adapter construction, credential
   // resolution, health checks, or any provider contact.
   await assertProductAccess(options.accessGate);
@@ -319,9 +284,6 @@ export async function prepareProductComposition(
     new DecisionNodeStore(paths.root, {
       now: options.now,
       createId: options.createId,
-      ...(options.approvalFederationCapture === undefined
-        ? {}
-        : { federationCapture: options.approvalFederationCapture }),
     });
   await approvals.initialize();
   const approvalGate =

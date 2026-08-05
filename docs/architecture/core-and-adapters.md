@@ -14,7 +14,7 @@ provider API -> adapter -> core contracts <- core orchestration
                     v                 |
          narrow infrastructure   product composition
                                       |
-                 machine ports + local stores + federation gate
+                 machine ports + local stores + retirement fence
 ```
 
 - Core never imports adapters or vendor SDKs.
@@ -32,15 +32,17 @@ These directions are executable policy, not naming conventions:
 - `src/product/machine/**` owns operating-system and installation-bound
   capabilities such as the private-key lifecycle.
 - Local organization code receives the machine signer port and product database
-  opener; it cannot import federation implementations wholesale.
+  opener; portable trust primitives come from the shared
+  `@echo-brain/federation-protocol` workspace, and no product-local federation
+  implementation exists to import.
 
 `npm run check:boundary` enforces these rules. Test directories mirror the same
 ownership, with deliberate crossings confined to `tests/integration/`.
 Every root layer rule independently allowlists relative imports, runtime
 packages, and Node builtins; a dependency being available to the overall
 product does not make it available to core, adapters, infrastructure, storage,
-or machine code. Stable federation and local organization also have their own
-non-workspace source-boundary manifests.
+or machine code. Local organization also has its own non-workspace
+source-boundary manifest.
 
 ## Canonical flow
 
@@ -125,8 +127,9 @@ adapter.
   the assurance recorded when it cannot.
 - Accept only canonical meetings and emit only canonical signals with evidence.
 - Declare processor identity and, when model-backed, model and
-  prompt/configuration version, so the persisted processor-attribution contract
-  can record them alongside the input identity.
+  prompt/configuration version, so runtime records can distinguish which
+  processor produced a result. The retired standalone processor-attribution
+  wire contract and schema are not part of the minimum product.
 - Reject malformed output and bound retries and execution time.
 
 The bundled `llm` processor is one semantic adapter with narrow provider

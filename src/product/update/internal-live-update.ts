@@ -12,6 +12,31 @@ const SOURCE_SHA_PATTERN = /^[a-f0-9]{40}$/u;
 const ISO_INSTANT_PATTERN =
   /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{3})?Z$/u;
 const SHA256_PATTERN = /^[a-f0-9]{64}$/u;
+const INTERNAL_LIVE_VERSION_PATTERN =
+  /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)-internal\.(0|[1-9]\d*)$/u;
+
+function internalLiveVersionTuple(value: string): readonly bigint[] | null {
+  const match = INTERNAL_LIVE_VERSION_PATTERN.exec(value);
+  return match === null ? null : match.slice(1).map((part) => BigInt(part!));
+}
+
+function assertNoInternalLiveDowngrade(
+  installedVersion: string,
+  candidateVersion: string,
+): void {
+  const installed = internalLiveVersionTuple(installedVersion);
+  const candidate = internalLiveVersionTuple(candidateVersion);
+  if (installed === null || candidate === null) return;
+  for (let index = 0; index < installed.length; index += 1) {
+    if (candidate[index]! > installed[index]!) return;
+    if (candidate[index]! < installed[index]!) {
+      throw new InternalLiveUpdateError(
+        'release_verification_failed',
+        `internal-live update refuses downgrade from ${installedVersion} to ${candidateVersion}`,
+      );
+    }
+  }
+}
 
 export type InternalLiveUpdatePhase =
   | 'verified'
@@ -868,6 +893,10 @@ export async function applyInternalLiveUpdate(
   }
   const previous = await operations.currentInstallation();
   assertInstalledIdentity(previous);
+  assertNoInternalLiveDowngrade(
+    previous.product_version,
+    manifest.release_version,
+  );
   const startedAt = operations.now();
   assertIsoInstant(startedAt, 'transaction start time');
   const transaction: InternalLiveUpdateTransactionV1 = {

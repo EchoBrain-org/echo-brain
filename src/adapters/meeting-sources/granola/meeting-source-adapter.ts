@@ -26,6 +26,10 @@ import {
   type GranolaNoteDetail,
   type GranolaTranscriptItem,
 } from "./granola-api-client.js";
+import {
+  granolaRecordOwnerMatches,
+  isCanonicalGranolaOwnerEmail,
+} from "./record-owner-observation.js";
 
 export const GRANOLA_MEETING_SOURCE_ADAPTER_ID = "granola";
 export const GRANOLA_MEETING_SOURCE_ADAPTER_VERSION = "2.2.0";
@@ -83,30 +87,6 @@ function nonNegativeInteger(value: unknown, maximum: number): value is number {
     (value as number) >= 0 &&
     (value as number) <= maximum
   );
-}
-
-function normalizedEmail(value: unknown): string | null {
-  if (typeof value !== "string") return null;
-  const normalized = value.trim().toLowerCase();
-  if (normalized.length === 0 || normalized.length > 254 || /\s/.test(normalized))
-    return null;
-  const [local, domain, extra] = normalized.split("@");
-  return local !== undefined &&
-    local.length > 0 &&
-    domain !== undefined &&
-    domain.length > 0 &&
-    extra === undefined
-    ? normalized
-    : null;
-}
-
-function isCanonicalLowercaseEmail(value: unknown): value is string {
-  return typeof value === "string" && normalizedEmail(value) === value;
-}
-
-function listOwnerEmail(owner: unknown): string | null {
-  if (!isPlainObject(owner)) return null;
-  return normalizedEmail(owner["email"]);
 }
 
 function normalizedIso(value: unknown): string | null {
@@ -1006,7 +986,7 @@ export class GranolaMeetingSourceAdapter implements MeetingSourceAdapter {
     const ownerEmail = config.settings["owner_email"];
     if (
       ownerEmail !== undefined &&
-      !isCanonicalLowercaseEmail(ownerEmail)
+      !isCanonicalGranolaOwnerEmail(ownerEmail)
     ) {
       errors.push(
         "settings.owner_email must be a canonical lowercase email address",
@@ -1120,7 +1100,10 @@ export class GranolaMeetingSourceAdapter implements MeetingSourceAdapter {
         );
         if (
           this.settings.ownerEmail !== undefined &&
-          listOwnerEmail(listNote.owner) !== this.settings.ownerEmail
+          !granolaRecordOwnerMatches(
+            listNote.owner,
+            this.settings.ownerEmail,
+          )
         ) {
           continue;
         }
@@ -1131,7 +1114,10 @@ export class GranolaMeetingSourceAdapter implements MeetingSourceAdapter {
           this.settings.ownerEmail !== undefined &&
           noteDetail.owner !== undefined &&
           noteDetail.owner !== null &&
-          listOwnerEmail(noteDetail.owner) !== this.settings.ownerEmail
+          !granolaRecordOwnerMatches(
+            noteDetail.owner,
+            this.settings.ownerEmail,
+          )
         ) {
           continue;
         }

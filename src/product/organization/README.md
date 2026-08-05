@@ -30,11 +30,12 @@ echo-brain organization rebind --config <absolute-path> \
   [--authority-ca <new-internal-ca-pem>]
 ```
 
-Enrollment and founder identity use the same installation ID and signing key.
-Once an authority is pinned, product startup and every processing cycle require
-a current signed access lease. The running service renews short leases in the
-background; an expired lease or durable revocation fails closed before adapter
-contact.
+Enrollment binds the organization membership to this installation ID and its
+signing key. Retired local founder identity is never parsed or exercised; its
+residue is detected by presence alone and refused. Once an authority is
+pinned, product startup and every processing cycle require a current signed
+access lease. The running service renews short leases in the background; an
+expired lease or durable revocation fails closed before adapter contact.
 
 Local product files never import the central service. The product package
 bundles only the three shared protocol/API workspaces.

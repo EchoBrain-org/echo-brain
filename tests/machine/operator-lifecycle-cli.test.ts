@@ -18,6 +18,8 @@ import {
   type ProductCliDependencies,
 } from '../../src/product/cli.js';
 import { createDefaultAdapterFactories } from '../../src/product/default-adapters.js';
+import { loadProductRuntimeConfig } from '../../src/product/config.js';
+import { canonicalProductConfigSha256 } from '../../src/product/lifecycle-lock.js';
 import type {
   LaunchctlResult,
   LaunchctlRunner,
@@ -135,6 +137,7 @@ function adapterFactories(
   factories.register({
     kind: 'meeting-source',
     adapter_id: 'fixture-meetings',
+    validateStaticConfig: () => ({ ok: true, errors: [] }),
     create: (config): MeetingSourceAdapter => ({
       identity: {
         kind: 'meeting-source',
@@ -152,6 +155,98 @@ function adapterFactories(
     }),
   });
   return factories;
+}
+
+function rewriteConfig(
+  configPath: string,
+  changes: Record<string, unknown>,
+): void {
+  const config = JSON.parse(readFileSync(configPath, 'utf8')) as Record<
+    string,
+    unknown
+  >;
+  writeFileSync(
+    configPath,
+    `${JSON.stringify({ ...config, ...changes }, null, 2)}\n`,
+  );
+}
+
+function rewriteDecisionProcessor(
+  configPath: string,
+  adapterId: string,
+): void {
+  rewriteConfig(configPath, {
+    decision_processor: {
+      adapter_id: adapterId,
+      instance_id: 'primary',
+      settings: {},
+    },
+  });
+}
+
+/**
+ * Points the fixture config at Slack for both delivery and approval, with the
+ * bundled adapters' own static requirements satisfied so the channel rule is
+ * what decides each command.
+ */
+function rewriteSlackSurfaces(
+  configPath: string,
+  stateDirectory: string,
+  deliveryChannel: string,
+  overrides: Record<string, unknown> = {},
+): void {
+  const credential_ref = `file:${slackCredentialPath(stateDirectory)}`;
+  rewriteConfig(configPath, {
+    delivery_surfaces: [
+      {
+        adapter_id: 'slack',
+        instance_id: 'team-decisions',
+        credential_ref,
+        settings: { channel_id: deliveryChannel },
+      },
+    ],
+    approval_mode: 'adapter',
+    approval_surface: {
+      adapter_id: 'slack-reactions',
+      instance_id: 'internal-approvals',
+      credential_ref,
+      settings: {
+        channel_id: 'C0REVIEW01',
+        reviewer: { slack_user_id: 'U0REVIEWER', name: 'founder' },
+      },
+    },
+    ...overrides,
+  });
+}
+
+function slackCredentialPath(stateDirectory: string): string {
+  return join(stateDirectory, 'credentials', 'slack-bot-token');
+}
+
+/**
+ * Strips the recorded build identity, and optionally re-records the current
+ * configuration, so reconfigure sees a manifest that predates them and re-pins.
+ * Returns the manifest path.
+ */
+function legacyManifest(stateDirectory: string, configPath?: string): string {
+  const path = join(
+    stateDirectory,
+    'manifests',
+    'operator-installation.v1.json',
+  );
+  const record = JSON.parse(readFileSync(path, 'utf8')) as Record<
+    string,
+    unknown
+  >;
+  delete record['source_sha'];
+  delete record['source_kind'];
+  if (configPath !== undefined) {
+    record['config_sha256'] = canonicalProductConfigSha256(
+      loadProductRuntimeConfig(configPath),
+    );
+  }
+  writeFileSync(path, `${JSON.stringify(record, null, 2)}\n`, { mode: 0o600 });
+  return path;
 }
 
 function cliDependencies(root: string, cliPath: string, launchd: FakeLaunchd) {
@@ -179,6 +274,26 @@ function cliDependencies(root: string, cliPath: string, launchd: FakeLaunchd) {
   };
 }
 
+/**
+ * A canonical private root carrying the fixture config and CLI, plus the
+ * dependencies that drive them. Every lifecycle test starts from one.
+ */
+function installation(
+  prefix: string,
+  launchd: FakeLaunchd = fakeLaunchd(),
+  credentialRef?: string,
+) {
+  const root = realpathSync(mkdtempSync(join(tmpdir(), prefix)));
+  roots.push(root);
+  const fixture = fixtures(root, credentialRef);
+  return {
+    ...fixture,
+    root,
+    launchd,
+    dependencies: cliDependencies(root, fixture.cliPath, launchd),
+  };
+}
+
 async function command(
   argv: readonly string[],
   dependencies: ProductCliDependencies,
@@ -193,6 +308,16 @@ async function command(
   return { status, stdout: stdout.read(), stderr: stderr.read() };
 }
 
+/** A command that must succeed; failures report the CLI's own diagnosis. */
+async function expectOk(
+  argv: readonly string[],
+  dependencies: ProductCliDependencies,
+) {
+  const result = await command(argv, dependencies);
+  expect(result.status, result.stderr).toBe(0);
+  return result;
+}
+
 afterEach(() => {
   while (roots.length > 0) {
     rmSync(roots.pop()!, { recursive: true, force: true });
@@ -200,64 +325,14 @@ afterEach(() => {
 });
 
 describe('operator onboarding and lifecycle CLI', () => {
-  it('onboards a new secret-free baseline without creating an empty credential', async () => {
-    const root = realpathSync(mkdtempSync(join(tmpdir(), 'echo-onboard-')));
-    roots.push(root);
-    const configPath = join(root, 'config', 'runtime.json');
-    const stateDirectory = join(root, 'state');
-    const result = await command(
-      ['onboard', '--config', configPath, '--state-dir', stateDirectory],
-      cliDependencies(root, realpathSync(import.meta.filename), fakeLaunchd()),
-    );
-
-    expect(result.status, result.stderr).toBe(0);
-    const report = JSON.parse(result.stdout);
-    expect(report).toMatchObject({
-      ok: true,
-      command: 'onboard',
-      config_path: configPath,
-      state_dir: stateDirectory,
-      credential_path: join(stateDirectory, 'credentials', 'granola-api-key'),
-    });
-    expect(statSync(configPath).mode & 0o777).toBe(0o600);
-    expect(statSync(stateDirectory).mode & 0o777).toBe(0o700);
-    expect(statSync(join(stateDirectory, 'credentials')).mode & 0o777).toBe(
-      0o700,
-    );
-    expect(existsSync(report.credential_path)).toBe(false);
-    const config = JSON.parse(readFileSync(configPath, 'utf8'));
-    expect(config.meeting_sources[0].credential_ref).toBe(
-      `file:${report.credential_path}`,
-    );
-    expect(config.decision_processor.adapter_id).toBe('structured-text');
-    expect(config.delivery_surfaces[0].adapter_id).toBe('jsonl-outbox');
-
-    const repeated = await command(
-      ['onboard', '--config', configPath, '--state-dir', stateDirectory],
-      cliDependencies(root, realpathSync(import.meta.filename), fakeLaunchd()),
-    );
-    expect(repeated.status).toBe(1);
-    expect(repeated.stderr).toContain('refusing to replace existing config');
-  });
-
   it('initializes private operator state idempotently', async () => {
-    const root = realpathSync(mkdtempSync(join(tmpdir(), 'echo-init-')));
-    roots.push(root);
-    const fixture = fixtures(root);
-    const dependencies = cliDependencies(root, fixture.cliPath, fakeLaunchd());
+    const { dependencies, ...fixture } = installation('echo-init-');
 
-    const first = await command(
-      ['init', '--config', fixture.configPath],
-      dependencies,
-    );
-    const second = await command(
-      ['init', '--config', fixture.configPath],
-      dependencies,
-    );
+    const init = ['init', '--config', fixture.configPath];
+    const first = await expectOk(init, dependencies);
+    const second = await expectOk(init, dependencies);
 
-    expect(first.status, first.stderr).toBe(0);
     expect(JSON.parse(first.stdout).created).toBe(true);
-    expect(second.status, second.stderr).toBe(0);
     expect(JSON.parse(second.stdout).created).toBe(false);
     expect(JSON.parse(first.stdout).installation).toMatchObject({
       product_version: expect.any(String),
@@ -277,10 +352,7 @@ describe('operator onboarding and lifecycle CLI', () => {
   });
 
   it('dispatches an update even when package replacement made the install record stale', async () => {
-    const root = realpathSync(mkdtempSync(join(tmpdir(), 'echo-update-cli-')));
-    roots.push(root);
-    const fixture = fixtures(root);
-    const base = cliDependencies(root, fixture.cliPath, fakeLaunchd());
+    const { dependencies: base, ...fixture } = installation('echo-update-cli-');
     let observedConfigPath: string | undefined;
     const dependencies: ProductCliDependencies = {
       ...base,
@@ -312,9 +384,7 @@ describe('operator onboarding and lifecycle CLI', () => {
         },
       },
     };
-    expect(
-      (await command(['init', '--config', fixture.configPath], base)).status,
-    ).toBe(0);
+    await expectOk(['init', '--config', fixture.configPath], base);
     dependencies.operator = {
       ...base.operator,
       buildIdentity: {
@@ -348,37 +418,17 @@ describe('operator onboarding and lifecycle CLI', () => {
   });
 
   it('upgrades a legacy installation manifest with exact build identity', async () => {
-    const root = realpathSync(
-      mkdtempSync(join(tmpdir(), 'echo-build-identity-upgrade-')),
+    const { dependencies, ...fixture } = installation(
+      'echo-build-identity-upgrade-',
     );
-    roots.push(root);
-    const fixture = fixtures(root);
-    const dependencies = cliDependencies(root, fixture.cliPath, fakeLaunchd());
-    expect(
-      (await command(['init', '--config', fixture.configPath], dependencies))
-        .status,
-    ).toBe(0);
+    await expectOk(['init', '--config', fixture.configPath], dependencies);
 
-    const installationPath = join(
-      fixture.stateDirectory,
-      'manifests',
-      'operator-installation.v1.json',
-    );
-    const legacy = JSON.parse(readFileSync(installationPath, 'utf8')) as Record<
-      string,
-      unknown
-    >;
-    delete legacy['source_sha'];
-    delete legacy['source_kind'];
-    writeFileSync(installationPath, `${JSON.stringify(legacy, null, 2)}\n`, {
-      mode: 0o600,
-    });
+    legacyManifest(fixture.stateDirectory);
 
-    const result = await command(
+    const result = await expectOk(
       ['reconfigure', '--config', fixture.configPath],
       dependencies,
     );
-    expect(result.status, result.stderr).toBe(0);
     expect(JSON.parse(result.stdout)).toMatchObject({
       updated: true,
       installation: {
@@ -393,23 +443,19 @@ describe('operator onboarding and lifecycle CLI', () => {
       mkdtempSync(join(tmpdir(), 'echo-file-credential-')),
     );
     roots.push(root);
-    const configPath = join(root, 'config', 'runtime.json');
-    const stateDirectory = join(root, 'state');
-    const cliPath = join(root, 'echo-brain-cli.js');
-    writeFileSync(cliPath, '#!/usr/bin/env node\n');
+    const credentialPath = join(
+      root,
+      'state',
+      'credentials',
+      'meeting-source-api-key',
+    );
+    const { configPath, stateDirectory, cliPath } = fixtures(
+      root,
+      `file:${credentialPath}`,
+    );
     const launchd = fakeLaunchd();
     const dependencies = cliDependencies(root, cliPath, launchd);
-    expect(
-      (
-        await command(
-          ['onboard', '--config', configPath, '--state-dir', stateDirectory],
-          dependencies,
-        )
-      ).status,
-    ).toBe(0);
-    expect(
-      (await command(['init', '--config', configPath], dependencies)).status,
-    ).toBe(0);
+    await expectOk(['init', '--config', configPath], dependencies);
 
     const missing = await command(
       ['service', 'install', '--config', configPath],
@@ -419,17 +465,12 @@ describe('operator onboarding and lifecycle CLI', () => {
     expect(missing.stderr).toContain('is unavailable or insecure');
     expect(launchd.calls.some((args) => args[0] === 'bootstrap')).toBe(false);
 
-    const credentialPath = join(
-      stateDirectory,
-      'credentials',
-      'granola-api-key',
-    );
+    mkdirSync(join(stateDirectory, 'credentials'), {
+      recursive: true,
+      mode: 0o700,
+    });
     writeFileSync(credentialPath, 'synthetic-token\n', { mode: 0o600 });
-    const installed = await command(
-      ['service', 'install', '--config', configPath],
-      dependencies,
-    );
-    expect(installed.status, installed.stderr).toBe(0);
+    await expectOk(['service', 'install', '--config', configPath], dependencies);
     const manifest = JSON.parse(
       readFileSync(
         join(stateDirectory, 'manifests', 'operator-installation.v1.json'),
@@ -442,23 +483,14 @@ describe('operator onboarding and lifecycle CLI', () => {
   });
 
   it('installs, starts, inspects, stops, restarts, and uninstalls without touching host launchd', async () => {
-    const root = realpathSync(mkdtempSync(join(tmpdir(), 'echo-service-')));
-    roots.push(root);
-    const fixture = fixtures(root);
-    const launchd = fakeLaunchd();
-    const dependencies = cliDependencies(root, fixture.cliPath, launchd);
-    expect(
-      (await command(['init', '--config', fixture.configPath], dependencies))
-        .status,
-    ).toBe(0);
+    const { dependencies, launchd, ...fixture } = installation('echo-service-');
+    await expectOk(['init', '--config', fixture.configPath], dependencies);
 
-    const installed = await command(
+    const installed = await expectOk(
       ['service', 'install', '--config', fixture.configPath],
       dependencies,
     );
-    expect(installed.status, installed.stderr).toBe(0);
-    const installation = JSON.parse(installed.stdout);
-    expect(installation).toMatchObject({
+    expect(JSON.parse(installed.stdout)).toMatchObject({
       action: 'install',
       installed: true,
       changed: true,
@@ -504,24 +536,19 @@ describe('operator onboarding and lifecycle CLI', () => {
       service: { installed: true, loaded: true, running: true },
     });
 
-    expect(
-      (
-        await command(
-          ['service', 'stop', '--config', fixture.configPath],
-          dependencies,
-        )
-      ).status,
-    ).toBe(0);
+    await expectOk(
+      ['service', 'stop', '--config', fixture.configPath],
+      dependencies,
+    );
     const started = await command(
       ['service', 'start', '--config', fixture.configPath],
       dependencies,
     );
     expect(JSON.parse(started.stdout).service.running).toBe(true);
-    const restarted = await command(
+    await expectOk(
       ['service', 'restart', '--config', fixture.configPath],
       dependencies,
     );
-    expect(restarted.status, restarted.stderr).toBe(0);
     const restartCalls = launchd.calls.slice(
       launchd.calls.map((args) => args[0]).lastIndexOf('bootout'),
     );
@@ -534,11 +561,10 @@ describe('operator onboarding and lifecycle CLI', () => {
       ),
     ).toBe(false);
 
-    const removed = await command(
+    const removed = await expectOk(
       ['service', 'uninstall', '--config', fixture.configPath],
       dependencies,
     );
-    expect(removed.status, removed.stderr).toBe(0);
     expect(JSON.parse(removed.stdout)).toMatchObject({
       action: 'uninstall',
       installed: false,
@@ -548,35 +574,24 @@ describe('operator onboarding and lifecycle CLI', () => {
   });
 
   it('locks before creating state and rejects a service restart after config drift', async () => {
-    const root = realpathSync(
-      mkdtempSync(join(tmpdir(), 'echo-service-identity-')),
+    const { dependencies: base, ...fixture } = installation(
+      'echo-service-identity-',
     );
-    roots.push(root);
-    const fixture = fixtures(root);
-    const launchd = fakeLaunchd();
     const observations: boolean[] = [];
     const dependencies = {
-      ...cliDependencies(root, fixture.cliPath, launchd),
+      ...base,
       acquireLifecycleLock: async () => {
         observations.push(existsSync(fixture.stateDirectory));
         return async () => undefined;
       },
     };
 
-    const initialized = await command(
-      ['init', '--config', fixture.configPath],
+    await expectOk(['init', '--config', fixture.configPath], dependencies);
+    expect(observations).toEqual([false, false]);
+    await expectOk(
+      ['service', 'install', '--config', fixture.configPath],
       dependencies,
     );
-    expect(initialized.status, initialized.stderr).toBe(0);
-    expect(observations).toEqual([false, false]);
-    expect(
-      (
-        await command(
-          ['service', 'install', '--config', fixture.configPath],
-          dependencies,
-        )
-      ).status,
-    ).toBe(0);
 
     const changed = JSON.parse(
       readFileSync(fixture.configPath, 'utf8'),
@@ -590,34 +605,103 @@ describe('operator onboarding and lifecycle CLI', () => {
     expect(serviceRun.status).toBe(1);
     expect(serviceRun.stderr).toContain('installation manifest does not match');
 
-    const stopped = await command(
+    await expectOk(
       ['service', 'stop', '--config', fixture.configPath],
       dependencies,
     );
-    expect(stopped.status, stopped.stderr).toBe(0);
-    const reconfigured = await command(
+    const reconfigured = await expectOk(
       ['reconfigure', '--config', fixture.configPath],
       dependencies,
     );
-    expect(reconfigured.status, reconfigured.stderr).toBe(0);
     expect(JSON.parse(reconfigured.stdout)).toMatchObject({
       ok: true,
       command: 'reconfigure',
       updated: true,
     });
-    const started = await command(
+    await expectOk(
       ['service', 'start', '--config', fixture.configPath],
       dependencies,
     );
-    expect(started.status, started.stderr).toBe(0);
+  });
+
+  it('proves the configured adapters offline before re-pinning the installation', async () => {
+    const { dependencies, ...fixture } = installation('echo-repin-adapters-');
+    await expectOk(['init', '--config', fixture.configPath], dependencies);
+    const installationPath = legacyManifest(fixture.stateDirectory);
+    const before = readFileSync(installationPath, 'utf8');
+
+    // A bundled processor whose own static validator rejects this settings
+    // block. The static proof itself -- aggregation across every configured
+    // adapter, failing closed without a validator, and never calling `create`
+    // -- is covered by tests/product/adapter-factories.test.ts; what matters
+    // here is that reconfigure runs it before rewriting anything.
+    rewriteDecisionProcessor(fixture.configPath, 'llm');
+    const refused = await command(
+      ['reconfigure', '--config', fixture.configPath],
+      dependencies,
+    );
+    expect(refused.status).toBe(1);
+    const failure = JSON.parse(refused.stderr);
+    expect(failure.code).toBe('adapter_unavailable');
+    expect(failure.error).toContain(
+      'reconfigure was refused before the installation manifest was updated',
+    );
+    expect(failure.error).toContain('settings.model is required');
+    expect(readFileSync(installationPath, 'utf8')).toBe(before);
+  });
+
+  it('keeps Slack approval and Slack delivery on separate channels', async () => {
+    const { configPath, stateDirectory, dependencies } =
+      installation('echo-slack-split-');
+
+    // Fresh init refuses one channel carrying both review and delivery traffic,
+    // before it creates any state.
+    rewriteSlackSurfaces(configPath, stateDirectory, 'C0REVIEW01');
+    const conflicting = await command(
+      ['init', '--config', configPath],
+      dependencies,
+    );
+    expect(conflicting.status).toBe(1);
+    expect(JSON.parse(conflicting.stderr).error).toContain(
+      'Slack approval channel C0REVIEW01 is also configured for Slack delivery',
+    );
+    expect(existsSync(join(stateDirectory, 'manifests'))).toBe(false);
+
+    rewriteSlackSurfaces(configPath, stateDirectory, 'C0DELIVERY');
+    await expectOk(['init', '--config', configPath], dependencies);
+    // Reconfigure reads every configured credential ref before anything else.
+    writeFileSync(slackCredentialPath(stateDirectory), 'xoxb-fixture\n', {
+      mode: 0o600,
+    });
+
+    // A grandfathered installation whose recorded config already shares one
+    // channel may still be re-pinned onto a new package.
+    rewriteSlackSurfaces(configPath, stateDirectory, 'C0REVIEW01');
+    const installationPath = legacyManifest(stateDirectory, configPath);
+    const repinned = await expectOk(
+      ['reconfigure', '--config', configPath],
+      dependencies,
+    );
+    expect(JSON.parse(repinned.stdout).updated).toBe(true);
+
+    // Changing that grandfathered configuration brings the rule back, and the
+    // manifest that reconfigure would have rewritten is left untouched.
+    const pinned = readFileSync(installationPath, 'utf8');
+    rewriteSlackSurfaces(configPath, stateDirectory, 'C0REVIEW01', {
+      cycle_interval_ms: 90_000,
+    });
+    const changed = await command(
+      ['reconfigure', '--config', configPath],
+      dependencies,
+    );
+    expect(changed.status).toBe(1);
+    expect(JSON.parse(changed.stderr).error).toContain(
+      'give generic Slack delivery its own channel',
+    );
+    expect(readFileSync(installationPath, 'utf8')).toBe(pinned);
   });
 
   it('fails closed when launchd cannot prove that the service is absent', async () => {
-    const root = realpathSync(
-      mkdtempSync(join(tmpdir(), 'echo-launchd-inspection-')),
-    );
-    roots.push(root);
-    const fixture = fixtures(root);
     const unavailable: FakeLaunchd = {
       calls: [],
       runner: async (args) => {
@@ -625,18 +709,18 @@ describe('operator onboarding and lifecycle CLI', () => {
         return { status: 1, stdout: '', stderr: 'permission denied' };
       },
     };
-    const dependencies = cliDependencies(root, fixture.cliPath, unavailable);
-    expect(
-      (await command(['init', '--config', fixture.configPath], dependencies))
-        .status,
-    ).toBe(0);
+    const { dependencies, ...fixture } = installation(
+      'echo-launchd-inspection-',
+      unavailable,
+    );
+    await expectOk(['init', '--config', fixture.configPath], dependencies);
     const backup = await command(
       [
         'backup',
         '--config',
         fixture.configPath,
         '--backup-root',
-        join(root, 'backups'),
+        join(fixture.root, 'backups'),
         '--id',
         'must-not-run',
       ],
@@ -646,26 +730,23 @@ describe('operator onboarding and lifecycle CLI', () => {
     expect(backup.stderr).toContain(
       'launchd inspection failed: permission denied',
     );
-    expect(existsSync(join(root, 'backups', 'must-not-run'))).toBe(false);
+    expect(existsSync(join(fixture.root, 'backups', 'must-not-run'))).toBe(
+      false,
+    );
   });
 
   it('runs bounded live adapter health checks without a core cycle', async () => {
-    const root = realpathSync(mkdtempSync(join(tmpdir(), 'echo-doctor-')));
-    roots.push(root);
-    const fixture = fixtures(root);
-    const launchd = fakeLaunchd();
-    const dependencies = cliDependencies(root, fixture.cliPath, launchd);
+    const { dependencies, ...fixture } = installation('echo-doctor-');
     await command(['init', '--config', fixture.configPath], dependencies);
     await command(
       ['service', 'install', '--config', fixture.configPath],
       dependencies,
     );
 
-    const healthy = await command(
+    const healthy = await expectOk(
       ['doctor', '--config', fixture.configPath],
       dependencies,
     );
-    expect(healthy.status, healthy.stderr).toBe(0);
     const report = JSON.parse(healthy.stdout);
     expect(report.ok).toBe(true);
     expect(report.adapters).toEqual(
@@ -708,11 +789,8 @@ describe('operator onboarding and lifecycle CLI', () => {
   });
 
   it('runs local doctor checks without probing configured adapters', async () => {
-    const root = realpathSync(mkdtempSync(join(tmpdir(), 'echo-doctor-local-')));
-    roots.push(root);
-    const fixture = fixtures(root);
-    const launchd = fakeLaunchd();
-    const base = cliDependencies(root, fixture.cliPath, launchd);
+    const { dependencies: base, ...fixture } =
+      installation('echo-doctor-local-');
     const dependencies = {
       ...base,
       adapterFactories: adapterFactories('unavailable'),
@@ -723,12 +801,11 @@ describe('operator onboarding and lifecycle CLI', () => {
       dependencies,
     );
 
-    const local = await command(
+    const local = await expectOk(
       ['doctor', '--local-only', '--config', fixture.configPath],
       dependencies,
     );
 
-    expect(local.status, local.stderr).toBe(0);
     const report = JSON.parse(local.stdout);
     expect(report.ok).toBe(true);
     expect(report.checks).toHaveLength(10);
@@ -739,23 +816,14 @@ describe('operator onboarding and lifecycle CLI', () => {
   });
 
   it('backs up and restores stopped product state through the CLI', async () => {
-    const root = realpathSync(
-      mkdtempSync(join(tmpdir(), 'echo-recovery-cli-')),
-    );
-    roots.push(root);
-    const fixture = fixtures(root);
-    const launchd = fakeLaunchd();
-    const dependencies = cliDependencies(root, fixture.cliPath, launchd);
-    const backupRoot = join(root, 'backups');
+    const { dependencies, ...fixture } = installation('echo-recovery-cli-');
+    const backupRoot = join(fixture.root, 'backups');
 
-    expect(
-      (await command(['init', '--config', fixture.configPath], dependencies))
-        .status,
-    ).toBe(0);
+    await expectOk(['init', '--config', fixture.configPath], dependencies);
     const marker = join(fixture.stateDirectory, 'operator-marker.txt');
     writeFileSync(marker, 'before\n', { mode: 0o600 });
 
-    const backup = await command(
+    const backup = await expectOk(
       [
         'backup',
         '--config',
@@ -767,23 +835,17 @@ describe('operator onboarding and lifecycle CLI', () => {
       ],
       dependencies,
     );
-    expect(backup.status, backup.stderr).toBe(0);
-    const backupReport = JSON.parse(backup.stdout);
-    expect(backupReport).toMatchObject({
+    expect(JSON.parse(backup.stdout)).toMatchObject({
       ok: true,
       command: 'backup',
       backup_directory: join(backupRoot, 'known-good'),
       evidence: { backup_id: 'known-good' },
     });
 
-    expect(
-      (
-        await command(
-          ['service', 'install', '--config', fixture.configPath],
-          dependencies,
-        )
-      ).status,
-    ).toBe(0);
+    await expectOk(
+      ['service', 'install', '--config', fixture.configPath],
+      dependencies,
+    );
     const whileLoaded = await command(
       [
         'backup',
@@ -798,17 +860,13 @@ describe('operator onboarding and lifecycle CLI', () => {
     );
     expect(whileLoaded.status).toBe(1);
     expect(whileLoaded.stderr).toContain('service is loaded');
-    expect(
-      (
-        await command(
-          ['service', 'stop', '--config', fixture.configPath],
-          dependencies,
-        )
-      ).status,
-    ).toBe(0);
+    await expectOk(
+      ['service', 'stop', '--config', fixture.configPath],
+      dependencies,
+    );
 
     writeFileSync(marker, 'after\n', { mode: 0o600 });
-    const restore = await command(
+    const restore = await expectOk(
       [
         'restore',
         '--config',
@@ -822,7 +880,6 @@ describe('operator onboarding and lifecycle CLI', () => {
       ],
       dependencies,
     );
-    expect(restore.status, restore.stderr).toBe(0);
     expect(JSON.parse(restore.stdout)).toMatchObject({
       ok: true,
       command: 'restore',
@@ -835,21 +892,23 @@ describe('operator onboarding and lifecycle CLI', () => {
   });
 
   it('rejects interactive env credentials and unsupported platforms without leaking values', async () => {
-    const root = realpathSync(
-      mkdtempSync(join(tmpdir(), 'echo-unsafe-service-')),
+    const {
+      dependencies: base,
+      launchd,
+      ...fixture
+    } = installation(
+      'echo-unsafe-service-',
+      fakeLaunchd(),
+      'env:GRANOLA_API_KEY',
     );
-    roots.push(root);
-    const fixture = fixtures(root, 'env:GRANOLA_API_KEY');
-    const launchd = fakeLaunchd();
     const dependencies = {
-      ...cliDependencies(root, fixture.cliPath, launchd),
+      ...base,
       environment: { GRANOLA_API_KEY: 'must-never-appear' },
     };
-    const initialized = await command(
+    const initialized = await expectOk(
       ['init', '--config', fixture.configPath],
       dependencies,
     );
-    expect(initialized.status, initialized.stderr).toBe(0);
     expect(initialized.stdout).toContain(
       `file:${join(fixture.stateDirectory, 'credentials', 'granola-api-key')}`,
     );
@@ -862,26 +921,22 @@ describe('operator onboarding and lifecycle CLI', () => {
     expect(rejected.stderr).not.toContain('must-never-appear');
     expect(launchd.calls.some((args) => args[0] === 'bootstrap')).toBe(false);
 
-    const outsideCredential = join(root, 'outside-token');
+    const outsideCredential = join(fixture.root, 'outside-token');
     writeFileSync(outsideCredential, 'private-but-unmanaged\n', {
       mode: 0o600,
     });
-    const outsideRoot = join(root, 'outside-fixture');
+    const outsideRoot = join(fixture.root, 'outside-fixture');
     mkdirSync(outsideRoot, { mode: 0o700 });
     const outsideFixture = fixtures(outsideRoot, `file:${outsideCredential}`);
     const outsideDependencies = cliDependencies(
-      root,
+      fixture.root,
       outsideFixture.cliPath,
       launchd,
     );
-    expect(
-      (
-        await command(
-          ['init', '--config', outsideFixture.configPath],
-          outsideDependencies,
-        )
-      ).status,
-    ).toBe(0);
+    await expectOk(
+      ['init', '--config', outsideFixture.configPath],
+      outsideDependencies,
+    );
     const outsideRejected = await command(
       ['service', 'install', '--config', outsideFixture.configPath],
       outsideDependencies,
