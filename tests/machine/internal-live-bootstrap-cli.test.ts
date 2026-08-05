@@ -241,22 +241,7 @@ function fixture() {
     }
     throw new Error(`unexpected organization authority path ${url.pathname}`);
   };
-  const dependencies: ProductCliDependencies & {
-    bootstrap: {
-      readGranolaCredential: () => Promise<string>;
-      observeGranolaRecordOwner: (
-        credential: string,
-        ownerEmail: string,
-      ) => Promise<{
-        provider: 'granola';
-        relationship: 'record_owner';
-        subject: { kind: 'email'; value: string };
-        assurance: 'provider_record_owner_observed';
-        notes_examined: number;
-      }>;
-      readSlackCredential: () => Promise<string>;
-    };
-  } = {
+  const dependencies: ProductCliDependencies = {
     classifyStateFilesystem: async () => ({ kind: 'local', raw: 'apfs' }),
     adapterFactories,
     bootstrap: {
@@ -373,23 +358,14 @@ describe('internal-live employee bootstrap CLI', () => {
         assurance: 'provider_record_owner_observed',
         notes_examined: 2,
       },
-      next_steps: [
-        `echo-brain organization slack-link-begin --config ${test.configPath}`,
-        expect.stringContaining('identity_link_id and adapter_binding_id'),
-        expect.stringContaining(
-          'echo-organization-admin slack approval activate',
-        ),
-        expect.any(String),
-        expect.any(String),
-        expect.any(String),
-        expect.any(String),
-        expect.any(String),
-        expect.any(String),
-        expect.any(String),
-        expect.any(String),
-      ],
     });
     expect(report).not.toHaveProperty('approval_activation');
+    expect(report.next_steps).toContainEqual(
+      `echo-brain organization slack-link-begin --config ${test.configPath}`,
+    );
+    expect(report.next_steps).toContainEqual(
+      expect.stringContaining('echo-organization-admin slack approval activate'),
+    );
 
     const config = JSON.parse(readFileSync(test.configPath, 'utf8'));
     expect(config.meeting_sources).toHaveLength(1);
@@ -506,19 +482,6 @@ describe('internal-live employee bootstrap CLI', () => {
         join(test.stateDirectory, 'credentials', 'granola-api-key'),
       ),
     ).toBe(false);
-
-    test.failGranolaOwnerObservation(null);
-    const retry = await command(argv, test.dependencies);
-
-    expect(retry.status, retry.stderr).toBe(0);
-    expect(test.granolaCredentialReads()).toBe(2);
-    expect(test.granolaOwnerObservations()).toBe(2);
-    expect(test.slackCredentialReads()).toBe(1);
-    expect(test.authorityPaths).toEqual([
-      '/v1/authority-descriptor',
-      '/v1/authority-descriptor',
-      '/v1/enrollments',
-    ]);
   });
 
   it('resumes an exact enrollment after the Authority response is lost', async () => {

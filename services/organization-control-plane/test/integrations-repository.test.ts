@@ -88,39 +88,39 @@ function organizationToolInput(
   };
 }
 
-function linkSlackApprovalIdentity(
+const INSTALLATION = {
+  authority_id: AUTHORITY_ID,
+  organization_id: ORGANIZATION_ID,
+  enrollment_id: "enr_test-enrollment",
+  principal_id: PRINCIPAL_ID,
+  membership_id: MEMBERSHIP_ID,
+  installation_id: INSTALLATION_ID,
+  installation_key_id: digest("installation-key"),
+} as const;
+
+function completeSlackIdentityLink(
   repository: OrganizationIntegrationsRepository,
+  label: string,
+  secretHandle: string,
 ): CompletedSlackIdentityLink {
   repository.onboardSlackOrganizationTool(
-    organizationToolInput(
-      "organization-slack-before-approval-activation",
-      "sch_11111111-1111-4111-8111-111111111111",
-    ),
+    organizationToolInput(`organization-slack-${label}`, secretHandle),
   );
   const organizationTool = repository.activeSlackOrganizationTool()!;
-  const installation = {
-    authority_id: AUTHORITY_ID,
-    organization_id: ORGANIZATION_ID,
-    enrollment_id: "enr_test-enrollment",
-    principal_id: PRINCIPAL_ID,
-    membership_id: MEMBERSHIP_ID,
-    installation_id: INSTALLATION_ID,
-    installation_key_id: digest("installation-key"),
-  } as const;
   const begun = repository.beginSlackIdentityLinkChallenge({
-    request_sha256: digest("approval-activation-link-begin"),
-    challenge_code_sha256: digest("approval-activation-challenge"),
-    installation,
+    request_sha256: digest(`${label}-begin`),
+    challenge_code_sha256: digest(`${label}-challenge`),
+    installation: INSTALLATION,
     organization_tool: organizationTool,
     now: NOW,
   });
   return repository.completeSlackIdentityLinkChallenge({
-    command_id: "slc_approval-activation-link",
-    command_sha256: digest("approval-activation-link"),
+    command_id: `slc_${label}`,
+    command_sha256: digest(`${label}-link`),
     challenge_attempt_id: begun.challenge_attempt_id,
-    challenge_code_sha256: digest("approval-activation-challenge"),
+    challenge_code_sha256: digest(`${label}-challenge`),
     challenge_message_ts: "1753822800.000001",
-    installation,
+    installation: INSTALLATION,
     organization_tool: organizationTool,
     observed: {
       team_id: "T123TEAM",
@@ -128,7 +128,7 @@ function linkSlackApprovalIdentity(
       channel_id: "C123CHANNEL",
       challenge_message_ts: "1753822800.000001",
       reply_message_ts: "1753822801.000001",
-      verification_evidence_sha256: digest("approval-activation-observation"),
+      verification_evidence_sha256: digest(`${label}-observation`),
     },
     adapter_id: "slack-reactions",
     adapter_instance_id: "founder-approvals",
@@ -286,15 +286,7 @@ describe("organization integrations repository", () => {
       ),
     );
     const organizationTool = repository.activeSlackOrganizationTool()!;
-    const installation = {
-      authority_id: AUTHORITY_ID,
-      organization_id: ORGANIZATION_ID,
-      enrollment_id: "enr_test-enrollment",
-      principal_id: PRINCIPAL_ID,
-      membership_id: MEMBERSHIP_ID,
-      installation_id: INSTALLATION_ID,
-      installation_key_id: digest("installation-key"),
-    } as const;
+    const installation = INSTALLATION;
     const begun = repository.beginSlackIdentityLinkChallenge({
       request_sha256: digest("employee-link-begin-one"),
       challenge_code_sha256: digest("challenge-one"),
@@ -448,12 +440,11 @@ describe("organization integrations repository", () => {
         authority_id: AUTHORITY_ID,
       },
     );
-    const linked = linkSlackApprovalIdentity(repository);
-    const attemptsBefore = (
-      integrationDatabase
-        .prepare("SELECT COUNT(*) AS count FROM organization_connection_attempts")
-        .get() as { count: number }
-    ).count;
+    const linked = completeSlackIdentityLink(
+      repository,
+      "approval-activation",
+      "sch_11111111-1111-4111-8111-111111111111",
+    );
     const input = approvalActivationInput(linked);
     const result = repository.activateExistingSlackApproval(input);
 
@@ -523,15 +514,6 @@ describe("organization integrations repository", () => {
       "slack_identity_link.completed",
       "organization_tool.slack.onboarded",
     ]);
-    expect(
-      (
-        integrationDatabase
-          .prepare(
-            "SELECT COUNT(*) AS count FROM organization_connection_attempts",
-          )
-          .get() as { count: number }
-      ).count,
-    ).toBe(attemptsBefore);
     repository.close();
   });
 
@@ -544,7 +526,11 @@ describe("organization integrations repository", () => {
         authority_id: AUTHORITY_ID,
       },
     );
-    const linked = linkSlackApprovalIdentity(repository);
+    const linked = completeSlackIdentityLink(
+      repository,
+      "approval-activation",
+      "sch_11111111-1111-4111-8111-111111111111",
+    );
     const created = repository.activateExistingSlackApproval(
       approvalActivationInput(linked, "approval-activation-create-pair"),
     );
@@ -594,7 +580,11 @@ describe("organization integrations repository", () => {
         authority_id: AUTHORITY_ID,
       },
     );
-    const linked = linkSlackApprovalIdentity(repository);
+    const linked = completeSlackIdentityLink(
+      repository,
+      "approval-activation",
+      "sch_11111111-1111-4111-8111-111111111111",
+    );
     const input = approvalActivationInput(linked);
 
     for (const mismatch of [
@@ -711,51 +701,11 @@ describe("organization integrations repository", () => {
       integrationDatabase,
       { organization_id: ORGANIZATION_ID, authority_id: AUTHORITY_ID },
     );
-    repository.onboardSlackOrganizationTool(
-      organizationToolInput(
-        "organization-slack-audit-chain",
-        "sch_55555555-5555-4555-8555-555555555555",
-      ),
+    completeSlackIdentityLink(
+      repository,
+      "audit-chain",
+      "sch_55555555-5555-4555-8555-555555555555",
     );
-    const organizationTool = repository.activeSlackOrganizationTool()!;
-    const installation = {
-      authority_id: AUTHORITY_ID,
-      organization_id: ORGANIZATION_ID,
-      enrollment_id: "enr_test-enrollment",
-      principal_id: PRINCIPAL_ID,
-      membership_id: MEMBERSHIP_ID,
-      installation_id: INSTALLATION_ID,
-      installation_key_id: digest("installation-key"),
-    } as const;
-    const begun = repository.beginSlackIdentityLinkChallenge({
-      request_sha256: digest("audit-chain-begin"),
-      challenge_code_sha256: digest("audit-chain-challenge"),
-      installation,
-      organization_tool: organizationTool,
-      now: NOW,
-    });
-    repository.completeSlackIdentityLinkChallenge({
-      command_id: "slc_audit-chain-link",
-      command_sha256: digest("audit-chain-link"),
-      challenge_attempt_id: begun.challenge_attempt_id,
-      challenge_code_sha256: digest("audit-chain-challenge"),
-      challenge_message_ts: "1753822800.000001",
-      installation,
-      organization_tool: organizationTool,
-      observed: {
-        team_id: "T123TEAM",
-        user_id: "U_ZHEN",
-        channel_id: "C123CHANNEL",
-        challenge_message_ts: "1753822800.000001",
-        reply_message_ts: "1753822801.000001",
-        verification_evidence_sha256: digest("audit-chain-observation"),
-      },
-      adapter_id: "slack-reactions",
-      adapter_instance_id: "founder-approvals",
-      adapter_version: "1.0.0",
-      authority_checked_at: NOW,
-      now: NOW,
-    });
 
     const rows = integrationDatabase
       .prepare(

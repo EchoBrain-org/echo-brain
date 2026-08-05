@@ -142,12 +142,13 @@ async function createAdapter(
   return adapter;
 }
 
-function createFactoryContext(
+export async function createConfiguredAdapterRegistry(
   config: ProductRuntimeConfig,
-  options: CreateConfiguredAdapterRegistryOptions,
-): ProductAdapterFactoryContext {
+  factories: ProductAdapterFactoryRegistry,
+  options: CreateConfiguredAdapterRegistryOptions = {},
+): Promise<AdapterRegistry> {
   const environment = options.environment ?? process.env;
-  return {
+  const context: ProductAdapterFactoryContext = {
     stateDirectory: config.state_dir,
     environment,
     credentialResolver:
@@ -161,34 +162,6 @@ function createFactoryContext(
       ? {}
       : { approvalActionAuthorizer: options.approvalActionAuthorizer }),
   };
-}
-
-/**
- * Construct only the configured decision processor through its installed
- * factory. Reconfigure's processor proofs — the changed-configuration live
- * activation check and the offline package-only compatibility check — use
- * this to show the configured processor is actually supported by this
- * package without constructing the rest of the configured adapters.
- */
-export async function createConfiguredDecisionProcessor(
-  config: ProductRuntimeConfig,
-  factories: ProductAdapterFactoryRegistry,
-  options: CreateConfiguredAdapterRegistryOptions = {},
-): Promise<AnyAdapter> {
-  return await createAdapter(
-    factories,
-    'decision-processor',
-    config.decision_processor,
-    createFactoryContext(config, options),
-  );
-}
-
-export async function createConfiguredAdapterRegistry(
-  config: ProductRuntimeConfig,
-  factories: ProductAdapterFactoryRegistry,
-  options: CreateConfiguredAdapterRegistryOptions = {},
-): Promise<AdapterRegistry> {
-  const context = createFactoryContext(config, options);
   const requested = configuredAdapterRequests(config);
   assertConfiguredAdapterFactoriesAvailable(config, factories);
   const registry = new AdapterRegistry();

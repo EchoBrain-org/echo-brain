@@ -844,24 +844,6 @@ describe('organization administrator CLI argument bounds', () => {
       ],
     },
     {
-      name: 'noncanonical Slack identity link',
-      arguments_: [
-        'slack',
-        'approval',
-        'activate',
-        '--administrator-membership-id',
-        IDS.membership,
-        '--target-membership-id',
-        IDS.targetMembership,
-        '--installation-id',
-        IDS.installation,
-        '--identity-link-id',
-        'clm_not-a-uuid',
-        '--adapter-binding-id',
-        IDS.adapterBinding,
-      ],
-    },
-    {
       name: 'oversized lifetime',
       arguments_: [
         'invitation',

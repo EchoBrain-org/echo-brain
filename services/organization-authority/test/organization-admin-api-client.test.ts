@@ -401,7 +401,7 @@ describe('organization administrator API client requests', () => {
       options({
         fetch: (async () =>
           jsonResponse(
-            { ...activatedSlackApproval, unexpected: true },
+            { ...activatedSlackApproval, permission_grants_created: 1 },
             201,
           )) as typeof fetch,
       }),

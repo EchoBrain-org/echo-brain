@@ -3,7 +3,6 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import {
-  approvalDeliveryChannelIssues,
   classifyMountTable,
   createStateFilesystemClassifier,
   ProductConfigError,
@@ -204,115 +203,6 @@ describe('product runtime configuration', () => {
     });
   });
 
-  it('loads a legacy equal-channel Slack config and reports the policy issues', () => {
-    const config = validateProductRuntimeConfig(
-      validConfig({
-        delivery_surfaces: [
-          {
-            adapter_id: 'slack',
-            instance_id: 'team',
-            credential_ref: 'env:SLACK_DELIVERY_TOKEN',
-            settings: { channel_id: 'C123' },
-          },
-          {
-            adapter_id: 'slack',
-            instance_id: 'announcements',
-            credential_ref: 'env:SLACK_DELIVERY_TOKEN',
-            settings: { channel_id: ' C123 ' },
-          },
-        ],
-        approval_mode: 'adapter',
-        approval_surface: {
-          adapter_id: 'slack-reactions',
-          instance_id: 'founder',
-          credential_ref: 'env:SLACK_BOT_TOKEN',
-          settings: {
-            channel_id: 'C123',
-            reviewer: { slack_user_id: 'U123', name: 'founder' },
-          },
-        },
-      }),
-    );
-    expect(config.approval_mode).toBe('adapter');
-    expect(approvalDeliveryChannelIssues(config)).toEqual([
-      '/approval_surface/settings/channel_id must differ from the Slack delivery channel at /delivery_surfaces/0/settings/channel_id',
-      '/approval_surface/settings/channel_id must differ from the Slack delivery channel at /delivery_surfaces/1/settings/channel_id',
-    ]);
-  });
-
-  it('accepts a Slack approval channel distinct from every Slack delivery channel', () => {
-    const config = validateProductRuntimeConfig(
-      validConfig({
-        delivery_surfaces: [
-          {
-            adapter_id: 'slack',
-            instance_id: 'team',
-            credential_ref: 'env:SLACK_DELIVERY_TOKEN',
-            settings: { channel_id: 'C456' },
-          },
-        ],
-        approval_mode: 'adapter',
-        approval_surface: {
-          adapter_id: 'slack-reactions',
-          instance_id: 'founder',
-          credential_ref: 'env:SLACK_BOT_TOKEN',
-          settings: {
-            channel_id: 'C123',
-            reviewer: { slack_user_id: 'U123', name: 'founder' },
-          },
-        },
-      }),
-    );
-    expect(config).toMatchObject({ approval_mode: 'adapter' });
-    expect(approvalDeliveryChannelIssues(config)).toEqual([]);
-  });
-
-  it('reports a Slack channel collision as a policy issue while staying offline-successful', async () => {
-    const configPath = writeConfig(
-      validConfig({
-        delivery_surfaces: [
-          {
-            adapter_id: 'slack',
-            instance_id: 'team',
-            credential_ref: 'env:SLACK_DELIVERY_TOKEN',
-            settings: { channel_id: 'C123' },
-          },
-        ],
-        approval_mode: 'adapter',
-        approval_surface: {
-          adapter_id: 'slack-reactions',
-          instance_id: 'founder',
-          credential_ref: 'env:SLACK_BOT_TOKEN',
-          settings: {
-            channel_id: 'C123',
-            reviewer: { slack_user_id: 'U123', name: 'founder' },
-          },
-        },
-      }),
-    );
-    let stdout = '';
-    const status = await runProductCli(
-      ['validate-config', '--config', configPath],
-      {
-        classifyStateFilesystem: async () => ({ kind: 'local', raw: 'apfs' }),
-        stdout: { write: (chunk) => ((stdout += String(chunk)), true) },
-        stderr: { write: () => true },
-      },
-    );
-    expect(status).toBe(0);
-    const report = JSON.parse(stdout) as {
-      ok: boolean;
-      config_policy: { ok: boolean; issues: string[] };
-      runtime_readiness: { checked: boolean };
-    };
-    expect(report.ok).toBe(true);
-    expect(report.config_policy.ok).toBe(false);
-    expect(report.config_policy.issues).toEqual([
-      '/approval_surface/settings/channel_id must differ from the Slack delivery channel at /delivery_surfaces/0/settings/channel_id',
-    ]);
-    expect(report.runtime_readiness.checked).toBe(false);
-  });
-
   it('accepts an explicit extraction timeout for slow decision processors', () => {
     expect(
       validateProductRuntimeConfig(
@@ -393,7 +283,6 @@ describe('product runtime configuration', () => {
         maturity: string;
         wedge_executed: boolean;
         adapters_loaded: boolean;
-        config_policy: { ok: boolean; issues: string[] };
         runtime_readiness: { checked: boolean; detail: string };
         adapter_references: {
           meeting_sources: Array<{ adapter_id: string; instance_id: string }>;
@@ -407,11 +296,7 @@ describe('product runtime configuration', () => {
       expect(report.maturity).toBe('DEV');
       expect(report.wedge_executed).toBe(false);
       expect(report.adapters_loaded).toBe(false);
-      expect(report.config_policy).toEqual({ ok: true, issues: [] });
       expect(report.runtime_readiness.checked).toBe(false);
-      expect(report.runtime_readiness.detail).toContain(
-        'no adapter was constructed',
-      );
       expect(report.runtime_readiness.detail).toContain(
         'no credential, provider, or service health was verified',
       );

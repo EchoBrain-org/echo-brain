@@ -307,12 +307,6 @@ describe('INTERNAL LIVE release tooling', () => {
     expect(bootstrap).toContain(
       'echo-organization-admin slack approval activate',
     );
-    expect(bootstrap).toMatch(
-      /verified identity link[\s\S]+?prerequisite and audit reference/u,
-    );
-    expect(bootstrap).toMatch(
-      /two direct grants[\s\S]+?scoped to\s+the exact adapter binding, principal, and membership/u,
-    );
     expect(bootstrap).toContain(
       'echo-brain approvals --config "$ECHO_CONFIG"',
     );

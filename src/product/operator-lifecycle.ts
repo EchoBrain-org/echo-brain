@@ -3,7 +3,6 @@ import { homedir } from 'node:os';
 import { dirname, isAbsolute, join, resolve } from 'node:path';
 import type { AdapterDiagnostic } from './adapter-diagnostics.js';
 import {
-  approvalDeliveryChannelIssues,
   validateProductRuntimeConfig,
   type ProductRuntimeConfig,
   type StateFilesystemClassification,
@@ -57,8 +56,7 @@ export type OperatorFailureCode =
   | 'installation_conflict'
   | 'service_conflict'
   | 'service_command_failed'
-  | 'decision_processor_rejected'
-  | 'config_policy_rejected';
+  | 'adapter_unavailable';
 
 export class ProductOperatorError extends Error {
   constructor(
@@ -87,29 +85,15 @@ export interface ProductOperatorDependencies {
   >;
   resolveCredential?: ProductCredentialResolver;
   /**
-   * Live activation proof for the configured decision processor. Reconfigure
-   * requires it whenever the whole canonical configuration hash changed —
-   * V1 deliberately uses that coarse trigger because no prior-config state
-   * is persisted, so a processor-only change cannot be isolated. Re-pinning
-   * an unchanged configuration never invokes it. The CLI always supplies the
-   * default implementation; when absent the operator fails closed rather
-   * than accepting an unproven changed configuration.
+   * Offline package safety check reconfigure runs before rewriting the
+   * installation record: every configured adapter factory must exist in the
+   * installed package. It must not construct an adapter, resolve a
+   * credential, or contact a provider, so update and recovery never depend
+   * on provider uptime. Re-pinning an exactly unchanged record skips it.
+   * The CLI always supplies the default implementation; when absent the
+   * operator fails closed rather than re-pinning an unverified package.
    */
-  verifyDecisionProcessorActivation?: (
-    config: ProductRuntimeConfig,
-  ) => Promise<void>;
-  /**
-   * Offline package-compatibility proof for a package-only re-pin: the
-   * config hash is unchanged but the build/package identity moved, so
-   * reconfigure verifies only that the installed package still supports the
-   * configured processor (installed factory plus the adapter's own static
-   * validation). It must not contact a provider, so update and recovery
-   * never depend on provider uptime. Exact unchanged records skip even
-   * this. Fails closed when absent, like the activation verifier.
-   */
-  verifyDecisionProcessorCompatibility?: (
-    config: ProductRuntimeConfig,
-  ) => Promise<void>;
+  verifyConfiguredAdapterFactories?: (config: ProductRuntimeConfig) => void;
 }
 
 export interface ProductInstallationRecord {
@@ -653,12 +637,9 @@ export class ProductOperator {
   private readonly productVersion: string;
   private readonly buildIdentity: ProductOperatorDependencies['buildIdentity'];
   private readonly resolveCredential: ProductCredentialResolver;
-  private readonly verifyProcessorActivation: (
+  private readonly verifyAdapterFactories: (
     config: ProductRuntimeConfig,
-  ) => Promise<void>;
-  private readonly verifyProcessorCompatibility: (
-    config: ProductRuntimeConfig,
-  ) => Promise<void>;
+  ) => void;
   private readonly context: OperatorContext;
 
   constructor(
@@ -676,18 +657,11 @@ export class ProductOperator {
     this.buildIdentity = dependencies.buildIdentity;
     this.resolveCredential =
       dependencies.resolveCredential ?? createProductCredentialResolver();
-    this.verifyProcessorActivation =
-      dependencies.verifyDecisionProcessorActivation ??
-      (async () => {
+    this.verifyAdapterFactories =
+      dependencies.verifyConfiguredAdapterFactories ??
+      (() => {
         throw new Error(
-          'no decision-processor activation verifier is installed for this operator',
-        );
-      });
-    this.verifyProcessorCompatibility =
-      dependencies.verifyDecisionProcessorCompatibility ??
-      (async () => {
-        throw new Error(
-          'no decision-processor compatibility verifier is installed for this operator',
+          'no configured-adapter-factory verifier is installed for this operator',
         );
       });
     this.context = this.createContext(
@@ -1127,20 +1101,6 @@ export class ProductOperator {
         'an incompatible operator installation already owns this state directory',
       );
     }
-    // Fresh installations must satisfy product config policy before any
-    // manifest exists. This is a pure configuration check — no adapter is
-    // constructed and no provider is contacted. Idempotent re-init of an
-    // existing (possibly grandfathered) record is not re-checked so
-    // recovery keeps working.
-    if (existing === null) {
-      const policyIssues = approvalDeliveryChannelIssues(this.config);
-      if (policyIssues.length > 0) {
-        throw new ProductOperatorError(
-          'config_policy_rejected',
-          `configuration was refused before the installation manifest was created: ${policyIssues.join('; ')}`,
-        );
-      }
-    }
     const statePaths = resolveProductStatePaths(this.context.stateDirectory);
     for (const directory of [
       statePaths.root,
@@ -1208,42 +1168,21 @@ export class ProductOperator {
       );
     }
     this.assertServiceCredentialsReadable();
-    // Changed configuration content must satisfy product config policy and
-    // prove the decision processor activates on this installed package
-    // before the manifest re-pins it. V1 triggers on the whole canonical
-    // config hash — deliberately conservative, since no prior-config state
-    // exists to isolate a processor-only change. A package-only re-pin
-    // (identical config hash, changed build identity) keeps grandfathered
-    // configs recoverable and verifies only offline package compatibility;
-    // an exactly unchanged record runs no processor check at all.
-    if (existing.config_sha256 !== expected.config_sha256) {
-      const policyIssues = approvalDeliveryChannelIssues(this.config);
-      if (policyIssues.length > 0) {
-        throw new ProductOperatorError(
-          'config_policy_rejected',
-          `changed configuration was refused before the installation manifest was updated: ${policyIssues.join('; ')}`,
-        );
-      }
-      try {
-        await this.verifyProcessorActivation(this.config);
-      } catch (error) {
-        throw new ProductOperatorError(
-          'decision_processor_rejected',
-          `changed configuration was refused before the installation manifest was updated: ${(error as Error).message}`,
-        );
-      }
-    } else if (!sameRecord(existing, expected)) {
-      try {
-        await this.verifyProcessorCompatibility(this.config);
-      } catch (error) {
-        throw new ProductOperatorError(
-          'decision_processor_rejected',
-          `package re-pin was refused before the installation manifest was updated: ${(error as Error).message}`,
-        );
-      }
-    }
     const updated = !sameRecord(existing, expected);
     if (updated) {
+      // Any rewrite of the installation record — changed configuration
+      // content or a package/build re-pin — first proves offline that every
+      // configured adapter factory exists in the installed package. No
+      // adapter is constructed and no provider is contacted; an exactly
+      // unchanged record skips the check.
+      try {
+        this.verifyAdapterFactories(this.config);
+      } catch (error) {
+        throw new ProductOperatorError(
+          'adapter_unavailable',
+          `reconfigure was refused before the installation manifest was updated: ${(error as Error).message}`,
+        );
+      }
       this.fileSystem.writePrivate(
         this.context.installationPath,
         `${JSON.stringify(expected, null, 2)}\n`,

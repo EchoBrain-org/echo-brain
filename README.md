@@ -529,7 +529,7 @@ retaining one canonical output schema and validator:
 Only Ollama accepts a custom `base_url`; hosted credentials cannot be redirected
 to an arbitrary endpoint.
 
-## Slack approval and delivery
+## Slack approval
 
 Slack remains a first-class internal surface. For reaction approval:
 
@@ -559,32 +559,10 @@ onboarding. V1 does not support private approval channels. The bot needs
 `chat:write`, `reactions:read`, and the public channel history scope. Only
 the configured reviewer can resolve a brief.
 
-Slack delivery is independent of Slack approval and must use a different
-channel than the approval surface. This is a disclosure and workflow
-boundary: review traffic stays in the review channel. Existing installations
-whose approval and delivery channels are equal remain loadable and can still
-re-pin unchanged or package-only updates for update/recovery, but the
-delivery channel must move before a changed configuration is accepted:
-
-```json
-{
-  "delivery_surfaces": [
-    {
-      "adapter_id": "slack",
-      "instance_id": "team-decisions",
-      "credential_ref": "file:/Users/you/.echo-brain/credentials/slack-bot-token",
-      "settings": {
-        "channel_id": "C0789TEAMX",
-        "request_timeout_ms": 30000
-      }
-    }
-  ]
-}
-```
-
-Confirmed Slack message identities are persisted as delivery receipts.
-Ambiguous post outcomes stop automatic retry so the product does not knowingly
-duplicate a message.
+V1 delivers approved briefs to the local JSONL outbox; Slack carries approval
+only. Generic Slack delivery already exists but is not enabled in the Internal
+Live V1 profile. If it is enabled later, give it a different channel than the
+approval surface so review traffic stays in the review channel.
 
 ## Day-to-day commands
 
@@ -641,9 +619,11 @@ echo-brain service uninstall --config /absolute/path/runtime.json
 `install`, `start`, and `restart` re-check that every configured credential
 reference is a private `file:` path inside the managed credentials directory
 before touching launchd. `reconfigure` re-records the installation manifest
-after the configuration content or product version changes; it requires the
-service to be stopped and refuses to change the config path, state directory,
-Node, CLI, or service identity.
+after the configuration content or product version changes; before rewriting
+the manifest it verifies offline that every configured adapter factory exists —
+it constructs no adapter and contacts no provider. It requires the service to
+be stopped and refuses to change the config path, state directory, Node, CLI,
+or service identity.
 
 ## Organization onboarding and access
 

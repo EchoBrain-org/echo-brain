@@ -78,22 +78,6 @@ async function healthWithDeadline(
   }
 }
 
-/**
- * Diagnose one configured adapter instance: static `validateConfig` first,
- * then a deadline-bounded live `healthCheck`. This is the same primitive the
- * full `diagnoseConfiguredAdapters` sweep applies to every configured
- * adapter; reconfigure's changed-configuration decision-processor activation
- * proof reuses it for a single instance.
- */
-export async function diagnoseAdapterInstance(
-  kind: AdapterKind,
-  config: AdapterConfig,
-  adapter: Adapter | undefined,
-  timeoutMs = 10_000,
-): Promise<AdapterDiagnostic> {
-  return await diagnoseOne({ kind, config, adapter }, timeoutMs);
-}
-
 async function diagnoseOne(
   configured: ConfiguredAdapter,
   timeoutMs: number,

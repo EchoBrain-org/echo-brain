@@ -23,7 +23,6 @@ import {
   type ProductComposition,
 } from "./composition.js";
 import {
-  approvalDeliveryChannelIssues,
   classifyStateFilesystem,
   loadProductRuntimeConfig,
   type ClassifyStateFilesystem,
@@ -37,10 +36,6 @@ import {
   type ProductRuntimeDependencies,
 } from "./runtime.js";
 import { diagnoseConfiguredAdapters } from "./adapter-diagnostics.js";
-import {
-  verifyDecisionProcessorActivation,
-  verifyDecisionProcessorCompatibility,
-} from "./processor-activation.js";
 import {
   createProductBootstrapCredential,
   createProductOnboardConfig,
@@ -1130,39 +1125,17 @@ function createProductOperator(
   dependencies: ProductCliDependencies,
 ): ProductOperator {
   const configured = dependencies.operator ?? {};
-  const processorVerifierOptions = () => ({
-    ...(dependencies.environment === undefined
-      ? {}
-      : { environment: dependencies.environment }),
-    ...(dependencies.now === undefined ? {} : { now: dependencies.now }),
-    ...(configured.resolveCredential === undefined
-      ? {}
-      : { credentialResolver: configured.resolveCredential }),
-  });
   return new ProductOperator(configPath, config, {
     ...configured,
     cliPath: configured.cliPath ?? CLI_PATH,
     productVersion: configured.productVersion ?? PRODUCT_VERSION,
     buildIdentity: configured.buildIdentity ?? packagedBuildIdentity(),
-    verifyDecisionProcessorActivation:
-      configured.verifyDecisionProcessorActivation ??
-      (async (changedConfig) => {
-        await verifyDecisionProcessorActivation(
-          changedConfig,
+    verifyConfiguredAdapterFactories:
+      configured.verifyConfiguredAdapterFactories ??
+      ((recordedConfig) => {
+        assertConfiguredAdapterFactoriesAvailable(
+          recordedConfig,
           dependencies.adapterFactories ?? createDefaultAdapterFactories(),
-          {
-            ...processorVerifierOptions(),
-            healthTimeoutMs: dependencies.doctorHealthTimeoutMs ?? 10_000,
-          },
-        );
-      }),
-    verifyDecisionProcessorCompatibility:
-      configured.verifyDecisionProcessorCompatibility ??
-      (async (repinnedConfig) => {
-        await verifyDecisionProcessorCompatibility(
-          repinnedConfig,
-          dependencies.adapterFactories ?? createDefaultAdapterFactories(),
-          processorVerifierOptions(),
         );
       }),
   });
@@ -2706,9 +2679,6 @@ export async function runProductCli(
         return 1;
       }
     }
-    // Channel-separation policy is reported, not enforced, so a
-    // grandfathered equal-channel profile can still diagnose itself offline.
-    const policyIssues = approvalDeliveryChannelIssues(config);
     print(stdout, {
       ok: true,
       command: parsed.command,
@@ -2717,10 +2687,6 @@ export async function runProductCli(
       maturity: "DEV",
       adapter_references: configuredAdapterReferences(config),
       adapters_loaded: false,
-      config_policy: {
-        ok: policyIssues.length === 0,
-        issues: policyIssues,
-      },
       runtime_readiness: {
         checked: false,
         detail:
