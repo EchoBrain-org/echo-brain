@@ -5,9 +5,11 @@ import type {
   MeetingSourceAdapter,
 } from '../../src/core/index.js';
 import {
+  assertConfiguredAdaptersValid,
   createConfiguredAdapterRegistry,
   ProductAdapterFactoryRegistry,
 } from '../../src/product/adapter-factories.js';
+import { createDefaultAdapterFactories } from '../../src/product/default-adapters.js';
 import { validateProductRuntimeConfig } from '../../src/product/config.js';
 import type { ApprovalActionAuthorizer } from '../../src/adapters/approval-surfaces/slack-reactions/slack-reactions-approval-surface.js';
 
@@ -140,9 +142,81 @@ describe('product adapter factories', () => {
     );
   });
 
+  it('proves configured adapters statically, aggregating every rejection', () => {
+    const factories = new ProductAdapterFactoryRegistry();
+    // `create` is the only path to a credential resolver, `fetch`, and
+    // `healthCheck`, so counting it counts all of them.
+    let creates = 0;
+    const register = (
+      kind: 'meeting-source' | 'decision-processor' | 'delivery-surface',
+      adapterId: string,
+      validateStaticConfig?: () => AdapterConfigValidation,
+    ) =>
+      factories.register({
+        kind,
+        adapter_id: adapterId,
+        ...(validateStaticConfig === undefined ? {} : { validateStaticConfig }),
+        create: () => {
+          creates += 1;
+          throw new Error('create must not run during the static proof');
+        },
+      });
+    // 'meeting-fixture' is deliberately unregistered for the first pass.
+    register('decision-processor', 'processor-fixture', () => ({
+      ok: false,
+      errors: ['model setting is required'],
+    }));
+    register('delivery-surface', 'delivery-fixture', () => {
+      throw new Error('validator exploded');
+    });
+
+    // One pass names the missing factory, the invalid configuration, and the
+    // validator that threw.
+    expect(() => assertConfiguredAdaptersValid(config(), factories)).toThrow(
+      /meeting-source adapter factory 'meeting-fixture' is not installed[\s\S]*model setting is required[\s\S]*validator exploded/,
+    );
+
+    // A factory with no static validator fails closed instead of passing.
+    register('meeting-source', 'meeting-fixture');
+    expect(() => assertConfiguredAdaptersValid(config(), factories)).toThrow(
+      /meeting-source 'meeting-fixture\/primary' exposes no static configuration validator/,
+    );
+    expect(creates).toBe(0);
+    // The accepting direction is proven by the bundled validators below and by
+    // the operator reconfigure tests, which rewrite a manifest only after this
+    // same proof passes.
+  });
+
+  it('validates every bundled adapter without constructing it', () => {
+    const factories = createDefaultAdapterFactories();
+    // A bundled factory without a static validator would fail the proof
+    // closed, so the composition root must carry one everywhere.
+    expect(
+      factories
+        .list()
+        .every((f) => typeof f.validateStaticConfig === 'function'),
+    ).toBe(true);
+    // Slack construction normally needs a receipt store, an environment, and a
+    // credential resolver; static validation runs with inert stand-ins that
+    // throw on any access, so reaching a verdict at all proves none were used.
+    const slack = factories.get('delivery-surface', 'slack')!;
+    const base = {
+      adapter_id: 'slack',
+      instance_id: 'team-decisions',
+      settings: { channel_id: 'C123' },
+    };
+    expect(
+      slack.validateStaticConfig!({
+        ...base,
+        credential_ref: 'env:SLACK_BOT_TOKEN',
+      }),
+    ).toEqual({ ok: true, errors: [] });
+    expect(slack.validateStaticConfig!(base).errors).toContain(
+      'credential_ref is required',
+    );
+  });
+
   it('bundles the llm decision processor in the default composition root', async () => {
-    const { createDefaultAdapterFactories } =
-      await import('../../src/product/default-adapters.js');
     const factory = createDefaultAdapterFactories().get(
       'decision-processor',
       'llm',
@@ -169,8 +243,6 @@ describe('product adapter factories', () => {
   });
 
   it('bundles independent Slack delivery and approval surface factories', async () => {
-    const { createDefaultAdapterFactories } =
-      await import('../../src/product/default-adapters.js');
     const factories = createDefaultAdapterFactories();
     const deliveryFactory = factories.get('delivery-surface', 'slack');
     const approvalFactory = factories.get(

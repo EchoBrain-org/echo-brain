@@ -17,6 +17,12 @@ const REPO = resolve(import.meta.dirname, '../..');
 const TOOL = join(REPO, 'tools', 'internal-live-release.mjs');
 const WORKFLOW = join(REPO, '.github', 'workflows', 'internal-live-release.yml');
 const CI_WORKFLOW = join(REPO, '.github', 'workflows', 'ci.yml');
+const MACOS_SMOKE = join(
+  REPO,
+  '.github',
+  'scripts',
+  'internal-live-macos-smoke.sh',
+);
 const README = join(REPO, 'README.md');
 const VERSION = '0.1.0-internal.5';
 const SOURCE_SHA = 'a'.repeat(40);
@@ -167,8 +173,11 @@ describe('INTERNAL LIVE release tooling', () => {
         '            "$archive" \\\n' +
         '            "$package_version"',
     );
-    expect(job).not.toContain('"$cli" onboard');
-    expect(job).not.toContain('"$cli" service install');
+    const smoke = readFileSync(MACOS_SMOKE, 'utf8');
+    expect(smoke).toContain('"$cli" init --config "$config"');
+    expect(smoke).toContain('"$cli" service install --config "$config"');
+    expect(smoke).not.toContain('"$cli" onboard');
+    expect(smoke).not.toContain('"$cli" selftest');
   });
 
   it('keeps one lean publication behind approval and exact-bundle verification', () => {

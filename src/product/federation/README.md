@@ -50,7 +50,7 @@ and one early dispatch policy in the CLI. A custom identity check, approval
 capture, approval store, or runtime cannot resume the retired mode through them.
 
 It deliberately does not gate the diagnosis, preservation, and quiescing
-commands -- `identity-check`, `validate-config`, `selftest`, general `status`,
+commands -- `identity-check`, `validate-config`, general `status`,
 `backup`/`restore`, and `service stop`/`status`/`uninstall`. Several of those
 write; the line is product work, not writes. `src/product/cli.ts` owns the exact
 policy and the top-level `README.md` states it.

@@ -366,22 +366,12 @@ The V1 intentionally has no background auto-update, remote shell, MDM,
 dashboard, rollout rings, or automatic live Granola/Slack test. A person starts
 each release and each machine update.
 
-Initialize private config and state:
+`bootstrap` is the only supported v1 setup path: it writes the private config
+and state, provisions the credentials, initializes, and enrolls in one command.
+After it succeeds, the individual commands stay available for inspection and
+maintenance:
 
 ```sh
-echo-brain onboard \
-  --config /absolute/path/runtime.json \
-  --state-dir /absolute/path/state
-
-echo-brain init --config /absolute/path/runtime.json
-
-echo-brain organization enroll \
-  --config /absolute/path/runtime.json \
-  --invitation /absolute/path/echo-organization-invitation.json \
-  --authority-pin sha256:PIN_FROM_A_SEPARATE_TRUSTED_CHANNEL \
-  --authority-ca /absolute/path/internal-authority-ca.pem \
-  --allow-exportable-software-key
-
 echo-brain organization status --config /absolute/path/runtime.json
 echo-brain organization refresh --config /absolute/path/runtime.json
 
@@ -404,18 +394,18 @@ federated `export` command, and the signed record projection and protected
 independent copy behind them -- is retired and removed from this build.
 
 A state root that still holds founder identity or cutover material is detected
-and refused, not downgraded. One early dispatch gate refuses `onboard`, `init`,
-`reconfigure`, `doctor`, every `organization` action, `approvals`, `approve`,
-`reject`, `run-once`, `run`, `service-run`, and `service
+and refused, not downgraded. One early dispatch gate refuses `bootstrap`,
+`init`, `reconfigure`, `doctor`, `update`, every `organization` action,
+`approvals`, `run-once`, the launchd `service-run` child, and `service
 install`/`start`/`restart` — before a `ProductOperator` is constructed, the
 filesystem is probed, a lifecycle lock is taken, a directory is created or
 chmodded, credentials are resolved, SQLite is opened or migrated, a provider or
 the Authority is contacted, or an injected callback runs. A custom identity
-check, approval capture, approval store, or runtime cannot bypass it.
+check, approval capture, or approval store cannot bypass it.
 
 The exceptions are not "commands that do not write" — several of them do write.
 They are the commands whose purpose is to diagnose, preserve, or quiesce a
-fenced profile: `--help`/`--version`, `validate-config`, `selftest`, `status`,
+fenced profile: `--help`/`--version`, `validate-config`, `status`,
 `identity-check`, `backup`, `restore`, and `service stop`/`status`/`uninstall`.
 `organization status` is **not** an exception: it opens and migrates writable
 SQLite, so it is gated with every other organization action.
@@ -433,22 +423,23 @@ echo-brain service stop --config /absolute/path/retired-runtime.json
 echo-brain backup --config /absolute/path/retired-runtime.json \
   --backup-root /absolute/path/backups
 
-echo-brain onboard \
+echo-brain bootstrap \
   --config /absolute/path/new-runtime.json \
-  --state-dir /absolute/path/new-state
-# provision the Granola credential the new config references, then:
-echo-brain init --config /absolute/path/new-runtime.json
-echo-brain organization enroll \
-  --config /absolute/path/new-runtime.json \
+  --state-dir /absolute/path/new-state \
+  --owner-email '<employee canonical lowercase email>' \
+  --slack-channel-id '<C...>' \
+  --slack-reviewer-user-id '<U...>' \
+  --slack-reviewer-name '<employee display name>' \
   --invitation /absolute/path/echo-organization-invitation.json \
   --authority-pin sha256:PIN_FROM_A_SEPARATE_TRUSTED_CHANNEL \
   --allow-exportable-software-key
 ```
 
-The new path must be free of founder residue — that is what the fence checks,
-not pristineness in general. `init` reports the credential recommendations for
-the configured adapters; `organization enroll` requires an initialized
-installation that is not already enrolled.
+Recovery is a fresh central bootstrap, not a repair of the fenced profile. The
+new path must be free of founder residue — that is what the fence checks, not
+pristineness in general. `bootstrap` prompts for the Granola and Slack tokens,
+initializes the installation, and enrolls it against a not-yet-enrolled
+membership.
 
 This pre-1.0 build does not migrate a Secure Enclave identity to the portable
 file signer. `identity-check` reports `unsupported_legacy_key_backend` for that
@@ -456,45 +447,12 @@ state. Preserve the prior state and signer when identity continuity matters.
 
 ## Runtime configuration
 
-Operational commands require an absolute JSON config path. This offline
-baseline uses Granola, local manual approval, and a JSONL outbox:
-
-```json
-{
-  "schema_version": 1,
-  "lane": "team-product",
-  "state_dir": "/Users/you/.echo-brain",
-  "meeting_sources": [
-    {
-      "adapter_id": "granola",
-      "instance_id": "primary",
-      "credential_ref": "file:/Users/you/.echo-brain/credentials/granola-api-key",
-      "settings": {
-        "owner_email": "you@example.com",
-        "page_size": 30,
-        "cursor_overlap_ms": 1000
-      }
-    }
-  ],
-  "decision_processor": {
-    "adapter_id": "structured-text",
-    "instance_id": "primary",
-    "settings": {}
-  },
-  "delivery_surfaces": [
-    {
-      "adapter_id": "jsonl-outbox",
-      "instance_id": "local",
-      "settings": {
-        "path": "/Users/you/.echo-brain/outbox.jsonl",
-        "destination_id": "reviewed-briefs"
-      }
-    }
-  ],
-  "approval_mode": "manual",
-  "cycle_interval_ms": 60000
-}
-```
+Operational commands require an absolute JSON config path. `bootstrap` writes
+the supported Internal Live configuration: Granola as the meeting source, the
+`structured-text` decision processor, the local JSONL outbox, and Slack
+reaction approval. There is no hand-written baseline to copy — the sections
+below document the fields that profile uses and the alternatives the composition
+root also bundles.
 
 When `owner_email` is set, Granola list-owner emails are trimmed, lowercased,
 and compared with that canonical lowercase value. List metadata still reaches
@@ -561,29 +519,37 @@ the configured reviewer can resolve a brief.
 
 V1 delivers approved briefs to the local JSONL outbox; Slack carries approval
 only. Generic Slack delivery already exists but is not enabled in the Internal
-Live V1 profile. If it is enabled later, give it a different channel than the
-approval surface so review traffic stays in the review channel.
+Live V1 profile. If it is enabled later it must use a different channel than
+the approval surface, so review traffic stays in the review channel: `init` and
+a configuration-changing `reconfigure` refuse a config that points both at one
+channel. The rule reads only the configuration — it contacts no provider and
+discovers no Slack channel — and a package-only re-pin of an unchanged
+configuration recorded before the rule existed is still allowed.
 
 ## Day-to-day commands
 
 ```sh
 echo-brain validate-config --config /absolute/path/runtime.json
-echo-brain selftest --config /absolute/path/runtime.json
 echo-brain status --config /absolute/path/runtime.json
 echo-brain run-once --config /absolute/path/runtime.json
 echo-brain approvals --config /absolute/path/runtime.json
-echo-brain approve --config /absolute/path/runtime.json --id <id> --reviewer <name>
-echo-brain reject --config /absolute/path/runtime.json --id <id> --reviewer <name>
-echo-brain run --config /absolute/path/runtime.json
 ```
+
+Every command takes an absolute `--config` path and rejects any option that
+command does not define.
 
 `run-once` loads the configured adapters, processes available meetings,
 persists cursors and decisions, waits for approval, and delivers the exact
-approved snapshot. Failures conservatively pin the source cursor.
+approved snapshot. Failures conservatively pin the source cursor. The installed
+LaunchAgent runs the same cycle continuously; there is no foreground `run`.
 
-`status` reports the recorded installation and the LaunchAgent state. `reject`
-takes the same `--id` and `--reviewer` as `approve` plus an optional
-`--reason <text>`.
+`approvals` lists decision records. It cannot resolve one — the organization
+Slack approval surface is the single v1 resolver, so every approve/reject is
+centrally attributed and authorized — but it is not a fully read-only command
+either: listing opens the local decision store, which initializes or migrates
+that state on first use.
+
+`status` reports the recorded installation and the LaunchAgent state.
 
 Backups and restores are explicit maintenance operations:
 
@@ -618,12 +584,20 @@ echo-brain service uninstall --config /absolute/path/runtime.json
 
 `install`, `start`, and `restart` re-check that every configured credential
 reference is a private `file:` path inside the managed credentials directory
-before touching launchd. `reconfigure` re-records the installation manifest
-after the configuration content or product version changes; before rewriting
-the manifest it verifies offline that every configured adapter factory exists —
-it constructs no adapter and contacts no provider. It requires the service to
-be stopped and refuses to change the config path, state directory, Node, CLI,
-or service identity.
+before touching launchd. The LaunchAgent invokes a hidden `service-run` child
+that re-proves the immutable service identity and then runs the cycle loop.
+
+`reconfigure` re-records the installation manifest after the configuration
+content or product version changes. Before rewriting the manifest it proves
+statically that this package can run the recorded configuration: every
+configured adapter factory exists and each one's own static validator accepts
+its configuration. That proof constructs no adapter and reads no credential,
+environment, state store, or provider, so update and recovery never depend on
+provider uptime or on anything outside the config file. A factory that exposes
+no static validator is refused rather than skipped, and every rejection in a
+pass is reported together. `reconfigure` requires the service to be stopped and
+refuses to change the config path, state directory, Node, CLI, or service
+identity.
 
 ## Organization onboarding and access
 

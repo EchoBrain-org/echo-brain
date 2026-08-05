@@ -1,14 +1,16 @@
 import { EventEmitter } from 'node:events';
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import {
   runProductCli,
+  type ProductCliDependencies,
   type ProductCliProcess,
 } from '../../src/product/cli.js';
 import { ProductAdapterFactoryRegistry } from '../../src/product/adapter-factories.js';
 import { validateProductRuntimeConfig } from '../../src/product/config.js';
+import type { LaunchctlRunner } from '../../src/product/launchd-service.js';
 import {
   startProductRuntime,
   withRuntimeDeadline,
@@ -217,12 +219,85 @@ function fixtureFactories(
   return factories;
 }
 
-function configFile(value: ReturnType<typeof config> = config()): string {
-  const directory = mkdtempSync(join(tmpdir(), 'echo-product-runtime-cli-'));
-  directories.push(directory);
-  const path = join(directory, 'config.json');
-  writeFileSync(path, `${JSON.stringify(value, null, 2)}\n`);
-  return path;
+function stoppedLaunchd(): LaunchctlRunner {
+  let loaded = false;
+  return async (input) => {
+    const args = [...input];
+    if (args[0] === 'print') {
+      return loaded
+        ? { status: 0, stdout: 'state = running\npid = 4242\n', stderr: '' }
+        : { status: 113, stdout: '', stderr: 'Could not find service' };
+    }
+    if (args[0] === 'bootstrap' || args[0] === 'kickstart') loaded = true;
+    return { status: 0, stdout: '', stderr: '' };
+  };
+}
+
+/**
+ * The daemon loop is only reachable through the hidden `service-run` the
+ * LaunchAgent invokes, so its signal handling is exercised the way launchd
+ * reaches it: an initialized installation with the owned plist in place.
+ */
+async function installedServiceFixture(
+  adapterFactories: ProductAdapterFactoryRegistry,
+): Promise<{ configPath: string; dependencies: ProductCliDependencies }> {
+  const root = realpathSync(mkdtempSync(join(tmpdir(), 'echo-service-run-')));
+  directories.push(root);
+  const configPath = join(root, 'runtime.json');
+  const cliPath = join(root, 'echo-brain-cli.js');
+  writeFileSync(cliPath, '#!/usr/bin/env node\n');
+  writeFileSync(
+    configPath,
+    `${JSON.stringify(
+      validateProductRuntimeConfig({
+        ...config(),
+        state_dir: join(root, 'state'),
+        // launchd refuses to persist a non-file credential ref, so the service
+        // profile carries none.
+        meeting_sources: [
+          {
+            adapter_id: 'fixture-meetings',
+            instance_id: 'primary',
+            settings: {},
+          },
+        ],
+        decision_processor: {
+          adapter_id: 'fixture-processor',
+          instance_id: 'primary',
+          settings: {},
+        },
+        delivery_surfaces: [
+          { adapter_id: 'fixture-delivery', instance_id: 'team', settings: {} },
+        ],
+      }),
+      null,
+      2,
+    )}\n`,
+  );
+  const dependencies: ProductCliDependencies = {
+    classifyStateFilesystem: async () => ({ kind: 'local', raw: 'apfs' }),
+    adapterFactories,
+    operator: {
+      launchctl: stoppedLaunchd(),
+      platform: 'darwin',
+      architecture: 'arm64',
+      homeDirectory: join(root, 'home'),
+      cliPath,
+      buildIdentity: {
+        source_sha: '1'.repeat(40),
+        source_kind: 'materialized-commit',
+      },
+    },
+    stdout: { write: () => true },
+    stderr: { write: () => true },
+  };
+  for (const argv of [
+    ['init', '--config', configPath],
+    ['service', 'install', '--config', configPath],
+  ]) {
+    expect(await runProductCli(argv, dependencies)).toBe(0);
+  }
+  return { configPath, dependencies };
 }
 
 afterEach(() => {
@@ -667,50 +742,7 @@ describe('isolated product runtime', () => {
     }
   });
 
-  it('captures SIGTERM during injected runtime startup and shuts down cleanly', async () => {
-    const starts: string[] = [];
-    const stops: string[] = [];
-    const emitter = new EventEmitter();
-    const processLike = emitter as ProductCliProcess;
-    let releaseStart: () => void = () => undefined;
-    const startGate = new Promise<void>((resolve) => {
-      releaseStart = resolve;
-    });
-    const execution = runProductCli(['run', '--config', configFile()], {
-      classifyStateFilesystem: async () => ({ kind: 'local', raw: 'apfs' }),
-      runtime: dependencies(
-        components(starts, stops, {
-          'product-state': async () => {
-            starts.push('product-state');
-            await startGate;
-            return {
-              stop: async () => void stops.push('product-state'),
-            };
-          },
-        }),
-      ),
-      process: processLike,
-      stdout: { write: () => true },
-      stderr: { write: () => true },
-    });
-    while (starts.length === 0) await new Promise(setImmediate);
-    expect(emitter.listenerCount('SIGTERM')).toBe(1);
-    emitter.emit('SIGTERM');
-    releaseStart();
-    expect(await execution).toBe(0);
-    expect(starts).toEqual(COMPONENTS);
-    expect(stops).toEqual([...COMPONENTS].reverse());
-    expect(emitter.listenerCount('SIGINT')).toBe(0);
-    expect(emitter.listenerCount('SIGTERM')).toBe(0);
-  });
-
-  it('does not run a cycle when SIGINT arrives during composition health setup', async () => {
-    const root = mkdtempSync(join(tmpdir(), 'echo-product-signal-'));
-    directories.push(root);
-    const configured = validateProductRuntimeConfig({
-      ...config(),
-      state_dir: join(root, 'state'),
-    });
+  it('runs no service-run cycle when SIGINT arrives during composition health setup', async () => {
     const fixtures = registeredFixtures();
     let healthStarted = false;
     let releaseHealth: () => void = () => undefined;
@@ -730,19 +762,15 @@ describe('isolated product runtime', () => {
       pulls += 1;
       return { meetings: [] };
     };
+    const service = await installedServiceFixture(fixtureFactories(fixtures));
     const emitter = new EventEmitter();
     let stdout = '';
     const execution = runProductCli(
-      ['run', '--config', configFile(configured)],
+      ['service-run', '--config', service.configPath],
       {
-        classifyStateFilesystem: async () => ({
-          kind: 'local',
-          raw: 'apfs',
-        }),
-        adapterFactories: fixtureFactories(fixtures),
+        ...service.dependencies,
         process: emitter as ProductCliProcess,
         stdout: { write: (chunk) => ((stdout += String(chunk)), true) },
-        stderr: { write: () => true },
       },
     );
     while (!healthStarted) await new Promise(setImmediate);
@@ -761,52 +789,59 @@ describe('isolated product runtime', () => {
     expect(emitter.listenerCount('SIGTERM')).toBe(0);
   });
 
-  it('removes signal handlers when composition setup fails', async () => {
-    const root = mkdtempSync(join(tmpdir(), 'echo-product-signal-error-'));
-    directories.push(root);
-    const configured = validateProductRuntimeConfig({
-      ...config(),
-      state_dir: join(root, 'state'),
-    });
+  it('completes its immediate service-run cycle and stops on SIGTERM', async () => {
     const fixtures = registeredFixtures();
-    fixtures.meetingSource.healthCheck = async () => {
-      throw new Error('health setup failed');
+    let pulls = 0;
+    fixtures.meetingSource.pull = async () => {
+      pulls += 1;
+      return { meetings: [] };
     };
+    let closed = 0;
+    const service = await installedServiceFixture(fixtureFactories(fixtures));
     const emitter = new EventEmitter();
-
-    expect(
-      await runProductCli(['run', '--config', configFile(configured)], {
-        classifyStateFilesystem: async () => ({
-          kind: 'local',
-          raw: 'apfs',
-        }),
-        adapterFactories: fixtureFactories(fixtures),
+    let stdout = '';
+    const execution = runProductCli(
+      ['service-run', '--config', service.configPath],
+      {
+        ...service.dependencies,
         process: emitter as ProductCliProcess,
-        stdout: { write: () => true },
-        stderr: { write: () => true },
-      }),
-    ).toBe(1);
+        composition: {
+          closeResources: () => {
+            closed += 1;
+          },
+        },
+        stdout: { write: (chunk) => ((stdout += String(chunk)), true) },
+      },
+    );
+    while (!stdout.includes('cycle-complete')) await new Promise(setImmediate);
+    emitter.emit('SIGTERM');
+
+    expect(await execution).toBe(0);
+    expect(pulls).toBe(1);
+    expect(closed).toBe(1);
+    expect(JSON.parse(stdout.trim().split('\n').at(-1)!)).toMatchObject({
+      ok: true,
+      signal: 'SIGTERM',
+      shutdown: { ok: true },
+    });
     expect(emitter.listenerCount('SIGINT')).toBe(0);
     expect(emitter.listenerCount('SIGTERM')).toBe(0);
   });
 
-  it('removes signal handlers when injected runtime startup fails', async () => {
+  it('removes service-run signal handlers when composition setup fails', async () => {
+    const fixtures = registeredFixtures();
+    fixtures.meetingSource.healthCheck = async () => {
+      throw new Error('health setup failed');
+    };
+    const service = await installedServiceFixture(fixtureFactories(fixtures));
     const emitter = new EventEmitter();
-    const execution = runProductCli(['run', '--config', configFile()], {
-      classifyStateFilesystem: async () => ({ kind: 'local', raw: 'apfs' }),
-      runtime: dependencies(
-        components([], [], {
-          'product-state': async () => {
-            throw new Error('startup failed');
-          },
-        }),
-      ),
-      process: emitter as ProductCliProcess,
-      stdout: { write: () => true },
-      stderr: { write: () => true },
-    });
 
-    expect(await execution).toBe(1);
+    expect(
+      await runProductCli(['service-run', '--config', service.configPath], {
+        ...service.dependencies,
+        process: emitter as ProductCliProcess,
+      }),
+    ).toBe(1);
     expect(emitter.listenerCount('SIGINT')).toBe(0);
     expect(emitter.listenerCount('SIGTERM')).toBe(0);
   });

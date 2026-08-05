@@ -86,24 +86,24 @@ continue until that composition is closed, but every new processing cycle is
 gated.
 
 The CLI applies this as one early dispatch policy, as soon as the state path is
-known. `onboard`, `init`, `reconfigure`, `doctor`, every `organization` action
-(including `status`, which opens and migrates writable SQLite), `approvals`,
-`approve`, `reject`, `run-once`, `run`, `service-run`, and `service
+known. `bootstrap`, `init`, `reconfigure`, `doctor`, `update`, every
+`organization` action (including `status`, which opens and migrates writable
+SQLite), `approvals`, `run-once`, `service-run`, and `service
 install`/`start`/`restart` are refused before any operator, probe, lock,
 directory, credential, database, network, or injected callback. The exceptions
-are the diagnose/preserve/quiesce commands -- `validate-config`, `selftest`,
-general `status`, `identity-check`, `backup`, `restore`, and `service
+are the diagnose/preserve/quiesce commands -- `validate-config`, general
+`status`, `identity-check`, `backup`, `restore`, and `service
 stop`/`status`/`uninstall` -- not a claim that they never write.
 
 Recovery is not a restore. The cutover is irreversible and a backup stays bound
 to its originating state path, so a backup of a retired profile is preservation
 for that profile and never a way to cross the fence. Because `backup` refuses
 while the service is loaded, the executable order is: `service stop`, `backup`,
-`onboard` a founder-residue-free new state path, provision the Granola
-credential that config references, `init`, then `organization enroll` on that
-initialized, not-already-enrolled installation. The extension seams -- the
-decision store's federation capture port and the persisted document contracts
-under `schemas/product/` -- are retained.
+then `bootstrap` onto a founder-residue-free new config and state path with the
+administrator-issued invitation and Authority PIN. That one command provisions
+the credentials, initializes, and enrolls the new installation. The extension
+seams -- the decision store's federation capture port and the persisted
+document contracts under `schemas/product/` -- are retained.
 
 ## Product boundary
 

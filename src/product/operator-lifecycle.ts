@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto';
 import { homedir } from 'node:os';
 import { dirname, isAbsolute, join, resolve } from 'node:path';
+import type { AdapterInstanceConfig } from '../core/index.js';
 import type { AdapterDiagnostic } from './adapter-diagnostics.js';
 import {
   validateProductRuntimeConfig,
@@ -87,13 +88,14 @@ export interface ProductOperatorDependencies {
   /**
    * Offline package safety check reconfigure runs before rewriting the
    * installation record: every configured adapter factory must exist in the
-   * installed package. It must not construct an adapter, resolve a
-   * credential, or contact a provider, so update and recovery never depend
-   * on provider uptime. Re-pinning an exactly unchanged record skips it.
-   * The CLI always supplies the default implementation; when absent the
+   * installed package and must statically accept its own configuration. It
+   * constructs no adapter and must not resolve a credential, open state, run
+   * a health check, or contact a provider, so update and recovery never
+   * depend on provider uptime. Re-pinning an exactly unchanged record skips
+   * it. The CLI always supplies the default implementation; when absent the
    * operator fails closed rather than re-pinning an unverified package.
    */
-  verifyConfiguredAdapterFactories?: (config: ProductRuntimeConfig) => void;
+  verifyConfiguredAdapters?: (config: ProductRuntimeConfig) => void | Promise<void>;
 }
 
 export interface ProductInstallationRecord {
@@ -397,6 +399,41 @@ export function createProductOnboardConfig(
   });
 }
 
+function slackChannelId(adapter: AdapterInstanceConfig): string | undefined {
+  const value = adapter.settings['channel_id'];
+  return typeof value === 'string' && value.length > 0 ? value : undefined;
+}
+
+/**
+ * Pure configuration rule: the Slack approval surface and generic Slack
+ * delivery may not share one channel, so review traffic stays in the review
+ * channel and a delivery post can never be mistaken for an approval card. It
+ * reads only the configuration -- it contacts no provider and discovers no
+ * Slack channel.
+ */
+export function assertSeparateSlackChannels(config: ProductRuntimeConfig): void {
+  if (
+    config.approval_mode !== 'adapter' ||
+    config.approval_surface.adapter_id !== 'slack-reactions'
+  ) {
+    return;
+  }
+  const approvalChannel = slackChannelId(config.approval_surface);
+  if (approvalChannel === undefined) return;
+  const conflicts = config.delivery_surfaces.filter(
+    (surface) =>
+      surface.adapter_id === 'slack' &&
+      slackChannelId(surface) === approvalChannel,
+  );
+  if (conflicts.length === 0) return;
+  throw new ProductOperatorError(
+    'installation_conflict',
+    `Slack approval channel ${approvalChannel} is also configured for Slack delivery (${conflicts
+      .map((surface) => `delivery-surface '${surface.instance_id}'`)
+      .join(', ')}); give generic Slack delivery its own channel`,
+  );
+}
+
 function normalizedAbsolute(path: string): boolean {
   return isAbsolute(path) && resolve(path) === path;
 }
@@ -637,9 +674,9 @@ export class ProductOperator {
   private readonly productVersion: string;
   private readonly buildIdentity: ProductOperatorDependencies['buildIdentity'];
   private readonly resolveCredential: ProductCredentialResolver;
-  private readonly verifyAdapterFactories: (
+  private readonly verifyConfiguredAdapters: (
     config: ProductRuntimeConfig,
-  ) => void;
+  ) => void | Promise<void>;
   private readonly context: OperatorContext;
 
   constructor(
@@ -657,11 +694,11 @@ export class ProductOperator {
     this.buildIdentity = dependencies.buildIdentity;
     this.resolveCredential =
       dependencies.resolveCredential ?? createProductCredentialResolver();
-    this.verifyAdapterFactories =
-      dependencies.verifyConfiguredAdapterFactories ??
+    this.verifyConfiguredAdapters =
+      dependencies.verifyConfiguredAdapters ??
       (() => {
         throw new Error(
-          'no configured-adapter-factory verifier is installed for this operator',
+          'no configured-adapter verifier is installed for this operator',
         );
       });
     this.context = this.createContext(
@@ -1101,6 +1138,7 @@ export class ProductOperator {
         'an incompatible operator installation already owns this state directory',
       );
     }
+    if (existing === null) assertSeparateSlackChannels(this.config);
     const statePaths = resolveProductStatePaths(this.context.stateDirectory);
     for (const directory of [
       statePaths.root,
@@ -1170,13 +1208,19 @@ export class ProductOperator {
     this.assertServiceCredentialsReadable();
     const updated = !sameRecord(existing, expected);
     if (updated) {
-      // Any rewrite of the installation record — changed configuration
-      // content or a package/build re-pin — first proves offline that every
-      // configured adapter factory exists in the installed package. No
-      // adapter is constructed and no provider is contacted; an exactly
-      // unchanged record skips the check.
+      // A changed configuration must satisfy the pure channel-separation rule.
+      // A package-only re-pin carries the configuration it already had, so an
+      // installation grandfathered before the rule existed can still be
+      // re-pinned onto a new package instead of being stranded.
+      if (existing.config_sha256 !== expected.config_sha256) {
+        assertSeparateSlackChannels(this.config);
+      }
+      // Any rewrite of the installation record — changed configuration content
+      // or a package/build re-pin — first proves offline that this package can
+      // run the recorded configuration. No health check runs and no provider
+      // is contacted; an exactly unchanged record skips the check.
       try {
-        this.verifyAdapterFactories(this.config);
+        await this.verifyConfiguredAdapters(this.config);
       } catch (error) {
         throw new ProductOperatorError(
           'adapter_unavailable',

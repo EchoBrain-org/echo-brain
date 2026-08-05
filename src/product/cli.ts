@@ -9,6 +9,7 @@ import { fileURLToPath } from "node:url";
 import type { AdapterInstanceConfig } from "../core/index.js";
 import {
   assertConfiguredAdapterFactoriesAvailable,
+  assertConfiguredAdaptersValid,
   createConfiguredAdapterRegistry,
   type ProductAdapterFactoryRegistry,
 } from "./adapter-factories.js";
@@ -30,11 +31,7 @@ import {
 } from "./config.js";
 import { createDefaultAdapterFactories } from "./default-adapters.js";
 import { DecisionNodeStore } from "./approval/decision-node-store.js";
-import {
-  ProductRuntimeFailure,
-  startProductRuntime,
-  type ProductRuntimeDependencies,
-} from "./runtime.js";
+import { ProductRuntimeFailure } from "./runtime.js";
 import { diagnoseConfiguredAdapters } from "./adapter-diagnostics.js";
 import {
   createProductBootstrapCredential,
@@ -70,7 +67,6 @@ import {
   DEFAULT_LOCAL_ORGANIZATION_LEASE_TTL_MS,
   HttpOrganizationAuthorityClient,
   OrganizationApprovalActionAuthorizer,
-  organizationApprovalResolutionRequiresAuthority,
   OrganizationRuntimeAccessController,
   OrganizationAuthorityTransportError,
   organizationEnrollmentGrantSha256,
@@ -88,7 +84,6 @@ import {
 import { ActiveIdentityBundleStore } from "./federation/identity/active-identity-bundle-store.js";
 import { RETIRED_FOUNDER_PROVENANCE_MESSAGE } from "./federation/cutover-fence.js";
 import { resolveProductStatePaths } from "./paths.js";
-import { SqliteCoreStateStore } from "./storage/sqlite-core-state-store.js";
 import { readFileNoFollow } from "./secure-local-files.js";
 import {
   GRANOLA_API_KEY_RE,
@@ -105,7 +100,6 @@ import {
   runInternalLiveUpdate,
   type RunInternalLiveUpdateOptions,
 } from "./update/internal-live-runner.js";
-import type { InternalLiveCommandRunner } from "./update/internal-live-node-operations.js";
 import { parseJson } from "../util/json.js";
 import { nodeOperatorFileSystem } from "./operator-io.js";
 
@@ -119,7 +113,6 @@ export interface ProductCliProcess {
 
 export interface ProductCliDependencies {
   classifyStateFilesystem?: ClassifyStateFilesystem;
-  runtime?: ProductRuntimeDependencies;
   process?: ProductCliProcess;
   stdout?: Pick<Writable, "write">;
   stderr?: Pick<Writable, "write">;
@@ -148,11 +141,6 @@ export interface ProductCliDependencies {
     execute?: (
       options: RunInternalLiveUpdateOptions,
     ) => ReturnType<typeof runInternalLiveUpdate>;
-    publicFetch?: typeof fetch;
-    commandRunner?: InternalLiveCommandRunner;
-    npmPath?: string;
-    nextDirectiveRequestId?: () => string;
-    nextTransactionId?: () => string;
   };
   bootstrap?: {
     /** Test/host seam; the default reads a hidden value from the controlling TTY. */
@@ -167,49 +155,35 @@ export interface ProductCliDependencies {
   };
 }
 
+type CliCommand =
+  | "bootstrap"
+  | "init"
+  | "reconfigure"
+  | "status"
+  | "doctor"
+  | "identity-check"
+  | "organization"
+  | "update"
+  | "service"
+  | "service-run"
+  | "backup"
+  | "restore"
+  | "validate-config"
+  | "run-once"
+  | "approvals";
+
 interface ParsedCommand {
-  command:
-    | "validate-config"
-    | "selftest"
-    | "run-once"
-    | "run"
-    | "service-run"
-    | "bootstrap"
-    | "onboard"
-    | "init"
-    | "reconfigure"
-    | "status"
-    | "doctor"
-    | "identity-check"
-    | "organization"
-    | "update"
-    | "service"
-    | "backup"
-    | "restore"
-    | "approvals"
-    | "approve"
-    | "reject";
+  command: CliCommand;
+  /** The validated sub-action word of `organization`, `update`, or `service`. */
+  action?: string;
   configPath: string;
-  approvalId?: string;
-  reviewer?: string;
-  reason?: string;
   stateDirectory?: string;
-  serviceAction?: ProductServiceAction;
   backupRoot?: string;
   backupDirectory?: string;
   operationId?: string;
-  strictIdentityCheck?: boolean;
-  allowExportableSoftwareKey?: boolean;
-  organizationAction?:
-    | "enroll"
-    | "status"
-    | "refresh"
-    | "rebind"
-    | "slack-link-begin"
-    | "slack-link-complete";
-  updateAction?: "apply";
-  updateChannel?: "internal-live";
-  doctorLocalOnly?: boolean;
+  strictIdentityCheck: boolean;
+  allowExportableSoftwareKey: boolean;
+  doctorLocalOnly: boolean;
   ownerEmail?: string;
   slackChannelId?: string;
   slackReviewerUserId?: string;
@@ -261,7 +235,6 @@ const HELP = `echo-brain ${PRODUCT_VERSION}
 
 Usage:
   echo-brain bootstrap --config <new-absolute-path> --state-dir <new-absolute-path> --owner-email <canonical-lowercase-email> --slack-channel-id <C...> --slack-reviewer-user-id <U...> --slack-reviewer-name <name> --invitation <absolute-path> --authority-pin <sha256:...> [--authority-ca <absolute-path>] --allow-exportable-software-key
-  echo-brain onboard --config <new-absolute-path> --state-dir <new-absolute-path>
   echo-brain init --config <absolute-path>
   echo-brain reconfigure --config <absolute-path>
   echo-brain status --config <absolute-path>
@@ -278,12 +251,8 @@ Usage:
   echo-brain backup --config <absolute-path> --backup-root <absolute-path> [--id <operation-id>]
   echo-brain restore --config <absolute-path> --backup <absolute-path> --backup-root <absolute-path> --id <operation-id>
   echo-brain validate-config --config <absolute-path>
-  echo-brain selftest --config <absolute-path>
   echo-brain run-once --config <absolute-path>
-  echo-brain run --config <absolute-path>
   echo-brain approvals --config <absolute-path>
-  echo-brain approve --config <absolute-path> --id <approval-id> --reviewer <name>
-  echo-brain reject --config <absolute-path> --id <approval-id> --reviewer <name> [--reason <text>]
   echo-brain --version
   echo-brain --help
 `;
@@ -292,434 +261,250 @@ function print(stream: Pick<Writable, "write">, value: unknown): void {
   stream.write(`${JSON.stringify(value)}\n`);
 }
 
+const OPTIONS = {
+  config: { type: "string" },
+  "state-dir": { type: "string" },
+  id: { type: "string" },
+  "backup-root": { type: "string" },
+  backup: { type: "string" },
+  invitation: { type: "string" },
+  "authority-pin": { type: "string" },
+  "authority-url": { type: "string" },
+  "authority-ca": { type: "string" },
+  "challenge-attempt": { type: "string" },
+  "challenge-message-ts": { type: "string" },
+  channel: { type: "string" },
+  "owner-email": { type: "string" },
+  "slack-channel-id": { type: "string" },
+  "slack-reviewer-user-id": { type: "string" },
+  "slack-reviewer-name": { type: "string" },
+  strict: { type: "boolean" },
+  "local-only": { type: "boolean" },
+  "allow-exportable-software-key": { type: "boolean" },
+} as const;
+
+type CliOption = keyof typeof OPTIONS;
+
+interface CommandRule {
+  /** Options accepted in addition to the always-required `--config`. */
+  accepts?: readonly CliOption[];
+  /** Options the command cannot run without. */
+  requires?: readonly CliOption[];
+  /** Path options that must be absolute, in addition to `--config`. */
+  absolute?: readonly CliOption[];
+}
+
+const NONE: CommandRule = {};
+const SERVICE_ACTIONS = [
+  "install",
+  "start",
+  "stop",
+  "restart",
+  "status",
+  "uninstall",
+] as const;
+
+/**
+ * One explicit rule per public command or command/action pair, plus the hidden
+ * `service-run` the LaunchAgent invokes. Everything the parser enforces -- the
+ * options a command accepts, the ones it cannot run without, and the ones that
+ * must be absolute paths -- is stated here, so an unlisted or missing option is
+ * refused deterministically instead of being silently ignored.
+ */
+const RULES: Readonly<Record<string, CommandRule>> = {
+  bootstrap: {
+    accepts: [
+      "state-dir",
+      "owner-email",
+      "slack-channel-id",
+      "slack-reviewer-user-id",
+      "slack-reviewer-name",
+      "invitation",
+      "authority-pin",
+      "authority-ca",
+      "allow-exportable-software-key",
+    ],
+    requires: [
+      "state-dir",
+      "owner-email",
+      "slack-channel-id",
+      "slack-reviewer-user-id",
+      "slack-reviewer-name",
+      "invitation",
+      "authority-pin",
+    ],
+    absolute: ["state-dir", "invitation", "authority-ca"],
+  },
+  init: NONE,
+  reconfigure: NONE,
+  status: NONE,
+  doctor: { accepts: ["local-only"] },
+  "identity-check": { accepts: ["strict"] },
+  "organization enroll": {
+    accepts: [
+      "invitation",
+      "authority-pin",
+      "authority-ca",
+      "allow-exportable-software-key",
+    ],
+    requires: ["invitation", "authority-pin"],
+    absolute: ["invitation", "authority-ca"],
+  },
+  "organization status": NONE,
+  "organization refresh": NONE,
+  "organization rebind": {
+    accepts: ["authority-url", "authority-pin", "authority-ca"],
+    requires: ["authority-url", "authority-pin"],
+    absolute: ["authority-ca"],
+  },
+  "organization slack-link-begin": NONE,
+  "organization slack-link-complete": {
+    accepts: ["challenge-attempt", "challenge-message-ts"],
+    requires: ["challenge-attempt", "challenge-message-ts"],
+  },
+  "update apply": { accepts: ["channel"], requires: ["channel"] },
+  ...Object.fromEntries(
+    SERVICE_ACTIONS.map((action) => [`service ${action}`, NONE] as const),
+  ),
+  backup: {
+    accepts: ["backup-root", "id"],
+    requires: ["backup-root"],
+    absolute: ["backup-root"],
+  },
+  restore: {
+    accepts: ["backup-root", "backup", "id"],
+    requires: ["backup-root", "backup", "id"],
+    absolute: ["backup-root", "backup"],
+  },
+  "validate-config": NONE,
+  "run-once": NONE,
+  approvals: NONE,
+  "service-run": NONE,
+};
+
+/** Commands that take a required sub-action word before their options. */
+const ACTIONS: Readonly<Record<string, readonly string[]>> = {
+  organization: [
+    "enroll",
+    "status",
+    "refresh",
+    "rebind",
+    "slack-link-begin",
+    "slack-link-complete",
+  ],
+  update: ["apply"],
+  service: SERVICE_ACTIONS,
+};
+
+/** `service-run` is a launchd implementation detail and stays unadvertised. */
+const HIDDEN_COMMANDS = new Set(["service-run"]);
+
+function commandUsage(): string {
+  const names = [
+    ...new Set(Object.keys(RULES).map((key) => key.split(" ")[0]!)),
+  ].filter((name) => !HIDDEN_COMMANDS.has(name));
+  return `usage: echo-brain <${names.join("|")}> --config <absolute-path>`;
+}
+
 function parseCommand(argv: readonly string[]): ParsedCommand {
-  const command = argv[0];
+  const command = argv[0] ?? "";
+  const actions = ACTIONS[command];
+  const action = actions === undefined ? undefined : argv[1];
   if (
-    command !== "validate-config" &&
-    command !== "bootstrap" &&
-    command !== "onboard" &&
-    command !== "init" &&
-    command !== "reconfigure" &&
-    command !== "status" &&
-    command !== "doctor" &&
-    command !== "identity-check" &&
-    command !== "organization" &&
-    command !== "update" &&
-    command !== "service" &&
-    command !== "backup" &&
-    command !== "restore" &&
-    command !== "selftest" &&
-    command !== "run-once" &&
-    command !== "service-run" &&
-    command !== "approvals" &&
-    command !== "approve" &&
-    command !== "reject" &&
-    command !== "run"
+    actions !== undefined &&
+    (action === undefined || !actions.includes(action))
   ) {
     throw new Error(
-      "usage: echo-brain <bootstrap|onboard|init|reconfigure|status|doctor|identity-check|organization|update|service|backup|restore|validate-config|selftest|run-once|run|approvals|approve|reject> --config <absolute-path>",
+      `usage: echo-brain ${command} <${actions.join("|")}> --config <absolute-path>`,
     );
   }
-  let serviceAction: ProductServiceAction | undefined;
-  let organizationAction:
-    | "enroll"
-    | "status"
-    | "refresh"
-    | "rebind"
-    | "slack-link-begin"
-    | "slack-link-complete"
-    | undefined;
-  let updateAction: "apply" | undefined;
-  let optionOffset = 1;
-  if (command === "service") {
-    const action = argv[1];
-    if (
-      action !== "install" &&
-      action !== "start" &&
-      action !== "stop" &&
-      action !== "restart" &&
-      action !== "status" &&
-      action !== "uninstall"
-    ) {
-      throw new Error(
-        "usage: echo-brain service <install|start|stop|restart|status|uninstall> --config <absolute-path>",
-      );
-    }
-    serviceAction = action;
-    optionOffset = 2;
-  }
-  if (command === "organization") {
-    const action = argv[1];
-    if (
-      action !== "enroll" &&
-      action !== "status" &&
-      action !== "refresh" &&
-      action !== "rebind" &&
-      action !== "slack-link-begin" &&
-      action !== "slack-link-complete"
-    ) {
-      throw new Error(
-        "usage: echo-brain organization <enroll|status|refresh|rebind|slack-link-begin|slack-link-complete> --config <absolute-path>",
-      );
-    }
-    organizationAction = action;
-    optionOffset = 2;
-  }
-  if (command === "update") {
-    if (argv[1] !== "apply") {
-      throw new Error(
-        "usage: echo-brain update apply --channel internal-live --config <absolute-path>",
-      );
-    }
-    updateAction = "apply";
-    optionOffset = 2;
-  }
+  const key = action === undefined ? command : `${command} ${action}`;
+  const rule = RULES[key];
+  if (rule === undefined) throw new Error(commandUsage());
+
   const parsed = parseArgs({
-    args: [...argv.slice(optionOffset)],
+    args: [...argv.slice(actions === undefined ? 1 : 2)],
     strict: true,
     allowPositionals: false,
-    options: {
-      config: { type: "string" },
-      id: { type: "string" },
-      reviewer: { type: "string" },
-      reason: { type: "string" },
-      "state-dir": { type: "string" },
-      "backup-root": { type: "string" },
-      backup: { type: "string" },
-      strict: { type: "boolean" },
-      "organization-name": { type: "string" },
-      "principal-name": { type: "string" },
-      "slack-user-id": { type: "string" },
-      "allow-exportable-software-key": { type: "boolean" },
-      invitation: { type: "string" },
-      "authority-pin": { type: "string" },
-      "authority-url": { type: "string" },
-      "authority-ca": { type: "string" },
-      "challenge-attempt": { type: "string" },
-      "challenge-message-ts": { type: "string" },
-      channel: { type: "string" },
-      "local-only": { type: "boolean" },
-      "owner-email": { type: "string" },
-      "slack-channel-id": { type: "string" },
-      "slack-reviewer-user-id": { type: "string" },
-      "slack-reviewer-name": { type: "string" },
-    },
+    options: OPTIONS,
   });
-  if (parsed.values.config === undefined)
-    throw new Error("--config is required");
-  if (parsed.values.strict !== undefined && command !== "identity-check") {
-    throw new Error("--strict is only valid with identity-check");
-  }
-  if (
-    parsed.values["local-only"] !== undefined &&
-    command !== "doctor"
-  ) {
-    throw new Error("--local-only is only valid with doctor");
-  }
-  if (parsed.values["owner-email"] !== undefined && command !== "bootstrap") {
-    throw new Error("--owner-email is only valid with bootstrap");
-  }
-  if (
-    command !== "bootstrap" &&
-    (parsed.values["slack-channel-id"] !== undefined ||
-      parsed.values["slack-reviewer-user-id"] !== undefined ||
-      parsed.values["slack-reviewer-name"] !== undefined)
-  ) {
-    throw new Error("Slack bootstrap options are only valid with bootstrap");
-  }
-  if (
-    (command === "bootstrap" ||
-      command === "onboard" ||
-      command === "init" ||
-      command === "reconfigure" ||
-      command === "status" ||
-      command === "doctor" ||
-      command === "identity-check" ||
-      command === "organization" ||
-      command === "update" ||
-      command === "service" ||
-      command === "service-run" ||
-      command === "backup" ||
-      command === "restore") &&
-    !isAbsolute(parsed.values.config)
-  ) {
-    throw new Error("--config must be an absolute path");
-  }
-  if (command === "onboard" || command === "bootstrap") {
-    if (parsed.values["state-dir"] === undefined)
-      throw new Error("--state-dir is required");
-    if (!isAbsolute(parsed.values["state-dir"]))
-      throw new Error("--state-dir must be an absolute path");
-  }
-  if (
-    command !== "organization" &&
-    command !== "bootstrap" &&
-    parsed.values["allow-exportable-software-key"] === true
-  ) {
-    throw new Error(
-      "--allow-exportable-software-key is only valid with organization enroll",
-    );
-  }
-  if (command === "bootstrap") {
-    const ownerEmail = parsed.values["owner-email"];
-    if (ownerEmail === undefined) {
-      throw new Error("bootstrap requires --owner-email");
-    }
-    const slackChannelId = parsed.values["slack-channel-id"];
-    if (slackChannelId === undefined) {
-      throw new Error("bootstrap requires --slack-channel-id");
-    }
-    const slackReviewerUserId =
-      parsed.values["slack-reviewer-user-id"];
-    if (slackReviewerUserId === undefined) {
-      throw new Error("bootstrap requires --slack-reviewer-user-id");
-    }
-    const slackReviewerName = parsed.values["slack-reviewer-name"];
-    if (slackReviewerName === undefined) {
-      throw new Error("bootstrap requires --slack-reviewer-name");
-    }
-    if (parsed.values.invitation === undefined) {
-      throw new Error("bootstrap requires --invitation");
-    }
-    if (!isAbsolute(parsed.values.invitation)) {
-      throw new Error("--invitation must be an absolute path");
-    }
-    if (parsed.values["authority-pin"] === undefined) {
-      throw new Error(
-        "bootstrap requires --authority-pin from an independent trusted channel",
-      );
-    }
-    if (parsed.values["authority-url"] !== undefined) {
-      throw new Error("--authority-url is not valid with bootstrap");
-    }
-    if (
-      parsed.values["authority-ca"] !== undefined &&
-      !isAbsolute(parsed.values["authority-ca"])
-    ) {
-      throw new Error("--authority-ca must be an absolute path");
-    }
-  } else if (command === "organization") {
-    if (organizationAction === "enroll") {
-      if (parsed.values.invitation === undefined) {
-        throw new Error("organization enroll requires --invitation");
-      }
-      if (!isAbsolute(parsed.values.invitation)) {
-        throw new Error("--invitation must be an absolute path");
-      }
-      if (parsed.values["authority-pin"] === undefined) {
-        throw new Error(
-          "organization enroll requires --authority-pin from an independent trusted channel",
-        );
-      }
-      if (parsed.values["authority-url"] !== undefined) {
-        throw new Error("--authority-url is only valid with organization rebind");
-      }
-      if (
-        parsed.values["authority-ca"] !== undefined &&
-        !isAbsolute(parsed.values["authority-ca"])
-      ) {
-        throw new Error("--authority-ca must be an absolute path");
-      }
-    } else if (organizationAction === "rebind") {
-      if (
-        parsed.values["authority-url"] === undefined ||
-        parsed.values["authority-pin"] === undefined
-      ) {
-        throw new Error(
-          "organization rebind requires --authority-url and --authority-pin",
-        );
-      }
-      if (parsed.values.invitation !== undefined) {
-        throw new Error("--invitation is only valid with organization enroll");
-      }
-      if (parsed.values["allow-exportable-software-key"] === true) {
-        throw new Error(
-          "--allow-exportable-software-key is only valid with organization enroll",
-        );
-      }
-      if (
-        parsed.values["authority-ca"] !== undefined &&
-        !isAbsolute(parsed.values["authority-ca"])
-      ) {
-        throw new Error("--authority-ca must be an absolute path");
-      }
-    } else {
-      if (parsed.values.invitation !== undefined) {
-        throw new Error(
-          "--invitation is only valid with organization enroll",
-        );
-      }
-      if (parsed.values["authority-pin"] !== undefined) {
-        throw new Error(
-          "--authority-pin is only valid with organization enroll or rebind",
-        );
-      }
-      if (parsed.values["authority-url"] !== undefined) {
-        throw new Error("--authority-url is only valid with organization rebind");
-      }
-      if (parsed.values["authority-ca"] !== undefined) {
-        throw new Error(
-          "--authority-ca is only valid with organization enroll or rebind",
-        );
-      }
-      if (parsed.values["allow-exportable-software-key"] === true) {
-        throw new Error(
-          "--allow-exportable-software-key is only valid with organization enroll",
-        );
-      }
-    }
-    if (organizationAction === "slack-link-complete") {
-      if (
-        parsed.values["challenge-attempt"] === undefined ||
-        parsed.values["challenge-message-ts"] === undefined
-      ) {
-        throw new Error(
-          "organization slack-link-complete requires --challenge-attempt and --challenge-message-ts",
-        );
-      }
-    } else if (
-      parsed.values["challenge-attempt"] !== undefined ||
-      parsed.values["challenge-message-ts"] !== undefined
-    ) {
-      throw new Error(
-        "--challenge-attempt and --challenge-message-ts are only valid with organization slack-link-complete",
-      );
-    }
-  } else {
-    if (parsed.values.invitation !== undefined) {
-      throw new Error("--invitation is only valid with organization enroll");
-    }
-    if (parsed.values["authority-pin"] !== undefined) {
-      throw new Error(
-        "--authority-pin is only valid with organization enroll or rebind",
-      );
-    }
-    if (parsed.values["authority-url"] !== undefined) {
-      throw new Error("--authority-url is only valid with organization rebind");
-    }
-    if (parsed.values["authority-ca"] !== undefined) {
-      throw new Error(
-        "--authority-ca is only valid with organization enroll or rebind",
-      );
-    }
-    if (
-      parsed.values["challenge-attempt"] !== undefined ||
-      parsed.values["challenge-message-ts"] !== undefined
-    ) {
-      throw new Error(
-        "--challenge-attempt and --challenge-message-ts are only valid with organization slack-link-complete",
-      );
+  const values = parsed.values as Record<
+    CliOption,
+    string | boolean | undefined
+  >;
+  const text = (name: CliOption): string | undefined => {
+    const value = values[name];
+    return typeof value === "string" ? value : undefined;
+  };
+
+  const accepted = new Set<string>(["config", ...(rule.accepts ?? [])]);
+  for (const [name, value] of Object.entries(values)) {
+    if (value !== undefined && !accepted.has(name)) {
+      throw new Error(`--${name} is not valid with \`echo-brain ${key}\``);
     }
   }
-  if (command === "update") {
-    if (parsed.values.channel !== "internal-live") {
-      throw new Error(
-        "update apply requires --channel internal-live",
-      );
-    }
-  } else if (parsed.values.channel !== undefined) {
-    throw new Error("--channel is only valid with update apply");
-  }
-  if (command === "approve" || command === "reject") {
-    if (parsed.values.id === undefined) throw new Error("--id is required");
-    if (
-      parsed.values.reviewer === undefined ||
-      parsed.values.reviewer.trim() === ""
-    ) {
-      throw new Error("--reviewer is required");
+  for (const name of ["config", ...(rule.requires ?? [])] as const) {
+    if (values[name] === undefined) {
+      throw new Error(`\`echo-brain ${key}\` requires --${name}`);
     }
   }
-  if (command === "backup" || command === "restore") {
-    if (parsed.values["backup-root"] === undefined)
-      throw new Error("--backup-root is required");
-    if (!isAbsolute(parsed.values["backup-root"]))
-      throw new Error("--backup-root must be an absolute path");
+  for (const name of ["config", ...(rule.absolute ?? [])] as const) {
+    const value = text(name);
+    if (value !== undefined && !isAbsolute(value)) {
+      throw new Error(`--${name} must be an absolute path`);
+    }
   }
-  if (command === "restore") {
-    if (parsed.values.backup === undefined)
-      throw new Error("--backup is required");
-    if (!isAbsolute(parsed.values.backup))
-      throw new Error("--backup must be an absolute path");
-    if (parsed.values.id === undefined)
-      throw new Error("--id is required for crash-resumable restore");
+  if (key === "update apply" && text("channel") !== "internal-live") {
+    throw new Error("update apply requires --channel internal-live");
   }
+
   return {
-    command,
-    configPath: parsed.values.config,
-    ...(parsed.values.id === undefined ? {} : { approvalId: parsed.values.id }),
-    ...(parsed.values.reviewer === undefined
-      ? {}
-      : { reviewer: parsed.values.reviewer }),
-    ...(parsed.values.reason === undefined
-      ? {}
-      : { reason: parsed.values.reason }),
-    ...(parsed.values["state-dir"] === undefined
-      ? {}
-      : { stateDirectory: parsed.values["state-dir"] }),
-    ...(serviceAction === undefined ? {} : { serviceAction }),
-    ...(parsed.values["backup-root"] === undefined
-      ? {}
-      : { backupRoot: parsed.values["backup-root"] }),
-    ...(parsed.values.backup === undefined
-      ? {}
-      : { backupDirectory: parsed.values.backup }),
-    ...((command !== "backup" && command !== "restore") ||
-    parsed.values.id === undefined
-      ? {}
-      : { operationId: parsed.values.id }),
-    ...(parsed.values.strict === true ? { strictIdentityCheck: true } : {}),
-    ...(parsed.values["allow-exportable-software-key"] === true
-      ? { allowExportableSoftwareKey: true }
-      : {}),
-    ...(organizationAction === undefined ? {} : { organizationAction }),
-    ...(updateAction === undefined
-      ? {}
-      : { updateAction, updateChannel: "internal-live" as const }),
-    ...(parsed.values["local-only"] === true
-      ? { doctorLocalOnly: true }
-      : {}),
-    ...(parsed.values["owner-email"] === undefined
-      ? {}
-      : { ownerEmail: parsed.values["owner-email"] }),
-    ...(parsed.values["slack-channel-id"] === undefined
-      ? {}
-      : { slackChannelId: parsed.values["slack-channel-id"] }),
-    ...(parsed.values["slack-reviewer-user-id"] === undefined
-      ? {}
-      : { slackReviewerUserId: parsed.values["slack-reviewer-user-id"] }),
-    ...(parsed.values["slack-reviewer-name"] === undefined
-      ? {}
-      : { slackReviewerName: parsed.values["slack-reviewer-name"] }),
-    ...(parsed.values["challenge-attempt"] === undefined
-      ? {}
-      : { slackLinkAttemptId: parsed.values["challenge-attempt"] }),
-    ...(parsed.values["challenge-message-ts"] === undefined
-      ? {}
-      : { slackLinkMessageTs: parsed.values["challenge-message-ts"] }),
-    ...(parsed.values.invitation === undefined
-      ? {}
-      : { invitationPath: parsed.values.invitation }),
-    ...(parsed.values["authority-pin"] === undefined
-      ? {}
-      : { authorityPin: parsed.values["authority-pin"] }),
-    ...(parsed.values["authority-url"] === undefined
-      ? {}
-      : { authorityUrl: parsed.values["authority-url"] }),
-    ...(parsed.values["authority-ca"] === undefined
-      ? {}
-      : { authorityCaPath: parsed.values["authority-ca"] }),
+    command: command as CliCommand,
+    action,
+    configPath: text("config")!,
+    stateDirectory: text("state-dir"),
+    backupRoot: text("backup-root"),
+    backupDirectory: text("backup"),
+    operationId: text("id"),
+    strictIdentityCheck: values.strict === true,
+    allowExportableSoftwareKey:
+      values["allow-exportable-software-key"] === true,
+    doctorLocalOnly: values["local-only"] === true,
+    ownerEmail: text("owner-email"),
+    slackChannelId: text("slack-channel-id"),
+    slackReviewerUserId: text("slack-reviewer-user-id"),
+    slackReviewerName: text("slack-reviewer-name"),
+    slackLinkAttemptId: text("challenge-attempt"),
+    slackLinkMessageTs: text("challenge-message-ts"),
+    invitationPath: text("invitation"),
+    authorityPin: text("authority-pin"),
+    authorityUrl: text("authority-url"),
+    authorityCaPath: text("authority-ca"),
   };
 }
 
-async function probeConfig(
+/**
+ * Classify the state filesystem, or report the one shared refusal and answer
+ * `null`. Every command that will not work off a local disk prints the same
+ * shape, keeping its own action and command-specific fields intact.
+ */
+async function requireLocalState(
+  parsed: ParsedCommand,
   config: ProductRuntimeConfig,
   classifier: ClassifyStateFilesystem,
-): Promise<{
-  ok: boolean;
-  filesystem: Awaited<ReturnType<ClassifyStateFilesystem>>;
-}> {
+  stderr: Pick<Writable, "write">,
+  extra: Record<string, unknown> = {},
+): Promise<Awaited<ReturnType<ClassifyStateFilesystem>> | null> {
   const filesystem = await classifier(config.state_dir);
-  return { ok: filesystem.kind === "local", filesystem };
+  if (filesystem.kind === "local") return filesystem;
+  print(stderr, {
+    ok: false,
+    command: parsed.command,
+    ...(parsed.action === undefined ? {} : { action: parsed.action }),
+    ...extra,
+    filesystem,
+  });
+  return null;
 }
 
 function adapterReference(config: AdapterInstanceConfig): {
@@ -883,7 +668,7 @@ function refuseRetiredFounderProvenance(stateDirectory: string): void {
  * its own implementation already does:
  *
  * - `--help` / `--version` never touch a state path at all;
- * - `validate-config` and `selftest` report on configuration;
+ * - `validate-config` reports on configuration;
  * - `status` reports operator/service state;
  * - `identity-check` is the diagnostic that names the retirement;
  * - `backup` and `restore` preserve and recover the profile, and keep their own
@@ -900,7 +685,6 @@ function refuseRetiredFounderProvenance(stateDirectory: string): void {
 function retiredProvenanceGateApplies(parsed: ParsedCommand): boolean {
   switch (parsed.command) {
     case "validate-config":
-    case "selftest":
     case "status":
     case "identity-check":
     case "backup":
@@ -908,13 +692,13 @@ function retiredProvenanceGateApplies(parsed: ParsedCommand): boolean {
       return false;
     case "service":
       return (
-        parsed.serviceAction === "install" ||
-        parsed.serviceAction === "start" ||
-        parsed.serviceAction === "restart"
+        parsed.action === "install" ||
+        parsed.action === "start" ||
+        parsed.action === "restart"
       );
     default:
-      // onboard, init, reconfigure, doctor, organization (every action),
-      // approvals, approve, reject, run-once, run, service-run.
+      // init, reconfigure, doctor, update, organization (every action),
+      // approvals, run-once, service-run.
       return true;
   }
 }
@@ -1130,10 +914,12 @@ function createProductOperator(
     cliPath: configured.cliPath ?? CLI_PATH,
     productVersion: configured.productVersion ?? PRODUCT_VERSION,
     buildIdentity: configured.buildIdentity ?? packagedBuildIdentity(),
-    verifyConfiguredAdapterFactories:
-      configured.verifyConfiguredAdapterFactories ??
+    verifyConfiguredAdapters:
+      configured.verifyConfiguredAdapters ??
       ((recordedConfig) => {
-        assertConfiguredAdapterFactoriesAvailable(
+        // Static factory-level proof only: no environment, credential
+        // resolver, or clock is handed over, because none may be used.
+        assertConfiguredAdaptersValid(
           recordedConfig,
           dependencies.adapterFactories ?? createDefaultAdapterFactories(),
         );
@@ -1719,28 +1505,6 @@ export async function runProductCli(
       stderr,
     );
   }
-  if (parsed.command === "onboard") {
-    // `onboard` learns its state path from `--state-dir`, not from a config
-    // file, and it is the one gated command whose target may not exist yet. An
-    // absent root whose adjacent external cutover guard survived is still
-    // fenced, so this runs before `onboardProduct` can create anything.
-    try {
-      refuseRetiredFounderProvenance(parsed.stateDirectory!);
-    } catch (error) {
-      printOperatorError(stderr, parsed.command, error);
-      return 1;
-    }
-    try {
-      const result = onboardProduct(parsed.configPath, parsed.stateDirectory!, {
-        fileSystem: dependencies.operator?.fileSystem,
-      });
-      print(stdout, { ok: true, command: parsed.command, ...result });
-      return 0;
-    } catch (error) {
-      printOperatorError(stderr, parsed.command, error);
-      return 1;
-    }
-  }
   let config: ProductRuntimeConfig;
   try {
     config = loadProductRuntimeConfig(parsed.configPath);
@@ -1758,12 +1522,7 @@ export async function runProductCli(
       print(stderr, {
         ok: false,
         command: parsed.command,
-        ...(parsed.serviceAction === undefined
-          ? {}
-          : { action: parsed.serviceAction }),
-        ...(parsed.organizationAction === undefined
-          ? {}
-          : { action: parsed.organizationAction }),
+        ...(parsed.action === undefined ? {} : { action: parsed.action }),
         code: "identity_not_operationally_ready",
         error: (error as Error).message,
       });
@@ -1773,15 +1532,11 @@ export async function runProductCli(
   const classifier =
     dependencies.classifyStateFilesystem ?? classifyStateFilesystem;
   if (parsed.command === "update") {
-    const probe = await probeConfig(config, classifier);
-    if (!probe.ok) {
-      print(stderr, {
-        ok: false,
-        command: parsed.command,
-        action: parsed.updateAction,
-        channel: parsed.updateChannel,
-        filesystem: probe.filesystem,
-      });
+    if (
+      (await requireLocalState(parsed, config, classifier, stderr, {
+        channel: "internal-live",
+      })) === null
+    ) {
       return 1;
     }
     try {
@@ -1819,34 +1574,13 @@ export async function runProductCli(
               allowInsecureLoopback:
                 dependencies.organization.allowInsecureLoopback,
             }),
-        ...(dependencies.internalLive?.publicFetch === undefined
-          ? {}
-          : { publicFetch: dependencies.internalLive.publicFetch }),
-        ...(dependencies.internalLive?.commandRunner === undefined
-          ? {}
-          : { commandRunner: dependencies.internalLive.commandRunner }),
-        ...(dependencies.internalLive?.npmPath === undefined
-          ? {}
-          : { npmPath: dependencies.internalLive.npmPath }),
-        ...(dependencies.internalLive?.nextDirectiveRequestId === undefined
-          ? {}
-          : {
-              nextDirectiveRequestId:
-                dependencies.internalLive.nextDirectiveRequestId,
-            }),
-        ...(dependencies.internalLive?.nextTransactionId === undefined
-          ? {}
-          : {
-              nextTransactionId:
-                dependencies.internalLive.nextTransactionId,
-            }),
       });
       const ok = result.receipt.outcome === "healthy";
       print(ok ? stdout : stderr, {
         ok,
         command: parsed.command,
-        action: parsed.updateAction,
-        channel: parsed.updateChannel,
+        action: parsed.action,
+        channel: "internal-live",
         directive_sequence: result.directive_sequence,
         receipt: result.receipt,
       });
@@ -1857,13 +1591,13 @@ export async function runProductCli(
     }
   }
   if (parsed.command === "organization") {
-    const action = parsed.organizationAction!;
+    const action = parsed.action!;
     const usesDefaultFileSigner =
       dependencies.organization?.installationSigner === undefined;
     if (
       action === "enroll" &&
       usesDefaultFileSigner &&
-      parsed.allowExportableSoftwareKey !== true
+      !parsed.allowExportableSoftwareKey
     ) {
       print(stderr, {
         ok: false,
@@ -1875,16 +1609,8 @@ export async function runProductCli(
       });
       return 2;
     }
-    const probe = await probeConfig(config, classifier);
-    if (!probe.ok) {
-      print(stderr, {
-        ok: false,
-        command: parsed.command,
-        action,
-        filesystem: probe.filesystem,
-      });
+    if ((await requireLocalState(parsed, config, classifier, stderr)) === null)
       return 1;
-    }
     try {
       const initialized = await createProductOperator(
         parsed.configPath,
@@ -2298,6 +2024,10 @@ export async function runProductCli(
       printOperatorError(stderr, parsed.command, error);
       return 1;
     }
+    return await runServiceDaemon(config, classifier, dependencies, {
+      stdout,
+      stderr,
+    });
   }
   if (parsed.command === "identity-check") {
     try {
@@ -2338,15 +2068,8 @@ export async function runProductCli(
     }
   }
   if (parsed.command === "backup" || parsed.command === "restore") {
-    const probe = await probeConfig(config, classifier);
-    if (!probe.ok) {
-      print(stderr, {
-        ok: false,
-        command: parsed.command,
-        filesystem: probe.filesystem,
-      });
+    if ((await requireLocalState(parsed, config, classifier, stderr)) === null)
       return 1;
-    }
     let operator: ProductOperator;
     try {
       operator = createProductOperator(parsed.configPath, config, dependencies);
@@ -2509,13 +2232,9 @@ export async function runProductCli(
       }
     }
     if (parsed.command === "init") {
-      const probe = await probeConfig(config, classifier);
-      if (!probe.ok) {
-        print(stderr, {
-          ok: false,
-          command: parsed.command,
-          filesystem: probe.filesystem,
-        });
+      if (
+        (await requireLocalState(parsed, config, classifier, stderr)) === null
+      ) {
         return 1;
       }
       try {
@@ -2539,13 +2258,9 @@ export async function runProductCli(
       }
     }
     if (parsed.command === "reconfigure") {
-      const probe = await probeConfig(config, classifier);
-      if (!probe.ok) {
-        print(stderr, {
-          ok: false,
-          command: parsed.command,
-          filesystem: probe.filesystem,
-        });
+      if (
+        (await requireLocalState(parsed, config, classifier, stderr)) === null
+      ) {
         return 1;
       }
       try {
@@ -2567,22 +2282,12 @@ export async function runProductCli(
         return 1;
       }
     }
-    const action = parsed.serviceAction!;
+    const action = parsed.action as ProductServiceAction;
     if (
-      action === "install" ||
-      action === "start" ||
-      action === "restart"
+      (action === "install" || action === "start" || action === "restart") &&
+      (await requireLocalState(parsed, config, classifier, stderr)) === null
     ) {
-      const probe = await probeConfig(config, classifier);
-      if (!probe.ok) {
-        print(stderr, {
-          ok: false,
-          command: parsed.command,
-          action,
-          filesystem: probe.filesystem,
-        });
-        return 1;
-      }
+      return 1;
     }
     try {
       let result: Awaited<ReturnType<ProductOperator["service"]>>;
@@ -2644,46 +2349,19 @@ export async function runProductCli(
       return 1;
     }
   }
-  if (parsed.command === "validate-config" || parsed.command === "selftest") {
-    const probe = await probeConfig(config, classifier);
-    if (!probe.ok) {
-      print(stderr, {
-        ok: false,
-        command: parsed.command,
-        filesystem: probe.filesystem,
-      });
-      return 1;
-    }
-    let storage:
-      | {
-          status: "ok";
-          kind: "product-state-sqlite-memory";
-          migrations: "loaded";
-        }
-      | undefined;
-    if (parsed.command === "selftest") {
-      try {
-        const coreState = new SqliteCoreStateStore(":memory:");
-        coreState.close();
-        storage = {
-          status: "ok",
-          kind: "product-state-sqlite-memory",
-          migrations: "loaded",
-        };
-      } catch (error) {
-        print(stderr, {
-          ok: false,
-          command: parsed.command,
-          error: `SQLite selftest failed: ${(error as Error).message}`,
-        });
-        return 1;
-      }
-    }
+  if (parsed.command === "validate-config") {
+    const filesystem = await requireLocalState(
+      parsed,
+      config,
+      classifier,
+      stderr,
+    );
+    if (filesystem === null) return 1;
     print(stdout, {
       ok: true,
       command: parsed.command,
       lane: config.lane,
-      filesystem: probe.filesystem,
+      filesystem,
       maturity: "DEV",
       adapter_references: configuredAdapterReferences(config),
       adapters_loaded: false,
@@ -2692,26 +2370,14 @@ export async function runProductCli(
         detail:
           "offline validation only: configuration schema, credential reference shape, and state filesystem were checked; no adapter was constructed and no credential, provider, or service health was verified",
       },
-      ...(storage === undefined ? {} : { storage }),
       wedge_executed: false,
     });
     return 0;
   }
 
-  if (
-    parsed.command === "approvals" ||
-    parsed.command === "approve" ||
-    parsed.command === "reject"
-  ) {
-    const probe = await probeConfig(config, classifier);
-    if (!probe.ok) {
-      print(stderr, {
-        ok: false,
-        command: parsed.command,
-        filesystem: probe.filesystem,
-      });
+  if (parsed.command === "approvals") {
+    if ((await requireLocalState(parsed, config, classifier, stderr)) === null)
       return 1;
-    }
     let approvalResult: Record<string, unknown> | undefined;
     try {
       const release = await lifecycleLock(
@@ -2722,14 +2388,9 @@ export async function runProductCli(
       );
       try {
         prepareProductStateRoot(config.state_dir);
-        const identityBase = resolveIdentityCheckDependencies(
-          dependencies.identityCheck,
-          config,
-          dependencies.environment,
-        );
-        // Listing remains local. Resolution is local only for standalone
-        // profiles; an enrolled organization must attribute and authorize the
-        // human through a centrally governed approval surface.
+        // Listing stays local and read-only. Resolution is never a CLI verb:
+        // the organization Slack approval surface is the one V1 resolver, so a
+        // reviewer is always centrally attributed and authorized.
         const approvals =
           dependencies.composition?.approvals ??
           new DecisionNodeStore(config.state_dir, {
@@ -2745,8 +2406,10 @@ export async function runProductCli(
                 }),
           });
         await approvals.initialize();
-        if (parsed.command === "approvals") {
-          const records = (await approvals.list()).map((record) => ({
+        approvalResult = {
+          ok: true,
+          command: parsed.command,
+          approvals: (await approvals.list()).map((record) => ({
             approval_id: record.approval_id,
             status: record.status,
             requested_at: record.requested_at,
@@ -2762,53 +2425,8 @@ export async function runProductCli(
                   },
                 }
               : {}),
-          }));
-          approvalResult = {
-            ok: true,
-            command: parsed.command,
-            approvals: records,
-          };
-        } else {
-          const organizationState = new SqliteOrganizationStateStore(
-            resolveProductStatePaths(config.state_dir).database,
-          );
-          let organizationManaged = false;
-          try {
-            organizationManaged =
-              organizationApprovalResolutionRequiresAuthority(
-                organizationState,
-              );
-          } finally {
-            organizationState.close();
-          }
-          if (organizationManaged) {
-            throw new Error(
-              "CLI approval resolution is disabled after an organization Authority is pinned; use an organization-authorized approval surface",
-            );
-          }
-          await assertFounderIdentityAllowsPipeline(
-            config.state_dir,
-            identityBase,
-          );
-          const record = await approvals.resolve({
-            approvalId: parsed.approvalId!,
-            status: parsed.command === "approve" ? "approved" : "rejected",
-            reviewedBy: parsed.reviewer!,
-            reason: parsed.reason,
-            surface: "cli",
-          });
-          approvalResult = {
-            ok: true,
-            command: parsed.command,
-            approval: {
-              approval_id: record.approval_id,
-              status: record.status,
-              reviewed_at: record.reviewed_at,
-              reviewed_by: record.reviewed_by,
-              reason: record.reason,
-            },
-          };
-        }
+          })),
+        };
       } finally {
         await release();
       }
@@ -2867,6 +2485,25 @@ export async function runProductCli(
     return cycleStatus;
   }
 
+  print(stderr, { ok: false, error: commandUsage() });
+  return 2;
+}
+
+/**
+ * The long-running loop the LaunchAgent's `service-run` child executes: one
+ * composition, an immediate cycle, then a cycle per interval until SIGINT or
+ * SIGTERM, holding the runtime lifecycle lock throughout.
+ */
+async function runServiceDaemon(
+  config: ProductRuntimeConfig,
+  classifier: ClassifyStateFilesystem,
+  dependencies: ProductCliDependencies,
+  streams: {
+    stdout: Pick<Writable, "write">;
+    stderr: Pick<Writable, "write">;
+  },
+): Promise<number> {
+  const { stdout, stderr } = streams;
   let releaseRuntime: ReleaseProductLifecycleLock;
   try {
     releaseRuntime = await lifecycleLock(
@@ -2888,38 +2525,6 @@ export async function runProductCli(
     } catch (error) {
       printRuntimeFailure(stderr, error);
       return 1;
-    }
-
-    if (dependencies.runtime !== undefined) {
-      let runtime: Awaited<ReturnType<typeof startProductRuntime>>;
-      try {
-        runtime = await startProductRuntime(config, {
-          ...dependencies.runtime,
-          classifyStateFilesystem: classifier,
-          identityCheck: resolveIdentityCheckDependencies(
-            dependencies.runtime.identityCheck ?? dependencies.identityCheck,
-            config,
-            dependencies.environment,
-          ),
-        });
-      } catch (error) {
-        signalWaiter.cancel();
-        printRuntimeFailure(stderr, error);
-        return 1;
-      }
-      if (!runtime.ok) {
-        signalWaiter.cancel();
-        printRuntimeFailure(stderr, runtime.error);
-        return 1;
-      }
-      const signal = signalWaiter.received ?? (await signalWaiter.promise);
-      const shutdown = await runtime.handle.shutdown();
-      print(shutdown.ok ? stdout : stderr, {
-        ok: shutdown.ok,
-        signal,
-        shutdown,
-      });
-      return shutdown.ok ? 0 : 1;
     }
 
     let composition: ProductComposition;
@@ -2949,7 +2554,7 @@ export async function runProductCli(
         .then((cycle) => {
           print(cycle.ok ? stdout : stderr, {
             ok: cycle.ok,
-            command: "run",
+            command: "service-run",
             status: "cycle-complete",
             cycle,
           });
@@ -2957,7 +2562,7 @@ export async function runProductCli(
         .catch((error: unknown) => {
           print(stderr, {
             ok: false,
-            command: "run",
+            command: "service-run",
             status: "cycle-failed",
             error: (error as Error).message,
           });

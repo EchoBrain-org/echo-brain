@@ -78,24 +78,51 @@ if [[ "$actual_version" != "$expected_version" ]]; then
   exit 1
 fi
 
-"$cli" onboard --config "$config" --state-dir "$state"
+# This package smoke has no live organization Authority. Materialize its
+# deliberately offline fixture directly; employee setup is exercised through
+# the public `bootstrap` command in the product tests.
+mkdir -p "$(dirname "$config")" "$state/credentials"
+chmod 700 "$(dirname "$config")" "$state" "$state/credentials"
 node -e '
   const fs = require("node:fs");
-  const path = process.argv[1];
-  const value = JSON.parse(fs.readFileSync(path, "utf8"));
-  value.meeting_sources[0].settings = {
-    ...value.meeting_sources[0].settings,
-    base_url: "https://127.0.0.1:1",
-    request_timeout_ms: 1000,
+  const path = require("node:path");
+  const configPath = process.argv[1];
+  const state = process.argv[2];
+  const value = {
+    schema_version: 1,
+    lane: "team-product",
+    state_dir: state,
+    meeting_sources: [{
+      adapter_id: "granola",
+      instance_id: "primary",
+      credential_ref: `file:${path.join(state, "credentials", "granola-api-key")}`,
+      settings: {
+        base_url: "https://127.0.0.1:1",
+        request_timeout_ms: 1000,
+      },
+    }],
+    decision_processor: {
+      adapter_id: "structured-text",
+      instance_id: "primary",
+      settings: {},
+    },
+    delivery_surfaces: [{
+      adapter_id: "jsonl-outbox",
+      instance_id: "local",
+      settings: {
+        path: path.join(state, "outbox.jsonl"),
+        destination_id: "local-outbox",
+      },
+    }],
+    approval_mode: "manual",
   };
-  fs.writeFileSync(path, `${JSON.stringify(value, null, 2)}\n`);
-' "$config"
+  fs.writeFileSync(configPath, `${JSON.stringify(value, null, 2)}\n`);
+' "$config" "$state"
 chmod 600 "$config"
 printf 'grn_ci_internal_live_smoke\n' > "$state/credentials/granola-api-key"
 chmod 600 "$state/credentials/granola-api-key"
 
 "$cli" init --config "$config"
-"$cli" selftest --config "$config"
 "$cli" service install --config "$config"
 
 launchagent_pid=''

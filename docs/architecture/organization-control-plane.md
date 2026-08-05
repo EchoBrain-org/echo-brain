@@ -218,8 +218,9 @@ The connection and permission service must preserve these rules:
   current installation, membership, link, binding, grant, bot identity,
   message marker, and conflicting reactions before appending a new audit
   evaluation.
-- Disable direct CLI approve/reject for organization-enrolled profiles until a
-  centrally attributable CLI actor policy exists.
+- Keep the Slack approval surface the single resolver. The CLI ships no
+  approve/reject command at all, so no local actor can resolve a decision until
+  a centrally attributable CLI actor policy exists.
 
 The Authority and integration layer run in one process. The permission lookup
 is authenticated by the enrolled installation key and never receives the

@@ -269,50 +269,51 @@ describe('product runtime configuration', () => {
     expect(stderr).toContain('invalid product runtime configuration');
   });
 
-  it('runs read-only validate-config and offline selftest without claiming the wedge ran', async () => {
+  it('runs read-only validate-config without claiming the wedge ran', async () => {
     const configPath = writeConfig(validConfig());
-    for (const command of ['validate-config', 'selftest'] as const) {
-      let stdout = '';
-      const status = await runProductCli([command, '--config', configPath], {
+    let stdout = '';
+    const status = await runProductCli(
+      ['validate-config', '--config', configPath],
+      {
         classifyStateFilesystem: async () => ({ kind: 'local', raw: 'apfs' }),
         stdout: { write: (chunk) => ((stdout += String(chunk)), true) },
         stderr: { write: () => true },
-      });
-      expect(status).toBe(0);
-      const report = JSON.parse(stdout) as {
-        maturity: string;
-        wedge_executed: boolean;
-        adapters_loaded: boolean;
-        runtime_readiness: { checked: boolean; detail: string };
-        adapter_references: {
-          meeting_sources: Array<{ adapter_id: string; instance_id: string }>;
-          decision_processor: { adapter_id: string; instance_id: string };
-          delivery_surfaces: Array<{
-            adapter_id: string;
-            instance_id: string;
-          }>;
-        };
+      },
+    );
+    expect(status).toBe(0);
+    const report = JSON.parse(stdout) as {
+      maturity: string;
+      wedge_executed: boolean;
+      adapters_loaded: boolean;
+      runtime_readiness: { checked: boolean; detail: string };
+      adapter_references: {
+        meeting_sources: Array<{ adapter_id: string; instance_id: string }>;
+        decision_processor: { adapter_id: string; instance_id: string };
+        delivery_surfaces: Array<{
+          adapter_id: string;
+          instance_id: string;
+        }>;
       };
-      expect(report.maturity).toBe('DEV');
-      expect(report.wedge_executed).toBe(false);
-      expect(report.adapters_loaded).toBe(false);
-      expect(report.runtime_readiness.checked).toBe(false);
-      expect(report.runtime_readiness.detail).toContain(
-        'no credential, provider, or service health was verified',
-      );
-      expect(report.adapter_references).toEqual({
-        meeting_sources: [
-          { adapter_id: 'fixture-meetings', instance_id: 'primary' },
-        ],
-        decision_processor: {
-          adapter_id: 'fixture-processor',
-          instance_id: 'primary',
-        },
-        delivery_surfaces: [
-          { adapter_id: 'fixture-delivery', instance_id: 'team' },
-        ],
-      });
-    }
+    };
+    expect(report.maturity).toBe('DEV');
+    expect(report.wedge_executed).toBe(false);
+    expect(report.adapters_loaded).toBe(false);
+    expect(report.runtime_readiness.checked).toBe(false);
+    expect(report.runtime_readiness.detail).toContain(
+      'no credential, provider, or service health was verified',
+    );
+    expect(report.adapter_references).toEqual({
+      meeting_sources: [
+        { adapter_id: 'fixture-meetings', instance_id: 'primary' },
+      ],
+      decision_processor: {
+        adapter_id: 'fixture-processor',
+        instance_id: 'primary',
+      },
+      delivery_surfaces: [
+        { adapter_id: 'fixture-delivery', instance_id: 'team' },
+      ],
+    });
   });
 
   it('reports the configured approval surface without loading adapters', async () => {
@@ -331,11 +332,14 @@ describe('product runtime configuration', () => {
       }),
     );
     let stdout = '';
-    const status = await runProductCli(['selftest', '--config', configPath], {
-      classifyStateFilesystem: async () => ({ kind: 'local', raw: 'apfs' }),
-      stdout: { write: (chunk) => ((stdout += String(chunk)), true) },
-      stderr: { write: () => true },
-    });
+    const status = await runProductCli(
+      ['validate-config', '--config', configPath],
+      {
+        classifyStateFilesystem: async () => ({ kind: 'local', raw: 'apfs' }),
+        stdout: { write: (chunk) => ((stdout += String(chunk)), true) },
+        stderr: { write: () => true },
+      },
+    );
 
     expect(status).toBe(0);
     expect(JSON.parse(stdout).adapter_references.approval_surface).toEqual({
@@ -344,11 +348,11 @@ describe('product runtime configuration', () => {
     });
   });
 
-  it('makes production run report every unavailable adapter before probing state', async () => {
+  it('makes a production cycle report every unavailable adapter before probing state', async () => {
     const configPath = writeConfig(validConfig());
     let probes = 0;
     let stderr = '';
-    const status = await runProductCli(['run', '--config', configPath], {
+    const status = await runProductCli(['run-once', '--config', configPath], {
       classifyStateFilesystem: async () => {
         probes += 1;
         return { kind: 'local', raw: 'apfs' };

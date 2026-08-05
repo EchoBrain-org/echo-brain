@@ -267,15 +267,15 @@ export const RETIRED_FOUNDER_PROVENANCE_MESSAGE =
   'founder-provenance mode that produced it is retired. No product-work ' +
   'command, runtime start, or new processing cycle can resume on this ' +
   'profile. Diagnosis, preservation, and quiescing stay available: ' +
-  'identity-check, validate-config, selftest, status, backup, restore, and ' +
+  'identity-check, validate-config, status, backup, restore, and ' +
   'service stop/status/uninstall. The cutover is irreversible and a backup ' +
   'stays bound to the state path it came from, so no restore crosses this ' +
   'fence. To move forward, in this order: `echo-brain service stop` (backup ' +
-  'refuses while the service is loaded), `echo-brain backup`, `echo-brain ' +
-  'onboard` a new founder-residue-free state path, provision the Granola ' +
-  'credential that path\'s config references, `echo-brain init`, then ' +
-  '`echo-brain organization enroll` on that initialized, not-yet-enrolled ' +
-  'installation.';
+  'refuses while the service is loaded), `echo-brain backup`, then ' +
+  '`echo-brain bootstrap` onto a new founder-residue-free config and state ' +
+  'path with the administrator-issued invitation and the Authority PIN from ' +
+  'an independent trusted channel; that one command provisions the ' +
+  'credentials, initializes, and enrolls the new installation.';
 
 export interface FounderProvenanceResidue {
   present: boolean;
@@ -486,7 +486,7 @@ export function inspectFounderProvenanceResidue(
  *
  * It is deliberately NOT called by the diagnosis, preservation, and quiescing
  * commands, which must stay usable on a fenced profile: `identity-check`,
- * `validate-config`, `selftest`, general `status`, `backup`, `restore`, and
+ * `validate-config`, general `status`, `backup`, `restore`, and
  * `service stop`/`status`/`uninstall`. Several of those write; the distinction
  * is product work, not writes. `src/product/cli.ts` owns the exact dispatch
  * policy.

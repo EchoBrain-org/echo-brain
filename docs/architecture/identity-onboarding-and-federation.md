@@ -105,16 +105,17 @@ closed.
 
 Diagnosis, preservation, and quiescing stay available on a fenced profile:
 `identity-check` still reports it as `identity_enabled` with
-`operational_ready: false`, and `validate-config`, `selftest`, general `status`,
-`backup`, `restore`, and `service stop`/`status`/`uninstall` remain reachable.
+`operational_ready: false`, and `validate-config`, general `status`, `backup`,
+`restore`, and `service stop`/`status`/`uninstall` remain reachable.
 Several of those write; the line is product work, not writes.
 
 Recovery does not cross the fence. The cutover is irreversible and a backup
 stays bound to its originating state path, so restore can only return a profile
 to itself. Because `backup` refuses while the service is loaded, the executable
-order is `service stop`, `backup`, `onboard` a founder-residue-free new state
-path, provision the Granola credential that config references, `init`, then
-`organization enroll` on that initialized, not-already-enrolled installation.
+order is `service stop`, `backup`, then `bootstrap` onto a founder-residue-free
+new config and state path with the administrator-issued invitation and
+Authority PIN; that one command provisions the credentials, initializes, and
+enrolls the new installation.
 
 Organization ingest, search, embeddings, participant resolution, IdP/SCIM,
 billing, and multi-organization tenancy are outside this onboarding/access
