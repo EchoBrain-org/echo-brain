@@ -21,9 +21,9 @@ general-purpose home for new files.
   portable integrity/key types from `@echo-brain/federation-protocol`. The
   retired source/processor attribution, approval metadata, record-envelope, and
   export type graph and its five unused JSON schemas are deleted. The product
-  store does not produce or schema-validate those full wire formats; the Slack
-  adapter still has a narrow opaque legacy-presentation parser, which is a
-  separate adapter cleanup boundary.
+  store does not produce or schema-validate those full wire formats, and the
+  Slack adapter refuses historical requested federation metadata before any
+  provider contact instead of parsing or presenting it.
 - `cutover-fence.ts` and `build-identity.ts` are bootstrap-owned root anchors,
   and `schema-validation.ts` with its `schema-validator.ts` Ajv backend is
   foundation-owned.

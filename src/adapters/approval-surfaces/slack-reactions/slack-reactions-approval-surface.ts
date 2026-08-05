@@ -1,4 +1,3 @@
-import { createHash } from 'node:crypto';
 import type {
   AdapterConfig,
   AdapterConfigValidation,
@@ -43,8 +42,8 @@ type ReviewerReactionState = 'present' | 'absent' | 'unknown';
 /**
  * The store port this surface resolves against. Implemented by the product
  * layer's `DecisionNodeStore` and injected by the composition root, so the
- * adapter stays independent of product internals while every surface (CLI,
- * Slack) shares one source of truth.
+ * adapter stays independent of product internals while approval state has one
+ * source of truth.
  */
 export interface ApprovalDecisionStoreView {
   approval_id: string;
@@ -57,12 +56,6 @@ export interface ApprovalDecisionStoreView {
   published: readonly { surface: string; reference: JsonObject }[];
 }
 
-export type SlackPresentationEvidence = JsonObject & {
-  rendered_blocks_sha256: string;
-  rendered_blocks: JsonValue;
-  provider_identity: SlackProviderIdentityEvidence;
-};
-
 export type SlackProviderIdentityEvidence = JsonObject & {
   provider: 'slack';
   team_id: string;
@@ -70,27 +63,6 @@ export type SlackProviderIdentityEvidence = JsonObject & {
   bot_user_id: string;
   bot_id: string | null;
   app_id: string | null;
-};
-
-export type SlackResolutionEvidence = JsonObject & {
-  provider_identity: SlackProviderIdentityEvidence;
-  actor: JsonObject & {
-    team_id: string;
-    user_id: string;
-    display_name: string;
-    reaction_name: string;
-    channel_id: string;
-    message_ts: string;
-    provider_occurred_at: null;
-    reason_reply:
-      | (JsonObject & {
-          message_ts: string;
-          author_user_id: string;
-          text: string;
-        })
-      | null;
-  };
-  authorization?: JsonObject;
 };
 
 export interface ApprovalActionAuthorizationRequest {
@@ -143,8 +115,6 @@ export interface ApprovalDecisionStore {
     processingKey: string;
     surface: string;
     reference: JsonObject;
-    /** Raw adapter evidence; the product store owns durable enrichment. */
-    presentationEvidence?: SlackPresentationEvidence;
   }): Promise<ApprovalDecisionStoreView>;
   resolve(input: {
     approvalId: string;
@@ -153,8 +123,6 @@ export interface ApprovalDecisionStore {
     reason?: string | null;
     surface: string;
     metadata?: JsonObject;
-    /** Raw adapter evidence; the product store owns durable enrichment. */
-    resolutionEvidence?: SlackResolutionEvidence;
   }): Promise<ApprovalDecisionStoreView>;
 }
 
@@ -176,23 +144,9 @@ interface SlackReactionsSettings {
   requestTimeoutMs: number | undefined;
 }
 
-interface ActiveFederationPresentation {
-  candidateContextSha256: string;
-  providerIdentity: SlackProviderIdentityEvidence;
-  publication: {
-    payloadScope: string;
-    audience: string;
-    sensitivity: string;
-    retention: string;
-    rawMeetingContent: string;
-    participantObservations: string;
-  };
-}
-
-export interface RenderSlackApprovalBlocksInput {
+interface RenderSlackApprovalBlocksInput {
   brief: DecisionBrief;
   approvalId?: string;
-  requestedMetadata?: JsonObject;
   approveReaction: string;
   rejectReaction: string;
 }
@@ -239,136 +193,6 @@ function settingsFrom(config: AdapterConfig): SlackReactionsSettings {
   };
 }
 
-function invalidFederationPresentation(detail: string): AdapterError {
-  return new AdapterError(
-    'permanently_rejected',
-    `Slack approval federation presentation is invalid: ${detail}`,
-    false,
-  );
-}
-
-function requiredPresentationString(
-  object: Record<string, unknown>,
-  key: string,
-): string {
-  const value = object[key];
-  if (!isNonEmptyString(value)) throw invalidFederationPresentation(key);
-  return value;
-}
-
-function nullablePresentationString(
-  object: Record<string, unknown>,
-  key: string,
-): string | null {
-  const value = object[key];
-  if (value === null) return null;
-  if (!isNonEmptyString(value)) throw invalidFederationPresentation(key);
-  return value;
-}
-
-function activeFederationPresentation(
-  requestedMetadata: JsonObject | undefined,
-): ActiveFederationPresentation | undefined {
-  const federation = requestedMetadata?.['federation'];
-  if (federation === undefined) return undefined;
-  if (!isPlainObject(federation)) {
-    throw invalidFederationPresentation('federation');
-  }
-  const publication = federation['publication'];
-  if (!isPlainObject(publication)) {
-    throw invalidFederationPresentation('publication');
-  }
-  const audience = publication['audience'];
-  if (!isPlainObject(audience)) {
-    throw invalidFederationPresentation('publication.audience');
-  }
-  const audienceScope = requiredPresentationString(audience, 'scope');
-  const subjects = audience['subjects'];
-  if (!Array.isArray(subjects) || subjects.length === 0) {
-    throw invalidFederationPresentation('publication.audience.subjects');
-  }
-  const renderedSubjects = subjects.map((subject, index) => {
-    if (!isPlainObject(subject)) {
-      throw invalidFederationPresentation(
-        `publication.audience.subjects[${index}]`,
-      );
-    }
-    return `${requiredPresentationString(
-      subject,
-      'kind',
-    )}:${requiredPresentationString(subject, 'id')}`;
-  });
-  const retention = publication['retention'];
-  if (!isPlainObject(retention)) {
-    throw invalidFederationPresentation('publication.retention');
-  }
-  const retentionKind = requiredPresentationString(retention, 'kind');
-  let renderedRetention: string;
-  if (retentionKind === 'indefinite') {
-    renderedRetention = 'indefinite';
-  } else if (
-    retentionKind === 'duration' &&
-    Number.isSafeInteger(retention['days']) &&
-    Number(retention['days']) > 0
-  ) {
-    renderedRetention = `duration (${String(retention['days'])} days)`;
-  } else {
-    throw invalidFederationPresentation('publication.retention');
-  }
-
-  const approvalSurface = federation['approval_surface'];
-  const connection = isPlainObject(approvalSurface)
-    ? approvalSurface['connection']
-    : undefined;
-  const providerIdentity = isPlainObject(connection)
-    ? connection['provider_identity']
-    : undefined;
-  if (!isPlainObject(providerIdentity)) {
-    throw invalidFederationPresentation(
-      'approval_surface.connection.provider_identity',
-    );
-  }
-  if (providerIdentity['provider'] !== 'slack') {
-    throw invalidFederationPresentation(
-      'approval_surface.connection.provider_identity.provider',
-    );
-  }
-
-  const botUserId = requiredPresentationString(providerIdentity, 'bot_user_id');
-
-  return {
-    candidateContextSha256: requiredPresentationString(
-      federation,
-      'candidate_context_sha256',
-    ),
-    providerIdentity: {
-      provider: 'slack',
-      team_id: requiredPresentationString(providerIdentity, 'team_id'),
-      enterprise_id: nullablePresentationString(
-        providerIdentity,
-        'enterprise_id',
-      ),
-      bot_user_id: botUserId,
-      bot_id: nullablePresentationString(providerIdentity, 'bot_id'),
-      app_id: nullablePresentationString(providerIdentity, 'app_id'),
-    },
-    publication: {
-      payloadScope: requiredPresentationString(publication, 'payload_scope'),
-      audience: `${audienceScope} [${renderedSubjects.join(', ')}]`,
-      sensitivity: requiredPresentationString(publication, 'sensitivity'),
-      retention: renderedRetention,
-      rawMeetingContent: requiredPresentationString(
-        publication,
-        'raw_meeting_content',
-      ),
-      participantObservations: requiredPresentationString(
-        publication,
-        'participant_observations',
-      ),
-    },
-  };
-}
-
 function liveProviderEvidence(
   identity: SlackAuthIdentity,
 ): SlackProviderIdentityEvidence {
@@ -380,32 +204,6 @@ function liveProviderEvidence(
     bot_id: identity.bot_id,
     app_id: identity.app_id,
   };
-}
-
-function assertSameProviderIdentity(
-  frozen: SlackProviderIdentityEvidence,
-  live: SlackProviderIdentityEvidence,
-): void {
-  if (!jsonEquivalent(frozen, live)) {
-    throw new AdapterError(
-      'unauthorized',
-      'Slack approval credential identity no longer matches the frozen connection',
-      false,
-    );
-  }
-}
-
-function assertReviewerIsNotBot(
-  federation: ActiveFederationPresentation,
-  reviewerUserId: string,
-): void {
-  if (federation.providerIdentity.bot_user_id === reviewerUserId) {
-    throw new AdapterError(
-      'permanently_rejected',
-      'Slack approval reviewer must be a human distinct from the bot user',
-      false,
-    );
-  }
 }
 
 function sortedJsonValue(value: unknown): unknown {
@@ -425,23 +223,9 @@ function jsonEquivalent(left: unknown, right: unknown): boolean {
   );
 }
 
-function jsonSha256(value: unknown): string {
-  return `sha256:${createHash('sha256')
-    .update(JSON.stringify(sortedJsonValue(value)))
-    .digest('hex')}`;
-}
-
 function slackReference(
   reference: JsonObject,
 ): { channel: string; messageTs: string } | undefined {
-  const nested = reference['slack'];
-  if (isPlainObject(nested)) {
-    const channel = nested['channel_id'];
-    const messageTs = nested['message_ts'];
-    if (isNonEmptyString(channel) && isNonEmptyString(messageTs)) {
-      return { channel, messageTs };
-    }
-  }
   const channel = reference['channel_id'];
   const messageTs = reference['message_ts'];
   return isNonEmptyString(channel) && isNonEmptyString(messageTs)
@@ -450,15 +234,11 @@ function slackReference(
 }
 
 /**
- * Version-1 approval-card renderer. Identity-enabled capture calls this same
- * pure function when validating durable presentation evidence, so changing a
- * stored block and merely recomputing its digest cannot rewrite what the
- * reviewer was asked to approve.
+ * Version-1 approval-card renderer.
  */
-export function renderSlackApprovalBlocks(
+function renderSlackApprovalBlocks(
   input: RenderSlackApprovalBlocksInput,
 ): JsonValue[] {
-  const federation = activeFederationPresentation(input.requestedMetadata);
   const title = input.brief.meeting.title ?? input.brief.meeting.id;
   const summaries = [
     summaryText(
@@ -471,29 +251,6 @@ export function renderSlackApprovalBlocks(
     ),
   ].filter((value): value is string => value !== undefined);
   const identified = input.approvalId !== undefined;
-  const active = federation !== undefined && identified;
-  const federationSummary = !active
-    ? []
-    : [
-        {
-          type: 'section',
-          text: {
-            type: 'plain_text',
-            text: [
-              'Publication:',
-              `• Payload scope: ${federation.publication.payloadScope}`,
-              `• Audience: ${federation.publication.audience}`,
-              `• Sensitivity: ${federation.publication.sensitivity}`,
-              `• Retention: ${federation.publication.retention}`,
-              `• Raw meeting content: ${federation.publication.rawMeetingContent}`,
-              `• Participant observations: ${federation.publication.participantObservations}`,
-              `• Candidate digest: ${federation.candidateContextSha256}`,
-              `• Approval ID: ${input.approvalId}`,
-            ].join('\n'),
-            emoji: true,
-          },
-        },
-      ];
   const blocks: JsonValue[] = [
     {
       type: 'header',
@@ -509,7 +266,6 @@ export function renderSlackApprovalBlocks(
       // <!channel> or <@U123> cannot become active Slack mentions.
       text: { type: 'plain_text', text, emoji: true },
     })),
-    ...federationSummary,
     {
       type: 'context',
       elements: [
@@ -764,13 +520,20 @@ export class SlackReactionsApprovalSurface implements ApprovalSurfaceAdapter {
         false,
       );
     }
-    // Stage the node before any Slack traffic: once the request is stored,
-    // the CLI surface can resolve it even if every Slack call below fails.
+    // Stage the node before any Slack traffic so retries keep one durable
+    // approval request even if every Slack call below fails.
     const staged = await this.store.ensureRequested(request);
+    if (Object.hasOwn(staged.requested_metadata ?? {}, 'federation')) {
+      throw new AdapterError(
+        'permanently_rejected',
+        'Slack approval request uses retired federation metadata',
+        false,
+      );
+    }
     if (staged.status !== 'pending') return decision(staged);
 
     try {
-      const publicationSurface = this.publicationSurface(staged);
+      const publicationSurface = this.publicationSurface();
       const published = await this.ensurePublished(
         request.processing_key,
         staged,
@@ -807,7 +570,7 @@ export class SlackReactionsApprovalSurface implements ApprovalSurfaceAdapter {
     staged: ApprovalDecisionStoreView,
     operation?: AdapterOperationContext,
   ): Promise<ApprovalDecisionStoreView> {
-    const publicationSurface = this.publicationSurface(staged);
+    const publicationSurface = this.publicationSurface();
     if (
       staged.published.some(
         (entry) => entry.surface === publicationSurface,
@@ -818,25 +581,11 @@ export class SlackReactionsApprovalSurface implements ApprovalSurfaceAdapter {
     // Posting then recording is a dual write: a crash between the two can
     // produce a duplicate message on retry. Posting is at-least-once by
     // design; the recorded reference always wins as the polled message.
-    const federation = activeFederationPresentation(staged.requested_metadata);
     const requiresExactPostedBlocks =
-      federation !== undefined ||
       publicationSurface === AUTHORITY_MARKED_SURFACE;
-    let liveProviderIdentity: SlackProviderIdentityEvidence | undefined;
-    if (federation !== undefined) {
-      assertReviewerIsNotBot(federation, this.settings.reviewerUserId);
-      liveProviderIdentity = liveProviderEvidence(
-        await this.apiClient().authIdentity(operation?.signal),
-      );
-      assertSameProviderIdentity(
-        federation.providerIdentity,
-        liveProviderIdentity,
-      );
-    }
     const blocks = renderSlackApprovalBlocks({
       brief: staged.brief,
       approvalId: staged.approval_id,
-      requestedMetadata: staged.requested_metadata,
       approveReaction: this.settings.approveReaction,
       rejectReaction: this.settings.rejectReaction,
     });
@@ -859,30 +608,18 @@ export class SlackReactionsApprovalSurface implements ApprovalSurfaceAdapter {
         true,
       );
     }
-    let presentationEvidence: SlackPresentationEvidence | undefined;
-    if (federation !== undefined) {
-      presentationEvidence = {
-        rendered_blocks_sha256: jsonSha256(posted.blocks),
-        rendered_blocks: JSON.parse(JSON.stringify(posted.blocks)) as JsonValue,
-        provider_identity:
-          liveProviderIdentity as SlackProviderIdentityEvidence,
-      };
-    }
     return await this.store.recordPublished({
       processingKey,
       surface: publicationSurface,
       reference: { channel_id: posted.channel, message_ts: posted.ts },
-      ...(presentationEvidence === undefined ? {} : { presentationEvidence }),
     });
   }
 
-  private publicationSurface(staged: ApprovalDecisionStoreView): string {
-    // Federation publications already authenticated their exact marked blocks
-    // before this organization-authority bridge existed. Plain pre-authority
-    // Slack slots did not, so central authorization uses a new append-only slot
-    // and thereafter polls only that durable replacement reference.
-    return this.approvalActionAuthorizer !== undefined &&
-      activeFederationPresentation(staged.requested_metadata) === undefined
+  private publicationSurface(): string {
+    // Plain pre-authority Slack slots did not authenticate their exact blocks,
+    // so central authorization uses a new append-only slot and thereafter
+    // polls only that durable replacement reference.
+    return this.approvalActionAuthorizer !== undefined
       ? AUTHORITY_MARKED_SURFACE
       : SURFACE;
   }
@@ -894,14 +631,9 @@ export class SlackReactionsApprovalSurface implements ApprovalSurfaceAdapter {
     messageTs: string,
     operation?: AdapterOperationContext,
   ): Promise<ApprovalDecision> {
-    const federation = activeFederationPresentation(state.requested_metadata);
     const centralizedAuthorization =
       this.approvalActionAuthorizer !== undefined;
-    const strictEvidence =
-      federation !== undefined || centralizedAuthorization;
-    if (federation !== undefined) {
-      assertReviewerIsNotBot(federation, this.settings.reviewerUserId);
-    }
+    const strictEvidence = centralizedAuthorization;
     const reactions = await this.apiClient().reactionsGet(
       channel,
       messageTs,
@@ -923,7 +655,7 @@ export class SlackReactionsApprovalSurface implements ApprovalSurfaceAdapter {
       return decision(state);
     // Both reactions present is a human conflict with no orderable winner
     // (Slack reactions carry no timestamps): fail closed and stay pending
-    // until the channel or the CLI sorts it out.
+    // until the reviewer removes one reaction.
     if (approved === rejected) return decision(state);
 
     const latestReply = await this.latestReviewerReply(
@@ -942,12 +674,6 @@ export class SlackReactionsApprovalSurface implements ApprovalSurfaceAdapter {
           await this.apiClient().authIdentity(operation?.signal),
         )
       : undefined;
-    if (federation !== undefined) {
-      assertSameProviderIdentity(
-        federation.providerIdentity,
-        liveProviderIdentity as SlackProviderIdentityEvidence,
-      );
-    }
     const authorizer = this.approvalActionAuthorizer;
     let authorizationEvidence: JsonObject | undefined;
     if (authorizer !== undefined) {
@@ -1010,49 +736,20 @@ export class SlackReactionsApprovalSurface implements ApprovalSurfaceAdapter {
         reviewedBy: this.settings.reviewerName,
         reason,
         surface: SURFACE,
-        ...(federation === undefined
-          ? {
-              metadata: {
-                slack: {
-                  channel_id: channel,
-                  message_ts: messageTs,
-                  reviewer_user_id: this.settings.reviewerUserId,
-                },
-                ...(authorizationEvidence === undefined
-                  ? {}
-                  : { authorization: authorizationEvidence }),
-              },
-            }
-          : {
-              resolutionEvidence: {
-                provider_identity:
-                  liveProviderIdentity as SlackProviderIdentityEvidence,
-                actor: {
-                  team_id: federation.providerIdentity.team_id,
-                  user_id: this.settings.reviewerUserId,
-                  display_name: this.settings.reviewerName,
-                  reaction_name: reactionName,
-                  channel_id: channel,
-                  message_ts: messageTs,
-                  provider_occurred_at: null,
-                  reason_reply:
-                    latestReply === null
-                      ? null
-                      : {
-                          message_ts: latestReply.ts,
-                          author_user_id: latestReply.user,
-                          text: latestReply.text,
-                        },
-                },
-                ...(authorizationEvidence === undefined
-                  ? {}
-                  : { authorization: authorizationEvidence }),
-              },
-            }),
+        metadata: {
+          slack: {
+            channel_id: channel,
+            message_ts: messageTs,
+            reviewer_user_id: this.settings.reviewerUserId,
+          },
+          ...(authorizationEvidence === undefined
+            ? {}
+            : { authorization: authorizationEvidence }),
+        },
       });
     } catch {
-      // Another surface (e.g. the CLI) resolved this node first. The store
-      // is first-resolution-wins; report the winner instead of failing.
+      // A concurrent review cycle may have resolved this node first. The
+      // store is first-resolution-wins; report the winner instead of failing.
       resolved = await this.store.ensureRequested(request);
       if (resolved.status === 'pending') {
         throw new AdapterError(
