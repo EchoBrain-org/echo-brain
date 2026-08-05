@@ -26,11 +26,14 @@ general-purpose home for new files.
   foundation-owned.
 
 `cutover-fence.ts` holds the founder identity/cutover detector and the one
-shared retirement gate, `assertFounderProvenanceRetired`. No supported command
-or runtime path in this build creates founder identity or cutover material --
-the low-level `commitFounderBootstrap`, `commitFounderCutoverGuard`, and the
-writable session-store APIs still compile and are still reachable from tests,
-so the guard is written to detect residue however it arrived, not to assume it
+shared retirement gate, `assertFounderProvenanceRetired`. Nothing in this build
+creates founder identity or cutover material: the low-level authoring APIs --
+the bootstrap commit and cutover-guard writers, the writable session-store
+APIs, provider observation/capture, challenge issue/poll, and credential-guard
+creation -- are deleted, and production is detection- and validation-only.
+Tests manufacture residue by copying the fixed, signed historical fixture
+bytes under `tests/product/federation/fixtures/retired-founder-state/`; the
+gate is still written to detect residue however it arrived, not to assume it
 cannot exist.
 
 That gate is observational only: it uses `lstat`/`readdir`/path existence and
@@ -76,17 +79,19 @@ satisfy that one with a permissive or no-op capture object -- it distinguishes
   `@echo-brain/federation-protocol` directly rather than through these shims.
 - `identity/`: identity bundles, manifests, connections, policies, credentials,
   and provider identity.
-- `bootstrap/`: bootstrap sessions, challenge handling, identity mutation
-  primitives, and the identity/seed readiness checks.
+- `bootstrap/`: historical validation of stored bootstrap sessions (reading,
+  exact-shape/signature/transition checks, and commit-plan reconstruction for
+  cross-checking old residue) plus the identity/seed readiness checks. The
+  mutation primitives that once wrote these documents are deleted.
 
 Installation-side organization orchestration lives in the sibling
 `src/product/organization/` module, and central organization-admin bootstrap is
 the supported enrollment path. Portable canonicalization, identifiers,
 signature validation, installation-key descriptor validation, and generic
 signed documents are owned by `@echo-brain/federation-protocol`. Product
-foundation files preserve the existing import surface while delegating those
-operations to that package. Private-key creation, inspection, deletion, and
-signing remain machine-local product responsibilities.
+foundation files preserve the retained reader/verification imports while
+delegating those operations to that package. Private-key creation, inspection,
+deletion, and signing remain machine-local product responsibilities.
 
 ## Dependency rule
 

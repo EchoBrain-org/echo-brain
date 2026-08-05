@@ -880,26 +880,10 @@ function resolveIdentityCheckDependencies(
   const credentialResolver =
     configured?.credentialResolver ??
     createProductCredentialResolver(environment ?? process.env);
-  if (configured?.signer !== undefined) {
-    return {
-      ...configured,
-      credentialResolver,
-      ...(runtimeConfig === undefined ? {} : { runtimeConfig }),
-    };
-  }
-  if (runtimeConfig === undefined) {
-    return {
-      ...configured,
-      credentialResolver,
-    };
-  }
   return {
     ...configured,
     credentialResolver,
-    runtimeConfig,
-    signer: new FileInstallationSigner(
-      join(runtimeConfig.state_dir, "installation", "keys"),
-    ),
+    ...(runtimeConfig === undefined ? {} : { runtimeConfig }),
   };
 }
 

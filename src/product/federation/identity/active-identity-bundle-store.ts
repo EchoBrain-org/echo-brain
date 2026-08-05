@@ -1,12 +1,10 @@
 import { lstatSync, readdirSync } from 'node:fs';
 import { join, relative, sep } from 'node:path';
-import { atomicCreate } from '../../../infrastructure/filesystem/atomic-create.js';
 import type { JsonValue } from '../../../core/index.js';
 import { resolveProductStatePaths, type ProductStatePaths } from '../../paths.js';
 import {
   assertPrivateOwnedDirectory,
   assertPrivateOwnedRegularFile,
-  ensureDirectory,
   pathEntryExists,
   readFileNoFollow,
 } from '../../secure-local-files.js';
@@ -123,26 +121,6 @@ export class ActiveIdentityBundleStore {
       }
     }
     return false;
-  }
-
-  prepare(): void {
-    assertPrivateOwnedDirectory(this.paths.root, 'product state directory');
-    ensureDirectory(this.paths.identityRoot, 0o700);
-    assertPrivateOwnedDirectory(this.paths.identityRoot, 'identity directory');
-    this.manifests.prepare();
-    this.registries.prepare();
-    this.policies.prepare();
-  }
-
-  createInitialPointer(raw: string): void {
-    this.prepare();
-    canonicalDocument<ActiveIdentityBundleV1>('active-identity-bundle', raw);
-    const created = atomicCreate({
-      filePath: this.paths.activeIdentityBundle,
-      content: raw,
-      mode: 0o600,
-    });
-    if (!created) throw new Error('an active identity bundle already exists');
   }
 
   loadVerified(

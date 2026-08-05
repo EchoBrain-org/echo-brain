@@ -1,9 +1,4 @@
 import {
-  generateKeyPairSync,
-  sign as signMessage,
-  type KeyObject,
-} from "node:crypto";
-import {
   chmodSync,
   mkdirSync,
   mkdtempSync,
@@ -20,12 +15,8 @@ import type {
   PublicationSnapshotV1,
   ToolConnectionV1,
 } from "../../../../src/product/federation/contracts.js";
-import type {
-  InstallationKeyDescriptor,
-  InstallationSigner,
-} from "../../../../src/product/federation/foundation/installation-signer.js";
+import type { InstallationKeyDescriptor } from "../../../../src/product/federation/foundation/installation-signer.js";
 import { canonicalSha256 } from "../../../../src/product/federation/foundation/canonical-json.js";
-import { normalizeP256LowS, p256KeyId } from "../../../../src/product/federation/foundation/signature-profile.js";
 
 export type JsonRecord = Record<string, unknown>;
 
@@ -47,83 +38,6 @@ export function createPrivateTestState(
   mkdirSync(state, { mode: 0o700 });
   chmodSync(state, 0o700);
   return state;
-}
-
-export class TestHardwareSigner implements InstallationSigner {
-  private readonly keys = new Map<string, {
-    privateKey: KeyObject;
-    descriptor: InstallationKeyDescriptor;
-  }>();
-
-  failSignOnce = false;
-  failGenerateOnce = false;
-  reportDeleteWithoutDeleting = false;
-  generateCalls = 0;
-
-  constructor(private readonly protection: Pick<InstallationKeyDescriptor, "protection" | "assurance"> = {
-    protection: "secure-enclave",
-    assurance: "hardware_bound",
-  }) {}
-
-  async generate(installationId: string): Promise<InstallationKeyDescriptor> {
-    this.generateCalls += 1;
-    if (this.failGenerateOnce) {
-      this.failGenerateOnce = false;
-      throw new Error("simulated crash before key generation");
-    }
-    const existing = this.keys.get(installationId);
-    if (existing !== undefined) return existing.descriptor;
-    const { publicKey, privateKey } = generateKeyPairSync("ec", { namedCurve: "prime256v1" });
-    const spki = publicKey.export({ type: "spki", format: "der" });
-    const descriptor: InstallationKeyDescriptor = {
-      installation_id: installationId,
-      key_id: p256KeyId(spki),
-      algorithm: "ecdsa-p256-sha256-der-low-s",
-      public_key_spki_der_base64: spki.toString("base64"),
-      protection: this.protection.protection,
-      assurance: this.protection.assurance,
-      private_key_exportable: false,
-    };
-    this.keys.set(installationId, { privateKey, descriptor });
-    return descriptor;
-  }
-
-  async inspect(installationId: string): Promise<InstallationKeyDescriptor | null> {
-    return this.keys.get(installationId)?.descriptor ?? null;
-  }
-
-  async sign(
-    installationId: string,
-    message: Buffer,
-    expectedKeyId?: `sha256:${string}`,
-  ): Promise<Buffer> {
-    if (this.failSignOnce) {
-      this.failSignOnce = false;
-      throw new Error("simulated crash after key generation");
-    }
-    const key = this.keys.get(installationId);
-    if (key === undefined) throw new Error("test key is unavailable");
-    if (expectedKeyId !== undefined && expectedKeyId !== key.descriptor.key_id) {
-      throw new Error("test key fingerprint mismatch");
-    }
-    return normalizeP256LowS(signMessage("sha256", message, {
-      key: key.privateKey,
-      dsaEncoding: "der",
-    }));
-  }
-
-  async deleteOrphan(
-    installationId: string,
-    expectedKeyId: `sha256:${string}`,
-  ): Promise<boolean> {
-    const key = this.keys.get(installationId);
-    if (key === undefined) return false;
-    if (key.descriptor.key_id !== expectedKeyId) {
-      throw new Error("test key fingerprint mismatch");
-    }
-    if (this.reportDeleteWithoutDeleting) return true;
-    return this.keys.delete(installationId);
-  }
 }
 
 export function manualRuntimeConfig(stateDir: string): ProductRuntimeConfig {

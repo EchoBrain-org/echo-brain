@@ -293,10 +293,9 @@ describe("retired founder provenance cannot be revived through a public seam", (
       expect(calls).toContain("accessGate");
 
       // The adjacent external cutover guard appears underneath the live
-      // composition. This writes the guard file directly rather than through
-      // `commitFounderCutoverGuard`, because what the next cycle must react to
-      // is the file's presence, whoever produced it. The next cycle must refuse
-      // before the access gate.
+      // composition. This writes the guard file directly, because what the
+      // next cycle must react to is the file's presence, whoever produced it.
+      // The next cycle must refuse before the access gate.
       calls.length = 0;
       captureCalls.length = 0;
       writeFileSync(founderCutoverGuardPath(stateDir), "{}", { mode: 0o600 });

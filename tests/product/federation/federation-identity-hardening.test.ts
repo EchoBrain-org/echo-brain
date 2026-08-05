@@ -5,7 +5,6 @@ import {
   checkFounderIdentity,
   verifyActiveConnectionCredentialGuards,
 } from "../../../src/product/federation/bootstrap/identity-check.js";
-import { createLocalCredentialGuard } from "../../../src/product/federation/identity/credential-guard.js";
 import { validateIdentityDocumentSemantics } from "../../../src/product/federation/identity/bundle-semantics.js";
 import {
   createPrivateTestState,
@@ -15,6 +14,10 @@ import {
   testPolicy,
   testRegistry,
 } from "./fixtures/founder-identity.js";
+import {
+  GOLDEN_DUMMY_CREDENTIALS,
+  goldenCredentialGuard,
+} from "./fixtures/retired-founder-state.js";
 
 const NOW = "2026-07-19T20:00:00.000Z";
 const DIGEST = `sha256:${"1".repeat(64)}` as const;
@@ -31,11 +34,19 @@ function privateState(): string {
   return createPrivateTestState(temporary, "echo-identity-hardening-");
 }
 
+/**
+ * The guard authoring API is deleted, so every guard here is the pinned golden
+ * Slack guard rebound to a per-connection reference. The digest is not covered
+ * by the reference, so the pinned salted digest keeps matching the one golden
+ * dummy credential.
+ */
+const ENROLLED_CREDENTIAL =
+  GOLDEN_DUMMY_CREDENTIALS["file:/private/slack-token"];
+
 function slackConnection(
   organizationId: string,
   tenantId: string,
   reference: string,
-  credential: string,
 ) {
   return slackConnectionFixture({
     connectionId: federationId("con"),
@@ -43,11 +54,7 @@ function slackConnection(
     activeAt: NOW,
     tenantId,
     evidenceSha256: DIGEST,
-    credentialGuard: createLocalCredentialGuard(
-      reference,
-      credential,
-      Buffer.alloc(16, tenantId === "T_APPROVAL" ? 1 : 2),
-    ),
+    credentialGuard: { ...goldenCredentialGuard("slack"), reference },
   });
 }
 
@@ -81,13 +88,11 @@ function semanticFixture(claimTenant: string) {
     ids.organization,
     "T_APPROVAL",
     "file:/private/slack-approval-token",
-    "approval-token",
   );
   const decoy = slackConnection(
     ids.organization,
     "T_DECOY",
     "file:/private/slack-decoy-token",
-    "decoy-token",
   );
   const manifest = testManifest({
     ids,
@@ -140,24 +145,21 @@ describe("active connection credential continuity", () => {
       organizationId,
       "T_FIRST",
       "file:/private/first-token",
-      "first-token",
     );
     const second = slackConnection(
       organizationId,
       "T_SECOND",
       "file:/private/second-token",
-      "second-token",
     );
     const retired = slackConnection(
       organizationId,
       "T_RETIRED",
       "file:/private/retired-token",
-      "retired-token",
     );
     retired.generations[0]!.ended_at = NOW;
     const credentials = new Map([
-      ["file:/private/first-token", "first-token"],
-      ["file:/private/second-token", "second-token"],
+      ["file:/private/first-token", ENROLLED_CREDENTIAL],
+      ["file:/private/second-token", ENROLLED_CREDENTIAL],
     ]);
     const resolver = vi.fn((reference: string) => credentials.get(reference));
 
@@ -179,7 +181,6 @@ describe("active connection credential continuity", () => {
       organizationId,
       "T_APPROVAL",
       "file:/private/approval-token",
-      "enrolled-token",
     );
     expect(
       verifyActiveConnectionCredentialGuards(

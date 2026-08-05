@@ -86,9 +86,10 @@ records software-key assurance. The CLI requires an explicit acknowledgement
 before creating that exportable key. The signer interface permits a later
 hardware-backed adapter without changing the federation documents.
 
-Pre-1.0 Secure Enclave identities are not silently rewritten. A build without
-that backend reports `unsupported_legacy_key_backend`; operators must preserve
-the old signer for continuity.
+Pre-1.0 Secure Enclave identities are not silently rewritten or exercised.
+The retained diagnostic verifies their stored public descriptors, document
+signatures, and cutover receipt, then reports the profile as retired and
+inoperable; operators must preserve the old state for continuity.
 
 A state root left behind by the retired founder-provenance mode is detected and
 refused, never downgraded: no product-work command, runtime start, or new

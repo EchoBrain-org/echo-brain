@@ -1,13 +1,9 @@
-import { randomBytes } from "node:crypto";
 import { ActiveIdentityBundleStore } from "../identity/active-identity-bundle-store.js";
 import {
   assertFounderCutoverReceiptMatchesActiveBundle,
   inspectFounderCutoverFence,
   readFounderCutoverGuard,
 } from "../cutover-fence.js";
-import type { InstallationSigner } from "../foundation/installation-signer.js";
-import { verifyInstallationKeyDescriptor } from "../foundation/installation-signer.js";
-import { verifyP256LowSSignature } from "../foundation/signature-profile.js";
 import type { ProductRuntimeConfig } from "../../config.js";
 import type { ProductCredentialResolver } from "../../credentials.js";
 import type { LocalConnectionRegistryV1 } from "../contracts.js";
@@ -48,7 +44,6 @@ export interface IdentityCheckReport {
 }
 
 export interface IdentityCheckDependencies {
-  signer?: InstallationSigner;
   runtimeConfig?: ProductRuntimeConfig;
   credentialResolver?: ProductCredentialResolver;
   approvalCaptureReady?: () => Promise<{ ok: boolean; detail: string }>;
@@ -56,8 +51,6 @@ export interface IdentityCheckDependencies {
   signedOutboxReady?: () => Promise<{ ok: boolean; detail: string }>;
   independentCopyReady?: () => Promise<{ ok: boolean; detail: string }>;
   legacyBoundaryReady?: () => Promise<{ ok: boolean; detail: string }>;
-  /** Recovery-only: lets the bootstrap finalizer validate before completion. */
-  allowCommittingCutoverFinalization?: boolean;
 }
 
 export interface ActiveCredentialGuardCheck {
@@ -393,10 +386,6 @@ export async function checkFounderIdentity(
     const receipt = assertFounderCutoverReceiptMatchesActiveBundle(
       stateDirectory,
       verified,
-      {
-        allowCommittingFinalization:
-          dependencies.allowCommittingCutoverFinalization === true,
-      },
     );
     checks.push(
       check(
@@ -419,88 +408,22 @@ export async function checkFounderIdentity(
     ),
   );
 
-  const signer = dependencies.signer;
-  if (signer === undefined) {
-    checks.push(
-      check(
-        "installation-key",
-        false,
-        "installation signer is unavailable",
-      ),
-      seedOnlyCheck(
-        "installation-key-assurance",
-        false,
-        "not checked without an available installation signer",
-      ),
-    );
-  } else {
-    try {
-      const installationId = verified.manifest.installation.installation_id;
-      const manifestKey = verified.manifest.installation.signing_key;
-      const descriptor = await signer.inspect(installationId);
-      if (
-        descriptor === null &&
-        (manifestKey.protection !== "development-file" ||
-          manifestKey.assurance !== "software_key_development_only")
-      ) {
-        throw new Error(
-          `unsupported_legacy_key_backend: the active identity requires ${manifestKey.protection}/${manifestKey.assurance}, but this pilot build supports development-file/software_key_development_only; preserve the old state and signer or intentionally re-bootstrap without identity continuity`,
-        );
-      }
-      if (descriptor === null)
-        throw new Error("installation signing key is unavailable");
-      const publicKey = verifyInstallationKeyDescriptor(descriptor);
-      if (
-        descriptor.installation_id !== installationId ||
-        descriptor.key_id !== manifestKey.key_id ||
-        descriptor.algorithm !== manifestKey.algorithm ||
-        descriptor.public_key_spki_der_base64 !==
-          manifestKey.public_key_spki_der_base64 ||
-        descriptor.protection !== manifestKey.protection ||
-        descriptor.assurance !== manifestKey.assurance
-      ) {
-        throw new Error(
-          "live installation key does not match the manifest key",
-        );
-      }
-      const challenge = randomBytes(32);
-      const signature = await signer.sign(
-        installationId,
-        challenge,
-        descriptor.key_id,
-      );
-      if (!verifyP256LowSSignature(publicKey, challenge, signature)) {
-        throw new Error("installation signing challenge did not verify");
-      }
-      checks.push(
-        check(
-          "installation-key",
-          true,
-          "matching installation key signed a fresh challenge",
-        ),
-        seedOnlyCheck(
-          "installation-key-assurance",
-          descriptor.protection === "secure-enclave" &&
-            descriptor.assurance === "hardware_bound" &&
-            descriptor.private_key_exportable === false,
-          descriptor.protection === "secure-enclave" &&
-            descriptor.assurance === "hardware_bound" &&
-            descriptor.private_key_exportable === false
-            ? "installation key is hardware-bound and non-exportable"
-            : `installation key is ${descriptor.protection}/${descriptor.assurance} and exportable=${descriptor.private_key_exportable}; pilot operation is allowed but seed-grade identity requires a hardware-bound non-exportable key`,
-        ),
-      );
-    } catch (error) {
-      checks.push(
-        check("installation-key", false, (error as Error).message),
-        seedOnlyCheck(
-          "installation-key-assurance",
-          false,
-          "not checked without a valid installation key",
-        ),
-      );
-    }
-  }
+  // The founder mode is retired and can never resume product work, so probing
+  // its private signing key would create a live key-use path with no supported
+  // consumer. Stored public-key descriptors and document signatures are still
+  // verified above; private-key continuity is deliberately not exercised.
+  checks.push(
+    check(
+      "installation-key",
+      false,
+      "private-key continuity checks are retired with founder-provenance operation",
+    ),
+    seedOnlyCheck(
+      "installation-key-assurance",
+      false,
+      "not applicable to the retired founder-provenance mode",
+    ),
+  );
 
   const hasSlackClaim = verified.manifest.identity_claims.some(
     (claim) =>

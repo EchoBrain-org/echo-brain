@@ -24,26 +24,28 @@ import {
 } from "../../../src/product/federation/cutover-fence.js";
 import { checkFounderIdentity } from "../../../src/product/federation/bootstrap/identity-check.js";
 import { FounderBootstrapSessionStore } from "../../../src/product/federation/bootstrap/bootstrap-session-store.js";
-import { signedFounderBootstrapSession } from "./fixtures/founder-bootstrap-session.js";
+import {
+  GOLDEN_SESSION_ID,
+  goldenSessionBytes,
+  goldenSessionPath,
+  guardStatePathDigest,
+  installGoldenFounderState,
+} from "./fixtures/retired-founder-state.js";
 import {
   createPrivateTestState,
   manualRuntimeConfig,
 } from "./fixtures/founder-identity.js";
 
 /**
- * The founder-provenance product surface is retired: no supported command or
- * runtime path creates founder identity or cutover material, though the
- * low-level bootstrap/guard/session APIs still compile, which is how these
- * tests build the residue. What must survive is the detector and the refusal:
- * this file pins the observational inspector itself -- what counts as residue,
- * that inspection never mutates, that its failures surface as typed refusals --
- * and that identity-check reports the retired mode instead of hiding it. The
- * decision store's own refusal is pinned at its layer, in
- * retired-provenance-bypass.test.ts (fresh store) and
+ * The founder-provenance product surface is retired and its authoring APIs are
+ * deleted; these tests build residue by copying the fixed golden founder-state
+ * bytes (or raw placeholders) into place. What must survive is the detector
+ * and the refusal: this file pins the observational inspector itself -- what
+ * counts as residue, that inspection never mutates, that its failures surface
+ * as typed refusals -- and that identity-check reports the retired mode
+ * instead of hiding it. The decision store's own refusal is pinned at its
+ * layer, in retired-provenance-bypass.test.ts (fresh store) and
  * tests/product/decision-node-store.test.ts (populated store).
- *
- * These cases moved here from the deleted bootstrap-ceremony suite and build
- * the same fenced state roots directly, from the retained primitives.
  */
 
 const temporary: string[] = [];
@@ -65,16 +67,14 @@ function writeCutoverGuard(
   overrides: Record<string, unknown> = {},
 ): string {
   const path = founderCutoverGuardPath(stateDirectory);
-  const durable = readFounderCutoverGuard(stateDirectory);
   writeFileSync(
     path,
     canonicalJson({
       schema_version: 1,
       kind: "echo-founder-cutover-guard",
-      // Only this state path's own digest is accepted; borrow it from the
-      // production reader rather than recomputing it in the test.
-      state_path_sha256:
-        durable?.state_path_sha256 ?? guardStatePathDigest(stateDirectory),
+      // Only this state path's own digest is accepted; read it back off the
+      // filename production picks rather than recomputing it in the test.
+      state_path_sha256: guardStatePathDigest(stateDirectory),
       session_id: GUARD_SESSION_ID,
       plan_sha256: `sha256:${"a".repeat(64)}`,
       installation_key_id: `sha256:${"b".repeat(64)}`,
@@ -83,18 +83,6 @@ function writeCutoverGuard(
     { mode: 0o600 },
   );
   return path;
-}
-
-/**
- * `founderCutoverGuardPath` embeds the state-path digest in the filename, so
- * the accepted value can be read back off the path the production code picks.
- */
-function guardStatePathDigest(stateDirectory: string): `sha256:${string}` {
-  const filename = founderCutoverGuardPath(stateDirectory).split("/").at(-1)!;
-  return `sha256:${filename.slice(
-    ".echo-founder-cutover.".length,
-    ".echo-founder-cutover.".length + 64,
-  )}`;
 }
 
 function writeIdentityMaterial(stateDirectory: string): void {
@@ -218,21 +206,21 @@ describe("founder seed cutover fence", () => {
     expect(() => requiresFounderFederation(sessionState)).toThrow();
   });
 
-  it("refuses a recoverable interrupted write without performing its rename", async () => {
+  it("refuses a recoverable interrupted write without performing its rename", () => {
     const stateDir = privateState();
     const sessions = resolveProductStatePaths(stateDir).founderIdentityBootstrap;
     mkdirSync(sessions, { recursive: true, mode: 0o700 });
     // A *valid* signed revision-1 session in a temporary file with no canonical
-    // file beside it. This is exactly the state the session store recovers by
-    // renaming, so the fixture proves the preflight declines a real mutation
-    // rather than merely failing to parse rubbish.
-    const built = await signedFounderBootstrapSession({ phase: "complete" });
+    // file beside it: the golden `committing` bytes. This is exactly the state
+    // the session store recovers by renaming, so the fixture proves the
+    // preflight declines a real mutation rather than merely failing to parse
+    // rubbish.
     const temporary = join(
       sessions,
-      `session.${built.session.session_id}.v1.json.1.` +
+      `session.${GOLDEN_SESSION_ID}.v1.json.1.` +
         "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb.tmp",
     );
-    const bytes = canonicalJson(built.session);
+    const bytes = goldenSessionBytes("committing").toString("utf8");
     writeFileSync(temporary, bytes, { mode: 0o600 });
 
     const residue = inspectFounderProvenanceResidue(stateDir);
@@ -248,33 +236,66 @@ describe("founder seed cutover fence", () => {
     // makes the preceding assertions meaningful.
     new FounderBootstrapSessionStore(stateDir).list();
     expect(readdirSync(sessions)).toEqual([
-      `session.${built.session.session_id}.v1.json`,
+      `session.${GOLDEN_SESSION_ID}.v1.json`,
     ]);
   });
 
-  it("refuses a redundant interrupted write without performing its unlink", async () => {
+  it("refuses a redundant interrupted write without performing its unlink", () => {
     const stateDir = privateState();
-    const built = await signedFounderBootstrapSession({ phase: "complete" });
-    const store = new FounderBootstrapSessionStore(stateDir);
-    store.write(built.session);
+    installGoldenFounderState(stateDir, {
+      session: "complete",
+      identity: false,
+      guard: false,
+    });
     const sessions = resolveProductStatePaths(stateDir).founderIdentityBootstrap;
     // A temporary write at the same revision with identical bytes: the store
     // recovers this one by unlinking it.
     const temporary = join(
       sessions,
-      `session.${built.session.session_id}.v1.json.1.` +
+      `session.${GOLDEN_SESSION_ID}.v1.json.2.` +
         "cccccccc-cccc-4ccc-8ccc-cccccccccccc.tmp",
     );
-    writeFileSync(temporary, canonicalJson(built.session), { mode: 0o600 });
+    writeFileSync(temporary, goldenSessionBytes("complete"), { mode: 0o600 });
     const before = readdirSync(sessions).sort();
 
     expect(() => assertFounderProvenanceRetired(stateDir)).toThrow(/is retired/);
     expect(readdirSync(sessions).sort()).toEqual(before);
 
-    store.list();
+    new FounderBootstrapSessionStore(stateDir).list();
     expect(readdirSync(sessions)).toEqual([
-      `session.${built.session.session_id}.v1.json`,
+      `session.${GOLDEN_SESSION_ID}.v1.json`,
     ]);
+  });
+
+  it("recovers a crash between session revisions by completing the rename", () => {
+    const stateDir = privateState();
+    // Canonical revision 1 (`committing`) with the signed revision 2
+    // (`complete`) still sitting in its temporary file: the exact crash window
+    // between durable revisions. The recovering reader must validate the
+    // transition against the durable revision and then finish the rename.
+    installGoldenFounderState(stateDir, {
+      session: "committing",
+      identity: false,
+      guard: false,
+    });
+    const sessions = resolveProductStatePaths(stateDir).founderIdentityBootstrap;
+    const temporary = join(
+      sessions,
+      `session.${GOLDEN_SESSION_ID}.v1.json.2.` +
+        "dddddddd-dddd-4ddd-8ddd-dddddddddddd.tmp",
+    );
+    writeFileSync(temporary, goldenSessionBytes("complete"), { mode: 0o600 });
+
+    const store = new FounderBootstrapSessionStore(stateDir);
+    const recovered = store.read(GOLDEN_SESSION_ID);
+    expect(recovered.phase).toBe("complete");
+    expect(recovered.revision).toBe(2);
+    expect(readdirSync(sessions)).toEqual([
+      `session.${GOLDEN_SESSION_ID}.v1.json`,
+    ]);
+    expect(readFileSync(goldenSessionPath(stateDir))).toEqual(
+      goldenSessionBytes("complete"),
+    );
   });
 
   it("refuses an uninspectable state path instead of leaking a raw fs error", async () => {

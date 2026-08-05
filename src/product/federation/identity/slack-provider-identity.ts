@@ -1,4 +1,3 @@
-import type { SlackAuthIdentity } from "../../../adapters/shared/slack/slack-web-api-client.js";
 import { canonicalSha256 } from "../foundation/canonical-json.js";
 import type {
   ProviderIdentityV1,
@@ -6,9 +5,11 @@ import type {
 } from "../contracts.js";
 import { assertUtcMillisecondTimestamp } from "../foundation/identifiers.js";
 
-export interface SlackAuthIdentityApi {
-  authIdentity(signal?: AbortSignal): Promise<SlackAuthIdentity>;
-}
+/**
+ * Persisted Slack auth.test evidence shapes and their validation. The capture
+ * code that produced them is retired; stored evidence is still parsed and
+ * cross-checked when old founder residue is inspected.
+ */
 
 export interface SlackAuthTestEvidenceInputV1 {
   schema_version: 1;
@@ -97,81 +98,4 @@ export function assertCapturedSlackProviderIdentity(
     providerIdentity.verification.verified_at,
     "Slack identity verified_at",
   );
-}
-
-/**
- * Capture only stable identifiers Slack proves for the presented bot token.
- * Mutable workspace/user display names and the bearer credential never enter
- * the evidence digest.
- */
-export async function captureSlackProviderIdentity(
-  api: SlackAuthIdentityApi,
-  verifiedAt: string | (() => string),
-  signal?: AbortSignal,
-): Promise<CapturedSlackProviderIdentityV1> {
-  if (typeof verifiedAt === "string") {
-    assertUtcMillisecondTimestamp(verifiedAt, "Slack identity verified_at");
-  }
-  const identity = await api.authIdentity(signal);
-  const observedAt =
-    typeof verifiedAt === "function" ? verifiedAt() : verifiedAt;
-  assertUtcMillisecondTimestamp(observedAt, "Slack identity verified_at");
-  if (identity.bot_id === null) {
-    throw new Error(
-      "Slack founder bootstrap requires auth.test to prove a bot installation",
-    );
-  }
-  const snapshot: CapturedSlackProviderIdentityV1["snapshot"] = {
-    provider: "slack",
-    team_id: identity.team_id,
-    enterprise_id: identity.enterprise_id,
-    bot_user_id: identity.user_id,
-    bot_id: identity.bot_id,
-    app_id: identity.app_id,
-  };
-  const evidenceInput: SlackAuthTestEvidenceInputV1 = {
-    schema_version: 1,
-    kind: "echo-slack-auth-test-evidence-input",
-    provider: "slack",
-    tenant: {
-      team_id: identity.team_id,
-      enterprise_id: identity.enterprise_id,
-    },
-    subject: {
-      bot_user_id: identity.user_id,
-      bot_id: identity.bot_id,
-      app_id: identity.app_id,
-    },
-  };
-  const evidenceSha256 = canonicalSha256(evidenceInput);
-  const captured = Object.freeze({
-    snapshot: Object.freeze(snapshot),
-    provider_identity: Object.freeze({
-      tenant: Object.freeze({
-        kind: "slack-team",
-        id: identity.team_id,
-        enterprise_id: identity.enterprise_id,
-      }),
-      subject: Object.freeze({
-        kind: "bot-installation",
-        id: identity.user_id,
-        bot_id: identity.bot_id,
-        app_id: identity.app_id,
-      }),
-      verification: Object.freeze({
-        method: "slack_auth_test",
-        assurance: "provider_verified",
-        verified_at: observedAt,
-        evidence_sha256: evidenceSha256,
-      }),
-    }),
-    evidence_input: Object.freeze({
-      ...evidenceInput,
-      tenant: Object.freeze(evidenceInput.tenant),
-      subject: Object.freeze(evidenceInput.subject),
-    }),
-    evidence_sha256: evidenceSha256,
-  });
-  assertCapturedSlackProviderIdentity(captured);
-  return captured;
 }

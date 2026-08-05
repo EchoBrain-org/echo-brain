@@ -8,10 +8,8 @@ import {
   unlinkSync,
 } from "node:fs";
 import { join } from "node:path";
-import { atomicWrite } from "../../../infrastructure/filesystem/atomic-write.js";
 import {
   assertPrivateOwnedDirectory,
-  ensureDirectory,
   pathEntryExists,
   readFileNoFollow,
 } from "../../secure-local-files.js";
@@ -216,7 +214,7 @@ function activatedBindings(
   }));
 }
 
-export function buildFounderBootstrapConfirmationSummary(
+function buildFounderBootstrapConfirmationSummary(
   session: FounderBootstrapSessionV1,
 ): FounderBootstrapConfirmationSummaryV1 {
   const observations = session.provider_observations;
@@ -299,7 +297,7 @@ function connectionsFromSession(
   }));
 }
 
-export function deriveFounderBootstrapPlanFromSession(
+function deriveFounderBootstrapPlanFromSession(
   session: FounderBootstrapSessionV1,
   confirmedAt: string,
 ): FounderBootstrapPlan {
@@ -332,9 +330,7 @@ export function deriveFounderBootstrapPlanFromSession(
     bindings: activatedBindings(session, confirmedAt),
     publication: session.request.publication,
   };
-  return planFounderBootstrap(input, signingKey, {
-    loadBuildIdentity: () => session.request.build,
-  });
+  return planFounderBootstrap(input, signingKey, session.request.build);
 }
 
 function nonBlank(value: string, label: string): void {
@@ -760,11 +756,6 @@ export class FounderBootstrapSessionStore {
       resolveProductStatePaths(stateDirectory).founderIdentityBootstrap;
   }
 
-  prepare(): void {
-    ensureDirectory(this.directory, 0o700);
-    assertPrivateOwnedDirectory(this.directory, "founder bootstrap directory");
-  }
-
   private syncDirectory(): void {
     const descriptor = openSync(this.directory, "r");
     try {
@@ -891,44 +882,5 @@ export class FounderBootstrapSessionStore {
   read(sessionId: string): FounderBootstrapSessionV1 {
     this.recoverInterruptedWrites();
     return this.readCanonical(sessionId);
-  }
-
-  write(session: FounderBootstrapSessionV1): void {
-    this.prepare();
-    validateFounderBootstrapSession(session);
-    const path = join(this.directory, sessionFilename(session.session_id));
-    const raw = canonicalJson(session);
-    const size = Buffer.byteLength(raw, "utf8");
-    if (size <= 0 || size > MAX_SESSION_BYTES) {
-      throw new Error(
-        `founder bootstrap session must contain 1-${MAX_SESSION_BYTES} bytes`,
-      );
-    }
-    if (pathEntryExists(path)) {
-      const existing = this.readCanonical(session.session_id);
-      const existingRaw = canonicalJson(existing);
-      if (existingRaw === raw) return;
-      if (session.revision !== existing.revision + 1) {
-        throw new Error(
-          "bootstrap session revision is not the next durable revision",
-        );
-      }
-      assertFounderBootstrapSessionTransition(existing, session);
-    } else if (session.revision !== 1) {
-      throw new Error("new bootstrap session must begin at revision 1");
-    }
-    atomicWrite({ filePath: path, content: raw, secretSensitive: true });
-  }
-
-  discard(sessionId: string, expectedRevision: number): void {
-    this.recoverInterruptedWrites();
-    const session = this.readCanonical(sessionId);
-    if (session.revision !== expectedRevision) {
-      throw new Error(
-        "bootstrap session changed before it could be safely discarded",
-      );
-    }
-    unlinkSync(join(this.directory, sessionFilename(sessionId)));
-    this.syncDirectory();
   }
 }

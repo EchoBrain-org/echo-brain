@@ -1,19 +1,13 @@
-import { randomBytes } from "node:crypto";
-import type {
-  SlackAuthIdentity,
-  SlackDirectMessage,
-  SlackPostMessageInput,
-  SlackPostedMessage,
-  SlackReaction,
-} from "../../../adapters/shared/slack/slack-web-api-client.js";
-import { canonicalSha256, sha256Digest } from "../foundation/canonical-json.js";
+import { canonicalSha256 } from "../foundation/canonical-json.js";
 import type { IdentityClaimV1 } from "../contracts.js";
 import { assertUtcMillisecondTimestamp } from "../foundation/identifiers.js";
-import {
-  assertCapturedSlackProviderIdentity,
-  type CapturedSlackProviderIdentityV1,
-  type SlackAuthIdentityApi,
-} from "../identity/slack-provider-identity.js";
+
+/**
+ * Persisted Slack DM challenge shapes and their validation. The challenge
+ * issue/poll code that produced them is retired; stored tickets and
+ * verifications are still parsed and cross-checked when old founder residue is
+ * inspected.
+ */
 
 const SLACK_TEAM_ID_RE = /^T[A-Z0-9]{2,}$/;
 const SLACK_ENTERPRISE_ID_RE = /^E[A-Z0-9]{2,}$/;
@@ -24,61 +18,7 @@ const SLACK_DM_ID_RE = /^D[A-Z0-9]{2,}$/;
 const SLACK_TIMESTAMP_RE = /^[0-9]{1,16}\.[0-9]{6}$/;
 const REACTION_NAME_RE = /^[a-z0-9_+-]{1,64}$/;
 const DIGEST_RE = /^sha256:[0-9a-f]{64}$/;
-const MIN_NONCE_BYTES = 16;
-const MAX_NONCE_BYTES = 64;
 const MAX_CHALLENGE_LIFETIME_MS = 15 * 60 * 1_000;
-const MIN_POLL_INTERVAL_MS = 1_000;
-const MAX_POLL_INTERVAL_MS = 30_000;
-const MAX_POLL_ATTEMPTS = 120;
-const DEFAULT_REACTION_NAME = "white_check_mark";
-
-export interface SlackDmChallengeApi extends SlackAuthIdentityApi {
-  openDirectMessage(
-    userId: string,
-    signal?: AbortSignal,
-  ): Promise<SlackDirectMessage>;
-  postMessage(
-    input: SlackPostMessageInput,
-    signal?: AbortSignal,
-  ): Promise<SlackPostedMessage>;
-  reactionsGet(
-    channel: string,
-    timestamp: string,
-    signal?: AbortSignal,
-  ): Promise<readonly SlackReaction[]>;
-}
-
-function providerIdentityMatches(
-  observed: SlackAuthIdentity,
-  provider: CapturedSlackProviderIdentityV1,
-): boolean {
-  return (
-    observed.team_id === provider.snapshot.team_id &&
-    observed.enterprise_id === provider.snapshot.enterprise_id &&
-    observed.user_id === provider.snapshot.bot_user_id &&
-    observed.bot_id === provider.snapshot.bot_id &&
-    observed.app_id === provider.snapshot.app_id
-  );
-}
-
-function ticketProviderIdentityMatches(
-  observed: SlackAuthIdentity,
-  ticket: SlackDmChallengeTicketV1,
-): boolean {
-  return (
-    observed.team_id === ticket.tenant_id &&
-    observed.enterprise_id === ticket.enterprise_id &&
-    observed.user_id === ticket.bot_user_id &&
-    observed.bot_id === ticket.bot_id &&
-    observed.app_id === ticket.app_id
-  );
-}
-
-export interface SlackActorNamespaceV1 {
-  provider: "slack";
-  team_id: string;
-  user_id: string;
-}
 
 export interface SlackDmChallengeTicketV1 {
   schema_version: 1;
@@ -134,60 +74,6 @@ export interface SlackDmChallengeVerificationV1 {
   claim_assertion: Pick<IdentityClaimV1, "issuer" | "subject" | "verification">;
 }
 
-export type SlackDmChallengePollResult =
-  | {
-      status: "verified";
-      attempts: number;
-      verification: SlackDmChallengeVerificationV1;
-    }
-  | { status: "expired"; attempts: number }
-  | { status: "not_observed"; attempts: number };
-
-export interface IssueSlackDmChallengeOptions {
-  issuedAt: string;
-  expiresAt: string;
-  reactionName?: string;
-  nonceFactory?: (size: number) => Buffer;
-  signal?: AbortSignal;
-}
-
-export interface PollSlackDmChallengeOptions {
-  maxAttempts: number;
-  pollIntervalMs: number;
-  now: () => string;
-  sleep?: (milliseconds: number, signal?: AbortSignal) => Promise<void>;
-  signal?: AbortSignal;
-}
-
-function assertNotAborted(signal?: AbortSignal): void {
-  if (signal?.aborted !== true) return;
-  if (signal.reason instanceof Error) throw signal.reason;
-  throw new Error("Slack DM challenge was cancelled");
-}
-
-async function defaultSleep(
-  milliseconds: number,
-  signal?: AbortSignal,
-): Promise<void> {
-  assertNotAborted(signal);
-  await new Promise<void>((resolve, reject) => {
-    const timer = setTimeout(() => {
-      signal?.removeEventListener("abort", abort);
-      resolve();
-    }, milliseconds);
-    const abort = () => {
-      clearTimeout(timer);
-      signal?.removeEventListener("abort", abort);
-      reject(
-        signal?.reason instanceof Error
-          ? signal.reason
-          : new Error("Slack DM challenge was cancelled"),
-      );
-    };
-    signal?.addEventListener("abort", abort, { once: true });
-  });
-}
-
 function timestampMilliseconds(value: string, label: string): number {
   assertUtcMillisecondTimestamp(value, label);
   const milliseconds = Date.parse(value);
@@ -237,139 +123,6 @@ export function assertSlackDmChallengeTicket(
   }
 }
 
-function challengeText(
-  actor: SlackActorNamespaceV1,
-  nonce: Buffer,
-  expiresAt: string,
-  reactionName: string,
-): string {
-  return [
-    "Echo Brain identity verification",
-    `Workspace/user: ${actor.team_id}/${actor.user_id}`,
-    `React with :${reactionName}: to this message before ${expiresAt}.`,
-    `Challenge: ${nonce.toString("base64url")}`,
-    "Do not paste this challenge into the terminal.",
-  ].join("\n");
-}
-
-/**
- * Send a fresh challenge into a one-person Slack DM. The returned ticket keeps
- * only the nonce digest; callers cannot satisfy the challenge through a local
- * CLI by replaying the value that was sent to Slack.
- */
-export async function issueSlackDmChallenge(
-  api: SlackDmChallengeApi,
-  provider: CapturedSlackProviderIdentityV1,
-  actor: SlackActorNamespaceV1,
-  options: IssueSlackDmChallengeOptions,
-): Promise<SlackDmChallengeTicketV1> {
-  assertCapturedSlackProviderIdentity(provider);
-  assertChallengeWindow(options.issuedAt, options.expiresAt);
-  if (
-    actor.provider !== "slack" ||
-    !SLACK_TEAM_ID_RE.test(actor.team_id) ||
-    !SLACK_USER_ID_RE.test(actor.user_id)
-  ) {
-    throw new Error(
-      "Slack challenge actor must be a namespaced team/user pair",
-    );
-  }
-  if (actor.team_id !== provider.snapshot.team_id) {
-    throw new Error("Slack challenge actor belongs to a different workspace");
-  }
-  if (actor.user_id === provider.snapshot.bot_user_id) {
-    throw new Error("Slack challenge actor cannot be the connected bot");
-  }
-  const reactionName = options.reactionName ?? DEFAULT_REACTION_NAME;
-  if (!REACTION_NAME_RE.test(reactionName)) {
-    throw new Error("Slack challenge reaction name is invalid");
-  }
-  assertNotAborted(options.signal);
-  const currentProvider = await api.authIdentity(options.signal);
-  if (!providerIdentityMatches(currentProvider, provider)) {
-    throw new Error(
-      "Slack connection identity changed before the DM challenge",
-    );
-  }
-  const nonce = (options.nonceFactory ?? randomBytes)(32);
-  if (
-    !Buffer.isBuffer(nonce) ||
-    nonce.byteLength < MIN_NONCE_BYTES ||
-    nonce.byteLength > MAX_NONCE_BYTES
-  ) {
-    throw new Error("Slack challenge nonce must contain 16-64 random bytes");
-  }
-  const directMessage = await api.openDirectMessage(
-    actor.user_id,
-    options.signal,
-  );
-  if (
-    directMessage.user_id !== actor.user_id ||
-    !SLACK_DM_ID_RE.test(directMessage.channel_id)
-  ) {
-    throw new Error("Slack opened an invalid direct message for this user");
-  }
-  const posted = await api.postMessage(
-    {
-      channel: directMessage.channel_id,
-      text: challengeText(actor, nonce, options.expiresAt, reactionName),
-      unfurlLinks: false,
-      unfurlMedia: false,
-    },
-    options.signal,
-  );
-  if (posted.channel !== directMessage.channel_id) {
-    throw new Error("Slack posted the challenge into a different conversation");
-  }
-  const ticket: SlackDmChallengeTicketV1 = {
-    schema_version: 1,
-    kind: "echo-slack-dm-challenge-ticket",
-    provider: "slack",
-    tenant_id: actor.team_id,
-    enterprise_id: provider.snapshot.enterprise_id,
-    subject_id: actor.user_id,
-    bot_user_id: provider.snapshot.bot_user_id,
-    bot_id: provider.snapshot.bot_id,
-    app_id: provider.snapshot.app_id,
-    auth_test_evidence_sha256: provider.evidence_sha256,
-    channel_id: directMessage.channel_id,
-    message_ts: posted.ts,
-    reaction_name: reactionName,
-    challenge_sha256: sha256Digest(nonce),
-    issued_at: options.issuedAt,
-    expires_at: options.expiresAt,
-  };
-  assertSlackDmChallengeTicket(ticket);
-  return Object.freeze(ticket);
-}
-
-function assertPollOptions(options: PollSlackDmChallengeOptions): void {
-  if (
-    !Number.isSafeInteger(options.maxAttempts) ||
-    options.maxAttempts < 1 ||
-    options.maxAttempts > MAX_POLL_ATTEMPTS
-  ) {
-    throw new Error(
-      `Slack challenge maxAttempts must be between 1 and ${MAX_POLL_ATTEMPTS}`,
-    );
-  }
-  if (
-    !Number.isSafeInteger(options.pollIntervalMs) ||
-    options.pollIntervalMs < MIN_POLL_INTERVAL_MS ||
-    options.pollIntervalMs > MAX_POLL_INTERVAL_MS
-  ) {
-    throw new Error(
-      `Slack challenge pollIntervalMs must be between ${MIN_POLL_INTERVAL_MS} and ${MAX_POLL_INTERVAL_MS}`,
-    );
-  }
-  if (
-    (options.maxAttempts - 1) * options.pollIntervalMs >
-    MAX_CHALLENGE_LIFETIME_MS
-  ) {
-    throw new Error("Slack challenge polling schedule exceeds 15 minutes");
-  }
-}
-
 function challengeExpired(
   now: string,
   ticket: SlackDmChallengeTicketV1,
@@ -387,67 +140,6 @@ function challengeExpired(
     throw new Error("Slack challenge observation precedes challenge issuance");
   }
   return observed >= expires;
-}
-
-function verification(
-  ticket: SlackDmChallengeTicketV1,
-  observedAt: string,
-): SlackDmChallengeVerificationV1 {
-  const evidenceInput: SlackDmChallengeEvidenceInputV1 = {
-    schema_version: 1,
-    kind: "echo-slack-dm-challenge-evidence-input",
-    provider: "slack",
-    tenant: {
-      team_id: ticket.tenant_id,
-      enterprise_id: ticket.enterprise_id,
-    },
-    subject: { user_id: ticket.subject_id },
-    bot: {
-      user_id: ticket.bot_user_id,
-      bot_id: ticket.bot_id,
-      app_id: ticket.app_id,
-      auth_test_evidence_sha256: ticket.auth_test_evidence_sha256,
-    },
-    challenge: {
-      channel_id: ticket.channel_id,
-      message_ts: ticket.message_ts,
-      nonce_sha256: ticket.challenge_sha256,
-      issued_at: ticket.issued_at,
-      expires_at: ticket.expires_at,
-    },
-    assertion: {
-      kind: "reaction",
-      name: ticket.reaction_name,
-      observed_at: observedAt,
-    },
-  };
-  const evidenceSha256 = canonicalSha256(evidenceInput);
-  const frozenEvidenceInput = Object.freeze({
-    ...evidenceInput,
-    tenant: Object.freeze(evidenceInput.tenant),
-    subject: Object.freeze(evidenceInput.subject),
-    bot: Object.freeze(evidenceInput.bot),
-    challenge: Object.freeze(evidenceInput.challenge),
-    assertion: Object.freeze(evidenceInput.assertion),
-  });
-  return Object.freeze({
-    evidence_input: frozenEvidenceInput,
-    evidence_sha256: evidenceSha256,
-    claim_assertion: Object.freeze({
-      issuer: Object.freeze({
-        kind: "provider" as const,
-        provider: "slack",
-        tenant_id: ticket.tenant_id,
-      }),
-      subject: Object.freeze({ kind: "user" as const, id: ticket.subject_id }),
-      verification: Object.freeze({
-        method: "slack_dm_challenge" as const,
-        assurance: "provider_challenge_observed" as const,
-        verified_at: observedAt,
-        evidence_sha256: evidenceSha256,
-      }),
-    }),
-  });
 }
 
 export function assertSlackDmChallengeVerification(
@@ -502,59 +194,4 @@ export function assertSlackDmChallengeVerification(
       "Slack DM challenge verification was observed after expiry",
     );
   }
-}
-
-/** Poll one exact Slack DM message for one exact workspace-scoped user. */
-export async function pollSlackDmChallenge(
-  api: SlackDmChallengeApi,
-  ticket: SlackDmChallengeTicketV1,
-  options: PollSlackDmChallengeOptions,
-): Promise<SlackDmChallengePollResult> {
-  assertSlackDmChallengeTicket(ticket);
-  assertPollOptions(options);
-  const sleep = options.sleep ?? defaultSleep;
-  let attempts = 0;
-  const preflightAt = options.now();
-  if (challengeExpired(preflightAt, ticket)) {
-    return { status: "expired", attempts };
-  }
-  const currentProvider = await api.authIdentity(options.signal);
-  if (!ticketProviderIdentityMatches(currentProvider, ticket)) {
-    throw new Error(
-      "Slack connection identity changed before challenge polling",
-    );
-  }
-  for (let index = 0; index < options.maxAttempts; index += 1) {
-    assertNotAborted(options.signal);
-    const startedAt = options.now();
-    if (challengeExpired(startedAt, ticket)) {
-      return { status: "expired", attempts };
-    }
-    const reactions = await api.reactionsGet(
-      ticket.channel_id,
-      ticket.message_ts,
-      options.signal,
-    );
-    attempts += 1;
-    const observedAt = options.now();
-    if (challengeExpired(observedAt, ticket)) {
-      return { status: "expired", attempts };
-    }
-    const matched = reactions.some(
-      (reaction) =>
-        reaction.name === ticket.reaction_name &&
-        reaction.users.includes(ticket.subject_id),
-    );
-    if (matched) {
-      return {
-        status: "verified",
-        attempts,
-        verification: verification(ticket, observedAt),
-      };
-    }
-    if (index + 1 < options.maxAttempts) {
-      await sleep(options.pollIntervalMs, options.signal);
-    }
-  }
-  return { status: "not_observed", attempts };
 }

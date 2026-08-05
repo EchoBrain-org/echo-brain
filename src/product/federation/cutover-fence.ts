@@ -70,36 +70,6 @@ export function founderCutoverGuardPath(stateDirectory: string): string {
   );
 }
 
-function guardForSession(
-  stateDirectory: string,
-  session: FounderBootstrapSessionV1,
-  plannedCommitSha256?: `sha256:${string}`,
-): FounderCutoverGuardV1 {
-  const verified = validateFounderBootstrapSession(session);
-  const planSha256 =
-    verified.phase === 'ready_for_confirmation'
-      ? plannedCommitSha256
-      : verified.commit?.plan_sha256;
-  if (
-    (verified.phase !== 'ready_for_confirmation' &&
-      verified.phase !== 'committing' &&
-      verified.phase !== 'complete') ||
-    planSha256 === undefined ||
-    !/^sha256:[0-9a-f]{64}$/.test(planSha256) ||
-    verified.signing_key === null
-  ) {
-    fail('cannot bind an external guard to a reversible bootstrap session');
-  }
-  return {
-    schema_version: 1,
-    kind: 'echo-founder-cutover-guard',
-    state_path_sha256: statePathDigest(stateDirectory),
-    session_id: verified.session_id,
-    plan_sha256: planSha256,
-    installation_key_id: verified.signing_key.key_id,
-  };
-}
-
 function assertGuard(value: unknown): FounderCutoverGuardV1 {
   if (typeof value !== 'object' || value === null || Array.isArray(value)) {
     fail('external cutover guard is not an object');
@@ -149,26 +119,6 @@ export function readFounderCutoverGuard(
     fail('external cutover guard belongs to another state path');
   }
   return guard;
-}
-
-export function commitFounderCutoverGuard(
-  stateDirectory: string,
-  session: FounderBootstrapSessionV1,
-  plannedCommitSha256?: `sha256:${string}`,
-): FounderCutoverGuardV1 {
-  const guard = guardForSession(
-    stateDirectory,
-    session,
-    plannedCommitSha256,
-  );
-  const path = founderCutoverGuardPath(stateDirectory);
-  assertOwnerControlledDirectory(dirname(path), 'cutover guard parent');
-  atomicCreate({ filePath: path, content: canonicalJson(guard), mode: 0o600 });
-  const durable = readFounderCutoverGuard(stateDirectory);
-  if (durable === null || canonicalJson(durable) !== canonicalJson(guard)) {
-    fail('external cutover guard conflicts with this bootstrap session');
-  }
-  return durable;
 }
 
 export function assertFounderCutoverGuardMatchesSession(
@@ -603,9 +553,7 @@ export function assertFounderCutoverReceiptMatchesActiveBundle(
 }
 import { lstatSync, readdirSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
-import { atomicCreate } from '../../infrastructure/filesystem/atomic-create.js';
 import {
-  assertOwnerControlledDirectory,
   assertPrivateOwnedRegularFile,
   canonicalLocalPath,
   pathEntryExists,

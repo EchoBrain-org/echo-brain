@@ -384,9 +384,9 @@ private state directory and labels its assurance as
 `software_key_development_only`. The signer port remains replaceable by a
 hardware-backed implementation later. `organization enroll` requires
 `--allow-exportable-software-key` so pilot-grade assurance cannot be accepted
-silently. This signer can be operationally ready for a pilot, but it never
-makes `seed_grade_ready` true; `identity-check --strict` continues to require
-hardware-bound, non-exportable key assurance.
+silently. That key authenticates the supported organization enrollment and
+Authority flows. It is not used to revive or qualify retired local founder
+identity; `identity-check --strict` remains false for a fenced founder profile.
 
 Central organization-admin bootstrap is the one supported v1 enrollment path.
 The local founder-provenance mode -- the `identity-bootstrap` ceremony, the
@@ -441,9 +441,10 @@ pristineness in general. `bootstrap` prompts for the Granola and Slack tokens,
 initializes the installation, and enrolls it against a not-yet-enrolled
 membership.
 
-This pre-1.0 build does not migrate a Secure Enclave identity to the portable
-file signer. `identity-check` reports `unsupported_legacy_key_backend` for that
-state. Preserve the prior state and signer when identity continuity matters.
+This pre-1.0 build does not migrate or exercise the private key of a retired
+founder identity. `identity-check` verifies its stored public descriptors,
+document signatures, and cutover receipt, then reports the profile as retired
+and inoperable. Preserve the prior state when identity continuity matters.
 
 ## Runtime configuration
 

@@ -154,10 +154,13 @@ What remains is roughly 6,000 lines of identity/bootstrap/cutover security
 core: the identity bundle, manifest, registry, policy, credential-guard, and
 provider-identity documents; bootstrap sessions and their exact-shape
 validation; and `cutover-fence.ts`, which owns both the founder identity/cutover
-detector and the one shared retirement gate. No supported command or runtime
-path creates founder identity or cutover material, though the low-level
-`commitFounderBootstrap`, `commitFounderCutoverGuard`, and writable session-store
-APIs still compile. The gate exists so a state root left behind by the retired
+detector and the one shared retirement gate. Nothing creates founder identity
+or cutover material: the low-level authoring APIs (`commitFounderBootstrap`,
+`commitFounderCutoverGuard`, and the writable session-store APIs) are deleted,
+production is detection- and validation-only, and tests copy fixed historical
+fixture bytes checked in under
+`tests/product/federation/fixtures/retired-founder-state/`.
+The gate exists so a state root left behind by the retired
 mode is detected and refused, never silently downgraded to an unattributed local
 profile. It gates *product work* -- runtime start and every processing cycle --
 and is called by `prepareProductComposition` (at construction and per cycle),

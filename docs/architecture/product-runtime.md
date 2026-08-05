@@ -52,13 +52,15 @@ Central organization-admin bootstrap is the one supported v1 path. Local use
 without an organization enrollment is rehearsal-grade and cannot be promoted
 retroactively.
 
-The local founder-provenance cutover mode is retired: no supported command or
-runtime path creates founder identity or cutover material, and the attribution,
-signed projection, outbox, and protected independent-copy implementations behind
-it are deleted. The low-level `commitFounderBootstrap`,
-`commitFounderCutoverGuard`, and writable bootstrap-session APIs still compile,
-so the product detects residue however it arrived rather than assuming it cannot
-exist.
+The local founder-provenance cutover mode is retired: nothing creates founder
+identity or cutover material, and the attribution, signed projection, outbox,
+protected independent-copy, and low-level authoring implementations behind it
+(`commitFounderBootstrap`, `commitFounderCutoverGuard`, the writable
+bootstrap-session APIs, provider observation/capture, and challenge handling)
+are deleted. Production is detection- and validation-only; tests copy fixed
+historical fixture bytes checked in under
+`tests/product/federation/fixtures/retired-founder-state/`. The product still
+detects residue however it arrived rather than assuming it cannot exist.
 
 Identity cutover was irreversible, so a state root that still carries that
 material is detected and refused rather than downgraded. No product-work

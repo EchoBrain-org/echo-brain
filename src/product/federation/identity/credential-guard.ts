@@ -1,11 +1,10 @@
-import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
+import { createHash, timingSafeEqual } from "node:crypto";
 import type { ToolConnectionGenerationV1 } from "../contracts.js";
 
 const CREDENTIAL_GUARD_DOMAIN = Buffer.from(
   "echo-brain:local-credential-guard:v1\0",
   "utf8",
 );
-const DEFAULT_SALT_BYTES = 32;
 const MIN_SALT_BYTES = 16;
 const MAX_SALT_BYTES = 64;
 const MAX_CREDENTIAL_BYTES = 64 * 1024;
@@ -66,31 +65,6 @@ function guardDigest(salt: Buffer, credential: Buffer): `sha256:${string}` {
     .update(length)
     .update(credential)
     .digest("hex")}`;
-}
-
-/**
- * Create local-only credential replacement evidence. The credential is never
- * returned; the random salt and digest stay in the non-exported local registry.
- */
-export function createLocalCredentialGuard(
-  reference: string,
-  credential: string,
-  salt: Buffer = randomBytes(DEFAULT_SALT_BYTES),
-): LocalCredentialGuardV1 {
-  assertCredentialReference(reference);
-  if (salt.length < MIN_SALT_BYTES || salt.length > MAX_SALT_BYTES) {
-    throw new LocalCredentialGuardError(
-      `credential guard salt must contain ${MIN_SALT_BYTES}-${MAX_SALT_BYTES} bytes`,
-    );
-  }
-  const value = credentialBytes(credential);
-  return {
-    reference,
-    algorithm: "sha256-salted",
-    salt_base64: Buffer.from(salt).toString("base64"),
-    digest: guardDigest(salt, value),
-    exportable: false,
-  };
 }
 
 /** Compare an exact resolved credential and reference to a stored local guard. */

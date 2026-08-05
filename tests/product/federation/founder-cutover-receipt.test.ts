@@ -14,22 +14,30 @@ import {
 } from "../../../src/product/state-backup.js";
 import {
   assertFounderCutoverGuardMatchesSession,
+  assertFounderCutoverReceiptMatchesActiveBundle,
   founderCutoverGuardPath,
   inspectFounderCutoverFence,
   readFounderCutoverGuard,
   requiresFounderFederation,
 } from "../../../src/product/federation/cutover-fence.js";
 import { FounderBootstrapSessionStore } from "../../../src/product/federation/bootstrap/bootstrap-session-store.js";
+import { ActiveIdentityBundleStore } from "../../../src/product/federation/identity/active-identity-bundle-store.js";
+import { canonicalJson } from "../../../src/product/federation/foundation/canonical-json.js";
 import { resolveProductStatePaths } from "../../../src/product/paths.js";
 import {
   createPrivateTestState,
   manualRuntimeConfig,
 } from "./fixtures/founder-identity.js";
 import {
-  founderBootstrapSessionPath,
-  signedFounderBootstrapSession,
-  writeFencedFounderState,
-} from "./fixtures/founder-bootstrap-session.js";
+  GOLDEN_ALTERNATE_SESSION_ID,
+  GOLDEN_SESSION_ID,
+  goldenCutoverGuard,
+  goldenSession,
+  goldenSessionPath,
+  goldenSessionRecord,
+  installGoldenFounderState,
+  writeGoldenCutoverGuard,
+} from "./fixtures/retired-founder-state.js";
 
 /**
  * Positive coverage for the retained *validating* inspection path.
@@ -42,12 +50,12 @@ import {
  * precommit session -- the downgrade guard falls back to the observational
  * inspector so a clean same-path backup cannot erase the residue either.
  *
- * These build genuinely valid signed sessions rather than restoring the
- * retired ceremony.
+ * The authoring ceremony is deleted, so every valid receipt here is copied
+ * from two fixed signed golden sessions; tamper cases mutate those golden
+ * bytes. The external guard is the one path-bound artifact a test may write.
  */
 
 const temporary: string[] = [];
-const OTHER_SESSION_ID = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb";
 
 afterEach(() => {
   for (const path of temporary.splice(0)) {
@@ -68,71 +76,111 @@ function configSha(stateDirectory: string): string {
 }
 
 describe("valid signed bootstrap receipts", () => {
-  it("detects a committing receipt and keeps the profile fenced", async () => {
+  it("detects a committing receipt and keeps the profile fenced", () => {
     const stateDir = privateState();
-    const built = await writeFencedFounderState(stateDir, {
-      phase: "committing",
+    installGoldenFounderState(stateDir, {
+      session: "committing",
+      identity: false,
     });
 
     const fence = inspectFounderCutoverFence(stateDir);
     expect(fence.state).toBe("committing");
-    expect(fence.session?.session_id).toBe(built.session.session_id);
+    expect(fence.session?.session_id).toBe(GOLDEN_SESSION_ID);
     expect(requiresFounderFederation(stateDir)).toBe(true);
 
     const guard = readFounderCutoverGuard(stateDir);
     expect(guard).not.toBeNull();
     expect(() =>
-      assertFounderCutoverGuardMatchesSession(guard!, built.session),
+      assertFounderCutoverGuardMatchesSession(guard!, fence.session!),
     ).not.toThrow();
   });
 
-  it("detects a complete receipt and stays fenced with no external guard", async () => {
+  it("accepts a committing receipt against the active bundle only for crash finalization", () => {
     const stateDir = privateState();
-    const built = await writeFencedFounderState(stateDir, {
-      phase: "complete",
-      withGuard: false,
+    installGoldenFounderState(stateDir, { session: "committing" });
+    const verified = new ActiveIdentityBundleStore(stateDir).loadVerified();
+    expect(verified).not.toBeNull();
+
+    expect(() =>
+      assertFounderCutoverReceiptMatchesActiveBundle(stateDir, verified!),
+    ).toThrow(/must be finalized/);
+    expect(() =>
+      assertFounderCutoverReceiptMatchesActiveBundle(stateDir, verified!, {
+        allowCommittingFinalization: true,
+      }),
+    ).not.toThrow();
+  });
+
+  it("detects a complete receipt and stays fenced with no external guard", () => {
+    const stateDir = privateState();
+    installGoldenFounderState(stateDir, {
+      session: "complete",
+      identity: false,
+      guard: false,
     });
 
     expect(readFounderCutoverGuard(stateDir)).toBeNull();
     expect(inspectFounderCutoverFence(stateDir).state).toBe("complete");
     // The guardless path: the irreversible receipt alone keeps it fenced.
     expect(requiresFounderFederation(stateDir)).toBe(true);
-    expect(built.session.result).not.toBeNull();
+    expect(
+      new FounderBootstrapSessionStore(stateDir).read(GOLDEN_SESSION_ID).result,
+    ).not.toBeNull();
   });
 
-  it("rejects a guard that names a different session", async () => {
+  it("rejects a guard that names a different session", () => {
     const stateDir = privateState();
-    const built = await writeFencedFounderState(stateDir, {
-      phase: "complete",
+    installGoldenFounderState(stateDir, {
+      session: "complete",
+      identity: false,
     });
-    const other = await signedFounderBootstrapSession({
-      phase: "complete",
-      sessionId: OTHER_SESSION_ID,
-      signer: built.signer,
-      signingKey: built.signingKey,
+    // The guard is unsigned by design; rewrite it to name another session and
+    // prove the receipt comparison catches the mismatch.
+    writeGoldenCutoverGuard(stateDir, {
+      ...goldenCutoverGuard(stateDir),
+      session_id: GOLDEN_ALTERNATE_SESSION_ID,
     });
 
     expect(() =>
       assertFounderCutoverGuardMatchesSession(
         readFounderCutoverGuard(stateDir)!,
-        other.session,
+        goldenSession(),
       ),
     ).toThrow(/does not match the bootstrap receipt/);
   });
 
-  it("fails closed when a stored receipt becomes malformed", async () => {
+  it("fails closed when a stored receipt becomes malformed", () => {
     const stateDir = privateState();
-    const built = await writeFencedFounderState(stateDir, {
-      phase: "complete",
+    installGoldenFounderState(stateDir, {
+      session: "complete",
+      identity: false,
     });
-    writeFileSync(
-      founderBootstrapSessionPath(stateDir, built.session.session_id),
-      "{}",
-      { mode: 0o600 },
-    );
+    writeFileSync(goldenSessionPath(stateDir), "{}", { mode: 0o600 });
 
     expect(() => inspectFounderCutoverFence(stateDir)).toThrow();
     expect(() => requiresFounderFederation(stateDir)).toThrow();
+  });
+
+  it("rejects a receipt whose signed integrity digest was tampered", () => {
+    const stateDir = privateState();
+    installGoldenFounderState(stateDir, {
+      session: "complete",
+      identity: false,
+      guard: false,
+    });
+    const tampered = goldenSessionRecord("complete");
+    const integrity = tampered["integrity"] as Record<string, unknown>;
+    integrity["payload_sha256"] = `sha256:${"0".repeat(64)}`;
+    writeFileSync(goldenSessionPath(stateDir), canonicalJson(tampered), {
+      mode: 0o600,
+    });
+
+    expect(() =>
+      new FounderBootstrapSessionStore(stateDir).read(GOLDEN_SESSION_ID),
+    ).toThrow(/payload digest does not match/);
+    expect(() => inspectFounderCutoverFence(stateDir)).toThrow(
+      /payload digest does not match/,
+    );
   });
 });
 
@@ -140,7 +188,10 @@ describe("backup downgrade protection over a valid receipt", () => {
   it("accepts a restore whose backup carries the identical cutover", async () => {
     const stateDir = privateState();
     const backupRoot = backupRootFor(stateDir);
-    await writeFencedFounderState(stateDir, { phase: "complete" });
+    installGoldenFounderState(stateDir, {
+      session: "complete",
+      identity: false,
+    });
     const sentinel = join(stateDir, "recovery-sentinel.txt");
     writeFileSync(sentinel, "trusted\n", { mode: 0o600 });
 
@@ -171,7 +222,10 @@ describe("backup downgrade protection over a valid receipt", () => {
   it("accepts an identical-cutover restore through the guardless comparison", async () => {
     const stateDir = privateState();
     const backupRoot = backupRootFor(stateDir);
-    await writeFencedFounderState(stateDir, { phase: "complete" });
+    installGoldenFounderState(stateDir, {
+      session: "complete",
+      identity: false,
+    });
     const sentinel = join(stateDir, "recovery-sentinel.txt");
     writeFileSync(sentinel, "trusted\n", { mode: 0o600 });
 
@@ -213,8 +267,9 @@ describe("backup downgrade protection over a valid receipt", () => {
       canonicalConfigSha256: configSha(stateDir),
     });
 
-    const built = await writeFencedFounderState(stateDir, {
-      phase: "complete",
+    installGoldenFounderState(stateDir, {
+      session: "complete",
+      identity: false,
     });
     // Deleting the adjacent guard must not reopen the downgrade: the stored
     // irreversible receipt alone still has to reject a pre-cutover backup.
@@ -234,8 +289,7 @@ describe("backup downgrade protection over a valid receipt", () => {
       }),
     ).rejects.toThrow(/irreversible founder identity cutover/);
     expect(
-      new FounderBootstrapSessionStore(stateDir).read(built.session.session_id)
-        .phase,
+      new FounderBootstrapSessionStore(stateDir).read(GOLDEN_SESSION_ID).phase,
     ).toBe("complete");
     // The refusal promises no safety backup was taken.
     expect(
@@ -246,11 +300,13 @@ describe("backup downgrade protection over a valid receipt", () => {
   it("rejects a restore whose backup carries a different cutover session", async () => {
     const stateDir = privateState();
     const backupRoot = backupRootFor(stateDir);
-    const first = await writeFencedFounderState(stateDir, {
-      phase: "complete",
+    installGoldenFounderState(stateDir, {
+      session: "complete",
+      identity: false,
     });
 
-    // A backup of this same state path, taken while session A was current.
+    // A backup of this same state path, taken while the primary signed session
+    // and its matching guard were current.
     const sessionA = await createProductStateBackup({
       stateDir,
       backupRoot,
@@ -259,18 +315,20 @@ describe("backup downgrade protection over a valid receipt", () => {
       canonicalConfigSha256: configSha(stateDir),
     });
 
-    // The live root now carries a different irreversible session, and the
-    // adjacent guard is gone, so only the stored receipts can catch it.
-    rmSync(founderBootstrapSessionPath(stateDir, first.session.session_id));
-    const second = await signedFounderBootstrapSession({
-      phase: "complete",
-      sessionId: OTHER_SESSION_ID,
-      signer: first.signer,
-      signingKey: first.signingKey,
+    // Replace the live receipt with a second, independently signed complete
+    // ceremony and remove the adjacent guard. This forces restore safety
+    // through its receipt-to-receipt comparison branch.
+    rmSync(goldenSessionPath(stateDir));
+    installGoldenFounderState(stateDir, {
+      session: "alternate-complete",
+      identity: false,
+      guard: false,
     });
-    new FounderBootstrapSessionStore(stateDir).write(second.session);
     rmSync(founderCutoverGuardPath(stateDir));
     expect(readFounderCutoverGuard(stateDir)).toBeNull();
+    expect(inspectFounderCutoverFence(stateDir).session?.session_id).toBe(
+      GOLDEN_ALTERNATE_SESSION_ID,
+    );
 
     await expect(
       restoreProductStateBackup({
@@ -285,9 +343,10 @@ describe("backup downgrade protection over a valid receipt", () => {
       }),
     ).rejects.toThrow(/irreversible founder identity cutover/);
     expect(
-      new FounderBootstrapSessionStore(stateDir).read(second.session.session_id)
-        .session_id,
-    ).toBe(OTHER_SESSION_ID);
+      new FounderBootstrapSessionStore(stateDir).read(
+        GOLDEN_ALTERNATE_SESSION_ID,
+      ).session_id,
+    ).toBe(GOLDEN_ALTERNATE_SESSION_ID);
     expect(
       existsSync(join(backupRoot, "must-not-create-mismatched-pre-backup")),
     ).toBe(false);
@@ -347,9 +406,30 @@ describe("backup downgrade protection over a valid receipt", () => {
       createdAt: "2026-07-19T22:58:00.000Z",
       canonicalConfigSha256: configSha(stateDir),
     });
-    const built = await writeFencedFounderState(stateDir, {
-      phase: "ready_for_confirmation",
-      withGuard: false,
+    // A precommit (`planned`) session is the golden request with every later
+    // phase artifact nulled out; the store accepts it unsigned by design, so
+    // mutating the golden JSON is enough to produce valid reversible residue.
+    const planned = goldenSessionRecord("committing");
+    planned["phase"] = "planned";
+    planned["revision"] = 1;
+    for (const field of [
+      "signing_key",
+      "integrity",
+      "provider_observations",
+      "challenge",
+      "verification",
+      "confirmation",
+      "commit",
+      "result",
+    ]) {
+      planned[field] = null;
+    }
+    mkdirSync(resolveProductStatePaths(stateDir).founderIdentityBootstrap, {
+      recursive: true,
+      mode: 0o700,
+    });
+    writeFileSync(goldenSessionPath(stateDir), canonicalJson(planned), {
+      mode: 0o600,
     });
     expect(readFounderCutoverGuard(stateDir)).toBeNull();
     expect(inspectFounderCutoverFence(stateDir).state).toBe("precommit");
@@ -367,9 +447,8 @@ describe("backup downgrade protection over a valid receipt", () => {
       }),
     ).rejects.toThrow(/erase retired founder-provenance material/);
     expect(
-      new FounderBootstrapSessionStore(stateDir).read(built.session.session_id)
-        .phase,
-    ).toBe("ready_for_confirmation");
+      new FounderBootstrapSessionStore(stateDir).read(GOLDEN_SESSION_ID).phase,
+    ).toBe("planned");
     expect(
       existsSync(join(backupRoot, "must-not-create-precommit-pre-backup")),
     ).toBe(false);
@@ -385,15 +464,12 @@ describe("backup downgrade protection over a valid receipt", () => {
       createdAt: "2026-07-19T22:58:00.000Z",
       canonicalConfigSha256: configSha(stateDir),
     });
-    const built = await writeFencedFounderState(stateDir, {
-      phase: "complete",
+    installGoldenFounderState(stateDir, {
+      session: "complete",
+      identity: false,
     });
     rmSync(founderCutoverGuardPath(stateDir));
-    writeFileSync(
-      founderBootstrapSessionPath(stateDir, built.session.session_id),
-      "{}",
-      { mode: 0o600 },
-    );
+    writeFileSync(goldenSessionPath(stateDir), "{}", { mode: 0o600 });
 
     await expect(
       restoreProductStateBackup({
