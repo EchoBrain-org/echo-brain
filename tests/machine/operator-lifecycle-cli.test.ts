@@ -20,7 +20,6 @@ import {
 import { createDefaultAdapterFactories } from '../../src/product/default-adapters.js';
 import { loadProductRuntimeConfig } from '../../src/product/config.js';
 import { canonicalProductConfigSha256 } from '../../src/product/lifecycle-lock.js';
-import { onboardProduct } from '../../src/product/operator-lifecycle.js';
 import type {
   LaunchctlResult,
   LaunchctlRunner,
@@ -444,16 +443,18 @@ describe('operator onboarding and lifecycle CLI', () => {
       mkdtempSync(join(tmpdir(), 'echo-file-credential-')),
     );
     roots.push(root);
-    const configPath = join(root, 'config', 'runtime.json');
-    const stateDirectory = join(root, 'state');
-    const cliPath = join(root, 'echo-brain-cli.js');
-    writeFileSync(cliPath, '#!/usr/bin/env node\n');
+    const credentialPath = join(
+      root,
+      'state',
+      'credentials',
+      'meeting-source-api-key',
+    );
+    const { configPath, stateDirectory, cliPath } = fixtures(
+      root,
+      `file:${credentialPath}`,
+    );
     const launchd = fakeLaunchd();
     const dependencies = cliDependencies(root, cliPath, launchd);
-    // `bootstrap` owns the only supported v1 setup and the real suite proves the
-    // baseline it writes; that baseline is arranged directly here so this test
-    // stays about the credential the service needs.
-    const { credential_path } = onboardProduct(configPath, stateDirectory);
     await expectOk(['init', '--config', configPath], dependencies);
 
     const missing = await command(
@@ -464,7 +465,11 @@ describe('operator onboarding and lifecycle CLI', () => {
     expect(missing.stderr).toContain('is unavailable or insecure');
     expect(launchd.calls.some((args) => args[0] === 'bootstrap')).toBe(false);
 
-    writeFileSync(credential_path, 'synthetic-token\n', { mode: 0o600 });
+    mkdirSync(join(stateDirectory, 'credentials'), {
+      recursive: true,
+      mode: 0o700,
+    });
+    writeFileSync(credentialPath, 'synthetic-token\n', { mode: 0o600 });
     await expectOk(['service', 'install', '--config', configPath], dependencies);
     const manifest = JSON.parse(
       readFileSync(

@@ -254,9 +254,8 @@ export interface ProductOnboardResult {
   config_path: string;
   state_dir: string;
   credential_path: string;
-  slack_credential_path?: string;
+  slack_credential_path: string;
   config: ProductRuntimeConfig;
-  next_steps: readonly string[];
 }
 
 export interface ProductSlackApprovalBootstrapProfile {
@@ -271,12 +270,9 @@ const SLACK_BOT_TOKEN_RE = /^xoxb-[A-Za-z0-9-]{8,}$/;
 
 export interface ProductOnboardOptions {
   fileSystem?: OperatorFileSystem;
-  /**
-   * The bootstrap-only owner boundary. Plain `onboard` retains its existing
-   * local rehearsal profile when this is absent.
-   */
-  granolaOwnerEmail?: string;
-  slackApproval?: ProductSlackApprovalBootstrapProfile;
+  /** The canonical employee owner the created Granola source is bound to. */
+  granolaOwnerEmail: string;
+  slackApproval: ProductSlackApprovalBootstrapProfile;
 }
 
 function canonicalLowercaseEmail(value: string): boolean {
@@ -295,47 +291,36 @@ function canonicalLowercaseEmail(value: string): boolean {
 
 export function createProductOnboardConfig(
   stateDirectory: string,
-  granolaOwnerEmail?: string,
-  slackApproval?: ProductSlackApprovalBootstrapProfile,
+  granolaOwnerEmail: string,
+  slackApproval: ProductSlackApprovalBootstrapProfile,
 ): ProductRuntimeConfig {
-  if (
-    granolaOwnerEmail !== undefined &&
-    !canonicalLowercaseEmail(granolaOwnerEmail)
-  ) {
+  if (!canonicalLowercaseEmail(granolaOwnerEmail)) {
     throw new ProductOperatorError(
       'installation_conflict',
       'Granola owner must be a canonical lowercase email address',
     );
   }
-  if (slackApproval !== undefined) {
-    if (granolaOwnerEmail === undefined) {
-      throw new ProductOperatorError(
-        'installation_conflict',
-        'Slack approval bootstrap requires an owner-bound profile',
-      );
-    }
-    if (!/^C[A-Z0-9]{2,}$/.test(slackApproval.channelId)) {
-      throw new ProductOperatorError(
-        'installation_conflict',
-        'Slack approval channel must be a canonical Slack channel ID',
-      );
-    }
-    if (!/^[UW][A-Z0-9]{2,}$/.test(slackApproval.reviewerUserId)) {
-      throw new ProductOperatorError(
-        'installation_conflict',
-        'Slack approval reviewer must be a canonical Slack user ID',
-      );
-    }
-    if (
-      slackApproval.reviewerName !== slackApproval.reviewerName.trim() ||
-      slackApproval.reviewerName.length === 0 ||
-      slackApproval.reviewerName.length > 256
-    ) {
-      throw new ProductOperatorError(
-        'installation_conflict',
-        'Slack approval reviewer name must be a trimmed non-empty name',
-      );
-    }
+  if (!/^C[A-Z0-9]{2,}$/.test(slackApproval.channelId)) {
+    throw new ProductOperatorError(
+      'installation_conflict',
+      'Slack approval channel must be a canonical Slack channel ID',
+    );
+  }
+  if (!/^[UW][A-Z0-9]{2,}$/.test(slackApproval.reviewerUserId)) {
+    throw new ProductOperatorError(
+      'installation_conflict',
+      'Slack approval reviewer must be a canonical Slack user ID',
+    );
+  }
+  if (
+    slackApproval.reviewerName !== slackApproval.reviewerName.trim() ||
+    slackApproval.reviewerName.length === 0 ||
+    slackApproval.reviewerName.length > 256
+  ) {
+    throw new ProductOperatorError(
+      'installation_conflict',
+      'Slack approval reviewer name must be a trimmed non-empty name',
+    );
   }
   const credentialPath = join(stateDirectory, 'credentials', 'granola-api-key');
   const slackCredentialPath = join(
@@ -350,16 +335,12 @@ export function createProductOnboardConfig(
     meeting_sources: [
       {
         adapter_id: 'granola',
-        instance_id:
-          granolaOwnerEmail === undefined ? 'primary' : 'owner-bound-v1',
+        instance_id: 'owner-bound-v1',
         credential_ref: `file:${credentialPath}`,
-        settings:
-          granolaOwnerEmail === undefined
-            ? {}
-            : {
-                owner_email: granolaOwnerEmail,
-                page_size: 1,
-              },
+        settings: {
+          owner_email: granolaOwnerEmail,
+          page_size: 1,
+        },
       },
     ],
     decision_processor: {
@@ -377,25 +358,21 @@ export function createProductOnboardConfig(
         },
       },
     ],
-    ...(slackApproval === undefined
-      ? { approval_mode: 'manual' as const }
-      : {
-          approval_mode: 'adapter' as const,
-          approval_surface: {
-            adapter_id: 'slack-reactions',
-            instance_id: 'internal-approvals',
-            credential_ref: `file:${slackCredentialPath}`,
-            settings: {
-              channel_id: slackApproval.channelId,
-              reviewer: {
-                slack_user_id: slackApproval.reviewerUserId,
-                name: slackApproval.reviewerName,
-              },
-              approve_reaction: DEFAULT_APPROVE_REACTION,
-              reject_reaction: DEFAULT_REJECT_REACTION,
-            },
-          },
-        }),
+    approval_mode: 'adapter',
+    approval_surface: {
+      adapter_id: 'slack-reactions',
+      instance_id: 'internal-approvals',
+      credential_ref: `file:${slackCredentialPath}`,
+      settings: {
+        channel_id: slackApproval.channelId,
+        reviewer: {
+          slack_user_id: slackApproval.reviewerUserId,
+          name: slackApproval.reviewerName,
+        },
+        approve_reaction: DEFAULT_APPROVE_REACTION,
+        reject_reaction: DEFAULT_REJECT_REACTION,
+      },
+    },
   });
 }
 
@@ -535,7 +512,7 @@ export function createProductBootstrapCredential(
 export function onboardProduct(
   configPath: string,
   stateDirectory: string,
-  options: ProductOnboardOptions = {},
+  options: ProductOnboardOptions,
 ): ProductOnboardResult {
   const fileSystem = options.fileSystem ?? nodeOperatorFileSystem;
   if (!normalizedAbsolute(configPath)) {
@@ -651,16 +628,8 @@ export function onboardProduct(
     config_path: configPath,
     state_dir: stateDirectory,
     credential_path: credentialPath,
-    ...(options.slackApproval === undefined
-      ? {}
-      : { slack_credential_path: slackCredentialPath }),
+    slack_credential_path: slackCredentialPath,
     config: loaded,
-    next_steps: [
-      `create ${credentialPath} as a mode-0600 regular file containing only the Granola API token`,
-      `echo-brain init --config ${configPath}`,
-      `echo-brain service install --config ${configPath}`,
-      `echo-brain doctor --config ${configPath}`,
-    ],
   };
 }
 
