@@ -21,7 +21,6 @@ describe('standalone CLI basics', () => {
     expect(stdout.read()).toContain('Usage:');
     expect(stdout.read()).toContain('echo-brain bootstrap');
     expect(stdout.read()).toContain('echo-brain validate-config');
-    expect(stdout.read()).toContain('echo-brain identity-check');
     expect(stdout.read()).toContain('echo-brain organization enroll');
     expect(stdout.read()).toContain(
       'echo-brain update apply --channel internal-live',
@@ -41,6 +40,7 @@ describe('standalone CLI basics', () => {
       'echo-brain approve',
       'echo-brain reject',
       'echo-brain run --config',
+      'echo-brain identity-check',
       // The launchd child command stays unadvertised.
       'echo-brain service-run',
     ]) {
@@ -55,6 +55,7 @@ describe('standalone CLI basics', () => {
       ['approve', '--config', '/tmp/echo-missing.json'],
       ['reject', '--config', '/tmp/echo-missing.json'],
       ['run', '--config', '/tmp/echo-missing.json'],
+      ['identity-check', '--config', '/tmp/echo-missing.json'],
     ]) {
       const stderr = output();
       expect(await runProductCli(argv, { stderr: stderr.stream })).toBe(2);
@@ -77,12 +78,12 @@ describe('standalone CLI basics', () => {
     const stderr = output();
     expect(
       await runProductCli(
-        ['status', '--config', '/tmp/echo-missing.json', '--strict'],
+        ['status', '--config', '/tmp/echo-missing.json', '--local-only'],
         { stderr: stderr.stream },
       ),
     ).toBe(2);
     expect(stderr.read()).toContain(
-      '--strict is not valid with `echo-brain status`',
+      '--local-only is not valid with `echo-brain status`',
     );
   });
 

@@ -56,8 +56,7 @@
       "import": "./dist/product/organization/index.js"
     },
     "./schemas/meeting-context.v1.schema.json": "./schemas/meeting-context.v1.schema.json",
-    "./schemas/runtime-config.v1.schema.json": "./schemas/runtime-config.v1.schema.json",
-    "./schemas/product/*": "./schemas/product/*"
+    "./schemas/runtime-config.v1.schema.json": "./schemas/runtime-config.v1.schema.json"
   },
   "bin": {
     "echo-brain": "dist/product/cli.js"
@@ -70,7 +69,6 @@
     "dist/**",
     "schemas/meeting-context.v1.schema.json",
     "schemas/runtime-config.v1.schema.json",
-    "schemas/product/*.schema.json",
     "docs/architecture/core-and-adapters.md",
     "npm-shrinkwrap.json",
     "README.md",
@@ -100,7 +98,6 @@
     "test:control-plane": "npm run build:workspaces && npm test --workspace @echo-brain/organization-control-plane",
     "test:integration": "npm run build:workspaces && vitest run --config vitest.config.ts tests/integration",
     "test:product": "npm run build:workspaces && vitest run --config vitest.product.config.ts",
-    "test:federation": "npm run build:workspaces && vitest run --config vitest.product.config.ts tests/product/federation",
     "test:machine": "npm run build:workspaces && vitest run --config vitest.config.ts tests/machine && vitest run --config vitest.product.config.ts tests/product/adapter-factories.test.ts tests/product/decision-node-store.test.ts tests/product/sqlite-core-state.test.ts tests/product/product-database-migrations.test.ts tests/product/runtime-config.test.ts tests/product/runtime-isolation.test.ts",
     "check:boundary": "node tools/check-boundary.mjs",
     "organization-authority:cli": "node services/organization-authority/dist/main.js",

@@ -386,7 +386,7 @@ hardware-backed implementation later. `organization enroll` requires
 `--allow-exportable-software-key` so pilot-grade assurance cannot be accepted
 silently. That key authenticates the supported organization enrollment and
 Authority flows. It is not used to revive or qualify retired local founder
-identity; `identity-check --strict` remains false for a fenced founder profile.
+identity; any founder residue is refused before product work begins.
 
 Central organization-admin bootstrap is the one supported v1 enrollment path.
 The local founder-provenance mode -- the `identity-bootstrap` ceremony, the
@@ -400,20 +400,27 @@ and refused, not downgraded. One early dispatch gate refuses `bootstrap`,
 install`/`start`/`restart` — before a `ProductOperator` is constructed, the
 filesystem is probed, a lifecycle lock is taken, a directory is created or
 chmodded, credentials are resolved, SQLite is opened or migrated, a provider or
-the Authority is contacted, or an injected callback runs. A custom identity
-check or approval store cannot bypass it.
+the Authority is contacted, or an injected callback runs. An injected approval
+store or callback cannot bypass it.
 
 The exceptions are not "commands that do not write" — several of them do write.
-They are the commands whose purpose is to diagnose, preserve, or quiesce a
-fenced profile: `--help`/`--version`, `validate-config`, `status`,
-`identity-check`, `backup`, `restore`, and `service stop`/`status`/`uninstall`.
+They are the commands whose purpose is to inspect, preserve, or quiesce a
+fenced profile: `--help`/`--version`, `validate-config`, `status`, `backup`,
+`restore`, and `service stop`/`status`/`uninstall`.
 `organization status` is **not** an exception: it opens and migrates writable
 SQLite, so it is gated with every other organization action.
 
-Recovery does not go through a restore. The cutover is irreversible, and a
-backup stays bound to the state path it was taken from, so no restore crosses
-the fence — a backup of a retired profile is preservation for that profile,
-nothing more.
+Old founder state is never parsed: the code that read, validated, or recovered
+it is deleted, and detection is presence-only. `backup` of a fenced profile
+stays available: regular state-tree files are copied byte-for-byte, the SQLite
+database is captured as a consistent SQLite backup, and the external cutover
+guard remains beside the original state path, outside the backup. Recovery
+does not go through a
+restore: `restore` refuses — before its safety pre-backup, its durable marker,
+staging, or any live change — whenever the live target holds founder residue
+*or* the validated backup payload would reintroduce it, and it will not
+recover, roll back, or report success over interrupted restore artifacts that
+involve that residue.
 
 The executable order matters, because `backup` refuses to run while the service
 is loaded:
@@ -441,10 +448,9 @@ pristineness in general. `bootstrap` prompts for the Granola and Slack tokens,
 initializes the installation, and enrolls it against a not-yet-enrolled
 membership.
 
-This pre-1.0 build does not migrate or exercise the private key of a retired
-founder identity. `identity-check` verifies its stored public descriptors,
-document signatures, and cutover receipt, then reports the profile as retired
-and inoperable. Preserve the prior state when identity continuity matters.
+This pre-1.0 build does not migrate, exercise, or provide a readiness diagnostic
+for a retired founder identity. Preserve the prior state when identity
+continuity matters; fresh central bootstrap is the supported way forward.
 
 ## Runtime configuration
 

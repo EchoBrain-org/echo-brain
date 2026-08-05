@@ -99,7 +99,7 @@ function configuredAdapterRequests(
  * Pure availability preflight. This proves every requested factory exists
  * without constructing an adapter, resolving a credential, or contacting a
  * provider. Product startup uses it before touching state while keeping actual
- * adapter construction behind the Founder identity gate.
+ * adapter construction behind the retired-founder provenance re-check.
  */
 export function assertConfiguredAdapterFactoriesAvailable(
   config: ProductRuntimeConfig,

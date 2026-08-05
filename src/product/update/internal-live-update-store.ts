@@ -1,7 +1,7 @@
 import { lstatSync, unlinkSync } from 'node:fs';
 import { join } from 'node:path';
+import { canonicalJson } from '@echo-brain/federation-protocol';
 import { atomicWrite } from '../../infrastructure/filesystem/atomic-write.js';
-import { canonicalJson } from '../federation/foundation/canonical-json.js';
 import {
   assertDisjointPaths,
   assertPrivateOwnedDirectory,

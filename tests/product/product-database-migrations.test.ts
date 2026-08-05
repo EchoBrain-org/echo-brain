@@ -16,10 +16,6 @@ const PRODUCT_TABLES = [
   'core_meeting_documents',
   'core_processed_markers',
   'core_source_cursors',
-  'federated_chain_heads',
-  'federated_outbox_events',
-  'federated_processor_attributions',
-  'federated_source_attributions',
   'organization_access_high_watermarks',
   'organization_authority_connections',
   'organization_authority_pins',
@@ -52,12 +48,12 @@ afterEach(() => {
 });
 
 describe('machine product database migrations', () => {
-  it('installs schema v7 with the complete product-state inventory', () => {
+  it('installs schema v8 with the complete product-state inventory', () => {
     const path = temporaryDatabase();
     openProductDatabase(path, { durability: 'operational' }).close();
 
     const database = new Database(path, { readonly: true });
-    expect(database.pragma('user_version', { simple: true })).toBe(7);
+    expect(database.pragma('user_version', { simple: true })).toBe(8);
     expect(tableNames(database)).toEqual(PRODUCT_TABLES);
     expect(
       database
@@ -69,7 +65,7 @@ describe('machine product database migrations', () => {
     database.close();
   });
 
-  it('upgrades v3, removes retired event data, and preserves owned state', () => {
+  it('upgrades v3, removes retired event and founder-federation tables, and preserves owned state', () => {
     const path = temporaryDatabase();
     const legacy = new Database(path);
     for (const filename of [
@@ -112,7 +108,7 @@ describe('machine product database migrations', () => {
     openProductDatabase(path, { durability: 'operational' }).close();
 
     const database = new Database(path, { readonly: true });
-    expect(database.pragma('user_version', { simple: true })).toBe(7);
+    expect(database.pragma('user_version', { simple: true })).toBe(8);
     expect(tableNames(database)).toEqual(PRODUCT_TABLES);
     expect(
       database
@@ -122,14 +118,15 @@ describe('machine product database migrations', () => {
         )
         .get('source-alpha', 'primary', '1.0.0'),
     ).toEqual({ cursor: 'cursor-v3' });
+    // 0008 drops the retired founder-federation tables along with the row the
+    // v3 database carried; only the deleted capability ever wrote them.
     expect(
       database
         .prepare(
-          `SELECT last_sequence FROM federated_chain_heads
-           WHERE installation_id = ?`,
+          `SELECT name FROM sqlite_master WHERE name LIKE 'federated_%'`,
         )
-        .get('installation-v3'),
-    ).toEqual({ last_sequence: 0 });
+        .all(),
+    ).toEqual([]);
     database.close();
   });
 });

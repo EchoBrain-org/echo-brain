@@ -35,12 +35,7 @@ import {
   assertProductMaintenanceLease,
   type ProductMaintenanceLease,
 } from './lifecycle-lock.js';
-import {
-  assertFounderCutoverGuardMatchesSession,
-  inspectFounderCutoverFence,
-  inspectFounderProvenanceResidue,
-  readFounderCutoverGuard,
-} from './federation/cutover-fence.js';
+import { inspectFounderProvenanceResidue } from './retired-founder-provenance.js';
 
 const BACKUP_MANIFEST = 'backup-manifest.json';
 const PRODUCT_DATABASE = 'echo-brain.sqlite';
@@ -168,59 +163,54 @@ interface StateBackupPreparation {
   canonical_config_sha256: string;
 }
 
-function assertRestorePreservesFounderCutover(
-  currentStateDirectory: string,
-  restoredStateDirectory: string,
+const FOUNDER_RESIDUE_PAYLOAD_ROOTS = ['identity', 'bootstrap/founder-identity'];
+
+/**
+ * Manifest paths that would land inside the retired founder identity or
+ * bootstrap locations. Detection is path-based only -- restore never parses
+ * retired state -- and mirrors the live residue detector, so a payload is
+ * refused exactly when restoring it would materialize a fenced state root.
+ */
+function founderResiduePayloadPaths(
+  manifest: StateBackupManifest,
+): string[] {
+  return manifest.files
+    .map((file) => file.path)
+    .filter((path) =>
+      FOUNDER_RESIDUE_PAYLOAD_ROOTS.some(
+        (root) => path === root || path.startsWith(`${root}/`),
+      ),
+    );
+}
+
+/**
+ * Refuse when a directory involved in restore holds, or cannot be proven free
+ * of, retired founder-provenance residue. Inspection is observational, so when
+ * this throws nothing has been renamed, deleted, staged, or promoted: the
+ * residue stays exactly where it was found and `backup` remains the one
+ * supported way to preserve it.
+ */
+function assertFreeOfFounderResidue(directory: string, label: string): void {
+  const residue = inspectFounderProvenanceResidue(directory);
+  if (!residue.present) return;
+  throw new Error(
+    `${label} holds retired founder-provenance material and is ` +
+      'preservation-only; no restore may modify, recover, or erase it ' +
+      `[${residue.findings.join('; ')}]`,
+  );
+}
+
+function assertPayloadFreeOfFounderResidue(
+  manifest: StateBackupManifest,
 ): void {
-  const guard = readFounderCutoverGuard(currentStateDirectory);
-  const current = inspectFounderCutoverFence(currentStateDirectory);
-  const currentIrreversible =
-    current.state === 'committing' || current.state === 'complete';
-  if (guard === null && !currentIrreversible) {
-    // No guard and no irreversible receipt: 'none' or 'precommit'. Identity-only
-    // residue and a valid precommit session are still retired founder-provenance
-    // material, and no restore may erase them -- no restore crosses the
-    // retirement fence. There is no cutover identity to match at these phases,
-    // and inspecting the backup instead would prove nothing: the observational
-    // inspector can see artifacts restore never copies (a guard-named sibling
-    // of the backup directory, an empty unexpected identity entry), so a clean
-    // payload could impersonate a fenced one. Presence of any current residue
-    // -- including an uninspectable root -- therefore refuses outright;
-    // preservation of such a profile is `backup`, not restore.
-    const residue = inspectFounderProvenanceResidue(currentStateDirectory);
-    if (!residue.present) return;
-    throw new Error(
-      'restore would erase retired founder-provenance material',
-    );
-  }
-  const restored = inspectFounderCutoverFence(restoredStateDirectory);
-  if (restored.state !== 'committing' && restored.state !== 'complete') {
-    throw new Error(
-      'restore would remove or replace the irreversible founder identity cutover',
-    );
-  }
-  try {
-    if (guard !== null) {
-      assertFounderCutoverGuardMatchesSession(guard, restored.session);
-    } else if (
-      current.state === 'committing' ||
-      current.state === 'complete'
-    ) {
-      if (
-        current.session.session_id !== restored.session.session_id ||
-        current.session.commit?.plan_sha256 !==
-          restored.session.commit?.plan_sha256 ||
-        current.session.signing_key?.key_id !==
-          restored.session.signing_key?.key_id
-      ) {
-        throw new Error('restored cutover identity differs');
-      }
-    }
-  } catch {
-    throw new Error(
-      'restore would remove or replace the irreversible founder identity cutover',
-    );
-  }
+  const residue = founderResiduePayloadPaths(manifest);
+  if (residue.length === 0) return;
+  throw new Error(
+    'validated backup payload contains retired founder-provenance material; ' +
+      'the mode that produced it is retired, the backup directory itself is ' +
+      'left untouched, and no restore may reintroduce it ' +
+      `[${residue.join('; ')}]`,
+  );
 }
 
 function assertIsoInstant(value: string, label: string): void {
@@ -1089,6 +1079,14 @@ export async function restoreProductStateBackup(
   const targetIdentity = productStatePathIdentity(stateDir);
   const parent = dirname(stateDir);
   assertOwnerControlledDirectory(parent, 'state directory parent');
+  // Fail closed first: a live target that holds (or cannot be proven free of)
+  // retired founder residue -- including the adjacent cutover guard, which
+  // outlives deletion of the root itself -- is preservation-only. This runs
+  // before transaction discovery, the pre-restore backup, the durable marker,
+  // staging, and any live mutation, and it also refuses to report recovery
+  // success over an interrupted older restore that promoted founder state,
+  // whether or not that transaction recorded live state to put back.
+  assertFreeOfFounderResidue(stateDir, 'restore target state');
   const requestedStageDirectory = join(
     parent,
     `.echo-restore-${options.operationId}.staging`,
@@ -1126,6 +1124,23 @@ export async function restoreProductStateBackup(
     const liveExists = pathEntryExists(stateDir);
     const stageExists = pathEntryExists(stageDirectory);
     const replacedExists = pathEntryExists(replacedDirectory);
+    // An interrupted restore left by an older binary may hold retired founder
+    // state in its staged or replaced directories. Recovery must not rename,
+    // delete, or promote that material, so it stops here -- before any
+    // recovery mutation -- and leaves the whole topology for manual
+    // resolution. The live root itself was swept above.
+    if (stageExists) {
+      assertFreeOfFounderResidue(
+        stageDirectory,
+        'interrupted restore staging',
+      );
+    }
+    if (replacedExists) {
+      assertFreeOfFounderResidue(
+        replacedDirectory,
+        'interrupted restore replaced state',
+      );
+    }
 
     if (pendingTransaction.had_live_state && !liveExists && replacedExists) {
       rollbackReplacedState(
@@ -1230,23 +1245,11 @@ export async function restoreProductStateBackup(
       'backup canonical config hash does not match this installation',
     );
   }
-  try {
-    assertRestorePreservesFounderCutover(stateDir, validated.backupDirectory);
-  } catch (error) {
-    if (
-      pendingTransaction !== undefined &&
-      pathEntryExists(replacedDirectory)
-    ) {
-      rollbackReplacedState(
-        stateDir,
-        stageDirectory,
-        replacedDirectory,
-        markerPath,
-        parent,
-      );
-    }
-    throw error;
-  }
+  // Refuse the incoming direction on the validated payload's own manifest,
+  // still before the pre-restore backup, the durable marker, staging, and any
+  // live mutation. A refusal changes nothing, so an interrupted-but-clean
+  // topology stays recoverable by retrying with the right source.
+  assertPayloadFreeOfFounderResidue(validated.manifest);
 
   const requestedAutomaticBackupRoot = canonicalLocalPath(
     options.automaticBackupRoot,
@@ -1421,17 +1424,35 @@ export async function restoreProductStateBackup(
     fsyncDirectoryTree(stageDirectory);
 
     if (pathEntryExists(stateDir)) {
+      // Residue -- or the adjacent guard -- can appear under the live root
+      // after the entry preflight. Re-check immediately before the rename
+      // that would move it into the replaced directory; refusing here leaves
+      // the durable marker, the staged payload, and the residue untouched.
+      assertFreeOfFounderResidue(stateDir, 'restore target state');
       renameSync(stateDir, replacedDirectory);
       replacedExists = true;
       fsyncDirectory(parent);
       options.faultInjector?.('after_live_replaced');
     }
+    // The staged payload was manifest-checked and verified, but residue can
+    // still land inside it before promotion. Re-check before the rename that
+    // would make it live.
+    assertFreeOfFounderResidue(stageDirectory, 'completed restore staging');
     renameSync(stageDirectory, stateDir);
     stageExists = false;
     fsyncDirectory(parent);
     options.faultInjector?.('after_stage_promoted');
+    // Residue in the promoted root -- or the adjacent guard beside the final
+    // target -- refuses before the replaced original or the durable marker
+    // is deleted, so the success path can never erase founder material.
+    assertFreeOfFounderResidue(stateDir, 'promoted restored state');
     verifyRestoredStage(stateDir, validated.manifest);
     if (replacedExists) {
+      // Residue can also land inside the replaced original after it was
+      // renamed aside; re-check immediately before the deletion that would
+      // erase it. Refusing leaves the promoted state, the replaced original,
+      // its residue, and the durable marker in place.
+      assertFreeOfFounderResidue(replacedDirectory, 'replaced original state');
       rmSync(replacedDirectory, { recursive: true, force: true });
       replacedExists = false;
       fsyncDirectory(parent);

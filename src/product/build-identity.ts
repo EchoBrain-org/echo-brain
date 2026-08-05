@@ -34,7 +34,7 @@ export function validatePackagedBuildIdentity(
 }
 
 export function loadPackagedBuildIdentity(): PackagedBuildIdentityV1 {
-  const raw = readFileSync(new URL('../build-identity.v1.json', import.meta.url), 'utf8');
+  const raw = readFileSync(new URL('./build-identity.v1.json', import.meta.url), 'utf8');
   let value: unknown;
   try {
     value = JSON.parse(raw) as unknown;

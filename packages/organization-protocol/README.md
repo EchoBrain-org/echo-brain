@@ -31,10 +31,11 @@ and requires recovery or re-enrollment rather than accepting a later snapshot
 as a fresh bootstrap. A valid result is only an installation-level organization
 gate; user-session and record-audience authorization remain separate.
 
-The stable enrollment shape intentionally does not copy the experimental
-identity-manifest and publication-policy fields. Those are product-local and
-ingest-era evidence. Enrollment remains self-contained; their later central
-registration belongs to the separate ingest promotion.
+The stable enrollment shape intentionally never copied the identity-manifest
+and publication-policy fields of the product-local founder federation, which
+is now deleted. Where those fields exist at all, they are historical evidence
+in preserved state and backups, not current product-local evidence. Enrollment
+remains self-contained.
 
 It depends only on `@echo-brain/federation-protocol`. It owns no transport
 routes, invitation delivery, database rows, admin commands, signing

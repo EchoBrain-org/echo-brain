@@ -11,14 +11,14 @@ import {
 } from "node:fs";
 import { dirname, join, relative } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { runProductCli } from "../../../src/product/cli.js";
-import type { ProductCliDependencies } from "../../../src/product/cli.js";
-import { resolveProductStatePaths } from "../../../src/product/paths.js";
-import { founderCutoverGuardPath } from "../../../src/product/federation/cutover-fence.js";
+import { runProductCli } from "../../src/product/cli.js";
+import type { ProductCliDependencies } from "../../src/product/cli.js";
+import { resolveProductStatePaths } from "../../src/product/paths.js";
+import { founderCutoverGuardPath } from "../../src/product/retired-founder-provenance.js";
 import {
   createPrivateTestState,
   manualRuntimeConfig,
-} from "./fixtures/founder-identity.js";
+} from "./fixtures/retired-provenance.js";
 
 /**
  * Ordering, not just outcome.
@@ -49,8 +49,7 @@ interface TouchLog {
 /**
  * Every injectable seam records its own name. None of them may fire on a
  * gated branch: the classifier, lifecycle-lock acquisition, operator
- * filesystem, credential resolvers, adapter factories, the top-level and
- * composition-level identity callbacks, approval gate, the
+ * filesystem, credential resolvers, adapter factories, approval gate, the
  * caller-owned state and approval stores, and signal handlers.
  */
 function instrumented(): TouchLog {
@@ -104,14 +103,6 @@ function instrumented(): TouchLog {
         calls.push("now");
         return "2026-07-19T23:00:00.000Z";
       },
-      // Property getters on both identity seams make even dependency spreading
-      // before the retirement gate visible.
-      identityCheck: {
-        get credentialResolver() {
-          calls.push("identityCheck.credentialResolver");
-          return () => "token";
-        },
-      },
       operator: {
         fileSystem: new Proxy(
           {},
@@ -141,8 +132,7 @@ function instrumented(): TouchLog {
         },
       },
       // The custom-composition surface: an auto-approving gate, caller-owned
-      // state and approval stores, a
-      // composition-scoped identity check, and the clock/id/teardown seams.
+      // state and approval stores, and the clock/id/teardown seams.
       composition: {
         state: new Proxy(
           {},
@@ -152,12 +142,6 @@ function instrumented(): TouchLog {
           {},
           { get: () => trap("composition.approvals") },
         ) as never,
-        identityCheck: {
-          get credentialResolver() {
-            calls.push("composition.identityCheck.credentialResolver");
-            return () => "token";
-          },
-        },
         approvalGate: {
           review: async (request) => {
             calls.push("composition.approvalGate.review");
@@ -237,7 +221,10 @@ function snapshot(stateDirectory: string): string[] {
  */
 function fencedProfile(): { stateDir: string; configPath: string } {
   const stateDir = createPrivateTestState(temporary, "echo-cli-dispatch-");
-  const manifests = resolveProductStatePaths(stateDir).identityManifests;
+  const manifests = join(
+    resolveProductStatePaths(stateDir).identityRoot,
+    "manifests",
+  );
   mkdirSync(manifests, { recursive: true, mode: 0o700 });
   writeFileSync(join(manifests, "idm_founder.v1.json"), "{}", { mode: 0o600 });
   chmodSync(manifests, 0o700);
@@ -356,22 +343,6 @@ const EXCEPTIONS: readonly (readonly [
         expect(lastJson(output)).toMatchObject({
           command: "status",
           code: "invalid_operator_path",
-        });
-      },
-    }),
-  ],
-  [
-    "identity-check",
-    (c) => ({
-      argv: ["identity-check", "--config", c],
-      expectReached: (output) => {
-        // The full identity report is computed and returned: the retirement is
-        // reported here, not refused at dispatch.
-        expect(lastJson(output)).toMatchObject({
-          command: "identity-check",
-          kind: "echo-founder-identity-check",
-          mode: "identity_enabled",
-          operational_ready: false,
         });
       },
     }),

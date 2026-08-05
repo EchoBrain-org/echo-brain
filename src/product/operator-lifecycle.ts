@@ -35,7 +35,7 @@ import {
   pathIsWithin,
 } from './secure-local-files.js';
 import { canonicalProductConfigSha256 } from './lifecycle-lock.js';
-import type { PackagedBuildIdentityV1 } from './federation/build-identity.js';
+import type { PackagedBuildIdentityV1 } from './build-identity.js';
 import { GRANOLA_API_KEY_RE } from '../adapters/meeting-sources/granola/granola-api-client.js';
 import {
   DEFAULT_APPROVE_REACTION,

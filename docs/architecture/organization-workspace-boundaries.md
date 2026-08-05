@@ -14,7 +14,6 @@ src/
   adapters/                     source, processor, approval, delivery
   product/                      CLI, runtime composition, approval, storage
   product/machine/              installation key and OS ports
-  product/federation/           local identity and signed records
   product/organization/         enrollment client and access state
   infrastructure/               atomic writes, SQLite migration, file locks
   util/                         narrow shared primitives
@@ -78,11 +77,11 @@ directions: a reachable module outside the allowlist is an error, and so is an
 allowlisted module no entry point can reach. Every tracked module under `src/`
 is therefore both allowlisted and reachable, and dead weight cannot accumulate
 inside the packed artifact.
-`tools/workspace-source-boundaries.v1.json` registers seven manifests that
-govern `packages/*/src`, `services/*/src`, and two refinement sub-boundaries
+`tools/workspace-source-boundaries.v1.json` registers six manifests that
+govern `packages/*/src`, `services/*/src`, and one refinement sub-boundary
 inside `src/product` by ownership: every file under a declared `source_root`
 must be owned and must match exactly one layer rule. Paths under
-`src/product/federation/` and `src/product/organization/` are the intersection
+`src/product/organization/` are the intersection
 of the two artifacts, and both checks must pass.
 
 ## Authority layers
@@ -145,43 +144,45 @@ production TypeScript -- for a lane no installation ever entered. Approval
 capture, attribution, signed record projection, the federated outbox, export
 bundles, protected independent copies, legacy classification, the bootstrap
 ceremony, and the `openFounderFederationRuntime` composition root are deleted,
-along with the `identity-bootstrap` and `export` CLI commands and the root
-federation barrel export. Ordinary composition, `identity-check`, and the
-approval commands no longer open a federation runtime, and the decision
+along with the `identity-bootstrap`, `identity-check`, and `export` CLI commands
+and the root federation barrel export. Ordinary composition and approval
+commands no longer open a federation runtime, and the decision
 store's federation capture port is deleted. Ordinary nodes use local metadata;
 historical nodes classified by an own `requested.metadata.federation` field
 are refused rather than projected or mutated.
 
-What remains is roughly 6,000 lines of identity/bootstrap/cutover security
-core: the identity bundle, manifest, registry, policy, credential-guard, and
-provider-identity documents; bootstrap sessions and their exact-shape
-validation; and `cutover-fence.ts`, which owns both the founder identity/cutover
-detector and the one shared retirement gate. Nothing creates founder identity
-or cutover material: the low-level authoring APIs (`commitFounderBootstrap`,
-`commitFounderCutoverGuard`, and the writable session-store APIs) are deleted,
-production is detection- and validation-only, and tests copy fixed historical
-fixture bytes checked in under
-`tests/product/federation/fixtures/retired-founder-state/`.
+`src/product/federation/` itself is now deleted entirely -- the historical
+identity-bundle, manifest, registry, policy, credential-guard, and
+provider-identity document code, bootstrap sessions and their exact-shape
+validation, the wire schemas, and every reader that could parse, validate, or
+recover that state. Old founder state is never parsed. What survives is one
+presence-only detector and refusal in
+`src/product/retired-founder-provenance.ts`, plus the packaged build identity
+relocated to `src/product/build-identity.ts`; the product boundary pins the
+deleted module under `removed_internal_roots`.
 The gate exists so a state root left behind by the retired
 mode is detected and refused, never silently downgraded to an unattributed local
 profile. It gates *product work* -- runtime start and every processing cycle --
 and is called by `prepareProductComposition` (at construction and per cycle),
 `DecisionNodeStore`, and the CLI before any directory creation, adapter
 resolution, credential work, provider or Authority contact, approval read or
-mutation, or caller-supplied callback. It
-deliberately does not gate `identity-check`, `validate-config`, general
-`status`, `backup`/`restore`, or `service stop`/`status`/`uninstall`,
-which must stay usable to diagnose, preserve, and quiesce a fenced profile.
+mutation, or caller-supplied callback. It deliberately does not gate
+`validate-config`, general `status`, `backup`/`restore`, or `service
+stop`/`status`/`uninstall`, which must stay usable to inspect, preserve, and
+quiesce a fenced profile; `backup` stays available (regular state files are
+copied byte-for-byte, SQLite is captured as a consistent SQLite backup, and
+the adjacent guard stays outside the backup), and
+`restore`'s own preflight refuses founder residue in the live target and in
+the validated backup payload before any pre-backup, marker, staging, or live
+mutation. Fresh central bootstrap is the only forward path.
 It is a fail-closed gate on trusted in-process callers, not a sandbox. It is
-observational only -- `lstat`/`readdir`/path existence, never the recovering
-session reader -- so refusing cannot mutate forensic founder state. Its entry
-points are declared in `src/product/federation/source-boundary.v1.json`.
+observational only -- `lstat`/`readdir`/path existence, never file content --
+so refusing cannot mutate forensic founder state.
 
-Read the federation half of
-[identity, onboarding, and federation](identity-onboarding-and-federation.md)
-as a persisted contract and a described future capability rather than as
-running code; the onboarding and access half of that document describes what
-actually runs.
+[Identity, onboarding, and federation](identity-onboarding-and-federation.md)
+describes what runs: onboarding and access, plus the retirement fence over the
+deleted local federation lane. Nothing there is a future capability of this
+lane.
 
 The bundled `llm` decision processor is a different case and is not out of
 scope. The composition root registers it alongside `structured-text`, and the

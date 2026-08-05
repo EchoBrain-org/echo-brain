@@ -1,5 +1,6 @@
 import {
   chmodSync,
+  existsSync,
   mkdirSync,
   mkdtempSync,
   realpathSync,
@@ -27,6 +28,8 @@ import {
   runProductCli,
   type ProductCliDependencies,
 } from '../../src/product/cli.js';
+import type { InstallationSigner } from '../../src/product/machine/security/installation-signer.js';
+import { SqliteOrganizationStateStore } from '../../src/product/organization/index.js';
 import { readPrivateOrganizationEnrollmentInvitation } from '../../src/product/organization/enrollment/private-organization-invitation.js';
 import {
   GRANT,
@@ -318,15 +321,6 @@ describe('organization machine CLI', () => {
         access_state_sequence: 1,
       },
     });
-    const identity = await command(
-      ['identity-check', '--config', configPath],
-      dependencies,
-    );
-    expect(identity.status, identity.stderr).toBe(0);
-    expect(JSON.parse(identity.stdout)).toMatchObject({
-      mode: 'local_only_unattributed',
-    });
-
     const status = await command(
       ['organization', 'status', '--config', configPath],
       dependencies,
@@ -391,6 +385,115 @@ describe('organization machine CLI', () => {
         ),
       ).mode & 0o777,
     ).toBe(0o600);
+  });
+
+  it('re-checks founder residue after the descriptor fetch, before any enrollment step', async () => {
+    const root = realpathSync(
+      mkdtempSync(join(tmpdir(), 'echo-organization-cli-')),
+    );
+    chmodSync(root, 0o700);
+    roots.push(root);
+    const { configPath, stateDirectory } = writeRuntimeConfig(root);
+    const authority = new TestAuthority();
+    const invitePath = invitationPath(root, authority);
+    const seams: string[] = [];
+
+    // The residue lands while the Authority descriptor is being read: after
+    // the early dispatch gate passed a clean root, before an installation
+    // identity is chosen. No test-only product seam exists for this; the
+    // injection rides the ordinary fetch dependency.
+    const fetchImpl: typeof fetch = async (input) => {
+      const url = new URL(String(input));
+      seams.push(`fetch ${url.pathname}`);
+      if (url.pathname === '/v1/authority-descriptor') {
+        const manifests = join(stateDirectory, 'identity', 'manifests');
+        mkdirSync(manifests, { recursive: true, mode: 0o700 });
+        writeFileSync(join(manifests, 'idm_race.v1.json'), '{}', {
+          mode: 0o600,
+        });
+        return Response.json({ authority_descriptor: authority.descriptor });
+      }
+      throw new Error(`unexpected organization authority path ${url.pathname}`);
+    };
+    const signer: InstallationSigner = {
+      generate: async (installationId) => {
+        seams.push(`signer.generate ${installationId}`);
+        throw new Error('signer must not run on a fenced root');
+      },
+      inspect: async (installationId) => {
+        seams.push(`signer.inspect ${installationId}`);
+        throw new Error('signer must not run on a fenced root');
+      },
+      sign: async (installationId) => {
+        seams.push(`signer.sign ${installationId}`);
+        throw new Error('signer must not run on a fenced root');
+      },
+    };
+    const dependencies: ProductCliDependencies = {
+      classifyStateFilesystem: async () => ({ kind: 'local', raw: 'apfs' }),
+      now: () => ENROLLMENT_TIME,
+      operator: {
+        launchctl: async () => ({
+          status: 113,
+          stdout: '',
+          stderr: 'not loaded',
+        }),
+        platform: 'darwin',
+        architecture: 'arm64',
+        uid: statSync(root).uid,
+        homeDirectory: join(root, 'home'),
+        nodePath: realpathSync(process.execPath),
+        nodeVersion: process.version,
+        cliPath: realpathSync(import.meta.filename),
+      },
+      organization: {
+        fetch: fetchImpl,
+        installationSigner: signer,
+        createInstallationId: () => {
+          seams.push('createInstallationId');
+          return ORGANIZATION_IDS.installation;
+        },
+      },
+    };
+
+    const initialized = await command(
+      ['init', '--config', configPath],
+      dependencies,
+    );
+    expect(initialized.status, initialized.stderr).toBe(0);
+
+    const enroll = await command(
+      [
+        'organization',
+        'enroll',
+        '--config',
+        configPath,
+        '--invitation',
+        invitePath,
+        '--authority-pin',
+        authority.pin,
+      ],
+      dependencies,
+    );
+    expect(enroll.status).toBe(1);
+    expect(enroll.stderr).toMatch(/is retired/);
+    // The descriptor read happened; nothing after the late re-check did: no
+    // installation id was generated, no signer key material was created or
+    // exercised, and no enrollment request left the machine.
+    expect(seams).toEqual(['fetch /v1/authority-descriptor']);
+    expect(
+      existsSync(join(stateDirectory, 'identity', 'manifests', 'idm_race.v1.json')),
+    ).toBe(true);
+
+    // No pending enrollment state was persisted for a later retry to resume.
+    const state = new SqliteOrganizationStateStore(
+      join(stateDirectory, 'echo-brain.sqlite'),
+    );
+    try {
+      expect(state.readEnrollment()).toBeNull();
+    } finally {
+      state.close();
+    }
   });
 
   it('recovers an exact enrollment retry after response loss and invitation expiry', async () => {

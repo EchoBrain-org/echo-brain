@@ -22,7 +22,7 @@ export class ProductRuntimeFailure extends Error {
       | 'adapter_unavailable'
       | 'adapter_invalid_config'
       | 'state_not_local'
-      | 'identity_not_operationally_ready'
+      | 'retired_founder_provenance'
       | 'organization_access_denied'
       | 'startup_failed',
     message: string,

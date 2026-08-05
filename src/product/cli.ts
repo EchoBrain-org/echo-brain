@@ -54,12 +54,6 @@ import {
   createProductStateBackup,
   restoreProductStateBackup,
 } from "./state-backup.js";
-import {
-  assertFounderIdentityAllowsPipeline,
-  checkFounderIdentity,
-  FounderIdentityGateError,
-  type IdentityCheckDependencies,
-} from "./federation/bootstrap/identity-check.js";
 import { FileInstallationSigner } from "./machine/security/file-installation-signer.js";
 import type { InstallationSigner } from "./machine/security/installation-signer.js";
 import {
@@ -77,12 +71,7 @@ import {
   type OrganizationInstallationAccessDecisionV1,
   verifyOrganizationAuthorityPin,
 } from "./organization/index.js";
-import {
-  createProductCredentialResolver,
-  readPrivateCredentialFile,
-} from "./credentials.js";
-import { ActiveIdentityBundleStore } from "./federation/identity/active-identity-bundle-store.js";
-import { RETIRED_FOUNDER_PROVENANCE_MESSAGE } from "./federation/cutover-fence.js";
+import { readPrivateCredentialFile } from "./credentials.js";
 import { resolveProductStatePaths } from "./paths.js";
 import { readFileNoFollow } from "./secure-local-files.js";
 import {
@@ -95,7 +84,7 @@ import { SLACK_REACTIONS_APPROVAL_SURFACE_ADAPTER_VERSION } from "../adapters/ap
 import {
   loadPackagedBuildIdentity,
   type PackagedBuildIdentityV1,
-} from "./federation/build-identity.js";
+} from "./build-identity.js";
 import {
   runInternalLiveUpdate,
   type RunInternalLiveUpdateOptions,
@@ -125,7 +114,6 @@ export interface ProductCliDependencies {
   >;
   operator?: Partial<ProductOperatorDependencies>;
   doctorHealthTimeoutMs?: number;
-  identityCheck?: IdentityCheckDependencies;
   acquireLifecycleLock?: (
     stateDirectory: string,
     kind: ProductLifecycleLockKind,
@@ -161,7 +149,6 @@ type CliCommand =
   | "reconfigure"
   | "status"
   | "doctor"
-  | "identity-check"
   | "organization"
   | "update"
   | "service"
@@ -181,7 +168,6 @@ interface ParsedCommand {
   backupRoot?: string;
   backupDirectory?: string;
   operationId?: string;
-  strictIdentityCheck: boolean;
   allowExportableSoftwareKey: boolean;
   doctorLocalOnly: boolean;
   ownerEmail?: string;
@@ -239,7 +225,6 @@ Usage:
   echo-brain reconfigure --config <absolute-path>
   echo-brain status --config <absolute-path>
   echo-brain doctor --config <absolute-path> [--local-only]
-  echo-brain identity-check --config <absolute-path> [--strict]
   echo-brain organization enroll --config <absolute-path> --invitation <absolute-path> --authority-pin <sha256:...> [--authority-ca <absolute-path>] --allow-exportable-software-key
   echo-brain organization status --config <absolute-path>
   echo-brain organization refresh --config <absolute-path>
@@ -278,7 +263,6 @@ const OPTIONS = {
   "slack-channel-id": { type: "string" },
   "slack-reviewer-user-id": { type: "string" },
   "slack-reviewer-name": { type: "string" },
-  strict: { type: "boolean" },
   "local-only": { type: "boolean" },
   "allow-exportable-software-key": { type: "boolean" },
 } as const;
@@ -339,7 +323,6 @@ const RULES: Readonly<Record<string, CommandRule>> = {
   reconfigure: NONE,
   status: NONE,
   doctor: { accepts: ["local-only"] },
-  "identity-check": { accepts: ["strict"] },
   "organization enroll": {
     accepts: [
       "invitation",
@@ -466,7 +449,6 @@ function parseCommand(argv: readonly string[]): ParsedCommand {
     backupRoot: text("backup-root"),
     backupDirectory: text("backup"),
     operationId: text("id"),
-    strictIdentityCheck: values.strict === true,
     allowExportableSoftwareKey:
       values["allow-exportable-software-key"] === true,
     doctorLocalOnly: values["local-only"] === true,
@@ -622,14 +604,6 @@ function printRuntimeFailure(
   const failure =
     error instanceof ProductRuntimeFailure
       ? error
-      : error instanceof FounderIdentityGateError
-        ? new ProductRuntimeFailure(
-            "identity_not_operationally_ready",
-            error.message,
-            error.report.checks
-              .filter((item) => item.required_for_operation && !item.ok)
-              .map((item) => `${item.id}: ${item.detail}`),
-          )
       : new ProductRuntimeFailure(
           "adapter_unavailable",
           (error as Error).message,
@@ -670,23 +644,22 @@ function refuseRetiredFounderProvenance(stateDirectory: string): void {
  * - `--help` / `--version` never touch a state path at all;
  * - `validate-config` reports on configuration;
  * - `status` reports operator/service state;
- * - `identity-check` is the diagnostic that names the retirement;
- * - `backup` and `restore` preserve and recover the profile, and keep their own
- *   cutover-fence downgrade protection;
+ * - `backup` preserves the profile (state files byte-for-byte, SQLite as a
+ *   consistent SQLite backup), and `restore`'s own preflight refuses founder
+ *   residue in the target and in the validated payload before changing any
+ *   state;
  * - `service stop`, `status`, and `uninstall` quiesce a fenced machine.
  *
  * `organization status` is deliberately NOT an exception: it opens and migrates
  * writable SQLite, so it is gated with every other organization action.
  *
- * `RETIRED_FOUNDER_PROVENANCE_MESSAGE` carries the recovery runbook. Its order
- * matters: `backup` refuses while the service is loaded, so `service stop`
- * comes first.
+ * The shared fence refusal carries the recovery runbook. Its order matters:
+ * `backup` refuses while the service is loaded, so `service stop` comes first.
  */
 function retiredProvenanceGateApplies(parsed: ParsedCommand): boolean {
   switch (parsed.command) {
     case "validate-config":
     case "status":
-    case "identity-check":
     case "backup":
     case "restore":
       return false;
@@ -828,7 +801,7 @@ async function createCliComposition(
   await assertProductAccess(accessGate);
 
   // Preserve the existing "adapters first" diagnostic without constructing
-  // adapters or resolving credentials before the strict identity gate.
+  // adapters or resolving credentials before the retirement re-check.
   assertConfiguredAdapterFactoriesAvailable(config, factories);
   const classification = await classifier(config.state_dir);
   if (classification.kind !== "local") {
@@ -839,13 +812,10 @@ async function createCliComposition(
     );
   }
   prepareProductStateRoot(config.state_dir);
-  const identityCheck = resolveIdentityCheckDependencies(
-    customComposition?.identityCheck ?? dependencies.identityCheck,
-    config,
-    dependencies.environment,
-  );
-  // Keep adapter construction and provider contact behind the identity gate.
-  await assertFounderIdentityAllowsPipeline(config.state_dir, identityCheck);
+  // Close the race between early CLI dispatch and adapter construction. The
+  // composition boundary checks once more after construction, and each cycle
+  // checks again before product work.
+  refuseRetiredFounderProvenance(config.state_dir);
   const registry = await createConfiguredAdapterRegistry(config, factories, {
     environment: dependencies.environment,
     now,
@@ -857,24 +827,8 @@ async function createCliComposition(
     ...customComposition,
     classifyStateFilesystem: async () => classification,
     accessGate,
-    identityCheck,
     ...(now === undefined ? {} : { now }),
   });
-}
-
-function resolveIdentityCheckDependencies(
-  configured: IdentityCheckDependencies | undefined,
-  runtimeConfig?: ProductRuntimeConfig,
-  environment?: NodeJS.ProcessEnv,
-): IdentityCheckDependencies {
-  const credentialResolver =
-    configured?.credentialResolver ??
-    createProductCredentialResolver(environment ?? process.env);
-  return {
-    ...configured,
-    credentialResolver,
-    ...(runtimeConfig === undefined ? {} : { runtimeConfig }),
-  };
 }
 
 function createProductOperator(
@@ -1497,7 +1451,7 @@ export async function runProductCli(
         ok: false,
         command: parsed.command,
         ...(parsed.action === undefined ? {} : { action: parsed.action }),
-        code: "identity_not_operationally_ready",
+        code: "retired_founder_provenance",
         error: (error as Error).message,
       });
       return 1;
@@ -1715,27 +1669,15 @@ export async function runProductCli(
             );
           }
           const retained = runtime.state.readEnrollment();
-          const activeIdentity = new ActiveIdentityBundleStore(
-            config.state_dir,
-          ).loadVerified(config);
-          if (
-            activeIdentity !== null &&
-            (activeIdentity.manifest.organization.organization_id !==
-              invitation.organization_id ||
-              activeIdentity.manifest.principal.principal_id !==
-                invitation.issued.principal_id ||
-              activeIdentity.manifest.membership.membership_id !==
-                invitation.membership_id)
-          ) {
-            throw new Error(
-              "organization invitation does not match the active product identity",
-            );
-          }
+          // The retired active-identity reader once ran here. Re-check the
+          // fence at the same point so residue appearing after early dispatch
+          // still refuses before an installation identity is chosen or the
+          // enrollment grant is presented to the Authority.
+          refuseRetiredFounderProvenance(config.state_dir);
           const installationId =
-            activeIdentity?.manifest.installation.installation_id ??
             retained?.request.installation_id ??
-            (dependencies.organization?.createInstallationId?.() ??
-              `ins_${randomUUID()}`);
+            dependencies.organization?.createInstallationId?.() ??
+            `ins_${randomUUID()}`;
           const grant = Buffer.from(
             invitation.enrollment_grant_base64url,
             "base64url",
@@ -2002,44 +1944,6 @@ export async function runProductCli(
       stdout,
       stderr,
     });
-  }
-  if (parsed.command === "identity-check") {
-    try {
-      // Reporting, not enabling. A state root holding founder identity or
-      // cutover material still reports `identity_enabled` and fails its
-      // required checks, so the retired mode stays visible and refused rather
-      // than silently downgraded to an unattributed local profile.
-      const report = await checkFounderIdentity(
-        config.state_dir,
-        resolveIdentityCheckDependencies(
-          dependencies.identityCheck,
-          config,
-          dependencies.environment,
-        ),
-      );
-      const strictFailure =
-        parsed.strictIdentityCheck === true && !report.seed_grade_ready;
-      const activeFailure =
-        report.mode === "identity_enabled" && !report.operational_ready;
-      const status = strictFailure || activeFailure ? 1 : 0;
-      print(status === 0 ? stdout : stderr, {
-        ok: status === 0,
-        command: parsed.command,
-        strict: parsed.strictIdentityCheck === true,
-        ...(report.mode === "identity_enabled"
-          ? { unsupported_mode: RETIRED_FOUNDER_PROVENANCE_MESSAGE }
-          : {}),
-        ...report,
-      });
-      return status;
-    } catch (error) {
-      print(stderr, {
-        ok: false,
-        command: parsed.command,
-        error: (error as Error).message,
-      });
-      return 1;
-    }
   }
   if (parsed.command === "backup" || parsed.command === "restore") {
     if ((await requireLocalState(parsed, config, classifier, stderr)) === null)

@@ -3,19 +3,20 @@
 **Status:** Current
 
 The product runtime is the local host around the core. It chooses adapters,
-owns durable state and approval authority, enforces identity readiness, and
-manages lifecycle. It does not redefine canonical records or provider behavior.
+owns durable state and approval authority, refuses retired founder residue,
+enforces current organization access, and manages lifecycle. It does not
+redefine canonical records or provider behavior.
 
 ## Composition
 
 ```text
 versioned configuration
   -> configuration and factory preflight
-  -> local state and identity/credential-continuity gate
+  -> retired-founder residue refusal and local-state validation
+  -> current organization access authorization
   -> adapter construction and configuration validation
   -> provider health
   -> durable state and approval authority
-  -> optional seed-grade identity layer
   -> core cycle
 ```
 
@@ -28,8 +29,9 @@ execution use the same composition.
 
 One explicit private local state root is the installation's authority and
 restore unit for mutable runtime state. The runtime does not infer an ambient
-Echo home. Irreversible cutover evidence and required independent copies are
-separate verification witnesses and do not roll back with that root.
+Echo home. Where a retired founder profile left its external cutover guard,
+that guard sits beside the state root rather than inside it and does not roll
+back with it.
 
 Control configuration remains outside restored state. Credentials are
 referenced and resolved by the host; secrets never enter canonical records.
@@ -39,7 +41,8 @@ Every approval entry point shares one durable append-only approval history.
 
 - Only one active runtime operates on a state root.
 - Runtime and maintenance operations are mutually exclusive.
-- Identity and credential continuity are checked before provider contact.
+- Retired founder residue is refused before provider contact and re-checked at
+  every processing cycle.
 - An installation pinned to an organization authority proves current signed
   access before adapter construction; denial fails startup closed.
 - Adapter health is checked before cycle work.
@@ -52,25 +55,22 @@ Central organization-admin bootstrap is the one supported v1 path. Local use
 without an organization enrollment is rehearsal-grade and cannot be promoted
 retroactively.
 
-The local founder-provenance cutover mode is retired: nothing creates founder
-identity or cutover material, and the attribution, signed projection, outbox,
-protected independent-copy, and low-level authoring implementations behind it
-(`commitFounderBootstrap`, `commitFounderCutoverGuard`, the writable
-bootstrap-session APIs, provider observation/capture, and challenge handling)
-are deleted. Production is detection- and validation-only; tests copy fixed
-historical fixture bytes checked in under
-`tests/product/federation/fixtures/retired-founder-state/`. The product still
-detects residue however it arrived rather than assuming it cannot exist.
+The local founder-provenance cutover mode is retired and its implementation is
+deleted: nothing creates, reads, validates, or recovers founder identity,
+bootstrap-session, or cutover material. What survives is one presence-only
+detector in `src/product/retired-founder-provenance.ts` -- old state is never
+parsed, and residue is detected however it arrived rather than assumed
+impossible.
 
 Identity cutover was irreversible, so a state root that still carries that
 material is detected and refused rather than downgraded. No product-work
 command, runtime start, or new processing cycle can resume on it. One shared
-gate in `cutover-fence.ts` is called by `prepareProductComposition` (at
+gate in `retired-founder-provenance.ts` is called by `prepareProductComposition` (at
 construction and at the start of every cycle), `DecisionNodeStore`, and the
 CLI before any directory creation, adapter resolution, credential work,
 provider or Authority contact, approval read or mutation, or caller-supplied
-callback, so a custom identity check or approval store
-cannot resume the retired mode.
+callback, so an injected approval store or callback cannot resume the retired
+mode.
 The gate is observational only, so refusing never mutates forensic founder
 state. It is a fail-closed gate on trusted in-process callers, not a sandbox:
 caller-supplied implementation that bypasses the documented seams and writes
@@ -85,22 +85,27 @@ known. `bootstrap`, `init`, `reconfigure`, `doctor`, `update`, every
 SQLite), `approvals`, `run-once`, `service-run`, and `service
 install`/`start`/`restart` are refused before any operator, probe, lock,
 directory, credential, database, network, or injected callback. The exceptions
-are the diagnose/preserve/quiesce commands -- `validate-config`, general
-`status`, `identity-check`, `backup`, `restore`, and `service
+are the inspect/preserve/quiesce commands -- `validate-config`, general
+`status`, `backup`, `restore`, and `service
 stop`/`status`/`uninstall` -- not a claim that they never write.
 
-Recovery is not a restore. The cutover is irreversible and a backup stays bound
-to its originating state path, so a backup of a retired profile is preservation
-for that profile and never a way to cross the fence. Because `backup` refuses
+Recovery is not a restore. `backup` stays available for a fenced profile --
+regular state-tree files are copied byte-for-byte, the SQLite database is
+captured as a consistent SQLite backup, and the external cutover guard stays
+beside the original state path, outside the backup; `restore` refuses -- before its safety pre-backup, its
+durable transaction marker, staging, or any live change -- whenever the live
+target holds founder residue or the validated backup payload would reintroduce
+it, and it stops without touching interrupted restore artifacts that involve
+that residue. Because `backup` refuses
 while the service is loaded, the executable order is: `service stop`, `backup`,
 then `bootstrap` onto a founder-residue-free new config and state path with the
 administrator-issued invitation and Authority PIN. That one command provisions
-the credentials, initializes, and enrolls the new installation. The decision
+the credentials, initializes, and enrolls the new installation; fresh central
+bootstrap is the only forward path. The decision
 store's federation capture port is deleted. New approval nodes always store
 local metadata; a historical node with an own `requested.metadata.federation`
 field is refused on every read or mutation, while similarly named fields in
-publication references or resolution metadata remain opaque. Persisted
-historical document contracts remain available only to the retained readers.
+publication references or resolution metadata remain opaque.
 
 ## Product boundary
 

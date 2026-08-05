@@ -18,6 +18,6 @@ Tests live at the narrowest layer whose public behavior they exercise:
 Useful commands are `npm test`, `npm run test:core`, `npm run test:adapters`,
 `npm run test:infrastructure`, `npm run test:architecture`,
 `npm run test:integration`, `npm run test:product`, `npm run test:machine`,
-`npm run test:federation`, `npm run test:local-org`,
+`npm run test:local-org`,
 `npm run test:protocols`, `npm run test:authority`, and
 `npm run test:control-plane`. Shared helpers live in `tests/support/`.

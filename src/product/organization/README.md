@@ -31,8 +31,8 @@ echo-brain organization rebind --config <absolute-path> \
 ```
 
 Enrollment binds the organization membership to this installation ID and its
-signing key. Retired local founder identity is validated from stored public
-evidence only and never exercises that private key. Once an authority is
+signing key. Retired local founder identity is never parsed or exercised; its
+residue is detected by presence alone and refused. Once an authority is
 pinned, product startup and every processing cycle require a current signed
 access lease. The running service renews short leases in the background; an
 expired lease or durable revocation fails closed before adapter contact.

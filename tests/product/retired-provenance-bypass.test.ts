@@ -8,27 +8,26 @@ import {
 } from "node:fs";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { AdapterRegistry } from "../../../src/core/index.js";
+import { AdapterRegistry } from "../../src/core/index.js";
 import type {
   DecisionProcessorAdapter,
   DeliverySurfaceAdapter,
   MeetingSourceAdapter,
-} from "../../../src/core/index.js";
-import { prepareProductComposition } from "../../../src/product/composition.js";
-import { DecisionNodeStore } from "../../../src/product/approval/decision-node-store.js";
-import { resolveProductStatePaths } from "../../../src/product/paths.js";
-import { founderCutoverGuardPath } from "../../../src/product/federation/cutover-fence.js";
+} from "../../src/core/index.js";
+import { prepareProductComposition } from "../../src/product/composition.js";
+import { DecisionNodeStore } from "../../src/product/approval/decision-node-store.js";
+import { resolveProductStatePaths } from "../../src/product/paths.js";
+import { founderCutoverGuardPath } from "../../src/product/retired-founder-provenance.js";
 import {
   createPrivateTestState,
   manualRuntimeConfig,
-} from "./fixtures/founder-identity.js";
+} from "./fixtures/retired-provenance.js";
 
 /**
  * The retirement gate has to hold at the retained *public* seams, not only in
  * the CLI. `prepareProductComposition` and `DecisionNodeStore` still accept
- * caller-supplied identity checks and approval stores; either one can hand the
- * product a "ready" answer for a state
- * root the retired founder-provenance mode left behind.
+ * caller-supplied approval and state stores, which must not bypass the retired
+ * founder-provenance refusal.
  *
  * Each case below supplies the most permissive seam it can and proves the
  * refusal happens *before* that seam is consulted and before anything is
@@ -53,23 +52,13 @@ function privateState(): string {
  * exactly as fencing as the signed documents the retired mode left behind.
  */
 function withFounderIdentityMaterial(stateDirectory: string): string {
-  const manifests = resolveProductStatePaths(stateDirectory).identityManifests;
+  const manifests = join(
+    resolveProductStatePaths(stateDirectory).identityRoot,
+    "manifests",
+  );
   mkdirSync(manifests, { recursive: true, mode: 0o700 });
   writeFileSync(join(manifests, "idm_founder.v1.json"), "{}", { mode: 0o600 });
   return stateDirectory;
-}
-
-/**
- * A credential-property sentinel, so even spreading the identity dependencies
- * before the retirement gate cannot go unnoticed.
- */
-function permissiveIdentityCheck(calls: string[]) {
-  return {
-    get credentialResolver() {
-      calls.push("credentialResolver");
-      return () => "token";
-    },
-  };
 }
 
 /**
@@ -163,7 +152,7 @@ function stubAdapterProfile(stateDirectory: string, calls: string[]) {
 }
 
 describe("retired founder provenance cannot be revived through a public seam", () => {
-  it("refuses prepareProductComposition before the classifier, identity check, or approval store runs", async () => {
+  it("refuses prepareProductComposition before the classifier or approval store runs", async () => {
     const stateDir = withFounderIdentityMaterial(privateState());
     const calls: string[] = [];
     let classified = false;
@@ -178,7 +167,6 @@ describe("retired founder provenance cannot be revived through a public seam", (
             classified = true;
             return { kind: "local", raw: "apfs" };
           },
-          identityCheck: permissiveIdentityCheck(calls),
           approvals,
           accessGate: {
             async assertAuthorized() {
@@ -187,11 +175,39 @@ describe("retired founder provenance cannot be revived through a public seam", (
           },
         },
       ),
-    ).rejects.toMatchObject({ code: "identity_not_operationally_ready" });
+    ).rejects.toMatchObject({ code: "retired_founder_provenance" });
 
     expect(classified).toBe(false);
     expect(calls).toEqual([]);
     // Nothing was created inside the fenced state root.
+    expect(existsSync(join(stateDir, "decisions"))).toBe(false);
+    expect(existsSync(resolveProductStatePaths(stateDir).database)).toBe(false);
+  });
+
+  it("re-checks residue created during classification before access or adapters", async () => {
+    const stateDir = privateState();
+    const calls: string[] = [];
+
+    await expect(
+      prepareProductComposition(
+        manualRuntimeConfig(stateDir),
+        new AdapterRegistry(),
+        {
+          classifyStateFilesystem: async () => {
+            calls.push("classifier");
+            withFounderIdentityMaterial(stateDir);
+            return { kind: "local", raw: "apfs" };
+          },
+          accessGate: {
+            async assertAuthorized() {
+              calls.push("accessGate");
+            },
+          },
+        },
+      ),
+    ).rejects.toMatchObject({ code: "retired_founder_provenance" });
+
+    expect(calls).toEqual(["classifier"]);
     expect(existsSync(join(stateDir, "decisions"))).toBe(false);
     expect(existsSync(resolveProductStatePaths(stateDir).database)).toBe(false);
   });
@@ -219,11 +235,10 @@ describe("retired founder provenance cannot be revived through a public seam", (
             classified = true;
             return { kind: "local", raw: "apfs" };
           },
-          identityCheck: permissiveIdentityCheck(calls),
         },
       ),
     ).rejects.toMatchObject({
-      code: "identity_not_operationally_ready",
+      code: "retired_founder_provenance",
       message: expect.stringMatching(/cannot be inspected/),
     });
     expect(classified).toBe(false);
@@ -238,7 +253,6 @@ describe("retired founder provenance cannot be revived through a public seam", (
     const { registry, config } = stubAdapterProfile(stateDir, calls);
     const composition = await prepareProductComposition(config, registry, {
       classifyStateFilesystem: async () => ({ kind: "local", raw: "apfs" }),
-      identityCheck: permissiveIdentityCheck(calls),
       accessGate: {
         async assertAuthorized() {
           calls.push("accessGate");
@@ -258,7 +272,7 @@ describe("retired founder provenance cannot be revived through a public seam", (
       writeFileSync(founderCutoverGuardPath(stateDir), "{}", { mode: 0o600 });
 
       await expect(composition.runOnce()).rejects.toMatchObject({
-        code: "identity_not_operationally_ready",
+        code: "retired_founder_provenance",
       });
       expect(calls).toEqual([]);
     } finally {

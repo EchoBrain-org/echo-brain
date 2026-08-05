@@ -17,7 +17,7 @@ import {
 import { atomicCreate } from '../../infrastructure/filesystem/atomic-create.js';
 import { parseJson } from '../../util/json.js';
 import { acquireProcessFileLock } from '../../infrastructure/filesystem/process-file-lock.js';
-import { assertFounderProvenanceRetired } from '../federation/cutover-fence.js';
+import { assertFounderProvenanceRetired } from '../retired-founder-provenance.js';
 import {
   assertDecisionPublishedEvent,
   assertDecisionRequestedEvent,
