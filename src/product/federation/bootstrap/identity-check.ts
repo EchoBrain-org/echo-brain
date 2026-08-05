@@ -13,15 +13,10 @@ export type IdentityCheckId =
   | "active-bundle"
   | "bundle-integrity"
   | "seed-cutover"
-  | "legacy-boundary"
   | "installation-key"
   | "installation-key-assurance"
   | "provider-identities"
-  | "connection-credentials"
-  | "approval-capture"
-  | "attribution-storage"
-  | "signed-outbox"
-  | "independent-copy";
+  | "connection-credentials";
 
 export interface IdentityCheckResult {
   id: IdentityCheckId;
@@ -46,11 +41,6 @@ export interface IdentityCheckReport {
 export interface IdentityCheckDependencies {
   runtimeConfig?: ProductRuntimeConfig;
   credentialResolver?: ProductCredentialResolver;
-  approvalCaptureReady?: () => Promise<{ ok: boolean; detail: string }>;
-  attributionStorageReady?: () => Promise<{ ok: boolean; detail: string }>;
-  signedOutboxReady?: () => Promise<{ ok: boolean; detail: string }>;
-  independentCopyReady?: () => Promise<{ ok: boolean; detail: string }>;
-  legacyBoundaryReady?: () => Promise<{ ok: boolean; detail: string }>;
 }
 
 export interface ActiveCredentialGuardCheck {
@@ -161,20 +151,6 @@ function seedOnlyCheck(
   return check(id, ok, detail, { requiredForOperation: false });
 }
 
-async function optionalCapabilityCheck(
-  id: IdentityCheckId,
-  probe: (() => Promise<{ ok: boolean; detail: string }>) | undefined,
-  notImplemented: string,
-): Promise<IdentityCheckResult> {
-  if (probe === undefined) return check(id, false, notImplemented);
-  try {
-    const result = await probe();
-    return check(id, result.ok, result.detail);
-  } catch (error) {
-    return check(id, false, `${id} check failed: ${(error as Error).message}`);
-  }
-}
-
 export async function checkFounderIdentity(
   stateDirectory: string,
   dependencies: IdentityCheckDependencies = {},
@@ -227,11 +203,6 @@ export async function checkFounderIdentity(
             "not checked without an active bundle",
           ),
           check(
-            "legacy-boundary",
-            false,
-            "not checked without an active bundle",
-          ),
-          check(
             "installation-key",
             false,
             "not checked without an active bundle",
@@ -248,22 +219,6 @@ export async function checkFounderIdentity(
           ),
           check(
             "connection-credentials",
-            false,
-            "not checked without an active bundle",
-          ),
-          check(
-            "approval-capture",
-            false,
-            "not checked without an active bundle",
-          ),
-          check(
-            "attribution-storage",
-            false,
-            "not checked without an active bundle",
-          ),
-          check("signed-outbox", false, "not checked without an active bundle"),
-          check(
-            "independent-copy",
             false,
             "not checked without an active bundle",
           ),
@@ -299,12 +254,6 @@ export async function checkFounderIdentity(
           { requiredForOperation: false },
         ),
         check(
-          "legacy-boundary",
-          false,
-          "not checked without an active bundle",
-          { requiredForOperation: false },
-        ),
-        check(
           "installation-key",
           false,
           "not checked without an active bundle",
@@ -323,27 +272,6 @@ export async function checkFounderIdentity(
         ),
         check(
           "connection-credentials",
-          false,
-          "not checked without an active bundle",
-          { requiredForOperation: false },
-        ),
-        check(
-          "approval-capture",
-          false,
-          "not checked without an active bundle",
-          { requiredForOperation: false },
-        ),
-        check(
-          "attribution-storage",
-          false,
-          "not checked without an active bundle",
-          { requiredForOperation: false },
-        ),
-        check("signed-outbox", false, "not checked without an active bundle", {
-          requiredForOperation: false,
-        }),
-        check(
-          "independent-copy",
           false,
           "not checked without an active bundle",
           { requiredForOperation: false },
@@ -399,14 +327,6 @@ export async function checkFounderIdentity(
   } catch (error) {
     checks.push(check("seed-cutover", false, (error as Error).message));
   }
-
-  checks.push(
-    await optionalCapabilityCheck(
-      "legacy-boundary",
-      dependencies.legacyBoundaryReady,
-      "legacy cutover classification is retired; no supported build implements it",
-    ),
-  );
 
   // The founder mode is retired and can never resume product work, so probing
   // its private signing key would create a live key-use path with no supported
@@ -485,28 +405,6 @@ export async function checkFounderIdentity(
   );
   checks.push(
     check("connection-credentials", credentialGuard.ok, credentialGuard.detail),
-  );
-  checks.push(
-    await optionalCapabilityCheck(
-      "approval-capture",
-      dependencies.approvalCaptureReady,
-      "approval federation capture is retired; no supported build implements it",
-    ),
-    await optionalCapabilityCheck(
-      "attribution-storage",
-      dependencies.attributionStorageReady,
-      "attribution storage is retired; no supported build implements it",
-    ),
-    await optionalCapabilityCheck(
-      "signed-outbox",
-      dependencies.signedOutboxReady,
-      "signed outbox projection is retired; no supported build implements it",
-    ),
-    await optionalCapabilityCheck(
-      "independent-copy",
-      dependencies.independentCopyReady,
-      "protected independent outbox copies are retired; no supported build implements them",
-    ),
   );
   const foundationOk = checks
     .filter(

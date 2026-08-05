@@ -96,8 +96,8 @@ refused, never downgraded: no product-work command, runtime start, or new
 processing cycle resumes on it. One shared observational gate in
 `cutover-fence.ts` runs before any directory creation, adapter
 resolution, credential work, provider or Authority contact, approval read or
-mutation, or caller-supplied callback, so a custom identity check, approval
-capture, or approval store cannot resume the mode. It is a fail-closed
+mutation, or caller-supplied callback, so a custom identity check or approval
+store cannot resume the mode. It is a fail-closed
 gate on trusted in-process callers, not a sandbox. The gate is re-run at every
 composition cycle, not only at construction, so residue appearing under a live
 composition still fails the next cycle closed; a background access-lease renewal
@@ -109,6 +109,10 @@ Diagnosis, preservation, and quiescing stay available on a fenced profile:
 `operational_ready: false`, and `validate-config`, general `status`, `backup`,
 `restore`, and `service stop`/`status`/`uninstall` remain reachable.
 Several of those write; the line is product work, not writes.
+The diagnostic reports only retained bundle/session, provider-identity, and
+credential checks; placeholder rows and injectable probes for the deleted
+capture, attribution, outbox, independent-copy, and legacy-boundary
+capabilities are gone.
 
 Recovery does not cross the fence. The cutover is irreversible and a backup
 stays bound to its originating state path, so restore can only return a profile

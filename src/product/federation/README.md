@@ -52,7 +52,7 @@ resolving credentials, contacting a provider or the organization Authority,
 reading or mutating approvals, or invoking a caller-supplied callback. Those
 entry points are `prepareProductComposition` (at construction *and* at the
 start of every cycle), `DecisionNodeStore`, and one early dispatch policy in
-the CLI. A custom identity check, approval capture, or approval store cannot
+the CLI. A custom identity check or approval store cannot
 resume the retired mode through them.
 
 It deliberately does not gate the diagnosis, preservation, and quiescing
@@ -69,10 +69,11 @@ composition closes, though every new processing cycle is gated.
 
 An uninspectable state path -- a symlink, a non-directory, or one whose adjacent
 guard or entries cannot be read -- is refused on its own terms rather than
-assumed clean; no caller relies on a later validator. `DecisionNodeStore` also
-keeps its own refusal for a federated node with no capture implementation; never
-satisfy that one with a permissive or no-op capture object -- it distinguishes
-`undefined` on purpose.
+assumed clean; no caller relies on a later validator. `DecisionNodeStore` has no
+federation capture extension: it writes local metadata and refuses every read or
+mutation of a historical node whose requested metadata owns `federation`.
+Federation-shaped fields in later publication references and resolution
+metadata are opaque and do not reclassify an ordinary node.
 
 ## Capability folders
 
@@ -84,8 +85,10 @@ satisfy that one with a permissive or no-op capture object -- it distinguishes
   and provider identity.
 - `bootstrap/`: historical validation of stored bootstrap sessions (reading,
   exact-shape/signature/transition checks, and commit-plan reconstruction for
-  cross-checking old residue) plus the identity/seed readiness checks. The
-  mutation primitives that once wrote these documents are deleted.
+  cross-checking old residue) plus retained bundle, session, provider, and
+  credential readiness checks. Test-only probes and report rows for deleted
+  product capabilities are gone. The mutation primitives that once wrote these
+  documents are deleted.
 
 Installation-side organization orchestration lives in the sibling
 `src/product/organization/` module, and central organization-admin bootstrap is

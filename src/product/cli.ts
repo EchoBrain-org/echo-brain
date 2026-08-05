@@ -849,16 +849,6 @@ async function createCliComposition(
   const registry = await createConfiguredAdapterRegistry(config, factories, {
     environment: dependencies.environment,
     now,
-    // No default capture exists in this build. A pristine profile composes the
-    // decision store with no federation capture at all, which is what keeps the
-    // store's own fail-closed guard meaningful; a permissive stub would defeat
-    // it. Hosts extending capture supply their own through this seam.
-    ...(customComposition?.approvalFederationCapture === undefined
-      ? {}
-      : {
-          approvalFederationCapture:
-            customComposition.approvalFederationCapture,
-        }),
     ...(approvalActionAuthorizer === undefined
       ? {}
       : { approvalActionAuthorizer }),
@@ -2379,15 +2369,6 @@ export async function runProductCli(
           dependencies.composition?.approvals ??
           new DecisionNodeStore(config.state_dir, {
             now: dependencies.now,
-            // No capture: the store's own guard refuses to mutate or even read
-            // a federated node without one, which is the fail-closed behavior
-            // a permissive stub would silently remove.
-            ...(dependencies.composition?.approvalFederationCapture === undefined
-              ? {}
-              : {
-                  federationCapture:
-                    dependencies.composition.approvalFederationCapture,
-                }),
           });
         await approvals.initialize();
         approvalResult = {
@@ -2401,14 +2382,6 @@ export async function runProductCli(
             reviewed_by: record.reviewed_by,
             reason: record.reason,
             brief: record.brief,
-            ...(Object.hasOwn(record.requested_metadata, "federation")
-              ? {
-                  federation: {
-                    requested: record.requested_metadata["federation"],
-                    resolved: record.resolved_metadata?.["federation"] ?? null,
-                  },
-                }
-              : {}),
           })),
         };
       } finally {

@@ -188,6 +188,15 @@ describe("Founder identity bundle foundation", () => {
     const report = await checkFounderIdentity(stateDir, dependencies);
     expect(report.mode).toBe("identity_enabled");
     expect(report.organization_id).toBe(EXACT_SESSION_IDS.organization_id);
+    expect(report.checks.map((item) => item.id)).toEqual([
+      "active-bundle",
+      "bundle-integrity",
+      "seed-cutover",
+      "installation-key",
+      "installation-key-assurance",
+      "provider-identities",
+      "connection-credentials",
+    ]);
     for (const id of [
       "active-bundle",
       "bundle-integrity",

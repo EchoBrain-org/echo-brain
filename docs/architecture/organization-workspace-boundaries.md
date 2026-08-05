@@ -147,8 +147,10 @@ bundles, protected independent copies, legacy classification, the bootstrap
 ceremony, and the `openFounderFederationRuntime` composition root are deleted,
 along with the `identity-bootstrap` and `export` CLI commands and the root
 federation barrel export. Ordinary composition, `identity-check`, and the
-approval commands no longer open a federation runtime, and a pristine profile
-composes its decision store with no federation capture at all.
+approval commands no longer open a federation runtime, and the decision
+store's federation capture port is deleted. Ordinary nodes use local metadata;
+historical nodes classified by an own `requested.metadata.federation` field
+are refused rather than projected or mutated.
 
 What remains is roughly 6,000 lines of identity/bootstrap/cutover security
 core: the identity bundle, manifest, registry, policy, credential-guard, and

@@ -14,10 +14,7 @@ import type {
   ClassifyStateFilesystem,
   ProductRuntimeConfig,
 } from './config.js';
-import {
-  DecisionNodeStore,
-  type DecisionNodeFederationCapture,
-} from './approval/decision-node-store.js';
+import { DecisionNodeStore } from './approval/decision-node-store.js';
 import { StoreBackedApprovalGate } from './approval/store-backed-approval-gate.js';
 import {
   assertFounderIdentityAllowsPipeline,
@@ -87,7 +84,6 @@ export interface PrepareProductCompositionOptions {
   operationDeadlines?: Partial<CoreCycleDeadlines>;
   identityCheck?: IdentityCheckDependencies;
   accessGate?: ProductAccessGate;
-  approvalFederationCapture?: DecisionNodeFederationCapture;
   /** Command-scoped resources not owned by the CoreStateStore. */
   closeResources?: () => void | Promise<void>;
 }
@@ -264,7 +260,7 @@ export async function prepareProductComposition(
 ): Promise<ProductComposition> {
   // First statement: before the caller-supplied filesystem classifier runs,
   // before the state root is created, and before any injected identity check,
-  // approval store, approval capture, or access gate is consulted.
+  // approval store or access gate is consulted.
   assertRetiredFounderProvenanceRefused(config.state_dir);
   const classification = await options.classifyStateFilesystem(
     config.state_dir,
@@ -279,13 +275,11 @@ export async function prepareProductComposition(
 
   const paths = resolveProductStatePaths(config.state_dir);
   prepareProductStateRoot(paths.root);
-  let identityEnabled = false;
   try {
-    const report = await assertFounderIdentityAllowsPipeline(config.state_dir, {
+    await assertFounderIdentityAllowsPipeline(config.state_dir, {
       ...options.identityCheck,
       runtimeConfig: config,
     });
-    identityEnabled = report.mode === 'identity_enabled';
   } catch (error) {
     if (error instanceof FounderIdentityGateError) {
       throw new ProductRuntimeFailure(
@@ -297,15 +291,6 @@ export async function prepareProductComposition(
       );
     }
     throw error;
-  }
-  if (identityEnabled && options.approvalGate !== undefined) {
-    throw new ProductRuntimeFailure(
-      'identity_not_operationally_ready',
-      'identity-active mode rejects a caller-owned approval gate',
-      [
-        'the federation-owned approval store and capture path must observe every post-cutover resolution',
-      ],
-    );
   }
   // Authorization is checked before adapter construction, credential
   // resolution, health checks, or any provider contact.
@@ -319,9 +304,6 @@ export async function prepareProductComposition(
     new DecisionNodeStore(paths.root, {
       now: options.now,
       createId: options.createId,
-      ...(options.approvalFederationCapture === undefined
-        ? {}
-        : { federationCapture: options.approvalFederationCapture }),
     });
   await approvals.initialize();
   const approvalGate =

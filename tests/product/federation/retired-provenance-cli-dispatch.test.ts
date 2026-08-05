@@ -50,7 +50,7 @@ interface TouchLog {
  * Every injectable seam records its own name. None of them may fire on a
  * gated branch: the classifier, lifecycle-lock acquisition, operator
  * filesystem, credential resolvers, adapter factories, the top-level and
- * composition-level identity callbacks, approval capture/gate, the
+ * composition-level identity callbacks, approval gate, the
  * caller-owned state and approval stores, and signal handlers.
  */
 function instrumented(): TouchLog {
@@ -66,10 +66,6 @@ function instrumented(): TouchLog {
   const trap = (name: string): never => {
     calls.push(name);
     throw new Error(`seam ${name} must not run on a fenced state root`);
-  };
-  const ready = (name: string) => async () => {
-    calls.push(name);
-    return { ok: true, detail: "ready" };
   };
   return {
     calls,
@@ -108,20 +104,13 @@ function instrumented(): TouchLog {
         calls.push("now");
         return "2026-07-19T23:00:00.000Z";
       },
-      // Every identity readiness callback, so no permissive "ready" answer is
-      // invisible to this test.
+      // Property getters on both identity seams make even dependency spreading
+      // before the retirement gate visible.
       identityCheck: {
-        credentialResolver: () => {
+        get credentialResolver() {
           calls.push("identityCheck.credentialResolver");
-          return "token";
+          return () => "token";
         },
-        approvalCaptureReady: ready("identityCheck.approvalCaptureReady"),
-        attributionStorageReady: ready(
-          "identityCheck.attributionStorageReady",
-        ),
-        signedOutboxReady: ready("identityCheck.signedOutboxReady"),
-        independentCopyReady: ready("identityCheck.independentCopyReady"),
-        legacyBoundaryReady: ready("identityCheck.legacyBoundaryReady"),
       },
       operator: {
         fileSystem: new Proxy(
@@ -151,14 +140,10 @@ function instrumented(): TouchLog {
           return "ins_forged";
         },
       },
-      // The complete custom-composition surface: a permissive capture, an
-      // auto-approving gate, a caller-owned state store and approval store, a
+      // The custom-composition surface: an auto-approving gate, caller-owned
+      // state and approval stores, a
       // composition-scoped identity check, and the clock/id/teardown seams.
       composition: {
-        approvalFederationCapture: new Proxy(
-          {},
-          { get: () => trap("composition.approvalFederationCapture") },
-        ) as never,
         state: new Proxy(
           {},
           { get: () => trap("composition.state") },
@@ -168,25 +153,10 @@ function instrumented(): TouchLog {
           { get: () => trap("composition.approvals") },
         ) as never,
         identityCheck: {
-          credentialResolver: () => {
+          get credentialResolver() {
             calls.push("composition.identityCheck.credentialResolver");
-            return "token";
+            return () => "token";
           },
-          approvalCaptureReady: ready(
-            "composition.identityCheck.approvalCaptureReady",
-          ),
-          attributionStorageReady: ready(
-            "composition.identityCheck.attributionStorageReady",
-          ),
-          signedOutboxReady: ready(
-            "composition.identityCheck.signedOutboxReady",
-          ),
-          independentCopyReady: ready(
-            "composition.identityCheck.independentCopyReady",
-          ),
-          legacyBoundaryReady: ready(
-            "composition.identityCheck.legacyBoundaryReady",
-          ),
         },
         approvalGate: {
           review: async (request) => {

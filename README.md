@@ -401,7 +401,7 @@ install`/`start`/`restart` — before a `ProductOperator` is constructed, the
 filesystem is probed, a lifecycle lock is taken, a directory is created or
 chmodded, credentials are resolved, SQLite is opened or migrated, a provider or
 the Authority is contacted, or an injected callback runs. A custom identity
-check, approval capture, or approval store cannot bypass it.
+check or approval store cannot bypass it.
 
 The exceptions are not "commands that do not write" — several of them do write.
 They are the commands whose purpose is to diagnose, preserve, or quiesce a
@@ -544,11 +544,15 @@ persists cursors and decisions, waits for approval, and delivers the exact
 approved snapshot. Failures conservatively pin the source cursor. The installed
 LaunchAgent runs the same cycle continuously; there is no foreground `run`.
 
-`approvals` lists decision records. It cannot resolve one — the organization
+`approvals` lists local decision records without a federation projection. It
+cannot resolve one — the organization
 Slack approval surface is the single v1 resolver, so every approve/reject is
 centrally attributed and authorized — but it is not a fully read-only command
 either: listing opens the local decision store, which initializes or migrates
-that state on first use.
+that state on first use. A historical node whose requested metadata owns a
+`federation` field is from the retired capture path and is refused rather than
+reinterpreted; similarly named publication or resolution fields remain opaque
+local metadata.
 
 `status` reports the recorded installation and the LaunchAgent state.
 

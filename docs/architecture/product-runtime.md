@@ -69,7 +69,7 @@ gate in `cutover-fence.ts` is called by `prepareProductComposition` (at
 construction and at the start of every cycle), `DecisionNodeStore`, and the
 CLI before any directory creation, adapter resolution, credential work,
 provider or Authority contact, approval read or mutation, or caller-supplied
-callback, so a custom identity check, approval capture, or approval store
+callback, so a custom identity check or approval store
 cannot resume the retired mode.
 The gate is observational only, so refusing never mutates forensic founder
 state. It is a fail-closed gate on trusted in-process callers, not a sandbox:
@@ -95,9 +95,12 @@ for that profile and never a way to cross the fence. Because `backup` refuses
 while the service is loaded, the executable order is: `service stop`, `backup`,
 then `bootstrap` onto a founder-residue-free new config and state path with the
 administrator-issued invitation and Authority PIN. That one command provisions
-the credentials, initializes, and enrolls the new installation. The extension
-seams -- the decision store's federation capture port and the persisted
-document contracts under `schemas/product/` -- are retained.
+the credentials, initializes, and enrolls the new installation. The decision
+store's federation capture port is deleted. New approval nodes always store
+local metadata; a historical node with an own `requested.metadata.federation`
+field is refused on every read or mutation, while similarly named fields in
+publication references or resolution metadata remain opaque. Persisted
+historical document contracts remain available only to the retained readers.
 
 ## Product boundary
 

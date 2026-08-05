@@ -431,7 +431,7 @@ export function inspectFounderProvenanceResidue(
  * otherwise creates directories, resolves adapters, resolves
  * credentials, contacts a provider or the organization Authority, reads or
  * mutates approvals, or invokes a caller-supplied callback calls this first, so
- * a custom identity check, approval capture, or approval store cannot resume
+ * a custom identity check or approval store cannot resume
  * the retired mode.
  *
  * It is deliberately NOT called by the diagnosis, preservation, and quiescing
