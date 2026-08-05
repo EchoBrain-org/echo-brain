@@ -125,8 +125,9 @@ adapter.
   the assurance recorded when it cannot.
 - Accept only canonical meetings and emit only canonical signals with evidence.
 - Declare processor identity and, when model-backed, model and
-  prompt/configuration version, so the persisted processor-attribution contract
-  can record them alongside the input identity.
+  prompt/configuration version, so runtime records can distinguish which
+  processor produced a result. The retired standalone processor-attribution
+  wire contract and schema are not part of the minimum product.
 - Reject malformed output and bound retries and execution time.
 
 The bundled `llm` processor is one semantic adapter with narrow provider

@@ -16,11 +16,14 @@ general-purpose home for new files.
   `bootstrap/identity-check.ts`, `cutover-fence.ts`, and
   `identity/active-identity-bundle-store.ts`. There is no federation barrel;
   callers import the specific file they need.
-- `contracts.ts` owns product-specific persisted data contracts and re-exports
-  portable integrity/key types from `@echo-brain/federation-protocol`. It still
-  describes the full persisted document set, including the record and export
-  shapes no code in this build produces, because those are wire contracts that
-  stored artifacts and the JSON schemas under `schemas/product/` depend on.
+- `contracts.ts` owns only the product-specific persisted contracts required to
+  read and validate historical founder bootstrap trust state, and re-exports
+  portable integrity/key types from `@echo-brain/federation-protocol`. The
+  retired source/processor attribution, approval metadata, record-envelope, and
+  export type graph and its five unused JSON schemas are deleted. The product
+  store does not produce or schema-validate those full wire formats; the Slack
+  adapter still has a narrow opaque legacy-presentation parser, which is a
+  separate adapter cleanup boundary.
 - `cutover-fence.ts` and `build-identity.ts` are bootstrap-owned root anchors,
   and `schema-validation.ts` with its `schema-validator.ts` Ajv backend is
   foundation-owned.

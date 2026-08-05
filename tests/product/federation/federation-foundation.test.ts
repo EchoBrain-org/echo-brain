@@ -17,7 +17,6 @@ import {
   checkFounderIdentity,
 } from "../../../src/product/federation/bootstrap/identity-check.js";
 import { ActiveIdentityBundleStore } from "../../../src/product/federation/identity/active-identity-bundle-store.js";
-import { federationId } from "../../../src/product/federation/foundation/identifiers.js";
 import {
   createPrivateTestState,
   EXACT_SESSION_IDS,
@@ -30,7 +29,6 @@ import {
 } from "./fixtures/retired-founder-state.js";
 
 const temporary: string[] = [];
-const NOW = "2026-07-19T20:10:00.000Z";
 const REPO = resolve(import.meta.dirname, "../../..");
 
 afterEach(() => {
@@ -54,11 +52,6 @@ describe("federation wire schemas", () => {
       "local-identity-manifest",
       "local-connection-registry",
       "publication-policy",
-      "source-attribution",
-      "processor-attribution",
-      "approval-federation-metadata",
-      "federated-record-envelope",
-      "federated-export",
     ];
     const ajv = new Ajv({ strict: true, allErrors: true });
     ajv.addFormat("utc-millisecond-timestamp", {
@@ -90,65 +83,6 @@ describe("federation wire schemas", () => {
     }
   });
 
-  it("represents CLI recovery approvals without claiming provider identity", () => {
-    const ajv = new Ajv({ strict: true, allErrors: true });
-    ajv.addFormat("utc-millisecond-timestamp", {
-      type: "string",
-      validate: () => true,
-    });
-    const schema = JSON.parse(
-      readFileSync(
-        join(
-          REPO,
-          "schemas",
-          "product",
-          "federated-record-envelope.v1.schema.json",
-        ),
-        "utf8",
-      ),
-    ) as object;
-    ajv.compile(schema);
-    const validateApproval = ajv.getSchema(
-      "https://echo.local/schemas/product/federated-record-envelope.v1.schema.json#/definitions/approval",
-    );
-    expect(validateApproval).toBeDefined();
-    const installationId = federationId("ins");
-    const approval = {
-      surface: null,
-      approver: {
-        principal_id: federationId("prn"),
-        membership_id: federationId("mem"),
-        claim_id: null,
-      },
-      raw_actor_assertion: {
-        surface: "cli",
-        installation_id: installationId,
-        reviewer_label: "founder-recovery",
-        command: "approve",
-        observed_at: NOW,
-      },
-      assurance: "installation_holder_self_attested",
-      reviewed_at: NOW,
-      reason: "Recovery after provider outage",
-      approved_brief_sha256: `sha256:${"2".repeat(64)}`,
-      approved_context_sha256: `sha256:${"3".repeat(64)}`,
-      observed_by: {
-        product_version: "0.1.0-dev.6",
-        source_sha: "4".repeat(40),
-        artifact_sha256: `sha256:${"5".repeat(64)}`,
-      },
-    };
-    expect(
-      validateApproval!(approval),
-      JSON.stringify(validateApproval!.errors),
-    ).toBe(true);
-    expect(
-      validateApproval!({
-        ...approval,
-        assurance: "provider_verified",
-      }),
-    ).toBe(false);
-  });
 });
 
 describe("Founder identity bundle foundation", () => {

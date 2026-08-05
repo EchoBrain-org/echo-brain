@@ -1,8 +1,5 @@
 import { canonicalSha256 } from "../foundation/canonical-json.js";
-import type {
-  ProviderIdentityV1,
-  SlackProviderIdentitySnapshotV1,
-} from "../contracts.js";
+import type { ProviderIdentityV1 } from "../contracts.js";
 import { assertUtcMillisecondTimestamp } from "../foundation/identifiers.js";
 
 /**
@@ -10,6 +7,15 @@ import { assertUtcMillisecondTimestamp } from "../foundation/identifiers.js";
  * code that produced them is retired; stored evidence is still parsed and
  * cross-checked when old founder residue is inspected.
  */
+
+export interface SlackProviderIdentitySnapshotV1 {
+  provider: "slack";
+  team_id: string;
+  enterprise_id: string | null;
+  bot_user_id: string;
+  bot_id: string | null;
+  app_id: string | null;
+}
 
 export interface SlackAuthTestEvidenceInputV1 {
   schema_version: 1;
