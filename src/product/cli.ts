@@ -31,6 +31,7 @@ import {
 } from "./config.js";
 import { createDefaultAdapterFactories } from "./default-adapters.js";
 import { DecisionNodeStore } from "./approval/decision-node-store.js";
+import { projectDecisionOrganizationRecord } from "./approval/decision-node.js";
 import { ProductRuntimeFailure } from "./runtime.js";
 import { diagnoseConfiguredAdapters } from "./adapter-diagnostics.js";
 import {
@@ -58,19 +59,27 @@ import { FileInstallationSigner } from "./machine/security/file-installation-sig
 import type { InstallationSigner } from "./machine/security/installation-signer.js";
 import {
   createLocalOrganizationRuntime,
+  createOrganizationIngestExclusion,
   DEFAULT_LOCAL_ORGANIZATION_LEASE_TTL_MS,
   HttpOrganizationAuthorityClient,
+  HttpOrganizationRecordClient,
   OrganizationApprovalActionAuthorizer,
+  OrganizationRecordSubmitter,
   OrganizationRuntimeAccessController,
   OrganizationAuthorityTransportError,
   organizationEnrollmentGrantSha256,
+  ProtocolOrganizationRecordEnvelopeBuilder,
   readPrivateOrganizationEnrollmentInvitation,
   SqliteOrganizationStateStore,
   validateOrganizationAuthorityDescriptorResponse,
   type HttpOrganizationAuthorityClientOptions,
   type OrganizationInstallationAccessDecisionV1,
+  type OrganizationRecordSweepResult,
+  type PinnedOrganizationAuthority,
+  type StoredOrganizationEnrollment,
   verifyOrganizationAuthorityPin,
 } from "./organization/index.js";
+import { signWithInstallationKey } from "./machine/security/installation-signer.js";
 import { readPrivateCredentialFile } from "./credentials.js";
 import { resolveProductStatePaths } from "./paths.js";
 import { readFileNoFollow } from "./secure-local-files.js";
@@ -692,22 +701,28 @@ function organizationAuthorityTransportOptions(
   };
 }
 
+interface ResolvedOrganizationAuthorization {
+  accessGate: ProductAccessGate | undefined;
+  approvalActionAuthorizer: OrganizationApprovalActionAuthorizer | undefined;
+  recordSubmitter: OrganizationRecordSubmitter | undefined;
+}
+
 function resolveOrganizationAuthorization(
   config: ProductRuntimeConfig,
   dependencies: ProductCliDependencies,
-): {
-  accessGate: ProductAccessGate | undefined;
-  approvalActionAuthorizer: OrganizationApprovalActionAuthorizer | undefined;
-} {
+): ResolvedOrganizationAuthorization {
   const databasePath = resolveProductStatePaths(config.state_dir).database;
   const state = new SqliteOrganizationStateStore(databasePath);
   let hasPin = false;
   let enrolled = false;
   let authorityBaseUrl: string | null = null;
   let authorityCaPem: string | null = null;
+  let pinnedAuthority: PinnedOrganizationAuthority | null = null;
+  let enrollment: StoredOrganizationEnrollment | null = null;
   try {
-    hasPin = state.readPinnedAuthority() !== null;
-    const enrollment = state.readEnrollment();
+    pinnedAuthority = state.readPinnedAuthority();
+    hasPin = pinnedAuthority !== null;
+    enrollment = state.readEnrollment();
     enrolled =
       enrollment?.receipt !== null &&
       enrollment?.receipt !== undefined &&
@@ -728,6 +743,7 @@ function resolveOrganizationAuthorization(
     return {
       accessGate: configuredAccessGate,
       approvalActionAuthorizer: undefined,
+      recordSubmitter: undefined,
     };
   }
   const signer =
@@ -765,21 +781,94 @@ function resolveOrganizationAuthorization(
                 ...transport,
               }),
           }));
+  if (!enrolled || authorityBaseUrl === null) {
+    return {
+      accessGate,
+      approvalActionAuthorizer: undefined,
+      recordSubmitter: undefined,
+    };
+  }
   return {
     accessGate,
-    approvalActionAuthorizer:
-      !enrolled || authorityBaseUrl === null
-        ? undefined
-        : new OrganizationApprovalActionAuthorizer({
-            openState: () => new SqliteOrganizationStateStore(databasePath),
-            authorityClient: new HttpOrganizationAuthorityClient({
-              baseUrl: authorityBaseUrl,
-              ...transport,
-            }),
-            installationSigner: signer,
-            now,
-          }),
+    approvalActionAuthorizer: new OrganizationApprovalActionAuthorizer({
+      openState: () => new SqliteOrganizationStateStore(databasePath),
+      authorityClient: new HttpOrganizationAuthorityClient({
+        baseUrl: authorityBaseUrl,
+        ...transport,
+      }),
+      installationSigner: signer,
+      now,
+    }),
+    recordSubmitter: createOrganizationRecordSubmitter({
+      config,
+      dependencies,
+      authorityBaseUrl,
+      transport,
+      pinnedAuthority,
+      enrollment,
+      signer,
+      now,
+    }),
   };
+}
+
+/**
+ * Composes the organization record submitter for an enrolled installation.
+ *
+ * The submitter has no store of its own: the decision node's write-once slot
+ * files are the whole state machine, so it opens the same append-only node
+ * directory the approvals CLI reads.
+ */
+function createOrganizationRecordSubmitter(input: {
+  config: ProductRuntimeConfig;
+  dependencies: ProductCliDependencies;
+  authorityBaseUrl: string;
+  transport: Omit<
+    HttpOrganizationAuthorityClientOptions,
+    "baseUrl" | "timeoutMs"
+  >;
+  pinnedAuthority: PinnedOrganizationAuthority | null;
+  enrollment: StoredOrganizationEnrollment | null;
+  signer: InstallationSigner;
+  now: () => string;
+}): OrganizationRecordSubmitter | undefined {
+  const request = input.enrollment?.request;
+  if (input.pinnedAuthority === null || request === undefined) return undefined;
+  const installationId = request.installation_id;
+  const installationSigningKey = request.installation_signing_key;
+  return new OrganizationRecordSubmitter({
+    nodes: new DecisionNodeStore(input.config.state_dir, {
+      now: input.dependencies.now,
+    }),
+    envelopes: new ProtocolOrganizationRecordEnvelopeBuilder({
+      pinnedAuthority: input.pinnedAuthority,
+      installationSigningKey,
+      sign: (bytes) =>
+        signWithInstallationKey(
+          input.signer,
+          installationId,
+          installationSigningKey.key_id,
+          bytes,
+        ),
+    }),
+    client: new HttpOrganizationRecordClient({
+      baseUrl: input.authorityBaseUrl,
+      pinnedAuthority: input.pinnedAuthority,
+      installationSigningKey,
+      ...input.transport,
+    }),
+    installationId,
+    // An absent section means nothing is excluded; an invalid one already
+    // failed configuration validation, so the submitter never starts on a
+    // list it could not read exactly.
+    exclusion: createOrganizationIngestExclusion(
+      input.config.organization_ingest?.exclude ?? {
+        sources: [],
+        meetings: [],
+      },
+    ),
+    now: input.now,
+  });
 }
 
 async function createCliComposition(
@@ -794,8 +883,26 @@ async function createCliComposition(
     dependencies.adapterFactories ?? createDefaultAdapterFactories();
   const now = dependencies.composition?.now ?? dependencies.now;
   const customComposition = dependencies.composition;
-  const { accessGate, approvalActionAuthorizer } =
+  const { accessGate, approvalActionAuthorizer, recordSubmitter } =
     resolveOrganizationAuthorization(config, dependencies);
+  // One serialized sweep at a time. The post-resolve hook, the startup sweep,
+  // and each cycle all reach the same function; overlapping them would resend
+  // the same frozen envelopes concurrently for no benefit.
+  let activeSweep: Promise<OrganizationRecordSweepResult> | null = null;
+  const sweepOrganizationRecord =
+    recordSubmitter === undefined
+      ? undefined
+      : (options: {
+          signal?: AbortSignal;
+        }): Promise<OrganizationRecordSweepResult> => {
+          if (activeSweep !== null) return activeSweep;
+          activeSweep = recordSubmitter
+            .sweep(options)
+            .finally(() => {
+              activeSweep = null;
+            });
+          return activeSweep;
+        };
   // This check precedes adapter factories and credential resolution. The
   // composition repeats it immediately before health checks and every cycle.
   await assertProductAccess(accessGate);
@@ -822,11 +929,23 @@ async function createCliComposition(
     ...(approvalActionAuthorizer === undefined
       ? {}
       : { approvalActionAuthorizer }),
+    ...(sweepOrganizationRecord === undefined
+      ? {}
+      : {
+          // Best-effort: a human act reaches the organization immediately, and
+          // a failure here is already covered by the next cycle's sweep.
+          afterDecisionResolved: () => {
+            void sweepOrganizationRecord({}).catch(() => undefined);
+          },
+        }),
   });
   return await prepareProductComposition(config, registry, {
     ...customComposition,
     classifyStateFilesystem: async () => classification,
     accessGate,
+    ...(sweepOrganizationRecord === undefined
+      ? {}
+      : { organizationRecordSweep: sweepOrganizationRecord }),
     ...(now === undefined ? {} : { now }),
   });
 }
@@ -2286,6 +2405,11 @@ export async function runProductCli(
             reviewed_by: record.reviewed_by,
             reason: record.reason,
             brief: record.brief,
+            // Until now this view showed neither the accepted receipt nor a
+            // permanent rejection, so an operator could not tell a decision
+            // that reached the organization from one that never left.
+            organization_record:
+              projectDecisionOrganizationRecord(record),
           })),
         };
       } finally {

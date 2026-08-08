@@ -271,6 +271,15 @@ describe('standalone composed cycle', () => {
       status: 'approved',
       reviewed_by: 'founder',
       reason: 'ship it',
+      // The projection shows organization-record state beside the local
+      // decision. Before this existed an operator could not tell a decision
+      // that reached the organization from one that never left the machine.
+      organization_record: {
+        status: 'pending',
+        position: null,
+        record_hash: null,
+        rejection_reason_code: null,
+      },
     });
   });
 
