@@ -1,0 +1,815 @@
+{
+  "fixture_version": 1,
+  "kind": "echo-organization-record-payload-conformance-fixture",
+  "note": "Shared positive and negative cases pinning the organization record payload schema to core's DecisionBrief validator. Both validators must agree on every case in valid and invalid; core imports no packages, so this data is the only shared artifact. The record_only_invalid cases are the deliberate divergence: core accepts them and the organization record contract does not.",
+  "meeting_id": "granola:meeting-2026-08-07-pricing",
+  "valid": [
+    {
+      "name": "minimal brief with one decided signal",
+      "brief": {
+        "schema_version": 1,
+        "id": "brief-minimal",
+        "meeting": {
+          "id": "granola:meeting-2026-08-07-pricing",
+          "participants": []
+        },
+        "decisions": [
+          {
+            "id": "signal-decision-1",
+            "kind": "decision",
+            "text": "Ship the pilot tier.",
+            "subject": null,
+            "confidence": null,
+            "evidence": [
+              {
+                "meeting_id": "granola:meeting-2026-08-07-pricing",
+                "block_id": "block-1"
+              }
+            ],
+            "status": "decided"
+          }
+        ],
+        "actions": [],
+        "rationales": [],
+        "provenance": {
+          "meeting_revision": "rev-1",
+          "processor": {
+            "kind": "decision-processor",
+            "adapter_id": "structured-text",
+            "instance_id": "default",
+            "version": "1.0.0"
+          },
+          "generated_at": "2026-08-07T15:40:00.000Z"
+        }
+      }
+    },
+    {
+      "name": "rich brief with every optional participant and evidence field",
+      "brief": {
+        "schema_version": 1,
+        "id": "brief-rich",
+        "meeting": {
+          "id": "granola:meeting-2026-08-07-pricing",
+          "title": "Pricing review",
+          "time": {
+            "scheduled_start_at": "2026-08-07T15:00:00.000Z",
+            "scheduled_end_at": "2026-08-07T15:30:00.000Z",
+            "actual_start_at": "2026-08-07T15:02:00.000Z",
+            "actual_end_at": "2026-08-07T15:31:00.000Z",
+            "timezone": "UTC",
+            "all_day": false
+          },
+          "participants": [
+            {
+              "id": "participant-1",
+              "display_name": "Ada Founder",
+              "identities": [
+                { "kind": "email", "value": "ada@example.test" },
+                { "kind": "source", "value": "U0ADA" }
+              ],
+              "roles": ["organizer", "speaker"],
+              "response_status": "accepted",
+              "attendance": "attended",
+              "organization": { "name": "Example", "domain": "example.test" },
+              "is_external": false,
+              "metadata": { "seat": "host" }
+            },
+            {
+              "id": "participant-2",
+              "attendance": "unknown"
+            }
+          ]
+        },
+        "decisions": [
+          {
+            "id": "signal-decision-1",
+            "kind": "decision",
+            "text": "Adopt usage-based pricing.",
+            "subject": "pricing",
+            "confidence": 1,
+            "evidence": [
+              {
+                "meeting_id": "granola:meeting-2026-08-07-pricing",
+                "block_id": "block-12",
+                "quote": "we go usage-based",
+                "started_at": "2026-08-07T15:11:00.000Z",
+                "ended_at": "2026-08-07T15:11:20.000Z"
+              }
+            ],
+            "status": "decided"
+          },
+          {
+            "id": "signal-decision-2",
+            "kind": "decision",
+            "text": "Keep the enterprise tier unchanged.",
+            "subject": null,
+            "confidence": 0,
+            "evidence": [
+              {
+                "meeting_id": "granola:meeting-2026-08-07-pricing",
+                "block_id": "block-15"
+              }
+            ],
+            "status": "proposed"
+          }
+        ],
+        "actions": [
+          {
+            "id": "signal-action-1",
+            "kind": "action",
+            "text": "Publish the revised pricing page.",
+            "subject": "pricing",
+            "confidence": 0.5,
+            "evidence": [
+              {
+                "meeting_id": "granola:meeting-2026-08-07-pricing",
+                "block_id": "block-14"
+              }
+            ],
+            "owner": "Blake Operator",
+            "due_at": "2026-08-14T17:00:00.000Z"
+          },
+          {
+            "id": "signal-action-2",
+            "kind": "action",
+            "text": "Draft the migration note.",
+            "subject": null,
+            "confidence": null,
+            "evidence": [
+              {
+                "meeting_id": "granola:meeting-2026-08-07-pricing",
+                "block_id": "block-16"
+              }
+            ],
+            "owner": null,
+            "due_at": null
+          }
+        ],
+        "rationales": [
+          {
+            "id": "signal-rationale-1",
+            "kind": "rationale",
+            "text": "Pilots only pay for what they run.",
+            "subject": null,
+            "confidence": 0.6,
+            "evidence": [
+              {
+                "meeting_id": "granola:meeting-2026-08-07-pricing",
+                "block_id": "block-13"
+              }
+            ],
+            "supports_signal_ids": ["signal-decision-1", "signal-action-1"]
+          },
+          {
+            "id": "signal-rationale-2",
+            "kind": "rationale",
+            "text": "No enterprise complaints were raised.",
+            "subject": null,
+            "confidence": null,
+            "evidence": [
+              {
+                "meeting_id": "granola:meeting-2026-08-07-pricing",
+                "block_id": "block-17"
+              }
+            ],
+            "supports_signal_ids": []
+          }
+        ],
+        "provenance": {
+          "meeting_revision": "rev-2026-08-07T15-40",
+          "processor": {
+            "kind": "decision-processor",
+            "adapter_id": "llm",
+            "instance_id": "primary",
+            "version": "2.3.1"
+          },
+          "generated_at": "2026-08-07T15:40:00.000Z"
+        }
+      }
+    }
+  ],
+  "invalid": [
+    {
+      "name": "unknown top-level key",
+      "reason": "an unrecognized brief field is not part of the canonical shape",
+      "brief": {
+        "schema_version": 1,
+        "id": "brief-minimal",
+        "meeting": {
+          "id": "granola:meeting-2026-08-07-pricing",
+          "participants": []
+        },
+        "decisions": [],
+        "actions": [],
+        "rationales": [],
+        "provenance": {
+          "meeting_revision": "rev-1",
+          "processor": {
+            "kind": "decision-processor",
+            "adapter_id": "structured-text",
+            "instance_id": "default",
+            "version": "1.0.0"
+          },
+          "generated_at": "2026-08-07T15:40:00.000Z"
+        },
+        "summary": "not a canonical field"
+      }
+    },
+    {
+      "name": "unsupported schema version",
+      "reason": "only schema version 1 exists",
+      "brief": {
+        "schema_version": 2,
+        "id": "brief-minimal",
+        "meeting": {
+          "id": "granola:meeting-2026-08-07-pricing",
+          "participants": []
+        },
+        "decisions": [],
+        "actions": [],
+        "rationales": [],
+        "provenance": {
+          "meeting_revision": "rev-1",
+          "processor": {
+            "kind": "decision-processor",
+            "adapter_id": "structured-text",
+            "instance_id": "default",
+            "version": "1.0.0"
+          },
+          "generated_at": "2026-08-07T15:40:00.000Z"
+        }
+      }
+    },
+    {
+      "name": "missing provenance",
+      "reason": "provenance is required",
+      "brief": {
+        "schema_version": 1,
+        "id": "brief-minimal",
+        "meeting": {
+          "id": "granola:meeting-2026-08-07-pricing",
+          "participants": []
+        },
+        "decisions": [],
+        "actions": [],
+        "rationales": []
+      }
+    },
+    {
+      "name": "blank brief id",
+      "reason": "the brief id must be a non-empty string",
+      "brief": {
+        "schema_version": 1,
+        "id": "   ",
+        "meeting": {
+          "id": "granola:meeting-2026-08-07-pricing",
+          "participants": []
+        },
+        "decisions": [],
+        "actions": [],
+        "rationales": [],
+        "provenance": {
+          "meeting_revision": "rev-1",
+          "processor": {
+            "kind": "decision-processor",
+            "adapter_id": "structured-text",
+            "instance_id": "default",
+            "version": "1.0.0"
+          },
+          "generated_at": "2026-08-07T15:40:00.000Z"
+        }
+      }
+    },
+    {
+      "name": "evidence from another meeting",
+      "reason": "evidence must resolve to the brief's own meeting",
+      "brief": {
+        "schema_version": 1,
+        "id": "brief-minimal",
+        "meeting": {
+          "id": "granola:meeting-2026-08-07-pricing",
+          "participants": []
+        },
+        "decisions": [
+          {
+            "id": "signal-decision-1",
+            "kind": "decision",
+            "text": "Ship the pilot tier.",
+            "subject": null,
+            "confidence": null,
+            "evidence": [
+              {
+                "meeting_id": "granola:meeting-2026-08-07-hiring",
+                "block_id": "block-1"
+              }
+            ],
+            "status": "decided"
+          }
+        ],
+        "actions": [],
+        "rationales": [],
+        "provenance": {
+          "meeting_revision": "rev-1",
+          "processor": {
+            "kind": "decision-processor",
+            "adapter_id": "structured-text",
+            "instance_id": "default",
+            "version": "1.0.0"
+          },
+          "generated_at": "2026-08-07T15:40:00.000Z"
+        }
+      }
+    },
+    {
+      "name": "signal without evidence",
+      "reason": "every signal carries at least one evidence span",
+      "brief": {
+        "schema_version": 1,
+        "id": "brief-minimal",
+        "meeting": {
+          "id": "granola:meeting-2026-08-07-pricing",
+          "participants": []
+        },
+        "decisions": [
+          {
+            "id": "signal-decision-1",
+            "kind": "decision",
+            "text": "Ship the pilot tier.",
+            "subject": null,
+            "confidence": null,
+            "evidence": [],
+            "status": "decided"
+          }
+        ],
+        "actions": [],
+        "rationales": [],
+        "provenance": {
+          "meeting_revision": "rev-1",
+          "processor": {
+            "kind": "decision-processor",
+            "adapter_id": "structured-text",
+            "instance_id": "default",
+            "version": "1.0.0"
+          },
+          "generated_at": "2026-08-07T15:40:00.000Z"
+        }
+      }
+    },
+    {
+      "name": "duplicate signal ids",
+      "reason": "signal ids are unique across all three collections",
+      "brief": {
+        "schema_version": 1,
+        "id": "brief-minimal",
+        "meeting": {
+          "id": "granola:meeting-2026-08-07-pricing",
+          "participants": []
+        },
+        "decisions": [
+          {
+            "id": "signal-1",
+            "kind": "decision",
+            "text": "Ship the pilot tier.",
+            "subject": null,
+            "confidence": null,
+            "evidence": [
+              {
+                "meeting_id": "granola:meeting-2026-08-07-pricing",
+                "block_id": "block-1"
+              }
+            ],
+            "status": "decided"
+          }
+        ],
+        "actions": [
+          {
+            "id": "signal-1",
+            "kind": "action",
+            "text": "Publish the note.",
+            "subject": null,
+            "confidence": null,
+            "evidence": [
+              {
+                "meeting_id": "granola:meeting-2026-08-07-pricing",
+                "block_id": "block-2"
+              }
+            ],
+            "owner": null,
+            "due_at": null
+          }
+        ],
+        "rationales": [],
+        "provenance": {
+          "meeting_revision": "rev-1",
+          "processor": {
+            "kind": "decision-processor",
+            "adapter_id": "structured-text",
+            "instance_id": "default",
+            "version": "1.0.0"
+          },
+          "generated_at": "2026-08-07T15:40:00.000Z"
+        }
+      }
+    },
+    {
+      "name": "self-supporting rationale",
+      "reason": "a rationale must support another signal",
+      "brief": {
+        "schema_version": 1,
+        "id": "brief-minimal",
+        "meeting": {
+          "id": "granola:meeting-2026-08-07-pricing",
+          "participants": []
+        },
+        "decisions": [],
+        "actions": [],
+        "rationales": [
+          {
+            "id": "signal-rationale-1",
+            "kind": "rationale",
+            "text": "Circular support.",
+            "subject": null,
+            "confidence": null,
+            "evidence": [
+              {
+                "meeting_id": "granola:meeting-2026-08-07-pricing",
+                "block_id": "block-1"
+              }
+            ],
+            "supports_signal_ids": ["signal-rationale-1"]
+          }
+        ],
+        "provenance": {
+          "meeting_revision": "rev-1",
+          "processor": {
+            "kind": "decision-processor",
+            "adapter_id": "structured-text",
+            "instance_id": "default",
+            "version": "1.0.0"
+          },
+          "generated_at": "2026-08-07T15:40:00.000Z"
+        }
+      }
+    },
+    {
+      "name": "rationale supporting an absent signal",
+      "reason": "rationale links must resolve inside the same brief",
+      "brief": {
+        "schema_version": 1,
+        "id": "brief-minimal",
+        "meeting": {
+          "id": "granola:meeting-2026-08-07-pricing",
+          "participants": []
+        },
+        "decisions": [],
+        "actions": [],
+        "rationales": [
+          {
+            "id": "signal-rationale-1",
+            "kind": "rationale",
+            "text": "Dangling support.",
+            "subject": null,
+            "confidence": null,
+            "evidence": [
+              {
+                "meeting_id": "granola:meeting-2026-08-07-pricing",
+                "block_id": "block-1"
+              }
+            ],
+            "supports_signal_ids": ["signal-decision-missing"]
+          }
+        ],
+        "provenance": {
+          "meeting_revision": "rev-1",
+          "processor": {
+            "kind": "decision-processor",
+            "adapter_id": "structured-text",
+            "instance_id": "default",
+            "version": "1.0.0"
+          },
+          "generated_at": "2026-08-07T15:40:00.000Z"
+        }
+      }
+    },
+    {
+      "name": "confidence above one",
+      "reason": "confidence is null or within [0, 1]",
+      "brief": {
+        "schema_version": 1,
+        "id": "brief-minimal",
+        "meeting": {
+          "id": "granola:meeting-2026-08-07-pricing",
+          "participants": []
+        },
+        "decisions": [
+          {
+            "id": "signal-decision-1",
+            "kind": "decision",
+            "text": "Ship the pilot tier.",
+            "subject": null,
+            "confidence": 1.5,
+            "evidence": [
+              {
+                "meeting_id": "granola:meeting-2026-08-07-pricing",
+                "block_id": "block-1"
+              }
+            ],
+            "status": "decided"
+          }
+        ],
+        "actions": [],
+        "rationales": [],
+        "provenance": {
+          "meeting_revision": "rev-1",
+          "processor": {
+            "kind": "decision-processor",
+            "adapter_id": "structured-text",
+            "instance_id": "default",
+            "version": "1.0.0"
+          },
+          "generated_at": "2026-08-07T15:40:00.000Z"
+        }
+      }
+    },
+    {
+      "name": "decision signal in the actions collection",
+      "reason": "each collection holds only its own signal kind",
+      "brief": {
+        "schema_version": 1,
+        "id": "brief-minimal",
+        "meeting": {
+          "id": "granola:meeting-2026-08-07-pricing",
+          "participants": []
+        },
+        "decisions": [],
+        "actions": [
+          {
+            "id": "signal-decision-1",
+            "kind": "decision",
+            "text": "Ship the pilot tier.",
+            "subject": null,
+            "confidence": null,
+            "evidence": [
+              {
+                "meeting_id": "granola:meeting-2026-08-07-pricing",
+                "block_id": "block-1"
+              }
+            ],
+            "status": "decided"
+          }
+        ],
+        "rationales": [],
+        "provenance": {
+          "meeting_revision": "rev-1",
+          "processor": {
+            "kind": "decision-processor",
+            "adapter_id": "structured-text",
+            "instance_id": "default",
+            "version": "1.0.0"
+          },
+          "generated_at": "2026-08-07T15:40:00.000Z"
+        }
+      }
+    },
+    {
+      "name": "processor of the wrong adapter kind",
+      "reason": "briefs are produced by a decision processor",
+      "brief": {
+        "schema_version": 1,
+        "id": "brief-minimal",
+        "meeting": {
+          "id": "granola:meeting-2026-08-07-pricing",
+          "participants": []
+        },
+        "decisions": [],
+        "actions": [],
+        "rationales": [],
+        "provenance": {
+          "meeting_revision": "rev-1",
+          "processor": {
+            "kind": "meeting-source",
+            "adapter_id": "granola",
+            "instance_id": "default",
+            "version": "1.0.0"
+          },
+          "generated_at": "2026-08-07T15:40:00.000Z"
+        }
+      }
+    },
+    {
+      "name": "participant with an unknown field",
+      "reason": "participant facts travel exactly as core defines them",
+      "brief": {
+        "schema_version": 1,
+        "id": "brief-minimal",
+        "meeting": {
+          "id": "granola:meeting-2026-08-07-pricing",
+          "participants": [
+            { "id": "participant-1", "principal_id": "prn_leaked" }
+          ]
+        },
+        "decisions": [],
+        "actions": [],
+        "rationales": [],
+        "provenance": {
+          "meeting_revision": "rev-1",
+          "processor": {
+            "kind": "decision-processor",
+            "adapter_id": "structured-text",
+            "instance_id": "default",
+            "version": "1.0.0"
+          },
+          "generated_at": "2026-08-07T15:40:00.000Z"
+        }
+      }
+    },
+    {
+      "name": "duplicate participant identity",
+      "reason": "identities are unique per participant",
+      "brief": {
+        "schema_version": 1,
+        "id": "brief-minimal",
+        "meeting": {
+          "id": "granola:meeting-2026-08-07-pricing",
+          "participants": [
+            {
+              "id": "participant-1",
+              "identities": [
+                { "kind": "email", "value": "ada@example.test" },
+                { "kind": "email", "value": "ada@example.test" }
+              ]
+            }
+          ]
+        },
+        "decisions": [],
+        "actions": [],
+        "rationales": [],
+        "provenance": {
+          "meeting_revision": "rev-1",
+          "processor": {
+            "kind": "decision-processor",
+            "adapter_id": "structured-text",
+            "instance_id": "default",
+            "version": "1.0.0"
+          },
+          "generated_at": "2026-08-07T15:40:00.000Z"
+        }
+      }
+    },
+    {
+      "name": "provenance timestamp without milliseconds",
+      "reason": "timestamps are canonical UTC millisecond strings",
+      "brief": {
+        "schema_version": 1,
+        "id": "brief-minimal",
+        "meeting": {
+          "id": "granola:meeting-2026-08-07-pricing",
+          "participants": []
+        },
+        "decisions": [],
+        "actions": [],
+        "rationales": [],
+        "provenance": {
+          "meeting_revision": "rev-1",
+          "processor": {
+            "kind": "decision-processor",
+            "adapter_id": "structured-text",
+            "instance_id": "default",
+            "version": "1.0.0"
+          },
+          "generated_at": "2026-08-07T15:40:00Z"
+        }
+      }
+    },
+    {
+      "name": "action due date that is not a real calendar day",
+      "reason": "timestamps must be real UTC instants",
+      "brief": {
+        "schema_version": 1,
+        "id": "brief-minimal",
+        "meeting": {
+          "id": "granola:meeting-2026-08-07-pricing",
+          "participants": []
+        },
+        "decisions": [],
+        "actions": [
+          {
+            "id": "signal-action-1",
+            "kind": "action",
+            "text": "Publish the note.",
+            "subject": null,
+            "confidence": null,
+            "evidence": [
+              {
+                "meeting_id": "granola:meeting-2026-08-07-pricing",
+                "block_id": "block-1"
+              }
+            ],
+            "owner": null,
+            "due_at": "2026-02-30T00:00:00.000Z"
+          }
+        ],
+        "rationales": [],
+        "provenance": {
+          "meeting_revision": "rev-1",
+          "processor": {
+            "kind": "decision-processor",
+            "adapter_id": "structured-text",
+            "instance_id": "default",
+            "version": "1.0.0"
+          },
+          "generated_at": "2026-08-07T15:40:00.000Z"
+        }
+      }
+    },
+    {
+      "name": "meeting window that ends before it starts",
+      "reason": "a meeting cannot end before it begins",
+      "brief": {
+        "schema_version": 1,
+        "id": "brief-minimal",
+        "meeting": {
+          "id": "granola:meeting-2026-08-07-pricing",
+          "time": {
+            "scheduled_start_at": "2026-08-07T15:30:00.000Z",
+            "scheduled_end_at": "2026-08-07T15:00:00.000Z"
+          },
+          "participants": []
+        },
+        "decisions": [],
+        "actions": [],
+        "rationales": [],
+        "provenance": {
+          "meeting_revision": "rev-1",
+          "processor": {
+            "kind": "decision-processor",
+            "adapter_id": "structured-text",
+            "instance_id": "default",
+            "version": "1.0.0"
+          },
+          "generated_at": "2026-08-07T15:40:00.000Z"
+        }
+      }
+    }
+  ],
+  "record_only_invalid": [
+    {
+      "name": "repeated participant id",
+      "reason": "derive keys a participant observation by (meeting snapshot, participant), so a repeated id would collide on insert or silently drop a distinct observation; every protocol-valid payload must be derivable",
+      "core_accepts": true,
+      "brief": {
+        "schema_version": 1,
+        "id": "brief-minimal",
+        "meeting": {
+          "id": "granola:meeting-2026-08-07-pricing",
+          "participants": [
+            { "id": "participant-1", "display_name": "Ada Founder" },
+            { "id": "participant-1", "display_name": "Ada F." }
+          ]
+        },
+        "decisions": [],
+        "actions": [],
+        "rationales": [],
+        "provenance": {
+          "meeting_revision": "rev-1",
+          "processor": {
+            "kind": "decision-processor",
+            "adapter_id": "structured-text",
+            "instance_id": "default",
+            "version": "1.0.0"
+          },
+          "generated_at": "2026-08-07T15:40:00.000Z"
+        }
+      }
+    },
+    {
+      "name": "participant id repeated with identical facts",
+      "reason": "an exactly duplicated entry is still two observations of one participant; structural uniqueItems does not catch the display-name variant above, so the runtime owns the id-level rule",
+      "core_accepts": true,
+      "brief": {
+        "schema_version": 1,
+        "id": "brief-minimal",
+        "meeting": {
+          "id": "granola:meeting-2026-08-07-pricing",
+          "participants": [
+            { "id": "participant-1" },
+            { "id": "participant-1" }
+          ]
+        },
+        "decisions": [],
+        "actions": [],
+        "rationales": [],
+        "provenance": {
+          "meeting_revision": "rev-1",
+          "processor": {
+            "kind": "decision-processor",
+            "adapter_id": "structured-text",
+            "instance_id": "default",
+            "version": "1.0.0"
+          },
+          "generated_at": "2026-08-07T15:40:00.000Z"
+        }
+      }
+    }
+  ]
+}

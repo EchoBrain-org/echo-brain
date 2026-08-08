@@ -16,7 +16,9 @@
     "packages/organization-protocol/schemas/organization-authority-descriptor.v1.schema.json",
     "packages/organization-protocol/schemas/organization-enrollment-request.v1.schema.json",
     "packages/organization-protocol/schemas/organization-enrollment-receipt.v1.schema.json",
-    "packages/organization-protocol/schemas/organization-installation-access-state.v1.schema.json"
+    "packages/organization-protocol/schemas/organization-installation-access-state.v1.schema.json",
+    "packages/organization-protocol/schemas/organization-record-envelope.v1.schema.json",
+    "packages/organization-protocol/schemas/organization-record-receipt.v1.schema.json"
   ],
   "layer_rules": [
     {

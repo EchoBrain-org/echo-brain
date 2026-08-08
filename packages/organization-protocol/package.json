@@ -15,7 +15,11 @@
     "./schemas/organization-enrollment-request.v1.schema.json": "./schemas/organization-enrollment-request.v1.schema.json",
     "./schemas/organization-enrollment-receipt.v1.schema.json": "./schemas/organization-enrollment-receipt.v1.schema.json",
     "./schemas/organization-installation-access-state.v1.schema.json": "./schemas/organization-installation-access-state.v1.schema.json",
-    "./fixtures/onboarding-access-chain.v1.json": "./fixtures/onboarding-access-chain.v1.json"
+    "./schemas/organization-record-envelope.v1.schema.json": "./schemas/organization-record-envelope.v1.schema.json",
+    "./schemas/organization-record-receipt.v1.schema.json": "./schemas/organization-record-receipt.v1.schema.json",
+    "./fixtures/onboarding-access-chain.v1.json": "./fixtures/onboarding-access-chain.v1.json",
+    "./fixtures/organization-record-chain.v1.json": "./fixtures/organization-record-chain.v1.json",
+    "./fixtures/organization-record-payload-conformance.v1.json": "./fixtures/organization-record-payload-conformance.v1.json"
   },
   "files": [
     "dist/**/*.js",

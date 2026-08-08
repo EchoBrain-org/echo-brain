@@ -17,7 +17,11 @@ const assetExports = [
   "./schemas/organization-enrollment-request.v1.schema.json",
   "./schemas/organization-enrollment-receipt.v1.schema.json",
   "./schemas/organization-installation-access-state.v1.schema.json",
+  "./schemas/organization-record-envelope.v1.schema.json",
+  "./schemas/organization-record-receipt.v1.schema.json",
   "./fixtures/onboarding-access-chain.v1.json",
+  "./fixtures/organization-record-chain.v1.json",
+  "./fixtures/organization-record-payload-conformance.v1.json",
 ] as const;
 
 describe("organization protocol package contract", () => {
@@ -49,13 +53,16 @@ describe("organization protocol package contract", () => {
     });
   });
 
-  it("ships no private key or bearer grant in its fixture", () => {
-    const fixture = readFileSync(
-      new URL("fixtures/onboarding-access-chain.v1.json", packageRoot),
-      "utf8",
-    );
-    expect(fixture).not.toMatch(/private[_ -]?key/i);
-    expect(fixture).not.toMatch(/enrollment_grant_base64/i);
-    expect(fixture).not.toMatch(/enrollment_grant_bytes/i);
+  it("ships no private key or bearer grant in its fixtures", () => {
+    for (const name of [
+      "fixtures/onboarding-access-chain.v1.json",
+      "fixtures/organization-record-chain.v1.json",
+      "fixtures/organization-record-payload-conformance.v1.json",
+    ]) {
+      const fixture = readFileSync(new URL(name, packageRoot), "utf8");
+      expect(fixture, name).not.toMatch(/private[_ -]?key/i);
+      expect(fixture, name).not.toMatch(/enrollment_grant_base64/i);
+      expect(fixture, name).not.toMatch(/enrollment_grant_bytes/i);
+    }
   });
 });

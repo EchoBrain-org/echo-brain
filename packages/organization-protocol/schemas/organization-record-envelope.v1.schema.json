@@ -1,0 +1,585 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://echo.local/schemas/organization-protocol/organization-record-envelope.v1.schema.json",
+  "title": "ECHO organization record envelope",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "kind",
+    "event_type",
+    "envelope_id",
+    "idempotency_key",
+    "payload",
+    "reviewer",
+    "submitter",
+    "integrity"
+  ],
+  "properties": {
+    "schema_version": { "const": 1 },
+    "kind": { "const": "echo-organization-record-envelope" },
+    "event_type": { "enum": ["approval", "rejection"] },
+    "envelope_id": { "$ref": "#/definitions/recordEnvelopeId" },
+    "idempotency_key": { "$ref": "#/definitions/idempotencyKey" },
+    "payload": {},
+    "reviewer": { "$ref": "#/definitions/reviewer" },
+    "intent": { "$ref": "#/definitions/intent" },
+    "submitter": { "$ref": "#/definitions/submitter" },
+    "integrity": { "$ref": "#/definitions/integrity" }
+  },
+  "oneOf": [
+    {
+      "$comment": "An allow decision for one act never authorizes the other: the quoted evidence must be for the approve action.",
+      "required": ["intent"],
+      "type": "object",
+      "properties": {
+        "event_type": { "const": "approval" },
+        "payload": { "$ref": "#/definitions/approvalPayload" },
+        "intent": { "$ref": "#/definitions/intent" },
+        "reviewer": {
+          "type": "object",
+          "properties": {
+            "authorization": {
+              "type": "object",
+              "properties": { "action": { "const": "approve" } }
+            }
+          }
+        }
+      }
+    },
+    {
+      "$comment": "A rejection carries no approval intent, and its quoted evidence must be for the reject action.",
+      "type": "object",
+      "not": {
+        "required": ["intent"],
+        "properties": { "intent": { "$ref": "#/definitions/intent" } }
+      },
+      "properties": {
+        "event_type": { "const": "rejection" },
+        "payload": { "$ref": "#/definitions/rejectionPayload" },
+        "reviewer": {
+          "type": "object",
+          "properties": {
+            "authorization": {
+              "type": "object",
+              "properties": { "action": { "const": "reject" } }
+            }
+          }
+        }
+      }
+    }
+  ],
+  "definitions": {
+    "authorityId": {
+      "type": "string",
+      "minLength": 40,
+      "maxLength": 40,
+      "pattern": "^oau_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+    },
+    "organizationId": {
+      "type": "string",
+      "minLength": 40,
+      "maxLength": 40,
+      "pattern": "^org_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+    },
+    "principalId": {
+      "type": "string",
+      "minLength": 40,
+      "maxLength": 40,
+      "pattern": "^prn_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+    },
+    "membershipId": {
+      "type": "string",
+      "minLength": 40,
+      "maxLength": 40,
+      "pattern": "^mem_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+    },
+    "installationId": {
+      "type": "string",
+      "minLength": 40,
+      "maxLength": 40,
+      "pattern": "^ins_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+    },
+    "enrollmentId": {
+      "type": "string",
+      "minLength": 40,
+      "maxLength": 40,
+      "pattern": "^enr_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+    },
+    "recordEnvelopeId": {
+      "type": "string",
+      "minLength": 40,
+      "maxLength": 40,
+      "pattern": "^rec_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+    },
+    "permissionCheckRequestId": {
+      "type": "string",
+      "minLength": 40,
+      "maxLength": 40,
+      "pattern": "^pcr_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+    },
+    "adapterBindingId": {
+      "type": "string",
+      "minLength": 40,
+      "maxLength": 40,
+      "pattern": "^bnd_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+    },
+    "permissionGrantId": {
+      "type": "string",
+      "minLength": 40,
+      "maxLength": 40,
+      "pattern": "^pgr_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+    },
+    "idempotencyKey": {
+      "type": "string",
+      "minLength": 64,
+      "maxLength": 64,
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "digest": {
+      "type": "string",
+      "minLength": 71,
+      "maxLength": 71,
+      "pattern": "^sha256:[0-9a-f]{64}$"
+    },
+    "timestamp": {
+      "type": "string",
+      "minLength": 24,
+      "maxLength": 24,
+      "pattern": "^[0-9]{4}-(?:0[1-9]|1[0-2])-(?:0[1-9]|[12][0-9]|3[01])T(?:[01][0-9]|2[0-3]):[0-5][0-9]:[0-5][0-9]\\.[0-9]{3}Z$"
+    },
+    "base64": {
+      "type": "string",
+      "pattern": "^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$"
+    },
+    "integrity": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "canonicalization",
+        "payload_sha256",
+        "signature_algorithm",
+        "key_id",
+        "signature_base64"
+      ],
+      "properties": {
+        "canonicalization": { "const": "RFC8785" },
+        "payload_sha256": { "$ref": "#/definitions/digest" },
+        "signature_algorithm": { "const": "ecdsa-p256-sha256-der-low-s" },
+        "key_id": { "$ref": "#/definitions/digest" },
+        "signature_base64": {
+          "type": "string",
+          "allOf": [{ "$ref": "#/definitions/base64" }],
+          "minLength": 8,
+          "maxLength": 96
+        }
+      }
+    },
+    "nonEmptyString": {
+      "type": "string",
+      "minLength": 1,
+      "pattern": "\\S"
+    },
+    "sourceLocator": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["adapter_id", "instance_id", "external_id"],
+      "properties": {
+        "adapter_id": { "$ref": "#/definitions/nonEmptyString" },
+        "instance_id": { "$ref": "#/definitions/nonEmptyString" },
+        "external_id": { "$ref": "#/definitions/nonEmptyString" }
+      }
+    },
+    "authorizationEvidence": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema_version",
+        "kind",
+        "authority_id",
+        "organization_id",
+        "enrollment_id",
+        "installation_id",
+        "request_id",
+        "approval_id",
+        "action",
+        "request_sha256",
+        "provider_event_sha256",
+        "allowed",
+        "reason_code",
+        "principal_id",
+        "membership_id",
+        "adapter_binding_id",
+        "permission_grant_id",
+        "evaluated_at"
+      ],
+      "properties": {
+        "schema_version": { "const": 1 },
+        "kind": { "const": "echo-organization-authorization-evidence" },
+        "authority_id": { "$ref": "#/definitions/authorityId" },
+        "organization_id": { "$ref": "#/definitions/organizationId" },
+        "enrollment_id": { "$ref": "#/definitions/enrollmentId" },
+        "installation_id": { "$ref": "#/definitions/installationId" },
+        "request_id": { "$ref": "#/definitions/permissionCheckRequestId" },
+        "approval_id": { "$ref": "#/definitions/idempotencyKey" },
+        "action": { "type": "string", "enum": ["approve", "reject"] },
+        "request_sha256": { "$ref": "#/definitions/digest" },
+        "provider_event_sha256": { "$ref": "#/definitions/digest" },
+        "allowed": { "const": true },
+        "reason_code": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "\\S"
+        },
+        "principal_id": { "$ref": "#/definitions/principalId" },
+        "membership_id": { "$ref": "#/definitions/membershipId" },
+        "adapter_binding_id": { "$ref": "#/definitions/adapterBindingId" },
+        "permission_grant_id": { "$ref": "#/definitions/permissionGrantId" },
+        "evaluated_at": { "$ref": "#/definitions/timestamp" }
+      }
+    },
+    "reviewer": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "principal_id",
+        "membership_id",
+        "reviewed_by",
+        "authorization"
+      ],
+      "properties": {
+        "principal_id": { "$ref": "#/definitions/principalId" },
+        "membership_id": { "$ref": "#/definitions/membershipId" },
+        "reviewed_by": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256,
+          "pattern": "\\S"
+        },
+        "authorization": { "$ref": "#/definitions/authorizationEvidence" }
+      }
+    },
+    "intent": {
+      "$comment": "Both fields are permanent contract. Schema version 1 pins them to the conservative installation default because no approval surface can set either value; relaxing the pin when an affordance ships changes these constants, not the shape.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["restricted", "reconsider_after"],
+      "properties": {
+        "restricted": { "const": true },
+        "reconsider_after": { "type": "null" }
+      }
+    },
+    "submitter": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["installation_id", "submitted_at"],
+      "properties": {
+        "installation_id": { "$ref": "#/definitions/installationId" },
+        "submitted_at": { "$ref": "#/definitions/timestamp" }
+      }
+    },
+    "evidenceSpan": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["meeting_id", "block_id"],
+      "properties": {
+        "meeting_id": { "$ref": "#/definitions/nonEmptyString" },
+        "block_id": { "$ref": "#/definitions/nonEmptyString" },
+        "quote": { "$ref": "#/definitions/nonEmptyString" },
+        "started_at": { "$ref": "#/definitions/timestamp" },
+        "ended_at": { "$ref": "#/definitions/timestamp" }
+      }
+    },
+    "evidenceSpans": {
+      "type": "array",
+      "minItems": 1,
+      "items": { "$ref": "#/definitions/evidenceSpan" }
+    },
+    "confidence": {
+      "oneOf": [
+        { "type": "null" },
+        { "type": "number", "minimum": 0, "maximum": 1 }
+      ]
+    },
+    "optionalNonEmptyString": {
+      "oneOf": [
+        { "type": "null" },
+        { "$ref": "#/definitions/nonEmptyString" }
+      ]
+    },
+    "decisionSignal": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "kind",
+        "text",
+        "subject",
+        "confidence",
+        "evidence",
+        "status"
+      ],
+      "properties": {
+        "id": { "$ref": "#/definitions/nonEmptyString" },
+        "kind": { "const": "decision" },
+        "text": { "$ref": "#/definitions/nonEmptyString" },
+        "subject": { "$ref": "#/definitions/optionalNonEmptyString" },
+        "confidence": { "$ref": "#/definitions/confidence" },
+        "evidence": { "$ref": "#/definitions/evidenceSpans" },
+        "status": {
+          "type": "string",
+          "enum": ["proposed", "decided", "unresolved"]
+        }
+      }
+    },
+    "actionSignal": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "kind",
+        "text",
+        "subject",
+        "confidence",
+        "evidence",
+        "owner",
+        "due_at"
+      ],
+      "properties": {
+        "id": { "$ref": "#/definitions/nonEmptyString" },
+        "kind": { "const": "action" },
+        "text": { "$ref": "#/definitions/nonEmptyString" },
+        "subject": { "$ref": "#/definitions/optionalNonEmptyString" },
+        "confidence": { "$ref": "#/definitions/confidence" },
+        "evidence": { "$ref": "#/definitions/evidenceSpans" },
+        "owner": { "$ref": "#/definitions/optionalNonEmptyString" },
+        "due_at": {
+          "oneOf": [{ "type": "null" }, { "$ref": "#/definitions/timestamp" }]
+        }
+      }
+    },
+    "rationaleSignal": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "kind",
+        "text",
+        "subject",
+        "confidence",
+        "evidence",
+        "supports_signal_ids"
+      ],
+      "properties": {
+        "id": { "$ref": "#/definitions/nonEmptyString" },
+        "kind": { "const": "rationale" },
+        "text": { "$ref": "#/definitions/nonEmptyString" },
+        "subject": { "$ref": "#/definitions/optionalNonEmptyString" },
+        "confidence": { "$ref": "#/definitions/confidence" },
+        "evidence": { "$ref": "#/definitions/evidenceSpans" },
+        "supports_signal_ids": {
+          "type": "array",
+          "maxItems": 1000,
+          "items": { "$ref": "#/definitions/nonEmptyString" }
+        }
+      }
+    },
+    "meetingTime": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "scheduled_start_at": { "$ref": "#/definitions/timestamp" },
+        "scheduled_end_at": { "$ref": "#/definitions/timestamp" },
+        "actual_start_at": { "$ref": "#/definitions/timestamp" },
+        "actual_end_at": { "$ref": "#/definitions/timestamp" },
+        "timezone": { "$ref": "#/definitions/nonEmptyString" },
+        "all_day": { "type": "boolean" }
+      }
+    },
+    "participantIdentity": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "value"],
+      "properties": {
+        "kind": {
+          "type": "string",
+          "enum": ["source", "email", "phone", "other"]
+        },
+        "value": { "$ref": "#/definitions/nonEmptyString" }
+      }
+    },
+    "participant": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id"],
+      "properties": {
+        "id": { "$ref": "#/definitions/nonEmptyString" },
+        "display_name": { "$ref": "#/definitions/nonEmptyString" },
+        "identities": {
+          "type": "array",
+          "maxItems": 100,
+          "uniqueItems": true,
+          "items": { "$ref": "#/definitions/participantIdentity" }
+        },
+        "roles": {
+          "type": "array",
+          "maxItems": 20,
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "enum": [
+              "organizer",
+              "host",
+              "invitee",
+              "attendee",
+              "speaker",
+              "note_taker",
+              "bot"
+            ]
+          }
+        },
+        "response_status": {
+          "type": "string",
+          "enum": ["accepted", "declined", "tentative", "unknown"]
+        },
+        "attendance": {
+          "type": "string",
+          "enum": ["attended", "no_show", "unknown"]
+        },
+        "organization": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "name": { "$ref": "#/definitions/nonEmptyString" },
+            "domain": { "$ref": "#/definitions/nonEmptyString" }
+          }
+        },
+        "is_external": { "type": "boolean" },
+        "metadata": { "type": "object" }
+      }
+    },
+    "decisionBrief": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema_version",
+        "id",
+        "meeting",
+        "decisions",
+        "actions",
+        "rationales",
+        "provenance"
+      ],
+      "properties": {
+        "schema_version": { "const": 1 },
+        "id": { "$ref": "#/definitions/nonEmptyString" },
+        "meeting": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["id", "participants"],
+          "properties": {
+            "id": { "$ref": "#/definitions/nonEmptyString" },
+            "title": { "$ref": "#/definitions/nonEmptyString" },
+            "time": { "$ref": "#/definitions/meetingTime" },
+            "participants": {
+              "$comment": "Participant ids are unique so every protocol-valid payload is derivable: derive keys an observation by (meeting snapshot, participant). Structural uniqueItems catches identical entries; the runtime validator owns the id-level rule.",
+              "type": "array",
+              "maxItems": 10000,
+              "uniqueItems": true,
+              "items": { "$ref": "#/definitions/participant" }
+            }
+          }
+        },
+        "decisions": {
+          "type": "array",
+          "items": { "$ref": "#/definitions/decisionSignal" }
+        },
+        "actions": {
+          "type": "array",
+          "items": { "$ref": "#/definitions/actionSignal" }
+        },
+        "rationales": {
+          "type": "array",
+          "items": { "$ref": "#/definitions/rationaleSignal" }
+        },
+        "provenance": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["meeting_revision", "processor", "generated_at"],
+          "properties": {
+            "meeting_revision": { "$ref": "#/definitions/nonEmptyString" },
+            "generated_at": { "$ref": "#/definitions/timestamp" },
+            "processor": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["kind", "adapter_id", "instance_id", "version"],
+              "properties": {
+                "kind": { "const": "decision-processor" },
+                "adapter_id": { "$ref": "#/definitions/nonEmptyString" },
+                "instance_id": { "$ref": "#/definitions/nonEmptyString" },
+                "version": { "$ref": "#/definitions/nonEmptyString" }
+              }
+            }
+          }
+        }
+      }
+    },
+    "approvalPayload": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "brief",
+        "source",
+        "alternatives",
+        "links",
+        "reviewed_at",
+        "surface"
+      ],
+      "properties": {
+        "brief": { "$ref": "#/definitions/decisionBrief" },
+        "source": { "$ref": "#/definitions/sourceLocator" },
+        "alternatives": { "type": "array", "maxItems": 0 },
+        "links": { "type": "null" },
+        "reviewed_at": { "$ref": "#/definitions/timestamp" },
+        "surface": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64,
+          "pattern": "^[a-z][a-z0-9-]*$"
+        }
+      }
+    },
+    "rejectionPayload": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "source",
+        "meeting_id",
+        "rejected_at",
+        "reason",
+        "reconsider_after"
+      ],
+      "properties": {
+        "source": { "$ref": "#/definitions/sourceLocator" },
+        "meeting_id": { "$ref": "#/definitions/nonEmptyString" },
+        "rejected_at": { "$ref": "#/definitions/timestamp" },
+        "reason": {
+          "$comment": "Structural bound only. The contract limit is 2048 UTF-8 BYTES, which JSON Schema cannot express: maxLength counts UTF-16 code units. Every string within 2048 bytes is within 2048 code units, so this never rejects a valid reason, but a multibyte reason under 2048 code units can exceed 2048 bytes and only the runtime validator rejects it.",
+          "oneOf": [
+            { "type": "null" },
+            {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 2048,
+              "pattern": "\\S"
+            }
+          ]
+        },
+        "reconsider_after": {
+          "oneOf": [{ "type": "null" }, { "$ref": "#/definitions/timestamp" }]
+        }
+      }
+    }
+  }
+}
