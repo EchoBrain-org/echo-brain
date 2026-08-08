@@ -1,7 +1,8 @@
 # Organization decision record: append and derive design (v1)
 
 **Status:** Design approved in founder session 2026-08-07; amended 2026-08-08
-after code cross-reference audit and independent efficiency review;
+after code cross-reference audit and independent efficiency review; industry
+cross-reference pass 2026-08-08 (see "Industry cross-reference" section);
 implementation not started
 **Builds on:** [org-brain-direction.md](org-brain-direction.md) (direction),
 `src/product/approval/` (local decision chain), `services/organization-authority`
@@ -154,7 +155,16 @@ does.
 **Submitter (member side).** No watcher daemon and no separate state store.
 Mechanism: a post-resolve hook plus a startup sweep. The pending queue is
 defined by the decision node's own slot files: `resolved.json` present,
-organization receipt slot absent. On success the receipt is filed as one more
+organization receipt slot absent.
+
+*Source exclusion.* The submitter honors a member-side never-ingest list
+(by source or meeting): an excluded source produces no org events at all —
+not even rejection acts. This is the pre-ingest escape hatch that an
+immutable log demands; precedent is Microsoft's semantic index, which lets
+admins exclude whole sites and advises it "for sensitive data, such as
+payroll, HR, or financial information," alongside the rule that "indexing
+data doesn't change access permissions to content"
+([Microsoft Learn — semantic indexing for Copilot](https://learn.microsoft.com/en-us/microsoftsearch/semantic-index-for-copilot)). On success the receipt is filed as one more
 write-once slot in the node directory (the existing `recordPublished`
 create-once idiom, surface `organization-record`). Filing is atomic-create;
 a receipt slot can never be overwritten. Retries reuse the same idempotency
@@ -182,7 +192,11 @@ canonical envelope bytes, `record_hash = sha256(prev_record_hash || envelope_byt
 `position` and `record_hash`) is the tamper-evidence mechanism: deletion,
 truncation, or reordering invalidates receipts already filed off-box.
 Per-envelope signatures alone cannot detect removal. A verify command walks
-the chain. No update or delete statement exists in the codepath.
+the chain, and it runs at process start and before every backup — a chain
+nobody walks is decoration (transparency-log practice:
+[Sigstore Rekor](https://github.com/sigstore/rekor) /
+[Google Trillian](https://github.com/google/trillian)). No update or delete
+statement exists in the codepath.
 
 **Receipt.** Signed: envelope id, idempotency key, log position, record hash,
 recorded-at.
@@ -269,6 +283,104 @@ rejection events (minimal payload) are org-visible as acts. The authority's
 integrations-gated today; the gatekeeper will need its own request shape.
 Enforcement design is out of scope here.
 
+## Industry cross-reference (2026-08-08)
+
+Cross-checked against the precedent atlas ("Decision-Graph Precedents —
+Industry Atlas") with the load-bearing claims re-verified in primary sources.
+Outcomes: validations of the design as-is, changes adopted (cited inline in
+their sections), traps recorded with a chosen v1 stance, and deferred
+adoptions for the interpretive/retrieve passes.
+
+### Validated as-is
+
+- Log-unit immutability and supersession-by-new-record are the industry rule,
+  verbatim. AWS: "When the team accepts an ADR, it becomes immutable. If new
+  insights require a different decision, the team proposes a new ADR. When
+  the team accepts the new ADR, it supersedes the previous ADR"
+  ([AWS ADR process](https://docs.aws.amazon.com/prescriptive-guidance/latest/architectural-decision-records/adr-process.html)).
+  Azure: "The ADR serves as an append-only log. Don't go back and edit
+  accepted records. If a decision changes, write a new record that supersedes
+  the original and link the two together"
+  ([Azure WAF](https://learn.microsoft.com/en-us/azure/well-architected/architect-role/architecture-decision-record)).
+- Rejection events with reasons: AWS treats ADRs as "immutable documents
+  after the team accepts **or rejects** them" and records the rejection
+  reason "to prevent future discussions on the same topic" (same source) —
+  our rejection events are exactly that rule made org-wide.
+- Approval as promotion of staged content is Iceberg's Write-Audit-Publish
+  (write to an audit branch invisible to consumers, validate, promote)
+  ([Iceberg branching](https://iceberg.apache.org/docs/latest/branching/)).
+- Retaining verbatim evidence in the log follows Confluent's event-sourcing
+  warning that once event-level fidelity is lost it cannot be recovered
+  ([Confluent](https://developer.confluent.io/courses/event-sourcing/event-sourcing-vs-event-streaming/)).
+- Append-only truth plus disposable projections is the KurrentDB/EventStoreDB
+  event-sourcing shape ([Kurrent](https://www.kurrent.io/event-sourcing));
+  supersession-as-new-assertion (never edit) is Datomic's accumulate-only
+  model ([Datomic](https://docs.datomic.com/whatis/data-model.html)).
+- Record lifecycle language matches PEP practice: "Once resolution is
+  reached, a PEP is considered a historical document rather than a living
+  specification" ([PEP 1](https://peps.python.org/pep-0001/)).
+- The `reconsider_after` intent field has certification-lifecycle precedent:
+  Guru verifies cards "with expiration dates or mark them as 'Does not
+  expire'" ([Guru](https://help.getguru.com/docs/what-is-verifcation)), and
+  Azure recommends recording low decision confidence as "useful for future
+  reconsideration decisions" (Azure WAF, above).
+
+### Recorded traps and v1 stances
+
+- **Erasure vs immutability.** Enterprise meeting tools ship redaction and
+  zero-day retention as compliance table stakes (atlas: Fellow's enterprise
+  controls), and a legal erasure demand (e.g. GDPR) cannot be satisfied by an
+  append-only log after the fact. V1 stance: erasure pressure is handled
+  *before* ingest — the human gate plus the submitter's source-exclusion
+  list. Post-ingest erasure is deferred with a named future mechanism:
+  payload tombstoning via a `correction`-family event that instructs
+  projections to suppress a payload while the log act remains. If a regulated
+  deployment ever requires regulator-recognized WORM, the assessed tier is S3
+  Object Lock compliance mode — "a protected object version can't be
+  overwritten or deleted by any user, including the root user," assessed by
+  Cohasset Associates against SEC 17a-4, CFTC, and FINRA
+  ([AWS docs](https://docs.aws.amazon.com/AmazonS3/latest/userguide/object-lock.html)).
+- **Replay cost at scale.** Full-log replay eventually gets slow; the named
+  remedy is Delta Lake's checkpoint pattern — periodic files that "save the
+  entire state of the table at a point in time" so readers "avoid
+  reprocessing what could be thousands of tiny, inefficient JSON files"
+  ([Databricks](https://www.databricks.com/blog/2019/08/21/diving-into-delta-lake-unpacking-the-transaction-log.html)).
+  Not v1; recorded so slow rebuilds have a known answer.
+- **Stale links kill decision logs.** Confluence's decision blueprint has no
+  supersedes edges and wiki decision logs rot; ADR practice's documented
+  failure mode is humans forgetting link maintenance. This is the standing
+  argument for the interpretive linker pass remaining first in line after v1.
+
+### Deferred adoptions (interpretive/retrieve passes)
+
+- PEP typed links: `Requires` as a third link type beyond parent/supersedes,
+  and a `Resolution`-style pointer to the exact approval act
+  ([PEP 1](https://peps.python.org/pep-0001/)).
+- Bi-temporal edges for the linker: Graphiti/Zep's temporal edge invalidation
+  over episodes ([Graphiti](https://help.getzep.com/graphiti/getting-started/overview),
+  [arXiv:2501.13956](https://arxiv.org/abs/2501.13956)) and XTDB's
+  valid-time/system-time split ([XTDB](https://github.com/xtdb/xtdb)) — so a
+  supersession discovered late can be backdated without touching approval
+  records.
+- Status vocabulary on derived atoms: Databricks' governed
+  `certified`/`deprecated` tag and Atlan's DRAFT/VERIFIED/DEPRECATED —
+  "superseded" must be a real state, not the absence of one
+  ([Databricks](https://learn.microsoft.com/en-us/azure/databricks/data-governance/unity-catalog/certify-deprecate-data),
+  [Atlan](https://developer.atlan.com/snippets/common-examples/certificates/)).
+- Alation's negative-flag rule — a deprecation requires a reason and a
+  pointer to the replacement — as the future supersedes-edge shape
+  ([Alation](https://docs.alation.com/en/latest/welcome/BestPractices/UseTrustFlagstoProceedwithConfidence.html)).
+- W3C PROV-O as the edge-name vocabulary (wasRevisionOf, wasQuotedFrom,
+  wasGeneratedBy) before inventing our own
+  ([PROV-O](https://www.w3.org/TR/prov-o/)).
+- UK Government ADR scope levels (team → programme → department) and Azure's
+  confidence level as future intent fields when orgs grow
+  ([UK framework](https://www.gov.uk/government/publications/architectural-decision-record-framework/architectural-decision-record-framework)).
+- lakeFS-style validation hooks gating linker edges before they become
+  visible ([lakeFS](https://en.wikipedia.org/wiki/LakeFS)).
+- Power BI's Promoted/Certified two-tier endorsement for multi-team orgs
+  ([Power BI](https://learn.microsoft.com/en-us/power-bi/collaborate-share/service-endorsement-overview)).
+
 ## Testing
 
 - Protocol package: canonical serialization and signature round-trip; golden
@@ -280,7 +392,8 @@ Enforcement design is out of scope here.
   same canonical content digest); crash-resume via startup catch-up.
 - Submitter: post-resolve hook fires; startup sweep finds resolved-without-
   receipt nodes; receipt slot is create-once; legacy-metadata nodes are
-  skipped with an alert, not fatal.
+  skipped with an alert, not fatal; an excluded source produces no envelope
+  of either event type.
 - End-to-end: approve on a member machine → receipt slot filed → atoms
   queryable in the derived store; repeat from the second pilot machine; zero
   duplicates.
@@ -307,6 +420,9 @@ Enforcement design is out of scope here.
 - `correction` events (shape reserved in `event_type` only).
 - Resurfacing of `reconsider_after` rejections (the fact is logged; the
   reminder behavior is a future derived-side feature).
+- Post-ingest erasure/redaction — payload tombstoning via a
+  `correction`-family event is the named future mechanism (see Industry
+  cross-reference: recorded traps).
 - Standalone-service extraction of `organization-record` (boundary rules above
   keep it mechanical if scale demands it).
 - Hardware-backed installation keys: current signer is exportable software
