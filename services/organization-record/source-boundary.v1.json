@@ -1,0 +1,69 @@
+{
+  "boundary_version": 1,
+  "kind": "echo-workspace-source-boundary",
+  "name": "@echo-brain/organization-record",
+  "workspace": true,
+  "boundary_root": "services/organization-record",
+  "source_root": "services/organization-record/src",
+  "package_json": "services/organization-record/package.json",
+  "entry_points": ["services/organization-record/src/index.ts"],
+  "owned_source_paths": ["services/organization-record/src/**"],
+  "allowed_internal_paths": ["services/organization-record/src/**"],
+  "allowed_workspace_packages": ["@echo-brain/federation-protocol"],
+  "allowed_external_packages": ["better-sqlite3"],
+  "allowed_node_builtins": ["fs", "path"],
+  "runtime_assets": [
+    "services/organization-record/migrations/log/0001_organization_record_log.sql",
+    "services/organization-record/migrations/derived/0001_organization_record_derived.sql"
+  ],
+  "layer_rules": [
+    {
+      "name": "record-entrypoint-exports-public-api",
+      "from": "services/organization-record/src/index.ts",
+      "allowed_imports": ["services/organization-record/src/**"],
+      "allowed_workspace_packages": [],
+      "allowed_external_packages": [],
+      "allowed_node_builtins": []
+    },
+    {
+      "name": "record-application-is-pure",
+      "from": "services/organization-record/src/application/**",
+      "allowed_imports": ["services/organization-record/src/application/**"],
+      "allowed_workspace_packages": ["@echo-brain/federation-protocol"],
+      "allowed_external_packages": [],
+      "allowed_node_builtins": []
+    },
+    {
+      "name": "record-persistence-owns-sqlite",
+      "from": "services/organization-record/src/persistence/**",
+      "allowed_imports": ["services/organization-record/src/persistence/**"],
+      "allowed_workspace_packages": ["@echo-brain/federation-protocol"],
+      "allowed_external_packages": ["better-sqlite3"],
+      "allowed_node_builtins": ["fs", "path"]
+    },
+    {
+      "name": "record-log-appends-through-application-contracts",
+      "from": "services/organization-record/src/log/**",
+      "allowed_imports": [
+        "services/organization-record/src/application/**",
+        "services/organization-record/src/log/**",
+        "services/organization-record/src/persistence/**"
+      ],
+      "allowed_workspace_packages": ["@echo-brain/federation-protocol"],
+      "allowed_external_packages": ["better-sqlite3"],
+      "allowed_node_builtins": []
+    },
+    {
+      "name": "record-derive-never-calls-the-append-machine",
+      "from": "services/organization-record/src/derive/**",
+      "allowed_imports": [
+        "services/organization-record/src/application/**",
+        "services/organization-record/src/derive/**",
+        "services/organization-record/src/persistence/**"
+      ],
+      "allowed_workspace_packages": ["@echo-brain/federation-protocol"],
+      "allowed_external_packages": ["better-sqlite3"],
+      "allowed_node_builtins": []
+    }
+  ]
+}

@@ -18,7 +18,8 @@
         "packages/organization-protocol",
         "packages/organization-api",
         "services/organization-authority",
-        "services/organization-control-plane"
+        "services/organization-control-plane",
+        "services/organization-record"
       ],
       "dependencies": {
         "@echo-brain/federation-protocol": "0.0.0-dev.0",
@@ -62,6 +63,10 @@
     },
     "node_modules/@echo-brain/organization-protocol": {
       "resolved": "packages/organization-protocol",
+      "link": true
+    },
+    "node_modules/@echo-brain/organization-record": {
+      "resolved": "services/organization-record",
       "link": true
     },
     "node_modules/@emnapi/core": {
@@ -3590,6 +3595,19 @@
       "version": "0.0.0-dev.0",
       "license": "MIT",
       "dependencies": {
+        "better-sqlite3": "12.10.0"
+      },
+      "engines": {
+        "node": "22.22.1",
+        "npm": "10.9.4"
+      }
+    },
+    "services/organization-record": {
+      "name": "@echo-brain/organization-record",
+      "version": "0.0.0-dev.0",
+      "license": "MIT",
+      "dependencies": {
+        "@echo-brain/federation-protocol": "0.0.0-dev.0",
         "better-sqlite3": "12.10.0"
       },
       "engines": {

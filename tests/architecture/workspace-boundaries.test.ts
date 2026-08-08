@@ -258,9 +258,11 @@ describe('workspace source boundaries', () => {
         '@echo-brain/organization-api',
         '@echo-brain/organization-control-plane',
         '@echo-brain/organization-protocol',
+        '@echo-brain/organization-record',
       ],
       '@echo-brain/organization-control-plane': [],
       '@echo-brain/organization-protocol': ['@echo-brain/federation-protocol'],
+      '@echo-brain/organization-record': ['@echo-brain/federation-protocol'],
       'echo-brain/local-organization': [
         '@echo-brain/federation-protocol',
         '@echo-brain/organization-api',
