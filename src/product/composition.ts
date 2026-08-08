@@ -34,6 +34,54 @@ export interface ProductSourceCycleResult {
   error?: string;
 }
 
+/**
+ * One submitter sweep, as the cycle needs to see it.
+ *
+ * Structural on purpose: the submitter lives in the organization module and
+ * this layer must not import it. It is a real type rather than `unknown`
+ * because the sweep is *non-throwing* — it reports a skipped node, an
+ * unreadable node, or a permanent rejection by resolving with `ok: false`,
+ * not by rejecting. A seam typed `unknown` cannot see that, so
+ * every alert the submitter raised was being reported to the operator as a
+ * clean cycle.
+ */
+export interface ProductOrganizationRecordSweepAlert {
+  readonly code: string;
+  readonly approval_id: string;
+  readonly detail: string;
+}
+
+export interface ProductOrganizationRecordSweepReport {
+  readonly ok: boolean;
+  readonly examined: number;
+  readonly excluded: number;
+  readonly skipped: number;
+  readonly published: number;
+  readonly rejected: number;
+  readonly retried: number;
+  readonly alerts: readonly ProductOrganizationRecordSweepAlert[];
+}
+
+/**
+ * Organization ingest is a second egress path beside delivery, never a gate on
+ * it. A failed sweep is reported here and changes nothing else about the
+ * cycle: `ok` stays the local pipeline's verdict.
+ *
+ * The counts are the sweep's own; `detail` is a bounded summary, never the full
+ * alert list, so one bad node cannot turn a cycle report into an unbounded blob.
+ */
+export interface ProductOrganizationRecordCycleResult {
+  ok: boolean;
+  detail: string | null;
+  examined: number;
+  excluded: number;
+  skipped: number;
+  published: number;
+  rejected: number;
+  retried: number;
+  alerts: number;
+}
+
 export interface ProductCycleResult {
   ok: boolean;
   sources: readonly ProductSourceCycleResult[];
@@ -43,6 +91,7 @@ export interface ProductCycleResult {
   meetings_rejected: number;
   meetings_dead_lettered: number;
   deliveries: number;
+  organization_record?: ProductOrganizationRecordCycleResult;
 }
 
 export interface ProductComposition {
@@ -78,6 +127,21 @@ export interface PrepareProductCompositionOptions {
   healthTimeoutMs?: number;
   operationDeadlines?: Partial<CoreCycleDeadlines>;
   accessGate?: ProductAccessGate;
+  /**
+   * Best-effort organization record submission sweep. Runs once at composition
+   * startup and at the start of every cycle, before local product work. It is
+   * deliberately not allowed to fail either: an organization that cannot be
+   * reached must never stop a member machine from processing its own meetings.
+   *
+   * The startup sweep's report is intentionally dropped — there is no cycle to
+   * attach it to, and refusing to compose over it would make an unreachable
+   * organization fatal to local work. Nothing is lost: the submitter recomputes
+   * every alert from durable node state, so a condition that really persists
+   * reappears on the very next cycle, where it is reported.
+   */
+  organizationRecordSweep?: (
+    options: ProductCycleRunOptions,
+  ) => Promise<ProductOrganizationRecordSweepReport>;
   /** Command-scoped resources not owned by the CoreStateStore. */
   closeResources?: () => void | Promise<void>;
 }
@@ -201,8 +265,101 @@ export async function assertProductAccess(
   }
 }
 
+/** Enough alerts to act on, few enough that one cycle line stays readable. */
+const MAX_REPORTED_RECORD_ALERTS = 3;
+const MAX_REPORTED_RECORD_ALERT_DETAIL_CHARACTERS = 200;
+
+const NO_RECORD_SWEEP_COUNTS = Object.freeze({
+  examined: 0,
+  excluded: 0,
+  skipped: 0,
+  published: 0,
+  rejected: 0,
+  retried: 0,
+  alerts: 0,
+});
+
+function boundedAlertDetail(detail: string): string {
+  return detail.length <= MAX_REPORTED_RECORD_ALERT_DETAIL_CHARACTERS
+    ? detail
+    : `${detail.slice(0, MAX_REPORTED_RECORD_ALERT_DETAIL_CHARACTERS)}…`;
+}
+
+/**
+ * A bounded, operator-readable summary of why a sweep was not ok. The alert
+ * count is reported separately, so truncating here loses no signal about how
+ * much went wrong — only which of it is quoted.
+ */
+function recordAlertSummary(
+  alerts: readonly ProductOrganizationRecordSweepAlert[],
+): string {
+  if (alerts.length === 0) {
+    return 'organization record sweep reported a failure without an alert';
+  }
+  const quoted = alerts
+    .slice(0, MAX_REPORTED_RECORD_ALERTS)
+    .map(
+      (alert) =>
+        `${alert.code} [${alert.approval_id.slice(0, 12)}]: ${boundedAlertDetail(alert.detail)}`,
+    )
+    .join('; ');
+  const hidden = alerts.length - Math.min(alerts.length, MAX_REPORTED_RECORD_ALERTS);
+  return hidden === 0 ? quoted : `${quoted}; +${hidden} more`;
+}
+
+/**
+ * Runs the organization sweep and converts every outcome into a reported fact.
+ * Nothing here may throw: the caller's next statement is the local pipeline.
+ *
+ * Two distinct failure shapes reach this function and both must land in the
+ * same field. A rejected promise is a fault the sweep could not classify; a
+ * resolved report with `ok: false` is the submitter's own considered verdict,
+ * carrying the alerts. Only the first was reported before, which made a sweep
+ * that skipped every node for missing authorization evidence indistinguishable
+ * from one that published everything.
+ */
+async function sweepOrganizationRecord(
+  sweep:
+    | ((
+        options: ProductCycleRunOptions,
+      ) => Promise<ProductOrganizationRecordSweepReport>)
+    | undefined,
+  runOptions: ProductCycleRunOptions,
+): Promise<ProductOrganizationRecordCycleResult | undefined> {
+  if (sweep === undefined) return undefined;
+  let report: ProductOrganizationRecordSweepReport;
+  try {
+    report = await sweep(runOptions);
+  } catch (error) {
+    return {
+      ok: false,
+      detail: (error as Error).message,
+      ...NO_RECORD_SWEEP_COUNTS,
+    };
+  }
+  if (report === null || typeof report !== 'object') {
+    return {
+      ok: false,
+      detail: 'organization record sweep returned no result',
+      ...NO_RECORD_SWEEP_COUNTS,
+    };
+  }
+  return {
+    ok: report.ok,
+    detail: report.ok ? null : recordAlertSummary(report.alerts),
+    examined: report.examined,
+    excluded: report.excluded,
+    skipped: report.skipped,
+    published: report.published,
+    rejected: report.rejected,
+    retried: report.retried,
+    alerts: report.alerts.length,
+  };
+}
+
 function summarize(
   sources: readonly ProductSourceCycleResult[],
+  organizationRecord?: ProductOrganizationRecordCycleResult,
 ): ProductCycleResult {
   const results = sources.flatMap((source) =>
     source.result === undefined ? [] : [source.result],
@@ -223,6 +380,9 @@ function summarize(
     meetings_rejected: sum('meetings_rejected'),
     meetings_dead_lettered: sum('meetings_dead_lettered'),
     deliveries: sum('deliveries'),
+    ...(organizationRecord === undefined
+      ? {}
+      : { organization_record: organizationRecord }),
   };
 }
 
@@ -306,6 +466,12 @@ export async function prepareProductComposition(
     // the access gate, providers, state, approvals, or any caller callback.
     assertRetiredFounderProvenanceRefused(config.state_dir);
     await assertProductAccess(options.accessGate);
+    // Every cycle sweeps first: a decision approved between cycles reaches the
+    // organization on the next tick even if its post-resolve hook was lost.
+    const organizationRecord = await sweepOrganizationRecord(
+      options.organizationRecordSweep,
+      runOptions,
+    );
     const sources: ProductSourceCycleResult[] = [];
     for (const source of adapters.meetingSources) {
       try {
@@ -335,9 +501,12 @@ export async function prepareProductComposition(
         });
       }
     }
-    return summarize(sources);
+    return summarize(sources, organizationRecord);
   };
 
+  // The startup sweep: resolved-without-receipt nodes left by an earlier
+  // process reach the organization before the first cycle runs.
+  await sweepOrganizationRecord(options.organizationRecordSweep, {});
   options.accessGate?.start?.();
   return {
     paths,
