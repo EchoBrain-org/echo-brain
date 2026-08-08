@@ -606,11 +606,14 @@ describe('single-organization authority runtime', () => {
           )
           .all() as Array<{ receipt_json: string }>;
         expect(rows).toHaveLength(3);
-        for (const row of rows) {
-          expect(row.receipt_json).not.toMatch(
-            /path|command|config|credential|meeting|transcript|log/i,
-          );
-        }
+        // Persist exactly the validated, redacted receipt documents. Scanning
+        // the whole signed JSON for short words is probabilistic: random IDs,
+        // digests, or signature bytes can eventually spell e.g. "log".
+        expect(rows.map((row) => row.receipt_json).sort()).toEqual(
+          [rolledBackReceipt, receipt, secondReceipt]
+            .map((value) => canonicalJson(value))
+            .sort(),
+        );
       } finally {
         database.close();
       }
