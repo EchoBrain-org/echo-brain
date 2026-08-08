@@ -344,3 +344,39 @@ export interface OrganizationIntegrationsOverview {
   permission_grants: readonly Readonly<Record<string, unknown>>[];
   recent_audit: readonly Readonly<Record<string, unknown>>[];
 }
+
+/**
+ * Every field of a frozen authorization evidence document, as the appended
+ * audit row stores them. The lookup below matches all of them at once: the
+ * evidence is only meaningful if the Authority's own append-only audit still
+ * holds exactly this evaluation.
+ *
+ * `authority_evidence_sha256` is deliberately absent. That column digests the
+ * Authority *status* the evaluation observed, not this evidence document, so
+ * comparing an invented digest against it would authorize nothing.
+ */
+export interface ApprovalAuthorizationEvidenceLookup {
+  organization_id: string;
+  installation_id: string;
+  approval_id: string;
+  action: "approve" | "reject";
+  request_id: string;
+  principal_id: string;
+  membership_id: string;
+  request_sha256: string;
+  provider_event_sha256: string;
+  adapter_binding_id: string;
+  permission_grant_id: string;
+  reason_code: string;
+  evaluated_at: string;
+}
+
+/**
+ * Absent and ambiguous are distinct outcomes and both deny. A caller must
+ * never be able to treat "more than one audit row could be this evaluation"
+ * as a match.
+ */
+export type ApprovalAuthorizationEvidenceMatch =
+  | { readonly status: "matched" }
+  | { readonly status: "absent" }
+  | { readonly status: "ambiguous" };
