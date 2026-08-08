@@ -173,7 +173,11 @@ or a single meeting (`source` + `external_id`). No pattern matching. The list
 is member-controlled (deliberate divergence from Microsoft's admin-controlled
 model: custody is member-side, so the member owns the valve), checked by the
 submitter before building any envelope of either event type, effective until
-a receipt exists and powerless after (see the erasure trap). An unreadable or
+a receipt exists and powerless after (see the erasure trap). An org-distributed
+exclusion floor (an admin list merged into the same check, subtractive only,
+distributed over the existing authority-to-member channel) is deliberately
+deferred: it touches no frozen surface, so it can be added whenever a real
+org needs it. An unreadable or
 invalid exclusion config fails closed: the submitter ships nothing and
 alerts. The `approvals` CLI projection shows affected nodes as `excluded`;
 the org side has no trace. On success the receipt is filed as one more
