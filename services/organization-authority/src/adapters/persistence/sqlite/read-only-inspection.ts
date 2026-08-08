@@ -40,6 +40,8 @@ interface MetadataRow {
   integrations_control_plane_id: string | null;
   integrations_marker_sha256: string | null;
   integrations_installed_at: string | null;
+  record_marker_sha256: string | null;
+  record_installed_at: string | null;
 }
 
 export interface AuthorityDatabaseInspection {
@@ -53,6 +55,9 @@ export interface AuthorityDatabaseInspection {
   integrations_control_plane_id: string | null;
   integrations_marker_sha256: `sha256:${string}` | null;
   integrations_installed_at: string | null;
+  /** The organization-record installation anchor; null before it is published. */
+  record_marker_sha256: `sha256:${string}` | null;
+  record_installed_at: string | null;
 }
 
 export function assertPrivateAuthorityDatabaseFile(path: string): void {
@@ -135,11 +140,16 @@ function inspectAuthorityDatabase(
         : `NULL AS integrations_control_plane_id,
            NULL AS integrations_marker_sha256,
            NULL AS integrations_installed_at`;
+    const recordAnchorColumns =
+      schemaVersion >= 5
+        ? `record_marker_sha256, record_installed_at`
+        : `NULL AS record_marker_sha256, NULL AS record_installed_at`;
     const metadata = database
       .prepare(
         `SELECT authority_id, organization_id, organization_display_name,
                 authority_pin_sha256, descriptor_json,
-                ${integrationAnchorColumns}
+                ${integrationAnchorColumns},
+                ${recordAnchorColumns}
          FROM authority_metadata WHERE singleton = 1`,
       )
       .get() as MetadataRow | undefined;
@@ -180,6 +190,20 @@ function inspectAuthorityDatabase(
         'organization authority integrations installation anchor is invalid',
       );
     }
+    const recordAnchorMissing =
+      metadata.record_marker_sha256 === null &&
+      metadata.record_installed_at === null;
+    if (
+      !recordAnchorMissing &&
+      (metadata.record_marker_sha256 === null ||
+        !/^sha256:[0-9a-f]{64}$/.test(metadata.record_marker_sha256) ||
+        metadata.record_installed_at === null ||
+        Number.isNaN(Date.parse(metadata.record_installed_at)))
+    ) {
+      throw new Error(
+        'organization authority record installation anchor is invalid',
+      );
+    }
     return Object.freeze({
       schema_version: schemaVersion,
       tables: Object.freeze([...tables]),
@@ -193,6 +217,9 @@ function inspectAuthorityDatabase(
       integrations_marker_sha256:
         metadata.integrations_marker_sha256 as `sha256:${string}` | null,
       integrations_installed_at: metadata.integrations_installed_at,
+      record_marker_sha256:
+        metadata.record_marker_sha256 as `sha256:${string}` | null,
+      record_installed_at: metadata.record_installed_at,
     });
   } finally {
     database.close();

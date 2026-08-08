@@ -99,6 +99,22 @@ async function runServe(
   };
   process.once('SIGINT', shutdown);
   process.once('SIGTERM', shutdown);
+  // The exit code and the whole teardown are already handled inside the
+  // runtime; this is the operator-visible line explaining why an apparently
+  // healthy process stopped answering. Claiming the stop keeps a later signal
+  // from reporting the same halt a second time, and the command outlives the
+  // runtime no further: with the listener, both databases, and singleton
+  // ownership released, nothing is left holding this process open.
+  void runtime.fatalFailure.then((failure) => {
+    shuttingDown = true;
+    io.stderr(
+      `${canonicalJson({
+        schema_version: 1,
+        kind: 'echo-organization-authority-fatal',
+        message: failure.message,
+      })}\n`,
+    );
+  });
   return 0;
 }
 

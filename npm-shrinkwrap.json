@@ -3583,6 +3583,7 @@
         "@echo-brain/organization-api": "0.0.0-dev.0",
         "@echo-brain/organization-control-plane": "0.0.0-dev.0",
         "@echo-brain/organization-protocol": "0.0.0-dev.0",
+        "@echo-brain/organization-record": "0.0.0-dev.0",
         "better-sqlite3": "12.10.0"
       },
       "engines": {

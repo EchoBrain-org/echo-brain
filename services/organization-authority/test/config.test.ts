@@ -14,6 +14,11 @@ const VALID_BOUNDARY = {
     STATE_DIRECTORY,
     'integrations.sqlite',
   ),
+  record_log_database_path: join(STATE_DIRECTORY, 'record-log.sqlite'),
+  record_derived_database_path: join(
+    STATE_DIRECTORY,
+    'record-derived.sqlite',
+  ),
   key_directory: join(STATE_DIRECTORY, 'keys'),
 };
 
@@ -67,5 +72,25 @@ describe('organization authority serve configuration guards', () => {
         ),
       }),
     ).toThrow('integrations database');
+    expect(() =>
+      assertAuthorityServeStateBoundary({
+        ...VALID_BOUNDARY,
+        record_log_database_path: join(STATE_DIRECTORY, 'other-log.sqlite'),
+      }),
+    ).toThrow('record log database');
+    // The log and the derived graph never share a file: the charter split is
+    // enforced at the path, not only by convention.
+    expect(() =>
+      assertAuthorityServeStateBoundary({
+        ...VALID_BOUNDARY,
+        record_derived_database_path: VALID_BOUNDARY.record_log_database_path,
+      }),
+    ).toThrow('record derived database');
+    expect(() =>
+      assertAuthorityServeStateBoundary({
+        ...VALID_BOUNDARY,
+        record_log_database_path: '/tmp/record-log.sqlite',
+      }),
+    ).toThrow('record log database');
   });
 });

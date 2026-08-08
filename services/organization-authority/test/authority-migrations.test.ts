@@ -38,7 +38,7 @@ describe('organization authority database migrations', () => {
     openAuthorityDatabase(path).close();
 
     const database = new Database(path, { readonly: true });
-    expect(database.pragma('user_version', { simple: true })).toBe(4);
+    expect(database.pragma('user_version', { simple: true })).toBe(5);
     const tables = database
       .prepare(
         `SELECT name FROM sqlite_master
@@ -125,7 +125,7 @@ describe('organization authority database migrations', () => {
 
     openAuthorityDatabase(path).close();
     const upgraded = new Database(path);
-    expect(upgraded.pragma('user_version', { simple: true })).toBe(4);
+    expect(upgraded.pragma('user_version', { simple: true })).toBe(5);
     const tables = upgraded
       .prepare(
         `SELECT name FROM sqlite_master
@@ -156,6 +156,17 @@ describe('organization authority database migrations', () => {
       integrations_marker_sha256: null,
       integrations_installed_at: null,
     });
+    // A legacy upgrade must leave the record store unanchored. That absence is
+    // the only evidence maintenance has that this directory predates the record
+    // databases and may therefore create them.
+    expect(
+      upgraded
+        .prepare(
+          `SELECT record_marker_sha256, record_installed_at
+           FROM authority_metadata WHERE singleton = 1`,
+        )
+        .get(),
+    ).toEqual({ record_marker_sha256: null, record_installed_at: null });
     expect(
       upgraded
         .prepare(
@@ -281,11 +292,11 @@ describe('organization authority database migrations', () => {
   it('rejects a database newer than this authority binary', () => {
     const path = databasePath();
     const future = new Database(path);
-    future.pragma('user_version = 5');
+    future.pragma('user_version = 6');
     future.close();
 
     expect(() => openAuthorityDatabase(path)).toThrow(
-      'newer than supported schema 4',
+      'newer than supported schema 5',
     );
   });
 });

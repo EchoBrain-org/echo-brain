@@ -41,8 +41,23 @@ export const AUTHORITY_INITIALIZATION_MANIFEST_FILENAME =
   'authority-initialization.v1.json';
 export const AUTHORITY_INTEGRATIONS_INSTALLATION_MARKER_FILENAME =
   'authority-integrations-installation.v1.json';
+/**
+ * The state-directory half of the record-store installation proof. Its digest
+ * is anchored in `authority.sqlite`, so the pair is only valid together.
+ */
+export const AUTHORITY_RECORD_INSTALLATION_MARKER_FILENAME =
+  'authority-record-installation.v1.json';
 export const AUTHORITY_DATABASE_FILENAME = 'authority.sqlite';
 export const AUTHORITY_INTEGRATIONS_DATABASE_FILENAME = 'integrations.sqlite';
+/**
+ * The organization record's two databases. The log is truth and the derived
+ * graph is disposable, so they never share a file with each other or with
+ * `authority.sqlite` — that separation is what keeps the authority's "does not
+ * store decisions" charter true at the database level.
+ */
+export const AUTHORITY_RECORD_LOG_DATABASE_FILENAME = 'record-log.sqlite';
+export const AUTHORITY_RECORD_DERIVED_DATABASE_FILENAME =
+  'record-derived.sqlite';
 export const AUTHORITY_ADMIN_CREDENTIAL_FILENAME = 'admin-token';
 export const AUTHORITY_PROXY_CREDENTIAL_FILENAME = 'trusted-proxy-token';
 
@@ -88,6 +103,9 @@ export interface AuthorityStatePaths {
   database_path: string;
   integrations_database_path: string;
   integrations_installation_marker_path: string;
+  record_log_database_path: string;
+  record_derived_database_path: string;
+  record_installation_marker_path: string;
   identity_path: string;
   initialization_manifest_path: string;
 }
@@ -177,6 +195,18 @@ export function authorityStatePaths(
     integrations_installation_marker_path: join(
       state,
       AUTHORITY_INTEGRATIONS_INSTALLATION_MARKER_FILENAME,
+    ),
+    record_log_database_path: join(
+      state,
+      AUTHORITY_RECORD_LOG_DATABASE_FILENAME,
+    ),
+    record_derived_database_path: join(
+      state,
+      AUTHORITY_RECORD_DERIVED_DATABASE_FILENAME,
+    ),
+    record_installation_marker_path: join(
+      state,
+      AUTHORITY_RECORD_INSTALLATION_MARKER_FILENAME,
     ),
     identity_path: join(state, AUTHORITY_IDENTITY_FILENAME),
     initialization_manifest_path: join(
@@ -507,6 +537,8 @@ export function resolveAuthorityServeConfig(
     authority_pin_sha256: config.authority.authority_pin_sha256,
     database_path: config.database_path,
     integrations_database_path: paths.integrations_database_path,
+    record_log_database_path: paths.record_log_database_path,
+    record_derived_database_path: paths.record_derived_database_path,
     admin_token: adminToken,
     trusted_proxy_token: trustedProxyToken,
     host: config.listener.host,

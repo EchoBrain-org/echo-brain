@@ -2,17 +2,18 @@
 
 The authority is the centrally hosted onboarding and access service for one
 organization. It manages principals, memberships, one-time enrollment grants,
-installation enrollment, short access leases, revocation, and an append-only
-audit log. It does not store meetings, decisions, reasoning state, or
-embeddings.
+installation enrollment, short access leases, revocation, and append-only
+organization decision records. It does not store raw meetings, reasoning
+state, or embeddings.
 
-One process and two persistent SQLite databases are the supported topology:
+One process and four persistent SQLite databases are the supported topology:
 `authority.sqlite` remains the source of membership and installation truth,
 while `integrations.sqlite` contains customer-owned provider links,
-connections, adapter bindings, direct grants, and integration audit. Both
-databases are owned by the same authenticated singleton process. There is no
-tenant registry, organization switcher, billing layer, or multi-replica
-coordination.
+connections, adapter bindings, direct grants, and integration audit.
+`record-log.sqlite` is the append-only record of truth, and
+`record-derived.sqlite` contains its replayable projection. All four databases
+are owned by the same authenticated singleton process. There is no tenant
+registry, organization switcher, billing layer, or multi-replica coordination.
 
 ## HTTP surface
 
@@ -150,20 +151,31 @@ npm run organization-authority:cli -- serve \
 ```
 
 Initialization creates private state, two distinct credentials, the software
-authority signing key, both databases, and a config bound to that exact state:
+authority signing key, every database, and a config bound to that exact state:
 
 ```text
 authority.json
 authority-state/
   authority.sqlite
   integrations.sqlite
+  record-log.sqlite
+  record-derived.sqlite
   authority-identity.v1.json
   authority-initialization.v1.json
   authority-integrations-installation.v1.json
+  authority-record-installation.v1.json
   keys/authority-development-key.v1.json
   credentials/admin-token
   credentials/trusted-proxy-token
 ```
+
+Both installation markers exist in one piece with an anchor in
+`authority.sqlite`. The record anchor is what makes a deleted decision log
+loud: once an authority has published its record store, `serve` and
+`install-integrations` both refuse a missing log, derived store, or marker
+rather than recreating one. Only a state directory that was never anchored —
+provably published before the record store existed — is bootstrapped by
+`install-integrations`.
 
 Successful organization-tool onboarding adds the private integration secret:
 
@@ -175,8 +187,8 @@ authority-state/
 All files are current-user private. Integration secret files are created
 mode-0600 and SQLite stores only their opaque `sch_*` handles. Repeating the
 exact initialization is read-only. `serve` never creates replacement state,
-and `status` verifies the config/state binding, signing identity, both database
-identities, and runtime ownership.
+and `status` verifies the config/state binding, signing identity, all four
+database identities, and runtime ownership.
 
 An authority state created before `integrations.sqlite` was introduced must be
 upgraded explicitly while the authority is stopped:
@@ -196,10 +208,45 @@ refused. Missing or mismatched integration state always makes `serve` fail
 closed.
 
 The authority remains a foreground process. Process restart and persistent
-volume backup belong to the container or service manager. Stop the authority
-before taking a file-level backup so `authority.sqlite`,
-`integrations.sqlite`, the signing key, and credentials form one consistent
-recovery unit.
+volume backup belong to the container or service manager.
+
+### Taking a backup
+
+A file-level backup is valid only when it is taken from a **stopped** authority
+whose stop **succeeded**. Stopping is not just quiescence: it drains the record
+derive follower and walks the record log's hash chain while both handles are
+still open, and it fails loudly when either step does not hold. A stop that
+reported a failure means the state on disk is not a consistent recovery unit —
+investigate before copying it, and never copy it as a good backup.
+
+1. Stop the authority (`SIGTERM`, or the service manager's stop) and confirm it
+   exited without a shutdown error and with exit code 0. A non-zero exit after a
+   derive failure means the same thing: do not treat that state as a backup.
+2. Copy the whole state directory as one unit. Every file below is part of the
+   recovery unit; a backup missing any of them cannot be restored:
+   - `authority.sqlite` — identity, memberships, enrollments, and the
+     integrations and record installation anchors
+   - `integrations.sqlite` — the control plane, including the permission audit
+     that record ingest reads
+   - `record-log.sqlite` — the organization decision record log. Truth.
+   - `record-derived.sqlite` — the derived graph. Rebuildable, but copied so a
+     restore does not have to replay
+   - `authority-integrations-installation.v1.json` and
+     `authority-record-installation.v1.json` — the installation markers whose
+     digests are anchored in `authority.sqlite`; a restore without them fails
+     closed rather than recreating what they describe
+   - `authority-identity.v1.json` and `authority-initialization.v1.json`
+   - `keys/` — the authority signing key
+   - `credentials/` — the admin and trusted-proxy tokens
+3. Restore all of it together. Restoring a subset — most sharply, a state
+   directory whose record log is missing — is refused: the record anchor in
+   `authority.sqlite` proves this authority already published a log, and neither
+   `serve` nor `install-integrations` will recreate one. That refusal is the
+   design: a fresh empty log would look healthy while every receipt already in
+   members' hands pointed at records it no longer holds.
+
+Databases use `journal_mode = DELETE`, so a stopped state has no WAL or SHM
+sidecars and every file is readable read-only exactly as copied.
 
 Runtime ownership is authenticated through a private Unix socket beside its
 lock. The portable Docker deployment sets
