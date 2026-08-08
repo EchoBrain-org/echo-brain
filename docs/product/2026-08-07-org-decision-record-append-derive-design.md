@@ -33,7 +33,13 @@ is deliberately out of scope.
    permission layer against current org membership. A derive bug therefore
    cannot widen access. (This refines the direction doc's "audience …
    travel[s] with the approved record": intent markers travel; resolved access
-   never does.)
+   never does.) Precedent: Glean keeps permissions in a dedicated layer the
+   knowledge graph connects to — "a sophisticated permission database that
+   records access control information for all organizational resources" —
+   with enforcement at query time against live identity data, rather than
+   ACLs frozen onto content
+   ([Glean — permissions-aware AI](https://www.glean.com/perspectives/security-permissions-aware-ai),
+   [Glean — permissions structure](https://www.glean.com/blog/secure-generative-ai-for-the-enterprise-requires-the-right-permissions-structure)).
 4. **The log unit is what the human approved.** One approval event stores the
    resolved decision package (the `DecisionBrief` with its evidence spans) in
    RFC 8785 canonical form. Per-signal atoms are a derived, rebuildable
@@ -366,6 +372,16 @@ adoptions for the interpretive/retrieve passes.
   supersedes edges and wiki decision logs rot; ADR practice's documented
   failure mode is humans forgetting link maintenance. This is the standing
   argument for the interpretive linker pass remaining first in line after v1.
+- **Edge existence leaks.** A supersedes/related edge from a visible decision
+  to a `restricted` one reveals that a hidden decision exists (and roughly
+  what it concerns) even when its body is filtered — the atlas's Glean-derived
+  warning that access must be graph-native, covering "nodes AND the edges the
+  linker creates," never a body-only filter. Binding requirement on the
+  future gatekeeper: edges are filtered as rigorously as nodes, and an edge
+  is visible only when both its endpoints are. Derive v1 is safe by
+  construction (its only cross-atom edge, `supports`, never crosses an
+  approval group, and audience is uniform within one approval), but every
+  interpretive edge type added later must pass this rule before shipping.
 
 ### Deferred adoptions (interpretive/retrieve passes)
 
