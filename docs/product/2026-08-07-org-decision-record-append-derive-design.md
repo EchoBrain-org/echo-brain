@@ -157,14 +157,26 @@ Mechanism: a post-resolve hook plus a startup sweep. The pending queue is
 defined by the decision node's own slot files: `resolved.json` present,
 organization receipt slot absent.
 
-*Source exclusion.* The submitter honors a member-side never-ingest list
-(by source or meeting): an excluded source produces no org events at all —
-not even rejection acts. This is the pre-ingest escape hatch that an
-immutable log demands; precedent is Microsoft's semantic index, which lets
-admins exclude whole sites and advises it "for sensitive data, such as
-payroll, HR, or financial information," alongside the rule that "indexing
-data doesn't change access permissions to content"
-([Microsoft Learn — semantic indexing for Copilot](https://learn.microsoft.com/en-us/microsoftsearch/semantic-index-for-copilot)). On success the receipt is filed as one more
+*Source exclusion.* The submitter honors a member-side never-ingest list:
+an excluded source produces no org events at all — not even rejection acts.
+This is the pre-ingest escape hatch that an immutable log demands; precedent
+is Microsoft's semantic index, which lets admins exclude whole sites and
+advises it "for sensitive data, such as payroll, HR, or financial
+information," alongside the rule that "indexing data doesn't change access
+permissions to content"
+([Microsoft Learn — semantic indexing for Copilot](https://learn.microsoft.com/en-us/microsoftsearch/semantic-index-for-copilot)).
+
+Setup: an optional `organization_ingest.exclude` section in the member's
+existing product config file (alongside `meeting_sources`), with exact-match
+entries at two granularities — a whole source (`adapter_id` + `instance_id`)
+or a single meeting (`source` + `external_id`). No pattern matching. The list
+is member-controlled (deliberate divergence from Microsoft's admin-controlled
+model: custody is member-side, so the member owns the valve), checked by the
+submitter before building any envelope of either event type, effective until
+a receipt exists and powerless after (see the erasure trap). An unreadable or
+invalid exclusion config fails closed: the submitter ships nothing and
+alerts. The `approvals` CLI projection shows affected nodes as `excluded`;
+the org side has no trace. On success the receipt is filed as one more
 write-once slot in the node directory (the existing `recordPublished`
 create-once idiom, surface `organization-record`). Filing is atomic-create;
 a receipt slot can never be overwritten. Retries reuse the same idempotency
