@@ -6,6 +6,7 @@ import type {
   Sha256Digest,
 } from '../application/contracts.js';
 import {
+  organizationRecordEnvelopeIndex,
   organizationRecordFrame,
   organizationRecordHash,
   organizationRecordReceiptPayload,
@@ -46,24 +47,46 @@ export function verifyOrganizationRecordChain(
     }
     expectedPosition = row.position + 1;
 
-    let envelopeIsCanonical = true;
+    let envelope: ReturnType<typeof parseOrganizationRecordEnvelope> | null =
+      null;
     try {
-      parseOrganizationRecordEnvelope(row.canonical_envelope);
+      envelope = parseOrganizationRecordEnvelope(row.canonical_envelope);
     } catch (error) {
-      envelopeIsCanonical = false;
       failures.push({
         position: row.position,
         kind: 'envelope_not_canonical',
         detail: (error as Error).message,
       });
     }
-    if (envelopeIsCanonical) {
+    if (envelope !== null) {
       const envelopeDigest = sha256Digest(row.canonical_envelope);
       if (envelopeDigest !== row.envelope_sha256) {
         failures.push({
           position: row.position,
           kind: 'envelope_digest_mismatch',
           detail: `stored ${row.envelope_sha256}, recomputed ${envelopeDigest}`,
+        });
+      }
+      try {
+        const index = organizationRecordEnvelopeIndex(envelope);
+        if (
+          index.envelope_id !== row.envelope_id ||
+          index.event_type !== row.event_type ||
+          index.installation_id !== row.installation_id ||
+          index.idempotency_key !== row.idempotency_key
+        ) {
+          failures.push({
+            position: row.position,
+            kind: 'envelope_index_mismatch',
+            detail:
+              'stored organization record index does not match its canonical envelope',
+          });
+        }
+      } catch (error) {
+        failures.push({
+          position: row.position,
+          kind: 'envelope_index_mismatch',
+          detail: (error as Error).message,
         });
       }
     }

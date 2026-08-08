@@ -388,6 +388,18 @@ describe('organization record chain verification', () => {
     );
   });
 
+  it('detects an index field that differs from the canonical envelope', async () => {
+    const stores = await tamperedChain();
+    stores.log.database.exec(
+      `UPDATE organization_record_log SET event_type = 'rejection' WHERE position = 1`,
+    );
+    expect(
+      verifyOrganizationRecordChain(stores.log).failures.map(
+        (failure) => failure.kind,
+      ),
+    ).toContain('envelope_index_mismatch');
+  });
+
   it('detects a mutated record hash and the broken successor link', async () => {
     const stores = await tamperedChain();
     stores.log.database.exec(

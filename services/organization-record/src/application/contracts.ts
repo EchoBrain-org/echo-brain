@@ -96,6 +96,7 @@ export type OrganizationRecordChainFailureKind =
   | 'record_hash_mismatch'
   | 'envelope_digest_mismatch'
   | 'envelope_not_canonical'
+  | 'envelope_index_mismatch'
   | 'receipt_payload_mismatch';
 
 export interface OrganizationRecordChainFailure {
