@@ -34,12 +34,12 @@ const INERT_ENVIRONMENT: NodeJS.ProcessEnv = Object.freeze({});
  * offers organization ingest a chance to run.
  *
  * The hook fires only after `resolve` has durably returned, and a hook failure
- * is swallowed: the human act is already recorded locally, and the startup and
- * per-cycle sweeps are the durable path. This is the design's "best-effort
+ * is swallowed: the human act is already recorded locally, and the per-cycle
+ * sweep is the durable path. This is the design's "best-effort
  * post-resolve hook" and nothing more — no queue, no daemon, no retry here.
  */
 export function notifyOnResolve(
-  store: DecisionNodeStore,
+  store: ApprovalDecisionStore,
   afterDecisionResolved: (() => void) | undefined,
 ): ApprovalDecisionStore {
   if (afterDecisionResolved === undefined) return store;

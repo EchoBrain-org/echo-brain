@@ -74,6 +74,7 @@ import {
   validateOrganizationAuthorityDescriptorResponse,
   type HttpOrganizationAuthorityClientOptions,
   type OrganizationInstallationAccessDecisionV1,
+  type OrganizationIngestExclusion,
   type OrganizationRecordSweepResult,
   type PinnedOrganizationAuthority,
   type StoredOrganizationEnrollment,
@@ -707,6 +708,14 @@ interface ResolvedOrganizationAuthorization {
   recordSubmitter: OrganizationRecordSubmitter | undefined;
 }
 
+function configuredOrganizationIngestExclusion(
+  config: ProductRuntimeConfig,
+): OrganizationIngestExclusion {
+  return createOrganizationIngestExclusion(
+    config.organization_ingest?.exclude ?? { sources: [], meetings: [] },
+  );
+}
+
 function resolveOrganizationAuthorization(
   config: ProductRuntimeConfig,
   dependencies: ProductCliDependencies,
@@ -861,12 +870,7 @@ function createOrganizationRecordSubmitter(input: {
     // An absent section means nothing is excluded; an invalid one already
     // failed configuration validation, so the submitter never starts on a
     // list it could not read exactly.
-    exclusion: createOrganizationIngestExclusion(
-      input.config.organization_ingest?.exclude ?? {
-        sources: [],
-        meetings: [],
-      },
-    ),
+    exclusion: configuredOrganizationIngestExclusion(input.config),
     now: input.now,
   });
 }
@@ -885,9 +889,9 @@ async function createCliComposition(
   const customComposition = dependencies.composition;
   const { accessGate, approvalActionAuthorizer, recordSubmitter } =
     resolveOrganizationAuthorization(config, dependencies);
-  // One serialized sweep at a time. The post-resolve hook, the startup sweep,
-  // and each cycle all reach the same function; overlapping them would resend
-  // the same frozen envelopes concurrently for no benefit.
+  // One serialized sweep at a time. The post-resolve hook and each cycle reach
+  // the same function; overlapping them would resend the same frozen envelopes
+  // concurrently for no benefit.
   let activeSweep: Promise<OrganizationRecordSweepResult> | null = null;
   const sweepOrganizationRecord =
     recordSubmitter === undefined
@@ -2394,23 +2398,31 @@ export async function runProductCli(
             now: dependencies.now,
           });
         await approvals.initialize();
+        const exclusion = configuredOrganizationIngestExclusion(config);
         approvalResult = {
           ok: true,
           command: parsed.command,
-          approvals: (await approvals.list()).map((record) => ({
-            approval_id: record.approval_id,
-            status: record.status,
-            requested_at: record.requested_at,
-            reviewed_at: record.reviewed_at,
-            reviewed_by: record.reviewed_by,
-            reason: record.reason,
-            brief: record.brief,
-            // Until now this view showed neither the accepted receipt nor a
-            // permanent rejection, so an operator could not tell a decision
-            // that reached the organization from one that never left.
-            organization_record:
-              projectDecisionOrganizationRecord(record),
-          })),
+          approvals: (await approvals.list()).map((record) => {
+            const organizationRecord = projectDecisionOrganizationRecord(record);
+            const excluded =
+              record.status !== "pending" &&
+              record.source !== null &&
+              organizationRecord.status !== "published" &&
+              organizationRecord.status !== "rejected" &&
+              exclusion.excludes(record.source);
+            return {
+              approval_id: record.approval_id,
+              status: record.status,
+              requested_at: record.requested_at,
+              reviewed_at: record.reviewed_at,
+              reviewed_by: record.reviewed_by,
+              reason: record.reason,
+              brief: record.brief,
+              organization_record: excluded
+                ? { ...organizationRecord, status: "excluded" }
+                : organizationRecord,
+            };
+          }),
         };
       } finally {
         await release();

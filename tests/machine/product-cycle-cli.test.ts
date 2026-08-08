@@ -145,6 +145,13 @@ describe('standalone composed cycle', () => {
               reviewer: { slack_user_id: 'U123', name: 'founder' },
             },
           },
+          organization_ingest: {
+            exclude: {
+              sources: [
+                { adapter_id: 'fixture-notes', instance_id: 'primary' },
+              ],
+            },
+          },
         },
         null,
         2,
@@ -275,7 +282,7 @@ describe('standalone composed cycle', () => {
       // decision. Before this existed an operator could not tell a decision
       // that reached the organization from one that never left the machine.
       organization_record: {
-        status: 'pending',
+        status: 'excluded',
         position: null,
         record_hash: null,
         rejection_reason_code: null,

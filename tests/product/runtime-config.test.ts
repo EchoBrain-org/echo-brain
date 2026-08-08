@@ -305,6 +305,27 @@ describe('product runtime configuration', () => {
         },
       },
     ],
+    [
+      'padded source identifier',
+      {
+        exclude: {
+          sources: [{ adapter_id: ' granola', instance_id: 'primary' }],
+        },
+      },
+    ],
+    [
+      'padded meeting external id',
+      {
+        exclude: {
+          meetings: [
+            {
+              source: { adapter_id: 'granola', instance_id: 'primary' },
+              external_id: 'meeting-42 ',
+            },
+          ],
+        },
+      },
+    ],
     ['non-array sources', { exclude: { sources: {} } }],
     ['missing exclude section', {}],
   ])('fails closed on an invalid exclusion config (%s)', (_label, ingest) => {

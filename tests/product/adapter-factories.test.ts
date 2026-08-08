@@ -45,15 +45,18 @@ describe('product adapter factories', () => {
     const approvalActionAuthorizer: ApprovalActionAuthorizer = {
       authorize: async () => ({ allowed: true, evidence: { test: true } }),
     };
+    const afterDecisionResolved = (): void => undefined;
     let observedApprovalActionAuthorizer:
       | ApprovalActionAuthorizer
       | undefined;
+    let observedAfterDecisionResolved: (() => void) | undefined;
     factories.register({
       kind: 'meeting-source',
       adapter_id: 'meeting-fixture',
       create: (adapterConfig, context): MeetingSourceAdapter => {
         observedApprovalActionAuthorizer =
           context.approvalActionAuthorizer;
+        observedAfterDecisionResolved = context.afterDecisionResolved;
         return {
           identity: {
             kind: 'meeting-source',
@@ -125,10 +128,11 @@ describe('product adapter factories', () => {
     const registry = await createConfiguredAdapterRegistry(
       config(),
       factories,
-      { approvalActionAuthorizer },
+      { approvalActionAuthorizer, afterDecisionResolved },
     );
     expect(registry.list()).toHaveLength(3);
     expect(observedApprovalActionAuthorizer).toBe(approvalActionAuthorizer);
+    expect(observedAfterDecisionResolved).toBe(afterDecisionResolved);
   });
 
   it('fails before creating a partial runtime when a factory is absent', async () => {

@@ -12,11 +12,7 @@ import { prepareProductComposition } from '../../src/product/composition.js';
 import type { ProductOrganizationRecordSweepReport } from '../../src/product/composition.js';
 import { validateProductRuntimeConfig } from '../../src/product/config.js';
 import { notifyOnResolve } from '../../src/product/default-adapters.js';
-import {
-  createConfiguredAdapterRegistry,
-  ProductAdapterFactoryRegistry,
-} from '../../src/product/adapter-factories.js';
-import type { DecisionNodeStore } from '../../src/product/approval/decision-node-store.js';
+import type { ApprovalDecisionStore } from '../../src/adapters/approval-surfaces/slack-reactions/slack-reactions-approval-surface.js';
 
 const directories: string[] = [];
 
@@ -52,7 +48,7 @@ function config(stateDir: string) {
   });
 }
 
-function registry(): AdapterRegistry {
+function registry(onPull?: () => void): AdapterRegistry {
   const validateConfig = () => ({ ok: true, errors: [] });
   const healthCheck = async () => ({
     status: 'healthy' as const,
@@ -67,7 +63,10 @@ function registry(): AdapterRegistry {
     },
     validateConfig,
     healthCheck,
-    pull: async () => ({ meetings: [] }),
+    pull: async () => {
+      onPull?.();
+      return { meetings: [] };
+    },
   };
   const decisionProcessor: DecisionProcessorAdapter = {
     identity: {
@@ -134,7 +133,7 @@ function sweepReport(
 }
 
 describe('organization record submission sweep wiring', () => {
-  it('sweeps once at startup and again at the start of every cycle', async () => {
+  it('sweeps once per cycle without a redundant startup sweep', async () => {
     const stateDir = stateDirectory();
     const sweeps: number[] = [];
     const composition = await prepareProductComposition(
@@ -149,10 +148,10 @@ describe('organization record submission sweep wiring', () => {
       },
     );
     try {
-      expect(sweeps).toEqual([1]);
+      expect(sweeps).toEqual([]);
       const first = await composition.runOnce();
       const second = await composition.runOnce();
-      expect(sweeps).toEqual([1, 2, 3]);
+      expect(sweeps).toEqual([1, 2]);
       expect(first.organization_record).toMatchObject({
         ok: true,
         detail: null,
@@ -180,8 +179,6 @@ describe('organization record submission sweep wiring', () => {
       },
     );
     try {
-      // Startup already survived a throwing sweep, which is the first proof.
-      expect(attempts).toBe(1);
       const cycle = await composition.runOnce();
 
       // Organization ingest is a second egress path, never a gate: the local
@@ -191,6 +188,46 @@ describe('organization record submission sweep wiring', () => {
         ok: false,
         detail: 'organization authority is unreachable',
         alerts: 0,
+      });
+      expect(attempts).toBe(1);
+    } finally {
+      await composition.close();
+    }
+  });
+
+  it('bounds a hanging sweep without holding up local source work', async () => {
+    const stateDir = stateDirectory();
+    let sweepAborted = false;
+    let pulledBeforeAbort = false;
+    const composition = await prepareProductComposition(
+      config(stateDir),
+      registry(() => {
+        pulledBeforeAbort = !sweepAborted;
+      }),
+      {
+        classifyStateFilesystem: async () => ({ kind: 'local', raw: 'apfs' }),
+        organizationRecordSweepTimeoutMs: 25,
+        organizationRecordSweep: async ({ signal }) => {
+          signal?.addEventListener('abort', () => {
+            sweepAborted = true;
+          });
+          return await new Promise<ProductOrganizationRecordSweepReport>(
+            () => undefined,
+          );
+        },
+      },
+    );
+    try {
+      const startedAt = Date.now();
+      const cycle = await composition.runOnce();
+
+      expect(Date.now() - startedAt).toBeLessThan(2_000);
+      expect(pulledBeforeAbort).toBe(true);
+      expect(sweepAborted).toBe(true);
+      expect(cycle.ok).toBe(true);
+      expect(cycle.organization_record).toMatchObject({
+        ok: false,
+        detail: 'organization record sweep timed out after 25ms',
       });
     } finally {
       await composition.close();
@@ -244,17 +281,15 @@ describe('organization record submission sweep wiring', () => {
     }
   });
 
-  it('bounds the reported summary and shows a persistent alert on the next cycle', async () => {
+  it('bounds the reported alert summary', async () => {
     const stateDir = stateDirectory();
-    let sweeps = 0;
     const composition = await prepareProductComposition(
       config(stateDir),
       registry(),
       {
         classifyStateFilesystem: async () => ({ kind: 'local', raw: 'apfs' }),
-        organizationRecordSweep: async () => {
-          sweeps += 1;
-          return sweepReport({
+        organizationRecordSweep: async () =>
+          sweepReport({
             ok: false,
             examined: 6,
             skipped: 6,
@@ -263,24 +298,18 @@ describe('organization record submission sweep wiring', () => {
               approval_id: 'a'.repeat(64),
               detail: `node ${index} could not be read`,
             })),
-          });
-        },
+          }),
       },
     );
     try {
-      // The startup sweep is best effort and reports nowhere; the condition is
-      // recomputed from durable node state, so it surfaces on the next cycle.
-      expect(sweeps).toBe(1);
-      const first = await composition.runOnce();
-      const second = await composition.runOnce();
+      const cycle = await composition.runOnce();
 
-      expect(first.organization_record?.alerts).toBe(6);
-      expect(first.organization_record?.detail).toBe(
+      expect(cycle.organization_record?.alerts).toBe(6);
+      expect(cycle.organization_record?.detail).toBe(
         'node_unreadable [aaaaaaaaaaaa]: node 0 could not be read; ' +
           'node_unreadable [aaaaaaaaaaaa]: node 1 could not be read; ' +
           'node_unreadable [aaaaaaaaaaaa]: node 2 could not be read; +3 more',
       );
-      expect(second.organization_record).toEqual(first.organization_record);
     } finally {
       await composition.close();
     }
@@ -301,7 +330,7 @@ describe('organization record submission sweep wiring', () => {
     }
   });
 
-  it('fires the post-resolve hook after a terminal local resolution', async () => {
+  it('fires the post-resolve hook after persistence without risking resolution', async () => {
     let fired = 0;
     const resolvedView = {
       approval_id: 'a'.repeat(64),
@@ -330,7 +359,7 @@ describe('organization record submission sweep wiring', () => {
       published: [],
     };
     const calls: string[] = [];
-    const store = {
+    const store: ApprovalDecisionStore = {
       ensureRequested: async () => {
         calls.push('ensureRequested');
         return resolvedView;
@@ -345,14 +374,13 @@ describe('organization record submission sweep wiring', () => {
       },
     };
 
-    const wrapped = notifyOnResolve(
-      store as unknown as DecisionNodeStore,
-      () => {
-        // The hook only ever runs after the durable write returned.
-        expect(calls).toEqual(['resolve']);
-        fired += 1;
-      },
-    );
+    const wrapped = notifyOnResolve(store, () => {
+      // The hook only runs after the durable write returned, and its failure
+      // cannot roll that local resolution back.
+      expect(calls).toEqual(['resolve']);
+      fired += 1;
+      throw new Error('sweep scheduling failed');
+    });
     const resolved = await wrapped.resolve({
       approvalId: resolvedView.approval_id,
       status: 'approved',
@@ -365,71 +393,5 @@ describe('organization record submission sweep wiring', () => {
     // Reading is untouched: only a terminal resolution offers ingest a turn.
     await wrapped.ensureRequested({} as never);
     expect(fired).toBe(1);
-  });
-
-  it('never lets a throwing hook fail a recorded human decision', async () => {
-    const resolvedView = { approval_id: 'b'.repeat(64) } as never;
-    const wrapped = notifyOnResolve(
-      {
-        ensureRequested: async () => resolvedView,
-        recordPublished: async () => resolvedView,
-        resolve: async () => resolvedView,
-      } as unknown as DecisionNodeStore,
-      () => {
-        throw new Error('sweep scheduling failed');
-      },
-    );
-
-    await expect(
-      wrapped.resolve({
-        approvalId: 'b'.repeat(64),
-        status: 'rejected',
-        reviewedBy: 'Ada Founder',
-        surface: 'slack-reactions',
-      }),
-    ).resolves.toBe(resolvedView);
-  });
-
-  it('forwards the post-resolve hook through the adapter factory context', async () => {
-    const stateDir = stateDirectory();
-    let received: (() => void) | undefined;
-    const factories = new ProductAdapterFactoryRegistry();
-    factories.register({
-      kind: 'meeting-source',
-      adapter_id: 'fixture-meetings',
-      create: () => registry().getMeetingSource({
-        adapter_id: 'fixture-meetings',
-        instance_id: 'primary',
-        settings: {},
-      })!,
-    });
-    factories.register({
-      kind: 'decision-processor',
-      adapter_id: 'fixture-processor',
-      create: (_config, context) => {
-        received = context.afterDecisionResolved;
-        return registry().getDecisionProcessor({
-          adapter_id: 'fixture-processor',
-          instance_id: 'primary',
-          settings: {},
-        })!;
-      },
-    });
-    factories.register({
-      kind: 'delivery-surface',
-      adapter_id: 'fixture-delivery',
-      create: () => registry().getDeliverySurface({
-        adapter_id: 'fixture-delivery',
-        instance_id: 'team',
-        settings: {},
-      })!,
-    });
-    const hook = (): void => undefined;
-
-    await createConfiguredAdapterRegistry(config(stateDir), factories, {
-      afterDecisionResolved: hook,
-    });
-
-    expect(received).toBe(hook);
   });
 });

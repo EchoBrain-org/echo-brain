@@ -128,20 +128,14 @@ export interface PrepareProductCompositionOptions {
   operationDeadlines?: Partial<CoreCycleDeadlines>;
   accessGate?: ProductAccessGate;
   /**
-   * Best-effort organization record submission sweep. Runs once at composition
-   * startup and at the start of every cycle, before local product work. It is
-   * deliberately not allowed to fail either: an organization that cannot be
-   * reached must never stop a member machine from processing its own meetings.
-   *
-   * The startup sweep's report is intentionally dropped — there is no cycle to
-   * attach it to, and refusing to compose over it would make an unreachable
-   * organization fatal to local work. Nothing is lost: the submitter recomputes
-   * every alert from durable node state, so a condition that really persists
-   * reappears on the very next cycle, where it is reported.
+   * Best-effort organization record submission sweep. It starts beside local
+   * work on every cycle and cannot change the local cycle verdict.
    */
   organizationRecordSweep?: (
     options: ProductCycleRunOptions,
   ) => Promise<ProductOrganizationRecordSweepReport>;
+  /** Total sweep deadline; primarily exposed to keep host tests fast. */
+  organizationRecordSweepTimeoutMs?: number;
   /** Command-scoped resources not owned by the CoreStateStore. */
   closeResources?: () => void | Promise<void>;
 }
@@ -268,6 +262,7 @@ export async function assertProductAccess(
 /** Enough alerts to act on, few enough that one cycle line stays readable. */
 const MAX_REPORTED_RECORD_ALERTS = 3;
 const MAX_REPORTED_RECORD_ALERT_DETAIL_CHARACTERS = 200;
+const DEFAULT_ORGANIZATION_RECORD_SWEEP_TIMEOUT_MS = 10_000;
 
 const NO_RECORD_SWEEP_COUNTS = Object.freeze({
   examined: 0,
@@ -325,17 +320,41 @@ async function sweepOrganizationRecord(
       ) => Promise<ProductOrganizationRecordSweepReport>)
     | undefined,
   runOptions: ProductCycleRunOptions,
+  timeoutMs: number,
 ): Promise<ProductOrganizationRecordCycleResult | undefined> {
   if (sweep === undefined) return undefined;
+  const controller = new AbortController();
+  const timeout = new Error(
+    `organization record sweep timed out after ${timeoutMs}ms`,
+  );
+  const timer = setTimeout(() => controller.abort(timeout), timeoutMs);
+  const onParentAbort = (): void => controller.abort(runOptions.signal?.reason);
+  if (runOptions.signal?.aborted === true) onParentAbort();
+  else runOptions.signal?.addEventListener('abort', onParentAbort, { once: true });
+  const aborted = controller.signal.aborted
+    ? Promise.reject(controller.signal.reason)
+    : new Promise<never>((_resolve, reject) => {
+        controller.signal.addEventListener(
+          'abort',
+          () => reject(controller.signal.reason),
+          { once: true },
+        );
+      });
   let report: ProductOrganizationRecordSweepReport;
   try {
-    report = await sweep(runOptions);
+    report = await Promise.race([
+      sweep({ ...runOptions, signal: controller.signal }),
+      aborted,
+    ]);
   } catch (error) {
     return {
       ok: false,
       detail: (error as Error).message,
       ...NO_RECORD_SWEEP_COUNTS,
     };
+  } finally {
+    clearTimeout(timer);
+    runOptions.signal?.removeEventListener('abort', onParentAbort);
   }
   if (report === null || typeof report !== 'object') {
     return {
@@ -466,11 +485,14 @@ export async function prepareProductComposition(
     // the access gate, providers, state, approvals, or any caller callback.
     assertRetiredFounderProvenanceRefused(config.state_dir);
     await assertProductAccess(options.accessGate);
-    // Every cycle sweeps first: a decision approved between cycles reaches the
-    // organization on the next tick even if its post-resolve hook was lost.
-    const organizationRecord = await sweepOrganizationRecord(
+    // Start the bounded secondary egress beside local work. Awaiting only when
+    // the report is assembled keeps an unavailable organization off the local
+    // processing critical path.
+    const organizationRecord = sweepOrganizationRecord(
       options.organizationRecordSweep,
       runOptions,
+      options.organizationRecordSweepTimeoutMs ??
+        DEFAULT_ORGANIZATION_RECORD_SWEEP_TIMEOUT_MS,
     );
     const sources: ProductSourceCycleResult[] = [];
     for (const source of adapters.meetingSources) {
@@ -501,12 +523,9 @@ export async function prepareProductComposition(
         });
       }
     }
-    return summarize(sources, organizationRecord);
+    return summarize(sources, await organizationRecord);
   };
 
-  // The startup sweep: resolved-without-receipt nodes left by an earlier
-  // process reach the organization before the first cycle runs.
-  await sweepOrganizationRecord(options.organizationRecordSweep, {});
   options.accessGate?.start?.();
   return {
     paths,
