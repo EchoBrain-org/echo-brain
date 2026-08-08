@@ -1,5 +1,8 @@
 export { validateOrganizationAuthorityDescriptorResponse } from '@echo-brain/organization-api';
-export type { OrganizationInstallationAccessDecisionV1 } from '@echo-brain/organization-protocol';
+export type {
+  OrganizationInstallationAccessDecisionV1,
+  PinnedOrganizationAuthority,
+} from '@echo-brain/organization-protocol';
 export {
   organizationEnrollmentGrantSha256,
   verifyOrganizationAuthorityPin,
@@ -58,5 +61,12 @@ export type {
   CreateLocalOrganizationRuntimeOptions,
   LocalOrganizationRuntime,
 } from './composition.js';
+export * from './record/index.js';
+export { HttpOrganizationRecordClient } from './client/http-organization-record-client.js';
+export type {
+  HttpOrganizationRecordClientOptions,
+  OrganizationRecordSubmissionOutcome,
+  OrganizationRecordSubmissionRequest,
+} from './client/http-organization-record-client.js';
 export { OrganizationRuntimeAccessController } from './runtime-access-controller.js';
 export type { OrganizationRuntimeAccessControllerOptions } from './runtime-access-controller.js';

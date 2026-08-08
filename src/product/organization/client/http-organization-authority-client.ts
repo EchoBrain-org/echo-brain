@@ -74,7 +74,10 @@ export class OrganizationAuthorityTransportError extends Error {
   }
 }
 
-function normalizeBaseUrl(value: string, allowInsecureLoopback: boolean): URL {
+export function normalizeOrganizationAuthorityBaseUrl(
+  value: string,
+  allowInsecureLoopback: boolean,
+): URL {
   let url: URL;
   try {
     url = new URL(value);
@@ -117,6 +120,125 @@ function canonicalGrantBase64Url(grant: Uint8Array): string {
   return Buffer.from(grant).toString('base64url');
 }
 
+/**
+ * Custom fetch and a pinned CA are mutually exclusive: one replaces the whole
+ * transport, the other configures the built-in one.
+ */
+export function resolveOrganizationAuthorityFetch(options: {
+  fetch?: typeof fetch;
+  authorityCaPem?: string;
+}): typeof fetch {
+  if (options.fetch !== undefined && options.authorityCaPem !== undefined) {
+    throw new Error(
+      'organization authority custom fetch and CA PEM are mutually exclusive',
+    );
+  }
+  const impl =
+    options.fetch ??
+    (options.authorityCaPem === undefined
+      ? globalThis.fetch
+      : createOrganizationAuthorityCaFetch(options.authorityCaPem));
+  if (typeof impl !== 'function') {
+    throw new Error('organization authority HTTP transport is unavailable');
+  }
+  return impl;
+}
+
+/**
+ * Reads one bounded JSON response body.
+ *
+ * `maximumBytes` is a per-call allowance so a single route may exceed the
+ * generic client limit without raising it for every other response. The
+ * organization record route is the only caller that passes anything else.
+ */
+export async function readBoundedJsonResponse(
+  response: Response,
+  maximumBytes: number,
+): Promise<unknown> {
+  const contentType = response.headers.get('content-type');
+  if (
+    contentType === null ||
+    !/^application\/json(?:\s*;\s*charset=utf-8)?$/i.test(contentType)
+  ) {
+    throw new OrganizationAuthorityTransportError(
+      'invalid_response',
+      'organization authority returned a non-JSON response',
+      response.status,
+    );
+  }
+  const declaredLength = response.headers.get('content-length');
+  if (
+    declaredLength !== null &&
+    (!/^\d+$/.test(declaredLength) || Number(declaredLength) > maximumBytes)
+  ) {
+    throw new OrganizationAuthorityTransportError(
+      'response_too_large',
+      'organization authority response exceeded its size limit',
+      response.status,
+    );
+  }
+  if (response.body === null) {
+    throw new OrganizationAuthorityTransportError(
+      'invalid_response',
+      'organization authority returned an empty response',
+      response.status,
+    );
+  }
+  const reader = response.body.getReader();
+  const chunks: Buffer[] = [];
+  let total = 0;
+  try {
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      total += value.byteLength;
+      if (total > maximumBytes) {
+        await reader.cancel();
+        throw new OrganizationAuthorityTransportError(
+          'response_too_large',
+          'organization authority response exceeded its size limit',
+          response.status,
+        );
+      }
+      chunks.push(Buffer.from(value));
+    }
+  } catch (error) {
+    if (error instanceof OrganizationAuthorityTransportError) throw error;
+    throw new OrganizationAuthorityTransportError(
+      'transport_failed',
+      'organization authority response could not be read',
+      response.status,
+    );
+  } finally {
+    reader.releaseLock();
+  }
+  const bytes = Buffer.concat(chunks, total);
+  if (bytes.byteLength === 0 || bytes.byteLength > maximumBytes) {
+    throw new OrganizationAuthorityTransportError(
+      'invalid_response',
+      'organization authority returned an empty or oversized response',
+      response.status,
+    );
+  }
+  try {
+    return JSON.parse(
+      new TextDecoder('utf-8', { fatal: true }).decode(bytes),
+    ) as unknown;
+  } catch {
+    throw new OrganizationAuthorityTransportError(
+      'invalid_response',
+      'organization authority returned invalid JSON',
+      response.status,
+    );
+  }
+}
+
+export function invalidOrganizationAuthorityResponse(
+  status: number,
+): OrganizationAuthorityTransportError {
+  return invalidResponse(status);
+}
+
 function invalidResponse(status: number): OrganizationAuthorityTransportError {
   return new OrganizationAuthorityTransportError(
     'invalid_response',
@@ -153,23 +275,11 @@ export class HttpOrganizationAuthorityClient implements OrganizationAuthorityCli
   private readonly timeoutMs: number;
 
   constructor(options: HttpOrganizationAuthorityClientOptions) {
-    this.baseUrl = normalizeBaseUrl(
+    this.baseUrl = normalizeOrganizationAuthorityBaseUrl(
       options.baseUrl,
       options.allowInsecureLoopback === true,
     );
-    if (options.fetch !== undefined && options.authorityCaPem !== undefined) {
-      throw new Error(
-        'organization authority custom fetch and CA PEM are mutually exclusive',
-      );
-    }
-    this.fetchImpl =
-      options.fetch ??
-      (options.authorityCaPem === undefined
-        ? globalThis.fetch
-        : createOrganizationAuthorityCaFetch(options.authorityCaPem));
-    if (typeof this.fetchImpl !== 'function') {
-      throw new Error('organization authority HTTP transport is unavailable');
-    }
+    this.fetchImpl = resolveOrganizationAuthorityFetch(options);
     this.timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
     if (!Number.isSafeInteger(this.timeoutMs) || this.timeoutMs <= 0) {
       throw new Error('organization authority timeout must be positive');
@@ -180,84 +290,8 @@ export class HttpOrganizationAuthorityClient implements OrganizationAuthorityCli
     return new URL(path, this.baseUrl).href;
   }
 
-  private async readJson(response: Response): Promise<unknown> {
-    const contentType = response.headers.get('content-type');
-    if (
-      contentType === null ||
-      !/^application\/json(?:\s*;\s*charset=utf-8)?$/i.test(contentType)
-    ) {
-      throw new OrganizationAuthorityTransportError(
-        'invalid_response',
-        'organization authority returned a non-JSON response',
-        response.status,
-      );
-    }
-    const declaredLength = response.headers.get('content-length');
-    if (
-      declaredLength !== null &&
-      (!/^\d+$/.test(declaredLength) ||
-        Number(declaredLength) > MAX_RESPONSE_BYTES)
-    ) {
-      throw new OrganizationAuthorityTransportError(
-        'response_too_large',
-        'organization authority response exceeded its size limit',
-        response.status,
-      );
-    }
-    if (response.body === null) {
-      throw new OrganizationAuthorityTransportError(
-        'invalid_response',
-        'organization authority returned an empty response',
-        response.status,
-      );
-    }
-    const reader = response.body.getReader();
-    const chunks: Buffer[] = [];
-    let total = 0;
-    try {
-      for (;;) {
-        const { done, value } = await reader.read();
-        if (done) break;
-        total += value.byteLength;
-        if (total > MAX_RESPONSE_BYTES) {
-          await reader.cancel();
-          throw new OrganizationAuthorityTransportError(
-            'response_too_large',
-            'organization authority response exceeded its size limit',
-            response.status,
-          );
-        }
-        chunks.push(Buffer.from(value));
-      }
-    } catch (error) {
-      if (error instanceof OrganizationAuthorityTransportError) throw error;
-      throw new OrganizationAuthorityTransportError(
-        'transport_failed',
-        'organization authority response could not be read',
-        response.status,
-      );
-    } finally {
-      reader.releaseLock();
-    }
-    const bytes = Buffer.concat(chunks, total);
-    if (bytes.byteLength === 0 || bytes.byteLength > MAX_RESPONSE_BYTES) {
-      throw new OrganizationAuthorityTransportError(
-        'invalid_response',
-        'organization authority returned an empty or oversized response',
-        response.status,
-      );
-    }
-    try {
-      return JSON.parse(
-        new TextDecoder('utf-8', { fatal: true }).decode(bytes),
-      ) as unknown;
-    } catch {
-      throw new OrganizationAuthorityTransportError(
-        'invalid_response',
-        'organization authority returned invalid JSON',
-        response.status,
-      );
-    }
+  private readJson(response: Response): Promise<unknown> {
+    return readBoundedJsonResponse(response, MAX_RESPONSE_BYTES);
   }
 
   private async request<T>(

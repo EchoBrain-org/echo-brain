@@ -9,3 +9,10 @@ the enrollment/state layers verify every signed authority result.
 Only a `409` from the access-lease endpoint is interpreted as the stale-state
 recovery protocol. Conflicts from enrollment and every other endpoint remain
 ordinary rejected requests and cannot be mistaken for an access-state update.
+
+`HttpOrganizationRecordClient` is the one client with its own request allowance:
+256 KiB, matching the authority's route-scoped exemption. Responses retain the
+shared small limit. It also verifies the authority-signed receipt against the
+pinned descriptor and exact envelope bytes before returning it, and maps only
+the exact permanent codes to a terminal rejection; everything else stays
+retryable.

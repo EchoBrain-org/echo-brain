@@ -37,5 +37,25 @@ pinned, product startup and every processing cycle require a current signed
 access lease. The running service renews short leases in the background; an
 expired lease or durable revocation fails closed before adapter contact.
 
+## Organization record submission
+
+`record/` holds the member half of the organization decision record. The
+submitter owns no store of its own: a decision node's write-once slot files are
+the whole state machine, so `sweep()` is safe to repeat from anywhere. It runs
+at composition startup, at the start of every product cycle, and immediately
+after a Slack approval or rejection resolves. A failed sweep never stops the
+local pipeline — organization ingest is a second egress path beside delivery,
+not a gate on it.
+
+`record/*.ts` stays protocol-free and works through injected ports;
+`record/adapters/` holds the concrete protocol-backed envelope builder, and
+`client/http-organization-record-client.ts` the ingest client. An excluded
+source produces no envelope of either event type, and an exclusion list that
+cannot be read exactly stops product startup rather than shipping everything.
+
+`echo-brain approvals` now shows each node's organization-record state beside
+its local decision, including the accepted receipt's position and record hash
+or the terminal rejection code.
+
 Local product files never import the central service. The product package
 bundles only the three shared protocol/API workspaces.
