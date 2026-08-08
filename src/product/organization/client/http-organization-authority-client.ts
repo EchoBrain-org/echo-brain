@@ -233,12 +233,6 @@ export async function readBoundedJsonResponse(
   }
 }
 
-export function invalidOrganizationAuthorityResponse(
-  status: number,
-): OrganizationAuthorityTransportError {
-  return invalidResponse(status);
-}
-
 function invalidResponse(status: number): OrganizationAuthorityTransportError {
   return new OrganizationAuthorityTransportError(
     'invalid_response',

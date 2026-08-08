@@ -532,6 +532,16 @@ function receipt(
   } as unknown as DecisionOrganizationRecordReceipt;
 }
 
+function rewriteJsonSlot(
+  path: string,
+  update: (slot: Record<string, unknown>) => void,
+): void {
+  const slot = JSON.parse(readFileSync(path, 'utf8')) as Record<string, unknown>;
+  update(slot);
+  rmSync(path);
+  writeFileSync(path, `${JSON.stringify(slot)}\n`, { mode: 0o600 });
+}
+
 describe('decision node organization record state', () => {
   it('persists the typed source locator on new requested slots', async () => {
     const root = newRoot('decision-store-source-locator-');
@@ -811,6 +821,104 @@ describe('decision node organization record state', () => {
     ) as { surface: string; reference: unknown };
     expect(slot.surface).toBe('organization-record');
     expect(slot.reference).toEqual(filed);
+  });
+
+  it.each([
+    [
+      'another approval id',
+      (slot: Record<string, unknown>) => {
+        slot['idempotency_key'] = 'b'.repeat(64);
+      },
+      /uses another idempotency key/,
+    ],
+    [
+      'the opposite resolved action',
+      (slot: Record<string, unknown>) => {
+        slot['record_event_type'] = 'rejection';
+      },
+      /does not match its approved resolution/,
+    ],
+  ])(
+    'refuses a frozen envelope for %s on read',
+    async (_label, mutate, error) => {
+      const root = newRoot('decision-store-envelope-tampered-');
+      const store = recordStore(root);
+      const node = await resolvedNode(store);
+      await store.createOrganizationRecordEnvelope(
+        envelopeInput(node.approval_id),
+      );
+      const path = join(
+        root,
+        'decisions',
+        node.approval_id,
+        'organization-record-envelope.json',
+      );
+      rewriteJsonSlot(path, mutate);
+
+      await expect(
+        recordStore(root).getState(request().processing_key),
+      ).rejects.toThrow(error);
+    },
+  );
+
+  it('refuses a receipt copied from another frozen envelope on read', async () => {
+    const root = newRoot('decision-store-receipt-cross-envelope-');
+    const store = recordStore(root);
+    const node = await resolvedNode(store);
+    await store.createOrganizationRecordEnvelope(
+      envelopeInput(node.approval_id),
+    );
+    await store.recordOrganizationRecordReceipt({
+      approvalId: node.approval_id,
+      receipt: receipt(node.approval_id),
+    });
+    const path = join(
+      root,
+      'decisions',
+      node.approval_id,
+      'published-organization-record.json',
+    );
+    rewriteJsonSlot(path, (slot) => {
+      const copied = slot['reference'] as Record<string, unknown>;
+      copied['envelope_id'] =
+        'env_00000000-0000-4000-8000-000000000002';
+      copied['envelope_sha256'] = `sha256:${'c'.repeat(64)}`;
+      copied['idempotency_key'] = 'b'.repeat(64);
+    });
+
+    await expect(
+      recordStore(root).getState(request().processing_key),
+    ).rejects.toThrow(/receipt does not bind its frozen envelope/);
+  });
+
+  it('refuses a permanent rejection copied from another frozen envelope on read', async () => {
+    const root = newRoot('decision-store-rejection-cross-envelope-');
+    const store = recordStore(root);
+    const node = await resolvedNode(store);
+    await store.createOrganizationRecordEnvelope(
+      envelopeInput(node.approval_id),
+    );
+    await store.recordOrganizationRecordRejection({
+      approvalId: node.approval_id,
+      reasonCode: 'signature_invalid',
+      reason: 'installation signature did not verify',
+    });
+    const path = join(
+      root,
+      'decisions',
+      node.approval_id,
+      'organization-record-rejected.json',
+    );
+    rewriteJsonSlot(path, (slot) => {
+      slot['envelope_id'] =
+        'env_00000000-0000-4000-8000-000000000002';
+      slot['envelope_sha256'] = `sha256:${'c'.repeat(64)}`;
+      slot['idempotency_key'] = 'b'.repeat(64);
+    });
+
+    await expect(
+      recordStore(root).getState(request().processing_key),
+    ).rejects.toThrow(/rejection does not bind its frozen envelope/);
   });
 
   it.each([

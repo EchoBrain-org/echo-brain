@@ -560,6 +560,40 @@ function foldOrganizationRecord(
       `decision node has an organization record outcome without its frozen envelope (${approvalId})`,
     );
   }
+  if (envelope !== null) {
+    if (envelope.idempotency_key !== approvalId) {
+      throw new Error(
+        `decision node organization record envelope uses another idempotency key (${approvalId})`,
+      );
+    }
+    if (events.resolved === undefined) {
+      throw new Error(
+        `decision node has an organization record envelope without a resolution (${approvalId})`,
+      );
+    }
+    const expectedEventType =
+      events.resolved.status === 'approved' ? 'approval' : 'rejection';
+    if (envelope.record_event_type !== expectedEventType) {
+      throw new Error(
+        `decision node organization record envelope does not match its ${events.resolved.status} resolution (${approvalId})`,
+      );
+    }
+    for (const [label, outcome] of [
+      ['receipt', receipt],
+      ['rejection', rejection],
+    ] as const) {
+      if (
+        outcome !== null &&
+        (outcome.envelope_id !== envelope.envelope_id ||
+          outcome.envelope_sha256 !== envelope.envelope_sha256 ||
+          outcome.idempotency_key !== envelope.idempotency_key)
+      ) {
+        throw new Error(
+          `decision node organization record ${label} does not bind its frozen envelope (${approvalId})`,
+        );
+      }
+    }
+  }
   const status: DecisionOrganizationRecordStatus =
     rejection !== null
       ? 'rejected'
