@@ -201,11 +201,11 @@ npm run organization-authority:cli -- install-integrations \
 The command checks the existing Authority identity, acquires the same
 authenticated singleton ownership used by `serve`, and installs the new
 database without replacing an anchored file. It durably publishes and verifies
-the database-marker pair before committing the immutable Authority anchor, so a
-retry can finish an interrupted target-schema installation. A completed
-repetition is read-only, while partial legacy or mismatched anchored state is
-refused. Missing or mismatched integration state always makes `serve` fail
-closed.
+the database-marker pair before committing the immutable Authority anchor. A
+completed repetition is read-only. Partial legacy state, a partial unanchored
+record-database pair, or mismatched anchored state is refused rather than
+guessed at; minimum v1 has no automatic recovery/rebuild command. Missing or
+mismatched integration state always makes `serve` fail closed.
 
 The authority remains a foreground process. Process restart and persistent
 volume backup belong to the container or service manager.

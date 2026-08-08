@@ -20,8 +20,16 @@ platform. It exists to prove two customer-visible behaviors:
 | --- | --- | --- |
 | Organization Authority | Customer | Principal, membership, role, installation, and revocation truth |
 | Organization control plane | Customer | Provider links, connection handles, adapter bindings, direct grants, and integration audit |
+| Organization record | Customer | The append-only log of human-approved decisions and rejections, and the deterministic graph derived from it |
 | Echo Brain product | Customer | Meetings, decisions, local processing, and delivery evidence |
 | Future ECHO entitlement | ECHO | Pseudonymous organization-wide deny/revoke only |
+
+Decision ownership is split deliberately. The product owns the meeting and the
+local decision node; the organization record owns the org-wide act once a human
+approved or rejected it. The control plane owns neither — it holds the
+permission evaluation that authorized the act, and organization-record ingest
+reads that existing `organization_integration_audit` row read-only before it
+appends. No control-plane table exists for records.
 
 The future ECHO entitlement cannot create a customer membership, grant an
 adapter permission, resolve a customer secret, or read customer organization
@@ -211,9 +219,10 @@ The connection and permission service must preserve these rules:
   and opaque approval digest into the installation-signed request. The Authority
   independently requires the bound bot to have authored a message carrying that
   exact approval marker.
-- Never send the product processing key, meeting identifier, meeting content,
-  decision text, or reason text to the Authority. `approval_id` is an
-  irreversible digest used only to name the approval card.
+- The installation-signed `/v1/permission-checks` request never sends the
+  product processing key, meeting identifier, meeting content, decision text,
+  or reason text to the Authority's action-time authorization path.
+  `approval_id` is an irreversible digest used only to name the approval card.
 - Never reuse a provider-event result as authorization. Every retry rechecks
   current installation, membership, link, binding, grant, bot identity,
   message marker, and conflicting reactions before appending a new audit
