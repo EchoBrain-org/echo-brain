@@ -10,6 +10,13 @@ export const ORGANIZATION_API_AUTHORITY_DESCRIPTOR_PATH =
 export const ORGANIZATION_API_ENROLLMENTS_PATH = '/v1/enrollments';
 export const ORGANIZATION_API_ACCESS_LEASES_PATH = '/v1/access-leases';
 export const ORGANIZATION_API_PERMISSION_CHECKS_PATH = '/v1/permission-checks';
+/**
+ * The organization decision record ingest path. It is the only route bounded by
+ * MAX_ORGANIZATION_RECORD_API_BODY_BYTES — the canonical-envelope contract plus
+ * the exact request-wrapper bytes; every other route keeps the shared
+ * MAX_ORGANIZATION_API_BODY_BYTES limit.
+ */
+export const ORGANIZATION_API_RECORD_ENVELOPES_PATH = '/v1/record-envelopes';
 export const ORGANIZATION_API_SLACK_LINK_CHALLENGES_PATH =
   '/v1/integration-links/slack/challenges';
 export const ORGANIZATION_API_SLACK_LINK_COMPLETIONS_PATH =

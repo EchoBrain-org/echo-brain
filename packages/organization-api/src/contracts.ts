@@ -9,6 +9,8 @@ import type {
   OrganizationEnrollmentRequestV1,
   OrganizationInstallationAccessStateV1,
   OrganizationMembershipTypeV1,
+  OrganizationRecordEnvelopeV1,
+  OrganizationRecordReceiptV1,
 } from '@echo-brain/organization-protocol';
 
 export type OrganizationApiSha256Digest = Sha256Digest;
@@ -373,3 +375,29 @@ export interface OrganizationApiErrorV1 {
     message: string;
   };
 }
+
+/** The signed envelope is the whole request; nothing else is submitted with it. */
+export interface SubmitOrganizationRecordEnvelopeRequestV1 {
+  record_envelope: OrganizationRecordEnvelopeV1;
+}
+
+/**
+ * The authority's answer to one accepted submission. A replayed envelope
+ * returns the stored original receipt unchanged, so the submitter cannot tell
+ * a fresh append from a retry -- and does not need to.
+ */
+export interface AcceptedOrganizationRecordV1 {
+  record_receipt: OrganizationRecordReceiptV1;
+}
+
+/**
+ * Terminal ingest outcomes. A code outside this set is transient: the
+ * submitter keeps its frozen envelope and retries on the next cycle rather
+ * than writing a permanent-rejection slot.
+ */
+export type OrganizationRecordRejectionCodeV1 =
+  | 'record_envelope_invalid'
+  | 'record_envelope_too_large'
+  | 'record_signature_invalid'
+  | 'record_authorization_invalid'
+  | 'record_idempotency_conflict';
