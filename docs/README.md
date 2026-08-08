@@ -17,7 +17,7 @@ The rest are subordinate deep-dives into one part of that map:
   a new adapter must satisfy.
 - [Product runtime](architecture/product-runtime.md) — the local host around
   the core: composition, durable state, lifecycle, and safety.
-- [Identity and onboarding](architecture/identity-onboarding-and-federation.md)
+- [Identity and onboarding](architecture/identity-and-onboarding.md)
   — installation identity, organization enrollment and access, and provider
   identity linking.
 - [Organization control plane](architecture/organization-control-plane.md) —
@@ -26,14 +26,20 @@ The rest are subordinate deep-dives into one part of that map:
 
 [Organization brain direction](product/org-brain-direction.md) is stated
 direction rather than current implementation and is labelled as such.
+[Org decision record: append and derive](product/2026-08-07-org-decision-record-append-derive-design.md)
+is the approved design for that direction's append/derive half — approved but
+not yet implemented.
 
 Historical proposals, ceremonies, evidence reports, and implementation diaries
-belong in Git history rather than the active tree. Commit `8be5151` removed
-that machinery; read it with `git show 8be5151^:<path>` for `provenance/`,
-`docs/decisions/`, `docs/runbooks/`, `services/organization-admin-edge/`,
-`release/`, `native/macos/`, `schemas/product/qualification-*.json`, and the
-removed `tools/` entries `phase5/`, `product/`, `release/`,
-`organization-admin-edge/`, `organization-authority/`,
-`audit-pinned-extraction.mjs`, `check-provenance.mjs`,
-`check-successor-provenance.mjs`, `check-dependencies.mjs`, and
-`verify-artifact.mjs`.
+belong in Git history rather than the active tree; approved-but-unimplemented
+designs live in `docs/product/` until implemented or superseded. Commit
+`8be5151` removed that machinery; read it with `git show 8be5151^:<path>` for
+`provenance/`, `docs/decisions/`, `docs/runbooks/`,
+`services/organization-admin-edge/`, `release/`, `native/macos/`,
+`schemas/product/qualification-*.json`, and the removed `tools/` entries
+`phase5/`, `product/`, `release/`, `organization-admin-edge/`,
+`organization-authority/`, `audit-pinned-extraction.mjs`,
+`check-provenance.mjs`, `check-successor-provenance.mjs`,
+`check-dependencies.mjs`, and `verify-artifact.mjs`. Commit `1d9892c`
+subsequently removed `src/product/federation/` and the remaining
+`schemas/product/*.json`; read those with `git show 1d9892c^:<path>`.

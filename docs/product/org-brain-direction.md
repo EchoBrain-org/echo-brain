@@ -1,6 +1,8 @@
 # Organization brain direction
 
-**Status:** Direction, not current implementation
+**Status:** Direction, not current implementation. The append/derive half is
+designed in
+[2026-08-07-org-decision-record-append-derive-design.md](2026-08-07-org-decision-record-append-derive-design.md).
 
 The organization brain is a trusted log of accepted organization records with
 replaceable ways to search and reason over them. Slack and MCP are interfaces,

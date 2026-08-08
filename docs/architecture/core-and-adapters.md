@@ -31,6 +31,7 @@ These directions are executable policy, not naming conventions:
 - `src/product/storage/**` implements core ports over narrow infrastructure.
 - `src/product/machine/**` owns operating-system and installation-bound
   capabilities such as the private-key lifecycle.
+- `src/product/update/**` owns internal-live release application.
 - Local organization code receives the machine signer port and product database
   opener; portable trust primitives come from the shared
   `@echo-brain/federation-protocol` workspace, and no product-local federation

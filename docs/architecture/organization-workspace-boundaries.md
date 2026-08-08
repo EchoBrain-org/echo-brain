@@ -15,6 +15,8 @@ src/
   product/                      CLI, runtime composition, approval, storage
   product/machine/              installation key and OS ports
   product/organization/         enrollment client and access state
+  product/update/               internal-live release channel and update
+                                application
   infrastructure/               atomic writes, SQLite migration, file locks
   util/                         narrow shared primitives
 
@@ -42,8 +44,9 @@ solely from `services/organization-authority/src/composition`. Read
 `services/` as two hosted workspaces, not as two running processes.
 
 The remaining tracked roots support that code rather than shipping in it:
-`product/` holds the root source-boundary manifest, `tools/` the build script
-and the boundary checker, `schemas/` the published JSON Schemas,
+`product/` holds the root source-boundary manifest, `tools/` the build script,
+the boundary checker, and the internal-live release tool, `schemas/` the
+published JSON Schemas,
 `deploy/organization-authority/` the one-machine authority deployment,
 `tests/` the suites mirroring the ownership above, and `docs/` this map and
 its deep-dives.
@@ -125,7 +128,10 @@ Product runtime work rechecks that durable decision before adapter contact and
 renews the short signed lease while running. Authority relocation changes only
 the network route after the exact same pinned descriptor is proved at the new
 origin.
-The authority stores no meeting, decision, reasoning, or embedding data.
+`authority.sqlite` stores no meeting, decision, reasoning, or embedding data.
+(The approved organization-record design hosts the org decision log in the
+authority process as separate database files; the charter above is a
+database-level claim and stays true.)
 
 ## Deployment
 
@@ -138,51 +144,18 @@ Multi-replica operation requires a later persistence and coordination design.
 ## Retired founder-provenance surface
 
 Founder identity cutover never happened on the pilot, and the local
-founder-provenance surface built on it is retired. `src/product/federation/`
-previously held roughly 20,700 lines -- close to 30 percent of the repository's
-production TypeScript -- for a lane no installation ever entered. Approval
-capture, attribution, signed record projection, the federated outbox, export
-bundles, protected independent copies, legacy classification, the bootstrap
-ceremony, and the `openFounderFederationRuntime` composition root are deleted,
-along with the `identity-bootstrap`, `identity-check`, and `export` CLI commands
-and the root federation barrel export. Ordinary composition and approval
-commands no longer open a federation runtime, and the decision
-store's federation capture port is deleted. Ordinary nodes use local metadata;
-historical nodes classified by an own `requested.metadata.federation` field
-are refused rather than projected or mutated.
-
-`src/product/federation/` itself is now deleted entirely -- the historical
-identity-bundle, manifest, registry, policy, credential-guard, and
-provider-identity document code, bootstrap sessions and their exact-shape
-validation, the wire schemas, and every reader that could parse, validate, or
-recover that state. Old founder state is never parsed. What survives is one
-presence-only detector and refusal in
-`src/product/retired-founder-provenance.ts`, plus the packaged build identity
-relocated to `src/product/build-identity.ts`; the product boundary pins the
-deleted module under `removed_internal_roots`.
-The gate exists so a state root left behind by the retired
-mode is detected and refused, never silently downgraded to an unattributed local
-profile. It gates *product work* -- runtime start and every processing cycle --
-and is called by `prepareProductComposition` (at construction and per cycle),
-`DecisionNodeStore`, and the CLI before any directory creation, adapter
-resolution, credential work, provider or Authority contact, approval read or
-mutation, or caller-supplied callback. It deliberately does not gate
-`validate-config`, general `status`, `backup`/`restore`, or `service
-stop`/`status`/`uninstall`, which must stay usable to inspect, preserve, and
-quiesce a fenced profile; `backup` stays available (regular state files are
-copied byte-for-byte, SQLite is captured as a consistent SQLite backup, and
-the adjacent guard stays outside the backup), and
-`restore`'s own preflight refuses founder residue in the live target and in
-the validated backup payload before any pre-backup, marker, staging, or live
-mutation. Fresh central bootstrap is the only forward path.
-It is a fail-closed gate on trusted in-process callers, not a sandbox. It is
-observational only -- `lstat`/`readdir`/path existence, never file content --
-so refusing cannot mutate forensic founder state.
-
-[Identity, onboarding, and federation](identity-onboarding-and-federation.md)
-describes what runs: onboarding and access, plus the retirement fence over the
-deleted local federation lane. Nothing there is a future capability of this
-lane.
+founder-provenance surface built on it — roughly 20,700 lines under
+`src/product/federation/`, close to 30 percent of the repository's production
+TypeScript, for a lane no installation ever entered — is deleted entirely,
+including every reader that could parse, validate, or recover that state.
+What survives is one presence-only detector and refusal in
+`src/product/retired-founder-provenance.ts`, the packaged build identity
+relocated to `src/product/build-identity.ts`, and the product boundary's
+`removed_internal_roots` pin. The refusal gate's runtime behavior — what it
+fences, what stays reachable, and the recovery path — is documented once in
+[Product runtime](product-runtime.md#identity-modes);
+[Identity and onboarding](identity-and-onboarding.md) covers the live
+onboarding/access surface.
 
 The bundled `llm` decision processor is a different case and is not out of
 scope. The composition root registers it alongside `structured-text`, and the

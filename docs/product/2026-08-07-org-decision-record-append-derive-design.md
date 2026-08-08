@@ -606,3 +606,9 @@ zero new runtime dependencies.** Per component:
 - Any UI beyond existing operator surfaces (with the noted exception: the
   `approvals` CLI must learn to show receipt/rejection state, which is in
   scope for the submitter).
+
+Doc updates that land with implementation, not before:
+`organization-workspace-boundaries.md` (services list gains
+`organization-record/`, persistence section gains the two record databases)
+and `organization-control-plane.md` (ownership-table row for decisions gains
+the org record).
