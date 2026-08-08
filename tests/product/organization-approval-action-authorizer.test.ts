@@ -116,6 +116,9 @@ describe('organization approval action authorizer', () => {
         installation_id: ORGANIZATION_IDS.installation,
         request_id: 'pcr_00000000-0000-4000-8000-000000000001',
         approval_id: 'f'.repeat(64),
+        // Carried on the evidence so a later consumer can match an act to its
+        // authorization without re-deriving the signed request bytes.
+        action: 'approve',
         request_sha256: expect.stringMatching(/^sha256:[0-9a-f]{64}$/),
         provider_event_sha256: expect.stringMatching(
           /^sha256:[0-9a-f]{64}$/,
