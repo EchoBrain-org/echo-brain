@@ -381,6 +381,57 @@ adoptions for the interpretive/retrieve passes.
 - Power BI's Promoted/Certified two-tier endorsement for multi-team orgs
   ([Power BI](https://learn.microsoft.com/en-us/power-bi/collaborate-share/service-endorsement-overview)).
 
+### Relationship to ADR practice (deep-dive 2026-08-08)
+
+We adopt ADR's lifecycle rules (immutable after resolution,
+supersession-by-new-record, rejections kept with reasons, append-only central
+log — citations above), not its template: classic ADR templates the *human's
+input*; we template the *record* and take conversation as input, so no one
+fills a form. Beyond the rules, four findings from the primary practice
+literature:
+
+- **The ADR people model falls out of our data for free.** MADR v4
+  distinguishes decision-makers from "consulted" ("everyone whose opinions
+  are sought … and with whom there is a two-way communication") and
+  "informed" ("everyone who is kept up-to-date on progress; and with whom
+  there is a one-way communication")
+  ([MADR](https://adr.github.io/madr/)); Confluence's DACI likewise makes the
+  Approver a named role distinct from Contributors. In classic practice a
+  human maintains these lists per record. Our envelope reconstructs them from
+  facts already captured: decision-maker = verified approver principal;
+  consulted = participant observations on the source meeting; informed =
+  delivery receipts. A future derived view answers "who decided, who was in
+  the room, who was told" per decision with zero form-filling.
+- **Conformance checking is a named future capability.** MADR's Confirmation
+  field — "Describe how the implementation of/compliance with the ADR
+  can/will be confirmed" — and AWS's practice of validating code changes
+  against ADRs in review (and raising tech-debt tasks for non-compliant
+  legacy) translate directly: a retrieve-pass capability that checks a piece
+  of work (a PR, a plan, a draft) against the approved decisions it touches
+  ([AWS best practices](https://docs.aws.amazon.com/prescriptive-guidance/latest/architectural-decision-records/best-practices.html)).
+  Deferred; recorded so the retrieve design inherits it.
+- **Atom size is validated by the founding text.** Nygard: "The whole
+  document should be one or two pages long … Large documents are never kept
+  up to date. Nobody ever reads large documents, either"
+  ([Nygard 2011](https://www.cognitect.com/blog/2011/11/15/documenting-architecture-decisions)).
+  Our unit is smaller still — signal-level atoms — and his requirement that
+  context be captured in "value-neutral" language is met by verbatim quotes
+  rather than paraphrase.
+- **Open submission, gated promotion.** AWS: empowering every member to own
+  records "helps the team adopt those decisions faster instead of treating
+  them as decisions that were imposed from higher levels" (best practices,
+  above). Ours matches structurally: any enrolled installation submits; the
+  gate is approval, not authorship.
+
+**One official practice we explicitly decline:** the UK framework advises
+teams to "Regularly review and update the ADR to reflect any changes in the
+context or consequences of the decision"
+([UK framework](https://www.gov.uk/government/publications/architectural-decision-record-framework/architectural-decision-record-framework))
+— an in-place update. We side with AWS, Azure, and Nygard: records are never
+updated; changed context produces a new linked record. Review-for-staleness
+is kept — that is `reconsider_after` — but its outcome is a new act, never an
+edit.
+
 ## Testing
 
 - Protocol package: canonical serialization and signature round-trip; golden
