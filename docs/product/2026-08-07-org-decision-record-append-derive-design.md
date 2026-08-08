@@ -158,6 +158,24 @@ database, and this property is tested. If derive encounters an unprocessable
 record, it halts with an operator alert rather than skipping; staleness is
 visible, truth untouched.
 
+## Concurrency and freshness
+
+The three machines run simultaneously; only an individual item's journey is
+ordered. Coordination state is the derive cursor alone.
+
+- The log tail is the single serialization point: one append at a time (a
+  sub-millisecond transaction), required anyway for monotonic positions and the
+  hash chain. Member submissions interleave freely; verify and dedupe overlap.
+- Both databases run SQLite WAL mode: derive reads the log while ingest
+  appends; retrieve reads the derived store while derive writes. No reader
+  blocks a writer or vice versa.
+- Derive commits atomically per log record, so readers always see a consistent
+  snapshot — never half an approval's atoms.
+- Latency contract: the approver waits only for the receipt (append round
+  trip); a querier never waits on append or derive and experiences only
+  freshness lag — with the nudge about a second, worst case one poll interval.
+  No stage ever blocks awaiting another stage's completion downstream.
+
 ## Access policy (recorded, not enforced in v1)
 
 The future gatekeeper reads graph facts plus authority membership at query
