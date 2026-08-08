@@ -464,6 +464,60 @@ updated; changed context produces a new linked record. Review-for-staleness
 is kept — that is `reconsider_after` — but its outcome is a new act, never an
 edit.
 
+### Knowledge-graph permission precedents (deep-dive 2026-08-08)
+
+Three credible source families, each contributing one binding requirement to
+the future gatekeeper. Recorded now because the append/derive design already
+guarantees the data they need.
+
+- **Permissions-as-graph (Google Zanzibar, OpenFGA).** Zanzibar stores
+  "trillions of access control lists" as relationship tuples and serves
+  "millions of authorization requests per second" at Google
+  ([Google Research](https://research.google/pubs/zanzibar-googles-consistent-global-authorization-system/));
+  OpenFGA (CNCF incubating) is the open implementation, where permissions
+  derive through relationship chains — e.g. "a user can view a document if
+  they are an owner, viewer or editor of the document or if they are a viewer
+  or owner of the folder/drive that is the parent of the document"
+  ([OpenFGA modeling](https://openfga.dev/docs/modeling/getting-started)).
+  *Requirement inherited:* the gatekeeper's policy is expressed as
+  relationship derivation over facts the graph already holds —
+  `may-read(decision)` derives from `attended(source-meeting)` (restricted)
+  or `member(org)` (unflagged) — never as per-record grants.
+- **Permissions-in-graph (Neo4j).** The only mainstream graph database with
+  shipped edge-level security splits visibility into TRAVERSE (may find) and
+  READ (may see properties), grantable/deniable per node label *and per
+  relationship type*: "Users can only read properties on entities that they
+  are enabled to find in the first place," and a denied entity "will not be
+  found by a Cypher MATCH statement"
+  ([Neo4j operations manual](https://neo4j.com/docs/operations-manual/current/authentication-authorization/privileges-reads/)).
+  *Requirement inherited:* adopt the two-right vocabulary — existence
+  (traverse) and content (read) are separate rights. Our edge rule ("an edge
+  is visible only when both endpoints are") is the traverse right; default
+  remains no-traverse → invisible entirely. The split keeps a softer future
+  policy ("org may know a restricted decision exists, participants may read
+  it") expressible as a choice rather than an accident.
+- **Consistency (Zanzibar's "new enemy problem").** Stale permission checks
+  leak: applying "old ACLs to new content" or missing a revocation's ordering
+  lets a removed reader keep de facto access; Zanzibar prevents this with
+  zookie freshness tokens guaranteeing checks are "at least as fresh" as the
+  content presented ([AuthZed](https://authzed.com/blog/new-enemies)).
+  *Recorded stance:* our single-process, single-database gatekeeper computes
+  every check against live membership at query time — immune by construction,
+  with no caches or replicas to go stale. The trap binds the moment
+  permission caching or replication is ever introduced; zookie-style
+  freshness tokens are the named remedy.
+- **Permission-preserving ingestion (Atlassian Teamwork Graph).** The
+  150-billion-connection graph's public principle — "Data enters the graph
+  with its access controls intact, so AI respects who can see what," with
+  connectors GA "with permissions intact" and admin control over "what
+  third-party data Rovo can ingest"
+  ([Atlassian](https://www.atlassian.com/blog/company-news/teamwork-graph-team-26),
+  [SiliconANGLE](https://siliconangle.com/2026/05/06/atlassian-opens-teamwork-graph-pushes-rovo-agentic-execution-team-26/))
+  — validates our envelope carrying provenance and intent from the moment of
+  ingest. Atlassian's public material is architecture-thin (verified
+  principle, undisclosed mechanics); the operable detail in this design comes
+  from Glean, Neo4j, and Zanzibar instead.
+
 ## Testing
 
 - Protocol package: canonical serialization and signature round-trip; golden
