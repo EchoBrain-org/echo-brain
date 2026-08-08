@@ -11,7 +11,14 @@ import { dirname, isAbsolute, normalize, parse, resolve, sep } from 'node:path';
 import { Ajv, type ErrorObject, type ValidateFunction } from 'ajv';
 import type { AdapterInstanceConfig } from '../core/index.js';
 import { parseJson } from '../util/json.js';
+import {
+  type OrganizationIngestExclusionConfig,
+} from './organization/record/index.js';
 import { spawnSanitizedChild } from './spawn-sanitized-child.js';
+
+export interface OrganizationIngestConfig {
+  exclude: OrganizationIngestExclusionConfig;
+}
 
 interface ProductRuntimeConfigBase {
   schema_version: 1;
@@ -22,6 +29,7 @@ interface ProductRuntimeConfigBase {
   delivery_surfaces: readonly AdapterInstanceConfig[];
   cycle_interval_ms?: number;
   extraction_timeout_ms?: number;
+  organization_ingest?: OrganizationIngestConfig;
 }
 
 export type ProductRuntimeConfig = ProductRuntimeConfigBase &
@@ -197,6 +205,20 @@ export function validateProductRuntimeConfig(
       credentialIssues,
     );
   }
+  let organizationIngest: OrganizationIngestConfig | undefined;
+  if (value.organization_ingest !== undefined) {
+    const exclude = value.organization_ingest
+      .exclude as Partial<OrganizationIngestExclusionConfig>;
+    organizationIngest = deepFreeze({
+      exclude: {
+        sources: (exclude.sources ?? []).map((source) => ({ ...source })),
+        meetings: (exclude.meetings ?? []).map((meeting) => ({
+          ...meeting,
+          source: { ...meeting.source },
+        })),
+      },
+    });
+  }
   // The schema's if/then pairing guarantees approval_mode and
   // approval_surface agree, which the spread cannot express structurally.
   return Object.freeze({
@@ -212,6 +234,9 @@ export function validateProductRuntimeConfig(
     ...(value.approval_surface === undefined
       ? {}
       : { approval_surface: freezeAdapterConfig(value.approval_surface) }),
+    ...(organizationIngest === undefined
+      ? {}
+      : { organization_ingest: organizationIngest }),
   } as ProductRuntimeConfig);
 }
 

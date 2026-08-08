@@ -39,7 +39,43 @@
       "maximum": 600000
     },
     "approval_mode": { "enum": ["manual", "adapter"] },
-    "approval_surface": { "$ref": "#/definitions/adapterInstance" }
+    "approval_surface": { "$ref": "#/definitions/adapterInstance" },
+    "organization_ingest": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["exclude"],
+      "properties": {
+        "exclude": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "sources": {
+              "type": "array",
+              "maxItems": 1000,
+              "items": { "$ref": "#/definitions/ingestSourceExclusion" }
+            },
+            "meetings": {
+              "type": "array",
+              "maxItems": 1000,
+              "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["source", "external_id"],
+                "properties": {
+                  "source": { "$ref": "#/definitions/ingestSourceExclusion" },
+                  "external_id": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 512,
+                    "pattern": "\\S"
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    }
   },
   "allOf": [
     {
@@ -69,6 +105,25 @@
         },
         "credential_ref": { "$ref": "#/definitions/secretReference" },
         "settings": { "type": "object" }
+      }
+    },
+    "ingestSourceExclusion": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["adapter_id", "instance_id"],
+      "properties": {
+        "adapter_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 512,
+          "pattern": "\\S"
+        },
+        "instance_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 512,
+          "pattern": "\\S"
+        }
       }
     },
     "secretReference": {

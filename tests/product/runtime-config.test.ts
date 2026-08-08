@@ -9,6 +9,9 @@ import {
   validateProductRuntimeConfig,
   type ProductRuntimeConfig,
 } from '../../src/product/config.js';
+import {
+  createOrganizationIngestExclusion,
+} from '../../src/product/organization/record/index.js';
 import { runProductCli } from '../../src/product/cli.js';
 
 const directories: string[] = [];
@@ -209,6 +212,109 @@ describe('product runtime configuration', () => {
         validConfig({ extraction_timeout_ms: 300_000 }),
       ),
     ).toMatchObject({ extraction_timeout_ms: 300_000 });
+  });
+
+  it('accepts exact source and meeting organization ingest exclusions', () => {
+    const config = validateProductRuntimeConfig(
+      validConfig({
+        organization_ingest: {
+          exclude: {
+            sources: [{ adapter_id: 'granola', instance_id: 'payroll' }],
+            meetings: [
+              {
+                source: { adapter_id: 'granola', instance_id: 'primary' },
+                external_id: 'meeting-42',
+              },
+            ],
+          },
+        },
+      }),
+    );
+
+    const exclude = config.organization_ingest?.exclude;
+    expect(exclude).toEqual({
+      sources: [{ adapter_id: 'granola', instance_id: 'payroll' }],
+      meetings: [
+        {
+          source: { adapter_id: 'granola', instance_id: 'primary' },
+          external_id: 'meeting-42',
+        },
+      ],
+    });
+    expect(Object.isFrozen(exclude)).toBe(true);
+    expect(Object.isFrozen(exclude?.sources)).toBe(true);
+    expect(Object.isFrozen(exclude?.meetings[0])).toBe(true);
+
+    const exclusion = createOrganizationIngestExclusion(exclude!);
+    // Whole-source exclusion covers every meeting under it.
+    expect(
+      exclusion.excludes({
+        adapter_id: 'granola',
+        instance_id: 'payroll',
+        external_id: 'anything',
+      }),
+    ).toBe(true);
+    // Single-meeting exclusion covers exactly that meeting.
+    expect(
+      exclusion.excludes({
+        adapter_id: 'granola',
+        instance_id: 'primary',
+        external_id: 'meeting-42',
+      }),
+    ).toBe(true);
+    expect(
+      exclusion.excludes({
+        adapter_id: 'granola',
+        instance_id: 'primary',
+        external_id: 'meeting-43',
+      }),
+    ).toBe(false);
+    // Exact match only: no prefix, glob, or case-insensitive matching.
+    expect(
+      exclusion.excludes({
+        adapter_id: 'granola',
+        instance_id: 'payroll-archive',
+        external_id: 'meeting-42',
+      }),
+    ).toBe(false);
+    expect(
+      exclusion.excludes({
+        adapter_id: 'Granola',
+        instance_id: 'payroll',
+        external_id: 'meeting-42',
+      }),
+    ).toBe(false);
+  });
+
+  it.each([
+    ['unknown key', { exclude: { sources: [], groups: [] } }],
+    [
+      'partial source entry',
+      { exclude: { sources: [{ adapter_id: 'granola' }] } },
+    ],
+    [
+      'empty meeting external id',
+      {
+        exclude: {
+          meetings: [
+            {
+              source: { adapter_id: 'granola', instance_id: 'primary' },
+              external_id: '   ',
+            },
+          ],
+        },
+      },
+    ],
+    ['non-array sources', { exclude: { sources: {} } }],
+    ['missing exclude section', {}],
+  ])('fails closed on an invalid exclusion config (%s)', (_label, ingest) => {
+    // An unreadable never-ingest list is never treated as an empty one: the
+    // whole configuration is refused so nothing ships unfiltered.
+    expect(() =>
+      validateProductRuntimeConfig(
+        validConfig({ organization_ingest: ingest }),
+      ),
+    ).toThrow(ProductConfigError);
   });
 
   it('rejects duplicate adapter instances within one capability', () => {
