@@ -519,7 +519,16 @@ describe('organization record persistence lifecycle', () => {
     // payload validation should make this impossible; when it happens anyway
     // the follower must halt rather than skip, and the host must not come up
     // looking healthy on a stuck cursor.
-    const canonicalEnvelope = canonicalJson({ kind: 'not-a-record-envelope' });
+    const envelopeId = 'rec_00000000-0000-4000-8000-000000000000';
+    const installationId = 'ins_00000000-0000-4000-8000-000000000000';
+    const idempotencyKey = 'a'.repeat(64);
+    const canonicalEnvelope = canonicalJson({
+      envelope_id: envelopeId,
+      event_type: 'approval',
+      idempotency_key: idempotencyKey,
+      submitter: { installation_id: installationId },
+      payload: null,
+    });
     const envelopeSha256 = sha256Digest(canonicalEnvelope);
     const recordedAt = '2026-08-08T12:00:00.000Z';
     const recordHash = organizationRecordHash(
@@ -543,17 +552,17 @@ describe('organization record persistence lifecycle', () => {
              'ins_00000000-0000-4000-8000-000000000000', ?, ?, ?, ?, NULL, ?, ?)`,
         )
         .run(
-          'a'.repeat(64),
+          idempotencyKey,
           canonicalEnvelope,
           envelopeSha256,
           canonicalJson(
             organizationRecordReceiptPayload({
               authority_id: config.authority.authority_id,
               organization_id: config.organization.organization_id,
-              envelope_id: 'rec_00000000-0000-4000-8000-000000000000',
+              envelope_id: envelopeId,
               envelope_sha256: envelopeSha256,
-              installation_id: 'ins_00000000-0000-4000-8000-000000000000',
-              idempotency_key: 'a'.repeat(64),
+              installation_id: installationId,
+              idempotency_key: idempotencyKey,
               position: 1,
               record_hash: recordHash,
               recorded_at: recordedAt,
