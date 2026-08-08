@@ -518,6 +518,44 @@ guarantees the data they need.
   principle, undisclosed mechanics); the operable detail in this design comes
   from Glean, Neo4j, and Zanzibar instead.
 
+### Build vs adopt (open-source survey 2026-08-08)
+
+Surveyed credible open-source substitutes for every component against the
+repo's dependency posture (entire external runtime surface: `ajv` +
+`better-sqlite3`; HTTP and crypto are node built-ins). **Verdict: v1 adds
+zero new runtime dependencies.** Per component:
+
+- **Event-sourcing frameworks** (Emmett/@event-driven-io — the credible TS
+  candidate): its SQLite package peer-depends on `sqlite3`, a second native
+  driver beside better-sqlite3; licensing is unresolved (open RFC to
+  dual-license AGPLv3/SSPL); and it covers streams/projections while missing
+  what this log actually is — hash chain, signed receipts, canonical bytes,
+  verified ingest. BUILD: one table, one INSERT path, ~10 lines of chaining.
+- **Merkle/transparency-log libraries**: the real ones (Trillian, Rekor,
+  transparency-dev) are Go servers; the JS ones are static-proof trees for
+  airdrops. A Merkle tree earns its cost only for third-party inclusion
+  proofs, which member-held receipts already cover at this scale. BUILD.
+- **RFC 8785**: keep the in-tree frozen implementation (principle 8 forbids a
+  second). One free adoption: import the RFC co-author's test vectors
+  ([erdtman/canonicalize](https://github.com/erdtman/canonicalize)) as
+  additional golden fixtures — data, not code.
+- **ReBAC engines (future gatekeeper)**: nothing in the Zanzibar family
+  (OpenFGA, SpiceDB, Permify, Keto) embeds in a Node process over SQLite —
+  they are Go servers; casbin embeds but doesn't traverse our graph. The
+  ~100-line SQL derivation check stays the plan, phrased in OpenFGA
+  vocabulary so OpenFGA-as-sidecar is the documented migration if policy
+  count ever outgrows hand-written SQL.
+- **Embedded graph engines (future KG)**: Kùzu is dead (archived 2025-10-10,
+  team acquired by Apple) — treat any Kùzu reference as stale; LadybugDB is
+  the active fork to re-verify if graph traversals ever outgrow SQLite
+  recursive CTEs. At our node/edge counts, SQLite edge tables are the
+  correct architecture, not a compromise. BUILD.
+- **Entity resolution (future interpretive pass)**: the credible ER science
+  (splink, dedupe) is Python; no credible JS framework exists. BUILD
+  deterministic matching (exact email, normalized name) per the determinism
+  discipline; if fuzziness is ever observed to be needed, adopt a single
+  distance function (e.g. talisman module), never a framework.
+
 ## Testing
 
 - Protocol package: canonical serialization and signature round-trip; golden
