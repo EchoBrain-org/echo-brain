@@ -256,8 +256,33 @@ Cloudflare dashboard must show only the intended EC2 connector.
 
 The public descriptor must retain Authority
 `oau_c96b9811-ab11-4c46-96ea-14ccd3bbc2c7` and organization
-`org_2f851bb7-34aa-4989-bb44-b42372f28149`. Finally run one read/refresh check
-from Founder and Audrey before declaring the move complete.
+`org_2f851bb7-34aa-4989-bb44-b42372f28149`. Finally run one real read/refresh
+check from Founder before declaring the infrastructure move complete. Validate
+each other active installation when that machine is available; do not promote
+the next client release until every active installation is qualified.
+
+## Minimum operating checkpoint
+
+After the first successful public refresh:
+
+- Briefly stop cloudflared and the Compose stack, require the Authority
+  container to exit with code 0, run `sync`, and request one encrypted EBS
+  snapshot before immediately restarting both layers. Keep this quiesced
+  snapshot until a restore drill succeeds.
+- Enable one EBS Data Lifecycle Manager policy for volumes tagged
+  `Project=echo-brain`, `Service=echo-authority`, `Environment=prod`, and
+  `Backup=true`. Run daily and retain seven snapshots. These scheduled
+  snapshots are a secondary, crash-consistent safety net; the quiesced snapshot
+  and complete stopped-state archive remain the recovery-grade checkpoints.
+- Monitor `https://authority.echobrain.org/v1/authority-descriptor` with an
+  HTTPS string check for the exact Authority ID above. Alarm after two of three
+  one-minute health periods fail, and treat missing data as unhealthy.
+- Route alarm and recovery notifications through the
+  `echo-org1-prod-ops-alerts` SNS topic. The email subscription must be
+  confirmed before alerts can be delivered.
+
+Do not add a CloudWatch Agent, dashboard, database replica, automatic failover,
+or cross-region copy for this v1 pilot.
 
 ## Rollback boundary
 
