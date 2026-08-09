@@ -1,0 +1,259 @@
+# ECHO Authority on EC2: minimum v1 cutover
+
+This moves the existing single-organization Authority to one Ubuntu ARM64 EC2
+instance in AWS account `904560150024`, region `us-west-2`. Docker runs the
+Authority and Caddy. Native `cloudflared` is the only public path. The security
+group must have no inbound rules; Docker publishes the HTTP origin only at
+`127.0.0.1:80`.
+
+This is deliberately one host, one EBS volume, and one Tunnel replica. It is
+not HA. Keep the Mac deployment unchanged as the rollback host.
+
+## 1. Publish the exact image
+
+Run on the Mac before the downtime window. Do not rebuild the release during
+the migration.
+
+```bash
+set -euo pipefail
+AWS_PROFILE=echo-prod
+AWS_REGION=us-west-2
+REGISTRY=904560150024.dkr.ecr.us-west-2.amazonaws.com
+REPOSITORY=echo/organization-authority
+SOURCE_IMAGE=echo-organization-authority:access-recovery-504ec74
+RELEASE_TAG=access-recovery-504ec74
+EXPECTED_SOURCE_ID=sha256:4d9382177d09163c914a2eabf0ddbf2af0ad5e56d1505e0dd4fb98919ca7aa1d
+aws_echo_prod() {
+  env -u AWS_ACCESS_KEY_ID -u AWS_SECRET_ACCESS_KEY \
+    -u AWS_SESSION_TOKEN -u AWS_SECURITY_TOKEN \
+    aws --profile "$AWS_PROFILE" --region "$AWS_REGION" "$@"
+}
+
+[[ $(aws_echo_prod sts get-caller-identity --query Account --output text) == 904560150024 ]]
+
+SOURCE_ID="$(docker image inspect "$SOURCE_IMAGE" --format '{{.Id}}')"
+[[ $SOURCE_ID == "$EXPECTED_SOURCE_ID" ]]
+[[ $(docker image inspect "$SOURCE_ID" --format '{{.Os}}/{{.Architecture}}') == linux/arm64 ]]
+aws_echo_prod ecr get-login-password |
+  docker login --username AWS --password-stdin "$REGISTRY"
+docker tag "$SOURCE_ID" "$REGISTRY/$REPOSITORY:$RELEASE_TAG"
+docker push "$REGISTRY/$REPOSITORY:$RELEASE_TAG"
+DIGEST="$(aws_echo_prod ecr describe-images \
+  --repository-name "$REPOSITORY" \
+  --image-ids "imageTag=$RELEASE_TAG" \
+  --query 'imageDetails[0].imageDigest' --output text)"
+[[ $DIGEST == "$EXPECTED_SOURCE_ID" ]]
+printf 'ECHO_AUTHORITY_IMAGE=%s\n' "$REGISTRY/$REPOSITORY@$DIGEST"
+docker logout "$REGISTRY"
+```
+
+Record the digest. The EC2 `.env` must use that digest reference, never just a
+tag. The ECR repository is immutable and scans on push.
+
+## 2. Prepare EC2 without connecting the Tunnel
+
+Copy `compose.yaml`, `compose.ec2.yaml`, `Caddyfile.ec2`,
+`bootstrap-ubuntu-arm64.sh`, `cloudflared-echo-authority.service`, and
+`restore-authority-state.sh` to the new host through Session Manager. Then run:
+
+```bash
+sudo ./bootstrap-ubuntu-arm64.sh
+sudo install -o root -g echo-authority -m 0640 \
+  compose.yaml compose.ec2.yaml Caddyfile.ec2 /srv/echo-authority/
+```
+
+The bootstrap installs Ubuntu's Docker, Compose, and ECR credential helper. It
+downloads Cloudflare's ARM64 `2026.7.3` package and verifies SHA-256
+`d3ea7d22dd337b465da33d6bc1c4b3cfd381407447a2a7d29542c19783430db3`.
+It installs the hardened Tunnel unit **disabled and stopped**, with no token.
+
+Create the target environment using the digest printed in step 1:
+
+```bash
+sudo bash -c '
+set -euo pipefail
+cd /srv/echo-authority
+AUTHORITY_UID="$(id -u echo-authority)"
+AUTHORITY_GID="$(id -g echo-authority)"
+IMAGE="904560150024.dkr.ecr.us-west-2.amazonaws.com/echo/organization-authority@sha256:REPLACE_WITH_DIGEST"
+[[ $IMAGE == *@sha256:* ]]
+umask 077
+printf "%s\n" \
+  "ECHO_AUTHORITY_HOST=authority.echobrain.org" \
+  "ECHO_AUTHORITY_UID=$AUTHORITY_UID" \
+  "ECHO_AUTHORITY_GID=$AUTHORITY_GID" \
+  "ECHO_AUTHORITY_IMAGE=$IMAGE" > .env
+docker compose --env-file .env -f compose.yaml -f compose.ec2.yaml config >/dev/null
+docker compose --env-file .env -f compose.yaml -f compose.ec2.yaml pull
+'
+```
+
+Do not create `/etc/cloudflared/tunnel.token` yet. The current rollback route is
+`https://localhost:443`, with HTTP Host and TLS server name `localhost`, TLS
+verification enabled, and the Mac `data/caddy-local-root.crt` as `caPool`.
+Confirm those values and confirm in the Cloudflare dashboard that the Mac is
+the only connector before freezing state.
+
+## 3. Cold-copy all Authority state
+
+There must never be two independent copies accepting traffic. At the start of
+the downtime window, unload the existing Mac Tunnel first, then stop the entire
+Mac Compose stack:
+
+```bash
+set -euo pipefail
+MAC_DEPLOY=/Users/zhenye/Desktop/echo-brain/deploy/organization-authority
+launchctl bootout "gui/$(id -u)" "$HOME/Library/LaunchAgents/com.cloudflare.cloudflared.plist"
+! pgrep -f '[c]loudflared tunnel run'
+cd "$MAC_DEPLOY"
+compose() { docker compose --env-file .env -f compose.yaml "$@"; }
+AUTHORITY_CONTAINER="$(compose ps -q authority)"
+[[ -n $AUTHORITY_CONTAINER ]]
+compose stop
+[[ $(docker inspect --format '{{.State.Status}}' "$AUTHORITY_CONTAINER") == exited ]]
+[[ $(docker inspect --format '{{.State.ExitCode}}' "$AUTHORITY_CONTAINER") == 0 ]]
+compose run --rm --no-deps authority \
+  status --config /echo/authority.json
+compose down
+[[ -z $(compose ps -q) ]]
+
+! find data/state -type f \
+  \( -name '*-wal' -o -name '*-shm' -o -name '*-journal' \) \
+  -print -quit | grep -q .
+for db in data/state/{authority,integrations,record-log,record-derived}.sqlite; do
+  [[ -f $db ]]
+  [[ $(sqlite3 -batch "file:$db?mode=ro&immutable=1" \
+    'PRAGMA integrity_check;') == ok ]]
+  [[ -z $(sqlite3 -batch "file:$db?mode=ro&immutable=1" \
+    'PRAGMA foreign_key_check;') ]]
+done
+! find data -type l -print -quit | grep -q .
+
+STAMP="$(date -u +%Y%m%dT%H%M%SZ)"
+ARCHIVE="$HOME/organization-authority-data-$STAMP.tar.gz"
+(umask 077; COPYFILE_DISABLE=1 tar -czf "$ARCHIVE" data)
+chmod 0600 "$ARCHIVE"
+tar -tzf "$ARCHIVE" >/dev/null
+shasum -a 256 "$ARCHIVE" | tee "$ARCHIVE.sha256"
+```
+
+Do not restart either Mac process after the snapshot. Upload the archive and
+the reviewed restore script to one private S3 prefix:
+
+```bash
+BACKUP_BUCKET=echo-org1-prod-authority-backups-904560150024-us-west-2
+AWS_PROFILE=echo-prod
+AWS_REGION=us-west-2
+INSTANCE_ID=i-REPLACE_WITH_INSTANCE_ID
+aws_echo_prod() {
+  env -u AWS_ACCESS_KEY_ID -u AWS_SECRET_ACCESS_KEY \
+    -u AWS_SESSION_TOKEN -u AWS_SECURITY_TOKEN \
+    aws --profile "$AWS_PROFILE" --region "$AWS_REGION" "$@"
+}
+[[ $(aws_echo_prod sts get-caller-identity --query Account --output text) == 904560150024 ]]
+STAMP="$(basename "$ARCHIVE" .tar.gz | sed 's/^organization-authority-data-//')"
+PREFIX="cutovers/$STAMP"
+ARCHIVE_NAME="$(basename "$ARCHIVE")"
+ARCHIVE_SHA256="$(shasum -a 256 "$ARCHIVE" | awk '{print $1}')"
+aws_echo_prod s3 cp "$ARCHIVE" \
+  "s3://$BACKUP_BUCKET/$PREFIX/$ARCHIVE_NAME" --sse AES256
+aws_echo_prod s3 cp restore-authority-state.sh \
+  "s3://$BACKUP_BUCKET/$PREFIX/restore-authority-state.sh" --sse AES256
+```
+
+Have Systems Manager download from S3 with the instance role and run the
+reviewed restore script. This passes no AWS credential or bearer URL to EC2:
+
+```bash
+SOURCE_URL="https://$BACKUP_BUCKET.s3.$AWS_REGION.amazonaws.com/$PREFIX/"
+PARAMETERS="$(jq -cn \
+  --arg source_info "$(jq -cn --arg path "$SOURCE_URL" '{path:$path}')" \
+  --arg command_line "sudo bash restore-authority-state.sh $ARCHIVE_NAME $ARCHIVE_SHA256" \
+  '{sourceType:["S3"],sourceInfo:[$source_info],commandLine:[$command_line]}')"
+COMMAND_ID="$(aws_echo_prod ssm send-command \
+  --instance-ids "$INSTANCE_ID" \
+  --document-name AWS-RunRemoteScript \
+  --comment 'Restore cold ECHO Authority state' \
+  --parameters "$PARAMETERS" \
+  --query 'Command.CommandId' --output text)"
+aws_echo_prod ssm wait command-executed \
+  --command-id "$COMMAND_ID" --instance-id "$INSTANCE_ID"
+aws_echo_prod ssm get-command-invocation \
+  --command-id "$COMMAND_ID" --instance-id "$INSTANCE_ID" \
+  --query '{Status:Status,Output:StandardOutputContent,Error:StandardErrorContent}'
+```
+
+Require `Status` to be `Success`. The restore script independently checks the
+Mac SHA-256, archive paths, SQLite sidecars, all four database integrity
+results, and foreign keys. Transfer the complete `data/` directory as one
+unit. Never copy selected SQLite files, credentials, or keys. Do not transfer
+the runtime coordination volume or Caddy's old TLS volumes; EC2 Caddy is an
+HTTP-only origin behind Cloudflare.
+
+## 4. Validate the new origin while it is still private
+
+On EC2:
+
+```bash
+sudo bash -c '
+set -euo pipefail
+cd /srv/echo-authority
+compose() { docker compose --env-file .env -f compose.yaml -f compose.ec2.yaml "$@"; }
+compose up -d --no-build --pull always --wait --wait-timeout 90
+compose exec -T authority node services/organization-authority/dist/main.js status --config /echo/authority.json
+[[ $(curl -sS -o /dev/null -w "%{http_code}" -H "Host: authority.echobrain.org" http://127.0.0.1/_echo/runtime-status) == 404 ]]
+curl --fail --silent --show-error -H "Host: authority.echobrain.org" http://127.0.0.1/v1/authority-descriptor
+docker port "$(compose ps -q authority)"
+'
+```
+
+`docker port` must show only `127.0.0.1:80`. If local validation fails, keep
+the Tunnel stopped and either repair EC2 or use the pre-cutover rollback below.
+
+## 5. Move the public route
+
+In Cloudflare, change the existing `authority.echobrain.org` Tunnel origin to
+`http://127.0.0.1:80` and set its HTTP Host header to
+`authority.echobrain.org`. Remove the old `originServerName` and `caPool`; they
+apply only to the old TLS origin. Use the existing remotely managed tunnel; do
+not create a second hostname or connector on the Mac.
+
+Install the Tunnel token only through the project's approved runtime secret
+resolver. The resolved value must go directly to
+`/etc/cloudflared/tunnel.token`, owned `root:cloudflared` with mode `0640`; it
+must never enter user data, argv, Git, shell history, clipboard, logs, or this
+chat. Do not continue if the approved resolver is unavailable. After the file
+is installed, run `sudo systemctl enable --now
+cloudflared-echo-authority.service`.
+
+Validate on EC2 and then from a separate machine:
+
+```bash
+sudo systemctl --no-pager --full status cloudflared-echo-authority.service
+curl --fail --silent http://127.0.0.1:20241/metrics | grep cloudflared_tunnel_ha_connections
+curl --fail --silent --show-error https://authority.echobrain.org/v1/authority-descriptor
+```
+
+The metrics must settle at four HA connections for this one connector, and the
+Cloudflare dashboard must show only the intended EC2 connector.
+
+The public descriptor must retain Authority
+`oau_c96b9811-ab11-4c46-96ea-14ccd3bbc2c7` and organization
+`org_2f851bb7-34aa-4989-bb44-b42372f28149`. Finally run one read/refresh check
+from Founder and Audrey before declaring the move complete.
+
+## Rollback boundary
+
+- **Before the EC2 Tunnel starts:** stop the EC2 Compose stack, restore the
+  recorded Cloudflare origin settings, start the unchanged Mac Compose stack,
+  then run
+  `launchctl bootstrap "gui/$(id -u)" "$HOME/Library/LaunchAgents/com.cloudflare.cloudflared.plist"`.
+  Its cold snapshot is still current.
+- **After the EC2 Tunnel starts:** the Mac copy is stale as soon as any request
+  can write state. Never simply reconnect it. Stop EC2 Tunnel and Compose,
+  cold-copy the entire latest EC2 `data/` generation back to the Mac, verify
+  its checksum, restore the old Cloudflare origin settings, and only then start
+  the Mac stack and Tunnel.
+
+At every boundary, one Tunnel connector and one Authority state owner is the
+maximum. If that cannot be proved, keep both sides stopped.

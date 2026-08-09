@@ -1,0 +1,42 @@
+[Unit]
+Description=Cloudflare Tunnel for ECHO Organization Authority
+Wants=network-online.target docker.service
+After=network-online.target docker.service
+ConditionFileNotEmpty=/etc/cloudflared/tunnel.token
+
+[Service]
+Type=simple
+User=cloudflared
+Group=cloudflared
+Environment=HOME=/var/lib/cloudflared
+ExecStart=/usr/bin/cloudflared tunnel --no-autoupdate --loglevel info --metrics 127.0.0.1:20241 run --token-file /etc/cloudflared/tunnel.token
+Restart=on-failure
+RestartSec=5s
+TimeoutStopSec=30s
+UMask=0077
+
+NoNewPrivileges=yes
+PrivateDevices=yes
+PrivateTmp=yes
+ProtectClock=yes
+ProtectControlGroups=yes
+ProtectHome=yes
+ProtectHostname=yes
+ProtectKernelLogs=yes
+ProtectKernelModules=yes
+ProtectKernelTunables=yes
+ProtectSystem=strict
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+CapabilityBoundingSet=
+AmbientCapabilities=
+StateDirectory=cloudflared
+StateDirectoryMode=0700
+RuntimeDirectory=cloudflared
+RuntimeDirectoryMode=0700
+
+[Install]
+WantedBy=multi-user.target
