@@ -1310,6 +1310,176 @@ describe('single-organization authority runtime', () => {
     }
   });
 
+  it('repairs a stranded installation the one-head recovery cannot reach', async () => {
+    const directory = mkdtempSync(join(tmpdir(), 'echo-authority-test-'));
+    chmodSync(directory, 0o700);
+    const databasePath = join(directory, 'authority.sqlite');
+    const clock = new FakeClock(Date.parse('2026-07-22T15:00:00.000Z'));
+    const { application, repository } = await createApplication(
+      databasePath,
+      clock,
+    );
+    try {
+      const membership = application.provisionMembership({
+        command_id: `adm_${randomUUID()}`,
+        display_name: 'Stranded Employee',
+        membership_type: 'employee',
+      });
+      const enrolled = await enroll(application, membership, clock);
+      const enrollmentId = enrolled.result.enrollment_receipt.enrollment_id;
+      const local = enrolled.result.access_state;
+      expect(local.access_state_sequence).toBe(1);
+      const leaseRequest = async (previous: Sha256Digest) =>
+        createOrganizationAccessLeaseRequest(
+          {
+            request_id: `alr_${randomUUID()}`,
+            authority_id: enrolled.result.enrollment_receipt.authority_id,
+            authority_key_id:
+              enrolled.result.enrollment_receipt.authority_key_id,
+            organization_id: enrolled.result.enrollment_receipt.organization_id,
+            enrollment_id: enrollmentId,
+            installation_id: enrolled.installationId,
+            installation_signing_key: enrolled.installation.descriptor,
+            previous_access_state_sha256: previous,
+            requested_at: clock.now(),
+          },
+          async (bytes) => sign(enrolled.installation, bytes),
+        );
+      // The current head an installation is handed back when its own freshly
+      // signed refresh is refused as stale.
+      const refusedRefresh = async (previous: Sha256Digest) => {
+        try {
+          await application.issueAccessLease(await leaseRequest(previous));
+        } catch (error) {
+          expect(error).toBeInstanceOf(StaleAccessStateError);
+          return (error as StaleAccessStateError).currentState;
+        }
+        throw new Error('stale access lease request was not refused');
+      };
+      const currentSequence = () =>
+        repository.read(
+          (transaction) =>
+            transaction.currentAccessState(enrollmentId)?.state
+              .access_state_sequence,
+        );
+      const recover = (reported: number) =>
+        application.recoverInstallationAccess(enrolled.installationId, {
+          local_access_state_sequence: reported,
+          reason: 'Missed issued heads through lost lease responses',
+        });
+
+      // Two Authority heads the installation never saw: the stranded local
+      // state is now two behind, which is one further than the automatic
+      // recovery is allowed to reach.
+      clock.advance(1);
+      const second = await application.issueAccessLease(
+        await leaseRequest(canonicalSha256(local)),
+      );
+      clock.advance(1);
+      const head = await application.issueAccessLease(
+        await leaseRequest(canonicalSha256(second)),
+      );
+      expect(head.access_state_sequence).toBe(3);
+
+      // The head is expired and older than the request window, which is
+      // exactly when the automatic recovery would take one skipped head. It
+      // still refuses this two-head gap, and appends nothing.
+      clock.advance(6 * 60 * 1000);
+      expect(
+        (await refusedRefresh(canonicalSha256(local))).access_state_sequence,
+      ).toBe(3);
+      expect(currentSequence()).toBe(3);
+
+      await expect(recover(2)).rejects.toMatchObject({
+        code: 'conflict',
+        message:
+          'reported local access state is within automatic recovery range',
+      });
+      expect(currentSequence()).toBe(3);
+
+      const recovered = await recover(1);
+      expect(recovered).toEqual({
+        installation_id: enrolled.installationId,
+        changed: true,
+        local_access_state_sequence: 1,
+        access_state_sequence: 4,
+        valid_until: new Date(
+          Date.parse(clock.now()) + 5 * 60 * 1000,
+        ).toISOString(),
+      });
+
+      // An immediate retry finds the repaired head still live and returns it
+      // without appending a second one.
+      expect(await recover(1)).toEqual({ ...recovered, changed: false });
+
+      const stored = repository.read((transaction) => ({
+        chain: [1, 2, 3, 4].map(
+          (sequence) => transaction.accessState(enrollmentId, sequence)?.state,
+        ),
+        beyond: transaction.accessState(enrollmentId, 5),
+      }));
+      expect(stored.beyond).toBeUndefined();
+      // History is appended to, never rewritten: every earlier head is still
+      // exactly the document its holder already has.
+      expect(canonicalJson(stored.chain[0])).toBe(canonicalJson(local));
+      expect(canonicalJson(stored.chain[1])).toBe(canonicalJson(second));
+      expect(canonicalJson(stored.chain[2])).toBe(canonicalJson(head));
+      expect(stored.chain[3]).toMatchObject({
+        status: 'active',
+        access_state_sequence: 4,
+        installation_id: enrolled.installationId,
+      });
+
+      // The stranded installation still holds only its own old head, and that
+      // is how it collects the repaired one: its next ordinary refresh is
+      // refused with the repaired head, and appends nothing further.
+      expect(await refusedRefresh(canonicalSha256(local))).toEqual(
+        stored.chain[3],
+      );
+      expect(currentSequence()).toBe(4);
+
+      const database = new Database(databasePath, { readonly: true });
+      try {
+        const auditRows = database
+          .prepare(
+            `SELECT actor_kind, detail_json FROM authority_audit_log
+             WHERE action = 'installation.access_recovered' AND subject_id = ?
+             ORDER BY audit_sequence`,
+          )
+          .all(enrolled.installationId) as Array<{
+          actor_kind: string;
+          detail_json: string;
+        }>;
+        expect(auditRows).toEqual([
+          {
+            actor_kind: 'admin',
+            detail_json: canonicalJson({
+              access_state_sequence: 4,
+              local_access_state_sequence: 1,
+              reason: 'Missed issued heads through lost lease responses',
+              recovered_access_state_sequence: 3,
+            }),
+          },
+        ]);
+      } finally {
+        database.close();
+      }
+
+      // A revoked subject is never brought back.
+      await application.revokeInstallation(
+        enrolled.installationId,
+        'Device retired',
+      );
+      await expect(recover(1)).rejects.toMatchObject({
+        code: 'conflict',
+        message: 'installation enrollment is not active',
+      });
+    } finally {
+      application.close();
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
   it('revokes every active installation with one membership transaction', async () => {
     const directory = mkdtempSync(join(tmpdir(), 'echo-authority-test-'));
     chmodSync(directory, 0o700);

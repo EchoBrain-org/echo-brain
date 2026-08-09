@@ -369,6 +369,32 @@ export interface RevokedOrganizationMembershipV1 {
   installations: RevokedOrganizationInstallationV1[];
 }
 
+/**
+ * The operator repair for an installation whose local access head is too far
+ * behind for the one-skipped-head automatic recovery. The sequence is what the
+ * operator read from the stranded installation; the authority cannot confirm
+ * that the installation really holds it, and uses it only to establish that the
+ * reported head is further behind than automatic recovery reaches.
+ */
+export interface RecoverOrganizationInstallationAccessRequestV1 {
+  local_access_state_sequence: number;
+  reason: string;
+}
+
+/**
+ * Deliberately flat. The repaired head reaches the installation through the
+ * ordinary access-lease route, so the administrator response carries only what
+ * the operator has to decide with: whether this call appended a head, which
+ * sequence is current, and when it expires.
+ */
+export interface RecoveredOrganizationInstallationAccessV1 {
+  installation_id: string;
+  changed: boolean;
+  local_access_state_sequence: number;
+  access_state_sequence: number;
+  valid_until: string;
+}
+
 export interface OrganizationApiErrorV1 {
   error: {
     code: string;

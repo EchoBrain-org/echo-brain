@@ -16,6 +16,7 @@ import {
   validateApproveOrganizationInternalLiveReleaseRequest,
   validateOrganizationInternalLiveReleaseManifest,
   validateProvisionOrganizationMembershipRequest,
+  validateRecoverOrganizationInstallationAccessRequest,
   validateRevokeOrganizationSubjectRequest,
 } from '@echo-brain/organization-api';
 import type {
@@ -33,6 +34,8 @@ import type {
   OrganizationMembershipPageV1,
   ProvisionedOrganizationMembershipV1,
   ProvisionOrganizationMembershipRequestV1,
+  RecoverOrganizationInstallationAccessRequestV1,
+  RecoveredOrganizationInstallationAccessV1,
   RevokeOrganizationSubjectRequestV1,
   RevokedOrganizationInstallationV1,
   RevokedOrganizationMembershipV1,
@@ -71,6 +74,7 @@ const USAGE = `usage:
   echo-organization-admin invitation create --config <absolute-path> --authority-url <public-https-origin> --membership-id <mem_UUIDv4> --lifetime-seconds <1-${MAX_ENROLLMENT_GRANT_LIFETIME_SECONDS}> --out <absolute-path> [--command-id <adm_UUIDv4>]
   echo-organization-admin member revoke --config <absolute-path> --membership-id <mem_UUIDv4> --reason <reason>
   echo-organization-admin installation revoke --config <absolute-path> --installation-id <ins_UUIDv4> --reason <reason>
+  echo-organization-admin installation access-recover --config <absolute-path> --installation-id <ins_UUIDv4> --local-access-sequence <positive-integer> --reason <reason>
   echo-organization-admin slack approval activate --config <absolute-path> --administrator-membership-id <mem_UUIDv4> --target-membership-id <mem_UUIDv4> --installation-id <ins_UUIDv4> --identity-link-id <clm_UUIDv4> --adapter-binding-id <bnd_UUIDv4> [--command-id <adm_UUIDv4>]
 
 INTERNAL LIVE:
@@ -124,6 +128,10 @@ export interface OrganizationAdminCliClient {
     installationId: string,
     input: RevokeOrganizationSubjectRequestV1,
   ): Promise<RevokedOrganizationInstallationV1>;
+  recoverInstallationAccess(
+    installationId: string,
+    input: RecoverOrganizationInstallationAccessRequestV1,
+  ): Promise<RecoveredOrganizationInstallationAccessV1>;
   activateSlackApproval(
     input: ActivateOrganizationSlackApprovalRequest,
   ): Promise<ActivatedOrganizationSlackApproval>;
@@ -619,6 +627,46 @@ async function runInstallationRevoke(
   return 0;
 }
 
+async function runInstallationAccessRecover(
+  arguments_: readonly string[],
+  io: OrganizationAdminCliIo,
+  dependencies: OrganizationAdminCliDependencies,
+): Promise<number> {
+  const flags = parseFlags(arguments_, [
+    '--config',
+    '--installation-id',
+    '--local-access-sequence',
+    '--reason',
+  ]);
+  const installationId = canonicalId(
+    requiredFlag(flags, '--installation-id'),
+    INSTALLATION_ID_PATTERN,
+    'installation_id',
+  );
+  const request = validateRecoverOrganizationInstallationAccessRequest({
+    local_access_state_sequence: parseInteger(
+      requiredFlag(flags, '--local-access-sequence'),
+      1,
+      Number.MAX_SAFE_INTEGER,
+      'local access sequence',
+    ),
+    reason: validateBoundedText(
+      requiredFlag(flags, '--reason'),
+      500,
+      'access recovery reason',
+    ),
+  });
+  const context = await commandContext(
+    requiredFlag(flags, '--config'),
+    dependencies,
+  );
+  outputJson(
+    io,
+    await context.client.recoverInstallationAccess(installationId, request),
+  );
+  return 0;
+}
+
 async function runSlackApprovalActivate(
   arguments_: readonly string[],
   io: OrganizationAdminCliIo,
@@ -833,6 +881,13 @@ export async function runOrganizationAuthorityAdminCli(
   }
   if (command === 'installation revoke') {
     return await runInstallationRevoke(commandArguments, io, dependencies);
+  }
+  if (command === 'installation access-recover') {
+    return await runInstallationAccessRecover(
+      commandArguments,
+      io,
+      dependencies,
+    );
   }
   throw new Error(USAGE);
 }

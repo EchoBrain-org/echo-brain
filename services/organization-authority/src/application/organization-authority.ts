@@ -16,6 +16,7 @@ import type {
 } from '@echo-brain/federation-protocol';
 import {
   compareOrganizationInternalLiveReleaseVersions,
+  MINIMUM_ORGANIZATION_ACCESS_RECOVERY_GAP,
   validateApproveOrganizationInternalLiveReleaseRequest,
   validateIssueOrganizationEnrollmentGrantRequest,
   validateOrganizationAccessLeaseRequest,
@@ -23,6 +24,7 @@ import {
   validateOrganizationInternalLiveUpdateReceipt,
   validateOrganizationPermissionCheckRequest,
   validateProvisionOrganizationMembershipRequest,
+  validateRecoverOrganizationInstallationAccessRequest,
 } from '@echo-brain/organization-api';
 import type {
   IssueOrganizationEnrollmentGrantRequestV1,
@@ -40,6 +42,8 @@ import type {
   OrganizationPermissionCheckRequestV1,
   ProvisionedOrganizationMembershipV1,
   ProvisionOrganizationMembershipRequestV1,
+  RecoverOrganizationInstallationAccessRequestV1,
+  RecoveredOrganizationInstallationAccessV1,
 } from '@echo-brain/organization-api';
 import {
   createOrganizationEnrollmentReceipt,
@@ -55,6 +59,7 @@ import {
   verifyOrganizationRecordEnvelope,
 } from '@echo-brain/organization-protocol';
 import type {
+  ActiveOrganizationInstallationAccessStateV1,
   OrganizationAuthorityDescriptorV1,
   OrganizationEnrollmentReceiptV1,
   OrganizationEnrollmentRequestV1,
@@ -290,6 +295,21 @@ function canRecoverExpiredStaleAccessHead(input: {
     input.authorityReceivedAtMillis > recoveryNotBeforeMillis &&
     input.commandRequestedAtMillis > recoveryNotBeforeMillis
   );
+}
+
+function recoveredInstallationAccess(input: {
+  installation_id: string;
+  changed: boolean;
+  local_access_state_sequence: number;
+  state: ActiveOrganizationInstallationAccessStateV1;
+}): RecoveredOrganizationInstallationAccessV1 {
+  return {
+    installation_id: input.installation_id,
+    changed: input.changed,
+    local_access_state_sequence: input.local_access_state_sequence,
+    access_state_sequence: input.state.access_state_sequence,
+    valid_until: input.state.valid_until,
+  };
 }
 
 export class OrganizationAuthorityApplication {
@@ -2016,6 +2036,178 @@ export class OrganizationAuthorityApplication {
     throw new AuthorityOperationError(
       'conflict',
       'installation revocation could not serialize',
+    );
+  }
+
+  /**
+   * The operator repair for an installation stranded further behind than the
+   * one skipped head automatic recovery covers. It appends exactly one ordinary
+   * active head to the same chain: history is never rewritten or deleted, the
+   * sequence and TTL rules are the ordinary ones, and a revoked membership,
+   * enrollment, or access head is never revived.
+   *
+   * The reported sequence is the operator's word for what the stranded
+   * installation holds locally, and nothing here proves that laptop state.
+   * Access history is a dense chain from sequence one, so a positive reported
+   * sequence at least two behind the current head necessarily names a real
+   * earlier state of this enrollment and looking it up would establish nothing.
+   * The sequence only establishes that the reported head is too far behind for
+   * automatic recovery; it never selects the parent of the new head, which is
+   * always the current head.
+   */
+  async recoverInstallationAccess(
+    installationId: string,
+    command: RecoverOrganizationInstallationAccessRequestV1,
+  ): Promise<RecoveredOrganizationInstallationAccessV1> {
+    assertFederationId(installationId, 'ins', 'recovered installation');
+    // The shared request validator is the only bound on the reason and the
+    // reported sequence, so an in-process caller cannot skip what the route
+    // applies.
+    command = validateRecoverOrganizationInstallationAccessRequest(command);
+    for (let attempt = 0; attempt < MAX_TRANSITION_RETRIES; attempt += 1) {
+      const snapshot = this.repository.read((transaction) => {
+        const enrollment = transaction.enrollmentByInstallation(installationId);
+        if (enrollment === undefined) {
+          throw new AuthorityOperationError(
+            'not_found',
+            'installation was not found',
+          );
+        }
+        return {
+          enrollment,
+          membership: transaction.membership(enrollment.membership_id),
+          current: requireCurrentAccessState(
+            transaction,
+            enrollment.enrollment_id,
+          ),
+        };
+      });
+      if (snapshot.enrollment.status !== 'active') {
+        throw new AuthorityOperationError(
+          'conflict',
+          'installation enrollment is not active',
+        );
+      }
+      if (
+        snapshot.membership === undefined ||
+        snapshot.membership.status !== 'active'
+      ) {
+        throw new AuthorityOperationError(
+          'conflict',
+          'installation membership is not active',
+        );
+      }
+      const current = snapshot.current.state;
+      if (current.status !== 'active') {
+        throw new AuthorityOperationError(
+          'conflict',
+          'current installation access is not active',
+        );
+      }
+      if (
+        current.access_state_sequence - command.local_access_state_sequence <
+        MINIMUM_ORGANIZATION_ACCESS_RECOVERY_GAP
+      ) {
+        throw new AuthorityOperationError(
+          'conflict',
+          'reported local access state is within automatic recovery range',
+        );
+      }
+      const requestedAt = this.now('installation access recovery time');
+      if (
+        timestampMillis(current.valid_until, 'current access state expiry') >
+        timestampMillis(requestedAt, 'installation access recovery time')
+      ) {
+        // Returning the head unchanged avoids unnecessary chain churn while a
+        // usable live head exists, and is what makes a retry safe.
+        return recoveredInstallationAccess({
+          installation_id: installationId,
+          changed: false,
+          local_access_state_sequence: command.local_access_state_sequence,
+          state: current,
+        });
+      }
+
+      const state = await createOrganizationInstallationAccessState(
+        {
+          request: snapshot.enrollment.request,
+          receipt: snapshot.enrollment.receipt,
+          previous_state: current,
+          access_state_sequence: current.access_state_sequence + 1,
+          evaluated_at: requestedAt,
+          status: 'active',
+          valid_until: addMilliseconds(requestedAt, this.activeLeaseTtlMs),
+          maximum_active_ttl_ms: this.activeLeaseTtlMs,
+        },
+        this.pinnedAuthority,
+        (bytes) => this.signCanonicalPayload(bytes),
+      );
+      const candidate: StoredAuthorityAccessState = {
+        enrollment_id: snapshot.enrollment.enrollment_id,
+        state_sha256: canonicalSha256(state),
+        state,
+      };
+      const commitAt = this.now('installation access recovery commit time');
+      if (commitAt < requestedAt) {
+        throw new Error(
+          'authority clock regressed while recovering installation access',
+        );
+      }
+      if (state.status !== 'active' || commitAt >= state.valid_until) {
+        throw new AuthorityOperationError(
+          'conflict',
+          'access-state signing exceeded the active lease',
+        );
+      }
+
+      const committed = this.repository.write(commitAt, (transaction) => {
+        const enrollment = transaction.enrollmentByInstallation(installationId);
+        if (enrollment === undefined) {
+          throw new AuthorityOperationError(
+            'not_found',
+            'installation was not found',
+          );
+        }
+        const membership = transaction.membership(enrollment.membership_id);
+        // The head digest is the whole precondition: an unchanged head carries
+        // the same sequence, status, and expiry every check above was made
+        // against.
+        if (
+          enrollment.status !== 'active' ||
+          membership === undefined ||
+          membership.status !== 'active' ||
+          requireCurrentAccessState(transaction, enrollment.enrollment_id)
+            .state_sha256 !== snapshot.current.state_sha256
+        ) {
+          return null;
+        }
+        transaction.insertAccessState(candidate);
+        transaction.appendAudit({
+          occurred_at: commitAt,
+          actor_kind: 'admin',
+          action: 'installation.access_recovered',
+          subject_id: installationId,
+          detail: {
+            reason: command.reason,
+            local_access_state_sequence: command.local_access_state_sequence,
+            recovered_access_state_sequence: current.access_state_sequence,
+            access_state_sequence: candidate.state.access_state_sequence,
+          },
+        });
+        return state;
+      });
+      if (committed !== null) {
+        return recoveredInstallationAccess({
+          installation_id: installationId,
+          changed: true,
+          local_access_state_sequence: command.local_access_state_sequence,
+          state: committed,
+        });
+      }
+    }
+    throw new AuthorityOperationError(
+      'conflict',
+      'installation access recovery could not serialize',
     );
   }
 

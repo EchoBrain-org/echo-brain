@@ -339,6 +339,54 @@ describe('organization administrator API client requests', () => {
     });
   });
 
+  it('posts the operator access repair and accepts only a matching response', async () => {
+    const recovered = {
+      installation_id: IDS.installation,
+      changed: true,
+      local_access_state_sequence: 254,
+      access_state_sequence: 257,
+      valid_until: '2026-08-09T12:05:00.000Z',
+    };
+    const command = {
+      local_access_state_sequence: 254,
+      reason: 'Missed issued heads through lost lease responses',
+    };
+    const captured: Array<{ url: URL; init: RequestInit }> = [];
+    const client = new OrganizationAdminApiClient(
+      options({
+        fetch: (async (input: URL | RequestInfo, init?: RequestInit) => {
+          captured.push({ url: new URL(String(input)), init: init ?? {} });
+          return jsonResponse(recovered);
+        }) as typeof fetch,
+      }),
+    );
+
+    await expect(
+      client.recoverInstallationAccess(IDS.installation, command),
+    ).resolves.toEqual(recovered);
+    expect(captured).toHaveLength(1);
+    expect(captured[0]!.url.pathname).toBe(
+      `/v1/admin/installations/${IDS.installation}/access-recoveries`,
+    );
+    expect(captured[0]!.init.method).toBe('POST');
+    expect(JSON.parse(String(captured[0]!.init.body))).toEqual(command);
+
+    // A response restating another local sequence is not an answer to this
+    // repair, however well formed it is on its own.
+    const mismatched = new OrganizationAdminApiClient(
+      options({
+        fetch: (async () =>
+          jsonResponse({
+            ...recovered,
+            local_access_state_sequence: 255,
+          })) as typeof fetch,
+      }),
+    );
+    await expect(
+      mismatched.recoverInstallationAccess(IDS.installation, command),
+    ).rejects.toMatchObject({ code: 'invalid_response', status: 200 });
+  });
+
   it('validates IDs, command bodies, cursors, and page sizes before fetch', async () => {
     const fetchImpl = vi.fn<typeof fetch>();
     const client = new OrganizationAdminApiClient(

@@ -65,6 +65,7 @@ function application(): OrganizationAuthorityHttpApplication {
     checkPermissionSubject: unexpected,
     revokeMembership: unexpected,
     revokeInstallation: unexpected,
+    recoverInstallationAccess: unexpected,
   };
 }
 

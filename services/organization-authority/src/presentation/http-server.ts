@@ -31,6 +31,7 @@ import {
   validateOrganizationInternalLiveDirectiveRequest,
   validateOrganizationInternalLiveUpdateReceipt,
   validateOrganizationPermissionCheckRequest,
+  validateRecoverOrganizationInstallationAccessRequest,
   validateSubmitOrganizationRecordEnvelopeRequest,
   validateOrganizationSlackLinkBeginRequest,
   validateOrganizationSlackLinkCompleteRequest,
@@ -43,6 +44,7 @@ import type {
   OrganizationAccessLeaseResponseV1,
   OrganizationApiErrorV1,
   ProvisionedOrganizationMembershipV1,
+  RecoveredOrganizationInstallationAccessV1,
   RevokedOrganizationMembershipV1,
 } from '@echo-brain/organization-api';
 import { ORGANIZATION_API_ADMIN_SLACK_APPROVAL_ACTIVATION_PATH } from '../application/slack-approval-activation.js';
@@ -88,6 +90,9 @@ const MEMBERSHIP_REVOCATION_ROUTE = new RegExp(
 );
 const INSTALLATION_REVOCATION_ROUTE = new RegExp(
   `^${ORGANIZATION_API_ADMIN_INSTALLATIONS_PATH}/(ins_${UUID_V4_SOURCE})/revocations$`,
+);
+const INSTALLATION_ACCESS_RECOVERY_ROUTE = new RegExp(
+  `^${ORGANIZATION_API_ADMIN_INSTALLATIONS_PATH}/(ins_${UUID_V4_SOURCE})/access-recoveries$`,
 );
 export const ORGANIZATION_API_ADMIN_INTEGRATIONS_PATH =
   '/v1/admin/integrations';
@@ -1033,6 +1038,23 @@ export function createOrganizationAuthorityHttpServer(
             installation_id: installationRevocationRoute[1]!,
             access_state: state,
           });
+          return;
+        }
+
+        const accessRecoveryRoute = INSTALLATION_ACCESS_RECOVERY_ROUTE.exec(
+          url.pathname,
+        );
+        if (method === 'POST' && accessRecoveryRoute !== null) {
+          requireAdmin(request);
+          const body = validateRecoverOrganizationInstallationAccessRequest(
+            await readJsonBody(request),
+          );
+          const recovered: RecoveredOrganizationInstallationAccessV1 =
+            await options.application.recoverInstallationAccess(
+              accessRecoveryRoute[1]!,
+              body,
+            );
+          sendJson(response, 200, recovered);
           return;
         }
 

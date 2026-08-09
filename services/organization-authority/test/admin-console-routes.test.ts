@@ -157,6 +157,7 @@ function testApplication() {
       installations: [],
     })),
     revokeInstallation: vi.fn(async () => ({}) as never),
+    recoverInstallationAccess: unexpected,
   } as OrganizationAuthorityHttpApplication;
   return application;
 }
