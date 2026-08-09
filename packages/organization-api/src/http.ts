@@ -54,3 +54,9 @@ export function organizationApiInstallationRevocationsPath(
 ): string {
   return `${ORGANIZATION_API_ADMIN_INSTALLATIONS_PATH}/${installationId}/revocations`;
 }
+
+export function organizationApiInstallationAccessRecoveriesPath(
+  installationId: string,
+): string {
+  return `${ORGANIZATION_API_ADMIN_INSTALLATIONS_PATH}/${installationId}/access-recoveries`;
+}

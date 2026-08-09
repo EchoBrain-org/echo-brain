@@ -39,6 +39,8 @@ import type {
   OrganizationSlackLinkResultV1,
   ProvisionedOrganizationMembershipV1,
   ProvisionOrganizationMembershipRequestV1,
+  RecoverOrganizationInstallationAccessRequestV1,
+  RecoveredOrganizationInstallationAccessV1,
   RevokeOrganizationSubjectRequestV1,
   RevokedOrganizationInstallationV1,
   RevokedOrganizationMembershipV1,
@@ -53,6 +55,13 @@ export const MAX_ORGANIZATION_API_PAGE_ITEMS = 100;
 export const MAX_ORGANIZATION_API_CURSOR_CHARACTERS = 512;
 export const MAX_ORGANIZATION_AUDIT_DETAIL_NODES = 256;
 export const MAX_ORGANIZATION_AUDIT_DETAIL_DEPTH = 8;
+/**
+ * The minimum gap the operator access repair covers. A gap of one skipped head
+ * is the automatic recovery's job and is refused, so a valid repair response
+ * always reports a current sequence at least this far ahead of the reported
+ * local one.
+ */
+export const MINIMUM_ORGANIZATION_ACCESS_RECOVERY_GAP = 2;
 
 const DIGEST_PATTERN = /^sha256:[0-9a-f]{64}$/;
 const UUID_V4_PATTERN =
@@ -1043,6 +1052,61 @@ export function validateRevokeOrganizationSubjectRequest(
   assertExactKeys(record, ['reason'], 'revocation request');
   assertString(record.reason, 'revocation reason', 500);
   return record as unknown as RevokeOrganizationSubjectRequestV1;
+}
+
+export function validateRecoverOrganizationInstallationAccessRequest(
+  value: unknown,
+): RecoverOrganizationInstallationAccessRequestV1 {
+  const record = asRecord(value, 'access recovery request');
+  assertExactKeys(
+    record,
+    ['local_access_state_sequence', 'reason'],
+    'access recovery request',
+  );
+  assertPositiveInteger(
+    record.local_access_state_sequence,
+    'access recovery local_access_state_sequence',
+  );
+  assertString(record.reason, 'access recovery reason', 500);
+  return record as unknown as RecoverOrganizationInstallationAccessRequestV1;
+}
+
+export function validateRecoveredOrganizationInstallationAccess(
+  value: unknown,
+): RecoveredOrganizationInstallationAccessV1 {
+  const record = asRecord(value, 'access recovery response');
+  assertExactKeys(
+    record,
+    [
+      'installation_id',
+      'changed',
+      'local_access_state_sequence',
+      'access_state_sequence',
+      'valid_until',
+    ],
+    'access recovery response',
+  );
+  assertId(record.installation_id, 'ins', 'access recovery installation_id');
+  if (typeof record.changed !== 'boolean') {
+    fail('access recovery changed must be a boolean');
+  }
+  assertPositiveInteger(
+    record.local_access_state_sequence,
+    'access recovery local_access_state_sequence',
+  );
+  assertPositiveInteger(
+    record.access_state_sequence,
+    'access recovery access_state_sequence',
+  );
+  assertTimestamp(record.valid_until, 'access recovery valid_until');
+  if (
+    (record.access_state_sequence as number) -
+      (record.local_access_state_sequence as number) <
+    MINIMUM_ORGANIZATION_ACCESS_RECOVERY_GAP
+  ) {
+    fail('access recovery response is within automatic recovery range');
+  }
+  return record as unknown as RecoveredOrganizationInstallationAccessV1;
 }
 
 export function validateOrganizationAuthorityDescriptorResponse(

@@ -4,6 +4,7 @@ import { organizationEnrollmentGrantSha256 } from '@echo-brain/organization-prot
 import {
   MAX_ORGANIZATION_API_CURSOR_CHARACTERS,
   MAX_ORGANIZATION_API_PAGE_ITEMS,
+  MINIMUM_ORGANIZATION_ACCESS_RECOVERY_GAP,
   validateIssueOrganizationEnrollmentGrantRequest,
   validateOrganizationAdminOverview,
   validateOrganizationAuditPage,
@@ -12,6 +13,8 @@ import {
   validateOrganizationInstallationPage,
   validateOrganizationMembershipPage,
   validateProvisionOrganizationMembershipRequest,
+  validateRecoveredOrganizationInstallationAccess,
+  validateRecoverOrganizationInstallationAccessRequest,
 } from '../src/index.js';
 
 const IDS = {
@@ -119,6 +122,55 @@ describe('organization administrator commands', () => {
         enrollment_grant_base64url: 'A'.repeat(43),
       }),
     ).toThrow('unexpected shape');
+  });
+
+  it('bounds the operator access-recovery command to a positive local sequence and a reason', () => {
+    const command = {
+      local_access_state_sequence: 254,
+      reason: 'Missed issued heads through lost lease responses',
+    };
+
+    expect(
+      validateRecoverOrganizationInstallationAccessRequest(command),
+    ).toEqual(command);
+    expect(() =>
+      validateRecoverOrganizationInstallationAccessRequest({
+        ...command,
+        installation_id: IDS.installation,
+      }),
+    ).toThrow('unexpected shape');
+  });
+
+  it('validates an access-recovery response beyond automatic recovery range', () => {
+    const recovered = {
+      installation_id: IDS.installation,
+      changed: true,
+      local_access_state_sequence: 254,
+      access_state_sequence: 257,
+      valid_until: TIMES.expires,
+    };
+
+    expect(validateRecoveredOrganizationInstallationAccess(recovered)).toEqual(
+      recovered,
+    );
+    expect(
+      validateRecoveredOrganizationInstallationAccess({
+        ...recovered,
+        changed: false,
+        access_state_sequence:
+          recovered.local_access_state_sequence +
+          MINIMUM_ORGANIZATION_ACCESS_RECOVERY_GAP,
+      }).changed,
+    ).toBe(false);
+
+    // A response no further ahead than automatic recovery already covers
+    // cannot have come from this action.
+    expect(() =>
+      validateRecoveredOrganizationInstallationAccess({
+        ...recovered,
+        access_state_sequence: recovered.local_access_state_sequence + 1,
+      }),
+    ).toThrow('within automatic recovery range');
   });
 
   it('validates the shared secret-bearing invitation handoff exactly', () => {
