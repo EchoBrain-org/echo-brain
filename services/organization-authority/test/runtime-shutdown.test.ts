@@ -31,6 +31,7 @@ function authorityApplication(): OrganizationAuthorityHttpApplication {
     checkPermissionSubject: unexpectedCall,
     revokeMembership: unexpectedCall,
     revokeInstallation: unexpectedCall,
+    recoverInstallationAccess: unexpectedCall,
   };
 }
 

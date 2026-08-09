@@ -11,6 +11,7 @@ import {
   ORGANIZATION_API_ADMIN_MEMBERSHIPS_PATH,
   ORGANIZATION_API_ADMIN_OVERVIEW_PATH,
   ORGANIZATION_API_PROXY_AUTH_SCHEME,
+  organizationApiInstallationAccessRecoveriesPath,
   organizationApiInstallationRevocationsPath,
   organizationApiMembershipEnrollmentGrantsPath,
   organizationApiMembershipRevocationsPath,
@@ -29,6 +30,8 @@ import {
   validateProvisionedOrganizationMembership,
   validateProvisionOrganizationMembershipRequest,
   validateIssueOrganizationEnrollmentGrantRequest,
+  validateRecoveredOrganizationInstallationAccess,
+  validateRecoverOrganizationInstallationAccessRequest,
   validateRevokeOrganizationSubjectRequest,
   validateRevokedOrganizationInstallation,
   validateRevokedOrganizationMembership,
@@ -48,6 +51,8 @@ import type {
   OrganizationMembershipPageV1,
   ProvisionedOrganizationMembershipV1,
   ProvisionOrganizationMembershipRequestV1,
+  RecoverOrganizationInstallationAccessRequestV1,
+  RecoveredOrganizationInstallationAccessV1,
   RevokeOrganizationSubjectRequestV1,
   RevokedOrganizationInstallationV1,
   RevokedOrganizationMembershipV1,
@@ -674,6 +679,38 @@ export class OrganizationAdminApiClient {
       expected_status: 200,
       body,
       validate: validateRevokedOrganizationInstallation,
+    });
+  }
+
+  recoverInstallationAccess(
+    installationId: string,
+    input: RecoverOrganizationInstallationAccessRequestV1,
+  ): Promise<RecoveredOrganizationInstallationAccessV1> {
+    const installation = validateSubjectId(
+      installationId,
+      INSTALLATION_ID_PATTERN,
+      'installation_id',
+    );
+    const body = validateRecoverOrganizationInstallationAccessRequest(input);
+    return this.request({
+      method: 'POST',
+      path: organizationApiInstallationAccessRecoveriesPath(installation),
+      expected_status: 200,
+      body,
+      validate: (value) => {
+        const recovered =
+          validateRecoveredOrganizationInstallationAccess(value);
+        if (recovered.installation_id !== installation) {
+          throw new Error('access recovery response names another installation');
+        }
+        if (
+          recovered.local_access_state_sequence !==
+          body.local_access_state_sequence
+        ) {
+          throw new Error('access recovery response restates another sequence');
+        }
+        return recovered;
+      },
     });
   }
 }

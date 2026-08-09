@@ -76,6 +76,7 @@ function testApplication(
     checkPermissionSubject: unexpectedCall,
     revokeMembership: unexpectedCall,
     revokeInstallation: unexpectedCall,
+    recoverInstallationAccess: unexpectedCall,
     ...overrides,
   };
 }
@@ -219,6 +220,73 @@ describe('authority HTTP presentation', () => {
     } finally {
       await close(server);
     }
+  });
+
+  it('requires administrator authentication and dispatches the installation access-recovery route', async () => {
+    const installation = 'ins_00000000-0000-4000-8000-000000000001';
+    const calls: Array<{ installation_id: string; input: unknown }> = [];
+    const application = testApplication({
+      recoverInstallationAccess: async (installationId, input) => {
+        calls.push({ installation_id: installationId, input });
+        return {
+          installation_id: installationId,
+          changed: true,
+          local_access_state_sequence: input.local_access_state_sequence,
+          access_state_sequence: 257,
+          valid_until: '2026-08-09T12:05:00.000Z',
+        };
+      },
+    });
+    const server = createOrganizationAuthorityHttpServer({
+      application,
+      adminAuthenticator: {
+        authenticate: (header) => header === `Bearer ${ADMIN_TOKEN}`,
+      },
+      clientIdentityResolver: new AuthenticatedProxyClientIdentityResolver(
+        PROXY_TOKEN,
+      ),
+    });
+    const origin = await listen(server);
+    const path = `${origin}/v1/admin/installations/${installation}/access-recoveries`;
+    const headers = {
+      ...proxyHeaders(clientId('access-recovery-test')),
+      'content-type': 'application/json',
+    };
+    const body = JSON.stringify({
+      local_access_state_sequence: 254,
+      reason: 'Missed issued heads through lost lease responses',
+    });
+    try {
+      const unauthorized = await fetch(path, { method: 'POST', headers, body });
+      expect(unauthorized.status).toBe(401);
+      expect(unauthorized.headers.get('www-authenticate')).toBe('Bearer');
+      await unauthorized.arrayBuffer();
+
+      const recovered = await fetch(path, {
+        method: 'POST',
+        headers: { ...headers, authorization: `Bearer ${ADMIN_TOKEN}` },
+        body,
+      });
+      expect(recovered.status).toBe(200);
+      expect(await recovered.json()).toEqual({
+        installation_id: installation,
+        changed: true,
+        local_access_state_sequence: 254,
+        access_state_sequence: 257,
+        valid_until: '2026-08-09T12:05:00.000Z',
+      });
+    } finally {
+      await close(server);
+    }
+    expect(calls).toEqual([
+      {
+        installation_id: installation,
+        input: {
+          local_access_state_sequence: 254,
+          reason: 'Missed issued heads through lost lease responses',
+        },
+      },
+    ]);
   });
 
   it('uses fatal UTF-8 decoding', () => {

@@ -36,6 +36,7 @@ origin:
 - `POST /v1/admin/memberships/:membership_id/enrollment-grants`
 - `POST /v1/admin/memberships/:membership_id/revocations`
 - `POST /v1/admin/installations/:installation_id/revocations`
+- `POST /v1/admin/installations/:installation_id/access-recoveries`
 - `POST /v1/admin/integrations/slack`
 - `POST /v1/admin/integrations/slack-approval-activation`
 
@@ -118,6 +119,62 @@ credential or provider configuration, makes no Slack API call, and does not
 create or replace an identity link or adapter binding. In v1 the target
 membership must own the enrolled installation. The call is audited as
 `slack_approval.activated`.
+
+### Recovering stale installation access
+
+An installation refreshes its own lease, and the Authority recovers exactly one
+skipped head automatically. An installation left further behind than that —
+because signed renewal responses were lost before it could store them, or
+because its local state is otherwise missing heads the Authority already
+issued — cannot renew, since its local head is neither the Authority's current
+head nor that head's immediate predecessor. That automatic policy is unchanged;
+this is its deliberately narrow operator fallback.
+
+The administrator-authenticated
+`POST /v1/admin/installations/:installation_id/access-recoveries` route accepts
+two fields: `local_access_state_sequence`, the sequence the operator read from
+the stranded installation, and a bounded `reason`. The Authority acts only when
+the enrollment and its membership are active, current access is active, and the
+current sequence is at least two ahead of the reported one. The reported
+sequence is the operator's word and is never proof of what the installation
+holds; it only rules out the one-head gap automatic recovery already covers.
+Once eligible, the two cases differ: an expired current head is repaired by
+appending exactly one ordinary Authority-signed active head with the normal
+next sequence and the normal lease TTL, audited as
+`installation.access_recovered`, while a still-live current head is returned
+unchanged with `changed: false` and nothing is appended, so a retry is safe.
+Nothing is rewritten or deleted, and no revoked membership, enrollment, or
+access head is revived.
+
+The response carries no signed or secret material — only `installation_id`,
+`changed`, the reported `local_access_state_sequence`, the current
+`access_state_sequence`, and its `valid_until`.
+
+```sh
+npm run organization-authority:admin -- installation access-recover \
+  --config /absolute/operator/authority.json \
+  --installation-id 'ins_<UUIDv4>' \
+  --local-access-sequence 254 \
+  --reason 'Missed issued heads through lost lease responses'
+```
+
+The repaired head is not in that response and is never handed to the operator.
+It reaches the installation through the ordinary lease route: the next
+`POST /v1/access-leases` signed from the stale local head is answered with the
+usual `409` stale-state response, and that response body carries the repaired
+head, which the installation verifies and stores like any other.
+
+So the recovery is only half done when the command returns. The stranded
+machine must run
+
+```sh
+echo-brain organization refresh --config /absolute/path/runtime.json
+```
+
+before the `valid_until` the command reported. The repaired head is an ordinary
+lease with the ordinary TTL, so if it expires first nothing is broken and
+nothing is recovered — run the administrator recovery again and refresh inside
+the new window.
 
 ## Ingress contract
 

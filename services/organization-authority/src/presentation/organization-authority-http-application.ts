@@ -16,6 +16,8 @@ import type {
   OrganizationApiSha256Digest,
   ProvisionedOrganizationMembershipV1,
   ProvisionOrganizationMembershipRequestV1,
+  RecoverOrganizationInstallationAccessRequestV1,
+  RecoveredOrganizationInstallationAccessV1,
   RevokedOrganizationMembershipV1,
 } from '@echo-brain/organization-api';
 import type {
@@ -93,4 +95,8 @@ export interface OrganizationAuthorityHttpApplication {
     installationId: string,
     reason: string,
   ): Promise<OrganizationInstallationAccessStateV1>;
+  recoverInstallationAccess(
+    installationId: string,
+    input: RecoverOrganizationInstallationAccessRequestV1,
+  ): Promise<RecoveredOrganizationInstallationAccessV1>;
 }

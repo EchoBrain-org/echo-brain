@@ -420,7 +420,7 @@ describe('local organization coordinator', () => {
     expect(state.readEnrollment()?.accepted_access_sequence).toBe(2);
   });
 
-  it('accepts a validated current state carried by a stale-state conflict', async () => {
+  it('accepts a validated current state that skips heads in a stale-state conflict', async () => {
     const authority = new TestAuthority();
     const state = new MemoryOrganizationStateStore();
     const installationSigner = new TestInstallationSigner();
@@ -439,10 +439,17 @@ describe('local organization coordinator', () => {
       now: clock.value,
       maximum_active_ttl_ms: MAX_TTL_MS,
     }).state;
-    const currentState = await authority.nextActiveState(
+    // The Authority is two heads ahead: sequence 2 was never delivered here,
+    // and sequence 3 is the head this installation has to adopt whole.
+    const undelivered = await authority.nextActiveState(
       enrollment.request,
       enrollment.receipt,
       previous,
+    );
+    const currentState = await authority.nextActiveState(
+      enrollment.request,
+      enrollment.receipt,
+      undelivered,
     );
     let postedCommand: OrganizationAccessLeaseRequestV1 | null = null;
     const conflictClient = descriptorClient(authority, {
@@ -470,9 +477,9 @@ describe('local organization coordinator', () => {
     ).toEqual(postedCommand);
     expect(recovered).toMatchObject({
       permitted: true,
-      state: { access_state_sequence: 2 },
+      state: { access_state_sequence: 3 },
     });
-    expect(state.readEnrollment()?.accepted_access_sequence).toBe(2);
+    expect(state.readEnrollment()?.accepted_access_sequence).toBe(3);
     expect(postedCommand).toMatchObject({
       installation_id: ORGANIZATION_IDS.installation,
     });

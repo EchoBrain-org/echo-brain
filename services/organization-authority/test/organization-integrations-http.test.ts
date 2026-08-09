@@ -101,6 +101,7 @@ function application(
     checkPermissionSubject: unexpected,
     revokeMembership: unexpected,
     revokeInstallation: unexpected,
+    recoverInstallationAccess: unexpected,
     ...overrides,
   };
 }

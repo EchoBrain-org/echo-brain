@@ -19,6 +19,8 @@ import type {
   IssuedOrganizationEnrollmentGrantV1,
   OrganizationInternalLiveReleaseManifestV1,
   ProvisionOrganizationMembershipRequestV1,
+  RecoverOrganizationInstallationAccessRequestV1,
+  RecoveredOrganizationInstallationAccessV1,
   RevokeOrganizationSubjectRequestV1,
 } from '@echo-brain/organization-api';
 import { organizationInternalLiveManifestSha256 } from '@echo-brain/organization-api';
@@ -180,6 +182,8 @@ function fakeClient(
     revokeMembership: async () => ({ operation: 'member-revoke' }) as never,
     revokeInstallation: async () =>
       ({ operation: 'installation-revoke' }) as never,
+    recoverInstallationAccess: async () =>
+      ({ operation: 'installation-access-recover' }) as never,
     activateSlackApproval: async () =>
       ({ operation: 'slack-approval-activate' }) as never,
     approveInternalLiveRelease: async () =>
@@ -444,6 +448,56 @@ describe('organization administrator CLI transport boundary', () => {
         request: { reason: 'Device retired' },
       },
     ]);
+  });
+
+  it('sends the operator access repair and prints the changed head plainly', async () => {
+    const value = fixture();
+    const calls: Array<{
+      id: string;
+      request: RecoverOrganizationInstallationAccessRequestV1;
+    }> = [];
+    const recovered: RecoveredOrganizationInstallationAccessV1 = {
+      installation_id: IDS.installation,
+      changed: true,
+      local_access_state_sequence: 254,
+      access_state_sequence: 257,
+      valid_until: '2026-08-09T12:05:00.000Z',
+    };
+    const reason = 'Missed issued heads through lost lease responses';
+    const client = fakeClient({
+      recoverInstallationAccess: async (id, request) => {
+        calls.push({ id, request });
+        return recovered;
+      },
+    });
+    const io = capturedIo();
+
+    await expect(
+      runOrganizationAuthorityAdminCli(
+        [
+          'installation',
+          'access-recover',
+          ...configArguments(value),
+          '--installation-id',
+          IDS.installation,
+          '--local-access-sequence',
+          '254',
+          '--reason',
+          reason,
+        ],
+        io,
+        successfulDependencies(client),
+      ),
+    ).resolves.toBe(0);
+
+    expect(calls).toEqual([
+      {
+        id: IDS.installation,
+        request: { local_access_state_sequence: 254, reason },
+      },
+    ]);
+    expect(JSON.parse(io.stdout_values.join(''))).toEqual(recovered);
+    expect(io.stderr_values).toEqual([]);
   });
 
   it('activates Slack approval from existing employee link IDs only', async () => {
