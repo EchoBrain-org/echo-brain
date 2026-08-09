@@ -54,6 +54,7 @@ tag. The ECR repository is immutable and scans on push.
 
 Copy `compose.yaml`, `compose.ec2.yaml`, `Caddyfile.ec2`,
 `bootstrap-ubuntu-arm64.sh`, `cloudflared-echo-authority.service`, and
+`install-cloudflare-tunnel-token.sh`, `asm-exec-structured-content.patch`, and
 `restore-authority-state.sh` to the new host through Session Manager. Then run:
 
 ```bash
@@ -62,9 +63,15 @@ sudo install -o root -g echo-authority -m 0640 \
   compose.yaml compose.ec2.yaml Caddyfile.ec2 /srv/echo-authority/
 ```
 
-The bootstrap installs Ubuntu's Docker, Compose, and ECR credential helper. It
-downloads Cloudflare's ARM64 `2026.7.3` package and verifies SHA-256
+The bootstrap installs Ubuntu's Docker, Compose, ECR credential helper, and AWS
+CLI v2. It downloads Cloudflare's ARM64 `2026.7.3` package and verifies SHA-256
 `d3ea7d22dd337b465da33d6bc1c4b3cfd381407447a2a7d29542c19783430db3`.
+It also installs `asm-exec` from AWS Agent Toolkit commit
+`171d4fba3bc404da3473f323c3e293b4a989f089`, verifies SHA-256
+`d55eb38ad33a5b76f584ca180f633ecc120cf39b8fd29427ffbe11a8fbf19556`,
+and applies the reviewed one-line compatibility patch for the AWS MCP server's
+`structuredContent` response. The patched checksum is
+`50fe3ed2dba8db65f29f4bfb7e382d8f9a95a0165f15153c7be2e28baeb30b6b`.
 It installs the hardened Tunnel unit **disabled and stopped**, with no token.
 
 Create the target environment using the digest printed in step 1:
@@ -218,13 +225,25 @@ In Cloudflare, change the existing `authority.echobrain.org` Tunnel origin to
 apply only to the old TLS origin. Use the existing remotely managed tunnel; do
 not create a second hostname or connector on the Mac.
 
-Install the Tunnel token only through the project's approved runtime secret
-resolver. The resolved value must go directly to
-`/etc/cloudflared/tunnel.token`, owned `root:cloudflared` with mode `0640`; it
-must never enter user data, argv, Git, shell history, clipboard, logs, or this
-chat. Do not continue if the approved resolver is unavailable. After the file
-is installed, run `sudo systemctl enable --now
-cloudflared-echo-authority.service`.
+The EC2 role may read only the exact Secrets Manager secret
+`echo/org1-prod/cloudflare-tunnel-token`. Confirm runtime resolution without
+printing or installing the value, then install it only after the private
+Authority validation in step 4 succeeds:
+
+```bash
+sudo /usr/local/sbin/install-echo-authority-tunnel-token --check
+sudo /usr/local/sbin/install-echo-authority-tunnel-token
+sudo stat -c 'token_mode=%a owner=%U group=%G size=%s' \
+  /etc/cloudflared/tunnel.token
+sudo systemctl enable --now cloudflared-echo-authority.service
+```
+
+Require the check to say only that resolution succeeded. The installer uses
+AWS Agent Toolkit's `asm-exec`; the resolved value exists only in the child
+process environment and is written atomically to
+`/etc/cloudflared/tunnel.token`, owned `root:cloudflared` with mode `0640`.
+It never enters user data, command arguments, Git, shell history, clipboard,
+logs, or this runbook. Do not continue if the check fails.
 
 Validate on EC2 and then from a separate machine:
 

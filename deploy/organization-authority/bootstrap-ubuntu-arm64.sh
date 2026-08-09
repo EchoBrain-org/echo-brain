@@ -3,9 +3,14 @@ set -euo pipefail
 
 CLOUDFLARED_VERSION=2026.7.3
 CLOUDFLARED_SHA256=d3ea7d22dd337b465da33d6bc1c4b3cfd381407447a2a7d29542c19783430db3
+AGENT_TOOLKIT_COMMIT=171d4fba3bc404da3473f323c3e293b4a989f089
+ASM_EXEC_UPSTREAM_SHA256=d55eb38ad33a5b76f584ca180f633ecc120cf39b8fd29427ffbe11a8fbf19556
+ASM_EXEC_PATCHED_SHA256=50fe3ed2dba8db65f29f4bfb7e382d8f9a95a0165f15153c7be2e28baeb30b6b
 ECR_REGISTRY=904560150024.dkr.ecr.us-west-2.amazonaws.com
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
 UNIT_SOURCE="$SCRIPT_DIR/cloudflared-echo-authority.service"
+TOKEN_INSTALLER_SOURCE="$SCRIPT_DIR/install-cloudflare-tunnel-token.sh"
+ASM_EXEC_PATCH_SOURCE="$SCRIPT_DIR/asm-exec-structured-content.patch"
 
 fail() {
   printf 'ERROR: %s\n' "$*" >&2
@@ -19,6 +24,8 @@ fail() {
 . /etc/os-release
 [[ ${ID:-} == ubuntu ]] || fail 'this bootstrap supports Ubuntu only'
 [[ -f "$UNIT_SOURCE" ]] || fail "missing $UNIT_SOURCE"
+[[ -f "$TOKEN_INSTALLER_SOURCE" ]] || fail "missing $TOKEN_INSTALLER_SOURCE"
+[[ -f "$ASM_EXEC_PATCH_SOURCE" ]] || fail "missing $ASM_EXEC_PATCH_SOURCE"
 
 export DEBIAN_FRONTEND=noninteractive
 apt-get update
@@ -28,6 +35,8 @@ apt-get install -y --no-install-recommends \
   docker.io \
   docker-compose-v2 \
   amazon-ecr-credential-helper \
+  patch \
+  snapd \
   sqlite3
 
 systemctl enable --now docker.service
@@ -57,6 +66,23 @@ install -d -o cloudflared -g cloudflared -m 0700 /var/lib/cloudflared
 
 tmp_dir="$(mktemp -d)"
 trap 'rm -rf -- "$tmp_dir"' EXIT
+
+if ! snap list aws-cli >/dev/null 2>&1; then
+  snap install aws-cli --classic
+fi
+/snap/bin/aws --version >/dev/null
+
+asm_exec="$tmp_dir/asm-exec"
+curl --fail --location --proto '=https' --tlsv1.2 \
+  --output "$asm_exec" \
+  "https://raw.githubusercontent.com/aws/agent-toolkit-for-aws/${AGENT_TOOLKIT_COMMIT}/plugins/aws-core/skills/aws-secrets-manager/references/asm-exec"
+printf '%s  %s\n' "$ASM_EXEC_UPSTREAM_SHA256" "$asm_exec" | sha256sum --check --status \
+  || fail 'upstream asm-exec checksum mismatch'
+patch --batch --forward "$asm_exec" "$ASM_EXEC_PATCH_SOURCE"
+printf '%s  %s\n' "$ASM_EXEC_PATCHED_SHA256" "$asm_exec" | sha256sum --check --status \
+  || fail 'patched asm-exec checksum mismatch'
+install -o root -g root -m 0755 "$asm_exec" /usr/local/bin/asm-exec
+
 cloudflared_deb="$tmp_dir/cloudflared-linux-arm64.deb"
 curl --fail --location --proto '=https' --tlsv1.2 \
   --output "$cloudflared_deb" \
@@ -74,6 +100,8 @@ fi
 
 install -o root -g root -m 0644 "$UNIT_SOURCE" \
   /etc/systemd/system/cloudflared-echo-authority.service
+install -o root -g root -m 0700 "$TOKEN_INSTALLER_SOURCE" \
+  /usr/local/sbin/install-echo-authority-tunnel-token
 systemctl daemon-reload
 systemctl disable cloudflared-echo-authority.service >/dev/null 2>&1 || true
 systemctl stop cloudflared-echo-authority.service >/dev/null 2>&1 || true
@@ -91,6 +119,8 @@ install -o root -g root -m 0600 "$docker_config" /root/.docker/config.json
 printf '%s\n' \
   "Docker $(docker version --format '{{.Server.Version}}')" \
   "Docker Compose $(docker compose version --short)" \
+  "$(/snap/bin/aws --version)" \
   "$(cloudflared --version)" \
+  "asm-exec $(sha256sum /usr/local/bin/asm-exec | cut -d ' ' -f 1)" \
   'Bootstrap complete. The Authority and Cloudflare Tunnel are not running.' \
   'Do not create /etc/cloudflared/tunnel.token until the cold state transfer is validated.'

@@ -1,0 +1,11 @@
+--- asm-exec
++++ asm-exec
+@@ -203,7 +203,7 @@
+         if "SecretString" in payload:
+             return payload["SecretString"]
+         # call_aws may nest the CLI output under a results/output key
+-        for key in ("result", "results", "output", "stdout"):
++        for key in ("result", "results", "output", "stdout", "structuredContent"):
+             if key in payload:
+                 nested = payload[key]
+                 if isinstance(nested, str):
