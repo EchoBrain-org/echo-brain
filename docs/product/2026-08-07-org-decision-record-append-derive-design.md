@@ -84,10 +84,11 @@ deployed service. Charters are enforced at the database level: the authority's
 "does not store decisions" remains true of `authority.sqlite`.
 
 - `record-log.sqlite` — the immutable log. Truth.
-- `record-derived.sqlite` — the derived graph. Logically rebuildable, but part
-  of the complete operational state in v1: no operator recovery/rebuild command
-  ships yet, so deleting it from an installed Authority fails closed and
-  requires a complete-state restore.
+- `record-derived.sqlite` — the derived graph. Rebuildable from the log by the
+  backup-first, stopped-state `rebuild-derived` maintenance command. Serve and
+  installation still fail closed on a missing derived file; the rebuild is the
+  one narrow exception, and only when the existing log, installation marker,
+  and Authority anchor are complete and valid.
 
 Boundary rules that keep later extraction to a standalone service mechanical:
 
@@ -384,7 +385,8 @@ the cursor advance commit in one `record-derived.sqlite` transaction; a crash
 leaves either all of them or none of them. The tested property: replaying the
 log into a fresh derived store at cursor zero produces the same **canonical
 content digest** — a hash over an ordered dump of all rows — as the incremental
-run. This is a module property, not an operator rebuild command. (It is not
+run. That module property is what the operator-facing `rebuild-derived`
+maintenance command rests on. (It is not
 file-byte identity: SQLite page layout varies across library versions.) If
 derive encounters an unprocessable record — which
 ingest-time payload validation should make impossible — it halts with an
@@ -735,10 +737,10 @@ zero new runtime dependencies.** Per component:
   cross-reference: recorded traps).
 - Receipt comparison, witnessed checkpoints, Merkle inclusion proofs, and
   automatic reconciliation of member-held receipts.
-- An operator recovery/rebuild command for `record-derived.sqlite`. V1 proves
-  deterministic replay in module tests, but an installed record pair remains
-  one complete state unit and must be restored together if either file is
-  missing.
+- Generic recovery beyond the stopped-state `rebuild-derived` command: log
+  rebuild or restore, automatic repair of a partial installation, backup and
+  restore commands, and any live (non-stopped) rebuild. A missing or mismatched
+  log, record marker, or Authority anchor must still be restored from a backup.
 - Standalone-service extraction of `organization-record` (boundary rules above
   keep it mechanical if scale demands it).
 - Hardware-backed installation keys: current signer is exportable software
@@ -792,9 +794,11 @@ document states rather than only its code:
    recreated a deleted immutable log. `authority.sqlite` now carries a record
    installation anchor beside the integrations one, and the state directory
    carries the matching marker. Serve refuses an unanchored record store, so an
-   unanchored state provably holds no history and may be bootstrapped; an
-   anchored one whose log, derived store, or marker is missing fails closed and
-   is never recreated.
+   unanchored state provably holds no history and may be bootstrapped. An
+   anchored state whose log or marker is missing fails closed and is never
+   recreated. A missing derived file also fails serve and installation, but the
+   stopped-state `rebuild-derived` command may recreate it after validating the
+   existing log, marker, and anchor.
 6. **A derive halt after start is fatal too.** The design already made a halted
    startup catch-up fatal. A halt under a live listener now closes the listener,
    refuses further ingest, and sets a failing exit code, because a process that

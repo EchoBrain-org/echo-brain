@@ -204,13 +204,56 @@ database without replacing an anchored file. It durably publishes and verifies
 the database-marker pair before committing the immutable Authority anchor. A
 completed repetition is read-only. Partial legacy state, a partial unanchored
 record-database pair, or mismatched anchored state is refused rather than
-guessed at; minimum v1 has no automatic recovery/rebuild command. Missing or
-mismatched integration state always makes `serve` fail closed.
+guessed at; nothing here is automatic recovery, and no command rebuilds a log.
+Missing or mismatched integration state always makes `serve` fail closed.
 
 The authority remains a foreground process. Process restart and persistent
 volume backup belong to the container or service manager.
 
-### Taking a backup
+### Rebuilding the derived record store
+
+`record-derived.sqlite` is the only rebuildable file in the state directory:
+it holds nothing the log does not already prove. Stop the authority and snapshot
+the whole state directory exactly as-is before mutation, then recreate a missing
+projection or replace a stale or content-corrupt one:
+
+```sh
+npm run organization-authority:cli -- rebuild-derived \
+  --config /absolute/operator/authority.json
+```
+
+The command acquires the same authenticated singleton ownership `serve` and
+`install-integrations` take, so a running authority refuses it rather than
+having the file it is serving replaced underneath it. Stop the authority first.
+If stop failed or the projection is already missing or corrupt, label the
+pre-rebuild snapshot not-known-good and retain the last known-good backup.
+
+It opens `record-log.sqlite` read-only and never writes to it, verifies the
+whole hash chain, then replays through the same follower and projector `serve`
+uses into a new sibling database. It refuses installed `-journal`, `-wal`, or
+`-shm` sidecars rather than deleting or guessing about them. Only after replay
+reaches the verified log head and the staged database validates does one atomic
+rename replace the derived path. A pre-swap failure leaves that path unchanged.
+The installation marker and its Authority anchor are never rewritten because
+they bind the canonical paths, not the derived file's inode.
+
+Output is one strict JSON line. `head_position` is the verified log head the
+new database was replayed to, and `derived_content_sha256` is the derived
+graph's canonical content digest. Because derived content is a pure function of
+log content, repeating the rebuild against an unchanged log reports the same
+digest — the command is idempotent, and an empty log rebuilds to a valid
+derived store at head 0.
+
+This rebuilds the projection and nothing else. It does not restore, repair, or
+recreate `record-log.sqlite`, does not complete a partial installation, and
+does not stand in for a backup. A missing or mismatched log, record marker, or
+Authority anchor is refused and never written: restore the complete state
+directory. A deterministic projection fault in the log is reproduced and
+reported rather than skipped. An existing derived target that is not a
+current-user `0600` canonical regular file is also refused for investigation or
+restore.
+
+### Taking a known-good backup
 
 A file-level backup is valid only when it is taken from a **stopped** authority
 whose stop **succeeded**. Stopping is not just quiescence: it drains the record
@@ -222,8 +265,9 @@ investigate before copying it, and never copy it as a good backup.
 1. Stop the authority (`SIGTERM`, or the service manager's stop) and confirm it
    exited without a shutdown error and with exit code 0. A non-zero exit after a
    derive failure means the same thing: do not treat that state as a backup.
-2. Copy the whole state directory as one unit. Every file below is part of the
-   recovery unit; a backup missing any of them cannot be restored:
+2. Copy the whole state directory as one unit. Every protected file below is
+   mandatory. A known-good backup also includes the derived file; it is the only
+   file that may instead be rebuilt from the verified log before serving:
    - `authority.sqlite` — identity, memberships, enrollments, and the
      integrations and record installation anchors
    - `integrations.sqlite` — the control plane, including the permission audit
@@ -238,12 +282,12 @@ investigate before copying it, and never copy it as a good backup.
    - `authority-identity.v1.json` and `authority-initialization.v1.json`
    - `keys/` — the authority signing key
    - `credentials/` — the admin and trusted-proxy tokens
-3. Restore all of it together. Restoring a subset — most sharply, a state
-   directory whose record log is missing — is refused: the record anchor in
-   `authority.sqlite` proves this authority already published a log, and neither
-   `serve` nor `install-integrations` will recreate one. That refusal is the
-   design: a fresh empty log would look healthy while every receipt already in
-   members' hands pointed at records it no longer holds.
+3. Restore all protected state together. If only `record-derived.sqlite` is
+   absent, run `rebuild-derived` while still stopped, then serve. Any other
+   partial restore — most sharply, one missing the record log — is refused: the
+   record anchor in `authority.sqlite` proves this authority already published a
+   log, and no command recreates one. A fresh empty log would look healthy while
+   every receipt already in members' hands pointed at records it no longer holds.
 
 Databases use `journal_mode = DELETE`, so a stopped state has no WAL or SHM
 sidecars and every file is readable read-only exactly as copied.

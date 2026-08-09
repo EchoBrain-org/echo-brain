@@ -131,9 +131,11 @@ The central and local databases remain separate:
 - Organization-record state is two further files in the same state directory:
   `record-log.sqlite`, the append-only log of human-approved acts and the
   truth, and `record-derived.sqlite`, the deterministic graph derived from it
-  and logically rebuildable from it. Minimum v1 has no operator
-  recovery/rebuild command, so both files remain one complete operational state
-  unit. They never share a file with each other or with `authority.sqlite`,
+  and rebuildable from it by the stopped-state `rebuild-derived` maintenance
+  command, which replays the log into a fresh derived database and swaps it in
+  atomically. Only the derived half is rebuildable: nothing recreates a log, so
+  a state directory missing `record-log.sqlite` requires full-state restore.
+  They never share a file with each other or with `authority.sqlite`,
   which is what keeps the authority's "stores no decisions" charter true at
   the database level. Both are published by
   `init-development` (and by `install-integrations` for a state directory that
@@ -143,9 +145,11 @@ The central and local databases remain separate:
   `authority-record-installation.v1.json` marker in the state directory and a
   record installation anchor in `authority.sqlite`. Serve refuses an unanchored
   record store, so an unanchored state provably holds no history and may be
-  bootstrapped; once anchored, a missing log, derived store, or marker fails
-  closed in both serve and maintenance and requires a complete-state restore
-  rather than recreation. The append chain is walked at process start and again
+  bootstrapped. Once anchored, serve and installation fail closed on any missing
+  record file. `rebuild-derived` is the sole exception: with the existing log,
+  marker, and Authority anchor all valid, it may recreate or replace only the
+  derived file. A missing log, marker, or anchor requires full-state restore.
+  The append chain is walked at process start and again
   at a successful stop — which is what makes a stopped state safe to back up —
   and a halted derivation is fatal at startup and after it.
 
