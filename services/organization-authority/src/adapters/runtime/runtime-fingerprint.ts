@@ -203,7 +203,7 @@ export function authorityRuntimeFingerprint(
 
 export function authorityMaintenanceFingerprint(
   config: AuthorityRuntimeFingerprintInput,
-  purpose: 'install-integrations',
+  purpose: 'install-integrations' | 'rebuild-derived',
 ): `sha256:${string}` {
   const keyPath = join(
     config.key_directory,

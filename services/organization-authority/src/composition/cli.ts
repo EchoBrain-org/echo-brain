@@ -7,6 +7,7 @@ import {
   initializeDevelopmentAuthority,
   installAuthorityIntegrations,
   inspectAuthorityServePreflight,
+  rebuildAuthorityDerivedRecordStore,
 } from './operator-state.js';
 import { startOrganizationAuthority } from './runtime.js';
 import { canonicalAuthorityStatus, inspectAuthorityStatus } from './status.js';
@@ -14,6 +15,7 @@ import { canonicalAuthorityStatus, inspectAuthorityStatus } from './status.js';
 const USAGE = `usage:
   echo-organization-authority init-development --config <absolute-path> --state-dir <absolute-path> --organization-name <name> [--port <1-65535>]
   echo-organization-authority install-integrations --config <absolute-path>
+  echo-organization-authority rebuild-derived --config <absolute-path>
   echo-organization-authority serve --config <absolute-path>
   echo-organization-authority status --config <absolute-path>`;
 
@@ -154,6 +156,14 @@ export async function runOrganizationAuthorityCli(
   if (command === 'install-integrations') {
     const flags = parseFlags(commandArguments, ['--config']);
     const result = await installAuthorityIntegrations(
+      requiredFlag(flags, '--config'),
+    );
+    io.stdout(`${canonicalJson(result as never)}\n`);
+    return 0;
+  }
+  if (command === 'rebuild-derived') {
+    const flags = parseFlags(commandArguments, ['--config']);
+    const result = await rebuildAuthorityDerivedRecordStore(
       requiredFlag(flags, '--config'),
     );
     io.stdout(`${canonicalJson(result as never)}\n`);

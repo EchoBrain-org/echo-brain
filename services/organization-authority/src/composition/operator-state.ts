@@ -37,7 +37,10 @@ import {
   ORGANIZATION_RECORD_DERIVED_DATABASE,
   ORGANIZATION_RECORD_LOG_DATABASE,
   OrganizationRecordDerivedStore,
+  OrganizationRecordFollower,
+  OrganizationRecordLogReader,
   OrganizationRecordLogStore,
+  verifyOrganizationRecordChain,
 } from '@echo-brain/organization-record';
 import {
   organizationAuthorityPinSha256,
@@ -165,6 +168,15 @@ export interface AuthorityIntegrationsInstallationResult {
   control_plane_id: string;
   organization_id: string;
   authority_id: string;
+}
+
+export interface AuthorityRecordDerivedRebuildResult {
+  schema_version: 1;
+  kind: 'echo-organization-authority-record-derived-rebuild';
+  config_path: string;
+  record_derived_database_path: string;
+  head_position: number;
+  derived_content_sha256: `sha256:${string}`;
 }
 
 export type AuthorityIntegrationsInstallationFaultPoint =
@@ -330,60 +342,90 @@ function createRecordDatabases(
  * application id and migration ledger, and belong to this organization. Never
  * creates, migrates, or writes.
  */
+function inspectOpenRecordDatabase(
+  database: ReturnType<typeof openOrganizationRecordDatabase>,
+  definition:
+    | typeof ORGANIZATION_RECORD_LOG_DATABASE
+    | typeof ORGANIZATION_RECORD_DERIVED_DATABASE,
+  label: string,
+  config: AuthorityRuntimeConfigV1,
+  allowOlderSchema: boolean,
+): void {
+  inspectOrganizationRecordDatabaseSchema(database, definition, {
+    allowOlderSchema,
+  });
+  const metadata = database
+    .prepare(
+      definition === ORGANIZATION_RECORD_LOG_DATABASE
+        ? `SELECT organization_id, authority_id
+           FROM organization_record_log_metadata WHERE singleton = 1`
+        : `SELECT organization_id, NULL AS authority_id
+           FROM organization_derived_metadata WHERE singleton = 1`,
+    )
+    .get() as
+    { organization_id: string; authority_id: string | null } | undefined;
+  if (
+    metadata === undefined ||
+    metadata.organization_id !== config.organization.organization_id ||
+    (metadata.authority_id !== null &&
+      metadata.authority_id !== config.authority.authority_id)
+  ) {
+    throw new Error(
+      `authority ${label} database belongs to a different organization or authority`,
+    );
+  }
+}
+
+function inspectRecordDatabase(
+  path: string,
+  definition:
+    | typeof ORGANIZATION_RECORD_LOG_DATABASE
+    | typeof ORGANIZATION_RECORD_DERIVED_DATABASE,
+  label: string,
+  config: AuthorityRuntimeConfigV1,
+  allowOlderSchema: boolean,
+): void {
+  if (!existsSync(path)) {
+    throw new Error(
+      `authority ${label} database is missing; restore the published state directory`,
+    );
+  }
+  const database = openOrganizationRecordDatabase(path, definition, {
+    readonly: true,
+  });
+  try {
+    database.pragma('query_only = ON');
+    inspectOpenRecordDatabase(
+      database,
+      definition,
+      label,
+      config,
+      allowOlderSchema,
+    );
+  } finally {
+    database.close();
+  }
+}
+
 function inspectRecordDatabases(
   paths: AuthorityStatePaths,
   config: AuthorityRuntimeConfigV1,
   allowOlderSchema: boolean,
 ): void {
-  for (const [path, definition, label] of [
-    [
-      paths.record_log_database_path,
-      ORGANIZATION_RECORD_LOG_DATABASE,
-      'record log',
-    ],
-    [
-      paths.record_derived_database_path,
-      ORGANIZATION_RECORD_DERIVED_DATABASE,
-      'record derived',
-    ],
-  ] as const) {
-    if (!existsSync(path)) {
-      throw new Error(
-        `authority ${label} database is missing; restore the published state directory`,
-      );
-    }
-    const database = openOrganizationRecordDatabase(path, definition, {
-      readonly: true,
-    });
-    try {
-      inspectOrganizationRecordDatabaseSchema(database, definition, {
-        allowOlderSchema,
-      });
-      const metadata = database
-        .prepare(
-          definition === ORGANIZATION_RECORD_LOG_DATABASE
-            ? `SELECT organization_id, authority_id
-               FROM organization_record_log_metadata WHERE singleton = 1`
-            : `SELECT organization_id, NULL AS authority_id
-               FROM organization_derived_metadata WHERE singleton = 1`,
-        )
-        .get() as
-        | { organization_id: string; authority_id: string | null }
-        | undefined;
-      if (
-        metadata === undefined ||
-        metadata.organization_id !== config.organization.organization_id ||
-        (metadata.authority_id !== null &&
-          metadata.authority_id !== config.authority.authority_id)
-      ) {
-        throw new Error(
-          `authority ${label} database belongs to a different organization or authority`,
-        );
-      }
-    } finally {
-      database.close();
-    }
-  }
+  inspectRecordDatabase(
+    paths.record_log_database_path,
+    ORGANIZATION_RECORD_LOG_DATABASE,
+    'record log',
+    config,
+    allowOlderSchema,
+  );
+  inspectRecordDatabase(
+    paths.record_derived_database_path,
+    ORGANIZATION_RECORD_DERIVED_DATABASE,
+    'record derived',
+    config,
+    allowOlderSchema,
+  );
 }
 
 function authorityIntegrationsBinding(
@@ -1907,6 +1949,235 @@ export async function installAuthorityIntegrations(
       );
       installAuthorityRecordStore(config, options);
       return result;
+    } finally {
+      await runtimeLock.release();
+    }
+  } finally {
+    await releaseInitialization();
+  }
+}
+
+async function inspectAuthorityRecordRebuildPreflight(
+  configPath: string,
+  config: AuthorityRuntimeConfigV1,
+): Promise<void> {
+  const inspected = await inspectInitializedAuthorityFiles(configPath, config);
+  const database = inspectAuthorityDatabaseReadOnly(config.database_path);
+  assertAuthorityDatabaseIdentity(database, config, inspected.identity);
+  const anchor = recordInstallationAnchor(database);
+  if (anchor === null) {
+    throw new Error(
+      'organization authority record installation anchor is missing',
+    );
+  }
+  assertRecordInstallationBinding(
+    readRecordInstallationMarker(config),
+    anchor,
+    config,
+  );
+}
+
+function assertReplaceableRecordDerivedPath(path: string): void {
+  let state: ReturnType<typeof lstatSync>;
+  try {
+    state = lstatSync(path);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return;
+    throw error;
+  }
+  const currentUid = process.getuid?.();
+  if (
+    state.isSymbolicLink() ||
+    !state.isFile() ||
+    realpathSync(path) !== path ||
+    (currentUid !== undefined && state.uid !== currentUid) ||
+    (state.mode & 0o777) !== 0o600
+  ) {
+    throw new Error(
+      'authority record derived database must be absent or a current-user 0600 canonical file',
+    );
+  }
+}
+
+function assertNoSqliteSidecars(databasePath: string, label: string): void {
+  for (const suffix of ['-journal', '-wal', '-shm']) {
+    const sidecar = `${databasePath}${suffix}`;
+    try {
+      lstatSync(sidecar);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') continue;
+      throw error;
+    }
+    throw new Error(
+      `${label} has SQLite sidecar ${basename(sidecar)}; investigate or restore the stopped state before rebuilding`,
+    );
+  }
+}
+
+function assertRecordRebuildPaths(paths: AuthorityStatePaths): void {
+  assertNoSqliteSidecars(paths.record_log_database_path, 'record log database');
+  assertNoSqliteSidecars(
+    paths.record_derived_database_path,
+    'record derived database',
+  );
+  assertReplaceableRecordDerivedPath(paths.record_derived_database_path);
+}
+
+async function rebuildAuthorityDerivedRecordStoreLocked(
+  configPath: string,
+  config: AuthorityRuntimeConfigV1,
+): Promise<AuthorityRecordDerivedRebuildResult> {
+  await inspectAuthorityRecordRebuildPreflight(configPath, config);
+  const paths = authorityStatePaths(config.state_dir);
+  assertRecordRebuildPaths(paths);
+  if (!existsSync(paths.record_log_database_path)) {
+    throw new Error(
+      'authority record log database is missing; restore the published state directory',
+    );
+  }
+
+  const organizationId = config.organization.organization_id;
+  const preparedPath = join(
+    paths.state_directory,
+    `.record-derived.sqlite.rebuilding-${randomBytes(16).toString('hex')}`,
+  );
+  let rebuilt: OrganizationRecordDerivedStore | undefined;
+  try {
+    const logDatabase = openOrganizationRecordDatabase(
+      paths.record_log_database_path,
+      ORGANIZATION_RECORD_LOG_DATABASE,
+      { readonly: true },
+    );
+    let headPosition: number;
+    let contentDigest: `sha256:${string}`;
+    try {
+      logDatabase.pragma('query_only = ON');
+      logDatabase.exec('BEGIN');
+      inspectOpenRecordDatabase(
+        logDatabase,
+        ORGANIZATION_RECORD_LOG_DATABASE,
+        'record log',
+        config,
+        false,
+      );
+      const reader = new OrganizationRecordLogReader(logDatabase);
+      const verification = verifyOrganizationRecordChain({
+        organization_id: organizationId,
+        authority_id: config.authority.authority_id,
+        rows: () => reader.readAfter(0, Number.MAX_SAFE_INTEGER),
+      });
+      if (verification.failures.length > 0) {
+        const detail = verification.failures
+          .map(
+            (failure) =>
+              `${failure.position}:${failure.kind}:${failure.detail}`,
+          )
+          .join('; ');
+        throw new Error(
+          `organization record log chain verification failed: ${detail}`,
+        );
+      }
+      headPosition = verification.head_position ?? 0;
+
+      rebuilt = OrganizationRecordDerivedStore.open(preparedPath, {
+        organization_id: organizationId,
+      });
+      const follower = new OrganizationRecordFollower({
+        logReader: reader,
+        derived: rebuilt,
+      });
+      const progress = await follower.drain();
+      if (progress.halted) {
+        const cause = follower.haltCause;
+        throw new Error(
+          `organization record derive halted while rebuilding at cursor ${progress.cursor_position}: ${
+            cause instanceof Error ? cause.message : String(cause)
+          }`,
+          cause === null ? undefined : { cause },
+        );
+      }
+      if (
+        progress.cursor_position !== headPosition ||
+        progress.records_derived !== headPosition
+      ) {
+        throw new Error(
+          `organization record rebuild derived ${progress.records_derived} records to cursor ${progress.cursor_position} instead of the verified log head ${headPosition}`,
+        );
+      }
+      contentDigest = rebuilt.contentDigest();
+
+      rebuilt.close();
+      rebuilt = undefined;
+      inspectRecordDatabase(
+        preparedPath,
+        ORGANIZATION_RECORD_DERIVED_DATABASE,
+        'rebuilt record derived',
+        config,
+        false,
+      );
+      assertNoSqliteSidecars(preparedPath, 'rebuilt record derived database');
+      fsyncFile(preparedPath);
+      assertRecordRebuildPaths(paths);
+      renameSync(preparedPath, paths.record_derived_database_path);
+      fsyncDirectory(paths.state_directory);
+    } finally {
+      if (logDatabase.inTransaction) {
+        try {
+          logDatabase.exec('ROLLBACK');
+        } catch {}
+      }
+      logDatabase.close();
+    }
+
+    return Object.freeze({
+      schema_version: 1,
+      kind: 'echo-organization-authority-record-derived-rebuild',
+      config_path: configPath,
+      record_derived_database_path: paths.record_derived_database_path,
+      head_position: headPosition,
+      derived_content_sha256: contentDigest,
+    });
+  } finally {
+    try {
+      rebuilt?.close();
+    } catch {}
+    let removed = false;
+    for (const suffix of ['-shm', '-wal', '-journal', '']) {
+      const abandoned = `${preparedPath}${suffix}`;
+      if (!existsSync(abandoned)) continue;
+      try {
+        unlinkSync(abandoned);
+        removed = true;
+      } catch {}
+    }
+    if (removed) fsyncDirectory(paths.state_directory);
+  }
+}
+
+/**
+ * The stopped-state derived-store rebuild.
+ *
+ * It takes the same authenticated singleton ownership `install-integrations`
+ * takes, under its own maintenance purpose, so a running authority refuses the
+ * rebuild instead of having the file it is serving replaced underneath it.
+ */
+export async function rebuildAuthorityDerivedRecordStore(
+  configPath: string,
+): Promise<AuthorityRecordDerivedRebuildResult> {
+  const path = normalizedAbsolutePath(configPath, 'authority config path');
+  const config = readAuthorityRuntimeConfig(path);
+  const releaseInitialization = await acquireAuthorityInitializationLock(
+    path,
+    config.state_dir,
+  );
+  try {
+    const serveConfig = resolveAuthorityServeConfig(config);
+    const runtimeLock = await acquireAuthorityRuntimeLock(
+      config.state_dir,
+      authorityMaintenanceFingerprint(serveConfig, 'rebuild-derived'),
+    );
+    try {
+      return await rebuildAuthorityDerivedRecordStoreLocked(path, config);
     } finally {
       await runtimeLock.release();
     }
