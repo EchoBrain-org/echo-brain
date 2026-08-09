@@ -226,24 +226,22 @@ apply only to the old TLS origin. Use the existing remotely managed tunnel; do
 not create a second hostname or connector on the Mac.
 
 The EC2 role may read only the exact Secrets Manager secret
-`echo/org1-prod/cloudflare-tunnel-token`. Confirm runtime resolution without
-printing or installing the value, then install it only after the private
-Authority validation in step 4 succeeds:
+`echo/org1-prod/cloudflare-tunnel-token`. Resolve and install it only after the
+private Authority validation in step 4 succeeds:
 
 ```bash
-sudo /usr/local/sbin/install-echo-authority-tunnel-token --check
 sudo /usr/local/sbin/install-echo-authority-tunnel-token
 sudo stat -c 'token_mode=%a owner=%U group=%G size=%s' \
   /etc/cloudflared/tunnel.token
 sudo systemctl enable --now cloudflared-echo-authority.service
 ```
 
-Require the check to say only that resolution succeeded. The installer uses
-AWS Agent Toolkit's `asm-exec`; the resolved value exists only in the child
-process environment and is written atomically to
+The installer makes at most four resolution/install attempts, with 5, 10, and
+15 second backoffs. It uses AWS Agent Toolkit's `asm-exec`; the resolved value
+exists only in the child process environment and is written atomically to
 `/etc/cloudflared/tunnel.token`, owned `root:cloudflared` with mode `0640`.
 It never enters user data, command arguments, Git, shell history, clipboard,
-logs, or this runbook. Do not continue if the check fails.
+logs, or this runbook. Do not continue if the installer fails.
 
 Validate on EC2 and then from a separate machine:
 
