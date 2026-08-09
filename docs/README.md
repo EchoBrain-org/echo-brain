@@ -27,8 +27,12 @@ The rest are subordinate deep-dives into one part of that map:
 [Organization brain direction](product/org-brain-direction.md) is stated
 direction rather than current implementation and is labelled as such.
 [Org decision record: append and derive](product/2026-08-07-org-decision-record-append-derive-design.md)
-is the approved design for that direction's append/derive half — approved but
-not yet implemented.
+is the approved design for that direction's append/derive half — implemented
+in 0.1.0-internal.6.
+[Organization permission architecture](product/2026-08-09-organization-permission-architecture.md)
+is the approved permission skeleton — pillars, trust ladder, invariants —
+that retrieve-side feature specs instantiate; approved but not yet
+implemented.
 
 Historical proposals, ceremonies, evidence reports, and implementation diaries
 belong in Git history rather than the active tree; approved-but-unimplemented

@@ -635,9 +635,13 @@ guarantees the data they need.
   ([Atlassian](https://www.atlassian.com/blog/company-news/teamwork-graph-team-26),
   [SiliconANGLE](https://siliconangle.com/2026/05/06/atlassian-opens-teamwork-graph-pushes-rovo-agentic-execution-team-26/))
   — validates our envelope carrying provenance and intent from the moment of
-  ingest. Atlassian's public material is architecture-thin (verified
-  principle, undisclosed mechanics); the operable detail in this design comes
-  from Glean, Neo4j, and Zanzibar instead.
+  ingest. (Corrected 2026-08-09: Atlassian's *developer* docs do publish
+  mechanics — the permission object shape, four principal types including a
+  workspace-wide principal, additive AND/OR evaluation, and 1P↔3P user
+  mapping
+  ([Atlassian](https://developer.atlassian.com/platform/teamwork-graph/permissions-and-access-control-lists/))
+  — making it a mechanical precedent for the permission architecture's
+  identity bridge, not principle only.)
 
 ### Build vs adopt (open-source survey 2026-08-08)
 
