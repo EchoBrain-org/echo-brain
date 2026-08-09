@@ -33,6 +33,8 @@ export {
   type CompletedSlackIdentityLink,
   type ActivateExistingSlackApprovalInput,
   type ActivateExistingSlackApprovalResult,
+  type ApprovalAuthorizationEvidenceLookup,
+  type ApprovalAuthorizationEvidenceMatch,
   type OnboardSlackOrganizationToolInput,
   type OnboardSlackOrganizationToolResult,
   type ObservedSlackIdentityLinkChallenge,

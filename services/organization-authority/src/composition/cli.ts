@@ -7,6 +7,7 @@ import {
   initializeDevelopmentAuthority,
   installAuthorityIntegrations,
   inspectAuthorityServePreflight,
+  rebuildAuthorityDerivedRecordStore,
 } from './operator-state.js';
 import { startOrganizationAuthority } from './runtime.js';
 import { canonicalAuthorityStatus, inspectAuthorityStatus } from './status.js';
@@ -14,6 +15,7 @@ import { canonicalAuthorityStatus, inspectAuthorityStatus } from './status.js';
 const USAGE = `usage:
   echo-organization-authority init-development --config <absolute-path> --state-dir <absolute-path> --organization-name <name> [--port <1-65535>]
   echo-organization-authority install-integrations --config <absolute-path>
+  echo-organization-authority rebuild-derived --config <absolute-path>
   echo-organization-authority serve --config <absolute-path>
   echo-organization-authority status --config <absolute-path>`;
 
@@ -99,6 +101,22 @@ async function runServe(
   };
   process.once('SIGINT', shutdown);
   process.once('SIGTERM', shutdown);
+  // The exit code and the whole teardown are already handled inside the
+  // runtime; this is the operator-visible line explaining why an apparently
+  // healthy process stopped answering. Claiming the stop keeps a later signal
+  // from reporting the same halt a second time, and the command outlives the
+  // runtime no further: with the listener, both databases, and singleton
+  // ownership released, nothing is left holding this process open.
+  void runtime.fatalFailure.then((failure) => {
+    shuttingDown = true;
+    io.stderr(
+      `${canonicalJson({
+        schema_version: 1,
+        kind: 'echo-organization-authority-fatal',
+        message: failure.message,
+      })}\n`,
+    );
+  });
   return 0;
 }
 
@@ -138,6 +156,14 @@ export async function runOrganizationAuthorityCli(
   if (command === 'install-integrations') {
     const flags = parseFlags(commandArguments, ['--config']);
     const result = await installAuthorityIntegrations(
+      requiredFlag(flags, '--config'),
+    );
+    io.stdout(`${canonicalJson(result as never)}\n`);
+    return 0;
+  }
+  if (command === 'rebuild-derived') {
+    const flags = parseFlags(commandArguments, ['--config']);
+    const result = await rebuildAuthorityDerivedRecordStore(
       requiredFlag(flags, '--config'),
     );
     io.stdout(`${canonicalJson(result as never)}\n`);

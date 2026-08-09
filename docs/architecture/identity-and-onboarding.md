@@ -1,10 +1,8 @@
-# Identity, onboarding, and federation
+# Identity and onboarding
 
-**Status:** Current — onboarding and access are live. The local
-founder-provenance federation surface (approval capture, attribution, signed
-record projection, export bundles, and protected independent copies) is
-retired and deleted from this build, with no plan to restore that local lane;
-what remains of it is presence-only residue detection and refusal.
+**Status:** Current — onboarding and access are live; the retired
+founder-provenance surface is deleted, with presence-only residue refusal
+(see [Product runtime](product-runtime.md#identity-modes)).
 
 Echo processes source data locally while preserving organization attribution.
 The installation owns personal provider credentials, raw source data, and its
@@ -63,46 +61,17 @@ revokes all its installations.
 The current portable signer uses a private file-backed P-256 key and explicitly
 records software-key assurance. The CLI requires an explicit acknowledgement
 before creating that exportable key. The signer interface permits a later
-hardware-backed adapter without changing the federation documents.
+hardware-backed adapter without changing the signed organization documents.
 
 Pre-1.0 Secure Enclave identities are not silently rewritten, exercised, or
 diagnosed for readiness. Their residue is sufficient to refuse product work;
 operators must preserve the old state for continuity.
 
-A state root left behind by the retired founder-provenance mode is detected and
-refused, never downgraded: no product-work command, runtime start, or new
-processing cycle resumes on it. Old founder state is never parsed — the readers
-that validated or recovered it are deleted, and detection is presence-only. One
-shared observational gate in `src/product/retired-founder-provenance.ts` runs
-before any directory creation, adapter
-resolution, credential work, provider or Authority contact, approval read or
-mutation, or caller-supplied callback, so an injected approval store or callback
-cannot resume the mode. It is a fail-closed
-gate on trusted in-process callers, not a sandbox. The gate is re-run at every
-composition cycle, not only at construction, so residue appearing under a live
-composition still fails the next cycle closed; a background access-lease renewal
-started by an already-running composition may continue until that composition is
-closed.
-
-Inspection, preservation, and quiescing stay available on a fenced profile:
-`validate-config`, general `status`, `backup`, `restore`, and `service
-stop`/`status`/`uninstall` remain reachable.
-Several of those write; the line is product work, not writes.
-
-Recovery does not cross the fence. `backup` stays available for a fenced
-profile: regular state-tree files are copied byte-for-byte and the SQLite
-database is captured as a consistent SQLite backup, while the external cutover
-guard remains beside the original state path, outside the backup. `restore`
-refuses — before its safety pre-backup, durable
-marker, staging, or any live change — whenever the live target holds founder
-residue or the validated backup payload would reintroduce it, and it stops
-without touching interrupted restore artifacts that involve that residue.
-Because `backup` refuses while the service is loaded, the executable
-order is `service stop`, `backup`, then `bootstrap` onto a founder-residue-free
-new config and state path with the administrator-issued invitation and
-Authority PIN; that one command provisions the credentials, initializes, and
-enrolls the new installation. Fresh central bootstrap is the only forward
-path.
+A state root left behind by the retired founder-provenance mode is detected
+and refused, never downgraded. The shared observational gate, the commands it
+fences and spares, and the `service stop` → `backup` → `bootstrap` recovery
+path are documented once in
+[Product runtime](product-runtime.md#identity-modes).
 
 Organization ingest, search, embeddings, participant resolution, IdP/SCIM,
 billing, and multi-organization tenancy are outside this onboarding/access

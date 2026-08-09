@@ -15,6 +15,9 @@ import type { ApprovalRequest } from '../../src/core/index.js';
 import {
   DecisionNodeStore,
   decisionApprovalId,
+  projectDecisionOrganizationRecord,
+  type DecisionNodeState,
+  type DecisionOrganizationRecordReceipt,
 } from '../../src/product/index.js';
 
 const roots: string[] = [];
@@ -456,4 +459,609 @@ describe('decision node store', () => {
     ).rejects.toThrow(/retired/);
   });
 
+});
+
+const RECORD_NOW = '2026-08-08T12:00:00.000Z';
+
+function recordStore(root: string): DecisionNodeStore {
+  return new DecisionNodeStore(root, { now: () => RECORD_NOW });
+}
+
+async function resolvedNode(
+  store: DecisionNodeStore,
+): Promise<DecisionNodeState> {
+  await store.ensureRequested(request());
+  return await store.resolve({
+    approvalId: decisionApprovalId(request().processing_key),
+    status: 'approved',
+    reviewedBy: 'reviewer',
+    surface: 'slack',
+  });
+}
+
+function envelopeInput(
+  approvalId: string,
+  overrides: Record<string, unknown> = {},
+) {
+  return {
+    approvalId,
+    recordEventType: 'approval' as const,
+    envelopeId: 'env_00000000-0000-4000-8000-000000000001',
+    idempotencyKey: approvalId,
+    envelopeSha256: `sha256:${'a'.repeat(64)}`,
+    envelope: { schema_version: 1, event_type: 'approval' },
+    ...overrides,
+  };
+}
+
+// 70 canonical base64 bytes: the size and shape of a real P-256 DER signature.
+const RECEIPT_SIGNATURE =
+  'AwoRGB8mLTQ7QklQV15lbHN6gYiPlp2kq7K5wMfO1dzj6vH4/wYNFBsiKTA3PkVMU1phaG92fYSLkpmgp661vMPK0djf5g==';
+
+function receiptIntegrity(
+  overrides: Record<string, unknown> = {},
+): Record<string, unknown> {
+  return {
+    canonicalization: 'RFC8785',
+    payload_sha256: `sha256:${'e'.repeat(64)}`,
+    signature_algorithm: 'ecdsa-p256-sha256-der-low-s',
+    key_id: `sha256:${'f'.repeat(64)}`,
+    signature_base64: RECEIPT_SIGNATURE,
+    ...overrides,
+  };
+}
+
+function receipt(
+  approvalId: string,
+  overrides: Record<string, unknown> = {},
+): DecisionOrganizationRecordReceipt {
+  return {
+    schema_version: 1,
+    kind: 'echo-organization-record-receipt',
+    authority_id: 'aut_1',
+    organization_id: 'org_1',
+    envelope_id: 'env_00000000-0000-4000-8000-000000000001',
+    envelope_sha256: `sha256:${'a'.repeat(64)}`,
+    installation_id: 'ins_1',
+    idempotency_key: approvalId,
+    position: 7,
+    record_hash: `sha256:${'b'.repeat(64)}`,
+    recorded_at: RECORD_NOW,
+    integrity: receiptIntegrity(),
+    ...overrides,
+  } as unknown as DecisionOrganizationRecordReceipt;
+}
+
+function rewriteJsonSlot(
+  path: string,
+  update: (slot: Record<string, unknown>) => void,
+): void {
+  const slot = JSON.parse(readFileSync(path, 'utf8')) as Record<string, unknown>;
+  update(slot);
+  rmSync(path);
+  writeFileSync(path, `${JSON.stringify(slot)}\n`, { mode: 0o600 });
+}
+
+describe('decision node organization record state', () => {
+  it('persists the typed source locator on new requested slots', async () => {
+    const root = newRoot('decision-store-source-locator-');
+    const staged = await recordStore(root).ensureRequested(request());
+
+    expect(staged.source).toEqual({
+      adapter_id: 'source',
+      instance_id: 'instance',
+      external_id: 'item',
+    });
+    const stored = JSON.parse(
+      readFileSync(
+        join(root, 'decisions', staged.approval_id, 'requested.json'),
+        'utf8',
+      ),
+    ) as { source: unknown };
+    expect(stored.source).toEqual(staged.source);
+  });
+
+  it('reports a node stored before the locator existed as an absent locator, not an empty one', async () => {
+    const root = newRoot('decision-store-legacy-locator-');
+    const store = recordStore(root);
+    await store.initialize();
+    const approvalId = decisionApprovalId(request().processing_key);
+    const nodeDirectory = join(root, 'decisions', approvalId);
+    mkdirSync(nodeDirectory, { recursive: true, mode: 0o700 });
+    writeFileSync(
+      join(nodeDirectory, 'requested.json'),
+      `${JSON.stringify({
+        schema_version: 1,
+        event_type: 'requested',
+        node_id: 'legacy-node',
+        processing_key: request().processing_key,
+        requested_at: request().requested_at,
+        brief: request().brief,
+        alternatives: [],
+        links: { parent: null, supersedes: null },
+        metadata: {},
+      })}\n`,
+      { mode: 0o600 },
+    );
+
+    const state = await store.getState(request().processing_key);
+    expect(state?.source).toBeNull();
+    expect(state?.organization_record.status).toBe('unresolved');
+  });
+
+  it('freezes the outbound envelope once and returns the frozen original on repeat', async () => {
+    const root = newRoot('decision-store-envelope-once-');
+    const store = recordStore(root);
+    const node = await resolvedNode(store);
+    expect(node.organization_record.status).toBe('pending');
+
+    const frozen = await store.createOrganizationRecordEnvelope(
+      envelopeInput(node.approval_id),
+    );
+    expect(frozen.envelope).toEqual({
+      schema_version: 1,
+      event_type: 'approval',
+    });
+
+    // A second build attempt never rewrites the slot: retries must resend the
+    // same bytes under the same idempotency key.
+    const again = await store.createOrganizationRecordEnvelope(
+      envelopeInput(node.approval_id, {
+        envelopeId: 'env_00000000-0000-4000-8000-000000000002',
+        envelope: { schema_version: 1, event_type: 'rebuilt' },
+      }),
+    );
+    expect(again).toEqual(frozen);
+
+    const reloaded = await store.getState(request().processing_key);
+    expect(reloaded?.organization_record.status).toBe('outbound');
+    expect(reloaded?.organization_record.envelope?.envelope_id).toBe(
+      frozen.envelope_id,
+    );
+  });
+
+  it('refuses an envelope for an unresolved node and an idempotency key that is not the approval id', async () => {
+    const root = newRoot('decision-store-envelope-guard-');
+    const store = recordStore(root);
+    const staged = await store.ensureRequested(request());
+
+    await expect(
+      store.createOrganizationRecordEnvelope(envelopeInput(staged.approval_id)),
+    ).rejects.toThrow(/not eligible/);
+
+    await store.resolve({
+      approvalId: staged.approval_id,
+      status: 'rejected',
+      reviewedBy: 'reviewer',
+      surface: 'slack',
+    });
+    await expect(
+      store.createOrganizationRecordEnvelope(
+        envelopeInput(staged.approval_id, { idempotencyKey: 'f'.repeat(64) }),
+      ),
+    ).rejects.toThrow(/idempotency key must be the approval id/);
+  });
+
+  it('binds the record event type to the immutable resolution for direct callers', async () => {
+    const approvedRoot = newRoot('decision-store-bind-approved-');
+    const approvedStore = recordStore(approvedRoot);
+    const approved = await resolvedNode(approvedStore);
+
+    // An approved decision can never be submitted as a rejection act.
+    await expect(
+      approvedStore.createOrganizationRecordEnvelope(
+        envelopeInput(approved.approval_id, { recordEventType: 'rejection' }),
+      ),
+    ).rejects.toThrow(
+      /event type must be 'approval' for a approved decision node/,
+    );
+    expect(
+      existsSync(
+        join(
+          approvedRoot,
+          'decisions',
+          approved.approval_id,
+          'organization-record-envelope.json',
+        ),
+      ),
+    ).toBe(false);
+    // The matching pairing still works.
+    expect(
+      (
+        await approvedStore.createOrganizationRecordEnvelope(
+          envelopeInput(approved.approval_id),
+        )
+      ).record_event_type,
+    ).toBe('approval');
+    // Create-once idempotency never becomes a way to assert the wrong act.
+    await expect(
+      approvedStore.createOrganizationRecordEnvelope(
+        envelopeInput(approved.approval_id, { recordEventType: 'rejection' }),
+      ),
+    ).rejects.toThrow(/event type must be 'approval'/);
+
+    const rejectedRoot = newRoot('decision-store-bind-rejected-');
+    const rejectedStore = recordStore(rejectedRoot);
+    await rejectedStore.ensureRequested(request());
+    const rejected = await rejectedStore.resolve({
+      approvalId: decisionApprovalId(request().processing_key),
+      status: 'rejected',
+      reviewedBy: 'reviewer',
+      surface: 'slack',
+    });
+
+    // ...and a rejected decision can never be submitted as an approval act.
+    await expect(
+      rejectedStore.createOrganizationRecordEnvelope(
+        envelopeInput(rejected.approval_id, { recordEventType: 'approval' }),
+      ),
+    ).rejects.toThrow(
+      /event type must be 'rejection' for a rejected decision node/,
+    );
+    expect(
+      (
+        await rejectedStore.createOrganizationRecordEnvelope(
+          envelopeInput(rejected.approval_id, {
+            recordEventType: 'rejection',
+          }),
+        )
+      ).record_event_type,
+    ).toBe('rejection');
+  });
+
+  it('files a verified receipt create-once and refuses one bound to other bytes', async () => {
+    const root = newRoot('decision-store-receipt-');
+    const store = recordStore(root);
+    const node = await resolvedNode(store);
+    await store.createOrganizationRecordEnvelope(
+      envelopeInput(node.approval_id),
+    );
+
+    await expect(
+      store.recordOrganizationRecordReceipt({
+        approvalId: node.approval_id,
+        receipt: receipt(node.approval_id, {
+          envelope_sha256: `sha256:${'c'.repeat(64)}`,
+        }),
+      }),
+    ).rejects.toThrow(/does not bind this node's frozen envelope/);
+
+    const published = await store.recordOrganizationRecordReceipt({
+      approvalId: node.approval_id,
+      receipt: receipt(node.approval_id),
+    });
+    expect(published.organization_record.status).toBe('published');
+    expect(published.organization_record.receipt?.position).toBe(7);
+    expect(
+      projectDecisionOrganizationRecord(published),
+    ).toMatchObject({
+      status: 'published',
+      position: 7,
+      record_hash: `sha256:${'b'.repeat(64)}`,
+    });
+
+    // Create-once: refiling never overwrites the receipt slot.
+    const again = await store.recordOrganizationRecordReceipt({
+      approvalId: node.approval_id,
+      receipt: receipt(node.approval_id, { position: 99 }),
+    });
+    expect(again.organization_record.receipt?.position).toBe(7);
+    await expect(
+      store.recordOrganizationRecordRejection({
+        approvalId: node.approval_id,
+        reasonCode: 'schema_invalid',
+        reason: 'too late',
+      }),
+    ).rejects.toThrow(/already published/);
+  });
+
+  it('files a permanent rejection create-once and then refuses a receipt', async () => {
+    const root = newRoot('decision-store-rejection-');
+    const store = recordStore(root);
+    const node = await resolvedNode(store);
+    await store.createOrganizationRecordEnvelope(
+      envelopeInput(node.approval_id),
+    );
+
+    const rejected = await store.recordOrganizationRecordRejection({
+      approvalId: node.approval_id,
+      reasonCode: 'signature_invalid',
+      reason: 'installation signature did not verify',
+    });
+    expect(rejected.reason_code).toBe('signature_invalid');
+    const again = await store.recordOrganizationRecordRejection({
+      approvalId: node.approval_id,
+      reasonCode: 'schema_invalid',
+      reason: 'second opinion',
+    });
+    expect(again).toEqual(rejected);
+
+    const state = await store.getState(request().processing_key);
+    expect(state?.organization_record.status).toBe('rejected');
+    expect(projectDecisionOrganizationRecord(state!)).toMatchObject({
+      status: 'rejected',
+      rejection_reason_code: 'signature_invalid',
+    });
+    await expect(
+      store.recordOrganizationRecordReceipt({
+        approvalId: node.approval_id,
+        receipt: receipt(node.approval_id),
+      }),
+    ).rejects.toThrow(/already rejected/);
+  });
+
+  it('round-trips the whole signed receipt, integrity block included, through the slot file', async () => {
+    const root = newRoot('decision-store-receipt-roundtrip-');
+    const store = recordStore(root);
+    const node = await resolvedNode(store);
+    await store.createOrganizationRecordEnvelope(
+      envelopeInput(node.approval_id),
+    );
+    const filed = receipt(node.approval_id);
+
+    await store.recordOrganizationRecordReceipt({
+      approvalId: node.approval_id,
+      receipt: filed,
+    });
+
+    // Read back from disk through a fresh store: nothing is dropped, and the
+    // signature is still there to present against the org log later.
+    const reloaded = await recordStore(root).getState(request().processing_key);
+    expect(reloaded?.organization_record.receipt).toEqual(filed);
+    const slot = JSON.parse(
+      readFileSync(
+        join(
+          root,
+          'decisions',
+          node.approval_id,
+          'published-organization-record.json',
+        ),
+        'utf8',
+      ),
+    ) as { surface: string; reference: unknown };
+    expect(slot.surface).toBe('organization-record');
+    expect(slot.reference).toEqual(filed);
+  });
+
+  it.each([
+    [
+      'another approval id',
+      (slot: Record<string, unknown>) => {
+        slot['idempotency_key'] = 'b'.repeat(64);
+      },
+      /uses another idempotency key/,
+    ],
+    [
+      'the opposite resolved action',
+      (slot: Record<string, unknown>) => {
+        slot['record_event_type'] = 'rejection';
+      },
+      /does not match its approved resolution/,
+    ],
+  ])(
+    'refuses a frozen envelope for %s on read',
+    async (_label, mutate, error) => {
+      const root = newRoot('decision-store-envelope-tampered-');
+      const store = recordStore(root);
+      const node = await resolvedNode(store);
+      await store.createOrganizationRecordEnvelope(
+        envelopeInput(node.approval_id),
+      );
+      const path = join(
+        root,
+        'decisions',
+        node.approval_id,
+        'organization-record-envelope.json',
+      );
+      rewriteJsonSlot(path, mutate);
+
+      await expect(
+        recordStore(root).getState(request().processing_key),
+      ).rejects.toThrow(error);
+    },
+  );
+
+  it('refuses a receipt copied from another frozen envelope on read', async () => {
+    const root = newRoot('decision-store-receipt-cross-envelope-');
+    const store = recordStore(root);
+    const node = await resolvedNode(store);
+    await store.createOrganizationRecordEnvelope(
+      envelopeInput(node.approval_id),
+    );
+    await store.recordOrganizationRecordReceipt({
+      approvalId: node.approval_id,
+      receipt: receipt(node.approval_id),
+    });
+    const path = join(
+      root,
+      'decisions',
+      node.approval_id,
+      'published-organization-record.json',
+    );
+    rewriteJsonSlot(path, (slot) => {
+      const copied = slot['reference'] as Record<string, unknown>;
+      copied['envelope_id'] =
+        'env_00000000-0000-4000-8000-000000000002';
+      copied['envelope_sha256'] = `sha256:${'c'.repeat(64)}`;
+      copied['idempotency_key'] = 'b'.repeat(64);
+    });
+
+    await expect(
+      recordStore(root).getState(request().processing_key),
+    ).rejects.toThrow(/receipt does not bind its frozen envelope/);
+  });
+
+  it('refuses a permanent rejection copied from another frozen envelope on read', async () => {
+    const root = newRoot('decision-store-rejection-cross-envelope-');
+    const store = recordStore(root);
+    const node = await resolvedNode(store);
+    await store.createOrganizationRecordEnvelope(
+      envelopeInput(node.approval_id),
+    );
+    await store.recordOrganizationRecordRejection({
+      approvalId: node.approval_id,
+      reasonCode: 'signature_invalid',
+      reason: 'installation signature did not verify',
+    });
+    const path = join(
+      root,
+      'decisions',
+      node.approval_id,
+      'organization-record-rejected.json',
+    );
+    rewriteJsonSlot(path, (slot) => {
+      slot['envelope_id'] =
+        'env_00000000-0000-4000-8000-000000000002';
+      slot['envelope_sha256'] = `sha256:${'c'.repeat(64)}`;
+      slot['idempotency_key'] = 'b'.repeat(64);
+    });
+
+    await expect(
+      recordStore(root).getState(request().processing_key),
+    ).rejects.toThrow(/rejection does not bind its frozen envelope/);
+  });
+
+  it.each([
+    ['absent integrity block', { integrity: undefined }],
+    ['unknown top-level key', { authority_key_id: `sha256:${'0'.repeat(64)}` }],
+    ['non-digest record hash', { record_hash: 'not-a-digest' }],
+    ['zero position', { position: 0 }],
+    ['wrong kind', { kind: 'echo-organization-enrollment-receipt' }],
+  ])(
+    'refuses to file a receipt with %s, leaving no published slot',
+    async (_label, overrides) => {
+      const root = newRoot('decision-store-receipt-invalid-');
+      const store = recordStore(root);
+      const node = await resolvedNode(store);
+      await store.createOrganizationRecordEnvelope(
+        envelopeInput(node.approval_id),
+      );
+
+      await expect(
+        store.recordOrganizationRecordReceipt({
+          approvalId: node.approval_id,
+          receipt: receipt(node.approval_id, overrides),
+        }),
+      ).rejects.toThrow(/invalid decision node event/);
+      expect(
+        existsSync(
+          join(
+            root,
+            'decisions',
+            node.approval_id,
+            'published-organization-record.json',
+          ),
+        ),
+      ).toBe(false);
+    },
+  );
+
+  it('refuses to read back a node whose receipt slot was stripped of its signature', async () => {
+    const root = newRoot('decision-store-receipt-stripped-');
+    const store = recordStore(root);
+    const node = await resolvedNode(store);
+    await store.createOrganizationRecordEnvelope(
+      envelopeInput(node.approval_id),
+    );
+    await store.recordOrganizationRecordReceipt({
+      approvalId: node.approval_id,
+      receipt: receipt(node.approval_id),
+    });
+
+    const slotPath = join(
+      root,
+      'decisions',
+      node.approval_id,
+      'published-organization-record.json',
+    );
+    const slot = JSON.parse(readFileSync(slotPath, 'utf8')) as {
+      reference: Record<string, unknown>;
+    };
+    delete slot.reference['integrity'];
+    rmSync(slotPath);
+    writeFileSync(slotPath, `${JSON.stringify(slot)}\n`, { mode: 0o600 });
+
+    // An unsigned receipt is never a readable state, so out-of-band tampering
+    // is loud rather than silently downgrading the member's evidence.
+    await expect(store.getState(request().processing_key)).rejects.toThrow(
+      /receipt\.integrity/,
+    );
+  });
+
+  it('refuses a receipt or rejection when no envelope was ever frozen', async () => {
+    const root = newRoot('decision-store-no-envelope-');
+    const store = recordStore(root);
+    const node = await resolvedNode(store);
+
+    await expect(
+      store.recordOrganizationRecordReceipt({
+        approvalId: node.approval_id,
+        receipt: receipt(node.approval_id),
+      }),
+    ).rejects.toThrow(/no frozen organization record envelope/);
+    await expect(
+      store.recordOrganizationRecordRejection({
+        approvalId: node.approval_id,
+        reasonCode: 'schema_invalid',
+        reason: 'nothing was sent',
+      }),
+    ).rejects.toThrow(/no frozen organization record envelope/);
+  });
+});
+
+describe('decision node submitter enumeration', () => {
+  it('returns healthy nodes with structured skips while list stays fail-closed', async () => {
+    const root = newRoot('decision-store-submitter-list-');
+    const store = recordStore(root);
+    const healthy = await store.ensureRequested(request());
+
+    // A historical federation node and a corrupt node both sit beside it.
+    const federated = decisionApprovalId('federated-key');
+    const corrupt = 'b'.repeat(64);
+    for (const [approvalId, body] of [
+      [
+        federated,
+        {
+          schema_version: 1,
+          event_type: 'requested',
+          node_id: 'historical-federated-node',
+          processing_key: 'federated-key',
+          requested_at: request().requested_at,
+          brief: request().brief,
+          alternatives: [],
+          links: { parent: null, supersedes: null },
+          metadata: { federation: { historical: true } },
+        },
+      ],
+      [corrupt, { schema_version: 1, event_type: 'requested' }],
+    ] as const) {
+      const directory = join(root, 'decisions', approvalId);
+      mkdirSync(directory, { recursive: true, mode: 0o700 });
+      writeFileSync(
+        join(directory, 'requested.json'),
+        `${JSON.stringify(body)}\n`,
+        { mode: 0o600 },
+      );
+    }
+
+    // Ordinary listing keeps refusing the whole directory: an operator asking
+    // "what is in my store" must not be handed a silently partial answer.
+    // (The exact federation refusal is pinned by the retirement test above.)
+    await expect(store.list()).rejects.toThrow();
+
+    const listing = await store.listForSubmission();
+    expect(listing.nodes.map((node) => node.approval_id)).toEqual([
+      healthy.approval_id,
+    ]);
+    expect(
+      [...listing.skipped]
+        .map((skip) => [skip.approval_id, skip.reason])
+        .sort(),
+    ).toEqual(
+      [
+        [federated, 'retired_federation'],
+        [corrupt, 'unreadable'],
+      ].sort(),
+    );
+  });
 });

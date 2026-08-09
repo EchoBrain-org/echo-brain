@@ -19,6 +19,13 @@ export interface ProductAdapterFactoryContext {
   credentialResolver: ProductCredentialResolver;
   now: () => string;
   approvalActionAuthorizer?: ApprovalActionAuthorizer;
+  /**
+   * Best-effort post-resolve hook. Fired after an approval surface records a
+   * terminal local decision so organization ingest happens at the moment of
+   * the human act instead of waiting for the next cycle. It must never throw
+   * and must never delay the resolution it observes.
+   */
+  afterDecisionResolved?: () => void;
 }
 
 export interface ProductAdapterFactory {
@@ -69,6 +76,7 @@ export interface CreateConfiguredAdapterRegistryOptions {
   credentialResolver?: ProductCredentialResolver;
   now?: () => string;
   approvalActionAuthorizer?: ApprovalActionAuthorizer;
+  afterDecisionResolved?: () => void;
 }
 
 interface ConfiguredAdapterRequest {
@@ -165,6 +173,9 @@ function createFactoryContext(
     ...(options.approvalActionAuthorizer === undefined
       ? {}
       : { approvalActionAuthorizer: options.approvalActionAuthorizer }),
+    ...(options.afterDecisionResolved === undefined
+      ? {}
+      : { afterDecisionResolved: options.afterDecisionResolved }),
   };
 }
 

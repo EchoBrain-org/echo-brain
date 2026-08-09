@@ -1,6 +1,8 @@
 # Organization brain direction
 
-**Status:** Direction, not current implementation
+**Status:** Direction, not current implementation. The append/derive half is
+designed in
+[2026-08-07-org-decision-record-append-derive-design.md](2026-08-07-org-decision-record-append-derive-design.md).
 
 The organization brain is a trusted log of accepted organization records with
 replaceable ways to search and reason over them. Slack and MCP are interfaces,
@@ -35,8 +37,9 @@ signed approved records
 ## Permission boundary
 
 Audience, sensitivity, retention, and payload scope travel with the approved
-record. Retrieval is default-deny and filters records before any model receives
-context. Bounded evidence inside the envelope shares that policy, and queries
+record as intent markers; resolved access is never stored on records and is
+computed at read time against current membership. Retrieval is default-deny and
+filters records before any model receives context. Bounded evidence inside the envelope shares that policy, and queries
 are auditable.
 
 Exact audience tiers, group rules, participant access, administrative override,

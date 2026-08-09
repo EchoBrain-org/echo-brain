@@ -26,6 +26,8 @@ export interface AuthorityRuntimeFingerprintInput {
   authority_pin_sha256: `sha256:${string}`;
   database_path: string;
   integrations_database_path: string;
+  record_log_database_path: string;
+  record_derived_database_path: string;
   admin_token: string;
   trusted_proxy_token: string;
   host: '127.0.0.1' | '::1';
@@ -163,6 +165,14 @@ export function authorityRuntimeFingerprint(
         config.integrations_database_path,
         'authority integrations runtime database',
       ),
+      record_log_database_file: fileIdentity(
+        config.record_log_database_path,
+        'authority record log runtime database',
+      ),
+      record_derived_database_file: fileIdentity(
+        config.record_derived_database_path,
+        'authority record derived runtime database',
+      ),
       integrations_installation_marker_file:
         contentFileIdentity(
           join(
@@ -193,7 +203,7 @@ export function authorityRuntimeFingerprint(
 
 export function authorityMaintenanceFingerprint(
   config: AuthorityRuntimeFingerprintInput,
-  purpose: 'install-integrations',
+  purpose: 'install-integrations' | 'rebuild-derived',
 ): `sha256:${string}` {
   const keyPath = join(
     config.key_directory,

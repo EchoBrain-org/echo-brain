@@ -38,6 +38,10 @@ import { HttpOrganizationAuthorityClient } from '../../src/product/organization/
 import { LocalOrganizationCoordinator } from '../../src/product/organization/enrollment/local-organization-coordinator.js';
 import { SqliteOrganizationStateStore } from '../../src/product/organization/state/sqlite-organization-state-store.js';
 import { initializeOrganizationControlDatabase } from '../../services/organization-control-plane/src/index.js';
+import {
+  OrganizationRecordDerivedStore,
+  OrganizationRecordLogStore,
+} from '../../services/organization-record/src/index.js';
 import { DevelopmentFileOrganizationAuthoritySigner } from '../../services/organization-authority/src/adapters/security/development-file-authority-signer.js';
 import { SqliteOrganizationAuthorityRepository } from '../../services/organization-authority/src/adapters/persistence/sqlite/sqlite-authority-repository.js';
 import { OrganizationAdminApiClient } from '../../services/organization-authority/src/adapters/http/organization-admin-api-client.js';
@@ -160,6 +164,8 @@ describe('local organization over the central HTTP authority', () => {
     const authorityPin = organizationAuthorityPinSha256(authorityDescriptor);
     const authorityDatabasePath = join(directory, 'authority.sqlite');
     const integrationsDatabasePath = join(directory, 'integrations.sqlite');
+    const recordLogDatabasePath = join(directory, 'record-log.sqlite');
+    const recordDerivedDatabasePath = join(directory, 'record-derived.sqlite');
     const authorityRepository = new SqliteOrganizationAuthorityRepository(
       authorityDatabasePath,
     );
@@ -218,6 +224,41 @@ describe('local organization over the central HTTP authority', () => {
     } finally {
       anchorDatabase.close();
     }
+    OrganizationRecordLogStore.open(recordLogDatabasePath, {
+      organization_id: ORGANIZATION_ID,
+      authority_id: AUTHORITY_ID,
+    }).close();
+    OrganizationRecordDerivedStore.open(recordDerivedDatabasePath, {
+      organization_id: ORGANIZATION_ID,
+    }).close();
+    // Serve refuses an unanchored record store, so a hand-built state
+    // directory publishes the same marker-and-anchor pair initialization does.
+    const recordMarker = {
+      schema_version: 1,
+      kind: 'echo-organization-authority-record-installation-marker',
+      organization_id: ORGANIZATION_ID,
+      authority_id: AUTHORITY_ID,
+      record_log_database_path: recordLogDatabasePath,
+      record_derived_database_path: recordDerivedDatabasePath,
+      installed_at: integrationsCreatedAt,
+    } as const;
+    writeFileSync(
+      join(directory, 'authority-record-installation.v1.json'),
+      `${canonicalJson(recordMarker)}\n`,
+      { flag: 'wx', mode: 0o600 },
+    );
+    const recordAnchorDatabase = new Database(authorityDatabasePath);
+    try {
+      recordAnchorDatabase
+        .prepare(
+          `UPDATE authority_metadata
+           SET record_marker_sha256 = ?, record_installed_at = ?
+           WHERE singleton = 1`,
+        )
+        .run(canonicalSha256(recordMarker), integrationsCreatedAt);
+    } finally {
+      recordAnchorDatabase.close();
+    }
     const runtime = await startOrganizationAuthority({
       state_directory: directory,
       authority_id: AUTHORITY_ID,
@@ -227,6 +268,8 @@ describe('local organization over the central HTTP authority', () => {
       authority_pin_sha256: authorityPin,
       database_path: authorityDatabasePath,
       integrations_database_path: integrationsDatabasePath,
+      record_log_database_path: recordLogDatabasePath,
+      record_derived_database_path: recordDerivedDatabasePath,
       admin_token: ADMIN_TOKEN,
       trusted_proxy_token: PROXY_TOKEN,
       host: '127.0.0.1',

@@ -107,6 +107,13 @@ local metadata; a historical node with an own `requested.metadata.federation`
 field is refused on every read or mutation, while similarly named fields in
 publication references or resolution metadata remain opaque.
 
+## Update channel
+
+`src/product/update/` applies internal-live releases under its own boundary
+layer rule (`internal-live-updater-owns-release-application`), with
+`tools/internal-live-release.mjs` producing the release artifacts. The
+operator flow is documented in the root [README](../../README.md).
+
 ## Product boundary
 
 The current product is one user-owned local installation. It is not a central

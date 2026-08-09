@@ -16,7 +16,8 @@
     "@echo-brain/federation-protocol",
     "@echo-brain/organization-control-plane",
     "@echo-brain/organization-protocol",
-    "@echo-brain/organization-api"
+    "@echo-brain/organization-api",
+    "@echo-brain/organization-record"
   ],
   "allowed_external_packages": ["better-sqlite3"],
   "allowed_node_builtins": [
@@ -33,7 +34,8 @@
     "services/organization-authority/migrations/0001_single_org_authority.sql",
     "services/organization-authority/migrations/0002_admin_command_idempotency.sql",
     "services/organization-authority/migrations/0003_integrations_installation_anchor.sql",
-    "services/organization-authority/migrations/0004_internal_live_release_rollout.sql"
+    "services/organization-authority/migrations/0004_internal_live_release_rollout.sql",
+    "services/organization-authority/migrations/0005_record_installation_anchor.sql"
   ],
   "layer_rules": [
     {
@@ -117,7 +119,8 @@
         "@echo-brain/federation-protocol",
         "@echo-brain/organization-control-plane",
         "@echo-brain/organization-protocol",
-        "@echo-brain/organization-api"
+        "@echo-brain/organization-api",
+        "@echo-brain/organization-record"
       ],
       "allowed_external_packages": [],
       "allowed_node_builtins": ["crypto", "events", "fs", "http", "net", "path"]

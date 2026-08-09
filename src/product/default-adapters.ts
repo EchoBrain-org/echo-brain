@@ -5,6 +5,7 @@ import { createJsonlOutboxDeliverySurface } from '../adapters/delivery-surfaces/
 import { createSlackDeliverySurface } from '../adapters/delivery-surfaces/slack/slack-delivery-surface.js';
 import { FileSlackDeliveryReceiptStore } from '../adapters/delivery-surfaces/slack/slack-delivery-receipt-store.js';
 import { createSlackReactionsApprovalSurface } from '../adapters/approval-surfaces/slack-reactions/slack-reactions-approval-surface.js';
+import type { ApprovalDecisionStore } from '../adapters/approval-surfaces/slack-reactions/slack-reactions-approval-surface.js';
 import { DecisionNodeStore } from './approval/decision-node-store.js';
 import { ProductAdapterFactoryRegistry } from './adapter-factories.js';
 
@@ -27,6 +28,33 @@ function inert<T>(dependency: string): T {
 
 /** Empty rather than `process.env`: static validation reads no environment. */
 const INERT_ENVIRONMENT: NodeJS.ProcessEnv = Object.freeze({});
+
+/**
+ * Wraps the decision node store so a terminal local resolution immediately
+ * offers organization ingest a chance to run.
+ *
+ * The hook fires only after `resolve` has durably returned, and a hook failure
+ * is swallowed: the human act is already recorded locally, and the per-cycle
+ * sweep is the durable path. This is the design's "best-effort
+ * post-resolve hook" and nothing more — no queue, no daemon, no retry here.
+ */
+export function notifyOnResolve(
+  store: ApprovalDecisionStore,
+  afterDecisionResolved: (() => void) | undefined,
+): ApprovalDecisionStore {
+  if (afterDecisionResolved === undefined) return store;
+  return {
+    ensureRequested: (request) => store.ensureRequested(request),
+    recordPublished: (input) => store.recordPublished(input),
+    resolve: async (input) => {
+      const resolved = await store.resolve(input);
+      try {
+        afterDecisionResolved();
+      } catch {}
+      return resolved;
+    },
+  };
+}
 
 const inertCredentialResolver = (): never => {
   throw new Error('static adapter validation must not resolve credentials');
@@ -124,9 +152,12 @@ export function createDefaultAdapterFactories(): ProductAdapterFactoryRegistry {
       createSlackReactionsApprovalSurface(config, {
         // The surface resolves against the same shared decision node store
         // as the CLI; the composition root owns that store choice.
-        store: new DecisionNodeStore(context.stateDirectory, {
-          now: context.now,
-        }),
+        store: notifyOnResolve(
+          new DecisionNodeStore(context.stateDirectory, {
+            now: context.now,
+          }),
+          context.afterDecisionResolved,
+        ),
         environment: context.environment,
         credentialResolver: context.credentialResolver,
         now: context.now,

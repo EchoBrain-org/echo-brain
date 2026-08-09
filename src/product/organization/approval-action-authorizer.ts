@@ -61,6 +61,12 @@ export type OrganizationApprovalActionAuthorizationEvidence = JsonObject & {
   installation_id: string;
   request_id: string;
   approval_id: string;
+  /**
+   * Which act the Authority evaluated. Carried on the evidence itself so a
+   * later consumer -- organization ingest above all -- can match an act to its
+   * authorization without re-deriving the signed request bytes.
+   */
+  action: 'approve' | 'reject';
   request_sha256: Sha256Digest;
   provider_event_sha256: Sha256Digest;
   allowed: boolean;
@@ -243,6 +249,7 @@ export class OrganizationApprovalActionAuthorizer {
         installation_id: requestIdentity.installation_id,
         request_id: request.request_id,
         approval_id: request.approval_id,
+        action: input.action,
         request_sha256: decision.request_sha256,
         provider_event_sha256: decision.provider_event_sha256,
         reason_code: decision.reason_code,

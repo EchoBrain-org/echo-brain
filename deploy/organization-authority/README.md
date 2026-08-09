@@ -51,11 +51,12 @@ trusted-proxy token, not the administrator token, databases, or authority
 signing key. The private runtime-status route is not forwarded by the public
 proxy.
 
-The authority container owns two private SQLite files in the same durable
-state directory: `authority.sqlite` for membership and installation truth, and
-`integrations.sqlite` for provider connections, exact adapter bindings,
-direct grants, and integration audit. They run in the same process under one
-authenticated singleton guard.
+The authority container owns four private SQLite files in the same durable
+state directory: `authority.sqlite` for membership and installation truth,
+`integrations.sqlite` for provider connections and grants, `record-log.sqlite`
+for append-only organization record truth, and `record-derived.sqlite` for its
+rebuildable projection. They run in one process under one authenticated
+singleton guard.
 
 For a state initialized by an older build, build the exact target image first,
 then stop and back up the complete state before running the one-time upgrade.
@@ -200,14 +201,53 @@ docker compose exec -T authority \
   status --config /echo/authority.json
 ```
 
-Use `docker compose run` only for the one-time initialization while the stack
-is stopped. `run` creates another container; it is not the live authority.
+To rebuild only `record-derived.sqlite`, stop the whole stack and snapshot the
+current `data` directory exactly as-is before mutation. Use a private backup root
+outside the Git worktree:
+
+```sh
+(
+  set -eu
+  compose() {
+    env \
+      -u ECHO_AUTHORITY_HOST \
+      -u ECHO_AUTHORITY_UID \
+      -u ECHO_AUTHORITY_GID \
+      -u ECHO_AUTHORITY_IMAGE \
+      -u ECHO_AUTHORITY_RUNTIME_VOLUME \
+      -u ECHO_PROXY_CLIENT_ID \
+      docker compose --env-file .env "$@"
+  }
+  compose down
+  BACKUP_ROOT=/absolute/private/echo-authority-rebuild-snapshots
+  install -d -m 0700 "$BACKUP_ROOT"
+  BACKUP_DIRECTORY="$(mktemp -d "$BACKUP_ROOT/rebuild-XXXXXXXX")"
+  (umask 077 && tar -czf "$BACKUP_DIRECTORY/data.tar.gz" data)
+  chmod 0600 "$BACKUP_DIRECTORY/data.tar.gz"
+  tar -tzf "$BACKUP_DIRECTORY/data.tar.gz" >/dev/null
+  shasum -a 256 "$BACKUP_DIRECTORY/data.tar.gz"
+  compose run --rm --no-deps authority \
+    rebuild-derived --config /echo/authority.json
+  compose up -d --no-build --wait --wait-timeout 90
+  compose exec -T authority \
+    node services/organization-authority/dist/main.js \
+    status --config /echo/authority.json
+)
+```
+
+If shutdown failed or the derived file was already missing or corrupt, this is
+an incident snapshot, not a known-good backup; retain the last known-good backup.
+The fail-fast block stops on a shutdown or backup-verification error. If shutdown
+itself fails, preserve the stopped state as-is before investigating or retrying.
+The command never rebuilds the log and refuses record-database SQLite sidecars.
+Use `docker compose run` only for one-time initialization or stopped maintenance.
+`run` creates another container; it is not the live authority.
 The authority's singleton guard is a private authenticated Unix socket in the
 shared `authority_runtime` Docker volume, so any second container using this
 compose service must prove the existing owner and is refused while it remains
-active. Durable keys and both database files remain in the host-mounted `data`
-directory; the coordination volume contains no organization content and may be
-recreated only while the whole authority stack is stopped.
+active. Durable keys and all four database files remain in the host-mounted
+`data` directory; the coordination volume contains no organization content and
+may be recreated only while the whole authority stack is stopped.
 
 The volume has the deployment-stable Docker name
 `echo-organization-authority-runtime`, so changing Compose project names does
@@ -227,8 +267,10 @@ Restarting only `authority` replaces that namespace and strands the existing
 proxy process until `proxy` is also restarted.
 
 Treat the complete `data` directory as one recovery unit. Stop the stack before
-a file-level backup so both SQLite databases, the signing key, credentials, and
-identity and installation manifests are captured consistently.
+a file-level backup so all four SQLite databases, the signing key, credentials,
+and identity and installation manifests are captured consistently. The derived
+database is the only file that may be absent and rebuilt from a verified log
+before restart; every protected file must be restored together.
 
 That `data` archive is sufficient for this in-place upgrade rollback because
 `docker compose down` leaves the named Caddy volumes intact. It is not by

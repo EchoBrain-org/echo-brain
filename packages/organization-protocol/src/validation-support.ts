@@ -20,6 +20,8 @@ export const MAX_ORGANIZATION_PROTOCOL_DOCUMENT_BYTES = 16 * 1024;
 const DIGEST_PATTERN = /^sha256:[0-9a-f]{64}$/;
 const CANONICAL_BASE64_PATTERN =
   /^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/;
+const UUID_V4_PATTERN =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
 
 function translateFederationValidation<T>(validate: () => T): T {
   try {
@@ -89,6 +91,27 @@ export function assertId(
     );
   }
   translateFederationValidation(() => assertFederationId(value, prefix, label));
+}
+
+/**
+ * Same identifier syntax as `assertId` for prefixes the federation identifier
+ * union does not own, such as the authority's `pcr` and `pgr` identifiers that
+ * reach this package only as quoted evidence.
+ */
+export function assertPrefixedUuidId(
+  value: unknown,
+  prefix: string,
+  label: string,
+): asserts value is string {
+  if (
+    typeof value !== "string" ||
+    !value.startsWith(`${prefix}_`) ||
+    !UUID_V4_PATTERN.test(value.slice(prefix.length + 1))
+  ) {
+    organizationProtocolValidationFailure(
+      `${label} must be a canonical ${prefix} identifier`,
+    );
+  }
 }
 
 export function assertTimestamp(
@@ -225,14 +248,19 @@ export function validateSignedIntegrity(
   return canonicalSnapshot(record as unknown as SignedIntegrity, label);
 }
 
-export function canonicalSnapshot<T>(value: T, label: string): T {
+/**
+ * `maximumBytes` is an explicit per-document exemption, never a global raise:
+ * every caller that omits it keeps the shared 16 KiB protocol default.
+ */
+export function canonicalSnapshot<T>(
+  value: T,
+  label: string,
+  maximumBytes: number = MAX_ORGANIZATION_PROTOCOL_DOCUMENT_BYTES,
+): T {
   const bytes = translateFederationValidation(() => canonicalJsonBytes(value));
-  if (
-    bytes.length === 0 ||
-    bytes.length > MAX_ORGANIZATION_PROTOCOL_DOCUMENT_BYTES
-  ) {
+  if (bytes.length === 0 || bytes.length > maximumBytes) {
     organizationProtocolValidationFailure(
-      `${label} must be between 1 and ${MAX_ORGANIZATION_PROTOCOL_DOCUMENT_BYTES} canonical bytes`,
+      `${label} must be between 1 and ${maximumBytes} canonical bytes`,
     );
   }
   return JSON.parse(bytes.toString("utf8")) as T;

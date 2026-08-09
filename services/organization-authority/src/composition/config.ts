@@ -12,6 +12,8 @@ export interface AuthorityServeConfig extends DevelopmentSignerConfig {
   authority_pin_sha256: `sha256:${string}`;
   database_path: string;
   integrations_database_path: string;
+  record_log_database_path: string;
+  record_derived_database_path: string;
   admin_token: string;
   trusted_proxy_token: string;
   host: '127.0.0.1' | '::1';
@@ -45,6 +47,8 @@ export function assertAuthorityServeStateBoundary(
     | 'state_directory'
     | 'database_path'
     | 'integrations_database_path'
+    | 'record_log_database_path'
+    | 'record_derived_database_path'
     | 'key_directory'
   >,
 ): void {
@@ -86,6 +90,27 @@ export function assertAuthorityServeStateBoundary(
     throw new Error(
       'authority integrations database must use the canonical state-directory path',
     );
+  }
+  // The record log and the derived graph are separate files by charter, so the
+  // boundary check refuses a configuration that would let them collide with
+  // each other or with `authority.sqlite`.
+  for (const [path, filename, label] of [
+    [config.record_log_database_path, 'record-log.sqlite', 'record log'],
+    [
+      config.record_derived_database_path,
+      'record-derived.sqlite',
+      'record derived',
+    ],
+  ] as const) {
+    if (
+      !normalizedAbsolute(path) ||
+      !pathIsWithin(path, config.state_directory) ||
+      path !== join(config.state_directory, filename)
+    ) {
+      throw new Error(
+        `authority ${label} database must use the canonical state-directory path`,
+      );
+    }
   }
 }
 

@@ -32,6 +32,17 @@ import {
   type OrganizationControlDatabaseIdentity,
 } from '@echo-brain/organization-control-plane';
 import {
+  inspectOrganizationRecordDatabaseSchema,
+  openOrganizationRecordDatabase,
+  ORGANIZATION_RECORD_DERIVED_DATABASE,
+  ORGANIZATION_RECORD_LOG_DATABASE,
+  OrganizationRecordDerivedStore,
+  OrganizationRecordFollower,
+  OrganizationRecordLogReader,
+  OrganizationRecordLogStore,
+  verifyOrganizationRecordChain,
+} from '@echo-brain/organization-record';
+import {
   organizationAuthorityPinSha256,
   validateOrganizationAuthorityDescriptor,
   verifyOrganizationAuthorityPin,
@@ -65,6 +76,7 @@ import {
   readAuthorityRuntimeConfig,
   resolveAuthorityServeConfig,
   type AuthorityRuntimeConfigV1,
+  type AuthorityStatePaths,
   validateAuthorityRuntimeConfig,
   writeAuthorityRuntimeConfigExclusive,
 } from './operator-config.js';
@@ -73,6 +85,7 @@ import type { AuthorityServeConfig } from './config.js';
 const MAX_IDENTITY_BYTES = 64 * 1024;
 const MAX_INITIALIZATION_MANIFEST_BYTES = 128 * 1024;
 const MAX_INTEGRATIONS_INSTALLATION_MARKER_BYTES = 64 * 1024;
+const MAX_RECORD_INSTALLATION_MARKER_BYTES = 64 * 1024;
 
 export interface AuthorityIdentityRecordV1 {
   schema_version: 1;
@@ -102,6 +115,27 @@ export interface AuthorityIntegrationsInstallationMarkerV1 {
 
 interface AuthorityIntegrationsInstallationAnchor {
   control_plane_id: string;
+  marker_sha256: `sha256:${string}`;
+  installed_at: string;
+}
+
+/**
+ * The state-directory half of the record-store installation proof.
+ *
+ * It names the two files it published so a marker restored beside a differently
+ * configured state directory is refused rather than silently believed.
+ */
+export interface AuthorityRecordInstallationMarkerV1 {
+  schema_version: 1;
+  kind: 'echo-organization-authority-record-installation-marker';
+  organization_id: string;
+  authority_id: string;
+  record_log_database_path: string;
+  record_derived_database_path: string;
+  installed_at: string;
+}
+
+interface AuthorityRecordInstallationAnchor {
   marker_sha256: `sha256:${string}`;
   installed_at: string;
 }
@@ -136,11 +170,22 @@ export interface AuthorityIntegrationsInstallationResult {
   authority_id: string;
 }
 
+export interface AuthorityRecordDerivedRebuildResult {
+  schema_version: 1;
+  kind: 'echo-organization-authority-record-derived-rebuild';
+  config_path: string;
+  record_derived_database_path: string;
+  head_position: number;
+  derived_content_sha256: `sha256:${string}`;
+}
+
 export type AuthorityIntegrationsInstallationFaultPoint =
   | 'after_authority_migration'
   | 'after_database_published'
   | 'after_marker_published'
-  | 'after_anchor_committed';
+  | 'after_anchor_committed'
+  | 'after_record_databases_published'
+  | 'after_record_marker_published';
 
 export interface InstallAuthorityIntegrationsOptions {
   /** Test-only crash hook. A thrown error leaves durable publication for retry. */
@@ -260,6 +305,128 @@ function readPrivateTextFile<T>(
 type AuthorityIntegrationsBindingConfig =
   | AuthorityRuntimeConfigV1
   | AuthorityServeConfig;
+
+/**
+ * Creates or re-opens both organization-record databases at their canonical
+ * state-directory paths, applying migrations and binding each file to this
+ * organization exactly once.
+ *
+ * Serve never calls this. Required production state is published by
+ * initialization, which is the project's existing rule for `authority.sqlite`
+ * and `integrations.sqlite`; a serve that silently created a fresh empty log
+ * would look healthy while every previously issued receipt pointed at records
+ * it no longer holds.
+ */
+function createRecordDatabases(
+  paths: AuthorityStatePaths,
+  organizationId: string,
+  authorityId: string,
+): void {
+  const log = OrganizationRecordLogStore.open(paths.record_log_database_path, {
+    organization_id: organizationId,
+    authority_id: authorityId,
+  });
+  try {
+    const derived = OrganizationRecordDerivedStore.open(
+      paths.record_derived_database_path,
+      { organization_id: organizationId },
+    );
+    derived.close();
+  } finally {
+    log.close();
+  }
+}
+
+/**
+ * Read-only proof that both record databases exist, carry the expected
+ * application id and migration ledger, and belong to this organization. Never
+ * creates, migrates, or writes.
+ */
+function inspectOpenRecordDatabase(
+  database: ReturnType<typeof openOrganizationRecordDatabase>,
+  definition:
+    | typeof ORGANIZATION_RECORD_LOG_DATABASE
+    | typeof ORGANIZATION_RECORD_DERIVED_DATABASE,
+  label: string,
+  config: AuthorityRuntimeConfigV1,
+  allowOlderSchema: boolean,
+): void {
+  inspectOrganizationRecordDatabaseSchema(database, definition, {
+    allowOlderSchema,
+  });
+  const metadata = database
+    .prepare(
+      definition === ORGANIZATION_RECORD_LOG_DATABASE
+        ? `SELECT organization_id, authority_id
+           FROM organization_record_log_metadata WHERE singleton = 1`
+        : `SELECT organization_id, NULL AS authority_id
+           FROM organization_derived_metadata WHERE singleton = 1`,
+    )
+    .get() as
+    { organization_id: string; authority_id: string | null } | undefined;
+  if (
+    metadata === undefined ||
+    metadata.organization_id !== config.organization.organization_id ||
+    (metadata.authority_id !== null &&
+      metadata.authority_id !== config.authority.authority_id)
+  ) {
+    throw new Error(
+      `authority ${label} database belongs to a different organization or authority`,
+    );
+  }
+}
+
+function inspectRecordDatabase(
+  path: string,
+  definition:
+    | typeof ORGANIZATION_RECORD_LOG_DATABASE
+    | typeof ORGANIZATION_RECORD_DERIVED_DATABASE,
+  label: string,
+  config: AuthorityRuntimeConfigV1,
+  allowOlderSchema: boolean,
+): void {
+  if (!existsSync(path)) {
+    throw new Error(
+      `authority ${label} database is missing; restore the published state directory`,
+    );
+  }
+  const database = openOrganizationRecordDatabase(path, definition, {
+    readonly: true,
+  });
+  try {
+    database.pragma('query_only = ON');
+    inspectOpenRecordDatabase(
+      database,
+      definition,
+      label,
+      config,
+      allowOlderSchema,
+    );
+  } finally {
+    database.close();
+  }
+}
+
+function inspectRecordDatabases(
+  paths: AuthorityStatePaths,
+  config: AuthorityRuntimeConfigV1,
+  allowOlderSchema: boolean,
+): void {
+  inspectRecordDatabase(
+    paths.record_log_database_path,
+    ORGANIZATION_RECORD_LOG_DATABASE,
+    'record log',
+    config,
+    allowOlderSchema,
+  );
+  inspectRecordDatabase(
+    paths.record_derived_database_path,
+    ORGANIZATION_RECORD_DERIVED_DATABASE,
+    'record derived',
+    config,
+    allowOlderSchema,
+  );
+}
 
 function authorityIntegrationsBinding(
   config: AuthorityIntegrationsBindingConfig,
@@ -545,6 +712,289 @@ function assertIntegrationsInstallationBinding(
   }
 }
 
+type AuthorityRecordBindingConfig =
+  | AuthorityRuntimeConfigV1
+  | AuthorityServeConfig;
+
+function authorityRecordBinding(config: AuthorityRecordBindingConfig): {
+  state_directory: string;
+  record_log_database_path: string;
+  record_derived_database_path: string;
+  organization_id: string;
+  authority_id: string;
+} {
+  if ('state_dir' in config) {
+    const paths = authorityStatePaths(config.state_dir);
+    return {
+      state_directory: paths.state_directory,
+      record_log_database_path: paths.record_log_database_path,
+      record_derived_database_path: paths.record_derived_database_path,
+      organization_id: config.organization.organization_id,
+      authority_id: config.authority.authority_id,
+    };
+  }
+  return {
+    state_directory: config.state_directory,
+    record_log_database_path: config.record_log_database_path,
+    record_derived_database_path: config.record_derived_database_path,
+    organization_id: config.organization_id,
+    authority_id: config.authority_id,
+  };
+}
+
+function recordInstallationMarker(
+  config: AuthorityRecordBindingConfig,
+  installedAt: string,
+): AuthorityRecordInstallationMarkerV1 {
+  const binding = authorityRecordBinding(config);
+  return {
+    schema_version: 1,
+    kind: 'echo-organization-authority-record-installation-marker',
+    organization_id: binding.organization_id,
+    authority_id: binding.authority_id,
+    record_log_database_path: binding.record_log_database_path,
+    record_derived_database_path: binding.record_derived_database_path,
+    installed_at: installedAt,
+  };
+}
+
+function readRecordInstallationMarker(
+  config: AuthorityRecordBindingConfig,
+): AuthorityRecordInstallationMarkerV1 {
+  const binding = authorityRecordBinding(config);
+  const paths = authorityStatePaths(binding.state_directory);
+  const path = paths.record_installation_marker_path;
+  if (!existsSync(path)) {
+    throw new Error(
+      'authority record installation marker is missing; a previously installed record store must be restored, while a verified pre-record state must use install-integrations',
+    );
+  }
+  return readPrivateTextFile(
+    path,
+    'authority record installation marker',
+    MAX_RECORD_INSTALLATION_MARKER_BYTES,
+    true,
+    (contents) => {
+      const parsed = JSON.parse(contents) as unknown;
+      if (
+        parsed === null ||
+        typeof parsed !== 'object' ||
+        Array.isArray(parsed)
+      ) {
+        throw new Error(
+          'authority record installation marker must be an object',
+        );
+      }
+      const marker = parsed as Record<string, unknown>;
+      if (
+        Object.keys(marker).sort().join(',') !==
+          [
+            'authority_id',
+            'installed_at',
+            'kind',
+            'organization_id',
+            'record_derived_database_path',
+            'record_log_database_path',
+            'schema_version',
+          ].join(',') ||
+        marker.schema_version !== 1 ||
+        marker.kind !==
+          'echo-organization-authority-record-installation-marker' ||
+        marker.organization_id !== binding.organization_id ||
+        marker.authority_id !== binding.authority_id ||
+        marker.record_log_database_path !==
+          binding.record_log_database_path ||
+        marker.record_derived_database_path !==
+          binding.record_derived_database_path ||
+        typeof marker.installed_at !== 'string' ||
+        Number.isNaN(Date.parse(marker.installed_at))
+      ) {
+        throw new Error(
+          'authority record installation marker is invalid or differs from config',
+        );
+      }
+      return Object.freeze({
+        schema_version: 1,
+        kind: 'echo-organization-authority-record-installation-marker',
+        organization_id: marker.organization_id,
+        authority_id: marker.authority_id,
+        record_log_database_path: marker.record_log_database_path,
+        record_derived_database_path: marker.record_derived_database_path,
+        installed_at: marker.installed_at,
+      });
+    },
+  );
+}
+
+function recordInstallationAnchor(
+  database: AuthorityDatabaseInspection,
+): AuthorityRecordInstallationAnchor | null {
+  if (
+    database.record_marker_sha256 === null &&
+    database.record_installed_at === null
+  ) {
+    return null;
+  }
+  if (
+    database.record_marker_sha256 === null ||
+    database.record_installed_at === null
+  ) {
+    throw new Error(
+      'organization authority record installation anchor is incomplete',
+    );
+  }
+  return Object.freeze({
+    marker_sha256: database.record_marker_sha256,
+    installed_at: database.record_installed_at,
+  });
+}
+
+function recordInstallationAnchorForMarker(
+  marker: AuthorityRecordInstallationMarkerV1,
+): AuthorityRecordInstallationAnchor {
+  return Object.freeze({
+    marker_sha256: canonicalSha256(marker),
+    installed_at: marker.installed_at,
+  });
+}
+
+/**
+ * Writes the record-store anchor into `authority.sqlite` exactly once.
+ *
+ * Re-running with the same marker is a no-op that re-validates, which is what
+ * makes an interrupted installation retry-safe. A *different* marker is refused
+ * by this code and again by the migration's immutability trigger: a second
+ * anchor would mean a second record store, and the first one's receipts would
+ * point at a log nobody is protecting any more.
+ */
+function commitRecordInstallationAnchor(
+  databasePath: string,
+  marker: AuthorityRecordInstallationMarkerV1,
+): AuthorityRecordInstallationAnchor {
+  const requested = recordInstallationAnchorForMarker(marker);
+  const database = openAuthorityDatabase(databasePath, { fileMustExist: true });
+  try {
+    database.exec('BEGIN IMMEDIATE');
+    try {
+      const existing = database
+        .prepare(
+          `SELECT record_marker_sha256, record_installed_at
+           FROM authority_metadata WHERE singleton = 1`,
+        )
+        .get() as
+        | {
+            record_marker_sha256: string | null;
+            record_installed_at: string | null;
+          }
+        | undefined;
+      if (existing === undefined) {
+        throw new Error('organization authority database metadata is missing');
+      }
+      if (existing.record_marker_sha256 !== null) {
+        if (
+          existing.record_marker_sha256 !== requested.marker_sha256 ||
+          existing.record_installed_at !== requested.installed_at
+        ) {
+          throw new Error(
+            'organization authority record installation anchor differs from the requested record store',
+          );
+        }
+      } else {
+        if (existing.record_installed_at !== null) {
+          throw new Error(
+            'organization authority record installation anchor is incomplete',
+          );
+        }
+        const update = database
+          .prepare(
+            `UPDATE authority_metadata
+             SET record_marker_sha256 = ?,
+                 record_installed_at = ?
+             WHERE singleton = 1
+               AND record_marker_sha256 IS NULL
+               AND record_installed_at IS NULL`,
+          )
+          .run(requested.marker_sha256, requested.installed_at);
+        if (update.changes !== 1) {
+          throw new Error(
+            'organization authority record installation anchor could not be committed',
+          );
+        }
+      }
+      database.exec('COMMIT');
+    } catch (error) {
+      try {
+        database.exec('ROLLBACK');
+      } catch {}
+      throw error;
+    }
+  } finally {
+    database.close();
+  }
+  fsyncFile(databasePath);
+  fsyncDirectory(dirname(databasePath));
+  return requested;
+}
+
+function assertRecordInstallationBinding(
+  marker: AuthorityRecordInstallationMarkerV1,
+  anchor: AuthorityRecordInstallationAnchor,
+  config: AuthorityRecordBindingConfig,
+): void {
+  const binding = authorityRecordBinding(config);
+  if (
+    marker.organization_id !== binding.organization_id ||
+    marker.authority_id !== binding.authority_id ||
+    marker.record_log_database_path !== binding.record_log_database_path ||
+    marker.record_derived_database_path !==
+      binding.record_derived_database_path ||
+    anchor.marker_sha256 !== canonicalSha256(marker) ||
+    anchor.installed_at !== marker.installed_at
+  ) {
+    throw new Error(
+      'organization record marker and authority installation anchor differ; restore the complete authority state',
+    );
+  }
+}
+
+/**
+ * The whole point of the anchor, in one function.
+ *
+ * Once an authority has published a record store, its log is the organization's
+ * history, and the only honest answer to a missing log is to refuse. Serve
+ * refuses here, maintenance refuses in `installAuthorityRecordStore`, and
+ * neither will recreate the file — a fresh empty log would look healthy while
+ * every receipt already in members' hands pointed at records it no longer
+ * holds.
+ */
+function assertRecordInstallationBoundState(
+  database: AuthorityDatabaseInspection,
+  config: AuthorityRecordBindingConfig,
+): void {
+  const binding = authorityRecordBinding(config);
+  const anchor = recordInstallationAnchor(database);
+  if (anchor === null) {
+    throw new Error(
+      'organization authority record installation anchor is missing',
+    );
+  }
+  for (const [path, label] of [
+    [binding.record_log_database_path, 'record log'],
+    [binding.record_derived_database_path, 'record derived'],
+  ] as const) {
+    if (!existsSync(path)) {
+      throw new Error(
+        `authority ${label} database is missing; restore the published state directory`,
+      );
+    }
+  }
+  assertRecordInstallationBinding(
+    readRecordInstallationMarker(config),
+    anchor,
+    config,
+  );
+}
+
 export function assertAuthorityRuntimeStateBinding(
   config: AuthorityServeConfig,
 ): void {
@@ -572,6 +1022,7 @@ export function assertAuthorityRuntimeStateBinding(
     anchor,
     config,
   );
+  assertRecordInstallationBoundState(authority, config);
 }
 
 function inspectUnanchoredIntegrationsPair(
@@ -913,6 +1364,12 @@ async function inspectBoundAuthorityState(
     integrationsAnchor,
     config,
   );
+  assertRecordInstallationBoundState(database, config);
+  inspectRecordDatabases(
+    authorityStatePaths(config.state_dir),
+    config,
+    inspectAuthority === inspectAuthorityDatabaseForServe,
+  );
   return inspected;
 }
 
@@ -1054,6 +1511,7 @@ async function initializeDevelopmentAuthorityLocked(
         created_at: new Date().toISOString(),
       },
     );
+    createRecordDatabases(stagingPaths, organizationId, authorityId);
     const integrationsMarker = integrationsInstallationMarker(
       config,
       integrationsIdentity,
@@ -1067,6 +1525,18 @@ async function initializeDevelopmentAuthorityLocked(
       stagingPaths.database_path,
       integrationsMarker,
     );
+    // A fresh authority is anchored from the first moment it exists, so the
+    // "no anchor" state can only ever mean a directory published before the
+    // record store did — the one case maintenance is allowed to bootstrap.
+    const recordMarker = recordInstallationMarker(
+      config,
+      new Date().toISOString(),
+    );
+    writePrivateJsonExclusive(
+      stagingPaths.record_installation_marker_path,
+      recordMarker,
+    );
+    commitRecordInstallationAnchor(stagingPaths.database_path, recordMarker);
     const identity: AuthorityIdentityRecordV1 = {
       schema_version: 1,
       kind: 'echo-organization-authority-identity',
@@ -1338,6 +1808,123 @@ async function installAuthorityIntegrationsLocked(
   }
 }
 
+/**
+ * The retrofit step for a state directory published before the record store
+ * existed — and the guard that stops it from being anything else.
+ *
+ * The rule is one sentence: **serve refuses an unanchored record store**, so an
+ * authority with no anchor cannot have accepted a single append, and an
+ * authority with an anchor holds history that must never be recreated. Every
+ * branch below follows from that.
+ *
+ * - Anchored: validate the marker and both databases, migrate in place, and
+ *   refuse outright if any of the three is missing. This is the deletion case
+ *   the anchor exists for, and it stays refused even when the marker and both
+ *   databases were removed together.
+ * - Unanchored with both databases present: adopt them. No append can have
+ *   reached them, and destroying a pair an operator restored by hand would be
+ *   worse than protecting it.
+ * - Unanchored with exactly one database: ambiguous, refuse — the same rule the
+ *   integrations database-marker pair follows.
+ * - Unanchored with neither: the provably pre-record legacy state. Create,
+ *   publish the marker, anchor.
+ *
+ * Publication is ordered databases → marker → anchor and every step is
+ * idempotent, so an interruption anywhere resumes on the next run rather than
+ * leaving a half-installed record store.
+ */
+function installAuthorityRecordStore(
+  config: AuthorityRuntimeConfigV1,
+  options: InstallAuthorityIntegrationsOptions,
+): void {
+  const paths = authorityStatePaths(config.state_dir);
+  const inspected = inspectAuthorityDatabaseForServe(config.database_path);
+  const anchor = recordInstallationAnchor(inspected);
+  const createDatabases = (): void => {
+    createRecordDatabases(
+      paths,
+      config.organization.organization_id,
+      config.authority.authority_id,
+    );
+  };
+
+  if (anchor !== null) {
+    if (
+      !existsSync(paths.record_installation_marker_path) ||
+      !existsSync(paths.record_log_database_path) ||
+      !existsSync(paths.record_derived_database_path)
+    ) {
+      throw new Error(
+        'organization record store was already installed but its marker, log, or derived database is missing; restore the complete authority state instead of recreating it',
+      );
+    }
+    const marker = readRecordInstallationMarker(config);
+    assertRecordInstallationBinding(marker, anchor, config);
+    // Idempotent: opening an existing pair only re-binds and migrates it.
+    createDatabases();
+    return;
+  }
+
+  const logExists = existsSync(paths.record_log_database_path);
+  const derivedExists = existsSync(paths.record_derived_database_path);
+  if (logExists !== derivedExists) {
+    throw new Error(
+      'organization authority has only part of the record log/derived pair; refuse ambiguous state and restore a complete backup',
+    );
+  }
+  let markerExists = existsSync(paths.record_installation_marker_path);
+  if (!logExists && markerExists) {
+    // Conclusively unpublished: an unanchored marker beside no databases can
+    // never have described a log anything appended to. Read it first so an
+    // unsafe or foreign entry occupying the canonical name is refused rather
+    // than silently deleted.
+    readRecordInstallationMarker(config);
+    unlinkSync(paths.record_installation_marker_path);
+    fsyncDirectory(paths.state_directory);
+    markerExists = false;
+  }
+
+  createDatabases();
+  options.faultInjector?.('after_record_databases_published');
+  const marker = markerExists
+    ? readRecordInstallationMarker(config)
+    : publishRecordInstallationMarker(config);
+  options.faultInjector?.('after_record_marker_published');
+  const committed = commitRecordInstallationAnchor(
+    config.database_path,
+    marker,
+  );
+  assertRecordInstallationBinding(marker, committed, config);
+}
+
+function publishRecordInstallationMarker(
+  config: AuthorityRuntimeConfigV1,
+): AuthorityRecordInstallationMarkerV1 {
+  const paths = authorityStatePaths(config.state_dir);
+  const preparedPath = join(
+    paths.state_directory,
+    `.authority-record-installation.v1.json.installing-${randomBytes(
+      16,
+    ).toString('hex')}`,
+  );
+  try {
+    const marker = recordInstallationMarker(config, new Date().toISOString());
+    writePrivateJsonExclusive(preparedPath, marker);
+    publishPreparedFile(
+      preparedPath,
+      paths.record_installation_marker_path,
+      paths.state_directory,
+    );
+    return marker;
+  } finally {
+    if (existsSync(preparedPath)) {
+      try {
+        unlinkSync(preparedPath);
+      } catch {}
+    }
+  }
+}
+
 export async function installAuthorityIntegrations(
   configPath: string,
   options: InstallAuthorityIntegrationsOptions = {},
@@ -1355,7 +1942,242 @@ export async function installAuthorityIntegrations(
       authorityMaintenanceFingerprint(serveConfig, 'install-integrations'),
     );
     try {
-      return await installAuthorityIntegrationsLocked(path, config, options);
+      const result = await installAuthorityIntegrationsLocked(
+        path,
+        config,
+        options,
+      );
+      installAuthorityRecordStore(config, options);
+      return result;
+    } finally {
+      await runtimeLock.release();
+    }
+  } finally {
+    await releaseInitialization();
+  }
+}
+
+async function inspectAuthorityRecordRebuildPreflight(
+  configPath: string,
+  config: AuthorityRuntimeConfigV1,
+): Promise<void> {
+  const inspected = await inspectInitializedAuthorityFiles(configPath, config);
+  const database = inspectAuthorityDatabaseReadOnly(config.database_path);
+  assertAuthorityDatabaseIdentity(database, config, inspected.identity);
+  const anchor = recordInstallationAnchor(database);
+  if (anchor === null) {
+    throw new Error(
+      'organization authority record installation anchor is missing',
+    );
+  }
+  assertRecordInstallationBinding(
+    readRecordInstallationMarker(config),
+    anchor,
+    config,
+  );
+}
+
+function assertReplaceableRecordDerivedPath(path: string): void {
+  let state: ReturnType<typeof lstatSync>;
+  try {
+    state = lstatSync(path);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return;
+    throw error;
+  }
+  const currentUid = process.getuid?.();
+  if (
+    state.isSymbolicLink() ||
+    !state.isFile() ||
+    realpathSync(path) !== path ||
+    (currentUid !== undefined && state.uid !== currentUid) ||
+    (state.mode & 0o777) !== 0o600
+  ) {
+    throw new Error(
+      'authority record derived database must be absent or a current-user 0600 canonical file',
+    );
+  }
+}
+
+function assertNoSqliteSidecars(databasePath: string, label: string): void {
+  for (const suffix of ['-journal', '-wal', '-shm']) {
+    const sidecar = `${databasePath}${suffix}`;
+    try {
+      lstatSync(sidecar);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') continue;
+      throw error;
+    }
+    throw new Error(
+      `${label} has SQLite sidecar ${basename(sidecar)}; investigate or restore the stopped state before rebuilding`,
+    );
+  }
+}
+
+function assertRecordRebuildPaths(paths: AuthorityStatePaths): void {
+  assertNoSqliteSidecars(paths.record_log_database_path, 'record log database');
+  assertNoSqliteSidecars(
+    paths.record_derived_database_path,
+    'record derived database',
+  );
+  assertReplaceableRecordDerivedPath(paths.record_derived_database_path);
+}
+
+async function rebuildAuthorityDerivedRecordStoreLocked(
+  configPath: string,
+  config: AuthorityRuntimeConfigV1,
+): Promise<AuthorityRecordDerivedRebuildResult> {
+  await inspectAuthorityRecordRebuildPreflight(configPath, config);
+  const paths = authorityStatePaths(config.state_dir);
+  assertRecordRebuildPaths(paths);
+  if (!existsSync(paths.record_log_database_path)) {
+    throw new Error(
+      'authority record log database is missing; restore the published state directory',
+    );
+  }
+
+  const organizationId = config.organization.organization_id;
+  const preparedPath = join(
+    paths.state_directory,
+    `.record-derived.sqlite.rebuilding-${randomBytes(16).toString('hex')}`,
+  );
+  let rebuilt: OrganizationRecordDerivedStore | undefined;
+  try {
+    const logDatabase = openOrganizationRecordDatabase(
+      paths.record_log_database_path,
+      ORGANIZATION_RECORD_LOG_DATABASE,
+      { readonly: true },
+    );
+    let headPosition: number;
+    let contentDigest: `sha256:${string}`;
+    try {
+      logDatabase.pragma('query_only = ON');
+      logDatabase.exec('BEGIN');
+      inspectOpenRecordDatabase(
+        logDatabase,
+        ORGANIZATION_RECORD_LOG_DATABASE,
+        'record log',
+        config,
+        false,
+      );
+      const reader = new OrganizationRecordLogReader(logDatabase);
+      const verification = verifyOrganizationRecordChain({
+        organization_id: organizationId,
+        authority_id: config.authority.authority_id,
+        rows: () => reader.readAfter(0, Number.MAX_SAFE_INTEGER),
+      });
+      if (verification.failures.length > 0) {
+        const detail = verification.failures
+          .map(
+            (failure) =>
+              `${failure.position}:${failure.kind}:${failure.detail}`,
+          )
+          .join('; ');
+        throw new Error(
+          `organization record log chain verification failed: ${detail}`,
+        );
+      }
+      headPosition = verification.head_position ?? 0;
+
+      rebuilt = OrganizationRecordDerivedStore.open(preparedPath, {
+        organization_id: organizationId,
+      });
+      const follower = new OrganizationRecordFollower({
+        logReader: reader,
+        derived: rebuilt,
+      });
+      const progress = await follower.drain();
+      if (progress.halted) {
+        const cause = follower.haltCause;
+        throw new Error(
+          `organization record derive halted while rebuilding at cursor ${progress.cursor_position}: ${
+            cause instanceof Error ? cause.message : String(cause)
+          }`,
+          cause === null ? undefined : { cause },
+        );
+      }
+      if (
+        progress.cursor_position !== headPosition ||
+        progress.records_derived !== headPosition
+      ) {
+        throw new Error(
+          `organization record rebuild derived ${progress.records_derived} records to cursor ${progress.cursor_position} instead of the verified log head ${headPosition}`,
+        );
+      }
+      contentDigest = rebuilt.contentDigest();
+
+      rebuilt.close();
+      rebuilt = undefined;
+      inspectRecordDatabase(
+        preparedPath,
+        ORGANIZATION_RECORD_DERIVED_DATABASE,
+        'rebuilt record derived',
+        config,
+        false,
+      );
+      assertNoSqliteSidecars(preparedPath, 'rebuilt record derived database');
+      fsyncFile(preparedPath);
+      assertRecordRebuildPaths(paths);
+      renameSync(preparedPath, paths.record_derived_database_path);
+      fsyncDirectory(paths.state_directory);
+    } finally {
+      if (logDatabase.inTransaction) {
+        try {
+          logDatabase.exec('ROLLBACK');
+        } catch {}
+      }
+      logDatabase.close();
+    }
+
+    return Object.freeze({
+      schema_version: 1,
+      kind: 'echo-organization-authority-record-derived-rebuild',
+      config_path: configPath,
+      record_derived_database_path: paths.record_derived_database_path,
+      head_position: headPosition,
+      derived_content_sha256: contentDigest,
+    });
+  } finally {
+    try {
+      rebuilt?.close();
+    } catch {}
+    let removed = false;
+    for (const suffix of ['-shm', '-wal', '-journal', '']) {
+      const abandoned = `${preparedPath}${suffix}`;
+      if (!existsSync(abandoned)) continue;
+      try {
+        unlinkSync(abandoned);
+        removed = true;
+      } catch {}
+    }
+    if (removed) fsyncDirectory(paths.state_directory);
+  }
+}
+
+/**
+ * The stopped-state derived-store rebuild.
+ *
+ * It takes the same authenticated singleton ownership `install-integrations`
+ * takes, under its own maintenance purpose, so a running authority refuses the
+ * rebuild instead of having the file it is serving replaced underneath it.
+ */
+export async function rebuildAuthorityDerivedRecordStore(
+  configPath: string,
+): Promise<AuthorityRecordDerivedRebuildResult> {
+  const path = normalizedAbsolutePath(configPath, 'authority config path');
+  const config = readAuthorityRuntimeConfig(path);
+  const releaseInitialization = await acquireAuthorityInitializationLock(
+    path,
+    config.state_dir,
+  );
+  try {
+    const serveConfig = resolveAuthorityServeConfig(config);
+    const runtimeLock = await acquireAuthorityRuntimeLock(
+      config.state_dir,
+      authorityMaintenanceFingerprint(serveConfig, 'rebuild-derived'),
+    );
+    try {
+      return await rebuildAuthorityDerivedRecordStoreLocked(path, config);
     } finally {
       await runtimeLock.release();
     }

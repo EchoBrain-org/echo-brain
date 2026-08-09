@@ -1,6 +1,6 @@
 {
   "name": "echo-brain",
-  "version": "0.1.0-internal.5",
+  "version": "0.1.0-internal.6",
   "description": "Tool-agnostic meeting-to-decision core with replaceable source, processor, and delivery adapters",
   "private": true,
   "workspaces": [
@@ -8,7 +8,8 @@
     "packages/organization-protocol",
     "packages/organization-api",
     "services/organization-authority",
-    "services/organization-control-plane"
+    "services/organization-control-plane",
+    "services/organization-record"
   ],
   "license": "MIT",
   "type": "module",
@@ -96,6 +97,7 @@
     "test:local-org": "npm run build:workspaces && vitest run --config vitest.product.config.ts tests/product/local-organization-coordinator.test.ts tests/product/http-organization-authority-client.test.ts tests/product/organization-state-store.test.ts",
     "test:authority": "npm run build:workspaces && npm test --workspace @echo-brain/organization-authority",
     "test:control-plane": "npm run build:workspaces && npm test --workspace @echo-brain/organization-control-plane",
+    "test:record": "npm run build:workspaces && npm test --workspace @echo-brain/organization-record",
     "test:integration": "npm run build:workspaces && vitest run --config vitest.config.ts tests/integration",
     "test:product": "npm run build:workspaces && vitest run --config vitest.product.config.ts",
     "test:machine": "npm run build:workspaces && vitest run --config vitest.config.ts tests/machine && vitest run --config vitest.product.config.ts tests/product/adapter-factories.test.ts tests/product/decision-node-store.test.ts tests/product/sqlite-core-state.test.ts tests/product/product-database-migrations.test.ts tests/product/runtime-config.test.ts tests/product/runtime-isolation.test.ts",

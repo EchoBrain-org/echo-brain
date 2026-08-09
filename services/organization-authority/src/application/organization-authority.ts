@@ -4,11 +4,13 @@ import {
   assertP256LowS,
   canonicalJson,
   canonicalSha256,
+  createSignedDocumentWithKey,
   verifyP256LowSSignature,
   verifyP256SigningKeyDescriptor,
   verifySignedDocument,
 } from '@echo-brain/federation-protocol';
 import type {
+  P256SigningKeyDescriptor,
   Sha256Digest,
   SignedIntegrity,
 } from '@echo-brain/federation-protocol';
@@ -47,14 +49,19 @@ import {
   organizationEnrollmentReceiptSha256,
   organizationEnrollmentRequestSha256,
   validateOrganizationAuthorityDescriptor,
+  validateOrganizationRecordReceipt,
   verifyOrganizationAuthorityPin,
   verifyOrganizationEnrollmentRequest,
+  verifyOrganizationRecordEnvelope,
 } from '@echo-brain/organization-protocol';
 import type {
   OrganizationAuthorityDescriptorV1,
   OrganizationEnrollmentReceiptV1,
   OrganizationEnrollmentRequestV1,
   OrganizationInstallationAccessStateV1,
+  OrganizationRecordEnvelopeV1,
+  OrganizationRecordReceiptPayloadV1,
+  OrganizationRecordReceiptV1,
   PinnedOrganizationAuthority,
 } from '@echo-brain/organization-protocol';
 import {
@@ -187,6 +194,31 @@ export interface OrganizationIntegrationInstallationContext {
   membership_id: string;
   installation_id: string;
   installation_key_id: Sha256Digest;
+  checked_at: string;
+}
+
+/**
+ * The live installation facts organization-record ingest needs before it may
+ * append: an active enrollment, an active membership, an unexpired access
+ * lease, and the installation signing key the envelope must be signed with.
+ *
+ * This is deliberately narrower than
+ * `OrganizationIntegrationInstallationContext`. A record envelope is not an
+ * installation-signed *command* — it carries no `authority_key_id`,
+ * `enrollment_id`, or `installation_key_id` at the top level, because those
+ * would be extra frozen bytes in every log record forever. The signature over
+ * the whole envelope is verified against the key returned here, so the binding
+ * is the same one `authenticateInstallationCommand` makes, read from durable
+ * enrollment state rather than from the document.
+ */
+export interface OrganizationRecordInstallationContext {
+  authority_id: string;
+  organization_id: string;
+  enrollment_id: string;
+  principal_id: string;
+  membership_id: string;
+  installation_id: string;
+  installation_signing_key: P256SigningKeyDescriptor;
   checked_at: string;
 }
 
@@ -464,6 +496,169 @@ export class OrganizationAuthorityApplication {
     );
   }
 
+  /**
+   * The record-ingest half of the installation-authentication path.
+   *
+   * The signature is not checked here because a record envelope is signed as a
+   * whole document rather than as an installation command; the caller verifies
+   * it against `installation_signing_key`, which comes from the same durable
+   * enrollment row `authenticateInstallationCommand` reads. Everything else —
+   * active enrollment, active membership, current unexpired access lease — is
+   * the same live check, so an expired lease or a revoked installation refuses
+   * ingest exactly as it refuses every other installation call.
+   *
+   * A *new* append additionally requires the current lease to still be valid at
+   * this evaluation instant. `assertActiveEnrolledInstallation` only proves the
+   * high watermark was never revoked; an `active` state whose `valid_until` has
+   * already passed is a lapsed member machine, and admitting a first-ever
+   * record from one would write an immutable log row no live authorization
+   * covers. Recovering a receipt for an act the log already accepted takes the
+   * record module's replay path and never reaches this check, which is what
+   * keeps a lease that expires mid-flight from stranding a durable record.
+   */
+  recordIngestInstallationContext(
+    installationId: string,
+  ): OrganizationRecordInstallationContext {
+    const label = 'organization record ingest';
+    const checkedAt = this.now(`${label} evaluation time`);
+    return this.repository.read((transaction) => {
+      const enrollment = transaction.enrollmentByInstallation(installationId);
+      if (enrollment === undefined) {
+        throw new AuthorityOperationError(
+          'unauthorized',
+          `${label} authentication failed`,
+        );
+      }
+      const access = this.assertActiveEnrolledInstallation(
+        transaction,
+        enrollment,
+        label,
+      );
+      this.assertUnexpiredAccessLease(access, checkedAt, label);
+      return {
+        authority_id: enrollment.authority_id,
+        organization_id: enrollment.organization_id,
+        enrollment_id: enrollment.enrollment_id,
+        principal_id: enrollment.principal_id,
+        membership_id: enrollment.membership_id,
+        installation_id: enrollment.installation_id,
+        installation_signing_key: enrollment.installation_signing_key,
+        checked_at: checkedAt,
+      };
+    });
+  }
+
+  /**
+   * Validates one record envelope and authenticates its installation
+   * signature. The pinned-authority handle never leaves this object: it is a
+   * process-local proof, and exposing it would let a caller assert a pin this
+   * application never verified.
+   */
+  verifyRecordEnvelope(
+    value: unknown,
+    installationSigningKey: P256SigningKeyDescriptor,
+  ): OrganizationRecordEnvelopeV1 {
+    return verifyOrganizationRecordEnvelope(
+      value,
+      this.pinnedAuthority,
+      installationSigningKey,
+    );
+  }
+
+  /**
+   * Signs the exact deterministic receipt payload the append transaction
+   * committed, with the existing authority signing key member machines already
+   * pin. The payload is signed verbatim — no field is recomputed here — so the
+   * signed receipt's `kind`, `schema_version`, `position`, and every binding
+   * digest are the ones stored with the log row.
+   *
+   * The assembled document is then verified against this authority's own public
+   * key and exact key id before it is returned. Validation is shape-only, and
+   * the caller persists this document create-once: a signer that produced a
+   * well-formed but unverifiable receipt would otherwise freeze a receipt no
+   * member can ever check against the log, with no second chance to replace it.
+   */
+  async signRecordReceipt(
+    payload: OrganizationRecordReceiptPayloadV1,
+  ): Promise<OrganizationRecordReceiptV1> {
+    if (
+      payload.authority_id !== this.descriptorValue.authority_id ||
+      payload.organization_id !== this.descriptorValue.organization_id
+    ) {
+      throw new Error(
+        'organization record receipt payload belongs to another authority',
+      );
+    }
+    const document = await createSignedDocumentWithKey(
+      payload,
+      this.descriptorValue.signing_key.key_id,
+      (bytes) => this.signCanonicalPayload(bytes),
+    );
+    const receipt = validateOrganizationRecordReceipt(document);
+    verifySignedDocument(
+      receipt,
+      organizationAuthorityPublicKey(this.pinnedAuthority),
+      this.descriptorValue.signing_key.key_id,
+    );
+    return receipt;
+  }
+
+  private assertActiveEnrolledInstallation(
+    transaction: AuthorityReadTransaction,
+    enrollment: StoredAuthorityEnrollment,
+    label: string,
+  ): StoredAuthorityAccessState {
+    const membership = transaction.membership(enrollment.membership_id);
+    const access = requireCurrentAccessState(
+      transaction,
+      enrollment.enrollment_id,
+    );
+    if (
+      enrollment.status !== 'active' ||
+      enrollment.authority_id !== this.descriptorValue.authority_id ||
+      enrollment.organization_id !== this.descriptorValue.organization_id ||
+      membership === undefined ||
+      membership.organization_id !== enrollment.organization_id ||
+      membership.principal_id !== enrollment.principal_id ||
+      membership.status !== 'active' ||
+      access.state.status !== 'active'
+    ) {
+      throw new AuthorityOperationError(
+        'unauthorized',
+        `${label} requires an active enrolled installation`,
+      );
+    }
+    return access;
+  }
+
+  /**
+   * The lease-expiry half of the record-ingest check, deliberately separate
+   * from `assertActiveEnrolledInstallation`: every other installation call
+   * already carries its own freshness rule (a signed command plus
+   * `assertFreshInstallationRequest`), and a record envelope carries neither,
+   * so this is the only place the wall clock decides whether a lease is still
+   * live. Strictly later, not "not earlier": a lease that expires exactly now
+   * is expired.
+   */
+  private assertUnexpiredAccessLease(
+    access: StoredAuthorityAccessState,
+    checkedAt: string,
+    label: string,
+  ): void {
+    if (
+      access.state.status !== 'active' ||
+      timestampMillis(
+        access.state.valid_until,
+        `${label} access lease expiry`,
+      ) <= timestampMillis(checkedAt, `${label} evaluation time`)
+    ) {
+      throw new AuthorityOperationError(
+        'unauthorized',
+        `${label} requires a current unexpired access lease`,
+      );
+    }
+  }
+
   private authenticatedActiveInstallationContext(
     command: InstallationSignedCommand,
     freshnessTimestamp: string | null,
@@ -499,29 +694,11 @@ export class OrganizationAuthorityApplication {
       if (currentEnrollment === undefined) {
         throw new Error(`authenticated ${label} enrollment disappeared`);
       }
-      const membership = transaction.membership(
-        currentEnrollment.membership_id,
-      );
-      const access = requireCurrentAccessState(
+      this.assertActiveEnrolledInstallation(
         transaction,
-        currentEnrollment.enrollment_id,
+        currentEnrollment,
+        label,
       );
-      if (
-        currentEnrollment.status !== 'active' ||
-        currentEnrollment.authority_id !== this.descriptorValue.authority_id ||
-        currentEnrollment.organization_id !==
-          this.descriptorValue.organization_id ||
-        membership === undefined ||
-        membership.organization_id !== currentEnrollment.organization_id ||
-        membership.principal_id !== currentEnrollment.principal_id ||
-        membership.status !== 'active' ||
-        access.state.status !== 'active'
-      ) {
-        throw new AuthorityOperationError(
-          'unauthorized',
-          `${label} requires an active enrolled installation`,
-        );
-      }
       return {
         request_sha256: requestSha256,
         authority_id: currentEnrollment.authority_id,

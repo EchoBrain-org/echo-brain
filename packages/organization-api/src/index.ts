@@ -1,4 +1,5 @@
 export type {
+  AcceptedOrganizationRecordV1,
   CompleteOrganizationEnrollmentRequestV1,
   CompletedOrganizationEnrollmentV1,
   IssueOrganizationEnrollmentGrantRequestV1,
@@ -26,6 +27,7 @@ export type {
   OrganizationPermissionCheckDecisionV1,
   OrganizationPermissionCheckRequestPayloadV1,
   OrganizationPermissionCheckRequestV1,
+  OrganizationRecordRejectionCodeV1,
   OrganizationSlackLinkBeginRequestPayloadV1,
   OrganizationSlackLinkBeginRequestV1,
   OrganizationSlackLinkBeginResponseV1,
@@ -37,6 +39,7 @@ export type {
   RevokeOrganizationSubjectRequestV1,
   RevokedOrganizationInstallationV1,
   RevokedOrganizationMembershipV1,
+  SubmitOrganizationRecordEnvelopeRequestV1,
 } from './contracts.js';
 export {
   MAX_ENROLLMENT_GRANT_LIFETIME_SECONDS,
@@ -45,8 +48,13 @@ export {
   MAX_ORGANIZATION_API_PAGE_ITEMS,
   MAX_ORGANIZATION_AUDIT_DETAIL_DEPTH,
   MAX_ORGANIZATION_AUDIT_DETAIL_NODES,
+  MAX_ORGANIZATION_RECORD_API_BODY_BYTES,
+  ORGANIZATION_RECORD_ENVELOPE_WRAPPER_BYTES,
+  ORGANIZATION_RECORD_PERMANENT_REJECTION_CODES,
   isOrganizationApiValidationError,
+  isOrganizationRecordPermanentRejectionCode,
   OrganizationApiValidationError,
+  validateAcceptedOrganizationRecord,
   validateCompleteOrganizationEnrollmentRequest,
   validateCompletedOrganizationEnrollment,
   validateIssuedOrganizationEnrollmentGrant,
@@ -77,6 +85,7 @@ export {
   validateRevokeOrganizationSubjectRequest,
   validateRevokedOrganizationInstallation,
   validateRevokedOrganizationMembership,
+  validateSubmitOrganizationRecordEnvelopeRequest,
 } from './validation.js';
 export {
   ORGANIZATION_API_ACCESS_LEASES_PATH,
@@ -95,6 +104,7 @@ export {
   ORGANIZATION_API_INTERNAL_LIVE_RECEIPTS_PATH,
   ORGANIZATION_API_PERMISSION_CHECKS_PATH,
   ORGANIZATION_API_PROXY_AUTH_SCHEME,
+  ORGANIZATION_API_RECORD_ENVELOPES_PATH,
   ORGANIZATION_API_SLACK_LINK_CHALLENGES_PATH,
   ORGANIZATION_API_SLACK_LINK_COMPLETIONS_PATH,
   organizationApiInstallationRevocationsPath,

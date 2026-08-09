@@ -92,6 +92,6 @@ describe('standalone CLI basics', () => {
     expect(await runProductCli(['--version'], { stdout: stdout.stream })).toBe(
       0,
     );
-    expect(stdout.read()).toBe('0.1.0-internal.5\n');
+    expect(stdout.read()).toBe('0.1.0-internal.6\n');
   });
 });

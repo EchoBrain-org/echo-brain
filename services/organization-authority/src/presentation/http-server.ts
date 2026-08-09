@@ -20,8 +20,10 @@ import {
   ORGANIZATION_API_INTERNAL_LIVE_DIRECTIVES_PATH,
   ORGANIZATION_API_INTERNAL_LIVE_RECEIPTS_PATH,
   ORGANIZATION_API_PERMISSION_CHECKS_PATH,
+  ORGANIZATION_API_RECORD_ENVELOPES_PATH,
   ORGANIZATION_API_SLACK_LINK_CHALLENGES_PATH,
   ORGANIZATION_API_SLACK_LINK_COMPLETIONS_PATH,
+  MAX_ORGANIZATION_RECORD_API_BODY_BYTES,
   validateCompleteOrganizationEnrollmentRequest,
   validateApproveOrganizationInternalLiveReleaseRequest,
   validateIssueOrganizationEnrollmentGrantRequest,
@@ -29,6 +31,7 @@ import {
   validateOrganizationInternalLiveDirectiveRequest,
   validateOrganizationInternalLiveUpdateReceipt,
   validateOrganizationPermissionCheckRequest,
+  validateSubmitOrganizationRecordEnvelopeRequest,
   validateOrganizationSlackLinkBeginRequest,
   validateOrganizationSlackLinkCompleteRequest,
   validateProvisionOrganizationMembershipRequest,
@@ -48,6 +51,7 @@ import {
   AuthorityOperationError,
   StaleAccessStateError,
 } from '../domain/errors.js';
+import { OrganizationRecordIngestRejectionError } from '../application/organization-record-ingest.js';
 import {
   assertAuthorityRuntimeStatusNonce,
   AUTHORITY_RUNTIME_STATUS_NONCE_HEADER,
@@ -56,6 +60,7 @@ import {
 } from '../domain/runtime-status.js';
 import type { OrganizationAuthorityHttpApplication } from './organization-authority-http-application.js';
 import type { OrganizationIntegrationsHttpApplication } from './organization-integrations-http-application.js';
+import type { OrganizationRecordHttpApplication } from './organization-record-http-application.js';
 import { handleAdminConsoleRequest } from './admin-console/routes.js';
 import type { AdminConsoleSessionStore } from './admin-console/sessions.js';
 import {
@@ -67,7 +72,11 @@ export interface AdminRequestAuthenticator {
   authenticate(authorizationHeader: string | undefined): boolean;
 }
 
-class PayloadTooLargeError extends Error {}
+class PayloadTooLargeError extends Error {
+  constructor(readonly code: string = 'payload_too_large') {
+    super('request body is too large');
+  }
+}
 
 const UUID_V4_SOURCE =
   '[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}';
@@ -203,7 +212,25 @@ function errorBody(code: string, message: string): OrganizationApiErrorV1 {
   return { error: { code, message } };
 }
 
-async function readJsonBody(request: IncomingMessage): Promise<unknown> {
+/**
+ * `maximumBytes` is a per-route exemption, never a global raise. Only the
+ * organization-record ingest route passes anything other than the shared
+ * `MAX_ORGANIZATION_API_BODY_BYTES`, because an approved brief with verbatim
+ * evidence spans routinely exceeds 16 KiB. Every other route keeps the shared
+ * limit, and the cap is applied to raw wire bytes before any JSON parsing.
+ *
+ * The record route's cap measures the *wrapped* request body, so it is the
+ * 256 KiB canonical-envelope contract plus the exact
+ * `{"record_envelope": ... }` wrapper — see
+ * `MAX_ORGANIZATION_RECORD_API_BODY_BYTES`. An envelope over the canonical cap
+ * is refused by the validator, which can name the failure; this limit only
+ * stops a body too large to be worth parsing.
+ */
+async function readJsonBody(
+  request: IncomingMessage,
+  maximumBytes: number = MAX_ORGANIZATION_API_BODY_BYTES,
+  oversizeCode = 'payload_too_large',
+): Promise<unknown> {
   const contentType = request.headers['content-type'];
   if (
     contentType === undefined ||
@@ -223,8 +250,8 @@ async function readJsonBody(request: IncomingMessage): Promise<unknown> {
         'Content-Length is invalid',
       );
     }
-    if (parsed > MAX_ORGANIZATION_API_BODY_BYTES) {
-      throw new PayloadTooLargeError();
+    if (parsed > maximumBytes) {
+      throw new PayloadTooLargeError(oversizeCode);
     }
   }
   const chunks: Buffer[] = [];
@@ -232,8 +259,8 @@ async function readJsonBody(request: IncomingMessage): Promise<unknown> {
   for await (const chunk of request) {
     const bytes = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
     total += bytes.length;
-    if (total > MAX_ORGANIZATION_API_BODY_BYTES) {
-      throw new PayloadTooLargeError();
+    if (total > maximumBytes) {
+      throw new PayloadTooLargeError(oversizeCode);
     }
     chunks.push(bytes);
   }
@@ -244,6 +271,37 @@ async function readJsonBody(request: IncomingMessage): Promise<unknown> {
     );
   }
   return decodeOrganizationApiJsonBody(Buffer.concat(chunks));
+}
+
+/**
+ * DTO validation on the record route is a *terminal* outcome, not a generic
+ * bad request. Envelope validation happens once, inside record ingest.
+ *
+ * Everywhere else, `invalid_request` is the right answer: the caller is a human
+ * or an admin tool that can fix the body and try again. The record submitter
+ * cannot. Its envelope is frozen and signed before the first send, so bytes
+ * that fail validation will fail identically forever — and a member that reads
+ * `invalid_request` keeps the frozen envelope and resends it on every cycle.
+ * Naming the exact terminal code lets the member file its permanent-rejection
+ * slot once and surface the node to an operator.
+ *
+ * Deliberately narrow: only the API package's own validation error is mapped.
+ * An oversize body already threw `record_envelope_too_large` before this runs,
+ * and everything the authority application raises later — an expired lease, a
+ * transient fault — keeps its own retryable code.
+ */
+function validateRecordEnvelopeRequest(
+  body: unknown,
+): ReturnType<typeof validateSubmitOrganizationRecordEnvelopeRequest> {
+  try {
+    return validateSubmitOrganizationRecordEnvelopeRequest(body);
+  } catch (error) {
+    if (!isOrganizationApiValidationError(error)) throw error;
+    throw new OrganizationRecordIngestRejectionError(
+      'record_envelope_invalid',
+      'record envelope failed request validation',
+    );
+  }
 }
 
 export function decodeOrganizationApiJsonBody(bytes: Uint8Array): unknown {
@@ -353,6 +411,8 @@ function adminPageRequest(url: URL): { cursor?: string; limit?: number } {
 export interface OrganizationAuthorityHttpServerOptions {
   application: OrganizationAuthorityHttpApplication;
   integrations?: OrganizationIntegrationsHttpApplication;
+  /** Present only when the authority process hosts the organization record. */
+  records?: OrganizationRecordHttpApplication;
   adminAuthenticator: AdminRequestAuthenticator;
   clientIdentityResolver: RequestClientIdentityResolver;
   adminConsole?: {
@@ -467,6 +527,15 @@ export function createOrganizationAuthorityHttpServer(
     }
     return options.integrations;
   };
+  const requireRecords = (): OrganizationRecordHttpApplication => {
+    if (options.records === undefined) {
+      throw new AuthorityOperationError(
+        'not_found',
+        'organization record ingest is unavailable',
+      );
+    }
+    return options.records;
+  };
   const lifecycle: OrganizationAuthorityHttpServerLifecycle = {
     shutdownController: new AbortController(),
     drainWaiters: new Set(),
@@ -551,7 +620,9 @@ export function createOrganizationAuthorityHttpServer(
                   ? 'enrollment'
                   : url.pathname === ORGANIZATION_API_ACCESS_LEASES_PATH
                     ? 'access'
-                    : 'other';
+                    : url.pathname === ORGANIZATION_API_RECORD_ENVELOPES_PATH
+                      ? 'record'
+                      : 'other';
           consumeRateLimit(rateLimiter, `${clientIdentity}:${routeClass}`);
         }
       }
@@ -775,6 +846,23 @@ export function createOrganizationAuthorityHttpServer(
 
         if (
           method === 'POST' &&
+          url.pathname === ORGANIZATION_API_RECORD_ENVELOPES_PATH
+        ) {
+          const records = requireRecords();
+          // The one route with a raised raw-body cap. The shared
+          // MAX_ORGANIZATION_API_BODY_BYTES stays in force everywhere else.
+          const body = await readJsonBody(
+            request,
+            MAX_ORGANIZATION_RECORD_API_BODY_BYTES,
+            'record_envelope_too_large',
+          );
+          const command = validateRecordEnvelopeRequest(body);
+          sendJson(response, 200, await records.submitRecordEnvelope(command));
+          return;
+        }
+
+        if (
+          method === 'POST' &&
           url.pathname === ORGANIZATION_API_INTERNAL_LIVE_DIRECTIVES_PATH
         ) {
           const command = validateOrganizationInternalLiveDirectiveRequest(
@@ -965,11 +1053,21 @@ export function createOrganizationAuthorityHttpServer(
           sendJson(response, 409, { access_state: error.currentState });
           return;
         }
+        if (error instanceof OrganizationRecordIngestRejectionError) {
+          // Terminal for the member. The code is the contract; the message
+          // never carries anything the submitter did not already send.
+          sendJson(
+            response,
+            error.code === 'record_idempotency_conflict' ? 409 : 400,
+            errorBody(error.code, error.message),
+          );
+          return;
+        }
         if (error instanceof PayloadTooLargeError) {
           sendJson(
             response,
             413,
-            errorBody('payload_too_large', 'request body is too large'),
+            errorBody(error.code, 'request body is too large'),
           );
           return;
         }

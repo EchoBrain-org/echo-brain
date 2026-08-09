@@ -11,6 +11,8 @@ import {
   type ActiveSlackOrganizationTool,
   type ActivateExistingSlackApprovalInput,
   type ActivateExistingSlackApprovalResult,
+  type ApprovalAuthorizationEvidenceLookup,
+  type ApprovalAuthorizationEvidenceMatch,
   type BeginSlackIdentityLinkChallengeInput,
   type BegunSlackIdentityLinkChallenge,
   type LegacySlackOrganizationTool,
@@ -1851,6 +1853,68 @@ export class OrganizationIntegrationsRepository {
         evaluated_at: input.evaluated_at,
       });
     });
+  }
+
+  /**
+   * Read-only confirmation that one frozen authorization evidence document is
+   * a real allowed evaluation this control plane appended.
+   *
+   * This adds no table and no column: `organization_integration_audit` already
+   * records every permission evaluation, and organization-record ingest reads
+   * it exactly as it was written by `recordPermissionDecision`. Every field a
+   * caller can present is compared, so a member cannot swap the binding, the
+   * grant, the reviewer, the request, or the act and still match.
+   *
+   * The row proves the evaluation happened; it never proves the installation
+   * is still authorized *now*. Currency is the Authority's live lease and
+   * enrollment check, which runs alongside this lookup.
+   */
+  findAllowedApprovalAuthorizationEvidence(
+    input: ApprovalAuthorizationEvidenceLookup,
+  ): ApprovalAuthorizationEvidenceMatch {
+    const rows = this.database
+      .prepare(
+        `SELECT 1 AS present
+         FROM organization_integration_audit
+         WHERE organization_id = ?
+           AND actor_installation_id = ?
+           AND subject_kind = 'approval'
+           AND subject_id = ?
+           AND action = ?
+           AND outcome = 'allowed'
+           AND correlation_id = ?
+           AND membership_id = ?
+           AND adapter_binding_id = ?
+           AND permission_grant_id = ?
+           AND provider_event_sha256 = ?
+           AND reason_code = ?
+           AND occurred_at = ?
+           AND authority_checked_at = ?
+           AND json_extract(detail_json, '$.principal_id') = ?
+           AND json_extract(detail_json, '$.request_sha256') = ?
+         LIMIT 2`,
+      )
+      .all(
+        input.organization_id,
+        input.installation_id,
+        input.approval_id,
+        `permission.${input.action}`,
+        input.request_id,
+        input.membership_id,
+        input.adapter_binding_id,
+        input.permission_grant_id,
+        input.provider_event_sha256,
+        input.reason_code,
+        input.evaluated_at,
+        input.evaluated_at,
+        input.principal_id,
+        input.request_sha256,
+      ) as { present: 1 }[];
+    if (rows.length === 0) return Object.freeze({ status: "absent" as const });
+    if (rows.length > 1) {
+      return Object.freeze({ status: "ambiguous" as const });
+    }
+    return Object.freeze({ status: "matched" as const });
   }
 
   overview(): OrganizationIntegrationsOverview {

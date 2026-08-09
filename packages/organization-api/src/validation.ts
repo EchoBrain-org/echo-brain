@@ -5,9 +5,11 @@ import {
   validateOrganizationEnrollmentReceipt,
   validateOrganizationEnrollmentRequest,
   validateOrganizationInstallationAccessState,
+  MAX_ORGANIZATION_RECORD_DOCUMENT_BYTES,
 } from '@echo-brain/organization-protocol';
 import type { JsonValue } from '@echo-brain/federation-protocol';
 import type {
+  AcceptedOrganizationRecordV1,
   CompleteOrganizationEnrollmentRequestV1,
   CompletedOrganizationEnrollmentV1,
   IssueOrganizationEnrollmentGrantRequestV1,
@@ -30,6 +32,7 @@ import type {
   OrganizationMembershipSummaryV1,
   OrganizationPermissionCheckDecisionV1,
   OrganizationPermissionCheckRequestV1,
+  OrganizationRecordRejectionCodeV1,
   OrganizationSlackLinkBeginRequestV1,
   OrganizationSlackLinkBeginResponseV1,
   OrganizationSlackLinkCompleteRequestV1,
@@ -39,6 +42,7 @@ import type {
   RevokeOrganizationSubjectRequestV1,
   RevokedOrganizationInstallationV1,
   RevokedOrganizationMembershipV1,
+  SubmitOrganizationRecordEnvelopeRequestV1,
 } from './contracts.js';
 import { organizationPermissionProviderEventSha256 } from './permission-check-event.js';
 import { isCanonicalOrganizationSlackLinkChallengeCode } from './slack-link-challenge-code.js';
@@ -1812,4 +1816,92 @@ export function validateRevokedOrganizationMembership(
     }
   }
   return { membership, installations };
+}
+
+/**
+ * The exact byte cost of wrapping a canonical envelope in the request DTO:
+ * `{"record_envelope":` is 19 bytes and the closing `}` is one more. The
+ * wrapper is the compact form both this package's client and the route's
+ * `JSON.stringify` produce; no whitespace is ever inserted between them.
+ */
+export const ORGANIZATION_RECORD_ENVELOPE_WRAPPER_BYTES =
+  '{"record_envelope":}'.length;
+
+/**
+ * The record ingest route is the one exemption to the shared body limit: an
+ * approved brief with verbatim evidence spans routinely exceeds 16 KiB. It
+ * bounds raw bytes before JSON parsing, and only on that route.
+ *
+ * Two different limits with two different jobs, and they are deliberately not
+ * the same number:
+ *
+ * - `MAX_ORGANIZATION_RECORD_DOCUMENT_BYTES` (256 KiB) bounds the *canonical
+ *   envelope* — the signed document itself, measured in RFC 8785 bytes. That is
+ *   the durable contract: it is what the protocol validator enforces and what
+ *   the log stores.
+ * - This limit bounds the *raw HTTP request body*, which is that envelope
+ *   already wrapped in `{"record_envelope": ...}`. Setting the two equal would
+ *   make the documented 256 KiB envelope unsendable, because its wrapper is 20
+ *   bytes longer than the thing the contract measures.
+ *
+ * So the raw cap is exactly the document cap plus the wrapper, and nothing
+ * more: an envelope one canonical byte over the document cap is still refused,
+ * just semantically (`record_envelope_invalid` / `record_envelope_too_large`
+ * from the validator) rather than by a raw byte count that cannot tell an
+ * oversize envelope from an oversize wrapper. The shared
+ * `MAX_ORGANIZATION_API_BODY_BYTES` is untouched on every other route.
+ */
+export const MAX_ORGANIZATION_RECORD_API_BODY_BYTES =
+  MAX_ORGANIZATION_RECORD_DOCUMENT_BYTES +
+  ORGANIZATION_RECORD_ENVELOPE_WRAPPER_BYTES;
+
+export const ORGANIZATION_RECORD_PERMANENT_REJECTION_CODES = [
+  'record_authorization_invalid',
+  'record_envelope_invalid',
+  'record_envelope_too_large',
+  'record_idempotency_conflict',
+  'record_signature_invalid',
+] as const satisfies readonly OrganizationRecordRejectionCodeV1[];
+
+/**
+ * A terminal outcome is decided by an exact code, never by matching message
+ * text. Anything else -- an expired lease, a transport fault -- leaves the
+ * frozen envelope retryable instead of writing a permanent-rejection slot.
+ */
+export function isOrganizationRecordPermanentRejectionCode(
+  value: unknown,
+): value is OrganizationRecordRejectionCodeV1 {
+  return (
+    typeof value === 'string' &&
+    (
+      ORGANIZATION_RECORD_PERMANENT_REJECTION_CODES as readonly string[]
+    ).includes(value)
+  );
+}
+
+export function validateSubmitOrganizationRecordEnvelopeRequest(
+  value: unknown,
+): SubmitOrganizationRecordEnvelopeRequestV1 {
+  const record = asRecord(value, 'record submission request');
+  assertExactKeys(record, ['record_envelope'], 'record submission request');
+  return {
+    // The API owns only the DTO wrapper. The Authority is the single owner of
+    // envelope schema, canonical-size, authority-binding, and signature
+    // validation before append.
+    record_envelope:
+      record.record_envelope as SubmitOrganizationRecordEnvelopeRequestV1['record_envelope'],
+  };
+}
+
+export function validateAcceptedOrganizationRecord(
+  value: unknown,
+): AcceptedOrganizationRecordV1 {
+  const record = asRecord(value, 'accepted record response');
+  assertExactKeys(record, ['record_receipt'], 'accepted record response');
+  return {
+    // The API owns only the DTO wrapper. Clients validate and verify the
+    // protocol receipt against their pinned authority and submitted envelope.
+    record_receipt:
+      record.record_receipt as AcceptedOrganizationRecordV1['record_receipt'],
+  };
 }

@@ -709,26 +709,36 @@ describe("organization onboarding and access golden chain", () => {
 
   it("exposes only the accepted protocol surface", () => {
     expect(Object.keys(protocol).sort()).toEqual([
+      "CONSERVATIVE_ORGANIZATION_RECORD_INTENT",
       "MAX_ORGANIZATION_ACCESS_CLOCK_SKEW_MS",
       "MAX_ORGANIZATION_PROTOCOL_DOCUMENT_BYTES",
+      "MAX_ORGANIZATION_RECORD_DOCUMENT_BYTES",
       "OrganizationProtocolValidationError",
       "createOrganizationEnrollmentReceipt",
       "createOrganizationEnrollmentRequest",
       "createOrganizationInstallationAccessState",
+      "createOrganizationRecordApprovalEnvelope",
+      "createOrganizationRecordReceipt",
+      "createOrganizationRecordRejectionEnvelope",
       "isOrganizationProtocolValidationError",
       "organizationAuthorityPinSha256",
       "organizationAuthorityPublicKey",
       "organizationEnrollmentGrantSha256",
       "organizationEnrollmentReceiptSha256",
       "organizationEnrollmentRequestSha256",
+      "organizationRecordEnvelopeId",
       "validateOrganizationAuthorityDescriptor",
       "validateOrganizationEnrollmentReceipt",
       "validateOrganizationEnrollmentRequest",
       "validateOrganizationInstallationAccessState",
+      "validateOrganizationRecordEnvelope",
+      "validateOrganizationRecordReceipt",
       "verifyOrganizationAuthorityPin",
       "verifyOrganizationEnrollmentReceipt",
       "verifyOrganizationEnrollmentRequest",
       "verifyOrganizationInstallationAccessState",
+      "verifyOrganizationRecordEnvelope",
+      "verifyOrganizationRecordReceipt",
     ]);
   });
 
