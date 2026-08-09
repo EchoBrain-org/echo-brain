@@ -24,7 +24,7 @@ const MACOS_SMOKE = join(
   'internal-live-macos-smoke.sh',
 );
 const README = join(REPO, 'README.md');
-const VERSION = '0.1.0-internal.5';
+const VERSION = '0.1.0-internal.6';
 const SOURCE_SHA = 'a'.repeat(40);
 const REPOSITORY = 'EchoBrain-org/echo-brain';
 const RUN_ID = '12345678901234567890';

@@ -1,6 +1,6 @@
 {
   "name": "echo-brain",
-  "version": "0.1.0-internal.5",
+  "version": "0.1.0-internal.6",
   "description": "Tool-agnostic meeting-to-decision core with replaceable source, processor, and delivery adapters",
   "private": true,
   "workspaces": [
