@@ -50,7 +50,13 @@ they are, not by which database file holds them.
   chose, never what they glanced at — an accountability ledger, not
   engagement telemetry. A query is an act (a stated question and a served
   answer, auditable under invariant 10); a scroll, click, view, or dwell is
-  a glance, and glances are refused as fields.
+  a glance, and glances are refused as fields. Scoping honesty (grounded
+  2026-08-09): today only approval and rejection acts live on the
+  hash-chained record log; grants and identity links live in control-plane
+  tables with revoke-by-update semantics, authority acts in an unchained
+  audit table, and queries nowhere. Bringing every act family under one
+  chained rail is required work, not a present property — until then, the
+  forgery/erasure guarantees below hold only for the record log.
 
 Access in one sentence: **a live person walking a path through frozen
 history.** When the person changes (leaves, switches teams), the person end
@@ -59,11 +65,11 @@ curation.
 
 The pillars are closed; the edge vocabulary is open. Every future need —
 teams, projects, contractor scoping — is a new relationship among existing
-pillars, never a new pillar. (Precedent: Glean, Microsoft Graph, and
-Atlassian's Teamwork Graph independently converged on this triad at
-enterprise scale; the relationship-derivation discipline is Zanzibar's. See
-the append/derive design's knowledge-graph permission deep-dive for
-citations.)
+pillars, never a new pillar. (The relationship-derivation discipline is
+Zanzibar's, and Atlassian's Teamwork Graph is the ingest-side precedent —
+both cited in the append/derive design's knowledge-graph permission
+deep-dive; Glean's and Microsoft Graph's triad convergence is recorded in
+the atlas.)
 
 ## The trust ladder
 
@@ -76,13 +82,22 @@ bears responsibility; rungs 2 and 3 to software, and rung 2 alone is
 redeemable by rebuild digest. PROV-O draws exactly this axis — "Attribution
 is the ascribing of an entity to an agent," where an agent "bears some form
 of responsibility" ([PROV-O](https://www.w3.org/TR/prov-o/)) — so labeling
-must key off the responsible agent, never off lineage.
+must key off the responsible agent, never off lineage. The ladder classifies
+content lineage only: live person-pillar facts (memberships, principals,
+grouping structure) sit outside it and are cited as current state at answer
+time, never as rung-2 rows — an answer renders the live principal, while the
+frozen `reviewer_display_name` on an atom remains display-only and never
+load-bearing.
 
 1. **Canonical envelope** — human-approved, signed, hash-chained. May be
    cited as fact.
-2. **Deterministic projection** — the same fact restated by code; verified by
-   rebuild digest and record hash; cites rung 1. The test for this rung:
-   the row cannot be wrong while the log is right.
+2. **Deterministic projection** — the same fact restated by code; proved
+   *reproducible* by the rebuild digest and *bound to rung 1* by record hash;
+   cites rung 1. The digest proves the projection is a pure function of the
+   log, not that it is the right function — correctness of the projection
+   rule itself rests on review and golden fixtures. The admission test for
+   this rung: the row carries no judgment that could be wrong while the log
+   is right.
 3. **Inference** (future interpretive pass) — machine judgment about facts.
    The machine-judgment marking is **a field on the row, not a rendering
    convention**, so it survives export, API access, and clients we do not
@@ -148,6 +163,11 @@ must key off the responsible agent, never off lineage.
    Azure AI Search warns "a timing lag occurs" before permission changes
    are recognized. Any future proposal to cache permission state is a
    proposal to adopt a window of that order and must state its number.)
+   Scope: this binds permission state that outlives a single answer; one
+   membership read used across the rows of one answer is not a cache. It
+   governs *visibility* answers — the shipped installation access lease
+   (TTL-bounded, `active_lease_ttl_ms`) is write-side operational
+   credentialing, already named, and not a visibility snapshot.
 6. **Every failure denies.** Missing data, unresolved identity, ambiguity,
    error — all deny. The asymmetry is deliberate: wrongful denial costs a
    question to a colleague; wrongful disclosure cannot be undone. This
@@ -161,8 +181,10 @@ must key off the responsible agent, never off lineage.
    Elastic makes an empty access-control field mean "the document will be
    effectively invisible"
    ([Elastic](https://www.elastic.co/docs/reference/search-connectors/es-dls-overview)).)
-7. **Structure and statistics obey the same rules as content.** An edge is
-   visible only when both endpoints are. No stubs, no counts of hidden
+7. **Structure and statistics obey the same rules as content.** An edge
+   resolves at the *lower* of its two endpoints' visibility levels, and it
+   renders above discoverable only when both endpoints are readable — in the
+   two-valued limit this is "visible only when both endpoints are." No stubs, no counts of hidden
    items, no "1 restricted result" — **and no statistic derived from
    content the asker cannot traverse**: term frequencies, corpus totals,
    ranking normalization, and pagination bounds computed over hidden
@@ -353,8 +375,16 @@ Rules of the rail:
   [Palantir](https://www.palantir.com/docs/foundry/action-types/action-log/)).
 - **No permission-family act auto-runs.** Model- or rule-initiated
   submission without a human gate is refused even as a configuration
-  (Palantir permits actions "to run automatically"; declined here — a
-  configurable gate is not a gate).
+  (Palantir's Agent Studio permits action tools "to run automatically or to
+  run after confirmation from the user"
+  ([Palantir](https://www.palantir.com/docs/foundry/agent-studio/tools));
+  declined here — a configurable gate is not a gate).
+- **Operational-credential acts are not grant acts.** Admin acts that
+  restore or revoke *machine credentials* (enrollment, leases, access
+  recovery) change no visibility path — no `member` or `observed-in` edge
+  moves — so the approval-surface contract does not bind them. They remain
+  acts: justified, audited, and (required hardening, below) attributable to
+  a named operator, not a shared token.
 
 Responsibility split: the requester and approver own the judgment; the
 system owns that the judgment was **informed** (enforced by the surface
@@ -370,7 +400,13 @@ Therefore:
 
 - An observation binds to a principal **only** through an attested identity
   link: a recorded act by an authorized human stating the binding, with its
-  verification method named, scoped, and auditable. (AWS reaches the same
+  verification method named, scoped, and auditable. Doctrine, stated
+  precisely: identifiers (emails, provider subjects) are never properties of
+  principals — they live **inside link acts** as issuer-scoped claims. The
+  shipped link table holds only OAuth-verified Slack subjects with a machine
+  verification record and no attestor or supersession fields; the attested
+  email link is therefore a **new link kind plus schema**, not a flow over
+  the existing one (grounding pass, below). (AWS reaches the same
   governance conclusion for its User Store: treat identity-mapping updates
   as "a privileged operation" behind "a documented approval process"
   ([AWS](https://docs.aws.amazon.com/amazonq/latest/qbusiness-ug/principal-store-hiw.html));
@@ -485,6 +521,57 @@ corrections.
 - **Coveo remains unverifiable** (503s on all doc fetches); nothing in this
   document rests on it.
 
+## Grounding pass (2026-08-09, three-agent review vs origin/main + PRs 14–15)
+
+What the latest code proves about implementing this document. Recorded so
+feature specs budget reality, not the constitution's ideal.
+
+- **The acts rail is not yet generic.** New act families are rejected at
+  five independent gates: the log's `event_type` CHECK (a SQLite CHECK on a
+  hash-chained, trigger-guarded table — altering it means a careful table
+  rebuild), the protocol's event-type union and validators, the record
+  frame, and a derive projector that halts on unknown types. Worse, the
+  envelope's authorization block is Slack-approval-shaped: it requires an
+  approval id, a Slack provider-event digest, an approval-surface
+  permission grant, a meeting-bearing brief — and `allowed: true`, so **no
+  refusal can even be expressed**. Permission acts (grants, attestations,
+  floor changes) therefore need a **second envelope family** with its own
+  payload schemas and authorization shape. Receipts, happily, are already
+  act-agnostic.
+- **The person pillar's audit is the untrusted link.** `authority_audit_log`
+  has no hash chain and no immutability triggers, and membership status
+  columns are freely mutable — the one pillar the gatekeeper reads live is
+  the one place a change can be silently erased. Required hardening before
+  any gatekeeper ships: append-only triggers plus chaining on authority
+  audit and membership transitions, using the two idioms already in-tree
+  (record log; integration audit).
+- **Nothing stores a floor, a visibility level, or a query audit** — those
+  are green-field, as expected; the floor additionally needs
+  position-scoped resolution ("the floor in force at this record's ingest").
+- **A local sensitivity vocabulary dies at the boundary, deliberately.**
+  `meeting.governance.sensitivity` (public/internal/confidential/restricted)
+  exists in local meeting contracts and is dropped from the org payload.
+  Disposition: it stays local in v1; when the intent affordance ships it is
+  a candidate *default suggestion* for the approver's intent — never an
+  automatic marking (invariant 8 applied to source metadata).
+- **PR #14 (access recovery, merged): compliant with the operational-act
+  distinction above** — every gate denies, sequences never rewind, recovery
+  mints an ordinary TTL lease and leaves an audit row with a mandatory
+  reason. Two notes now standing requirements: admin acts must gain a
+  **named operator identity** (today: one shared bearer token, audit records
+  only `actor_kind: admin` — the widening act is exactly the one needing
+  attribution), and the client's acceptance of skipped access-state heads is
+  load-bearing and documented only in a test name.
+- **PR #15 (EC2 deploy, draft): blocked on key custody.** The cutover
+  archive — containing the authority signing key and the admin bearer token
+  — is uploaded to S3 under SSE-S3 with no bucket policy, versioning, or
+  deletion step; "grants cannot be forged" must never reduce to bucket IAM.
+  Also required before merge: stated volume/termination posture, an alarm on
+  the derive-halt fatal exit (today caught only by coincidence), the Mac
+  authority permanently disabled rather than booted-out (single-writer
+  across hosts is currently prose), and a no-cache rule for the authority
+  hostname before `can`/`why`/`who` ship as GETs (invariant 5).
+
 ## Appendix A — first instantiation (pilot)
 
 Proof the skeleton carries load, stated as paths.
@@ -499,23 +586,39 @@ choice:
   are a member of the organization."
 - **Rule 2 (restricted):** asker → identity link → observation →
   `observed-in` → source meeting → atom ⇒ readable; approver always
-  readable via the approval act. Sentence: "You can see this because you
-  were in that meeting (or approved it)."
+  readable via the approval act. Edge disambiguation (grounded): today no
+  meeting source emits attendance facts, so the `attended-by` edge has never
+  fired; Rule 2 therefore walks `listed-participant`, and its honest
+  sentence is "you were on the participant list of that meeting (or approved
+  it)." When sources begin emitting explicit attendance, `attended-by`
+  becomes the preferred, narrower path with the stronger sentence.
+- **Rule 3 (rejections):** rejection-derived rows carry no intent slot and
+  resolve by the floor like any other unmarked row; the rejecting reviewer
+  always retains readability via the rejection act. (Supersedes the
+  append/derive doc's "org-visible as acts" sentence, which predated the
+  floor.)
 
-**Dated policy — the first written policy of the gatekeeper:** records
-ingested before the approval surface offers an intent control provably carry
-no human intent behind their `restricted` flag (the flag is a protocol
-default; no affordance exists). Such records resolve by the floor. Records
-ingested after the affordance ships mean what they say: restricted resolves
-by Rule 2. The frozen flag never changes; only its interpretation is dated.
-This is the stone/gatekeeper split in first use, and the policy text itself
-is auditable.
+**Dated policy — the first written policy of the gatekeeper:** records whose
+envelopes carry no intent-provenance marker provably carry no human intent
+behind their `restricted` flag (the flag is a protocol default; no affordance
+exists). Such records resolve by the floor. The affordance ships as an
+explicit intent-provenance field in the envelope (e.g.
+`intent_source: approver`); records carrying it mean what they say —
+restricted resolves by Rule 2. The policy keys on **field presence, not
+wall-clock date**: per-installation release rollout (including rollback)
+makes any global date wrong, while the envelope's own shape is
+per-record truth. The frozen flag never changes; only its interpretation is
+policied. This is the stone/gatekeeper split in first use, and the policy
+text itself is auditable.
 
 Practical consequence for the pilot: until the affordance ships, every
-recorded decision resolves readable to both members. Anything that must not
-be org-visible belongs on the member-side exclusion list, not behind the
-flag. The query audit does **not** resolve by the pilot's readable floor
-(invariant 10); its readership is the org owners until stated otherwise.
+recorded decision resolves readable to both members. There is currently no
+way to mark a decision non-org-visible; the only remedy is to keep the
+source out of the record entirely via the member-side exclusion list — a
+**custody choice made before content exists org-side, not a permission
+control** (see the no-deny stance). The query audit does **not** resolve by
+the pilot's readable floor (invariant 10); its readership is the org owners
+until stated otherwise.
 
 **V1 needs only Rule 1.** Rule 2 requires the identity bridge, which ships
 as one bundle with the intent affordance and the request/approve flow —
