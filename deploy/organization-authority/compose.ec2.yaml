@@ -1,0 +1,14 @@
+services:
+  authority:
+    image: "${ECHO_AUTHORITY_IMAGE:?set ECHO_AUTHORITY_IMAGE to the immutable ECR digest}"
+    build: !reset null
+    ports: !override
+      - name: tunnel-origin
+        target: 80
+        published: "80"
+        host_ip: 127.0.0.1
+        protocol: tcp
+
+  proxy:
+    volumes:
+      - ./Caddyfile.ec2:/etc/caddy/Caddyfile:ro
