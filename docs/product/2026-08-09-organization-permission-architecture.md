@@ -562,15 +562,51 @@ feature specs budget reality, not the constitution's ideal.
   only `actor_kind: admin` — the widening act is exactly the one needing
   attribution), and the client's acceptance of skipped access-state heads is
   load-bearing and documented only in a test name.
-- **PR #15 (EC2 deploy, draft): blocked on key custody.** The cutover
-  archive — containing the authority signing key and the admin bearer token
-  — is uploaded to S3 under SSE-S3 with no bucket policy, versioning, or
-  deletion step; "grants cannot be forged" must never reduce to bucket IAM.
-  Also required before merge: stated volume/termination posture, an alarm on
-  the derive-halt fatal exit (today caught only by coincidence), the Mac
-  authority permanently disabled rather than booted-out (single-writer
-  across hosts is currently prose), and a no-cache rule for the authority
-  hostname before `can`/`why`/`who` ship as GETs (invariant 5).
+- **PR #15 (EC2 deploy, merged 2026-08-10 as `fa816d5`): merged with key
+  custody unresolved.** Delta re-grounded post-merge (no production code
+  changed in the entire delta — ops bundle and docs only). Standing debt:
+  - **Key custody — open and live.** The cutover ran; the archive holding
+    the authority signing key, admin bearer token, and trusted-proxy token
+    sits in S3 (SSE-S3, no recorded bucket policy / Block Public Access /
+    versioning / deletion step) *and* in the SSM download directory on the
+    EC2 host (`restore-authority-state.sh` never deletes it). "Grants
+    cannot be forged" currently reduces to bucket IAM. Required: record
+    bucket posture, then delete both copies once a restore drill passes.
+  - **Volume posture — partial.** Quiesced encrypted snapshot + daily
+    seven-snapshot DLM policy recorded; volume encryption at launch,
+    `DeleteOnTermination`, and termination protection are not — and no
+    runbook step applies the four tags the DLM policy selects on, so the
+    backup net can match zero volumes as written.
+  - **Derive-halt alarm — detection satisfied.** The HTTPS descriptor
+    check (two-of-three one-minute periods, missing-data-unhealthy) fires
+    on a halt because the halt tears down the listener. It cannot
+    distinguish a deterministic crash-loop from a transient outage, and
+    the runbook forbids the agent that would carry exit codes and restart
+    counts.
+  - **Mac authority — open.** Still `launchctl bootout`; the plist retains
+    `RunAtLoad`/`KeepAlive` and is not disabled (verified live), so a
+    reboot re-launches a second connector. Single-writer across hosts
+    remains prose, not mechanism.
+  - **No-cache — better than recorded.** Every authority JSON response
+    already sends `Cache-Control: no-store` at the origin; remaining work
+    before `can`/`why`/`who` ship as GETs is an edge cache-bypass rule and
+    a test pinning the header (invariant 5).
+  - **Two notes upgraded to recorded facts:** the per-source ingress
+    rate-limit bucket for `/v1/permission-checks` has *never* been
+    per-source (behind cloudflared the proxied source is always loopback,
+    on the Mac as on EC2), and the runbook's step-1 digest assertion
+    compares an ECR manifest digest to a local image config ID and cannot
+    pass (fail-closed, but it blocks every future cutover at line one).
+  - **New, introduced by the merged state:** (a) daily crash-consistent
+    snapshots are now standard procedure, and a restore rewinds
+    memberships and `authority_audit_log` — the unchained pillar —
+    undetectably: a recovery-time exception to "revocation is immediate by
+    construction"; until that audit is chained, any restore must be
+    followed by explicit revocation re-verification. (b) The general POST
+    limiter keys on one shared proxy client id — a deployment-wide 60/min
+    budget per route class is a shared-fate denial channel, whereas
+    invariant 6's "per-query and self-healing" justification assumes
+    per-asker denial; scope the claim or key the limiter per installation.
 
 ## Appendix A — first instantiation (pilot)
 
