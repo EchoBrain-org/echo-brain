@@ -562,60 +562,65 @@ feature specs budget reality, not the constitution's ideal.
   only `actor_kind: admin` — the widening act is exactly the one needing
   attribution), and the client's acceptance of skipped access-state heads is
   load-bearing and documented only in a test name.
-- **PR #15 (EC2 deploy, merged 2026-08-10 as `fa816d5`): merged with key
-  custody unresolved.** Delta re-grounded post-merge (no production code
-  changed in the entire delta — ops bundle and docs only). Standing debt:
-  - **Key custody — open and live.** The cutover ran; the archive holding
-    the authority signing key, admin bearer token, and trusted-proxy token
-    sits in S3 (SSE-S3, no recorded bucket policy / Block Public Access /
-    versioning / deletion step) *and* in the SSM download directory on the
-    EC2 host (`restore-authority-state.sh` never deletes it). "Grants
-    cannot be forged" currently reduces to bucket IAM. Required: record
-    bucket posture, then delete both copies once a restore drill passes.
-  - **Volume posture — partial.** Quiesced encrypted snapshot + daily
-    seven-snapshot DLM policy recorded; volume encryption at launch,
-    `DeleteOnTermination`, and termination protection are not — and no
-    runbook step applies the four tags the DLM policy selects on, so the
-    backup net can match zero volumes as written.
+- **PR #15 (EC2 deploy, merged 2026-08-10 as `fa816d5`): pilot operating
+  checkpoint closed; standing architecture debt remains.** Delta
+  re-grounded post-merge (no production code changed in the entire delta —
+  ops bundle and docs only).
+  - **Key custody — bounded for the pilot.** The stopped-state archive is
+    intentionally retained as a recovery artifact in a private, versioned,
+    SSE-S3 bucket with all Block Public Access controls enabled and a
+    non-public policy. The EC2/SSM archive and restore-script copies were
+    deleted after the successful restore drill. Because the retained archive
+    contains the authority signing key and administrator and trusted-proxy
+    credentials, read access to that bucket remains Authority-control access;
+    stronger separation of backup custody is future architecture work.
+  - **Volume and recovery posture — verified.** The root EBS volume is
+    encrypted, retained on instance termination, protected by instance
+    termination protection, and carries all four tags selected by the enabled
+    daily seven-snapshot DLM policy. The quiesced encrypted snapshot passed an
+    isolated restore: the exact Authority image became healthy with no
+    network, ports, Caddy, or Tunnel token, exited cleanly, and left all four
+    databases and the record/derive checkpoint consistent. The temporary
+    restore volume was deleted.
   - **Derive-halt alarm — detection satisfied.** The HTTPS descriptor
     check (two-of-three one-minute periods, missing-data-unhealthy) fires
     on a halt because the halt tears down the listener. It cannot
     distinguish a deterministic crash-loop from a transient outage, and
     the runbook forbids the agent that would carry exit codes and restart
     counts.
-  - **Mac authority — open.** Still `launchctl bootout`; the plist retains
-    `RunAtLoad`/`KeepAlive` and is not disabled (verified live), so a
-    reboot re-launches a second connector. Single-writer across hosts
-    remains prose, not mechanism.
+  - **Single writer — pilot hazard closed.** The old Mac Tunnel LaunchAgent
+    is unloaded and persistently disabled, so reboot cannot reconnect it.
+    EC2 is the sole live Authority state owner and Tunnel connector. A future
+    rollback must copy the latest complete EC2 state generation before the Mac
+    connector is deliberately re-enabled.
   - **No-cache — better than recorded.** Every authority JSON response
     already sends `Cache-Control: no-store` at the origin; remaining work
     before `can`/`why`/`who` ship as GETs is an edge cache-bypass rule and
     a test pinning the header (invariant 5).
-  - **Two notes upgraded to recorded facts:** the per-source ingress
-    rate-limit bucket for `/v1/permission-checks` has *never* been
-    per-source (behind cloudflared the proxied source is always loopback,
-    on the Mac as on EC2), and the runbook's step-1 digest assertion
-    compares an ECR manifest digest to a local image config ID and cannot
-    pass (fail-closed, but it blocks every future cutover at line one).
-  - **New, introduced by the merged state:** (a) daily crash-consistent
-    snapshots are now standard procedure, and a restore rewinds
-    memberships and `authority_audit_log` — the unchained pillar —
+  - **Exact artifact — verified.** The configured ECR manifest digest matches
+    the reviewed pinned ECR digest; separately, the running Docker image ID
+    matches the reviewed source image ID. The remaining ingress note is
+    separate: the per-source bucket for `/v1/permission-checks` has never been
+    per-source because cloudflared's proxied source is loopback, on the Mac and
+    EC2 alike.
+  - **Recovery and rate-limit debt — unchanged.** A production restore
+    rewinds memberships and `authority_audit_log` — the unchained pillar —
     undetectably: a recovery-time exception to "revocation is immediate by
-    construction"; until that audit is chained, any restore must be
-    followed by explicit revocation re-verification. (b) The general POST
-    limiter keys on one shared proxy client id — a deployment-wide 60/min
-    budget per route class is a shared-fate denial channel, whereas
-    invariant 6's "per-query and self-healing" justification assumes
-    per-asker denial; scope the claim or key the limiter per installation.
+    construction". Until that history is chained, every restore requires
+    explicit membership, installation, and revocation re-verification. The
+    general POST limiter also keys on one shared proxy client id, making its
+    deployment-wide 60/min budget per route class a shared-fate denial
+    channel; invariant 6's "per-query and self-healing" justification assumes
+    per-asker denial, so scope the claim or key the limiter per installation.
 
 ## Appendix A — first instantiation (pilot)
 
 Proof the skeleton carries load, stated as paths.
 
-The floor is per-organization: the pilot organization (n=2, both founders)
-sets its floor to **readable**; the shipped default for new organizations
-remains **discoverable**. Both are the same rule with a different org
-choice:
+The floor will be per-organization. For the first implementation, the pilot
+organization (n=2, one owner and one employee) will use **readable**; the
+default for new organizations will remain **discoverable**. Both are the same
+rule with a different org choice:
 
 - **Rule 1 (floor):** asker → `member` → org → unmarked atom ⇒ the org's
   floor level (pilot: readable). Sentence: "You can see this because you

@@ -7,7 +7,9 @@ group must have no inbound rules; Docker publishes the HTTP origin only at
 `127.0.0.1:80`.
 
 This is deliberately one host, one EBS volume, and one Tunnel replica. It is
-not HA. Keep the Mac deployment unchanged as the rollback host.
+not HA. Keep the Mac data only as a cold rollback copy. Its Compose stack and
+Tunnel connector must remain stopped; after EC2 accepts traffic, refresh the
+entire data generation before any Mac rollback.
 
 ## 1. Publish the exact image
 
@@ -22,7 +24,8 @@ REGISTRY=904560150024.dkr.ecr.us-west-2.amazonaws.com
 REPOSITORY=echo/organization-authority
 SOURCE_IMAGE=echo-organization-authority:access-recovery-504ec74
 RELEASE_TAG=access-recovery-504ec74
-EXPECTED_SOURCE_ID=sha256:4d9382177d09163c914a2eabf0ddbf2af0ad5e56d1505e0dd4fb98919ca7aa1d
+EXPECTED_DOCKER_IMAGE_ID=sha256:4d9382177d09163c914a2eabf0ddbf2af0ad5e56d1505e0dd4fb98919ca7aa1d
+EXPECTED_ECR_DIGEST=sha256:4d9382177d09163c914a2eabf0ddbf2af0ad5e56d1505e0dd4fb98919ca7aa1d
 aws_echo_prod() {
   env -u AWS_ACCESS_KEY_ID -u AWS_SECRET_ACCESS_KEY \
     -u AWS_SESSION_TOKEN -u AWS_SECURITY_TOKEN \
@@ -32,7 +35,7 @@ aws_echo_prod() {
 [[ $(aws_echo_prod sts get-caller-identity --query Account --output text) == 904560150024 ]]
 
 SOURCE_ID="$(docker image inspect "$SOURCE_IMAGE" --format '{{.Id}}')"
-[[ $SOURCE_ID == "$EXPECTED_SOURCE_ID" ]]
+[[ $SOURCE_ID == "$EXPECTED_DOCKER_IMAGE_ID" ]]
 [[ $(docker image inspect "$SOURCE_ID" --format '{{.Os}}/{{.Architecture}}') == linux/arm64 ]]
 aws_echo_prod ecr get-login-password |
   docker login --username AWS --password-stdin "$REGISTRY"
@@ -42,13 +45,17 @@ DIGEST="$(aws_echo_prod ecr describe-images \
   --repository-name "$REPOSITORY" \
   --image-ids "imageTag=$RELEASE_TAG" \
   --query 'imageDetails[0].imageDigest' --output text)"
-[[ $DIGEST == "$EXPECTED_SOURCE_ID" ]]
-printf 'ECHO_AUTHORITY_IMAGE=%s\n' "$REGISTRY/$REPOSITORY@$DIGEST"
+[[ $DIGEST == "$EXPECTED_ECR_DIGEST" ]]
+PINNED_IMAGE="$REGISTRY/$REPOSITORY@$DIGEST"
+docker pull "$PINNED_IMAGE"
+[[ $(docker image inspect "$PINNED_IMAGE" --format '{{.Id}}') == "$EXPECTED_DOCKER_IMAGE_ID" ]]
+printf 'ECHO_AUTHORITY_IMAGE=%s\n' "$PINNED_IMAGE"
 docker logout "$REGISTRY"
 ```
 
-Record the digest. The EC2 `.env` must use that digest reference, never just a
-tag. The ECR repository is immutable and scans on push.
+Record the ECR digest and Docker image ID separately. The EC2 `.env` must use
+the digest-pinned ECR reference, never just a tag. The ECR repository is
+immutable and scans on push.
 
 ## 2. Prepare EC2 without connecting the Tunnel
 
@@ -217,6 +224,14 @@ docker port "$(compose ps -q authority)"
 `docker port` must show only `127.0.0.1:80`. If local validation fails, keep
 the Tunnel stopped and either repair EC2 or use the pre-cutover rollback below.
 
+After private validation succeeds, remove only the downloaded archive and
+restore-script copies from the recorded SSM command staging directory. Retain
+the source archive in the private, versioned, SSE-S3 backup bucket as a
+recovery artifact. It contains the Authority signing key and administrator and
+proxy credentials, so bucket read access is Authority-control access. Do not
+delete any S3 object version until a newer quiesced archive and snapshot have
+both passed recovery validation.
+
 ## 5. Move the public route
 
 In Cloudflare, change the existing `authority.echobrain.org` Tunnel origin to
@@ -261,14 +276,28 @@ check from Founder before declaring the infrastructure move complete. Validate
 each other active installation when that machine is available; do not promote
 the next client release until every active installation is qualified.
 
+Once EC2 is accepted as the live owner, persistently disable the old Mac
+connector so a reboot cannot create a second Tunnel replica:
+
+```bash
+launchctl disable "gui/$(id -u)/com.cloudflare.cloudflared"
+```
+
 ## Minimum operating checkpoint
 
 After the first successful public refresh:
 
 - Briefly stop cloudflared and the Compose stack, require the Authority
   container to exit with code 0, run `sync`, and request one encrypted EBS
-  snapshot before immediately restarting both layers. Keep this quiesced
-  snapshot until a restore drill succeeds.
+  snapshot before immediately restarting both layers. Keep each quiesced
+  snapshot until a newer quiesced checkpoint passes a restore drill.
+- Current evidence: quiesced snapshot `snap-0f238691b65a7039e` passed an
+  isolated restore drill:
+  an encrypted temporary volume was restored and mounted, the exact Authority
+  image started with no network, no published ports, no Caddy, and no
+  mounted Tunnel token or running cloudflared process, Authority status was
+  healthy, and shutdown completed cleanly. The temporary container, volume,
+  and instance-side SSM archive and restore script were deleted.
 - Enable one EBS Data Lifecycle Manager policy for volumes tagged
   `Project=echo-brain`, `Service=echo-authority`, `Environment=prod`, and
   `Backup=true`. Run daily and retain seven snapshots. These scheduled
@@ -284,18 +313,51 @@ After the first successful public refresh:
 Do not add a CloudWatch Agent, dashboard, database replica, automatic failover,
 or cross-region copy for this v1 pilot.
 
+## Restore boundary
+
+A snapshot or archive restore is a point-in-time replacement, not a merge. It
+rewinds all Authority state to the checkpoint, including memberships,
+installations, revocations, access-state heads, audit rows, and the
+organization-record tail.
+
+The isolated attachment drill above does not authorize booting directly from a
+restored snapshot: that root contains an enabled Tunnel service and its token.
+Before a real restore, persistently disable and stop the current connector. A
+restored boot volume must have the connector disabled or masked offline, or
+outbound connectivity blocked, before its first boot.
+
+Start the restored Authority privately, list memberships and installations,
+and compare them with a separately retained incident or operator record. The
+restored audit log is not sufficient evidence because it was rewound with the
+database. Treat every restored active membership and installation as
+unverified until the Founder confirms it; reapply every known membership or
+installation revocation before reconnecting public ingress.
+
+`installation access-recover` is not a remedy when restoring the Authority
+makes a client newer than the server. Use a newer checkpoint, or revoke and
+replace the stale installation with a newly bootstrapped and enrolled identity.
+Keep access recovery only for its documented central-ahead/client-behind case:
+active membership and enrollment, active Authority access, a gap of at least
+two heads, and an expired current head. It must never reactivate a revoked
+membership or installation.
+
 ## Rollback boundary
 
 - **Before the EC2 Tunnel starts:** stop the EC2 Compose stack, restore the
   recorded Cloudflare origin settings, start the unchanged Mac Compose stack,
-  then run
+  then deliberately re-enable and start the Mac connector:
+  `launchctl enable "gui/$(id -u)/com.cloudflare.cloudflared"`, followed by
   `launchctl bootstrap "gui/$(id -u)" "$HOME/Library/LaunchAgents/com.cloudflare.cloudflared.plist"`.
   Its cold snapshot is still current.
 - **After the EC2 Tunnel starts:** the Mac copy is stale as soon as any request
-  can write state. Never simply reconnect it. Stop EC2 Tunnel and Compose,
-  cold-copy the entire latest EC2 `data/` generation back to the Mac, verify
-  its checksum, restore the old Cloudflare origin settings, and only then start
-  the Mac stack and Tunnel.
+  can write state. Never simply reconnect it. Run
+  `sudo systemctl disable --now cloudflared-echo-authority.service`, verify the
+  EC2 connector is gone, and stop Compose cleanly. Cold-copy the entire latest
+  EC2 `data/` generation back to the Mac, verify its checksum, start and
+  validate the Mac Authority privately, and restore the old Cloudflare origin
+  settings. Only then run
+  `launchctl enable "gui/$(id -u)/com.cloudflare.cloudflared"` and bootstrap
+  the Mac Tunnel.
 
 At every boundary, one Tunnel connector and one Authority state owner is the
 maximum. If that cannot be proved, keep both sides stopped.
