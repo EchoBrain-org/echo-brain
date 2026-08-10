@@ -761,7 +761,21 @@ zero new runtime dependencies.** Per component:
 - Interpretive derivation: entity resolution, model-proposed
   supersedes/relates edges, atom ranking.
 - Approval-surface affordance for `restricted` / `reconsider_after` (contract
-  field ships; input UI deferred until observed need).
+  field ships; input UI deferred until observed need). Founder direction
+  2026-08-10: the gate affordances form one future feature — **approval
+  surface v2** — comprising intent, declared links (`links.supersedes` /
+  `parent`), and **edit-before-approve**, all "things a human states at the
+  gate." Edit-before-approve is the chosen correction model (over
+  reject-and-refine round-trips) per the Abridge precedent — the clinician
+  edits the AI draft, then signs, and the signed artifact is the edited one.
+  Its three rules: edits are visible as edits (the machine draft's digest
+  travels in the envelope, so human-authored-where-edited is checkable);
+  quotes are immutable (claims may be rewritten, a mis-attached quote may be
+  removed, the words said may never be altered, and every claim still
+  requires non-empty evidence); the signature covers the final bytes, as the
+  rail already guarantees. One-tap approval remains the default path; edit
+  is the exception path behind it, so the wedge's zero-friction property is
+  preserved.
 - `correction` events (shape reserved in `event_type` only).
 - Revisit/branch creation and rejection-to-later-approval linkage.
 - Resurfacing of `reconsider_after` rejections (the fact is logged; the
