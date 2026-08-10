@@ -41,6 +41,7 @@ import {
   type AuthorityServeConfig,
 } from './config.js';
 import { assertAuthorityRuntimeStateBinding } from './operator-state.js';
+import { composeOrganizationRecentDecisions } from './recent-decisions.js';
 
 export interface RunningOrganizationAuthority {
   address: AddressInfo;
@@ -302,12 +303,6 @@ export async function startOrganizationAuthority(
       integrationsRepository,
       integrationSecrets,
     );
-    const integrations = new ComposedOrganizationIntegrationsApplication({
-      authority: application,
-      repository: integrationsRepository,
-      secrets: integrationSecrets,
-      slack: new SlackWebIntegrationProvider(),
-    });
     // Opens both record databases, verifies the append chain, and runs the
     // startup derive catch-up. A halted initial derivation throws here, which
     // is what makes it process-fatal: the supervisor restart re-runs the same
@@ -349,6 +344,13 @@ export async function startOrganizationAuthority(
         );
       },
     });
+    const integrations = new ComposedOrganizationIntegrationsApplication({
+      authority: application,
+      repository: integrationsRepository,
+      secrets: integrationSecrets,
+      slack: new SlackWebIntegrationProvider(),
+      permissionPilotHealth: records.permissionPilotHealth,
+    });
     if (authorityRuntimeFingerprint(config) !== runtimeFingerprint) {
       throw new Error(
         'organization authority files changed while composing the runtime',
@@ -358,6 +360,10 @@ export async function startOrganizationAuthority(
       application,
       integrations,
       records,
+      recentDecisions: composeOrganizationRecentDecisions(
+        application,
+        records,
+      ),
       adminAuthenticator,
       clientIdentityResolver,
       adminConsole: {

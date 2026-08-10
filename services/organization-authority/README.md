@@ -264,6 +264,52 @@ record-database pair, or mismatched anchored state is refused rather than
 guessed at; nothing here is automatic recovery, and no command rebuilds a log.
 Missing or mismatched integration state always makes `serve` fail closed.
 
+### Activating the two-person permission pilot
+
+Activation is an operator-confirmed local maintenance act, not an HTTP
+administrator act or proof of a named founder. Stop the Authority, create a
+current-user mode-0600 canonical JSON command outside mutable state, and run:
+
+```sh
+npm run organization-authority:cli -- activate-permission-pilot \
+  --config /absolute/operator/authority.json \
+  --command /absolute/operator/permission-pilot-activation.json
+```
+
+The exact command shape is:
+
+```json
+{
+  "schema_version": 1,
+  "kind": "echo-organization-permission-pilot-activation-command",
+  "command_id": "ppa_<UUIDv4>",
+  "authority_id": "oau_<UUIDv4>",
+  "organization_id": "org_<UUIDv4>",
+  "policy_id": "pilot-member-readable-v1",
+  "presentation_policy_id": "pilot-two-person-audience-v1",
+  "audience": [
+    { "membership_id": "mem_<UUIDv4>", "label": "First Person" },
+    { "membership_id": "mem_<UUIDv4>", "label": "Second Person" }
+  ],
+  "requested_at": "2026-08-10T08:00:00.000Z",
+  "reason": "Operator-confirmed two-person post-activation read pilot."
+}
+```
+
+The audience must be sorted by membership ID. Both memberships must currently
+be active, and each label must exactly equal its Authority principal display
+name. First creation requires `requested_at` within five minutes of execution.
+The command takes the same authenticated singleton runtime lock as `serve`,
+verifies the record chain, and writes one immutable marker at the current log
+head. An exact command-ID-and-digest retry returns that marker even after later
+appends or membership changes; any different command is refused.
+
+Successful output contains the non-secret marker and its canonical
+`presentation_descriptor`. Install that exact descriptor in both pilot
+approval-surface configurations before accepting live approvals. The marker
+opens only notice-qualified records appended after its recorded boundary; it
+does not disclose pre-activation history.
+
 The authority remains a foreground process. Process restart and persistent
 volume backup belong to the container or service manager.
 

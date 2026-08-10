@@ -46,6 +46,28 @@ export interface VerifySlackReactionInput {
   reaction_name: string;
   opposite_reaction_name: string;
   user_id: string;
+  /**
+   * Authority-owned presentation evidence. The caller does not choose these
+   * values: they come from the startup-validated permission-pilot marker.
+   * `null` preserves the pre-pilot approval path without making it eligible
+   * for the pilot read policy.
+   */
+  expected_presentation: SlackApprovalPresentationExpectation | null;
+}
+
+export interface SlackApprovalPresentationExpectation {
+  presentation_policy_id: "pilot-two-person-audience-v1";
+  audience_notice_sha256: `sha256:${string}`;
+  notice_text: string;
+  fallback_text: string;
+}
+
+export interface VerifiedSlackReaction {
+  observed: boolean;
+  /** True when a grammar-valid card contains an own audience extension. */
+  presentation_candidate_observed: boolean;
+  /** Present only after the exact, unedited marker-bound card was verified. */
+  message_presentation_sha256: `sha256:${string}` | null;
 }
 
 export interface PostSlackIdentityLinkChallengeInput {
@@ -101,7 +123,7 @@ export interface SlackIntegrationProvider {
     token: string,
     input: VerifySlackReactionInput,
     signal?: AbortSignal,
-  ): Promise<boolean>;
+  ): Promise<VerifiedSlackReaction>;
   postIdentityLinkChallenge(
     token: string,
     input: PostSlackIdentityLinkChallengeInput,
@@ -303,6 +325,7 @@ export interface SlackApprovalPermissionCandidate {
 
 export type OrganizationPermissionReasonCode =
   | "active_membership_and_direct_grant"
+  | "active_membership_direct_grant_pilot_notice_v1"
   | "installation_inactive"
   | "no_active_link_binding_or_grant"
   | "provider_unavailable"
@@ -371,12 +394,24 @@ export interface ApprovalAuthorizationEvidenceLookup {
   evaluated_at: string;
 }
 
+export interface OrganizationPermissionPilotEligibilityProof {
+  policy_id: "pilot-member-readable-v1";
+  presentation_policy_id: "pilot-two-person-audience-v1";
+  audience_notice_sha256: `sha256:${string}`;
+  message_presentation_sha256: `sha256:${string}`;
+}
+
 /**
- * Absent and ambiguous are distinct outcomes and both deny. A caller must
- * never be able to treat "more than one audit row could be this evaluation"
- * as a match.
+ * Absent, ambiguous, and corrupt are distinct outcomes and all deny. Keeping
+ * malformed notice detail separate from a genuine miss lets the record
+ * Authority preserve a frozen pilot envelope for a retry instead of filing a
+ * permanent rejection for damage in its own audit store.
  */
 export type ApprovalAuthorizationEvidenceMatch =
-  | { readonly status: "matched" }
+  | {
+      readonly status: "matched";
+      readonly permission_pilot_eligibility?: OrganizationPermissionPilotEligibilityProof;
+    }
   | { readonly status: "absent" }
-  | { readonly status: "ambiguous" };
+  | { readonly status: "ambiguous" }
+  | { readonly status: "corrupt" };

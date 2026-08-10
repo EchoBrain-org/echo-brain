@@ -238,6 +238,7 @@ Usage:
   echo-brain organization enroll --config <absolute-path> --invitation <absolute-path> --authority-pin <sha256:...> [--authority-ca <absolute-path>] --allow-exportable-software-key
   echo-brain organization status --config <absolute-path>
   echo-brain organization refresh --config <absolute-path>
+  echo-brain organization recent-decisions --config <absolute-path>
   echo-brain organization rebind --config <absolute-path> --authority-url <https-origin> --authority-pin <sha256:...> [--authority-ca <absolute-path>]
   echo-brain organization slack-link-begin --config <absolute-path>
   echo-brain organization slack-link-complete --config <absolute-path> --challenge-attempt <cat_...> --challenge-message-ts <Slack timestamp>  # reads ECHO_SLACK_LINK_CODE
@@ -345,6 +346,7 @@ const RULES: Readonly<Record<string, CommandRule>> = {
   },
   "organization status": NONE,
   "organization refresh": NONE,
+  "organization recent-decisions": NONE,
   "organization rebind": {
     accepts: ["authority-url", "authority-pin", "authority-ca"],
     requires: ["authority-url", "authority-pin"],
@@ -381,6 +383,7 @@ const ACTIONS: Readonly<Record<string, readonly string[]>> = {
     "enroll",
     "status",
     "refresh",
+    "recent-decisions",
     "rebind",
     "slack-link-begin",
     "slack-link-complete",
@@ -1680,11 +1683,11 @@ export async function runProductCli(
     }
 
     let releases: readonly ReleaseProductLifecycleLock[] = [];
-    let organizationResult: Record<string, unknown> | undefined;
+    let organizationResult: object | undefined;
     let operationFailure: unknown;
     try {
       releases =
-        action === "status"
+        action === "status" || action === "recent-decisions"
           ? [
               await lifecycleLock(
                 dependencies,
@@ -1959,6 +1962,8 @@ export async function runProductCli(
               enrolled: true,
               access: organizationAccessSummary(decision),
             };
+          } else if (action === "recent-decisions") {
+            organizationResult = await runtime.recentDecisions.read();
           } else {
             const approvalSurface = configuredSlackApprovalSurface(config);
             if (action === "slack-link-begin") {

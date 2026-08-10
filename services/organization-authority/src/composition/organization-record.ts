@@ -5,17 +5,22 @@ import {
   OrganizationRecordIngest,
   OrganizationRecordLogReader,
   OrganizationRecordLogStore,
+  OrganizationPermissionPilotReader,
+  parseOrganizationRecordEnvelope,
   verifyOrganizationRecordChain,
 } from '@echo-brain/organization-record';
 import type {
   OrganizationRecordAlert,
   OrganizationRecordChainVerification,
+  OrganizationPermissionPilotActivationMarkerV1,
+  OrganizationPermissionPilotEligibleRecord,
 } from '@echo-brain/organization-record';
 import {
   validateAcceptedOrganizationRecord,
   type AcceptedOrganizationRecordV1,
   type SubmitOrganizationRecordEnvelopeRequestV1,
 } from '@echo-brain/organization-api';
+import { validateOrganizationRecordEnvelope } from '@echo-brain/organization-protocol';
 import { AuthorityOperationError } from '../domain/errors.js';
 import {
   OrganizationRecordIngestAuthority,
@@ -47,11 +52,30 @@ export interface OpenOrganizationRecordRuntimeOptions {
   readonly onFatal?: (failure: Error) => void;
 }
 
+/**
+ * The startup-cached health of the optional permission pilot.
+ *
+ * `absent` is the clean pre-activation state. `degraded` means activation,
+ * eligibility, or its backing notice audit failed validation; keeping that
+ * state distinct prevents both hidden empty reads and permanent rejection of
+ * already-frozen notice-qualified envelopes.
+ */
+export type OrganizationPermissionPilotRuntimeHealth =
+  | { readonly kind: 'absent' }
+  | {
+      readonly kind: 'ready';
+      readonly activation: OrganizationPermissionPilotActivationMarkerV1;
+    }
+  | { readonly kind: 'degraded'; readonly failure: Error };
+
 export interface OrganizationRecordRuntime
   extends OrganizationRecordHttpApplication {
   /** Walks the internal chain. Run at process start and before every backup. */
   verifyChain(): OrganizationRecordChainVerification;
   readonly follower: OrganizationRecordFollower;
+  readonly permissionPilotHealth: OrganizationPermissionPilotRuntimeHealth;
+  /** The fixed, newest-first <=20 canonical rows. Empty only before activation. */
+  readPermissionPilotEligibleRecords(): readonly OrganizationPermissionPilotEligibleRecord[];
   /** The post-start derive failure, once one has happened. */
   readonly fatalFailure: Error | null;
   /**
@@ -85,6 +109,50 @@ function deriveHaltFailure(alert: OrganizationRecordAlert): Error {
     }`,
     alert.cause === undefined ? undefined : { cause: alert.cause },
   );
+}
+
+function assertPermissionPilotEvidence(
+  records: readonly OrganizationPermissionPilotEligibleRecord[],
+  evidenceStore: OrganizationRecordAuthorizationEvidenceStore,
+  organizationId: string,
+): void {
+  for (const { row, eligibility } of records) {
+    const envelope = validateOrganizationRecordEnvelope(
+      parseOrganizationRecordEnvelope(row.canonical_envelope),
+    );
+    const evidence = envelope.reviewer.authorization;
+    const match = evidenceStore.findAllowedApprovalAuthorizationEvidence({
+      organization_id: organizationId,
+      installation_id: envelope.submitter.installation_id,
+      approval_id: evidence.approval_id,
+      action: evidence.action,
+      request_id: evidence.request_id,
+      principal_id: evidence.principal_id,
+      membership_id: evidence.membership_id,
+      request_sha256: evidence.request_sha256,
+      provider_event_sha256: evidence.provider_event_sha256,
+      adapter_binding_id: evidence.adapter_binding_id,
+      permission_grant_id: evidence.permission_grant_id,
+      reason_code: evidence.reason_code,
+      evaluated_at: evidence.evaluated_at,
+    });
+    const proof =
+      match.status === 'matched'
+        ? match.permission_pilot_eligibility
+        : undefined;
+    if (
+      proof === undefined ||
+      proof.policy_id !== eligibility.policy_id ||
+      proof.presentation_policy_id !== eligibility.presentation_policy_id ||
+      proof.audience_notice_sha256 !== eligibility.audience_notice_sha256 ||
+      proof.message_presentation_sha256 !==
+        eligibility.message_presentation_sha256
+    ) {
+      throw new Error(
+        `organization permission pilot eligibility at record position ${row.position} has no exact audited notice evidence`,
+      );
+    }
+  }
 }
 
 /**
@@ -162,9 +230,46 @@ export async function openOrganizationRecordRuntime(
       derived,
       alert,
     });
+    const permissionPilotReader = new OrganizationPermissionPilotReader(
+      log.database,
+      { organization_id: options.organization_id },
+    );
+    let permissionPilotHealth: OrganizationPermissionPilotRuntimeHealth;
+    try {
+      const permissionPilotState = permissionPilotReader.validateState();
+      if (permissionPilotState.activation === null) {
+        permissionPilotHealth = Object.freeze({ kind: 'absent' });
+      } else {
+        assertPermissionPilotEvidence(
+          permissionPilotState.eligible_records,
+          options.evidence,
+          options.organization_id,
+        );
+        permissionPilotHealth = Object.freeze({
+          kind: 'ready',
+          activation: permissionPilotState.activation,
+        });
+      }
+    } catch (error) {
+      const failure =
+        error instanceof Error
+          ? error
+          : new Error(`permission pilot validation failed: ${String(error)}`);
+      // The optional permission slice fails independently closed. The explicit
+      // degraded state keeps the append-only record and deterministic derive
+      // machines live without pretending this was clean non-activation.
+      operatorAlert({
+        kind: 'permission-pilot-inactive',
+        message: `organization permission pilot is degraded: ${failure.message}`,
+        log_position: null,
+        cause: failure,
+      });
+      permissionPilotHealth = Object.freeze({ kind: 'degraded', failure });
+    }
     const authority = new OrganizationRecordIngestAuthority({
       authority: options.authority,
       evidence: options.evidence,
+      permissionPilotHealth,
     });
     const ingest = new OrganizationRecordIngest({
       log,
@@ -206,6 +311,17 @@ export async function openOrganizationRecordRuntime(
       },
       verifyChain: () => verifyOrganizationRecordChain(log),
       follower,
+      permissionPilotHealth,
+      readPermissionPilotEligibleRecords(): readonly OrganizationPermissionPilotEligibleRecord[] {
+        if (permissionPilotHealth.kind === 'absent') return Object.freeze([]);
+        if (permissionPilotHealth.kind === 'degraded') {
+          throw new Error(
+            'organization permission pilot record selection is unavailable',
+            { cause: permissionPilotHealth.failure },
+          );
+        }
+        return permissionPilotReader.readEligibleRecordsDescending();
+      },
       get fatalFailure(): Error | null {
         return fatalFailure;
       },

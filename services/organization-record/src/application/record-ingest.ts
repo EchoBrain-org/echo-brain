@@ -15,6 +15,7 @@ import {
   organizationRecordCanonicalEnvelope,
   organizationRecordEnvelopeIndex,
 } from './record-frame.js';
+import { assertOrganizationPermissionPilotProofBinding } from './permission-pilot.js';
 import {
   systemOrganizationRecordClock,
   type OrganizationRecordAlertPort,
@@ -107,6 +108,10 @@ export class OrganizationRecordIngest {
 
     const verified = await this.authority.verifyEnvelope(envelope);
     assertVerifiedEnvelopeIndexBinding(verified);
+    assertOrganizationPermissionPilotProofBinding(
+      verified.envelope,
+      verified.permission_pilot_eligibility,
+    );
     const canonicalEnvelope = organizationRecordCanonicalEnvelope(verified.envelope);
     const envelopeSha256 = sha256Digest(canonicalEnvelope);
 

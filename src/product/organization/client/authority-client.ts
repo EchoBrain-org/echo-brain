@@ -5,6 +5,8 @@ import type {
   OrganizationAuthorityDescriptorResponseV1,
   OrganizationPermissionCheckDecisionV1,
   OrganizationPermissionCheckRequestV1,
+  OrganizationRecentDecisionsRequestV1,
+  OrganizationRecentDecisionsResponseV1,
   OrganizationInternalLiveDirectiveRequestV1,
   OrganizationInternalLiveUpdateDirectiveV1,
   OrganizationInternalLiveUpdateReceiptV1,
@@ -45,6 +47,11 @@ export interface OrganizationAuthorityClient {
     request: OrganizationPermissionCheckRequestV1,
     signal?: AbortSignal,
   ): Promise<OrganizationPermissionCheckDecisionV1>;
+
+  readRecentDecisions(
+    request: OrganizationRecentDecisionsRequestV1,
+    signal?: AbortSignal,
+  ): Promise<OrganizationRecentDecisionsResponseV1>;
 
   beginSlackLink(
     request: OrganizationSlackLinkBeginRequestV1,

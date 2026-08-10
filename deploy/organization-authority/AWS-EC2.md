@@ -266,6 +266,47 @@ curl --fail --silent http://127.0.0.1:20241/metrics | grep cloudflared_tunnel_ha
 curl --fail --silent --show-error https://authority.echobrain.org/v1/authority-descriptor
 ```
 
+From the separate machine, also pass this public-path cache release gate. The
+malformed body deliberately exercises the fixed recent-decisions `400` without
+using an installation key. Both identical responses must traverse Cloudflare,
+retain the origin's `no-store`, and remain a non-hit. Do not accept a missing
+Cloudflare cache-status header as proof that the edge did not cache the route.
+
+```bash
+set -euo pipefail
+PROBE_DIR="$(mktemp -d)"
+chmod 0700 "$PROBE_DIR"
+trap 'rm -rf -- "$PROBE_DIR"' EXIT
+
+for ATTEMPT in 1 2; do
+  STATUS="$(curl --silent --show-error \
+    --request POST \
+    --header 'Content-Type: application/json' \
+    --data-binary '{' \
+    --dump-header "$PROBE_DIR/headers-$ATTEMPT" \
+    --output "$PROBE_DIR/body-$ATTEMPT" \
+    --write-out '%{http_code}' \
+    https://authority.echobrain.org/v1/recent-decisions)"
+  [[ $STATUS == 400 ]]
+  grep -Eiq '^cf-ray:' "$PROBE_DIR/headers-$ATTEMPT"
+  grep -Eiq '^cache-control:[[:space:]]*no-store[[:space:]]*$' \
+    "$PROBE_DIR/headers-$ATTEMPT"
+  grep -Eiq '^cf-cache-status:' "$PROBE_DIR/headers-$ATTEMPT"
+  ! grep -Eiq \
+    '^cf-cache-status:[[:space:]]*(hit|stale|updating|revalidated)([[:space:]]|$)' \
+    "$PROBE_DIR/headers-$ATTEMPT"
+  ! grep -Eiq '^age:' "$PROBE_DIR/headers-$ATTEMPT"
+  jq -e \
+    '.error == {"code":"invalid_request","message":"request body is invalid"}' \
+    "$PROBE_DIR/body-$ATTEMPT" >/dev/null
+done
+```
+
+This probe is a live release gate, not a substitute for the origin HTTP tests.
+Record the two `CF-Cache-Status` values with the cutover evidence. Stop the
+release if either response is cache-hit-like, lacks `Cache-Control: no-store`,
+or does not carry Cloudflare evidence.
+
 The metrics must settle at four HA connections for this one connector, and the
 Cloudflare dashboard must show only the intended EC2 connector.
 

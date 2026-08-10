@@ -336,11 +336,12 @@ export class SlackWebApiClient {
         !SLACK_MESSAGE_TS_RE.test(ts) ||
         !isPlainObject(message) ||
         message["ts"] !== ts ||
+        message["text"] !== input.text ||
         !Array.isArray(acknowledgedBlocks))
     ) {
       throw new SlackApiError(
         "unknown_outcome",
-        "Slack did not bind the acknowledged blocks to the posted message identity",
+        "Slack did not bind the acknowledged presentation to the posted message identity",
         true,
       );
     }

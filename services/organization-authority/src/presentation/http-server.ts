@@ -20,6 +20,7 @@ import {
   ORGANIZATION_API_INTERNAL_LIVE_DIRECTIVES_PATH,
   ORGANIZATION_API_INTERNAL_LIVE_RECEIPTS_PATH,
   ORGANIZATION_API_PERMISSION_CHECKS_PATH,
+  ORGANIZATION_API_RECENT_DECISIONS_PATH,
   ORGANIZATION_API_RECORD_ENVELOPES_PATH,
   ORGANIZATION_API_SLACK_LINK_CHALLENGES_PATH,
   ORGANIZATION_API_SLACK_LINK_COMPLETIONS_PATH,
@@ -31,6 +32,7 @@ import {
   validateOrganizationInternalLiveDirectiveRequest,
   validateOrganizationInternalLiveUpdateReceipt,
   validateOrganizationPermissionCheckRequest,
+  validateOrganizationRecentDecisionsRequest,
   validateRecoverOrganizationInstallationAccessRequest,
   validateSubmitOrganizationRecordEnvelopeRequest,
   validateOrganizationSlackLinkBeginRequest,
@@ -55,6 +57,10 @@ import {
 } from '../domain/errors.js';
 import { OrganizationRecordIngestRejectionError } from '../application/organization-record-ingest.js';
 import {
+  fixedRecentDecisionsErrorBytes,
+  OrganizationRecentDecisionsError,
+} from '../application/recent-decisions.js';
+import {
   assertAuthorityRuntimeStatusNonce,
   AUTHORITY_RUNTIME_STATUS_NONCE_HEADER,
   AUTHORITY_RUNTIME_STATUS_PATH,
@@ -63,6 +69,7 @@ import {
 import type { OrganizationAuthorityHttpApplication } from './organization-authority-http-application.js';
 import type { OrganizationIntegrationsHttpApplication } from './organization-integrations-http-application.js';
 import type { OrganizationRecordHttpApplication } from './organization-record-http-application.js';
+import type { OrganizationRecentDecisionsHttpApplication } from './organization-recent-decisions-http-application.js';
 import { handleAdminConsoleRequest } from './admin-console/routes.js';
 import type { AdminConsoleSessionStore } from './admin-console/sessions.js';
 import {
@@ -204,6 +211,21 @@ function sendJson(
   response.end(bytes);
 }
 
+/** Sends already-authorized bytes without a second JSON serialization pass. */
+function sendSerializedJson(
+  response: ServerResponse,
+  status: number,
+  bytes: Buffer,
+): void {
+  response.writeHead(status, {
+    'Cache-Control': 'no-store',
+    'Content-Type': 'application/json; charset=utf-8',
+    'Content-Length': String(bytes.length),
+    'X-Content-Type-Options': 'nosniff',
+  });
+  response.end(bytes);
+}
+
 function sendNoContent(response: ServerResponse): void {
   response.writeHead(204, {
     'Cache-Control': 'no-store',
@@ -306,6 +328,30 @@ function validateRecordEnvelopeRequest(
       'record_envelope_invalid',
       'record envelope failed request validation',
     );
+  }
+}
+
+async function readRecentDecisionsRequest(
+  request: IncomingMessage,
+): Promise<ReturnType<typeof validateOrganizationRecentDecisionsRequest>> {
+  try {
+    return validateOrganizationRecentDecisionsRequest(
+      await readJsonBody(request),
+    );
+  } catch (error) {
+    if (
+      isOrganizationApiValidationError(error) ||
+      error instanceof PayloadTooLargeError ||
+      (error instanceof AuthorityOperationError &&
+        error.code === 'invalid_request')
+    ) {
+      throw new OrganizationRecentDecisionsError(
+        'invalid_request',
+        'recent decisions request is invalid',
+        { cause: error },
+      );
+    }
+    throw error;
   }
 }
 
@@ -418,6 +464,8 @@ export interface OrganizationAuthorityHttpServerOptions {
   integrations?: OrganizationIntegrationsHttpApplication;
   /** Present only when the authority process hosts the organization record. */
   records?: OrganizationRecordHttpApplication;
+  /** Present only when a valid permission-pilot marker was cached at startup. */
+  recentDecisions?: OrganizationRecentDecisionsHttpApplication;
   adminAuthenticator: AdminRequestAuthenticator;
   clientIdentityResolver: RequestClientIdentityResolver;
   adminConsole?: {
@@ -627,7 +675,9 @@ export function createOrganizationAuthorityHttpServer(
                     ? 'access'
                     : url.pathname === ORGANIZATION_API_RECORD_ENVELOPES_PATH
                       ? 'record'
-                      : 'other';
+                      : url.pathname === ORGANIZATION_API_RECENT_DECISIONS_PATH
+                        ? 'recent-decisions'
+                        : 'other';
           consumeRateLimit(rateLimiter, `${clientIdentity}:${routeClass}`);
         }
       }
@@ -868,6 +918,34 @@ export function createOrganizationAuthorityHttpServer(
 
         if (
           method === 'POST' &&
+          url.pathname === ORGANIZATION_API_RECENT_DECISIONS_PATH
+        ) {
+          if (url.search !== '') {
+            throw new OrganizationRecentDecisionsError(
+              'invalid_request',
+              'recent decisions query parameters are unsupported',
+            );
+          }
+          if (options.recentDecisions === undefined) {
+            sendSerializedJson(
+              response,
+              404,
+              fixedRecentDecisionsErrorBytes(404),
+            );
+            return;
+          }
+          const command = await readRecentDecisionsRequest(request);
+          const prepared = options.recentDecisions.recentDecisions(command);
+          sendSerializedJson(
+            response,
+            prepared.status_code,
+            prepared.body,
+          );
+          return;
+        }
+
+        if (
+          method === 'POST' &&
           url.pathname === ORGANIZATION_API_INTERNAL_LIVE_DIRECTIVES_PATH
         ) {
           const command = validateOrganizationInternalLiveDirectiveRequest(
@@ -1060,6 +1138,20 @@ export function createOrganizationAuthorityHttpServer(
 
         sendJson(response, 404, errorBody('not_found', 'route was not found'));
       } catch (error) {
+        if (error instanceof OrganizationRecentDecisionsError) {
+          const status =
+            error.code === 'invalid_request'
+              ? 400
+              : error.code === 'unauthorized'
+                ? 401
+                : 503;
+          sendSerializedJson(
+            response,
+            status,
+            fixedRecentDecisionsErrorBytes(status),
+          );
+          return;
+        }
         if (error instanceof TrustedProxyIdentityError) {
           sendJson(
             response,

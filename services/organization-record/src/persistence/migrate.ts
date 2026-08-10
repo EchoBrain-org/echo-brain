@@ -202,16 +202,16 @@ export function migrateOrganizationRecordDatabaseWithMigrations(
   try {
     const current = database.pragma('user_version', { simple: true }) as number;
     const applicationId = database.pragma('application_id', { simple: true }) as number;
-    if (current > currentSchemaVersion) {
-      throw new Error(
-        `${definition.label} database schema ${current} is newer than supported schema ${currentSchemaVersion}`,
-      );
-    }
     if (
       (current > 0 && applicationId !== definition.application_id) ||
       (applicationId !== 0 && applicationId !== definition.application_id)
     ) {
       throw new Error(`database is not an ${definition.label} database`);
+    }
+    if (current > currentSchemaVersion) {
+      throw new Error(
+        `${definition.label} database schema ${current} is newer than supported schema ${currentSchemaVersion}`,
+      );
     }
     if (current === 0) {
       const existingObject = database

@@ -10,6 +10,11 @@ Only a `409` from the access-lease endpoint is interpreted as the stale-state
 recovery protocol. Conflicts from enrollment and every other endpoint remain
 ordinary rejected requests and cannot be mistaken for an access-state update.
 
+The permission-pilot recent-decisions method posts the exact validated signed
+request and accepts only the closed response DTO under its narrower 60 KiB raw
+response limit. The adjacent reader creates a fresh request for each CLI call;
+neither layer persists or caches returned content.
+
 `HttpOrganizationRecordClient` is the one client with its own request allowance:
 256 KiB, matching the authority's route-scoped exemption. Responses retain the
 shared small limit. It also verifies the authority-signed receipt against the

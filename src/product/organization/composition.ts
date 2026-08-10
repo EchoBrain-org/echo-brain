@@ -8,6 +8,7 @@ import {
 } from './enrollment/local-organization-coordinator.js';
 import type { OrganizationStateStore } from './state/organization-state-store.js';
 import { SqliteOrganizationStateStore } from './state/sqlite-organization-state-store.js';
+import { OrganizationRecentDecisionsReader } from './recent-decisions-reader.js';
 import { OrganizationSlackIdentityLinkCoordinator } from './slack-identity-link-coordinator.js';
 
 export const DEFAULT_LOCAL_ORGANIZATION_LEASE_TTL_MS = 5 * 60 * 1000;
@@ -24,6 +25,9 @@ export interface CreateLocalOrganizationRuntimeOptions {
     nextBeginRequestId(): string;
     nextCompleteRequestId(): string;
   };
+  recentDecisionsRequestIds?: {
+    nextRequestId(): string;
+  };
   allowInsecureLoopback?: boolean;
   authorityCaPem?: string;
   fetch?: typeof fetch;
@@ -31,6 +35,7 @@ export interface CreateLocalOrganizationRuntimeOptions {
 
 export interface LocalOrganizationRuntime {
   coordinator: LocalOrganizationCoordinator;
+  recentDecisions: OrganizationRecentDecisionsReader;
   slackIdentityLinks: OrganizationSlackIdentityLinkCoordinator;
   authorityClient: OrganizationAuthorityClient;
   state: OrganizationStateStore;
@@ -82,8 +87,20 @@ export function createLocalOrganizationRuntime(
               options.slackLinkRequestIds.nextCompleteRequestId,
           }),
     });
+    const recentDecisions = new OrganizationRecentDecisionsReader({
+      state,
+      authorityClient,
+      installationSigner: options.installationSigner,
+      now: () => options.clock.now(),
+      ...(options.recentDecisionsRequestIds === undefined
+        ? {}
+        : {
+            nextRequestId: options.recentDecisionsRequestIds.nextRequestId,
+          }),
+    });
     return Object.freeze({
       coordinator,
+      recentDecisions,
       slackIdentityLinks,
       authorityClient,
       state,

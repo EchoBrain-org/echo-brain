@@ -36,6 +36,12 @@ const LOG_TABLES_BY_OBSERVABLE_BEHAVIOR = {
   'materializes a signed receipt once, recoverably, after the append commits': [
     'organization_record_signed_receipt',
   ],
+  'activates one immutable notice-bound two-member permission pilot': [
+    'organization_record_permission_pilot_activation',
+  ],
+  'indexes only notice-qualified post-activation approvals for the pilot read': [
+    'organization_record_permission_pilot_eligibility',
+  ],
 } as const;
 
 const DERIVED_TABLES_BY_OBSERVABLE_BEHAVIOR = {
@@ -64,6 +70,12 @@ const LOG_MIGRATION_SHA256 = [
   sha256Digest(
     readFileSync(
       new URL('../migrations/log/0001_organization_record_log.sql', import.meta.url),
+      'utf8',
+    ),
+  ),
+  sha256Digest(
+    readFileSync(
+      new URL('../migrations/log/0002_permission_pilot.sql', import.meta.url),
       'utf8',
     ),
   ),

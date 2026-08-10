@@ -14,6 +14,7 @@
   "allowed_node_builtins": ["fs", "path"],
   "runtime_assets": [
     "services/organization-record/migrations/log/0001_organization_record_log.sql",
+    "services/organization-record/migrations/log/0002_permission_pilot.sql",
     "services/organization-record/migrations/derived/0001_organization_record_derived.sql"
   ],
   "layer_rules": [
@@ -62,6 +63,18 @@
         "services/organization-record/src/persistence/**"
       ],
       "allowed_workspace_packages": ["@echo-brain/federation-protocol"],
+      "allowed_external_packages": ["better-sqlite3"],
+      "allowed_node_builtins": []
+    },
+    {
+      "name": "record-retrieve-reads-only-qualified-log-state",
+      "from": "services/organization-record/src/retrieve/**",
+      "allowed_imports": [
+        "services/organization-record/src/application/**",
+        "services/organization-record/src/log/permission-pilot.ts",
+        "services/organization-record/src/retrieve/**"
+      ],
+      "allowed_workspace_packages": [],
       "allowed_external_packages": ["better-sqlite3"],
       "allowed_node_builtins": []
     }

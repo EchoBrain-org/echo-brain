@@ -23,6 +23,7 @@ import {
 } from '../application/ports.js';
 import { ORGANIZATION_RECORD_LOG_DATABASE } from '../persistence/database-definition.js';
 import { openOrganizationRecordDatabase } from '../persistence/open-database.js';
+import { appendOrganizationPermissionPilotEligibility } from './permission-pilot.js';
 
 interface MetadataRow {
   organization_id: string;
@@ -183,6 +184,11 @@ export class OrganizationRecordLogStore implements OrganizationRecordLogPort {
           recordHash,
           recorded_at,
         );
+      appendOrganizationPermissionPilotEligibility(
+        this.database,
+        { position, record_hash: recordHash },
+        envelope.permission_pilot_eligibility,
+      );
       this.database.exec('COMMIT');
       return {
         outcome: 'appended',

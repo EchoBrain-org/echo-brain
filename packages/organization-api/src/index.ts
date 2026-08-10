@@ -27,6 +27,11 @@ export type {
   OrganizationPermissionCheckDecisionV1,
   OrganizationPermissionCheckRequestPayloadV1,
   OrganizationPermissionCheckRequestV1,
+  OrganizationRecentDecisionItemV1,
+  OrganizationRecentDecisionKindV1,
+  OrganizationRecentDecisionsRequestPayloadV1,
+  OrganizationRecentDecisionsRequestV1,
+  OrganizationRecentDecisionsResponseV1,
   OrganizationRecordRejectionCodeV1,
   OrganizationSlackLinkBeginRequestPayloadV1,
   OrganizationSlackLinkBeginRequestV1,
@@ -48,10 +53,14 @@ export {
   MAX_ORGANIZATION_API_CURSOR_CHARACTERS,
   MAX_ORGANIZATION_API_BODY_BYTES,
   MAX_ORGANIZATION_API_PAGE_ITEMS,
+  MAX_ORGANIZATION_RECENT_DECISIONS_ITEMS,
+  MAX_ORGANIZATION_RECENT_DECISIONS_RESPONSE_BYTES,
   MAX_ORGANIZATION_AUDIT_DETAIL_DEPTH,
   MAX_ORGANIZATION_AUDIT_DETAIL_NODES,
   MAX_ORGANIZATION_RECORD_API_BODY_BYTES,
   MINIMUM_ORGANIZATION_ACCESS_RECOVERY_GAP,
+  ORGANIZATION_RECENT_DECISIONS_POLICY_ID,
+  ORGANIZATION_RECENT_DECISIONS_WITNESS,
   ORGANIZATION_RECORD_ENVELOPE_WRAPPER_BYTES,
   ORGANIZATION_RECORD_PERMANENT_REJECTION_CODES,
   isOrganizationApiValidationError,
@@ -79,6 +88,8 @@ export {
   validateOrganizationMembershipSummary,
   validateOrganizationPermissionCheckDecision,
   validateOrganizationPermissionCheckRequest,
+  validateOrganizationRecentDecisionsRequest,
+  validateOrganizationRecentDecisionsResponse,
   validateOrganizationSlackLinkBeginRequest,
   validateOrganizationSlackLinkBeginResponse,
   validateOrganizationSlackLinkCompleteRequest,
@@ -108,6 +119,7 @@ export {
   ORGANIZATION_API_INTERNAL_LIVE_DIRECTIVES_PATH,
   ORGANIZATION_API_INTERNAL_LIVE_RECEIPTS_PATH,
   ORGANIZATION_API_PERMISSION_CHECKS_PATH,
+  ORGANIZATION_API_RECENT_DECISIONS_PATH,
   ORGANIZATION_API_PROXY_AUTH_SCHEME,
   ORGANIZATION_API_RECORD_ENVELOPES_PATH,
   ORGANIZATION_API_SLACK_LINK_CHALLENGES_PATH,
@@ -131,6 +143,12 @@ export {
   verifyOrganizationPermissionCheckRequest,
 } from './permission-check-request.js';
 export type { CreateOrganizationPermissionCheckRequestInput } from './permission-check-request.js';
+export {
+  createOrganizationRecentDecisionsRequest,
+  organizationRecentDecisionsRequestSha256,
+  verifyOrganizationRecentDecisionsRequest,
+} from './recent-decisions-request.js';
+export type { CreateOrganizationRecentDecisionsRequestInput } from './recent-decisions-request.js';
 export {
   createOrganizationSlackLinkBeginRequest,
   createOrganizationSlackLinkCompleteRequest,

@@ -10,7 +10,7 @@ import {
 } from 'node:crypto';
 import type { KeyObject } from 'node:crypto';
 import Database from 'better-sqlite3';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import {
   canonicalJson,
   canonicalSha256,
@@ -18,6 +18,7 @@ import {
   federationId,
   normalizeP256LowS,
   p256KeyId,
+  sha256Digest,
 } from '@echo-brain/federation-protocol';
 import type {
   P256SigningKeyDescriptor,
@@ -39,10 +40,14 @@ import {
   createOrganizationInternalLiveDirectiveRequest,
   createOrganizationInternalLiveUpdateReceipt,
   createOrganizationPermissionCheckRequest,
+  createOrganizationRecentDecisionsRequest,
   createOrganizationSlackLinkBeginRequest,
   organizationInternalLiveManifestSha256,
 } from '@echo-brain/organization-api';
-import type { OrganizationPermissionCheckRequestV1 } from '@echo-brain/organization-api';
+import type {
+  OrganizationPermissionCheckRequestV1,
+  OrganizationRecentDecisionsRequestV1,
+} from '@echo-brain/organization-api';
 import { OrganizationAuthorityApplication } from '../src/application/organization-authority.js';
 import type {
   AuthorityClock,
@@ -54,6 +59,11 @@ import {
   AuthorityOperationError,
   StaleAccessStateError,
 } from '../src/domain/errors.js';
+import { OrganizationRecentDecisionsError } from '../src/application/recent-decisions.js';
+import type {
+  OrganizationRecentDecisionsPilotActivation,
+  OrganizationRecentDecisionsProjectedRecord,
+} from '../src/application/recent-decisions.js';
 
 class FakeClock implements AuthorityClock {
   constructor(private current: number) {}
@@ -281,6 +291,70 @@ async function permissionCheckRequest(
   );
 }
 
+interface RecentDecisionsFixtureView {
+  readonly clock: FakeClock;
+  readonly enrolled: Awaited<ReturnType<typeof enroll>>;
+}
+
+async function recentDecisionsRequest(
+  fixture: RecentDecisionsFixtureView,
+  requestedAt = fixture.clock.now(),
+): Promise<OrganizationRecentDecisionsRequestV1> {
+  const receipt = fixture.enrolled.result.enrollment_receipt;
+  return createOrganizationRecentDecisionsRequest(
+    {
+      request_id: `rdr_${randomUUID()}`,
+      authority_id: receipt.authority_id,
+      authority_key_id: receipt.authority_key_id,
+      organization_id: receipt.organization_id,
+      enrollment_id: receipt.enrollment_id,
+      installation_id: fixture.enrolled.installationId,
+      installation_signing_key: fixture.enrolled.installation.descriptor,
+      requested_at: requestedAt,
+    },
+    async (bytes) => sign(fixture.enrolled.installation, bytes),
+  );
+}
+
+function recentDecisionsActivation(
+  fixture: RecentDecisionsFixtureView,
+  membershipIds: readonly [string, string] = [
+    fixture.enrolled.request.membership_id,
+    federationId('mem'),
+  ],
+): OrganizationRecentDecisionsPilotActivation {
+  const sorted = [...membershipIds].sort() as [string, string];
+  return {
+    organization_id: fixture.enrolled.result.enrollment_receipt.organization_id,
+    policy_id: 'pilot-member-readable-v1',
+    marker_sha256: canonicalSha256({
+      command: 'permission-pilot',
+      effective_after_position: 41,
+      effective_after_record_hash: canonicalSha256({ record: 41 }),
+    }),
+    audience_notice_sha256: canonicalSha256({ notice: 'two people' }),
+    membership_ids: sorted,
+  };
+}
+
+function recentProjectedRecord(
+  position = 1,
+): OrganizationRecentDecisionsProjectedRecord {
+  const recordHash = canonicalSha256({ record: position });
+  return {
+    log_position: position,
+    record_hash: recordHash,
+    atoms: [
+      {
+        atom_id: canonicalSha256({ atom: position }),
+        record_hash: recordHash,
+        kind: 'decision',
+        text: 'Ship the two-person retrieval pilot.',
+      },
+    ],
+  };
+}
+
 async function slackLinkBeginRequest(
   fixture: Awaited<ReturnType<typeof createEnrolledFixture>>,
 ) {
@@ -355,6 +429,43 @@ function internalLiveReleaseApproval(
 }
 
 describe('single-organization authority runtime', () => {
+  it('samples a linearized write timestamp only after holding the writer lock', async () => {
+    const fixture = await createEnrolledFixture('2026-08-02T19:55:00.000Z');
+    try {
+      fixture.clock.advance(1);
+      let sampleCount = 0;
+      const committedAt = fixture.repository.writeAtLinearization(
+        () => {
+          sampleCount += 1;
+          const competitor = new Database(fixture.databasePath);
+          try {
+            competitor.pragma('busy_timeout = 0');
+            expect(() => competitor.exec('BEGIN IMMEDIATE')).toThrow(
+              /database is locked/,
+            );
+          } finally {
+            competitor.close();
+          }
+          return fixture.clock.now();
+        },
+        (transaction, observedAt) => {
+          expect(transaction.metadata().last_observed_at).toBe(observedAt);
+          return observedAt;
+        },
+      );
+
+      expect(committedAt).toBe(fixture.clock.now());
+      expect(sampleCount).toBe(1);
+      expect(
+        fixture.repository.read(
+          (transaction) => transaction.metadata().last_observed_at,
+        ),
+      ).toBe(committedAt);
+    } finally {
+      closeFixture(fixture);
+    }
+  });
+
   it('approves one immutable internal-live pointer and records signed redacted rollout receipts', async () => {
     const fixture = await createEnrolledFixture('2026-08-02T20:00:00.000Z');
     try {
@@ -441,11 +552,7 @@ describe('single-organization authority runtime', () => {
         manifest_sha256: approval.manifest_sha256,
       });
 
-      const higherApproval = approvalForVersion(
-        '0.1.0-internal.2',
-        'e',
-        'f',
-      );
+      const higherApproval = approvalForVersion('0.1.0-internal.2', 'e', 'f');
       const rolledBackReceipt =
         await createOrganizationInternalLiveUpdateReceipt(
           {
@@ -458,8 +565,7 @@ describe('single-organization authority runtime', () => {
             enrollment_id:
               fixture.enrolled.result.enrollment_receipt.enrollment_id,
             installation_id: fixture.enrolled.installationId,
-            installation_signing_key:
-              fixture.enrolled.installation.descriptor,
+            installation_signing_key: fixture.enrolled.installation.descriptor,
             transaction_id: `upd_${randomUUID()}`,
             directive_sequence: 1,
             release_version: manifest.release_version,
@@ -492,14 +598,12 @@ describe('single-organization authority runtime', () => {
       const transactionId = `upd_${randomUUID()}`;
       fixture.clock.advance(1);
       const receiptPayload = {
-        authority_id:
-          fixture.enrolled.result.enrollment_receipt.authority_id,
+        authority_id: fixture.enrolled.result.enrollment_receipt.authority_id,
         authority_key_id:
           fixture.enrolled.result.enrollment_receipt.authority_key_id,
         organization_id:
           fixture.enrolled.result.enrollment_receipt.organization_id,
-        enrollment_id:
-          fixture.enrolled.result.enrollment_receipt.enrollment_id,
+        enrollment_id: fixture.enrolled.result.enrollment_receipt.enrollment_id,
         installation_id: fixture.enrolled.installationId,
         installation_signing_key: fixture.enrolled.installation.descriptor,
         transaction_id: transactionId,
@@ -520,6 +624,56 @@ describe('single-organization authority runtime', () => {
       fixture.clock.advance(5 * 60 * 1000 + 1);
       expect(() =>
         fixture.application.recordInternalLiveUpdateReceipt(receipt),
+      ).toThrow(
+        expect.objectContaining<Partial<AuthorityOperationError>>({
+          code: 'unauthorized',
+        }),
+      );
+      const renewedAccessRequest = await createOrganizationAccessLeaseRequest(
+        {
+          request_id: `alr_${randomUUID()}`,
+          authority_id:
+            fixture.enrolled.result.enrollment_receipt.authority_id,
+          authority_key_id:
+            fixture.enrolled.result.enrollment_receipt.authority_key_id,
+          organization_id:
+            fixture.enrolled.result.enrollment_receipt.organization_id,
+          enrollment_id:
+            fixture.enrolled.result.enrollment_receipt.enrollment_id,
+          installation_id: fixture.enrolled.installationId,
+          installation_signing_key: fixture.enrolled.installation.descriptor,
+          previous_access_state_sha256: canonicalSha256(
+            fixture.enrolled.result.access_state,
+          ),
+          requested_at: fixture.clock.now(),
+        },
+        async (bytes) => sign(fixture.enrolled.installation, bytes),
+      );
+      await fixture.application.issueAccessLease(renewedAccessRequest);
+      const secondRenewedAccessRequest =
+        await createOrganizationAccessLeaseRequest(
+          {
+            request_id: `alr_${randomUUID()}`,
+            authority_id:
+              secondEnrolled.result.enrollment_receipt.authority_id,
+            authority_key_id:
+              secondEnrolled.result.enrollment_receipt.authority_key_id,
+            organization_id:
+              secondEnrolled.result.enrollment_receipt.organization_id,
+            enrollment_id:
+              secondEnrolled.result.enrollment_receipt.enrollment_id,
+            installation_id: secondEnrolled.installationId,
+            installation_signing_key: secondEnrolled.installation.descriptor,
+            previous_access_state_sha256: canonicalSha256(
+              secondEnrolled.result.access_state,
+            ),
+            requested_at: fixture.clock.now(),
+          },
+          async (bytes) => sign(secondEnrolled.installation, bytes),
+        );
+      await fixture.application.issueAccessLease(secondRenewedAccessRequest);
+      expect(() =>
+        fixture.application.recordInternalLiveUpdateReceipt(receipt),
       ).not.toThrow();
       const resignedReceipt = await createOrganizationInternalLiveUpdateReceipt(
         receiptPayload,
@@ -531,16 +685,17 @@ describe('single-organization authority runtime', () => {
       expect(() =>
         fixture.application.approveInternalLiveRelease(higherApproval),
       ).toThrow(/not healthy on every active installation/);
-      const divergentReceipt = await createOrganizationInternalLiveUpdateReceipt(
-        {
-          ...receiptPayload,
-          outcome: 'failed',
-          doctor: null,
-          failure: { phase: 'doctor', code: 'doctor_failed' },
-          finished_at: fixture.clock.now(),
-        },
-        async (bytes) => sign(fixture.enrolled.installation, bytes),
-      );
+      const divergentReceipt =
+        await createOrganizationInternalLiveUpdateReceipt(
+          {
+            ...receiptPayload,
+            outcome: 'failed',
+            doctor: null,
+            failure: { phase: 'doctor', code: 'doctor_failed' },
+            finished_at: fixture.clock.now(),
+          },
+          async (bytes) => sign(fixture.enrolled.installation, bytes),
+        );
       expect(() =>
         fixture.application.recordInternalLiveUpdateReceipt(divergentReceipt),
       ).toThrow(/transaction ID was reused/);
@@ -560,8 +715,7 @@ describe('single-organization authority runtime', () => {
       const secondReceipt = await createOrganizationInternalLiveUpdateReceipt(
         {
           ...receiptPayload,
-          enrollment_id:
-            secondEnrolled.result.enrollment_receipt.enrollment_id,
+          enrollment_id: secondEnrolled.result.enrollment_receipt.enrollment_id,
           installation_id: secondEnrolled.installationId,
           installation_signing_key: secondEnrolled.installation.descriptor,
           transaction_id: `upd_${randomUUID()}`,
@@ -625,16 +779,8 @@ describe('single-organization authority runtime', () => {
   it('allows a strictly newer release to replace a pre-rollout approval', async () => {
     const fixture = await createEnrolledFixture('2026-08-02T21:00:00.000Z');
     try {
-      const first = internalLiveReleaseApproval(
-        '0.1.0-internal.1',
-        'a',
-        'b',
-      );
-      const second = internalLiveReleaseApproval(
-        '0.1.0-internal.2',
-        'c',
-        'd',
-      );
+      const first = internalLiveReleaseApproval('0.1.0-internal.1', 'a', 'b');
+      const second = internalLiveReleaseApproval('0.1.0-internal.2', 'c', 'd');
 
       expect(
         fixture.application.approveInternalLiveRelease(first),
@@ -662,11 +808,7 @@ describe('single-organization authority runtime', () => {
         ],
       });
 
-      const older = internalLiveReleaseApproval(
-        '0.1.0-internal.1',
-        'e',
-        'f',
-      );
+      const older = internalLiveReleaseApproval('0.1.0-internal.1', 'e', 'f');
       expect(() =>
         fixture.application.approveInternalLiveRelease(older),
       ).toThrow(/version must increase monotonically/);
@@ -820,11 +962,9 @@ describe('single-organization authority runtime', () => {
       });
       expect(active).toMatchObject({
         provider_event_sha256: request.provider_event_sha256,
-        enrollment_id:
-          fixture.enrolled.result.enrollment_receipt.enrollment_id,
+        enrollment_id: fixture.enrolled.result.enrollment_receipt.enrollment_id,
         installation_id: fixture.enrolled.installationId,
-        installation_key_id:
-          fixture.enrolled.installation.descriptor.key_id,
+        installation_key_id: fixture.enrolled.installation.descriptor.key_id,
         installation_principal_id:
           fixture.enrolled.result.enrollment_receipt.principal_id,
         installation_membership_id:
@@ -883,10 +1023,8 @@ describe('single-organization authority runtime', () => {
         authority_id: request.authority_id,
         organization_id: request.organization_id,
         enrollment_id: request.enrollment_id,
-        principal_id:
-          fixture.enrolled.result.enrollment_receipt.principal_id,
-        membership_id:
-          fixture.enrolled.result.enrollment_receipt.membership_id,
+        principal_id: fixture.enrolled.result.enrollment_receipt.principal_id,
+        membership_id: fixture.enrolled.result.enrollment_receipt.membership_id,
         installation_id: request.installation_id,
         installation_key_id: request.installation_key_id,
       });
@@ -911,7 +1049,7 @@ describe('single-organization authority runtime', () => {
     }
   });
 
-  it('rejects unknown, forged, and stale permission-check authentication', async () => {
+  it('rejects unknown, forged, stale, and expired permission-check callers', async () => {
     const fixture = await createEnrolledFixture('2026-07-22T11:50:00.000Z');
     try {
       const unknownEnrollment = await permissionCheckRequest(fixture, {
@@ -948,7 +1086,28 @@ describe('single-organization authority runtime', () => {
         }),
       );
 
-      fixture.clock.advance(5 * 60 * 1000 + 1);
+      fixture.clock.advance(5 * 60 * 1000);
+      const freshAfterExpiry = await permissionCheckRequest(fixture);
+      expect(
+        fixture.application.checkPermissionSubject(freshAfterExpiry, null),
+      ).toMatchObject({
+        installation_active: false,
+        evaluated_at: fixture.clock.now(),
+      });
+
+      const freshIntegrationRequest = await slackLinkBeginRequest(fixture);
+      expect(() =>
+        fixture.application.integrationInstallationContext(
+          freshIntegrationRequest,
+          'Slack identity link begin request',
+        ),
+      ).toThrow(
+        expect.objectContaining<Partial<AuthorityOperationError>>({
+          code: 'unauthorized',
+        }),
+      );
+
+      fixture.clock.advance(1);
       expect(() =>
         fixture.application.checkPermissionSubject(request, null),
       ).toThrow(
@@ -957,6 +1116,312 @@ describe('single-organization authority runtime', () => {
         }),
       );
     } finally {
+      closeFixture(fixture);
+    }
+  });
+
+  it('audits the exact recent-decisions bytes after the final person recheck', async () => {
+    const fixture = await createEnrolledFixture('2026-07-22T11:55:00.000Z');
+    try {
+      const request = await recentDecisionsRequest(fixture);
+      const activation = recentDecisionsActivation(fixture);
+      const prepared = fixture.application.serveRecentDecisions(
+        request,
+        activation,
+        () => [recentProjectedRecord()],
+      );
+      expect(prepared.status_code).toBe(200);
+      expect(JSON.parse(prepared.body.toString('utf8'))).toMatchObject({
+        policy_id: 'pilot-member-readable-v1',
+        items: [
+          {
+            kind: 'decision',
+            text: 'Ship the two-person retrieval pilot.',
+          },
+        ],
+      });
+      const allowedAudit = fixture.application.listAudit({ limit: 1 })
+        .items[0]!;
+      expect(allowedAudit).toMatchObject({
+        actor_kind: 'installation',
+        action: 'permission_pilot.recent_decisions_decided',
+        subject_id: fixture.enrolled.installationId,
+        detail: {
+          operation: 'recent_decisions',
+          decision: 'allow',
+          governed_reason: 'active_bound_pilot_membership',
+          request_sha256: canonicalSha256(request),
+          response_sha256: sha256Digest(prepared.body),
+          policy_marker_sha256: activation.marker_sha256,
+          audience_notice_sha256: activation.audience_notice_sha256,
+          returned_items: prepared.item_references,
+          pilot_person_state: {
+            membership_id: fixture.enrolled.request.membership_id,
+            principal_id: fixture.enrolled.request.principal_id,
+            membership_status: 'active',
+            enrollment_status: 'active',
+            installation_id: fixture.enrolled.installationId,
+            access_status: 'active',
+          },
+        },
+      });
+
+      const auditDetail = allowedAudit.detail as Record<string, unknown>;
+      expect(auditDetail).not.toHaveProperty('text');
+      expect(auditDetail.pilot_person_state_sha256).toBe(
+        canonicalSha256(auditDetail.pilot_person_state),
+      );
+
+      const empty = fixture.application.serveRecentDecisions(
+        request,
+        activation,
+        () => [],
+      );
+      expect(empty.status_code).toBe(200);
+      expect(JSON.parse(empty.body.toString('utf8'))).toMatchObject({
+        items: [],
+      });
+      expect(
+        fixture.application.listAudit({ limit: 1 }).items[0]!.detail,
+      ).toMatchObject({
+        decision: 'allow',
+        response_sha256: sha256Digest(empty.body),
+        returned_items: [],
+      });
+
+      const deniedAfterConcurrentExpiry =
+        fixture.application.serveRecentDecisions(request, activation, () => {
+          fixture.clock.advance(5 * 60 * 1000 + 1);
+          return [recentProjectedRecord()];
+        });
+      expect(deniedAfterConcurrentExpiry.status_code).toBe(401);
+      expect(deniedAfterConcurrentExpiry.body.toString('utf8')).toBe(
+        '{"error":{"code":"unauthorized","message":"authorization failed"}}',
+      );
+      const deniedAudit = fixture.application.listAudit({ limit: 1 }).items[0]!;
+      expect(deniedAudit.detail).toMatchObject({
+        decision: 'deny',
+        governed_reason: 'installation_access_expired',
+        response_sha256: sha256Digest(deniedAfterConcurrentExpiry.body),
+      });
+      expect(deniedAudit.detail).not.toHaveProperty('returned_items');
+    } finally {
+      closeFixture(fixture);
+    }
+  });
+
+  it('audits opaque denials before source selection for unbound and expired callers', async () => {
+    const fixture = await createEnrolledFixture('2026-07-22T11:57:00.000Z');
+    try {
+      let sourceReads = 0;
+      const unboundRequest = await recentDecisionsRequest(fixture);
+      const unbound = fixture.application.serveRecentDecisions(
+        unboundRequest,
+        recentDecisionsActivation(fixture, [
+          federationId('mem'),
+          federationId('mem'),
+        ]),
+        () => {
+          sourceReads += 1;
+          return [recentProjectedRecord()];
+        },
+      );
+      expect(unbound.status_code).toBe(404);
+      expect(sourceReads).toBe(0);
+      expect(
+        fixture.application.listAudit({ limit: 1 }).items[0]!.detail,
+      ).toMatchObject({
+        decision: 'deny',
+        governed_reason: 'inactive_or_unbound_pilot_membership',
+      });
+
+      fixture.clock.advance(5 * 60 * 1000 + 1);
+      const expiredRequest = await recentDecisionsRequest(fixture);
+      const expired = fixture.application.serveRecentDecisions(
+        expiredRequest,
+        recentDecisionsActivation(fixture),
+        () => {
+          sourceReads += 1;
+          return [recentProjectedRecord()];
+        },
+      );
+      expect(expired.status_code).toBe(401);
+      expect(sourceReads).toBe(0);
+      expect(
+        fixture.application.listAudit({ limit: 1 }).items[0]!.detail,
+      ).toMatchObject({
+        decision: 'deny',
+        governed_reason: 'installation_access_expired',
+      });
+    } finally {
+      closeFixture(fixture);
+    }
+  });
+
+  it('keeps the other bound member eligible when one bound membership is revoked', async () => {
+    const directory = mkdtempSync(join(tmpdir(), 'echo-authority-pilot-pair-'));
+    chmodSync(directory, 0o700);
+    const clock = new FakeClock(Date.parse('2026-07-22T11:58:00.000Z'));
+    const { application } = await createApplication(
+      join(directory, 'authority.sqlite'),
+      clock,
+    );
+    try {
+      const membershipA = application.provisionMembership({
+        command_id: `adm_${randomUUID()}`,
+        display_name: 'Pilot Member A',
+        membership_type: 'employee',
+      });
+      const membershipB = application.provisionMembership({
+        command_id: `adm_${randomUUID()}`,
+        display_name: 'Pilot Member B',
+        membership_type: 'employee',
+      });
+      const membershipC = application.provisionMembership({
+        command_id: `adm_${randomUUID()}`,
+        display_name: 'Unbound Member',
+        membership_type: 'employee',
+      });
+      const memberA = {
+        clock,
+        enrolled: await enroll(application, membershipA, clock),
+      };
+      const memberB = {
+        clock,
+        enrolled: await enroll(application, membershipB, clock),
+      };
+      const memberC = {
+        clock,
+        enrolled: await enroll(application, membershipC, clock),
+      };
+      const activation = recentDecisionsActivation(memberA, [
+        membershipA.membership_id,
+        membershipB.membership_id,
+      ]);
+      let sourceReads = 0;
+      const load = (): readonly OrganizationRecentDecisionsProjectedRecord[] => {
+        sourceReads += 1;
+        return [recentProjectedRecord()];
+      };
+
+      expect(
+        application.serveRecentDecisions(
+          await recentDecisionsRequest(memberA),
+          activation,
+          load,
+        ).status_code,
+      ).toBe(200);
+      expect(
+        application.serveRecentDecisions(
+          await recentDecisionsRequest(memberB),
+          activation,
+          load,
+        ).status_code,
+      ).toBe(200);
+      expect(
+        application.serveRecentDecisions(
+          await recentDecisionsRequest(memberC),
+          activation,
+          load,
+        ).status_code,
+      ).toBe(404);
+      expect(sourceReads).toBe(2);
+
+      await application.revokeMembership(
+        membershipA.membership_id,
+        'Permission-pilot revocation test',
+      );
+      expect(
+        application.serveRecentDecisions(
+          await recentDecisionsRequest(memberA),
+          activation,
+          load,
+        ).status_code,
+      ).toBe(404);
+      expect(
+        application.serveRecentDecisions(
+          await recentDecisionsRequest(memberB),
+          activation,
+          load,
+        ).status_code,
+      ).toBe(200);
+      expect(sourceReads).toBe(3);
+    } finally {
+      application.close();
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
+  it('returns unauthenticated recent-decisions failures before audit or source access', async () => {
+    const fixture = await createEnrolledFixture('2026-07-22T11:59:00.000Z');
+    try {
+      const request = await recentDecisionsRequest(fixture);
+      const activation = recentDecisionsActivation(fixture);
+      const initialAuditCount =
+        fixture.application.adminOverview().counts.audit_entries;
+      let sourceReads = 0;
+      expect(() =>
+        fixture.application.serveRecentDecisions(
+          { ...request, requested_at: '2026-07-22T11:59:01.000Z' },
+          activation,
+          () => {
+            sourceReads += 1;
+            return [];
+          },
+        ),
+      ).toThrow(
+        expect.objectContaining<Partial<OrganizationRecentDecisionsError>>({
+          code: 'unauthorized',
+        }),
+      );
+      fixture.clock.advance(5 * 60 * 1000 + 1);
+      expect(() =>
+        fixture.application.serveRecentDecisions(request, activation, () => {
+          sourceReads += 1;
+          return [];
+        }),
+      ).toThrow(
+        expect.objectContaining<Partial<OrganizationRecentDecisionsError>>({
+          code: 'unauthorized',
+        }),
+      );
+      expect(sourceReads).toBe(0);
+      expect(fixture.application.adminOverview().counts.audit_entries).toBe(
+        initialAuditCount,
+      );
+    } finally {
+      closeFixture(fixture);
+    }
+  });
+
+  it('turns an audit write outage into unavailable without releasing content', async () => {
+    const fixture = await createEnrolledFixture('2026-07-22T11:59:30.000Z');
+    try {
+      const request = await recentDecisionsRequest(fixture);
+      const initialAuditCount = fixture.application.adminOverview().counts
+        .audit_entries;
+      const write = vi
+        .spyOn(fixture.repository, 'writeAtLinearization')
+        .mockImplementation(() => {
+          throw new Error('simulated authority audit store outage');
+        });
+      expect(() =>
+        fixture.application.serveRecentDecisions(
+          request,
+          recentDecisionsActivation(fixture),
+          () => [recentProjectedRecord()],
+        ),
+      ).toThrow(
+        expect.objectContaining<Partial<OrganizationRecentDecisionsError>>({
+          code: 'unavailable',
+        }),
+      );
+      write.mockRestore();
+      expect(fixture.application.adminOverview().counts.audit_entries).toBe(
+        initialAuditCount,
+      );
+    } finally {
+      vi.restoreAllMocks();
       closeFixture(fixture);
     }
   });
@@ -1034,8 +1499,7 @@ describe('single-organization authority runtime', () => {
 
       clock.advance(4 * 60 * 1000 + 1);
       let heldRequestCurrent:
-        | InstanceType<typeof StaleAccessStateError>['currentState']
-        | undefined;
+        InstanceType<typeof StaleAccessStateError>['currentState'] | undefined;
       try {
         await application.issueAccessLease(liveStale);
       } catch (error) {
@@ -1069,8 +1533,7 @@ describe('single-organization authority runtime', () => {
         async (bytes) => sign(enrolled.installation, bytes),
       );
       let recovered:
-        | InstanceType<typeof StaleAccessStateError>['currentState']
-        | undefined;
+        InstanceType<typeof StaleAccessStateError>['currentState'] | undefined;
       try {
         await application.issueAccessLease(expiredStale);
       } catch (error) {
@@ -1078,7 +1541,9 @@ describe('single-organization authority runtime', () => {
         recovered = (error as StaleAccessStateError).currentState;
       }
       if (recovered === undefined) {
-        throw new Error('expired stale-head recovery did not return a conflict');
+        throw new Error(
+          'expired stale-head recovery did not return a conflict',
+        );
       }
       expect(recovered).toMatchObject({
         status: 'active',
@@ -1108,29 +1573,25 @@ describe('single-organization authority runtime', () => {
         ),
       ).toBe(3);
       const storedRecoveryRequest = repository.read((transaction) =>
-        transaction.accessLeaseRequestByDigest(
-          canonicalSha256(expiredStale),
-        ),
+        transaction.accessLeaseRequestByDigest(canonicalSha256(expiredStale)),
       );
       expect(storedRecoveryRequest).toBeUndefined();
 
       clock.advance(6 * 60 * 1000);
-      const oldAncestorRequest =
-        await createOrganizationAccessLeaseRequest(
-          {
-            ...access,
-            request_id: `alr_${randomUUID()}`,
-            installation_signing_key: enrolled.installation.descriptor,
-            previous_access_state_sha256: canonicalSha256(
-              enrolled.result.access_state,
-            ),
-            requested_at: clock.now(),
-          },
-          async (bytes) => sign(enrolled.installation, bytes),
-        );
+      const oldAncestorRequest = await createOrganizationAccessLeaseRequest(
+        {
+          ...access,
+          request_id: `alr_${randomUUID()}`,
+          installation_signing_key: enrolled.installation.descriptor,
+          previous_access_state_sha256: canonicalSha256(
+            enrolled.result.access_state,
+          ),
+          requested_at: clock.now(),
+        },
+        async (bytes) => sign(enrolled.installation, bytes),
+      );
       let oldAncestorCurrent:
-        | InstanceType<typeof StaleAccessStateError>['currentState']
-        | undefined;
+        InstanceType<typeof StaleAccessStateError>['currentState'] | undefined;
       try {
         await application.issueAccessLease(oldAncestorRequest);
       } catch (error) {
@@ -1278,10 +1739,8 @@ describe('single-organization authority runtime', () => {
           {
             request_id: `alr_${randomUUID()}`,
             authority_id: second.result.enrollment_receipt.authority_id,
-            authority_key_id:
-              second.result.enrollment_receipt.authority_key_id,
-            organization_id:
-              second.result.enrollment_receipt.organization_id,
+            authority_key_id: second.result.enrollment_receipt.authority_key_id,
+            organization_id: second.result.enrollment_receipt.organization_id,
             enrollment_id: second.result.enrollment_receipt.enrollment_id,
             installation_id: second.installationId,
             installation_signing_key: second.installation.descriptor,

@@ -4,8 +4,11 @@ import {
   createOrganizationInternalLiveDirectiveRequest,
   createOrganizationInternalLiveUpdateReceipt,
   createOrganizationPermissionCheckRequest,
+  createOrganizationRecentDecisionsRequest,
   createOrganizationSlackLinkBeginRequest,
   createOrganizationSlackLinkCompleteRequest,
+  ORGANIZATION_RECENT_DECISIONS_POLICY_ID,
+  ORGANIZATION_RECENT_DECISIONS_WITNESS,
 } from '@echo-brain/organization-api';
 import { OrganizationAuthorityConflictError } from '../../src/product/organization/client/authority-client.js';
 import {
@@ -203,6 +206,83 @@ describe('HTTP organization authority client', () => {
     cancellation.abort();
     await expect(pending).rejects.toMatchObject({ code: 'transport_failed' });
     expect(combinedSignal?.aborted).toBe(true);
+  });
+
+  it('posts the exact signed recent-decisions request and accepts only its closed bounded response', async () => {
+    const authority = new TestAuthority();
+    const signer = new TestInstallationSigner();
+    const signingKey = protocolInstallationKey(signer);
+    const request = await createOrganizationRecentDecisionsRequest(
+      {
+        request_id: 'rdr_00000000-0000-4000-8000-000000000001',
+        authority_id: ORGANIZATION_IDS.authority,
+        authority_key_id: authority.descriptor.signing_key.key_id,
+        organization_id: ORGANIZATION_IDS.organization,
+        enrollment_id: ORGANIZATION_IDS.enrollment,
+        installation_id: ORGANIZATION_IDS.installation,
+        installation_signing_key: signingKey,
+        requested_at: NOW,
+      },
+      (bytes) =>
+        signer.sign(
+          ORGANIZATION_IDS.installation,
+          bytes,
+          signingKey.key_id,
+        ),
+    );
+    const response = {
+      schema_version: 1 as const,
+      policy_id: ORGANIZATION_RECENT_DECISIONS_POLICY_ID,
+      witness: ORGANIZATION_RECENT_DECISIONS_WITNESS,
+      items: [
+        {
+          atom_id: `sha256:${'a'.repeat(64)}` as const,
+          kind: 'decision' as const,
+          text: 'Adopt the two-member pilot.',
+          record_hash: `sha256:${'b'.repeat(64)}` as const,
+        },
+      ],
+    };
+    const client = new HttpOrganizationAuthorityClient({
+      baseUrl: 'https://authority.example',
+      fetch: async (input, init) => {
+        expect(String(input)).toBe(
+          'https://authority.example/v1/recent-decisions',
+        );
+        expect(init?.method).toBe('POST');
+        expect(new Headers(init?.headers).get('authorization')).toBeNull();
+        expect(JSON.parse(String(init?.body))).toEqual(request);
+        return Response.json(response);
+      },
+    });
+
+    await expect(client.readRecentDecisions(request)).resolves.toEqual(
+      response,
+    );
+
+    const malformedClient = new HttpOrganizationAuthorityClient({
+      baseUrl: 'https://authority.example',
+      fetch: async () =>
+        Response.json({
+          ...response,
+          items: [{ ...response.items[0]!, log_position: 7 }],
+        }),
+    });
+    await expect(
+      malformedClient.readRecentDecisions(request),
+    ).rejects.toMatchObject({ code: 'invalid_response', status: 200 });
+
+    const oversizedClient = new HttpOrganizationAuthorityClient({
+      baseUrl: 'https://authority.example',
+      fetch: async () =>
+        Response.json({
+          ...response,
+          items: [{ ...response.items[0]!, text: 'x'.repeat(61 * 1024) }],
+        }),
+    });
+    await expect(
+      oversizedClient.readRecentDecisions(request),
+    ).rejects.toMatchObject({ code: 'response_too_large', status: 200 });
   });
 
   it('uses only signed installation requests for Slack linking and strictly validates both responses', async () => {

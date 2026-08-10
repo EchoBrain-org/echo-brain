@@ -40,7 +40,16 @@ import {
   OrganizationRecordFollower,
   OrganizationRecordLogReader,
   OrganizationRecordLogStore,
+  OrganizationPermissionPilotLog,
+  assertOrganizationPermissionPilotActivationFresh,
+  organizationPermissionPilotCommandSha256,
+  validateOrganizationPermissionPilotActivationCommand,
   verifyOrganizationRecordChain,
+} from '@echo-brain/organization-record';
+import type {
+  OrganizationPermissionPilotActivationCommandV1,
+  OrganizationPermissionPilotActivationMarkerV1,
+  OrganizationPermissionPilotPresentationV1,
 } from '@echo-brain/organization-record';
 import {
   organizationAuthorityPinSha256,
@@ -51,6 +60,7 @@ import type { OrganizationAuthorityDescriptorV1 } from '@echo-brain/organization
 import {
   inspectAuthorityDatabaseForServe,
   inspectAuthorityDatabaseReadOnly,
+  inspectAuthorityPermissionPilotAudienceReadOnly,
   type AuthorityDatabaseInspection,
 } from '../adapters/persistence/sqlite/read-only-inspection.js';
 import { openAuthorityDatabase } from '../adapters/persistence/sqlite/open-database.js';
@@ -86,6 +96,7 @@ const MAX_IDENTITY_BYTES = 64 * 1024;
 const MAX_INITIALIZATION_MANIFEST_BYTES = 128 * 1024;
 const MAX_INTEGRATIONS_INSTALLATION_MARKER_BYTES = 64 * 1024;
 const MAX_RECORD_INSTALLATION_MARKER_BYTES = 64 * 1024;
+const MAX_PERMISSION_PILOT_ACTIVATION_COMMAND_BYTES = 64 * 1024;
 
 export interface AuthorityIdentityRecordV1 {
   schema_version: 1;
@@ -177,6 +188,24 @@ export interface AuthorityRecordDerivedRebuildResult {
   record_derived_database_path: string;
   head_position: number;
   derived_content_sha256: `sha256:${string}`;
+}
+
+export interface AuthorityPermissionPilotActivationResult {
+  schema_version: 1;
+  kind: 'echo-organization-authority-permission-pilot-activation';
+  created: boolean;
+  config_path: string;
+  state_dir: string;
+  record_log_database_path: string;
+  organization_id: string;
+  authority_id: string;
+  marker: OrganizationPermissionPilotActivationMarkerV1;
+  presentation_descriptor: OrganizationPermissionPilotPresentationV1;
+}
+
+export interface ActivateOrganizationPermissionPilotOptions {
+  /** Test seam; production callers use the canonical current UTC instant. */
+  now?: () => string;
 }
 
 export type AuthorityIntegrationsInstallationFaultPoint =
@@ -300,6 +329,30 @@ function readPrivateTextFile<T>(
   } finally {
     closeSync(file);
   }
+}
+
+function readPermissionPilotActivationCommand(
+  commandPath: string,
+  config: AuthorityRuntimeConfigV1,
+): OrganizationPermissionPilotActivationCommandV1 {
+  const path = normalizedAbsolutePath(
+    commandPath,
+    'permission pilot activation command path',
+  );
+  return readPrivateTextFile(
+    path,
+    'permission pilot activation command',
+    MAX_PERMISSION_PILOT_ACTIVATION_COMMAND_BYTES,
+    true,
+    (contents) =>
+      validateOrganizationPermissionPilotActivationCommand(
+        JSON.parse(contents) as unknown,
+        {
+          authority_id: config.authority.authority_id,
+          organization_id: config.organization.organization_id,
+        },
+      ),
+  );
 }
 
 type AuthorityIntegrationsBindingConfig =
@@ -1949,6 +2002,164 @@ export async function installAuthorityIntegrations(
       );
       installAuthorityRecordStore(config, options);
       return result;
+    } finally {
+      await runtimeLock.release();
+    }
+  } finally {
+    await releaseInitialization();
+  }
+}
+
+/**
+ * Reads the two named memberships from the stopped Authority without opening
+ * its write-capable repository or changing `last_observed_at`.
+ *
+ * Extra active members are deliberately irrelevant here. Pilot slice 1 binds
+ * exactly the two command members; membership outside that pair does not enter
+ * the marker and can never satisfy the read policy.
+ */
+function assertPermissionPilotAudienceMemberships(
+  config: AuthorityRuntimeConfigV1,
+  command: OrganizationPermissionPilotActivationCommandV1,
+): void {
+  const membershipIds = [
+    command.audience[0].membership_id,
+    command.audience[1].membership_id,
+  ] as const;
+  const rows = inspectAuthorityPermissionPilotAudienceReadOnly(
+    config.database_path,
+    {
+      authority_id: config.authority.authority_id,
+      organization_id: config.organization.organization_id,
+      membership_ids: membershipIds,
+    },
+  );
+  if (rows.length !== 2 || rows.some((row) => row.status !== 'active')) {
+    throw new Error(
+      'permission pilot activation requires both named audience memberships to be active',
+    );
+  }
+  const rowsByMembership = new Map(
+    rows.map((row) => [row.membership_id, row] as const),
+  );
+  for (const audience of command.audience) {
+    const membership = rowsByMembership.get(audience.membership_id);
+    if (membership === undefined) {
+      throw new Error(
+        'permission pilot activation requires both named audience memberships to be active',
+      );
+    }
+    assertDisplayName(membership.display_name);
+    if (audience.label !== membership.display_name) {
+      throw new Error(
+        'permission pilot audience labels must equal current Authority principal display names',
+      );
+    }
+  }
+}
+
+function permissionPilotActivationResult(
+  created: boolean,
+  configPath: string,
+  config: AuthorityRuntimeConfigV1,
+  marker: OrganizationPermissionPilotActivationMarkerV1,
+): AuthorityPermissionPilotActivationResult {
+  const paths = authorityStatePaths(config.state_dir);
+  return Object.freeze({
+    schema_version: 1,
+    kind: 'echo-organization-authority-permission-pilot-activation',
+    created,
+    config_path: configPath,
+    state_dir: config.state_dir,
+    record_log_database_path: paths.record_log_database_path,
+    organization_id: config.organization.organization_id,
+    authority_id: config.authority.authority_id,
+    marker,
+    presentation_descriptor: marker.presentation_descriptor,
+  });
+}
+
+/**
+ * Operator-confirmed, stopped-state activation for the fixed two-person pilot.
+ *
+ * Initialization ownership stabilizes config-to-state binding. Runtime
+ * ownership proves the serving process is stopped and shares its singleton
+ * fence with record append. Once the immutable marker exists, its exact
+ * command id and digest are checked before freshness, membership, or log-head
+ * state so an interrupted operator retry always returns the original durable
+ * result.
+ */
+export async function activateOrganizationPermissionPilot(
+  configPath: string,
+  commandPath: string,
+  options: ActivateOrganizationPermissionPilotOptions = {},
+): Promise<AuthorityPermissionPilotActivationResult> {
+  const path = normalizedAbsolutePath(configPath, 'authority config path');
+  const config = readAuthorityRuntimeConfig(path);
+  const command = readPermissionPilotActivationCommand(commandPath, config);
+  const commandSha256 = organizationPermissionPilotCommandSha256(command);
+  const releaseInitialization = await acquireAuthorityInitializationLock(
+    path,
+    config.state_dir,
+  );
+  try {
+    const serveConfig = resolveAuthorityServeConfig(config);
+    const runtimeLock = await acquireAuthorityRuntimeLock(
+      config.state_dir,
+      authorityMaintenanceFingerprint(
+        serveConfig,
+        'activate-permission-pilot',
+      ),
+    );
+    try {
+      await inspectAuthorityServePreflight(path, config);
+      const paths = authorityStatePaths(config.state_dir);
+      const log = OrganizationPermissionPilotLog.open(
+        paths.record_log_database_path,
+        {
+          organization_id: config.organization.organization_id,
+          authority_id: config.authority.authority_id,
+        },
+      );
+      try {
+        const existing = log.activation();
+        if (existing !== null) {
+          if (
+            existing.command_id !== command.command_id ||
+            existing.command_sha256 !== commandSha256
+          ) {
+            throw new Error(
+              'organization permission pilot was already activated by a different command',
+            );
+          }
+          return permissionPilotActivationResult(
+            false,
+            path,
+            config,
+            existing,
+          );
+        }
+
+        const activatedAt = (options.now ?? (() => new Date().toISOString()))();
+        assertOrganizationPermissionPilotActivationFresh(
+          command,
+          activatedAt,
+        );
+        assertPermissionPilotAudienceMemberships(config, command);
+        const activated = log.activate({
+          command,
+          command_sha256: commandSha256,
+          activated_at: activatedAt,
+        });
+        return permissionPilotActivationResult(
+          activated.created,
+          path,
+          config,
+          activated.marker,
+        );
+      } finally {
+        log.close();
+      }
     } finally {
       await runtimeLock.release();
     }

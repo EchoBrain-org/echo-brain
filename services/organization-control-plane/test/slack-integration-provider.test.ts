@@ -3,6 +3,7 @@ import {
   SlackIntegrationProviderError,
   SlackWebIntegrationProvider,
 } from '../src/adapters/slack/slack-integration-provider.js';
+import { canonicalSha256 } from '../src/canonical/canonical-json.js';
 
 const APPROVAL_ID = 'f'.repeat(64);
 const TOKEN = 'xoxb-test-token-12345678';
@@ -45,6 +46,17 @@ const REACTION_INPUT = {
   reaction_name: 'white_check_mark',
   opposite_reaction_name: 'x',
   user_id: 'U123ZHEN',
+  expected_presentation: null,
+} as const;
+const PILOT_NOTICE =
+  "Approving publishes this organization record's decisions, actions, and " +
+  'rationales to Audrey and Zhenye.';
+const PILOT_FALLBACK = `Decision brief awaiting approval. ${PILOT_NOTICE}`;
+const PILOT_PRESENTATION_EXPECTATION = {
+  presentation_policy_id: 'pilot-two-person-audience-v1',
+  audience_notice_sha256: `sha256:${'a'.repeat(64)}`,
+  notice_text: PILOT_NOTICE,
+  fallback_text: PILOT_FALLBACK,
 } as const;
 const CHALLENGE_ATTEMPT_ID =
   'cat_12345678-1234-4123-8123-123456789abc';
@@ -98,10 +110,15 @@ function slackFetch(...responses: Response[]) {
 function approvalMessage(
   reactions: unknown,
   blockApprovalId = APPROVAL_ID,
+  override: Readonly<Record<string, unknown>> = {},
 ): Record<string, unknown> {
   return {
+    type: 'message',
+    user: REACTION_INPUT.expected_bot_user_id,
     ts: REACTION_INPUT.message_ts,
     bot_id: REACTION_INPUT.expected_bot_id,
+    app_id: REACTION_INPUT.expected_app_id,
+    text: 'legacy approval fallback',
     blocks: [
       {
         type: 'header',
@@ -109,7 +126,28 @@ function approvalMessage(
       },
     ],
     reactions,
+    ...override,
   };
+}
+
+function pilotApprovalBlocks(
+  noticeText = PILOT_NOTICE,
+): readonly Record<string, unknown>[] {
+  return [
+    {
+      type: 'header',
+      block_id: `echo-approval-${APPROVAL_ID}-0`,
+    },
+    {
+      type: 'section',
+      block_id: `echo-approval-${APPROVAL_ID}-audience-v1`,
+      text: { type: 'plain_text', text: noticeText, emoji: false },
+    },
+    {
+      type: 'context',
+      block_id: `echo-approval-${APPROVAL_ID}-2`,
+    },
+  ];
 }
 
 function challengeBlocks(
@@ -155,13 +193,14 @@ function challengeReply(
 function reactionProvider(
   reactions: unknown,
   blockApprovalId = APPROVAL_ID,
+  messageOverride: Readonly<Record<string, unknown>> = {},
 ): SlackWebIntegrationProvider {
   return new SlackWebIntegrationProvider({
     fetch: slackFetch(
       slackResponse(CONNECTION),
       slackResponse({
         ok: true,
-        message: approvalMessage(reactions, blockApprovalId),
+        message: approvalMessage(reactions, blockApprovalId, messageOverride),
       }),
     ),
   });
@@ -435,7 +474,11 @@ describe('Slack integration provider verification', () => {
           users: ['U123ZHEN'],
         },
       ]).verifyReaction(TOKEN, REACTION_INPUT),
-    ).resolves.toBe(true);
+    ).resolves.toEqual({
+      observed: true,
+      presentation_candidate_observed: false,
+      message_presentation_sha256: null,
+    });
   });
 
   it('fails closed when Slack truncates the decisive reaction user roster', async () => {
@@ -460,7 +503,51 @@ describe('Slack integration provider verification', () => {
         },
         { name: 'x', count: 1, users: ['U123ZHEN'] },
       ]).verifyReaction(TOKEN, REACTION_INPUT),
-    ).resolves.toBe(false);
+    ).resolves.toEqual({
+      observed: false,
+      presentation_candidate_observed: false,
+      message_presentation_sha256: null,
+    });
+  });
+
+  it('rejects duplicate decisive entries instead of hiding a conflict', async () => {
+    await expect(
+      reactionProvider([
+        {
+          name: 'white_check_mark',
+          count: 1,
+          users: ['U123ZHEN'],
+        },
+        {
+          name: 'x',
+          count: 1,
+          users: ['U123ZHEN'],
+        },
+        {
+          name: 'x',
+          count: 0,
+          users: [],
+        },
+      ]).verifyReaction(TOKEN, REACTION_INPUT),
+    ).rejects.toMatchObject({
+      name: 'SlackIntegrationProviderError',
+      code: 'invalid_response',
+    });
+  });
+
+  it('rejects duplicate users in a decisive reaction roster', async () => {
+    await expect(
+      reactionProvider([
+        {
+          name: 'white_check_mark',
+          count: 1,
+          users: ['U123ZHEN', 'U123ZHEN'],
+        },
+      ]).verifyReaction(TOKEN, REACTION_INPUT),
+    ).rejects.toMatchObject({
+      name: 'SlackIntegrationProviderError',
+      code: 'invalid_response',
+    });
   });
 
   it('rejects a reaction on a message that is not the exact bound approval card', async () => {
@@ -477,6 +564,412 @@ describe('Slack integration provider verification', () => {
       ).verifyReaction(TOKEN, REACTION_INPUT),
     ).rejects.toThrow(/marker does not match/);
   });
+
+  it.each([
+    {
+      label: 'malformed numeric ordinal',
+      blocks: [
+        {
+          type: 'header',
+          block_id: `echo-approval-${APPROVAL_ID}-00`,
+        },
+      ],
+    },
+    {
+      label: 'mixed numeric numbering schemes',
+      blocks: [
+        pilotApprovalBlocks()[0],
+        pilotApprovalBlocks()[1],
+        {
+          ...pilotApprovalBlocks()[2],
+          block_id: `echo-approval-${APPROVAL_ID}-3`,
+        },
+      ],
+    },
+    {
+      label: 'duplicate numeric ordinal',
+      blocks: [
+        pilotApprovalBlocks()[0],
+        {
+          type: 'context',
+          block_id: `echo-approval-${APPROVAL_ID}-0`,
+        },
+      ],
+    },
+    {
+      label: 'duplicate audience block id',
+      blocks: [
+        pilotApprovalBlocks()[0],
+        pilotApprovalBlocks()[1],
+        pilotApprovalBlocks()[1],
+        {
+          ...pilotApprovalBlocks()[2],
+          block_id: `echo-approval-${APPROVAL_ID}-3`,
+        },
+      ],
+    },
+  ])('rejects a $label in the approval block grammar', async ({ blocks }) => {
+    await expect(
+      reactionProvider(
+        [
+          {
+            name: 'white_check_mark',
+            count: 1,
+            users: ['U123ZHEN'],
+          },
+        ],
+        APPROVAL_ID,
+        { text: PILOT_FALLBACK, blocks },
+      ).verifyReaction(TOKEN, {
+        ...REACTION_INPUT,
+        expected_presentation: PILOT_PRESENTATION_EXPECTATION,
+      }),
+    ).rejects.toMatchObject({
+      name: 'SlackIntegrationProviderError',
+      code: 'unauthorized',
+    });
+  });
+
+  it('proves the exact unedited marker-bound audience presentation', async () => {
+    const provider = new SlackWebIntegrationProvider({
+      fetch: slackFetch(
+        slackResponse(CONNECTION),
+        slackResponse({
+          ok: true,
+          message: approvalMessage(
+            [
+              {
+                name: 'white_check_mark',
+                count: 1,
+                users: ['U123ZHEN'],
+              },
+            ],
+            APPROVAL_ID,
+            { text: PILOT_FALLBACK, blocks: pilotApprovalBlocks() },
+          ),
+        }),
+      ),
+    });
+
+    await expect(provider.verifyReaction(TOKEN, {
+      ...REACTION_INPUT,
+      expected_presentation: PILOT_PRESENTATION_EXPECTATION,
+    })).resolves.toEqual({
+      observed: true,
+      presentation_candidate_observed: true,
+      message_presentation_sha256: canonicalSha256({
+        audience_notice_sha256:
+          PILOT_PRESENTATION_EXPECTATION.audience_notice_sha256,
+        approval_id: APPROVAL_ID,
+        provider_team_id: CONNECTION.team_id,
+        provider_enterprise_id: CONNECTION.enterprise_id,
+        provider_bot_user_id: CONNECTION.user_id,
+        provider_bot_id: CONNECTION.bot_id,
+        provider_app_id: CONNECTION.app_id,
+        channel_id: REACTION_INPUT.channel_id,
+        message_ts: REACTION_INPUT.message_ts,
+        audience_block: pilotApprovalBlocks()[1],
+        fallback_text: PILOT_FALLBACK,
+        message_unedited: true,
+      }),
+    });
+  });
+
+  it('accepts contiguous logical ordinary ordinals around the pilot extension', async () => {
+    const logicalBlocks = [
+      pilotApprovalBlocks()[0],
+      pilotApprovalBlocks()[1],
+      {
+        ...pilotApprovalBlocks()[2],
+        block_id: `echo-approval-${APPROVAL_ID}-1`,
+      },
+    ];
+
+    await expect(
+      reactionProvider(
+        [
+          {
+            name: 'white_check_mark',
+            count: 1,
+            users: ['U123ZHEN'],
+          },
+        ],
+        APPROVAL_ID,
+        { text: PILOT_FALLBACK, blocks: logicalBlocks },
+      ).verifyReaction(TOKEN, {
+        ...REACTION_INPUT,
+        expected_presentation: PILOT_PRESENTATION_EXPECTATION,
+      }),
+    ).resolves.toMatchObject({
+      observed: true,
+      message_presentation_sha256: expect.stringMatching(
+        /^sha256:[0-9a-f]{64}$/,
+      ),
+    });
+  });
+
+  it('treats a current pilot card as ordinary when no presentation is expected', async () => {
+    await expect(
+      reactionProvider(
+        [
+          {
+            name: 'white_check_mark',
+            count: 1,
+            users: ['U123ZHEN'],
+          },
+        ],
+        APPROVAL_ID,
+        { text: PILOT_FALLBACK, blocks: pilotApprovalBlocks() },
+      ).verifyReaction(TOKEN, REACTION_INPUT),
+    ).resolves.toEqual({
+      observed: true,
+      presentation_candidate_observed: true,
+      message_presentation_sha256: null,
+    });
+  });
+
+  it('reports a pilot presentation candidate before a reaction is observed', async () => {
+    await expect(
+      reactionProvider(undefined, APPROVAL_ID, {
+        text: PILOT_FALLBACK,
+        blocks: pilotApprovalBlocks(),
+      }).verifyReaction(TOKEN, REACTION_INPUT),
+    ).resolves.toEqual({
+      observed: false,
+      presentation_candidate_observed: true,
+      message_presentation_sha256: null,
+    });
+  });
+
+  it('withholds pilot proof when the stored app identity is unavailable', async () => {
+    const provider = new SlackWebIntegrationProvider({
+      fetch: slackFetch(
+        slackResponse({ ...CONNECTION, app_id: null }),
+        slackResponse({
+          ok: true,
+          message: approvalMessage(
+            [
+              {
+                name: 'white_check_mark',
+                count: 1,
+                users: ['U123ZHEN'],
+              },
+            ],
+            APPROVAL_ID,
+            {
+              app_id: 'A999OTHER',
+              text: PILOT_FALLBACK,
+              blocks: pilotApprovalBlocks(),
+            },
+          ),
+        }),
+      ),
+    });
+
+    await expect(
+      provider.verifyReaction(TOKEN, {
+        ...REACTION_INPUT,
+        expected_app_id: null,
+        expected_presentation: PILOT_PRESENTATION_EXPECTATION,
+      }),
+    ).resolves.toEqual({
+      observed: true,
+      presentation_candidate_observed: true,
+      message_presentation_sha256: null,
+    });
+  });
+
+  it('rejects a non-null live app when the stored app identity is null', async () => {
+    const fetch = slackFetch(
+      slackResponse(CONNECTION),
+      slackResponse({
+        ok: true,
+        message: approvalMessage([], APPROVAL_ID, {
+          app_id: 'A999OTHER',
+          text: PILOT_FALLBACK,
+          blocks: pilotApprovalBlocks(),
+        }),
+      }),
+    );
+    const provider = new SlackWebIntegrationProvider({ fetch });
+
+    await expect(
+      provider.verifyReaction(TOKEN, {
+        ...REACTION_INPUT,
+        expected_app_id: null,
+        expected_presentation: PILOT_PRESENTATION_EXPECTATION,
+      }),
+    ).rejects.toMatchObject({
+      name: 'SlackIntegrationProviderError',
+      code: 'unauthorized',
+    });
+    expect(fetch).toHaveBeenCalledTimes(1);
+  });
+
+  it('rejects a pilot audience block with no independent ordinary block', async () => {
+    const provider = new SlackWebIntegrationProvider({
+      fetch: slackFetch(
+        slackResponse(CONNECTION),
+        slackResponse({
+          ok: true,
+          message: approvalMessage(
+            [
+              {
+                name: 'white_check_mark',
+                count: 1,
+                users: ['U123ZHEN'],
+              },
+            ],
+            APPROVAL_ID,
+            {
+              text: PILOT_FALLBACK,
+              blocks: [pilotApprovalBlocks()[1]],
+            },
+          ),
+        }),
+      ),
+    });
+
+    await expect(
+      provider.verifyReaction(TOKEN, {
+        ...REACTION_INPUT,
+        expected_presentation: PILOT_PRESENTATION_EXPECTATION,
+      }),
+    ).rejects.toMatchObject({
+      name: 'SlackIntegrationProviderError',
+      code: 'unauthorized',
+    });
+  });
+
+  it('does not bind unrelated Slack message fields into the presentation digest', async () => {
+    const verify = async (
+      unrelated: Readonly<Record<string, unknown>>,
+    ): Promise<`sha256:${string}` | null> => {
+      const provider = new SlackWebIntegrationProvider({
+        fetch: slackFetch(
+          slackResponse(CONNECTION),
+          slackResponse({
+            ok: true,
+            message: approvalMessage(
+              [
+                {
+                  name: 'white_check_mark',
+                  count: 1,
+                  users: ['U123ZHEN'],
+                },
+              ],
+              APPROVAL_ID,
+              {
+                text: PILOT_FALLBACK,
+                blocks: pilotApprovalBlocks(),
+                ...unrelated,
+              },
+            ),
+          }),
+        ),
+      });
+      return (
+        await provider.verifyReaction(TOKEN, {
+          ...REACTION_INPUT,
+          expected_presentation: PILOT_PRESENTATION_EXPECTATION,
+        })
+      ).message_presentation_sha256;
+    };
+
+    const first = await verify({
+      permalink: 'https://example.slack.com/archives/first',
+    });
+    const second = await verify({
+      client_msg_id: 'unrelated-provider-field',
+    });
+    expect(first).toMatch(/^sha256:[0-9a-f]{64}$/);
+    expect(second).toBe(first);
+  });
+
+  it.each([
+    ['bot user', { user: 'U999OTHER' }],
+    ['bot id', { bot_id: 'B999OTHER' }],
+    ['app id', { app_id: 'A999OTHER' }],
+    ['message timestamp', { ts: '1753822800.000002' }],
+  ])('rejects a changed approval-message %s identity', async (_label, override) => {
+    const provider = new SlackWebIntegrationProvider({
+      fetch: slackFetch(
+        slackResponse(CONNECTION),
+        slackResponse({
+          ok: true,
+          message: approvalMessage([], APPROVAL_ID, override),
+        }),
+      ),
+    });
+
+    await expect(
+      provider.verifyReaction(TOKEN, REACTION_INPUT),
+    ).rejects.toMatchObject({ code: 'unauthorized' });
+  });
+
+  it.each([
+    {
+      label: 'edited message',
+      override: { edited: { user: 'U123BOT', ts: '1753822801.000001' } },
+      candidateObserved: true,
+    },
+    {
+      label: 'changed fallback',
+      override: { text: `${PILOT_FALLBACK} changed` },
+      candidateObserved: true,
+    },
+    {
+      label: 'changed notice block',
+      override: { blocks: pilotApprovalBlocks(`${PILOT_NOTICE} changed`) },
+      candidateObserved: true,
+    },
+    {
+      label: 'missing notice block',
+      override: {
+        blocks: [
+          {
+            type: 'header',
+            block_id: `echo-approval-${APPROVAL_ID}-0`,
+          },
+        ],
+      },
+      candidateObserved: false,
+    },
+  ])(
+    'keeps an ordinary approval observable but withholds proof for a $label',
+    async ({ override, candidateObserved }) => {
+      const provider = new SlackWebIntegrationProvider({
+        fetch: slackFetch(
+          slackResponse(CONNECTION),
+          slackResponse({
+            ok: true,
+            message: approvalMessage(
+              [
+                {
+                  name: 'white_check_mark',
+                  count: 1,
+                  users: ['U123ZHEN'],
+                },
+              ],
+              APPROVAL_ID,
+              { text: PILOT_FALLBACK, blocks: pilotApprovalBlocks(), ...override },
+            ),
+          }),
+        ),
+      });
+
+      await expect(
+        provider.verifyReaction(TOKEN, {
+          ...REACTION_INPUT,
+          expected_presentation: PILOT_PRESENTATION_EXPECTATION,
+        }),
+      ).resolves.toEqual({
+        observed: true,
+        presentation_candidate_observed: candidateObserved,
+        message_presentation_sha256: null,
+      });
+    },
+  );
 
   it('posts a code-free, attempt-bound identity-link challenge as the exact bot', async () => {
     const fetch = slackFetch(
@@ -678,13 +1171,17 @@ describe('Slack integration provider verification', () => {
         slackResponse({ ...CONNECTION, user_id: 'W123BOT' }),
         slackResponse({
           ok: true,
-          message: approvalMessage([
-            {
-              name: 'white_check_mark',
-              users: ['W123ZHEN'],
-              count: 1,
-            },
-          ]),
+          message: approvalMessage(
+            [
+              {
+                name: 'white_check_mark',
+                users: ['W123ZHEN'],
+                count: 1,
+              },
+            ],
+            APPROVAL_ID,
+            { user: 'W123BOT' },
+          ),
         }),
       ),
     });
@@ -695,7 +1192,11 @@ describe('Slack integration provider verification', () => {
         expected_bot_user_id: 'W123BOT',
         user_id: 'W123ZHEN',
       }),
-    ).resolves.toBe(true);
+    ).resolves.toEqual({
+      observed: true,
+      presentation_candidate_observed: false,
+      message_presentation_sha256: null,
+    });
   });
 
   it('uses Slack-relative reply ordering when the Authority clock is ahead', async () => {

@@ -39,7 +39,8 @@ export const systemOrganizationRecordClock: OrganizationRecordClock = () =>
 export type OrganizationRecordAlertKind =
   | 'derive-halted'
   | 'derive-nudge-failed'
-  | 'receipt-materialization-failed';
+  | 'receipt-materialization-failed'
+  | 'permission-pilot-inactive';
 
 export interface OrganizationRecordAlert {
   readonly kind: OrganizationRecordAlertKind;

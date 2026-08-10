@@ -41,6 +41,7 @@ export {
   type ObserveSlackIdentityLinkChallengeInput,
   type OrganizationIntegrationsOverview,
   type OrganizationPermissionReasonCode,
+  type OrganizationPermissionPilotEligibilityProof,
   type OrganizationSecretReference,
   type OrganizationSecretStore,
   type RecordPermissionDecisionInput,
@@ -52,9 +53,11 @@ export {
   type SlackApprovalPermissionCandidate,
   type SlackApprovalPermissionLookup,
   type SlackIntegrationProvider,
+  type SlackApprovalPresentationExpectation,
   type VerifiedSlackChannel,
   type VerifiedSlackConnection,
   type VerifiedSlackHuman,
+  type VerifiedSlackReaction,
   type VerifySlackReactionInput,
 } from "./application/contracts.js";
 export {

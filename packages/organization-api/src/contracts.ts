@@ -106,6 +106,48 @@ export interface OrganizationPermissionCheckDecisionV1 {
   evaluated_at: string;
 }
 
+export interface OrganizationRecentDecisionsRequestPayloadV1 {
+  schema_version: 1;
+  kind: 'echo-organization-recent-decisions-request';
+  request_id: string;
+  authority_id: string;
+  authority_key_id: OrganizationApiSha256Digest;
+  organization_id: string;
+  enrollment_id: string;
+  installation_id: string;
+  installation_key_id: OrganizationApiSha256Digest;
+  http_method: 'POST';
+  http_path: '/v1/recent-decisions';
+  requested_at: string;
+}
+
+/**
+ * A fresh, exact-operation read authenticated by the enrolled installation.
+ * The request is not an authorization receipt; the Authority rechecks current
+ * membership and access immediately before releasing every response.
+ */
+export interface OrganizationRecentDecisionsRequestV1 extends OrganizationRecentDecisionsRequestPayloadV1 {
+  integrity: OrganizationApiSignedIntegrityV1;
+}
+
+export type OrganizationRecentDecisionKindV1 =
+  'decision' | 'action' | 'rationale';
+
+export interface OrganizationRecentDecisionItemV1 {
+  atom_id: OrganizationApiSha256Digest;
+  kind: OrganizationRecentDecisionKindV1;
+  text: string;
+  record_hash: OrganizationApiSha256Digest;
+}
+
+/** The deliberately closed content surface for permission pilot slice 1. */
+export interface OrganizationRecentDecisionsResponseV1 {
+  schema_version: 1;
+  policy_id: 'pilot-member-readable-v1';
+  witness: 'Readable because your active membership is one of the two memberships bound to pilot-member-readable-v1 and the returned records carry the exact two-person sharing notice.';
+  items: OrganizationRecentDecisionItemV1[];
+}
+
 export interface OrganizationSlackLinkBeginRequestPayloadV1 {
   schema_version: 1;
   kind: 'echo-organization-slack-link-begin-request';

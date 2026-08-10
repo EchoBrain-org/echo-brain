@@ -37,6 +37,7 @@ import {
   type SlackApprovalPermissionCandidate,
   type SlackApprovalPermissionLookup,
   type SlackIntegrationProvider,
+  type VerifiedSlackReaction,
 } from '@echo-brain/organization-control-plane';
 import {
   OrganizationAuthorityApplication,
@@ -50,9 +51,17 @@ import type {
   OnboardOrganizationSlackToolRequest,
   OrganizationIntegrationsHttpApplication,
 } from '../presentation/organization-integrations-http-application.js';
+import type { OrganizationPermissionPilotRuntimeHealth } from './organization-record.js';
 
 const ADMIN_COMMAND_ID =
   /^adm_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
+const SHA256_DIGEST = /^sha256:[0-9a-f]{64}$/;
+
+interface NoticeQualifiedSlackPresentation {
+  readonly presentation_policy_id: 'pilot-two-person-audience-v1';
+  readonly audience_notice_sha256: `sha256:${string}`;
+  readonly message_presentation_sha256: `sha256:${string}`;
+}
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === 'object' && !Array.isArray(value);
@@ -381,6 +390,7 @@ export class ComposedOrganizationIntegrationsApplication
       repository: OrganizationIntegrationsRepository;
       secrets: OrganizationSecretStore;
       slack: SlackIntegrationProvider;
+      permissionPilotHealth: OrganizationPermissionPilotRuntimeHealth;
       now?: () => string;
     },
   ) {}
@@ -872,7 +882,8 @@ export class ComposedOrganizationIntegrationsApplication
       principal_id: candidate.principal_id,
       membership_id: candidate.membership_id,
     };
-    let providerObserved = false;
+    const expectedPresentation = this.permissionPilotPresentationExpectation();
+    let providerVerification: VerifiedSlackReaction | null = null;
     let providerFailure:
       | Extract<
           OrganizationPermissionReasonCode,
@@ -884,7 +895,7 @@ export class ComposedOrganizationIntegrationsApplication
         secret_backend_id: AUTHORITY_FILE_SECRET_BACKEND,
         secret_handle_id: candidate.secret_handle_id,
       });
-      providerObserved = await this.options.slack.verifyReaction(
+      providerVerification = await this.options.slack.verifyReaction(
         secret,
         {
           expected_team_id: request.provider_tenant_id,
@@ -901,6 +912,7 @@ export class ComposedOrganizationIntegrationsApplication
               ? candidate.reject_reaction
               : candidate.approve_reaction,
           user_id: request.provider_subject_id,
+          expected_presentation: expectedPresentation,
         },
         signal,
       );
@@ -977,7 +989,7 @@ export class ComposedOrganizationIntegrationsApplication
       }
       return decision;
     }
-    if (!providerObserved) {
+    if (providerVerification?.observed !== true) {
       const decision = this.recordDecision(
         request,
         current,
@@ -990,13 +1002,72 @@ export class ComposedOrganizationIntegrationsApplication
         `Slack approval evidence is not yet decisive after ${decision.evaluated_at}`,
       );
     }
+    if (
+      request.action === 'approve' &&
+      this.options.permissionPilotHealth.kind === 'degraded' &&
+      providerVerification.presentation_candidate_observed
+    ) {
+      throw new AuthorityOperationError(
+        'unavailable',
+        'organization permission pilot presentation verification is temporarily unavailable',
+      );
+    }
+    const noticeProof =
+      request.action === 'approve' &&
+      expectedPresentation !== null &&
+      providerVerification.message_presentation_sha256 !== null &&
+      SHA256_DIGEST.test(providerVerification.message_presentation_sha256)
+        ? {
+            presentation_policy_id:
+              expectedPresentation.presentation_policy_id,
+            audience_notice_sha256:
+              expectedPresentation.audience_notice_sha256,
+            message_presentation_sha256:
+              providerVerification.message_presentation_sha256,
+          }
+        : null;
     return this.recordDecision(
       request,
       current,
       candidate,
       true,
-      'active_membership_and_direct_grant',
+      noticeProof === null
+        ? 'active_membership_and_direct_grant'
+        : 'active_membership_direct_grant_pilot_notice_v1',
+      noticeProof,
     );
+  }
+
+  private permissionPilotPresentationExpectation(): {
+    readonly presentation_policy_id: 'pilot-two-person-audience-v1';
+    readonly audience_notice_sha256: `sha256:${string}`;
+    readonly notice_text: string;
+    readonly fallback_text: string;
+  } | null {
+    const health = this.options.permissionPilotHealth;
+    if (health.kind === 'absent') return null;
+    if (health.kind === 'degraded') return null;
+    const activation = health.activation;
+    if (
+      activation.policy_id !== 'pilot-member-readable-v1' ||
+      activation.presentation_policy_id !==
+        'pilot-two-person-audience-v1' ||
+      !SHA256_DIGEST.test(activation.audience_notice_sha256) ||
+      activation.presentation_descriptor.policy_id !== activation.policy_id ||
+      activation.presentation_descriptor.presentation_policy_id !==
+        activation.presentation_policy_id
+    ) {
+      throw new AuthorityOperationError(
+        'unavailable',
+        'organization permission pilot activation is invalid',
+      );
+    }
+    return Object.freeze({
+      presentation_policy_id: activation.presentation_policy_id,
+      audience_notice_sha256: activation.audience_notice_sha256,
+      notice_text: activation.presentation_descriptor.notice_text,
+      fallback_text: activation.presentation_descriptor.fallback_text,
+    });
   }
 
   private now(): string {
@@ -1009,6 +1080,7 @@ export class ComposedOrganizationIntegrationsApplication
     candidate: SlackApprovalPermissionCandidate | null,
     allowed: boolean,
     reasonCode: OrganizationPermissionReasonCode,
+    noticeProof: NoticeQualifiedSlackPresentation | null = null,
   ): OrganizationPermissionCheckDecisionV1 {
     const recorded = this.options.repository.recordPermissionDecision({
       request_id: request.request_id,
@@ -1040,6 +1112,7 @@ export class ComposedOrganizationIntegrationsApplication
         channel_id: request.channel_id,
         message_ts: request.message_ts,
         reaction_name: request.reaction_name,
+        ...(noticeProof === null ? {} : noticeProof),
       },
     });
     return validateOrganizationPermissionCheckDecision({

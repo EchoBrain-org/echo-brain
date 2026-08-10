@@ -546,15 +546,24 @@ describe('organization record submitter', () => {
       ],
     });
 
-    const result = await submitter({
+    const runner = submitter({
       store,
       builder: fakeBuilder(envelope),
       client: fakeClient({ outcome: 'accepted', receipt: receipt(envelope) }),
-    }).sweep();
+    });
+    const result = await runner.sweep();
 
     // The healthy node still lands.
     expect(result.published).toBe(1);
     expect(result.alerts.map((alert) => alert.code)).toEqual([
+      'retired_federation_node',
+      'node_unreadable',
+      'source_locator_missing',
+    ]);
+
+    const repeated = await runner.sweep();
+    expect(repeated.ok).toBe(false);
+    expect(repeated.alerts.map((alert) => alert.code)).toEqual([
       'retired_federation_node',
       'node_unreadable',
       'source_locator_missing',

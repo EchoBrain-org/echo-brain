@@ -21,6 +21,18 @@ import type {
   Sha256Digest,
 } from '@echo-brain/federation-protocol';
 import {
+  ORGANIZATION_PERMISSION_PILOT_ACTIVATION_COMMAND_KIND,
+  ORGANIZATION_PERMISSION_PILOT_NOTICE_REASON_CODE,
+  ORGANIZATION_PERMISSION_PILOT_POLICY_ID,
+  ORGANIZATION_PERMISSION_PILOT_PRESENTATION_POLICY_ID,
+  OrganizationPermissionPilotLog,
+  OrganizationRecordLogStore,
+  organizationPermissionPilotCommandSha256,
+  validateOrganizationPermissionPilotAudience,
+  type OrganizationPermissionPilotActivationCommandV1,
+  type OrganizationPermissionPilotEligibilityProofV1,
+} from '@echo-brain/organization-record';
+import {
   createOrganizationEnrollmentRequest,
   createOrganizationRecordApprovalEnvelope,
   createOrganizationRecordRejectionEnvelope,
@@ -41,6 +53,7 @@ import type {
 import {
   OrganizationIntegrationsRepository,
   openOrganizationControlDatabase,
+  type OrganizationPermissionReasonCode,
 } from '@echo-brain/organization-control-plane';
 import { OrganizationAuthorityApplication } from '../../src/application/organization-authority.js';
 import type {
@@ -218,6 +231,7 @@ export interface RecordIngestFixture {
   authorize(input: {
     approval_id: string;
     action: 'approve' | 'reject';
+    permission_pilot_eligibility?: OrganizationPermissionPilotEligibilityProofV1;
   }): OrganizationRecordReviewerAuthorizationV1;
   approvalEnvelope(input: {
     approval_id: string;
@@ -240,6 +254,7 @@ export interface RecordIngestFixture {
   authorizeOtherMember(input: {
     approval_id: string;
     action: 'approve' | 'reject';
+    permission_pilot_eligibility?: OrganizationPermissionPilotEligibilityProofV1;
   }): OrganizationRecordReviewerAuthorizationV1;
   approvalEnvelopeFor(input: {
     approval_id: string;
@@ -250,13 +265,20 @@ export interface RecordIngestFixture {
   close(): Promise<void>;
 }
 
+export interface CreateRecordIngestFixtureOptions {
+  /** Creates the immutable two-member marker before the runtime starts. */
+  readonly activatePermissionPilot?: boolean;
+}
+
 /**
  * A whole authority process's worth of record ingest: a real authority
  * application, a real control-plane audit, and the real record runtime over two
  * real SQLite files. Nothing here is faked, so an evidence lookup that only
  * appears to work would fail against the audit the Authority actually writes.
  */
-export async function createRecordIngestFixture(): Promise<RecordIngestFixture> {
+export async function createRecordIngestFixture(
+  options: CreateRecordIngestFixtureOptions = {},
+): Promise<RecordIngestFixture> {
   const directory = mkdtempSync(join(tmpdir(), 'echo-record-ingest-'));
   chmodSync(directory, 0o700);
   const clock = new FixtureClock(Date.parse(RECORD_FIXTURE_NOW));
@@ -282,6 +304,14 @@ export async function createRecordIngestFixture(): Promise<RecordIngestFixture> 
   const membership = application.provisionMembership({
     command_id: `adm_${randomUUID()}`,
     display_name: 'Ada Founder',
+    membership_type: 'employee',
+  });
+  // The pilot marker binds the complete two-person audience before the record
+  // runtime opens. This second member otherwise behaves exactly as it did when
+  // the fixture provisioned it later: it owns no installation of its own.
+  const otherMember = application.provisionMembership({
+    command_id: `adm_${randomUUID()}`,
+    display_name: 'Grace Reviewer',
     membership_type: 'employee',
   });
   const grant = Uint8Array.from(randomBytes(32));
@@ -478,6 +508,56 @@ export async function createRecordIngestFixture(): Promise<RecordIngestFixture> 
 
   const recordLogDatabasePath = join(directory, 'record-log.sqlite');
   const recordDerivedDatabasePath = join(directory, 'record-derived.sqlite');
+  if (options.activatePermissionPilot === true) {
+    // Runtime startup is read-only with respect to activation. Materialize the
+    // record database, then perform the same stopped-state marker write the
+    // operator command owns before opening the live runtime.
+    OrganizationRecordLogStore.open(recordLogDatabasePath, {
+      organization_id: organizationId,
+      authority_id: authorityId,
+    }).close();
+    const audience = validateOrganizationPermissionPilotAudience(
+      [
+        {
+          membership_id: membership.membership_id,
+          label: 'Ada Founder',
+        },
+        {
+          membership_id: otherMember.membership_id,
+          label: 'Grace Reviewer',
+        },
+      ].sort((left, right) =>
+        left.membership_id.localeCompare(right.membership_id),
+      ),
+    );
+    const requestedAt = clock.now();
+    const command: OrganizationPermissionPilotActivationCommandV1 = {
+      schema_version: 1,
+      kind: ORGANIZATION_PERMISSION_PILOT_ACTIVATION_COMMAND_KIND,
+      command_id: `ppa_${randomUUID()}`,
+      authority_id: authorityId,
+      organization_id: organizationId,
+      policy_id: ORGANIZATION_PERMISSION_PILOT_POLICY_ID,
+      presentation_policy_id:
+        ORGANIZATION_PERMISSION_PILOT_PRESENTATION_POLICY_ID,
+      audience,
+      requested_at: requestedAt,
+      reason: 'Activate the two-person organization-record test pilot.',
+    };
+    const pilotLog = OrganizationPermissionPilotLog.open(
+      recordLogDatabasePath,
+      { organization_id: organizationId, authority_id: authorityId },
+    );
+    try {
+      pilotLog.activate({
+        command,
+        command_sha256: organizationPermissionPilotCommandSha256(command),
+        activated_at: requestedAt,
+      });
+    } finally {
+      pilotLog.close();
+    }
+  }
   const fatalFailures: Error[] = [];
   const runtime = await openOrganizationRecordRuntime({
     authority: application,
@@ -493,11 +573,6 @@ export async function createRecordIngestFixture(): Promise<RecordIngestFixture> 
   // A second organization member who approves in the same shared Slack channel
   // but owns no installation. Its grants sit on the very same adapter binding,
   // because that binding is the channel, not the machine.
-  const otherMember = application.provisionMembership({
-    command_id: `adm_${randomUUID()}`,
-    display_name: 'Grace Reviewer',
-    membership_type: 'employee',
-  });
   const otherGrantIds = {
     approve: `pgr_${randomUUID()}`,
     reject: `pgr_${randomUUID()}`,
@@ -529,11 +604,19 @@ export async function createRecordIngestFixture(): Promise<RecordIngestFixture> 
   const authorizeAs = (
     reviewer: { principal_id: string; membership_id: string },
     grants: Readonly<Record<'approve' | 'reject', string>>,
-    input: { approval_id: string; action: 'approve' | 'reject' },
+    input: {
+      approval_id: string;
+      action: 'approve' | 'reject';
+      permission_pilot_eligibility?: OrganizationPermissionPilotEligibilityProofV1;
+    },
   ): OrganizationRecordReviewerAuthorizationV1 => {
     evaluations += 1;
     const requestId = `pcr_${randomUUID()}`;
     const evaluatedAt = clock.now();
+    const reasonCode: OrganizationPermissionReasonCode =
+      input.permission_pilot_eligibility === undefined
+        ? 'active_membership_and_direct_grant'
+        : ORGANIZATION_PERMISSION_PILOT_NOTICE_REASON_CODE;
     const evidence: OrganizationRecordReviewerAuthorizationV1 = {
       schema_version: 1,
       kind: 'echo-organization-authorization-evidence',
@@ -547,7 +630,7 @@ export async function createRecordIngestFixture(): Promise<RecordIngestFixture> 
       request_sha256: digest(`request-${evaluations}`),
       provider_event_sha256: digest(`provider-event-${evaluations}`),
       allowed: true,
-      reason_code: 'active_membership_and_direct_grant',
+      reason_code: reasonCode,
       principal_id: reviewer.principal_id,
       membership_id: reviewer.membership_id,
       adapter_binding_id: adapterBindingId,
@@ -562,7 +645,7 @@ export async function createRecordIngestFixture(): Promise<RecordIngestFixture> 
       provider_event_sha256: evidence.provider_event_sha256,
       action: evidence.action,
       allowed: true,
-      reason_code: 'active_membership_and_direct_grant',
+      reason_code: reasonCode,
       principal_id: evidence.principal_id,
       membership_id: evidence.membership_id,
       adapter_binding_id: evidence.adapter_binding_id,
@@ -586,6 +669,17 @@ export async function createRecordIngestFixture(): Promise<RecordIngestFixture> 
         channel_id: 'C12345678',
         message_ts: '1721678400.123456',
         reaction_name: 'white_check_mark',
+        ...(input.permission_pilot_eligibility === undefined
+          ? {}
+          : {
+              presentation_policy_id:
+                input.permission_pilot_eligibility.presentation_policy_id,
+              audience_notice_sha256:
+                input.permission_pilot_eligibility.audience_notice_sha256,
+              message_presentation_sha256:
+                input.permission_pilot_eligibility
+                  .message_presentation_sha256,
+            }),
       },
     });
     return evidence;
@@ -593,11 +687,13 @@ export async function createRecordIngestFixture(): Promise<RecordIngestFixture> 
   const authorize = (input: {
     approval_id: string;
     action: 'approve' | 'reject';
+    permission_pilot_eligibility?: OrganizationPermissionPilotEligibilityProofV1;
   }): OrganizationRecordReviewerAuthorizationV1 =>
     authorizeAs(membership, grantIds, input);
   const authorizeOtherMember = (input: {
     approval_id: string;
     action: 'approve' | 'reject';
+    permission_pilot_eligibility?: OrganizationPermissionPilotEligibilityProofV1;
   }): OrganizationRecordReviewerAuthorizationV1 =>
     authorizeAs(otherMember, otherGrantIds, input);
 

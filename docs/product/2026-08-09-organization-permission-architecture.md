@@ -1,13 +1,11 @@
 # Organization permission architecture (constitution v1)
 
-**Status:** design-only constitution, refined 2026-08-09 after a code,
-invariant, and primary-source audit. It does not claim that a content
+**Status:** design-only constitution. It does not claim that a content
 gatekeeper is shipped.
 
-**Code baseline:** reviewed against `origin/main` at `549be7b`. The two local
-commits after that point are documentation-only. The shipped member product is
-`0.1.0-internal.6`; it appends and derives organization records but exposes no
-organization-record retrieval surface.
+**Code baseline:** this constitution is design grounding, not an implementation
+baseline. A feature-specific contract and review must establish any current
+code baseline.
 
 **Builds on:**
 [2026-08-07-org-decision-record-append-derive-design.md](2026-08-07-org-decision-record-append-derive-design.md)
@@ -17,7 +15,8 @@ and [org-brain-direction.md](org-brain-direction.md).
 
 This document uses four status terms deliberately:
 
-- **Landed** means code present at the baseline above.
+- **Landed** means code present at the feature's stated implementation
+  baseline.
 - **Constitution v1** means a binding design constraint for later permission
   features. It is not a shipped feature.
 - **Pilot slice 1** means the absolute-minimum first evaluator described near
@@ -197,6 +196,16 @@ are UTF-8 byte positions, not character indexes.
    substitutes for fresh authoritative Person state. Multiple Authority writers
    remain unsupported until a distributed consistency mechanism replaces this
    fence.
+
+   A reviewed, bounded feature contract may preselect independently immutable,
+   append-only content outside that fence only after authenticating and
+   authorizing the caller before any content access. It must recheck every
+   mutable authorization fact and commit its audit in the final
+   Authority-owned transaction before sending pre-serialized bytes. A
+   concurrently appended row may affect only a later request; it may not alter
+   or widen the selected response. This exception neither permits mutable
+   projections outside the fence nor substitutes an authorization token for the
+   final check.
 6. **Failure cannot widen access.** Missing or renamed visibility data,
    unresolved identity, malformed policy state, stale versions, storage errors,
    and audit failures deny the affected path. An unresolved optional path does
@@ -452,82 +461,12 @@ timestamp, user, and submission-time context
 [Entra approval policy](https://learn.microsoft.com/en-us/entra/id-governance/entitlement-management-access-package-approval-policy),
 [Palantir action log](https://www.palantir.com/docs/foundry/action-types/action-log/)).
 
-## Pilot slice 1: absolute minimum
+## Pilot slice 1
 
-Pilot slice 1 is a two-level, self-only resolver kernel for the exact two
-approved pilot memberships. It does not implement the full three-level
-constitution and is not a general all-active-members policy.
-
-Activation requires one founder-confirmed, immutable pilot-policy marker bound
-to the organization id, the exact two membership ids, the pinned policy
-version, and the current record head position/hash. It applies only to records
-appended after that head. This one narrow marker is not a mutable floor table or
-a generic permission-act framework; it prevents deploying code from silently
-opening pre-activation history. Any active membership outside the bound pair
-disables served reads until a new rollout is reviewed. One bound membership may
-later be revoked without denying the other active member. Historical records
-require a later explicit, scoped disclosure act.
-
-The activation marker and record append share the same Authority write fence.
-Activation acquires it, reads the record head, commits the marker with a unique
-activation sequence and `effective_after_position`, verifies the head is still
-unchanged, and only then releases it. Record ingest cannot commit in the gap.
-This serialization, not wall-clock time, decides whether a record is before or
-after activation.
-
-```text
-authenticated enrolled installation
-AND current unexpired organization access lease
-AND current active membership is one of the two activation-bound memberships
-AND no active membership exists outside the activation-bound pair
-AND valid derived atom bound to the verified record log
-AND derived cursor equals record head under the pinned derive build
-AND record position is after the pilot activation head
-AND valid legacy-unmarked classification
-=> readable under policy pilot-member-readable-v1
-
-everything else
-=> invisible externally
-```
-
-There is no mutable floor table in this slice. There is no discoverable state,
-identity bridge, participant path, content grant, generic act envelope,
-`who`, search, ranking, model, or external ReBAC engine. Existing
-approval/rejection schemas and derive behavior remain unchanged.
-
-The kernel may be built and tested before retrieval, but it cannot serve a
-byte of content until the signed retrieve operation and audit-before-serve
-path exist. The first served operation must meet all of these acceptance
-criteria:
-
-- the two activation-bound, currently active pilot members can read every valid
-  post-activation legacy-unmarked atom and get the active-membership
-  explanation;
-- pre-activation records and any unbound active membership disable served
-  reads until a separate rollout is reviewed;
-- the first operation linearized after a membership revocation commits denies,
-  while the other active member remains allowed;
-- expired lease, revoked installation, unknown item, malformed request,
-  missing projection, invalid log binding, and database or audit failure are
-  externally indistinguishable denies;
-- instrumentation proves no content row, score, count, or corpus statistic is
-  passed to retrieval or a model before authorization succeeds;
-- the record chain is verified, the derived cursor equals its head, the derive
-  build is pinned, and a deliberately corrupted or cross-record derived row is
-  rejected rather than trusted merely because it names a valid record hash;
-- the selected Person/policy version is revalidated immediately before
-  response commitment and a changed head causes retry or deny;
-- no positive decision is cached or reusable, and every response is
-  `Cache-Control: no-store`;
-- audit commits before response and stores identifiers/digests and decision
-  evidence, not raw prompt/answer content;
-- every decision records the pinned `pilot-member-readable-v1` policy version;
-  and
-- a restored Authority remains offline until membership, installation,
-  revocation, and client-head reconciliation passes.
-
-This slice proves the security wiring. It does not qualify restricted content,
-discoverability, participant access, or grant workflows.
+The minimum two-member read is defined by the dated
+[Permission pilot v1 contract](2026-08-10-permission-pilot-v1-contract.md).
+That companion is a bounded implementation contract, not a change to this
+constitution or a claim that the feature has landed or shipped.
 
 ## Later stages, in dependency order
 

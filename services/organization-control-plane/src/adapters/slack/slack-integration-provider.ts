@@ -8,6 +8,7 @@ import type {
   VerifiedSlackChannel,
   VerifiedSlackConnection,
   VerifiedSlackHuman,
+  VerifiedSlackReaction,
   VerifySlackReactionInput,
 } from '../../application/contracts.js';
 
@@ -18,6 +19,7 @@ const SLACK_USER_ID = /^[UW][A-Z0-9]{2,}$/;
 const SLACK_TIMESTAMP = /^[0-9]{1,16}\.[0-9]{6}$/;
 const REACTION_NAME = /^[a-z0-9_+-]{1,64}$/;
 const APPROVAL_ID = /^[0-9a-f]{64}$/;
+const SHA256_DIGEST = /^sha256:[0-9a-f]{64}$/;
 const CONNECTION_ATTEMPT_ID = /^cat_[A-Za-z0-9][A-Za-z0-9_-]{0,95}$/;
 const CHALLENGE_CODE =
   /^[A-Za-z0-9_-]{42}[AEIMQUYcgkosw048]$/;
@@ -94,6 +96,60 @@ function slackTimestampMicroseconds(value: unknown, label: string): bigint {
   }
   const [seconds = '', fraction = ''] = value.split('.');
   return BigInt(seconds) * 1_000_000n + BigInt(fraction);
+}
+
+function validateApprovalPresentationExpectation(
+  value: unknown,
+): void {
+  if (value === null || typeof value !== 'object' || Array.isArray(value)) {
+    throw new SlackIntegrationProviderError(
+      'Slack approval presentation expectation is invalid',
+      'invalid_response',
+    );
+  }
+  const expectation = value as Record<string, unknown>;
+  if (
+    Object.keys(expectation).sort().join(',') !==
+      [
+        'presentation_policy_id',
+        'audience_notice_sha256',
+        'notice_text',
+        'fallback_text',
+      ]
+        .sort()
+        .join(',') ||
+    expectation['presentation_policy_id'] !==
+      'pilot-two-person-audience-v1' ||
+    typeof expectation['audience_notice_sha256'] !== 'string' ||
+    !SHA256_DIGEST.test(expectation['audience_notice_sha256']) ||
+    typeof expectation['notice_text'] !== 'string' ||
+    expectation['notice_text'].length === 0 ||
+    expectation['notice_text'].length > 512 ||
+    expectation['notice_text'].trim() !== expectation['notice_text'] ||
+    typeof expectation['fallback_text'] !== 'string' ||
+    expectation['fallback_text'] !==
+      `Decision brief awaiting approval. ${expectation['notice_text']}`
+  ) {
+    throw new SlackIntegrationProviderError(
+      'Slack approval presentation expectation is invalid',
+      'invalid_response',
+    );
+  }
+}
+
+function exactApprovalAudienceBlock(
+  approvalId: string,
+  noticeText: string,
+): Readonly<Record<string, unknown>> {
+  return Object.freeze({
+    type: 'section',
+    block_id: `echo-approval-${approvalId}-audience-v1`,
+    text: Object.freeze({
+      type: 'plain_text',
+      text: noticeText,
+      emoji: false,
+    }),
+  });
 }
 
 interface ValidatedIdentityLinkChallenge {
@@ -597,7 +653,7 @@ export class SlackWebIntegrationProvider implements SlackIntegrationProvider {
     token: string,
     input: VerifySlackReactionInput,
     signal?: AbortSignal,
-  ): Promise<boolean> {
+  ): Promise<VerifiedSlackReaction> {
     if (
       !SLACK_ID.test(input.expected_team_id) ||
       !(
@@ -625,7 +681,10 @@ export class SlackWebIntegrationProvider implements SlackIntegrationProvider {
         'invalid_response',
       );
     }
-    await this.verifyExpectedConnection(token, input, signal);
+    if (input.expected_presentation !== null) {
+      validateApprovalPresentationExpectation(input.expected_presentation);
+    }
+    const connection = await this.verifyExpectedConnection(token, input, signal);
     const response = await this.call(
       token,
       'reactions.get',
@@ -638,9 +697,15 @@ export class SlackWebIntegrationProvider implements SlackIntegrationProvider {
     );
     const message = record(response.value['message'], 'reactions.get message');
     if (
+      message['type'] !== 'message' ||
+      message['user'] !== input.expected_bot_user_id ||
       requiredId(message['bot_id'], 'message.bot_id', 'B') !==
         input.expected_bot_id ||
-      message['ts'] !== input.message_ts
+      message['ts'] !== input.message_ts ||
+      (message['subtype'] !== undefined &&
+        message['subtype'] !== 'bot_message') ||
+      (input.expected_app_id !== null &&
+        message['app_id'] !== input.expected_app_id)
     ) {
       throw new SlackIntegrationProviderError(
         'Slack approval message identity changed',
@@ -654,20 +719,129 @@ export class SlackWebIntegrationProvider implements SlackIntegrationProvider {
         'invalid_response',
       );
     }
-    for (const [index, item] of blocks.entries()) {
+    const expectation = input.expected_presentation;
+    const expectedAudienceBlock =
+      expectation === null
+        ? null
+        : exactApprovalAudienceBlock(
+            input.approval_id,
+            expectation.notice_text,
+          );
+    const approvalBlockPrefix = `echo-approval-${input.approval_id}-`;
+    const audienceBlockPrefix = `${approvalBlockPrefix}audience-`;
+    const presentationCandidates: Record<string, unknown>[] = [];
+    const ordinaryBlocks: Array<{
+      readonly ordinal: number;
+      readonly physicalIndex: number;
+    }> = [];
+    const blockIds = new Set<string>();
+    const ordinaryOrdinals = new Set<number>();
+    for (const [physicalIndex, item] of blocks.entries()) {
       const block = record(item, 'approval block');
+      const blockId = block['block_id'];
       if (
-        block['block_id'] !==
-        `echo-approval-${input.approval_id}-${String(index)}`
+        typeof blockId !== 'string' ||
+        !blockId.startsWith(approvalBlockPrefix) ||
+        blockIds.has(blockId)
       ) {
         throw new SlackIntegrationProviderError(
           'Slack approval marker does not match the requested approval',
-          'invalid_response',
+          'unauthorized',
         );
       }
+      blockIds.add(blockId);
+      if (blockId.startsWith(audienceBlockPrefix)) {
+        presentationCandidates.push(block);
+        continue;
+      }
+      const ordinalText = blockId.slice(approvalBlockPrefix.length);
+      const ordinal = /^[0-9]+$/.test(ordinalText)
+        ? Number(ordinalText)
+        : Number.NaN;
+      if (
+        !Number.isSafeInteger(ordinal) ||
+        String(ordinal) !== ordinalText ||
+        ordinaryOrdinals.has(ordinal)
+      ) {
+        throw new SlackIntegrationProviderError(
+          'Slack approval marker does not match the requested approval',
+          'unauthorized',
+        );
+      }
+      ordinaryOrdinals.add(ordinal);
+      ordinaryBlocks.push({ ordinal, physicalIndex });
     }
+    const logicalOrdinalsMatch = ordinaryBlocks.every(
+      (block, logicalIndex) => block.ordinal === logicalIndex,
+    );
+    const physicalOrdinalsMatch =
+      presentationCandidates.length > 0 &&
+      ordinaryBlocks.every(
+        (block) => block.ordinal === block.physicalIndex,
+      );
+    if (
+      ordinaryBlocks.length === 0 ||
+      (!logicalOrdinalsMatch && !physicalOrdinalsMatch)
+    ) {
+      throw new SlackIntegrationProviderError(
+        'Slack approval marker does not match the requested approval',
+        'unauthorized',
+      );
+    }
+    let audienceBlockCount = 0;
+    let presentationMatches =
+      expectation !== null &&
+      input.expected_app_id !== null &&
+      connection.app_id === input.expected_app_id &&
+      message['app_id'] === input.expected_app_id &&
+      message['edited'] === undefined;
+    for (const block of presentationCandidates) {
+      if (
+        expectedAudienceBlock !== null &&
+        block['block_id'] === expectedAudienceBlock['block_id']
+      ) {
+        audienceBlockCount += 1;
+        if (canonicalSha256(block) !== canonicalSha256(expectedAudienceBlock)) {
+          presentationMatches = false;
+        }
+      }
+    }
+    if (
+      expectation !== null &&
+      (presentationCandidates.length !== 1 ||
+        audienceBlockCount !== 1 ||
+        message['text'] !== expectation.fallback_text)
+    ) {
+      presentationMatches = false;
+    }
+    const messagePresentationSha256 =
+      expectation === null ||
+      expectedAudienceBlock === null ||
+      !presentationMatches
+        ? null
+        : canonicalSha256({
+            audience_notice_sha256: expectation.audience_notice_sha256,
+            approval_id: input.approval_id,
+            provider_team_id: connection.team_id,
+            provider_enterprise_id: connection.enterprise_id,
+            provider_bot_user_id: connection.bot_user_id,
+            provider_bot_id: connection.bot_id,
+            provider_app_id: connection.app_id,
+            channel_id: input.channel_id,
+            message_ts: input.message_ts,
+            audience_block: expectedAudienceBlock,
+            fallback_text: expectation.fallback_text,
+            message_unedited: true,
+          });
+    const presentationCandidateObserved = presentationCandidates.length > 0;
     const reactions = message['reactions'];
-    if (reactions === undefined) return false;
+    if (reactions === undefined) {
+      return Object.freeze({
+        observed: false,
+        presentation_candidate_observed: presentationCandidateObserved,
+        message_presentation_sha256: messagePresentationSha256,
+      });
+    }
     if (!Array.isArray(reactions)) {
       throw new SlackIntegrationProviderError(
         'Slack reaction roster is invalid',
@@ -676,6 +850,7 @@ export class SlackWebIntegrationProvider implements SlackIntegrationProvider {
     }
     let selectedPresent = false;
     let oppositePresent = false;
+    const decisiveReactionNames = new Set<string>();
     for (const item of reactions) {
       const reaction = record(item, 'reaction');
       const reactionName = reaction['name'];
@@ -685,6 +860,13 @@ export class SlackWebIntegrationProvider implements SlackIntegrationProvider {
       ) {
         continue;
       }
+      if (decisiveReactionNames.has(reactionName)) {
+        throw new SlackIntegrationProviderError(
+          'Slack reaction roster is ambiguous',
+          'invalid_response',
+        );
+      }
+      decisiveReactionNames.add(reactionName);
       const users = reaction['users'];
       const count = reaction['count'];
       if (
@@ -700,6 +882,12 @@ export class SlackWebIntegrationProvider implements SlackIntegrationProvider {
         );
       }
       const unique = new Set(users as string[]);
+      if (unique.size !== users.length) {
+        throw new SlackIntegrationProviderError(
+          'Slack reaction roster is invalid',
+          'invalid_response',
+        );
+      }
       if (unique.size !== count) {
         throw new SlackIntegrationProviderError(
           'Slack reaction roster is incomplete',
@@ -712,7 +900,11 @@ export class SlackWebIntegrationProvider implements SlackIntegrationProvider {
         oppositePresent = unique.has(input.user_id);
       }
     }
-    return selectedPresent && !oppositePresent;
+    return Object.freeze({
+      observed: selectedPresent && !oppositePresent,
+      presentation_candidate_observed: presentationCandidateObserved,
+      message_presentation_sha256: messagePresentationSha256,
+    });
   }
 
   async postIdentityLinkChallenge(

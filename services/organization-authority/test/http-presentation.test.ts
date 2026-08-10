@@ -7,9 +7,14 @@ import { describe, expect, it, vi } from 'vitest';
 import {
   ORGANIZATION_API_ADMIN_AUTH_SCHEME,
   ORGANIZATION_API_PROXY_AUTH_SCHEME,
+  ORGANIZATION_API_RECENT_DECISIONS_PATH,
 } from '@echo-brain/organization-api';
 import { AdminBearerAuthenticator } from '../src/adapters/security/admin-bearer-authenticator.js';
 import { AuthorityOperationError } from '../src/domain/errors.js';
+import {
+  fixedRecentDecisionsErrorBytes,
+  OrganizationRecentDecisionsError,
+} from '../src/application/recent-decisions.js';
 import {
   createOrganizationAuthorityHttpServer,
   decodeOrganizationApiJsonBody,
@@ -25,6 +30,10 @@ import {
 
 const ADMIN_TOKEN = 'test-admin-token-with-at-least-32-bytes';
 const PROXY_TOKEN = 'test-proxy-origin-token-with-at-least-32-bytes';
+const EMPTY_RECENT_DECISIONS_RESPONSE_BYTES = Buffer.from(
+  '{"items":[],"policy_id":"pilot-member-readable-v1","schema_version":1,"witness":"Readable because your active membership is one of the two memberships bound to pilot-member-readable-v1 and the returned records carry the exact two-person sharing notice."}',
+  'utf8',
+);
 
 function clientId(label: string): string {
   return `cid_${createHash('sha256').update(label).digest('base64url')}`;
@@ -35,6 +44,31 @@ function proxyHeaders(identity: string): Record<string, string> {
     connection: 'close',
     [TRUSTED_PROXY_AUTHORIZATION_HEADER]: `${ORGANIZATION_API_PROXY_AUTH_SCHEME} ${PROXY_TOKEN}`,
     [TRUSTED_PROXY_CLIENT_ID_HEADER]: identity,
+  };
+}
+
+function recentDecisionsWireRequest() {
+  const installationKey = `sha256:${'b'.repeat(64)}`;
+  return {
+    schema_version: 1 as const,
+    kind: 'echo-organization-recent-decisions-request' as const,
+    request_id: 'rdr_00000000-0000-4000-8000-000000000001',
+    authority_id: 'oau_00000000-0000-4000-8000-000000000001',
+    authority_key_id: `sha256:${'a'.repeat(64)}`,
+    organization_id: 'org_00000000-0000-4000-8000-000000000001',
+    enrollment_id: 'enr_00000000-0000-4000-8000-000000000001',
+    installation_id: 'ins_00000000-0000-4000-8000-000000000001',
+    installation_key_id: installationKey,
+    http_method: 'POST' as const,
+    http_path: ORGANIZATION_API_RECENT_DECISIONS_PATH,
+    requested_at: '2026-08-10T08:00:00.000Z',
+    integrity: {
+      canonicalization: 'RFC8785' as const,
+      payload_sha256: `sha256:${'c'.repeat(64)}`,
+      signature_algorithm: 'ecdsa-p256-sha256-der-low-s' as const,
+      key_id: installationKey,
+      signature_base64: 'AAAAAAAA',
+    },
   };
 }
 
@@ -150,12 +184,9 @@ describe('authority HTTP presentation', () => {
       expect(unauthorized.status).toBe(401);
       await unauthorized.arrayBuffer();
 
-      const rollout = await fetch(
-        `${origin}/v1/admin/internal-live/rollout`,
-        {
-          headers: { ...headers, authorization: `Bearer ${ADMIN_TOKEN}` },
-        },
-      );
+      const rollout = await fetch(`${origin}/v1/admin/internal-live/rollout`, {
+        headers: { ...headers, authorization: `Bearer ${ADMIN_TOKEN}` },
+      });
       expect(rollout.status).toBe(200);
       expect(await rollout.json()).toMatchObject({
         channel: 'internal-live',
@@ -346,13 +377,11 @@ describe('authority HTTP presentation', () => {
     expect(() => resolver.resolve(request)).toThrow(
       'trusted proxy identity is unavailable',
     );
-    request.rawHeaders[1] =
-      `${ORGANIZATION_API_PROXY_AUTH_SCHEME} wrong-token-with-at-least-32-visible-bytes`;
+    request.rawHeaders[1] = `${ORGANIZATION_API_PROXY_AUTH_SCHEME} wrong-token-with-at-least-32-visible-bytes`;
     expect(() => resolver.resolve(request)).toThrow(
       'trusted proxy identity is unavailable',
     );
-    request.rawHeaders[1] =
-      `${ORGANIZATION_API_PROXY_AUTH_SCHEME} ${PROXY_TOKEN}`;
+    request.rawHeaders[1] = `${ORGANIZATION_API_PROXY_AUTH_SCHEME} ${PROXY_TOKEN}`;
     request.rawHeaders[3] = 'employee-one@example.com';
     expect(() => resolver.resolve(request)).toThrow(
       'trusted proxy identity is unavailable',
@@ -493,6 +522,183 @@ describe('authority HTTP presentation', () => {
       await otherUnauthorizedRoute.arrayBuffer();
     } finally {
       await close(server);
+    }
+  });
+
+  it('sends the exact pre-serialized recent-decisions bytes with no-store', async () => {
+    const exact = EMPTY_RECENT_DECISIONS_RESPONSE_BYTES;
+    let calls = 0;
+    const server = createOrganizationAuthorityHttpServer({
+      application: testApplication(),
+      recentDecisions: {
+        recentDecisions: (request) => {
+          calls += 1;
+          expect(request).toEqual(recentDecisionsWireRequest());
+          return { status_code: 200, body: exact, item_references: [] };
+        },
+      },
+      adminAuthenticator: { authenticate: () => false },
+      clientIdentityResolver: new AuthenticatedProxyClientIdentityResolver(
+        PROXY_TOKEN,
+      ),
+    });
+    const origin = await listen(server);
+    try {
+      const response = await fetch(
+        `${origin}${ORGANIZATION_API_RECENT_DECISIONS_PATH}`,
+        {
+          method: 'POST',
+          headers: {
+            ...proxyHeaders(clientId('recent-decisions')),
+            'content-type': 'application/json',
+          },
+          body: JSON.stringify(recentDecisionsWireRequest()),
+        },
+      );
+      const received = Buffer.from(await response.arrayBuffer());
+      expect(response.status).toBe(200);
+      expect(response.headers.get('cache-control')).toBe('no-store');
+      expect(response.headers.get('content-length')).toBe(String(exact.length));
+      expect(received).toEqual(exact);
+      expect(calls).toBe(1);
+    } finally {
+      await close(server);
+    }
+  });
+
+  it('rate-limits recent decisions as outer transport without another application call', async () => {
+    const recentDecisions = vi.fn(() => ({
+      status_code: 200 as const,
+      body: EMPTY_RECENT_DECISIONS_RESPONSE_BYTES,
+      item_references: [],
+    }));
+    const server = createOrganizationAuthorityHttpServer({
+      application: testApplication(),
+      recentDecisions: { recentDecisions },
+      adminAuthenticator: { authenticate: () => false },
+      clientIdentityResolver: new AuthenticatedProxyClientIdentityResolver(
+        PROXY_TOKEN,
+      ),
+      rateLimiter: new InMemoryPostRequestRateLimiter({
+        maximum_requests_per_window: 1,
+        window_ms: 60_000,
+        maximum_keys: 10,
+        now: () => 1_000,
+      }),
+    });
+    const origin = await listen(server);
+    const send = (): Promise<Response> =>
+      fetch(`${origin}${ORGANIZATION_API_RECENT_DECISIONS_PATH}`, {
+        method: 'POST',
+        headers: {
+          ...proxyHeaders(clientId('rate-limited-recent-decisions')),
+          'content-type': 'application/json',
+        },
+        body: JSON.stringify(recentDecisionsWireRequest()),
+      });
+    try {
+      const admitted = await send();
+      expect(admitted.status).toBe(200);
+      await admitted.arrayBuffer();
+      expect(recentDecisions).toHaveBeenCalledOnce();
+
+      const limited = await send();
+      expect(limited.status).toBe(429);
+      expect(limited.headers.get('retry-after')).toBe('60');
+      expect(limited.headers.get('cache-control')).toBe('no-store');
+      expect(await limited.json()).toEqual({
+        error: {
+          code: 'rate_limited',
+          message: 'too many requests',
+        },
+      });
+      expect(recentDecisions).toHaveBeenCalledOnce();
+    } finally {
+      await close(server);
+    }
+  });
+
+  it('uses only the fixed recent-decisions error bodies', async () => {
+    const request = async (
+      server: Server,
+      body: string,
+      suffix = '',
+    ): Promise<Response> => {
+      const origin = await listen(server);
+      return fetch(
+        `${origin}${ORGANIZATION_API_RECENT_DECISIONS_PATH}${suffix}`,
+        {
+          method: 'POST',
+          headers: {
+            ...proxyHeaders(clientId(`recent-error-${suffix}-${body.length}`)),
+            'content-type': 'application/json',
+          },
+          body,
+        },
+      );
+    };
+    const options = {
+      application: testApplication(),
+      adminAuthenticator: { authenticate: () => false },
+      clientIdentityResolver: new AuthenticatedProxyClientIdentityResolver(
+        PROXY_TOKEN,
+      ),
+    };
+
+    const inactive = createOrganizationAuthorityHttpServer(options);
+    try {
+      const response = await request(inactive, '{}');
+      expect(response.status).toBe(404);
+      expect(Buffer.from(await response.arrayBuffer())).toEqual(
+        fixedRecentDecisionsErrorBytes(404),
+      );
+    } finally {
+      await close(inactive);
+    }
+
+    const malformed = createOrganizationAuthorityHttpServer({
+      ...options,
+      recentDecisions: {
+        recentDecisions: () => {
+          throw new Error('must not reach application');
+        },
+      },
+    });
+    try {
+      const response = await request(malformed, '{');
+      expect(response.status).toBe(400);
+      expect(Buffer.from(await response.arrayBuffer())).toEqual(
+        fixedRecentDecisionsErrorBytes(400),
+      );
+    } finally {
+      await close(malformed);
+    }
+
+    for (const [code, status] of [
+      ['unauthorized', 401],
+      ['unavailable', 503],
+    ] as const) {
+      const failing = createOrganizationAuthorityHttpServer({
+        ...options,
+        recentDecisions: {
+          recentDecisions: () => {
+            throw new OrganizationRecentDecisionsError(code, 'private detail');
+          },
+        },
+      });
+      try {
+        const response = await request(
+          failing,
+          JSON.stringify(recentDecisionsWireRequest()),
+        );
+        expect(response.status).toBe(status);
+        expect(Buffer.from(await response.arrayBuffer())).toEqual(
+          fixedRecentDecisionsErrorBytes(status),
+        );
+        expect(response.headers.get('cache-control')).toBe('no-store');
+      } finally {
+        await close(failing);
+      }
     }
   });
 

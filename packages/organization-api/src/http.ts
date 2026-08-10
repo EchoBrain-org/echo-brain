@@ -10,6 +10,7 @@ export const ORGANIZATION_API_AUTHORITY_DESCRIPTOR_PATH =
 export const ORGANIZATION_API_ENROLLMENTS_PATH = '/v1/enrollments';
 export const ORGANIZATION_API_ACCESS_LEASES_PATH = '/v1/access-leases';
 export const ORGANIZATION_API_PERMISSION_CHECKS_PATH = '/v1/permission-checks';
+export const ORGANIZATION_API_RECENT_DECISIONS_PATH = '/v1/recent-decisions';
 /**
  * The organization decision record ingest path. It is the only route bounded by
  * MAX_ORGANIZATION_RECORD_API_BODY_BYTES — the canonical-envelope contract plus

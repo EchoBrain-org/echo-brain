@@ -1,4 +1,5 @@
 import type { JsonObject, JsonValue, Sha256Digest } from '@echo-brain/federation-protocol';
+import type { OrganizationPermissionPilotEligibilityProofV1 } from './permission-pilot.js';
 
 /**
  * Local structural contracts for the organization record core.
@@ -30,6 +31,8 @@ export interface VerifiedOrganizationRecordEnvelope {
   readonly event_type: OrganizationRecordEventTypeV1;
   readonly idempotency_key: string;
   readonly installation_id: string;
+  /** Present only after the Authority verified the marker-bound notice proof. */
+  readonly permission_pilot_eligibility?: OrganizationPermissionPilotEligibilityProofV1;
 }
 
 /** The versioned record frame. `record_hash` is sha256 over its canonical bytes. */

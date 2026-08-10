@@ -21,6 +21,7 @@ import {
   type OnboardSlackOrganizationToolInput,
   type OnboardSlackOrganizationToolResult,
   type OrganizationIntegrationsOverview,
+  type OrganizationPermissionPilotEligibilityProof,
   type RecordPermissionDecisionInput,
   type RecordedPermissionDecision,
   type SlackApprovalPermissionCandidate,
@@ -41,6 +42,54 @@ interface AuditTail {
 
 interface AuditReplayRow {
   detail_json: string;
+}
+
+interface ApprovalAuthorizationEvidenceRow {
+  reason_code: string;
+  detail_json: string;
+}
+
+const SHA256_DIGEST = /^sha256:[0-9a-f]{64}$/;
+
+function permissionPilotEligibilityFromAudit(
+  row: ApprovalAuthorizationEvidenceRow,
+  action: ApprovalAuthorizationEvidenceLookup["action"],
+): OrganizationPermissionPilotEligibilityProof | null | undefined {
+  if (
+    row.reason_code !==
+    "active_membership_direct_grant_pilot_notice_v1"
+  ) {
+    return null;
+  }
+  if (action !== "approve") return undefined;
+  let detail: unknown;
+  try {
+    detail = JSON.parse(row.detail_json) as unknown;
+  } catch {
+    return undefined;
+  }
+  if (detail === null || typeof detail !== "object" || Array.isArray(detail)) {
+    return undefined;
+  }
+  const value = detail as Record<string, unknown>;
+  if (
+    value["presentation_policy_id"] !==
+      "pilot-two-person-audience-v1" ||
+    typeof value["audience_notice_sha256"] !== "string" ||
+    !SHA256_DIGEST.test(value["audience_notice_sha256"]) ||
+    typeof value["message_presentation_sha256"] !== "string" ||
+    !SHA256_DIGEST.test(value["message_presentation_sha256"])
+  ) {
+    return undefined;
+  }
+  return Object.freeze({
+    policy_id: "pilot-member-readable-v1",
+    presentation_policy_id: "pilot-two-person-audience-v1",
+    audience_notice_sha256: value["audience_notice_sha256"] as `sha256:${string}`,
+    message_presentation_sha256: value[
+      "message_presentation_sha256"
+    ] as `sha256:${string}`,
+  });
 }
 
 interface ToolConnectionOverviewRow extends Record<string, unknown> {
@@ -1874,7 +1923,7 @@ export class OrganizationIntegrationsRepository {
   ): ApprovalAuthorizationEvidenceMatch {
     const rows = this.database
       .prepare(
-        `SELECT 1 AS present
+        `SELECT reason_code, detail_json
          FROM organization_integration_audit
          WHERE organization_id = ?
            AND actor_installation_id = ?
@@ -1909,12 +1958,24 @@ export class OrganizationIntegrationsRepository {
         input.evaluated_at,
         input.principal_id,
         input.request_sha256,
-      ) as { present: 1 }[];
+      ) as ApprovalAuthorizationEvidenceRow[];
     if (rows.length === 0) return Object.freeze({ status: "absent" as const });
     if (rows.length > 1) {
       return Object.freeze({ status: "ambiguous" as const });
     }
-    return Object.freeze({ status: "matched" as const });
+    const eligibility = permissionPilotEligibilityFromAudit(
+      rows[0] as ApprovalAuthorizationEvidenceRow,
+      input.action,
+    );
+    if (eligibility === undefined) {
+      return Object.freeze({ status: "corrupt" as const });
+    }
+    return Object.freeze({
+      status: "matched" as const,
+      ...(eligibility === null
+        ? {}
+        : { permission_pilot_eligibility: eligibility }),
+    });
   }
 
   overview(): OrganizationIntegrationsOverview {

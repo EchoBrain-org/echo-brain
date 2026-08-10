@@ -2,11 +2,13 @@ import { Buffer } from 'node:buffer';
 import {
   isOrganizationApiValidationError,
   MAX_ORGANIZATION_API_BODY_BYTES,
+  MAX_ORGANIZATION_RECENT_DECISIONS_RESPONSE_BYTES,
   ORGANIZATION_API_ACCESS_LEASES_PATH,
   ORGANIZATION_API_AUTHORITY_DESCRIPTOR_PATH,
   ORGANIZATION_API_ENROLLMENT_AUTH_SCHEME,
   ORGANIZATION_API_ENROLLMENTS_PATH,
   ORGANIZATION_API_PERMISSION_CHECKS_PATH,
+  ORGANIZATION_API_RECENT_DECISIONS_PATH,
   ORGANIZATION_API_INTERNAL_LIVE_DIRECTIVES_PATH,
   ORGANIZATION_API_INTERNAL_LIVE_RECEIPTS_PATH,
   ORGANIZATION_API_SLACK_LINK_CHALLENGES_PATH,
@@ -18,6 +20,8 @@ import {
   validateOrganizationAuthorityDescriptorResponse,
   validateOrganizationPermissionCheckDecision,
   validateOrganizationPermissionCheckRequest,
+  validateOrganizationRecentDecisionsRequest,
+  validateOrganizationRecentDecisionsResponse,
   validateOrganizationInternalLiveDirectiveRequest,
   validateOrganizationInternalLiveUpdateDirective,
   validateOrganizationInternalLiveUpdateReceipt,
@@ -32,6 +36,8 @@ import {
   type OrganizationAuthorityDescriptorResponseV1,
   type OrganizationPermissionCheckDecisionV1,
   type OrganizationPermissionCheckRequestV1,
+  type OrganizationRecentDecisionsRequestV1,
+  type OrganizationRecentDecisionsResponseV1,
   type OrganizationInternalLiveDirectiveRequestV1,
   type OrganizationInternalLiveUpdateDirectiveV1,
   type OrganizationInternalLiveUpdateReceiptV1,
@@ -284,8 +290,11 @@ export class HttpOrganizationAuthorityClient implements OrganizationAuthorityCli
     return new URL(path, this.baseUrl).href;
   }
 
-  private readJson(response: Response): Promise<unknown> {
-    return readBoundedJsonResponse(response, MAX_RESPONSE_BYTES);
+  private readJson(
+    response: Response,
+    maximumBytes = MAX_RESPONSE_BYTES,
+  ): Promise<unknown> {
+    return readBoundedJsonResponse(response, maximumBytes);
   }
 
   private async request<T>(
@@ -295,9 +304,10 @@ export class HttpOrganizationAuthorityClient implements OrganizationAuthorityCli
     conflictHandling: ConflictHandling = 'transport-error',
     signal?: AbortSignal,
     timeoutMs = this.timeoutMs,
+    maximumResponseBytes = MAX_RESPONSE_BYTES,
   ): Promise<T> {
     const response = await this.send(path, init, signal, timeoutMs);
-    const value = await this.readJson(response);
+    const value = await this.readJson(response, maximumResponseBytes);
     if (response.status === 409 && conflictHandling === 'stale-access-state') {
       const staleState = tryValidate(
         value,
@@ -354,6 +364,7 @@ export class HttpOrganizationAuthorityClient implements OrganizationAuthorityCli
     requestKind:
       | 'access'
       | 'permission'
+      | 'recent decisions'
       | 'Slack link'
       | 'internal-live directive'
       | 'internal-live receipt',
@@ -361,6 +372,7 @@ export class HttpOrganizationAuthorityClient implements OrganizationAuthorityCli
     conflictHandling: ConflictHandling = 'transport-error',
     signal?: AbortSignal,
     timeoutMs?: number,
+    maximumResponseBytes?: number,
   ): Promise<T> {
     const body = JSON.stringify(value);
     if (Buffer.byteLength(body) > MAX_ORGANIZATION_API_BODY_BYTES) {
@@ -373,6 +385,7 @@ export class HttpOrganizationAuthorityClient implements OrganizationAuthorityCli
       conflictHandling,
       signal,
       timeoutMs,
+      maximumResponseBytes,
     );
   }
 
@@ -485,6 +498,22 @@ export class HttpOrganizationAuthorityClient implements OrganizationAuthorityCli
       validateOrganizationPermissionCheckDecision,
       'transport-error',
       signal,
+    );
+  }
+
+  readRecentDecisions(
+    request: OrganizationRecentDecisionsRequestV1,
+    signal?: AbortSignal,
+  ): Promise<OrganizationRecentDecisionsResponseV1> {
+    return this.postJson(
+      ORGANIZATION_API_RECENT_DECISIONS_PATH,
+      validateOrganizationRecentDecisionsRequest(request),
+      'recent decisions',
+      validateOrganizationRecentDecisionsResponse,
+      'transport-error',
+      signal,
+      undefined,
+      MAX_ORGANIZATION_RECENT_DECISIONS_RESPONSE_BYTES,
     );
   }
 

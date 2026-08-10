@@ -39,6 +39,8 @@ export type {
   CompleteOrganizationSlackIdentityLinkInput,
   OrganizationSlackIdentityLinkCoordinatorOptions,
 } from './slack-identity-link-coordinator.js';
+export { OrganizationRecentDecisionsReader } from './recent-decisions-reader.js';
+export type { OrganizationRecentDecisionsReaderOptions } from './recent-decisions-reader.js';
 export { readPrivateOrganizationEnrollmentInvitation } from './enrollment/private-organization-invitation.js';
 export {
   OrganizationClockRollbackError,

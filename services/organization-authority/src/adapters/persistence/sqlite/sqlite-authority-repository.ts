@@ -1673,6 +1673,38 @@ export class SqliteOrganizationAuthorityRepository implements OrganizationAuthor
     }
   }
 
+  writeAtLinearization<T>(
+    observe: () => string,
+    operation: (
+      transaction: AuthorityWriteTransaction,
+      observedAt: string,
+    ) => T,
+  ): T {
+    this.assertOpen();
+    this.database.exec('BEGIN IMMEDIATE');
+    try {
+      const observedAt = observe();
+      timestampMillis(observedAt, 'authority write time');
+      const metadata = this.transaction.metadata();
+      if (observedAt < metadata.last_observed_at) {
+        throw new Error(
+          'authority clock regressed since the last committed write',
+        );
+      }
+      this.database
+        .prepare(
+          'UPDATE authority_metadata SET last_observed_at = ? WHERE singleton = 1',
+        )
+        .run(observedAt);
+      const result = operation(this.transaction, observedAt);
+      this.database.exec('COMMIT');
+      return result;
+    } catch (error) {
+      this.rollback();
+      throw error;
+    }
+  }
+
   close(): void {
     if (this.closed) return;
     this.database.close();

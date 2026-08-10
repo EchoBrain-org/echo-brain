@@ -15,6 +15,7 @@ import {
   type OrganizationSecretStore,
   type SlackIntegrationProvider,
 } from '@echo-brain/organization-control-plane';
+import type { OrganizationPermissionPilotActivationMarkerV1 } from '@echo-brain/organization-record';
 import {
   OrganizationAuthorityApplication,
   type OrganizationIntegrationAdminContext,
@@ -27,6 +28,7 @@ import {
   ComposedOrganizationIntegrationsApplication,
   reconcileOrganizationIntegrationSecrets,
 } from '../src/composition/organization-integrations.js';
+import type { OrganizationPermissionPilotRuntimeHealth } from '../src/composition/organization-record.js';
 
 const NOW = '2026-07-29T20:00:00.000Z';
 const AUTHORITY_ID = 'oau_11111111-1111-4111-8111-111111111111';
@@ -42,10 +44,43 @@ const AUTHORITY_KEY_ID = digest('authority-key');
 const SLACK_TOKEN = 'xoxb-test-token-12345678';
 const SECRET_HANDLE_ID = 'sch_99999999-9999-4999-8999-999999999999';
 const SLACK_LINK_CODE = `${'A'.repeat(42)}E`;
+const PILOT_NOTICE =
+  "Approving publishes this organization record's decisions, actions, and " +
+  'rationales to Audrey and Zhenye.';
+const PILOT_AUDIENCE_NOTICE_SHA256 = digest('pilot-audience-notice');
+const PILOT_MESSAGE_PRESENTATION_SHA256 = digest('pilot-message-presentation');
 
 function digest(value: string): `sha256:${string}` {
   return `sha256:${createHash('sha256').update(value).digest('hex')}`;
 }
+
+const PILOT_ACTIVATION = {
+  organization_id: ORGANIZATION_ID,
+  command_id: 'ppa_aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+  command_sha256: digest('pilot-command'),
+  policy_id: 'pilot-member-readable-v1',
+  presentation_policy_id: 'pilot-two-person-audience-v1',
+  audience: [
+    { membership_id: ADMIN_MEMBERSHIP_ID, label: 'Audrey' },
+    { membership_id: TARGET_MEMBERSHIP_ID, label: 'Zhenye' },
+  ],
+  presentation_descriptor: {
+    schema_version: 1,
+    kind: 'echo-organization-permission-pilot-presentation',
+    policy_id: 'pilot-member-readable-v1',
+    presentation_policy_id: 'pilot-two-person-audience-v1',
+    audience: [
+      { membership_id: ADMIN_MEMBERSHIP_ID, label: 'Audrey' },
+      { membership_id: TARGET_MEMBERSHIP_ID, label: 'Zhenye' },
+    ],
+    notice_text: PILOT_NOTICE,
+    fallback_text: `Decision brief awaiting approval. ${PILOT_NOTICE}`,
+  },
+  audience_notice_sha256: PILOT_AUDIENCE_NOTICE_SHA256,
+  activated_at: NOW,
+  effective_after_position: 0,
+  effective_after_record_hash: null,
+} as const satisfies OrganizationPermissionPilotActivationMarkerV1;
 
 function openRepository(): OrganizationIntegrationsRepository {
   const database = openOrganizationControlDatabase(':memory:');
@@ -243,6 +278,8 @@ function testDependencies(options: {
   ownerChanged?: boolean;
   targetActive?: boolean;
   reaction?: boolean | Error;
+  messagePresentationSha256?: `sha256:${string}` | null;
+  presentationCandidateObserved?: boolean;
 } = {}) {
   let storedSecret: string | null = null;
   const reference = {
@@ -296,7 +333,13 @@ function testDependencies(options: {
     })),
     verifyReaction: vi.fn(async () => {
       if (options.reaction instanceof Error) throw options.reaction;
-      return options.reaction ?? true;
+      return {
+        observed: options.reaction ?? true,
+        presentation_candidate_observed:
+          options.presentationCandidateObserved ?? false,
+        message_presentation_sha256:
+          options.messagePresentationSha256 ?? null,
+      };
     }),
     postIdentityLinkChallenge: vi.fn(async () => ({
       team_id: 'T123ABC',
@@ -412,6 +455,9 @@ async function activate(
 
 function applicationFixture(
   dependencies = testDependencies(),
+  permissionPilotHealth: OrganizationPermissionPilotRuntimeHealth = {
+    kind: 'absent',
+  },
 ): {
   repository: OrganizationIntegrationsRepository;
   dependencies: ReturnType<typeof testDependencies>;
@@ -424,6 +470,7 @@ function applicationFixture(
     application: new ComposedOrganizationIntegrationsApplication({
       ...dependencies,
       repository,
+      permissionPilotHealth,
       now: () => NOW,
     }),
   };
@@ -704,6 +751,7 @@ describe('composed organization integrations application', () => {
     const application = new ComposedOrganizationIntegrationsApplication({
       ...dependencies,
       repository,
+      permissionPilotHealth: { kind: 'absent' },
       now: () => NOW,
     });
 
@@ -986,6 +1034,7 @@ describe('composed organization integrations application', () => {
           reaction_name: 'white_check_mark',
           opposite_reaction_name: 'x',
           user_id: 'U123ZHEN',
+          expected_presentation: null,
         },
         undefined,
       );
@@ -998,6 +1047,201 @@ describe('composed organization integrations application', () => {
         action: 'permission.approve',
         membership_id: TARGET_MEMBERSHIP_ID,
         outcome: 'allowed',
+      });
+    } finally {
+      repository.close();
+    }
+  });
+
+  it('keeps ordinary Slack approval live without pilot qualification when startup is degraded', async () => {
+    const { repository, dependencies, application } = applicationFixture(
+      testDependencies(),
+      {
+        kind: 'degraded',
+        failure: new Error('corrupt pilot marker'),
+      },
+    );
+    try {
+      await activate(application);
+      vi.mocked(dependencies.slack.verifyReaction).mockClear();
+      vi.mocked(dependencies.slack.verifyHuman).mockClear();
+
+      await expect(application.checkPermission(request())).resolves.toMatchObject({
+        allowed: true,
+        reason_code: 'active_membership_and_direct_grant',
+      });
+      expect(dependencies.slack.verifyReaction).toHaveBeenCalledWith(
+        SLACK_TOKEN,
+        expect.objectContaining({ expected_presentation: null }),
+        undefined,
+      );
+      expect(dependencies.slack.verifyHuman).toHaveBeenCalled();
+    } finally {
+      repository.close();
+    }
+  });
+
+  it('keeps a degraded pilot presentation candidate retryable without recording an ordinary allow', async () => {
+    const { repository, dependencies, application } = applicationFixture(
+      testDependencies({ presentationCandidateObserved: true }),
+      {
+        kind: 'degraded',
+        failure: new Error('corrupt pilot marker'),
+      },
+    );
+    try {
+      await activate(application);
+      vi.mocked(dependencies.slack.verifyReaction).mockClear();
+      vi.mocked(dependencies.slack.verifyHuman).mockClear();
+      dependencies.checkPermissionSubject.mockClear();
+      const permissionAuditsBefore = application
+        .overview()
+        .recent_audit.filter((entry) => entry.action === 'permission.approve')
+        .length;
+
+      await expect(application.checkPermission(request())).rejects.toMatchObject({
+        name: 'AuthorityOperationError',
+        code: 'unavailable',
+      });
+      expect(dependencies.slack.verifyReaction).toHaveBeenCalledWith(
+        SLACK_TOKEN,
+        expect.objectContaining({ expected_presentation: null }),
+        undefined,
+      );
+      expect(dependencies.slack.verifyHuman).toHaveBeenCalled();
+      expect(dependencies.checkPermissionSubject).toHaveBeenCalledTimes(2);
+      expect(
+        application
+          .overview()
+          .recent_audit.filter((entry) => entry.action === 'permission.approve'),
+      ).toHaveLength(permissionAuditsBefore);
+    } finally {
+      repository.close();
+    }
+  });
+
+  it('keeps a degraded pilot presentation candidate reject on the ordinary path', async () => {
+    const { repository, application } = applicationFixture(
+      testDependencies({ presentationCandidateObserved: true }),
+      {
+        kind: 'degraded',
+        failure: new Error('corrupt pilot marker'),
+      },
+    );
+    try {
+      await activate(application);
+      const rejectRequest = request({ action: 'reject', reaction_name: 'x' });
+      const command = {
+        ...rejectRequest,
+        provider_event_sha256:
+          organizationPermissionProviderEventSha256(rejectRequest),
+      };
+
+      await expect(
+        application.checkPermission(command),
+      ).resolves.toMatchObject({
+        allowed: true,
+        reason_code: 'active_membership_and_direct_grant',
+      });
+      expect(application.overview().recent_audit[0]).toMatchObject({
+        action: 'permission.reject',
+        outcome: 'allowed',
+        reason_code: 'active_membership_and_direct_grant',
+      });
+    } finally {
+      repository.close();
+    }
+  });
+
+  it('records the exact notice-qualified reason and presentation audit detail', async () => {
+    const fixture = applicationFixture(
+      testDependencies({
+        messagePresentationSha256: PILOT_MESSAGE_PRESENTATION_SHA256,
+      }),
+      { kind: 'ready', activation: PILOT_ACTIVATION },
+    );
+    const { repository, dependencies, application } = fixture;
+    try {
+      await activate(application);
+
+      const command = request();
+      const decision = await application.checkPermission(command);
+      expect(decision).toMatchObject({
+        allowed: true,
+        reason_code: 'active_membership_direct_grant_pilot_notice_v1',
+      });
+      expect(dependencies.slack.verifyReaction).toHaveBeenCalledWith(
+        SLACK_TOKEN,
+        expect.objectContaining({
+          expected_presentation: {
+            presentation_policy_id: 'pilot-two-person-audience-v1',
+            audience_notice_sha256: PILOT_AUDIENCE_NOTICE_SHA256,
+            notice_text: PILOT_NOTICE,
+            fallback_text: `Decision brief awaiting approval. ${PILOT_NOTICE}`,
+          },
+        }),
+        undefined,
+      );
+      expect(
+        repository.findAllowedApprovalAuthorizationEvidence({
+          organization_id: ORGANIZATION_ID,
+          installation_id: INSTALLATION_ID,
+          approval_id: command.approval_id,
+          action: command.action,
+          request_id: command.request_id,
+          principal_id: decision.principal_id as string,
+          membership_id: decision.membership_id as string,
+          request_sha256: decision.request_sha256,
+          provider_event_sha256: decision.provider_event_sha256,
+          adapter_binding_id: decision.adapter_binding_id as string,
+          permission_grant_id: decision.permission_grant_id as string,
+          reason_code: decision.reason_code,
+          evaluated_at: decision.evaluated_at,
+        }),
+      ).toEqual({
+        status: 'matched',
+        permission_pilot_eligibility: {
+          policy_id: 'pilot-member-readable-v1',
+          presentation_policy_id: 'pilot-two-person-audience-v1',
+          audience_notice_sha256: PILOT_AUDIENCE_NOTICE_SHA256,
+          message_presentation_sha256: PILOT_MESSAGE_PRESENTATION_SHA256,
+        },
+      });
+    } finally {
+      repository.close();
+    }
+  });
+
+  it('keeps an old card on the legacy allow reason without pilot eligibility proof', async () => {
+    const { repository, application } = applicationFixture(
+      testDependencies({ messagePresentationSha256: null }),
+      { kind: 'ready', activation: PILOT_ACTIVATION },
+    );
+    try {
+      await activate(application);
+
+      const command = request();
+      const decision = await application.checkPermission(command);
+      expect(decision).toMatchObject({
+        allowed: true,
+        reason_code: 'active_membership_and_direct_grant',
+      });
+      expect(repository.findAllowedApprovalAuthorizationEvidence({
+        organization_id: ORGANIZATION_ID,
+        installation_id: INSTALLATION_ID,
+        approval_id: command.approval_id,
+        action: command.action,
+        request_id: command.request_id,
+        principal_id: decision.principal_id as string,
+        membership_id: decision.membership_id as string,
+        request_sha256: decision.request_sha256,
+        provider_event_sha256: decision.provider_event_sha256,
+        adapter_binding_id: decision.adapter_binding_id as string,
+        permission_grant_id: decision.permission_grant_id as string,
+        reason_code: decision.reason_code,
+        evaluated_at: decision.evaluated_at,
+      })).toEqual({
+        status: 'matched',
       });
     } finally {
       repository.close();

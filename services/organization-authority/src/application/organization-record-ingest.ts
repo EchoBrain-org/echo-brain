@@ -14,6 +14,10 @@ import type {
   OrganizationAuthorityApplication,
   OrganizationRecordInstallationContext,
 } from './organization-authority.js';
+import { AuthorityOperationError } from '../domain/errors.js';
+
+const ORGANIZATION_PERMISSION_PILOT_NOTICE_REASON_CODE =
+  'active_membership_direct_grant_pilot_notice_v1' as const;
 
 /**
  * A terminal ingest outcome the member files as a permanent rejection.
@@ -32,6 +36,34 @@ export class OrganizationRecordIngestRejectionError extends Error {
     this.code = code;
   }
 }
+
+/** Structural seam; the record package owns the durable marker/proof types. */
+export interface OrganizationRecordPermissionPilotEligibilityProofView {
+  readonly policy_id: 'pilot-member-readable-v1';
+  readonly presentation_policy_id: 'pilot-two-person-audience-v1';
+  readonly audience_notice_sha256: `sha256:${string}`;
+  readonly message_presentation_sha256: `sha256:${string}`;
+}
+
+export interface OrganizationRecordPermissionPilotActivationView {
+  readonly organization_id: string;
+  readonly policy_id: 'pilot-member-readable-v1';
+  readonly presentation_policy_id: 'pilot-two-person-audience-v1';
+  readonly audience_notice_sha256: `sha256:${string}`;
+}
+
+/**
+ * Startup-cached permission-pilot health. Unlike a nullable marker, this keeps
+ * a clean pre-activation state distinct from a failed marker/index/audit
+ * validation, so a frozen notice-qualified envelope can remain retryable.
+ */
+export type OrganizationRecordPermissionPilotHealthView =
+  | { readonly kind: 'absent' }
+  | {
+      readonly kind: 'ready';
+      readonly activation: OrganizationRecordPermissionPilotActivationView;
+    }
+  | { readonly kind: 'degraded'; readonly failure: Error };
 
 /**
  * The read-only view of the Authority's existing integration audit.
@@ -56,7 +88,12 @@ export interface OrganizationRecordAuthorizationEvidenceStore {
     permission_grant_id: string;
     reason_code: string;
     evaluated_at: string;
-  }): { readonly status: 'matched' | 'absent' | 'ambiguous' };
+  }):
+    | {
+        readonly status: 'matched';
+        readonly permission_pilot_eligibility?: OrganizationRecordPermissionPilotEligibilityProofView;
+      }
+    | { readonly status: 'absent' | 'ambiguous' | 'corrupt' };
 }
 
 /** The structural view `OrganizationRecordAuthorityPort` requires. */
@@ -66,6 +103,7 @@ export interface VerifiedOrganizationRecordEnvelopeView {
   readonly event_type: 'approval' | 'rejection';
   readonly idempotency_key: string;
   readonly installation_id: string;
+  readonly permission_pilot_eligibility?: OrganizationRecordPermissionPilotEligibilityProofView;
 }
 
 export interface OrganizationRecordIngestAuthorityOptions {
@@ -74,6 +112,7 @@ export interface OrganizationRecordIngestAuthorityOptions {
     'recordIngestInstallationContext' | 'verifyRecordEnvelope' | 'signRecordReceipt'
   >;
   readonly evidence: OrganizationRecordAuthorizationEvidenceStore;
+  readonly permissionPilotHealth: OrganizationRecordPermissionPilotHealthView;
 }
 
 function installationIdOf(value: unknown): string {
@@ -120,13 +159,19 @@ export class OrganizationRecordIngestAuthority {
       );
     const envelope = this.validate(value, context);
     this.assertEnrolledSubmitter(envelope, context);
-    this.assertAuditedAuthorization(envelope, context);
+    const permissionPilotEligibility = this.assertAuditedAuthorization(
+      envelope,
+      context,
+    );
     return {
       envelope: envelope as unknown as JsonObject,
       envelope_id: envelope.envelope_id,
       event_type: envelope.event_type,
       idempotency_key: envelope.idempotency_key,
       installation_id: envelope.submitter.installation_id,
+      ...(permissionPilotEligibility === undefined
+        ? {}
+        : { permission_pilot_eligibility: permissionPilotEligibility }),
     };
   }
 
@@ -224,13 +269,16 @@ export class OrganizationRecordIngestAuthority {
 
   /**
    * The evidence is only worth what the Authority's own audit says. Every
-   * frozen field is matched against one allowed row; absent and ambiguous both
-   * deny, because "some row might be this evaluation" authorizes nothing.
+   * frozen field is matched against one allowed row. Ordinary evidence that is
+   * absent or ambiguous is terminally invalid. Notice-qualified evidence stays
+   * retryable when its audit proof cannot be established: permanently rejecting
+   * the already-frozen envelope would lose a record because of Authority-owned
+   * pilot state or audit availability.
    */
   private assertAuditedAuthorization(
     envelope: OrganizationRecordEnvelopeV1,
     context: OrganizationRecordInstallationContext,
-  ): void {
+  ): OrganizationRecordPermissionPilotEligibilityProofView | undefined {
     const evidence: OrganizationRecordReviewerAuthorizationV1 =
       envelope.reviewer.authorization;
     const match = this.options.evidence.findAllowedApprovalAuthorizationEvidence({
@@ -248,7 +296,16 @@ export class OrganizationRecordIngestAuthority {
       reason_code: evidence.reason_code,
       evaluated_at: evidence.evaluated_at,
     });
+    const noticeQualified =
+      evidence.reason_code ===
+      ORGANIZATION_PERMISSION_PILOT_NOTICE_REASON_CODE;
     if (match.status !== 'matched') {
+      if (noticeQualified) {
+        throw new AuthorityOperationError(
+          'unavailable',
+          'organization permission pilot authorization evidence is temporarily unavailable',
+        );
+      }
       throw new OrganizationRecordIngestRejectionError(
         'record_authorization_invalid',
         match.status === 'ambiguous'
@@ -256,5 +313,35 @@ export class OrganizationRecordIngestAuthority {
           : 'record authorization evidence matches no audited allowed evaluation',
       );
     }
+    const proof = match.permission_pilot_eligibility;
+    if (proof === undefined) {
+      if (noticeQualified) {
+        throw new AuthorityOperationError(
+          'unavailable',
+          'organization permission pilot authorization evidence is incomplete',
+        );
+      }
+      return undefined;
+    }
+    const health = this.options.permissionPilotHealth;
+    if (health.kind !== 'ready') {
+      throw new AuthorityOperationError(
+        'unavailable',
+        'organization permission pilot activation is temporarily unavailable',
+      );
+    }
+    const activation = health.activation;
+    if (
+      activation.organization_id !== context.organization_id ||
+      proof.policy_id !== activation.policy_id ||
+      proof.presentation_policy_id !== activation.presentation_policy_id ||
+      proof.audience_notice_sha256 !== activation.audience_notice_sha256
+    ) {
+      throw new OrganizationRecordIngestRejectionError(
+        'record_authorization_invalid',
+        'record authorization notice proof does not match the active permission pilot',
+      );
+    }
+    return proof;
   }
 }

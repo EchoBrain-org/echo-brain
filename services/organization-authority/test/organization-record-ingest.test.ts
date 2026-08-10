@@ -1,6 +1,6 @@
 import { Buffer } from 'node:buffer';
 import { canonicalJson, canonicalSha256 } from '@echo-brain/federation-protocol';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   MAX_ORGANIZATION_RECORD_DOCUMENT_BYTES,
   validateOrganizationRecordReceipt,
@@ -10,6 +10,7 @@ import { OrganizationRecordIngestRejectionError } from '../src/application/organ
 import {
   approvalId,
   createRecordIngestFixture,
+  digest,
   recordBrief,
   RECORD_MEETING_ID,
   type RecordIngestFixture,
@@ -22,8 +23,10 @@ afterEach(async () => {
   fixture = undefined;
 });
 
-async function openFixture(): Promise<RecordIngestFixture> {
-  fixture = await createRecordIngestFixture();
+async function openFixture(
+  options: { readonly activatePermissionPilot?: boolean } = {},
+): Promise<RecordIngestFixture> {
+  fixture = await createRecordIngestFixture(options);
   return fixture;
 }
 
@@ -113,6 +116,146 @@ describe('organization record ingest', () => {
 
     expect(second.record_receipt).toEqual(first.record_receipt);
     expect(test.runtime.verifyChain().head_position).toBe(1);
+  });
+
+  it('passes exact marker-bound notice proof into the atomic eligibility append', async () => {
+    const test = await openFixture({ activatePermissionPilot: true });
+    const health = test.runtime.permissionPilotHealth;
+    if (health.kind !== 'ready') throw new Error('expected an active pilot marker');
+    const activation = health.activation;
+    const id = approvalId('approval-pilot-eligible');
+    const proof = {
+      policy_id: activation.policy_id,
+      presentation_policy_id: activation.presentation_policy_id,
+      audience_notice_sha256: activation.audience_notice_sha256,
+      message_presentation_sha256: digest('pilot-message-presentation'),
+    };
+    const envelope = await test.approvalEnvelope({
+      approval_id: id,
+      authorization: test.authorize({
+        approval_id: id,
+        action: 'approve',
+        permission_pilot_eligibility: proof,
+      }),
+    });
+
+    const accepted = await test.runtime.submitRecordEnvelope({
+      record_envelope: envelope,
+    });
+
+    expect(test.runtime.readPermissionPilotEligibleRecords()).toEqual([
+      expect.objectContaining({
+        row: expect.objectContaining({
+          position: accepted.record_receipt.position,
+          record_hash: accepted.record_receipt.record_hash,
+        }),
+        eligibility: proof,
+      }),
+    ]);
+  });
+
+  it('keeps a legacy allowed post-activation record out of the pilot index', async () => {
+    const test = await openFixture({ activatePermissionPilot: true });
+    const id = approvalId('approval-pilot-legacy');
+    const envelope = await test.approvalEnvelope({
+      approval_id: id,
+      authorization: test.authorize({ approval_id: id, action: 'approve' }),
+    });
+
+    await expect(
+      test.runtime.submitRecordEnvelope({ record_envelope: envelope }),
+    ).resolves.toMatchObject({ record_receipt: { position: 1 } });
+    expect(test.runtime.readPermissionPilotEligibleRecords()).toEqual([]);
+  });
+
+  it('keeps a notice-qualified envelope retryable when no activation marker exists', async () => {
+    const test = await openFixture();
+    const id = approvalId('approval-pilot-marker-absent');
+    const proof = {
+      policy_id: 'pilot-member-readable-v1' as const,
+      presentation_policy_id: 'pilot-two-person-audience-v1' as const,
+      audience_notice_sha256: digest('pilot-audience-without-marker'),
+      message_presentation_sha256: digest('pilot-message-without-marker'),
+    };
+    const envelope = await test.approvalEnvelope({
+      approval_id: id,
+      authorization: test.authorize({
+        approval_id: id,
+        action: 'approve',
+        permission_pilot_eligibility: proof,
+      }),
+    });
+
+    expect(
+      await rejectionCode(() =>
+        test.runtime.submitRecordEnvelope({ record_envelope: envelope }),
+      ),
+    ).toEqual({ code: 'unavailable', terminal: false });
+    expect(test.runtime.verifyChain().head_position).toBeNull();
+  });
+
+  it.each(['ambiguous', 'corrupt'] as const)(
+    'keeps a notice-qualified envelope retryable when its audit is %s',
+    async (status) => {
+      const test = await openFixture({ activatePermissionPilot: true });
+      const health = test.runtime.permissionPilotHealth;
+      if (health.kind !== 'ready') throw new Error('expected an active pilot marker');
+      const id = approvalId(`approval-pilot-audit-${status}`);
+      const proof = {
+        policy_id: health.activation.policy_id,
+        presentation_policy_id: health.activation.presentation_policy_id,
+        audience_notice_sha256: health.activation.audience_notice_sha256,
+        message_presentation_sha256: digest(`pilot-message-${status}`),
+      };
+      const envelope = await test.approvalEnvelope({
+        approval_id: id,
+        authorization: test.authorize({
+          approval_id: id,
+          action: 'approve',
+          permission_pilot_eligibility: proof,
+        }),
+      });
+      vi.spyOn(
+        test.integrations,
+        'findAllowedApprovalAuthorizationEvidence',
+      ).mockReturnValue({ status });
+
+      expect(
+        await rejectionCode(() =>
+          test.runtime.submitRecordEnvelope({ record_envelope: envelope }),
+        ),
+      ).toEqual({ code: 'unavailable', terminal: false });
+      expect(test.runtime.verifyChain().head_position).toBeNull();
+    },
+  );
+
+  it('rejects notice proof bound to another audience digest before append', async () => {
+    const test = await openFixture({ activatePermissionPilot: true });
+    const health = test.runtime.permissionPilotHealth;
+    if (health.kind !== 'ready') throw new Error('expected an active pilot marker');
+    const activation = health.activation;
+    const id = approvalId('approval-pilot-other-audience');
+    const envelope = await test.approvalEnvelope({
+      approval_id: id,
+      authorization: test.authorize({
+        approval_id: id,
+        action: 'approve',
+        permission_pilot_eligibility: {
+          policy_id: activation.policy_id,
+          presentation_policy_id: activation.presentation_policy_id,
+          audience_notice_sha256: digest('another-audience'),
+          message_presentation_sha256: digest('pilot-message-presentation'),
+        },
+      }),
+    });
+
+    expect(
+      await rejectionCode(() =>
+        test.runtime.submitRecordEnvelope({ record_envelope: envelope }),
+      ),
+    ).toEqual({ code: 'record_authorization_invalid', terminal: true });
+    expect(test.runtime.readPermissionPilotEligibleRecords()).toEqual([]);
+    expect(test.runtime.verifyChain().head_position).toBeNull();
   });
 
   it('refuses a divergent envelope under a known idempotency key', async () => {

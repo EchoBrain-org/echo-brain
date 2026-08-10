@@ -226,6 +226,43 @@ function surfaceConfig(): AdapterConfig {
   };
 }
 
+const PILOT_NOTICE =
+  "Approving publishes this organization record's decisions, actions, and " +
+  'rationales to Audrey and Zhenye.';
+const PILOT_FALLBACK = `Decision brief awaiting approval. ${PILOT_NOTICE}`;
+const PILOT_PRESENTATION = {
+  schema_version: 1,
+  kind: 'echo-organization-permission-pilot-presentation',
+  policy_id: 'pilot-member-readable-v1',
+  presentation_policy_id: 'pilot-two-person-audience-v1',
+  audience: [
+    {
+      membership_id: 'mem_00000000-0000-4000-8000-000000000001',
+      label: 'Audrey',
+    },
+    {
+      membership_id: 'mem_00000000-0000-4000-8000-000000000002',
+      label: 'Zhenye',
+    },
+  ],
+  notice_text: PILOT_NOTICE,
+  fallback_text: PILOT_FALLBACK,
+} as const;
+
+function pilotSurfaceConfig(): AdapterConfig {
+  const config = surfaceConfig();
+  return {
+    ...config,
+    settings: {
+      ...config.settings,
+      permission_pilot_presentation: {
+        ...PILOT_PRESENTATION,
+        audience: PILOT_PRESENTATION.audience.map((member) => ({ ...member })),
+      },
+    },
+  };
+}
+
 interface FakeSlack {
   fetchImpl: typeof fetch;
   calls: string[];
@@ -313,6 +350,7 @@ function fakeSlack(): FakeSlack {
           ts: '1700.100000',
           message: {
             ts: '1700.100000',
+            text: body['text'],
             ...(state.acknowledgedBlocks === undefined
               ? {}
               : { blocks: state.acknowledgedBlocks }),
@@ -358,11 +396,12 @@ function reverseObjectKeys(value: unknown): unknown {
 function build(
   slack: FakeSlack,
   approvalActionAuthorizer?: ApprovalActionAuthorizer,
+  config: AdapterConfig = surfaceConfig(),
 ) {
   const store = new InMemoryApprovalDecisionStore(
     () => '2026-07-16T21:00:00.000Z',
   );
-  const surface = createSlackReactionsApprovalSurface(surfaceConfig(), {
+  const surface = createSlackReactionsApprovalSurface(config, {
     store,
     ...(approvalActionAuthorizer === undefined
       ? {}
@@ -444,6 +483,45 @@ describe('slack reactions approval surface', () => {
               verbatim: false,
             },
           ],
+        },
+      ],
+    });
+  });
+
+  it('renders the exact activation-bound audience notice and accessibility fallback', async () => {
+    const slack = fakeSlack();
+    const { surface } = build(
+      slack,
+      {
+        authorize: async () => ({
+          allowed: true,
+          evidence: AUTHORIZATION_EVIDENCE,
+        }),
+      },
+      pilotSurfaceConfig(),
+    );
+
+    await surface.review(request());
+
+    expect(postedMessage(slack)).toMatchObject({
+      text: PILOT_FALLBACK,
+      blocks: [
+        {
+          type: 'header',
+          block_id: `echo-approval-${decisionApprovalId(request().processing_key)}-0`,
+        },
+        {
+          type: 'section',
+          block_id: `echo-approval-${decisionApprovalId(request().processing_key)}-audience-v1`,
+          text: {
+            type: 'plain_text',
+            text: PILOT_NOTICE,
+            emoji: false,
+          },
+        },
+        {
+          type: 'context',
+          block_id: `echo-approval-${decisionApprovalId(request().processing_key)}-2`,
         },
       ],
     });
@@ -1028,6 +1106,7 @@ describe('slack reactions approval surface', () => {
         credential_ref: 'file:/tmp/slack-token',
       }).ok,
     ).toBe(true);
+    expect(surface.validateConfig(pilotSurfaceConfig()).ok).toBe(true);
 
     const failures: Array<
       [Partial<AdapterConfig> | Record<string, unknown>, RegExp]
@@ -1057,6 +1136,18 @@ describe('slack reactions approval surface', () => {
           },
         },
         /must differ/,
+      ],
+      [
+        {
+          settings: {
+            ...valid.settings,
+            permission_pilot_presentation: {
+              ...PILOT_PRESENTATION,
+              fallback_text: `${PILOT_FALLBACK} changed`,
+            },
+          },
+        },
+        /exact activation-emitted descriptor/,
       ],
     ];
     for (const [override, expected] of failures) {

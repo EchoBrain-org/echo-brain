@@ -4,7 +4,9 @@ The organization's single append-only record of human-approved decisions, plus
 the deterministic graph derived from it. Implements the append and derive
 halves of
 [`docs/product/2026-08-07-org-decision-record-append-derive-design.md`](../../docs/product/2026-08-07-org-decision-record-append-derive-design.md).
-Retrieval and the permission gatekeeper are deliberately out of scope.
+Generic retrieval and the permission gatekeeper are deliberately out of scope.
+The sole exception is the fixed, bounded two-member pilot reader described
+below.
 
 Like `organization-control-plane`, this is a **library, not a service**, despite
 its `services/` path: no `bin`, no process entry point, no listener. It is
@@ -120,6 +122,29 @@ being skipped — staleness is visible, truth untouched. `drain()` reports
 `halted` in its progress so a startup catch-up cannot return looking healthy.
 The composition root decides whether to make that halt process-fatal.
 
+### Two-member permission-pilot reader
+
+`OrganizationPermissionPilotLog` is the stopped-state writer for one immutable
+activation marker. It binds the exact two-member presentation descriptor and
+notice digest to the verified current log head. An exact command-id/digest
+retry returns the existing marker; a different activation, update, or delete
+is refused.
+
+When Authority verification supplies a notice-qualified eligibility proof,
+the same append transaction creates a strict immutable pointer to the new
+approval row. A missing marker, a pre-activation position, or any policy or
+notice-digest mismatch aborts the entire record append. Ordinary approvals and
+rejections remain valid record rows but never enter this index.
+
+`OrganizationPermissionPilotReader.validateState()` validates the marker and
+every pointer against its canonical log row at startup. The Authority then
+cross-checks those pointers against its immutable integration-audit evidence
+before caching the activation. A failure disables only the pilot; ordinary
+append and derive remain operational. The served read selects at most the 20
+newest qualified pointers in descending internal position and reuses
+`projectOrganizationRecord` in memory. It never trusts the disposable derived
+database or exposes a generic record query.
+
 ## Ports the host wires
 
 | Port | What the host supplies |
@@ -215,9 +240,9 @@ catch-up rather than leaving a stale process looking healthy.
 ## Not here
 
 Route definitions and HTTP hosting (the authority owns both), the member
-submitter (`src/product/organization/`), retrieval, the permission gatekeeper,
-observation-to-principal resolution, interpretive derivation, `correction`
-events, witnessed checkpoints, and Merkle inclusion proofs.
+submitter (`src/product/organization/`), generic retrieval, generic permission
+resolution, observation-to-principal resolution, interpretive derivation,
+`correction` events, witnessed checkpoints, and Merkle inclusion proofs.
 
 ## Tests
 

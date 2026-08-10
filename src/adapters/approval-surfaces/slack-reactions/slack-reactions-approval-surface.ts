@@ -142,6 +142,22 @@ interface SlackReactionsSettings {
   approveReaction: string;
   rejectReaction: string;
   requestTimeoutMs: number | undefined;
+  permissionPilotPresentation:
+    | PermissionPilotPresentationDescriptor
+    | undefined;
+}
+
+export interface PermissionPilotPresentationDescriptor {
+  schema_version: 1;
+  kind: 'echo-organization-permission-pilot-presentation';
+  policy_id: 'pilot-member-readable-v1';
+  presentation_policy_id: 'pilot-two-person-audience-v1';
+  audience: readonly [
+    { readonly membership_id: string; readonly label: string },
+    { readonly membership_id: string; readonly label: string },
+  ];
+  notice_text: string;
+  fallback_text: string;
 }
 
 interface RenderSlackApprovalBlocksInput {
@@ -149,6 +165,7 @@ interface RenderSlackApprovalBlocksInput {
   approvalId?: string;
   approveReaction: string;
   rejectReaction: string;
+  permissionPilotPresentation?: PermissionPilotPresentationDescriptor;
 }
 
 type ReviewerReplyEvidence = JsonObject & {
@@ -163,6 +180,88 @@ function isPlainObject(value: unknown): value is Record<string, unknown> {
 
 function isNonEmptyString(value: unknown): value is string {
   return typeof value === 'string' && value.trim().length > 0;
+}
+
+function exactKeys(
+  value: Record<string, unknown>,
+  keys: readonly string[],
+): boolean {
+  return Object.keys(value).sort().join(',') === [...keys].sort().join(',');
+}
+
+function validPilotAudienceLabel(value: unknown): value is string {
+  return (
+    typeof value === 'string' &&
+    value === value.trim() &&
+    value === value.normalize('NFC') &&
+    [...value].length >= 1 &&
+    [...value].length <= 80 &&
+    /^[\p{L}\p{M}\p{N} .'-]+$/u.test(value)
+  );
+}
+
+function permissionPilotPresentation(
+  value: unknown,
+): PermissionPilotPresentationDescriptor | undefined {
+  if (
+    !isPlainObject(value) ||
+    !exactKeys(value, [
+      'schema_version',
+      'kind',
+      'policy_id',
+      'presentation_policy_id',
+      'audience',
+      'notice_text',
+      'fallback_text',
+    ]) ||
+    value['schema_version'] !== 1 ||
+    value['kind'] !== 'echo-organization-permission-pilot-presentation' ||
+    value['policy_id'] !== 'pilot-member-readable-v1' ||
+    value['presentation_policy_id'] !== 'pilot-two-person-audience-v1' ||
+    !Array.isArray(value['audience']) ||
+    value['audience'].length !== 2
+  ) {
+    return undefined;
+  }
+  const audience = value['audience'];
+  const members = audience.map((entry) => {
+    if (
+      !isPlainObject(entry) ||
+      !exactKeys(entry, ['membership_id', 'label']) ||
+      typeof entry['membership_id'] !== 'string' ||
+      !/^mem_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(
+        entry['membership_id'],
+      ) ||
+      !validPilotAudienceLabel(entry['label'])
+    ) {
+      return undefined;
+    }
+    return {
+      membership_id: entry['membership_id'],
+      label: entry['label'],
+    };
+  });
+  const first = members[0];
+  const second = members[1];
+  if (
+    first === undefined ||
+    second === undefined ||
+    first.membership_id >= second.membership_id ||
+    first.label === second.label
+  ) {
+    return undefined;
+  }
+  const noticeText =
+    "Approving publishes this organization record's decisions, actions, and " +
+    `rationales to ${first.label} and ${second.label}.`;
+  const fallbackText = `Decision brief awaiting approval. ${noticeText}`;
+  if (
+    value['notice_text'] !== noticeText ||
+    value['fallback_text'] !== fallbackText
+  ) {
+    return undefined;
+  }
+  return value as unknown as PermissionPilotPresentationDescriptor;
 }
 
 function settingsFrom(config: AdapterConfig): SlackReactionsSettings {
@@ -190,6 +289,9 @@ function settingsFrom(config: AdapterConfig): SlackReactionsSettings {
       typeof settings['request_timeout_ms'] === 'number'
         ? settings['request_timeout_ms']
         : undefined,
+    permissionPilotPresentation: permissionPilotPresentation(
+      settings['permission_pilot_presentation'],
+    ),
   };
 }
 
@@ -251,7 +353,7 @@ function renderSlackApprovalBlocks(
     ),
   ].filter((value): value is string => value !== undefined);
   const identified = input.approvalId !== undefined;
-  const blocks: JsonValue[] = [
+  const ordinaryBlocks: JsonValue[] = [
     {
       type: 'header',
       text: {
@@ -277,10 +379,28 @@ function renderSlackApprovalBlocks(
       ],
     },
   ];
+  const blocks =
+    identified && input.permissionPilotPresentation !== undefined
+      ? [
+          ...ordinaryBlocks.slice(0, -1),
+          {
+            type: 'section',
+            block_id: `echo-approval-${input.approvalId}-audience-v1`,
+            text: {
+              type: 'plain_text',
+              text: input.permissionPilotPresentation.notice_text,
+              emoji: false,
+            },
+          },
+          ordinaryBlocks[ordinaryBlocks.length - 1] as JsonValue,
+        ]
+      : ordinaryBlocks;
   if (!identified) return blocks;
   return blocks.map((block, index) => ({
     ...(block as JsonObject),
-    block_id: `echo-approval-${input.approvalId}-${index}`,
+    ...((block as JsonObject)['block_id'] === undefined
+      ? { block_id: `echo-approval-${input.approvalId}-${index}` }
+      : {}),
   }));
 }
 
@@ -427,6 +547,7 @@ export class SlackReactionsApprovalSurface implements ApprovalSurfaceAdapter {
       'approve_reaction',
       'reject_reaction',
       'request_timeout_ms',
+      'permission_pilot_presentation',
     ]);
     for (const key of Object.keys(config.settings)) {
       if (!allowedSettings.has(key))
@@ -466,6 +587,14 @@ export class SlackReactionsApprovalSurface implements ApprovalSurfaceAdapter {
     ) {
       errors.push(
         'settings.request_timeout_ms must be 1000-60000 milliseconds',
+      );
+    }
+    if (
+      config.settings['permission_pilot_presentation'] !== undefined &&
+      settings.permissionPilotPresentation === undefined
+    ) {
+      errors.push(
+        'settings.permission_pilot_presentation must be the exact activation-emitted descriptor',
       );
     }
     return { ok: errors.length === 0, errors };
@@ -588,6 +717,12 @@ export class SlackReactionsApprovalSurface implements ApprovalSurfaceAdapter {
       approvalId: staged.approval_id,
       approveReaction: this.settings.approveReaction,
       rejectReaction: this.settings.rejectReaction,
+      ...(this.settings.permissionPilotPresentation === undefined
+        ? {}
+        : {
+            permissionPilotPresentation:
+              this.settings.permissionPilotPresentation,
+          }),
     });
     const posted = await this.apiClient().postMessage(
       {
@@ -805,6 +940,9 @@ export class SlackReactionsApprovalSurface implements ApprovalSurfaceAdapter {
   }
 
   private messageText(brief: DecisionBrief): string {
+    if (this.settings.permissionPilotPresentation !== undefined) {
+      return this.settings.permissionPilotPresentation.fallback_text;
+    }
     const title = brief.meeting.title ?? brief.meeting.id;
     return `Decision brief awaiting approval: ${escapeSlackControlText(
       boundedSingleLine(title, SLACK_HEADER_MAX_CHARS),

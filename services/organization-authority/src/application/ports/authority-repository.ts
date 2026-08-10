@@ -269,5 +269,13 @@ export interface OrganizationAuthorityRepository {
     observedAt: string,
     operation: (transaction: AuthorityWriteTransaction) => T,
   ): T;
+  /** Acquires the write fence, then samples the write time exactly once. */
+  writeAtLinearization<T>(
+    observe: () => string,
+    operation: (
+      transaction: AuthorityWriteTransaction,
+      observedAt: string,
+    ) => T,
+  ): T;
   close(): void;
 }
