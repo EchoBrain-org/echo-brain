@@ -25,10 +25,13 @@ is deliberately out of scope.
    with a cursor, retrieve answers questions. V1 builds append and derive only.
 2. **The log records facts; interpretation is derived.** Litmus test: if
    deleting it loses truth, it is a log event (human acts: approval, rejection).
-   If it can be recomputed from the log, it is derived (atoms, edges, indexes).
+   If it can be recomputed from the log, it is derived (atoms, edges, and
+   provenance indexes; retrieval-time scoring or search indexes are not
+   derive output — per permission invariant 1, scoping precedes scoring).
 3. **Stone/gatekeeper split for access.** Log records and derived nodes carry
    provenance facts (source meeting, participant observations, approver) and
-   approver intent (`restricted` flag). They never carry resolved reader lists
+   an approver-intent slot (`restricted`) — unpopulated by any human in v1,
+   per the protocol default. They never carry resolved reader lists
    and never bind observations to principals. Effective access — including
    observation-to-principal resolution — is computed at query time by a future
    permission layer against current org membership. This prevents stale frozen
@@ -65,7 +68,10 @@ is deliberately out of scope.
 7. **Derive v1 is deterministic only.** Atomization and provenance edges over
    log content alone; no entity resolution, no principal binding, no
    model-proposed links, no model calls, no reads of live authority state.
-   Interpretive linking is a later, separately designed pass.
+   Interpretive linking is a later, separately designed pass — and it does
+   not inherit derive v1's whole-log read scope: per permission invariant 8,
+   the linker's reads are declared and bounded, which may require an
+   audience-partitioned follower rather than this single org-wide cursor.
 8. **One canonicalization.** All wire signing and hashing uses the RFC 8785
    implementation in `packages/federation-protocol` (`canonical-json.ts`,
    `signed-document.ts`). No new canonical-JSON implementation may be added,
@@ -228,11 +234,12 @@ model: custody is member-side, so the member owns the valve), checked by the
 submitter before first building and before sending any envelope of either event
 type, effective until remote append and powerless after (see the erasure
 trap). Receipt absence after a timeout does not prove that remote append did
-not occur. An org-distributed
-exclusion floor (an admin list merged into the same check, subtractive only,
-distributed over the existing authority-to-member channel) is deliberately
-deferred: it touches no frozen surface, so it can be added whenever a real
-org needs it. An unreadable or invalid exclusion config fails closed at
+not occur. (An org-distributed exclusion list was previously sketched here
+as a deferred "subtractive floor"; per the permission architecture's no-deny
+stance, org-authored exclusion of org content is a permission question that,
+if ever needed, becomes an appended act inside the log — not a subtractive
+pre-ingest control, and not a "floor," which now names the visibility
+setting.) An unreadable or invalid exclusion config fails closed at
 startup, before a submitter can be composed or anything can ship. The
 `approvals` CLI projection shows affected nodes as `excluded`;
 the org side has no trace. On success the verified receipt is filed through
@@ -415,13 +422,16 @@ process boundary.
 ## Access policy (recorded, not enforced in v1)
 
 The future gatekeeper reads graph facts plus authority membership at query
-time — including resolving participant observations to principals. Initial
-policy, changeable without touching the log: unflagged atoms resolve
-org-wide; `restricted` atoms resolve from the exact approval-scoped meeting
-snapshot under a separately designed fail-closed participant-eligibility rule;
-the approver is never accidentally excluded by that future rule. Rejection
-events (minimal payload, including any submitted reason) are org-visible as
-acts. The authority's
+time — including resolving participant observations to principals.
+**Superseded 2026-08-09 by the
+[organization permission architecture](2026-08-09-organization-permission-architecture.md):**
+records ingested before the intent affordance exists resolve by the
+organization floor (its dated policy), not by their protocol-default
+`restricted` flag; visibility defaults are set by the per-organization floor,
+not fixed here; and rejection-derived rows resolve by the floor like any
+other unmarked derived row — their reasons are not unconditionally
+org-visible. The approver of a record always retains readability via the
+approval act. The authority's
 `POST /v1/permission-checks` exists but is Slack-event-shaped and
 integrations-gated today; the gatekeeper will need its own request shape.
 Enforcement design is out of scope here.
@@ -635,9 +645,13 @@ guarantees the data they need.
   ([Atlassian](https://www.atlassian.com/blog/company-news/teamwork-graph-team-26),
   [SiliconANGLE](https://siliconangle.com/2026/05/06/atlassian-opens-teamwork-graph-pushes-rovo-agentic-execution-team-26/))
   — validates our envelope carrying provenance and intent from the moment of
-  ingest. Atlassian's public material is architecture-thin (verified
-  principle, undisclosed mechanics); the operable detail in this design comes
-  from Glean, Neo4j, and Zanzibar instead.
+  ingest. (Corrected 2026-08-09: Atlassian's *developer* docs do publish
+  mechanics — the permission object shape, four principal types including a
+  workspace-wide principal, additive AND/OR evaluation, and 1P↔3P user
+  mapping
+  ([Atlassian](https://developer.atlassian.com/platform/teamwork-graph/permissions-and-access-control-lists/))
+  — making it a mechanical precedent for the permission architecture's
+  identity bridge, not principle only.)
 
 ### Build vs adopt (open-source survey 2026-08-08)
 
@@ -712,8 +726,9 @@ zero new runtime dependencies.** Per component:
 2. The derived graph answers: which decisions came from which exact approved
    meeting snapshot, who was listed and with what captured attendance facts,
    who approved (verified principal), what supports what.
-3. `intent` travels end to end (conservative installation defaults in v1; the
-   field, not an approver affordance).
+3. The `intent` field travels end to end as an unpopulated slot (protocol
+   defaults in v1; no approver affordance exists, so it carries no human
+   intent).
 4. A full rebuild reproduces the derived store's canonical content digest
    exactly.
 5. Exact source and meeting exclusions prevent construction or transmission of
