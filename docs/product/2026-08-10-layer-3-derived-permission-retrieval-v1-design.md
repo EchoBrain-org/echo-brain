@@ -63,7 +63,7 @@ The combined predecessor completed the requested sequential process:
 6. minimum-V1 lean-down with focused Fable/Codex verification.
 
 Its final verified content SHA-256 was
-`064ac93553bccde09f2f9af07b21b94a4dcb7e1dd94c7cdf2a0ab6d9a14186f1`.
+[`064ac93553bccde09f2f9af07b21b94a4dcb7e1dd94c7cdf2a0ab6d9a14186f1`](2026-08-10-layer-3-derived-permission-retrieval-v1-design.superseded.md).
 That review remains evidence for the approval proof, exact-membership rule,
 facts-before-text boundary, failure algebra, and final audit-before-bytes
 contract.

@@ -1843,7 +1843,7 @@ list.
 
 The combined predecessor completed sequential Fable/Codex review at content
 SHA-256
-`064ac93553bccde09f2f9af07b21b94a4dcb7e1dd94c7cdf2a0ab6d9a14186f1`.
+[`064ac93553bccde09f2f9af07b21b94a4dcb7e1dd94c7cdf2a0ab6d9a14186f1`](2026-08-10-layer-3-derived-permission-retrieval-v1-design.superseded.md).
 That review established the approval proof, exact membership, facts-before-
 text, final recheck/audit, and failure boundaries retained here.
 

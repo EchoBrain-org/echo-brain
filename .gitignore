@@ -10,9 +10,3 @@ deploy/organization-authority/data/
 *.tgz
 organization-authority-data-*.tar.gz*
 *.log
-
-# Permission-architecture design set.
-docs/product/2026-08-10-layer-3-derived-permission-retrieval-v1-design.md
-docs/product/2026-08-11-architecture-invariant-registry.md
-docs/product/2026-08-11-reviewer-permission-v1-log-facts-design.md
-docs/product/2026-08-11-trusted-permission-aware-searchable-layer-2-design.md
