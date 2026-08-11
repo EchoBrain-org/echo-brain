@@ -16,8 +16,9 @@ behavior.
    [append and derive design](2026-08-07-org-decision-record-append-derive-design.md#design-principles-settled).
    That document calls them settled design principles rather than normative
    permission invariants; this registry gives them stable `AD-*` identifiers.
-3. The reviewer design proposes `INV-11A` and `INV-12` in
-   [A: Reviewer permission V1](2026-08-11-reviewer-permission-v1-log-facts-design.md#invariant-trace-and-proposed-additions).
+3. The founder-confirmed reviewer implementation contract adopts `INV-11A`
+   and `INV-12` in
+   [A: Reviewer permission V1](2026-08-11-reviewer-permission-v1-log-facts-design.md#invariant-trace-and-adopted-additions).
 4. The searchable Layer 2 design proposes `INV-11B` in
    [B: Trusted permission-aware searchable Layer 2](2026-08-11-trusted-permission-aware-searchable-layer-2-design.md#invariant-trace-and-proposed-layer-2-invariant).
 5. The permission-pilot and A/B conformance tables restate the canonical
@@ -33,7 +34,7 @@ Normative and implementation status are independent:
 
 | Field | Values used here | Meaning |
 | --- | --- | --- |
-| Normative status | `constitution`, `approved design`, `proposal` | Whether the rule governs architecture or is awaiting acceptance |
+| Normative status | `constitution`, `approved design`, `approved implementation contract`, `proposal` | Whether the rule governs architecture or is awaiting acceptance |
 | Enforcement scope | `general primitive`, `bounded pilot`, `supporting foundation`, `none` | Where code currently enforces the rule |
 | Implementation status | `implemented at baseline`, `partially implemented`, `not implemented` | Static code/test status at `aaae750` |
 | Live status | `not assessed` | This registry does not infer merge, deployment, or current production state |
@@ -146,12 +147,12 @@ generalized. In particular:
 | `INV-09` | Versioned human intent and policy-consequence surfaces beyond the fixed pilot notice. |
 | `INV-10` | Query-audit visibility, retention, export, expiry, and minimization covering every future served operation without becoming a reverse disclosure surface. |
 
-### Proposed additions
+### Adopted feature invariants and future proposal
 
-| ID | Proposed invariant | Normative status | Current implementation |
+| ID | Invariant | Normative status | Current implementation |
 | --- | --- | --- | --- |
-| `INV-11A` | **Reviewer reads start from append-atomic, text-free facts.** Select only immutable facts co-committed with the verified Layer 1 record; release content only through a request-local binding after current-Person resolution; missing fact/reprojection/binding or broad-store bypass denies. | Proposal in A | Not implemented. The pilot's append-atomic eligibility pointer is a useful pattern, but there is no reviewer-v2 fact table, exact reviewer-membership reader, runtime content capability, or reviewer route. |
-| `INV-12` | **Content-visibility approval binds consequence.** Human-visible consequence, exact actor principal/membership, complete presented release draft, and provider evidence are cryptographically bound over Authority semantic bytes and verified before append. | Proposal in A | Not implemented. Pilot audience notice and message-presentation proofs are foundations only; no envelope v2, frozen release draft, complete reviewer card, or reviewer semantic proof exists. |
+| `INV-11A` | **Reviewer reads start from append-atomic, text-free facts.** Select only immutable facts co-committed with the verified Layer 1 record; release content only through a request-local binding after current-Person resolution; missing fact/reprojection/binding or broad-store bypass denies. | Approved implementation contract in A; founder-confirmed 2026-08-11 | Not implemented. The pilot's append-atomic eligibility pointer is a useful pattern, but there is no reviewer-v2 fact table, exact reviewer-membership reader, runtime content capability, or reviewer route. |
+| `INV-12` | **Content-visibility approval binds consequence.** Human-visible consequence, exact actor principal/membership, complete presented release draft, and provider evidence are cryptographically bound over Authority semantic bytes and verified before append. | Approved implementation contract in A; founder-confirmed 2026-08-11 | Not implemented. Pilot audience notice and message-presentation proofs are foundations only; no envelope v2, frozen release draft, complete reviewer card, or reviewer semantic proof exists. |
 | `INV-11B` | **Permission-aware derived retrieval begins with text-free, rebuildable facts.** Layer 3 creates a request-local scope over provenance-bound facts; protected content/search/embeddings/statistics/cross-record projections require that scope and one versioned generation contract. | Proposal in B | Not implemented. Current Layer 2 is deterministic/rebuildable but text-bearing and broad; it lacks exact membership/policy facts, plane-separated ports, scopes, roots/manifests, generation publication, and search isolation. |
 
 `INV-11A` and `INV-11B` are distinct, complementary invariants for sequenced
