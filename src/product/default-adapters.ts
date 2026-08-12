@@ -8,6 +8,8 @@ import { createSlackReactionsApprovalSurface } from '../adapters/approval-surfac
 import type {
   ApprovalActionAuthorizer,
   ApprovalDecisionStore,
+  OrganizationMemberApprovalActionAuthorizer,
+  OrganizationMemberApprovalPresentationRenderer,
   ReviewerApprovalActionAuthorizer,
   ReviewerApprovalPresentationRenderer,
 } from '../adapters/approval-surfaces/slack-reactions/slack-reactions-approval-surface.js';
@@ -18,8 +20,15 @@ import {
   assertReviewerDisplayName,
   validateReviewerAuthorizationEvidence,
 } from './approval/reviewer-authorization-evidence.js';
+import {
+  validateOrganizationMemberAuthorizationEvidence,
+} from './approval/organization-member-authorization-evidence.js';
 import { assertReviewerPublicationPreflight } from './approval/reviewer-publication-preflight.js';
-import type { ReviewerPublicationMode } from './approval/reviewer-publication-preflight.js';
+import type { ApprovalPublicationMode } from './approval/reviewer-publication-preflight.js';
+import {
+  organizationMemberApprovalPresentationRenderer,
+  organizationMemberApprovalPolicyContractSha256,
+} from './organization/record/adapters/organization-member-presentation-renderer.js';
 import {
   ProductAdapterFactoryRegistry,
   type ProductAdapterFactoryContext,
@@ -66,6 +75,7 @@ export function notifyOnResolve(
   // `store`, so the receiver stays the original object.
   const freeze = store.freezeApprovalPresentationContract;
   const read = store.readApprovalPresentationContract;
+  const readFrozen = store.readFrozenApprovalPresentationContract;
   return {
     ensureRequested: (request) => store.ensureRequested(request),
     recordPublished: (input) => store.recordPublished(input),
@@ -81,6 +91,12 @@ export function notifyOnResolve(
       : {
           readApprovalPresentationContract: (approvalId: string) =>
             read.call(store, approvalId),
+        }),
+    ...(readFrozen === undefined
+      ? {}
+      : {
+          readFrozenApprovalPresentationContract: (approvalId: string) =>
+            readFrozen.call(store, approvalId),
         }),
     resolve: async (input) => {
       const resolved = await store.resolve(input);
@@ -119,17 +135,23 @@ function assertSlackReviewerPublicationPreflight(
 ): void {
   const settings = config.settings as Record<string, unknown>;
   const declared = settings['presentation_mode'];
-  const mode: ReviewerPublicationMode =
+  const mode: ApprovalPublicationMode =
     declared === 'restricted-reviewer-v1'
       ? 'restricted-reviewer-v1'
+      : declared === 'organization-member-readable-v1'
+        ? 'organization-member-readable-v1'
       : declared === 'pilot-member-readable-v1'
         ? 'pilot-member-readable-v1'
         : 'ordinary-v1';
-  const unresolved = store.listUnresolvedApprovalPresentationContracts();
+  const unresolved = store.listUnresolvedFrozenApprovalPresentationContracts();
   // Nothing frozen and nothing to enable: the landed path is untouched.
-  if (mode !== 'restricted-reviewer-v1' && unresolved.every(
+  if (
+    mode !== 'restricted-reviewer-v1' &&
+    mode !== 'organization-member-readable-v1' &&
+    unresolved.every(
     (slot) => slot.contract === null,
-  )) {
+    )
+  ) {
     return;
   }
   const reviewer = (
@@ -172,6 +194,8 @@ function assertSlackReviewerPublicationPreflight(
           : settingString(settings, 'reject_reaction'),
       permission_pilot_presentation_enabled:
         settings['permission_pilot_presentation'] !== undefined,
+      organization_member_policy_contract_sha256:
+        organizationMemberApprovalPolicyContractSha256(),
     },
     unresolved,
   );
@@ -195,6 +219,8 @@ function staticValidationDecisionStore(): ApprovalDecisionStore {
       staticValidationRefusal('the decision node store'),
     readApprovalPresentationContract: () =>
       staticValidationRefusal('the decision node store'),
+    readFrozenApprovalPresentationContract: () =>
+      staticValidationRefusal('the decision node store'),
   };
 }
 
@@ -207,11 +233,37 @@ const inertReviewerApprovalActionAuthorizer: ReviewerApprovalActionAuthorizer = 
     staticValidationRefusal('the reviewer approval authorizer'),
 };
 
+const inertOrganizationMemberApprovalActionAuthorizer: OrganizationMemberApprovalActionAuthorizer = {
+  authorizeOrganizationMemberApproval: () =>
+    staticValidationRefusal('the organization-member approval authorizer'),
+};
+
 const inertReviewerPresentationRenderer: ReviewerApprovalPresentationRenderer = {
   render: () => staticValidationRefusal('the reviewer presentation renderer'),
   credentialFingerprint: () =>
     staticValidationRefusal('the reviewer presentation renderer'),
 };
+
+const inertOrganizationMemberPresentationRenderer: OrganizationMemberApprovalPresentationRenderer = {
+  render: () =>
+    staticValidationRefusal('the organization-member presentation renderer'),
+  credentialFingerprint: () =>
+    staticValidationRefusal('the organization-member presentation renderer'),
+};
+
+function organizationMemberAuthorizer(
+  candidate: ReviewerApprovalActionAuthorizer | undefined,
+): OrganizationMemberApprovalActionAuthorizer | undefined {
+  if (
+    candidate !== undefined &&
+    typeof (
+      candidate as Partial<OrganizationMemberApprovalActionAuthorizer>
+    ).authorizeOrganizationMemberApproval === 'function'
+  ) {
+    return candidate as unknown as OrganizationMemberApprovalActionAuthorizer;
+  }
+  return undefined;
+}
 
 /**
  * Adapters bundled with the standalone package.
@@ -302,10 +354,16 @@ export function createDefaultAdapterFactories(): ProductAdapterFactoryRegistry {
         store: staticValidationDecisionStore(),
         approvalActionAuthorizer: inertApprovalActionAuthorizer,
         reviewerApprovalActionAuthorizer: inertReviewerApprovalActionAuthorizer,
+        organizationMemberApprovalActionAuthorizer:
+          inertOrganizationMemberApprovalActionAuthorizer,
         reviewerAuthorizationEvidenceValidator:
           validateReviewerAuthorizationEvidence,
+        organizationMemberAuthorizationEvidenceValidator:
+          validateOrganizationMemberAuthorizationEvidence,
         reviewerDisplayNameValidator: assertReviewerDisplayName,
         reviewerPresentationRenderer: inertReviewerPresentationRenderer,
+        organizationMemberPresentationRenderer:
+          inertOrganizationMemberPresentationRenderer,
         environment: INERT_ENVIRONMENT,
         credentialResolver: inertCredentialResolver,
       }).validateConfig(config),
@@ -327,7 +385,11 @@ export function createDefaultAdapterFactories(): ProductAdapterFactoryRegistry {
         now: context.now,
         reviewerAuthorizationEvidenceValidator:
           validateReviewerAuthorizationEvidence,
+        organizationMemberAuthorizationEvidenceValidator:
+          validateOrganizationMemberAuthorizationEvidence,
         reviewerDisplayNameValidator: assertReviewerDisplayName,
+        organizationMemberPresentationRenderer:
+          organizationMemberApprovalPresentationRenderer,
         ...(context.approvalActionAuthorizer === undefined
           ? {}
           : {
@@ -338,6 +400,16 @@ export function createDefaultAdapterFactories(): ProductAdapterFactoryRegistry {
           : {
               reviewerApprovalActionAuthorizer:
                 context.reviewerApprovalActionAuthorizer,
+            }),
+        ...(organizationMemberAuthorizer(
+          context.reviewerApprovalActionAuthorizer,
+        ) === undefined
+          ? {}
+          : {
+              organizationMemberApprovalActionAuthorizer:
+                organizationMemberAuthorizer(
+                  context.reviewerApprovalActionAuthorizer,
+                ),
             }),
         ...(context.reviewerPresentationRenderer === undefined
           ? {}

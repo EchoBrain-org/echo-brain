@@ -23,7 +23,11 @@ import {
   validateReviewerAuthorizationEvidence,
 } from './reviewer-authorization-evidence.js';
 import {
+  validateOrganizationMemberAuthorizationEvidence,
+} from './organization-member-authorization-evidence.js';
+import {
   APPROVAL_PRESENTATION_CONTRACT_SURFACE,
+  assertApprovalPresentationContract,
   assertDecisionApprovalPresentationContractEvent,
   assertDecisionOrganizationRecordEnvelopeEvent,
   assertDecisionOrganizationRecordReceipt,
@@ -32,12 +36,13 @@ import {
   assertDecisionRequestedEvent,
   assertDecisionResolvedEvent,
   assertDecisionSourceLocator,
-  assertSlackApprovalPresentationContract,
   decisionApprovalId,
   foldDecisionNode,
+  ORGANIZATION_MEMBER_READABLE_PRESENTATION_MODE,
   ORGANIZATION_RECORD_SURFACE,
+  RESTRICTED_REVIEWER_PRESENTATION_MODE,
+  type ApprovalPresentationContract,
   type DecisionApprovalPresentationContractEvent,
-  type SlackApprovalPresentationContract,
   type DecisionNodeEvents,
   type DecisionNodeState,
   type DecisionOrganizationRecordEnvelopeEvent,
@@ -86,6 +91,8 @@ export interface ResolveDecisionNodeInput {
 
 /** The one resolved surface that carries schema-v2 reviewer evidence. */
 export const RESTRICTED_REVIEWER_SURFACE = 'slack-reviewer-v1';
+export const ORGANIZATION_MEMBER_READABLE_SURFACE =
+  'slack-organization-member-readable-v1';
 
 function isPlainRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
@@ -101,25 +108,31 @@ function sortedJson(value: unknown): unknown {
   );
 }
 
-function assertReviewerResolutionBinding(input: {
+function assertApprovalResolutionBinding(input: {
   approvalId: string;
   status: 'approved' | 'rejected';
   reviewedBy: string;
   reviewedAt: string | undefined;
   surface: string;
   metadata: JsonObject;
-  contract: SlackApprovalPresentationContract | null;
+  contract: ApprovalPresentationContract | null;
 }): void {
   const authorization = (input.metadata as Record<string, unknown>)[
     'authorization'
   ];
-  if (input.surface !== RESTRICTED_REVIEWER_SURFACE) {
+  const evidenceVersion = isPlainRecord(authorization)
+    ? authorization['schema_version']
+    : undefined;
+  const isReviewerSurface = input.surface === RESTRICTED_REVIEWER_SURFACE;
+  const isOrganizationMemberSurface =
+    input.surface === ORGANIZATION_MEMBER_READABLE_SURFACE;
+  if (!isReviewerSurface && !isOrganizationMemberSurface) {
     if (
-      isPlainRecord(authorization) &&
-      authorization['schema_version'] === 2
+      evidenceVersion === 2 ||
+      evidenceVersion === 3
     ) {
       throw new Error(
-        `schema-v2 reviewer evidence requires the reviewer resolution surface (${input.approvalId})`,
+        `schema-v2 or schema-v3 authorization evidence requires its dedicated resolution surface (${input.approvalId})`,
       );
     }
     if (input.reviewedAt !== undefined) {
@@ -137,22 +150,56 @@ function assertReviewerResolutionBinding(input: {
     input.reviewedAt === undefined
   ) {
     throw new Error(
-      `reviewer resolution must carry one approved frozen presentation and exact authority evidence (${input.approvalId})`,
+      `approval resolution must carry one approved frozen presentation and exact authority evidence (${input.approvalId})`,
     );
   }
   assertReviewerDisplayName(input.reviewedBy, 'reviewer resolution reviewed_by');
-  const evidence = validateReviewerAuthorizationEvidence(authorization);
+  if (isReviewerSurface) {
+    if (
+      input.contract.mode !== RESTRICTED_REVIEWER_PRESENTATION_MODE ||
+      evidenceVersion === 3
+    ) {
+      throw new Error(
+        `reviewer resolution has a cross-version evidence or presentation contract (${input.approvalId})`,
+      );
+    }
+    const evidence = validateReviewerAuthorizationEvidence(authorization);
+    if (
+      input.reviewedBy !== input.contract.reviewer_name ||
+      input.reviewedAt !== evidence.evaluated_at ||
+      evidence.approval_id !== input.approvalId ||
+      evidence.reviewer_release_draft_sha256 !==
+        input.contract.reviewer_release_draft_sha256 ||
+      evidence.approval_presentation_sha256 !==
+        input.contract.approval_presentation_sha256
+    ) {
+      throw new Error(
+        `reviewer resolution does not bind its frozen presentation contract (${input.approvalId})`,
+      );
+    }
+    return;
+  }
+  if (
+    input.contract.mode !== ORGANIZATION_MEMBER_READABLE_PRESENTATION_MODE ||
+    evidenceVersion === 2
+  ) {
+    throw new Error(
+      `organization-member resolution has a cross-version evidence or presentation contract (${input.approvalId})`,
+    );
+  }
+  const evidence = validateOrganizationMemberAuthorizationEvidence(authorization);
   if (
     input.reviewedBy !== input.contract.reviewer_name ||
     input.reviewedAt !== evidence.evaluated_at ||
     evidence.approval_id !== input.approvalId ||
-    evidence.reviewer_release_draft_sha256 !==
-      input.contract.reviewer_release_draft_sha256 ||
+    evidence.policy_id !== input.contract.policy_id ||
+    evidence.policy_contract_sha256 !== input.contract.policy_contract_sha256 ||
+    evidence.release_draft_sha256 !== input.contract.release_draft_sha256 ||
     evidence.approval_presentation_sha256 !==
       input.contract.approval_presentation_sha256
   ) {
     throw new Error(
-      `reviewer resolution does not bind its frozen presentation contract (${input.approvalId})`,
+      `organization-member resolution does not bind its frozen presentation contract (${input.approvalId})`,
     );
   }
 }
@@ -293,8 +340,16 @@ export class DecisionNodeStore {
    */
   async freezeApprovalPresentationContract(input: {
     approvalId: string;
-    contract: SlackApprovalPresentationContract;
-  }): Promise<SlackApprovalPresentationContract> {
+    contract: import('./decision-node.js').OrganizationMemberSlackApprovalPresentationContract;
+  }): Promise<import('./decision-node.js').OrganizationMemberSlackApprovalPresentationContract>;
+  async freezeApprovalPresentationContract(input: {
+    approvalId: string;
+    contract: import('./decision-node.js').SlackApprovalPresentationContract;
+  }): Promise<import('./decision-node.js').SlackApprovalPresentationContract>;
+  async freezeApprovalPresentationContract(input: {
+    approvalId: string;
+    contract: ApprovalPresentationContract;
+  }): Promise<ApprovalPresentationContract> {
     await this.initialize();
     const approvalId = this.assertApprovalId(input.approvalId);
     const release = await this.acquireLock(approvalId);
@@ -310,7 +365,7 @@ export class DecisionNodeStore {
         this.nodePath(approvalId),
         PRESENTATION_CONTRACT_FILE,
       );
-      const contract = assertSlackApprovalPresentationContract(
+      const contract = assertApprovalPresentationContract(
         input.contract,
         path,
       );
@@ -352,7 +407,21 @@ export class DecisionNodeStore {
    */
   readApprovalPresentationContract(
     approvalId: string,
-  ): SlackApprovalPresentationContract | null {
+  ): import('./decision-node.js').SlackApprovalPresentationContract | null {
+    const contract = this.readFrozenApprovalPresentationContract(approvalId);
+    return contract?.mode === RESTRICTED_REVIEWER_PRESENTATION_MODE
+      ? contract
+      : null;
+  }
+
+  /**
+   * The complete closed frozen contract for local resolution. The historical
+   * reviewer-only reader remains narrowed so the existing reviewer adapter
+   * cannot reinterpret an organization-member card as its own contract.
+   */
+  readFrozenApprovalPresentationContract(
+    approvalId: string,
+  ): ApprovalPresentationContract | null {
     const checkedApprovalId = this.assertApprovalId(approvalId);
     const nodeDirectory = this.nodePath(checkedApprovalId);
     const path = join(
@@ -388,19 +457,39 @@ export class DecisionNodeStore {
    */
   listUnresolvedApprovalPresentationContracts(): readonly {
     approval_id: string;
-    contract: SlackApprovalPresentationContract | null;
+    contract: import('./decision-node.js').SlackApprovalPresentationContract | null;
+  }[] {
+    return this.listUnresolvedFrozenApprovalPresentationContracts().map(
+      (slot) => ({
+        approval_id: slot.approval_id,
+        contract:
+          slot.contract?.mode === RESTRICTED_REVIEWER_PRESENTATION_MODE
+            ? slot.contract
+            : null,
+      }),
+    );
+  }
+
+  /**
+   * The complete unresolved publication-slot inventory used by composition
+   * startup checks. Unlike the historical reviewer-only reader above, this
+   * never hides a frozen schema-v3 card as an ordinary slot.
+   */
+  listUnresolvedFrozenApprovalPresentationContracts(): readonly {
+    approval_id: string;
+    contract: ApprovalPresentationContract | null;
   }[] {
     if (!existsSync(this.directory)) return [];
     const unresolved: {
       approval_id: string;
-      contract: SlackApprovalPresentationContract | null;
+      contract: ApprovalPresentationContract | null;
     }[] = [];
     for (const entry of readdirSync(this.directory).sort()) {
       if (!APPROVAL_ID_RE.test(entry)) continue;
       const nodeDirectory = join(this.directory, entry);
       if (!existsSync(join(nodeDirectory, REQUESTED_FILE))) continue;
       if (existsSync(join(nodeDirectory, RESOLVED_FILE))) continue;
-      const contract = this.readApprovalPresentationContract(entry);
+      const contract = this.readFrozenApprovalPresentationContract(entry);
       const authorityCardPublished = existsSync(
         join(
           nodeDirectory,
@@ -474,15 +563,17 @@ export class DecisionNodeStore {
       // than sampling the local clock: `evaluated_at` is one value across the
       // decision, the envelope, the audit row, and the resolved event, so a
       // local clock could only disagree with proved evidence.
-      const reviewerResolution = input.surface === RESTRICTED_REVIEWER_SURFACE;
-      assertReviewerResolutionBinding({
+      const approvalResolution =
+        input.surface === RESTRICTED_REVIEWER_SURFACE ||
+        input.surface === ORGANIZATION_MEMBER_READABLE_SURFACE;
+      assertApprovalResolutionBinding({
         approvalId,
         status: input.status,
         reviewedBy: input.reviewedBy,
         reviewedAt: input.reviewedAt,
         surface: input.surface,
         metadata,
-        contract: this.readApprovalPresentationContract(approvalId),
+        contract: this.readFrozenApprovalPresentationContract(approvalId),
       });
       if (current.status !== 'pending') {
         // Same idempotent-retry contract as the pre-store manual queue:
@@ -493,7 +584,7 @@ export class DecisionNodeStore {
           current.status === input.status &&
           current.reviewed_by === input.reviewedBy &&
           current.reason === (input.reason ?? null) &&
-          (!reviewerResolution ||
+          (!approvalResolution ||
             (current.resolved_surface === input.surface &&
               current.reviewed_at === input.reviewedAt &&
               JSON.stringify(sortedJson(current.resolved_metadata)) ===
@@ -863,12 +954,13 @@ export class DecisionNodeStore {
       if (resolved.node_id !== requested.node_id) {
         throw new Error(`decision node resolved identity mismatch: ${approvalId}`);
       }
-      assertReviewerResolutionBinding({
+      assertApprovalResolutionBinding({
         approvalId,
         status: resolved.status,
         reviewedBy: resolved.reviewed_by,
         reviewedAt:
-          resolved.surface === RESTRICTED_REVIEWER_SURFACE
+          resolved.surface === RESTRICTED_REVIEWER_SURFACE ||
+          resolved.surface === ORGANIZATION_MEMBER_READABLE_SURFACE
             ? resolved.reviewed_at
             : undefined,
         surface: resolved.surface,

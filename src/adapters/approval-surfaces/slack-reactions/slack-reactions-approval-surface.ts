@@ -34,6 +34,9 @@ const SURFACE = 'slack';
 const AUTHORITY_MARKED_SURFACE = 'slack-authority-v1';
 /** The one resolved surface that carries schema-v2 reviewer evidence. */
 const RESTRICTED_REVIEWER_SURFACE = 'slack-reviewer-v1';
+/** The one resolved surface that carries schema-v3 organization-member evidence. */
+const ORGANIZATION_MEMBER_READABLE_SURFACE =
+  'slack-organization-member-readable-v1';
 export const DEFAULT_APPROVE_REACTION = 'white_check_mark';
 export const DEFAULT_REJECT_REACTION = 'x';
 const REACTION_NAME_RE = /^[a-z0-9_+-]{1,64}$/;
@@ -144,6 +147,26 @@ export interface ReviewerApprovalPresentationRenderer {
   credentialFingerprint(token: string): string;
 }
 
+/** The exact schema-v3 organization-member card, injected from product code. */
+export interface OrganizationMemberApprovalPresentationRendering {
+  text: string;
+  blocks: readonly unknown[];
+  policy_id: 'organization-member-readable-v1';
+  policy_contract_sha256: string;
+  release_draft_sha256: string;
+  approval_presentation_sha256: string;
+}
+
+export interface OrganizationMemberApprovalPresentationRenderer {
+  render(input: {
+    approvalId: string;
+    brief: DecisionBrief;
+    approveReaction: string;
+    rejectReaction: string;
+  }): OrganizationMemberApprovalPresentationRendering;
+  credentialFingerprint(token: string): string;
+}
+
 /** The one frozen publication contract this adapter reads back. */
 export interface FrozenSlackApprovalPresentationContract {
   schema_version: 1;
@@ -161,6 +184,40 @@ export interface FrozenSlackApprovalPresentationContract {
   reject_reaction: string;
   reviewer_release_draft_sha256: string;
   approval_presentation_sha256: string;
+}
+
+export interface FrozenOrganizationMemberApprovalPresentationContract {
+  schema_version: 1;
+  kind: 'echo-slack-approval-presentation-contract';
+  mode: 'organization-member-readable-v1';
+  adapter_id: string;
+  adapter_instance_id: string;
+  adapter_version: string;
+  channel_id: string;
+  reviewer_slack_user_id: string;
+  reviewer_name: string;
+  credential_ref: string;
+  credential_fingerprint_sha256: string;
+  approve_reaction: string;
+  reject_reaction: string;
+  policy_id: 'organization-member-readable-v1';
+  policy_contract_sha256: string;
+  release_draft_sha256: string;
+  approval_presentation_sha256: string;
+}
+
+type FrozenApprovalPresentationContract =
+  | FrozenSlackApprovalPresentationContract
+  | FrozenOrganizationMemberApprovalPresentationContract;
+
+interface OrganizationMemberApprovalDecisionStore {
+  freezeApprovalPresentationContract(input: {
+    approvalId: string;
+    contract: FrozenOrganizationMemberApprovalPresentationContract;
+  }): Promise<FrozenOrganizationMemberApprovalPresentationContract>;
+  readFrozenApprovalPresentationContract(
+    approvalId: string,
+  ): FrozenApprovalPresentationContract | null;
 }
 
 export interface ReviewerApprovalActionAuthorizationRequest {
@@ -188,6 +245,33 @@ export interface ReviewerApprovalActionAuthorizer {
   ): Promise<ApprovalActionAuthorizationResult>;
 }
 
+export interface OrganizationMemberApprovalActionAuthorizationRequest {
+  approval_id: string;
+  adapter_identity: {
+    kind: 'approval-surface';
+    adapter_id: string;
+    instance_id: string;
+    version: string;
+  };
+  provider_identity: SlackProviderIdentityEvidence;
+  actor: { provider: 'slack'; team_id: string; user_id: string };
+  channel_id: string;
+  message_ts: string;
+  approve_reaction: string;
+  reject_reaction: string;
+  policy_id: 'organization-member-readable-v1';
+  policy_contract_sha256: string;
+  release_draft_sha256: string;
+  approval_presentation_sha256: string;
+}
+
+export interface OrganizationMemberApprovalActionAuthorizer {
+  authorizeOrganizationMemberApproval(
+    request: OrganizationMemberApprovalActionAuthorizationRequest,
+    signal?: AbortSignal,
+  ): Promise<ApprovalActionAuthorizationResult>;
+}
+
 /** Injected by product so the adapter cannot restate the durable proof loosely. */
 export type ReviewerAuthorizationEvidenceValidator = (
   value: unknown,
@@ -206,6 +290,9 @@ export interface ApprovalDecisionStore {
   readApprovalPresentationContract?(
     approvalId: string,
   ): FrozenSlackApprovalPresentationContract | null;
+  readFrozenApprovalPresentationContract?(
+    approvalId: string,
+  ): FrozenApprovalPresentationContract | null;
   recordPublished(input: {
     processingKey: string;
     surface: string;
@@ -227,9 +314,12 @@ export interface SlackReactionsApprovalSurfaceOptions {
   store: ApprovalDecisionStore;
   approvalActionAuthorizer?: ApprovalActionAuthorizer;
   reviewerApprovalActionAuthorizer?: ReviewerApprovalActionAuthorizer;
+  organizationMemberApprovalActionAuthorizer?: OrganizationMemberApprovalActionAuthorizer;
   reviewerAuthorizationEvidenceValidator?: ReviewerAuthorizationEvidenceValidator;
+  organizationMemberAuthorizationEvidenceValidator?: ReviewerAuthorizationEvidenceValidator;
   reviewerDisplayNameValidator?: (value: unknown) => void;
   reviewerPresentationRenderer?: ReviewerApprovalPresentationRenderer;
+  organizationMemberPresentationRenderer?: OrganizationMemberApprovalPresentationRenderer;
   environment?: NodeJS.ProcessEnv;
   credentialResolver?: (reference: string) => string | undefined;
   now?: () => string;
@@ -245,7 +335,8 @@ export interface SlackReactionsApprovalSurfaceOptions {
 export type SlackApprovalPresentationMode =
   | 'ordinary-v1'
   | 'pilot-member-readable-v1'
-  | 'restricted-reviewer-v1';
+  | 'restricted-reviewer-v1'
+  | 'organization-member-readable-v1';
 
 interface SlackReactionsSettings {
   channelId: string;
@@ -408,6 +499,8 @@ function settingsFrom(config: AdapterConfig): SlackReactionsSettings {
     presentationMode:
       settings['presentation_mode'] === 'restricted-reviewer-v1'
         ? 'restricted-reviewer-v1'
+        : settings['presentation_mode'] === 'organization-member-readable-v1'
+          ? 'organization-member-readable-v1'
         : settings['presentation_mode'] === 'pilot-member-readable-v1'
           ? 'pilot-member-readable-v1'
           : 'ordinary-v1',
@@ -607,14 +700,23 @@ export class SlackReactionsApprovalSurface implements ApprovalSurfaceAdapter {
   private readonly reviewerApprovalActionAuthorizer:
     | ReviewerApprovalActionAuthorizer
     | undefined;
+  private readonly organizationMemberApprovalActionAuthorizer:
+    | OrganizationMemberApprovalActionAuthorizer
+    | undefined;
   private readonly reviewerPresentationRenderer:
     | ReviewerApprovalPresentationRenderer
     | undefined;
   private readonly reviewerAuthorizationEvidenceValidator:
     | ReviewerAuthorizationEvidenceValidator
     | undefined;
+  private readonly organizationMemberAuthorizationEvidenceValidator:
+    | ReviewerAuthorizationEvidenceValidator
+    | undefined;
   private readonly reviewerDisplayNameValidator:
     | ((value: unknown) => void)
+    | undefined;
+  private readonly organizationMemberPresentationRenderer:
+    | OrganizationMemberApprovalPresentationRenderer
     | undefined;
   private readonly environment: NodeJS.ProcessEnv;
   private readonly credentialResolver: (
@@ -639,10 +741,16 @@ export class SlackReactionsApprovalSurface implements ApprovalSurfaceAdapter {
     this.approvalActionAuthorizer = options.approvalActionAuthorizer;
     this.reviewerApprovalActionAuthorizer =
       options.reviewerApprovalActionAuthorizer;
+    this.organizationMemberApprovalActionAuthorizer =
+      options.organizationMemberApprovalActionAuthorizer;
     this.reviewerPresentationRenderer = options.reviewerPresentationRenderer;
     this.reviewerAuthorizationEvidenceValidator =
       options.reviewerAuthorizationEvidenceValidator;
+    this.organizationMemberAuthorizationEvidenceValidator =
+      options.organizationMemberAuthorizationEvidenceValidator;
     this.reviewerDisplayNameValidator = options.reviewerDisplayNameValidator;
+    this.organizationMemberPresentationRenderer =
+      options.organizationMemberPresentationRenderer;
     this.environment = options.environment ?? process.env;
     this.credentialResolver =
       options.credentialResolver ??
@@ -699,14 +807,15 @@ export class SlackReactionsApprovalSurface implements ApprovalSurfaceAdapter {
     ) {
       errors.push('settings.presentation_mode is not a supported mode');
     }
-    // Pilot and reviewer presentation configuration are mutually exclusive:
+    // Pilot and either exact Authority presentation are mutually exclusive:
     // startup rejects both being enabled rather than choosing one.
     if (
-      settings.presentationMode === 'restricted-reviewer-v1' &&
+      (settings.presentationMode === 'restricted-reviewer-v1' ||
+        settings.presentationMode === 'organization-member-readable-v1') &&
       settings.permissionPilotPresentation !== undefined
     ) {
       errors.push(
-        'settings.presentation_mode restricted-reviewer-v1 excludes settings.permission_pilot_presentation',
+        'settings.presentation_mode Authority presentation excludes settings.permission_pilot_presentation',
       );
     }
     if (
@@ -757,6 +866,49 @@ export class SlackReactionsApprovalSurface implements ApprovalSurfaceAdapter {
       ) {
         errors.push(
           'restricted-reviewer-v1 requires a store that freezes the publication contract',
+        );
+      }
+    }
+    if (settings.presentationMode === 'organization-member-readable-v1') {
+      if (this.organizationMemberPresentationRenderer === undefined) {
+        errors.push(
+          'organization-member-readable-v1 requires an injected organization-member presentation renderer',
+        );
+      }
+      if (this.organizationMemberApprovalActionAuthorizer === undefined) {
+        errors.push(
+          'organization-member-readable-v1 requires an injected schema-v3 organization-member approval authorizer',
+        );
+      }
+      if (this.organizationMemberAuthorizationEvidenceValidator === undefined) {
+        errors.push(
+          'organization-member-readable-v1 requires an exact schema-v3 organization-member authorization evidence validator',
+        );
+      }
+      if (this.reviewerDisplayNameValidator === undefined) {
+        errors.push(
+          'organization-member-readable-v1 requires an exact reviewer display-name validator',
+        );
+      } else {
+        try {
+          this.reviewerDisplayNameValidator(settings.reviewerName);
+        } catch {
+          errors.push(
+            'settings.reviewer.name must satisfy the organization-member reviewer display-name contract',
+          );
+        }
+      }
+      if (this.approvalActionAuthorizer === undefined) {
+        errors.push(
+          'organization-member-readable-v1 requires the authority-marked rejection path',
+        );
+      }
+      if (
+        this.store.freezeApprovalPresentationContract === undefined ||
+        this.store.readFrozenApprovalPresentationContract === undefined
+      ) {
+        errors.push(
+          'organization-member-readable-v1 requires a store that freezes the complete publication contract',
         );
       }
     }
@@ -1008,13 +1160,120 @@ export class SlackReactionsApprovalSurface implements ApprovalSurfaceAdapter {
     return { contract: frozen, rendering, client: this.reviewerClient(token) };
   }
 
+  /** The schema-v3 organization-member publication contract for one node. */
+  private async frozenOrganizationMemberContract(
+    staged: ApprovalDecisionStoreView,
+    alreadyPublished = false,
+  ): Promise<{
+    contract: FrozenOrganizationMemberApprovalPresentationContract;
+    rendering: OrganizationMemberApprovalPresentationRendering;
+    client: SlackWebApiClient;
+  }> {
+    const renderer = this.organizationMemberPresentationRenderer;
+    const store = this.store as unknown as Partial<OrganizationMemberApprovalDecisionStore>;
+    const freeze = store.freezeApprovalPresentationContract;
+    const read = store.readFrozenApprovalPresentationContract;
+    if (renderer === undefined || freeze === undefined || read === undefined) {
+      throw new AdapterError(
+        'invalid_config',
+        'Slack organization-member publication is not composed',
+        false,
+      );
+    }
+    const stored = read.call(store, staged.approval_id);
+    if (
+      stored !== null &&
+      stored !== undefined &&
+      stored.mode !== 'organization-member-readable-v1'
+    ) {
+      throw new AdapterError(
+        'permanently_rejected',
+        'Slack card was frozen under a different approval presentation mode',
+        false,
+      );
+    }
+    const approveReaction = stored?.approve_reaction ?? this.settings.approveReaction;
+    const rejectReaction = stored?.reject_reaction ?? this.settings.rejectReaction;
+    const rendering = renderer.render({
+      approvalId: staged.approval_id,
+      brief: staged.brief,
+      approveReaction,
+      rejectReaction,
+    });
+    if (stored !== null && stored !== undefined) {
+      if (
+        stored.policy_id !== rendering.policy_id ||
+        stored.policy_contract_sha256 !== rendering.policy_contract_sha256 ||
+        stored.release_draft_sha256 !== rendering.release_draft_sha256 ||
+        stored.approval_presentation_sha256 !==
+          rendering.approval_presentation_sha256
+      ) {
+        throw new AdapterError(
+          'permanently_rejected',
+          'Slack organization-member card no longer reprojects to its frozen presentation contract',
+          false,
+        );
+      }
+      this.assertFrozenAdapterIdentity(stored);
+      const token = this.assertFrozenCredential(stored, renderer);
+      return { contract: stored, rendering, client: this.reviewerClient(token) };
+    }
+    if (alreadyPublished) {
+      throw new AdapterError(
+        'permanently_rejected',
+        'Slack card was published without an organization-member presentation contract',
+        false,
+      );
+    }
+    const credentialRef = this.config.credential_ref;
+    if (!isNonEmptyString(credentialRef)) {
+      throw new AdapterError(
+        'invalid_config',
+        'Slack organization-member publication requires a credential reference',
+        false,
+      );
+    }
+    const token = this.credentialResolver(credentialRef);
+    if (!isNonEmptyString(token)) {
+      throw new AdapterError(
+        'unauthorized',
+        'Slack credentials are unavailable',
+        false,
+      );
+    }
+    const contract: FrozenOrganizationMemberApprovalPresentationContract = {
+      schema_version: 1,
+      kind: 'echo-slack-approval-presentation-contract',
+      mode: 'organization-member-readable-v1',
+      adapter_id: this.identity.adapter_id,
+      adapter_instance_id: this.identity.instance_id,
+      adapter_version: this.identity.version,
+      channel_id: this.settings.channelId,
+      reviewer_slack_user_id: this.settings.reviewerUserId,
+      reviewer_name: this.settings.reviewerName,
+      credential_ref: credentialRef,
+      credential_fingerprint_sha256: renderer.credentialFingerprint(token),
+      approve_reaction: approveReaction,
+      reject_reaction: rejectReaction,
+      policy_id: rendering.policy_id,
+      policy_contract_sha256: rendering.policy_contract_sha256,
+      release_draft_sha256: rendering.release_draft_sha256,
+      approval_presentation_sha256: rendering.approval_presentation_sha256,
+    };
+    const frozen = await freeze.call(store, {
+      approvalId: staged.approval_id,
+      contract,
+    });
+    return { contract: frozen, rendering, client: this.reviewerClient(token) };
+  }
+
   /**
    * A frozen card is never rendered, retried, polled, or authorized under a
    * rotated adapter identity, channel, reviewer, or reaction pair. Recovering
    * one requires restoring the exact old binding, not using the new pair.
    */
   private assertFrozenAdapterIdentity(
-    contract: FrozenSlackApprovalPresentationContract,
+    contract: FrozenApprovalPresentationContract,
   ): void {
     if (
       contract.adapter_id !== this.identity.adapter_id ||
@@ -1030,8 +1289,10 @@ export class SlackReactionsApprovalSurface implements ApprovalSurfaceAdapter {
   }
 
   private assertFrozenCredential(
-    contract: FrozenSlackApprovalPresentationContract,
-    renderer: ReviewerApprovalPresentationRenderer,
+    contract: FrozenApprovalPresentationContract,
+    renderer:
+      | ReviewerApprovalPresentationRenderer
+      | OrganizationMemberApprovalPresentationRenderer,
   ): string {
     if (contract.credential_ref !== this.config.credential_ref) {
       throw new AdapterError(
@@ -1069,6 +1330,8 @@ export class SlackReactionsApprovalSurface implements ApprovalSurfaceAdapter {
     const publicationSurface = this.publicationSurface();
     const reviewerMode =
       this.settings.presentationMode === 'restricted-reviewer-v1';
+    const organizationMemberMode =
+      this.settings.presentationMode === 'organization-member-readable-v1';
     if (
       staged.published.some(
         (entry) => entry.surface === publicationSurface,
@@ -1078,6 +1341,9 @@ export class SlackReactionsApprovalSurface implements ApprovalSurfaceAdapter {
       // rotated credential, adapter identity, or reaction pair fails closed on
       // the next poll instead of being silently reinterpreted.
       if (reviewerMode) await this.frozenReviewerContract(staged, true);
+      if (organizationMemberMode) {
+        await this.frozenOrganizationMemberContract(staged, true);
+      }
       return staged;
     }
     if (reviewerMode) {
@@ -1098,6 +1364,37 @@ export class SlackReactionsApprovalSurface implements ApprovalSurfaceAdapter {
       // Slack returns `text` and `blocks`, not the transport flags, so
       // publication verifies exactly what the provider echoed and relies on
       // the fixed contract constants for the rest.
+      if (
+        posted.blocks === undefined ||
+        !jsonEquivalent(rendering.blocks, posted.blocks)
+      ) {
+        throw new AdapterError(
+          'unknown_outcome',
+          'Slack did not acknowledge the exact approval presentation',
+          true,
+        );
+      }
+      return await this.store.recordPublished({
+        processingKey,
+        surface: publicationSurface,
+        reference: { channel_id: posted.channel, message_ts: posted.ts },
+      });
+    }
+    if (organizationMemberMode) {
+      const { contract, rendering, client } =
+        await this.frozenOrganizationMemberContract(staged);
+      const posted = await client.postMessage(
+        {
+          channel: contract.channel_id,
+          text: rendering.text,
+          blocks: rendering.blocks,
+          strictEvidence: true,
+          mrkdwn: false,
+          unfurlLinks: false,
+          unfurlMedia: false,
+        },
+        operation?.signal,
+      );
       if (
         posted.blocks === undefined ||
         !jsonEquivalent(rendering.blocks, posted.blocks)
@@ -1176,19 +1473,42 @@ export class SlackReactionsApprovalSurface implements ApprovalSurfaceAdapter {
     const centralizedAuthorization =
       this.approvalActionAuthorizer !== undefined;
     const strictEvidence = centralizedAuthorization;
-    // Every reviewer-card read resolves its reaction pair, channel, reviewer,
-    // and credential from the frozen contract. No poll consults current mode
-    // or reaction configuration.
-    const frozenBundle =
-      this.settings.presentationMode === 'restricted-reviewer-v1'
+    // Every exact Authority-card read resolves its reaction pair, channel,
+    // reviewer, and credential from the frozen contract. No poll consults
+    // current mode or reaction configuration.
+    // Resolution is selected from the persisted contract, never the current
+    // adapter mode. A restart under a changed configuration must either have
+    // been refused by composition preflight or retain this card's exact
+    // schema-v2/v3 handling; it must never reinterpret a frozen card as an
+    // ordinary schema-v1 Slack reaction.
+    const readFrozen = this.store.readFrozenApprovalPresentationContract;
+    const persistedContract =
+      readFrozen === undefined
+        // Keep the established reviewer-only port usable for the pinned
+        // schema-v2 surface. Schema-v3 configuration requires the complete
+        // union reader at validation time, so this compatibility branch can
+        // never turn an organization-member card into a legacy approval.
+        ? (this.store.readApprovalPresentationContract?.call(
+            this.store,
+            state.approval_id,
+          ) ?? null)
+        : readFrozen.call(this.store, state.approval_id);
+    const reviewerBundle =
+      persistedContract?.mode === 'restricted-reviewer-v1'
         ? await this.frozenReviewerContract(state, true)
         : null;
-    const frozen = frozenBundle?.contract ?? null;
-    const apiClient = frozenBundle?.client ?? this.apiClient();
+    const organizationMemberBundle =
+      persistedContract?.mode === 'organization-member-readable-v1'
+        ? await this.frozenOrganizationMemberContract(state, true)
+        : null;
+    const frozen =
+      reviewerBundle?.contract ?? organizationMemberBundle?.contract ?? null;
+    const apiClient =
+      reviewerBundle?.client ?? organizationMemberBundle?.client ?? this.apiClient();
     if (frozen !== null && frozen.channel_id !== channel) {
       throw new AdapterError(
         'permanently_rejected',
-        'Slack reviewer card was published in a different channel',
+        'Slack approval card was published in a different channel',
         false,
       );
     }
@@ -1252,9 +1572,33 @@ export class SlackReactionsApprovalSurface implements ApprovalSurfaceAdapter {
       let authorization: ApprovalActionAuthorizationResult;
       try {
         authorization =
-          frozen !== null && approved === 'present'
-            ? // The reviewer approval is the only schema-v2 path. It carries
-              // both frozen content commitments and no content.
+          frozen?.mode === 'organization-member-readable-v1' &&
+          approved === 'present'
+            ? await (
+                this
+                  .organizationMemberApprovalActionAuthorizer as OrganizationMemberApprovalActionAuthorizer
+              ).authorizeOrganizationMemberApproval(
+                {
+                  approval_id: state.approval_id,
+                  adapter_identity: this.identity,
+                  provider_identity: providerIdentity,
+                  actor,
+                  channel_id: channel,
+                  message_ts: messageTs,
+                  approve_reaction: frozen.approve_reaction,
+                  reject_reaction: frozen.reject_reaction,
+                  policy_id: frozen.policy_id,
+                  policy_contract_sha256: frozen.policy_contract_sha256,
+                  release_draft_sha256: frozen.release_draft_sha256,
+                  approval_presentation_sha256:
+                    frozen.approval_presentation_sha256,
+                },
+                operation?.signal,
+              )
+            : frozen?.mode === 'restricted-reviewer-v1' &&
+                approved === 'present'
+              ? // The reviewer approval is the only schema-v2 path. It
+                // carries both frozen content commitments and no content.
               await (
                 this
                   .reviewerApprovalActionAuthorizer as ReviewerApprovalActionAuthorizer
@@ -1275,9 +1619,9 @@ export class SlackReactionsApprovalSurface implements ApprovalSurfaceAdapter {
                 },
                 operation?.signal,
               )
-            : // Reviewer-card rejection continues through the unchanged
-              // schema-v1 request, taking its reaction from the frozen
-              // contract rather than the current local setting.
+              : // Exact-card rejections continue through the unchanged
+                // schema-v1 request, taking its reaction from the frozen
+                // contract rather than the current local setting.
               await authorizer.authorize(
                 {
                   approval_id: state.approval_id,
@@ -1321,11 +1665,14 @@ export class SlackReactionsApprovalSurface implements ApprovalSurfaceAdapter {
       authorizationEvidence = authorization.evidence;
     }
     operation?.signal?.throwIfAborted();
-    // A reviewer approval resolves under its own surface, carries exactly the
-    // schema-v2 evidence, and records the Authority transaction time. Every
-    // other act -- including a reviewer-card rejection -- keeps the landed
+    // Each approval family has one dedicated surface, exact evidence version,
+    // and Authority transaction time. Every rejection keeps the landed
     // schema-v1 surface, metadata shape, and local-clock behavior.
-    const reviewerApproval = frozen !== null && approved === 'present';
+    const reviewerApproval =
+      frozen?.mode === 'restricted-reviewer-v1' && approved === 'present';
+    const organizationMemberApproval =
+      frozen?.mode === 'organization-member-readable-v1' &&
+      approved === 'present';
     if (reviewerApproval) {
       const validateEvidence = this.reviewerAuthorizationEvidenceValidator;
       try {
@@ -1353,13 +1700,47 @@ export class SlackReactionsApprovalSurface implements ApprovalSurfaceAdapter {
         );
       }
     }
-    const reviewerEvaluatedAt = reviewerApproval
+    if (organizationMemberApproval) {
+      const validateEvidence = this.organizationMemberAuthorizationEvidenceValidator;
+      try {
+        if (validateEvidence === undefined) {
+          throw new Error(
+            'organization-member authorization evidence validator is absent',
+          );
+        }
+        const validated = validateEvidence(authorizationEvidence);
+        if (
+          validated['approval_id'] !== state.approval_id ||
+          validated['policy_id'] !== frozen.policy_id ||
+          validated['policy_contract_sha256'] !==
+            frozen.policy_contract_sha256 ||
+          validated['release_draft_sha256'] !== frozen.release_draft_sha256 ||
+          validated['approval_presentation_sha256'] !==
+            frozen.approval_presentation_sha256
+        ) {
+          throw new Error(
+            'organization-member authorization evidence does not bind the frozen approval presentation',
+          );
+        }
+        authorizationEvidence = validated;
+      } catch {
+        throw new AdapterError(
+          'temporarily_unavailable',
+          'Slack organization-member approval evidence is invalid',
+          true,
+        );
+      }
+    }
+    const approvalEvaluatedAt = reviewerApproval || organizationMemberApproval
       ? (authorizationEvidence as JsonObject)['evaluated_at']
       : undefined;
-    if (reviewerApproval && !isNonEmptyString(reviewerEvaluatedAt)) {
+    if (
+      (reviewerApproval || organizationMemberApproval) &&
+      !isNonEmptyString(approvalEvaluatedAt)
+    ) {
       throw new AdapterError(
         'temporarily_unavailable',
-        'Slack reviewer approval evidence has no evaluation time',
+        'Slack approval evidence has no evaluation time',
         true,
       );
     }
@@ -1370,11 +1751,15 @@ export class SlackReactionsApprovalSurface implements ApprovalSurfaceAdapter {
         status: approved === 'present' ? 'approved' : 'rejected',
         reviewedBy: reviewerName,
         reason,
-        surface: reviewerApproval ? RESTRICTED_REVIEWER_SURFACE : SURFACE,
-        ...(reviewerApproval
-          ? { reviewedAt: reviewerEvaluatedAt as string }
+        surface: reviewerApproval
+          ? RESTRICTED_REVIEWER_SURFACE
+          : organizationMemberApproval
+            ? ORGANIZATION_MEMBER_READABLE_SURFACE
+            : SURFACE,
+        ...(reviewerApproval || organizationMemberApproval
+          ? { reviewedAt: approvalEvaluatedAt as string }
           : {}),
-        metadata: reviewerApproval
+        metadata: reviewerApproval || organizationMemberApproval
           ? { authorization: authorizationEvidence as JsonObject }
           : {
               slack: {

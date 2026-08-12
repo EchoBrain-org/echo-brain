@@ -20,6 +20,15 @@ import {
   readReviewerRestrictedEnvelope,
   type ReviewerRestrictedEnvelopeValidator,
 } from './reviewer-policy-fact.js';
+import {
+  createOrganizationMemberEligibilityCapabilityChannel,
+  type OrganizationMemberEligibilityCapabilityChannel,
+  type OrganizationMemberPolicyFactAppendInput,
+} from './organization-member-eligibility-capability.js';
+import {
+  readOrganizationMemberReadableEnvelope,
+  type OrganizationMemberReadableEnvelopeValidator,
+} from './organization-member-policy-fact.js';
 import { OrganizationRecordError } from './errors.js';
 import {
   assertVerifiedEnvelopeIndexBinding,
@@ -47,6 +56,8 @@ export interface OrganizationRecordIngestDependencies {
   readonly clock?: OrganizationRecordClock;
   /** The injected closed reviewer-v2 validator, from Authority composition. */
   readonly reviewerValidator?: ReviewerRestrictedEnvelopeValidator;
+  /** The injected closed schema-v3 validator, from Authority composition. */
+  readonly organizationMemberValidator?: OrganizationMemberReadableEnvelopeValidator;
   /** The in-process derive nudge, fired after each append commit. */
   readonly onAppended?: () => void;
   readonly alert?: OrganizationRecordAlertPort;
@@ -110,6 +121,9 @@ export class OrganizationRecordIngest {
   private readonly reviewerValidator:
     | ReviewerRestrictedEnvelopeValidator
     | undefined;
+  private readonly organizationMemberValidator:
+    | OrganizationMemberReadableEnvelopeValidator
+    | undefined;
   private readonly onAppended: (() => void) | null;
   private readonly alert: OrganizationRecordAlertPort | null;
   /**
@@ -119,6 +133,8 @@ export class OrganizationRecordIngest {
    */
   private readonly reviewerEligibilityChannel: ReviewerEligibilityCapabilityChannel =
     createReviewerEligibilityCapabilityChannel();
+  private readonly organizationMemberEligibilityChannel: OrganizationMemberEligibilityCapabilityChannel =
+    createOrganizationMemberEligibilityCapabilityChannel();
 
   constructor(dependencies: OrganizationRecordIngestDependencies) {
     this.log = dependencies.log;
@@ -126,6 +142,7 @@ export class OrganizationRecordIngest {
     this.receiptSigner = dependencies.receiptSigner;
     this.clock = dependencies.clock ?? systemOrganizationRecordClock;
     this.reviewerValidator = dependencies.reviewerValidator;
+    this.organizationMemberValidator = dependencies.organizationMemberValidator;
     this.onAppended = dependencies.onAppended ?? null;
     this.alert = dependencies.alert ?? null;
   }
@@ -151,6 +168,10 @@ export class OrganizationRecordIngest {
       verified,
       envelopeSha256,
     );
+    const organizationMemberEligibility = this.mintOrganizationMemberEligibility(
+      verified,
+      envelopeSha256,
+    );
 
     const { outcome, row } = this.log.append({
       envelope: verified,
@@ -159,6 +180,9 @@ export class OrganizationRecordIngest {
       ...(reviewerEligibility === null
         ? {}
         : { reviewer_eligibility: reviewerEligibility }),
+      ...(organizationMemberEligibility === null
+        ? {}
+        : { organization_member_eligibility: organizationMemberEligibility }),
     });
 
     if (outcome === 'appended') this.nudge();
@@ -203,6 +227,36 @@ export class OrganizationRecordIngest {
     return { capability, channel: this.reviewerEligibilityChannel };
   }
 
+  private mintOrganizationMemberEligibility(
+    verified: VerifiedOrganizationRecordEnvelope,
+    envelopeSha256: Sha256Digest,
+  ): OrganizationMemberPolicyFactAppendInput | null {
+    const proof = verified.organization_member_readable_proof;
+    if (proof === undefined) return null;
+    const view = readOrganizationMemberReadableEnvelope(
+      verified.envelope,
+      this.organizationMemberValidator,
+    );
+    const capability = this.organizationMemberEligibilityChannel.issue({
+      organization_id: this.log.organization_id,
+      envelope_id: view.envelope_id,
+      idempotency_key: view.idempotency_key,
+      installation_id: view.installation_id,
+      canonical_envelope_sha256: envelopeSha256,
+      policy_contract_sha256: proof.policy_contract_sha256,
+      approving_principal_id: proof.approving_principal_id,
+      approving_membership_id: proof.approving_membership_id,
+      release_draft_sha256: proof.release_draft_sha256,
+      approval_presentation_sha256: proof.approval_presentation_sha256,
+      semantic_intent_sha256: proof.semantic_intent_sha256,
+      message_presentation_sha256: proof.message_presentation_sha256,
+      authorization_audit_event_id: proof.authorization_audit_event_id,
+      authorization_audit_entry_sha256: proof.authorization_audit_entry_sha256,
+      evaluated_at: proof.evaluated_at,
+    });
+    return { capability, channel: this.organizationMemberEligibilityChannel };
+  }
+
   /**
    * Finds the committed row for an exact resend of an already-accepted act.
    *
@@ -231,7 +285,7 @@ export class OrganizationRecordIngest {
       // The reviewer path has to repeat its exact audit lookup, mint and
       // consume a fresh capability, and compare the complete committed fact
       // set before it may hand back the existing row.
-      if (value['schema_version'] === 2) return null;
+      if (value['schema_version'] === 2 || value['schema_version'] === 3) return null;
       const index = organizationRecordEnvelopeIndex(value);
       const row = this.log.findAcceptedRecord(
         index.installation_id,

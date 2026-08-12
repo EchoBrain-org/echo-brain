@@ -1,4 +1,6 @@
-import type { SlackApprovalPresentationContract } from './decision-node.js';
+import type {
+  ApprovalPresentationContract,
+} from './decision-node.js';
 
 /**
  * The local lifecycle preflight for the reviewer publication mode.
@@ -15,13 +17,18 @@ export type ReviewerPublicationMode =
   | 'pilot-member-readable-v1'
   | 'restricted-reviewer-v1';
 
+/** Every supported frozen Slack presentation mode at startup. */
+export type ApprovalPublicationMode =
+  | ReviewerPublicationMode
+  | 'organization-member-readable-v1';
+
 export interface UnresolvedApprovalPresentationSlot {
   readonly approval_id: string;
-  readonly contract: SlackApprovalPresentationContract | null;
+  readonly contract: ApprovalPresentationContract | null;
 }
 
 export interface ReviewerPublicationConfiguration {
-  readonly mode: ReviewerPublicationMode;
+  readonly mode: ApprovalPublicationMode;
   readonly adapter_id: string;
   readonly adapter_instance_id: string;
   readonly adapter_version: string;
@@ -40,6 +47,12 @@ export interface ReviewerPublicationConfiguration {
   readonly reject_reaction: string;
   /** True when pilot presentation configuration is also present. */
   readonly permission_pilot_presentation_enabled: boolean;
+  /**
+   * The one supported schema-v3 policy digest. Composition supplies this
+   * independently of persisted cards so startup can reject a stale or
+   * substituted organization-member contract before any Slack call.
+   */
+  readonly organization_member_policy_contract_sha256?: string;
 }
 
 export interface ReviewerPublicationPreflightResult {
@@ -81,10 +94,10 @@ export function reviewerPublicationPreflight(
     );
   }
 
-  const reviewerSlots = unresolved.filter(
+  const frozenSlots = unresolved.filter(
     (slot) => slot.contract !== null,
   ) as readonly (UnresolvedApprovalPresentationSlot & {
-    contract: SlackApprovalPresentationContract;
+    contract: ApprovalPresentationContract;
   })[];
 
   if (configuration.mode === 'restricted-reviewer-v1') {
@@ -105,10 +118,10 @@ export function reviewerPublicationPreflight(
   // frozen adapter identity, channel, reviewer, credential reference, credential
   // value, or reaction pair is refused. A frozen card fails closed rather than
   // being reinterpreted under the new pair.
-  for (const slot of reviewerSlots) {
-    if (configuration.mode !== 'restricted-reviewer-v1') {
+  for (const slot of frozenSlots) {
+    if (configuration.mode !== slot.contract.mode) {
       refusals.push(
-        `decision ${slot.approval_id} holds an unresolved reviewer presentation contract and cannot start under ${configuration.mode}`,
+        `decision ${slot.approval_id} holds an unresolved ${slot.contract.mode} presentation contract and cannot start under ${configuration.mode}`,
       );
       continue;
     }
@@ -126,6 +139,16 @@ export function reviewerPublicationPreflight(
     ) {
       refusals.push(
         `decision ${slot.approval_id} froze its credential value and it was rotated in place before that card resolved`,
+      );
+    }
+    if (
+      slot.contract.mode === 'organization-member-readable-v1' &&
+      configuration.organization_member_policy_contract_sha256 !== undefined &&
+      slot.contract.policy_contract_sha256 !==
+        configuration.organization_member_policy_contract_sha256
+    ) {
+      refusals.push(
+        `decision ${slot.approval_id} froze an unsupported organization-member policy contract digest`,
       );
     }
   }

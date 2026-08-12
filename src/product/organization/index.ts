@@ -43,6 +43,8 @@ export { OrganizationRecentDecisionsReader } from './recent-decisions-reader.js'
 export type { OrganizationRecentDecisionsReaderOptions } from './recent-decisions-reader.js';
 export { OrganizationReviewerRecentDecisionsReader } from './reviewer-recent-decisions-reader.js';
 export type { OrganizationReviewerRecentDecisionsReaderOptions } from './reviewer-recent-decisions-reader.js';
+export { OrganizationReadableSearchReader } from './readable-search-reader.js';
+export type { OrganizationReadableSearchReaderOptions } from './readable-search-reader.js';
 export { readPrivateOrganizationEnrollmentInvitation } from './enrollment/private-organization-invitation.js';
 export {
   OrganizationClockRollbackError,

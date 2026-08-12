@@ -16,6 +16,10 @@ import {
   verifyOrganizationAuthorityPin,
 } from '@echo-brain/organization-protocol';
 import type { OrganizationAuthorityDescriptorV1 } from '@echo-brain/organization-protocol';
+import {
+  validateStoredReadableSearchActiveGeneration,
+} from '../../../application/readable-search-persistence.js';
+import type { StoredReadableSearchActiveGeneration } from '../../../application/ports/authority-repository.js';
 import { currentAuthoritySchemaVersion } from './migrate.js';
 
 const AUTHORITY_TABLES = Object.freeze([
@@ -30,6 +34,8 @@ const AUTHORITY_TABLES = Object.freeze([
   'authority_metadata',
   'authority_principals',
   'authority_query_decision_audit',
+  'authority_readable_search_active_generation',
+  'authority_readable_search_query_audit',
 ]);
 
 interface MetadataRow {
@@ -65,6 +71,75 @@ export interface AuthorityPermissionPilotAudienceInspection {
   membership_id: string;
   status: string;
   display_name: string;
+}
+
+/**
+ * Reads the one active generation pointer through a read-only SQLite handle.
+ * It rechecks authority identity in the same snapshot as the pointer so a
+ * stopped operator command never needs the write-capable repository.
+ */
+export function readActiveReadableSearchGenerationReadOnly(
+  databasePath: string,
+  binding: { readonly authority_id: string; readonly organization_id: string },
+): StoredReadableSearchActiveGeneration | null {
+  const inspection = inspectAuthorityDatabaseReadOnly(databasePath);
+  if (
+    inspection.authority_id !== binding.authority_id ||
+    inspection.organization_id !== binding.organization_id
+  ) {
+    throw new Error('readable-search authority database differs from config');
+  }
+  assertPrivateAuthorityDatabaseFile(databasePath);
+  const database = new Database(databasePath, {
+    readonly: true,
+    fileMustExist: true,
+  });
+  try {
+    database.pragma('query_only = ON');
+    database.pragma('trusted_schema = OFF');
+    database.exec('BEGIN');
+    try {
+      const metadata = database
+        .prepare(
+          `SELECT authority_id, organization_id
+             FROM authority_metadata WHERE singleton = 1`,
+        )
+        .get() as
+        | { authority_id: string; organization_id: string }
+        | undefined;
+      if (
+        metadata === undefined ||
+        metadata.authority_id !== binding.authority_id ||
+        metadata.organization_id !== binding.organization_id
+      ) {
+        throw new Error(
+          'readable-search authority database changed or differs from config',
+        );
+      }
+      const row = database
+        .prepare(
+          `SELECT organization_id, generation_id, manifest_sha256,
+                  retrieval_contract_sha256, record_head_position,
+                  record_head_hash, published_at
+             FROM authority_readable_search_active_generation
+            WHERE singleton = 1`,
+        )
+        .get();
+      const pointer =
+        row === undefined
+          ? null
+          : validateStoredReadableSearchActiveGeneration(row);
+      database.exec('COMMIT');
+      return pointer;
+    } catch (error) {
+      try {
+        database.exec('ROLLBACK');
+      } catch {}
+      throw error;
+    }
+  } finally {
+    database.close();
+  }
 }
 
 export function assertPrivateAuthorityDatabaseFile(path: string): void {

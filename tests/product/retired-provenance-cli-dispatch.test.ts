@@ -270,6 +270,14 @@ const GATED: readonly (readonly [string, (configPath: string) => string[]])[] =
       "--config",
       c,
     ]],
+    ["organization readable-search", (c) => [
+      "organization",
+      "readable-search",
+      "--config",
+      c,
+      "--query",
+      "Adopt pilot",
+    ]],
     ["organization rebind", (c) => [
       "organization",
       "rebind",

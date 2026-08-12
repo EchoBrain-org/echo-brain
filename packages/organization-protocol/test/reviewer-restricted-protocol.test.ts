@@ -18,6 +18,10 @@ import {
   RESTRICTED_REVIEWER_POLICY_ID,
   RESTRICTED_REVIEWER_RECORD_SURFACE,
   createOrganizationRecordReviewerApprovalEnvelope,
+  createOrganizationRecordOrganizationMemberApprovalEnvelope,
+  organizationMemberReadablePolicyContractSha256,
+  organizationRecordOrganizationMemberIntent,
+  projectOrganizationMemberReadableReleaseDraft,
   organizationAuthorityPinSha256,
   organizationRecordReviewerIntent,
   projectReviewerReleaseDraft,
@@ -531,11 +535,67 @@ describe("reviewer envelope v2", () => {
     );
   });
 
+  it("dispatches a separately closed schema-v3 organization-member approval", async () => {
+    const memberDraft = projectOrganizationMemberReadableReleaseDraft({
+      approval_id: APPROVAL_ID,
+      brief: brief(),
+    });
+    const envelope = await createOrganizationRecordOrganizationMemberApprovalEnvelope(
+      {
+        envelope_id: ENVELOPE_ID,
+        idempotency_key: APPROVAL_ID,
+        payload: {
+          ...approvalPayload(),
+          surface: "slack-organization-member-readable-v1",
+        },
+        reviewer: {
+          principal_id: PRINCIPAL_ID,
+          membership_id: MEMBERSHIP_ID,
+          reviewed_by: "Reviewer One",
+          authorization: {
+            schema_version: 3,
+            kind: "echo-organization-authorization-evidence",
+            policy_id: "organization-member-readable-v1",
+            policy_contract_sha256: organizationMemberReadablePolicyContractSha256(),
+            authority_id: AUTHORITY_ID,
+            organization_id: ORGANIZATION_ID,
+            enrollment_id: ENROLLMENT_ID,
+            installation_id: INSTALLATION_ID,
+            request_id: REQUEST_ID,
+            approval_id: APPROVAL_ID,
+            action: "approve",
+            request_sha256: digestOf("2"),
+            provider_event_sha256: digestOf("3"),
+            allowed: true,
+            reason_code: "active_organization_member_readable_notice_v1",
+            principal_id: PRINCIPAL_ID,
+            membership_id: MEMBERSHIP_ID,
+            adapter_binding_id: BINDING_ID,
+            permission_grant_id: GRANT_ID,
+            evaluated_at: EVALUATED_AT,
+            authorization_audit_event_id: AUDIT_EVENT_ID,
+            authorization_audit_entry_sha256: digestOf("4"),
+            release_draft_sha256: canonicalSha256(memberDraft),
+            approval_presentation_sha256: digestOf("5"),
+            semantic_intent_sha256: semanticSha256,
+            message_presentation_sha256: digestOf("6"),
+          },
+        },
+        intent: organizationRecordOrganizationMemberIntent(semanticSha256),
+        submitter: { installation_id: INSTALLATION_ID, submitted_at: "2026-08-11T12:00:01.000Z" },
+        installation_signing_key: installation.descriptor,
+      },
+      pinnedAuthority,
+      installation.sign,
+    );
+    expect(validateOrganizationRecordEnvelope(envelope).schema_version).toBe(3);
+  });
+
   it("halts unknown kinds and versions instead of falling back", async () => {
     const envelope = await buildValid();
     expect(() =>
       validateOrganizationRecordEnvelope({ ...envelope, schema_version: 3 }),
-    ).toThrow("schema_version is unsupported");
+    ).toThrow();
     expect(() =>
       validateOrganizationRecordEnvelope({
         ...envelope,

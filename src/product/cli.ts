@@ -191,6 +191,7 @@ interface ParsedCommand {
   authorityPin?: string;
   authorityUrl?: string;
   authorityCaPath?: string;
+  query?: string;
 }
 
 const PRODUCT_VERSION = (
@@ -241,6 +242,7 @@ Usage:
   echo-brain organization refresh --config <absolute-path>
   echo-brain organization recent-decisions --config <absolute-path>
   echo-brain organization reviewer-recent-decisions --config <absolute-path>
+  echo-brain organization readable-search --config <absolute-path> --query <text>
   echo-brain organization rebind --config <absolute-path> --authority-url <https-origin> --authority-pin <sha256:...> [--authority-ca <absolute-path>]
   echo-brain organization slack-link-begin --config <absolute-path>
   echo-brain organization slack-link-complete --config <absolute-path> --challenge-attempt <cat_...> --challenge-message-ts <Slack timestamp>  # reads ECHO_SLACK_LINK_CODE
@@ -269,6 +271,7 @@ const OPTIONS = {
   "authority-pin": { type: "string" },
   "authority-url": { type: "string" },
   "authority-ca": { type: "string" },
+  query: { type: "string" },
   "challenge-attempt": { type: "string" },
   "challenge-message-ts": { type: "string" },
   channel: { type: "string" },
@@ -350,6 +353,7 @@ const RULES: Readonly<Record<string, CommandRule>> = {
   "organization refresh": NONE,
   "organization recent-decisions": NONE,
   "organization reviewer-recent-decisions": NONE,
+  "organization readable-search": { accepts: ["query"], requires: ["query"] },
   "organization rebind": {
     accepts: ["authority-url", "authority-pin", "authority-ca"],
     requires: ["authority-url", "authority-pin"],
@@ -388,6 +392,7 @@ const ACTIONS: Readonly<Record<string, readonly string[]>> = {
     "refresh",
     "recent-decisions",
     "reviewer-recent-decisions",
+    "readable-search",
     "rebind",
     "slack-link-begin",
     "slack-link-complete",
@@ -479,6 +484,7 @@ function parseCommand(argv: readonly string[]): ParsedCommand {
     authorityPin: text("authority-pin"),
     authorityUrl: text("authority-url"),
     authorityCaPath: text("authority-ca"),
+    query: text("query"),
   };
 }
 
@@ -1700,7 +1706,8 @@ export async function runProductCli(
       releases =
         action === "status" ||
         action === "recent-decisions" ||
-        action === "reviewer-recent-decisions"
+        action === "reviewer-recent-decisions" ||
+        action === "readable-search"
           ? [
               await lifecycleLock(
                 dependencies,
@@ -1979,6 +1986,10 @@ export async function runProductCli(
             organizationResult = await runtime.recentDecisions.read();
           } else if (action === "reviewer-recent-decisions") {
             organizationResult = await runtime.reviewerRecentDecisions.read();
+          } else if (action === "readable-search") {
+            organizationResult = await runtime.readableSearch.read(
+              parsed.query!,
+            );
           } else {
             const approvalSurface = configuredSlackApprovalSurface(config);
             if (action === "slack-link-begin") {

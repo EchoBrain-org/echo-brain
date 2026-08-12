@@ -40,6 +40,22 @@ export interface VerifiedOrganizationRecordEnvelope {
    * capability and the log writer will not create reviewer facts without one.
    */
   readonly reviewer_restricted_proof?: OrganizationRecordReviewerRestrictedProofView;
+  /** Authority-proved schema-v3 organization-member-readable evidence. */
+  readonly organization_member_readable_proof?: OrganizationRecordOrganizationMemberReadableProofView;
+}
+
+export interface OrganizationRecordOrganizationMemberReadableProofView {
+  readonly policy_id: 'organization-member-readable-v1';
+  readonly policy_contract_sha256: Sha256Digest;
+  readonly approving_principal_id: string;
+  readonly approving_membership_id: string;
+  readonly release_draft_sha256: Sha256Digest;
+  readonly approval_presentation_sha256: Sha256Digest;
+  readonly semantic_intent_sha256: Sha256Digest;
+  readonly message_presentation_sha256: Sha256Digest;
+  readonly authorization_audit_event_id: string;
+  readonly authorization_audit_entry_sha256: Sha256Digest;
+  readonly evaluated_at: string;
 }
 
 /** The closed reviewer proof the Authority's audit lookup returned. */
@@ -233,6 +249,14 @@ export interface DerivedReviewerPolicyExclusionRow {
   readonly outcome: 'deferred-to-permission-aware-retrieval';
 }
 
+export interface DerivedOrganizationMemberPolicyExclusionRow {
+  readonly log_position: number;
+  readonly record_hash: Sha256Digest;
+  readonly envelope_version: 3;
+  readonly policy_id: 'organization-member-readable-v1';
+  readonly outcome: 'deferred-to-permission-aware-retrieval';
+}
+
 /** Everything one log record derives to. Committed as one transaction with the cursor. */
 export interface OrganizationRecordProjection {
   readonly log_position: number;
@@ -248,6 +272,8 @@ export interface OrganizationRecordProjection {
    * other collections are all empty.
    */
   readonly reviewer_policy_exclusions: readonly DerivedReviewerPolicyExclusionRow[];
+  /** Empty except for a valid schema-v3 organization-member-readable approval. */
+  readonly organization_member_policy_exclusions: readonly DerivedOrganizationMemberPolicyExclusionRow[];
 }
 
 export interface OrganizationRecordDeriveProgress {

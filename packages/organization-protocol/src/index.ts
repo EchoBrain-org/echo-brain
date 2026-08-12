@@ -55,6 +55,42 @@ export {
 } from "./record-envelope-v2.js";
 export type { CreateOrganizationRecordReviewerApprovalEnvelopeInput } from "./record-envelope-v2.js";
 export {
+  createOrganizationRecordOrganizationMemberApprovalEnvelope,
+  organizationRecordOrganizationMemberIntent,
+  ORGANIZATION_MEMBER_READABLE_RECORD_ENVELOPE_SCHEMA_VERSION,
+  validateOrganizationRecordOrganizationMemberApprovalEnvelope,
+  verifyOrganizationRecordOrganizationMemberApprovalEnvelope,
+} from "./record-envelope-v3.js";
+export type { CreateOrganizationRecordOrganizationMemberApprovalEnvelopeInput } from "./record-envelope-v3.js";
+export {
+  ORGANIZATION_MEMBER_READABLE_ALLOW_REASON_CODE,
+  ORGANIZATION_MEMBER_READABLE_APPROVAL_PRESENTATION_KIND,
+  ORGANIZATION_MEMBER_READABLE_CONSEQUENCE_TEXT,
+  ORGANIZATION_MEMBER_READABLE_CONSEQUENCE_VERSION,
+  ORGANIZATION_MEMBER_READABLE_ELIGIBLE_MEMBERSHIP_TYPES,
+  ORGANIZATION_MEMBER_READABLE_POLICY_ID,
+  ORGANIZATION_MEMBER_READABLE_PRESENTATION_MODE,
+  ORGANIZATION_MEMBER_READABLE_RECORD_SURFACE,
+  ORGANIZATION_MEMBER_READABLE_REACTION_PATTERN,
+  ORGANIZATION_MEMBER_READABLE_RELEASE_DRAFT_KIND,
+  organizationMemberReadablePolicyContract,
+  organizationMemberReadablePolicyContractSha256,
+} from "./organization-member-readable-policy.js";
+export type { OrganizationMemberReadableItemKindV1 } from "./organization-member-readable-policy.js";
+export {
+  organizationMemberReadableReleaseDraftSha256,
+  organizationMemberReadableSignalIdSha256,
+  projectOrganizationMemberReadableReleaseDraft,
+  validateOrganizationMemberReadableReleaseDraft,
+} from "./organization-member-release-draft.js";
+export type { OrganizationMemberReadableReleaseDraftItemV1, OrganizationMemberReadableReleaseDraftV1 } from "./organization-member-release-draft.js";
+export {
+  organizationMemberReadableApprovalFallbackText,
+  organizationMemberReadableApprovalPresentation,
+  organizationMemberReadableApprovalPresentationSha256,
+} from "./organization-member-approval-presentation.js";
+export type { OrganizationMemberReadableApprovalPresentationV1 } from "./organization-member-approval-presentation.js";
+export {
   MAX_REVIEWER_CARD_TITLE_SCALARS,
   MAX_REVIEWER_ITEM_TEXT_SCALARS,
   MAX_REVIEWER_RELEASE_ITEMS,
@@ -144,6 +180,11 @@ export type {
   OrganizationRecordEvidenceSpanV1,
   OrganizationRecordIntentV1,
   OrganizationRecordMeetingTimeV1,
+  OrganizationRecordOrganizationMemberApprovalEnvelopePayloadV3,
+  OrganizationRecordOrganizationMemberApprovalEnvelopeV3,
+  OrganizationRecordOrganizationMemberAuthorizationV3,
+  OrganizationRecordOrganizationMemberIntentV3,
+  OrganizationRecordOrganizationMemberV3,
   OrganizationRecordParticipantIdentityV1,
   OrganizationRecordParticipantRoleV1,
   OrganizationRecordParticipantV1,

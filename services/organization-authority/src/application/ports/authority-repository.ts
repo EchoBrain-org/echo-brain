@@ -159,6 +159,83 @@ export const REVIEWER_QUERY_AUDIT_OPERATION =
 
 export const REVIEWER_QUERY_AUDIT_RETENTION_DAYS = 180;
 
+export const READABLE_SEARCH_QUERY_AUDIT_OPERATION =
+  'permission.readable_search_decided' as const;
+
+/** Immutable stopped-builder receipt, not a query decision. */
+export const READABLE_SEARCH_GENERATION_PUBLISHED_ACTION =
+  'permission.readable_search_generation_published' as const;
+
+export const READABLE_SEARCH_QUERY_AUDIT_RETENTION_DAYS = 180;
+
+export const READABLE_SEARCH_QUERY_AUDIT_EXPORT_ACTION =
+  'permission.readable_search_query_audit_export_authorized' as const;
+
+export const READABLE_SEARCH_QUERY_AUDIT_EXPIRED_ACTION =
+  'permission.readable_search_query_audit_expired' as const;
+
+export type ReadableSearchQueryAuditControlAction =
+  | typeof READABLE_SEARCH_QUERY_AUDIT_EXPORT_ACTION
+  | typeof READABLE_SEARCH_QUERY_AUDIT_EXPIRED_ACTION;
+
+export type ReadableSearchQueryAuditDecision = 'allow' | 'deny';
+
+export type ReadableSearchQueryAuditReasonCode =
+  | 'active_member_with_scoped_policy_paths'
+  | 'installation_access_expired'
+  | 'inactive_or_unbound_organization_membership'
+  | 'inactive_or_revoked_installation_enrollment';
+
+/** The published pointer has no segment, tuple, count, term, or content data. */
+export interface ReadableSearchActiveGenerationPublication {
+  organization_id: string;
+  generation_id: Sha256Digest;
+  manifest_sha256: Sha256Digest;
+  retrieval_contract_sha256: Sha256Digest;
+  record_head_position: number;
+  record_head_hash: Sha256Digest | null;
+}
+
+export interface StoredReadableSearchActiveGeneration
+  extends ReadableSearchActiveGenerationPublication {
+  published_at: string;
+}
+
+/** The exact prepared response bytes are hashed and then discarded. */
+export interface ReadableSearchQueryAuditEntry {
+  decision: ReadableSearchQueryAuditDecision;
+  reason_code: ReadableSearchQueryAuditReasonCode;
+  detail: JsonValue;
+  response_bytes: Uint8Array;
+}
+
+export interface StoredReadableSearchQueryAuditEntry {
+  audit_sequence: number;
+  occurred_at: string;
+  retain_until: string;
+  operation: typeof READABLE_SEARCH_QUERY_AUDIT_OPERATION;
+  decision: ReadableSearchQueryAuditDecision;
+  reason_code: ReadableSearchQueryAuditReasonCode;
+  detail: JsonValue;
+}
+
+/** Immutable generic-audit receipt for one stopped readable-search command. */
+export interface StoredReadableSearchQueryAuditControlEvent {
+  audit_sequence: number;
+  occurred_at: string;
+  actor_kind: 'admin';
+  action: ReadableSearchQueryAuditControlAction;
+  subject_id: string;
+  detail_json: string;
+}
+
+/** Closed command identity used for retry and cross-action conflict checks. */
+export interface ReadableSearchQueryAuditCommandBinding {
+  command_id: string;
+  action: ReadableSearchQueryAuditControlAction;
+  command_sha256: Sha256Digest;
+}
+
 export type ReviewerQueryAuditDecision = 'allow' | 'deny';
 
 export type ReviewerQueryAuditReasonCode =
@@ -327,6 +404,8 @@ export interface AuthorityReadTransaction {
     limit: number,
   ): StoredAuthorityAuditEntry[];
   adminCounts(now: string): AuthorityAdminCounts;
+  /** `null` is the clean, never-built state; corruption throws. */
+  activeReadableSearchGeneration(): StoredReadableSearchActiveGeneration | null;
 }
 
 export interface AuthorityWriteTransaction extends AuthorityReadTransaction {
@@ -366,6 +445,14 @@ export interface AuthorityWriteTransaction extends AuthorityReadTransaction {
   appendReviewerQueryAudit(
     entry: ReviewerQueryAuditEntry,
   ): StoredReviewerQueryAuditEntry;
+  /** Replaces the singleton pointer at this transaction's own final time. */
+  publishReadableSearchActiveGeneration(
+    publication: ReadableSearchActiveGenerationPublication,
+  ): StoredReadableSearchActiveGeneration;
+  /** Appends one isolated readable-search authorization decision. */
+  appendReadableSearchQueryAudit(
+    entry: ReadableSearchQueryAuditEntry,
+  ): StoredReadableSearchQueryAuditEntry;
 }
 
 export interface InitializeAuthorityRepositoryInput {

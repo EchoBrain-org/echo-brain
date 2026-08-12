@@ -44,6 +44,8 @@ const LOG_TABLES_BY_OBSERVABLE_BEHAVIOR = {
   ],
   'indexes each released item of a verified reviewer-v2 approval, text-free, for its exact approving reviewer':
     ['organization_record_reviewer_policy_fact'],
+  'indexes each released item of a verified organization-member-readable schema-v3 approval, text-free':
+    ['organization_member_readable_policy_fact'],
 } as const;
 
 const DERIVED_TABLES_BY_OBSERVABLE_BEHAVIOR = {
@@ -65,6 +67,8 @@ const DERIVED_TABLES_BY_OBSERVABLE_BEHAVIOR = {
   ],
   'defers a reviewer-v2 approval to permission-aware retrieval without deriving its content':
     ['organization_derived_reviewer_policy_exclusion'],
+  'defers an organization-member-readable schema-v3 approval without deriving its content':
+    ['organization_derived_member_readable_policy_exclusion'],
 } as const;
 
 const LOG_TABLES = Object.values(LOG_TABLES_BY_OBSERVABLE_BEHAVIOR).flat().sort();
@@ -86,6 +90,12 @@ const LOG_MIGRATION_SHA256 = [
   sha256Digest(
     readFileSync(
       new URL('../migrations/log/0003_reviewer_policy_fact.sql', import.meta.url),
+      'utf8',
+    ),
+  ),
+  sha256Digest(
+    readFileSync(
+      new URL('../migrations/log/0004_organization_member_readable_policy_fact.sql', import.meta.url),
       'utf8',
     ),
   ),

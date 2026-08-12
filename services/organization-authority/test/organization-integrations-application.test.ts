@@ -3,19 +3,23 @@ import { describe, expect, it, vi } from 'vitest';
 import {
   organizationSlackLinkChallengeCodeSha256,
   organizationPermissionProviderEventSha256,
+  organizationMemberReadablePermissionProviderEventSha256,
   organizationReviewerPermissionProviderEventSha256,
+  type OrganizationMemberReadablePermissionCheckRequestV3,
   type OrganizationPermissionCheckRequestV1,
   type OrganizationReviewerPermissionCheckRequestV2,
   type OrganizationSlackLinkBeginRequestV1,
   type OrganizationSlackLinkCompleteRequestV1,
 } from '@echo-brain/organization-api';
 import { canonicalSha256 } from '@echo-brain/federation-protocol';
+import { organizationMemberReadablePolicyContractSha256 } from '@echo-brain/organization-protocol';
 import {
   AUTHORITY_FILE_SECRET_BACKEND,
   OrganizationIntegrationsRepository,
   SlackIntegrationProviderError,
   openOrganizationControlDatabase,
   reviewerMessagePresentationPreimage,
+  organizationMemberMessagePresentationPreimage,
   type OrganizationSecretStore,
   type SlackIntegrationProvider,
 } from '@echo-brain/organization-control-plane';
@@ -33,6 +37,7 @@ import {
   reconcileOrganizationIntegrationSecrets,
 } from '../src/composition/organization-integrations.js';
 import type { OrganizationPermissionPilotRuntimeHealth } from '../src/composition/organization-record.js';
+import type { OrganizationRecordingPolicyV1 } from '../src/composition/config.js';
 
 const NOW = '2026-07-29T20:00:00.000Z';
 const AUTHORITY_ID = 'oau_11111111-1111-4111-8111-111111111111';
@@ -289,6 +294,11 @@ function testDependencies(options: {
     approval_presentation_sha256: `sha256:${string}`;
     message_presentation_sha256: `sha256:${string}`;
   };
+  organizationMemberPresentation?: {
+    release_draft_sha256: `sha256:${string}`;
+    approval_presentation_sha256: `sha256:${string}`;
+    message_presentation_sha256: `sha256:${string}`;
+  };
   reviewerCardReactions?: {
     approve_reaction: string;
     reject_reaction: string;
@@ -355,6 +365,12 @@ function testDependencies(options: {
         ...(options.reviewerPresentation === undefined
           ? {}
           : { reviewer_presentation: options.reviewerPresentation }),
+        ...(options.organizationMemberPresentation === undefined
+          ? {}
+          : {
+              organization_member_presentation:
+                options.organizationMemberPresentation,
+            }),
         ...(options.reviewerCardReactions === undefined
           ? {}
           : { reviewer_card_reactions: options.reviewerCardReactions }),
@@ -415,6 +431,7 @@ function testDependencies(options: {
     // The reviewer path resolves the same current-Person status; only the
     // request validator differs.
     checkReviewerPermissionSubject: checkPermissionSubject,
+    checkOrganizationMemberReadablePermissionSubject: checkPermissionSubject,
   } as unknown as OrganizationAuthorityApplication;
   return {
     authority,
@@ -480,6 +497,8 @@ function applicationFixture(
   permissionPilotHealth: OrganizationPermissionPilotRuntimeHealth = {
     kind: 'absent',
   },
+  organizationRecordingPolicy: OrganizationRecordingPolicyV1 | null =
+    ORGANIZATION_MEMBER_RECORDING_POLICY,
 ): {
   repository: OrganizationIntegrationsRepository;
   dependencies: ReturnType<typeof testDependencies>;
@@ -493,6 +512,9 @@ function applicationFixture(
       ...dependencies,
       repository,
       permissionPilotHealth,
+      ...(organizationRecordingPolicy === null
+        ? {}
+        : { organizationRecordingPolicy }),
       now: () => NOW,
     }),
   };
@@ -1563,6 +1585,114 @@ function observedReviewerCard(
   } as const;
 }
 
+const ORGANIZATION_MEMBER_RELEASE_DRAFT_SHA256 = digest(
+  'organization-member-release-draft',
+);
+const ORGANIZATION_MEMBER_PRESENTATION_SHA256 = digest(
+  'organization-member-approval-presentation',
+);
+
+const ORGANIZATION_MEMBER_RECORDING_POLICY: OrganizationRecordingPolicyV1 = {
+  schema_version: 1,
+  kind: 'organization-recording-policy-v1',
+  decision_processor_adapter_instance_id: 'processor-primary',
+  approval_surface_adapter_instance_id: 'primary',
+  presentation_mode: 'organization-member-readable-v1',
+  policy_contract_sha256: organizationMemberReadablePolicyContractSha256(),
+};
+
+function organizationMemberRequest(
+  overrides: Record<string, unknown> = {},
+): OrganizationMemberReadablePermissionCheckRequestV3 {
+  const event = {
+    authority_id: AUTHORITY_ID,
+    authority_key_id: AUTHORITY_KEY_ID,
+    organization_id: ORGANIZATION_ID,
+    enrollment_id: ENROLLMENT_ID,
+    installation_id: INSTALLATION_ID,
+    installation_key_id: INSTALLATION_KEY_ID,
+    provider: 'slack',
+    provider_issuer: 'https://slack.com',
+    provider_tenant_kind: 'workspace',
+    provider_tenant_id: 'T123ABC',
+    provider_enterprise_id: null,
+    provider_connection_subject_id: 'U123BOT',
+    provider_connection_bot_id: 'B123BOT',
+    provider_connection_app_id: 'A123APP',
+    provider_subject_kind: 'human_user',
+    provider_subject_id: 'U123ZHEN',
+    adapter_kind: 'approval-surface',
+    adapter_id: 'slack-reactions',
+    adapter_instance_id: 'primary',
+    adapter_version: '1.0.0',
+    action: 'approve',
+    approval_id: 'f'.repeat(64),
+    channel_id: 'C123ABC',
+    message_ts: '1720000000.123456',
+    reaction_name: 'white_check_mark',
+    approve_reaction: 'white_check_mark',
+    reject_reaction: 'x',
+    policy_id: 'organization-member-readable-v1',
+    policy_contract_sha256: organizationMemberReadablePolicyContractSha256(),
+    release_draft_sha256: ORGANIZATION_MEMBER_RELEASE_DRAFT_SHA256,
+    approval_presentation_sha256: ORGANIZATION_MEMBER_PRESENTATION_SHA256,
+    http_method: 'POST',
+    http_path: '/v1/permission-checks',
+    ...overrides,
+  } as never;
+  return {
+    schema_version: 3,
+    kind: 'echo-organization-permission-check-request',
+    request_id: 'pcr_dddddddd-dddd-4ddd-8ddd-dddddddddddd',
+    ...(event as Record<string, unknown>),
+    provider_event_sha256:
+      organizationMemberReadablePermissionProviderEventSha256(event),
+    requested_at: NOW,
+    integrity: {
+      canonicalization: 'RFC8785',
+      payload_sha256: digest('organization-member-permission-request-payload'),
+      signature_algorithm: 'ecdsa-p256-sha256-der-low-s',
+      key_id: INSTALLATION_KEY_ID,
+      signature_base64: 'QUJDREVGR0g=',
+    },
+  } as unknown as OrganizationMemberReadablePermissionCheckRequestV3;
+}
+
+function organizationMemberMessageSha256(
+  providerEventSha256: string,
+): `sha256:${string}` {
+  return canonicalSha256(
+    organizationMemberMessagePresentationPreimage({
+      provider_event_sha256: providerEventSha256,
+      approval_presentation_sha256: ORGANIZATION_MEMBER_PRESENTATION_SHA256,
+      team_id: 'T123ABC',
+      enterprise_id: null,
+      bot_user_id: 'U123BOT',
+      bot_id: 'B123BOT',
+      app_id: 'A123APP',
+      actor_user_id: 'U123ZHEN',
+      channel_id: 'C123ABC',
+      message_ts: '1720000000.123456',
+      reaction_name: 'white_check_mark',
+    }),
+  );
+}
+
+function observedOrganizationMemberCard(
+  request: OrganizationMemberReadablePermissionCheckRequestV3 =
+    organizationMemberRequest(),
+) {
+  return {
+    organizationMemberPresentation: {
+      release_draft_sha256: ORGANIZATION_MEMBER_RELEASE_DRAFT_SHA256,
+      approval_presentation_sha256: ORGANIZATION_MEMBER_PRESENTATION_SHA256,
+      message_presentation_sha256: organizationMemberMessageSha256(
+        request.provider_event_sha256,
+      ),
+    },
+  } as const;
+}
+
 describe('organization reviewer permission check', () => {
   it('allows the exact reviewer approval and appends one immutable audit row', async () => {
     const dependencies = testDependencies(observedReviewerCard());
@@ -1801,6 +1931,167 @@ describe('organization reviewer permission check', () => {
         reason_code: 'target_membership_inactive',
         authorization_audit_entry_sha256: null,
       });
+    } finally {
+      repository.close();
+    }
+  });
+});
+
+describe('organization-member-readable permission check', () => {
+  it.each([
+    ['absent mapping', null],
+    [
+      'restricted-reviewer mapping',
+      {
+        ...ORGANIZATION_MEMBER_RECORDING_POLICY,
+        presentation_mode: 'restricted-reviewer-v1' as const,
+      },
+    ],
+    [
+      'another approval-surface instance',
+      {
+        ...ORGANIZATION_MEMBER_RECORDING_POLICY,
+        approval_surface_adapter_instance_id: 'secondary',
+      },
+    ],
+    [
+      'another policy digest',
+      {
+        ...ORGANIZATION_MEMBER_RECORDING_POLICY,
+        policy_contract_sha256: digest('other-policy'),
+      },
+    ],
+  ] as const)(
+    'fails closed before provider evidence for %s',
+    async (_label, organizationRecordingPolicy) => {
+      const dependencies = testDependencies(observedOrganizationMemberCard());
+      const { repository, application } = applicationFixture(
+        dependencies,
+        { kind: 'absent' },
+        organizationRecordingPolicy,
+      );
+      try {
+        await activate(application);
+        vi.clearAllMocks();
+        const bindingLookup = vi.spyOn(
+          repository,
+          'findSlackApprovalPermission',
+        );
+        const decision =
+          await application.checkOrganizationMemberReadablePermission(
+            organizationMemberRequest(),
+          );
+
+        expect(decision).toMatchObject({
+          schema_version: 3,
+          allowed: false,
+          reason_code: 'no_active_link_binding_or_grant',
+          principal_id: null,
+          authorization_audit_event_id: null,
+        });
+        expect(dependencies.secrets.read).not.toHaveBeenCalled();
+        expect(dependencies.slack.verifyReaction).not.toHaveBeenCalled();
+        expect(dependencies.slack.verifyHuman).not.toHaveBeenCalled();
+        expect(bindingLookup).not.toHaveBeenCalled();
+      } finally {
+        repository.close();
+      }
+    },
+  );
+
+  it('allows the exact schema-v3 card proof and appends immutable evidence', async () => {
+    const dependencies = testDependencies(observedOrganizationMemberCard());
+    const { repository, application } = applicationFixture(dependencies);
+    try {
+      await activate(application);
+      const command = organizationMemberRequest();
+      const decision =
+        await application.checkOrganizationMemberReadablePermission(command);
+
+      expect(decision).toMatchObject({
+        schema_version: 3,
+        allowed: true,
+        reason_code: 'active_organization_member_readable_notice_v1',
+        policy_contract_sha256: organizationMemberReadablePolicyContractSha256(),
+        principal_id: TARGET_PRINCIPAL_ID,
+        membership_id: TARGET_MEMBERSHIP_ID,
+        release_draft_sha256: ORGANIZATION_MEMBER_RELEASE_DRAFT_SHA256,
+        approval_presentation_sha256: ORGANIZATION_MEMBER_PRESENTATION_SHA256,
+        message_presentation_sha256: organizationMemberMessageSha256(
+          command.provider_event_sha256,
+        ),
+      });
+      expect(decision.authorization_audit_event_id).toMatch(/^aud_/);
+      expect(decision.authorization_audit_entry_sha256).toMatch(
+        /^sha256:[0-9a-f]{64}$/,
+      );
+    } finally {
+      repository.close();
+    }
+  });
+
+  it('does not invent an unauthenticated decision-processor binding for schema-v3', async () => {
+    const dependencies = testDependencies(observedOrganizationMemberCard());
+    const { repository, application } = applicationFixture(
+      dependencies,
+      { kind: 'absent' },
+      {
+        ...ORGANIZATION_MEMBER_RECORDING_POLICY,
+        // This mapping field is deliberately not compared: the closed v3
+        // request/evidence grammar has no signed processor-instance field.
+        decision_processor_adapter_instance_id: 'processor-rotated',
+      },
+    );
+    try {
+      await activate(application);
+      const decision =
+        await application.checkOrganizationMemberReadablePermission(
+          organizationMemberRequest(),
+        );
+      expect(decision.allowed).toBe(true);
+      expect(organizationMemberRequest()).not.toHaveProperty(
+        'decision_processor_adapter_instance_id',
+      );
+    } finally {
+      repository.close();
+    }
+  });
+
+  it('returns a closed denial when the current grant no longer has the frozen reaction pair', async () => {
+    const dependencies = testDependencies(observedOrganizationMemberCard());
+    const { repository, application } = applicationFixture(dependencies);
+    try {
+      await activate(application);
+      const decision = await application.checkOrganizationMemberReadablePermission(
+        organizationMemberRequest({
+          approve_reaction: 'heavy_check_mark',
+          reaction_name: 'heavy_check_mark',
+        }),
+      );
+
+      expect(decision).toMatchObject({
+        schema_version: 3,
+        allowed: false,
+        reason_code: 'no_active_link_binding_or_grant',
+        principal_id: null,
+        authorization_audit_event_id: null,
+        release_draft_sha256: null,
+      });
+      expect(dependencies.slack.verifyReaction).not.toHaveBeenCalled();
+    } finally {
+      repository.close();
+    }
+  });
+
+  it('keeps absent live schema-v3 card proof retryable', async () => {
+    const { repository, application } = applicationFixture(testDependencies());
+    try {
+      await activate(application);
+      await expect(
+        application.checkOrganizationMemberReadablePermission(
+          organizationMemberRequest(),
+        ),
+      ).rejects.toMatchObject({ code: 'unavailable' });
     } finally {
       repository.close();
     }

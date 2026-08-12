@@ -9,17 +9,27 @@ import {
   ORGANIZATION_API_ENROLLMENT_AUTH_SCHEME,
   ORGANIZATION_API_ENROLLMENTS_PATH,
   MAX_ORGANIZATION_REVIEWER_RECENT_DECISIONS_RESPONSE_BYTES,
+  MAX_ORGANIZATION_READABLE_SEARCH_RESPONSE_BYTES,
   ORGANIZATION_API_PERMISSION_CHECKS_PATH,
   ORGANIZATION_API_RECENT_DECISIONS_PATH,
   ORGANIZATION_API_REVIEWER_RECENT_DECISIONS_PATH,
+  ORGANIZATION_API_READABLE_SEARCH_PATH,
   validateOrganizationReviewerPermissionCheckDecision,
   validateOrganizationReviewerPermissionCheckRequest,
+  validateOrganizationMemberReadablePermissionCheckDecision,
+  validateOrganizationMemberReadablePermissionCheckRequest,
   validateOrganizationReviewerRecentDecisionsRequest,
   validateOrganizationReviewerRecentDecisionsResponse,
+  validateOrganizationReadableSearchRequest,
+  validateOrganizationReadableSearchResponse,
   type OrganizationReviewerPermissionCheckDecisionV2,
   type OrganizationReviewerPermissionCheckRequestV2,
+  type OrganizationMemberReadablePermissionCheckDecisionV3,
+  type OrganizationMemberReadablePermissionCheckRequestV3,
   type OrganizationReviewerRecentDecisionsRequestV1,
   type OrganizationReviewerRecentDecisionsResponseV1,
+  type OrganizationReadableSearchRequestV1,
+  type OrganizationReadableSearchResponseV1,
   ORGANIZATION_API_INTERNAL_LIVE_DIRECTIVES_PATH,
   ORGANIZATION_API_INTERNAL_LIVE_RECEIPTS_PATH,
   ORGANIZATION_API_SLACK_LINK_CHALLENGES_PATH,
@@ -391,6 +401,7 @@ export class HttpOrganizationAuthorityClient implements OrganizationAuthorityCli
       | 'permission'
       | 'recent decisions'
       | 'reviewer recent decisions'
+      | 'readable search'
       | 'Slack link'
       | 'internal-live directive'
       | 'internal-live receipt',
@@ -538,6 +549,40 @@ export class HttpOrganizationAuthorityClient implements OrganizationAuthorityCli
       validateOrganizationReviewerPermissionCheckRequest(request),
       'permission',
       validateOrganizationReviewerPermissionCheckDecision,
+      'transport-error',
+      signal,
+      undefined,
+      undefined,
+      true,
+    );
+  }
+
+  readReadableSearch(
+    request: OrganizationReadableSearchRequestV1,
+    signal?: AbortSignal,
+  ): Promise<OrganizationReadableSearchResponseV1> {
+    return this.postJson(
+      ORGANIZATION_API_READABLE_SEARCH_PATH,
+      validateOrganizationReadableSearchRequest(request),
+      'readable search',
+      validateOrganizationReadableSearchResponse,
+      'transport-error',
+      signal,
+      undefined,
+      MAX_ORGANIZATION_READABLE_SEARCH_RESPONSE_BYTES,
+      true,
+    );
+  }
+
+  checkOrganizationMemberPermission(
+    request: OrganizationMemberReadablePermissionCheckRequestV3,
+    signal?: AbortSignal,
+  ): Promise<OrganizationMemberReadablePermissionCheckDecisionV3> {
+    return this.postJson(
+      ORGANIZATION_API_PERMISSION_CHECKS_PATH,
+      validateOrganizationMemberReadablePermissionCheckRequest(request),
+      'permission',
+      validateOrganizationMemberReadablePermissionCheckDecision,
       'transport-error',
       signal,
       undefined,

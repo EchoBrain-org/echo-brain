@@ -20,6 +20,7 @@ import type {
   OrganizationRecordRejectionPayloadV1,
   OrganizationRecordReviewerActionV1,
   OrganizationRecordReviewerApprovalEnvelopeV2,
+  OrganizationRecordOrganizationMemberApprovalEnvelopeV3,
   OrganizationRecordReviewerV1,
   OrganizationRecordSubmitterV1,
 } from "./contracts.js";
@@ -27,6 +28,10 @@ import {
   REVIEWER_RECORD_ENVELOPE_SCHEMA_VERSION,
   assertReviewerApprovalEnvelopeSnapshot,
 } from "./record-envelope-v2.js";
+import {
+  ORGANIZATION_MEMBER_READABLE_RECORD_ENVELOPE_SCHEMA_VERSION,
+  assertOrganizationMemberReadableApprovalEnvelopeSnapshot,
+} from "./record-envelope-v3.js";
 import { RESTRICTED_REVIEWER_ALLOW_REASON_CODE } from "./reviewer-restricted-policy.js";
 import {
   assertOrganizationRecordApprovalPayload,
@@ -449,6 +454,13 @@ export function validateOrganizationRecordEnvelope(
       "organization record reviewer envelope",
     );
     return record as unknown as OrganizationRecordReviewerApprovalEnvelopeV2;
+  }
+  if (record.schema_version === ORGANIZATION_MEMBER_READABLE_RECORD_ENVELOPE_SCHEMA_VERSION) {
+    assertOrganizationMemberReadableApprovalEnvelopeSnapshot(
+      record,
+      "organization record organization-member envelope",
+    );
+    return record as unknown as OrganizationRecordOrganizationMemberApprovalEnvelopeV3;
   }
   if (record.schema_version !== 1) {
     organizationProtocolValidationFailure(

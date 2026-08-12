@@ -22,6 +22,10 @@
     "./reviewer": {
       "types": "./dist/reviewer.d.ts",
       "import": "./dist/reviewer.js"
+    },
+    "./retrieval-build": {
+      "types": "./dist/retrieval-build.d.ts",
+      "import": "./dist/retrieval-build.js"
     }
   },
   "files": [

@@ -59,12 +59,14 @@ export interface VerifySlackReactionInput {
    * carries both is invalid input, never a card to reinterpret.
    */
   expected_reviewer_presentation?: SlackReviewerPresentationExpectation | null;
+  expected_organization_member_presentation?: SlackOrganizationMemberPresentationExpectation | null;
   /**
    * The signed request's provider-event digest. It is a member of the reviewer
    * provider-message preimage, so a proof can never be replayed against a
    * different signed action.
    */
   reviewer_provider_event_sha256?: `sha256:${string}`;
+  organization_member_provider_event_sha256?: `sha256:${string}`;
   /**
    * True when the caller only needs the reviewer card's own frozen reaction
    * pair parsed -- the schema-v1 rejection of a reviewer card. No reviewer
@@ -100,6 +102,19 @@ export interface VerifiedSlackReviewerPresentation {
   approval_presentation_sha256: `sha256:${string}`;
   message_presentation_sha256: `sha256:${string}`;
 }
+export interface SlackOrganizationMemberPresentationExpectation {
+  policy_id: "organization-member-readable-v1";
+  policy_contract_sha256: `sha256:${string}`;
+  approve_reaction: string;
+  reject_reaction: string;
+  release_draft_sha256: `sha256:${string}`;
+  approval_presentation_sha256: `sha256:${string}`;
+}
+export interface VerifiedSlackOrganizationMemberPresentation {
+  release_draft_sha256: `sha256:${string}`;
+  approval_presentation_sha256: `sha256:${string}`;
+  message_presentation_sha256: `sha256:${string}`;
+}
 
 export interface VerifiedSlackReaction {
   observed: boolean;
@@ -113,6 +128,7 @@ export interface VerifiedSlackReaction {
    * verified. A mixed pilot/reviewer presentation never produces it.
    */
   reviewer_presentation?: VerifiedSlackReviewerPresentation;
+  organization_member_presentation?: VerifiedSlackOrganizationMemberPresentation;
   /**
    * The two frozen reaction names parsed from the live reviewer card. The
    * schema-v1 rejection path uses them to prove the card's own pair, and
@@ -590,3 +606,26 @@ export interface RecordedReviewerPermissionDecision {
   authorization_audit_event_id: string;
   authorization_audit_entry_sha256: `sha256:${string}`;
 }
+export interface RecordOrganizationMemberReadablePermissionDecisionInput {
+  organization_id: string; authority_id: string; request_id: string;
+  request_sha256: `sha256:${string}`; provider_event_sha256: `sha256:${string}`;
+  approval_id: string; installation_id: string; approving_principal_id: string;
+  approving_membership_id: string; identity_link_id: string; connection_id: string;
+  adapter_binding_id: string; permission_grant_id: string; evaluated_at: string;
+  authority_evidence_sha256: `sha256:${string}`; detail: Readonly<Record<string, unknown>>;
+}
+export interface RecordedOrganizationMemberReadablePermissionDecision {
+  authorization_audit_event_id: string;
+  authorization_audit_entry_sha256: `sha256:${string}`;
+}
+export interface OrganizationMemberAuthorizationEvidenceExpectation {
+  organization_id: string; installation_id: string; approval_id: string; request_id: string;
+  principal_id: string; membership_id: string; request_sha256: string;
+  provider_event_sha256: string; adapter_binding_id: string; permission_grant_id: string;
+  evaluated_at: string; policy_contract_sha256: string; release_draft_sha256: string;
+  approval_presentation_sha256: string; semantic_intent_sha256: string;
+  message_presentation_sha256: string; authorization_audit_entry_sha256: string;
+}
+export type OrganizationMemberAuthorizationEvidenceMatch =
+  | { readonly status: "matched"; readonly audit_entry_sha256: `sha256:${string}` }
+  | { readonly status: "absent" | "mismatch" | "corrupt" | "unavailable" };

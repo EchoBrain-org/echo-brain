@@ -3,6 +3,8 @@ import type {
   OrganizationAccessLeaseRequestV1,
   OrganizationAccessLeaseResponseV1,
   OrganizationAuthorityDescriptorResponseV1,
+  OrganizationMemberReadablePermissionCheckDecisionV3,
+  OrganizationMemberReadablePermissionCheckRequestV3,
   OrganizationPermissionCheckDecisionV1,
   OrganizationPermissionCheckRequestV1,
   OrganizationRecentDecisionsRequestV1,
@@ -14,6 +16,8 @@ import type {
   OrganizationInternalLiveDirectiveRequestV1,
   OrganizationInternalLiveUpdateDirectiveV1,
   OrganizationInternalLiveUpdateReceiptV1,
+  OrganizationReadableSearchRequestV1,
+  OrganizationReadableSearchResponseV1,
   OrganizationSlackLinkBeginRequestV1,
   OrganizationSlackLinkBeginResponseV1,
   OrganizationSlackLinkCompleteRequestV1,
@@ -57,6 +61,11 @@ export interface OrganizationAuthorityClient {
     signal?: AbortSignal,
   ): Promise<OrganizationReviewerPermissionCheckDecisionV2>;
 
+  checkOrganizationMemberPermission(
+    request: OrganizationMemberReadablePermissionCheckRequestV3,
+    signal?: AbortSignal,
+  ): Promise<OrganizationMemberReadablePermissionCheckDecisionV3>;
+
   readRecentDecisions(
     request: OrganizationRecentDecisionsRequestV1,
     signal?: AbortSignal,
@@ -66,6 +75,11 @@ export interface OrganizationAuthorityClient {
     request: OrganizationReviewerRecentDecisionsRequestV1,
     signal?: AbortSignal,
   ): Promise<OrganizationReviewerRecentDecisionsResponseV1>;
+
+  readReadableSearch(
+    request: OrganizationReadableSearchRequestV1,
+    signal?: AbortSignal,
+  ): Promise<OrganizationReadableSearchResponseV1>;
 
   beginSlackLink(
     request: OrganizationSlackLinkBeginRequestV1,

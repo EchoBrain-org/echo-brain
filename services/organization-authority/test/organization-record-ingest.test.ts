@@ -1,12 +1,15 @@
 import { Buffer } from 'node:buffer';
+import Database from 'better-sqlite3';
 import { canonicalJson, canonicalSha256 } from '@echo-brain/federation-protocol';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   MAX_ORGANIZATION_RECORD_DOCUMENT_BYTES,
   validateOrganizationRecordReceipt,
 } from '@echo-brain/organization-protocol';
+import { OrganizationRecordLogStore } from '@echo-brain/organization-record/append';
 import { AuthorityOperationError } from '../src/domain/errors.js';
 import { OrganizationRecordIngestRejectionError } from '../src/application/organization-record-ingest.js';
+import { openOrganizationRecordRuntime } from '../src/composition/organization-record.js';
 import {
   approvalId,
   createRecordIngestFixture,
@@ -52,6 +55,119 @@ function differentOpaqueId(value: string): string {
 }
 
 describe('organization record ingest', () => {
+  it('admits v3 only after real audit reproof, atomically facts it, and re-admits it on restart', async () => {
+    const test = await openFixture();
+    const editedId = approvalId('organization-member-edited-card');
+    const edited = await test.organizationMemberApprovalEnvelope({
+      approval_id: editedId,
+    });
+    const editedCard = JSON.parse(canonicalJson(edited)) as typeof edited;
+    editedCard.payload.brief.decisions[0]!.text = 'Edited after approval.';
+    await expect(
+      test.runtime.submitRecordEnvelope({ record_envelope: editedCard }),
+    ).rejects.toBeInstanceOf(OrganizationRecordIngestRejectionError);
+
+    const mismatchId = approvalId('organization-member-audit-mismatch');
+    const auditMismatch = await test.organizationMemberApprovalEnvelope({
+      approval_id: mismatchId,
+    });
+    const auditLookup = vi.spyOn(
+      test.integrations,
+      'findAllowedOrganizationMemberAuthorizationEvidenceById',
+    );
+    auditLookup.mockReturnValue({ status: 'mismatch' });
+    await expect(
+      test.runtime.submitRecordEnvelope({ record_envelope: auditMismatch }),
+    ).rejects.toMatchObject({ code: 'record_authorization_invalid' });
+    auditLookup.mockRestore();
+    const unadmittedLog = new Database(test.recordLogDatabasePath, {
+      readonly: true,
+    });
+    try {
+      expect(
+        unadmittedLog
+          .prepare('SELECT count(*) AS count FROM organization_record_log')
+          .get(),
+      ).toEqual({ count: 0 });
+      expect(
+        unadmittedLog
+          .prepare(
+            'SELECT count(*) AS count FROM organization_member_readable_policy_fact',
+          )
+          .get(),
+      ).toEqual({ count: 0 });
+    } finally {
+      unadmittedLog.close();
+    }
+
+    const admittedId = approvalId('organization-member-admitted');
+    const admitted = await test.organizationMemberApprovalEnvelope({
+      approval_id: admittedId,
+    });
+    const reproof = vi.spyOn(
+      test.integrations,
+      'findAllowedOrganizationMemberAuthorizationEvidenceById',
+    );
+    const first = await test.runtime.submitRecordEnvelope({
+      record_envelope: admitted,
+    });
+    const duplicate = await test.runtime.submitRecordEnvelope({
+      record_envelope: admitted,
+    });
+    expect(first.record_receipt.position).toBe(1);
+    expect(duplicate.record_receipt.position).toBe(1);
+    expect(reproof).toHaveBeenCalledTimes(2);
+
+    await test.runtime.close();
+    const log = OrganizationRecordLogStore.open(test.recordLogDatabasePath, {
+      organization_id: test.organizationId,
+      authority_id: test.authorityId,
+    });
+    try {
+      expect(
+        log.database
+          .prepare('SELECT count(*) AS count FROM organization_record_log')
+          .get(),
+      ).toEqual({ count: 1 });
+      expect(
+        log.database
+          .prepare(
+            'SELECT log_position, atom_order FROM organization_member_readable_policy_fact ORDER BY atom_order',
+          )
+          .all(),
+      ).toEqual([{ log_position: 1, atom_order: 0 }]);
+    } finally {
+      log.close();
+    }
+
+    const restarted = await openOrganizationRecordRuntime({
+      authority: test.application,
+      evidence: test.integrations,
+      organization_id: test.organizationId,
+      authority_id: test.authorityId,
+      record_log_database_path: test.recordLogDatabasePath,
+      record_derived_database_path: test.recordDerivedDatabasePath,
+      alert: () => undefined,
+    });
+    try {
+      expect(restarted.organizationMemberReadableHealth).toMatchObject({
+        kind: 'ready',
+        readiness: {
+          organization_member_records_verified: 1,
+          organization_member_facts_verified: 1,
+          audit_rows_revalidated: 1,
+        },
+      });
+      expect(restarted.verifyChain()).toMatchObject({
+        head_position: 1,
+        records_verified: 1,
+        failures: [],
+      });
+    } finally {
+      await restarted.close();
+    }
+  });
+
   it('accepts one approval and returns a signed receipt with exact fields', async () => {
     const test = await openFixture();
     const id = approvalId('approval-accepted');

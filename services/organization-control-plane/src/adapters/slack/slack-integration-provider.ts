@@ -4,6 +4,8 @@ import {
 } from '../../application/reviewer-restricted-policy.js';
 import { canonicalSha256 } from '../../canonical/canonical-json.js';
 import { reconstructReviewerCard } from './reviewer-card-grammar.js';
+import { reconstructOrganizationMemberCard } from './organization-member-card-grammar.js';
+import { ORGANIZATION_MEMBER_READABLE_POLICY_ID, organizationMemberMessagePresentationPreimage } from '../../application/organization-member-readable-policy.js';
 import type {
   ObservedSlackIdentityLinkChallenge,
   ObserveSlackIdentityLinkChallengeInput,
@@ -727,6 +729,17 @@ export class SlackWebIntegrationProvider implements SlackIntegrationProvider {
       );
     }
     const reviewerExpectation = input.expected_reviewer_presentation ?? null;
+    const memberExpectation = input.expected_organization_member_presentation ?? null;
+    if (memberExpectation !== null) {
+      if (reviewerExpectation !== null || input.expected_presentation !== null) throw new SlackIntegrationProviderError('Slack approval presentation expectation is invalid', 'invalid_response');
+      const reconstructed = reconstructOrganizationMemberCard({ approval_id: input.approval_id, blocks, fallback_text: message['text'] });
+      const identityVerified = input.expected_app_id !== null && connection.app_id === input.expected_app_id && message['app_id'] === input.expected_app_id && message['edited'] === undefined;
+      if (reconstructed === null || !identityVerified || memberExpectation.policy_id !== ORGANIZATION_MEMBER_READABLE_POLICY_ID || memberExpectation.approve_reaction !== reconstructed.approve_reaction || memberExpectation.reject_reaction !== reconstructed.reject_reaction || memberExpectation.release_draft_sha256 !== reconstructed.release_draft_sha256 || memberExpectation.approval_presentation_sha256 !== reconstructed.approval_presentation_sha256) throw new SlackIntegrationProviderError('Slack organization-member card does not match signed commitments', 'identity_mismatch');
+      const event = input.organization_member_provider_event_sha256;
+      if (event === undefined || !SHA256_DIGEST.test(event)) throw new SlackIntegrationProviderError('Slack organization-member verification input is invalid', 'invalid_response');
+      const observed = this.observedDecisiveReaction(message, input.reaction_name, input.opposite_reaction_name, input.user_id);
+      return Object.freeze({ observed, presentation_candidate_observed: true, message_presentation_sha256: null, ...(observed ? { organization_member_presentation: Object.freeze({ release_draft_sha256: reconstructed.release_draft_sha256, approval_presentation_sha256: reconstructed.approval_presentation_sha256, message_presentation_sha256: canonicalSha256(organizationMemberMessagePresentationPreimage({ provider_event_sha256: event, approval_presentation_sha256: reconstructed.approval_presentation_sha256, team_id: connection.team_id, enterprise_id: connection.enterprise_id, bot_user_id: connection.bot_user_id, bot_id: connection.bot_id, app_id: connection.app_id as string, actor_user_id: input.user_id, channel_id: input.channel_id, message_ts: input.message_ts, reaction_name: input.reaction_name })) }) } : {}) });
+    }
     const parseReviewerReactions =
       input.parse_reviewer_card_reactions === true;
     if (reviewerExpectation !== null || parseReviewerReactions) {

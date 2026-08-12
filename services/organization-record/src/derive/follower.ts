@@ -5,6 +5,7 @@ import type {
   OrganizationRecordLogReaderPort,
 } from '../application/ports.js';
 import type { ReviewerRestrictedEnvelopeValidator } from '../application/reviewer-policy-fact.js';
+import type { OrganizationMemberReadableEnvelopeValidator } from '../application/organization-member-policy-fact.js';
 import type { OrganizationRecordDerivedStore } from './derived-store.js';
 import { projectOrganizationRecord } from './projection.js';
 
@@ -20,6 +21,7 @@ export interface OrganizationRecordFollowerDependencies {
    * halts the follower rather than deriving on a looser reading.
    */
   readonly reviewerValidator?: ReviewerRestrictedEnvelopeValidator;
+  readonly organizationMemberValidator?: OrganizationMemberReadableEnvelopeValidator;
 }
 
 /**
@@ -44,6 +46,9 @@ export class OrganizationRecordFollower {
   private readonly reviewerValidator:
     | ReviewerRestrictedEnvelopeValidator
     | undefined;
+  private readonly organizationMemberValidator:
+    | OrganizationMemberReadableEnvelopeValidator
+    | undefined;
 
   private running: Promise<void> | null = null;
   private pending = false;
@@ -56,6 +61,7 @@ export class OrganizationRecordFollower {
     this.alert = dependencies.alert ?? null;
     this.batchSize = dependencies.batchSize ?? DEFAULT_BATCH_SIZE;
     this.reviewerValidator = dependencies.reviewerValidator;
+    this.organizationMemberValidator = dependencies.organizationMemberValidator;
   }
 
   get halted(): boolean {
@@ -128,7 +134,7 @@ export class OrganizationRecordFollower {
       if (batch.length === 0) return;
       for (const row of batch) {
         this.derived.commitRecord(
-          projectOrganizationRecord(row, this.reviewerValidator),
+          projectOrganizationRecord(row, this.reviewerValidator, this.organizationMemberValidator),
         );
         this.recordsDerived += 1;
       }

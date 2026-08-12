@@ -7,6 +7,7 @@ import {
 } from '@echo-brain/federation-protocol';
 import {
   RESTRICTED_REVIEWER_ALLOW_REASON_CODE,
+  createOrganizationMemberReadablePermissionCheckRequest,
   createOrganizationPermissionCheckRequest,
   createOrganizationReviewerPermissionCheckRequest,
   validateOrganizationPermissionCheckDecision,
@@ -170,6 +171,58 @@ export type OrganizationReviewerApprovalAuthorizationResult =
       allowed: true;
       reason: string;
       evidence: OrganizationReviewerApprovalAuthorizationEvidence;
+    }
+  | { allowed: false; reason: string };
+
+export interface OrganizationMemberApprovalAuthorizationRequest {
+  approval_id: string;
+  adapter_identity: OrganizationReviewerApprovalAuthorizationRequest['adapter_identity'];
+  provider_identity: OrganizationReviewerApprovalAuthorizationRequest['provider_identity'];
+  actor: OrganizationReviewerApprovalAuthorizationRequest['actor'];
+  channel_id: string;
+  message_ts: string;
+  approve_reaction: string;
+  reject_reaction: string;
+  policy_id: 'organization-member-readable-v1';
+  policy_contract_sha256: Sha256Digest;
+  release_draft_sha256: Sha256Digest;
+  approval_presentation_sha256: Sha256Digest;
+}
+
+export type OrganizationMemberApprovalAuthorizationEvidence = JsonObject & {
+  schema_version: 3;
+  kind: 'echo-organization-authorization-evidence';
+  policy_id: 'organization-member-readable-v1';
+  policy_contract_sha256: Sha256Digest;
+  authority_id: string;
+  organization_id: string;
+  enrollment_id: string;
+  installation_id: string;
+  request_id: string;
+  approval_id: string;
+  action: 'approve';
+  request_sha256: Sha256Digest;
+  provider_event_sha256: Sha256Digest;
+  allowed: true;
+  reason_code: 'active_organization_member_readable_notice_v1';
+  principal_id: string;
+  membership_id: string;
+  adapter_binding_id: string;
+  permission_grant_id: string;
+  evaluated_at: string;
+  authorization_audit_event_id: string;
+  authorization_audit_entry_sha256: Sha256Digest;
+  release_draft_sha256: Sha256Digest;
+  approval_presentation_sha256: Sha256Digest;
+  semantic_intent_sha256: Sha256Digest;
+  message_presentation_sha256: Sha256Digest;
+};
+
+export type OrganizationMemberApprovalAuthorizationResult =
+  | {
+      allowed: true;
+      reason: string;
+      evidence: OrganizationMemberApprovalAuthorizationEvidence;
     }
   | { allowed: false; reason: string };
 
@@ -532,6 +585,167 @@ export class OrganizationApprovalActionAuthorizer {
           message_presentation_sha256: decision.message_presentation_sha256,
         },
       };
+    } finally {
+      state.close();
+    }
+  }
+
+  /** The schema-v3 organization-member approval, with no reviewer fallback. */
+  async authorizeOrganizationMemberApproval(
+    input: OrganizationMemberApprovalAuthorizationRequest,
+    signal?: AbortSignal,
+  ): Promise<OrganizationMemberApprovalAuthorizationResult> {
+    const state = this.options.openState();
+    try {
+      const enrollment = state.readEnrollment();
+      if (
+        enrollment === null ||
+        enrollment.receipt === null ||
+        enrollment.accepted_access_sequence < 1
+      ) {
+        throw new Error(
+          'organization enrollment is unavailable for approval authorization',
+        );
+      }
+      const requestIdentity = enrollment.request;
+      const signerKey = protocolSigningKey(
+        await this.options.installationSigner.inspect(
+          requestIdentity.installation_id,
+        ),
+        requestIdentity.installation_id,
+      );
+      if (signerKey.key_id !== requestIdentity.installation_signing_key.key_id) {
+        throw new Error(
+          'organization installation signer no longer matches the enrollment',
+        );
+      }
+      if (input.provider_identity.bot_id === null) {
+        throw new Error('Slack approval bot identity is unavailable');
+      }
+      const request = await createOrganizationMemberReadablePermissionCheckRequest(
+        {
+          request_id: this.nextRequestId(),
+          authority_id: requestIdentity.authority_id,
+          authority_key_id: requestIdentity.authority_key_id,
+          organization_id: requestIdentity.organization_id,
+          enrollment_id: enrollment.receipt.enrollment_id,
+          installation_id: requestIdentity.installation_id,
+          installation_signing_key: signerKey,
+          provider: 'slack',
+          provider_issuer: 'https://slack.com',
+          provider_tenant_kind: 'workspace',
+          provider_tenant_id: input.actor.team_id,
+          provider_enterprise_id: input.provider_identity.enterprise_id,
+          provider_connection_subject_id: input.provider_identity.bot_user_id,
+          provider_connection_bot_id: input.provider_identity.bot_id,
+          provider_connection_app_id: input.provider_identity.app_id,
+          provider_subject_kind: 'human_user',
+          provider_subject_id: input.actor.user_id,
+          adapter_kind: 'approval-surface',
+          adapter_id: input.adapter_identity.adapter_id,
+          adapter_instance_id: input.adapter_identity.instance_id,
+          adapter_version: input.adapter_identity.version,
+          approval_id: input.approval_id,
+          channel_id: input.channel_id,
+          message_ts: input.message_ts,
+          reaction_name: input.approve_reaction,
+          approve_reaction: input.approve_reaction,
+          reject_reaction: input.reject_reaction,
+          release_draft_sha256: input.release_draft_sha256,
+          approval_presentation_sha256: input.approval_presentation_sha256,
+          requested_at: this.now(),
+        },
+        (bytes) =>
+          signWithInstallationKey(
+            this.options.installationSigner,
+            requestIdentity.installation_id,
+            signerKey.key_id,
+            bytes,
+          ),
+      );
+      if (
+        request.policy_id !== input.policy_id ||
+        request.policy_contract_sha256 !== input.policy_contract_sha256
+      ) {
+        throw new Error(
+          'organization-member request does not bind the frozen policy contract',
+        );
+      }
+      const decision = await this.options.authorityClient.checkOrganizationMemberPermission(
+        request,
+        signal,
+      );
+      if (
+        decision.request_sha256 !== canonicalSha256(request) ||
+        decision.provider_event_sha256 !== request.provider_event_sha256
+      ) {
+        throw new Error(
+          'organization permission decision does not match the signed request',
+        );
+      }
+      const reason = decision.reason_code.replaceAll('_', ' ');
+      if (!decision.allowed) return { allowed: false, reason };
+      if (
+        decision.principal_id !== requestIdentity.principal_id ||
+        decision.membership_id !== requestIdentity.membership_id
+      ) {
+        throw new Error(
+          'organization permission decision belongs to another enrolled member',
+        );
+      }
+      if (
+        decision.policy_id !== input.policy_id ||
+        decision.policy_contract_sha256 !== input.policy_contract_sha256 ||
+        decision.release_draft_sha256 !== input.release_draft_sha256 ||
+        decision.approval_presentation_sha256 !==
+          input.approval_presentation_sha256
+      ) {
+        throw new Error(
+          'organization-member decision does not quote the frozen presentation contract',
+        );
+      }
+      if (
+        decision.adapter_binding_id === null ||
+        decision.permission_grant_id === null ||
+        decision.authorization_audit_event_id === null ||
+        decision.authorization_audit_entry_sha256 === null ||
+        decision.semantic_intent_sha256 === null ||
+        decision.message_presentation_sha256 === null
+      ) {
+        throw new Error(
+          'organization-member allow decision has no complete proof',
+        );
+      }
+      const evidence: OrganizationMemberApprovalAuthorizationEvidence = {
+        schema_version: 3,
+        kind: 'echo-organization-authorization-evidence',
+        policy_id: input.policy_id,
+        policy_contract_sha256: input.policy_contract_sha256,
+        authority_id: requestIdentity.authority_id,
+        organization_id: requestIdentity.organization_id,
+        enrollment_id: enrollment.receipt.enrollment_id,
+        installation_id: requestIdentity.installation_id,
+        request_id: request.request_id,
+        approval_id: request.approval_id,
+        action: 'approve',
+        request_sha256: decision.request_sha256,
+        provider_event_sha256: decision.provider_event_sha256,
+        allowed: true,
+        reason_code: 'active_organization_member_readable_notice_v1',
+        principal_id: decision.principal_id,
+        membership_id: decision.membership_id,
+        adapter_binding_id: decision.adapter_binding_id,
+        permission_grant_id: decision.permission_grant_id,
+        evaluated_at: decision.evaluated_at,
+        authorization_audit_event_id: decision.authorization_audit_event_id,
+        authorization_audit_entry_sha256:
+          decision.authorization_audit_entry_sha256,
+        release_draft_sha256: input.release_draft_sha256,
+        approval_presentation_sha256: input.approval_presentation_sha256,
+        semantic_intent_sha256: decision.semantic_intent_sha256,
+        message_presentation_sha256: decision.message_presentation_sha256,
+      };
+      return { allowed: true, reason, evidence };
     } finally {
       state.close();
     }

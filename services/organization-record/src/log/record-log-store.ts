@@ -38,6 +38,17 @@ import {
   reviewerFactUnavailable,
   type ReviewerRestrictedEnvelopeValidator,
 } from '../application/reviewer-policy-fact.js';
+import {
+  isOrganizationMemberReadableEnvelopeDocument,
+  organizationMemberFactInvalid,
+  organizationMemberFactUnavailable,
+  type OrganizationMemberReadableEnvelopeValidator,
+} from '../application/organization-member-policy-fact.js';
+import {
+  assertCommittedOrganizationMemberPolicyFactsMatch,
+  insertOrganizationMemberPolicyFacts,
+  organizationMemberPolicyFactsForAppend,
+} from './organization-member-policy-fact.js';
 
 interface MetadataRow {
   organization_id: string;
@@ -59,6 +70,8 @@ export interface OpenOrganizationRecordLogOptions {
    * closed as unavailable and legacy append stays live.
    */
   readonly reviewer_validator?: ReviewerRestrictedEnvelopeValidator;
+  /** The injected closed schema-v3 validator.  No validator means v3 is closed. */
+  readonly organization_member_validator?: OrganizationMemberReadableEnvelopeValidator;
   /**
    * Test-only seam for proving append atomicity. It runs inside the open
    * transaction, immediately before `COMMIT`, so an injected failure must roll
@@ -82,6 +95,9 @@ export class OrganizationRecordLogStore implements OrganizationRecordLogPort {
   private readonly reviewerValidator:
     | ReviewerRestrictedEnvelopeValidator
     | undefined;
+  private readonly organizationMemberValidator:
+    | OrganizationMemberReadableEnvelopeValidator
+    | undefined;
   private readonly beforeAppendCommit: (() => void) | undefined;
 
   private constructor(
@@ -93,6 +109,7 @@ export class OrganizationRecordLogStore implements OrganizationRecordLogPort {
     this.authority_id = options.authority_id;
     this.clock = options.clock ?? systemOrganizationRecordClock;
     this.reviewerValidator = options.reviewer_validator;
+    this.organizationMemberValidator = options.organization_member_validator;
     this.beforeAppendCommit = options.beforeAppendCommit;
   }
 
@@ -167,6 +184,9 @@ export class OrganizationRecordLogStore implements OrganizationRecordLogPort {
     const reviewerDocument = isReviewerRestrictedEnvelopeDocument(
       envelope.envelope,
     );
+    const organizationMemberDocument = isOrganizationMemberReadableEnvelopeDocument(
+      envelope.envelope,
+    );
     if (reviewerDocument && input.reviewer_eligibility === undefined) {
       reviewerFactUnavailable(
         'reviewer-v2 append requires a live Authority-minted eligibility capability',
@@ -175,6 +195,25 @@ export class OrganizationRecordLogStore implements OrganizationRecordLogPort {
     if (!reviewerDocument && input.reviewer_eligibility !== undefined) {
       reviewerFactInvalid(
         'reviewer eligibility was presented for a non-reviewer envelope',
+      );
+    }
+    if (organizationMemberDocument && input.organization_member_eligibility === undefined) {
+      organizationMemberFactUnavailable(
+        'schema-v3 append requires a live Authority-minted organization-member eligibility capability',
+      );
+    }
+    if (!organizationMemberDocument && input.organization_member_eligibility !== undefined) {
+      organizationMemberFactInvalid(
+        'organization-member eligibility was presented for a non-schema-v3 envelope',
+      );
+    }
+    if (
+      (reviewerDocument && input.organization_member_eligibility !== undefined) ||
+      (organizationMemberDocument && input.reviewer_eligibility !== undefined)
+    ) {
+      throw new OrganizationRecordError(
+        'log_invariant_violated',
+        'record append presented an eligibility capability for another policy family',
       );
     }
     this.database.exec('BEGIN IMMEDIATE');
@@ -216,6 +255,23 @@ export class OrganizationRecordLogStore implements OrganizationRecordLogPort {
               validate: this.reviewerValidator,
             },
             input.reviewer_eligibility,
+          );
+        }
+        if (input.organization_member_eligibility !== undefined) {
+          assertCommittedOrganizationMemberPolicyFactsMatch(
+            this.database,
+            {
+              organization_id: this.organization_id,
+              position: existing.position,
+              record_hash: existing.record_hash as Sha256Digest,
+              envelope: envelope.envelope,
+              envelope_sha256,
+              envelope_id: envelope.envelope_id,
+              idempotency_key: envelope.idempotency_key,
+              installation_id: envelope.installation_id,
+              validate: this.organizationMemberValidator,
+            },
+            input.organization_member_eligibility,
           );
         }
         // A duplicate stamps no new record time: the committed row keeps the
@@ -308,6 +364,25 @@ export class OrganizationRecordLogStore implements OrganizationRecordLogPort {
               validate: this.reviewerValidator,
             },
             input.reviewer_eligibility,
+          ),
+        );
+      }
+      if (input.organization_member_eligibility !== undefined) {
+        insertOrganizationMemberPolicyFacts(
+          this.database,
+          organizationMemberPolicyFactsForAppend(
+            {
+              organization_id: this.organization_id,
+              position,
+              record_hash: recordHash,
+              envelope: envelope.envelope,
+              envelope_sha256,
+              envelope_id: envelope.envelope_id,
+              idempotency_key: envelope.idempotency_key,
+              installation_id: envelope.installation_id,
+              validate: this.organizationMemberValidator,
+            },
+            input.organization_member_eligibility,
           ),
         );
       }

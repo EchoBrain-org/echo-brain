@@ -37,6 +37,7 @@ import {
 } from '@echo-brain/organization-record/append';
 import {
   createOrganizationRecordReviewerApprovalEnvelope,
+  createOrganizationRecordOrganizationMemberApprovalEnvelope,
   createOrganizationEnrollmentRequest,
   createOrganizationRecordApprovalEnvelope,
   createOrganizationRecordRejectionEnvelope,
@@ -44,7 +45,13 @@ import {
   organizationAuthorityPinSha256,
   organizationEnrollmentGrantSha256,
   organizationRecordReviewerIntent,
+  organizationRecordOrganizationMemberIntent,
   organizationRecordEnvelopeId,
+  organizationMemberReadableApprovalPresentation,
+  organizationMemberReadableApprovalPresentationSha256,
+  organizationMemberReadablePolicyContractSha256,
+  organizationMemberReadableReleaseDraftSha256,
+  projectOrganizationMemberReadableReleaseDraft,
   projectReviewerReleaseDraft,
   reviewerApprovalPresentation,
   reviewerApprovalPresentationSha256,
@@ -57,12 +64,15 @@ import type {
   OrganizationRecordDecisionBriefV1,
   OrganizationRecordEnvelopeV1,
   OrganizationRecordReviewerApprovalEnvelopeV2,
+  OrganizationRecordOrganizationMemberApprovalEnvelopeV3,
   OrganizationRecordRejectionEnvelopeV1,
   OrganizationRecordReviewerAuthorizationV1,
   OrganizationRecordReviewerAuthorizationV2,
+  OrganizationRecordOrganizationMemberAuthorizationV3,
 } from '@echo-brain/organization-protocol';
 import {
   OrganizationIntegrationsRepository,
+  organizationMemberMessagePresentationPreimage,
   openOrganizationControlDatabase,
   reviewerMessagePresentationPreimage,
   type OrganizationSecretStore,
@@ -71,8 +81,11 @@ import {
 } from '@echo-brain/organization-control-plane';
 import {
   createOrganizationReviewerPermissionCheckRequest,
+  createOrganizationMemberReadablePermissionCheckRequest,
   createOrganizationReviewerRecentDecisionsRequest,
+  createOrganizationReadableSearchRequest,
   type OrganizationReviewerRecentDecisionsRequestV1,
+  type OrganizationReadableSearchRequestV1,
 } from '@echo-brain/organization-api';
 import { OrganizationAuthorityApplication } from '../../src/application/organization-authority.js';
 import type {
@@ -233,6 +246,8 @@ export function recordBrief(
 
 export interface RecordIngestFixture {
   readonly application: OrganizationAuthorityApplication;
+  /** Test-only handle for asserting the durable publication/audit transition. */
+  readonly authorityRepository: SqliteOrganizationAuthorityRepository;
   readonly integrations: OrganizationIntegrationsRepository;
   readonly runtime: OrganizationRecordRuntime;
   readonly clock: FixtureClock;
@@ -290,8 +305,17 @@ export interface RecordIngestFixture {
     approval_id: string;
     brief?: OrganizationRecordDecisionBriefV1;
   }): Promise<OrganizationRecordReviewerApprovalEnvelopeV2>;
+  /** Runs the real v3 permission check/audit and returns its signed envelope. */
+  organizationMemberApprovalEnvelope(input: {
+    approval_id: string;
+    brief?: OrganizationRecordDecisionBriefV1;
+  }): Promise<OrganizationRecordOrganizationMemberApprovalEnvelopeV3>;
   reviewerRecentDecisionsRequest(): Promise<OrganizationReviewerRecentDecisionsRequestV1>;
   otherReviewerRecentDecisionsRequest(): Promise<OrganizationReviewerRecentDecisionsRequestV1>;
+  readableSearchRequest(query: string): Promise<OrganizationReadableSearchRequestV1>;
+  otherReadableSearchRequest(query: string): Promise<OrganizationReadableSearchRequestV1>;
+  /** Enrolls a replacement current member after test records exist. */
+  replacementReadableSearchRequest(query: string): Promise<OrganizationReadableSearchRequestV1>;
   close(): Promise<void>;
 }
 
@@ -665,6 +689,42 @@ export async function createRecordIngestFixture(
       verification_evidence_sha256: digest('reviewer-human'),
     }),
     verifyReaction: async (_token, verification) => {
+      const organizationMember =
+        verification.expected_organization_member_presentation;
+      const organizationMemberEvent =
+        verification.organization_member_provider_event_sha256;
+      if (organizationMember !== null && organizationMember !== undefined) {
+        if (organizationMemberEvent === undefined) {
+          throw new Error('organization-member lifecycle expected a provider event');
+        }
+        return {
+          observed: true,
+          presentation_candidate_observed: true,
+          message_presentation_sha256: null,
+          organization_member_presentation: {
+            release_draft_sha256:
+              organizationMember.release_draft_sha256,
+            approval_presentation_sha256:
+              organizationMember.approval_presentation_sha256,
+            message_presentation_sha256: canonicalSha256(
+              organizationMemberMessagePresentationPreimage({
+                provider_event_sha256: organizationMemberEvent,
+                approval_presentation_sha256:
+                  organizationMember.approval_presentation_sha256,
+                team_id: verification.expected_team_id,
+                enterprise_id: verification.expected_enterprise_id,
+                bot_user_id: verification.expected_bot_user_id,
+                bot_id: verification.expected_bot_id,
+                app_id: verification.expected_app_id ?? 'A12345678',
+                actor_user_id: verification.user_id,
+                channel_id: verification.channel_id,
+                message_ts: verification.message_ts,
+                reaction_name: verification.reaction_name,
+              }),
+            ),
+          },
+        };
+      }
       const expected = verification.expected_reviewer_presentation;
       const providerEventSha256 =
         verification.reviewer_provider_event_sha256;
@@ -715,6 +775,14 @@ export async function createRecordIngestFixture(
       secrets: reviewerSecrets,
       slack: reviewerSlack,
       permissionPilotHealth: { kind: 'absent' },
+      organizationRecordingPolicy: {
+        schema_version: 1,
+        kind: 'organization-recording-policy-v1',
+        decision_processor_adapter_instance_id: 'primary',
+        approval_surface_adapter_instance_id: 'primary',
+        presentation_mode: 'organization-member-readable-v1',
+        policy_contract_sha256: organizationMemberReadablePolicyContractSha256(),
+      },
       now: () => clock.now(),
     });
 
@@ -1085,6 +1153,136 @@ export async function createRecordIngestFixture(
     );
   };
 
+  const organizationMemberApprovalEnvelope = async (input: {
+    approval_id: string;
+    brief?: OrganizationRecordDecisionBriefV1;
+  }): Promise<OrganizationRecordOrganizationMemberApprovalEnvelopeV3> => {
+    const brief = input.brief ?? recordBrief();
+    const draft = projectOrganizationMemberReadableReleaseDraft({
+      approval_id: input.approval_id,
+      brief,
+    });
+    const presentation = organizationMemberReadableApprovalPresentation({
+      draft,
+      approve_reaction: 'white_check_mark',
+      reject_reaction: 'x',
+    });
+    const request = await createOrganizationMemberReadablePermissionCheckRequest(
+      {
+        request_id: `pcr_${randomUUID()}`,
+        authority_id: authorityId,
+        authority_key_id: enrolled.enrollment_receipt.authority_key_id,
+        organization_id: organizationId,
+        enrollment_id: enrollmentId,
+        installation_id: installationId,
+        installation_signing_key: installation.descriptor,
+        provider: 'slack',
+        provider_issuer: 'https://slack.com',
+        provider_tenant_kind: 'workspace',
+        provider_tenant_id: 'T12345678',
+        provider_enterprise_id: null,
+        provider_connection_subject_id: 'U12345679',
+        provider_connection_bot_id: 'B12345678',
+        provider_connection_app_id: 'A12345678',
+        provider_subject_kind: 'human_user',
+        provider_subject_id: 'U12345678',
+        adapter_kind: 'approval-surface',
+        adapter_id: 'slack-reactions',
+        adapter_instance_id: 'primary',
+        adapter_version: '1.0.0',
+        approval_id: input.approval_id,
+        channel_id: 'C12345678',
+        message_ts: '1721678400.123456',
+        reaction_name: 'white_check_mark',
+        approve_reaction: 'white_check_mark',
+        reject_reaction: 'x',
+        release_draft_sha256: organizationMemberReadableReleaseDraftSha256(draft),
+        approval_presentation_sha256:
+          organizationMemberReadableApprovalPresentationSha256(presentation),
+        requested_at: clock.now(),
+      },
+      async (bytes) => signWith(installation, bytes),
+    );
+    const decision =
+      await reviewerPermissionApplication.checkOrganizationMemberReadablePermission(
+        request,
+      );
+    if (
+      !decision.allowed ||
+      decision.principal_id === null ||
+      decision.membership_id === null ||
+      decision.adapter_binding_id === null ||
+      decision.permission_grant_id === null ||
+      decision.authorization_audit_event_id === null ||
+      decision.authorization_audit_entry_sha256 === null ||
+      decision.release_draft_sha256 === null ||
+      decision.approval_presentation_sha256 === null ||
+      decision.semantic_intent_sha256 === null ||
+      decision.message_presentation_sha256 === null
+    ) {
+      throw new Error('organization-member lifecycle permission proof was not allowed');
+    }
+    const authorization: OrganizationRecordOrganizationMemberAuthorizationV3 = {
+      schema_version: 3,
+      kind: 'echo-organization-authorization-evidence',
+      policy_id: decision.policy_id,
+      policy_contract_sha256: decision.policy_contract_sha256,
+      authority_id: authorityId,
+      organization_id: organizationId,
+      enrollment_id: enrollmentId,
+      installation_id: installationId,
+      request_id: request.request_id,
+      approval_id: input.approval_id,
+      action: 'approve',
+      request_sha256: decision.request_sha256,
+      provider_event_sha256: decision.provider_event_sha256,
+      allowed: true,
+      reason_code: 'active_organization_member_readable_notice_v1',
+      principal_id: decision.principal_id,
+      membership_id: decision.membership_id,
+      adapter_binding_id: decision.adapter_binding_id,
+      permission_grant_id: decision.permission_grant_id,
+      evaluated_at: decision.evaluated_at,
+      authorization_audit_event_id: decision.authorization_audit_event_id,
+      authorization_audit_entry_sha256:
+        decision.authorization_audit_entry_sha256,
+      release_draft_sha256: decision.release_draft_sha256,
+      approval_presentation_sha256: decision.approval_presentation_sha256,
+      semantic_intent_sha256: decision.semantic_intent_sha256,
+      message_presentation_sha256: decision.message_presentation_sha256,
+    };
+    return createOrganizationRecordOrganizationMemberApprovalEnvelope(
+      {
+        envelope_id: organizationRecordEnvelopeId(),
+        idempotency_key: input.approval_id,
+        payload: {
+          brief,
+          source: { ...RECORD_SOURCE },
+          alternatives: [],
+          links: null,
+          reviewed_at: decision.evaluated_at,
+          surface: 'slack-organization-member-readable-v1',
+        },
+        reviewer: {
+          principal_id: decision.principal_id,
+          membership_id: decision.membership_id,
+          reviewed_by: 'Ada Founder',
+          authorization,
+        },
+        intent: organizationRecordOrganizationMemberIntent(
+          decision.semantic_intent_sha256,
+        ),
+        submitter: {
+          installation_id: installationId,
+          submitted_at: decision.evaluated_at,
+        },
+        installation_signing_key: installation.descriptor,
+      },
+      pinned,
+      async (bytes) => signWith(installation, bytes),
+    );
+  };
+
   const reviewerRecentDecisionsRequest = (
     receipt: typeof enrolled.enrollment_receipt,
     id: string,
@@ -1104,8 +1302,89 @@ export async function createRecordIngestFixture(
       async (bytes) => signWith(key, bytes),
     );
 
+  const readableSearchRequest = (
+    receipt: typeof enrolled.enrollment_receipt,
+    id: string,
+    key: FixtureKey,
+    query: string,
+  ): Promise<OrganizationReadableSearchRequestV1> =>
+    createOrganizationReadableSearchRequest(
+      {
+        request_id: `osq_${randomUUID()}`,
+        authority_id: receipt.authority_id,
+        authority_key_id: receipt.authority_key_id,
+        organization_id: receipt.organization_id,
+        enrollment_id: receipt.enrollment_id,
+        installation_id: id,
+        installation_signing_key: key.descriptor,
+        query,
+        requested_at: clock.now(),
+      },
+      async (bytes) => signWith(key, bytes),
+    );
+
+  let replacement:
+    | {
+        readonly receipt: typeof enrolled.enrollment_receipt;
+        readonly installation_id: string;
+        readonly key: FixtureKey;
+      }
+    | undefined;
+  const replacementReadableSearchRequest = async (
+    query: string,
+  ): Promise<OrganizationReadableSearchRequestV1> => {
+    if (replacement === undefined) {
+      // This is deliberately deferred until a test calls it, so it represents
+      // a real later/replacement enrollment rather than another reader that
+      // happened to exist when the protected records were written.
+      clock.advance(1);
+      const member = application.provisionMembership({
+        command_id: `adm_${randomUUID()}`,
+        display_name: 'Lin Replacement',
+        membership_type: 'employee',
+      });
+      const grant = Uint8Array.from(randomBytes(32));
+      const grantSha256 = organizationEnrollmentGrantSha256(grant);
+      application.issueEnrollmentGrant(member.membership_id, {
+        command_id: `adm_${randomUUID()}`,
+        enrollment_grant_sha256: grantSha256,
+        lifetime_seconds: 3600,
+      });
+      const key = fixtureKey();
+      const installationId = federationId('ins');
+      const request = await createOrganizationEnrollmentRequest(
+        {
+          enrollment_grant_sha256: grantSha256,
+          principal_id: member.principal_id,
+          membership_id: member.membership_id,
+          installation_id: installationId,
+          installation_signing_key: key.descriptor,
+        },
+        pinned,
+        async (bytes) => signWith(key, bytes),
+      );
+      clock.advance(1);
+      const enrolledReplacement = await application.completeEnrollment({
+        enrollment_grant: grant,
+        enrollment_request: request,
+      });
+      replacement = {
+        receipt: enrolledReplacement.enrollment_receipt,
+        installation_id: installationId,
+        key,
+      };
+    }
+    return readableSearchRequest(
+      replacement.receipt,
+      replacement.installation_id,
+      replacement.key,
+      query,
+    );
+  };
+
   return {
     application,
+    authorityRepository: repository,
     integrations,
     runtime,
     clock,
@@ -1184,6 +1463,7 @@ export async function createRecordIngestFixture(
     authorizeOtherMember,
     approvalEnvelopeFor: approvalEnvelopeWithReviewer,
     reviewerApprovalEnvelope,
+    organizationMemberApprovalEnvelope,
     reviewerRecentDecisionsRequest: () =>
       reviewerRecentDecisionsRequest(
         enrolled.enrollment_receipt,
@@ -1196,6 +1476,21 @@ export async function createRecordIngestFixture(
         otherInstallationId,
         otherInstallation,
       ),
+    readableSearchRequest: (query) =>
+      readableSearchRequest(
+        enrolled.enrollment_receipt,
+        installationId,
+        installation,
+        query,
+      ),
+    otherReadableSearchRequest: (query) =>
+      readableSearchRequest(
+        otherEnrolled.enrollment_receipt,
+        otherInstallationId,
+        otherInstallation,
+        query,
+      ),
+    replacementReadableSearchRequest,
     async close(): Promise<void> {
       try {
         await runtime.close();

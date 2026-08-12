@@ -11,6 +11,7 @@ import {
   OrganizationRecordFollower,
   OrganizationRecordLogReader,
 } from '../src/append.js';
+import { createOrganizationRecordRetrievalBuildPort } from '../src/retrieval-build.js';
 import type { OrganizationRecordLogRow } from '../src/application/contracts.js';
 // Deep import on purpose: the channel is not on the public entry point.
 import { createReviewerEligibilityCapabilityChannel } from '../src/application/reviewer-eligibility-capability.js';
@@ -258,6 +259,37 @@ function reviewerRow(
 }
 
 describe('reviewer-v2 derived compatibility', () => {
+  it('releases v2 text only with reprojected eligibility and content/provenance bindings', () => {
+    const { stores } = context();
+    try {
+      appendReviewer(stores);
+      const source = createOrganizationRecordRetrievalBuildPort(
+        stores.log.database,
+        {
+          organization_id: ORGANIZATION_ID,
+          authority_id: AUTHORITY_ID,
+          reviewer_validator: TEST_REVIEWER_VALIDATOR,
+          organization_member_validator: () => {
+            throw new Error('organization-member validator must not be used');
+          },
+        },
+      );
+      const [item] = source.readAt(source.record_head).reviewer_items;
+      expect(item).toMatchObject({
+        text: 'Ship the reviewer pilot.',
+        release_draft_sha256: digest('release-draft'),
+        approval_presentation_sha256: digest('approval-presentation'),
+        message_presentation_sha256: digest('message-presentation'),
+      });
+      expect(item?.provenance.authorization_audit_event_id).toBe('aud_derived');
+      expect(item?.content_binding_sha256).toMatch(/^sha256:[0-9a-f]{64}$/);
+      expect(item?.provenance_binding_sha256).toMatch(/^sha256:[0-9a-f]{64}$/);
+    } finally {
+      stores.log.close();
+      stores.derived.close();
+    }
+  });
+
   it('projects exactly one text-free exclusion and no broad v1 content', () => {
     const projection = projectOrganizationRecord(
       reviewerRow(),
@@ -592,7 +624,7 @@ describe('reviewer-v2 derived compatibility', () => {
     }
   });
 
-  it('includes the exclusion collection under diagnostic schema 2', async () => {
+  it('includes both exclusion collections under diagnostic schema 3', async () => {
     const { stores, follower } = context();
     try {
       appendReviewer(stores);
@@ -600,7 +632,7 @@ describe('reviewer-v2 derived compatibility', () => {
       expect(stores.derived.contentDigest()).toBe(
         canonicalSha256({
           kind: 'echo-organization-record-derived-content',
-          schema_version: 2,
+          schema_version: 3,
           cursor_position: 1,
           atoms: [],
           meeting_snapshots: [],
@@ -609,6 +641,8 @@ describe('reviewer-v2 derived compatibility', () => {
           edges: [],
           reviewer_policy_exclusions:
             stores.derived.reviewerPolicyExclusions() as never,
+          organization_member_policy_exclusions:
+            stores.derived.organizationMemberPolicyExclusions() as never,
         }),
       );
     } finally {

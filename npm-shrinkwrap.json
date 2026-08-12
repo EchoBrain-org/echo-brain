@@ -19,7 +19,8 @@
         "packages/organization-api",
         "services/organization-authority",
         "services/organization-control-plane",
-        "services/organization-record"
+        "services/organization-record",
+        "services/organization-retrieval"
       ],
       "dependencies": {
         "@echo-brain/federation-protocol": "0.0.0-dev.0",
@@ -67,6 +68,10 @@
     },
     "node_modules/@echo-brain/organization-record": {
       "resolved": "services/organization-record",
+      "link": true
+    },
+    "node_modules/@echo-brain/organization-retrieval": {
+      "resolved": "services/organization-retrieval",
       "link": true
     },
     "node_modules/@emnapi/core": {
@@ -3584,6 +3589,7 @@
         "@echo-brain/organization-control-plane": "0.0.0-dev.0",
         "@echo-brain/organization-protocol": "0.0.0-dev.0",
         "@echo-brain/organization-record": "0.0.0-dev.0",
+        "@echo-brain/organization-retrieval": "0.0.0-dev.0",
         "better-sqlite3": "12.10.0"
       },
       "engines": {
@@ -3605,6 +3611,19 @@
     },
     "services/organization-record": {
       "name": "@echo-brain/organization-record",
+      "version": "0.0.0-dev.0",
+      "license": "MIT",
+      "dependencies": {
+        "@echo-brain/federation-protocol": "0.0.0-dev.0",
+        "better-sqlite3": "12.10.0"
+      },
+      "engines": {
+        "node": "22.22.1",
+        "npm": "10.9.4"
+      }
+    },
+    "services/organization-retrieval": {
+      "name": "@echo-brain/organization-retrieval",
       "version": "0.0.0-dev.0",
       "license": "MIT",
       "dependencies": {

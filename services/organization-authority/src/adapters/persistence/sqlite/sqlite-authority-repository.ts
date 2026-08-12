@@ -45,9 +45,14 @@ import type {
   StoredInternalLiveRelease,
   StoredInternalLiveUpdateReceipt,
   ReviewerQueryAuditEntry,
+  ReadableSearchActiveGenerationPublication,
+  ReadableSearchQueryAuditEntry,
+  StoredReadableSearchActiveGeneration,
+  StoredReadableSearchQueryAuditEntry,
   StoredReviewerQueryAuditEntry,
 } from '../../../application/ports/authority-repository.js';
 import {
+  READABLE_SEARCH_QUERY_AUDIT_OPERATION,
   REVIEWER_QUERY_AUDIT_EXPIRED_ACTION,
   REVIEWER_QUERY_AUDIT_EXPORT_ACTION,
   REVIEWER_QUERY_AUDIT_OPERATION,
@@ -56,6 +61,13 @@ import {
   reviewerQueryAuditDecisionDetailJson,
   reviewerQueryAuditRetainUntil,
 } from '../../../application/reviewer-query-audit.js';
+import {
+  readableSearchQueryAuditDetailJson,
+  readableSearchQueryAuditRetainUntil,
+  validateReadableSearchActiveGenerationPublication,
+  validateStoredReadableSearchActiveGeneration,
+  validateStoredReadableSearchQueryAuditEntry,
+} from '../../../application/readable-search-persistence.js';
 import { reviewerQueryAuditRowBySequence } from './reviewer-query-audit-rows.js';
 import type { AuthorityAuditRow } from './reviewer-query-audit-rows.js';
 import {
@@ -173,6 +185,26 @@ interface InternalLiveUpdateReceiptRow {
   received_at: string;
 }
 
+interface ReadableSearchActiveGenerationRow {
+  organization_id: string;
+  generation_id: string;
+  manifest_sha256: string;
+  retrieval_contract_sha256: string;
+  record_head_position: number;
+  record_head_hash: string | null;
+  published_at: string;
+}
+
+interface ReadableSearchQueryAuditRow {
+  audit_sequence: number;
+  occurred_at: string;
+  retain_until: string;
+  operation: string;
+  decision: string;
+  reason_code: string;
+  detail_json: string;
+}
+
 interface PersistedAuthorityTrustContext {
   descriptor: OrganizationAuthorityDescriptorV1;
   pinned_authority: PinnedOrganizationAuthority;
@@ -279,7 +311,7 @@ class SqliteAuthorityTransaction
   private transactionTime(): string {
     invariant(
       this.writeTime !== undefined,
-      'reviewer query audit append requires an open authority write transaction',
+      'operation requires an open authority write transaction',
     );
     return this.writeTime;
   }
@@ -1344,6 +1376,28 @@ class SqliteAuthorityTransaction
     return { ...row };
   }
 
+  activeReadableSearchGeneration(): StoredReadableSearchActiveGeneration | null {
+    const row = this.database
+      .prepare(
+        `SELECT organization_id, generation_id, manifest_sha256,
+                retrieval_contract_sha256, record_head_position,
+                record_head_hash, published_at
+           FROM authority_readable_search_active_generation
+          WHERE singleton = 1`,
+      )
+      .get() as ReadableSearchActiveGenerationRow | undefined;
+    if (row === undefined) return null;
+    const stored = verifiedPersistedValue(
+      'readable search active generation',
+      () => validateStoredReadableSearchActiveGeneration(row),
+    );
+    invariant(
+      stored.organization_id === this.trust().descriptor.organization_id,
+      'readable search active generation belongs to another organization',
+    );
+    return stored;
+  }
+
   insertMembership(membership: StoredAuthorityMembership): void {
     this.database
       .prepare(
@@ -1638,6 +1692,93 @@ class SqliteAuthorityTransaction
     if (stored.occurred_at !== occurredAt) {
       throw new Error('stored reviewer query audit entry lost its write time');
     }
+    return stored;
+  }
+
+  publishReadableSearchActiveGeneration(
+    publication: ReadableSearchActiveGenerationPublication,
+  ): StoredReadableSearchActiveGeneration {
+    const validated = validateReadableSearchActiveGenerationPublication(publication);
+    const metadata = this.metadata();
+    invariant(
+      validated.organization_id === metadata.organization_id,
+      'readable search active generation belongs to another organization',
+    );
+    const publishedAt = this.transactionTime();
+    this.database
+      .prepare(
+        `INSERT INTO authority_readable_search_active_generation (
+           singleton, organization_id, generation_id, manifest_sha256,
+           retrieval_contract_sha256, record_head_position, record_head_hash,
+           published_at
+         ) VALUES (1, ?, ?, ?, ?, ?, ?, ?)
+         ON CONFLICT(singleton) DO UPDATE SET
+           organization_id = excluded.organization_id,
+           generation_id = excluded.generation_id,
+           manifest_sha256 = excluded.manifest_sha256,
+           retrieval_contract_sha256 = excluded.retrieval_contract_sha256,
+           record_head_position = excluded.record_head_position,
+           record_head_hash = excluded.record_head_hash,
+           published_at = excluded.published_at`,
+      )
+      .run(
+        validated.organization_id,
+        validated.generation_id,
+        validated.manifest_sha256,
+        validated.retrieval_contract_sha256,
+        validated.record_head_position,
+        validated.record_head_hash,
+        publishedAt,
+      );
+    const stored = this.activeReadableSearchGeneration();
+    invariant(stored !== null, 'readable search active generation was not stored');
+    invariant(
+      stored.published_at === publishedAt,
+      'readable search active generation lost its transaction time',
+    );
+    return stored;
+  }
+
+  appendReadableSearchQueryAudit(
+    entry: ReadableSearchQueryAuditEntry,
+  ): StoredReadableSearchQueryAuditEntry {
+    const occurredAt = this.transactionTime();
+    const detailJson = readableSearchQueryAuditDetailJson(
+      { ...entry, occurred_at: occurredAt },
+      entry.detail,
+    );
+    const inserted = this.database
+      .prepare(
+        `INSERT INTO authority_readable_search_query_audit (
+           occurred_at, retain_until, operation, decision, reason_code,
+           detail_json
+         ) VALUES (?, ?, ?, ?, ?, ?)`,
+      )
+      .run(
+        occurredAt,
+        readableSearchQueryAuditRetainUntil(occurredAt),
+        READABLE_SEARCH_QUERY_AUDIT_OPERATION,
+        entry.decision,
+        entry.reason_code,
+        detailJson,
+      );
+    const row = this.database
+      .prepare(
+        `SELECT audit_sequence, occurred_at, retain_until, operation, decision,
+                reason_code, detail_json
+           FROM authority_readable_search_query_audit
+          WHERE audit_sequence = ?`,
+      )
+      .get(Number(inserted.lastInsertRowid)) as ReadableSearchQueryAuditRow | undefined;
+    invariant(row !== undefined, 'readable search query audit entry was not stored');
+    const stored = verifiedPersistedValue(
+      'readable search query audit entry',
+      () => validateStoredReadableSearchQueryAuditEntry(row),
+    );
+    invariant(
+      stored.occurred_at === occurredAt,
+      'readable search query audit entry lost its transaction time',
+    );
     return stored;
   }
 }

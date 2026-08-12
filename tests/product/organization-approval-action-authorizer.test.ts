@@ -1,9 +1,12 @@
 import type {
+  OrganizationMemberReadablePermissionCheckDecisionV3,
+  OrganizationMemberReadablePermissionCheckRequestV3,
   OrganizationPermissionCheckRequestV1,
   OrganizationReviewerPermissionCheckDecisionV2,
   OrganizationReviewerPermissionCheckRequestV2,
 } from '@echo-brain/organization-api';
 import { canonicalSha256 } from '@echo-brain/federation-protocol';
+import { organizationMemberReadablePolicyContractSha256 } from '@echo-brain/organization-protocol';
 import {
   mkdtempSync,
   rmSync,
@@ -13,6 +16,7 @@ import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { OrganizationApprovalActionAuthorizer } from '../../src/product/organization/approval-action-authorizer.js';
 import { validateReviewerAuthorizationEvidence } from '../../src/product/approval/reviewer-authorization-evidence.js';
+import { validateOrganizationMemberAuthorizationEvidence } from '../../src/product/approval/organization-member-authorization-evidence.js';
 import { LocalOrganizationCoordinator } from '../../src/product/organization/enrollment/local-organization-coordinator.js';
 import { SqliteOrganizationStateStore } from '../../src/product/organization/state/sqlite-organization-state-store.js';
 import {
@@ -85,6 +89,9 @@ function authorizationInput() {
 
 const reviewerDraftSha256 = `sha256:${'d'.repeat(64)}` as const;
 const reviewerPresentationSha256 = `sha256:${'e'.repeat(64)}` as const;
+const memberPolicyContractSha256 = organizationMemberReadablePolicyContractSha256();
+const memberDraftSha256 = `sha256:${'d'.repeat(64)}` as const;
+const memberPresentationSha256 = `sha256:${'e'.repeat(64)}` as const;
 
 function reviewerAuthorizationInput() {
   const input = authorizationInput();
@@ -120,6 +127,50 @@ function allowedReviewerDecision(
     authorization_audit_event_id: fixtureId('aud', 1),
     authorization_audit_entry_sha256: `sha256:${'a'.repeat(64)}`,
     reviewer_release_draft_sha256: request.reviewer_release_draft_sha256,
+    approval_presentation_sha256: request.approval_presentation_sha256,
+    semantic_intent_sha256: `sha256:${'b'.repeat(64)}`,
+    message_presentation_sha256: `sha256:${'c'.repeat(64)}`,
+  };
+}
+
+function organizationMemberAuthorizationInput() {
+  const input = authorizationInput();
+  return {
+    approval_id: input.approval_id,
+    adapter_identity: input.adapter_identity,
+    provider_identity: input.provider_identity,
+    actor: input.actor,
+    channel_id: input.channel_id,
+    message_ts: input.message_ts,
+    approve_reaction: input.reaction_name,
+    reject_reaction: 'x',
+    policy_id: 'organization-member-readable-v1' as const,
+    policy_contract_sha256: memberPolicyContractSha256,
+    release_draft_sha256: memberDraftSha256,
+    approval_presentation_sha256: memberPresentationSha256,
+  };
+}
+
+function allowedOrganizationMemberDecision(
+  request: OrganizationMemberReadablePermissionCheckRequestV3,
+): OrganizationMemberReadablePermissionCheckDecisionV3 {
+  return {
+    schema_version: 3,
+    kind: 'echo-organization-permission-check-decision',
+    request_sha256: canonicalSha256(request),
+    provider_event_sha256: request.provider_event_sha256,
+    allowed: true,
+    reason_code: 'active_organization_member_readable_notice_v1',
+    policy_id: request.policy_id,
+    policy_contract_sha256: request.policy_contract_sha256,
+    principal_id: ORGANIZATION_IDS.principal,
+    membership_id: ORGANIZATION_IDS.membership,
+    adapter_binding_id: fixtureId('bnd', 1),
+    permission_grant_id: fixtureId('pgr', 1),
+    evaluated_at: NOW,
+    authorization_audit_event_id: fixtureId('aud', 1),
+    authorization_audit_entry_sha256: `sha256:${'a'.repeat(64)}`,
+    release_draft_sha256: request.release_draft_sha256,
     approval_presentation_sha256: request.approval_presentation_sha256,
     semantic_intent_sha256: `sha256:${'b'.repeat(64)}`,
     message_presentation_sha256: `sha256:${'c'.repeat(64)}`,
@@ -317,6 +368,97 @@ describe('organization approval action authorizer', () => {
     });
     await expect(
       authorizer.authorizeReviewerApproval(reviewerAuthorizationInput()),
+    ).rejects.toThrow(message);
+  });
+
+  it('signs the closed organization-member request and returns schema-v3 evidence', async () => {
+    const { authority, databasePath, signer } = await enrolledFixture();
+    let observed: OrganizationMemberReadablePermissionCheckRequestV3 | undefined;
+    const client = descriptorClient(authority, {
+      checkOrganizationMemberPermission: async (request) => {
+        observed = request;
+        return allowedOrganizationMemberDecision(request);
+      },
+    });
+    const authorizer = new OrganizationApprovalActionAuthorizer({
+      openState: () => new SqliteOrganizationStateStore(databasePath),
+      authorityClient: client,
+      installationSigner: signer,
+      now: () => NOW,
+      nextRequestId: () => 'pcr_00000000-0000-4000-8000-000000000001',
+    });
+
+    const result = await authorizer.authorizeOrganizationMemberApproval(
+      organizationMemberAuthorizationInput(),
+    );
+    expect(result.allowed).toBe(true);
+    if (!result.allowed) throw new Error('organization-member allow was expected');
+    expect(validateOrganizationMemberAuthorizationEvidence(result.evidence)).toEqual(
+      result.evidence,
+    );
+    expect(observed).toMatchObject({
+      schema_version: 3,
+      approval_id: 'f'.repeat(64),
+      action: 'approve',
+      reaction_name: 'white_check_mark',
+      approve_reaction: 'white_check_mark',
+      reject_reaction: 'x',
+      policy_id: 'organization-member-readable-v1',
+      policy_contract_sha256: memberPolicyContractSha256,
+      release_draft_sha256: memberDraftSha256,
+      approval_presentation_sha256: memberPresentationSha256,
+    });
+  });
+
+  it.each([
+    [
+      'request digest',
+      (decision: OrganizationMemberReadablePermissionCheckDecisionV3) => ({
+        ...decision,
+        request_sha256: `sha256:${'f'.repeat(64)}` as const,
+      }),
+      /does not match the signed request/u,
+    ],
+    [
+      'policy contract',
+      (decision: OrganizationMemberReadablePermissionCheckDecisionV3) => ({
+        ...decision,
+        policy_contract_sha256: `sha256:${'f'.repeat(64)}` as const,
+      }),
+      /does not quote the frozen presentation contract/u,
+    ],
+    [
+      'frozen presentation',
+      (decision: OrganizationMemberReadablePermissionCheckDecisionV3) => ({
+        ...decision,
+        approval_presentation_sha256: `sha256:${'f'.repeat(64)}` as const,
+      }),
+      /does not quote the frozen presentation contract/u,
+    ],
+    [
+      'complete proof',
+      (decision: OrganizationMemberReadablePermissionCheckDecisionV3) => ({
+        ...decision,
+        authorization_audit_event_id: null,
+      }),
+      /organization-member allow decision has no complete proof/u,
+    ],
+  ])('refuses an organization-member allow with mismatched %s', async (_label, mutate, message) => {
+    const { authority, databasePath, signer } = await enrolledFixture();
+    const client = descriptorClient(authority, {
+      checkOrganizationMemberPermission: async (request) =>
+        mutate(allowedOrganizationMemberDecision(request)),
+    });
+    const authorizer = new OrganizationApprovalActionAuthorizer({
+      openState: () => new SqliteOrganizationStateStore(databasePath),
+      authorityClient: client,
+      installationSigner: signer,
+      now: () => NOW,
+    });
+    await expect(
+      authorizer.authorizeOrganizationMemberApproval(
+        organizationMemberAuthorizationInput(),
+      ),
     ).rejects.toThrow(message);
   });
 });

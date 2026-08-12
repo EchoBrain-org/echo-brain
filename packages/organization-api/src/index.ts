@@ -36,10 +36,17 @@ export type {
   OrganizationReviewerPermissionCheckDecisionV2,
   OrganizationReviewerPermissionCheckRequestPayloadV2,
   OrganizationReviewerPermissionCheckRequestV2,
+  OrganizationMemberReadablePermissionCheckDecisionV3,
+  OrganizationMemberReadablePermissionCheckRequestPayloadV3,
+  OrganizationMemberReadablePermissionCheckRequestV3,
   OrganizationReviewerRecentDecisionItemV1,
   OrganizationReviewerRecentDecisionsRequestPayloadV1,
   OrganizationReviewerRecentDecisionsRequestV1,
   OrganizationReviewerRecentDecisionsResponseV1,
+  OrganizationReadableSearchRequestPayloadV1,
+  OrganizationReadableSearchRequestV1,
+  OrganizationReadableSearchResponseV1,
+  OrganizationReadableSearchResultItemV1,
   OrganizationSlackLinkBeginRequestPayloadV1,
   OrganizationSlackLinkBeginRequestV1,
   OrganizationSlackLinkBeginResponseV1,
@@ -127,6 +134,7 @@ export {
   ORGANIZATION_API_INTERNAL_LIVE_RECEIPTS_PATH,
   ORGANIZATION_API_PERMISSION_CHECKS_PATH,
   ORGANIZATION_API_RECENT_DECISIONS_PATH,
+  ORGANIZATION_API_READABLE_SEARCH_PATH,
   ORGANIZATION_API_REVIEWER_RECENT_DECISIONS_PATH,
   ORGANIZATION_API_PROXY_AUTH_SCHEME,
   ORGANIZATION_API_RECORD_ENVELOPES_PATH,
@@ -189,6 +197,21 @@ export type {
   OrganizationReviewerPermissionProviderEventInput,
 } from './reviewer-permission-check.js';
 export {
+  ORGANIZATION_MEMBER_READABLE_PERMISSION_DENIAL_REASON_CODES,
+  createOrganizationMemberReadablePermissionCheckRequest,
+  organizationMemberReadablePermissionCheckRequestSha256,
+  organizationMemberReadablePermissionProviderEvent,
+  organizationMemberReadablePermissionProviderEventSha256,
+  validateOrganizationMemberReadablePermissionCheckDecision,
+  validateOrganizationMemberReadablePermissionCheckRequest,
+  verifyOrganizationMemberReadablePermissionCheckRequest,
+} from './organization-member-permission-check.js';
+export type {
+  CreateOrganizationMemberReadablePermissionCheckRequestInput,
+  OrganizationMemberReadablePermissionDenialReasonCodeV3,
+  OrganizationMemberReadablePermissionProviderEventInput,
+} from './organization-member-permission-check.js';
+export {
   MAX_ORGANIZATION_REVIEWER_RECENT_DECISIONS_ITEMS,
   MAX_ORGANIZATION_REVIEWER_RECENT_DECISIONS_REQUEST_BYTES,
   MAX_ORGANIZATION_REVIEWER_RECENT_DECISIONS_RESPONSE_BYTES,
@@ -200,6 +223,22 @@ export {
   verifyOrganizationReviewerRecentDecisionsRequest,
 } from './reviewer-recent-decisions.js';
 export type { CreateOrganizationReviewerRecentDecisionsRequestInput } from './reviewer-recent-decisions.js';
+export {
+  MAX_ORGANIZATION_READABLE_SEARCH_ITEMS,
+  MAX_ORGANIZATION_READABLE_SEARCH_QUERY_SCALARS,
+  MAX_ORGANIZATION_READABLE_SEARCH_REQUEST_BYTES,
+  MAX_ORGANIZATION_READABLE_SEARCH_RESPONSE_BYTES,
+  ORGANIZATION_MEMBER_READABLE_SEARCH_WITNESS,
+  ORGANIZATION_READABLE_SEARCH_CONTRACT_ID,
+  RESTRICTED_REVIEWER_READABLE_SEARCH_WITNESS,
+  canonicalOrganizationReadableSearchRequestBytes,
+  createOrganizationReadableSearchRequest,
+  organizationReadableSearchRequestSha256,
+  validateOrganizationReadableSearchRequest,
+  validateOrganizationReadableSearchResponse,
+  verifyOrganizationReadableSearchRequest,
+} from './readable-search.js';
+export type { CreateOrganizationReadableSearchRequestInput } from './readable-search.js';
 export {
   compareOrganizationInternalLiveReleaseVersions,
   createOrganizationInternalLiveDirectiveRequest,

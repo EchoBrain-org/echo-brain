@@ -25,6 +25,11 @@ const MAINTENANCE_MODULE = join(
   'adapters/persistence/sqlite/reviewer-query-audit-maintenance.ts',
 );
 
+const READABLE_SEARCH_MAINTENANCE_MODULE = join(
+  SOURCE_ROOT,
+  'adapters/persistence/sqlite/readable-search-query-audit-maintenance.ts',
+);
+
 /** The one production module allowed to construct stopped-state maintenance. */
 const ALLOWED_IMPORTERS = ['composition/operator-state.ts'];
 
@@ -74,6 +79,9 @@ describe('reviewer query audit maintenance boundary', () => {
     ).toContain('composition/runtime.ts');
 
     expect(importersOf(MAINTENANCE_MODULE)).toEqual(ALLOWED_IMPORTERS);
+    expect(importersOf(READABLE_SEARCH_MAINTENANCE_MODULE)).toEqual(
+      ALLOWED_IMPORTERS,
+    );
   });
 
   it('is not reachable from the runtime repository the served authority holds', () => {
@@ -98,6 +106,9 @@ describe('reviewer query audit maintenance boundary', () => {
       'expireDueEntries',
       'appendControlEvent',
       'reviewerQueryAuditControlEventByCommand',
+      'authorizeReadableSearchQueryAuditExport',
+      'expireReadableSearchQueryAudit',
+      'readableSearchQueryAuditControlEventByCommand',
     ]) {
       expect(surface.has(method)).toBe(false);
     }
@@ -106,10 +117,12 @@ describe('reviewer query audit maintenance boundary', () => {
   it('keeps the runtime composition free of the stopped-only module', () => {
     const runtime = readFileSync(join(SOURCE_ROOT, 'composition/runtime.ts'), 'utf8');
     expect(runtime).not.toContain('reviewer-query-audit-maintenance');
+    expect(runtime).not.toContain('readable-search-query-audit-maintenance');
     const httpApplication = readFileSync(
       join(SOURCE_ROOT, 'presentation/organization-authority-http-application.ts'),
       'utf8',
     );
     expect(httpApplication).not.toContain('reviewer-query-audit-maintenance');
+    expect(httpApplication).not.toContain('readable-search-query-audit-maintenance');
   });
 });

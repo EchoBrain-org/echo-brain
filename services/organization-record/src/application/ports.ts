@@ -6,6 +6,7 @@ import type {
   VerifiedOrganizationRecordEnvelope,
 } from './contracts.js';
 import type { ReviewerPolicyFactAppendInput } from './reviewer-eligibility-capability.js';
+import type { OrganizationMemberPolicyFactAppendInput } from './organization-member-eligibility-capability.js';
 
 /**
  * Authority verification.
@@ -78,6 +79,8 @@ export interface OrganizationRecordLogAppendInput {
    * facts. It is a live runtime capability, never a serializable field.
    */
   readonly reviewer_eligibility?: ReviewerPolicyFactAppendInput;
+  /** Present only for a schema-v3 organization-member-readable approval. */
+  readonly organization_member_eligibility?: OrganizationMemberPolicyFactAppendInput;
 }
 
 export interface OrganizationRecordLogAppendOutcome {

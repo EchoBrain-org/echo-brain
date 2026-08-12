@@ -10,10 +10,14 @@ import {
   decisionApprovalId,
   reviewerApprovalPresentationRenderer,
   reviewerPublicationPreflight,
+  type OrganizationMemberSlackApprovalPresentationContract,
   type ReviewerPublicationConfiguration,
   type SlackApprovalPresentationContract,
   type UnresolvedApprovalPresentationSlot,
 } from '../../src/product/index.js';
+import {
+  organizationMemberApprovalPolicyContractSha256,
+} from '../../src/product/organization/record/adapters/organization-member-presentation-renderer.js';
 
 const digest = (character: string): string => `sha256:${character.repeat(64)}`;
 
@@ -63,6 +67,37 @@ function configuration(
 const reviewerSlot: UnresolvedApprovalPresentationSlot = {
   approval_id: 'a'.repeat(64),
   contract: contract(),
+};
+
+function organizationMemberContract(
+  overrides: Partial<OrganizationMemberSlackApprovalPresentationContract> = {},
+): OrganizationMemberSlackApprovalPresentationContract {
+  return {
+    schema_version: 1,
+    kind: 'echo-slack-approval-presentation-contract',
+    mode: 'organization-member-readable-v1',
+    adapter_id: 'slack-reactions',
+    adapter_instance_id: 'default',
+    adapter_version: '1.0.0',
+    channel_id: 'C012CHANNEL',
+    reviewer_slack_user_id: 'U012REVIEWER',
+    reviewer_name: 'Reviewer One',
+    credential_ref: 'env:SLACK_BOT_TOKEN',
+    credential_fingerprint_sha256: reviewerApprovalPresentationRenderer
+      .credentialFingerprint('xoxb-test'),
+    approve_reaction: 'white_check_mark',
+    reject_reaction: 'x',
+    policy_id: 'organization-member-readable-v1',
+    policy_contract_sha256: organizationMemberApprovalPolicyContractSha256(),
+    release_draft_sha256: digest('2'),
+    approval_presentation_sha256: digest('3'),
+    ...overrides,
+  };
+}
+
+const organizationMemberSlot: UnresolvedApprovalPresentationSlot = {
+  approval_id: 'd'.repeat(64),
+  contract: organizationMemberContract(),
 };
 
 describe('reviewer publication preflight', () => {
@@ -147,6 +182,43 @@ describe('reviewer publication preflight', () => {
       expect(result.ok).toBe(false);
       expect(result.refusals[0]).toContain(`cannot start under ${mode}`);
     }
+  });
+
+  it('refuses every non-v3 start over an unresolved schema-v3 card', () => {
+    for (const mode of [
+      'ordinary-v1',
+      'pilot-member-readable-v1',
+      'restricted-reviewer-v1',
+    ] as const) {
+      const result = reviewerPublicationPreflight(
+        configuration({ mode }),
+        [organizationMemberSlot],
+      );
+      expect(result.ok, mode).toBe(false);
+      expect(result.refusals.join('; '), mode).toContain(
+        `cannot start under ${mode}`,
+      );
+    }
+  });
+
+  it('refuses an unresolved schema-v3 card with a substituted policy digest', () => {
+    const result = reviewerPublicationPreflight(
+      configuration({
+        mode: 'organization-member-readable-v1',
+        organization_member_policy_contract_sha256:
+          organizationMemberApprovalPolicyContractSha256(),
+      }),
+      [
+        {
+          ...organizationMemberSlot,
+          contract: organizationMemberContract({
+            policy_contract_sha256: digest('f'),
+          }),
+        },
+      ],
+    );
+    expect(result.ok).toBe(false);
+    expect(result.refusals.join('; ')).toContain('policy contract digest');
   });
 
   it('aggregates every refusal into one thrown startup failure', () => {
@@ -274,6 +346,23 @@ async function seededStateDirectory(
   return root;
 }
 
+async function seededOrganizationMemberStateDirectory(): Promise<string> {
+  const root = mkdtempSync(join(tmpdir(), 'member-startup-'));
+  roots.push(root);
+  const store = new DecisionNodeStore(root);
+  await store.ensureRequested(stagedRequest());
+  await store.freezeApprovalPresentationContract({
+    approvalId: STAGED_APPROVAL_ID,
+    contract: organizationMemberContract(),
+  });
+  await store.recordPublished({
+    processingKey: PROCESSING_KEY,
+    surface: 'slack-authority-v1',
+    reference: { channel_id: 'C012CHANNEL', message_ts: '171.1' },
+  });
+  return root;
+}
+
 function startSurface(
   stateDirectory: string,
   config: AdapterConfig,
@@ -338,6 +427,22 @@ describe('reviewer publication preflight at startup', () => {
         surfaceConfig({ presentation_mode: undefined }) as AdapterConfig,
       ),
     ).not.toThrow();
+  });
+
+  it('refuses every restart mode change over a published schema-v3 card before it can poll or resolve', async () => {
+    const root = await seededOrganizationMemberStateDirectory();
+    for (const presentation_mode of [
+      undefined,
+      'pilot-member-readable-v1',
+      'restricted-reviewer-v1',
+    ]) {
+      expect(() =>
+        startSurface(
+          root,
+          surfaceConfig({ presentation_mode }) as AdapterConfig,
+        ),
+      ).toThrow(/organization-member-readable-v1 presentation contract/);
+    }
   });
 
   /**

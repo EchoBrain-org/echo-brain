@@ -26,6 +26,7 @@ import {
 } from '@echo-brain/organization-api';
 import { validateOrganizationRecordEnvelope } from '@echo-brain/organization-protocol';
 import { AuthorityOperationError } from '../domain/errors.js';
+import type { ReadableSearchAuthorizationFence } from '../application/readable-search-authorization-fence.js';
 import {
   OrganizationRecordIngestAuthority,
   OrganizationRecordIngestRejectionError,
@@ -34,10 +35,15 @@ import {
 import type { OrganizationAuthorityApplication } from '../application/organization-authority.js';
 import type { OrganizationRecordHttpApplication } from '../presentation/organization-record-http-application.js';
 import { reviewerRestrictedEnvelopeValidator } from './reviewer-envelope-validator.js';
+import { organizationMemberReadableEnvelopeValidator } from './organization-member-envelope-validator.js';
 import {
   verifyReviewerRestrictedReadiness,
   type ReviewerRestrictedReadiness,
 } from './reviewer-restricted-admission.js';
+import {
+  verifyOrganizationMemberReadableReadiness,
+  type OrganizationMemberReadableReadiness,
+} from './organization-member-readable-admission.js';
 
 export interface OpenOrganizationRecordRuntimeOptions {
   readonly authority: OrganizationAuthorityApplication;
@@ -46,6 +52,8 @@ export interface OpenOrganizationRecordRuntimeOptions {
   readonly authority_id: string;
   readonly record_log_database_path: string;
   readonly record_derived_database_path: string;
+  /** Shared with current-Person writes; acquired only for the append commit. */
+  readonly authorization_fence?: ReadableSearchAuthorizationFence;
   /** Operator alerting. Defaults to one line per alert on stderr. */
   readonly alert?: (alert: OrganizationRecordAlert) => void;
   /**
@@ -88,6 +96,10 @@ export type ReviewerRestrictedRuntimeHealth =
       readonly readiness?: ReviewerRestrictedReadiness;
     };
 
+export type OrganizationMemberReadableRuntimeHealth =
+  | { readonly kind: 'ready'; readonly readiness: OrganizationMemberReadableReadiness }
+  | { readonly kind: 'degraded'; readonly failure: Error; readonly readiness?: OrganizationMemberReadableReadiness };
+
 export interface OrganizationRecordRuntime
   extends OrganizationRecordHttpApplication {
   /** Walks the internal chain. Run at process start and before every backup. */
@@ -95,6 +107,7 @@ export interface OrganizationRecordRuntime
   readonly follower: OrganizationRecordFollower;
   readonly permissionPilotHealth: OrganizationPermissionPilotRuntimeHealth;
   readonly reviewerRestrictedHealth: ReviewerRestrictedRuntimeHealth;
+  readonly organizationMemberReadableHealth: OrganizationMemberReadableRuntimeHealth;
   readonly reviewerRecords: ReviewerRecordPort;
   /** The fixed, newest-first <=20 canonical rows. Empty only before activation. */
   readPermissionPilotEligibleRecords(): readonly OrganizationPermissionPilotEligibleRecord[];
@@ -236,10 +249,15 @@ export async function openOrganizationRecordRuntime(
     organization_id: options.organization_id,
     authority_id: options.authority_id,
   });
+  const organizationMemberValidator = organizationMemberReadableEnvelopeValidator({
+    organization_id: options.organization_id,
+    authority_id: options.authority_id,
+  });
   const log = OrganizationRecordLogStore.open(options.record_log_database_path, {
     organization_id: options.organization_id,
     authority_id: options.authority_id,
     reviewer_validator: reviewerValidator,
+    organization_member_validator: organizationMemberValidator,
   });
   const reviewerRecords = createReviewerRecordPort(log.database, {
     organization_id: options.organization_id,
@@ -266,6 +284,7 @@ export async function openOrganizationRecordRuntime(
       derived,
       alert,
       reviewerValidator,
+      organizationMemberValidator,
     });
     const permissionPilotReader = new OrganizationPermissionPilotReader(
       log.database,
@@ -332,17 +351,43 @@ export async function openOrganizationRecordRuntime(
       });
       reviewerRestrictedHealth = Object.freeze({ kind: 'degraded', failure });
     }
+    let organizationMemberReadableHealth: OrganizationMemberReadableRuntimeHealth;
+    try {
+      const readiness = verifyOrganizationMemberReadableReadiness({
+        database: log.database,
+        organization_id: options.organization_id,
+        validator: organizationMemberValidator,
+        evidence: options.evidence,
+      });
+      if (!readiness.ready) {
+        throw new Error(readiness.failures.map((failure) => failure.detail).join('; '));
+      }
+      organizationMemberReadableHealth = Object.freeze({ kind: 'ready', readiness });
+    } catch (error) {
+      const failure = error instanceof Error
+        ? error
+        : new Error(`organization-member-readable admission failed: ${String(error)}`);
+      operatorAlert({
+        kind: 'reviewer-restricted-inactive',
+        message: `organization-member-readable V1 is degraded: ${failure.message}`,
+        log_position: null,
+        cause: failure,
+      });
+      organizationMemberReadableHealth = Object.freeze({ kind: 'degraded', failure });
+    }
     const authority = new OrganizationRecordIngestAuthority({
       authority: options.authority,
       evidence: options.evidence,
       permissionPilotHealth,
       reviewerRestrictedHealth,
+      organizationMemberReadableHealth,
     });
     const ingest = new OrganizationRecordIngest({
       log,
       authority,
       receiptSigner: authority,
       reviewerValidator,
+      organizationMemberValidator,
       onAppended: () => follower.nudge(),
       alert,
     });
@@ -369,7 +414,11 @@ export async function openOrganizationRecordRuntime(
           );
         }
         try {
-          const appended = await ingest.append(request.record_envelope);
+          const appended = options.authorization_fence === undefined
+            ? await ingest.append(request.record_envelope)
+            : await options.authorization_fence.withWrite(() =>
+                ingest.append(request.record_envelope),
+              );
           return validateAcceptedOrganizationRecord({
             record_receipt: appended.signed_receipt,
           });
@@ -381,6 +430,7 @@ export async function openOrganizationRecordRuntime(
       follower,
       permissionPilotHealth,
       reviewerRestrictedHealth,
+      organizationMemberReadableHealth,
       reviewerRecords,
       readPermissionPilotEligibleRecords(): readonly OrganizationPermissionPilotEligibleRecord[] {
         if (permissionPilotHealth.kind === 'absent') return Object.freeze([]);

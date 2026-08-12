@@ -193,7 +193,7 @@ describe('organization record persistence lifecycle', () => {
       try {
         expect(
           inspectOrganizationRecordDatabaseSchema(database, definition),
-        ).toBe(definition === ORGANIZATION_RECORD_LOG_DATABASE ? 3 : 2);
+        ).toBe(definition === ORGANIZATION_RECORD_LOG_DATABASE ? 4 : 3);
       } finally {
         database.close();
       }

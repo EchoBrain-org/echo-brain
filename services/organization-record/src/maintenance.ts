@@ -19,3 +19,5 @@ export {
   reviewerRestrictedEligibilityProofSha256,
 } from './application/reviewer-policy-fact.js';
 export { verifyReviewerFactAdmission } from './log/reviewer-fact-admission.js';
+export { verifyOrganizationMemberFactAdmission } from './log/organization-member-fact-admission.js';
+export { readOrganizationMemberPolicyFactsAtPosition } from './log/organization-member-policy-fact.js';

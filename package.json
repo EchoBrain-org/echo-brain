@@ -9,7 +9,8 @@
     "packages/organization-api",
     "services/organization-authority",
     "services/organization-control-plane",
-    "services/organization-record"
+    "services/organization-record",
+    "services/organization-retrieval"
   ],
   "license": "MIT",
   "type": "module",

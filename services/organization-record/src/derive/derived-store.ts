@@ -7,6 +7,7 @@ import type {
   DerivedParticipantObservationRow,
   DerivedRejectionRow,
   DerivedReviewerPolicyExclusionRow,
+  DerivedOrganizationMemberPolicyExclusionRow,
   JsonValue,
   OrganizationRecordProjection,
   Sha256Digest,
@@ -37,12 +38,15 @@ export interface OpenOrganizationRecordDerivedOptions {
 function assertProjectionIsExclusiveByEnvelopeVersion(
   projection: OrganizationRecordProjection,
 ): void {
-  const exclusions = projection.reviewer_policy_exclusions;
+  const exclusions = [
+    ...projection.reviewer_policy_exclusions,
+    ...projection.organization_member_policy_exclusions,
+  ];
   if (exclusions.length === 0) return;
   if (exclusions.length !== 1) {
     throw new OrganizationRecordError(
       'derive_halted',
-      `organization record derive at position ${projection.log_position} produced ${exclusions.length} reviewer exclusions`,
+      `organization record derive at position ${projection.log_position} produced ${exclusions.length} policy exclusions`,
     );
   }
   if (
@@ -57,14 +61,22 @@ function assertProjectionIsExclusiveByEnvelopeVersion(
       `organization record derive at position ${projection.log_position} mixed reviewer-v2 exclusion with broad v1 rows`,
     );
   }
-  const exclusion = exclusions[0] as DerivedReviewerPolicyExclusionRow;
-  if (
+  const exclusion = exclusions[0] as
+    | DerivedReviewerPolicyExclusionRow
+    | DerivedOrganizationMemberPolicyExclusionRow;
+  const reviewerExclusion =
     exclusion.log_position !== projection.log_position ||
     exclusion.record_hash !== projection.record_hash ||
     exclusion.envelope_version !== 2 ||
     exclusion.policy_id !== 'restricted-reviewer-v1' ||
-    exclusion.outcome !== 'deferred-to-permission-aware-retrieval'
-  ) {
+    exclusion.outcome !== 'deferred-to-permission-aware-retrieval';
+  const memberExclusion =
+    exclusion.log_position !== projection.log_position ||
+    exclusion.record_hash !== projection.record_hash ||
+    exclusion.envelope_version !== 3 ||
+    exclusion.policy_id !== 'organization-member-readable-v1' ||
+    exclusion.outcome !== 'deferred-to-permission-aware-retrieval';
+  if (reviewerExclusion && memberExclusion) {
     throw new OrganizationRecordError(
       'derive_halted',
       `organization record derive at position ${projection.log_position} produced a reviewer exclusion that is not the fixed text-free outcome`,
@@ -210,6 +222,13 @@ export class OrganizationRecordDerivedStore {
       for (const exclusion of projection.reviewer_policy_exclusions) {
         insertExclusion.run(exclusion);
       }
+      const insertOrganizationMemberExclusion = this.database.prepare(
+        `INSERT INTO organization_derived_member_readable_policy_exclusion (${EXCLUSION_COLUMNS})
+         VALUES (@log_position, @record_hash, @envelope_version, @policy_id, @outcome)`,
+      );
+      for (const exclusion of projection.organization_member_policy_exclusions) {
+        insertOrganizationMemberExclusion.run(exclusion);
+      }
 
       this.database
         .prepare(
@@ -283,6 +302,16 @@ export class OrganizationRecordDerivedStore {
       .all() as DerivedReviewerPolicyExclusionRow[];
   }
 
+  organizationMemberPolicyExclusions(): readonly DerivedOrganizationMemberPolicyExclusionRow[] {
+    return this.database
+      .prepare(
+        `SELECT ${EXCLUSION_COLUMNS}
+         FROM organization_derived_member_readable_policy_exclusion
+         ORDER BY log_position`,
+      )
+      .all() as DerivedOrganizationMemberPolicyExclusionRow[];
+  }
+
   /**
    * Diagnostic schema 2 adds the exclusion collection. Projected schema-v1
    * rows are byte-identical to what schema 1 produced, so a v1-only store
@@ -291,7 +320,7 @@ export class OrganizationRecordDerivedStore {
   contentDigest(): Sha256Digest {
     return canonicalSha256({
       kind: 'echo-organization-record-derived-content',
-      schema_version: 2,
+      schema_version: 3,
       cursor_position: this.cursorPosition(),
       atoms: this.atoms() as unknown as JsonValue,
       meeting_snapshots: this.meetingSnapshots() as unknown as JsonValue,
@@ -300,6 +329,8 @@ export class OrganizationRecordDerivedStore {
       edges: this.edges() as unknown as JsonValue,
       reviewer_policy_exclusions:
         this.reviewerPolicyExclusions() as unknown as JsonValue,
+      organization_member_policy_exclusions:
+        this.organizationMemberPolicyExclusions() as unknown as JsonValue,
     });
   }
 

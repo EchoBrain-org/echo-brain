@@ -2,6 +2,12 @@ import { once } from 'node:events';
 import type { AddressInfo } from 'node:net';
 import { join } from 'node:path';
 import {
+  createReadableSearchAnalyzerDescriptor,
+  readableSearchRetrievalContractSha256,
+  readableSearchSourceBytesSha256,
+} from '@echo-brain/organization-retrieval';
+import { organizationMemberReadablePolicyContractSha256 } from '@echo-brain/organization-protocol';
+import {
   FileOrganizationSecretStore,
   inspectOpenOrganizationControlDatabase,
   openOrganizationControlDatabase,
@@ -16,6 +22,8 @@ import {
 } from '../adapters/runtime/system-runtime-ports.js';
 import { SqliteOrganizationAuthorityRepository } from '../adapters/persistence/sqlite/sqlite-authority-repository.js';
 import { OrganizationAuthorityApplication } from '../application/organization-authority.js';
+import { reviewerPolicyContractSha256 } from '../application/reviewer-policy-contract.js';
+import { ReadableSearchAuthorizationFence } from '../application/readable-search-authorization-fence.js';
 import {
   beginOrganizationAuthorityHttpServerShutdown,
   createOrganizationAuthorityHttpServer,
@@ -40,9 +48,14 @@ import {
   assertPersistentAuthorityDatabasePath,
   type AuthorityServeConfig,
 } from './config.js';
-import { assertAuthorityRuntimeStateBinding } from './operator-state.js';
+import {
+  assertAuthorityRuntimeStateBinding,
+  readableSearchReleaseDescriptor,
+} from './operator-state.js';
 import { composeOrganizationRecentDecisions } from './recent-decisions.js';
 import { composeReviewerRecentDecisions } from './reviewer-recent-decisions.js';
+import { fenceAuthorizationRelevantAuthorityMutations } from './readable-search-authorization-writes.js';
+import { createReadableSearchRuntimeAdapter } from './readable-search.js';
 
 export interface RunningOrganizationAuthority {
   address: AddressInfo;
@@ -54,6 +67,8 @@ export interface RunningOrganizationAuthority {
    * same event a standalone process observes as a non-zero exit.
    */
   readonly fatalFailure: Promise<Error>;
+  /** The singleton shared fence for in-process authorization-relevant writers. */
+  readonly authorizationFence: ReadableSearchAuthorizationFence;
 }
 
 const RECORD_DERIVE_FATAL_EXIT_CODE = 1;
@@ -158,6 +173,7 @@ export async function startOrganizationAuthority(
     | ReturnType<typeof openOrganizationControlDatabase>
     | undefined;
   let application: OrganizationAuthorityApplication | undefined;
+  const authorizationFence = new ReadableSearchAuthorizationFence();
   let records: OrganizationRecordRuntime | undefined;
   let server: OrganizationAuthorityHttpServer | undefined;
   let signalFatalFailure: (failure: Error) => void = () => undefined;
@@ -315,6 +331,7 @@ export async function startOrganizationAuthority(
       authority_id: config.authority_id,
       record_log_database_path: config.record_log_database_path,
       record_derived_database_path: config.record_derived_database_path,
+      authorization_fence: authorizationFence,
       // A halt after start gets the same treatment as one during it. The
       // record runtime already refuses further ingest; the process concerns
       // are here, because a listener still answering and a zero exit code are
@@ -351,6 +368,46 @@ export async function startOrganizationAuthority(
       secrets: integrationSecrets,
       slack: new SlackWebIntegrationProvider(),
       permissionPilotHealth: records.permissionPilotHealth,
+      organizationRecordingPolicy: config.organization_recording_policy_v1,
+      authorizationFence,
+    });
+    const memberPolicy = organizationMemberReadablePolicyContractSha256();
+    const reviewerPolicy = reviewerPolicyContractSha256();
+    const analyzer = createReadableSearchAnalyzerDescriptor({
+      analyzer_source_sha256: readableSearchSourceBytesSha256(
+        readableSearchReleaseDescriptor(),
+      ),
+      node_version: process.versions.node,
+      unicode_version: process.versions.unicode ?? 'unknown',
+      icu_version: process.versions.icu ?? 'unknown',
+    });
+    const readableSearch = createReadableSearchRuntimeAdapter({
+      authority: application,
+      records,
+      generation_directories: {
+        directoryFor: (generationId) =>
+          join(config.state_directory, 'record-retrieval', 'generations', generationId),
+      },
+      retrieval_state_directory: config.state_directory,
+      analyzer,
+      contract: {
+        retrieval_contract_sha256: readableSearchRetrievalContractSha256({
+          analyzer_contract_sha256: analyzer.analyzer_contract_sha256,
+          organization_member_policy_contract_sha256: memberPolicy,
+          restricted_reviewer_policy_contract_sha256: reviewerPolicy,
+        }),
+        policy_contracts: [
+          {
+            policy_id: 'organization-member-readable-v1',
+            policy_contract_sha256: memberPolicy,
+          },
+          {
+            policy_id: 'restricted-reviewer-v1',
+            policy_contract_sha256: reviewerPolicy,
+          },
+        ],
+      },
+      fence: authorizationFence,
     });
     if (authorityRuntimeFingerprint(config) !== runtimeFingerprint) {
       throw new Error(
@@ -358,7 +415,10 @@ export async function startOrganizationAuthority(
       );
     }
     server = createOrganizationAuthorityHttpServer({
-      application,
+      application: fenceAuthorizationRelevantAuthorityMutations(
+        application,
+        authorizationFence,
+      ),
       integrations,
       records,
       recentDecisions: composeOrganizationRecentDecisions(
@@ -370,6 +430,7 @@ export async function startOrganizationAuthority(
         records,
         integrationsRepository,
       ),
+      readableSearch,
       adminAuthenticator,
       clientIdentityResolver,
       adminConsole: {
@@ -395,7 +456,12 @@ export async function startOrganizationAuthority(
     if (address === null || typeof address === 'string') {
       throw new Error('organization authority did not bind a TCP address');
     }
-    return { address, fatalFailure, close: shutdown };
+    return {
+      address,
+      fatalFailure,
+      authorizationFence,
+      close: shutdown,
+    };
   } catch (error) {
     const failures: unknown[] = [error];
     let cleanupFailed = false;

@@ -24,8 +24,12 @@ import {
   type OrganizationPermissionPilotEligibilityProof,
   type RecordPermissionDecisionInput,
   type RecordReviewerPermissionDecisionInput,
+  type RecordOrganizationMemberReadablePermissionDecisionInput,
   type RecordedPermissionDecision,
   type RecordedReviewerPermissionDecision,
+  type RecordedOrganizationMemberReadablePermissionDecision,
+  type OrganizationMemberAuthorizationEvidenceExpectation,
+  type OrganizationMemberAuthorizationEvidenceMatch,
   type ReviewerAuthorizationEvidenceExpectation,
   type ReviewerAuthorizationEvidenceMatch,
   type ReviewerAuthorizationEvidenceRead,
@@ -44,6 +48,7 @@ import {
   reviewerRestrictedSemanticPreimage,
   type OrganizationIntegrationAuditEntryPreimageInput,
 } from "../application/reviewer-restricted-policy.js";
+import { ORGANIZATION_MEMBER_READABLE_ALLOW_REASON_CODE } from "../application/organization-member-readable-policy.js";
 import {
   canonicalJson,
   canonicalSha256,
@@ -2174,6 +2179,54 @@ export class OrganizationIntegrationsRepository {
         authorization_audit_entry_sha256: appended.entry_sha256,
       });
     });
+  }
+
+  /** Appends the separate schema-v3 organization-member allow audit row. */
+  recordOrganizationMemberReadablePermissionDecision(
+    input: RecordOrganizationMemberReadablePermissionDecisionInput,
+  ): RecordedOrganizationMemberReadablePermissionDecision {
+    const evaluationId = id("pce");
+    return this.immediateTransaction(() => {
+      const appended = this.appendAudit({
+        occurred_at: input.evaluated_at, actor_kind: "installation",
+        actor_principal_id: input.approving_principal_id,
+        actor_membership_id: input.approving_membership_id,
+        actor_identity_link_id: null, actor_installation_id: input.installation_id,
+        command_id: evaluationId, provider_event_sha256: input.provider_event_sha256,
+        action: "permission.approve", subject_kind: "approval", subject_id: input.approval_id,
+        membership_id: input.approving_membership_id, identity_link_id: input.identity_link_id,
+        connection_id: input.connection_id, adapter_binding_id: input.adapter_binding_id,
+        permission_grant_id: input.permission_grant_id, outcome: "allowed",
+        reason_code: ORGANIZATION_MEMBER_READABLE_ALLOW_REASON_CODE,
+        idempotency_key: `permission-evaluation:${evaluationId}`,
+        authority_checked_at: input.evaluated_at,
+        authority_evidence_sha256: input.authority_evidence_sha256,
+        correlation_id: input.request_id, detail: input.detail,
+      });
+      return Object.freeze({ authorization_audit_event_id: appended.audit_event_id, authorization_audit_entry_sha256: appended.entry_sha256 });
+    });
+  }
+
+  /** Exact-ID v3 evidence proof. It rehashes canonical detail and the audit
+   * chain entry before comparing every caller-quoted commitment. */
+  findAllowedOrganizationMemberAuthorizationEvidenceById(
+    auditEventId: string,
+    expected: OrganizationMemberAuthorizationEvidenceExpectation,
+  ): OrganizationMemberAuthorizationEvidenceMatch {
+    let row: ReviewerAuditRow | undefined;
+    let predecessor: { entry_sha256: string } | undefined;
+    try {
+      row = this.database.prepare(`SELECT ${REVIEWER_AUDIT_COLUMNS} FROM organization_integration_audit WHERE audit_event_id = ?`).get(auditEventId) as ReviewerAuditRow | undefined;
+      if (row !== undefined && row.audit_sequence > 1) predecessor = this.database.prepare('SELECT entry_sha256 FROM organization_integration_audit WHERE audit_sequence = ?').get(row.audit_sequence - 1) as { entry_sha256: string } | undefined;
+    } catch { return Object.freeze({ status: 'unavailable' as const }); }
+    if (row === undefined) return Object.freeze({ status: 'absent' as const });
+    if (row.organization_id !== this.identity.organization_id || (row.audit_sequence > 1 && (predecessor === undefined || predecessor.entry_sha256 !== row.previous_entry_sha256)) || (row.audit_sequence === 1 && row.previous_entry_sha256 !== null)) return Object.freeze({ status: 'corrupt' as const });
+    let detail: Record<string, unknown>;
+    try { const parsed = JSON.parse(row.detail_json) as unknown; if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed) || canonicalJson(parsed as Record<string, unknown>) !== row.detail_json) return Object.freeze({ status: 'corrupt' as const }); detail = parsed as Record<string, unknown>; } catch { return Object.freeze({ status: 'corrupt' as const }); }
+    if (digest(detail) !== row.detail_sha256 || organizationIntegrationAuditEntrySha256({ ...row, detail }) !== row.entry_sha256) return Object.freeze({ status: 'corrupt' as const });
+    const fields: Readonly<Record<string, unknown>> = { request_sha256: expected.request_sha256, provider_event_sha256: expected.provider_event_sha256, principal_id: expected.principal_id, policy_contract_sha256: expected.policy_contract_sha256, release_draft_sha256: expected.release_draft_sha256, approval_presentation_sha256: expected.approval_presentation_sha256, semantic_intent_sha256: expected.semantic_intent_sha256, message_presentation_sha256: expected.message_presentation_sha256 };
+    if (row.reason_code !== ORGANIZATION_MEMBER_READABLE_ALLOW_REASON_CODE || row.outcome !== 'allowed' || row.action !== 'permission.approve' || row.subject_kind !== 'approval' || row.subject_id !== expected.approval_id || row.actor_installation_id !== expected.installation_id || row.actor_principal_id !== expected.principal_id || row.actor_membership_id !== expected.membership_id || row.membership_id !== expected.membership_id || row.correlation_id !== expected.request_id || row.adapter_binding_id !== expected.adapter_binding_id || row.permission_grant_id !== expected.permission_grant_id || row.provider_event_sha256 !== expected.provider_event_sha256 || row.occurred_at !== expected.evaluated_at || row.authority_checked_at !== expected.evaluated_at || row.entry_sha256 !== expected.authorization_audit_entry_sha256 || detail.kind !== 'organization-member-readable-approval-audit-detail-v1' || detail.policy_id !== 'organization-member-readable-v1' || Object.entries(fields).some(([key, value]) => detail[key] !== value)) return Object.freeze({ status: 'mismatch' as const });
+    return Object.freeze({ status: 'matched' as const, audit_entry_sha256: row.entry_sha256 as `sha256:${string}` });
   }
 
   /**

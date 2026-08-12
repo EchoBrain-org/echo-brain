@@ -17,6 +17,10 @@ import {
   type ReviewerRestrictedEnvelopeValidator,
 } from '../application/reviewer-policy-fact.js';
 import {
+  readOrganizationMemberReadableEnvelope,
+  type OrganizationMemberReadableEnvelopeValidator,
+} from '../application/organization-member-policy-fact.js';
+import {
   derivedApprovalGroupId,
   derivedAtomId,
   derivedMeetingSnapshotId,
@@ -290,6 +294,7 @@ function approvalProjection(
     rejections: [],
     edges: deduplicateEdges(edges),
     reviewer_policy_exclusions: [],
+    organization_member_policy_exclusions: [],
   };
 }
 
@@ -331,6 +336,7 @@ function rejectionProjection(
       },
     ]),
     reviewer_policy_exclusions: [],
+    organization_member_policy_exclusions: [],
   };
 }
 
@@ -394,6 +400,41 @@ function reviewerExclusionProjection(
         outcome: 'deferred-to-permission-aware-retrieval',
       },
     ],
+    organization_member_policy_exclusions: [],
+  };
+}
+
+function organizationMemberExclusionProjection(
+  row: OrganizationRecordLogRow,
+  envelope: JsonObject,
+  validate: OrganizationMemberReadableEnvelopeValidator | undefined,
+): OrganizationRecordProjection {
+  if (envelope['event_type'] !== row.event_type) {
+    return fail(row.position, 'envelope event type does not match its indexed event type');
+  }
+  if (row.event_type !== 'approval') {
+    return fail(row.position, 'envelope schema version 3 admits approval only');
+  }
+  try {
+    readOrganizationMemberReadableEnvelope(envelope, validate);
+  } catch (error) {
+    return fail(
+      row.position,
+      error instanceof Error ? error.message : 'organization-member envelope failed closed schema-v3 validation',
+    );
+  }
+  return {
+    log_position: row.position,
+    record_hash: row.record_hash,
+    atoms: [], meeting_snapshots: [], participant_observations: [], rejections: [], edges: [],
+    reviewer_policy_exclusions: [],
+    organization_member_policy_exclusions: [{
+      log_position: row.position,
+      record_hash: row.record_hash,
+      envelope_version: 3,
+      policy_id: 'organization-member-readable-v1',
+      outcome: 'deferred-to-permission-aware-retrieval',
+    }],
   };
 }
 
@@ -409,6 +450,7 @@ function reviewerExclusionProjection(
 export function projectOrganizationRecord(
   row: OrganizationRecordLogRow,
   reviewerValidator?: ReviewerRestrictedEnvelopeValidator,
+  organizationMemberValidator?: OrganizationMemberReadableEnvelopeValidator,
 ): OrganizationRecordProjection {
   let envelope: JsonObject;
   try {
@@ -426,6 +468,9 @@ export function projectOrganizationRecord(
   const schemaVersion = envelope['schema_version'];
   if (schemaVersion === 2) {
     return reviewerExclusionProjection(row, envelope, reviewerValidator);
+  }
+  if (schemaVersion === 3) {
+    return organizationMemberExclusionProjection(row, envelope, organizationMemberValidator);
   }
   if (schemaVersion !== 1) {
     return fail(

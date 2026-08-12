@@ -181,6 +181,26 @@ export interface OrganizationReviewerPermissionCheckDecisionV2 {
   message_presentation_sha256: OrganizationApiSha256Digest | null;
 }
 
+export interface OrganizationMemberReadablePermissionCheckRequestPayloadV3 {
+  schema_version: 3;
+  kind: 'echo-organization-permission-check-request';
+  request_id: string; authority_id: string; authority_key_id: OrganizationApiSha256Digest;
+  organization_id: string; enrollment_id: string; installation_id: string; installation_key_id: OrganizationApiSha256Digest;
+  provider: 'slack'; provider_issuer: 'https://slack.com'; provider_tenant_kind: 'workspace'; provider_tenant_id: string; provider_enterprise_id: string | null;
+  provider_connection_subject_id: string; provider_connection_bot_id: string; provider_connection_app_id: string | null; provider_subject_kind: 'human_user'; provider_subject_id: string;
+  adapter_kind: 'approval-surface'; adapter_id: string; adapter_instance_id: string; adapter_version: string;
+  action: 'approve'; approval_id: string; channel_id: string; message_ts: string; reaction_name: string; approve_reaction: string; reject_reaction: string;
+  policy_id: 'organization-member-readable-v1'; policy_contract_sha256: OrganizationApiSha256Digest; release_draft_sha256: OrganizationApiSha256Digest; approval_presentation_sha256: OrganizationApiSha256Digest;
+  provider_event_sha256: OrganizationApiSha256Digest; requested_at: string; http_method: 'POST'; http_path: '/v1/permission-checks';
+}
+export interface OrganizationMemberReadablePermissionCheckRequestV3 extends OrganizationMemberReadablePermissionCheckRequestPayloadV3 { integrity: OrganizationApiSignedIntegrityV1 }
+export interface OrganizationMemberReadablePermissionCheckDecisionV3 {
+  schema_version: 3; kind: 'echo-organization-permission-check-decision'; request_sha256: OrganizationApiSha256Digest; provider_event_sha256: OrganizationApiSha256Digest; allowed: boolean; reason_code: string;
+  policy_id: 'organization-member-readable-v1'; policy_contract_sha256: OrganizationApiSha256Digest;
+  principal_id: string | null; membership_id: string | null; adapter_binding_id: string | null; permission_grant_id: string | null; evaluated_at: string;
+  authorization_audit_event_id: string | null; authorization_audit_entry_sha256: OrganizationApiSha256Digest | null; release_draft_sha256: OrganizationApiSha256Digest | null; approval_presentation_sha256: OrganizationApiSha256Digest | null; semantic_intent_sha256: OrganizationApiSha256Digest | null; message_presentation_sha256: OrganizationApiSha256Digest | null;
+}
+
 /**
  * The signed, target-free reviewer read. The caller supplies no target,
  * policy, limit, cursor, sort, query, or atom id, and query parameters are
@@ -222,6 +242,41 @@ export interface OrganizationReviewerRecentDecisionsResponseV1 {
   items: readonly OrganizationReviewerRecentDecisionItemV1[];
   policy_id: 'restricted-reviewer-v1';
   witness: string;
+}
+
+/** The target-free, signed permission-aware lexical search operation. */
+export interface OrganizationReadableSearchRequestPayloadV1 {
+  schema_version: 1;
+  kind: 'echo-organization-readable-search-request';
+  request_id: string;
+  authority_id: string;
+  authority_key_id: OrganizationApiSha256Digest;
+  organization_id: string;
+  enrollment_id: string;
+  installation_id: string;
+  installation_key_id: OrganizationApiSha256Digest;
+  http_method: 'POST';
+  http_path: '/v1/readable-search';
+  query: string;
+  requested_at: string;
+}
+
+export interface OrganizationReadableSearchRequestV1
+  extends OrganizationReadableSearchRequestPayloadV1 {
+  integrity: OrganizationApiSignedIntegrityV1;
+}
+
+export interface OrganizationReadableSearchResultItemV1 {
+  kind: OrganizationRecentDecisionKindV1;
+  text: string;
+  policy_id: 'organization-member-readable-v1' | 'restricted-reviewer-v1';
+  witness: string;
+}
+
+export interface OrganizationReadableSearchResponseV1 {
+  schema_version: 1;
+  contract_id: 'permission-aware-readable-search-v1';
+  items: readonly OrganizationReadableSearchResultItemV1[];
 }
 
 export interface OrganizationRecentDecisionsRequestPayloadV1 {

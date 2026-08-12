@@ -10,16 +10,20 @@ import {
   ORGANIZATION_API_SLACK_LINK_CHALLENGES_PATH,
   ORGANIZATION_API_SLACK_LINK_COMPLETIONS_PATH,
   organizationPermissionProviderEventSha256,
+  organizationMemberReadablePermissionProviderEventSha256,
   organizationReviewerPermissionProviderEventSha256,
   organizationSlackLinkChallengeCodeSha256,
   type OrganizationPermissionCheckDecisionV1,
   type OrganizationPermissionCheckRequestV1,
+  type OrganizationMemberReadablePermissionCheckDecisionV3,
+  type OrganizationMemberReadablePermissionCheckRequestV3,
   type OrganizationReviewerPermissionCheckRequestV2,
   type OrganizationSlackLinkBeginRequestV1,
   type OrganizationSlackLinkBeginResponseV1,
   type OrganizationSlackLinkCompleteRequestV1,
   type OrganizationSlackLinkResultV1,
 } from '@echo-brain/organization-api';
+import { organizationMemberReadablePolicyContractSha256 } from '@echo-brain/organization-protocol';
 import {
   beginOrganizationAuthorityHttpServerShutdown,
   createOrganizationAuthorityHttpServer,
@@ -260,6 +264,107 @@ function reviewerPermissionRequest(): OrganizationReviewerPermissionCheckRequest
       key_id: INSTALLATION_KEY_ID,
       signature_base64: 'QUJDREVGR0g=',
     },
+  };
+}
+
+function organizationMemberPermissionRequest(): OrganizationMemberReadablePermissionCheckRequestV3 {
+  const event = {
+    authority_id: AUTHORITY_ID,
+    authority_key_id: AUTHORITY_KEY_ID,
+    organization_id: ORGANIZATION_ID,
+    enrollment_id: ENROLLMENT_ID,
+    installation_id: INSTALLATION_ID,
+    installation_key_id: INSTALLATION_KEY_ID,
+    provider: 'slack',
+    provider_issuer: 'https://slack.com',
+    provider_tenant_kind: 'workspace',
+    provider_tenant_id: 'T123ABC',
+    provider_enterprise_id: null,
+    provider_connection_subject_id: 'U123BOT',
+    provider_connection_bot_id: 'B123BOT',
+    provider_connection_app_id: 'A123APP',
+    provider_subject_kind: 'human_user',
+    provider_subject_id: 'U123ZHEN',
+    adapter_kind: 'approval-surface',
+    adapter_id: 'slack-reactions',
+    adapter_instance_id: 'primary',
+    adapter_version: '1.0.0',
+    action: 'approve',
+    approval_id: 'f'.repeat(64),
+    channel_id: 'C123ABC',
+    message_ts: '1720000000.123456',
+    reaction_name: 'white_check_mark',
+    approve_reaction: 'white_check_mark',
+    reject_reaction: 'x',
+    policy_id: 'organization-member-readable-v1',
+    policy_contract_sha256: organizationMemberReadablePolicyContractSha256(),
+    release_draft_sha256: digest('organization-member-release'),
+    approval_presentation_sha256: digest('organization-member-presentation'),
+    http_method: 'POST',
+    http_path: ORGANIZATION_API_PERMISSION_CHECKS_PATH,
+  } as const;
+  return {
+    schema_version: 3,
+    kind: 'echo-organization-permission-check-request',
+    request_id: 'pcr_dddddddd-dddd-4ddd-8ddd-dddddddddddd',
+    ...event,
+    provider_event_sha256:
+      organizationMemberReadablePermissionProviderEventSha256(event),
+    requested_at: NOW,
+    integrity: {
+      canonicalization: 'RFC8785',
+      payload_sha256: digest('organization-member-request-payload'),
+      signature_algorithm: 'ecdsa-p256-sha256-der-low-s',
+      key_id: INSTALLATION_KEY_ID,
+      signature_base64: 'QUJDREVGR0g=',
+    },
+  } as OrganizationMemberReadablePermissionCheckRequestV3;
+}
+
+function organizationMemberPermissionDecision(
+  request: OrganizationMemberReadablePermissionCheckRequestV3,
+  allowed = false,
+): OrganizationMemberReadablePermissionCheckDecisionV3 {
+  return {
+    schema_version: 3,
+    kind: 'echo-organization-permission-check-decision',
+    request_sha256: digest('organization-member-request'),
+    provider_event_sha256: request.provider_event_sha256,
+    allowed,
+    reason_code: allowed
+      ? 'active_organization_member_readable_notice_v1'
+      : 'provider_identity_mismatch',
+    policy_id: 'organization-member-readable-v1',
+    policy_contract_sha256: request.policy_contract_sha256,
+    principal_id: allowed
+      ? 'prn_33333333-3333-4333-8333-333333333333'
+      : null,
+    membership_id: allowed
+      ? 'mem_44444444-4444-4444-8444-444444444444'
+      : null,
+    adapter_binding_id: allowed
+      ? 'bnd_55555555-5555-4555-8555-555555555555'
+      : null,
+    permission_grant_id: allowed
+      ? 'pgr_66666666-6666-4666-8666-666666666666'
+      : null,
+    evaluated_at: NOW,
+    authorization_audit_event_id: allowed
+      ? 'aud_77777777-7777-4777-8777-777777777777'
+      : null,
+    authorization_audit_entry_sha256: allowed
+      ? digest('organization-member-audit-entry')
+      : null,
+    release_draft_sha256: allowed ? request.release_draft_sha256 : null,
+    approval_presentation_sha256: allowed
+      ? request.approval_presentation_sha256
+      : null,
+    semantic_intent_sha256: allowed
+      ? digest('organization-member-semantic-intent')
+      : null,
+    message_presentation_sha256: allowed
+      ? digest('organization-member-message-presentation')
+      : null,
   };
 }
 
@@ -578,6 +683,149 @@ describe('organization integrations HTTP routes', () => {
       } finally {
         await close(server);
       }
+    }
+  });
+
+  it('dispatches a signed schema-v3 request and returns its closed decision unchanged', async () => {
+    const command = organizationMemberPermissionRequest();
+    const decision = organizationMemberPermissionDecision(command, true);
+    const checkOrganizationMemberReadablePermission = vi.fn(async () =>
+      decision,
+    );
+    const server = integrationServer(
+      integrationsApplication({ checkOrganizationMemberReadablePermission }),
+      {
+        checkOrganizationMemberReadablePermissionSubject: (request) => ({
+          installation_id: request.installation_id,
+        }),
+      },
+    );
+    const origin = await listen(server);
+    try {
+      const response = await fetch(
+        `${origin}${ORGANIZATION_API_PERMISSION_CHECKS_PATH}`,
+        {
+          method: 'POST',
+          headers: { ...proxyHeaders(), 'content-type': 'application/json' },
+          body: JSON.stringify(command),
+        },
+      );
+      expect(response.status).toBe(200);
+      expect(await response.text()).toBe(JSON.stringify(decision));
+      expect(checkOrganizationMemberReadablePermission).toHaveBeenCalledWith(
+        command,
+        expect.any(AbortSignal),
+      );
+    } finally {
+      await close(server);
+    }
+  });
+
+  it('keeps a schema-v3 identity/card mismatch as its closed 200 denial', async () => {
+    const command = organizationMemberPermissionRequest();
+    const decision = organizationMemberPermissionDecision(command);
+    const server = integrationServer(
+      integrationsApplication({
+        checkOrganizationMemberReadablePermission: vi.fn(async () => decision),
+      }),
+      {
+        checkOrganizationMemberReadablePermissionSubject: (request) => ({
+          installation_id: request.installation_id,
+        }),
+      },
+    );
+    const origin = await listen(server);
+    try {
+      const response = await fetch(
+        `${origin}${ORGANIZATION_API_PERMISSION_CHECKS_PATH}`,
+        {
+          method: 'POST',
+          headers: { ...proxyHeaders(), 'content-type': 'application/json' },
+          body: JSON.stringify(command),
+        },
+      );
+      expect(response.status).toBe(200);
+      expect(await response.text()).toBe(JSON.stringify(decision));
+    } finally {
+      await close(server);
+    }
+  });
+
+  it('uses the exact fixed 503 bytes for schema-v3 provider or storage failures', async () => {
+    const command = organizationMemberPermissionRequest();
+    const fixedBody =
+      '{"error":{"code":"unavailable","message":"service is temporarily unavailable"}}';
+    for (const failure of ['subject-storage', 'provider-storage'] as const) {
+      const checkOrganizationMemberReadablePermission = vi.fn(async () => {
+        throw new Error('private v3 provider/storage detail');
+      });
+      const server = integrationServer(
+        integrationsApplication({ checkOrganizationMemberReadablePermission }),
+        {
+          checkOrganizationMemberReadablePermissionSubject:
+            failure === 'subject-storage'
+              ? () => {
+                  throw new Error('private current state failure');
+                }
+              : (request) => ({ installation_id: request.installation_id }),
+        },
+      );
+      const origin = await listen(server);
+      try {
+        const response = await fetch(
+          `${origin}${ORGANIZATION_API_PERMISSION_CHECKS_PATH}`,
+          {
+            method: 'POST',
+            headers: {
+              ...proxyHeaders(),
+              'content-type': 'application/json',
+            },
+            body: JSON.stringify(command),
+          },
+        );
+        expect(response.status).toBe(503);
+        expect(response.headers.get('cache-control')).toBe('no-store');
+        expect(await response.text()).toBe(fixedBody);
+        expect(checkOrganizationMemberReadablePermission).toHaveBeenCalledTimes(
+          failure === 'subject-storage' ? 0 : 1,
+        );
+      } finally {
+        await close(server);
+      }
+    }
+  });
+
+  it('rejects malformed schema-v3 input before application dispatch', async () => {
+    const command = {
+      ...organizationMemberPermissionRequest(),
+      policy_contract_sha256: digest('wrong-policy-contract'),
+    };
+    const checkOrganizationMemberReadablePermission = vi.fn();
+    const server = integrationServer(
+      integrationsApplication({ checkOrganizationMemberReadablePermission }),
+      {
+        checkOrganizationMemberReadablePermissionSubject: (request) => ({
+          installation_id: request.installation_id,
+        }),
+      },
+    );
+    const origin = await listen(server);
+    try {
+      const response = await fetch(
+        `${origin}${ORGANIZATION_API_PERMISSION_CHECKS_PATH}`,
+        {
+          method: 'POST',
+          headers: { ...proxyHeaders(), 'content-type': 'application/json' },
+          body: JSON.stringify(command),
+        },
+      );
+      expect(response.status).toBe(400);
+      expect(await response.text()).toBe(
+        '{"error":{"code":"invalid_request","message":"request body is invalid"}}',
+      );
+      expect(checkOrganizationMemberReadablePermission).not.toHaveBeenCalled();
+    } finally {
+      await close(server);
     }
   });
 

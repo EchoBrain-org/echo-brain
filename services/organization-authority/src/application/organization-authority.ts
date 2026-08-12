@@ -25,9 +25,11 @@ import {
   validateOrganizationInternalLiveDirectiveRequest,
   validateOrganizationInternalLiveUpdateReceipt,
   validateOrganizationPermissionCheckRequest,
+  validateOrganizationReadableSearchRequest,
   validateOrganizationRecentDecisionsRequest,
   validateOrganizationReviewerRecentDecisionsRequest,
   validateOrganizationReviewerPermissionCheckRequest,
+  validateOrganizationMemberReadablePermissionCheckRequest,
   validateProvisionOrganizationMembershipRequest,
   validateRecoverOrganizationInstallationAccessRequest,
 } from '@echo-brain/organization-api';
@@ -45,9 +47,11 @@ import type {
   OrganizationInternalLiveUpdateReceiptV1,
   OrganizationMembershipPageV1,
   OrganizationPermissionCheckRequestV1,
+  OrganizationReadableSearchRequestV1,
   OrganizationRecentDecisionsRequestV1,
   OrganizationReviewerRecentDecisionsRequestV1,
   OrganizationReviewerPermissionCheckRequestV2,
+  OrganizationMemberReadablePermissionCheckRequestV3,
   ProvisionedOrganizationMembershipV1,
   ProvisionOrganizationMembershipRequestV1,
   RecoverOrganizationInstallationAccessRequestV1,
@@ -104,6 +108,7 @@ import type {
   StoredAuthorityMembership,
   StoredEnrollmentGrant,
   StoredInternalLiveRelease,
+  StoredReadableSearchActiveGeneration,
 } from './ports/authority-repository.js';
 import type {
   AuthorityClock,
@@ -137,6 +142,14 @@ import type {
   OrganizationRecentDecisionsProjectedRecord,
   PreparedOrganizationRecentDecisionsResponse,
 } from './recent-decisions.js';
+import {
+  ReadableSearchError,
+  type ReadableSearchAuthorityStatePort,
+  type ReadableSearchAuthenticatedRequest,
+  type ReadableSearchCurrentPerson,
+  type ReadableSearchGenerationBinding,
+  type ReadableSearchScope,
+} from './readable-search.js';
 
 const MAX_TRANSITION_RETRIES = 16;
 
@@ -338,6 +351,14 @@ export interface ReviewerRecentDecisionsSourceOutput {
     readonly position: number;
     readonly record_hash: Sha256Digest | null;
   };
+}
+
+/**
+ * Composition owns the record runtime.  This is the only read the Authority
+ * needs from it at the final authorization linearization point.
+ */
+export interface ReadableSearchRecordHeadVerifier {
+  stillMatches(binding: ReadableSearchGenerationBinding): boolean;
 }
 
 export interface CreateOrganizationAuthorityApplicationOptions {
@@ -1681,6 +1702,310 @@ export class OrganizationAuthorityApplication {
     return canonicalSha256(command);
   }
 
+  /**
+   * The durable active-generation pointer is intentionally exposed as a
+   * value, never as a repository handle.  Composition resolves its private
+   * directory and opens the retrieval generation from this exact pin.
+   */
+  readableSearchActiveGeneration(): StoredReadableSearchActiveGeneration | null {
+    try {
+      return this.repository.read((transaction) =>
+        transaction.activeReadableSearchGeneration(),
+      );
+    } catch (error) {
+      throw new ReadableSearchError(
+        'unavailable',
+        'readable-search active generation is unavailable',
+        { cause: error },
+      );
+    }
+  }
+
+  /** The reusable port retains no request state across concurrent searches. */
+  createBoundReadableSearchAuthorityStatePort(
+    recordHead: ReadableSearchRecordHeadVerifier,
+  ): ReadableSearchAuthorityStatePort {
+    const port: ReadableSearchAuthorityStatePort = {
+      authenticate: (input: OrganizationReadableSearchRequestV1) =>
+        this.authenticateReadableSearchRequest(input),
+      currentPerson: (request: ReadableSearchAuthenticatedRequest) =>
+        this.readableSearchRead((transaction) =>
+          this.readableSearchPersonSnapshot(
+            transaction,
+            request,
+            this.now('readable-search initial authorization time'),
+          ),
+        ),
+      writeAtLinearization: <T>(
+        authenticated: ReadableSearchAuthenticatedRequest,
+        scope: ReadableSearchScope | null,
+        selected: readonly import('./readable-search.js').ReadableSearchCandidate[],
+        operation: (input: {
+          readonly person: ReadableSearchCurrentPerson;
+          readonly checked_at: string;
+          readonly scope_still_admitted: boolean;
+          appendQueryAudit: AuthorityWriteTransaction['appendReadableSearchQueryAudit'];
+        }) => T,
+      ): T => {
+        return this.writeReadableSearchAtLinearization(
+          authenticated,
+          scope,
+          selected,
+          recordHead,
+          operation,
+        );
+      },
+    };
+    return Object.freeze(port);
+  }
+
+  private authenticateReadableSearchRequest(
+    raw: OrganizationReadableSearchRequestV1,
+  ): ReadableSearchAuthenticatedRequest {
+    let request: OrganizationReadableSearchRequestV1;
+    try {
+      request = JSON.parse(
+        canonicalJson(validateOrganizationReadableSearchRequest(raw)),
+      ) as OrganizationReadableSearchRequestV1;
+    } catch (error) {
+      throw new ReadableSearchError(
+        'invalid_request',
+        'readable-search request is invalid',
+        { cause: error },
+      );
+    }
+    try {
+      const enrollment = this.repository.read((transaction) =>
+        transaction.enrollmentById(request.enrollment_id),
+      );
+      if (enrollment === undefined) {
+        throw new AuthorityOperationError(
+          'unauthorized',
+          'readable-search enrollment does not exist',
+        );
+      }
+      const requestSha256 = this.authenticateInstallationCommand(
+        request,
+        enrollment,
+        'readable-search request',
+      );
+      assertFreshInstallationRequest(
+        request.requested_at,
+        this.now('readable-search request freshness time'),
+        this.accessRequestMaximumAgeMs,
+        'readable-search request',
+      );
+      return Object.freeze({ request, request_sha256: requestSha256 });
+    } catch (error) {
+      if (
+        error instanceof AuthorityOperationError &&
+        error.code === 'unauthorized'
+      ) {
+        throw new ReadableSearchError(
+          'unauthorized',
+          'readable-search authentication failed',
+          { cause: error },
+        );
+      }
+      if (error instanceof ReadableSearchError) throw error;
+      throw new ReadableSearchError(
+        'unavailable',
+        'readable-search authentication is unavailable',
+        { cause: error },
+      );
+    }
+  }
+
+  private readableSearchRead<T>(
+    operation: (transaction: AuthorityReadTransaction) => T,
+  ): T {
+    try {
+      return this.repository.read(operation);
+    } catch (error) {
+      if (error instanceof ReadableSearchError) throw error;
+      throw new ReadableSearchError(
+        'unavailable',
+        'readable-search Authority state is unavailable',
+        { cause: error },
+      );
+    }
+  }
+
+  private readableSearchPersonSnapshot(
+    transaction: AuthorityReadTransaction,
+    authenticated: ReadableSearchAuthenticatedRequest,
+    checkedAt: string,
+  ): ReadableSearchCurrentPerson {
+    const { request } = authenticated;
+    const enrollment = transaction.enrollmentById(request.enrollment_id);
+    if (enrollment === undefined) {
+      throw new ReadableSearchError(
+        'unavailable',
+        'authenticated readable-search enrollment disappeared',
+      );
+    }
+    const membership = transaction.membership(enrollment.membership_id);
+    const access = transaction.currentAccessState(enrollment.enrollment_id);
+    if (membership === undefined || access === undefined) {
+      throw new ReadableSearchError(
+        'unavailable',
+        'readable-search current Person state is incomplete',
+      );
+    }
+    if (
+      request.authority_id !== this.descriptorValue.authority_id ||
+      request.organization_id !== this.descriptorValue.organization_id ||
+      enrollment.authority_id !== request.authority_id ||
+      enrollment.organization_id !== request.organization_id ||
+      enrollment.enrollment_id !== request.enrollment_id ||
+      enrollment.installation_id !== request.installation_id ||
+      enrollment.installation_signing_key.key_id !== request.installation_key_id ||
+      membership.organization_id !== enrollment.organization_id ||
+      membership.membership_id !== enrollment.membership_id ||
+      membership.principal_id !== enrollment.principal_id ||
+      membership.membership_type !== enrollment.membership_type ||
+      access.enrollment_id !== enrollment.enrollment_id
+    ) {
+      throw new ReadableSearchError(
+        'unavailable',
+        'readable-search current Person state is inconsistent',
+      );
+    }
+    const personStateSha256 = canonicalSha256({
+      schema_version: 1,
+      kind: 'readable-search-person-state-v1',
+      authority_id: this.descriptorValue.authority_id,
+      organization_id: this.descriptorValue.organization_id,
+      membership_id: membership.membership_id,
+      principal_id: membership.principal_id,
+      membership_type: membership.membership_type,
+      membership_status: membership.status,
+      membership_revoked_at: membership.revoked_at,
+      enrollment_id: enrollment.enrollment_id,
+      enrollment_status: enrollment.status,
+      enrollment_revoked_at: enrollment.revoked_at,
+      enrollment_revocation_kind: enrollment.revocation_kind,
+      installation_id: enrollment.installation_id,
+      installation_key_id: enrollment.installation_signing_key.key_id,
+      access_state_sequence: access.state.access_state_sequence,
+      access_state_sha256: access.state_sha256,
+      access_status: access.state.status,
+      access_valid_until: access.state.valid_until,
+      evaluated_at: checkedAt,
+    });
+    const base = {
+      principal_id: membership.principal_id,
+      membership_id: membership.membership_id,
+      membership_type: membership.membership_type,
+      enrollment_id: enrollment.enrollment_id,
+      installation_id: enrollment.installation_id,
+      person_state_sha256: personStateSha256,
+    } as const;
+    if (membership.status !== 'active') {
+      return Object.freeze({
+        ...base,
+        decision: 'not_found' as const,
+        governed_reason: 'inactive_or_unbound_organization_membership' as const,
+      });
+    }
+    if (enrollment.status !== 'active') {
+      return Object.freeze({
+        ...base,
+        decision: 'not_found' as const,
+        governed_reason: 'inactive_or_revoked_installation_enrollment' as const,
+      });
+    }
+    if (access.state.status !== 'active') {
+      return Object.freeze({
+        ...base,
+        decision: 'not_found' as const,
+        governed_reason: 'inactive_or_revoked_installation_enrollment' as const,
+      });
+    }
+    if (access.state.valid_until === null) {
+      throw new ReadableSearchError(
+        'unavailable',
+        'active readable-search access state has no expiry',
+      );
+    }
+    if (
+      timestampMillis(access.state.valid_until, 'readable-search access expiry') <=
+      timestampMillis(checkedAt, 'readable-search Person check time')
+    ) {
+      return Object.freeze({
+        ...base,
+        decision: 'expired' as const,
+        governed_reason: 'installation_access_expired' as const,
+      });
+    }
+    return Object.freeze({
+      ...base,
+      decision: 'eligible' as const,
+      governed_reason: 'active_member_with_scoped_policy_paths' as const,
+    });
+  }
+
+  private readableSearchGenerationStillMatches(
+    transaction: AuthorityReadTransaction,
+    scope: ReadableSearchScope,
+  ): boolean {
+    const active = transaction.activeReadableSearchGeneration();
+    return (
+      active !== null &&
+      active.generation_id === scope.binding.generation_id &&
+      active.manifest_sha256 === scope.binding.manifest_sha256 &&
+      active.retrieval_contract_sha256 ===
+        scope.binding.retrieval_contract_sha256 &&
+      active.record_head_position === scope.binding.record_head_position &&
+      active.record_head_hash === scope.binding.record_head_hash
+    );
+  }
+
+  private writeReadableSearchAtLinearization<T>(
+    authenticated: ReadableSearchAuthenticatedRequest,
+    scope: ReadableSearchScope | null,
+    selected: readonly import('./readable-search.js').ReadableSearchCandidate[],
+    recordHead: ReadableSearchRecordHeadVerifier,
+    operation: (input: {
+      readonly person: ReadableSearchCurrentPerson;
+      readonly checked_at: string;
+      readonly scope_still_admitted: boolean;
+      appendQueryAudit: AuthorityWriteTransaction['appendReadableSearchQueryAudit'];
+    }) => T,
+  ): T {
+    try {
+      return this.repository.writeAtLinearization(
+        () => this.now('readable-search authorization commit time'),
+        (transaction, checkedAt) => {
+          const person = this.readableSearchPersonSnapshot(
+            transaction,
+            authenticated,
+            checkedAt,
+          );
+          const scopeStillAdmitted =
+            scope === null ||
+            (this.readableSearchGenerationStillMatches(transaction, scope) &&
+              recordHead.stillMatches(scope.binding) &&
+              scope.selected_policy_paths_still_match(selected));
+          return operation({
+            person,
+            checked_at: checkedAt,
+            scope_still_admitted: scopeStillAdmitted,
+            appendQueryAudit: (entry) =>
+              transaction.appendReadableSearchQueryAudit(entry),
+          });
+        },
+      );
+    } catch (error) {
+      if (error instanceof ReadableSearchError) throw error;
+      throw new ReadableSearchError(
+        'unavailable',
+        'readable-search final authorization is unavailable',
+        { cause: error },
+      );
+    }
+  }
+
   private authenticateAccessCommand(
     command: OrganizationAccessLeaseRequestV1,
     enrollment: StoredAuthorityEnrollment,
@@ -2356,10 +2681,31 @@ export class OrganizationAuthorityApplication {
     );
   }
 
+  /**
+   * Schema-v3 uses the same current-Person status calculation as the earlier
+   * permission checks, after authenticating its own closed request contract.
+   * Keeping this entry point separate prevents a schema-v3 request from being
+   * reinterpreted through either v1 or v2 validation.
+   */
+  checkOrganizationMemberReadablePermissionSubject(
+    request: OrganizationMemberReadablePermissionCheckRequestV3,
+    target: OrganizationPermissionAuthorityTarget | null,
+  ): OrganizationPermissionAuthorityStatus {
+    return this.permissionSubjectStatus(
+      JSON.parse(
+        canonicalJson(
+          validateOrganizationMemberReadablePermissionCheckRequest(request),
+        ),
+      ) as OrganizationMemberReadablePermissionCheckRequestV3,
+      target,
+    );
+  }
+
   private permissionSubjectStatus(
     request:
       | OrganizationPermissionCheckRequestV1
-      | OrganizationReviewerPermissionCheckRequestV2,
+      | OrganizationReviewerPermissionCheckRequestV2
+      | OrganizationMemberReadablePermissionCheckRequestV3,
     target: OrganizationPermissionAuthorityTarget | null,
   ): OrganizationPermissionAuthorityStatus {
     if (target !== null) {
