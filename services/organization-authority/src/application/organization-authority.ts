@@ -1871,9 +1871,9 @@ export class OrganizationAuthorityApplication {
         'readable-search current Person state is inconsistent',
       );
     }
-    const personStateSha256 = canonicalSha256({
+    const authorizationState = {
       schema_version: 1,
-      kind: 'readable-search-person-state-v1',
+      kind: 'readable-search-authorization-state-v1',
       authority_id: this.descriptorValue.authority_id,
       organization_id: this.descriptorValue.organization_id,
       membership_id: membership.membership_id,
@@ -1891,6 +1891,11 @@ export class OrganizationAuthorityApplication {
       access_state_sha256: access.state_sha256,
       access_status: access.state.status,
       access_valid_until: access.state.valid_until,
+    } as const;
+    const authorizationStateSha256 = canonicalSha256(authorizationState);
+    const personStateSha256 = canonicalSha256({
+      ...authorizationState,
+      kind: 'readable-search-person-state-v1',
       evaluated_at: checkedAt,
     });
     const base = {
@@ -1899,6 +1904,7 @@ export class OrganizationAuthorityApplication {
       membership_type: membership.membership_type,
       enrollment_id: enrollment.enrollment_id,
       installation_id: enrollment.installation_id,
+      authorization_state_sha256: authorizationStateSha256,
       person_state_sha256: personStateSha256,
     } as const;
     if (membership.status !== 'active') {

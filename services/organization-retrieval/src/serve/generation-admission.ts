@@ -62,8 +62,6 @@ export interface ReadableSearchImmutableFileIdentity {
 export interface OpenAdmittedReadableSearchPlaneOptions {
   readonly open_database?: (path: string) => Database.Database;
   readonly validate_opened?: (database: Database.Database) => void;
-  /** Test-only: isolates opened-object validation from pathname checks. */
-  readonly skip_post_open_identity_check?: boolean;
 }
 
 export interface OpenedReadableSearchGeneration extends ReadableSearchAdmittedGeneration {
@@ -159,7 +157,6 @@ function openReadonlyPlane(
   });
   try {
     if (
-      options?.skip_post_open_identity_check !== true &&
       expectedIdentity !== undefined &&
       !sameImmutableFileIdentity(
         immutableFileIdentity(path, `readable-search ${definition.plane} plane`),

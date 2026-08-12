@@ -80,14 +80,14 @@ export const REVIEWER_APPROVAL_TRANSPORT: ReviewerApprovalTransportV1 =
     unfurl_media: false,
   });
 
-export function reviewerApprovalFallbackReactionLine(
+function reviewerApprovalFallbackReactionLine(
   approveReaction: string,
   rejectReaction: string,
 ): string {
   return `React :${approveReaction}: to approve or :${rejectReaction}: to reject. To record a reason, reply in this thread before reacting.`;
 }
 
-export function reviewerApprovalContextReactionLine(
+function reviewerApprovalContextReactionLine(
   approveReaction: string,
   rejectReaction: string,
 ): string {
@@ -98,7 +98,7 @@ export function reviewerApprovalContextReactionLine(
  * The complete deterministic alternative presentation. Screen-reader users see
  * the same package, in the same frozen item order, as the block rendering.
  */
-export function reviewerApprovalFallbackText(input: {
+function reviewerApprovalFallbackText(input: {
   readonly draft: ReviewerReleaseDraftV1;
   readonly approve_reaction: string;
   readonly reject_reaction: string;
@@ -115,11 +115,11 @@ export function reviewerApprovalFallbackText(input: {
   ].join("\n");
 }
 
-export function reviewerApprovalTitleBlockId(approvalId: string): string {
+function reviewerApprovalTitleBlockId(approvalId: string): string {
   return `echo-approval-${approvalId}-title-v1`;
 }
 
-export function reviewerApprovalItemBlockId(
+function reviewerApprovalItemBlockId(
   approvalId: string,
   index: number,
   signalIdSha256: string,
@@ -129,11 +129,11 @@ export function reviewerApprovalItemBlockId(
   )}-v1`;
 }
 
-export function reviewerApprovalPolicyBlockId(approvalId: string): string {
+function reviewerApprovalPolicyBlockId(approvalId: string): string {
   return `echo-approval-${approvalId}-reviewer-policy-v1`;
 }
 
-export function reviewerApprovalReactionBlockId(approvalId: string): string {
+function reviewerApprovalReactionBlockId(approvalId: string): string {
   return `echo-approval-${approvalId}-reaction-v1`;
 }
 

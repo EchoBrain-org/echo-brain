@@ -85,7 +85,6 @@ export {
 } from "./organization-member-release-draft.js";
 export type { OrganizationMemberReadableReleaseDraftItemV1, OrganizationMemberReadableReleaseDraftV1 } from "./organization-member-release-draft.js";
 export {
-  organizationMemberReadableApprovalFallbackText,
   organizationMemberReadableApprovalPresentation,
   organizationMemberReadableApprovalPresentationSha256,
 } from "./organization-member-approval-presentation.js";
@@ -124,15 +123,8 @@ export type {
 export {
   REVIEWER_APPROVAL_PRESENTATION_KIND,
   REVIEWER_APPROVAL_TRANSPORT,
-  reviewerApprovalContextReactionLine,
-  reviewerApprovalFallbackReactionLine,
-  reviewerApprovalFallbackText,
-  reviewerApprovalItemBlockId,
-  reviewerApprovalPolicyBlockId,
   reviewerApprovalPresentation,
   reviewerApprovalPresentationSha256,
-  reviewerApprovalReactionBlockId,
-  reviewerApprovalTitleBlockId,
 } from "./reviewer-approval-presentation.js";
 export type {
   ReviewerApprovalBlockV1,

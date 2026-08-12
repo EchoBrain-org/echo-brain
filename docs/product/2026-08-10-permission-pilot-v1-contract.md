@@ -2,8 +2,9 @@
 
 **Date:** 2026-08-10
 
-**Status:** pre-merge implementation contract. It does not claim Pilot slice 1
-is landed or shipped.
+**Status:** implemented local baseline at
+`aaae7509f6b62434b1f23e811b82f3926c38eae3`. It is not deployed, founder-live
+qualified, client-live qualified, or released.
 
 **Constitution:** [Organization permission architecture](2026-08-09-organization-permission-architecture.md)
 

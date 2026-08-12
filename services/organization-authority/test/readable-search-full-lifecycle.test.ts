@@ -264,8 +264,10 @@ describe('Layer 2 local readable-search lifecycle', () => {
       unicode_version: process.versions.unicode ?? 'unknown',
       icu_version: process.versions.icu ?? 'unknown',
     });
+    const clock = fixture.clock;
     let admissions = 0;
     const openings: string[] = [];
+    let advanceClockAtFirstHandle = false;
     const service = createReadableSearchRuntimeAdapter({
       authority: fixture.application,
       records: restarted,
@@ -291,10 +293,18 @@ describe('Layer 2 local readable-search lifecycle', () => {
         return admitReadableSearchGenerationDirectory(input);
       },
       handle_observer: {
-        opened: (plane, segmentId) => openings.push(`${plane}:${segmentId}`),
+        opened: (plane, segmentId) => {
+          openings.push(`${plane}:${segmentId}`);
+          if (advanceClockAtFirstHandle) {
+            advanceClockAtFirstHandle = false;
+            clock.advance(1);
+          }
+        },
       },
     });
     expect(admissions).toBe(1);
+    const initialAuthorizationAt = clock.now();
+    advanceClockAtFirstHandle = true;
     const reviewerResponse = await service.search(await fixture.readableSearchRequest('launch roadmap'));
     const reviewerBytes = handoff(reviewerResponse);
     expect(reviewerResponse.status_code).toBe(200);
@@ -335,6 +345,9 @@ describe('Layer 2 local readable-search lifecycle', () => {
         parseCanonicalJson(rows[1]!.detail_json),
       ) as Record<string, unknown>;
       expect(reviewerAudit['response_sha256']).toBe(sha256Digest(reviewerBytes));
+      expect(reviewerAudit['evaluated_at']).toBe(
+        new Date(Date.parse(initialAuthorizationAt) + 1).toISOString(),
+      );
       expect(memberAudit['response_sha256']).toBe(sha256Digest(memberBytes));
       expect(memberAudit['returned_policy_ids']).toEqual([
         'organization-member-readable-v1',

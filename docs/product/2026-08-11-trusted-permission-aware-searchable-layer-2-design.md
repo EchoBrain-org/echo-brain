@@ -1,14 +1,14 @@
 # B: Permission-aware lexical Layer 2 minimum V1
 
 **Status:** approved implementation contract for minimum V1, founder-directed
-2026-08-12 and independently reviewed. Job B is locally committed at
+2026-08-12 and independently reviewed. Job B is implemented at source baseline
 `588b42828d5c811a4ae51b21e881139109e7e46d`, with integrated pre-push
 hardening at `c0a498f7aebca9a5f067cc9a808a967297ff7d9d`; final local gates passed.
 The Authority image's derived workspace/runtime closure and real stopped
 retrieval-migration smoke are pinned at
 `2da11a04f45ff503978dd6594fe2677964c93a9e`.
-Remote source publication is not a merge, deployment, founder-live
-qualification, client-live qualification, or release.
+Source integration and remote publication do not constitute deployment,
+founder-live qualification, client-live qualification, or release.
 
 **Pinned Job A predecessor:**
 `03167cfd66fa0b5fe983abbf266271178548efb8` on
@@ -27,10 +27,10 @@ primitive; Job A's complete suite must revalidate both composition changes.
 organization-member admission path, retrieval workspace, stopped rebuild,
 backup verification, and query-audit maintenance commands, plus product
 client/CLI wiring described below. Final local validation passed: `npm run
-check` (boundary, typecheck, lint; root 111 files/1,170 tests; product 34
+check` (boundary, typecheck, lint; root 111 files/1,171 tests; product 34
 files/333 tests), protocol suites (12 federation, 62 organization-protocol, 65
 organization-API), control-plane (123), record (121), retrieval (21), Authority
-(35 files/401 tests), integration (5 files/10 tests), and infrastructure (4
+(35 files/402 tests), integration (5 files/10 tests), and infrastructure (4
 files/29 tests). Independent final acceptance/security review passed after the
 orphan-verifier fix; lean review had no must-fix findings, and its optional
 internal test seam was made file-local.
@@ -937,12 +937,12 @@ their respective single exported helpers. One search-contract helper builds
 and hashes this object; generation build, startup, scope minting, final fence,
 and audit append independently compare it.
 
-`person_state_sha256` is the canonical SHA-256 of the current transaction's
-exact-key snapshot:
+`authorization_state_sha256` is the canonical SHA-256 of the current
+transaction's exact-key authorization snapshot:
 
 ```text
 schema_version = 1
-kind = readable-search-person-state-v1
+kind = readable-search-authorization-state-v1
 authority_id
 organization_id
 principal_id
@@ -960,15 +960,19 @@ access_state_sequence
 access_state_sha256
 access_status = active | revoked
 access_valid_until = timestamp | null
-evaluated_at
 ```
 
 All keys are always present. The snapshot is reconstructed from Authority rows
 inside the same transaction that evaluates it; no caller value supplies a
 state field. Allow requires both active statuses, `membership_type` in the
 closed allowlist, matching enrollment/access bindings, and
-`access_valid_until > evaluated_at`. Audited expired/inactive decisions hash
-the exact non-eligible snapshot they evaluated.
+`access_valid_until > evaluated_at`. The final cross-transaction fence compares
+this stable digest, so ordinary clock passage does not turn an unchanged allow
+into a mismatch. `person_state_sha256` remains the canonical SHA-256 of this
+same object with `kind = readable-search-person-state-v1` and the transaction's
+`evaluated_at` appended; it is retained in the decision audit so each audit row
+records the exact timestamped snapshot it evaluated. Audited expired/inactive
+decisions hash the exact non-eligible timestamped snapshot they evaluated.
 
 ## Retrieval generation: a new Layer 2 store
 
@@ -2039,7 +2043,9 @@ search route reuses the Authority's landed fixed 401/500 bytes. The same pass
 removed redundant per-record roots, an unused reverse-posting index, and the
 backward coupling from immutable admission policy to one search wire version.
 
-The remaining boundary is implementation start. This contract freezes the
-exact policy consequence, two-policy search union, and wire/analyzer choices
-above; changing one requires a reviewed contract revision rather than an
-implementation-time interpretation.
+Source integration closes the implementation boundary but does not qualify a
+deployment. Restore reconciliation and founder-live qualification remain the
+external gates. This contract freezes the exact policy consequence,
+two-policy search union, and wire/analyzer choices above; changing one requires
+a reviewed contract revision rather than an implementation-time
+interpretation.

@@ -271,7 +271,7 @@ describe('admitted generation and opaque search machine', () => {
     }
   });
 
-  it('detects a swap-open-restore race from the opened lexical object, not its pathname', () => {
+  it('detects a counterfeit opened lexical object after its pathname passes post-open identity validation', () => {
     const directory = stateDirectory();
     try {
       const build = buildStoppedReadableSearchGeneration(buildInput(directory, [
@@ -292,7 +292,6 @@ describe('admitted generation and opaque search machine', () => {
         atom({ atom_id: 'member', text: 'counterfeit member text', position: 1 }),
       ]));
       const replacement = `${member.lexical_path}.replacement`;
-      const original = `${member.lexical_path}.original`;
       copyFileSync(
         `${counterfeit.generation_directory}/segments/${member.manifest.segment_id}/lexical.sqlite`,
         replacement,
@@ -303,14 +302,9 @@ describe('admitted generation and opaque search machine', () => {
         READABLE_SEARCH_LEXICAL_DATABASE,
         member.lexical_identity,
         {
-          skip_post_open_identity_check: true,
           open_database: (path) => {
-            renameSync(path, original);
-            renameSync(replacement, path);
-            const database = new Database(path, { readonly: true, fileMustExist: true });
-            renameSync(path, replacement);
-            renameSync(original, path);
-            return database;
+            expect(path).toBe(member.lexical_path);
+            return new Database(replacement, { readonly: true, fileMustExist: true });
           },
           validate_opened: (database) => {
             const documents = database.prepare(

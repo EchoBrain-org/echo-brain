@@ -73,12 +73,15 @@ and build sequence. Consequently, neither new document inherited the old
 CLEAN verdict. A subsequently completed fresh code-grounding, storage/port,
 wire-contract, scope, and invariant reviews and is now an
 [approved implementation contract](2026-08-11-reviewer-permission-v1-log-facts-design.md).
-B still needs a fresh review when a concrete search or cross-record operation
-reaches its entry gate.
+B is implemented at source baseline
+`588b42828d5c811a4ae51b21e881139109e7e46d`, with final local gates and
+independent acceptance/security review recorded in its approved implementation
+contract. It is not deployed, founder-live qualified, client-live qualified,
+or released.
 
 ## Authorization boundary
 
 This non-normative split index authorizes no action by itself. A independently
 authorizes only its specified implementation. Neither this index nor A
 authorizes merge, deployment, migration, cutover, founder-live testing, or
-release. B remains a proposal and authorizes no implementation.
+release. B's local implementation does not authorize any of those actions.

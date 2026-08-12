@@ -2,9 +2,9 @@
 
 **Status:** approved implementation contract, implemented and locally
 validated on `feat/organization-permission-pilot-v1-clean`. The founder choices
-remain closed. The reviewed implementation is committed on the feature branch;
-remote source publication does not constitute merge, deployment,
-founder-live qualification, or release.
+remain closed. The reviewed implementation is pinned below; source integration
+and remote publication do not constitute deployment, founder-live
+qualification, or release.
 
 **Implementation lineage:** Job A landed at
 `03167cfd66fa0b5fe983abbf266271178548efb8`. The integrated reviewed head is
@@ -14,10 +14,10 @@ broadening either approved policy. Code and schemas remain authoritative for
 landed behavior.
 
 **Local validation (2026-08-12):** `npm run check` is green: source boundary,
-typecheck, lint, 111 non-product test files with 1,170 tests, and 34 product test
+typecheck, lint, 111 non-product test files with 1,171 tests, and 34 product test
 files with 333 tests. The explicit workspace gates are also green: federation
 protocol 12, organization protocol 62, organization API 65, control plane 123,
-record 121, retrieval 21, Authority 401, integration 10, and infrastructure 29
+record 121, retrieval 21, Authority 402, integration 10, and infrastructure 29
 tests. `git diff --check` is clean. Stages 1-5 include a real Authority reviewer
 permission decision, append-atomic facts, process restart, exact self-read, and
 a separately enrolled current member's audited empty response with no canonical

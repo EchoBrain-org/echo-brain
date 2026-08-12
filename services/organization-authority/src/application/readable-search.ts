@@ -68,6 +68,13 @@ export interface ReadableSearchCurrentPerson {
   readonly membership_type: 'owner' | 'employee';
   readonly enrollment_id: string;
   readonly installation_id: string;
+  /**
+   * Closed authorization-relevant state only. This deliberately excludes the
+   * evaluation clock, so the final transaction can distinguish an actual
+   * authorization change from the expected passage of time between checks.
+   */
+  readonly authorization_state_sha256: Sha256Digest;
+  /** Timestamped Person snapshot retained for the final decision audit. */
   readonly person_state_sha256: Sha256Digest;
 }
 
@@ -358,7 +365,7 @@ function samePerson(
     initial.enrollment_id === final.enrollment_id &&
     initial.installation_id === final.installation_id &&
     initial.membership_type === final.membership_type &&
-    initial.person_state_sha256 === final.person_state_sha256
+    initial.authorization_state_sha256 === final.authorization_state_sha256
   );
 }
 

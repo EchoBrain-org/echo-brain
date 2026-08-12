@@ -8,7 +8,7 @@ export interface OrganizationMemberReadableApprovalPresentationV1 {
   schema_version: 1; kind: typeof ORGANIZATION_MEMBER_READABLE_APPROVAL_PRESENTATION_KIND; approval_id: string; approve_reaction: string; reject_reaction: string; text: string; blocks: readonly Record<string, unknown>[]; transport: { mrkdwn: false; unfurl_links: false; unfurl_media: false };
 }
 const transport = Object.freeze({ mrkdwn: false as const, unfurl_links: false as const, unfurl_media: false as const });
-export function organizationMemberReadableApprovalFallbackText(input: { draft: OrganizationMemberReadableReleaseDraftV1; approve_reaction: string; reject_reaction: string }): string {
+function organizationMemberReadableApprovalFallbackText(input: { draft: OrganizationMemberReadableReleaseDraftV1; approve_reaction: string; reject_reaction: string }): string {
   return ["Decision brief awaiting approval.", `Title: ${input.draft.card_title}`, ...input.draft.items.map((item) => `${item.kind}: ${item.text}`), ORGANIZATION_MEMBER_READABLE_CONSEQUENCE_TEXT, `React :${input.approve_reaction}: to approve or :${input.reject_reaction}: to reject. To record a reason, reply in this thread before reacting.`].join("\n");
 }
 export function organizationMemberReadableApprovalPresentation(input: { draft: OrganizationMemberReadableReleaseDraftV1; approve_reaction: string; reject_reaction: string }): OrganizationMemberReadableApprovalPresentationV1 {

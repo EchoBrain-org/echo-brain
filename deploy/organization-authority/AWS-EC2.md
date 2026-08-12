@@ -53,6 +53,15 @@ printf 'ECHO_AUTHORITY_IMAGE=%s\n' "$PINNED_IMAGE"
 docker logout "$REGISTRY"
 ```
 
+`access-recovery-504ec74` is the current pinned production image. It predates
+the locally implemented Job B readable-search capability and does **not**
+contain `verify-readable-search-backup`. Do not add that command to this
+image's cutover, backup, or restore requirements. The Job B-only procedure in
+the restore boundary below applies only after a separately promoted
+B-capable image has been deliberately selected; local baseline
+`588b42828d5c811a4ae51b21e881139109e7e46d` is not that promotion and is not
+deployed or released.
+
 Record the ECR digest and Docker image ID separately. The EC2 `.env` must use
 the digest-pinned ECR reference, never just a tag. The ECR repository is
 immutable and scans on push.
@@ -370,16 +379,9 @@ Before a real restore, persistently disable and stop the current connector. A
 restored boot volume must have the connector disabled or masked offline, or
 outbound connectivity blocked, before its first boot.
 
-Start the restored Authority privately, list memberships and installations,
-and compare them with a separately retained incident or operator record. The
-restored audit log is not sufficient evidence because it was rewound with the
-database. Treat every restored active membership and installation as
-unverified until the Founder confirms it; reapply every known membership or
-installation revocation before reconnecting public ingress.
-
-The readable-search baseline adds stopped validation and external evidence to
-the existing restore boundary. Before external reconciliation, keep the
-Authority stopped and run:
+Keep the restored Authority stopped. If, and only if, this restore uses a
+separately promoted B-capable image, run the Job B verifier before starting the
+Authority privately or doing external reconciliation:
 
 ```bash
 compose run --rm --no-deps authority \
@@ -394,7 +396,17 @@ may be rebuilt only from verified current Layer 1 while stopped. If the verifier
 rejects an intended stale pointer/head, keep the process offline, retain any
 pre-rebuild copy only as an unverified incident snapshot, run the stopped
 rebuild, and rerun verification before reconciliation. A stale generation
-cannot serve as a historical prefix.
+cannot serve as a historical prefix. This is a conditional B validation gate,
+not a requirement for the pinned `access-recovery-504ec74` image.
+
+Once the conditional B verification has succeeded, or does not apply because
+the selected image is not B-capable, start the restored Authority privately.
+List memberships and installations and compare them with a separately retained
+incident or operator record. The restored audit log is not sufficient evidence
+because it was rewound with the database. Treat every restored active
+membership and installation as unverified until the Founder confirms it;
+reapply every known membership or installation revocation before reconnecting
+public ingress.
 
 Keep the completed evidence in the incident or deployment record outside
 `/srv/echo-authority/data` so restored state cannot overwrite it. Record:
@@ -406,22 +418,23 @@ Keep the completed evidence in the incident or deployment record outside
   expiry, and revocation state, compared with independently retained operator
   evidence;
 - the current integration authorization-audit chain and each reviewer proof
-  referenced by a reviewer-policy fact, plus the organization-member-readable
-  policy proof family when present;
-- the complete organization-record chain, both policy-fact admissions, active
-  pointer, exact record head, generation manifest/roots, analyzer and retrieval
-  contract identity, and any applicable client-held record or access receipts
-  and heads;
-- writable readable-search query-audit storage and applicable stopped export or
-  expiry receipts; and
+  referenced by a reviewer-policy fact; for a separately promoted B-capable
+  image, also retain the organization-member-readable policy proof family;
+- the complete organization-record chain and applicable client-held record or
+  access receipts and heads; for a separately promoted B-capable image, also
+  retain both policy-fact admissions, active pointer, exact record head,
+  generation manifest/roots, and analyzer/retrieval contract identity;
+- for a separately promoted B-capable image, writable readable-search
+  query-audit storage and applicable stopped export or expiry receipts; and
 - the Founder or trusted operator's explicit release decision.
 
-A mismatch, missing fact, incomplete audit proof, invalid/stale readable-search
-generation, unexplained valid-prefix rollback, or unavailable client receipt
-keeps the reviewer route, readable-search route, and public ingress offline.
-The restore script's archive, SQLite integrity, foreign-key checks, and stopped
-readable-search verification are necessary but do not prove that a rolled-back
-Person or authorization state is current. There is intentionally no automatic
+A mismatch, missing fact, incomplete audit proof, unexplained valid-prefix
+rollback, or unavailable client receipt keeps the reviewer route and public
+ingress offline. For a separately promoted B-capable image, an invalid or stale
+readable-search generation also keeps its route offline. The restore script's
+archive, SQLite integrity, and foreign-key checks, plus the conditional stopped
+B verification when applicable, do not prove that a rolled-back Person or
+authorization state is current. There is intentionally no automatic
 reconciliation command: the release evidence must remain outside the state
 being restored. Nothing in this baseline runbook claims founder-live or
 release qualification.

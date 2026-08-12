@@ -25,7 +25,7 @@ employees. The repository contains:
 - a minimum customer-owned organization control plane for one verified
   organization Slack tool, exact provider identity links and adapter bindings,
   and direct approve/reject permission checks; and
-- a locally committed bounded permission-aware organization readable-search
+- a source-implemented bounded permission-aware organization readable-search
   baseline, documented with its authority lifecycle rather than as a deployed
   feature.
 

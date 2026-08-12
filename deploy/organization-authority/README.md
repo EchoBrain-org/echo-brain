@@ -55,10 +55,21 @@ The authority container owns four private SQLite files in the same durable
 state directory: `authority.sqlite` for membership and installation truth,
 `integrations.sqlite` for provider connections and grants, `record-log.sqlite`
 for append-only organization record truth, and `record-derived.sqlite` for its
-rebuildable projection. The locally committed Job B baseline also publishes immutable
+rebuildable projection. The source-implemented Job B baseline also publishes immutable
 retrieval generations below `data/state/record-retrieval/generations/`; they
 are not a fifth mutable source of truth. All run in one process under one
 authenticated singleton guard.
+
+## Release boundary
+
+The current EC2 runbook pins `access-recovery-504ec74`. That image predates
+Job B and does not include readable-search generation or
+`verify-readable-search-backup`; it must not be treated as requiring either.
+The readable-search sections below document the locally implemented Job B
+baseline and apply operationally only after a separately promoted B-capable
+image has been selected. Local baseline
+`588b42828d5c811a4ae51b21e881139109e7e46d` is not deployed, founder-live
+qualified, client-live qualified, or released.
 
 For a state initialized by an older build, build the exact target image first,
 then stop and back up the complete state before running the one-time upgrade.
@@ -251,7 +262,7 @@ active. Durable keys and all four database files remain in the host-mounted
 `data` directory; the coordination volume contains no organization content and
 may be recreated only while the whole authority stack is stopped.
 
-For the local readable-search baseline, use the same stopped snapshot boundary
+For a separately promoted B-capable image, use the same stopped snapshot boundary
 before a generation rebuild or query-audit maintenance. The route is unavailable
 until an exact-record-head generation is published; any later append makes it
 return fixed `503` until the next stopped rebuild. The verifier deliberately
@@ -289,7 +300,7 @@ known-good backup. The second archive follows a successful verifier receipt and
 is the recovery-grade backup. For routine stopped backups with an already
 exact-head generation, run the verifier before creating the only archive.
 
-`verify-readable-search-backup` must run while stopped before a recovery-grade
+For a separately promoted B-capable image, `verify-readable-search-backup` must run while stopped before a recovery-grade
 archive and again after a restore, before any external reconciliation. It
 returns `verified` for an admitted active generation or `not_built` when no
 active pointer exists; it otherwise rejects the pointer/head mismatch, bad
@@ -333,24 +344,26 @@ Restarting only `authority` replaces that namespace and strands the existing
 proxy process until `proxy` is also restarted.
 
 Treat the complete `data` directory as one recovery unit. Stop the stack before
-a file-level backup, run `verify-readable-search-backup`, and then archive only
-after its `verified` or `not_built` result so
-all four SQLite databases, the signing key, credentials, identity and
-installation manifests, active pointer, and immutable retrieval generation are
-captured consistently. The derived database is the only SQLite file that may be
-absent and rebuilt from a verified log before restart; a missing retrieval
-generation may be rebuilt only from verified current Layer 1 while stopped.
-Every protected file must otherwise be restored together. A stale-generation
-copy is an unverified incident snapshot until a stopped rebuild and fresh
-verification produce a separate recovery-grade archive.
+a file-level backup and archive all four SQLite databases, signing key,
+credentials, identity, and installation manifests together. For a separately
+promoted B-capable image, also run `verify-readable-search-backup` first and
+capture its active pointer and immutable retrieval generation only after a
+`verified` or `not_built` result. The derived database is the only SQLite file
+that may be absent and rebuilt from a verified log before restart; on a
+B-capable image, a missing retrieval generation may be rebuilt only from
+verified current Layer 1 while stopped. Every protected file must otherwise be
+restored together. A B stale-generation copy is an unverified incident snapshot
+until a stopped rebuild and fresh verification produce a separate recovery-grade
+archive.
 
 Before making any restored Authority available, complete the external operator
 evidence checklist in
 [`AWS-EC2.md`](./AWS-EC2.md#restore-boundary). Keep the Tunnel and reviewer
-and readable-search routes offline until current Person roots, the integration
-audit chain, complete record log, both policy-fact families, active pointer and
-generation evidence, and applicable client-held receipts have been reconciled
-against independently retained evidence. A restored database cannot serve as
+route offline until current Person roots, the integration audit chain, complete
+record log, and applicable client-held receipts have been reconciled against
+independently retained evidence. For a separately promoted B-capable image,
+keep readable search offline as well until its policy-fact, active-pointer, and
+generation evidence has been reconciled. A restored database cannot serve as
 evidence that its own historical state is current.
 
 That `data` archive is sufficient for this in-place upgrade rollback because

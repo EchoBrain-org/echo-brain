@@ -314,18 +314,6 @@ export function verifyOrganizationReviewerPermissionCheckRequest(
   return request;
 }
 
-export function organizationReviewerPermissionCheckRequestSha256(
-  value: unknown,
-  installationSigningKey: P256SigningKeyDescriptor,
-): Sha256Digest {
-  return canonicalSha256(
-    verifyOrganizationReviewerPermissionCheckRequest(
-      value,
-      installationSigningKey,
-    ),
-  );
-}
-
 export interface CreateOrganizationReviewerPermissionCheckRequestInput
   extends Omit<
     OrganizationReviewerPermissionProviderEventInput,

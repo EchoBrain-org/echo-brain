@@ -120,6 +120,7 @@ function person(
     membership_type: 'employee',
     enrollment_id: 'enr_00000000-0000-4000-8000-000000000001',
     installation_id: 'ins_00000000-0000-4000-8000-000000000001',
+    authorization_state_sha256: digest('0'),
     person_state_sha256: digest('a'),
     ...overrides,
   };
@@ -391,6 +392,28 @@ describe('readable-search Authority orchestration', () => {
       expect(response.status_code).toBe(200);
       handoff(response);
     }
+  });
+
+  it('allows a progressing authorization clock when the closed state is unchanged and audits the final snapshot', async () => {
+    const found = candidate();
+    const initial = person({ person_state_sha256: digest('a') });
+    const final = person({ person_state_sha256: digest('b') });
+    const subject = harness({
+      initial,
+      final,
+      candidates: [found],
+      fetched: [item(found)],
+    });
+
+    const response = await subject.service.search(REQUEST);
+
+    expect(response.status_code).toBe(200);
+    handoff(response);
+    expect(subject.audits).toHaveLength(1);
+    expect(subject.audits[0]!.detail).toMatchObject({
+      person_state_sha256: final.person_state_sha256,
+      evaluated_at: CHECKED_AT,
+    });
   });
 
   it('returns audited empty 200 without any content result', async () => {

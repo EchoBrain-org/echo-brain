@@ -12,11 +12,21 @@ while `integrations.sqlite` contains customer-owned provider links,
 connections, adapter bindings, direct grants, and integration audit.
 `record-log.sqlite` is the append-only record of truth, and
 `record-derived.sqlite` contains its replayable projection. All four databases
-are owned by the same authenticated singleton process. The locally committed
+are owned by the same authenticated singleton process. The source-implemented
 Job B baseline also keeps immutable retrieval generations below
 `record-retrieval/generations/`; those directories are not a fifth mutable
 source of truth. There is no tenant registry, organization switcher, billing
 layer, or multi-replica coordination.
+
+## Release boundary
+
+Job B readable search is implemented at source baseline
+`588b42828d5c811a4ae51b21e881139109e7e46d`; it is not deployed, founder-live
+qualified, client-live qualified, or released. Its route,
+generation, verifier, and query-audit procedures are conditional on a
+separately promoted B-capable image. In particular, the current EC2-pinned
+`access-recovery-504ec74` image predates Job B and does not contain those
+commands, so they are not current production requirements.
 
 ## HTTP surface
 
@@ -27,7 +37,7 @@ origin:
 - `POST /v1/enrollments`
 - `POST /v1/access-leases`
 - `POST /v1/permission-checks`
-- `POST /v1/readable-search`
+- `POST /v1/readable-search` (B-capable image only; see the release boundary above)
 - `POST /v1/integration-links/slack/challenges`
 - `POST /v1/integration-links/slack/completions`
 - `GET /v1/admin/overview`
@@ -63,8 +73,9 @@ Administrator requests use `Authorization: Bearer <token>`. Enrollment uses
 `Authorization: Echo-Enrollment <grant>`. Lease refresh, permission checks,
 and readable search use installation-signed commands.
 
-`POST /v1/readable-search` is implemented at the local Job B baseline, not an
-operational release. It accepts only a canonical RFC 8785 signed request body
+When a separately promoted B-capable image is selected,
+`POST /v1/readable-search` provides the local Job B baseline behavior. It is
+not an operational release. It accepts only a canonical RFC 8785 signed request body
 with no URL query, searches the two closed policy families, and returns at most
 ten whole decision/action/rationale items. It has no pagination, totals,
 scores, snippets, filters, cache, external provider, vector, graph, or model
@@ -267,7 +278,10 @@ after a stopped readable-search rebuild publishes a complete immutable
 generation. The active-generation pointer remains in `authority.sqlite`; a
 generation directory must never be copied, repaired, or swapped on its own.
 
-### Local readable-search baseline configuration and maintenance
+### Conditional Job B readable-search configuration and maintenance
+
+This section applies only to a separately promoted B-capable image. It does
+not add a runtime or backup requirement to `access-recovery-504ec74`.
 
 The optional `organization_recording_policy_v1` runtime-config object enables
 one explicit recording presentation mode. It must contain exactly:
@@ -449,14 +463,16 @@ investigate before copying it, and never copy it as a good backup.
 1. Stop the authority (`SIGTERM`, or the service manager's stop) and confirm it
    exited without a shutdown error and with exit code 0. A non-zero exit after a
    derive failure means the same thing: do not treat that state as a backup.
-2. Before copying, run `verify-readable-search-backup` below. It returns the
+2. For a separately promoted B-capable image, before copying run
+   `verify-readable-search-backup` below. It returns the
    text-free `verified` receipt for an admitted exact-head generation, or the
    benign `not_built` receipt when no active pointer exists. Either result may
    precede a recovery-grade archive. A stale pointer/head mismatch, corrupt
    generation, staging directory, or sidecar is a failure, not a valid backup
    result.
-3. Copy the whole state directory as one unit only after that successful
-   verification. Every protected file below is
+3. Copy the whole state directory as one unit. For a separately promoted
+   B-capable image, do so only after that successful verification. Every
+   protected file below is
    mandatory. A known-good backup also includes the derived file and, if an
    active readable-search generation exists, its complete immutable generation
    directory; `record-derived.sqlite` is the only SQLite file that may instead
@@ -491,7 +507,8 @@ investigate before copying it, and never copy it as a good backup.
 Databases use `journal_mode = DELETE`, so a stopped state has no WAL or SHM
 sidecars and every file is readable read-only exactly as copied.
 
-Before archiving and again after restoring, run the stopped validation command:
+For a separately promoted B-capable image, before archiving and again after
+restoring, run the stopped validation command:
 
 ```sh
 npm run organization-authority:cli -- verify-readable-search-backup \
