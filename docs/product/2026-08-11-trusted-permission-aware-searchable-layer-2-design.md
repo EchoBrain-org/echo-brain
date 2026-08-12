@@ -2,8 +2,10 @@
 
 **Status:** approved implementation contract for minimum V1, founder-directed
 2026-08-12 and independently reviewed. Job B is locally committed at
-`588b42828d5c811a4ae51b21e881139109e7e46d`; final local gates passed. It is
-not pushed, merged, deployed, founder-live qualified, client-live, or released.
+`588b42828d5c811a4ae51b21e881139109e7e46d`, with integrated pre-push
+hardening at `c0a498f7aebca9a5f067cc9a808a967297ff7d9d`; final local gates passed.
+Remote source publication is not a merge, deployment, founder-live
+qualification, client-live qualification, or release.
 
 **Pinned Job A predecessor:**
 `03167cfd66fa0b5fe983abbf266271178548efb8` on
@@ -22,12 +24,17 @@ primitive; Job A's complete suite must revalidate both composition changes.
 organization-member admission path, retrieval workspace, stopped rebuild,
 backup verification, and query-audit maintenance commands, plus product
 client/CLI wiring described below. Final local validation passed: `npm run
-check` (boundary, typecheck, lint; root 111 files/1141 tests; product 34
-files/333 tests), protocol suites (12 federation, 62 organization-protocol, 63
+check` (boundary, typecheck, lint; root 111 files/1,169 tests; product 34
+files/333 tests), protocol suites (12 federation, 62 organization-protocol, 65
 organization-API), control-plane (123), record (121), retrieval (21), Authority
-(35 files/394 tests), and integration (5 files/10 tests). Independent final
-acceptance/security review passed after the orphan-verifier fix; lean review had
-no must-fix findings, and its optional internal test seam was made file-local.
+(35 files/401 tests), integration (5 files/10 tests), and infrastructure (4
+files/29 tests). Independent final acceptance/security review passed after the
+orphan-verifier fix; lean review had no must-fix findings, and its optional
+internal test seam was made file-local.
+The final pre-push review additionally closed canonical v2/v3 decision-wire
+ownership, continuing export authorization, and crash-recoverable lock
+publication at their shared protocol boundaries rather than route-specific
+patches.
 External restore reconciliation and founder-live rows remain operational gates,
 not implementation blockers. This is a local committed baseline, not an
 operational qualification.

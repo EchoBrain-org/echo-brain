@@ -2,33 +2,41 @@
 
 **Status:** approved implementation contract, implemented and locally
 validated on `feat/organization-permission-pilot-v1-clean`. The founder choices
-remain closed. The code has not been merged, pushed, deployed, founder-live
-qualified, or released.
+remain closed. The reviewed implementation is committed on the feature branch;
+remote source publication does not constitute merge, deployment,
+founder-live qualification, or release.
 
-**Code baseline:** `03167cfd66fa0b5fe983abbf266271178548efb8` on
-`feat/organization-permission-pilot-v1-clean`, committed after independent
-read-only review and the local validation below. Code and schemas remain
-authoritative for landed behavior.
+**Implementation lineage:** Job A landed at
+`03167cfd66fa0b5fe983abbf266271178548efb8`. The integrated reviewed head is
+`c0a498f7aebca9a5f067cc9a808a967297ff7d9d`; it adds systemic permission-wire,
+audit-export authorization, and crash-recoverable lock hardening without
+broadening either approved policy. Code and schemas remain authoritative for
+landed behavior.
 
-**Local validation (2026-08-11):** `npm run check` is green: source boundary,
-typecheck, lint, 91 non-product test files with 1,018 tests, and 30 product test
-files with 297 tests. The explicit workspace gates are also green: federation
-protocol 12, organization protocol 59, organization API 50, control plane 118,
-record 115, Authority 319, and integration 10 tests. `git diff --check` is
-clean. Stages 1-5 include a real Authority reviewer permission decision,
-append-atomic facts, process restart, exact self-read, and a separately
-enrolled current member's audited empty response with no canonical content-row
-access. Restore release remains the external runbook gate, and acceptance item
-13 remains founder-live only.
+**Local validation (2026-08-12):** `npm run check` is green: source boundary,
+typecheck, lint, 111 non-product test files with 1,169 tests, and 34 product test
+files with 333 tests. The explicit workspace gates are also green: federation
+protocol 12, organization protocol 62, organization API 65, control plane 123,
+record 121, retrieval 21, Authority 401, integration 10, and infrastructure 29
+tests. `git diff --check` is clean. Stages 1-5 include a real Authority reviewer
+permission decision, append-atomic facts, process restart, exact self-read, and
+a separately enrolled current member's audited empty response with no canonical
+content-row access. Restore release remains the external runbook gate, and
+acceptance item 13 remains founder-live only.
 
-**Implementation review:** the final Codex minimum-V1 pass removed shared-v1
-validator drift and fixed canonical reviewer permission bytes, fixed reviewer
+**Implementation review:** the Codex minimum-V1 pass removed shared-v1
+validator drift and fixed canonical reviewer permission bytes, reviewer
 operational `503` bytes across pre-provider storage failures, final reviewer
-tuple rebinding, and direct frozen-presentation slot identity validation. A
-read-only `claude-fable-5` review was invoked as requested and made no changes;
-the available Claude account hit its session limit before returning a final
-verdict. That independent verdict remains a pre-merge review evidence gap, not
-a local code or test failure, and must not be represented as a pass.
+tuple rebinding, and direct frozen-presentation slot identity validation. The
+2026-08-12 Codex-only pre-push review then corrected the root wire-contract
+ownership mismatch, made export retries reprove current disclosure authority,
+and replaced the racy lock cleanup patch with an atomic token-publication
+protocol plus deterministic crash, replacement, special-file, and zero-timeout
+coverage. A prior read-only `claude-fable-5` review was invoked as requested
+and made no changes; the available Claude account hit its session limit before
+returning a final verdict. That independent verdict remains a pre-merge review
+evidence gap, not a local code or test failure, and must not be represented as
+a pass.
 
 **Split companion:**
 [B: Permission-aware lexical Layer 2 minimum V1](2026-08-11-trusted-permission-aware-searchable-layer-2-design.md).
