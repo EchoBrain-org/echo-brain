@@ -5,11 +5,10 @@ validated on `feat/organization-permission-pilot-v1-clean`. The founder choices
 remain closed. The code has not been merged, pushed, deployed, founder-live
 qualified, or released.
 
-**Code baseline:** `aaae7509f6b62434b1f23e811b82f3926c38eae3` on
-`feat/organization-permission-pilot-v1-clean`. Code and schemas remain
-authoritative for landed behavior. The implementation is the uncommitted Job A
-worktree diff above `10c0f74cd6dde1fb98e338e2bc0af31d53f0548d`; record its
-final commit SHA here when it is intentionally committed.
+**Code baseline:** `03167cfd66fa0b5fe983abbf266271178548efb8` on
+`feat/organization-permission-pilot-v1-clean`, committed after independent
+read-only review and the local validation below. Code and schemas remain
+authoritative for landed behavior.
 
 **Local validation (2026-08-11):** `npm run check` is green: source boundary,
 typecheck, lint, 91 non-product test files with 1,018 tests, and 30 product test

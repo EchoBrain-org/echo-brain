@@ -1,16 +1,15 @@
 # B: Permission-aware lexical Layer 2 minimum V1
 
 **Status:** approved implementation contract for minimum V1, founder-directed
-2026-08-12 and independently reviewed. Implementation has not started. This
-document does not claim a committed implementation, merge,
-deployment, founder-live qualification, or release. Starting implementation
-must pin a reviewed Job A commit and preserve every gate below.
+2026-08-12 and independently reviewed. Implementation starts only after the
+pinned predecessor below. This document does not claim a completed Job B
+implementation, merge, deployment, founder-live qualification, or release.
 
-**Design baseline:** `10c0f74cd6dde1fb98e338e2bc0af31d53f0548d` on
-`feat/organization-permission-pilot-v1-clean`. The Job A implementation is the
-worktree diff above that commit; its final reviewed commit SHA must replace
-this baseline before Job B code starts. Code and migrations remain
-authoritative for behavior that has already landed.
+**Pinned Job A predecessor:**
+`03167cfd66fa0b5fe983abbf266271178548efb8` on
+`feat/organization-permission-pilot-v1-clean`, locally validated and committed
+2026-08-12. Code and migrations remain authoritative for behavior that has
+already landed.
 
 **Predecessor capability:**
 [A: Reviewer permission minimum V1 with append-atomic log facts](2026-08-11-reviewer-permission-v1-log-facts-design.md).
@@ -1772,9 +1771,9 @@ decision releases no response bytes.
 Implementation is sequential. A later stage cannot make an earlier incomplete
 stage look acceptable, and no stage is a release by itself.
 
-1. **Pin the predecessor.** Finish, independently review, and commit Job A.
-   Record its SHA here and in the invariant registry. Do not build B on an
-   unnamed dirty diff.
+1. **Pin the predecessor.** Satisfied by reviewed Job A commit
+   `03167cfd66fa0b5fe983abbf266271178548efb8`. Every Job B stage must keep its
+   complete validation suite green.
 2. **Land organization policy admission.** Protocol/API schema v3, frozen human
    consequence/card, Authority proof/audit, append capability, append-atomic
    facts, strict duplicate behavior, derived compatibility exclusion, startup
