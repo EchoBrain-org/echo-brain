@@ -1,0 +1,88 @@
+name: Bug or regression
+description: Report reproducible incorrect behavior for weekly triage.
+labels:
+  - bug
+  - needs-triage
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Use this form when you can describe incorrect behavior and how to reproduce it. Use **Quick capture** when the finding is still preliminary.
+
+        Do not include credentials, tokens, private user data, or exploitable security details. Use [private vulnerability reporting](https://github.com/EchoBrain-org/echo-brain/security/advisories/new) instead.
+
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      options:
+        - Mac client
+        - Central Authority
+        - CI or release
+        - Repository or documentation
+        - Unsure or cross-cutting
+    validations:
+      required: true
+
+  - type: textarea
+    id: observed
+    attributes:
+      label: What happened?
+      description: Describe the observable behavior and frequency.
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: What should have happened?
+    validations:
+      required: true
+
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Reproduction steps
+      description: Provide the smallest reliable sequence. If intermittent, say so and describe when it occurs.
+      placeholder: |
+        1. Start with ...
+        2. Run ...
+        3. Observe ...
+    validations:
+      required: true
+
+  - type: dropdown
+    id: impact
+    attributes:
+      label: Potential impact
+      description: Choose the closest observation. Triage will assign final priority.
+      options:
+        - Unsure
+        - Minor friction or cleanup
+        - Incorrect behavior with a workaround
+        - Blocks a workflow or release
+        - Risks data integrity or availability
+    validations:
+      required: true
+
+  - type: input
+    id: observed-in
+    attributes:
+      label: Observed in
+      description: Client version, commit SHA, workflow run, or Authority image digest, if known.
+      placeholder: Optional
+
+  - type: textarea
+    id: evidence
+    attributes:
+      label: Sanitized evidence
+      description: Add relevant logs, screenshots, or links after removing secrets and private data.
+      placeholder: Optional
+
+  - type: checkboxes
+    id: safety
+    attributes:
+      label: Safety check
+      options:
+        - label: I did not include secrets, credentials, private user data, or exploitable security details.
+          required: true
