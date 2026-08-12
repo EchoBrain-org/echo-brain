@@ -31,6 +31,16 @@ export type {
   OrganizationPermissionPilotPresentationV1,
 } from './application/permission-pilot.js';
 export { isOrganizationRecordError } from './application/errors.js';
+/**
+ * Reviewer capabilities, raw stores, database handles, and read sessions are
+ * deliberately NOT on this entry point.
+ *
+ * Served composition receives append internals only through the explicit
+ * `/append` subpath and receives reviewer reads only as the narrow closure on
+ * `/reviewer`. Stopped operator code uses `/maintenance`. The ordinary package
+ * root therefore cannot mint append authority, open a database, scan protected
+ * facts, or bind content.
+ */
 export type {
   OrganizationRecordAlert,
   OrganizationRecordAuthorityPort,
@@ -43,25 +53,5 @@ export {
   organizationRecordReceiptPayload,
   parseOrganizationRecordEnvelope,
 } from './application/record-frame.js';
-export { OrganizationRecordIngest } from './application/record-ingest.js';
-export { verifyOrganizationRecordChain } from './log/chain-verification.js';
-export { OrganizationRecordLogStore } from './log/record-log-store.js';
-export {
-  OrganizationPermissionPilotLog,
-  type OrganizationPermissionPilotActivationResult,
-} from './log/permission-pilot.js';
-export { OrganizationRecordDerivedStore } from './derive/derived-store.js';
-export { OrganizationRecordFollower } from './derive/follower.js';
-export { OrganizationRecordLogReader } from './derive/log-reader.js';
-export {
-  OrganizationPermissionPilotReader,
-  type OrganizationPermissionPilotEligibleRecord,
-  type OrganizationPermissionPilotValidatedState,
-} from './retrieve/permission-pilot-reader.js';
 export { projectOrganizationRecord } from './derive/projection.js';
-export {
-  ORGANIZATION_RECORD_DERIVED_DATABASE,
-  ORGANIZATION_RECORD_LOG_DATABASE,
-} from './persistence/database-definition.js';
-export { inspectOrganizationRecordDatabaseSchema } from './persistence/migrate.js';
-export { openOrganizationRecordDatabase } from './persistence/open-database.js';
+export type { OrganizationPermissionPilotEligibleRecord } from './retrieve/permission-pilot-reader.js';

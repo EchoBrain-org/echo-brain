@@ -29,6 +29,7 @@ const AUTHORITY_TABLES = Object.freeze([
   'authority_memberships',
   'authority_metadata',
   'authority_principals',
+  'authority_query_decision_audit',
 ]);
 
 interface MetadataRow {

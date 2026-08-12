@@ -5,6 +5,7 @@ import type {
   Sha256Digest,
   VerifiedOrganizationRecordEnvelope,
 } from './contracts.js';
+import type { ReviewerPolicyFactAppendInput } from './reviewer-eligibility-capability.js';
 
 /**
  * Authority verification.
@@ -40,7 +41,8 @@ export type OrganizationRecordAlertKind =
   | 'derive-halted'
   | 'derive-nudge-failed'
   | 'receipt-materialization-failed'
-  | 'permission-pilot-inactive';
+  | 'permission-pilot-inactive'
+  | 'reviewer-restricted-inactive';
 
 export interface OrganizationRecordAlert {
   readonly kind: OrganizationRecordAlertKind;
@@ -61,7 +63,21 @@ export interface OrganizationRecordLogAppendInput {
   readonly envelope: VerifiedOrganizationRecordEnvelope;
   readonly canonical_envelope: string;
   readonly envelope_sha256: Sha256Digest;
-  readonly recorded_at: string;
+  /**
+   * `recorded_at` is deliberately absent.
+   *
+   * The append transaction alone allocates position, predecessor, and record
+   * time, so no caller can choose the value the record hash commits. The log
+   * store samples its own injected clock once, inside `BEGIN IMMEDIATE` and
+   * after the exact duplicate check.
+   */
+  /**
+   * Present only for a reviewer-v2 approval, and only ever minted by the
+   * Authority append coordinator after its exact primary-key audit lookup.
+   * Legacy and rejection appends do not require it and cannot create reviewer
+   * facts. It is a live runtime capability, never a serializable field.
+   */
+  readonly reviewer_eligibility?: ReviewerPolicyFactAppendInput;
 }
 
 export interface OrganizationRecordLogAppendOutcome {

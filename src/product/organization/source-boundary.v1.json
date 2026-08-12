@@ -95,7 +95,7 @@
     },
     {
       "name": "local-organization-recent-decisions-use-authority",
-      "from": "src/product/organization/recent-decisions-reader.ts",
+      "from": "src/product/organization/*recent-decisions-reader.ts",
       "allowed_imports": [
         "src/product/organization/**",
         "src/product/machine/security/installation-signer.ts"

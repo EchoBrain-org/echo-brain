@@ -374,6 +374,30 @@ database. Treat every restored active membership and installation as
 unverified until the Founder confirms it; reapply every known membership or
 installation revocation before reconnecting public ingress.
 
+Restricted reviewer V1 adds a mandatory release checklist. Keep its completed
+evidence in the incident or deployment record outside `/srv/echo-authority/data`
+so the restored state cannot overwrite the decision to release it. Record:
+
+- the restored artifact digest, checkpoint time, operator, and validation time;
+- proof that the Tunnel and every other ingress path remained disabled while
+  the restored process was inspected;
+- each current Person root: membership, enrollment, installation, access-lease
+  expiry, and revocation state, compared with independently retained operator
+  evidence;
+- the current integration authorization-audit chain and each reviewer proof
+  referenced by a reviewer-policy fact;
+- the complete organization-record chain, reviewer-policy fact admission, and
+  any applicable client-held record or access receipts and heads; and
+- the Founder or trusted operator's explicit release decision.
+
+A mismatch, missing fact, incomplete audit proof, unexplained valid-prefix
+rollback, or unavailable client receipt keeps the reviewer route and public
+ingress offline. The restore script's archive, SQLite integrity, and foreign-key
+checks are necessary but do not prove that a rolled-back Person or reviewer
+authorization is still current. There is intentionally no database marker or
+automatic reconciliation command: the release evidence must remain outside the
+state being restored.
+
 `installation access-recover` is not a remedy when restoring the Authority
 makes a client newer than the server. Use a newer checkpoint, or revoke and
 replace the stale installation with a newly bootstrapped and enrolled identity.

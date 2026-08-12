@@ -26,6 +26,8 @@ import {
   validateOrganizationInternalLiveUpdateReceipt,
   validateOrganizationPermissionCheckRequest,
   validateOrganizationRecentDecisionsRequest,
+  validateOrganizationReviewerRecentDecisionsRequest,
+  validateOrganizationReviewerPermissionCheckRequest,
   validateProvisionOrganizationMembershipRequest,
   validateRecoverOrganizationInstallationAccessRequest,
 } from '@echo-brain/organization-api';
@@ -44,6 +46,8 @@ import type {
   OrganizationMembershipPageV1,
   OrganizationPermissionCheckRequestV1,
   OrganizationRecentDecisionsRequestV1,
+  OrganizationReviewerRecentDecisionsRequestV1,
+  OrganizationReviewerPermissionCheckRequestV2,
   ProvisionedOrganizationMembershipV1,
   ProvisionOrganizationMembershipRequestV1,
   RecoverOrganizationInstallationAccessRequestV1,
@@ -68,7 +72,7 @@ import type {
   OrganizationEnrollmentReceiptV1,
   OrganizationEnrollmentRequestV1,
   OrganizationInstallationAccessStateV1,
-  OrganizationRecordEnvelopeV1,
+  OrganizationRecordEnvelopeAnyVersion,
   OrganizationRecordReceiptPayloadV1,
   OrganizationRecordReceiptV1,
   PinnedOrganizationAuthority,
@@ -116,6 +120,18 @@ import {
   prepareAllowedRecentDecisionsResponse,
   validateRecentDecisionsPilotActivation,
 } from './recent-decisions.js';
+import {
+  prepareReviewerRecentDecisionsResponse,
+  preparedReviewerDenial,
+  reviewerAllowAuditDetail,
+  reviewerDenialAuditDetail,
+  ReviewerRecentDecisionsError,
+} from './reviewer-recent-decisions.js';
+import type {
+  PreparedReviewerRecentDecisionsResponse,
+  ReviewerDenialReasonCode,
+  ReviewerResolvedItem,
+} from './reviewer-recent-decisions.js';
 import type {
   OrganizationRecentDecisionsPilotActivation,
   OrganizationRecentDecisionsProjectedRecord,
@@ -274,6 +290,54 @@ interface AuthenticatedRecentDecisionsRequest {
   readonly request: OrganizationRecentDecisionsRequestV1;
   readonly request_sha256: Sha256Digest;
   readonly activation: OrganizationRecentDecisionsPilotActivation;
+}
+
+interface ReviewerRecentDecisionsPersonState {
+  membership_id: string;
+  principal_id: string;
+  membership_status: 'active' | 'revoked';
+  enrollment_id: string;
+  enrollment_status: 'active' | 'revoked';
+  installation_id: string;
+  installation_key_id: Sha256Digest;
+  access_state_sequence: number;
+  access_state_sha256: Sha256Digest;
+  access_status: 'active' | 'revoked';
+  access_valid_until: string | null;
+  checked_at: string;
+}
+
+type ReviewerRecentDecisionsPersonDecision =
+  | 'eligible'
+  | 'expired'
+  | 'not_found';
+
+interface ReviewerRecentDecisionsPersonSnapshot {
+  readonly state: ReviewerRecentDecisionsPersonState;
+  readonly state_sha256: Sha256Digest;
+  readonly decision: ReviewerRecentDecisionsPersonDecision;
+  readonly governed_reason:
+    | 'active_exact_reviewer_membership'
+    | ReviewerDenialReasonCode;
+}
+
+interface AuthenticatedReviewerRecentDecisionsRequest {
+  readonly request: OrganizationReviewerRecentDecisionsRequestV1;
+  readonly request_sha256: Sha256Digest;
+}
+
+export interface ReviewerRecentDecisionsSourceInput {
+  readonly request_sha256: Sha256Digest;
+  readonly reviewer_principal_id: string;
+  readonly reviewer_membership_id: string;
+}
+
+export interface ReviewerRecentDecisionsSourceOutput {
+  readonly items: readonly ReviewerResolvedItem[];
+  readonly record_head: {
+    readonly position: number;
+    readonly record_hash: Sha256Digest | null;
+  };
 }
 
 export interface CreateOrganizationAuthorityApplicationOptions {
@@ -626,7 +690,7 @@ export class OrganizationAuthorityApplication {
   verifyRecordEnvelope(
     value: unknown,
     installationSigningKey: P256SigningKeyDescriptor,
-  ): OrganizationRecordEnvelopeV1 {
+  ): OrganizationRecordEnvelopeAnyVersion {
     return verifyOrganizationRecordEnvelope(
       value,
       this.pinnedAuthority,
@@ -1938,14 +2002,366 @@ export class OrganizationAuthorityApplication {
     return this.commitRecentDecisionsResponse(authenticated, allowed);
   }
 
+  private reviewerRecentDecisionsRead<T>(
+    operation: (transaction: AuthorityReadTransaction) => T,
+  ): T {
+    try {
+      return this.repository.read(operation);
+    } catch (error) {
+      if (error instanceof ReviewerRecentDecisionsError) throw error;
+      throw new ReviewerRecentDecisionsError(
+        'unavailable',
+        'authority state is unavailable for reviewer recent decisions',
+        { cause: error },
+      );
+    }
+  }
+
+  private reviewerRecentDecisionsPersonSnapshot(
+    transaction: AuthorityReadTransaction,
+    authenticated: AuthenticatedReviewerRecentDecisionsRequest,
+    checkedAt: string,
+  ): ReviewerRecentDecisionsPersonSnapshot {
+    const { request } = authenticated;
+    const enrollment = transaction.enrollmentById(request.enrollment_id);
+    if (enrollment === undefined) {
+      throw new ReviewerRecentDecisionsError(
+        'unavailable',
+        'authenticated reviewer enrollment disappeared',
+      );
+    }
+    const membership = transaction.membership(enrollment.membership_id);
+    const access = transaction.currentAccessState(enrollment.enrollment_id);
+    if (membership === undefined || access === undefined) {
+      throw new ReviewerRecentDecisionsError(
+        'unavailable',
+        'reviewer current Person state is incomplete',
+      );
+    }
+    if (
+      request.authority_id !== this.descriptorValue.authority_id ||
+      request.organization_id !== this.descriptorValue.organization_id ||
+      enrollment.authority_id !== request.authority_id ||
+      enrollment.organization_id !== request.organization_id ||
+      enrollment.enrollment_id !== request.enrollment_id ||
+      enrollment.installation_id !== request.installation_id ||
+      enrollment.installation_signing_key.key_id !==
+        request.installation_key_id ||
+      membership.organization_id !== enrollment.organization_id ||
+      membership.membership_id !== enrollment.membership_id ||
+      membership.principal_id !== enrollment.principal_id ||
+      access.enrollment_id !== enrollment.enrollment_id
+    ) {
+      throw new ReviewerRecentDecisionsError(
+        'unavailable',
+        'reviewer current Person state is inconsistent',
+      );
+    }
+    const state: ReviewerRecentDecisionsPersonState = {
+      membership_id: membership.membership_id,
+      principal_id: membership.principal_id,
+      membership_status: membership.status,
+      enrollment_id: enrollment.enrollment_id,
+      enrollment_status: enrollment.status,
+      installation_id: enrollment.installation_id,
+      installation_key_id: enrollment.installation_signing_key.key_id,
+      access_state_sequence: access.state.access_state_sequence,
+      access_state_sha256: access.state_sha256,
+      access_status: access.state.status,
+      access_valid_until: access.state.valid_until,
+      checked_at: checkedAt,
+    };
+    const stateSha256 = canonicalSha256(state);
+    if (
+      membership.status !== 'active' ||
+      enrollment.status !== 'active' ||
+      access.state.status !== 'active'
+    ) {
+      return {
+        state,
+        state_sha256: stateSha256,
+        decision: 'not_found',
+        governed_reason: 'inactive_or_unbound_reviewer_membership',
+      };
+    }
+    if (access.state.valid_until === null) {
+      throw new ReviewerRecentDecisionsError(
+        'unavailable',
+        'active reviewer access state has no expiry',
+      );
+    }
+    if (
+      timestampMillis(
+        access.state.valid_until,
+        'reviewer access lease expiry',
+      ) <= timestampMillis(checkedAt, 'reviewer Person check time')
+    ) {
+      return {
+        state,
+        state_sha256: stateSha256,
+        decision: 'expired',
+        governed_reason: 'installation_access_expired',
+      };
+    }
+    return {
+      state,
+      state_sha256: stateSha256,
+      decision: 'eligible',
+      governed_reason: 'active_exact_reviewer_membership',
+    };
+  }
+
+  private preparedReviewerRecentDecisionsDenial(
+    snapshot: ReviewerRecentDecisionsPersonSnapshot,
+  ): PreparedReviewerRecentDecisionsResponse {
+    return preparedReviewerDenial(snapshot.decision === 'expired' ? 401 : 404);
+  }
+
+  private commitReviewerRecentDecisionsResponse(
+    authenticated: AuthenticatedReviewerRecentDecisionsRequest,
+    allowed:
+      | {
+          readonly prepared: PreparedReviewerRecentDecisionsResponse;
+          readonly source: ReviewerRecentDecisionsSourceOutput;
+          readonly resolved_reviewer_principal_id: string;
+          readonly resolved_reviewer_membership_id: string;
+        }
+      | null,
+  ): PreparedReviewerRecentDecisionsResponse {
+    try {
+      return this.repository.writeAtLinearization(
+        () => this.now('reviewer recent decisions authorization commit time'),
+        (transaction, checkedAt) => {
+          const snapshot = this.reviewerRecentDecisionsPersonSnapshot(
+            transaction,
+            authenticated,
+            checkedAt,
+          );
+          if (allowed === null && snapshot.decision === 'eligible') {
+            throw new ReviewerRecentDecisionsError(
+              'unavailable',
+              'reviewer Person state changed before denial commit',
+            );
+          }
+          // The source selected every fact under this exact tuple. Requiring
+          // the final Person root to reproduce it reruns the reviewer resolver
+          // for the complete immutable selection without reopening content in
+          // the Authority transaction.
+          const resolverStillMatches =
+            allowed !== null &&
+            snapshot.state.principal_id ===
+              allowed.resolved_reviewer_principal_id &&
+            snapshot.state.membership_id ===
+              allowed.resolved_reviewer_membership_id;
+          const isAllow =
+            allowed !== null &&
+            snapshot.decision === 'eligible' &&
+            resolverStillMatches;
+          const prepared = isAllow
+            ? allowed.prepared
+            : this.preparedReviewerRecentDecisionsDenial(snapshot);
+          const requester = {
+            principal_id: snapshot.state.principal_id,
+            membership_id: snapshot.state.membership_id,
+            enrollment_id: snapshot.state.enrollment_id,
+            installation_id: snapshot.state.installation_id,
+          };
+          const responseSha256 = sha256Digest(prepared.body);
+          const detail = isAllow
+            ? reviewerAllowAuditDetail({
+                request_id: authenticated.request.request_id,
+                request_sha256: authenticated.request_sha256,
+                requester,
+                person_state_sha256: snapshot.state_sha256,
+                record_head: allowed.source.record_head,
+                returned_atom_ids: prepared.returned_atom_ids,
+                returned_record_hashes: prepared.returned_record_hashes,
+                evaluated_at: checkedAt,
+                response_sha256: responseSha256,
+              })
+            : reviewerDenialAuditDetail({
+                request_id: authenticated.request.request_id,
+                request_sha256: authenticated.request_sha256,
+                requester,
+                reason_code:
+                  snapshot.decision === 'expired'
+                    ? 'installation_access_expired'
+                    : 'inactive_or_unbound_reviewer_membership',
+                person_state_sha256: snapshot.state_sha256,
+                evaluated_at: checkedAt,
+                response_sha256: responseSha256,
+              });
+          transaction.appendReviewerQueryAudit({
+            decision: isAllow ? 'allow' : 'deny',
+            reason_code: isAllow
+              ? 'active_exact_reviewer_membership'
+              : snapshot.decision === 'expired'
+                ? 'installation_access_expired'
+                : 'inactive_or_unbound_reviewer_membership',
+            detail,
+            response_bytes: prepared.body,
+          });
+          return prepared;
+        },
+      );
+    } catch (error) {
+      if (error instanceof ReviewerRecentDecisionsError) throw error;
+      throw new ReviewerRecentDecisionsError(
+        'unavailable',
+        'reviewer recent decisions audit commit is unavailable',
+        { cause: error },
+      );
+    }
+  }
+
+  /**
+   * Authenticates and fences the exact reviewer-only read.  The injected
+   * source is called only after the current Person root is active and returns
+   * immutable record selections; the final transaction rechecks the same
+   * principal/membership and commits the exact response digest before bytes
+   * leave this method.
+   */
+  serveReviewerRecentDecisions(
+    input: OrganizationReviewerRecentDecisionsRequestV1,
+    source: (
+      input: ReviewerRecentDecisionsSourceInput,
+    ) => ReviewerRecentDecisionsSourceOutput,
+  ): PreparedReviewerRecentDecisionsResponse {
+    let request: OrganizationReviewerRecentDecisionsRequestV1;
+    try {
+      request = validateOrganizationReviewerRecentDecisionsRequest(input);
+      request = JSON.parse(
+        canonicalJson(request),
+      ) as OrganizationReviewerRecentDecisionsRequestV1;
+    } catch (error) {
+      if (!isOrganizationApiValidationError(error)) throw error;
+      throw new ReviewerRecentDecisionsError(
+        'invalid_request',
+        'reviewer recent decisions request is invalid',
+        { cause: error },
+      );
+    }
+    const enrollment = this.reviewerRecentDecisionsRead((transaction) =>
+      transaction.enrollmentById(request.enrollment_id),
+    );
+    if (enrollment === undefined) {
+      throw new ReviewerRecentDecisionsError(
+        'unauthorized',
+        'reviewer recent decisions authentication failed',
+      );
+    }
+    let requestSha256: Sha256Digest;
+    try {
+      requestSha256 = this.authenticateInstallationCommand(
+        request,
+        enrollment,
+        'reviewer recent decisions request',
+      );
+    } catch (error) {
+      if (
+        error instanceof AuthorityOperationError &&
+        error.code === 'unauthorized'
+      ) {
+        throw new ReviewerRecentDecisionsError(
+          'unauthorized',
+          'reviewer recent decisions authentication failed',
+          { cause: error },
+        );
+      }
+      throw error;
+    }
+    const checkedAt = this.now(
+      'reviewer recent decisions initial authorization time',
+    );
+    try {
+      assertFreshInstallationRequest(
+        request.requested_at,
+        checkedAt,
+        this.accessRequestMaximumAgeMs,
+        'reviewer recent decisions request',
+      );
+    } catch (error) {
+      throw new ReviewerRecentDecisionsError(
+        'unauthorized',
+        'reviewer recent decisions request is outside the accepted time window',
+        { cause: error },
+      );
+    }
+    const authenticated = Object.freeze({
+      request,
+      request_sha256: requestSha256,
+    });
+    const initial = this.reviewerRecentDecisionsRead((transaction) =>
+      this.reviewerRecentDecisionsPersonSnapshot(
+        transaction,
+        authenticated,
+        checkedAt,
+      ),
+    );
+    if (initial.decision !== 'eligible') {
+      return this.commitReviewerRecentDecisionsResponse(authenticated, null);
+    }
+    let selected: ReviewerRecentDecisionsSourceOutput;
+    try {
+      selected = source({
+        request_sha256: requestSha256,
+        reviewer_principal_id: initial.state.principal_id,
+        reviewer_membership_id: initial.state.membership_id,
+      });
+    } catch (error) {
+      if (error instanceof ReviewerRecentDecisionsError) throw error;
+      throw new ReviewerRecentDecisionsError(
+        'unavailable',
+        'reviewer record selection is unavailable',
+        { cause: error },
+      );
+    }
+    const prepared = prepareReviewerRecentDecisionsResponse(selected.items);
+    return this.commitReviewerRecentDecisionsResponse(authenticated, {
+      prepared,
+      source: selected,
+      resolved_reviewer_principal_id: initial.state.principal_id,
+      resolved_reviewer_membership_id: initial.state.membership_id,
+    });
+  }
+
   checkPermissionSubject(
     request: OrganizationPermissionCheckRequestV1,
     target: OrganizationPermissionAuthorityTarget | null,
   ): OrganizationPermissionAuthorityStatus {
-    request = validateOrganizationPermissionCheckRequest(request);
-    request = JSON.parse(
-      canonicalJson(request),
-    ) as OrganizationPermissionCheckRequestV1;
+    return this.permissionSubjectStatus(
+      JSON.parse(
+        canonicalJson(validateOrganizationPermissionCheckRequest(request)),
+      ) as OrganizationPermissionCheckRequestV1,
+      target,
+    );
+  }
+
+  /**
+   * The schema-v2 twin. It authenticates the reviewer request with the closed
+   * v2 validator and then reuses the one current-Person evaluation: schema-v1
+   * status and body behavior stay byte-for-byte unchanged.
+   */
+  checkReviewerPermissionSubject(
+    request: OrganizationReviewerPermissionCheckRequestV2,
+    target: OrganizationPermissionAuthorityTarget | null,
+  ): OrganizationPermissionAuthorityStatus {
+    return this.permissionSubjectStatus(
+      JSON.parse(
+        canonicalJson(
+          validateOrganizationReviewerPermissionCheckRequest(request),
+        ),
+      ) as OrganizationReviewerPermissionCheckRequestV2,
+      target,
+    );
+  }
+
+  private permissionSubjectStatus(
+    request:
+      | OrganizationPermissionCheckRequestV1
+      | OrganizationReviewerPermissionCheckRequestV2,
+    target: OrganizationPermissionAuthorityTarget | null,
+  ): OrganizationPermissionAuthorityStatus {
     if (target !== null) {
       try {
         assertFederationId(

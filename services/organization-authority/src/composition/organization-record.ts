@@ -1,13 +1,16 @@
 import {
-  isOrganizationRecordError,
   OrganizationRecordDerivedStore,
   OrganizationRecordFollower,
   OrganizationRecordIngest,
   OrganizationRecordLogReader,
   OrganizationRecordLogStore,
   OrganizationPermissionPilotReader,
-  parseOrganizationRecordEnvelope,
   verifyOrganizationRecordChain,
+  createReviewerRecordPort,
+} from '@echo-brain/organization-record/append';
+import {
+  isOrganizationRecordError,
+  parseOrganizationRecordEnvelope,
 } from '@echo-brain/organization-record';
 import type {
   OrganizationRecordAlert,
@@ -15,6 +18,7 @@ import type {
   OrganizationPermissionPilotActivationMarkerV1,
   OrganizationPermissionPilotEligibleRecord,
 } from '@echo-brain/organization-record';
+import type { ReviewerRecordPort } from '@echo-brain/organization-record/reviewer';
 import {
   validateAcceptedOrganizationRecord,
   type AcceptedOrganizationRecordV1,
@@ -29,6 +33,11 @@ import {
 } from '../application/organization-record-ingest.js';
 import type { OrganizationAuthorityApplication } from '../application/organization-authority.js';
 import type { OrganizationRecordHttpApplication } from '../presentation/organization-record-http-application.js';
+import { reviewerRestrictedEnvelopeValidator } from './reviewer-envelope-validator.js';
+import {
+  verifyReviewerRestrictedReadiness,
+  type ReviewerRestrictedReadiness,
+} from './reviewer-restricted-admission.js';
 
 export interface OpenOrganizationRecordRuntimeOptions {
   readonly authority: OrganizationAuthorityApplication;
@@ -68,12 +77,25 @@ export type OrganizationPermissionPilotRuntimeHealth =
     }
   | { readonly kind: 'degraded'; readonly failure: Error };
 
+export type ReviewerRestrictedRuntimeHealth =
+  | {
+      readonly kind: 'ready';
+      readonly readiness: ReviewerRestrictedReadiness;
+    }
+  | {
+      readonly kind: 'degraded';
+      readonly failure: Error;
+      readonly readiness?: ReviewerRestrictedReadiness;
+    };
+
 export interface OrganizationRecordRuntime
   extends OrganizationRecordHttpApplication {
   /** Walks the internal chain. Run at process start and before every backup. */
   verifyChain(): OrganizationRecordChainVerification;
   readonly follower: OrganizationRecordFollower;
   readonly permissionPilotHealth: OrganizationPermissionPilotRuntimeHealth;
+  readonly reviewerRestrictedHealth: ReviewerRestrictedRuntimeHealth;
+  readonly reviewerRecords: ReviewerRecordPort;
   /** The fixed, newest-first <=20 canonical rows. Empty only before activation. */
   readPermissionPilotEligibleRecords(): readonly OrganizationPermissionPilotEligibleRecord[];
   /** The post-start derive failure, once one has happened. */
@@ -206,9 +228,23 @@ export async function openOrganizationRecordRuntime(
     // it was never handed.
     if (started) options.onFatal?.(fatalFailure);
   };
+  // One closed reviewer-v2 validator for this organization and authority,
+  // built here and threaded into every record-side caller that may read a
+  // reviewer-v2 document. The record workspace has no import edge to the
+  // protocol package, so this is the only reviewer-v2 reading it ever gets.
+  const reviewerValidator = reviewerRestrictedEnvelopeValidator({
+    organization_id: options.organization_id,
+    authority_id: options.authority_id,
+  });
   const log = OrganizationRecordLogStore.open(options.record_log_database_path, {
     organization_id: options.organization_id,
     authority_id: options.authority_id,
+    reviewer_validator: reviewerValidator,
+  });
+  const reviewerRecords = createReviewerRecordPort(log.database, {
+    organization_id: options.organization_id,
+    authority_id: options.authority_id,
+    reviewer_validator: reviewerValidator,
   });
   let derived: OrganizationRecordDerivedStore | undefined;
   try {
@@ -229,6 +265,7 @@ export async function openOrganizationRecordRuntime(
       logReader: new OrganizationRecordLogReader(log.database),
       derived,
       alert,
+      reviewerValidator,
     });
     const permissionPilotReader = new OrganizationPermissionPilotReader(
       log.database,
@@ -266,15 +303,46 @@ export async function openOrganizationRecordRuntime(
       });
       permissionPilotHealth = Object.freeze({ kind: 'degraded', failure });
     }
+    let reviewerRestrictedHealth: ReviewerRestrictedRuntimeHealth;
+    try {
+      const readiness = verifyReviewerRestrictedReadiness({
+        records: reviewerRecords,
+        evidence: options.evidence,
+        organization_id: options.organization_id,
+        authority_id: options.authority_id,
+      });
+      if (!readiness.ready) {
+        throw new Error(
+          readiness.failures
+            .map((failure) => `${failure.kind}:${failure.detail}`)
+            .join('; '),
+        );
+      }
+      reviewerRestrictedHealth = Object.freeze({ kind: 'ready', readiness });
+    } catch (error) {
+      const failure =
+        error instanceof Error
+          ? error
+          : new Error(`reviewer-restricted admission failed: ${String(error)}`);
+      operatorAlert({
+        kind: 'reviewer-restricted-inactive',
+        message: `reviewer-restricted V1 is degraded: ${failure.message}`,
+        log_position: null,
+        cause: failure,
+      });
+      reviewerRestrictedHealth = Object.freeze({ kind: 'degraded', failure });
+    }
     const authority = new OrganizationRecordIngestAuthority({
       authority: options.authority,
       evidence: options.evidence,
       permissionPilotHealth,
+      reviewerRestrictedHealth,
     });
     const ingest = new OrganizationRecordIngest({
       log,
       authority,
       receiptSigner: authority,
+      reviewerValidator,
       onAppended: () => follower.nudge(),
       alert,
     });
@@ -312,6 +380,8 @@ export async function openOrganizationRecordRuntime(
       verifyChain: () => verifyOrganizationRecordChain(log),
       follower,
       permissionPilotHealth,
+      reviewerRestrictedHealth,
+      reviewerRecords,
       readPermissionPilotEligibleRecords(): readonly OrganizationPermissionPilotEligibleRecord[] {
         if (permissionPilotHealth.kind === 'absent') return Object.freeze([]);
         if (permissionPilotHealth.kind === 'degraded') {

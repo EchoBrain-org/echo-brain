@@ -8,7 +8,7 @@ import {
   openOrganizationRecordDatabase,
   ORGANIZATION_RECORD_DERIVED_DATABASE,
   ORGANIZATION_RECORD_LOG_DATABASE,
-} from '../src/index.js';
+} from '../src/maintenance.js';
 import type { OrganizationRecordDatabaseDefinition } from '../src/persistence/database-definition.js';
 import {
   currentOrganizationRecordSchemaVersion,
@@ -42,6 +42,8 @@ const LOG_TABLES_BY_OBSERVABLE_BEHAVIOR = {
   'indexes only notice-qualified post-activation approvals for the pilot read': [
     'organization_record_permission_pilot_eligibility',
   ],
+  'indexes each released item of a verified reviewer-v2 approval, text-free, for its exact approving reviewer':
+    ['organization_record_reviewer_policy_fact'],
 } as const;
 
 const DERIVED_TABLES_BY_OBSERVABLE_BEHAVIOR = {
@@ -61,6 +63,8 @@ const DERIVED_TABLES_BY_OBSERVABLE_BEHAVIOR = {
   'answers what supports what and who was listed or attended': [
     'organization_derived_edge',
   ],
+  'defers a reviewer-v2 approval to permission-aware retrieval without deriving its content':
+    ['organization_derived_reviewer_policy_exclusion'],
 } as const;
 
 const LOG_TABLES = Object.values(LOG_TABLES_BY_OBSERVABLE_BEHAVIOR).flat().sort();
@@ -76,6 +80,12 @@ const LOG_MIGRATION_SHA256 = [
   sha256Digest(
     readFileSync(
       new URL('../migrations/log/0002_permission_pilot.sql', import.meta.url),
+      'utf8',
+    ),
+  ),
+  sha256Digest(
+    readFileSync(
+      new URL('../migrations/log/0003_reviewer_policy_fact.sql', import.meta.url),
       'utf8',
     ),
   ),

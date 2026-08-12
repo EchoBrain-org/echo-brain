@@ -272,6 +272,15 @@ and identity and installation manifests are captured consistently. The derived
 database is the only file that may be absent and rebuilt from a verified log
 before restart; every protected file must be restored together.
 
+Before releasing any restored Authority that serves restricted reviewer V1,
+complete the external operator evidence checklist in
+[`AWS-EC2.md`](./AWS-EC2.md#restore-boundary). Keep the Tunnel and reviewer
+route offline until the current Person roots, integration audit chain, complete
+record log, reviewer-policy facts, and applicable client-held receipts have
+been reconciled against independently retained evidence and the Founder or
+trusted operator records the release decision. A restored database cannot
+serve as evidence that its own historical state is current.
+
 That `data` archive is sufficient for this in-place upgrade rollback because
 `docker compose down` leaves the named Caddy volumes intact. It is not by
 itself a host-loss disaster-recovery backup. Localhost and private-CA clients

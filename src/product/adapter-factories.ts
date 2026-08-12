@@ -7,7 +7,11 @@ import {
   type AnyAdapter,
 } from '../core/index.js';
 import type { ProductRuntimeConfig } from './config.js';
-import type { ApprovalActionAuthorizer } from '../adapters/approval-surfaces/slack-reactions/slack-reactions-approval-surface.js';
+import type {
+  ApprovalActionAuthorizer,
+  ReviewerApprovalActionAuthorizer,
+  ReviewerApprovalPresentationRenderer,
+} from '../adapters/approval-surfaces/slack-reactions/slack-reactions-approval-surface.js';
 import {
   createProductCredentialResolver,
   type ProductCredentialResolver,
@@ -19,6 +23,8 @@ export interface ProductAdapterFactoryContext {
   credentialResolver: ProductCredentialResolver;
   now: () => string;
   approvalActionAuthorizer?: ApprovalActionAuthorizer;
+  reviewerApprovalActionAuthorizer?: ReviewerApprovalActionAuthorizer;
+  reviewerPresentationRenderer?: ReviewerApprovalPresentationRenderer;
   /**
    * Best-effort post-resolve hook. Fired after an approval surface records a
    * terminal local decision so organization ingest happens at the moment of
@@ -76,6 +82,8 @@ export interface CreateConfiguredAdapterRegistryOptions {
   credentialResolver?: ProductCredentialResolver;
   now?: () => string;
   approvalActionAuthorizer?: ApprovalActionAuthorizer;
+  reviewerApprovalActionAuthorizer?: ReviewerApprovalActionAuthorizer;
+  reviewerPresentationRenderer?: ReviewerApprovalPresentationRenderer;
   afterDecisionResolved?: () => void;
 }
 
@@ -173,6 +181,17 @@ function createFactoryContext(
     ...(options.approvalActionAuthorizer === undefined
       ? {}
       : { approvalActionAuthorizer: options.approvalActionAuthorizer }),
+    ...(options.reviewerApprovalActionAuthorizer === undefined
+      ? {}
+      : {
+          reviewerApprovalActionAuthorizer:
+            options.reviewerApprovalActionAuthorizer,
+        }),
+    ...(options.reviewerPresentationRenderer === undefined
+      ? {}
+      : {
+          reviewerPresentationRenderer: options.reviewerPresentationRenderer,
+        }),
     ...(options.afterDecisionResolved === undefined
       ? {}
       : { afterDecisionResolved: options.afterDecisionResolved }),

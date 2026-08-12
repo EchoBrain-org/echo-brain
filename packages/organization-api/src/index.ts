@@ -33,6 +33,13 @@ export type {
   OrganizationRecentDecisionsRequestV1,
   OrganizationRecentDecisionsResponseV1,
   OrganizationRecordRejectionCodeV1,
+  OrganizationReviewerPermissionCheckDecisionV2,
+  OrganizationReviewerPermissionCheckRequestPayloadV2,
+  OrganizationReviewerPermissionCheckRequestV2,
+  OrganizationReviewerRecentDecisionItemV1,
+  OrganizationReviewerRecentDecisionsRequestPayloadV1,
+  OrganizationReviewerRecentDecisionsRequestV1,
+  OrganizationReviewerRecentDecisionsResponseV1,
   OrganizationSlackLinkBeginRequestPayloadV1,
   OrganizationSlackLinkBeginRequestV1,
   OrganizationSlackLinkBeginResponseV1,
@@ -120,6 +127,7 @@ export {
   ORGANIZATION_API_INTERNAL_LIVE_RECEIPTS_PATH,
   ORGANIZATION_API_PERMISSION_CHECKS_PATH,
   ORGANIZATION_API_RECENT_DECISIONS_PATH,
+  ORGANIZATION_API_REVIEWER_RECENT_DECISIONS_PATH,
   ORGANIZATION_API_PROXY_AUTH_SCHEME,
   ORGANIZATION_API_RECORD_ENVELOPES_PATH,
   ORGANIZATION_API_SLACK_LINK_CHALLENGES_PATH,
@@ -164,6 +172,34 @@ export type {
 export { organizationSlackLinkChallengeCodeSha256 } from './slack-link-challenge-code.js';
 export { organizationPermissionProviderEventSha256 } from './permission-check-event.js';
 export type { OrganizationPermissionProviderEventInput } from './permission-check-event.js';
+export {
+  RESTRICTED_REVIEWER_ALLOW_REASON_CODE,
+  REVIEWER_PERMISSION_DENIAL_REASON_CODES,
+  createOrganizationReviewerPermissionCheckRequest,
+  organizationReviewerPermissionCheckRequestSha256,
+  organizationReviewerPermissionProviderEvent,
+  organizationReviewerPermissionProviderEventSha256,
+  validateOrganizationReviewerPermissionCheckDecision,
+  validateOrganizationReviewerPermissionCheckRequest,
+  verifyOrganizationReviewerPermissionCheckRequest,
+} from './reviewer-permission-check.js';
+export type {
+  CreateOrganizationReviewerPermissionCheckRequestInput,
+  OrganizationReviewerPermissionDenialReasonCodeV2,
+  OrganizationReviewerPermissionProviderEventInput,
+} from './reviewer-permission-check.js';
+export {
+  MAX_ORGANIZATION_REVIEWER_RECENT_DECISIONS_ITEMS,
+  MAX_ORGANIZATION_REVIEWER_RECENT_DECISIONS_REQUEST_BYTES,
+  MAX_ORGANIZATION_REVIEWER_RECENT_DECISIONS_RESPONSE_BYTES,
+  ORGANIZATION_REVIEWER_RECENT_DECISIONS_WITNESS,
+  createOrganizationReviewerRecentDecisionsRequest,
+  organizationReviewerRecentDecisionsRequestSha256,
+  validateOrganizationReviewerRecentDecisionsRequest,
+  validateOrganizationReviewerRecentDecisionsResponse,
+  verifyOrganizationReviewerRecentDecisionsRequest,
+} from './reviewer-recent-decisions.js';
+export type { CreateOrganizationReviewerRecentDecisionsRequestInput } from './reviewer-recent-decisions.js';
 export {
   compareOrganizationInternalLiveReleaseVersions,
   createOrganizationInternalLiveDirectiveRequest,

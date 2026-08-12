@@ -3,15 +3,19 @@ import { describe, expect, it, vi } from 'vitest';
 import {
   organizationSlackLinkChallengeCodeSha256,
   organizationPermissionProviderEventSha256,
+  organizationReviewerPermissionProviderEventSha256,
   type OrganizationPermissionCheckRequestV1,
+  type OrganizationReviewerPermissionCheckRequestV2,
   type OrganizationSlackLinkBeginRequestV1,
   type OrganizationSlackLinkCompleteRequestV1,
 } from '@echo-brain/organization-api';
+import { canonicalSha256 } from '@echo-brain/federation-protocol';
 import {
   AUTHORITY_FILE_SECRET_BACKEND,
   OrganizationIntegrationsRepository,
   SlackIntegrationProviderError,
   openOrganizationControlDatabase,
+  reviewerMessagePresentationPreimage,
   type OrganizationSecretStore,
   type SlackIntegrationProvider,
 } from '@echo-brain/organization-control-plane';
@@ -280,6 +284,15 @@ function testDependencies(options: {
   reaction?: boolean | Error;
   messagePresentationSha256?: `sha256:${string}` | null;
   presentationCandidateObserved?: boolean;
+  reviewerPresentation?: {
+    reviewer_release_draft_sha256: `sha256:${string}`;
+    approval_presentation_sha256: `sha256:${string}`;
+    message_presentation_sha256: `sha256:${string}`;
+  };
+  reviewerCardReactions?: {
+    approve_reaction: string;
+    reject_reaction: string;
+  };
 } = {}) {
   let storedSecret: string | null = null;
   const reference = {
@@ -339,6 +352,12 @@ function testDependencies(options: {
           options.presentationCandidateObserved ?? false,
         message_presentation_sha256:
           options.messagePresentationSha256 ?? null,
+        ...(options.reviewerPresentation === undefined
+          ? {}
+          : { reviewer_presentation: options.reviewerPresentation }),
+        ...(options.reviewerCardReactions === undefined
+          ? {}
+          : { reviewer_card_reactions: options.reviewerCardReactions }),
       };
     }),
     postIdentityLinkChallenge: vi.fn(async () => ({
@@ -393,6 +412,9 @@ function testDependencies(options: {
     integrationAdminContext,
     integrationInstallationContext,
     checkPermissionSubject,
+    // The reviewer path resolves the same current-Person status; only the
+    // request validator differs.
+    checkReviewerPermissionSubject: checkPermissionSubject,
   } as unknown as OrganizationAuthorityApplication;
   return {
     authority,
@@ -1436,6 +1458,348 @@ describe('composed organization integrations application', () => {
       expect(application.overview().recent_audit[0]).toMatchObject({
         reason_code: 'provider_unavailable',
         outcome: 'denied',
+      });
+    } finally {
+      repository.close();
+    }
+  });
+});
+
+const REVIEWER_DRAFT_SHA256 = digest('reviewer-release-draft');
+const REVIEWER_PRESENTATION_SHA256 = digest('reviewer-approval-presentation');
+
+function reviewerRequest(
+  overrides: Record<string, unknown> = {},
+): OrganizationReviewerPermissionCheckRequestV2 {
+  const event = {
+    authority_id: AUTHORITY_ID,
+    authority_key_id: AUTHORITY_KEY_ID,
+    organization_id: ORGANIZATION_ID,
+    enrollment_id: ENROLLMENT_ID,
+    installation_id: INSTALLATION_ID,
+    installation_key_id: INSTALLATION_KEY_ID,
+    provider: 'slack',
+    provider_issuer: 'https://slack.com',
+    provider_tenant_kind: 'workspace',
+    provider_tenant_id: 'T123ABC',
+    provider_enterprise_id: null,
+    provider_connection_subject_id: 'U123BOT',
+    provider_connection_bot_id: 'B123BOT',
+    provider_connection_app_id: 'A123APP',
+    provider_subject_kind: 'human_user',
+    provider_subject_id: 'U123ZHEN',
+    adapter_kind: 'approval-surface',
+    adapter_id: 'slack-reactions',
+    adapter_instance_id: 'primary',
+    adapter_version: '1.0.0',
+    action: 'approve',
+    approval_id: 'f'.repeat(64),
+    channel_id: 'C123ABC',
+    message_ts: '1720000000.123456',
+    reaction_name: 'white_check_mark',
+    approve_reaction: 'white_check_mark',
+    reject_reaction: 'x',
+    policy_id: 'restricted-reviewer-v1',
+    reviewer_release_draft_sha256: REVIEWER_DRAFT_SHA256,
+    approval_presentation_sha256: REVIEWER_PRESENTATION_SHA256,
+    http_method: 'POST',
+    http_path: '/v1/permission-checks',
+    ...overrides,
+  } as never;
+  return {
+    schema_version: 2,
+    kind: 'echo-organization-permission-check-request',
+    request_id: 'pcr_cccccccc-cccc-4ccc-8ccc-cccccccccccc',
+    ...(event as Record<string, unknown>),
+    provider_event_sha256:
+      organizationReviewerPermissionProviderEventSha256(event),
+    requested_at: NOW,
+    integrity: {
+      canonicalization: 'RFC8785',
+      payload_sha256: digest('reviewer-permission-request-payload'),
+      signature_algorithm: 'ecdsa-p256-sha256-der-low-s',
+      key_id: INSTALLATION_KEY_ID,
+      signature_base64: 'QUJDREVGR0g=',
+    },
+  } as unknown as OrganizationReviewerPermissionCheckRequestV2;
+}
+
+/**
+ * The provider computes this from the live card and connection. The exact-ID
+ * evidence lookup recomputes the same preimage from stored columns, so a
+ * fabricated digest is corrupt evidence rather than a match.
+ */
+function reviewerMessageSha256(
+  providerEventSha256: string,
+): `sha256:${string}` {
+  return canonicalSha256(
+    reviewerMessagePresentationPreimage({
+      provider_event_sha256: providerEventSha256,
+      approval_presentation_sha256: REVIEWER_PRESENTATION_SHA256,
+      team_id: 'T123ABC',
+      enterprise_id: null,
+      bot_user_id: 'U123BOT',
+      bot_id: 'B123BOT',
+      app_id: 'A123APP',
+      actor_user_id: 'U123ZHEN',
+      channel_id: 'C123ABC',
+      message_ts: '1720000000.123456',
+      reaction_name: 'white_check_mark',
+    }),
+  );
+}
+
+function observedReviewerCard(
+  request: OrganizationReviewerPermissionCheckRequestV2 = reviewerRequest(),
+) {
+  return {
+    reviewerPresentation: {
+      reviewer_release_draft_sha256: REVIEWER_DRAFT_SHA256,
+      approval_presentation_sha256: REVIEWER_PRESENTATION_SHA256,
+      message_presentation_sha256: reviewerMessageSha256(
+        request.provider_event_sha256,
+      ),
+    },
+  } as const;
+}
+
+describe('organization reviewer permission check', () => {
+  it('allows the exact reviewer approval and appends one immutable audit row', async () => {
+    const dependencies = testDependencies(observedReviewerCard());
+    const { repository, application } = applicationFixture(dependencies);
+    try {
+      await activate(application);
+      const command = reviewerRequest();
+      const decision = await application.checkReviewerPermission(command);
+
+      expect(decision).toMatchObject({
+        schema_version: 2,
+        allowed: true,
+        reason_code: 'active_reviewer_restricted_notice_v1',
+        principal_id: TARGET_PRINCIPAL_ID,
+        membership_id: TARGET_MEMBERSHIP_ID,
+        reviewer_release_draft_sha256: REVIEWER_DRAFT_SHA256,
+        approval_presentation_sha256: REVIEWER_PRESENTATION_SHA256,
+        message_presentation_sha256: reviewerMessageSha256(
+          command.provider_event_sha256,
+        ),
+      });
+      expect(decision.authorization_audit_event_id).toMatch(/^aud_/);
+      expect(decision.semantic_intent_sha256).toMatch(
+        /^sha256:[0-9a-f]{64}$/,
+      );
+
+      // The proof is verifiable by exact primary key and returns no content.
+      const match = repository.findAllowedReviewerAuthorizationEvidenceById(
+        decision.authorization_audit_event_id as string,
+        {
+          organization_id: ORGANIZATION_ID,
+          installation_id: INSTALLATION_ID,
+          approval_id: command.approval_id,
+          request_id: command.request_id,
+          principal_id: TARGET_PRINCIPAL_ID,
+          membership_id: TARGET_MEMBERSHIP_ID,
+          request_sha256: decision.request_sha256,
+          provider_event_sha256: command.provider_event_sha256,
+          adapter_binding_id: decision.adapter_binding_id as string,
+          permission_grant_id: decision.permission_grant_id as string,
+          evaluated_at: decision.evaluated_at,
+          reviewer_release_draft_sha256: REVIEWER_DRAFT_SHA256,
+          approval_presentation_sha256: REVIEWER_PRESENTATION_SHA256,
+          semantic_intent_sha256: decision.semantic_intent_sha256 as string,
+          message_presentation_sha256: reviewerMessageSha256(
+            command.provider_event_sha256,
+          ),
+          authorization_audit_entry_sha256:
+            decision.authorization_audit_entry_sha256 as string,
+        },
+      );
+      expect(match.status).toBe('matched');
+    } finally {
+      repository.close();
+    }
+  });
+
+  it('denies a reaction pair the current active binding no longer carries', async () => {
+    const dependencies = testDependencies(observedReviewerCard());
+    const { repository, application } = applicationFixture(dependencies);
+    try {
+      await activate(application);
+      const decision = await application.checkReviewerPermission(
+        reviewerRequest({
+          approve_reaction: 'heavy_check_mark',
+          reaction_name: 'heavy_check_mark',
+        }),
+      );
+      expect(decision).toMatchObject({
+        allowed: false,
+        reason_code: 'no_active_link_binding_or_grant',
+        principal_id: null,
+        authorization_audit_event_id: null,
+        semantic_intent_sha256: null,
+      });
+      expect(dependencies.slack.verifyReaction).not.toHaveBeenCalled();
+    } finally {
+      repository.close();
+    }
+  });
+
+  it('denies when the live card does not carry a reviewer proof', async () => {
+    const { repository, application } = applicationFixture(
+      testDependencies({}),
+    );
+    try {
+      await activate(application);
+      await expect(
+        application.checkReviewerPermission(reviewerRequest()),
+      ).rejects.toMatchObject({ code: 'unavailable' });
+    } finally {
+      repository.close();
+    }
+  });
+
+  /**
+   * A decided answer about who reacted is a denial, not an outage. Only a real
+   * provider outage may degrade to the fixed unavailable body.
+   */
+  it('returns a closed denial, not unavailable, on provider identity mismatch', async () => {
+    const dependencies = testDependencies({
+      ...observedReviewerCard(),
+      reaction: new SlackIntegrationProviderError(
+        'Slack reviewer identity changed',
+        'identity_mismatch',
+      ),
+    });
+    const { repository, application } = applicationFixture(dependencies);
+    try {
+      await activate(application);
+      const decision = await application.checkReviewerPermission(
+        reviewerRequest(),
+      );
+      expect(decision).toMatchObject({
+        schema_version: 2,
+        allowed: false,
+        reason_code: 'provider_identity_mismatch',
+        principal_id: null,
+        membership_id: null,
+        adapter_binding_id: null,
+        permission_grant_id: null,
+        authorization_audit_event_id: null,
+        authorization_audit_entry_sha256: null,
+        reviewer_release_draft_sha256: null,
+        approval_presentation_sha256: null,
+        semantic_intent_sha256: null,
+        message_presentation_sha256: null,
+      });
+    } finally {
+      repository.close();
+    }
+  });
+
+  it('keeps invalid or revoked Slack credentials retryable', async () => {
+    const dependencies = testDependencies({
+      ...observedReviewerCard(),
+      reaction: new SlackIntegrationProviderError(
+        'Slack token is revoked',
+        'unauthorized',
+      ),
+    });
+    const { repository, application } = applicationFixture(dependencies);
+    try {
+      await activate(application);
+      await expect(
+        application.checkReviewerPermission(reviewerRequest()),
+      ).rejects.toMatchObject({ code: 'unavailable' });
+    } finally {
+      repository.close();
+    }
+  });
+
+  it('degrades to unavailable only for a real provider outage', async () => {
+    const dependencies = testDependencies({
+      ...observedReviewerCard(),
+      reaction: new SlackIntegrationProviderError(
+        'Slack is unreachable',
+        'unavailable',
+      ),
+    });
+    const { repository, application } = applicationFixture(dependencies);
+    try {
+      await activate(application);
+      await expect(
+        application.checkReviewerPermission(reviewerRequest()),
+      ).rejects.toMatchObject({ code: 'unavailable' });
+    } finally {
+      repository.close();
+    }
+  });
+
+  it('denies a reviewer proof whose digests changed after signing', async () => {
+    const dependencies = testDependencies({
+      reviewerPresentation: {
+        reviewer_release_draft_sha256: digest('another-draft'),
+        approval_presentation_sha256: REVIEWER_PRESENTATION_SHA256,
+        message_presentation_sha256: reviewerMessageSha256(
+          reviewerRequest().provider_event_sha256,
+        ),
+      },
+    });
+    const { repository, application } = applicationFixture(dependencies);
+    try {
+      await activate(application);
+      const decision = await application.checkReviewerPermission(
+        reviewerRequest(),
+      );
+      expect(decision).toMatchObject({
+        allowed: false,
+        reason_code: 'provider_identity_mismatch',
+        message_presentation_sha256: null,
+      });
+    } finally {
+      repository.close();
+    }
+  });
+
+  it('denies when the reacting member is not the enrolled caller', async () => {
+    const dependencies = testDependencies(observedReviewerCard());
+    const { repository, application } = applicationFixture(dependencies);
+    try {
+      await activate(application);
+      dependencies.checkPermissionSubject.mockImplementation(
+        ((value: never, target: never) => ({
+          ...permissionStatus(value, target, true),
+          // A different linked Slack member signed this request.
+          installation_principal_id: 'prn_99999999-9999-4999-8999-999999999999',
+          installation_membership_id: 'mem_99999999-9999-4999-8999-999999999999',
+        })) as never,
+      );
+      const decision = await application.checkReviewerPermission(
+        reviewerRequest(),
+      );
+      expect(decision).toMatchObject({
+        allowed: false,
+        reason_code: 'provider_identity_mismatch',
+      });
+    } finally {
+      repository.close();
+    }
+  });
+
+  it('denies an inactive target membership before any content exists', async () => {
+    const dependencies = testDependencies({
+      ...observedReviewerCard(),
+      targetActive: false,
+    });
+    const { repository, application } = applicationFixture(dependencies);
+    try {
+      await activate(application);
+      const decision = await application.checkReviewerPermission(
+        reviewerRequest(),
+      );
+      expect(decision).toMatchObject({
+        allowed: false,
+        reason_code: 'target_membership_inactive',
+        authorization_audit_entry_sha256: null,
       });
     } finally {
       repository.close();

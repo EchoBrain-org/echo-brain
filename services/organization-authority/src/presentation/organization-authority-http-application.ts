@@ -13,6 +13,7 @@ import type {
   OrganizationInternalLiveUpdateReceiptV1,
   OrganizationMembershipPageV1,
   OrganizationPermissionCheckRequestV1,
+  OrganizationReviewerPermissionCheckRequestV2,
   OrganizationApiSha256Digest,
   ProvisionedOrganizationMembershipV1,
   ProvisionOrganizationMembershipRequestV1,
@@ -83,6 +84,12 @@ export interface OrganizationAuthorityHttpApplication {
   ): Promise<OrganizationInstallationAccessStateV1>;
   checkPermissionSubject(
     request: OrganizationPermissionCheckRequestV1,
+    target: null,
+  ): {
+    installation_id: string;
+  };
+  checkReviewerPermissionSubject(
+    request: OrganizationReviewerPermissionCheckRequestV2,
     target: null,
   ): {
     installation_id: string;

@@ -1,4 +1,5 @@
 import { Buffer } from 'node:buffer';
+import { canonicalJson } from '@echo-brain/federation-protocol';
 import {
   isOrganizationApiValidationError,
   MAX_ORGANIZATION_API_BODY_BYTES,
@@ -7,8 +8,18 @@ import {
   ORGANIZATION_API_AUTHORITY_DESCRIPTOR_PATH,
   ORGANIZATION_API_ENROLLMENT_AUTH_SCHEME,
   ORGANIZATION_API_ENROLLMENTS_PATH,
+  MAX_ORGANIZATION_REVIEWER_RECENT_DECISIONS_RESPONSE_BYTES,
   ORGANIZATION_API_PERMISSION_CHECKS_PATH,
   ORGANIZATION_API_RECENT_DECISIONS_PATH,
+  ORGANIZATION_API_REVIEWER_RECENT_DECISIONS_PATH,
+  validateOrganizationReviewerPermissionCheckDecision,
+  validateOrganizationReviewerPermissionCheckRequest,
+  validateOrganizationReviewerRecentDecisionsRequest,
+  validateOrganizationReviewerRecentDecisionsResponse,
+  type OrganizationReviewerPermissionCheckDecisionV2,
+  type OrganizationReviewerPermissionCheckRequestV2,
+  type OrganizationReviewerRecentDecisionsRequestV1,
+  type OrganizationReviewerRecentDecisionsResponseV1,
   ORGANIZATION_API_INTERNAL_LIVE_DIRECTIVES_PATH,
   ORGANIZATION_API_INTERNAL_LIVE_RECEIPTS_PATH,
   ORGANIZATION_API_SLACK_LINK_CHALLENGES_PATH,
@@ -160,6 +171,7 @@ export function resolveOrganizationAuthorityFetch(options: {
 export async function readBoundedJsonResponse(
   response: Response,
   maximumBytes: number,
+  requireCanonicalBytes = false,
 ): Promise<unknown> {
   const contentType = response.headers.get('content-type');
   if (
@@ -227,9 +239,12 @@ export async function readBoundedJsonResponse(
     );
   }
   try {
-    return JSON.parse(
-      new TextDecoder('utf-8', { fatal: true }).decode(bytes),
-    ) as unknown;
+    const text = new TextDecoder('utf-8', { fatal: true }).decode(bytes);
+    const value = JSON.parse(text) as unknown;
+    if (requireCanonicalBytes && canonicalJson(value) !== text) {
+      throw new Error('response bytes are not canonical JSON');
+    }
+    return value;
   } catch {
     throw new OrganizationAuthorityTransportError(
       'invalid_response',
@@ -293,8 +308,13 @@ export class HttpOrganizationAuthorityClient implements OrganizationAuthorityCli
   private readJson(
     response: Response,
     maximumBytes = MAX_RESPONSE_BYTES,
+    requireCanonicalBytes = false,
   ): Promise<unknown> {
-    return readBoundedJsonResponse(response, maximumBytes);
+    return readBoundedJsonResponse(
+      response,
+      maximumBytes,
+      requireCanonicalBytes,
+    );
   }
 
   private async request<T>(
@@ -305,9 +325,14 @@ export class HttpOrganizationAuthorityClient implements OrganizationAuthorityCli
     signal?: AbortSignal,
     timeoutMs = this.timeoutMs,
     maximumResponseBytes = MAX_RESPONSE_BYTES,
+    requireCanonicalResponse = false,
   ): Promise<T> {
     const response = await this.send(path, init, signal, timeoutMs);
-    const value = await this.readJson(response, maximumResponseBytes);
+    const value = await this.readJson(
+      response,
+      maximumResponseBytes,
+      requireCanonicalResponse,
+    );
     if (response.status === 409 && conflictHandling === 'stale-access-state') {
       const staleState = tryValidate(
         value,
@@ -365,6 +390,7 @@ export class HttpOrganizationAuthorityClient implements OrganizationAuthorityCli
       | 'access'
       | 'permission'
       | 'recent decisions'
+      | 'reviewer recent decisions'
       | 'Slack link'
       | 'internal-live directive'
       | 'internal-live receipt',
@@ -373,8 +399,9 @@ export class HttpOrganizationAuthorityClient implements OrganizationAuthorityCli
     signal?: AbortSignal,
     timeoutMs?: number,
     maximumResponseBytes?: number,
+    canonicalWire = false,
   ): Promise<T> {
-    const body = JSON.stringify(value);
+    const body = canonicalWire ? canonicalJson(value) : JSON.stringify(value);
     if (Buffer.byteLength(body) > MAX_ORGANIZATION_API_BODY_BYTES) {
       throw new Error(`organization ${requestKind} request exceeds the API body limit`);
     }
@@ -386,6 +413,7 @@ export class HttpOrganizationAuthorityClient implements OrganizationAuthorityCli
       signal,
       timeoutMs,
       maximumResponseBytes,
+      canonicalWire,
     );
   }
 
@@ -501,6 +529,23 @@ export class HttpOrganizationAuthorityClient implements OrganizationAuthorityCli
     );
   }
 
+  checkReviewerPermission(
+    request: OrganizationReviewerPermissionCheckRequestV2,
+    signal?: AbortSignal,
+  ): Promise<OrganizationReviewerPermissionCheckDecisionV2> {
+    return this.postJson(
+      ORGANIZATION_API_PERMISSION_CHECKS_PATH,
+      validateOrganizationReviewerPermissionCheckRequest(request),
+      'permission',
+      validateOrganizationReviewerPermissionCheckDecision,
+      'transport-error',
+      signal,
+      undefined,
+      undefined,
+      true,
+    );
+  }
+
   readRecentDecisions(
     request: OrganizationRecentDecisionsRequestV1,
     signal?: AbortSignal,
@@ -514,6 +559,23 @@ export class HttpOrganizationAuthorityClient implements OrganizationAuthorityCli
       signal,
       undefined,
       MAX_ORGANIZATION_RECENT_DECISIONS_RESPONSE_BYTES,
+    );
+  }
+
+  readReviewerRecentDecisions(
+    request: OrganizationReviewerRecentDecisionsRequestV1,
+    signal?: AbortSignal,
+  ): Promise<OrganizationReviewerRecentDecisionsResponseV1> {
+    return this.postJson(
+      ORGANIZATION_API_REVIEWER_RECENT_DECISIONS_PATH,
+      validateOrganizationReviewerRecentDecisionsRequest(request),
+      'reviewer recent decisions',
+      validateOrganizationReviewerRecentDecisionsResponse,
+      'transport-error',
+      signal,
+      undefined,
+      MAX_ORGANIZATION_REVIEWER_RECENT_DECISIONS_RESPONSE_BYTES,
+      true,
     );
   }
 

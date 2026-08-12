@@ -43,13 +43,15 @@ import {
   openOrganizationControlDatabase,
 } from '../../services/organization-control-plane/src/index.js';
 import {
-  ORGANIZATION_RECORD_DERIVED_DATABASE,
-  ORGANIZATION_RECORD_LOG_DATABASE,
-  openOrganizationRecordDatabase,
   organizationRecordFrame,
   organizationRecordHash,
   organizationRecordReceiptPayload,
 } from '../../services/organization-record/src/index.js';
+import {
+  ORGANIZATION_RECORD_DERIVED_DATABASE,
+  ORGANIZATION_RECORD_LOG_DATABASE,
+  openOrganizationRecordDatabase,
+} from '../../services/organization-record/src/maintenance.js';
 import { OrganizationAdminApiClient } from '../../services/organization-authority/src/adapters/http/organization-admin-api-client.js';
 import { authorityRuntimeFingerprint } from '../../services/organization-authority/src/adapters/runtime/runtime-fingerprint.js';
 import {

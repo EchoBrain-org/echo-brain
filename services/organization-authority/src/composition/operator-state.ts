@@ -4,6 +4,7 @@ import {
   closeSync,
   constants as fsConstants,
   existsSync,
+  fchmodSync,
   fstatSync,
   fsyncSync,
   linkSync,
@@ -18,11 +19,12 @@ import {
   unlinkSync,
   writeFileSync,
 } from 'node:fs';
-import { basename, dirname, join } from 'node:path';
+import { basename, dirname, isAbsolute, join, relative, sep } from 'node:path';
 import {
   canonicalJson,
   canonicalSha256,
   federationId,
+  parseCanonicalJson,
 } from '@echo-brain/federation-protocol';
 import {
   initializeOrganizationControlDatabase,
@@ -41,10 +43,12 @@ import {
   OrganizationRecordLogReader,
   OrganizationRecordLogStore,
   OrganizationPermissionPilotLog,
+  verifyOrganizationRecordChain,
+} from '@echo-brain/organization-record/maintenance';
+import {
   assertOrganizationPermissionPilotActivationFresh,
   organizationPermissionPilotCommandSha256,
   validateOrganizationPermissionPilotActivationCommand,
-  verifyOrganizationRecordChain,
 } from '@echo-brain/organization-record';
 import type {
   OrganizationPermissionPilotActivationCommandV1,
@@ -57,6 +61,7 @@ import {
   verifyOrganizationAuthorityPin,
 } from '@echo-brain/organization-protocol';
 import type { OrganizationAuthorityDescriptorV1 } from '@echo-brain/organization-protocol';
+import { reviewerRestrictedEnvelopeValidator } from './reviewer-envelope-validator.js';
 import {
   inspectAuthorityDatabaseForServe,
   inspectAuthorityDatabaseReadOnly,
@@ -65,6 +70,18 @@ import {
 } from '../adapters/persistence/sqlite/read-only-inspection.js';
 import { openAuthorityDatabase } from '../adapters/persistence/sqlite/open-database.js';
 import { SqliteOrganizationAuthorityRepository } from '../adapters/persistence/sqlite/sqlite-authority-repository.js';
+import { SqliteReviewerQueryAuditMaintenanceRepository } from '../adapters/persistence/sqlite/reviewer-query-audit-maintenance.js';
+import {
+  REVIEWER_QUERY_AUDIT_EXPORT_COMMAND_KIND,
+  REVIEWER_QUERY_AUDIT_EXPIRY_COMMAND_KIND,
+  reviewerQueryAuditOutputPathSha256,
+  validateReviewerQueryAuditMaintenanceCommand,
+} from '../application/reviewer-query-audit.js';
+import type {
+  ReviewerQueryAuditExportCommandV1,
+  ReviewerQueryAuditExpiryCommandV1,
+} from '../application/reviewer-query-audit.js';
+import type { StoredReviewerQueryAuditControlEvent } from '../application/ports/authority-repository.js';
 import {
   acquireAuthorityInitializationLock,
   acquireAuthorityRuntimeLock,
@@ -97,6 +114,7 @@ const MAX_INITIALIZATION_MANIFEST_BYTES = 128 * 1024;
 const MAX_INTEGRATIONS_INSTALLATION_MARKER_BYTES = 64 * 1024;
 const MAX_RECORD_INSTALLATION_MARKER_BYTES = 64 * 1024;
 const MAX_PERMISSION_PILOT_ACTIVATION_COMMAND_BYTES = 64 * 1024;
+const MAX_REVIEWER_QUERY_AUDIT_MAINTENANCE_COMMAND_BYTES = 64 * 1024;
 
 export interface AuthorityIdentityRecordV1 {
   schema_version: 1;
@@ -205,6 +223,25 @@ export interface AuthorityPermissionPilotActivationResult {
 
 export interface ActivateOrganizationPermissionPilotOptions {
   /** Test seam; production callers use the canonical current UTC instant. */
+  now?: () => string;
+}
+
+export type ReviewerQueryAuditDeliveryStatus =
+  | 'written'
+  | 'already_present'
+  | 'unavailable';
+
+export interface ReviewerQueryAuditExportResult {
+  readonly control_event: StoredReviewerQueryAuditControlEvent;
+  readonly delivery_status: ReviewerQueryAuditDeliveryStatus;
+}
+
+export interface ReviewerQueryAuditExpiryResult {
+  readonly control_event: StoredReviewerQueryAuditControlEvent;
+}
+
+export interface ReviewerQueryAuditMaintenanceOptions {
+  /** Test seam; production samples the canonical current UTC instant once. */
   now?: () => string;
 }
 
@@ -353,6 +390,180 @@ function readPermissionPilotActivationCommand(
         },
       ),
   );
+}
+
+function readReviewerQueryAuditMaintenanceCommand(
+  commandPath: string,
+): ReviewerQueryAuditExportCommandV1 | ReviewerQueryAuditExpiryCommandV1 {
+  const path = normalizedAbsolutePath(
+    commandPath,
+    'reviewer query audit maintenance command path',
+  );
+  return readPrivateTextFile(
+    path,
+    'reviewer query audit maintenance command',
+    MAX_REVIEWER_QUERY_AUDIT_MAINTENANCE_COMMAND_BYTES,
+    true,
+    (contents) => {
+      const command = validateReviewerQueryAuditMaintenanceCommand(
+        parseCanonicalJson(contents),
+      );
+      if (canonicalJson(command) !== contents) {
+        throw new Error(
+          'reviewer query audit maintenance command must be exact canonical JSON with no trailing bytes',
+        );
+      }
+      return command;
+    },
+  );
+}
+
+function pathIsWithin(child: string, parent: string): boolean {
+  const difference = relative(parent, child);
+  return (
+    difference === '' ||
+    (difference !== '..' &&
+      !difference.startsWith(`..${sep}`) &&
+      !isAbsolute(difference))
+  );
+}
+
+function assertReviewerQueryAuditOutputPath(
+  outputPath: string,
+  stateDirectory: string,
+): void {
+  if (pathIsWithin(outputPath, stateDirectory)) {
+    throw new Error(
+      'reviewer query audit export output must be outside managed authority state',
+    );
+  }
+  assertPrivateParent(outputPath, 'reviewer query audit export output parent');
+  if (!existsSync(outputPath)) return;
+  const state = lstatSync(outputPath);
+  const currentUid = process.getuid?.();
+  if (
+    state.isSymbolicLink() ||
+    !state.isFile() ||
+    realpathSync(outputPath) !== outputPath ||
+    (currentUid !== undefined && state.uid !== currentUid) ||
+    (state.mode & 0o777) !== 0o600
+  ) {
+    throw new Error(
+      'existing reviewer query audit export output must be a current-user 0600 canonical regular file',
+    );
+  }
+}
+
+function reviewerQueryAuditExportMatches(
+  outputPath: string,
+  bytes: Uint8Array,
+): boolean {
+  const before = lstatSync(outputPath);
+  const currentUid = process.getuid?.();
+  if (
+    before.isSymbolicLink() ||
+    !before.isFile() ||
+    realpathSync(outputPath) !== outputPath ||
+    (currentUid !== undefined && before.uid !== currentUid) ||
+    (before.mode & 0o777) !== 0o600
+  ) {
+    throw new Error(
+      'existing reviewer query audit export output is not a private canonical file',
+    );
+  }
+  const file = openSync(
+    outputPath,
+    fsConstants.O_RDONLY | (fsConstants.O_NOFOLLOW ?? 0),
+  );
+  try {
+    const opened = fstatSync(file);
+    if (
+      opened.dev !== before.dev ||
+      opened.ino !== before.ino ||
+      opened.size !== before.size
+    ) {
+      throw new Error(
+        'reviewer query audit export output changed while opening',
+      );
+    }
+    const contents = readFileSync(file);
+    const completed = fstatSync(file);
+    if (
+      completed.dev !== opened.dev ||
+      completed.ino !== opened.ino ||
+      completed.size !== opened.size ||
+      completed.mtimeMs !== opened.mtimeMs ||
+      completed.ctimeMs !== opened.ctimeMs
+    ) {
+      throw new Error(
+        'reviewer query audit export output changed while reading',
+      );
+    }
+    return contents.equals(Buffer.from(bytes));
+  } finally {
+    closeSync(file);
+  }
+}
+
+function publishReviewerQueryAuditExport(
+  outputPath: string,
+  stateDirectory: string,
+  bytes: Uint8Array,
+): ReviewerQueryAuditDeliveryStatus {
+  try {
+    assertReviewerQueryAuditOutputPath(outputPath, stateDirectory);
+    if (existsSync(outputPath)) {
+      return reviewerQueryAuditExportMatches(outputPath, bytes)
+        ? 'already_present'
+        : 'unavailable';
+    }
+    const parent = dirname(outputPath);
+    const temporary = join(
+      parent,
+      `.${basename(outputPath)}.${randomBytes(16).toString('hex')}.tmp`,
+    );
+    let created = false;
+    let linked = false;
+    try {
+      const file = openSync(
+        temporary,
+        fsConstants.O_CREAT |
+          fsConstants.O_EXCL |
+          fsConstants.O_WRONLY |
+          (fsConstants.O_NOFOLLOW ?? 0),
+        0o600,
+      );
+      created = true;
+      try {
+        fchmodSync(file, 0o600);
+        writeFileSync(file, bytes);
+        fsyncSync(file);
+      } finally {
+        closeSync(file);
+      }
+      try {
+        linkSync(temporary, outputPath);
+        linked = true;
+      } catch (error) {
+        const code = (error as NodeJS.ErrnoException).code;
+        if (code !== 'EEXIST') throw error;
+      }
+      fsyncDirectory(parent);
+      return existsSync(outputPath) &&
+        reviewerQueryAuditExportMatches(outputPath, bytes)
+        ? linked
+          ? 'written'
+          : 'already_present'
+        : 'unavailable';
+    } finally {
+      if (created && existsSync(temporary)) {
+        unlinkSync(temporary);
+        fsyncDirectory(parent);
+      }
+    }
+  } catch {
+    return 'unavailable';
+  }
 }
 
 type AuthorityIntegrationsBindingConfig =
@@ -2168,6 +2379,139 @@ export async function activateOrganizationPermissionPilot(
   }
 }
 
+function reviewerQueryAuditMaintenanceTrust(
+  config: AuthorityRuntimeConfigV1,
+  inspected: InspectedAuthorityState,
+): Parameters<typeof SqliteReviewerQueryAuditMaintenanceRepository.open>[0]['trust'] {
+  return {
+    descriptor: inspected.identity.authority_descriptor,
+    authority_pin_sha256: inspected.identity.authority_pin_sha256,
+    organization_display_name: config.organization.display_name,
+    maximum_active_lease_ttl_ms: config.access.active_lease_ttl_ms,
+  };
+}
+
+/** Stopped-only, bounded, receipt-first reviewer query-audit export. */
+export async function exportReviewerQueryAudit(
+  configPath: string,
+  commandPath: string,
+  outputPath: string,
+  options: ReviewerQueryAuditMaintenanceOptions = {},
+): Promise<ReviewerQueryAuditExportResult> {
+  const path = normalizedAbsolutePath(configPath, 'authority config path');
+  const config = readAuthorityRuntimeConfig(path);
+  const command = readReviewerQueryAuditMaintenanceCommand(commandPath);
+  if (command.kind !== REVIEWER_QUERY_AUDIT_EXPORT_COMMAND_KIND) {
+    throw new Error('reviewer query audit export requires an export command');
+  }
+  const output = normalizedAbsolutePath(
+    outputPath,
+    'reviewer query audit export output path',
+  );
+  if (reviewerQueryAuditOutputPathSha256(output) !== command.output_path_sha256) {
+    throw new Error(
+      'reviewer query audit export output path does not match the signed command',
+    );
+  }
+  assertReviewerQueryAuditOutputPath(output, config.state_dir);
+
+  const releaseInitialization = await acquireAuthorityInitializationLock(
+    path,
+    config.state_dir,
+  );
+  try {
+    const serveConfig = resolveAuthorityServeConfig(config);
+    const runtimeLock = await acquireAuthorityRuntimeLock(
+      config.state_dir,
+      authorityMaintenanceFingerprint(
+        serveConfig,
+        'export-reviewer-query-audit',
+      ),
+    );
+    try {
+      const inspected = await inspectAuthorityServePreflight(path, config);
+      const repository = SqliteReviewerQueryAuditMaintenanceRepository.open({
+        database_path: config.database_path,
+        trust: reviewerQueryAuditMaintenanceTrust(config, inspected),
+      });
+      let authorized: ReturnType<typeof repository.authorizeExport>;
+      try {
+        authorized = repository.authorizeExport(
+          command,
+          options.now ?? (() => new Date().toISOString()),
+        );
+      } finally {
+        repository.close();
+      }
+      const deliveryStatus =
+        authorized.export_bytes === null
+          ? 'unavailable'
+          : publishReviewerQueryAuditExport(
+              output,
+              config.state_dir,
+              authorized.export_bytes,
+            );
+      return Object.freeze({
+        control_event: authorized.control_event,
+        delivery_status: deliveryStatus,
+      });
+    } finally {
+      await runtimeLock.release();
+    }
+  } finally {
+    await releaseInitialization();
+  }
+}
+
+/** Stopped-only whole-row expiry at the Authority-owned transaction time. */
+export async function expireReviewerQueryAudit(
+  configPath: string,
+  commandPath: string,
+  options: ReviewerQueryAuditMaintenanceOptions = {},
+): Promise<ReviewerQueryAuditExpiryResult> {
+  const path = normalizedAbsolutePath(configPath, 'authority config path');
+  const config = readAuthorityRuntimeConfig(path);
+  const command = readReviewerQueryAuditMaintenanceCommand(commandPath);
+  if (command.kind !== REVIEWER_QUERY_AUDIT_EXPIRY_COMMAND_KIND) {
+    throw new Error('reviewer query audit expiry requires an expiry command');
+  }
+  const releaseInitialization = await acquireAuthorityInitializationLock(
+    path,
+    config.state_dir,
+  );
+  try {
+    const serveConfig = resolveAuthorityServeConfig(config);
+    const runtimeLock = await acquireAuthorityRuntimeLock(
+      config.state_dir,
+      authorityMaintenanceFingerprint(
+        serveConfig,
+        'expire-reviewer-query-audit',
+      ),
+    );
+    try {
+      const inspected = await inspectAuthorityServePreflight(path, config);
+      const repository = SqliteReviewerQueryAuditMaintenanceRepository.open({
+        database_path: config.database_path,
+        trust: reviewerQueryAuditMaintenanceTrust(config, inspected),
+      });
+      try {
+        return Object.freeze({
+          control_event: repository.expire(
+            command,
+            options.now ?? (() => new Date().toISOString()),
+          ),
+        });
+      } finally {
+        repository.close();
+      }
+    } finally {
+      await runtimeLock.release();
+    }
+  } finally {
+    await releaseInitialization();
+  }
+}
+
 async function inspectAuthorityRecordRebuildPreflight(
   configPath: string,
   config: AuthorityRuntimeConfigV1,
@@ -2296,6 +2640,13 @@ async function rebuildAuthorityDerivedRecordStoreLocked(
       const follower = new OrganizationRecordFollower({
         logReader: reader,
         derived: rebuilt,
+        // A stopped rebuild must reproduce the running follower's outcome
+        // exactly, which means reading reviewer-v2 through the same closed
+        // validator rather than a looser rebuild-only path.
+        reviewerValidator: reviewerRestrictedEnvelopeValidator({
+          organization_id: organizationId,
+          authority_id: config.authority.authority_id,
+        }),
       });
       const progress = await follower.drain();
       if (progress.halted) {

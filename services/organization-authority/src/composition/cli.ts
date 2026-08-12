@@ -5,6 +5,8 @@ import {
 } from './operator-config.js';
 import {
   activateOrganizationPermissionPilot,
+  expireReviewerQueryAudit,
+  exportReviewerQueryAudit,
   initializeDevelopmentAuthority,
   installAuthorityIntegrations,
   inspectAuthorityServePreflight,
@@ -17,6 +19,8 @@ const USAGE = `usage:
   echo-organization-authority init-development --config <absolute-path> --state-dir <absolute-path> --organization-name <name> [--port <1-65535>]
   echo-organization-authority install-integrations --config <absolute-path>
   echo-organization-authority activate-permission-pilot --config <absolute-path> --command <absolute-json-path>
+  echo-organization-authority reviewer-query-audit-export --config <absolute-path> --command <absolute-json-path> --output <absolute-path>
+  echo-organization-authority reviewer-query-audit-expire --config <absolute-path> --command <absolute-json-path>
   echo-organization-authority rebuild-derived --config <absolute-path>
   echo-organization-authority serve --config <absolute-path>
   echo-organization-authority status --config <absolute-path>`;
@@ -166,6 +170,29 @@ export async function runOrganizationAuthorityCli(
   if (command === 'activate-permission-pilot') {
     const flags = parseFlags(commandArguments, ['--config', '--command']);
     const result = await activateOrganizationPermissionPilot(
+      requiredFlag(flags, '--config'),
+      requiredFlag(flags, '--command'),
+    );
+    io.stdout(`${canonicalJson(result as never)}\n`);
+    return 0;
+  }
+  if (command === 'reviewer-query-audit-export') {
+    const flags = parseFlags(commandArguments, [
+      '--config',
+      '--command',
+      '--output',
+    ]);
+    const result = await exportReviewerQueryAudit(
+      requiredFlag(flags, '--config'),
+      requiredFlag(flags, '--command'),
+      requiredFlag(flags, '--output'),
+    );
+    io.stdout(`${canonicalJson(result as never)}\n`);
+    return 0;
+  }
+  if (command === 'reviewer-query-audit-expire') {
+    const flags = parseFlags(commandArguments, ['--config', '--command']);
+    const result = await expireReviewerQueryAudit(
       requiredFlag(flags, '--config'),
       requiredFlag(flags, '--command'),
     );

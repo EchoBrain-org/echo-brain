@@ -1,10 +1,16 @@
+import {
+  RESTRICTED_REVIEWER_POLICY_ID,
+  reviewerMessagePresentationPreimage,
+} from '../../application/reviewer-restricted-policy.js';
 import { canonicalSha256 } from '../../canonical/canonical-json.js';
+import { reconstructReviewerCard } from './reviewer-card-grammar.js';
 import type {
   ObservedSlackIdentityLinkChallenge,
   ObserveSlackIdentityLinkChallengeInput,
   PostedSlackIdentityLinkChallenge,
   PostSlackIdentityLinkChallengeInput,
   SlackIntegrationProvider,
+  SlackReviewerPresentationExpectation,
   VerifiedSlackChannel,
   VerifiedSlackConnection,
   VerifiedSlackHuman,
@@ -293,6 +299,7 @@ export class SlackIntegrationProviderError extends Error {
     message: string,
     readonly code:
       | 'unauthorized'
+      | 'identity_mismatch'
       | 'unavailable'
       | 'invalid_response'
       | 'not_observed',
@@ -719,6 +726,29 @@ export class SlackWebIntegrationProvider implements SlackIntegrationProvider {
         'invalid_response',
       );
     }
+    const reviewerExpectation = input.expected_reviewer_presentation ?? null;
+    const parseReviewerReactions =
+      input.parse_reviewer_card_reactions === true;
+    if (reviewerExpectation !== null || parseReviewerReactions) {
+      if (reviewerExpectation !== null && input.expected_presentation !== null) {
+        // A mixed pilot/reviewer expectation cannot produce reviewer proof.
+        throw new SlackIntegrationProviderError(
+          'Slack approval presentation expectation is invalid',
+          'invalid_response',
+        );
+      }
+      const reviewerResult = this.verifyReviewerCardReaction({
+        input,
+        connection,
+        message,
+        blocks,
+        expectation: reviewerExpectation,
+      });
+      // Reaction-pair parsing is an extension the parser always offers. When
+      // the live card is not a reviewer card it falls through to the landed
+      // path, so ordinary and pilot rejections are unchanged.
+      if (reviewerResult !== null) return reviewerResult;
+    }
     const expectation = input.expected_presentation;
     const expectedAudienceBlock =
       expectation === null
@@ -834,14 +864,167 @@ export class SlackWebIntegrationProvider implements SlackIntegrationProvider {
             message_unedited: true,
           });
     const presentationCandidateObserved = presentationCandidates.length > 0;
-    const reactions = message['reactions'];
-    if (reactions === undefined) {
+    return Object.freeze({
+      observed: this.observedDecisiveReaction(
+        message,
+        input.reaction_name,
+        input.opposite_reaction_name,
+        input.user_id,
+      ),
+      presentation_candidate_observed: presentationCandidateObserved,
+      message_presentation_sha256: messagePresentationSha256,
+    });
+  }
+
+  /**
+   * The closed reviewer branch.
+   *
+   * The complete card must reconstruct exactly; provider identity, absent edit
+   * evidence, and a non-null matching `app_id` are required before any digest
+   * is trusted; and both signed commitments must equal the recomputed values.
+   * Title and item text stay in this bounded frame and are never persisted,
+   * logged, traced, measured, or returned.
+   */
+  private verifyReviewerCardReaction(context: {
+    input: VerifySlackReactionInput;
+    connection: VerifiedSlackConnection;
+    message: Record<string, unknown>;
+    blocks: readonly unknown[];
+    expectation: SlackReviewerPresentationExpectation | null;
+  }): VerifiedSlackReaction | null {
+    const { input, connection, message, blocks, expectation } = context;
+    const reconstructed = reconstructReviewerCard({
+      approval_id: input.approval_id,
+      blocks,
+      fallback_text: message['text'],
+    });
+    if (reconstructed === null) {
+      if (expectation === null) {
+        // Not a reviewer card: the caller only asked whether one was there.
+        return null;
+      }
+      throw new SlackIntegrationProviderError(
+        'Slack reviewer approval card does not match the closed grammar',
+        'identity_mismatch',
+      );
+    }
+    const identityVerified =
+      input.expected_app_id !== null &&
+      connection.app_id === input.expected_app_id &&
+      message['app_id'] === input.expected_app_id &&
+      message['edited'] === undefined;
+    if (!identityVerified) {
+      throw new SlackIntegrationProviderError(
+        'Slack reviewer approval card identity or edit state is unusable',
+        'identity_mismatch',
+      );
+    }
+    if (expectation === null) {
+      // Reaction-pair parsing only: the schema-v1 rejection of a reviewer card
+      // proves the card's own frozen pair and produces no reviewer digests.
+      // The selected reaction must be the live reject reaction, and the live
+      // approve reaction -- not a caller-supplied one -- is the opposite.
+      if (input.reaction_name !== reconstructed.reject_reaction) {
+        throw new SlackIntegrationProviderError(
+          'Slack reviewer approval card does not authorize this reaction',
+          'identity_mismatch',
+        );
+      }
       return Object.freeze({
-        observed: false,
-        presentation_candidate_observed: presentationCandidateObserved,
-        message_presentation_sha256: messagePresentationSha256,
+        observed: this.observedDecisiveReaction(
+          message,
+          reconstructed.reject_reaction,
+          reconstructed.approve_reaction,
+          input.user_id,
+        ),
+        presentation_candidate_observed: true,
+        message_presentation_sha256: null,
+        reviewer_card_reactions: Object.freeze({
+          approve_reaction: reconstructed.approve_reaction,
+          reject_reaction: reconstructed.reject_reaction,
+        }),
       });
     }
+    if (
+      expectation.policy_id !== RESTRICTED_REVIEWER_POLICY_ID ||
+      expectation.approve_reaction !== reconstructed.approve_reaction ||
+      expectation.reject_reaction !== reconstructed.reject_reaction ||
+      expectation.reviewer_release_draft_sha256 !==
+        reconstructed.reviewer_release_draft_sha256 ||
+      expectation.approval_presentation_sha256 !==
+        reconstructed.approval_presentation_sha256
+    ) {
+      throw new SlackIntegrationProviderError(
+        'Slack reviewer approval card does not match its signed commitments',
+        'identity_mismatch',
+      );
+    }
+    const providerEventSha256 = input.reviewer_provider_event_sha256;
+    if (
+      providerEventSha256 === undefined ||
+      !SHA256_DIGEST.test(providerEventSha256)
+    ) {
+      throw new SlackIntegrationProviderError(
+        'Slack reviewer verification input is invalid',
+        'invalid_response',
+      );
+    }
+    const observed = this.observedDecisiveReaction(
+      message,
+      input.reaction_name,
+      input.opposite_reaction_name,
+      input.user_id,
+    );
+    if (!observed) {
+      return Object.freeze({
+        observed: false,
+        presentation_candidate_observed: true,
+        message_presentation_sha256: null,
+      });
+    }
+    const messagePresentationSha256 = canonicalSha256(
+      reviewerMessagePresentationPreimage({
+        provider_event_sha256: providerEventSha256,
+        approval_presentation_sha256:
+          reconstructed.approval_presentation_sha256,
+        team_id: connection.team_id,
+        enterprise_id: connection.enterprise_id,
+        bot_user_id: connection.bot_user_id,
+        bot_id: connection.bot_id,
+        app_id: connection.app_id as string,
+        actor_user_id: input.user_id,
+        channel_id: input.channel_id,
+        message_ts: input.message_ts,
+        reaction_name: input.reaction_name,
+      }),
+    );
+    return Object.freeze({
+      observed: true,
+      presentation_candidate_observed: true,
+      message_presentation_sha256: null,
+      reviewer_presentation: Object.freeze({
+        reviewer_release_draft_sha256:
+          reconstructed.reviewer_release_draft_sha256,
+        approval_presentation_sha256:
+          reconstructed.approval_presentation_sha256,
+        message_presentation_sha256: messagePresentationSha256,
+      }),
+    });
+  }
+
+  private observedDecisiveReaction(
+    message: Record<string, unknown>,
+    selectedReaction: string,
+    oppositeReaction: string,
+    userId: string,
+  ): boolean {
+    const input = {
+      reaction_name: selectedReaction,
+      opposite_reaction_name: oppositeReaction,
+      user_id: userId,
+    };
+    const reactions = message['reactions'];
+    if (reactions === undefined) return false;
     if (!Array.isArray(reactions)) {
       throw new SlackIntegrationProviderError(
         'Slack reaction roster is invalid',
@@ -900,11 +1083,7 @@ export class SlackWebIntegrationProvider implements SlackIntegrationProvider {
         oppositePresent = unique.has(input.user_id);
       }
     }
-    return Object.freeze({
-      observed: selectedPresent && !oppositePresent,
-      presentation_candidate_observed: presentationCandidateObserved,
-      message_presentation_sha256: messagePresentationSha256,
-    });
+    return selectedPresent && !oppositePresent;
   }
 
   async postIdentityLinkChallenge(

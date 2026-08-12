@@ -301,6 +301,14 @@ landed exact-key v1 schema cannot accept a new `intent_source` field.
 | Rejection without future intent marker | Effective historical floor | Active rejecting reviewer |
 | Malformed, unknown-version, or internally inconsistent | Invisible and incomplete; operator alert | None |
 
+The implementation-ready
+[Job B minimum-V1 contract](2026-08-11-trusted-permission-aware-searchable-layer-2-design.md)
+now names that future positive state `organization-member-readable-v1` and
+defines it as a separate schema-v3 human-approved policy for current active
+`owner` and `employee` memberships, including people who join later. It is not
+implemented. It does not reinterpret legacy rows, establish a floor, or make
+membership alone a path to reviewer-restricted content.
+
 An unresolved participant link may leave discoverability proved while
 readability is incomplete. It must not turn a separately proved discoverable
 path into invisible, and it must not be treated as readable.

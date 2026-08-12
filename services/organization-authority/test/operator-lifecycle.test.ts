@@ -368,7 +368,7 @@ describe('organization authority operator lifecycle', () => {
     expect(manifestText).not.toContain(proxyToken);
 
     const database = inspectAuthorityDatabaseReadOnly(paths.database_path);
-    expect(database.tables).toHaveLength(10);
+    expect(database.tables).toHaveLength(11);
     expect(database.authority_id).toBe(firstConfig.authority.authority_id);
     expect(database.organization_id).toBe(
       firstConfig.organization.organization_id,
@@ -1215,7 +1215,7 @@ describe('organization authority operator lifecycle', () => {
     expect(
       inspectAuthorityDatabaseReadOnly(config.database_path),
     ).toMatchObject({
-      schema_version: 5,
+      schema_version: 6,
       integrations_control_plane_id: integrationsIdentity.control_plane_id,
       integrations_marker_sha256: expect.stringMatching(
         /^sha256:[0-9a-f]{64}$/,
@@ -1306,7 +1306,7 @@ describe('organization authority operator lifecycle', () => {
       const interruptedAuthority = inspectAuthorityDatabaseReadOnly(
         config.database_path,
       );
-      expect(interruptedAuthority.schema_version).toBe(5);
+      expect(interruptedAuthority.schema_version).toBe(6);
       expect(
         interruptedAuthority.integrations_control_plane_id !== null,
       ).toBe(anchoredAfterFault);
@@ -1323,7 +1323,7 @@ describe('organization authority operator lifecycle', () => {
         config.database_path,
       );
       expect(recoveredAuthority).toMatchObject({
-        schema_version: 5,
+        schema_version: 6,
         integrations_control_plane_id: recovered.control_plane_id,
         integrations_marker_sha256: expect.stringMatching(
           /^sha256:[0-9a-f]{64}$/,

@@ -42,6 +42,7 @@ import {
 } from './config.js';
 import { assertAuthorityRuntimeStateBinding } from './operator-state.js';
 import { composeOrganizationRecentDecisions } from './recent-decisions.js';
+import { composeReviewerRecentDecisions } from './reviewer-recent-decisions.js';
 
 export interface RunningOrganizationAuthority {
   address: AddressInfo;
@@ -363,6 +364,11 @@ export async function startOrganizationAuthority(
       recentDecisions: composeOrganizationRecentDecisions(
         application,
         records,
+      ),
+      reviewerRecentDecisions: composeReviewerRecentDecisions(
+        application,
+        records,
+        integrationsRepository,
       ),
       adminAuthenticator,
       clientIdentityResolver,

@@ -14,12 +14,14 @@ import {
   ORGANIZATION_PERMISSION_PILOT_ACTIVATION_COMMAND_KIND,
   ORGANIZATION_PERMISSION_PILOT_POLICY_ID,
   ORGANIZATION_PERMISSION_PILOT_PRESENTATION_POLICY_ID,
-  OrganizationPermissionPilotLog,
-  OrganizationRecordLogStore,
   organizationPermissionPilotCommandSha256,
   type OrganizationPermissionPilotActivationCommandV1,
   type OrganizationPermissionPilotActivationMarkerV1,
 } from '@echo-brain/organization-record';
+import {
+  OrganizationPermissionPilotLog,
+  OrganizationRecordLogStore,
+} from '@echo-brain/organization-record/maintenance';
 import { acquireAuthorityRuntimeLock } from '../src/adapters/runtime/singleton-runtime-lock.js';
 import { runOrganizationAuthorityCli } from '../src/composition/cli.js';
 import {
@@ -242,7 +244,6 @@ function appendRecord(fixtureValue: Fixture): `sha256:${string}` {
       },
       canonical_envelope: canonicalEnvelope,
       envelope_sha256: sha256Digest(canonicalEnvelope),
-      recorded_at: '2026-08-10T08:00:01.000Z',
     }).row.record_hash;
   } finally {
     log.close();

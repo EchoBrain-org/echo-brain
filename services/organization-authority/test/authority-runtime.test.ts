@@ -41,12 +41,14 @@ import {
   createOrganizationInternalLiveUpdateReceipt,
   createOrganizationPermissionCheckRequest,
   createOrganizationRecentDecisionsRequest,
+  createOrganizationReviewerRecentDecisionsRequest,
   createOrganizationSlackLinkBeginRequest,
   organizationInternalLiveManifestSha256,
 } from '@echo-brain/organization-api';
 import type {
   OrganizationPermissionCheckRequestV1,
   OrganizationRecentDecisionsRequestV1,
+  OrganizationReviewerRecentDecisionsRequestV1,
 } from '@echo-brain/organization-api';
 import { OrganizationAuthorityApplication } from '../src/application/organization-authority.js';
 import type {
@@ -304,6 +306,26 @@ async function recentDecisionsRequest(
   return createOrganizationRecentDecisionsRequest(
     {
       request_id: `rdr_${randomUUID()}`,
+      authority_id: receipt.authority_id,
+      authority_key_id: receipt.authority_key_id,
+      organization_id: receipt.organization_id,
+      enrollment_id: receipt.enrollment_id,
+      installation_id: fixture.enrolled.installationId,
+      installation_signing_key: fixture.enrolled.installation.descriptor,
+      requested_at: requestedAt,
+    },
+    async (bytes) => sign(fixture.enrolled.installation, bytes),
+  );
+}
+
+async function reviewerRecentDecisionsRequest(
+  fixture: RecentDecisionsFixtureView,
+  requestedAt = fixture.clock.now(),
+): Promise<OrganizationReviewerRecentDecisionsRequestV1> {
+  const receipt = fixture.enrolled.result.enrollment_receipt;
+  return createOrganizationReviewerRecentDecisionsRequest(
+    {
+      request_id: `rrd_${randomUUID()}`,
       authority_id: receipt.authority_id,
       authority_key_id: receipt.authority_key_id,
       organization_id: receipt.organization_id,
@@ -2235,6 +2257,98 @@ describe('single-organization authority runtime', () => {
       await expect(
         fixture.application.issueAccessLease(forgedCommand),
       ).rejects.toThrow('access lease request authentication failed');
+    } finally {
+      closeFixture(fixture);
+    }
+  });
+
+  it('audits the exact reviewer response before release and rechecks Person state at commit', async () => {
+    const fixture = await createEnrolledFixture('2026-07-22T16:55:00.000Z');
+    try {
+      const request = await reviewerRecentDecisionsRequest(fixture);
+      let sourceReads = 0;
+      const recordHash = canonicalSha256({ reviewer: 'record' });
+      const atomId = canonicalSha256({ reviewer: 'atom' });
+      const prepared = fixture.application.serveReviewerRecentDecisions(
+        request,
+        (caller) => {
+          sourceReads += 1;
+          expect(caller).toMatchObject({
+            reviewer_principal_id: fixture.enrolled.request.principal_id,
+            reviewer_membership_id: fixture.enrolled.request.membership_id,
+          });
+          return {
+            items: [
+              {
+                kind: 'decision',
+                text: 'Ship the exact reviewer read.',
+                atom_id: atomId,
+                record_hash: recordHash,
+              },
+            ],
+            record_head: { position: 1, record_hash: recordHash },
+          };
+        },
+      );
+      expect(prepared.status_code).toBe(200);
+      expect(prepared.body.toString('utf8')).toBe(
+        canonicalJson({
+          items: [
+            { kind: 'decision', text: 'Ship the exact reviewer read.' },
+          ],
+          policy_id: 'restricted-reviewer-v1',
+          schema_version: 1,
+          witness:
+            'Allowed by restricted-reviewer-v1 because every returned item records you as its approving reviewer and that exact reviewer membership is currently active.',
+        }),
+      );
+      expect(sourceReads).toBe(1);
+
+      const database = new Database(fixture.databasePath, { readonly: true });
+      try {
+        const audit = database
+          .prepare(
+            `SELECT decision, reason_code, detail_json
+             FROM authority_query_decision_audit
+             ORDER BY audit_sequence DESC LIMIT 1`,
+          )
+          .get() as {
+          decision: string;
+          reason_code: string;
+          detail_json: string;
+        };
+        expect(audit).toMatchObject({
+          decision: 'allow',
+          reason_code: 'active_exact_reviewer_membership',
+        });
+        const detail = JSON.parse(audit.detail_json) as Record<string, unknown>;
+        expect(detail['response_sha256']).toBe(sha256Digest(prepared.body));
+        expect(detail['returned_atom_ids']).toEqual([atomId]);
+        expect(fixture.application.adminOverview().counts.audit_entries).toBeGreaterThan(0);
+        expect(
+          fixture.application
+            .listAudit({ limit: 100 })
+            .items.some((entry) => entry.action.includes('reviewer_query')),
+        ).toBe(false);
+      } finally {
+        database.close();
+      }
+
+      const next = await reviewerRecentDecisionsRequest(fixture);
+      const denied = fixture.application.serveReviewerRecentDecisions(
+        next,
+        () => {
+          fixture.clock.advance(5 * 60 * 1000 + 1);
+          return {
+            items: [],
+            record_head: { position: 1, record_hash: recordHash },
+          };
+        },
+      );
+      expect(denied.status_code).toBe(401);
+      expect(denied.body.toString('utf8')).toBe(
+        '{"error":{"code":"unauthorized","message":"authorization failed"}}',
+      );
     } finally {
       closeFixture(fixture);
     }

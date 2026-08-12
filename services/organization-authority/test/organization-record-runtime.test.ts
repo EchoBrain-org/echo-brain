@@ -2,15 +2,17 @@ import Database from 'better-sqlite3';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { canonicalJson, sha256Digest } from '@echo-brain/federation-protocol';
 import {
-  ORGANIZATION_RECORD_DERIVED_DATABASE,
-  openOrganizationRecordDatabase,
   organizationRecordCanonicalEnvelope,
   organizationRecordEnvelopeIndex,
   organizationRecordFrame,
   organizationRecordHash,
   organizationRecordReceiptPayload,
-  OrganizationRecordLogStore,
 } from '@echo-brain/organization-record';
+import { OrganizationRecordLogStore } from '@echo-brain/organization-record/append';
+import {
+  ORGANIZATION_RECORD_DERIVED_DATABASE,
+  openOrganizationRecordDatabase,
+} from '@echo-brain/organization-record/maintenance';
 import { AuthorityOperationError } from '../src/domain/errors.js';
 import { openOrganizationRecordRuntime } from '../src/composition/organization-record.js';
 import {
@@ -69,7 +71,6 @@ function appendOutsideTheRuntime(
       envelope_sha256: sha256Digest(
         organizationRecordCanonicalEnvelope(envelope as Record<string, never>),
       ),
-      recorded_at: '2026-08-08T12:00:00.000Z',
     });
   } finally {
     log.close();

@@ -70,6 +70,7 @@ import {
   organizationEnrollmentGrantSha256,
   ProtocolOrganizationRecordEnvelopeBuilder,
   readPrivateOrganizationEnrollmentInvitation,
+  reviewerApprovalPresentationRenderer,
   SqliteOrganizationStateStore,
   validateOrganizationAuthorityDescriptorResponse,
   type HttpOrganizationAuthorityClientOptions,
@@ -239,6 +240,7 @@ Usage:
   echo-brain organization status --config <absolute-path>
   echo-brain organization refresh --config <absolute-path>
   echo-brain organization recent-decisions --config <absolute-path>
+  echo-brain organization reviewer-recent-decisions --config <absolute-path>
   echo-brain organization rebind --config <absolute-path> --authority-url <https-origin> --authority-pin <sha256:...> [--authority-ca <absolute-path>]
   echo-brain organization slack-link-begin --config <absolute-path>
   echo-brain organization slack-link-complete --config <absolute-path> --challenge-attempt <cat_...> --challenge-message-ts <Slack timestamp>  # reads ECHO_SLACK_LINK_CODE
@@ -347,6 +349,7 @@ const RULES: Readonly<Record<string, CommandRule>> = {
   "organization status": NONE,
   "organization refresh": NONE,
   "organization recent-decisions": NONE,
+  "organization reviewer-recent-decisions": NONE,
   "organization rebind": {
     accepts: ["authority-url", "authority-pin", "authority-ca"],
     requires: ["authority-url", "authority-pin"],
@@ -384,6 +387,7 @@ const ACTIONS: Readonly<Record<string, readonly string[]>> = {
     "status",
     "refresh",
     "recent-decisions",
+    "reviewer-recent-decisions",
     "rebind",
     "slack-link-begin",
     "slack-link-complete",
@@ -935,7 +939,14 @@ async function createCliComposition(
     now,
     ...(approvalActionAuthorizer === undefined
       ? {}
-      : { approvalActionAuthorizer }),
+      : {
+          approvalActionAuthorizer,
+          // The same authorizer object owns both the landed schema-v1 path and
+          // the schema-v2 reviewer approval; the renderer is the one local
+          // reviewer card projection.
+          reviewerApprovalActionAuthorizer: approvalActionAuthorizer,
+          reviewerPresentationRenderer: reviewerApprovalPresentationRenderer,
+        }),
     ...(sweepOrganizationRecord === undefined
       ? {}
       : {
@@ -1687,7 +1698,9 @@ export async function runProductCli(
     let operationFailure: unknown;
     try {
       releases =
-        action === "status" || action === "recent-decisions"
+        action === "status" ||
+        action === "recent-decisions" ||
+        action === "reviewer-recent-decisions"
           ? [
               await lifecycleLock(
                 dependencies,
@@ -1964,6 +1977,8 @@ export async function runProductCli(
             };
           } else if (action === "recent-decisions") {
             organizationResult = await runtime.recentDecisions.read();
+          } else if (action === "reviewer-recent-decisions") {
+            organizationResult = await runtime.reviewerRecentDecisions.read();
           } else {
             const approvalSurface = configuredSlackApprovalSurface(config);
             if (action === "slack-link-begin") {

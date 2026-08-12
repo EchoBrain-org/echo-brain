@@ -1,6 +1,7 @@
 import { Buffer } from 'node:buffer';
 import { describe, expect, it, vi } from 'vitest';
 import {
+  createOrganizationReviewerPermissionCheckRequest,
   createOrganizationInternalLiveDirectiveRequest,
   createOrganizationInternalLiveUpdateReceipt,
   createOrganizationPermissionCheckRequest,
@@ -10,6 +11,7 @@ import {
   ORGANIZATION_RECENT_DECISIONS_POLICY_ID,
   ORGANIZATION_RECENT_DECISIONS_WITNESS,
 } from '@echo-brain/organization-api';
+import { canonicalJson, canonicalSha256 } from '@echo-brain/federation-protocol';
 import { OrganizationAuthorityConflictError } from '../../src/product/organization/client/authority-client.js';
 import {
   HttpOrganizationAuthorityClient,
@@ -206,6 +208,89 @@ describe('HTTP organization authority client', () => {
     cancellation.abort();
     await expect(pending).rejects.toMatchObject({ code: 'transport_failed' });
     expect(combinedSignal?.aborted).toBe(true);
+  });
+
+  it('sends reviewer permission as exact canonical bytes without changing schema-v1 wire behavior', async () => {
+    const authority = new TestAuthority();
+    const signer = new TestInstallationSigner();
+    const signingKey = protocolInstallationKey(signer);
+    const request = await createOrganizationReviewerPermissionCheckRequest(
+      {
+        request_id: 'pcr_00000000-0000-4000-8000-000000000001',
+        authority_id: ORGANIZATION_IDS.authority,
+        authority_key_id: authority.descriptor.signing_key.key_id,
+        organization_id: ORGANIZATION_IDS.organization,
+        enrollment_id: ORGANIZATION_IDS.enrollment,
+        installation_id: ORGANIZATION_IDS.installation,
+        installation_signing_key: signingKey,
+        provider: 'slack',
+        provider_issuer: 'https://slack.com',
+        provider_tenant_kind: 'workspace',
+        provider_tenant_id: 'T123TEAM',
+        provider_enterprise_id: null,
+        provider_connection_subject_id: 'U123BOT',
+        provider_connection_bot_id: 'B123BOT',
+        provider_connection_app_id: 'A123APP',
+        provider_subject_kind: 'human_user',
+        provider_subject_id: 'U123ZHEN',
+        adapter_kind: 'approval-surface',
+        adapter_id: 'slack-reactions',
+        adapter_instance_id: 'primary',
+        adapter_version: '1.0.0',
+        approval_id: 'f'.repeat(64),
+        channel_id: 'C123CHANNEL',
+        message_ts: '1753822800.000001',
+        reaction_name: 'white_check_mark',
+        approve_reaction: 'white_check_mark',
+        reject_reaction: 'x',
+        reviewer_release_draft_sha256: `sha256:${'d'.repeat(64)}`,
+        approval_presentation_sha256: `sha256:${'e'.repeat(64)}`,
+        requested_at: NOW,
+      },
+      (bytes) =>
+        signer.sign(
+          ORGANIZATION_IDS.installation,
+          bytes,
+          signingKey.key_id,
+        ),
+    );
+    const decision = {
+      schema_version: 2 as const,
+      kind: 'echo-organization-permission-check-decision' as const,
+      request_sha256: canonicalSha256(request),
+      provider_event_sha256: request.provider_event_sha256,
+      allowed: true,
+      reason_code: 'active_reviewer_restricted_notice_v1',
+      principal_id: ORGANIZATION_IDS.principal,
+      membership_id: ORGANIZATION_IDS.membership,
+      adapter_binding_id: 'bnd_00000000-0000-4000-8000-000000000001',
+      permission_grant_id: 'pgr_00000000-0000-4000-8000-000000000001',
+      evaluated_at: NOW,
+      authorization_audit_event_id:
+        'aud_00000000-0000-4000-8000-000000000001',
+      authorization_audit_entry_sha256: `sha256:${'a'.repeat(64)}`,
+      reviewer_release_draft_sha256:
+        request.reviewer_release_draft_sha256,
+      approval_presentation_sha256: request.approval_presentation_sha256,
+      semantic_intent_sha256: `sha256:${'b'.repeat(64)}`,
+      message_presentation_sha256: `sha256:${'c'.repeat(64)}`,
+    };
+    const client = new HttpOrganizationAuthorityClient({
+      baseUrl: 'https://authority.example',
+      fetch: async (input, init) => {
+        expect(String(input)).toBe(
+          'https://authority.example/v1/permission-checks',
+        );
+        expect(String(init?.body)).toBe(canonicalJson(request));
+        return new Response(canonicalJson(decision), {
+          headers: { 'content-type': 'application/json' },
+        });
+      },
+    });
+
+    await expect(client.checkReviewerPermission(request)).resolves.toEqual(
+      decision,
+    );
   });
 
   it('posts the exact signed recent-decisions request and accepts only its closed bounded response', async () => {

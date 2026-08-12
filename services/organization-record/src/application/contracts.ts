@@ -33,6 +33,27 @@ export interface VerifiedOrganizationRecordEnvelope {
   readonly installation_id: string;
   /** Present only after the Authority verified the marker-bound notice proof. */
   readonly permission_pilot_eligibility?: OrganizationPermissionPilotEligibilityProofV1;
+  /**
+   * Present only after the Authority matched this envelope's exact immutable
+   * integration-audit row by primary key. It is proved evidence, never a
+   * caller-constructible object: the ingest turns it into a single-use runtime
+   * capability and the log writer will not create reviewer facts without one.
+   */
+  readonly reviewer_restricted_proof?: OrganizationRecordReviewerRestrictedProofView;
+}
+
+/** The closed reviewer proof the Authority's audit lookup returned. */
+export interface OrganizationRecordReviewerRestrictedProofView {
+  readonly policy_id: 'restricted-reviewer-v1';
+  readonly reviewer_principal_id: string;
+  readonly reviewer_membership_id: string;
+  readonly reviewer_release_draft_sha256: Sha256Digest;
+  readonly approval_presentation_sha256: Sha256Digest;
+  readonly semantic_intent_sha256: Sha256Digest;
+  readonly message_presentation_sha256: Sha256Digest;
+  readonly authorization_audit_event_id: string;
+  readonly authorization_audit_entry_sha256: Sha256Digest;
+  readonly evaluated_at: string;
 }
 
 /** The versioned record frame. `record_hash` is sha256 over its canonical bytes. */
@@ -199,6 +220,19 @@ export interface DerivedEdgeRow {
   readonly log_position: number;
 }
 
+/**
+ * The one deterministic, text-free outcome a valid reviewer-v2 approval
+ * produces in the derived store. It carries no content and is never read while
+ * serving.
+ */
+export interface DerivedReviewerPolicyExclusionRow {
+  readonly log_position: number;
+  readonly record_hash: Sha256Digest;
+  readonly envelope_version: 2;
+  readonly policy_id: 'restricted-reviewer-v1';
+  readonly outcome: 'deferred-to-permission-aware-retrieval';
+}
+
 /** Everything one log record derives to. Committed as one transaction with the cursor. */
 export interface OrganizationRecordProjection {
   readonly log_position: number;
@@ -208,6 +242,12 @@ export interface OrganizationRecordProjection {
   readonly participant_observations: readonly DerivedParticipantObservationRow[];
   readonly rejections: readonly DerivedRejectionRow[];
   readonly edges: readonly DerivedEdgeRow[];
+  /**
+   * Empty for every schema-v1 record, so existing projected rows stay
+   * byte-identical. Exactly one entry for a valid reviewer-v2 approval, whose
+   * other collections are all empty.
+   */
+  readonly reviewer_policy_exclusions: readonly DerivedReviewerPolicyExclusionRow[];
 }
 
 export interface OrganizationRecordDeriveProgress {

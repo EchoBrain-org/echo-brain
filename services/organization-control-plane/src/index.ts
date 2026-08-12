@@ -45,7 +45,17 @@ export {
   type OrganizationSecretReference,
   type OrganizationSecretStore,
   type RecordPermissionDecisionInput,
+  type RecordReviewerPermissionDecisionInput,
   type RecordedPermissionDecision,
+  type RecordedReviewerPermissionDecision,
+  type ReviewerAuthorizationEvidenceExpectation,
+  type ReviewerAuthorizationEvidenceMatch,
+  type ReviewerAuthorizationEvidenceRead,
+  type ReviewerRestrictedAuthorizationProof,
+  type ReviewerRestrictedAuthorizationEvidence,
+  type OrganizationIntegrationAuditChainVerification,
+  type SlackReviewerPresentationExpectation,
+  type VerifiedSlackReviewerPresentation,
   type PostedSlackIdentityLinkChallenge,
   type PostSlackIdentityLinkChallengeInput,
   type PendingSlackIdentityLinkChallenge,
@@ -60,6 +70,15 @@ export {
   type VerifiedSlackReaction,
   type VerifySlackReactionInput,
 } from "./application/contracts.js";
+export {
+  RESTRICTED_REVIEWER_ALLOW_REASON_CODE,
+  RESTRICTED_REVIEWER_CONSEQUENCE_TEXT,
+  RESTRICTED_REVIEWER_CONSEQUENCE_VERSION,
+  RESTRICTED_REVIEWER_POLICY_ID,
+  reviewerMessagePresentationPreimage,
+  reviewerRestrictedAuditDetail,
+  reviewerRestrictedSemanticPreimage,
+} from "./application/reviewer-restricted-policy.js";
 export {
   SlackIntegrationProviderError,
   SlackWebIntegrationProvider,

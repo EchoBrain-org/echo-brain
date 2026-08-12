@@ -8,6 +8,7 @@ import {
   ORGANIZATION_API_ADMIN_AUTH_SCHEME,
   ORGANIZATION_API_PROXY_AUTH_SCHEME,
   ORGANIZATION_API_RECENT_DECISIONS_PATH,
+  ORGANIZATION_API_REVIEWER_RECENT_DECISIONS_PATH,
 } from '@echo-brain/organization-api';
 import { AdminBearerAuthenticator } from '../src/adapters/security/admin-bearer-authenticator.js';
 import { AuthorityOperationError } from '../src/domain/errors.js';
@@ -15,6 +16,10 @@ import {
   fixedRecentDecisionsErrorBytes,
   OrganizationRecentDecisionsError,
 } from '../src/application/recent-decisions.js';
+import {
+  fixedReviewerRecentDecisionsErrorBytes,
+  ReviewerRecentDecisionsError,
+} from '../src/application/reviewer-recent-decisions.js';
 import {
   createOrganizationAuthorityHttpServer,
   decodeOrganizationApiJsonBody,
@@ -32,6 +37,10 @@ const ADMIN_TOKEN = 'test-admin-token-with-at-least-32-bytes';
 const PROXY_TOKEN = 'test-proxy-origin-token-with-at-least-32-bytes';
 const EMPTY_RECENT_DECISIONS_RESPONSE_BYTES = Buffer.from(
   '{"items":[],"policy_id":"pilot-member-readable-v1","schema_version":1,"witness":"Readable because your active membership is one of the two memberships bound to pilot-member-readable-v1 and the returned records carry the exact two-person sharing notice."}',
+  'utf8',
+);
+const EMPTY_REVIEWER_RECENT_DECISIONS_RESPONSE_BYTES = Buffer.from(
+  '{"items":[],"policy_id":"restricted-reviewer-v1","schema_version":1,"witness":"Allowed by restricted-reviewer-v1 because every returned item records you as its approving reviewer and that exact reviewer membership is currently active."}',
   'utf8',
 );
 
@@ -61,6 +70,31 @@ function recentDecisionsWireRequest() {
     installation_key_id: installationKey,
     http_method: 'POST' as const,
     http_path: ORGANIZATION_API_RECENT_DECISIONS_PATH,
+    requested_at: '2026-08-10T08:00:00.000Z',
+    integrity: {
+      canonicalization: 'RFC8785' as const,
+      payload_sha256: `sha256:${'c'.repeat(64)}`,
+      signature_algorithm: 'ecdsa-p256-sha256-der-low-s' as const,
+      key_id: installationKey,
+      signature_base64: 'AAAAAAAA',
+    },
+  };
+}
+
+function reviewerRecentDecisionsWireRequest() {
+  const installationKey = `sha256:${'b'.repeat(64)}`;
+  return {
+    schema_version: 1 as const,
+    kind: 'echo-organization-reviewer-recent-decisions-request' as const,
+    request_id: 'rrd_00000000-0000-4000-8000-000000000001',
+    authority_id: 'oau_00000000-0000-4000-8000-000000000001',
+    authority_key_id: `sha256:${'a'.repeat(64)}`,
+    organization_id: 'org_00000000-0000-4000-8000-000000000001',
+    enrollment_id: 'enr_00000000-0000-4000-8000-000000000001',
+    installation_id: 'ins_00000000-0000-4000-8000-000000000001',
+    installation_key_id: installationKey,
+    http_method: 'POST' as const,
+    http_path: ORGANIZATION_API_REVIEWER_RECENT_DECISIONS_PATH,
     requested_at: '2026-08-10T08:00:00.000Z',
     integrity: {
       canonicalization: 'RFC8785' as const,
@@ -108,6 +142,7 @@ function testApplication(
     completeEnrollment: unexpectedCall,
     issueAccessLease: unexpectedCall,
     checkPermissionSubject: unexpectedCall,
+    checkReviewerPermissionSubject: unexpectedCall,
     revokeMembership: unexpectedCall,
     revokeInstallation: unexpectedCall,
     recoverInstallationAccess: unexpectedCall,
@@ -563,6 +598,96 @@ describe('authority HTTP presentation', () => {
       expect(calls).toBe(1);
     } finally {
       await close(server);
+    }
+  });
+
+  it('sends exact reviewer bytes and only fixed reviewer route errors', async () => {
+    const exact = EMPTY_REVIEWER_RECENT_DECISIONS_RESPONSE_BYTES;
+    const application = vi.fn(() => ({
+      status_code: 200 as const,
+      body: exact,
+      returned_atom_ids: [],
+      returned_record_hashes: [],
+    }));
+    const server = createOrganizationAuthorityHttpServer({
+      application: testApplication(),
+      reviewerRecentDecisions: { reviewerRecentDecisions: application },
+      adminAuthenticator: { authenticate: () => false },
+      clientIdentityResolver: new AuthenticatedProxyClientIdentityResolver(
+        PROXY_TOKEN,
+      ),
+    });
+    const origin = await listen(server);
+    const send = (suffix = '', body = JSON.stringify(reviewerRecentDecisionsWireRequest())) =>
+      fetch(`${origin}${ORGANIZATION_API_REVIEWER_RECENT_DECISIONS_PATH}${suffix}`, {
+        method: 'POST',
+        headers: {
+          ...proxyHeaders(clientId(`reviewer-recent${suffix}`)),
+          'content-type': 'application/json',
+        },
+        body,
+      });
+    try {
+      const response = await send();
+      expect(response.status).toBe(200);
+      expect(response.headers.get('cache-control')).toBe('no-store');
+      expect(Buffer.from(await response.arrayBuffer())).toEqual(exact);
+      expect(application).toHaveBeenCalledOnce();
+
+      const query = await send('?cursor=1');
+      expect(query.status).toBe(400);
+      expect(Buffer.from(await query.arrayBuffer())).toEqual(
+        fixedReviewerRecentDecisionsErrorBytes(400),
+      );
+      expect(application).toHaveBeenCalledOnce();
+
+      const malformed = await send('', '{}');
+      expect(malformed.status).toBe(400);
+      expect(Buffer.from(await malformed.arrayBuffer())).toEqual(
+        fixedReviewerRecentDecisionsErrorBytes(400),
+      );
+      expect(application).toHaveBeenCalledOnce();
+    } finally {
+      await close(server);
+    }
+
+    for (const [code, status] of [
+      ['unauthorized', 401],
+      ['unavailable', 503],
+    ] as const) {
+      const failing = createOrganizationAuthorityHttpServer({
+        application: testApplication(),
+        reviewerRecentDecisions: {
+          reviewerRecentDecisions: () => {
+            throw new ReviewerRecentDecisionsError(code, 'private detail');
+          },
+        },
+        adminAuthenticator: { authenticate: () => false },
+        clientIdentityResolver: new AuthenticatedProxyClientIdentityResolver(
+          PROXY_TOKEN,
+        ),
+      });
+      const failingOrigin = await listen(failing);
+      try {
+        const response = await fetch(
+          `${failingOrigin}${ORGANIZATION_API_REVIEWER_RECENT_DECISIONS_PATH}`,
+          {
+            method: 'POST',
+            headers: {
+              ...proxyHeaders(clientId(`reviewer-${code}`)),
+              'content-type': 'application/json',
+            },
+            body: JSON.stringify(reviewerRecentDecisionsWireRequest()),
+          },
+        );
+        expect(response.status).toBe(status);
+        expect(response.headers.get('cache-control')).toBe('no-store');
+        expect(Buffer.from(await response.arrayBuffer())).toEqual(
+          fixedReviewerRecentDecisionsErrorBytes(status),
+        );
+      } finally {
+        await close(failing);
+      }
     }
   });
 

@@ -206,7 +206,9 @@ export function authorityMaintenanceFingerprint(
   purpose:
     | 'install-integrations'
     | 'rebuild-derived'
-    | 'activate-permission-pilot',
+    | 'activate-permission-pilot'
+    | 'export-reviewer-query-audit'
+    | 'expire-reviewer-query-audit',
 ): `sha256:${string}` {
   const keyPath = join(
     config.key_directory,

@@ -21,7 +21,7 @@ import {
   ORGANIZATION_RECORD_DERIVED_DATABASE,
   OrganizationRecordLogStore,
   openOrganizationRecordDatabase,
-} from '@echo-brain/organization-record';
+} from '@echo-brain/organization-record/maintenance';
 import {
   authorityStatePaths,
   readAuthorityRuntimeConfig,
@@ -90,7 +90,6 @@ function underivableEnvelope(index: number): Record<string, unknown> {
 
 function appendRecord(
   config: AuthorityRuntimeConfigV1,
-  index: number,
   envelope: Record<string, unknown>,
 ): void {
   const paths = authorityStatePaths(config.state_dir);
@@ -110,7 +109,6 @@ function appendRecord(
       },
       canonical_envelope: canonicalEnvelope,
       envelope_sha256: sha256Digest(canonicalEnvelope),
-      recorded_at: `2026-08-08T12:00:0${index}.000Z`,
     });
   } finally {
     log.close();
@@ -199,7 +197,7 @@ describe('organization record rebuild-derived', () => {
   it('replays a verified log idempotently without changing protected files', async () => {
     const fixture = await initializedFixture();
     const paths = authorityStatePaths(fixture.stateDirectory);
-    appendRecord(fixture.config, 1, rejectionEnvelope(1));
+    appendRecord(fixture.config, rejectionEnvelope(1));
     const protectedBefore = {
       log: fileIdentity(paths.record_log_database_path),
       authority: fileIdentity(paths.database_path),
@@ -254,7 +252,7 @@ describe('organization record rebuild-derived', () => {
     async (condition) => {
       const fixture = await initializedFixture();
       const paths = authorityStatePaths(fixture.stateDirectory);
-      appendRecord(fixture.config, 1, rejectionEnvelope(1));
+      appendRecord(fixture.config, rejectionEnvelope(1));
       const logBefore = fileIdentity(paths.record_log_database_path);
       if (condition === 'missing') {
         unlinkSync(paths.record_derived_database_path);
@@ -335,8 +333,8 @@ describe('organization record rebuild-derived', () => {
   it('cleans staging and preserves the target when projection halts', async () => {
     const fixture = await initializedFixture();
     const paths = authorityStatePaths(fixture.stateDirectory);
-    appendRecord(fixture.config, 1, rejectionEnvelope(1));
-    appendRecord(fixture.config, 2, underivableEnvelope(2));
+    appendRecord(fixture.config, rejectionEnvelope(1));
+    appendRecord(fixture.config, underivableEnvelope(2));
     const derivedBefore = fileIdentity(paths.record_derived_database_path);
 
     await expect(

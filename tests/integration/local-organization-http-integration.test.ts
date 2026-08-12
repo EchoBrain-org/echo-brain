@@ -41,7 +41,7 @@ import { initializeOrganizationControlDatabase } from '../../services/organizati
 import {
   OrganizationRecordDerivedStore,
   OrganizationRecordLogStore,
-} from '../../services/organization-record/src/index.js';
+} from '../../services/organization-record/src/append.js';
 import { DevelopmentFileOrganizationAuthoritySigner } from '../../services/organization-authority/src/adapters/security/development-file-authority-signer.js';
 import { SqliteOrganizationAuthorityRepository } from '../../services/organization-authority/src/adapters/persistence/sqlite/sqlite-authority-repository.js';
 import { OrganizationAdminApiClient } from '../../services/organization-authority/src/adapters/http/organization-admin-api-client.js';

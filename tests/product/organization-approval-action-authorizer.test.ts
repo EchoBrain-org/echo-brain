@@ -1,6 +1,9 @@
 import type {
   OrganizationPermissionCheckRequestV1,
+  OrganizationReviewerPermissionCheckDecisionV2,
+  OrganizationReviewerPermissionCheckRequestV2,
 } from '@echo-brain/organization-api';
+import { canonicalSha256 } from '@echo-brain/federation-protocol';
 import {
   mkdtempSync,
   rmSync,
@@ -9,6 +12,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { OrganizationApprovalActionAuthorizer } from '../../src/product/organization/approval-action-authorizer.js';
+import { validateReviewerAuthorizationEvidence } from '../../src/product/approval/reviewer-authorization-evidence.js';
 import { LocalOrganizationCoordinator } from '../../src/product/organization/enrollment/local-organization-coordinator.js';
 import { SqliteOrganizationStateStore } from '../../src/product/organization/state/sqlite-organization-state-store.js';
 import {
@@ -76,6 +80,49 @@ function authorizationInput() {
     channel_id: 'C123CHANNEL',
     message_ts: '1753822800.000001',
     reaction_name: 'white_check_mark',
+  };
+}
+
+const reviewerDraftSha256 = `sha256:${'d'.repeat(64)}` as const;
+const reviewerPresentationSha256 = `sha256:${'e'.repeat(64)}` as const;
+
+function reviewerAuthorizationInput() {
+  const input = authorizationInput();
+  return {
+    approval_id: input.approval_id,
+    adapter_identity: input.adapter_identity,
+    provider_identity: input.provider_identity,
+    actor: input.actor,
+    channel_id: input.channel_id,
+    message_ts: input.message_ts,
+    approve_reaction: input.reaction_name,
+    reject_reaction: 'x',
+    reviewer_release_draft_sha256: reviewerDraftSha256,
+    approval_presentation_sha256: reviewerPresentationSha256,
+  };
+}
+
+function allowedReviewerDecision(
+  request: OrganizationReviewerPermissionCheckRequestV2,
+): OrganizationReviewerPermissionCheckDecisionV2 {
+  return {
+    schema_version: 2,
+    kind: 'echo-organization-permission-check-decision',
+    request_sha256: canonicalSha256(request),
+    provider_event_sha256: request.provider_event_sha256,
+    allowed: true,
+    reason_code: 'active_reviewer_restricted_notice_v1',
+    principal_id: ORGANIZATION_IDS.principal,
+    membership_id: ORGANIZATION_IDS.membership,
+    adapter_binding_id: fixtureId('bnd', 1),
+    permission_grant_id: fixtureId('pgr', 1),
+    evaluated_at: NOW,
+    authorization_audit_event_id: fixtureId('aud', 1),
+    authorization_audit_entry_sha256: `sha256:${'a'.repeat(64)}`,
+    reviewer_release_draft_sha256: request.reviewer_release_draft_sha256,
+    approval_presentation_sha256: request.approval_presentation_sha256,
+    semantic_intent_sha256: `sha256:${'b'.repeat(64)}`,
+    message_presentation_sha256: `sha256:${'c'.repeat(64)}`,
   };
 }
 
@@ -184,4 +231,92 @@ describe('organization approval action authorizer', () => {
       );
     },
   );
+
+  it('signs the closed reviewer request and returns a locally revalidated complete proof', async () => {
+    const { authority, databasePath, signer } = await enrolledFixture();
+    let observed: OrganizationReviewerPermissionCheckRequestV2 | undefined;
+    const client = descriptorClient(authority, {
+      checkReviewerPermission: async (request) => {
+        observed = request;
+        return allowedReviewerDecision(request);
+      },
+    });
+    const authorizer = new OrganizationApprovalActionAuthorizer({
+      openState: () => new SqliteOrganizationStateStore(databasePath),
+      authorityClient: client,
+      installationSigner: signer,
+      now: () => NOW,
+      nextRequestId: () =>
+        'pcr_00000000-0000-4000-8000-000000000001',
+    });
+
+    const result = await authorizer.authorizeReviewerApproval(
+      reviewerAuthorizationInput(),
+    );
+    expect(result.allowed).toBe(true);
+    if (!result.allowed) throw new Error('reviewer allow was expected');
+    expect(validateReviewerAuthorizationEvidence(result.evidence)).toEqual(
+      result.evidence,
+    );
+    expect(observed).toMatchObject({
+      schema_version: 2,
+      approval_id: 'f'.repeat(64),
+      action: 'approve',
+      reaction_name: 'white_check_mark',
+      approve_reaction: 'white_check_mark',
+      reject_reaction: 'x',
+      reviewer_release_draft_sha256: reviewerDraftSha256,
+      approval_presentation_sha256: reviewerPresentationSha256,
+    });
+  });
+
+  it.each([
+    [
+      'request digest',
+      (decision: OrganizationReviewerPermissionCheckDecisionV2) => ({
+        ...decision,
+        request_sha256: `sha256:${'f'.repeat(64)}` as const,
+      }),
+      /does not match the signed request/u,
+    ],
+    [
+      'reviewer actor',
+      (decision: OrganizationReviewerPermissionCheckDecisionV2) => ({
+        ...decision,
+        principal_id: fixtureId('prn', 2),
+      }),
+      /belongs to another enrolled member/u,
+    ],
+    [
+      'frozen presentation',
+      (decision: OrganizationReviewerPermissionCheckDecisionV2) => ({
+        ...decision,
+        approval_presentation_sha256: `sha256:${'f'.repeat(64)}` as const,
+      }),
+      /does not quote the frozen presentation/u,
+    ],
+    [
+      'complete proof',
+      (decision: OrganizationReviewerPermissionCheckDecisionV2) => ({
+        ...decision,
+        authorization_audit_event_id: null,
+      }),
+      /authorization_audit_event_id must be a canonical aud identifier/u,
+    ],
+  ])('refuses a reviewer allow with mismatched %s', async (_label, mutate, message) => {
+    const { authority, databasePath, signer } = await enrolledFixture();
+    const client = descriptorClient(authority, {
+      checkReviewerPermission: async (request) =>
+        mutate(allowedReviewerDecision(request)),
+    });
+    const authorizer = new OrganizationApprovalActionAuthorizer({
+      openState: () => new SqliteOrganizationStateStore(databasePath),
+      authorityClient: client,
+      installationSigner: signer,
+      now: () => NOW,
+    });
+    await expect(
+      authorizer.authorizeReviewerApproval(reviewerAuthorizationInput()),
+    ).rejects.toThrow(message);
+  });
 });

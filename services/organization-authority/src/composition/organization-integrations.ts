@@ -11,9 +11,14 @@ import {
   validateOrganizationSlackLinkBeginRequest,
   validateOrganizationSlackLinkBeginResponse,
   validateOrganizationSlackLinkCompleteRequest,
+  validateOrganizationReviewerPermissionCheckDecision,
+  validateOrganizationReviewerPermissionCheckRequest,
   validateOrganizationSlackLinkResult,
   type OrganizationPermissionCheckDecisionV1,
   type OrganizationPermissionCheckRequestV1,
+  type OrganizationReviewerPermissionCheckDecisionV2,
+  type OrganizationReviewerPermissionCheckRequestV2,
+  type OrganizationReviewerPermissionDenialReasonCodeV2,
   type OrganizationSlackLinkBeginRequestV1,
   type OrganizationSlackLinkBeginResponseV1,
   type OrganizationSlackLinkCompleteRequestV1,
@@ -23,8 +28,12 @@ import {
   AUTHORITY_FILE_SECRET_BACKEND,
   OrganizationIntegrationConflictError,
   OrganizationIntegrationsRepository,
+  RESTRICTED_REVIEWER_ALLOW_REASON_CODE,
+  RESTRICTED_REVIEWER_POLICY_ID,
   SLACK_ORGANIZATION_TOOL_REQUIRED_SCOPES,
   SlackIntegrationProviderError,
+  reviewerRestrictedAuditDetail,
+  reviewerRestrictedSemanticPreimage,
   type ActivateExistingSlackApprovalInput,
   type ActivateExistingSlackApprovalResult,
   type BeginSlackIdentityLinkChallengeInput,
@@ -351,6 +360,33 @@ function slackApprovalPermissionLookup(
     slack_bot_id: request.provider_connection_bot_id,
     slack_app_id: request.provider_connection_app_id,
     action: request.action,
+  };
+}
+
+/**
+ * The reviewer lookup uses the request's frozen `approve_reaction` as the
+ * selected reaction, so the currently active binding must still carry the pair
+ * the card was published with.
+ */
+function reviewerApprovalPermissionLookup(
+  request: OrganizationReviewerPermissionCheckRequestV2,
+): SlackApprovalPermissionLookup {
+  return {
+    organization_id: request.organization_id,
+    installation_id: request.installation_id,
+    installation_key_id: request.installation_key_id,
+    adapter_id: request.adapter_id,
+    adapter_instance_id: request.adapter_instance_id,
+    adapter_version: request.adapter_version,
+    channel_id: request.channel_id,
+    reaction_name: request.approve_reaction,
+    slack_team_id: request.provider_tenant_id,
+    slack_user_id: request.provider_subject_id,
+    slack_enterprise_id: request.provider_enterprise_id,
+    slack_bot_user_id: request.provider_connection_subject_id,
+    slack_bot_id: request.provider_connection_bot_id,
+    slack_app_id: request.provider_connection_app_id,
+    action: 'approve',
   };
 }
 
@@ -913,6 +949,12 @@ export class ComposedOrganizationIntegrationsApplication
               : candidate.approve_reaction,
           user_id: request.provider_subject_id,
           expected_presentation: expectedPresentation,
+          // The parser always recognizes the reviewer namespace as an
+          // extension. A reviewer card may still be rejected through this
+          // unchanged schema-v1 path; the approval call is untouched.
+          ...(request.action === 'reject'
+            ? { parse_reviewer_card_reactions: true }
+            : {}),
         },
         signal,
       );
@@ -933,7 +975,7 @@ export class ComposedOrganizationIntegrationsApplication
     } catch (error) {
       providerFailure =
         error instanceof SlackIntegrationProviderError &&
-        error.code === 'unauthorized'
+        (error.code === 'unauthorized' || error.code === 'identity_mismatch')
           ? 'provider_identity_mismatch'
           : 'provider_unavailable';
     }
@@ -989,6 +1031,26 @@ export class ComposedOrganizationIntegrationsApplication
       }
       return decision;
     }
+    // A rejected reviewer card must prove both of its own frozen reaction
+    // names against the current active binding pair. Any pair rotation or
+    // conflicting reaction denies rather than reinterpreting the card.
+    const reviewerCardReactions = providerVerification?.reviewer_card_reactions;
+    if (reviewerCardReactions !== undefined) {
+      if (
+        request.action !== 'reject' ||
+        request.reaction_name !== reviewerCardReactions.reject_reaction ||
+        reviewerCardReactions.reject_reaction !== candidate.reject_reaction ||
+        reviewerCardReactions.approve_reaction !== candidate.approve_reaction
+      ) {
+        return this.recordDecision(
+          request,
+          current,
+          candidate,
+          false,
+          'provider_identity_mismatch',
+        );
+      }
+    }
     if (providerVerification?.observed !== true) {
       const decision = this.recordDecision(
         request,
@@ -1036,6 +1098,307 @@ export class ComposedOrganizationIntegrationsApplication
         : 'active_membership_direct_grant_pilot_notice_v1',
       noticeProof,
     );
+  }
+
+  /**
+   * The schema-v2 reviewer approval.
+   *
+   * It never consults local adapter, reaction, or credential configuration:
+   * the frozen values arrive on the signed request and are matched against the
+   * currently active central binding, connection, and live provider identity.
+   * An allow additionally requires the Slack reactor's resolved principal and
+   * membership to equal the authenticated enrollment's -- reviewer V1 is
+   * self-only, so a different linked member is a `provider_identity_mismatch`
+   * denial rather than a delegated approval.
+   */
+  async checkReviewerPermission(
+    value: OrganizationReviewerPermissionCheckRequestV2,
+    signal?: AbortSignal,
+  ): Promise<OrganizationReviewerPermissionCheckDecisionV2> {
+    const request = validateOrganizationReviewerPermissionCheckRequest(value);
+    const initial = this.options.authority.checkReviewerPermissionSubject(
+      request,
+      null,
+    );
+    if (!initial.installation_active) {
+      return this.reviewerDenial(request, initial, 'installation_inactive');
+    }
+    const lookup = reviewerApprovalPermissionLookup(request);
+    const candidate =
+      this.options.repository.findSlackApprovalPermission(lookup);
+    if (candidate === null) {
+      const current = this.options.authority.checkReviewerPermissionSubject(
+        request,
+        null,
+      );
+      return this.reviewerDenial(
+        request,
+        current,
+        current.installation_active
+          ? 'no_active_link_binding_or_grant'
+          : 'installation_inactive',
+      );
+    }
+    if (
+      candidate.approve_reaction !== request.approve_reaction ||
+      candidate.reject_reaction !== request.reject_reaction
+    ) {
+      const current = this.options.authority.checkReviewerPermissionSubject(
+        request,
+        null,
+      );
+      return this.reviewerDenial(
+        request,
+        current,
+        'no_active_link_binding_or_grant',
+      );
+    }
+
+    const target = {
+      principal_id: candidate.principal_id,
+      membership_id: candidate.membership_id,
+    };
+    let providerVerification: VerifiedSlackReaction | null = null;
+    let providerFailure:
+      | 'provider_unavailable'
+      | 'provider_identity_mismatch'
+      | null = null;
+    try {
+      const secret = this.options.secrets.read({
+        secret_backend_id: AUTHORITY_FILE_SECRET_BACKEND,
+        secret_handle_id: candidate.secret_handle_id,
+      });
+      providerVerification = await this.options.slack.verifyReaction(
+        secret,
+        {
+          expected_team_id: request.provider_tenant_id,
+          expected_enterprise_id: candidate.slack_enterprise_id,
+          expected_bot_user_id: candidate.slack_bot_user_id,
+          expected_bot_id: candidate.slack_bot_id,
+          expected_app_id: candidate.slack_app_id,
+          approval_id: request.approval_id,
+          channel_id: request.channel_id,
+          message_ts: request.message_ts,
+          reaction_name: request.reaction_name,
+          opposite_reaction_name: request.reject_reaction,
+          user_id: request.provider_subject_id,
+          expected_presentation: null,
+          expected_reviewer_presentation: {
+            policy_id: RESTRICTED_REVIEWER_POLICY_ID,
+            approve_reaction: request.approve_reaction,
+            reject_reaction: request.reject_reaction,
+            reviewer_release_draft_sha256:
+              request.reviewer_release_draft_sha256,
+            approval_presentation_sha256:
+              request.approval_presentation_sha256,
+          },
+          reviewer_provider_event_sha256: request.provider_event_sha256,
+        },
+        signal,
+      );
+      const human = await this.options.slack.verifyHuman(
+        secret,
+        request.provider_subject_id,
+        signal,
+      );
+      if (
+        human.team_id !== request.provider_tenant_id ||
+        human.user_id !== request.provider_subject_id
+      ) {
+        throw new SlackIntegrationProviderError(
+          'Slack reviewer identity changed during approval verification',
+          'identity_mismatch',
+        );
+      }
+    } catch (error) {
+      providerFailure =
+        error instanceof SlackIntegrationProviderError &&
+        error.code === 'identity_mismatch'
+          ? 'provider_identity_mismatch'
+          : 'provider_unavailable';
+    }
+    const currentCandidate =
+      this.options.repository.findSlackApprovalPermission(lookup);
+    const candidateStillActive =
+      currentCandidate !== null &&
+      canonicalJson(currentCandidate) === canonicalJson(candidate);
+    const current = this.options.authority.checkReviewerPermissionSubject(
+      request,
+      target,
+    );
+    if (!current.installation_active) {
+      return this.reviewerDenial(request, current, 'installation_inactive');
+    }
+    if (current.target_active !== true) {
+      return this.reviewerDenial(
+        request,
+        current,
+        'target_membership_inactive',
+      );
+    }
+    if (!candidateStillActive) {
+      return this.reviewerDenial(
+        request,
+        current,
+        'no_active_link_binding_or_grant',
+      );
+    }
+    // Reviewer V1 is self-only: the human who reacted must be the same
+    // principal and the same membership that signed this request.
+    if (
+      candidate.principal_id !== current.installation_principal_id ||
+      candidate.membership_id !== current.installation_membership_id
+    ) {
+      return this.reviewerDenial(
+        request,
+        current,
+        'provider_identity_mismatch',
+      );
+    }
+    if (providerFailure !== null) {
+      const decision = this.reviewerDenial(request, current, providerFailure);
+      // `provider_identity_mismatch` is one of the six closed denial reasons:
+      // it is a decided answer about who reacted, so it returns the schema-v2
+      // decision DTO. Only a genuinely operational provider failure degrades
+      // to the fixed unavailable body.
+      if (providerFailure === 'provider_unavailable') {
+        throw new AuthorityOperationError(
+          'unavailable',
+          `Slack reviewer approval verification is temporarily unavailable after ${decision.evaluated_at}`,
+        );
+      }
+      return decision;
+    }
+    if (
+      providerVerification?.observed !== true ||
+      providerVerification.reviewer_presentation === undefined
+    ) {
+      const decision = this.reviewerDenial(
+        request,
+        current,
+        'provider_reaction_not_observed',
+      );
+      throw new AuthorityOperationError(
+        'unavailable',
+        `Slack reviewer approval evidence is not yet decisive after ${decision.evaluated_at}`,
+      );
+    }
+    const proof = providerVerification.reviewer_presentation;
+    if (
+      proof.reviewer_release_draft_sha256 !==
+        request.reviewer_release_draft_sha256 ||
+      proof.approval_presentation_sha256 !==
+        request.approval_presentation_sha256
+    ) {
+      return this.reviewerDenial(
+        request,
+        current,
+        'provider_identity_mismatch',
+      );
+    }
+    const semanticIntentSha256 = canonicalSha256(
+      reviewerRestrictedSemanticPreimage({
+        authority_id: request.authority_id,
+        organization_id: request.organization_id,
+        approval_id: request.approval_id,
+        reviewer_principal_id: candidate.principal_id,
+        reviewer_membership_id: candidate.membership_id,
+        reviewer_release_draft_sha256: proof.reviewer_release_draft_sha256,
+        approval_presentation_sha256: proof.approval_presentation_sha256,
+        evaluated_at: current.evaluated_at,
+      }),
+    );
+    const recorded = this.options.repository.recordReviewerPermissionDecision({
+      organization_id: request.organization_id,
+      authority_id: request.authority_id,
+      request_id: request.request_id,
+      request_sha256: current.request_sha256,
+      provider_event_sha256: request.provider_event_sha256,
+      approval_id: request.approval_id,
+      installation_id: request.installation_id,
+      reviewer_principal_id: candidate.principal_id,
+      reviewer_membership_id: candidate.membership_id,
+      identity_link_id: candidate.identity_link_id,
+      connection_id: candidate.connection_id,
+      adapter_binding_id: candidate.adapter_binding_id,
+      permission_grant_id: candidate.permission_grant_id,
+      evaluated_at: current.evaluated_at,
+      authority_evidence_sha256: evidenceSha256(current),
+      detail: reviewerRestrictedAuditDetail({
+        authority_id: request.authority_id,
+        request_sha256: current.request_sha256,
+        provider_event_sha256: request.provider_event_sha256,
+        principal_id: candidate.principal_id,
+        team_id: request.provider_tenant_id,
+        enterprise_id: candidate.slack_enterprise_id,
+        bot_user_id: candidate.slack_bot_user_id,
+        bot_id: candidate.slack_bot_id,
+        app_id: candidate.slack_app_id as string,
+        actor_user_id: request.provider_subject_id,
+        adapter_id: request.adapter_id,
+        adapter_instance_id: request.adapter_instance_id,
+        adapter_version: request.adapter_version,
+        channel_id: request.channel_id,
+        message_ts: request.message_ts,
+        reaction_name: request.reaction_name,
+        approve_reaction: request.approve_reaction,
+        reject_reaction: request.reject_reaction,
+        reviewer_release_draft_sha256: proof.reviewer_release_draft_sha256,
+        approval_presentation_sha256: proof.approval_presentation_sha256,
+        semantic_intent_sha256: semanticIntentSha256,
+        message_presentation_sha256: proof.message_presentation_sha256,
+      }),
+    });
+    return validateOrganizationReviewerPermissionCheckDecision({
+      schema_version: 2,
+      kind: 'echo-organization-permission-check-decision',
+      request_sha256: current.request_sha256,
+      provider_event_sha256: request.provider_event_sha256,
+      allowed: true,
+      reason_code: RESTRICTED_REVIEWER_ALLOW_REASON_CODE,
+      principal_id: candidate.principal_id,
+      membership_id: candidate.membership_id,
+      adapter_binding_id: candidate.adapter_binding_id,
+      permission_grant_id: candidate.permission_grant_id,
+      evaluated_at: current.evaluated_at,
+      authorization_audit_event_id: recorded.authorization_audit_event_id,
+      authorization_audit_entry_sha256:
+        recorded.authorization_audit_entry_sha256,
+      reviewer_release_draft_sha256: proof.reviewer_release_draft_sha256,
+      approval_presentation_sha256: proof.approval_presentation_sha256,
+      semantic_intent_sha256: semanticIntentSha256,
+      message_presentation_sha256: proof.message_presentation_sha256,
+    });
+  }
+
+  /**
+   * A reviewer denial nulls every proof and actor field and creates no
+   * integration-audit row: reviewer evidence exists only for an allow.
+   */
+  private reviewerDenial(
+    request: OrganizationReviewerPermissionCheckRequestV2,
+    status: OrganizationPermissionAuthorityStatus,
+    reasonCode: OrganizationReviewerPermissionDenialReasonCodeV2,
+  ): OrganizationReviewerPermissionCheckDecisionV2 {
+    return validateOrganizationReviewerPermissionCheckDecision({
+      schema_version: 2,
+      kind: 'echo-organization-permission-check-decision',
+      request_sha256: status.request_sha256,
+      provider_event_sha256: request.provider_event_sha256,
+      allowed: false,
+      reason_code: reasonCode,
+      principal_id: null,
+      membership_id: null,
+      adapter_binding_id: null,
+      permission_grant_id: null,
+      evaluated_at: status.evaluated_at,
+      authorization_audit_event_id: null,
+      authorization_audit_entry_sha256: null,
+      reviewer_release_draft_sha256: null,
+      approval_presentation_sha256: null,
+      semantic_intent_sha256: null,
+      message_presentation_sha256: null,
+    });
   }
 
   private permissionPilotPresentationExpectation(): {

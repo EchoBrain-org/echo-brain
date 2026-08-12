@@ -21,6 +21,7 @@ import {
   ORGANIZATION_API_INTERNAL_LIVE_RECEIPTS_PATH,
   ORGANIZATION_API_PERMISSION_CHECKS_PATH,
   ORGANIZATION_API_RECENT_DECISIONS_PATH,
+  ORGANIZATION_API_REVIEWER_RECENT_DECISIONS_PATH,
   ORGANIZATION_API_RECORD_ENVELOPES_PATH,
   ORGANIZATION_API_SLACK_LINK_CHALLENGES_PATH,
   ORGANIZATION_API_SLACK_LINK_COMPLETIONS_PATH,
@@ -32,7 +33,9 @@ import {
   validateOrganizationInternalLiveDirectiveRequest,
   validateOrganizationInternalLiveUpdateReceipt,
   validateOrganizationPermissionCheckRequest,
+  validateOrganizationReviewerPermissionCheckRequest,
   validateOrganizationRecentDecisionsRequest,
+  validateOrganizationReviewerRecentDecisionsRequest,
   validateRecoverOrganizationInstallationAccessRequest,
   validateSubmitOrganizationRecordEnvelopeRequest,
   validateOrganizationSlackLinkBeginRequest,
@@ -61,6 +64,15 @@ import {
   OrganizationRecentDecisionsError,
 } from '../application/recent-decisions.js';
 import {
+  fixedReviewerRecentDecisionsErrorBytes,
+  ReviewerRecentDecisionsError,
+} from '../application/reviewer-recent-decisions.js';
+
+const REVIEWER_PERMISSION_UNAVAILABLE_BYTES = Buffer.from(
+  '{"error":{"code":"unavailable","message":"service is temporarily unavailable"}}',
+  'utf8',
+);
+import {
   assertAuthorityRuntimeStatusNonce,
   AUTHORITY_RUNTIME_STATUS_NONCE_HEADER,
   AUTHORITY_RUNTIME_STATUS_PATH,
@@ -70,6 +82,7 @@ import type { OrganizationAuthorityHttpApplication } from './organization-author
 import type { OrganizationIntegrationsHttpApplication } from './organization-integrations-http-application.js';
 import type { OrganizationRecordHttpApplication } from './organization-record-http-application.js';
 import type { OrganizationRecentDecisionsHttpApplication } from './organization-recent-decisions-http-application.js';
+import type { OrganizationReviewerRecentDecisionsHttpApplication } from './organization-reviewer-recent-decisions-http-application.js';
 import { handleAdminConsoleRequest } from './admin-console/routes.js';
 import type { AdminConsoleSessionStore } from './admin-console/sessions.js';
 import {
@@ -355,6 +368,34 @@ async function readRecentDecisionsRequest(
   }
 }
 
+async function readReviewerRecentDecisionsRequest(
+  request: IncomingMessage,
+): Promise<
+  ReturnType<typeof validateOrganizationReviewerRecentDecisionsRequest>
+> {
+  try {
+    return validateOrganizationReviewerRecentDecisionsRequest(
+      await readJsonBody(request),
+    );
+  } catch (error) {
+    // The raw body cap is an outer transport boundary and remains 413. Only a
+    // decoded malformed request becomes the reviewer's fixed 400.
+    if (error instanceof PayloadTooLargeError) throw error;
+    if (
+      isOrganizationApiValidationError(error) ||
+      (error instanceof AuthorityOperationError &&
+        error.code === 'invalid_request')
+    ) {
+      throw new ReviewerRecentDecisionsError(
+        'invalid_request',
+        'reviewer recent decisions request is invalid',
+        { cause: error },
+      );
+    }
+    throw error;
+  }
+}
+
 export function decodeOrganizationApiJsonBody(bytes: Uint8Array): unknown {
   let text: string;
   try {
@@ -466,6 +507,7 @@ export interface OrganizationAuthorityHttpServerOptions {
   records?: OrganizationRecordHttpApplication;
   /** Present only when a valid permission-pilot marker was cached at startup. */
   recentDecisions?: OrganizationRecentDecisionsHttpApplication;
+  reviewerRecentDecisions?: OrganizationReviewerRecentDecisionsHttpApplication;
   adminAuthenticator: AdminRequestAuthenticator;
   clientIdentityResolver: RequestClientIdentityResolver;
   adminConsole?: {
@@ -821,6 +863,14 @@ export function createOrganizationAuthorityHttpServer(
         }
 
         if (url.search !== '') {
+          if (
+            url.pathname === ORGANIZATION_API_REVIEWER_RECENT_DECISIONS_PATH
+          ) {
+            throw new ReviewerRecentDecisionsError(
+              'invalid_request',
+              'reviewer recent decisions query parameters are unsupported',
+            );
+          }
           throw new AuthorityOperationError(
             'invalid_request',
             'query parameters are not supported',
@@ -946,6 +996,31 @@ export function createOrganizationAuthorityHttpServer(
 
         if (
           method === 'POST' &&
+          url.pathname === ORGANIZATION_API_REVIEWER_RECENT_DECISIONS_PATH
+        ) {
+          if (url.search !== '') {
+            throw new ReviewerRecentDecisionsError(
+              'invalid_request',
+              'reviewer recent decisions query parameters are unsupported',
+            );
+          }
+          if (options.reviewerRecentDecisions === undefined) {
+            sendSerializedJson(
+              response,
+              404,
+              fixedReviewerRecentDecisionsErrorBytes(404),
+            );
+            return;
+          }
+          const command = await readReviewerRecentDecisionsRequest(request);
+          const prepared =
+            options.reviewerRecentDecisions.reviewerRecentDecisions(command);
+          sendSerializedJson(response, prepared.status_code, prepared.body);
+          return;
+        }
+
+        if (
+          method === 'POST' &&
           url.pathname === ORGANIZATION_API_INTERNAL_LIVE_DIRECTIVES_PATH
         ) {
           const command = validateOrganizationInternalLiveDirectiveRequest(
@@ -976,9 +1051,68 @@ export function createOrganizationAuthorityHttpServer(
           url.pathname === ORGANIZATION_API_PERMISSION_CHECKS_PATH
         ) {
           const integrations = requireIntegrations();
-          const command = validateOrganizationPermissionCheckRequest(
-            await readJsonBody(request),
-          );
+          const body = await readJsonBody(request);
+          // Strict version dispatch before any field is interpreted. Schema-v1
+          // status and body behavior stay byte-for-byte unchanged.
+          if (
+            body !== null &&
+            typeof body === 'object' &&
+            !Array.isArray(body) &&
+            (body as Record<string, unknown>)['schema_version'] === 2
+          ) {
+            const reviewerCommand =
+              validateOrganizationReviewerPermissionCheckRequest(body);
+            let reviewerAuthenticated: { installation_id: string };
+            try {
+              reviewerAuthenticated =
+                options.application.checkReviewerPermissionSubject(
+                  reviewerCommand,
+                  null,
+                );
+            } catch (error) {
+              if (
+                error instanceof AuthorityOperationError &&
+                (error.code === 'invalid_request' ||
+                  error.code === 'unauthorized' ||
+                  error.code === 'not_found')
+              ) {
+                throw error;
+              }
+              // Authentication/state storage is part of the reviewer
+              // operation. A lock, corrupt read, or other operational failure
+              // has the same fixed retryable result as provider and audit
+              // storage failures; it must not fall through to the generic 500
+              // body or expose internal detail.
+              sendSerializedJson(
+                response,
+                503,
+                REVIEWER_PERMISSION_UNAVAILABLE_BYTES,
+              );
+              return;
+            }
+            consumeRateLimit(
+              permissionRateLimiter,
+              `installation:${reviewerAuthenticated.installation_id}`,
+            );
+            try {
+              const decision = await integrations.checkReviewerPermission(
+                reviewerCommand,
+                lifecycle.shutdownController.signal,
+              );
+              sendJson(response, 200, decision);
+            } catch {
+              // Reviewer operational/provider/storage failures have one fixed
+              // retryable wire result. The v1 branch below retains its existing
+              // AuthorityOperationError mapping byte-for-byte.
+              sendSerializedJson(
+                response,
+                503,
+                REVIEWER_PERMISSION_UNAVAILABLE_BYTES,
+              );
+            }
+            return;
+          }
+          const command = validateOrganizationPermissionCheckRequest(body);
           const authenticated =
             options.application.checkPermissionSubject(command, null);
           consumeRateLimit(
@@ -1138,6 +1272,20 @@ export function createOrganizationAuthorityHttpServer(
 
         sendJson(response, 404, errorBody('not_found', 'route was not found'));
       } catch (error) {
+        if (error instanceof ReviewerRecentDecisionsError) {
+          const status =
+            error.code === 'invalid_request'
+              ? 400
+              : error.code === 'unauthorized'
+                ? 401
+                : 503;
+          sendSerializedJson(
+            response,
+            status,
+            fixedReviewerRecentDecisionsErrorBytes(status),
+          );
+          return;
+        }
         if (error instanceof OrganizationRecentDecisionsError) {
           const status =
             error.code === 'invalid_request'

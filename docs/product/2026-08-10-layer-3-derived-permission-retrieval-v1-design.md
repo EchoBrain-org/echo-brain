@@ -9,7 +9,7 @@ identified during founder review:
 1. **Job A - permission awareness for the minimum reviewer feature:**
    [A: Reviewer permission minimum V1 with append-atomic log facts](2026-08-11-reviewer-permission-v1-log-facts-design.md)
 2. **Job B - trustworthiness for a mutable permission-aware search corpus:**
-   [B: Trusted permission-aware searchable Layer 2](2026-08-11-trusted-permission-aware-searchable-layer-2-design.md)
+   [B: Permission-aware lexical Layer 2 minimum V1](2026-08-11-trusted-permission-aware-searchable-layer-2-design.md)
 
 ## Why the split exists
 

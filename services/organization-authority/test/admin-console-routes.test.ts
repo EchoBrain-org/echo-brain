@@ -61,6 +61,7 @@ function testApplication() {
   const application = {
     descriptor: unexpected,
     checkPermissionSubject: unexpected,
+    checkReviewerPermissionSubject: unexpected,
     internalLiveRolloutStatus: unexpected,
     approveInternalLiveRelease: unexpected,
     fetchInternalLiveDirective: unexpected,

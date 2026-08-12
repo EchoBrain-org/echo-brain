@@ -44,7 +44,20 @@ import type {
   StoredEnrollmentGrant,
   StoredInternalLiveRelease,
   StoredInternalLiveUpdateReceipt,
+  ReviewerQueryAuditEntry,
+  StoredReviewerQueryAuditEntry,
 } from '../../../application/ports/authority-repository.js';
+import {
+  REVIEWER_QUERY_AUDIT_EXPIRED_ACTION,
+  REVIEWER_QUERY_AUDIT_EXPORT_ACTION,
+  REVIEWER_QUERY_AUDIT_OPERATION,
+} from '../../../application/ports/authority-repository.js';
+import {
+  reviewerQueryAuditDecisionDetailJson,
+  reviewerQueryAuditRetainUntil,
+} from '../../../application/reviewer-query-audit.js';
+import { reviewerQueryAuditRowBySequence } from './reviewer-query-audit-rows.js';
+import type { AuthorityAuditRow } from './reviewer-query-audit-rows.js';
 import {
   openAuthorityDatabase,
   type OpenAuthorityDatabaseOptions,
@@ -89,14 +102,7 @@ interface GrantRow {
   admin_command_sha256: string | null;
 }
 
-interface AuditRow {
-  audit_sequence: number;
-  occurred_at: string;
-  actor_kind: string;
-  action: string;
-  subject_id: string;
-  detail_json: string;
-}
+type AuditRow = AuthorityAuditRow;
 
 interface EnrollmentRow {
   enrollment_id: string;
@@ -222,14 +228,63 @@ function verifiedPersistedValue<T>(label: string, verify: () => T): T {
   }
 }
 
+/** The configured trust root, without the one-off initialization time. */
+export type AuthorityTrustConfiguration = Omit<
+  InitializeAuthorityRepositoryInput,
+  'initialized_at'
+>;
+
+/**
+ * The narrow, read-only view of Authority state that stopped-state maintenance
+ * is allowed to hold.
+ *
+ * Handing out this instead of the transaction object keeps the whole online
+ * write surface -- memberships, grants, enrollments, leases, releases, the
+ * generic audit -- out of the maintenance module entirely.
+ */
+export interface AuthorityStateReader {
+  metadata(): StoredAuthorityMetadata;
+  membership(membershipId: string): StoredAuthorityMembership | undefined;
+}
+
+export function createAuthorityStateReader(
+  database: Database.Database,
+  trust: AuthorityTrustConfiguration,
+): AuthorityStateReader {
+  const transaction = new SqliteAuthorityTransaction(database);
+  transaction.configureTrust(trust);
+  return {
+    metadata: () => transaction.metadata(),
+    membership: (membershipId) => transaction.membership(membershipId),
+  };
+}
+
 class SqliteAuthorityTransaction
   implements AuthorityReadTransaction, AuthorityWriteTransaction
 {
   private trustContext: PersistedAuthorityTrustContext | undefined;
+  private writeTime: string | undefined;
 
   constructor(private readonly database: Database.Database) {}
 
-  configureTrust(input: InitializeAuthorityRepositoryInput): void {
+  /** The one final time of the write transaction currently in progress. */
+  bindWriteTime(observedAt: string): void {
+    this.writeTime = observedAt;
+  }
+
+  clearWriteTime(): void {
+    this.writeTime = undefined;
+  }
+
+  private transactionTime(): string {
+    invariant(
+      this.writeTime !== undefined,
+      'reviewer query audit append requires an open authority write transaction',
+    );
+    return this.writeTime;
+  }
+
+  configureTrust(input: AuthorityTrustConfiguration): void {
     const descriptor = validateOrganizationAuthorityDescriptor(
       input.descriptor,
     );
@@ -1515,6 +1570,18 @@ class SqliteAuthorityTransaction
   }
 
   appendAudit(entry: AuthorityAuditEntry): void {
+    // The two governed reviewer query-audit actions are reserved. They are the
+    // maintenance receipt for a disclosure or a deletion, so the ordinary audit
+    // path -- which any online write holds -- must not be able to mint one.
+    // Only the stopped-state maintenance transaction's own private insert may.
+    if (
+      entry.action === REVIEWER_QUERY_AUDIT_EXPORT_ACTION ||
+      entry.action === REVIEWER_QUERY_AUDIT_EXPIRED_ACTION
+    ) {
+      throw new Error(
+        'reviewer query audit control actions are reserved for governed stopped-state maintenance',
+      );
+    }
     const detailJson = canonicalJson(entry.detail);
     this.database
       .prepare(
@@ -1530,9 +1597,63 @@ class SqliteAuthorityTransaction
         detailJson,
       );
   }
+
+  appendReviewerQueryAudit(
+    entry: ReviewerQueryAuditEntry,
+  ): StoredReviewerQueryAuditEntry {
+    // The row's time is this transaction's own final time. A caller states the
+    // decision, never when it happened, so it cannot move the retention.
+    const occurredAt = this.transactionTime();
+    const detailJson = reviewerQueryAuditDecisionDetailJson(
+      {
+        decision: entry.decision,
+        reason_code: entry.reason_code,
+        occurred_at: occurredAt,
+        response_bytes: entry.response_bytes,
+      },
+      entry.detail,
+    );
+    const inserted = this.database
+      .prepare(
+        `INSERT INTO authority_query_decision_audit (
+           occurred_at, retain_until, operation, decision, reason_code,
+           detail_json
+         ) VALUES (?, ?, ?, ?, ?, ?)`,
+      )
+      .run(
+        occurredAt,
+        reviewerQueryAuditRetainUntil(occurredAt),
+        REVIEWER_QUERY_AUDIT_OPERATION,
+        entry.decision,
+        entry.reason_code,
+        detailJson,
+      );
+    const stored = reviewerQueryAuditRowBySequence(
+      this.database,
+      Number(inserted.lastInsertRowid),
+    );
+    if (stored === undefined) {
+      throw new Error('reviewer query audit entry was not stored');
+    }
+    if (stored.occurred_at !== occurredAt) {
+      throw new Error('stored reviewer query audit entry lost its write time');
+    }
+    return stored;
+  }
 }
 
-export class SqliteOrganizationAuthorityRepository implements OrganizationAuthorityRepository {
+/**
+ * The online repository.
+ *
+ * It implements the served Authority contract and nothing else. Reviewer
+ * query-audit scanning, expiry, control lookup, and control append are not
+ * missing by convention here: they are not on this class or its type at all, so
+ * the live runtime holds no reference that could reach them. The stopped-state
+ * capability lives in `reviewer-query-audit-maintenance.ts`.
+ */
+export class SqliteOrganizationAuthorityRepository
+  implements OrganizationAuthorityRepository
+{
   private readonly database: Database.Database;
   private readonly transaction: SqliteAuthorityTransaction;
   private readonly allowInitialization: boolean;
@@ -1664,12 +1785,15 @@ export class SqliteOrganizationAuthorityRepository implements OrganizationAuthor
           'UPDATE authority_metadata SET last_observed_at = ? WHERE singleton = 1',
         )
         .run(observedAt);
+      this.transaction.bindWriteTime(observedAt);
       const result = operation(this.transaction);
       this.database.exec('COMMIT');
       return result;
     } catch (error) {
       this.rollback();
       throw error;
+    } finally {
+      this.transaction.clearWriteTime();
     }
   }
 
@@ -1696,12 +1820,15 @@ export class SqliteOrganizationAuthorityRepository implements OrganizationAuthor
           'UPDATE authority_metadata SET last_observed_at = ? WHERE singleton = 1',
         )
         .run(observedAt);
+      this.transaction.bindWriteTime(observedAt);
       const result = operation(this.transaction, observedAt);
       this.database.exec('COMMIT');
       return result;
     } catch (error) {
       this.rollback();
       throw error;
+    } finally {
+      this.transaction.clearWriteTime();
     }
   }
 

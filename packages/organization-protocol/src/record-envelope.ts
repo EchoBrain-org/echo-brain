@@ -12,16 +12,22 @@ import type {
   OrganizationRecordApprovalEnvelopePayloadV1,
   OrganizationRecordApprovalEnvelopeV1,
   OrganizationRecordApprovalPayloadV1,
-  OrganizationRecordEnvelopeV1,
+  OrganizationRecordEnvelopeAnyVersion,
   OrganizationRecordEventTypeV1,
   OrganizationRecordIntentV1,
   OrganizationRecordRejectionEnvelopePayloadV1,
   OrganizationRecordRejectionEnvelopeV1,
   OrganizationRecordRejectionPayloadV1,
   OrganizationRecordReviewerActionV1,
+  OrganizationRecordReviewerApprovalEnvelopeV2,
   OrganizationRecordReviewerV1,
   OrganizationRecordSubmitterV1,
 } from "./contracts.js";
+import {
+  REVIEWER_RECORD_ENVELOPE_SCHEMA_VERSION,
+  assertReviewerApprovalEnvelopeSnapshot,
+} from "./record-envelope-v2.js";
+import { RESTRICTED_REVIEWER_ALLOW_REASON_CODE } from "./reviewer-restricted-policy.js";
 import {
   assertOrganizationRecordApprovalPayload,
   assertOrganizationRecordRejectionPayload,
@@ -232,6 +238,13 @@ function assertReviewer(
     `${label} authorization reason_code`,
     MAX_REASON_CODE_CHARACTERS,
   );
+  // A reviewer-approved package must never enter the broad schema-v1 derive
+  // path. Only the closed schema-v2 family may carry this reason.
+  if (evidence.reason_code === RESTRICTED_REVIEWER_ALLOW_REASON_CODE) {
+    organizationProtocolValidationFailure(
+      `${label} authorization reason_code ${RESTRICTED_REVIEWER_ALLOW_REASON_CODE} requires schema version 2`,
+    );
+  }
   assertId(evidence.principal_id, "prn", `${label} authorization principal_id`);
   assertId(
     evidence.membership_id,
@@ -409,15 +422,39 @@ export function validateOrganizationRecordRejectionEnvelope(
 }
 
 /**
- * Dispatches on the declared event type of one canonical snapshot, so an
- * accessor-backed input cannot be routed by one value and validated as another.
- * `correction` is reserved and rejected by name.
+ * Strict envelope dispatch.
+ *
+ * One canonical snapshot is taken first, then the exact `(kind,
+ * schema_version)` pair selects exactly one closed validator family before any
+ * event, intent, payload, or reviewer field is read. An accessor-backed input
+ * therefore cannot be routed by one value and validated as another, and no
+ * cross-version field set can be interpreted by the wrong family.
+ *
+ * Version 1 keeps its landed behavior byte for byte, including rejecting the
+ * reserved `correction` event by name. Version 2 is reviewer-only and admits
+ * approval alone. Every other kind or version is unknown: it halts ingest and
+ * derive rather than falling back to v1 or pilot behavior.
  */
 export function validateOrganizationRecordEnvelope(
   value: unknown,
-): OrganizationRecordEnvelopeV1 {
+): OrganizationRecordEnvelopeAnyVersion {
   const label = "organization record envelope";
   const record = envelopeSnapshot(value, label);
+  if (record.kind !== "echo-organization-record-envelope") {
+    organizationProtocolValidationFailure(`${label} kind is unsupported`);
+  }
+  if (record.schema_version === REVIEWER_RECORD_ENVELOPE_SCHEMA_VERSION) {
+    assertReviewerApprovalEnvelopeSnapshot(
+      record,
+      "organization record reviewer envelope",
+    );
+    return record as unknown as OrganizationRecordReviewerApprovalEnvelopeV2;
+  }
+  if (record.schema_version !== 1) {
+    organizationProtocolValidationFailure(
+      `${label} schema_version is unsupported`,
+    );
+  }
   if (record.event_type === "correction") {
     organizationProtocolValidationFailure(
       `${label} event_type correction is reserved and is not supported in schema version 1`,
@@ -437,7 +474,7 @@ export function validateOrganizationRecordEnvelope(
 }
 
 function verifyRecordEnvelopeBindings(
-  envelope: OrganizationRecordEnvelopeV1,
+  envelope: OrganizationRecordEnvelopeAnyVersion,
   pinnedAuthority: PinnedOrganizationAuthority,
   installationSigningKey: P256SigningKeyDescriptor,
 ): void {
@@ -492,7 +529,7 @@ export function verifyOrganizationRecordEnvelope(
   value: unknown,
   pinnedAuthority: PinnedOrganizationAuthority,
   installationSigningKey: P256SigningKeyDescriptor,
-): OrganizationRecordEnvelopeV1 {
+): OrganizationRecordEnvelopeAnyVersion {
   const envelope = validateOrganizationRecordEnvelope(value);
   verifyRecordEnvelopeBindings(
     envelope,

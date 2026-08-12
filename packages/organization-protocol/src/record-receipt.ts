@@ -13,7 +13,7 @@ import { resolvePinnedOrganizationAuthority } from "./authority-descriptor.js";
 import type { PinnedOrganizationAuthority } from "./authority-descriptor.js";
 import type {
   CanonicalPayloadSigner,
-  OrganizationRecordEnvelopeV1,
+  OrganizationRecordEnvelopeAnyVersion,
   OrganizationRecordReceiptPayloadV1,
   OrganizationRecordReceiptV1,
 } from "./contracts.js";
@@ -32,7 +32,7 @@ import {
 import { organizationProtocolValidationFailure } from "./validation-error.js";
 
 export interface CreateOrganizationRecordReceiptInput {
-  envelope: OrganizationRecordEnvelopeV1;
+  envelope: OrganizationRecordEnvelopeAnyVersion;
   installation_signing_key: P256SigningKeyDescriptor;
   position: number;
   record_hash: Sha256Digest;
@@ -42,7 +42,7 @@ export interface CreateOrganizationRecordReceiptInput {
 const IDEMPOTENCY_KEY_PATTERN = /^[0-9a-f]{64}$/;
 
 function envelopeSha256(
-  envelope: OrganizationRecordEnvelopeV1,
+  envelope: OrganizationRecordEnvelopeAnyVersion,
 ): Sha256Digest {
   return sha256Digest(canonicalJsonBytes(envelope));
 }
@@ -121,7 +121,7 @@ export function verifyOrganizationRecordReceipt(
 function verifyReceiptAgainstEnvelope(
   value: unknown,
   authority: ReturnType<typeof resolvePinnedOrganizationAuthority>,
-  envelope: OrganizationRecordEnvelopeV1,
+  envelope: OrganizationRecordEnvelopeAnyVersion,
 ): OrganizationRecordReceiptV1 {
   const receipt = validateOrganizationRecordReceipt(value);
   if (

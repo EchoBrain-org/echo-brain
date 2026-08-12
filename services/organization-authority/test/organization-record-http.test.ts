@@ -63,6 +63,7 @@ function application(): OrganizationAuthorityHttpApplication {
     completeEnrollment: unexpected,
     issueAccessLease: unexpected,
     checkPermissionSubject: unexpected,
+    checkReviewerPermissionSubject: unexpected,
     revokeMembership: unexpected,
     revokeInstallation: unexpected,
     recoverInstallationAccess: unexpected,

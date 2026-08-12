@@ -1,17 +1,38 @@
 # A: Reviewer permission minimum V1 with append-atomic log facts
 
-**Status:** approved implementation contract. The founder choices are closed,
-and fresh code-grounding, storage/port, wire-contract, scope, and invariant
-reviews completed against the named baseline. This status authorizes only the
-implementation described here. It is not implemented, merged, deployed, or
-released.
+**Status:** approved implementation contract, implemented and locally
+validated on `feat/organization-permission-pilot-v1-clean`. The founder choices
+remain closed. The code has not been merged, pushed, deployed, founder-live
+qualified, or released.
 
 **Code baseline:** `aaae7509f6b62434b1f23e811b82f3926c38eae3` on
 `feat/organization-permission-pilot-v1-clean`. Code and schemas remain
-authoritative for landed behavior.
+authoritative for landed behavior. The implementation is the uncommitted Job A
+worktree diff above `10c0f74cd6dde1fb98e338e2bc0af31d53f0548d`; record its
+final commit SHA here when it is intentionally committed.
+
+**Local validation (2026-08-11):** `npm run check` is green: source boundary,
+typecheck, lint, 91 non-product test files with 1,018 tests, and 30 product test
+files with 297 tests. The explicit workspace gates are also green: federation
+protocol 12, organization protocol 59, organization API 50, control plane 118,
+record 115, Authority 319, and integration 10 tests. `git diff --check` is
+clean. Stages 1-5 include a real Authority reviewer permission decision,
+append-atomic facts, process restart, exact self-read, and a separately
+enrolled current member's audited empty response with no canonical content-row
+access. Restore release remains the external runbook gate, and acceptance item
+13 remains founder-live only.
+
+**Implementation review:** the final Codex minimum-V1 pass removed shared-v1
+validator drift and fixed canonical reviewer permission bytes, fixed reviewer
+operational `503` bytes across pre-provider storage failures, final reviewer
+tuple rebinding, and direct frozen-presentation slot identity validation. A
+read-only `claude-fable-5` review was invoked as requested and made no changes;
+the available Claude account hit its session limit before returning a final
+verdict. That independent verdict remains a pre-merge review evidence gap, not
+a local code or test failure, and must not be represented as a pass.
 
 **Split companion:**
-[B: Trusted permission-aware searchable Layer 2](2026-08-11-trusted-permission-aware-searchable-layer-2-design.md).
+[B: Permission-aware lexical Layer 2 minimum V1](2026-08-11-trusted-permission-aware-searchable-layer-2-design.md).
 B is not a prerequisite for A.
 
 **Builds on:**
@@ -1722,9 +1743,8 @@ release promise.
    founder-live reviewer self-read with a different active member returning no
    items.
 
-No later stage starts before the preceding stage is green. Implementation
-authorization is fixed by the status at the top of this contract; deployment,
-merge, and release always require their separate gates.
+The stages above are locally implemented and green. Deployment, merge,
+founder-live qualification, and release still require their separate gates.
 
 ## Minimum acceptance matrix
 

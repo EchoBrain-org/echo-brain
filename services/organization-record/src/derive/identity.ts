@@ -1,4 +1,5 @@
 import { canonicalSha256 } from '@echo-brain/federation-protocol';
+import { derivedAtomIdentity } from '../application/atom-identity.js';
 import type { JsonValue, Sha256Digest } from '../application/contracts.js';
 
 /**
@@ -8,12 +9,12 @@ import type { JsonValue, Sha256Digest } from '../application/contracts.js';
  * rebuild reproduces every id exactly.
  */
 
+/**
+ * Delegates to the one shared implementation. The reviewer fact plane stores
+ * the same identity, and a second copy here could drift from it.
+ */
 export function derivedAtomId(recordHash: string, signalId: string): Sha256Digest {
-  return canonicalSha256({
-    kind: 'echo-organization-record-atom',
-    record_hash: recordHash,
-    signal_id: signalId,
-  });
+  return derivedAtomIdentity(recordHash, signalId);
 }
 
 export function derivedMeetingSnapshotId(

@@ -35,7 +35,8 @@
     "services/organization-authority/migrations/0002_admin_command_idempotency.sql",
     "services/organization-authority/migrations/0003_integrations_installation_anchor.sql",
     "services/organization-authority/migrations/0004_internal_live_release_rollout.sql",
-    "services/organization-authority/migrations/0005_record_installation_anchor.sql"
+    "services/organization-authority/migrations/0005_record_installation_anchor.sql",
+    "services/organization-authority/migrations/0006_reviewer_query_audit.sql"
   ],
   "layer_rules": [
     {

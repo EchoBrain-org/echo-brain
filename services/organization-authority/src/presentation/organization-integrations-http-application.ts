@@ -1,6 +1,8 @@
 import type {
   OrganizationPermissionCheckDecisionV1,
   OrganizationPermissionCheckRequestV1,
+  OrganizationReviewerPermissionCheckDecisionV2,
+  OrganizationReviewerPermissionCheckRequestV2,
   OrganizationSlackLinkBeginRequestV1,
   OrganizationSlackLinkBeginResponseV1,
   OrganizationSlackLinkCompleteRequestV1,
@@ -55,6 +57,11 @@ export interface OrganizationIntegrationsHttpApplication {
     input: OrganizationSlackLinkCompleteRequestV1,
     signal?: AbortSignal,
   ): Promise<OrganizationSlackLinkResultV1>;
+  checkReviewerPermission(
+    request: OrganizationReviewerPermissionCheckRequestV2,
+    signal?: AbortSignal,
+  ): Promise<OrganizationReviewerPermissionCheckDecisionV2>;
+
   checkPermission(
     request: OrganizationPermissionCheckRequestV1,
     signal?: AbortSignal,

@@ -6,7 +6,9 @@ import {
   CONSERVATIVE_ORGANIZATION_RECORD_INTENT,
   createOrganizationRecordApprovalEnvelope,
   createOrganizationRecordRejectionEnvelope,
+  createOrganizationRecordReviewerApprovalEnvelope,
   organizationRecordEnvelopeId,
+  organizationRecordReviewerIntent,
 } from '@echo-brain/organization-protocol';
 import type {
   CanonicalPayloadSigner,
@@ -14,6 +16,7 @@ import type {
   OrganizationRecordDecisionBriefV1,
   OrganizationRecordRejectionPayloadV1,
   OrganizationRecordReviewerAuthorizationV1,
+  OrganizationRecordReviewerAuthorizationV2,
   OrganizationRecordReviewerV1,
   PinnedOrganizationAuthority,
 } from '@echo-brain/organization-protocol';
@@ -85,6 +88,12 @@ export class ProtocolOrganizationRecordEnvelopeBuilder
   async build(
     input: OrganizationRecordEnvelopeBuildInput,
   ): Promise<BuiltOrganizationRecordEnvelope> {
+    if (
+      (input.authorization as unknown as { schema_version?: unknown })
+        .schema_version === 2
+    ) {
+      return await this.buildReviewerApproval(input);
+    }
     const authorization =
       input.authorization as unknown as OrganizationRecordReviewerAuthorizationV1;
     const envelopeId = this.nextEnvelopeId();
@@ -122,6 +131,56 @@ export class ProtocolOrganizationRecordEnvelopeBuilder
       idempotency_key: envelope.idempotency_key,
       event_type: envelope.event_type,
       envelope: document,
+    };
+  }
+
+  /**
+   * The closed reviewer-v2 approval envelope.
+   *
+   * The intent is derived, never client-chosen: its only variable is the
+   * Authority-computed semantic digest quoted from the evidence. The protocol
+   * creator independently reprojects the release draft from this payload and
+   * refuses to sign anything that does not reproduce the exact digest the
+   * reviewer approved, so this adapter cannot widen or restate the package.
+   */
+  private async buildReviewerApproval(
+    input: OrganizationRecordEnvelopeBuildInput,
+  ): Promise<BuiltOrganizationRecordEnvelope> {
+    if (input.event_type !== 'approval') {
+      throw new Error(
+        'organization record schema version 2 admits approval only',
+      );
+    }
+    const authorization =
+      input.authorization as unknown as OrganizationRecordReviewerAuthorizationV2;
+    const envelope = await createOrganizationRecordReviewerApprovalEnvelope(
+      {
+        envelope_id: this.nextEnvelopeId(),
+        idempotency_key: input.approval_id,
+        payload: this.approvalPayload(input),
+        reviewer: {
+          principal_id: authorization.principal_id,
+          membership_id: authorization.membership_id,
+          reviewed_by: input.reviewed_by,
+          authorization,
+        },
+        intent: organizationRecordReviewerIntent(
+          authorization.semantic_intent_sha256,
+        ),
+        submitter: {
+          installation_id: authorization.installation_id,
+          submitted_at: input.submitted_at,
+        },
+        installation_signing_key: this.options.installationSigningKey,
+      },
+      this.options.pinnedAuthority,
+      this.options.sign,
+    );
+    return {
+      envelope_id: envelope.envelope_id,
+      idempotency_key: envelope.idempotency_key,
+      event_type: envelope.event_type,
+      envelope: envelope as unknown as JsonObject,
     };
   }
 

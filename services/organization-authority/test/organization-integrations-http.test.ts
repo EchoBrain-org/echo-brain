@@ -10,9 +10,11 @@ import {
   ORGANIZATION_API_SLACK_LINK_CHALLENGES_PATH,
   ORGANIZATION_API_SLACK_LINK_COMPLETIONS_PATH,
   organizationPermissionProviderEventSha256,
+  organizationReviewerPermissionProviderEventSha256,
   organizationSlackLinkChallengeCodeSha256,
   type OrganizationPermissionCheckDecisionV1,
   type OrganizationPermissionCheckRequestV1,
+  type OrganizationReviewerPermissionCheckRequestV2,
   type OrganizationSlackLinkBeginRequestV1,
   type OrganizationSlackLinkBeginResponseV1,
   type OrganizationSlackLinkCompleteRequestV1,
@@ -99,6 +101,7 @@ function application(
     completeEnrollment: unexpected,
     issueAccessLease: unexpected,
     checkPermissionSubject: unexpected,
+    checkReviewerPermissionSubject: unexpected,
     revokeMembership: unexpected,
     revokeInstallation: unexpected,
     recoverInstallationAccess: unexpected,
@@ -122,6 +125,7 @@ function integrationsApplication(
     beginSlackIdentityLink: vi.fn(),
     completeSlackIdentityLink: vi.fn(),
     checkPermission: vi.fn(),
+    checkReviewerPermission: vi.fn(),
     ...overrides,
   };
 }
@@ -203,6 +207,59 @@ function permissionDecision(
     adapter_binding_id: null,
     permission_grant_id: null,
     evaluated_at: NOW,
+  };
+}
+
+function reviewerPermissionRequest(): OrganizationReviewerPermissionCheckRequestV2 {
+  const event = {
+    authority_id: AUTHORITY_ID,
+    authority_key_id: AUTHORITY_KEY_ID,
+    organization_id: ORGANIZATION_ID,
+    enrollment_id: ENROLLMENT_ID,
+    installation_id: INSTALLATION_ID,
+    installation_key_id: INSTALLATION_KEY_ID,
+    provider: 'slack',
+    provider_issuer: 'https://slack.com',
+    provider_tenant_kind: 'workspace',
+    provider_tenant_id: 'T123ABC',
+    provider_enterprise_id: null,
+    provider_connection_subject_id: 'U123BOT',
+    provider_connection_bot_id: 'B123BOT',
+    provider_connection_app_id: 'A123APP',
+    provider_subject_kind: 'human_user',
+    provider_subject_id: 'U123ZHEN',
+    adapter_kind: 'approval-surface',
+    adapter_id: 'slack-reactions',
+    adapter_instance_id: 'primary',
+    adapter_version: '1.0.0',
+    action: 'approve',
+    approval_id: 'f'.repeat(64),
+    channel_id: 'C123ABC',
+    message_ts: '1720000000.123456',
+    reaction_name: 'white_check_mark',
+    approve_reaction: 'white_check_mark',
+    reject_reaction: 'x',
+    policy_id: 'restricted-reviewer-v1',
+    reviewer_release_draft_sha256: digest('reviewer-release'),
+    approval_presentation_sha256: digest('reviewer-presentation'),
+    http_method: 'POST',
+    http_path: ORGANIZATION_API_PERMISSION_CHECKS_PATH,
+  } as const;
+  return {
+    schema_version: 2,
+    kind: 'echo-organization-permission-check-request',
+    request_id: 'pcr_bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb',
+    ...event,
+    provider_event_sha256:
+      organizationReviewerPermissionProviderEventSha256(event),
+    requested_at: NOW,
+    integrity: {
+      canonicalization: 'RFC8785',
+      payload_sha256: digest('reviewer-request-payload'),
+      signature_algorithm: 'ecdsa-p256-sha256-der-low-s',
+      key_id: INSTALLATION_KEY_ID,
+      signature_base64: 'QUJDREVGR0g=',
+    },
   };
 }
 
@@ -474,6 +531,88 @@ describe('organization integrations HTTP routes', () => {
         expect.any(AbortSignal),
       );
       expect(responseBody).toEqual(permissionDecision(command));
+    } finally {
+      await close(server);
+    }
+  });
+
+  it('uses one fixed 503 body for every reviewer operational failure', async () => {
+    const command = reviewerPermissionRequest();
+    const fixedBody =
+      '{"error":{"code":"unavailable","message":"service is temporarily unavailable"}}';
+
+    for (const failure of ['subject-storage', 'integration-storage'] as const) {
+      const checkReviewerPermission = vi.fn(async () => {
+        throw new Error('private persistence detail at 2026-08-11T20:00:00.000Z');
+      });
+      const server = integrationServer(
+        integrationsApplication({ checkReviewerPermission }),
+        {
+          checkReviewerPermissionSubject:
+            failure === 'subject-storage'
+              ? () => {
+                  throw new Error('database is locked');
+                }
+              : (request) => ({ installation_id: request.installation_id }),
+        },
+      );
+      const origin = await listen(server);
+      try {
+        const response = await fetch(
+          `${origin}${ORGANIZATION_API_PERMISSION_CHECKS_PATH}`,
+          {
+            method: 'POST',
+            headers: {
+              ...proxyHeaders(),
+              'content-type': 'application/json',
+            },
+            body: JSON.stringify(command),
+          },
+        );
+        expect(response.status).toBe(503);
+        expect(response.headers.get('cache-control')).toBe('no-store');
+        expect(await response.text()).toBe(fixedBody);
+        expect(checkReviewerPermission).toHaveBeenCalledTimes(
+          failure === 'subject-storage' ? 0 : 1,
+        );
+      } finally {
+        await close(server);
+      }
+    }
+  });
+
+  it('keeps reviewer authentication failures as the closed 401 boundary', async () => {
+    const command = reviewerPermissionRequest();
+    const checkReviewerPermission = vi.fn();
+    const server = integrationServer(
+      integrationsApplication({ checkReviewerPermission }),
+      {
+        checkReviewerPermissionSubject: () => {
+          throw new AuthorityOperationError(
+            'unauthorized',
+            'private authentication detail',
+          );
+        },
+      },
+    );
+    const origin = await listen(server);
+    try {
+      const response = await fetch(
+        `${origin}${ORGANIZATION_API_PERMISSION_CHECKS_PATH}`,
+        {
+          method: 'POST',
+          headers: {
+            ...proxyHeaders(),
+            'content-type': 'application/json',
+          },
+          body: JSON.stringify(command),
+        },
+      );
+      expect(response.status).toBe(401);
+      await expect(response.json()).resolves.toEqual({
+        error: { code: 'unauthorized', message: 'authorization failed' },
+      });
+      expect(checkReviewerPermission).not.toHaveBeenCalled();
     } finally {
       await close(server);
     }

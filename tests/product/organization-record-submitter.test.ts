@@ -694,3 +694,125 @@ describe('organization record submitter', () => {
     expect(client.sent).toHaveLength(0);
   });
 });
+
+const REVIEWER_EVALUATED_AT = '2026-08-08T11:30:00.000Z';
+
+function reviewerEvidence(overrides: JsonObject = {}): JsonObject {
+  return {
+    ...evidence({
+      schema_version: 2,
+      reason_code: 'active_reviewer_restricted_notice_v1',
+      evaluated_at: REVIEWER_EVALUATED_AT,
+      authorization_audit_event_id: 'aud_1',
+      authorization_audit_entry_sha256: `sha256:${'3'.repeat(64)}`,
+      reviewer_release_draft_sha256: `sha256:${'4'.repeat(64)}`,
+      approval_presentation_sha256: `sha256:${'5'.repeat(64)}`,
+      semantic_intent_sha256: `sha256:${'6'.repeat(64)}`,
+      message_presentation_sha256: `sha256:${'7'.repeat(64)}`,
+    }),
+    ...overrides,
+  };
+}
+
+function reviewerNode(
+  overrides: Partial<OrganizationRecordCandidateNode> = {},
+): OrganizationRecordCandidateNode {
+  return node({
+    reviewed_at: REVIEWER_EVALUATED_AT,
+    resolved_surface: 'slack-reviewer-v1',
+    resolved_metadata: { authorization: reviewerEvidence() },
+    ...overrides,
+  });
+}
+
+describe('organization record submitter reviewer gating', () => {
+  it('builds a reviewer envelope from complete schema-v2 evidence', async () => {
+    const envelope = envelopeValue();
+    const store = fakeStore({ nodes: [reviewerNode()], skipped: [] });
+    const builder = fakeBuilder(envelope);
+    const client = fakeClient({
+      outcome: 'accepted',
+      receipt: receipt(envelope),
+    });
+
+    const result = await submitter({ store, builder, client }).sweep();
+
+    expect(result).toMatchObject({ skipped: 0 });
+    expect(builder.inputs).toHaveLength(1);
+    expect(builder.inputs[0]?.surface).toBe('slack-reviewer-v1');
+    expect(builder.inputs[0]?.reviewed_at).toBe(REVIEWER_EVALUATED_AT);
+  });
+
+  it.each([
+    [
+      'a reviewer rejection',
+      reviewerNode({
+        status: 'rejected',
+        resolved_metadata: {
+          authorization: reviewerEvidence({ action: 'reject' }),
+        },
+      }),
+      /cannot record a rejection/,
+    ],
+    [
+      'reviewer evidence on the landed schema-v1 surface',
+      reviewerNode({ resolved_surface: 'slack' }),
+      /requires the reviewer resolution surface/,
+    ],
+    [
+      'a resolution time that contradicts the evidence',
+      reviewerNode({ reviewed_at: '2026-08-08T11:31:00.000Z' }),
+      /does not match its authorization evidence/,
+    ],
+    [
+      'reviewer evidence missing its audit event id',
+      reviewerNode({
+        resolved_metadata: {
+          authorization: reviewerEvidence({
+            authorization_audit_event_id: '',
+          }),
+        },
+      }),
+      /missing authorization_audit_event_id/,
+    ],
+    [
+      'reviewer evidence with a malformed proof digest',
+      reviewerNode({
+        resolved_metadata: {
+          authorization: reviewerEvidence({
+            semantic_intent_sha256: 'sha256:short',
+          }),
+        },
+      }),
+      /semantic_intent_sha256 is not a sha256 digest/,
+    ],
+    [
+      'the reviewer reason on schema-v1 evidence',
+      node({
+        resolved_metadata: {
+          authorization: evidence({
+            reason_code: 'active_reviewer_restricted_notice_v1',
+          }),
+        },
+      }),
+      /requires schema version 2 evidence/,
+    ],
+  ])(
+    'skips %s, building and sending nothing',
+    async (_label, candidate, expected) => {
+      const store = fakeStore({ nodes: [candidate], skipped: [] });
+      const builder = fakeBuilder();
+      const client = fakeClient({ outcome: 'retry', reason: 'unused' });
+
+      const result = await submitter({ store, builder, client }).sweep();
+
+      expect(result).toMatchObject({ ok: false, skipped: 1, published: 0 });
+      expect(result.alerts[0]).toMatchObject({
+        code: 'authorization_evidence_invalid',
+      });
+      expect(result.alerts[0]?.detail).toMatch(expected);
+      expect(builder.inputs).toHaveLength(0);
+      expect(client.sent).toHaveLength(0);
+    },
+  );
+});

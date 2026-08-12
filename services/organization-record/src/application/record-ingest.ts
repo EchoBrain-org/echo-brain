@@ -8,7 +8,18 @@ import type {
   OrganizationRecordAppendResult,
   OrganizationRecordLogRow,
   OrganizationRecordReceiptPayloadV1,
+  Sha256Digest,
+  VerifiedOrganizationRecordEnvelope,
 } from './contracts.js';
+import {
+  createReviewerEligibilityCapabilityChannel,
+  type ReviewerEligibilityCapabilityChannel,
+  type ReviewerPolicyFactAppendInput,
+} from './reviewer-eligibility-capability.js';
+import {
+  readReviewerRestrictedEnvelope,
+  type ReviewerRestrictedEnvelopeValidator,
+} from './reviewer-policy-fact.js';
 import { OrganizationRecordError } from './errors.js';
 import {
   assertVerifiedEnvelopeIndexBinding,
@@ -29,7 +40,13 @@ export interface OrganizationRecordIngestDependencies {
   readonly log: OrganizationRecordLogPort;
   readonly authority: OrganizationRecordAuthorityPort;
   readonly receiptSigner: OrganizationRecordReceiptSignerPort;
+  /**
+   * Receipt materialization time only. Record time belongs to the log's own
+   * append transaction and is never sampled here.
+   */
   readonly clock?: OrganizationRecordClock;
+  /** The injected closed reviewer-v2 validator, from Authority composition. */
+  readonly reviewerValidator?: ReviewerRestrictedEnvelopeValidator;
   /** The in-process derive nudge, fired after each append commit. */
   readonly onAppended?: () => void;
   readonly alert?: OrganizationRecordAlertPort;
@@ -90,14 +107,25 @@ export class OrganizationRecordIngest {
   private readonly authority: OrganizationRecordAuthorityPort;
   private readonly receiptSigner: OrganizationRecordReceiptSignerPort;
   private readonly clock: OrganizationRecordClock;
+  private readonly reviewerValidator:
+    | ReviewerRestrictedEnvelopeValidator
+    | undefined;
   private readonly onAppended: (() => void) | null;
   private readonly alert: OrganizationRecordAlertPort | null;
+  /**
+   * One channel per ingest. Capabilities minted here are honored only by this
+   * object's own appends, so a capability can never cross processes, ingests,
+   * or organizations.
+   */
+  private readonly reviewerEligibilityChannel: ReviewerEligibilityCapabilityChannel =
+    createReviewerEligibilityCapabilityChannel();
 
   constructor(dependencies: OrganizationRecordIngestDependencies) {
     this.log = dependencies.log;
     this.authority = dependencies.authority;
     this.receiptSigner = dependencies.receiptSigner;
     this.clock = dependencies.clock ?? systemOrganizationRecordClock;
+    this.reviewerValidator = dependencies.reviewerValidator;
     this.onAppended = dependencies.onAppended ?? null;
     this.alert = dependencies.alert ?? null;
   }
@@ -115,15 +143,64 @@ export class OrganizationRecordIngest {
     const canonicalEnvelope = organizationRecordCanonicalEnvelope(verified.envelope);
     const envelopeSha256 = sha256Digest(canonicalEnvelope);
 
+    // Only after the Authority port proved the exact immutable audit row does
+    // the coordinator mint a capability, and it mints one per append attempt:
+    // a failed transaction is retried by repeating the lookup, never by
+    // reusing this object.
+    const reviewerEligibility = this.mintReviewerEligibility(
+      verified,
+      envelopeSha256,
+    );
+
     const { outcome, row } = this.log.append({
       envelope: verified,
       canonical_envelope: canonicalEnvelope,
       envelope_sha256: envelopeSha256,
-      recorded_at: this.clock(),
+      ...(reviewerEligibility === null
+        ? {}
+        : { reviewer_eligibility: reviewerEligibility }),
     });
 
     if (outcome === 'appended') this.nudge();
     return this.resultFor(outcome, row);
+  }
+
+  /**
+   * Mints the single-use eligibility capability for one reviewer-v2 append.
+   *
+   * The proof view arrives from the Authority verification port, which already
+   * performed the exact primary-key integration-audit lookup and matched the
+   * closed reviewer proof. This method only turns that proved evidence into an
+   * unforgeable runtime object bound to this exact canonical envelope; it
+   * decides nothing and reads no audit state itself.
+   */
+  private mintReviewerEligibility(
+    verified: VerifiedOrganizationRecordEnvelope,
+    envelopeSha256: Sha256Digest,
+  ): ReviewerPolicyFactAppendInput | null {
+    const proof = verified.reviewer_restricted_proof;
+    if (proof === undefined) return null;
+    const view = readReviewerRestrictedEnvelope(
+      verified.envelope,
+      this.reviewerValidator as ReviewerRestrictedEnvelopeValidator,
+    );
+    const capability = this.reviewerEligibilityChannel.issue({
+      organization_id: this.log.organization_id,
+      envelope_id: view.envelope_id,
+      idempotency_key: view.idempotency_key,
+      installation_id: view.installation_id,
+      canonical_envelope_sha256: envelopeSha256,
+      reviewer_principal_id: proof.reviewer_principal_id,
+      reviewer_membership_id: proof.reviewer_membership_id,
+      reviewer_release_draft_sha256: proof.reviewer_release_draft_sha256,
+      approval_presentation_sha256: proof.approval_presentation_sha256,
+      semantic_intent_sha256: proof.semantic_intent_sha256,
+      message_presentation_sha256: proof.message_presentation_sha256,
+      authorization_audit_event_id: proof.authorization_audit_event_id,
+      authorization_audit_entry_sha256: proof.authorization_audit_entry_sha256,
+      evaluated_at: proof.evaluated_at,
+    });
+    return { capability, channel: this.reviewerEligibilityChannel };
   }
 
   /**
@@ -150,6 +227,11 @@ export class OrganizationRecordIngest {
         envelope,
         'organization record envelope is not a JSON object',
       );
+      // A schema-v2 duplicate may not return before Authority verification.
+      // The reviewer path has to repeat its exact audit lookup, mint and
+      // consume a fresh capability, and compare the complete committed fact
+      // set before it may hand back the existing row.
+      if (value['schema_version'] === 2) return null;
       const index = organizationRecordEnvelopeIndex(value);
       const row = this.log.findAcceptedRecord(
         index.installation_id,

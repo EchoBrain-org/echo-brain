@@ -12,6 +12,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
   canonicalJson,
+  canonicalSha256,
   federationId,
   normalizeP256LowS,
   p256KeyId,
@@ -25,21 +26,29 @@ import {
   ORGANIZATION_PERMISSION_PILOT_NOTICE_REASON_CODE,
   ORGANIZATION_PERMISSION_PILOT_POLICY_ID,
   ORGANIZATION_PERMISSION_PILOT_PRESENTATION_POLICY_ID,
-  OrganizationPermissionPilotLog,
-  OrganizationRecordLogStore,
   organizationPermissionPilotCommandSha256,
   validateOrganizationPermissionPilotAudience,
   type OrganizationPermissionPilotActivationCommandV1,
   type OrganizationPermissionPilotEligibilityProofV1,
 } from '@echo-brain/organization-record';
 import {
+  OrganizationPermissionPilotLog,
+  OrganizationRecordLogStore,
+} from '@echo-brain/organization-record/append';
+import {
+  createOrganizationRecordReviewerApprovalEnvelope,
   createOrganizationEnrollmentRequest,
   createOrganizationRecordApprovalEnvelope,
   createOrganizationRecordRejectionEnvelope,
   CONSERVATIVE_ORGANIZATION_RECORD_INTENT,
   organizationAuthorityPinSha256,
   organizationEnrollmentGrantSha256,
+  organizationRecordReviewerIntent,
   organizationRecordEnvelopeId,
+  projectReviewerReleaseDraft,
+  reviewerApprovalPresentation,
+  reviewerApprovalPresentationSha256,
+  reviewerReleaseDraftSha256,
   verifyOrganizationAuthorityPin,
 } from '@echo-brain/organization-protocol';
 import type {
@@ -47,14 +56,24 @@ import type {
   OrganizationRecordApprovalEnvelopeV1,
   OrganizationRecordDecisionBriefV1,
   OrganizationRecordEnvelopeV1,
+  OrganizationRecordReviewerApprovalEnvelopeV2,
   OrganizationRecordRejectionEnvelopeV1,
   OrganizationRecordReviewerAuthorizationV1,
+  OrganizationRecordReviewerAuthorizationV2,
 } from '@echo-brain/organization-protocol';
 import {
   OrganizationIntegrationsRepository,
   openOrganizationControlDatabase,
+  reviewerMessagePresentationPreimage,
+  type OrganizationSecretStore,
   type OrganizationPermissionReasonCode,
+  type SlackIntegrationProvider,
 } from '@echo-brain/organization-control-plane';
+import {
+  createOrganizationReviewerPermissionCheckRequest,
+  createOrganizationReviewerRecentDecisionsRequest,
+  type OrganizationReviewerRecentDecisionsRequestV1,
+} from '@echo-brain/organization-api';
 import { OrganizationAuthorityApplication } from '../../src/application/organization-authority.js';
 import type {
   AuthorityClock,
@@ -66,6 +85,7 @@ import {
   openOrganizationRecordRuntime,
   type OrganizationRecordRuntime,
 } from '../../src/composition/organization-record.js';
+import { ComposedOrganizationIntegrationsApplication } from '../../src/composition/organization-integrations.js';
 
 export const RECORD_FIXTURE_NOW = '2026-08-08T12:00:00.000Z';
 export const RECORD_FIXTURE_LEASE_TTL_MS = 5 * 60 * 1000;
@@ -221,6 +241,9 @@ export interface RecordIngestFixture {
   readonly principalId: string;
   readonly membershipId: string;
   readonly enrollmentId: string;
+  readonly otherPrincipalId: string;
+  readonly otherMembershipId: string;
+  readonly otherEnrollmentId: string;
   readonly authorityId: string;
   readonly organizationId: string;
   readonly recordLogDatabasePath: string;
@@ -262,6 +285,13 @@ export interface RecordIngestFixture {
     reviewer_principal_id?: string;
     reviewer_membership_id?: string;
   }): Promise<OrganizationRecordApprovalEnvelopeV1>;
+  /** Records one exact reviewer proof and returns its signed v2 envelope. */
+  reviewerApprovalEnvelope(input: {
+    approval_id: string;
+    brief?: OrganizationRecordDecisionBriefV1;
+  }): Promise<OrganizationRecordReviewerApprovalEnvelopeV2>;
+  reviewerRecentDecisionsRequest(): Promise<OrganizationReviewerRecentDecisionsRequestV1>;
+  otherReviewerRecentDecisionsRequest(): Promise<OrganizationReviewerRecentDecisionsRequestV1>;
   close(): Promise<void>;
 }
 
@@ -307,8 +337,9 @@ export async function createRecordIngestFixture(
     membership_type: 'employee',
   });
   // The pilot marker binds the complete two-person audience before the record
-  // runtime opens. This second member otherwise behaves exactly as it did when
-  // the fixture provisioned it later: it owns no installation of its own.
+  // runtime opens. Grace also owns an independent installation so the reviewer
+  // lifecycle can prove that a different current member receives audited empty
+  // bytes without gaining access to Ada's selected record content.
   const otherMember = application.provisionMembership({
     command_id: `adm_${randomUUID()}`,
     display_name: 'Grace Reviewer',
@@ -344,6 +375,36 @@ export async function createRecordIngestFixture(
     enrollment_request: enrollmentRequest,
   });
   const enrollmentId = enrolled.enrollment_receipt.enrollment_id;
+
+  // Grace owns a separate current installation for the negative reviewer-read
+  // half of the lifecycle. The Slack approval binding below remains Ada's:
+  // installation identity and later read identity are intentionally distinct.
+  const otherGrant = Uint8Array.from(randomBytes(32));
+  const otherGrantSha256 = organizationEnrollmentGrantSha256(otherGrant);
+  application.issueEnrollmentGrant(otherMember.membership_id, {
+    command_id: `adm_${randomUUID()}`,
+    enrollment_grant_sha256: otherGrantSha256,
+    lifetime_seconds: 3600,
+  });
+  const otherInstallation = fixtureKey();
+  const otherInstallationId = federationId('ins');
+  const otherEnrollmentRequest = await createOrganizationEnrollmentRequest(
+    {
+      enrollment_grant_sha256: otherGrantSha256,
+      principal_id: otherMember.principal_id,
+      membership_id: otherMember.membership_id,
+      installation_id: otherInstallationId,
+      installation_signing_key: otherInstallation.descriptor,
+    },
+    pinned,
+    async (bytes) => signWith(otherInstallation, bytes),
+  );
+  clock.advance(1);
+  const otherEnrolled = await application.completeEnrollment({
+    enrollment_grant: otherGrant,
+    enrollment_request: otherEnrollmentRequest,
+  });
+  const otherEnrollmentId = otherEnrolled.enrollment_receipt.enrollment_id;
 
   const controlDatabase = openOrganizationControlDatabase(':memory:');
   controlDatabase
@@ -483,6 +544,81 @@ export async function createRecordIngestFixture(
       membership.membership_id,
       RECORD_FIXTURE_NOW,
     );
+  const identityAttemptId = 'cat_record-fixture-human-attempt';
+  const identityLinkId = federationId('clm');
+  const identityScopesJson = '["identity.basic"]';
+  const identityEvidenceSha256 = digest('human-verification-evidence');
+  controlDatabase
+    .prepare(
+      `INSERT INTO organization_connection_attempts (
+         connection_attempt_id, organization_id, requested_by_principal_id,
+         requested_by_membership_id, attempt_purpose, target_owner_kind,
+         target_principal_id, target_membership_id, provider, provider_issuer,
+         provider_tenant_kind, provider_tenant_id, redirect_uri,
+         requested_scopes_json, requested_scopes_sha256, state_sha256,
+         nonce_sha256, pkce_challenge_sha256, admin_session_sha256, status,
+         provider_subject_kind, provider_subject_id, granted_scopes_json,
+         granted_scopes_sha256, verification_evidence_sha256, created_at,
+         expires_at, consumed_at, outcome_reason
+       ) VALUES (
+         ?, ?, ?, ?, 'identity_link', 'membership', ?, ?, 'slack',
+         'https://slack.com', 'workspace', 'T12345678',
+         'https://authority.invalid/callback', ?, ?, ?, ?, ?, ?, 'pending',
+         NULL, NULL, NULL, NULL, NULL, ?, ?, NULL, NULL
+       )`,
+    )
+    .run(
+      identityAttemptId,
+      organizationId,
+      membership.principal_id,
+      membership.membership_id,
+      membership.principal_id,
+      membership.membership_id,
+      identityScopesJson,
+      digest(identityScopesJson),
+      digest('identity-state'),
+      digest('identity-nonce'),
+      digest('identity-pkce'),
+      digest('identity-admin-session'),
+      RECORD_FIXTURE_NOW,
+      new Date(Date.parse(RECORD_FIXTURE_NOW) + 600_000).toISOString(),
+    );
+  controlDatabase
+    .prepare(
+      `UPDATE organization_connection_attempts
+       SET status = 'succeeded', provider_subject_kind = 'human_user',
+           provider_subject_id = 'U12345678', granted_scopes_json = ?,
+           granted_scopes_sha256 = ?, verification_evidence_sha256 = ?,
+           consumed_at = ?
+       WHERE connection_attempt_id = ?`,
+    )
+    .run(
+      identityScopesJson,
+      digest(identityScopesJson),
+      identityEvidenceSha256,
+      RECORD_FIXTURE_NOW,
+      identityAttemptId,
+    );
+  controlDatabase
+    .prepare(
+      `INSERT INTO organization_external_identity_links (
+         identity_link_id, organization_id, principal_id, membership_id,
+         provider, provider_issuer, provider_tenant_kind, provider_tenant_id,
+         provider_subject_id, verification_attempt_id,
+         verification_evidence_sha256, status, verified_at, revoked_at,
+         revocation_reason
+       ) VALUES (?, ?, ?, ?, 'slack', 'https://slack.com', 'workspace',
+                 'T12345678', 'U12345678', ?, ?, 'active', ?, NULL, NULL)`,
+    )
+    .run(
+      identityLinkId,
+      organizationId,
+      membership.principal_id,
+      membership.membership_id,
+      identityAttemptId,
+      identityEvidenceSha256,
+      RECORD_FIXTURE_NOW,
+    );
   for (const action of ['approve', 'reject'] as const) {
     controlDatabase
       .prepare(
@@ -505,6 +641,82 @@ export async function createRecordIngestFixture(
         RECORD_FIXTURE_NOW,
       );
   }
+
+  const reviewerSecrets: OrganizationSecretStore = {
+    create: () => {
+      throw new Error('reviewer lifecycle does not create credentials');
+    },
+    read: () => 'xoxb-record-fixture',
+    listReferences: () => [],
+    remove: () => {
+      throw new Error('reviewer lifecycle does not remove credentials');
+    },
+  };
+  const reviewerSlack: SlackIntegrationProvider = {
+    verifyConnection: async () => {
+      throw new Error('reviewer lifecycle does not verify a new connection');
+    },
+    verifyChannel: async () => {
+      throw new Error('reviewer lifecycle does not verify a new channel');
+    },
+    verifyHuman: async (_token, userId) => ({
+      team_id: 'T12345678',
+      user_id: userId,
+      verification_evidence_sha256: digest('reviewer-human'),
+    }),
+    verifyReaction: async (_token, verification) => {
+      const expected = verification.expected_reviewer_presentation;
+      const providerEventSha256 =
+        verification.reviewer_provider_event_sha256;
+      if (expected === null || expected === undefined || providerEventSha256 === undefined) {
+        throw new Error('reviewer lifecycle expected a reviewer presentation');
+      }
+      return {
+        observed: true,
+        presentation_candidate_observed: false,
+        message_presentation_sha256: null,
+        reviewer_presentation: {
+          reviewer_release_draft_sha256:
+            expected.reviewer_release_draft_sha256,
+          approval_presentation_sha256:
+            expected.approval_presentation_sha256,
+          message_presentation_sha256: canonicalSha256(
+            reviewerMessagePresentationPreimage({
+              provider_event_sha256: providerEventSha256,
+              approval_presentation_sha256:
+                expected.approval_presentation_sha256,
+              team_id: verification.expected_team_id,
+              enterprise_id: verification.expected_enterprise_id,
+              bot_user_id: verification.expected_bot_user_id,
+              bot_id: verification.expected_bot_id,
+              app_id: verification.expected_app_id ?? 'A12345678',
+              actor_user_id: verification.user_id,
+              channel_id: verification.channel_id,
+              message_ts: verification.message_ts,
+              reaction_name: verification.reaction_name,
+            }),
+          ),
+        },
+      };
+    },
+    postIdentityLinkChallenge: async () => {
+      throw new Error('reviewer lifecycle does not post an identity challenge');
+    },
+    observeIdentityLinkChallenge: async () => {
+      throw new Error(
+        'reviewer lifecycle does not observe an identity challenge',
+      );
+    },
+  };
+  const reviewerPermissionApplication =
+    new ComposedOrganizationIntegrationsApplication({
+      authority: application,
+      repository: integrations,
+      secrets: reviewerSecrets,
+      slack: reviewerSlack,
+      permissionPilotHealth: { kind: 'absent' },
+      now: () => clock.now(),
+    });
 
   const recordLogDatabasePath = join(directory, 'record-log.sqlite');
   const recordDerivedDatabasePath = join(directory, 'record-derived.sqlite');
@@ -742,6 +954,156 @@ export async function createRecordIngestFixture(
       async (bytes) => signWith(installation, bytes),
     );
 
+  const reviewerApprovalEnvelope = async (input: {
+    approval_id: string;
+    brief?: OrganizationRecordDecisionBriefV1;
+  }): Promise<OrganizationRecordReviewerApprovalEnvelopeV2> => {
+    const brief = input.brief ?? recordBrief();
+    const draft = projectReviewerReleaseDraft({
+      approval_id: input.approval_id,
+      brief,
+    });
+    const presentation = reviewerApprovalPresentation({
+      draft,
+      approve_reaction: 'white_check_mark',
+      reject_reaction: 'x',
+    });
+    const draftSha256 = reviewerReleaseDraftSha256(draft);
+    const presentationSha256 =
+      reviewerApprovalPresentationSha256(presentation);
+    const request = await createOrganizationReviewerPermissionCheckRequest(
+      {
+        request_id: `pcr_${randomUUID()}`,
+        authority_id: authorityId,
+        authority_key_id: enrolled.enrollment_receipt.authority_key_id,
+        organization_id: organizationId,
+        enrollment_id: enrollmentId,
+        installation_id: installationId,
+        installation_signing_key: installation.descriptor,
+        provider: 'slack',
+        provider_issuer: 'https://slack.com',
+        provider_tenant_kind: 'workspace',
+        provider_tenant_id: 'T12345678',
+        provider_enterprise_id: null,
+        provider_connection_subject_id: 'U12345679',
+        provider_connection_bot_id: 'B12345678',
+        provider_connection_app_id: 'A12345678',
+        provider_subject_kind: 'human_user',
+        provider_subject_id: 'U12345678',
+        adapter_kind: 'approval-surface',
+        adapter_id: 'slack-reactions',
+        adapter_instance_id: 'primary',
+        adapter_version: '1.0.0',
+        approval_id: input.approval_id,
+        channel_id: 'C12345678',
+        message_ts: '1721678400.123456',
+        reaction_name: 'white_check_mark',
+        approve_reaction: 'white_check_mark',
+        reject_reaction: 'x',
+        reviewer_release_draft_sha256: draftSha256,
+        approval_presentation_sha256: presentationSha256,
+        requested_at: clock.now(),
+      },
+      async (bytes) => signWith(installation, bytes),
+    );
+    const decision = await reviewerPermissionApplication.checkReviewerPermission(
+      request,
+    );
+    if (
+      !decision.allowed ||
+      decision.principal_id === null ||
+      decision.membership_id === null ||
+      decision.adapter_binding_id === null ||
+      decision.permission_grant_id === null ||
+      decision.authorization_audit_event_id === null ||
+      decision.authorization_audit_entry_sha256 === null ||
+      decision.reviewer_release_draft_sha256 === null ||
+      decision.approval_presentation_sha256 === null ||
+      decision.semantic_intent_sha256 === null ||
+      decision.message_presentation_sha256 === null
+    ) {
+      throw new Error('reviewer lifecycle permission proof was not allowed');
+    }
+    const authorization: OrganizationRecordReviewerAuthorizationV2 = {
+      schema_version: 2,
+      kind: 'echo-organization-authorization-evidence',
+      authority_id: authorityId,
+      organization_id: organizationId,
+      enrollment_id: enrollmentId,
+      installation_id: installationId,
+      request_id: request.request_id,
+      approval_id: input.approval_id,
+      action: 'approve',
+      request_sha256: decision.request_sha256,
+      provider_event_sha256: decision.provider_event_sha256,
+      allowed: true,
+      reason_code: 'active_reviewer_restricted_notice_v1',
+      principal_id: decision.principal_id,
+      membership_id: decision.membership_id,
+      adapter_binding_id: decision.adapter_binding_id,
+      permission_grant_id: decision.permission_grant_id,
+      evaluated_at: decision.evaluated_at,
+      authorization_audit_event_id: decision.authorization_audit_event_id,
+      authorization_audit_entry_sha256:
+        decision.authorization_audit_entry_sha256,
+      reviewer_release_draft_sha256:
+        decision.reviewer_release_draft_sha256,
+      approval_presentation_sha256:
+        decision.approval_presentation_sha256,
+      semantic_intent_sha256: decision.semantic_intent_sha256,
+      message_presentation_sha256: decision.message_presentation_sha256,
+    };
+    return createOrganizationRecordReviewerApprovalEnvelope(
+      {
+        envelope_id: organizationRecordEnvelopeId(),
+        idempotency_key: input.approval_id,
+        payload: {
+          brief,
+          source: { ...RECORD_SOURCE },
+          alternatives: [],
+          links: null,
+          reviewed_at: decision.evaluated_at,
+          surface: 'slack-reviewer-v1',
+        },
+        reviewer: {
+          principal_id: membership.principal_id,
+          membership_id: membership.membership_id,
+          reviewed_by: 'Ada Founder',
+          authorization,
+        },
+        intent: organizationRecordReviewerIntent(
+          decision.semantic_intent_sha256,
+        ),
+        submitter: {
+          installation_id: installationId,
+          submitted_at: decision.evaluated_at,
+        },
+        installation_signing_key: installation.descriptor,
+      },
+      pinned,
+      async (bytes) => signWith(installation, bytes),
+    );
+  };
+
+  const reviewerRecentDecisionsRequest = (
+    receipt: typeof enrolled.enrollment_receipt,
+    id: string,
+    key: FixtureKey,
+  ): Promise<OrganizationReviewerRecentDecisionsRequestV1> =>
+    createOrganizationReviewerRecentDecisionsRequest(
+      {
+        request_id: `rrd_${randomUUID()}`,
+        authority_id: receipt.authority_id,
+        authority_key_id: receipt.authority_key_id,
+        organization_id: receipt.organization_id,
+        enrollment_id: receipt.enrollment_id,
+        installation_id: id,
+        installation_signing_key: key.descriptor,
+        requested_at: clock.now(),
+      },
+      async (bytes) => signWith(key, bytes),
+    );
+
   return {
     application,
     integrations,
@@ -752,6 +1114,9 @@ export async function createRecordIngestFixture(
     principalId: membership.principal_id,
     membershipId: membership.membership_id,
     enrollmentId,
+    otherPrincipalId: otherMember.principal_id,
+    otherMembershipId: otherMember.membership_id,
+    otherEnrollmentId,
     authorityId,
     organizationId,
     recordLogDatabasePath,
@@ -818,6 +1183,19 @@ export async function createRecordIngestFixture(
     },
     authorizeOtherMember,
     approvalEnvelopeFor: approvalEnvelopeWithReviewer,
+    reviewerApprovalEnvelope,
+    reviewerRecentDecisionsRequest: () =>
+      reviewerRecentDecisionsRequest(
+        enrolled.enrollment_receipt,
+        installationId,
+        installation,
+      ),
+    otherReviewerRecentDecisionsRequest: () =>
+      reviewerRecentDecisionsRequest(
+        otherEnrolled.enrollment_receipt,
+        otherInstallationId,
+        otherInstallation,
+      ),
     async close(): Promise<void> {
       try {
         await runtime.close();

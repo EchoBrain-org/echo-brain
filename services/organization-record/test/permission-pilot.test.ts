@@ -4,16 +4,18 @@ import {
   ORGANIZATION_PERMISSION_PILOT_NOTICE_REASON_CODE,
   ORGANIZATION_PERMISSION_PILOT_POLICY_ID,
   ORGANIZATION_PERMISSION_PILOT_PRESENTATION_POLICY_ID,
-  OrganizationPermissionPilotLog,
-  OrganizationPermissionPilotReader,
-  OrganizationRecordIngest,
-  OrganizationRecordLogStore,
   organizationPermissionPilotCommandSha256,
   projectOrganizationRecord,
   type JsonObject,
   type OrganizationPermissionPilotActivationCommandV1,
   type OrganizationPermissionPilotEligibilityProofV1,
 } from '../src/index.js';
+import {
+  OrganizationPermissionPilotLog,
+  OrganizationPermissionPilotReader,
+  OrganizationRecordIngest,
+  OrganizationRecordLogStore,
+} from '../src/append.js';
 import {
   approvalEnvelope,
   fixedClock,
@@ -149,7 +151,6 @@ async function appendQualified(
 function appendUnqualified(
   log: OrganizationRecordLogStore,
   envelope: JsonObject,
-  recordedAt: string,
 ): void {
   const canonicalEnvelope = canonicalJson(envelope);
   log.append({
@@ -162,7 +163,6 @@ function appendUnqualified(
     },
     canonical_envelope: canonicalEnvelope,
     envelope_sha256: sha256Digest(canonicalEnvelope),
-    recorded_at: recordedAt,
   });
 }
 
@@ -219,7 +219,6 @@ describe('organization permission pilot activation', () => {
       },
       canonical_envelope: canonical,
       envelope_sha256: sha256Digest(canonical),
-      recorded_at: '2026-08-10T11:59:00.000Z',
     });
     const head = log.rows()[0]!;
     log.close();
@@ -271,7 +270,6 @@ describe('organization permission pilot eligibility and reader', () => {
         idempotency_key: '1'.repeat(64),
         installation_id: INSTALLATION_ID,
       }),
-      '2026-08-10T12:00:02.000Z',
     );
     appendUnqualified(
       log,
@@ -280,7 +278,6 @@ describe('organization permission pilot eligibility and reader', () => {
         idempotency_key: '2'.repeat(64),
         installation_id: INSTALLATION_ID,
       }),
-      '2026-08-10T12:00:03.000Z',
     );
 
     expect(log.rows()).toHaveLength(2);
@@ -314,7 +311,6 @@ describe('organization permission pilot eligibility and reader', () => {
       },
       canonical_envelope: canonical,
       envelope_sha256: sha256Digest(canonical),
-      recorded_at: '2026-08-10T11:59:00.000Z',
     });
     initial.close();
     const marker = activate(path).marker;

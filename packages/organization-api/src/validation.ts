@@ -97,11 +97,19 @@ export function isOrganizationApiValidationError(
   return value instanceof OrganizationApiValidationError;
 }
 
-function fail(message: string, cause?: unknown): never {
+/**
+ * The shared primitives below are exported for sibling validators inside this
+ * package only. `index.ts` re-exports none of them, so the published API
+ * surface is unchanged.
+ */
+export function fail(message: string, cause?: unknown): never {
   throw new OrganizationApiValidationError(message, { cause });
 }
 
-function asRecord(value: unknown, label: string): Record<string, unknown> {
+export function asRecord(
+  value: unknown,
+  label: string,
+): Record<string, unknown> {
   if (
     typeof value !== 'object' ||
     value === null ||
@@ -122,7 +130,7 @@ function asRecord(value: unknown, label: string): Record<string, unknown> {
   return value as Record<string, unknown>;
 }
 
-function assertExactKeys(
+export function assertExactKeys(
   value: Record<string, unknown>,
   keys: readonly string[],
   label: string,
@@ -137,7 +145,59 @@ function assertExactKeys(
   }
 }
 
-function assertString(
+/**
+ * Reviewer wire families are closed recursively. Reject in-memory properties
+ * that RFC 8785 would otherwise omit instead of validating a different
+ * apparent object. This is opt-in so landed schema-v1 snapshot semantics stay
+ * unchanged.
+ */
+export function assertOnlyEnumerableDataProperties(
+  value: unknown,
+  label: string,
+  seen: Set<object> = new Set<object>(),
+): void {
+  if (typeof value !== 'object' || value === null) return;
+  if (seen.has(value)) fail(`${label} must not contain a cycle`);
+  seen.add(value);
+  try {
+    if (Object.getOwnPropertySymbols(value).length !== 0) {
+      fail(`${label} must not contain symbol properties`);
+    }
+    if (Array.isArray(value)) {
+      const names = Object.getOwnPropertyNames(value);
+      if (names.length !== value.length + 1 || !names.includes('length')) {
+        fail(`${label} must contain only dense array elements`);
+      }
+      for (let index = 0; index < value.length; index += 1) {
+        const descriptor = Object.getOwnPropertyDescriptor(
+          value,
+          String(index),
+        );
+        if (
+          descriptor === undefined ||
+          !('value' in descriptor) ||
+          descriptor.enumerable !== true
+        ) {
+          fail(`${label} must contain only enumerable data properties`);
+        }
+        assertOnlyEnumerableDataProperties(descriptor.value, label, seen);
+      }
+      return;
+    }
+    for (const descriptor of Object.values(
+      Object.getOwnPropertyDescriptors(value),
+    )) {
+      if (!('value' in descriptor) || descriptor.enumerable !== true) {
+        fail(`${label} must contain only enumerable data properties`);
+      }
+      assertOnlyEnumerableDataProperties(descriptor.value, label, seen);
+    }
+  } finally {
+    seen.delete(value);
+  }
+}
+
+export function assertString(
   value: unknown,
   label: string,
   maximumLength: number,
@@ -153,7 +213,7 @@ function assertString(
   }
 }
 
-function assertPatternString(
+export function assertPatternString(
   value: unknown,
   label: string,
   maximumLength: number,
@@ -163,13 +223,16 @@ function assertPatternString(
   if (!pattern.test(value)) fail(`${label} is invalid`);
 }
 
-function assertDigest(value: unknown, label: string): asserts value is string {
+export function assertDigest(
+  value: unknown,
+  label: string,
+): asserts value is string {
   if (typeof value !== 'string' || !DIGEST_PATTERN.test(value)) {
     fail(`${label} must be a canonical SHA-256 digest`);
   }
 }
 
-function assertId(value: unknown, prefix: string, label: string): void {
+export function assertId(value: unknown, prefix: string, label: string): void {
   if (
     typeof value !== 'string' ||
     !value.startsWith(`${prefix}_`) ||
@@ -329,7 +392,7 @@ function validateUniquePage<T>(
   return page;
 }
 
-function assertTimestamp(
+export function assertTimestamp(
   value: unknown,
   label: string,
 ): asserts value is string {
@@ -359,7 +422,7 @@ function validateMembershipType(value: unknown, label: string): void {
   }
 }
 
-function validateIntegrity(
+export function validateIntegrity(
   value: unknown,
   documentLabel = 'access lease request',
 ): OrganizationApiSignedIntegrityV1 {

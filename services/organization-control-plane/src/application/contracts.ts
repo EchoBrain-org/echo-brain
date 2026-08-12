@@ -53,6 +53,24 @@ export interface VerifySlackReactionInput {
    * for the pilot read policy.
    */
   expected_presentation: SlackApprovalPresentationExpectation | null;
+  /**
+   * The closed reviewer expectation, or `null` for every non-reviewer card.
+   * The pilot and reviewer expectations are mutually exclusive: a request that
+   * carries both is invalid input, never a card to reinterpret.
+   */
+  expected_reviewer_presentation?: SlackReviewerPresentationExpectation | null;
+  /**
+   * The signed request's provider-event digest. It is a member of the reviewer
+   * provider-message preimage, so a proof can never be replayed against a
+   * different signed action.
+   */
+  reviewer_provider_event_sha256?: `sha256:${string}`;
+  /**
+   * True when the caller only needs the reviewer card's own frozen reaction
+   * pair parsed -- the schema-v1 rejection of a reviewer card. No reviewer
+   * proof is produced.
+   */
+  parse_reviewer_card_reactions?: boolean;
 }
 
 export interface SlackApprovalPresentationExpectation {
@@ -62,12 +80,48 @@ export interface SlackApprovalPresentationExpectation {
   fallback_text: string;
 }
 
+/**
+ * The closed reviewer expectation. It contains only the policy, the frozen
+ * reaction pair, and the two digests the signed request committed to: the
+ * verifier reconstructs the draft and presentation from the live card and
+ * compares, so no title, item text, or reconstructed draft is an input.
+ */
+export interface SlackReviewerPresentationExpectation {
+  policy_id: "restricted-reviewer-v1";
+  approve_reaction: string;
+  reject_reaction: string;
+  reviewer_release_draft_sha256: `sha256:${string}`;
+  approval_presentation_sha256: `sha256:${string}`;
+}
+
+/** A positive reviewer proof returns digests only, never card content. */
+export interface VerifiedSlackReviewerPresentation {
+  reviewer_release_draft_sha256: `sha256:${string}`;
+  approval_presentation_sha256: `sha256:${string}`;
+  message_presentation_sha256: `sha256:${string}`;
+}
+
 export interface VerifiedSlackReaction {
   observed: boolean;
   /** True when a grammar-valid card contains an own audience extension. */
   presentation_candidate_observed: boolean;
   /** Present only after the exact, unedited marker-bound card was verified. */
   message_presentation_sha256: `sha256:${string}` | null;
+  /**
+   * Present only after the complete closed reviewer card, both recomputed
+   * digests, provider identity, absent edit evidence, and the reaction all
+   * verified. A mixed pilot/reviewer presentation never produces it.
+   */
+  reviewer_presentation?: VerifiedSlackReviewerPresentation;
+  /**
+   * The two frozen reaction names parsed from the live reviewer card. The
+   * schema-v1 rejection path uses them to prove the card's own pair, and
+   * requires both to equal the current active binding pair.
+   */
+  reviewer_card_reactions?: {
+    approve_reaction: string;
+    reject_reaction: string;
+  };
 }
 
 export interface PostSlackIdentityLinkChallengeInput {
@@ -415,3 +469,124 @@ export type ApprovalAuthorizationEvidenceMatch =
   | { readonly status: "absent" }
   | { readonly status: "ambiguous" }
   | { readonly status: "corrupt" };
+
+/**
+ * The signed reviewer commitments one exact `aud_*` row must satisfy. The
+ * lookup is by primary key, so multiplicity is database corruption rather than
+ * an `ambiguous` result.
+ */
+export interface ReviewerAuthorizationEvidenceExpectation {
+  organization_id: string;
+  installation_id: string;
+  approval_id: string;
+  request_id: string;
+  principal_id: string;
+  membership_id: string;
+  request_sha256: string;
+  provider_event_sha256: string;
+  adapter_binding_id: string;
+  permission_grant_id: string;
+  evaluated_at: string;
+  reviewer_release_draft_sha256: string;
+  approval_presentation_sha256: string;
+  semantic_intent_sha256: string;
+  message_presentation_sha256: string;
+  authorization_audit_entry_sha256: string;
+}
+
+/** The closed reviewer proof. No raw presentation content is ever returned. */
+export interface ReviewerRestrictedAuthorizationProof {
+  policy_id: "restricted-reviewer-v1";
+  reviewer_principal_id: string;
+  reviewer_membership_id: string;
+  reviewer_release_draft_sha256: `sha256:${string}`;
+  approval_presentation_sha256: `sha256:${string}`;
+  semantic_intent_sha256: `sha256:${string}`;
+  message_presentation_sha256: `sha256:${string}`;
+  authorization_audit_event_id: string;
+  authorization_audit_entry_sha256: `sha256:${string}`;
+  evaluated_at: string;
+}
+
+/**
+ * The complete, text-free reviewer authorization reconstructed from one
+ * validated immutable integration-audit row.
+ *
+ * This is used by startup admission and the reviewer read path, where the
+ * caller intentionally does not have protected canonical-envelope content
+ * yet.  The exact `aud_*` primary-key lookup owns all of these values; no
+ * caller supplies them as an expected object.
+ */
+export interface ReviewerRestrictedAuthorizationEvidence
+  extends ReviewerRestrictedAuthorizationProof {
+  readonly authority_id: string;
+  readonly organization_id: string;
+  readonly installation_id: string;
+  readonly approval_id: string;
+  readonly request_id: string;
+  readonly request_sha256: `sha256:${string}`;
+  readonly provider_event_sha256: `sha256:${string}`;
+  readonly adapter_binding_id: string;
+  readonly permission_grant_id: string;
+}
+
+export type ReviewerAuthorizationEvidenceRead =
+  | {
+      readonly status: "matched";
+      readonly evidence: ReviewerRestrictedAuthorizationEvidence;
+    }
+  | { readonly status: "absent" }
+  | { readonly status: "corrupt" }
+  | { readonly status: "unavailable" };
+
+export interface OrganizationIntegrationAuditChainVerification {
+  readonly valid: boolean;
+  readonly entries_verified: number;
+  readonly head_sequence: number;
+  readonly head_entry_sha256: `sha256:${string}` | null;
+  readonly failure: string | null;
+}
+
+/**
+ * Healthy `absent`/`mismatch` is terminal invalid input. `corrupt` and
+ * `unavailable` are retryable and degrade reviewer V1 alone; they never widen
+ * access or fall back to another policy.
+ */
+export type ReviewerAuthorizationEvidenceMatch =
+  | {
+      readonly status: "matched";
+      readonly audit_entry_sha256: `sha256:${string}`;
+      readonly proof: ReviewerRestrictedAuthorizationProof;
+    }
+  | { readonly status: "absent" }
+  | { readonly status: "mismatch" }
+  | { readonly status: "corrupt" }
+  | { readonly status: "unavailable" };
+
+/**
+ * The reviewer allow that appends exactly one integration-audit row. Every
+ * digest is Authority-computed; the caller supplies no proof object.
+ */
+export interface RecordReviewerPermissionDecisionInput {
+  organization_id: string;
+  authority_id: string;
+  request_id: string;
+  request_sha256: `sha256:${string}`;
+  provider_event_sha256: `sha256:${string}`;
+  approval_id: string;
+  installation_id: string;
+  reviewer_principal_id: string;
+  reviewer_membership_id: string;
+  identity_link_id: string;
+  connection_id: string;
+  adapter_binding_id: string;
+  permission_grant_id: string;
+  evaluated_at: string;
+  authority_evidence_sha256: `sha256:${string}`;
+  detail: Readonly<Record<string, unknown>>;
+}
+
+export interface RecordedReviewerPermissionDecision {
+  authorization_audit_event_id: string;
+  authorization_audit_entry_sha256: `sha256:${string}`;
+}
