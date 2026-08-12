@@ -12,8 +12,11 @@ while `integrations.sqlite` contains customer-owned provider links,
 connections, adapter bindings, direct grants, and integration audit.
 `record-log.sqlite` is the append-only record of truth, and
 `record-derived.sqlite` contains its replayable projection. All four databases
-are owned by the same authenticated singleton process. There is no tenant
-registry, organization switcher, billing layer, or multi-replica coordination.
+are owned by the same authenticated singleton process. The locally committed
+Job B baseline also keeps immutable retrieval generations below
+`record-retrieval/generations/`; those directories are not a fifth mutable
+source of truth. There is no tenant registry, organization switcher, billing
+layer, or multi-replica coordination.
 
 ## HTTP surface
 
@@ -24,6 +27,7 @@ origin:
 - `POST /v1/enrollments`
 - `POST /v1/access-leases`
 - `POST /v1/permission-checks`
+- `POST /v1/readable-search`
 - `POST /v1/integration-links/slack/challenges`
 - `POST /v1/integration-links/slack/completions`
 - `GET /v1/admin/overview`
@@ -56,8 +60,17 @@ The browser administrator console occupies the `/admin` namespace:
 the ingress contract below keeps unreachable from outside.
 
 Administrator requests use `Authorization: Bearer <token>`. Enrollment uses
-`Authorization: Echo-Enrollment <grant>`. Lease refresh and permission checks
-use installation-signed commands.
+`Authorization: Echo-Enrollment <grant>`. Lease refresh, permission checks,
+and readable search use installation-signed commands.
+
+`POST /v1/readable-search` is implemented at the local Job B baseline, not an
+operational release. It accepts only a canonical RFC 8785 signed request body
+with no URL query, searches the two closed policy families, and returns at most
+ten whole decision/action/rationale items. It has no pagination, totals,
+scores, snippets, filters, cache, external provider, vector, graph, or model
+surface. A missing, stale, partial, corrupt, or otherwise unadmitted generation
+returns the fixed no-store `503`; invalid request bytes return `400`, and
+authentication/resource denials use their fixed complete `401`/`404` bodies.
 
 The Slack administrator routes implement the minimum-v1 organization-tool
 contract documented in
@@ -217,6 +230,8 @@ authority-state/
   integrations.sqlite
   record-log.sqlite
   record-derived.sqlite
+  record-retrieval/
+    generations/<sha256-generation-id>/
   authority-identity.v1.json
   authority-initialization.v1.json
   authority-integrations-installation.v1.json
@@ -246,6 +261,69 @@ mode-0600 and SQLite stores only their opaque `sch_*` handles. Repeating the
 exact initialization is read-only. `serve` never creates replacement state,
 and `status` verifies the config/state binding, signing identity, all four
 database identities, and runtime ownership.
+
+`record-retrieval/` is absent after ordinary initialization and appears only
+after a stopped readable-search rebuild publishes a complete immutable
+generation. The active-generation pointer remains in `authority.sqlite`; a
+generation directory must never be copied, repaired, or swapped on its own.
+
+### Local readable-search baseline configuration and maintenance
+
+The optional `organization_recording_policy_v1` runtime-config object enables
+one explicit recording presentation mode. It must contain exactly:
+
+```json
+{
+  "schema_version": 1,
+  "kind": "organization-recording-policy-v1",
+  "decision_processor_adapter_instance_id": "<configured adapter instance>",
+  "approval_surface_adapter_instance_id": "<configured adapter instance>",
+  "presentation_mode": "organization-member-readable-v1",
+  "policy_contract_sha256": "sha256:<matching policy contract>"
+}
+```
+
+`presentation_mode` is either `restricted-reviewer-v1` or
+`organization-member-readable-v1`; the contract digest must match that exact
+mode. The object is optional for compatibility, but its absence never enables
+organization-member-readable admission.
+
+Stop the Authority and snapshot the complete state directory before either
+command. The shared initialization and authenticated runtime locks refuse
+maintenance while a live Authority owns the state:
+
+```sh
+npm run organization-authority:cli -- rebuild-readable-search \
+  --config /absolute/operator/authority.json
+
+npm run organization-authority:cli -- readable-search-query-audit-export \
+  --config /absolute/operator/authority.json \
+  --command /absolute/operator/readable-search-query-audit-export.json \
+  --output /absolute/private/readable-search-query-audit.json
+
+npm run organization-authority:cli -- readable-search-query-audit-expire \
+  --config /absolute/operator/authority.json \
+  --command /absolute/operator/readable-search-query-audit-expiry.json
+```
+
+`rebuild-readable-search` verifies the Authority, integration, record, and
+both policy-fact families; builds one complete private generation; then
+atomically publishes its pointer at the exact record head. A new record append
+does not wait for Layer 2, but immediately makes that pointer stale and the
+route returns `503` until another stopped rebuild publishes an exact-head
+generation. Rebuild never mutates an active generation in place; a failed
+rebuild leaves the prior pointer untouched, which may still be unavailable if
+its head is stale.
+
+The readable-search decision audit is isolated from generic admin audit listing
+and retained immutably for 180 days. Export and expiry use distinct canonical
+`sqa_` commands, require the exact current active owner, and require a
+five-minute freshness window for first execution. Export accepts only a
+positive, non-future range of at most 31 days and writes a create-once,
+current-user `0600` file under a current-user `0700` parent outside managed
+Authority state; its output path digest must match the signed command. Expiry
+uses its Authority transaction time and deletes only elapsed complete rows,
+recording an immutable receipt in the same transaction.
 
 An authority state created before `integrations.sqlite` was introduced must be
 upgraded explicitly while the authority is stopped:
@@ -315,10 +393,13 @@ volume backup belong to the container or service manager.
 
 ### Rebuilding the derived record store
 
-`record-derived.sqlite` is the only rebuildable file in the state directory:
-it holds nothing the log does not already prove. Stop the authority and snapshot
-the whole state directory exactly as-is before mutation, then recreate a missing
-projection or replace a stale or content-corrupt one:
+`record-derived.sqlite` is the only replaceable SQLite projection in the state
+directory: it holds nothing the log does not already prove. Retrieval
+generations are separately rebuilt and published only through
+`rebuild-readable-search`; no individual generation file is repairable. Stop
+the authority and snapshot the whole state directory exactly as-is before
+mutation, then recreate a missing projection or replace a stale or
+content-corrupt one:
 
 ```sh
 npm run organization-authority:cli -- rebuild-derived \
@@ -368,16 +449,29 @@ investigate before copying it, and never copy it as a good backup.
 1. Stop the authority (`SIGTERM`, or the service manager's stop) and confirm it
    exited without a shutdown error and with exit code 0. A non-zero exit after a
    derive failure means the same thing: do not treat that state as a backup.
-2. Copy the whole state directory as one unit. Every protected file below is
-   mandatory. A known-good backup also includes the derived file; it is the only
-   file that may instead be rebuilt from the verified log before serving:
+2. Before copying, run `verify-readable-search-backup` below. It returns the
+   text-free `verified` receipt for an admitted exact-head generation, or the
+   benign `not_built` receipt when no active pointer exists. Either result may
+   precede a recovery-grade archive. A stale pointer/head mismatch, corrupt
+   generation, staging directory, or sidecar is a failure, not a valid backup
+   result.
+3. Copy the whole state directory as one unit only after that successful
+   verification. Every protected file below is
+   mandatory. A known-good backup also includes the derived file and, if an
+   active readable-search generation exists, its complete immutable generation
+   directory; `record-derived.sqlite` is the only SQLite file that may instead
+   be rebuilt from the verified log before serving:
    - `authority.sqlite` — identity, memberships, enrollments, and the
      integrations and record installation anchors
    - `integrations.sqlite` — the control plane, including the permission audit
      that record ingest reads
    - `record-log.sqlite` — the organization decision record log. Truth.
    - `record-derived.sqlite` — the derived graph. Rebuildable, but copied so a
-     restore does not have to replay
+   restore does not have to replay
+   - `record-retrieval/` — the active-generation directory and any retained
+     immutable generations. The active pointer in `authority.sqlite` must refer
+     to a complete generation at the restored record head before search can
+     serve
    - `authority-integrations-installation.v1.json` and
      `authority-record-installation.v1.json` — the installation markers whose
      digests are anchored in `authority.sqlite`; a restore without them fails
@@ -385,15 +479,38 @@ investigate before copying it, and never copy it as a good backup.
    - `authority-identity.v1.json` and `authority-initialization.v1.json`
    - `keys/` — the authority signing key
    - `credentials/` — the admin and trusted-proxy tokens
-3. Restore all protected state together. If only `record-derived.sqlite` is
-   absent, run `rebuild-derived` while still stopped, then serve. Any other
-   partial restore — most sharply, one missing the record log — is refused: the
-   record anchor in `authority.sqlite` proves this authority already published a
-   log, and no command recreates one. A fresh empty log would look healthy while
-   every receipt already in members' hands pointed at records it no longer holds.
+4. Restore all protected state together. If only `record-derived.sqlite` is
+   absent, run `rebuild-derived` while still stopped. A missing readable-search
+   generation may be rebuilt only from verified current Layer 1 while stopped;
+   a stale generation must remain unavailable. Any other partial restore — most
+   sharply, one missing the record log — is refused: the record anchor in
+   `authority.sqlite` proves this authority already published a log, and no
+   command recreates one. A fresh empty log would look healthy while every
+   receipt already in members' hands pointed at records it no longer holds.
 
 Databases use `journal_mode = DELETE`, so a stopped state has no WAL or SHM
 sidecars and every file is readable read-only exactly as copied.
+
+Before archiving and again after restoring, run the stopped validation command:
+
+```sh
+npm run organization-authority:cli -- verify-readable-search-backup \
+  --config /absolute/operator/authority.json
+```
+
+It is the B validation gate for active pointer/head equality, runtime retrieval
+contract, complete generation manifests and roots, temporary build directories,
+and retrieval SQLite sidecars. A tar/copy archive is recovery-grade for the
+retrieval state only when it follows a stopped `verified` or `not_built` result
+at the appropriate checkpoint; it still does not authorize serving after
+restore without the external reconciliation below.
+
+If the command rejects a stale pointer/head after an authorized append, keep
+the Authority stopped. A pre-rebuild copy may be retained only as an
+**unverified incident snapshot**, never as a known-good recovery backup. Run
+`rebuild-readable-search`, rerun this verifier, and only then take a separate
+recovery-grade archive. The rebuild is what repairs intended Layer 2 staleness;
+the verifier never repairs it.
 
 Runtime ownership is authenticated through a private Unix socket beside its
 lock. The portable Docker deployment sets

@@ -3,8 +3,10 @@
 **Status:** local code-grounded registry. It consolidates invariant statements
 from the product architecture documents and records the permission-pilot
 baseline plus locally committed Job A baseline
-`03167cfd66fa0b5fe983abbf266271178548efb8`. Job A is not merged, pushed,
-deployed, founder-live qualified, or released.
+`03167cfd66fa0b5fe983abbf266271178548efb8`, alongside locally committed Job B
+baseline `588b42828d5c811a4ae51b21e881139109e7e46d`. Job B's final local gates
+passed, but it is not pushed, merged, deployed, founder-live qualified,
+client-live, or released.
 
 This registry does not approve a proposal, prove a deployment, or replace the
 normative source documents. Code and schemas remain authoritative for current
@@ -39,7 +41,7 @@ Normative and implementation status are independent:
 | --- | --- | --- |
 | Normative status | `constitution`, `approved design`, `approved implementation contract`, `proposal` | Whether the rule governs architecture or is awaiting acceptance |
 | Enforcement scope | `general primitive`, `bounded pilot`, `supporting foundation`, `none` | Where code currently enforces the rule |
-| Implementation status | `implemented at baseline`, `implemented at Job A baseline`, `partially implemented`, `not implemented` | Static code/test status at the named pilot or Job A commit |
+| Implementation status | `implemented at baseline`, `implemented at Job A baseline`, `implemented at Job B local baseline`, `partially implemented`, `not implemented` | Static code/test status at the named baseline |
 | Live status | `not assessed` | This registry does not infer merge, deployment, or current production state |
 
 “Landed” below means present in code and tests at the named baseline. It does
@@ -135,9 +137,12 @@ Two constitutional invariants are not classified as pilot-enforced controls:
 
 No canonical permission invariant is globally implemented across a general
 retrieval/search/model surface. The bounded pilot evidence above must not be
-generalized. Job B now defines a bounded, implementation-ready lexical-search
-contract over two explicit policies, but no Job B code has landed and its
-controls must not be claimed for any other operation. In particular:
+generalized. Job B is locally committed at
+`588b42828d5c811a4ae51b21e881139109e7e46d` for the bounded lexical-search
+contract over two explicit policies, and final local gates passed. It remains
+neither pushed, merged, deployed, founder-live qualified, client-live, nor
+released, and its controls must not be claimed for any other operation. In
+particular:
 
 | ID | Missing general implementation |
 | --- | --- |
@@ -157,8 +162,8 @@ controls must not be claimed for any other operation. In particular:
 | ID | Invariant | Normative status | Current implementation |
 | --- | --- | --- | --- |
 | `INV-11A` | **Reviewer reads start from append-atomic, text-free facts.** Select only immutable facts co-committed with the verified Layer 1 record; release content only through a request-local binding after current-Person resolution; missing fact/reprojection/binding or broad-store bypass denies. | Approved implementation contract in A; founder-confirmed 2026-08-11 | Implemented at Job A baseline `03167cfd`: closed reviewer-v2 append, co-committed immutable facts, startup admission, exact indexed selection, request-local binding, canonical reprojection, final current-Person recheck, separate query audit, signed route/client/CLI, and restart lifecycle tests. Not merged or live-qualified. |
-| `INV-12` | **Content-visibility approval binds consequence.** Human-visible consequence, exact actor principal/membership, complete presented release draft, and provider evidence are cryptographically bound over Authority semantic bytes and verified before append. | Approved implementation contract for `restricted-reviewer-v1` in A and the separate `organization-member-readable-v1` extension in B | Implemented for the reviewer policy at Job A baseline `03167cfd`: deterministic release draft and presentation, frozen Slack contract, credential/card verification, signed schema-v2 permission request, Authority semantic/message proof, immutable integration audit, append capability, and cross-layer agreement tests. The Job B member-readable consequence/schema-v3 extension is not implemented. Nothing is merged or live-qualified. |
-| `INV-11B` | **Permission-aware derived retrieval begins with text-free, rebuildable facts.** Layer 2 creates a request-local scope over provenance-bound facts; protected content/search/embeddings/statistics/cross-record projections require that scope and one versioned generation contract. | Approved implementation contract in Job B; founder-directed 2026-08-12 | Not implemented. The reviewed minimum scope is one local lexical operation over only `restricted-reviewer-v1` and `organization-member-readable-v1`, with append-atomic admission facts, physically isolated fact/content/lexical segment planes, an immutable exact-head generation, request-local scope, per-item term-frequency scoring, final Authority fence, and isolated audit. No vector, graph, discovery, cache, model, external provider, or general policy engine is included. |
+| `INV-12` | **Content-visibility approval binds consequence.** Human-visible consequence, exact actor principal/membership, complete presented release draft, and provider evidence are cryptographically bound over Authority semantic bytes and verified before append. | Approved implementation contract for `restricted-reviewer-v1` in A and the separate `organization-member-readable-v1` extension in B | Implemented for the reviewer policy at Job A baseline `03167cfd`: deterministic release draft and presentation, frozen Slack contract, credential/card verification, signed schema-v2 permission request, Authority semantic/message proof, immutable integration audit, append capability, and cross-layer agreement tests. The organization-member-readable consequence/schema-v3 extension is implemented at Job B local baseline `588b428`; final local gates passed. It is not pushed, merged, deployed, founder-live qualified, client-live, or released. |
+| `INV-11B` | **Permission-aware derived retrieval begins with text-free, rebuildable facts.** Layer 2 creates a request-local scope over provenance-bound facts; protected content/search/embeddings/statistics/cross-record projections require that scope and one versioned generation contract. | Approved implementation contract in Job B; founder-directed 2026-08-12 | Implemented at Job B local baseline `588b428`: one local lexical operation over only `restricted-reviewer-v1` and `organization-member-readable-v1`, with append-atomic admission facts, physically isolated fact/content/lexical segment planes, an immutable exact-head generation, request-local scope, per-item term-frequency scoring, final Authority fence, and isolated audit. Final local gates and independent acceptance/security review passed. No vector, graph, discovery, cache, model, external provider, or general policy engine is included; operational restore reconciliation and founder-live gates remain outstanding. |
 
 `INV-11A` and `INV-11B` are distinct, complementary invariants for sequenced
 serving stages, not a fork or two numbers for the same implementation. A uses

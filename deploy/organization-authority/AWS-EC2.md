@@ -343,7 +343,9 @@ After the first successful public refresh:
   `Project=echo-brain`, `Service=echo-authority`, `Environment=prod`, and
   `Backup=true`. Run daily and retain seven snapshots. These scheduled
   snapshots are a secondary, crash-consistent safety net; the quiesced snapshot
-  and complete stopped-state archive remain the recovery-grade checkpoints.
+  and complete stopped-state archive remain the existing recovery-grade
+  checkpoints. They predate the readable-search baseline: do not treat either
+  as B recovery-grade until the stopped verifier succeeds for that checkpoint.
 - Monitor `https://authority.echobrain.org/v1/authority-descriptor` with an
   HTTPS string check for the exact Authority ID above. Alarm after two of three
   one-minute health periods fail, and treat missing data as unhealthy.
@@ -358,8 +360,9 @@ or cross-region copy for this v1 pilot.
 
 A snapshot or archive restore is a point-in-time replacement, not a merge. It
 rewinds all Authority state to the checkpoint, including memberships,
-installations, revocations, access-state heads, audit rows, and the
-organization-record tail.
+installations, revocations, access-state heads, audit rows, the
+organization-record tail, the readable-search active pointer, and any retained
+retrieval generations.
 
 The isolated attachment drill above does not authorize booting directly from a
 restored snapshot: that root contains an enabled Tunnel service and its token.
@@ -374,9 +377,27 @@ database. Treat every restored active membership and installation as
 unverified until the Founder confirms it; reapply every known membership or
 installation revocation before reconnecting public ingress.
 
-Restricted reviewer V1 adds a mandatory release checklist. Keep its completed
-evidence in the incident or deployment record outside `/srv/echo-authority/data`
-so the restored state cannot overwrite the decision to release it. Record:
+The readable-search baseline adds stopped validation and external evidence to
+the existing restore boundary. Before external reconciliation, keep the
+Authority stopped and run:
+
+```bash
+compose run --rm --no-deps authority \
+  verify-readable-search-backup --config /echo/authority.json
+```
+
+It returns `verified` only when the active pointer matches the restored record
+head and its complete generation manifests/roots and runtime contract admit;
+it returns `not_built` when no active pointer exists, and rejects staging
+directories, SQLite sidecars, or every other mixed state. A missing generation
+may be rebuilt only from verified current Layer 1 while stopped. If the verifier
+rejects an intended stale pointer/head, keep the process offline, retain any
+pre-rebuild copy only as an unverified incident snapshot, run the stopped
+rebuild, and rerun verification before reconciliation. A stale generation
+cannot serve as a historical prefix.
+
+Keep the completed evidence in the incident or deployment record outside
+`/srv/echo-authority/data` so restored state cannot overwrite it. Record:
 
 - the restored artifact digest, checkpoint time, operator, and validation time;
 - proof that the Tunnel and every other ingress path remained disabled while
@@ -385,18 +406,25 @@ so the restored state cannot overwrite the decision to release it. Record:
   expiry, and revocation state, compared with independently retained operator
   evidence;
 - the current integration authorization-audit chain and each reviewer proof
-  referenced by a reviewer-policy fact;
-- the complete organization-record chain, reviewer-policy fact admission, and
-  any applicable client-held record or access receipts and heads; and
+  referenced by a reviewer-policy fact, plus the organization-member-readable
+  policy proof family when present;
+- the complete organization-record chain, both policy-fact admissions, active
+  pointer, exact record head, generation manifest/roots, analyzer and retrieval
+  contract identity, and any applicable client-held record or access receipts
+  and heads;
+- writable readable-search query-audit storage and applicable stopped export or
+  expiry receipts; and
 - the Founder or trusted operator's explicit release decision.
 
-A mismatch, missing fact, incomplete audit proof, unexplained valid-prefix
-rollback, or unavailable client receipt keeps the reviewer route and public
-ingress offline. The restore script's archive, SQLite integrity, and foreign-key
-checks are necessary but do not prove that a rolled-back Person or reviewer
-authorization is still current. There is intentionally no database marker or
-automatic reconciliation command: the release evidence must remain outside the
-state being restored.
+A mismatch, missing fact, incomplete audit proof, invalid/stale readable-search
+generation, unexplained valid-prefix rollback, or unavailable client receipt
+keeps the reviewer route, readable-search route, and public ingress offline.
+The restore script's archive, SQLite integrity, foreign-key checks, and stopped
+readable-search verification are necessary but do not prove that a rolled-back
+Person or authorization state is current. There is intentionally no automatic
+reconciliation command: the release evidence must remain outside the state
+being restored. Nothing in this baseline runbook claims founder-live or
+release qualification.
 
 `installation access-recover` is not a remedy when restoring the Authority
 makes a client newer than the server. Use a newer checkpoint, or revoke and

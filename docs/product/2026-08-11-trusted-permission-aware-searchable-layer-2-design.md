@@ -1,9 +1,9 @@
 # B: Permission-aware lexical Layer 2 minimum V1
 
 **Status:** approved implementation contract for minimum V1, founder-directed
-2026-08-12 and independently reviewed. Implementation starts only after the
-pinned predecessor below. This document does not claim a completed Job B
-implementation, merge, deployment, founder-live qualification, or release.
+2026-08-12 and independently reviewed. Job B is locally committed at
+`588b42828d5c811a4ae51b21e881139109e7e46d`; final local gates passed. It is
+not pushed, merged, deployed, founder-live qualified, client-live, or released.
 
 **Pinned Job A predecessor:**
 `03167cfd66fa0b5fe983abbf266271178548efb8` on
@@ -17,6 +17,20 @@ Job A's contract and reviewer-recent serving behavior are not superseded. Job
 B adds behavior-preserving acquisition of the shared authorization fence on
 append/mutation paths and reuses the governed query-audit maintenance
 primitive; Job A's complete suite must revalidate both composition changes.
+
+**Local committed-baseline evidence:** the baseline contains the bounded route,
+organization-member admission path, retrieval workspace, stopped rebuild,
+backup verification, and query-audit maintenance commands, plus product
+client/CLI wiring described below. Final local validation passed: `npm run
+check` (boundary, typecheck, lint; root 111 files/1141 tests; product 34
+files/333 tests), protocol suites (12 federation, 62 organization-protocol, 63
+organization-API), control-plane (123), record (121), retrieval (21), Authority
+(35 files/394 tests), and integration (5 files/10 tests). Independent final
+acceptance/security review passed after the orphan-verifier fix; lean review had
+no must-fix findings, and its optional internal test seam was made file-local.
+External restore reconciliation and founder-live rows remain operational gates,
+not implementation blockers. This is a local committed baseline, not an
+operational qualification.
 
 **Builds on:**
 
@@ -1944,7 +1958,7 @@ architecture for later permission types.
 
 ## Grounded implementation footprint
 
-Expected new/changed areas are:
+Implemented local-baseline areas are:
 
 - `packages/organization-protocol`: organization-member release draft,
   presentation, policy contract, permission evidence, and envelope-v3 closed

@@ -55,8 +55,10 @@ The authority container owns four private SQLite files in the same durable
 state directory: `authority.sqlite` for membership and installation truth,
 `integrations.sqlite` for provider connections and grants, `record-log.sqlite`
 for append-only organization record truth, and `record-derived.sqlite` for its
-rebuildable projection. They run in one process under one authenticated
-singleton guard.
+rebuildable projection. The locally committed Job B baseline also publishes immutable
+retrieval generations below `data/state/record-retrieval/generations/`; they
+are not a fifth mutable source of truth. All run in one process under one
+authenticated singleton guard.
 
 For a state initialized by an older build, build the exact target image first,
 then stop and back up the complete state before running the one-time upgrade.
@@ -249,6 +251,70 @@ active. Durable keys and all four database files remain in the host-mounted
 `data` directory; the coordination volume contains no organization content and
 may be recreated only while the whole authority stack is stopped.
 
+For the local readable-search baseline, use the same stopped snapshot boundary
+before a generation rebuild or query-audit maintenance. The route is unavailable
+until an exact-record-head generation is published; any later append makes it
+return fixed `503` until the next stopped rebuild. The verifier deliberately
+rejects that stale pointer/head; rebuilding, not verification, repairs the
+staleness.
+
+```sh
+(
+  set -eu
+  compose() { docker compose --env-file .env "$@"; }
+  compose down
+  BACKUP_ROOT=/absolute/private/echo-authority-readable-search-snapshots
+  install -d -m 0700 "$BACKUP_ROOT"
+  INCIDENT_DIRECTORY="$(mktemp -d "$BACKUP_ROOT/incident-XXXXXXXX")"
+  (umask 077 && tar -czf "$INCIDENT_DIRECTORY/data.tar.gz" data)
+  chmod 0600 "$INCIDENT_DIRECTORY/data.tar.gz"
+  tar -tzf "$INCIDENT_DIRECTORY/data.tar.gz" >/dev/null
+  shasum -a 256 "$INCIDENT_DIRECTORY/data.tar.gz"
+  compose run --rm --no-deps authority \
+    rebuild-readable-search --config /echo/authority.json
+  compose run --rm --no-deps authority \
+    verify-readable-search-backup --config /echo/authority.json
+  VERIFIED_DIRECTORY="$(mktemp -d "$BACKUP_ROOT/verified-XXXXXXXX")"
+  (umask 077 && tar -czf "$VERIFIED_DIRECTORY/data.tar.gz" data)
+  chmod 0600 "$VERIFIED_DIRECTORY/data.tar.gz"
+  tar -tzf "$VERIFIED_DIRECTORY/data.tar.gz" >/dev/null
+  shasum -a 256 "$VERIFIED_DIRECTORY/data.tar.gz"
+  compose up -d --no-build --wait --wait-timeout 90
+)
+```
+
+The first archive above is an **unverified incident snapshot**: it preserves
+the stale pre-rebuild state for investigation and must not replace the last
+known-good backup. The second archive follows a successful verifier receipt and
+is the recovery-grade backup. For routine stopped backups with an already
+exact-head generation, run the verifier before creating the only archive.
+
+`verify-readable-search-backup` must run while stopped before a recovery-grade
+archive and again after a restore, before any external reconciliation. It
+returns `verified` for an admitted active generation or `not_built` when no
+active pointer exists; it otherwise rejects the pointer/head mismatch, bad
+contract or generation, staging directories, or SQLite sidecars. The archive
+must retain the complete `data` directory, including `record-retrieval/`; never
+copy, repair, or restore a generation directory independently of
+`authority.sqlite` and the record databases.
+
+Stopped readable-search query-audit maintenance uses the same boundary:
+
+```sh
+docker compose run --rm --no-deps authority \
+  readable-search-query-audit-export --config /echo/authority.json \
+  --command /absolute/private/export-command.json \
+  --output /absolute/private/readable-search-query-audit.json
+
+docker compose run --rm --no-deps authority \
+  readable-search-query-audit-expire --config /echo/authority.json \
+  --command /absolute/private/expiry-command.json
+```
+
+The signed `sqa_` commands require the current active owner and five-minute
+first-execution freshness. Export output is create-once and must remain outside
+managed `data`.
+
 The volume has the deployment-stable Docker name
 `echo-organization-authority-runtime`, so changing Compose project names does
 not create a second coordination island. If one Docker host runs more than one
@@ -267,19 +333,25 @@ Restarting only `authority` replaces that namespace and strands the existing
 proxy process until `proxy` is also restarted.
 
 Treat the complete `data` directory as one recovery unit. Stop the stack before
-a file-level backup so all four SQLite databases, the signing key, credentials,
-and identity and installation manifests are captured consistently. The derived
-database is the only file that may be absent and rebuilt from a verified log
-before restart; every protected file must be restored together.
+a file-level backup, run `verify-readable-search-backup`, and then archive only
+after its `verified` or `not_built` result so
+all four SQLite databases, the signing key, credentials, identity and
+installation manifests, active pointer, and immutable retrieval generation are
+captured consistently. The derived database is the only SQLite file that may be
+absent and rebuilt from a verified log before restart; a missing retrieval
+generation may be rebuilt only from verified current Layer 1 while stopped.
+Every protected file must otherwise be restored together. A stale-generation
+copy is an unverified incident snapshot until a stopped rebuild and fresh
+verification produce a separate recovery-grade archive.
 
-Before releasing any restored Authority that serves restricted reviewer V1,
-complete the external operator evidence checklist in
+Before making any restored Authority available, complete the external operator
+evidence checklist in
 [`AWS-EC2.md`](./AWS-EC2.md#restore-boundary). Keep the Tunnel and reviewer
-route offline until the current Person roots, integration audit chain, complete
-record log, reviewer-policy facts, and applicable client-held receipts have
-been reconciled against independently retained evidence and the Founder or
-trusted operator records the release decision. A restored database cannot
-serve as evidence that its own historical state is current.
+and readable-search routes offline until current Person roots, the integration
+audit chain, complete record log, both policy-fact families, active pointer and
+generation evidence, and applicable client-held receipts have been reconciled
+against independently retained evidence. A restored database cannot serve as
+evidence that its own historical state is current.
 
 That `data` archive is sufficient for this in-place upgrade rollback because
 `docker compose down` leaves the named Caddy volumes intact. It is not by
