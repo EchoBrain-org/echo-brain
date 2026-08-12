@@ -1,6 +1,10 @@
 import type {
   OrganizationPermissionCheckDecisionV1,
   OrganizationPermissionCheckRequestV1,
+  OrganizationMemberReadablePermissionCheckDecisionV3,
+  OrganizationMemberReadablePermissionCheckRequestV3,
+  OrganizationReviewerPermissionCheckDecisionV2,
+  OrganizationReviewerPermissionCheckRequestV2,
   OrganizationSlackLinkBeginRequestV1,
   OrganizationSlackLinkBeginResponseV1,
   OrganizationSlackLinkCompleteRequestV1,
@@ -46,7 +50,7 @@ export interface OrganizationIntegrationsHttpApplication {
   ): Promise<OnboardSlackOrganizationToolResult>;
   activateSlackApproval(
     input: unknown,
-  ): ActivatedOrganizationSlackApproval;
+  ): ActivatedOrganizationSlackApproval | Promise<ActivatedOrganizationSlackApproval>;
   beginSlackIdentityLink(
     input: OrganizationSlackLinkBeginRequestV1,
     signal?: AbortSignal,
@@ -55,6 +59,16 @@ export interface OrganizationIntegrationsHttpApplication {
     input: OrganizationSlackLinkCompleteRequestV1,
     signal?: AbortSignal,
   ): Promise<OrganizationSlackLinkResultV1>;
+  checkReviewerPermission(
+    request: OrganizationReviewerPermissionCheckRequestV2,
+    signal?: AbortSignal,
+  ): Promise<OrganizationReviewerPermissionCheckDecisionV2>;
+
+  checkOrganizationMemberReadablePermission?(
+    request: OrganizationMemberReadablePermissionCheckRequestV3,
+    signal?: AbortSignal,
+  ): Promise<OrganizationMemberReadablePermissionCheckDecisionV3>;
+
   checkPermission(
     request: OrganizationPermissionCheckRequestV1,
     signal?: AbortSignal,

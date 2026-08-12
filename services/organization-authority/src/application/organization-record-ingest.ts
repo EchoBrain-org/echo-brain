@@ -6,14 +6,20 @@ import {
   MAX_ORGANIZATION_RECORD_DOCUMENT_BYTES,
 } from '@echo-brain/organization-protocol';
 import type {
+  OrganizationRecordEnvelopeAnyVersion,
   OrganizationRecordEnvelopeV1,
+  OrganizationRecordOrganizationMemberApprovalEnvelopeV3,
   OrganizationRecordReceiptPayloadV1,
-  OrganizationRecordReviewerAuthorizationV1,
+  OrganizationRecordReviewerApprovalEnvelopeV2,
 } from '@echo-brain/organization-protocol';
 import type {
   OrganizationAuthorityApplication,
   OrganizationRecordInstallationContext,
 } from './organization-authority.js';
+import { AuthorityOperationError } from '../domain/errors.js';
+
+const ORGANIZATION_PERMISSION_PILOT_NOTICE_REASON_CODE =
+  'active_membership_direct_grant_pilot_notice_v1' as const;
 
 /**
  * A terminal ingest outcome the member files as a permanent rejection.
@@ -33,6 +39,87 @@ export class OrganizationRecordIngestRejectionError extends Error {
   }
 }
 
+/** Structural seam; the record package owns the durable marker/proof types. */
+export interface OrganizationRecordPermissionPilotEligibilityProofView {
+  readonly policy_id: 'pilot-member-readable-v1';
+  readonly presentation_policy_id: 'pilot-two-person-audience-v1';
+  readonly audience_notice_sha256: `sha256:${string}`;
+  readonly message_presentation_sha256: `sha256:${string}`;
+}
+
+export interface OrganizationRecordPermissionPilotActivationView {
+  readonly organization_id: string;
+  readonly policy_id: 'pilot-member-readable-v1';
+  readonly presentation_policy_id: 'pilot-two-person-audience-v1';
+  readonly audience_notice_sha256: `sha256:${string}`;
+}
+
+/**
+ * Startup-cached permission-pilot health. Unlike a nullable marker, this keeps
+ * a clean pre-activation state distinct from a failed marker/index/audit
+ * validation, so a frozen notice-qualified envelope can remain retryable.
+ */
+export type OrganizationRecordPermissionPilotHealthView =
+  | { readonly kind: 'absent' }
+  | {
+      readonly kind: 'ready';
+      readonly activation: OrganizationRecordPermissionPilotActivationView;
+    }
+  | { readonly kind: 'degraded'; readonly failure: Error };
+
+/**
+ * The closed reviewer proof one exact immutable audit row returned. It is
+ * never constructed from client-signed fields: the control plane recomputes it
+ * from stored columns and the fixed consequence before returning it.
+ */
+export interface OrganizationRecordReviewerRestrictedProofView {
+  readonly policy_id: 'restricted-reviewer-v1';
+  readonly reviewer_principal_id: string;
+  readonly reviewer_membership_id: string;
+  readonly reviewer_release_draft_sha256: `sha256:${string}`;
+  readonly approval_presentation_sha256: `sha256:${string}`;
+  readonly semantic_intent_sha256: `sha256:${string}`;
+  readonly message_presentation_sha256: `sha256:${string}`;
+  readonly authorization_audit_event_id: string;
+  readonly authorization_audit_entry_sha256: `sha256:${string}`;
+  readonly evaluated_at: string;
+}
+
+export interface OrganizationRecordReviewerAuthorizationEvidenceView
+  extends OrganizationRecordReviewerRestrictedProofView {
+  readonly authority_id: string;
+  readonly organization_id: string;
+  readonly installation_id: string;
+  readonly approval_id: string;
+  readonly request_id: string;
+  readonly request_sha256: `sha256:${string}`;
+  readonly provider_event_sha256: `sha256:${string}`;
+  readonly adapter_binding_id: string;
+  readonly permission_grant_id: string;
+}
+
+export interface OrganizationRecordOrganizationMemberReadableProofView {
+  readonly policy_id: 'organization-member-readable-v1';
+  readonly policy_contract_sha256: `sha256:${string}`;
+  readonly approving_principal_id: string;
+  readonly approving_membership_id: string;
+  readonly release_draft_sha256: `sha256:${string}`;
+  readonly approval_presentation_sha256: `sha256:${string}`;
+  readonly semantic_intent_sha256: `sha256:${string}`;
+  readonly message_presentation_sha256: `sha256:${string}`;
+  readonly authorization_audit_event_id: string;
+  readonly authorization_audit_entry_sha256: `sha256:${string}`;
+  readonly evaluated_at: string;
+}
+
+export interface OrganizationRecordIntegrationAuditChainView {
+  readonly valid: boolean;
+  readonly entries_verified: number;
+  readonly head_sequence: number;
+  readonly head_entry_sha256: `sha256:${string}` | null;
+  readonly failure: string | null;
+}
+
 /**
  * The read-only view of the Authority's existing integration audit.
  *
@@ -42,6 +129,77 @@ export class OrganizationRecordIngestRejectionError extends Error {
  * produced the evidence is already an appended, immutable audit row.
  */
 export interface OrganizationRecordAuthorizationEvidenceStore {
+  verifyIntegrationAuditChain?(): OrganizationRecordIntegrationAuditChainView;
+
+  readAllowedReviewerAuthorizationEvidenceById?(
+    auditEventId: string,
+  ):
+    | {
+        readonly status: 'matched';
+        readonly evidence: OrganizationRecordReviewerAuthorizationEvidenceView;
+      }
+    | { readonly status: 'absent' | 'corrupt' | 'unavailable' };
+
+  /**
+   * The reviewer lookup is by exact primary key, never a descriptive scan, and
+   * revalidates the stored entry hash and predecessor relation before matching
+   * the closed proof. Healthy `absent`/`mismatch` is terminal invalid input;
+   * `corrupt`/`unavailable` is retryable and degrades reviewer V1 only.
+   */
+  findAllowedReviewerAuthorizationEvidenceById(
+    auditEventId: string,
+    expected: {
+      organization_id: string;
+      installation_id: string;
+      approval_id: string;
+      request_id: string;
+      principal_id: string;
+      membership_id: string;
+      request_sha256: string;
+      provider_event_sha256: string;
+      adapter_binding_id: string;
+      permission_grant_id: string;
+      evaluated_at: string;
+      reviewer_release_draft_sha256: string;
+      approval_presentation_sha256: string;
+      semantic_intent_sha256: string;
+      message_presentation_sha256: string;
+      authorization_audit_entry_sha256: string;
+    },
+  ):
+    | {
+        readonly status: 'matched';
+        readonly audit_entry_sha256: `sha256:${string}`;
+        readonly proof: OrganizationRecordReviewerRestrictedProofView;
+      }
+    | { readonly status: 'absent' | 'mismatch' | 'corrupt' | 'unavailable' };
+
+  /** Exact primary-key reproof of the closed schema-v3 authorization audit. */
+  findAllowedOrganizationMemberAuthorizationEvidenceById?(
+    auditEventId: string,
+    expected: {
+      organization_id: string;
+      installation_id: string;
+      approval_id: string;
+      request_id: string;
+      principal_id: string;
+      membership_id: string;
+      request_sha256: string;
+      provider_event_sha256: string;
+      adapter_binding_id: string;
+      permission_grant_id: string;
+      evaluated_at: string;
+      policy_contract_sha256: string;
+      release_draft_sha256: string;
+      approval_presentation_sha256: string;
+      semantic_intent_sha256: string;
+      message_presentation_sha256: string;
+      authorization_audit_entry_sha256: string;
+    },
+  ):
+    | { readonly status: 'matched'; readonly audit_entry_sha256: `sha256:${string}` }
+    | { readonly status: 'absent' | 'mismatch' | 'corrupt' | 'unavailable' };
+
   findAllowedApprovalAuthorizationEvidence(input: {
     organization_id: string;
     installation_id: string;
@@ -56,7 +214,12 @@ export interface OrganizationRecordAuthorizationEvidenceStore {
     permission_grant_id: string;
     reason_code: string;
     evaluated_at: string;
-  }): { readonly status: 'matched' | 'absent' | 'ambiguous' };
+  }):
+    | {
+        readonly status: 'matched';
+        readonly permission_pilot_eligibility?: OrganizationRecordPermissionPilotEligibilityProofView;
+      }
+    | { readonly status: 'absent' | 'ambiguous' | 'corrupt' };
 }
 
 /** The structural view `OrganizationRecordAuthorityPort` requires. */
@@ -64,8 +227,24 @@ export interface VerifiedOrganizationRecordEnvelopeView {
   readonly envelope: JsonObject;
   readonly envelope_id: string;
   readonly event_type: 'approval' | 'rejection';
+  readonly envelope_schema_version: 1 | 2 | 3;
   readonly idempotency_key: string;
   readonly installation_id: string;
+  readonly permission_pilot_eligibility?: OrganizationRecordPermissionPilotEligibilityProofView;
+  readonly reviewer_restricted_proof?: OrganizationRecordReviewerRestrictedProofView;
+  readonly organization_member_readable_proof?: OrganizationRecordOrganizationMemberReadableProofView;
+}
+
+function isReviewerRestrictedEnvelope(
+  envelope: OrganizationRecordEnvelopeAnyVersion,
+): envelope is OrganizationRecordReviewerApprovalEnvelopeV2 {
+  return envelope.schema_version === 2;
+}
+
+function isOrganizationMemberReadableEnvelope(
+  envelope: OrganizationRecordEnvelopeAnyVersion,
+): envelope is OrganizationRecordOrganizationMemberApprovalEnvelopeV3 {
+  return envelope.schema_version === 3;
 }
 
 export interface OrganizationRecordIngestAuthorityOptions {
@@ -74,6 +253,13 @@ export interface OrganizationRecordIngestAuthorityOptions {
     'recordIngestInstallationContext' | 'verifyRecordEnvelope' | 'signRecordReceipt'
   >;
   readonly evidence: OrganizationRecordAuthorizationEvidenceStore;
+  readonly permissionPilotHealth: OrganizationRecordPermissionPilotHealthView;
+  readonly reviewerRestrictedHealth:
+    | { readonly kind: 'ready' }
+    | { readonly kind: 'degraded'; readonly failure: Error };
+  readonly organizationMemberReadableHealth:
+    | { readonly kind: 'ready' }
+    | { readonly kind: 'degraded'; readonly failure: Error };
 }
 
 function installationIdOf(value: unknown): string {
@@ -120,14 +306,177 @@ export class OrganizationRecordIngestAuthority {
       );
     const envelope = this.validate(value, context);
     this.assertEnrolledSubmitter(envelope, context);
-    this.assertAuditedAuthorization(envelope, context);
+    if (isReviewerRestrictedEnvelope(envelope)) {
+      if (this.options.reviewerRestrictedHealth.kind !== 'ready') {
+        throw new AuthorityOperationError(
+          'unavailable',
+          'reviewer-restricted record ingest is temporarily unavailable',
+        );
+      }
+      const proof = this.assertAuditedReviewerAuthorization(envelope, context);
+      return {
+        envelope: envelope as unknown as JsonObject,
+        envelope_id: envelope.envelope_id,
+        event_type: 'approval',
+        envelope_schema_version: 2,
+        idempotency_key: envelope.idempotency_key,
+        installation_id: envelope.submitter.installation_id,
+        reviewer_restricted_proof: proof,
+      };
+    }
+    if (isOrganizationMemberReadableEnvelope(envelope)) {
+      if (this.options.organizationMemberReadableHealth.kind !== 'ready') {
+        throw new AuthorityOperationError(
+          'unavailable',
+          'organization-member-readable record ingest is temporarily unavailable',
+        );
+      }
+      const proof = this.assertAuditedOrganizationMemberAuthorization(envelope, context);
+      return {
+        envelope: envelope as unknown as JsonObject,
+        envelope_id: envelope.envelope_id,
+        event_type: 'approval',
+        envelope_schema_version: 3,
+        idempotency_key: envelope.idempotency_key,
+        installation_id: envelope.submitter.installation_id,
+        organization_member_readable_proof: proof,
+      };
+    }
+    const permissionPilotEligibility = this.assertAuditedAuthorization(
+      envelope,
+      context,
+    );
     return {
       envelope: envelope as unknown as JsonObject,
       envelope_id: envelope.envelope_id,
       event_type: envelope.event_type,
+      envelope_schema_version: 1,
       idempotency_key: envelope.idempotency_key,
       installation_id: envelope.submitter.installation_id,
+      ...(permissionPilotEligibility === undefined
+        ? {}
+        : { permission_pilot_eligibility: permissionPilotEligibility }),
     };
+  }
+
+  /**
+   * The reviewer path never trusts the client-signed proof fields. It looks up
+   * the one immutable audit row by its exact `aud_*` primary key, requires the
+   * control plane's recomputed entry hash and closed proof to equal every
+   * signed commitment, and only then admits the envelope.
+   */
+  private assertAuditedReviewerAuthorization(
+    envelope: OrganizationRecordReviewerApprovalEnvelopeV2,
+    context: OrganizationRecordInstallationContext,
+  ): OrganizationRecordReviewerRestrictedProofView {
+    const evidence = envelope.reviewer.authorization;
+    const match =
+      this.options.evidence.findAllowedReviewerAuthorizationEvidenceById(
+        evidence.authorization_audit_event_id,
+        {
+          organization_id: context.organization_id,
+          installation_id: context.installation_id,
+          approval_id: evidence.approval_id,
+          request_id: evidence.request_id,
+          principal_id: evidence.principal_id,
+          membership_id: evidence.membership_id,
+          request_sha256: evidence.request_sha256,
+          provider_event_sha256: evidence.provider_event_sha256,
+          adapter_binding_id: evidence.adapter_binding_id,
+          permission_grant_id: evidence.permission_grant_id,
+          evaluated_at: evidence.evaluated_at,
+          reviewer_release_draft_sha256:
+            evidence.reviewer_release_draft_sha256,
+          approval_presentation_sha256: evidence.approval_presentation_sha256,
+          semantic_intent_sha256: evidence.semantic_intent_sha256,
+          message_presentation_sha256: evidence.message_presentation_sha256,
+          authorization_audit_entry_sha256:
+            evidence.authorization_audit_entry_sha256,
+        },
+      );
+    if (match.status === 'corrupt' || match.status === 'unavailable') {
+      throw new AuthorityOperationError(
+        'unavailable',
+        'organization reviewer authorization evidence is temporarily unavailable',
+      );
+    }
+    if (match.status !== 'matched') {
+      throw new OrganizationRecordIngestRejectionError(
+        'record_authorization_invalid',
+        'record authorization evidence matches no audited allowed reviewer evaluation',
+      );
+    }
+    if (
+      match.audit_entry_sha256 !== evidence.authorization_audit_entry_sha256 ||
+      match.proof.reviewer_principal_id !== envelope.reviewer.principal_id ||
+      match.proof.reviewer_membership_id !== envelope.reviewer.membership_id ||
+      match.proof.evaluated_at !== evidence.evaluated_at
+    ) {
+      throw new OrganizationRecordIngestRejectionError(
+        'record_authorization_invalid',
+        'record authorization reviewer proof does not match the audited evaluation',
+      );
+    }
+    return match.proof;
+  }
+
+  private assertAuditedOrganizationMemberAuthorization(
+    envelope: OrganizationRecordOrganizationMemberApprovalEnvelopeV3,
+    context: OrganizationRecordInstallationContext,
+  ): OrganizationRecordOrganizationMemberReadableProofView {
+    const evidence = envelope.reviewer.authorization;
+    const lookup = this.options.evidence.findAllowedOrganizationMemberAuthorizationEvidenceById;
+    if (lookup === undefined) {
+      throw new AuthorityOperationError(
+        'unavailable',
+        'organization-member authorization audit reproof is unavailable',
+      );
+    }
+    const match = lookup.call(this.options.evidence, evidence.authorization_audit_event_id, {
+      organization_id: context.organization_id,
+      installation_id: context.installation_id,
+      approval_id: evidence.approval_id,
+      request_id: evidence.request_id,
+      principal_id: evidence.principal_id,
+      membership_id: evidence.membership_id,
+      request_sha256: evidence.request_sha256,
+      provider_event_sha256: evidence.provider_event_sha256,
+      adapter_binding_id: evidence.adapter_binding_id,
+      permission_grant_id: evidence.permission_grant_id,
+      evaluated_at: evidence.evaluated_at,
+      policy_contract_sha256: evidence.policy_contract_sha256,
+      release_draft_sha256: evidence.release_draft_sha256,
+      approval_presentation_sha256: evidence.approval_presentation_sha256,
+      semantic_intent_sha256: evidence.semantic_intent_sha256,
+      message_presentation_sha256: evidence.message_presentation_sha256,
+      authorization_audit_entry_sha256: evidence.authorization_audit_entry_sha256,
+    });
+    if (match.status === 'corrupt' || match.status === 'unavailable') {
+      throw new AuthorityOperationError(
+        'unavailable',
+        'organization-member authorization evidence is temporarily unavailable',
+      );
+    }
+    if (match.status !== 'matched' ||
+      match.audit_entry_sha256 !== evidence.authorization_audit_entry_sha256) {
+      throw new OrganizationRecordIngestRejectionError(
+        'record_authorization_invalid',
+        'record authorization evidence matches no audited organization-member evaluation',
+      );
+    }
+    return Object.freeze({
+      policy_id: 'organization-member-readable-v1',
+      policy_contract_sha256: evidence.policy_contract_sha256,
+      approving_principal_id: evidence.principal_id,
+      approving_membership_id: evidence.membership_id,
+      release_draft_sha256: evidence.release_draft_sha256,
+      approval_presentation_sha256: evidence.approval_presentation_sha256,
+      semantic_intent_sha256: evidence.semantic_intent_sha256,
+      message_presentation_sha256: evidence.message_presentation_sha256,
+      authorization_audit_event_id: evidence.authorization_audit_event_id,
+      authorization_audit_entry_sha256: evidence.authorization_audit_entry_sha256,
+      evaluated_at: evidence.evaluated_at,
+    });
   }
 
   signReceipt(payload: OrganizationRecordReceiptPayloadV1): Promise<JsonObject> {
@@ -139,7 +488,7 @@ export class OrganizationRecordIngestAuthority {
   private validate(
     value: unknown,
     context: OrganizationRecordInstallationContext,
-  ): OrganizationRecordEnvelopeV1 {
+  ): OrganizationRecordEnvelopeAnyVersion {
     try {
       return this.options.authority.verifyRecordEnvelope(
         value,
@@ -204,7 +553,7 @@ export class OrganizationRecordIngestAuthority {
    * one exact allowed audit row for this organization and installation.
    */
   private assertEnrolledSubmitter(
-    envelope: OrganizationRecordEnvelopeV1,
+    envelope: OrganizationRecordEnvelopeAnyVersion,
     context: OrganizationRecordInstallationContext,
   ): void {
     const evidence = envelope.reviewer.authorization;
@@ -224,15 +573,17 @@ export class OrganizationRecordIngestAuthority {
 
   /**
    * The evidence is only worth what the Authority's own audit says. Every
-   * frozen field is matched against one allowed row; absent and ambiguous both
-   * deny, because "some row might be this evaluation" authorizes nothing.
+   * frozen field is matched against one allowed row. Ordinary evidence that is
+   * absent or ambiguous is terminally invalid. Notice-qualified evidence stays
+   * retryable when its audit proof cannot be established: permanently rejecting
+   * the already-frozen envelope would lose a record because of Authority-owned
+   * pilot state or audit availability.
    */
   private assertAuditedAuthorization(
     envelope: OrganizationRecordEnvelopeV1,
     context: OrganizationRecordInstallationContext,
-  ): void {
-    const evidence: OrganizationRecordReviewerAuthorizationV1 =
-      envelope.reviewer.authorization;
+  ): OrganizationRecordPermissionPilotEligibilityProofView | undefined {
+    const evidence = envelope.reviewer.authorization;
     const match = this.options.evidence.findAllowedApprovalAuthorizationEvidence({
       organization_id: context.organization_id,
       installation_id: context.installation_id,
@@ -248,7 +599,16 @@ export class OrganizationRecordIngestAuthority {
       reason_code: evidence.reason_code,
       evaluated_at: evidence.evaluated_at,
     });
+    const noticeQualified =
+      evidence.reason_code ===
+      ORGANIZATION_PERMISSION_PILOT_NOTICE_REASON_CODE;
     if (match.status !== 'matched') {
+      if (noticeQualified) {
+        throw new AuthorityOperationError(
+          'unavailable',
+          'organization permission pilot authorization evidence is temporarily unavailable',
+        );
+      }
       throw new OrganizationRecordIngestRejectionError(
         'record_authorization_invalid',
         match.status === 'ambiguous'
@@ -256,5 +616,35 @@ export class OrganizationRecordIngestAuthority {
           : 'record authorization evidence matches no audited allowed evaluation',
       );
     }
+    const proof = match.permission_pilot_eligibility;
+    if (proof === undefined) {
+      if (noticeQualified) {
+        throw new AuthorityOperationError(
+          'unavailable',
+          'organization permission pilot authorization evidence is incomplete',
+        );
+      }
+      return undefined;
+    }
+    const health = this.options.permissionPilotHealth;
+    if (health.kind !== 'ready') {
+      throw new AuthorityOperationError(
+        'unavailable',
+        'organization permission pilot activation is temporarily unavailable',
+      );
+    }
+    const activation = health.activation;
+    if (
+      activation.organization_id !== context.organization_id ||
+      proof.policy_id !== activation.policy_id ||
+      proof.presentation_policy_id !== activation.presentation_policy_id ||
+      proof.audience_notice_sha256 !== activation.audience_notice_sha256
+    ) {
+      throw new OrganizationRecordIngestRejectionError(
+        'record_authorization_invalid',
+        'record authorization notice proof does not match the active permission pilot',
+      );
+    }
+    return proof;
   }
 }

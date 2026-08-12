@@ -7,7 +7,10 @@ import {
   validateOrganizationInstallationAccessState,
   MAX_ORGANIZATION_RECORD_DOCUMENT_BYTES,
 } from '@echo-brain/organization-protocol';
-import type { JsonValue } from '@echo-brain/federation-protocol';
+import {
+  canonicalJsonBytes,
+  type JsonValue,
+} from '@echo-brain/federation-protocol';
 import type {
   AcceptedOrganizationRecordV1,
   CompleteOrganizationEnrollmentRequestV1,
@@ -32,6 +35,9 @@ import type {
   OrganizationMembershipSummaryV1,
   OrganizationPermissionCheckDecisionV1,
   OrganizationPermissionCheckRequestV1,
+  OrganizationRecentDecisionItemV1,
+  OrganizationRecentDecisionsRequestV1,
+  OrganizationRecentDecisionsResponseV1,
   OrganizationRecordRejectionCodeV1,
   OrganizationSlackLinkBeginRequestV1,
   OrganizationSlackLinkBeginResponseV1,
@@ -46,12 +52,19 @@ import type {
   RevokedOrganizationMembershipV1,
   SubmitOrganizationRecordEnvelopeRequestV1,
 } from './contracts.js';
+import { ORGANIZATION_API_RECENT_DECISIONS_PATH } from './http.js';
 import { organizationPermissionProviderEventSha256 } from './permission-check-event.js';
 import { isCanonicalOrganizationSlackLinkChallengeCode } from './slack-link-challenge-code.js';
 
 export const MAX_ORGANIZATION_API_BODY_BYTES = 16 * 1024;
 export const MAX_ENROLLMENT_GRANT_LIFETIME_SECONDS = 7 * 24 * 60 * 60;
 export const MAX_ORGANIZATION_API_PAGE_ITEMS = 100;
+export const MAX_ORGANIZATION_RECENT_DECISIONS_ITEMS = 10;
+export const MAX_ORGANIZATION_RECENT_DECISIONS_RESPONSE_BYTES = 60 * 1024;
+export const ORGANIZATION_RECENT_DECISIONS_POLICY_ID =
+  'pilot-member-readable-v1' as const;
+export const ORGANIZATION_RECENT_DECISIONS_WITNESS =
+  'Readable because your active membership is one of the two memberships bound to pilot-member-readable-v1 and the returned records carry the exact two-person sharing notice.' as const;
 export const MAX_ORGANIZATION_API_CURSOR_CHARACTERS = 512;
 export const MAX_ORGANIZATION_AUDIT_DETAIL_NODES = 256;
 export const MAX_ORGANIZATION_AUDIT_DETAIL_DEPTH = 8;
@@ -84,11 +97,19 @@ export function isOrganizationApiValidationError(
   return value instanceof OrganizationApiValidationError;
 }
 
-function fail(message: string, cause?: unknown): never {
+/**
+ * The shared primitives below are exported for sibling validators inside this
+ * package only. `index.ts` re-exports none of them, so the published API
+ * surface is unchanged.
+ */
+export function fail(message: string, cause?: unknown): never {
   throw new OrganizationApiValidationError(message, { cause });
 }
 
-function asRecord(value: unknown, label: string): Record<string, unknown> {
+export function asRecord(
+  value: unknown,
+  label: string,
+): Record<string, unknown> {
   if (
     typeof value !== 'object' ||
     value === null ||
@@ -109,7 +130,7 @@ function asRecord(value: unknown, label: string): Record<string, unknown> {
   return value as Record<string, unknown>;
 }
 
-function assertExactKeys(
+export function assertExactKeys(
   value: Record<string, unknown>,
   keys: readonly string[],
   label: string,
@@ -124,7 +145,59 @@ function assertExactKeys(
   }
 }
 
-function assertString(
+/**
+ * Reviewer wire families are closed recursively. Reject in-memory properties
+ * that RFC 8785 would otherwise omit instead of validating a different
+ * apparent object. This is opt-in so landed schema-v1 snapshot semantics stay
+ * unchanged.
+ */
+export function assertOnlyEnumerableDataProperties(
+  value: unknown,
+  label: string,
+  seen: Set<object> = new Set<object>(),
+): void {
+  if (typeof value !== 'object' || value === null) return;
+  if (seen.has(value)) fail(`${label} must not contain a cycle`);
+  seen.add(value);
+  try {
+    if (Object.getOwnPropertySymbols(value).length !== 0) {
+      fail(`${label} must not contain symbol properties`);
+    }
+    if (Array.isArray(value)) {
+      const names = Object.getOwnPropertyNames(value);
+      if (names.length !== value.length + 1 || !names.includes('length')) {
+        fail(`${label} must contain only dense array elements`);
+      }
+      for (let index = 0; index < value.length; index += 1) {
+        const descriptor = Object.getOwnPropertyDescriptor(
+          value,
+          String(index),
+        );
+        if (
+          descriptor === undefined ||
+          !('value' in descriptor) ||
+          descriptor.enumerable !== true
+        ) {
+          fail(`${label} must contain only enumerable data properties`);
+        }
+        assertOnlyEnumerableDataProperties(descriptor.value, label, seen);
+      }
+      return;
+    }
+    for (const descriptor of Object.values(
+      Object.getOwnPropertyDescriptors(value),
+    )) {
+      if (!('value' in descriptor) || descriptor.enumerable !== true) {
+        fail(`${label} must contain only enumerable data properties`);
+      }
+      assertOnlyEnumerableDataProperties(descriptor.value, label, seen);
+    }
+  } finally {
+    seen.delete(value);
+  }
+}
+
+export function assertString(
   value: unknown,
   label: string,
   maximumLength: number,
@@ -140,7 +213,7 @@ function assertString(
   }
 }
 
-function assertPatternString(
+export function assertPatternString(
   value: unknown,
   label: string,
   maximumLength: number,
@@ -150,13 +223,16 @@ function assertPatternString(
   if (!pattern.test(value)) fail(`${label} is invalid`);
 }
 
-function assertDigest(value: unknown, label: string): asserts value is string {
+export function assertDigest(
+  value: unknown,
+  label: string,
+): asserts value is string {
   if (typeof value !== 'string' || !DIGEST_PATTERN.test(value)) {
     fail(`${label} must be a canonical SHA-256 digest`);
   }
 }
 
-function assertId(value: unknown, prefix: string, label: string): void {
+export function assertId(value: unknown, prefix: string, label: string): void {
   if (
     typeof value !== 'string' ||
     !value.startsWith(`${prefix}_`) ||
@@ -316,7 +392,7 @@ function validateUniquePage<T>(
   return page;
 }
 
-function assertTimestamp(
+export function assertTimestamp(
   value: unknown,
   label: string,
 ): asserts value is string {
@@ -346,7 +422,7 @@ function validateMembershipType(value: unknown, label: string): void {
   }
 }
 
-function validateIntegrity(
+export function validateIntegrity(
   value: unknown,
   documentLabel = 'access lease request',
 ): OrganizationApiSignedIntegrityV1 {
@@ -710,6 +786,163 @@ export function validateOrganizationPermissionCheckDecision(
     'permission check decision evaluated_at',
   );
   return record as unknown as OrganizationPermissionCheckDecisionV1;
+}
+
+export function validateOrganizationRecentDecisionsRequest(
+  value: unknown,
+): OrganizationRecentDecisionsRequestV1 {
+  const label = 'recent decisions request';
+  const record = asRecord(value, label);
+  assertExactKeys(
+    record,
+    [
+      'schema_version',
+      'kind',
+      'request_id',
+      'authority_id',
+      'authority_key_id',
+      'organization_id',
+      'enrollment_id',
+      'installation_id',
+      'installation_key_id',
+      'http_method',
+      'http_path',
+      'requested_at',
+      'integrity',
+    ],
+    label,
+  );
+  if (
+    record.schema_version !== 1 ||
+    record.kind !== 'echo-organization-recent-decisions-request'
+  ) {
+    fail('recent decisions request version or kind is unsupported');
+  }
+  assertId(record.request_id, 'rdr', 'recent decisions request request_id');
+  assertId(record.authority_id, 'oau', 'recent decisions request authority_id');
+  assertDigest(
+    record.authority_key_id,
+    'recent decisions request authority_key_id',
+  );
+  assertId(
+    record.organization_id,
+    'org',
+    'recent decisions request organization_id',
+  );
+  assertId(
+    record.enrollment_id,
+    'enr',
+    'recent decisions request enrollment_id',
+  );
+  assertId(
+    record.installation_id,
+    'ins',
+    'recent decisions request installation_id',
+  );
+  assertDigest(
+    record.installation_key_id,
+    'recent decisions request installation_key_id',
+  );
+  if (
+    record.http_method !== 'POST' ||
+    record.http_path !== ORGANIZATION_API_RECENT_DECISIONS_PATH
+  ) {
+    fail('recent decisions request HTTP operation is unsupported');
+  }
+  assertTimestamp(record.requested_at, 'recent decisions request requested_at');
+  const integrity = validateIntegrity(record.integrity, label);
+  if (integrity.key_id !== record.installation_key_id) {
+    fail(
+      'recent decisions request signature key does not match installation key',
+    );
+  }
+  return {
+    ...record,
+    integrity,
+  } as unknown as OrganizationRecentDecisionsRequestV1;
+}
+
+function validateOrganizationRecentDecisionItem(
+  value: unknown,
+  index: number,
+): OrganizationRecentDecisionItemV1 {
+  const label = `recent decisions response items[${index}]`;
+  const record = asRecord(value, label);
+  assertExactKeys(record, ['atom_id', 'kind', 'text', 'record_hash'], label);
+  assertDigest(record.atom_id, `${label} atom_id`);
+  if (
+    record.kind !== 'decision' &&
+    record.kind !== 'action' &&
+    record.kind !== 'rationale'
+  ) {
+    fail(`${label} kind is unsupported`);
+  }
+  if (typeof record.text !== 'string' || record.text.trim().length === 0) {
+    fail(`${label} text must be a non-empty string`);
+  }
+  assertDigest(record.record_hash, `${label} record_hash`);
+  return record as unknown as OrganizationRecentDecisionItemV1;
+}
+
+export function validateOrganizationRecentDecisionsResponse(
+  value: unknown,
+): OrganizationRecentDecisionsResponseV1 {
+  const label = 'recent decisions response';
+  const record = asRecord(value, label);
+  assertExactKeys(
+    record,
+    ['schema_version', 'policy_id', 'witness', 'items'],
+    label,
+  );
+  if (
+    record.schema_version !== 1 ||
+    record.policy_id !== ORGANIZATION_RECENT_DECISIONS_POLICY_ID ||
+    record.witness !== ORGANIZATION_RECENT_DECISIONS_WITNESS
+  ) {
+    fail(
+      'recent decisions response version, policy, or witness is unsupported',
+    );
+  }
+  if (!Array.isArray(record.items)) {
+    fail('recent decisions response items must be an array');
+  }
+  if (record.items.length > MAX_ORGANIZATION_RECENT_DECISIONS_ITEMS) {
+    fail('recent decisions response exceeds the maximum item count');
+  }
+  if (
+    Object.getOwnPropertySymbols(record.items).length !== 0 ||
+    Object.keys(record.items).length !== record.items.length
+  ) {
+    fail('recent decisions response items must be a dense array');
+  }
+  const descriptors = Object.getOwnPropertyDescriptors(record.items);
+  const items: OrganizationRecentDecisionItemV1[] = [];
+  for (let index = 0; index < record.items.length; index += 1) {
+    const descriptor = descriptors[String(index)];
+    if (descriptor === undefined || !('value' in descriptor)) {
+      fail('recent decisions response items must be a dense array');
+    }
+    items.push(validateOrganizationRecentDecisionItem(descriptor.value, index));
+  }
+  if (new Set(items.map((item) => item.atom_id)).size !== items.length) {
+    fail('recent decisions response repeats an atom_id');
+  }
+  const result: OrganizationRecentDecisionsResponseV1 = {
+    schema_version: 1,
+    policy_id: ORGANIZATION_RECENT_DECISIONS_POLICY_ID,
+    witness: ORGANIZATION_RECENT_DECISIONS_WITNESS,
+    items,
+  };
+  let canonicalBytes: number;
+  try {
+    canonicalBytes = canonicalJsonBytes(result).byteLength;
+  } catch (error) {
+    fail('recent decisions response is not canonicalizable', error);
+  }
+  if (canonicalBytes > MAX_ORGANIZATION_RECENT_DECISIONS_RESPONSE_BYTES) {
+    fail('recent decisions response exceeds its canonical byte limit');
+  }
+  return result;
 }
 
 function validateSlackLinkRequestIdentity(

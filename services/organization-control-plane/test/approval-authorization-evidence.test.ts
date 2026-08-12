@@ -18,6 +18,8 @@ const REQUEST_ID = "pcr_bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb";
 const APPROVAL_ID = "f".repeat(64);
 const ADAPTER_BINDING_ID = "bnd_55555555-5555-4555-8555-555555555555";
 const PERMISSION_GRANT_ID = "pgr_66666666-6666-4666-8666-666666666666";
+const AUDIENCE_NOTICE_SHA256 = digest("audience-notice");
+const MESSAGE_PRESENTATION_SHA256 = digest("message-presentation");
 
 function digest(value: string): `sha256:${string}` {
   return `sha256:${createHash("sha256").update(value).digest("hex")}`;
@@ -110,7 +112,98 @@ describe("allowed approval authorization evidence lookup", () => {
 
       expect(
         repository.findAllowedApprovalAuthorizationEvidence(lookup()),
-      ).toMatchObject({ status: "matched" });
+      ).toEqual({ status: "matched" });
+    } finally {
+      database.close();
+    }
+  });
+
+  it("returns the exact pilot eligibility proof from notice-qualified audit detail", () => {
+    const { repository, database } = openRepository();
+    try {
+      repository.recordPermissionDecision(
+        decision({
+          reason_code: "active_membership_direct_grant_pilot_notice_v1",
+          detail: {
+            provider: "slack",
+            provider_subject_id: "U12345678",
+            presentation_policy_id: "pilot-two-person-audience-v1",
+            audience_notice_sha256: AUDIENCE_NOTICE_SHA256,
+            message_presentation_sha256: MESSAGE_PRESENTATION_SHA256,
+          },
+        }),
+      );
+
+      expect(
+        repository.findAllowedApprovalAuthorizationEvidence(
+          lookup({
+            reason_code:
+              "active_membership_direct_grant_pilot_notice_v1",
+          }),
+        ),
+      ).toEqual({
+        status: "matched",
+        permission_pilot_eligibility: {
+          policy_id: "pilot-member-readable-v1",
+          presentation_policy_id: "pilot-two-person-audience-v1",
+          audience_notice_sha256: AUDIENCE_NOTICE_SHA256,
+          message_presentation_sha256: MESSAGE_PRESENTATION_SHA256,
+        },
+      });
+    } finally {
+      database.close();
+    }
+  });
+
+  it.each([
+    {
+      label: "missing presentation policy",
+      detail: {
+        audience_notice_sha256: AUDIENCE_NOTICE_SHA256,
+        message_presentation_sha256: MESSAGE_PRESENTATION_SHA256,
+      },
+    },
+    {
+      label: "changed presentation policy",
+      detail: {
+        presentation_policy_id: "other-policy",
+        audience_notice_sha256: AUDIENCE_NOTICE_SHA256,
+        message_presentation_sha256: MESSAGE_PRESENTATION_SHA256,
+      },
+    },
+    {
+      label: "missing audience digest",
+      detail: {
+        presentation_policy_id: "pilot-two-person-audience-v1",
+        message_presentation_sha256: MESSAGE_PRESENTATION_SHA256,
+      },
+    },
+    {
+      label: "malformed message digest",
+      detail: {
+        presentation_policy_id: "pilot-two-person-audience-v1",
+        audience_notice_sha256: AUDIENCE_NOTICE_SHA256,
+        message_presentation_sha256: "sha256:not-a-digest",
+      },
+    },
+  ])("reports corrupt notice evidence with $label", ({ detail }) => {
+    const { repository, database } = openRepository();
+    try {
+      repository.recordPermissionDecision(
+        decision({
+          reason_code: "active_membership_direct_grant_pilot_notice_v1",
+          detail,
+        }),
+      );
+
+      expect(
+        repository.findAllowedApprovalAuthorizationEvidence(
+          lookup({
+            reason_code:
+              "active_membership_direct_grant_pilot_notice_v1",
+          }),
+        ),
+      ).toEqual({ status: "corrupt" });
     } finally {
       database.close();
     }

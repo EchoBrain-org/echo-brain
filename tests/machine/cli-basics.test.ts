@@ -22,6 +22,7 @@ describe('standalone CLI basics', () => {
     expect(stdout.read()).toContain('echo-brain bootstrap');
     expect(stdout.read()).toContain('echo-brain validate-config');
     expect(stdout.read()).toContain('echo-brain organization enroll');
+    expect(stdout.read()).toContain('echo-brain organization recent-decisions');
     expect(stdout.read()).toContain(
       'echo-brain update apply --channel internal-live',
     );

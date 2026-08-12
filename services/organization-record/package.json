@@ -10,6 +10,22 @@
     ".": {
       "types": "./dist/index.d.ts",
       "import": "./dist/index.js"
+    },
+    "./append": {
+      "types": "./dist/append.d.ts",
+      "import": "./dist/append.js"
+    },
+    "./maintenance": {
+      "types": "./dist/maintenance.d.ts",
+      "import": "./dist/maintenance.js"
+    },
+    "./reviewer": {
+      "types": "./dist/reviewer.d.ts",
+      "import": "./dist/reviewer.js"
+    },
+    "./retrieval-build": {
+      "types": "./dist/retrieval-build.d.ts",
+      "import": "./dist/retrieval-build.js"
     }
   },
   "files": [

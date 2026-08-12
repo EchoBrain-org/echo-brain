@@ -27,6 +27,15 @@ export type {
   OrganizationRecordSubmissionResult,
   VerifiedOrganizationRecordReceipt,
 } from './ports.js';
+export {
+  renderReviewerApprovalPresentation,
+  reviewerApprovalPresentationRenderer,
+  reviewerCredentialFingerprintSha256,
+} from './adapters/reviewer-presentation-renderer.js';
+export type {
+  ReviewerPresentationRenderInput,
+  ReviewerPresentationRendering,
+} from './adapters/reviewer-presentation-renderer.js';
 export { ProtocolOrganizationRecordEnvelopeBuilder } from './adapters/protocol-record-envelope-builder.js';
 export type { ProtocolOrganizationRecordEnvelopeBuilderOptions } from './adapters/protocol-record-envelope-builder.js';
 export {

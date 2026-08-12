@@ -3,6 +3,7 @@ import { createServer } from 'node:net';
 import {
   chmodSync,
   existsSync,
+  mkdirSync,
   mkdtempSync,
   readFileSync,
   readdirSync,
@@ -13,15 +14,15 @@ import {
   writeFileSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import Database from 'better-sqlite3';
 import { afterEach, describe, expect, it } from 'vitest';
-import { canonicalJson, sha256Digest } from '@echo-brain/federation-protocol';
+import { canonicalJson, parseCanonicalJson, sha256Digest } from '@echo-brain/federation-protocol';
 import {
   ORGANIZATION_RECORD_DERIVED_DATABASE,
   OrganizationRecordLogStore,
   openOrganizationRecordDatabase,
-} from '@echo-brain/organization-record';
+} from '@echo-brain/organization-record/maintenance';
 import {
   authorityStatePaths,
   readAuthorityRuntimeConfig,
@@ -31,10 +32,13 @@ import {
 import {
   initializeDevelopmentAuthority,
   inspectAuthorityServePreflight,
+  rebuildAuthorityReadableSearch,
   rebuildAuthorityDerivedRecordStore,
+  verifyAuthorityReadableSearchBackup,
 } from '../src/composition/operator-state.js';
 import { runOrganizationAuthorityCli } from '../src/composition/cli.js';
 import { startOrganizationAuthority } from '../src/composition/runtime.js';
+import { validateReadableSearchGenerationPublishedAuditDetail } from '../src/application/readable-search-persistence.js';
 
 const roots: string[] = [];
 const INSTALLATION_ID = 'ins_00000000-0000-4000-8000-000000000001';
@@ -90,7 +94,6 @@ function underivableEnvelope(index: number): Record<string, unknown> {
 
 function appendRecord(
   config: AuthorityRuntimeConfigV1,
-  index: number,
   envelope: Record<string, unknown>,
 ): void {
   const paths = authorityStatePaths(config.state_dir);
@@ -110,7 +113,6 @@ function appendRecord(
       },
       canonical_envelope: canonicalEnvelope,
       envelope_sha256: sha256Digest(canonicalEnvelope),
-      recorded_at: `2026-08-08T12:00:0${index}.000Z`,
     });
   } finally {
     log.close();
@@ -155,6 +157,34 @@ function expectNoRecordSidecars(
   }
 }
 
+function generationPublicationAudits(databasePath: string): readonly {
+  readonly occurred_at: string;
+  readonly subject_id: string;
+  readonly detail: unknown;
+}[] {
+  const database = new Database(databasePath, { readonly: true });
+  try {
+    return (database
+      .prepare(
+        `SELECT occurred_at, subject_id, detail_json
+         FROM authority_audit_log
+         WHERE action = 'permission.readable_search_generation_published'
+         ORDER BY audit_sequence ASC`,
+      )
+      .all() as readonly {
+        readonly occurred_at: string;
+        readonly subject_id: string;
+        readonly detail_json: string;
+      }[]).map((row) => ({
+      occurred_at: row.occurred_at,
+      subject_id: row.subject_id,
+      detail: parseCanonicalJson(row.detail_json),
+    }));
+  } finally {
+    database.close();
+  }
+}
+
 async function reserveLoopbackPort(): Promise<number> {
   const server = createServer();
   return await new Promise<number>((resolve, reject) => {
@@ -196,10 +226,179 @@ async function initializedFixture(): Promise<{
 }
 
 describe('organization record rebuild-derived', () => {
+  it('builds and atomically publishes an idempotent stopped readable-search generation', async () => {
+    const fixture = await initializedFixture();
+    const paths = authorityStatePaths(fixture.stateDirectory);
+    const stdout: string[] = [];
+    const code = await runOrganizationAuthorityCli(
+      ['rebuild-readable-search', '--config', fixture.configPath],
+      {},
+      { stdout: (value) => stdout.push(value), stderr: () => undefined },
+    );
+    expect(code).toBe(0);
+    const first = JSON.parse(stdout[0] ?? '') as Record<string, unknown>;
+    expect(first).toMatchObject({
+      schema_version: 1,
+      kind: 'echo-organization-authority-readable-search-rebuild',
+      config_path: fixture.configPath,
+      record_head_position: 0,
+      record_head_hash: null,
+    });
+    expect(first.generation_id).toMatch(/^sha256:[0-9a-f]{64}$/);
+    expect(first.manifest_sha256).toMatch(/^sha256:[0-9a-f]{64}$/);
+    expect(existsSync(join(paths.state_directory, 'record-retrieval', 'generations', String(first.generation_id), 'manifest.json'))).toBe(true);
+
+    const second = await rebuildAuthorityReadableSearch(fixture.configPath);
+    expect(second.generation_id).toBe(first.generation_id);
+    expect(second.manifest_sha256).toBe(first.manifest_sha256);
+    const audits = generationPublicationAudits(paths.database_path);
+    expect(audits).toHaveLength(1);
+    const audit = audits[0];
+    expect(audit).toMatchObject({
+      subject_id: fixture.config.organization.organization_id,
+    });
+    const detail = validateReadableSearchGenerationPublishedAuditDetail(audit?.detail);
+    expect(detail).toMatchObject({
+      organization_id: fixture.config.organization.organization_id,
+      publication: {
+        generation_id: first.generation_id,
+        manifest_sha256: first.manifest_sha256,
+        record_head_position: 0,
+        record_head_hash: null,
+      },
+      prior_generation: null,
+      published_at: audit?.occurred_at,
+    });
+    await inspectAuthorityServePreflight(fixture.configPath, fixture.config);
+  });
+
+  it('reports a text-free not-built readable-search backup through the CLI', async () => {
+    const fixture = await initializedFixture();
+    const stdout: string[] = [];
+    const code = await runOrganizationAuthorityCli(
+      ['verify-readable-search-backup', '--config', fixture.configPath],
+      {},
+      { stdout: (value) => stdout.push(value), stderr: () => undefined },
+    );
+    expect(code).toBe(0);
+    const result = JSON.parse(stdout[0] ?? '') as Record<string, unknown>;
+    expect(result).toEqual({
+      schema_version: 1,
+      kind: 'echo-organization-authority-readable-search-backup-verification',
+      config_path: fixture.configPath,
+      organization_id: fixture.config.organization.organization_id,
+      status: 'not_built',
+      generation_id: null,
+      manifest_sha256: null,
+      retrieval_contract_sha256: null,
+      record_head_position: 0,
+      record_head_hash: null,
+    });
+    expect(stdout[0]).toBe(`${canonicalJson(result as never)}\n`);
+  });
+
+  it('rejects an incomplete unreferenced finalized generation even without a pointer', async () => {
+    const fixture = await initializedFixture();
+    const generations = join(
+      fixture.stateDirectory,
+      'record-retrieval',
+      'generations',
+    );
+    mkdirSync(generations, { recursive: true, mode: 0o700 });
+    chmodSync(join(fixture.stateDirectory, 'record-retrieval'), 0o700);
+    chmodSync(generations, 0o700);
+    mkdirSync(join(generations, 'unreferenced-incomplete'), { mode: 0o700 });
+
+    await expect(
+      verifyAuthorityReadableSearchBackup(fixture.configPath),
+    ).rejects.toThrow(/generation manifest/);
+  });
+
+  it('admits the exact active generation and rejects stale or corrupt backup state', async () => {
+    const fixture = await initializedFixture();
+    const built = await rebuildAuthorityReadableSearch(fixture.configPath);
+    const verified = await verifyAuthorityReadableSearchBackup(fixture.configPath);
+    expect(verified).toMatchObject({
+      status: 'verified',
+      generation_id: built.generation_id,
+      manifest_sha256: built.manifest_sha256,
+      record_head_position: built.record_head_position,
+      record_head_hash: built.record_head_hash,
+    });
+
+    appendRecord(fixture.config, rejectionEnvelope(1));
+    await expect(
+      verifyAuthorityReadableSearchBackup(fixture.configPath),
+    ).rejects.toThrow('does not match the exact record head');
+
+    const rebuilt = await rebuildAuthorityReadableSearch(fixture.configPath);
+    await expect(
+      verifyAuthorityReadableSearchBackup(fixture.configPath),
+    ).resolves.toMatchObject({
+      status: 'verified',
+      generation_id: rebuilt.generation_id,
+    });
+    const paths = authorityStatePaths(fixture.stateDirectory);
+    const manifestPath = join(
+      paths.state_directory,
+      'record-retrieval',
+      'generations',
+      rebuilt.generation_id,
+      'manifest.json',
+    );
+    writeFileSync(manifestPath, '{}', { mode: 0o600 });
+    await expect(
+      verifyAuthorityReadableSearchBackup(fixture.configPath),
+    ).rejects.toThrow(/manifest/);
+  });
+
+  it.each([
+    ['staging directory', (generationDirectory: string, _paths: ReturnType<typeof authorityStatePaths>) => {
+      const directory = join(dirname(generationDirectory), '.staging');
+      mkdirSync(directory, { mode: 0o700 });
+    }],
+    ['retrieval SQLite sidecar', (generationDirectory: string, _paths: ReturnType<typeof authorityStatePaths>) => {
+      writeFileSync(join(generationDirectory, 'unexpected.sqlite-wal'), 'stale', { mode: 0o600 });
+    }],
+    ['core SQLite sidecar', (_generationDirectory: string, paths: ReturnType<typeof authorityStatePaths>) => {
+      writeFileSync(`${paths.database_path}-wal`, 'stale', { mode: 0o600 });
+    }],
+    ['wrong-mode retrieval file', (generationDirectory: string, _paths: ReturnType<typeof authorityStatePaths>) => {
+      chmodSync(join(generationDirectory, 'manifest.json'), 0o644);
+    }],
+  ] as const)('rejects readable-search backup %s', async (_label, introduce) => {
+    const fixture = await initializedFixture();
+    const built = await rebuildAuthorityReadableSearch(fixture.configPath);
+    const generationDirectory = join(
+      fixture.stateDirectory,
+      'record-retrieval',
+      'generations',
+      built.generation_id,
+    );
+    introduce(generationDirectory, authorityStatePaths(fixture.stateDirectory));
+    await expect(
+      verifyAuthorityReadableSearchBackup(fixture.configPath),
+    ).rejects.toThrow(/staging directory|SQLite sidecar|0600/);
+  });
+
+  it('refuses readable-search backup verification while the authority owns the state', async () => {
+    const fixture = await initializedFixture();
+    const runtime = await startOrganizationAuthority(
+      resolveAuthorityServeConfig(fixture.config),
+    );
+    try {
+      await expect(
+        verifyAuthorityReadableSearchBackup(fixture.configPath),
+      ).rejects.toThrow('organization authority is already running');
+    } finally {
+      await runtime.close();
+    }
+  });
+
   it('replays a verified log idempotently without changing protected files', async () => {
     const fixture = await initializedFixture();
     const paths = authorityStatePaths(fixture.stateDirectory);
-    appendRecord(fixture.config, 1, rejectionEnvelope(1));
+    appendRecord(fixture.config, rejectionEnvelope(1));
     const protectedBefore = {
       log: fileIdentity(paths.record_log_database_path),
       authority: fileIdentity(paths.database_path),
@@ -254,7 +453,7 @@ describe('organization record rebuild-derived', () => {
     async (condition) => {
       const fixture = await initializedFixture();
       const paths = authorityStatePaths(fixture.stateDirectory);
-      appendRecord(fixture.config, 1, rejectionEnvelope(1));
+      appendRecord(fixture.config, rejectionEnvelope(1));
       const logBefore = fileIdentity(paths.record_log_database_path);
       if (condition === 'missing') {
         unlinkSync(paths.record_derived_database_path);
@@ -335,8 +534,8 @@ describe('organization record rebuild-derived', () => {
   it('cleans staging and preserves the target when projection halts', async () => {
     const fixture = await initializedFixture();
     const paths = authorityStatePaths(fixture.stateDirectory);
-    appendRecord(fixture.config, 1, rejectionEnvelope(1));
-    appendRecord(fixture.config, 2, underivableEnvelope(2));
+    appendRecord(fixture.config, rejectionEnvelope(1));
+    appendRecord(fixture.config, underivableEnvelope(2));
     const derivedBefore = fileIdentity(paths.record_derived_database_path);
 
     await expect(

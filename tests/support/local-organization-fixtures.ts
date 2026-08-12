@@ -363,6 +363,21 @@ export function descriptorClient(
     checkPermission: async () => {
       throw new Error('unexpected permission check');
     },
+    checkReviewerPermission: async () => {
+      throw new Error('unexpected reviewer permission check');
+    },
+    checkOrganizationMemberPermission: async () => {
+      throw new Error('unexpected organization-member permission check');
+    },
+    readRecentDecisions: async () => {
+      throw new Error('unexpected recent decisions read');
+    },
+    readReviewerRecentDecisions: async () => {
+      throw new Error('unexpected reviewer recent decisions read');
+    },
+    readReadableSearch: async () => {
+      throw new Error('unexpected readable search');
+    },
     beginSlackLink: async () => {
       throw new Error('unexpected Slack link begin');
     },

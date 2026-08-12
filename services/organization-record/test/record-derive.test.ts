@@ -1,13 +1,15 @@
 import { join } from 'node:path';
 import { afterAll, describe, expect, it } from 'vitest';
 import {
+  type JsonObject,
+  type OrganizationRecordAlert,
+} from '../src/index.js';
+import {
   OrganizationRecordDerivedStore,
   OrganizationRecordFollower,
   OrganizationRecordIngest,
   OrganizationRecordLogReader,
-  type JsonObject,
-  type OrganizationRecordAlert,
-} from '../src/index.js';
+} from '../src/append.js';
 import type { OrganizationRecordLogReaderPort } from '../src/application/ports.js';
 import {
   derivedApprovalGroupId,

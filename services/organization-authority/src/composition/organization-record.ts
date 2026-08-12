@@ -1,22 +1,32 @@
 import {
-  isOrganizationRecordError,
   OrganizationRecordDerivedStore,
   OrganizationRecordFollower,
   OrganizationRecordIngest,
   OrganizationRecordLogReader,
   OrganizationRecordLogStore,
+  OrganizationPermissionPilotReader,
   verifyOrganizationRecordChain,
+  createReviewerRecordPort,
+} from '@echo-brain/organization-record/append';
+import {
+  isOrganizationRecordError,
+  parseOrganizationRecordEnvelope,
 } from '@echo-brain/organization-record';
 import type {
   OrganizationRecordAlert,
   OrganizationRecordChainVerification,
+  OrganizationPermissionPilotActivationMarkerV1,
+  OrganizationPermissionPilotEligibleRecord,
 } from '@echo-brain/organization-record';
+import type { ReviewerRecordPort } from '@echo-brain/organization-record/reviewer';
 import {
   validateAcceptedOrganizationRecord,
   type AcceptedOrganizationRecordV1,
   type SubmitOrganizationRecordEnvelopeRequestV1,
 } from '@echo-brain/organization-api';
+import { validateOrganizationRecordEnvelope } from '@echo-brain/organization-protocol';
 import { AuthorityOperationError } from '../domain/errors.js';
+import type { ReadableSearchAuthorizationFence } from '../application/readable-search-authorization-fence.js';
 import {
   OrganizationRecordIngestAuthority,
   OrganizationRecordIngestRejectionError,
@@ -24,6 +34,16 @@ import {
 } from '../application/organization-record-ingest.js';
 import type { OrganizationAuthorityApplication } from '../application/organization-authority.js';
 import type { OrganizationRecordHttpApplication } from '../presentation/organization-record-http-application.js';
+import { reviewerRestrictedEnvelopeValidator } from './reviewer-envelope-validator.js';
+import { organizationMemberReadableEnvelopeValidator } from './organization-member-envelope-validator.js';
+import {
+  verifyReviewerRestrictedReadiness,
+  type ReviewerRestrictedReadiness,
+} from './reviewer-restricted-admission.js';
+import {
+  verifyOrganizationMemberReadableReadiness,
+  type OrganizationMemberReadableReadiness,
+} from './organization-member-readable-admission.js';
 
 export interface OpenOrganizationRecordRuntimeOptions {
   readonly authority: OrganizationAuthorityApplication;
@@ -32,6 +52,8 @@ export interface OpenOrganizationRecordRuntimeOptions {
   readonly authority_id: string;
   readonly record_log_database_path: string;
   readonly record_derived_database_path: string;
+  /** Shared with current-Person writes; acquired only for the append commit. */
+  readonly authorization_fence?: ReadableSearchAuthorizationFence;
   /** Operator alerting. Defaults to one line per alert on stderr. */
   readonly alert?: (alert: OrganizationRecordAlert) => void;
   /**
@@ -47,11 +69,48 @@ export interface OpenOrganizationRecordRuntimeOptions {
   readonly onFatal?: (failure: Error) => void;
 }
 
+/**
+ * The startup-cached health of the optional permission pilot.
+ *
+ * `absent` is the clean pre-activation state. `degraded` means activation,
+ * eligibility, or its backing notice audit failed validation; keeping that
+ * state distinct prevents both hidden empty reads and permanent rejection of
+ * already-frozen notice-qualified envelopes.
+ */
+export type OrganizationPermissionPilotRuntimeHealth =
+  | { readonly kind: 'absent' }
+  | {
+      readonly kind: 'ready';
+      readonly activation: OrganizationPermissionPilotActivationMarkerV1;
+    }
+  | { readonly kind: 'degraded'; readonly failure: Error };
+
+export type ReviewerRestrictedRuntimeHealth =
+  | {
+      readonly kind: 'ready';
+      readonly readiness: ReviewerRestrictedReadiness;
+    }
+  | {
+      readonly kind: 'degraded';
+      readonly failure: Error;
+      readonly readiness?: ReviewerRestrictedReadiness;
+    };
+
+export type OrganizationMemberReadableRuntimeHealth =
+  | { readonly kind: 'ready'; readonly readiness: OrganizationMemberReadableReadiness }
+  | { readonly kind: 'degraded'; readonly failure: Error; readonly readiness?: OrganizationMemberReadableReadiness };
+
 export interface OrganizationRecordRuntime
   extends OrganizationRecordHttpApplication {
   /** Walks the internal chain. Run at process start and before every backup. */
   verifyChain(): OrganizationRecordChainVerification;
   readonly follower: OrganizationRecordFollower;
+  readonly permissionPilotHealth: OrganizationPermissionPilotRuntimeHealth;
+  readonly reviewerRestrictedHealth: ReviewerRestrictedRuntimeHealth;
+  readonly organizationMemberReadableHealth: OrganizationMemberReadableRuntimeHealth;
+  readonly reviewerRecords: ReviewerRecordPort;
+  /** The fixed, newest-first <=20 canonical rows. Empty only before activation. */
+  readPermissionPilotEligibleRecords(): readonly OrganizationPermissionPilotEligibleRecord[];
   /** The post-start derive failure, once one has happened. */
   readonly fatalFailure: Error | null;
   /**
@@ -85,6 +144,50 @@ function deriveHaltFailure(alert: OrganizationRecordAlert): Error {
     }`,
     alert.cause === undefined ? undefined : { cause: alert.cause },
   );
+}
+
+function assertPermissionPilotEvidence(
+  records: readonly OrganizationPermissionPilotEligibleRecord[],
+  evidenceStore: OrganizationRecordAuthorizationEvidenceStore,
+  organizationId: string,
+): void {
+  for (const { row, eligibility } of records) {
+    const envelope = validateOrganizationRecordEnvelope(
+      parseOrganizationRecordEnvelope(row.canonical_envelope),
+    );
+    const evidence = envelope.reviewer.authorization;
+    const match = evidenceStore.findAllowedApprovalAuthorizationEvidence({
+      organization_id: organizationId,
+      installation_id: envelope.submitter.installation_id,
+      approval_id: evidence.approval_id,
+      action: evidence.action,
+      request_id: evidence.request_id,
+      principal_id: evidence.principal_id,
+      membership_id: evidence.membership_id,
+      request_sha256: evidence.request_sha256,
+      provider_event_sha256: evidence.provider_event_sha256,
+      adapter_binding_id: evidence.adapter_binding_id,
+      permission_grant_id: evidence.permission_grant_id,
+      reason_code: evidence.reason_code,
+      evaluated_at: evidence.evaluated_at,
+    });
+    const proof =
+      match.status === 'matched'
+        ? match.permission_pilot_eligibility
+        : undefined;
+    if (
+      proof === undefined ||
+      proof.policy_id !== eligibility.policy_id ||
+      proof.presentation_policy_id !== eligibility.presentation_policy_id ||
+      proof.audience_notice_sha256 !== eligibility.audience_notice_sha256 ||
+      proof.message_presentation_sha256 !==
+        eligibility.message_presentation_sha256
+    ) {
+      throw new Error(
+        `organization permission pilot eligibility at record position ${row.position} has no exact audited notice evidence`,
+      );
+    }
+  }
 }
 
 /**
@@ -138,9 +241,28 @@ export async function openOrganizationRecordRuntime(
     // it was never handed.
     if (started) options.onFatal?.(fatalFailure);
   };
+  // One closed reviewer-v2 validator for this organization and authority,
+  // built here and threaded into every record-side caller that may read a
+  // reviewer-v2 document. The record workspace has no import edge to the
+  // protocol package, so this is the only reviewer-v2 reading it ever gets.
+  const reviewerValidator = reviewerRestrictedEnvelopeValidator({
+    organization_id: options.organization_id,
+    authority_id: options.authority_id,
+  });
+  const organizationMemberValidator = organizationMemberReadableEnvelopeValidator({
+    organization_id: options.organization_id,
+    authority_id: options.authority_id,
+  });
   const log = OrganizationRecordLogStore.open(options.record_log_database_path, {
     organization_id: options.organization_id,
     authority_id: options.authority_id,
+    reviewer_validator: reviewerValidator,
+    organization_member_validator: organizationMemberValidator,
+  });
+  const reviewerRecords = createReviewerRecordPort(log.database, {
+    organization_id: options.organization_id,
+    authority_id: options.authority_id,
+    reviewer_validator: reviewerValidator,
   });
   let derived: OrganizationRecordDerivedStore | undefined;
   try {
@@ -161,15 +283,111 @@ export async function openOrganizationRecordRuntime(
       logReader: new OrganizationRecordLogReader(log.database),
       derived,
       alert,
+      reviewerValidator,
+      organizationMemberValidator,
     });
+    const permissionPilotReader = new OrganizationPermissionPilotReader(
+      log.database,
+      { organization_id: options.organization_id },
+    );
+    let permissionPilotHealth: OrganizationPermissionPilotRuntimeHealth;
+    try {
+      const permissionPilotState = permissionPilotReader.validateState();
+      if (permissionPilotState.activation === null) {
+        permissionPilotHealth = Object.freeze({ kind: 'absent' });
+      } else {
+        assertPermissionPilotEvidence(
+          permissionPilotState.eligible_records,
+          options.evidence,
+          options.organization_id,
+        );
+        permissionPilotHealth = Object.freeze({
+          kind: 'ready',
+          activation: permissionPilotState.activation,
+        });
+      }
+    } catch (error) {
+      const failure =
+        error instanceof Error
+          ? error
+          : new Error(`permission pilot validation failed: ${String(error)}`);
+      // The optional permission slice fails independently closed. The explicit
+      // degraded state keeps the append-only record and deterministic derive
+      // machines live without pretending this was clean non-activation.
+      operatorAlert({
+        kind: 'permission-pilot-inactive',
+        message: `organization permission pilot is degraded: ${failure.message}`,
+        log_position: null,
+        cause: failure,
+      });
+      permissionPilotHealth = Object.freeze({ kind: 'degraded', failure });
+    }
+    let reviewerRestrictedHealth: ReviewerRestrictedRuntimeHealth;
+    try {
+      const readiness = verifyReviewerRestrictedReadiness({
+        records: reviewerRecords,
+        evidence: options.evidence,
+        organization_id: options.organization_id,
+        authority_id: options.authority_id,
+      });
+      if (!readiness.ready) {
+        throw new Error(
+          readiness.failures
+            .map((failure) => `${failure.kind}:${failure.detail}`)
+            .join('; '),
+        );
+      }
+      reviewerRestrictedHealth = Object.freeze({ kind: 'ready', readiness });
+    } catch (error) {
+      const failure =
+        error instanceof Error
+          ? error
+          : new Error(`reviewer-restricted admission failed: ${String(error)}`);
+      operatorAlert({
+        kind: 'reviewer-restricted-inactive',
+        message: `reviewer-restricted V1 is degraded: ${failure.message}`,
+        log_position: null,
+        cause: failure,
+      });
+      reviewerRestrictedHealth = Object.freeze({ kind: 'degraded', failure });
+    }
+    let organizationMemberReadableHealth: OrganizationMemberReadableRuntimeHealth;
+    try {
+      const readiness = verifyOrganizationMemberReadableReadiness({
+        database: log.database,
+        organization_id: options.organization_id,
+        validator: organizationMemberValidator,
+        evidence: options.evidence,
+      });
+      if (!readiness.ready) {
+        throw new Error(readiness.failures.map((failure) => failure.detail).join('; '));
+      }
+      organizationMemberReadableHealth = Object.freeze({ kind: 'ready', readiness });
+    } catch (error) {
+      const failure = error instanceof Error
+        ? error
+        : new Error(`organization-member-readable admission failed: ${String(error)}`);
+      operatorAlert({
+        kind: 'reviewer-restricted-inactive',
+        message: `organization-member-readable V1 is degraded: ${failure.message}`,
+        log_position: null,
+        cause: failure,
+      });
+      organizationMemberReadableHealth = Object.freeze({ kind: 'degraded', failure });
+    }
     const authority = new OrganizationRecordIngestAuthority({
       authority: options.authority,
       evidence: options.evidence,
+      permissionPilotHealth,
+      reviewerRestrictedHealth,
+      organizationMemberReadableHealth,
     });
     const ingest = new OrganizationRecordIngest({
       log,
       authority,
       receiptSigner: authority,
+      reviewerValidator,
+      organizationMemberValidator,
       onAppended: () => follower.nudge(),
       alert,
     });
@@ -196,7 +414,11 @@ export async function openOrganizationRecordRuntime(
           );
         }
         try {
-          const appended = await ingest.append(request.record_envelope);
+          const appended = options.authorization_fence === undefined
+            ? await ingest.append(request.record_envelope)
+            : await options.authorization_fence.withWrite(() =>
+                ingest.append(request.record_envelope),
+              );
           return validateAcceptedOrganizationRecord({
             record_receipt: appended.signed_receipt,
           });
@@ -206,6 +428,20 @@ export async function openOrganizationRecordRuntime(
       },
       verifyChain: () => verifyOrganizationRecordChain(log),
       follower,
+      permissionPilotHealth,
+      reviewerRestrictedHealth,
+      organizationMemberReadableHealth,
+      reviewerRecords,
+      readPermissionPilotEligibleRecords(): readonly OrganizationPermissionPilotEligibleRecord[] {
+        if (permissionPilotHealth.kind === 'absent') return Object.freeze([]);
+        if (permissionPilotHealth.kind === 'degraded') {
+          throw new Error(
+            'organization permission pilot record selection is unavailable',
+            { cause: permissionPilotHealth.failure },
+          );
+        }
+        return permissionPilotReader.readEligibleRecordsDescending();
+      },
       get fatalFailure(): Error | null {
         return fatalFailure;
       },

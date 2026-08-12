@@ -9,7 +9,7 @@ import type {
   OrganizationEnrollmentRequestV1,
   OrganizationInstallationAccessStateV1,
   OrganizationMembershipTypeV1,
-  OrganizationRecordEnvelopeV1,
+  OrganizationRecordEnvelopeAnyVersion,
   OrganizationRecordReceiptV1,
 } from '@echo-brain/organization-protocol';
 
@@ -104,6 +104,221 @@ export interface OrganizationPermissionCheckDecisionV1 {
   adapter_binding_id: string | null;
   permission_grant_id: string | null;
   evaluated_at: string;
+}
+
+/**
+ * The closed reviewer approval request. It carries content commitments, never
+ * content: no draft, title, item text, raw signal id, meeting id, or
+ * processing key crosses this wire.
+ */
+export interface OrganizationReviewerPermissionCheckRequestPayloadV2 {
+  schema_version: 2;
+  kind: 'echo-organization-permission-check-request';
+  request_id: string;
+  authority_id: string;
+  authority_key_id: OrganizationApiSha256Digest;
+  organization_id: string;
+  enrollment_id: string;
+  installation_id: string;
+  installation_key_id: OrganizationApiSha256Digest;
+  provider: 'slack';
+  provider_issuer: 'https://slack.com';
+  provider_tenant_kind: 'workspace';
+  provider_tenant_id: string;
+  provider_enterprise_id: string | null;
+  provider_connection_subject_id: string;
+  provider_connection_bot_id: string;
+  provider_connection_app_id: string | null;
+  provider_subject_kind: 'human_user';
+  provider_subject_id: string;
+  adapter_kind: 'approval-surface';
+  adapter_id: string;
+  adapter_instance_id: string;
+  adapter_version: string;
+  action: 'approve';
+  approval_id: string;
+  channel_id: string;
+  message_ts: string;
+  reaction_name: string;
+  approve_reaction: string;
+  reject_reaction: string;
+  policy_id: 'restricted-reviewer-v1';
+  reviewer_release_draft_sha256: OrganizationApiSha256Digest;
+  approval_presentation_sha256: OrganizationApiSha256Digest;
+  provider_event_sha256: OrganizationApiSha256Digest;
+  requested_at: string;
+  http_method: 'POST';
+  http_path: '/v1/permission-checks';
+}
+
+export interface OrganizationReviewerPermissionCheckRequestV2
+  extends OrganizationReviewerPermissionCheckRequestPayloadV2 {
+  integrity: OrganizationApiSignedIntegrityV1;
+}
+
+/**
+ * The closed reviewer decision. An allow carries all six proof fields and the
+ * four actor/binding/grant identifiers; a denial nulls every one of them and
+ * names one closed reason.
+ */
+export interface OrganizationReviewerPermissionCheckDecisionV2 {
+  schema_version: 2;
+  kind: 'echo-organization-permission-check-decision';
+  request_sha256: OrganizationApiSha256Digest;
+  provider_event_sha256: OrganizationApiSha256Digest;
+  allowed: boolean;
+  reason_code: string;
+  principal_id: string | null;
+  membership_id: string | null;
+  adapter_binding_id: string | null;
+  permission_grant_id: string | null;
+  evaluated_at: string;
+  authorization_audit_event_id: string | null;
+  authorization_audit_entry_sha256: OrganizationApiSha256Digest | null;
+  reviewer_release_draft_sha256: OrganizationApiSha256Digest | null;
+  approval_presentation_sha256: OrganizationApiSha256Digest | null;
+  semantic_intent_sha256: OrganizationApiSha256Digest | null;
+  message_presentation_sha256: OrganizationApiSha256Digest | null;
+}
+
+export interface OrganizationMemberReadablePermissionCheckRequestPayloadV3 {
+  schema_version: 3;
+  kind: 'echo-organization-permission-check-request';
+  request_id: string; authority_id: string; authority_key_id: OrganizationApiSha256Digest;
+  organization_id: string; enrollment_id: string; installation_id: string; installation_key_id: OrganizationApiSha256Digest;
+  provider: 'slack'; provider_issuer: 'https://slack.com'; provider_tenant_kind: 'workspace'; provider_tenant_id: string; provider_enterprise_id: string | null;
+  provider_connection_subject_id: string; provider_connection_bot_id: string; provider_connection_app_id: string | null; provider_subject_kind: 'human_user'; provider_subject_id: string;
+  adapter_kind: 'approval-surface'; adapter_id: string; adapter_instance_id: string; adapter_version: string;
+  action: 'approve'; approval_id: string; channel_id: string; message_ts: string; reaction_name: string; approve_reaction: string; reject_reaction: string;
+  policy_id: 'organization-member-readable-v1'; policy_contract_sha256: OrganizationApiSha256Digest; release_draft_sha256: OrganizationApiSha256Digest; approval_presentation_sha256: OrganizationApiSha256Digest;
+  provider_event_sha256: OrganizationApiSha256Digest; requested_at: string; http_method: 'POST'; http_path: '/v1/permission-checks';
+}
+export interface OrganizationMemberReadablePermissionCheckRequestV3 extends OrganizationMemberReadablePermissionCheckRequestPayloadV3 { integrity: OrganizationApiSignedIntegrityV1 }
+export interface OrganizationMemberReadablePermissionCheckDecisionV3 {
+  schema_version: 3; kind: 'echo-organization-permission-check-decision'; request_sha256: OrganizationApiSha256Digest; provider_event_sha256: OrganizationApiSha256Digest; allowed: boolean; reason_code: string;
+  policy_id: 'organization-member-readable-v1'; policy_contract_sha256: OrganizationApiSha256Digest;
+  principal_id: string | null; membership_id: string | null; adapter_binding_id: string | null; permission_grant_id: string | null; evaluated_at: string;
+  authorization_audit_event_id: string | null; authorization_audit_entry_sha256: OrganizationApiSha256Digest | null; release_draft_sha256: OrganizationApiSha256Digest | null; approval_presentation_sha256: OrganizationApiSha256Digest | null; semantic_intent_sha256: OrganizationApiSha256Digest | null; message_presentation_sha256: OrganizationApiSha256Digest | null;
+}
+
+/**
+ * The signed, target-free reviewer read. The caller supplies no target,
+ * policy, limit, cursor, sort, query, or atom id, and query parameters are
+ * invalid.
+ */
+export interface OrganizationReviewerRecentDecisionsRequestPayloadV1 {
+  schema_version: 1;
+  kind: 'echo-organization-reviewer-recent-decisions-request';
+  request_id: string;
+  authority_id: string;
+  authority_key_id: OrganizationApiSha256Digest;
+  organization_id: string;
+  enrollment_id: string;
+  installation_id: string;
+  installation_key_id: OrganizationApiSha256Digest;
+  http_method: 'POST';
+  http_path: '/v1/reviewer-recent-decisions';
+  requested_at: string;
+}
+
+export interface OrganizationReviewerRecentDecisionsRequestV1
+  extends OrganizationReviewerRecentDecisionsRequestPayloadV1 {
+  integrity: OrganizationApiSignedIntegrityV1;
+}
+
+/**
+ * One released item. It exposes no atom or record id, log position, total,
+ * hidden count, cursor, scan depth, title, meeting id, participant, source,
+ * evidence, subject, score, identity value, audit reference, or internal path
+ * kind.
+ */
+export interface OrganizationReviewerRecentDecisionItemV1 {
+  kind: OrganizationRecentDecisionKindV1;
+  text: string;
+}
+
+export interface OrganizationReviewerRecentDecisionsResponseV1 {
+  schema_version: 1;
+  items: readonly OrganizationReviewerRecentDecisionItemV1[];
+  policy_id: 'restricted-reviewer-v1';
+  witness: string;
+}
+
+/** The target-free, signed permission-aware lexical search operation. */
+export interface OrganizationReadableSearchRequestPayloadV1 {
+  schema_version: 1;
+  kind: 'echo-organization-readable-search-request';
+  request_id: string;
+  authority_id: string;
+  authority_key_id: OrganizationApiSha256Digest;
+  organization_id: string;
+  enrollment_id: string;
+  installation_id: string;
+  installation_key_id: OrganizationApiSha256Digest;
+  http_method: 'POST';
+  http_path: '/v1/readable-search';
+  query: string;
+  requested_at: string;
+}
+
+export interface OrganizationReadableSearchRequestV1
+  extends OrganizationReadableSearchRequestPayloadV1 {
+  integrity: OrganizationApiSignedIntegrityV1;
+}
+
+export interface OrganizationReadableSearchResultItemV1 {
+  kind: OrganizationRecentDecisionKindV1;
+  text: string;
+  policy_id: 'organization-member-readable-v1' | 'restricted-reviewer-v1';
+  witness: string;
+}
+
+export interface OrganizationReadableSearchResponseV1 {
+  schema_version: 1;
+  contract_id: 'permission-aware-readable-search-v1';
+  items: readonly OrganizationReadableSearchResultItemV1[];
+}
+
+export interface OrganizationRecentDecisionsRequestPayloadV1 {
+  schema_version: 1;
+  kind: 'echo-organization-recent-decisions-request';
+  request_id: string;
+  authority_id: string;
+  authority_key_id: OrganizationApiSha256Digest;
+  organization_id: string;
+  enrollment_id: string;
+  installation_id: string;
+  installation_key_id: OrganizationApiSha256Digest;
+  http_method: 'POST';
+  http_path: '/v1/recent-decisions';
+  requested_at: string;
+}
+
+/**
+ * A fresh, exact-operation read authenticated by the enrolled installation.
+ * The request is not an authorization receipt; the Authority rechecks current
+ * membership and access immediately before releasing every response.
+ */
+export interface OrganizationRecentDecisionsRequestV1 extends OrganizationRecentDecisionsRequestPayloadV1 {
+  integrity: OrganizationApiSignedIntegrityV1;
+}
+
+export type OrganizationRecentDecisionKindV1 =
+  'decision' | 'action' | 'rationale';
+
+export interface OrganizationRecentDecisionItemV1 {
+  atom_id: OrganizationApiSha256Digest;
+  kind: OrganizationRecentDecisionKindV1;
+  text: string;
+  record_hash: OrganizationApiSha256Digest;
+}
+
+/** The deliberately closed content surface for permission pilot slice 1. */
+export interface OrganizationRecentDecisionsResponseV1 {
+  schema_version: 1;
+  policy_id: 'pilot-member-readable-v1';
+  witness: 'Readable because your active membership is one of the two memberships bound to pilot-member-readable-v1 and the returned records carry the exact two-person sharing notice.';
+  items: OrganizationRecentDecisionItemV1[];
 }
 
 export interface OrganizationSlackLinkBeginRequestPayloadV1 {
@@ -404,7 +619,7 @@ export interface OrganizationApiErrorV1 {
 
 /** The signed envelope is the whole request; nothing else is submitted with it. */
 export interface SubmitOrganizationRecordEnvelopeRequestV1 {
-  record_envelope: OrganizationRecordEnvelopeV1;
+  record_envelope: OrganizationRecordEnvelopeAnyVersion;
 }
 
 /**

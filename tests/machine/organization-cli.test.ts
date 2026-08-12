@@ -14,8 +14,12 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { canonicalJson } from '@echo-brain/federation-protocol';
 import {
   organizationSlackLinkChallengeCodeSha256,
+  ORGANIZATION_RECENT_DECISIONS_POLICY_ID,
+  ORGANIZATION_RECENT_DECISIONS_WITNESS,
+  verifyOrganizationRecentDecisionsRequest,
   verifyOrganizationSlackLinkBeginRequest,
   verifyOrganizationSlackLinkCompleteRequest,
+  type OrganizationRecentDecisionsRequestV1,
   type OrganizationSlackLinkBeginRequestV1,
   type OrganizationSlackLinkCompleteRequestV1,
 } from '@echo-brain/organization-api';
@@ -209,6 +213,9 @@ describe('organization machine CLI', () => {
     let clock = ENROLLMENT_TIME;
     let request: OrganizationEnrollmentRequestV1 | null = null;
     let accessState: OrganizationInstallationAccessStateV1 | null = null;
+    const recentRequests: OrganizationRecentDecisionsRequestV1[] = [];
+    let malformedRecentResponse = false;
+    const lifecycleKinds: string[] = [];
 
     const fetchImpl: typeof fetch = async (input, init) => {
       const url = new URL(String(input));
@@ -241,6 +248,35 @@ describe('organization machine CLI', () => {
         );
         return Response.json({ access_state: accessState });
       }
+      if (url.pathname === '/v1/recent-decisions') {
+        if (request === null) {
+          throw new Error('enrollment must precede recent decisions');
+        }
+        const body = JSON.parse(
+          String(init?.body),
+        ) as OrganizationRecentDecisionsRequestV1;
+        expect(
+          verifyOrganizationRecentDecisionsRequest(
+            body,
+            request.installation_signing_key,
+          ),
+        ).toEqual(body);
+        recentRequests.push(body);
+        return Response.json({
+          schema_version: 1,
+          policy_id: ORGANIZATION_RECENT_DECISIONS_POLICY_ID,
+          witness: ORGANIZATION_RECENT_DECISIONS_WITNESS,
+          items: [
+            {
+              atom_id: `sha256:${'a'.repeat(64)}`,
+              kind: 'decision',
+              text: 'Ship the exact two-member read.',
+              record_hash: `sha256:${'b'.repeat(64)}`,
+              ...(malformedRecentResponse ? { log_position: 7 } : {}),
+            },
+          ],
+        });
+      }
       throw new Error(`unexpected organization authority path ${url.pathname}`);
     };
     const dependencies: ProductCliDependencies = {
@@ -248,6 +284,10 @@ describe('organization machine CLI', () => {
         kind: 'local',
         raw: 'apfs',
       }),
+      acquireLifecycleLock: async (_stateDirectory, kind) => {
+        lifecycleKinds.push(kind);
+        return async () => undefined;
+      },
       now: () => clock,
       operator: {
         launchctl: async () => ({
@@ -375,6 +415,45 @@ describe('organization machine CLI', () => {
         access_state_sequence: 2,
       },
     });
+    lifecycleKinds.length = 0;
+    const recent = await command(
+      ['organization', 'recent-decisions', '--config', configPath],
+      dependencies,
+    );
+    expect(recent.status, recent.stderr).toBe(0);
+    expect(JSON.parse(recent.stdout)).toEqual({
+      schema_version: 1,
+      policy_id: ORGANIZATION_RECENT_DECISIONS_POLICY_ID,
+      witness: ORGANIZATION_RECENT_DECISIONS_WITNESS,
+      items: [
+        {
+          atom_id: `sha256:${'a'.repeat(64)}`,
+          kind: 'decision',
+          text: 'Ship the exact two-member read.',
+          record_hash: `sha256:${'b'.repeat(64)}`,
+        },
+      ],
+    });
+    expect(JSON.parse(recent.stdout)).not.toHaveProperty('ok');
+    expect(lifecycleKinds).toEqual(['maintenance']);
+    expect(recentRequests).toHaveLength(1);
+    expect(recentRequests[0]).toMatchObject({
+      request_id: expect.stringMatching(
+        /^rdr_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+      ),
+      http_method: 'POST',
+      http_path: '/v1/recent-decisions',
+      requested_at: REFRESH_TIME,
+    });
+
+    malformedRecentResponse = true;
+    const malformedRecent = await command(
+      ['organization', 'recent-decisions', '--config', configPath],
+      dependencies,
+    );
+    expect(malformedRecent.status).toBe(1);
+    expect(malformedRecent.stdout).toBe('');
+    expect(malformedRecent.stderr).toContain('malformed response');
     expect(
       statSync(
         join(

@@ -13,6 +13,8 @@ import type {
   OrganizationInternalLiveUpdateReceiptV1,
   OrganizationMembershipPageV1,
   OrganizationPermissionCheckRequestV1,
+  OrganizationMemberReadablePermissionCheckRequestV3,
+  OrganizationReviewerPermissionCheckRequestV2,
   OrganizationApiSha256Digest,
   ProvisionedOrganizationMembershipV1,
   ProvisionOrganizationMembershipRequestV1,
@@ -69,11 +71,11 @@ export interface OrganizationAuthorityHttpApplication {
   ): void;
   provisionMembership(
     input: ProvisionOrganizationMembershipRequestV1,
-  ): ProvisionedOrganizationMembershipV1;
+  ): ProvisionedOrganizationMembershipV1 | Promise<ProvisionedOrganizationMembershipV1>;
   issueEnrollmentGrant(
     membershipId: string,
     input: IssueOrganizationEnrollmentGrantRequestV1,
-  ): HttpIssuedOrganizationEnrollmentGrant;
+  ): HttpIssuedOrganizationEnrollmentGrant | Promise<HttpIssuedOrganizationEnrollmentGrant>;
   completeEnrollment(input: {
     enrollment_grant: Uint8Array;
     enrollment_request: OrganizationEnrollmentRequestV1;
@@ -83,6 +85,18 @@ export interface OrganizationAuthorityHttpApplication {
   ): Promise<OrganizationInstallationAccessStateV1>;
   checkPermissionSubject(
     request: OrganizationPermissionCheckRequestV1,
+    target: null,
+  ): {
+    installation_id: string;
+  };
+  checkReviewerPermissionSubject(
+    request: OrganizationReviewerPermissionCheckRequestV2,
+    target: null,
+  ): {
+    installation_id: string;
+  };
+  checkOrganizationMemberReadablePermissionSubject?(
+    request: OrganizationMemberReadablePermissionCheckRequestV3,
     target: null,
   ): {
     installation_id: string;

@@ -4,6 +4,8 @@ import type {
   OrganizationRecordAlertPort,
   OrganizationRecordLogReaderPort,
 } from '../application/ports.js';
+import type { ReviewerRestrictedEnvelopeValidator } from '../application/reviewer-policy-fact.js';
+import type { OrganizationMemberReadableEnvelopeValidator } from '../application/organization-member-policy-fact.js';
 import type { OrganizationRecordDerivedStore } from './derived-store.js';
 import { projectOrganizationRecord } from './projection.js';
 
@@ -14,6 +16,12 @@ export interface OrganizationRecordFollowerDependencies {
   readonly derived: OrganizationRecordDerivedStore;
   readonly alert?: OrganizationRecordAlertPort;
   readonly batchSize?: number;
+  /**
+   * The injected closed reviewer-v2 validator. Without it a reviewer-v2 record
+   * halts the follower rather than deriving on a looser reading.
+   */
+  readonly reviewerValidator?: ReviewerRestrictedEnvelopeValidator;
+  readonly organizationMemberValidator?: OrganizationMemberReadableEnvelopeValidator;
 }
 
 /**
@@ -35,6 +43,12 @@ export class OrganizationRecordFollower {
   private readonly derived: OrganizationRecordDerivedStore;
   private readonly alert: OrganizationRecordAlertPort | null;
   private readonly batchSize: number;
+  private readonly reviewerValidator:
+    | ReviewerRestrictedEnvelopeValidator
+    | undefined;
+  private readonly organizationMemberValidator:
+    | OrganizationMemberReadableEnvelopeValidator
+    | undefined;
 
   private running: Promise<void> | null = null;
   private pending = false;
@@ -46,6 +60,8 @@ export class OrganizationRecordFollower {
     this.derived = dependencies.derived;
     this.alert = dependencies.alert ?? null;
     this.batchSize = dependencies.batchSize ?? DEFAULT_BATCH_SIZE;
+    this.reviewerValidator = dependencies.reviewerValidator;
+    this.organizationMemberValidator = dependencies.organizationMemberValidator;
   }
 
   get halted(): boolean {
@@ -117,7 +133,9 @@ export class OrganizationRecordFollower {
       const batch = this.logReader.readAfter(cursor, this.batchSize);
       if (batch.length === 0) return;
       for (const row of batch) {
-        this.derived.commitRecord(projectOrganizationRecord(row));
+        this.derived.commitRecord(
+          projectOrganizationRecord(row, this.reviewerValidator, this.organizationMemberValidator),
+        );
         this.recordsDerived += 1;
       }
       // Yield between batches so a long catch-up never starves the process.

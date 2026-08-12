@@ -6,6 +6,7 @@ import {
   type DecisionBrief,
   type JsonObject,
 } from '../../core/index.js';
+import { assertReviewerDisplayName } from './reviewer-authorization-evidence.js';
 
 /**
  * A decision node is one link in the decision chain: what was decided, by
@@ -72,6 +73,332 @@ export interface DecisionResolvedEvent {
  * an accepted append can never be overwritten or double-filed.
  */
 export const ORGANIZATION_RECORD_SURFACE = 'organization-record';
+
+/** The one approval surface whose publication mode is frozen before posting. */
+export const APPROVAL_PRESENTATION_CONTRACT_SURFACE = 'slack-authority-v1';
+
+export const RESTRICTED_REVIEWER_PRESENTATION_MODE = 'restricted-reviewer-v1';
+export const ORGANIZATION_MEMBER_READABLE_PRESENTATION_MODE =
+  'organization-member-readable-v1';
+
+/**
+ * The immutable local publication contract.
+ *
+ * It stores only the closed contract, its two content digests, the non-secret
+ * `env:`/`file:` credential reference, and the frozen adapter settings -- never
+ * token bytes and never a second copy of the title or item text. Its frozen
+ * mode and adapter identity override current configuration for every render,
+ * post retry, poll, and action request, so no retry can reinterpret a card.
+ */
+export interface SlackApprovalPresentationContract {
+  schema_version: 1;
+  kind: 'echo-slack-approval-presentation-contract';
+  mode: typeof RESTRICTED_REVIEWER_PRESENTATION_MODE;
+  adapter_id: string;
+  adapter_instance_id: string;
+  adapter_version: string;
+  channel_id: string;
+  reviewer_slack_user_id: string;
+  reviewer_name: string;
+  credential_ref: string;
+  credential_fingerprint_sha256: string;
+  approve_reaction: string;
+  reject_reaction: string;
+  reviewer_release_draft_sha256: string;
+  approval_presentation_sha256: string;
+}
+
+/**
+ * The second closed Slack publication contract. It deliberately has a
+ * different discriminator and proof field names from the reviewer contract:
+ * schema-v2 reviewer evidence cannot be reinterpreted as a schema-v3
+ * organization-member approval.
+ */
+export interface OrganizationMemberSlackApprovalPresentationContract {
+  schema_version: 1;
+  kind: 'echo-slack-approval-presentation-contract';
+  mode: typeof ORGANIZATION_MEMBER_READABLE_PRESENTATION_MODE;
+  adapter_id: string;
+  adapter_instance_id: string;
+  adapter_version: string;
+  channel_id: string;
+  reviewer_slack_user_id: string;
+  reviewer_name: string;
+  credential_ref: string;
+  credential_fingerprint_sha256: string;
+  approve_reaction: string;
+  reject_reaction: string;
+  policy_id: 'organization-member-readable-v1';
+  policy_contract_sha256: string;
+  release_draft_sha256: string;
+  approval_presentation_sha256: string;
+}
+
+/** Every persisted contract is one closed mode, never a hybrid. */
+export type ApprovalPresentationContract =
+  | SlackApprovalPresentationContract
+  | OrganizationMemberSlackApprovalPresentationContract;
+
+export interface DecisionApprovalPresentationContractEvent {
+  schema_version: 1;
+  event_type: 'approval-presentation-contract';
+  node_id: string;
+  surface: typeof APPROVAL_PRESENTATION_CONTRACT_SURFACE;
+  created_at: string;
+  presentation_contract: ApprovalPresentationContract;
+}
+
+const REACTION_NAME_RE = /^[a-z0-9_+-]{1,64}$/;
+const SLACK_USER_ID_RE = /^[UW][A-Z0-9]{2,}$/;
+const CREDENTIAL_REF_RE = /^(?:env|file):[^\s]{1,512}$/;
+
+export function assertSlackApprovalPresentationContract(
+  value: unknown,
+  file: string,
+): SlackApprovalPresentationContract {
+  if (!isPlainObject(value)) throw invalid(file, 'presentation_contract');
+  assertExactKeys(
+    value,
+    [
+      'schema_version',
+      'kind',
+      'mode',
+      'adapter_id',
+      'adapter_instance_id',
+      'adapter_version',
+      'channel_id',
+      'reviewer_slack_user_id',
+      'reviewer_name',
+      'credential_ref',
+      'credential_fingerprint_sha256',
+      'approve_reaction',
+      'reject_reaction',
+      'reviewer_release_draft_sha256',
+      'approval_presentation_sha256',
+    ],
+    file,
+    'presentation_contract',
+  );
+  if (value['schema_version'] !== 1) {
+    throw invalid(file, 'presentation_contract.schema_version');
+  }
+  if (value['kind'] !== 'echo-slack-approval-presentation-contract') {
+    throw invalid(file, 'presentation_contract.kind');
+  }
+  if (value['mode'] !== RESTRICTED_REVIEWER_PRESENTATION_MODE) {
+    throw invalid(file, 'presentation_contract.mode');
+  }
+  for (const field of [
+    'adapter_id',
+    'adapter_instance_id',
+    'adapter_version',
+    'channel_id',
+  ] as const) {
+    if (!isBoundedString(value[field], MAX_LOCATOR_FIELD_BYTES)) {
+      throw invalid(file, `presentation_contract.${field}`);
+    }
+  }
+  try {
+    assertReviewerDisplayName(
+      value['reviewer_name'],
+      'presentation_contract.reviewer_name',
+    );
+  } catch {
+    throw invalid(file, 'presentation_contract.reviewer_name');
+  }
+  if (
+    typeof value['reviewer_slack_user_id'] !== 'string' ||
+    !SLACK_USER_ID_RE.test(value['reviewer_slack_user_id'])
+  ) {
+    throw invalid(file, 'presentation_contract.reviewer_slack_user_id');
+  }
+  if (
+    typeof value['credential_ref'] !== 'string' ||
+    !CREDENTIAL_REF_RE.test(value['credential_ref'])
+  ) {
+    throw invalid(file, 'presentation_contract.credential_ref');
+  }
+  for (const field of [
+    'credential_fingerprint_sha256',
+    'reviewer_release_draft_sha256',
+    'approval_presentation_sha256',
+  ] as const) {
+    if (!isSha256Digest(value[field])) {
+      throw invalid(file, `presentation_contract.${field}`);
+    }
+  }
+  for (const field of ['approve_reaction', 'reject_reaction'] as const) {
+    if (
+      typeof value[field] !== 'string' ||
+      !REACTION_NAME_RE.test(value[field])
+    ) {
+      throw invalid(file, `presentation_contract.${field}`);
+    }
+  }
+  if (value['approve_reaction'] === value['reject_reaction']) {
+    throw invalid(file, 'presentation_contract.reject_reaction');
+  }
+  return value as unknown as SlackApprovalPresentationContract;
+}
+
+export function assertOrganizationMemberSlackApprovalPresentationContract(
+  value: unknown,
+  file: string,
+): OrganizationMemberSlackApprovalPresentationContract {
+  if (
+    !isPlainObject(value) ||
+    Object.getPrototypeOf(value) !== Object.prototype ||
+    Object.getOwnPropertySymbols(value).length !== 0
+  ) {
+    throw invalid(file, 'presentation_contract');
+  }
+  for (const descriptor of Object.values(Object.getOwnPropertyDescriptors(value))) {
+    if (
+      descriptor.get !== undefined ||
+      descriptor.set !== undefined ||
+      descriptor.enumerable !== true
+    ) {
+      throw invalid(file, 'presentation_contract');
+    }
+  }
+  assertExactKeys(
+    value,
+    [
+      'schema_version',
+      'kind',
+      'mode',
+      'adapter_id',
+      'adapter_instance_id',
+      'adapter_version',
+      'channel_id',
+      'reviewer_slack_user_id',
+      'reviewer_name',
+      'credential_ref',
+      'credential_fingerprint_sha256',
+      'approve_reaction',
+      'reject_reaction',
+      'policy_id',
+      'policy_contract_sha256',
+      'release_draft_sha256',
+      'approval_presentation_sha256',
+    ],
+    file,
+    'presentation_contract',
+  );
+  if (value['schema_version'] !== 1) {
+    throw invalid(file, 'presentation_contract.schema_version');
+  }
+  if (value['kind'] !== 'echo-slack-approval-presentation-contract') {
+    throw invalid(file, 'presentation_contract.kind');
+  }
+  if (value['mode'] !== ORGANIZATION_MEMBER_READABLE_PRESENTATION_MODE) {
+    throw invalid(file, 'presentation_contract.mode');
+  }
+  if (value['policy_id'] !== 'organization-member-readable-v1') {
+    throw invalid(file, 'presentation_contract.policy_id');
+  }
+  for (const field of [
+    'adapter_id',
+    'adapter_instance_id',
+    'adapter_version',
+    'channel_id',
+  ] as const) {
+    if (!isBoundedString(value[field], MAX_LOCATOR_FIELD_BYTES)) {
+      throw invalid(file, `presentation_contract.${field}`);
+    }
+  }
+  try {
+    assertReviewerDisplayName(
+      value['reviewer_name'],
+      'presentation_contract.reviewer_name',
+    );
+  } catch {
+    throw invalid(file, 'presentation_contract.reviewer_name');
+  }
+  if (
+    typeof value['reviewer_slack_user_id'] !== 'string' ||
+    !SLACK_USER_ID_RE.test(value['reviewer_slack_user_id'])
+  ) {
+    throw invalid(file, 'presentation_contract.reviewer_slack_user_id');
+  }
+  if (
+    typeof value['credential_ref'] !== 'string' ||
+    !CREDENTIAL_REF_RE.test(value['credential_ref'])
+  ) {
+    throw invalid(file, 'presentation_contract.credential_ref');
+  }
+  for (const field of [
+    'credential_fingerprint_sha256',
+    'policy_contract_sha256',
+    'release_draft_sha256',
+    'approval_presentation_sha256',
+  ] as const) {
+    if (!isSha256Digest(value[field])) {
+      throw invalid(file, `presentation_contract.${field}`);
+    }
+  }
+  for (const field of ['approve_reaction', 'reject_reaction'] as const) {
+    if (
+      typeof value[field] !== 'string' ||
+      !REACTION_NAME_RE.test(value[field])
+    ) {
+      throw invalid(file, `presentation_contract.${field}`);
+    }
+  }
+  if (value['approve_reaction'] === value['reject_reaction']) {
+    throw invalid(file, 'presentation_contract.reject_reaction');
+  }
+  return value as unknown as OrganizationMemberSlackApprovalPresentationContract;
+}
+
+export function assertApprovalPresentationContract(
+  value: unknown,
+  file: string,
+): ApprovalPresentationContract {
+  if (!isPlainObject(value)) throw invalid(file, 'presentation_contract');
+  if (value['mode'] === RESTRICTED_REVIEWER_PRESENTATION_MODE) {
+    return assertSlackApprovalPresentationContract(value, file);
+  }
+  if (value['mode'] === ORGANIZATION_MEMBER_READABLE_PRESENTATION_MODE) {
+    return assertOrganizationMemberSlackApprovalPresentationContract(value, file);
+  }
+  throw invalid(file, 'presentation_contract.mode');
+}
+
+export function assertDecisionApprovalPresentationContractEvent(
+  value: unknown,
+  file: string,
+): DecisionApprovalPresentationContractEvent {
+  const record = assertEventEnvelope(
+    value,
+    'approval-presentation-contract',
+    file,
+  );
+  assertExactKeys(
+    record,
+    [
+      'schema_version',
+      'event_type',
+      'node_id',
+      'surface',
+      'created_at',
+      'presentation_contract',
+    ],
+    file,
+    'presentation contract event',
+  );
+  if (record['surface'] !== APPROVAL_PRESENTATION_CONTRACT_SURFACE) {
+    throw invalid(file, 'surface');
+  }
+  if (!isCanonicalTimestamp(record['created_at'])) {
+    throw invalid(file, 'created_at');
+  }
+  assertApprovalPresentationContract(
+    record['presentation_contract'],
+    file,
+  );
+  return record as unknown as DecisionApprovalPresentationContractEvent;
+}
 
 /**
  * The exact signed outbound envelope, frozen once before its first send. The

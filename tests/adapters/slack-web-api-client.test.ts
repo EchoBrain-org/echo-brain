@@ -383,7 +383,7 @@ describe("SlackWebApiClient", () => {
           ok: true,
           channel: "C123",
           ts: "1700.100000",
-          message: { ts: "1700.100000", blocks },
+          message: { ts: "1700.100000", text: "approval", blocks },
         }),
       ),
     });
@@ -433,6 +433,19 @@ describe("SlackWebApiClient", () => {
         channel: "C123",
         ts: "1700.100",
         message: { ts: "1700.100", blocks: [] },
+      },
+    },
+    {
+      name: "mismatched fallback text",
+      body: {
+        ok: true,
+        channel: "C123",
+        ts: "1700.100000",
+        message: {
+          ts: "1700.100000",
+          text: "changed",
+          blocks: [],
+        },
       },
     },
     {

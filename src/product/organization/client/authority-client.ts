@@ -3,11 +3,21 @@ import type {
   OrganizationAccessLeaseRequestV1,
   OrganizationAccessLeaseResponseV1,
   OrganizationAuthorityDescriptorResponseV1,
+  OrganizationMemberReadablePermissionCheckDecisionV3,
+  OrganizationMemberReadablePermissionCheckRequestV3,
   OrganizationPermissionCheckDecisionV1,
   OrganizationPermissionCheckRequestV1,
+  OrganizationRecentDecisionsRequestV1,
+  OrganizationRecentDecisionsResponseV1,
+  OrganizationReviewerPermissionCheckDecisionV2,
+  OrganizationReviewerPermissionCheckRequestV2,
+  OrganizationReviewerRecentDecisionsRequestV1,
+  OrganizationReviewerRecentDecisionsResponseV1,
   OrganizationInternalLiveDirectiveRequestV1,
   OrganizationInternalLiveUpdateDirectiveV1,
   OrganizationInternalLiveUpdateReceiptV1,
+  OrganizationReadableSearchRequestV1,
+  OrganizationReadableSearchResponseV1,
   OrganizationSlackLinkBeginRequestV1,
   OrganizationSlackLinkBeginResponseV1,
   OrganizationSlackLinkCompleteRequestV1,
@@ -45,6 +55,31 @@ export interface OrganizationAuthorityClient {
     request: OrganizationPermissionCheckRequestV1,
     signal?: AbortSignal,
   ): Promise<OrganizationPermissionCheckDecisionV1>;
+
+  checkReviewerPermission(
+    request: OrganizationReviewerPermissionCheckRequestV2,
+    signal?: AbortSignal,
+  ): Promise<OrganizationReviewerPermissionCheckDecisionV2>;
+
+  checkOrganizationMemberPermission(
+    request: OrganizationMemberReadablePermissionCheckRequestV3,
+    signal?: AbortSignal,
+  ): Promise<OrganizationMemberReadablePermissionCheckDecisionV3>;
+
+  readRecentDecisions(
+    request: OrganizationRecentDecisionsRequestV1,
+    signal?: AbortSignal,
+  ): Promise<OrganizationRecentDecisionsResponseV1>;
+
+  readReviewerRecentDecisions(
+    request: OrganizationReviewerRecentDecisionsRequestV1,
+    signal?: AbortSignal,
+  ): Promise<OrganizationReviewerRecentDecisionsResponseV1>;
+
+  readReadableSearch(
+    request: OrganizationReadableSearchRequestV1,
+    signal?: AbortSignal,
+  ): Promise<OrganizationReadableSearchResponseV1>;
 
   beginSlackLink(
     request: OrganizationSlackLinkBeginRequestV1,

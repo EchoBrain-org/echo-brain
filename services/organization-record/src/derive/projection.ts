@@ -13,6 +13,14 @@ import type {
 import { OrganizationRecordDeriveError } from '../application/errors.js';
 import { parseOrganizationRecordEnvelope } from '../application/record-frame.js';
 import {
+  readReviewerRestrictedEnvelope,
+  type ReviewerRestrictedEnvelopeValidator,
+} from '../application/reviewer-policy-fact.js';
+import {
+  readOrganizationMemberReadableEnvelope,
+  type OrganizationMemberReadableEnvelopeValidator,
+} from '../application/organization-member-policy-fact.js';
+import {
   derivedApprovalGroupId,
   derivedAtomId,
   derivedMeetingSnapshotId,
@@ -285,6 +293,8 @@ function approvalProjection(
     participant_observations: observations,
     rejections: [],
     edges: deduplicateEdges(edges),
+    reviewer_policy_exclusions: [],
+    organization_member_policy_exclusions: [],
   };
 }
 
@@ -325,11 +335,122 @@ function rejectionProjection(
         log_position: position,
       },
     ]),
+    reviewer_policy_exclusions: [],
+    organization_member_policy_exclusions: [],
   };
 }
 
+/**
+ * The one text-free outcome a valid reviewer-v2 approval produces. Its broad
+ * v1 collections are all empty, so no reviewer-v2 content can reach the tables
+ * the landed follower serves from.
+ *
+ * Validity is decided by exactly the same injected closed validator the append
+ * path uses; derive owns no second, looser reading of a durable v2 document.
+ * Anything it rejects halts the follower with the cursor unchanged.
+ */
+function reviewerExclusionProjection(
+  row: OrganizationRecordLogRow,
+  envelope: JsonObject,
+  validate: ReviewerRestrictedEnvelopeValidator | undefined,
+): OrganizationRecordProjection {
+  const position = row.position;
+  // The indexed event type and the frame's own event type must be the same
+  // fact. A row whose column says `rejection` cannot derive as the approval
+  // its bytes claim, and a v2 frame admits approval only.
+  if (envelope['event_type'] !== row.event_type) {
+    return fail(
+      position,
+      'envelope event type does not match its indexed event type',
+    );
+  }
+  if (row.event_type !== 'approval') {
+    return fail(position, 'envelope schema version 2 admits approval only');
+  }
+  if (validate === undefined) {
+    return fail(
+      position,
+      'reviewer-v2 derive requires the injected closed reviewer validator',
+    );
+  }
+  try {
+    readReviewerRestrictedEnvelope(envelope, validate);
+  } catch (error) {
+    return fail(
+      position,
+      error instanceof Error
+        ? error.message
+        : 'reviewer envelope failed closed reviewer-v2 validation',
+    );
+  }
+  return {
+    log_position: position,
+    record_hash: row.record_hash,
+    atoms: [],
+    meeting_snapshots: [],
+    participant_observations: [],
+    rejections: [],
+    edges: [],
+    reviewer_policy_exclusions: [
+      {
+        log_position: position,
+        record_hash: row.record_hash,
+        envelope_version: 2,
+        policy_id: 'restricted-reviewer-v1',
+        outcome: 'deferred-to-permission-aware-retrieval',
+      },
+    ],
+    organization_member_policy_exclusions: [],
+  };
+}
+
+function organizationMemberExclusionProjection(
+  row: OrganizationRecordLogRow,
+  envelope: JsonObject,
+  validate: OrganizationMemberReadableEnvelopeValidator | undefined,
+): OrganizationRecordProjection {
+  if (envelope['event_type'] !== row.event_type) {
+    return fail(row.position, 'envelope event type does not match its indexed event type');
+  }
+  if (row.event_type !== 'approval') {
+    return fail(row.position, 'envelope schema version 3 admits approval only');
+  }
+  try {
+    readOrganizationMemberReadableEnvelope(envelope, validate);
+  } catch (error) {
+    return fail(
+      row.position,
+      error instanceof Error ? error.message : 'organization-member envelope failed closed schema-v3 validation',
+    );
+  }
+  return {
+    log_position: row.position,
+    record_hash: row.record_hash,
+    atoms: [], meeting_snapshots: [], participant_observations: [], rejections: [], edges: [],
+    reviewer_policy_exclusions: [],
+    organization_member_policy_exclusions: [{
+      log_position: row.position,
+      record_hash: row.record_hash,
+      envelope_version: 3,
+      policy_id: 'organization-member-readable-v1',
+      outcome: 'deferred-to-permission-aware-retrieval',
+    }],
+  };
+}
+
+/**
+ * Strict envelope dispatch.
+ *
+ * The exact `(kind, schema_version)` pair selects one closed family before any
+ * event, intent, or payload field is interpreted. Version 1 keeps its landed
+ * behavior byte for byte. Version 2 produces exactly one exclusion row.
+ * Everything else halts the follower rather than being skipped: visible
+ * staleness is the designed behavior.
+ */
 export function projectOrganizationRecord(
   row: OrganizationRecordLogRow,
+  reviewerValidator?: ReviewerRestrictedEnvelopeValidator,
+  organizationMemberValidator?: OrganizationMemberReadableEnvelopeValidator,
 ): OrganizationRecordProjection {
   let envelope: JsonObject;
   try {
@@ -338,6 +459,23 @@ export function projectOrganizationRecord(
     return fail(
       row.position,
       `stored envelope bytes are not canonical JSON: ${(error as Error).message}`,
+    );
+  }
+  const kind = envelope['kind'];
+  if (kind !== undefined && kind !== 'echo-organization-record-envelope') {
+    return fail(row.position, `unsupported envelope kind ${String(kind)}`);
+  }
+  const schemaVersion = envelope['schema_version'];
+  if (schemaVersion === 2) {
+    return reviewerExclusionProjection(row, envelope, reviewerValidator);
+  }
+  if (schemaVersion === 3) {
+    return organizationMemberExclusionProjection(row, envelope, organizationMemberValidator);
+  }
+  if (schemaVersion !== 1) {
+    return fail(
+      row.position,
+      `unsupported envelope schema version ${String(schemaVersion)}`,
     );
   }
   if (row.event_type === 'approval') return approvalProjection(row, envelope);

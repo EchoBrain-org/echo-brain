@@ -6,7 +6,13 @@
   "boundary_root": "services/organization-record",
   "source_root": "services/organization-record/src",
   "package_json": "services/organization-record/package.json",
-  "entry_points": ["services/organization-record/src/index.ts"],
+  "entry_points": [
+    "services/organization-record/src/index.ts",
+    "services/organization-record/src/append.ts",
+    "services/organization-record/src/maintenance.ts",
+    "services/organization-record/src/reviewer.ts",
+    "services/organization-record/src/retrieval-build.ts"
+  ],
   "owned_source_paths": ["services/organization-record/src/**"],
   "allowed_internal_paths": ["services/organization-record/src/**"],
   "allowed_workspace_packages": ["@echo-brain/federation-protocol"],
@@ -14,12 +20,17 @@
   "allowed_node_builtins": ["fs", "path"],
   "runtime_assets": [
     "services/organization-record/migrations/log/0001_organization_record_log.sql",
-    "services/organization-record/migrations/derived/0001_organization_record_derived.sql"
+    "services/organization-record/migrations/log/0002_permission_pilot.sql",
+    "services/organization-record/migrations/log/0003_reviewer_policy_fact.sql",
+    "services/organization-record/migrations/log/0004_organization_member_readable_policy_fact.sql",
+    "services/organization-record/migrations/derived/0001_organization_record_derived.sql",
+    "services/organization-record/migrations/derived/0002_reviewer_v2_exclusion.sql",
+    "services/organization-record/migrations/derived/0003_member_readable_v3_exclusion.sql"
   ],
   "layer_rules": [
     {
       "name": "record-entrypoint-exports-public-api",
-      "from": "services/organization-record/src/index.ts",
+      "from": "services/organization-record/src/*.ts",
       "allowed_imports": ["services/organization-record/src/**"],
       "allowed_workspace_packages": [],
       "allowed_external_packages": [],
@@ -60,6 +71,22 @@
         "services/organization-record/src/application/**",
         "services/organization-record/src/derive/**",
         "services/organization-record/src/persistence/**"
+      ],
+      "allowed_workspace_packages": ["@echo-brain/federation-protocol"],
+      "allowed_external_packages": ["better-sqlite3"],
+      "allowed_node_builtins": []
+    },
+    {
+      "name": "record-retrieve-reads-only-qualified-log-state",
+      "from": "services/organization-record/src/retrieve/**",
+      "allowed_imports": [
+        "services/organization-record/src/application/**",
+        "services/organization-record/src/log/chain-verification.ts",
+        "services/organization-record/src/log/reviewer-fact-admission.ts",
+        "services/organization-record/src/log/reviewer-policy-fact.ts",
+        "services/organization-record/src/log/organization-member-policy-fact.ts",
+        "services/organization-record/src/log/permission-pilot.ts",
+        "services/organization-record/src/retrieve/**"
       ],
       "allowed_workspace_packages": ["@echo-brain/federation-protocol"],
       "allowed_external_packages": ["better-sqlite3"],

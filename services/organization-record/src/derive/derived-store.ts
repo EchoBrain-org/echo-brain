@@ -6,6 +6,8 @@ import type {
   DerivedMeetingSnapshotRow,
   DerivedParticipantObservationRow,
   DerivedRejectionRow,
+  DerivedReviewerPolicyExclusionRow,
+  DerivedOrganizationMemberPolicyExclusionRow,
   JsonValue,
   OrganizationRecordProjection,
   Sha256Digest,
@@ -23,6 +25,65 @@ export interface OpenOrganizationRecordDerivedOptions {
   readonly clock?: OrganizationRecordClock;
 }
 
+/**
+ * The storage-layer half of derived v2 compatibility.
+ *
+ * The projector is where the exclusion outcome is decided, but the write
+ * boundary is where it is enforced. One log record either derives the broad v1
+ * way or produces exactly one fixed text-free exclusion — never both, and
+ * never a second exclusion. A mixed projection is rejected before any insert
+ * runs, so the record's rows, edges, and cursor roll back together and the
+ * follower halts with the cursor unchanged.
+ */
+function assertProjectionIsExclusiveByEnvelopeVersion(
+  projection: OrganizationRecordProjection,
+): void {
+  const exclusions = [
+    ...projection.reviewer_policy_exclusions,
+    ...projection.organization_member_policy_exclusions,
+  ];
+  if (exclusions.length === 0) return;
+  if (exclusions.length !== 1) {
+    throw new OrganizationRecordError(
+      'derive_halted',
+      `organization record derive at position ${projection.log_position} produced ${exclusions.length} policy exclusions`,
+    );
+  }
+  if (
+    projection.atoms.length > 0 ||
+    projection.meeting_snapshots.length > 0 ||
+    projection.participant_observations.length > 0 ||
+    projection.rejections.length > 0 ||
+    projection.edges.length > 0
+  ) {
+    throw new OrganizationRecordError(
+      'derive_halted',
+      `organization record derive at position ${projection.log_position} mixed reviewer-v2 exclusion with broad v1 rows`,
+    );
+  }
+  const exclusion = exclusions[0] as
+    | DerivedReviewerPolicyExclusionRow
+    | DerivedOrganizationMemberPolicyExclusionRow;
+  const reviewerExclusion =
+    exclusion.log_position !== projection.log_position ||
+    exclusion.record_hash !== projection.record_hash ||
+    exclusion.envelope_version !== 2 ||
+    exclusion.policy_id !== 'restricted-reviewer-v1' ||
+    exclusion.outcome !== 'deferred-to-permission-aware-retrieval';
+  const memberExclusion =
+    exclusion.log_position !== projection.log_position ||
+    exclusion.record_hash !== projection.record_hash ||
+    exclusion.envelope_version !== 3 ||
+    exclusion.policy_id !== 'organization-member-readable-v1' ||
+    exclusion.outcome !== 'deferred-to-permission-aware-retrieval';
+  if (reviewerExclusion && memberExclusion) {
+    throw new OrganizationRecordError(
+      'derive_halted',
+      `organization record derive at position ${projection.log_position} produced a reviewer exclusion that is not the fixed text-free outcome`,
+    );
+  }
+}
+
 const ATOM_COLUMNS =
   'atom_id, log_position, record_hash, approval_group, signal_id, kind, text, subject, status, owner, due_at, confidence, evidence, restricted, reviewer_principal_id, reviewer_display_name, reviewed_at';
 const SNAPSHOT_COLUMNS =
@@ -32,6 +93,8 @@ const OBSERVATION_COLUMNS =
 const REJECTION_COLUMNS =
   'rejection_id, log_position, record_hash, meeting_id, source_adapter_id, source_instance_id, source_external_id, reviewer_principal_id, reviewer_display_name, rejected_at, reason, reconsider_after';
 const EDGE_COLUMNS = 'edge_type, from_id, to_id, log_position';
+const EXCLUSION_COLUMNS =
+  'log_position, record_hash, envelope_version, policy_id, outcome';
 
 /**
  * The derived graph over `record-derived.sqlite`. Disposable and rebuildable.
@@ -110,6 +173,7 @@ export class OrganizationRecordDerivedStore {
   commitRecord(projection: OrganizationRecordProjection): void {
     this.database.exec('BEGIN IMMEDIATE');
     try {
+      assertProjectionIsExclusiveByEnvelopeVersion(projection);
       const cursor = this.cursorPosition();
       if (projection.log_position !== cursor + 1) {
         throw new OrganizationRecordError(
@@ -149,6 +213,22 @@ export class OrganizationRecordDerivedStore {
       for (const atom of projection.atoms) insertAtom.run(atom);
       for (const rejection of projection.rejections) insertRejection.run(rejection);
       for (const edge of projection.edges) insertEdge.run(edge);
+      // The exclusion row and the cursor advance in this same transaction, so
+      // a restart or a stopped rebuild reproduces the identical outcome.
+      const insertExclusion = this.database.prepare(
+        `INSERT INTO organization_derived_reviewer_policy_exclusion (${EXCLUSION_COLUMNS})
+         VALUES (@log_position, @record_hash, @envelope_version, @policy_id, @outcome)`,
+      );
+      for (const exclusion of projection.reviewer_policy_exclusions) {
+        insertExclusion.run(exclusion);
+      }
+      const insertOrganizationMemberExclusion = this.database.prepare(
+        `INSERT INTO organization_derived_member_readable_policy_exclusion (${EXCLUSION_COLUMNS})
+         VALUES (@log_position, @record_hash, @envelope_version, @policy_id, @outcome)`,
+      );
+      for (const exclusion of projection.organization_member_policy_exclusions) {
+        insertOrganizationMemberExclusion.run(exclusion);
+      }
 
       this.database
         .prepare(
@@ -212,16 +292,45 @@ export class OrganizationRecordDerivedStore {
    * across library versions. Derivation wall-clock (`updated_at`,
    * `created_at`) is deliberately outside the digest: it is not log content.
    */
+  reviewerPolicyExclusions(): readonly DerivedReviewerPolicyExclusionRow[] {
+    return this.database
+      .prepare(
+        `SELECT ${EXCLUSION_COLUMNS}
+         FROM organization_derived_reviewer_policy_exclusion
+         ORDER BY log_position`,
+      )
+      .all() as DerivedReviewerPolicyExclusionRow[];
+  }
+
+  organizationMemberPolicyExclusions(): readonly DerivedOrganizationMemberPolicyExclusionRow[] {
+    return this.database
+      .prepare(
+        `SELECT ${EXCLUSION_COLUMNS}
+         FROM organization_derived_member_readable_policy_exclusion
+         ORDER BY log_position`,
+      )
+      .all() as DerivedOrganizationMemberPolicyExclusionRow[];
+  }
+
+  /**
+   * Diagnostic schema 2 adds the exclusion collection. Projected schema-v1
+   * rows are byte-identical to what schema 1 produced, so a v1-only store
+   * digests the same content it always did under a new envelope version.
+   */
   contentDigest(): Sha256Digest {
     return canonicalSha256({
       kind: 'echo-organization-record-derived-content',
-      schema_version: 1,
+      schema_version: 3,
       cursor_position: this.cursorPosition(),
       atoms: this.atoms() as unknown as JsonValue,
       meeting_snapshots: this.meetingSnapshots() as unknown as JsonValue,
       participant_observations: this.participantObservations() as unknown as JsonValue,
       rejections: this.rejections() as unknown as JsonValue,
       edges: this.edges() as unknown as JsonValue,
+      reviewer_policy_exclusions:
+        this.reviewerPolicyExclusions() as unknown as JsonValue,
+      organization_member_policy_exclusions:
+        this.organizationMemberPolicyExclusions() as unknown as JsonValue,
     });
   }
 

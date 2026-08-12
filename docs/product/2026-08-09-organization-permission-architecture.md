@@ -1,639 +1,565 @@
-# Organization permission architecture: pillars and skeleton (v1)
+# Organization permission architecture (constitution v1)
 
-**Status:** Skeleton approved in founder session 2026-08-09; industry
-cross-reference pass 2026-08-09 (three-agent primary-source review; see
-"Industry cross-reference"); deliberately contains no feature. Features
-(retrieve surface, request/approve flow, intent affordance, org-chart
-onboarding) instantiate this document in their own specs and may not
-contradict it.
+**Status:** design-only constitution. It does not claim that a content
+gatekeeper is shipped.
+
+**Code baseline:** this constitution is design grounding, not an implementation
+baseline. A feature-specific contract and review must establish any current
+code baseline.
+
 **Builds on:**
 [2026-08-07-org-decision-record-append-derive-design.md](2026-08-07-org-decision-record-append-derive-design.md)
-(the shipped append/derive substrate and its industry deep-dives),
-[org-brain-direction.md](org-brain-direction.md).
+and [org-brain-direction.md](org-brain-direction.md).
+
+## Reading contract
+
+This document uses four status terms deliberately:
+
+- **Landed** means code present at the feature's stated implementation
+  baseline.
+- **Constitution v1** means a binding design constraint for later permission
+  features. It is not a shipped feature.
+- **Pilot slice 1** means the absolute-minimum first evaluator described near
+  the end of this document.
+- **Deferred** means a separate feature spec and review are required before
+  implementation.
+
+Industry systems are cited as evidence of a failure mode or a useful
+mechanism. A citation does not make the adjacent ECHO policy inevitable. The
+research ledger records both what each source supports and what it does not.
 
 ## Why this is the product
 
 People put real decisions into a system only when they can predict who will
-see them. Predictability — not merely correctness — is what prevents
-self-censorship, and what is in the brain is what the brain is worth. The
-permission model therefore produces the asset; it does not guard it. It is
-also the one component that can fail silently: every other layer fails loudly
-(bad append rejected, bad derive halts), while a wrong visibility answer
-looks like a normal answer. This document exists to make that failure
-structurally hard rather than procedurally avoided.
+see them. Predictability reduces self-censorship, and what is in the brain is
+what makes the brain useful. The permission model therefore helps create the
+asset; it is not merely a guard around it.
 
-The gate philosophy is one idea applied twice: a human act decides what
-enters the record, and a human's real-world context decides who sees it. The
-system never exceeds what a person did or would do.
+Wrong visibility is also unusually quiet. A bad append can reject and a bad
+derive can halt, but an over-broad answer can look normal. This architecture
+reduces that risk by limiting access to reviewed policy over recorded human
+acts and current organization facts. It does not claim to reconstruct what a
+person hypothetically “would have done.”
+
+## Glossary and threat boundary
+
+- **Principal** is the Authority's stable organization identity. **Person** is
+  the live, effective view of a principal, membership, and valid identity
+  links at an evaluation point.
+- **Caller** is the authenticated installation making a request. **Subject**
+  is the principal whose visibility is being evaluated. Normal product reads
+  are self-only: caller and subject must resolve to the same active principal.
+- **Record** is a canonical approved or rejected envelope in the organization
+  log. **Atom** is a deterministic derived decision, action, or rationale.
+  **Item** means an atom or another future permission-addressable projection.
+- **Path** is evidence that proves a visibility level. An **explicit grant**
+  is one possible path, recorded separately from immutable content. The word
+  grant does not mean every derived path.
+- **Visibility** is what has been proved: invisible, discoverable, or readable.
+  **Determinacy** records whether all policy-relevant inputs needed for a
+  higher level were evaluable. The two are not the same.
+- **Floor** is the organization policy for valid content carrying no human
+  visibility intent. No floor is landed today.
+- **Legacy-unmarked** means a valid old envelope whose schema predates human
+  intent provenance. **Marked** means a future schema carries explicit human
+  provenance for its visibility intent. Missing required fields in that
+  future schema are malformed, not legacy-unmarked.
+
+The product gate protects normal application reads. It is not a claim that an
+EC2, SSM, root, database, backup, or signing-key custodian lacks technical
+access. Those custodians remain inside the trusted computing and operating
+boundary. A product-level “no override” means there is no application route
+that bypasses traversal policy; it does not erase infrastructure custody.
+
+SQLite triggers and the record hash chain prevent ordinary application
+updates and reveal mutation, reordering, and interior deletion. They cannot
+detect a valid-prefix tail truncation or restore of an older valid database
+without an externally retained checkpoint. The landed verifier states this as
+`tail_truncation_detectable: false`. Accordingly:
+
+- “immutable” below means immutable through supported application paths and
+  tamper-evident relative to retained receipts or a trusted prior head;
+- no claim says a database owner is cryptographically unable to rewrite
+  history; and
+- until an off-host monotonic Authority-state head exists, a restore must stay
+  out of service until memberships, installations, revocations, grants, and
+  client-held receipts are reconciled.
 
 ## The three pillars
 
-All authoritative pillar data is organization-central, held by the authority
-process. Pillar membership is epistemic, not physical — classify rows by what
-they are, not by which database file holds them.
+Pillar membership is epistemic, not physical. Different act families may use
+different ledgers when their schemas or retention rules differ.
 
-- **Person — who people are now.** Principals, memberships (owner/employee,
-  active/revoked), installations, provider identity links, and — when they
-  exist — groupings of principals (teams, roles, org-chart structure). This
-  is the only pillar the gatekeeper reads live. It is current state with its
-  own audit history, not an append-only log.
-- **Content — what humans approved.** The canonical envelopes in the log are
-  the authoritative form; the deterministic projections (atoms, meeting
-  snapshots, participant observations, provenance edges) are the same content
-  in servable shape, carrying zero independent authority and verifiable
-  against the log by hash. Content is frozen forever. Nothing enters by
-  type or by crawling; things enter by being approved.
-- **Activity — what humans did.** Approvals, rejections, grants, requests,
-  identity attestations, queries. Append-only, never edited. In this system
-  activity is primary: the log is the activity pillar, and person-facts and
-  content are downstream of recorded acts. Activity records what humans
-  chose, never what they glanced at — an accountability ledger, not
-  engagement telemetry. A query is an act (a stated question and a served
-  answer, auditable under invariant 10); a scroll, click, view, or dwell is
-  a glance, and glances are refused as fields. Scoping honesty (grounded
-  2026-08-09): today only approval and rejection acts live on the
-  hash-chained record log; grants and identity links live in control-plane
-  tables with revoke-by-update semantics, authority acts in an unchained
-  audit table, and queries nowhere. Bringing every act family under one
-  chained rail is required work, not a present property — until then, the
-  forgery/erasure guarantees below hold only for the record log.
+- **Person — who people are at the evaluation point.** Principals, current
+  active or revoked memberships, installations, and effective identity-link
+  projections. Future teams and roles also belong here. The attestation that
+  created an identity link is Activity; its currently effective binding is a
+  Person projection.
+- **Content — what humans approved or rejected.** Canonical envelopes are the
+  authoritative form. Deterministic atoms, meeting snapshots, participant
+  observations, and provenance edges are servable projections with no
+  independent authority. Corrections are new records, not edits.
+- **Activity — accountable acts and system outcomes.** Approval, rejection,
+  future permission acts, and future access-decision audits live here. Durable
+  governance acts are append-only and superseded by later acts. Query-audit
+  entries are immutable during a declared retention period and then expire as
+  whole entries or sealed segments under an auditable retention action. They
+  do not belong in the forever decision log.
 
-Access in one sentence: **a live person walking a path through frozen
-history.** When the person changes (leaves, switches teams), the person end
-of every derived path changes with them — zero writes to content, zero
-curation.
+Queries are accountability events, not engagement telemetry. Scrolls,
+clicks, views, dwell time, and claims about human attention are not admitted
+as fields.
 
-The pillars are closed; the edge vocabulary is open. Every future need —
-teams, projects, contractor scoping — is a new relationship among existing
-pillars, never a new pillar. (The relationship-derivation discipline is
-Zanzibar's, and Atlassian's Teamwork Graph is the ingest-side precedent —
-both cited in the append/derive design's knowledge-graph permission
-deep-dive; Glean's and Microsoft Graph's triad convergence is recorded in
-the atlas.)
+The access sentence is: **a current active person walking a reviewed path
+through frozen history.** A person's membership change affects future
+evaluations without rewriting content.
 
-## The trust ladder
+## Trust ladder
 
-Authority never transfers downstream. Derivation preserves content but not
-authority; inference produces neither.
+Authority never transfers merely because data moved downstream. W3C PROV-O's
+attribution vocabulary motivates the responsible-agent axis; it does not
+prescribe this four-rung taxonomy
+([PROV-O](https://www.w3.org/TR/prov-o/)).
 
-Rungs 2 and 3 are indistinguishable by lineage — both derive from rung 1.
-What separates them is **attribution**: rung 1 is attributed to a person who
-bears responsibility; rungs 2 and 3 to software, and rung 2 alone is
-redeemable by rebuild digest. PROV-O draws exactly this axis — "Attribution
-is the ascribing of an entity to an agent," where an agent "bears some form
-of responsibility" ([PROV-O](https://www.w3.org/TR/prov-o/)) — so labeling
-must key off the responsible agent, never off lineage. The ladder classifies
-content lineage only: live person-pillar facts (memberships, principals,
-grouping structure) sit outside it and are cited as current state at answer
-time, never as rung-2 rows — an answer renders the live principal, while the
-frozen `reviewer_display_name` on an atom remains display-only and never
-load-bearing.
+1. **Canonical envelope.** Human-approved or human-rejected, installation
+   signed, Authority-receipted, and hash-chained. It may be cited as the
+   organization's recorded fact.
+2. **Deterministic projection.** A pure restatement bound to rung 1 by record
+   hash and reproducible under a pinned derive build. The rebuild digest proves
+   reproducibility, not that the projection rule was correct; review and golden
+   fixtures carry that burden.
+3. **Inference.** Machine judgment about facts. It must identify its software
+   producer in the persisted row, cite rungs 1–2, and never grant access. EU AI
+   Act Article 50(2) is a useful transport precedent for machine-readable
+   marking of certain synthetic output, but its legal scope and exceptions
+   differ from this taxonomy. Article 50(4)'s editorial-control exception sits
+   inside a narrow, specified disclosure duty; it is not a general exception
+   for deterministic projections
+   ([official EUR-Lex text](https://eur-lex.europa.eu/eli/reg/2024/1689/oj?locale=en)).
+   A field on every ECHO row is our architecture choice, not a statutory
+   database-row requirement.
+4. **Answer composition.** Ephemeral and citation-bound. Every substantive
+   claim cites authorized upstream atoms. “No approved decision you are
+   authorized to discover or read covers that” is a valid answer. The access
+   audit stores decision evidence and a response digest, not a second full copy
+   of the prompt and answer by default.
 
-1. **Canonical envelope** — human-approved, signed, hash-chained. May be
-   cited as fact.
-2. **Deterministic projection** — the same fact restated by code; proved
-   *reproducible* by the rebuild digest and *bound to rung 1* by record hash;
-   cites rung 1. The digest proves the projection is a pure function of the
-   log, not that it is the right function — correctness of the projection
-   rule itself rests on review and golden fixtures. The admission test for
-   this rung: the row carries no judgment that could be wrong while the log
-   is right.
-3. **Inference** (future interpretive pass) — machine judgment about facts.
-   The machine-judgment marking is **a field on the row, not a rendering
-   convention**, so it survives export, API access, and clients we do not
-   write (EU AI Act Art. 50(2) requires machine-readable marking of
-   machine-generated output; its Art. 50(4) exemption for content with
-   "human editorial review or responsibility for publication" is a
-   regulator's version of rungs 1–2:
-   [Art. 50](https://artificialintelligenceact.eu/article/50/)). Inference
-   must cite rungs 1–2 and may never grant access. When entities and
-   semantic edges arrive, the knowledge graph becomes a quad; the permission
-   graph remains the triad.
-4. **Answer composition** (query time) — ephemeral; must cite upward; "no
-   approved decision covers that" is a first-class answer; persisted only in
-   the query audit. Binding rules, each inverting a shipped vendor default
-   (citations in the cross-reference section): every claim cites — there is
-   no self-certified exemption (Google's `groundingCheckRequired: false`
-   affordance is refused by name); support aggregates AND across cited
-   atoms, never any-chunk-passes; nothing streams to the asker before its
-   verdict resolves; verification is per cited atom, which also respects
-   vendor input ceilings. No shipped grounding check permits a threshold of
-   1.0 — zero ungrounded claims cannot be guaranteed — which is the standing
-   argument for rung 4 remaining ephemeral and citing upward. Abstention is
-   stronger here than in the precedents: "no approved decision covers that"
-   is a statement about the organization's record, and it is the answer that
-   makes request-and-approve possible.
+Probabilistic grounding scores do not make rung 4 authoritative. Amazon
+Bedrock caps its contextual-grounding threshold below 1, while Google accepts
+a citation threshold of 1, but that only controls citation-confidence
+filtering rather than proving the answer correct. Neither establishes zero
+ungrounded claims
+([Bedrock](https://docs.aws.amazon.com/bedrock/latest/userguide/guardrails-contextual-grounding-check.html),
+[Google](https://docs.cloud.google.com/generative-ai-app-builder/docs/check-grounding)).
+Future implementation must also pin claim-offset semantics: Google's offsets
+are UTF-8 byte positions, not character indexes.
 
-## Invariants
+## Normative invariants
 
-1. **Unreachable, not filtered.** Retrieval traverses from the asker.
-   Nothing unauthorized is ever selected, held, and then removed; it is
-   never reachable. A traversal bug shows less, never more. Scoping happens
-   **before scoring**: an index or ranking computed over the whole corpus
-   and then trimmed is a filter with extra steps.
-2. **Access derives only from facts the organization already maintains for
-   other reasons** — employment, team membership, presence in a room, an
-   explicit recorded grant. Never a reader list attached to a record.
-   (Forced, not preferred: content is frozen, so a per-record reader list
-   would make every membership change a rewrite of immutable records.
-   Vendors document both failure axes of stamped lists: Google caps
-   `acl_info` at "3000 readers … per document"
-   ([Google](https://docs.cloud.google.com/generative-ai-app-builder/docs/data-source-access-control));
-   Microsoft warns that group expansion into item ACLs causes "a high
-   volume of item updates"
-   ([Microsoft](https://learn.microsoft.com/en-us/graph/connecting-external-content-manage-items)).
-   The early-binding camp — snapshot readers at approval time — fails the
-   same way: a frozen reader list cannot follow a person who changes teams,
-   which is the entire "live person walking a path through frozen history"
-   claim.)
-3. **Existence and content are separate rights** (traverse vs read). The
-   visibility vocabulary is three-valued: invisible, discoverable, readable.
-4. **Every grant is a path, expressible as one sentence to the person
-   affected.** "You can see this because you were in that meeting." A rule
-   that cannot be said that way does not enter the system. The path is also
-   the explanation: there is no access the system cannot explain, because
-   access is the explanation.
-5. **Every visibility answer is computed against current reality.** No
-   cached, replicated, or snapshotted permission state. Revocation is
-   immediate by construction. (Zanzibar's new-enemy problem binds the moment
-   this is violated; freshness tokens are the named remedy if caching is
-   ever introduced. The alternative is a documented staleness window:
-   Amazon Quick synchronizes permissions "every 24 hours by default";
-   Moveworks runs a daily full pass with incrementals "every 15 minutes";
-   Azure AI Search warns "a timing lag occurs" before permission changes
-   are recognized. Any future proposal to cache permission state is a
-   proposal to adopt a window of that order and must state its number.)
-   Scope: this binds permission state that outlives a single answer; one
-   membership read used across the rows of one answer is not a cache. It
-   governs *visibility* answers — the shipped installation access lease
-   (TTL-bounded, `active_lease_ttl_ms`) is write-side operational
-   credentialing, already named, and not a visibility snapshot.
-6. **Every failure denies.** Missing data, unresolved identity, ambiguity,
-   error — all deny. The asymmetry is deliberate: wrongful denial costs a
-   question to a colleague; wrongful disclosure cannot be undone. This
-   holds because denial here is **per-query and self-healing** — the next
-   query recomputes; the principle licenses no bulk revocation event.
-   (Shipped precedent both ways: Amazon Quick "returns no documents rather
-   than unfiltered results" when it cannot evaluate permissions, and denies
-   everyone on a shared email "to prevent accidentally granting document
-   access to the wrong person"
-   ([AWS](https://docs.aws.amazon.com/quick/latest/userguide/acl-best-practices-kb.html));
-   Elastic makes an empty access-control field mean "the document will be
-   effectively invisible"
-   ([Elastic](https://www.elastic.co/docs/reference/search-connectors/es-dls-overview)).)
-7. **Structure and statistics obey the same rules as content.** An edge
-   resolves at the *lower* of its two endpoints' visibility levels, and it
-   renders above discoverable only when both endpoints are readable — in the
-   two-valued limit this is "visible only when both endpoints are." No stubs, no counts of hidden
-   items, no "1 restricted result" — **and no statistic derived from
-   content the asker cannot traverse**: term frequencies, corpus totals,
-   ranking normalization, and pagination bounds computed over hidden
-   content are themselves disclosures. Elastic, which filters documents
-   correctly, still concedes a restricted user "could … count how many
-   inaccessible documents contain a given term"
-   ([Elastic](https://www.elastic.co/docs/deploy-manage/users-roles/cluster-or-deployment-auth/controlling-access-at-document-field-level));
-   this invariant binds the index, not just the renderer.
-8. **No model output can ever widen access.** Inferred nodes and edges
-   describe; they never grant. The interpretive linker must be structurally
-   incapable of creating a path that confers visibility — and its **read
-   scope is itself declared and bounded**, so it cannot observe across
-   audiences it must not link (Palantir's read authorization is "an
-   additional upper bound on the data an action can read during execution"
-   ([Palantir](https://www.palantir.com/docs/foundry/action-types/read-write-authorizations/))).
-   A machine recommendation shown on any approval surface is rung-3
-   inference: labeled as such, never pre-selected, never defaulted, never
-   bulk-applied — a recommender whispering "approve" to a human relay is a
-   widening path (Entra ships ML deny/approve recommendations and a bulk
-   "Accept recommendations" button; both affordances are refused:
-   [Entra](https://learn.microsoft.com/en-us/entra/id-governance/review-recommendations-access-reviews)).
-9. **Recording is not sharing.** Entry into the organization record implies
-   no readership. What the org may read of a record is decided by the
-   permission model, never by the act of recording.
-10. **Every visibility decision is auditable afterward** — who asked, what
-    was served, by which path, and where a traversal terminated at a deny,
-    that a deny occurred and by which rule, recorded without the denied
-    item's content (the shape Purview ships: per-resource access records
-    with policy details for blocked access:
-    [Purview](https://learn.microsoft.com/en-us/purview/audit-copilot)).
-    **The query audit is itself a governed record with its own visibility
-    rule and retention horizon, stated at onboarding alongside the floor —
-    it is never resolved by the floor.** The audit is a transitive map of
-    who asks about what; under a readable floor it would otherwise be the
-    design's largest silent disclosure.
+1. **Authorize the candidate set before scoring or model access.** The logical
+   set passed to search, ranking, tools, or a model contains only items the
+   caller may traverse. Authorization is not a post-filter. This structure
+   reduces leakage, but it does not make all traversal bugs under-disclose;
+   adversarial over-disclosure tests remain mandatory. Governed and ungoverned
+   sources never share a retrieval corpus unless every source has an explicit
+   policy root.
+2. **Never stamp resolved reader identities into immutable content.**
+   Fact-derived paths use current organization facts maintained independently
+   of the item. Explicit grants live as permission-act edges. Frozen participant
+   claims may remain content facts, but they are not a current reader list.
+3. **Existence and content are separate rights.** Visibility is ordered
+   `invisible < discoverable < readable`. Discoverable metadata is its own
+   deliberately approved projection; an atom subject, meeting title,
+   participant list, evidence span, count, or model summary is never assumed
+   safe merely because it is metadata.
+4. **Every positive result has a sentence-form witness.** The witness names a
+   reviewed policy and facts the caller is allowed to know. If several paths
+   exist, policy chooses one deterministically and audit records the exact path
+   kind and rule version. An explanation must not reveal a hidden intermediate
+   node.
+5. **Check and use share one consistency boundary.** One request evaluates a
+   coherent Person, permission-effect, content, derive, and policy version and
+   scopes all candidate reads to those heads. In the single-process Authority,
+   every authorization-relevant mutation — Person or policy change, permission
+   act/effect transition, record append, or derive-head transition — and final
+   response commitment passes through one Authority-owned read/write fence. A
+   mutation holds the write side through its commit and head update. After
+   expensive retrieval or model
+   work is buffered, a response holds the read side while it rechecks every
+   pinned head, commits audit, and hands the response to the HTTP layer. That
+   short fenced section is the authorization linearization point: a revocation
+   committed before it must deny; one ordered after it affects the next
+   request. A changed head causes retry or deny. A positive decision is never a
+   reusable authorization token. Model output is buffered until
+   citation/grounding checks and audit pass; unchecked output is never streamed
+   to the caller. A local access lease authenticates the installation but never
+   substitutes for fresh authoritative Person state. Multiple Authority writers
+   remain unsupported until a distributed consistency mechanism replaces this
+   fence.
 
-**The gatekeeper is queryable, in three forms, all v1:** `can(person, item)`
-returns readable / discoverable / invisible; `why(person, item)` returns the
-path as its sentence, or the absence of one; `who(item)` returns everyone
-with a path today, each with their sentence. All three distinguish
-**granted / denied-for-lack-of-path / undeterminable** (identity unresolved)
-— collapsing the last two hides exactly the identity-bridge failures
-invariant 6 exists to catch. (Precedent: Amazon Quick's permission checker
-returns has-access / no-access / "No access control list found"
-([AWS](https://docs.aws.amazon.com/quick/latest/userguide/sync-reports-observability.html));
-OpenFGA splits Check from Expand, the latter "to understand why a user has a
-particular relationship with a specific object"
-([OpenFGA](https://openfga.dev/docs/interacting/relationship-queries)).)
+   A reviewed, bounded feature contract may preselect independently immutable,
+   append-only content outside that fence only after authenticating and
+   authorizing the caller before any content access. It must recheck every
+   mutable authorization fact and commit its audit in the final
+   Authority-owned transaction before sending pre-serialized bytes. A
+   concurrently appended row may affect only a later request; it may not alter
+   or widen the selected response. This exception neither permits mutable
+   projections outside the fence nor substitutes an authorization token for the
+   final check.
+6. **Failure cannot widen access.** Missing or renamed visibility data,
+   unresolved identity, malformed policy state, stale versions, storage errors,
+   and audit failures deny the affected path. An unresolved optional path does
+   not erase an independently proved lower level: the resolver returns both the
+   highest proved visibility and whether higher evaluation was incomplete.
+   Ordinary callers receive one opaque not-found/denied shape for nonexistent,
+   invisible, and indeterminate items; full diagnostics are governed admin
+   data. This is an application authorization rule, not a license for a shared
+   network limiter to deny the whole deployment.
+7. **Structure and statistics inherit visibility before computation.** An edge
+   cannot render above the lower visibility of its endpoints, and required
+   provenance caps the item at the lower endpoint. Candidate counts, facets,
+   term frequencies, ranking normalization, suggestions, autocomplete,
+   highlights, explain/profile output, pagination bounds, cursors, and caches
+   must all be computed from the caller-scoped set. No hidden-item stub or
+   “restricted result” count is emitted. Every retrieval child or chunk carries
+   and validates its parent's visibility binding; missing projection denies.
+8. **Models cannot widen access or identity.** Inferred nodes and edges may
+   describe but never confer visibility. A model may propose a link or grant to
+   a human, visibly labeled and unselected; it may not bind an identity,
+   approve, bulk-apply, or choose its own moving rule/tool version.
+9. **Recording creates no recipient list.** Ingest does not itself grant a
+   reader. The policy already in force may nevertheless make newly recorded
+   content immediately readable; that is a policy consequence and must be
+   shown on the approval surface before the record is created.
+10. **Every response-authorization decision is auditable without creating a
+    second disclosure surface.** The pre-response event records an authorized
+    response attempt; it does not claim that a network client received the
+    bytes. Minimum audit evidence is requester and installation,
+    operation, target/citation identifiers or opaque digests, decision,
+    path/reason code, Person and policy versions, timestamps, and response
+    digest. A denial records no denied-item text, title, URL, participant,
+    evidence, or other descriptive metadata. Audit visibility, export, and
+    retention are explicit and never inherit the organization content floor.
 
-## Access as path
+## Formal evaluation semantics
 
-Founding facts (v1 vocabulary, both already in the graph):
+### Path roots and combination
 
-- `member(person, organization)` — live, from authority memberships.
-- `observed-in(person, meeting)` — frozen, from participant observations,
-  usable only through the identity bridge below.
+Every ordinary content path begins with all of:
 
-When groupings arrive, a `member(team)` path is preferred over enumerating
-`observed-in` wherever both are true — per-attendee enumeration at a
-60-person all-hands has the fan-out shape of the flat reader lists
-invariant 2 forbids.
+```text
+authenticated enrolled installation
+AND current unexpired organization access lease
+AND current active membership for the caller's principal
+```
 
-Visibility levels:
+Historical attendance, reviewer status, or an explicit grant never keeps a
+departed member readable. External readers are not supported by constitution
+v1; adding them requires a separate root and threat review.
 
-- **Invisible** — the asker cannot know the item exists.
-- **Discoverable** — the asker may see that a decision exists: its subject,
-  its date, and who can grant access. That surface is **exhaustive and
-  closed** — specifically not participant lists (which would leak who met
-  with whom), not evidence, not counts. Discoverable is what makes
-  request-and-approve possible at all. This level is a **deliberate
-  departure** from enterprise-KG practice, where restricted items are
-  uniformly trimmed to invisible; the one shipped precedent is Power BI's
-  discoverability state, added for exactly our reason: without it, users
-  "don't know it exists, so they can't even request access"
-  ([Microsoft](https://learn.microsoft.com/en-us/power-bi/collaborate-share/service-discovery)).
-  Incumbents inherit source-system ACLs and cannot safely do this; we own
-  the record and can.
-- **Readable** — full content with verbatim evidence and provenance.
+Each valid path proves one visibility level. Independent positive paths
+combine with `max`. Record policy controls which path families are eligible;
+it is not implemented as a hidden deny edge. An expired or revoked grant is
+simply no longer a valid path.
 
-**The floor is the one organization-level choice.** At onboarding an
-organization chooses what bare membership grants for unmarked content:
-invisible, discoverable, or readable. Everything else derives from facts and
-recorded acts; nothing else is configurable. The shipped default is
-**discoverable**. The floor is a cultural statement about the organization,
-which is why it is the single explicit setting rather than one knob among
-many.
+Constitution v1 has no free-form deny edge. Narrowing comes from ending a live
+fact, expiring or revoking an explicit grant, the record's reviewed intent, or
+the monotonic floor rule. If a later product need cannot be represented that
+way, a deny vocabulary requires its own conflict and explanation design; it is
+not smuggled in as a traversal exception.
 
-**A floor change is prospective only.** Each record resolves against the
-floor act in force at that record's ingest — exactly as the dated policy
-treats the restricted flag. A floor may be lowered for the future; it may
-never be raised over the past. Raising visibility of existing records is
-not configuration but disclosure, and takes the form of explicit grant acts
-with a named approver. (Google, Amazon Q Business, and Amazon Quick all make
-the access-control mode of a store permanent at creation — "You can't turn
-this setting on or off for an existing data store"; "Document-level ACL
-configuration is permanent"; "Once you turn ACL and identity crawling on
-you won't be able to turn them off." We permit the change but bind it to
-the future — the weakest form of the same protection, and the strongest
-compatible with the floor being a choice at all.)
+The internal result separates proof from completeness:
 
-A projection whose resolution is determinable and merely **unmarked**
-resolves by the floor — a policy choice. A projection whose intent flag is
-unreadable, absent, or corrupt is **invisible**, not floor-defaulted
-(invariant 6): unmarked and unknown are different things.
+```text
+visibility: invisible | discoverable | readable
+evaluation: determined | incomplete
+reason_code: stable machine code
+path_kind: stable machine code | null
+person_state_version
+policy_version
+record_head_position
+record_head_hash
+derived_cursor
+derive_build_id
+permission_act_head | null
+permission_effect_cursor | null
+evaluated_at
+```
 
-Reporting lines and roles, when they arrive, are facts access *may* derive
-from through stated policy — never automatic grants. Hierarchy is data, not
-permission.
+Only governed diagnostics see `reason_code` for an invisible result.
 
-## Permission changes are acts
+### Intent states and the visibility table
 
-Grants, requests, revocations, identity attestations, and floor changes are
-human acts on the same rails as decisions: request → named human approval →
-immutable appended record → derived effect. The permission system is the
-decision system pointed at itself. (Palantir states the same identity from
-the other side: "Submission criteria support encoding business logic into
-data editing permissions" — the business rule *is* the permission
-([Palantir](https://www.palantir.com/docs/foundry/action-types/submission-criteria/));
-Entra PIM ships grants as approval-gated, justified, audited acts
-([Microsoft](https://learn.microsoft.com/en-us/entra/id-governance/privileged-identity-management/pim-configure)).)
+A future intent affordance requires a new versioned envelope schema. The
+landed exact-key v1 schema cannot accept a new `intent_source` field.
 
-Consequences: grants cannot be forged, silently edited, or deleted; every
-grant has a named approver and timestamp; revocation is a new act, never an
-erasure; "who granted this and when" is the same query as "who decided this
-and when."
+| Valid state | Bare active-member path | Additional readable paths |
+| --- | --- | --- |
+| Legacy-unmarked old envelope | Effective historical floor | Active reviewer, later explicit grant |
+| Future explicitly organization-readable | Readable | Not needed |
+| Future explicitly restricted | At most `min(effective historical floor, discoverable)` | Active reviewer, verified explicit attendance, later explicit grant |
+| Rejection without future intent marker | Effective historical floor | Active rejecting reviewer |
+| Malformed, unknown-version, or internally inconsistent | Invisible and incomplete; operator alert | None |
 
-Rules of the rail:
+The implementation-ready
+[Job B minimum-V1 contract](2026-08-11-trusted-permission-aware-searchable-layer-2-design.md)
+now names that future positive state `organization-member-readable-v1` and
+defines it as a separate schema-v3 human-approved policy for current active
+`owner` and `employee` memberships, including people who join later. It is not
+implemented. It does not reinterpret legacy rows, establish a floor, or make
+membership alone a path to reviewer-restricted content.
 
-- **The grant-granting right is first-class and two-key.** A grant act is
-  valid only when the approver holds authority over the permission
-  vocabulary (itself established by a recorded act) *and* a path to the
-  scope being granted; neither implies the other. V1 rule: the approver of
-  a decision is its grantor of record, and the discoverable level's "who
-  can grant access" is computed by that rule and nothing else. (Precedent:
-  Databricks requires `ASSIGN` on the governed certification tag *and*
-  apply rights on the object
-  ([Databricks](https://learn.microsoft.com/en-us/azure/databricks/data-governance/unity-catalog/certify-deprecate-data));
-  Fabric binds certification to admin-defined security groups plus item
-  write permission
-  ([Microsoft](https://learn.microsoft.com/en-us/fabric/admin/endorsement-certification-enable)).)
-- **Every grant carries an expiry; "never" is a recorded choice, not an
-  absent field.** Extension and renewal are new acts requiring the same
-  approval as the original; never automatic, never silent. (Entra: expiry
-  on date / days / hours / never, with "Require approval to grant
-  extension"
-  ([Microsoft](https://learn.microsoft.com/en-us/entra/id-governance/entitlement-management-access-package-lifecycle-policy));
-  symmetry: rejections already carry `reconsider_after`.)
-- **The approval surface contract.** It renders the full scope enumerated
-  as items (never a name or count), the requester's stated reason, and the
-  sentence-form path the grant would create (invariant 4). It offers no
-  action that decides anything the approver has not opened — bulk accept
-  does not exist. Approver justification is mandatory and visible to the
-  requester. The scope is digested at render and re-checked at submit; if
-  the digest changed, the approval is refused and re-presented
-  (compare-and-swap on scope — the informed-approver requirement made
-  enforceable). The grant act records that digest, so "the approver saw
-  exactly what the scope contains" is verifiable afterward rather than
-  asserted (Palantir's action log stores "the state of the world when
-  decisions are made"
-  ([Palantir](https://www.palantir.com/docs/foundry/announcements/2022-10/index.html));
-  Entra requester questions "shown to approvers to help them make a
-  decision," justification "visible to other approvers and the requestor"
-  ([Microsoft](https://learn.microsoft.com/en-us/entra/id-governance/entitlement-management-access-package-approval-policy)).)
-- **No out-of-band grant path exists.** A grant that did not occur as an
-  appended act does not exist, even if a human said yes in a hallway.
-  (Power BI's default routes access requests to *email*, making the system
-  record optional
-  ([Microsoft](https://learn.microsoft.com/en-us/power-bi/connect-data/service-datasets-build-permissions));
-  that affordance is refused.)
-- **An unanswered request never auto-approves.** Expiry of a request is
-  itself an appended act with a stated duration, so the record
-  distinguishes refused from ignored (Entra: "If a request isn't approved
-  within this time period, it's automatically denied").
-- **Revocation targets explicit grants only.** Access derived from a live
-  fact has no grant to revoke — it ends when the fact ends (membership
-  revoked, link interval closed). This is the acknowledged/revocable
-  distinction identity governance draws: automatically-derived access "the
-  certifier can only acknowledge"
-  ([SailPoint](https://documentation.sailpoint.com/saas/help/certs/completing_campaigns.html)).
-  Consequence stated positively: derived paths make standing-access
-  recertification largely structurally unnecessary — access expires when
-  facts change — so periodic re-review, when it arrives, is scoped to
-  explicit grants alone.
-- **Every act records the version of the rule under which it was
-  authorized**, not only the grant it used. The dated policy is this
-  mechanism in prose, and prose does not survive a second policy change
-  (Palantir's action log carries the action-type version per entry:
-  [Palantir](https://www.palantir.com/docs/foundry/action-types/action-log/)).
-- **No permission-family act auto-runs.** Model- or rule-initiated
-  submission without a human gate is refused even as a configuration
-  (Palantir's Agent Studio permits action tools "to run automatically or to
-  run after confirmation from the user"
-  ([Palantir](https://www.palantir.com/docs/foundry/agent-studio/tools));
-  declined here — a configurable gate is not a gate).
-- **Operational-credential acts are not grant acts.** Admin acts that
-  restore or revoke *machine credentials* (enrollment, leases, access
-  recovery) change no visibility path — no `member` or `observed-in` edge
-  moves — so the approval-surface contract does not bind them. They remain
-  acts: justified, audited, and (required hardening, below) attributable to
-  a named operator, not a shared token.
+An unresolved participant link may leave discoverability proved while
+readability is incomplete. It must not turn a separately proved discoverable
+path into invisible, and it must not be treated as readable.
 
-Responsibility split: the requester and approver own the judgment; the
-system owns that the judgment was **informed** (enforced by the surface
-contract above) and **faithfully enforced** (no wider, no narrower, by an
-approver holding both keys).
+### Floor monotonicity
 
-## The identity bridge
+No floor is landed in the current code. The eventual design default is
+discoverable only after the discoverable projection exists; “discoverable” is
+not a shipped default.
 
-Content identifies people by observation (an email address seen in a
-meeting). The person pillar deliberately holds no emails — display names,
-email addresses, and unscoped provider IDs are not canonical identity.
-Therefore:
+For unmarked content, lowering visibility applies immediately to history;
+raising it never silently reopens history. Formally, a record's effective
+floor is the minimum visibility among organization floor acts from its ingest
+through the evaluation point. A later higher floor applies only to records
+ingested after that act. A floor increase alone never reopens existing
+content. Existing content may become newly readable only through a separately
+proved path that the pinned policy already defines, such as a later valid
+attendance attestation, or through an explicit scoped grant.
 
-- An observation binds to a principal **only** through an attested identity
-  link: a recorded act by an authorized human stating the binding, with its
-  verification method named, scoped, and auditable. Doctrine, stated
-  precisely: identifiers (emails, provider subjects) are never properties of
-  principals — they live **inside link acts** as issuer-scoped claims. The
-  shipped link table holds only OAuth-verified Slack subjects with a machine
-  verification record and no attestor or supersession fields; the attested
-  email link is therefore a **new link kind plus schema**, not a flow over
-  the existing one (grounding pass, below). (AWS reaches the same
-  governance conclusion for its User Store: treat identity-mapping updates
-  as "a privileged operation" behind "a documented approval process"
-  ([AWS](https://docs.aws.amazon.com/amazonq/latest/qbusiness-ug/principal-store-hiw.html));
-  Atlassian's published 1P↔3P user mapping is the same interposition
-  ([Atlassian](https://developer.atlassian.com/platform/teamwork-graph/permissions-and-access-control-lists/)).)
-- **An identity link is an interval, not a permanent equation.** An
-  observation resolves through the link that was valid at the observation's
-  timestamp — never through a link attested later for a later holder of the
-  same address. Revocation ends the interval without erasing it. An
-  identifier that has ever been bound is never silently rebound: a new
-  attestation over it must name the binding it succeeds, and its interval
-  begins at attestation, never earlier. This closes the recycled-identifier
-  trap AWS documents — "the new employee may temporarily access documents
-  intended for the previous employee" — which is worse here because our
-  observations are frozen: one careless rebinding would grant a stranger a
-  predecessor's entire meeting history
-  ([AWS](https://docs.aws.amazon.com/quick/latest/userguide/acl-best-practices-kb.html)).
-- Absent a link interval covering the observation, the path denies
-  (invariant 6). No fuzzy matching, no display-name guessing, ever. AWS
-  ships the same rule for ambiguity: a shared email "denies access to
-  everyone using that shared email." If fuzzy assistance is ever added, it
-  may propose links for attestation; it may never bind (invariant 8 applied
-  to identity).
+Content older than the first recorded floor act has no historical floor and is
+therefore invisible through the bare-membership path. A feature rollout is not
+itself retroactive consent to disclose legacy history.
 
-## The field-admission rule
+This keeps content frozen while making policy changes monotonic toward safety.
+It deliberately does not infer per-record policy permanence from vendors that
+make only the store's ACL *mode* permanent.
 
-The pillars never grow; fields and edge types grow only through this gate.
-A proposed field must answer:
+### Discoverable is an approved projection
 
-1. **Which pillar?** If not clearly one, it is not a field but a confusion.
-2. **Does the organization already maintain it for other reasons?** A field
-   requiring new curation is rot on arrival (invariant 2).
-3. **Can a one-sentence access path or provenance citation use it?** If
-   neither, it does not belong in the graph.
-4. **Live or frozen?** Person fields are live; content and activity fields
-   are frozen. A field that wants both is two fields.
+The requester-facing discoverable surface is closed. It may expose only a
+caller-scoped, non-enumerable, non-correlatable request handle, broad item
+kind, approval date, and a separately human-approved discovery label when one
+exists. It does not expose the raw
+atom subject, meeting title, participants, evidence, source identifiers,
+counts, scores, or grantor identity. If the policy cannot produce a safe
+projection, the item remains invisible. Routing a request to an eligible
+grantor does not require naming that person to the requester.
 
-## Industry cross-reference (2026-08-09)
+Power BI is only a narrow product precedent: authorized users can mark
+promoted or certified semantic models discoverable after tenant configuration.
+It demonstrates that existence can be separated from read access; it does not
+justify auto-discovering every unmarked record
+([Microsoft](https://learn.microsoft.com/en-us/power-bi/collaborate-share/service-discovery)).
 
-Three parallel reviewers (Opus 5) tested this document against the
-precedent atlas and primary sources — AWS Q Business/Quick, Elastic,
-Google Vertex AI Search, Microsoft Graph connectors / Azure AI Search /
-Entra ID Governance / Power BI / Purview, Atlassian Teamwork Graph
-developer docs, Moveworks, OpenFGA, Palantir Foundry, Google
-check-grounding, Bedrock Guardrails, PROV-O, EU AI Act. Amendments are
-folded inline above; this section records the standing stances and source
-corrections.
+### Gatekeeper and introspection shapes
 
-### Recorded stances
+The minimum resolver is an internal `evaluateVisibilityForCaller` operation,
+not a public `can(person, item)` oracle. The served retrieve operation must
+authenticate, evaluate, read only the authorized set, commit audit, and return
+as one check-and-use flow. Responses remain `Cache-Control: no-store`.
 
-- **Break-glass: there is no override.** Elevated read for investigations
-  (Azure ships "elevated read requests for auditable investigations") may
-  only ever be an ordinary grant act — named approver, stated scope,
-  expiry, sentence: "you can see this because the organization granted you
-  investigative access on [date], approved by [name]." An override
-  implemented as traversal bypass violates invariants 1 and 4
-  simultaneously and is the silent-failure mode this document exists to
-  prevent. Built under incident pressure is exactly how it would otherwise
-  arrive; hence recorded now.
-- **No deny primitive.** Nothing in the graph subtracts; paths only grant.
-  The only negative control is pre-ingest exclusion, which is deliberately
-  *before* the log: a member decides what never becomes organization
-  content, and that decision is not an organization act because it concerns
-  material the organization never received. Consequence recorded honestly:
-  exclusion is invisible to the organization, not org-centrally auditable,
-  and therefore **not a permission mechanism** — it must never be described
-  as one. If exclusion ever needs org review, it becomes an act and moves
-  inside the log; it does not become a deny edge. (Industry is split:
-  Microsoft ACLs carry deny-takes-precedence; Atlassian is additive-only.
-  We choose additive because a deny edge cannot be a one-sentence *grant*
-  path and because revocation-of-derived-access has a cleaner answer: end
-  the fact.)
-- **Staleness lives in the human layer too.** An approval surface that
-  computes its scope at render and applies it at submit reproduces
-  invariant 5's problem inside the approval; hence the scope-digest
-  compare-and-swap in the surface contract (Entra's decision helpers are
-  "determined when the review begins and … not updated while the review is
-  in-progress" — the trap, shipped).
-- **Grounding vendor defaults are inverted deliberately** (rung 4): no
-  self-certified exemption (`groundingCheckRequired: false` refused), AND
-  across cited atoms not any-chunk-passes, no streaming before verdict,
-  per-atom verification. No vendor publishes a safe threshold and 1.0 is
-  structurally unavailable — the recorded argument for rung 4's ephemerality.
+- A requester-facing explanation is available only for an item already proved
+  discoverable or readable, and only about the authenticated caller.
+- Full no-path and identity-resolution diagnostics are admin/auditor data.
+- Reverse enumeration (`who`) is deferred, admin-only, audited, bounded, and
+  paginated. It cannot promise “everyone” without an explicit completeness
+  contract and may never be used as an authorization result. OpenFGA likewise
+  separates relationship-tree debugging (`Expand`) from effective reverse
+  enumeration (`ListUsers`), whose results are deadline and size bounded
+  ([OpenFGA](https://openfga.dev/docs/interacting/relationship-queries)).
 
-### Source corrections (atlas and prior doc)
+The landed `POST /v1/permission-checks` is unrelated: it authorizes one Slack
+approve/reject action on an approval surface. Its request and decision shapes
+must not be reused for content visibility.
 
-- **Veza is withdrawn as the invariant-10 precedent.** Its reachable pages
-  are marketing without a data model; the documented precedents for
-  "effective access, explained" are OpenFGA's Expand and Amazon Quick's
-  three-valued permission checker, cited above.
-- **The atlas overstated Palantir's agent bounding.** No first-party doc
-  says AIP agents "can only act through action types" — Agent Studio ships
-  non-Action tools including arbitrary Functions. The verifiable claim,
-  cited above, is that agentic activity is governed by "the same security
-  policies that govern human usage" with staged-then-human-reviewed edits.
-  Invariant 8 leans only on the verifiable form.
-- **Power BI has no built-in request-certification flow** (atlas claim):
-  the button is greyed out with a documentation link, or routes to email.
-  The real routed-request precedents are Glean's request-verification-with-
-  reason and Power BI's *discoverability → request access* path — a
-  different feature, and the one cited for the discoverable level.
-- **Diligent's trust root is an officer's attestation** ("have not been
-  amended, rescinded or modified … as of the date of this certification"),
-  not record immutability. Cited only for the certified-resolution concept;
-  our hash chain is the stronger mechanism and the two must not be framed
-  as convergent.
-- **Atlassian is promoted from "principle only" to mechanical precedent**:
-  developer docs publish the permission object shape, four principal types
-  including a workspace-wide principal (a floor primitive), additive
-  AND/OR evaluation, and the 1P↔3P user mapping. The append/derive doc's
-  "architecture-thin" note is corrected in place.
-- **Coveo remains unverifiable** (503s on all doc fetches); nothing in this
-  document rests on it.
+## Access facts and identity
 
-## Grounding pass (2026-08-09, three-agent review vs origin/main + PRs 14–15)
+### What is landed
 
-What the latest code proves about implementing this document. Recorded so
-feature specs budget reality, not the constitution's ideal.
+- Current membership exists in Authority state, not in the derived content
+  graph.
+- Frozen participant observations exist in the derived store. They retain
+  source claims and may produce `listed-participant` or `attended-by` edges.
+- There is no principal-bound `observed-in(person, meeting)` edge.
+- The projector creates `attended-by` only from explicit attended status.
+  `listed-participant` includes invitees and no-shows and confers no read access.
 
-- **The acts rail is not yet generic.** New act families are rejected at
-  five independent gates: the log's `event_type` CHECK (a SQLite CHECK on a
-  hash-chained, trigger-guarded table — altering it means a careful table
-  rebuild), the protocol's event-type union and validators, the record
-  frame, and a derive projector that halts on unknown types. Worse, the
-  envelope's authorization block is Slack-approval-shaped: it requires an
-  approval id, a Slack provider-event digest, an approval-surface
-  permission grant, a meeting-bearing brief — and `allowed: true`, so **no
-  refusal can even be expressed**. Permission acts (grants, attestations,
-  floor changes) therefore need a **second envelope family** with its own
-  payload schemas and authorization shape. Receipts, happily, are already
-  act-agnostic.
-- **The person pillar's audit is the untrusted link.** `authority_audit_log`
-  has no hash chain and no immutability triggers, and membership status
-  columns are freely mutable — the one pillar the gatekeeper reads live is
-  the one place a change can be silently erased. Required hardening before
-  any gatekeeper ships: append-only triggers plus chaining on authority
-  audit and membership transitions, using the two idioms already in-tree
-  (record log; integration audit).
-- **Nothing stores a floor, a visibility level, or a query audit** — those
-  are green-field, as expected; the floor additionally needs
-  position-scoped resolution ("the floor in force at this record's ingest").
-- **A local sensitivity vocabulary dies at the boundary, deliberately.**
-  `meeting.governance.sensitivity` (public/internal/confidential/restricted)
-  exists in local meeting contracts and is dropped from the org payload.
-  Disposition: it stays local in v1; when the intent affordance ships it is
-  a candidate *default suggestion* for the approver's intent — never an
-  automatic marking (invariant 8 applied to source metadata).
-- **PR #14 (access recovery, merged): compliant with the operational-act
-  distinction above** — every gate denies, sequences never rewind, recovery
-  mints an ordinary TTL lease and leaves an audit row with a mandatory
-  reason. Two notes now standing requirements: admin acts must gain a
-  **named operator identity** (today: one shared bearer token, audit records
-  only `actor_kind: admin` — the widening act is exactly the one needing
-  attribution), and the client's acceptance of skipped access-state heads is
-  load-bearing and documented only in a test name.
-- **PR #15 (EC2 deploy, draft): blocked on key custody.** The cutover
-  archive — containing the authority signing key and the admin bearer token
-  — is uploaded to S3 under SSE-S3 with no bucket policy, versioning, or
-  deletion step; "grants cannot be forged" must never reduce to bucket IAM.
-  Also required before merge: stated volume/termination posture, an alarm on
-  the derive-halt fatal exit (today caught only by coincidence), the Mac
-  authority permanently disabled rather than booted-out (single-writer
-  across hosts is currently prose), and a no-cache rule for the authority
-  hostname before `can`/`why`/`who` ship as GETs (invariant 5).
+### Future identity bridge
 
-## Appendix A — first instantiation (pilot)
+An immutable identity-link attestation belongs to Activity. Its effective
+interval is a Person projection. Before participant access can ship:
 
-Proof the skeleton carries load, stated as paths.
+- an observation claim is keyed by issuer or by the exact source adapter and
+  instance, claim kind, and normalized value; a raw email/display string is
+  never joined globally;
+- normalization and tenant rules are exact and versioned;
+- `attested_at` is distinct from `effective_from`;
+- a link begins no earlier than attestation unless a human approves a bounded,
+  evidenced retrospective interval;
+- a correction/invalidation act can close a mistakenly attested interval and
+  make affected paths fail closed without erasing history;
+- the observation timestamp is unambiguous and falls inside the interval;
+  absent or ambiguous time denies; and
+- current active membership remains a conjunct of the final path.
 
-The floor is per-organization: the pilot organization (n=2, both founders)
-sets its floor to **readable**; the shipped default for new organizations
-remains **discoverable**. Both are the same rule with a different org
-choice:
+AWS documents both accidental document-access changes from identity-map
+updates and recycled-email risk. That supports treating mapping as privileged
+and never equating an email with a principal; ECHO's interval and correction
+rules remain our design choices
+([AWS Quick](https://docs.aws.amazon.com/quick/latest/userguide/acl-best-practices-kb.html),
+[legacy Amazon Q Business](https://docs.aws.amazon.com/amazonq/latest/qbusiness-ug/principal-store-hiw.html)).
 
-- **Rule 1 (floor):** asker → `member` → org → unmarked atom ⇒ the org's
-  floor level (pilot: readable). Sentence: "You can see this because you
-  are a member of the organization."
-- **Rule 2 (restricted):** asker → identity link → observation →
-  `observed-in` → source meeting → atom ⇒ readable; approver always
-  readable via the approval act. Edge disambiguation (grounded): today no
-  meeting source emits attendance facts, so the `attended-by` edge has never
-  fired; Rule 2 therefore walks `listed-participant`, and its honest
-  sentence is "you were on the participant list of that meeting (or approved
-  it)." When sources begin emitting explicit attendance, `attended-by`
-  becomes the preferred, narrower path with the stronger sentence.
-- **Rule 3 (rejections):** rejection-derived rows carry no intent slot and
-  resolve by the floor like any other unmarked row; the rejecting reviewer
-  always retains readability via the rejection act. (Supersedes the
-  append/derive doc's "org-visible as acts" sentence, which predated the
-  floor.)
+Fuzzy assistance may propose an attestation to a human. It never binds.
 
-**Dated policy — the first written policy of the gatekeeper:** records whose
-envelopes carry no intent-provenance marker provably carry no human intent
-behind their `restricted` flag (the flag is a protocol default; no affordance
-exists). Such records resolve by the floor. The affordance ships as an
-explicit intent-provenance field in the envelope (e.g.
-`intent_source: approver`); records carrying it mean what they say —
-restricted resolves by Rule 2. The policy keys on **field presence, not
-wall-clock date**: per-installation release rollout (including rollback)
-makes any global date wrong, while the envelope's own shape is
-per-record truth. The frozen flag never changes; only its interpretation is
-policied. This is the stone/gatekeeper split in first use, and the policy
-text itself is auditable.
+## Permission changes are separate acts
 
-Practical consequence for the pilot: until the affordance ships, every
-recorded decision resolves readable to both members. There is currently no
-way to mark a decision non-org-visible; the only remedy is to keep the
-source out of the record entirely via the member-side exclusion list — a
-**custody choice made before content exists org-side, not a permission
-control** (see the no-deny stance). The query audit does **not** resolve by
-the pilot's readable floor (invariant 10); its readership is the org owners
-until stated otherwise.
+Future requests, grants, refusals, revocations, identity attestations, and
+floor changes use the same propose/confirm discipline as decisions, not the
+same table or payload. Keep three narrow families:
 
-**V1 needs only Rule 1.** Rule 2 requires the identity bridge, which ships
-as one bundle with the intent affordance and the request/approve flow —
-none is meaningful without the others.
+1. the landed approval/rejection record log;
+2. a future durable permission-act ledger; and
+3. a future retention-bounded query-audit ledger.
 
-**Explicitly deferred by this instantiation:** the identity-attestation
-admin flow, request/approve UX, org-chart import and grouping vocabulary,
-teams/roles/projects as facts, the query surface itself (retrieve spec),
-search and ranking, query-audit schema and its retention horizon,
-interpretive linking, model composition and grounding, delivery-receipt
-("informed") centralization, periodic re-review of explicit grants.
+They cross-reference stable identifiers and digests. The decision log must not
+be generalized merely to reuse its chain; landed derive correctly halts on an
+unknown event type.
 
-## Out of scope of this document
+Permission-act rules:
 
-Everything in the deferred list above, plus: MCP tool shapes, FTS indexing,
-storage layout of the audit, multi-organization tenancy, and any enforcement
-implementation. Feature specs that instantiate this skeleton must cite the
-invariants they exercise and may not weaken them.
+- **Every widening act is human-confirmed.** System timers may append expiry or
+  closure outcomes that only narrow access. No model or timer widens access.
+- **No self-approval.** A requester cannot approve their own access request.
+  Concurrent approvers race through one atomic first-valid-decision rule;
+  retries are idempotent.
+- **Two-key authority.** A grantor needs both permission-vocabulary authority
+  and a readable path to the exact scope. The first vocabulary authority comes
+  from a one-time founder bootstrap act authenticated through the landed active
+  owner membership. That act needs its own spec and named-human confirmation;
+  no grant flow ships before it exists. Restricted-content features also need
+  owner succession and a fail-closed orphan state before they ship.
+- **Every scope is enumerated and bound.** The surface renders each item and a
+  sentence-form resulting path. A scope digest proves that the submitted act
+  was bound to the exact system-rendered scope; it does not prove the human
+  read or understood every item.
+- **Every grant has explicit expiry.** “Never” is a recorded choice. Renewal
+  is another human-confirmed act.
+- **Revocation is verified.** Appending a revocation is not completion until a
+  fresh evaluation proves that act no longer contributes. Other independent
+  paths may legitimately remain; an operation whose requested outcome is “no
+  access” must enumerate them instead of claiming the one revocation removed
+  everything.
+- **Permission effects are head-aligned.** The gatekeeper either evaluates the
+  durable permission acts directly or requires the effect projection cursor to
+  equal the permission-act head. Any lag denies permission-dependent reads: a
+  delayed new grant merely under-shares, while a delayed revocation can leak.
+- **Every act pins its authorizing policy version.** Decision-capable tools and
+  rules may not float to a latest version.
+- **Operational credentials are separate.** Enrollment, lease, update, and
+  access-recovery administration do not create content-visibility paths. They
+  still require a reason, audit, and named operator identity.
+
+Entra and Palantir are mechanism precedents, not guarantees. Entra offers
+optional approval, justification, time bounds, and audit, while ECHO makes the
+chosen controls mandatory; Palantir action logs record action type version,
+timestamp, user, and submission-time context
+([Entra PIM](https://learn.microsoft.com/en-us/entra/id-governance/privileged-identity-management/pim-configure),
+[Entra approval policy](https://learn.microsoft.com/en-us/entra/id-governance/entitlement-management-access-package-approval-policy),
+[Palantir action log](https://www.palantir.com/docs/foundry/action-types/action-log/)).
+
+## Pilot slice 1
+
+The minimum two-member read is defined by the dated
+[Permission pilot v1 contract](2026-08-10-permission-pilot-v1-contract.md).
+That companion is a bounded implementation contract, not a change to this
+constitution or a claim that the feature has landed or shipped.
+
+## Later stages, in dependency order
+
+1. **Explicit intent.** Add a versioned human-provenance schema. Start with
+   explicitly restricted content readable only to a current active reviewer;
+   others remain invisible. Do not add request/grant machinery yet.
+2. **Participant access.** Add scoped interval identity links, correction acts,
+   and explicit attendance. Calendar listing remains non-authoritative.
+3. **Discoverability and one-item grants.** Add an approved discovery
+   projection, one-item requests, two-key approval, expiry, and revocation
+   verification. No collection scopes or bulk approval.
+4. **Scale only when observed.** Teams, roles, reverse enumeration, safe search
+   indexes, statistics, model composition, grounding, interpretive links, and
+   an external ReBAC engine remain separate decisions.
+
+## Grounding against landed code
+
+The following is descriptive, not aspirational.
+
+| Area | Landed fact | Design consequence |
+| --- | --- | --- |
+| Decision rail | Protocol, log CHECK constraints, and derive accept only approval/rejection; authorization evidence uses `allowed: true` to prove the reviewer was authorized for either action. | A refusal remains an authorized semantic event. Permission acts need a separate family; they must not make `allowed: false` appendable evidence. |
+| Record integrity | Update/delete triggers and chain verification protect normal paths and detect interior tampering; verification explicitly cannot detect valid-prefix truncation or rollback. | Absolute “cannot be deleted” claims are invalid without an external head. |
+| Derived graph | Atoms, meeting snapshots, participant observations, and provenance edges exist; `supports` edges cannot cross an approval group. | Reuse deterministic provenance boundaries, but do not infer principal identity or readers. |
+| Intent | Envelope v1 pins `{restricted: true, reconsider_after: null}` and exact keys; no human provenance exists. | All current records are legacy-unmarked for permission purposes. `intent_source` requires a new schema version. |
+| Existing permission check | `/v1/permission-checks` authenticates Slack `approve`/`reject` actions and returns an unsigned, TLS-authenticated one-request decision. | It is not content visibility and is not a reusable authorization receipt. |
+| Existing permission grants | `organization_permission_grants` are adapter-action grants such as view/approve/reject, bound to an approval-surface integration. | Future content-read grants need a distinct schema and name. |
+| Person state | Membership and installation revocation plus audit append occur in one SQLite transaction. Authority audit is not chained, and membership status is mutable. | Preserve atomicity; before served reads, add a trustworthy Person-state version and restore reconciliation. A local chain alone does not solve rollback. |
+| Provider authorization | Slack authorization rechecks the candidate and Authority state after external provider I/O. | Reuse the recheck-after-external-work pattern for response commitment. |
+| HTTP | Authority JSON responses already send `Cache-Control: no-store`. | Pin this in future retrieve tests and ensure the Cloudflare edge never caches the route. |
+
+The access-recovery skipped-head behavior is documented in the Authority
+README as well as tests. The remaining operator-attribution gap is that one
+shared administrator bearer credential yields only `actor_kind: admin`, not a
+named human operator.
+
+Deployment evidence is tracked separately from code grounding: the EC2 host is
+the sole live Authority owner, the old Mac connector is disabled, and an
+isolated restore of the reviewed image passed. The changing evidence belongs in
+`deploy/organization-authority/AWS-EC2.md`. Any production restore still
+requires Person-state reconciliation before visibility service.
+
+## Primary-source research ledger (checked 2026-08-09)
+
+The ledger separates a source's useful evidence from ECHO's own decision.
+
+| Source | What it supports | Trap or limit ECHO records |
+| --- | --- | --- |
+| [W3C PROV-O](https://www.w3.org/TR/prov-o/) | Attribution relates entities to responsible agents. | It does not define ECHO's trust ladder. |
+| [EU AI Act, official text](https://eur-lex.europa.eu/eli/reg/2024/1689/oj?locale=en) | Article 50 includes machine-readable marking and disclosure duties for specified synthetic output. | Its editorial-control exception sits inside a narrowly defined disclosure duty; it is not a generic deterministic-projection exemption. |
+| [Zanzibar](https://research.google/pubs/zanzibar-googles-consistent-global-authorization-system/) | Consistent snapshots and causal freshness address stale authorization. | It does not justify banning every cache; any cache must state and enforce a freshness contract. |
+| [Google data-source access control](https://docs.cloud.google.com/generative-ai-app-builder/docs/data-source-access-control) | Expanded ACLs have a 3,000-reader limit and access-control mode is chosen at store creation. | This Preview feature does not prove per-record policy should be frozen. |
+| [Microsoft Graph external items](https://learn.microsoft.com/en-us/graph/connecting-external-content-manage-items) | Group expansion can cause many item updates; deny takes precedence in that ACL model. | It demonstrates stamped-ACL costs, not that all external relationship tuples are wrong. |
+| [Elastic document/field security](https://www.elastic.co/docs/deploy-manage/users-roles/cluster-or-deployment-auth/controlling-access-at-document-field-level) and [connector DLS](https://www.elastic.co/docs/reference/search-connectors/es-dls-overview) | Correct document filtering can still leak global terms/counts; an explicitly empty access field hides a document. | Omitting one DLS query or ACL field can grant broad access, and role queries combine with OR. Missing/renamed/default-role semantics must deny in ECHO. |
+| [Bedrock ACL-aware retrieval](https://docs.aws.amazon.com/bedrock/latest/userguide/kb-test-retrieve-acl.html) | Missing user context and missing ACL metadata return no results. | Third-party identity credentials may be cached, permission changes are eventually consistent, and non-ACL sources in a mixed knowledge base remain available. ECHO partitions by policy mode. |
+| [AWS Quick ACL guidance](https://docs.aws.amazon.com/quick/latest/userguide/acl-best-practices-kb.html) | Shared-email ambiguity denies and identifier recycling can expose a predecessor's documents. | Case-insensitive and plus-address handling reinforce that email is not a canonical principal. |
+| [Power BI discovery](https://learn.microsoft.com/en-us/power-bi/collaborate-share/service-discovery) | Existence can be exposed without read access to support access requests. | Only promoted/certified semantic models are deliberately marked discoverable; this is not a default for unmarked content. |
+| [OpenFGA relationship queries](https://openfga.dev/docs/interacting/relationship-queries) | Check, Expand, ListObjects, and ListUsers are separate operations. | Expand is a debugging tree; ListUsers is bounded. Neither makes an unrestricted `who` oracle safe. |
+| [Purview Copilot audit](https://learn.microsoft.com/en-us/purview/audit-copilot) | Per-resource audit can record policy details and success/failure. | It may also store resource IDs, URLs, readable names, and sensitivity labels; ECHO adopts stricter minimization. |
+| [Bedrock grounding](https://docs.aws.amazon.com/bedrock/latest/userguide/guardrails-contextual-grounding-check.html) and [Google check grounding](https://docs.cloud.google.com/generative-ai-app-builder/docs/check-grounding) | Vendors expose probabilistic grounding/citation controls and input limits. | Threshold semantics differ; neither turns composed output into authoritative fact or guarantees zero unsupported claims. |
+| [Entra approval policy](https://learn.microsoft.com/en-us/entra/id-governance/entitlement-management-access-package-approval-policy), [PIM](https://learn.microsoft.com/en-us/entra/id-governance/privileged-identity-management/pim-configure), and [access-review recommendations](https://learn.microsoft.com/en-us/entra/id-governance/review-recommendations-access-reviews) | Approval questions, no self-approval, optional approval/time bounds, audit, and stale review snapshots are shipped mechanisms. | Several safeguards are optional and review state can be snapshotted; ECHO must mandate and revalidate its chosen controls. |
+| [Palantir action log](https://www.palantir.com/docs/foundry/action-types/action-log/) and [tool execution](https://www.palantir.com/docs/foundry/chatbot-studio/tools) | Actions can record action type version and submission context; tools may require confirmation. | Function tools may float to the latest version unless pinned; ECHO refuses moving authorization code and automatic widening. |
+| [Azure AI Search sensitivity labels](https://learn.microsoft.com/en-us/azure/search/search-indexer-sensitivity-labels) | A label-aware path disables autocomplete/suggest where labels cannot be enforced and audits elevated reads. | It is a preview, label-specific path, not a general production break-glass precedent; child chunks missing label projection are not filtered correctly. |
+
+## Field-admission rule
+
+A new field or edge must answer:
+
+1. Which pillar owns its meaning?
+2. Is it a current fact, frozen content, durable act, or retention-bounded audit?
+3. If it automatically grants access, is it maintained independently for a
+   legitimate organization purpose and does it have freshness/correction
+   semantics?
+4. Can a sentence-form path or provenance citation use it without revealing a
+   hidden item?
+5. What exact failure, missing-field, restore, and version behavior applies?
+
+Fields that exist only to prove an explicit permission act, its reason,
+expiry, or audit are allowed; the “maintained for another reason” test applies
+to facts that grant access automatically.
+
+## Out of scope
+
+This constitution does not specify MCP tools, UI, FTS layout, model prompts,
+database layout for future ledgers, multi-organization tenancy, or an external
+authorization engine. Feature specs must cite the invariants they exercise,
+state their policy and Person-state versions, include over-disclosure tests,
+and may not weaken the restore or infrastructure threat boundary by omission.

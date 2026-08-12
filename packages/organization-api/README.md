@@ -1,6 +1,6 @@
 # Organization API
 
-**Status:** stable onboarding/access transport contract
+**Status:** stable onboarding/access plus permission-pilot read transport contract
 
 This package owns the versioned ordinary transport DTOs for the narrow
 single-organization onboarding/access slice. It references signed organization
@@ -23,6 +23,20 @@ installation-signed; `request_sha256` and `provider_event_sha256` bind the
 decision to that exact request but do not authenticate it. Authenticity comes
 from the transport -- the configured HTTPS origin associated with the pinned
 Authority descriptor. Callers verify the request binding regardless.
+
+## Permission-pilot recent decisions
+
+`POST /v1/recent-decisions` accepts one installation-signed request whose
+signature binds the fixed HTTP method and path. Callers cannot supply a cursor,
+limit, item id, or alternate operation. The response is a closed DTO containing
+only the fixed pilot policy and witness plus at most ten decision, action, or
+rationale atoms. Validation rejects extra transport or derived-record fields
+and responses above the fixed 60 KiB canonical JSON limit.
+
+The request authenticates one attempt; it is not a reusable authorization
+result. The Authority rechecks current access and membership for every call.
+Member clients validate the response at the transport boundary and do not
+persist or cache it.
 
 ## Organization record ingest
 

@@ -5,9 +5,34 @@ import { createJsonlOutboxDeliverySurface } from '../adapters/delivery-surfaces/
 import { createSlackDeliverySurface } from '../adapters/delivery-surfaces/slack/slack-delivery-surface.js';
 import { FileSlackDeliveryReceiptStore } from '../adapters/delivery-surfaces/slack/slack-delivery-receipt-store.js';
 import { createSlackReactionsApprovalSurface } from '../adapters/approval-surfaces/slack-reactions/slack-reactions-approval-surface.js';
-import type { ApprovalDecisionStore } from '../adapters/approval-surfaces/slack-reactions/slack-reactions-approval-surface.js';
+import type {
+  ApprovalActionAuthorizer,
+  ApprovalDecisionStore,
+  OrganizationMemberApprovalActionAuthorizer,
+  OrganizationMemberApprovalPresentationRenderer,
+  ReviewerApprovalActionAuthorizer,
+  ReviewerApprovalPresentationRenderer,
+} from '../adapters/approval-surfaces/slack-reactions/slack-reactions-approval-surface.js';
+import type { AdapterConfig } from '../core/index.js';
+import { SLACK_REACTIONS_APPROVAL_SURFACE_ADAPTER_VERSION } from '../adapters/approval-surfaces/slack-reactions/slack-reactions-approval-surface.js';
 import { DecisionNodeStore } from './approval/decision-node-store.js';
-import { ProductAdapterFactoryRegistry } from './adapter-factories.js';
+import {
+  assertReviewerDisplayName,
+  validateReviewerAuthorizationEvidence,
+} from './approval/reviewer-authorization-evidence.js';
+import {
+  validateOrganizationMemberAuthorizationEvidence,
+} from './approval/organization-member-authorization-evidence.js';
+import { assertReviewerPublicationPreflight } from './approval/reviewer-publication-preflight.js';
+import type { ApprovalPublicationMode } from './approval/reviewer-publication-preflight.js';
+import {
+  organizationMemberApprovalPresentationRenderer,
+  organizationMemberApprovalPolicyContractSha256,
+} from './organization/record/adapters/organization-member-presentation-renderer.js';
+import {
+  ProductAdapterFactoryRegistry,
+  type ProductAdapterFactoryContext,
+} from './adapter-factories.js';
 
 /**
  * Stand-in for a runtime dependency that static validation must never touch.
@@ -43,9 +68,36 @@ export function notifyOnResolve(
   afterDecisionResolved: (() => void) | undefined,
 ): ApprovalDecisionStore {
   if (afterDecisionResolved === undefined) return store;
+  // The optional reviewer members must survive this wrapper. Dropping them
+  // silently disables reviewer mode wherever a post-resolve hook is wired --
+  // which is every production composition -- because the surface then sees a
+  // store that cannot freeze a publication contract. Each delegate closes over
+  // `store`, so the receiver stays the original object.
+  const freeze = store.freezeApprovalPresentationContract;
+  const read = store.readApprovalPresentationContract;
+  const readFrozen = store.readFrozenApprovalPresentationContract;
   return {
     ensureRequested: (request) => store.ensureRequested(request),
     recordPublished: (input) => store.recordPublished(input),
+    ...(freeze === undefined
+      ? {}
+      : {
+          freezeApprovalPresentationContract: (
+            input: Parameters<typeof freeze>[0],
+          ) => freeze.call(store, input),
+        }),
+    ...(read === undefined
+      ? {}
+      : {
+          readApprovalPresentationContract: (approvalId: string) =>
+            read.call(store, approvalId),
+        }),
+    ...(readFrozen === undefined
+      ? {}
+      : {
+          readFrozenApprovalPresentationContract: (approvalId: string) =>
+            readFrozen.call(store, approvalId),
+        }),
     resolve: async (input) => {
       const resolved = await store.resolve(input);
       try {
@@ -59,6 +111,159 @@ export function notifyOnResolve(
 const inertCredentialResolver = (): never => {
   throw new Error('static adapter validation must not resolve credentials');
 };
+
+function settingString(
+  settings: Record<string, unknown>,
+  key: string,
+): string {
+  const value = settings[key];
+  return typeof value === 'string' ? value : '';
+}
+
+/**
+ * Runs the local reviewer preflight for one configured Slack approval surface.
+ *
+ * It is deliberately here, in the composition root, rather than inside the
+ * adapter: the refusal must happen before any surface can render, post, poll,
+ * or authorize, and it needs the state directory and credential resolver the
+ * factory context owns.
+ */
+function assertSlackReviewerPublicationPreflight(
+  config: AdapterConfig,
+  context: ProductAdapterFactoryContext,
+  store: DecisionNodeStore,
+): void {
+  const settings = config.settings as Record<string, unknown>;
+  const declared = settings['presentation_mode'];
+  const mode: ApprovalPublicationMode =
+    declared === 'restricted-reviewer-v1'
+      ? 'restricted-reviewer-v1'
+      : declared === 'organization-member-readable-v1'
+        ? 'organization-member-readable-v1'
+      : declared === 'pilot-member-readable-v1'
+        ? 'pilot-member-readable-v1'
+        : 'ordinary-v1';
+  const unresolved = store.listUnresolvedFrozenApprovalPresentationContracts();
+  // Nothing frozen and nothing to enable: the landed path is untouched.
+  if (
+    mode !== 'restricted-reviewer-v1' &&
+    mode !== 'organization-member-readable-v1' &&
+    unresolved.every(
+    (slot) => slot.contract === null,
+    )
+  ) {
+    return;
+  }
+  const reviewer = (
+    typeof settings['reviewer'] === 'object' && settings['reviewer'] !== null
+      ? settings['reviewer']
+      : {}
+  ) as Record<string, unknown>;
+  const credentialRef = config.credential_ref ?? '';
+  let fingerprint: string | null = null;
+  try {
+    const token =
+      credentialRef === '' ? undefined : context.credentialResolver(credentialRef);
+    fingerprint =
+      typeof token === 'string' && token.length > 0
+        ? (context.reviewerPresentationRenderer?.credentialFingerprint(token) ??
+          null)
+        : null;
+  } catch {
+    // An unresolvable credential cannot prove the value did not rotate.
+    fingerprint = null;
+  }
+  assertReviewerPublicationPreflight(
+    {
+      mode,
+      adapter_id: config.adapter_id,
+      adapter_instance_id: config.instance_id,
+      adapter_version: SLACK_REACTIONS_APPROVAL_SURFACE_ADAPTER_VERSION,
+      channel_id: settingString(settings, 'channel_id'),
+      reviewer_slack_user_id: settingString(reviewer, 'slack_user_id'),
+      reviewer_name: settingString(reviewer, 'name'),
+      credential_ref: credentialRef,
+      credential_fingerprint_sha256: fingerprint,
+      approve_reaction:
+        settings['approve_reaction'] === undefined
+          ? 'white_check_mark'
+          : settingString(settings, 'approve_reaction'),
+      reject_reaction:
+        settings['reject_reaction'] === undefined
+          ? 'x'
+          : settingString(settings, 'reject_reaction'),
+      permission_pilot_presentation_enabled:
+        settings['permission_pilot_presentation'] !== undefined,
+      organization_member_policy_contract_sha256:
+        organizationMemberApprovalPolicyContractSha256(),
+    },
+    unresolved,
+  );
+}
+
+function staticValidationRefusal(dependency: string): never {
+  throw new Error(`static adapter validation must not use ${dependency}`);
+}
+
+/**
+ * Present-but-refusing stand-ins. `validateConfig` asks whether the reviewer
+ * ports exist; answering that question must not require a state directory, a
+ * credential, or a provider.
+ */
+function staticValidationDecisionStore(): ApprovalDecisionStore {
+  return {
+    ensureRequested: () => staticValidationRefusal('the decision node store'),
+    recordPublished: () => staticValidationRefusal('the decision node store'),
+    resolve: () => staticValidationRefusal('the decision node store'),
+    freezeApprovalPresentationContract: () =>
+      staticValidationRefusal('the decision node store'),
+    readApprovalPresentationContract: () =>
+      staticValidationRefusal('the decision node store'),
+    readFrozenApprovalPresentationContract: () =>
+      staticValidationRefusal('the decision node store'),
+  };
+}
+
+const inertApprovalActionAuthorizer: ApprovalActionAuthorizer = {
+  authorize: () => staticValidationRefusal('the approval action authorizer'),
+};
+
+const inertReviewerApprovalActionAuthorizer: ReviewerApprovalActionAuthorizer = {
+  authorizeReviewerApproval: () =>
+    staticValidationRefusal('the reviewer approval authorizer'),
+};
+
+const inertOrganizationMemberApprovalActionAuthorizer: OrganizationMemberApprovalActionAuthorizer = {
+  authorizeOrganizationMemberApproval: () =>
+    staticValidationRefusal('the organization-member approval authorizer'),
+};
+
+const inertReviewerPresentationRenderer: ReviewerApprovalPresentationRenderer = {
+  render: () => staticValidationRefusal('the reviewer presentation renderer'),
+  credentialFingerprint: () =>
+    staticValidationRefusal('the reviewer presentation renderer'),
+};
+
+const inertOrganizationMemberPresentationRenderer: OrganizationMemberApprovalPresentationRenderer = {
+  render: () =>
+    staticValidationRefusal('the organization-member presentation renderer'),
+  credentialFingerprint: () =>
+    staticValidationRefusal('the organization-member presentation renderer'),
+};
+
+function organizationMemberAuthorizer(
+  candidate: ReviewerApprovalActionAuthorizer | undefined,
+): OrganizationMemberApprovalActionAuthorizer | undefined {
+  if (
+    candidate !== undefined &&
+    typeof (
+      candidate as Partial<OrganizationMemberApprovalActionAuthorizer>
+    ).authorizeOrganizationMemberApproval === 'function'
+  ) {
+    return candidate as unknown as OrganizationMemberApprovalActionAuthorizer;
+  }
+  return undefined;
+}
 
 /**
  * Adapters bundled with the standalone package.
@@ -144,29 +349,76 @@ export function createDefaultAdapterFactories(): ProductAdapterFactoryRegistry {
     adapter_id: 'slack-reactions',
     validateStaticConfig: (config) =>
       createSlackReactionsApprovalSurface(config, {
-        store: inert('the decision node store'),
+        // Static validation judges configuration, never composition, so the
+        // reviewer ports are present but refuse every call.
+        store: staticValidationDecisionStore(),
+        approvalActionAuthorizer: inertApprovalActionAuthorizer,
+        reviewerApprovalActionAuthorizer: inertReviewerApprovalActionAuthorizer,
+        organizationMemberApprovalActionAuthorizer:
+          inertOrganizationMemberApprovalActionAuthorizer,
+        reviewerAuthorizationEvidenceValidator:
+          validateReviewerAuthorizationEvidence,
+        organizationMemberAuthorizationEvidenceValidator:
+          validateOrganizationMemberAuthorizationEvidence,
+        reviewerDisplayNameValidator: assertReviewerDisplayName,
+        reviewerPresentationRenderer: inertReviewerPresentationRenderer,
+        organizationMemberPresentationRenderer:
+          inertOrganizationMemberPresentationRenderer,
         environment: INERT_ENVIRONMENT,
         credentialResolver: inertCredentialResolver,
       }).validateConfig(config),
-    create: (config, context) =>
-      createSlackReactionsApprovalSurface(config, {
+    create: (config, context) => {
+      const store = new DecisionNodeStore(context.stateDirectory, {
+        now: context.now,
+      });
+      // The local lifecycle preflight runs before the surface exists, so an
+      // unresolved card published under another mode, or an in-place rotation
+      // of anything a frozen card pinned, refuses this start instead of being
+      // reinterpreted at action time.
+      assertSlackReviewerPublicationPreflight(config, context, store);
+      return createSlackReactionsApprovalSurface(config, {
         // The surface resolves against the same shared decision node store
         // as the CLI; the composition root owns that store choice.
-        store: notifyOnResolve(
-          new DecisionNodeStore(context.stateDirectory, {
-            now: context.now,
-          }),
-          context.afterDecisionResolved,
-        ),
+        store: notifyOnResolve(store, context.afterDecisionResolved),
         environment: context.environment,
         credentialResolver: context.credentialResolver,
         now: context.now,
+        reviewerAuthorizationEvidenceValidator:
+          validateReviewerAuthorizationEvidence,
+        organizationMemberAuthorizationEvidenceValidator:
+          validateOrganizationMemberAuthorizationEvidence,
+        reviewerDisplayNameValidator: assertReviewerDisplayName,
+        organizationMemberPresentationRenderer:
+          organizationMemberApprovalPresentationRenderer,
         ...(context.approvalActionAuthorizer === undefined
           ? {}
           : {
               approvalActionAuthorizer: context.approvalActionAuthorizer,
             }),
-      }),
+        ...(context.reviewerApprovalActionAuthorizer === undefined
+          ? {}
+          : {
+              reviewerApprovalActionAuthorizer:
+                context.reviewerApprovalActionAuthorizer,
+            }),
+        ...(organizationMemberAuthorizer(
+          context.reviewerApprovalActionAuthorizer,
+        ) === undefined
+          ? {}
+          : {
+              organizationMemberApprovalActionAuthorizer:
+                organizationMemberAuthorizer(
+                  context.reviewerApprovalActionAuthorizer,
+                ),
+            }),
+        ...(context.reviewerPresentationRenderer === undefined
+          ? {}
+          : {
+              reviewerPresentationRenderer:
+                context.reviewerPresentationRenderer,
+            }),
+      });
+    },
   });
   return factories;
 }

@@ -766,7 +766,7 @@ export async function handleAdminConsoleRequest(
       const command = validateProvisionOrganizationMembershipRequest(
         validationPayload(body),
       );
-      options.application.provisionMembership(command);
+      await options.application.provisionMembership(command);
       sendRedirect(options.response, '/admin');
       return true;
     }
@@ -799,7 +799,7 @@ export async function handleAdminConsoleRequest(
       const command = validateIssueOrganizationEnrollmentGrantRequest(
         validationPayload(body),
       );
-      const issued = options.application.issueEnrollmentGrant(
+      const issued = await options.application.issueEnrollmentGrant(
         invitationMatch[1]!,
         command,
       );

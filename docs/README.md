@@ -33,6 +33,9 @@ in 0.1.0-internal.6.
 is the approved permission skeleton — pillars, trust ladder, invariants —
 that retrieve-side feature specs instantiate; approved but not yet
 implemented.
+[Approval surface v2](product/2026-08-10-approval-surface-v2-direction.md) is
+founder direction for the gate's future affordances (intent, declared links,
+edit-before-approve); direction, not scheduled.
 
 Historical proposals, ceremonies, evidence reports, and implementation diaries
 belong in Git history rather than the active tree; approved-but-unimplemented

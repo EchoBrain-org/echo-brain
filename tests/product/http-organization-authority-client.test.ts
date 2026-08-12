@@ -1,12 +1,19 @@
 import { Buffer } from 'node:buffer';
 import { describe, expect, it, vi } from 'vitest';
 import {
+  createOrganizationMemberReadablePermissionCheckRequest,
+  createOrganizationReadableSearchRequest,
+  createOrganizationReviewerPermissionCheckRequest,
   createOrganizationInternalLiveDirectiveRequest,
   createOrganizationInternalLiveUpdateReceipt,
   createOrganizationPermissionCheckRequest,
+  createOrganizationRecentDecisionsRequest,
   createOrganizationSlackLinkBeginRequest,
   createOrganizationSlackLinkCompleteRequest,
+  ORGANIZATION_RECENT_DECISIONS_POLICY_ID,
+  ORGANIZATION_RECENT_DECISIONS_WITNESS,
 } from '@echo-brain/organization-api';
+import { canonicalJson, canonicalSha256 } from '@echo-brain/federation-protocol';
 import { OrganizationAuthorityConflictError } from '../../src/product/organization/client/authority-client.js';
 import {
   HttpOrganizationAuthorityClient,
@@ -203,6 +210,306 @@ describe('HTTP organization authority client', () => {
     cancellation.abort();
     await expect(pending).rejects.toMatchObject({ code: 'transport_failed' });
     expect(combinedSignal?.aborted).toBe(true);
+  });
+
+  it('sends reviewer permission as exact canonical bytes without changing schema-v1 wire behavior', async () => {
+    const authority = new TestAuthority();
+    const signer = new TestInstallationSigner();
+    const signingKey = protocolInstallationKey(signer);
+    const request = await createOrganizationReviewerPermissionCheckRequest(
+      {
+        request_id: 'pcr_00000000-0000-4000-8000-000000000001',
+        authority_id: ORGANIZATION_IDS.authority,
+        authority_key_id: authority.descriptor.signing_key.key_id,
+        organization_id: ORGANIZATION_IDS.organization,
+        enrollment_id: ORGANIZATION_IDS.enrollment,
+        installation_id: ORGANIZATION_IDS.installation,
+        installation_signing_key: signingKey,
+        provider: 'slack',
+        provider_issuer: 'https://slack.com',
+        provider_tenant_kind: 'workspace',
+        provider_tenant_id: 'T123TEAM',
+        provider_enterprise_id: null,
+        provider_connection_subject_id: 'U123BOT',
+        provider_connection_bot_id: 'B123BOT',
+        provider_connection_app_id: 'A123APP',
+        provider_subject_kind: 'human_user',
+        provider_subject_id: 'U123ZHEN',
+        adapter_kind: 'approval-surface',
+        adapter_id: 'slack-reactions',
+        adapter_instance_id: 'primary',
+        adapter_version: '1.0.0',
+        approval_id: 'f'.repeat(64),
+        channel_id: 'C123CHANNEL',
+        message_ts: '1753822800.000001',
+        reaction_name: 'white_check_mark',
+        approve_reaction: 'white_check_mark',
+        reject_reaction: 'x',
+        reviewer_release_draft_sha256: `sha256:${'d'.repeat(64)}`,
+        approval_presentation_sha256: `sha256:${'e'.repeat(64)}`,
+        requested_at: NOW,
+      },
+      (bytes) =>
+        signer.sign(
+          ORGANIZATION_IDS.installation,
+          bytes,
+          signingKey.key_id,
+        ),
+    );
+    const decision = {
+      schema_version: 2 as const,
+      kind: 'echo-organization-permission-check-decision' as const,
+      request_sha256: canonicalSha256(request),
+      provider_event_sha256: request.provider_event_sha256,
+      allowed: true,
+      reason_code: 'active_reviewer_restricted_notice_v1',
+      principal_id: ORGANIZATION_IDS.principal,
+      membership_id: ORGANIZATION_IDS.membership,
+      adapter_binding_id: 'bnd_00000000-0000-4000-8000-000000000001',
+      permission_grant_id: 'pgr_00000000-0000-4000-8000-000000000001',
+      evaluated_at: NOW,
+      authorization_audit_event_id:
+        'aud_00000000-0000-4000-8000-000000000001',
+      authorization_audit_entry_sha256: `sha256:${'a'.repeat(64)}`,
+      reviewer_release_draft_sha256:
+        request.reviewer_release_draft_sha256,
+      approval_presentation_sha256: request.approval_presentation_sha256,
+      semantic_intent_sha256: `sha256:${'b'.repeat(64)}`,
+      message_presentation_sha256: `sha256:${'c'.repeat(64)}`,
+    };
+    const client = new HttpOrganizationAuthorityClient({
+      baseUrl: 'https://authority.example',
+      fetch: async (input, init) => {
+        expect(String(input)).toBe(
+          'https://authority.example/v1/permission-checks',
+        );
+        expect(String(init?.body)).toBe(canonicalJson(request));
+        return new Response(canonicalJson(decision), {
+          headers: { 'content-type': 'application/json' },
+        });
+      },
+    });
+
+    await expect(client.checkReviewerPermission(request)).resolves.toEqual(
+      decision,
+    );
+  });
+
+  it('sends organization-member permission as exact schema-v3 canonical bytes', async () => {
+    const authority = new TestAuthority();
+    const signer = new TestInstallationSigner();
+    const signingKey = protocolInstallationKey(signer);
+    const request = await createOrganizationMemberReadablePermissionCheckRequest(
+      {
+        request_id: 'pcr_00000000-0000-4000-8000-000000000001',
+        authority_id: ORGANIZATION_IDS.authority,
+        authority_key_id: authority.descriptor.signing_key.key_id,
+        organization_id: ORGANIZATION_IDS.organization,
+        enrollment_id: ORGANIZATION_IDS.enrollment,
+        installation_id: ORGANIZATION_IDS.installation,
+        installation_signing_key: signingKey,
+        provider: 'slack',
+        provider_issuer: 'https://slack.com',
+        provider_tenant_kind: 'workspace',
+        provider_tenant_id: 'T123TEAM',
+        provider_enterprise_id: null,
+        provider_connection_subject_id: 'U123BOT',
+        provider_connection_bot_id: 'B123BOT',
+        provider_connection_app_id: 'A123APP',
+        provider_subject_kind: 'human_user',
+        provider_subject_id: 'U123ZHEN',
+        adapter_kind: 'approval-surface',
+        adapter_id: 'slack-reactions',
+        adapter_instance_id: 'primary',
+        adapter_version: '1.0.0',
+        approval_id: 'f'.repeat(64),
+        channel_id: 'C123CHANNEL',
+        message_ts: '1753822800.000001',
+        reaction_name: 'white_check_mark',
+        approve_reaction: 'white_check_mark',
+        reject_reaction: 'x',
+        release_draft_sha256: `sha256:${'d'.repeat(64)}`,
+        approval_presentation_sha256: `sha256:${'e'.repeat(64)}`,
+        requested_at: NOW,
+      },
+      (bytes) => signer.sign(ORGANIZATION_IDS.installation, bytes, signingKey.key_id),
+    );
+    const decision = {
+      schema_version: 3 as const,
+      kind: 'echo-organization-permission-check-decision' as const,
+      request_sha256: canonicalSha256(request),
+      provider_event_sha256: request.provider_event_sha256,
+      allowed: true,
+      reason_code: 'active_organization_member_readable_notice_v1',
+      policy_id: request.policy_id,
+      policy_contract_sha256: request.policy_contract_sha256,
+      principal_id: ORGANIZATION_IDS.principal,
+      membership_id: ORGANIZATION_IDS.membership,
+      adapter_binding_id: 'bnd_00000000-0000-4000-8000-000000000001',
+      permission_grant_id: 'pgr_00000000-0000-4000-8000-000000000001',
+      evaluated_at: NOW,
+      authorization_audit_event_id: 'aud_00000000-0000-4000-8000-000000000001',
+      authorization_audit_entry_sha256: `sha256:${'a'.repeat(64)}`,
+      release_draft_sha256: request.release_draft_sha256,
+      approval_presentation_sha256: request.approval_presentation_sha256,
+      semantic_intent_sha256: `sha256:${'b'.repeat(64)}`,
+      message_presentation_sha256: `sha256:${'c'.repeat(64)}`,
+    };
+    const client = new HttpOrganizationAuthorityClient({
+      baseUrl: 'https://authority.example',
+      fetch: async (input, init) => {
+        expect(String(input)).toBe('https://authority.example/v1/permission-checks');
+        expect(String(init?.body)).toBe(canonicalJson(request));
+        return new Response(canonicalJson(decision), {
+          headers: { 'content-type': 'application/json' },
+        });
+      },
+    });
+
+    await expect(client.checkOrganizationMemberPermission(request)).resolves.toEqual(
+      decision,
+    );
+  });
+
+  it('sends readable search as canonical bytes and rejects noncanonical response bytes', async () => {
+    const authority = new TestAuthority();
+    const signer = new TestInstallationSigner();
+    const signingKey = protocolInstallationKey(signer);
+    const request = await createOrganizationReadableSearchRequest(
+      {
+        request_id: 'osq_00000000-0000-4000-8000-000000000001',
+        authority_id: ORGANIZATION_IDS.authority,
+        authority_key_id: authority.descriptor.signing_key.key_id,
+        organization_id: ORGANIZATION_IDS.organization,
+        enrollment_id: ORGANIZATION_IDS.enrollment,
+        installation_id: ORGANIZATION_IDS.installation,
+        installation_signing_key: signingKey,
+        query: 'Adopt pilot',
+        requested_at: NOW,
+      },
+      (bytes) => signer.sign(ORGANIZATION_IDS.installation, bytes, signingKey.key_id),
+    );
+    const response = {
+      schema_version: 1,
+      contract_id: 'permission-aware-readable-search-v1',
+      items: [
+        {
+          kind: 'decision',
+          text: 'Adopt the organization pilot.',
+          policy_id: 'organization-member-readable-v1',
+          witness:
+            'You may read this item because it was explicitly approved for current active owner or employee members, including members admitted after approval, and your membership is active.',
+        },
+      ],
+    } as const;
+    const client = new HttpOrganizationAuthorityClient({
+      baseUrl: 'https://authority.example',
+      fetch: async (input, init) => {
+        expect(String(input)).toBe('https://authority.example/v1/readable-search');
+        expect(String(init?.body)).toBe(canonicalJson(request));
+        return new Response(canonicalJson(response), {
+          headers: { 'content-type': 'application/json' },
+        });
+      },
+    });
+    await expect(client.readReadableSearch(request)).resolves.toEqual(response);
+
+    for (const body of [
+      ` ${canonicalJson(response)}`,
+      JSON.stringify({
+        items: response.items,
+        contract_id: response.contract_id,
+        schema_version: response.schema_version,
+      }),
+    ]) {
+      const noncanonicalClient = new HttpOrganizationAuthorityClient({
+        baseUrl: 'https://authority.example',
+        fetch: async () =>
+          new Response(body, {
+            headers: { 'content-type': 'application/json' },
+          }),
+      });
+      await expect(
+        noncanonicalClient.readReadableSearch(request),
+      ).rejects.toMatchObject({ code: 'invalid_response' });
+    }
+  });
+
+  it('posts the exact signed recent-decisions request and accepts only its closed bounded response', async () => {
+    const authority = new TestAuthority();
+    const signer = new TestInstallationSigner();
+    const signingKey = protocolInstallationKey(signer);
+    const request = await createOrganizationRecentDecisionsRequest(
+      {
+        request_id: 'rdr_00000000-0000-4000-8000-000000000001',
+        authority_id: ORGANIZATION_IDS.authority,
+        authority_key_id: authority.descriptor.signing_key.key_id,
+        organization_id: ORGANIZATION_IDS.organization,
+        enrollment_id: ORGANIZATION_IDS.enrollment,
+        installation_id: ORGANIZATION_IDS.installation,
+        installation_signing_key: signingKey,
+        requested_at: NOW,
+      },
+      (bytes) =>
+        signer.sign(
+          ORGANIZATION_IDS.installation,
+          bytes,
+          signingKey.key_id,
+        ),
+    );
+    const response = {
+      schema_version: 1 as const,
+      policy_id: ORGANIZATION_RECENT_DECISIONS_POLICY_ID,
+      witness: ORGANIZATION_RECENT_DECISIONS_WITNESS,
+      items: [
+        {
+          atom_id: `sha256:${'a'.repeat(64)}` as const,
+          kind: 'decision' as const,
+          text: 'Adopt the two-member pilot.',
+          record_hash: `sha256:${'b'.repeat(64)}` as const,
+        },
+      ],
+    };
+    const client = new HttpOrganizationAuthorityClient({
+      baseUrl: 'https://authority.example',
+      fetch: async (input, init) => {
+        expect(String(input)).toBe(
+          'https://authority.example/v1/recent-decisions',
+        );
+        expect(init?.method).toBe('POST');
+        expect(new Headers(init?.headers).get('authorization')).toBeNull();
+        expect(JSON.parse(String(init?.body))).toEqual(request);
+        return Response.json(response);
+      },
+    });
+
+    await expect(client.readRecentDecisions(request)).resolves.toEqual(
+      response,
+    );
+
+    const malformedClient = new HttpOrganizationAuthorityClient({
+      baseUrl: 'https://authority.example',
+      fetch: async () =>
+        Response.json({
+          ...response,
+          items: [{ ...response.items[0]!, log_position: 7 }],
+        }),
+    });
+    await expect(
+      malformedClient.readRecentDecisions(request),
+    ).rejects.toMatchObject({ code: 'invalid_response', status: 200 });
+
+    const oversizedClient = new HttpOrganizationAuthorityClient({
+      baseUrl: 'https://authority.example',
+      fetch: async () =>
+        Response.json({
+          ...response,
+          items: [{ ...response.items[0]!, text: 'x'.repeat(61 * 1024) }],
+        }),
+    });
+    await expect(
+      oversizedClient.readRecentDecisions(request),
+    ).rejects.toMatchObject({ code: 'response_too_large', status: 200 });
   });
 
   it('uses only signed installation requests for Slack linking and strictly validates both responses', async () => {

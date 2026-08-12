@@ -1,13 +1,15 @@
 import { canonicalJson } from '@echo-brain/federation-protocol';
 import { afterAll, describe, expect, it } from 'vitest';
 import {
-  OrganizationRecordIngest,
   organizationRecordFrame,
   organizationRecordHash,
-  verifyOrganizationRecordChain,
   type JsonObject,
   type OrganizationRecordReceiptPayloadV1,
 } from '../src/index.js';
+import {
+  OrganizationRecordIngest,
+  verifyOrganizationRecordChain,
+} from '../src/append.js';
 import { OrganizationRecordIdempotencyConflictError } from '../src/application/errors.js';
 import {
   acceptingVerifier,
@@ -25,6 +27,25 @@ import {
 } from './support/fixtures.js';
 
 afterAll(removeTemporaryDirectories);
+
+/**
+ * The record clock, as the log transaction now owns it.
+ *
+ * `recorded_at` moved from an ingest-supplied append input to a single sample
+ * inside `BEGIN IMMEDIATE`. This sequence reproduces exactly the timestamps
+ * the ingest clock used to stamp — tick 0 spent on the one-time organization
+ * binding row, then one stamp per committed record — so the golden chain below
+ * is unchanged by the move: same frame, same canonicalization, same hash of
+ * the same inputs.
+ */
+function goldenRecordClock(): () => string {
+  let call = 0;
+  return () => {
+    const seconds = call === 0 ? 0 : 500 + (call - 1) * 2;
+    call += 1;
+    return new Date(Date.UTC(2026, 7, 7, 12, 0, seconds)).toISOString();
+  };
+}
 
 /**
  * The golden two-record chain. These digests freeze the exact genesis frame
@@ -47,7 +68,7 @@ function ingest(overrides: Partial<{ clock: () => string }> = {}): {
   verifier: ReturnType<typeof acceptingVerifier>;
   nudges: number[];
 } {
-  const stores = openStores(overrides.clock ?? fixedClock());
+  const stores = openStores(overrides.clock ?? goldenRecordClock());
   const signer = recordingSigner();
   const verifier = acceptingVerifier();
   const nudges: number[] = [];

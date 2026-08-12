@@ -29,6 +29,7 @@ function authorityApplication(): OrganizationAuthorityHttpApplication {
     completeEnrollment: unexpectedCall,
     issueAccessLease: unexpectedCall,
     checkPermissionSubject: unexpectedCall,
+    checkReviewerPermissionSubject: unexpectedCall,
     revokeMembership: unexpectedCall,
     revokeInstallation: unexpectedCall,
     recoverInstallationAccess: unexpectedCall,
@@ -56,6 +57,7 @@ describe('organization Authority runtime shutdown', () => {
       beginSlackIdentityLink: unexpectedCall,
       completeSlackIdentityLink: unexpectedCall,
       checkPermission: unexpectedCall,
+      checkReviewerPermission: unexpectedCall,
     };
     const server = createOrganizationAuthorityHttpServer({
       application: authorityApplication(),

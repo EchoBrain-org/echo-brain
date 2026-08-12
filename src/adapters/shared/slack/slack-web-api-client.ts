@@ -29,6 +29,12 @@ export interface SlackPostMessageInput {
   unfurlLinks?: boolean;
   /** Disable media previews for meeting-derived content by default. */
   unfurlMedia?: boolean;
+  /**
+   * Explicit top-level `mrkdwn`. Slack defaults it to true and never returns
+   * it, so a presentation that must be rendered verbatim has to send `false`
+   * and rely on the frozen contract constant rather than an acknowledgement.
+   */
+  mrkdwn?: boolean;
 }
 
 export interface SlackPostedMessage {
@@ -313,6 +319,7 @@ export class SlackWebApiClient {
         text: input.text,
         unfurl_links: input.unfurlLinks ?? false,
         unfurl_media: input.unfurlMedia ?? false,
+        ...(input.mrkdwn === undefined ? {} : { mrkdwn: input.mrkdwn }),
         ...(input.blocks === undefined ? {} : { blocks: input.blocks }),
       },
       { signal, unknownOutcomeOnTransportFailure: true },
@@ -336,11 +343,12 @@ export class SlackWebApiClient {
         !SLACK_MESSAGE_TS_RE.test(ts) ||
         !isPlainObject(message) ||
         message["ts"] !== ts ||
+        message["text"] !== input.text ||
         !Array.isArray(acknowledgedBlocks))
     ) {
       throw new SlackApiError(
         "unknown_outcome",
-        "Slack did not bind the acknowledged blocks to the posted message identity",
+        "Slack did not bind the acknowledged presentation to the posted message identity",
         true,
       );
     }

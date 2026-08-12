@@ -265,3 +265,64 @@ export function canonicalSnapshot<T>(
   }
   return JSON.parse(bytes.toString("utf8")) as T;
 }
+
+/**
+ * Canonical JSON intentionally serializes only enumerable data. Protocol
+ * validators must reject, rather than silently discard, any in-memory field
+ * that could not have arrived on the JSON wire.
+ */
+export function assertOnlyEnumerableDataProperties(
+  value: unknown,
+  label: string,
+  seen: Set<object> = new Set<object>(),
+): void {
+  if (typeof value !== "object" || value === null) return;
+  if (seen.has(value)) {
+    organizationProtocolValidationFailure(`${label} must not contain a cycle`);
+  }
+  seen.add(value);
+  try {
+    if (Object.getOwnPropertySymbols(value).length !== 0) {
+      organizationProtocolValidationFailure(
+        `${label} must not contain symbol properties`,
+      );
+    }
+    if (Array.isArray(value)) {
+      const names = Object.getOwnPropertyNames(value);
+      if (
+        names.length !== value.length + 1 ||
+        !names.includes("length")
+      ) {
+        organizationProtocolValidationFailure(
+          `${label} must contain only dense array elements`,
+        );
+      }
+      for (let index = 0; index < value.length; index += 1) {
+        const descriptor = Object.getOwnPropertyDescriptor(value, String(index));
+        if (
+          descriptor === undefined ||
+          !("value" in descriptor) ||
+          descriptor.enumerable !== true
+        ) {
+          organizationProtocolValidationFailure(
+            `${label} must contain only enumerable data properties`,
+          );
+        }
+        assertOnlyEnumerableDataProperties(descriptor.value, label, seen);
+      }
+      return;
+    }
+    for (const descriptor of Object.values(
+      Object.getOwnPropertyDescriptors(value),
+    )) {
+      if (!("value" in descriptor) || descriptor.enumerable !== true) {
+        organizationProtocolValidationFailure(
+          `${label} must contain only enumerable data properties`,
+        );
+      }
+      assertOnlyEnumerableDataProperties(descriptor.value, label, seen);
+    }
+  } finally {
+    seen.delete(value);
+  }
+}

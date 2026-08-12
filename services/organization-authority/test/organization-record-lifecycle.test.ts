@@ -16,15 +16,17 @@ import { join } from 'node:path';
 import Database from 'better-sqlite3';
 import { afterEach, describe, expect, it } from 'vitest';
 import {
+  organizationRecordFrame,
+  organizationRecordHash,
+  organizationRecordReceiptPayload,
+} from '@echo-brain/organization-record';
+import {
   ORGANIZATION_RECORD_DERIVED_DATABASE,
   ORGANIZATION_RECORD_LOG_DATABASE,
   OrganizationRecordLogStore,
   inspectOrganizationRecordDatabaseSchema,
   openOrganizationRecordDatabase,
-  organizationRecordFrame,
-  organizationRecordHash,
-  organizationRecordReceiptPayload,
-} from '@echo-brain/organization-record';
+} from '@echo-brain/organization-record/maintenance';
 import {
   canonicalJson,
   canonicalSha256,
@@ -108,7 +110,6 @@ function appendOneRecord(config: AuthorityRuntimeConfigV1): void {
       },
       canonical_envelope: canonicalEnvelope,
       envelope_sha256: sha256Digest(canonicalEnvelope),
-      recorded_at: '2026-08-08T12:00:00.000Z',
     });
   } finally {
     log.close();
@@ -192,7 +193,7 @@ describe('organization record persistence lifecycle', () => {
       try {
         expect(
           inspectOrganizationRecordDatabaseSchema(database, definition),
-        ).toBe(1);
+        ).toBe(definition === ORGANIZATION_RECORD_LOG_DATABASE ? 4 : 3);
       } finally {
         database.close();
       }

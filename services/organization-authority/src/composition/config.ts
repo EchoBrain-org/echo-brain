@@ -6,6 +6,17 @@ export interface DevelopmentSignerConfig {
   key_directory: string;
 }
 
+export interface OrganizationRecordingPolicyV1 {
+  schema_version: 1;
+  kind: 'organization-recording-policy-v1';
+  decision_processor_adapter_instance_id: string;
+  approval_surface_adapter_instance_id: string;
+  presentation_mode:
+    | 'restricted-reviewer-v1'
+    | 'organization-member-readable-v1';
+  policy_contract_sha256: `sha256:${string}`;
+}
+
 export interface AuthorityServeConfig extends DevelopmentSignerConfig {
   state_directory: string;
   organization_display_name: string;
@@ -20,6 +31,11 @@ export interface AuthorityServeConfig extends DevelopmentSignerConfig {
   port: number;
   active_lease_ttl_ms: number;
   access_request_maximum_age_ms: number;
+  /**
+   * Optional while the Job B admission family is not configured. Its absence
+   * deliberately leaves the existing runtime and fingerprint unchanged.
+   */
+  organization_recording_policy_v1?: OrganizationRecordingPolicyV1;
 }
 
 function normalizedAbsolute(path: string): boolean {

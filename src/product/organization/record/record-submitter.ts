@@ -14,6 +14,15 @@ import type {
   VerifiedOrganizationRecordReceipt,
 } from './ports.js';
 
+/**
+ * Restated rather than imported: this module speaks only the federation
+ * primitives, and the protocol package owns the durable shapes. Both values
+ * are pinned to the protocol package by test.
+ */
+const RESTRICTED_REVIEWER_ALLOW_REASON_CODE =
+  'active_reviewer_restricted_notice_v1';
+const RESTRICTED_REVIEWER_SURFACE = 'slack-reviewer-v1';
+
 export type OrganizationRecordAlertCode =
   | 'node_unreadable'
   | 'retired_federation_node'
@@ -103,7 +112,11 @@ function isNonEmptyString(value: unknown): value is string {
 function readOrganizationRecordAuthorization(
   node: Pick<
     OrganizationRecordCandidateNode,
-    'approval_id' | 'status' | 'resolved_metadata'
+    | 'approval_id'
+    | 'status'
+    | 'resolved_metadata'
+    | 'resolved_surface'
+    | 'reviewed_at'
   >,
   installationId: string,
 ): OrganizationRecordAuthorizationEvidence | string {
@@ -117,8 +130,43 @@ function readOrganizationRecordAuthorization(
   if (evidence['kind'] !== 'echo-organization-authorization-evidence') {
     return 'authorization evidence kind is not recognized';
   }
-  if (evidence['schema_version'] !== 1) {
+  const reviewerEvidence = evidence['schema_version'] === 2;
+  if (evidence['schema_version'] !== 1 && !reviewerEvidence) {
     return 'authorization evidence schema version is not supported';
+  }
+  // Schema-v2 evidence is reviewer-only: it authorizes approval alone and must
+  // carry the closed reviewer reason plus every proof digest. A v2 rejection
+  // cannot exist, so it can never fall through to the broad v1 derive path.
+  if (reviewerEvidence) {
+    if (node.status !== 'approved') {
+      return 'reviewer authorization evidence cannot record a rejection';
+    }
+    if (evidence['reason_code'] !== RESTRICTED_REVIEWER_ALLOW_REASON_CODE) {
+      return 'reviewer authorization evidence carries another reason code';
+    }
+    if (!isNonEmptyString(evidence['authorization_audit_event_id'])) {
+      return 'authorization evidence is missing authorization_audit_event_id';
+    }
+    for (const field of [
+      'authorization_audit_entry_sha256',
+      'reviewer_release_draft_sha256',
+      'approval_presentation_sha256',
+      'semantic_intent_sha256',
+      'message_presentation_sha256',
+    ] as const) {
+      const digest = evidence[field];
+      if (typeof digest !== 'string' || !SHA256_DIGEST_RE.test(digest)) {
+        return `authorization evidence ${field} is not a sha256 digest`;
+      }
+    }
+    if (node.resolved_surface !== RESTRICTED_REVIEWER_SURFACE) {
+      return 'reviewer authorization evidence requires the reviewer resolution surface';
+    }
+    if (node.reviewed_at !== evidence['evaluated_at']) {
+      return 'reviewer resolution time does not match its authorization evidence';
+    }
+  } else if (evidence['reason_code'] === RESTRICTED_REVIEWER_ALLOW_REASON_CODE) {
+    return 'reviewer reason code requires schema version 2 evidence';
   }
   if (evidence['allowed'] !== true) {
     return 'authorization evidence is not an allow decision';

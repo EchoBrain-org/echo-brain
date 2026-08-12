@@ -24,7 +24,10 @@ employees. The repository contains:
 - one customer-hosted organization authority for enrollment and access; and
 - a minimum customer-owned organization control plane for one verified
   organization Slack tool, exact provider identity links and adapter bindings,
-  and direct approve/reject permission checks.
+  and direct approve/reject permission checks; and
+- a source-implemented bounded permission-aware organization readable-search
+  baseline, documented with its authority lifecycle rather than as a deployed
+  feature.
 
 It does not contain a multi-tenant vendor control plane, billing, fleet,
 multi-replica authority infrastructure, general employee tool propagation,
@@ -620,6 +623,7 @@ reverse proxy. See:
 - [portable one-machine deployment](deploy/organization-authority/README.md)
 - [organization protocol boundaries](docs/architecture/organization-workspace-boundaries.md)
 - [organization control-plane design](docs/architecture/organization-control-plane.md)
+- [permission-aware readable-search baseline](docs/product/2026-08-11-trusted-permission-aware-searchable-layer-2-design.md)
 
 The employee product owns its installation private key and pins the authority
 identity. The authority owns membership, enrollment grants, leases, and

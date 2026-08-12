@@ -17,6 +17,9 @@ const AUTHORITY_TABLES = [
   'authority_memberships',
   'authority_metadata',
   'authority_principals',
+  'authority_query_decision_audit',
+  'authority_readable_search_active_generation',
+  'authority_readable_search_query_audit',
 ];
 const temporaryDirectories: string[] = [];
 
@@ -38,7 +41,7 @@ describe('organization authority database migrations', () => {
     openAuthorityDatabase(path).close();
 
     const database = new Database(path, { readonly: true });
-    expect(database.pragma('user_version', { simple: true })).toBe(5);
+    expect(database.pragma('user_version', { simple: true })).toBe(7);
     const tables = database
       .prepare(
         `SELECT name FROM sqlite_master
@@ -125,7 +128,7 @@ describe('organization authority database migrations', () => {
 
     openAuthorityDatabase(path).close();
     const upgraded = new Database(path);
-    expect(upgraded.pragma('user_version', { simple: true })).toBe(5);
+    expect(upgraded.pragma('user_version', { simple: true })).toBe(7);
     const tables = upgraded
       .prepare(
         `SELECT name FROM sqlite_master
@@ -277,6 +280,88 @@ describe('organization authority database migrations', () => {
     expect(() => openAuthorityDatabase(path).close()).not.toThrow();
   });
 
+  it('keeps readable-search publication state strict and query decisions isolated', () => {
+    const path = databasePath();
+    openAuthorityDatabase(path).close();
+    const database = new Database(path);
+    const digest = `sha256:${'a'.repeat(64)}`;
+
+    database
+      .prepare(
+        `INSERT INTO authority_readable_search_active_generation (
+           singleton, organization_id, generation_id, manifest_sha256,
+           retrieval_contract_sha256, record_head_position, record_head_hash,
+           published_at
+         ) VALUES (1, ?, ?, ?, ?, 0, NULL, ?)`,
+      )
+      .run(
+        'org_00000000-0000-4000-8000-000000000001',
+        digest,
+        digest,
+        digest,
+        '2026-07-22T00:00:00.000Z',
+      );
+    expect(() =>
+      database
+        .prepare(
+          `INSERT INTO authority_readable_search_active_generation (
+             singleton, organization_id, generation_id, manifest_sha256,
+             retrieval_contract_sha256, record_head_position, record_head_hash,
+             published_at
+           ) VALUES (2, ?, ?, ?, ?, 0, NULL, ?)`,
+        )
+        .run(
+          'org_00000000-0000-4000-8000-000000000001',
+          digest,
+          digest,
+          digest,
+          '2026-07-22T00:00:00.000Z',
+        ),
+    ).toThrow();
+    expect(() =>
+      database
+        .prepare(
+          `UPDATE authority_readable_search_active_generation
+             SET record_head_hash = ? WHERE singleton = 1`,
+        )
+        .run(digest),
+    ).toThrow();
+
+    database
+      .prepare(
+        `INSERT INTO authority_readable_search_query_audit (
+           occurred_at, retain_until, operation, decision, reason_code,
+           detail_json
+         ) VALUES (?, ?, 'permission.readable_search_decided', 'deny',
+           'installation_access_expired', '{}')`,
+      )
+      .run('2026-07-22T00:00:00.000Z', '2027-01-18T00:00:00.000Z');
+    expect(() =>
+      database
+        .prepare(
+          `INSERT INTO authority_readable_search_query_audit (
+             occurred_at, retain_until, operation, decision, reason_code,
+             detail_json
+           ) VALUES (?, ?, 'permission.readable_search_decided', 'allow',
+             'installation_access_expired', '{}')`,
+        )
+        .run('2026-07-22T00:00:00.000Z', '2027-01-18T00:00:00.000Z'),
+    ).toThrow();
+    expect(() =>
+      database
+        .prepare(
+          'UPDATE authority_readable_search_query_audit SET decision = \'allow\'',
+        )
+        .run(),
+    ).toThrow('readable search query audit is immutable');
+    expect(() =>
+      database
+        .prepare('DELETE FROM authority_readable_search_query_audit')
+        .run(),
+    ).toThrow('readable search query audit entry deletion is denied');
+    database.close();
+  });
+
   it('does not create a missing database when an existing file is required', () => {
     const path = databasePath();
 
@@ -292,11 +377,11 @@ describe('organization authority database migrations', () => {
   it('rejects a database newer than this authority binary', () => {
     const path = databasePath();
     const future = new Database(path);
-    future.pragma('user_version = 6');
+    future.pragma('user_version = 8');
     future.close();
 
     expect(() => openAuthorityDatabase(path)).toThrow(
-      'newer than supported schema 5',
+      'newer than supported schema 7',
     );
   });
 });

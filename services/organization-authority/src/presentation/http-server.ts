@@ -4,6 +4,9 @@ import type { IncomingMessage, Server, ServerResponse } from 'node:http';
 import { TextDecoder } from 'node:util';
 import {
   isOrganizationApiValidationError,
+  canonicalOrganizationMemberReadablePermissionCheckDecisionBytes,
+  canonicalOrganizationReadableSearchRequestBytes,
+  canonicalOrganizationReviewerPermissionCheckDecisionBytes,
   MAX_ORGANIZATION_API_BODY_BYTES,
   ORGANIZATION_API_ACCESS_LEASES_PATH,
   ORGANIZATION_API_ADMIN_AUDIT_PATH,
@@ -20,10 +23,14 @@ import {
   ORGANIZATION_API_INTERNAL_LIVE_DIRECTIVES_PATH,
   ORGANIZATION_API_INTERNAL_LIVE_RECEIPTS_PATH,
   ORGANIZATION_API_PERMISSION_CHECKS_PATH,
+  ORGANIZATION_API_READABLE_SEARCH_PATH,
+  ORGANIZATION_API_RECENT_DECISIONS_PATH,
+  ORGANIZATION_API_REVIEWER_RECENT_DECISIONS_PATH,
   ORGANIZATION_API_RECORD_ENVELOPES_PATH,
   ORGANIZATION_API_SLACK_LINK_CHALLENGES_PATH,
   ORGANIZATION_API_SLACK_LINK_COMPLETIONS_PATH,
   MAX_ORGANIZATION_RECORD_API_BODY_BYTES,
+  MAX_ORGANIZATION_READABLE_SEARCH_REQUEST_BYTES,
   validateCompleteOrganizationEnrollmentRequest,
   validateApproveOrganizationInternalLiveReleaseRequest,
   validateIssueOrganizationEnrollmentGrantRequest,
@@ -31,6 +38,11 @@ import {
   validateOrganizationInternalLiveDirectiveRequest,
   validateOrganizationInternalLiveUpdateReceipt,
   validateOrganizationPermissionCheckRequest,
+  validateOrganizationMemberReadablePermissionCheckRequest,
+  validateOrganizationReviewerPermissionCheckRequest,
+  validateOrganizationRecentDecisionsRequest,
+  validateOrganizationReadableSearchRequest,
+  validateOrganizationReviewerRecentDecisionsRequest,
   validateRecoverOrganizationInstallationAccessRequest,
   validateSubmitOrganizationRecordEnvelopeRequest,
   validateOrganizationSlackLinkBeginRequest,
@@ -55,6 +67,35 @@ import {
 } from '../domain/errors.js';
 import { OrganizationRecordIngestRejectionError } from '../application/organization-record-ingest.js';
 import {
+  fixedRecentDecisionsErrorBytes,
+  OrganizationRecentDecisionsError,
+} from '../application/recent-decisions.js';
+import {
+  fixedReviewerRecentDecisionsErrorBytes,
+  ReviewerRecentDecisionsError,
+} from '../application/reviewer-recent-decisions.js';
+import {
+  fixedReadableSearchErrorBytes,
+  ReadableSearchError,
+} from '../application/readable-search.js';
+
+const REVIEWER_PERMISSION_UNAVAILABLE_BYTES = Buffer.from(
+  '{"error":{"code":"unavailable","message":"service is temporarily unavailable"}}',
+  'utf8',
+);
+const ORGANIZATION_MEMBER_PERMISSION_UNAVAILABLE_BYTES = Buffer.from(
+  '{"error":{"code":"unavailable","message":"service is temporarily unavailable"}}',
+  'utf8',
+);
+const READABLE_SEARCH_INVALID_REQUEST_BYTES = Buffer.from(
+  '{"error":{"code":"invalid_request","message":"request is invalid"}}',
+  'utf8',
+);
+const READABLE_SEARCH_UNAVAILABLE_BYTES = Buffer.from(
+  '{"error":{"code":"unavailable","message":"service is temporarily unavailable"}}',
+  'utf8',
+);
+import {
   assertAuthorityRuntimeStatusNonce,
   AUTHORITY_RUNTIME_STATUS_NONCE_HEADER,
   AUTHORITY_RUNTIME_STATUS_PATH,
@@ -63,6 +104,9 @@ import {
 import type { OrganizationAuthorityHttpApplication } from './organization-authority-http-application.js';
 import type { OrganizationIntegrationsHttpApplication } from './organization-integrations-http-application.js';
 import type { OrganizationRecordHttpApplication } from './organization-record-http-application.js';
+import type { OrganizationRecentDecisionsHttpApplication } from './organization-recent-decisions-http-application.js';
+import type { OrganizationReviewerRecentDecisionsHttpApplication } from './organization-reviewer-recent-decisions-http-application.js';
+import type { OrganizationReadableSearchHttpApplication } from './organization-readable-search-http-application.js';
 import { handleAdminConsoleRequest } from './admin-console/routes.js';
 import type { AdminConsoleSessionStore } from './admin-console/sessions.js';
 import {
@@ -204,6 +248,54 @@ function sendJson(
   response.end(bytes);
 }
 
+/** Sends already-authorized bytes without a second JSON serialization pass. */
+function sendSerializedJson(
+  response: ServerResponse,
+  status: number,
+  bytes: Buffer,
+): void {
+  response.writeHead(status, {
+    'Cache-Control': 'no-store',
+    'Content-Type': 'application/json; charset=utf-8',
+    'Content-Length': String(bytes.length),
+    'X-Content-Type-Options': 'nosniff',
+  });
+  response.end(bytes);
+}
+
+/**
+ * A prepared readable-search response owns a fence/scope lease until its
+ * exact bytes have been handed to transport. A transport failure has no
+ * second HTTP body to send, but it must still release exactly once.
+ */
+function handoffPreparedReadableSearchResponse(
+  send: (body: string) => void,
+  prepared: { handoff(send: (body: string) => void): void },
+): void {
+  try {
+    prepared.handoff(send);
+  } catch {
+    // The transport may already have written a prefix. The sealed handoff has
+    // already attempted exactly-once cleanup in its own finally; never send a
+    // replacement body from here.
+  }
+}
+
+/** Sends the audited UTF-8 primitive directly, without reserializing it. */
+function sendPreparedReadableSearchJson(
+  response: ServerResponse,
+  status: number,
+  body: string,
+): void {
+  response.writeHead(status, {
+    'Cache-Control': 'no-store',
+    'Content-Type': 'application/json; charset=utf-8',
+    'Content-Length': String(Buffer.byteLength(body, 'utf8')),
+    'X-Content-Type-Options': 'nosniff',
+  });
+  response.end(body);
+}
+
 function sendNoContent(response: ServerResponse): void {
   response.writeHead(204, {
     'Cache-Control': 'no-store',
@@ -236,6 +328,16 @@ async function readJsonBody(
   maximumBytes: number = MAX_ORGANIZATION_API_BODY_BYTES,
   oversizeCode = 'payload_too_large',
 ): Promise<unknown> {
+  return decodeOrganizationApiJsonBody(
+    await readJsonBodyBytes(request, maximumBytes, oversizeCode),
+  );
+}
+
+async function readJsonBodyBytes(
+  request: IncomingMessage,
+  maximumBytes: number = MAX_ORGANIZATION_API_BODY_BYTES,
+  oversizeCode = 'payload_too_large',
+): Promise<Buffer> {
   const contentType = request.headers['content-type'];
   if (
     contentType === undefined ||
@@ -275,7 +377,7 @@ async function readJsonBody(
       'request body is empty',
     );
   }
-  return decodeOrganizationApiJsonBody(Buffer.concat(chunks));
+  return Buffer.concat(chunks);
 }
 
 /**
@@ -305,6 +407,91 @@ function validateRecordEnvelopeRequest(
     throw new OrganizationRecordIngestRejectionError(
       'record_envelope_invalid',
       'record envelope failed request validation',
+    );
+  }
+}
+
+async function readRecentDecisionsRequest(
+  request: IncomingMessage,
+): Promise<ReturnType<typeof validateOrganizationRecentDecisionsRequest>> {
+  try {
+    return validateOrganizationRecentDecisionsRequest(
+      await readJsonBody(request),
+    );
+  } catch (error) {
+    if (
+      isOrganizationApiValidationError(error) ||
+      error instanceof PayloadTooLargeError ||
+      (error instanceof AuthorityOperationError &&
+        error.code === 'invalid_request')
+    ) {
+      throw new OrganizationRecentDecisionsError(
+        'invalid_request',
+        'recent decisions request is invalid',
+        { cause: error },
+      );
+    }
+    throw error;
+  }
+}
+
+async function readReviewerRecentDecisionsRequest(
+  request: IncomingMessage,
+): Promise<
+  ReturnType<typeof validateOrganizationReviewerRecentDecisionsRequest>
+> {
+  try {
+    return validateOrganizationReviewerRecentDecisionsRequest(
+      await readJsonBody(request),
+    );
+  } catch (error) {
+    // The raw body cap is an outer transport boundary and remains 413. Only a
+    // decoded malformed request becomes the reviewer's fixed 400.
+    if (error instanceof PayloadTooLargeError) throw error;
+    if (
+      isOrganizationApiValidationError(error) ||
+      (error instanceof AuthorityOperationError &&
+        error.code === 'invalid_request')
+    ) {
+      throw new ReviewerRecentDecisionsError(
+        'invalid_request',
+        'reviewer recent decisions request is invalid',
+        { cause: error },
+      );
+    }
+    throw error;
+  }
+}
+
+async function readReadableSearchRequest(
+  request: IncomingMessage,
+): Promise<ReturnType<typeof validateOrganizationReadableSearchRequest>> {
+  let bytes: Buffer;
+  try {
+    bytes = await readJsonBodyBytes(
+      request,
+      MAX_ORGANIZATION_READABLE_SEARCH_REQUEST_BYTES,
+    );
+    const command = validateOrganizationReadableSearchRequest(
+      decodeOrganizationApiJsonBody(bytes),
+    );
+    if (
+      !bytes.equals(
+        Buffer.from(canonicalOrganizationReadableSearchRequestBytes(command)),
+      )
+    ) {
+      throw new Error('readable-search request bytes are not RFC8785 canonical');
+    }
+    return command;
+  } catch (error) {
+    // The raw byte cap is the outer 413 contract. Everything else, including
+    // whitespace or reordered JSON that decodes to the same DTO, is the
+    // readable-search fixed 400 before authentication or audit.
+    if (error instanceof PayloadTooLargeError) throw error;
+    throw new ReadableSearchError(
+      'invalid_request',
+      'readable-search request is invalid',
+      { cause: error },
     );
   }
 }
@@ -350,8 +537,8 @@ function decodeEnrollmentGrant(header: string | undefined): Uint8Array {
 }
 
 function membershipResponse(
-  value: ReturnType<
-    OrganizationAuthorityHttpApplication['provisionMembership']
+  value: Awaited<
+    ReturnType<OrganizationAuthorityHttpApplication['provisionMembership']>
   >,
 ): ProvisionedOrganizationMembershipV1 {
   return {
@@ -418,6 +605,11 @@ export interface OrganizationAuthorityHttpServerOptions {
   integrations?: OrganizationIntegrationsHttpApplication;
   /** Present only when the authority process hosts the organization record. */
   records?: OrganizationRecordHttpApplication;
+  /** Present only when a valid permission-pilot marker was cached at startup. */
+  recentDecisions?: OrganizationRecentDecisionsHttpApplication;
+  reviewerRecentDecisions?: OrganizationReviewerRecentDecisionsHttpApplication;
+  /** Omitted means no admitted readable-search runtime is available. */
+  readableSearch?: OrganizationReadableSearchHttpApplication;
   adminAuthenticator: AdminRequestAuthenticator;
   clientIdentityResolver: RequestClientIdentityResolver;
   adminConsole?: {
@@ -627,7 +819,9 @@ export function createOrganizationAuthorityHttpServer(
                     ? 'access'
                     : url.pathname === ORGANIZATION_API_RECORD_ENVELOPES_PATH
                       ? 'record'
-                      : 'other';
+                      : url.pathname === ORGANIZATION_API_RECENT_DECISIONS_PATH
+                        ? 'recent-decisions'
+                        : 'other';
           consumeRateLimit(rateLimiter, `${clientIdentity}:${routeClass}`);
         }
       }
@@ -650,6 +844,29 @@ export function createOrganizationAuthorityHttpServer(
           url,
           signal: lifecycle.shutdownController.signal,
         });
+        return;
+      }
+
+      if (url.pathname === ORGANIZATION_API_READABLE_SEARCH_PATH) {
+        if (method !== 'POST' || url.search !== '') {
+          throw new ReadableSearchError(
+            'invalid_request',
+            'readable-search method or query is invalid',
+          );
+        }
+        if (options.readableSearch === undefined) {
+          sendSerializedJson(response, 503, READABLE_SEARCH_UNAVAILABLE_BYTES);
+          return;
+        }
+        const command = await readReadableSearchRequest(request);
+        const prepared = await options.readableSearch.search(command);
+        // The application has already appended the exact bytes to its audit
+        // transaction. Transport never reserializes or prefixes this body.
+        handoffPreparedReadableSearchResponse(
+          (body) =>
+            sendPreparedReadableSearchJson(response, prepared.status_code, body),
+          prepared,
+        );
         return;
       }
 
@@ -771,6 +988,14 @@ export function createOrganizationAuthorityHttpServer(
         }
 
         if (url.search !== '') {
+          if (
+            url.pathname === ORGANIZATION_API_REVIEWER_RECENT_DECISIONS_PATH
+          ) {
+            throw new ReviewerRecentDecisionsError(
+              'invalid_request',
+              'reviewer recent decisions query parameters are unsupported',
+            );
+          }
           throw new AuthorityOperationError(
             'invalid_request',
             'query parameters are not supported',
@@ -788,7 +1013,7 @@ export function createOrganizationAuthorityHttpServer(
           sendJson(
             response,
             201,
-            membershipResponse(options.application.provisionMembership(body)),
+            membershipResponse(await options.application.provisionMembership(body)),
           );
           return;
         }
@@ -799,7 +1024,7 @@ export function createOrganizationAuthorityHttpServer(
           const body = validateIssueOrganizationEnrollmentGrantRequest(
             await readJsonBody(request),
           );
-          const issued = options.application.issueEnrollmentGrant(
+          const issued = await options.application.issueEnrollmentGrant(
             grantRoute[1]!,
             body,
           );
@@ -868,6 +1093,59 @@ export function createOrganizationAuthorityHttpServer(
 
         if (
           method === 'POST' &&
+          url.pathname === ORGANIZATION_API_RECENT_DECISIONS_PATH
+        ) {
+          if (url.search !== '') {
+            throw new OrganizationRecentDecisionsError(
+              'invalid_request',
+              'recent decisions query parameters are unsupported',
+            );
+          }
+          if (options.recentDecisions === undefined) {
+            sendSerializedJson(
+              response,
+              404,
+              fixedRecentDecisionsErrorBytes(404),
+            );
+            return;
+          }
+          const command = await readRecentDecisionsRequest(request);
+          const prepared = options.recentDecisions.recentDecisions(command);
+          sendSerializedJson(
+            response,
+            prepared.status_code,
+            prepared.body,
+          );
+          return;
+        }
+
+        if (
+          method === 'POST' &&
+          url.pathname === ORGANIZATION_API_REVIEWER_RECENT_DECISIONS_PATH
+        ) {
+          if (url.search !== '') {
+            throw new ReviewerRecentDecisionsError(
+              'invalid_request',
+              'reviewer recent decisions query parameters are unsupported',
+            );
+          }
+          if (options.reviewerRecentDecisions === undefined) {
+            sendSerializedJson(
+              response,
+              404,
+              fixedReviewerRecentDecisionsErrorBytes(404),
+            );
+            return;
+          }
+          const command = await readReviewerRecentDecisionsRequest(request);
+          const prepared =
+            options.reviewerRecentDecisions.reviewerRecentDecisions(command);
+          sendSerializedJson(response, prepared.status_code, prepared.body);
+          return;
+        }
+
+        if (
+          method === 'POST' &&
           url.pathname === ORGANIZATION_API_INTERNAL_LIVE_DIRECTIVES_PATH
         ) {
           const command = validateOrganizationInternalLiveDirectiveRequest(
@@ -898,9 +1176,148 @@ export function createOrganizationAuthorityHttpServer(
           url.pathname === ORGANIZATION_API_PERMISSION_CHECKS_PATH
         ) {
           const integrations = requireIntegrations();
-          const command = validateOrganizationPermissionCheckRequest(
-            await readJsonBody(request),
-          );
+          const body = await readJsonBody(request);
+          // Strict version dispatch before any field is interpreted. Schema-v1
+          // status and body behavior stay byte-for-byte unchanged.
+          if (
+            body !== null &&
+            typeof body === 'object' &&
+            !Array.isArray(body) &&
+            (body as Record<string, unknown>)['schema_version'] === 3
+          ) {
+            const organizationMemberCommand =
+              validateOrganizationMemberReadablePermissionCheckRequest(body);
+            const checkSubject =
+              options.application
+                .checkOrganizationMemberReadablePermissionSubject;
+            const checkPermission =
+              integrations.checkOrganizationMemberReadablePermission;
+            if (checkSubject === undefined || checkPermission === undefined) {
+              sendSerializedJson(
+                response,
+                503,
+                ORGANIZATION_MEMBER_PERMISSION_UNAVAILABLE_BYTES,
+              );
+              return;
+            }
+            let organizationMemberAuthenticated: { installation_id: string };
+            try {
+              organizationMemberAuthenticated = checkSubject(
+                organizationMemberCommand,
+                null,
+              );
+            } catch (error) {
+              if (
+                error instanceof AuthorityOperationError &&
+                (error.code === 'invalid_request' ||
+                  error.code === 'unauthorized' ||
+                  error.code === 'not_found')
+              ) {
+                throw error;
+              }
+              sendSerializedJson(
+                response,
+                503,
+                ORGANIZATION_MEMBER_PERMISSION_UNAVAILABLE_BYTES,
+              );
+              return;
+            }
+            consumeRateLimit(
+              permissionRateLimiter,
+              `installation:${organizationMemberAuthenticated.installation_id}`,
+            );
+            try {
+              // A schema-v3 closed denial is a decided 200 response. Only
+              // operational/provider/not-observed/audit failures reach this
+              // catch and receive the fixed retryable body.
+              sendSerializedJson(
+                response,
+                200,
+                Buffer.from(
+                  canonicalOrganizationMemberReadablePermissionCheckDecisionBytes(
+                    await checkPermission(
+                      organizationMemberCommand,
+                      lifecycle.shutdownController.signal,
+                    ),
+                  ),
+                ),
+              );
+            } catch {
+              sendSerializedJson(
+                response,
+                503,
+                ORGANIZATION_MEMBER_PERMISSION_UNAVAILABLE_BYTES,
+              );
+            }
+            return;
+          }
+          if (
+            body !== null &&
+            typeof body === 'object' &&
+            !Array.isArray(body) &&
+            (body as Record<string, unknown>)['schema_version'] === 2
+          ) {
+            const reviewerCommand =
+              validateOrganizationReviewerPermissionCheckRequest(body);
+            let reviewerAuthenticated: { installation_id: string };
+            try {
+              reviewerAuthenticated =
+                options.application.checkReviewerPermissionSubject(
+                  reviewerCommand,
+                  null,
+                );
+            } catch (error) {
+              if (
+                error instanceof AuthorityOperationError &&
+                (error.code === 'invalid_request' ||
+                  error.code === 'unauthorized' ||
+                  error.code === 'not_found')
+              ) {
+                throw error;
+              }
+              // Authentication/state storage is part of the reviewer
+              // operation. A lock, corrupt read, or other operational failure
+              // has the same fixed retryable result as provider and audit
+              // storage failures; it must not fall through to the generic 500
+              // body or expose internal detail.
+              sendSerializedJson(
+                response,
+                503,
+                REVIEWER_PERMISSION_UNAVAILABLE_BYTES,
+              );
+              return;
+            }
+            consumeRateLimit(
+              permissionRateLimiter,
+              `installation:${reviewerAuthenticated.installation_id}`,
+            );
+            try {
+              const decision = await integrations.checkReviewerPermission(
+                reviewerCommand,
+                lifecycle.shutdownController.signal,
+              );
+              sendSerializedJson(
+                response,
+                200,
+                Buffer.from(
+                  canonicalOrganizationReviewerPermissionCheckDecisionBytes(
+                    decision,
+                  ),
+                ),
+              );
+            } catch {
+              // Reviewer operational/provider/storage failures have one fixed
+              // retryable wire result. The v1 branch below retains its existing
+              // AuthorityOperationError mapping byte-for-byte.
+              sendSerializedJson(
+                response,
+                503,
+                REVIEWER_PERMISSION_UNAVAILABLE_BYTES,
+              );
+            }
+            return;
+          }
+          const command = validateOrganizationPermissionCheckRequest(body);
           const authenticated =
             options.application.checkPermissionSubject(command, null);
           consumeRateLimit(
@@ -995,7 +1412,7 @@ export function createOrganizationAuthorityHttpServer(
           sendJson(
             response,
             201,
-            requireIntegrations().activateSlackApproval(
+            await requireIntegrations().activateSlackApproval(
               await readJsonBody(request),
             ),
           );
@@ -1060,6 +1477,52 @@ export function createOrganizationAuthorityHttpServer(
 
         sendJson(response, 404, errorBody('not_found', 'route was not found'));
       } catch (error) {
+        if (error instanceof ReadableSearchError) {
+          const status =
+            error.code === 'invalid_request'
+              ? 400
+              : error.code === 'unauthorized'
+                ? 401
+                : error.code === 'not_found'
+                  ? 404
+                  : 503;
+          const body =
+            status === 400
+              ? READABLE_SEARCH_INVALID_REQUEST_BYTES
+              : status === 401 || status === 404
+                ? fixedReadableSearchErrorBytes(status)
+                : READABLE_SEARCH_UNAVAILABLE_BYTES;
+          sendSerializedJson(response, status, body);
+          return;
+        }
+        if (error instanceof ReviewerRecentDecisionsError) {
+          const status =
+            error.code === 'invalid_request'
+              ? 400
+              : error.code === 'unauthorized'
+                ? 401
+                : 503;
+          sendSerializedJson(
+            response,
+            status,
+            fixedReviewerRecentDecisionsErrorBytes(status),
+          );
+          return;
+        }
+        if (error instanceof OrganizationRecentDecisionsError) {
+          const status =
+            error.code === 'invalid_request'
+              ? 400
+              : error.code === 'unauthorized'
+                ? 401
+                : 503;
+          sendSerializedJson(
+            response,
+            status,
+            fixedRecentDecisionsErrorBytes(status),
+          );
+          return;
+        }
         if (error instanceof TrustedProxyIdentityError) {
           sendJson(
             response,

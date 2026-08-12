@@ -1,12 +1,35 @@
 import { Buffer } from 'node:buffer';
+import { canonicalJson } from '@echo-brain/federation-protocol';
 import {
   isOrganizationApiValidationError,
   MAX_ORGANIZATION_API_BODY_BYTES,
+  MAX_ORGANIZATION_RECENT_DECISIONS_RESPONSE_BYTES,
   ORGANIZATION_API_ACCESS_LEASES_PATH,
   ORGANIZATION_API_AUTHORITY_DESCRIPTOR_PATH,
   ORGANIZATION_API_ENROLLMENT_AUTH_SCHEME,
   ORGANIZATION_API_ENROLLMENTS_PATH,
+  MAX_ORGANIZATION_REVIEWER_RECENT_DECISIONS_RESPONSE_BYTES,
+  MAX_ORGANIZATION_READABLE_SEARCH_RESPONSE_BYTES,
   ORGANIZATION_API_PERMISSION_CHECKS_PATH,
+  ORGANIZATION_API_RECENT_DECISIONS_PATH,
+  ORGANIZATION_API_REVIEWER_RECENT_DECISIONS_PATH,
+  ORGANIZATION_API_READABLE_SEARCH_PATH,
+  validateOrganizationReviewerPermissionCheckDecision,
+  validateOrganizationReviewerPermissionCheckRequest,
+  validateOrganizationMemberReadablePermissionCheckDecision,
+  validateOrganizationMemberReadablePermissionCheckRequest,
+  validateOrganizationReviewerRecentDecisionsRequest,
+  validateOrganizationReviewerRecentDecisionsResponse,
+  validateOrganizationReadableSearchRequest,
+  validateOrganizationReadableSearchResponse,
+  type OrganizationReviewerPermissionCheckDecisionV2,
+  type OrganizationReviewerPermissionCheckRequestV2,
+  type OrganizationMemberReadablePermissionCheckDecisionV3,
+  type OrganizationMemberReadablePermissionCheckRequestV3,
+  type OrganizationReviewerRecentDecisionsRequestV1,
+  type OrganizationReviewerRecentDecisionsResponseV1,
+  type OrganizationReadableSearchRequestV1,
+  type OrganizationReadableSearchResponseV1,
   ORGANIZATION_API_INTERNAL_LIVE_DIRECTIVES_PATH,
   ORGANIZATION_API_INTERNAL_LIVE_RECEIPTS_PATH,
   ORGANIZATION_API_SLACK_LINK_CHALLENGES_PATH,
@@ -18,6 +41,8 @@ import {
   validateOrganizationAuthorityDescriptorResponse,
   validateOrganizationPermissionCheckDecision,
   validateOrganizationPermissionCheckRequest,
+  validateOrganizationRecentDecisionsRequest,
+  validateOrganizationRecentDecisionsResponse,
   validateOrganizationInternalLiveDirectiveRequest,
   validateOrganizationInternalLiveUpdateDirective,
   validateOrganizationInternalLiveUpdateReceipt,
@@ -32,6 +57,8 @@ import {
   type OrganizationAuthorityDescriptorResponseV1,
   type OrganizationPermissionCheckDecisionV1,
   type OrganizationPermissionCheckRequestV1,
+  type OrganizationRecentDecisionsRequestV1,
+  type OrganizationRecentDecisionsResponseV1,
   type OrganizationInternalLiveDirectiveRequestV1,
   type OrganizationInternalLiveUpdateDirectiveV1,
   type OrganizationInternalLiveUpdateReceiptV1,
@@ -52,6 +79,55 @@ const JSON_HEADERS = {
   'content-type': 'application/json',
 } as const;
 type ConflictHandling = 'transport-error' | 'stale-access-state';
+type JsonRequestSerialization = 'json' | 'canonical-json';
+type JsonResponseByteRequirement = 'json' | 'canonical-json';
+
+/**
+ * Closed per-endpoint wire choices. Request encoding and response-byte
+ * ownership are intentionally separate: a signed request does not by itself
+ * imply a canonical response, or vice versa.
+ */
+interface JsonEndpointWireContract {
+  readonly requestSerialization: JsonRequestSerialization;
+  readonly responseByteRequirement: JsonResponseByteRequirement;
+  readonly maximumResponseBytes: number;
+}
+
+const ORDINARY_JSON_WIRE_CONTRACT = Object.freeze({
+  requestSerialization: 'json',
+  responseByteRequirement: 'json',
+  maximumResponseBytes: MAX_RESPONSE_BYTES,
+} satisfies JsonEndpointWireContract);
+
+const REVIEWER_PERMISSION_WIRE_CONTRACT = Object.freeze({
+  requestSerialization: 'canonical-json',
+  responseByteRequirement: 'canonical-json',
+  maximumResponseBytes: MAX_RESPONSE_BYTES,
+} satisfies JsonEndpointWireContract);
+
+const ORGANIZATION_MEMBER_PERMISSION_WIRE_CONTRACT = Object.freeze({
+  requestSerialization: 'canonical-json',
+  responseByteRequirement: 'canonical-json',
+  maximumResponseBytes: MAX_RESPONSE_BYTES,
+} satisfies JsonEndpointWireContract);
+
+const READABLE_SEARCH_WIRE_CONTRACT = Object.freeze({
+  requestSerialization: 'canonical-json',
+  responseByteRequirement: 'canonical-json',
+  maximumResponseBytes: MAX_ORGANIZATION_READABLE_SEARCH_RESPONSE_BYTES,
+} satisfies JsonEndpointWireContract);
+
+const REVIEWER_RECENT_DECISIONS_WIRE_CONTRACT = Object.freeze({
+  requestSerialization: 'canonical-json',
+  responseByteRequirement: 'canonical-json',
+  maximumResponseBytes: MAX_ORGANIZATION_REVIEWER_RECENT_DECISIONS_RESPONSE_BYTES,
+} satisfies JsonEndpointWireContract);
+
+const RECENT_DECISIONS_WIRE_CONTRACT = Object.freeze({
+  requestSerialization: 'json',
+  responseByteRequirement: 'json',
+  maximumResponseBytes: MAX_ORGANIZATION_RECENT_DECISIONS_RESPONSE_BYTES,
+} satisfies JsonEndpointWireContract);
 
 export interface HttpOrganizationAuthorityClientOptions {
   baseUrl: string;
@@ -154,6 +230,7 @@ export function resolveOrganizationAuthorityFetch(options: {
 export async function readBoundedJsonResponse(
   response: Response,
   maximumBytes: number,
+  requireCanonicalBytes = false,
 ): Promise<unknown> {
   const contentType = response.headers.get('content-type');
   if (
@@ -221,9 +298,12 @@ export async function readBoundedJsonResponse(
     );
   }
   try {
-    return JSON.parse(
-      new TextDecoder('utf-8', { fatal: true }).decode(bytes),
-    ) as unknown;
+    const text = new TextDecoder('utf-8', { fatal: true }).decode(bytes);
+    const value = JSON.parse(text) as unknown;
+    if (requireCanonicalBytes && canonicalJson(value) !== text) {
+      throw new Error('response bytes are not canonical JSON');
+    }
+    return value;
   } catch {
     throw new OrganizationAuthorityTransportError(
       'invalid_response',
@@ -284,20 +364,34 @@ export class HttpOrganizationAuthorityClient implements OrganizationAuthorityCli
     return new URL(path, this.baseUrl).href;
   }
 
-  private readJson(response: Response): Promise<unknown> {
-    return readBoundedJsonResponse(response, MAX_RESPONSE_BYTES);
+  private readJson(
+    response: Response,
+    wireContract: Pick<
+      JsonEndpointWireContract,
+      'responseByteRequirement' | 'maximumResponseBytes'
+    >,
+  ): Promise<unknown> {
+    return readBoundedJsonResponse(
+      response,
+      wireContract.maximumResponseBytes,
+      wireContract.responseByteRequirement === 'canonical-json',
+    );
   }
 
   private async request<T>(
     path: string,
     init: Omit<RequestInit, 'redirect' | 'signal'>,
     validateSuccess: (value: unknown) => T,
+    wireContract: Pick<
+      JsonEndpointWireContract,
+      'responseByteRequirement' | 'maximumResponseBytes'
+    >,
     conflictHandling: ConflictHandling = 'transport-error',
     signal?: AbortSignal,
     timeoutMs = this.timeoutMs,
   ): Promise<T> {
     const response = await this.send(path, init, signal, timeoutMs);
-    const value = await this.readJson(response);
+    const value = await this.readJson(response, wireContract);
     if (response.status === 409 && conflictHandling === 'stale-access-state') {
       const staleState = tryValidate(
         value,
@@ -354,15 +448,22 @@ export class HttpOrganizationAuthorityClient implements OrganizationAuthorityCli
     requestKind:
       | 'access'
       | 'permission'
+      | 'recent decisions'
+      | 'reviewer recent decisions'
+      | 'readable search'
       | 'Slack link'
       | 'internal-live directive'
       | 'internal-live receipt',
     validateSuccess: (value: unknown) => T,
+    wireContract: JsonEndpointWireContract,
     conflictHandling: ConflictHandling = 'transport-error',
     signal?: AbortSignal,
     timeoutMs?: number,
   ): Promise<T> {
-    const body = JSON.stringify(value);
+    const body =
+      wireContract.requestSerialization === 'canonical-json'
+        ? canonicalJson(value)
+        : JSON.stringify(value);
     if (Buffer.byteLength(body) > MAX_ORGANIZATION_API_BODY_BYTES) {
       throw new Error(`organization ${requestKind} request exceeds the API body limit`);
     }
@@ -370,6 +471,7 @@ export class HttpOrganizationAuthorityClient implements OrganizationAuthorityCli
       path,
       { method: 'POST', headers: JSON_HEADERS, body },
       validateSuccess,
+      wireContract,
       conflictHandling,
       signal,
       timeoutMs,
@@ -380,9 +482,13 @@ export class HttpOrganizationAuthorityClient implements OrganizationAuthorityCli
     path: string,
     value: unknown,
     requestKind: 'internal-live receipt',
+    wireContract: JsonEndpointWireContract,
     signal?: AbortSignal,
   ): Promise<void> {
-    const body = JSON.stringify(value);
+    const body =
+      wireContract.requestSerialization === 'canonical-json'
+        ? canonicalJson(value)
+        : JSON.stringify(value);
     if (Buffer.byteLength(body) > MAX_ORGANIZATION_API_BODY_BYTES) {
       throw new Error(
         `organization ${requestKind} request exceeds the API body limit`,
@@ -396,7 +502,7 @@ export class HttpOrganizationAuthorityClient implements OrganizationAuthorityCli
     );
     if (!response.ok) {
       const apiError = tryValidate(
-        await this.readJson(response),
+        await this.readJson(response, wireContract),
         validateOrganizationApiError,
       );
       if (apiError === null) throw invalidResponse(response.status);
@@ -433,6 +539,7 @@ export class HttpOrganizationAuthorityClient implements OrganizationAuthorityCli
         headers: { accept: 'application/json' },
       },
       validateOrganizationAuthorityDescriptorResponse,
+      ORDINARY_JSON_WIRE_CONTRACT,
     );
   }
 
@@ -459,6 +566,7 @@ export class HttpOrganizationAuthorityClient implements OrganizationAuthorityCli
         body,
       },
       validateCompletedOrganizationEnrollment,
+      ORDINARY_JSON_WIRE_CONTRACT,
     );
   }
 
@@ -470,6 +578,7 @@ export class HttpOrganizationAuthorityClient implements OrganizationAuthorityCli
       validateOrganizationAccessLeaseRequest(request),
       'access',
       validateOrganizationAccessLeaseResponse,
+      ORDINARY_JSON_WIRE_CONTRACT,
       'stale-access-state',
     );
   }
@@ -483,6 +592,82 @@ export class HttpOrganizationAuthorityClient implements OrganizationAuthorityCli
       validateOrganizationPermissionCheckRequest(request),
       'permission',
       validateOrganizationPermissionCheckDecision,
+      ORDINARY_JSON_WIRE_CONTRACT,
+      'transport-error',
+      signal,
+    );
+  }
+
+  checkReviewerPermission(
+    request: OrganizationReviewerPermissionCheckRequestV2,
+    signal?: AbortSignal,
+  ): Promise<OrganizationReviewerPermissionCheckDecisionV2> {
+    return this.postJson(
+      ORGANIZATION_API_PERMISSION_CHECKS_PATH,
+      validateOrganizationReviewerPermissionCheckRequest(request),
+      'permission',
+      validateOrganizationReviewerPermissionCheckDecision,
+      REVIEWER_PERMISSION_WIRE_CONTRACT,
+      'transport-error',
+      signal,
+    );
+  }
+
+  readReadableSearch(
+    request: OrganizationReadableSearchRequestV1,
+    signal?: AbortSignal,
+  ): Promise<OrganizationReadableSearchResponseV1> {
+    return this.postJson(
+      ORGANIZATION_API_READABLE_SEARCH_PATH,
+      validateOrganizationReadableSearchRequest(request),
+      'readable search',
+      validateOrganizationReadableSearchResponse,
+      READABLE_SEARCH_WIRE_CONTRACT,
+      'transport-error',
+      signal,
+    );
+  }
+
+  checkOrganizationMemberPermission(
+    request: OrganizationMemberReadablePermissionCheckRequestV3,
+    signal?: AbortSignal,
+  ): Promise<OrganizationMemberReadablePermissionCheckDecisionV3> {
+    return this.postJson(
+      ORGANIZATION_API_PERMISSION_CHECKS_PATH,
+      validateOrganizationMemberReadablePermissionCheckRequest(request),
+      'permission',
+      validateOrganizationMemberReadablePermissionCheckDecision,
+      ORGANIZATION_MEMBER_PERMISSION_WIRE_CONTRACT,
+      'transport-error',
+      signal,
+    );
+  }
+
+  readRecentDecisions(
+    request: OrganizationRecentDecisionsRequestV1,
+    signal?: AbortSignal,
+  ): Promise<OrganizationRecentDecisionsResponseV1> {
+    return this.postJson(
+      ORGANIZATION_API_RECENT_DECISIONS_PATH,
+      validateOrganizationRecentDecisionsRequest(request),
+      'recent decisions',
+      validateOrganizationRecentDecisionsResponse,
+      RECENT_DECISIONS_WIRE_CONTRACT,
+      'transport-error',
+      signal,
+    );
+  }
+
+  readReviewerRecentDecisions(
+    request: OrganizationReviewerRecentDecisionsRequestV1,
+    signal?: AbortSignal,
+  ): Promise<OrganizationReviewerRecentDecisionsResponseV1> {
+    return this.postJson(
+      ORGANIZATION_API_REVIEWER_RECENT_DECISIONS_PATH,
+      validateOrganizationReviewerRecentDecisionsRequest(request),
+      'reviewer recent decisions',
+      validateOrganizationReviewerRecentDecisionsResponse,
+      REVIEWER_RECENT_DECISIONS_WIRE_CONTRACT,
       'transport-error',
       signal,
     );
@@ -497,6 +682,7 @@ export class HttpOrganizationAuthorityClient implements OrganizationAuthorityCli
       validateOrganizationSlackLinkBeginRequest(request),
       'Slack link',
       validateOrganizationSlackLinkBeginResponse,
+      ORDINARY_JSON_WIRE_CONTRACT,
       'transport-error',
       signal,
       Math.max(this.timeoutMs, SLACK_LINK_TIMEOUT_MS),
@@ -512,6 +698,7 @@ export class HttpOrganizationAuthorityClient implements OrganizationAuthorityCli
       validateOrganizationSlackLinkCompleteRequest(request),
       'Slack link',
       validateOrganizationSlackLinkResult,
+      ORDINARY_JSON_WIRE_CONTRACT,
       'transport-error',
       signal,
       Math.max(this.timeoutMs, SLACK_LINK_TIMEOUT_MS),
@@ -527,6 +714,7 @@ export class HttpOrganizationAuthorityClient implements OrganizationAuthorityCli
       validateOrganizationInternalLiveDirectiveRequest(request),
       'internal-live directive',
       validateOrganizationInternalLiveUpdateDirective,
+      ORDINARY_JSON_WIRE_CONTRACT,
       'transport-error',
       signal,
     );
@@ -540,6 +728,7 @@ export class HttpOrganizationAuthorityClient implements OrganizationAuthorityCli
       ORGANIZATION_API_INTERNAL_LIVE_RECEIPTS_PATH,
       validateOrganizationInternalLiveUpdateReceipt(receipt),
       'internal-live receipt',
+      ORDINARY_JSON_WIRE_CONTRACT,
       signal,
     );
   }

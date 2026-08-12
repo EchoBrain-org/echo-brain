@@ -524,12 +524,31 @@ adoptions for the interpretive/retrieve passes.
   [arXiv:2501.13956](https://arxiv.org/abs/2501.13956)) and XTDB's
   valid-time/system-time split ([XTDB](https://github.com/xtdb/xtdb)) — so a
   supersession discovered late can be backdated without touching approval
-  records.
+  records. Verified formula (2026-08-09, primary source): Graphiti closes a
+  contradicted fact "by setting their t_invalid to the t_valid of the
+  invalidating edge" ([arXiv HTML](https://arxiv.org/html/2501.13956)) —
+  ours is the same math *computed at read time* from the supersedes edge
+  (July's validity ends at its superseder's `reviewed_at`), never stored
+  onto a frozen row. Divergence recorded: Graphiti/Mem0g let the LLM
+  auto-invalidate (proportionate for unattested conversational memory);
+  here machine contradiction-detection only produces a labeled proposal —
+  rung-3 judgment never closes the validity of rung-1 fact; a human act
+  does (Mem0g precedent for mark-not-delete:
+  [arXiv:2504.19413](https://arxiv.org/html/2504.19413v1)).
 - Status vocabulary on derived atoms: Databricks' governed
   `certified`/`deprecated` tag and Atlan's DRAFT/VERIFIED/DEPRECATED —
   "superseded" must be a real state, not the absence of one
   ([Databricks](https://learn.microsoft.com/en-us/azure/databricks/data-governance/unity-catalog/certify-deprecate-data),
   [Atlan](https://developer.atlan.com/snippets/common-examples/certificates/)).
+  Refined by Wikidata's rank semantics (verified 2026-08-09,
+  [Help:Ranking](https://www.wikidata.org/wiki/Help:Ranking)):
+  **superseded ≠ wrong** — outdated-but-was-true keeps normal rank with an
+  end-time ("the old mayor really was mayor"), while never-true is
+  deprecated with a reason; and retrieval defaults to "best rank"
+  (preferred = current, superseded one explicit ask away, deprecated
+  excluded unless requested). A superseded decision governed its interval
+  and remains a normal dated fact; approved-in-error is `correction`-family
+  and deprecates.
 - Alation's negative-flag rule — a deprecation requires a reason and a
   pointer to the replacement — as the future supersedes-edge shape
   ([Alation](https://docs.alation.com/en/latest/welcome/BestPractices/UseTrustFlagstoProceedwithConfidence.html)).

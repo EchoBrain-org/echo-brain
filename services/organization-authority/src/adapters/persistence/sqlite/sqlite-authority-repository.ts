@@ -44,7 +44,32 @@ import type {
   StoredEnrollmentGrant,
   StoredInternalLiveRelease,
   StoredInternalLiveUpdateReceipt,
+  ReviewerQueryAuditEntry,
+  ReadableSearchActiveGenerationPublication,
+  ReadableSearchQueryAuditEntry,
+  StoredReadableSearchActiveGeneration,
+  StoredReadableSearchQueryAuditEntry,
+  StoredReviewerQueryAuditEntry,
 } from '../../../application/ports/authority-repository.js';
+import {
+  READABLE_SEARCH_QUERY_AUDIT_OPERATION,
+  REVIEWER_QUERY_AUDIT_EXPIRED_ACTION,
+  REVIEWER_QUERY_AUDIT_EXPORT_ACTION,
+  REVIEWER_QUERY_AUDIT_OPERATION,
+} from '../../../application/ports/authority-repository.js';
+import {
+  reviewerQueryAuditDecisionDetailJson,
+  reviewerQueryAuditRetainUntil,
+} from '../../../application/reviewer-query-audit.js';
+import {
+  readableSearchQueryAuditDetailJson,
+  readableSearchQueryAuditRetainUntil,
+  validateReadableSearchActiveGenerationPublication,
+  validateStoredReadableSearchActiveGeneration,
+  validateStoredReadableSearchQueryAuditEntry,
+} from '../../../application/readable-search-persistence.js';
+import { reviewerQueryAuditRowBySequence } from './reviewer-query-audit-rows.js';
+import type { AuthorityAuditRow } from './reviewer-query-audit-rows.js';
 import {
   openAuthorityDatabase,
   type OpenAuthorityDatabaseOptions,
@@ -89,14 +114,7 @@ interface GrantRow {
   admin_command_sha256: string | null;
 }
 
-interface AuditRow {
-  audit_sequence: number;
-  occurred_at: string;
-  actor_kind: string;
-  action: string;
-  subject_id: string;
-  detail_json: string;
-}
+type AuditRow = AuthorityAuditRow;
 
 interface EnrollmentRow {
   enrollment_id: string;
@@ -167,6 +185,26 @@ interface InternalLiveUpdateReceiptRow {
   received_at: string;
 }
 
+interface ReadableSearchActiveGenerationRow {
+  organization_id: string;
+  generation_id: string;
+  manifest_sha256: string;
+  retrieval_contract_sha256: string;
+  record_head_position: number;
+  record_head_hash: string | null;
+  published_at: string;
+}
+
+interface ReadableSearchQueryAuditRow {
+  audit_sequence: number;
+  occurred_at: string;
+  retain_until: string;
+  operation: string;
+  decision: string;
+  reason_code: string;
+  detail_json: string;
+}
+
 interface PersistedAuthorityTrustContext {
   descriptor: OrganizationAuthorityDescriptorV1;
   pinned_authority: PinnedOrganizationAuthority;
@@ -222,14 +260,63 @@ function verifiedPersistedValue<T>(label: string, verify: () => T): T {
   }
 }
 
+/** The configured trust root, without the one-off initialization time. */
+export type AuthorityTrustConfiguration = Omit<
+  InitializeAuthorityRepositoryInput,
+  'initialized_at'
+>;
+
+/**
+ * The narrow, read-only view of Authority state that stopped-state maintenance
+ * is allowed to hold.
+ *
+ * Handing out this instead of the transaction object keeps the whole online
+ * write surface -- memberships, grants, enrollments, leases, releases, the
+ * generic audit -- out of the maintenance module entirely.
+ */
+export interface AuthorityStateReader {
+  metadata(): StoredAuthorityMetadata;
+  membership(membershipId: string): StoredAuthorityMembership | undefined;
+}
+
+export function createAuthorityStateReader(
+  database: Database.Database,
+  trust: AuthorityTrustConfiguration,
+): AuthorityStateReader {
+  const transaction = new SqliteAuthorityTransaction(database);
+  transaction.configureTrust(trust);
+  return {
+    metadata: () => transaction.metadata(),
+    membership: (membershipId) => transaction.membership(membershipId),
+  };
+}
+
 class SqliteAuthorityTransaction
   implements AuthorityReadTransaction, AuthorityWriteTransaction
 {
   private trustContext: PersistedAuthorityTrustContext | undefined;
+  private writeTime: string | undefined;
 
   constructor(private readonly database: Database.Database) {}
 
-  configureTrust(input: InitializeAuthorityRepositoryInput): void {
+  /** The one final time of the write transaction currently in progress. */
+  bindWriteTime(observedAt: string): void {
+    this.writeTime = observedAt;
+  }
+
+  clearWriteTime(): void {
+    this.writeTime = undefined;
+  }
+
+  private transactionTime(): string {
+    invariant(
+      this.writeTime !== undefined,
+      'operation requires an open authority write transaction',
+    );
+    return this.writeTime;
+  }
+
+  configureTrust(input: AuthorityTrustConfiguration): void {
     const descriptor = validateOrganizationAuthorityDescriptor(
       input.descriptor,
     );
@@ -1289,6 +1376,28 @@ class SqliteAuthorityTransaction
     return { ...row };
   }
 
+  activeReadableSearchGeneration(): StoredReadableSearchActiveGeneration | null {
+    const row = this.database
+      .prepare(
+        `SELECT organization_id, generation_id, manifest_sha256,
+                retrieval_contract_sha256, record_head_position,
+                record_head_hash, published_at
+           FROM authority_readable_search_active_generation
+          WHERE singleton = 1`,
+      )
+      .get() as ReadableSearchActiveGenerationRow | undefined;
+    if (row === undefined) return null;
+    const stored = verifiedPersistedValue(
+      'readable search active generation',
+      () => validateStoredReadableSearchActiveGeneration(row),
+    );
+    invariant(
+      stored.organization_id === this.trust().descriptor.organization_id,
+      'readable search active generation belongs to another organization',
+    );
+    return stored;
+  }
+
   insertMembership(membership: StoredAuthorityMembership): void {
     this.database
       .prepare(
@@ -1515,6 +1624,18 @@ class SqliteAuthorityTransaction
   }
 
   appendAudit(entry: AuthorityAuditEntry): void {
+    // The two governed reviewer query-audit actions are reserved. They are the
+    // maintenance receipt for a disclosure or a deletion, so the ordinary audit
+    // path -- which any online write holds -- must not be able to mint one.
+    // Only the stopped-state maintenance transaction's own private insert may.
+    if (
+      entry.action === REVIEWER_QUERY_AUDIT_EXPORT_ACTION ||
+      entry.action === REVIEWER_QUERY_AUDIT_EXPIRED_ACTION
+    ) {
+      throw new Error(
+        'reviewer query audit control actions are reserved for governed stopped-state maintenance',
+      );
+    }
     const detailJson = canonicalJson(entry.detail);
     this.database
       .prepare(
@@ -1530,9 +1651,150 @@ class SqliteAuthorityTransaction
         detailJson,
       );
   }
+
+  appendReviewerQueryAudit(
+    entry: ReviewerQueryAuditEntry,
+  ): StoredReviewerQueryAuditEntry {
+    // The row's time is this transaction's own final time. A caller states the
+    // decision, never when it happened, so it cannot move the retention.
+    const occurredAt = this.transactionTime();
+    const detailJson = reviewerQueryAuditDecisionDetailJson(
+      {
+        decision: entry.decision,
+        reason_code: entry.reason_code,
+        occurred_at: occurredAt,
+        response_bytes: entry.response_bytes,
+      },
+      entry.detail,
+    );
+    const inserted = this.database
+      .prepare(
+        `INSERT INTO authority_query_decision_audit (
+           occurred_at, retain_until, operation, decision, reason_code,
+           detail_json
+         ) VALUES (?, ?, ?, ?, ?, ?)`,
+      )
+      .run(
+        occurredAt,
+        reviewerQueryAuditRetainUntil(occurredAt),
+        REVIEWER_QUERY_AUDIT_OPERATION,
+        entry.decision,
+        entry.reason_code,
+        detailJson,
+      );
+    const stored = reviewerQueryAuditRowBySequence(
+      this.database,
+      Number(inserted.lastInsertRowid),
+    );
+    if (stored === undefined) {
+      throw new Error('reviewer query audit entry was not stored');
+    }
+    if (stored.occurred_at !== occurredAt) {
+      throw new Error('stored reviewer query audit entry lost its write time');
+    }
+    return stored;
+  }
+
+  publishReadableSearchActiveGeneration(
+    publication: ReadableSearchActiveGenerationPublication,
+  ): StoredReadableSearchActiveGeneration {
+    const validated = validateReadableSearchActiveGenerationPublication(publication);
+    const metadata = this.metadata();
+    invariant(
+      validated.organization_id === metadata.organization_id,
+      'readable search active generation belongs to another organization',
+    );
+    const publishedAt = this.transactionTime();
+    this.database
+      .prepare(
+        `INSERT INTO authority_readable_search_active_generation (
+           singleton, organization_id, generation_id, manifest_sha256,
+           retrieval_contract_sha256, record_head_position, record_head_hash,
+           published_at
+         ) VALUES (1, ?, ?, ?, ?, ?, ?, ?)
+         ON CONFLICT(singleton) DO UPDATE SET
+           organization_id = excluded.organization_id,
+           generation_id = excluded.generation_id,
+           manifest_sha256 = excluded.manifest_sha256,
+           retrieval_contract_sha256 = excluded.retrieval_contract_sha256,
+           record_head_position = excluded.record_head_position,
+           record_head_hash = excluded.record_head_hash,
+           published_at = excluded.published_at`,
+      )
+      .run(
+        validated.organization_id,
+        validated.generation_id,
+        validated.manifest_sha256,
+        validated.retrieval_contract_sha256,
+        validated.record_head_position,
+        validated.record_head_hash,
+        publishedAt,
+      );
+    const stored = this.activeReadableSearchGeneration();
+    invariant(stored !== null, 'readable search active generation was not stored');
+    invariant(
+      stored.published_at === publishedAt,
+      'readable search active generation lost its transaction time',
+    );
+    return stored;
+  }
+
+  appendReadableSearchQueryAudit(
+    entry: ReadableSearchQueryAuditEntry,
+  ): StoredReadableSearchQueryAuditEntry {
+    const occurredAt = this.transactionTime();
+    const detailJson = readableSearchQueryAuditDetailJson(
+      { ...entry, occurred_at: occurredAt },
+      entry.detail,
+    );
+    const inserted = this.database
+      .prepare(
+        `INSERT INTO authority_readable_search_query_audit (
+           occurred_at, retain_until, operation, decision, reason_code,
+           detail_json
+         ) VALUES (?, ?, ?, ?, ?, ?)`,
+      )
+      .run(
+        occurredAt,
+        readableSearchQueryAuditRetainUntil(occurredAt),
+        READABLE_SEARCH_QUERY_AUDIT_OPERATION,
+        entry.decision,
+        entry.reason_code,
+        detailJson,
+      );
+    const row = this.database
+      .prepare(
+        `SELECT audit_sequence, occurred_at, retain_until, operation, decision,
+                reason_code, detail_json
+           FROM authority_readable_search_query_audit
+          WHERE audit_sequence = ?`,
+      )
+      .get(Number(inserted.lastInsertRowid)) as ReadableSearchQueryAuditRow | undefined;
+    invariant(row !== undefined, 'readable search query audit entry was not stored');
+    const stored = verifiedPersistedValue(
+      'readable search query audit entry',
+      () => validateStoredReadableSearchQueryAuditEntry(row),
+    );
+    invariant(
+      stored.occurred_at === occurredAt,
+      'readable search query audit entry lost its transaction time',
+    );
+    return stored;
+  }
 }
 
-export class SqliteOrganizationAuthorityRepository implements OrganizationAuthorityRepository {
+/**
+ * The online repository.
+ *
+ * It implements the served Authority contract and nothing else. Reviewer
+ * query-audit scanning, expiry, control lookup, and control append are not
+ * missing by convention here: they are not on this class or its type at all, so
+ * the live runtime holds no reference that could reach them. The stopped-state
+ * capability lives in `reviewer-query-audit-maintenance.ts`.
+ */
+export class SqliteOrganizationAuthorityRepository
+  implements OrganizationAuthorityRepository
+{
   private readonly database: Database.Database;
   private readonly transaction: SqliteAuthorityTransaction;
   private readonly allowInitialization: boolean;
@@ -1664,12 +1926,50 @@ export class SqliteOrganizationAuthorityRepository implements OrganizationAuthor
           'UPDATE authority_metadata SET last_observed_at = ? WHERE singleton = 1',
         )
         .run(observedAt);
+      this.transaction.bindWriteTime(observedAt);
       const result = operation(this.transaction);
       this.database.exec('COMMIT');
       return result;
     } catch (error) {
       this.rollback();
       throw error;
+    } finally {
+      this.transaction.clearWriteTime();
+    }
+  }
+
+  writeAtLinearization<T>(
+    observe: () => string,
+    operation: (
+      transaction: AuthorityWriteTransaction,
+      observedAt: string,
+    ) => T,
+  ): T {
+    this.assertOpen();
+    this.database.exec('BEGIN IMMEDIATE');
+    try {
+      const observedAt = observe();
+      timestampMillis(observedAt, 'authority write time');
+      const metadata = this.transaction.metadata();
+      if (observedAt < metadata.last_observed_at) {
+        throw new Error(
+          'authority clock regressed since the last committed write',
+        );
+      }
+      this.database
+        .prepare(
+          'UPDATE authority_metadata SET last_observed_at = ? WHERE singleton = 1',
+        )
+        .run(observedAt);
+      this.transaction.bindWriteTime(observedAt);
+      const result = operation(this.transaction, observedAt);
+      this.database.exec('COMMIT');
+      return result;
+    } catch (error) {
+      this.rollback();
+      throw error;
+    } finally {
+      this.transaction.clearWriteTime();
     }
   }
 

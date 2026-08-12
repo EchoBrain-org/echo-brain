@@ -23,6 +23,8 @@ import {
   sep,
 } from 'node:path';
 import { assertFederationId } from '@echo-brain/federation-protocol';
+import { organizationMemberReadablePolicyContractSha256 } from '@echo-brain/organization-protocol';
+import { reviewerPolicyContractSha256 } from '../application/reviewer-policy-contract.js';
 import {
   authorityCredentialPath,
   readPrivateAuthorityCredential,
@@ -34,7 +36,10 @@ import {
   MAX_AUTHORITY_ACCESS_REQUEST_AGE_MS,
   MAX_AUTHORITY_ACTIVE_LEASE_TTL_MS,
 } from '../domain/rules.js';
-import type { AuthorityServeConfig } from './config.js';
+import type {
+  AuthorityServeConfig,
+  OrganizationRecordingPolicyV1,
+} from './config.js';
 
 export const AUTHORITY_IDENTITY_FILENAME = 'authority-identity.v1.json';
 export const AUTHORITY_INITIALIZATION_MANIFEST_FILENAME =
@@ -62,6 +67,7 @@ export const AUTHORITY_ADMIN_CREDENTIAL_FILENAME = 'admin-token';
 export const AUTHORITY_PROXY_CREDENTIAL_FILENAME = 'trusted-proxy-token';
 
 const MAX_CONFIG_BYTES = 64 * 1024;
+const MAX_ADAPTER_INSTANCE_ID_LENGTH = 128;
 
 export interface AuthorityRuntimeConfigV1 {
   schema_version: 1;
@@ -92,6 +98,7 @@ export interface AuthorityRuntimeConfigV1 {
     active_lease_ttl_ms: number;
     request_maximum_age_ms: number;
   };
+  organization_recording_policy_v1?: OrganizationRecordingPolicyV1;
 }
 
 export interface AuthorityStatePaths {
@@ -127,6 +134,74 @@ function exactKeys(
 function record(value: unknown, label: string): Record<string, unknown> {
   if (!isRecord(value)) throw new Error(`${label} must be an object`);
   return value;
+}
+
+function boundedAdapterInstanceId(value: unknown, label: string): string {
+  if (
+    typeof value !== 'string' ||
+    value.length === 0 ||
+    value.length > MAX_ADAPTER_INSTANCE_ID_LENGTH ||
+    value.trim() !== value ||
+    value.includes('\0')
+  ) {
+    throw new Error(`${label} must be a bounded non-empty identifier`);
+  }
+  return value;
+}
+
+function validateOrganizationRecordingPolicy(
+  value: unknown,
+): OrganizationRecordingPolicyV1 {
+  const policy = record(value, 'organization_recording_policy_v1');
+  exactKeys(
+    policy,
+    [
+      'schema_version',
+      'kind',
+      'decision_processor_adapter_instance_id',
+      'approval_surface_adapter_instance_id',
+      'presentation_mode',
+      'policy_contract_sha256',
+    ],
+    'organization_recording_policy_v1',
+  );
+  if (
+    policy.schema_version !== 1 ||
+    policy.kind !== 'organization-recording-policy-v1'
+  ) {
+    throw new Error('organization_recording_policy_v1 identity is unsupported');
+  }
+  const decisionProcessorAdapterInstanceId = boundedAdapterInstanceId(
+    policy.decision_processor_adapter_instance_id,
+    'organization_recording_policy_v1 decision_processor_adapter_instance_id',
+  );
+  const approvalSurfaceAdapterInstanceId = boundedAdapterInstanceId(
+    policy.approval_surface_adapter_instance_id,
+    'organization_recording_policy_v1 approval_surface_adapter_instance_id',
+  );
+  if (
+    policy.presentation_mode !== 'restricted-reviewer-v1' &&
+    policy.presentation_mode !== 'organization-member-readable-v1'
+  ) {
+    throw new Error('organization_recording_policy_v1 presentation_mode is unsupported');
+  }
+  const expectedPolicyContractSha256 =
+    policy.presentation_mode === 'restricted-reviewer-v1'
+      ? reviewerPolicyContractSha256()
+      : organizationMemberReadablePolicyContractSha256();
+  if (policy.policy_contract_sha256 !== expectedPolicyContractSha256) {
+    throw new Error(
+      'organization_recording_policy_v1 policy_contract_sha256 does not match presentation_mode',
+    );
+  }
+  return {
+    schema_version: 1,
+    kind: 'organization-recording-policy-v1',
+    decision_processor_adapter_instance_id: decisionProcessorAdapterInstanceId,
+    approval_surface_adapter_instance_id: approvalSurfaceAdapterInstanceId,
+    presentation_mode: policy.presentation_mode,
+    policy_contract_sha256: expectedPolicyContractSha256,
+  };
 }
 
 export function normalizedAbsolutePath(value: unknown, label: string): string {
@@ -262,6 +337,10 @@ export function validateAuthorityRuntimeConfig(
   value: unknown,
 ): AuthorityRuntimeConfigV1 {
   const root = record(value, 'authority runtime config');
+  const organizationRecordingPolicyPresent = Object.hasOwn(
+    root,
+    'organization_recording_policy_v1',
+  );
   exactKeys(
     root,
     [
@@ -275,6 +354,9 @@ export function validateAuthorityRuntimeConfig(
       'listener',
       'credentials',
       'access',
+      ...(organizationRecordingPolicyPresent
+        ? ['organization_recording_policy_v1']
+        : []),
     ],
     'authority runtime config',
   );
@@ -387,6 +469,10 @@ export function validateAuthorityRuntimeConfig(
   assertConfiguredLeaseTtl(access.active_lease_ttl_ms as number);
   assertConfiguredRequestAge(access.request_maximum_age_ms as number);
 
+  const organizationRecordingPolicy = organizationRecordingPolicyPresent
+    ? validateOrganizationRecordingPolicy(root.organization_recording_policy_v1)
+    : undefined;
+
   return {
     schema_version: 1,
     kind: 'echo-organization-authority-runtime-config',
@@ -417,6 +503,9 @@ export function validateAuthorityRuntimeConfig(
       active_lease_ttl_ms: access.active_lease_ttl_ms as number,
       request_maximum_age_ms: access.request_maximum_age_ms as number,
     },
+    ...(organizationRecordingPolicy === undefined
+      ? {}
+      : { organization_recording_policy_v1: organizationRecordingPolicy }),
   };
 }
 
@@ -545,5 +634,11 @@ export function resolveAuthorityServeConfig(
     port: config.listener.port,
     active_lease_ttl_ms: config.access.active_lease_ttl_ms,
     access_request_maximum_age_ms: config.access.request_maximum_age_ms,
+    ...(config.organization_recording_policy_v1 === undefined
+      ? {}
+      : {
+          organization_recording_policy_v1:
+            config.organization_recording_policy_v1,
+        }),
   };
 }

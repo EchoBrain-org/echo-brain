@@ -4,6 +4,7 @@ import {
   closeSync,
   constants as fsConstants,
   existsSync,
+  fchmodSync,
   fstatSync,
   fsyncSync,
   linkSync,
@@ -12,23 +13,26 @@ import {
   mkdtempSync,
   openSync,
   readFileSync,
+  readdirSync,
   realpathSync,
   renameSync,
   rmSync,
   unlinkSync,
   writeFileSync,
 } from 'node:fs';
-import { basename, dirname, join } from 'node:path';
+import { basename, dirname, isAbsolute, join, relative, sep } from 'node:path';
 import {
   canonicalJson,
   canonicalSha256,
   federationId,
+  parseCanonicalJson,
 } from '@echo-brain/federation-protocol';
 import {
   initializeOrganizationControlDatabase,
   inspectOrganizationControlDatabaseForServe,
   inspectOrganizationControlDatabaseReadOnly,
   openOrganizationControlDatabase,
+  OrganizationIntegrationsRepository,
   type OrganizationControlDatabaseIdentity,
 } from '@echo-brain/organization-control-plane';
 import {
@@ -40,21 +44,79 @@ import {
   OrganizationRecordFollower,
   OrganizationRecordLogReader,
   OrganizationRecordLogStore,
+  OrganizationPermissionPilotLog,
   verifyOrganizationRecordChain,
+} from '@echo-brain/organization-record/maintenance';
+import { createOrganizationRecordRetrievalBuildPort } from '@echo-brain/organization-record/retrieval-build';
+import { createReviewerRecordPort } from '@echo-brain/organization-record/append';
+import {
+  buildStoppedReadableSearchGeneration,
+  createReadableSearchAnalyzerDescriptor,
+  readableSearchRetrievalContractSha256,
+  readableSearchSourceBytesSha256,
+} from '@echo-brain/organization-retrieval/build';
+import type { ReadableSearchAdmittedAtom } from '@echo-brain/organization-retrieval/build';
+import { admitReadableSearchGenerationDirectory } from '@echo-brain/organization-retrieval/serve';
+import { validateReadableSearchGenerationManifest } from '@echo-brain/organization-retrieval';
+import {
+  assertOrganizationPermissionPilotActivationFresh,
+  organizationPermissionPilotCommandSha256,
+  validateOrganizationPermissionPilotActivationCommand,
+} from '@echo-brain/organization-record';
+import type {
+  OrganizationPermissionPilotActivationCommandV1,
+  OrganizationPermissionPilotActivationMarkerV1,
+  OrganizationPermissionPilotPresentationV1,
 } from '@echo-brain/organization-record';
 import {
   organizationAuthorityPinSha256,
+  organizationMemberReadablePolicyContractSha256,
   validateOrganizationAuthorityDescriptor,
   verifyOrganizationAuthorityPin,
 } from '@echo-brain/organization-protocol';
 import type { OrganizationAuthorityDescriptorV1 } from '@echo-brain/organization-protocol';
+import { reviewerRestrictedEnvelopeValidator } from './reviewer-envelope-validator.js';
+import { organizationMemberReadableEnvelopeValidator } from './organization-member-envelope-validator.js';
+import { verifyReviewerRestrictedReadiness } from './reviewer-restricted-admission.js';
+import { verifyOrganizationMemberReadableReadiness } from './organization-member-readable-admission.js';
+import { reviewerPolicyContractSha256 } from '../application/reviewer-policy-contract.js';
 import {
   inspectAuthorityDatabaseForServe,
   inspectAuthorityDatabaseReadOnly,
+  inspectAuthorityPermissionPilotAudienceReadOnly,
+  readActiveReadableSearchGenerationReadOnly,
   type AuthorityDatabaseInspection,
 } from '../adapters/persistence/sqlite/read-only-inspection.js';
 import { openAuthorityDatabase } from '../adapters/persistence/sqlite/open-database.js';
 import { SqliteOrganizationAuthorityRepository } from '../adapters/persistence/sqlite/sqlite-authority-repository.js';
+import { SqliteReviewerQueryAuditMaintenanceRepository } from '../adapters/persistence/sqlite/reviewer-query-audit-maintenance.js';
+import { SqliteReadableSearchQueryAuditMaintenanceRepository } from '../adapters/persistence/sqlite/readable-search-query-audit-maintenance.js';
+import {
+  REVIEWER_QUERY_AUDIT_EXPORT_COMMAND_KIND,
+  REVIEWER_QUERY_AUDIT_EXPIRY_COMMAND_KIND,
+  reviewerQueryAuditOutputPathSha256,
+  validateReviewerQueryAuditMaintenanceCommand,
+} from '../application/reviewer-query-audit.js';
+import type {
+  ReviewerQueryAuditExportCommandV1,
+  ReviewerQueryAuditExpiryCommandV1,
+} from '../application/reviewer-query-audit.js';
+import type { StoredReviewerQueryAuditControlEvent } from '../application/ports/authority-repository.js';
+import type { StoredReadableSearchQueryAuditControlEvent } from '../application/ports/authority-repository.js';
+import {
+  createReadableSearchGenerationPublishedAudit,
+  validateReadableSearchGenerationPublishedAuditDetail,
+} from '../application/readable-search-persistence.js';
+import {
+  READABLE_SEARCH_QUERY_AUDIT_EXPORT_COMMAND_KIND,
+  READABLE_SEARCH_QUERY_AUDIT_EXPIRY_COMMAND_KIND,
+  readableSearchQueryAuditOutputPathSha256,
+  validateReadableSearchQueryAuditMaintenanceCommand,
+} from '../application/readable-search-query-audit-maintenance.js';
+import type {
+  ReadableSearchQueryAuditExportCommandV1,
+  ReadableSearchQueryAuditExpiryCommandV1,
+} from '../application/readable-search-query-audit-maintenance.js';
 import {
   acquireAuthorityInitializationLock,
   acquireAuthorityRuntimeLock,
@@ -86,6 +148,8 @@ const MAX_IDENTITY_BYTES = 64 * 1024;
 const MAX_INITIALIZATION_MANIFEST_BYTES = 128 * 1024;
 const MAX_INTEGRATIONS_INSTALLATION_MARKER_BYTES = 64 * 1024;
 const MAX_RECORD_INSTALLATION_MARKER_BYTES = 64 * 1024;
+const MAX_PERMISSION_PILOT_ACTIVATION_COMMAND_BYTES = 64 * 1024;
+const MAX_REVIEWER_QUERY_AUDIT_MAINTENANCE_COMMAND_BYTES = 64 * 1024;
 
 export interface AuthorityIdentityRecordV1 {
   schema_version: 1;
@@ -177,6 +241,81 @@ export interface AuthorityRecordDerivedRebuildResult {
   record_derived_database_path: string;
   head_position: number;
   derived_content_sha256: `sha256:${string}`;
+}
+
+export interface AuthorityReadableSearchRebuildResult {
+  readonly schema_version: 1;
+  readonly kind: 'echo-organization-authority-readable-search-rebuild';
+  readonly config_path: string;
+  readonly generation_id: `sha256:${string}`;
+  readonly manifest_sha256: `sha256:${string}`;
+  readonly retrieval_contract_sha256: `sha256:${string}`;
+  readonly record_head_position: number;
+  readonly record_head_hash: `sha256:${string}` | null;
+}
+
+/**
+ * A closed, text-free receipt for stopped readable-search backup verification.
+ * `not_built` is the only benign absence: every mixed or partially published
+ * state is rejected before a receipt can be returned.
+ */
+export interface AuthorityReadableSearchBackupVerificationResult {
+  readonly schema_version: 1;
+  readonly kind: 'echo-organization-authority-readable-search-backup-verification';
+  readonly config_path: string;
+  readonly organization_id: string;
+  readonly status: 'not_built' | 'verified';
+  readonly generation_id: `sha256:${string}` | null;
+  readonly manifest_sha256: `sha256:${string}` | null;
+  readonly retrieval_contract_sha256: `sha256:${string}` | null;
+  readonly record_head_position: number;
+  readonly record_head_hash: `sha256:${string}` | null;
+}
+
+export interface AuthorityPermissionPilotActivationResult {
+  schema_version: 1;
+  kind: 'echo-organization-authority-permission-pilot-activation';
+  created: boolean;
+  config_path: string;
+  state_dir: string;
+  record_log_database_path: string;
+  organization_id: string;
+  authority_id: string;
+  marker: OrganizationPermissionPilotActivationMarkerV1;
+  presentation_descriptor: OrganizationPermissionPilotPresentationV1;
+}
+
+export interface ActivateOrganizationPermissionPilotOptions {
+  /** Test seam; production callers use the canonical current UTC instant. */
+  now?: () => string;
+}
+
+export type ReviewerQueryAuditDeliveryStatus =
+  | 'written'
+  | 'already_present'
+  | 'unavailable';
+
+export interface ReviewerQueryAuditExportResult {
+  readonly control_event: StoredReviewerQueryAuditControlEvent;
+  readonly delivery_status: ReviewerQueryAuditDeliveryStatus;
+}
+
+export interface ReviewerQueryAuditExpiryResult {
+  readonly control_event: StoredReviewerQueryAuditControlEvent;
+}
+
+export interface ReviewerQueryAuditMaintenanceOptions {
+  /** Test seam; production samples the canonical current UTC instant once. */
+  now?: () => string;
+}
+
+export interface ReadableSearchQueryAuditExportResult {
+  readonly control_event: StoredReadableSearchQueryAuditControlEvent;
+  readonly delivery_status: ReviewerQueryAuditDeliveryStatus;
+}
+
+export interface ReadableSearchQueryAuditExpiryResult {
+  readonly control_event: StoredReadableSearchQueryAuditControlEvent;
 }
 
 export type AuthorityIntegrationsInstallationFaultPoint =
@@ -299,6 +438,266 @@ function readPrivateTextFile<T>(
     return result;
   } finally {
     closeSync(file);
+  }
+}
+
+function readPermissionPilotActivationCommand(
+  commandPath: string,
+  config: AuthorityRuntimeConfigV1,
+): OrganizationPermissionPilotActivationCommandV1 {
+  const path = normalizedAbsolutePath(
+    commandPath,
+    'permission pilot activation command path',
+  );
+  return readPrivateTextFile(
+    path,
+    'permission pilot activation command',
+    MAX_PERMISSION_PILOT_ACTIVATION_COMMAND_BYTES,
+    true,
+    (contents) =>
+      validateOrganizationPermissionPilotActivationCommand(
+        JSON.parse(contents) as unknown,
+        {
+          authority_id: config.authority.authority_id,
+          organization_id: config.organization.organization_id,
+        },
+      ),
+  );
+}
+
+function readReviewerQueryAuditMaintenanceCommand(
+  commandPath: string,
+): ReviewerQueryAuditExportCommandV1 | ReviewerQueryAuditExpiryCommandV1 {
+  const path = normalizedAbsolutePath(
+    commandPath,
+    'reviewer query audit maintenance command path',
+  );
+  return readPrivateTextFile(
+    path,
+    'reviewer query audit maintenance command',
+    MAX_REVIEWER_QUERY_AUDIT_MAINTENANCE_COMMAND_BYTES,
+    true,
+    (contents) => {
+      const command = validateReviewerQueryAuditMaintenanceCommand(
+        parseCanonicalJson(contents),
+      );
+      if (canonicalJson(command) !== contents) {
+        throw new Error(
+          'reviewer query audit maintenance command must be exact canonical JSON with no trailing bytes',
+        );
+      }
+      return command;
+    },
+  );
+}
+
+function readReadableSearchQueryAuditMaintenanceCommand(
+  commandPath: string,
+): ReadableSearchQueryAuditExportCommandV1 | ReadableSearchQueryAuditExpiryCommandV1 {
+  const path = normalizedAbsolutePath(
+    commandPath,
+    'readable search query audit maintenance command path',
+  );
+  return readPrivateTextFile(
+    path,
+    'readable search query audit maintenance command',
+    MAX_REVIEWER_QUERY_AUDIT_MAINTENANCE_COMMAND_BYTES,
+    true,
+    (contents) => {
+      const command = validateReadableSearchQueryAuditMaintenanceCommand(
+        parseCanonicalJson(contents),
+      );
+      if (canonicalJson(command) !== contents) {
+        throw new Error(
+          'readable search query audit maintenance command must be exact canonical JSON with no trailing bytes',
+        );
+      }
+      return command;
+    },
+  );
+}
+
+function pathIsWithin(child: string, parent: string): boolean {
+  const difference = relative(parent, child);
+  return (
+    difference === '' ||
+    (difference !== '..' &&
+      !difference.startsWith(`..${sep}`) &&
+      !isAbsolute(difference))
+  );
+}
+
+function assertReviewerQueryAuditOutputPath(
+  outputPath: string,
+  stateDirectory: string,
+): void {
+  if (pathIsWithin(outputPath, stateDirectory)) {
+    throw new Error(
+      'reviewer query audit export output must be outside managed authority state',
+    );
+  }
+  assertPrivateParent(outputPath, 'reviewer query audit export output parent');
+  if (!existsSync(outputPath)) return;
+  const state = lstatSync(outputPath);
+  const currentUid = process.getuid?.();
+  if (
+    state.isSymbolicLink() ||
+    !state.isFile() ||
+    realpathSync(outputPath) !== outputPath ||
+    (currentUid !== undefined && state.uid !== currentUid) ||
+    (state.mode & 0o777) !== 0o600
+  ) {
+    throw new Error(
+      'existing reviewer query audit export output must be a current-user 0600 canonical regular file',
+    );
+  }
+}
+
+function reviewerQueryAuditExportMatches(
+  outputPath: string,
+  bytes: Uint8Array,
+): boolean {
+  const before = lstatSync(outputPath);
+  const currentUid = process.getuid?.();
+  if (
+    before.isSymbolicLink() ||
+    !before.isFile() ||
+    realpathSync(outputPath) !== outputPath ||
+    (currentUid !== undefined && before.uid !== currentUid) ||
+    (before.mode & 0o777) !== 0o600
+  ) {
+    throw new Error(
+      'existing reviewer query audit export output is not a private canonical file',
+    );
+  }
+  const file = openSync(
+    outputPath,
+    fsConstants.O_RDONLY | (fsConstants.O_NOFOLLOW ?? 0),
+  );
+  try {
+    const opened = fstatSync(file);
+    if (
+      opened.dev !== before.dev ||
+      opened.ino !== before.ino ||
+      opened.size !== before.size
+    ) {
+      throw new Error(
+        'reviewer query audit export output changed while opening',
+      );
+    }
+    const contents = readFileSync(file);
+    const completed = fstatSync(file);
+    if (
+      completed.dev !== opened.dev ||
+      completed.ino !== opened.ino ||
+      completed.size !== opened.size ||
+      completed.mtimeMs !== opened.mtimeMs ||
+      completed.ctimeMs !== opened.ctimeMs
+    ) {
+      throw new Error(
+        'reviewer query audit export output changed while reading',
+      );
+    }
+    return contents.equals(Buffer.from(bytes));
+  } finally {
+    closeSync(file);
+  }
+}
+
+function publishReviewerQueryAuditExport(
+  outputPath: string,
+  stateDirectory: string,
+  bytes: Uint8Array,
+): ReviewerQueryAuditDeliveryStatus {
+  try {
+    assertReviewerQueryAuditOutputPath(outputPath, stateDirectory);
+    if (existsSync(outputPath)) {
+      return reviewerQueryAuditExportMatches(outputPath, bytes)
+        ? 'already_present'
+        : 'unavailable';
+    }
+    const parent = dirname(outputPath);
+    const temporary = join(
+      parent,
+      `.${basename(outputPath)}.${randomBytes(16).toString('hex')}.tmp`,
+    );
+    let created = false;
+    let linked = false;
+    try {
+      const file = openSync(
+        temporary,
+        fsConstants.O_CREAT |
+          fsConstants.O_EXCL |
+          fsConstants.O_WRONLY |
+          (fsConstants.O_NOFOLLOW ?? 0),
+        0o600,
+      );
+      created = true;
+      try {
+        fchmodSync(file, 0o600);
+        writeFileSync(file, bytes);
+        fsyncSync(file);
+      } finally {
+        closeSync(file);
+      }
+      try {
+        linkSync(temporary, outputPath);
+        linked = true;
+      } catch (error) {
+        const code = (error as NodeJS.ErrnoException).code;
+        if (code !== 'EEXIST') throw error;
+      }
+      fsyncDirectory(parent);
+      return existsSync(outputPath) &&
+        reviewerQueryAuditExportMatches(outputPath, bytes)
+        ? linked
+          ? 'written'
+          : 'already_present'
+        : 'unavailable';
+    } finally {
+      if (created && existsSync(temporary)) {
+        unlinkSync(temporary);
+        fsyncDirectory(parent);
+      }
+    }
+  } catch {
+    return 'unavailable';
+  }
+}
+
+/** Same private create-once primitive, with readable-search-specific policy labels. */
+function assertReadableSearchQueryAuditOutputPath(
+  outputPath: string,
+  stateDirectory: string,
+): void {
+  if (pathIsWithin(outputPath, stateDirectory)) {
+    throw new Error(
+      'readable search query audit export output must be outside managed authority state',
+    );
+  }
+  assertPrivateParent(outputPath, 'readable search query audit export output parent');
+  if (!existsSync(outputPath)) return;
+  const state = lstatSync(outputPath);
+  const currentUid = process.getuid?.();
+  if (
+    state.isSymbolicLink() || !state.isFile() || realpathSync(outputPath) !== outputPath ||
+    (currentUid !== undefined && state.uid !== currentUid) || (state.mode & 0o777) !== 0o600
+  ) throw new Error('existing readable search query audit export output must be a current-user 0600 canonical regular file');
+}
+
+function publishReadableSearchQueryAuditExport(
+  outputPath: string,
+  stateDirectory: string,
+  bytes: Uint8Array,
+): ReviewerQueryAuditDeliveryStatus {
+  try {
+    assertReadableSearchQueryAuditOutputPath(outputPath, stateDirectory);
+    // The tested reviewer primitive is the shared private create-once transport:
+    // it fsyncs bytes and parent, uses a link rather than overwrite, and returns
+    // unavailable for an unequal existing artifact.
+    return publishReviewerQueryAuditExport(outputPath, stateDirectory, bytes);
+  } catch {
+    return 'unavailable';
   }
 }
 
@@ -1957,6 +2356,400 @@ export async function installAuthorityIntegrations(
   }
 }
 
+/**
+ * Reads the two named memberships from the stopped Authority without opening
+ * its write-capable repository or changing `last_observed_at`.
+ *
+ * Extra active members are deliberately irrelevant here. Pilot slice 1 binds
+ * exactly the two command members; membership outside that pair does not enter
+ * the marker and can never satisfy the read policy.
+ */
+function assertPermissionPilotAudienceMemberships(
+  config: AuthorityRuntimeConfigV1,
+  command: OrganizationPermissionPilotActivationCommandV1,
+): void {
+  const membershipIds = [
+    command.audience[0].membership_id,
+    command.audience[1].membership_id,
+  ] as const;
+  const rows = inspectAuthorityPermissionPilotAudienceReadOnly(
+    config.database_path,
+    {
+      authority_id: config.authority.authority_id,
+      organization_id: config.organization.organization_id,
+      membership_ids: membershipIds,
+    },
+  );
+  if (rows.length !== 2 || rows.some((row) => row.status !== 'active')) {
+    throw new Error(
+      'permission pilot activation requires both named audience memberships to be active',
+    );
+  }
+  const rowsByMembership = new Map(
+    rows.map((row) => [row.membership_id, row] as const),
+  );
+  for (const audience of command.audience) {
+    const membership = rowsByMembership.get(audience.membership_id);
+    if (membership === undefined) {
+      throw new Error(
+        'permission pilot activation requires both named audience memberships to be active',
+      );
+    }
+    assertDisplayName(membership.display_name);
+    if (audience.label !== membership.display_name) {
+      throw new Error(
+        'permission pilot audience labels must equal current Authority principal display names',
+      );
+    }
+  }
+}
+
+function permissionPilotActivationResult(
+  created: boolean,
+  configPath: string,
+  config: AuthorityRuntimeConfigV1,
+  marker: OrganizationPermissionPilotActivationMarkerV1,
+): AuthorityPermissionPilotActivationResult {
+  const paths = authorityStatePaths(config.state_dir);
+  return Object.freeze({
+    schema_version: 1,
+    kind: 'echo-organization-authority-permission-pilot-activation',
+    created,
+    config_path: configPath,
+    state_dir: config.state_dir,
+    record_log_database_path: paths.record_log_database_path,
+    organization_id: config.organization.organization_id,
+    authority_id: config.authority.authority_id,
+    marker,
+    presentation_descriptor: marker.presentation_descriptor,
+  });
+}
+
+/**
+ * Operator-confirmed, stopped-state activation for the fixed two-person pilot.
+ *
+ * Initialization ownership stabilizes config-to-state binding. Runtime
+ * ownership proves the serving process is stopped and shares its singleton
+ * fence with record append. Once the immutable marker exists, its exact
+ * command id and digest are checked before freshness, membership, or log-head
+ * state so an interrupted operator retry always returns the original durable
+ * result.
+ */
+export async function activateOrganizationPermissionPilot(
+  configPath: string,
+  commandPath: string,
+  options: ActivateOrganizationPermissionPilotOptions = {},
+): Promise<AuthorityPermissionPilotActivationResult> {
+  const path = normalizedAbsolutePath(configPath, 'authority config path');
+  const config = readAuthorityRuntimeConfig(path);
+  const command = readPermissionPilotActivationCommand(commandPath, config);
+  const commandSha256 = organizationPermissionPilotCommandSha256(command);
+  const releaseInitialization = await acquireAuthorityInitializationLock(
+    path,
+    config.state_dir,
+  );
+  try {
+    const serveConfig = resolveAuthorityServeConfig(config);
+    const runtimeLock = await acquireAuthorityRuntimeLock(
+      config.state_dir,
+      authorityMaintenanceFingerprint(
+        serveConfig,
+        'activate-permission-pilot',
+      ),
+    );
+    try {
+      await inspectAuthorityServePreflight(path, config);
+      const paths = authorityStatePaths(config.state_dir);
+      const log = OrganizationPermissionPilotLog.open(
+        paths.record_log_database_path,
+        {
+          organization_id: config.organization.organization_id,
+          authority_id: config.authority.authority_id,
+        },
+      );
+      try {
+        const existing = log.activation();
+        if (existing !== null) {
+          if (
+            existing.command_id !== command.command_id ||
+            existing.command_sha256 !== commandSha256
+          ) {
+            throw new Error(
+              'organization permission pilot was already activated by a different command',
+            );
+          }
+          return permissionPilotActivationResult(
+            false,
+            path,
+            config,
+            existing,
+          );
+        }
+
+        const activatedAt = (options.now ?? (() => new Date().toISOString()))();
+        assertOrganizationPermissionPilotActivationFresh(
+          command,
+          activatedAt,
+        );
+        assertPermissionPilotAudienceMemberships(config, command);
+        const activated = log.activate({
+          command,
+          command_sha256: commandSha256,
+          activated_at: activatedAt,
+        });
+        return permissionPilotActivationResult(
+          activated.created,
+          path,
+          config,
+          activated.marker,
+        );
+      } finally {
+        log.close();
+      }
+    } finally {
+      await runtimeLock.release();
+    }
+  } finally {
+    await releaseInitialization();
+  }
+}
+
+function reviewerQueryAuditMaintenanceTrust(
+  config: AuthorityRuntimeConfigV1,
+  inspected: InspectedAuthorityState,
+): Parameters<typeof SqliteReviewerQueryAuditMaintenanceRepository.open>[0]['trust'] {
+  return {
+    descriptor: inspected.identity.authority_descriptor,
+    authority_pin_sha256: inspected.identity.authority_pin_sha256,
+    organization_display_name: config.organization.display_name,
+    maximum_active_lease_ttl_ms: config.access.active_lease_ttl_ms,
+  };
+}
+
+/** Stopped-only, bounded, receipt-first reviewer query-audit export. */
+export async function exportReviewerQueryAudit(
+  configPath: string,
+  commandPath: string,
+  outputPath: string,
+  options: ReviewerQueryAuditMaintenanceOptions = {},
+): Promise<ReviewerQueryAuditExportResult> {
+  const path = normalizedAbsolutePath(configPath, 'authority config path');
+  const config = readAuthorityRuntimeConfig(path);
+  const command = readReviewerQueryAuditMaintenanceCommand(commandPath);
+  if (command.kind !== REVIEWER_QUERY_AUDIT_EXPORT_COMMAND_KIND) {
+    throw new Error('reviewer query audit export requires an export command');
+  }
+  const output = normalizedAbsolutePath(
+    outputPath,
+    'reviewer query audit export output path',
+  );
+  if (reviewerQueryAuditOutputPathSha256(output) !== command.output_path_sha256) {
+    throw new Error(
+      'reviewer query audit export output path does not match the signed command',
+    );
+  }
+  assertReviewerQueryAuditOutputPath(output, config.state_dir);
+
+  const releaseInitialization = await acquireAuthorityInitializationLock(
+    path,
+    config.state_dir,
+  );
+  try {
+    const serveConfig = resolveAuthorityServeConfig(config);
+    const runtimeLock = await acquireAuthorityRuntimeLock(
+      config.state_dir,
+      authorityMaintenanceFingerprint(
+        serveConfig,
+        'export-reviewer-query-audit',
+      ),
+    );
+    try {
+      const inspected = await inspectAuthorityServePreflight(path, config);
+      const repository = SqliteReviewerQueryAuditMaintenanceRepository.open({
+        database_path: config.database_path,
+        trust: reviewerQueryAuditMaintenanceTrust(config, inspected),
+      });
+      let authorized: ReturnType<typeof repository.authorizeExport>;
+      try {
+        authorized = repository.authorizeExport(
+          command,
+          options.now ?? (() => new Date().toISOString()),
+        );
+      } finally {
+        repository.close();
+      }
+      const deliveryStatus =
+        authorized.export_bytes === null
+          ? 'unavailable'
+          : publishReviewerQueryAuditExport(
+              output,
+              config.state_dir,
+              authorized.export_bytes,
+            );
+      return Object.freeze({
+        control_event: authorized.control_event,
+        delivery_status: deliveryStatus,
+      });
+    } finally {
+      await runtimeLock.release();
+    }
+  } finally {
+    await releaseInitialization();
+  }
+}
+
+/** Stopped-only whole-row expiry at the Authority-owned transaction time. */
+export async function expireReviewerQueryAudit(
+  configPath: string,
+  commandPath: string,
+  options: ReviewerQueryAuditMaintenanceOptions = {},
+): Promise<ReviewerQueryAuditExpiryResult> {
+  const path = normalizedAbsolutePath(configPath, 'authority config path');
+  const config = readAuthorityRuntimeConfig(path);
+  const command = readReviewerQueryAuditMaintenanceCommand(commandPath);
+  if (command.kind !== REVIEWER_QUERY_AUDIT_EXPIRY_COMMAND_KIND) {
+    throw new Error('reviewer query audit expiry requires an expiry command');
+  }
+  const releaseInitialization = await acquireAuthorityInitializationLock(
+    path,
+    config.state_dir,
+  );
+  try {
+    const serveConfig = resolveAuthorityServeConfig(config);
+    const runtimeLock = await acquireAuthorityRuntimeLock(
+      config.state_dir,
+      authorityMaintenanceFingerprint(
+        serveConfig,
+        'expire-reviewer-query-audit',
+      ),
+    );
+    try {
+      const inspected = await inspectAuthorityServePreflight(path, config);
+      const repository = SqliteReviewerQueryAuditMaintenanceRepository.open({
+        database_path: config.database_path,
+        trust: reviewerQueryAuditMaintenanceTrust(config, inspected),
+      });
+      try {
+        return Object.freeze({
+          control_event: repository.expire(
+            command,
+            options.now ?? (() => new Date().toISOString()),
+          ),
+        });
+      } finally {
+        repository.close();
+      }
+    } finally {
+      await runtimeLock.release();
+    }
+  } finally {
+    await releaseInitialization();
+  }
+}
+
+function readableSearchQueryAuditMaintenanceTrust(
+  config: AuthorityRuntimeConfigV1,
+  inspected: InspectedAuthorityState,
+): Parameters<typeof SqliteReadableSearchQueryAuditMaintenanceRepository.open>[0]['trust'] {
+  return {
+    descriptor: inspected.identity.authority_descriptor,
+    authority_pin_sha256: inspected.identity.authority_pin_sha256,
+    organization_display_name: config.organization.display_name,
+    maximum_active_lease_ttl_ms: config.access.active_lease_ttl_ms,
+  };
+}
+
+/** Stopped-only, receipt-first readable-search audit export. */
+export async function exportReadableSearchQueryAudit(
+  configPath: string,
+  commandPath: string,
+  outputPath: string,
+  options: ReviewerQueryAuditMaintenanceOptions = {},
+): Promise<ReadableSearchQueryAuditExportResult> {
+  const path = normalizedAbsolutePath(configPath, 'authority config path');
+  const config = readAuthorityRuntimeConfig(path);
+  const command = readReadableSearchQueryAuditMaintenanceCommand(commandPath);
+  if (command.kind !== READABLE_SEARCH_QUERY_AUDIT_EXPORT_COMMAND_KIND) {
+    throw new Error('readable search query audit export requires an export command');
+  }
+  const output = normalizedAbsolutePath(outputPath, 'readable search query audit export output path');
+  if (readableSearchQueryAuditOutputPathSha256(output) !== command.output_path_sha256) {
+    throw new Error('readable search query audit export output path does not match the signed command');
+  }
+  assertReadableSearchQueryAuditOutputPath(output, config.state_dir);
+  const releaseInitialization = await acquireAuthorityInitializationLock(path, config.state_dir);
+  try {
+    const serveConfig = resolveAuthorityServeConfig(config);
+    const runtimeLock = await acquireAuthorityRuntimeLock(
+      config.state_dir,
+      authorityMaintenanceFingerprint(serveConfig, 'export-readable-search-query-audit'),
+    );
+    try {
+      const inspected = await inspectAuthorityServePreflight(path, config);
+      const repository = SqliteReadableSearchQueryAuditMaintenanceRepository.open({
+        database_path: config.database_path,
+        trust: readableSearchQueryAuditMaintenanceTrust(config, inspected),
+      });
+      let authorized: ReturnType<typeof repository.authorizeExport>;
+      try {
+        authorized = repository.authorizeExport(command, options.now ?? (() => new Date().toISOString()));
+      } finally {
+        repository.close();
+      }
+      return Object.freeze({
+        control_event: authorized.control_event,
+        delivery_status: authorized.export_bytes === null
+          ? 'unavailable'
+          : publishReadableSearchQueryAuditExport(output, config.state_dir, authorized.export_bytes),
+      });
+    } finally {
+      await runtimeLock.release();
+    }
+  } finally {
+    await releaseInitialization();
+  }
+}
+
+/** Stopped-only whole-row readable-search audit expiry at transaction time. */
+export async function expireReadableSearchQueryAudit(
+  configPath: string,
+  commandPath: string,
+  options: ReviewerQueryAuditMaintenanceOptions = {},
+): Promise<ReadableSearchQueryAuditExpiryResult> {
+  const path = normalizedAbsolutePath(configPath, 'authority config path');
+  const config = readAuthorityRuntimeConfig(path);
+  const command = readReadableSearchQueryAuditMaintenanceCommand(commandPath);
+  if (command.kind !== READABLE_SEARCH_QUERY_AUDIT_EXPIRY_COMMAND_KIND) {
+    throw new Error('readable search query audit expiry requires an expiry command');
+  }
+  const releaseInitialization = await acquireAuthorityInitializationLock(path, config.state_dir);
+  try {
+    const serveConfig = resolveAuthorityServeConfig(config);
+    const runtimeLock = await acquireAuthorityRuntimeLock(
+      config.state_dir,
+      authorityMaintenanceFingerprint(serveConfig, 'expire-readable-search-query-audit'),
+    );
+    try {
+      const inspected = await inspectAuthorityServePreflight(path, config);
+      const repository = SqliteReadableSearchQueryAuditMaintenanceRepository.open({
+        database_path: config.database_path,
+        trust: readableSearchQueryAuditMaintenanceTrust(config, inspected),
+      });
+      try {
+        return Object.freeze({
+          control_event: repository.expire(command, options.now ?? (() => new Date().toISOString())),
+        });
+      } finally {
+        repository.close();
+      }
+    } finally {
+      await runtimeLock.release();
+    }
+  } finally {
+    await releaseInitialization();
+  }
+}
+
 async function inspectAuthorityRecordRebuildPreflight(
   configPath: string,
   config: AuthorityRuntimeConfigV1,
@@ -2085,6 +2878,13 @@ async function rebuildAuthorityDerivedRecordStoreLocked(
       const follower = new OrganizationRecordFollower({
         logReader: reader,
         derived: rebuilt,
+        // A stopped rebuild must reproduce the running follower's outcome
+        // exactly, which means reading reviewer-v2 through the same closed
+        // validator rather than a looser rebuild-only path.
+        reviewerValidator: reviewerRestrictedEnvelopeValidator({
+          organization_id: organizationId,
+          authority_id: config.authority.authority_id,
+        }),
       });
       const progress = await follower.drain();
       if (progress.halted) {
@@ -2178,6 +2978,612 @@ export async function rebuildAuthorityDerivedRecordStore(
     );
     try {
       return await rebuildAuthorityDerivedRecordStoreLocked(path, config);
+    } finally {
+      await runtimeLock.release();
+    }
+  } finally {
+    await releaseInitialization();
+  }
+}
+
+/** Fixed release descriptor shared by the stopped builder and live admission. */
+export function readableSearchReleaseDescriptor(): Uint8Array {
+  // Release evidence is an immutable in-binary declaration, never a worktree
+  // path. Updating analyzer implementation or this adapter requires a new
+  // descriptor and therefore a new generation identity.
+  return new TextEncoder().encode(canonicalJson({
+    schema_version: 1,
+    kind: 'organization-authority-readable-search-builder-release-v1',
+    adapter: 'record-retrieval-build-port-v1',
+    analyzer: 'echo-unicode-alnum-frequency-v1',
+  }));
+}
+
+function retrievalAtoms(
+  organizationId: string,
+  batch: ReturnType<ReturnType<typeof createOrganizationRecordRetrievalBuildPort>['readAt']>,
+): readonly ReadableSearchAdmittedAtom[] {
+  const reviewerContract = reviewerPolicyContractSha256();
+  const reviewer: readonly ReadableSearchAdmittedAtom[] = batch.reviewer_items.map((item) => Object.freeze({
+    fact: Object.freeze({
+      atom_id: item.atom_id,
+      organization_id: organizationId,
+      envelope_sha256: item.envelope_sha256,
+      log_position: item.log_position,
+      record_hash: item.record_hash,
+      atom_order: item.atom_order,
+      signal_id_sha256: item.signal_id_sha256,
+      item_kind: item.item_kind,
+      policy_id: item.policy_id,
+      policy_contract_sha256: reviewerContract,
+      approval_actor_principal_id: item.provenance.reviewer_principal_id,
+      approval_actor_membership_id: item.provenance.reviewer_membership_id,
+      reviewer_principal_id: item.provenance.reviewer_principal_id,
+      reviewer_membership_id: item.provenance.reviewer_membership_id,
+      release_draft_sha256: item.release_draft_sha256,
+      approval_presentation_sha256: item.approval_presentation_sha256,
+      semantic_intent_sha256: item.provenance.semantic_intent_sha256,
+      message_presentation_sha256: item.message_presentation_sha256,
+      authorization_audit_event_id: item.provenance.authorization_audit_event_id,
+      authorization_audit_entry_sha256: item.provenance.authorization_audit_entry_sha256,
+      evaluated_at: item.evaluated_at,
+      authorization_proof_sha256: item.provenance.authorization_proof_sha256,
+      content_binding_sha256: item.content_binding_sha256,
+      provenance_binding_sha256: item.provenance_binding_sha256,
+    }),
+    text: item.text,
+    text_sha256: item.text_sha256,
+  }));
+  const member: readonly ReadableSearchAdmittedAtom[] = batch.organization_member_items.map((item) => Object.freeze({
+    fact: Object.freeze({
+      atom_id: item.atom_id,
+      organization_id: item.provenance.organization_id,
+      envelope_sha256: item.envelope_sha256,
+      log_position: item.log_position,
+      record_hash: item.record_hash,
+      atom_order: item.atom_order,
+      signal_id_sha256: item.signal_id_sha256,
+      item_kind: item.item_kind,
+      policy_id: item.policy_id,
+      policy_contract_sha256: item.provenance.policy_contract_sha256,
+      approval_actor_principal_id: item.provenance.approving_principal_id,
+      approval_actor_membership_id: item.provenance.approving_membership_id,
+      reviewer_principal_id: null,
+      reviewer_membership_id: null,
+      release_draft_sha256: item.provenance.release_draft_sha256,
+      approval_presentation_sha256: item.provenance.approval_presentation_sha256,
+      semantic_intent_sha256: item.provenance.semantic_intent_sha256,
+      message_presentation_sha256: item.provenance.message_presentation_sha256,
+      authorization_audit_event_id: item.provenance.authorization_audit_event_id,
+      authorization_audit_entry_sha256: item.provenance.authorization_audit_entry_sha256,
+      evaluated_at: item.provenance.evaluated_at,
+      authorization_proof_sha256: item.provenance.authorization_proof_sha256,
+      content_binding_sha256: item.provenance.content_binding_sha256,
+      provenance_binding_sha256: item.provenance.provenance_binding_sha256,
+    }),
+    text: item.text,
+    text_sha256: item.text_sha256,
+  }));
+  return Object.freeze([...reviewer, ...member]);
+}
+
+async function rebuildAuthorityReadableSearchLocked(
+  configPath: string,
+  config: AuthorityRuntimeConfigV1,
+): Promise<AuthorityReadableSearchRebuildResult> {
+  await inspectAuthorityServePreflight(configPath, config);
+  const paths = authorityStatePaths(config.state_dir);
+  assertNoSqliteSidecars(paths.record_log_database_path, 'record log database');
+  const control = openOrganizationControlDatabase(paths.integrations_database_path, {
+    fileMustExist: true,
+  });
+  const evidence = new OrganizationIntegrationsRepository(control, {
+    organization_id: config.organization.organization_id,
+    authority_id: config.authority.authority_id,
+  });
+  const record = openOrganizationRecordDatabase(
+    paths.record_log_database_path,
+    ORGANIZATION_RECORD_LOG_DATABASE,
+    { readonly: true, fileMustExist: true },
+  );
+  let repository: SqliteOrganizationAuthorityRepository | undefined;
+  try {
+    record.pragma('query_only = ON');
+    record.exec('BEGIN');
+    const reviewerValidator = reviewerRestrictedEnvelopeValidator({
+      organization_id: config.organization.organization_id,
+      authority_id: config.authority.authority_id,
+    });
+    const organizationMemberValidator = organizationMemberReadableEnvelopeValidator({
+      organization_id: config.organization.organization_id,
+      authority_id: config.authority.authority_id,
+    });
+    const reviewerReadiness = verifyReviewerRestrictedReadiness({
+      records: createReviewerRecordPort(record, {
+        organization_id: config.organization.organization_id,
+        authority_id: config.authority.authority_id,
+        reviewer_validator: reviewerValidator,
+      }),
+      evidence,
+      organization_id: config.organization.organization_id,
+      authority_id: config.authority.authority_id,
+    });
+    if (!reviewerReadiness.ready) {
+      throw new Error(`reviewer fact admission failed: ${reviewerReadiness.failures.map((failure) => failure.detail).join('; ')}`);
+    }
+    const memberReadiness = verifyOrganizationMemberReadableReadiness({
+      database: record,
+      organization_id: config.organization.organization_id,
+      validator: organizationMemberValidator,
+      evidence,
+    });
+    if (!memberReadiness.ready) {
+      throw new Error(`organization-member fact admission failed: ${memberReadiness.failures.map((failure) => failure.detail).join('; ')}`);
+    }
+    const source = createOrganizationRecordRetrievalBuildPort(record, {
+      organization_id: config.organization.organization_id,
+      authority_id: config.authority.authority_id,
+      reviewer_validator: reviewerValidator,
+      organization_member_validator: organizationMemberValidator,
+    });
+    const batch = source.readAt(source.record_head);
+    const atoms = retrievalAtoms(config.organization.organization_id, batch);
+    const memberContract = organizationMemberReadablePolicyContractSha256();
+    const reviewerContract = reviewerPolicyContractSha256();
+    const sourceBytes = readableSearchReleaseDescriptor();
+    const analyzer = createReadableSearchAnalyzerDescriptor({
+      analyzer_source_sha256: readableSearchSourceBytesSha256(sourceBytes),
+      node_version: process.versions.node,
+      unicode_version: process.versions.unicode ?? 'unknown',
+      icu_version: process.versions.icu ?? 'unknown',
+    });
+    const retrievalContract = readableSearchRetrievalContractSha256({
+      analyzer_contract_sha256: analyzer.analyzer_contract_sha256,
+      organization_member_policy_contract_sha256: memberContract,
+      restricted_reviewer_policy_contract_sha256: reviewerContract,
+    });
+    const generated = buildStoppedReadableSearchGeneration({
+      state_directory: paths.state_directory,
+      organization_id: config.organization.organization_id,
+      record_head: batch.record_head,
+      upstream_input_root: canonicalSha256({
+        schema_version: 1,
+        kind: 'organization-record-retrieval-build-input-v1',
+        record_head: batch.record_head,
+        atoms,
+      }),
+      retrieval_contract_sha256: retrievalContract,
+      organization_member_policy_contract_sha256: memberContract,
+      restricted_reviewer_policy_contract_sha256: reviewerContract,
+      analyzer,
+      source_revision: 'organization-authority-readable-search-builder-v1',
+      builder_artifact_sha256: readableSearchSourceBytesSha256(sourceBytes),
+      sqlite_version: (record.prepare('SELECT sqlite_version() AS version').get() as { version: string }).version,
+      atoms,
+    });
+    repository = new SqliteOrganizationAuthorityRepository(config.database_path, {
+      fileMustExist: true,
+      allowInitialization: false,
+    });
+    // The served repository deliberately receives trust only through Authority
+    // application construction. This stopped composition opens the same
+    // repository directly, so establish that existing immutable trust context
+    // before its one pointer transaction; `initialize` validates equality and
+    // never creates or changes identity on an already initialized database.
+    const identity = readIdentity(paths.identity_path);
+    repository.initialize({
+      descriptor: identity.authority_descriptor,
+      authority_pin_sha256: config.authority.authority_pin_sha256,
+      organization_display_name: config.organization.display_name,
+      maximum_active_lease_ttl_ms: config.access.active_lease_ttl_ms,
+      initialized_at: new Date().toISOString(),
+    });
+    repository.writeAtLinearization(
+      () => new Date().toISOString(),
+      (transaction, publishedAt) => {
+        const publication = {
+          organization_id: config.organization.organization_id,
+          generation_id: generated.manifest.generation_id,
+          manifest_sha256: generated.manifest_sha256,
+          retrieval_contract_sha256: generated.manifest.retrieval_contract_sha256,
+          record_head_position: batch.record_head.position,
+          record_head_hash: batch.record_head.record_hash,
+        } as const;
+        const current = transaction.activeReadableSearchGeneration();
+        if (
+          current !== null &&
+          current.organization_id === publication.organization_id &&
+          current.generation_id === publication.generation_id &&
+          current.manifest_sha256 === publication.manifest_sha256 &&
+          current.retrieval_contract_sha256 === publication.retrieval_contract_sha256 &&
+          current.record_head_position === publication.record_head_position &&
+          current.record_head_hash === publication.record_head_hash
+        ) return current;
+        const stored = transaction.publishReadableSearchActiveGeneration(publication);
+        const audit = createReadableSearchGenerationPublishedAudit({
+          publication,
+          prior_generation: current,
+          published_at: publishedAt,
+        });
+        transaction.appendAudit(audit);
+        const readback = transaction.recentAuditBefore(undefined, 1)[0];
+        if (
+          readback === undefined ||
+          readback.occurred_at !== publishedAt ||
+          readback.action !== audit.action ||
+          readback.subject_id !== publication.organization_id
+        ) {
+          throw new Error('readable search generation publication audit was not stored atomically');
+        }
+        const detail = validateReadableSearchGenerationPublishedAuditDetail(readback.detail);
+        if (
+          detail.organization_id !== publication.organization_id ||
+          detail.publication.generation_id !== stored.generation_id ||
+          detail.published_at !== stored.published_at
+        ) {
+          throw new Error('readable search generation publication audit readback differs from pointer');
+        }
+        return stored;
+      },
+    );
+    return Object.freeze({
+      schema_version: 1,
+      kind: 'echo-organization-authority-readable-search-rebuild',
+      config_path: configPath,
+      generation_id: generated.manifest.generation_id,
+      manifest_sha256: generated.manifest_sha256,
+      retrieval_contract_sha256: generated.manifest.retrieval_contract_sha256,
+      record_head_position: batch.record_head.position,
+      record_head_hash: batch.record_head.record_hash,
+    });
+  } finally {
+    repository?.close();
+    if (record.inTransaction) {
+      try { record.exec('ROLLBACK'); } catch {}
+    }
+    record.close();
+    evidence.close();
+  }
+}
+
+/** Builds and publishes one immutable generation while the Authority is stopped. */
+export async function rebuildAuthorityReadableSearch(
+  configPath: string,
+): Promise<AuthorityReadableSearchRebuildResult> {
+  const path = normalizedAbsolutePath(configPath, 'authority config path');
+  const config = readAuthorityRuntimeConfig(path);
+  const releaseInitialization = await acquireAuthorityInitializationLock(path, config.state_dir);
+  try {
+    const runtimeLock = await acquireAuthorityRuntimeLock(
+      config.state_dir,
+      authorityMaintenanceFingerprint(resolveAuthorityServeConfig(config), 'rebuild-readable-search'),
+    );
+    try {
+      return await rebuildAuthorityReadableSearchLocked(path, config);
+    } finally {
+      await runtimeLock.release();
+    }
+  } finally {
+    await releaseInitialization();
+  }
+}
+
+function assertNoReadableSearchBackupTransientState(stateDirectory: string): void {
+  const retrievalRoot = join(stateDirectory, 'record-retrieval');
+  if (!existsSync(retrievalRoot)) return;
+  assertPrivateDirectory(retrievalRoot, 'readable-search retrieval state directory');
+
+  const assertPrivateFile = (path: string): void => {
+    const state = lstatSync(path);
+    const currentUid = process.getuid?.();
+    if (
+      state.isSymbolicLink() ||
+      !state.isFile() ||
+      realpathSync(path) !== path ||
+      (currentUid !== undefined && state.uid !== currentUid) ||
+      (state.mode & 0o777) !== 0o600
+    ) {
+      throw new Error(
+        'readable-search backup state file must be a current-user 0600 canonical regular file',
+      );
+    }
+  };
+
+  const inspectDirectory = (directory: string): void => {
+    for (const entry of readdirSync(directory)) {
+      const path = join(directory, entry);
+      const state = lstatSync(path);
+      if (state.isSymbolicLink()) {
+        throw new Error('readable-search backup state contains a symbolic link');
+      }
+      if (state.isDirectory()) {
+        if (entry.startsWith('.staging')) {
+          throw new Error('readable-search backup state contains a staging directory');
+        }
+        assertPrivateDirectory(path, 'readable-search backup state directory');
+        inspectDirectory(path);
+        continue;
+      }
+      if (!state.isFile()) {
+        throw new Error('readable-search backup state contains a non-regular entry');
+      }
+      assertPrivateFile(path);
+      if (
+        entry.endsWith('-journal') ||
+        entry.endsWith('-wal') ||
+        entry.endsWith('-shm')
+      ) {
+        throw new Error(`readable-search backup state has SQLite sidecar ${entry}`);
+      }
+    }
+  };
+  inspectDirectory(retrievalRoot);
+}
+
+function assertReadableSearchBackupCorePaths(paths: AuthorityStatePaths): void {
+  assertNoSqliteSidecars(paths.database_path, 'authority database');
+  assertNoSqliteSidecars(paths.integrations_database_path, 'integrations database');
+  assertNoSqliteSidecars(paths.record_log_database_path, 'record log database');
+  assertNoSqliteSidecars(paths.record_derived_database_path, 'record derived database');
+  assertNoReadableSearchBackupTransientState(paths.state_directory);
+}
+
+interface VerifiedReadableSearchRecordHeads {
+  readonly current: { readonly position: number; readonly record_hash: `sha256:${string}` | null };
+  matches(head: { readonly position: number; readonly record_hash: `sha256:${string}` | null }): boolean;
+}
+
+function readReadableSearchBackupRecordHeads(
+  paths: AuthorityStatePaths,
+  config: AuthorityRuntimeConfigV1,
+): VerifiedReadableSearchRecordHeads {
+  const record = openOrganizationRecordDatabase(
+    paths.record_log_database_path,
+    ORGANIZATION_RECORD_LOG_DATABASE,
+    { readonly: true, fileMustExist: true },
+  );
+  try {
+    record.pragma('query_only = ON');
+    const reader = new OrganizationRecordLogReader(record);
+    const rows = reader.readAfter(0, Number.MAX_SAFE_INTEGER);
+    const verification = verifyOrganizationRecordChain({
+      organization_id: config.organization.organization_id,
+      authority_id: config.authority.authority_id,
+      rows: () => rows,
+    });
+    if (verification.failures.length !== 0) {
+      throw new Error(
+        `organization record log chain verification failed: ${verification.failures.map((failure) => `${failure.position}:${failure.kind}`).join('; ')}`,
+      );
+    }
+    const recordHashes = new Map<number, `sha256:${string}` | null>([
+      [0, null],
+      ...rows.map((row) => [row.position, row.record_hash] as const),
+    ]);
+    const current = Object.freeze({
+      position: verification.head_position ?? 0,
+      record_hash: verification.head_record_hash,
+    });
+    return Object.freeze({
+      current,
+      matches(head: { readonly position: number; readonly record_hash: `sha256:${string}` | null }) {
+        return recordHashes.get(head.position) === head.record_hash;
+      },
+    });
+  } finally {
+    record.close();
+  }
+}
+
+function readReadableSearchBackupGenerationManifest(
+  generationDirectory: string,
+) {
+  const manifestPath = join(generationDirectory, 'manifest.json');
+  if (!existsSync(manifestPath)) {
+    throw new Error('readable-search generation manifest is missing');
+  }
+  return readPrivateTextFile(
+    manifestPath,
+    'readable-search generation manifest',
+    1024 * 1024,
+    true,
+    (contents) => {
+      const parsed = parseCanonicalJson(contents);
+      if (canonicalJson(parsed) !== contents) {
+        throw new Error('readable-search generation manifest is not canonical JSON');
+      }
+      return validateReadableSearchGenerationManifest(parsed);
+    },
+  );
+}
+
+function admitAllReadableSearchBackupGenerations(input: {
+  readonly paths: AuthorityStatePaths;
+  readonly organization_id: string;
+  readonly analyzer: ReturnType<typeof createReadableSearchAnalyzerDescriptor>;
+  readonly retrieval_contract_sha256: `sha256:${string}`;
+  readonly record_heads: VerifiedReadableSearchRecordHeads;
+}): void {
+  const generationsDirectory = join(
+    input.paths.state_directory,
+    'record-retrieval',
+    'generations',
+  );
+  if (!existsSync(generationsDirectory)) return;
+  assertPrivateDirectory(
+    generationsDirectory,
+    'readable-search generations directory',
+  );
+  const seenGenerationIds = new Set<string>();
+  for (const entry of readdirSync(generationsDirectory).sort()) {
+    const generationDirectory = join(generationsDirectory, entry);
+    const state = lstatSync(generationDirectory);
+    if (state.isSymbolicLink() || !state.isDirectory()) {
+      throw new Error('readable-search generations directory has a non-directory child');
+    }
+    assertPrivateDirectory(
+      generationDirectory,
+      'readable-search generation directory',
+    );
+    const manifest = readReadableSearchBackupGenerationManifest(
+      generationDirectory,
+    );
+    if (!input.record_heads.matches(manifest.record_head)) {
+      throw new Error('readable-search generation does not match a verified record head');
+    }
+    const admitted = admitReadableSearchGenerationDirectory({
+      generation_directory: generationDirectory,
+      admission: {
+        state_directory: input.paths.state_directory,
+        organization_id: input.organization_id,
+        record_head: manifest.record_head,
+        retrieval_contract_sha256: input.retrieval_contract_sha256,
+        analyzer: input.analyzer,
+      },
+    });
+    if (
+      admitted.manifest.generation_id !== manifest.generation_id ||
+      admitted.manifest_sha256 !== canonicalSha256(manifest)
+    ) {
+      throw new Error('readable-search generation admission differs from manifest');
+    }
+    if (seenGenerationIds.has(admitted.manifest.generation_id)) {
+      throw new Error('readable-search generations directory duplicates a generation identity');
+    }
+    seenGenerationIds.add(admitted.manifest.generation_id);
+  }
+}
+
+function readReadableSearchBackupPointer(
+  paths: AuthorityStatePaths,
+  config: AuthorityRuntimeConfigV1,
+) {
+  return readActiveReadableSearchGenerationReadOnly(paths.database_path, {
+    authority_id: config.authority.authority_id,
+    organization_id: config.organization.organization_id,
+  });
+}
+
+/**
+ * Verifies the stopped backup boundary without releasing or returning content.
+ * The active pointer is admitted only through the immutable generation reader;
+ * no copied manifest hash, root, or record head is trusted on its own.
+ */
+async function verifyAuthorityReadableSearchBackupLocked(
+  configPath: string,
+  config: AuthorityRuntimeConfigV1,
+): Promise<AuthorityReadableSearchBackupVerificationResult> {
+  await inspectAuthorityServePreflight(configPath, config);
+  const paths = authorityStatePaths(config.state_dir);
+  assertReadableSearchBackupCorePaths(paths);
+  const recordHeads = readReadableSearchBackupRecordHeads(paths, config);
+  const recordHead = recordHeads.current;
+  const sourceBytes = readableSearchReleaseDescriptor();
+  const analyzer = createReadableSearchAnalyzerDescriptor({
+    analyzer_source_sha256: readableSearchSourceBytesSha256(sourceBytes),
+    node_version: process.versions.node,
+    unicode_version: process.versions.unicode ?? 'unknown',
+    icu_version: process.versions.icu ?? 'unknown',
+  });
+  const retrievalContract = readableSearchRetrievalContractSha256({
+    analyzer_contract_sha256: analyzer.analyzer_contract_sha256,
+    organization_member_policy_contract_sha256:
+      organizationMemberReadablePolicyContractSha256(),
+    restricted_reviewer_policy_contract_sha256: reviewerPolicyContractSha256(),
+  });
+  admitAllReadableSearchBackupGenerations({
+    paths,
+    organization_id: config.organization.organization_id,
+    analyzer,
+    retrieval_contract_sha256: retrievalContract,
+    record_heads: recordHeads,
+  });
+  const pointer = readReadableSearchBackupPointer(paths, config);
+  if (pointer === null) {
+    return Object.freeze({
+      schema_version: 1,
+      kind: 'echo-organization-authority-readable-search-backup-verification',
+      config_path: configPath,
+      organization_id: config.organization.organization_id,
+      status: 'not_built',
+      generation_id: null,
+      manifest_sha256: null,
+      retrieval_contract_sha256: null,
+      record_head_position: recordHead.position,
+      record_head_hash: recordHead.record_hash,
+    });
+  }
+  if (pointer.organization_id !== config.organization.organization_id) {
+    throw new Error('readable-search active generation belongs to another organization');
+  }
+  if (
+    pointer.record_head_position !== recordHead.position ||
+    pointer.record_head_hash !== recordHead.record_hash
+  ) {
+    throw new Error('readable-search active generation does not match the exact record head');
+  }
+  if (pointer.retrieval_contract_sha256 !== retrievalContract) {
+    throw new Error('readable-search active generation uses a different retrieval contract');
+  }
+  const admitted = admitReadableSearchGenerationDirectory({
+    generation_directory: join(
+      paths.state_directory,
+      'record-retrieval',
+      'generations',
+      pointer.generation_id,
+    ),
+    admission: {
+      state_directory: paths.state_directory,
+      organization_id: config.organization.organization_id,
+      record_head: recordHead,
+      retrieval_contract_sha256: retrievalContract,
+      analyzer,
+    },
+  });
+  if (
+    admitted.manifest.generation_id !== pointer.generation_id ||
+    admitted.manifest_sha256 !== pointer.manifest_sha256 ||
+    admitted.manifest.retrieval_contract_sha256 !== pointer.retrieval_contract_sha256 ||
+    admitted.manifest.record_head.position !== pointer.record_head_position ||
+    admitted.manifest.record_head.record_hash !== pointer.record_head_hash
+  ) {
+    throw new Error('readable-search active generation pointer differs from admitted generation');
+  }
+  assertReadableSearchBackupCorePaths(paths);
+  return Object.freeze({
+    schema_version: 1,
+    kind: 'echo-organization-authority-readable-search-backup-verification',
+    config_path: configPath,
+    organization_id: config.organization.organization_id,
+    status: 'verified',
+    generation_id: pointer.generation_id,
+    manifest_sha256: pointer.manifest_sha256,
+    retrieval_contract_sha256: pointer.retrieval_contract_sha256,
+    record_head_position: recordHead.position,
+    record_head_hash: recordHead.record_hash,
+  });
+}
+
+/** Verifies a backup candidate while ownership proves the Authority is stopped. */
+export async function verifyAuthorityReadableSearchBackup(
+  configPath: string,
+): Promise<AuthorityReadableSearchBackupVerificationResult> {
+  const path = normalizedAbsolutePath(configPath, 'authority config path');
+  const config = readAuthorityRuntimeConfig(path);
+  const releaseInitialization = await acquireAuthorityInitializationLock(
+    path,
+    config.state_dir,
+  );
+  try {
+    const runtimeLock = await acquireAuthorityRuntimeLock(
+      config.state_dir,
+      authorityMaintenanceFingerprint(
+        resolveAuthorityServeConfig(config),
+        'verify-readable-search-backup',
+      ),
+    );
+    try {
+      return await verifyAuthorityReadableSearchBackupLocked(path, config);
     } finally {
       await runtimeLock.release();
     }

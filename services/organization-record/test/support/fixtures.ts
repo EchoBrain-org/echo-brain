@@ -6,17 +6,39 @@ import type {
   JsonObject,
   OrganizationRecordReceiptPayloadV1,
 } from '../../src/index.js';
+import type {
+  ReviewerRestrictedEnvelopeValidator,
+  ReviewerRestrictedEnvelopeView,
+} from '../../src/application/reviewer-policy-fact.js';
 import type { VerifiedOrganizationRecordEnvelope } from '../../src/application/contracts.js';
 import {
   organizationRecordEnvelopeIndex,
+} from '../../src/index.js';
+import {
   OrganizationRecordDerivedStore,
   OrganizationRecordLogStore,
-} from '../../src/index.js';
+} from '../../src/append.js';
+import { testReviewerValidator } from './reviewer-validator.js';
 
 export const ORGANIZATION_ID = 'org_pilot';
 export const AUTHORITY_ID = 'oau_pilot';
 export const INSTALLATION_ALPHA = 'ins_alpha';
 export const INSTALLATION_BETA = 'ins_beta';
+
+/**
+ * The injected closed reviewer-v2 validator these suites use everywhere the
+ * production composition would inject the protocol package's own. It is a test
+ * double for exactly the same reason `acceptingVerifier` is.
+ */
+export const TEST_REVIEWER_VALIDATOR: ReviewerRestrictedEnvelopeValidator =
+  testReviewerValidator(ORGANIZATION_ID);
+
+/** The record-owned view of one reviewer fixture, read through the double. */
+export function reviewerView(
+  envelope: JsonObject,
+): ReviewerRestrictedEnvelopeView {
+  return TEST_REVIEWER_VALIDATOR(envelope);
+}
 
 const temporaryDirectories: string[] = [];
 
@@ -334,6 +356,7 @@ export function openStores(
       organization_id: ORGANIZATION_ID,
       authority_id: AUTHORITY_ID,
       clock: logClock,
+      reviewer_validator: TEST_REVIEWER_VALIDATOR,
     }),
     derived: OrganizationRecordDerivedStore.open(derivedPath, {
       organization_id: ORGANIZATION_ID,

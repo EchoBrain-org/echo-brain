@@ -57,6 +57,12 @@ interface ProductBoundary {
   layer_rules: LayerRule[];
 }
 
+interface PackageManifest {
+  name: string;
+  dependencies?: Record<string, string>;
+  files?: string[];
+}
+
 function readJson<T>(path: string): T {
   return JSON.parse(readFileSync(join(REPO, path), 'utf8')) as T;
 }
@@ -259,16 +265,76 @@ describe('workspace source boundaries', () => {
         '@echo-brain/organization-control-plane',
         '@echo-brain/organization-protocol',
         '@echo-brain/organization-record',
+        '@echo-brain/organization-retrieval',
       ],
       '@echo-brain/organization-control-plane': [],
       '@echo-brain/organization-protocol': ['@echo-brain/federation-protocol'],
       '@echo-brain/organization-record': ['@echo-brain/federation-protocol'],
+      '@echo-brain/organization-retrieval': [
+        '@echo-brain/federation-protocol',
+      ],
       'echo-brain/local-organization': [
         '@echo-brain/federation-protocol',
         '@echo-brain/organization-api',
         '@echo-brain/organization-protocol',
       ],
     });
+  });
+
+  it('keeps the Authority container closed over its workspace build and runtime dependencies', () => {
+    const rootPackage = readJson<{ workspaces: string[] }>('package.json');
+    const workspaceByName = new Map(
+      rootPackage.workspaces.map((workspace) => [
+        readJson<PackageManifest>(`${workspace}/package.json`).name,
+        workspace,
+      ]),
+    );
+    const dockerfile = readFileSync(
+      join(REPO, 'deploy/organization-authority/Dockerfile'),
+      'utf8',
+    );
+
+    // The builder runs the root workspace build, so every declared workspace
+    // must be present in its selective Docker context. A parent COPY is valid
+    // only when it contains the complete workspace path.
+    for (const workspace of rootPackage.workspaces) {
+      const parent = workspace.split('/')[0]!;
+      const copied =
+        dockerfile.includes(`COPY ${workspace} ./${workspace}`) ||
+        dockerfile.includes(`COPY ${parent} ./${parent}`);
+      expect(copied, `builder omits workspace ${workspace}`).toBe(true);
+    }
+
+    const runtimeClosure = new Set<string>();
+    const visit = (workspace: string): void => {
+      if (runtimeClosure.has(workspace)) return;
+      runtimeClosure.add(workspace);
+      const manifest = readJson<PackageManifest>(`${workspace}/package.json`);
+      for (const dependency of Object.keys(manifest.dependencies ?? {})) {
+        const dependencyWorkspace = workspaceByName.get(dependency);
+        if (dependencyWorkspace !== undefined) visit(dependencyWorkspace);
+      }
+    };
+    visit('services/organization-authority');
+
+    // npm's workspace links resolve into these runtime directories. Every
+    // reachable workspace therefore needs its package exports and compiled
+    // code, and service packages that ship migrations need those immutable
+    // filesystem assets beside dist.
+    for (const workspace of [...runtimeClosure].sort()) {
+      const manifest = readJson<PackageManifest>(`${workspace}/package.json`);
+      expect(dockerfile).toContain(
+        `COPY --from=build /app/${workspace}/package.json ./${workspace}/package.json`,
+      );
+      expect(dockerfile).toContain(
+        `COPY --from=build /app/${workspace}/dist ./${workspace}/dist`,
+      );
+      if (manifest.files?.some((path) => path.startsWith('migrations/'))) {
+        expect(dockerfile).toContain(
+          `COPY --from=build /app/${workspace}/migrations ./${workspace}/migrations`,
+        );
+      }
+    }
   });
 
   it('lists every SQL migration as a runtime asset', () => {

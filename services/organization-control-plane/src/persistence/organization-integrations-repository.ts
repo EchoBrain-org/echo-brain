@@ -21,13 +21,34 @@ import {
   type OnboardSlackOrganizationToolInput,
   type OnboardSlackOrganizationToolResult,
   type OrganizationIntegrationsOverview,
+  type OrganizationPermissionPilotEligibilityProof,
   type RecordPermissionDecisionInput,
+  type RecordReviewerPermissionDecisionInput,
+  type RecordOrganizationMemberReadablePermissionDecisionInput,
   type RecordedPermissionDecision,
+  type RecordedReviewerPermissionDecision,
+  type RecordedOrganizationMemberReadablePermissionDecision,
+  type OrganizationMemberAuthorizationEvidenceExpectation,
+  type OrganizationMemberAuthorizationEvidenceMatch,
+  type ReviewerAuthorizationEvidenceExpectation,
+  type ReviewerAuthorizationEvidenceMatch,
+  type ReviewerAuthorizationEvidenceRead,
+  type OrganizationIntegrationAuditChainVerification,
   type SlackApprovalPermissionCandidate,
   type SlackApprovalPermissionLookup,
   type OrganizationSecretReference,
   type PendingSlackIdentityLinkChallenge,
 } from "../application/contracts.js";
+import {
+  REVIEWER_RESTRICTED_AUDIT_DETAIL_KIND,
+  RESTRICTED_REVIEWER_ALLOW_REASON_CODE,
+  RESTRICTED_REVIEWER_POLICY_ID,
+  organizationIntegrationAuditEntryPreimage,
+  reviewerMessagePresentationPreimage,
+  reviewerRestrictedSemanticPreimage,
+  type OrganizationIntegrationAuditEntryPreimageInput,
+} from "../application/reviewer-restricted-policy.js";
+import { ORGANIZATION_MEMBER_READABLE_ALLOW_REASON_CODE } from "../application/organization-member-readable-policy.js";
 import {
   canonicalJson,
   canonicalSha256,
@@ -41,6 +62,54 @@ interface AuditTail {
 
 interface AuditReplayRow {
   detail_json: string;
+}
+
+interface ApprovalAuthorizationEvidenceRow {
+  reason_code: string;
+  detail_json: string;
+}
+
+const SHA256_DIGEST = /^sha256:[0-9a-f]{64}$/;
+
+function permissionPilotEligibilityFromAudit(
+  row: ApprovalAuthorizationEvidenceRow,
+  action: ApprovalAuthorizationEvidenceLookup["action"],
+): OrganizationPermissionPilotEligibilityProof | null | undefined {
+  if (
+    row.reason_code !==
+    "active_membership_direct_grant_pilot_notice_v1"
+  ) {
+    return null;
+  }
+  if (action !== "approve") return undefined;
+  let detail: unknown;
+  try {
+    detail = JSON.parse(row.detail_json) as unknown;
+  } catch {
+    return undefined;
+  }
+  if (detail === null || typeof detail !== "object" || Array.isArray(detail)) {
+    return undefined;
+  }
+  const value = detail as Record<string, unknown>;
+  if (
+    value["presentation_policy_id"] !==
+      "pilot-two-person-audience-v1" ||
+    typeof value["audience_notice_sha256"] !== "string" ||
+    !SHA256_DIGEST.test(value["audience_notice_sha256"]) ||
+    typeof value["message_presentation_sha256"] !== "string" ||
+    !SHA256_DIGEST.test(value["message_presentation_sha256"])
+  ) {
+    return undefined;
+  }
+  return Object.freeze({
+    policy_id: "pilot-member-readable-v1",
+    presentation_policy_id: "pilot-two-person-audience-v1",
+    audience_notice_sha256: value["audience_notice_sha256"] as `sha256:${string}`,
+    message_presentation_sha256: value[
+      "message_presentation_sha256"
+    ] as `sha256:${string}`,
+  });
 }
 
 interface ToolConnectionOverviewRow extends Record<string, unknown> {
@@ -148,6 +217,151 @@ function digest(value: unknown): `sha256:${string}` {
 
 function id(prefix: string): string {
   return `${prefix}_${randomUUID()}`;
+}
+
+/**
+ * The one chained-entry hash, used by both append and verification so stored
+ * entry bytes never depend on which caller computed them.
+ */
+export function organizationIntegrationAuditEntrySha256(
+  input: OrganizationIntegrationAuditEntryPreimageInput,
+): `sha256:${string}` {
+  return canonicalSha256(organizationIntegrationAuditEntryPreimage(input));
+}
+
+interface ReviewerAuditRow {
+  audit_sequence: number;
+  audit_event_id: string;
+  previous_entry_sha256: string | null;
+  entry_sha256: string;
+  organization_id: string;
+  occurred_at: string;
+  actor_kind: string;
+  actor_principal_id: string | null;
+  actor_membership_id: string | null;
+  actor_identity_link_id: string | null;
+  actor_installation_id: string | null;
+  command_id: string;
+  provider_event_sha256: string | null;
+  action: string;
+  subject_kind: string;
+  subject_id: string;
+  membership_id: string | null;
+  identity_link_id: string | null;
+  connection_id: string | null;
+  adapter_binding_id: string | null;
+  permission_grant_id: string | null;
+  outcome: string;
+  reason_code: string;
+  idempotency_key: string;
+  authority_checked_at: string | null;
+  authority_evidence_sha256: string | null;
+  correlation_id: string;
+  detail_json: string;
+  detail_sha256: string;
+}
+
+const REVIEWER_AUDIT_COLUMNS = `audit_sequence, audit_event_id,
+          previous_entry_sha256, entry_sha256, organization_id, occurred_at,
+          actor_kind, actor_principal_id, actor_membership_id,
+          actor_identity_link_id, actor_installation_id, command_id,
+          provider_event_sha256, action, subject_kind, subject_id,
+          membership_id, identity_link_id, connection_id, adapter_binding_id,
+          permission_grant_id, outcome, reason_code, idempotency_key,
+          authority_checked_at, authority_evidence_sha256, correlation_id,
+          detail_json, detail_sha256`;
+
+function reviewerAuditDetail(
+  row: ReviewerAuditRow,
+): Readonly<Record<string, unknown>> | undefined {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(row.detail_json) as unknown;
+  } catch {
+    return undefined;
+  }
+  if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) {
+    return undefined;
+  }
+  const detail = parsed as Record<string, unknown>;
+  if (canonicalJson(detail) !== row.detail_json) return undefined;
+  const exactKeys = [
+    "schema_version",
+    "kind",
+    "authority_id",
+    "request_sha256",
+    "provider_event_sha256",
+    "principal_id",
+    "policy_id",
+    "provider",
+    "provider_issuer",
+    "team_id",
+    "enterprise_id",
+    "bot_user_id",
+    "bot_id",
+    "app_id",
+    "actor_user_id",
+    "adapter_id",
+    "adapter_instance_id",
+    "adapter_version",
+    "channel_id",
+    "message_ts",
+    "reaction_name",
+    "approve_reaction",
+    "reject_reaction",
+    "reviewer_release_draft_sha256",
+    "approval_presentation_sha256",
+    "semantic_intent_sha256",
+    "message_presentation_sha256",
+    "message_unedited",
+    "consequence_version",
+  ].sort();
+  if (Object.keys(detail).sort().join("\u0000") !== exactKeys.join("\u0000")) {
+    return undefined;
+  }
+  if (
+    detail["kind"] !== REVIEWER_RESTRICTED_AUDIT_DETAIL_KIND ||
+    detail["schema_version"] !== 2 ||
+    detail["policy_id"] !== RESTRICTED_REVIEWER_POLICY_ID ||
+    detail["message_unedited"] !== true
+  ) {
+    return undefined;
+  }
+  return detail;
+}
+
+function canonicalAuditDetail(
+  row: ReviewerAuditRow,
+): Readonly<Record<string, unknown>> | undefined {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(row.detail_json) as unknown;
+  } catch {
+    return undefined;
+  }
+  if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) {
+    return undefined;
+  }
+  const detail = parsed as Readonly<Record<string, unknown>>;
+  return canonicalJson(detail) === row.detail_json ? detail : undefined;
+}
+
+function digestField(
+  detail: Readonly<Record<string, unknown>>,
+  key: string,
+): `sha256:${string}` | undefined {
+  const value = detail[key];
+  return typeof value === "string" && SHA256_DIGEST.test(value)
+    ? (value as `sha256:${string}`)
+    : undefined;
+}
+
+function textField(
+  detail: Readonly<Record<string, unknown>>,
+  key: string,
+): string | undefined {
+  const value = detail[key];
+  return typeof value === "string" && value.length > 0 ? value : undefined;
 }
 
 function addMinutes(value: string, minutes: number): string {
@@ -324,6 +538,75 @@ export class OrganizationIntegrationsRepository {
         "organization integrations database identity does not match the authority",
       );
     }
+  }
+
+  /**
+   * Verifies the complete immutable integration-audit chain through its
+   * current head.  Reviewer readiness calls this once at startup; checking
+   * only the selected row and its immediate predecessor would allow a
+   * tampered older ancestor to remain outside the trust decision.
+   */
+  verifyIntegrationAuditChain(): OrganizationIntegrationAuditChainVerification {
+    let rows: ReviewerAuditRow[];
+    try {
+      rows = this.database
+        .prepare(
+          `SELECT ${REVIEWER_AUDIT_COLUMNS}
+           FROM organization_integration_audit
+           ORDER BY audit_sequence ASC`,
+        )
+        .all() as ReviewerAuditRow[];
+    } catch (error) {
+      return Object.freeze({
+        valid: false,
+        entries_verified: 0,
+        head_sequence: 0,
+        head_entry_sha256: null,
+        failure: `integration audit could not be read: ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+      });
+    }
+
+    let previous: `sha256:${string}` | null = null;
+    let verified = 0;
+    for (const [index, row] of rows.entries()) {
+      const expectedSequence = index + 1;
+      const detail = canonicalAuditDetail(row);
+      const failure =
+        row.audit_sequence !== expectedSequence
+          ? `integration audit sequence ${row.audit_sequence} is not ${expectedSequence}`
+          : row.organization_id !== this.identity.organization_id
+            ? `integration audit sequence ${row.audit_sequence} belongs to another organization`
+            : row.previous_entry_sha256 !== previous
+              ? `integration audit sequence ${row.audit_sequence} does not link to its predecessor`
+              : detail === undefined
+                ? `integration audit sequence ${row.audit_sequence} has noncanonical detail`
+                : digest(detail) !== row.detail_sha256
+                  ? `integration audit sequence ${row.audit_sequence} has a mismatched detail digest`
+                  : organizationIntegrationAuditEntrySha256({ ...row, detail }) !==
+                      row.entry_sha256
+                    ? `integration audit sequence ${row.audit_sequence} has a mismatched entry digest`
+                    : null;
+      if (failure !== null) {
+        return Object.freeze({
+          valid: false,
+          entries_verified: verified,
+          head_sequence: verified,
+          head_entry_sha256: previous,
+          failure,
+        });
+      }
+      previous = row.entry_sha256 as `sha256:${string}`;
+      verified += 1;
+    }
+    return Object.freeze({
+      valid: true,
+      entries_verified: verified,
+      head_sequence: verified,
+      head_entry_sha256: previous,
+      failure: null,
+    });
   }
 
   slackApprovalActivationReplay(
@@ -1856,6 +2139,385 @@ export class OrganizationIntegrationsRepository {
   }
 
   /**
+   * Appends exactly one immutable reviewer allow and returns its generated
+   * `aud_*` id and chained entry hash. Nothing here is derived from a caller
+   * proof object: every digest arrives already recomputed by the Authority
+   * verifier from the live provider card.
+   */
+  recordReviewerPermissionDecision(
+    input: RecordReviewerPermissionDecisionInput,
+  ): RecordedReviewerPermissionDecision {
+    const evaluationId = id("pce");
+    return this.immediateTransaction(() => {
+      const appended = this.appendAudit({
+        occurred_at: input.evaluated_at,
+        actor_kind: "installation",
+        actor_principal_id: input.reviewer_principal_id,
+        actor_membership_id: input.reviewer_membership_id,
+        actor_identity_link_id: null,
+        actor_installation_id: input.installation_id,
+        command_id: evaluationId,
+        provider_event_sha256: input.provider_event_sha256,
+        action: "permission.approve",
+        subject_kind: "approval",
+        subject_id: input.approval_id,
+        membership_id: input.reviewer_membership_id,
+        identity_link_id: input.identity_link_id,
+        connection_id: input.connection_id,
+        adapter_binding_id: input.adapter_binding_id,
+        permission_grant_id: input.permission_grant_id,
+        outcome: "allowed",
+        reason_code: RESTRICTED_REVIEWER_ALLOW_REASON_CODE,
+        idempotency_key: `permission-evaluation:${evaluationId}`,
+        authority_checked_at: input.evaluated_at,
+        authority_evidence_sha256: input.authority_evidence_sha256,
+        correlation_id: input.request_id,
+        detail: input.detail,
+      });
+      return Object.freeze({
+        authorization_audit_event_id: appended.audit_event_id,
+        authorization_audit_entry_sha256: appended.entry_sha256,
+      });
+    });
+  }
+
+  /** Appends the separate schema-v3 organization-member allow audit row. */
+  recordOrganizationMemberReadablePermissionDecision(
+    input: RecordOrganizationMemberReadablePermissionDecisionInput,
+  ): RecordedOrganizationMemberReadablePermissionDecision {
+    const evaluationId = id("pce");
+    return this.immediateTransaction(() => {
+      const appended = this.appendAudit({
+        occurred_at: input.evaluated_at, actor_kind: "installation",
+        actor_principal_id: input.approving_principal_id,
+        actor_membership_id: input.approving_membership_id,
+        actor_identity_link_id: null, actor_installation_id: input.installation_id,
+        command_id: evaluationId, provider_event_sha256: input.provider_event_sha256,
+        action: "permission.approve", subject_kind: "approval", subject_id: input.approval_id,
+        membership_id: input.approving_membership_id, identity_link_id: input.identity_link_id,
+        connection_id: input.connection_id, adapter_binding_id: input.adapter_binding_id,
+        permission_grant_id: input.permission_grant_id, outcome: "allowed",
+        reason_code: ORGANIZATION_MEMBER_READABLE_ALLOW_REASON_CODE,
+        idempotency_key: `permission-evaluation:${evaluationId}`,
+        authority_checked_at: input.evaluated_at,
+        authority_evidence_sha256: input.authority_evidence_sha256,
+        correlation_id: input.request_id, detail: input.detail,
+      });
+      return Object.freeze({ authorization_audit_event_id: appended.audit_event_id, authorization_audit_entry_sha256: appended.entry_sha256 });
+    });
+  }
+
+  /** Exact-ID v3 evidence proof. It rehashes canonical detail and the audit
+   * chain entry before comparing every caller-quoted commitment. */
+  findAllowedOrganizationMemberAuthorizationEvidenceById(
+    auditEventId: string,
+    expected: OrganizationMemberAuthorizationEvidenceExpectation,
+  ): OrganizationMemberAuthorizationEvidenceMatch {
+    let row: ReviewerAuditRow | undefined;
+    let predecessor: { entry_sha256: string } | undefined;
+    try {
+      row = this.database.prepare(`SELECT ${REVIEWER_AUDIT_COLUMNS} FROM organization_integration_audit WHERE audit_event_id = ?`).get(auditEventId) as ReviewerAuditRow | undefined;
+      if (row !== undefined && row.audit_sequence > 1) predecessor = this.database.prepare('SELECT entry_sha256 FROM organization_integration_audit WHERE audit_sequence = ?').get(row.audit_sequence - 1) as { entry_sha256: string } | undefined;
+    } catch { return Object.freeze({ status: 'unavailable' as const }); }
+    if (row === undefined) return Object.freeze({ status: 'absent' as const });
+    if (row.organization_id !== this.identity.organization_id || (row.audit_sequence > 1 && (predecessor === undefined || predecessor.entry_sha256 !== row.previous_entry_sha256)) || (row.audit_sequence === 1 && row.previous_entry_sha256 !== null)) return Object.freeze({ status: 'corrupt' as const });
+    let detail: Record<string, unknown>;
+    try { const parsed = JSON.parse(row.detail_json) as unknown; if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed) || canonicalJson(parsed as Record<string, unknown>) !== row.detail_json) return Object.freeze({ status: 'corrupt' as const }); detail = parsed as Record<string, unknown>; } catch { return Object.freeze({ status: 'corrupt' as const }); }
+    if (digest(detail) !== row.detail_sha256 || organizationIntegrationAuditEntrySha256({ ...row, detail }) !== row.entry_sha256) return Object.freeze({ status: 'corrupt' as const });
+    const fields: Readonly<Record<string, unknown>> = { request_sha256: expected.request_sha256, provider_event_sha256: expected.provider_event_sha256, principal_id: expected.principal_id, policy_contract_sha256: expected.policy_contract_sha256, release_draft_sha256: expected.release_draft_sha256, approval_presentation_sha256: expected.approval_presentation_sha256, semantic_intent_sha256: expected.semantic_intent_sha256, message_presentation_sha256: expected.message_presentation_sha256 };
+    if (row.reason_code !== ORGANIZATION_MEMBER_READABLE_ALLOW_REASON_CODE || row.outcome !== 'allowed' || row.action !== 'permission.approve' || row.subject_kind !== 'approval' || row.subject_id !== expected.approval_id || row.actor_installation_id !== expected.installation_id || row.actor_principal_id !== expected.principal_id || row.actor_membership_id !== expected.membership_id || row.membership_id !== expected.membership_id || row.correlation_id !== expected.request_id || row.adapter_binding_id !== expected.adapter_binding_id || row.permission_grant_id !== expected.permission_grant_id || row.provider_event_sha256 !== expected.provider_event_sha256 || row.occurred_at !== expected.evaluated_at || row.authority_checked_at !== expected.evaluated_at || row.entry_sha256 !== expected.authorization_audit_entry_sha256 || detail.kind !== 'organization-member-readable-approval-audit-detail-v1' || detail.policy_id !== 'organization-member-readable-v1' || Object.entries(fields).some(([key, value]) => detail[key] !== value)) return Object.freeze({ status: 'mismatch' as const });
+    return Object.freeze({ status: 'matched' as const, audit_entry_sha256: row.entry_sha256 as `sha256:${string}` });
+  }
+
+  /**
+   * Reconstructs the complete text-free reviewer authorization from one exact
+   * immutable audit row.  Startup admission and reviewer reads use this form
+   * before canonical record content is available; the existing expected-value
+   * lookup below remains the append boundary for a client-signed envelope.
+   */
+  readAllowedReviewerAuthorizationEvidenceById(
+    auditEventId: string,
+  ): ReviewerAuthorizationEvidenceRead {
+    let row: ReviewerAuditRow | undefined;
+    try {
+      row = this.database
+        .prepare(
+          `SELECT ${REVIEWER_AUDIT_COLUMNS}
+           FROM organization_integration_audit
+           WHERE audit_event_id = ?`,
+        )
+        .get(auditEventId) as ReviewerAuditRow | undefined;
+    } catch {
+      return Object.freeze({ status: "unavailable" as const });
+    }
+    if (row === undefined) return Object.freeze({ status: "absent" as const });
+    const detail = reviewerAuditDetail(row);
+    const requestSha256 =
+      detail === undefined ? undefined : digestField(detail, "request_sha256");
+    if (
+      detail === undefined ||
+      requestSha256 === undefined ||
+      row.actor_installation_id === null ||
+      row.actor_principal_id === null ||
+      row.actor_membership_id === null ||
+      row.provider_event_sha256 === null ||
+      row.adapter_binding_id === null ||
+      row.permission_grant_id === null
+    ) {
+      return Object.freeze({ status: "corrupt" as const });
+    }
+    const match = this.findAllowedReviewerAuthorizationEvidenceById(
+      auditEventId,
+      {
+        organization_id: row.organization_id,
+        installation_id: row.actor_installation_id,
+        approval_id: row.subject_id,
+        request_id: row.correlation_id,
+        principal_id: row.actor_principal_id,
+        membership_id: row.actor_membership_id,
+        request_sha256: requestSha256,
+        provider_event_sha256: row.provider_event_sha256,
+        adapter_binding_id: row.adapter_binding_id,
+        permission_grant_id: row.permission_grant_id,
+        evaluated_at: row.occurred_at,
+        reviewer_release_draft_sha256:
+          digestField(detail, "reviewer_release_draft_sha256") ?? "",
+        approval_presentation_sha256:
+          digestField(detail, "approval_presentation_sha256") ?? "",
+        semantic_intent_sha256:
+          digestField(detail, "semantic_intent_sha256") ?? "",
+        message_presentation_sha256:
+          digestField(detail, "message_presentation_sha256") ?? "",
+        authorization_audit_entry_sha256: row.entry_sha256,
+      },
+    );
+    if (match.status !== "matched") {
+      return Object.freeze({
+        status:
+          match.status === "unavailable"
+            ? ("unavailable" as const)
+            : match.status === "absent"
+              ? ("absent" as const)
+              : ("corrupt" as const),
+      });
+    }
+    return Object.freeze({
+      status: "matched" as const,
+      evidence: Object.freeze({
+        ...match.proof,
+        authority_id: detail["authority_id"] as string,
+        organization_id: row.organization_id,
+        installation_id: row.actor_installation_id,
+        approval_id: row.subject_id,
+        request_id: row.correlation_id,
+        request_sha256: requestSha256,
+        provider_event_sha256:
+          row.provider_event_sha256 as `sha256:${string}`,
+        adapter_binding_id: row.adapter_binding_id,
+        permission_grant_id: row.permission_grant_id,
+      }),
+    });
+  }
+
+  /**
+   * The exact-primary-key reviewer evidence lookup.
+   *
+   * It reselects every outer column plus the detail, validates the
+   * organization binding and the predecessor/sequence relation, recomputes
+   * both the detail digest and the chained entry hash with the same shared
+   * helper the append used, reconstructs the semantic and provider-message
+   * preimages from the stored values and the fixed consequence, and only then
+   * matches the closed reviewer proof. It returns digests and identifiers
+   * only: no title, item text, or reconstructed draft.
+   */
+  findAllowedReviewerAuthorizationEvidenceById(
+    auditEventId: string,
+    expected: ReviewerAuthorizationEvidenceExpectation,
+  ): ReviewerAuthorizationEvidenceMatch {
+    let row: ReviewerAuditRow | undefined;
+    let predecessor: { entry_sha256: string } | undefined;
+    try {
+      row = this.database
+        .prepare(
+          `SELECT ${REVIEWER_AUDIT_COLUMNS}
+           FROM organization_integration_audit
+           WHERE audit_event_id = ?`,
+        )
+        .get(auditEventId) as ReviewerAuditRow | undefined;
+      if (row !== undefined && row.audit_sequence > 1) {
+        predecessor = this.database
+          .prepare(
+            `SELECT entry_sha256
+             FROM organization_integration_audit
+             WHERE audit_sequence = ?`,
+          )
+          .get(row.audit_sequence - 1) as { entry_sha256: string } | undefined;
+      }
+    } catch {
+      return Object.freeze({ status: "unavailable" as const });
+    }
+    if (row === undefined) return Object.freeze({ status: "absent" as const });
+    if (row.organization_id !== this.identity.organization_id) {
+      return Object.freeze({ status: "mismatch" as const });
+    }
+    if (
+      row.audit_sequence === 1
+        ? row.previous_entry_sha256 !== null
+        : predecessor === undefined ||
+          predecessor.entry_sha256 !== row.previous_entry_sha256
+    ) {
+      return Object.freeze({ status: "corrupt" as const });
+    }
+
+    const detail = reviewerAuditDetail(row);
+    if (detail === undefined) {
+      return Object.freeze({ status: "corrupt" as const });
+    }
+    if (digest(detail) !== row.detail_sha256) {
+      return Object.freeze({ status: "corrupt" as const });
+    }
+    const recomputedEntry = organizationIntegrationAuditEntrySha256({
+      ...row,
+      detail,
+    });
+    if (recomputedEntry !== row.entry_sha256) {
+      return Object.freeze({ status: "corrupt" as const });
+    }
+
+    const releaseDraftSha256 = digestField(
+      detail,
+      "reviewer_release_draft_sha256",
+    );
+    const presentationSha256 = digestField(
+      detail,
+      "approval_presentation_sha256",
+    );
+    const semanticSha256 = digestField(detail, "semantic_intent_sha256");
+    const messageSha256 = digestField(detail, "message_presentation_sha256");
+    const authorityId = textField(detail, "authority_id");
+    if (
+      releaseDraftSha256 === undefined ||
+      presentationSha256 === undefined ||
+      semanticSha256 === undefined ||
+      messageSha256 === undefined ||
+      authorityId === undefined ||
+      row.actor_principal_id === null ||
+      row.actor_membership_id === null
+    ) {
+      return Object.freeze({ status: "corrupt" as const });
+    }
+
+    // Recompute both Authority preimages from stored values and the fixed
+    // consequence; a row whose digests do not regenerate is corrupt evidence,
+    // never a mismatch the caller could fix by presenting other bytes.
+    const recomputedSemantic = canonicalSha256(
+      reviewerRestrictedSemanticPreimage({
+        authority_id: authorityId,
+        organization_id: row.organization_id,
+        approval_id: row.subject_id,
+        reviewer_principal_id: row.actor_principal_id,
+        reviewer_membership_id: row.actor_membership_id,
+        reviewer_release_draft_sha256: releaseDraftSha256,
+        approval_presentation_sha256: presentationSha256,
+        evaluated_at: row.occurred_at,
+      }),
+    );
+    const teamId = textField(detail, "team_id");
+    const botUserId = textField(detail, "bot_user_id");
+    const botId = textField(detail, "bot_id");
+    const appId = textField(detail, "app_id");
+    const actorUserId = textField(detail, "actor_user_id");
+    const channelId = textField(detail, "channel_id");
+    const messageTs = textField(detail, "message_ts");
+    const reactionName = textField(detail, "reaction_name");
+    const enterpriseId = detail["enterprise_id"];
+    if (
+      teamId === undefined ||
+      botUserId === undefined ||
+      botId === undefined ||
+      appId === undefined ||
+      actorUserId === undefined ||
+      channelId === undefined ||
+      messageTs === undefined ||
+      reactionName === undefined ||
+      row.provider_event_sha256 === null ||
+      !(enterpriseId === null || typeof enterpriseId === "string")
+    ) {
+      return Object.freeze({ status: "corrupt" as const });
+    }
+    const recomputedMessage = canonicalSha256(
+      reviewerMessagePresentationPreimage({
+        provider_event_sha256: row.provider_event_sha256,
+        approval_presentation_sha256: presentationSha256,
+        team_id: teamId,
+        enterprise_id: enterpriseId,
+        bot_user_id: botUserId,
+        bot_id: botId,
+        app_id: appId,
+        actor_user_id: actorUserId,
+        channel_id: channelId,
+        message_ts: messageTs,
+        reaction_name: reactionName,
+      }),
+    );
+    if (
+      recomputedSemantic !== semanticSha256 ||
+      recomputedMessage !== messageSha256
+    ) {
+      return Object.freeze({ status: "corrupt" as const });
+    }
+
+    if (
+      row.reason_code !== RESTRICTED_REVIEWER_ALLOW_REASON_CODE ||
+      row.outcome !== "allowed" ||
+      row.action !== "permission.approve" ||
+      row.subject_kind !== "approval" ||
+      row.actor_kind !== "installation" ||
+      row.actor_identity_link_id !== null ||
+      row.subject_id !== expected.approval_id ||
+      row.actor_installation_id !== expected.installation_id ||
+      row.correlation_id !== expected.request_id ||
+      row.actor_principal_id !== expected.principal_id ||
+      row.actor_membership_id !== expected.membership_id ||
+      row.membership_id !== expected.membership_id ||
+      row.adapter_binding_id !== expected.adapter_binding_id ||
+      row.permission_grant_id !== expected.permission_grant_id ||
+      row.provider_event_sha256 !== expected.provider_event_sha256 ||
+      row.occurred_at !== expected.evaluated_at ||
+      row.authority_checked_at !== expected.evaluated_at ||
+      authorityId !== this.identity.authority_id ||
+      detail["request_sha256"] !== expected.request_sha256 ||
+      detail["provider_event_sha256"] !== expected.provider_event_sha256 ||
+      detail["principal_id"] !== expected.principal_id ||
+      releaseDraftSha256 !== expected.reviewer_release_draft_sha256 ||
+      presentationSha256 !== expected.approval_presentation_sha256 ||
+      semanticSha256 !== expected.semantic_intent_sha256 ||
+      messageSha256 !== expected.message_presentation_sha256 ||
+      row.entry_sha256 !== expected.authorization_audit_entry_sha256 ||
+      this.identity.organization_id !== expected.organization_id
+    ) {
+      return Object.freeze({ status: "mismatch" as const });
+    }
+
+    return Object.freeze({
+      status: "matched" as const,
+      audit_entry_sha256: row.entry_sha256 as `sha256:${string}`,
+      proof: Object.freeze({
+        policy_id: RESTRICTED_REVIEWER_POLICY_ID,
+        reviewer_principal_id: row.actor_principal_id,
+        reviewer_membership_id: row.actor_membership_id,
+        reviewer_release_draft_sha256: releaseDraftSha256,
+        approval_presentation_sha256: presentationSha256,
+        semantic_intent_sha256: semanticSha256,
+        message_presentation_sha256: messageSha256,
+        authorization_audit_event_id: row.audit_event_id,
+        authorization_audit_entry_sha256: row.entry_sha256 as `sha256:${string}`,
+        evaluated_at: row.occurred_at,
+      }),
+    });
+  }
+
+  /**
    * Read-only confirmation that one frozen authorization evidence document is
    * a real allowed evaluation this control plane appended.
    *
@@ -1874,7 +2536,7 @@ export class OrganizationIntegrationsRepository {
   ): ApprovalAuthorizationEvidenceMatch {
     const rows = this.database
       .prepare(
-        `SELECT 1 AS present
+        `SELECT reason_code, detail_json
          FROM organization_integration_audit
          WHERE organization_id = ?
            AND actor_installation_id = ?
@@ -1909,12 +2571,24 @@ export class OrganizationIntegrationsRepository {
         input.evaluated_at,
         input.principal_id,
         input.request_sha256,
-      ) as { present: 1 }[];
+      ) as ApprovalAuthorizationEvidenceRow[];
     if (rows.length === 0) return Object.freeze({ status: "absent" as const });
     if (rows.length > 1) {
       return Object.freeze({ status: "ambiguous" as const });
     }
-    return Object.freeze({ status: "matched" as const });
+    const eligibility = permissionPilotEligibilityFromAudit(
+      rows[0] as ApprovalAuthorizationEvidenceRow,
+      input.action,
+    );
+    if (eligibility === undefined) {
+      return Object.freeze({ status: "corrupt" as const });
+    }
+    return Object.freeze({
+      status: "matched" as const,
+      ...(eligibility === null
+        ? {}
+        : { permission_pilot_eligibility: eligibility }),
+    });
   }
 
   overview(): OrganizationIntegrationsOverview {
@@ -2003,7 +2677,7 @@ export class OrganizationIntegrationsRepository {
     authority_evidence_sha256: string | null;
     correlation_id: string;
     detail: Readonly<Record<string, unknown>>;
-  }): void {
+  }): { audit_event_id: string; entry_sha256: `sha256:${string}` } {
     const tail = this.database
       .prepare(
         `SELECT audit_sequence, entry_sha256
@@ -2017,7 +2691,7 @@ export class OrganizationIntegrationsRepository {
     const detailJson = canonicalJson(input.detail);
     const detailSha256 = digest(input.detail);
     const auditEventId = id("aud");
-    const entrySha256 = digest({
+    const entrySha256 = organizationIntegrationAuditEntrySha256({
       audit_sequence: auditSequence,
       audit_event_id: auditEventId,
       previous_entry_sha256: previousEntrySha256,
@@ -2073,5 +2747,6 @@ export class OrganizationIntegrationsRepository {
         detailJson,
         detailSha256,
       );
+    return { audit_event_id: auditEventId, entry_sha256: entrySha256 };
   }
 }

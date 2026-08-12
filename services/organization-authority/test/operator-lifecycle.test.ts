@@ -24,6 +24,7 @@ import {
   inspectOrganizationControlDatabaseReadOnly,
   type OrganizationControlDatabaseIdentity,
 } from '@echo-brain/organization-control-plane';
+import { organizationMemberReadablePolicyContractSha256 } from '@echo-brain/organization-protocol';
 import {
   migrateOrganizationControlDatabaseWithMigrations,
   type OrganizationControlMigration,
@@ -53,6 +54,7 @@ import {
   type AuthorityIntegrationsInstallationFaultPoint,
 } from '../src/composition/operator-state.js';
 import { startOrganizationAuthority } from '../src/composition/runtime.js';
+import { reviewerPolicyContractSha256 } from '../src/application/reviewer-policy-contract.js';
 import {
   inspectAuthorityRuntimeOwnership,
   inspectAuthorityStatus,
@@ -368,7 +370,21 @@ describe('organization authority operator lifecycle', () => {
     expect(manifestText).not.toContain(proxyToken);
 
     const database = inspectAuthorityDatabaseReadOnly(paths.database_path);
-    expect(database.tables).toHaveLength(10);
+    expect(database.tables).toEqual([
+      'authority_access_lease_requests',
+      'authority_access_states',
+      'authority_audit_log',
+      'authority_enrollment_grants',
+      'authority_enrollments',
+      'authority_internal_live_releases',
+      'authority_internal_live_update_receipts',
+      'authority_memberships',
+      'authority_metadata',
+      'authority_principals',
+      'authority_query_decision_audit',
+      'authority_readable_search_active_generation',
+      'authority_readable_search_query_audit',
+    ]);
     expect(database.authority_id).toBe(firstConfig.authority.authority_id);
     expect(database.organization_id).toBe(
       firstConfig.organization.organization_id,
@@ -1215,7 +1231,7 @@ describe('organization authority operator lifecycle', () => {
     expect(
       inspectAuthorityDatabaseReadOnly(config.database_path),
     ).toMatchObject({
-      schema_version: 5,
+      schema_version: 7,
       integrations_control_plane_id: integrationsIdentity.control_plane_id,
       integrations_marker_sha256: expect.stringMatching(
         /^sha256:[0-9a-f]{64}$/,
@@ -1306,7 +1322,7 @@ describe('organization authority operator lifecycle', () => {
       const interruptedAuthority = inspectAuthorityDatabaseReadOnly(
         config.database_path,
       );
-      expect(interruptedAuthority.schema_version).toBe(5);
+      expect(interruptedAuthority.schema_version).toBe(7);
       expect(
         interruptedAuthority.integrations_control_plane_id !== null,
       ).toBe(anchoredAfterFault);
@@ -1323,7 +1339,7 @@ describe('organization authority operator lifecycle', () => {
         config.database_path,
       );
       expect(recoveredAuthority).toMatchObject({
-        schema_version: 5,
+        schema_version: 7,
         integrations_control_plane_id: recovered.control_plane_id,
         integrations_marker_sha256: expect.stringMatching(
           /^sha256:[0-9a-f]{64}$/,
@@ -1650,6 +1666,85 @@ describe('organization authority operator lifecycle', () => {
     expect(() => readAuthorityRuntimeConfig(fixture.configPath)).toThrow(
       '0600',
     );
+  });
+
+  it('validates and fingerprints an optional closed organization recording policy', async () => {
+    const fixture = await initializedFixture();
+    const original = JSON.parse(
+      readFileSync(fixture.configPath, 'utf8'),
+    ) as Record<string, unknown>;
+    const absent = resolveAuthorityServeConfig(
+      readAuthorityRuntimeConfig(fixture.configPath),
+    );
+    const absentFingerprint = authorityRuntimeFingerprint(absent);
+    expect(absent.organization_recording_policy_v1).toBeUndefined();
+
+    const policy = {
+      schema_version: 1,
+      kind: 'organization-recording-policy-v1',
+      decision_processor_adapter_instance_id: 'decision-processor-primary',
+      approval_surface_adapter_instance_id: 'slack-reactions-primary',
+      presentation_mode: 'organization-member-readable-v1',
+      policy_contract_sha256: organizationMemberReadablePolicyContractSha256(),
+    } as const;
+    writeFileSync(
+      fixture.configPath,
+      `${JSON.stringify({
+        ...original,
+        organization_recording_policy_v1: policy,
+      })}\n`,
+      { mode: 0o600 },
+    );
+    const configured = resolveAuthorityServeConfig(
+      readAuthorityRuntimeConfig(fixture.configPath),
+    );
+    expect(configured.organization_recording_policy_v1).toEqual(policy);
+    expect(authorityRuntimeFingerprint(configured)).not.toBe(absentFingerprint);
+    expect(
+      authorityRuntimeFingerprint({
+        ...configured,
+        organization_recording_policy_v1: undefined,
+      }),
+    ).toBe(absentFingerprint);
+  });
+
+  it('refuses malformed or mismatched organization recording policy mappings', async () => {
+    const fixture = await initializedFixture();
+    const original = JSON.parse(
+      readFileSync(fixture.configPath, 'utf8'),
+    ) as Record<string, unknown>;
+    const validReviewerPolicy = {
+      schema_version: 1,
+      kind: 'organization-recording-policy-v1',
+      decision_processor_adapter_instance_id: 'decision-processor-primary',
+      approval_surface_adapter_instance_id: 'slack-reactions-primary',
+      presentation_mode: 'restricted-reviewer-v1',
+      policy_contract_sha256: reviewerPolicyContractSha256(),
+    };
+    for (const policy of [
+      { ...validReviewerPolicy, unexpected: true },
+      { ...validReviewerPolicy, schema_version: 2 },
+      {
+        ...validReviewerPolicy,
+        decision_processor_adapter_instance_id: ' '.repeat(129),
+      },
+      {
+        ...validReviewerPolicy,
+        presentation_mode: 'organization-member-readable-v1',
+      },
+    ]) {
+      writeFileSync(
+        fixture.configPath,
+        `${JSON.stringify({
+          ...original,
+          organization_recording_policy_v1: policy,
+        })}\n`,
+        { mode: 0o600 },
+      );
+      expect(() => readAuthorityRuntimeConfig(fixture.configPath)).toThrow(
+        'organization_recording_policy_v1',
+      );
+    }
   });
 
   it('exposes init and stopped status through strict JSON CLI commands', async () => {

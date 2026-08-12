@@ -34,6 +34,16 @@ export interface AuthorityRuntimeFingerprintInput {
   port: number;
   active_lease_ttl_ms: number;
   access_request_maximum_age_ms: number;
+  organization_recording_policy_v1?: {
+    schema_version: 1;
+    kind: 'organization-recording-policy-v1';
+    decision_processor_adapter_instance_id: string;
+    approval_surface_adapter_instance_id: string;
+    presentation_mode:
+      | 'restricted-reviewer-v1'
+      | 'organization-member-readable-v1';
+    policy_contract_sha256: `sha256:${string}`;
+  };
 }
 
 function sha256(value: string | Buffer): `sha256:${string}` {
@@ -193,6 +203,12 @@ export function authorityRuntimeFingerprint(
         active_lease_ttl_ms: config.active_lease_ttl_ms,
         request_maximum_age_ms: config.access_request_maximum_age_ms,
       },
+      ...(config.organization_recording_policy_v1 === undefined
+        ? {}
+        : {
+            organization_recording_policy_v1:
+              config.organization_recording_policy_v1,
+          }),
       credentials: {
         admin_token_sha256: sha256(config.admin_token),
         trusted_proxy_token_sha256: sha256(config.trusted_proxy_token),
@@ -203,7 +219,16 @@ export function authorityRuntimeFingerprint(
 
 export function authorityMaintenanceFingerprint(
   config: AuthorityRuntimeFingerprintInput,
-  purpose: 'install-integrations' | 'rebuild-derived',
+  purpose:
+    | 'install-integrations'
+    | 'rebuild-derived'
+    | 'rebuild-readable-search'
+    | 'verify-readable-search-backup'
+    | 'activate-permission-pilot'
+    | 'export-reviewer-query-audit'
+    | 'expire-reviewer-query-audit'
+    | 'export-readable-search-query-audit'
+    | 'expire-readable-search-query-audit',
 ): `sha256:${string}` {
   const keyPath = join(
     config.key_directory,

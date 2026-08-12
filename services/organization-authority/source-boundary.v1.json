@@ -17,7 +17,8 @@
     "@echo-brain/organization-control-plane",
     "@echo-brain/organization-protocol",
     "@echo-brain/organization-api",
-    "@echo-brain/organization-record"
+    "@echo-brain/organization-record",
+    "@echo-brain/organization-retrieval"
   ],
   "allowed_external_packages": ["better-sqlite3"],
   "allowed_node_builtins": [
@@ -35,7 +36,9 @@
     "services/organization-authority/migrations/0002_admin_command_idempotency.sql",
     "services/organization-authority/migrations/0003_integrations_installation_anchor.sql",
     "services/organization-authority/migrations/0004_internal_live_release_rollout.sql",
-    "services/organization-authority/migrations/0005_record_installation_anchor.sql"
+    "services/organization-authority/migrations/0005_record_installation_anchor.sql",
+    "services/organization-authority/migrations/0006_reviewer_query_audit.sql",
+    "services/organization-authority/migrations/0007_readable_search_state.sql"
   ],
   "layer_rules": [
     {
@@ -120,7 +123,8 @@
         "@echo-brain/organization-control-plane",
         "@echo-brain/organization-protocol",
         "@echo-brain/organization-api",
-        "@echo-brain/organization-record"
+        "@echo-brain/organization-record",
+        "@echo-brain/organization-retrieval"
       ],
       "allowed_external_packages": [],
       "allowed_node_builtins": ["crypto", "events", "fs", "http", "net", "path"]

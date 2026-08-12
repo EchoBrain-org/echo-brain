@@ -6,6 +6,7 @@ export * from './config.js';
 export * from './default-adapters.js';
 export * from './approval/decision-node.js';
 export * from './approval/decision-node-store.js';
+export * from './approval/reviewer-publication-preflight.js';
 export * from './approval/store-backed-approval-gate.js';
 export * from './paths.js';
 export * from './runtime.js';

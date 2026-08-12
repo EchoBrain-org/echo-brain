@@ -27,7 +27,26 @@ export type {
   OrganizationPermissionCheckDecisionV1,
   OrganizationPermissionCheckRequestPayloadV1,
   OrganizationPermissionCheckRequestV1,
+  OrganizationRecentDecisionItemV1,
+  OrganizationRecentDecisionKindV1,
+  OrganizationRecentDecisionsRequestPayloadV1,
+  OrganizationRecentDecisionsRequestV1,
+  OrganizationRecentDecisionsResponseV1,
   OrganizationRecordRejectionCodeV1,
+  OrganizationReviewerPermissionCheckDecisionV2,
+  OrganizationReviewerPermissionCheckRequestPayloadV2,
+  OrganizationReviewerPermissionCheckRequestV2,
+  OrganizationMemberReadablePermissionCheckDecisionV3,
+  OrganizationMemberReadablePermissionCheckRequestPayloadV3,
+  OrganizationMemberReadablePermissionCheckRequestV3,
+  OrganizationReviewerRecentDecisionItemV1,
+  OrganizationReviewerRecentDecisionsRequestPayloadV1,
+  OrganizationReviewerRecentDecisionsRequestV1,
+  OrganizationReviewerRecentDecisionsResponseV1,
+  OrganizationReadableSearchRequestPayloadV1,
+  OrganizationReadableSearchRequestV1,
+  OrganizationReadableSearchResponseV1,
+  OrganizationReadableSearchResultItemV1,
   OrganizationSlackLinkBeginRequestPayloadV1,
   OrganizationSlackLinkBeginRequestV1,
   OrganizationSlackLinkBeginResponseV1,
@@ -48,10 +67,14 @@ export {
   MAX_ORGANIZATION_API_CURSOR_CHARACTERS,
   MAX_ORGANIZATION_API_BODY_BYTES,
   MAX_ORGANIZATION_API_PAGE_ITEMS,
+  MAX_ORGANIZATION_RECENT_DECISIONS_ITEMS,
+  MAX_ORGANIZATION_RECENT_DECISIONS_RESPONSE_BYTES,
   MAX_ORGANIZATION_AUDIT_DETAIL_DEPTH,
   MAX_ORGANIZATION_AUDIT_DETAIL_NODES,
   MAX_ORGANIZATION_RECORD_API_BODY_BYTES,
   MINIMUM_ORGANIZATION_ACCESS_RECOVERY_GAP,
+  ORGANIZATION_RECENT_DECISIONS_POLICY_ID,
+  ORGANIZATION_RECENT_DECISIONS_WITNESS,
   ORGANIZATION_RECORD_ENVELOPE_WRAPPER_BYTES,
   ORGANIZATION_RECORD_PERMANENT_REJECTION_CODES,
   isOrganizationApiValidationError,
@@ -79,6 +102,8 @@ export {
   validateOrganizationMembershipSummary,
   validateOrganizationPermissionCheckDecision,
   validateOrganizationPermissionCheckRequest,
+  validateOrganizationRecentDecisionsRequest,
+  validateOrganizationRecentDecisionsResponse,
   validateOrganizationSlackLinkBeginRequest,
   validateOrganizationSlackLinkBeginResponse,
   validateOrganizationSlackLinkCompleteRequest,
@@ -108,6 +133,9 @@ export {
   ORGANIZATION_API_INTERNAL_LIVE_DIRECTIVES_PATH,
   ORGANIZATION_API_INTERNAL_LIVE_RECEIPTS_PATH,
   ORGANIZATION_API_PERMISSION_CHECKS_PATH,
+  ORGANIZATION_API_RECENT_DECISIONS_PATH,
+  ORGANIZATION_API_READABLE_SEARCH_PATH,
+  ORGANIZATION_API_REVIEWER_RECENT_DECISIONS_PATH,
   ORGANIZATION_API_PROXY_AUTH_SCHEME,
   ORGANIZATION_API_RECORD_ENVELOPES_PATH,
   ORGANIZATION_API_SLACK_LINK_CHALLENGES_PATH,
@@ -132,6 +160,12 @@ export {
 } from './permission-check-request.js';
 export type { CreateOrganizationPermissionCheckRequestInput } from './permission-check-request.js';
 export {
+  createOrganizationRecentDecisionsRequest,
+  organizationRecentDecisionsRequestSha256,
+  verifyOrganizationRecentDecisionsRequest,
+} from './recent-decisions-request.js';
+export type { CreateOrganizationRecentDecisionsRequestInput } from './recent-decisions-request.js';
+export {
   createOrganizationSlackLinkBeginRequest,
   createOrganizationSlackLinkCompleteRequest,
   organizationSlackLinkBeginRequestSha256,
@@ -146,6 +180,65 @@ export type {
 export { organizationSlackLinkChallengeCodeSha256 } from './slack-link-challenge-code.js';
 export { organizationPermissionProviderEventSha256 } from './permission-check-event.js';
 export type { OrganizationPermissionProviderEventInput } from './permission-check-event.js';
+export {
+  RESTRICTED_REVIEWER_ALLOW_REASON_CODE,
+  REVIEWER_PERMISSION_DENIAL_REASON_CODES,
+  canonicalOrganizationReviewerPermissionCheckDecisionBytes,
+  createOrganizationReviewerPermissionCheckRequest,
+  organizationReviewerPermissionProviderEvent,
+  organizationReviewerPermissionProviderEventSha256,
+  validateOrganizationReviewerPermissionCheckDecision,
+  validateOrganizationReviewerPermissionCheckRequest,
+  verifyOrganizationReviewerPermissionCheckRequest,
+} from './reviewer-permission-check.js';
+export type {
+  CreateOrganizationReviewerPermissionCheckRequestInput,
+  OrganizationReviewerPermissionDenialReasonCodeV2,
+  OrganizationReviewerPermissionProviderEventInput,
+} from './reviewer-permission-check.js';
+export {
+  ORGANIZATION_MEMBER_READABLE_PERMISSION_DENIAL_REASON_CODES,
+  canonicalOrganizationMemberReadablePermissionCheckDecisionBytes,
+  createOrganizationMemberReadablePermissionCheckRequest,
+  organizationMemberReadablePermissionProviderEvent,
+  organizationMemberReadablePermissionProviderEventSha256,
+  validateOrganizationMemberReadablePermissionCheckDecision,
+  validateOrganizationMemberReadablePermissionCheckRequest,
+  verifyOrganizationMemberReadablePermissionCheckRequest,
+} from './organization-member-permission-check.js';
+export type {
+  CreateOrganizationMemberReadablePermissionCheckRequestInput,
+  OrganizationMemberReadablePermissionDenialReasonCodeV3,
+  OrganizationMemberReadablePermissionProviderEventInput,
+} from './organization-member-permission-check.js';
+export {
+  MAX_ORGANIZATION_REVIEWER_RECENT_DECISIONS_ITEMS,
+  MAX_ORGANIZATION_REVIEWER_RECENT_DECISIONS_REQUEST_BYTES,
+  MAX_ORGANIZATION_REVIEWER_RECENT_DECISIONS_RESPONSE_BYTES,
+  ORGANIZATION_REVIEWER_RECENT_DECISIONS_WITNESS,
+  createOrganizationReviewerRecentDecisionsRequest,
+  organizationReviewerRecentDecisionsRequestSha256,
+  validateOrganizationReviewerRecentDecisionsRequest,
+  validateOrganizationReviewerRecentDecisionsResponse,
+  verifyOrganizationReviewerRecentDecisionsRequest,
+} from './reviewer-recent-decisions.js';
+export type { CreateOrganizationReviewerRecentDecisionsRequestInput } from './reviewer-recent-decisions.js';
+export {
+  MAX_ORGANIZATION_READABLE_SEARCH_ITEMS,
+  MAX_ORGANIZATION_READABLE_SEARCH_QUERY_SCALARS,
+  MAX_ORGANIZATION_READABLE_SEARCH_REQUEST_BYTES,
+  MAX_ORGANIZATION_READABLE_SEARCH_RESPONSE_BYTES,
+  ORGANIZATION_MEMBER_READABLE_SEARCH_WITNESS,
+  ORGANIZATION_READABLE_SEARCH_CONTRACT_ID,
+  RESTRICTED_REVIEWER_READABLE_SEARCH_WITNESS,
+  canonicalOrganizationReadableSearchRequestBytes,
+  createOrganizationReadableSearchRequest,
+  organizationReadableSearchRequestSha256,
+  validateOrganizationReadableSearchRequest,
+  validateOrganizationReadableSearchResponse,
+  verifyOrganizationReadableSearchRequest,
+} from './readable-search.js';
+export type { CreateOrganizationReadableSearchRequestInput } from './readable-search.js';
 export {
   compareOrganizationInternalLiveReleaseVersions,
   createOrganizationInternalLiveDirectiveRequest,

@@ -368,6 +368,16 @@ describe('organization record submission sweep wiring', () => {
         calls.push('recordPublished');
         return resolvedView;
       },
+      async freezeApprovalPresentationContract(input) {
+        expect(this).toBe(store);
+        calls.push('freezeApprovalPresentationContract');
+        return input.contract;
+      },
+      readApprovalPresentationContract() {
+        expect(this).toBe(store);
+        calls.push('readApprovalPresentationContract');
+        return null;
+      },
       resolve: async () => {
         calls.push('resolve');
         return resolvedView;
@@ -390,8 +400,28 @@ describe('organization record submission sweep wiring', () => {
 
     expect(resolved).toBe(resolvedView);
     expect(fired).toBe(1);
+    const presentationContract = {
+      schema_version: 1,
+      kind: 'echo-slack-approval-presentation-contract',
+      mode: 'restricted-reviewer-v1',
+    } as never;
+    await expect(
+      wrapped.freezeApprovalPresentationContract?.({
+        approvalId: resolvedView.approval_id,
+        contract: presentationContract,
+      }),
+    ).resolves.toBe(presentationContract);
+    expect(
+      wrapped.readApprovalPresentationContract?.(resolvedView.approval_id),
+    ).toBeNull();
     // Reading is untouched: only a terminal resolution offers ingest a turn.
     await wrapped.ensureRequested({} as never);
     expect(fired).toBe(1);
+    expect(calls).toEqual([
+      'resolve',
+      'freezeApprovalPresentationContract',
+      'readApprovalPresentationContract',
+      'ensureRequested',
+    ]);
   });
 });

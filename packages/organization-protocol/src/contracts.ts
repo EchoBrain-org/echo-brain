@@ -360,6 +360,145 @@ export type OrganizationRecordEnvelopeV1 =
   | OrganizationRecordRejectionEnvelopeV1;
 
 /**
+ * The Authority-computed reviewer proof, quoted whole by the envelope. Every
+ * digest is recomputed centrally from the live provider card and the immutable
+ * integration-audit row: a client cannot nominate a reviewer, a policy, a
+ * semantic digest, or a proof digest.
+ */
+export interface OrganizationRecordReviewerAuthorizationV2 {
+  schema_version: 2;
+  kind: "echo-organization-authorization-evidence";
+  authority_id: string;
+  organization_id: string;
+  enrollment_id: string;
+  installation_id: string;
+  request_id: string;
+  approval_id: string;
+  action: "approve";
+  request_sha256: Sha256Digest;
+  provider_event_sha256: Sha256Digest;
+  allowed: true;
+  reason_code: "active_reviewer_restricted_notice_v1";
+  principal_id: string;
+  membership_id: string;
+  adapter_binding_id: string;
+  permission_grant_id: string;
+  evaluated_at: string;
+  authorization_audit_event_id: string;
+  authorization_audit_entry_sha256: Sha256Digest;
+  reviewer_release_draft_sha256: Sha256Digest;
+  approval_presentation_sha256: Sha256Digest;
+  semantic_intent_sha256: Sha256Digest;
+  message_presentation_sha256: Sha256Digest;
+}
+
+export interface OrganizationRecordReviewerV2 {
+  principal_id: string;
+  membership_id: string;
+  reviewed_by: string;
+  authorization: OrganizationRecordReviewerAuthorizationV2;
+}
+
+/**
+ * Reviewer intent is the frozen policy plus a commitment to the exact
+ * Authority-computed semantic bytes the human approved. `purpose_id` and
+ * `reconsider_after` are absent because V1 has no affordance for either; a
+ * future purpose or reconsideration feature requires a new exact version.
+ */
+export interface OrganizationRecordReviewerIntentV2 {
+  schema_version: 1;
+  visibility: "restricted";
+  policy_id: "restricted-reviewer-v1";
+  provenance: {
+    kind: "approval-surface-confirmation-v1";
+    semantic_intent_sha256: Sha256Digest;
+  };
+}
+
+export interface OrganizationRecordReviewerApprovalEnvelopePayloadV2 {
+  schema_version: 2;
+  kind: "echo-organization-record-envelope";
+  event_type: "approval";
+  envelope_id: string;
+  idempotency_key: string;
+  payload: OrganizationRecordApprovalPayloadV1;
+  reviewer: OrganizationRecordReviewerV2;
+  intent: OrganizationRecordReviewerIntentV2;
+  submitter: OrganizationRecordSubmitterV1;
+}
+
+export interface OrganizationRecordReviewerApprovalEnvelopeV2
+  extends OrganizationRecordReviewerApprovalEnvelopePayloadV2, SignedDocument {}
+
+export interface OrganizationRecordOrganizationMemberAuthorizationV3 {
+  schema_version: 3;
+  kind: "echo-organization-authorization-evidence";
+  policy_id: "organization-member-readable-v1";
+  policy_contract_sha256: Sha256Digest;
+  authority_id: string;
+  organization_id: string;
+  enrollment_id: string;
+  installation_id: string;
+  request_id: string;
+  approval_id: string;
+  action: "approve";
+  request_sha256: Sha256Digest;
+  provider_event_sha256: Sha256Digest;
+  allowed: true;
+  reason_code: "active_organization_member_readable_notice_v1";
+  principal_id: string;
+  membership_id: string;
+  adapter_binding_id: string;
+  permission_grant_id: string;
+  evaluated_at: string;
+  authorization_audit_event_id: string;
+  authorization_audit_entry_sha256: Sha256Digest;
+  release_draft_sha256: Sha256Digest;
+  approval_presentation_sha256: Sha256Digest;
+  semantic_intent_sha256: Sha256Digest;
+  message_presentation_sha256: Sha256Digest;
+}
+
+export interface OrganizationRecordOrganizationMemberV3 {
+  principal_id: string;
+  membership_id: string;
+  reviewed_by: string;
+  authorization: OrganizationRecordOrganizationMemberAuthorizationV3;
+}
+
+export interface OrganizationRecordOrganizationMemberIntentV3 {
+  schema_version: 1;
+  visibility: "organization-member-readable";
+  policy_id: "organization-member-readable-v1";
+  policy_contract_sha256: Sha256Digest;
+  provenance: { kind: "approval-surface-confirmation-v1"; semantic_intent_sha256: Sha256Digest };
+}
+
+export interface OrganizationRecordOrganizationMemberApprovalEnvelopePayloadV3 {
+  schema_version: 3;
+  kind: "echo-organization-record-envelope";
+  event_type: "approval";
+  envelope_id: string;
+  idempotency_key: string;
+  payload: OrganizationRecordApprovalPayloadV1;
+  reviewer: OrganizationRecordOrganizationMemberV3;
+  intent: OrganizationRecordOrganizationMemberIntentV3;
+  submitter: OrganizationRecordSubmitterV1;
+}
+
+export interface OrganizationRecordOrganizationMemberApprovalEnvelopeV3 extends OrganizationRecordOrganizationMemberApprovalEnvelopePayloadV3, SignedDocument {}
+
+/**
+ * Every envelope version the strict dispatcher admits. Unknown kinds and
+ * versions are not members: they halt ingest and derive rather than falling
+ * back to v1 or pilot behavior.
+ */
+export type OrganizationRecordEnvelopeAnyVersion =
+  | OrganizationRecordEnvelopeV1
+  | OrganizationRecordReviewerApprovalEnvelopeV2
+  | OrganizationRecordOrganizationMemberApprovalEnvelopeV3;
+
+/**
  * The authority's proof that one exact envelope reached one exact log
  * position. The signed `kind` and `schema_version` provide domain separation
  * with the shared `signed-document` primitive.

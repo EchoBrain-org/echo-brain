@@ -13,6 +13,7 @@
     { "path": "../../packages/organization-protocol" },
     { "path": "../../packages/organization-api" },
     { "path": "../organization-control-plane" },
-    { "path": "../organization-record" }
+    { "path": "../organization-record" },
+    { "path": "../organization-retrieval" }
   ]
 }
