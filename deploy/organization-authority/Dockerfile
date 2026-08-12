@@ -6,6 +6,7 @@ COPY packages ./packages
 COPY services/organization-authority ./services/organization-authority
 COPY services/organization-control-plane ./services/organization-control-plane
 COPY services/organization-record ./services/organization-record
+COPY services/organization-retrieval ./services/organization-retrieval
 RUN npm ci \
   && npm run build:workspaces \
   && npm prune --omit=dev
@@ -30,6 +31,9 @@ COPY --from=build /app/services/organization-control-plane/migrations ./services
 COPY --from=build /app/services/organization-record/package.json ./services/organization-record/package.json
 COPY --from=build /app/services/organization-record/dist ./services/organization-record/dist
 COPY --from=build /app/services/organization-record/migrations ./services/organization-record/migrations
+COPY --from=build /app/services/organization-retrieval/package.json ./services/organization-retrieval/package.json
+COPY --from=build /app/services/organization-retrieval/dist ./services/organization-retrieval/dist
+COPY --from=build /app/services/organization-retrieval/migrations ./services/organization-retrieval/migrations
 RUN install -d -m 1777 /echo-runtime
 USER node
 ENTRYPOINT ["node", "services/organization-authority/dist/main.js"]

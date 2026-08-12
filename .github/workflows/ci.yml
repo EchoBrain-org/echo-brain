@@ -67,6 +67,7 @@ jobs:
           compose="$deployment/compose.yaml"
           data="$deployment/data"
           status_file="$RUNNER_TEMP/authority-status.json"
+          rebuild_file="$RUNNER_TEMP/authority-readable-search-rebuild.json"
           duplicate_log="$RUNNER_TEMP/authority-duplicate.log"
           proxy_body="$RUNNER_TEMP/authority-proxy-body"
           test ! -e "$data"
@@ -86,6 +87,27 @@ jobs:
             --config /echo/authority.json \
             --state-dir /echo/state \
             --organization-name 'CI Organization'
+          # This stopped build crosses the Authority image's complete runtime
+          # workspace boundary and opens all three retrieval migration planes.
+          # It prevents a selective Docker COPY from passing compilation while
+          # omitting a reachable package or its filesystem assets.
+          docker compose --file "$compose" run --rm --no-deps authority \
+            rebuild-readable-search \
+            --config /echo/authority.json > "$rebuild_file"
+          node -e '
+            const fs = require("node:fs");
+            const value = JSON.parse(fs.readFileSync(process.argv[1], "utf8"));
+            if (
+              value.schema_version !== 1 ||
+              value.kind !== "echo-organization-authority-readable-search-rebuild" ||
+              value.record_head_position !== 0 ||
+              value.record_head_hash !== null ||
+              !/^sha256:[0-9a-f]{64}$/.test(value.generation_id) ||
+              !/^sha256:[0-9a-f]{64}$/.test(value.manifest_sha256)
+            ) {
+              throw new Error(`authority readable-search rebuild failed: ${JSON.stringify(value)}`);
+            }
+          ' "$rebuild_file"
           docker compose --file "$compose" run --rm --no-deps authority \
             status --config /echo/authority.json > "$status_file"
           node -e '
