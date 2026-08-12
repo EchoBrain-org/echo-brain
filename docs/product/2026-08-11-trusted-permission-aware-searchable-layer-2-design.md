@@ -7,6 +7,8 @@ hardening at `c0a498f7aebca9a5f067cc9a808a967297ff7d9d`; final local gates passe
 The Authority image's derived workspace/runtime closure and real stopped
 retrieval-migration smoke are pinned at
 `2da11a04f45ff503978dd6594fe2677964c93a9e`.
+The final minimum-V1 lean-down and real-clock authorization fix are pinned at
+`e94f94a508b85f78734646b220bdb3233b411738`.
 Source integration and remote publication do not constitute deployment,
 founder-live qualification, client-live qualification, or release.
 

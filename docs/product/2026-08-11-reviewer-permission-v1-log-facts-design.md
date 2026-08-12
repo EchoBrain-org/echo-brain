@@ -10,8 +10,11 @@ qualification, or release.
 `03167cfd66fa0b5fe983abbf266271178548efb8`. The integrated reviewed head is
 `c0a498f7aebca9a5f067cc9a808a967297ff7d9d`; it adds systemic permission-wire,
 audit-export authorization, and crash-recoverable lock hardening without
-broadening either approved policy. Code and schemas remain authoritative for
-landed behavior.
+broadening either approved policy. The final minimum-V1 lean-down is pinned at
+`e94f94a508b85f78734646b220bdb3233b411738`; it narrows unused private exports,
+removes a test-only retrieval guard bypass, and separates stable authorization
+state from the timestamped decision-audit snapshot. Code and schemas remain
+authoritative for landed behavior.
 
 **Local validation (2026-08-12):** `npm run check` is green: source boundary,
 typecheck, lint, 111 non-product test files with 1,171 tests, and 34 product test

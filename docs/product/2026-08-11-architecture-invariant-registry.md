@@ -8,6 +8,8 @@ baseline `588b42828d5c811a4ae51b21e881139109e7e46d` and integrated pre-push
 hardening `c0a498f7aebca9a5f067cc9a808a967297ff7d9d`. Authority container closure
 and retrieval-migration execution are pinned at
 `2da11a04f45ff503978dd6594fe2677964c93a9e`. Final local gates passed.
+The final minimum-V1 lean-down and stable authorization-state correction are
+pinned at `e94f94a508b85f78734646b220bdb3233b411738`.
 Source integration and remote publication do not constitute deployment,
 founder-live qualification, client-live qualification, or release.
 
