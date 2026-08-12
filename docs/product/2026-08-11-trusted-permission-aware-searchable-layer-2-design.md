@@ -4,6 +4,9 @@
 2026-08-12 and independently reviewed. Job B is locally committed at
 `588b42828d5c811a4ae51b21e881139109e7e46d`, with integrated pre-push
 hardening at `c0a498f7aebca9a5f067cc9a808a967297ff7d9d`; final local gates passed.
+The Authority image's derived workspace/runtime closure and real stopped
+retrieval-migration smoke are pinned at
+`2da11a04f45ff503978dd6594fe2677964c93a9e`.
 Remote source publication is not a merge, deployment, founder-live
 qualification, client-live qualification, or release.
 
@@ -24,7 +27,7 @@ primitive; Job A's complete suite must revalidate both composition changes.
 organization-member admission path, retrieval workspace, stopped rebuild,
 backup verification, and query-audit maintenance commands, plus product
 client/CLI wiring described below. Final local validation passed: `npm run
-check` (boundary, typecheck, lint; root 111 files/1,169 tests; product 34
+check` (boundary, typecheck, lint; root 111 files/1,170 tests; product 34
 files/333 tests), protocol suites (12 federation, 62 organization-protocol, 65
 organization-API), control-plane (123), record (121), retrieval (21), Authority
 (35 files/401 tests), integration (5 files/10 tests), and infrastructure (4
@@ -34,7 +37,12 @@ internal test seam was made file-local.
 The final pre-push review additionally closed canonical v2/v3 decision-wire
 ownership, continuing export authorization, and crash-recoverable lock
 publication at their shared protocol boundaries rather than route-specific
-patches.
+patches. The Authority container was then built locally and its real stopped
+`rebuild-readable-search` command successfully created the facts, lexical, and
+content planes from the image-shipped migrations. A metadata-derived
+architecture test now requires the selective image to include every root build
+workspace and every Authority-reachable runtime workspace plus migration
+assets.
 External restore reconciliation and founder-live rows remain operational gates,
 not implementation blockers. This is a local committed baseline, not an
 operational qualification.

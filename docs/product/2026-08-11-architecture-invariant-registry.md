@@ -5,7 +5,9 @@ from the product architecture documents and records the permission-pilot
 baseline plus locally committed Job A baseline
 `03167cfd66fa0b5fe983abbf266271178548efb8`, alongside locally committed Job B
 baseline `588b42828d5c811a4ae51b21e881139109e7e46d` and integrated pre-push
-hardening `c0a498f7aebca9a5f067cc9a808a967297ff7d9d`. Final local gates passed.
+hardening `c0a498f7aebca9a5f067cc9a808a967297ff7d9d`. Authority container closure
+and retrieval-migration execution are pinned at
+`2da11a04f45ff503978dd6594fe2677964c93a9e`. Final local gates passed.
 Remote source publication does not constitute merge, deployment,
 founder-live qualification, client-live qualification, or release.
 

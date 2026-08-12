@@ -14,7 +14,7 @@ broadening either approved policy. Code and schemas remain authoritative for
 landed behavior.
 
 **Local validation (2026-08-12):** `npm run check` is green: source boundary,
-typecheck, lint, 111 non-product test files with 1,169 tests, and 34 product test
+typecheck, lint, 111 non-product test files with 1,170 tests, and 34 product test
 files with 333 tests. The explicit workspace gates are also green: federation
 protocol 12, organization protocol 62, organization API 65, control plane 123,
 record 121, retrieval 21, Authority 401, integration 10, and infrastructure 29
