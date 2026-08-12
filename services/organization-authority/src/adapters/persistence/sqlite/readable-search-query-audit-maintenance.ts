@@ -192,14 +192,23 @@ export class SqliteReadableSearchQueryAuditMaintenanceRepository {
     try {
       const prior = lookup(this.database, binding);
       let result: AuthorizedReadableSearchQueryAuditExport | StoredReadableSearchQueryAuditControlEvent;
-      if (prior.status === 'found') result = command.kind === READABLE_SEARCH_QUERY_AUDIT_EXPORT_COMMAND_KIND ? this.reproduce(prior.event, command) : prior.event;
+      if (prior.status === 'found') {
+        if (command.kind === READABLE_SEARCH_QUERY_AUDIT_EXPORT_COMMAND_KIND) {
+          // A receipt makes the command idempotent, not the disclosure
+          // authority permanent. Preserve retry-before-freshness semantics,
+          // while requiring the exact configured Authority and owner to still
+          // be active before reconstructing plaintext.
+          this.assertCommandAuthorityAndCurrentOwner(command);
+          result = this.reproduce(prior.event, command);
+        } else result = prior.event;
+      }
       else {
         if (prior.status !== 'absent') throw new Error(prior.reason);
         const observedAt = observe(); timestampMillis(observedAt, 'readable search query audit maintenance time');
         if (observedAt < this.state.metadata().last_observed_at) throw new Error('authority clock regressed since the last committed write');
         this.database.prepare('UPDATE authority_metadata SET last_observed_at = ? WHERE singleton = 1').run(observedAt);
         transaction = new MaintenanceTransaction(this.database, this.state, binding, observedAt);
-        this.assertOwner(transaction, command); assertReadableSearchQueryAuditCommandFresh(command, observedAt);
+        this.assertCommandAuthorityAndCurrentOwner(command); assertReadableSearchQueryAuditCommandFresh(command, observedAt);
         if (command.kind === READABLE_SEARCH_QUERY_AUDIT_EXPORT_COMMAND_KIND) {
           if (command.until_exclusive > observedAt) throw new Error('readable search query audit export range may not extend into the future');
           const selected = transaction.auditBetween(command.from_inclusive, command.until_exclusive);
@@ -217,8 +226,13 @@ export class SqliteReadableSearchQueryAuditMaintenanceRepository {
       this.database.exec('COMMIT'); return result;
     } catch (error) { try { this.database.exec('ROLLBACK'); } catch {} throw error; } finally { transaction?.invalidate(); }
   }
-  private assertOwner(transaction: MaintenanceTransaction, command: ReadableSearchQueryAuditMaintenanceCommandV1): void {
-    const metadata = transaction.metadata(); const owner = transaction.membership(command.owner_membership_id);
+  /**
+   * Proves live disclosure authority inside the stopped maintenance
+   * transaction. A durable receipt proves idempotency only; every export call
+   * reaches this proof before it can reconstruct plaintext or return a status.
+   */
+  private assertCommandAuthorityAndCurrentOwner(command: ReadableSearchQueryAuditMaintenanceCommandV1): void {
+    const metadata = this.state.metadata(); const owner = this.state.membership(command.owner_membership_id);
     if (metadata.authority_id !== command.authority_id || metadata.organization_id !== command.organization_id || owner === undefined || owner.organization_id !== command.organization_id || owner.principal_id !== command.owner_principal_id || owner.membership_id !== command.owner_membership_id || owner.membership_type !== 'owner' || owner.status !== 'active' || owner.revoked_at !== null) throw new Error('readable search query audit maintenance requires the exact current active owner');
   }
   private reproduce(event: StoredReadableSearchQueryAuditControlEvent, command: ReadableSearchQueryAuditExportCommandV1): AuthorizedReadableSearchQueryAuditExport {

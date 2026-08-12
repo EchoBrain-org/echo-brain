@@ -183,6 +183,7 @@ export type { OrganizationPermissionProviderEventInput } from './permission-chec
 export {
   RESTRICTED_REVIEWER_ALLOW_REASON_CODE,
   REVIEWER_PERMISSION_DENIAL_REASON_CODES,
+  canonicalOrganizationReviewerPermissionCheckDecisionBytes,
   createOrganizationReviewerPermissionCheckRequest,
   organizationReviewerPermissionCheckRequestSha256,
   organizationReviewerPermissionProviderEvent,
@@ -198,6 +199,7 @@ export type {
 } from './reviewer-permission-check.js';
 export {
   ORGANIZATION_MEMBER_READABLE_PERMISSION_DENIAL_REASON_CODES,
+  canonicalOrganizationMemberReadablePermissionCheckDecisionBytes,
   createOrganizationMemberReadablePermissionCheckRequest,
   organizationMemberReadablePermissionCheckRequestSha256,
   organizationMemberReadablePermissionProviderEvent,

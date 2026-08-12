@@ -4,7 +4,9 @@ import type { IncomingMessage, Server, ServerResponse } from 'node:http';
 import { TextDecoder } from 'node:util';
 import {
   isOrganizationApiValidationError,
+  canonicalOrganizationMemberReadablePermissionCheckDecisionBytes,
   canonicalOrganizationReadableSearchRequestBytes,
+  canonicalOrganizationReviewerPermissionCheckDecisionBytes,
   MAX_ORGANIZATION_API_BODY_BYTES,
   ORGANIZATION_API_ACCESS_LEASES_PATH,
   ORGANIZATION_API_ADMIN_AUDIT_PATH,
@@ -1228,12 +1230,16 @@ export function createOrganizationAuthorityHttpServer(
               // A schema-v3 closed denial is a decided 200 response. Only
               // operational/provider/not-observed/audit failures reach this
               // catch and receive the fixed retryable body.
-              sendJson(
+              sendSerializedJson(
                 response,
                 200,
-                await checkPermission(
-                  organizationMemberCommand,
-                  lifecycle.shutdownController.signal,
+                Buffer.from(
+                  canonicalOrganizationMemberReadablePermissionCheckDecisionBytes(
+                    await checkPermission(
+                      organizationMemberCommand,
+                      lifecycle.shutdownController.signal,
+                    ),
+                  ),
                 ),
               );
             } catch {
@@ -1290,7 +1296,15 @@ export function createOrganizationAuthorityHttpServer(
                 reviewerCommand,
                 lifecycle.shutdownController.signal,
               );
-              sendJson(response, 200, decision);
+              sendSerializedJson(
+                response,
+                200,
+                Buffer.from(
+                  canonicalOrganizationReviewerPermissionCheckDecisionBytes(
+                    decision,
+                  ),
+                ),
+              );
             } catch {
               // Reviewer operational/provider/storage failures have one fixed
               // retryable wire result. The v1 branch below retains its existing

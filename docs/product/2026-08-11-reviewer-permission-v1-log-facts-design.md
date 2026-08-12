@@ -1572,9 +1572,14 @@ There is no HTTP or generic admin-query method.
 
 Before freshness or mutation, the stopped command transaction searches both
 control actions by the unique command ID. An existing row with the same
-`command_sha256` is an exact retry and returns the stored generic control event
-without authorizing a second disclosure or deleting again, even after the
-original freshness window. That exact stored row
+`command_sha256` is an exact retry. It skips time sampling and the original
+freshness check, but an export retry must still reprove the configured
+Authority/organization and the exact current active owner inside that stopped
+maintenance transaction before it can return or reconstruct plaintext. The
+durable receipt is idempotency evidence, never continuing disclosure authority.
+An exact expiry retry returns only its immutable non-plaintext control receipt,
+so it does not perform a new disclosure and does not need an owner recheck.
+The exact stored row
 `{audit_sequence, occurred_at, actor_kind, action, subject_id, detail_json}` is
 the immutable maintenance receipt; the baseline generic audit has no `aud_*`
 ID or entry hash, and A does not invent one. The maintenance repository adds
@@ -1637,13 +1642,20 @@ an audited non-delivery rather than an unaudited disclosure.
 
 The export port returns exactly `{control_event, delivery_status}`, where
 `control_event` is the stored generic audit event and `delivery_status` is
-`written|already_present|unavailable`. On exact retry, a matching existing
-file yields `already_present`; otherwise retained rows may be reselected only
-when recomputed row count, ordered-row digest, and exact export-byte digest all
-equal the stored event. If rows are no longer retained, any digest differs, or
-an I/O check fails, retry returns the stored event with `unavailable` and
-writes nothing. It never creates a replacement authorization event or claims
-historical bytes were reproduced.
+`written|already_present|unavailable`. An exact export retry first completes
+the live Authority/organization and owner proof above. Only then can a matching
+existing file yield `already_present`; otherwise retained rows may be
+reselected only when recomputed row count, ordered-row digest, and exact
+export-byte digest all equal the stored event. If rows are no longer retained,
+any digest differs, or an I/O check fails, retry returns the stored event with
+`unavailable` and writes nothing. It never creates a replacement authorization
+event or claims historical bytes were reproduced.
+
+The stopped locks establish a cooperative linearization boundary: all supported
+Authority mutators acquire the same runtime lock and are excluded until the
+transaction and any authorized publication finish. Direct or out-of-band
+database writes that bypass that protocol are state corruption at the
+threat-boundary, not a concurrent mutation model this contract can serialize.
 
 The output path is a normalized absolute CLI input whose canonical
 `output_path_sha256` is

@@ -486,3 +486,20 @@ export function validateOrganizationReviewerPermissionCheckDecision(
   }
   return record as unknown as OrganizationReviewerPermissionCheckDecisionV2;
 }
+
+/**
+ * The closed decision's exact RFC8785 wire representation. Presentation uses
+ * this API-owned helper so the schema-v2 success response remains bounded and
+ * cannot drift from the client's canonical-response contract.
+ */
+export function canonicalOrganizationReviewerPermissionCheckDecisionBytes(
+  value: unknown,
+): Uint8Array {
+  const bytes = canonicalJsonBytes(
+    validateOrganizationReviewerPermissionCheckDecision(value),
+  );
+  if (bytes.byteLength > MAX_ORGANIZATION_API_BODY_BYTES) {
+    fail('reviewer permission check decision exceeds its canonical byte bound');
+  }
+  return bytes;
+}

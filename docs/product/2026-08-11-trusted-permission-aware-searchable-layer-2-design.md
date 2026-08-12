@@ -1722,9 +1722,15 @@ The expiry command omits the range/output and uses kind
 `echo-authority-readable-search-query-audit-expiry-command`. Both use the same
 `sqa_*` namespace, full canonical `command_sha256`, current exact active-owner
 check, five-minute first-execution freshness, initialization/runtime locks,
-and retry-before-freshness rule as Job A. The same ID with different bytes or
-action is conflict. Only stopped `operator-state` imports the two concrete
-actions; no generic callback or escaped transaction exists.
+and retry-before-freshness rule as Job A. An exact export retry skips fresh time
+sampling but must reprove the configured Authority/organization and exact
+current active owner inside the stopped maintenance transaction before it can
+return or reconstruct plaintext: its receipt is durable idempotency evidence,
+never continuing disclosure authority. An exact expiry retry returns only its
+immutable non-plaintext receipt and therefore has no new disclosure or owner
+recheck. The same ID with different bytes or action is conflict. Only stopped
+`operator-state` imports the two concrete actions; no generic callback or
+escaped transaction exists.
 
 Export selects at most a positive 31-day non-future half-open range and emits
 the canonical document
@@ -1738,15 +1744,19 @@ output-path digest, row count, ordered-row digest, and export digest.
 
 The export authorization commits before a create-once mode-0600 file is
 published beneath a current-user mode-0700 directory outside managed state.
-Exact retry may reproduce only the byte-identical retained row set; it never
-overwrites. Expiry accepts no caller cutoff, uses its transaction-owned time,
+Only after the live retry proof may exact retry reproduce the byte-identical
+retained row set; it never overwrites. Expiry accepts no caller cutoff, uses its transaction-owned time,
 selects/deletes all and only complete rows whose `retain_until` has elapsed,
 and appends `permission.readable_search_query_audit_expired` with the exact
 command/owner/reason, `retention_days = 180`, cutoff, row count, and ordered-row
 digest in the same transaction. The persistent default-deny delete trigger is
 temporarily replaced only inside the maintenance savepoint and is restored on
 success or rollback. Both control rows are immutable and invisible to query-
-audit serving. These mechanics are identical to the finalized Job A governed
+audit serving. The stopped locks are a cooperative linearization boundary:
+supported Authority mutators acquire the same runtime lock and are excluded
+until transaction and authorized publication complete. Database writes that
+bypass that protocol are corruption at the threat-boundary, not a concurrency
+case this contract serializes. These mechanics are identical to the finalized Job A governed
 maintenance contract but use distinct command kinds, actions, details, and
 table; a shared primitive must satisfy both suites before either release.
 

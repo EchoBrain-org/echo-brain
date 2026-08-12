@@ -6,4 +6,3 @@ export interface OrganizationReviewerRecentDecisionsHttpApplication {
     request: OrganizationReviewerRecentDecisionsRequestV1,
   ): PreparedReviewerRecentDecisionsResponse;
 }
-

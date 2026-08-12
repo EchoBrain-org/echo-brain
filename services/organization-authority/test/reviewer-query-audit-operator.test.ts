@@ -1,11 +1,13 @@
 import { randomUUID } from 'node:crypto';
 import {
   chmodSync,
+  existsSync,
   lstatSync,
   mkdtempSync,
   readFileSync,
   realpathSync,
   rmSync,
+  unlinkSync,
   writeFileSync,
 } from 'node:fs';
 import { join } from 'node:path';
@@ -143,6 +145,21 @@ async function operatorFixture(): Promise<OperatorFixture> {
   };
 }
 
+function revokeOperatorOwner(context: OperatorFixture, revokedAt: string): void {
+  const database = new Database(readAuthorityRuntimeConfig(context.config).database_path);
+  try {
+    database
+      .prepare(
+        `UPDATE authority_memberships
+           SET status = 'revoked', revoked_at = ?, revocation_reason = ?
+         WHERE membership_id = ?`,
+      )
+      .run(revokedAt, 'owner access revoked after export', context.owner.membership_id);
+  } finally {
+    database.close();
+  }
+}
+
 describe('reviewer query-audit stopped operator commands', () => {
   it('publishes exact create-once 0600 export bytes after its durable receipt', async () => {
     const context = await operatorFixture();
@@ -188,6 +205,78 @@ describe('reviewer query-audit stopped operator commands', () => {
       control_event: first.control_event,
       delivery_status: 'already_present',
     });
+  });
+
+  it('does not republish a deleted reviewer export when its owner was revoked after the first export', async () => {
+    const context = await operatorFixture();
+    const observedAt = plus(context.last_observed_at, 1);
+    const command: ReviewerQueryAuditExportCommandV1 = {
+      schema_version: 1,
+      kind: 'echo-authority-reviewer-query-audit-export-command',
+      command_id: `qac_${randomUUID()}`,
+      authority_id: context.authority_id,
+      organization_id: context.organization_id,
+      owner_principal_id: context.owner.principal_id,
+      owner_membership_id: context.owner.membership_id,
+      requested_at: observedAt,
+      reason: 'bounded auditor export',
+      from_inclusive: plus(observedAt, -24 * 60 * 60 * 1000),
+      until_exclusive: observedAt,
+      output_path_sha256: reviewerQueryAuditOutputPathSha256(context.output),
+    };
+    const commandPath = join(context.root, 'export-command.json');
+    privateCanonicalCommand(commandPath, command);
+    await exportReviewerQueryAudit(context.config, commandPath, context.output, {
+      now: () => observedAt,
+    });
+    unlinkSync(context.output);
+    revokeOperatorOwner(context, plus(observedAt, 1));
+
+    await expect(
+      exportReviewerQueryAudit(context.config, commandPath, context.output, {
+        now: () => plus(observedAt, 60 * 60 * 1000),
+      }),
+    ).rejects.toThrow('exact current active owner');
+    expect(existsSync(context.output)).toBe(false);
+  });
+
+  it('denies an already-present reviewer export when its owner was revoked after first delivery', async () => {
+    const context = await operatorFixture();
+    const observedAt = plus(context.last_observed_at, 1);
+    const command: ReviewerQueryAuditExportCommandV1 = {
+      schema_version: 1,
+      kind: 'echo-authority-reviewer-query-audit-export-command',
+      command_id: `qac_${randomUUID()}`,
+      authority_id: context.authority_id,
+      organization_id: context.organization_id,
+      owner_principal_id: context.owner.principal_id,
+      owner_membership_id: context.owner.membership_id,
+      requested_at: observedAt,
+      reason: 'bounded auditor export',
+      from_inclusive: plus(observedAt, -24 * 60 * 60 * 1000),
+      until_exclusive: observedAt,
+      output_path_sha256: reviewerQueryAuditOutputPathSha256(context.output),
+    };
+    const commandPath = join(context.root, 'export-command.json');
+    privateCanonicalCommand(commandPath, command);
+    const first = await exportReviewerQueryAudit(
+      context.config,
+      commandPath,
+      context.output,
+      { now: () => observedAt },
+    );
+    const retainedBytes = readFileSync(context.output);
+    revokeOperatorOwner(context, plus(observedAt, 1));
+
+    await expect(
+      exportReviewerQueryAudit(context.config, commandPath, context.output, {
+        now: () => plus(observedAt, 60 * 60 * 1000),
+      }),
+    ).rejects.toThrow('exact current active owner');
+    // The pre-existing file may represent prior possession, but this invocation
+    // received neither a success status nor a newly authorized disclosure.
+    expect(first.delivery_status).toBe('written');
+    expect(readFileSync(context.output)).toEqual(retainedBytes);
   });
 
   it('runs expiry without a caller cutoff and exact-retries its stored receipt', async () => {
@@ -286,6 +375,79 @@ describe('readable-search query-audit stopped operator commands', () => {
     const unavailable = await exportReadableSearchQueryAudit(context.config, commandPath, output, { now: () => plus(observedAt, 2 * 60 * 60 * 1000) });
     expect(unavailable).toEqual({ control_event: first.control_event, delivery_status: 'unavailable' });
     expect(readFileSync(output, 'utf8')).toBe('different retained bytes');
+  });
+
+  it('does not republish a deleted readable-search export when its owner was revoked after the first export', async () => {
+    const context = await operatorFixture();
+    const observedAt = plus(context.last_observed_at, 1);
+    const output = join(context.root, 'readable-search-query-audit.json');
+    const command: ReadableSearchQueryAuditExportCommandV1 = {
+      schema_version: 1,
+      kind: 'echo-authority-readable-search-query-audit-export-command',
+      command_id: `sqa_${randomUUID()}`,
+      authority_id: context.authority_id,
+      organization_id: context.organization_id,
+      owner_principal_id: context.owner.principal_id,
+      owner_membership_id: context.owner.membership_id,
+      requested_at: observedAt,
+      reason: 'bounded readable audit export',
+      from_inclusive: plus(observedAt, -24 * 60 * 60 * 1000),
+      until_exclusive: observedAt,
+      output_path_sha256: readableSearchQueryAuditOutputPathSha256(output),
+    };
+    const commandPath = join(context.root, 'readable-export-command.json');
+    privateCanonicalCommand(commandPath, command);
+    await exportReadableSearchQueryAudit(context.config, commandPath, output, {
+      now: () => observedAt,
+    });
+    unlinkSync(output);
+    revokeOperatorOwner(context, plus(observedAt, 1));
+
+    await expect(
+      exportReadableSearchQueryAudit(context.config, commandPath, output, {
+        now: () => plus(observedAt, 60 * 60 * 1000),
+      }),
+    ).rejects.toThrow('exact current active owner');
+    expect(existsSync(output)).toBe(false);
+  });
+
+  it('denies an already-present readable-search export when its owner was revoked after first delivery', async () => {
+    const context = await operatorFixture();
+    const observedAt = plus(context.last_observed_at, 1);
+    const output = join(context.root, 'readable-search-query-audit.json');
+    const command: ReadableSearchQueryAuditExportCommandV1 = {
+      schema_version: 1,
+      kind: 'echo-authority-readable-search-query-audit-export-command',
+      command_id: `sqa_${randomUUID()}`,
+      authority_id: context.authority_id,
+      organization_id: context.organization_id,
+      owner_principal_id: context.owner.principal_id,
+      owner_membership_id: context.owner.membership_id,
+      requested_at: observedAt,
+      reason: 'bounded readable audit export',
+      from_inclusive: plus(observedAt, -24 * 60 * 60 * 1000),
+      until_exclusive: observedAt,
+      output_path_sha256: readableSearchQueryAuditOutputPathSha256(output),
+    };
+    const commandPath = join(context.root, 'readable-export-command.json');
+    privateCanonicalCommand(commandPath, command);
+    const first = await exportReadableSearchQueryAudit(
+      context.config,
+      commandPath,
+      output,
+      { now: () => observedAt },
+    );
+    const retainedBytes = readFileSync(output);
+    revokeOperatorOwner(context, plus(observedAt, 1));
+
+    await expect(
+      exportReadableSearchQueryAudit(context.config, commandPath, output, {
+        now: () => plus(observedAt, 60 * 60 * 1000),
+      }),
+    ).rejects.toThrow('exact current active owner');
+    // Existing bytes can evidence prior possession only. This call was denied.
+    expect(first.delivery_status).toBe('written');
+    expect(readFileSync(output)).toEqual(retainedBytes);
   });
 
   it('has no caller cutoff and exact-retries expiry', async () => {

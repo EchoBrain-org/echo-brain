@@ -396,6 +396,54 @@ describe('closed stopped-state reviewer query audit maintenance', () => {
     });
   });
 
+  it('denies a receipt retry after its exact owner is revoked before reconstructing bytes', () => {
+    const context = fixture();
+    appendAllow(context.repository, '2026-01-01T12:00:00.000Z');
+    context.repository.close();
+    const command = exportCommand(context, '2026-01-02T00:00:00.000Z');
+    const maintenance = context.maintenance();
+    const first = maintenance.authorizeExport(
+      command,
+      () => '2026-01-02T00:00:00.000Z',
+    );
+    expect(first.export_bytes).not.toBeNull();
+
+    rawDatabase(context.path, (database) => {
+      database
+        .prepare(
+          `UPDATE authority_memberships
+             SET status = 'revoked', revoked_at = ?, revocation_reason = ?
+           WHERE membership_id = ?`,
+        )
+        .run(
+          '2026-01-02T00:00:01.000Z',
+          'owner access revoked after export',
+          context.owner.membership_id,
+        );
+    });
+
+    let retryTimeSamples = 0;
+    expect(() =>
+      maintenance.authorizeExport(command, () => {
+        retryTimeSamples += 1;
+        return '2030-01-01T00:00:00.000Z';
+      }),
+    ).toThrow('exact current active owner');
+    expect(retryTimeSamples).toBe(0);
+    rawDatabase(context.path, (database) => {
+      expect(
+        (
+          database
+            .prepare(
+              `SELECT COUNT(*) AS total FROM authority_audit_log
+                WHERE action = ?`,
+            )
+            .get(REVIEWER_QUERY_AUDIT_EXPORT_ACTION) as { total: number }
+        ).total,
+      ).toBe(1);
+    });
+  });
+
   it('rejects stale first execution, a future range, wrong owner, and command-id reuse', () => {
     const context = fixture();
     context.repository.close();

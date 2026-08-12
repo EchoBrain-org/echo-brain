@@ -5,7 +5,6 @@ import {
   mkdir,
   open,
   readdir,
-  readFile,
   rmdir,
   unlink,
   type FileHandle,
@@ -31,6 +30,23 @@ export interface ProcessFileLockOptions {
   retryMs: number;
   /** Internal deterministic interleaving hook used only by the lock tests. */
   afterDirectoryCreate?: () => Promise<void>;
+  /** Internal deterministic interleaving hook used only by the lock tests. */
+  afterOwnerCreate?: () => Promise<void>;
+  /** Internal deterministic interleaving hook used only by the lock tests. */
+  afterOwnerUnlink?: () => Promise<void>;
+  /** Internal deterministic interleaving hook used only by the lock tests. */
+  afterStaleOwnerUnlink?: () => Promise<void>;
+  /** Internal deterministic interleaving hook used only by the lock tests. */
+  afterValidSuccessorObserved?: () => Promise<void>;
+}
+
+const OWNER_TOKEN =
+  /^(\d+)-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
+
+interface ObservedOwner {
+  pid: number;
+  token: string;
+  state: Awaited<ReturnType<typeof lstat>>;
 }
 
 function errno(error: unknown): string | undefined {
@@ -52,31 +68,231 @@ async function delay(milliseconds: number): Promise<void> {
   await new Promise<void>((resolve) => setTimeout(resolve, milliseconds));
 }
 
-async function removeEmptyDirectory(path: string): Promise<void> {
-  try {
-    await rmdir(path);
-  } catch (error) {
-    if (errno(error) !== 'ENOENT' && errno(error) !== 'ENOTEMPTY') throw error;
+function busy(): ProcessFileLockError {
+  return new ProcessFileLockError('busy', 'process lock is busy');
+}
+
+/** Invalid caller configuration is an operational error, not lock corruption. */
+function assertValidOptions(options: ProcessFileLockOptions): void {
+  for (const [name, value] of Object.entries({
+    timeoutMs: options.timeoutMs,
+    staleMs: options.staleMs,
+    retryMs: options.retryMs,
+  })) {
+    if (!Number.isSafeInteger(value) || value < 0) {
+      throw new ProcessFileLockError(
+        'io',
+        `process lock ${name} must be a nonnegative safe integer`,
+      );
+    }
   }
+}
+
+async function retryBefore(
+  deadline: number,
+  retryMs: number,
+): Promise<void> {
+  const remaining = deadline - Date.now();
+  if (remaining <= 0) throw busy();
+  await delay(Math.min(Math.max(0, retryMs), remaining));
+  if (Date.now() >= deadline) throw busy();
+}
+
+function assertSafeDirectory(state: Awaited<ReturnType<typeof lstat>>): void {
+  if (state.isSymbolicLink() || !state.isDirectory()) {
+    throw new ProcessFileLockError('unsafe', 'process lock path is unsafe');
+  }
+  assertPrivateOwnedState(state, 0o700, 'process lock directory');
+}
+
+function assertPrivateOwnedState(
+  state: Awaited<ReturnType<typeof lstat>>,
+  expectedMode: number,
+  description: string,
+): void {
+  if ((Number(state.mode) & 0o777) !== expectedMode) {
+    throw new ProcessFileLockError('unsafe', `${description} mode is unsafe`);
+  }
+  if (
+    typeof process.getuid === 'function' &&
+    Number(state.uid) !== process.getuid()
+  ) {
+    throw new ProcessFileLockError('unsafe', `${description} owner is unsafe`);
+  }
+}
+
+/**
+ * Read and validate the owner record through a no-follow descriptor. The
+ * syntactically valid token filename is the complete atomic owner record: its
+ * O_EXCL directory entry is publication. File contents are intentionally
+ * ignored for compatibility with older JSON-filled owners and so a crash
+ * between creation and a payload write cannot create an invalid half-owner.
+ */
+async function readOwner(
+  ownerPath: string,
+  token: string,
+): Promise<ObservedOwner> {
+  const match = OWNER_TOKEN.exec(token);
+  if (match === null) {
+    throw new ProcessFileLockError(
+      'unsafe',
+      'process lock owner token is invalid',
+    );
+  }
+
+  let handle: FileHandle | undefined;
+  try {
+    const pathState = await lstat(ownerPath);
+    if (pathState.isSymbolicLink() || !pathState.isFile()) {
+      throw new ProcessFileLockError('unsafe', 'process lock owner is unsafe');
+    }
+    assertPrivateOwnedState(pathState, 0o600, 'process lock owner');
+    handle = await open(
+      ownerPath,
+      constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK,
+    );
+    const state = await handle.stat();
+    if (!state.isFile()) {
+      throw new ProcessFileLockError('unsafe', 'process lock owner is unsafe');
+    }
+    assertPrivateOwnedState(state, 0o600, 'process lock owner');
+    const pid = Number(match[1]);
+    if (!Number.isSafeInteger(pid) || pid <= 0) {
+      throw new ProcessFileLockError(
+        'unsafe',
+        'process lock owner token is invalid',
+      );
+    }
+    return { pid, token, state };
+  } catch (error) {
+    if (error instanceof ProcessFileLockError) throw error;
+    if (errno(error) === 'ELOOP' || errno(error) === 'ENXIO') {
+      throw new ProcessFileLockError('unsafe', 'process lock owner is unsafe', {
+        cause: error,
+      });
+    }
+    throw error;
+  } finally {
+    await handle?.close().catch(() => undefined);
+  }
+}
+
+/**
+ * The directory has only two legal states: empty while it is being
+ * initialized, or exactly one validated owner token.  This is deliberately
+ * stricter than treating ENOTEMPTY as a successful cleanup: lock parents can
+ * be shared-writable, so arbitrary entries are an integrity failure.
+ */
+async function inspectLockDirectory(
+  lockDirectory: string,
+): Promise<ObservedOwner | undefined> {
+  const directoryState = await lstat(lockDirectory);
+  assertSafeDirectory(directoryState);
+  const entries = await readdir(lockDirectory);
+  if (entries.length === 0) return undefined;
+  if (entries.length !== 1) {
+    throw new ProcessFileLockError(
+      'unsafe',
+      'process lock contains unexpected entries',
+    );
+  }
+  return await readOwner(join(lockDirectory, entries[0]!), entries[0]!);
+}
+
+/**
+ * Remove a directory only while it is proved empty.  Once our exact owner
+ * token has been unlinked, another initializer may publish a successor before
+ * rmdir.  We accept only that fully validated successor; any other ENOTEMPTY
+ * is unsafe, rather than a successful release or recovery.
+ */
+async function removeOnlyProvenEmptyDirectory(
+  lockDirectory: string,
+  deadline: number,
+  afterValidSuccessorObserved?: () => Promise<void>,
+): Promise<boolean> {
+  let successorValidationAfterDeadlineAvailable = true;
+  for (;;) {
+    let owner: ObservedOwner | undefined;
+    try {
+      owner = await inspectLockDirectory(lockDirectory);
+    } catch (error) {
+      if (errno(error) === 'ENOENT') return false;
+      throw error;
+    }
+    if (owner !== undefined) {
+      await afterValidSuccessorObserved?.();
+      return false;
+    }
+
+    try {
+      await rmdir(lockDirectory);
+      return true;
+    } catch (error) {
+      if (errno(error) === 'ENOENT') return false;
+      if (errno(error) !== 'ENOTEMPTY') throw error;
+      // A contender changed the directory after our empty observation.  The
+      // next inspection validates a real successor or fails closed on junk.
+      if (Date.now() >= deadline) {
+        if (!successorValidationAfterDeadlineAvailable) throw busy();
+        successorValidationAfterDeadlineAvailable = false;
+      }
+    }
+  }
+}
+
+async function removeExactOwnerAndSettle(
+  lockDirectory: string,
+  ownerPath: string,
+  deadline: number,
+): Promise<boolean> {
+  let ownerRemoved = false;
+  try {
+    await unlink(ownerPath);
+    ownerRemoved = true;
+  } catch (error) {
+    if (errno(error) !== 'ENOENT') throw error;
+  }
+  return (
+    (await removeOnlyProvenEmptyDirectory(lockDirectory, deadline)) ||
+    ownerRemoved
+  );
 }
 
 /**
  * Acquire a crash-recoverable, cross-process lock.
  *
- * The lock is a directory containing exactly one owner file whose filename is
- * the ownership token. Stale recovery unlinks that exact token before removing
- * the directory. A contender that observed an older owner can therefore never
- * delete a newer owner's token, closing the usual check-then-unlink race.
+ * A directory contains exactly one owner file.  Ownership begins when that
+ * file is created with O_EXCL and ends when that exact token is unlinked.
+ * Directory removal is only opportunistic cleanup, never a lock transition:
+ * it may remove a proved-empty initialization generation, but it cannot
+ * remove a successor owner or silently bless unexpected directory contents.
  */
 export async function acquireProcessFileLock(
   lockDirectory: string,
   options: ProcessFileLockOptions,
 ): Promise<() => Promise<void>> {
+  assertValidOptions(options);
   const token = `${process.pid}-${randomUUID()}`;
   const ownerPath = join(lockDirectory, token);
   const deadline = Date.now() + options.timeoutMs;
+  let attempted = false;
+  let immediateAttemptAfterProgress = false;
 
   for (;;) {
+    let usingImmediateAttemptAfterProgress = false;
+    if (
+      attempted &&
+      Date.now() >= deadline &&
+      !immediateAttemptAfterProgress
+    ) {
+      throw busy();
+    }
+    if (attempted && Date.now() >= deadline) {
+      immediateAttemptAfterProgress = false;
+      usingImmediateAttemptAfterProgress = true;
+    }
+    attempted = true;
+
     let created = false;
     try {
       await mkdir(lockDirectory, { mode: 0o700 });
@@ -90,27 +306,24 @@ export async function acquireProcessFileLock(
     }
 
     if (created) {
-      let createdState;
+      let createdState: Awaited<ReturnType<typeof lstat>>;
       try {
         createdState = await lstat(lockDirectory);
-        if (!createdState.isDirectory() || createdState.isSymbolicLink()) {
-          throw new ProcessFileLockError(
-            'unsafe',
-            'new process lock directory is unsafe',
-          );
-        }
+        assertSafeDirectory(createdState);
         await options.afterDirectoryCreate?.();
       } catch (error) {
-        if (errno(error) === 'ENOENT') continue;
+        if (errno(error) === 'ENOENT') {
+          await retryBefore(deadline, options.retryMs);
+          continue;
+        }
         if (error instanceof ProcessFileLockError) throw error;
         throw new ProcessFileLockError(
           'io',
           'cannot inspect new process lock',
-          {
-            cause: error,
-          },
+          { cause: error },
         );
       }
+
       let handle: FileHandle | undefined;
       try {
         handle = await open(
@@ -121,46 +334,52 @@ export async function acquireProcessFileLock(
             constants.O_NOFOLLOW,
           0o600,
         );
-        await handle.writeFile(
-          `${JSON.stringify({ pid: process.pid, token })}\n`,
-          'utf8',
-        );
-        await handle.sync();
+        await options.afterOwnerCreate?.();
         await handle.close();
         handle = undefined;
 
         const currentState = await lstat(lockDirectory);
-        const currentEntries = await readdir(lockDirectory);
+        assertSafeDirectory(currentState);
         if (
           currentState.dev !== createdState.dev ||
-          currentState.ino !== createdState.ino ||
-          currentEntries.length !== 1 ||
-          currentEntries[0] !== token
+          currentState.ino !== createdState.ino
         ) {
-          // The empty initialization directory was replaced or another owner
-          // appeared before publication. Remove only our unguessable token;
-          // never remove the replacement directory or its owner's token.
-          try {
-            await unlink(ownerPath);
-          } catch {
-            // A replacement may already have removed our token.
-          }
+          // The initialization directory was replaced or a successor won
+          // publication.  Our token is still exact, so it is the only entry
+          // this contender is allowed to unlink.
+          await removeExactOwnerAndSettle(lockDirectory, ownerPath, deadline);
+          await retryBefore(deadline, options.retryMs);
+          continue;
+        }
+
+        const owner = await inspectLockDirectory(lockDirectory);
+        if (
+          owner === undefined ||
+          owner.pid !== process.pid ||
+          owner.token !== token
+        ) {
+          await removeExactOwnerAndSettle(lockDirectory, ownerPath, deadline);
+          await retryBefore(deadline, options.retryMs);
           continue;
         }
 
         return async () => {
           try {
-            const owner = JSON.parse(await readFile(ownerPath, 'utf8')) as {
-              token?: unknown;
-            };
-            if (owner.token !== token) {
+            const releaseDeadline = Date.now() + options.timeoutMs;
+            const owner = await readOwner(ownerPath, token);
+            if (owner.pid !== process.pid) {
               throw new ProcessFileLockError(
                 'compromised',
                 'process lock ownership changed before release',
               );
             }
             await unlink(ownerPath);
-            await rmdir(lockDirectory);
+            await options.afterOwnerUnlink?.();
+            await removeOnlyProvenEmptyDirectory(
+              lockDirectory,
+              releaseDeadline,
+              options.afterValidSuccessorObserved,
+            );
           } catch (error) {
             if (error instanceof ProcessFileLockError) throw error;
             throw new ProcessFileLockError(
@@ -173,129 +392,113 @@ export async function acquireProcessFileLock(
       } catch (error) {
         await handle?.close().catch(() => undefined);
         try {
-          await unlink(ownerPath);
-        } catch {
-          // The directory may have been removed while still empty.
+          await removeExactOwnerAndSettle(lockDirectory, ownerPath, deadline);
+        } catch (cleanupError) {
+          if (cleanupError instanceof ProcessFileLockError) throw cleanupError;
+          throw new ProcessFileLockError(
+            'io',
+            'cannot clean up process lock initialization',
+            { cause: cleanupError },
+          );
         }
-        try {
-          const currentState = await lstat(lockDirectory);
-          if (
-            currentState.dev === createdState.dev &&
-            currentState.ino === createdState.ino
-          ) {
-            await removeEmptyDirectory(lockDirectory);
-          }
-        } catch {
-          // The initialization directory was already removed or replaced.
+        if (error instanceof ProcessFileLockError) throw error;
+        if (errno(error) === 'ENOENT' || errno(error) === 'EEXIST') {
+          await retryBefore(deadline, options.retryMs);
+          continue;
         }
-        if (errno(error) === 'ENOENT') continue;
         throw new ProcessFileLockError('io', 'cannot establish process lock', {
           cause: error,
         });
       }
     }
 
-    let lockState;
+    let owner: ObservedOwner | undefined;
     try {
-      lockState = await lstat(lockDirectory);
+      owner = await inspectLockDirectory(lockDirectory);
     } catch (error) {
-      if (errno(error) === 'ENOENT') continue;
+      if (errno(error) === 'ENOENT') {
+        await retryBefore(deadline, options.retryMs);
+        continue;
+      }
+      if (error instanceof ProcessFileLockError) throw error;
       throw new ProcessFileLockError('io', 'cannot inspect process lock', {
         cause: error,
       });
     }
-    if (lockState.isSymbolicLink() || !lockState.isDirectory()) {
-      throw new ProcessFileLockError('unsafe', 'process lock path is unsafe');
-    }
 
-    let entries: string[];
-    try {
-      entries = await readdir(lockDirectory);
-    } catch (error) {
-      if (errno(error) === 'ENOENT') continue;
-      throw new ProcessFileLockError(
-        'io',
-        'cannot inspect process lock owner',
-        {
+    if (owner === undefined) {
+      let directoryRemoved: boolean;
+      try {
+        directoryRemoved = await removeOnlyProvenEmptyDirectory(
+          lockDirectory,
+          deadline,
+          options.afterValidSuccessorObserved,
+        );
+      } catch (error) {
+        if (error instanceof ProcessFileLockError) throw error;
+        throw new ProcessFileLockError('io', 'cannot clean process lock', {
           cause: error,
-        },
-      );
-    }
-    if (entries.length === 0) {
-      await removeEmptyDirectory(lockDirectory);
+        });
+      }
+      if (
+        directoryRemoved &&
+        Date.now() >= deadline &&
+        !usingImmediateAttemptAfterProgress
+      ) {
+        immediateAttemptAfterProgress = true;
+        continue;
+      }
+      await retryBefore(deadline, options.retryMs);
       continue;
     }
-    if (entries.length !== 1) {
-      throw new ProcessFileLockError(
-        'unsafe',
-        'process lock contains unexpected entries',
-      );
-    }
-    const match =
-      /^(\d+)-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.exec(
-        entries[0]!,
-      );
-    if (match === null) {
-      throw new ProcessFileLockError(
-        'unsafe',
-        'process lock owner token is invalid',
-      );
-    }
-    const observedOwnerPath = join(lockDirectory, entries[0]!);
-    let ownerState;
-    try {
-      ownerState = await lstat(observedOwnerPath);
-    } catch (error) {
-      if (errno(error) === 'ENOENT') continue;
-      throw new ProcessFileLockError(
-        'io',
-        'cannot inspect process lock owner',
-        {
-          cause: error,
-        },
-      );
-    }
-    if (ownerState.isSymbolicLink() || !ownerState.isFile()) {
-      throw new ProcessFileLockError('unsafe', 'process lock owner is unsafe');
-    }
 
-    const ownerPid = Number(match[1]);
     if (
-      Date.now() - ownerState.mtimeMs > options.staleMs &&
-      !processIsAlive(ownerPid)
+      Date.now() - Number(owner.state.mtimeMs) > options.staleMs &&
+      !processIsAlive(owner.pid)
     ) {
+      const observedOwnerPath = join(
+        lockDirectory,
+        owner.token,
+      );
+      let ownerRemoved = false;
       try {
-        // Only the contender that successfully removes this exact token may
-        // remove the now-empty directory. Other contenders observe ENOENT and
-        // restart without touching a replacement owner's different token.
+        // Recovery unlinks the exact observed token. A concurrent recovery
+        // can only produce ENOENT; it can never name a successor token. Node
+        // has no descriptor-relative unlink, so a same-identity actor that
+        // can mutate this private directory out of band remains outside this
+        // cooperative local-filesystem threat model.
         await unlink(observedOwnerPath);
+        ownerRemoved = true;
+        await options.afterStaleOwnerUnlink?.();
+        await removeOnlyProvenEmptyDirectory(
+          lockDirectory,
+          deadline,
+          options.afterValidSuccessorObserved,
+        );
       } catch (error) {
-        if (errno(error) === 'ENOENT') continue;
+        if (errno(error) === 'ENOENT') {
+          await retryBefore(deadline, options.retryMs);
+          continue;
+        }
+        if (error instanceof ProcessFileLockError) throw error;
         throw new ProcessFileLockError(
           'io',
           'cannot recover stale process lock',
-          {
-            cause: error,
-          },
+          { cause: error },
         );
       }
-      try {
-        await rmdir(lockDirectory);
-      } catch (error) {
-        if (errno(error) !== 'ENOENT') {
-          throw new ProcessFileLockError(
-            'unsafe',
-            'stale process lock changed during recovery',
-            { cause: error },
-          );
-        }
+      if (
+        ownerRemoved &&
+        Date.now() >= deadline &&
+        !usingImmediateAttemptAfterProgress
+      ) {
+        immediateAttemptAfterProgress = true;
+        continue;
       }
+      await retryBefore(deadline, options.retryMs);
       continue;
     }
 
-    if (Date.now() >= deadline) {
-      throw new ProcessFileLockError('busy', 'process lock is busy');
-    }
-    await delay(options.retryMs);
+    await retryBefore(deadline, options.retryMs);
   }
 }

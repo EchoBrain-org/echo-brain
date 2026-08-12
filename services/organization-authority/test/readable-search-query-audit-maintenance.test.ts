@@ -74,6 +74,22 @@ describe('stopped readable-search query-audit maintenance', () => {
     expect(samples).toBe(1); expect(retry.control_event).toEqual(first.control_event);
   });
 
+  it('denies a receipt retry after its exact owner is revoked before reconstructing bytes', () => {
+    const context = fixture(); append(context, '2026-01-01T12:00:00.123Z'); context.repository.close();
+    const command = exportCommand(context, '2026-01-02T00:00:00.000Z'); const store = context.open();
+    const first = store.authorizeExport(command, () => '2026-01-02T00:00:00.000Z');
+    expect(first.export_bytes).not.toBeNull();
+    raw(context.path, (database) => {
+      database.prepare(`UPDATE authority_memberships SET status = 'revoked', revoked_at = ?, revocation_reason = ? WHERE membership_id = ?`).run(
+        '2026-01-02T00:00:01.000Z', 'owner access revoked after export', context.owner.membership_id,
+      );
+    });
+    let retryTimeSamples = 0;
+    expect(() => store.authorizeExport(command, () => { retryTimeSamples += 1; return '2030-01-01T00:00:00.000Z'; })).toThrow('exact current active owner');
+    expect(retryTimeSamples).toBe(0);
+    raw(context.path, (database) => expect(database.prepare("SELECT COUNT(*) AS total FROM authority_audit_log WHERE action = 'permission.readable_search_query_audit_export_authorized'").get()).toEqual({ total: 1 }));
+  });
+
   it('expires all-and-only exact-millisecond due rows with no caller cutoff and restores default deny', () => {
     const context = fixture(); const old = append(context, '2026-01-01T00:00:00.123Z'); const future = append(context, '2026-01-01T00:00:00.124Z'); context.repository.close(); const cutoff = readableSearchQueryAuditRetainUntil(old.occurred_at);
     const event = context.open().expire(expiryCommand(context, cutoff), () => cutoff); expect(event.action).toBe('permission.readable_search_query_audit_expired');

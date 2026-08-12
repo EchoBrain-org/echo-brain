@@ -2,6 +2,7 @@ import { Buffer } from 'node:buffer';
 import { generateKeyPairSync, sign as signMessage } from 'node:crypto';
 import { describe, expect, it } from 'vitest';
 import {
+  canonicalJson,
   canonicalSha256,
   normalizeP256LowS,
   p256KeyId,
@@ -17,6 +18,7 @@ import {
   ORGANIZATION_API_REVIEWER_RECENT_DECISIONS_PATH,
   ORGANIZATION_REVIEWER_RECENT_DECISIONS_WITNESS,
   REVIEWER_PERMISSION_DENIAL_REASON_CODES,
+  canonicalOrganizationReviewerPermissionCheckDecisionBytes,
   createOrganizationReviewerPermissionCheckRequest,
   createOrganizationReviewerRecentDecisionsRequest,
   organizationReviewerPermissionProviderEventSha256,
@@ -314,6 +316,31 @@ describe('reviewer permission check decision', () => {
         message_presentation_sha256: null,
       }),
     ).toThrow('denial reason_code is unsupported');
+  });
+
+  it('serializes both allowed and denied closed decisions as their exact bounded canonical bytes', () => {
+    const denial = {
+      ...allow,
+      allowed: false,
+      reason_code: 'provider_identity_mismatch',
+      principal_id: null,
+      membership_id: null,
+      adapter_binding_id: null,
+      permission_grant_id: null,
+      authorization_audit_event_id: null,
+      authorization_audit_entry_sha256: null,
+      reviewer_release_draft_sha256: null,
+      approval_presentation_sha256: null,
+      semantic_intent_sha256: null,
+      message_presentation_sha256: null,
+    } as const;
+    for (const decision of [allow, denial]) {
+      expect(
+        Buffer.from(
+          canonicalOrganizationReviewerPermissionCheckDecisionBytes(decision),
+        ).toString('utf8'),
+      ).toBe(canonicalJson(decision));
+    }
   });
 });
 

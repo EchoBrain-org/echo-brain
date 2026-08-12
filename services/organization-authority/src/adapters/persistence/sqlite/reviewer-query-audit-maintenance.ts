@@ -497,7 +497,11 @@ export class SqliteReviewerQueryAuditMaintenanceRepository
     }
   }
 
-  /** Authorizes exactly one bounded export; no callback receives database powers. */
+  /**
+   * Authorizes exactly one bounded export; no callback receives database
+   * powers. Every call, including a receipted exact retry, proves live
+   * disclosure authority before it can reconstruct plaintext.
+   */
   authorizeExport(
     input: ReviewerQueryAuditExportCommandV1,
     observe: () => string,
@@ -510,7 +514,7 @@ export class SqliteReviewerQueryAuditMaintenanceRepository
       command,
       observe,
       (transaction, observedAt) => {
-        this.assertCommandAuthorityAndOwner(transaction, command);
+        this.assertCommandAuthorityAndCurrentOwner(command);
         assertReviewerQueryAuditCommandFresh(command, observedAt);
         if (command.until_exclusive > observedAt) {
           throw new Error(
@@ -519,7 +523,14 @@ export class SqliteReviewerQueryAuditMaintenanceRepository
         }
         return this.authorizeFreshExport(transaction, command);
       },
-      (event) => this.reproduceAuthorizedExport(event, command),
+      (event) => {
+        // A durable receipt is not a continuing disclosure grant. Exact
+        // retries deliberately do not sample time or apply freshness again,
+        // but they must still prove the configured Authority and exact owner
+        // remain current before reconstructing plaintext.
+        this.assertCommandAuthorityAndCurrentOwner(command);
+        return this.reproduceAuthorizedExport(event, command);
+      },
     );
   }
 
@@ -536,7 +547,7 @@ export class SqliteReviewerQueryAuditMaintenanceRepository
       command,
       observe,
       (transaction, observedAt) => {
-        this.assertCommandAuthorityAndOwner(transaction, command);
+        this.assertCommandAuthorityAndCurrentOwner(command);
         assertReviewerQueryAuditCommandFresh(command, observedAt);
         const due = transaction.dueForExpiry();
         const orderedRowsSha256 = reviewerQueryAuditOrderedRowsSha256(due);
@@ -640,11 +651,15 @@ export class SqliteReviewerQueryAuditMaintenanceRepository
     }
   }
 
-  private assertCommandAuthorityAndOwner(
-    transaction: SqliteReviewerQueryAuditMaintenanceTransaction,
+  /**
+   * Proves live disclosure authority inside the stopped maintenance
+   * transaction. A durable receipt proves idempotency only; export retries
+   * cannot expose plaintext until this check succeeds.
+   */
+  private assertCommandAuthorityAndCurrentOwner(
     command: ReviewerQueryAuditMaintenanceCommandV1,
   ): void {
-    const metadata = transaction.metadata();
+    const metadata = this.state.metadata();
     if (
       metadata.authority_id !== command.authority_id ||
       metadata.organization_id !== command.organization_id
@@ -653,7 +668,7 @@ export class SqliteReviewerQueryAuditMaintenanceRepository
         'reviewer query audit command does not name this authority and organization',
       );
     }
-    const owner = transaction.membership(command.owner_membership_id);
+    const owner = this.state.membership(command.owner_membership_id);
     if (
       owner === undefined ||
       owner.organization_id !== command.organization_id ||

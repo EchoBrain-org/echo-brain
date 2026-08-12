@@ -17,13 +17,16 @@ import {
   type OrganizationPermissionCheckRequestV1,
   type OrganizationMemberReadablePermissionCheckDecisionV3,
   type OrganizationMemberReadablePermissionCheckRequestV3,
+  type OrganizationReviewerPermissionCheckDecisionV2,
   type OrganizationReviewerPermissionCheckRequestV2,
   type OrganizationSlackLinkBeginRequestV1,
   type OrganizationSlackLinkBeginResponseV1,
   type OrganizationSlackLinkCompleteRequestV1,
   type OrganizationSlackLinkResultV1,
 } from '@echo-brain/organization-api';
+import { canonicalJson } from '@echo-brain/federation-protocol';
 import { organizationMemberReadablePolicyContractSha256 } from '@echo-brain/organization-protocol';
+import { HttpOrganizationAuthorityClient } from '../../../src/product/organization/client/http-organization-authority-client.js';
 import {
   beginOrganizationAuthorityHttpServerShutdown,
   createOrganizationAuthorityHttpServer,
@@ -69,6 +72,16 @@ function proxyHeaders(): Record<string, string> {
     [TRUSTED_PROXY_CLIENT_ID_HEADER]: clientId(),
   };
 }
+
+const proxyFetch: typeof fetch = (input, init) => {
+  const headers = new Headers(init?.headers);
+  headers.set(
+    TRUSTED_PROXY_AUTHORIZATION_HEADER,
+    `${ORGANIZATION_API_PROXY_AUTH_SCHEME} ${PROXY_TOKEN}`,
+  );
+  headers.set(TRUSTED_PROXY_CLIENT_ID_HEADER, clientId());
+  return fetch(input, { ...init, headers });
+};
 
 async function listen(server: Server): Promise<string> {
   server.listen(0, '127.0.0.1');
@@ -365,6 +378,47 @@ function organizationMemberPermissionDecision(
     message_presentation_sha256: allowed
       ? digest('organization-member-message-presentation')
       : null,
+  };
+}
+
+function reviewerPermissionDecision(
+  request: OrganizationReviewerPermissionCheckRequestV2,
+  allowed = false,
+): OrganizationReviewerPermissionCheckDecisionV2 {
+  return {
+    schema_version: 2,
+    kind: 'echo-organization-permission-check-decision',
+    request_sha256: digest('reviewer-request'),
+    provider_event_sha256: request.provider_event_sha256,
+    allowed,
+    reason_code: allowed
+      ? 'active_reviewer_restricted_notice_v1'
+      : 'provider_identity_mismatch',
+    principal_id: allowed
+      ? 'prn_33333333-3333-4333-8333-333333333333'
+      : null,
+    membership_id: allowed
+      ? 'mem_44444444-4444-4444-8444-444444444444'
+      : null,
+    adapter_binding_id: allowed
+      ? 'bnd_55555555-5555-4555-8555-555555555555'
+      : null,
+    permission_grant_id: allowed
+      ? 'pgr_66666666-6666-4666-8666-866666666666'
+      : null,
+    evaluated_at: NOW,
+    authorization_audit_event_id: allowed
+      ? 'aud_77777777-7777-4777-8777-777777777777'
+      : null,
+    authorization_audit_entry_sha256: allowed ? digest('reviewer-audit') : null,
+    reviewer_release_draft_sha256: allowed
+      ? request.reviewer_release_draft_sha256
+      : null,
+    approval_presentation_sha256: allowed
+      ? request.approval_presentation_sha256
+      : null,
+    semantic_intent_sha256: allowed ? digest('reviewer-semantic') : null,
+    message_presentation_sha256: allowed ? digest('reviewer-message') : null,
   };
 }
 
@@ -711,11 +765,96 @@ describe('organization integrations HTTP routes', () => {
         },
       );
       expect(response.status).toBe(200);
-      expect(await response.text()).toBe(JSON.stringify(decision));
+      expect(await response.text()).toBe(canonicalJson(decision));
       expect(checkOrganizationMemberReadablePermission).toHaveBeenCalledWith(
         command,
         expect.any(AbortSignal),
       );
+    } finally {
+      await close(server);
+    }
+  });
+
+  it('round-trips exact canonical schema-v2 and schema-v3 allow and denial decisions through the HTTP server and client', async () => {
+    const reviewerCommand = reviewerPermissionRequest();
+    const reviewerDenial = reviewerPermissionDecision(reviewerCommand);
+    const reviewerAllow = reviewerPermissionDecision(reviewerCommand, true);
+    const organizationMemberCommand = organizationMemberPermissionRequest();
+    const organizationMemberDenial = organizationMemberPermissionDecision(
+      organizationMemberCommand,
+    );
+    const organizationMemberAllow = organizationMemberPermissionDecision(
+      organizationMemberCommand,
+      true,
+    );
+    const reviewerDecisions = [reviewerDenial, reviewerAllow];
+    const organizationMemberDecisions = [
+      organizationMemberDenial,
+      organizationMemberAllow,
+    ];
+    const server = integrationServer(
+      integrationsApplication({
+        checkReviewerPermission: vi.fn(
+          async () => reviewerDecisions.shift()!,
+        ),
+        checkOrganizationMemberReadablePermission: vi.fn(
+          async () => organizationMemberDecisions.shift()!,
+        ),
+      }),
+      {
+        checkReviewerPermissionSubject: (request) => ({
+          installation_id: request.installation_id,
+        }),
+        checkOrganizationMemberReadablePermissionSubject: (request) => ({
+          installation_id: request.installation_id,
+        }),
+      },
+    );
+    const origin = await listen(server);
+    const observedWire: Array<{ request: string; response: string }> = [];
+    const client = new HttpOrganizationAuthorityClient({
+      baseUrl: origin,
+      fetch: async (input, init) => {
+        const response = await proxyFetch(input, init);
+        observedWire.push({
+          request: String(init?.body),
+          response: await response.clone().text(),
+        });
+        return response;
+      },
+      allowInsecureLoopback: true,
+    });
+    try {
+      await expect(
+        client.checkReviewerPermission(reviewerCommand),
+      ).resolves.toEqual(reviewerDenial);
+      await expect(
+        client.checkOrganizationMemberPermission(organizationMemberCommand),
+      ).resolves.toEqual(organizationMemberDenial);
+      await expect(
+        client.checkReviewerPermission(reviewerCommand),
+      ).resolves.toEqual(reviewerAllow);
+      await expect(
+        client.checkOrganizationMemberPermission(organizationMemberCommand),
+      ).resolves.toEqual(organizationMemberAllow);
+      expect(observedWire).toEqual([
+        {
+          request: canonicalJson(reviewerCommand),
+          response: canonicalJson(reviewerDenial),
+        },
+        {
+          request: canonicalJson(organizationMemberCommand),
+          response: canonicalJson(organizationMemberDenial),
+        },
+        {
+          request: canonicalJson(reviewerCommand),
+          response: canonicalJson(reviewerAllow),
+        },
+        {
+          request: canonicalJson(organizationMemberCommand),
+          response: canonicalJson(organizationMemberAllow),
+        },
+      ]);
     } finally {
       await close(server);
     }
@@ -745,7 +884,7 @@ describe('organization integrations HTTP routes', () => {
         },
       );
       expect(response.status).toBe(200);
-      expect(await response.text()).toBe(JSON.stringify(decision));
+      expect(await response.text()).toBe(canonicalJson(decision));
     } finally {
       await close(server);
     }
