@@ -3,8 +3,6 @@ schema_version: 1
 id: INV-IDENTITY-003
 kind: invariant
 title: Central and offline revocation windows are separate claims
-owners:
-  - unassigned
 component_ids:
   - CMP-IDENTITY-ACCESS
   - CMP-PERMISSIONS
@@ -18,12 +16,8 @@ enforcement_scope: Current central reads and writes plus locally cached organiza
 invariant_ids:
   - INV-05
   - INV-06
-decision_ids: []
 failure_pattern_ids:
   - FP-IDENTITY-003
-runbook_ids: []
-qualification_ids: []
-issue_urls: []
 ---
 
 # INV-IDENTITY-003: Central and offline revocation windows are separate claims

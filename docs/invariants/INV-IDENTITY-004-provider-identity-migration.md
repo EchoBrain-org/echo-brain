@@ -3,8 +3,6 @@ schema_version: 1
 id: INV-IDENTITY-004
 kind: invariant
 title: Incomplete provider identity is repaired by fresh atomic proof
-owners:
-  - unassigned
 component_ids:
   - CMP-IDENTITY-ACCESS
   - CMP-CENTRAL-ORGANIZATION
@@ -15,13 +13,8 @@ reviewed_ref: 77b7744b46a912b9154c218b3a036e8552d7180e
 normative: MUST
 enforcement_status: partial
 enforcement_scope: Legacy Slack app-identity promotion on the founder-live hardening branch
-invariant_ids: []
-decision_ids: []
 failure_pattern_ids:
   - FP-IDENTITY-004
-runbook_ids: []
-qualification_ids: []
-issue_urls: []
 ---
 
 # INV-IDENTITY-004: Incomplete provider identity is repaired by fresh atomic proof

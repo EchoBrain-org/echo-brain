@@ -3,8 +3,6 @@ schema_version: 1
 id: QMAT-ADAPTERS-001
 kind: qualification-matrix
 title: Provider adapter adversarial qualification matrix
-owners:
-  - unassigned
 component_ids:
   - CMP-ADAPTERS
   - CMP-CORE-PIPELINE
@@ -53,7 +51,6 @@ invariant_ids:
   - INV-RUNTIME-001
   - INV-PERMISSIONS-013
   - INV-PERMISSIONS-014
-decision_ids: []
 failure_pattern_ids:
   - FP-ADAPTERS-001
   - FP-ADAPTERS-002
@@ -67,9 +64,6 @@ failure_pattern_ids:
   - FP-PERMISSIONS-001
   - FP-RELEASE-001
   - FP-OPERATIONS-001
-runbook_ids: []
-qualification_ids: []
-issue_urls: []
 ---
 
 # Provider adapter adversarial qualification matrix V1

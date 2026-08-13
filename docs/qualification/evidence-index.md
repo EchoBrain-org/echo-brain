@@ -3,8 +3,6 @@ schema_version: 1
 id: EVID-INDEX-001
 kind: evidence-index
 title: Founder-live Job A and Job B sanitized evidence index
-owners:
-  - unassigned
 component_ids:
   - CMP-ADAPTERS
   - CMP-LOCAL-RUNTIME

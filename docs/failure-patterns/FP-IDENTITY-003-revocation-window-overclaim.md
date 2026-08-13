@@ -3,8 +3,6 @@ schema_version: 1
 id: FP-IDENTITY-003
 kind: failure-pattern
 title: Central revocation is described as immediate on an offline Mac
-owners:
-  - unassigned
 component_ids:
   - CMP-IDENTITY-ACCESS
   - CMP-PERMISSIONS
@@ -21,12 +19,8 @@ invariant_ids:
   - INV-IDENTITY-003
   - INV-05
   - INV-06
-decision_ids: []
 failure_pattern_ids:
   - FP-IDENTITY-002
-runbook_ids: []
-qualification_ids: []
-issue_urls: []
 evidence_ids:
   - EVID-JOB-AB-LEDGER-001
 implementation_refs:
@@ -34,9 +28,6 @@ implementation_refs:
 regression_test_refs:
   - tests/product/runtime-isolation.test.ts@280db80479a39ba51708b5923cc4b3eb3cfcd7ef
   - services/organization-authority/test/authority-runtime.test.ts@280db80479a39ba51708b5923cc4b3eb3cfcd7ef
-risk_decision_id: null
-residual_risk: null
-next_review_at: null
 ---
 
 # FP-IDENTITY-003: Central revocation is described as immediate on an offline Mac

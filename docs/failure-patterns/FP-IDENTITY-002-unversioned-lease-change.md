@@ -3,8 +3,6 @@ schema_version: 1
 id: FP-IDENTITY-002
 kind: failure-pattern
 title: Lease duration changes without protocol negotiation
-owners:
-  - unassigned
 component_ids:
   - CMP-IDENTITY-ACCESS
   - CMP-PROTOCOLS-CRYPTO
@@ -19,12 +17,8 @@ severity: high
 first_observed: 2026-08-12
 invariant_ids:
   - INV-IDENTITY-002
-decision_ids: []
 failure_pattern_ids:
   - FP-IDENTITY-003
-runbook_ids: []
-qualification_ids: []
-issue_urls: []
 evidence_ids:
   - EVID-CANDIDATE-IDENTITY-001
   - EVID-JOB-AB-LEDGER-001
@@ -33,9 +27,6 @@ implementation_refs:
 regression_test_refs:
   - packages/organization-api/test/access-lease-request.test.ts@280db80479a39ba51708b5923cc4b3eb3cfcd7ef
   - tests/product/local-organization-coordinator.test.ts@280db80479a39ba51708b5923cc4b3eb3cfcd7ef
-risk_decision_id: null
-residual_risk: null
-next_review_at: null
 ---
 
 # FP-IDENTITY-002: Lease duration changes without protocol negotiation

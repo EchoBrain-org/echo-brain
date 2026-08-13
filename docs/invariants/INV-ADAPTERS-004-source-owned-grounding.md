@@ -3,8 +3,6 @@ schema_version: 1
 id: INV-ADAPTERS-004
 kind: invariant
 title: Models select source-owned evidence references
-owners:
-  - unassigned
 component_ids:
   - CMP-ADAPTERS
   - CMP-CORE-PIPELINE
@@ -16,12 +14,8 @@ enforcement_status: partial
 enforcement_scope: Shared LLM decision processor on the founder-live hardening branch
 invariant_ids:
   - INV-08
-decision_ids: []
 failure_pattern_ids:
   - FP-ADAPTERS-004
-runbook_ids: []
-qualification_ids: []
-issue_urls: []
 ---
 
 # INV-ADAPTERS-004: Models select source-owned evidence references

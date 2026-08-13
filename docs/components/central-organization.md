@@ -17,7 +17,6 @@ invariant_ids:
   - INV-IDENTITY-004
   - INV-RUNTIME-001
   - INV-OPERATIONS-001
-decision_ids: []
 failure_pattern_ids:
   - FP-IDENTITY-001
   - FP-IDENTITY-002
@@ -25,10 +24,8 @@ failure_pattern_ids:
   - FP-IDENTITY-004
   - FP-RUNTIME-001
   - FP-OPERATIONS-001
-runbook_ids: []
 qualification_ids:
   - QUAL-20260813-174902-001
-issue_urls: []
 ---
 
 # Central organization

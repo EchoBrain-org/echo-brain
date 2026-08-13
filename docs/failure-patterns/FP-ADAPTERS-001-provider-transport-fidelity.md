@@ -3,8 +3,6 @@ schema_version: 1
 id: FP-ADAPTERS-001
 kind: failure-pattern
 title: Provider success envelope hides a wire-contract mismatch
-owners:
-  - unassigned
 component_ids:
   - CMP-ADAPTERS
   - CMP-IDENTITY-ACCESS
@@ -18,21 +16,14 @@ severity: high
 first_observed: 2026-08-12
 invariant_ids:
   - INV-ADAPTERS-001
-decision_ids: []
 failure_pattern_ids:
   - FP-IDENTITY-001
-runbook_ids: []
-qualification_ids: []
-issue_urls: []
 evidence_ids:
   - EVID-JOB-AB-LEDGER-001
 implementation_refs:
   - commit:06811c29458b0bf3aac443baf35453d3a2eb27f3
 regression_test_refs:
   - tests/adapters/slack-web-api-client.test.ts@06811c29458b0bf3aac443baf35453d3a2eb27f3
-risk_decision_id: null
-residual_risk: null
-next_review_at: null
 ---
 
 # FP-ADAPTERS-001: Provider success envelope hides a wire-contract mismatch

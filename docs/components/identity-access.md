@@ -16,15 +16,11 @@ invariant_ids:
   - INV-IDENTITY-003
   - INV-IDENTITY-004
   - INV-PERMISSIONS-014
-decision_ids: []
 failure_pattern_ids:
   - FP-IDENTITY-001
   - FP-IDENTITY-002
   - FP-IDENTITY-003
   - FP-IDENTITY-004
-runbook_ids: []
-qualification_ids: []
-issue_urls: []
 ---
 
 # Identity and access

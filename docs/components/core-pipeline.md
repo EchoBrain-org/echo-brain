@@ -13,13 +13,9 @@ reviewed_ref: 808ac89eaf3e8eba529b356bd80d4509b9a2a293
 invariant_ids:
   - INV-ADAPTERS-003
   - INV-ADAPTERS-004
-decision_ids: []
 failure_pattern_ids:
   - FP-ADAPTERS-003
   - FP-ADAPTERS-004
-runbook_ids: []
-qualification_ids: []
-issue_urls: []
 ---
 
 # Core pipeline

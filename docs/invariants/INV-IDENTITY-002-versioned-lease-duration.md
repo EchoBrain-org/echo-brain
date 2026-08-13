@@ -3,8 +3,6 @@ schema_version: 1
 id: INV-IDENTITY-002
 kind: invariant
 title: Access duration changes are versioned compatibility changes
-owners:
-  - unassigned
 component_ids:
   - CMP-IDENTITY-ACCESS
   - CMP-PROTOCOLS-CRYPTO
@@ -15,13 +13,8 @@ reviewed_ref: 280db80479a39ba51708b5923cc4b3eb3cfcd7ef
 normative: MUST
 enforcement_status: partial
 enforcement_scope: Signed V1 and opt-in V2 organization access leases on the founder-live hardening branch
-invariant_ids: []
-decision_ids: []
 failure_pattern_ids:
   - FP-IDENTITY-002
-runbook_ids: []
-qualification_ids: []
-issue_urls: []
 ---
 
 # INV-IDENTITY-002: Access duration changes are versioned compatibility changes

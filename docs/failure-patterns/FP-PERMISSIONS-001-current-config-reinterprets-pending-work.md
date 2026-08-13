@@ -3,8 +3,6 @@ schema_version: 1
 id: FP-PERMISSIONS-001
 kind: failure-pattern
 title: Current configuration reinterprets frozen pending work
-owners:
-  - unassigned
 component_ids:
   - CMP-ADAPTERS
   - CMP-LOCAL-RUNTIME
@@ -20,11 +18,6 @@ first_observed: 2026-08-12
 invariant_ids:
   - INV-PERMISSIONS-013
   - INV-12
-decision_ids: []
-failure_pattern_ids: []
-runbook_ids: []
-qualification_ids: []
-issue_urls: []
 evidence_ids:
   - EVID-JOB-AB-LEDGER-001
 implementation_refs:
@@ -33,9 +26,6 @@ implementation_refs:
 regression_test_refs:
   - tests/machine/operator-lifecycle-cli.test.ts@4b505021b03255c870695e0fba56a2b74879d86a
   - tests/product/slack-reviewer-publication.test.ts@8d61edada1cf994678aa7c2201c47ff08753ea08
-risk_decision_id: null
-residual_risk: null
-next_review_at: null
 ---
 
 # FP-PERMISSIONS-001: Current configuration reinterprets frozen pending work

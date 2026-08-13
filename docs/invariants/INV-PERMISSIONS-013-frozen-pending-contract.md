@@ -3,8 +3,6 @@ schema_version: 1
 id: INV-PERMISSIONS-013
 kind: invariant
 title: Pending consequential work resolves under its frozen contract
-owners:
-  - unassigned
 component_ids:
   - CMP-ADAPTERS
   - CMP-LOCAL-RUNTIME
@@ -17,12 +15,8 @@ enforcement_status: partial
 enforcement_scope: Frozen Slack approval presentation and authorization-aware diagnostic composition on the founder-live hardening branch
 invariant_ids:
   - INV-12
-decision_ids: []
 failure_pattern_ids:
   - FP-PERMISSIONS-001
-runbook_ids: []
-qualification_ids: []
-issue_urls: []
 ---
 
 # INV-PERMISSIONS-013: Pending consequential work resolves under its frozen contract

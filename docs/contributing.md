@@ -1,158 +1,55 @@
 # Contributing to ECHO documentation
 
-Documentation changes use the same branch, review, and verification workflow
-as code. Capture knowledge while the implementation and evidence are still
-available.
+Use the same branch, review, and verification workflow as code. Capture a
+lesson while its implementation and evidence are still available; link records
+by stable ID instead of building a design diary.
 
-## Record types
+| Record                         | Use it for                                          |
+| ------------------------------ | --------------------------------------------------- |
+| Component                      | Ownership, boundaries, and navigation               |
+| Invariant                      | A rule that must or must not hold                   |
+| ADR / RFC                      | Accepted rationale / proposed coordinated change    |
+| Failure pattern                | A reusable boundary failure                         |
+| Playbook / runbook             | Uncertain investigation / known operational outcome |
+| Qualification / evidence index | An exact run / bounded proof lookup                 |
 
-| Kind | Answers | Lifecycle |
-| --- | --- | --- |
-| Component | What does this part own, trust, store, and expose? | Living |
-| Invariant | What must or must not remain true? | Stable; change explicitly |
-| ADR | Why was an important choice made? | Immutable after acceptance |
-| RFC | What coordinated change is being proposed? | Proposed through disposition |
-| Failure pattern | How can this class of boundary fail? | Preserved; mitigation evolves |
-| Playbook | How do I investigate an uncertain problem? | Living and tested |
-| Runbook | How do I reach a known operational outcome? | Living and tested |
-| Qualification | What did this exact artifact and configuration prove? | Immutable per run |
-| Evidence index | Where is bounded proof and how is it verified? | Append-only references |
+## Metadata and IDs
 
-Do not combine these lifecycles into one growing design diary. Link records
-together with stable IDs.
+Copy the appropriate template. Records use flat YAML scalars and lists only.
+`reviewed_at` and `reviewed_ref` mean the record was checked against that exact
+source commit; updating prose does not update the claim automatically. Omit an
+empty relationship field. In V1, ownership lives on component pages; add an
+`owners` list to another record only when it names a real owner. IDs are permanent: `CMP-*`, `INV-<DOMAIN>-NNN`, `ADR-NNNN`, `RFC-NNNN`,
+`FP-<DOMAIN>-NNN`, `PB-<DOMAIN>-NNN`, `RB-<DOMAIN>-NNN`,
+`QMAT-<DOMAIN>-NNN`, and `QUAL-YYYYMMDD-HHMMSS-NNN`.
 
-## Required metadata
+Keep separate claims separate: accepted design, implemented code, deployed
+artifact, and qualified run are not interchangeable. Do not rewrite accepted
+or rejected ADR rationale; supersede it with a linked new ADR.
 
-Durable records use YAML front matter. Use the template for the record kind.
-The checker intentionally accepts only the flat scalar-and-list subset used by
-the templates; nested mappings and inline arrays are outside schema V1.
-At minimum record:
+## Turn an observation into durable knowledge
 
-```yaml
-schema_version: 1
-id: FP-ADAPTERS-001
-kind: failure-pattern
-title: Provider acknowledgement differs from stored state
-owners:
-  - unassigned
-component_ids:
-  - CMP-ADAPTERS
-created_at: 2026-08-13
-reviewed_at: 2026-08-13
-reviewed_ref: 808ac89eaf3e8eba529b356bd80d4509b9a2a293
-invariant_ids: []
-decision_ids: []
-failure_pattern_ids: []
-runbook_ids: []
-qualification_ids: []
-issue_urls: []
-```
+1. Preserve the raw receipt privately and write a sanitized exact-event summary.
+2. Add or update a failure pattern and an invariant when the lesson is durable.
+3. Add an ADR for a significant or hard-to-reverse repair.
+4. Add a deterministic regression test or qualification assertion.
+5. Add an operational procedure and issue when recovery or corrective work remains.
 
-`reviewed_at` means a human or agent checked the document against
-`reviewed_ref`. It is not automatically updated because the file changed.
-Use an ISO `YYYY-MM-DD` date for review policy and an RFC 3339 timestamp for
-an exact event. Relation fields contain stable IDs, except `issue_urls`.
-Use `unassigned` honestly until an owner accepts responsibility.
+Mark a pattern `mitigated` only with linked proof. An `accepted-risk` pattern
+requires its risk decision, residual risk, and review date.
 
-## Stable identifiers
+## Evidence and PRs
 
-Use these prefixes. Domains come from controlled component IDs; do not invent
-synonyms for an existing domain.
+Tracked documentation may contain opaque IDs, source commits, artifact
+digests, result and assertion IDs, evidence hashes, sensitivity class, and
+verification metadata. Never add raw provider payloads, credentials, personal
+content, private paths or keys, infrastructure identifiers, or resolver maps.
+An evidence receipt proves only its named assertions.
 
-| Prefix | Record |
-| --- | --- |
-| `CMP-*` | Component landing page |
-| `INV-<DOMAIN>-NNN` | Invariant |
-| `ADR-NNNN` | Accepted or proposed architecture decision |
-| `RFC-NNNN` | Proposed coordinated change |
-| `FP-<DOMAIN>-NNN` | Failure pattern |
-| `PB-<DOMAIN>-NNN` | Investigative playbook |
-| `RB-<DOMAIN>-NNN` | Operational runbook |
-| `QMAT-<DOMAIN>-NNN` | Reusable qualification matrix |
-| `QUAL-YYYYMMDD-HHMMSS-NNN` | Exact qualification run |
-
-Never reuse an ID. A renamed record keeps its ID. Qualification IDs include a
-UTC time suffix in addition to the date when concurrent runs are possible.
-
-## Status is multi-dimensional
-
-Do not use one status to imply several different claims. Where applicable,
-record them independently:
-
-Status belongs to the record that owns the claim. ADRs and RFCs own decision
-status. Failure patterns own mitigation status. Qualification reports own an
-exact run result. Invariants must name their enforcement scope and link proof;
-they must not claim global qualification from one bounded run.
-
-An accepted design can be unimplemented. Implemented code can be unqualified,
-and a deployed artifact can have an open regression. State each fact directly
-rather than inferring it from a generic status.
-
-Accepted or rejected ADR bodies are not rewritten to make history look
-current. Only lifecycle and relationship metadata may be appended after
-disposition. A replacement changes the old record to `superseded`, links its
-`superseded_by`, and links the new record's `supersedes`. Use `updates` only
-when both records remain necessary.
-
-## From observation to durable knowledge
-
-When development or live qualification exposes a problem:
-
-1. Preserve the raw receipt without editing it.
-2. Write a factual incident or qualification summary for the exact event.
-3. Create or update a failure pattern if the lesson can recur.
-4. Create or strengthen an invariant if the failure exposed an enduring rule.
-5. Write an ADR when the repair makes a significant or hard-to-reverse choice.
-6. Add a deterministic regression test or qualification case.
-7. Add a playbook or runbook if a human may need to diagnose or recover it.
-8. Open a GitHub issue for unresolved corrective work.
-9. Mark the pattern mitigated only after the change and linked proof exist.
-
-Closed issues remain linked, but the failure pattern and invariant stay
-discoverable.
-
-## Evidence safety
-
-Raw founder-live and customer evidence can contain provider payloads,
-infrastructure identifiers, private object locations, credentials, or personal
-content. Do not copy those values into the repository.
-
-A tracked evidence index may contain only the minimum sanitized information:
-
-- stable qualification and receipt IDs;
-- source commit and artifact digest;
-- result and assertion IDs;
-- opaque evidence ID and content hash;
-- sensitivity class;
-- the date and actor that verified the hash.
-
-The real filename, local path, object key, provider identifier, and resolver
-mapping remain only in the access-controlled evidence system. Configuration
-and state identities in Git must be sanitized digests or opaque IDs.
-
-An exact receipt proves only the assertions it names. Do not cite one stopped
-proof as evidence for unrelated failure patterns.
-
-## Pull request expectations
-
-A behavior-changing pull request should answer:
-
-- Which component pages are affected?
-- Which invariant IDs are preserved, added, or changed?
-- Does the change require an ADR or RFC?
-- Does it create or mitigate a failure pattern?
-- Which regression tests and qualification cases prove the result?
-- Does an operator playbook or runbook change?
-- Is the status claim source-only, merged, deployed, qualified, or released?
-
-Prefer links over duplicated prose. Keep component pages short enough to act as
-maps; put exact contracts in reference documents and executable schemas.
-
-## Verification
-
-Run `npm run check:docs` while editing durable records. The check validates
-metadata and stable IDs, relationships, component/workspace coverage, local
-links, exact qualification matrices and results, evidence-index hashes,
-historical implementation and regression references, and a bounded set of
-private-material leak signatures. Its negative cases run with the normal test
-suite.
+For a behavior-changing PR, update the affected component and any applicable
+invariant, ADR/RFC, failure pattern, tests, qualification, or runbook. State
+whether the claim is source-tested, artifact-tested, deployed,
+founder-live-qualified, client-live-qualified, or released. Run
+`npm run check:docs`; it checks IDs, relations, catalog coverage, links,
+qualification/evidence consistency, historical references, and known private
+material signatures.

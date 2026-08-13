@@ -3,8 +3,6 @@ schema_version: 1
 id: INV-RELEASE-001
 kind: invariant
 title: Artifact identity is bound to the exact source worktree
-owners:
-  - unassigned
 component_ids:
   - CMP-OPERATIONS-RELEASE
 created_at: 2026-08-13
@@ -13,13 +11,8 @@ reviewed_ref: 5aa7a37de94b8431c8fcb40cdee15ed34c4ba69a
 normative: MUST
 enforcement_status: not-implemented
 enforcement_scope: Operator procedure only; systemic build-environment sanitation remains open
-invariant_ids: []
-decision_ids: []
 failure_pattern_ids:
   - FP-RELEASE-001
-runbook_ids: []
-qualification_ids: []
-issue_urls: []
 ---
 
 # INV-RELEASE-001: Artifact identity is bound to the exact source worktree

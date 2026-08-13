@@ -3,8 +3,6 @@ schema_version: 1
 id: INV-ADAPTERS-002
 kind: invariant
 title: External object identity is durable before verification
-owners:
-  - unassigned
 component_ids:
   - CMP-ADAPTERS
   - CMP-LOCAL-RUNTIME
@@ -15,13 +13,8 @@ reviewed_ref: 8d61edada1cf994678aa7c2201c47ff08753ea08
 normative: MUST
 enforcement_status: partial
 enforcement_scope: Exact Slack reviewer and organization-member publication on the founder-live hardening branch
-invariant_ids: []
-decision_ids: []
 failure_pattern_ids:
   - FP-ADAPTERS-002
-runbook_ids: []
-qualification_ids: []
-issue_urls: []
 ---
 
 # INV-ADAPTERS-002: External object identity is durable before verification

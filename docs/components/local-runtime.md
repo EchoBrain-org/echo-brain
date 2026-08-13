@@ -14,14 +14,10 @@ invariant_ids:
   - INV-ADAPTERS-002
   - INV-RUNTIME-001
   - INV-PERMISSIONS-013
-decision_ids: []
 failure_pattern_ids:
   - FP-ADAPTERS-002
   - FP-RUNTIME-001
   - FP-PERMISSIONS-001
-runbook_ids: []
-qualification_ids: []
-issue_urls: []
 ---
 
 # Local runtime

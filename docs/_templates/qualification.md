@@ -3,8 +3,6 @@ schema_version: 1
 id: QUAL-YYYYMMDD-HHMMSS-000
 kind: qualification
 title: Exact capability qualification
-owners:
-  - unassigned
 component_ids: []
 created_at: YYYY-MM-DD
 reviewed_at: YYYY-MM-DD
@@ -22,33 +20,14 @@ matrix_id: required
 matrix_version: required
 assertion_ids: []
 evidence_ids: []
-invariant_ids: []
-decision_ids: []
-failure_pattern_ids: []
-runbook_ids: []
-qualification_ids: []
-issue_urls: []
 ---
 
 # QUAL-YYYYMMDD-HHMMSS-000: Exact capability qualification
 
-## Scope and non-claims
+## Scope, identities, and preconditions
 
-## Exact identities
+| Assertion      | Outcome | Evidence  |
+| -------------- | ------- | --------- |
+| `ASSERTION-ID` | passed  | `EVID-ID` |
 
-## Environment and preconditions
-
-## Assertion results
-
-Each assertion records its stable ID, `passed`, `failed`, or `not-run`
-outcome, and one or more opaque evidence IDs.
-
-| Assertion | Outcome | Evidence |
-| --- | --- | --- |
-| `ASSERTION-ID` | passed | `EVID-ID` |
-
-## Deviations and stopped gates
-
-## Sanitized evidence index
-
-## Follow-up work
+## Deviations, follow-up, and sanitized evidence

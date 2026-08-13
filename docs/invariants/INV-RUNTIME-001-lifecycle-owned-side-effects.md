@@ -3,8 +3,6 @@ schema_version: 1
 id: INV-RUNTIME-001
 kind: invariant
 title: Durable side-effect follow-up belongs to the runtime lifecycle
-owners:
-  - unassigned
 component_ids:
   - CMP-LOCAL-RUNTIME
   - CMP-CENTRAL-ORGANIZATION
@@ -14,13 +12,8 @@ reviewed_ref: a132c35aa9399876cc633c727d2c820af506bcf4
 normative: MUST
 enforcement_status: partial
 enforcement_scope: Organization record follow-up and record-only recovery on the founder-live hardening branch
-invariant_ids: []
-decision_ids: []
 failure_pattern_ids:
   - FP-RUNTIME-001
-runbook_ids: []
-qualification_ids: []
-issue_urls: []
 ---
 
 # INV-RUNTIME-001: Durable side-effect follow-up belongs to the runtime lifecycle

@@ -17,8 +17,8 @@ during migration.
 | [`INV-ADAPTERS-001`](INV-ADAPTERS-001-provider-transport.md) | Provider transport is part of the verified contract | External provider methods | partial | linked tests |
 | [`INV-IDENTITY-001`](INV-IDENTITY-001-symmetric-provider-proof.md) | Provider identity proof is complete and symmetric | Provider enrollment and action-time proof | partial | linked tests and live evidence |
 | [`INV-ADAPTERS-002`](INV-ADAPTERS-002-durable-external-reference.md) | External object identity is durable before verification | Consequential provider writes | partial | linked tests and live evidence |
-| [`INV-RUNTIME-001`](INV-RUNTIME-001-lifecycle-owned-side-effects.md) | Durable side-effect follow-up belongs to the runtime lifecycle | Background external effects | partial | linked tests and stopped proof |
-| [`INV-PERMISSIONS-013`](INV-PERMISSIONS-013-frozen-pending-contract.md) | Pending consequential work resolves under its frozen contract | Approval and diagnostics | partial | linked tests and stopped proof |
+| [`INV-RUNTIME-001`](INV-RUNTIME-001-lifecycle-owned-side-effects.md) | Durable side-effect follow-up belongs to the runtime lifecycle | Background external effects | partial | linked historical tests |
+| [`INV-PERMISSIONS-013`](INV-PERMISSIONS-013-frozen-pending-contract.md) | Pending consequential work resolves under its frozen contract | Approval and diagnostics | partial | linked historical tests |
 | [`INV-PERMISSIONS-014`](INV-PERMISSIONS-014-actor-not-source-owner.md) | Approval authority is independent from source custody | Bounded Slack modes | implemented | live negative evidence |
 | [`INV-ADAPTERS-003`](INV-ADAPTERS-003-model-execution-controls.md) | Model execution controls are explicit processing identity | Model/provider pairs | partial | linked test and live evidence |
 | [`INV-ADAPTERS-004`](INV-ADAPTERS-004-source-owned-grounding.md) | Models select source-owned evidence references | Shared LLM processor | partial | linked tests and live evidence |

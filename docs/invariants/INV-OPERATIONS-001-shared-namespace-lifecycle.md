@@ -3,8 +3,6 @@ schema_version: 1
 id: INV-OPERATIONS-001
 kind: invariant
 title: Components sharing a runtime namespace share lifecycle qualification
-owners:
-  - unassigned
 component_ids:
   - CMP-CENTRAL-ORGANIZATION
   - CMP-OPERATIONS-RELEASE
@@ -14,13 +12,8 @@ reviewed_ref: 5aa7a37de94b8431c8fcb40cdee15ed34c4ba69a
 normative: MUST
 enforcement_status: partial
 enforcement_scope: Explicit Authority Compose restart on the founder-live hardening branch
-invariant_ids: []
-decision_ids: []
 failure_pattern_ids:
   - FP-OPERATIONS-001
-runbook_ids: []
-qualification_ids: []
-issue_urls: []
 ---
 
 # INV-OPERATIONS-001: Components sharing a runtime namespace share lifecycle qualification

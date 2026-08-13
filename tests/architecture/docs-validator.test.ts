@@ -21,12 +21,10 @@ function run(command: string, args: string[], cwd: string) {
     throw new Error(`${command} failed: ${result.stderr}`);
   return result.stdout.trim();
 }
-
 function write(path: string, contents: string) {
   mkdirSync(resolve(path, ".."), { recursive: true });
   writeFileSync(path, contents);
 }
-
 function common(id: string, kind: string, componentIds = "  - CMP-TEST") {
   return [
     "---",
@@ -34,22 +32,16 @@ function common(id: string, kind: string, componentIds = "  - CMP-TEST") {
     `id: ${id}`,
     `kind: ${kind}`,
     `title: Test ${kind}`,
-    "owners:",
-    "  - test",
+    ...(kind === "component" || kind === "component-index"
+      ? ["owners:", "  - test"]
+      : []),
     "component_ids:",
     componentIds,
     "created_at: 2026-08-13",
     "reviewed_at: 2026-08-13",
     `reviewed_ref: ${PLACEHOLDER}`,
-    "invariant_ids: []",
-    "decision_ids: []",
-    "failure_pattern_ids: []",
-    "runbook_ids: []",
-    "qualification_ids: []",
-    "issue_urls: []",
   ].join("\n");
 }
-
 function qualification(root: string) {
   write(
     join(root, "docs/qualification/QUAL-20260813-120000-001.md"),
@@ -82,7 +74,6 @@ function qualification(root: string) {
     ].join("\n"),
   );
 }
-
 function fixture() {
   const root = mkdtempSync(join(tmpdir(), "echo-docs-validator-"));
   roots.push(root);
@@ -93,12 +84,11 @@ function fixture() {
   write(join(root, "tests/regression.test.ts"), "export {};\n");
   write(
     join(root, "docs/components/README.md"),
-    common("CMP-CATALOG", "component-index", "  - CMP-TEST") +
-      "\n---\n# Components\n",
+    `${common("CMP-CATALOG", "component-index")}\n---\n# Components\n`,
   );
   write(
     join(root, "docs/components/test.md"),
-    common("CMP-TEST", "component") + "\n---\n# Test component\n",
+    `${common("CMP-TEST", "component")}\n---\n# Test component\n`,
   );
   write(
     join(root, "docs/qualification/evidence-index.md"),
@@ -144,16 +134,13 @@ function fixture() {
     "docs/qualification/evidence-index.md",
     "docs/qualification/matrix.md",
     "docs/qualification/QUAL-20260813-120000-001.md",
-  ]) {
-    const absolute = join(root, path);
+  ])
     writeFileSync(
-      absolute,
-      readFileSync(absolute, "utf8").replaceAll(PLACEHOLDER, sha),
+      join(root, path),
+      readFileSync(join(root, path), "utf8").replaceAll(PLACEHOLDER, sha),
     );
-  }
   return { root, sha };
 }
-
 function validate(root: string) {
   const result = spawnSync(process.execPath, [TOOL], {
     cwd: root,
@@ -161,8 +148,7 @@ function validate(root: string) {
   });
   return result.stdout + "\n" + result.stderr;
 }
-
-function failurePattern(root: string, sha: string, extra: string) {
+function failurePattern(root: string, sha: string, extra = "") {
   write(
     join(root, "docs/failure-patterns/FP-TEST-001.md"),
     [
@@ -176,9 +162,6 @@ function failurePattern(root: string, sha: string, extra: string) {
       "  - EVID-TEST-001",
       "implementation_refs: []",
       "regression_test_refs: []",
-      "risk_decision_id: null",
-      "residual_risk: null",
-      "next_review_at: null",
       extra.replaceAll(PLACEHOLDER, sha),
       "---",
       "# Failure pattern",
@@ -186,125 +169,127 @@ function failurePattern(root: string, sha: string, extra: string) {
     ].join("\n"),
   );
 }
-
 afterEach(() => {
-  while (roots.length > 0)
-    rmSync(roots.pop()!, { recursive: true, force: true });
+  while (roots.length) rmSync(roots.pop()!, { recursive: true, force: true });
 });
 
 describe("documentation validator", () => {
-  it("accepts the proof-grade baseline fixture", () => {
-    expect(validate(fixture().root)).toContain("checks passed");
-  });
-
-  it("rejects a qualification whose assertions do not exactly match its matrix", () => {
-    const { root } = fixture();
-    const path = join(root, "docs/qualification/QUAL-20260813-120000-001.md");
-    writeFileSync(
-      path,
-      readFileSync(path, "utf8")
-        .replace("  - TEST-A-002\n", "")
-        .replace("| TEST-A-002 | passed | EVID-TEST-001 |\n", ""),
-    );
-    expect(validate(root)).toContain(
+  it("accepts the lean proof-grade baseline", () =>
+    expect(validate(fixture().root)).toContain("checks passed"));
+  it.each([
+    [
+      "qualification assertion set",
+      (root: string) =>
+        edit(root, "docs/qualification/QUAL-20260813-120000-001.md", (source) =>
+          source
+            .replace("  - TEST-A-002\n", "")
+            .replace("| TEST-A-002 | passed | EVID-TEST-001 |\n", ""),
+        ),
       "qualification assertions must exactly match its matrix",
-    );
-  });
-
-  it("rejects a passing qualification with a failed assertion", () => {
-    const { root } = fixture();
-    const path = join(root, "docs/qualification/QUAL-20260813-120000-001.md");
-    writeFileSync(
-      path,
-      readFileSync(path, "utf8").replace(
-        "| TEST-A-002 | passed | EVID-TEST-001 |",
-        "| TEST-A-002 | failed | EVID-TEST-001 |",
-      ),
-    );
-    const output = validate(root);
-    expect(output).toContain(
+    ],
+    [
+      "matrix version",
+      (root: string) =>
+        edit(root, "docs/qualification/QUAL-20260813-120000-001.md", (source) =>
+          source.replace("matrix_version: 1", "matrix_version: 2"),
+        ),
+      "matrix_version does not match QMAT-TEST-001",
+    ],
+    [
+      "matrix declaration/table set",
+      (root: string) =>
+        edit(root, "docs/qualification/matrix.md", (source) =>
+          source.replace("  - TEST-A-002\n", ""),
+        ),
+      "matrix assertion_ids must exactly match its Assertion ID table",
+    ],
+    [
+      "passed result with failed assertion",
+      (root: string) =>
+        edit(root, "docs/qualification/QUAL-20260813-120000-001.md", (source) =>
+          source.replace(
+            "| TEST-A-002 | passed | EVID-TEST-001 |",
+            "| TEST-A-002 | failed | EVID-TEST-001 |",
+          ),
+        ),
       "passed qualification has non-passing assertion TEST-A-002",
-    );
-  });
-
-  it("rejects incoherent halted qualification outcomes", () => {
-    const { root } = fixture();
-    const path = join(root, "docs/qualification/QUAL-20260813-120000-001.md");
-    writeFileSync(
-      path,
-      readFileSync(path, "utf8").replace(
-        "run_status: completed",
-        "run_status: halted",
-      ),
-    );
-    expect(validate(root)).toContain(
+    ],
+    [
+      "halted success",
+      (root: string) =>
+        edit(root, "docs/qualification/QUAL-20260813-120000-001.md", (source) =>
+          source.replace("run_status: completed", "run_status: halted"),
+        ),
       "halted or aborted qualification requires non-passing result and stop reason",
-    );
+    ],
+    [
+      "failed result with every assertion passed",
+      (root: string) =>
+        edit(root, "docs/qualification/QUAL-20260813-120000-001.md", (source) =>
+          source.replace("result: passed", "result: failed"),
+        ),
+      "non-passing qualification requires a failed or not-run assertion",
+    ],
+  ])("rejects %s", (_label, change, expected) => {
+    const { root } = fixture();
+    change(root);
+    expect(validate(root)).toContain(expected);
   });
-
-  it("rejects prose-only, duplicate, and malformed evidence rows", () => {
+  it("rejects malformed, duplicate, and unresolved evidence", () => {
     const { root, sha } = fixture();
-    const path = join(root, "docs/qualification/evidence-index.md");
-    writeFileSync(
-      path,
-      readFileSync(path, "utf8").replace(
+    edit(root, "docs/qualification/evidence-index.md", (source) =>
+      source.replace(
         `| EVID-TEST-001 | ${"d".repeat(64)} | test fixture | test |`,
         `| EVID-TEST-001 | ${"d".repeat(64)} | test fixture | test |\n| EVID-TEST-001 | short | duplicate | test |`,
-      ) + "EVID-GHOST-001 is only prose.\n",
+      ),
     );
     failurePattern(root, sha, "");
-    const pattern = join(root, "docs/failure-patterns/FP-TEST-001.md");
-    writeFileSync(
-      pattern,
-      readFileSync(pattern, "utf8").replace(
-        "evidence_ids:\n  - EVID-TEST-001",
-        "evidence_ids:\n  - EVID-GHOST-001",
-      ),
+    edit(root, "docs/failure-patterns/FP-TEST-001.md", (source) =>
+      source.replace("  - EVID-TEST-001", "  - EVID-GHOST-001"),
     );
     const output = validate(root);
     expect(output).toContain("duplicate evidence id EVID-TEST-001");
     expect(output).toContain("must have a 64-hex SHA-256");
     expect(output).toContain("unknown evidence id EVID-GHOST-001");
   });
-
-  it("rejects a managed record without front matter", () => {
-    const { root } = fixture();
-    write(
-      join(root, "docs/failure-patterns/FP-TEST-001.md"),
-      "# Untyped failure pattern\n",
-    );
-    expect(validate(root)).toContain("managed record requires front matter");
-  });
-
-  it("rejects non-full and non-historical revision references", () => {
+  it("rejects malformed managed records, historic references, and sensitive content", () => {
     const { root, sha } = fixture();
-    failurePattern(root, sha, "");
-    const pattern = join(root, "docs/failure-patterns/FP-TEST-001.md");
-    writeFileSync(
-      pattern,
-      readFileSync(pattern, "utf8").replace(
-        "implementation_refs: []\nregression_test_refs: []",
-        `implementation_refs:\n  - commit:deadbeef\nregression_test_refs:\n  - tests/regression.test.ts@${"b".repeat(40)}`,
-      ),
+    write(join(root, "docs/failure-patterns/FP-TEST-002.md"), "# Untyped\n");
+    failurePattern(
+      root,
+      sha,
+      `implementation_refs:\n  - commit:deadbeef\nregression_test_refs:\n  - tests/regression.test.ts@${"b".repeat(40)}`,
+    );
+    edit(
+      root,
+      "docs/qualification/QUAL-20260813-120000-001.md",
+      (source) =>
+        `${source}\nSynthetic /Users/example/private and xoxb-not-a-real-token. [bad](%ZZ)\n`,
     );
     const output = validate(root);
+    expect(output).toContain("managed record requires front matter");
     expect(output).toContain("implementation ref must use commit:<full-sha>");
     expect(output).toContain(
       "regression test path does not exist at claimed commit",
     );
-  });
-
-  it("rejects sensitive material and malformed encoded local links", () => {
-    const { root } = fixture();
-    const path = join(root, "docs/qualification/QUAL-20260813-120000-001.md");
-    writeFileSync(
-      path,
-      readFileSync(path, "utf8") +
-        "\nSynthetic /Users/example/private and xoxb-not-a-real-token. [bad](%ZZ)\n",
-    );
-    const output = validate(root);
     expect(output).toContain("contains forbidden /Users path");
     expect(output).toContain("contains forbidden Slack token");
     expect(output).toContain("malformed percent-encoded local link %ZZ");
   });
+  it.each([
+    ["component_ids: null", "component_ids must be an array"],
+    ["invariant_ids: 1", "invariant_ids must be an array"],
+  ])("rejects malformed relation %s without crashing", (field, expected) => {
+    const { root } = fixture();
+    edit(root, "docs/components/test.md", (source) =>
+      field.startsWith("component_ids")
+        ? source.replace("component_ids:\n  - CMP-TEST", field)
+        : source.replace("reviewed_at: 2026-08-13", `invariant_ids: 1\nreviewed_at: 2026-08-13`),
+    );
+    expect(validate(root)).toContain(expected);
+  });
 });
+function edit(root: string, file: string, mutate: (source: string) => string) {
+  const path = join(root, file);
+  writeFileSync(path, mutate(readFileSync(path, "utf8")));
+}

@@ -3,8 +3,6 @@ schema_version: 1
 id: FP-RELEASE-001
 kind: failure-pattern
 title: Packaging command builds a different worktree than the claimed source
-owners:
-  - unassigned
 component_ids:
   - CMP-OPERATIONS-RELEASE
 created_at: 2026-08-13
@@ -17,19 +15,11 @@ severity: critical
 first_observed: 2026-08-12
 invariant_ids:
   - INV-RELEASE-001
-decision_ids: []
-failure_pattern_ids: []
-runbook_ids: []
-qualification_ids: []
-issue_urls: []
 evidence_ids:
   - EVID-CANDIDATE-IDENTITY-001
   - EVID-JOB-AB-LEDGER-001
 implementation_refs: []
 regression_test_refs: []
-risk_decision_id: null
-residual_risk: null
-next_review_at: null
 ---
 
 # FP-RELEASE-001: Packaging command builds a different worktree than the claimed source

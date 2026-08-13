@@ -18,7 +18,6 @@ invariant_ids:
   - INV-IDENTITY-001
   - INV-PERMISSIONS-013
   - INV-PERMISSIONS-014
-decision_ids: []
 failure_pattern_ids:
   - FP-ADAPTERS-001
   - FP-ADAPTERS-002
@@ -26,10 +25,8 @@ failure_pattern_ids:
   - FP-ADAPTERS-004
   - FP-IDENTITY-001
   - FP-PERMISSIONS-001
-runbook_ids: []
 qualification_ids:
   - QMAT-ADAPTERS-001
-issue_urls: []
 ---
 
 # Adapters

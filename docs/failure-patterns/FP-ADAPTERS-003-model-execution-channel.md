@@ -3,8 +3,6 @@ schema_version: 1
 id: FP-ADAPTERS-003
 kind: failure-pattern
 title: Model spends the output budget outside the visible answer channel
-owners:
-  - unassigned
 component_ids:
   - CMP-ADAPTERS
   - CMP-CORE-PIPELINE
@@ -18,12 +16,8 @@ severity: high
 first_observed: 2026-08-12
 invariant_ids:
   - INV-ADAPTERS-003
-decision_ids: []
 failure_pattern_ids:
   - FP-ADAPTERS-004
-runbook_ids: []
-qualification_ids: []
-issue_urls: []
 evidence_ids:
   - EVID-QWEN-OUTPUT-GAP-001
   - EVID-JOB-AB-LEDGER-001
@@ -31,9 +25,6 @@ implementation_refs:
   - commit:fd762a45e8745eebf27f346317e97038be69de44
 regression_test_refs:
   - tests/adapters/llm-provider-clients.test.ts@fd762a45e8745eebf27f346317e97038be69de44
-risk_decision_id: null
-residual_risk: null
-next_review_at: null
 ---
 
 # FP-ADAPTERS-003: Model spends the output budget outside the visible answer channel

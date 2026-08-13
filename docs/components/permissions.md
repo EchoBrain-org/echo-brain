@@ -14,14 +14,11 @@ invariant_ids:
   - INV-PERMISSIONS-013
   - INV-PERMISSIONS-014
   - INV-IDENTITY-003
-decision_ids: []
 failure_pattern_ids:
   - FP-PERMISSIONS-001
   - FP-IDENTITY-003
-runbook_ids: []
 qualification_ids:
   - QUAL-20260813-174902-001
-issue_urls: []
 ---
 
 # Permissions

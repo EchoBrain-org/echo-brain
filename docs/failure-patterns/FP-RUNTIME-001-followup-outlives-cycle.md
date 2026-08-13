@@ -3,8 +3,6 @@ schema_version: 1
 id: FP-RUNTIME-001
 kind: failure-pattern
 title: Durable provider resolution is not followed by a fresh bounded sweep
-owners:
-  - unassigned
 component_ids:
   - CMP-LOCAL-RUNTIME
   - CMP-CENTRAL-ORGANIZATION
@@ -18,11 +16,6 @@ severity: high
 first_observed: 2026-08-13
 invariant_ids:
   - INV-RUNTIME-001
-decision_ids: []
-failure_pattern_ids: []
-runbook_ids: []
-qualification_ids: []
-issue_urls: []
 evidence_ids:
   - EVID-JOB-AB-LEDGER-001
 implementation_refs:
@@ -30,9 +23,6 @@ implementation_refs:
 regression_test_refs:
   - tests/product/organization-record-sweep-wiring.test.ts@a132c35aa9399876cc633c727d2c820af506bcf4
   - tests/machine/organization-cli.test.ts@a132c35aa9399876cc633c727d2c820af506bcf4
-risk_decision_id: null
-residual_risk: null
-next_review_at: null
 ---
 
 # FP-RUNTIME-001: Durable provider resolution is not followed by a fresh bounded sweep

@@ -3,8 +3,6 @@ schema_version: 1
 id: FP-OPERATIONS-001
 kind: failure-pattern
 title: Dependency restart leaves a proxy in a stale shared namespace
-owners:
-  - unassigned
 component_ids:
   - CMP-CENTRAL-ORGANIZATION
   - CMP-OPERATIONS-RELEASE
@@ -18,11 +16,6 @@ severity: high
 first_observed: 2026-08-13
 invariant_ids:
   - INV-OPERATIONS-001
-decision_ids: []
-failure_pattern_ids: []
-runbook_ids: []
-qualification_ids: []
-issue_urls: []
 evidence_ids:
   - EVID-AUTHORITY-RESTART-001
   - EVID-JOB-AB-LEDGER-001
@@ -30,9 +23,7 @@ implementation_refs:
   - commit:5aa7a37de94b8431c8fcb40cdee15ed34c4ba69a
 regression_test_refs:
   - .github/workflows/ci.yml@5aa7a37de94b8431c8fcb40cdee15ed34c4ba69a
-risk_decision_id: null
 residual_risk: Engine-initiated dependency crash restart is not covered by explicit Compose restart propagation
-next_review_at: null
 ---
 
 # FP-OPERATIONS-001: Dependency restart leaves a proxy in a stale shared namespace

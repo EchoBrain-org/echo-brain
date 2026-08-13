@@ -3,8 +3,6 @@ schema_version: 1
 id: QMAT-JOB-A-STOPPED-001
 kind: qualification-matrix
 title: Job A stopped-state proof matrix
-owners:
-  - unassigned
 component_ids:
   - CMP-CENTRAL-ORGANIZATION
   - CMP-PERMISSIONS
@@ -20,13 +18,8 @@ assertion_ids:
   - JOB-A-STOP-004
   - JOB-A-STOP-005
   - JOB-A-STOP-006
-invariant_ids: []
-decision_ids: []
-failure_pattern_ids: []
-runbook_ids: []
 qualification_ids:
   - QUAL-20260813-174902-001
-issue_urls: []
 ---
 
 # Job A stopped-state proof matrix V1

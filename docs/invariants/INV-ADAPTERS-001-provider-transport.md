@@ -3,8 +3,6 @@ schema_version: 1
 id: INV-ADAPTERS-001
 kind: invariant
 title: Provider transport is part of the verified contract
-owners:
-  - unassigned
 component_ids:
   - CMP-ADAPTERS
 created_at: 2026-08-13
@@ -13,13 +11,8 @@ reviewed_ref: 06811c29458b0bf3aac443baf35453d3a2eb27f3
 normative: MUST
 enforcement_status: partial
 enforcement_scope: Slack identity verification on the founder-live hardening branch
-invariant_ids: []
-decision_ids: []
 failure_pattern_ids:
   - FP-ADAPTERS-001
-runbook_ids: []
-qualification_ids: []
-issue_urls: []
 ---
 
 # INV-ADAPTERS-001: Provider transport is part of the verified contract

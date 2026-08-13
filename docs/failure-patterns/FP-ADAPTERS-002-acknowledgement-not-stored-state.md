@@ -3,8 +3,6 @@ schema_version: 1
 id: FP-ADAPTERS-002
 kind: failure-pattern
 title: Provider accepts a write but acknowledgement differs from stored state
-owners:
-  - unassigned
 component_ids:
   - CMP-ADAPTERS
   - CMP-LOCAL-RUNTIME
@@ -20,11 +18,6 @@ first_observed: 2026-08-12
 invariant_ids:
   - INV-ADAPTERS-002
   - INV-PERMISSIONS-013
-decision_ids: []
-failure_pattern_ids: []
-runbook_ids: []
-qualification_ids: []
-issue_urls: []
 evidence_ids:
   - EVID-JOB-AB-LEDGER-001
 implementation_refs:
@@ -33,9 +26,6 @@ regression_test_refs:
   - tests/adapters/slack-reactions-approval-surface.test.ts@8d61edada1cf994678aa7c2201c47ff08753ea08
   - tests/product/slack-reviewer-publication.test.ts@8d61edada1cf994678aa7c2201c47ff08753ea08
   - tests/adapters/slack-web-api-client.test.ts@8d61edada1cf994678aa7c2201c47ff08753ea08
-risk_decision_id: null
-residual_risk: null
-next_review_at: null
 ---
 
 # FP-ADAPTERS-002: Provider accepts a write but acknowledgement differs from stored state

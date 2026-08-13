@@ -3,8 +3,6 @@ schema_version: 1
 id: INV-ADAPTERS-003
 kind: invariant
 title: Model execution controls are explicit processing identity
-owners:
-  - unassigned
 component_ids:
   - CMP-ADAPTERS
   - CMP-CORE-PIPELINE
@@ -14,13 +12,8 @@ reviewed_ref: fd762a45e8745eebf27f346317e97038be69de44
 normative: MUST
 enforcement_status: partial
 enforcement_scope: Qwen 3 through the Ollama adapter on the founder-live hardening branch
-invariant_ids: []
-decision_ids: []
 failure_pattern_ids:
   - FP-ADAPTERS-003
-runbook_ids: []
-qualification_ids: []
-issue_urls: []
 ---
 
 # INV-ADAPTERS-003: Model execution controls are explicit processing identity

@@ -3,8 +3,6 @@ schema_version: 1
 id: INV-PERMISSIONS-014
 kind: invariant
 title: Approval authority is independent from source custody
-owners:
-  - unassigned
 component_ids:
   - CMP-ADAPTERS
   - CMP-IDENTITY-ACCESS
@@ -17,11 +15,6 @@ enforcement_status: partial
 enforcement_scope: Bounded Slack reviewer and organization-member approval modes only
 invariant_ids:
   - INV-12
-decision_ids: []
-failure_pattern_ids: []
-runbook_ids: []
-qualification_ids: []
-issue_urls: []
 ---
 
 # INV-PERMISSIONS-014: Approval authority is independent from source custody

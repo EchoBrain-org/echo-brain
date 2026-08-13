@@ -3,8 +3,6 @@ schema_version: 1
 id: FP-IDENTITY-001
 kind: failure-pattern
 title: Enrollment and authorization derive different provider identities
-owners:
-  - unassigned
 component_ids:
   - CMP-ADAPTERS
   - CMP-IDENTITY-ACCESS
@@ -20,13 +18,9 @@ first_observed: 2026-08-12
 invariant_ids:
   - INV-IDENTITY-001
   - INV-IDENTITY-004
-decision_ids: []
 failure_pattern_ids:
   - FP-ADAPTERS-001
   - FP-IDENTITY-004
-runbook_ids: []
-qualification_ids: []
-issue_urls: []
 evidence_ids:
   - EVID-JOB-AB-LEDGER-001
 implementation_refs:
@@ -34,9 +28,6 @@ implementation_refs:
 regression_test_refs:
   - tests/adapters/slack-web-api-client.test.ts@77b7744b46a912b9154c218b3a036e8552d7180e
   - services/organization-control-plane/test/slack-integration-provider.test.ts@77b7744b46a912b9154c218b3a036e8552d7180e
-risk_decision_id: null
-residual_risk: null
-next_review_at: null
 ---
 
 # FP-IDENTITY-001: Enrollment and authorization derive different provider identities
