@@ -135,7 +135,10 @@ adapter.
 
 The bundled `llm` processor is one semantic adapter with narrow provider
 drivers. The shared processor owns the prompt, canonical structured-output
-schema, parsing, decision validation, and verbatim evidence gate. Ollama,
+schema, parsing, decision validation, and request-local source-block evidence
+gate. The model cites a short block alias; the adapter resolves it to the
+canonical meeting block without asking the model to reproduce source text.
+Ollama,
 OpenAI, Anthropic, and OpenRouter drivers own only authentication, wire-format
 translation, model capability checks, response extraction, and error
 normalization. A provider driver must not weaken or specialize the semantic

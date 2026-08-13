@@ -50,6 +50,7 @@ describe('Ollama provider client', () => {
     expect(JSON.parse(String(calls[0]!.init.body))).toMatchObject({
       model: 'qwen3:4b',
       stream: false,
+      think: false,
       format: generationRequest.schema,
       options: { temperature: 0, num_ctx: 32_768, num_predict: 4096 },
     });
