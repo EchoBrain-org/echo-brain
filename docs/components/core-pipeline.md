@@ -10,9 +10,13 @@ component_ids:
 created_at: 2026-08-13
 reviewed_at: 2026-08-13
 reviewed_ref: 808ac89eaf3e8eba529b356bd80d4509b9a2a293
-invariant_ids: []
+invariant_ids:
+  - INV-ADAPTERS-003
+  - INV-ADAPTERS-004
 decision_ids: []
-failure_pattern_ids: []
+failure_pattern_ids:
+  - FP-ADAPTERS-003
+  - FP-ADAPTERS-004
 runbook_ids: []
 qualification_ids: []
 issue_urls: []
@@ -48,4 +52,6 @@ depend outward on them.
 - [Architecture decisions](../decisions/README.md)
 - [Failure patterns](../failure-patterns/README.md)
 
-The component-specific record index has not yet been seeded.
+Current links cover the LLM execution and source-grounding boundaries. Other
+core invariants remain indexed in the existing permission registry until
+incrementally migrated.

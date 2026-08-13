@@ -10,11 +10,24 @@ component_ids:
 created_at: 2026-08-13
 reviewed_at: 2026-08-13
 reviewed_ref: 808ac89eaf3e8eba529b356bd80d4509b9a2a293
-invariant_ids: []
+invariant_ids:
+  - INV-IDENTITY-001
+  - INV-IDENTITY-002
+  - INV-IDENTITY-003
+  - INV-IDENTITY-004
+  - INV-RUNTIME-001
+  - INV-OPERATIONS-001
 decision_ids: []
-failure_pattern_ids: []
+failure_pattern_ids:
+  - FP-IDENTITY-001
+  - FP-IDENTITY-002
+  - FP-IDENTITY-003
+  - FP-IDENTITY-004
+  - FP-RUNTIME-001
+  - FP-OPERATIONS-001
 runbook_ids: []
-qualification_ids: []
+qualification_ids:
+  - QUAL-20260813-174902-001
 issue_urls: []
 ---
 

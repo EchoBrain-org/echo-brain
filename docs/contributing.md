@@ -66,7 +66,8 @@ synonyms for an existing domain.
 | `FP-<DOMAIN>-NNN` | Failure pattern |
 | `PB-<DOMAIN>-NNN` | Investigative playbook |
 | `RB-<DOMAIN>-NNN` | Operational runbook |
-| `QUAL-YYYYMMDD-NNN` | Exact qualification run |
+| `QMAT-<DOMAIN>-NNN` | Reusable qualification matrix |
+| `QUAL-YYYYMMDD-HHMMSS-NNN` | Exact qualification run |
 
 Never reuse an ID. A renamed record keeps its ID. Qualification IDs include a
 UTC time suffix in addition to the date when concurrent runs are possible.

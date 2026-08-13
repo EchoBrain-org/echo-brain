@@ -10,9 +10,11 @@ component_ids:
 created_at: 2026-08-13
 reviewed_at: 2026-08-13
 reviewed_ref: 808ac89eaf3e8eba529b356bd80d4509b9a2a293
-invariant_ids: []
+invariant_ids:
+  - INV-IDENTITY-002
 decision_ids: []
-failure_pattern_ids: []
+failure_pattern_ids:
+  - FP-IDENTITY-002
 runbook_ids: []
 qualification_ids: []
 issue_urls: []

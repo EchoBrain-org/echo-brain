@@ -10,11 +10,25 @@ component_ids:
 created_at: 2026-08-13
 reviewed_at: 2026-08-13
 reviewed_ref: 808ac89eaf3e8eba529b356bd80d4509b9a2a293
-invariant_ids: []
+invariant_ids:
+  - INV-ADAPTERS-001
+  - INV-ADAPTERS-002
+  - INV-ADAPTERS-003
+  - INV-ADAPTERS-004
+  - INV-IDENTITY-001
+  - INV-PERMISSIONS-013
+  - INV-PERMISSIONS-014
 decision_ids: []
-failure_pattern_ids: []
+failure_pattern_ids:
+  - FP-ADAPTERS-001
+  - FP-ADAPTERS-002
+  - FP-ADAPTERS-003
+  - FP-ADAPTERS-004
+  - FP-IDENTITY-001
+  - FP-PERMISSIONS-001
 runbook_ids: []
-qualification_ids: []
+qualification_ids:
+  - QMAT-ADAPTERS-001
 issue_urls: []
 ---
 
@@ -48,6 +62,7 @@ semantics.
 - [Failure-pattern registry](../failure-patterns/README.md)
 - [Qualification](../qualification/README.md)
 
-The private founder-live adapter ledger will seed sanitized failure-pattern
-records and a reusable qualification matrix in a later checkpoint. Raw
-provider payloads and private receipts will not be copied here.
+The founder-live ledger has been converted into the linked sanitized
+[failure-pattern records](../failure-patterns/README.md) and the
+[provider adapter matrix](../qualification/adapter-matrix-v1.md). Raw provider
+payloads and private receipt locators were not copied.

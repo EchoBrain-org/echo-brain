@@ -53,10 +53,12 @@ invariants, decisions, failure patterns, operations, and proof.
 
 ## Durable knowledge records
 
-**Foundation status:** this branch establishes the structure and templates.
-The adapter failure catalog and qualification matrix are seeded in the next
-checkpoint; standalone ADR migration remains incremental. Until an index is
-populated, follow its links to the existing architecture and product contracts.
+**Foundation status:** this branch establishes the structure and templates and
+seeds the founder-live adapter invariants, 12 failure patterns, one expected
+fail-closed control, the adversarial matrix, and one bounded stopped-state
+qualification report. Standalone ADR
+migration remains incremental; existing architecture and product contracts
+remain linked as the source for decisions not yet extracted.
 
 - [Invariants](invariants/README.md): rules that must or must not hold.
 - [Architecture decisions](decisions/README.md): accepted choices, rationale,

@@ -10,9 +10,15 @@ component_ids:
 created_at: 2026-08-13
 reviewed_at: 2026-08-13
 reviewed_ref: 808ac89eaf3e8eba529b356bd80d4509b9a2a293
-invariant_ids: []
+invariant_ids:
+  - INV-ADAPTERS-002
+  - INV-RUNTIME-001
+  - INV-PERMISSIONS-013
 decision_ids: []
-failure_pattern_ids: []
+failure_pattern_ids:
+  - FP-ADAPTERS-002
+  - FP-RUNTIME-001
+  - FP-PERMISSIONS-001
 runbook_ids: []
 qualification_ids: []
 issue_urls: []
@@ -45,6 +51,5 @@ the organization record.
   [`tests/machine/`](../../tests/machine)
 
 Diagnostics must distinguish provider reachability from complete runtime
-readiness and must not mutate production state merely to inspect it. This rule
-will receive a stable invariant and failure-pattern link when the registry is
-seeded.
+readiness and must not mutate production state merely to inspect it. See
+`INV-PERMISSIONS-013` and `FP-PERMISSIONS-001`.

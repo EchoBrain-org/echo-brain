@@ -15,6 +15,13 @@ deployment, and release.
 
 Use the [qualification report template](../_templates/qualification.md).
 
+Current indexes and matrices:
+
+- [Sanitized private evidence index](evidence-index.md)
+- [Provider adapter adversarial matrix V1](adapter-matrix-v1.md)
+- [Job A stopped-state matrix V1](job-a-stopped-matrix-v1.md)
+- [Job A stopped-state proof](QUAL-20260813-174902-001-job-a-stopped.md)
+
 ## Evidence index rules
 
 A tracked evidence entry contains only sanitized metadata:
