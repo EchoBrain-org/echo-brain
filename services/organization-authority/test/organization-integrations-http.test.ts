@@ -775,6 +775,61 @@ describe('organization integrations HTTP routes', () => {
     }
   });
 
+  it('preserves both schema-v3 application method receivers', async () => {
+    const command = organizationMemberPermissionRequest();
+    const decision = organizationMemberPermissionDecision(command, true);
+    let checkSubject!: NonNullable<
+      OrganizationAuthorityHttpApplication['checkOrganizationMemberReadablePermissionSubject']
+    >;
+    let checkPermission!: NonNullable<
+      OrganizationIntegrationsHttpApplication['checkOrganizationMemberReadablePermission']
+    >;
+    checkSubject = vi.fn(function (
+      this: OrganizationAuthorityHttpApplication,
+      request,
+    ) {
+      if (
+        this.checkOrganizationMemberReadablePermissionSubject !== checkSubject
+      ) {
+        throw new Error('schema-v3 subject receiver was lost');
+      }
+      return { installation_id: request.installation_id };
+    });
+    checkPermission = vi.fn(async function (
+      this: OrganizationIntegrationsHttpApplication,
+    ) {
+      if (this.checkOrganizationMemberReadablePermission !== checkPermission) {
+        throw new Error('schema-v3 integration receiver was lost');
+      }
+      return decision;
+    });
+    const server = integrationServer(
+      integrationsApplication({
+        checkOrganizationMemberReadablePermission: checkPermission,
+      }),
+      {
+        checkOrganizationMemberReadablePermissionSubject: checkSubject,
+      },
+    );
+    const origin = await listen(server);
+    try {
+      const response = await fetch(
+        `${origin}${ORGANIZATION_API_PERMISSION_CHECKS_PATH}`,
+        {
+          method: 'POST',
+          headers: { ...proxyHeaders(), 'content-type': 'application/json' },
+          body: JSON.stringify(command),
+        },
+      );
+      expect(response.status).toBe(200);
+      expect(await response.text()).toBe(canonicalJson(decision));
+      expect(checkSubject).toHaveBeenCalledOnce();
+      expect(checkPermission).toHaveBeenCalledOnce();
+    } finally {
+      await close(server);
+    }
+  });
+
   it('round-trips exact canonical schema-v2 and schema-v3 allow and denial decisions through the HTTP server and client', async () => {
     const reviewerCommand = reviewerPermissionRequest();
     const reviewerDenial = reviewerPermissionDecision(reviewerCommand);

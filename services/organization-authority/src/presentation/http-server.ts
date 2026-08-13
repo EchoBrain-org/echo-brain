@@ -1202,7 +1202,8 @@ export function createOrganizationAuthorityHttpServer(
             }
             let organizationMemberAuthenticated: { installation_id: string };
             try {
-              organizationMemberAuthenticated = checkSubject(
+              organizationMemberAuthenticated = checkSubject.call(
+                options.application,
                 organizationMemberCommand,
                 null,
               );
@@ -1235,7 +1236,8 @@ export function createOrganizationAuthorityHttpServer(
                 200,
                 Buffer.from(
                   canonicalOrganizationMemberReadablePermissionCheckDecisionBytes(
-                    await checkPermission(
+                    await checkPermission.call(
+                      integrations,
                       organizationMemberCommand,
                       lifecycle.shutdownController.signal,
                     ),
