@@ -38,7 +38,8 @@
     "services/organization-authority/migrations/0004_internal_live_release_rollout.sql",
     "services/organization-authority/migrations/0005_record_installation_anchor.sql",
     "services/organization-authority/migrations/0006_reviewer_query_audit.sql",
-    "services/organization-authority/migrations/0007_readable_search_state.sql"
+    "services/organization-authority/migrations/0007_readable_search_state.sql",
+    "services/organization-authority/migrations/0008_organization_member_recording_activation.sql"
   ],
   "layer_rules": [
     {

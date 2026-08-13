@@ -874,6 +874,54 @@ export class OrganizationIntegrationsRepository {
     });
   }
 
+  /**
+   * Proves that one exact active Slack approval-surface instance is bound to
+   * the current organization tool. This is intentionally stricter than an
+   * adapter-id existence check: a one-way policy activation must not accept a
+   * misspelled instance id or a binding whose public Slack identity drifted.
+   */
+  hasActiveSlackApprovalSurfaceInstance(adapterInstanceId: string): boolean {
+    if (
+      adapterInstanceId.length < 1 ||
+      adapterInstanceId.length > 128 ||
+      adapterInstanceId.trim() !== adapterInstanceId ||
+      adapterInstanceId.includes("\0")
+    ) {
+      return false;
+    }
+    const tool = this.activeSlackOrganizationTool();
+    if (tool === null) return false;
+    const rows = this.database
+      .prepare(
+        `SELECT adapter_binding_id, installation_id, installation_key_id,
+                adapter_id, adapter_instance_id, adapter_version,
+                connection_id, public_configuration_json,
+                public_configuration_sha256
+         FROM organization_adapter_bindings
+         WHERE organization_id = ?
+           AND product_namespace = 'echo-brain'
+           AND adapter_kind = 'approval-surface'
+           AND adapter_id = 'slack-reactions'
+           AND adapter_instance_id = ?
+           AND connection_id = ?
+           AND status = 'active'
+         ORDER BY adapter_binding_id`,
+      )
+      .all(
+        this.identity.organization_id,
+        adapterInstanceId,
+        tool.connection_id,
+      ) as ActiveSlackBindingRow[];
+    for (const row of rows) {
+      if (!slackApprovalBindingMatchesTool(row, tool)) {
+        throw new OrganizationIntegrationConflictError(
+          "active Slack approval binding is not an exact organization-tool binding",
+        );
+      }
+    }
+    return rows.length > 0;
+  }
+
   upgradeableSlackOrganizationTool(): UpgradeableSlackOrganizationTool | null {
     const row = this.slackOrganizationToolRow();
     if (row === undefined) return null;
@@ -2502,9 +2550,9 @@ export class OrganizationIntegrationsRepository {
     let detail: Record<string, unknown>;
     try { const parsed = JSON.parse(row.detail_json) as unknown; if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed) || canonicalJson(parsed as Record<string, unknown>) !== row.detail_json) return Object.freeze({ status: 'corrupt' as const }); detail = parsed as Record<string, unknown>; } catch { return Object.freeze({ status: 'corrupt' as const }); }
     if (digest(detail) !== row.detail_sha256 || organizationIntegrationAuditEntrySha256({ ...row, detail }) !== row.entry_sha256) return Object.freeze({ status: 'corrupt' as const });
-    const fields: Readonly<Record<string, unknown>> = { request_sha256: expected.request_sha256, provider_event_sha256: expected.provider_event_sha256, principal_id: expected.principal_id, policy_contract_sha256: expected.policy_contract_sha256, release_draft_sha256: expected.release_draft_sha256, approval_presentation_sha256: expected.approval_presentation_sha256, semantic_intent_sha256: expected.semantic_intent_sha256, message_presentation_sha256: expected.message_presentation_sha256 };
-    if (row.reason_code !== ORGANIZATION_MEMBER_READABLE_ALLOW_REASON_CODE || row.outcome !== 'allowed' || row.action !== 'permission.approve' || row.subject_kind !== 'approval' || row.subject_id !== expected.approval_id || row.actor_installation_id !== expected.installation_id || row.actor_principal_id !== expected.principal_id || row.actor_membership_id !== expected.membership_id || row.membership_id !== expected.membership_id || row.correlation_id !== expected.request_id || row.adapter_binding_id !== expected.adapter_binding_id || row.permission_grant_id !== expected.permission_grant_id || row.provider_event_sha256 !== expected.provider_event_sha256 || row.occurred_at !== expected.evaluated_at || row.authority_checked_at !== expected.evaluated_at || row.entry_sha256 !== expected.authorization_audit_entry_sha256 || detail.kind !== 'organization-member-readable-approval-audit-detail-v1' || detail.policy_id !== 'organization-member-readable-v1' || Object.entries(fields).some(([key, value]) => detail[key] !== value)) return Object.freeze({ status: 'mismatch' as const });
-    return Object.freeze({ status: 'matched' as const, audit_entry_sha256: row.entry_sha256 as `sha256:${string}` });
+    const fields: Readonly<Record<string, unknown>> = { request_sha256: expected.request_sha256, provider_event_sha256: expected.provider_event_sha256, principal_id: expected.principal_id, adapter_instance_id: expected.adapter_instance_id, policy_contract_sha256: expected.policy_contract_sha256, release_draft_sha256: expected.release_draft_sha256, approval_presentation_sha256: expected.approval_presentation_sha256, semantic_intent_sha256: expected.semantic_intent_sha256, message_presentation_sha256: expected.message_presentation_sha256 };
+    if (row.reason_code !== ORGANIZATION_MEMBER_READABLE_ALLOW_REASON_CODE || row.outcome !== 'allowed' || row.action !== 'permission.approve' || row.subject_kind !== 'approval' || row.subject_id !== expected.approval_id || row.actor_installation_id !== expected.installation_id || row.actor_principal_id !== expected.principal_id || row.actor_membership_id !== expected.membership_id || row.membership_id !== expected.membership_id || row.correlation_id !== expected.request_id || row.adapter_binding_id !== expected.adapter_binding_id || row.permission_grant_id !== expected.permission_grant_id || row.provider_event_sha256 !== expected.provider_event_sha256 || row.occurred_at !== expected.evaluated_at || row.authority_checked_at !== expected.evaluated_at || row.entry_sha256 !== expected.authorization_audit_entry_sha256 || detail.kind !== 'organization-member-readable-approval-audit-detail-v1' || detail.policy_id !== 'organization-member-readable-v1' || detail.adapter_id !== 'slack-reactions' || Object.entries(fields).some(([key, value]) => detail[key] !== value)) return Object.freeze({ status: 'mismatch' as const });
+    return Object.freeze({ status: 'matched' as const, audit_entry_sha256: row.entry_sha256 as `sha256:${string}`, adapter_instance_id: detail.adapter_instance_id as string });
   }
 
   /**

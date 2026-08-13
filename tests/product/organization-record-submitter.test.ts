@@ -816,3 +816,143 @@ describe('organization record submitter reviewer gating', () => {
     },
   );
 });
+
+const ORGANIZATION_MEMBER_EVALUATED_AT = '2026-08-08T11:45:00.000Z';
+
+function organizationMemberEvidence(overrides: JsonObject = {}): JsonObject {
+  return {
+    ...evidence({
+      schema_version: 3,
+      reason_code: 'active_organization_member_readable_notice_v1',
+      policy_id: 'organization-member-readable-v1',
+      policy_contract_sha256: `sha256:${'8'.repeat(64)}`,
+      evaluated_at: ORGANIZATION_MEMBER_EVALUATED_AT,
+      authorization_audit_event_id: 'aud_1',
+      authorization_audit_entry_sha256: `sha256:${'3'.repeat(64)}`,
+      release_draft_sha256: `sha256:${'4'.repeat(64)}`,
+      approval_presentation_sha256: `sha256:${'5'.repeat(64)}`,
+      semantic_intent_sha256: `sha256:${'6'.repeat(64)}`,
+      message_presentation_sha256: `sha256:${'7'.repeat(64)}`,
+    }),
+    ...overrides,
+  };
+}
+
+function organizationMemberNode(
+  overrides: Partial<OrganizationRecordCandidateNode> = {},
+): OrganizationRecordCandidateNode {
+  return node({
+    reviewed_at: ORGANIZATION_MEMBER_EVALUATED_AT,
+    resolved_surface: 'slack-organization-member-readable-v1',
+    resolved_metadata: { authorization: organizationMemberEvidence() },
+    ...overrides,
+  });
+}
+
+describe('organization record submitter organization-member gating', () => {
+  it('builds a member-readable envelope from complete schema-v3 evidence', async () => {
+    const envelope = envelopeValue();
+    const store = fakeStore({ nodes: [organizationMemberNode()], skipped: [] });
+    const builder = fakeBuilder(envelope);
+    const client = fakeClient({
+      outcome: 'accepted',
+      receipt: receipt(envelope),
+    });
+
+    const result = await submitter({ store, builder, client }).sweep();
+
+    expect(result).toMatchObject({ skipped: 0 });
+    expect(builder.inputs).toHaveLength(1);
+    expect(builder.inputs[0]?.authorization).toEqual(
+      organizationMemberEvidence(),
+    );
+    expect(builder.inputs[0]?.surface).toBe(
+      'slack-organization-member-readable-v1',
+    );
+    expect(builder.inputs[0]?.reviewed_at).toBe(
+      ORGANIZATION_MEMBER_EVALUATED_AT,
+    );
+  });
+
+  it.each([
+    [
+      'an organization-member rejection',
+      organizationMemberNode({
+        status: 'rejected',
+        resolved_metadata: {
+          authorization: organizationMemberEvidence({ action: 'reject' }),
+        },
+      }),
+      /cannot record a rejection/,
+    ],
+    [
+      'organization-member evidence on another surface',
+      organizationMemberNode({ resolved_surface: 'slack-reviewer-v1' }),
+      /requires the organization-member resolution surface/,
+    ],
+    [
+      'a resolution time that contradicts the member evidence',
+      organizationMemberNode({ reviewed_at: '2026-08-08T11:46:00.000Z' }),
+      /does not match its authorization evidence/,
+    ],
+    [
+      'organization-member evidence missing its audit event id',
+      organizationMemberNode({
+        resolved_metadata: {
+          authorization: organizationMemberEvidence({
+            authorization_audit_event_id: '',
+          }),
+        },
+      }),
+      /missing authorization_audit_event_id/,
+    ],
+    [
+      'organization-member evidence with a malformed policy digest',
+      organizationMemberNode({
+        resolved_metadata: {
+          authorization: organizationMemberEvidence({
+            policy_contract_sha256: 'sha256:short',
+          }),
+        },
+      }),
+      /policy_contract_sha256 is not a sha256 digest/,
+    ],
+    [
+      'organization-member evidence for another policy',
+      organizationMemberNode({
+        resolved_metadata: {
+          authorization: organizationMemberEvidence({ policy_id: 'other-policy' }),
+        },
+      }),
+      /carries another policy id/,
+    ],
+    [
+      'the organization-member reason on schema-v1 evidence',
+      node({
+        resolved_metadata: {
+          authorization: evidence({
+            reason_code: 'active_organization_member_readable_notice_v1',
+          }),
+        },
+      }),
+      /requires schema version 3 evidence/,
+    ],
+  ])(
+    'skips %s, building and sending nothing',
+    async (_label, candidate, expected) => {
+      const store = fakeStore({ nodes: [candidate], skipped: [] });
+      const builder = fakeBuilder();
+      const client = fakeClient({ outcome: 'retry', reason: 'unused' });
+
+      const result = await submitter({ store, builder, client }).sweep();
+
+      expect(result).toMatchObject({ ok: false, skipped: 1, published: 0 });
+      expect(result.alerts[0]).toMatchObject({
+        code: 'authorization_evidence_invalid',
+      });
+      expect(result.alerts[0]?.detail).toMatch(expected);
+      expect(builder.inputs).toHaveLength(0);
+      expect(client.sent).toHaveLength(0);
+    },
+  );
+});

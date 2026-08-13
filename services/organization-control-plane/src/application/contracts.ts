@@ -647,11 +647,16 @@ export interface RecordedOrganizationMemberReadablePermissionDecision {
 export interface OrganizationMemberAuthorizationEvidenceExpectation {
   organization_id: string; installation_id: string; approval_id: string; request_id: string;
   principal_id: string; membership_id: string; request_sha256: string;
-  provider_event_sha256: string; adapter_binding_id: string; permission_grant_id: string;
+  provider_event_sha256: string; adapter_binding_id: string; adapter_instance_id: string;
+  permission_grant_id: string;
   evaluated_at: string; policy_contract_sha256: string; release_draft_sha256: string;
   approval_presentation_sha256: string; semantic_intent_sha256: string;
   message_presentation_sha256: string; authorization_audit_entry_sha256: string;
 }
 export type OrganizationMemberAuthorizationEvidenceMatch =
-  | { readonly status: "matched"; readonly audit_entry_sha256: `sha256:${string}` }
+  | {
+      readonly status: "matched";
+      readonly audit_entry_sha256: `sha256:${string}`;
+      readonly adapter_instance_id: string;
+    }
   | { readonly status: "absent" | "mismatch" | "corrupt" | "unavailable" };

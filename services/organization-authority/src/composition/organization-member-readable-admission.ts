@@ -9,6 +9,10 @@ import {
 } from '@echo-brain/organization-protocol';
 import type { OrganizationMemberReadableEnvelopeValidator } from '@echo-brain/organization-record/append';
 import type { OrganizationRecordAuthorizationEvidenceStore } from '../application/organization-record-ingest.js';
+import {
+  isOrganizationMemberReadableRecordingPolicy,
+  type OrganizationRecordingPolicyV1,
+} from '../application/organization-recording-policy.js';
 
 type RecordLogDatabase = Parameters<typeof verifyOrganizationMemberFactAdmission>[0];
 
@@ -29,6 +33,7 @@ export function verifyOrganizationMemberReadableReadiness(input: {
   readonly organization_id: string;
   readonly validator: OrganizationMemberReadableEnvelopeValidator;
   readonly evidence: OrganizationRecordAuthorizationEvidenceStore;
+  readonly organization_recording_policy_v1?: OrganizationRecordingPolicyV1;
 }): OrganizationMemberReadableReadiness {
   const admission = verifyOrganizationMemberFactAdmission(input.database, {
     organization_id: input.organization_id,
@@ -58,11 +63,22 @@ export function verifyOrganizationMemberReadableReadiness(input: {
          AND json_extract(canonical_envelope, '$.schema_version') = 3
        ORDER BY position`,
     ).all() as { position: number; canonical_envelope: string }[];
+    const policy = input.organization_recording_policy_v1;
+    if (
+      rows.length > 0 &&
+      !isOrganizationMemberReadableRecordingPolicy(policy)
+    ) {
+      failures.push(Object.freeze({
+        log_position: null,
+        detail: 'organization-member records exist without an active effective recording policy',
+      }));
+    }
     for (const row of rows) {
       try {
         const envelope = validateOrganizationRecordOrganizationMemberApprovalEnvelope(
           parseOrganizationRecordEnvelope(row.canonical_envelope),
         );
+        if (!isOrganizationMemberReadableRecordingPolicy(policy)) continue;
         const evidence = envelope.reviewer.authorization;
         const match = lookup.call(input.evidence, evidence.authorization_audit_event_id, {
           organization_id: input.organization_id,
@@ -74,6 +90,7 @@ export function verifyOrganizationMemberReadableReadiness(input: {
           request_sha256: evidence.request_sha256,
           provider_event_sha256: evidence.provider_event_sha256,
           adapter_binding_id: evidence.adapter_binding_id,
+          adapter_instance_id: policy.approval_surface_adapter_instance_id,
           permission_grant_id: evidence.permission_grant_id,
           evaluated_at: evidence.evaluated_at,
           policy_contract_sha256: evidence.policy_contract_sha256,
@@ -84,7 +101,8 @@ export function verifyOrganizationMemberReadableReadiness(input: {
           authorization_audit_entry_sha256: evidence.authorization_audit_entry_sha256,
         });
         if (match.status !== 'matched' ||
-          match.audit_entry_sha256 !== evidence.authorization_audit_entry_sha256) {
+          match.audit_entry_sha256 !== evidence.authorization_audit_entry_sha256 ||
+          match.adapter_instance_id !== policy.approval_surface_adapter_instance_id) {
           failures.push(Object.freeze({
             log_position: row.position,
             detail: `organization-member audit ${evidence.authorization_audit_event_id} is ${match.status}`,

@@ -17,6 +17,7 @@ import {
 import {
   inspectInitializedAuthorityFiles,
   inspectInitializedAuthorityState,
+  resolveEffectiveAuthorityServeConfig,
 } from './operator-state.js';
 
 const MAX_STATUS_RESPONSE_BYTES = 64 * 1024;
@@ -196,7 +197,9 @@ async function inspectAuthorityStatusWithPolicy(
       await inspectInitializedAuthorityState(configPath, config);
     else await inspectInitializedAuthorityFiles(configPath, config);
     runtimeFingerprint = authorityRuntimeFingerprint(
-      resolveAuthorityServeConfig(config),
+      inspectDatabaseState
+        ? resolveEffectiveAuthorityServeConfig(configPath, config)
+        : resolveAuthorityServeConfig(config),
     );
     checks.push({
       id: 'initialized-state',
@@ -280,7 +283,10 @@ async function inspectAuthorityStatusWithPolicy(
     ok: true,
     detail: `runtime owner pid ${String(lock.pid)} is active`,
   });
-  if (lock.runtime_fingerprint_sha256 !== runtimeFingerprint) {
+  if (
+    inspectDatabaseState &&
+    lock.runtime_fingerprint_sha256 !== runtimeFingerprint
+  ) {
     checks.push({
       id: 'listener',
       ok: false,
@@ -301,11 +307,14 @@ async function inspectAuthorityStatusWithPolicy(
       checks,
     };
   }
-  if (lock.challenge_secret === undefined) {
+  if (
+    lock.challenge_secret === undefined ||
+    lock.runtime_fingerprint_sha256 === undefined
+  ) {
     checks.push({
       id: 'listener',
       ok: false,
-      detail: 'runtime ownership has no challenge secret',
+      detail: 'runtime ownership has no complete challenge proof',
     });
     return {
       schema_version: 1,
@@ -325,7 +334,13 @@ async function inspectAuthorityStatusWithPolicy(
   const listener = await probeListener(
     config,
     lock.challenge_secret,
-    runtimeFingerprint,
+    // Ownership-only preflight intentionally does not open SQLite. In that
+    // mode the authenticated lock names the exact fingerprint the live
+    // listener must prove. Full status independently recomputes and compares
+    // the activation-aware fingerprint above before reaching this probe.
+    inspectDatabaseState
+      ? runtimeFingerprint
+      : lock.runtime_fingerprint_sha256,
   );
   checks.push({ id: 'listener', ok: listener.ok, detail: listener.detail });
   return {
@@ -352,7 +367,9 @@ export async function inspectAuthorityStatus(
 
 /**
  * Proves the configured live process without opening the authority database.
- * The running process owns database validation; the admin CLI owns transport.
+ * The authenticated ownership lock supplies the opaque runtime fingerprint;
+ * the live listener must prove it with the lock challenge secret. Full status
+ * separately owns SQLite and effective-policy validation.
  */
 export async function inspectAuthorityRuntimeOwnership(
   configPath: string,

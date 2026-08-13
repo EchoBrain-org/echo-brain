@@ -43,7 +43,8 @@ export type OrganizationRecordAlertKind =
   | 'derive-nudge-failed'
   | 'receipt-materialization-failed'
   | 'permission-pilot-inactive'
-  | 'reviewer-restricted-inactive';
+  | 'reviewer-restricted-inactive'
+  | 'organization-member-readable-inactive';
 
 export interface OrganizationRecordAlert {
   readonly kind: OrganizationRecordAlertKind;

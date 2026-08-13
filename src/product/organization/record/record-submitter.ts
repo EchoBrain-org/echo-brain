@@ -22,6 +22,12 @@ import type {
 const RESTRICTED_REVIEWER_ALLOW_REASON_CODE =
   'active_reviewer_restricted_notice_v1';
 const RESTRICTED_REVIEWER_SURFACE = 'slack-reviewer-v1';
+const ORGANIZATION_MEMBER_READABLE_ALLOW_REASON_CODE =
+  'active_organization_member_readable_notice_v1';
+const ORGANIZATION_MEMBER_READABLE_POLICY_ID =
+  'organization-member-readable-v1';
+const ORGANIZATION_MEMBER_READABLE_SURFACE =
+  'slack-organization-member-readable-v1';
 
 export type OrganizationRecordAlertCode =
   | 'node_unreadable'
@@ -131,7 +137,12 @@ function readOrganizationRecordAuthorization(
     return 'authorization evidence kind is not recognized';
   }
   const reviewerEvidence = evidence['schema_version'] === 2;
-  if (evidence['schema_version'] !== 1 && !reviewerEvidence) {
+  const organizationMemberEvidence = evidence['schema_version'] === 3;
+  if (
+    evidence['schema_version'] !== 1 &&
+    !reviewerEvidence &&
+    !organizationMemberEvidence
+  ) {
     return 'authorization evidence schema version is not supported';
   }
   // Schema-v2 evidence is reviewer-only: it authorizes approval alone and must
@@ -165,8 +176,47 @@ function readOrganizationRecordAuthorization(
     if (node.reviewed_at !== evidence['evaluated_at']) {
       return 'reviewer resolution time does not match its authorization evidence';
     }
+  } else if (organizationMemberEvidence) {
+    if (node.status !== 'approved') {
+      return 'organization-member authorization evidence cannot record a rejection';
+    }
+    if (
+      evidence['reason_code'] !==
+      ORGANIZATION_MEMBER_READABLE_ALLOW_REASON_CODE
+    ) {
+      return 'organization-member authorization evidence carries another reason code';
+    }
+    if (evidence['policy_id'] !== ORGANIZATION_MEMBER_READABLE_POLICY_ID) {
+      return 'organization-member authorization evidence carries another policy id';
+    }
+    if (!isNonEmptyString(evidence['authorization_audit_event_id'])) {
+      return 'authorization evidence is missing authorization_audit_event_id';
+    }
+    for (const field of [
+      'policy_contract_sha256',
+      'authorization_audit_entry_sha256',
+      'release_draft_sha256',
+      'approval_presentation_sha256',
+      'semantic_intent_sha256',
+      'message_presentation_sha256',
+    ] as const) {
+      const digest = evidence[field];
+      if (typeof digest !== 'string' || !SHA256_DIGEST_RE.test(digest)) {
+        return `authorization evidence ${field} is not a sha256 digest`;
+      }
+    }
+    if (node.resolved_surface !== ORGANIZATION_MEMBER_READABLE_SURFACE) {
+      return 'organization-member authorization evidence requires the organization-member resolution surface';
+    }
+    if (node.reviewed_at !== evidence['evaluated_at']) {
+      return 'organization-member resolution time does not match its authorization evidence';
+    }
   } else if (evidence['reason_code'] === RESTRICTED_REVIEWER_ALLOW_REASON_CODE) {
     return 'reviewer reason code requires schema version 2 evidence';
+  } else if (
+    evidence['reason_code'] === ORGANIZATION_MEMBER_READABLE_ALLOW_REASON_CODE
+  ) {
+    return 'organization-member reason code requires schema version 3 evidence';
   }
   if (evidence['allowed'] !== true) {
     return 'authorization evidence is not an allow decision';

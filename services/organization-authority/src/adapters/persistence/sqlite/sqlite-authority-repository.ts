@@ -72,6 +72,7 @@ import {
   validateStoredReadableSearchActiveGeneration,
   validateStoredReadableSearchQueryAuditEntry,
 } from '../../../application/readable-search-persistence.js';
+import { ORGANIZATION_MEMBER_RECORDING_ACTIVATED_ACTION } from '../../../application/organization-recording-policy-activation.js';
 import { reviewerQueryAuditRowBySequence } from './reviewer-query-audit-rows.js';
 import type { AuthorityAuditRow } from './reviewer-query-audit-rows.js';
 import {
@@ -1641,16 +1642,16 @@ class SqliteAuthorityTransaction
   }
 
   appendAudit(entry: AuthorityAuditEntry): void {
-    // The two governed reviewer query-audit actions are reserved. They are the
-    // maintenance receipt for a disclosure or a deletion, so the ordinary audit
-    // path -- which any online write holds -- must not be able to mint one.
-    // Only the stopped-state maintenance transaction's own private insert may.
+    // Governed stopped-state receipts are reserved. The ordinary audit path,
+    // which any online write holds, must not be able to mint a lookalike.
+    // Only each maintenance transaction's private atomic insert may.
     if (
       entry.action === REVIEWER_QUERY_AUDIT_EXPORT_ACTION ||
-      entry.action === REVIEWER_QUERY_AUDIT_EXPIRED_ACTION
+      entry.action === REVIEWER_QUERY_AUDIT_EXPIRED_ACTION ||
+      entry.action === ORGANIZATION_MEMBER_RECORDING_ACTIVATED_ACTION
     ) {
       throw new Error(
-        'reviewer query audit control actions are reserved for governed stopped-state maintenance',
+        'governed stopped-state audit actions are reserved for their maintenance transaction',
       );
     }
     const detailJson = canonicalJson(entry.detail);

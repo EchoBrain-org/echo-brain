@@ -16,6 +16,7 @@ import {
   digest,
   recordBrief,
   RECORD_MEETING_ID,
+  type CreateRecordIngestFixtureOptions,
   type RecordIngestFixture,
 } from './support/record-ingest-fixture.js';
 
@@ -27,7 +28,7 @@ afterEach(async () => {
 });
 
 async function openFixture(
-  options: { readonly activatePermissionPilot?: boolean } = {},
+  options: CreateRecordIngestFixtureOptions = {},
 ): Promise<RecordIngestFixture> {
   fixture = await createRecordIngestFixture(options);
   return fixture;
@@ -57,6 +58,7 @@ function differentOpaqueId(value: string): string {
 describe('organization record ingest', () => {
   it('admits v3 only after real audit reproof, atomically facts it, and re-admits it on restart', async () => {
     const test = await openFixture();
+    expect(test.runtime.organizationMemberReadableHealth.kind).toBe('ready');
     const editedId = approvalId('organization-member-edited-card');
     const edited = await test.organizationMemberApprovalEnvelope({
       approval_id: editedId,
@@ -147,6 +149,7 @@ describe('organization record ingest', () => {
       authority_id: test.authorityId,
       record_log_database_path: test.recordLogDatabasePath,
       record_derived_database_path: test.recordDerivedDatabasePath,
+      organization_recording_policy_v1: test.organizationRecordingPolicy,
       alert: () => undefined,
     });
     try {
@@ -166,7 +169,76 @@ describe('organization record ingest', () => {
     } finally {
       await restarted.close();
     }
+
+    const alerts: string[] = [];
+    const memberAuditMismatch = vi
+      .spyOn(
+        test.integrations,
+        'findAllowedOrganizationMemberAuthorizationEvidenceById',
+      )
+      .mockReturnValue({ status: 'mismatch' });
+    const degraded = await openOrganizationRecordRuntime({
+      authority: test.application,
+      evidence: test.integrations,
+      organization_id: test.organizationId,
+      authority_id: test.authorityId,
+      record_log_database_path: test.recordLogDatabasePath,
+      record_derived_database_path: test.recordDerivedDatabasePath,
+      organization_recording_policy_v1: test.organizationRecordingPolicy,
+      alert: (alert) => alerts.push(`${alert.kind}:${alert.message}`),
+    });
+    try {
+      expect(degraded.organizationMemberReadableHealth.kind).toBe('degraded');
+      expect(alerts).toEqual([
+        expect.stringMatching(/^organization-member-readable-inactive:/),
+      ]);
+    } finally {
+      memberAuditMismatch.mockRestore();
+      await degraded.close();
+    }
   });
+
+  it.each(['absent', 'mismatched'] as const)(
+    'refuses an otherwise valid audited v3 append while the central policy is %s',
+    async (organizationMemberRecordingPolicy) => {
+      const test = await openFixture({ organizationMemberRecordingPolicy });
+      expect(test.runtime.organizationMemberReadableHealth.kind).toBe('absent');
+      const envelope = await test.organizationMemberApprovalEnvelope({
+        approval_id: approvalId(`central-gate-${organizationMemberRecordingPolicy}`),
+      });
+
+      await expect(
+        test.runtime.submitRecordEnvelope({ record_envelope: envelope }),
+      ).rejects.toMatchObject({ code: 'unavailable' });
+      const log = new Database(test.recordLogDatabasePath, { readonly: true });
+      try {
+        expect(
+          log
+            .prepare('SELECT COUNT(*) AS count FROM organization_record_log')
+            .get(),
+        ).toEqual({ count: 0 });
+        expect(
+          log
+            .prepare(
+              'SELECT COUNT(*) AS count FROM organization_member_readable_policy_fact',
+            )
+            .get(),
+        ).toEqual({ count: 0 });
+      } finally {
+        log.close();
+      }
+
+      // The additive member-v3 gate never disables reviewer-v2.
+      const reviewerEnvelope = await test.reviewerApprovalEnvelope({
+        approval_id: approvalId(`reviewer-still-live-${organizationMemberRecordingPolicy}`),
+      });
+      await expect(
+        test.runtime.submitRecordEnvelope({
+          record_envelope: reviewerEnvelope,
+        }),
+      ).resolves.toMatchObject({ record_receipt: { position: 1 } });
+    },
+  );
 
   it('accepts one approval and returns a signed receipt with exact fields', async () => {
     const test = await openFixture();

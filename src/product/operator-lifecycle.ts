@@ -41,6 +41,7 @@ import {
   DEFAULT_APPROVE_REACTION,
   DEFAULT_REJECT_REACTION,
 } from '../adapters/approval-surfaces/slack-reactions/slack-reactions-approval-surface.js';
+import { assertConfiguredApprovalPublicationPreflight } from './default-adapters.js';
 
 export type ProductServiceAction =
   | 'install'
@@ -1194,6 +1195,21 @@ export class ProductOperator {
       } catch (error) {
         throw new ProductOperatorError(
           'adapter_unavailable',
+          `reconfigure was refused before the installation manifest was updated: ${(error as Error).message}`,
+        );
+      }
+      // Every manifest rewrite, including a package-only re-pin, must prove the
+      // package can still resume each unresolved frozen publication. Adapter
+      // version is part of that contract, so a config-equal package replacement
+      // is not exempt from this stateful, provider-free compatibility check.
+      try {
+        assertConfiguredApprovalPublicationPreflight(
+          this.config,
+          this.resolveCredential,
+        );
+      } catch (error) {
+        throw new ProductOperatorError(
+          'installation_conflict',
           `reconfigure was refused before the installation manifest was updated: ${(error as Error).message}`,
         );
       }

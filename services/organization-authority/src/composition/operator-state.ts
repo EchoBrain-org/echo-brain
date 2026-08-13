@@ -143,6 +143,17 @@ import {
   writeAuthorityRuntimeConfigExclusive,
 } from './operator-config.js';
 import type { AuthorityServeConfig } from './config.js';
+import type { OrganizationMemberRecordingActivationBindingV1 } from './config.js';
+import {
+  assertOrganizationMemberRecordingActivationFresh,
+  validateOrganizationMemberRecordingActivationCommand,
+  type OrganizationMemberRecordingActivationCommandV1,
+  type StoredOrganizationMemberRecordingActivation,
+} from '../application/organization-recording-policy-activation.js';
+import {
+  appendOrganizationMemberRecordingActivation,
+  readOrganizationMemberRecordingActivation,
+} from '../adapters/persistence/sqlite/organization-recording-policy-activation.js';
 
 const MAX_IDENTITY_BYTES = 64 * 1024;
 const MAX_INITIALIZATION_MANIFEST_BYTES = 128 * 1024;
@@ -150,6 +161,7 @@ const MAX_INTEGRATIONS_INSTALLATION_MARKER_BYTES = 64 * 1024;
 const MAX_RECORD_INSTALLATION_MARKER_BYTES = 64 * 1024;
 const MAX_PERMISSION_PILOT_ACTIVATION_COMMAND_BYTES = 64 * 1024;
 const MAX_REVIEWER_QUERY_AUDIT_MAINTENANCE_COMMAND_BYTES = 64 * 1024;
+const MAX_RECORDING_ACTIVATION_COMMAND_BYTES = 64 * 1024;
 
 export interface AuthorityIdentityRecordV1 {
   schema_version: 1;
@@ -283,6 +295,23 @@ export interface AuthorityPermissionPilotActivationResult {
   authority_id: string;
   marker: OrganizationPermissionPilotActivationMarkerV1;
   presentation_descriptor: OrganizationPermissionPilotPresentationV1;
+}
+
+export interface AuthorityOrganizationMemberRecordingActivationResult {
+  readonly schema_version: 1;
+  readonly kind: 'echo-organization-member-recording-activation';
+  readonly created: boolean;
+  readonly config_path: string;
+  readonly state_dir: string;
+  readonly authority_id: string;
+  readonly organization_id: string;
+  readonly effective_policy: OrganizationMemberRecordingActivationCommandV1['target_policy'];
+  readonly activation: StoredOrganizationMemberRecordingActivation;
+}
+
+export interface ActivateOrganizationMemberRecordingOptions {
+  readonly now?: () => string;
+  readonly fault_after_audit?: () => void;
 }
 
 export interface ActivateOrganizationPermissionPilotOptions {
@@ -462,6 +491,37 @@ function readPermissionPilotActivationCommand(
           organization_id: config.organization.organization_id,
         },
       ),
+  );
+}
+
+function readOrganizationMemberRecordingActivationCommand(
+  commandPath: string,
+  config: AuthorityRuntimeConfigV1,
+): OrganizationMemberRecordingActivationCommandV1 {
+  const path = normalizedAbsolutePath(
+    commandPath,
+    'organization-member recording activation command path',
+  );
+  return readPrivateTextFile(
+    path,
+    'organization-member recording activation command',
+    MAX_RECORDING_ACTIVATION_COMMAND_BYTES,
+    true,
+    (contents) => {
+      const command = validateOrganizationMemberRecordingActivationCommand(
+        parseCanonicalJson(contents),
+        {
+          authority_id: config.authority.authority_id,
+          organization_id: config.organization.organization_id,
+        },
+      );
+      if (canonicalJson(command) !== contents) {
+        throw new Error(
+          'organization-member recording activation command must be exact canonical JSON with no trailing bytes',
+        );
+      }
+      return command;
+    },
   );
 }
 
@@ -1397,6 +1457,28 @@ function assertRecordInstallationBoundState(
 export function assertAuthorityRuntimeStateBinding(
   config: AuthorityServeConfig,
 ): void {
+  if (
+    config.organization_recording_policy_v1 !== undefined ||
+    config.organization_member_recording_activation_v1 !== undefined
+  ) {
+    const initializedPolicy = readInitializationManifest(
+      config.state_directory,
+    ).runtime_config.organization_recording_policy_v1;
+    if (config.organization_member_recording_activation_v1 === undefined) {
+      if (
+        canonicalJson(initializedPolicy ?? null) !==
+        canonicalJson(config.organization_recording_policy_v1 ?? null)
+      ) {
+        throw new Error(
+          'organization recording policy differs from the immutable initialized baseline',
+        );
+      }
+    } else if (initializedPolicy !== undefined) {
+      throw new Error(
+        'organization-member recording activation conflicts with initialized policy',
+      );
+    }
+  }
   const authority = inspectAuthorityDatabaseForServe(config.database_path);
   if (
     authority.authority_id !== config.authority_id ||
@@ -1605,6 +1687,87 @@ function assertInitializationBinding(
   return manifest;
 }
 
+function initializedBaselineDigests(
+  configPath: string,
+  config: AuthorityRuntimeConfigV1,
+): {
+  readonly initialized_runtime_config_sha256: `sha256:${string}`;
+  readonly initialization_manifest_sha256: `sha256:${string}`;
+} {
+  const manifest = assertInitializationBinding(configPath, config);
+  return Object.freeze({
+    initialized_runtime_config_sha256: canonicalSha256(manifest.runtime_config),
+    initialization_manifest_sha256: canonicalSha256(manifest),
+  });
+}
+
+function activationBinding(
+  activation: StoredOrganizationMemberRecordingActivation,
+): OrganizationMemberRecordingActivationBindingV1 {
+  return Object.freeze({
+    schema_version: 1,
+    kind: 'organization-member-recording-activation-binding-v1',
+    command_sha256: activation.command_sha256,
+    activation_sha256: activation.activation_sha256,
+    initialized_runtime_config_sha256:
+      activation.command.initialized_runtime_config_sha256,
+    initialization_manifest_sha256:
+      activation.command.initialization_manifest_sha256,
+    activated_at: activation.activated_at,
+    audit_sequence: activation.audit_sequence,
+  });
+}
+
+function assertActivationMatchesInitializedBaseline(
+  configPath: string,
+  config: AuthorityRuntimeConfigV1,
+  activation: StoredOrganizationMemberRecordingActivation,
+): void {
+  if (config.organization_recording_policy_v1 !== undefined) {
+    throw new Error(
+      'organization-member recording activation conflicts with initialized policy',
+    );
+  }
+  const baseline = initializedBaselineDigests(configPath, config);
+  if (
+    activation.command.authority_id !== config.authority.authority_id ||
+    activation.command.organization_id !== config.organization.organization_id ||
+    activation.command.initialized_runtime_config_sha256 !==
+      baseline.initialized_runtime_config_sha256 ||
+    activation.command.initialization_manifest_sha256 !==
+      baseline.initialization_manifest_sha256
+  ) {
+    throw new Error(
+      'organization-member recording activation differs from immutable initialized baseline',
+    );
+  }
+}
+
+/**
+ * Folds the immutable initialized config with the one supported additive
+ * activation. A legacy schema has no activation table and therefore preserves
+ * the initialized policy until serving, under the runtime lock, migrates it.
+ */
+export function resolveEffectiveAuthorityServeConfig(
+  configPath: string,
+  config: AuthorityRuntimeConfigV1,
+): AuthorityServeConfig {
+  const base = resolveAuthorityServeConfig(config);
+  const inspected = inspectAuthorityDatabaseForServe(config.database_path);
+  if (inspected.schema_version < 8) return base;
+  const activation = readOrganizationMemberRecordingActivation(
+    config.database_path,
+  );
+  if (activation === null) return base;
+  assertActivationMatchesInitializedBaseline(configPath, config, activation);
+  return Object.freeze({
+    ...base,
+    organization_recording_policy_v1: activation.command.target_policy,
+    organization_member_recording_activation_v1:
+      activationBinding(activation),
+  });
+}
+
 function readIdentity(path: string): AuthorityIdentityRecordV1 {
   return readPrivateTextFile(
     path,
@@ -1750,6 +1913,18 @@ async function inspectBoundAuthorityState(
   const inspected = await inspectInitializedAuthorityFiles(configPath, config);
   const database = inspectAuthority(config.database_path);
   assertAuthorityDatabaseIdentity(database, config, inspected.identity);
+  if (database.schema_version >= 8) {
+    const activation = readOrganizationMemberRecordingActivation(
+      config.database_path,
+    );
+    if (activation !== null) {
+      assertActivationMatchesInitializedBaseline(
+        configPath,
+        config,
+        activation,
+      );
+    }
+  }
   const integrationsAnchor = integrationsInstallationAnchor(database);
   if (integrationsAnchor === null) {
     throw new Error(
@@ -2513,6 +2688,145 @@ export async function activateOrganizationPermissionPilot(
   }
 }
 
+function organizationMemberRecordingActivationResult(
+  created: boolean,
+  configPath: string,
+  config: AuthorityRuntimeConfigV1,
+  activation: StoredOrganizationMemberRecordingActivation,
+): AuthorityOrganizationMemberRecordingActivationResult {
+  return Object.freeze({
+    schema_version: 1,
+    kind: 'echo-organization-member-recording-activation',
+    created,
+    config_path: configPath,
+    state_dir: config.state_dir,
+    authority_id: config.authority.authority_id,
+    organization_id: config.organization.organization_id,
+    effective_policy: activation.command.target_policy,
+    activation,
+  });
+}
+
+/**
+ * One-way, stopped activation of schema-v3 member-readable recording.
+ *
+ * Neither the operator config nor its initialization manifest is rewritten.
+ * Their exact canonical digests are instead named by the command and checked
+ * before the additive Authority marker and its audit are committed atomically.
+ */
+export async function activateOrganizationMemberRecording(
+  configPath: string,
+  commandPath: string,
+  options: ActivateOrganizationMemberRecordingOptions = {},
+): Promise<AuthorityOrganizationMemberRecordingActivationResult> {
+  const path = normalizedAbsolutePath(configPath, 'authority config path');
+  const config = readAuthorityRuntimeConfig(path);
+  if (config.organization_recording_policy_v1 !== undefined) {
+    throw new Error(
+      'organization-member recording activation requires the immutable initialized policy to be absent',
+    );
+  }
+  const command = readOrganizationMemberRecordingActivationCommand(
+    commandPath,
+    config,
+  );
+  const releaseInitialization = await acquireAuthorityInitializationLock(
+    path,
+    config.state_dir,
+  );
+  try {
+    const runtimeLock = await acquireAuthorityRuntimeLock(
+      config.state_dir,
+      authorityMaintenanceFingerprint(
+        resolveAuthorityServeConfig(config),
+        'activate-organization-member-recording',
+      ),
+    );
+    try {
+      // The singleton maintenance lock is held before the write-capable open:
+      // migrate a legacy v7 Authority to the activation schema while serving
+      // is conclusively stopped, then require the complete current preflight.
+      const migrated = openAuthorityDatabase(config.database_path, {
+        fileMustExist: true,
+      });
+      migrated.close();
+      await inspectAuthorityServePreflight(path, config);
+      const paths = authorityStatePaths(config.state_dir);
+      const manifest = readInitializationManifest(config.state_dir);
+      const runtimeConfigSha256 = canonicalSha256(manifest.runtime_config);
+      const initializationManifestSha256 = canonicalSha256(manifest);
+      if (
+        command.initialized_runtime_config_sha256 !== runtimeConfigSha256 ||
+        command.initialization_manifest_sha256 !== initializationManifestSha256
+      ) {
+        throw new Error(
+          'organization-member recording activation does not match the immutable initialized baseline',
+        );
+      }
+      const existing = readOrganizationMemberRecordingActivation(
+        paths.database_path,
+      );
+      if (existing !== null) {
+        if (
+          existing.command.command_id !== command.command_id ||
+          existing.command_sha256 !== canonicalSha256(command)
+        ) {
+          throw new Error(
+            'organization-member recording was already activated by a different command',
+          );
+        }
+        return organizationMemberRecordingActivationResult(
+          false,
+          path,
+          config,
+          existing,
+        );
+      }
+      const control = openOrganizationControlDatabase(
+        paths.integrations_database_path,
+        { fileMustExist: true },
+      );
+      const integrations = new OrganizationIntegrationsRepository(control, {
+        organization_id: config.organization.organization_id,
+        authority_id: config.authority.authority_id,
+      });
+      try {
+        if (
+          !integrations.hasActiveSlackApprovalSurfaceInstance(
+            command.target_policy.approval_surface_adapter_instance_id,
+          )
+        ) {
+          throw new Error(
+            'organization-member recording activation requires an exact active Slack approval-surface instance',
+          );
+        }
+      } finally {
+        integrations.close();
+      }
+      const activatedAt = (options.now ?? (() => new Date().toISOString()))();
+      assertOrganizationMemberRecordingActivationFresh(command, activatedAt);
+      const appended = appendOrganizationMemberRecordingActivation({
+        database_path: paths.database_path,
+        command,
+        activated_at: activatedAt,
+        ...(options.fault_after_audit === undefined
+          ? {}
+          : { fault_after_audit: options.fault_after_audit }),
+      });
+      return organizationMemberRecordingActivationResult(
+        appended.created,
+        path,
+        config,
+        appended.activation,
+      );
+    } finally {
+      await runtimeLock.release();
+    }
+  } finally {
+    await releaseInitialization();
+  }
+}
+
 function reviewerQueryAuditMaintenanceTrust(
   config: AuthorityRuntimeConfigV1,
   inspected: InspectedAuthorityState,
@@ -2876,12 +3190,17 @@ async function rebuildAuthorityDerivedRecordStoreLocked(
         logReader: reader,
         derived: rebuilt,
         // A stopped rebuild must reproduce the running follower's outcome
-        // exactly, which means reading reviewer-v2 through the same closed
-        // validator rather than a looser rebuild-only path.
+        // exactly, so both admitted envelope families use the same closed
+        // validators as the live follower rather than a looser rebuild path.
         reviewerValidator: reviewerRestrictedEnvelopeValidator({
           organization_id: organizationId,
           authority_id: config.authority.authority_id,
         }),
+        organizationMemberValidator:
+          organizationMemberReadableEnvelopeValidator({
+            organization_id: organizationId,
+            authority_id: config.authority.authority_id,
+          }),
       });
       const progress = await follower.drain();
       if (progress.halted) {
@@ -3069,6 +3388,7 @@ async function rebuildAuthorityReadableSearchLocked(
   config: AuthorityRuntimeConfigV1,
 ): Promise<AuthorityReadableSearchRebuildResult> {
   await inspectAuthorityServePreflight(configPath, config);
+  const effectiveConfig = resolveEffectiveAuthorityServeConfig(configPath, config);
   const paths = authorityStatePaths(config.state_dir);
   assertNoSqliteSidecars(paths.record_log_database_path, 'record log database');
   const control = openOrganizationControlDatabase(paths.integrations_database_path, {
@@ -3113,6 +3433,8 @@ async function rebuildAuthorityReadableSearchLocked(
       organization_id: config.organization.organization_id,
       validator: organizationMemberValidator,
       evidence,
+      organization_recording_policy_v1:
+        effectiveConfig.organization_recording_policy_v1,
     });
     if (!memberReadiness.ready) {
       throw new Error(`organization-member fact admission failed: ${memberReadiness.failures.map((failure) => failure.detail).join('; ')}`);

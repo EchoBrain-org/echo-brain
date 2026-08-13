@@ -277,6 +277,16 @@ function configureOrganizationMemberApproval(
   });
 }
 
+function configureManualApproval(configPath: string): void {
+  const config = JSON.parse(readFileSync(configPath, 'utf8')) as Record<
+    string,
+    unknown
+  >;
+  config['approval_mode'] = 'manual';
+  delete config['approval_surface'];
+  writeFileSync(configPath, `${JSON.stringify(config, null, 2)}\n`);
+}
+
 function pendingRestrictedReviewerRequest(): ApprovalRequest {
   return {
     processing_key: 'source:instance:item:revision:processor:instance:version',
@@ -340,6 +350,7 @@ function pendingRestrictedReviewerRequest(): ApprovalRequest {
 async function seedFrozenRestrictedReviewerCard(
   stateDirectory: string,
   credential: string,
+  adapterVersion = '1.0.0',
 ): Promise<void> {
   const store = new DecisionNodeStore(stateDirectory, { now: () => fixedTime });
   const request = pendingRestrictedReviewerRequest();
@@ -352,7 +363,7 @@ async function seedFrozenRestrictedReviewerCard(
       mode: 'restricted-reviewer-v1',
       adapter_id: 'slack-reactions',
       adapter_instance_id: 'internal-approvals',
-      adapter_version: '1.0.0',
+      adapter_version: adapterVersion,
       channel_id: 'C0REVIEW01',
       reviewer_slack_user_id: 'U0REVIEWER',
       reviewer_name: 'founder',
@@ -847,6 +858,265 @@ describe('operator onboarding and lifecycle CLI', () => {
     );
     expect(failure.error).toContain('settings.model is required');
     expect(readFileSync(installationPath, 'utf8')).toBe(before);
+  });
+
+  it('refuses to pin a new approval mode while an old-mode frozen card is unresolved', async () => {
+    const { dependencies, ...fixture } = installation(
+      'echo-reconfigure-frozen-mode-',
+    );
+    configureRestrictedReviewerApproval(
+      fixture.configPath,
+      fixture.stateDirectory,
+    );
+    mkdirSync(join(fixture.stateDirectory, 'credentials'), {
+      recursive: true,
+      mode: 0o700,
+    });
+    writeFileSync(
+      slackCredentialPath(fixture.stateDirectory),
+      'xoxb-matching\n',
+      { mode: 0o600 },
+    );
+    await expectOk(['init', '--config', fixture.configPath], dependencies);
+    await seedFrozenRestrictedReviewerCard(
+      fixture.stateDirectory,
+      'xoxb-matching',
+    );
+    const installationPath = join(
+      fixture.stateDirectory,
+      'manifests',
+      'operator-installation.v1.json',
+    );
+    const before = readFileSync(installationPath, 'utf8');
+
+    configureOrganizationMemberApproval(
+      fixture.configPath,
+      fixture.stateDirectory,
+    );
+    const refused = await command(
+      ['reconfigure', '--config', fixture.configPath],
+      dependencies,
+    );
+
+    expect(refused.status).toBe(1);
+    expect(JSON.parse(refused.stderr)).toMatchObject({
+      code: 'installation_conflict',
+      error: expect.stringContaining(
+        'holds an unresolved restricted-reviewer-v1 presentation contract',
+      ),
+    });
+    expect(readFileSync(installationPath, 'utf8')).toBe(before);
+  });
+
+  it('refuses a package-only re-pin when its approval adapter version cannot resume a frozen card', async () => {
+    const { dependencies, ...fixture } = installation(
+      'echo-repin-frozen-adapter-version-',
+    );
+    configureRestrictedReviewerApproval(
+      fixture.configPath,
+      fixture.stateDirectory,
+    );
+    mkdirSync(join(fixture.stateDirectory, 'credentials'), {
+      recursive: true,
+      mode: 0o700,
+    });
+    writeFileSync(
+      slackCredentialPath(fixture.stateDirectory),
+      'xoxb-matching\n',
+      { mode: 0o600 },
+    );
+    await expectOk(['init', '--config', fixture.configPath], dependencies);
+    await seedFrozenRestrictedReviewerCard(
+      fixture.stateDirectory,
+      'xoxb-matching',
+      '0.9.0',
+    );
+    const installationPath = legacyManifest(
+      fixture.stateDirectory,
+      fixture.configPath,
+    );
+    const before = readFileSync(installationPath, 'utf8');
+
+    const refused = await command(
+      ['reconfigure', '--config', fixture.configPath],
+      dependencies,
+    );
+
+    expect(refused.status).toBe(1);
+    expect(JSON.parse(refused.stderr)).toMatchObject({
+      code: 'installation_conflict',
+      error: expect.stringContaining(
+        'froze adapter_version and it was rotated in place',
+      ),
+    });
+    expect(readFileSync(installationPath, 'utf8')).toBe(before);
+  });
+
+  it('refuses to switch to manual approval while a legacy Authority-published Slack card is unresolved', async () => {
+    const { dependencies, ...fixture } = installation(
+      'echo-reconfigure-frozen-to-manual-',
+    );
+    configureRestrictedReviewerApproval(
+      fixture.configPath,
+      fixture.stateDirectory,
+    );
+    mkdirSync(join(fixture.stateDirectory, 'credentials'), {
+      recursive: true,
+      mode: 0o700,
+    });
+    writeFileSync(
+      slackCredentialPath(fixture.stateDirectory),
+      'xoxb-matching\n',
+      { mode: 0o600 },
+    );
+    await expectOk(['init', '--config', fixture.configPath], dependencies);
+    const store = new DecisionNodeStore(fixture.stateDirectory, {
+      now: () => fixedTime,
+    });
+    await store.ensureRequested(pendingRestrictedReviewerRequest());
+    await store.recordPublished({
+      processingKey: pendingRestrictedReviewerRequest().processing_key,
+      surface: 'slack-authority-v1',
+      reference: { channel_id: 'C0REVIEW01', message_ts: '172.1' },
+    });
+    const installationPath = join(
+      fixture.stateDirectory,
+      'manifests',
+      'operator-installation.v1.json',
+    );
+    const before = readFileSync(installationPath, 'utf8');
+    configureManualApproval(fixture.configPath);
+
+    const refused = await command(
+      ['reconfigure', '--config', fixture.configPath],
+      dependencies,
+    );
+
+    expect(refused.status).toBe(1);
+    expect(JSON.parse(refused.stderr)).toMatchObject({
+      code: 'installation_conflict',
+      error: expect.stringContaining(
+        'was published without a frozen approval presentation contract',
+      ),
+    });
+    expect(readFileSync(installationPath, 'utf8')).toBe(before);
+  });
+
+  it('allows manual reconfigure when the only unresolved node is a requested-only crash window', async () => {
+    const { dependencies, ...fixture } = installation(
+      'echo-reconfigure-requested-only-to-manual-',
+    );
+    configureRestrictedReviewerApproval(
+      fixture.configPath,
+      fixture.stateDirectory,
+    );
+    await expectOk(['init', '--config', fixture.configPath], dependencies);
+    const store = new DecisionNodeStore(fixture.stateDirectory, {
+      now: () => fixedTime,
+    });
+    await store.ensureRequested(pendingRestrictedReviewerRequest());
+    configureManualApproval(fixture.configPath);
+
+    const reconfigured = await expectOk(
+      ['reconfigure', '--config', fixture.configPath],
+      dependencies,
+    );
+
+    expect(JSON.parse(reconfigured.stdout)).toMatchObject({ updated: true });
+  });
+
+  it('refuses to switch to another approval adapter while a frozen Slack card is unresolved', async () => {
+    const { dependencies, ...fixture } = installation(
+      'echo-reconfigure-frozen-to-another-adapter-',
+    );
+    dependencies.adapterFactories.register({
+      kind: 'approval-surface',
+      adapter_id: 'fixture-approval',
+      validateStaticConfig: () => ({ ok: true, errors: [] }),
+      create: () => {
+        throw new Error('fixture approval surface is static-only');
+      },
+    });
+    configureRestrictedReviewerApproval(
+      fixture.configPath,
+      fixture.stateDirectory,
+    );
+    mkdirSync(join(fixture.stateDirectory, 'credentials'), {
+      recursive: true,
+      mode: 0o700,
+    });
+    writeFileSync(
+      slackCredentialPath(fixture.stateDirectory),
+      'xoxb-matching\n',
+      { mode: 0o600 },
+    );
+    await expectOk(['init', '--config', fixture.configPath], dependencies);
+    await seedFrozenRestrictedReviewerCard(
+      fixture.stateDirectory,
+      'xoxb-matching',
+    );
+    const installationPath = join(
+      fixture.stateDirectory,
+      'manifests',
+      'operator-installation.v1.json',
+    );
+    const before = readFileSync(installationPath, 'utf8');
+    rewriteConfig(fixture.configPath, {
+      approval_mode: 'adapter',
+      approval_surface: {
+        adapter_id: 'fixture-approval',
+        instance_id: 'future-surface',
+        settings: {},
+      },
+    });
+
+    const refused = await command(
+      ['reconfigure', '--config', fixture.configPath],
+      dependencies,
+    );
+
+    expect(refused.status).toBe(1);
+    expect(JSON.parse(refused.stderr)).toMatchObject({
+      code: 'installation_conflict',
+      error: expect.stringContaining(
+        "approval adapter 'fixture-approval/future-surface' cannot resume",
+      ),
+    });
+    expect(readFileSync(installationPath, 'utf8')).toBe(before);
+  });
+
+  it('allows stopped reconfigure when unresolved frozen cards still match the configured mode', async () => {
+    const { dependencies, ...fixture } = installation(
+      'echo-reconfigure-matching-frozen-mode-',
+    );
+    configureRestrictedReviewerApproval(
+      fixture.configPath,
+      fixture.stateDirectory,
+    );
+    mkdirSync(join(fixture.stateDirectory, 'credentials'), {
+      recursive: true,
+      mode: 0o700,
+    });
+    writeFileSync(
+      slackCredentialPath(fixture.stateDirectory),
+      'xoxb-matching\n',
+      { mode: 0o600 },
+    );
+    await expectOk(['init', '--config', fixture.configPath], dependencies);
+    await seedFrozenRestrictedReviewerCard(
+      fixture.stateDirectory,
+      'xoxb-matching',
+    );
+    rewriteConfig(fixture.configPath, { cycle_interval_ms: 90_000 });
+
+    const reconfigured = await expectOk(
+      ['reconfigure', '--config', fixture.configPath],
+      dependencies,
+    );
+
+    expect(JSON.parse(reconfigured.stdout)).toMatchObject({
+      updated: true,
+    });
   });
 
   it('keeps Slack approval and Slack delivery on separate channels', async () => {

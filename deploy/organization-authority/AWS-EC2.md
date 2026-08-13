@@ -335,6 +335,50 @@ connector so a reboot cannot create a second Tunnel replica:
 launchctl disable "gui/$(id -u)/com.cloudflare.cloudflared"
 ```
 
+## Conditional Job B activation
+
+This section applies only after a B-capable image has been selected and the
+complete stopped Authority state has been archived and snapshotted. An older
+Authority has no organization-member recording activation even though its
+image can validate that policy. Do not edit `authority.json` or
+`authority-initialization.v1.json` to add it.
+
+Keep the Tunnel stopped, stop the whole Compose stack, and place the reviewed
+mode-0600 canonical activation command at
+`data/operator/activate-organization-member-recording.json`. Its `rpa_`
+identity, Authority and organization IDs, initialized runtime-config and
+manifest digests, current active owner tuple, exact member-readable target
+policy, fresh timestamp, and reason must all match the stopped deployment. The
+target approval-surface instance must already be an exact active
+`slack-reactions` binding to the current Slack organization tool; its public
+configuration pins Slack identity, channel, and reactions rather than the
+product-local `presentation_mode`. Then run:
+
+```bash
+sudo bash -c '
+set -euo pipefail
+cd /srv/echo-authority
+compose() { docker compose --env-file .env -f compose.yaml -f compose.ec2.yaml "$@"; }
+compose down
+compose run --rm --no-deps authority \
+  activate-organization-member-recording \
+  --config /echo/authority.json \
+  --command /echo/operator/activate-organization-member-recording.json
+compose run --rm --no-deps authority \
+  status --config /echo/authority.json
+compose up -d --no-build --wait --wait-timeout 90
+compose exec -T authority node services/organization-authority/dist/main.js \
+  status --config /echo/authority.json
+'
+```
+
+The activation is an immutable, one-way Authority journal entry layered over
+the unchanged initialization baseline. Repeating the exact command returns
+the existing receipt; different bytes or a second target are refused. This
+does not switch a product installation. Reconfigure each stopped producer
+separately, where its local frozen-card preflight must pass before it can emit
+organization-member-readable cards.
+
 ## Minimum operating checkpoint
 
 After the first successful public refresh:

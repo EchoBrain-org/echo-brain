@@ -322,15 +322,18 @@ generation directory must never be copied, repaired, or swapped on its own.
 This section applies only to a separately promoted B-capable image. It does
 not add a runtime or backup requirement to `access-recovery-504ec74`.
 
-The optional `organization_recording_policy_v1` runtime-config object enables
-one explicit recording presentation mode. It must contain exactly:
+The runtime-config schema retains an optional closed
+`organization_recording_policy_v1` object for source compatibility. The
+current initializer leaves it absent, and an operator must not add it by
+editing an initialized config. When present in an already materialized
+baseline it contains exactly:
 
 ```json
 {
   "schema_version": 1,
   "kind": "organization-recording-policy-v1",
-  "decision_processor_adapter_instance_id": "<configured adapter instance>",
-  "approval_surface_adapter_instance_id": "<configured adapter instance>",
+  "decision_processor_adapter_instance_id": "<product-local provenance instance>",
+  "approval_surface_adapter_instance_id": "<centrally enforced surface instance>",
   "presentation_mode": "organization-member-readable-v1",
   "policy_contract_sha256": "sha256:<matching policy contract>"
 }
@@ -338,11 +341,80 @@ one explicit recording presentation mode. It must contain exactly:
 
 `presentation_mode` is either `restricted-reviewer-v1` or
 `organization-member-readable-v1`; the contract digest must match that exact
-mode. The object is optional for compatibility, but its absence never enables
-organization-member-readable admission.
+mode. Its absence never enables organization-member-readable admission.
 
-Stop the Authority and snapshot the complete state directory before either
-command. The shared initialization and authenticated runtime locks refuse
+An Authority initialized before this mapping existed keeps its original
+runtime config and initialization manifest immutable. Enable the one supported
+Job B capability with the stopped, one-way activation command instead of
+editing either file:
+
+```sh
+npm run organization-authority:cli -- \
+  activate-organization-member-recording \
+  --config /absolute/operator/authority.json \
+  --command /absolute/private/activate-organization-member-recording.json
+```
+
+The mode-0600 canonical command contains exactly:
+
+```json
+{
+  "schema_version": 1,
+  "kind": "echo-organization-member-recording-activation-command",
+  "command_id": "rpa_<uuid-v4>",
+  "authority_id": "oau_<uuid-v4>",
+  "organization_id": "org_<uuid-v4>",
+  "initialized_runtime_config_sha256": "sha256:<initialized-config-digest>",
+  "initialization_manifest_sha256": "sha256:<initialization-manifest-digest>",
+  "owner_principal_id": "prn_<uuid-v4>",
+  "owner_membership_id": "mem_<uuid-v4>",
+  "target_policy": {
+    "schema_version": 1,
+    "kind": "organization-recording-policy-v1",
+    "decision_processor_adapter_instance_id": "<product-local provenance instance>",
+    "approval_surface_adapter_instance_id": "<exact active Slack surface instance>",
+    "presentation_mode": "organization-member-readable-v1",
+    "policy_contract_sha256": "sha256:<exact-built-in-contract>"
+  },
+  "requested_at": "<canonical-UTC-millisecond-time>",
+  "reason": "<bounded operator reason>"
+}
+```
+
+The command requires the exact current active owner, both initialized baseline
+digests, the built-in organization-member-readable policy digest, and a fresh
+first execution within five minutes. First creation also refuses unless the
+target `approval_surface_adapter_instance_id` is an exact active
+`slack-reactions` approval-surface instance bound to the current active Slack
+organization tool. The control-plane binding's public configuration pins the
+Slack identity, channel, and reaction pair; it does not contain the product's
+local `presentation_mode`.
+
+The immutable Authority journal entry is the runtime overlay; the
+initialization manifest remains history. Repeating the exact command is
+read-only and returns `created: false`; reusing its ID for different bytes or
+trying to activate a different policy is refused.
+
+This activates a shared central capability. It does not switch any producer.
+Each product installation must be stopped and reconfigured independently;
+that local reconfigure refuses a mode change while an old frozen Slack card is
+unresolved. The activation adds member-v3 admission without replacing the
+existing reviewer-v2 family. There is no generic policy editor or in-place
+rollback in V1.
+
+For schema-v3 ingest, the installation-signed envelope contains a bounded
+processor instance as signed provenance. Authority validates it structurally
+but does not compare that string with the activation, a control-plane binding,
+or the authorization audit; a different processor string alone does not reject
+ingest. Authority instead re-proves the exact allowed authorization audit named
+by the signed envelope and requires that audit's approval-surface instance,
+adapter binding, and evidence commitments to match the activated surface. The
+central gate is the built-in policy digest plus the exact active and audited
+approval-surface instance; `presentation_mode` is not stored in control-plane
+public configuration.
+
+Stop the Authority and snapshot the complete state directory before any
+maintenance command. The shared initialization and authenticated runtime locks refuse
 maintenance while a live Authority owns the state:
 
 ```sh

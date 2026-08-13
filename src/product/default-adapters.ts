@@ -29,10 +29,13 @@ import {
   organizationMemberApprovalPresentationRenderer,
   organizationMemberApprovalPolicyContractSha256,
 } from './organization/record/adapters/organization-member-presentation-renderer.js';
+import { reviewerApprovalPresentationRenderer } from './organization/record/adapters/reviewer-presentation-renderer.js';
 import {
   ProductAdapterFactoryRegistry,
   type ProductAdapterFactoryContext,
 } from './adapter-factories.js';
+import type { ProductRuntimeConfig } from './config.js';
+import type { ProductCredentialResolver } from './credentials.js';
 
 /**
  * Stand-in for a runtime dependency that static validation must never touch.
@@ -130,7 +133,10 @@ function settingString(
  */
 function assertSlackReviewerPublicationPreflight(
   config: AdapterConfig,
-  context: ProductAdapterFactoryContext,
+  context: Pick<
+    ProductAdapterFactoryContext,
+    'credentialResolver' | 'reviewerPresentationRenderer'
+  >,
   store: DecisionNodeStore,
 ): void {
   const settings = config.settings as Record<string, unknown>;
@@ -198,6 +204,54 @@ function assertSlackReviewerPublicationPreflight(
         organizationMemberApprovalPolicyContractSha256(),
     },
     unresolved,
+  );
+}
+
+/**
+ * Reuses the runtime's exact frozen-card preflight during stopped
+ * reconfiguration.
+ *
+ * The installation manifest is the durable assertion that this configuration
+ * is safe to start.  Reconfigure must therefore run the stateful check before
+ * it records a changed config hash, rather than leaving the next service start
+ * to discover that an unresolved card was frozen under another mode or
+ * binding.  No provider call is made; the credential is resolved only to
+ * compare its local fingerprint with an already-frozen contract.
+ */
+export function assertConfiguredApprovalPublicationPreflight(
+  config: ProductRuntimeConfig,
+  credentialResolver: ProductCredentialResolver,
+): void {
+  const store = new DecisionNodeStore(config.state_dir);
+  if (
+    config.approval_mode !== 'adapter' ||
+    config.approval_surface.adapter_id !== 'slack-reactions'
+  ) {
+    const unresolved = store.listUnresolvedFrozenApprovalPresentationContracts();
+    if (unresolved.length > 0) {
+      const target =
+        config.approval_mode === 'manual'
+          ? 'manual approval'
+          : `approval adapter '${config.approval_surface.adapter_id}/${config.approval_surface.instance_id}'`;
+      throw new Error(
+        `Slack approval publication preflight refused this reconfigure: ${target} cannot resume ${unresolved
+          .map((slot) =>
+            slot.contract === null
+              ? `decision ${slot.approval_id}, which was published without a frozen approval presentation contract`
+              : `decision ${slot.approval_id}, which holds an unresolved ${slot.contract.mode} presentation contract`,
+          )
+          .join('; ')}`,
+      );
+    }
+    return;
+  }
+  assertSlackReviewerPublicationPreflight(
+    config.approval_surface,
+    {
+      credentialResolver,
+      reviewerPresentationRenderer: reviewerApprovalPresentationRenderer,
+    },
+    store,
   );
 }
 

@@ -8,13 +8,20 @@ import type {
   DecisionOrganizationRecordReceiptIntegrity,
   DecisionSourceLocator,
 } from '../../src/product/approval/decision-node.js';
-import type { OrganizationApprovalActionAuthorizationResult } from '../../src/product/organization/approval-action-authorizer.js';
+import type {
+  OrganizationApprovalActionAuthorizationResult,
+  OrganizationMemberApprovalAuthorizationResult,
+  OrganizationReviewerApprovalAuthorizationResult,
+} from '../../src/product/organization/approval-action-authorizer.js';
 import type {
   OrganizationRecordAuthorizationEvidence,
+  OrganizationRecordAuthorizationEvidenceV1,
   OrganizationRecordCandidateNode,
   OrganizationRecordFrozenEnvelope,
   OrganizationRecordNodeStore,
+  OrganizationRecordOrganizationMemberAuthorizationEvidenceV3,
   OrganizationRecordReceiptIntegrity,
+  OrganizationRecordReviewerAuthorizationEvidenceV2,
   OrganizationRecordSourceLocator,
   VerifiedOrganizationRecordReceipt,
 } from '../../src/product/organization/record/index.js';
@@ -22,6 +29,14 @@ import type {
 /** The exact evidence shape an allow decision stores on the resolved slot. */
 type AllowEvidence = Extract<
   OrganizationApprovalActionAuthorizationResult,
+  { allowed: true }
+>['evidence'];
+type ReviewerAllowEvidence = Extract<
+  OrganizationReviewerApprovalAuthorizationResult,
+  { allowed: true }
+>['evidence'];
+type OrganizationMemberAllowEvidence = Extract<
+  OrganizationMemberApprovalAuthorizationResult,
   { allowed: true }
 >['evidence'];
 
@@ -84,6 +99,19 @@ describe('organization record ports', () => {
     pin<(allowed: AllowEvidence) => OrganizationRecordAuthorizationEvidence>(
       (allowed) => allowed,
     );
+    pin<(allowed: AllowEvidence) => OrganizationRecordAuthorizationEvidenceV1>(
+      (allowed) => allowed,
+    );
+    pin<
+      (
+        allowed: ReviewerAllowEvidence,
+      ) => OrganizationRecordReviewerAuthorizationEvidenceV2
+    >((allowed) => allowed);
+    pin<
+      (
+        allowed: OrganizationMemberAllowEvidence,
+      ) => OrganizationRecordOrganizationMemberAuthorizationEvidenceV3
+    >((allowed) => allowed);
     // The shared signed-document integrity block must satisfy the port's
     // restatement, so a real signed receipt is filable as durable state.
     pin<

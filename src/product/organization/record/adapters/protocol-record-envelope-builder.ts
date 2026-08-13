@@ -5,15 +5,18 @@ import type {
 import {
   CONSERVATIVE_ORGANIZATION_RECORD_INTENT,
   createOrganizationRecordApprovalEnvelope,
+  createOrganizationRecordOrganizationMemberApprovalEnvelope,
   createOrganizationRecordRejectionEnvelope,
   createOrganizationRecordReviewerApprovalEnvelope,
   organizationRecordEnvelopeId,
+  organizationRecordOrganizationMemberIntent,
   organizationRecordReviewerIntent,
 } from '@echo-brain/organization-protocol';
 import type {
   CanonicalPayloadSigner,
   OrganizationRecordApprovalPayloadV1,
   OrganizationRecordDecisionBriefV1,
+  OrganizationRecordOrganizationMemberAuthorizationV3,
   OrganizationRecordRejectionPayloadV1,
   OrganizationRecordReviewerAuthorizationV1,
   OrganizationRecordReviewerAuthorizationV2,
@@ -88,6 +91,12 @@ export class ProtocolOrganizationRecordEnvelopeBuilder
   async build(
     input: OrganizationRecordEnvelopeBuildInput,
   ): Promise<BuiltOrganizationRecordEnvelope> {
+    if (
+      (input.authorization as unknown as { schema_version?: unknown })
+        .schema_version === 3
+    ) {
+      return await this.buildOrganizationMemberApproval(input);
+    }
     if (
       (input.authorization as unknown as { schema_version?: unknown })
         .schema_version === 2
@@ -176,6 +185,49 @@ export class ProtocolOrganizationRecordEnvelopeBuilder
       this.options.pinnedAuthority,
       this.options.sign,
     );
+    return {
+      envelope_id: envelope.envelope_id,
+      idempotency_key: envelope.idempotency_key,
+      event_type: envelope.event_type,
+      envelope: envelope as unknown as JsonObject,
+    };
+  }
+
+  /** The closed organization-member-readable schema-v3 approval envelope. */
+  private async buildOrganizationMemberApproval(
+    input: OrganizationRecordEnvelopeBuildInput,
+  ): Promise<BuiltOrganizationRecordEnvelope> {
+    if (input.event_type !== 'approval') {
+      throw new Error(
+        'organization record schema version 3 admits approval only',
+      );
+    }
+    const authorization =
+      input.authorization as unknown as OrganizationRecordOrganizationMemberAuthorizationV3;
+    const envelope =
+      await createOrganizationRecordOrganizationMemberApprovalEnvelope(
+        {
+          envelope_id: this.nextEnvelopeId(),
+          idempotency_key: input.approval_id,
+          payload: this.approvalPayload(input),
+          reviewer: {
+            principal_id: authorization.principal_id,
+            membership_id: authorization.membership_id,
+            reviewed_by: input.reviewed_by,
+            authorization,
+          },
+          intent: organizationRecordOrganizationMemberIntent(
+            authorization.semantic_intent_sha256,
+          ),
+          submitter: {
+            installation_id: authorization.installation_id,
+            submitted_at: input.submitted_at,
+          },
+          installation_signing_key: this.options.installationSigningKey,
+        },
+        this.options.pinnedAuthority,
+        this.options.sign,
+      );
     return {
       envelope_id: envelope.envelope_id,
       idempotency_key: envelope.idempotency_key,

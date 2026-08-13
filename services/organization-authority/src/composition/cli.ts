@@ -1,9 +1,7 @@
 import { canonicalJson } from '@echo-brain/federation-protocol';
+import { readAuthorityRuntimeConfig } from './operator-config.js';
 import {
-  readAuthorityRuntimeConfig,
-  resolveAuthorityServeConfig,
-} from './operator-config.js';
-import {
+  activateOrganizationMemberRecording,
   activateOrganizationPermissionPilot,
   expireReadableSearchQueryAudit,
   expireReviewerQueryAudit,
@@ -12,6 +10,7 @@ import {
   initializeDevelopmentAuthority,
   installAuthorityIntegrations,
   inspectAuthorityServePreflight,
+  resolveEffectiveAuthorityServeConfig,
   rebuildAuthorityReadableSearch,
   rebuildAuthorityDerivedRecordStore,
   verifyAuthorityReadableSearchBackup,
@@ -23,6 +22,7 @@ const USAGE = `usage:
   echo-organization-authority init-development --config <absolute-path> --state-dir <absolute-path> --organization-name <name> [--port <1-65535>]
   echo-organization-authority install-integrations --config <absolute-path>
   echo-organization-authority activate-permission-pilot --config <absolute-path> --command <absolute-json-path>
+  echo-organization-authority activate-organization-member-recording --config <absolute-path> --command <absolute-json-path>
   echo-organization-authority reviewer-query-audit-export --config <absolute-path> --command <absolute-json-path> --output <absolute-path>
   echo-organization-authority reviewer-query-audit-expire --config <absolute-path> --command <absolute-json-path>
   echo-organization-authority readable-search-query-audit-export --config <absolute-path> --command <absolute-json-path> --output <absolute-path>
@@ -88,7 +88,10 @@ async function runServe(
 ): Promise<number> {
   const runtimeConfig = readAuthorityRuntimeConfig(configPath);
   await inspectAuthorityServePreflight(configPath, runtimeConfig);
-  const config = resolveAuthorityServeConfig(runtimeConfig);
+  const config = resolveEffectiveAuthorityServeConfig(
+    configPath,
+    runtimeConfig,
+  );
   const runtime = await startOrganizationAuthority(config);
   const listening =
     `organization authority listening on ${runtime.address.address}:` +
@@ -178,6 +181,15 @@ export async function runOrganizationAuthorityCli(
   if (command === 'activate-permission-pilot') {
     const flags = parseFlags(commandArguments, ['--config', '--command']);
     const result = await activateOrganizationPermissionPilot(
+      requiredFlag(flags, '--config'),
+      requiredFlag(flags, '--command'),
+    );
+    io.stdout(`${canonicalJson(result as never)}\n`);
+    return 0;
+  }
+  if (command === 'activate-organization-member-recording') {
+    const flags = parseFlags(commandArguments, ['--config', '--command']);
+    const result = await activateOrganizationMemberRecording(
       requiredFlag(flags, '--config'),
       requiredFlag(flags, '--command'),
     );

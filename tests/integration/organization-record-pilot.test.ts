@@ -14,16 +14,19 @@ import {
   readFileSync,
   realpathSync,
   rmSync,
+  writeFileSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import Database from 'better-sqlite3';
 import { afterEach, describe, expect, it } from 'vitest';
 import {
+  createOrganizationReadableSearchRequest,
   ORGANIZATION_API_PROXY_AUTH_SCHEME,
   ORGANIZATION_API_RECORD_ENVELOPES_PATH,
 } from '@echo-brain/organization-api';
 import {
+  canonicalSha256,
   canonicalJson,
   normalizeP256LowS,
   p256KeyId,
@@ -34,11 +37,21 @@ import {
 } from '@echo-brain/federation-protocol';
 import {
   organizationEnrollmentGrantSha256,
+  organizationMemberReadableApprovalPresentation,
+  organizationMemberReadableApprovalPresentationSha256,
+  organizationMemberReadablePolicyContractSha256,
+  organizationMemberReadableReleaseDraftSha256,
+  projectOrganizationMemberReadableReleaseDraft,
   validateOrganizationAuthorityDescriptor,
+  validateOrganizationRecordEnvelope,
   verifyOrganizationAuthorityPin,
   type PinnedOrganizationAuthority,
 } from '@echo-brain/organization-protocol';
 import {
+  organizationMemberMessagePresentationPreimage,
+  organizationMemberReadableAuditDetail,
+  organizationMemberReadableSemanticPreimage,
+  FileOrganizationSecretStore,
   OrganizationIntegrationsRepository,
   openOrganizationControlDatabase,
 } from '../../services/organization-control-plane/src/index.js';
@@ -59,12 +72,18 @@ import {
   inspectAuthorityRuntimeLock,
 } from '../../services/organization-authority/src/adapters/runtime/singleton-runtime-lock.js';
 import type { AuthorityServeConfig } from '../../services/organization-authority/src/composition/config.js';
+import type { OrganizationMemberRecordingActivationCommandV1 } from '../../services/organization-authority/src/application/organization-recording-policy-activation.js';
 import {
   authorityStatePaths,
   readAuthorityRuntimeConfig,
   resolveAuthorityServeConfig,
 } from '../../services/organization-authority/src/composition/operator-config.js';
-import { initializeDevelopmentAuthority } from '../../services/organization-authority/src/composition/operator-state.js';
+import {
+  activateOrganizationMemberRecording,
+  initializeDevelopmentAuthority,
+  rebuildAuthorityReadableSearch,
+  resolveEffectiveAuthorityServeConfig,
+} from '../../services/organization-authority/src/composition/operator-state.js';
 import { startOrganizationAuthority } from '../../services/organization-authority/src/composition/runtime.js';
 import {
   TRUSTED_PROXY_AUTHORIZATION_HEADER,
@@ -95,7 +114,7 @@ const PROCESSING_KEY =
   'granola:primary:pricing-2026-08-08:rev-1:structured-text:default:1.0.0';
 const DECISION_TEXT = 'Adopt usage-based pricing.';
 const SLACK_TOOL_CONFIGURATION_JSON =
-  '{"channel_id":"C12345678","organization_tool_profile":"slack-organization-tool-v1","schema_version":1,"slack_app_id":"A12345678","slack_bot_id":"B12345678","slack_bot_user_id":"U12345679","slack_enterprise_id":null}';
+  '{"approve_reaction":"white_check_mark","channel_id":"C12345678","organization_tool_profile":"slack-organization-tool-v1","reject_reaction":"x","schema_version":1,"slack_app_id":"A12345678","slack_bot_id":"B12345678","slack_bot_user_id":"U12345679","slack_enterprise_id":null}';
 const SLACK_BINDING_CONFIGURATION_JSON =
   '{"approve_reaction":"white_check_mark","channel_id":"C12345678","organization_tool_profile":"slack-organization-tool-v1","reject_reaction":"x","schema_version":1,"slack_app_id":"A12345678","slack_bot_id":"B12345678","slack_bot_user_id":"U12345679","slack_enterprise_id":null}';
 
@@ -262,13 +281,26 @@ function approvalRequest(decisionText = DECISION_TEXT): ApprovalRequest {
 
 interface RecordPilot {
   readonly origin: string;
+  readonly configPath: string;
   readonly stateDirectory: string;
   /** The exact config a supervisor's replacement process would serve from. */
   readonly serveConfig: AuthorityServeConfig;
   readonly nodes: DecisionNodeStore;
   readonly installationId: string;
+  readonly enrollmentId: string;
+  readonly ownerPrincipalId: string;
+  readonly ownerMembershipId: string;
+  readonly authorityKeyId: Sha256Digest;
   readonly installationSigningKey: P256SigningKeyDescriptor;
   readonly signCanonicalBytes: (bytes: Buffer) => Promise<Buffer>;
+  readonly secondMember:
+    | {
+        readonly enrollmentId: string;
+        readonly installationId: string;
+        readonly installationSigningKey: P256SigningKeyDescriptor;
+        readonly signCanonicalBytes: (bytes: Buffer) => Promise<Buffer>;
+      }
+    | undefined;
   readonly pinnedAuthority: PinnedOrganizationAuthority;
   readonly fetch: typeof fetch;
   /** Loses exactly one record-route response *after* the authority handled it. */
@@ -293,6 +325,7 @@ interface RecordPilot {
  */
 async function startRecordPilot(
   decisionText = DECISION_TEXT,
+  authorizationFamily: 'v1' | 'organization-member-v3' = 'v1',
 ): Promise<RecordPilot> {
   const root = realpathSync(mkdtempSync(join(tmpdir(), 'echo-rec-pilot-')));
   chmodSync(root, 0o700);
@@ -320,7 +353,19 @@ async function startRecordPilot(
       `${ORGANIZATION_API_PROXY_AUTH_SCHEME} ${serveConfig.trusted_proxy_token}`,
     );
     headers.set(TRUSTED_PROXY_CLIENT_ID_HEADER, PROXY_CLIENT_ID);
-    const response = await fetch(input, { ...init, headers });
+    // This fixture deliberately restarts a listener on the same reserved port.
+    // Close each test connection so undici cannot reuse a socket owned by the
+    // stopped process for the first request to its replacement.
+    headers.set('connection', 'close');
+    let response: Response;
+    try {
+      response = await fetch(input, { ...init, headers });
+    } catch (error) {
+      const cause = (error as Error & { cause?: { code?: string } }).cause;
+      throw new Error(
+        `record pilot proxy fetch failed (${cause?.code ?? 'no-code'}): ${(error as Error).message}`,
+      );
+    }
     const url = typeof input === 'string' ? input : String(input);
     if (
       dropNextRecordResponse &&
@@ -348,7 +393,8 @@ async function startRecordPilot(
     const membership = await admin.provisionMembership({
       command_id: `adm_${randomUUID()}`,
       display_name: 'Ada Founder',
-      membership_type: 'employee',
+      membership_type:
+        authorizationFamily === 'organization-member-v3' ? 'owner' : 'employee',
     });
     const grant = Uint8Array.from(randomBytes(32));
     await admin.registerEnrollmentGrant(membership.membership_id, {
@@ -396,6 +442,72 @@ async function startRecordPilot(
       throw new Error('pilot enrollment produced no receipt');
     }
 
+    let secondMember: RecordPilot['secondMember'];
+    if (authorizationFamily === 'organization-member-v3') {
+      const readerMembership = await admin.provisionMembership({
+        command_id: `adm_${randomUUID()}`,
+        display_name: 'Grace Reader',
+        membership_type: 'employee',
+      });
+      const readerGrant = Uint8Array.from(randomBytes(32));
+      await admin.registerEnrollmentGrant(readerMembership.membership_id, {
+        command_id: `adm_${randomUUID()}`,
+        enrollment_grant_sha256: organizationEnrollmentGrantSha256(readerGrant),
+        lifetime_seconds: 3600,
+      });
+      const readerState = new SqliteOrganizationStateStore(
+        join(root, 'reader-installation.sqlite'),
+      );
+      try {
+        const readerInstallationId = `ins_${randomUUID()}`;
+        const readerSigner = new MemoryInstallationSigner();
+        const readerEnrolled = await new LocalOrganizationCoordinator({
+          state: readerState,
+          authorityClient: new HttpOrganizationAuthorityClient({
+            baseUrl: origin,
+            fetch: proxyFetch,
+            allowInsecureLoopback: true,
+          }),
+          installationSigner: readerSigner,
+          maximumActiveLeaseTtlMs: serveConfig.active_lease_ttl_ms,
+        }).enroll({
+          authorityBaseUrl: new URL(origin).origin,
+          authorityDescriptor,
+          independentlyTrustedAuthorityPin: identity.authority_pin_sha256,
+          enrollmentGrant: readerGrant,
+          principalId: readerMembership.principal_id,
+          membershipId: readerMembership.membership_id,
+          installationId: readerInstallationId,
+        });
+        if (!readerEnrolled.permitted) {
+          throw new Error('second-member pilot enrollment was refused');
+        }
+        const readerEnrollment = readerState.readEnrollment();
+        const readerEnrollmentId = readerEnrollment?.receipt?.enrollment_id;
+        const readerSigningKey =
+          readerEnrollment?.request.installation_signing_key;
+        if (
+          readerEnrollmentId === undefined ||
+          readerSigningKey === undefined
+        ) {
+          throw new Error('second-member pilot enrollment produced no receipt');
+        }
+        secondMember = Object.freeze({
+          enrollmentId: readerEnrollmentId,
+          installationId: readerInstallationId,
+          installationSigningKey: readerSigningKey,
+          signCanonicalBytes: (bytes: Buffer) =>
+            readerSigner.sign(
+              readerInstallationId,
+              bytes,
+              readerSigningKey.key_id,
+            ),
+        });
+      } finally {
+        readerState.close();
+      }
+    }
+
     // The real integration audit, written through the same control-plane
     // repository the authority uses. A second connection beside a running
     // authority is exactly how an operator tool touches this file.
@@ -407,89 +519,252 @@ async function startRecordPilot(
       organization_id: serveConfig.organization_id,
       authority_id: serveConfig.authority_id,
     });
+    const integrationSecret = new FileOrganizationSecretStore(
+      join(stateDirectory, 'credentials', 'integrations'),
+    ).create('xoxb-record-pilot');
     const surface = seedSlackApprovalSurface(controlDatabase, {
       organizationId: serveConfig.organization_id,
       installationId,
       installationKeyId: installationSigningKey.key_id,
       principalId: membership.principal_id,
       membershipId: membership.membership_id,
+      secret: integrationSecret,
     });
 
     const nodes = new DecisionNodeStore(join(root, 'member'), {
       now: () => NOW,
     });
-    const requested = await nodes.ensureRequested(approvalRequest(decisionText));
+    const request = approvalRequest(decisionText);
+    const requested = await nodes.ensureRequested(request);
     const approvalId = requested.approval_id;
-    const evidence: OrganizationRecordAuthorizationEvidence = {
-      schema_version: 1,
-      kind: 'echo-organization-authorization-evidence',
-      authority_id: serveConfig.authority_id,
-      organization_id: serveConfig.organization_id,
-      enrollment_id: enrollmentId,
-      installation_id: installationId,
-      request_id: `pcr_${randomUUID()}`,
-      approval_id: approvalId,
-      action: 'approve',
-      request_sha256: digest('pilot-request'),
-      provider_event_sha256: digest('pilot-provider-event'),
-      allowed: true,
-      reason_code: 'active_membership_and_direct_grant',
-      principal_id: membership.principal_id,
-      membership_id: membership.membership_id,
-      adapter_binding_id: surface.adapter_binding_id,
-      permission_grant_id: surface.approve_permission_grant_id,
-      evaluated_at: NOW,
-    };
-    integrations.recordPermissionDecision({
-      request_id: evidence.request_id,
-      request_sha256: evidence.request_sha256 as Sha256Digest,
-      provider_event_sha256: evidence.provider_event_sha256 as Sha256Digest,
-      action: 'approve',
-      allowed: true,
-      reason_code: 'active_membership_and_direct_grant',
-      principal_id: evidence.principal_id,
-      membership_id: evidence.membership_id,
-      adapter_binding_id: evidence.adapter_binding_id,
-      permission_grant_id: evidence.permission_grant_id,
-      evaluated_at: evidence.evaluated_at,
-      authority_evidence_sha256: digest('pilot-authority-status'),
-      authority_checked_at: evidence.evaluated_at,
-      organization_id: serveConfig.organization_id,
-      caller_principal_id: evidence.principal_id,
-      caller_membership_id: evidence.membership_id,
-      installation_id: installationId,
-      identity_link_id: null,
-      connection_id: null,
-      approval_id: approvalId,
-      detail: {
-        provider: 'slack',
-        provider_tenant_id: 'T12345678',
-        provider_subject_id: 'U12345678',
-        adapter_id: 'slack-reactions',
-        adapter_instance_id: 'primary',
-        channel_id: 'C12345678',
-        message_ts: '1721678400.123456',
-        reaction_name: 'white_check_mark',
-      },
-    });
-    await nodes.resolve({
-      approvalId,
-      status: 'approved',
-      reviewedBy: 'Ada Founder',
-      surface: 'slack-reactions',
-      metadata: JSON.parse(
-        canonicalJson({ authorization: evidence }),
-      ) as JsonObject,
-    });
+    if (authorizationFamily === 'organization-member-v3') {
+      const policyContractSha256 =
+        organizationMemberReadablePolicyContractSha256();
+      const draft = projectOrganizationMemberReadableReleaseDraft({
+        approval_id: approvalId,
+        brief: request.brief,
+      });
+      const presentation = organizationMemberReadableApprovalPresentation({
+        draft,
+        approve_reaction: 'white_check_mark',
+        reject_reaction: 'x',
+      });
+      const releaseDraftSha256 =
+        organizationMemberReadableReleaseDraftSha256(draft);
+      const approvalPresentationSha256 =
+        organizationMemberReadableApprovalPresentationSha256(presentation);
+      const requestId = `pcr_${randomUUID()}`;
+      const requestSha256 = digest('pilot-member-request');
+      const providerEventSha256 = digest('pilot-member-provider-event');
+      const semanticIntentSha256 = canonicalSha256(
+        organizationMemberReadableSemanticPreimage({
+          authority_id: serveConfig.authority_id,
+          organization_id: serveConfig.organization_id,
+          policy_contract_sha256: policyContractSha256,
+          approval_id: approvalId,
+          approving_principal_id: membership.principal_id,
+          approving_membership_id: membership.membership_id,
+          release_draft_sha256: releaseDraftSha256,
+          approval_presentation_sha256: approvalPresentationSha256,
+          evaluated_at: NOW,
+        }),
+      );
+      const messagePresentationSha256 = canonicalSha256(
+        organizationMemberMessagePresentationPreimage({
+          provider_event_sha256: providerEventSha256,
+          approval_presentation_sha256: approvalPresentationSha256,
+          team_id: 'T12345678',
+          enterprise_id: null,
+          bot_user_id: 'U12345679',
+          bot_id: 'B12345678',
+          app_id: 'A12345678',
+          actor_user_id: 'U12345678',
+          channel_id: 'C12345678',
+          message_ts: '1721678400.123456',
+          reaction_name: 'white_check_mark',
+        }),
+      );
+      const recorded =
+        integrations.recordOrganizationMemberReadablePermissionDecision({
+          organization_id: serveConfig.organization_id,
+          authority_id: serveConfig.authority_id,
+          request_id: requestId,
+          request_sha256: requestSha256,
+          provider_event_sha256: providerEventSha256,
+          approval_id: approvalId,
+          installation_id: installationId,
+          approving_principal_id: membership.principal_id,
+          approving_membership_id: membership.membership_id,
+          identity_link_id: surface.identity_link_id,
+          connection_id: surface.connection_id,
+          adapter_binding_id: surface.adapter_binding_id,
+          permission_grant_id: surface.approve_permission_grant_id,
+          evaluated_at: NOW,
+          authority_evidence_sha256: digest('pilot-member-authority-status'),
+          detail: organizationMemberReadableAuditDetail({
+            authority_id: serveConfig.authority_id,
+            request_sha256: requestSha256,
+            provider_event_sha256: providerEventSha256,
+            principal_id: membership.principal_id,
+            policy_contract_sha256: policyContractSha256,
+            team_id: 'T12345678',
+            enterprise_id: null,
+            bot_user_id: 'U12345679',
+            bot_id: 'B12345678',
+            app_id: 'A12345678',
+            actor_user_id: 'U12345678',
+            adapter_id: 'slack-reactions',
+            adapter_instance_id: 'primary',
+            adapter_version: '1.0.0',
+            channel_id: 'C12345678',
+            message_ts: '1721678400.123456',
+            reaction_name: 'white_check_mark',
+            approve_reaction: 'white_check_mark',
+            reject_reaction: 'x',
+            release_draft_sha256: releaseDraftSha256,
+            approval_presentation_sha256: approvalPresentationSha256,
+            semantic_intent_sha256: semanticIntentSha256,
+            message_presentation_sha256: messagePresentationSha256,
+          }),
+        });
+      const evidence: OrganizationRecordAuthorizationEvidence = {
+        schema_version: 3,
+        kind: 'echo-organization-authorization-evidence',
+        policy_id: 'organization-member-readable-v1',
+        policy_contract_sha256: policyContractSha256,
+        authority_id: serveConfig.authority_id,
+        organization_id: serveConfig.organization_id,
+        enrollment_id: enrollmentId,
+        installation_id: installationId,
+        request_id: requestId,
+        approval_id: approvalId,
+        action: 'approve',
+        request_sha256: requestSha256,
+        provider_event_sha256: providerEventSha256,
+        allowed: true,
+        reason_code: 'active_organization_member_readable_notice_v1',
+        principal_id: membership.principal_id,
+        membership_id: membership.membership_id,
+        adapter_binding_id: surface.adapter_binding_id,
+        permission_grant_id: surface.approve_permission_grant_id,
+        evaluated_at: NOW,
+        authorization_audit_event_id: recorded.authorization_audit_event_id,
+        authorization_audit_entry_sha256:
+          recorded.authorization_audit_entry_sha256,
+        release_draft_sha256: releaseDraftSha256,
+        approval_presentation_sha256: approvalPresentationSha256,
+        semantic_intent_sha256: semanticIntentSha256,
+        message_presentation_sha256: messagePresentationSha256,
+      };
+      await nodes.freezeApprovalPresentationContract({
+        approvalId,
+        contract: {
+          schema_version: 1,
+          kind: 'echo-slack-approval-presentation-contract',
+          mode: 'organization-member-readable-v1',
+          adapter_id: 'slack-reactions',
+          adapter_instance_id: 'primary',
+          adapter_version: '1.0.0',
+          channel_id: 'C12345678',
+          reviewer_slack_user_id: 'U12345678',
+          reviewer_name: 'Ada Founder',
+          credential_ref: 'env:ECHO_SLACK_BOT_TOKEN',
+          credential_fingerprint_sha256: digest('pilot-member-credential'),
+          approve_reaction: 'white_check_mark',
+          reject_reaction: 'x',
+          policy_id: 'organization-member-readable-v1',
+          policy_contract_sha256: policyContractSha256,
+          release_draft_sha256: releaseDraftSha256,
+          approval_presentation_sha256: approvalPresentationSha256,
+        },
+      });
+      await nodes.resolve({
+        approvalId,
+        status: 'approved',
+        reviewedBy: 'Ada Founder',
+        reviewedAt: NOW,
+        surface: 'slack-organization-member-readable-v1',
+        metadata: JSON.parse(
+          canonicalJson({ authorization: evidence }),
+        ) as JsonObject,
+      });
+    } else {
+      const evidence: OrganizationRecordAuthorizationEvidence = {
+        schema_version: 1,
+        kind: 'echo-organization-authorization-evidence',
+        authority_id: serveConfig.authority_id,
+        organization_id: serveConfig.organization_id,
+        enrollment_id: enrollmentId,
+        installation_id: installationId,
+        request_id: `pcr_${randomUUID()}`,
+        approval_id: approvalId,
+        action: 'approve',
+        request_sha256: digest('pilot-request'),
+        provider_event_sha256: digest('pilot-provider-event'),
+        allowed: true,
+        reason_code: 'active_membership_and_direct_grant',
+        principal_id: membership.principal_id,
+        membership_id: membership.membership_id,
+        adapter_binding_id: surface.adapter_binding_id,
+        permission_grant_id: surface.approve_permission_grant_id,
+        evaluated_at: NOW,
+      };
+      integrations.recordPermissionDecision({
+        request_id: evidence.request_id,
+        request_sha256: evidence.request_sha256 as Sha256Digest,
+        provider_event_sha256: evidence.provider_event_sha256 as Sha256Digest,
+        action: 'approve',
+        allowed: true,
+        reason_code: 'active_membership_and_direct_grant',
+        principal_id: evidence.principal_id,
+        membership_id: evidence.membership_id,
+        adapter_binding_id: evidence.adapter_binding_id,
+        permission_grant_id: evidence.permission_grant_id,
+        evaluated_at: evidence.evaluated_at,
+        authority_evidence_sha256: digest('pilot-authority-status'),
+        authority_checked_at: evidence.evaluated_at,
+        organization_id: serveConfig.organization_id,
+        caller_principal_id: evidence.principal_id,
+        caller_membership_id: evidence.membership_id,
+        installation_id: installationId,
+        identity_link_id: null,
+        connection_id: null,
+        approval_id: approvalId,
+        detail: {
+          provider: 'slack',
+          provider_tenant_id: 'T12345678',
+          provider_subject_id: 'U12345678',
+          adapter_id: 'slack-reactions',
+          adapter_instance_id: 'primary',
+          channel_id: 'C12345678',
+          message_ts: '1721678400.123456',
+          reaction_name: 'white_check_mark',
+        },
+      });
+      await nodes.resolve({
+        approvalId,
+        status: 'approved',
+        reviewedBy: 'Ada Founder',
+        surface: 'slack-reactions',
+        metadata: JSON.parse(
+          canonicalJson({ authorization: evidence }),
+        ) as JsonObject,
+      });
+    }
 
     const closedRepository = integrations;
     let closed = false;
     return {
       origin,
+      configPath,
       stateDirectory,
       serveConfig,
       nodes,
       installationId,
+      enrollmentId,
+      ownerPrincipalId: membership.principal_id,
+      ownerMembershipId: membership.membership_id,
+      authorityKeyId: authorityDescriptor.signing_key.key_id,
       installationSigningKey,
       signCanonicalBytes: (bytes) =>
         installationSigner.sign(
@@ -497,6 +772,7 @@ async function startRecordPilot(
           bytes,
           installationSigningKey.key_id,
         ),
+      secondMember,
       pinnedAuthority,
       fetch: proxyFetch,
       loseNextRecordResponse: () => {
@@ -533,8 +809,17 @@ function seedSlackApprovalSurface(
     installationKeyId: string;
     principalId: string;
     membershipId: string;
+    secret: {
+      readonly secret_backend_id: string;
+      readonly secret_handle_id: string;
+    };
   },
-): { adapter_binding_id: string; approve_permission_grant_id: string } {
+): {
+  adapter_binding_id: string;
+  approve_permission_grant_id: string;
+  connection_id: string;
+  identity_link_id: string;
+} {
   const attemptId = 'cat_record-pilot-attempt';
   const connectionId = 'con_record-pilot';
   const adapterBindingId = `bnd_${randomUUID()}`;
@@ -605,8 +890,8 @@ function seedSlackApprovalSurface(
        ) VALUES (
          ?, ?, 'service_account', 'organization', NULL, NULL, NULL,
          'slack', 'https://slack.com', 'workspace', 'T12345678',
-         'service_account', 'U12345679', ?, ?, ?, ?, 'authority-file-v1',
-         'sch_record-pilot', 'active', ?, ?, ?, NULL, NULL, ?, ?
+         'service_account', 'U12345679', ?, ?, ?, ?, ?, ?, 'active', ?, ?,
+         ?, NULL, NULL, ?, ?
        )`,
     )
     .run(
@@ -616,6 +901,8 @@ function seedSlackApprovalSurface(
       digest(scopesJson),
       attemptId,
       digest('verification-evidence'),
+      input.secret.secret_backend_id,
+      input.secret.secret_handle_id,
       input.principalId,
       input.membershipId,
       NOW,
@@ -648,6 +935,81 @@ function seedSlackApprovalSurface(
       input.membershipId,
       NOW,
     );
+  const identityAttemptId = 'cat_record-pilot-human-attempt';
+  const identityLinkId = `clm_${randomUUID()}`;
+  const identityScopesJson = '["identity.basic"]';
+  const identityEvidenceSha256 = digest('human-verification-evidence');
+  database
+    .prepare(
+      `INSERT INTO organization_connection_attempts (
+         connection_attempt_id, organization_id, requested_by_principal_id,
+         requested_by_membership_id, attempt_purpose, target_owner_kind,
+         target_principal_id, target_membership_id, provider, provider_issuer,
+         provider_tenant_kind, provider_tenant_id, redirect_uri,
+         requested_scopes_json, requested_scopes_sha256, state_sha256,
+         nonce_sha256, pkce_challenge_sha256, admin_session_sha256, status,
+         provider_subject_kind, provider_subject_id, granted_scopes_json,
+         granted_scopes_sha256, verification_evidence_sha256, created_at,
+         expires_at, consumed_at, outcome_reason
+       ) VALUES (
+         ?, ?, ?, ?, 'identity_link', 'membership', ?, ?, 'slack',
+         'https://slack.com', 'workspace', 'T12345678',
+         'https://authority.invalid/callback', ?, ?, ?, ?, ?, ?, 'pending',
+         NULL, NULL, NULL, NULL, NULL, ?, ?, NULL, NULL
+       )`,
+    )
+    .run(
+      identityAttemptId,
+      input.organizationId,
+      input.principalId,
+      input.membershipId,
+      input.principalId,
+      input.membershipId,
+      identityScopesJson,
+      digest(identityScopesJson),
+      digest('identity-state'),
+      digest('identity-nonce'),
+      digest('identity-pkce'),
+      digest('identity-admin-session'),
+      NOW,
+      new Date(Date.parse(NOW) + 600_000).toISOString(),
+    );
+  database
+    .prepare(
+      `UPDATE organization_connection_attempts
+       SET status = 'succeeded', provider_subject_kind = 'human_user',
+           provider_subject_id = 'U12345678', granted_scopes_json = ?,
+           granted_scopes_sha256 = ?, verification_evidence_sha256 = ?,
+           consumed_at = ?
+       WHERE connection_attempt_id = ?`,
+    )
+    .run(
+      identityScopesJson,
+      digest(identityScopesJson),
+      identityEvidenceSha256,
+      NOW,
+      identityAttemptId,
+    );
+  database
+    .prepare(
+      `INSERT INTO organization_external_identity_links (
+         identity_link_id, organization_id, principal_id, membership_id,
+         provider, provider_issuer, provider_tenant_kind, provider_tenant_id,
+         provider_subject_id, verification_attempt_id,
+         verification_evidence_sha256, status, verified_at, revoked_at,
+         revocation_reason
+       ) VALUES (?, ?, ?, ?, 'slack', 'https://slack.com', 'workspace',
+                 'T12345678', 'U12345678', ?, ?, 'active', ?, NULL, NULL)`,
+    )
+    .run(
+      identityLinkId,
+      input.organizationId,
+      input.principalId,
+      input.membershipId,
+      identityAttemptId,
+      identityEvidenceSha256,
+      NOW,
+    );
   database
     .prepare(
       `INSERT INTO organization_permission_grants (
@@ -670,6 +1032,8 @@ function seedSlackApprovalSurface(
   return {
     adapter_binding_id: adapterBindingId,
     approve_permission_grant_id: approvePermissionGrantId,
+    connection_id: connectionId,
+    identity_link_id: identityLinkId,
   };
 }
 
@@ -704,6 +1068,63 @@ function recordSubmitter(pilot: RecordPilot): OrganizationRecordSubmitter {
   });
 }
 
+async function activateMemberRecording(
+  pilot: RecordPilot,
+): Promise<AuthorityServeConfig> {
+  const paths = authorityStatePaths(pilot.stateDirectory);
+  const manifest = JSON.parse(
+    readFileSync(paths.initialization_manifest_path, 'utf8'),
+  ) as { readonly runtime_config: unknown; readonly [key: string]: unknown };
+  const requestedAt = new Date().toISOString();
+  const command = {
+    schema_version: 1,
+    kind: 'echo-organization-member-recording-activation-command',
+    command_id: `rpa_${randomUUID()}`,
+    authority_id: pilot.serveConfig.authority_id,
+    organization_id: pilot.serveConfig.organization_id,
+    initialized_runtime_config_sha256: canonicalSha256(
+      manifest.runtime_config as never,
+    ),
+    initialization_manifest_sha256: canonicalSha256(manifest as never),
+    owner_principal_id: pilot.ownerPrincipalId,
+    owner_membership_id: pilot.ownerMembershipId,
+    target_policy: {
+      schema_version: 1,
+      kind: 'organization-recording-policy-v1',
+      decision_processor_adapter_instance_id: 'default',
+      approval_surface_adapter_instance_id: 'primary',
+      presentation_mode: 'organization-member-readable-v1',
+      policy_contract_sha256: organizationMemberReadablePolicyContractSha256(),
+    },
+    requested_at: requestedAt,
+    reason: 'Enable member-readable recording after the integration gate proof',
+  } satisfies OrganizationMemberRecordingActivationCommandV1;
+  const commandPath = `${pilot.configPath}.activate-member-recording.json`;
+  writeFileSync(commandPath, canonicalJson(command), { mode: 0o600 });
+  chmodSync(commandPath, 0o600);
+
+  const activated = await activateOrganizationMemberRecording(
+    pilot.configPath,
+    commandPath,
+    { now: () => requestedAt },
+  );
+  expect(activated).toMatchObject({
+    created: true,
+    effective_policy: command.target_policy,
+  });
+  const effective = resolveEffectiveAuthorityServeConfig(
+    pilot.configPath,
+    readAuthorityRuntimeConfig(pilot.configPath),
+  );
+  expect(effective).toMatchObject({
+    organization_recording_policy_v1: command.target_policy,
+    organization_member_recording_activation_v1: {
+      kind: 'organization-member-recording-activation-binding-v1',
+    },
+  });
+  return effective;
+}
+
 function logRows(
   stateDirectory: string,
 ): ReadonlyArray<{ position: number; envelope_sha256: string }> {
@@ -724,6 +1145,47 @@ function logRows(
   }
 }
 
+interface OrganizationMemberFactRow {
+  readonly log_position: number;
+  readonly item_kind: string;
+  readonly policy_id: string;
+  readonly policy_contract_sha256: string;
+  readonly approving_principal_id: string;
+  readonly approving_membership_id: string;
+  readonly release_draft_sha256: string;
+  readonly approval_presentation_sha256: string;
+  readonly semantic_intent_sha256: string;
+  readonly message_presentation_sha256: string;
+  readonly authorization_audit_event_id: string;
+  readonly authorization_audit_entry_sha256: string;
+}
+
+function organizationMemberFactRows(
+  stateDirectory: string,
+): readonly OrganizationMemberFactRow[] {
+  const database = openOrganizationRecordDatabase(
+    authorityStatePaths(stateDirectory).record_log_database_path,
+    ORGANIZATION_RECORD_LOG_DATABASE,
+    { readonly: true },
+  );
+  try {
+    return database
+      .prepare(
+        `SELECT log_position, item_kind, policy_id, policy_contract_sha256,
+                approving_principal_id, approving_membership_id,
+                release_draft_sha256, approval_presentation_sha256,
+                semantic_intent_sha256, message_presentation_sha256,
+                authorization_audit_event_id,
+                authorization_audit_entry_sha256
+           FROM organization_member_readable_policy_fact
+          ORDER BY log_position, atom_order`,
+      )
+      .all() as OrganizationMemberFactRow[];
+  } finally {
+    database.close();
+  }
+}
+
 function derivedAtomTexts(stateDirectory: string): readonly string[] {
   const database = openOrganizationRecordDatabase(
     authorityStatePaths(stateDirectory).record_derived_database_path,
@@ -736,6 +1198,39 @@ function derivedAtomTexts(stateDirectory: string): readonly string[] {
         .prepare(`SELECT text FROM organization_derived_atom ORDER BY atom_id`)
         .all() as Array<{ text: string }>
     ).map(({ text }) => text);
+  } finally {
+    database.close();
+  }
+}
+
+function organizationMemberCompatibilityExclusions(
+  stateDirectory: string,
+): readonly {
+  readonly log_position: number;
+  readonly record_hash: string;
+  readonly envelope_version: number;
+  readonly policy_id: string;
+  readonly outcome: string;
+}[] {
+  const database = openOrganizationRecordDatabase(
+    authorityStatePaths(stateDirectory).record_derived_database_path,
+    ORGANIZATION_RECORD_DERIVED_DATABASE,
+    { readonly: true },
+  );
+  try {
+    return database
+      .prepare(
+        `SELECT log_position, record_hash, envelope_version, policy_id, outcome
+           FROM organization_derived_member_readable_policy_exclusion
+          ORDER BY log_position`,
+      )
+      .all() as readonly {
+      readonly log_position: number;
+      readonly record_hash: string;
+      readonly envelope_version: number;
+      readonly policy_id: string;
+      readonly outcome: string;
+    }[];
   } finally {
     database.close();
   }
@@ -776,6 +1271,202 @@ describe('organization record pilot over the real authority listener', () => {
 
     expect(logRows(pilot.stateDirectory)).toHaveLength(1);
     expect(derivedAtomTexts(pilot.stateDirectory)).toEqual([DECISION_TEXT]);
+  });
+
+  it('bridges a resolved schema-v3 product node through HTTP append into member-readable facts', async () => {
+    const pilot = await startRecordPilot(
+      DECISION_TEXT,
+      'organization-member-v3',
+    );
+    let running:
+      Awaited<ReturnType<typeof startOrganizationAuthority>> | undefined;
+    let authorization:
+      | Extract<
+          ReturnType<typeof validateOrganizationRecordEnvelope>,
+          { schema_version: 3 }
+        >['reviewer']['authorization']
+      | undefined;
+    try {
+      const resolved = await pilot.nodes.getState(PROCESSING_KEY);
+      expect(resolved).toMatchObject({
+        status: 'approved',
+        reviewed_at: NOW,
+        resolved_surface: 'slack-organization-member-readable-v1',
+        resolved_metadata: {
+          authorization: {
+            schema_version: 3,
+            policy_id: 'organization-member-readable-v1',
+            reason_code: 'active_organization_member_readable_notice_v1',
+          },
+        },
+      });
+
+      // A valid signed schema-v3 document is not enough. Before the central
+      // policy head is activated, the real HTTP route refuses it retryably and
+      // the member retains the exact frozen envelope for a later sweep.
+      const inactive = await recordSubmitter(pilot).sweep();
+      expect(inactive).toMatchObject({
+        ok: true,
+        examined: 1,
+        skipped: 0,
+        published: 0,
+        rejected: 0,
+        retried: 1,
+      });
+      const outbound = await pilot.nodes.getState(PROCESSING_KEY);
+      expect(outbound?.organization_record.status).toBe('outbound');
+      const frozen = outbound?.organization_record.envelope;
+      if (frozen === null || frozen === undefined) {
+        throw new Error('inactive v3 submission produced no frozen envelope');
+      }
+      const inactiveHttp = await pilot.fetch(
+        new URL(ORGANIZATION_API_RECORD_ENVELOPES_PATH, pilot.origin).href,
+        {
+          method: 'POST',
+          headers: {
+            accept: 'application/json',
+            'content-type': 'application/json',
+          },
+          body: JSON.stringify({ record_envelope: frozen.envelope }),
+        },
+      );
+      expect(inactiveHttp.status).toBe(503);
+      expect(await inactiveHttp.json()).toMatchObject({
+        error: { code: 'unavailable' },
+      });
+      expect(logRows(pilot.stateDirectory)).toEqual([]);
+      expect(organizationMemberFactRows(pilot.stateDirectory)).toEqual([]);
+      expect(derivedAtomTexts(pilot.stateDirectory)).toEqual([]);
+      expect(
+        organizationMemberCompatibilityExclusions(pilot.stateDirectory),
+      ).toEqual([]);
+
+      const frozenDocument = validateOrganizationRecordEnvelope(
+        frozen.envelope,
+      );
+      expect(frozenDocument.schema_version).toBe(3);
+      if (frozenDocument.schema_version !== 3) {
+        throw new Error('expected frozen schema v3 envelope');
+      }
+      authorization = frozenDocument.reviewer.authorization;
+
+      // Activation is a supported stopped maintenance transaction. It writes
+      // the one-way policy marker and audit; the immutable initialized config
+      // is never edited to make this test pass.
+      await pilot.close();
+      const effectiveConfig = await activateMemberRecording(pilot);
+      running = await startOrganizationAuthority(effectiveConfig);
+
+      const result = await recordSubmitter(pilot).sweep();
+
+      expect(result).toMatchObject({
+        ok: true,
+        examined: 1,
+        skipped: 0,
+        published: 1,
+        rejected: 0,
+        retried: 0,
+      });
+      const published = await pilot.nodes.getState(PROCESSING_KEY);
+      expect(published?.organization_record.status).toBe('published');
+      expect(published?.organization_record.receipt?.position).toBe(1);
+      expect(published?.organization_record.envelope?.envelope_sha256).toBe(
+        frozen.envelope_sha256,
+      );
+      expect(published?.organization_record.receipt?.envelope_sha256).toBe(
+        frozen.envelope_sha256,
+      );
+      const document = validateOrganizationRecordEnvelope(
+        published?.organization_record.envelope?.envelope,
+      );
+      expect(document.schema_version).toBe(3);
+      if (document.schema_version !== 3) throw new Error('expected schema v3');
+      expect(document.payload.surface).toBe(
+        'slack-organization-member-readable-v1',
+      );
+      expect(document.reviewer.authorization).toEqual(authorization);
+
+      await running.close();
+      running = undefined;
+
+      expect(logRows(pilot.stateDirectory)).toHaveLength(1);
+      // Schema v3 is deliberately excluded from the legacy broad-derived
+      // graph; content enters only the permission-aware rebuild plane.
+      expect(derivedAtomTexts(pilot.stateDirectory)).toEqual([]);
+      expect(
+        organizationMemberCompatibilityExclusions(pilot.stateDirectory),
+      ).toEqual([
+        {
+          log_position: 1,
+          record_hash: expect.stringMatching(/^sha256:[0-9a-f]{64}$/),
+          envelope_version: 3,
+          policy_id: 'organization-member-readable-v1',
+          outcome: 'deferred-to-permission-aware-retrieval',
+        },
+      ]);
+      const facts = organizationMemberFactRows(pilot.stateDirectory);
+      expect(facts).toHaveLength(1);
+      expect(facts[0]).toMatchObject({
+        log_position: 1,
+        item_kind: 'decision',
+        policy_id: 'organization-member-readable-v1',
+        policy_contract_sha256: authorization.policy_contract_sha256,
+        approving_principal_id: authorization.principal_id,
+        approving_membership_id: authorization.membership_id,
+        release_draft_sha256: authorization.release_draft_sha256,
+        approval_presentation_sha256:
+          authorization.approval_presentation_sha256,
+        semantic_intent_sha256: authorization.semantic_intent_sha256,
+        message_presentation_sha256: authorization.message_presentation_sha256,
+        authorization_audit_event_id:
+          authorization.authorization_audit_event_id,
+        authorization_audit_entry_sha256:
+          authorization.authorization_audit_entry_sha256,
+      });
+      // The co-committed fact plane contains bindings and hashes, never content.
+      expect(JSON.stringify(facts)).not.toContain(DECISION_TEXT);
+
+      const rebuilt = await rebuildAuthorityReadableSearch(pilot.configPath);
+      expect(rebuilt).toMatchObject({
+        kind: 'echo-organization-authority-readable-search-rebuild',
+        record_head_position: 1,
+      });
+      running = await startOrganizationAuthority(effectiveConfig);
+      const restartedOrigin = `http://127.0.0.1:${running.address.port}/`;
+      const secondMember = pilot.secondMember;
+      if (secondMember === undefined) {
+        throw new Error('schema-v3 pilot has no second enrolled member');
+      }
+      const searchRequest = await createOrganizationReadableSearchRequest(
+        {
+          request_id: `osq_${randomUUID()}`,
+          authority_id: effectiveConfig.authority_id,
+          authority_key_id: pilot.authorityKeyId,
+          organization_id: effectiveConfig.organization_id,
+          enrollment_id: secondMember.enrollmentId,
+          installation_id: secondMember.installationId,
+          installation_signing_key: secondMember.installationSigningKey,
+          query: 'usage pricing',
+          requested_at: new Date().toISOString(),
+        },
+        secondMember.signCanonicalBytes,
+      );
+      const response = await new HttpOrganizationAuthorityClient({
+        baseUrl: restartedOrigin,
+        fetch: pilot.fetch,
+        allowInsecureLoopback: true,
+      }).readReadableSearch(searchRequest);
+      expect(response.items).toEqual([
+        expect.objectContaining({
+          kind: 'decision',
+          policy_id: 'organization-member-readable-v1',
+          text: DECISION_TEXT,
+        }),
+      ]);
+    } finally {
+      await running?.close();
+      await pilot.close();
+    }
   });
 
   it('takes the host down when derive halts under a live listener', async () => {
@@ -822,7 +1513,6 @@ describe('organization record pilot over the real authority listener', () => {
       await pilot.close().catch(() => undefined);
     }
   });
-
 });
 
 /**

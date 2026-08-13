@@ -16,6 +16,10 @@ import type {
   OrganizationAuthorityApplication,
   OrganizationRecordInstallationContext,
 } from './organization-authority.js';
+import {
+  isOrganizationMemberReadableRecordingPolicy,
+  type OrganizationRecordingPolicyV1,
+} from './organization-recording-policy.js';
 import { AuthorityOperationError } from '../domain/errors.js';
 
 const ORGANIZATION_PERMISSION_PILOT_NOTICE_REASON_CODE =
@@ -187,6 +191,7 @@ export interface OrganizationRecordAuthorizationEvidenceStore {
       request_sha256: string;
       provider_event_sha256: string;
       adapter_binding_id: string;
+      adapter_instance_id: string;
       permission_grant_id: string;
       evaluated_at: string;
       policy_contract_sha256: string;
@@ -197,7 +202,11 @@ export interface OrganizationRecordAuthorizationEvidenceStore {
       authorization_audit_entry_sha256: string;
     },
   ):
-    | { readonly status: 'matched'; readonly audit_entry_sha256: `sha256:${string}` }
+    | {
+        readonly status: 'matched';
+        readonly audit_entry_sha256: `sha256:${string}`;
+        readonly adapter_instance_id: string;
+      }
     | { readonly status: 'absent' | 'mismatch' | 'corrupt' | 'unavailable' };
 
   findAllowedApprovalAuthorizationEvidence(input: {
@@ -258,8 +267,11 @@ export interface OrganizationRecordIngestAuthorityOptions {
     | { readonly kind: 'ready' }
     | { readonly kind: 'degraded'; readonly failure: Error };
   readonly organizationMemberReadableHealth:
+    | { readonly kind: 'absent' }
     | { readonly kind: 'ready' }
     | { readonly kind: 'degraded'; readonly failure: Error };
+  /** Effective central policy after the additive activation overlay is read. */
+  readonly organizationRecordingPolicy?: OrganizationRecordingPolicyV1;
 }
 
 function installationIdOf(value: unknown): string {
@@ -325,13 +337,23 @@ export class OrganizationRecordIngestAuthority {
       };
     }
     if (isOrganizationMemberReadableEnvelope(envelope)) {
-      if (this.options.organizationMemberReadableHealth.kind !== 'ready') {
+      const policy = this.options.organizationRecordingPolicy;
+      if (
+        !isOrganizationMemberReadableRecordingPolicy(policy) ||
+        envelope.reviewer.authorization.policy_contract_sha256 !==
+          policy.policy_contract_sha256 ||
+        this.options.organizationMemberReadableHealth.kind !== 'ready'
+      ) {
         throw new AuthorityOperationError(
           'unavailable',
-          'organization-member-readable record ingest is temporarily unavailable',
+          'organization-member-readable record ingest is not active under the effective Authority policy',
         );
       }
-      const proof = this.assertAuditedOrganizationMemberAuthorization(envelope, context);
+      const proof = this.assertAuditedOrganizationMemberAuthorization(
+        envelope,
+        context,
+        policy,
+      );
       return {
         envelope: envelope as unknown as JsonObject,
         envelope_id: envelope.envelope_id,
@@ -423,6 +445,7 @@ export class OrganizationRecordIngestAuthority {
   private assertAuditedOrganizationMemberAuthorization(
     envelope: OrganizationRecordOrganizationMemberApprovalEnvelopeV3,
     context: OrganizationRecordInstallationContext,
+    policy: OrganizationRecordingPolicyV1,
   ): OrganizationRecordOrganizationMemberReadableProofView {
     const evidence = envelope.reviewer.authorization;
     const lookup = this.options.evidence.findAllowedOrganizationMemberAuthorizationEvidenceById;
@@ -442,6 +465,7 @@ export class OrganizationRecordIngestAuthority {
       request_sha256: evidence.request_sha256,
       provider_event_sha256: evidence.provider_event_sha256,
       adapter_binding_id: evidence.adapter_binding_id,
+      adapter_instance_id: policy.approval_surface_adapter_instance_id,
       permission_grant_id: evidence.permission_grant_id,
       evaluated_at: evidence.evaluated_at,
       policy_contract_sha256: evidence.policy_contract_sha256,
@@ -458,7 +482,8 @@ export class OrganizationRecordIngestAuthority {
       );
     }
     if (match.status !== 'matched' ||
-      match.audit_entry_sha256 !== evidence.authorization_audit_entry_sha256) {
+      match.audit_entry_sha256 !== evidence.authorization_audit_entry_sha256 ||
+      match.adapter_instance_id !== policy.approval_surface_adapter_instance_id) {
       throw new OrganizationRecordIngestRejectionError(
         'record_authorization_invalid',
         'record authorization evidence matches no audited organization-member evaluation',

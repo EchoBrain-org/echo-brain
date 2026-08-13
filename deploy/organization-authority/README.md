@@ -262,8 +262,41 @@ active. Durable keys and all four database files remain in the host-mounted
 `data` directory; the coordination volume contains no organization content and
 may be recreated only while the whole authority stack is stopped.
 
+For an Authority initialized before organization-member recording existed,
+activation is a separate one-time stopped operation. First stop the complete
+stack and take the same private whole-`data` snapshot. Then place the strict
+mode-0600 canonical `rpa_` command in a private host directory mounted beneath
+`/echo` and run:
+
+```sh
+compose run --rm --no-deps authority \
+  activate-organization-member-recording \
+  --config /echo/authority.json \
+  --command /echo/operator/activate-organization-member-recording.json
+```
+
+The command binds the immutable initialization manifest and initialized
+runtime-config digests, the exact current owner tuple, and the one fixed
+organization-member-readable target mapping. It appends an immutable
+Authority activation and leaves both initialization files unchanged. An exact
+retry is read-only. The command is one-way: restore the complete stopped
+pre-activation snapshot if activation must be abandoned before qualification.
+Do not edit the config, initialization manifest, or activation journal.
+
+First creation also requires the mapping's exact approval-surface instance to
+already be an active `slack-reactions` binding to the current active Slack
+organization tool. Its public configuration pins Slack identity, channel, and
+reactions, not the product-local `presentation_mode`; a missing, inactive, or
+drifted instance refuses activation.
+
+Starting the Authority after this operation enables only the central
+capability. Reconfigure each stopped product installation separately. Product
+reconfigure refuses the new mode until every frozen card on that installation
+has resolved under its original mode, so central activation does not silently
+reinterpret an existing Slack card.
+
 For a separately promoted B-capable image, use the same stopped snapshot boundary
-before a generation rebuild or query-audit maintenance. The route is unavailable
+before activation, a generation rebuild, or query-audit maintenance. The route is unavailable
 until an exact-record-head generation is published; any later append makes it
 return fixed `503` until the next stopped rebuild. The verifier deliberately
 rejects that stale pointer/head; rebuilding, not verification, repairs the

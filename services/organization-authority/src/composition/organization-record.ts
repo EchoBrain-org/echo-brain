@@ -33,6 +33,10 @@ import {
   type OrganizationRecordAuthorizationEvidenceStore,
 } from '../application/organization-record-ingest.js';
 import type { OrganizationAuthorityApplication } from '../application/organization-authority.js';
+import {
+  isOrganizationMemberReadableRecordingPolicy,
+  type OrganizationRecordingPolicyV1,
+} from '../application/organization-recording-policy.js';
 import type { OrganizationRecordHttpApplication } from '../presentation/organization-record-http-application.js';
 import { reviewerRestrictedEnvelopeValidator } from './reviewer-envelope-validator.js';
 import { organizationMemberReadableEnvelopeValidator } from './organization-member-envelope-validator.js';
@@ -52,6 +56,8 @@ export interface OpenOrganizationRecordRuntimeOptions {
   readonly authority_id: string;
   readonly record_log_database_path: string;
   readonly record_derived_database_path: string;
+  /** Effective central policy after the additive activation overlay is read. */
+  readonly organization_recording_policy_v1?: OrganizationRecordingPolicyV1;
   /** Shared with current-Person writes; acquired only for the append commit. */
   readonly authorization_fence?: ReadableSearchAuthorizationFence;
   /** Operator alerting. Defaults to one line per alert on stderr. */
@@ -97,6 +103,7 @@ export type ReviewerRestrictedRuntimeHealth =
     };
 
 export type OrganizationMemberReadableRuntimeHealth =
+  | { readonly kind: 'absent' }
   | { readonly kind: 'ready'; readonly readiness: OrganizationMemberReadableReadiness }
   | { readonly kind: 'degraded'; readonly failure: Error; readonly readiness?: OrganizationMemberReadableReadiness };
 
@@ -352,12 +359,22 @@ export async function openOrganizationRecordRuntime(
       reviewerRestrictedHealth = Object.freeze({ kind: 'degraded', failure });
     }
     let organizationMemberReadableHealth: OrganizationMemberReadableRuntimeHealth;
-    try {
+    if (
+      !isOrganizationMemberReadableRecordingPolicy(
+        options.organization_recording_policy_v1,
+      )
+    ) {
+      // Clean legacy/reviewer-only state. Historical schema-v3 rows remain
+      // derivable, but no new member-v3 append authority is minted.
+      organizationMemberReadableHealth = Object.freeze({ kind: 'absent' });
+    } else try {
       const readiness = verifyOrganizationMemberReadableReadiness({
         database: log.database,
         organization_id: options.organization_id,
         validator: organizationMemberValidator,
         evidence: options.evidence,
+        organization_recording_policy_v1:
+          options.organization_recording_policy_v1,
       });
       if (!readiness.ready) {
         throw new Error(readiness.failures.map((failure) => failure.detail).join('; '));
@@ -368,7 +385,7 @@ export async function openOrganizationRecordRuntime(
         ? error
         : new Error(`organization-member-readable admission failed: ${String(error)}`);
       operatorAlert({
-        kind: 'reviewer-restricted-inactive',
+        kind: 'organization-member-readable-inactive',
         message: `organization-member-readable V1 is degraded: ${failure.message}`,
         log_position: null,
         cause: failure,
@@ -381,6 +398,7 @@ export async function openOrganizationRecordRuntime(
       permissionPilotHealth,
       reviewerRestrictedHealth,
       organizationMemberReadableHealth,
+      organizationRecordingPolicy: options.organization_recording_policy_v1,
     });
     const ingest = new OrganizationRecordIngest({
       log,
