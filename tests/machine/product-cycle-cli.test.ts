@@ -176,13 +176,13 @@ describe('standalone composed cycle', () => {
           postedBodies.push(
             JSON.parse(String(init?.body)) as Record<string, unknown>,
           );
-          return json({ ok: true, channel: 'C123', ts: '1700.100' });
+          return json({ ok: true, channel: 'C123', ts: '1700.100000' });
         }
         if (method === 'reactions.get') {
           return json({
             ok: true,
             message: {
-              ts: '1700.100',
+              ts: '1700.100000',
               reactions: reviewerApproved
                 ? [{ name: 'white_check_mark', users: ['U123'], count: 1 }]
                 : [],
@@ -193,7 +193,7 @@ describe('standalone composed cycle', () => {
           return json({
             ok: true,
             messages: [
-              { ts: '1700.100', user: 'B123', text: 'approval request' },
+              { ts: '1700.100000', user: 'B123', text: 'approval request' },
               { ts: '1700.200', user: 'U123', text: 'ship it' },
             ],
           });

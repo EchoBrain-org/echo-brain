@@ -73,6 +73,12 @@ export interface VerifySlackReactionInput {
    * proof is produced.
    */
   parse_reviewer_card_reactions?: boolean;
+  /**
+   * True when the caller only needs the organization-member card's own frozen
+   * reaction pair parsed -- the schema-v1 rejection of an organization-member
+   * card. No organization-member approval proof is produced.
+   */
+  parse_organization_member_card_reactions?: boolean;
 }
 
 export interface SlackApprovalPresentationExpectation {
@@ -135,6 +141,15 @@ export interface VerifiedSlackReaction {
    * requires both to equal the current active binding pair.
    */
   reviewer_card_reactions?: {
+    approve_reaction: string;
+    reject_reaction: string;
+  };
+  /**
+   * The two frozen reaction names parsed from the live organization-member
+   * card. This is rejection-only schema-v1 evidence, not schema-v3 approval
+   * presentation evidence.
+   */
+  organization_member_card_reactions?: {
     approve_reaction: string;
     reject_reaction: string;
   };

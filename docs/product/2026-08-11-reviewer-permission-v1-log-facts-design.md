@@ -207,13 +207,16 @@ adapter identity/reaction pair override current configuration for every render,
 post retry, poll, and action request. The adapter reprojects the immutable
 requested slot and requires both stored digests before remote I/O.
 
-The existing `published-slack-authority-v1.json` slot remains only the durable
-`channel_id`/`message_ts` reference written after Slack acknowledges the exact
-card. A crash after Slack accepts the post but before that reference is filed
-may cause an at-least-once duplicate post, as today, but every retry renders
-the same frozen contract. An unrecorded Slack message is never polled and its
-reaction cannot produce an action request. No retry consults current mode or
-reaction configuration.
+Slack's returned top-level `channel`/`ts` first creates the separate immutable
+`published-slack-authority-v1-posted.json` identity slot. The adapter then reads
+that exact stored message through `reactions.get`, verifies the complete card,
+and creates `published-slack-authority-v1.json` as the verified publication.
+A retry with the posted slot re-reads the same message and never submits
+another post. Only the verified publication is polled for a decision. A crash
+before the identified-post slot is filed retains the provider's unavoidable
+unknown-outcome boundary, but no response-shape normalization can discard an
+already identified post. No retry consults current mode or reaction
+configuration.
 
 A content change creates a new processing revision, approval ID, requested
 slot, release draft, card, and presentation-contract slot. Existing ordinary
@@ -354,8 +357,11 @@ transport = {
 }
 ```
 
-`text` is the exact accessibility fallback above. Every nested object is
-closed. The block array is exactly:
+Logical `text` is the exact accessibility fallback above. Slack may return
+that exact string or its deterministic stored form with each logical newline
+replaced by one ASCII space. The adapter and Authority accept only those two
+representations and always reconstruct and hash the original logical fallback.
+Every nested object is closed. The block array is exactly:
 
 ```text
 {
@@ -394,13 +400,12 @@ the corresponding draft item. Both reaction names match
 truncation, summary, or ellipsis is allowed.
 
 The Slack transport sends `text`, `blocks`, and the three fixed `transport`
-values, with strict post acknowledgement. The client gains the explicit
-`mrkdwn` input needed to send `false`; link and media unfurl flags remain
-false. Slack returns message `text` and `blocks`, not those transport flags, so
-publication verifies the complete acknowledgement while action-time live
-verification compares only provider-returned `text`/`blocks` and relies on the
-fixed contract constants for transport. It never claims Slack reported fields
-that Slack does not return.
+values. `chat.postMessage` acknowledges only the exact top-level message
+identity; the durable read-after-write verifies stored `text`/`blocks`. The
+client gains the explicit `mrkdwn` input needed to send `false`; link and media
+unfurl flags remain false. Slack does not acknowledge those transport flags,
+so the fixed contract constants remain authoritative. It never claims Slack
+reported fields that Slack does not return.
 
 Authority parses only this closed live card grammar, reconstructs the release
 draft from title, item kind/text, item-order, and signal-ID digests, and

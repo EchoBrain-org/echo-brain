@@ -118,10 +118,21 @@ describe('reviewer publication preflight', () => {
     const result = reviewerPublicationPreflight(configuration(), [ordinary]);
     expect(result.ok).toBe(false);
     expect(result.refusals[0]).toContain(
-      'published without a reviewer presentation contract',
+      'published without a frozen approval presentation contract',
     );
     // Resolved history needs no rewrite: an empty unresolved set is clean.
     expect(reviewerPublicationPreflight(configuration(), []).ok).toBe(true);
+  });
+
+  it('refuses enabling organization-member mode over a contract-less Authority card', () => {
+    const result = reviewerPublicationPreflight(
+      configuration({ mode: 'organization-member-readable-v1' }),
+      [{ approval_id: 'b'.repeat(64), contract: null }],
+    );
+    expect(result.ok).toBe(false);
+    expect(result.refusals.join('; ')).toContain(
+      'published without a frozen approval presentation contract',
+    );
   });
 
   it('refuses pilot and reviewer presentation configuration together', () => {
@@ -400,9 +411,32 @@ describe('reviewer publication preflight at startup', () => {
       reference: { channel_id: 'C012CHANNEL', message_ts: '171.1' },
     });
     expect(() => startSurface(root, surfaceConfig())).toThrow(
-      /published without a reviewer presentation contract/,
+      /published without a frozen approval presentation contract/,
     );
   });
+
+  it.each([
+    undefined,
+    'restricted-reviewer-v1',
+    'organization-member-readable-v1',
+  ] as const)(
+    'refuses an identified Authority post with no frozen contract under %s',
+    async (presentationMode) => {
+      const root = await seededStateDirectory();
+      const store = new DecisionNodeStore(root);
+      await store.recordPublished({
+        processingKey: PROCESSING_KEY,
+        surface: 'slack-authority-v1-posted',
+        reference: { channel_id: 'C012CHANNEL', message_ts: '171.000001' },
+      });
+      expect(() =>
+        startSurface(
+          root,
+          surfaceConfig({ presentation_mode: presentationMode }),
+        ),
+      ).toThrow(/identified Authority post without its frozen presentation contract/);
+    },
+  );
 
   it('constructs the surface when every unresolved card is a matching reviewer card', async () => {
     const root = await seededStateDirectory({});

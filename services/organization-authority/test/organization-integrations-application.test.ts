@@ -303,6 +303,10 @@ function testDependencies(options: {
     approve_reaction: string;
     reject_reaction: string;
   };
+  organizationMemberCardReactions?: {
+    approve_reaction: string;
+    reject_reaction: string;
+  };
 } = {}) {
   let storedSecret: string | null = null;
   const reference = {
@@ -374,6 +378,12 @@ function testDependencies(options: {
         ...(options.reviewerCardReactions === undefined
           ? {}
           : { reviewer_card_reactions: options.reviewerCardReactions }),
+        ...(options.organizationMemberCardReactions === undefined
+          ? {}
+          : {
+              organization_member_card_reactions:
+                options.organizationMemberCardReactions,
+            }),
       };
     }),
     postIdentityLinkChallenge: vi.fn(async () => ({
@@ -1191,6 +1201,99 @@ describe('composed organization integrations application', () => {
         action: 'permission.reject',
         outcome: 'allowed',
         reason_code: 'active_membership_and_direct_grant',
+      });
+    } finally {
+      repository.close();
+    }
+  });
+
+  it('allows schema-v1 rejection only after parsing the exact organization-member card pair', async () => {
+    const { repository, dependencies, application } = applicationFixture(
+      testDependencies({
+        organizationMemberCardReactions: {
+          approve_reaction: 'white_check_mark',
+          reject_reaction: 'x',
+        },
+      }),
+    );
+    try {
+      await activate(application);
+      const rejectRequest = request({ action: 'reject', reaction_name: 'x' });
+      const command = {
+        ...rejectRequest,
+        provider_event_sha256:
+          organizationPermissionProviderEventSha256(rejectRequest),
+      };
+
+      await expect(application.checkPermission(command)).resolves.toMatchObject({
+        allowed: true,
+        reason_code: 'active_membership_and_direct_grant',
+      });
+      expect(dependencies.slack.verifyReaction).toHaveBeenCalledWith(
+        SLACK_TOKEN,
+        expect.objectContaining({
+          reaction_name: 'x',
+          opposite_reaction_name: 'white_check_mark',
+          parse_reviewer_card_reactions: true,
+          parse_organization_member_card_reactions: true,
+        }),
+        undefined,
+      );
+    } finally {
+      repository.close();
+    }
+  });
+
+  it('denies schema-v1 rejection when the member card pair differs from the active binding', async () => {
+    const { repository, application } = applicationFixture(
+      testDependencies({
+        organizationMemberCardReactions: {
+          approve_reaction: 'thumbsup',
+          reject_reaction: 'x',
+        },
+      }),
+    );
+    try {
+      await activate(application);
+      const rejectRequest = request({ action: 'reject', reaction_name: 'x' });
+      const command = {
+        ...rejectRequest,
+        provider_event_sha256:
+          organizationPermissionProviderEventSha256(rejectRequest),
+      };
+
+      await expect(application.checkPermission(command)).resolves.toMatchObject({
+        allowed: false,
+        reason_code: 'provider_identity_mismatch',
+      });
+    } finally {
+      repository.close();
+    }
+  });
+
+  it('denies an ambiguous schema-v1 rejection that claims both closed card families', async () => {
+    const pair = {
+      approve_reaction: 'white_check_mark',
+      reject_reaction: 'x',
+    };
+    const { repository, application } = applicationFixture(
+      testDependencies({
+        reviewerCardReactions: pair,
+        organizationMemberCardReactions: pair,
+      }),
+    );
+    try {
+      await activate(application);
+      const rejectRequest = request({ action: 'reject', reaction_name: 'x' });
+      const command = {
+        ...rejectRequest,
+        provider_event_sha256:
+          organizationPermissionProviderEventSha256(rejectRequest),
+      };
+
+      await expect(application.checkPermission(command)).resolves.toMatchObject({
+        allowed: false,
+        reason_code: 'provider_identity_mismatch',
       });
     } finally {
       repository.close();

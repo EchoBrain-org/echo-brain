@@ -762,6 +762,18 @@ export class SlackWebIntegrationProvider implements SlackIntegrationProvider {
       // path, so ordinary and pilot rejections are unchanged.
       if (reviewerResult !== null) return reviewerResult;
     }
+    if (input.parse_organization_member_card_reactions === true) {
+      const memberResult = this.verifyOrganizationMemberCardReaction({
+        input,
+        connection,
+        message,
+        blocks,
+      });
+      // As with reviewer cards, an exact member card is a closed extension of
+      // schema-v1 rejection. Every other card continues through the landed
+      // ordinary/pilot grammar unchanged.
+      if (memberResult !== null) return memberResult;
+    }
     const expectation = input.expected_presentation;
     const expectedAudienceBlock =
       expectation === null
@@ -1021,6 +1033,58 @@ export class SlackWebIntegrationProvider implements SlackIntegrationProvider {
         approval_presentation_sha256:
           reconstructed.approval_presentation_sha256,
         message_presentation_sha256: messagePresentationSha256,
+      }),
+    });
+  }
+
+  /**
+   * Parses only the frozen reaction pair from an exact organization-member
+   * card for its schema-v1 rejection. Positive organization-member approval
+   * still requires the separate schema-v3 expectation and proof above.
+   */
+  private verifyOrganizationMemberCardReaction(context: {
+    input: VerifySlackReactionInput;
+    connection: VerifiedSlackConnection;
+    message: Record<string, unknown>;
+    blocks: readonly unknown[];
+  }): VerifiedSlackReaction | null {
+    const { input, connection, message, blocks } = context;
+    const reconstructed = reconstructOrganizationMemberCard({
+      approval_id: input.approval_id,
+      blocks,
+      fallback_text: message['text'],
+    });
+    if (reconstructed === null) return null;
+
+    const identityVerified =
+      input.expected_app_id !== null &&
+      connection.app_id === input.expected_app_id &&
+      message['app_id'] === input.expected_app_id &&
+      message['edited'] === undefined;
+    if (!identityVerified) {
+      throw new SlackIntegrationProviderError(
+        'Slack organization-member approval card identity or edit state is unusable',
+        'identity_mismatch',
+      );
+    }
+    if (input.reaction_name !== reconstructed.reject_reaction) {
+      throw new SlackIntegrationProviderError(
+        'Slack organization-member approval card does not authorize this reaction',
+        'identity_mismatch',
+      );
+    }
+    return Object.freeze({
+      observed: this.observedDecisiveReaction(
+        message,
+        reconstructed.reject_reaction,
+        reconstructed.approve_reaction,
+        input.user_id,
+      ),
+      presentation_candidate_observed: true,
+      message_presentation_sha256: null,
+      organization_member_card_reactions: Object.freeze({
+        approve_reaction: reconstructed.approve_reaction,
+        reject_reaction: reconstructed.reject_reaction,
       }),
     });
   }

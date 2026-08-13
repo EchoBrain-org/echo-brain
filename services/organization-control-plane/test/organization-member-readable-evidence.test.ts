@@ -108,6 +108,21 @@ describe("organization-member-readable card grammar", () => {
     });
   });
 
+  it("accepts Slack's deterministic stored fallback without changing either digest", () => {
+    const logical = reconstructOrganizationMemberCard({
+      approval_id: APPROVAL_ID,
+      blocks: memberBlocks(),
+      fallback_text: FALLBACK,
+    });
+    const stored = reconstructOrganizationMemberCard({
+      approval_id: APPROVAL_ID,
+      blocks: memberBlocks(),
+      fallback_text: FALLBACK.replace(/\n/g, " "),
+    });
+
+    expect(stored).toEqual(logical);
+  });
+
   it("rejects edits, the reviewer namespace, hidden fields, and malformed reactions", () => {
     const cases: unknown[][] = [
       memberBlocks().filter((_block, index) => index !== 2),
@@ -152,6 +167,13 @@ describe("organization-member-readable card grammar", () => {
         approval_id: APPROVAL_ID,
         blocks: memberBlocks(),
         fallback_text: `${FALLBACK} edited`,
+      }),
+    ).toBeNull();
+    expect(
+      reconstructOrganizationMemberCard({
+        approval_id: APPROVAL_ID,
+        blocks: memberBlocks(),
+        fallback_text: FALLBACK.replace(/\n/g, "  "),
       }),
     ).toBeNull();
   });

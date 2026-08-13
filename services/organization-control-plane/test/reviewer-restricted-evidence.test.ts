@@ -136,6 +136,21 @@ describe("reviewer card grammar", () => {
     );
   });
 
+  it("accepts Slack's deterministic stored fallback without changing either digest", () => {
+    const logical = reconstructReviewerCard({
+      approval_id: APPROVAL_ID,
+      blocks: reviewerBlocks(),
+      fallback_text: FALLBACK_TEXT,
+    });
+    const stored = reconstructReviewerCard({
+      approval_id: APPROVAL_ID,
+      blocks: reviewerBlocks(),
+      fallback_text: FALLBACK_TEXT.replace(/\n/g, " "),
+    });
+
+    expect(stored).toEqual(logical);
+  });
+
   it("refuses every malformed, edited, or mixed-namespace card", () => {
     const cases: { blocks: unknown[]; fallback?: string }[] = [
       // Missing the consequence block.
@@ -144,6 +159,11 @@ describe("reviewer card grammar", () => {
       {
         blocks: reviewerBlocks(),
         fallback: FALLBACK_TEXT.replace(`decision: ${ITEM_TEXT}\n`, ""),
+      },
+      // Only one ASCII space per logical newline is an accepted Slack form.
+      {
+        blocks: reviewerBlocks(),
+        fallback: FALLBACK_TEXT.replace(/\n/g, "  "),
       },
       // A pilot audience block spliced into the reviewer namespace.
       {

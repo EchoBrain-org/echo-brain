@@ -23,8 +23,6 @@ export interface SlackPostMessageInput {
   channel: string;
   text: string;
   blocks?: readonly unknown[];
-  /** Require provider-returned blocks to be bound to this exact message. */
-  strictEvidence?: boolean;
   /** Disable link previews for meeting-derived content by default. */
   unfurlLinks?: boolean;
   /** Disable media previews for meeting-derived content by default. */
@@ -40,8 +38,13 @@ export interface SlackPostMessageInput {
 export interface SlackPostedMessage {
   channel: string;
   ts: string;
-  /** Blocks Slack acknowledged on the stored message, when returned. */
-  blocks?: readonly unknown[];
+}
+
+/** Exact immutable-card evidence fetched after an identified post. */
+export interface SlackReadMessage {
+  ts: string;
+  text: string;
+  blocks: readonly unknown[];
 }
 
 /** Stable provider identifiers returned by Slack's `auth.test`. */
@@ -165,7 +168,8 @@ const SLACK_USER_ID_RE = /^[UW][A-Z0-9]{2,}$/;
 const SLACK_BOT_ID_RE = /^B[A-Z0-9]{2,}$/;
 const SLACK_APP_ID_RE = /^A[A-Z0-9]{2,}$/;
 const SLACK_DM_ID_RE = /^D[A-Z0-9]{2,}$/;
-const SLACK_MESSAGE_TS_RE = /^[0-9]+\.[0-9]{6}$/;
+const SLACK_CONVERSATION_ID_RE = /^[CGD][A-Z0-9]{2,}$/;
+const SLACK_MESSAGE_TS_RE = /^[0-9]{1,16}\.[0-9]{6}$/;
 
 function requiredSlackId(
   body: Record<string, unknown>,
@@ -309,6 +313,13 @@ export class SlackWebApiClient {
     input: SlackPostMessageInput,
     signal?: AbortSignal,
   ): Promise<SlackPostedMessage> {
+    if (!SLACK_CONVERSATION_ID_RE.test(input.channel)) {
+      throw new SlackApiError(
+        "invalid",
+        "Slack chat.postMessage requires a canonical conversation ID",
+        false,
+      );
+    }
     // A transport failure here is an unknown outcome: Slack may have accepted
     // the message even though no response arrived. Callers must treat posting
     // as at-least-once.
@@ -333,31 +344,66 @@ export class SlackWebApiClient {
         true,
       );
     }
-    const message = body["message"];
-    const acknowledgedBlocks = isPlainObject(message)
-      ? message["blocks"]
-      : undefined;
+    // `message` is an acknowledgement echo, not durable message evidence.
+    // It can be absent, stale, or differ in shape from Slack's stored card.
+    // Identified-card callers must re-read via `readMessage()` below.
     if (
-      input.strictEvidence === true &&
-      (channel !== input.channel ||
-        !SLACK_MESSAGE_TS_RE.test(ts) ||
-        !isPlainObject(message) ||
-        message["ts"] !== ts ||
-        message["text"] !== input.text ||
-        !Array.isArray(acknowledgedBlocks))
+      channel !== input.channel ||
+      !SLACK_CONVERSATION_ID_RE.test(channel) ||
+      !SLACK_MESSAGE_TS_RE.test(ts)
     ) {
       throw new SlackApiError(
         "unknown_outcome",
-        "Slack did not bind the acknowledged presentation to the posted message identity",
+        "Slack did not return the exact posted message identity",
         true,
       );
     }
+    return { channel, ts };
+  }
+
+  /**
+   * Read back the exact stored card for an identified post. This intentionally
+   * uses `reactions.get`: it returns the message alongside reaction evidence
+   * and lets approval polling use the same provider-bound reference.
+   */
+  async readMessage(
+    channel: string,
+    timestamp: string,
+    signal?: AbortSignal,
+  ): Promise<SlackReadMessage> {
+    if (
+      !SLACK_CONVERSATION_ID_RE.test(channel) ||
+      !SLACK_MESSAGE_TS_RE.test(timestamp)
+    ) {
+      throw new SlackApiError(
+        "invalid",
+        "Slack reactions.get requires a canonical message identity",
+        false,
+      );
+    }
+    const body = await this.call(
+      "reactions.get",
+      { channel, timestamp, full: true },
+      { signal, method: "GET" },
+    );
+    const message = body["message"];
+    if (
+      !isPlainObject(message) ||
+      message["ts"] !== timestamp ||
+      typeof message["text"] !== "string" ||
+      !Array.isArray(message["blocks"]) ||
+      Object.hasOwn(message, "edited")
+    ) {
+      throw new SlackApiError(
+        "invalid",
+        "Slack reactions.get returned edited or malformed message evidence",
+        false,
+      );
+    }
     return {
-      channel,
-      ts,
-      ...(Array.isArray(acknowledgedBlocks)
-        ? { blocks: acknowledgedBlocks }
-        : {}),
+      ts: timestamp,
+      text: message["text"],
+      blocks: message["blocks"],
     };
   }
 

@@ -358,7 +358,7 @@ describe("SlackWebApiClient", () => {
     let requestBody: unknown;
     const fetchImpl = (async (_input, init) => {
       requestBody = JSON.parse(String(init?.body));
-      return jsonResponse({ ok: true, channel: "C123", ts: "1700.100" });
+      return jsonResponse({ ok: true, channel: "C123", ts: "1700.100000" });
     }) as typeof fetch;
     const client = new SlackWebApiClient("xoxb-test", { fetchImpl });
 
@@ -367,7 +367,7 @@ describe("SlackWebApiClient", () => {
         channel: "C123",
         text: "https://sensitive.example",
       }),
-    ).resolves.toEqual({ channel: "C123", ts: "1700.100" });
+    ).resolves.toEqual({ channel: "C123", ts: "1700.100000" });
     expect(requestBody).toMatchObject({
       channel: "C123",
       unfurl_links: false,
@@ -375,7 +375,7 @@ describe("SlackWebApiClient", () => {
     });
   });
 
-  it("binds strict acknowledged blocks to the exact posted Slack message", async () => {
+  it("binds every post only to the exact top-level Slack message identity", async () => {
     const blocks = [{ type: "context", block_id: "approval-0" }];
     const client = new SlackWebApiClient("xoxb-test", {
       fetchImpl: fetchReturning(() =>
@@ -393,30 +393,11 @@ describe("SlackWebApiClient", () => {
         channel: "C123",
         text: "approval",
         blocks,
-        strictEvidence: true,
       }),
-    ).resolves.toEqual({ channel: "C123", ts: "1700.100000", blocks });
+    ).resolves.toEqual({ channel: "C123", ts: "1700.100000" });
   });
 
   it.each([
-    {
-      name: "missing message timestamp",
-      body: {
-        ok: true,
-        channel: "C123",
-        ts: "1700.100000",
-        message: { blocks: [] },
-      },
-    },
-    {
-      name: "mismatched message timestamp",
-      body: {
-        ok: true,
-        channel: "C123",
-        ts: "1700.100000",
-        message: { ts: "1700.999999", blocks: [] },
-      },
-    },
     {
       name: "mismatched channel",
       body: {
@@ -436,28 +417,14 @@ describe("SlackWebApiClient", () => {
       },
     },
     {
-      name: "mismatched fallback text",
+      name: "unbounded timestamp seconds",
       body: {
         ok: true,
         channel: "C123",
-        ts: "1700.100000",
-        message: {
-          ts: "1700.100000",
-          text: "changed",
-          blocks: [],
-        },
+        ts: "12345678901234567.100000",
       },
     },
-    {
-      name: "missing acknowledged blocks",
-      body: {
-        ok: true,
-        channel: "C123",
-        ts: "1700.100000",
-        message: { ts: "1700.100000" },
-      },
-    },
-  ])("rejects strict post evidence with $name", async ({ body }) => {
+  ])("rejects post identity with $name", async ({ body }) => {
     const client = new SlackWebApiClient("xoxb-test", {
       fetchImpl: fetchReturning(() => jsonResponse(body)),
     });
@@ -467,12 +434,62 @@ describe("SlackWebApiClient", () => {
         channel: "C123",
         text: "approval",
         blocks: [],
-        strictEvidence: true,
       }),
     ).rejects.toMatchObject({
       name: "SlackApiError",
       code: "unknown_outcome",
       retryable: true,
+    });
+  });
+
+  it("reads the exact unedited stored card through reactions.get", async () => {
+    const blocks = [{ type: "context", block_id: "approval-0" }];
+    const client = new SlackWebApiClient("xoxb-test", {
+      fetchImpl: fetchReturning(() =>
+        jsonResponse({
+          ok: true,
+          message: {
+            ts: "1700.100000",
+            text: "first line\nsecond line",
+            blocks,
+          },
+        }),
+      ),
+    });
+
+    await expect(client.readMessage("C123", "1700.100000")).resolves.toEqual({
+      ts: "1700.100000",
+      text: "first line\nsecond line",
+      blocks,
+    });
+  });
+
+  it.each([
+    {
+      name: "edited",
+      message: {
+        ts: "1700.100000",
+        text: "card",
+        blocks: [],
+        edited: { ts: "1700.200000" },
+      },
+    },
+    {
+      name: "wrong timestamp",
+      message: { ts: "1700.999999", text: "card", blocks: [] },
+    },
+    { name: "missing blocks", message: { ts: "1700.100000", text: "card" } },
+  ])("refuses $name strict stored-card evidence", async ({ message }) => {
+    const client = new SlackWebApiClient("xoxb-test", {
+      fetchImpl: fetchReturning(() => jsonResponse({ ok: true, message })),
+    });
+
+    await expect(
+      client.readMessage("C123", "1700.100000"),
+    ).rejects.toMatchObject({
+      name: "SlackApiError",
+      code: "invalid",
+      retryable: false,
     });
   });
 

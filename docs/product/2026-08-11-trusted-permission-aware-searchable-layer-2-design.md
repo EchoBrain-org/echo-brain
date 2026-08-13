@@ -414,6 +414,13 @@ presentation digest domain changed to the values in this contract. Any other
 block, field, order, fallback, edit state, reaction pair, hidden item, or
 truncation denies.
 
+It also inherits Job A's identified-post recovery and Slack stored-fallback
+rule: the top-level message identity is persisted before read-after-write
+verification, retries re-read that one message instead of posting again, and
+the only accepted provider normalization replaces each logical fallback
+newline with one ASCII space while retaining the original logical presentation
+for its digest.
+
 Schema version 3 accepts `event_type = approval` only. Rejection remains on
 the existing closed rejection path and creates no readable content or policy
 facts. Protocol dispatch occurs on exact `(kind, schema_version)` before any

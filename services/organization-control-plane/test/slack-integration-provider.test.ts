@@ -3,6 +3,9 @@ import {
   SlackIntegrationProviderError,
   SlackWebIntegrationProvider,
 } from '../src/adapters/slack/slack-integration-provider.js';
+import {
+  ORGANIZATION_MEMBER_READABLE_CONSEQUENCE_TEXT,
+} from '../src/application/organization-member-readable-policy.js';
 import { canonicalSha256 } from '../src/canonical/canonical-json.js';
 
 const APPROVAL_ID = 'f'.repeat(64);
@@ -58,6 +61,9 @@ const PILOT_PRESENTATION_EXPECTATION = {
   notice_text: PILOT_NOTICE,
   fallback_text: PILOT_FALLBACK,
 } as const;
+const MEMBER_CARD_TITLE = 'Pricing review';
+const MEMBER_ITEM_TEXT = 'Ship the member-readable release.';
+const MEMBER_ITEM_DIGEST = '1'.repeat(64);
 const CHALLENGE_ATTEMPT_ID =
   'cat_12345678-1234-4123-8123-123456789abc';
 const CHALLENGE_ISSUED_AT = '2025-07-29T20:59:00.000Z';
@@ -148,6 +154,55 @@ function pilotApprovalBlocks(
       block_id: `echo-approval-${APPROVAL_ID}-2`,
     },
   ];
+}
+
+function organizationMemberApprovalBlocks(): readonly Record<string, unknown>[] {
+  return [
+    {
+      type: 'header',
+      block_id: `echo-approval-${APPROVAL_ID}-title-v1`,
+      text: { type: 'plain_text', text: MEMBER_CARD_TITLE, emoji: false },
+    },
+    {
+      type: 'section',
+      block_id: `echo-approval-${APPROVAL_ID}-item-0-${MEMBER_ITEM_DIGEST}-v1`,
+      text: {
+        type: 'plain_text',
+        text: `decision: ${MEMBER_ITEM_TEXT}`,
+        emoji: false,
+      },
+    },
+    {
+      type: 'section',
+      block_id: `echo-approval-${APPROVAL_ID}-organization-member-policy-v1`,
+      text: {
+        type: 'plain_text',
+        text: ORGANIZATION_MEMBER_READABLE_CONSEQUENCE_TEXT,
+        emoji: false,
+      },
+    },
+    {
+      type: 'context',
+      block_id: `echo-approval-${APPROVAL_ID}-reaction-v1`,
+      elements: [
+        {
+          type: 'mrkdwn',
+          text: 'React :white_check_mark: to approve or :x: to reject. To record a reason, reply in this thread *before* reacting.',
+          verbatim: false,
+        },
+      ],
+    },
+  ];
+}
+
+function organizationMemberFallback(): string {
+  return [
+    'Decision brief awaiting approval.',
+    `Title: ${MEMBER_CARD_TITLE}`,
+    `decision: ${MEMBER_ITEM_TEXT}`,
+    ORGANIZATION_MEMBER_READABLE_CONSEQUENCE_TEXT,
+    'React :white_check_mark: to approve or :x: to reject. To record a reason, reply in this thread before reacting.',
+  ].join('\n');
 }
 
 function challengeBlocks(
@@ -478,6 +533,52 @@ describe('Slack integration provider verification', () => {
       observed: true,
       presentation_candidate_observed: false,
       message_presentation_sha256: null,
+    });
+  });
+
+  it('parses the exact organization-member card pair for schema-v1 rejection', async () => {
+    await expect(
+      reactionProvider(
+        [{ name: 'x', count: 1, users: ['U123ZHEN'] }],
+        APPROVAL_ID,
+        {
+          text: organizationMemberFallback().replace(/\n/g, ' '),
+          blocks: organizationMemberApprovalBlocks(),
+        },
+      ).verifyReaction(TOKEN, {
+        ...REACTION_INPUT,
+        reaction_name: 'x',
+        opposite_reaction_name: 'white_check_mark',
+        parse_reviewer_card_reactions: true,
+        parse_organization_member_card_reactions: true,
+      }),
+    ).resolves.toEqual({
+      observed: true,
+      presentation_candidate_observed: true,
+      message_presentation_sha256: null,
+      organization_member_card_reactions: {
+        approve_reaction: 'white_check_mark',
+        reject_reaction: 'x',
+      },
+    });
+  });
+
+  it('never reinterprets an organization-member approve as schema-v1 rejection', async () => {
+    await expect(
+      reactionProvider(
+        [{ name: 'white_check_mark', count: 1, users: ['U123ZHEN'] }],
+        APPROVAL_ID,
+        {
+          text: organizationMemberFallback(),
+          blocks: organizationMemberApprovalBlocks(),
+        },
+      ).verifyReaction(TOKEN, {
+        ...REACTION_INPUT,
+        parse_organization_member_card_reactions: true,
+      }),
+    ).rejects.toMatchObject({
+      name: 'SlackIntegrationProviderError',
+      code: 'identity_mismatch',
     });
   });
 

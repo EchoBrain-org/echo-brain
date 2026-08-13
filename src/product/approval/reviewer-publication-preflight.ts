@@ -100,15 +100,17 @@ export function reviewerPublicationPreflight(
     contract: ApprovalPresentationContract;
   })[];
 
-  if (configuration.mode === 'restricted-reviewer-v1') {
-    // Enabling reviewer mode refuses startup if any unresolved Authority-marked
-    // card was published without the reviewer contract. Those ordinary or pilot
-    // cards must be resolved or rejected under their original configuration
-    // first; no migration guesses a mode from current configuration.
+  if (
+    configuration.mode === 'restricted-reviewer-v1' ||
+    configuration.mode === 'organization-member-readable-v1'
+  ) {
+    // Enabling either exact mode refuses startup if any unresolved legacy
+    // Authority-marked card was published without a frozen contract. Those
+    // cards must resolve under their original mode; no migration guesses.
     for (const slot of unresolved) {
       if (slot.contract === null) {
         refusals.push(
-          `decision ${slot.approval_id} is unresolved and was published without a reviewer presentation contract`,
+          `decision ${slot.approval_id} is unresolved and was published without a frozen approval presentation contract`,
         );
       }
     }
