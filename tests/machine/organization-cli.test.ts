@@ -38,6 +38,7 @@ import { readPrivateOrganizationEnrollmentInvitation } from '../../src/product/o
 import {
   GRANT,
   ORGANIZATION_IDS,
+  requestedAccessLeaseTtlMs,
   TestAuthority,
 } from '../support/local-organization-fixtures.js';
 
@@ -241,10 +242,14 @@ describe('organization machine CLI', () => {
           throw new Error('enrollment must precede refresh');
         }
         const enrollment = await authority.complete(request);
+        const activeLeaseTtlMs = requestedAccessLeaseTtlMs(
+          JSON.parse(String(init?.body)) as unknown,
+        );
         accessState = await authority.nextActiveState(
           request,
           enrollment.enrollment_receipt,
           accessState,
+          activeLeaseTtlMs,
         );
         return Response.json({ access_state: accessState });
       }

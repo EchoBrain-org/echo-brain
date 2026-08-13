@@ -1,6 +1,6 @@
 import type {
   CompletedOrganizationEnrollmentV1,
-  OrganizationAccessLeaseRequestV1,
+  OrganizationAccessLeaseRequestAnyVersion,
   OrganizationAccessLeaseResponseV1,
   OrganizationAuthorityDescriptorResponseV1,
   OrganizationMemberReadablePermissionCheckDecisionV3,
@@ -48,7 +48,7 @@ export interface OrganizationAuthorityClient {
   }): Promise<CompletedOrganizationEnrollmentV1>;
 
   issueAccessLease(
-    request: OrganizationAccessLeaseRequestV1,
+    request: OrganizationAccessLeaseRequestAnyVersion,
   ): Promise<OrganizationAccessLeaseResponseV1>;
 
   checkPermission(

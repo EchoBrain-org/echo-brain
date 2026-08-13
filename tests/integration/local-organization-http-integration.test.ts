@@ -174,7 +174,6 @@ describe('local organization over the central HTTP authority', () => {
         descriptor: authorityDescriptor,
         authority_pin_sha256: authorityPin,
         organization_display_name: 'Example Company',
-        maximum_active_lease_ttl_ms: 60_000,
         initialized_at: new Date().toISOString(),
       });
     } finally {

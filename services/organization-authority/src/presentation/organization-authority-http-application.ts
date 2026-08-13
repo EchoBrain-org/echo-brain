@@ -2,7 +2,7 @@ import type {
   ApproveOrganizationInternalLiveReleaseRequestV1,
   CompletedOrganizationEnrollmentV1,
   IssueOrganizationEnrollmentGrantRequestV1,
-  OrganizationAccessLeaseRequestV1,
+  OrganizationAccessLeaseRequestAnyVersion,
   OrganizationAdminOverviewV1,
   OrganizationAuditPageV1,
   OrganizationEnrollmentGrantPageV1,
@@ -81,7 +81,7 @@ export interface OrganizationAuthorityHttpApplication {
     enrollment_request: OrganizationEnrollmentRequestV1;
   }): Promise<CompletedOrganizationEnrollmentV1>;
   issueAccessLease(
-    request: OrganizationAccessLeaseRequestV1,
+    request: OrganizationAccessLeaseRequestAnyVersion,
   ): Promise<OrganizationInstallationAccessStateV1>;
   checkPermissionSubject(
     request: OrganizationPermissionCheckRequestV1,

@@ -5,11 +5,13 @@ import type { Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { describe, expect, it, vi } from 'vitest';
 import {
+  ORGANIZATION_API_ACCESS_LEASES_PATH,
   ORGANIZATION_API_ADMIN_AUTH_SCHEME,
   ORGANIZATION_API_PROXY_AUTH_SCHEME,
   ORGANIZATION_API_RECENT_DECISIONS_PATH,
   ORGANIZATION_API_REVIEWER_RECENT_DECISIONS_PATH,
 } from '@echo-brain/organization-api';
+import type { OrganizationInstallationAccessStateV1 } from '@echo-brain/organization-protocol';
 import { AdminBearerAuthenticator } from '../src/adapters/security/admin-bearer-authenticator.js';
 import { AuthorityOperationError } from '../src/domain/errors.js';
 import {
@@ -151,6 +153,84 @@ function testApplication(
 }
 
 describe('authority HTTP presentation', () => {
+  it.each([
+    {
+      label: 'legacy V1',
+      schema_version: 1 as const,
+      requested_active_lease_ttl_ms: undefined,
+    },
+    {
+      label: 'opt-in V2',
+      schema_version: 2 as const,
+      requested_active_lease_ttl_ms: 30 * 60 * 1000,
+    },
+  ])(
+    'admits a $label access lease request at the HTTP boundary',
+    async (version) => {
+      const installationKey = `sha256:${'b'.repeat(64)}`;
+      const request = {
+        schema_version: version.schema_version,
+        kind: 'echo-organization-access-lease-request' as const,
+        request_id: 'alr_00000000-0000-4000-8000-000000000001',
+        authority_id: 'oau_00000000-0000-4000-8000-000000000001',
+        authority_key_id: `sha256:${'a'.repeat(64)}`,
+        organization_id: 'org_00000000-0000-4000-8000-000000000001',
+        enrollment_id: 'enr_00000000-0000-4000-8000-000000000001',
+        installation_id: 'ins_00000000-0000-4000-8000-000000000001',
+        installation_key_id: installationKey,
+        previous_access_state_sha256: `sha256:${'c'.repeat(64)}`,
+        ...(version.requested_active_lease_ttl_ms === undefined
+          ? {}
+          : {
+              requested_active_lease_ttl_ms:
+                version.requested_active_lease_ttl_ms,
+            }),
+        requested_at: '2026-08-12T08:00:00.000Z',
+        integrity: {
+          canonicalization: 'RFC8785' as const,
+          payload_sha256: `sha256:${'d'.repeat(64)}`,
+          signature_algorithm: 'ecdsa-p256-sha256-der-low-s' as const,
+          key_id: installationKey,
+          signature_base64: 'AAAAAAAA',
+        },
+      };
+      const calls: unknown[] = [];
+      const server = createOrganizationAuthorityHttpServer({
+        application: testApplication({
+          issueAccessLease: async (command) => {
+            calls.push(command);
+            return {} as OrganizationInstallationAccessStateV1;
+          },
+        }),
+        adminAuthenticator: { authenticate: () => false },
+        clientIdentityResolver: new AuthenticatedProxyClientIdentityResolver(
+          PROXY_TOKEN,
+        ),
+      });
+      const origin = await listen(server);
+      try {
+        const response = await fetch(
+          `${origin}${ORGANIZATION_API_ACCESS_LEASES_PATH}`,
+          {
+            method: 'POST',
+            headers: {
+              ...proxyHeaders(
+                clientId(`access-lease-v${version.schema_version}-test`),
+              ),
+              'content-type': 'application/json',
+            },
+            body: JSON.stringify(request),
+          },
+        );
+        expect(response.status).toBe(200);
+        expect(await response.json()).toEqual({ access_state: {} });
+      } finally {
+        await close(server);
+      }
+      expect(calls).toEqual([request]);
+    },
+  );
+
   it('exposes admin-approved internal-live directives and installation receipt routes', async () => {
     const ids = {
       authority: 'oau_00000000-0000-4000-8000-000000000001',

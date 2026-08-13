@@ -1895,7 +1895,6 @@ async function initializeDevelopmentAuthorityLocked(
         descriptor,
         authority_pin_sha256: authorityPin,
         organization_display_name: options.organization_display_name,
-        maximum_active_lease_ttl_ms: config.access.active_lease_ttl_ms,
         initialized_at: new Date().toISOString(),
       });
     } finally {
@@ -2522,7 +2521,6 @@ function reviewerQueryAuditMaintenanceTrust(
     descriptor: inspected.identity.authority_descriptor,
     authority_pin_sha256: inspected.identity.authority_pin_sha256,
     organization_display_name: config.organization.display_name,
-    maximum_active_lease_ttl_ms: config.access.active_lease_ttl_ms,
   };
 }
 
@@ -2655,7 +2653,6 @@ function readableSearchQueryAuditMaintenanceTrust(
     descriptor: inspected.identity.authority_descriptor,
     authority_pin_sha256: inspected.identity.authority_pin_sha256,
     organization_display_name: config.organization.display_name,
-    maximum_active_lease_ttl_ms: config.access.active_lease_ttl_ms,
   };
 }
 
@@ -3175,7 +3172,6 @@ async function rebuildAuthorityReadableSearchLocked(
       descriptor: identity.authority_descriptor,
       authority_pin_sha256: config.authority.authority_pin_sha256,
       organization_display_name: config.organization.display_name,
-      maximum_active_lease_ttl_ms: config.access.active_lease_ttl_ms,
       initialized_at: new Date().toISOString(),
     });
     repository.writeAtLinearization(

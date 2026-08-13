@@ -33,6 +33,7 @@ import type {
 import {
   GRANT,
   ORGANIZATION_IDS,
+  requestedAccessLeaseTtlMs,
   TestAuthority,
 } from '../support/local-organization-fixtures.js';
 
@@ -232,10 +233,14 @@ function fixture() {
       ) {
         throw new Error('enrollment must precede access refresh');
       }
+      const activeLeaseTtlMs = requestedAccessLeaseTtlMs(
+        JSON.parse(String(init?.body)) as unknown,
+      );
       accessState = await authority.nextActiveState(
         enrollmentRequest,
         enrollmentReceipt,
         accessState,
+        activeLeaseTtlMs,
       );
       return Response.json({ access_state: accessState });
     }

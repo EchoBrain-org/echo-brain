@@ -56,7 +56,13 @@ itself as enrolled.
 Access leases are short, signed, and monotonic. Missing, expired, corrupted, or
 rolled-back local access state fails closed. Revoking one installation does not
 erase history or revoke a different active installation. Ending a membership
-revokes all its installations.
+revokes all its installations. Current clients opt in to a renewal of up to 30
+minutes;
+the unchanged V1 request continues to receive five minutes for compatibility.
+The longer renewal reduces avoidable Authority churn and permits up to 30
+minutes of already-signed local operation during an outage. Online permission
+and read routes still evaluate current central membership and installation
+state on every request.
 
 The current portable signer uses a private file-backed P-256 key and explicitly
 records software-key assurance. The CLI requires an explicit acknowledgement

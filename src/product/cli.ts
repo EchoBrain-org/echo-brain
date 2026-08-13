@@ -60,7 +60,7 @@ import type { InstallationSigner } from "./machine/security/installation-signer.
 import {
   createLocalOrganizationRuntime,
   createOrganizationIngestExclusion,
-  DEFAULT_LOCAL_ORGANIZATION_LEASE_TTL_MS,
+  MAX_LOCAL_ORGANIZATION_ACTIVE_LEASE_TTL_MS,
   HttpOrganizationAuthorityClient,
   HttpOrganizationRecordClient,
   OrganizationApprovalActionAuthorizer,
@@ -1755,7 +1755,7 @@ export async function runProductCli(
             const decision = state.verifyCurrentAccess({
               now: now(),
               maximum_active_ttl_ms:
-                DEFAULT_LOCAL_ORGANIZATION_LEASE_TTL_MS,
+                MAX_LOCAL_ORGANIZATION_ACTIVE_LEASE_TTL_MS,
             });
             organizationResult = {
               ok: true,

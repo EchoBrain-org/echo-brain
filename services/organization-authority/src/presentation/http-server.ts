@@ -34,7 +34,7 @@ import {
   validateCompleteOrganizationEnrollmentRequest,
   validateApproveOrganizationInternalLiveReleaseRequest,
   validateIssueOrganizationEnrollmentGrantRequest,
-  validateOrganizationAccessLeaseRequest,
+  validateOrganizationAccessLeaseRequestAnyVersion,
   validateOrganizationInternalLiveDirectiveRequest,
   validateOrganizationInternalLiveUpdateReceipt,
   validateOrganizationPermissionCheckRequest,
@@ -1063,7 +1063,7 @@ export function createOrganizationAuthorityHttpServer(
           method === 'POST' &&
           url.pathname === ORGANIZATION_API_ACCESS_LEASES_PATH
         ) {
-          const command = validateOrganizationAccessLeaseRequest(
+          const command = validateOrganizationAccessLeaseRequestAnyVersion(
             await readJsonBody(request),
           );
           const state = await options.application.issueAccessLease(command);

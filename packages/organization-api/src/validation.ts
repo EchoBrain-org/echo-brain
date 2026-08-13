@@ -17,7 +17,9 @@ import type {
   CompletedOrganizationEnrollmentV1,
   IssueOrganizationEnrollmentGrantRequestV1,
   IssuedOrganizationEnrollmentGrantV1,
+  OrganizationAccessLeaseRequestAnyVersion,
   OrganizationAccessLeaseRequestV1,
+  OrganizationAccessLeaseRequestV2,
   OrganizationAccessLeaseResponseV1,
   OrganizationAdminOverviewCountsV1,
   OrganizationAdminOverviewV1,
@@ -51,6 +53,10 @@ import type {
   RevokedOrganizationInstallationV1,
   RevokedOrganizationMembershipV1,
   SubmitOrganizationRecordEnvelopeRequestV1,
+} from './contracts.js';
+import {
+  MAX_ORGANIZATION_ACCESS_LEASE_REQUEST_TTL_MS,
+  MIN_ORGANIZATION_ACCESS_LEASE_REQUEST_TTL_MS,
 } from './contracts.js';
 import { ORGANIZATION_API_RECENT_DECISIONS_PATH } from './http.js';
 import { organizationPermissionProviderEventSha256 } from './permission-check-event.js';
@@ -461,6 +467,34 @@ export function validateIntegrity(
 export function validateOrganizationAccessLeaseRequest(
   value: unknown,
 ): OrganizationAccessLeaseRequestV1 {
+  return validateOrganizationAccessLeaseRequestVersion(value, 1);
+}
+
+export function validateOrganizationAccessLeaseRequestAnyVersion(
+  value: unknown,
+): OrganizationAccessLeaseRequestAnyVersion {
+  const record = asRecord(value, 'access lease request');
+  if (record.schema_version === 1) {
+    return validateOrganizationAccessLeaseRequestVersion(value, 1);
+  }
+  if (record.schema_version === 2) {
+    return validateOrganizationAccessLeaseRequestVersion(value, 2);
+  }
+  fail('access lease request version or kind is unsupported');
+}
+
+function validateOrganizationAccessLeaseRequestVersion(
+  value: unknown,
+  schemaVersion: 1,
+): OrganizationAccessLeaseRequestV1;
+function validateOrganizationAccessLeaseRequestVersion(
+  value: unknown,
+  schemaVersion: 2,
+): OrganizationAccessLeaseRequestV2;
+function validateOrganizationAccessLeaseRequestVersion(
+  value: unknown,
+  schemaVersion: 1 | 2,
+): OrganizationAccessLeaseRequestAnyVersion {
   const record = asRecord(value, 'access lease request');
   assertExactKeys(
     record,
@@ -475,13 +509,14 @@ export function validateOrganizationAccessLeaseRequest(
       'installation_id',
       'installation_key_id',
       'previous_access_state_sha256',
+      ...(schemaVersion === 2 ? ['requested_active_lease_ttl_ms'] : []),
       'requested_at',
       'integrity',
     ],
     'access lease request',
   );
   if (
-    record.schema_version !== 1 ||
+    record.schema_version !== schemaVersion ||
     record.kind !== 'echo-organization-access-lease-request'
   ) {
     fail('access lease request version or kind is unsupported');
@@ -492,6 +527,18 @@ export function validateOrganizationAccessLeaseRequest(
     record.authority_key_id,
     'access lease request authority_key_id',
   );
+  if (
+    schemaVersion === 2 &&
+    (!Number.isSafeInteger(record.requested_active_lease_ttl_ms) ||
+      (record.requested_active_lease_ttl_ms as number) <
+        MIN_ORGANIZATION_ACCESS_LEASE_REQUEST_TTL_MS ||
+      (record.requested_active_lease_ttl_ms as number) >
+        MAX_ORGANIZATION_ACCESS_LEASE_REQUEST_TTL_MS)
+  ) {
+    fail(
+      `access lease request requested_active_lease_ttl_ms must be an integer from ${MIN_ORGANIZATION_ACCESS_LEASE_REQUEST_TTL_MS} through ${MAX_ORGANIZATION_ACCESS_LEASE_REQUEST_TTL_MS}`,
+    );
+  }
   assertId(
     record.organization_id,
     'org',
@@ -519,7 +566,7 @@ export function validateOrganizationAccessLeaseRequest(
   return {
     ...record,
     integrity,
-  } as unknown as OrganizationAccessLeaseRequestV1;
+  } as unknown as OrganizationAccessLeaseRequestAnyVersion;
 }
 
 export function validateOrganizationPermissionCheckRequest(

@@ -4,8 +4,8 @@ import {
   canonicalSha256,
 } from '@echo-brain/federation-protocol';
 import {
-  verifyOrganizationAccessLeaseRequest,
-  type OrganizationAccessLeaseRequestV1,
+  verifyOrganizationAccessLeaseRequestAnyVersion,
+  type OrganizationAccessLeaseRequestAnyVersion,
 } from '@echo-brain/organization-api';
 import {
   verifyOrganizationAuthorityPin,
@@ -21,7 +21,11 @@ import {
 import type { OrganizationAuthorityClient } from '../../src/product/organization/client/authority-client.js';
 import { OrganizationAuthorityConflictError } from '../../src/product/organization/client/authority-client.js';
 import { organizationApprovalResolutionRequiresAuthority } from '../../src/product/organization/approval-action-authorizer.js';
-import { LocalOrganizationCoordinator } from '../../src/product/organization/enrollment/local-organization-coordinator.js';
+import {
+  DEFAULT_LOCAL_ORGANIZATION_REQUESTED_LEASE_TTL_MS,
+  LocalOrganizationCoordinator,
+  MAX_LOCAL_ORGANIZATION_ACTIVE_LEASE_TTL_MS,
+} from '../../src/product/organization/enrollment/local-organization-coordinator.js';
 import type {
   OrganizationAccessVerificationPolicy,
   OrganizationStateStore,
@@ -261,12 +265,16 @@ function coordinator(
   authorityClient: OrganizationAuthorityClient,
   installationSigner: TestInstallationSigner,
   clock: MutableClock,
+  requestedActiveLeaseTtlMs?: number,
 ): LocalOrganizationCoordinator {
   return new LocalOrganizationCoordinator({
     state,
     authorityClient,
     installationSigner,
     maximumActiveLeaseTtlMs: MAX_TTL_MS,
+    ...(requestedActiveLeaseTtlMs === undefined
+      ? {}
+      : { requestedActiveLeaseTtlMs }),
     clock,
     requestIds: {
       nextAccessLeaseRequestId: () => ACCESS_REQUEST_ID,
@@ -377,10 +385,10 @@ describe('local organization coordinator', () => {
     const state = new MemoryOrganizationStateStore();
     const installationSigner = new TestInstallationSigner();
     const clock = mutableClock();
-    let refreshRequest: OrganizationAccessLeaseRequestV1 | null = null;
+    let refreshRequest: OrganizationAccessLeaseRequestAnyVersion | null = null;
     const client = descriptorClient(authority, {
       issueAccessLease: async (request) => {
-        refreshRequest = verifyOrganizationAccessLeaseRequest(
+        refreshRequest = verifyOrganizationAccessLeaseRequestAnyVersion(
           request,
           protocolInstallationKey(installationSigner),
         );
@@ -413,11 +421,76 @@ describe('local organization coordinator', () => {
       state: { access_state_sequence: 2 },
     });
     expect(refreshRequest).toMatchObject({
+      schema_version: 2,
       request_id: ACCESS_REQUEST_ID,
       previous_access_state_sha256: previousHash,
+      requested_active_lease_ttl_ms: MAX_TTL_MS,
       requested_at: REFRESHED_AT,
     });
     expect(state.readEnrollment()?.accepted_access_sequence).toBe(2);
+  });
+
+  it('requests and accepts a 30-minute V2 lease by default at the new ceiling', async () => {
+    expect(DEFAULT_LOCAL_ORGANIZATION_REQUESTED_LEASE_TTL_MS).toBe(1_800_000);
+    expect(MAX_LOCAL_ORGANIZATION_ACTIVE_LEASE_TTL_MS).toBe(1_800_000);
+    const authority = new TestAuthority();
+    const state = new MemoryOrganizationStateStore();
+    const installationSigner = new TestInstallationSigner();
+    const clock = mutableClock();
+    let postedRequest: OrganizationAccessLeaseRequestAnyVersion | null = null;
+    const client = descriptorClient(authority, {
+      issueAccessLease: async (request) => {
+        postedRequest = verifyOrganizationAccessLeaseRequestAnyVersion(
+          request,
+          protocolInstallationKey(installationSigner),
+        );
+        const enrollment = state.readEnrollment();
+        if (enrollment?.receipt === null || enrollment?.receipt === undefined) {
+          throw new Error('enrollment disappeared');
+        }
+        const previous = state.verifyCurrentAccess({
+          now: clock.value,
+          maximum_active_ttl_ms:
+            MAX_LOCAL_ORGANIZATION_ACTIVE_LEASE_TTL_MS,
+        }).state;
+        return {
+          access_state: await authority.nextActiveState(
+            enrollment.request,
+            enrollment.receipt,
+            previous,
+            DEFAULT_LOCAL_ORGANIZATION_REQUESTED_LEASE_TTL_MS,
+          ),
+        };
+      },
+    });
+    const local = new LocalOrganizationCoordinator({
+      state,
+      authorityClient: client,
+      installationSigner,
+      maximumActiveLeaseTtlMs:
+        MAX_LOCAL_ORGANIZATION_ACTIVE_LEASE_TTL_MS,
+      clock,
+      requestIds: {
+        nextAccessLeaseRequestId: () => ACCESS_REQUEST_ID,
+      },
+    });
+    await local.enroll(enrollmentInput(authority));
+    clock.value = REFRESHED_AT;
+
+    const refreshed = await local.refreshAccess();
+
+    expect(postedRequest).toMatchObject({
+      schema_version: 2,
+      requested_active_lease_ttl_ms: 1_800_000,
+    });
+    expect(refreshed).toMatchObject({
+      permitted: true,
+      state: { access_state_sequence: 2 },
+    });
+    expect(
+      Date.parse(refreshed.state.valid_until ?? '') -
+        Date.parse(refreshed.state.evaluated_at),
+    ).toBe(1_800_000);
   });
 
   it('accepts a validated current state that skips heads in a stale-state conflict', async () => {
@@ -451,7 +524,7 @@ describe('local organization coordinator', () => {
       enrollment.receipt,
       undelivered,
     );
-    let postedCommand: OrganizationAccessLeaseRequestV1 | null = null;
+    let postedCommand: OrganizationAccessLeaseRequestAnyVersion | null = null;
     const conflictClient = descriptorClient(authority, {
       issueAccessLease: async (command) => {
         postedCommand = command;
@@ -470,7 +543,7 @@ describe('local organization coordinator', () => {
     ).refreshAccess();
 
     expect(
-      verifyOrganizationAccessLeaseRequest(
+      verifyOrganizationAccessLeaseRequestAnyVersion(
         postedCommand,
         protocolInstallationKey(installationSigner),
       ),
@@ -481,7 +554,204 @@ describe('local organization coordinator', () => {
     });
     expect(state.readEnrollment()?.accepted_access_sequence).toBe(3);
     expect(postedCommand).toMatchObject({
+      schema_version: 2,
       installation_id: ORGANIZATION_IDS.installation,
+      requested_active_lease_ttl_ms: MAX_TTL_MS,
     });
+  });
+
+  it('rejects a successful active response longer than the V2 request', async () => {
+    const authority = new TestAuthority();
+    const state = new MemoryOrganizationStateStore();
+    const installationSigner = new TestInstallationSigner();
+    const clock = mutableClock();
+    const client = descriptorClient(authority, {
+      issueAccessLease: async (request) => {
+        expect(request).toMatchObject({
+          schema_version: 2,
+          requested_active_lease_ttl_ms: 4 * 60 * 1000,
+        });
+        const enrollment = state.readEnrollment();
+        if (enrollment?.receipt === null || enrollment?.receipt === undefined) {
+          throw new Error('enrollment disappeared');
+        }
+        const previous = state.verifyCurrentAccess({
+          now: clock.value,
+          maximum_active_ttl_ms: MAX_TTL_MS,
+        }).state;
+        return {
+          access_state: await authority.nextActiveState(
+            enrollment.request,
+            enrollment.receipt,
+            previous,
+          ),
+        };
+      },
+    });
+    const local = coordinator(
+      state,
+      client,
+      installationSigner,
+      clock,
+      4 * 60 * 1000,
+    );
+    await local.enroll(enrollmentInput(authority));
+    clock.value = REFRESHED_AT;
+
+    await expect(local.refreshAccess()).rejects.toThrow(
+      'active access lease exceeds the requested TTL',
+    );
+    expect(state.readEnrollment()?.accepted_access_sequence).toBe(1);
+  });
+
+  it('accepts a successful active response shorter than the V2 request', async () => {
+    const authority = new TestAuthority();
+    const state = new MemoryOrganizationStateStore();
+    const installationSigner = new TestInstallationSigner();
+    const clock = mutableClock();
+    const client = descriptorClient(authority, {
+      issueAccessLease: async (request) => {
+        expect(request).toMatchObject({
+          schema_version: 2,
+          requested_active_lease_ttl_ms: 30 * 60 * 1000,
+        });
+        const enrollment = state.readEnrollment();
+        if (enrollment?.receipt === null || enrollment?.receipt === undefined) {
+          throw new Error('enrollment disappeared');
+        }
+        const previous = state.verifyCurrentAccess({
+          now: clock.value,
+          maximum_active_ttl_ms: MAX_TTL_MS,
+        }).state;
+        return {
+          access_state: await authority.nextActiveState(
+            enrollment.request,
+            enrollment.receipt,
+            previous,
+          ),
+        };
+      },
+    });
+    const local = new LocalOrganizationCoordinator({
+      state,
+      authorityClient: client,
+      installationSigner,
+      maximumActiveLeaseTtlMs: 30 * 60 * 1000,
+      requestedActiveLeaseTtlMs: 30 * 60 * 1000,
+      clock,
+      requestIds: {
+        nextAccessLeaseRequestId: () => ACCESS_REQUEST_ID,
+      },
+    });
+    await local.enroll(enrollmentInput(authority));
+    clock.value = REFRESHED_AT;
+
+    await expect(local.refreshAccess()).resolves.toMatchObject({
+      permitted: true,
+      state: { access_state_sequence: 2 },
+    });
+  });
+
+  it('can adopt a valid stale-conflict head with a legacy lifetime', async () => {
+    const authority = new TestAuthority();
+    const state = new MemoryOrganizationStateStore();
+    const installationSigner = new TestInstallationSigner();
+    const clock = mutableClock();
+    await coordinator(
+      state,
+      descriptorClient(authority),
+      installationSigner,
+      clock,
+    ).enroll(enrollmentInput(authority));
+    const enrollment = state.readEnrollment();
+    if (enrollment?.receipt === null || enrollment?.receipt === undefined) {
+      throw new Error('enrollment disappeared');
+    }
+    const previous = state.verifyCurrentAccess({
+      now: clock.value,
+      maximum_active_ttl_ms: MAX_TTL_MS,
+    }).state;
+    const legacyLifetimeHead = await authority.nextActiveState(
+      enrollment.request,
+      enrollment.receipt,
+      previous,
+    );
+    const conflictClient = descriptorClient(authority, {
+      issueAccessLease: async (request) => {
+        expect(request).toMatchObject({
+          schema_version: 2,
+          requested_active_lease_ttl_ms: 30 * 60 * 1000,
+        });
+        throw new OrganizationAuthorityConflictError({
+          access_state: legacyLifetimeHead,
+        });
+      },
+    });
+    clock.value = REFRESHED_AT;
+
+    const local = new LocalOrganizationCoordinator({
+      state,
+      authorityClient: conflictClient,
+      installationSigner,
+      maximumActiveLeaseTtlMs: 30 * 60 * 1000,
+      requestedActiveLeaseTtlMs: 30 * 60 * 1000,
+      clock,
+      requestIds: {
+        nextAccessLeaseRequestId: () => ACCESS_REQUEST_ID,
+      },
+    });
+    await expect(local.refreshAccess()).resolves.toMatchObject({
+      permitted: true,
+      state: { access_state_sequence: 2 },
+    });
+  });
+
+  it('refuses a stale-conflict active head longer than the explicitly requested lease', async () => {
+    const authority = new TestAuthority();
+    const state = new MemoryOrganizationStateStore();
+    const installationSigner = new TestInstallationSigner();
+    const clock = mutableClock();
+    await coordinator(
+      state,
+      descriptorClient(authority),
+      installationSigner,
+      clock,
+    ).enroll(enrollmentInput(authority));
+    const enrollment = state.readEnrollment();
+    if (enrollment?.receipt === null || enrollment?.receipt === undefined) {
+      throw new Error('enrollment disappeared');
+    }
+    const previous = state.verifyCurrentAccess({
+      now: clock.value,
+      maximum_active_ttl_ms: MAX_TTL_MS,
+    }).state;
+    const longerConflictHead = await authority.nextActiveState(
+      enrollment.request,
+      enrollment.receipt,
+      previous,
+    );
+    const conflictClient = descriptorClient(authority, {
+      issueAccessLease: async (request) => {
+        expect(request).toMatchObject({
+          schema_version: 2,
+          requested_active_lease_ttl_ms: 4 * 60 * 1000,
+        });
+        throw new OrganizationAuthorityConflictError({
+          access_state: longerConflictHead,
+        });
+      },
+    });
+    clock.value = REFRESHED_AT;
+
+    await expect(
+      coordinator(
+        state,
+        conflictClient,
+        installationSigner,
+        clock,
+        4 * 60 * 1000,
+      ).refreshAccess(),
+    ).rejects.toThrow('active access lease exceeds the requested TTL');
+    expect(state.readEnrollment()?.accepted_access_sequence).toBe(1);
   });
 });

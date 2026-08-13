@@ -3,6 +3,8 @@ import type { OrganizationAuthorityClient } from './client/authority-client.js';
 import { HttpOrganizationAuthorityClient } from './client/http-organization-authority-client.js';
 import {
   LocalOrganizationCoordinator,
+  DEFAULT_LOCAL_ORGANIZATION_REQUESTED_LEASE_TTL_MS,
+  MAX_LOCAL_ORGANIZATION_ACTIVE_LEASE_TTL_MS,
   type LocalOrganizationClock,
   type LocalOrganizationRequestIds,
 } from './enrollment/local-organization-coordinator.js';
@@ -13,6 +15,12 @@ import { OrganizationReviewerRecentDecisionsReader } from './reviewer-recent-dec
 import { OrganizationReadableSearchReader } from './readable-search-reader.js';
 import { OrganizationSlackIdentityLinkCoordinator } from './slack-identity-link-coordinator.js';
 
+export {
+  DEFAULT_LOCAL_ORGANIZATION_REQUESTED_LEASE_TTL_MS,
+  MAX_LOCAL_ORGANIZATION_ACTIVE_LEASE_TTL_MS,
+} from './enrollment/local-organization-coordinator.js';
+
+/** @deprecated The legacy V1 product lease default. */
 export const DEFAULT_LOCAL_ORGANIZATION_LEASE_TTL_MS = 5 * 60 * 1000;
 
 export interface CreateLocalOrganizationRuntimeOptions {
@@ -20,6 +28,7 @@ export interface CreateLocalOrganizationRuntimeOptions {
   authorityBaseUrl: string;
   installationSigner: InstallationSigner;
   maximumActiveLeaseTtlMs?: number;
+  requestedActiveLeaseTtlMs?: number;
   allowedClockSkewMs?: number;
   clock: LocalOrganizationClock;
   requestIds?: LocalOrganizationRequestIds;
@@ -74,7 +83,11 @@ export function createLocalOrganizationRuntime(
       installationSigner: options.installationSigner,
       maximumActiveLeaseTtlMs:
         options.maximumActiveLeaseTtlMs ??
-        DEFAULT_LOCAL_ORGANIZATION_LEASE_TTL_MS,
+        MAX_LOCAL_ORGANIZATION_ACTIVE_LEASE_TTL_MS,
+      requestedActiveLeaseTtlMs:
+        options.requestedActiveLeaseTtlMs ??
+        options.maximumActiveLeaseTtlMs ??
+        DEFAULT_LOCAL_ORGANIZATION_REQUESTED_LEASE_TTL_MS,
       ...(options.allowedClockSkewMs === undefined
         ? {}
         : { allowedClockSkewMs: options.allowedClockSkewMs }),

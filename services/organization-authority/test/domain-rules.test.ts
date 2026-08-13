@@ -15,6 +15,10 @@ import {
 } from '../src/domain/rules.js';
 
 describe('organization authority domain rules', () => {
+  it('keeps configured V1 issuance at five minutes', () => {
+    expect(MAX_AUTHORITY_ACTIVE_LEASE_TTL_MS).toBe(5 * 60 * 1000);
+  });
+
   it('performs timestamp arithmetic only on canonical UTC milliseconds', () => {
     expect(timestampMillis('2026-07-22T00:00:00.000Z', 'fixture')).toBe(
       Date.parse('2026-07-22T00:00:00.000Z'),

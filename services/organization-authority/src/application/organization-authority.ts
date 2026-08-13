@@ -21,7 +21,7 @@ import {
   MINIMUM_ORGANIZATION_ACCESS_RECOVERY_GAP,
   validateApproveOrganizationInternalLiveReleaseRequest,
   validateIssueOrganizationEnrollmentGrantRequest,
-  validateOrganizationAccessLeaseRequest,
+  validateOrganizationAccessLeaseRequestAnyVersion,
   validateOrganizationInternalLiveDirectiveRequest,
   validateOrganizationInternalLiveUpdateReceipt,
   validateOrganizationPermissionCheckRequest,
@@ -36,7 +36,7 @@ import {
 import type {
   IssueOrganizationEnrollmentGrantRequestV1,
   ApproveOrganizationInternalLiveReleaseRequestV1,
-  OrganizationAccessLeaseRequestV1,
+  OrganizationAccessLeaseRequestAnyVersion,
   OrganizationAdminOverviewV1,
   OrganizationAuditPageV1,
   OrganizationEnrollmentGrantPageV1,
@@ -484,7 +484,6 @@ export class OrganizationAuthorityApplication {
       descriptor,
       authority_pin_sha256: options.independently_trusted_authority_pin,
       organization_display_name: options.organization_display_name,
-      maximum_active_lease_ttl_ms: options.active_lease_ttl_ms,
       initialized_at: initializedAt,
     });
     return new OrganizationAuthorityApplication(
@@ -2013,7 +2012,7 @@ export class OrganizationAuthorityApplication {
   }
 
   private authenticateAccessCommand(
-    command: OrganizationAccessLeaseRequestV1,
+    command: OrganizationAccessLeaseRequestAnyVersion,
     enrollment: StoredAuthorityEnrollment,
   ): Sha256Digest {
     return this.authenticateInstallationCommand(
@@ -2816,7 +2815,7 @@ export class OrganizationAuthorityApplication {
   private storedLeaseResponse(
     transaction: AuthorityReadTransaction,
     requestSha256: Sha256Digest,
-    request: OrganizationAccessLeaseRequestV1,
+    request: OrganizationAccessLeaseRequestAnyVersion,
   ): OrganizationInstallationAccessStateV1 | undefined {
     const stored = transaction.accessLeaseRequestByDigest(requestSha256);
     if (stored === undefined) return undefined;
@@ -2833,12 +2832,16 @@ export class OrganizationAuthorityApplication {
   }
 
   async issueAccessLease(
-    command: OrganizationAccessLeaseRequestV1,
+    command: OrganizationAccessLeaseRequestAnyVersion,
   ): Promise<OrganizationInstallationAccessStateV1> {
-    command = validateOrganizationAccessLeaseRequest(command);
+    command = validateOrganizationAccessLeaseRequestAnyVersion(command);
     command = JSON.parse(
       canonicalJson(command),
-    ) as OrganizationAccessLeaseRequestV1;
+    ) as OrganizationAccessLeaseRequestAnyVersion;
+    const issuedLeaseTtlMs =
+      command.schema_version === 2
+        ? command.requested_active_lease_ttl_ms
+        : this.activeLeaseTtlMs;
     const enrollment = this.repository.read((transaction) =>
       requireEnrollment(transaction, command.enrollment_id),
     );
@@ -2913,8 +2916,9 @@ export class OrganizationAuthorityApplication {
       if (
         command.previous_access_state_sha256 !== snapshot.current.state_sha256
       ) {
-        // V1 recovers exactly one skipped head. Allowing older ancestors would
-        // let a briefly held installation key pre-sign future renewals. If the
+        // The access protocol recovers exactly one skipped head. Allowing older
+        // ancestors would let a briefly held installation key pre-sign future
+        // renewals. If the
         // recovery 409 is lost until its replacement expires, operator repair
         // remains the deliberately narrow fallback.
         recoveringExpiredStaleHead = canRecoverExpiredStaleAccessHead({
@@ -2940,8 +2944,8 @@ export class OrganizationAuthorityApplication {
             snapshot.current.state.access_state_sequence + 1,
           evaluated_at: requestedAt,
           status: 'active',
-          valid_until: addMilliseconds(requestedAt, this.activeLeaseTtlMs),
-          maximum_active_ttl_ms: this.activeLeaseTtlMs,
+          valid_until: addMilliseconds(requestedAt, issuedLeaseTtlMs),
+          maximum_active_ttl_ms: issuedLeaseTtlMs,
         },
         this.pinnedAuthority,
         (bytes) => this.signCanonicalPayload(bytes),

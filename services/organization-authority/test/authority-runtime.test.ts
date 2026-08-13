@@ -37,12 +37,14 @@ import type {
 } from '@echo-brain/organization-protocol';
 import {
   createOrganizationAccessLeaseRequest,
+  createOrganizationAccessLeaseRequestV2,
   createOrganizationInternalLiveDirectiveRequest,
   createOrganizationInternalLiveUpdateReceipt,
   createOrganizationPermissionCheckRequest,
   createOrganizationRecentDecisionsRequest,
   createOrganizationReviewerRecentDecisionsRequest,
   createOrganizationSlackLinkBeginRequest,
+  MAX_ORGANIZATION_ACCESS_LEASE_REQUEST_TTL_MS,
   organizationInternalLiveManifestSha256,
 } from '@echo-brain/organization-api';
 import type {
@@ -969,6 +971,145 @@ describe('single-organization authority runtime', () => {
     }
   });
 
+  it('reopens 30-minute V2 history while V1 issuance stays at five minutes', async () => {
+    const fixture = await createEnrolledFixture('2026-07-22T11:35:00.000Z');
+    try {
+      fixture.clock.advance(1);
+      const v2RequestedAt = fixture.clock.now();
+      const v2 = await createOrganizationAccessLeaseRequestV2(
+        {
+          request_id: `alr_${randomUUID()}`,
+          authority_id: fixture.enrolled.result.enrollment_receipt.authority_id,
+          authority_key_id:
+            fixture.enrolled.result.enrollment_receipt.authority_key_id,
+          organization_id:
+            fixture.enrolled.result.enrollment_receipt.organization_id,
+          enrollment_id:
+            fixture.enrolled.result.enrollment_receipt.enrollment_id,
+          installation_id: fixture.enrolled.installationId,
+          installation_signing_key: fixture.enrolled.installation.descriptor,
+          previous_access_state_sha256: canonicalSha256(
+            fixture.enrolled.result.access_state,
+          ),
+          requested_active_lease_ttl_ms:
+            MAX_ORGANIZATION_ACCESS_LEASE_REQUEST_TTL_MS,
+          requested_at: v2RequestedAt,
+        },
+        async (bytes) => sign(fixture.enrolled.installation, bytes),
+      );
+      const longLease = await fixture.application.issueAccessLease(v2);
+      if (longLease.status !== 'active') {
+        throw new Error('V2 renewal unexpectedly returned revoked access');
+      }
+      expect(
+        Date.parse(longLease.valid_until) - Date.parse(v2RequestedAt),
+      ).toBe(MAX_ORGANIZATION_ACCESS_LEASE_REQUEST_TTL_MS);
+      expect(
+        fixture.repository.read(
+          (transaction) =>
+            transaction.accessLeaseRequestByDigest(canonicalSha256(v2))
+              ?.request,
+        ),
+      ).toEqual(v2);
+
+      fixture.application.close();
+      const reopened = await createApplication(
+        fixture.databasePath,
+        fixture.clock,
+        fixture.signer,
+      );
+      fixture.application = reopened.application;
+      fixture.repository = reopened.repository;
+      expect(
+        fixture.repository.read(
+          (transaction) =>
+            transaction.currentAccessState(
+              fixture.enrolled.result.enrollment_receipt.enrollment_id,
+            )?.state,
+        ),
+      ).toEqual(longLease);
+
+      fixture.clock.advance(1);
+      const v1RequestedAt = fixture.clock.now();
+      const v1 = await createOrganizationAccessLeaseRequest(
+        {
+          request_id: `alr_${randomUUID()}`,
+          authority_id: fixture.enrolled.result.enrollment_receipt.authority_id,
+          authority_key_id:
+            fixture.enrolled.result.enrollment_receipt.authority_key_id,
+          organization_id:
+            fixture.enrolled.result.enrollment_receipt.organization_id,
+          enrollment_id:
+            fixture.enrolled.result.enrollment_receipt.enrollment_id,
+          installation_id: fixture.enrolled.installationId,
+          installation_signing_key: fixture.enrolled.installation.descriptor,
+          previous_access_state_sha256: canonicalSha256(longLease),
+          requested_at: v1RequestedAt,
+        },
+        async (bytes) => sign(fixture.enrolled.installation, bytes),
+      );
+      const configuredLease = await fixture.application.issueAccessLease(v1);
+      if (configuredLease.status !== 'active') {
+        throw new Error('V1 renewal unexpectedly returned revoked access');
+      }
+      expect(
+        Date.parse(configuredLease.valid_until) - Date.parse(v1RequestedAt),
+      ).toBe(5 * 60 * 1000);
+    } finally {
+      closeFixture(fixture);
+    }
+  });
+
+  it('rejects an out-of-range V2 lease before any Authority state is written', async () => {
+    const fixture = await createEnrolledFixture('2026-07-22T11:37:00.000Z');
+    try {
+      fixture.clock.advance(1);
+      const command = await createSignedDocumentWithKey(
+        {
+          schema_version: 2 as const,
+          kind: 'echo-organization-access-lease-request' as const,
+          request_id: `alr_${randomUUID()}`,
+          authority_id: fixture.enrolled.result.enrollment_receipt.authority_id,
+          authority_key_id:
+            fixture.enrolled.result.enrollment_receipt.authority_key_id,
+          organization_id:
+            fixture.enrolled.result.enrollment_receipt.organization_id,
+          enrollment_id:
+            fixture.enrolled.result.enrollment_receipt.enrollment_id,
+          installation_id: fixture.enrolled.installationId,
+          installation_key_id: fixture.enrolled.installation.descriptor.key_id,
+          previous_access_state_sha256: canonicalSha256(
+            fixture.enrolled.result.access_state,
+          ),
+          requested_active_lease_ttl_ms:
+            MAX_ORGANIZATION_ACCESS_LEASE_REQUEST_TTL_MS + 1,
+          requested_at: fixture.clock.now(),
+        },
+        fixture.enrolled.installation.descriptor.key_id,
+        async (bytes) => sign(fixture.enrolled.installation, bytes),
+      );
+      const before = fixture.application.adminOverview().counts;
+
+      await expect(
+        fixture.application.issueAccessLease(command),
+      ).rejects.toThrow(
+        'access lease request requested_active_lease_ttl_ms must be an integer',
+      );
+
+      expect(fixture.application.adminOverview().counts).toEqual(before);
+      expect(
+        fixture.repository.read(
+          (transaction) =>
+            transaction.currentAccessState(
+              fixture.enrolled.result.enrollment_receipt.enrollment_id,
+            )?.state.access_state_sequence,
+        ),
+      ).toBe(1);
+    } finally {
+      closeFixture(fixture);
+    }
+  });
+
   it('authenticates permission checks and reports current caller and target state', async () => {
     const fixture = await createEnrolledFixture('2026-07-22T11:40:00.000Z');
     try {
@@ -1026,6 +1167,58 @@ describe('single-organization authority runtime', () => {
         target_membership_id: null,
         target_active: null,
       });
+    } finally {
+      closeFixture(fixture);
+    }
+  });
+
+  it('applies central installation revocation immediately while a 30-minute lease remains unexpired', async () => {
+    const fixture = await createEnrolledFixture('2026-07-22T11:42:00.000Z');
+    try {
+      fixture.clock.advance(1);
+      const receipt = fixture.enrolled.result.enrollment_receipt;
+      const longRequest = await createOrganizationAccessLeaseRequestV2(
+        {
+          request_id: `alr_${randomUUID()}`,
+          authority_id: receipt.authority_id,
+          authority_key_id: receipt.authority_key_id,
+          organization_id: receipt.organization_id,
+          enrollment_id: receipt.enrollment_id,
+          installation_id: fixture.enrolled.installationId,
+          installation_signing_key: fixture.enrolled.installation.descriptor,
+          previous_access_state_sha256: canonicalSha256(
+            fixture.enrolled.result.access_state,
+          ),
+          requested_active_lease_ttl_ms:
+            MAX_ORGANIZATION_ACCESS_LEASE_REQUEST_TTL_MS,
+          requested_at: fixture.clock.now(),
+        },
+        async (bytes) => sign(fixture.enrolled.installation, bytes),
+      );
+      const longLease = await fixture.application.issueAccessLease(longRequest);
+      if (longLease.status !== 'active') {
+        throw new Error('30-minute lease unexpectedly returned revoked access');
+      }
+      expect(
+        Date.parse(longLease.valid_until) - Date.parse(longLease.evaluated_at),
+      ).toBe(MAX_ORGANIZATION_ACCESS_LEASE_REQUEST_TTL_MS);
+
+      const permission = await permissionCheckRequest(fixture);
+      expect(
+        fixture.application.checkPermissionSubject(permission, null),
+      ).toMatchObject({ installation_active: true });
+
+      fixture.clock.advance(1);
+      await fixture.application.revokeInstallation(
+        fixture.enrolled.installationId,
+        'Caller installation retired',
+      );
+      expect(Date.parse(longLease.valid_until)).toBeGreaterThan(
+        Date.parse(fixture.clock.now()),
+      );
+      expect(
+        fixture.application.checkPermissionSubject(permission, null),
+      ).toMatchObject({ installation_active: false });
     } finally {
       closeFixture(fixture);
     }
@@ -2257,6 +2450,112 @@ describe('single-organization authority runtime', () => {
       await expect(
         fixture.application.issueAccessLease(forgedCommand),
       ).rejects.toThrow('access lease request authentication failed');
+    } finally {
+      closeFixture(fixture);
+    }
+  });
+
+  it('binds persisted active results to the V1 hard limit and signed V2 TTL bound', async () => {
+    const fixture = await createEnrolledFixture('2026-07-22T16:40:00.000Z');
+    try {
+      fixture.clock.advance(1);
+      const receipt = fixture.enrolled.result.enrollment_receipt;
+      const initialStateSha256 = canonicalSha256(
+        fixture.enrolled.result.access_state,
+      );
+      const longRequest = await createOrganizationAccessLeaseRequestV2(
+        {
+          request_id: `alr_${randomUUID()}`,
+          authority_id: receipt.authority_id,
+          authority_key_id: receipt.authority_key_id,
+          organization_id: receipt.organization_id,
+          enrollment_id: receipt.enrollment_id,
+          installation_id: fixture.enrolled.installationId,
+          installation_signing_key: fixture.enrolled.installation.descriptor,
+          previous_access_state_sha256: initialStateSha256,
+          requested_active_lease_ttl_ms:
+            MAX_ORGANIZATION_ACCESS_LEASE_REQUEST_TTL_MS,
+          requested_at: fixture.clock.now(),
+        },
+        async (bytes) => sign(fixture.enrolled.installation, bytes),
+      );
+      const longResult = await fixture.application.issueAccessLease(longRequest);
+      if (longResult.status !== 'active') {
+        throw new Error('30-minute lease unexpectedly returned revoked access');
+      }
+      expect(
+        Date.parse(longResult.valid_until) - Date.parse(longResult.evaluated_at),
+      ).toBe(MAX_ORGANIZATION_ACCESS_LEASE_REQUEST_TTL_MS);
+
+      const commonReplacement = {
+        authority_id: receipt.authority_id,
+        authority_key_id: receipt.authority_key_id,
+        organization_id: receipt.organization_id,
+        enrollment_id: receipt.enrollment_id,
+        installation_id: fixture.enrolled.installationId,
+        installation_signing_key: fixture.enrolled.installation.descriptor,
+        previous_access_state_sha256: initialStateSha256,
+        requested_at: fixture.clock.now(),
+      };
+      const legacyRequest = await createOrganizationAccessLeaseRequest(
+        {
+          ...commonReplacement,
+          request_id: `alr_${randomUUID()}`,
+        },
+        async (bytes) => sign(fixture.enrolled.installation, bytes),
+      );
+      const shortV2Request = await createOrganizationAccessLeaseRequestV2(
+        {
+          ...commonReplacement,
+          request_id: `alr_${randomUUID()}`,
+          requested_active_lease_ttl_ms: 60_000,
+        },
+        async (bytes) => sign(fixture.enrolled.installation, bytes),
+      );
+      const replaceStoredRequest = (
+        previousRequestSha256: Sha256Digest,
+        replacement: typeof legacyRequest | typeof shortV2Request,
+      ) => {
+        const database = new Database(fixture.databasePath);
+        try {
+          database
+            .prepare(
+              `UPDATE authority_access_lease_requests
+               SET request_sha256 = ?, request_id = ?, request_json = ?
+               WHERE request_sha256 = ?`,
+            )
+            .run(
+              canonicalSha256(replacement),
+              replacement.request_id,
+              canonicalJson(replacement),
+              previousRequestSha256,
+            );
+        } finally {
+          database.close();
+        }
+      };
+
+      replaceStoredRequest(canonicalSha256(longRequest), legacyRequest);
+      expect(() =>
+        fixture.repository.read((transaction) =>
+          transaction.accessLeaseRequestByDigest(
+            canonicalSha256(legacyRequest),
+          ),
+        ),
+      ).toThrow(
+        'authority database invariant: access request active result exceeds its versioned TTL bound',
+      );
+
+      replaceStoredRequest(canonicalSha256(legacyRequest), shortV2Request);
+      expect(() =>
+        fixture.repository.read((transaction) =>
+          transaction.accessLeaseRequestByDigest(
+            canonicalSha256(shortV2Request),
+          ),
+        ),
+      ).toThrow(
+        'authority database invariant: access request active result exceeds its versioned TTL bound',
+      );
     } finally {
       closeFixture(fixture);
     }

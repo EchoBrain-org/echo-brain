@@ -5,7 +5,8 @@ import {
   type Sha256Digest,
 } from '@echo-brain/federation-protocol';
 import {
-  createOrganizationAccessLeaseRequest,
+  createOrganizationAccessLeaseRequestV2,
+  MAX_ORGANIZATION_ACCESS_LEASE_REQUEST_TTL_MS,
   validateCompletedOrganizationEnrollment,
   validateOrganizationAccessLeaseResponse,
   validateOrganizationAuthorityDescriptorResponse,
@@ -44,10 +45,16 @@ export interface LocalOrganizationCoordinatorOptions {
   authorityClient: OrganizationAuthorityClient;
   installationSigner: InstallationSigner;
   maximumActiveLeaseTtlMs: number;
+  requestedActiveLeaseTtlMs?: number;
   allowedClockSkewMs?: number;
   clock?: LocalOrganizationClock;
   requestIds?: LocalOrganizationRequestIds;
 }
+
+export const MAX_LOCAL_ORGANIZATION_ACTIVE_LEASE_TTL_MS =
+  MAX_ORGANIZATION_ACCESS_LEASE_REQUEST_TTL_MS;
+export const DEFAULT_LOCAL_ORGANIZATION_REQUESTED_LEASE_TTL_MS =
+  MAX_LOCAL_ORGANIZATION_ACTIVE_LEASE_TTL_MS;
 
 export interface EnrollLocalInstallationInput {
   authorityBaseUrl: string;
@@ -113,12 +120,40 @@ export class LocalOrganizationCoordinator {
   private readonly requestIds: LocalOrganizationRequestIds;
 
   constructor(private readonly options: LocalOrganizationCoordinatorOptions) {
+    if (
+      !Number.isSafeInteger(options.maximumActiveLeaseTtlMs) ||
+      options.maximumActiveLeaseTtlMs < 1 ||
+      options.maximumActiveLeaseTtlMs >
+        MAX_LOCAL_ORGANIZATION_ACTIVE_LEASE_TTL_MS
+    ) {
+      throw new Error(
+        `maximum organization access lease TTL must be an integer from 1 through ${MAX_LOCAL_ORGANIZATION_ACTIVE_LEASE_TTL_MS}`,
+      );
+    }
+    const requestedActiveLeaseTtlMs =
+      options.requestedActiveLeaseTtlMs ?? options.maximumActiveLeaseTtlMs;
+    if (
+      !Number.isSafeInteger(requestedActiveLeaseTtlMs) ||
+      requestedActiveLeaseTtlMs < 1 ||
+      requestedActiveLeaseTtlMs > options.maximumActiveLeaseTtlMs
+    ) {
+      throw new Error(
+        'requested organization access lease TTL must be a positive integer no greater than the local verification ceiling',
+      );
+    }
     this.clock = options.clock ?? { now: () => new Date().toISOString() };
     this.requestIds =
       options.requestIds ??
       ({
         nextAccessLeaseRequestId: () => `alr_${randomUUID()}`,
       } satisfies LocalOrganizationRequestIds);
+  }
+
+  private requestedActiveLeaseTtlMs(): number {
+    return (
+      this.options.requestedActiveLeaseTtlMs ??
+      this.options.maximumActiveLeaseTtlMs
+    );
   }
 
   private verificationPolicy(): OrganizationAccessVerificationPolicy {
@@ -273,7 +308,8 @@ export class LocalOrganizationCoordinator {
         'organization installation signer no longer matches the enrollment',
       );
     }
-    const command = await createOrganizationAccessLeaseRequest(
+    const requestedActiveLeaseTtlMs = this.requestedActiveLeaseTtlMs();
+    const command = await createOrganizationAccessLeaseRequestV2(
       {
         request_id: this.requestIds.nextAccessLeaseRequestId(),
         authority_id: request.authority_id,
@@ -283,6 +319,7 @@ export class LocalOrganizationCoordinator {
         installation_id: request.installation_id,
         installation_signing_key: signerKey,
         previous_access_state_sha256: enrollment.accepted_access_sha256,
+        requested_active_lease_ttl_ms: requestedActiveLeaseTtlMs,
         requested_at: this.clock.now(),
       },
       (bytes) =>
@@ -309,6 +346,16 @@ export class LocalOrganizationCoordinator {
       response = validateOrganizationAccessLeaseResponse(
         error.conflict.response,
       );
+    }
+    if (response.access_state.status === 'active') {
+      const evaluatedAt = Date.parse(response.access_state.evaluated_at);
+      const validUntil = Date.parse(response.access_state.valid_until);
+      const receivedActiveLeaseTtlMs = validUntil - evaluatedAt;
+      if (receivedActiveLeaseTtlMs > requestedActiveLeaseTtlMs) {
+        throw new Error(
+          'organization authority active access lease exceeds the requested TTL',
+        );
+      }
     }
     return this.options.state.acceptAccessState(
       response.access_state,

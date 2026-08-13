@@ -14,6 +14,7 @@ import {
 } from '@echo-brain/federation-protocol';
 import {
   createOrganizationAccessLeaseRequest,
+  validateOrganizationAccessLeaseRequestAnyVersion,
   type CompletedOrganizationEnrollmentV1,
   type OrganizationAccessLeaseRequestV1,
   type OrganizationPermissionCheckDecisionV1,
@@ -43,6 +44,14 @@ export const REFRESHED_AT = '2026-07-22T00:03:00.000Z';
 export const MAX_TTL_MS = 5 * 60 * 1000;
 export const GRANT = Buffer.from('0123456789abcdef0123456789abcdef', 'utf8');
 export const ACCESS_REQUEST_ID = 'alr_00000000-0000-4000-8000-000000000001';
+
+/** Mirrors the Authority's mixed-version lease selection in HTTP fixtures. */
+export function requestedAccessLeaseTtlMs(value: unknown): number {
+  const request = validateOrganizationAccessLeaseRequestAnyVersion(value);
+  return request.schema_version === 2
+    ? request.requested_active_lease_ttl_ms
+    : MAX_TTL_MS;
+}
 
 export function fixtureId(prefix: string, suffix: number): string {
   return `${prefix}_00000000-0000-4000-8000-${suffix
@@ -249,6 +258,7 @@ export class TestAuthority {
     request: OrganizationEnrollmentRequestV1,
     receipt: OrganizationEnrollmentReceiptV1,
     previousState: OrganizationInstallationAccessStateV1,
+    activeLeaseTtlMs = MAX_TTL_MS,
   ): Promise<OrganizationInstallationAccessStateV1> {
     const pinned = verifyOrganizationAuthorityPin(this.descriptor, this.pin);
     return createOrganizationInstallationAccessState(
@@ -259,8 +269,10 @@ export class TestAuthority {
         access_state_sequence: previousState.access_state_sequence + 1,
         evaluated_at: REFRESHED_AT,
         status: 'active',
-        valid_until: '2026-07-22T00:08:00.000Z',
-        maximum_active_ttl_ms: MAX_TTL_MS,
+        valid_until: new Date(
+          Date.parse(REFRESHED_AT) + activeLeaseTtlMs,
+        ).toISOString(),
+        maximum_active_ttl_ms: activeLeaseTtlMs,
       },
       pinned,
       this.signer.sign,

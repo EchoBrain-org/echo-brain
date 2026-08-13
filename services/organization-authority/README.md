@@ -73,6 +73,31 @@ Administrator requests use `Authorization: Bearer <token>`. Enrollment uses
 `Authorization: Echo-Enrollment <grant>`. Lease refresh, permission checks,
 and readable search use installation-signed commands.
 
+The access-lease route accepts both request versions. V1 has no lifetime field
+and retains the operator-configured lifetime of at most five minutes. V2 binds
+an explicit requested maximum into the installation signature and accepts at
+most 30 minutes; the current product asks for the full 30 minutes. The
+Authority may issue any positive lifetime at or below that bound. Repository
+verification uses the stable 30-minute historical ceiling independently of the
+current V1 issuance setting, so lowering that setting cannot make already
+signed states unreadable.
+
+| Authority | Product | Lease behavior |
+| --- | --- | --- |
+| pre-V2 | legacy V1 | five-minute V1 |
+| V2-capable | legacy V1 | five-minute V1 |
+| V2-capable | V2-capable | bounded V2, currently 30 minutes |
+| pre-V2 | V2-capable | fails closed; deploy the Authority first |
+
+After the first V2 lease longer than five minutes is stored, a code-only
+rollback to an Authority build that predates V2 is not state-compatible: that
+older verifier still applies its five-minute setting to historical states. A
+rollback at that point must use a V2-capable build or restore the matching
+pre-V2 Authority data together with each affected installation's matching
+local state (or explicitly recover/re-enroll that installation). Before any
+longer V2 state is issued, the previous image remains a code-only rollback
+option.
+
 When a separately promoted B-capable image is selected,
 `POST /v1/readable-search` provides the local Job B baseline behavior. It is
 not an operational release. It accepts only a canonical RFC 8785 signed request body

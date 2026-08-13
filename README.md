@@ -640,11 +640,19 @@ securely removed.
 
 Once the authority is pinned, product startup and every processing cycle check
 the signed access lease before adapter contact. The running service renews its
-short lease in the background. A transient authority outage can use only the
-remaining signed lease; expiration or revocation fails closed. Use
+short lease in the background. Current installations explicitly request up to
+a 30-minute renewal; legacy V1 installations continue to receive five-minute
+renewals. A transient authority outage can use only the remaining signed lease;
+expiration or revocation fails closed. Authority-backed permission and read
+requests still recheck current central access rather than treating the local
+lease as cached content authorization. Use
 `organization rebind` with the same independently verified authority PIN to
 prove the identical authority at a new HTTPS origin before changing the saved
 route.
+
+Deploy a V2-capable Authority before a V2-capable product. The new Authority
+continues to serve legacy V1 products, while a new product deliberately fails
+closed against an Authority that does not understand its signed V2 request.
 
 Once the organization Slack tool is active, an enrolled installation links its
 Slack identity with `organization slack-link-begin` and
