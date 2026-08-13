@@ -29,7 +29,7 @@ evidence_ids:
 implementation_refs:
   - commit:06811c29458b0bf3aac443baf35453d3a2eb27f3
 regression_test_refs:
-  - tests/adapters/slack-web-api-client.test.ts@06811c2
+  - tests/adapters/slack-web-api-client.test.ts@06811c29458b0bf3aac443baf35453d3a2eb27f3
 risk_decision_id: null
 residual_risk: null
 next_review_at: null

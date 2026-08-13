@@ -13,6 +13,13 @@ created_at: 2026-08-13
 reviewed_at: 2026-08-13
 reviewed_ref: 4b505021b03255c870695e0fba56a2b74879d86a
 matrix_version: 1
+assertion_ids:
+  - JOB-A-STOP-001
+  - JOB-A-STOP-002
+  - JOB-A-STOP-003
+  - JOB-A-STOP-004
+  - JOB-A-STOP-005
+  - JOB-A-STOP-006
 invariant_ids: []
 decision_ids: []
 failure_pattern_ids: []

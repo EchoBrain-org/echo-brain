@@ -15,6 +15,32 @@ created_at: 2026-08-13
 reviewed_at: 2026-08-13
 reviewed_ref: 5aa7a37de94b8431c8fcb40cdee15ed34c4ba69a
 matrix_version: 1
+assertion_ids:
+  - ADP-T01
+  - ADP-T02
+  - ADP-T03
+  - ADP-T04
+  - ADP-T05
+  - ADP-I01
+  - ADP-I02
+  - ADP-I03
+  - ADP-I04
+  - ADP-E01
+  - ADP-E02
+  - ADP-E03
+  - ADP-E04
+  - ADP-F01
+  - ADP-A01
+  - ADP-A02
+  - ADP-M01
+  - ADP-M02
+  - ADP-L01
+  - ADP-L02
+  - ADP-R01
+  - ADP-R02
+  - ADP-B01
+  - ADP-B02
+  - ADP-B03
 invariant_ids:
   - INV-ADAPTERS-001
   - INV-ADAPTERS-002

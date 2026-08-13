@@ -31,8 +31,8 @@ evidence_ids:
 implementation_refs:
   - commit:77b7744b46a912b9154c218b3a036e8552d7180e
 regression_test_refs:
-  - services/organization-control-plane/test/control-plane-migrations.test.ts@77b7744
-  - services/organization-authority/test/organization-integrations-application.test.ts@77b7744
+  - services/organization-control-plane/test/control-plane-migrations.test.ts@77b7744b46a912b9154c218b3a036e8552d7180e
+  - services/organization-authority/test/organization-integrations-application.test.ts@77b7744b46a912b9154c218b3a036e8552d7180e
 risk_decision_id: null
 residual_risk: null
 next_review_at: null

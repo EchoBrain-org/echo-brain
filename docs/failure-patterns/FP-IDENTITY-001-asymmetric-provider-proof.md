@@ -32,8 +32,8 @@ evidence_ids:
 implementation_refs:
   - commit:77b7744b46a912b9154c218b3a036e8552d7180e
 regression_test_refs:
-  - tests/adapters/slack-web-api-client.test.ts@77b7744
-  - services/organization-control-plane/test/slack-integration-provider.test.ts@77b7744
+  - tests/adapters/slack-web-api-client.test.ts@77b7744b46a912b9154c218b3a036e8552d7180e
+  - services/organization-control-plane/test/slack-integration-provider.test.ts@77b7744b46a912b9154c218b3a036e8552d7180e
 risk_decision_id: null
 residual_risk: null
 next_review_at: null

@@ -32,8 +32,8 @@ evidence_ids:
 implementation_refs:
   - commit:280db80479a39ba51708b5923cc4b3eb3cfcd7ef
 regression_test_refs:
-  - tests/product/runtime-isolation.test.ts@280db80
-  - services/organization-authority/test/authority-runtime.test.ts@280db80
+  - tests/product/runtime-isolation.test.ts@280db80479a39ba51708b5923cc4b3eb3cfcd7ef
+  - services/organization-authority/test/authority-runtime.test.ts@280db80479a39ba51708b5923cc4b3eb3cfcd7ef
 risk_decision_id: null
 residual_risk: null
 next_review_at: null

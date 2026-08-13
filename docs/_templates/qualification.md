@@ -11,11 +11,11 @@ reviewed_at: YYYY-MM-DD
 reviewed_ref: null
 run_status: completed
 result: passed
-stop_reason: null
+stop_reason: not-applicable
 source_commit: required-or-not-applicable
 artifact_digest: required-or-not-applicable
-configuration_identity: required-sanitized-id-or-not-applicable
-state_identity: required-sanitized-id-or-not-applicable
+configuration_identity: opaque:required-sanitized-id-or-not-applicable
+state_identity: opaque:required-sanitized-id-or-not-applicable
 started_at: YYYY-MM-DDTHH:MM:SSZ
 completed_at: YYYY-MM-DDTHH:MM:SSZ
 matrix_id: required
@@ -42,6 +42,10 @@ issue_urls: []
 
 Each assertion records its stable ID, `passed`, `failed`, or `not-run`
 outcome, and one or more opaque evidence IDs.
+
+| Assertion | Outcome | Evidence |
+| --- | --- | --- |
+| `ASSERTION-ID` | passed | `EVID-ID` |
 
 ## Deviations and stopped gates
 

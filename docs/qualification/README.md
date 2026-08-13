@@ -13,7 +13,10 @@ deployment, and release.
 - A **raw receipt** is bounded proof from the run. Private receipts remain in
   access-controlled storage.
 
-Use the [qualification report template](../_templates/qualification.md).
+Use the [qualification matrix template](../_templates/qualification-matrix.md)
+and [qualification report template](../_templates/qualification.md). Matrix
+front matter and its table carry the same assertion IDs; completed reports
+must record an outcome and evidence for that exact assertion set.
 
 Current indexes and matrices:
 

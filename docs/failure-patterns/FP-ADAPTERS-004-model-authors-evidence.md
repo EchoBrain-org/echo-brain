@@ -31,7 +31,7 @@ evidence_ids:
 implementation_refs:
   - commit:fd762a45e8745eebf27f346317e97038be69de44
 regression_test_refs:
-  - tests/adapters/llm-decision-processor.test.ts@fd762a4
+  - tests/adapters/llm-decision-processor.test.ts@fd762a45e8745eebf27f346317e97038be69de44
 risk_decision_id: null
 residual_risk: null
 next_review_at: null

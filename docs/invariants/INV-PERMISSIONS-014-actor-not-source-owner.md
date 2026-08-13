@@ -13,7 +13,7 @@ created_at: 2026-08-13
 reviewed_at: 2026-08-13
 reviewed_ref: 808ac89eaf3e8eba529b356bd80d4509b9a2a293
 normative: MUST
-enforcement_status: implemented
+enforcement_status: partial
 enforcement_scope: Bounded Slack reviewer and organization-member approval modes only
 invariant_ids:
   - INV-12
@@ -40,6 +40,7 @@ Permission mode can change the read audience; it does not delegate approval.
 
 ## Enforcement and verification
 
-The bounded Slack paths enforce this rule and founder-live evidence confirmed
-the second actor received no unintended result. This is not a global role or
-delegation system.
+The bounded Slack paths enforce this rule, and focused founder-live evidence
+observed the second actor receiving no unintended result. That receipt is not
+yet promoted into an exact qualification report, and this is not a global role
+or delegation system.

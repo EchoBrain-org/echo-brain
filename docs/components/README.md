@@ -52,5 +52,5 @@ Each component page records or links:
 The checked source-boundary registry at
 [`tools/workspace-source-boundaries.v1.json`](../../tools/workspace-source-boundaries.v1.json)
 is the machine-readable inventory for package, service, and local-organization
-workspaces. A later validation checkpoint in this branch will require each
-registered workspace to remain reachable from this catalog.
+workspaces. `npm run check:docs` requires every registered workspace to remain
+reachable from this catalog.

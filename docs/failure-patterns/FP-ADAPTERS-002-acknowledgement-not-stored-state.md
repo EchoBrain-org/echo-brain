@@ -30,9 +30,9 @@ evidence_ids:
 implementation_refs:
   - commit:8d61edada1cf994678aa7c2201c47ff08753ea08
 regression_test_refs:
-  - tests/adapters/slack-reactions-approval-surface.test.ts@8d61eda
-  - tests/product/slack-reviewer-publication.test.ts@8d61eda
-  - tests/adapters/slack-web-api-client.test.ts@8d61eda
+  - tests/adapters/slack-reactions-approval-surface.test.ts@8d61edada1cf994678aa7c2201c47ff08753ea08
+  - tests/product/slack-reviewer-publication.test.ts@8d61edada1cf994678aa7c2201c47ff08753ea08
+  - tests/adapters/slack-web-api-client.test.ts@8d61edada1cf994678aa7c2201c47ff08753ea08
 risk_decision_id: null
 residual_risk: null
 next_review_at: null

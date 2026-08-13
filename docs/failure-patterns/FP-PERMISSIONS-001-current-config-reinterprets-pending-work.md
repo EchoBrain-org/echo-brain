@@ -31,8 +31,8 @@ implementation_refs:
   - commit:4b505021b03255c870695e0fba56a2b74879d86a
   - commit:2fab8152abd441f3e4927babe3d6d6d909f22450
 regression_test_refs:
-  - tests/machine/operator-lifecycle-cli.test.ts@4b50502
-  - tests/product/slack-reviewer-publication.test.ts@8d61eda
+  - tests/machine/operator-lifecycle-cli.test.ts@4b505021b03255c870695e0fba56a2b74879d86a
+  - tests/product/slack-reviewer-publication.test.ts@8d61edada1cf994678aa7c2201c47ff08753ea08
 risk_decision_id: null
 residual_risk: null
 next_review_at: null

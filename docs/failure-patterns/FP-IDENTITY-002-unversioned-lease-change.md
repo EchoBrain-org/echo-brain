@@ -31,8 +31,8 @@ evidence_ids:
 implementation_refs:
   - commit:280db80479a39ba51708b5923cc4b3eb3cfcd7ef
 regression_test_refs:
-  - packages/organization-api/test/access-lease-request.test.ts@280db80
-  - tests/product/local-organization-coordinator.test.ts@280db80
+  - packages/organization-api/test/access-lease-request.test.ts@280db80479a39ba51708b5923cc4b3eb3cfcd7ef
+  - tests/product/local-organization-coordinator.test.ts@280db80479a39ba51708b5923cc4b3eb3cfcd7ef
 risk_decision_id: null
 residual_risk: null
 next_review_at: null

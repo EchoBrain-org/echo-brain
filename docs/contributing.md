@@ -24,6 +24,8 @@ together with stable IDs.
 ## Required metadata
 
 Durable records use YAML front matter. Use the template for the record kind.
+The checker intentionally accepts only the flat scalar-and-list subset used by
+the templates; nested mappings and inline arrays are outside schema V1.
 At minimum record:
 
 ```yaml
@@ -145,3 +147,12 @@ A behavior-changing pull request should answer:
 
 Prefer links over duplicated prose. Keep component pages short enough to act as
 maps; put exact contracts in reference documents and executable schemas.
+
+## Verification
+
+Run `npm run check:docs` while editing durable records. The check validates
+metadata and stable IDs, relationships, component/workspace coverage, local
+links, exact qualification matrices and results, evidence-index hashes,
+historical implementation and regression references, and a bounded set of
+private-material leak signatures. Its negative cases run with the normal test
+suite.
