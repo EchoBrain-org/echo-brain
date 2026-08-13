@@ -87,10 +87,24 @@ The Slack administrator routes implement the minimum-v1 organization-tool
 contract documented in
 [`organization-control-plane.md`](../../docs/architecture/organization-control-plane.md).
 An active owner supplies a bot token and public channel; the Authority verifies
-the exact provider identity, required scopes, and channel before storing the
-token in mode-0600 secret storage. A historical profileless connection remains
-usable by its existing binding and grants, but becomes employee-connectable
-only after explicit re-verification promotes that same connection in place.
+the exact provider identity, required scopes, canonical non-null Slack app ID,
+and channel before storing the token in mode-0600 secret storage. The app proof
+comes from `bots.info` for the bot established by `auth.test`, not from an app
+ID that might be absent from `auth.test` or from a Slack message. A historical
+profileless connection remains usable by its existing binding and grants, but
+becomes employee-connectable only after explicit re-verification promotes that
+same connection in place.
+
+The same owner-only Slack onboarding operation also repairs a historical
+profileless or ready tool whose stored app ID is `null`. This is explicit
+re-onboarding, never a startup migration or a raw database edit: the Authority
+reads the retained opaque secret handle privately, verifies it with Slack
+again, requires the submitted credential to match rather than rotating it, and
+asks the control plane to promote the connection and every exact active Slack
+approval binding atomically. Connection IDs, binding IDs, grants, secret
+handles, and prior audit rows are preserved; the repair appends a fresh audit
+entry. The bot token is neither returned by the route nor logged, rendered,
+stored in SQLite, or placed in browser storage.
 
 The browser console creates invitation secrets locally with Web Crypto and
 sends only their digest to the authority. Its invitation records the current

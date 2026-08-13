@@ -29,6 +29,7 @@ export {
   type BeginSlackIdentityLinkChallengeInput,
   type BegunSlackIdentityLinkChallenge,
   type LegacySlackOrganizationTool,
+  type UpgradeableSlackOrganizationTool,
   type CompleteSlackIdentityLinkChallengeInput,
   type CompletedSlackIdentityLink,
   type ActivateExistingSlackApprovalInput,

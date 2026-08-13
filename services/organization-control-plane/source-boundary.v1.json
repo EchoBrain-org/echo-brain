@@ -16,7 +16,8 @@
     "services/organization-control-plane/migrations/0001_organization_control_plane.sql",
     "services/organization-control-plane/migrations/0002_organization_tool_public_configuration.sql",
     "services/organization-control-plane/migrations/0003_single_canonical_slack_promotion.sql",
-    "services/organization-control-plane/migrations/0004_slack_enterprise_grid_user_ids.sql"
+    "services/organization-control-plane/migrations/0004_slack_enterprise_grid_user_ids.sql",
+    "services/organization-control-plane/migrations/0005_slack_app_identity_promotion.sql"
   ],
   "layer_rules": [
     {

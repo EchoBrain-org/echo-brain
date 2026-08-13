@@ -3,11 +3,13 @@ import {
   existsSync,
   lstatSync,
   mkdtempSync,
+  readFileSync,
   realpathSync,
   rmSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import Database from "better-sqlite3";
 import { afterEach, describe, expect, it } from "vitest";
 import {
   canonicalSha256,
@@ -23,6 +25,7 @@ import {
   type CompletedSlackIdentityLink,
   type OnboardSlackOrganizationToolInput,
 } from "../src/index.js";
+import { migrateOrganizationControlDatabaseWithMigrations } from "../src/persistence/migrate.js";
 
 const directories: string[] = [];
 const NOW = "2026-07-29T20:00:00.000Z";
@@ -47,6 +50,85 @@ function database() {
     )
     .run(ORGANIZATION_ID, AUTHORITY_ID, digest("authority"), NOW);
   return database;
+}
+
+const V4_MIGRATION_FILENAMES = [
+  "0001_organization_control_plane.sql",
+  "0002_organization_tool_public_configuration.sql",
+  "0003_single_canonical_slack_promotion.sql",
+  "0004_slack_enterprise_grid_user_ids.sql",
+] as const;
+
+function migration(filename: string, version: number) {
+  const sql = readFileSync(
+    new URL(`../migrations/${filename}`, import.meta.url),
+    "utf8",
+  );
+  return { version, filename, sql, sha256: digest(sql) };
+}
+
+function databaseThroughV4() {
+  const integrationDatabase = new Database(":memory:");
+  migrateOrganizationControlDatabaseWithMigrations(
+    integrationDatabase,
+    V4_MIGRATION_FILENAMES.map((filename, index) =>
+      migration(filename, index + 1),
+    ),
+  );
+  integrationDatabase
+    .prepare(
+      `INSERT INTO organization_control_plane_metadata (
+         singleton, control_plane_id, organization_id, authority_id,
+         authority_descriptor_sha256, created_at
+       ) VALUES (1, 'ocp_test-control-plane', ?, ?, ?, ?)`,
+    )
+    .run(ORGANIZATION_ID, AUTHORITY_ID, digest("authority"), NOW);
+  return integrationDatabase;
+}
+
+function migrateDatabaseToV5(integrationDatabase: Database.Database): void {
+  migrateOrganizationControlDatabaseWithMigrations(integrationDatabase, [
+    ...V4_MIGRATION_FILENAMES.map((filename, index) =>
+      migration(filename, index + 1),
+    ),
+    migration("0005_slack_app_identity_promotion.sql", 5),
+  ]);
+}
+
+function insertHistoricalSlackBinding(
+  integrationDatabase: Database.Database,
+  input: {
+    binding_id: string;
+    installation_id: string;
+    adapter_instance_id: string;
+    connection_id: string;
+    configuration: Readonly<Record<string, unknown>>;
+  },
+): void {
+  const configurationJson = JSON.stringify(input.configuration);
+  integrationDatabase.prepare(
+    `INSERT INTO organization_adapter_bindings (
+       adapter_binding_id, organization_id, product_namespace,
+       installation_id, installation_key_id, adapter_kind, adapter_id,
+       adapter_instance_id, adapter_version, connection_id,
+       public_configuration_json, public_configuration_sha256, status,
+       created_by_principal_id, created_by_membership_id, bound_at,
+       revoked_at, revocation_reason
+     ) VALUES (?, ?, 'echo-brain', ?, ?, 'approval-surface',
+       'slack-reactions', ?, '1.0.0', ?, ?, ?, 'active', ?, ?, ?, NULL, NULL)`,
+  ).run(
+    input.binding_id,
+    ORGANIZATION_ID,
+    input.installation_id,
+    digest(`${input.installation_id}-key`),
+    input.adapter_instance_id,
+    input.connection_id,
+    configurationJson,
+    sha256Digest(configurationJson),
+    PRINCIPAL_ID,
+    MEMBERSHIP_ID,
+    NOW,
+  );
 }
 
 function organizationToolInput(
@@ -166,6 +248,238 @@ afterEach(() => {
 });
 
 describe("organization integrations repository", () => {
+  it("promotes a ready null-app Slack tool and every exact binding atomically", () => {
+    const integrationDatabase = databaseThroughV4();
+    const repository = new OrganizationIntegrationsRepository(
+      integrationDatabase,
+      { organization_id: ORGANIZATION_ID, authority_id: AUTHORITY_ID },
+    );
+    const secretHandle = "sch_12121212-1212-4121-8121-121212121212";
+    const initial = organizationToolInput("null-app-ready", secretHandle);
+    repository.onboardSlackOrganizationTool({
+      ...initial,
+      connection: {
+        ...initial.connection,
+        app_id: null as unknown as string,
+      },
+    });
+    const nullAppTool = repository.activeSlackOrganizationTool()!;
+    const nullBinding = {
+      approve_reaction: nullAppTool.approve_reaction,
+      channel_id: nullAppTool.channel_id,
+      reject_reaction: nullAppTool.reject_reaction,
+      slack_app_id: null,
+      slack_bot_id: nullAppTool.bot_id,
+      slack_bot_user_id: nullAppTool.bot_user_id,
+      slack_enterprise_id: nullAppTool.enterprise_id,
+    };
+    for (const suffix of ["one", "two", "three"] as const) {
+      insertHistoricalSlackBinding(integrationDatabase, {
+        binding_id: `bnd_app-promotion-${suffix}`,
+        installation_id: `ins_app-promotion-${suffix}`,
+        adapter_instance_id: `app-promotion-${suffix}`,
+        connection_id: nullAppTool.connection_id,
+        configuration: nullBinding,
+      });
+    }
+    integrationDatabase.prepare(
+      `INSERT INTO organization_permission_grants (
+         permission_grant_id, organization_id, adapter_binding_id,
+         principal_id, membership_id, action, resource_scope_json, status,
+         granted_by_principal_id, granted_by_membership_id, granted_at,
+         revoked_at, revocation_reason
+       ) VALUES ('pgr_app-promotion', ?, 'bnd_app-promotion-one', ?, ?,
+         'approve', '{}', 'active', ?, ?, ?, NULL, NULL)`,
+    ).run(
+      ORGANIZATION_ID,
+      PRINCIPAL_ID,
+      MEMBERSHIP_ID,
+      PRINCIPAL_ID,
+      MEMBERSHIP_ID,
+      NOW,
+    );
+    migrateDatabaseToV5(integrationDatabase);
+    const before = {
+      connection: nullAppTool.connection_id,
+      activated_at: integrationDatabase.prepare(
+        `SELECT activated_at FROM organization_tool_connections
+         WHERE connection_id = ?`,
+      ).get(nullAppTool.connection_id),
+      bindings: integrationDatabase.prepare(
+        `SELECT adapter_binding_id FROM organization_adapter_bindings
+         ORDER BY adapter_binding_id`,
+      ).all() as Array<{ adapter_binding_id: string }>,
+      grants: integrationDatabase.prepare(
+        `SELECT permission_grant_id, adapter_binding_id
+         FROM organization_permission_grants ORDER BY permission_grant_id`,
+      ).all(),
+    };
+    const promotion = organizationToolInput("promote-ready-app", secretHandle);
+    const promoted = repository.onboardSlackOrganizationTool(promotion);
+
+    expect(promoted).toMatchObject({
+      connection_id: before.connection,
+      activated_at: NOW,
+    });
+    expect(repository.activeSlackOrganizationTool()).toMatchObject({
+      connection_id: before.connection,
+      app_id: "A123APP",
+    });
+    expect(repository.upgradeableSlackOrganizationTool()).toBeNull();
+    expect(
+      integrationDatabase.prepare(
+        `SELECT adapter_binding_id,
+                json_extract(public_configuration_json, '$.slack_app_id') AS app_id
+         FROM organization_adapter_bindings ORDER BY adapter_binding_id`,
+      ).all(),
+    ).toEqual(
+      before.bindings.map((row) => ({ ...row, app_id: "A123APP" })),
+    );
+    expect(
+      integrationDatabase.prepare(
+        `SELECT permission_grant_id, adapter_binding_id
+         FROM organization_permission_grants ORDER BY permission_grant_id`,
+      ).all(),
+    ).toEqual(before.grants);
+    const audit = integrationDatabase.prepare(
+      `SELECT reason_code, detail_json FROM organization_integration_audit
+       WHERE command_id = ?`,
+    ).get(promotion.command_id) as { reason_code: string; detail_json: string };
+    const detail = JSON.parse(audit.detail_json) as {
+      app_identity_promotion: {
+        schema_version: number;
+        kind: string;
+        app_id: string;
+        binding_updates: readonly unknown[];
+      };
+    };
+    expect(audit.reason_code).toBe(
+      "null_app_identity_reverified_and_promoted",
+    );
+    expect(detail.app_identity_promotion).toMatchObject({
+      schema_version: 1,
+      kind: "slack-null-app-identity-promotion-v1",
+      app_id: "A123APP",
+    });
+    expect(detail.app_identity_promotion.binding_updates).toHaveLength(3);
+    const countsBeforeReplay = integrationDatabase.prepare(
+      `SELECT
+         (SELECT COUNT(*) FROM organization_connection_attempts) AS attempts,
+         (SELECT COUNT(*) FROM organization_integration_audit) AS audit`,
+    ).get();
+    expect(repository.onboardSlackOrganizationTool(promotion)).toEqual(promoted);
+    expect(
+      integrationDatabase.prepare(
+        `SELECT
+           (SELECT COUNT(*) FROM organization_connection_attempts) AS attempts,
+           (SELECT COUNT(*) FROM organization_integration_audit) AS audit`,
+      ).get(),
+    ).toEqual(countsBeforeReplay);
+    expect(
+      integrationDatabase.prepare(
+        `SELECT activated_at FROM organization_tool_connections
+         WHERE connection_id = ?`,
+      ).get(before.connection),
+    ).toEqual(before.activated_at);
+    repository.close();
+  });
+
+  it("rejects one mismatched null-app binding without writing any promotion state", () => {
+    const integrationDatabase = databaseThroughV4();
+    const repository = new OrganizationIntegrationsRepository(
+      integrationDatabase,
+      { organization_id: ORGANIZATION_ID, authority_id: AUTHORITY_ID },
+    );
+    const secretHandle = "sch_13131313-1313-4131-8131-131313131313";
+    const initial = organizationToolInput("null-app-mismatch", secretHandle);
+    repository.onboardSlackOrganizationTool({
+      ...initial,
+      connection: {
+        ...initial.connection,
+        app_id: null as unknown as string,
+      },
+    });
+    const tool = repository.activeSlackOrganizationTool()!;
+    const exact = {
+      approve_reaction: tool.approve_reaction,
+      channel_id: tool.channel_id,
+      reject_reaction: tool.reject_reaction,
+      slack_app_id: null,
+      slack_bot_id: tool.bot_id,
+      slack_bot_user_id: tool.bot_user_id,
+      slack_enterprise_id: tool.enterprise_id,
+    };
+    insertHistoricalSlackBinding(integrationDatabase, {
+      binding_id: "bnd_app-mismatch-exact",
+      installation_id: "ins_app-mismatch-exact",
+      adapter_instance_id: "app-mismatch-exact",
+      connection_id: tool.connection_id,
+      configuration: exact,
+    });
+    insertHistoricalSlackBinding(integrationDatabase, {
+      binding_id: "bnd_app-mismatch-wrong",
+      installation_id: "ins_app-mismatch-wrong",
+      adapter_instance_id: "app-mismatch-wrong",
+      connection_id: tool.connection_id,
+      configuration: { ...exact, channel_id: "C999WRONG" },
+    });
+    migrateDatabaseToV5(integrationDatabase);
+    const stateBefore = {
+      attempts: integrationDatabase.prepare(
+        `SELECT connection_attempt_id, status
+         FROM organization_connection_attempts ORDER BY connection_attempt_id`,
+      ).all(),
+      audit: integrationDatabase.prepare(
+        `SELECT audit_sequence, command_id
+         FROM organization_integration_audit ORDER BY audit_sequence`,
+      ).all(),
+      connection: integrationDatabase.prepare(
+        `SELECT connection_id, verification_attempt_id,
+                public_configuration_json, public_configuration_sha256
+         FROM organization_tool_connections`,
+      ).all(),
+      bindings: integrationDatabase.prepare(
+        `SELECT adapter_binding_id, public_configuration_json,
+                public_configuration_sha256
+         FROM organization_adapter_bindings ORDER BY adapter_binding_id`,
+      ).all(),
+      grants: integrationDatabase.prepare(
+        `SELECT * FROM organization_permission_grants`,
+      ).all(),
+    };
+    expect(() =>
+      repository.onboardSlackOrganizationTool(
+        organizationToolInput("mismatched-promotion", secretHandle),
+      ),
+    ).toThrow(
+      "active Slack approval binding is not an exact null-app organization-tool binding",
+    );
+    expect({
+      attempts: integrationDatabase.prepare(
+        `SELECT connection_attempt_id, status
+         FROM organization_connection_attempts ORDER BY connection_attempt_id`,
+      ).all(),
+      audit: integrationDatabase.prepare(
+        `SELECT audit_sequence, command_id
+         FROM organization_integration_audit ORDER BY audit_sequence`,
+      ).all(),
+      connection: integrationDatabase.prepare(
+        `SELECT connection_id, verification_attempt_id,
+                public_configuration_json, public_configuration_sha256
+         FROM organization_tool_connections`,
+      ).all(),
+      bindings: integrationDatabase.prepare(
+        `SELECT adapter_binding_id, public_configuration_json,
+                public_configuration_sha256
+         FROM organization_adapter_bindings ORDER BY adapter_binding_id`,
+      ).all(),
+      grants: integrationDatabase.prepare(
+        `SELECT * FROM organization_permission_grants`,
+      ).all(),
+    }).toEqual(stateBefore);
+    repository.close();
+  });
+
   it("activates one verified organization Slack tool without employee state", () => {
     const integrationDatabase = database();
     const repository = new OrganizationIntegrationsRepository(

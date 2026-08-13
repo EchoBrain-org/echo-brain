@@ -328,9 +328,16 @@ interface FakeSlack {
     team_id: string;
     enterprise_id: string | null;
     user_id: string;
-    bot_id: string | null;
-    app_id: string | null;
+    bot_id: string;
+    app_id: string;
   }>;
+  activeAuthIdentity?: {
+    team_id: string;
+    enterprise_id: string | null;
+    user_id: string;
+    bot_id: string;
+    app_id: string;
+  };
 }
 
 interface PostedTextObject {
@@ -368,14 +375,35 @@ function fakeSlack(): FakeSlack {
       const url = String(input instanceof Request ? input.url : input);
       const method = url.split('/').pop()!.split('?')[0]!;
       state.calls.push(method);
-      const json = (body: unknown) =>
+      const json = (body: unknown, headers: Record<string, string> = {}) =>
         new Response(JSON.stringify(body), {
           status: 200,
-          headers: { 'content-type': 'application/json' },
+          headers: { 'content-type': 'application/json', ...headers },
         });
       if (method === 'auth.test') {
         const identity = state.authIdentities?.shift();
-        return json({ ok: true, ...(identity ?? { user_id: 'B1' }) });
+        if (identity === undefined) delete state.activeAuthIdentity;
+        else state.activeAuthIdentity = identity;
+        return json(
+          { ok: true, ...(identity ?? { user_id: 'B1' }) },
+          identity === undefined
+            ? {}
+            : { 'x-oauth-scopes': 'chat:write,users:read' },
+        );
+      }
+      if (method === 'bots.info') {
+        const identity = state.activeAuthIdentity;
+        return identity === undefined
+          ? json({ ok: false, error: 'unknown_bot' })
+          : json({
+              ok: true,
+              bot: {
+                id: identity.bot_id,
+                user_id: identity.user_id,
+                app_id: identity.app_id,
+                deleted: false,
+              },
+            });
       }
       if (method === 'chat.postMessage') {
         if (typeof init?.body !== 'string') {
@@ -872,10 +900,11 @@ describe('slack reactions approval surface', () => {
         reaction_name: 'white_check_mark',
       },
     ]);
-    expect(slack.calls.slice(-3)).toEqual([
+    expect(slack.calls.slice(-4)).toEqual([
       'reactions.get',
       'conversations.replies',
       'auth.test',
+      'bots.info',
     ]);
     expect(decisionStore.resolutionInputs[0]?.metadata).toMatchObject({
       authorization: AUTHORIZATION_EVIDENCE,

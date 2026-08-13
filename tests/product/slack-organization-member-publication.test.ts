@@ -73,11 +73,12 @@ function fetchWithApproval(
 ): typeof fetch {
   return (async (url: string | URL | Request, init?: RequestInit) => {
     const method = String(url instanceof Request ? url.url : url).split('/').pop()!.split('?')[0];
-    const json = (body: unknown) => new Response(JSON.stringify(body), { status: 200, headers: { 'content-type': 'application/json' } });
+    const json = (body: unknown, headers: Record<string, string> = {}) => new Response(JSON.stringify(body), { status: 200, headers: { 'content-type': 'application/json', ...headers } });
     if (method === 'chat.postMessage') { const body = JSON.parse(String(init?.body)) as Record<string, unknown>; postBodies.push(body); return json({ ok: true, channel: 'C012CHANNEL', ts: '1700.100000', message: { ts: '1700.100000', text: body.text, blocks: body.blocks } }); }
     if (method === 'reactions.get') return json({ ok: true, message: { ts: '1700.100000', text: postBodies[0]?.text, blocks: postBodies[0]?.blocks, reactions: [{ name: reactionName, users: [REVIEWER], count: 1 }] } });
     if (method === 'conversations.replies') return json({ ok: true, messages: [{ ts: '1700.100000', user: 'U012BOTUSER', text: 'card' }] });
-    if (method === 'auth.test') return json({ ok: true, team_id: 'T012ABCDEF', enterprise_id: null, user_id: 'U012BOTUSER', bot_id: 'B012BOTID', app_id: 'A012APPID' });
+    if (method === 'auth.test') return json({ ok: true, team_id: 'T012ABCDEF', enterprise_id: null, user_id: 'U012BOTUSER', bot_id: 'B012BOTID' }, { 'x-oauth-scopes': 'chat:write,users:read' });
+    if (method === 'bots.info') return json({ ok: true, bot: { id: 'B012BOTID', user_id: 'U012BOTUSER', app_id: 'A012APPID', deleted: false } });
     return json({ ok: false, error: 'unknown_method' });
   }) as typeof fetch;
 }

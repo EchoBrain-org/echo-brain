@@ -479,32 +479,90 @@ export class SlackWebIntegrationProvider implements SlackIntegrationProvider {
     token: string,
     signal?: AbortSignal,
   ): Promise<VerifiedSlackConnection> {
-    const response = await this.call(token, 'auth.test', {}, signal);
-    if (response.scopes === null) {
+    const authTest = await this.call(token, 'auth.test', {}, signal);
+    if (authTest.scopes === null) {
       throw new SlackIntegrationProviderError(
         'Slack did not report the granted OAuth scopes',
         'invalid_response',
       );
     }
+    if (!authTest.scopes.includes('users:read')) {
+      throw new SlackIntegrationProviderError(
+        'Slack connection cannot verify its app identity without users:read',
+        'unauthorized',
+      );
+    }
+    const teamId = requiredId(authTest.value['team_id'], 'team_id', 'T');
+    const enterpriseId = optionalId(
+      authTest.value['enterprise_id'],
+      'enterprise_id',
+      'E',
+    );
+    const botUserId = requiredSlackUserId(
+      authTest.value['user_id'],
+      'user_id',
+    );
+    const botId = requiredId(authTest.value['bot_id'], 'bot_id', 'B');
+    const authTestAppId = optionalId(
+      authTest.value['app_id'],
+      'app_id',
+      'A',
+    );
+    const botInfo = await this.call(
+      token,
+      'bots.info',
+      { bot: botId },
+      signal,
+    );
+    let bot: Record<string, unknown>;
+    let observedBotId: string;
+    let observedBotUserId: string;
+    let appId: string;
+    try {
+      bot = record(botInfo.value['bot'], 'bots.info bot');
+      observedBotId = requiredId(bot['id'], 'bot.id', 'B');
+      observedBotUserId = requiredSlackUserId(bot['user_id'], 'bot.user_id');
+      appId = requiredId(bot['app_id'], 'bot.app_id', 'A');
+    } catch {
+      throw new SlackIntegrationProviderError(
+        'Slack bots.info response does not prove an app identity',
+        'invalid_response',
+      );
+    }
+    if (bot['deleted'] !== false) {
+      throw new SlackIntegrationProviderError(
+        'Slack bot is deleted or has an invalid deletion state',
+        bot['deleted'] === true ? 'unauthorized' : 'invalid_response',
+      );
+    }
+    if (observedBotId !== botId || observedBotUserId !== botUserId) {
+      throw new SlackIntegrationProviderError(
+        'Slack bot identity does not match auth.test',
+        'unauthorized',
+      );
+    }
+    if (authTestAppId !== null && authTestAppId !== appId) {
+      throw new SlackIntegrationProviderError(
+        'Slack app identity does not match auth.test',
+        'unauthorized',
+      );
+    }
     const connection = {
-      team_id: requiredId(response.value['team_id'], 'team_id', 'T'),
-      enterprise_id: optionalId(
-        response.value['enterprise_id'],
-        'enterprise_id',
-        'E',
-      ),
-      bot_user_id: requiredSlackUserId(response.value['user_id'], 'user_id'),
-      bot_id: requiredId(response.value['bot_id'], 'bot_id', 'B'),
-      app_id: optionalId(response.value['app_id'], 'app_id', 'A'),
-      granted_scopes: response.scopes,
+      team_id: teamId,
+      enterprise_id: enterpriseId,
+      bot_user_id: botUserId,
+      bot_id: botId,
+      app_id: appId,
+      granted_scopes: authTest.scopes,
       verification_evidence_sha256: canonicalSha256({
-        method: 'slack_auth_test',
-        team_id: response.value['team_id'],
-        enterprise_id: response.value['enterprise_id'] ?? null,
-        bot_user_id: response.value['user_id'],
-        bot_id: response.value['bot_id'],
-        app_id: response.value['app_id'] ?? null,
-        granted_scopes: response.scopes,
+        method: 'slack_auth_test_bots_info',
+        team_id: teamId,
+        enterprise_id: enterpriseId,
+        bot_user_id: botUserId,
+        bot_id: botId,
+        app_id: appId,
+        bot_deleted: false,
+        granted_scopes: authTest.scopes,
       }),
     } satisfies VerifiedSlackConnection;
     return Object.freeze(connection);

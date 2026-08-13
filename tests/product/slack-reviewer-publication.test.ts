@@ -241,19 +241,32 @@ function fakeSlack(): FakeSlack {
     fetchImpl: (async (input: string | URL | Request, init?: RequestInit) => {
       const url = String(input instanceof Request ? input.url : input);
       const method = url.split('/').pop()!.split('?')[0]!;
-      const json = (body: unknown) =>
+      const json = (body: unknown, headers: Record<string, string> = {}) =>
         new Response(JSON.stringify(body), {
           status: 200,
-          headers: { 'content-type': 'application/json' },
+          headers: { 'content-type': 'application/json', ...headers },
         });
       if (method === 'auth.test') {
+        return json(
+          {
+            ok: true,
+            team_id: 'T012ABCDEF',
+            enterprise_id: null,
+            user_id: 'U012BOTUSER',
+            bot_id: 'B012BOTID',
+          },
+          { 'x-oauth-scopes': 'chat:write,users:read' },
+        );
+      }
+      if (method === 'bots.info') {
         return json({
           ok: true,
-          team_id: 'T012ABCDEF',
-          enterprise_id: null,
-          user_id: 'U012BOTUSER',
-          bot_id: 'B012BOTID',
-          app_id: 'A012APPID',
+          bot: {
+            id: 'B012BOTID',
+            user_id: 'U012BOTUSER',
+            app_id: 'A012APPID',
+            deleted: false,
+          },
         });
       }
       if (method === 'chat.postMessage') {

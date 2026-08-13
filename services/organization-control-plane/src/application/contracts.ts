@@ -17,7 +17,7 @@ export interface VerifiedSlackConnection {
   enterprise_id: string | null;
   bot_user_id: string;
   bot_id: string;
-  app_id: string | null;
+  app_id: string;
   granted_scopes: readonly string[];
   verification_evidence_sha256: `sha256:${string}`;
 }
@@ -251,6 +251,17 @@ export interface ActiveSlackOrganizationTool {
 export interface LegacySlackOrganizationTool
   extends ActiveSlackOrganizationTool {
   activated_at: string;
+}
+
+/**
+ * A ready v1 Slack organization tool created before Slack app identity was
+ * mandatory. It may only be upgraded by re-running the explicit onboarding
+ * operation with a freshly verified, canonical app ID.
+ */
+export interface UpgradeableSlackOrganizationTool
+  extends ActiveSlackOrganizationTool {
+  activated_at: string;
+  app_id: null;
 }
 
 export interface SlackIdentityLinkInstallation {

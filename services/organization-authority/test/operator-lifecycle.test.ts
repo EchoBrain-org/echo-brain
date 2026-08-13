@@ -1225,7 +1225,7 @@ describe('organization authority operator lifecycle', () => {
         paths.integrations_database_path,
       ),
     ).toMatchObject({
-      schema_version: 4,
+      schema_version: 5,
       control_plane_id: integrationsIdentity.control_plane_id,
     });
     expect(
@@ -1281,7 +1281,7 @@ describe('organization authority operator lifecycle', () => {
         paths.integrations_database_path,
       ),
     ).toMatchObject({
-      schema_version: 4,
+      schema_version: 5,
       control_plane_id: integrationsIdentity.control_plane_id,
     });
   });

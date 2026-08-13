@@ -18,6 +18,15 @@ const CONNECTION = {
   bot_id: 'B123BOT',
   app_id: 'A123APP',
 } as const;
+const BOT_INFO = {
+  ok: true,
+  bot: {
+    id: CONNECTION.bot_id,
+    user_id: CONNECTION.user_id,
+    app_id: CONNECTION.app_id,
+    deleted: false,
+  },
+} as const;
 const HUMAN = {
   id: 'U123ZHEN',
   team_id: 'T123TEAM',
@@ -108,8 +117,36 @@ function slackResponse(
 }
 
 function slackFetch(...responses: Response[]) {
-  const fetch = vi.fn<typeof globalThis.fetch>();
-  for (const response of responses) fetch.mockResolvedValueOnce(response);
+  let responseIndex = 0;
+  let authTest: Readonly<Record<string, unknown>> | null = null;
+  const fetch = vi.fn<typeof globalThis.fetch>(async (input) => {
+    const url = String(input);
+    if (url === 'https://slack.com/api/bots.info') {
+      const botId = authTest?.['bot_id'];
+      const botUserId = authTest?.['user_id'];
+      const appId = authTest?.['app_id'];
+      return slackResponse({
+        ...BOT_INFO,
+        bot: {
+          ...BOT_INFO.bot,
+          ...(typeof botId === 'string' ? { id: botId } : {}),
+          ...(typeof botUserId === 'string' ? { user_id: botUserId } : {}),
+          ...(typeof appId === 'string' ? { app_id: appId } : {}),
+        },
+      });
+    }
+    const response = responses[responseIndex++];
+    if (response === undefined) {
+      throw new Error(`Unexpected Slack test request: ${url}`);
+    }
+    if (url === 'https://slack.com/api/auth.test') {
+      const body: unknown = await response.clone().json();
+      authTest = body !== null && typeof body === 'object' && !Array.isArray(body)
+        ? body as Readonly<Record<string, unknown>>
+        : null;
+    }
+    return response;
+  });
   return fetch;
 }
 
@@ -284,7 +321,103 @@ describe('Slack integration provider verification', () => {
       team_id: 'T123TEAM',
       user_id: 'U123ZHEN',
     });
-    expect(fetch).toHaveBeenCalledTimes(2);
+    expect(fetch).toHaveBeenCalledTimes(3);
+    expect(fetch).toHaveBeenNthCalledWith(
+      2,
+      'https://slack.com/api/bots.info',
+      expect.objectContaining({
+        body: new URLSearchParams({ bot: CONNECTION.bot_id }),
+      }),
+    );
+  });
+
+  it('derives the app identity from the active bot returned by bots.info', async () => {
+    const authTestWithoutAppId = { ...CONNECTION } as Record<string, unknown>;
+    delete authTestWithoutAppId.app_id;
+    const fetch = vi.fn<typeof globalThis.fetch>(async (input) => {
+      if (String(input) === 'https://slack.com/api/auth.test') {
+        return slackResponse(authTestWithoutAppId);
+      }
+      if (String(input) === 'https://slack.com/api/bots.info') {
+        return slackResponse(BOT_INFO);
+      }
+      throw new Error(`Unexpected Slack test request: ${String(input)}`);
+    });
+    const connection = await new SlackWebIntegrationProvider({ fetch })
+      .verifyConnection(TOKEN);
+
+    expect(connection).toMatchObject({
+      bot_id: CONNECTION.bot_id,
+      bot_user_id: CONNECTION.user_id,
+      app_id: CONNECTION.app_id,
+    });
+    expect(connection.verification_evidence_sha256).toBe(canonicalSha256({
+      method: 'slack_auth_test_bots_info',
+      team_id: CONNECTION.team_id,
+      enterprise_id: CONNECTION.enterprise_id,
+      bot_user_id: CONNECTION.user_id,
+      bot_id: CONNECTION.bot_id,
+      app_id: CONNECTION.app_id,
+      bot_deleted: false,
+      granted_scopes: ['chat:write', 'reactions:read', 'users:read'],
+    }));
+  });
+
+  it.each([
+    {
+      label: 'a different bot id',
+      bot: { ...BOT_INFO.bot, id: 'B999OTHER' },
+      code: 'unauthorized',
+    },
+    {
+      label: 'a different bot user id',
+      bot: { ...BOT_INFO.bot, user_id: 'U999OTHER' },
+      code: 'unauthorized',
+    },
+    {
+      label: 'a deleted bot',
+      bot: { ...BOT_INFO.bot, deleted: true },
+      code: 'unauthorized',
+    },
+    {
+      label: 'an app id that conflicts with auth.test',
+      bot: { ...BOT_INFO.bot, app_id: 'A999OTHER' },
+      code: 'unauthorized',
+    },
+    {
+      label: 'no app id',
+      bot: { id: CONNECTION.bot_id, user_id: CONNECTION.user_id, deleted: false },
+      code: 'invalid_response',
+    },
+  ])('rejects bots.info when it reports $label', async ({ bot, code }) => {
+    const fetch = vi.fn<typeof globalThis.fetch>(async (input) => {
+      if (String(input) === 'https://slack.com/api/auth.test') {
+        return slackResponse(CONNECTION);
+      }
+      if (String(input) === 'https://slack.com/api/bots.info') {
+        return slackResponse({ ok: true, bot });
+      }
+      throw new Error(`Unexpected Slack test request: ${String(input)}`);
+    });
+
+    await expect(
+      new SlackWebIntegrationProvider({ fetch }).verifyConnection(TOKEN),
+    ).rejects.toMatchObject({
+      name: 'SlackIntegrationProviderError',
+      code,
+    });
+  });
+
+  it('requires users:read before it attempts bot app discovery', async () => {
+    const fetch = slackFetch(slackResponse(CONNECTION, 'chat:write'));
+
+    await expect(
+      new SlackWebIntegrationProvider({ fetch }).verifyConnection(TOKEN),
+    ).rejects.toMatchObject({
+      name: 'SlackIntegrationProviderError',
+      code: 'unauthorized',
+    });
+    expect(fetch).toHaveBeenCalledTimes(1);
   });
 
   it('accepts an app-created human and hashes the exact observed app-user flag', async () => {
@@ -842,7 +975,7 @@ describe('Slack integration provider verification', () => {
     });
   });
 
-  it('withholds pilot proof when the stored app identity is unavailable', async () => {
+  it('rejects a legacy connection whose stored app identity is unavailable', async () => {
     const provider = new SlackWebIntegrationProvider({
       fetch: slackFetch(
         slackResponse({ ...CONNECTION, app_id: null }),
@@ -873,10 +1006,9 @@ describe('Slack integration provider verification', () => {
         expected_app_id: null,
         expected_presentation: PILOT_PRESENTATION_EXPECTATION,
       }),
-    ).resolves.toEqual({
-      observed: true,
-      presentation_candidate_observed: true,
-      message_presentation_sha256: null,
+    ).rejects.toMatchObject({
+      name: 'SlackIntegrationProviderError',
+      code: 'unauthorized',
     });
   });
 
@@ -904,7 +1036,7 @@ describe('Slack integration provider verification', () => {
       name: 'SlackIntegrationProviderError',
       code: 'unauthorized',
     });
-    expect(fetch).toHaveBeenCalledTimes(1);
+    expect(fetch).toHaveBeenCalledTimes(2);
   });
 
   it('rejects a pilot audience block with no independent ordinary block', async () => {
@@ -1091,7 +1223,7 @@ describe('Slack integration provider verification', () => {
       channel_id: 'C123CHANNEL',
       challenge_message_ts: CHALLENGE_MESSAGE_TS,
     });
-    const post = fetch.mock.calls[1];
+    const post = fetch.mock.calls[2];
     expect(post?.[0]).toBe('https://slack.com/api/chat.postMessage');
     const body = post?.[1]?.body;
     expect(body).toBeInstanceOf(URLSearchParams);
@@ -1173,7 +1305,7 @@ describe('Slack integration provider verification', () => {
       ),
     });
     expect(fetch).toHaveBeenNthCalledWith(
-      2,
+      3,
       'https://slack.com/api/conversations.replies',
       expect.objectContaining({
         body: new URLSearchParams({
@@ -1184,7 +1316,7 @@ describe('Slack integration provider verification', () => {
       }),
     );
     expect(fetch).toHaveBeenNthCalledWith(
-      3,
+      4,
       'https://slack.com/api/users.info',
       expect.objectContaining({
         body: new URLSearchParams({ user: 'U123ZHEN' }),

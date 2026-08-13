@@ -51,7 +51,7 @@ const TABLES_BY_OBSERVABLE_BEHAVIOR = {
 
 const TABLES = Object.values(TABLES_BY_OBSERVABLE_BEHAVIOR).flat().sort();
 const V1_SCHEMA_CONTRACT_SHA256 =
-  "sha256:6d4c0a81c7a3d2f59d394bae62d75a7f27395edafe6fcd8640213880beba3e32";
+  "sha256:1b2359aaf36ef7c3c6e10599a918f51192ddb9e418b406a01a82484922db5758";
 
 const IDS = {
   authority: "oau_test-authority",
@@ -80,6 +80,8 @@ const LEGACY_SLACK_PUBLIC_CONFIGURATION_JSON =
   '{"approve_reaction":"white_check_mark","channel_id":"C123CHANNEL","reject_reaction":"x","slack_app_id":null,"slack_bot_id":"B123BOT","slack_bot_user_id":"U123BOT","slack_enterprise_id":null}';
 const PROMOTED_LEGACY_SLACK_PUBLIC_CONFIGURATION_JSON =
   '{"approve_reaction":"white_check_mark","channel_id":"C123CHANNEL","organization_tool_profile":"slack-organization-tool-v1","reject_reaction":"x","schema_version":1,"slack_app_id":null,"slack_bot_id":"B123BOT","slack_bot_user_id":"U123BOT","slack_enterprise_id":null}';
+const PROMOTED_LEGACY_SLACK_BINDING_CONFIGURATION_JSON =
+  '{"approve_reaction":"white_check_mark","channel_id":"C123CHANNEL","reject_reaction":"x","slack_app_id":"A123APP","slack_bot_id":"B123BOT","slack_bot_user_id":"U123BOT","slack_enterprise_id":null}';
 const READY_SLACK_PUBLIC_CONFIGURATION_JSON =
   '{"channel_id":"C123CHANNEL","organization_tool_profile":"slack-organization-tool-v1","schema_version":1,"slack_app_id":"A123APP","slack_bot_id":"B123BOT","slack_bot_user_id":"U123BOT","slack_enterprise_id":null}';
 const READY_SLACK_APPROVAL_BINDING_CONFIGURATION_JSON =
@@ -94,6 +96,7 @@ const MIGRATION_SHA256 = [
   "sha256:b8dfb1a432ec709a7fa8298ad105e25987ab40aca6e238fa685cc01f2d5d7425",
   "sha256:83c7ad70666693deed991861dfe55e8e949127421c5e70d79127905c7264aa7b",
   "sha256:8697e5d7c58097e07754e7715200b6a2beaffb5edc6ec30303bcac08bb899a0a",
+  "sha256:43cb3a11610f162ffe78e45fdd6cfe2962c96332c1b1107bfbcb28167a0819c0",
 ] as const;
 
 const temporaryDirectories: string[] = [];
@@ -125,6 +128,25 @@ function controlPlaneMigrationsThroughV4(): readonly OrganizationControlMigratio
   return [
     ...controlPlaneMigrationsThroughV3(),
     "0004_slack_enterprise_grid_user_ids.sql",
+  ].map((migration, index) => {
+    if (typeof migration !== "string") return migration;
+    const sql = readFileSync(
+      new URL(`../migrations/${migration}`, import.meta.url),
+      "utf8",
+    );
+    return {
+      version: index + 1,
+      filename: migration,
+      sql,
+      sha256: digest(sql),
+    };
+  });
+}
+
+function controlPlaneMigrationsThroughV5(): readonly OrganizationControlMigration[] {
+  return [
+    ...controlPlaneMigrationsThroughV4(),
+    "0005_slack_app_identity_promotion.sql",
   ].map((migration, index) => {
     if (typeof migration !== "string") return migration;
     const sql = readFileSync(
@@ -403,7 +425,11 @@ function insertBinding(
 
 function insertGrant(
   database: Database.Database,
-  options: { id?: string; action?: "view" | "approve" | "reject" } = {},
+  options: {
+    id?: string;
+    bindingId?: string;
+    action?: "view" | "approve" | "reject";
+  } = {},
 ): void {
   database
     .prepare(
@@ -417,7 +443,7 @@ function insertGrant(
     .run(
       options.id ?? "pgr_zhen-approve",
       IDS.organization,
-      IDS.binding,
+      options.bindingId ?? IDS.binding,
       IDS.principal,
       IDS.membership,
       options.action ?? "approve",
@@ -430,7 +456,7 @@ function insertGrant(
 function seedApprovalFlow(
   database: Database.Database,
   connectionScopes = REQUIRED_SLACK_SCOPES_JSON,
-  bindingConfiguration = LEGACY_SLACK_PUBLIC_CONFIGURATION_JSON,
+  bindingConfiguration?: string,
   botUserId = "U123BOT",
 ): void {
   seedMetadata(database);
@@ -456,8 +482,141 @@ function seedApprovalFlow(
     grantedScopes: connectionScopes,
   });
   insertServiceConnection(database, { providerSubjectId: botUserId });
-  insertBinding(database, { publicConfigurationJson: bindingConfiguration });
+  insertBinding(database, {
+    ...(bindingConfiguration === undefined
+      ? {}
+      : { publicConfigurationJson: bindingConfiguration }),
+  });
   insertGrant(database);
+}
+
+function rawSlackAppPromotionFixture(): Database.Database {
+  const database = new Database(":memory:");
+  database.pragma("foreign_keys = ON");
+  const migrations = controlPlaneMigrationsThroughV5();
+  migrateOrganizationControlDatabaseWithMigrations(
+    database,
+    migrations.slice(0, 1),
+  );
+  seedApprovalFlow(database, INTERNAL_LIVE_SLACK_SCOPES_JSON);
+  migrateOrganizationControlDatabaseWithMigrations(
+    database,
+    migrations.slice(0, 4),
+  );
+  insertBinding(database, {
+    bindingId: "bnd_slack-approval-secondary",
+    installationId: "ins_test-installation-secondary",
+    adapterInstanceId: "secondary",
+    publicConfigurationJson: LEGACY_SLACK_PUBLIC_CONFIGURATION_JSON,
+  });
+  migrateOrganizationControlDatabaseWithMigrations(database, migrations);
+  return database;
+}
+
+function appendRawSlackAppPromotionAudit(
+  database: Database.Database,
+  bindingIds: readonly string[],
+): void {
+  insertPendingAttempt(database, {
+    id: "cat_raw-app-promotion",
+    ownerKind: "organization",
+    requestedScopes: REQUIRED_SLACK_SCOPES_JSON,
+  });
+  completeAttempt(database, {
+    id: "cat_raw-app-promotion",
+    subjectKind: "service_account",
+    subjectId: "U123BOT",
+    grantedScopes: REQUIRED_SLACK_SCOPES_JSON,
+    consumedAt: TIME.revoked,
+  });
+  const previousConnectionSha256 = digest(
+    LEGACY_SLACK_PUBLIC_CONFIGURATION_JSON,
+  );
+  const connectionSha256 = digest(
+    READY_SLACK_APPROVAL_BINDING_CONFIGURATION_JSON,
+  );
+  const previousBindingSha256 = digest(
+    LEGACY_SLACK_PUBLIC_CONFIGURATION_JSON,
+  );
+  const bindingSha256 = digest(
+    PROMOTED_LEGACY_SLACK_BINDING_CONFIGURATION_JSON,
+  );
+  const detailJson = JSON.stringify({
+    command_sha256: digest("raw-app-promotion-command"),
+    public_configuration_sha256: connectionSha256,
+    app_identity_promotion: {
+      schema_version: 1,
+      kind: "slack-null-app-identity-promotion-v1",
+      app_id: "A123APP",
+      previous_public_configuration_sha256: previousConnectionSha256,
+      public_configuration_sha256: connectionSha256,
+      binding_updates: bindingIds.map((adapterBindingId) => ({
+        adapter_binding_id: adapterBindingId,
+        previous_public_configuration_sha256: previousBindingSha256,
+        public_configuration_sha256: bindingSha256,
+      })),
+    },
+    result: {
+      connection_attempt_id: "cat_raw-app-promotion",
+      connection_id: IDS.connection,
+      organization_id: IDS.organization,
+      provider: "slack",
+      status: "active",
+    },
+  });
+  database
+    .prepare(
+      `INSERT INTO organization_integration_audit (
+         audit_sequence, audit_event_id, previous_entry_sha256,
+         entry_sha256, organization_id, occurred_at, actor_kind,
+         actor_principal_id, actor_membership_id, command_id, action,
+         subject_kind, subject_id, connection_id, outcome, reason_code,
+         idempotency_key, authority_checked_at, authority_evidence_sha256,
+         correlation_id, detail_json, detail_sha256
+       ) VALUES (
+         1, 'aud_raw-app-promotion', NULL, ?, ?, ?, 'membership', ?, ?,
+         'cmd_raw-app-promotion', 'organization_tool.slack.onboarded',
+         'tool_connection', ?, ?, 'succeeded',
+         'null_app_identity_reverified_and_promoted',
+         'organization-tool:slack:raw-app-promotion', ?, ?,
+         'cmd_raw-app-promotion', ?, ?
+       )`,
+    )
+    .run(
+      digest("raw-app-promotion-audit-entry"),
+      IDS.organization,
+      TIME.revoked,
+      IDS.principal,
+      IDS.membership,
+      IDS.connection,
+      IDS.connection,
+      TIME.revoked,
+      digest("raw-app-promotion-command"),
+      detailJson,
+      digest(detailJson),
+    );
+}
+
+function runRawSlackAppPromotion(database: Database.Database): void {
+  database
+    .prepare(
+      `UPDATE organization_tool_connections
+       SET granted_scopes_json = ?,
+           granted_scopes_sha256 = ?,
+           verification_attempt_id = 'cat_raw-app-promotion',
+           verification_evidence_sha256 = ?,
+           public_configuration_json = ?,
+           public_configuration_sha256 = ?
+       WHERE connection_id = ?`,
+    )
+    .run(
+      REQUIRED_SLACK_SCOPES_JSON,
+      digest(REQUIRED_SLACK_SCOPES_JSON),
+      digest("verification-evidence:cat_raw-app-promotion"),
+      READY_SLACK_APPROVAL_BINDING_CONFIGURATION_JSON,
+      digest(READY_SLACK_APPROVAL_BINDING_CONFIGURATION_JSON),
+      IDS.connection,
+    );
 }
 
 function effectivePermission(
@@ -528,8 +687,8 @@ describe("minimum organization control-plane v1 schema", () => {
   it("installs only tables assigned to observable v1 behavior", () => {
     const path = databasePath();
     const database = openOrganizationControlDatabase(path);
-    expect(currentOrganizationControlSchemaVersion()).toBe(4);
-    expect(database.pragma("user_version", { simple: true })).toBe(4);
+    expect(currentOrganizationControlSchemaVersion()).toBe(5);
+    expect(database.pragma("user_version", { simple: true })).toBe(5);
     expect(database.pragma("application_id", { simple: true })).toBe(
       organizationControlApplicationId(),
     );
@@ -552,6 +711,198 @@ describe("minimum organization control-plane v1 schema", () => {
 
     expect(lstatSync(path).mode & 0o777).toBe(0o600);
     expect(lstatSync(join(path, "..")).mode & 0o777).toBe(0o700);
+  });
+
+  it("rejects a fresh ready Slack connection without a canonical app ID", () => {
+    const database = openOrganizationControlDatabase(":memory:");
+    seedMetadata(database);
+    insertPendingAttempt(database, {
+      id: "cat_fresh-null-app",
+      ownerKind: "organization",
+      requestedScopes: REQUIRED_SLACK_SCOPES_JSON,
+    });
+    completeAttempt(database, {
+      id: "cat_fresh-null-app",
+      subjectKind: "service_account",
+      subjectId: "U123BOT",
+      grantedScopes: REQUIRED_SLACK_SCOPES_JSON,
+    });
+    expect(() =>
+      insertServiceConnection(database, {
+        attemptId: "cat_fresh-null-app",
+        publicConfigurationJson:
+          PROMOTED_LEGACY_SLACK_PUBLIC_CONFIGURATION_JSON,
+      }),
+    ).toThrow(
+      "active Slack organization connection configuration is incomplete",
+    );
+    expect(
+      database.prepare(
+        `SELECT COUNT(*) AS count FROM organization_tool_connections`,
+      ).get(),
+    ).toEqual({ count: 0 });
+    database.close();
+  });
+
+  it("cascades an audited raw app promotion as one atomic connection statement", () => {
+    const malformed = rawSlackAppPromotionFixture();
+    const malformedBefore = {
+      connection: malformed
+        .prepare(
+          `SELECT verification_attempt_id, public_configuration_json,
+                  public_configuration_sha256
+           FROM organization_tool_connections WHERE connection_id = ?`,
+        )
+        .get(IDS.connection),
+      bindings: malformed
+        .prepare(
+          `SELECT adapter_binding_id, public_configuration_json,
+                  public_configuration_sha256
+           FROM organization_adapter_bindings
+           WHERE connection_id = ? ORDER BY adapter_binding_id`,
+        )
+        .all(IDS.connection),
+    };
+    expect(() =>
+      malformed
+        .prepare(
+          `UPDATE organization_adapter_bindings
+           SET public_configuration_json = ?,
+               public_configuration_sha256 = ?
+           WHERE adapter_binding_id = ?`,
+        )
+        .run(
+          PROMOTED_LEGACY_SLACK_BINDING_CONFIGURATION_JSON,
+          digest(PROMOTED_LEGACY_SLACK_BINDING_CONFIGURATION_JSON),
+          IDS.binding,
+        ),
+    ).toThrow(
+      "adapter bindings may only be revoked or receive an audited Slack app identity",
+    );
+    appendRawSlackAppPromotionAudit(malformed, [IDS.binding]);
+    expect(() => runRawSlackAppPromotion(malformed)).toThrow(
+      "Slack app identity promotion is invalid or incomplete",
+    );
+    expect({
+      connection: malformed
+        .prepare(
+          `SELECT verification_attempt_id, public_configuration_json,
+                  public_configuration_sha256
+           FROM organization_tool_connections WHERE connection_id = ?`,
+        )
+        .get(IDS.connection),
+      bindings: malformed
+        .prepare(
+          `SELECT adapter_binding_id, public_configuration_json,
+                  public_configuration_sha256
+           FROM organization_adapter_bindings
+           WHERE connection_id = ? ORDER BY adapter_binding_id`,
+        )
+        .all(IDS.connection),
+    }).toEqual(malformedBefore);
+    malformed.close();
+
+    const database = rawSlackAppPromotionFixture();
+    const bindingIds = [IDS.binding, "bnd_slack-approval-secondary"];
+    appendRawSlackAppPromotionAudit(database, bindingIds);
+    const before = {
+      connection: database
+        .prepare(
+          `SELECT verification_attempt_id, public_configuration_json,
+                  public_configuration_sha256
+           FROM organization_tool_connections WHERE connection_id = ?`,
+        )
+        .get(IDS.connection),
+      bindings: database
+        .prepare(
+          `SELECT adapter_binding_id, public_configuration_json,
+                  public_configuration_sha256
+           FROM organization_adapter_bindings
+           WHERE connection_id = ? ORDER BY adapter_binding_id`,
+        )
+        .all(IDS.connection),
+    };
+    database.exec(
+      `CREATE TRIGGER test_abort_second_binding_promotion
+       BEFORE UPDATE ON organization_adapter_bindings
+       WHEN OLD.adapter_binding_id = 'bnd_slack-approval-secondary'
+       BEGIN
+         SELECT RAISE(ABORT, 'test second binding abort');
+       END`,
+    );
+    expect(() => runRawSlackAppPromotion(database)).toThrow(
+      "test second binding abort",
+    );
+    expect({
+      connection: database
+        .prepare(
+          `SELECT verification_attempt_id, public_configuration_json,
+                  public_configuration_sha256
+           FROM organization_tool_connections WHERE connection_id = ?`,
+        )
+        .get(IDS.connection),
+      bindings: database
+        .prepare(
+          `SELECT adapter_binding_id, public_configuration_json,
+                  public_configuration_sha256
+           FROM organization_adapter_bindings
+           WHERE connection_id = ? ORDER BY adapter_binding_id`,
+        )
+        .all(IDS.connection),
+    }).toEqual(before);
+
+    database.exec("DROP TRIGGER test_abort_second_binding_promotion");
+    expect(() => runRawSlackAppPromotion(database)).not.toThrow();
+    expect(
+      database
+        .prepare(
+          `SELECT verification_attempt_id,
+                  json_extract(
+                    public_configuration_json,
+                    '$.slack_app_id'
+                  ) AS slack_app_id
+           FROM organization_tool_connections WHERE connection_id = ?`,
+        )
+        .get(IDS.connection),
+    ).toEqual({
+      verification_attempt_id: "cat_raw-app-promotion",
+      slack_app_id: "A123APP",
+    });
+    expect(
+      database
+        .prepare(
+          `SELECT adapter_binding_id,
+                  json_extract(
+                    public_configuration_json,
+                    '$.slack_app_id'
+                  ) AS slack_app_id,
+                  public_configuration_sha256
+           FROM organization_adapter_bindings
+           WHERE connection_id = ? ORDER BY adapter_binding_id`,
+        )
+        .all(IDS.connection),
+    ).toEqual(
+      bindingIds.sort().map((adapterBindingId) => ({
+        adapter_binding_id: adapterBindingId,
+        slack_app_id: "A123APP",
+        public_configuration_sha256: digest(
+          PROMOTED_LEGACY_SLACK_BINDING_CONFIGURATION_JSON,
+        ),
+      })),
+    );
+    expect(
+      database
+        .prepare(
+          `SELECT permission_grant_id, adapter_binding_id
+           FROM organization_permission_grants
+           WHERE permission_grant_id = 'pgr_zhen-approve'`,
+        )
+        .get(),
+    ).toEqual({
+      permission_grant_id: "pgr_zhen-approve",
+      adapter_binding_id: IDS.binding,
+    });
+    database.close();
   });
 
   it("rejects missing, foreign, partial, future, and tampered databases", () => {
@@ -595,11 +946,11 @@ describe("minimum organization control-plane v1 schema", () => {
 
     const futurePath = join(path, "..", "future.sqlite");
     const future = new Database(futurePath);
-    future.pragma("user_version = 5");
+    future.pragma("user_version = 6");
     future.close();
     chmodSync(futurePath, 0o600);
     expect(() => openOrganizationControlDatabase(futurePath)).toThrow(
-      "newer than supported schema 4",
+      "newer than supported schema 5",
     );
 
     const tamperedPath = join(path, "..", "tampered.sqlite");
@@ -668,13 +1019,13 @@ describe("minimum organization control-plane v1 schema", () => {
     const path = databasePath();
     const database = new Database(path);
     database.pragma("foreign_keys = ON");
-    const migrations = controlPlaneMigrationsThroughV3();
-    expect(migrations.map(({ sha256 }) => sha256)).toEqual(
+    const v3Migrations = controlPlaneMigrationsThroughV3();
+    expect(v3Migrations.map(({ sha256 }) => sha256)).toEqual(
       MIGRATION_SHA256.slice(0, 3),
     );
     migrateOrganizationControlDatabaseWithMigrations(
       database,
-      migrations.slice(0, 1),
+      v3Migrations.slice(0, 1),
     );
     seedApprovalFlow(database, INTERNAL_LIVE_SLACK_SCOPES_JSON);
 
@@ -683,7 +1034,7 @@ describe("minimum organization control-plane v1 schema", () => {
     });
     migrateOrganizationControlDatabaseWithMigrations(
       database,
-      migrations.slice(0, 2),
+      v3Migrations.slice(0, 2),
     );
     expect(database.pragma("user_version", { simple: true })).toBe(2);
     expect(
@@ -707,7 +1058,7 @@ describe("minimum organization control-plane v1 schema", () => {
       public_configuration_json: LEGACY_SLACK_PUBLIC_CONFIGURATION_JSON,
     });
 
-    migrateOrganizationControlDatabaseWithMigrations(database, migrations);
+    migrateOrganizationControlDatabaseWithMigrations(database, v3Migrations);
     expect(database.pragma("user_version", { simple: true })).toBe(3);
     expect(
       database
@@ -786,6 +1137,12 @@ describe("minimum organization control-plane v1 schema", () => {
         .get(IDS.connection),
     ).toEqual(legacyConnectionBeforeRejectedRewrite);
 
+    migrateOrganizationControlDatabaseWithMigrations(
+      database,
+      controlPlaneMigrationsThroughV5(),
+    );
+    expect(database.pragma("user_version", { simple: true })).toBe(5);
+
     const repository = new OrganizationIntegrationsRepository(database, {
       organization_id: IDS.organization,
       authority_id: IDS.authority,
@@ -845,7 +1202,7 @@ describe("minimum organization control-plane v1 schema", () => {
         enterprise_id: null,
         bot_user_id: "U123BOT",
         bot_id: "B123BOT",
-        app_id: null,
+        app_id: "A123APP",
         granted_scopes: [
           "channels:history",
           "channels:read",
@@ -870,8 +1227,31 @@ describe("minimum organization control-plane v1 schema", () => {
     });
 
     expect(promoted.connection_id).toBe(IDS.connection);
+    const promotionAudit = database
+      .prepare(
+        `SELECT reason_code, detail_json
+         FROM organization_integration_audit WHERE command_id = ?`,
+      )
+      .get("cmd_reverify-internal-live-slack") as {
+      reason_code: string;
+      detail_json: string;
+    };
+    expect(promotionAudit.reason_code).toBe(
+      "null_app_identity_reverified_and_promoted",
+    );
+    expect(JSON.parse(promotionAudit.detail_json)).toMatchObject({
+      app_identity_promotion: {
+        schema_version: 1,
+        kind: "slack-null-app-identity-promotion-v1",
+        app_id: "A123APP",
+        binding_updates: [
+          expect.objectContaining({ adapter_binding_id: IDS.binding }),
+        ],
+      },
+    });
     expect(repository.activeSlackOrganizationTool()).toMatchObject({
       connection_id: IDS.connection,
+      app_id: "A123APP",
       granted_scopes: [
         "channels:history",
         "channels:read",
@@ -920,7 +1300,19 @@ describe("minimum organization control-plane v1 schema", () => {
         .get(IDS.connection),
     ).toEqual({
       public_configuration_json:
-        PROMOTED_LEGACY_SLACK_PUBLIC_CONFIGURATION_JSON,
+        READY_SLACK_APPROVAL_BINDING_CONFIGURATION_JSON,
+    });
+    expect(
+      database
+        .prepare(
+          `SELECT public_configuration_json
+           FROM organization_adapter_bindings
+           WHERE adapter_binding_id = ?`,
+        )
+        .get(IDS.binding),
+    ).toEqual({
+      public_configuration_json:
+        PROMOTED_LEGACY_SLACK_BINDING_CONFIGURATION_JSON,
     });
     expect(
       database
@@ -935,7 +1327,10 @@ describe("minimum organization control-plane v1 schema", () => {
       granted_scopes_json: REQUIRED_SLACK_SCOPES_JSON,
     });
     expect(
-      repository.findSlackApprovalPermission(permissionLookup),
+      repository.findSlackApprovalPermission({
+        ...permissionLookup,
+        slack_app_id: "A123APP",
+      }),
     ).toMatchObject({
       connection_id: IDS.connection,
       adapter_binding_id: IDS.binding,
@@ -954,7 +1349,9 @@ describe("minimum organization control-plane v1 schema", () => {
         '"slack_bot_user_id":"W123BOT"',
       );
     const migrations = controlPlaneMigrationsThroughV4();
-    expect(migrations.map(({ sha256 }) => sha256)).toEqual(MIGRATION_SHA256);
+    expect(migrations.map(({ sha256 }) => sha256)).toEqual(
+      MIGRATION_SHA256.slice(0, 4),
+    );
 
     const legacy = new Database(databasePath());
     legacy.pragma("foreign_keys = ON");
@@ -1014,7 +1411,7 @@ describe("minimum organization control-plane v1 schema", () => {
           enterprise_id: null,
           bot_user_id: "W123BOT",
           bot_id: "B123BOT",
-          app_id: null,
+          app_id: null as unknown as string,
           granted_scopes: [
             "channels:history",
             "channels:read",
@@ -1261,7 +1658,10 @@ describe("minimum organization control-plane v1 schema", () => {
     const cases = [
       {
         label: "missing profile",
-        configuration: LEGACY_SLACK_PUBLIC_CONFIGURATION_JSON,
+        configuration: LEGACY_SLACK_PUBLIC_CONFIGURATION_JSON.replace(
+          '"slack_app_id":null',
+          '"slack_app_id":"A123APP"',
+        ),
         scopes: REQUIRED_SLACK_SCOPES_JSON,
       },
       {
@@ -1438,7 +1838,7 @@ describe("minimum organization control-plane v1 schema", () => {
            ) VALUES (
              'bnd_after-revoke', ?, 'echo-brain', ?, ?,
              'approval-surface', 'slack-reactions', 'secondary', '1.0.0', ?,
-             '{}', ?, 'active', ?, ?, ?, NULL, NULL
+             ?, ?, 'active', ?, ?, ?, NULL, NULL
            )`,
         )
         .run(
@@ -1446,7 +1846,8 @@ describe("minimum organization control-plane v1 schema", () => {
           IDS.installation,
           digest("installation-key"),
           IDS.connection,
-          digest("empty-config"),
+          READY_SLACK_APPROVAL_BINDING_CONFIGURATION_JSON,
+          digest(READY_SLACK_APPROVAL_BINDING_CONFIGURATION_JSON),
           IDS.principal,
           IDS.membership,
           TIME.revoked,

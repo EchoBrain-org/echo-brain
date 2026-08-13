@@ -62,13 +62,19 @@ organization Slack connection is active
 ```
 
 The required Slack scopes are `channels:history`, `channels:read`,
-`chat:write`, `reactions:read`, and `users:read`. The selected channel must be
-an unarchived public `C...` channel and the verified bot must be a current
-member. Its Slack `context_team_id` must equal the workspace proven by the bot
-token, and externally shared or pending-external Slack Connect channels are
-rejected. Provider verification occurs before activation. A failed,
-incomplete, or unavailable verification leaves no active connection; absence
-therefore means inactive.
+`chat:write`, `reactions:read`, and `users:read`. Provider verification first
+uses Slack `auth.test` for the token-bound workspace, bot user, bot ID, and
+granted scopes. It then uses `bots.info` for that exact bot ID and requires the
+returned bot ID and user ID to agree, the bot not to be deleted, and a canonical
+non-null Slack app ID. If `auth.test` also returns an app ID, it is only a
+corroborating value and must agree with `bots.info`; its omission is not proof
+that there is no app. The selected channel must be an unarchived public `C...`
+channel and the verified bot must be a current member. Its Slack
+`context_team_id` must equal the workspace proven by the bot token, and
+externally shared or pending-external Slack Connect channels are rejected.
+Provider verification occurs before activation. A failed, incomplete, or
+unavailable verification leaves no active connection; absence therefore means
+inactive.
 
 Raw bot-token bytes are written only to the customer-owned Authority secret
 directory as a mode-0600 file. `integrations.sqlite` receives an opaque
@@ -110,6 +116,19 @@ Migration `0004_slack_enterprise_grid_user_ids.sql` changes no table or
 persisted relationship. It replaces only the Slack connection guards so the
 bot and human user namespaces accept Slack's documented `U...` and Enterprise
 Grid `W...` IDs while retaining every other v3 invariant.
+
+Migration `0005_slack_app_identity_promotion.sql` is a narrow forward repair
+for historical profileless and ready v1 Slack tools created before canonical app
+identity was required. It does not infer or backfill an app ID, and it does not
+change an active tool during startup. It permits only the explicit
+re-onboarding ceremony to replace the exact stored `null` app ID with a freshly
+verified non-null app ID, in the same transaction as the equivalent update to
+every active exact Slack approval binding on that connection. The connection
+ID, binding IDs, secret handle, direct grants, and existing audit history
+remain unchanged; a new owner-attributed audit entry records the
+re-verification. Any other tool or binding shape, provider mismatch, missing
+app proof, or concurrent change fails closed. This is identity repair, not
+credential rotation, channel rotation, or a general lifecycle operation.
 
 ### Retained action-time permission path
 
@@ -182,8 +201,11 @@ The connection and permission service must preserve these rules:
   or caller-supplied provider IDs.
 - Organization Slack onboarding is an owner-attributed, direct credential
   ceremony rather than OAuth. It verifies the bot, workspace, required scopes,
-  and exact public channel access before creating an active organization tool
-  connection.
+  canonical non-null app identity, and exact public channel access before
+  creating an active organization tool connection. `auth.test` establishes the
+  token-bound bot context; `bots.info` for that bot is the required app-identity
+  proof. The app ID embedded in a reviewed Slack message is never trusted as
+  the connection identity.
 - Existing profileless approval connections and their links, bindings, and
   grants remain usable. Explicit organization-tool onboarding re-verifies the
   stored credential and channel and promotes that same connection ID; it never
@@ -192,6 +214,12 @@ The connection and permission service must preserve these rules:
   that identity link and installation binding. A separate owner-attributed
   activation creates or reuses approve/reject grants for those exact existing
   records. Organization-tool onboarding creates no employee-specific state.
+- A historical profileless or ready v1 tool with a `null` Slack app ID is not
+  silently accepted as an exact reviewer identity. An owner must explicitly
+  re-onboard it. The Authority verifies the retained private credential again
+  and the control plane atomically promotes the connection plus every exact
+  active Slack approval binding to the same canonical app ID. IDs, grants, and
+  prior audit entries are retained; a new audit entry identifies the repair.
 - OAuth callbacks and automatic organization-tool discovery/configuration
   propagation remain requirements for a later polished connect flow.
 - Normalize scopes, require the provider's granted scope set to contain every

@@ -500,16 +500,21 @@ export class ComposedOrganizationIntegrationsApplication
     if (replay !== null) return replay;
 
     const legacy = this.options.repository.legacySlackOrganizationTool();
+    const upgradeable =
+      legacy === null
+        ? this.options.repository.upgradeableSlackOrganizationTool()
+        : null;
+    const existingTool = legacy ?? upgradeable;
     let verificationToken = slackBotToken;
-    if (legacy !== null) {
-      if (request.channel_id !== legacy.channel_id) {
+    if (existingTool !== null) {
+      if (request.channel_id !== existingTool.channel_id) {
         throw new AuthorityOperationError(
           'conflict',
           'Slack onboarding channel differs from the existing organization tool',
         );
       }
       try {
-        verificationToken = this.options.secrets.read(legacy.secret);
+        verificationToken = this.options.secrets.read(existingTool.secret);
       } catch {
         throw new AuthorityOperationError(
           'unavailable',
@@ -546,8 +551,10 @@ export class ComposedOrganizationIntegrationsApplication
             'organization integration authority state changed during verification',
           );
         }
-        secret ??= legacy?.secret ?? this.options.secrets.create(slackBotToken);
-        createdSecret ||= legacy === null;
+        const secretForInput =
+          existingTool?.secret ?? this.options.secrets.create(slackBotToken);
+        secret ??= secretForInput;
+        createdSecret ||= existingTool === null;
         const descriptor = this.options.authority.descriptor();
         const input: OnboardSlackOrganizationToolInput = {
           command_id: request.command_id,
@@ -558,7 +565,7 @@ export class ComposedOrganizationIntegrationsApplication
           administrator_membership_id: after.administrator.membership_id,
           connection,
           channel,
-          secret,
+          secret: secretForInput,
           now: this.now(),
         };
         return this.options.repository.onboardSlackOrganizationTool(input);

@@ -590,6 +590,16 @@ describe("permission-pilot full lifecycle", () => {
               bot_id: "B12345678",
               app_id: "A12345678",
             }
+          : method === "bots.info"
+            ? {
+                ok: true,
+                bot: {
+                  id: "B12345678",
+                  user_id: BOT_USER,
+                  app_id: "A12345678",
+                  deleted: false,
+                },
+              }
           : method === "users.info"
             ? {
                 ok: true,
