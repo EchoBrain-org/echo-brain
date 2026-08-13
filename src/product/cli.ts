@@ -81,7 +81,16 @@ import {
   type StoredOrganizationEnrollment,
   verifyOrganizationAuthorityPin,
 } from "./organization/index.js";
-import { signWithInstallationKey } from "./machine/security/installation-signer.js";
+import {
+  classifyOrganizationComposition,
+  type OrganizationCompositionState,
+} from './organization/state/organization-composition-state.js';
+import type { OrganizationApprovalActionAuthorizerOptions } from './organization/approval-action-authorizer.js';
+import type { OrganizationStateStore } from './organization/state/organization-state-store.js';
+import {
+  signWithInstallationKey,
+  verifyInstallationKeyDescriptor,
+} from "./machine/security/installation-signer.js";
 import { readPrivateCredentialFile } from "./credentials.js";
 import { resolveProductStatePaths } from "./paths.js";
 import { readFileNoFollow } from "./secure-local-files.js";
@@ -721,6 +730,29 @@ interface ResolvedOrganizationAuthorization {
   recordSubmitter: OrganizationRecordSubmitter | undefined;
 }
 
+/**
+ * The Slack reviewer renderer is pure local code, so it must be present even
+ * before an installation has organization authority. In particular, startup
+ * preflight needs it to fingerprint an unresolved frozen card's credential
+ * and distinguish a real rotation from unavailable authority wiring.
+ *
+ * When authority is available, the exact same authorizer handles the legacy
+ * approval path and the reviewer path.
+ */
+function approvalSurfaceFactoryOptions(
+  approvalActionAuthorizer: OrganizationApprovalActionAuthorizer | undefined,
+) {
+  return {
+    reviewerPresentationRenderer: reviewerApprovalPresentationRenderer,
+    ...(approvalActionAuthorizer === undefined
+      ? {}
+      : {
+          approvalActionAuthorizer,
+          reviewerApprovalActionAuthorizer: approvalActionAuthorizer,
+        }),
+  };
+}
+
 function configuredOrganizationIngestExclusion(
   config: ProductRuntimeConfig,
 ): OrganizationIngestExclusion {
@@ -729,37 +761,217 @@ function configuredOrganizationIngestExclusion(
   );
 }
 
+interface DoctorOrganizationResolution {
+  approvalActionAuthorizer: OrganizationApprovalActionAuthorizer | undefined;
+  diagnostic: { ok: boolean; detail: string };
+}
+
+function configuredApprovalRequiresOrganizationAuthorization(
+  config: ProductRuntimeConfig,
+): boolean {
+  if (config.approval_mode !== 'adapter') return false;
+  const mode = config.approval_surface.settings['presentation_mode'];
+  return (
+    mode === 'restricted-reviewer-v1' ||
+    mode === 'organization-member-readable-v1'
+  );
+}
+
+function organizationInstallationSigner(
+  config: ProductRuntimeConfig,
+  dependencies: ProductCliDependencies,
+): InstallationSigner {
+  return (
+    dependencies.organization?.installationSigner ??
+    new FileInstallationSigner(join(config.state_dir, 'installation', 'keys'))
+  );
+}
+
+function createApprovalActionAuthorizer(input: {
+  authorityBaseUrl: string;
+  authorityCaPem: string | null;
+  dependencies: ProductCliDependencies;
+  signer: InstallationSigner;
+  now: () => string;
+  openState: OrganizationApprovalActionAuthorizerOptions['openState'];
+}): OrganizationApprovalActionAuthorizer {
+  return new OrganizationApprovalActionAuthorizer({
+    openState: input.openState,
+    authorityClient: new HttpOrganizationAuthorityClient({
+      baseUrl: input.authorityBaseUrl,
+      ...organizationAuthorityTransportOptions(
+        input.dependencies.organization,
+        input.authorityCaPem,
+      ),
+    }),
+    installationSigner: input.signer,
+    now: input.now,
+  });
+}
+
+function snapshotEnrollmentReader(
+  enrollment: StoredOrganizationEnrollment,
+): Pick<OrganizationStateStore, 'readEnrollment' | 'close'> {
+  let closed = false;
+  return {
+    readEnrollment() {
+      if (closed) throw new Error('organization state reader is closed');
+      return enrollment;
+    },
+    close() {
+      closed = true;
+    },
+  };
+}
+
+async function resolveDoctorOrganization(
+  config: ProductRuntimeConfig,
+  dependencies: ProductCliDependencies,
+): Promise<DoctorOrganizationResolution> {
+  const databasePath = resolveProductStatePaths(config.state_dir).database;
+  const state = classifyOrganizationComposition(
+    SqliteOrganizationStateStore.inspectReadOnly(databasePath),
+  );
+  if (state.kind === 'corrupt' || state.kind === 'unavailable') {
+    return {
+      approvalActionAuthorizer: undefined,
+      diagnostic: {
+        ok: false,
+        detail: `organization state is ${state.kind}: ${state.detail}`,
+      },
+    };
+  }
+  if (state.kind === 'unmanaged') {
+    const required = configuredApprovalRequiresOrganizationAuthorization(config);
+    return {
+      approvalActionAuthorizer: undefined,
+      diagnostic: {
+        ok: !required,
+        detail: required
+          ? 'the configured approval presentation requires organization authorization, but organization state is not configured'
+          : state.source === 'pre-organization-schema'
+            ? `organization is not configured; database schema v${String(state.schemaVersion)} predates organization state`
+            : 'organization is not configured for this installation',
+      },
+    };
+  }
+  if (state.kind === 'pinned-unenrolled') {
+    return {
+      approvalActionAuthorizer: undefined,
+      diagnostic: {
+        ok: false,
+        detail: `organization authority is pinned but enrollment is ${state.phase.replaceAll('-', ' ')}`,
+      },
+    };
+  }
+  if (state.kind === 'enrolled-disconnected') {
+    return {
+      approvalActionAuthorizer: undefined,
+      diagnostic: {
+        ok: false,
+        detail:
+          'organization enrollment is accepted but its authority connection is unavailable',
+      },
+    };
+  }
+
+  const signer = organizationInstallationSigner(config, dependencies);
+  try {
+    const expected = state.enrollment.request.installation_signing_key;
+    const descriptor = await signer.inspect(
+      state.enrollment.request.installation_id,
+    );
+    if (descriptor === null) {
+      throw new Error('organization installation signing key is unavailable');
+    }
+    verifyInstallationKeyDescriptor(descriptor);
+    if (
+      descriptor.installation_id !==
+        state.enrollment.request.installation_id ||
+      descriptor.key_id !== expected.key_id ||
+      descriptor.algorithm !== expected.algorithm ||
+      descriptor.public_key_spki_der_base64 !==
+        expected.public_key_spki_der_base64
+    ) {
+      throw new Error(
+        'organization installation signer no longer matches the enrollment',
+      );
+    }
+  } catch (error) {
+    return {
+      approvalActionAuthorizer: undefined,
+      diagnostic: { ok: false, detail: (error as Error).message },
+    };
+  }
+  return {
+    approvalActionAuthorizer: createApprovalActionAuthorizer({
+      authorityBaseUrl: state.authorityConnection.authority_base_url,
+      authorityCaPem: state.authorityConnection.authority_ca_pem,
+      dependencies,
+      signer,
+      now: resolveProductClock(dependencies.now),
+      openState: () => snapshotEnrollmentReader(state.enrollment),
+    }),
+    diagnostic: {
+      ok: true,
+      detail:
+        'organization enrollment, authority connection, and installation signer are locally consistent',
+    },
+  };
+}
+
+function readRuntimeOrganizationCompositionState(
+  databasePath: string,
+): OrganizationCompositionState {
+  const state = new SqliteOrganizationStateStore(databasePath);
+  try {
+    return classifyOrganizationComposition(
+      state.readCompositionObservation(),
+    );
+  } finally {
+    state.close();
+  }
+}
+
 function resolveOrganizationAuthorization(
   config: ProductRuntimeConfig,
   dependencies: ProductCliDependencies,
 ): ResolvedOrganizationAuthorization {
   const databasePath = resolveProductStatePaths(config.state_dir).database;
-  const state = new SqliteOrganizationStateStore(databasePath);
-  let hasPin = false;
-  let enrolled = false;
-  let authorityBaseUrl: string | null = null;
-  let authorityCaPem: string | null = null;
-  let pinnedAuthority: PinnedOrganizationAuthority | null = null;
-  let enrollment: StoredOrganizationEnrollment | null = null;
-  try {
-    pinnedAuthority = state.readPinnedAuthority();
-    hasPin = pinnedAuthority !== null;
-    enrollment = state.readEnrollment();
-    enrolled =
-      enrollment?.receipt !== null &&
-      enrollment?.receipt !== undefined &&
-      enrollment.accepted_access_sequence > 0;
-    const connection = state.readAuthorityConnection();
-    authorityBaseUrl = connection?.authority_base_url ?? null;
-    authorityCaPem = connection?.authority_ca_pem ?? null;
-  } finally {
-    state.close();
+  const organizationState = readRuntimeOrganizationCompositionState(databasePath);
+  if (
+    organizationState.kind === 'corrupt' ||
+    organizationState.kind === 'unavailable'
+  ) {
+    throw new Error(
+      `organization state is ${organizationState.kind}: ${organizationState.detail}`,
+    );
   }
-  if (enrolled && authorityBaseUrl === null) {
+  if (organizationState.kind === 'enrolled-disconnected') {
     throw new Error(
       "organization authority connection is unavailable for approval authorization",
     );
   }
+  const hasPin = organizationState.kind !== 'unmanaged';
+  const enrolled = organizationState.kind === 'enrolled-connected';
+  const authorityConnection =
+    organizationState.kind === 'enrolled-connected' ||
+    organizationState.kind === 'pinned-unenrolled'
+      ? organizationState.authorityConnection
+      : null;
+  const authorityBaseUrl =
+    authorityConnection?.authority_base_url ?? null;
+  const authorityCaPem = authorityConnection?.authority_ca_pem ?? null;
+  const pinnedAuthority =
+    organizationState.kind === 'enrolled-connected' ||
+    organizationState.kind === 'pinned-unenrolled'
+      ? organizationState.pinnedAuthority
+      : null;
+  const enrollment =
+    organizationState.kind === 'enrolled-connected' ||
+    organizationState.kind === 'pinned-unenrolled'
+      ? organizationState.enrollment
+      : null;
   const configuredAccessGate = dependencies.composition?.accessGate;
   if (!enrolled && (configuredAccessGate !== undefined || !hasPin)) {
     return {
@@ -768,11 +980,7 @@ function resolveOrganizationAuthorization(
       recordSubmitter: undefined,
     };
   }
-  const signer =
-    dependencies.organization?.installationSigner ??
-    new FileInstallationSigner(
-      join(config.state_dir, "installation", "keys"),
-    );
+  const signer = organizationInstallationSigner(config, dependencies);
   const now = resolveProductClock(dependencies.now);
   const transport = organizationAuthorityTransportOptions(
     dependencies.organization,
@@ -812,14 +1020,13 @@ function resolveOrganizationAuthorization(
   }
   return {
     accessGate,
-    approvalActionAuthorizer: new OrganizationApprovalActionAuthorizer({
-      openState: () => new SqliteOrganizationStateStore(databasePath),
-      authorityClient: new HttpOrganizationAuthorityClient({
-        baseUrl: authorityBaseUrl,
-        ...transport,
-      }),
-      installationSigner: signer,
+    approvalActionAuthorizer: createApprovalActionAuthorizer({
+      authorityBaseUrl,
+      authorityCaPem,
+      dependencies,
+      signer,
       now,
+      openState: () => new SqliteOrganizationStateStore(databasePath),
     }),
     recordSubmitter: createOrganizationRecordSubmitter({
       config,
@@ -943,16 +1150,7 @@ async function createCliComposition(
   const registry = await createConfiguredAdapterRegistry(config, factories, {
     environment: dependencies.environment,
     now,
-    ...(approvalActionAuthorizer === undefined
-      ? {}
-      : {
-          approvalActionAuthorizer,
-          // The same authorizer object owns both the landed schema-v1 path and
-          // the schema-v2 reviewer approval; the renderer is the one local
-          // reviewer card projection.
-          reviewerApprovalActionAuthorizer: approvalActionAuthorizer,
-          reviewerPresentationRenderer: reviewerApprovalPresentationRenderer,
-        }),
+    ...approvalSurfaceFactoryOptions(approvalActionAuthorizer),
     ...(sweepOrganizationRecord === undefined
       ? {}
       : {
@@ -2225,8 +2423,31 @@ export async function runProductCli(
       }
       let adapters: Awaited<ReturnType<typeof diagnoseConfiguredAdapters>> = [];
       let adapterError: string | undefined;
+      let organizationDiagnostic:
+        | DoctorOrganizationResolution['diagnostic']
+        | undefined;
       if (parsed.doctorLocalOnly !== true) {
+        let approvalActionAuthorizer:
+          | OrganizationApprovalActionAuthorizer
+          | undefined;
         try {
+          const organization = await resolveDoctorOrganization(
+            config,
+            dependencies,
+          );
+          organizationDiagnostic = organization.diagnostic;
+          approvalActionAuthorizer =
+            organization.approvalActionAuthorizer;
+        } catch (error) {
+          organizationDiagnostic = {
+            ok: false,
+            detail: `organization state inspection failed: ${(error as Error).message}`,
+          };
+          adapterError =
+            'adapter diagnostics were skipped because organization state inspection failed';
+        }
+        if (adapterError === undefined) {
+          try {
           const factories =
             dependencies.adapterFactories ?? createDefaultAdapterFactories();
           const registry = await createConfiguredAdapterRegistry(
@@ -2235,6 +2456,9 @@ export async function runProductCli(
             {
               environment: dependencies.environment,
               now: dependencies.now,
+              ...approvalSurfaceFactoryOptions(
+                approvalActionAuthorizer,
+              ),
             },
           );
           adapters = await diagnoseConfiguredAdapters(
@@ -2242,8 +2466,9 @@ export async function runProductCli(
             registry,
             dependencies.doctorHealthTimeoutMs ?? 10_000,
           );
-        } catch (error) {
-          adapterError = (error as Error).message;
+          } catch (error) {
+            adapterError = (error as Error).message;
+          }
         }
       }
       try {
@@ -2251,6 +2476,9 @@ export async function runProductCli(
           filesystem,
           adapters,
           includeAdapters: parsed.doctorLocalOnly !== true,
+          ...(organizationDiagnostic === undefined
+            ? {}
+            : { organizationDiagnostic }),
           ...(adapterError === undefined ? {} : { adapterError }),
         });
         print(report.ok ? stdout : stderr, {

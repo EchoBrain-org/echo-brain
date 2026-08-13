@@ -49,6 +49,19 @@ Every approval entry point shares one durable append-only approval history.
 - Provider operations are bounded and cancellable.
 - Unknown external outcomes never become fabricated success.
 
+## Diagnostic composition
+
+Full `doctor` uses the same adapter factory inputs and the same authenticated
+organization-state classifier as runtime composition. Pure presentation ports
+are always supplied; authority-bearing ports are supplied only after one
+query-only SQLite snapshot proves a connected enrollment and its installation
+signer. Diagnostics must not invent a stand-in capability merely to make
+adapter validation pass. The inspection runs no migrations and makes no
+logical product-state writes, although SQLite may use its private WAL
+coordination files. `--local-only` deliberately skips organization and adapter
+composition. Provider health remains a reachability check, not proof that a
+future runtime authorization will succeed.
+
 ## Identity modes
 
 Central organization-admin bootstrap is the one supported v1 path. Local use

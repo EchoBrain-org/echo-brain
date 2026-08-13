@@ -26,7 +26,15 @@ import {
   type OrganizationInstallationAccessStateV1,
   type PinnedOrganizationAuthority,
 } from '@echo-brain/organization-protocol';
-import { openProductDatabase } from '../../storage/open-product-database.js';
+import type {
+  OrganizationCompositionFacts,
+  OrganizationCompositionObservation,
+} from './organization-composition-state.js';
+import {
+  currentProductDatabaseSchemaVersion,
+  openProductDatabase,
+  openReadOnlyProductDatabase,
+} from '../../storage/open-product-database.js';
 import {
   OrganizationClockRollbackError,
   OrganizationStateConflictError,
@@ -113,6 +121,10 @@ interface LoadedContext {
   enrollment: LoadedEnrollment;
   access: LoadedAccessState | null;
 }
+
+const FIRST_ORGANIZATION_SCHEMA_VERSION = 5;
+const FIRST_ORGANIZATION_CONNECTION_SCHEMA_VERSION = 6;
+const FIRST_ORGANIZATION_CA_SCHEMA_VERSION = 7;
 
 function corruption(message: string, cause: unknown): never {
   if (cause instanceof OrganizationStateCorruptionError) throw cause;
@@ -257,6 +269,156 @@ export class SqliteOrganizationStateStore implements OrganizationStateStore {
     }
   }
 
+  private static fromOpenedDatabase(
+    database: ReturnType<typeof openProductDatabase>,
+  ): SqliteOrganizationStateStore {
+    // The public constructor always opens and migrates the writable product
+    // store. Read-only inspection needs the exact same validation methods but
+    // must not expose a writable store capability, so only this class may bind
+    // an already-open query-only handle to its private read model.
+    const state = Object.create(
+      SqliteOrganizationStateStore.prototype,
+    ) as SqliteOrganizationStateStore;
+    Object.defineProperties(state, {
+      database: { value: database },
+      closed: { value: false, writable: true },
+    });
+    return state;
+  }
+
+  private tableHasRows(table: string): boolean {
+    const row = this.database
+      .prepare(`SELECT EXISTS (SELECT 1 FROM ${table} LIMIT 1) AS present`)
+      .get() as { present: 0 | 1 };
+    return row.present === 1;
+  }
+
+  /**
+   * Authenticates the complete organization composition view in one SQLite
+   * read transaction. Runtime and doctor both use this exact read model, so a
+   * concurrent writer cannot make pin, connection, enrollment, and access
+   * facts come from different commits.
+   */
+  private readCompositionFacts(schemaVersion: number): OrganizationCompositionFacts {
+    const connectionSchemaAvailable =
+      schemaVersion >= FIRST_ORGANIZATION_CONNECTION_SCHEMA_VERSION;
+    return this.readTransaction(() => {
+      const authority = this.loadAuthorityPin();
+      if (authority === null) {
+        const orphaned =
+          this.tableHasRows('organization_enrollments') ||
+          this.tableHasRows('organization_access_high_watermarks') ||
+          (connectionSchemaAvailable &&
+            this.tableHasRows('organization_authority_connections'));
+        if (orphaned) {
+          throw new OrganizationStateCorruptionError(
+            'organization state exists without its pinned authority',
+          );
+        }
+        return {
+          pinnedAuthority: null,
+          authorityConnection: null,
+          enrollment: null,
+        };
+      }
+      const enrollment = this.loadEnrollment(authority);
+      if (enrollment === null) {
+        if (this.tableHasRows('organization_access_high_watermarks')) {
+          throw new OrganizationStateCorruptionError(
+            'organization access state exists without its enrollment',
+          );
+        }
+      } else {
+        this.loadAccess(authority, enrollment);
+      }
+      return {
+        pinnedAuthority: authority.handle,
+        authorityConnection: connectionSchemaAvailable
+          ? this.loadAuthorityConnection(
+              authority,
+              schemaVersion >= FIRST_ORGANIZATION_CA_SCHEMA_VERSION,
+            )
+          : null,
+        enrollment:
+          enrollment === null
+            ? null
+            : {
+                request: enrollment.request,
+                receipt: enrollment.receipt,
+                accepted_access_sequence:
+                  enrollment.row.accepted_access_sequence,
+                accepted_access_sha256: enrollment.row
+                  .accepted_access_sha256 as Sha256Digest | null,
+                trusted_time_high_watermark:
+                  enrollment.row.trusted_time_high_watermark,
+              },
+      };
+    });
+  }
+
+  readCompositionObservation(): OrganizationCompositionObservation {
+    let schemaVersion: number;
+    try {
+      schemaVersion = this.database.pragma('user_version', {
+        simple: true,
+      }) as number;
+    } catch (error) {
+      return { kind: 'unavailable', detail: (error as Error).message };
+    }
+    if (
+      !Number.isSafeInteger(schemaVersion) ||
+      schemaVersion < 0 ||
+      schemaVersion > currentProductDatabaseSchemaVersion()
+    ) {
+      return {
+        kind: 'unavailable',
+        detail: `product database schema version ${String(schemaVersion)} is unsupported`,
+      };
+    }
+    if (schemaVersion < FIRST_ORGANIZATION_SCHEMA_VERSION) {
+      return { kind: 'pre-organization-schema', schemaVersion };
+    }
+    try {
+      return {
+        kind: 'organization-schema',
+        schemaVersion,
+        facts: this.readCompositionFacts(schemaVersion),
+      };
+    } catch (error) {
+      const code = (error as { code?: unknown }).code;
+      if (
+        error instanceof OrganizationStateCorruptionError ||
+        (code !== 'SQLITE_BUSY' &&
+          code !== 'SQLITE_LOCKED' &&
+          code !== 'SQLITE_IOERR')
+      ) {
+        return { kind: 'corrupt', detail: (error as Error).message };
+      }
+      return { kind: 'unavailable', detail: (error as Error).message };
+    }
+  }
+
+  /**
+   * Observe organization composition without creating or migrating product
+   * state. SQLite may use its normal WAL coordination files; this connection
+   * is query-only and performs no product-state writes.
+   */
+  static inspectReadOnly(
+    databasePath: string,
+  ): OrganizationCompositionObservation {
+    let database: ReturnType<typeof openProductDatabase> | undefined;
+    try {
+      database = openReadOnlyProductDatabase(databasePath) ?? undefined;
+      if (database === undefined) return { kind: 'database-absent' };
+      const state = SqliteOrganizationStateStore.fromOpenedDatabase(database);
+      return state.readCompositionObservation();
+    } catch (error) {
+      return { kind: 'unavailable', detail: (error as Error).message };
+    } finally {
+      database?.close();
+    }
+  }
+
   private authorityPinRow(): AuthorityPinRow | undefined {
     return this.database
       .prepare(
@@ -357,11 +519,14 @@ export class SqliteOrganizationStateStore implements OrganizationStateStore {
     return this.readTransaction(() => this.loadAuthorityPin()?.handle ?? null);
   }
 
-  private authorityConnectionRow(): AuthorityConnectionRow | undefined {
+  private authorityConnectionRow(
+    caSchemaAvailable = true,
+  ): AuthorityConnectionRow | undefined {
     return this.database
       .prepare(
         `SELECT authority_id, organization_id, authority_base_url,
-                authority_ca_pem, configured_at
+                ${caSchemaAvailable ? 'authority_ca_pem' : 'NULL AS authority_ca_pem'},
+                configured_at
          FROM organization_authority_connections
          WHERE singleton = 1`,
       )
@@ -370,8 +535,9 @@ export class SqliteOrganizationStateStore implements OrganizationStateStore {
 
   private loadAuthorityConnection(
     authority: LoadedAuthorityPin,
+    caSchemaAvailable = true,
   ): StoredOrganizationAuthorityConnection | null {
-    const row = this.authorityConnectionRow();
+    const row = this.authorityConnectionRow(caSchemaAvailable);
     if (row === undefined) return null;
     try {
       const authorityBaseUrl = validateOrganizationAuthorityOrigin(

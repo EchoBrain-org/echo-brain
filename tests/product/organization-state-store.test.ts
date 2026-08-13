@@ -3,7 +3,13 @@ import {
   sign as signMessage,
   type KeyObject,
 } from 'node:crypto';
-import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import {
+  chmodSync,
+  existsSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import Database from 'better-sqlite3';
@@ -34,6 +40,7 @@ import {
   type OrganizationAccessVerificationPolicy,
 } from '../../src/product/organization/state/organization-state-store.js';
 import { SqliteOrganizationStateStore } from '../../src/product/organization/state/sqlite-organization-state-store.js';
+import { classifyOrganizationComposition } from '../../src/product/organization/state/organization-composition-state.js';
 
 const MAX_TTL_MS = 5 * 60 * 1000;
 const ENROLLED_AT = '2026-07-22T00:00:00.000Z';
@@ -649,5 +656,160 @@ describe('SQLite organization installation state', () => {
         .get(),
     ).toEqual({ accepted_access_sequence: 1 });
     database.close();
+  });
+
+  it('observes absent and pre-organization databases without creating or migrating them', () => {
+    const absent = temporaryDatabase();
+    expect(SqliteOrganizationStateStore.inspectReadOnly(absent)).toEqual({
+      kind: 'database-absent',
+    });
+    expect(existsSync(absent)).toBe(false);
+
+    const legacy = temporaryDatabase();
+    const database = new Database(legacy);
+    database.pragma('user_version = 4');
+    database.close();
+    chmodSync(legacy, 0o600);
+
+    expect(SqliteOrganizationStateStore.inspectReadOnly(legacy)).toEqual({
+      kind: 'pre-organization-schema',
+      schemaVersion: 4,
+    });
+    const reopened = new Database(legacy, {
+      readonly: true,
+      fileMustExist: true,
+    });
+    expect(reopened.pragma('user_version', { simple: true })).toBe(4);
+    reopened.close();
+  });
+
+  it('reads one authenticated snapshot including committed live WAL state', async () => {
+    const chain = await onboardingChain();
+    const databasePath = temporaryDatabase();
+    const store = openStore(databasePath);
+    seedEnrollment(store, chain);
+    store.saveAuthorityConnection({
+      authority_id: chain.authority.authority_id,
+      organization_id: chain.authority.organization_id,
+      authority_base_url: 'https://authority.example.test',
+    });
+    store.acceptAccessState(
+      chain.activeOne,
+      policy('2026-07-22T00:02:00.000Z'),
+    );
+    const mainBefore = readFileSync(databasePath);
+    const walBefore = readFileSync(`${databasePath}-wal`);
+
+    const observation = SqliteOrganizationStateStore.inspectReadOnly(
+      databasePath,
+    );
+    expect(classifyOrganizationComposition(observation)).toMatchObject({
+      kind: 'enrolled-connected',
+      enrollment: { accepted_access_sequence: 1 },
+      authorityConnection: {
+        authority_base_url: 'https://authority.example.test',
+      },
+    });
+    expect(readFileSync(databasePath)).toEqual(mainBefore);
+    expect(readFileSync(`${databasePath}-wal`)).toEqual(walBefore);
+  });
+
+  it('does not change product state when SQLite coordinates a cold WAL read', async () => {
+    const chain = await onboardingChain();
+    const databasePath = temporaryDatabase();
+    const store = openStore(databasePath);
+    seedEnrollment(store, chain);
+    store.close();
+    expect(existsSync(`${databasePath}-wal`)).toBe(false);
+    expect(existsSync(`${databasePath}-shm`)).toBe(false);
+    const mainBefore = readFileSync(databasePath);
+
+    expect(
+      SqliteOrganizationStateStore.inspectReadOnly(databasePath),
+    ).toMatchObject({ kind: 'organization-schema' });
+
+    expect(readFileSync(databasePath)).toEqual(mainBefore);
+    const reopened = new Database(databasePath, {
+      readonly: true,
+      fileMustExist: true,
+    });
+    expect(reopened.pragma('user_version', { simple: true })).toBe(8);
+    reopened.close();
+  });
+
+  it('names a recognized but damaged organization schema as corrupt', () => {
+    const databasePath = temporaryDatabase();
+    const store = openStore(databasePath);
+    store.close();
+    const database = new Database(databasePath);
+    database.exec('DROP TABLE organization_enrollments');
+    database.close();
+
+    expect(
+      SqliteOrganizationStateStore.inspectReadOnly(databasePath),
+    ).toMatchObject({ kind: 'corrupt' });
+  });
+
+  it('classifies accepted schema-v5 state without a connection as disconnected', async () => {
+    const chain = await onboardingChain();
+    const databasePath = temporaryDatabase();
+    const store = openStore(databasePath);
+    seedEnrollment(store, chain);
+    store.acceptAccessState(
+      chain.activeOne,
+      policy('2026-07-22T00:02:00.000Z'),
+    );
+    store.close();
+    const database = new Database(databasePath);
+    database.exec('DROP TABLE organization_authority_connections');
+    database.pragma('user_version = 5');
+    database.close();
+
+    expect(
+      classifyOrganizationComposition(
+        SqliteOrganizationStateStore.inspectReadOnly(databasePath),
+      ),
+    ).toMatchObject({ kind: 'enrolled-disconnected' });
+  });
+
+  it('authenticates the exact schema-v6 connection without its later CA column', async () => {
+    const chain = await onboardingChain();
+    const databasePath = temporaryDatabase();
+    const store = openStore(databasePath);
+    seedEnrollment(store, chain);
+    store.saveAuthorityConnection({
+      authority_id: chain.authority.authority_id,
+      organization_id: chain.authority.organization_id,
+      authority_base_url: 'https://authority.example.test',
+    });
+    store.acceptAccessState(
+      chain.activeOne,
+      policy('2026-07-22T00:02:00.000Z'),
+    );
+    store.close();
+    const database = new Database(databasePath);
+    database.exec(`
+      DROP TRIGGER organization_authority_connections_preserve_identity;
+      ALTER TABLE organization_authority_connections DROP COLUMN authority_ca_pem;
+      CREATE TRIGGER organization_authority_connections_are_write_once
+      BEFORE UPDATE ON organization_authority_connections
+      BEGIN
+        SELECT RAISE(ABORT, 'organization authority connection is write-once');
+      END;
+    `);
+    database.pragma('user_version = 6');
+    database.close();
+
+    expect(
+      classifyOrganizationComposition(
+        SqliteOrganizationStateStore.inspectReadOnly(databasePath),
+      ),
+    ).toMatchObject({
+      kind: 'enrolled-connected',
+      authorityConnection: {
+        authority_base_url: 'https://authority.example.test',
+        authority_ca_pem: null,
+      },
+    });
   });
 });

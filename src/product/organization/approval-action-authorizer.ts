@@ -49,7 +49,7 @@ export interface OrganizationApprovalActionAuthorizationRequest {
 }
 
 export interface OrganizationApprovalActionAuthorizerOptions {
-  openState(): OrganizationStateStore;
+  openState(): Pick<OrganizationStateStore, 'readEnrollment' | 'close'>;
   authorityClient: OrganizationAuthorityClient;
   installationSigner: InstallationSigner;
   now: () => string;

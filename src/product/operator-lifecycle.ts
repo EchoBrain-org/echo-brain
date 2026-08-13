@@ -152,6 +152,7 @@ export interface ProductDoctorCheck {
     | 'service-plist'
     | 'service-running'
     | 'service-credentials'
+    | 'organization-state'
     | 'adapters';
   ok: boolean;
   detail: string;
@@ -1277,6 +1278,7 @@ export class ProductOperator {
     adapters: readonly AdapterDiagnostic[];
     adapterError?: string;
     includeAdapters?: boolean;
+    organizationDiagnostic?: { ok: boolean; detail: string };
   }): Promise<ProductDoctorReport> {
     const checks: ProductDoctorCheck[] = [];
     const platformOk =
@@ -1422,6 +1424,15 @@ export class ProductOperator {
             : credentialsError,
       ),
     );
+    if (input.organizationDiagnostic !== undefined) {
+      checks.push(
+        check(
+          'organization-state',
+          input.organizationDiagnostic.ok,
+          input.organizationDiagnostic.detail,
+        ),
+      );
+    }
     if (input.includeAdapters !== false) {
       const adaptersOk =
         input.adapterError === undefined &&
