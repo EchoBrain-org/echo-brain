@@ -273,12 +273,26 @@ describe("SlackWebApiClient", () => {
       bot_id: "B123ABC",
     };
     const methods: string[] = [];
-    const requestBodies: unknown[] = [];
+    const requests: Array<{
+      method: string;
+      httpMethod: string | undefined;
+      body: BodyInit | null | undefined;
+      contentType: string | null;
+    }> = [];
     const client = new SlackWebApiClient("xoxb-test", {
       fetchImpl: (async (input, init) => {
-        const method = String(input).split("/").pop() ?? "";
+        const url = new URL(String(input));
+        const method = url.pathname.split("/").pop() ?? "";
         methods.push(method);
-        requestBodies.push(JSON.parse(String(init?.body)));
+        requests.push({
+          method,
+          httpMethod: init?.method,
+          body: init?.body,
+          contentType: new Headers(init?.headers).get("content-type"),
+        });
+        if (method === "bots.info") {
+          expect(url.searchParams.get("bot")).toBe("B123ABC");
+        }
         return method === "auth.test"
           ? jsonResponse(authResponse, {
               headers: { "x-oauth-scopes": "chat:write, users:read" },
@@ -304,7 +318,26 @@ describe("SlackWebApiClient", () => {
       app_id: "A456DEF",
     });
     expect(methods).toEqual(["auth.test", "auth.test", "bots.info"]);
-    expect(requestBodies.at(-1)).toEqual({ bot: "B123ABC" });
+    expect(requests.slice(0, 2)).toEqual([
+      {
+        method: "auth.test",
+        httpMethod: "POST",
+        body: "{}",
+        contentType: "application/json; charset=utf-8",
+      },
+      {
+        method: "auth.test",
+        httpMethod: "POST",
+        body: "{}",
+        contentType: "application/json; charset=utf-8",
+      },
+    ]);
+    expect(requests.at(-1)).toEqual({
+      method: "bots.info",
+      httpMethod: "GET",
+      body: undefined,
+      contentType: null,
+    });
   });
 
   it.each([

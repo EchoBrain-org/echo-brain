@@ -113,6 +113,15 @@ adapter.
 
 ## Capability checklists
 
+Provider verification is an endpoint-specific protocol, not a generic HTTP
+success check. Each adapter must test the documented method and parameter
+encoding, keep credentials out of URLs, refuse redirects, and reject malformed
+success bodies. Health proves reachability only. Authorization-grade identity
+must correlate the provider's tenant, user, bot, application, scope, and
+disabled/deleted state across every endpoint used in the proof. Real-provider
+probes must record only sanitized identifiers and outcomes, never credentials
+or source content.
+
 ### Meeting source
 
 - State the strongest provider account or tenant identity the API can prove and

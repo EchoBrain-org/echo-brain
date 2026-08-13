@@ -309,7 +309,14 @@ export class SlackWebApiClient {
       SLACK_APP_ID_RE,
       "auth.test",
     );
-    const botBody = await this.call("bots.info", { bot: botId }, { signal });
+    // Slack documents bots.info as a GET method. Keep its selector in the
+    // query string so Slack cannot silently ignore a JSON POST body and return
+    // an unscoped success response without the requested bot identity.
+    const botBody = await this.call(
+      "bots.info",
+      { bot: botId },
+      { signal, method: "GET" },
+    );
     const bot = botBody["bot"];
     if (!isPlainObject(bot)) {
       throw new SlackApiError(
