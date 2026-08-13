@@ -33,6 +33,8 @@ cli="$prefix/node_modules/.bin/echo-brain"
 config="$runtime_root/config/runtime.json"
 state="$runtime_root/state"
 status_file="$runtime_root/service-status.json"
+install_file="$runtime_root/service-install.json"
+install_error_file="$runtime_root/service-install.stderr.log"
 doctor_file="$runtime_root/doctor.json"
 
 cleanup() {
@@ -123,7 +125,38 @@ printf 'grn_ci_internal_live_smoke\n' > "$state/credentials/granola-api-key"
 chmod 600 "$state/credentials/granola-api-key"
 
 "$cli" init --config "$config"
-"$cli" service install --config "$config"
+if ! "$cli" service install --config "$config" \
+  > "$install_file" 2> "$install_error_file"; then
+  "$cli" status --config "$config" > "$status_file" 2>/dev/null || true
+  printf '%s\n' 'INTERNAL LIVE service install failed:' >&2
+  cat "$install_error_file" >&2
+  dump_diagnostics
+  exit 1
+fi
+
+install_pid="$(
+  node -e '
+    const fs = require("node:fs");
+    const value = JSON.parse(fs.readFileSync(process.argv[1], "utf8"));
+    const pid = value.service?.pid;
+    if (
+      value.ok !== true ||
+      value.command !== "service" ||
+      value.action !== "install" ||
+      !value.installed ||
+      !value.service?.loaded ||
+      !value.service?.running ||
+      !Number.isSafeInteger(pid) ||
+      pid <= 0
+    ) {
+      throw new Error(`service install did not return a running LaunchAgent: ${JSON.stringify(value)}`);
+    }
+    process.stdout.write(String(pid));
+  ' "$install_file"
+)" || {
+  dump_diagnostics
+  exit 1
+}
 
 launchagent_pid=''
 for _ in {1..20}; do
@@ -153,6 +186,12 @@ for _ in {1..20}; do
 done
 if [[ -z "$launchagent_pid" ]]; then
   dump_diagnostics
+  exit 1
+fi
+if [[ "$launchagent_pid" != "$install_pid" ]]; then
+  dump_diagnostics
+  printf 'LaunchAgent PID changed from install %s to first status %s\n' \
+    "$install_pid" "$launchagent_pid" >&2
   exit 1
 fi
 
@@ -196,6 +235,22 @@ plist="$(
 plutil -lint "$plist"
 if [[ "$(stat -f '%Lp' "$plist")" != '600' ]]; then
   printf 'LaunchAgent plist must have mode 0600\n' >&2
+  exit 1
+fi
+expected_cli="$(node -e 'process.stdout.write(require("node:fs").realpathSync(process.argv[1]))' "$cli")"
+plist_cli="$(plutil -extract ProgramArguments.1 raw -o - "$plist")"
+if [[ "$plist_cli" != "$expected_cli" ]]; then
+  printf 'LaunchAgent CLI %s does not match installed artifact CLI %s\n' \
+    "$plist_cli" "$expected_cli" >&2
+  exit 1
+fi
+process_command="$(ps -ww -p "$stable_pid" -o command=)"
+if [[ "$process_command" != *"$plist_cli"* ]] || \
+   [[ "$process_command" != *"service-run"* ]] || \
+   [[ "$process_command" != *"$config"* ]]; then
+  printf 'LaunchAgent PID %s is not running the installed artifact command\n' \
+    "$stable_pid" >&2
+  printf '%s\n' "$process_command" >&2
   exit 1
 fi
 
@@ -273,6 +328,7 @@ node -e '
     platform: process.platform,
     arch: process.arch,
     launchagent_stable: true,
+    installed_artifact_process_verified: true,
     doctor_lifecycle_checks_ok: true,
     doctor_live_adapter_check: "expected-degraded-fixture",
     uninstall_ok: true,

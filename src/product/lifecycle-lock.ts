@@ -10,7 +10,7 @@ import {
 } from './secure-local-files.js';
 import type { ProductRuntimeConfig } from './config.js';
 
-export type ProductLifecycleLockKind = 'runtime' | 'maintenance';
+export type ProductLifecycleLockKind = 'runtime' | 'maintenance' | 'service';
 export type ReleaseProductLifecycleLock = () => Promise<void>;
 
 export interface AcquireProductLifecycleLockOptions {

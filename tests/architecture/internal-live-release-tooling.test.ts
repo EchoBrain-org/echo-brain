@@ -175,7 +175,17 @@ describe('INTERNAL LIVE release tooling', () => {
     );
     const smoke = readFileSync(MACOS_SMOKE, 'utf8');
     expect(smoke).toContain('"$cli" init --config "$config"');
-    expect(smoke).toContain('"$cli" service install --config "$config"');
+    expect(smoke).toContain(
+      'if ! "$cli" service install --config "$config"',
+    );
+    expect(smoke).toContain('cat "$install_error_file" >&2');
+    expect(smoke).toContain('dump_diagnostics');
+    expect(smoke).toContain('value.action !== "install"');
+    expect(smoke).toContain(
+      'plutil -extract ProgramArguments.1 raw -o - "$plist"',
+    );
+    expect(smoke).toContain('ps -ww -p "$stable_pid" -o command=');
+    expect(smoke).toContain('installed_artifact_process_verified: true');
     expect(smoke).not.toContain('"$cli" onboard');
     expect(smoke).not.toContain('"$cli" selftest');
   });

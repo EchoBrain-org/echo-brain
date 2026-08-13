@@ -1529,6 +1529,26 @@ export class ProductOperator {
             'launchd bootstrap',
           );
           changed = true;
+          // RunAtLoad is part of the plist, but bootstrap accepting the job is
+          // not proof that launchd actually attempted to start it. Some
+          // launchd versions can leave a freshly bootstrapped agent loaded but
+          // stopped. Demand-start every newly bootstrapped installation so a
+          // successful install has one explicit start boundary.
+          await requireLaunchctlSuccess(
+            this.launchctl,
+            ['kickstart', target],
+            'launchd install start',
+          );
+        } else if (!before.running) {
+          // Re-running install is also the supported recovery path for an
+          // owned plist whose launchd job is loaded but stopped. Do not
+          // bootstrap a duplicate label.
+          await requireLaunchctlSuccess(
+            this.launchctl,
+            ['kickstart', target],
+            'launchd install start',
+          );
+          changed = true;
         }
       } else if (action === 'start') {
         if (!installed) {
@@ -1564,14 +1584,26 @@ export class ProductOperator {
         if (before.loaded) {
           await requireLaunchctlSuccess(
             this.launchctl,
-            ['bootout', target],
+            ['bootout', '--wait', target],
             'launchd restart bootout',
           );
+          const stopped = await inspectLaunchdService(this.launchctl, target);
+          if (stopped.loaded) {
+            throw new ProductOperatorError(
+              'service_command_failed',
+              'launchd restart bootout completed but the LaunchAgent remains loaded',
+            );
+          }
         }
         await requireLaunchctlSuccess(
           this.launchctl,
           ['bootstrap', `gui/${context.uid}`, context.plistPath],
           'launchd restart bootstrap',
+        );
+        await requireLaunchctlSuccess(
+          this.launchctl,
+          ['kickstart', target],
+          'launchd restart start',
         );
         changed = true;
       } else if (action === 'stop') {
@@ -1584,7 +1616,7 @@ export class ProductOperator {
         if (before.loaded) {
           await requireLaunchctlSuccess(
             this.launchctl,
-            ['bootout', target],
+            ['bootout', '--wait', target],
             'launchd bootout',
           );
           changed = true;
@@ -1601,15 +1633,46 @@ export class ProductOperator {
           if (before.loaded) {
             await requireLaunchctlSuccess(
               this.launchctl,
-              ['bootout', target],
+              ['bootout', '--wait', target],
               'launchd bootout',
             );
           }
-          this.fileSystem.unlink(context.plistPath);
-          installed = false;
-          changed = true;
         }
       }
+      const service = await inspectLaunchdService(this.launchctl, target);
+      if (
+        (action === 'install' || action === 'start' || action === 'restart') &&
+        (!service.loaded || !service.running)
+      ) {
+        throw new ProductOperatorError(
+          'service_command_failed',
+          `launchd ${action} completed but the LaunchAgent is not running`,
+        );
+      }
+      if (
+        (action === 'stop' || action === 'uninstall') &&
+        service.loaded
+      ) {
+        throw new ProductOperatorError(
+          'service_command_failed',
+          `launchd ${action} completed but the LaunchAgent remains loaded`,
+        );
+      }
+      if (action === 'uninstall' && installed) {
+        // The plist is the ownership proof and recovery handle. Retain it
+        // until launchd independently proves that the job is no longer
+        // loaded; an uncertain bootout must remain retryable.
+        this.fileSystem.unlink(context.plistPath);
+        installed = false;
+        changed = true;
+      }
+
+      return {
+        action,
+        installed,
+        service,
+        changed,
+      };
     } catch (error) {
       if (error instanceof ProductOperatorError) throw error;
       throw new ProductOperatorError(
@@ -1617,12 +1680,5 @@ export class ProductOperator {
         (error as Error).message,
       );
     }
-
-    return {
-      action,
-      installed,
-      service: await inspectLaunchdService(this.launchctl, target),
-      changed,
-    };
   }
 }

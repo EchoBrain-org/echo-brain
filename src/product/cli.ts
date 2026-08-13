@@ -2855,30 +2855,24 @@ export async function runProductCli(
       return 1;
     }
     try {
+      // The daemon owns the runtime lock for its whole lifetime, so stop must
+      // be allowed to signal launchd before waiting for that lock. A separate
+      // service lock serializes CLI lifecycle mutations without reversing the
+      // service -> runtime ordering or deadlocking a running daemon.
+      const releaseService =
+        action === "status"
+          ? undefined
+          : await lifecycleLock(
+              dependencies,
+              config.state_dir,
+              "service",
+              15_000,
+            );
       let result: Awaited<ReturnType<ProductOperator["service"]>>;
-      if (action === "restart") {
-        operator.preflightServiceStart();
-        await operator.service("stop");
-        const release = await lifecycleLock(
-          dependencies,
-          config.state_dir,
-          "runtime",
-          15_000,
-        );
-        try {
-          const started = await operator.service("start");
-          result = { ...started, action: "restart", changed: true };
-        } finally {
-          await release();
-        }
-      } else if (
-        action === "install" ||
-        action === "start"
-      ) {
-        const before = await operator.status();
-        if (before.service.running) {
-          result = await operator.service(action);
-        } else {
+      try {
+        if (action === "restart") {
+          operator.preflightServiceStart();
+          await operator.service("stop");
           const release = await lifecycleLock(
             dependencies,
             config.state_dir,
@@ -2886,22 +2880,42 @@ export async function runProductCli(
             15_000,
           );
           try {
-            result = await operator.service(action);
+            const started = await operator.service("start");
+            result = { ...started, action: "restart", changed: true };
           } finally {
             await release();
           }
+        } else if (action === "install" || action === "start") {
+          const before = await operator.status();
+          if (before.service.running) {
+            result = await operator.service(action);
+          } else {
+            const release = await lifecycleLock(
+              dependencies,
+              config.state_dir,
+              "runtime",
+              15_000,
+            );
+            try {
+              result = await operator.service(action);
+            } finally {
+              await release();
+            }
+          }
+        } else if (action === "stop" || action === "uninstall") {
+          result = await operator.service(action);
+          const release = await lifecycleLock(
+            dependencies,
+            config.state_dir,
+            "runtime",
+            15_000,
+          );
+          await release();
+        } else {
+          result = await operator.service(action);
         }
-      } else if (action === "stop" || action === "uninstall") {
-        result = await operator.service(action);
-        const release = await lifecycleLock(
-          dependencies,
-          config.state_dir,
-          "runtime",
-          15_000,
-        );
-        await release();
-      } else {
-        result = await operator.service(action);
+      } finally {
+        await releaseService?.();
       }
       print(stdout, {
         ok: true,

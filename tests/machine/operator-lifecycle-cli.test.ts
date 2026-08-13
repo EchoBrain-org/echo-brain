@@ -60,11 +60,26 @@ function output() {
 interface FakeLaunchd {
   runner: LaunchctlRunner;
   calls: string[][];
+  setState(state: { loaded: boolean; running: boolean }): void;
+  configure(options: FakeLaunchdOptions): void;
 }
 
-function fakeLaunchd(): FakeLaunchd {
+interface FakeLaunchdOptions {
+  bootstrapStarts?: boolean;
+  kickstartStarts?: boolean;
+  kickstartFailure?: string;
+  bootoutUnloads?: boolean;
+  bootoutFailure?: string;
+}
+
+function fakeLaunchd(options: FakeLaunchdOptions = {}): FakeLaunchd {
   let loaded = false;
   let running = false;
+  let bootstrapStarts = options.bootstrapStarts ?? true;
+  let kickstartStarts = options.kickstartStarts ?? true;
+  let kickstartFailure = options.kickstartFailure;
+  let bootoutUnloads = options.bootoutUnloads ?? true;
+  let bootoutFailure = options.bootoutFailure;
   const calls: string[][] = [];
   const runner: LaunchctlRunner = async (input) => {
     const args = [...input];
@@ -82,22 +97,59 @@ function fakeLaunchd(): FakeLaunchd {
         : { status: 113, stdout: '', stderr: 'Could not find service' };
     } else if (args[0] === 'bootstrap') {
       loaded = true;
-      running = true;
+      running = bootstrapStarts;
       result = { status: 0, stdout: '', stderr: '' };
     } else if (args[0] === 'kickstart') {
-      loaded = true;
-      running = true;
-      result = { status: 0, stdout: '', stderr: '' };
+      if (kickstartFailure !== undefined) {
+        result = {
+          status: 5,
+          stdout: '',
+          stderr: kickstartFailure,
+        };
+      } else {
+        loaded = true;
+        running = kickstartStarts;
+        result = { status: 0, stdout: '', stderr: '' };
+      }
     } else if (args[0] === 'bootout') {
-      loaded = false;
-      running = false;
-      result = { status: 0, stdout: '', stderr: '' };
+      if (bootoutFailure !== undefined) {
+        result = {
+          status: 5,
+          stdout: '',
+          stderr: bootoutFailure,
+        };
+      } else {
+        if (bootoutUnloads) {
+          loaded = false;
+          running = false;
+        }
+        result = { status: 0, stdout: '', stderr: '' };
+      }
     } else {
       result = { status: 64, stdout: '', stderr: 'unexpected launchctl call' };
     }
     return result;
   };
-  return { runner, calls };
+  return {
+    runner,
+    calls,
+    setState: (state) => {
+      loaded = state.loaded;
+      running = state.running;
+    },
+    configure: (changes) => {
+      if (changes.bootstrapStarts !== undefined)
+        bootstrapStarts = changes.bootstrapStarts;
+      if (changes.kickstartStarts !== undefined)
+        kickstartStarts = changes.kickstartStarts;
+      if ('kickstartFailure' in changes)
+        kickstartFailure = changes.kickstartFailure;
+      if (changes.bootoutUnloads !== undefined)
+        bootoutUnloads = changes.bootoutUnloads;
+      if ('bootoutFailure' in changes)
+        bootoutFailure = changes.bootoutFailure;
+    },
+  };
 }
 
 function fixtures(root: string, credentialRef?: string) {
@@ -706,6 +758,13 @@ describe('operator onboarding and lifecycle CLI', () => {
       changed: true,
       service: { loaded: true, running: true },
     });
+    expect(launchd.calls.map((args) => args[0])).toEqual([
+      'print',
+      'print',
+      'bootstrap',
+      'kickstart',
+      'print',
+    ]);
     const plistPath = JSON.parse(
       readFileSync(
         join(
@@ -731,6 +790,9 @@ describe('operator onboarding and lifecycle CLI', () => {
     expect(JSON.parse(repeated.stdout).changed).toBe(false);
     expect(
       launchd.calls.filter((args) => args[0] === 'bootstrap'),
+    ).toHaveLength(1);
+    expect(
+      launchd.calls.filter((args) => args[0] === 'kickstart'),
     ).toHaveLength(1);
 
     const status = await command(
@@ -782,6 +844,274 @@ describe('operator onboarding and lifecycle CLI', () => {
     });
     expect(existsSync(plistPath)).toBe(false);
   });
+
+  it('refuses a stale plist without mutating launchd or replacing the ownership evidence', async () => {
+    const { dependencies, launchd, ...fixture } = installation(
+      'echo-service-stale-plist-',
+    );
+    await expectOk(['init', '--config', fixture.configPath], dependencies);
+    const manifest = JSON.parse(
+      readFileSync(
+        join(
+          fixture.stateDirectory,
+          'manifests',
+          'operator-installation.v1.json',
+        ),
+        'utf8',
+      ),
+    ) as { service: { plist_path: string } };
+    mkdirSync(join(fixture.root, 'home', 'Library', 'LaunchAgents'), {
+      recursive: true,
+      mode: 0o700,
+    });
+    const stale = 'tampered launch agent\n';
+    writeFileSync(manifest.service.plist_path, stale, { mode: 0o600 });
+
+    const failed = await command(
+      ['service', 'install', '--config', fixture.configPath],
+      dependencies,
+    );
+
+    expect(failed.status).toBe(1);
+    expect(JSON.parse(failed.stderr)).toMatchObject({
+      ok: false,
+      command: 'service install',
+      code: 'service_conflict',
+      error: 'LaunchAgent plist exists but is not owned by this installation',
+    });
+    expect(readFileSync(manifest.service.plist_path, 'utf8')).toBe(stale);
+    expect(launchd.calls.every((args) => args[0] === 'print')).toBe(true);
+  });
+
+  it('demand-starts an owned loaded-but-stopped service without bootstrapping a duplicate', async () => {
+    const { dependencies, launchd, ...fixture } = installation(
+      'echo-service-install-recovery-',
+    );
+    await expectOk(['init', '--config', fixture.configPath], dependencies);
+    await expectOk(
+      ['service', 'install', '--config', fixture.configPath],
+      dependencies,
+    );
+    launchd.setState({ loaded: true, running: false });
+    const callCount = launchd.calls.length;
+
+    const recovered = await expectOk(
+      ['service', 'install', '--config', fixture.configPath],
+      dependencies,
+    );
+
+    expect(JSON.parse(recovered.stdout)).toMatchObject({
+      action: 'install',
+      installed: true,
+      changed: true,
+      service: { loaded: true, running: true },
+    });
+    expect(
+      launchd.calls.slice(callCount).map((args) => args[0]),
+    ).toEqual(['print', 'print', 'kickstart', 'print']);
+    expect(
+      launchd.calls.filter((args) => args[0] === 'bootstrap'),
+    ).toHaveLength(1);
+    expect(
+      launchd.calls.filter((args) => args[0] === 'kickstart'),
+    ).toHaveLength(2);
+  });
+
+  it('fails install honestly when launchd rejects the explicit demand-start', async () => {
+    const launchd = fakeLaunchd({
+      bootstrapStarts: false,
+      kickstartFailure: 'operation not permitted',
+    });
+    const { dependencies, ...fixture } = installation(
+      'echo-service-install-start-failure-',
+      launchd,
+    );
+    await expectOk(['init', '--config', fixture.configPath], dependencies);
+
+    const failed = await command(
+      ['service', 'install', '--config', fixture.configPath],
+      dependencies,
+    );
+
+    expect(failed.status).toBe(1);
+    expect(JSON.parse(failed.stderr)).toMatchObject({
+      ok: false,
+      command: 'service install',
+      code: 'service_command_failed',
+      error: 'launchd install start failed: operation not permitted',
+    });
+    expect(launchd.calls.map((args) => args[0])).toEqual([
+      'print',
+      'print',
+      'bootstrap',
+      'kickstart',
+    ]);
+
+    const status = await expectOk(
+      ['status', '--config', fixture.configPath],
+      dependencies,
+    );
+    expect(JSON.parse(status.stdout)).toMatchObject({
+      service: { installed: true, loaded: true, running: false },
+    });
+  });
+
+  it('fails install when demand-start succeeds but the agent immediately exits', async () => {
+    const launchd = fakeLaunchd({
+      bootstrapStarts: false,
+      kickstartStarts: false,
+    });
+    const { dependencies, ...fixture } = installation(
+      'echo-service-install-immediate-exit-',
+      launchd,
+    );
+    await expectOk(['init', '--config', fixture.configPath], dependencies);
+
+    const failed = await command(
+      ['service', 'install', '--config', fixture.configPath],
+      dependencies,
+    );
+
+    expect(failed.status).toBe(1);
+    expect(JSON.parse(failed.stderr)).toMatchObject({
+      ok: false,
+      command: 'service install',
+      code: 'service_command_failed',
+      error:
+        'launchd install completed but the LaunchAgent is not running',
+    });
+    expect(launchd.calls.map((args) => args[0])).toEqual([
+      'print',
+      'print',
+      'bootstrap',
+      'kickstart',
+      'print',
+    ]);
+  });
+
+  it.each(['start', 'restart'] as const)(
+    'fails %s when launchd accepts activation but the agent immediately exits',
+    async (action) => {
+      const { dependencies, launchd, ...fixture } = installation(
+        `echo-service-${action}-immediate-exit-`,
+      );
+      await expectOk(['init', '--config', fixture.configPath], dependencies);
+      await expectOk(
+        ['service', 'install', '--config', fixture.configPath],
+        dependencies,
+      );
+      if (action === 'start') {
+        await expectOk(
+          ['service', 'stop', '--config', fixture.configPath],
+          dependencies,
+        );
+      }
+      launchd.configure({
+        bootstrapStarts: false,
+        kickstartStarts: false,
+      });
+
+      const failed = await command(
+        ['service', action, '--config', fixture.configPath],
+        dependencies,
+      );
+
+      expect(failed.status).toBe(1);
+      expect(JSON.parse(failed.stderr)).toMatchObject({
+        ok: false,
+        command: `service ${action}`,
+        code: 'service_command_failed',
+        error: 'launchd start completed but the LaunchAgent is not running',
+      });
+      expect(
+        launchd.calls.some(
+          (args) => args[0] === 'bootout' && args[1] === '--wait',
+        ),
+      ).toBe(true);
+      expect(launchd.calls.some((args) => args[0] === 'kickstart')).toBe(true);
+    },
+  );
+
+  it('fails stop when waited bootout returns success but the job remains loaded', async () => {
+    const { dependencies, launchd, ...fixture } = installation(
+      'echo-service-stop-still-loaded-',
+    );
+    await expectOk(['init', '--config', fixture.configPath], dependencies);
+    await expectOk(
+      ['service', 'install', '--config', fixture.configPath],
+      dependencies,
+    );
+    launchd.configure({ bootoutUnloads: false });
+
+    const failed = await command(
+      ['service', 'stop', '--config', fixture.configPath],
+      dependencies,
+    );
+
+    expect(failed.status).toBe(1);
+    expect(JSON.parse(failed.stderr)).toMatchObject({
+      ok: false,
+      command: 'service stop',
+      code: 'service_command_failed',
+      error: 'launchd stop completed but the LaunchAgent remains loaded',
+    });
+    expect(launchd.calls.at(-2)?.slice(0, 2)).toEqual(['bootout', '--wait']);
+    expect(launchd.calls.at(-1)?.[0]).toBe('print');
+  });
+
+  it.each([
+    {
+      name: 'accepted but still loaded',
+      behavior: { bootoutUnloads: false },
+      error: 'launchd uninstall completed but the LaunchAgent remains loaded',
+    },
+    {
+      name: 'refused',
+      behavior: { bootoutFailure: 'operation not permitted' },
+      error: 'launchd bootout failed: operation not permitted',
+    },
+  ])(
+    'retains the owned plist when uninstall bootout is $name',
+    async ({ behavior, error }) => {
+      const { dependencies, launchd, ...fixture } = installation(
+        'echo-service-uninstall-uncertain-',
+      );
+      await expectOk(['init', '--config', fixture.configPath], dependencies);
+      await expectOk(
+        ['service', 'install', '--config', fixture.configPath],
+        dependencies,
+      );
+      const manifest = JSON.parse(
+        readFileSync(
+          join(
+            fixture.stateDirectory,
+            'manifests',
+            'operator-installation.v1.json',
+          ),
+          'utf8',
+        ),
+      ) as { service: { plist_path: string } };
+      launchd.configure(behavior);
+
+      const failed = await command(
+        ['service', 'uninstall', '--config', fixture.configPath],
+        dependencies,
+      );
+
+      expect(failed.status).toBe(1);
+      expect(JSON.parse(failed.stderr)).toMatchObject({
+        ok: false,
+        command: 'service uninstall',
+        code: 'service_command_failed',
+        error,
+      });
+      expect(existsSync(manifest.service.plist_path)).toBe(true);
+      const bootout = [...launchd.calls]
+        .reverse()
+        .find((args) => args[0] === 'bootout');
+      expect(bootout?.slice(0, 2)).toEqual(['bootout', '--wait']);
+    },
+  );
 
   it('locks before creating state and rejects a service restart after config drift', async () => {
     const { dependencies: base, ...fixture } = installation(
@@ -1173,6 +1503,8 @@ describe('operator onboarding and lifecycle CLI', () => {
   it('fails closed when launchd cannot prove that the service is absent', async () => {
     const unavailable: FakeLaunchd = {
       calls: [],
+      setState: () => undefined,
+      configure: () => undefined,
       runner: async (args) => {
         unavailable.calls.push([...args]);
         return { status: 1, stdout: '', stderr: 'permission denied' };

@@ -60,6 +60,17 @@ describe('product lifecycle locks', () => {
     await releaseRuntime();
   });
 
+  it('serializes service mutations without contending with the daemon runtime lease', async () => {
+    const state = stateRoot();
+    const releaseRuntime = await acquireProductLifecycleLock(state, 'runtime');
+    const releaseService = await acquireProductLifecycleLock(state, 'service');
+    await expect(
+      acquireProductLifecycleLock(state, 'service', { timeoutMs: 0 }),
+    ).rejects.toMatchObject({ code: 'busy' });
+    await releaseService();
+    await releaseRuntime();
+  });
+
   it('rejects coordination under a shared writable parent', async () => {
     const root = realpathSync(
       mkdtempSync(join(tmpdir(), 'echo-lifecycle-parent-')),
