@@ -71,7 +71,7 @@ dump_diagnostics() {
 
 trap cleanup EXIT
 
-actual_version="$($cli --version)"
+actual_version="$("$cli" --version)"
 if [[ "$actual_version" != "$expected_version" ]]; then
   printf 'installed version %s does not match expected %s\n' \
     "$actual_version" "$expected_version" >&2
