@@ -16,6 +16,7 @@ import { OrganizationReadableSearchReader } from './readable-search-reader.js';
 import { OrganizationSlackIdentityLinkCoordinator } from './slack-identity-link-coordinator.js';
 
 export {
+  DEFAULT_LOCAL_ORGANIZATION_ACCESS_CLOCK_SKEW_MS,
   DEFAULT_LOCAL_ORGANIZATION_REQUESTED_LEASE_TTL_MS,
   MAX_LOCAL_ORGANIZATION_ACTIVE_LEASE_TTL_MS,
 } from './enrollment/local-organization-coordinator.js';

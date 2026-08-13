@@ -650,6 +650,11 @@ lease as cached content authorization. Use
 prove the identical authority at a new HTTPS origin before changing the saved
 route.
 
+Product access verification allows Authority timestamps up to five seconds
+ahead of the local trusted clock for normal distributed-clock variation.
+Larger future skew remains a fail-closed error; the protocol primitive itself
+keeps its explicit default of zero allowance.
+
 Deploy a V2-capable Authority before a V2-capable product. The new Authority
 continues to serve legacy V1 products, while a new product deliberately fails
 closed against an Authority that does not understand its signed V2 request.

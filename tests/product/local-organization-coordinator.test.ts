@@ -22,6 +22,7 @@ import type { OrganizationAuthorityClient } from '../../src/product/organization
 import { OrganizationAuthorityConflictError } from '../../src/product/organization/client/authority-client.js';
 import { organizationApprovalResolutionRequiresAuthority } from '../../src/product/organization/approval-action-authorizer.js';
 import {
+  DEFAULT_LOCAL_ORGANIZATION_ACCESS_CLOCK_SKEW_MS,
   DEFAULT_LOCAL_ORGANIZATION_REQUESTED_LEASE_TTL_MS,
   LocalOrganizationCoordinator,
   MAX_LOCAL_ORGANIZATION_ACTIVE_LEASE_TTL_MS,
@@ -266,6 +267,7 @@ function coordinator(
   installationSigner: TestInstallationSigner,
   clock: MutableClock,
   requestedActiveLeaseTtlMs?: number,
+  allowedClockSkewMs?: number,
 ): LocalOrganizationCoordinator {
   return new LocalOrganizationCoordinator({
     state,
@@ -275,6 +277,7 @@ function coordinator(
     ...(requestedActiveLeaseTtlMs === undefined
       ? {}
       : { requestedActiveLeaseTtlMs }),
+    ...(allowedClockSkewMs === undefined ? {} : { allowedClockSkewMs }),
     clock,
     requestIds: {
       nextAccessLeaseRequestId: () => ACCESS_REQUEST_ID,
@@ -558,6 +561,163 @@ describe('local organization coordinator', () => {
       installation_id: ORGANIZATION_IDS.installation,
       requested_active_lease_ttl_ms: MAX_TTL_MS,
     });
+  });
+
+  it('accepts a normal lease response evaluated within the product clock-skew bound', async () => {
+    expect(DEFAULT_LOCAL_ORGANIZATION_ACCESS_CLOCK_SKEW_MS).toBe(5_000);
+    const authority = new TestAuthority();
+    const state = new MemoryOrganizationStateStore();
+    const installationSigner = new TestInstallationSigner();
+    const clock = mutableClock();
+    const client = descriptorClient(authority, {
+      issueAccessLease: async () => {
+        const enrollment = state.readEnrollment();
+        if (enrollment?.receipt === null || enrollment?.receipt === undefined) {
+          throw new Error('enrollment disappeared');
+        }
+        const previous = state.verifyCurrentAccess({
+          now: clock.value,
+          maximum_active_ttl_ms: MAX_TTL_MS,
+        }).state;
+        return {
+          access_state: await authority.nextActiveState(
+            enrollment.request,
+            enrollment.receipt,
+            previous,
+          ),
+        };
+      },
+    });
+    const local = coordinator(state, client, installationSigner, clock);
+    await local.enroll(enrollmentInput(authority));
+    // The Authority response is evaluated at REFRESHED_AT, exactly five
+    // seconds ahead of this machine's trusted clock.
+    clock.value = '2026-07-22T00:02:55.000Z';
+
+    await expect(local.refreshAccess()).resolves.toMatchObject({
+      permitted: true,
+      state: { access_state_sequence: 2 },
+    });
+  });
+
+  it('recovers a stale 409 head evaluated within the product clock-skew bound', async () => {
+    const authority = new TestAuthority();
+    const state = new MemoryOrganizationStateStore();
+    const installationSigner = new TestInstallationSigner();
+    const clock = mutableClock();
+    await coordinator(
+      state,
+      descriptorClient(authority),
+      installationSigner,
+      clock,
+    ).enroll(enrollmentInput(authority));
+    const enrollment = state.readEnrollment();
+    if (enrollment?.receipt === null || enrollment?.receipt === undefined) {
+      throw new Error('enrollment disappeared');
+    }
+    const previous = state.verifyCurrentAccess({
+      now: clock.value,
+      maximum_active_ttl_ms: MAX_TTL_MS,
+    }).state;
+    const currentHead = await authority.nextActiveState(
+      enrollment.request,
+      enrollment.receipt,
+      previous,
+    );
+    const conflictClient = descriptorClient(authority, {
+      issueAccessLease: async () => {
+        throw new OrganizationAuthorityConflictError({
+          access_state: currentHead,
+        });
+      },
+    });
+    // A stale conflict head receives the same bounded treatment.
+    clock.value = '2026-07-22T00:02:55.000Z';
+
+    await expect(
+      coordinator(state, conflictClient, installationSigner, clock).refreshAccess(),
+    ).resolves.toMatchObject({
+      permitted: true,
+      state: { access_state_sequence: 2 },
+    });
+  });
+
+  it('refuses a lease response beyond the product clock-skew bound', async () => {
+    const authority = new TestAuthority();
+    const state = new MemoryOrganizationStateStore();
+    const installationSigner = new TestInstallationSigner();
+    const clock = mutableClock();
+    const client = descriptorClient(authority, {
+      issueAccessLease: async () => {
+        const enrollment = state.readEnrollment();
+        if (enrollment?.receipt === null || enrollment?.receipt === undefined) {
+          throw new Error('enrollment disappeared');
+        }
+        const previous = state.verifyCurrentAccess({
+          now: clock.value,
+          maximum_active_ttl_ms: MAX_TTL_MS,
+        }).state;
+        return {
+          access_state: await authority.nextActiveState(
+            enrollment.request,
+            enrollment.receipt,
+            previous,
+          ),
+        };
+      },
+    });
+    const local = coordinator(state, client, installationSigner, clock);
+    await local.enroll(enrollmentInput(authority));
+    // REFRESHED_AT is 5,001 ms ahead: one millisecond over the product bound.
+    clock.value = '2026-07-22T00:02:54.999Z';
+
+    await expect(local.refreshAccess()).rejects.toThrow(
+      'organization access state is implausibly future-dated',
+    );
+    expect(state.readEnrollment()?.accepted_access_sequence).toBe(1);
+  });
+
+  it('keeps an explicit zero clock-skew override fail-closed', async () => {
+    const authority = new TestAuthority();
+    const state = new MemoryOrganizationStateStore();
+    const installationSigner = new TestInstallationSigner();
+    const clock = mutableClock();
+    const client = descriptorClient(authority, {
+      issueAccessLease: async () => {
+        const enrollment = state.readEnrollment();
+        if (enrollment?.receipt === null || enrollment?.receipt === undefined) {
+          throw new Error('enrollment disappeared');
+        }
+        const previous = state.verifyCurrentAccess({
+          now: clock.value,
+          maximum_active_ttl_ms: MAX_TTL_MS,
+        }).state;
+        return {
+          access_state: await authority.nextActiveState(
+            enrollment.request,
+            enrollment.receipt,
+            previous,
+          ),
+        };
+      },
+    });
+    const local = coordinator(
+      state,
+      client,
+      installationSigner,
+      clock,
+      undefined,
+      0,
+    );
+    await local.enroll(enrollmentInput(authority));
+    // REFRESHED_AT is only one millisecond ahead, but the explicit product
+    // override must preserve protocol-equivalent zero tolerance.
+    clock.value = '2026-07-22T00:02:59.999Z';
+
+    await expect(local.refreshAccess()).rejects.toThrow(
+      'organization access state is implausibly future-dated',
+    );
+    expect(state.readEnrollment()?.accepted_access_sequence).toBe(1);
   });
 
   it('rejects a successful active response longer than the V2 request', async () => {

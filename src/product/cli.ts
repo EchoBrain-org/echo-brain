@@ -60,6 +60,7 @@ import type { InstallationSigner } from "./machine/security/installation-signer.
 import {
   createLocalOrganizationRuntime,
   createOrganizationIngestExclusion,
+  DEFAULT_LOCAL_ORGANIZATION_ACCESS_CLOCK_SKEW_MS,
   MAX_LOCAL_ORGANIZATION_ACTIVE_LEASE_TTL_MS,
   HttpOrganizationAuthorityClient,
   HttpOrganizationRecordClient,
@@ -1954,6 +1955,8 @@ export async function runProductCli(
               now: now(),
               maximum_active_ttl_ms:
                 MAX_LOCAL_ORGANIZATION_ACTIVE_LEASE_TTL_MS,
+              allowed_clock_skew_ms:
+                DEFAULT_LOCAL_ORGANIZATION_ACCESS_CLOCK_SKEW_MS,
             });
             organizationResult = {
               ok: true,

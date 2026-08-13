@@ -55,6 +55,12 @@ export const MAX_LOCAL_ORGANIZATION_ACTIVE_LEASE_TTL_MS =
   MAX_ORGANIZATION_ACCESS_LEASE_REQUEST_TTL_MS;
 export const DEFAULT_LOCAL_ORGANIZATION_REQUESTED_LEASE_TTL_MS =
   MAX_LOCAL_ORGANIZATION_ACTIVE_LEASE_TTL_MS;
+/**
+ * Product deployments verify Authority-issued timestamps across two machines.
+ * Permit routine distributed-clock differences while retaining a narrow,
+ * fail-closed boundary well below the protocol's five-minute maximum.
+ */
+export const DEFAULT_LOCAL_ORGANIZATION_ACCESS_CLOCK_SKEW_MS = 5_000;
 
 export interface EnrollLocalInstallationInput {
   authorityBaseUrl: string;
@@ -160,9 +166,9 @@ export class LocalOrganizationCoordinator {
     return {
       now: this.clock.now(),
       maximum_active_ttl_ms: this.options.maximumActiveLeaseTtlMs,
-      ...(this.options.allowedClockSkewMs === undefined
-        ? {}
-        : { allowed_clock_skew_ms: this.options.allowedClockSkewMs }),
+      allowed_clock_skew_ms:
+        this.options.allowedClockSkewMs ??
+        DEFAULT_LOCAL_ORGANIZATION_ACCESS_CLOCK_SKEW_MS,
     };
   }
 
