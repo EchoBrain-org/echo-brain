@@ -21,6 +21,7 @@ import {
   type OrganizationPermissionCheckRequestV1,
 } from '@echo-brain/organization-api';
 import {
+  createOrganizationRecordReceipt,
   createOrganizationEnrollmentReceipt,
   createOrganizationEnrollmentRequest,
   createOrganizationInstallationAccessState,
@@ -32,6 +33,8 @@ import {
   type OrganizationEnrollmentReceiptV1,
   type OrganizationEnrollmentRequestV1,
   type OrganizationInstallationAccessStateV1,
+  type OrganizationRecordEnvelopeAnyVersion,
+  type OrganizationRecordReceiptV1,
 } from '@echo-brain/organization-protocol';
 import type { OrganizationAuthorityClient } from '../../src/product/organization/client/authority-client.js';
 import type {
@@ -273,6 +276,32 @@ export class TestAuthority {
           Date.parse(REFRESHED_AT) + activeLeaseTtlMs,
         ).toISOString(),
         maximum_active_ttl_ms: activeLeaseTtlMs,
+      },
+      pinned,
+      this.signer.sign,
+    );
+  }
+
+  async recordReceipt(
+    envelope: OrganizationRecordEnvelopeAnyVersion,
+    installationSigningKey: P256SigningKeyDescriptor,
+    options: { position?: number; recordedAt?: string } = {},
+  ): Promise<OrganizationRecordReceiptV1> {
+    const pinned = verifyOrganizationAuthorityPin(
+      this.descriptor,
+      this.pin,
+    );
+    const position = options.position ?? 1;
+    return await createOrganizationRecordReceipt(
+      {
+        envelope,
+        installation_signing_key: installationSigningKey,
+        position,
+        record_hash: canonicalSha256({
+          envelope_id: envelope.envelope_id,
+          position,
+        }),
+        recorded_at: options.recordedAt ?? NOW,
       },
       pinned,
       this.signer.sign,

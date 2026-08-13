@@ -553,6 +553,20 @@ persists cursors and decisions, waits for approval, and delivers the exact
 approved snapshot. Failures conservatively pin the source cursor. The installed
 LaunchAgent runs the same cycle continuously; there is no foreground `run`.
 
+If a decision is already durably resolved but its organization-record append
+is still pending, stop the service and run the narrow recovery command:
+
+```sh
+echo-brain organization record-flush --config /absolute/path/runtime.json
+```
+
+`record-flush` takes the exclusive runtime and maintenance locks, rechecks
+current organization access, and performs one awaited record sweep. It does
+not construct meeting, processor, delivery, or approval adapters and cannot
+pull another meeting or advance a source cursor. Its receipt output is a typed
+identifier-and-digest summary; the complete signed receipt remains in the
+private decision-node state.
+
 `approvals` lists local decision records without a federation projection. It
 cannot resolve one — the organization
 Slack approval surface is the single v1 resolver, so every approve/reject is

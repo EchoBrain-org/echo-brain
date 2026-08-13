@@ -262,7 +262,8 @@ export async function assertProductAccess(
 /** Enough alerts to act on, few enough that one cycle line stays readable. */
 const MAX_REPORTED_RECORD_ALERTS = 3;
 const MAX_REPORTED_RECORD_ALERT_DETAIL_CHARACTERS = 200;
-const DEFAULT_ORGANIZATION_RECORD_SWEEP_TIMEOUT_MS = 10_000;
+/** Shared deadline for a cycle sweep and any coordinator-owned background pass. */
+export const DEFAULT_ORGANIZATION_RECORD_SWEEP_TIMEOUT_MS = 10_000;
 
 const NO_RECORD_SWEEP_COUNTS = Object.freeze({
   examined: 0,

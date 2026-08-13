@@ -16,6 +16,7 @@ import {
 import {
   assertProductAccess,
   assertRetiredFounderProvenanceRefused,
+  DEFAULT_ORGANIZATION_RECORD_SWEEP_TIMEOUT_MS,
   prepareProductComposition,
   prepareProductStateRoot,
   resolveProductClock,
@@ -250,6 +251,7 @@ Usage:
   echo-brain organization enroll --config <absolute-path> --invitation <absolute-path> --authority-pin <sha256:...> [--authority-ca <absolute-path>] --allow-exportable-software-key
   echo-brain organization status --config <absolute-path>
   echo-brain organization refresh --config <absolute-path>
+  echo-brain organization record-flush --config <absolute-path>
   echo-brain organization recent-decisions --config <absolute-path>
   echo-brain organization reviewer-recent-decisions --config <absolute-path>
   echo-brain organization readable-search --config <absolute-path> --query <text>
@@ -361,6 +363,7 @@ const RULES: Readonly<Record<string, CommandRule>> = {
   },
   "organization status": NONE,
   "organization refresh": NONE,
+  "organization record-flush": NONE,
   "organization recent-decisions": NONE,
   "organization reviewer-recent-decisions": NONE,
   "organization readable-search": { accepts: ["query"], requires: ["query"] },
@@ -400,6 +403,7 @@ const ACTIONS: Readonly<Record<string, readonly string[]>> = {
     "enroll",
     "status",
     "refresh",
+    "record-flush",
     "recent-decisions",
     "reviewer-recent-decisions",
     "readable-search",
@@ -1096,6 +1100,289 @@ function createOrganizationRecordSubmitter(input: {
   });
 }
 
+interface OrganizationRecordFlushTransition {
+  approval_id: string;
+  outcome: "published" | "rejected";
+  receipt_summary?: {
+    schema_version: 1;
+    kind: "echo-organization-record-receipt";
+    authority_id: string;
+    organization_id: string;
+    envelope_id: string;
+    envelope_sha256: string;
+    installation_id: string;
+    idempotency_key: string;
+    position: number;
+    record_hash: string;
+    recorded_at: string;
+  };
+  rejection?: {
+    envelope_id: string;
+    envelope_sha256: string;
+    idempotency_key: string;
+    reason_code: string;
+  };
+}
+
+/**
+ * Runs the narrow operator recovery path for already-resolved records.
+ *
+ * The candidate ids are captured before the sweep, so output describes only
+ * transitions caused (or completed idempotently) by this invocation. A prior
+ * published receipt can never be misreported as fresh recovery evidence.
+ */
+async function flushOrganizationRecords(
+  config: ProductRuntimeConfig,
+  dependencies: ProductCliDependencies,
+): Promise<{
+  ok: boolean;
+  candidate_records: number;
+  sweep: OrganizationRecordSweepResult;
+  published_records: readonly OrganizationRecordFlushTransition[];
+  rejected_records: readonly OrganizationRecordFlushTransition[];
+}> {
+  // The early dispatch gate ran before lifecycle acquisition. Re-check inside
+  // the exclusive window before opening organization SQLite, inspecting the
+  // signer, refreshing access, or contacting the Authority.
+  refuseRetiredFounderProvenance(config.state_dir);
+  const { accessGate, recordSubmitter } = resolveOrganizationAuthorization(
+    config,
+    dependencies,
+  );
+  try {
+    if (recordSubmitter === undefined) {
+      throw new Error(
+        "organization record flush requires an enrolled, connected organization",
+      );
+    }
+    await assertProductAccess(accessGate);
+    const nodes = new DecisionNodeStore(config.state_dir, {
+      now: dependencies.now,
+    });
+    const before = await nodes.listForSubmission();
+    const candidates = new Set(
+      before.nodes
+        .filter(
+          (node) =>
+            node.organization_record.status === "pending" ||
+            node.organization_record.status === "outbound",
+        )
+        .map((node) => node.approval_id),
+    );
+    // Exactly one awaited submitter sweep. This command does not construct a
+    // product composition, adapter registry, or core state store.
+    const sweep = await recordSubmitter.sweep({});
+    const after = await nodes.listForSubmission();
+    const transitions: OrganizationRecordFlushTransition[] = [];
+    for (const node of after.nodes) {
+      if (!candidates.has(node.approval_id)) continue;
+      const record = node.organization_record;
+      if (record.status === "published" && record.receipt !== null) {
+        const receipt = record.receipt;
+        transitions.push({
+          approval_id: node.approval_id,
+          outcome: "published",
+          receipt_summary: {
+            schema_version: receipt.schema_version,
+            kind: receipt.kind,
+            authority_id: receipt.authority_id,
+            organization_id: receipt.organization_id,
+            envelope_id: receipt.envelope_id,
+            envelope_sha256: receipt.envelope_sha256,
+            installation_id: receipt.installation_id,
+            idempotency_key: receipt.idempotency_key,
+            position: receipt.position,
+            record_hash: receipt.record_hash,
+            recorded_at: receipt.recorded_at,
+          },
+        });
+      } else if (record.status === "rejected" && record.rejection !== null) {
+        const rejection = record.rejection;
+        transitions.push({
+          approval_id: node.approval_id,
+          outcome: "rejected",
+          rejection: {
+            envelope_id: rejection.envelope_id,
+            envelope_sha256: rejection.envelope_sha256,
+            idempotency_key: rejection.idempotency_key,
+            reason_code: rejection.reason_code,
+          },
+        });
+      }
+    }
+    return {
+      // `sweep.ok` means no alert. A retry is deliberately alert-free in the
+      // submitter because it remains recoverable, but this one-shot command
+      // must not call an undelivered result successful.
+      ok:
+        sweep.ok &&
+        sweep.retried === 0 &&
+        sweep.rejected === 0 &&
+        transitions.filter(
+          (transition) => transition.outcome === "published",
+        ).length === candidates.size,
+      candidate_records: candidates.size,
+      sweep,
+      published_records: transitions.filter(
+        (transition) => transition.outcome === "published",
+      ),
+      rejected_records: transitions.filter(
+        (transition) => transition.outcome === "rejected",
+      ),
+    };
+  } finally {
+    await accessGate?.close?.();
+  }
+}
+
+/**
+ * Serializes organization-record sweeps without losing an approval that
+ * resolves while a service-cycle sweep is already looking at the node set.
+ *
+ * The first caller receives one outer batch promise. A request that arrives
+ * while its first physical sweep runs adds one signal-free follow-up to that
+ * same batch, so its result carries both passes and composition cannot close
+ * between them. The coordinator owns a lifetime abort controller for each
+ * physical pass and its `close()` drains the active batch before the runtime
+ * lock is released. Requests during the follow-up share that batch instead of
+ * scheduling a third pass; the next service cycle is their durable retry path.
+ */
+export interface OrganizationRecordSweepCoordinator {
+  sweep(options: {
+    signal?: AbortSignal;
+  }): Promise<OrganizationRecordSweepResult>;
+  close(): Promise<void>;
+}
+
+function mergeOrganizationRecordSweepResults(
+  first: OrganizationRecordSweepResult,
+  second: OrganizationRecordSweepResult,
+): OrganizationRecordSweepResult {
+  return {
+    ok: first.ok && second.ok,
+    examined: first.examined + second.examined,
+    excluded: first.excluded + second.excluded,
+    skipped: first.skipped + second.skipped,
+    published: first.published + second.published,
+    rejected: first.rejected + second.rejected,
+    retried: first.retried + second.retried,
+    alerts: [...first.alerts, ...second.alerts],
+  };
+}
+
+export function createOrganizationRecordSweepCoordinator(
+  sweep: (options: {
+    signal?: AbortSignal;
+  }) => Promise<OrganizationRecordSweepResult>,
+  options: {
+    timeoutMs?: number;
+  } = {},
+): OrganizationRecordSweepCoordinator {
+  const timeoutMs =
+    options.timeoutMs ?? DEFAULT_ORGANIZATION_RECORD_SWEEP_TIMEOUT_MS;
+  let activeBatch: Promise<OrganizationRecordSweepResult> | null = null;
+  let activeController: AbortController | null = null;
+  let followUpRequested = false;
+  let acceptingFollowUp = false;
+  let closed = false;
+
+  const physicalSweep = async (
+    options: { signal?: AbortSignal },
+  ): Promise<OrganizationRecordSweepResult> => {
+    const controller = new AbortController();
+    const abortForParent = (): void => {
+      controller.abort(options.signal?.reason);
+    };
+    if (options.signal?.aborted === true) abortForParent();
+    else
+      options.signal?.addEventListener('abort', abortForParent, {
+        once: true,
+      });
+    activeController = controller;
+    const timer = setTimeout(
+      () =>
+        controller.abort(
+          new Error(`organization record sweep timed out after ${timeoutMs}ms`),
+        ),
+      timeoutMs,
+    );
+    try {
+      return await sweep({ signal: controller.signal });
+    } finally {
+      clearTimeout(timer);
+      options.signal?.removeEventListener('abort', abortForParent);
+      if (activeController === controller) activeController = null;
+    }
+  };
+
+  const runBatch = async (
+    firstOptions: { signal?: AbortSignal },
+  ): Promise<OrganizationRecordSweepResult> => {
+    let first: OrganizationRecordSweepResult | undefined;
+    let firstFailure: unknown;
+    try {
+      first = await physicalSweep(firstOptions);
+    } catch (error) {
+      firstFailure = error;
+    }
+    acceptingFollowUp = false;
+    if (followUpRequested && !closed) {
+      followUpRequested = false;
+      let second: OrganizationRecordSweepResult | undefined;
+      let secondFailure: unknown;
+      try {
+        // The cycle timeout belongs to its first pass only. This independent
+        // pass is still bounded by the composition lifetime controller above.
+        second = await physicalSweep({});
+      } catch (error) {
+        secondFailure = error;
+      }
+      if (firstFailure !== undefined) throw firstFailure;
+      if (secondFailure !== undefined) throw secondFailure;
+      if (first === undefined || second === undefined) {
+        throw new Error('organization record sweep returned no result');
+      }
+      return mergeOrganizationRecordSweepResults(first, second);
+    }
+    followUpRequested = false;
+    if (firstFailure !== undefined) throw firstFailure;
+    if (first === undefined) {
+      throw new Error('organization record sweep returned no result');
+    }
+    return first;
+  };
+
+  return {
+    sweep(options) {
+      if (closed) {
+        return Promise.reject(
+          new Error('organization record sweep coordinator is closed'),
+        );
+      }
+      if (activeBatch !== null) {
+        if (acceptingFollowUp) followUpRequested = true;
+        return activeBatch;
+      }
+      acceptingFollowUp = true;
+      const batch = runBatch(options);
+      activeBatch = batch.finally(() => {
+        if (activeBatch === tracked) activeBatch = null;
+      });
+      const tracked = activeBatch;
+      return tracked;
+    },
+    async close() {
+      closed = true;
+      followUpRequested = false;
+      acceptingFollowUp = false;
+      activeController?.abort(
+        new Error('organization record sweep coordinator is closing'),
+      );
+      await activeBatch?.catch(() => undefined);
+    },
+  };
+}
+
 async function createCliComposition(
   config: ProductRuntimeConfig,
   classifier: ClassifyStateFilesystem,
@@ -1110,24 +1397,23 @@ async function createCliComposition(
   const customComposition = dependencies.composition;
   const { accessGate, approvalActionAuthorizer, recordSubmitter } =
     resolveOrganizationAuthorization(config, dependencies);
-  // One serialized sweep at a time. The post-resolve hook and each cycle reach
-  // the same function; overlapping them would resend the same frozen envelopes
-  // concurrently for no benefit.
-  let activeSweep: Promise<OrganizationRecordSweepResult> | null = null;
-  const sweepOrganizationRecord =
+  // One serialized sweep at a time. A resolution during the cycle's sweep
+  // coalesces into one independent follow-up rather than disappearing behind
+  // the already-active snapshot.
+  const recordSweepCoordinator =
     recordSubmitter === undefined
       ? undefined
-      : (options: {
-          signal?: AbortSignal;
-        }): Promise<OrganizationRecordSweepResult> => {
-          if (activeSweep !== null) return activeSweep;
-          activeSweep = recordSubmitter
-            .sweep(options)
-            .finally(() => {
-              activeSweep = null;
-            });
-          return activeSweep;
-        };
+      : createOrganizationRecordSweepCoordinator((options) =>
+          recordSubmitter.sweep(options),
+          {
+            timeoutMs:
+              customComposition?.organizationRecordSweepTimeoutMs ??
+              DEFAULT_ORGANIZATION_RECORD_SWEEP_TIMEOUT_MS,
+          },
+        );
+  const sweepOrganizationRecord = recordSweepCoordinator?.sweep.bind(
+    recordSweepCoordinator,
+  );
   // This check precedes adapter factories and credential resolution. The
   // composition repeats it immediately before health checks and every cycle.
   await assertProductAccess(accessGate);
@@ -1155,8 +1441,8 @@ async function createCliComposition(
     ...(sweepOrganizationRecord === undefined
       ? {}
       : {
-          // Best-effort: a human act reaches the organization immediately, and
-          // a failure here is already covered by the next cycle's sweep.
+          // The human act remains local and immediate. The coordinator owns
+          // the bounded background pass and composition close drains it.
           afterDecisionResolved: () => {
             void sweepOrganizationRecord({}).catch(() => undefined);
           },
@@ -1169,6 +1455,13 @@ async function createCliComposition(
     ...(sweepOrganizationRecord === undefined
       ? {}
       : { organizationRecordSweep: sweepOrganizationRecord }),
+    closeResources: async () => {
+      try {
+        await recordSweepCoordinator?.close();
+      } finally {
+        await customComposition?.closeResources?.();
+      }
+    },
     ...(now === undefined ? {} : { now }),
   });
 }
@@ -1900,6 +2193,7 @@ export async function runProductCli(
 
     let releases: readonly ReleaseProductLifecycleLock[] = [];
     let organizationResult: object | undefined;
+    let organizationStatus = 0;
     let operationFailure: unknown;
     try {
       releases =
@@ -1923,7 +2217,15 @@ export async function runProductCli(
       const paths = resolveProductStatePaths(config.state_dir);
       const now = resolveProductClock(dependencies.now);
 
-      if (action === "status") {
+      if (action === "record-flush") {
+        const flushed = await flushOrganizationRecords(config, dependencies);
+        organizationStatus = flushed.ok ? 0 : 1;
+        organizationResult = {
+          command: parsed.command,
+          action,
+          ...flushed,
+        };
+      } else if (action === "status") {
         const state = new SqliteOrganizationStateStore(paths.database);
         try {
           const connection = state.readAuthorityConnection();
@@ -2281,8 +2583,8 @@ export async function runProductCli(
       );
       return 1;
     }
-    print(stdout, organizationResult!);
-    return 0;
+    print(organizationStatus === 0 ? stdout : stderr, organizationResult!);
+    return organizationStatus;
   }
   if (parsed.command === "service-run") {
     try {
