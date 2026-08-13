@@ -276,10 +276,12 @@ curl --fail --silent --show-error https://authority.echobrain.org/v1/authority-d
 ```
 
 From the separate machine, also pass this public-path cache release gate. The
-malformed body deliberately exercises the fixed recent-decisions `400` without
-using an installation key. Both identical responses must traverse Cloudflare,
-retain the origin's `no-store`, and remain a non-hit. Do not accept a missing
-Cloudflare cache-status header as proof that the edge did not cache the route.
+malformed body deliberately exercises the fixed reviewer-recent-decisions `400`
+without using an installation key. Unlike the optional pilot recent-decisions
+route, the reviewer route is always composed. Both identical responses must
+traverse Cloudflare, retain the origin's `no-store`, and remain a non-hit. Do
+not accept a missing Cloudflare cache-status header as proof that the edge did
+not cache the route.
 
 ```bash
 set -euo pipefail
@@ -295,7 +297,7 @@ for ATTEMPT in 1 2; do
     --dump-header "$PROBE_DIR/headers-$ATTEMPT" \
     --output "$PROBE_DIR/body-$ATTEMPT" \
     --write-out '%{http_code}' \
-    https://authority.echobrain.org/v1/recent-decisions)"
+    https://authority.echobrain.org/v1/reviewer-recent-decisions)"
   [[ $STATUS == 400 ]]
   grep -Eiq '^cf-ray:' "$PROBE_DIR/headers-$ATTEMPT"
   grep -Eiq '^cache-control:[[:space:]]*no-store[[:space:]]*$' \
@@ -306,7 +308,7 @@ for ATTEMPT in 1 2; do
     "$PROBE_DIR/headers-$ATTEMPT"
   ! grep -Eiq '^age:' "$PROBE_DIR/headers-$ATTEMPT"
   jq -e \
-    '.error == {"code":"invalid_request","message":"request body is invalid"}' \
+    '.error == {"code":"invalid_request","message":"request is invalid"}' \
     "$PROBE_DIR/body-$ATTEMPT" >/dev/null
 done
 ```

@@ -334,14 +334,15 @@ organization authority, set a different, durable
 while that authority state is in use.
 
 Because this portable compose file deliberately puts Caddy in the authority
-container's network namespace, restart the stack as one unit:
+container's network namespace, Compose restarts `proxy` whenever it explicitly
+restarts `authority`. Use Compose, rather than `docker restart`, for a focused
+Authority restart:
 
 ```sh
-docker compose restart
+docker compose restart authority
 ```
 
-Restarting only `authority` replaces that namespace and strands the existing
-proxy process until `proxy` is also restarted.
+To restart every service intentionally, use `docker compose restart`.
 
 Treat the complete `data` directory as one recovery unit. Stop the stack before
 a file-level backup and archive all four SQLite databases, signing key,

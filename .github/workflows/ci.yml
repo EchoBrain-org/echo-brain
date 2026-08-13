@@ -70,6 +70,7 @@ jobs:
           rebuild_file="$RUNNER_TEMP/authority-readable-search-rebuild.json"
           duplicate_log="$RUNNER_TEMP/authority-duplicate.log"
           proxy_body="$RUNNER_TEMP/authority-proxy-body"
+          descriptor_body="$RUNNER_TEMP/authority-descriptor.json"
           test ! -e "$data"
           install -d -m 0700 "$data"
           export ECHO_AUTHORITY_UID="$(id -u)"
@@ -186,6 +187,75 @@ jobs:
               throw new Error(`authority live status failed: ${JSON.stringify(value)}`);
             }
           ' "$status_file"
+
+          # `proxy` shares the Authority network namespace. Its Compose
+          # dependency explicitly propagates a focused Authority restart, so
+          # prove that the proxy process is replaced, still targets this
+          # Authority container, and can serve the descriptor afterwards.
+          proxy_container_before="$(docker compose --file "$compose" ps -q proxy)"
+          proxy_pid_before="$(docker inspect --format '{{.State.Pid}}' "$proxy_container_before")"
+          test -n "$proxy_container_before"
+          test "$proxy_pid_before" != 0
+
+          docker compose --file "$compose" restart authority
+
+          proxy_container_after="$(docker compose --file "$compose" ps -q proxy)"
+          proxy_pid_after="$(docker inspect --format '{{.State.Pid}}' "$proxy_container_after")"
+          authority_container="$(docker compose --file "$compose" ps -q authority)"
+          proxy_network_mode="$(docker inspect --format '{{.HostConfig.NetworkMode}}' "$proxy_container_after")"
+          if [[ "$proxy_pid_after" = "$proxy_pid_before" ||
+            "$proxy_network_mode" != "container:$authority_container" ]]; then
+            docker compose --file "$compose" ps >&2
+            docker compose --file "$compose" logs >&2
+            printf 'proxy did not restart and rejoin Authority after focused restart (before_pid=%s after_pid=%s network_mode=%s authority=%s)\n' \
+              "$proxy_pid_before" "$proxy_pid_after" "$proxy_network_mode" "$authority_container" >&2
+            exit 1
+          fi
+
+          proxy_status=''
+          for _ in {1..30}; do
+            proxy_status="$(
+              curl \
+                --connect-timeout 2 \
+                --insecure \
+                --max-time 2 \
+                --output "$proxy_body" \
+                --silent \
+                --write-out '%{http_code}' \
+                https://localhost/admin ||
+                true
+            )"
+            if [[ "$proxy_status" = 303 ]]; then
+              break
+            fi
+            sleep 1
+          done
+          if [[ "$proxy_status" != 303 ]] ||
+            [[ "$(
+              curl \
+                --cacert "$caddy_ca" \
+                --connect-timeout 2 \
+                --max-time 2 \
+                --output "$descriptor_body" \
+                --silent \
+                --write-out '%{http_code}' \
+                https://localhost/v1/authority-descriptor
+            )" != 200 ]]; then
+            docker compose --file "$compose" logs >&2
+            echo 'proxy did not serve the Authority descriptor after focused restart' >&2
+            exit 1
+          fi
+          node -e '
+            const fs = require("node:fs");
+            const value = JSON.parse(fs.readFileSync(process.argv[1], "utf8"));
+            const descriptor = value.authority_descriptor;
+            if (
+              descriptor?.kind !== "echo-organization-authority" ||
+              descriptor.schema_version !== 1
+            ) {
+              throw new Error(`unexpected Authority descriptor after focused restart: ${JSON.stringify(value)}`);
+            }
+          ' "$descriptor_body"
 
           if docker compose --file "$compose" run --rm --no-deps authority \
             serve --config /echo/authority.json > "$duplicate_log" 2>&1; then
