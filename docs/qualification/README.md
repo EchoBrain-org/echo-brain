@@ -24,6 +24,8 @@ Current indexes and matrices:
 - [Provider adapter adversarial matrix V1](adapter-matrix-v1.md)
 - [Job A stopped-state matrix V1](job-a-stopped-matrix-v1.md)
 - [Job A stopped-state proof](QUAL-20260813-174902-001-job-a-stopped.md)
+- [Job B active-member readable-search matrix V1](job-b-active-member-matrix-v1.md)
+- [Job B active-member readable-search proof](QUAL-20260814-050326-001-job-b-active-member.md)
 
 ## Evidence index rules
 

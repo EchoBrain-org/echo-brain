@@ -8,8 +8,8 @@ owners:
 component_ids:
   - CMP-PERMISSIONS
 created_at: 2026-08-13
-reviewed_at: 2026-08-13
-reviewed_ref: 808ac89eaf3e8eba529b356bd80d4509b9a2a293
+reviewed_at: 2026-08-14
+reviewed_ref: add08da02e98c6f3c6aaad71a07141c95887c93d
 invariant_ids:
   - INV-PERMISSIONS-013
   - INV-PERMISSIONS-014
@@ -19,6 +19,8 @@ failure_pattern_ids:
   - FP-IDENTITY-003
 qualification_ids:
   - QUAL-20260813-174902-001
+  - QMAT-JOB-B-ACTIVE-MEMBER-001
+  - QUAL-20260814-050326-001
 ---
 
 # Permissions

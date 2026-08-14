@@ -7,11 +7,12 @@ component_ids:
   - CMP-ADAPTERS
   - CMP-LOCAL-RUNTIME
   - CMP-CENTRAL-ORGANIZATION
+  - CMP-IDENTITY-ACCESS
   - CMP-PERMISSIONS
   - CMP-OPERATIONS-RELEASE
 created_at: 2026-08-13
-reviewed_at: 2026-08-13
-reviewed_ref: 5aa7a37de94b8431c8fcb40cdee15ed34c4ba69a
+reviewed_at: 2026-08-14
+reviewed_ref: add08da02e98c6f3c6aaad71a07141c95887c93d
 ---
 
 # Founder-live Job A and Job B sanitized evidence index
@@ -30,6 +31,7 @@ evidence system.
 | `EVID-CANDIDATE-IDENTITY-001` | `f0debc1952d573040504e8daefe33507a3cf771e89fed0c0d412515a9436557b` | Candidate source and artifact identity receipt | founder-private |
 | `EVID-ACTOR-SEPARATION-001` | `dc797e26643b3cc902007ec2cb618d429b7f6d71b01fc5264125780701ac38b5` | Negative human-actor/read assertion for the bounded permission mode | founder-private |
 | `EVID-AUTHORITY-RESTART-001` | `4796bf2046fa9f476132875cbc4435f9f266064c088ad5317b483d5c1866fe23` | Focused Authority restart and topology evidence | founder-private |
+| `EVID-JOB-B-ACTIVE-MEMBER-001` | `c75e10bf9ab58ecb97828a9771726c46935d035411f4cb18e0c2fe72e82a60dd` | Schema-V3 append, exact-head rebuild, active-owner read, cross-machine active-employee read, and central audit proof | founder-private |
 
 ## Verification rule
 
@@ -38,4 +40,4 @@ SHA-256 over the exact bytes, and compares it with this index before reading
 the assertions. A hash match proves byte identity, not the truth of assertions
 outside that receipt's declared scope.
 
-This index was verified on 2026-08-13 by the Codex documentation setup session.
+This index was verified on 2026-08-14 by the Codex founder-live qualification session.
