@@ -66,7 +66,7 @@ function identity(
   });
 }
 
-function assertPrivateDatabaseFile(path: string): void {
+function assertPrivateDatabaseFile(path: string): Readonly<{ dev: number; ino: number }> {
   const state = lstatSync(path);
   const currentUid = process.getuid?.();
   if (
@@ -96,6 +96,7 @@ function assertPrivateDatabaseFile(path: string): void {
   } finally {
     closeSync(file);
   }
+  return Object.freeze({ dev: state.dev, ino: state.ino });
 }
 
 function inspectReadOnly(
@@ -133,4 +134,34 @@ export function inspectOrganizationControlDatabaseForServe(
   path: string,
 ): OrganizationControlDatabaseIdentity {
   return inspectReadOnly(path, true);
+}
+
+/**
+ * Opens an already-current control-plane database without migrations or any
+ * durable pragma. Callers receive a query-only handle after the canonical
+ * private-file and exact current-schema identity have both been verified.
+ */
+export function openOrganizationControlDatabaseReadOnly(
+  path: string,
+): Database.Database {
+  const before = assertPrivateDatabaseFile(path);
+  const database = new Database(path, {
+    readonly: true,
+    fileMustExist: true,
+  });
+  try {
+    database.pragma('query_only = ON');
+    database.pragma('trusted_schema = OFF');
+    database.pragma('foreign_keys = ON');
+    database.pragma('busy_timeout = 5000');
+    identity(database, false);
+    const after = lstatSync(path);
+    if (after.dev !== before.dev || after.ino !== before.ino) {
+      throw new Error('organization control database changed while opening');
+    }
+    return database;
+  } catch (error) {
+    database.close();
+    throw error;
+  }
 }

@@ -43,7 +43,10 @@ export interface ReadableSearchGenerationDirectoryResolver {
 
 export interface CreateReadableSearchRuntimeAdapterOptions {
   readonly authority: OrganizationAuthorityApplication;
-  readonly records: Pick<OrganizationRecordRuntime, 'verifyChain'>;
+  readonly records: Pick<
+    OrganizationRecordRuntime,
+    'verifyChain' | 'readableSearchLayer1Admission'
+  >;
   readonly generation_directories: ReadableSearchGenerationDirectoryResolver;
   /** The private Layer 2 state root, passed directly to serving admission. */
   readonly retrieval_state_directory: string;
@@ -51,7 +54,8 @@ export interface CreateReadableSearchRuntimeAdapterOptions {
   readonly contract: ReadableSearchContract;
   /** The singleton shared with every eventual Authority/record writer. */
   readonly fence: ReadableSearchAuthorizationFence;
-  readonly fence_timeout_ms?: number;
+  /** Required at the production composition boundary so queued reads are bounded. */
+  readonly fence_timeout_ms: number;
   /** Test-only observation of request-local plane opens. */
   readonly handle_observer?: ReadableSearchHandleObserver;
   /** Test seam; production uses the closed serving admission function. */
@@ -147,9 +151,16 @@ function captureGeneration(
   options: CreateReadableSearchRuntimeAdapterOptions,
 ): CapturedGenerationState {
   try {
+    const layer1 = options.records.readableSearchLayer1Admission;
+    if (layer1 === null) {
+      throw new Error('readable-search Layer 1 admission is unavailable');
+    }
     const active = options.authority.readableSearchActiveGeneration();
     if (active === null) throw new Error('no active readable-search generation');
     const head = recordHead(options.records);
+    if (!sameHead(head, layer1.record_head)) {
+      throw new Error('readable-search Layer 1 admission is not at the current record head');
+    }
     if (
       !sameHead(head, {
         position: active.record_head_position,
@@ -180,6 +191,7 @@ function captureGeneration(
     if (
       generation.manifest.generation_id !== active.generation_id ||
       generation.manifest_sha256 !== active.manifest_sha256 ||
+      generation.manifest.upstream_input_root !== layer1.upstream_input_root ||
       generation.manifest.retrieval_contract_sha256 !==
         options.contract.retrieval_contract_sha256 ||
       member === undefined ||

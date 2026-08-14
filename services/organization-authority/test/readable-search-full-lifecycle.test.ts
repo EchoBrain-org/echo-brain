@@ -2,15 +2,14 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import Database from 'better-sqlite3';
-import { afterEach, describe, expect, it } from 'vitest';
-import { canonicalSha256, parseCanonicalJson, sha256Digest } from '@echo-brain/federation-protocol';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import { parseCanonicalJson, sha256Digest } from '@echo-brain/federation-protocol';
 import {
   buildStoppedReadableSearchGeneration,
   createReadableSearchAnalyzerDescriptor,
   readableSearchRetrievalContractSha256,
   readableSearchSourceBytesSha256,
 } from '@echo-brain/organization-retrieval/build';
-import type { ReadableSearchAdmittedAtom } from '@echo-brain/organization-retrieval/build';
 import { admitReadableSearchGenerationDirectory } from '@echo-brain/organization-retrieval/serve';
 import {
   ORGANIZATION_RECORD_LOG_DATABASE,
@@ -32,6 +31,8 @@ import {
 } from '../src/composition/organization-record.js';
 import { readableSearchReleaseDescriptor } from '../src/composition/operator-state.js';
 import { createReadableSearchRuntimeAdapter } from '../src/composition/readable-search.js';
+import { readableSearchCanonicalInput } from '../src/composition/readable-search-layer1.js';
+import { fenceAuthorizationRelevantAuthorityMutations } from '../src/composition/readable-search-authorization-writes.js';
 import {
   organizationMemberSegmentIdentity,
   reviewerSegmentIdentity,
@@ -71,72 +72,15 @@ function handoff(response: {
   return Buffer.from(body, 'utf8');
 }
 
-function admittedAtoms(
-  organizationId: string,
-  batch: ReturnType<ReturnType<typeof createOrganizationRecordRetrievalBuildPort>['readAt']>,
-): readonly ReadableSearchAdmittedAtom[] {
-  const reviewerContract = reviewerPolicyContractSha256();
-  const reviewer: readonly ReadableSearchAdmittedAtom[] = batch.reviewer_items.map((item) => ({
-    fact: {
-      atom_id: item.atom_id,
-      organization_id: organizationId,
-      envelope_sha256: item.envelope_sha256,
-      log_position: item.log_position,
-      record_hash: item.record_hash,
-      atom_order: item.atom_order,
-      signal_id_sha256: item.signal_id_sha256,
-      item_kind: item.item_kind,
-      policy_id: item.policy_id,
-      policy_contract_sha256: reviewerContract,
-      approval_actor_principal_id: item.provenance.reviewer_principal_id,
-      approval_actor_membership_id: item.provenance.reviewer_membership_id,
-      reviewer_principal_id: item.provenance.reviewer_principal_id,
-      reviewer_membership_id: item.provenance.reviewer_membership_id,
-      release_draft_sha256: item.release_draft_sha256,
-      approval_presentation_sha256: item.approval_presentation_sha256,
-      semantic_intent_sha256: item.provenance.semantic_intent_sha256,
-      message_presentation_sha256: item.message_presentation_sha256,
-      authorization_audit_event_id: item.provenance.authorization_audit_event_id,
-      authorization_audit_entry_sha256: item.provenance.authorization_audit_entry_sha256,
-      evaluated_at: item.evaluated_at,
-      authorization_proof_sha256: item.provenance.authorization_proof_sha256,
-      content_binding_sha256: item.content_binding_sha256,
-      provenance_binding_sha256: item.provenance_binding_sha256,
-    },
-    text: item.text,
-    text_sha256: item.text_sha256,
-  }));
-  const member: readonly ReadableSearchAdmittedAtom[] = batch.organization_member_items.map((item) => ({
-    fact: {
-      atom_id: item.atom_id,
-      organization_id: item.provenance.organization_id,
-      envelope_sha256: item.envelope_sha256,
-      log_position: item.log_position,
-      record_hash: item.record_hash,
-      atom_order: item.atom_order,
-      signal_id_sha256: item.signal_id_sha256,
-      item_kind: item.item_kind,
-      policy_id: item.policy_id,
-      policy_contract_sha256: item.provenance.policy_contract_sha256,
-      approval_actor_principal_id: item.provenance.approving_principal_id,
-      approval_actor_membership_id: item.provenance.approving_membership_id,
-      reviewer_principal_id: null,
-      reviewer_membership_id: null,
-      release_draft_sha256: item.provenance.release_draft_sha256,
-      approval_presentation_sha256: item.provenance.approval_presentation_sha256,
-      semantic_intent_sha256: item.provenance.semantic_intent_sha256,
-      message_presentation_sha256: item.provenance.message_presentation_sha256,
-      authorization_audit_event_id: item.provenance.authorization_audit_event_id,
-      authorization_audit_entry_sha256: item.provenance.authorization_audit_entry_sha256,
-      evaluated_at: item.provenance.evaluated_at,
-      authorization_proof_sha256: item.provenance.authorization_proof_sha256,
-      content_binding_sha256: item.provenance.content_binding_sha256,
-      provenance_binding_sha256: item.provenance.provenance_binding_sha256,
-    },
-    text: item.text,
-    text_sha256: item.text_sha256,
-  }));
-  return Object.freeze([...reviewer, ...member]);
+function readableSearchQueryAuditCount(authorityDatabasePath: string): number {
+  const database = new Database(authorityDatabasePath, { readonly: true });
+  try {
+    return (database.prepare(
+      'SELECT count(*) AS count FROM authority_readable_search_query_audit',
+    ).get() as { readonly count: number }).count;
+  } finally {
+    database.close();
+  }
 }
 
 function buildAndPublish(
@@ -159,11 +103,16 @@ function buildAndPublish(
     const source = createOrganizationRecordRetrievalBuildPort(database, {
       organization_id: input.fixture.organizationId,
       authority_id: input.fixture.authorityId,
+      restricted_reviewer_policy_contract_sha256:
+        reviewerPolicyContractSha256(),
       reviewer_validator: reviewerValidator,
       organization_member_validator: memberValidator,
     });
     const batch = source.readAt(source.record_head);
-    const atoms = admittedAtoms(input.fixture.organizationId, batch);
+    const canonicalInput = readableSearchCanonicalInput(
+      input.fixture.organizationId,
+      batch,
+    );
     const memberContract = organizationMemberReadablePolicyContractSha256();
     const reviewerContract = reviewerPolicyContractSha256();
     const release = readableSearchReleaseDescriptor();
@@ -184,12 +133,7 @@ function buildAndPublish(
       state_directory: stateDirectory,
       organization_id: input.fixture.organizationId,
       record_head: batch.record_head,
-      upstream_input_root: canonicalSha256({
-        schema_version: 1,
-        kind: 'organization-record-retrieval-build-input-v1',
-        record_head: batch.record_head,
-        atoms,
-      }),
+      upstream_input_preimage: canonicalInput.upstream_input_preimage,
       retrieval_contract_sha256: retrievalContract,
       organization_member_policy_contract_sha256: memberContract,
       restricted_reviewer_policy_contract_sha256: reviewerContract,
@@ -197,7 +141,7 @@ function buildAndPublish(
       source_revision: 'layer-2-local-lifecycle-test',
       builder_artifact_sha256: readableSearchSourceBytesSha256(release),
       sqlite_version: (database.prepare('SELECT sqlite_version() AS version').get() as { version: string }).version,
-      atoms,
+      atoms: canonicalInput.atoms,
     });
     input.fixture.authorityRepository.write(input.fixture.clock.now(), (transaction) => {
       const publication = {
@@ -269,6 +213,53 @@ describe('Layer 2 local readable-search lifecycle', () => {
     let admissions = 0;
     const openings: string[] = [];
     let advanceClockAtFirstHandle = false;
+    const authorizationFence = new ReadableSearchAuthorizationFence();
+    let wrongRootAdmissions = 0;
+    const wrongRootOpenings: string[] = [];
+    const wrongRootService = createReadableSearchRuntimeAdapter({
+      authority: fixture.application,
+      records: restarted,
+      generation_directories: {
+        directoryFor: (generationId) => join(stateDirectory, 'record-retrieval', 'generations', generationId),
+      },
+      retrieval_state_directory: stateDirectory,
+      analyzer,
+      contract: {
+        retrieval_contract_sha256: readableSearchRetrievalContractSha256({
+          analyzer_contract_sha256: analyzer.analyzer_contract_sha256,
+          organization_member_policy_contract_sha256: memberContract,
+          restricted_reviewer_policy_contract_sha256: reviewerContract,
+        }),
+        policy_contracts: [
+          { policy_id: 'organization-member-readable-v1', policy_contract_sha256: memberContract },
+          { policy_id: 'restricted-reviewer-v1', policy_contract_sha256: reviewerContract },
+        ],
+      },
+      fence: authorizationFence,
+      fence_timeout_ms: 5_000,
+      admit_generation: (input) => {
+        wrongRootAdmissions += 1;
+        const admitted = admitReadableSearchGenerationDirectory(input);
+        return Object.freeze({
+          ...admitted,
+          manifest: Object.freeze({
+            ...admitted.manifest,
+            upstream_input_root: sha256Digest('different-current-layer-1-input'),
+          }),
+        });
+      },
+      handle_observer: { opened: (plane, segmentId) => wrongRootOpenings.push(`${plane}:${segmentId}`) },
+    });
+    expect(wrongRootAdmissions).toBe(1);
+    const activeBeforeWrongRoot = fixture.application.readableSearchActiveGeneration();
+    await expect(
+      wrongRootService.search(await fixture.readableSearchRequest('launch roadmap')),
+    ).rejects.toMatchObject({ code: 'unavailable' } satisfies Partial<ReadableSearchError>);
+    expect(wrongRootOpenings).toEqual([]);
+    expect(readableSearchQueryAuditCount(join(fixture.directory, 'authority.sqlite'))).toBe(0);
+    expect(fixture.application.readableSearchActiveGeneration()).toEqual(
+      activeBeforeWrongRoot,
+    );
     const service = createReadableSearchRuntimeAdapter({
       authority: fixture.application,
       records: restarted,
@@ -288,7 +279,8 @@ describe('Layer 2 local readable-search lifecycle', () => {
           { policy_id: 'restricted-reviewer-v1', policy_contract_sha256: reviewerContract },
         ],
       },
-      fence: new ReadableSearchAuthorizationFence(),
+      fence: authorizationFence,
+      fence_timeout_ms: 5_000,
       admit_generation: (input) => {
         admissions += 1;
         return admitReadableSearchGenerationDirectory(input);
@@ -358,6 +350,62 @@ describe('Layer 2 local readable-search lifecycle', () => {
       authority.close();
     }
 
+    // The request above enrolled Lin after the content was approved. The real
+    // Authority mutation shares the service's authorization fence, so the next
+    // signed request must observe revocation before retrieval can open a plane.
+    const authorityDatabase = new Database(join(fixture.directory, 'authority.sqlite'), {
+      readonly: true,
+    });
+    let replacementMembershipId: string;
+    try {
+      const row = authorityDatabase.prepare(
+        `SELECT membership.membership_id
+         FROM authority_memberships AS membership
+         JOIN authority_principals AS principal
+           ON principal.principal_id = membership.principal_id
+         WHERE principal.display_name = 'Lin Replacement'
+           AND membership.status = 'active'`,
+      ).get() as { membership_id: string } | undefined;
+      if (row === undefined) throw new Error('replacement membership was not created');
+      replacementMembershipId = row.membership_id;
+    } finally {
+      authorityDatabase.close();
+    }
+    await fenceAuthorizationRelevantAuthorityMutations(
+      fixture.application,
+      authorizationFence,
+    ).revokeMembership(replacementMembershipId, 'test employee departure');
+    openings.splice(0);
+    const revokedResponse = await service.search(
+      await fixture.replacementReadableSearchRequest('launch roadmap'),
+    );
+    expect(revokedResponse.status_code).toBe(404);
+    expect(handoff(revokedResponse)).toEqual(
+      Buffer.from('{"error":{"code":"not_found","message":"resource was not found"}}'),
+    );
+    expect(openings).toEqual([]);
+    const revokedAuditDatabase = new Database(
+      join(fixture.directory, 'authority.sqlite'),
+      { readonly: true },
+    );
+    try {
+      const rows = revokedAuditDatabase.prepare(
+        `SELECT detail_json FROM authority_readable_search_query_audit
+         ORDER BY audit_sequence ASC`,
+      ).all() as readonly { readonly detail_json: string }[];
+      expect(rows).toHaveLength(3);
+      const revokedAudit = validateReadableSearchQueryAuditDetail(
+        parseCanonicalJson(rows[2]!.detail_json),
+      ) as Record<string, unknown>;
+      expect(revokedAudit['decision']).toBe('deny');
+      expect(revokedAudit['reason_code']).toBe(
+        'inactive_or_unbound_organization_membership',
+      );
+      expect(revokedAudit['returned_policy_ids']).toBeUndefined();
+    } finally {
+      revokedAuditDatabase.close();
+    }
+
     await restarted.submitRecordEnvelope({
       record_envelope: await fixture.organizationMemberApprovalEnvelope({
         approval_id: approvalId('layer-2-stale'),
@@ -367,4 +415,163 @@ describe('Layer 2 local readable-search lifecycle', () => {
       code: 'unavailable',
     } satisfies Partial<ReadableSearchError>);
   });
+
+  it.each([
+    { label: 'missing append-atomic v2 fact', policy: 'reviewer', corruption: 'fact' },
+    { label: 'corrupt v2 integration-audit reproof', policy: 'reviewer', corruption: 'audit' },
+    { label: 'missing append-atomic v3 fact', policy: 'member', corruption: 'fact' },
+    { label: 'corrupt v3 integration-audit reproof', policy: 'member', corruption: 'audit' },
+  ] as const)(
+    'does not admit or serve an old generation after restart with $label',
+    async ({ label, policy, corruption }) => {
+      fixture = await createRecordIngestFixture();
+      await fixture.runtime.submitRecordEnvelope({
+        record_envelope: await fixture.reviewerApprovalEnvelope({
+          approval_id: approvalId(`layer-1-reviewer-${label}`),
+        }),
+      });
+      await fixture.runtime.submitRecordEnvelope({
+        record_envelope: await fixture.organizationMemberApprovalEnvelope({
+          approval_id: approvalId(`layer-1-member-${label}`),
+        }),
+      });
+      await fixture.runtime.close();
+      restarted = await openOrganizationRecordRuntime({
+        authority: fixture.application,
+        evidence: fixture.integrations,
+        organization_id: fixture.organizationId,
+        authority_id: fixture.authorityId,
+        record_log_database_path: fixture.recordLogDatabasePath,
+        record_derived_database_path: fixture.recordDerivedDatabasePath,
+        organization_recording_policy_v1: fixture.organizationRecordingPolicy,
+        alert: () => undefined,
+      });
+      expect(restarted.readableSearchLayer1Admission).not.toBeNull();
+      buildAndPublish({ fixture, runtime: restarted });
+      const activeBeforeCorruption = fixture.application.readableSearchActiveGeneration();
+      expect(activeBeforeCorruption).not.toBeNull();
+      await restarted.close();
+      restarted = undefined;
+
+      let restoreAudit: (() => void) | undefined;
+      if (corruption === 'fact') {
+        const database = new Database(fixture.recordLogDatabasePath);
+        try {
+          const trigger = database
+            .prepare(
+              `SELECT sql FROM sqlite_master
+               WHERE type = 'trigger'
+                 AND name = ?`,
+            )
+            .get(
+              policy === 'reviewer'
+                ? 'organization_record_reviewer_policy_fact_immutable_delete'
+                : 'organization_member_readable_policy_fact_immutable_delete',
+            ) as { sql: string };
+          const table = policy === 'reviewer'
+            ? 'organization_record_reviewer_policy_fact'
+            : 'organization_member_readable_policy_fact';
+          const triggerName = policy === 'reviewer'
+            ? 'organization_record_reviewer_policy_fact_immutable_delete'
+            : 'organization_member_readable_policy_fact_immutable_delete';
+          database.exec(`DROP TRIGGER ${triggerName}`);
+          database.exec(`DELETE FROM ${table}`);
+          database.exec(trigger.sql);
+        } finally {
+          database.close();
+        }
+      } else {
+        const audit = policy === 'reviewer'
+          ? vi.spyOn(
+              fixture.integrations,
+              'findAllowedReviewerAuthorizationEvidenceById',
+            ).mockReturnValue({ status: 'mismatch' })
+          : vi.spyOn(
+              fixture.integrations,
+              'findAllowedOrganizationMemberAuthorizationEvidenceById',
+            ).mockReturnValue({ status: 'mismatch' });
+        restoreAudit = () => audit.mockRestore();
+      }
+      try {
+        restarted = await openOrganizationRecordRuntime({
+          authority: fixture.application,
+          evidence: fixture.integrations,
+          organization_id: fixture.organizationId,
+          authority_id: fixture.authorityId,
+          record_log_database_path: fixture.recordLogDatabasePath,
+          record_derived_database_path: fixture.recordDerivedDatabasePath,
+          organization_recording_policy_v1: fixture.organizationRecordingPolicy,
+          alert: () => undefined,
+        });
+        expect(
+          policy === 'reviewer'
+            ? restarted.reviewerRestrictedHealth.kind
+            : restarted.organizationMemberReadableHealth.kind,
+        ).toBe('degraded');
+        expect(
+          policy === 'reviewer'
+            ? restarted.organizationMemberReadableHealth.kind
+            : restarted.reviewerRestrictedHealth.kind,
+        ).toBe('ready');
+        expect(restarted.readableSearchLayer1Admission).toBeNull();
+
+        const stateDirectory = roots[0]!;
+        const memberContract = organizationMemberReadablePolicyContractSha256();
+        const reviewerContract = reviewerPolicyContractSha256();
+        const release = readableSearchReleaseDescriptor();
+        const analyzer = createReadableSearchAnalyzerDescriptor({
+          analyzer_source_sha256: readableSearchSourceBytesSha256(release),
+          node_version: process.versions.node,
+          unicode_version: process.versions.unicode ?? 'unknown',
+          icu_version: process.versions.icu ?? 'unknown',
+        });
+        let admissions = 0;
+        const openings: string[] = [];
+        const service = createReadableSearchRuntimeAdapter({
+          authority: fixture.application,
+          records: restarted,
+          generation_directories: {
+            directoryFor: (generationId) =>
+              join(stateDirectory, 'record-retrieval', 'generations', generationId),
+          },
+          retrieval_state_directory: stateDirectory,
+          analyzer,
+          contract: {
+            retrieval_contract_sha256: readableSearchRetrievalContractSha256({
+              analyzer_contract_sha256: analyzer.analyzer_contract_sha256,
+              organization_member_policy_contract_sha256: memberContract,
+              restricted_reviewer_policy_contract_sha256: reviewerContract,
+            }),
+            policy_contracts: [
+              { policy_id: 'organization-member-readable-v1', policy_contract_sha256: memberContract },
+              { policy_id: 'restricted-reviewer-v1', policy_contract_sha256: reviewerContract },
+            ],
+          },
+          fence: new ReadableSearchAuthorizationFence(),
+          fence_timeout_ms: 5_000,
+          admit_generation: (input) => {
+            admissions += 1;
+            return admitReadableSearchGenerationDirectory(input);
+          },
+          handle_observer: {
+            opened: (plane, segmentId) => openings.push(`${plane}:${segmentId}`),
+          },
+        });
+        expect(admissions).toBe(0);
+        await expect(
+          service.search(await fixture.readableSearchRequest('launch')),
+        ).rejects.toMatchObject({ code: 'unavailable' } satisfies Partial<ReadableSearchError>);
+        expect(admissions).toBe(0);
+        expect(openings).toEqual([]);
+        expect(
+          readableSearchQueryAuditCount(join(fixture.directory, 'authority.sqlite')),
+        ).toBe(0);
+        expect(fixture.application.readableSearchActiveGeneration()).toEqual(
+          activeBeforeCorruption,
+        );
+      } finally {
+        restoreAudit?.();
+      }
+    },
+  );
 });

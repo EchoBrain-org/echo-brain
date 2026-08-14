@@ -15,11 +15,15 @@ export {
   readableSearchSourceBytesSha256,
 } from './application/search-contract.js';
 export { buildStoppedReadableSearchGeneration } from './build/generation-builder.js';
+export {
+  validateReadableSearchRetrievalPermissionFact,
+} from './application/upstream-input.js';
 export type {
   ReadableSearchAdmittedAtom,
   ReadableSearchAdmittedGeneration,
   ReadableSearchAnalyzerDescriptor,
   ReadableSearchStoppedBuildInput,
+  ReadableSearchUpstreamInputRootPreimageV1,
   RetrievalPermissionFact,
 } from './application/contracts.js';
 export { ReadableSearchContentStore } from './persistence/content-store.js';

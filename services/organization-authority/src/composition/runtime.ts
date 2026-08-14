@@ -76,6 +76,8 @@ export interface RunningOrganizationAuthority {
 const RECORD_DERIVE_FATAL_EXIT_CODE = 1;
 
 const GRACEFUL_SHUTDOWN_DEADLINE_MS = 30_000;
+/** Bounds only the final shared-fence wait; SQLite keeps its own 5s busy bound. */
+const READABLE_SEARCH_FENCE_TIMEOUT_MS = 5_000;
 const ADMIN_CONSOLE_SESSION_TTL_MS = 8 * 60 * 60 * 1000;
 const MAXIMUM_ADMIN_CONSOLE_SESSIONS = 256;
 
@@ -464,6 +466,7 @@ export async function startOrganizationAuthority(
         ],
       },
       fence: authorizationFence,
+      fence_timeout_ms: READABLE_SEARCH_FENCE_TIMEOUT_MS,
     });
     if (authorityRuntimeFingerprint(config) !== runtimeFingerprint) {
       throw new Error(

@@ -11,6 +11,10 @@ import type {
   RetrievalPermissionFact,
   RetrievalTermPosting,
 } from '../application/contracts.js';
+import {
+  readableSearchContentBindingSha256,
+  readableSearchProvenanceBindingSha256,
+} from '../application/upstream-input.js';
 import { ReadableSearchValidationError } from '../application/contracts.js';
 import {
   readableSearchContentRoot,
@@ -352,15 +356,20 @@ export class OpaqueReadableSearchMachine {
           content_binding_sha256: string;
           provenance_binding_sha256: string;
         } | undefined;
+        const textSha256 = sha256Digest(row?.text ?? '');
         if (
           row === undefined ||
           row.log_position !== fact.log_position ||
           row.record_hash !== fact.record_hash ||
           row.atom_order !== fact.atom_order ||
           row.item_kind !== fact.item_kind ||
-          row.text_sha256 !== sha256Digest(row.text) ||
+          row.text_sha256 !== textSha256 ||
           row.content_binding_sha256 !== fact.content_binding_sha256 ||
-          row.provenance_binding_sha256 !== fact.provenance_binding_sha256
+          row.provenance_binding_sha256 !== fact.provenance_binding_sha256 ||
+          fact.content_binding_sha256 !==
+            readableSearchContentBindingSha256({ fact, text_sha256: textSha256 }) ||
+          fact.provenance_binding_sha256 !==
+            readableSearchProvenanceBindingSha256(fact)
         ) {
           throw new ReadableSearchValidationError('readable-search content binding is invalid');
         }

@@ -146,6 +146,7 @@ describe('organization-member-readable v3 fact plane', () => {
       });
       const port = createOrganizationRecordRetrievalBuildPort(log.database, {
         organization_id: 'org_test', authority_id: 'oau_test',
+        restricted_reviewer_policy_contract_sha256: digest('r'),
         reviewer_validator: () => { throw new Error('reviewer validator must not be used'); },
         organization_member_validator: () => envelope,
       });
@@ -186,6 +187,7 @@ describe('organization-member-readable v3 fact plane', () => {
       log.database.exec('DROP TRIGGER organization_member_readable_policy_fact_immutable_delete; DELETE FROM organization_member_readable_policy_fact');
       expect(() => createOrganizationRecordRetrievalBuildPort(log.database, {
         organization_id: 'org_test', authority_id: 'oau_test',
+        restricted_reviewer_policy_contract_sha256: digest('r'),
         reviewer_validator: () => { throw new Error('unused'); },
         organization_member_validator: () => envelope,
       })).toThrow(/facts do not reproject/);

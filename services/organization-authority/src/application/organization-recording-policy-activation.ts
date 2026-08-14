@@ -224,6 +224,8 @@ export function organizationMemberRecordingActivationSha256(input: {
   return canonicalSha256({
     schema_version: 1,
     kind: 'echo-organization-member-recording-activation',
-    ...input,
+    command_sha256: input.command_sha256,
+    activated_at: input.activated_at,
+    audit_sequence: input.audit_sequence,
   });
 }

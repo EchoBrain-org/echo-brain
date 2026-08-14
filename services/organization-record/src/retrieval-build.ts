@@ -6,7 +6,11 @@ export type {
   CreateOrganizationRecordRetrievalBuildPortInput,
   OrganizationRecordRetrievalBuildPort,
   RetrievalBuildBatch,
+  RetrievalBuildLegacyExcludedRow,
   RetrievalBuildOrganizationMemberItem,
+  RetrievalBuildOrganizationMemberAdmittedRow,
   RetrievalBuildRecordHead,
+  RetrievalBuildRowClassification,
   RetrievalBuildReviewerItem,
+  RetrievalBuildReviewerAdmittedRow,
 } from './retrieve/retrieval-build-port.js';

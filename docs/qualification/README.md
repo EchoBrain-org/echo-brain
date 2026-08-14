@@ -26,6 +26,7 @@ Current indexes and matrices:
 - [Job A stopped-state proof](QUAL-20260813-174902-001-job-a-stopped.md)
 - [Job B active-member readable-search matrix V1](job-b-active-member-matrix-v1.md)
 - [Job B active-member readable-search proof](QUAL-20260814-050326-001-job-b-active-member.md)
+- [Readable-search minimum-V1 Layers 1-3 source-readiness matrix](readable-search-minimum-v1-source-readiness-matrix.md)
 
 ## Evidence index rules
 

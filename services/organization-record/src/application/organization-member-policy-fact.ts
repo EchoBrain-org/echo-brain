@@ -4,6 +4,10 @@ import {
 } from '@echo-brain/federation-protocol';
 import type { JsonObject, Sha256Digest } from './contracts.js';
 import { derivedAtomIdentity } from './atom-identity.js';
+import {
+  organizationRecordItemContentBindingSha256,
+  organizationRecordMemberProvenanceBindingSha256,
+} from './retrieval-policy-binding.js';
 
 /**
  * The organization-member-readable v3 fact plane.  This is deliberately a
@@ -317,26 +321,25 @@ export function projectOrganizationMemberPolicyFacts(input: {
     envelope: input.envelope,
   });
   const { envelope } = input;
-  const provenanceBindingSha256 = canonicalSha256({
-    schema_version: 1,
-    kind: 'organization-record-policy-provenance-binding-v1',
-    organization_id: input.organization_id,
-    envelope_sha256: input.envelope_sha256,
-    log_position: input.log_position,
-    record_hash: input.record_hash,
-    policy_id: ORGANIZATION_MEMBER_READABLE_POLICY_ID,
-    policy_contract_sha256: envelope.policy_contract_sha256,
-    approving_principal_id: envelope.approving_principal_id,
-    approving_membership_id: envelope.approving_membership_id,
-    release_draft_sha256: envelope.release_draft_sha256,
-    approval_presentation_sha256: envelope.approval_presentation_sha256,
-    semantic_intent_sha256: envelope.semantic_intent_sha256,
-    message_presentation_sha256: envelope.message_presentation_sha256,
-    authorization_audit_event_id: envelope.authorization_audit_event_id,
-    authorization_audit_entry_sha256: envelope.authorization_audit_entry_sha256,
-    authorization_proof_sha256: proof.authorization_proof_sha256,
-    evaluated_at: envelope.evaluated_at,
-  });
+  const provenanceBindingSha256 =
+    organizationRecordMemberProvenanceBindingSha256({
+      organization_id: input.organization_id,
+      envelope_sha256: input.envelope_sha256,
+      log_position: input.log_position,
+      record_hash: input.record_hash,
+      policy_contract_sha256: envelope.policy_contract_sha256,
+      approving_principal_id: envelope.approving_principal_id,
+      approving_membership_id: envelope.approving_membership_id,
+      release_draft_sha256: envelope.release_draft_sha256,
+      approval_presentation_sha256: envelope.approval_presentation_sha256,
+      semantic_intent_sha256: envelope.semantic_intent_sha256,
+      message_presentation_sha256: envelope.message_presentation_sha256,
+      authorization_audit_event_id: envelope.authorization_audit_event_id,
+      authorization_audit_entry_sha256:
+        envelope.authorization_audit_entry_sha256,
+      authorization_proof_sha256: proof.authorization_proof_sha256,
+      evaluated_at: envelope.evaluated_at,
+    });
   const rows = envelope.signals.map((signal, atom_order) => {
     const signal_id_sha256 = sha256Digest(signal.id);
     const atom_id = derivedAtomIdentity(input.record_hash, signal.id);
@@ -361,9 +364,7 @@ export function projectOrganizationMemberPolicyFacts(input: {
       authorization_audit_entry_sha256: envelope.authorization_audit_entry_sha256,
       evaluated_at: envelope.evaluated_at,
       authorization_proof_sha256: proof.authorization_proof_sha256,
-      content_binding_sha256: canonicalSha256({
-        schema_version: 1,
-        kind: 'organization-record-item-content-binding-v1',
+      content_binding_sha256: organizationRecordItemContentBindingSha256({
         organization_id: input.organization_id,
         envelope_sha256: input.envelope_sha256,
         log_position: input.log_position,

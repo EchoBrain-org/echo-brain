@@ -12,6 +12,10 @@ import {
   isOrganizationRecordError,
   parseOrganizationRecordEnvelope,
 } from '@echo-brain/organization-record';
+import {
+  createOrganizationRecordRetrievalBuildPort,
+} from '@echo-brain/organization-record/retrieval-build';
+import type { Sha256Digest } from '@echo-brain/federation-protocol';
 import type {
   OrganizationRecordAlert,
   OrganizationRecordChainVerification,
@@ -48,6 +52,8 @@ import {
   verifyOrganizationMemberReadableReadiness,
   type OrganizationMemberReadableReadiness,
 } from './organization-member-readable-admission.js';
+import { reviewerPolicyContractSha256 } from '../application/reviewer-policy-contract.js';
+import { readableSearchCanonicalInput } from './readable-search-layer1.js';
 
 export interface OpenOrganizationRecordRuntimeOptions {
   readonly authority: OrganizationAuthorityApplication;
@@ -107,6 +113,24 @@ export type OrganizationMemberReadableRuntimeHealth =
   | { readonly kind: 'ready'; readonly readiness: OrganizationMemberReadableReadiness }
   | { readonly kind: 'degraded'; readonly failure: Error; readonly readiness?: OrganizationMemberReadableReadiness };
 
+/**
+ * The closed Layer 1 input admitted to a readable-search generation.
+ *
+ * It exists only after both policy families have revalidated their complete
+ * append-atomic facts and their Authority audit evidence.  The input root is
+ * calculated from the same canonical, fact-qualified retrieval projection as
+ * the stopped builder.  It is deliberately a value, not a database handle or
+ * a text-bearing reader: the serving composition can compare it to an
+ * immutable generation manifest without acquiring a broader Layer 1 surface.
+ */
+export interface ReadableSearchLayer1Admission {
+  readonly record_head: {
+    readonly position: number;
+    readonly record_hash: Sha256Digest | null;
+  };
+  readonly upstream_input_root: Sha256Digest;
+}
+
 export interface OrganizationRecordRuntime
   extends OrganizationRecordHttpApplication {
   /** Walks the internal chain. Run at process start and before every backup. */
@@ -115,6 +139,10 @@ export interface OrganizationRecordRuntime
   readonly permissionPilotHealth: OrganizationPermissionPilotRuntimeHealth;
   readonly reviewerRestrictedHealth: ReviewerRestrictedRuntimeHealth;
   readonly organizationMemberReadableHealth: OrganizationMemberReadableRuntimeHealth;
+  /** Null means Layer 1 is not safe to admit to readable search. */
+  readonly readableSearchLayer1Admission: ReadableSearchLayer1Admission | null;
+  /** Bounded Layer 1 projection failure retained for an unavailable search gate. */
+  readonly readableSearchLayer1AdmissionFailure: Error | null;
   readonly reviewerRecords: ReviewerRecordPort;
   /** The fixed, newest-first <=20 canonical rows. Empty only before activation. */
   readPermissionPilotEligibleRecords(): readonly OrganizationPermissionPilotEligibleRecord[];
@@ -195,6 +223,41 @@ function assertPermissionPilotEvidence(
       );
     }
   }
+}
+
+function admitReadableSearchLayer1Projection(input: {
+  readonly log: OrganizationRecordLogStore;
+  readonly organization_id: string;
+  readonly authority_id: string;
+  readonly reviewer_validator: ReturnType<typeof reviewerRestrictedEnvelopeValidator>;
+  readonly organization_member_validator: ReturnType<typeof organizationMemberReadableEnvelopeValidator>;
+  readonly reviewer_health: ReviewerRestrictedRuntimeHealth;
+  readonly member_health: OrganizationMemberReadableRuntimeHealth;
+}): ReadableSearchLayer1Admission | null {
+  if (
+    input.reviewer_health.kind !== 'ready' ||
+    input.member_health.kind !== 'ready'
+  ) return null;
+  // This records-only projection performs a second, independent re-read of
+  // canonical envelopes and append-atomic fact sets.  Health cannot be used as
+  // a proxy for a generation's input: the root below must bind the exact bytes
+  // from which the stopped builder constructed that generation.
+  const source = createOrganizationRecordRetrievalBuildPort(input.log.database, {
+    organization_id: input.organization_id,
+    authority_id: input.authority_id,
+    restricted_reviewer_policy_contract_sha256:
+      reviewerPolicyContractSha256(),
+    reviewer_validator: input.reviewer_validator,
+    organization_member_validator: input.organization_member_validator,
+  });
+  const batch = source.readAt(source.record_head);
+  return Object.freeze({
+    record_head: batch.record_head,
+    upstream_input_root: readableSearchCanonicalInput(
+      input.organization_id,
+      batch,
+    ).upstream_input_root,
+  });
 }
 
 /**
@@ -392,6 +455,28 @@ export async function openOrganizationRecordRuntime(
       });
       organizationMemberReadableHealth = Object.freeze({ kind: 'degraded', failure });
     }
+    let readableSearchLayer1Admission: ReadableSearchLayer1Admission | null = null;
+    let readableSearchLayer1AdmissionFailure: Error | null = null;
+    try {
+      readableSearchLayer1Admission = admitReadableSearchLayer1Projection({
+        log,
+        organization_id: options.organization_id,
+        authority_id: options.authority_id,
+        reviewer_validator: reviewerValidator,
+        organization_member_validator: organizationMemberValidator,
+        reviewer_health: reviewerRestrictedHealth,
+        member_health: organizationMemberReadableHealth,
+      });
+    } catch (error) {
+      // The record runtime remains authoritative for legacy append and Job A.
+      // A projection error only removes its ability to admit a Layer 2
+      // generation. Existing alert kinds describe policy readiness rather than
+      // this cross-layer integrity failure, so retain a bounded cause instead
+      // of emitting a misleading health alert.
+      readableSearchLayer1AdmissionFailure = error instanceof Error
+        ? error
+        : new Error(`readable-search Layer 1 projection failed: ${String(error)}`);
+    }
     const authority = new OrganizationRecordIngestAuthority({
       authority: options.authority,
       evidence: options.evidence,
@@ -449,6 +534,8 @@ export async function openOrganizationRecordRuntime(
       permissionPilotHealth,
       reviewerRestrictedHealth,
       organizationMemberReadableHealth,
+      readableSearchLayer1Admission,
+      readableSearchLayer1AdmissionFailure,
       reviewerRecords,
       readPermissionPilotEligibleRecords(): readonly OrganizationPermissionPilotEligibleRecord[] {
         if (permissionPilotHealth.kind === 'absent') return Object.freeze([]);

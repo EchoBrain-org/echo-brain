@@ -56,6 +56,7 @@ import {
   assertReadableSearchIdentifier,
   assertReadableSearchRecordHead,
 } from '../application/validation.js';
+import { assertReadableSearchUpstreamInputBinding } from '../application/upstream-input.js';
 import { ReadableSearchContentStore } from '../persistence/content-store.js';
 import { ReadableSearchFactsStore } from '../persistence/facts-store.js';
 import { ReadableSearchLexicalStore } from '../persistence/lexical-store.js';
@@ -423,6 +424,7 @@ export function buildStoppedReadableSearchGeneration(
   const retrievalContract = assertReadableSearchDigest(input.retrieval_contract_sha256, 'retrieval_contract_sha256');
   const memberContract = assertReadableSearchDigest(input.organization_member_policy_contract_sha256, 'organization member policy contract');
   const reviewerContract = assertReadableSearchDigest(input.restricted_reviewer_policy_contract_sha256, 'reviewer policy contract');
+  const upstreamInputRoot = assertReadableSearchUpstreamInputBinding(input);
   const root = join(stateDirectory, RETRIEVAL_DIRECTORY);
   const generations = join(root, GENERATIONS_DIRECTORY);
   ensurePrivateDirectory(stateDirectory, 'readable-search state directory');
@@ -467,7 +469,7 @@ export function buildStoppedReadableSearchGeneration(
       ],
       record_head: recordHead,
       input_cursor: recordHead,
-      upstream_input_root: input.upstream_input_root,
+      upstream_input_root: upstreamInputRoot,
       roots: {
         facts_root: readableSearchGenerationPlaneRoot({ plane: 'facts', segments }),
         content_root: readableSearchGenerationPlaneRoot({ plane: 'content', segments }),
