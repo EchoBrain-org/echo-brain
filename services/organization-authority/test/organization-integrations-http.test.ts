@@ -740,42 +740,7 @@ describe('organization integrations HTTP routes', () => {
     }
   });
 
-  it('dispatches a signed schema-v3 request and returns its closed decision unchanged', async () => {
-    const command = organizationMemberPermissionRequest();
-    const decision = organizationMemberPermissionDecision(command, true);
-    const checkOrganizationMemberReadablePermission = vi.fn(async () =>
-      decision,
-    );
-    const server = integrationServer(
-      integrationsApplication({ checkOrganizationMemberReadablePermission }),
-      {
-        checkOrganizationMemberReadablePermissionSubject: (request) => ({
-          installation_id: request.installation_id,
-        }),
-      },
-    );
-    const origin = await listen(server);
-    try {
-      const response = await fetch(
-        `${origin}${ORGANIZATION_API_PERMISSION_CHECKS_PATH}`,
-        {
-          method: 'POST',
-          headers: { ...proxyHeaders(), 'content-type': 'application/json' },
-          body: JSON.stringify(command),
-        },
-      );
-      expect(response.status).toBe(200);
-      expect(await response.text()).toBe(canonicalJson(decision));
-      expect(checkOrganizationMemberReadablePermission).toHaveBeenCalledWith(
-        command,
-        expect.any(AbortSignal),
-      );
-    } finally {
-      await close(server);
-    }
-  });
-
-  it('preserves both schema-v3 application method receivers', async () => {
+  it('dispatches schema-v3 with both application receivers intact', async () => {
     const command = organizationMemberPermissionRequest();
     const decision = organizationMemberPermissionDecision(command, true);
     let checkSubject!: NonNullable<
@@ -790,17 +755,15 @@ describe('organization integrations HTTP routes', () => {
     ) {
       if (
         this.checkOrganizationMemberReadablePermissionSubject !== checkSubject
-      ) {
+      )
         throw new Error('schema-v3 subject receiver was lost');
-      }
       return { installation_id: request.installation_id };
     });
     checkPermission = vi.fn(async function (
       this: OrganizationIntegrationsHttpApplication,
     ) {
-      if (this.checkOrganizationMemberReadablePermission !== checkPermission) {
+      if (this.checkOrganizationMemberReadablePermission !== checkPermission)
         throw new Error('schema-v3 integration receiver was lost');
-      }
       return decision;
     });
     const server = integrationServer(
@@ -825,6 +788,10 @@ describe('organization integrations HTTP routes', () => {
       expect(await response.text()).toBe(canonicalJson(decision));
       expect(checkSubject).toHaveBeenCalledOnce();
       expect(checkPermission).toHaveBeenCalledOnce();
+      expect(checkPermission).toHaveBeenCalledWith(
+        command,
+        expect.any(AbortSignal),
+      );
     } finally {
       await close(server);
     }
