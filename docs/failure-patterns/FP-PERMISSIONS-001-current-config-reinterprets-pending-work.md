@@ -58,5 +58,5 @@ dummy authorization components and then report complete runtime health.
 Resolve pending work only from the persisted contract. Compose diagnostics
 with equivalent authorization semantics, but inspect real state through a
 side-effect-free read-only path. Distinguish provider reachability from
-authorization readiness. The diagnostic repair is reviewed on the hardening
-branch and remains outside this branch's source baseline.
+authorization readiness. The exact diagnostic repair and regression scope is
+fixed by the refs above.

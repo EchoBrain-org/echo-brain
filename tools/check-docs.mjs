@@ -64,6 +64,15 @@ const RELATIONS = new Map([
   ["qualification_ids", new Set(["qualification", "qualification-matrix"])],
 ]);
 
+const COMPONENT_BACKLINK_FIELDS = new Map([
+  ["invariant", "invariant_ids"],
+  ["decision", "decision_ids"],
+  ["failure-pattern", "failure_pattern_ids"],
+  ["runbook", "runbook_ids"],
+  ["qualification", "qualification_ids"],
+  ["qualification-matrix", "qualification_ids"],
+]);
+
 function markdownFiles(root) {
   return readdirSync(root, { withFileTypes: true })
     .flatMap((entry) => {
@@ -71,6 +80,21 @@ function markdownFiles(root) {
       if (entry.isDirectory()) return markdownFiles(path);
       return entry.isFile() && path.endsWith(".md") ? [path] : [];
     })
+    .sort();
+}
+
+function trackedMarkdownFiles() {
+  const tracked = spawnSync("git", ["ls-files", "-z", "--", "*.md"], {
+    cwd: REPO,
+    encoding: "utf8",
+  });
+  if (tracked.status !== 0)
+    throw new Error("could not enumerate tracked Markdown files");
+  return tracked.stdout
+    .split("\0")
+    .filter(Boolean)
+    .map((path) => join(REPO, path))
+    .filter(existsSync)
     .sort();
 }
 
@@ -539,6 +563,35 @@ function validateRelations(record, recordsById, errors) {
     }
 }
 
+function validateComponentBacklinks(recordsById, errors) {
+  for (const record of recordsById.values()) {
+    const field = COMPONENT_BACKLINK_FIELDS.get(record.metadata.kind);
+    if (!field) continue;
+    for (const componentId of relationValues(record, "component_ids")) {
+      const component = recordsById.get(componentId);
+      if (component?.metadata.kind !== "component") continue;
+      if (!relationValues(component, field).includes(record.metadata.id))
+        errors.push(
+          `${record.path}: ${componentId} is missing ${field} backlink ${record.metadata.id}`,
+        );
+    }
+  }
+  for (const component of recordsById.values()) {
+    if (component.metadata.kind !== "component") continue;
+    for (const [field, kinds] of RELATIONS) {
+      if (field === "component_ids") continue;
+      for (const id of relationValues(component, field)) {
+        const target = recordsById.get(id);
+        if (!target || !kinds.has(target.metadata.kind)) continue;
+        if (!relationValues(target, "component_ids").includes(component.metadata.id))
+          errors.push(
+            `${component.path}: ${field} has stale backlink ${id}; ${id} does not reference ${component.metadata.id}`,
+          );
+      }
+    }
+  }
+}
+
 function validateCatalog(recordsById, errors) {
   const catalog = recordsById.get("CMP-CATALOG");
   if (!catalog) {
@@ -572,10 +625,34 @@ function validateCatalog(recordsById, errors) {
   }
 }
 
+function markdownProse(source) {
+  let fence = null;
+  return source
+    .split(/\r?\n/)
+    .map((line) => {
+      if (fence) {
+        const closing = new RegExp(
+          `^ {0,3}${fence.marker}{${fence.length},}[ \\t]*$`,
+        );
+        if (closing.test(line)) fence = null;
+        return "";
+      }
+      const opening = /^ {0,3}(`{3,}|~{3,})/.exec(line);
+      if (opening) {
+        fence = { marker: opening[1][0], length: opening[1].length };
+        return "";
+      }
+      return line.replace(/(`+)(.*?)\1/g, "");
+    })
+    .join("\n");
+}
+
 function validateLinks(files, errors) {
   const pattern = /!?\[[^\]]*\]\(([^)]+)\)/g;
   for (const path of files)
-    for (const match of readFileSync(path, "utf8").matchAll(pattern)) {
+    for (const match of markdownProse(readFileSync(path, "utf8")).matchAll(
+      pattern,
+    )) {
       let target = match[1].trim();
       target =
         target.startsWith("<") && target.endsWith(">")
@@ -608,19 +685,38 @@ function validateLinks(files, errors) {
 
 function validateSensitiveMaterial(files, errors) {
   const forbidden = [
-    ["/Users path", /\/Users\//],
+    [
+      "/Users path",
+      /\/Users\/(?!you(?=\/|[\s`'")\]}>]|$))[A-Za-z0-9._-]+/,
+    ],
     ["S3 URI", /s3:\/\//i],
     ["AWS ARN", /arn:aws/i],
+    ["AWS account id", /\b\d{12}\b/],
     ["AWS access key", /\bAKIA[0-9A-Z]{16}\b/],
     ["Slack token", /\bxox[baprs]-[A-Za-z0-9-]+\b/],
     ["EC2 instance id", /\bi-[0-9a-f]{8,17}\b/],
     ["EBS volume id", /\bvol-[0-9a-f]{8,17}\b/],
+    ["EBS snapshot id", /\bsnap-[0-9a-f]{8,17}\b/],
+    [
+      "organization authority id",
+      /\boau_[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}\b/i,
+    ],
+    [
+      "organization id",
+      /\borg_[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}\b/i,
+    ],
+    [
+      "branch-relative status wording",
+      /\b(?:this branch|(?:this|the) documentation branch|(?:the\s+)?(?:founder-live\s+)?hardening branch)(?:'s)?\b/i,
+    ],
     ["private receipt filename", /\bstep9-[a-z0-9-]+\.v1\.json\b/i],
   ];
-  for (const path of files)
+  for (const path of files) {
+    const source = readFileSync(path, "utf8");
     for (const [label, pattern] of forbidden)
-      if (pattern.test(readFileSync(path, "utf8")))
+      if (pattern.test(source))
         errors.push(`${relative(REPO, path)}: contains forbidden ${label}`);
+  }
 }
 
 function managed(path) {
@@ -631,6 +727,8 @@ function managed(path) {
 export function checkDocumentation() {
   const errors = [];
   const files = markdownFiles(DOCS);
+  const trackedMarkdown = trackedMarkdownFiles();
+  const checkedMarkdown = [...new Set([...files, ...trackedMarkdown])].sort();
   const records = [];
   for (const absolutePath of files) {
     if (absolutePath.startsWith(`${TEMPLATE_ROOT}/`)) continue;
@@ -679,9 +777,10 @@ export function checkDocumentation() {
     if (record.metadata.kind === "qualification")
       validateQualification(record, recordsById, evidenceIds, matrices, errors);
   }
+  validateComponentBacklinks(recordsById, errors);
   validateCatalog(recordsById, errors);
-  validateLinks(files, errors);
-  validateSensitiveMaterial(files, errors);
+  validateLinks(checkedMarkdown, errors);
+  validateSensitiveMaterial(checkedMarkdown, errors);
   return errors;
 }
 

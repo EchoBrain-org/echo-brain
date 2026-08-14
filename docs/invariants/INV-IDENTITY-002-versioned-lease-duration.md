@@ -12,7 +12,7 @@ reviewed_at: 2026-08-13
 reviewed_ref: 280db80479a39ba51708b5923cc4b3eb3cfcd7ef
 normative: MUST
 enforcement_status: partial
-enforcement_scope: Signed V1 and opt-in V2 organization access leases on the founder-live hardening branch
+enforcement_scope: Signed V1 and opt-in V2 organization access leases
 failure_pattern_ids:
   - FP-IDENTITY-002
 ---
@@ -35,4 +35,4 @@ prevent an old client from encountering a central head it cannot validate.
 ## Enforcement and verification
 
 The reviewed V2 opt-in preserves V1 five-minute behavior and permits a bounded
-longer request. V2 live issuance was not proved by the stopped Job A receipt.
+longer request. Live issuance requires its own exact qualification.

@@ -10,7 +10,7 @@ reviewed_at: 2026-08-13
 reviewed_ref: 06811c29458b0bf3aac443baf35453d3a2eb27f3
 normative: MUST
 enforcement_status: partial
-enforcement_scope: Slack identity verification on the founder-live hardening branch
+enforcement_scope: Slack identity verification paths
 failure_pattern_ids:
   - FP-ADAPTERS-001
 ---

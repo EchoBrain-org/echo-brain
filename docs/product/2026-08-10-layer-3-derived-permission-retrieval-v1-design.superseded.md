@@ -18,4 +18,5 @@ Current normative successors are:
 The predecessor's review record remains historical evidence for the approval
 proof, exact-membership rule, facts-before-text boundary, failure algebra, and
 final audit-before-bytes contract. The A/B split and their later reviews govern
-current implementation status and release boundaries.
+the normative implementation boundaries. Exact-run outcomes belong in the
+[qualification index](../qualification/README.md), not this tombstone.

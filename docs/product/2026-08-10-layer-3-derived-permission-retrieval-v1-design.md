@@ -76,10 +76,11 @@ wire-contract, scope, and invariant reviews and is now an
 B was first implemented at source baseline
 `588b42828d5c811a4ae51b21e881139109e7e46d`, with final local gates and
 independent acceptance/security review recorded in its approved implementation
-contract. The exact successor `83819a5` is now deployed and founder-live
-qualified for the bounded two-policy lexical path by
-[`QUAL-20260814-194049-001`](../qualification/QUAL-20260814-194049-001-readable-search-minimum-v1.md).
-It is not client-live qualified or released.
+contract. The immutable report
+[`QUAL-20260814-194049-001`](../qualification/QUAL-20260814-194049-001-readable-search-minimum-v1.md)
+records one exact `83819a5` deployed founder-live run for the bounded
+two-policy lexical path, with no client-live or released claim. This
+non-normative index does not own mutable deployment status.
 
 ## Authorization boundary
 

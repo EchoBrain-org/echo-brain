@@ -55,5 +55,5 @@ empty decisions.
 
 Pin execution controls per provider/model, include them in processing
 identity, and test visible-empty, thinking-only, truncation, invalid schema,
-and valid-empty outcomes. The Qwen repair passed live on the hardening branch
-but is not part of this documentation branch's source baseline.
+and valid-empty outcomes. The exact implementation, regression, and live
+evidence scope is fixed by the refs and evidence IDs above.

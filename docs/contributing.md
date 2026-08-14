@@ -22,10 +22,17 @@ empty relationship field. In V1, ownership lives on component pages; add an
 `owners` list to another record only when it names a real owner. IDs are permanent: `CMP-*`, `INV-<DOMAIN>-NNN`, `ADR-NNNN`, `RFC-NNNN`,
 `FP-<DOMAIN>-NNN`, `PB-<DOMAIN>-NNN`, `RB-<DOMAIN>-NNN`,
 `QMAT-<DOMAIN>-NNN`, and `QUAL-YYYYMMDD-HHMMSS-NNN`.
+Keep every record's `component_ids` and each component's kind-specific reverse
+ID list in exact two-way agreement.
 
 Keep separate claims separate: accepted design, implemented code, deployed
 artifact, and qualified run are not interchangeable. Do not rewrite accepted
 or rejected ADR rationale; supersede it with a linked new ADR.
+
+Immutable qualification reports own exact deployment and promotion outcomes.
+Durable records may link those reports, but must not use a branch name or a
+"current deployment" as their status or enforcement boundary; bind source
+claims to `reviewed_ref` instead.
 
 ## Turn an observation into durable knowledge
 

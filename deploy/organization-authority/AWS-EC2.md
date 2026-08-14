@@ -1,75 +1,103 @@
 # ECHO Authority on EC2: minimum v1 cutover
 
 This moves the existing single-organization Authority to one Ubuntu ARM64 EC2
-instance in AWS account `904560150024`, region `us-west-2`. Docker runs the
-Authority and Caddy. Native `cloudflared` is the only public path. The security
-group must have no inbound rules; Docker publishes the HTTP origin only at
-`127.0.0.1:80`.
+instance. Docker runs the Authority and Caddy. Native `cloudflared` is the only
+public path. The security group must have no inbound rules; Docker publishes
+the HTTP origin only at `127.0.0.1:80`.
 
 This is deliberately one host, one EBS volume, and one Tunnel replica. It is
 not HA. Keep the Mac data only as a cold rollback copy. Its Compose stack and
 Tunnel connector must remain stopped; after EC2 accepts traffic, refresh the
 entire data generation before any Mac rollback.
 
-## 1. Historical bootstrap image publication
+The account, Region, registry, repository, hostname, instance, backup bucket,
+expected Authority and organization identities, monitoring topic, and secret
+identifier are protected operator inputs. Keep them in a mode-0600 environment
+file outside the repository and load them without printing their values. The
+commands below require `AWS_PROFILE`, `AWS_REGION`, `AWS_ACCOUNT_ID`,
+`ECR_REGISTRY`, `ECR_REPOSITORY`, `AUTHORITY_HOST`, `BACKUP_BUCKET`,
+`INSTANCE_ID`, `EXPECTED_AUTHORITY_ID`, `EXPECTED_ORGANIZATION_ID`,
+`TUNNEL_TOKEN_SECRET_ID`, `EXPECTED_RESTORE_SCRIPT_SHA256`,
+`OPS_ALERTS_TOPIC_ID`, and `ECHO_REPO_ROOT` when applicable. The checked-in
+bootstrap and token installer remain the executable
+owners of their registry, Region, and dynamic-reference pins; the runbook only
+compares those pins with protected operator inputs. Artifact publication also
+requires `SOURCE_IMAGE`, `RELEASE_TAG`, `EXPECTED_DOCKER_IMAGE_ID`, and
+`EXPECTED_ECR_DIGEST` from reviewed private release evidence. Never copy their
+resolved values into this runbook.
 
-The command block in this section records the original
-`access-recovery-504ec74` migration. It is historical evidence, not the
-mutable identity of the running service, and must not be rerun as a current
-upgrade. The deployed readable-search identity is recorded immutably in
-[`QUAL-20260814-194049-001`](../../docs/qualification/QUAL-20260814-194049-001-readable-search-minimum-v1.md).
-Any later promotion must substitute a newly reviewed exact image and produce
-new qualification evidence. Do not rebuild a selected artifact during its
-downtime window.
+[`QUAL-20260814-194049-001`](../../docs/qualification/QUAL-20260814-194049-001-readable-search-minimum-v1.md)
+immutably records one exact deployed, founder-live-qualified readable-search
+run. It owns that run's source, image, state identities, and non-claims; it is
+not a mutable pointer to the running deployment. Select any later artifact from
+new reviewed release evidence and create new exact qualification evidence when
+making a later promotion claim.
+
+## 1. Publish the exact reviewed image
+
+Run on the Mac before the downtime window. Do not rebuild the selected artifact
+during the migration. Load the protected operator environment, then require
+every value used below:
 
 ```bash
 set -euo pipefail
-AWS_PROFILE=echo-prod
-AWS_REGION=us-west-2
-REGISTRY=904560150024.dkr.ecr.us-west-2.amazonaws.com
-REPOSITORY=echo/organization-authority
-SOURCE_IMAGE=echo-organization-authority:access-recovery-504ec74
-RELEASE_TAG=access-recovery-504ec74
-EXPECTED_DOCKER_IMAGE_ID=sha256:4d9382177d09163c914a2eabf0ddbf2af0ad5e56d1505e0dd4fb98919ca7aa1d
-EXPECTED_ECR_DIGEST=sha256:4d9382177d09163c914a2eabf0ddbf2af0ad5e56d1505e0dd4fb98919ca7aa1d
-aws_echo_prod() {
+: "${AWS_PROFILE:?load from protected operator environment}"
+: "${AWS_REGION:?load from protected operator environment}"
+: "${AWS_ACCOUNT_ID:?load from protected operator environment}"
+: "${ECR_REGISTRY:?load from protected operator environment}"
+: "${ECR_REPOSITORY:?load from protected operator environment}"
+: "${TUNNEL_TOKEN_SECRET_ID:?load from protected operator environment}"
+: "${ECHO_REPO_ROOT:?load from protected operator environment}"
+: "${SOURCE_IMAGE:?load from reviewed private release evidence}"
+: "${RELEASE_TAG:?load from reviewed private release evidence}"
+: "${EXPECTED_DOCKER_IMAGE_ID:?load from reviewed private release evidence}"
+: "${EXPECTED_ECR_DIGEST:?load from reviewed private release evidence}"
+DEPLOY_ROOT="$(git -C "$ECHO_REPO_ROOT" rev-parse --show-toplevel)/deploy/organization-authority"
+BOOTSTRAP="$DEPLOY_ROOT/bootstrap-ubuntu-arm64.sh"
+TOKEN_INSTALLER="$DEPLOY_ROOT/install-cloudflare-tunnel-token.sh"
+[[ -f $BOOTSTRAP && -f $TOKEN_INSTALLER ]]
+[[ $ECR_REGISTRY == "$AWS_ACCOUNT_ID.dkr.ecr.$AWS_REGION.amazonaws.com" ]]
+BOOTSTRAP_REGISTRY="$(sed -n 's/^ECR_REGISTRY=//p' "$BOOTSTRAP")"
+INSTALLER_REGION="$(sed -n 's/^AWS_REGION=//p' "$TOKEN_INSTALLER")"
+INSTALLER_REFERENCE="$(
+  sed -n "s/^TOKEN_REFERENCE='\\(.*\\)'$/\\1/p" "$TOKEN_INSTALLER"
+)"
+[[ $BOOTSTRAP_REGISTRY == "$ECR_REGISTRY" ]]
+[[ $INSTALLER_REGION == "$AWS_REGION" ]]
+[[ $INSTALLER_REFERENCE == "{{resolve:secretsmanager:${TUNNEL_TOKEN_SECRET_ID}}}" ]]
+aws_operator() {
   env -u AWS_ACCESS_KEY_ID -u AWS_SECRET_ACCESS_KEY \
     -u AWS_SESSION_TOKEN -u AWS_SECURITY_TOKEN \
     aws --profile "$AWS_PROFILE" --region "$AWS_REGION" "$@"
 }
 
-[[ $(aws_echo_prod sts get-caller-identity --query Account --output text) == 904560150024 ]]
+[[ $(aws_operator sts get-caller-identity --query Account --output text) == "$AWS_ACCOUNT_ID" ]]
 
 SOURCE_ID="$(docker image inspect "$SOURCE_IMAGE" --format '{{.Id}}')"
 [[ $SOURCE_ID == "$EXPECTED_DOCKER_IMAGE_ID" ]]
 [[ $(docker image inspect "$SOURCE_ID" --format '{{.Os}}/{{.Architecture}}') == linux/arm64 ]]
-aws_echo_prod ecr get-login-password |
-  docker login --username AWS --password-stdin "$REGISTRY"
-docker tag "$SOURCE_ID" "$REGISTRY/$REPOSITORY:$RELEASE_TAG"
-docker push "$REGISTRY/$REPOSITORY:$RELEASE_TAG"
-DIGEST="$(aws_echo_prod ecr describe-images \
-  --repository-name "$REPOSITORY" \
+aws_operator ecr get-login-password |
+  docker login --username AWS --password-stdin "$ECR_REGISTRY"
+docker tag "$SOURCE_ID" "$ECR_REGISTRY/$ECR_REPOSITORY:$RELEASE_TAG"
+docker push "$ECR_REGISTRY/$ECR_REPOSITORY:$RELEASE_TAG"
+DIGEST="$(aws_operator ecr describe-images \
+  --repository-name "$ECR_REPOSITORY" \
   --image-ids "imageTag=$RELEASE_TAG" \
   --query 'imageDetails[0].imageDigest' --output text)"
 [[ $DIGEST == "$EXPECTED_ECR_DIGEST" ]]
-PINNED_IMAGE="$REGISTRY/$REPOSITORY@$DIGEST"
+PINNED_IMAGE="$ECR_REGISTRY/$ECR_REPOSITORY@$DIGEST"
 docker pull "$PINNED_IMAGE"
 [[ $(docker image inspect "$PINNED_IMAGE" --format '{{.Id}}') == "$EXPECTED_DOCKER_IMAGE_ID" ]]
 printf 'ECHO_AUTHORITY_IMAGE=%s\n' "$PINNED_IMAGE"
-docker logout "$REGISTRY"
+docker logout "$ECR_REGISTRY"
 ```
 
-`access-recovery-504ec74` was the historical bootstrap image. It predates the
-readable-search capability and does **not** contain
-`verify-readable-search-backup`; do not add that command to this historical
-image's cutover, backup, or restore requirements. The readable-search
-procedure below applies only to an exact B-capable image whose immutable
-qualification report names its source, digest, compatible state, and recovery
-evidence.
-
-Record the ECR digest and Docker image ID separately. The EC2 `.env` must use
-the digest-pinned ECR reference, never just a tag. The ECR repository is
-immutable and scans on push.
+Record the ECR digest, Docker image ID, and `PINNED_IMAGE` in private release
+evidence. The EC2 `.env` must use the digest-pinned ECR reference, never just a
+tag. The ECR repository is immutable and scans on push. Readable-search
+maintenance applies only when the selected exact image exposes those commands
+and its reviewed evidence names compatible state; never infer capability from
+a historical tag.
 
 ## 2. Prepare EC2 without connecting the Tunnel
 
@@ -79,44 +107,51 @@ Copy `compose.yaml`, `compose.ec2.yaml`, `Caddyfile.ec2`,
 `restore-authority-state.sh` to the new host through Session Manager. Then run:
 
 ```bash
+set -euo pipefail
 sudo ./bootstrap-ubuntu-arm64.sh
 sudo install -o root -g echo-authority -m 0640 \
   compose.yaml compose.ec2.yaml Caddyfile.ec2 /srv/echo-authority/
 ```
 
 The bootstrap installs Ubuntu's Docker, Compose, ECR credential helper, and AWS
-CLI v2. It downloads Cloudflare's ARM64 `2026.7.3` package and verifies SHA-256
-`d3ea7d22dd337b465da33d6bc1c4b3cfd381407447a2a7d29542c19783430db3`.
-It also installs `asm-exec` from AWS Agent Toolkit commit
-`171d4fba3bc404da3473f323c3e293b4a989f089`, verifies SHA-256
-`d55eb38ad33a5b76f584ca180f633ecc120cf39b8fd29427ffbe11a8fbf19556`,
-and applies the reviewed one-line compatibility patch for the AWS MCP server's
-`structuredContent` response. The patched checksum is
-`50fe3ed2dba8db65f29f4bfb7e382d8f9a95a0165f15153c7be2e28baeb30b6b`.
-It installs the hardened Tunnel unit **disabled and stopped**, with no token.
+CLI v2. It downloads and verifies the exact Cloudflare ARM64 package and
+`asm-exec` revision pinned in `bootstrap-ubuntu-arm64.sh`, applies the checked-in
+compatibility patch, verifies the patched bytes, and installs the hardened
+Tunnel unit **disabled and stopped**, with no token. The script is the single
+source for those version and digest pins; do not copy them into this runbook.
 
-Create the target environment using the digest printed in step 1:
+Create the target environment using `PINNED_IMAGE` from the private release
+record and `AUTHORITY_HOST` from the protected operator environment:
 
 ```bash
-sudo bash -c '
 set -euo pipefail
-cd /srv/echo-authority
+: "${PINNED_IMAGE:?load from private release evidence}"
+: "${AUTHORITY_HOST:?load from protected operator environment}"
+[[ $AUTHORITY_HOST =~ ^[a-z0-9]([a-z0-9.-]*[a-z0-9])?$ ]]
+[[ $PINNED_IMAGE =~ ^[a-z0-9.-]+(/[a-z0-9._-]+)+@sha256:[0-9a-f]{64}$ ]]
 AUTHORITY_UID="$(id -u echo-authority)"
 AUTHORITY_GID="$(id -g echo-authority)"
-IMAGE="904560150024.dkr.ecr.us-west-2.amazonaws.com/echo/organization-authority@sha256:REPLACE_WITH_DIGEST"
-[[ $IMAGE == *@sha256:* ]]
+STAGED_ENV="$(mktemp)"
+trap 'rm -f -- "$STAGED_ENV"' EXIT
 umask 077
 printf "%s\n" \
-  "ECHO_AUTHORITY_HOST=authority.echobrain.org" \
+  "ECHO_AUTHORITY_HOST=$AUTHORITY_HOST" \
   "ECHO_AUTHORITY_UID=$AUTHORITY_UID" \
   "ECHO_AUTHORITY_GID=$AUTHORITY_GID" \
-  "ECHO_AUTHORITY_IMAGE=$IMAGE" > .env
-docker compose --env-file .env -f compose.yaml -f compose.ec2.yaml config >/dev/null
-docker compose --env-file .env -f compose.yaml -f compose.ec2.yaml pull
+  "ECHO_AUTHORITY_IMAGE=$PINNED_IMAGE" > "$STAGED_ENV"
+sudo install -o root -g echo-authority -m 0600 \
+  "$STAGED_ENV" /srv/echo-authority/.env
+rm -f -- "$STAGED_ENV"
+trap - EXIT
+sudo bash -c '
+  set -euo pipefail
+  cd /srv/echo-authority
+  docker compose --env-file .env -f compose.yaml -f compose.ec2.yaml config >/dev/null
+  docker compose --env-file .env -f compose.yaml -f compose.ec2.yaml pull
 '
 ```
 
-Do not create `/etc/cloudflared/tunnel.token` yet. The current rollback route is
+Do not create `/etc/cloudflared/tunnel.token` yet. The pre-cutover rollback route is
 `https://localhost:443`, with HTTP Host and TLS server name `localhost`, TLS
 verification enabled, and the Mac `data/caddy-local-root.crt` as `caPool`.
 Confirm those values and confirm in the Cloudflare dashboard that the Mac is
@@ -130,7 +165,9 @@ Mac Compose stack:
 
 ```bash
 set -euo pipefail
-MAC_DEPLOY=/Users/zhenye/Desktop/echo-brain/deploy/organization-authority
+: "${ECHO_REPO_ROOT:?load from protected operator environment}"
+MAC_DEPLOY="$(git -C "$ECHO_REPO_ROOT" rev-parse --show-toplevel)/deploy/organization-authority"
+[[ -d $MAC_DEPLOY ]]
 launchctl bootout "gui/$(id -u)" "$HOME/Library/LaunchAgents/com.cloudflare.cloudflared.plist"
 ! pgrep -f '[c]loudflared tunnel run'
 cd "$MAC_DEPLOY"
@@ -166,57 +203,93 @@ shasum -a 256 "$ARCHIVE" | tee "$ARCHIVE.sha256"
 ```
 
 Do not restart either Mac process after the snapshot. Upload the archive and
-the reviewed restore script to one private S3 prefix:
+reviewed restore script to one private, versioned S3 prefix, then derive the
+Systems Manager source URL from that same bucket, Region, and key prefix. This
+passes no AWS credential or bearer URL to EC2:
 
 ```bash
-BACKUP_BUCKET=echo-org1-prod-authority-backups-904560150024-us-west-2
-AWS_PROFILE=echo-prod
-AWS_REGION=us-west-2
-INSTANCE_ID=i-REPLACE_WITH_INSTANCE_ID
-aws_echo_prod() {
+set -euo pipefail
+: "${ARCHIVE:?set to the exact cold archive from the prior step}"
+: "${BACKUP_BUCKET:?load from protected operator environment}"
+: "${AWS_PROFILE:?load from protected operator environment}"
+: "${AWS_REGION:?load from protected operator environment}"
+: "${AWS_ACCOUNT_ID:?load from protected operator environment}"
+: "${INSTANCE_ID:?load from protected operator environment}"
+: "${ECHO_REPO_ROOT:?load from protected operator environment}"
+: "${EXPECTED_RESTORE_SCRIPT_SHA256:?load from reviewed private recovery evidence}"
+[[ -f $ARCHIVE ]]
+[[ $BACKUP_BUCKET =~ ^[a-z0-9][a-z0-9-]{1,61}[a-z0-9]$ ]]
+RESTORE_SCRIPT="$(git -C "$ECHO_REPO_ROOT" rev-parse --show-toplevel)/deploy/organization-authority/restore-authority-state.sh"
+[[ -f $RESTORE_SCRIPT ]]
+[[ $EXPECTED_RESTORE_SCRIPT_SHA256 =~ ^[0-9a-f]{64}$ ]]
+RESTORE_SCRIPT_SHA256="$(shasum -a 256 "$RESTORE_SCRIPT" | awk '{print $1}')"
+[[ $RESTORE_SCRIPT_SHA256 == "$EXPECTED_RESTORE_SCRIPT_SHA256" ]]
+aws_operator() {
   env -u AWS_ACCESS_KEY_ID -u AWS_SECRET_ACCESS_KEY \
     -u AWS_SESSION_TOKEN -u AWS_SECURITY_TOKEN \
     aws --profile "$AWS_PROFILE" --region "$AWS_REGION" "$@"
 }
-[[ $(aws_echo_prod sts get-caller-identity --query Account --output text) == 904560150024 ]]
+[[ $(aws_operator sts get-caller-identity --query Account --output text) == "$AWS_ACCOUNT_ID" ]]
+BUCKET_REGION="$(aws_operator s3api get-bucket-location \
+  --bucket "$BACKUP_BUCKET" --query LocationConstraint --output text)"
+[[ $BUCKET_REGION != None ]] || BUCKET_REGION=us-east-1
+[[ $BUCKET_REGION == "$AWS_REGION" ]]
+[[ $(aws_operator s3api get-bucket-versioning \
+  --bucket "$BACKUP_BUCKET" --query Status --output text) == Enabled ]]
 STAMP="$(basename "$ARCHIVE" .tar.gz | sed 's/^organization-authority-data-//')"
 PREFIX="cutovers/$STAMP"
 ARCHIVE_NAME="$(basename "$ARCHIVE")"
 ARCHIVE_SHA256="$(shasum -a 256 "$ARCHIVE" | awk '{print $1}')"
-aws_echo_prod s3 cp "$ARCHIVE" \
-  "s3://$BACKUP_BUCKET/$PREFIX/$ARCHIVE_NAME" --sse AES256
-aws_echo_prod s3 cp restore-authority-state.sh \
-  "s3://$BACKUP_BUCKET/$PREFIX/restore-authority-state.sh" --sse AES256
-```
-
-Have Systems Manager download from S3 with the instance role and run the
-reviewed restore script. This passes no AWS credential or bearer URL to EC2:
-
-```bash
-SOURCE_URL="https://$BACKUP_BUCKET.s3.$AWS_REGION.amazonaws.com/$PREFIX/"
+[[ $ARCHIVE_NAME =~ ^organization-authority-data-[0-9]{8}T[0-9]{6}Z\.tar\.gz$ ]]
+[[ $ARCHIVE_SHA256 =~ ^[0-9a-f]{64}$ ]]
+ARCHIVE_VERSION="$(aws_operator s3api put-object \
+  --bucket "$BACKUP_BUCKET" \
+  --key "$PREFIX/$ARCHIVE_NAME" \
+  --body "$ARCHIVE" \
+  --expected-bucket-owner "$AWS_ACCOUNT_ID" \
+  --server-side-encryption AES256 \
+  --query VersionId --output text)"
+SCRIPT_VERSION="$(aws_operator s3api put-object \
+  --bucket "$BACKUP_BUCKET" \
+  --key "$PREFIX/restore-authority-state.sh" \
+  --body "$RESTORE_SCRIPT" \
+  --expected-bucket-owner "$AWS_ACCOUNT_ID" \
+  --server-side-encryption AES256 \
+  --query VersionId --output text)"
+[[ -n $ARCHIVE_VERSION && $ARCHIVE_VERSION != None && $ARCHIVE_VERSION != null ]]
+[[ -n $SCRIPT_VERSION && $SCRIPT_VERSION != None && $SCRIPT_VERSION != null ]]
+SOURCE_URL="https://${BACKUP_BUCKET}.s3.${AWS_REGION}.amazonaws.com/${PREFIX}/"
+RESTORE_COMMAND="printf '%s  %s\\n' '$EXPECTED_RESTORE_SCRIPT_SHA256' restore-authority-state.sh | sha256sum --check --status && sudo bash restore-authority-state.sh $ARCHIVE_NAME $ARCHIVE_SHA256"
 PARAMETERS="$(jq -cn \
   --arg source_info "$(jq -cn --arg path "$SOURCE_URL" '{path:$path}')" \
-  --arg command_line "sudo bash restore-authority-state.sh $ARCHIVE_NAME $ARCHIVE_SHA256" \
+  --arg command_line "$RESTORE_COMMAND" \
   '{sourceType:["S3"],sourceInfo:[$source_info],commandLine:[$command_line]}')"
-COMMAND_ID="$(aws_echo_prod ssm send-command \
+COMMAND_ID="$(aws_operator ssm send-command \
   --instance-ids "$INSTANCE_ID" \
   --document-name AWS-RunRemoteScript \
   --comment 'Restore cold ECHO Authority state' \
   --parameters "$PARAMETERS" \
   --query 'Command.CommandId' --output text)"
-aws_echo_prod ssm wait command-executed \
+aws_operator ssm wait command-executed \
   --command-id "$COMMAND_ID" --instance-id "$INSTANCE_ID"
-aws_echo_prod ssm get-command-invocation \
+STATUS="$(aws_operator ssm get-command-invocation \
   --command-id "$COMMAND_ID" --instance-id "$INSTANCE_ID" \
-  --query '{Status:Status,Output:StandardOutputContent,Error:StandardErrorContent}'
+  --query Status --output text)"
+[[ $STATUS == Success ]]
+printf 'archive_version=%s script_version=%s script_sha256=%s command_id=%s status=%s\n' \
+  "$ARCHIVE_VERSION" "$SCRIPT_VERSION" "$RESTORE_SCRIPT_SHA256" \
+  "$COMMAND_ID" "$STATUS"
 ```
 
-Require `Status` to be `Success`. The restore script independently checks the
-Mac SHA-256, archive paths, SQLite sidecars, all four database integrity
-results, and foreign keys. Transfer the complete `data/` directory as one
-unit. Never copy selected SQLite files, credentials, or keys. Do not transfer
-the runtime coordination volume or Caddy's old TLS volumes; EC2 Caddy is an
-HTTP-only origin behind Cloudflare.
+Retain the two object Version IDs, archive and restore-script SHA-256 values,
+command ID, and successful status in private cutover evidence. Inspect failed
+command output only through
+private Systems Manager incident tooling; do not paste it into tracked docs.
+The restore script independently checks the Mac SHA-256, archive paths, SQLite
+sidecars, all four database integrity results, and foreign keys. Transfer the
+complete `data/` directory as one unit. Never copy selected SQLite files,
+credentials, or keys. Do not transfer the runtime coordination volume or
+Caddy's old TLS volumes; EC2 Caddy is an HTTP-only origin behind Cloudflare.
 
 ## 4. Validate the new origin while it is still private
 
@@ -226,11 +299,15 @@ On EC2:
 sudo bash -c '
 set -euo pipefail
 cd /srv/echo-authority
+mapfile -t AUTHORITY_HOST_LINES < <(sed -n "s/^ECHO_AUTHORITY_HOST=//p" .env)
+[[ ${#AUTHORITY_HOST_LINES[@]} -eq 1 ]]
+ECHO_AUTHORITY_HOST="${AUTHORITY_HOST_LINES[0]}"
+[[ $ECHO_AUTHORITY_HOST =~ ^[A-Za-z0-9.-]+$ ]]
 compose() { docker compose --env-file .env -f compose.yaml -f compose.ec2.yaml "$@"; }
 compose up -d --no-build --pull always --wait --wait-timeout 90
 compose exec -T authority node services/organization-authority/dist/main.js status --config /echo/authority.json
-[[ $(curl -sS -o /dev/null -w "%{http_code}" -H "Host: authority.echobrain.org" http://127.0.0.1/_echo/runtime-status) == 404 ]]
-curl --fail --silent --show-error -H "Host: authority.echobrain.org" http://127.0.0.1/v1/authority-descriptor
+[[ $(curl -sS -o /dev/null -w "%{http_code}" -H "Host: $ECHO_AUTHORITY_HOST" http://127.0.0.1/_echo/runtime-status) == 404 ]]
+curl --fail --silent --show-error -H "Host: $ECHO_AUTHORITY_HOST" http://127.0.0.1/v1/authority-descriptor
 docker port "$(compose ps -q authority)"
 '
 ```
@@ -248,21 +325,34 @@ both passed recovery validation.
 
 ## 5. Move the public route
 
-In Cloudflare, change the existing `authority.echobrain.org` Tunnel origin to
-`http://127.0.0.1:80` and set its HTTP Host header to
-`authority.echobrain.org`. Remove the old `originServerName` and `caPool`; they
-apply only to the old TLS origin. Use the existing remotely managed tunnel; do
-not create a second hostname or connector on the Mac.
+In Cloudflare, change the existing `$AUTHORITY_HOST` Tunnel origin to
+`http://127.0.0.1:80` and set its HTTP Host header to the exact same protected
+hostname. Remove the old `originServerName` and `caPool`; they apply only to
+the old TLS origin. Use the existing remotely managed tunnel; do not create a
+second hostname or connector on the Mac.
 
-The EC2 role may read only the exact Secrets Manager secret
-`echo/org1-prod/cloudflare-tunnel-token`. Resolve and install it only after the
-private Authority validation in step 4 succeeds:
+The EC2 role may read only the exact Secrets Manager resource identified by
+protected operator input `TUNNEL_TOKEN_SECRET_ID`. Verify that the reviewed
+installer's dynamic reference resolves that same identifier without printing
+either the identifier or value; step 1 performs that comparison. Resolve and
+install the token only after the private Authority validation in step 4
+succeeds. The fail-closed sequence stops ingress and removes any old token
+before attempting resolution, so an install failure cannot start with stale
+credentials:
 
 ```bash
-sudo /usr/local/sbin/install-echo-authority-tunnel-token
-sudo stat -c 'token_mode=%a owner=%U group=%G size=%s' \
-  /etc/cloudflared/tunnel.token
-sudo systemctl enable --now cloudflared-echo-authority.service
+sudo bash -c '
+set -euo pipefail
+systemctl disable --now cloudflared-echo-authority.service
+! systemctl is-active --quiet cloudflared-echo-authority.service
+! pgrep -x cloudflared >/dev/null
+rm -f -- /etc/cloudflared/tunnel.token
+/usr/local/sbin/install-echo-authority-tunnel-token
+[[ -s /etc/cloudflared/tunnel.token ]]
+[[ $(stat -c "%a:%U:%G" /etc/cloudflared/tunnel.token) == 640:root:cloudflared ]]
+systemctl enable --now cloudflared-echo-authority.service
+systemctl is-active --quiet cloudflared-echo-authority.service
+'
 ```
 
 The installer makes at most four resolution/install attempts, with 5, 10, and
@@ -272,15 +362,20 @@ exists only in the child process environment and is written atomically to
 It never enters user data, command arguments, Git, shell history, clipboard,
 logs, or this runbook. Do not continue if the installer fails.
 
-Validate on EC2 and then from a separate machine:
+Validate the connector on EC2:
 
 ```bash
-sudo systemctl --no-pager --full status cloudflared-echo-authority.service
-curl --fail --silent http://127.0.0.1:20241/metrics | grep cloudflared_tunnel_ha_connections
-curl --fail --silent --show-error https://authority.echobrain.org/v1/authority-descriptor
+sudo bash -c '
+set -euo pipefail
+systemctl is-active --quiet cloudflared-echo-authority.service
+systemctl --no-pager --full status cloudflared-echo-authority.service
+curl --fail --silent http://127.0.0.1:20241/metrics |
+  grep -Eq "^cloudflared_tunnel_ha_connections 4(\\.0+)?$"
+'
 ```
 
-From the separate machine, also pass this public-path cache release gate. The
+Then, from a separate machine, fetch the public descriptor and pass this
+public-path cache release gate. The
 malformed body deliberately exercises the fixed reviewer-recent-decisions `400`
 without using an installation key. Unlike the optional pilot recent-decisions
 route, the reviewer route is always composed. Both identical responses must
@@ -290,6 +385,15 @@ not cache the route.
 
 ```bash
 set -euo pipefail
+: "${AUTHORITY_HOST:?load from protected operator environment}"
+: "${EXPECTED_AUTHORITY_ID:?load from private operator evidence}"
+: "${EXPECTED_ORGANIZATION_ID:?load from private operator evidence}"
+curl --fail --silent --show-error \
+  "https://$AUTHORITY_HOST/v1/authority-descriptor" |
+  jq -e --arg authority "$EXPECTED_AUTHORITY_ID" \
+    --arg organization "$EXPECTED_ORGANIZATION_ID" \
+    '.authority_descriptor.authority_id == $authority and
+     .authority_descriptor.organization_id == $organization' >/dev/null
 PROBE_DIR="$(mktemp -d)"
 chmod 0700 "$PROBE_DIR"
 trap 'rm -rf -- "$PROBE_DIR"' EXIT
@@ -302,7 +406,7 @@ for ATTEMPT in 1 2; do
     --dump-header "$PROBE_DIR/headers-$ATTEMPT" \
     --output "$PROBE_DIR/body-$ATTEMPT" \
     --write-out '%{http_code}' \
-    https://authority.echobrain.org/v1/reviewer-recent-decisions)"
+    "https://$AUTHORITY_HOST/v1/reviewer-recent-decisions")"
   [[ $STATUS == 400 ]]
   grep -Eiq '^cf-ray:' "$PROBE_DIR/headers-$ATTEMPT"
   grep -Eiq '^cache-control:[[:space:]]*no-store[[:space:]]*$' \
@@ -326,12 +430,12 @@ or does not carry Cloudflare evidence.
 The metrics must settle at four HA connections for this one connector, and the
 Cloudflare dashboard must show only the intended EC2 connector.
 
-The public descriptor must retain Authority
-`oau_c96b9811-ab11-4c46-96ea-14ccd3bbc2c7` and organization
-`org_2f851bb7-34aa-4989-bb44-b42372f28149`. Finally run one real read/refresh
-check from Founder before declaring the infrastructure move complete. Validate
-each other active installation when that machine is available; do not promote
-the next client release until every active installation is qualified.
+The public descriptor must match `EXPECTED_AUTHORITY_ID` and
+`EXPECTED_ORGANIZATION_ID` from independently retained private operator
+evidence. Finally run one real read/refresh check from Founder before declaring
+the infrastructure move complete. Validate each other active installation when
+that machine is available; do not promote the next client release until every
+active installation is qualified.
 
 Once EC2 is accepted as the live owner, persistently disable the old Mac
 connector so a reboot cannot create a second Tunnel replica:
@@ -340,13 +444,13 @@ connector so a reboot cannot create a second Tunnel replica:
 launchctl disable "gui/$(id -u)/com.cloudflare.cloudflared"
 ```
 
-## Conditional Job B activation
+## Conditional organization-member recording activation
 
-This section applies only after a B-capable image has been selected and the
-complete stopped Authority state has been archived and snapshotted. An older
-Authority has no organization-member recording activation even though its
-image can validate that policy. Do not edit `authority.json` or
-`authority-initialization.v1.json` to add it.
+This section applies only after a readable-search-capable image with the
+activation command has been selected and the complete stopped Authority state
+has been archived and snapshotted. An image without that command has no
+organization-member recording activation even if it can validate that policy.
+Do not edit `authority.json` or `authority-initialization.v1.json` to add it.
 
 Keep the Tunnel stopped, stop the whole Compose stack, and place the reviewed
 mode-0600 canonical activation command at
@@ -392,26 +496,21 @@ After the first successful public refresh:
   container to exit with code 0, run `sync`, and request one encrypted EBS
   snapshot before immediately restarting both layers. Keep each quiesced
   snapshot until a newer quiesced checkpoint passes a restore drill.
-- Current evidence: quiesced snapshot `snap-0f238691b65a7039e` passed an
-  isolated restore drill:
-  an encrypted temporary volume was restored and mounted, the exact Authority
-  image started with no network, no published ports, no Caddy, and no
-  mounted Tunnel token or running cloudflared process, Authority status was
-  healthy, and shutdown completed cleanly. The temporary container, volume,
-  and instance-side SSM archive and restore script were deleted.
-- Enable one EBS Data Lifecycle Manager policy for volumes tagged
-  `Project=echo-brain`, `Service=echo-authority`, `Environment=prod`, and
-  `Backup=true`. Run daily and retain seven snapshots. These scheduled
-  snapshots are a secondary, crash-consistent safety net; the quiesced snapshot
-  and complete stopped-state archive remain the existing recovery-grade
-  checkpoints. They predate the readable-search baseline: do not treat either
-  as B recovery-grade until the stopped verifier succeeds for that checkpoint.
-- Monitor `https://authority.echobrain.org/v1/authority-descriptor` with an
-  HTTPS string check for the exact Authority ID above. Alarm after two of three
-  one-minute health periods fail, and treat missing data as unhealthy.
-- Route alarm and recovery notifications through the
-  `echo-org1-prod-ops-alerts` SNS topic. The email subscription must be
-  confirmed before alerts can be delivered.
+- Record each quiesced snapshot identifier and isolated restore-drill outcome
+  only in private immutable operator evidence. A runbook sentence is not proof
+  that a checkpoint remains current or recovery-grade.
+- Enable one EBS Data Lifecycle Manager policy for the exact Authority volume
+  tags in protected operator configuration. Run daily and retain seven
+  snapshots. These scheduled snapshots are a secondary, crash-consistent safety
+  net; the quiesced snapshot and complete stopped-state archive remain the
+  recovery-grade checkpoints. Do not treat any checkpoint as readable-search
+  recovery-grade until the stopped verifier succeeds for that checkpoint.
+- Monitor `https://$AUTHORITY_HOST/v1/authority-descriptor` with an HTTPS string
+  check for `EXPECTED_AUTHORITY_ID` from private evidence. Alarm after two of
+  three one-minute health periods fail, and treat missing data as unhealthy.
+- Route alarm and recovery notifications through the protected
+  `OPS_ALERTS_TOPIC_ID`. The subscription must be confirmed before alerts can
+  be delivered.
 
 Do not add a CloudWatch Agent, dashboard, database replica, automatic failover,
 or cross-region copy for this v1 pilot.
@@ -430,13 +529,22 @@ Before a real restore, persistently disable and stop the current connector. A
 restored boot volume must have the connector disabled or masked offline, or
 outbound connectivity blocked, before its first boot.
 
-Keep the restored Authority stopped. If, and only if, this restore uses a
-separately promoted B-capable image, run the Job B verifier before starting the
-Authority privately or doing external reconciliation:
+Keep the restored Authority stopped. If, and only if, the selected exact image
+is readable-search-capable, run its verifier before starting the Authority
+privately or doing external reconciliation:
 
 ```bash
+sudo bash -c '
+set -euo pipefail
+cd /srv/echo-authority
+! systemctl is-enabled --quiet cloudflared-echo-authority.service
+! systemctl is-active --quiet cloudflared-echo-authority.service
+! pgrep -x cloudflared >/dev/null
+compose() { docker compose --env-file .env -f compose.yaml -f compose.ec2.yaml "$@"; }
+[[ -z $(compose ps -q --status running) ]]
 compose run --rm --no-deps authority \
   verify-readable-search-backup --config /echo/authority.json
+'
 ```
 
 It returns `verified` only when the active pointer matches the restored record
@@ -447,12 +555,12 @@ may be rebuilt only from verified current Layer 1 while stopped. If the verifier
 rejects an intended stale pointer/head, keep the process offline, retain any
 pre-rebuild copy only as an unverified incident snapshot, run the stopped
 rebuild, and rerun verification before reconciliation. A stale generation
-cannot serve as a historical prefix. This is a conditional B validation gate,
-not a requirement for the pinned `access-recovery-504ec74` image.
+cannot serve as a historical prefix. This gate applies only to an image whose
+reviewed release evidence includes readable search.
 
-Once the conditional B verification has succeeded, or does not apply because
-the selected image is not B-capable, start the restored Authority privately.
-List memberships and installations and compare them with a separately retained
+Once the conditional readable-search verification has succeeded, or does not
+apply to the selected image, start the restored Authority privately. List
+memberships and installations and compare them with a separately retained
 incident or operator record. The restored audit log is not sufficient evidence
 because it was rewound with the database. Treat every restored active
 membership and installation as unverified until the Founder confirms it;
@@ -469,26 +577,28 @@ Keep the completed evidence in the incident or deployment record outside
   expiry, and revocation state, compared with independently retained operator
   evidence;
 - the current integration authorization-audit chain and each reviewer proof
-  referenced by a reviewer-policy fact; for a separately promoted B-capable
-  image, also retain the organization-member-readable policy proof family;
+  referenced by a reviewer-policy fact; for a readable-search-capable image,
+  also retain the organization-member-readable policy proof family;
 - the complete organization-record chain and applicable client-held record or
-  access receipts and heads; for a separately promoted B-capable image, also
-  retain both policy-fact admissions, active pointer, exact record head,
-  generation manifest/roots, and analyzer/retrieval contract identity;
-- for a separately promoted B-capable image, writable readable-search
-  query-audit storage and applicable stopped export or expiry receipts; and
+  access receipts and heads; for a readable-search-capable image, also retain
+  both policy-fact admissions, active pointer, exact record head, generation
+  manifest/roots, and analyzer/retrieval contract identity;
+- for a readable-search-capable image, writable readable-search query-audit
+  storage and applicable stopped export or expiry receipts; and
 - the Founder or trusted operator's explicit release decision.
 
 A mismatch, missing fact, incomplete audit proof, unexplained valid-prefix
 rollback, or unavailable client receipt keeps the reviewer route and public
-ingress offline. For a separately promoted B-capable image, an invalid or stale
-readable-search generation also keeps its route offline. The restore script's
-archive, SQLite integrity, and foreign-key checks, plus the conditional stopped
-B verification when applicable, do not prove that a rolled-back Person or
-authorization state is current. There is intentionally no automatic
-reconciliation command: the release evidence must remain outside the state
-being restored. Nothing in this baseline runbook claims founder-live or
-release qualification.
+ingress offline. For a readable-search-capable image, an invalid or stale
+generation also keeps its route offline. The restore script's archive, SQLite
+integrity, and foreign-key checks, plus stopped readable-search verification
+when applicable, do not prove that a rolled-back Person or authorization state
+is current. There is intentionally no automatic reconciliation command: the
+release evidence must remain outside the state being restored. Completing this
+restore establishes no founder-live, client-live, or release qualification and
+does not renew or transfer the immutable result of an earlier qualification
+report. Any new promotion claim requires exact evidence for the restored
+artifact, configuration, state, and environment.
 
 `installation access-recover` is not a remedy when restoring the Authority
 makes a client newer than the server. Use a newer checkpoint, or revoke and
@@ -505,7 +615,8 @@ membership or installation.
   then deliberately re-enable and start the Mac connector:
   `launchctl enable "gui/$(id -u)/com.cloudflare.cloudflared"`, followed by
   `launchctl bootstrap "gui/$(id -u)" "$HOME/Library/LaunchAgents/com.cloudflare.cloudflared.plist"`.
-  Its cold snapshot is still current.
+  Use that cold copy only if private cutover evidence proves it remained stopped
+  and unchanged throughout the attempted move.
 - **After the EC2 Tunnel starts:** the Mac copy is stale as soon as any request
   can write state. Never simply reconnect it. Run
   `sudo systemctl disable --now cloudflared-echo-authority.service`, verify the

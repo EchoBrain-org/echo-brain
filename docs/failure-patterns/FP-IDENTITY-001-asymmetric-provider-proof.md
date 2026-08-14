@@ -59,5 +59,6 @@ a nullable stored field. Do not relax the action-time equality check.
 Define every tuple component and authoritative endpoint. Correlate Slack
 `auth.test` and `bots.info` on both sides, reject missing or conflicting proof,
 and repair legacy state only through fresh owner-authorized verification. Tests
-remove and mismatch each component independently. The repair was live-tested
-on the hardening branch but is not merged into this branch's source baseline.
+remove and mismatch each component independently. The exact implementation,
+regression, and live evidence scope is fixed by the refs and evidence IDs
+above.

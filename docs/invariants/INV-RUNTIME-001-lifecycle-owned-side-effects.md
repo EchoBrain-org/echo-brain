@@ -11,7 +11,7 @@ reviewed_at: 2026-08-13
 reviewed_ref: a132c35aa9399876cc633c727d2c820af506bcf4
 normative: MUST
 enforcement_status: partial
-enforcement_scope: Organization record follow-up and record-only recovery on the founder-live hardening branch
+enforcement_scope: Organization record follow-up and record-only recovery
 failure_pattern_ids:
   - FP-RUNTIME-001
 ---

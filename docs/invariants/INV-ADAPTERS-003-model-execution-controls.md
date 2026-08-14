@@ -11,7 +11,7 @@ reviewed_at: 2026-08-13
 reviewed_ref: fd762a45e8745eebf27f346317e97038be69de44
 normative: MUST
 enforcement_status: partial
-enforcement_scope: Qwen 3 through the Ollama adapter on the founder-live hardening branch
+enforcement_scope: Qwen 3 through the Ollama adapter
 failure_pattern_ids:
   - FP-ADAPTERS-003
 ---

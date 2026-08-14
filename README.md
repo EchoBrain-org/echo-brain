@@ -21,17 +21,18 @@ employees. The repository contains:
 - local and Slack approval;
 - JSONL and Slack delivery;
 - SQLite product state, onboarding, backup, and restore;
-- one customer-hosted organization authority for enrollment and access; and
+- one customer-hosted organization authority for enrollment and access;
 - a minimum customer-owned organization control plane for one verified
   organization Slack tool, exact provider identity links and adapter bindings,
   and direct approve/reject permission checks; and
-- a source-implemented bounded permission-aware organization readable-search
-  baseline, documented with its authority lifecycle rather than as a deployed
-  feature.
+- a bounded permission-aware organization readable-search path whose exact
+  founder-live minimum-V1 run is recorded in
+  [qualification](docs/qualification/QUAL-20260814-194049-001-readable-search-minimum-v1.md).
 
 It does not contain a multi-tenant vendor control plane, billing, fleet,
 multi-replica authority infrastructure, general employee tool propagation,
 non-Slack organization tools, or a vendor-visible organization data plane.
+The readable-search qualification is not a client-live or released claim.
 
 ## Requirements
 

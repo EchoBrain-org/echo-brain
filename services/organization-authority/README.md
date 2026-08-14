@@ -12,21 +12,22 @@ while `integrations.sqlite` contains customer-owned provider links,
 connections, adapter bindings, direct grants, and integration audit.
 `record-log.sqlite` is the append-only record of truth, and
 `record-derived.sqlite` contains its replayable projection. All four databases
-are owned by the same authenticated singleton process. The source-implemented
-Job B baseline also keeps immutable retrieval generations below
+are owned by the same authenticated singleton process. Readable-search-capable
+builds also keep immutable retrieval generations below
 `record-retrieval/generations/`; those directories are not a fifth mutable
 source of truth. There is no tenant registry, organization switcher, billing
 layer, or multi-replica coordination.
 
 ## Release boundary
 
-Job B readable search is implemented at source baseline
-`588b42828d5c811a4ae51b21e881139109e7e46d`; it is not deployed, founder-live
-qualified, client-live qualified, or released. Its route,
-generation, verifier, and query-audit procedures are conditional on a
-separately promoted B-capable image. In particular, the current EC2-pinned
-`access-recovery-504ec74` image predates Job B and does not contain those
-commands, so they are not current production requirements.
+The bounded two-policy readable-search path has one exact deployed
+founder-live run recorded by
+[`QUAL-20260814-194049-001`](../../docs/qualification/QUAL-20260814-194049-001-readable-search-minimum-v1.md).
+That immutable report owns the source, image, state, and non-claims; this
+README does not mirror mutable deployment identity. Operators must require
+the route, generation, verifier, and query-audit procedures whenever the
+selected image is readable-search-capable. Historical images may not contain
+those commands.
 
 ## HTTP surface
 
@@ -37,7 +38,7 @@ origin:
 - `POST /v1/enrollments`
 - `POST /v1/access-leases`
 - `POST /v1/permission-checks`
-- `POST /v1/readable-search` (B-capable image only; see the release boundary above)
+- `POST /v1/readable-search` (readable-search-capable image only)
 - `POST /v1/integration-links/slack/challenges`
 - `POST /v1/integration-links/slack/completions`
 - `GET /v1/admin/overview`
@@ -98,8 +99,8 @@ local state (or explicitly recover/re-enroll that installation). Before any
 longer V2 state is issued, the previous image remains a code-only rollback
 option.
 
-When a separately promoted B-capable image is selected,
-`POST /v1/readable-search` provides the local Job B baseline behavior. It is
+When a readable-search-capable image is selected,
+`POST /v1/readable-search` provides the bounded two-policy behavior. It is
 not an operational release. It accepts only a canonical RFC 8785 signed request body
 with no URL query, searches the two closed policy families, and returns at most
 ten whole decision/action/rationale items. It has no pagination, totals,
@@ -317,10 +318,10 @@ after a stopped readable-search rebuild publishes a complete immutable
 generation. The active-generation pointer remains in `authority.sqlite`; a
 generation directory must never be copied, repaired, or swapped on its own.
 
-### Conditional Job B readable-search configuration and maintenance
+### Readable-search configuration and maintenance
 
-This section applies only to a separately promoted B-capable image. It does
-not add a runtime or backup requirement to `access-recovery-504ec74`.
+This section applies only to a readable-search-capable image. Historical
+images without these commands retain their own immutable runbook requirements.
 
 The runtime-config schema retains an optional closed
 `organization_recording_policy_v1` object for source compatibility. The
@@ -345,7 +346,8 @@ mode. Its absence never enables organization-member-readable admission.
 
 An Authority initialized before this mapping existed keeps its original
 runtime config and initialization manifest immutable. Enable the one supported
-Job B capability with the stopped, one-way activation command instead of
+organization-member-readable capability with the stopped, one-way activation
+command instead of
 editing either file:
 
 ```sh
@@ -574,15 +576,15 @@ investigate before copying it, and never copy it as a good backup.
 1. Stop the authority (`SIGTERM`, or the service manager's stop) and confirm it
    exited without a shutdown error and with exit code 0. A non-zero exit after a
    derive failure means the same thing: do not treat that state as a backup.
-2. For a separately promoted B-capable image, before copying run
+2. For a readable-search-capable image, before copying run
    `verify-readable-search-backup` below. It returns the
    text-free `verified` receipt for an admitted exact-head generation, or the
    benign `not_built` receipt when no active pointer exists. Either result may
    precede a recovery-grade archive. A stale pointer/head mismatch, corrupt
    generation, staging directory, or sidecar is a failure, not a valid backup
    result.
-3. Copy the whole state directory as one unit. For a separately promoted
-   B-capable image, do so only after that successful verification. Every
+3. Copy the whole state directory as one unit. For a readable-search-capable
+   image, do so only after that successful verification. Every
    protected file below is
    mandatory. A known-good backup also includes the derived file and, if an
    active readable-search generation exists, its complete immutable generation
@@ -618,7 +620,7 @@ investigate before copying it, and never copy it as a good backup.
 Databases use `journal_mode = DELETE`, so a stopped state has no WAL or SHM
 sidecars and every file is readable read-only exactly as copied.
 
-For a separately promoted B-capable image, before archiving and again after
+For a readable-search-capable image, before archiving and again after
 restoring, run the stopped validation command:
 
 ```sh

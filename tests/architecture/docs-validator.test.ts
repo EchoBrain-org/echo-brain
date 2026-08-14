@@ -88,7 +88,25 @@ function fixture() {
   );
   write(
     join(root, "docs/components/test.md"),
-    `${common("CMP-TEST", "component")}\n---\n# Test component\n`,
+    [
+      common("CMP-TEST", "component"),
+      "qualification_ids:",
+      "  - QMAT-TEST-001",
+      "  - QUAL-20260813-120000-001",
+      "---",
+      "# Test component",
+      "",
+    ].join("\n"),
+  );
+  write(
+    join(root, "README.md"),
+    [
+      "# Fixture",
+      "",
+      "Generic paths such as `/Users/you` and `/Users/you/project` are safe to document.",
+      "See the [test component](docs/components/test.md).",
+      "",
+    ].join("\n"),
   );
   write(
     join(root, "docs/qualification/evidence-index.md"),
@@ -149,6 +167,12 @@ function validate(root: string) {
   return result.stdout + "\n" + result.stderr;
 }
 function failurePattern(root: string, sha: string, extra = "") {
+  edit(root, "docs/components/test.md", (source) =>
+    source.replace(
+      "qualification_ids:",
+      "failure_pattern_ids:\n  - FP-TEST-001\nqualification_ids:",
+    ),
+  );
   write(
     join(root, "docs/failure-patterns/FP-TEST-001.md"),
     [
@@ -251,6 +275,91 @@ describe("documentation validator", () => {
     expect(output).toContain("duplicate evidence id EVID-TEST-001");
     expect(output).toContain("must have a 64-hex SHA-256");
     expect(output).toContain("unknown evidence id EVID-GHOST-001");
+  });
+  it("checks links and real user paths in tracked Markdown outside docs", () => {
+    const { root } = fixture();
+    edit(
+      root,
+      "README.md",
+      (source) =>
+        `${source}\nReal path: /Users/alice/private\n[missing](missing.md)\n`,
+    );
+    const output = validate(root);
+    expect(output).toContain("README.md: contains forbidden /Users path");
+    expect(output).toContain("README.md: broken local link missing.md");
+  });
+  it("checks links and sensitive material in untracked docs", () => {
+    const { root } = fixture();
+    write(
+      join(root, "docs/untracked.md"),
+      "# Untracked\n\nReal path: /Users/alice/private\n[missing](missing.md)\n",
+    );
+    const output = validate(root);
+    expect(output).toContain(
+      "docs/untracked.md: contains forbidden /Users path",
+    );
+    expect(output).toContain(
+      "docs/untracked.md: broken local link missing.md",
+    );
+  });
+  it("does not parse links inside Markdown code", () => {
+    const { root } = fixture();
+    edit(
+      root,
+      "README.md",
+      (source) =>
+        `${source}\n\`[inline](missing-inline.md)\`\n\n\`\`\`bash\n[[ $HOST =~ ^[a-z0-9]([a-z0-9.-]*[a-z0-9])?$ ]]\n[code](missing-code.md)\n\`\`\`\n`,
+    );
+    expect(validate(root)).toContain("checks passed");
+  });
+  it("rejects concrete infrastructure and organization identifiers", () => {
+    const { root } = fixture();
+    edit(
+      root,
+      "README.md",
+      (source) =>
+        `${source}\n${[
+          "123456789012",
+          "snap-0123456789abcdef0",
+          "oau_01234567-89ab-cdef-0123-456789abcdef",
+          "org_01234567-89ab-cdef-0123-456789abcdef",
+        ].join(" ")}\n`,
+    );
+    const output = validate(root);
+    expect(output).toContain("contains forbidden AWS account id");
+    expect(output).toContain("contains forbidden EBS snapshot id");
+    expect(output).toContain("contains forbidden organization authority id");
+    expect(output).toContain("contains forbidden organization id");
+  });
+  it.each([
+    "The fix is not present in this branch's baseline.",
+    "The fix exists on the founder-live hardening branch.",
+  ])("rejects branch-relative status wording: %s", (wording) => {
+    const { root } = fixture();
+    edit(root, "README.md", (source) => `${source}\n${wording}\n`);
+    expect(validate(root)).toContain(
+      "contains forbidden branch-relative status wording",
+    );
+  });
+  it("requires component reverse backlinks for related records", () => {
+    const { root } = fixture();
+    edit(root, "docs/components/test.md", (source) =>
+      source.replace("  - QUAL-20260813-120000-001\n", ""),
+    );
+    expect(validate(root)).toContain(
+      "CMP-TEST is missing qualification_ids backlink QUAL-20260813-120000-001",
+    );
+  });
+  it("rejects stale component backlinks", () => {
+    const { root } = fixture();
+    edit(
+      root,
+      "docs/qualification/QUAL-20260813-120000-001.md",
+      (source) => source.replace("component_ids:\n  - CMP-TEST", "component_ids: []"),
+    );
+    expect(validate(root)).toContain(
+      "qualification_ids has stale backlink QUAL-20260813-120000-001; QUAL-20260813-120000-001 does not reference CMP-TEST",
+    );
   });
   it("rejects malformed managed records, historic references, and sensitive content", () => {
     const { root, sha } = fixture();

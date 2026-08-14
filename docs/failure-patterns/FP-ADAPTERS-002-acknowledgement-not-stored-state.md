@@ -57,6 +57,6 @@ Either response would weaken card integrity or preserve duplicate risk.
 Persist provider coordinates immediately, read the stored object, apply only a
 versioned narrow canonicalization rule, and finalize after exact stored-state
 verification. Retry reads the same reference. Crash, timeout, normalization,
-mutation, restart, and concurrent-winner cases are regression-tested. The live
-card was recovered without reposting; the code remains off this branch's main
-baseline.
+mutation, restart, and concurrent-winner cases are regression-tested. The
+indexed live evidence records recovery without reposting; the exact
+implementation and test scope is fixed by the refs above.
