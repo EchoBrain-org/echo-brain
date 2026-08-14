@@ -13,9 +13,113 @@ import {
   validateReadableSearchSegmentManifest,
   validateReadableSearchGenerationManifest,
 } from '../src/index.js';
+import type {
+  ReadableSearchGenerationManifest,
+  ReadableSearchSegmentManifest,
+} from '../src/index.js';
 
 const digest = (value: string): `sha256:${string}` =>
   `sha256:${value.padEnd(64, '0').slice(0, 64)}`;
+
+type JsonRecord = Record<string, unknown>;
+
+function generationManifest(): ReadableSearchGenerationManifest {
+  return createReadableSearchGenerationManifest({
+    organization_id: 'org_test',
+    retrieval_contract_sha256: digest('9'),
+    source_revision: 'source-1',
+    builder_artifact_sha256: digest('a1'),
+    input_contract_version: 1,
+    policies: [
+      {
+        policy_id: 'organization-member-readable-v1',
+        policy_contract_sha256: digest('1'),
+      },
+      {
+        policy_id: 'restricted-reviewer-v1',
+        policy_contract_sha256: digest('2'),
+      },
+    ],
+    record_head: { position: 2, record_hash: digest('c') },
+    input_cursor: { position: 2, record_hash: digest('c') },
+    upstream_input_root: digest('b1'),
+    roots: {
+      facts_root: sha256Digest('generation-facts'),
+      content_root: sha256Digest('generation-content'),
+      lexical_root: sha256Digest('generation-lexical'),
+    },
+    segments: [
+      {
+        segment_id: sha256Digest('segment-a'),
+        segment_manifest_sha256: sha256Digest('segment-a-manifest'),
+        facts_root: sha256Digest('segment-a-facts'),
+        content_root: sha256Digest('segment-a-content'),
+        lexical_root: sha256Digest('segment-a-lexical'),
+      },
+      {
+        segment_id: sha256Digest('segment-b'),
+        segment_manifest_sha256: sha256Digest('segment-b-manifest'),
+        facts_root: sha256Digest('segment-b-facts'),
+        content_root: sha256Digest('segment-b-content'),
+        lexical_root: sha256Digest('segment-b-lexical'),
+      },
+    ],
+    analyzer: {
+      analyzer_id: 'echo-unicode-alnum-frequency-v1',
+      analyzer_contract_sha256: digest('8'),
+      analyzer_source_sha256: digest('c1'),
+      node_version: '22.22.1',
+      unicode_version: '16.0',
+      icu_version: '76.1',
+    },
+    index: { format_version: 1, sqlite_version: '3.50.4' },
+  });
+}
+
+function segmentManifest(): ReadableSearchSegmentManifest {
+  return createReadableSearchSegmentManifest({
+    ...organizationMemberSegmentIdentity({
+      organization_id: 'org_test',
+      policy_contract_sha256: digest('1'),
+    }),
+    analyzer_contract_sha256: digest('8'),
+    facts_root: digest('a'),
+    content_root: digest('b'),
+    lexical_root: digest('c'),
+    fact_count: 0,
+    content_count: 0,
+    document_count: 0,
+    posting_count: 0,
+  });
+}
+
+function mutableManifest(
+  manifest: ReadableSearchGenerationManifest = generationManifest(),
+): JsonRecord {
+  return JSON.parse(canonicalJson(manifest)) as JsonRecord;
+}
+
+function nestedObject(record: JsonRecord, key: string): JsonRecord {
+  const value = record[key];
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) {
+    throw new Error(`${key} is not an object`);
+  }
+  return value as JsonRecord;
+}
+
+function nestedArrayObject(
+  record: JsonRecord,
+  key: string,
+  index: number,
+): JsonRecord {
+  const values = record[key];
+  if (!Array.isArray(values)) throw new Error(`${key} is not an array`);
+  const value = values[index];
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) {
+    throw new Error(`${key}[${index}] is not an object`);
+  }
+  return value as JsonRecord;
+}
 
 describe('retrieval roots and manifests', () => {
   it('builds roots independent of input enumeration order', () => {
@@ -77,5 +181,101 @@ describe('retrieval roots and manifests', () => {
     expect(validateReadableSearchGenerationManifest(JSON.parse(canonicalJson(generation)))).toEqual(generation);
     expect(() => validateReadableSearchGenerationManifest({ ...generation, generation_id: digest('tampered') }))
       .toThrow('generation_id');
+  });
+
+  it.each([
+    ['policy', (manifest: JsonRecord) => {
+      nestedArrayObject(manifest, 'policies', 0).undeclared = true;
+    }],
+    ['record head', (manifest: JsonRecord) => {
+      nestedObject(manifest, 'record_head').undeclared = true;
+    }],
+    ['input cursor', (manifest: JsonRecord) => {
+      nestedObject(manifest, 'input_cursor').undeclared = true;
+    }],
+    ['generation roots', (manifest: JsonRecord) => {
+      nestedObject(manifest, 'roots').undeclared = true;
+    }],
+    ['segment', (manifest: JsonRecord) => {
+      nestedArrayObject(manifest, 'segments', 0).undeclared = true;
+    }],
+    ['analyzer', (manifest: JsonRecord) => {
+      nestedObject(manifest, 'analyzer').undeclared = true;
+    }],
+    ['index', (manifest: JsonRecord) => {
+      nestedObject(manifest, 'index').undeclared = true;
+    }],
+  ] as const)('rejects undeclared nested generation-manifest keys in %s', (_label, mutate) => {
+    const manifest = mutableManifest();
+    mutate(manifest);
+    expect(() => validateReadableSearchGenerationManifest(manifest)).toThrow(
+      'unexpected shape',
+    );
+  });
+
+  it('rejects nested constants instead of normalizing them', () => {
+    const wrongAnalyzer = mutableManifest();
+    nestedObject(wrongAnalyzer, 'analyzer').analyzer_id =
+      'echo-unicode-alnum-frequency-v999';
+    expect(() => validateReadableSearchGenerationManifest(wrongAnalyzer)).toThrow(
+      'generation analyzer identity is unsupported',
+    );
+
+    const wrongIndex = mutableManifest();
+    nestedObject(wrongIndex, 'index').format_version = 999;
+    expect(() => validateReadableSearchGenerationManifest(wrongIndex)).toThrow(
+      'generation index identity is unsupported',
+    );
+  });
+
+  it('rejects non-canonical policy and segment array order instead of normalizing it', () => {
+    const reversedPolicies = mutableManifest();
+    reversedPolicies.policies = [
+      ...(reversedPolicies.policies as readonly unknown[]),
+    ].reverse();
+    expect(() => validateReadableSearchGenerationManifest(reversedPolicies)).toThrow(
+      'generation policies must be the exact ordered V1 pair',
+    );
+
+    const reversedSegments = mutableManifest();
+    reversedSegments.segments = [
+      ...(reversedSegments.segments as readonly unknown[]),
+    ].reverse();
+    expect(() => validateReadableSearchGenerationManifest(reversedSegments)).toThrow(
+      'generation segments must be ordered by segment_id',
+    );
+  });
+
+  it('hashes only an exact validated generation-manifest object', () => {
+    const manifest = generationManifest();
+    expect(readableSearchGenerationManifestSha256(manifest)).toBe(
+      sha256Digest(canonicalJson(manifest)),
+    );
+
+    const counterfeit = mutableManifest(manifest);
+    nestedObject(counterfeit, 'roots').undeclared = sha256Digest('not-bound');
+    expect(() => readableSearchGenerationManifestSha256(
+      counterfeit as unknown as ReadableSearchGenerationManifest,
+    )).toThrow('unexpected shape');
+  });
+
+  it('hashes only an exact validated segment-manifest object', () => {
+    const manifest = segmentManifest();
+    expect(readableSearchSegmentManifestSha256(manifest)).toBe(
+      sha256Digest(canonicalJson(manifest)),
+    );
+    const counterfeit = {
+      ...manifest,
+      undeclared: sha256Digest('not-bound'),
+    } as unknown as ReadableSearchSegmentManifest;
+    expect(() => readableSearchSegmentManifestSha256(counterfeit)).toThrow(
+      'unexpected shape',
+    );
+    expect(() => readableSearchSegmentManifestSha256({
+      ...manifest,
+      analyzer_id: 'counterfeit-analyzer',
+    } as unknown as ReadableSearchSegmentManifest)).toThrow(
+      'segment manifest analyzer is unsupported',
+    );
   });
 });

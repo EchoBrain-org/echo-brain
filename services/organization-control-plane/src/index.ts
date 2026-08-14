@@ -11,6 +11,7 @@ export {
   inspectOpenOrganizationControlDatabase,
   inspectOrganizationControlDatabaseForServe,
   inspectOrganizationControlDatabaseReadOnly,
+  openOrganizationControlDatabaseReadOnly,
   type OrganizationControlDatabaseIdentity,
 } from "./persistence/inspect-database.js";
 export {

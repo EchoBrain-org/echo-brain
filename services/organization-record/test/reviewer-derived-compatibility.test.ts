@@ -46,6 +46,7 @@ afterAll(removeTemporaryDirectories);
 
 const digest = (seed: string): `sha256:${string}` => canonicalSha256(seed);
 const APPROVAL_ID = 'e'.repeat(64);
+const REVIEWER_POLICY_CONTRACT = digest('reviewer-policy-contract');
 
 function reviewerEnvelope(overrides: Record<string, unknown> = {}): JsonObject {
   const semantic = digest('semantic-intent');
@@ -259,6 +260,60 @@ function reviewerRow(
 }
 
 describe('reviewer-v2 derived compatibility', () => {
+  it('classifies every empty, excluded, and admitted Layer 1 row', () => {
+    const empty = context();
+    try {
+      const source = createOrganizationRecordRetrievalBuildPort(
+        empty.stores.log.database,
+        {
+          organization_id: ORGANIZATION_ID,
+          authority_id: AUTHORITY_ID,
+          restricted_reviewer_policy_contract_sha256:
+            REVIEWER_POLICY_CONTRACT,
+          reviewer_validator: TEST_REVIEWER_VALIDATOR,
+          organization_member_validator: () => {
+            throw new Error('organization-member validator must not be used');
+          },
+        },
+      );
+      const batch = source.readAt(source.record_head);
+      expect(batch.row_classifications).toEqual([]);
+    } finally {
+      empty.stores.log.close();
+      empty.stores.derived.close();
+    }
+
+    const mixed = context();
+    try {
+      appendLegacy(mixed.stores);
+      appendReviewer(mixed.stores);
+      const source = createOrganizationRecordRetrievalBuildPort(
+        mixed.stores.log.database,
+        {
+          organization_id: ORGANIZATION_ID,
+          authority_id: AUTHORITY_ID,
+          restricted_reviewer_policy_contract_sha256:
+            REVIEWER_POLICY_CONTRACT,
+          reviewer_validator: TEST_REVIEWER_VALIDATOR,
+          organization_member_validator: () => {
+            throw new Error('organization-member validator must not be used');
+          },
+        },
+      );
+      const batch = source.readAt(source.record_head);
+      expect(batch.row_classifications.map((row) => row.classification)).toEqual([
+        'legacy-schema-v1-excluded',
+        'restricted-reviewer-v2-admitted',
+      ]);
+      expect(batch.row_classifications[1]).toMatchObject({
+        log_position: 2,
+      });
+    } finally {
+      mixed.stores.log.close();
+      mixed.stores.derived.close();
+    }
+  });
+
   it('releases v2 text only with reprojected eligibility and content/provenance bindings', () => {
     const { stores } = context();
     try {
@@ -268,6 +323,8 @@ describe('reviewer-v2 derived compatibility', () => {
         {
           organization_id: ORGANIZATION_ID,
           authority_id: AUTHORITY_ID,
+          restricted_reviewer_policy_contract_sha256:
+            REVIEWER_POLICY_CONTRACT,
           reviewer_validator: TEST_REVIEWER_VALIDATOR,
           organization_member_validator: () => {
             throw new Error('organization-member validator must not be used');
@@ -282,8 +339,44 @@ describe('reviewer-v2 derived compatibility', () => {
         message_presentation_sha256: digest('message-presentation'),
       });
       expect(item?.provenance.authorization_audit_event_id).toBe('aud_derived');
-      expect(item?.content_binding_sha256).toMatch(/^sha256:[0-9a-f]{64}$/);
-      expect(item?.provenance_binding_sha256).toMatch(/^sha256:[0-9a-f]{64}$/);
+      expect(item).toBeDefined();
+      expect(item?.content_binding_sha256).toBe(canonicalSha256({
+        schema_version: 1,
+        kind: 'organization-record-item-content-binding-v1',
+        organization_id: ORGANIZATION_ID,
+        envelope_sha256: item!.envelope_sha256,
+        log_position: item!.log_position,
+        record_hash: item!.record_hash,
+        atom_id: item!.atom_id,
+        atom_order: item!.atom_order,
+        signal_id_sha256: item!.signal_id_sha256,
+        item_kind: item!.item_kind,
+        text_sha256: item!.text_sha256,
+      }));
+      expect(item?.provenance_binding_sha256).toBe(canonicalSha256({
+        schema_version: 1,
+        kind: 'organization-record-policy-provenance-binding-v1',
+        organization_id: ORGANIZATION_ID,
+        envelope_sha256: item!.envelope_sha256,
+        log_position: item!.log_position,
+        record_hash: item!.record_hash,
+        policy_id: 'restricted-reviewer-v1',
+        policy_contract_sha256: REVIEWER_POLICY_CONTRACT,
+        reviewer_principal_id: item!.provenance.reviewer_principal_id,
+        reviewer_membership_id: item!.provenance.reviewer_membership_id,
+        release_draft_sha256: item!.release_draft_sha256,
+        approval_presentation_sha256:
+          item!.approval_presentation_sha256,
+        semantic_intent_sha256: item!.provenance.semantic_intent_sha256,
+        message_presentation_sha256: item!.message_presentation_sha256,
+        authorization_audit_event_id:
+          item!.provenance.authorization_audit_event_id,
+        authorization_audit_entry_sha256:
+          item!.provenance.authorization_audit_entry_sha256,
+        authorization_proof_sha256:
+          item!.provenance.authorization_proof_sha256,
+        evaluated_at: item!.evaluated_at,
+      }));
     } finally {
       stores.log.close();
       stores.derived.close();
@@ -414,6 +507,18 @@ describe('reviewer-v2 derived compatibility', () => {
         // document, so a log can only hold one of these after a restore or a
         // corruption. The follower must still halt rather than skip it.
         graftLogRow(stores, envelope, eventType);
+        expect(() =>
+          createOrganizationRecordRetrievalBuildPort(stores.log.database, {
+            organization_id: ORGANIZATION_ID,
+            authority_id: AUTHORITY_ID,
+            restricted_reviewer_policy_contract_sha256:
+              REVIEWER_POLICY_CONTRACT,
+            reviewer_validator: TEST_REVIEWER_VALIDATOR,
+            organization_member_validator: () => {
+              throw new Error('organization-member validator must not be used');
+            },
+          }),
+        ).toThrow(/chain failed verification|unsupported|failed validation|canonical record/);
         await follower.drain();
         // Visible staleness is the designed behavior: the cursor stays put and
         // the operator is alerted rather than the record being skipped.

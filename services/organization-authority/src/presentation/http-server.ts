@@ -281,6 +281,28 @@ function handoffPreparedReadableSearchResponse(
   }
 }
 
+/** Bridges listener shutdown and a vanished HTTP peer into queued fence admission. */
+function readableSearchAbortLease(
+  request: IncomingMessage,
+  response: ServerResponse,
+  shutdownSignal: AbortSignal,
+): { readonly signal: AbortSignal; release(): void } {
+  const controller = new AbortController();
+  const abort = (): void => controller.abort();
+  request.once('aborted', abort);
+  response.once('close', abort);
+  shutdownSignal.addEventListener('abort', abort, { once: true });
+  if (request.aborted || response.destroyed || shutdownSignal.aborted) abort();
+  return {
+    signal: controller.signal,
+    release(): void {
+      request.removeListener('aborted', abort);
+      response.removeListener('close', abort);
+      shutdownSignal.removeEventListener('abort', abort);
+    },
+  };
+}
+
 /** Sends the audited UTF-8 primitive directly, without reserializing it. */
 function sendPreparedReadableSearchJson(
   response: ServerResponse,
@@ -859,14 +881,25 @@ export function createOrganizationAuthorityHttpServer(
           return;
         }
         const command = await readReadableSearchRequest(request);
-        const prepared = await options.readableSearch.search(command);
-        // The application has already appended the exact bytes to its audit
-        // transaction. Transport never reserializes or prefixes this body.
-        handoffPreparedReadableSearchResponse(
-          (body) =>
-            sendPreparedReadableSearchJson(response, prepared.status_code, body),
-          prepared,
+        const abortLease = readableSearchAbortLease(
+          request,
+          response,
+          lifecycle.shutdownController.signal,
         );
+        try {
+          const prepared = await options.readableSearch.search(command, {
+            signal: abortLease.signal,
+          });
+          // The application has already appended the exact bytes to its audit
+          // transaction. Transport never reserializes or prefixes this body.
+          handoffPreparedReadableSearchResponse(
+            (body) =>
+              sendPreparedReadableSearchJson(response, prepared.status_code, body),
+            prepared,
+          );
+        } finally {
+          abortLease.release();
+        }
         return;
       }
 

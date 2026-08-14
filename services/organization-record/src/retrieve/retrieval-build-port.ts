@@ -1,4 +1,4 @@
-import { canonicalSha256, sha256Digest } from '@echo-brain/federation-protocol';
+import { sha256Digest } from '@echo-brain/federation-protocol';
 import type Database from 'better-sqlite3';
 import type { OrganizationRecordLogRow, Sha256Digest } from '../application/contracts.js';
 import {
@@ -22,6 +22,10 @@ import { toOrganizationRecordLogRow, type RawOrganizationRecordLogRow } from '..
 import { verifyOrganizationRecordChain } from '../log/chain-verification.js';
 import { readOrganizationMemberPolicyFactsAtPosition } from '../log/organization-member-policy-fact.js';
 import { readReviewerPolicyFactsAtPosition } from '../log/reviewer-policy-fact.js';
+import {
+  organizationRecordItemContentBindingSha256,
+  organizationRecordReviewerProvenanceBindingSha256,
+} from '../application/retrieval-policy-binding.js';
 
 /** Immutable Layer 1 head captured when the stopped builder port opens. */
 export interface RetrievalBuildRecordHead {
@@ -69,9 +73,38 @@ export interface RetrievalBuildOrganizationMemberItem {
 
 export interface RetrievalBuildBatch {
   readonly record_head: RetrievalBuildRecordHead;
+  /** One ordered, text-free classification for every canonical log row. */
+  readonly row_classifications: readonly RetrievalBuildRowClassification[];
   readonly reviewer_items: readonly RetrievalBuildReviewerItem[];
   readonly organization_member_items: readonly RetrievalBuildOrganizationMemberItem[];
 }
+
+interface RetrievalBuildClassifiedRow {
+  readonly log_position: number;
+  readonly record_hash: Sha256Digest;
+  readonly envelope_sha256: Sha256Digest;
+}
+
+export interface RetrievalBuildLegacyExcludedRow
+  extends RetrievalBuildClassifiedRow {
+  readonly classification: 'legacy-schema-v1-excluded';
+  readonly items: readonly [];
+}
+
+export interface RetrievalBuildReviewerAdmittedRow
+  extends RetrievalBuildClassifiedRow {
+  readonly classification: 'restricted-reviewer-v2-admitted';
+}
+
+export interface RetrievalBuildOrganizationMemberAdmittedRow
+  extends RetrievalBuildClassifiedRow {
+  readonly classification: 'organization-member-readable-v3-admitted';
+}
+
+export type RetrievalBuildRowClassification =
+  | RetrievalBuildLegacyExcludedRow
+  | RetrievalBuildReviewerAdmittedRow
+  | RetrievalBuildOrganizationMemberAdmittedRow;
 
 /**
  * Stopped-builder-only source surface.  It exposes neither a database handle
@@ -86,6 +119,8 @@ export interface OrganizationRecordRetrievalBuildPort {
 export interface CreateOrganizationRecordRetrievalBuildPortInput {
   readonly organization_id: string;
   readonly authority_id: string;
+  /** Fixed reviewer-v1 contract supplied by Authority composition. */
+  readonly restricted_reviewer_policy_contract_sha256: Sha256Digest;
   readonly reviewer_validator: ReviewerRestrictedEnvelopeValidator;
   readonly organization_member_validator: OrganizationMemberReadableEnvelopeValidator;
 }
@@ -102,33 +137,21 @@ function fail(message: string): never {
   throw new Error(`organization retrieval-build source is unavailable: ${message}`);
 }
 
-function reviewerContentBinding(input: {
-  readonly item: Pick<RetrievalBuildReviewerItem, 'log_position' | 'record_hash' | 'atom_order' | 'atom_id' | 'signal_id_sha256' | 'text_sha256'>;
-}): Sha256Digest {
-  return canonicalSha256({
-    schema_version: 1,
-    kind: 'organization-record-reviewer-retrieval-content-binding-v1',
-    policy_id: 'restricted-reviewer-v1',
-    ...input.item,
-  });
-}
-
-function reviewerProvenanceBinding(input: {
-  readonly item: Pick<RetrievalBuildReviewerItem, 'log_position' | 'record_hash' | 'envelope_sha256' | 'atom_order' | 'atom_id' | 'signal_id_sha256' | 'release_draft_sha256' | 'approval_presentation_sha256' | 'message_presentation_sha256' | 'evaluated_at' | 'content_binding_sha256'>;
-  readonly provenance: OrganizationRecordReviewerPolicyFactRow;
-}): Sha256Digest {
-  return canonicalSha256({
-    schema_version: 1,
-    kind: 'organization-record-reviewer-retrieval-provenance-binding-v1',
-    policy_id: 'restricted-reviewer-v1',
-    ...input.item,
-    reviewer_principal_id: input.provenance.reviewer_principal_id,
-    reviewer_membership_id: input.provenance.reviewer_membership_id,
-    semantic_intent_sha256: input.provenance.semantic_intent_sha256,
-    authorization_audit_event_id: input.provenance.authorization_audit_event_id,
-    authorization_audit_entry_sha256: input.provenance.authorization_audit_entry_sha256,
-    authorization_proof_sha256: input.provenance.authorization_proof_sha256,
-  });
+interface ReviewerRetrievalBindingItem {
+  readonly policy_id: 'restricted-reviewer-v1';
+  readonly log_position: number;
+  readonly record_hash: Sha256Digest;
+  readonly envelope_sha256: Sha256Digest;
+  readonly atom_order: number;
+  readonly atom_id: Sha256Digest;
+  readonly signal_id_sha256: Sha256Digest;
+  readonly item_kind: RetrievalBuildReviewerItem['item_kind'];
+  readonly text: string;
+  readonly text_sha256: Sha256Digest;
+  readonly release_draft_sha256: Sha256Digest;
+  readonly approval_presentation_sha256: Sha256Digest;
+  readonly message_presentation_sha256: Sha256Digest;
+  readonly evaluated_at: string;
 }
 
 function readRows(database: Database.Database): readonly OrganizationRecordLogRow[] {
@@ -156,6 +179,7 @@ export function createOrganizationRecordRetrievalBuildPort(
   });
   if (chain.failures.length > 0) fail(`record chain failed verification at ${chain.failures[0]!.position}`);
   const record_head = frozenHead(rows.at(-1));
+  const row_classifications: RetrievalBuildRowClassification[] = [];
   const reviewer_items: RetrievalBuildReviewerItem[] = [];
   const organization_member_items: RetrievalBuildOrganizationMemberItem[] = [];
 
@@ -201,19 +225,56 @@ export function createOrganizationRecordRetrievalBuildPort(
           approval_presentation_sha256: envelope.approval_presentation_sha256,
           message_presentation_sha256: envelope.message_presentation_sha256,
           evaluated_at: envelope.evaluated_at,
-        };
-        const content_binding_sha256 = reviewerContentBinding({ item });
+        } satisfies ReviewerRetrievalBindingItem;
+        const content_binding_sha256 =
+          organizationRecordItemContentBindingSha256({
+            organization_id: binding.organization_id,
+            envelope_sha256: item.envelope_sha256,
+            log_position: item.log_position,
+            record_hash: item.record_hash,
+            atom_id: item.atom_id,
+            atom_order: item.atom_order,
+            signal_id_sha256: item.signal_id_sha256,
+            item_kind: item.item_kind,
+            text_sha256: item.text_sha256,
+          });
         const provenance = Object.freeze({ ...fact });
         reviewer_items.push(Object.freeze({
           ...item,
           content_binding_sha256,
-          provenance_binding_sha256: reviewerProvenanceBinding({
-            item: { ...item, content_binding_sha256 },
-            provenance,
-          }),
+          provenance_binding_sha256:
+            organizationRecordReviewerProvenanceBindingSha256({
+              organization_id: binding.organization_id,
+              envelope_sha256: item.envelope_sha256,
+              log_position: item.log_position,
+              record_hash: item.record_hash,
+              policy_contract_sha256:
+                binding.restricted_reviewer_policy_contract_sha256,
+              reviewer_principal_id: provenance.reviewer_principal_id,
+              reviewer_membership_id: provenance.reviewer_membership_id,
+              release_draft_sha256: item.release_draft_sha256,
+              approval_presentation_sha256:
+                item.approval_presentation_sha256,
+              semantic_intent_sha256: provenance.semantic_intent_sha256,
+              message_presentation_sha256:
+                item.message_presentation_sha256,
+              authorization_audit_event_id:
+                provenance.authorization_audit_event_id,
+              authorization_audit_entry_sha256:
+                provenance.authorization_audit_entry_sha256,
+              authorization_proof_sha256:
+                provenance.authorization_proof_sha256,
+              evaluated_at: item.evaluated_at,
+            }),
           provenance,
         }));
       }
+      row_classifications.push(Object.freeze({
+        classification: 'restricted-reviewer-v2-admitted',
+        log_position: row.position,
+        record_hash: row.record_hash,
+        envelope_sha256: row.envelope_sha256,
+      }));
       continue;
     }
     if (isOrganizationMemberReadableEnvelopeDocument(document)) {
@@ -249,6 +310,12 @@ export function createOrganizationRecordRetrievalBuildPort(
           text: signal.text, text_sha256: sha256Digest(signal.text), provenance: Object.freeze({ ...fact }),
         }));
       }
+      row_classifications.push(Object.freeze({
+        classification: 'organization-member-readable-v3-admitted',
+        log_position: row.position,
+        record_hash: row.record_hash,
+        envelope_sha256: row.envelope_sha256,
+      }));
       continue;
     }
     // Only known legacy v1 records are excluded. An unsupported future
@@ -256,9 +323,17 @@ export function createOrganizationRecordRetrievalBuildPort(
     if (document['schema_version'] !== 1) {
       fail(`unsupported envelope schema version ${String(document['schema_version'])} at ${row.position}`);
     }
+    row_classifications.push(Object.freeze({
+      classification: 'legacy-schema-v1-excluded',
+      log_position: row.position,
+      record_hash: row.record_hash,
+      envelope_sha256: row.envelope_sha256,
+      items: Object.freeze([] as const),
+    }));
   }
   const batch: RetrievalBuildBatch = Object.freeze({
     record_head,
+    row_classifications: Object.freeze(row_classifications),
     reviewer_items: Object.freeze(reviewer_items),
     organization_member_items: Object.freeze(organization_member_items),
   });

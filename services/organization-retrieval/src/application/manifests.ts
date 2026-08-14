@@ -19,7 +19,12 @@ import {
 } from './segment-identity.js';
 
 function exactKeys(value: Record<string, unknown>, keys: readonly string[], label: string): void {
-  if (Object.keys(value).sort().join(',') !== [...keys].sort().join(',')) {
+  const expected = new Set(keys);
+  const actual = Object.keys(value);
+  if (
+    actual.length !== expected.size ||
+    actual.some((key) => !expected.has(key))
+  ) {
     throw new ReadableSearchValidationError(`${label} has an unexpected shape`);
   }
 }
@@ -34,7 +39,8 @@ function object(value: unknown, label: string): Record<string, unknown> {
 export function readableSearchSegmentManifestSha256(
   manifest: ReadableSearchSegmentManifest,
 ): `sha256:${string}` {
-  return sha256Digest(canonicalJson(manifest));
+  const validated = validateReadableSearchSegmentManifest(manifest);
+  return sha256Digest(canonicalJson(validated));
 }
 
 export function createReadableSearchSegmentManifest(
@@ -98,7 +104,7 @@ export function validateReadableSearchSegmentManifest(
   if (record.analyzer_id !== READABLE_SEARCH_ANALYZER_ID) {
     throw new ReadableSearchValidationError('segment manifest analyzer is unsupported');
   }
-  return createReadableSearchSegmentManifest({
+  const generated = createReadableSearchSegmentManifest({
     organization_id: record.organization_id as string,
     segment_id: record.segment_id as `sha256:${string}`,
     segment_kind: record.segment_kind as 'organization-member' | 'reviewer',
@@ -115,18 +121,37 @@ export function validateReadableSearchSegmentManifest(
     document_count: record.document_count as number,
     posting_count: record.posting_count as number,
   });
+  if (canonicalJson(record) !== canonicalJson(generated)) {
+    throw new ReadableSearchValidationError(
+      'segment manifest does not equal its exact canonical validated object',
+    );
+  }
+  return generated;
 }
 
-export function readableSearchGenerationIdentity(
+function readableSearchGenerationIdentity(
   manifest: Omit<
     ReadableSearchGenerationManifest,
     'generation_id' | 'kind' | 'schema_version'
   >,
 ): `sha256:${string}` {
   return canonicalSha256({
-    ...manifest,
     schema_version: 1,
     kind: 'readable-search-generation-identity-v1',
+    organization_id: manifest.organization_id,
+    retrieval_contract_id: manifest.retrieval_contract_id,
+    retrieval_contract_sha256: manifest.retrieval_contract_sha256,
+    source_revision: manifest.source_revision,
+    builder_artifact_sha256: manifest.builder_artifact_sha256,
+    input_contract_version: manifest.input_contract_version,
+    policies: manifest.policies,
+    record_head: manifest.record_head,
+    input_cursor: manifest.input_cursor,
+    upstream_input_root: manifest.upstream_input_root,
+    roots: manifest.roots,
+    segments: manifest.segments,
+    analyzer: manifest.analyzer,
+    index: manifest.index,
   });
 }
 
@@ -202,7 +227,8 @@ export function createReadableSearchGenerationManifest(
 export function readableSearchGenerationManifestSha256(
   manifest: ReadableSearchGenerationManifest,
 ): `sha256:${string}` {
-  return sha256Digest(canonicalJson(manifest));
+  const validated = validateReadableSearchGenerationManifest(manifest);
+  return sha256Digest(canonicalJson(validated));
 }
 
 export function validateReadableSearchGenerationManifest(
@@ -225,26 +251,116 @@ export function validateReadableSearchGenerationManifest(
   ) {
     throw new ReadableSearchValidationError('generation manifest identity is unsupported');
   }
+
+  const policies = record.policies.map((value, index) => {
+    const policy = object(value, `generation policy ${index}`);
+    exactKeys(
+      policy,
+      ['policy_id', 'policy_contract_sha256'],
+      `generation policy ${index}`,
+    );
+    return policy;
+  });
+  if (
+    policies.length !== 2 ||
+    policies[0]?.policy_id !== 'organization-member-readable-v1' ||
+    policies[1]?.policy_id !== 'restricted-reviewer-v1'
+  ) {
+    throw new ReadableSearchValidationError(
+      'generation policies must be the exact ordered V1 pair',
+    );
+  }
+
+  const recordHead = object(record.record_head, 'generation record head');
+  exactKeys(
+    recordHead,
+    ['position', 'record_hash'],
+    'generation record head',
+  );
+  const inputCursor = object(record.input_cursor, 'generation input cursor');
+  exactKeys(
+    inputCursor,
+    ['position', 'record_hash'],
+    'generation input cursor',
+  );
+
   const analyzer = object(record.analyzer, 'generation analyzer');
+  exactKeys(analyzer, [
+    'analyzer_id',
+    'analyzer_contract_sha256',
+    'analyzer_source_sha256',
+    'node_version',
+    'unicode_version',
+    'icu_version',
+  ], 'generation analyzer');
+  if (analyzer.analyzer_id !== READABLE_SEARCH_ANALYZER_ID) {
+    throw new ReadableSearchValidationError(
+      'generation analyzer identity is unsupported',
+    );
+  }
+
   const index = object(record.index, 'generation index');
+  exactKeys(index, ['format_version', 'sqlite_version'], 'generation index');
+  if (index.format_version !== 1) {
+    throw new ReadableSearchValidationError(
+      'generation index identity is unsupported',
+    );
+  }
+
   const roots = object(record.roots, 'generation roots');
+  exactKeys(
+    roots,
+    ['facts_root', 'content_root', 'lexical_root'],
+    'generation roots',
+  );
+
+  const segments = record.segments.map((value, index) => {
+    const segment = object(value, `generation segment ${index}`);
+    exactKeys(segment, [
+      'segment_id',
+      'segment_manifest_sha256',
+      'facts_root',
+      'content_root',
+      'lexical_root',
+    ], `generation segment ${index}`);
+    return segment;
+  });
+  const segmentIds = segments.map((segment) =>
+    assertReadableSearchDigest(segment.segment_id, 'generation segment_id')
+  );
+  if (
+    segmentIds.some((segmentId, index) =>
+      index > 0 &&
+      Buffer.compare(Buffer.from(segmentIds[index - 1]!), Buffer.from(segmentId)) >= 0
+    )
+  ) {
+    throw new ReadableSearchValidationError(
+      'generation segments must be ordered by segment_id without duplicates',
+    );
+  }
+
   const generated = createReadableSearchGenerationManifest({
     organization_id: record.organization_id as string,
     retrieval_contract_sha256: record.retrieval_contract_sha256 as `sha256:${string}`,
     source_revision: record.source_revision as string,
     builder_artifact_sha256: record.builder_artifact_sha256 as `sha256:${string}`,
     input_contract_version: 1,
-    policies: record.policies as ReadableSearchGenerationManifest['policies'],
-    record_head: record.record_head as ReadableSearchGenerationManifest['record_head'],
-    input_cursor: record.input_cursor as ReadableSearchGenerationManifest['input_cursor'],
+    policies: policies as unknown as ReadableSearchGenerationManifest['policies'],
+    record_head: recordHead as unknown as ReadableSearchGenerationManifest['record_head'],
+    input_cursor: inputCursor as unknown as ReadableSearchGenerationManifest['input_cursor'],
     upstream_input_root: record.upstream_input_root as `sha256:${string}`,
     roots: roots as unknown as ReadableSearchGenerationManifest['roots'],
-    segments: record.segments as ReadableSearchGenerationManifest['segments'],
+    segments: segments as unknown as ReadableSearchGenerationManifest['segments'],
     analyzer: analyzer as unknown as ReadableSearchGenerationManifest['analyzer'],
     index: index as unknown as ReadableSearchGenerationManifest['index'],
   });
   if (record.generation_id !== generated.generation_id) {
     throw new ReadableSearchValidationError('generation_id does not match its closed identity preimage');
+  }
+  if (canonicalJson(record) !== canonicalJson(generated)) {
+    throw new ReadableSearchValidationError(
+      'generation manifest does not equal its exact canonical validated object',
+    );
   }
   return generated;
 }

@@ -24,6 +24,7 @@ failure_pattern_ids:
 qualification_ids:
   - QMAT-JOB-B-ACTIVE-MEMBER-001
   - QUAL-20260814-050326-001
+  - QMAT-READABLE-SEARCH-MINIMUM-V1-001
 ---
 
 # Identity and access

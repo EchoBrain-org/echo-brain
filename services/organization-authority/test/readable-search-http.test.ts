@@ -10,8 +10,13 @@ import {
   ORGANIZATION_API_READABLE_SEARCH_PATH,
   type OrganizationReadableSearchRequestV1,
 } from '@echo-brain/organization-api';
-import { ReadableSearchError } from '../src/application/readable-search.js';
 import {
+  ReadableSearchError,
+  ReadableSearchService,
+} from '../src/application/readable-search.js';
+import { ReadableSearchAuthorizationFence } from '../src/application/readable-search-authorization-fence.js';
+import {
+  beginOrganizationAuthorityHttpServerShutdown,
   createOrganizationAuthorityHttpServer,
   type OrganizationAuthorityHttpServerOptions,
 } from '../src/presentation/http-server.js';
@@ -143,7 +148,9 @@ describe('readable-search HTTP route', () => {
       expect(digest(responseBytes.toString('utf8'))).toBe(
         committedAudit.response_sha256,
       );
-      expect(search).toHaveBeenCalledWith(command);
+      expect(search).toHaveBeenCalledWith(command, {
+        signal: expect.any(AbortSignal),
+      });
       expect(release).toHaveBeenCalledOnce();
     } finally {
       await close(http);
@@ -183,6 +190,7 @@ describe('readable-search HTTP route', () => {
           body,
         });
         expect(response.status).toBe(400);
+        expect(response.headers.get('cache-control')).toBe('no-store');
         expect(await response.text()).toBe(
           '{"error":{"code":"invalid_request","message":"request is invalid"}}',
         );
@@ -215,10 +223,111 @@ describe('readable-search HTTP route', () => {
           body: canonicalJson(command),
         });
         expect(response.status).toBe(503);
+        expect(response.headers.get('cache-control')).toBe('no-store');
         expect(await response.text()).toBe(FIXED_UNAVAILABLE);
       } finally {
         await close(http);
       }
+    }
+  });
+
+  it('maps an authentication-store fault through the real service boundary to fixed 503', async () => {
+    const retrieval = {
+      openScope: vi.fn(() => { throw new Error('must not open'); }),
+      search: vi.fn(() => []),
+      fetch: vi.fn(() => []),
+      close: vi.fn(),
+    };
+    const readableSearch = new ReadableSearchService({
+      authority: {
+        authenticate: () => { throw new Error('private repository read fault'); },
+        currentPerson: () => { throw new Error('must not resolve Person'); },
+        writeAtLinearization: () => { throw new Error('must not write audit'); },
+      },
+      retrieval,
+      fence: new ReadableSearchAuthorizationFence(),
+      fence_timeout_ms: 10,
+      contract: {
+        retrieval_contract_sha256: digest('retrieval-contract'),
+        policy_contracts: [
+          {
+            policy_id: 'organization-member-readable-v1',
+            policy_contract_sha256: digest('member-policy'),
+          },
+          {
+            policy_id: 'restricted-reviewer-v1',
+            policy_contract_sha256: digest('reviewer-policy'),
+          },
+        ],
+      },
+    });
+    const http = server(readableSearch);
+    const origin = await listen(http);
+    try {
+      const response = await fetch(`${origin}${ORGANIZATION_API_READABLE_SEARCH_PATH}`, {
+        method: 'POST',
+        headers: { ...proxyHeaders(), 'content-type': 'application/json' },
+        body: canonicalJson(readableSearchRequest()),
+      });
+      expect(response.status).toBe(503);
+      expect(response.headers.get('cache-control')).toBe('no-store');
+      expect(await response.text()).toBe(FIXED_UNAVAILABLE);
+      expect(retrieval.openScope).not.toHaveBeenCalled();
+      expect(retrieval.search).not.toHaveBeenCalled();
+      expect(retrieval.fetch).not.toHaveBeenCalled();
+      expect(retrieval.close).not.toHaveBeenCalled();
+    } finally {
+      await close(http);
+    }
+  });
+
+  it('aborts queued readable-search work when Authority shutdown begins', async () => {
+    const command = readableSearchRequest();
+    let entered!: () => void;
+    const searchEntered = new Promise<void>((resolve) => {
+      entered = resolve;
+    });
+    const search = vi.fn(
+      async (
+        _request: OrganizationReadableSearchRequestV1,
+        requestOptions?: { readonly signal?: AbortSignal },
+      ) => {
+        const signal = requestOptions?.signal;
+        if (signal === undefined) throw new Error('readable-search signal is missing');
+        entered();
+        return await new Promise<never>((_resolve, reject) => {
+          const unavailable = (): void => {
+            reject(
+              new ReadableSearchError(
+                'unavailable',
+                'readable-search fence admission was cancelled',
+              ),
+            );
+          };
+          if (signal.aborted) unavailable();
+          else signal.addEventListener('abort', unavailable, { once: true });
+        });
+      },
+    );
+    const http = server({ search });
+    const origin = await listen(http);
+    try {
+      const responsePending = fetch(
+        `${origin}${ORGANIZATION_API_READABLE_SEARCH_PATH}`,
+        {
+          method: 'POST',
+          headers: { ...proxyHeaders(), 'content-type': 'application/json' },
+          body: canonicalJson(command),
+        },
+      );
+      await searchEntered;
+      beginOrganizationAuthorityHttpServerShutdown(http);
+      const response = await responsePending;
+      expect(response.status).toBe(503);
+      expect(response.headers.get('cache-control')).toBe('no-store');
+      expect(await response.text()).toBe(FIXED_UNAVAILABLE);
+    } finally {
+      await close(http);
     }
   });
 
@@ -254,6 +363,7 @@ describe('readable-search HTTP route', () => {
           body: canonicalJson(command),
         });
         expect(response.status).toBe(status);
+        expect(response.headers.get('cache-control')).toBe('no-store');
         expect(await response.text()).toBe(body);
       } finally {
         await close(http);

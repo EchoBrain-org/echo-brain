@@ -167,11 +167,36 @@ export interface ReadableSearchAdmittedAtom {
   readonly text_sha256: Sha256Digest;
 }
 
+export type ReadableSearchUpstreamRowClassification =
+  | 'legacy-schema-v1-excluded'
+  | 'restricted-reviewer-v2-admitted'
+  | 'organization-member-readable-v3-admitted';
+
+/**
+ * The dense, text-free Layer 1 projection committed by upstream_input_root.
+ * The builder requires this preimage so the text-bearing atoms cannot be
+ * supplied independently from the exact permission facts claimed by the root.
+ */
+export interface ReadableSearchUpstreamInputRootPreimageV1 {
+  readonly schema_version: 1;
+  readonly kind: 'readable-search-upstream-input-root-v1';
+  readonly organization_id: string;
+  readonly input_contract_version: 1;
+  readonly record_head: ReadableSearchRecordHead;
+  readonly rows: readonly Readonly<{
+    readonly classification: ReadableSearchUpstreamRowClassification;
+    readonly log_position: number;
+    readonly record_hash: Sha256Digest;
+    readonly envelope_sha256: Sha256Digest;
+    readonly items: readonly RetrievalPermissionFact[];
+  }>[];
+}
+
 export interface ReadableSearchStoppedBuildInput {
   readonly state_directory: string;
   readonly organization_id: string;
   readonly record_head: ReadableSearchRecordHead;
-  readonly upstream_input_root: Sha256Digest;
+  readonly upstream_input_preimage: ReadableSearchUpstreamInputRootPreimageV1;
   readonly retrieval_contract_sha256: Sha256Digest;
   readonly organization_member_policy_contract_sha256: Sha256Digest;
   readonly restricted_reviewer_policy_contract_sha256: Sha256Digest;

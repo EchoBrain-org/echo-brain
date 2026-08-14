@@ -29,9 +29,11 @@ import {
 } from '@echo-brain/federation-protocol';
 import {
   initializeOrganizationControlDatabase,
+  inspectOpenOrganizationControlDatabase,
   inspectOrganizationControlDatabaseForServe,
   inspectOrganizationControlDatabaseReadOnly,
   openOrganizationControlDatabase,
+  openOrganizationControlDatabaseReadOnly,
   OrganizationIntegrationsRepository,
   type OrganizationControlDatabaseIdentity,
 } from '@echo-brain/organization-control-plane';
@@ -55,7 +57,6 @@ import {
   readableSearchRetrievalContractSha256,
   readableSearchSourceBytesSha256,
 } from '@echo-brain/organization-retrieval/build';
-import type { ReadableSearchAdmittedAtom } from '@echo-brain/organization-retrieval/build';
 import { admitReadableSearchGenerationDirectory } from '@echo-brain/organization-retrieval/serve';
 import { validateReadableSearchGenerationManifest } from '@echo-brain/organization-retrieval';
 import {
@@ -79,6 +80,7 @@ import { reviewerRestrictedEnvelopeValidator } from './reviewer-envelope-validat
 import { organizationMemberReadableEnvelopeValidator } from './organization-member-envelope-validator.js';
 import { verifyReviewerRestrictedReadiness } from './reviewer-restricted-admission.js';
 import { verifyOrganizationMemberReadableReadiness } from './organization-member-readable-admission.js';
+import { readableSearchCanonicalInput } from './readable-search-layer1.js';
 import { reviewerPolicyContractSha256 } from '../application/reviewer-policy-contract.js';
 import {
   inspectAuthorityDatabaseForServe,
@@ -3315,74 +3317,6 @@ export function readableSearchReleaseDescriptor(): Uint8Array {
   }));
 }
 
-function retrievalAtoms(
-  organizationId: string,
-  batch: ReturnType<ReturnType<typeof createOrganizationRecordRetrievalBuildPort>['readAt']>,
-): readonly ReadableSearchAdmittedAtom[] {
-  const reviewerContract = reviewerPolicyContractSha256();
-  const reviewer: readonly ReadableSearchAdmittedAtom[] = batch.reviewer_items.map((item) => Object.freeze({
-    fact: Object.freeze({
-      atom_id: item.atom_id,
-      organization_id: organizationId,
-      envelope_sha256: item.envelope_sha256,
-      log_position: item.log_position,
-      record_hash: item.record_hash,
-      atom_order: item.atom_order,
-      signal_id_sha256: item.signal_id_sha256,
-      item_kind: item.item_kind,
-      policy_id: item.policy_id,
-      policy_contract_sha256: reviewerContract,
-      approval_actor_principal_id: item.provenance.reviewer_principal_id,
-      approval_actor_membership_id: item.provenance.reviewer_membership_id,
-      reviewer_principal_id: item.provenance.reviewer_principal_id,
-      reviewer_membership_id: item.provenance.reviewer_membership_id,
-      release_draft_sha256: item.release_draft_sha256,
-      approval_presentation_sha256: item.approval_presentation_sha256,
-      semantic_intent_sha256: item.provenance.semantic_intent_sha256,
-      message_presentation_sha256: item.message_presentation_sha256,
-      authorization_audit_event_id: item.provenance.authorization_audit_event_id,
-      authorization_audit_entry_sha256: item.provenance.authorization_audit_entry_sha256,
-      evaluated_at: item.evaluated_at,
-      authorization_proof_sha256: item.provenance.authorization_proof_sha256,
-      content_binding_sha256: item.content_binding_sha256,
-      provenance_binding_sha256: item.provenance_binding_sha256,
-    }),
-    text: item.text,
-    text_sha256: item.text_sha256,
-  }));
-  const member: readonly ReadableSearchAdmittedAtom[] = batch.organization_member_items.map((item) => Object.freeze({
-    fact: Object.freeze({
-      atom_id: item.atom_id,
-      organization_id: item.provenance.organization_id,
-      envelope_sha256: item.envelope_sha256,
-      log_position: item.log_position,
-      record_hash: item.record_hash,
-      atom_order: item.atom_order,
-      signal_id_sha256: item.signal_id_sha256,
-      item_kind: item.item_kind,
-      policy_id: item.policy_id,
-      policy_contract_sha256: item.provenance.policy_contract_sha256,
-      approval_actor_principal_id: item.provenance.approving_principal_id,
-      approval_actor_membership_id: item.provenance.approving_membership_id,
-      reviewer_principal_id: null,
-      reviewer_membership_id: null,
-      release_draft_sha256: item.provenance.release_draft_sha256,
-      approval_presentation_sha256: item.provenance.approval_presentation_sha256,
-      semantic_intent_sha256: item.provenance.semantic_intent_sha256,
-      message_presentation_sha256: item.provenance.message_presentation_sha256,
-      authorization_audit_event_id: item.provenance.authorization_audit_event_id,
-      authorization_audit_entry_sha256: item.provenance.authorization_audit_entry_sha256,
-      evaluated_at: item.provenance.evaluated_at,
-      authorization_proof_sha256: item.provenance.authorization_proof_sha256,
-      content_binding_sha256: item.provenance.content_binding_sha256,
-      provenance_binding_sha256: item.provenance.provenance_binding_sha256,
-    }),
-    text: item.text,
-    text_sha256: item.text_sha256,
-  }));
-  return Object.freeze([...reviewer, ...member]);
-}
-
 async function rebuildAuthorityReadableSearchLocked(
   configPath: string,
   config: AuthorityRuntimeConfigV1,
@@ -3442,11 +3376,16 @@ async function rebuildAuthorityReadableSearchLocked(
     const source = createOrganizationRecordRetrievalBuildPort(record, {
       organization_id: config.organization.organization_id,
       authority_id: config.authority.authority_id,
+      restricted_reviewer_policy_contract_sha256:
+        reviewerPolicyContractSha256(),
       reviewer_validator: reviewerValidator,
       organization_member_validator: organizationMemberValidator,
     });
     const batch = source.readAt(source.record_head);
-    const atoms = retrievalAtoms(config.organization.organization_id, batch);
+    const canonicalInput = readableSearchCanonicalInput(
+      config.organization.organization_id,
+      batch,
+    );
     const memberContract = organizationMemberReadablePolicyContractSha256();
     const reviewerContract = reviewerPolicyContractSha256();
     const sourceBytes = readableSearchReleaseDescriptor();
@@ -3465,12 +3404,7 @@ async function rebuildAuthorityReadableSearchLocked(
       state_directory: paths.state_directory,
       organization_id: config.organization.organization_id,
       record_head: batch.record_head,
-      upstream_input_root: canonicalSha256({
-        schema_version: 1,
-        kind: 'organization-record-retrieval-build-input-v1',
-        record_head: batch.record_head,
-        atoms,
-      }),
+      upstream_input_preimage: canonicalInput.upstream_input_preimage,
       retrieval_contract_sha256: retrievalContract,
       organization_member_policy_contract_sha256: memberContract,
       restricted_reviewer_policy_contract_sha256: reviewerContract,
@@ -3478,7 +3412,7 @@ async function rebuildAuthorityReadableSearchLocked(
       source_revision: 'organization-authority-readable-search-builder-v1',
       builder_artifact_sha256: readableSearchSourceBytesSha256(sourceBytes),
       sqlite_version: (record.prepare('SELECT sqlite_version() AS version').get() as { version: string }).version,
-      atoms,
+      atoms: canonicalInput.atoms,
     });
     repository = new SqliteOrganizationAuthorityRepository(config.database_path, {
       fileMustExist: true,
@@ -3651,6 +3585,14 @@ interface VerifiedReadableSearchRecordHeads {
   matches(head: { readonly position: number; readonly record_hash: `sha256:${string}` | null }): boolean;
 }
 
+interface VerifiedReadableSearchLayer1Projection {
+  readonly record_head: {
+    readonly position: number;
+    readonly record_hash: `sha256:${string}` | null;
+  };
+  readonly upstream_input_root: `sha256:${string}`;
+}
+
 function readReadableSearchBackupRecordHeads(
   paths: AuthorityStatePaths,
   config: AuthorityRuntimeConfigV1,
@@ -3690,6 +3632,146 @@ function readReadableSearchBackupRecordHeads(
     });
   } finally {
     record.close();
+  }
+}
+
+/**
+ * Independently re-opens the stopped Layer 1 and evidence stores, re-proves
+ * both closed policy families, then reproduces the exact canonical input root
+ * used by the builder. A generation manifest is not evidence for any of these
+ * facts: it is compared with this value only after the source proof succeeds.
+ */
+function readReadableSearchBackupLayer1Projection(
+  paths: AuthorityStatePaths,
+  config: AuthorityRuntimeConfigV1,
+  organizationRecordingPolicy:
+    AuthorityServeConfig['organization_recording_policy_v1'],
+): VerifiedReadableSearchLayer1Projection {
+  const inspectedControl = inspectOrganizationControlDatabaseReadOnly(
+    paths.integrations_database_path,
+  );
+  if (
+    inspectedControl.organization_id !== config.organization.organization_id ||
+    inspectedControl.authority_id !== config.authority.authority_id
+  ) {
+    throw new Error(
+      'organization integrations database identity does not match the backup',
+    );
+  }
+  const control = openOrganizationControlDatabaseReadOnly(
+    paths.integrations_database_path,
+  );
+  let record: ReturnType<typeof openOrganizationRecordDatabase>;
+  try {
+    record = openOrganizationRecordDatabase(
+      paths.record_log_database_path,
+      ORGANIZATION_RECORD_LOG_DATABASE,
+      { readonly: true, fileMustExist: true },
+    );
+  } catch (error) {
+    control.close();
+    throw error;
+  }
+  let evidence: OrganizationIntegrationsRepository | undefined;
+  try {
+    control.pragma('trusted_schema = OFF');
+    control.pragma('query_only = ON');
+    control.pragma('foreign_keys = ON');
+    const openedControl = inspectOpenOrganizationControlDatabase(control);
+    if (
+      canonicalJson(openedControl as never) !==
+      canonicalJson(inspectedControl as never)
+    ) {
+      throw new Error(
+        'organization integrations database changed while opening the backup',
+      );
+    }
+    control.exec('BEGIN');
+    record.pragma('query_only = ON');
+    record.exec('BEGIN');
+    evidence = new OrganizationIntegrationsRepository(control, {
+      organization_id: config.organization.organization_id,
+      authority_id: config.authority.authority_id,
+    });
+    const integrationAuditChain = evidence.verifyIntegrationAuditChain();
+    if (!integrationAuditChain.valid) {
+      throw new Error(
+        `integration audit chain admission failed: ${
+          integrationAuditChain.failure ?? 'chain is invalid'
+        }`,
+      );
+    }
+    const reviewerValidator = reviewerRestrictedEnvelopeValidator({
+      organization_id: config.organization.organization_id,
+      authority_id: config.authority.authority_id,
+    });
+    const organizationMemberValidator = organizationMemberReadableEnvelopeValidator({
+      organization_id: config.organization.organization_id,
+      authority_id: config.authority.authority_id,
+    });
+    const reviewerReadiness = verifyReviewerRestrictedReadiness({
+      records: createReviewerRecordPort(record, {
+        organization_id: config.organization.organization_id,
+        authority_id: config.authority.authority_id,
+        reviewer_validator: reviewerValidator,
+      }),
+      evidence,
+      organization_id: config.organization.organization_id,
+      authority_id: config.authority.authority_id,
+    });
+    if (!reviewerReadiness.ready) {
+      throw new Error(
+        `reviewer fact admission failed: ${reviewerReadiness.failures
+          .map((failure) => failure.detail)
+          .join('; ')}`,
+      );
+    }
+    const memberReadiness = verifyOrganizationMemberReadableReadiness({
+      database: record,
+      organization_id: config.organization.organization_id,
+      validator: organizationMemberValidator,
+      evidence,
+      ...(organizationRecordingPolicy === undefined
+        ? {}
+        : {
+            organization_recording_policy_v1:
+              organizationRecordingPolicy,
+          }),
+    });
+    if (!memberReadiness.ready) {
+      throw new Error(
+        `organization-member fact admission failed: ${memberReadiness.failures
+          .map((failure) => failure.detail)
+          .join('; ')}`,
+      );
+    }
+    const source = createOrganizationRecordRetrievalBuildPort(record, {
+      organization_id: config.organization.organization_id,
+      authority_id: config.authority.authority_id,
+      restricted_reviewer_policy_contract_sha256:
+        reviewerPolicyContractSha256(),
+      reviewer_validator: reviewerValidator,
+      organization_member_validator: organizationMemberValidator,
+    });
+    const batch = source.readAt(source.record_head);
+    const canonicalInput = readableSearchCanonicalInput(
+      config.organization.organization_id,
+      batch,
+    );
+    return Object.freeze({
+      record_head: batch.record_head,
+      upstream_input_root: canonicalInput.upstream_input_root,
+    });
+  } finally {
+    if (record.inTransaction) {
+      try { record.exec('ROLLBACK'); } catch {}
+    }
+    record.close();
+    if (control.inTransaction) {
+      try { control.exec('ROLLBACK'); } catch {}
+    }
+    if (evidence === undefined) control.close();
+    else evidence.close();
   }
 }
 
@@ -3792,10 +3874,27 @@ async function verifyAuthorityReadableSearchBackupLocked(
   config: AuthorityRuntimeConfigV1,
 ): Promise<AuthorityReadableSearchBackupVerificationResult> {
   await inspectAuthorityServePreflight(configPath, config);
+  const effectiveConfig = resolveEffectiveAuthorityServeConfig(
+    configPath,
+    config,
+  );
   const paths = authorityStatePaths(config.state_dir);
   assertReadableSearchBackupCorePaths(paths);
   const recordHeads = readReadableSearchBackupRecordHeads(paths, config);
   const recordHead = recordHeads.current;
+  const layer1 = readReadableSearchBackupLayer1Projection(
+    paths,
+    config,
+    effectiveConfig.organization_recording_policy_v1,
+  );
+  if (
+    layer1.record_head.position !== recordHead.position ||
+    layer1.record_head.record_hash !== recordHead.record_hash
+  ) {
+    throw new Error(
+      'readable-search Layer 1 projection does not match the verified record head',
+    );
+  }
   const sourceBytes = readableSearchReleaseDescriptor();
   const analyzer = createReadableSearchAnalyzerDescriptor({
     analyzer_source_sha256: readableSearchSourceBytesSha256(sourceBytes),
@@ -3863,9 +3962,12 @@ async function verifyAuthorityReadableSearchBackupLocked(
     admitted.manifest_sha256 !== pointer.manifest_sha256 ||
     admitted.manifest.retrieval_contract_sha256 !== pointer.retrieval_contract_sha256 ||
     admitted.manifest.record_head.position !== pointer.record_head_position ||
-    admitted.manifest.record_head.record_hash !== pointer.record_head_hash
+    admitted.manifest.record_head.record_hash !== pointer.record_head_hash ||
+    admitted.manifest.upstream_input_root !== layer1.upstream_input_root
   ) {
-    throw new Error('readable-search active generation pointer differs from admitted generation');
+    throw new Error(
+      'readable-search active generation differs from its pointer or canonical Layer 1 projection',
+    );
   }
   assertReadableSearchBackupCorePaths(paths);
   return Object.freeze({

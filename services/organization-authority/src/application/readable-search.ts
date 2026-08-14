@@ -455,13 +455,32 @@ export interface ReadableSearchServiceOptions {
   readonly retrieval: ReadableSearchRetrievalPort;
   readonly fence: ReadableSearchAuthorizationFence;
   readonly contract: ReadableSearchContract;
-  readonly fence_timeout_ms?: number;
+  /** Required and positive: final authorization admission may never wait forever. */
+  readonly fence_timeout_ms: number;
+}
+
+export interface ReadableSearchRequestOptions {
+  /** Cancels only queued final-fence admission; no audited response was committed. */
+  readonly signal?: AbortSignal;
 }
 
 export class ReadableSearchService {
-  constructor(private readonly options: ReadableSearchServiceOptions) {}
+  private readonly options: ReadableSearchServiceOptions;
 
-  async search(input: ReadableSearchRequestInput): Promise<PreparedReadableSearchResponse> {
+  constructor(options: ReadableSearchServiceOptions) {
+    if (
+      !Number.isSafeInteger(options.fence_timeout_ms) ||
+      options.fence_timeout_ms <= 0
+    ) {
+      throw new TypeError('readable-search fence timeout must be a positive safe integer');
+    }
+    this.options = options;
+  }
+
+  async search(
+    input: ReadableSearchRequestInput,
+    requestOptions: ReadableSearchRequestOptions = {},
+  ): Promise<PreparedReadableSearchResponse> {
     let request: OrganizationReadableSearchRequestV1;
     try {
       request = JSON.parse(
@@ -478,7 +497,8 @@ export class ReadableSearchService {
     try {
       authenticated = await this.options.authority.authenticate(request);
     } catch (error) {
-      throw new ReadableSearchError('unauthorized', 'readable-search authentication failed', { cause: error });
+      if (error instanceof ReadableSearchError) throw error;
+      unavailable('readable-search authentication is unavailable', error);
     }
     let initial: ReadableSearchCurrentPerson;
     try {
@@ -487,7 +507,7 @@ export class ReadableSearchService {
       unavailable('readable-search current Person lookup is unavailable', error);
     }
     if (initial.decision !== 'eligible') {
-      return await this.finalizeDenial(authenticated);
+      return await this.finalizeDenial(authenticated, requestOptions.signal);
     }
 
     let scope: ReadableSearchScope | undefined;
@@ -524,14 +544,17 @@ export class ReadableSearchService {
       candidates,
       items,
       prepared,
+      requestOptions.signal,
     );
   }
 
   private async finalizeDenial(
     authenticated: ReadableSearchAuthenticatedRequest,
+    signal?: AbortSignal,
   ): Promise<PreparedReadableSearchResponse> {
     try {
       const lease = await this.options.fence.acquireRead({
+        signal,
         timeout_ms: this.options.fence_timeout_ms,
       });
       try {
@@ -577,11 +600,15 @@ export class ReadableSearchService {
     candidates: readonly ReadableSearchCandidate[],
     items: readonly ReadableSearchFetchedItem[],
     prepared: PreparedReadableSearchDraft,
+    signal?: AbortSignal,
   ): Promise<PreparedReadableSearchResponse> {
+    let leaseAcquired = false;
     try {
       const lease = await this.options.fence.acquireRead({
+        signal,
         timeout_ms: this.options.fence_timeout_ms,
       });
+      leaseAcquired = true;
       try {
         const finalizedPrepared = this.options.authority.writeAtLinearization(authenticated, scope, candidates, (finalized) => {
             if (finalized.person.decision !== 'eligible') {
@@ -638,6 +665,13 @@ export class ReadableSearchService {
         throw error;
       }
     } catch (error) {
+      if (!leaseAcquired) {
+        try {
+          this.options.retrieval.close(scope);
+        } catch (closeError) {
+          unavailable('readable-search retrieval scope close is unavailable', closeError);
+        }
+      }
       if (error instanceof ReadableSearchError) throw error;
       if (readableSearchFenceFailureClassification(error) === 'unavailable') {
         unavailable('readable-search final fence timed out', error);

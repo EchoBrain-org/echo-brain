@@ -15,6 +15,7 @@ import {
   inspectOrganizationControlDatabaseForServe,
   inspectOrganizationControlDatabaseReadOnly,
   openOrganizationControlDatabase,
+  openOrganizationControlDatabaseReadOnly,
 } from '../src/index.js';
 
 const temporaryDirectories: string[] = [];
@@ -73,6 +74,16 @@ describe('organization integrations database lifecycle', () => {
     });
     expect(inspectOpenOrganizationControlDatabase(opened)).toEqual(initialized);
     opened.close();
+
+    const readOnly = openOrganizationControlDatabaseReadOnly(path);
+    try {
+      expect(inspectOpenOrganizationControlDatabase(readOnly)).toEqual(initialized);
+      expect(() =>
+        readOnly.exec('DELETE FROM organization_control_plane_metadata'),
+      ).toThrow(/readonly|read-only/);
+    } finally {
+      readOnly.close();
+    }
   });
 
   it('never claims or replaces an existing path', () => {

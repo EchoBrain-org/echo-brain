@@ -1,11 +1,13 @@
 import {
   copyFileSync,
+  readFileSync,
   renameSync,
   rmSync,
   symlinkSync,
   writeFileSync,
 } from 'node:fs';
 import Database from 'better-sqlite3';
+import { canonicalJson } from '@echo-brain/federation-protocol';
 import { describe, expect, it } from 'vitest';
 import { buildStoppedReadableSearchGeneration } from '../src/build.js';
 import { admitReadableSearchGenerationDirectory, OpaqueReadableSearchMachine } from '../src/serve.js';
@@ -101,6 +103,72 @@ describe('admitted generation and opaque search machine', () => {
       removeStateDirectory(directory);
     }
   });
+
+  it.each([
+    {
+      label: 'undeclared nested material',
+      atoms: [atom({ atom_id: 'member', text: 'visible' })],
+      mutate(manifest: Record<string, unknown>): void {
+        (manifest.roots as Record<string, unknown>).undeclared =
+          digest('not-bound-by-the-pointer');
+      },
+      expected_error: 'generation roots has an unexpected shape',
+    },
+    {
+      label: 'a normalized wrong constant',
+      atoms: [atom({ atom_id: 'member', text: 'visible' })],
+      mutate(manifest: Record<string, unknown>): void {
+        (manifest.index as { format_version: number }).format_version = 999;
+      },
+      expected_error: 'generation index identity is unsupported',
+    },
+    {
+      label: 'reordered segments',
+      atoms: [
+        atom({ atom_id: 'member', text: 'visible member', position: 1 }),
+        atom({
+          atom_id: 'reviewer',
+          policy_id: 'restricted-reviewer-v1',
+          text: 'visible reviewer',
+          position: 2,
+        }),
+      ],
+      mutate(manifest: Record<string, unknown>): void {
+        const segments = manifest.segments as unknown[];
+        expect(segments).toHaveLength(2);
+        segments.reverse();
+      },
+      expected_error: 'generation segments must be ordered by segment_id',
+    },
+  ] as const)(
+    'rejects canonical manifest bytes containing $label',
+    ({ atoms, mutate, expected_error }) => {
+      const directory = stateDirectory();
+      try {
+        const build = buildStoppedReadableSearchGeneration(
+          buildInput(directory, atoms),
+        );
+        const manifestPath = `${build.generation_directory}/manifest.json`;
+        const manifest = JSON.parse(readFileSync(manifestPath, 'utf8')) as Record<
+          string,
+          unknown
+        >;
+        mutate(manifest);
+        writeFileSync(manifestPath, canonicalJson(manifest), { mode: 0o600 });
+
+        expect(() => admitReadableSearchGenerationDirectory({
+          generation_directory: build.generation_directory,
+          admission: {
+            state_directory: directory, organization_id: build.manifest.organization_id,
+            record_head: build.manifest.record_head, retrieval_contract_sha256: build.manifest.retrieval_contract_sha256,
+            analyzer: build.manifest.analyzer,
+          },
+        })).toThrow(expected_error);
+      } finally {
+        removeStateDirectory(directory);
+      }
+    },
+  );
 
   it('opens no plane for an empty scope and no hidden reviewer plane for an ordinary member', () => {
     const directory = stateDirectory();

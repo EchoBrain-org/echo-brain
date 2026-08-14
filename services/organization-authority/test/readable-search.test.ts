@@ -1,6 +1,6 @@
 import { Buffer } from 'node:buffer';
 import { generateKeyPairSync, sign as signMessage } from 'node:crypto';
-import { beforeAll, describe, expect, it } from 'vitest';
+import { beforeAll, describe, expect, it, vi } from 'vitest';
 import {
   createOrganizationReadableSearchRequest,
 } from '@echo-brain/organization-api';
@@ -168,6 +168,7 @@ interface Harness {
   readonly fence: ReadableSearchAuthorizationFence;
   readonly audits: ReadableSearchQueryAuditEntry[];
   readonly retrievalCalls: { opened: number; searched: number; fetched: number; closed: number };
+  readonly linearizations: { count: number };
   initial: ReadableSearchCurrentPerson;
   final: ReadableSearchCurrentPerson;
   scopeStillAdmitted: boolean;
@@ -182,10 +183,13 @@ function harness(input: {
   readonly scope?: ReadableSearchScope;
   readonly initial?: ReadableSearchCurrentPerson;
   readonly final?: ReadableSearchCurrentPerson;
+  readonly authentication_failure?: unknown;
+  readonly fence_timeout_ms?: number;
 } = {}): Harness {
   const fence = new ReadableSearchAuthorizationFence();
   const audits: ReadableSearchQueryAuditEntry[] = [];
   const retrievalCalls = { opened: 0, searched: 0, fetched: 0, closed: 0 };
+  const linearizations = { count: 0 };
   const state = {
     initial: input.initial ?? person(),
     final: input.final ?? input.initial ?? person(),
@@ -213,13 +217,19 @@ function harness(input: {
     },
   };
   const authority: ReadableSearchAuthorityStatePort = {
-    authenticate: (request) => ({
-      request,
-      request_sha256: digest('b'),
-    }),
+    authenticate: (request) => {
+      if (input.authentication_failure !== undefined) {
+        throw input.authentication_failure;
+      }
+      return {
+        request,
+        request_sha256: digest('b'),
+      };
+    },
     currentPerson: () => state.initial,
-    writeAtLinearization: (_authenticated, selectedScope, selected, operation) =>
-      operation({
+    writeAtLinearization: (_authenticated, selectedScope, selected, operation) => {
+      linearizations.count += 1;
+      return operation({
         person: state.final,
         checked_at: CHECKED_AT,
         scope_still_admitted:
@@ -230,7 +240,8 @@ function harness(input: {
           if (state.auditFailure !== null) throw state.auditFailure;
           audits.push(entry);
         },
-      }),
+      });
+    },
   };
   const service = new ReadableSearchService({
     authority,
@@ -249,11 +260,13 @@ function harness(input: {
         },
       ],
     },
+    fence_timeout_ms: input.fence_timeout_ms ?? 1_000,
   });
   return {
     fence,
     audits,
     retrievalCalls,
+    linearizations,
     get initial() {
       return state.initial;
     },
@@ -289,6 +302,40 @@ function harness(input: {
 }
 
 describe('readable-search Authority orchestration', () => {
+  it('refuses an invalid final-fence deadline at composition', () => {
+    expect(() => harness({ fence_timeout_ms: 0 })).toThrow(
+      /fence timeout must be a positive safe integer/,
+    );
+    expect(() => harness({ fence_timeout_ms: Number.NaN })).toThrow(
+      /fence timeout must be a positive safe integer/,
+    );
+  });
+
+  it('preserves classified authentication outages and maps unknown auth faults unavailable', async () => {
+    const classified = new ReadableSearchError(
+      'unavailable',
+      'private repository read failure',
+    );
+    const classifiedSubject = harness({ authentication_failure: classified });
+    await expect(classifiedSubject.service.search(REQUEST)).rejects.toBe(classified);
+    expect(classifiedSubject.retrievalCalls).toEqual({
+      opened: 0,
+      searched: 0,
+      fetched: 0,
+      closed: 0,
+    });
+    expect(classifiedSubject.audits).toHaveLength(0);
+
+    const unknownSubject = harness({
+      authentication_failure: new Error('unclassified authentication storage fault'),
+    });
+    await expect(unknownSubject.service.search(REQUEST)).rejects.toMatchObject({
+      code: 'unavailable',
+    } satisfies Partial<ReadableSearchError>);
+    expect(unknownSubject.retrievalCalls.opened).toBe(0);
+    expect(unknownSubject.audits).toHaveLength(0);
+  });
+
   it('seals audited bytes until one-shot transport handoff', async () => {
     const found = candidate();
     const subject = harness({ candidates: [found], fetched: [item(found)] });
@@ -498,6 +545,66 @@ describe('readable-search Authority orchestration', () => {
     expect(subject.audits).toHaveLength(1);
   });
 
+  it('fails unavailable without audit when the final fence wait reaches its deadline', async () => {
+    const found = candidate();
+    const subject = harness({
+      candidates: [found],
+      fetched: [item(found)],
+      fence_timeout_ms: 10,
+    });
+    const writer = await subject.fence.acquireWrite();
+    try {
+      await expect(subject.service.search(REQUEST)).rejects.toMatchObject({
+        code: 'unavailable',
+      } satisfies Partial<ReadableSearchError>);
+    } finally {
+      writer.release();
+    }
+    expect(subject.audits).toHaveLength(0);
+    expect(subject.linearizations.count).toBe(0);
+    expect(subject.fence.pendingCount()).toBe(0);
+    expect(subject.retrievalCalls).toEqual({
+      opened: 1,
+      searched: 1,
+      fetched: 1,
+      closed: 1,
+    });
+    const recovered = await subject.service.search(REQUEST);
+    handoff(recovered);
+    expect(subject.audits).toHaveLength(1);
+  });
+
+  it('cancels queued final-fence admission from the request signal', async () => {
+    const found = candidate();
+    const subject = harness({ candidates: [found], fetched: [item(found)] });
+    const writer = await subject.fence.acquireWrite();
+    const controller = new AbortController();
+    try {
+      const pending = subject.service.search(REQUEST, {
+        signal: controller.signal,
+      });
+      await vi.waitFor(() => expect(subject.fence.pendingCount()).toBe(1));
+      controller.abort();
+      await expect(pending).rejects.toMatchObject({
+        code: 'unavailable',
+      } satisfies Partial<ReadableSearchError>);
+    } finally {
+      writer.release();
+    }
+    expect(subject.audits).toHaveLength(0);
+    expect(subject.linearizations.count).toBe(0);
+    expect(subject.fence.pendingCount()).toBe(0);
+    expect(subject.retrievalCalls).toEqual({
+      opened: 1,
+      searched: 1,
+      fetched: 1,
+      closed: 1,
+    });
+    const recovered = await subject.service.search(REQUEST);
+    handoff(recovered);
+    expect(subject.audits).toHaveLength(1);
+  });
+
   it('keeps each concurrent final audit bound to its own authenticated request', async () => {
     const fence = new ReadableSearchAuthorizationFence();
     const aOpened = deferred<void>();
@@ -539,6 +646,7 @@ describe('readable-search Authority orchestration', () => {
       authority,
       retrieval,
       fence,
+      fence_timeout_ms: 1_000,
       contract: {
         retrieval_contract_sha256: digest('4'),
         policy_contracts: [
