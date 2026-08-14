@@ -1,0 +1,5 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Report a security vulnerability
+    url: https://github.com/EchoBrain-org/echo-brain/security/advisories/new
+    about: Send security-sensitive findings privately. Never include secrets in a public issue.
