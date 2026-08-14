@@ -2,7 +2,7 @@
 schema_version: 1
 id: EVID-INDEX-001
 kind: evidence-index
-title: Founder-live Job A and Job B sanitized evidence index
+title: Founder-live permission qualification sanitized evidence index
 component_ids:
   - CMP-ADAPTERS
   - CMP-LOCAL-RUNTIME
@@ -12,10 +12,10 @@ component_ids:
   - CMP-OPERATIONS-RELEASE
 created_at: 2026-08-13
 reviewed_at: 2026-08-14
-reviewed_ref: add08da02e98c6f3c6aaad71a07141c95887c93d
+reviewed_ref: 83819a57fd8635384d14d3cc8d591e8f76ad1260
 ---
 
-# Founder-live Job A and Job B sanitized evidence index
+# Founder-live permission qualification sanitized evidence index
 
 This index identifies private immutable evidence without disclosing its real
 filename, path, storage key, infrastructure identifiers, provider identifiers,
@@ -32,6 +32,7 @@ evidence system.
 | `EVID-ACTOR-SEPARATION-001` | `dc797e26643b3cc902007ec2cb618d429b7f6d71b01fc5264125780701ac38b5` | Negative human-actor/read assertion for the bounded permission mode | founder-private |
 | `EVID-AUTHORITY-RESTART-001` | `4796bf2046fa9f476132875cbc4435f9f266064c088ad5317b483d5c1866fe23` | Focused Authority restart and topology evidence | founder-private |
 | `EVID-JOB-B-ACTIVE-MEMBER-001` | `c75e10bf9ab58ecb97828a9771726c46935d035411f4cb18e0c2fe72e82a60dd` | Schema-V3 append, exact-head rebuild, active-owner read, cross-machine active-employee read, and central audit proof | founder-private |
+| `EVID-LAYER-123-MINIMUM-V1-001` | `096bd8a82a11bf93efc2590f06b4461683777f58ccf76c8deb964a474acdf013` | Exact-source Layers 1-3 tests, ordered restore proof, exact-artifact cutover, owner two-policy reads, later-member read, and revocation denial | founder-private |
 
 ## Verification rule
 

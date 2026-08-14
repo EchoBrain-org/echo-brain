@@ -9,7 +9,7 @@ component_ids:
   - CMP-IDENTITY-ACCESS
 created_at: 2026-08-13
 reviewed_at: 2026-08-14
-reviewed_ref: add08da02e98c6f3c6aaad71a07141c95887c93d
+reviewed_ref: 83819a57fd8635384d14d3cc8d591e8f76ad1260
 invariant_ids:
   - INV-IDENTITY-001
   - INV-IDENTITY-002
@@ -25,6 +25,7 @@ qualification_ids:
   - QMAT-JOB-B-ACTIVE-MEMBER-001
   - QUAL-20260814-050326-001
   - QMAT-READABLE-SEARCH-MINIMUM-V1-001
+  - QUAL-20260814-194049-001
 ---
 
 # Identity and access

@@ -45,9 +45,12 @@ content planes from the image-shipped migrations. A metadata-derived
 architecture test now requires the selective image to include every root build
 workspace and every Authority-reachable runtime workspace plus migration
 assets.
-External restore reconciliation and founder-live rows remain operational gates,
-not implementation blockers. This is a local committed baseline, not an
-operational qualification.
+At this baseline, external restore reconciliation and founder-live rows
+remained operational gates rather than implementation blockers. Those gates
+were later satisfied for exact source `83819a5` by
+[`QUAL-20260814-194049-001`](../qualification/QUAL-20260814-194049-001-readable-search-minimum-v1.md).
+This design records the approved contract; the immutable report records the
+operational qualification and its non-claims.
 
 **Builds on:**
 
