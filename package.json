@@ -103,9 +103,10 @@
     "test:product": "npm run build:workspaces && vitest run --config vitest.product.config.ts",
     "test:machine": "npm run build:workspaces && vitest run --config vitest.config.ts tests/machine && vitest run --config vitest.product.config.ts tests/product/adapter-factories.test.ts tests/product/decision-node-store.test.ts tests/product/sqlite-core-state.test.ts tests/product/product-database-migrations.test.ts tests/product/runtime-config.test.ts tests/product/runtime-isolation.test.ts",
     "check:boundary": "node tools/check-boundary.mjs",
+    "check:docs": "node tools/check-docs.mjs",
     "organization-authority:cli": "node services/organization-authority/dist/main.js",
     "organization-authority:admin": "node services/organization-authority/dist/admin-main.js",
-    "check": "npm run check:boundary && npm run typecheck && npm run lint && npm test",
+    "check": "npm run check:boundary && npm run check:docs && npm run typecheck && npm run lint && npm test",
     "prepack": "npm run build"
   },
   "dependencies": {

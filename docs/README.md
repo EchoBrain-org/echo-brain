@@ -1,52 +1,47 @@
-# Documentation
+# ECHO documentation
 
-Code and schemas are authoritative for exact fields and behavior. These files
-cover only current architecture and near-term product direction.
+Code and schemas define exact behavior. This index records the contracts that
+must survive code changes: system boundaries, invariants, decisions, reusable
+failures, operations, and proof for exact runs.
 
-Start with the primary map:
+## Start here
 
-- [One-organization boundaries](architecture/organization-workspace-boundaries.md)
-  — the whole repository: which workspace owns what, how those workspaces
-  depend on each other, which capabilities are out of pilot scope, and which
-  manifests enforce the graph.
+- New to ECHO: [system map](architecture/organization-workspace-boundaries.md), then the [component catalog](components/README.md).
+- Changing behavior: start at the affected component, then follow its linked invariants, failure patterns, and qualification.
+- Investigating: start with [failure patterns](failure-patterns/README.md), then its playbook or runbook.
+- Making a durable choice: use an [ADR](decisions/README.md); use an [RFC](rfcs/README.md) for a proposed coordinated change.
+- Claiming readiness: use [qualification](qualification/README.md). Source, deployment, and qualification are separate claims.
 
-The rest are subordinate deep-dives into one part of that map:
+Components are the navigation layer. Cross-cutting records are written once,
+linked by stable ID, and not copied between component pages.
 
-- [Core and adapters](architecture/core-and-adapters.md) — the `src/`
-  capability contract: tool-neutral core, replaceable adapters, and the rules
-  a new adapter must satisfy.
-- [Product runtime](architecture/product-runtime.md) — the local host around
-  the core: composition, durable state, lifecycle, and safety.
+## System maps
+
+- [Workspace boundaries](architecture/organization-workspace-boundaries.md)
+- [Core and adapters](architecture/core-and-adapters.md)
+- [Product runtime](architecture/product-runtime.md)
 - [Identity and onboarding](architecture/identity-and-onboarding.md)
-  — installation identity, organization enrollment and access, and provider
-  identity linking.
-- [Organization control plane](architecture/organization-control-plane.md) —
-  the customer-owned Slack connection, the identity link, and the action-time
-  permission path.
+- [Organization control plane](architecture/organization-control-plane.md)
+- [Component catalog](components/README.md)
 
-[Organization brain direction](product/org-brain-direction.md) is stated
-direction rather than current implementation and is labelled as such.
-[Org decision record: append and derive](product/2026-08-07-org-decision-record-append-derive-design.md)
-is the approved design for that direction's append/derive half — implemented
-in 0.1.0-internal.6.
-[Organization permission architecture](product/2026-08-09-organization-permission-architecture.md)
-is the approved permission skeleton — pillars, trust ladder, invariants —
-that retrieve-side feature specs instantiate; approved but not yet
-implemented.
-[Approval surface v2](product/2026-08-10-approval-surface-v2-direction.md) is
-founder direction for the gate's future affordances (intent, declared links,
-edit-before-approve); direction, not scheduled.
+## Durable records
 
-Historical proposals, ceremonies, evidence reports, and implementation diaries
-belong in Git history rather than the active tree; approved-but-unimplemented
-designs live in `docs/product/` until implemented or superseded. Commit
-`8be5151` removed that machinery; read it with `git show 8be5151^:<path>` for
-`provenance/`, `docs/decisions/`, `docs/runbooks/`,
-`services/organization-admin-edge/`, `release/`, `native/macos/`,
-`schemas/product/qualification-*.json`, and the removed `tools/` entries
-`phase5/`, `product/`, `release/`, `organization-admin-edge/`,
-`organization-authority/`, `audit-pinned-extraction.mjs`,
-`check-provenance.mjs`, `check-successor-provenance.mjs`,
-`check-dependencies.mjs`, and `verify-artifact.mjs`. Commit `1d9892c`
-subsequently removed `src/product/federation/` and the remaining
-`schemas/product/*.json`; read those with `git show 1d9892c^:<path>`.
+- [Invariants](invariants/README.md): rules that must hold.
+- [Decisions](decisions/README.md): rationale and supersession history.
+- [Failure patterns](failure-patterns/README.md): reusable boundary failures and controls.
+- [Operations](operations/README.md): investigative playbooks and outcome runbooks.
+- [Qualification](qualification/README.md): matrices, exact-run reports, and evidence indexes.
+- [RFCs](rfcs/README.md): proposed cross-component changes.
+
+Read [contributing](contributing.md) before changing a durable record.
+
+## Product contracts and truth
+
+`docs/product/` keeps direction and implementation contracts while their
+durable decisions, invariants, failures, and proof are extracted. Do not
+delete useful history merely to shorten the active tree.
+
+Use each artifact for its own claim: code and schemas for implementation;
+invariants for required safety; ADRs for why; tests for repeatable behavior;
+qualification reports for one exact artifact and configuration; private
+receipts for raw bounded evidence; and issues for unresolved work.

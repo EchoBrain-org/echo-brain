@@ -30,6 +30,8 @@ services/
   organization-control-plane/   customer-owned Slack connection and policy
   organization-record/          the organization's append-only decision log
                                 and its derived graph
+  organization-retrieval/       rebuildable permission-aware retrieval
+                                generations
 ```
 
 The root package is the employee product. The authority is a separate
@@ -37,13 +39,15 @@ workspace and deployment. They share the three protocol/API packages and never
 import one another. The authority additionally depends on the organization
 control plane, which the employee product does not.
 
-`organization-control-plane` and `organization-record` are libraries, not
-services, despite their `services/` path. Neither declares a `bin`, has a
-process entry point of its own, or opens a listener, and neither appears in
+`organization-control-plane`, `organization-record`, and
+`organization-retrieval` are libraries, not processes, despite their
+`services/` path. None declares a `bin`, has a process entry point of its own,
+or opens a listener, and none appears in
 `deploy/organization-authority/compose.yaml`, whose only two containers are
-`authority` and `proxy`. Both are linked into the authority process and
-imported solely from `services/organization-authority/src/composition`. Read
-`services/` as three hosted workspaces, not as three running processes.
+`authority` and `proxy`. All three libraries are linked into the Authority
+process and
+imported through the Authority composition boundary. Read `services/` as four
+hosted workspaces, not as four running processes.
 
 The remaining tracked roots support that code rather than shipping in it:
 `product/` holds the root source-boundary manifest, `tools/` the build script,
@@ -55,16 +59,22 @@ its deep-dives.
 
 ## Dependency direction
 
-```text
-federation-protocol
-        ↑                     ↖
-organization-protocol          organization-record
-        ↑
-organization-api
-      ↗          ↖
-product      authority → organization-control-plane
-                       ↘ organization-record
-```
+The direct internal workspace dependencies declared in `package.json` files
+are:
+
+| Workspace | Direct internal dependencies |
+| --- | --- |
+| employee product | `federation-protocol`, `organization-protocol`, `organization-api` |
+| `federation-protocol` | none |
+| `organization-protocol` | `federation-protocol` |
+| `organization-api` | `federation-protocol`, `organization-protocol` |
+| `organization-authority` | all three protocol/API packages, `organization-control-plane`, `organization-record`, `organization-retrieval` |
+| `organization-control-plane` | none |
+| `organization-record` | `federation-protocol` |
+| `organization-retrieval` | `federation-protocol` |
+
+The package manifests and checked source-boundary manifests are authoritative;
+this table is a readable projection of those files.
 
 - Protocol packages do not import product, service, database, or UI code.
 - `organization-control-plane` is a library with no workspace dependencies of
@@ -73,6 +83,9 @@ product      authority → organization-control-plane
   canonicalization, no second copy — and deliberately does not import
   `organization-protocol`: the durable signed shapes stay in the protocol
   package and the authority's composition layer adapts between them.
+- `organization-retrieval` also depends on `federation-protocol` rather than
+  on `organization-record`; the Authority composition layer coordinates data
+  between the two libraries.
 - Cross-workspace imports use package exports.
 - Signed trust documents and ordinary HTTP DTOs remain separate contracts.
 - Private-key lifecycle stays behind signer ports; protocol packages know only
@@ -87,7 +100,7 @@ directions: a reachable module outside the allowlist is an error, and so is an
 allowlisted module no entry point can reach. Every tracked module under `src/`
 is therefore both allowlisted and reachable, and dead weight cannot accumulate
 inside the packed artifact.
-`tools/workspace-source-boundaries.v1.json` registers seven manifests that
+`tools/workspace-source-boundaries.v1.json` registers eight manifests that
 govern `packages/*/src`, `services/*/src`, and one refinement sub-boundary
 inside `src/product` by ownership: every file under a declared `source_root`
 must be owned and must match exactly one layer rule. Paths under
