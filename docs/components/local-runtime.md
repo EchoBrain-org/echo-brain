@@ -18,6 +18,8 @@ failure_pattern_ids:
   - FP-ADAPTERS-002
   - FP-RUNTIME-001
   - FP-PERMISSIONS-001
+qualification_ids:
+  - QMAT-ADAPTERS-001
 ---
 
 # Local runtime

@@ -12,7 +12,7 @@ reviewed_at: 2026-08-13
 reviewed_ref: 77b7744b46a912b9154c218b3a036e8552d7180e
 normative: MUST
 enforcement_status: partial
-enforcement_scope: Slack product and Authority identity paths on the founder-live hardening branch
+enforcement_scope: Slack product and Authority identity paths
 failure_pattern_ids:
   - FP-IDENTITY-001
 ---

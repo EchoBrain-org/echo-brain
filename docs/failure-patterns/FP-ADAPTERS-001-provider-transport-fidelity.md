@@ -58,5 +58,5 @@ to keep tests passing.
 Assert verb, query/form/body placement, header-only credentials, redirect
 refusal, bounded response shape, and presence of the exact requested object.
 The regression sends the wrong transport and malformed successes and requires
-closed failure. The repair exists on the founder-live hardening branch but is
-not present at this documentation branch's `808ac89` source baseline.
+closed failure. The exact implementation and regression scope is fixed by the
+refs above.

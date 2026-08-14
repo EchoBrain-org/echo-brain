@@ -59,5 +59,6 @@ the verifier for legacy rows.
 Require owner-authorized re-verification against authoritative endpoints and
 atomically promote every exact binding while preserving stable IDs and
 appending audit. Reject partial and malformed promotion. Tests cover migration,
-multi-binding atomicity, and no in-place fallback. The live promotion succeeded
-on the hardening branch; its code is not on this branch's baseline.
+multi-binding atomicity, and no in-place fallback. The indexed live evidence
+records the promotion outcome; the exact implementation and test scope is fixed
+by the refs above.

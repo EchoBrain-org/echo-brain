@@ -1,10 +1,12 @@
 # A: Reviewer permission minimum V1 with append-atomic log facts
 
-**Status:** approved implementation contract, implemented and locally
-validated on `feat/organization-permission-pilot-v1-clean`. The founder choices
-remain closed. The reviewed implementation is pinned below; source integration
-and remote publication do not constitute deployment, founder-live
-qualification, or release.
+**Status:** approved implementation contract. The branch and gate language
+below records the implementation state at its named baselines; the founder
+choices remain closed. The shared reviewer-fact path later contributed to the
+exact two-policy readable-search run in
+[`QUAL-20260814-194049-001`](../qualification/QUAL-20260814-194049-001-readable-search-minimum-v1.md).
+That report does not independently qualify the separate reviewer-recent
+operation.
 
 **Implementation lineage:** Job A landed at
 `03167cfd66fa0b5fe983abbf266271178548efb8`. The integrated reviewed head is
@@ -24,8 +26,8 @@ record 121, retrieval 21, Authority 402, integration 10, and infrastructure 29
 tests. `git diff --check` is clean. Stages 1-5 include a real Authority reviewer
 permission decision, append-atomic facts, process restart, exact self-read, and
 a separately enrolled current member's audited empty response with no canonical
-content-row access. Restore release remains the external runbook gate, and
-acceptance item 13 remains founder-live only.
+content-row access. At that checkpoint, restore release was still the external
+runbook gate and acceptance item 13 remained founder-live only.
 
 **Implementation review:** the Codex minimum-V1 pass removed shared-v1
 validator drift and fixed canonical reviewer permission bytes, reviewer
@@ -1770,8 +1772,10 @@ release promise.
    founder-live reviewer self-read with a different active member returning no
    items.
 
-The stages above are locally implemented and green. Deployment, merge,
-founder-live qualification, and release still require their separate gates.
+The stages above were locally implemented and green at the pinned baseline.
+At that checkpoint, deployment, merge, founder-live qualification, and release
+still required separate gates. The later qualification linked in the status
+note applies only to its declared shared readable-search scope.
 
 ## Minimum acceptance matrix
 

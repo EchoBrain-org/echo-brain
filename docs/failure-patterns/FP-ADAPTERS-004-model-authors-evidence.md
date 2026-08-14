@@ -56,5 +56,5 @@ locator. A citation ID proves source selection, not semantic entailment.
 Assign request-local aliases to canonical source blocks, let the model select
 an alias, and resolve it locally. Valid empty and all-invalid output are
 different outcomes. Tests cover supported paraphrase, mixed valid/invalid
-references, and all-invalid retry. The implementation passed live retry on the
-hardening branch but is not present at this branch's source baseline.
+references, and all-invalid retry. The exact implementation, regression, and
+live evidence scope is fixed by the refs and evidence IDs above.

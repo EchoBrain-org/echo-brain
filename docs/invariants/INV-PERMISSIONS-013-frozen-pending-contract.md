@@ -12,7 +12,7 @@ reviewed_at: 2026-08-13
 reviewed_ref: 4b505021b03255c870695e0fba56a2b74879d86a
 normative: MUST
 enforcement_status: partial
-enforcement_scope: Frozen Slack approval presentation and authorization-aware diagnostic composition on the founder-live hardening branch
+enforcement_scope: Frozen Slack approval presentation and authorization-aware diagnostic composition
 invariant_ids:
   - INV-12
 failure_pattern_ids:
@@ -36,5 +36,5 @@ runtime while inspecting production state without creating or migrating it.
 ## Enforcement and verification
 
 Frozen Slack approval state is implemented for the bounded reviewer paths.
-Diagnostic parity and read-only inspection are reviewed on the named ref but
-remain outside the documentation branch's source baseline.
+Diagnostic parity and read-only inspection are covered by the reviewed ref;
+broader approval paths remain outside this bounded enforcement scope.

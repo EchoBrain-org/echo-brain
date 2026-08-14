@@ -9,8 +9,9 @@ retrieval-migration smoke are pinned at
 `2da11a04f45ff503978dd6594fe2677964c93a9e`.
 The final minimum-V1 lean-down and real-clock authorization fix are pinned at
 `e94f94a508b85f78734646b220bdb3233b411738`.
-Source integration and remote publication do not constitute deployment,
-founder-live qualification, client-live qualification, or release.
+At those baselines, source integration and remote publication alone did not
+constitute deployment, founder-live qualification, client-live qualification,
+or release. The later exact-run result is recorded below.
 
 **Pinned Job A predecessor:**
 `03167cfd66fa0b5fe983abbf266271178548efb8` on
@@ -2102,9 +2103,9 @@ search route reuses the Authority's landed fixed 401/500 bytes. The same pass
 removed redundant per-record roots, an unused reverse-posting index, and the
 backward coupling from immutable admission policy to one search wire version.
 
-Source integration closes the implementation boundary but does not qualify a
-deployment. Restore reconciliation and founder-live qualification remain the
-external gates. This contract freezes the exact policy consequence,
+Source integration alone never qualifies a deployment. The exact
+qualification named in the status note above records the later operational
+result. This contract freezes the exact policy consequence,
 two-policy search union, and wire/analyzer choices above; changing one requires
 a reviewed contract revision rather than an implementation-time
 interpretation.

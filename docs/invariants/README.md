@@ -19,10 +19,10 @@ during migration.
 | [`INV-ADAPTERS-002`](INV-ADAPTERS-002-durable-external-reference.md) | External object identity is durable before verification | Consequential provider writes | partial | linked tests and live evidence |
 | [`INV-RUNTIME-001`](INV-RUNTIME-001-lifecycle-owned-side-effects.md) | Durable side-effect follow-up belongs to the runtime lifecycle | Background external effects | partial | linked historical tests |
 | [`INV-PERMISSIONS-013`](INV-PERMISSIONS-013-frozen-pending-contract.md) | Pending consequential work resolves under its frozen contract | Approval and diagnostics | partial | linked historical tests |
-| [`INV-PERMISSIONS-014`](INV-PERMISSIONS-014-actor-not-source-owner.md) | Approval authority is independent from source custody | Bounded Slack modes | implemented | live negative evidence |
+| [`INV-PERMISSIONS-014`](INV-PERMISSIONS-014-actor-not-source-owner.md) | Approval authority is independent from source custody | Bounded Slack modes | partial | live negative evidence |
 | [`INV-ADAPTERS-003`](INV-ADAPTERS-003-model-execution-controls.md) | Model execution controls are explicit processing identity | Model/provider pairs | partial | linked test and live evidence |
 | [`INV-ADAPTERS-004`](INV-ADAPTERS-004-source-owned-grounding.md) | Models select source-owned evidence references | Shared LLM processor | partial | linked tests and live evidence |
-| [`INV-IDENTITY-002`](INV-IDENTITY-002-versioned-lease-duration.md) | Access duration changes are versioned compatibility changes | Access protocol | partial | linked tests; live V2 open |
+| [`INV-IDENTITY-002`](INV-IDENTITY-002-versioned-lease-duration.md) | Access duration changes are versioned compatibility changes | Access protocol | partial | linked tests; live qualification open |
 | [`INV-IDENTITY-003`](INV-IDENTITY-003-revocation-windows.md) | Central and offline revocation windows are separate claims | Access and permissions | partial | bounded tests |
 | [`INV-IDENTITY-004`](INV-IDENTITY-004-provider-identity-migration.md) | Incomplete provider identity is repaired by fresh atomic proof | Provider migrations | partial | linked tests and live promotion |
 | [`INV-RELEASE-001`](INV-RELEASE-001-worktree-bound-artifact.md) | Artifact identity is bound to the exact source worktree | Build and release | not implemented systemically | live detection only |

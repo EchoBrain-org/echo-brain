@@ -12,7 +12,7 @@ reviewed_at: 2026-08-13
 reviewed_ref: 8d61edada1cf994678aa7c2201c47ff08753ea08
 normative: MUST
 enforcement_status: partial
-enforcement_scope: Exact Slack reviewer and organization-member publication on the founder-live hardening branch
+enforcement_scope: Exact Slack reviewer and organization-member publication
 failure_pattern_ids:
   - FP-ADAPTERS-002
 ---

@@ -16,6 +16,8 @@ invariant_ids:
 failure_pattern_ids:
   - FP-ADAPTERS-003
   - FP-ADAPTERS-004
+qualification_ids:
+  - QMAT-ADAPTERS-001
 ---
 
 # Core pipeline

@@ -18,7 +18,12 @@ and [qualification report template](../_templates/qualification.md). Matrix
 front matter and its table carry the same assertion IDs; completed reports
 must record an outcome and evidence for that exact assertion set.
 
-Current indexes and matrices:
+Primary minimum-V1 records:
+
+- [Readable-search minimum-V1 Layers 1-3 matrix](readable-search-minimum-v1-source-readiness-matrix.md)
+- [Readable-search Layers 1-3 founder-live qualification](QUAL-20260814-194049-001-readable-search-minimum-v1.md)
+
+Supporting matrices and bounded predecessor runs:
 
 - [Sanitized private evidence index](evidence-index.md)
 - [Provider adapter adversarial matrix V1](adapter-matrix-v1.md)
@@ -26,8 +31,6 @@ Current indexes and matrices:
 - [Job A stopped-state proof](QUAL-20260813-174902-001-job-a-stopped.md)
 - [Job B active-member readable-search matrix V1](job-b-active-member-matrix-v1.md)
 - [Job B active-member readable-search proof](QUAL-20260814-050326-001-job-b-active-member.md)
-- [Readable-search minimum-V1 Layers 1-3 source-readiness matrix](readable-search-minimum-v1-source-readiness-matrix.md)
-- [Readable-search Layers 1-3 minimum-V1 founder-live qualification](QUAL-20260814-194049-001-readable-search-minimum-v1.md)
 
 ## Evidence index rules
 

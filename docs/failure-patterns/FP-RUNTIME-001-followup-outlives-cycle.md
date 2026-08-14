@@ -54,5 +54,5 @@ not run a full source cycle merely to flush one durable record.
 Schedule one coalesced bounded follow-up, keep the callback synchronous and
 nonblocking, abort and drain during shutdown, and provide a record-only
 recovery command. Tests cover scheduling, timeout, shutdown, concurrency, and
-no unrelated adapter construction. The hardening branch implemented and used
-the recovery successfully; it is not yet this branch's source baseline.
+no unrelated adapter construction. The indexed live evidence records successful
+recovery; the exact implementation and test scope is fixed by the refs above.

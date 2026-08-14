@@ -42,7 +42,5 @@ membership is currently active.
 
 This V1 matrix does not cover a membership created after approval or denial
 after membership revocation. Those require a temporary test identity and a
-separate qualification run. The later
-[Layers 1-3 minimum-V1 qualification](QUAL-20260814-194049-001-readable-search-minimum-v1.md)
-records that broader exact-artifact evidence without changing the immutable
-active-member report.
+separate qualification run; this matrix and its immutable report do not inherit
+that broader scope.

@@ -55,24 +55,25 @@ The authority container owns four private SQLite files in the same durable
 state directory: `authority.sqlite` for membership and installation truth,
 `integrations.sqlite` for provider connections and grants, `record-log.sqlite`
 for append-only organization record truth, and `record-derived.sqlite` for its
-rebuildable projection. The source-implemented Job B baseline also publishes immutable
-retrieval generations below `data/state/record-retrieval/generations/`; they
-are not a fifth mutable source of truth. All run in one process under one
-authenticated singleton guard.
+rebuildable projection. A readable-search-capable Authority also publishes
+immutable retrieval generations below
+`data/state/record-retrieval/generations/`; they are not a fifth mutable source
+of truth. All run in one process under one authenticated singleton guard.
 
 ## Release boundary
 
-The historical EC2 bootstrap example pins `access-recovery-504ec74`; do not
-interpret that example as the mutable identity of the running service. It
-predates readable-search generation and `verify-readable-search-backup`.
+[`QUAL-20260814-194049-001`](../../docs/qualification/QUAL-20260814-194049-001-readable-search-minimum-v1.md)
+immutably records one exact deployed, founder-live-qualified readable-search
+run, including its source, image, state identities, and non-claims. It is
+historical evidence, not a mutable pointer to the running deployment, and it
+does not claim client-live qualification or release. Resolve the selected
+deployment identity from protected release evidence and create new exact
+evidence for any later promotion rather than editing that report.
 
-The bounded two-policy readable-search path is deployed and founder-live
-qualified at exact source
-`83819a57fd8635384d14d3cc8d591e8f76ad1260` by
-[`QUAL-20260814-194049-001`](../../docs/qualification/QUAL-20260814-194049-001-readable-search-minimum-v1.md).
-The immutable report owns the exact image and state identities. This is not a
-client-live or released claim, and later deployments require new exact
-evidence rather than editing that report.
+In this document, a **readable-search-capable image** is a selected exact image
+whose reviewed release evidence names compatible readable-search commands and
+state. Capability comes from that selected artifact, not from an old image tag
+or a status sentence in this runbook.
 
 For a state initialized by an older build, build the exact target image first,
 then stop and back up the complete state before running the one-time upgrade.
@@ -298,12 +299,12 @@ reconfigure refuses the new mode until every frozen card on that installation
 has resolved under its original mode, so central activation does not silently
 reinterpret an existing Slack card.
 
-For a separately promoted B-capable image, use the same stopped snapshot boundary
-before activation, a generation rebuild, or query-audit maintenance. The route is unavailable
-until an exact-record-head generation is published; any later append makes it
-return fixed `503` until the next stopped rebuild. The verifier deliberately
-rejects that stale pointer/head; rebuilding, not verification, repairs the
-staleness.
+For a readable-search-capable image, use the same stopped snapshot boundary
+before activation, a generation rebuild, or query-audit maintenance. The route
+is unavailable until an exact-record-head generation is published; any later
+append makes it return fixed `503` until the next stopped rebuild. The verifier
+deliberately rejects that stale pointer/head; rebuilding, not verification,
+repairs the staleness.
 
 ```sh
 (
@@ -336,14 +337,14 @@ known-good backup. The second archive follows a successful verifier receipt and
 is the recovery-grade backup. For routine stopped backups with an already
 exact-head generation, run the verifier before creating the only archive.
 
-For a separately promoted B-capable image, `verify-readable-search-backup` must run while stopped before a recovery-grade
-archive and again after a restore, before any external reconciliation. It
-returns `verified` for an admitted active generation or `not_built` when no
-active pointer exists; it otherwise rejects the pointer/head mismatch, bad
-contract or generation, staging directories, or SQLite sidecars. The archive
-must retain the complete `data` directory, including `record-retrieval/`; never
-copy, repair, or restore a generation directory independently of
-`authority.sqlite` and the record databases.
+For a readable-search-capable image, `verify-readable-search-backup` must run
+while stopped before a recovery-grade archive and again after a restore, before
+any external reconciliation. It returns `verified` for an admitted active
+generation or `not_built` when no active pointer exists; it otherwise rejects
+the pointer/head mismatch, bad contract or generation, staging directories, or
+SQLite sidecars. The archive must retain the complete `data` directory,
+including `record-retrieval/`; never copy, repair, or restore a generation
+directory independently of `authority.sqlite` and the record databases.
 
 Stopped readable-search query-audit maintenance uses the same boundary:
 
@@ -382,26 +383,29 @@ To restart every service intentionally, use `docker compose restart`.
 
 Treat the complete `data` directory as one recovery unit. Stop the stack before
 a file-level backup and archive all four SQLite databases, signing key,
-credentials, identity, and installation manifests together. For a separately
-promoted B-capable image, also run `verify-readable-search-backup` first and
-capture its active pointer and immutable retrieval generation only after a
+credentials, identity, and installation manifests together. For a
+readable-search-capable image, also run `verify-readable-search-backup` first
+and capture its active pointer and immutable retrieval generation only after a
 `verified` or `not_built` result. The derived database is the only SQLite file
-that may be absent and rebuilt from a verified log before restart; on a
-B-capable image, a missing retrieval generation may be rebuilt only from
-verified current Layer 1 while stopped. Every protected file must otherwise be
-restored together. A B stale-generation copy is an unverified incident snapshot
-until a stopped rebuild and fresh verification produce a separate recovery-grade
-archive.
+that may be absent and rebuilt from a verified log before restart; for a
+readable-search-capable image, a missing retrieval generation may be rebuilt
+only from verified current Layer 1 while stopped. Every protected file must
+otherwise be restored together. A stale readable-search generation copy is an
+unverified incident snapshot until a stopped rebuild and fresh verification
+produce a separate recovery-grade archive.
 
 Before making any restored Authority available, complete the external operator
 evidence checklist in
 [`AWS-EC2.md`](./AWS-EC2.md#restore-boundary). Keep the Tunnel and reviewer
 route offline until current Person roots, the integration audit chain, complete
 record log, and applicable client-held receipts have been reconciled against
-independently retained evidence. For a separately promoted B-capable image,
-keep readable search offline as well until its policy-fact, active-pointer, and
+independently retained evidence. For a readable-search-capable image, keep
+readable search offline as well until its policy-fact, active-pointer, and
 generation evidence has been reconciled. A restored database cannot serve as
-evidence that its own historical state is current.
+evidence that its own historical state is current. A successful restore and
+verifier result establish only structural recovery admissibility; by
+themselves they add, renew, or inherit no source, deployment, founder-live,
+client-live, or release qualification.
 
 That `data` archive is sufficient for this in-place upgrade rollback because
 `docker compose down` leaves the named Caddy volumes intact. It is not by

@@ -11,7 +11,7 @@ reviewed_at: 2026-08-13
 reviewed_ref: 5aa7a37de94b8431c8fcb40cdee15ed34c4ba69a
 normative: MUST
 enforcement_status: partial
-enforcement_scope: Explicit Authority Compose restart on the founder-live hardening branch
+enforcement_scope: Explicit Authority Compose restart
 failure_pattern_ids:
   - FP-OPERATIONS-001
 ---
@@ -34,5 +34,5 @@ stated residual until the topology or supervisor closes it.
 ## Enforcement and verification
 
 The reviewed Compose change and CI smoke cover explicit Authority restart and
-proxy replacement. The exact founder-live stopped proof separately confirms
-the proxy targeted the current namespace after recovery.
+proxy replacement. Externally served reachability remains a separate exact-run
+qualification assertion.
