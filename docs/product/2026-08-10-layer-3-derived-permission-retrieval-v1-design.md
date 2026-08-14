@@ -73,15 +73,17 @@ and build sequence. Consequently, neither new document inherited the old
 CLEAN verdict. A subsequently completed fresh code-grounding, storage/port,
 wire-contract, scope, and invariant reviews and is now an
 [approved implementation contract](2026-08-11-reviewer-permission-v1-log-facts-design.md).
-B is implemented at source baseline
+B was first implemented at source baseline
 `588b42828d5c811a4ae51b21e881139109e7e46d`, with final local gates and
 independent acceptance/security review recorded in its approved implementation
-contract. It is not deployed, founder-live qualified, client-live qualified,
-or released.
+contract. The exact successor `83819a5` is now deployed and founder-live
+qualified for the bounded two-policy lexical path by
+[`QUAL-20260814-194049-001`](../qualification/QUAL-20260814-194049-001-readable-search-minimum-v1.md).
+It is not client-live qualified or released.
 
 ## Authorization boundary
 
 This non-normative split index authorizes no action by itself. A independently
-authorizes only its specified implementation. Neither this index nor A
-authorizes merge, deployment, migration, cutover, founder-live testing, or
-release. B's local implementation does not authorize any of those actions.
+authorizes only its specified implementation. The completed qualification
+above records one exact deployment and founder-live run; it does not authorize
+a future merge, deployment, migration, cutover, client-live run, or release.

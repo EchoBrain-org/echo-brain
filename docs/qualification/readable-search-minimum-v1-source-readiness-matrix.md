@@ -10,7 +10,7 @@ component_ids:
   - CMP-OPERATIONS-RELEASE
 created_at: 2026-08-14
 reviewed_at: 2026-08-14
-reviewed_ref: 6b9f925908b7790c008f81147c3a6837cc63083a
+reviewed_ref: 83819a57fd8635384d14d3cc8d591e8f76ad1260
 matrix_version: 1
 assertion_ids:
   - RSMV1-001
@@ -31,6 +31,8 @@ assertion_ids:
   - RSMV1-016
   - RSMV1-017
   - RSMV1-018
+qualification_ids:
+  - QUAL-20260814-194049-001
 ---
 
 # Readable-search minimum-V1 Layers 1-3 source-readiness matrix
@@ -39,21 +41,20 @@ assertion_ids:
 
 This is the reusable minimum-V1 qualification matrix for the readable-search
 path across immutable Layer 1 input, rebuildable Layer 2 generation, and
-serving Layer 3 authorization/audit. It records the source and focused-test
-surfaces that must be evidenced by a future exact run.
+serving Layer 3 authorization/audit. It records the source, focused-test, and
+operational surfaces that each exact run must evidence.
 
-It is not a qualification report. The referenced implementation and focused
-tests are presently uncommitted working-tree material, so this matrix makes no
-`source-tested`, artifact-tested, deployed, founder-live-qualified,
-client-live-qualified, restore-qualified, or released claim. In particular,
-the existing Job A stopped-state and Job B active-member reports remain their
-own immutable evidence and do not satisfy every assertion below.
+The implementation and focused tests are committed at the `reviewed_ref`.
+[QUAL-20260814-194049-001](QUAL-20260814-194049-001-readable-search-minimum-v1.md)
+records one passed exact-source, restore, and founder-live run against this
+matrix. The earlier Job A stopped-state and Job B active-member reports remain
+their own immutable evidence and do not inherit this broader scope.
 
-The `reviewed_ref` identifies the committed documentation baseline only. A
-future report must name the exact source commit, artifact, configuration,
-state generation, per-assertion outcome, and evidence IDs. Restore and
-founder-live assertions require separate exact-run evidence; neither may be
-recorded as passed from local source inspection or focused tests.
+Each future report must still name its exact source commit, artifact,
+configuration, state generation, per-assertion outcome, and evidence IDs.
+Restore and founder-live assertions require their own exact-run evidence;
+neither may be inherited from local source inspection, focused tests, or the
+completed report above.
 
 ## Matrix
 
@@ -73,10 +74,10 @@ recorded as passed from local source inspection or focused tests.
 | `RSMV1-012` | Crashes throughout staging, rename, and pointer commit leave either the prior pointer or one complete new pointer; stopped rebuild reproduces logical roots/generation ID and never mutates active files. | Layer 2 operations | `services/organization-authority/src/composition/operator-state.ts`; `services/organization-authority/test/organization-record-rebuild-derived.test.ts`. |
 | `RSMV1-013` | Membership, lease, installation, record-head, policy, and generation changes before final commit deny or return unavailable; changes after commit affect only the next request; audit failure sends no bytes. | Layer 3 final fence | `services/organization-authority/src/application/readable-search.ts`; `services/organization-authority/test/readable-search.test.ts`. |
 | `RSMV1-014` | The exact response digest and opaque returned bindings are audited for 180 days; raw query, text, terms, scores, segments, and counts never enter audit, logs, traces, metrics, cache, or an external provider. | Layer 3 audit | `services/organization-authority/src/application/readable-search.ts`; `services/organization-authority/test/readable-search.test.ts`; `services/organization-authority/test/readable-search-http.test.ts`. |
-| `RSMV1-015` | Internally consistent stale state remains offline until independently retained heads/receipts, Person state, policy facts, record head, active pointer, manifests, roots, and audit storage reconcile. | Restore operational gate | Required separate restore-reconciliation exact run. The local operator-state and stopped-build source/test surfaces do not qualify this row; no restore qualification report is linked here. |
+| `RSMV1-015` | Internally consistent stale state remains offline until independently retained heads/receipts, Person state, policy facts, record head, active pointer, manifests, roots, and audit storage reconcile. | Restore operational gate | Required separate restore-reconciliation exact run. `QUAL-20260814-194049-001` satisfies this row for its exact artifact through the ordered checkpoint, exact-version verification, no-network restore, and cutover-reconciliation chain. |
 | `RSMV1-016` | Serving code cannot import raw databases, broad derived accessors, builders, migrations, filesystem paths, or maintenance commands; builders cannot import current Person state; fact code cannot import content/index readers. | Cross-layer source boundary | `tests/architecture/source-independence.test.ts`; `tests/architecture/readable-search-binding-conformance.test.ts`; exact boundary-suite evidence must be attached to a committed source identity. |
 | `RSMV1-017` | Shadow generations cannot alter Job A behavior. The search route has one serving substrate and never unions or falls back across A/B; Job A's reviewer-recent route stays log-backed unless separately reviewed. | Layer 2/3 cutover | `services/organization-authority/src/composition/readable-search.ts`; `services/organization-authority/test/readable-search-full-lifecycle.test.ts`; source-test evidence does not authorize cutover. |
-| `RSMV1-018` | A real reviewer-v2 record and a real organization-v3 record survive Authority restart and stopped generation rebuild; the exact reviewer sees both, a separately enrolled later member sees only the organization item, and no hidden segment/content access occurs. | Founder-live operational gate | Required separate founder-live exact run. No founder-live qualification report is linked to this matrix; existing Job A and Job B reports retain only their declared scopes. |
+| `RSMV1-018` | A real reviewer-v2 record and a real organization-v3 record survive Authority restart and stopped generation rebuild; the exact reviewer sees both, a separately enrolled later member sees only the organization item, and no hidden segment/content access occurs. | Founder-live operational gate | Required separate founder-live exact run. `QUAL-20260814-194049-001` satisfies this row for its exact artifact; its report preserves the same-human/provider and live-probe non-claims. |
 
 ## Required qualification sequence
 
@@ -91,4 +92,6 @@ recorded as passed from local source inspection or focused tests.
 
 Passing a local focused suite is evidence for a named source assertion only.
 It does not convert the matrix into a qualification report or promote any
-readiness status.
+readiness status. The linked report combines exact-source CI with separately
+recorded restore and founder-live evidence; it does not imply every row was
+live-tested.

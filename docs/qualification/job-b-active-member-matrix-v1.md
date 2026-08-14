@@ -10,7 +10,7 @@ component_ids:
   - CMP-OPERATIONS-RELEASE
 created_at: 2026-08-14
 reviewed_at: 2026-08-14
-reviewed_ref: add08da02e98c6f3c6aaad71a07141c95887c93d
+reviewed_ref: 83819a57fd8635384d14d3cc8d591e8f76ad1260
 matrix_version: 1
 assertion_ids:
   - JOB-B-ACTIVE-001
@@ -42,4 +42,7 @@ membership is currently active.
 
 This V1 matrix does not cover a membership created after approval or denial
 after membership revocation. Those require a temporary test identity and a
-separate matrix revision or qualification run.
+separate qualification run. The later
+[Layers 1-3 minimum-V1 qualification](QUAL-20260814-194049-001-readable-search-minimum-v1.md)
+records that broader exact-artifact evidence without changing the immutable
+active-member report.

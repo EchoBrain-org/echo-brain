@@ -11,10 +11,16 @@ not HA. Keep the Mac data only as a cold rollback copy. Its Compose stack and
 Tunnel connector must remain stopped; after EC2 accepts traffic, refresh the
 entire data generation before any Mac rollback.
 
-## 1. Publish the exact image
+## 1. Historical bootstrap image publication
 
-Run on the Mac before the downtime window. Do not rebuild the release during
-the migration.
+The command block in this section records the original
+`access-recovery-504ec74` migration. It is historical evidence, not the
+mutable identity of the running service, and must not be rerun as a current
+upgrade. The deployed readable-search identity is recorded immutably in
+[`QUAL-20260814-194049-001`](../../docs/qualification/QUAL-20260814-194049-001-readable-search-minimum-v1.md).
+Any later promotion must substitute a newly reviewed exact image and produce
+new qualification evidence. Do not rebuild a selected artifact during its
+downtime window.
 
 ```bash
 set -euo pipefail
@@ -53,14 +59,13 @@ printf 'ECHO_AUTHORITY_IMAGE=%s\n' "$PINNED_IMAGE"
 docker logout "$REGISTRY"
 ```
 
-`access-recovery-504ec74` is the current pinned production image. It predates
-the locally implemented Job B readable-search capability and does **not**
-contain `verify-readable-search-backup`. Do not add that command to this
-image's cutover, backup, or restore requirements. The Job B-only procedure in
-the restore boundary below applies only after a separately promoted
-B-capable image has been deliberately selected; local baseline
-`588b42828d5c811a4ae51b21e881139109e7e46d` is not that promotion and is not
-deployed or released.
+`access-recovery-504ec74` was the historical bootstrap image. It predates the
+readable-search capability and does **not** contain
+`verify-readable-search-backup`; do not add that command to this historical
+image's cutover, backup, or restore requirements. The readable-search
+procedure below applies only to an exact B-capable image whose immutable
+qualification report names its source, digest, compatible state, and recovery
+evidence.
 
 Record the ECR digest and Docker image ID separately. The EC2 `.env` must use
 the digest-pinned ECR reference, never just a tag. The ECR repository is

@@ -142,12 +142,12 @@ Two constitutional invariants are not classified as pilot-enforced controls:
 
 No canonical permission invariant is globally implemented across a general
 retrieval/search/model surface. The bounded pilot evidence above must not be
-generalized. Job B is implemented at source baseline
-`588b42828d5c811a4ae51b21e881139109e7e46d` for the bounded lexical-search
-contract over two explicit policies, and final local gates passed. It remains
-neither deployed, founder-live qualified, client-live, nor released, and its
-controls must not be claimed for any other operation. In
-particular:
+generalized. The two-policy lexical readable-search path is source-tested,
+deployed, and founder-live-qualified at exact source
+`83819a57fd8635384d14d3cc8d591e8f76ad1260` under
+[`QUAL-20260814-194049-001`](../qualification/QUAL-20260814-194049-001-readable-search-minimum-v1.md).
+It remains neither client-live nor released, and its controls must not be
+claimed for any other operation. In particular:
 
 | ID | Missing general implementation |
 | --- | --- |
@@ -166,17 +166,17 @@ particular:
 
 | ID | Invariant | Normative status | Current implementation |
 | --- | --- | --- | --- |
-| `INV-11A` | **Reviewer reads start from append-atomic, text-free facts.** Select only immutable facts co-committed with the verified Layer 1 record; release content only through a request-local binding after current-Person resolution; missing fact/reprojection/binding or broad-store bypass denies. | Approved implementation contract in A; founder-confirmed 2026-08-11 | Implemented at Job A baseline `03167cfd`: closed reviewer-v2 append, co-committed immutable facts, startup admission, exact indexed selection, request-local binding, canonical reprojection, final current-Person recheck, separate query audit, signed route/client/CLI, and restart lifecycle tests. Not founder-live qualified, client-live, or released. |
-| `INV-12` | **Content-visibility approval binds consequence.** Human-visible consequence, exact actor principal/membership, complete presented release draft, and provider evidence are cryptographically bound over Authority semantic bytes and verified before append. | Approved implementation contract for `restricted-reviewer-v1` in A and the separate `organization-member-readable-v1` extension in B | Implemented for the reviewer policy at Job A baseline `03167cfd`: deterministic release draft and presentation, frozen Slack contract, credential/card verification, signed schema-v2 permission request, Authority semantic/message proof, immutable integration audit, append capability, and cross-layer agreement tests. The organization-member-readable consequence/schema-v3 extension is implemented at Job B baseline `588b428`, with shared pre-push hardening at `c0a498f`; final local gates passed. It is not deployed, founder-live qualified, client-live, or released. |
-| `INV-11B` | **Permission-aware derived retrieval begins with text-free, rebuildable facts.** Layer 2 creates a request-local scope over provenance-bound facts; protected content/search/embeddings/statistics/cross-record projections require that scope and one versioned generation contract. | Approved implementation contract in Job B; founder-directed 2026-08-12 | Implemented at Job B local baseline `588b428`: one local lexical operation over only `restricted-reviewer-v1` and `organization-member-readable-v1`, with append-atomic admission facts, physically isolated fact/content/lexical segment planes, an immutable exact-head generation, request-local scope, per-item term-frequency scoring, final Authority fence, and isolated audit. Final local gates and independent acceptance/security review passed. No vector, graph, discovery, cache, model, external provider, or general policy engine is included; operational restore reconciliation and founder-live gates remain outstanding. |
+| `INV-11A` | **Reviewer reads start from append-atomic, text-free facts.** Select only immutable facts co-committed with the verified Layer 1 record; release content only through a request-local binding after current-Person resolution; missing fact/reprojection/binding or broad-store bypass denies. | Approved implementation contract in A; founder-confirmed 2026-08-11 | Implemented and exact-source tested at `83819a5`: closed reviewer-v2 append, co-committed immutable facts, startup admission, exact indexed selection, request-local binding, canonical reprojection, final current-Person recheck, separate query audit, signed route/client/CLI, and restart lifecycle tests. The bounded readable-search path is founder-live-qualified by `QUAL-20260814-194049-001`; it is not client-live or released. |
+| `INV-12` | **Content-visibility approval binds consequence.** Human-visible consequence, exact actor principal/membership, complete presented release draft, and provider evidence are cryptographically bound over Authority semantic bytes and verified before append. | Approved implementation contract for `restricted-reviewer-v1` in A and the separate `organization-member-readable-v1` extension in B | Implemented and exact-source tested at `83819a5` for both the reviewer schema-v2 and organization-member-readable schema-v3 families. The bounded two-policy readable-search path is deployed and founder-live-qualified by `QUAL-20260814-194049-001`; it is not a global permission implementation, client-live, or released. |
+| `INV-11B` | **Permission-aware derived retrieval begins with text-free, rebuildable facts.** Layer 2 creates a request-local scope over provenance-bound facts; protected content/search/embeddings/statistics/cross-record projections require that scope and one versioned generation contract. | Approved implementation contract in Job B; founder-directed 2026-08-12 | Implemented, exact-source tested, restore-checked, and founder-live-qualified at `83819a5` for one lexical operation over only `restricted-reviewer-v1` and `organization-member-readable-v1`. It uses append-atomic admission facts, physically isolated fact/content/lexical segments, an immutable exact-head generation, request-local scope, deterministic scoring, final Authority fencing, and minimized audit. No vector, graph, discovery, cache, model, external provider, general policy engine, client-live, or release claim is included. |
 
 `INV-11A` and `INV-11B` are distinct, complementary invariants for sequenced
 serving stages, not a fork or two numbers for the same implementation. A uses
 a Layer 1 append-side physical index for one per-record reviewer operation. B
 governs a later mutable, searchable, cross-record Layer 2 corpus and does not
 supersede A. `INV-12` is the upstream admission rule either can consume, but
-its current implementation claim remains reviewer-only until Job B's distinct
-organization-member-readable admission family lands and passes review.
+its bounded reviewer and organization-member-readable implementation claims
+are limited to the exact two-policy path qualified above.
 
 ### Approval-surface v2 rules not yet implemented
 

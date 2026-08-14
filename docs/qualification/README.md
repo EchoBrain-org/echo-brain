@@ -27,6 +27,7 @@ Current indexes and matrices:
 - [Job B active-member readable-search matrix V1](job-b-active-member-matrix-v1.md)
 - [Job B active-member readable-search proof](QUAL-20260814-050326-001-job-b-active-member.md)
 - [Readable-search minimum-V1 Layers 1-3 source-readiness matrix](readable-search-minimum-v1-source-readiness-matrix.md)
+- [Readable-search Layers 1-3 minimum-V1 founder-live qualification](QUAL-20260814-194049-001-readable-search-minimum-v1.md)
 
 ## Evidence index rules
 

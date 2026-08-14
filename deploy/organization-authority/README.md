@@ -62,14 +62,17 @@ authenticated singleton guard.
 
 ## Release boundary
 
-The current EC2 runbook pins `access-recovery-504ec74`. That image predates
-Job B and does not include readable-search generation or
-`verify-readable-search-backup`; it must not be treated as requiring either.
-The readable-search sections below document the locally implemented Job B
-baseline and apply operationally only after a separately promoted B-capable
-image has been selected. Local baseline
-`588b42828d5c811a4ae51b21e881139109e7e46d` is not deployed, founder-live
-qualified, client-live qualified, or released.
+The historical EC2 bootstrap example pins `access-recovery-504ec74`; do not
+interpret that example as the mutable identity of the running service. It
+predates readable-search generation and `verify-readable-search-backup`.
+
+The bounded two-policy readable-search path is deployed and founder-live
+qualified at exact source
+`83819a57fd8635384d14d3cc8d591e8f76ad1260` by
+[`QUAL-20260814-194049-001`](../../docs/qualification/QUAL-20260814-194049-001-readable-search-minimum-v1.md).
+The immutable report owns the exact image and state identities. This is not a
+client-live or released claim, and later deployments require new exact
+evidence rather than editing that report.
 
 For a state initialized by an older build, build the exact target image first,
 then stop and back up the complete state before running the one-time upgrade.
