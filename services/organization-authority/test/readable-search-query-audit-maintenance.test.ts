@@ -33,10 +33,10 @@ function descriptor(): OrganizationAuthorityDescriptorV1 {
 function fixture() {
   const directory = mkdtempSync(join(tmpdir(), 'echo-readable-maintenance-')); directories.push(directory);
   const authority = descriptor(); const path = join(directory, 'authority.sqlite'); const repository = new SqliteOrganizationAuthorityRepository(path);
-  repository.initialize({ descriptor: authority, authority_pin_sha256: organizationAuthorityPinSha256(authority), organization_display_name: 'Example', maximum_active_lease_ttl_ms: 300_000, initialized_at: '2026-01-01T00:00:00.000Z' });
+  repository.initialize({ descriptor: authority, authority_pin_sha256: organizationAuthorityPinSha256(authority), organization_display_name: 'Example', initialized_at: '2026-01-01T00:00:00.000Z' });
   const owner = { organization_id: authority.organization_id, principal_id: federationId('prn'), membership_id: federationId('mem'), display_name: 'Owner', membership_type: 'owner' as const, status: 'active' as const, provisioned_at: '2026-01-01T00:00:00.000Z', revoked_at: null, revocation_reason: null, admin_command_id: id('adm'), admin_command_sha256: digest('1') };
   repository.write('2026-01-01T00:00:00.000Z', (transaction) => transaction.insertMembership(owner));
-  const open = () => { const item = SqliteReadableSearchQueryAuditMaintenanceRepository.open({ database_path: path, trust: { descriptor: authority, authority_pin_sha256: organizationAuthorityPinSha256(authority), organization_display_name: 'Example', maximum_active_lease_ttl_ms: 300_000 } }); maintenance.push(item); return item; };
+  const open = () => { const item = SqliteReadableSearchQueryAuditMaintenanceRepository.open({ database_path: path, trust: { descriptor: authority, authority_pin_sha256: organizationAuthorityPinSha256(authority), organization_display_name: 'Example' } }); maintenance.push(item); return item; };
   return { authority, owner, path, repository, open };
 }
 

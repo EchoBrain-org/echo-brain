@@ -5,7 +5,7 @@ import type {
 } from '@echo-brain/federation-protocol';
 import type {
   ApproveOrganizationInternalLiveReleaseRequestV1,
-  OrganizationAccessLeaseRequestV1,
+  OrganizationAccessLeaseRequestAnyVersion,
   OrganizationInternalLiveReleaseManifestV1,
   OrganizationInternalLiveUpdateReceiptV1,
 } from '@echo-brain/organization-api';
@@ -89,7 +89,7 @@ export interface StoredAuthorityAccessState {
 export interface StoredAccessLeaseRequest {
   request_id: string;
   request_sha256: Sha256Digest;
-  request: OrganizationAccessLeaseRequestV1;
+  request: OrganizationAccessLeaseRequestAnyVersion;
   enrollment_id: string;
   previous_access_state_sha256: Sha256Digest;
   resulting_state_sha256: Sha256Digest;
@@ -459,7 +459,6 @@ export interface InitializeAuthorityRepositoryInput {
   descriptor: OrganizationAuthorityDescriptorV1;
   authority_pin_sha256: Sha256Digest;
   organization_display_name: string;
-  maximum_active_lease_ttl_ms: number;
   initialized_at: string;
 }
 

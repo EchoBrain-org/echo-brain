@@ -41,6 +41,7 @@ import {
   DEFAULT_APPROVE_REACTION,
   DEFAULT_REJECT_REACTION,
 } from '../adapters/approval-surfaces/slack-reactions/slack-reactions-approval-surface.js';
+import { assertConfiguredApprovalPublicationPreflight } from './default-adapters.js';
 
 export type ProductServiceAction =
   | 'install'
@@ -152,6 +153,7 @@ export interface ProductDoctorCheck {
     | 'service-plist'
     | 'service-running'
     | 'service-credentials'
+    | 'organization-state'
     | 'adapters';
   ok: boolean;
   detail: string;
@@ -1196,6 +1198,21 @@ export class ProductOperator {
           `reconfigure was refused before the installation manifest was updated: ${(error as Error).message}`,
         );
       }
+      // Every manifest rewrite, including a package-only re-pin, must prove the
+      // package can still resume each unresolved frozen publication. Adapter
+      // version is part of that contract, so a config-equal package replacement
+      // is not exempt from this stateful, provider-free compatibility check.
+      try {
+        assertConfiguredApprovalPublicationPreflight(
+          this.config,
+          this.resolveCredential,
+        );
+      } catch (error) {
+        throw new ProductOperatorError(
+          'installation_conflict',
+          `reconfigure was refused before the installation manifest was updated: ${(error as Error).message}`,
+        );
+      }
       this.fileSystem.writePrivate(
         this.context.installationPath,
         `${JSON.stringify(expected, null, 2)}\n`,
@@ -1277,6 +1294,7 @@ export class ProductOperator {
     adapters: readonly AdapterDiagnostic[];
     adapterError?: string;
     includeAdapters?: boolean;
+    organizationDiagnostic?: { ok: boolean; detail: string };
   }): Promise<ProductDoctorReport> {
     const checks: ProductDoctorCheck[] = [];
     const platformOk =
@@ -1422,6 +1440,15 @@ export class ProductOperator {
             : credentialsError,
       ),
     );
+    if (input.organizationDiagnostic !== undefined) {
+      checks.push(
+        check(
+          'organization-state',
+          input.organizationDiagnostic.ok,
+          input.organizationDiagnostic.detail,
+        ),
+      );
+    }
     if (input.includeAdapters !== false) {
       const adaptersOk =
         input.adapterError === undefined &&

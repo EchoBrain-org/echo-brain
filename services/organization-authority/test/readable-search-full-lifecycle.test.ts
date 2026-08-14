@@ -246,6 +246,7 @@ describe('Layer 2 local readable-search lifecycle', () => {
       authority_id: fixture.authorityId,
       record_log_database_path: fixture.recordLogDatabasePath,
       record_derived_database_path: fixture.recordDerivedDatabasePath,
+      organization_recording_policy_v1: fixture.organizationRecordingPolicy,
       alert: () => undefined,
     });
     expect(restarted.reviewerRestrictedHealth.kind).toBe('ready');

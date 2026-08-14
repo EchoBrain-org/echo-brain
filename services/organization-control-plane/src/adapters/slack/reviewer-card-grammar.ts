@@ -218,7 +218,16 @@ export function reconstructReviewerCard(input: {
     RESTRICTED_REVIEWER_CONSEQUENCE_TEXT,
     `React :${reactions.approve_reaction}: to approve or :${reactions.reject_reaction}: to reject. To record a reason, reply in this thread before reacting.`,
   ].join("\n");
-  if (input.fallback_text !== expectedFallback) return null;
+  // Slack may persist the message fallback with each logical line break
+  // flattened to one ASCII space. This is the sole stored-form variance we
+  // accept; the presentation remains bound to the original logical text.
+  const storedFallback = expectedFallback.replace(/\n/g, " ");
+  if (
+    input.fallback_text !== expectedFallback &&
+    input.fallback_text !== storedFallback
+  ) {
+    return null;
+  }
 
   const draft = {
     schema_version: 1,

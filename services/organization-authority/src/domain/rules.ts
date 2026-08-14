@@ -3,6 +3,10 @@ import type { OrganizationMembershipTypeV1 } from '@echo-brain/organization-prot
 import { AuthorityOperationError } from './errors.js';
 
 export const MAX_AUTHORITY_ENROLLMENT_GRANT_LIFETIME_SECONDS = 7 * 24 * 60 * 60;
+/**
+ * The operator-configured lifetime used by V1 renewal, enrollment, and
+ * recovery. Keep this independent from the longer opt-in V2 lifetime.
+ */
 export const MAX_AUTHORITY_ACTIVE_LEASE_TTL_MS = 5 * 60 * 1000;
 export const MAX_AUTHORITY_ACCESS_REQUEST_AGE_MS = 5 * 60 * 1000;
 

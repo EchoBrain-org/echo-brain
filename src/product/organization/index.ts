@@ -61,7 +61,10 @@ export type {
 export { SqliteOrganizationStateStore } from './state/sqlite-organization-state-store.js';
 export {
   createLocalOrganizationRuntime,
+  DEFAULT_LOCAL_ORGANIZATION_ACCESS_CLOCK_SKEW_MS,
+  DEFAULT_LOCAL_ORGANIZATION_REQUESTED_LEASE_TTL_MS,
   DEFAULT_LOCAL_ORGANIZATION_LEASE_TTL_MS,
+  MAX_LOCAL_ORGANIZATION_ACTIVE_LEASE_TTL_MS,
 } from './composition.js';
 export type {
   CreateLocalOrganizationRuntimeOptions,

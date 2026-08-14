@@ -17,7 +17,7 @@ export interface VerifiedSlackConnection {
   enterprise_id: string | null;
   bot_user_id: string;
   bot_id: string;
-  app_id: string | null;
+  app_id: string;
   granted_scopes: readonly string[];
   verification_evidence_sha256: `sha256:${string}`;
 }
@@ -73,6 +73,12 @@ export interface VerifySlackReactionInput {
    * proof is produced.
    */
   parse_reviewer_card_reactions?: boolean;
+  /**
+   * True when the caller only needs the organization-member card's own frozen
+   * reaction pair parsed -- the schema-v1 rejection of an organization-member
+   * card. No organization-member approval proof is produced.
+   */
+  parse_organization_member_card_reactions?: boolean;
 }
 
 export interface SlackApprovalPresentationExpectation {
@@ -135,6 +141,15 @@ export interface VerifiedSlackReaction {
    * requires both to equal the current active binding pair.
    */
   reviewer_card_reactions?: {
+    approve_reaction: string;
+    reject_reaction: string;
+  };
+  /**
+   * The two frozen reaction names parsed from the live organization-member
+   * card. This is rejection-only schema-v1 evidence, not schema-v3 approval
+   * presentation evidence.
+   */
+  organization_member_card_reactions?: {
     approve_reaction: string;
     reject_reaction: string;
   };
@@ -236,6 +251,17 @@ export interface ActiveSlackOrganizationTool {
 export interface LegacySlackOrganizationTool
   extends ActiveSlackOrganizationTool {
   activated_at: string;
+}
+
+/**
+ * A ready v1 Slack organization tool created before Slack app identity was
+ * mandatory. It may only be upgraded by re-running the explicit onboarding
+ * operation with a freshly verified, canonical app ID.
+ */
+export interface UpgradeableSlackOrganizationTool
+  extends ActiveSlackOrganizationTool {
+  activated_at: string;
+  app_id: null;
 }
 
 export interface SlackIdentityLinkInstallation {
@@ -621,11 +647,16 @@ export interface RecordedOrganizationMemberReadablePermissionDecision {
 export interface OrganizationMemberAuthorizationEvidenceExpectation {
   organization_id: string; installation_id: string; approval_id: string; request_id: string;
   principal_id: string; membership_id: string; request_sha256: string;
-  provider_event_sha256: string; adapter_binding_id: string; permission_grant_id: string;
+  provider_event_sha256: string; adapter_binding_id: string; adapter_instance_id: string;
+  permission_grant_id: string;
   evaluated_at: string; policy_contract_sha256: string; release_draft_sha256: string;
   approval_presentation_sha256: string; semantic_intent_sha256: string;
   message_presentation_sha256: string; authorization_audit_entry_sha256: string;
 }
 export type OrganizationMemberAuthorizationEvidenceMatch =
-  | { readonly status: "matched"; readonly audit_entry_sha256: `sha256:${string}` }
+  | {
+      readonly status: "matched";
+      readonly audit_entry_sha256: `sha256:${string}`;
+      readonly adapter_instance_id: string;
+    }
   | { readonly status: "absent" | "mismatch" | "corrupt" | "unavailable" };

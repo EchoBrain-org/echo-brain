@@ -1,5 +1,8 @@
 import { describe, expect, it } from 'vitest';
-import type { OrganizationRecordOrganizationMemberApprovalEnvelopeV3 } from '@echo-brain/organization-protocol';
+import {
+  organizationMemberReadablePolicyContractSha256,
+  type OrganizationRecordOrganizationMemberApprovalEnvelopeV3,
+} from '@echo-brain/organization-protocol';
 import { AuthorityOperationError } from '../src/domain/errors.js';
 import {
   OrganizationRecordIngestAuthority,
@@ -13,14 +16,16 @@ function envelope(): OrganizationRecordOrganizationMemberApprovalEnvelopeV3 {
     schema_version: 3, kind: 'echo-organization-record-envelope', event_type: 'approval',
     envelope_id: 'rec_test', idempotency_key: 'a'.repeat(64),
     submitter: { installation_id: 'ins_test', submitted_at: '2026-08-12T00:00:00.000Z' },
-    payload: {} as never,
+    payload: {
+      brief: { provenance: { processor: { instance_id: 'default' } } },
+    } as never,
     intent: {} as never,
     integrity: {} as never,
     reviewer: {
       principal_id: 'prn_approver', membership_id: 'mem_approver', reviewed_by: 'Approver',
       authorization: {
         schema_version: 3, kind: 'echo-organization-authorization-evidence',
-        policy_id: 'organization-member-readable-v1', policy_contract_sha256: digest('1'),
+        policy_id: 'organization-member-readable-v1', policy_contract_sha256: organizationMemberReadablePolicyContractSha256(),
         authority_id: 'oau_test', organization_id: 'org_test', enrollment_id: 'enr_test',
         installation_id: 'ins_test', request_id: 'pcr_test', approval_id: 'a'.repeat(64),
         action: 'approve', request_sha256: digest('2'), provider_event_sha256: digest('3'),
@@ -34,6 +39,15 @@ function envelope(): OrganizationRecordOrganizationMemberApprovalEnvelopeV3 {
     },
   };
 }
+
+const ACTIVE_POLICY = Object.freeze({
+  schema_version: 1 as const,
+  kind: 'organization-recording-policy-v1' as const,
+  decision_processor_adapter_instance_id: 'default',
+  approval_surface_adapter_instance_id: 'primary',
+  presentation_mode: 'organization-member-readable-v1' as const,
+  policy_contract_sha256: organizationMemberReadablePolicyContractSha256(),
+});
 
 function authorityFor(document: OrganizationRecordOrganizationMemberApprovalEnvelopeV3) {
   return {
@@ -55,11 +69,13 @@ describe('schema-v3 organization-member record ingest', () => {
       permissionPilotHealth: { kind: 'absent' },
       reviewerRestrictedHealth: { kind: 'ready' },
       organizationMemberReadableHealth: { kind: 'ready' },
+      organizationRecordingPolicy: ACTIVE_POLICY,
       evidence: {
         findAllowedApprovalAuthorizationEvidence: () => ({ status: 'matched' }),
         findAllowedReviewerAuthorizationEvidenceById: () => ({ status: 'absent' }),
         findAllowedOrganizationMemberAuthorizationEvidenceById: () => ({
           status: 'matched', audit_entry_sha256: document.reviewer.authorization.authorization_audit_entry_sha256,
+          adapter_instance_id: 'primary',
         }),
       },
     });
@@ -78,6 +94,7 @@ describe('schema-v3 organization-member record ingest', () => {
       authority: authorityFor(document) as never,
       permissionPilotHealth: { kind: 'absent' }, reviewerRestrictedHealth: { kind: 'ready' },
       organizationMemberReadableHealth: { kind: 'ready' },
+      organizationRecordingPolicy: ACTIVE_POLICY,
       evidence: {
         findAllowedApprovalAuthorizationEvidence: () => ({ status: 'matched' }),
         findAllowedReviewerAuthorizationEvidenceById: () => ({ status: 'absent' }),
@@ -93,6 +110,7 @@ describe('schema-v3 organization-member record ingest', () => {
       authority: authorityFor(document) as never,
       permissionPilotHealth: { kind: 'absent' }, reviewerRestrictedHealth: { kind: 'ready' },
       organizationMemberReadableHealth: { kind: 'ready' },
+      organizationRecordingPolicy: ACTIVE_POLICY,
       evidence: {
         findAllowedApprovalAuthorizationEvidence: () => ({ status: 'matched' }),
         findAllowedReviewerAuthorizationEvidenceById: () => ({ status: 'absent' }),
@@ -101,5 +119,55 @@ describe('schema-v3 organization-member record ingest', () => {
     });
     await expect(authority.verifyEnvelope({ submitter: { installation_id: 'ins_test' } }))
       .rejects.toBeInstanceOf(OrganizationRecordIngestRejectionError);
+  });
+
+  it('does not mistake self-asserted processor provenance for central authorization', async () => {
+    const document = envelope();
+    (document.payload.brief.provenance.processor as { instance_id: string }).instance_id =
+      'unexpected-processor';
+    const authority = new OrganizationRecordIngestAuthority({
+      authority: authorityFor(document) as never,
+      permissionPilotHealth: { kind: 'absent' },
+      reviewerRestrictedHealth: { kind: 'ready' },
+      organizationMemberReadableHealth: { kind: 'ready' },
+      organizationRecordingPolicy: ACTIVE_POLICY,
+      evidence: {
+        findAllowedApprovalAuthorizationEvidence: () => ({ status: 'matched' }),
+        findAllowedReviewerAuthorizationEvidenceById: () => ({ status: 'absent' }),
+        findAllowedOrganizationMemberAuthorizationEvidenceById: () => ({
+          status: 'matched',
+          audit_entry_sha256:
+            document.reviewer.authorization.authorization_audit_entry_sha256,
+          adapter_instance_id: 'primary',
+        }),
+      },
+    });
+    await expect(
+      authority.verifyEnvelope({ submitter: { installation_id: 'ins_test' } }),
+    ).resolves.toMatchObject({ envelope_schema_version: 3 });
+  });
+
+  it('rejects v3 when the audited approval-surface instance differs from the policy head', async () => {
+    const document = envelope();
+    const authority = new OrganizationRecordIngestAuthority({
+      authority: authorityFor(document) as never,
+      permissionPilotHealth: { kind: 'absent' },
+      reviewerRestrictedHealth: { kind: 'ready' },
+      organizationMemberReadableHealth: { kind: 'ready' },
+      organizationRecordingPolicy: ACTIVE_POLICY,
+      evidence: {
+        findAllowedApprovalAuthorizationEvidence: () => ({ status: 'matched' }),
+        findAllowedReviewerAuthorizationEvidenceById: () => ({ status: 'absent' }),
+        findAllowedOrganizationMemberAuthorizationEvidenceById: () => ({
+          status: 'matched',
+          audit_entry_sha256:
+            document.reviewer.authorization.authorization_audit_entry_sha256,
+          adapter_instance_id: 'other-surface',
+        }),
+      },
+    });
+    await expect(
+      authority.verifyEnvelope({ submitter: { installation_id: 'ins_test' } }),
+    ).rejects.toBeInstanceOf(OrganizationRecordIngestRejectionError);
   });
 });

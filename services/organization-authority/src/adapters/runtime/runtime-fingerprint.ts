@@ -44,6 +44,16 @@ export interface AuthorityRuntimeFingerprintInput {
       | 'organization-member-readable-v1';
     policy_contract_sha256: `sha256:${string}`;
   };
+  organization_member_recording_activation_v1?: {
+    schema_version: 1;
+    kind: 'organization-member-recording-activation-binding-v1';
+    command_sha256: `sha256:${string}`;
+    activation_sha256: `sha256:${string}`;
+    initialized_runtime_config_sha256: `sha256:${string}`;
+    initialization_manifest_sha256: `sha256:${string}`;
+    activated_at: string;
+    audit_sequence: number;
+  };
 }
 
 function sha256(value: string | Buffer): `sha256:${string}` {
@@ -209,6 +219,12 @@ export function authorityRuntimeFingerprint(
             organization_recording_policy_v1:
               config.organization_recording_policy_v1,
           }),
+      ...(config.organization_member_recording_activation_v1 === undefined
+        ? {}
+        : {
+            organization_member_recording_activation_v1:
+              config.organization_member_recording_activation_v1,
+          }),
       credentials: {
         admin_token_sha256: sha256(config.admin_token),
         trusted_proxy_token_sha256: sha256(config.trusted_proxy_token),
@@ -225,6 +241,7 @@ export function authorityMaintenanceFingerprint(
     | 'rebuild-readable-search'
     | 'verify-readable-search-backup'
     | 'activate-permission-pilot'
+    | 'activate-organization-member-recording'
     | 'export-reviewer-query-audit'
     | 'expire-reviewer-query-audit'
     | 'export-readable-search-query-audit'

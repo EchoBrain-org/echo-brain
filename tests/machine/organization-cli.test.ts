@@ -11,8 +11,12 @@ import {
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
-import { canonicalJson } from '@echo-brain/federation-protocol';
 import {
+  canonicalJson,
+  canonicalSha256,
+} from '@echo-brain/federation-protocol';
+import {
+  ORGANIZATION_API_RECORD_ENVELOPES_PATH,
   organizationSlackLinkChallengeCodeSha256,
   ORGANIZATION_RECENT_DECISIONS_POLICY_ID,
   ORGANIZATION_RECENT_DECISIONS_WITNESS,
@@ -25,9 +29,17 @@ import {
 } from '@echo-brain/organization-api';
 import {
   organizationEnrollmentGrantSha256,
+  type OrganizationRecordEnvelopeAnyVersion,
   type OrganizationEnrollmentRequestV1,
   type OrganizationInstallationAccessStateV1,
 } from '@echo-brain/organization-protocol';
+import type {
+  ApprovalRequest,
+  MeetingSourceAdapter,
+} from '../../src/core/index.js';
+import { ProductAdapterFactoryRegistry } from '../../src/product/adapter-factories.js';
+import { decisionApprovalId } from '../../src/product/approval/decision-node.js';
+import { DecisionNodeStore } from '../../src/product/approval/decision-node-store.js';
 import {
   runProductCli,
   type ProductCliDependencies,
@@ -35,10 +47,17 @@ import {
 import type { InstallationSigner } from '../../src/product/machine/security/installation-signer.js';
 import { SqliteOrganizationStateStore } from '../../src/product/organization/index.js';
 import { readPrivateOrganizationEnrollmentInvitation } from '../../src/product/organization/enrollment/private-organization-invitation.js';
+import { resolveProductStatePaths } from '../../src/product/paths.js';
+import { SqliteCoreStateStore } from '../../src/product/storage/sqlite-core-state-store.js';
+import { acquireProductLifecycleLock } from '../../src/product/lifecycle-lock.js';
 import {
+  fixtureId,
   GRANT,
   ORGANIZATION_IDS,
+  protocolInstallationKey,
+  requestedAccessLeaseTtlMs,
   TestAuthority,
+  TestInstallationSigner,
 } from '../support/local-organization-fixtures.js';
 
 const roots: string[] = [];
@@ -136,6 +155,121 @@ function writeRuntimeConfig(
     { mode: 0o600 },
   );
   return { configPath, stateDirectory };
+}
+
+function recordApprovalRequest(suffix = 'yen-live-test'): ApprovalRequest {
+  const meetingId = `granola:${suffix}`;
+  const signal = {
+    id: 'decision-1',
+    kind: 'decision' as const,
+    text: 'Keep the organization record flush independent from meeting ingest.',
+    subject: null,
+    confidence: null,
+    evidence: [{ meeting_id: meetingId, block_id: 'notes-1' }],
+    status: 'decided' as const,
+  };
+  return {
+    processing_key:
+      `granola:primary:${suffix}:rev-1:structured-text:primary:1.0.0`,
+    requested_at: ENROLLMENT_TIME,
+    meeting: {
+      schema_version: 1,
+      id: meetingId,
+      title: 'Yen live test',
+      time: { actual_start_at: '2026-07-21T23:00:00.000Z' },
+      capture: {
+        state: 'complete',
+        components: [{ kind: 'notes', state: 'available' }],
+      },
+      participants: [],
+      content: [
+        {
+          id: 'notes-1',
+          kind: 'note',
+          text: signal.text,
+        },
+      ],
+      artifacts: [],
+      provenance: {
+        source: {
+          kind: 'meeting-source',
+          adapter_id: 'granola',
+          instance_id: 'primary',
+          version: '1.0.0',
+        },
+        external_id: suffix,
+        canonical_revision: 'rev-1',
+        observed_at: ENROLLMENT_TIME,
+        normalizer_version: '1.0.0',
+        source_updated_at: '2026-07-21T23:30:00.000Z',
+      },
+    },
+    decisions: {
+      schema_version: 1,
+      meeting_id: meetingId,
+      meeting_revision: 'rev-1',
+      processor: {
+        kind: 'decision-processor',
+        adapter_id: 'structured-text',
+        instance_id: 'primary',
+        version: '1.0.0',
+      },
+      generated_at: ENROLLMENT_TIME,
+      signals: [signal],
+    },
+    brief: {
+      schema_version: 1,
+      id: `${suffix}-brief-1`,
+      meeting: {
+        id: meetingId,
+        title: 'Yen live test',
+        time: { actual_start_at: '2026-07-21T23:00:00.000Z' },
+        participants: [],
+      },
+      decisions: [signal],
+      actions: [],
+      rationales: [],
+      provenance: {
+        meeting_revision: 'rev-1',
+        processor: {
+          kind: 'decision-processor',
+          adapter_id: 'structured-text',
+          instance_id: 'primary',
+          version: '1.0.0',
+        },
+        generated_at: ENROLLMENT_TIME,
+      },
+    },
+  };
+}
+
+function recordAuthorizationEvidence(
+  authority: TestAuthority,
+  approvalId: string,
+  suffix: number,
+) {
+  return {
+    schema_version: 1,
+    kind: 'echo-organization-authorization-evidence',
+    authority_id: authority.descriptor.authority_id,
+    organization_id: authority.descriptor.organization_id,
+    enrollment_id: ORGANIZATION_IDS.enrollment,
+    installation_id: ORGANIZATION_IDS.installation,
+    request_id: fixtureId('pcr', suffix),
+    approval_id: approvalId,
+    action: 'approve',
+    request_sha256: canonicalSha256(`record-flush-request-${suffix}`),
+    provider_event_sha256: canonicalSha256(
+      `record-flush-provider-event-${suffix}`,
+    ),
+    allowed: true,
+    reason_code: 'active_membership_and_direct_grant',
+    principal_id: ORGANIZATION_IDS.principal,
+    membership_id: ORGANIZATION_IDS.membership,
+    adapter_binding_id: fixtureId('bnd', 1),
+    permission_grant_id: fixtureId('pgr', 1),
+    evaluated_at: ENROLLMENT_TIME,
+  } as const;
 }
 
 function invitationPath(
@@ -241,10 +375,14 @@ describe('organization machine CLI', () => {
           throw new Error('enrollment must precede refresh');
         }
         const enrollment = await authority.complete(request);
+        const activeLeaseTtlMs = requestedAccessLeaseTtlMs(
+          JSON.parse(String(init?.body)) as unknown,
+        );
         accessState = await authority.nextActiveState(
           request,
           enrollment.enrollment_receipt,
           accessState,
+          activeLeaseTtlMs,
         );
         return Response.json({ access_state: accessState });
       }
@@ -464,6 +602,292 @@ describe('organization machine CLI', () => {
         ),
       ).mode & 0o777,
     ).toBe(0o600);
+  });
+
+  it('flushes one resolved organization record without loading adapters or advancing the meeting cursor', async () => {
+    const root = realpathSync(
+      mkdtempSync(join(tmpdir(), 'echo-organization-record-flush-')),
+    );
+    chmodSync(root, 0o700);
+    roots.push(root);
+    const { configPath, stateDirectory } = writeRuntimeConfig(root);
+    const authority = new TestAuthority();
+    const installationSigner = new TestInstallationSigner();
+    const invitePath = invitationPath(root, authority);
+    const lifecycleKinds: string[] = [];
+    const authorityPaths: string[] = [];
+    let enrollmentRequest: OrganizationEnrollmentRequestV1 | null = null;
+    let retryRecordSubmission = false;
+    let meetingSourceFactories = 0;
+    let meetingSourcePulls = 0;
+    const adapterFactories = new ProductAdapterFactoryRegistry();
+    adapterFactories.register({
+      kind: 'meeting-source',
+      adapter_id: 'granola',
+      create: (adapterConfig): MeetingSourceAdapter => {
+        meetingSourceFactories += 1;
+        return {
+          identity: {
+            kind: 'meeting-source',
+            adapter_id: adapterConfig.adapter_id,
+            instance_id: adapterConfig.instance_id,
+            version: 'test-must-not-load',
+          },
+          validateConfig: () => ({ ok: true, errors: [] }),
+          healthCheck: async () => ({
+            status: 'healthy',
+            checked_at: ENROLLMENT_TIME,
+          }),
+          pull: async () => {
+            meetingSourcePulls += 1;
+            throw new Error('record flush must not pull a meeting source');
+          },
+        };
+      },
+    });
+
+    const fetchImpl: typeof fetch = async (input, init) => {
+      const url = new URL(String(input));
+      authorityPaths.push(url.pathname);
+      if (url.pathname === '/v1/authority-descriptor') {
+        return Response.json({ authority_descriptor: authority.descriptor });
+      }
+      if (url.pathname === '/v1/enrollments') {
+        const body = JSON.parse(String(init?.body)) as {
+          enrollment_request: OrganizationEnrollmentRequestV1;
+        };
+        enrollmentRequest = body.enrollment_request;
+        return Response.json(await authority.complete(enrollmentRequest), {
+          status: 201,
+        });
+      }
+      if (url.pathname === ORGANIZATION_API_RECORD_ENVELOPES_PATH) {
+        if (retryRecordSubmission) {
+          throw new Error('simulated organization record outage');
+        }
+        if (enrollmentRequest === null) {
+          throw new Error('record submission must follow enrollment');
+        }
+        const body = JSON.parse(String(init?.body)) as {
+          record_envelope: OrganizationRecordEnvelopeAnyVersion;
+        };
+        const receipt = await authority.recordReceipt(
+          body.record_envelope,
+          protocolInstallationKey(installationSigner),
+          { position: 23, recordedAt: ENROLLMENT_TIME },
+        );
+        return Response.json({ record_receipt: receipt });
+      }
+      throw new Error(`unexpected organization authority path ${url.pathname}`);
+    };
+    const dependencies: ProductCliDependencies = {
+      adapterFactories,
+      classifyStateFilesystem: async () => ({ kind: 'local', raw: 'apfs' }),
+      acquireLifecycleLock: async (_stateDirectory, kind) => {
+        lifecycleKinds.push(kind);
+        return async () => undefined;
+      },
+      now: () => ENROLLMENT_TIME,
+      operator: {
+        launchctl: async () => ({
+          status: 113,
+          stdout: '',
+          stderr: 'not loaded',
+        }),
+        platform: 'darwin',
+        architecture: 'arm64',
+        uid: statSync(root).uid,
+        homeDirectory: join(root, 'home'),
+        nodePath: realpathSync(process.execPath),
+        nodeVersion: process.version,
+        cliPath: realpathSync(import.meta.filename),
+      },
+      organization: {
+        fetch: fetchImpl,
+        installationSigner,
+        createInstallationId: () => ORGANIZATION_IDS.installation,
+      },
+    };
+
+    const initialized = await command(
+      ['init', '--config', configPath],
+      dependencies,
+    );
+    expect(initialized.status, initialized.stderr).toBe(0);
+    const enrolled = await command(
+      [
+        'organization',
+        'enroll',
+        '--config',
+        configPath,
+        '--invitation',
+        invitePath,
+        '--authority-pin',
+        authority.pin,
+      ],
+      dependencies,
+    );
+    expect(enrolled.status, enrolled.stderr).toBe(0);
+
+    const request = recordApprovalRequest();
+    const approvalId = decisionApprovalId(request.processing_key);
+    const nodes = new DecisionNodeStore(stateDirectory, {
+      now: () => ENROLLMENT_TIME,
+    });
+    await nodes.ensureRequested(request);
+    await nodes.resolve({
+      approvalId,
+      status: 'approved',
+      reviewedBy: 'Yen Reviewer',
+      surface: 'slack',
+      metadata: {
+        authorization: recordAuthorizationEvidence(authority, approvalId, 1),
+      },
+    });
+
+    const source = request.meeting.provenance.source;
+    const databasePath = resolveProductStatePaths(stateDirectory).database;
+    const coreBefore = new SqliteCoreStateStore(databasePath);
+    await coreBefore.setSourceCursor(source, 'yen-cursor-before-flush');
+    coreBefore.close();
+    lifecycleKinds.length = 0;
+    authorityPaths.length = 0;
+
+    const flushed = await command(
+      ['organization', 'record-flush', '--config', configPath],
+      dependencies,
+    );
+
+    expect(flushed.status, flushed.stderr).toBe(0);
+    expect(flushed.stderr).toBe('');
+    expect(JSON.parse(flushed.stdout)).toMatchObject({
+      ok: true,
+      command: 'organization',
+      action: 'record-flush',
+      sweep: {
+        ok: true,
+        examined: 1,
+        published: 1,
+        rejected: 0,
+        retried: 0,
+      },
+      published_records: [
+        {
+          approval_id: approvalId,
+          receipt_summary: {
+            schema_version: 1,
+            kind: 'echo-organization-record-receipt',
+            position: 23,
+            installation_id: ORGANIZATION_IDS.installation,
+            idempotency_key: approvalId,
+          },
+        },
+      ],
+      rejected_records: [],
+    });
+    expect(lifecycleKinds).toEqual(['runtime', 'maintenance']);
+    expect(authorityPaths).toEqual([ORGANIZATION_API_RECORD_ENVELOPES_PATH]);
+    expect(meetingSourceFactories).toBe(0);
+    expect(meetingSourcePulls).toBe(0);
+
+    const [published] = await nodes.list();
+    expect(published?.organization_record.status).toBe('published');
+    expect(published?.organization_record.receipt?.position).toBe(23);
+    const coreAfter = new SqliteCoreStateStore(databasePath);
+    await expect(coreAfter.getSourceCursor(source)).resolves.toBe(
+      'yen-cursor-before-flush',
+    );
+    coreAfter.close();
+
+    // A transient send is not a successful operator flush even though the
+    // submitter intentionally keeps it retryable and alert-free.
+    const retryRequest = recordApprovalRequest('yen-retry');
+    const retryApprovalId = decisionApprovalId(retryRequest.processing_key);
+    await nodes.ensureRequested(retryRequest);
+    await nodes.resolve({
+      approvalId: retryApprovalId,
+      status: 'approved',
+      reviewedBy: 'Yen Reviewer',
+      surface: 'slack',
+      metadata: {
+        authorization: recordAuthorizationEvidence(
+          authority,
+          retryApprovalId,
+          2,
+        ),
+      },
+    });
+    retryRecordSubmission = true;
+    authorityPaths.length = 0;
+    const retried = await command(
+      ['organization', 'record-flush', '--config', configPath],
+      dependencies,
+    );
+    expect(retried.status).toBe(1);
+    expect(retried.stdout).toBe('');
+    expect(JSON.parse(retried.stderr)).toMatchObject({
+      ok: false,
+      command: 'organization',
+      action: 'record-flush',
+      candidate_records: 1,
+      sweep: { ok: true, retried: 1, published: 0, rejected: 0 },
+      published_records: [],
+      rejected_records: [],
+    });
+    expect(authorityPaths).toEqual([ORGANIZATION_API_RECORD_ENVELOPES_PATH]);
+
+    // Holding the runtime lease models an active service. The maintenance
+    // command fails before access verification or any Authority request.
+    authorityPaths.length = 0;
+    const releaseRuntime = await acquireProductLifecycleLock(
+      stateDirectory,
+      'runtime',
+    );
+    try {
+      const blocked = await command(
+        ['organization', 'record-flush', '--config', configPath],
+        { ...dependencies, acquireLifecycleLock: undefined },
+      );
+      expect(blocked.status).toBe(1);
+      expect(blocked.stdout).toBe('');
+      expect(blocked.stderr).toContain('process lock is busy');
+      expect(authorityPaths).toEqual([]);
+    } finally {
+      await releaseRuntime();
+    }
+
+    // Close the clean-at-dispatch to residue-after-lock race before the flush
+    // opens organization state, inspects/signs with the installation key, or
+    // contacts the Authority.
+    authorityPaths.length = 0;
+    const signCallsBeforeRace = installationSigner.signCalls;
+    let residueInjected = false;
+    const raced = await command(
+      ['organization', 'record-flush', '--config', configPath],
+      {
+        ...dependencies,
+        acquireLifecycleLock: async (_stateDirectory, kind) => {
+          if (kind === 'runtime' && !residueInjected) {
+            residueInjected = true;
+            const manifests = join(
+              resolveProductStatePaths(stateDirectory).identityRoot,
+              'manifests',
+            );
+            mkdirSync(manifests, { recursive: true, mode: 0o700 });
+            writeFileSync(join(manifests, 'idm_race.v1.json'), '{}', {
+              mode: 0o600,
+            });
+          }
+          return async () => undefined;
+        },
+      },
+    );
+    expect(residueInjected).toBe(true);
+    expect(raced.status).toBe(1);
+    expect(raced.stdout).toBe('');
+    expect(raced.stderr).toContain('founder identity or cutover material');
+    expect(authorityPaths).toEqual([]);
+    expect(installationSigner.signCalls).toBe(signCallsBeforeRace);
   });
 
   it('re-checks founder residue after the descriptor fetch, before any enrollment step', async () => {

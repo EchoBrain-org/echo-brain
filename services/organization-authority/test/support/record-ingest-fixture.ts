@@ -99,6 +99,8 @@ import {
   type OrganizationRecordRuntime,
 } from '../../src/composition/organization-record.js';
 import { ComposedOrganizationIntegrationsApplication } from '../../src/composition/organization-integrations.js';
+import { reviewerPolicyContractSha256 } from '../../src/application/reviewer-policy-contract.js';
+import type { OrganizationRecordingPolicyV1 } from '../../src/application/organization-recording-policy.js';
 
 export const RECORD_FIXTURE_NOW = '2026-08-08T12:00:00.000Z';
 export const RECORD_FIXTURE_LEASE_TTL_MS = 5 * 60 * 1000;
@@ -263,6 +265,7 @@ export interface RecordIngestFixture {
   readonly organizationId: string;
   readonly recordLogDatabasePath: string;
   readonly recordDerivedDatabasePath: string;
+  readonly organizationRecordingPolicy: OrganizationRecordingPolicyV1;
   /** Every post-start derive failure the record runtime signalled to its host. */
   readonly fatalFailures: readonly Error[];
   /** Appends one real allowed audit row and returns the matching evidence. */
@@ -322,6 +325,11 @@ export interface RecordIngestFixture {
 export interface CreateRecordIngestFixtureOptions {
   /** Creates the immutable two-member marker before the runtime starts. */
   readonly activatePermissionPilot?: boolean;
+  /** Test-only central gate state. Production obtains this from activation. */
+  readonly organizationMemberRecordingPolicy?:
+    | 'active'
+    | 'absent'
+    | 'mismatched';
 }
 
 /**
@@ -768,6 +776,14 @@ export async function createRecordIngestFixture(
       );
     },
   };
+  const organizationRecordingPolicy = {
+    schema_version: 1,
+    kind: 'organization-recording-policy-v1',
+    decision_processor_adapter_instance_id: 'default',
+    approval_surface_adapter_instance_id: 'primary',
+    presentation_mode: 'organization-member-readable-v1',
+    policy_contract_sha256: organizationMemberReadablePolicyContractSha256(),
+  } as const;
   const reviewerPermissionApplication =
     new ComposedOrganizationIntegrationsApplication({
       authority: application,
@@ -775,14 +791,7 @@ export async function createRecordIngestFixture(
       secrets: reviewerSecrets,
       slack: reviewerSlack,
       permissionPilotHealth: { kind: 'absent' },
-      organizationRecordingPolicy: {
-        schema_version: 1,
-        kind: 'organization-recording-policy-v1',
-        decision_processor_adapter_instance_id: 'primary',
-        approval_surface_adapter_instance_id: 'primary',
-        presentation_mode: 'organization-member-readable-v1',
-        policy_contract_sha256: organizationMemberReadablePolicyContractSha256(),
-      },
+      organizationRecordingPolicy,
       now: () => clock.now(),
     });
 
@@ -839,6 +848,16 @@ export async function createRecordIngestFixture(
     }
   }
   const fatalFailures: Error[] = [];
+  const runtimeRecordingPolicy: OrganizationRecordingPolicyV1 | undefined =
+    options.organizationMemberRecordingPolicy === 'absent'
+      ? undefined
+      : options.organizationMemberRecordingPolicy === 'mismatched'
+        ? {
+            ...organizationRecordingPolicy,
+            presentation_mode: 'restricted-reviewer-v1',
+            policy_contract_sha256: reviewerPolicyContractSha256(),
+          }
+        : organizationRecordingPolicy;
   const runtime = await openOrganizationRecordRuntime({
     authority: application,
     evidence: integrations,
@@ -846,6 +865,9 @@ export async function createRecordIngestFixture(
     authority_id: authorityId,
     record_log_database_path: recordLogDatabasePath,
     record_derived_database_path: recordDerivedDatabasePath,
+    ...(runtimeRecordingPolicy === undefined
+      ? {}
+      : { organization_recording_policy_v1: runtimeRecordingPolicy }),
     alert: () => undefined,
     onFatal: (failure) => fatalFailures.push(failure),
   });
@@ -1400,6 +1422,7 @@ export async function createRecordIngestFixture(
     organizationId,
     recordLogDatabasePath,
     recordDerivedDatabasePath,
+    organizationRecordingPolicy,
     fatalFailures,
     authorize,
     approvalEnvelope: (input) =>

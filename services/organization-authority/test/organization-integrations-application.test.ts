@@ -303,6 +303,10 @@ function testDependencies(options: {
     approve_reaction: string;
     reject_reaction: string;
   };
+  organizationMemberCardReactions?: {
+    approve_reaction: string;
+    reject_reaction: string;
+  };
 } = {}) {
   let storedSecret: string | null = null;
   const reference = {
@@ -374,6 +378,12 @@ function testDependencies(options: {
         ...(options.reviewerCardReactions === undefined
           ? {}
           : { reviewer_card_reactions: options.reviewerCardReactions }),
+        ...(options.organizationMemberCardReactions === undefined
+          ? {}
+          : {
+              organization_member_card_reactions:
+                options.organizationMemberCardReactions,
+            }),
       };
     }),
     postIdentityLinkChallenge: vi.fn(async () => ({
@@ -789,6 +799,7 @@ describe('composed organization integrations application', () => {
         ],
         secret: existingSecret,
       })),
+      upgradeableSlackOrganizationTool: vi.fn(() => null),
       onboardSlackOrganizationTool: vi.fn(() => result),
       secretReferenceIsInUse: vi.fn(() => true),
     } as unknown as OrganizationIntegrationsRepository;
@@ -819,6 +830,227 @@ describe('composed organization integrations application', () => {
         secret: existingSecret,
       }),
     );
+  });
+
+  it('reverifies a ready null-app Slack tool with its retained credential before promoting its discovered app identity', async () => {
+    const dependencies = testDependencies();
+    const existingSecret = dependencies.secrets.create(SLACK_TOKEN);
+    vi.mocked(dependencies.secrets.create).mockClear();
+    const connectionId = 'con_aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
+    const result = {
+      connection_attempt_id: 'cat_bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb',
+      connection_id: connectionId,
+      organization_id: ORGANIZATION_ID,
+      provider: 'slack',
+      status: 'active',
+      slack_team_id: 'T123ABC',
+      slack_bot_user_id: 'U123BOT',
+      channel_id: 'C123ABC',
+      granted_scopes: [
+        'channels:history',
+        'channels:read',
+        'chat:write',
+        'reactions:read',
+        'users:read',
+      ],
+      activated_at: '2026-07-28T20:00:00.000Z',
+    } as const;
+    const repository = {
+      slackOrganizationToolReplay: vi.fn(() => null),
+      legacySlackOrganizationTool: vi.fn(() => null),
+      upgradeableSlackOrganizationTool: vi.fn(() => ({
+        connection_attempt_id: 'cat_cccccccc-cccc-4ccc-8ccc-cccccccccccc',
+        connection_id: connectionId,
+        activated_at: result.activated_at,
+        team_id: 'T123ABC',
+        enterprise_id: null,
+        bot_user_id: 'U123BOT',
+        bot_id: 'B123BOT',
+        app_id: null,
+        channel_id: 'C123ABC',
+        approve_reaction: 'white_check_mark',
+        reject_reaction: 'x',
+        granted_scopes: [
+          'channels:history',
+          'channels:read',
+          'chat:write',
+          'reactions:read',
+          'users:read',
+        ],
+        secret: existingSecret,
+      })),
+      onboardSlackOrganizationTool: vi.fn(() => result),
+      secretReferenceIsInUse: vi.fn(() => true),
+    } as unknown as OrganizationIntegrationsRepository;
+    const application = new ComposedOrganizationIntegrationsApplication({
+      ...dependencies,
+      repository,
+      permissionPilotHealth: { kind: 'absent' },
+      now: () => NOW,
+    });
+
+    await expect(onboardSlackOrganizationTool(application)).resolves.toBe(
+      result,
+    );
+    expect(dependencies.secrets.read).toHaveBeenCalledWith(existingSecret);
+    expect(dependencies.secrets.create).not.toHaveBeenCalled();
+    expect(dependencies.secrets.remove).not.toHaveBeenCalled();
+    expect(dependencies.slack.verifyConnection).toHaveBeenCalledWith(
+      SLACK_TOKEN,
+      undefined,
+    );
+    expect(dependencies.slack.verifyChannel).toHaveBeenCalledWith(
+      SLACK_TOKEN,
+      'C123ABC',
+      'T123ABC',
+      undefined,
+    );
+    expect(repository.onboardSlackOrganizationTool).toHaveBeenCalledWith(
+      expect.objectContaining({
+        connection: expect.objectContaining({ app_id: 'A123APP' }),
+        channel: expect.objectContaining({ channel_id: 'C123ABC' }),
+        secret: existingSecret,
+      }),
+    );
+  });
+
+  it('does not promote a ready null-app Slack tool if owner state changes during re-verification', async () => {
+    const dependencies = testDependencies({ ownerChanged: true });
+    const existingSecret = dependencies.secrets.create(SLACK_TOKEN);
+    vi.mocked(dependencies.secrets.create).mockClear();
+    const repository = {
+      slackOrganizationToolReplay: vi.fn(() => null),
+      legacySlackOrganizationTool: vi.fn(() => null),
+      upgradeableSlackOrganizationTool: vi.fn(() => ({
+        connection_attempt_id: 'cat_cccccccc-cccc-4ccc-8ccc-cccccccccccc',
+        connection_id: 'con_aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+        activated_at: '2026-07-28T20:00:00.000Z',
+        team_id: 'T123ABC',
+        enterprise_id: null,
+        bot_user_id: 'U123BOT',
+        bot_id: 'B123BOT',
+        app_id: null,
+        channel_id: 'C123ABC',
+        approve_reaction: 'white_check_mark',
+        reject_reaction: 'x',
+        granted_scopes: [
+          'channels:history',
+          'channels:read',
+          'chat:write',
+          'reactions:read',
+          'users:read',
+        ],
+        secret: existingSecret,
+      })),
+      onboardSlackOrganizationTool: vi.fn(),
+      secretReferenceIsInUse: vi.fn(() => true),
+    } as unknown as OrganizationIntegrationsRepository;
+    const application = new ComposedOrganizationIntegrationsApplication({
+      ...dependencies,
+      repository,
+      permissionPilotHealth: { kind: 'absent' },
+      now: () => NOW,
+    });
+
+    await expect(onboardSlackOrganizationTool(application)).rejects.toMatchObject({
+      name: 'AuthorityOperationError',
+      code: 'conflict',
+    });
+    expect(repository.onboardSlackOrganizationTool).not.toHaveBeenCalled();
+    expect(dependencies.secrets.create).not.toHaveBeenCalled();
+    expect(dependencies.secrets.remove).not.toHaveBeenCalled();
+  });
+
+  it('requires the submitted token to match the retained credential for ready null-app promotion', async () => {
+    const dependencies = testDependencies();
+    const existingSecret = dependencies.secrets.create('xoxb-other-token-12345678');
+    vi.mocked(dependencies.secrets.create).mockClear();
+    const repository = {
+      slackOrganizationToolReplay: vi.fn(() => null),
+      legacySlackOrganizationTool: vi.fn(() => null),
+      upgradeableSlackOrganizationTool: vi.fn(() => ({
+        connection_attempt_id: 'cat_cccccccc-cccc-4ccc-8ccc-cccccccccccc',
+        connection_id: 'con_aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+        activated_at: '2026-07-28T20:00:00.000Z',
+        team_id: 'T123ABC',
+        enterprise_id: null,
+        bot_user_id: 'U123BOT',
+        bot_id: 'B123BOT',
+        app_id: null,
+        channel_id: 'C123ABC',
+        approve_reaction: 'white_check_mark',
+        reject_reaction: 'x',
+        granted_scopes: [
+          'channels:history',
+          'channels:read',
+          'chat:write',
+          'reactions:read',
+          'users:read',
+        ],
+        secret: existingSecret,
+      })),
+      onboardSlackOrganizationTool: vi.fn(),
+      secretReferenceIsInUse: vi.fn(() => true),
+    } as unknown as OrganizationIntegrationsRepository;
+    const application = new ComposedOrganizationIntegrationsApplication({
+      ...dependencies,
+      repository,
+      permissionPilotHealth: { kind: 'absent' },
+      now: () => NOW,
+    });
+
+    await expect(onboardSlackOrganizationTool(application)).rejects.toMatchObject({
+      name: 'AuthorityOperationError',
+      code: 'invalid_request',
+      message: 'Slack onboarding must reverify the existing organization credential',
+    });
+    expect(dependencies.slack.verifyConnection).not.toHaveBeenCalled();
+    expect(repository.onboardSlackOrganizationTool).not.toHaveBeenCalled();
+    expect(dependencies.secrets.create).not.toHaveBeenCalled();
+  });
+
+  it('replays a ready null-app promotion without reading or re-verifying its credential', async () => {
+    const dependencies = testDependencies();
+    const result = {
+      connection_attempt_id: 'cat_bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb',
+      connection_id: 'con_aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+      organization_id: ORGANIZATION_ID,
+      provider: 'slack',
+      status: 'active',
+      slack_team_id: 'T123ABC',
+      slack_bot_user_id: 'U123BOT',
+      channel_id: 'C123ABC',
+      granted_scopes: [
+        'channels:history',
+        'channels:read',
+        'chat:write',
+        'reactions:read',
+        'users:read',
+      ],
+      activated_at: '2026-07-28T20:00:00.000Z',
+    } as const;
+    const repository = {
+      slackOrganizationToolReplay: vi.fn(() => result),
+      legacySlackOrganizationTool: vi.fn(),
+      upgradeableSlackOrganizationTool: vi.fn(),
+      onboardSlackOrganizationTool: vi.fn(),
+      secretReferenceIsInUse: vi.fn(),
+    } as unknown as OrganizationIntegrationsRepository;
+    const application = new ComposedOrganizationIntegrationsApplication({
+      ...dependencies,
+      repository,
+      permissionPilotHealth: { kind: 'absent' },
+      now: () => NOW,
+    });
+
+    await expect(onboardSlackOrganizationTool(application)).resolves.toBe(
+      result,
+    );
+    expect(repository.legacySlackOrganizationTool).not.toHaveBeenCalled();
+    expect(repository.upgradeableSlackOrganizationTool).not.toHaveBeenCalled();
+    expect(dependencies.secrets.read).not.toHaveBeenCalled();
+    expect(dependencies.slack.verifyConnection).not.toHaveBeenCalled();
+    expect(repository.onboardSlackOrganizationTool).not.toHaveBeenCalled();
   });
 
   it('leaves Slack inactive when provider or owner verification fails', async () => {
@@ -1191,6 +1423,99 @@ describe('composed organization integrations application', () => {
         action: 'permission.reject',
         outcome: 'allowed',
         reason_code: 'active_membership_and_direct_grant',
+      });
+    } finally {
+      repository.close();
+    }
+  });
+
+  it('allows schema-v1 rejection only after parsing the exact organization-member card pair', async () => {
+    const { repository, dependencies, application } = applicationFixture(
+      testDependencies({
+        organizationMemberCardReactions: {
+          approve_reaction: 'white_check_mark',
+          reject_reaction: 'x',
+        },
+      }),
+    );
+    try {
+      await activate(application);
+      const rejectRequest = request({ action: 'reject', reaction_name: 'x' });
+      const command = {
+        ...rejectRequest,
+        provider_event_sha256:
+          organizationPermissionProviderEventSha256(rejectRequest),
+      };
+
+      await expect(application.checkPermission(command)).resolves.toMatchObject({
+        allowed: true,
+        reason_code: 'active_membership_and_direct_grant',
+      });
+      expect(dependencies.slack.verifyReaction).toHaveBeenCalledWith(
+        SLACK_TOKEN,
+        expect.objectContaining({
+          reaction_name: 'x',
+          opposite_reaction_name: 'white_check_mark',
+          parse_reviewer_card_reactions: true,
+          parse_organization_member_card_reactions: true,
+        }),
+        undefined,
+      );
+    } finally {
+      repository.close();
+    }
+  });
+
+  it('denies schema-v1 rejection when the member card pair differs from the active binding', async () => {
+    const { repository, application } = applicationFixture(
+      testDependencies({
+        organizationMemberCardReactions: {
+          approve_reaction: 'thumbsup',
+          reject_reaction: 'x',
+        },
+      }),
+    );
+    try {
+      await activate(application);
+      const rejectRequest = request({ action: 'reject', reaction_name: 'x' });
+      const command = {
+        ...rejectRequest,
+        provider_event_sha256:
+          organizationPermissionProviderEventSha256(rejectRequest),
+      };
+
+      await expect(application.checkPermission(command)).resolves.toMatchObject({
+        allowed: false,
+        reason_code: 'provider_identity_mismatch',
+      });
+    } finally {
+      repository.close();
+    }
+  });
+
+  it('denies an ambiguous schema-v1 rejection that claims both closed card families', async () => {
+    const pair = {
+      approve_reaction: 'white_check_mark',
+      reject_reaction: 'x',
+    };
+    const { repository, application } = applicationFixture(
+      testDependencies({
+        reviewerCardReactions: pair,
+        organizationMemberCardReactions: pair,
+      }),
+    );
+    try {
+      await activate(application);
+      const rejectRequest = request({ action: 'reject', reaction_name: 'x' });
+      const command = {
+        ...rejectRequest,
+        provider_event_sha256:
+          organizationPermissionProviderEventSha256(rejectRequest),
+      };
+
+      await expect(application.checkPermission(command)).resolves.toMatchObject({
+        allowed: false,
+        reason_code: 'provider_identity_mismatch',
       });
     } finally {
       repository.close();

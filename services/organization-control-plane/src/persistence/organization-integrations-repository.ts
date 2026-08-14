@@ -16,6 +16,7 @@ import {
   type BeginSlackIdentityLinkChallengeInput,
   type BegunSlackIdentityLinkChallenge,
   type LegacySlackOrganizationTool,
+  type UpgradeableSlackOrganizationTool,
   type CompleteSlackIdentityLinkChallengeInput,
   type CompletedSlackIdentityLink,
   type OnboardSlackOrganizationToolInput,
@@ -161,6 +162,12 @@ interface ActiveSlackBindingRow {
   connection_id: string;
   public_configuration_json: string;
   public_configuration_sha256: string;
+}
+
+interface SlackAppIdentityBindingPromotion {
+  adapter_binding_id: string;
+  previous_public_configuration_sha256: string;
+  public_configuration_sha256: `sha256:${string}`;
 }
 
 interface ActiveSlackApprovalGrantRow {
@@ -514,6 +521,28 @@ function slackApprovalBindingMatchesTool(
   );
 }
 
+function isExactReadySlackOrganizationToolConfiguration(
+  configuration: Readonly<Record<string, unknown>>,
+): boolean {
+  return (
+    Object.keys(configuration).sort().join(",") ===
+      [
+        "approve_reaction",
+        "channel_id",
+        "organization_tool_profile",
+        "reject_reaction",
+        "schema_version",
+        "slack_app_id",
+        "slack_bot_id",
+        "slack_bot_user_id",
+        "slack_enterprise_id",
+      ].join(",") &&
+    configuration["organization_tool_profile"] ===
+      SLACK_ORGANIZATION_TOOL_PROFILE &&
+    configuration["schema_version"] === 1
+  );
+}
+
 export class OrganizationIntegrationsRepository {
   constructor(
     private readonly database: Database.Database,
@@ -845,6 +874,136 @@ export class OrganizationIntegrationsRepository {
     });
   }
 
+  /**
+   * Proves that one exact active Slack approval-surface instance is bound to
+   * the current organization tool. This is intentionally stricter than an
+   * adapter-id existence check: a one-way policy activation must not accept a
+   * misspelled instance id or a binding whose public Slack identity drifted.
+   */
+  hasActiveSlackApprovalSurfaceInstance(adapterInstanceId: string): boolean {
+    if (
+      adapterInstanceId.length < 1 ||
+      adapterInstanceId.length > 128 ||
+      adapterInstanceId.trim() !== adapterInstanceId ||
+      adapterInstanceId.includes("\0")
+    ) {
+      return false;
+    }
+    const tool = this.activeSlackOrganizationTool();
+    if (tool === null) return false;
+    const rows = this.database
+      .prepare(
+        `SELECT adapter_binding_id, installation_id, installation_key_id,
+                adapter_id, adapter_instance_id, adapter_version,
+                connection_id, public_configuration_json,
+                public_configuration_sha256
+         FROM organization_adapter_bindings
+         WHERE organization_id = ?
+           AND product_namespace = 'echo-brain'
+           AND adapter_kind = 'approval-surface'
+           AND adapter_id = 'slack-reactions'
+           AND adapter_instance_id = ?
+           AND connection_id = ?
+           AND status = 'active'
+         ORDER BY adapter_binding_id`,
+      )
+      .all(
+        this.identity.organization_id,
+        adapterInstanceId,
+        tool.connection_id,
+      ) as ActiveSlackBindingRow[];
+    for (const row of rows) {
+      if (!slackApprovalBindingMatchesTool(row, tool)) {
+        throw new OrganizationIntegrationConflictError(
+          "active Slack approval binding is not an exact organization-tool binding",
+        );
+      }
+    }
+    return rows.length > 0;
+  }
+
+  upgradeableSlackOrganizationTool(): UpgradeableSlackOrganizationTool | null {
+    const row = this.slackOrganizationToolRow();
+    if (row === undefined) return null;
+    const { configuration, scopes } = validatedSlackToolData(
+      row,
+      "stored upgradeable Slack organization tool is invalid",
+    );
+    if (
+      configuration["organization_tool_profile"] !==
+        SLACK_ORGANIZATION_TOOL_PROFILE ||
+      configuration["slack_app_id"] !== null
+    ) {
+      return null;
+    }
+    const active = this.activeSlackOrganizationTool();
+    if (
+      !isExactReadySlackOrganizationToolConfiguration(configuration) ||
+      active === null ||
+      !hasSlackOrganizationToolScopes(scopes) ||
+      !/^T[A-Z0-9]{2,}$/.test(active.team_id) ||
+      !/^C[A-Z0-9]{2,}$/.test(active.channel_id) ||
+      !/^B[A-Z0-9]{2,}$/.test(active.bot_id) ||
+      !/^[UW][A-Z0-9]{2,}$/.test(active.bot_user_id) ||
+      !(
+        active.enterprise_id === null ||
+        /^E[A-Z0-9]{2,}$/.test(active.enterprise_id)
+      )
+    ) {
+      throw new Error("stored upgradeable Slack organization tool is invalid");
+    }
+    return Object.freeze({
+      ...active,
+      activated_at: row.activated_at,
+      app_id: null,
+    });
+  }
+
+  private slackAppIdentityBindingPromotions(
+    tool: UpgradeableSlackOrganizationTool,
+    appId: string,
+  ): readonly SlackAppIdentityBindingPromotion[] {
+    const rows = this.database
+      .prepare(
+        `SELECT adapter_binding_id, installation_id, installation_key_id,
+                adapter_id, adapter_instance_id, adapter_version,
+                connection_id, public_configuration_json,
+                public_configuration_sha256
+         FROM organization_adapter_bindings
+         WHERE organization_id = ?
+           AND product_namespace = 'echo-brain'
+           AND adapter_kind = 'approval-surface'
+           AND adapter_id = 'slack-reactions'
+           AND connection_id = ?
+           AND status = 'active'
+         ORDER BY adapter_binding_id`,
+      )
+      .all(this.identity.organization_id, tool.connection_id) as
+      ActiveSlackBindingRow[];
+    return Object.freeze(
+      rows.map((row) => {
+        if (!slackApprovalBindingMatchesTool(row, tool)) {
+          throw new OrganizationIntegrationConflictError(
+            "active Slack approval binding is not an exact null-app organization-tool binding",
+          );
+        }
+        const previous = validatedPublicConfiguration(row);
+        if (previous["slack_app_id"] !== null) {
+          throw new OrganizationIntegrationConflictError(
+            "active Slack approval binding app identity is inconsistent",
+          );
+        }
+        const promoted = { ...previous, slack_app_id: appId };
+        return Object.freeze({
+          adapter_binding_id: row.adapter_binding_id,
+          previous_public_configuration_sha256:
+            row.public_configuration_sha256,
+          public_configuration_sha256: digest(promoted),
+        });
+      }),
+    );
+  }
+
   beginSlackIdentityLinkChallenge(
     input: BeginSlackIdentityLinkChallengeInput,
   ): BegunSlackIdentityLinkChallenge {
@@ -1167,23 +1326,50 @@ export class OrganizationIntegrationsRepository {
     input: OnboardSlackOrganizationToolInput,
   ): OnboardSlackOrganizationToolResult {
     const legacy = this.legacySlackOrganizationTool();
+    const upgradeable = this.upgradeableSlackOrganizationTool();
+    const existingTool = legacy ?? upgradeable;
+    const verifiedAppId = input.connection.app_id as string | null;
+    const nullAppTool: UpgradeableSlackOrganizationTool | null =
+      upgradeable ??
+      (legacy?.app_id === null
+        ? Object.freeze({ ...legacy, app_id: null })
+        : null);
+    const promotesAppIdentity =
+      nullAppTool !== null &&
+      verifiedAppId !== null &&
+      /^A[A-Z0-9]{2,}$/.test(verifiedAppId);
+    const preV5Schema =
+      (this.database.pragma("user_version", { simple: true }) as number) < 5;
+    const acceptsPreV5FreshNullApp =
+      existingTool === null &&
+      verifiedAppId === null &&
+      preV5Schema;
+    const acceptsPreV5LegacyNullApp =
+      legacy?.app_id === null && verifiedAppId === null && preV5Schema;
     if (
       input.organization_id !== this.identity.organization_id ||
       input.authority_id !== this.identity.authority_id ||
       input.secret.secret_backend_id !== AUTHORITY_FILE_SECRET_BACKEND ||
       input.channel.team_id !== input.connection.team_id ||
       !/^C[A-Z0-9]{2,}$/.test(input.channel.channel_id) ||
+      !(
+        (verifiedAppId !== null && /^A[A-Z0-9]{2,}$/.test(verifiedAppId)) ||
+        acceptsPreV5FreshNullApp ||
+        acceptsPreV5LegacyNullApp
+      ) ||
       !hasSlackOrganizationToolScopes(input.connection.granted_scopes) ||
-      (legacy !== null &&
-        (legacy.connection_id.length === 0 ||
+      (existingTool !== null &&
+        (existingTool.connection_id.length === 0 ||
           input.secret.secret_handle_id !==
-            legacy.secret.secret_handle_id ||
-          input.connection.team_id !== legacy.team_id ||
-          input.connection.enterprise_id !== legacy.enterprise_id ||
-          input.connection.bot_user_id !== legacy.bot_user_id ||
-          input.connection.bot_id !== legacy.bot_id ||
-          input.connection.app_id !== legacy.app_id ||
-          input.channel.channel_id !== legacy.channel_id))
+            existingTool.secret.secret_handle_id ||
+          input.connection.team_id !== existingTool.team_id ||
+          input.connection.enterprise_id !== existingTool.enterprise_id ||
+          input.connection.bot_user_id !== existingTool.bot_user_id ||
+          input.connection.bot_id !== existingTool.bot_id ||
+          (legacy !== null &&
+            legacy.app_id !== null &&
+            input.connection.app_id !== legacy.app_id) ||
+          input.channel.channel_id !== existingTool.channel_id))
     ) {
       throw new Error("Slack organization tool identities are inconsistent");
     }
@@ -1194,18 +1380,18 @@ export class OrganizationIntegrationsRepository {
     if (replay !== null) return replay;
 
     const connectionAttemptId = id("cat");
-    const connectionId = legacy?.connection_id ?? id("con");
+    const connectionId = existingTool?.connection_id ?? id("con");
     const expiresAt = addMinutes(input.now, 15);
     const connectionScopes = [...input.connection.granted_scopes].sort();
     const connectionScopesJson = canonicalJson(connectionScopes);
     const connectionScopesSha256 = digest(connectionScopes);
     const publicConfiguration = {
       approve_reaction:
-        legacy?.approve_reaction ?? SLACK_DEFAULT_APPROVE_REACTION,
+        existingTool?.approve_reaction ?? SLACK_DEFAULT_APPROVE_REACTION,
       channel_id: input.channel.channel_id,
       organization_tool_profile: SLACK_ORGANIZATION_TOOL_PROFILE,
       reject_reaction:
-        legacy?.reject_reaction ?? SLACK_DEFAULT_REJECT_REACTION,
+        existingTool?.reject_reaction ?? SLACK_DEFAULT_REJECT_REACTION,
       schema_version: 1,
       slack_app_id: input.connection.app_id,
       slack_bot_id: input.connection.bot_id,
@@ -1230,8 +1416,15 @@ export class OrganizationIntegrationsRepository {
       slack_bot_user_id: input.connection.bot_user_id,
       channel_id: input.channel.channel_id,
       granted_scopes: Object.freeze(connectionScopes),
-      activated_at: legacy?.activated_at ?? input.now,
+      activated_at: existingTool?.activated_at ?? input.now,
     };
+    const bindingPromotions =
+      !promotesAppIdentity
+        ? Object.freeze([])
+        : this.slackAppIdentityBindingPromotions(
+            nullAppTool,
+            verifiedAppId,
+          );
 
     return this.immediateTransaction(() => {
       const concurrent = this.slackOrganizationToolReplay(
@@ -1251,11 +1444,37 @@ export class OrganizationIntegrationsRepository {
         .get(input.organization_id, SLACK_PROVIDER) as
         | { connection_id: string }
         | undefined;
-      if (legacy === null && existing !== undefined) {
+      if (existingTool === null && existing !== undefined) {
         throw new Error("Slack organization tool is already active");
       }
-      if (legacy !== null && existing?.connection_id !== legacy.connection_id) {
+      if (
+        existingTool !== null &&
+        existing?.connection_id !== existingTool.connection_id
+      ) {
         throw new Error("Slack organization tool state changed during onboarding");
+      }
+      if (promotesAppIdentity) {
+        const currentLegacy = this.legacySlackOrganizationTool();
+        const currentUpgradeable = this.upgradeableSlackOrganizationTool();
+        const currentNullAppTool: UpgradeableSlackOrganizationTool | null =
+          currentUpgradeable ??
+          (currentLegacy?.app_id === null
+            ? Object.freeze({ ...currentLegacy, app_id: null })
+            : null);
+        if (
+          currentNullAppTool === null ||
+          canonicalJson(currentNullAppTool) !== canonicalJson(nullAppTool) ||
+          canonicalJson(
+            this.slackAppIdentityBindingPromotions(
+              currentNullAppTool,
+              verifiedAppId,
+            ),
+          ) !== canonicalJson(bindingPromotions)
+        ) {
+          throw new OrganizationIntegrationConflictError(
+            "Slack organization tool app identity changed during onboarding",
+          );
+        }
       }
 
       this.completeSlackOrganizationToolAttempt({
@@ -1272,7 +1491,7 @@ export class OrganizationIntegrationsRepository {
         expires_at: expiresAt,
       });
 
-      if (legacy === null) {
+      if (existingTool === null) {
         this.database
           .prepare(
             `INSERT INTO organization_tool_connections (
@@ -1311,7 +1530,7 @@ export class OrganizationIntegrationsRepository {
             publicConfigurationJson,
             publicConfigurationSha256,
           );
-      } else {
+      } else if (!promotesAppIdentity && legacy !== null) {
         const promoted = this.database
           .prepare(
             `UPDATE organization_tool_connections
@@ -1344,39 +1563,146 @@ export class OrganizationIntegrationsRepository {
             "legacy Slack organization tool could not be promoted",
           );
         }
-      }
-      this.appendAudit({
-        occurred_at: input.now,
-        actor_kind: "membership",
-        actor_principal_id: input.administrator_principal_id,
-        actor_membership_id: input.administrator_membership_id,
-        actor_identity_link_id: null,
-        actor_installation_id: null,
-        command_id: input.command_id,
-        provider_event_sha256: null,
-        action: "organization_tool.slack.onboarded",
-        subject_kind: "tool_connection",
-        subject_id: connectionId,
-        membership_id: null,
-        identity_link_id: null,
-        connection_id: connectionId,
-        adapter_binding_id: null,
-        permission_grant_id: null,
-        outcome: "succeeded",
-        reason_code:
-          legacy === null
-            ? "provider_and_channel_verified"
-            : "legacy_connection_reverified_and_promoted",
-        idempotency_key: `organization-tool:slack:${input.command_id}`,
-        authority_checked_at: input.now,
-        authority_evidence_sha256: input.command_sha256,
-        correlation_id: input.command_id,
-        detail: {
-          command_sha256: input.command_sha256,
+      } else if (promotesAppIdentity) {
+        const previousPublicConfiguration = {
+          approve_reaction: nullAppTool.approve_reaction,
+          channel_id: nullAppTool.channel_id,
+          ...(upgradeable === null
+            ? {}
+            : {
+                organization_tool_profile: SLACK_ORGANIZATION_TOOL_PROFILE,
+                schema_version: 1,
+              }),
+          reject_reaction: nullAppTool.reject_reaction,
+          slack_app_id: null,
+          slack_bot_id: nullAppTool.bot_id,
+          slack_bot_user_id: nullAppTool.bot_user_id,
+          slack_enterprise_id: nullAppTool.enterprise_id,
+        };
+        const previousPublicConfigurationJson = canonicalJson(
+          previousPublicConfiguration,
+        );
+        const previousPublicConfigurationSha256 = digest(
+          previousPublicConfiguration,
+        );
+        const appIdentityPromotion = Object.freeze({
+          schema_version: 1,
+          kind: "slack-null-app-identity-promotion-v1",
+          app_id: verifiedAppId,
+          previous_public_configuration_sha256:
+            previousPublicConfigurationSha256,
           public_configuration_sha256: publicConfigurationSha256,
-          result,
-        },
-      });
+          binding_updates: Object.freeze(
+            bindingPromotions.map((binding) =>
+              Object.freeze({
+                adapter_binding_id: binding.adapter_binding_id,
+                previous_public_configuration_sha256:
+                  binding.previous_public_configuration_sha256,
+                public_configuration_sha256:
+                  binding.public_configuration_sha256,
+              }),
+            ),
+          ),
+        });
+        this.appendAudit({
+          occurred_at: input.now,
+          actor_kind: "membership",
+          actor_principal_id: input.administrator_principal_id,
+          actor_membership_id: input.administrator_membership_id,
+          actor_identity_link_id: null,
+          actor_installation_id: null,
+          command_id: input.command_id,
+          provider_event_sha256: null,
+          action: "organization_tool.slack.onboarded",
+          subject_kind: "tool_connection",
+          subject_id: connectionId,
+          membership_id: null,
+          identity_link_id: null,
+          connection_id: connectionId,
+          adapter_binding_id: null,
+          permission_grant_id: null,
+          outcome: "succeeded",
+          reason_code: "null_app_identity_reverified_and_promoted",
+          idempotency_key: `organization-tool:slack:${input.command_id}`,
+          authority_checked_at: input.now,
+          authority_evidence_sha256: input.command_sha256,
+          correlation_id: input.command_id,
+          detail: {
+            command_sha256: input.command_sha256,
+            public_configuration_sha256: publicConfigurationSha256,
+            app_identity_promotion: appIdentityPromotion,
+            result,
+          },
+        });
+        const promoted = this.database
+          .prepare(
+            `UPDATE organization_tool_connections
+             SET granted_scopes_json = ?,
+                 granted_scopes_sha256 = ?,
+                 verification_attempt_id = ?,
+                 verification_evidence_sha256 = ?,
+                 public_configuration_json = ?,
+                 public_configuration_sha256 = ?
+             WHERE connection_id = ?
+               AND organization_id = ?
+               AND status = 'active'
+               AND verification_attempt_id = ?
+               AND public_configuration_json = ?
+               AND public_configuration_sha256 = ?`,
+          )
+          .run(
+            connectionScopesJson,
+            connectionScopesSha256,
+            connectionAttemptId,
+            verificationEvidenceSha256,
+            publicConfigurationJson,
+            publicConfigurationSha256,
+            connectionId,
+            input.organization_id,
+            nullAppTool.connection_attempt_id,
+            previousPublicConfigurationJson,
+            previousPublicConfigurationSha256,
+          );
+        if (promoted.changes !== 1) {
+          throw new OrganizationIntegrationConflictError(
+            "ready Slack organization tool app identity could not be promoted",
+          );
+        }
+      }
+      if (!promotesAppIdentity) {
+        this.appendAudit({
+          occurred_at: input.now,
+          actor_kind: "membership",
+          actor_principal_id: input.administrator_principal_id,
+          actor_membership_id: input.administrator_membership_id,
+          actor_identity_link_id: null,
+          actor_installation_id: null,
+          command_id: input.command_id,
+          provider_event_sha256: null,
+          action: "organization_tool.slack.onboarded",
+          subject_kind: "tool_connection",
+          subject_id: connectionId,
+          membership_id: null,
+          identity_link_id: null,
+          connection_id: connectionId,
+          adapter_binding_id: null,
+          permission_grant_id: null,
+          outcome: "succeeded",
+          reason_code:
+            legacy === null
+              ? "provider_and_channel_verified"
+              : "legacy_connection_reverified_and_promoted",
+          idempotency_key: `organization-tool:slack:${input.command_id}`,
+          authority_checked_at: input.now,
+          authority_evidence_sha256: input.command_sha256,
+          correlation_id: input.command_id,
+          detail: {
+            command_sha256: input.command_sha256,
+            public_configuration_sha256: publicConfigurationSha256,
+            result,
+          },
+        });
+      }
       return Object.freeze(result);
     });
   }
@@ -2224,9 +2550,9 @@ export class OrganizationIntegrationsRepository {
     let detail: Record<string, unknown>;
     try { const parsed = JSON.parse(row.detail_json) as unknown; if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed) || canonicalJson(parsed as Record<string, unknown>) !== row.detail_json) return Object.freeze({ status: 'corrupt' as const }); detail = parsed as Record<string, unknown>; } catch { return Object.freeze({ status: 'corrupt' as const }); }
     if (digest(detail) !== row.detail_sha256 || organizationIntegrationAuditEntrySha256({ ...row, detail }) !== row.entry_sha256) return Object.freeze({ status: 'corrupt' as const });
-    const fields: Readonly<Record<string, unknown>> = { request_sha256: expected.request_sha256, provider_event_sha256: expected.provider_event_sha256, principal_id: expected.principal_id, policy_contract_sha256: expected.policy_contract_sha256, release_draft_sha256: expected.release_draft_sha256, approval_presentation_sha256: expected.approval_presentation_sha256, semantic_intent_sha256: expected.semantic_intent_sha256, message_presentation_sha256: expected.message_presentation_sha256 };
-    if (row.reason_code !== ORGANIZATION_MEMBER_READABLE_ALLOW_REASON_CODE || row.outcome !== 'allowed' || row.action !== 'permission.approve' || row.subject_kind !== 'approval' || row.subject_id !== expected.approval_id || row.actor_installation_id !== expected.installation_id || row.actor_principal_id !== expected.principal_id || row.actor_membership_id !== expected.membership_id || row.membership_id !== expected.membership_id || row.correlation_id !== expected.request_id || row.adapter_binding_id !== expected.adapter_binding_id || row.permission_grant_id !== expected.permission_grant_id || row.provider_event_sha256 !== expected.provider_event_sha256 || row.occurred_at !== expected.evaluated_at || row.authority_checked_at !== expected.evaluated_at || row.entry_sha256 !== expected.authorization_audit_entry_sha256 || detail.kind !== 'organization-member-readable-approval-audit-detail-v1' || detail.policy_id !== 'organization-member-readable-v1' || Object.entries(fields).some(([key, value]) => detail[key] !== value)) return Object.freeze({ status: 'mismatch' as const });
-    return Object.freeze({ status: 'matched' as const, audit_entry_sha256: row.entry_sha256 as `sha256:${string}` });
+    const fields: Readonly<Record<string, unknown>> = { request_sha256: expected.request_sha256, provider_event_sha256: expected.provider_event_sha256, principal_id: expected.principal_id, adapter_instance_id: expected.adapter_instance_id, policy_contract_sha256: expected.policy_contract_sha256, release_draft_sha256: expected.release_draft_sha256, approval_presentation_sha256: expected.approval_presentation_sha256, semantic_intent_sha256: expected.semantic_intent_sha256, message_presentation_sha256: expected.message_presentation_sha256 };
+    if (row.reason_code !== ORGANIZATION_MEMBER_READABLE_ALLOW_REASON_CODE || row.outcome !== 'allowed' || row.action !== 'permission.approve' || row.subject_kind !== 'approval' || row.subject_id !== expected.approval_id || row.actor_installation_id !== expected.installation_id || row.actor_principal_id !== expected.principal_id || row.actor_membership_id !== expected.membership_id || row.membership_id !== expected.membership_id || row.correlation_id !== expected.request_id || row.adapter_binding_id !== expected.adapter_binding_id || row.permission_grant_id !== expected.permission_grant_id || row.provider_event_sha256 !== expected.provider_event_sha256 || row.occurred_at !== expected.evaluated_at || row.authority_checked_at !== expected.evaluated_at || row.entry_sha256 !== expected.authorization_audit_entry_sha256 || detail.kind !== 'organization-member-readable-approval-audit-detail-v1' || detail.policy_id !== 'organization-member-readable-v1' || detail.adapter_id !== 'slack-reactions' || Object.entries(fields).some(([key, value]) => detail[key] !== value)) return Object.freeze({ status: 'mismatch' as const });
+    return Object.freeze({ status: 'matched' as const, audit_entry_sha256: row.entry_sha256 as `sha256:${string}`, adapter_instance_id: detail.adapter_instance_id as string });
   }
 
   /**

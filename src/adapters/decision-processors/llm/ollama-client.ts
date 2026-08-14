@@ -66,6 +66,9 @@ export class OllamaClient implements LlmProviderClient {
             { role: 'user', content: request.userPrompt },
           ],
           stream: false,
+          // Qwen3 enables reasoning by default. Disable it so the bounded
+          // response budget is reserved for the schema-constrained answer.
+          think: false,
           format: request.schema,
           options: {
             temperature: 0,

@@ -1,4 +1,9 @@
-import { createHash } from 'node:crypto';
+import {
+  createHash,
+  generateKeyPairSync,
+  randomUUID,
+  sign as signMessage,
+} from 'node:crypto';
 import { createServer } from 'node:net';
 import {
   chmodSync,
@@ -17,12 +22,34 @@ import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import Database from 'better-sqlite3';
 import { afterEach, describe, expect, it } from 'vitest';
-import { canonicalJson, parseCanonicalJson, sha256Digest } from '@echo-brain/federation-protocol';
+import {
+  canonicalJson,
+  federationId,
+  normalizeP256LowS,
+  p256KeyId,
+  parseCanonicalJson,
+  sha256Digest,
+} from '@echo-brain/federation-protocol';
+import {
+  createOrganizationRecordOrganizationMemberApprovalEnvelope,
+  organizationAuthorityPinSha256,
+  organizationMemberReadablePolicyContractSha256,
+  organizationMemberReadableReleaseDraftSha256,
+  organizationRecordEnvelopeId,
+  organizationRecordOrganizationMemberIntent,
+  projectOrganizationMemberReadableReleaseDraft,
+  verifyOrganizationAuthorityPin,
+} from '@echo-brain/organization-protocol';
 import {
   ORGANIZATION_RECORD_DERIVED_DATABASE,
   OrganizationRecordLogStore,
   openOrganizationRecordDatabase,
 } from '@echo-brain/organization-record/maintenance';
+import type { JsonObject } from '@echo-brain/organization-record';
+import {
+  createOrganizationMemberEligibilityCapabilityChannel,
+  deriveOrganizationMemberReadableEligibilityProof,
+} from '@echo-brain/organization-record/append';
 import {
   authorityStatePaths,
   readAuthorityRuntimeConfig,
@@ -39,6 +66,8 @@ import {
 import { runOrganizationAuthorityCli } from '../src/composition/cli.js';
 import { startOrganizationAuthority } from '../src/composition/runtime.js';
 import { validateReadableSearchGenerationPublishedAuditDetail } from '../src/application/readable-search-persistence.js';
+import { organizationMemberReadableEnvelopeValidator } from '../src/composition/organization-member-envelope-validator.js';
+import { recordBrief } from './support/record-ingest-fixture.js';
 
 const roots: string[] = [];
 const INSTALLATION_ID = 'ins_00000000-0000-4000-8000-000000000001';
@@ -113,6 +142,154 @@ function appendRecord(
       },
       canonical_envelope: canonicalEnvelope,
       envelope_sha256: sha256Digest(canonicalEnvelope),
+    });
+  } finally {
+    log.close();
+  }
+}
+
+async function appendOrganizationMemberRecord(
+  config: AuthorityRuntimeConfigV1,
+): Promise<void> {
+  const keyPair = generateKeyPairSync('ec', { namedCurve: 'prime256v1' });
+  const publicBytes = keyPair.publicKey.export({ format: 'der', type: 'spki' });
+  if (!Buffer.isBuffer(publicBytes)) throw new Error('test key export failed');
+  const signingKey = {
+    key_id: p256KeyId(publicBytes),
+    algorithm: 'ecdsa-p256-sha256-der-low-s',
+    public_key_spki_der_base64: publicBytes.toString('base64'),
+  } as const;
+  const authorityDescriptor = {
+    schema_version: 1,
+    kind: 'echo-organization-authority',
+    authority_id: config.authority.authority_id,
+    organization_id: config.organization.organization_id,
+    signing_key: signingKey,
+  } as const;
+  const pinned = verifyOrganizationAuthorityPin(
+    authorityDescriptor,
+    organizationAuthorityPinSha256(authorityDescriptor),
+  );
+  const approvalId = createHash('sha256')
+    .update('stopped-rebuild-member-v3')
+    .digest('hex');
+  const brief = recordBrief();
+  const evaluatedAt = '2026-08-08T12:00:00.000Z';
+  const semanticIntentSha256 = sha256Digest('member semantic intent');
+  const installationId = federationId('ins');
+  const principalId = federationId('prn');
+  const membershipId = federationId('mem');
+  const releaseDraftSha256 = organizationMemberReadableReleaseDraftSha256(
+    projectOrganizationMemberReadableReleaseDraft({
+      approval_id: approvalId,
+      brief,
+    }),
+  );
+  const envelope = await createOrganizationRecordOrganizationMemberApprovalEnvelope(
+    {
+      envelope_id: organizationRecordEnvelopeId(),
+      idempotency_key: approvalId,
+      payload: {
+        brief,
+        source: {
+          adapter_id: 'granola',
+          instance_id: 'primary',
+          external_id: 'stopped-rebuild-member-v3',
+        },
+        alternatives: [],
+        links: null,
+        reviewed_at: evaluatedAt,
+        surface: 'slack-organization-member-readable-v1',
+      },
+      reviewer: {
+        principal_id: principalId,
+        membership_id: membershipId,
+        reviewed_by: 'Ada Founder',
+        authorization: {
+          schema_version: 3,
+          kind: 'echo-organization-authorization-evidence',
+          policy_id: 'organization-member-readable-v1',
+          policy_contract_sha256:
+            organizationMemberReadablePolicyContractSha256(),
+          authority_id: config.authority.authority_id,
+          organization_id: config.organization.organization_id,
+          enrollment_id: federationId('enr'),
+          installation_id: installationId,
+          request_id: `pcr_${randomUUID()}`,
+          approval_id: approvalId,
+          action: 'approve',
+          request_sha256: sha256Digest('member request'),
+          provider_event_sha256: sha256Digest('member provider event'),
+          allowed: true,
+          reason_code: 'active_organization_member_readable_notice_v1',
+          principal_id: principalId,
+          membership_id: membershipId,
+          adapter_binding_id: federationId('bnd'),
+          permission_grant_id: `pgr_${randomUUID()}`,
+          evaluated_at: evaluatedAt,
+          authorization_audit_event_id: `aud_${randomUUID()}`,
+          authorization_audit_entry_sha256: sha256Digest('member audit entry'),
+          release_draft_sha256: releaseDraftSha256,
+          approval_presentation_sha256: sha256Digest('member presentation'),
+          semantic_intent_sha256: semanticIntentSha256,
+          message_presentation_sha256: sha256Digest('member provider presentation'),
+        },
+      },
+      intent: organizationRecordOrganizationMemberIntent(
+        semanticIntentSha256,
+      ),
+      submitter: {
+        installation_id: installationId,
+        submitted_at: evaluatedAt,
+      },
+      installation_signing_key: signingKey,
+    },
+    pinned,
+    async (bytes) =>
+      normalizeP256LowS(
+        signMessage('sha256', bytes, {
+          key: keyPair.privateKey,
+          dsaEncoding: 'der',
+        }),
+      ),
+  );
+  const document = envelope as unknown as JsonObject;
+  const paths = authorityStatePaths(config.state_dir);
+  const log = OrganizationRecordLogStore.open(paths.record_log_database_path, {
+    organization_id: config.organization.organization_id,
+    authority_id: config.authority.authority_id,
+    organization_member_validator: organizationMemberReadableEnvelopeValidator({
+      organization_id: config.organization.organization_id,
+      authority_id: config.authority.authority_id,
+    }),
+  });
+  try {
+    const canonicalEnvelope = canonicalJson(envelope);
+    const envelopeSha256 = sha256Digest(canonicalEnvelope);
+    const view = organizationMemberReadableEnvelopeValidator({
+      organization_id: config.organization.organization_id,
+      authority_id: config.authority.authority_id,
+    })(document);
+    const proof = deriveOrganizationMemberReadableEligibilityProof({
+      organization_id: config.organization.organization_id,
+      canonical_envelope_sha256: envelopeSha256,
+      envelope: view,
+    });
+    const channel = createOrganizationMemberEligibilityCapabilityChannel();
+    log.append({
+      envelope: {
+        envelope: document,
+        envelope_id: envelope.envelope_id,
+        event_type: 'approval',
+        idempotency_key: envelope.idempotency_key,
+        installation_id: envelope.submitter.installation_id,
+      },
+      canonical_envelope: canonicalEnvelope,
+      envelope_sha256: envelopeSha256,
+      organization_member_eligibility: {
+        capability: channel.issue(proof.preimage),
+        channel,
+      },
     });
   } finally {
     log.close();
@@ -446,6 +623,58 @@ describe('organization record rebuild-derived', () => {
     expect(rebuildingLeftovers(paths.state_directory)).toEqual([]);
     expectNoRecordSidecars(paths);
     await inspectAuthorityServePreflight(fixture.configPath, fixture.config);
+  });
+
+  it('rebuilds a valid schema-v3 member record as the exact text-free exclusion', async () => {
+    const fixture = await initializedFixture();
+    const paths = authorityStatePaths(fixture.stateDirectory);
+    await appendOrganizationMemberRecord(fixture.config);
+
+    const log = new Database(paths.record_log_database_path, {
+      readonly: true,
+    });
+    expect(
+      log
+        .prepare(
+          'SELECT log_position, atom_order FROM organization_member_readable_policy_fact ORDER BY atom_order',
+        )
+        .all(),
+    ).toEqual([{ log_position: 1, atom_order: 0 }]);
+    log.close();
+
+    const rebuilt = await rebuildAuthorityDerivedRecordStore(
+      fixture.configPath,
+    );
+    expect(rebuilt.head_position).toBe(1);
+    const derived = new Database(paths.record_derived_database_path, {
+      readonly: true,
+    });
+    try {
+      expect(
+        derived
+          .prepare(
+            `SELECT log_position, envelope_version, policy_id, outcome
+               FROM organization_derived_member_readable_policy_exclusion`,
+          )
+          .all(),
+      ).toEqual([
+        {
+          log_position: 1,
+          envelope_version: 3,
+          policy_id: 'organization-member-readable-v1',
+          outcome: 'deferred-to-permission-aware-retrieval',
+        },
+      ]);
+      expect(
+        (
+          derived
+            .prepare('SELECT COUNT(*) AS count FROM organization_derived_atom')
+            .get() as { count: number }
+        ).count,
+      ).toBe(0);
+    } finally {
+      derived.close();
+    }
   });
 
   it.each(['missing', 'corrupt'] as const)(

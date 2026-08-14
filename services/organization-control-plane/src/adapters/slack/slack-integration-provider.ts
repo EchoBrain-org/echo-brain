@@ -479,32 +479,90 @@ export class SlackWebIntegrationProvider implements SlackIntegrationProvider {
     token: string,
     signal?: AbortSignal,
   ): Promise<VerifiedSlackConnection> {
-    const response = await this.call(token, 'auth.test', {}, signal);
-    if (response.scopes === null) {
+    const authTest = await this.call(token, 'auth.test', {}, signal);
+    if (authTest.scopes === null) {
       throw new SlackIntegrationProviderError(
         'Slack did not report the granted OAuth scopes',
         'invalid_response',
       );
     }
+    if (!authTest.scopes.includes('users:read')) {
+      throw new SlackIntegrationProviderError(
+        'Slack connection cannot verify its app identity without users:read',
+        'unauthorized',
+      );
+    }
+    const teamId = requiredId(authTest.value['team_id'], 'team_id', 'T');
+    const enterpriseId = optionalId(
+      authTest.value['enterprise_id'],
+      'enterprise_id',
+      'E',
+    );
+    const botUserId = requiredSlackUserId(
+      authTest.value['user_id'],
+      'user_id',
+    );
+    const botId = requiredId(authTest.value['bot_id'], 'bot_id', 'B');
+    const authTestAppId = optionalId(
+      authTest.value['app_id'],
+      'app_id',
+      'A',
+    );
+    const botInfo = await this.call(
+      token,
+      'bots.info',
+      { bot: botId },
+      signal,
+    );
+    let bot: Record<string, unknown>;
+    let observedBotId: string;
+    let observedBotUserId: string;
+    let appId: string;
+    try {
+      bot = record(botInfo.value['bot'], 'bots.info bot');
+      observedBotId = requiredId(bot['id'], 'bot.id', 'B');
+      observedBotUserId = requiredSlackUserId(bot['user_id'], 'bot.user_id');
+      appId = requiredId(bot['app_id'], 'bot.app_id', 'A');
+    } catch {
+      throw new SlackIntegrationProviderError(
+        'Slack bots.info response does not prove an app identity',
+        'invalid_response',
+      );
+    }
+    if (bot['deleted'] !== false) {
+      throw new SlackIntegrationProviderError(
+        'Slack bot is deleted or has an invalid deletion state',
+        bot['deleted'] === true ? 'unauthorized' : 'invalid_response',
+      );
+    }
+    if (observedBotId !== botId || observedBotUserId !== botUserId) {
+      throw new SlackIntegrationProviderError(
+        'Slack bot identity does not match auth.test',
+        'unauthorized',
+      );
+    }
+    if (authTestAppId !== null && authTestAppId !== appId) {
+      throw new SlackIntegrationProviderError(
+        'Slack app identity does not match auth.test',
+        'unauthorized',
+      );
+    }
     const connection = {
-      team_id: requiredId(response.value['team_id'], 'team_id', 'T'),
-      enterprise_id: optionalId(
-        response.value['enterprise_id'],
-        'enterprise_id',
-        'E',
-      ),
-      bot_user_id: requiredSlackUserId(response.value['user_id'], 'user_id'),
-      bot_id: requiredId(response.value['bot_id'], 'bot_id', 'B'),
-      app_id: optionalId(response.value['app_id'], 'app_id', 'A'),
-      granted_scopes: response.scopes,
+      team_id: teamId,
+      enterprise_id: enterpriseId,
+      bot_user_id: botUserId,
+      bot_id: botId,
+      app_id: appId,
+      granted_scopes: authTest.scopes,
       verification_evidence_sha256: canonicalSha256({
-        method: 'slack_auth_test',
-        team_id: response.value['team_id'],
-        enterprise_id: response.value['enterprise_id'] ?? null,
-        bot_user_id: response.value['user_id'],
-        bot_id: response.value['bot_id'],
-        app_id: response.value['app_id'] ?? null,
-        granted_scopes: response.scopes,
+        method: 'slack_auth_test_bots_info',
+        team_id: teamId,
+        enterprise_id: enterpriseId,
+        bot_user_id: botUserId,
+        bot_id: botId,
+        app_id: appId,
+        bot_deleted: false,
+        granted_scopes: authTest.scopes,
       }),
     } satisfies VerifiedSlackConnection;
     return Object.freeze(connection);
@@ -761,6 +819,18 @@ export class SlackWebIntegrationProvider implements SlackIntegrationProvider {
       // the live card is not a reviewer card it falls through to the landed
       // path, so ordinary and pilot rejections are unchanged.
       if (reviewerResult !== null) return reviewerResult;
+    }
+    if (input.parse_organization_member_card_reactions === true) {
+      const memberResult = this.verifyOrganizationMemberCardReaction({
+        input,
+        connection,
+        message,
+        blocks,
+      });
+      // As with reviewer cards, an exact member card is a closed extension of
+      // schema-v1 rejection. Every other card continues through the landed
+      // ordinary/pilot grammar unchanged.
+      if (memberResult !== null) return memberResult;
     }
     const expectation = input.expected_presentation;
     const expectedAudienceBlock =
@@ -1021,6 +1091,58 @@ export class SlackWebIntegrationProvider implements SlackIntegrationProvider {
         approval_presentation_sha256:
           reconstructed.approval_presentation_sha256,
         message_presentation_sha256: messagePresentationSha256,
+      }),
+    });
+  }
+
+  /**
+   * Parses only the frozen reaction pair from an exact organization-member
+   * card for its schema-v1 rejection. Positive organization-member approval
+   * still requires the separate schema-v3 expectation and proof above.
+   */
+  private verifyOrganizationMemberCardReaction(context: {
+    input: VerifySlackReactionInput;
+    connection: VerifiedSlackConnection;
+    message: Record<string, unknown>;
+    blocks: readonly unknown[];
+  }): VerifiedSlackReaction | null {
+    const { input, connection, message, blocks } = context;
+    const reconstructed = reconstructOrganizationMemberCard({
+      approval_id: input.approval_id,
+      blocks,
+      fallback_text: message['text'],
+    });
+    if (reconstructed === null) return null;
+
+    const identityVerified =
+      input.expected_app_id !== null &&
+      connection.app_id === input.expected_app_id &&
+      message['app_id'] === input.expected_app_id &&
+      message['edited'] === undefined;
+    if (!identityVerified) {
+      throw new SlackIntegrationProviderError(
+        'Slack organization-member approval card identity or edit state is unusable',
+        'identity_mismatch',
+      );
+    }
+    if (input.reaction_name !== reconstructed.reject_reaction) {
+      throw new SlackIntegrationProviderError(
+        'Slack organization-member approval card does not authorize this reaction',
+        'identity_mismatch',
+      );
+    }
+    return Object.freeze({
+      observed: this.observedDecisiveReaction(
+        message,
+        reconstructed.reject_reaction,
+        reconstructed.approve_reaction,
+        input.user_id,
+      ),
+      presentation_candidate_observed: true,
+      message_presentation_sha256: null,
+      organization_member_card_reactions: Object.freeze({
+        approve_reaction: reconstructed.approve_reaction,
+        reject_reaction: reconstructed.reject_reaction,
       }),
     });
   }

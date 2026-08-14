@@ -32,6 +32,10 @@ const SURFACE = 'slack';
 // authority-verifiable replacement for a pre-marker Slack card without
 // rewriting its audit history or weakening live Authority verification.
 const AUTHORITY_MARKED_SURFACE = 'slack-authority-v1';
+// A durable identified-post recovery marker. It is intentionally separate
+// from the Authority-readable surface: a retry may prove the exact stored
+// card without ever submitting another post request.
+const AUTHORITY_POSTED_SURFACE = `${AUTHORITY_MARKED_SURFACE}-posted`;
 /** The one resolved surface that carries schema-v2 reviewer evidence. */
 const RESTRICTED_REVIEWER_SURFACE = 'slack-reviewer-v1';
 /** The one resolved surface that carries schema-v3 organization-member evidence. */
@@ -40,6 +44,7 @@ const ORGANIZATION_MEMBER_READABLE_SURFACE =
 export const DEFAULT_APPROVE_REACTION = 'white_check_mark';
 export const DEFAULT_REJECT_REACTION = 'x';
 const REACTION_NAME_RE = /^[a-z0-9_+-]{1,64}$/;
+const SLACK_CHANNEL_ID_RE = /^[CGD][A-Z0-9]{2,}$/;
 const SLACK_HEADER_MAX_CHARS = 150;
 
 type ReviewerReactionState = 'present' | 'absent' | 'unknown';
@@ -537,6 +542,14 @@ function jsonEquivalent(left: unknown, right: unknown): boolean {
   );
 }
 
+/** Slack may fold fallback newlines to literal single spaces on storage. */
+function equivalentSlackFallbackText(
+  expected: string,
+  actual: string,
+): boolean {
+  return actual === expected || actual === expected.replace(/\n/g, ' ');
+}
+
 function slackReference(
   reference: JsonObject,
 ): { channel: string; messageTs: string } | undefined {
@@ -912,8 +925,8 @@ export class SlackReactionsApprovalSurface implements ApprovalSurfaceAdapter {
         );
       }
     }
-    if (!isNonEmptyString(settings.channelId)) {
-      errors.push('settings.channel_id is required');
+    if (!SLACK_CHANNEL_ID_RE.test(settings.channelId)) {
+      errors.push('settings.channel_id must be a Slack channel ID');
     }
     // Exactly one reviewer: Slack reactions carry no timestamps, so a
     // multi-reviewer race has no defined winner and attribution would be
@@ -1347,69 +1360,39 @@ export class SlackReactionsApprovalSurface implements ApprovalSurfaceAdapter {
       return staged;
     }
     if (reviewerMode) {
-      const { contract, rendering, client } =
-        await this.frozenReviewerContract(staged);
-      const posted = await client.postMessage(
-        {
-          channel: contract.channel_id,
-          text: rendering.text,
-          blocks: rendering.blocks,
-          strictEvidence: true,
-          mrkdwn: false,
-          unfurlLinks: false,
-          unfurlMedia: false,
-        },
-        operation?.signal,
+      const { contract, rendering, client } = await this.frozenReviewerContract(
+        staged,
+        staged.published.some(
+          (entry) => entry.surface === AUTHORITY_POSTED_SURFACE,
+        ),
       );
-      // Slack returns `text` and `blocks`, not the transport flags, so
-      // publication verifies exactly what the provider echoed and relies on
-      // the fixed contract constants for the rest.
-      if (
-        posted.blocks === undefined ||
-        !jsonEquivalent(rendering.blocks, posted.blocks)
-      ) {
-        throw new AdapterError(
-          'unknown_outcome',
-          'Slack did not acknowledge the exact approval presentation',
-          true,
-        );
-      }
-      return await this.store.recordPublished({
+      return await this.ensureIdentifiedAuthorityPublished(
         processingKey,
-        surface: publicationSurface,
-        reference: { channel_id: posted.channel, message_ts: posted.ts },
-      });
+        staged,
+        contract.channel_id,
+        rendering.text,
+        rendering.blocks,
+        client,
+        operation,
+      );
     }
     if (organizationMemberMode) {
       const { contract, rendering, client } =
-        await this.frozenOrganizationMemberContract(staged);
-      const posted = await client.postMessage(
-        {
-          channel: contract.channel_id,
-          text: rendering.text,
-          blocks: rendering.blocks,
-          strictEvidence: true,
-          mrkdwn: false,
-          unfurlLinks: false,
-          unfurlMedia: false,
-        },
-        operation?.signal,
-      );
-      if (
-        posted.blocks === undefined ||
-        !jsonEquivalent(rendering.blocks, posted.blocks)
-      ) {
-        throw new AdapterError(
-          'unknown_outcome',
-          'Slack did not acknowledge the exact approval presentation',
-          true,
+        await this.frozenOrganizationMemberContract(
+          staged,
+          staged.published.some(
+            (entry) => entry.surface === AUTHORITY_POSTED_SURFACE,
+          ),
         );
-      }
-      return await this.store.recordPublished({
+      return await this.ensureIdentifiedAuthorityPublished(
         processingKey,
-        surface: publicationSurface,
-        reference: { channel_id: posted.channel, message_ts: posted.ts },
-      });
+        staged,
+        contract.channel_id,
+        rendering.text,
+        rendering.blocks,
+        client,
+        operation,
+      );
     }
     // Posting then recording is a dual write: a crash between the two can
     // produce a duplicate message on retry. Posting is at-least-once by
@@ -1428,30 +1411,183 @@ export class SlackReactionsApprovalSurface implements ApprovalSurfaceAdapter {
               this.settings.permissionPilotPresentation,
           }),
     });
-    const posted = await this.apiClient().postMessage(
+    const expectedText = this.messageText(staged.brief);
+    const client = this.apiClient();
+    const posted = await client.postMessage(
       {
         channel: this.settings.channelId,
-        text: this.messageText(staged.brief),
+        text: expectedText,
         blocks,
-        strictEvidence: requiresExactPostedBlocks,
       },
       operation?.signal,
     );
-    if (
-      requiresExactPostedBlocks &&
-      (posted.blocks === undefined || !jsonEquivalent(blocks, posted.blocks))
-    ) {
-      throw new AdapterError(
-        'unknown_outcome',
-        'Slack did not acknowledge the exact approval presentation',
-        true,
+    if (requiresExactPostedBlocks) {
+      await this.verifyStoredApprovalPresentation(
+        { channel_id: posted.channel, message_ts: posted.ts },
+        this.settings.channelId,
+        expectedText,
+        blocks,
+        client,
+        operation,
       );
     }
-    return await this.store.recordPublished({
+    const finalized = await this.store.recordPublished({
       processingKey,
       surface: publicationSurface,
       reference: { channel_id: posted.channel, message_ts: posted.ts },
     });
+    if (requiresExactPostedBlocks && finalized.status === 'pending') {
+      const winner = finalized.published.find(
+        (entry) => entry.surface === AUTHORITY_MARKED_SURFACE,
+      );
+      if (winner === undefined) {
+        throw new AdapterError(
+          'temporarily_unavailable',
+          'Slack Authority publication could not be recorded',
+          true,
+        );
+      }
+      if (
+        !jsonEquivalent(winner.reference, {
+          channel_id: posted.channel,
+          message_ts: posted.ts,
+        })
+      ) {
+        await this.verifyStoredApprovalPresentation(
+          winner.reference,
+          this.settings.channelId,
+          expectedText,
+          blocks,
+          client,
+          operation,
+        );
+      }
+    }
+    return finalized;
+  }
+
+  /**
+   * Make an exact-card post recoverable before trusting any provider content.
+   * The `*-posted` slot is create-once. In particular, when two workers race
+   * to record it, the returned store view chooses the one Slack reference
+   * both workers must read and verify before the Authority slot is appended.
+   */
+  private async ensureIdentifiedAuthorityPublished(
+    processingKey: string,
+    staged: ApprovalDecisionStoreView,
+    channel: string,
+    expectedText: string,
+    expectedBlocks: readonly unknown[],
+    client: SlackWebApiClient,
+    operation?: AdapterOperationContext,
+  ): Promise<ApprovalDecisionStoreView> {
+    let identified = staged;
+    if (
+      !identified.published.some(
+        (entry) => entry.surface === AUTHORITY_POSTED_SURFACE,
+      )
+    ) {
+      const posted = await client.postMessage(
+        {
+          channel,
+          text: expectedText,
+          blocks: expectedBlocks,
+          mrkdwn: false,
+          unfurlLinks: false,
+          unfurlMedia: false,
+        },
+        operation?.signal,
+      );
+      // Persist the provider identity before making a second provider call.
+      // Retried work sees this marker and never posts another card.
+      identified = await this.store.recordPublished({
+        processingKey,
+        surface: AUTHORITY_POSTED_SURFACE,
+        reference: { channel_id: posted.channel, message_ts: posted.ts },
+      });
+    }
+    if (identified.status !== 'pending') return identified;
+    const winner = identified.published.find(
+      (entry) => entry.surface === AUTHORITY_POSTED_SURFACE,
+    );
+    if (winner === undefined) {
+      throw new AdapterError(
+        'temporarily_unavailable',
+        'Slack identified post could not be recorded',
+        true,
+      );
+    }
+    await this.verifyStoredApprovalPresentation(
+      winner.reference,
+      channel,
+      expectedText,
+      expectedBlocks,
+      client,
+      operation,
+    );
+    const finalized = await this.store.recordPublished({
+      processingKey,
+      surface: AUTHORITY_MARKED_SURFACE,
+      reference: winner.reference,
+    });
+    if (finalized.status !== 'pending') return finalized;
+    // `recordPublished` is create-once. A concurrent worker might have won
+    // the Authority slot with another already-identified reference, so the
+    // durable returned winner is the only reference this cycle may poll.
+    const finalWinner = finalized.published.find(
+      (entry) => entry.surface === AUTHORITY_MARKED_SURFACE,
+    );
+    if (finalWinner === undefined) {
+      throw new AdapterError(
+        'temporarily_unavailable',
+        'Slack Authority publication could not be recorded',
+        true,
+      );
+    }
+    if (!jsonEquivalent(finalWinner.reference, winner.reference)) {
+      await this.verifyStoredApprovalPresentation(
+        finalWinner.reference,
+        channel,
+        expectedText,
+        expectedBlocks,
+        client,
+        operation,
+      );
+    }
+    return finalized;
+  }
+
+  private async verifyStoredApprovalPresentation(
+    reference: JsonObject,
+    expectedChannel: string,
+    expectedText: string,
+    expectedBlocks: readonly unknown[],
+    client: SlackWebApiClient,
+    operation?: AdapterOperationContext,
+  ): Promise<void> {
+    const parsed = slackReference(reference);
+    if (parsed === undefined || parsed.channel !== expectedChannel) {
+      throw new AdapterError(
+        'permanently_rejected',
+        'Slack identified publication reference is malformed or names another channel',
+        false,
+      );
+    }
+    const stored = await client.readMessage(
+      parsed.channel,
+      parsed.messageTs,
+      operation?.signal,
+    );
+    if (
+      !equivalentSlackFallbackText(expectedText, stored.text) ||
+      !jsonEquivalent(expectedBlocks, stored.blocks)
+    ) {
+      throw new AdapterError(
+        'permanently_rejected',
+        'Slack stored approval presentation does not match its frozen card',
+        false,
+      );
+    }
   }
 
   private publicationSurface(): string {

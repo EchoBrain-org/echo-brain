@@ -67,14 +67,18 @@ class MemberStore implements ApprovalDecisionStore {
   readFrozenApprovalPresentationContract(): FrozenOrganizationMemberApprovalPresentationContract | null { return this.contract; }
 }
 
-function fetchWithApproval(postBodies: Record<string, unknown>[]): typeof fetch {
+function fetchWithApproval(
+  postBodies: Record<string, unknown>[],
+  reactionName = 'white_check_mark',
+): typeof fetch {
   return (async (url: string | URL | Request, init?: RequestInit) => {
     const method = String(url instanceof Request ? url.url : url).split('/').pop()!.split('?')[0];
-    const json = (body: unknown) => new Response(JSON.stringify(body), { status: 200, headers: { 'content-type': 'application/json' } });
+    const json = (body: unknown, headers: Record<string, string> = {}) => new Response(JSON.stringify(body), { status: 200, headers: { 'content-type': 'application/json', ...headers } });
     if (method === 'chat.postMessage') { const body = JSON.parse(String(init?.body)) as Record<string, unknown>; postBodies.push(body); return json({ ok: true, channel: 'C012CHANNEL', ts: '1700.100000', message: { ts: '1700.100000', text: body.text, blocks: body.blocks } }); }
-    if (method === 'reactions.get') return json({ ok: true, message: { ts: '1700.100000', reactions: [{ name: 'white_check_mark', users: [REVIEWER], count: 1 }] } });
+    if (method === 'reactions.get') return json({ ok: true, message: { ts: '1700.100000', text: postBodies[0]?.text, blocks: postBodies[0]?.blocks, reactions: [{ name: reactionName, users: [REVIEWER], count: 1 }] } });
     if (method === 'conversations.replies') return json({ ok: true, messages: [{ ts: '1700.100000', user: 'U012BOTUSER', text: 'card' }] });
-    if (method === 'auth.test') return json({ ok: true, team_id: 'T012ABCDEF', enterprise_id: null, user_id: 'U012BOTUSER', bot_id: 'B012BOTID', app_id: 'A012APPID' });
+    if (method === 'auth.test') return json({ ok: true, team_id: 'T012ABCDEF', enterprise_id: null, user_id: 'U012BOTUSER', bot_id: 'B012BOTID' }, { 'x-oauth-scopes': 'chat:write,users:read' });
+    if (method === 'bots.info') return json({ ok: true, bot: { id: 'B012BOTID', user_id: 'U012BOTUSER', app_id: 'A012APPID', deleted: false } });
     return json({ ok: false, error: 'unknown_method' });
   }) as typeof fetch;
 }
@@ -100,5 +104,43 @@ describe('slack organization-member publication', () => {
     expect(bodies[0]?.mrkdwn).toBe(false);
     expect(memberRequests[0]?.policy_contract_sha256).toBe(store.contract?.policy_contract_sha256);
     expect(store.resolutions[0]).toMatchObject({ surface: 'slack-organization-member-readable-v1', reviewedAt: EVALUATED_AT, metadata: { authorization: evidence(memberRequests[0]!) } });
+  });
+
+  it('keeps organization-member rejection on the schema-v1 authorization path', async () => {
+    const store = new MemberStore(); const bodies: Record<string, unknown>[] = [];
+    const legacyRequests: Array<Parameters<ApprovalActionAuthorizer['authorize']>[0]> = [];
+    let memberAuthorizationCalls = 0;
+    const legacyEvidence = { schema_version: 1, action: 'reject' };
+    const legacy: ApprovalActionAuthorizer = {
+      authorize: async (input) => {
+        legacyRequests.push(input);
+        return { allowed: true, evidence: legacyEvidence };
+      },
+    };
+    const surface = createSlackReactionsApprovalSurface({ kind: 'approval-surface', adapter_id: 'slack-reactions', instance_id: 'default', credential_ref: 'env:SLACK_BOT_TOKEN', settings: { channel_id: 'C012CHANNEL', reviewer: { slack_user_id: REVIEWER, name: 'Reviewer One' }, approve_reaction: 'white_check_mark', reject_reaction: 'x', presentation_mode: 'organization-member-readable-v1' } } as unknown as AdapterConfig, {
+      store, approvalActionAuthorizer: legacy,
+      organizationMemberApprovalActionAuthorizer: { authorizeOrganizationMemberApproval: async () => { memberAuthorizationCalls += 1; throw new Error('member approval path must not authorize a rejection'); } },
+      organizationMemberAuthorizationEvidenceValidator: validateOrganizationMemberAuthorizationEvidence,
+      reviewerDisplayNameValidator: assertReviewerDisplayName,
+      organizationMemberPresentationRenderer: organizationMemberApprovalPresentationRenderer,
+      environment: { SLACK_BOT_TOKEN: 'xoxb-test' }, fetchImpl: fetchWithApproval(bodies, 'x'), now: () => '2026-08-11T13:00:00.000Z',
+    });
+
+    const result = await surface.review(request());
+
+    expect(result.status).toBe('rejected');
+    expect(memberAuthorizationCalls).toBe(0);
+    expect(legacyRequests).toEqual([
+      expect.objectContaining({
+        approval_id: approvalId,
+        action: 'reject',
+        reaction_name: 'x',
+      }),
+    ]);
+    expect(store.resolutions[0]).toMatchObject({
+      status: 'rejected',
+      surface: 'slack',
+      metadata: { authorization: legacyEvidence },
+    });
   });
 });

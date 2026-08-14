@@ -23,8 +23,6 @@ export interface SlackPostMessageInput {
   channel: string;
   text: string;
   blocks?: readonly unknown[];
-  /** Require provider-returned blocks to be bound to this exact message. */
-  strictEvidence?: boolean;
   /** Disable link previews for meeting-derived content by default. */
   unfurlLinks?: boolean;
   /** Disable media previews for meeting-derived content by default. */
@@ -40,17 +38,22 @@ export interface SlackPostMessageInput {
 export interface SlackPostedMessage {
   channel: string;
   ts: string;
-  /** Blocks Slack acknowledged on the stored message, when returned. */
-  blocks?: readonly unknown[];
 }
 
-/** Stable provider identifiers returned by Slack's `auth.test`. */
+/** Exact immutable-card evidence fetched after an identified post. */
+export interface SlackReadMessage {
+  ts: string;
+  text: string;
+  blocks: readonly unknown[];
+}
+
+/** Stable provider identifiers proved across Slack's auth and bot APIs. */
 export interface SlackAuthIdentity {
   team_id: string;
   enterprise_id: string | null;
   user_id: string;
-  bot_id: string | null;
-  app_id: string | null;
+  bot_id: string;
+  app_id: string;
 }
 
 export interface SlackDirectMessage {
@@ -165,7 +168,10 @@ const SLACK_USER_ID_RE = /^[UW][A-Z0-9]{2,}$/;
 const SLACK_BOT_ID_RE = /^B[A-Z0-9]{2,}$/;
 const SLACK_APP_ID_RE = /^A[A-Z0-9]{2,}$/;
 const SLACK_DM_ID_RE = /^D[A-Z0-9]{2,}$/;
-const SLACK_MESSAGE_TS_RE = /^[0-9]+\.[0-9]{6}$/;
+const SLACK_CONVERSATION_ID_RE = /^[CGD][A-Z0-9]{2,}$/;
+const SLACK_MESSAGE_TS_RE = /^[0-9]{1,16}\.[0-9]{6}$/;
+const SLACK_SCOPE_RE = /^[a-z][a-z0-9:_-]{0,127}$/;
+const SLACK_IDENTITY_REQUIRED_SCOPE = "users:read";
 
 function requiredSlackId(
   body: Record<string, unknown>,
@@ -202,6 +208,39 @@ function optionalSlackId(
   return value;
 }
 
+function requireSlackScopeEvidence(
+  header: string | null,
+  requiredScope: string,
+  method: string,
+): void {
+  if (header === null) {
+    throw new SlackApiError(
+      "invalid",
+      `Slack ${method} returned no OAuth scope evidence`,
+      false,
+    );
+  }
+  const scopes = [...new Set(header.split(",").map((scope) => scope.trim()))]
+    .filter((scope) => scope.length > 0);
+  if (
+    scopes.length === 0 ||
+    scopes.some((scope) => !SLACK_SCOPE_RE.test(scope))
+  ) {
+    throw new SlackApiError(
+      "invalid",
+      `Slack ${method} returned invalid OAuth scope evidence`,
+      false,
+    );
+  }
+  if (!scopes.includes(requiredScope)) {
+    throw new SlackApiError(
+      "auth",
+      `Slack ${method} did not prove the required ${requiredScope} scope`,
+      false,
+    );
+  }
+}
+
 /**
  * Minimal capability-neutral Slack Web API client shared by Slack adapters.
  * Slack commonly reports failures as HTTP 200 with `{ok:false,error}`, so both
@@ -229,26 +268,105 @@ export class SlackWebApiClient {
   }
 
   /**
-   * Capture the strongest stable tenant and installation-subject identifiers
-   * exposed by `auth.test`. This is intentionally separate from `authTest()`:
-   * adapter health checks retain their historical permissive return shape,
-   * while identity enrollment fails closed on malformed or absent IDs.
+   * Capture the strongest stable tenant and installation-subject identifiers.
+   * `auth.test` does not reliably expose `app_id`, so the signed-request path
+   * resolves the authenticated bot through `bots.info` and binds its exact
+   * bot, user, and app IDs. This remains separate from permissive health
+   * checks, which need only prove that the token can answer `auth.test`.
    */
   async authIdentity(signal?: AbortSignal): Promise<SlackAuthIdentity> {
-    const body = await this.call("auth.test", {}, { signal });
+    const body = await this.call("auth.test", {}, {
+      signal,
+      requiredScope: SLACK_IDENTITY_REQUIRED_SCOPE,
+    });
+    const teamId = requiredSlackId(
+      body,
+      "team_id",
+      SLACK_TEAM_ID_RE,
+      "auth.test",
+    );
+    const enterpriseId = optionalSlackId(
+      body,
+      "enterprise_id",
+      SLACK_ENTERPRISE_ID_RE,
+      "auth.test",
+    );
+    const userId = requiredSlackId(
+      body,
+      "user_id",
+      SLACK_USER_ID_RE,
+      "auth.test",
+    );
+    const botId = requiredSlackId(
+      body,
+      "bot_id",
+      SLACK_BOT_ID_RE,
+      "auth.test",
+    );
+    const authAppId = optionalSlackId(
+      body,
+      "app_id",
+      SLACK_APP_ID_RE,
+      "auth.test",
+    );
+    // Slack documents bots.info as a GET method. Keep its selector in the
+    // query string so Slack cannot silently ignore a JSON POST body and return
+    // an unscoped success response without the requested bot identity.
+    const botBody = await this.call(
+      "bots.info",
+      { bot: botId },
+      { signal, method: "GET" },
+    );
+    const bot = botBody["bot"];
+    if (!isPlainObject(bot)) {
+      throw new SlackApiError(
+        "invalid",
+        "Slack bots.info returned no bot identity",
+        false,
+      );
+    }
+    const observedBotId = requiredSlackId(
+      bot,
+      "id",
+      SLACK_BOT_ID_RE,
+      "bots.info",
+    );
+    const observedUserId = requiredSlackId(
+      bot,
+      "user_id",
+      SLACK_USER_ID_RE,
+      "bots.info",
+    );
+    const appId = requiredSlackId(
+      bot,
+      "app_id",
+      SLACK_APP_ID_RE,
+      "bots.info",
+    );
+    if (bot["deleted"] !== false) {
+      throw new SlackApiError(
+        bot["deleted"] === true ? "auth" : "invalid",
+        "Slack bots.info returned a deleted bot or invalid deletion state",
+        false,
+      );
+    }
+    if (
+      observedBotId !== botId ||
+      observedUserId !== userId ||
+      (authAppId !== null && authAppId !== appId)
+    ) {
+      throw new SlackApiError(
+        "auth",
+        "Slack bots.info identity does not match auth.test",
+        false,
+      );
+    }
     return {
-      team_id: requiredSlackId(body, "team_id", SLACK_TEAM_ID_RE, "auth.test"),
-      enterprise_id: optionalSlackId(
-        body,
-        "enterprise_id",
-        SLACK_ENTERPRISE_ID_RE,
-        "auth.test",
-      ),
-      user_id: requiredSlackId(body, "user_id", SLACK_USER_ID_RE, "auth.test"),
-      bot_id: optionalSlackId(body, "bot_id", SLACK_BOT_ID_RE, "auth.test"),
-      // `app_id` is not promised by auth.test, but retain it when Slack does
-      // supply it rather than inferring it from the token or configuration.
-      app_id: optionalSlackId(body, "app_id", SLACK_APP_ID_RE, "auth.test"),
+      team_id: teamId,
+      enterprise_id: enterpriseId,
+      user_id: userId,
+      bot_id: botId,
+      app_id: appId,
     };
   }
 
@@ -309,6 +427,13 @@ export class SlackWebApiClient {
     input: SlackPostMessageInput,
     signal?: AbortSignal,
   ): Promise<SlackPostedMessage> {
+    if (!SLACK_CONVERSATION_ID_RE.test(input.channel)) {
+      throw new SlackApiError(
+        "invalid",
+        "Slack chat.postMessage requires a canonical conversation ID",
+        false,
+      );
+    }
     // A transport failure here is an unknown outcome: Slack may have accepted
     // the message even though no response arrived. Callers must treat posting
     // as at-least-once.
@@ -333,31 +458,66 @@ export class SlackWebApiClient {
         true,
       );
     }
-    const message = body["message"];
-    const acknowledgedBlocks = isPlainObject(message)
-      ? message["blocks"]
-      : undefined;
+    // `message` is an acknowledgement echo, not durable message evidence.
+    // It can be absent, stale, or differ in shape from Slack's stored card.
+    // Identified-card callers must re-read via `readMessage()` below.
     if (
-      input.strictEvidence === true &&
-      (channel !== input.channel ||
-        !SLACK_MESSAGE_TS_RE.test(ts) ||
-        !isPlainObject(message) ||
-        message["ts"] !== ts ||
-        message["text"] !== input.text ||
-        !Array.isArray(acknowledgedBlocks))
+      channel !== input.channel ||
+      !SLACK_CONVERSATION_ID_RE.test(channel) ||
+      !SLACK_MESSAGE_TS_RE.test(ts)
     ) {
       throw new SlackApiError(
         "unknown_outcome",
-        "Slack did not bind the acknowledged presentation to the posted message identity",
+        "Slack did not return the exact posted message identity",
         true,
       );
     }
+    return { channel, ts };
+  }
+
+  /**
+   * Read back the exact stored card for an identified post. This intentionally
+   * uses `reactions.get`: it returns the message alongside reaction evidence
+   * and lets approval polling use the same provider-bound reference.
+   */
+  async readMessage(
+    channel: string,
+    timestamp: string,
+    signal?: AbortSignal,
+  ): Promise<SlackReadMessage> {
+    if (
+      !SLACK_CONVERSATION_ID_RE.test(channel) ||
+      !SLACK_MESSAGE_TS_RE.test(timestamp)
+    ) {
+      throw new SlackApiError(
+        "invalid",
+        "Slack reactions.get requires a canonical message identity",
+        false,
+      );
+    }
+    const body = await this.call(
+      "reactions.get",
+      { channel, timestamp, full: true },
+      { signal, method: "GET" },
+    );
+    const message = body["message"];
+    if (
+      !isPlainObject(message) ||
+      message["ts"] !== timestamp ||
+      typeof message["text"] !== "string" ||
+      !Array.isArray(message["blocks"]) ||
+      Object.hasOwn(message, "edited")
+    ) {
+      throw new SlackApiError(
+        "invalid",
+        "Slack reactions.get returned edited or malformed message evidence",
+        false,
+      );
+    }
     return {
-      channel,
-      ts,
-      ...(Array.isArray(acknowledgedBlocks)
-        ? { blocks: acknowledgedBlocks }
-        : {}),
+      ts: timestamp,
+      text: message["text"],
+      blocks: message["blocks"],
     };
   }
 
@@ -607,6 +767,7 @@ export class SlackWebApiClient {
       signal?: AbortSignal | undefined;
       method?: "GET" | "POST";
       unknownOutcomeOnTransportFailure?: boolean;
+      requiredScope?: string;
     },
   ): Promise<Record<string, unknown>> {
     const httpMethod = options.method ?? "POST";
@@ -684,7 +845,6 @@ export class SlackWebApiClient {
           false,
         );
       }
-
       const body = await readBoundedSlackJson(
         response,
         method,
@@ -733,6 +893,13 @@ export class SlackWebApiClient {
           "invalid",
           `Slack ${method} failed: ${error}`,
           false,
+        );
+      }
+      if (options.requiredScope !== undefined) {
+        requireSlackScopeEvidence(
+          response.headers.get("x-oauth-scopes"),
+          options.requiredScope,
+          method,
         );
       }
       return body;

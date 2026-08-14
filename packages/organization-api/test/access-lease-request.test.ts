@@ -5,10 +5,13 @@ import { normalizeP256LowS, p256KeyId } from '@echo-brain/federation-protocol';
 import type { P256SigningKeyDescriptor } from '@echo-brain/federation-protocol';
 import {
   createOrganizationAccessLeaseRequest,
+  createOrganizationAccessLeaseRequestV2,
+  MAX_ORGANIZATION_ACCESS_LEASE_REQUEST_TTL_MS,
   organizationAccessLeaseRequestSha256,
   validateCompletedOrganizationEnrollment,
   validateIssuedOrganizationEnrollmentGrant,
   validateOrganizationAccessLeaseRequest,
+  validateOrganizationAccessLeaseRequestAnyVersion,
   validateOrganizationAccessLeaseResponse,
   validateOrganizationApiError,
   validateOrganizationAuthorityDescriptorResponse,
@@ -16,6 +19,7 @@ import {
   validateRevokedOrganizationInstallation,
   validateRevokedOrganizationMembership,
   verifyOrganizationAccessLeaseRequest,
+  verifyOrganizationAccessLeaseRequestAnyVersion,
 } from '../src/index.js';
 
 function installationKey(): {
@@ -76,6 +80,92 @@ describe('organization access lease request', () => {
           previous_access_state_sha256:
             'sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc',
         },
+        key.descriptor,
+      ),
+    ).toThrow('payload digest');
+  });
+
+  it('preserves the exact V1 payload while V2 explicitly signs a bounded requested TTL', async () => {
+    const key = installationKey();
+    let v1Payload = '';
+    const common = {
+      request_id: 'alr_00000000-0000-4000-8000-000000000003',
+      authority_id: 'oau_00000000-0000-4000-8000-000000000001',
+      authority_key_id:
+        'sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa' as const,
+      organization_id: 'org_00000000-0000-4000-8000-000000000001',
+      enrollment_id: 'enr_00000000-0000-4000-8000-000000000001',
+      installation_id: 'ins_00000000-0000-4000-8000-000000000001',
+      installation_signing_key: key.descriptor,
+      previous_access_state_sha256:
+        'sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb' as const,
+      requested_at: '2026-07-22T12:00:00.000Z',
+    };
+    const v1 = await createOrganizationAccessLeaseRequest(common, (bytes) => {
+      v1Payload = bytes.toString('utf8');
+      return key.sign(bytes);
+    });
+    expect(v1Payload).toBe(
+      `{"authority_id":"${common.authority_id}","authority_key_id":"${common.authority_key_id}","enrollment_id":"${common.enrollment_id}","installation_id":"${common.installation_id}","installation_key_id":"${key.descriptor.key_id}","kind":"echo-organization-access-lease-request","organization_id":"${common.organization_id}","previous_access_state_sha256":"${common.previous_access_state_sha256}","request_id":"${common.request_id}","requested_at":"${common.requested_at}","schema_version":1}`,
+    );
+
+    const v2 = await createOrganizationAccessLeaseRequestV2(
+      {
+        ...common,
+        requested_active_lease_ttl_ms:
+          MAX_ORGANIZATION_ACCESS_LEASE_REQUEST_TTL_MS,
+      },
+      (bytes) => key.sign(bytes),
+    );
+    expect(v2).toMatchObject({
+      schema_version: 2,
+      requested_active_lease_ttl_ms: 1_800_000,
+    });
+    expect(
+      verifyOrganizationAccessLeaseRequestAnyVersion(v2, key.descriptor),
+    ).toEqual(v2);
+    expect(validateOrganizationAccessLeaseRequestAnyVersion(v2)).toEqual(v2);
+    expect(() => validateOrganizationAccessLeaseRequest(v2)).toThrow();
+    expect(() =>
+      verifyOrganizationAccessLeaseRequest(v2, key.descriptor),
+    ).toThrow();
+    expect(() =>
+      organizationAccessLeaseRequestSha256(v2, key.descriptor),
+    ).toThrow();
+    expect(validateOrganizationAccessLeaseRequest(v1)).toEqual(v1);
+  });
+
+  it('rejects out-of-range, non-integer, and unsigned changes to a V2 TTL', async () => {
+    const key = installationKey();
+    const input = {
+      request_id: 'alr_00000000-0000-4000-8000-000000000004',
+      authority_id: 'oau_00000000-0000-4000-8000-000000000001',
+      authority_key_id:
+        'sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa' as const,
+      organization_id: 'org_00000000-0000-4000-8000-000000000001',
+      enrollment_id: 'enr_00000000-0000-4000-8000-000000000001',
+      installation_id: 'ins_00000000-0000-4000-8000-000000000001',
+      installation_signing_key: key.descriptor,
+      previous_access_state_sha256:
+        'sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb' as const,
+      requested_at: '2026-07-22T12:00:00.000Z',
+    };
+    for (const invalid of [0, 1.5, 1_800_001]) {
+      await expect(
+        createOrganizationAccessLeaseRequestV2(
+          { ...input, requested_active_lease_ttl_ms: invalid },
+          (bytes) => key.sign(bytes),
+        ),
+      ).rejects.toThrow('requested_active_lease_ttl_ms');
+    }
+
+    const request = await createOrganizationAccessLeaseRequestV2(
+      { ...input, requested_active_lease_ttl_ms: 1_800_000 },
+      (bytes) => key.sign(bytes),
+    );
+    expect(() =>
+      verifyOrganizationAccessLeaseRequestAnyVersion(
+        { ...request, requested_active_lease_ttl_ms: 300_000 },
         key.descriptor,
       ),
     ).toThrow('payload digest');

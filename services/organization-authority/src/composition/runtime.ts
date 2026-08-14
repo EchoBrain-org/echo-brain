@@ -1,6 +1,7 @@
 import { once } from 'node:events';
 import type { AddressInfo } from 'node:net';
 import { join } from 'node:path';
+import { canonicalJson } from '@echo-brain/federation-protocol';
 import {
   createReadableSearchAnalyzerDescriptor,
   readableSearchRetrievalContractSha256,
@@ -21,6 +22,7 @@ import {
   SystemAuthorityClock,
 } from '../adapters/runtime/system-runtime-ports.js';
 import { SqliteOrganizationAuthorityRepository } from '../adapters/persistence/sqlite/sqlite-authority-repository.js';
+import { readOrganizationMemberRecordingActivation } from '../adapters/persistence/sqlite/organization-recording-policy-activation.js';
 import { OrganizationAuthorityApplication } from '../application/organization-authority.js';
 import { reviewerPolicyContractSha256 } from '../application/reviewer-policy-contract.js';
 import { ReadableSearchAuthorizationFence } from '../application/readable-search-authorization-fence.js';
@@ -76,6 +78,49 @@ const RECORD_DERIVE_FATAL_EXIT_CODE = 1;
 const GRACEFUL_SHUTDOWN_DEADLINE_MS = 30_000;
 const ADMIN_CONSOLE_SESSION_TTL_MS = 8 * 60 * 60 * 1000;
 const MAXIMUM_ADMIN_CONSOLE_SESSIONS = 256;
+
+function assertOrganizationMemberRecordingRuntimeBinding(
+  config: AuthorityServeConfig,
+): void {
+  const stored = readOrganizationMemberRecordingActivation(
+    config.database_path,
+  );
+  const expected = config.organization_member_recording_activation_v1;
+  if (stored === null) {
+    if (expected !== undefined) {
+      throw new Error(
+        'organization-member recording activation disappeared before runtime composition',
+      );
+    }
+    return;
+  }
+  if (expected === undefined) {
+    throw new Error(
+      'organization-member recording activation changed before runtime composition',
+    );
+  }
+  const actual = {
+    schema_version: 1,
+    kind: 'organization-member-recording-activation-binding-v1',
+    command_sha256: stored.command_sha256,
+    activation_sha256: stored.activation_sha256,
+    initialized_runtime_config_sha256:
+      stored.command.initialized_runtime_config_sha256,
+    initialization_manifest_sha256:
+      stored.command.initialization_manifest_sha256,
+    activated_at: stored.activated_at,
+    audit_sequence: stored.audit_sequence,
+  } as const;
+  if (
+    canonicalJson(actual) !== canonicalJson(expected) ||
+    canonicalJson(stored.command.target_policy) !==
+      canonicalJson(config.organization_recording_policy_v1)
+  ) {
+    throw new Error(
+      'organization-member recording activation differs from effective runtime policy',
+    );
+  }
+}
 
 type OrganizationAuthorityHttpServer = ReturnType<
   typeof createOrganizationAuthorityHttpServer
@@ -278,6 +323,11 @@ export async function startOrganizationAuthority(
       config.database_path,
       { fileMustExist: true, allowInitialization: false },
     );
+    // Repository opening applies migrations while the singleton runtime lock
+    // is held. Re-read the activation only after that point so a stopped
+    // activation that won the startup race is detected rather than served
+    // under the caller's stale policy snapshot.
+    assertOrganizationMemberRecordingRuntimeBinding(config);
     integrationsDatabase = openOrganizationControlDatabase(
       config.integrations_database_path,
       { fileMustExist: true },
@@ -331,6 +381,12 @@ export async function startOrganizationAuthority(
       authority_id: config.authority_id,
       record_log_database_path: config.record_log_database_path,
       record_derived_database_path: config.record_derived_database_path,
+      ...(config.organization_recording_policy_v1 === undefined
+        ? {}
+        : {
+            organization_recording_policy_v1:
+              config.organization_recording_policy_v1,
+          }),
       authorization_fence: authorizationFence,
       // A halt after start gets the same treatment as one during it. The
       // record runtime already refuses further ingest; the process concerns
@@ -414,6 +470,7 @@ export async function startOrganizationAuthority(
         'organization authority files changed while composing the runtime',
       );
     }
+    assertOrganizationMemberRecordingRuntimeBinding(config);
     server = createOrganizationAuthorityHttpServer({
       application: fenceAuthorizationRelevantAuthorityMutations(
         application,

@@ -244,46 +244,93 @@ Every durable kind, schema version, reason, policy digest, consequence digest,
 and presentation digest is domain-separated from Job A. A reviewer-v2 proof
 cannot satisfy the new policy and the new proof cannot satisfy reviewer-v2.
 
-The Slack approval-surface configuration selects one exact
+The product's local Slack approval-surface settings select one exact
 `presentation_mode`: `restricted-reviewer-v1` or
 `organization-member-readable-v1`. There is no missing-value default and no
 per-card free-form policy field. A decision is published through exactly one
-configured mode and freezes that mode in its create-once presentation slot.
-The decision-processor binding names exactly one approval-surface adapter
-instance and the Authority control-plane binding commits that instance's
-closed public configuration, including `presentation_mode`; there is no
-request field or runtime fallback that selects another mode. The frozen local
-contract must equal that active binding before publish and again before action
-authorization. One card can never be resolved under both. Minimum V1 does not
-ship a per-decision or concurrent policy selector. Changing the one mapped
-mode is a stopped operator rebinding for future cards and first follows Job
-A's fail-closed unresolved-card drain/rotation rule. Records already appended
-under either policy retain that immutable policy and may coexist in one search
-generation.
+locally configured mode and freezes that mode in its create-once presentation
+slot. The local decision-processor binding names exactly one approval-surface
+adapter instance, and stopped product reconfiguration checks unresolved frozen
+cards against those local settings before changing them.
 
-Minimum V1 has no per-decision audience chooser. The deployment declares one
-closed `organization_recording_policy_v1` mapping in the private canonical
-Authority serve configuration, whose digest participates in the runtime
-fingerprint:
+The Authority control plane has a different responsibility. Its active Slack
+approval-surface binding commits the instance ID plus the exact Slack
+organization-tool identity, channel, and reaction-pair public configuration;
+that public configuration does **not** contain `presentation_mode`. The
+central activation mapping separately selects the one approval-surface
+instance allowed for member-v3 and carries the fixed member-readable policy
+mode and digest. The signed schema-v3 request and frozen card commitments let
+Authority revalidate that member-v3 action against the selected live Slack
+binding without treating control-plane public configuration as a product-mode
+selector. One card can never be resolved under both modes. Minimum V1 does not
+ship a per-decision or concurrent policy selector within one producer binding.
+The central Authority continues to support reviewer-v2 while the additive
+member-v3 capability is active; this activation does not replace the reviewer
+admission family. V1 also does not ship a generic Authority policy editor or
+in-place rollback. An Authority can make only the supported one-way activation
+from no organization-member recording capability to the exact built-in
+organization-member-readable policy. That central activation does not switch a
+producer's presentation mode. Each producer is stopped and reconfigured
+separately for future cards, and its local fail-closed unresolved-card
+drain/rotation preflight must pass first. Records already appended under either
+policy retain that immutable policy and may coexist in one search generation.
+
+Minimum V1 has no per-decision audience chooser. The effective Authority
+runtime has at most one closed member-recording
+`organization_recording_policy_v1` mapping, whose digest participates in the
+runtime fingerprint. This singleton gates member-v3 only; it does not remove or
+reinterpret reviewer-v2:
 
 ```text
 schema_version = 1
 kind = organization-recording-policy-v1
 decision_processor_adapter_instance_id
 approval_surface_adapter_instance_id
-presentation_mode = restricted-reviewer-v1 |
-                    organization-member-readable-v1
+presentation_mode = organization-member-readable-v1
 policy_contract_sha256
 ```
 
-The decision processor can route only to its one mapped approval surface.
-Authority verifies the exact active adapter binding and policy-contract digest
-before permission evaluation. Missing, duplicate, ambiguous, inactive, or
-mismatched mappings refuse publication/authorization. Changing the mapping is
-an operator configuration/rebinding act for future cards only and must first
-drain every unresolved contract on the old mapping. Ordinary and pilot
-approval surfaces remain outside this B mapping and cannot be selected as a
-fallback.
+The current initializer leaves this mapping absent. V1 does not add it by
+rewriting the private canonical Authority config or initialization manifest. A
+stopped mode-0600 canonical
+`echo-organization-member-recording-activation-command` supplies the same
+complete mapping as a one-way journal overlay. The activation binds the exact
+Authority and organization, initialized runtime-config and initialization-
+manifest digests, current active owner tuple, built-in policy-contract digest,
+fresh request time, and operator reason. It does not rewrite either baseline
+file. Exact retries return the existing receipt; changed command bytes, a
+different target, or another activation are refused.
+
+First creation also requires the target
+`approval_surface_adapter_instance_id` to exist as an exact active
+`slack-reactions` approval-surface binding to the current active Slack
+organization tool. Its stored public configuration must match that tool's
+provider identity, channel, and reaction pair. A misspelled, inactive,
+wrong-connection, or drifted surface refuses activation. Exact replay remains
+read-only even if that binding later changes.
+
+The product locally routes its configured decision processor to its configured
+approval surface. Centrally, Authority enforces the built-in member-readable
+policy digest and the exact active and audited approval-surface instance before
+member-v3 permission evaluation. Missing, inactive, or mismatched
+member-recording state refuses member-v3 authorization/ingest without
+disabling reviewer-v2. The mapping's
+`decision_processor_adapter_instance_id` is retained for source compatibility
+and operator provenance; it is not looked up as a control-plane binding,
+compared with an envelope, or used to authorize or admit the human action.
+Ordinary and pilot approval surfaces remain outside this B mapping and cannot
+be selected as a fallback.
+
+Schema-v3 ingest independently closes the other half of the binding. The
+installation-signed envelope contains a bounded decision-processor instance as
+signed provenance. Authority validates that signed provenance structurally but
+does not compare its string with the activation mapping, a control-plane
+binding, or the authorization audit; a different processor string alone does
+not reject ingest. Authority instead re-proves the exact immutable allowed
+authorization audit named by the signed envelope, requiring its audited
+approval-surface instance to equal the activated mapping and its signed
+adapter-binding and evidence commitments to match. Only the built-in policy
+digest and exact active/audited surface gate member-v3.
 
 The new approval uses:
 
@@ -413,6 +460,13 @@ reaction blocks, with `kind`, the policy block ID, consequence text, and
 presentation digest domain changed to the values in this contract. Any other
 block, field, order, fallback, edit state, reaction pair, hidden item, or
 truncation denies.
+
+It also inherits Job A's identified-post recovery and Slack stored-fallback
+rule: the top-level message identity is persisted before read-after-write
+verification, retries re-read that one message instead of posting again, and
+the only accepted provider normalization replaces each logical fallback
+newline with one ASCII space while retaining the original logical presentation
+for its digest.
 
 Schema version 3 accepts `event_type = approval` only. Rejection remains on
 the existing closed rejection path and creates no readable content or policy

@@ -62,6 +62,8 @@ const ORGANIZATION_RECORD_ENVELOPE_FILE = 'organization-record-envelope.json';
 const ORGANIZATION_RECORD_REJECTED_FILE = 'organization-record-rejected.json';
 const PRESENTATION_CONTRACT_FILE =
   `presentation-contract-${APPROVAL_PRESENTATION_CONTRACT_SURFACE}.json` as const;
+const IDENTIFIED_AUTHORITY_POST_FILE =
+  `published-${APPROVAL_PRESENTATION_CONTRACT_SURFACE}-posted.json` as const;
 const PUBLISHED_FILE_RE = /^published-([a-z][a-z0-9-]*)\.json$/;
 
 export interface DecisionNodeStoreOptions {
@@ -490,6 +492,14 @@ export class DecisionNodeStore {
       if (!existsSync(join(nodeDirectory, REQUESTED_FILE))) continue;
       if (existsSync(join(nodeDirectory, RESOLVED_FILE))) continue;
       const contract = this.readFrozenApprovalPresentationContract(entry);
+      if (
+        contract === null &&
+        existsSync(join(nodeDirectory, IDENTIFIED_AUTHORITY_POST_FILE))
+      ) {
+        throw new Error(
+          `decision ${entry} has an identified Authority post without its frozen presentation contract`,
+        );
+      }
       const authorityCardPublished = existsSync(
         join(
           nodeDirectory,

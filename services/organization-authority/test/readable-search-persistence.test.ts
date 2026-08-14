@@ -60,7 +60,6 @@ function fixture() {
     descriptor: authority,
     authority_pin_sha256: organizationAuthorityPinSha256(authority),
     organization_display_name: 'Example Company',
-    maximum_active_lease_ttl_ms: 300_000,
     initialized_at: '2026-08-12T00:00:00.000Z',
   });
   return { authority, repository };

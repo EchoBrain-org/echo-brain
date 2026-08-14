@@ -73,6 +73,31 @@ Administrator requests use `Authorization: Bearer <token>`. Enrollment uses
 `Authorization: Echo-Enrollment <grant>`. Lease refresh, permission checks,
 and readable search use installation-signed commands.
 
+The access-lease route accepts both request versions. V1 has no lifetime field
+and retains the operator-configured lifetime of at most five minutes. V2 binds
+an explicit requested maximum into the installation signature and accepts at
+most 30 minutes; the current product asks for the full 30 minutes. The
+Authority may issue any positive lifetime at or below that bound. Repository
+verification uses the stable 30-minute historical ceiling independently of the
+current V1 issuance setting, so lowering that setting cannot make already
+signed states unreadable.
+
+| Authority | Product | Lease behavior |
+| --- | --- | --- |
+| pre-V2 | legacy V1 | five-minute V1 |
+| V2-capable | legacy V1 | five-minute V1 |
+| V2-capable | V2-capable | bounded V2, currently 30 minutes |
+| pre-V2 | V2-capable | fails closed; deploy the Authority first |
+
+After the first V2 lease longer than five minutes is stored, a code-only
+rollback to an Authority build that predates V2 is not state-compatible: that
+older verifier still applies its five-minute setting to historical states. A
+rollback at that point must use a V2-capable build or restore the matching
+pre-V2 Authority data together with each affected installation's matching
+local state (or explicitly recover/re-enroll that installation). Before any
+longer V2 state is issued, the previous image remains a code-only rollback
+option.
+
 When a separately promoted B-capable image is selected,
 `POST /v1/readable-search` provides the local Job B baseline behavior. It is
 not an operational release. It accepts only a canonical RFC 8785 signed request body
@@ -87,10 +112,24 @@ The Slack administrator routes implement the minimum-v1 organization-tool
 contract documented in
 [`organization-control-plane.md`](../../docs/architecture/organization-control-plane.md).
 An active owner supplies a bot token and public channel; the Authority verifies
-the exact provider identity, required scopes, and channel before storing the
-token in mode-0600 secret storage. A historical profileless connection remains
-usable by its existing binding and grants, but becomes employee-connectable
-only after explicit re-verification promotes that same connection in place.
+the exact provider identity, required scopes, canonical non-null Slack app ID,
+and channel before storing the token in mode-0600 secret storage. The app proof
+comes from `bots.info` for the bot established by `auth.test`, not from an app
+ID that might be absent from `auth.test` or from a Slack message. A historical
+profileless connection remains usable by its existing binding and grants, but
+becomes employee-connectable only after explicit re-verification promotes that
+same connection in place.
+
+The same owner-only Slack onboarding operation also repairs a historical
+profileless or ready tool whose stored app ID is `null`. This is explicit
+re-onboarding, never a startup migration or a raw database edit: the Authority
+reads the retained opaque secret handle privately, verifies it with Slack
+again, requires the submitted credential to match rather than rotating it, and
+asks the control plane to promote the connection and every exact active Slack
+approval binding atomically. Connection IDs, binding IDs, grants, secret
+handles, and prior audit rows are preserved; the repair appends a fresh audit
+entry. The bot token is neither returned by the route nor logged, rendered,
+stored in SQLite, or placed in browser storage.
 
 The browser console creates invitation secrets locally with Web Crypto and
 sends only their digest to the authority. Its invitation records the current
@@ -283,15 +322,18 @@ generation directory must never be copied, repaired, or swapped on its own.
 This section applies only to a separately promoted B-capable image. It does
 not add a runtime or backup requirement to `access-recovery-504ec74`.
 
-The optional `organization_recording_policy_v1` runtime-config object enables
-one explicit recording presentation mode. It must contain exactly:
+The runtime-config schema retains an optional closed
+`organization_recording_policy_v1` object for source compatibility. The
+current initializer leaves it absent, and an operator must not add it by
+editing an initialized config. When present in an already materialized
+baseline it contains exactly:
 
 ```json
 {
   "schema_version": 1,
   "kind": "organization-recording-policy-v1",
-  "decision_processor_adapter_instance_id": "<configured adapter instance>",
-  "approval_surface_adapter_instance_id": "<configured adapter instance>",
+  "decision_processor_adapter_instance_id": "<product-local provenance instance>",
+  "approval_surface_adapter_instance_id": "<centrally enforced surface instance>",
   "presentation_mode": "organization-member-readable-v1",
   "policy_contract_sha256": "sha256:<matching policy contract>"
 }
@@ -299,11 +341,80 @@ one explicit recording presentation mode. It must contain exactly:
 
 `presentation_mode` is either `restricted-reviewer-v1` or
 `organization-member-readable-v1`; the contract digest must match that exact
-mode. The object is optional for compatibility, but its absence never enables
-organization-member-readable admission.
+mode. Its absence never enables organization-member-readable admission.
 
-Stop the Authority and snapshot the complete state directory before either
-command. The shared initialization and authenticated runtime locks refuse
+An Authority initialized before this mapping existed keeps its original
+runtime config and initialization manifest immutable. Enable the one supported
+Job B capability with the stopped, one-way activation command instead of
+editing either file:
+
+```sh
+npm run organization-authority:cli -- \
+  activate-organization-member-recording \
+  --config /absolute/operator/authority.json \
+  --command /absolute/private/activate-organization-member-recording.json
+```
+
+The mode-0600 canonical command contains exactly:
+
+```json
+{
+  "schema_version": 1,
+  "kind": "echo-organization-member-recording-activation-command",
+  "command_id": "rpa_<uuid-v4>",
+  "authority_id": "oau_<uuid-v4>",
+  "organization_id": "org_<uuid-v4>",
+  "initialized_runtime_config_sha256": "sha256:<initialized-config-digest>",
+  "initialization_manifest_sha256": "sha256:<initialization-manifest-digest>",
+  "owner_principal_id": "prn_<uuid-v4>",
+  "owner_membership_id": "mem_<uuid-v4>",
+  "target_policy": {
+    "schema_version": 1,
+    "kind": "organization-recording-policy-v1",
+    "decision_processor_adapter_instance_id": "<product-local provenance instance>",
+    "approval_surface_adapter_instance_id": "<exact active Slack surface instance>",
+    "presentation_mode": "organization-member-readable-v1",
+    "policy_contract_sha256": "sha256:<exact-built-in-contract>"
+  },
+  "requested_at": "<canonical-UTC-millisecond-time>",
+  "reason": "<bounded operator reason>"
+}
+```
+
+The command requires the exact current active owner, both initialized baseline
+digests, the built-in organization-member-readable policy digest, and a fresh
+first execution within five minutes. First creation also refuses unless the
+target `approval_surface_adapter_instance_id` is an exact active
+`slack-reactions` approval-surface instance bound to the current active Slack
+organization tool. The control-plane binding's public configuration pins the
+Slack identity, channel, and reaction pair; it does not contain the product's
+local `presentation_mode`.
+
+The immutable Authority journal entry is the runtime overlay; the
+initialization manifest remains history. Repeating the exact command is
+read-only and returns `created: false`; reusing its ID for different bytes or
+trying to activate a different policy is refused.
+
+This activates a shared central capability. It does not switch any producer.
+Each product installation must be stopped and reconfigured independently;
+that local reconfigure refuses a mode change while an old frozen Slack card is
+unresolved. The activation adds member-v3 admission without replacing the
+existing reviewer-v2 family. There is no generic policy editor or in-place
+rollback in V1.
+
+For schema-v3 ingest, the installation-signed envelope contains a bounded
+processor instance as signed provenance. Authority validates it structurally
+but does not compare that string with the activation, a control-plane binding,
+or the authorization audit; a different processor string alone does not reject
+ingest. Authority instead re-proves the exact allowed authorization audit named
+by the signed envelope and requires that audit's approval-surface instance,
+adapter binding, and evidence commitments to match the activated surface. The
+central gate is the built-in policy digest plus the exact active and audited
+approval-surface instance; `presentation_mode` is not stored in control-plane
+public configuration.
+
+Stop the Authority and snapshot the complete state directory before any
+maintenance command. The shared initialization and authenticated runtime locks refuse
 maintenance while a live Authority owns the state:
 
 ```sh

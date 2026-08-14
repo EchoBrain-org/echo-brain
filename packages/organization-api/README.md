@@ -18,6 +18,15 @@ authorization cache. The request carries only an opaque `approval_id`; raw
 product processing keys and meeting identifiers never cross the organization
 Authority boundary.
 
+Access-lease request V1 remains the compatibility shape: it carries no
+requested lifetime, and the Authority issues its configured V1 lifetime of at
+most five minutes. V2 adds one installation-signed
+`requested_active_lease_ttl_ms`, an upper bound from one millisecond through
+30 minutes. The Authority may issue any positive lifetime at or below that
+signed bound. The current product asks for the full 30 minutes; older V1
+installations keep receiving and verifying five-minute leases. The signed
+access-state response shape is unchanged.
+
 The permission-check decision is not itself signed. The request is
 installation-signed; `request_sha256` and `provider_event_sha256` bind the
 decision to that exact request but do not authenticate it. Authenticity comes

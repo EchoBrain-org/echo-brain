@@ -19,13 +19,17 @@ import type {
   PinnedOrganizationAuthority,
 } from '@echo-brain/organization-protocol';
 import {
+  MAX_ORGANIZATION_ACCESS_LEASE_REQUEST_TTL_MS,
   organizationInternalLiveManifestSha256,
   validateOrganizationInternalLiveReleaseManifest,
-  verifyOrganizationAccessLeaseRequest,
+  verifyOrganizationAccessLeaseRequestAnyVersion,
   verifyOrganizationInternalLiveUpdateReceipt,
 } from '@echo-brain/organization-api';
 import type Database from 'better-sqlite3';
-import { timestampMillis } from '../../../domain/rules.js';
+import {
+  MAX_AUTHORITY_ACTIVE_LEASE_TTL_MS,
+  timestampMillis,
+} from '../../../domain/rules.js';
 import type {
   AuthorityAdminCounts,
   AuthorityAuditEntry,
@@ -68,6 +72,7 @@ import {
   validateStoredReadableSearchActiveGeneration,
   validateStoredReadableSearchQueryAuditEntry,
 } from '../../../application/readable-search-persistence.js';
+import { ORGANIZATION_MEMBER_RECORDING_ACTIVATED_ACTION } from '../../../application/organization-recording-policy-activation.js';
 import { reviewerQueryAuditRowBySequence } from './reviewer-query-audit-rows.js';
 import type { AuthorityAuditRow } from './reviewer-query-audit-rows.js';
 import {
@@ -210,7 +215,6 @@ interface PersistedAuthorityTrustContext {
   pinned_authority: PinnedOrganizationAuthority;
   authority_pin_sha256: Sha256Digest;
   organization_display_name: string;
-  maximum_active_lease_ttl_ms: number;
 }
 
 function invariant(condition: unknown, message: string): asserts condition {
@@ -324,17 +328,11 @@ class SqliteAuthorityTransaction
       descriptor,
       input.authority_pin_sha256,
     );
-    invariant(
-      Number.isSafeInteger(input.maximum_active_lease_ttl_ms) &&
-        input.maximum_active_lease_ttl_ms > 0,
-      'maximum active lease TTL is invalid',
-    );
     this.trustContext = {
       descriptor,
       pinned_authority: pinnedAuthority,
       authority_pin_sha256: input.authority_pin_sha256,
       organization_display_name: input.organization_display_name,
-      maximum_active_lease_ttl_ms: input.maximum_active_lease_ttl_ms,
     };
   }
 
@@ -903,7 +901,7 @@ class SqliteAuthorityTransaction
     let previous: OrganizationInstallationAccessStateV1 | null = null;
     // Authenticate the replay target and its direct transition in O(1).
     // The schema trigger owns contiguous insertion and terminality, so replay
-    // cost does not grow with years of five-minute lease history.
+    // cost does not grow with years of lease history.
     if (row.access_state_sequence > 1) {
       const previousRow = this.database
         .prepare(
@@ -931,8 +929,8 @@ class SqliteAuthorityTransaction
               previous.evaluated_at,
               'stored predecessor access state evaluation time',
             ) <=
-            trust.maximum_active_lease_ttl_ms,
-          'predecessor access lease exceeds the configured maximum TTL',
+            MAX_ORGANIZATION_ACCESS_LEASE_REQUEST_TTL_MS,
+          'predecessor access lease exceeds the historical maximum TTL',
         );
       }
     }
@@ -945,7 +943,8 @@ class SqliteAuthorityTransaction
           enrollment_request: enrollment.request,
           enrollment_receipt: enrollment.receipt,
           now: state.evaluated_at,
-          maximum_active_ttl_ms: trust.maximum_active_lease_ttl_ms,
+          maximum_active_ttl_ms:
+            MAX_ORGANIZATION_ACCESS_LEASE_REQUEST_TTL_MS,
           previous_state: previous,
         }),
     );
@@ -1191,7 +1190,7 @@ class SqliteAuthorityTransaction
       'access request enrollment is missing or invalid',
     );
     const request = verifiedPersistedValue('access lease request', () =>
-      verifyOrganizationAccessLeaseRequest(
+      verifyOrganizationAccessLeaseRequestAnyVersion(
         parseStoredJson(row.request_json),
         enrollment.installation_signing_key,
       ),
@@ -1239,6 +1238,25 @@ class SqliteAuthorityTransaction
             previous.state.access_state_sequence + 1),
       'access request result is not a valid successor',
     );
+    if (resulting.state.status === 'active') {
+      const resultingLeaseTtlMs =
+        timestampMillis(
+          resulting.state.valid_until,
+          'stored access request active result expiry',
+        ) -
+        timestampMillis(
+          resulting.state.evaluated_at,
+          'stored access request active result evaluation time',
+        );
+      const requestLeaseTtlBoundMs =
+        request.schema_version === 2
+          ? request.requested_active_lease_ttl_ms
+          : MAX_AUTHORITY_ACTIVE_LEASE_TTL_MS;
+      invariant(
+        resultingLeaseTtlMs <= requestLeaseTtlBoundMs,
+        'access request active result exceeds its versioned TTL bound',
+      );
+    }
     invariant(
       timestampMillis(
         resulting.state.evaluated_at,
@@ -1624,16 +1642,16 @@ class SqliteAuthorityTransaction
   }
 
   appendAudit(entry: AuthorityAuditEntry): void {
-    // The two governed reviewer query-audit actions are reserved. They are the
-    // maintenance receipt for a disclosure or a deletion, so the ordinary audit
-    // path -- which any online write holds -- must not be able to mint one.
-    // Only the stopped-state maintenance transaction's own private insert may.
+    // Governed stopped-state receipts are reserved. The ordinary audit path,
+    // which any online write holds, must not be able to mint a lookalike.
+    // Only each maintenance transaction's private atomic insert may.
     if (
       entry.action === REVIEWER_QUERY_AUDIT_EXPORT_ACTION ||
-      entry.action === REVIEWER_QUERY_AUDIT_EXPIRED_ACTION
+      entry.action === REVIEWER_QUERY_AUDIT_EXPIRED_ACTION ||
+      entry.action === ORGANIZATION_MEMBER_RECORDING_ACTIVATED_ACTION
     ) {
       throw new Error(
-        'reviewer query audit control actions are reserved for governed stopped-state maintenance',
+        'governed stopped-state audit actions are reserved for their maintenance transaction',
       );
     }
     const detailJson = canonicalJson(entry.detail);
@@ -1820,11 +1838,6 @@ export class SqliteOrganizationAuthorityRepository
       input.descriptor,
     );
     verifyOrganizationAuthorityPin(descriptor, input.authority_pin_sha256);
-    invariant(
-      Number.isSafeInteger(input.maximum_active_lease_ttl_ms) &&
-        input.maximum_active_lease_ttl_ms > 0,
-      'maximum active lease TTL is invalid',
-    );
     this.transaction.configureTrust(input);
     const descriptorJson = canonicalJson(descriptor);
     this.database.exec('BEGIN IMMEDIATE');

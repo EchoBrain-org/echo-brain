@@ -553,6 +553,20 @@ persists cursors and decisions, waits for approval, and delivers the exact
 approved snapshot. Failures conservatively pin the source cursor. The installed
 LaunchAgent runs the same cycle continuously; there is no foreground `run`.
 
+If a decision is already durably resolved but its organization-record append
+is still pending, stop the service and run the narrow recovery command:
+
+```sh
+echo-brain organization record-flush --config /absolute/path/runtime.json
+```
+
+`record-flush` takes the exclusive runtime and maintenance locks, rechecks
+current organization access, and performs one awaited record sweep. It does
+not construct meeting, processor, delivery, or approval adapters and cannot
+pull another meeting or advance a source cursor. Its receipt output is a typed
+identifier-and-digest summary; the complete signed receipt remains in the
+private decision-node state.
+
 `approvals` lists local decision records without a federation projection. It
 cannot resolve one — the organization
 Slack approval surface is the single v1 resolver, so every approve/reject is
@@ -640,11 +654,24 @@ securely removed.
 
 Once the authority is pinned, product startup and every processing cycle check
 the signed access lease before adapter contact. The running service renews its
-short lease in the background. A transient authority outage can use only the
-remaining signed lease; expiration or revocation fails closed. Use
+short lease in the background. Current installations explicitly request up to
+a 30-minute renewal; legacy V1 installations continue to receive five-minute
+renewals. A transient authority outage can use only the remaining signed lease;
+expiration or revocation fails closed. Authority-backed permission and read
+requests still recheck current central access rather than treating the local
+lease as cached content authorization. Use
 `organization rebind` with the same independently verified authority PIN to
 prove the identical authority at a new HTTPS origin before changing the saved
 route.
+
+Product access verification allows Authority timestamps up to five seconds
+ahead of the local trusted clock for normal distributed-clock variation.
+Larger future skew remains a fail-closed error; the protocol primitive itself
+keeps its explicit default of zero allowance.
+
+Deploy a V2-capable Authority before a V2-capable product. The new Authority
+continues to serve legacy V1 products, while a new product deliberately fails
+closed against an Authority that does not understand its signed V2 request.
 
 Once the organization Slack tool is active, an enrolled installation links its
 Slack identity with `organization slack-link-begin` and

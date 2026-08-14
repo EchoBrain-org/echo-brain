@@ -110,7 +110,6 @@ async function operatorFixture(): Promise<OperatorFixture> {
       initialized.authority_descriptor,
     ),
     organization_display_name: 'Example Company',
-    maximum_active_lease_ttl_ms: runtimeConfig.access.active_lease_ttl_ms,
     initialized_at: configuredAt,
   });
   const owner: StoredAuthorityMembership = {

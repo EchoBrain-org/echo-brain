@@ -4,8 +4,11 @@ export type {
   CompletedOrganizationEnrollmentV1,
   IssueOrganizationEnrollmentGrantRequestV1,
   IssuedOrganizationEnrollmentGrantV1,
+  OrganizationAccessLeaseRequestAnyVersion,
   OrganizationAccessLeaseRequestPayloadV1,
+  OrganizationAccessLeaseRequestPayloadV2,
   OrganizationAccessLeaseRequestV1,
+  OrganizationAccessLeaseRequestV2,
   OrganizationAccessLeaseResponseV1,
   OrganizationAdminOverviewCountsV1,
   OrganizationAdminOverviewV1,
@@ -63,6 +66,10 @@ export type {
   SubmitOrganizationRecordEnvelopeRequestV1,
 } from './contracts.js';
 export {
+  MAX_ORGANIZATION_ACCESS_LEASE_REQUEST_TTL_MS,
+  MIN_ORGANIZATION_ACCESS_LEASE_REQUEST_TTL_MS,
+} from './contracts.js';
+export {
   MAX_ENROLLMENT_GRANT_LIFETIME_SECONDS,
   MAX_ORGANIZATION_API_CURSOR_CHARACTERS,
   MAX_ORGANIZATION_API_BODY_BYTES,
@@ -86,6 +93,7 @@ export {
   validateIssuedOrganizationEnrollmentGrant,
   validateIssueOrganizationEnrollmentGrantRequest,
   validateOrganizationAccessLeaseRequest,
+  validateOrganizationAccessLeaseRequestAnyVersion,
   validateOrganizationAccessLeaseResponse,
   validateOrganizationAdminOverview,
   validateOrganizationApiError,
@@ -149,10 +157,15 @@ export {
 } from './http.js';
 export {
   createOrganizationAccessLeaseRequest,
+  createOrganizationAccessLeaseRequestV2,
   organizationAccessLeaseRequestSha256,
   verifyOrganizationAccessLeaseRequest,
+  verifyOrganizationAccessLeaseRequestAnyVersion,
 } from './access-lease-request.js';
-export type { CreateOrganizationAccessLeaseRequestInput } from './access-lease-request.js';
+export type {
+  CreateOrganizationAccessLeaseRequestInput,
+  CreateOrganizationAccessLeaseRequestV2Input,
+} from './access-lease-request.js';
 export {
   createOrganizationPermissionCheckRequest,
   organizationPermissionCheckRequestSha256,

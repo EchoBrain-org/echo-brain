@@ -1,6 +1,7 @@
 import { Buffer } from 'node:buffer';
 import { describe, expect, it, vi } from 'vitest';
 import {
+  createOrganizationAccessLeaseRequestV2,
   createOrganizationMemberReadablePermissionCheckRequest,
   createOrganizationReadableSearchRequest,
   createOrganizationReviewerPermissionCheckRequest,
@@ -123,6 +124,60 @@ describe('HTTP organization authority client', () => {
       });
     }
     expect(postedBody).toEqual(accessRequest);
+  });
+
+  it('posts the exact signed V2 lease request including its bounded TTL', async () => {
+    const authority = new TestAuthority();
+    const installationSigner = new TestInstallationSigner();
+    const signingKey = protocolInstallationKey(installationSigner);
+    const request = await createOrganizationAccessLeaseRequestV2(
+      {
+        request_id: 'alr_00000000-0000-4000-8000-000000000002',
+        authority_id: ORGANIZATION_IDS.authority,
+        authority_key_id: authority.descriptor.signing_key.key_id,
+        organization_id: ORGANIZATION_IDS.organization,
+        enrollment_id: ORGANIZATION_IDS.enrollment,
+        installation_id: ORGANIZATION_IDS.installation,
+        installation_signing_key: signingKey,
+        previous_access_state_sha256: authority.pin,
+        requested_active_lease_ttl_ms: 1_800_000,
+        requested_at: NOW,
+      },
+      (bytes) =>
+        installationSigner.sign(
+          ORGANIZATION_IDS.installation,
+          bytes,
+          signingKey.key_id,
+        ),
+    );
+    let postedBody: unknown = null;
+    const client = new HttpOrganizationAuthorityClient({
+      baseUrl: 'https://authority.example',
+      fetch: async (input, init) => {
+        expect(String(input)).toBe(
+          'https://authority.example/v1/access-leases',
+        );
+        postedBody = JSON.parse(String(init?.body));
+        return new Response(
+          JSON.stringify({
+            access_state: (
+              await authority.complete(
+                await signedEnrollmentRequest(authority, installationSigner),
+              )
+            ).access_state,
+          }),
+          {
+            status: 200,
+            headers: { 'content-type': 'application/json' },
+          },
+        );
+      },
+    });
+
+    await expect(client.issueAccessLease(request)).resolves.toMatchObject({
+      access_state: { schema_version: 1 },
+    });
+    expect(postedBody).toEqual(request);
   });
 
   it('posts the exact signed permission request and validates its decision', async () => {

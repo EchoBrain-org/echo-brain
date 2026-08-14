@@ -1,7 +1,7 @@
 import type {
   CompletedOrganizationEnrollmentV1,
   IssueOrganizationEnrollmentGrantRequestV1,
-  OrganizationAccessLeaseRequestV1,
+  OrganizationAccessLeaseRequestAnyVersion,
   ProvisionOrganizationMembershipRequestV1,
   ProvisionedOrganizationMembershipV1,
   RecoverOrganizationInstallationAccessRequestV1,
@@ -63,7 +63,7 @@ export function fenceAuthorizationRelevantAuthorityMutations(
   }): Promise<CompletedOrganizationEnrollmentV1> =>
     await fence.withWrite(() => application.completeEnrollment(input));
   facade.issueAccessLease = async (
-    request: OrganizationAccessLeaseRequestV1,
+    request: OrganizationAccessLeaseRequestAnyVersion,
   ): Promise<OrganizationInstallationAccessStateV1> =>
     await fence.withWrite(() => application.issueAccessLease(request));
   facade.revokeMembership = async (

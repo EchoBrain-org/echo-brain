@@ -35,7 +35,7 @@ import {
   ORGANIZATION_API_SLACK_LINK_CHALLENGES_PATH,
   ORGANIZATION_API_SLACK_LINK_COMPLETIONS_PATH,
   validateCompletedOrganizationEnrollment,
-  validateOrganizationAccessLeaseRequest,
+  validateOrganizationAccessLeaseRequestAnyVersion,
   validateOrganizationAccessLeaseResponse,
   validateOrganizationApiError,
   validateOrganizationAuthorityDescriptorResponse,
@@ -52,7 +52,7 @@ import {
   validateOrganizationSlackLinkResult,
   type CompleteOrganizationEnrollmentRequestV1,
   type CompletedOrganizationEnrollmentV1,
-  type OrganizationAccessLeaseRequestV1,
+  type OrganizationAccessLeaseRequestAnyVersion,
   type OrganizationAccessLeaseResponseV1,
   type OrganizationAuthorityDescriptorResponseV1,
   type OrganizationPermissionCheckDecisionV1,
@@ -571,11 +571,11 @@ export class HttpOrganizationAuthorityClient implements OrganizationAuthorityCli
   }
 
   issueAccessLease(
-    request: OrganizationAccessLeaseRequestV1,
+    request: OrganizationAccessLeaseRequestAnyVersion,
   ): Promise<OrganizationAccessLeaseResponseV1> {
     return this.postJson(
       ORGANIZATION_API_ACCESS_LEASES_PATH,
-      validateOrganizationAccessLeaseRequest(request),
+      validateOrganizationAccessLeaseRequestAnyVersion(request),
       'access',
       validateOrganizationAccessLeaseResponse,
       ORDINARY_JSON_WIRE_CONTRACT,

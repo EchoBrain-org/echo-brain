@@ -71,7 +71,7 @@ dump_diagnostics() {
 
 trap cleanup EXIT
 
-actual_version="$($cli --version)"
+actual_version="$("$cli" --version)"
 if [[ "$actual_version" != "$expected_version" ]]; then
   printf 'installed version %s does not match expected %s\n' \
     "$actual_version" "$expected_version" >&2
@@ -211,16 +211,37 @@ fi
 node -e '
   const fs = require("node:fs");
   const value = JSON.parse(fs.readFileSync(process.argv[1], "utf8"));
-  const lifecycleChecks = value.checks?.filter((check) => check?.id !== "adapters");
-  const adapterCheck = value.checks?.find((check) => check?.id === "adapters");
+  const expectedLifecycleCheckIds = [
+    "platform",
+    "config",
+    "state-filesystem",
+    "state-directory",
+    "installation-manifest",
+    "node-runtime",
+    "cli-entrypoint",
+    "service-plist",
+    "service-running",
+    "service-credentials",
+    "organization-state",
+  ];
+  const expectedCheckIds = [...expectedLifecycleCheckIds, "adapters"];
+  const checksById = new Map(
+    Array.isArray(value.checks)
+      ? value.checks.map((check) => [check?.id, check])
+      : [],
+  );
+  const exactChecks =
+    Array.isArray(value.checks) &&
+    checksById.size === expectedCheckIds.length &&
+    value.checks.length === expectedCheckIds.length &&
+    expectedCheckIds.every((id) => checksById.has(id));
+  const lifecycleChecks = expectedLifecycleCheckIds.map((id) => checksById.get(id));
+  const adapterCheck = checksById.get("adapters");
   const granola = value.adapters?.find((adapter) => adapter?.adapter_id === "granola");
   const otherAdapters = value.adapters?.filter((adapter) => adapter?.adapter_id !== "granola");
   if (
     value.ok !== false ||
-    !Array.isArray(value.checks) ||
-    value.checks.length !== 11 ||
-    !Array.isArray(lifecycleChecks) ||
-    lifecycleChecks.length !== 10 ||
+    !exactChecks ||
     lifecycleChecks.some((check) => check?.ok !== true) ||
     adapterCheck?.ok !== false ||
     granola?.status !== "degraded" ||

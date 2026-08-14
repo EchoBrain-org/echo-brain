@@ -12,6 +12,8 @@ import {
   type ApprovalActionAuthorizer,
   type ApprovalDecisionStore,
   type ApprovalDecisionStoreView,
+  type FrozenSlackApprovalPresentationContract,
+  type ReviewerApprovalPresentationRenderer,
 } from '../../src/adapters/approval-surfaces/slack-reactions/slack-reactions-approval-surface.js';
 import { adapterConformance } from '../support/adapter-conformance.js';
 
@@ -117,6 +119,22 @@ class InMemoryApprovalDecisionStore implements ApprovalDecisionStore {
     const view = this.byProcessingKey.get(processingKey);
     if (view === undefined) throw new Error('approval was not requested');
     return view;
+  }
+}
+
+class IdentifiedApprovalDecisionStore extends InMemoryApprovalDecisionStore {
+  private contract: FrozenSlackApprovalPresentationContract | null = null;
+
+  async freezeApprovalPresentationContract(input: {
+    approvalId: string;
+    contract: FrozenSlackApprovalPresentationContract;
+  }): Promise<FrozenSlackApprovalPresentationContract> {
+    if (this.contract === null) this.contract = input.contract;
+    return this.contract;
+  }
+
+  readApprovalPresentationContract(): FrozenSlackApprovalPresentationContract | null {
+    return this.contract;
   }
 }
 
@@ -263,6 +281,28 @@ function pilotSurfaceConfig(): AdapterConfig {
   };
 }
 
+function reviewerSurfaceConfig(): AdapterConfig {
+  return {
+    ...surfaceConfig(),
+    settings: {
+      ...surfaceConfig().settings,
+      presentation_mode: 'restricted-reviewer-v1',
+    },
+  };
+}
+
+const IDENTIFIED_RENDERER: ReviewerApprovalPresentationRenderer = {
+  render() {
+    return {
+      text: 'Decision brief awaiting approval.\nReview the stored card.',
+      blocks: [{ type: 'context', block_id: 'exact-card', elements: [] }],
+      reviewer_release_draft_sha256: `sha256:${'a'.repeat(64)}`,
+      approval_presentation_sha256: `sha256:${'b'.repeat(64)}`,
+    };
+  },
+  credentialFingerprint: () => `sha256:${'c'.repeat(64)}`,
+};
+
 interface FakeSlack {
   fetchImpl: typeof fetch;
   calls: string[];
@@ -280,13 +320,24 @@ interface FakeSlack {
     blocks: readonly unknown[],
   ) => readonly unknown[] | undefined;
   acknowledgedBlocks?: readonly unknown[];
+  storedText?: unknown;
+  storedBlocks?: unknown;
+  storedMessageOverride?: Record<string, unknown>;
+  storedMessageOverridesByTimestamp?: Record<string, Record<string, unknown>>;
   authIdentities?: Array<{
     team_id: string;
     enterprise_id: string | null;
     user_id: string;
-    bot_id: string | null;
-    app_id: string | null;
+    bot_id: string;
+    app_id: string;
   }>;
+  activeAuthIdentity?: {
+    team_id: string;
+    enterprise_id: string | null;
+    user_id: string;
+    bot_id: string;
+    app_id: string;
+  };
 }
 
 interface PostedTextObject {
@@ -324,14 +375,35 @@ function fakeSlack(): FakeSlack {
       const url = String(input instanceof Request ? input.url : input);
       const method = url.split('/').pop()!.split('?')[0]!;
       state.calls.push(method);
-      const json = (body: unknown) =>
+      const json = (body: unknown, headers: Record<string, string> = {}) =>
         new Response(JSON.stringify(body), {
           status: 200,
-          headers: { 'content-type': 'application/json' },
+          headers: { 'content-type': 'application/json', ...headers },
         });
       if (method === 'auth.test') {
         const identity = state.authIdentities?.shift();
-        return json({ ok: true, ...(identity ?? { user_id: 'B1' }) });
+        if (identity === undefined) delete state.activeAuthIdentity;
+        else state.activeAuthIdentity = identity;
+        return json(
+          { ok: true, ...(identity ?? { user_id: 'B1' }) },
+          identity === undefined
+            ? {}
+            : { 'x-oauth-scopes': 'chat:write,users:read' },
+        );
+      }
+      if (method === 'bots.info') {
+        const identity = state.activeAuthIdentity;
+        return identity === undefined
+          ? json({ ok: false, error: 'unknown_bot' })
+          : json({
+              ok: true,
+              bot: {
+                id: identity.bot_id,
+                user_id: identity.user_id,
+                app_id: identity.app_id,
+                deleted: false,
+              },
+            });
       }
       if (method === 'chat.postMessage') {
         if (typeof init?.body !== 'string') {
@@ -344,6 +416,8 @@ function fakeSlack(): FakeSlack {
           throw new Error('expected chat.postMessage blocks');
         }
         state.acknowledgedBlocks = state.acknowledgeBlocks?.(requestedBlocks);
+        state.storedText = body['text'];
+        state.storedBlocks = requestedBlocks;
         return json({
           ok: true,
           channel: 'C123',
@@ -361,9 +435,21 @@ function fakeSlack(): FakeSlack {
         if (state.failReactionsWith !== undefined) {
           return new Response('slow down', { status: state.failReactionsWith });
         }
+        const timestamp = new URL(url).searchParams.get('timestamp');
+        const timestampOverride =
+          timestamp === null
+            ? undefined
+            : state.storedMessageOverridesByTimestamp?.[timestamp];
         return json({
           ok: true,
-          message: { ts: '1700.100000', reactions: state.reactions },
+          message: {
+            ts: timestamp ?? '1700.100000',
+            ...(timestampOverride ?? state.storedMessageOverride ?? {
+              text: state.storedText,
+              blocks: state.storedBlocks,
+            }),
+            reactions: state.reactions,
+          },
         });
       }
       if (method === 'conversations.replies') {
@@ -413,6 +499,42 @@ function build(
   return { surface, store };
 }
 
+function buildIdentifiedReviewer(slack: FakeSlack) {
+  const store = new IdentifiedApprovalDecisionStore(
+    () => '2026-07-16T21:00:00.000Z',
+  );
+  const surface = identifiedReviewerSurface(slack, store);
+  return { surface, store };
+}
+
+function identifiedReviewerSurface(
+  slack: FakeSlack,
+  store: ApprovalDecisionStore,
+) {
+  const surface = createSlackReactionsApprovalSurface(reviewerSurfaceConfig(), {
+    store,
+    approvalActionAuthorizer: {
+      authorize: async () => ({
+        allowed: true,
+        evidence: AUTHORIZATION_EVIDENCE,
+      }),
+    },
+    reviewerApprovalActionAuthorizer: {
+      authorizeReviewerApproval: async () => ({
+        allowed: true,
+        evidence: AUTHORIZATION_EVIDENCE,
+      }),
+    },
+    reviewerAuthorizationEvidenceValidator: (value) => value as JsonObject,
+    reviewerDisplayNameValidator: () => undefined,
+    reviewerPresentationRenderer: IDENTIFIED_RENDERER,
+    environment: { SLACK_BOT_TOKEN: 'xoxb-test' },
+    now: () => '2026-07-16T21:00:00.000Z',
+    fetchImpl: slack.fetchImpl,
+  });
+  return surface;
+}
+
 function stageSlackAction(
   slack: FakeSlack,
   reaction = 'white_check_mark',
@@ -437,6 +559,65 @@ adapterConformance({
 });
 
 describe('slack reactions approval surface', () => {
+  it('accepts Slack fallback text when storage deterministically folds newlines to spaces', async () => {
+    const slack = fakeSlack();
+    slack.storedMessageOverride = {
+      text: 'Decision brief awaiting approval. Review the stored card.',
+      blocks: [{ type: 'context', block_id: 'exact-card', elements: [] }],
+    };
+    const { surface, store } = buildIdentifiedReviewer(slack);
+
+    await expect(surface.review(request())).resolves.toMatchObject({
+      status: 'pending',
+    });
+    expect(store.publicationInputs.map((input) => input.surface)).toEqual([
+      'slack-authority-v1-posted',
+      'slack-authority-v1',
+    ]);
+    expect(
+      slack.calls.filter((call) => call === 'chat.postMessage'),
+    ).toHaveLength(1);
+  });
+
+  it('resumes an identified reviewer post after a read failure without reposting', async () => {
+    const slack = fakeSlack();
+    const { surface, store } = buildIdentifiedReviewer(slack);
+    slack.failReactionsWith = 500;
+
+    await expect(surface.review(request())).rejects.toMatchObject({
+      code: 'temporarily_unavailable',
+      retryable: true,
+    });
+    expect(store.publicationInputs.map((input) => input.surface)).toEqual([
+      'slack-authority-v1-posted',
+    ]);
+
+    slack.failReactionsWith = undefined;
+    await expect(surface.review(request())).resolves.toMatchObject({
+      status: 'pending',
+    });
+    expect(
+      slack.calls.filter((call) => call === 'chat.postMessage'),
+    ).toHaveLength(1);
+  });
+
+  it('fails closed when the stored identified reviewer card does not match its frozen blocks', async () => {
+    const slack = fakeSlack();
+    slack.storedMessageOverride = {
+      text: 'Decision brief awaiting approval.\nReview the stored card.',
+      blocks: [{ type: 'context', block_id: 'mutated-card', elements: [] }],
+    };
+    const { surface, store } = buildIdentifiedReviewer(slack);
+
+    await expect(surface.review(request())).rejects.toMatchObject({
+      code: 'permanently_rejected',
+      retryable: false,
+    });
+    expect(store.publicationInputs.map((input) => input.surface)).toEqual([
+      'slack-authority-v1-posted',
+    ]);
+  });
+
   it('posts the brief exactly once and stays pending without reactions', async () => {
     const slack = fakeSlack();
     const { surface } = build(slack);
@@ -719,17 +900,18 @@ describe('slack reactions approval surface', () => {
         reaction_name: 'white_check_mark',
       },
     ]);
-    expect(slack.calls.slice(-3)).toEqual([
+    expect(slack.calls.slice(-4)).toEqual([
       'reactions.get',
       'conversations.replies',
       'auth.test',
+      'bots.info',
     ]);
     expect(decisionStore.resolutionInputs[0]?.metadata).toMatchObject({
       authorization: AUTHORIZATION_EVIDENCE,
     });
   });
 
-  it('records the authority publication only after an exact, key-order-independent Slack acknowledgement', async () => {
+  it('does not trust a nested chat.postMessage acknowledgement for the legacy authority path', async () => {
     const slack = fakeSlack();
     slack.acknowledgeBlocks = () => undefined;
     const { surface, store } = build(slack, {
@@ -739,11 +921,12 @@ describe('slack reactions approval surface', () => {
       }),
     });
 
-    await expect(surface.review(request())).rejects.toMatchObject({
-      code: 'unknown_outcome',
-      retryable: true,
+    await expect(surface.review(request())).resolves.toMatchObject({
+      status: 'pending',
     });
-    expect((await store.list())[0]?.published).toEqual([]);
+    expect((await store.list())[0]?.published[0]?.surface).toBe(
+      'slack-authority-v1',
+    );
 
     slack.acknowledgeBlocks = (blocks) =>
       reverseObjectKeys(blocks) as readonly unknown[];
@@ -752,19 +935,17 @@ describe('slack reactions approval surface', () => {
     });
     expect(
       slack.calls.filter((call) => call === 'chat.postMessage'),
-    ).toHaveLength(2);
+    ).toHaveLength(1);
     expect((await store.list())[0]?.published[0]?.surface).toBe(
       'slack-authority-v1',
     );
   });
 
-  it('rejects unexpected authority-marked block mutation before publication', async () => {
+  it('does not treat a nested chat.postMessage block mutation as stored-card evidence', async () => {
     const slack = fakeSlack();
     slack.acknowledgeBlocks = (blocks) =>
       blocks.map((block, index) =>
-        index === 0
-          ? { ...(block as JsonObject), unexpected: true }
-          : block,
+        index === 0 ? { ...(block as JsonObject), unexpected: true } : block,
       );
     const { surface, store } = build(slack, {
       authorize: async () => ({
@@ -773,11 +954,101 @@ describe('slack reactions approval surface', () => {
       }),
     });
 
+    await expect(surface.review(request())).resolves.toMatchObject({
+      status: 'pending',
+    });
+    expect((await store.list())[0]?.published[0]?.surface).toBe(
+      'slack-authority-v1',
+    );
+  });
+
+  it('refuses the legacy authority path when the stored card differs from the posted card', async () => {
+    const slack = fakeSlack();
+    slack.storedMessageOverride = {
+      text: 'Decision brief awaiting approval: Planning',
+      blocks: [{ type: 'context', block_id: 'mutated-card', elements: [] }],
+    };
+    const { surface, store } = build(slack, {
+      authorize: async () => ({
+        allowed: true,
+        evidence: AUTHORIZATION_EVIDENCE,
+      }),
+    });
+
     await expect(surface.review(request())).rejects.toMatchObject({
-      code: 'unknown_outcome',
-      retryable: true,
+      code: 'permanently_rejected',
+      retryable: false,
     });
     expect((await store.list())[0]?.published).toEqual([]);
+  });
+
+  it('verifies a different durable Authority publication winner before polling it', async () => {
+    const slack = fakeSlack();
+    slack.storedMessageOverridesByTimestamp = {
+      '1700.200000': {
+        text: 'A different concurrent card',
+        blocks: [
+          { type: 'context', block_id: 'different-card', elements: [] },
+        ],
+      },
+    };
+    const durable = new InMemoryApprovalDecisionStore(
+      () => '2026-07-16T21:00:00.000Z',
+    );
+    let concurrentWinnerInstalled = false;
+    const racingStore: ApprovalDecisionStore = {
+      ensureRequested: (candidate) => durable.ensureRequested(candidate),
+      recordPublished: async (input) => {
+        if (
+          input.surface === 'slack-authority-v1' &&
+          !concurrentWinnerInstalled
+        ) {
+          concurrentWinnerInstalled = true;
+          return await durable.recordPublished({
+            ...input,
+            reference: {
+              channel_id: 'C123',
+              message_ts: '1700.200000',
+            },
+          });
+        }
+        return await durable.recordPublished(input);
+      },
+      resolve: (input) => durable.resolve(input),
+    };
+    const surface = createSlackReactionsApprovalSurface(surfaceConfig(), {
+      store: racingStore,
+      approvalActionAuthorizer: {
+        authorize: async () => ({
+          allowed: true,
+          evidence: AUTHORIZATION_EVIDENCE,
+        }),
+      },
+      environment: { SLACK_BOT_TOKEN: 'xoxb-test' },
+      now: () => '2026-07-16T21:00:00.000Z',
+      fetchImpl: slack.fetchImpl,
+    });
+
+    await expect(surface.review(request())).rejects.toMatchObject({
+      code: 'permanently_rejected',
+      retryable: false,
+    });
+    expect((await durable.list())[0]?.published).toMatchObject([
+      {
+        surface: 'slack-authority-v1',
+        reference: {
+          channel_id: 'C123',
+          message_ts: '1700.200000',
+        },
+      },
+    ]);
+    // One read verifies our post, then the second verifies the durable winner.
+    // A reaction poll would ignore the mismatched card bytes and return pending.
+    expect(slack.calls.filter((call) => call === 'reactions.get')).toHaveLength(
+      2,
+    );
+    expect(slack.calls).not.toContain('conversations.replies');
+    expect(durable.resolutionInputs).toEqual([]);
   });
 
   it('reposts and durably supersedes a stored pre-marker Slack publication before centralized authorization', async () => {
@@ -831,11 +1102,11 @@ describe('slack reactions approval surface', () => {
         },
       },
     ]);
-    // Strict polling would reject the fake provider's 1700.100000 response if
-    // either review still selected the legacy 1600.000001 reference.
-    expect(
-      slack.calls.filter((call) => call === 'reactions.get'),
-    ).toHaveLength(2);
+    // One read verifies the stored replacement before publication; the two
+    // polls would reject if either review selected the legacy reference.
+    expect(slack.calls.filter((call) => call === 'reactions.get')).toHaveLength(
+      3,
+    );
     expect(authorizationCalls).toBe(0);
   });
 
@@ -1127,6 +1398,10 @@ describe('slack reactions approval surface', () => {
         /settings.base_url is not supported/,
       ],
       [{ settings: { reviewer: valid.settings['reviewer'] } }, /channel_id/],
+      [
+        { settings: { ...valid.settings, channel_id: 'not-a-channel' } },
+        /Slack channel ID/,
+      ],
       [{ settings: { channel_id: 'C123' } }, /reviewer/],
       [
         {

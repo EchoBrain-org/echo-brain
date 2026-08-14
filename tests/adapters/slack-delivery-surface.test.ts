@@ -125,7 +125,7 @@ function fakeSlack(): FakeSlack {
         if (slack.postMode === 'unauthorized') {
           return json({ ok: false, error: 'invalid_auth' });
         }
-        return json({ ok: true, channel: 'C123', ts: '1700.100' });
+        return json({ ok: true, channel: 'C123', ts: '1700.100000' });
       }
       return json({ ok: false, error: 'unknown_method' });
     }) as typeof fetch,
@@ -189,7 +189,7 @@ describe('Slack delivery surface', () => {
       schema_version: 1,
       envelope_id: 'envelope-1',
       status: 'delivered',
-      external_id: 'slack:message:C123:1700.100',
+      external_id: 'slack:message:C123:1700.100000',
       recorded_at: '2026-07-18T20:02:00.000Z',
       retryable: false,
     });
@@ -218,7 +218,7 @@ describe('Slack delivery surface', () => {
     const three = await restarted.publish(envelope(restarted, 'attempt-3'));
 
     expect(slack.postCalls).toBe(1);
-    expect(one.external_id).toBe('slack:message:C123:1700.100');
+    expect(one.external_id).toBe('slack:message:C123:1700.100000');
     expect(two).toMatchObject({
       envelope_id: 'attempt-2',
       external_id: one.external_id,
@@ -279,7 +279,7 @@ describe('Slack delivery surface', () => {
       status: 'unknown',
       external_id: null,
       retryable: true,
-      message: expect.stringMatching(/unexpected destination/),
+      message: expect.stringMatching(/outcome could not be confirmed/),
     });
     await expect(
       build(root, slack).publish(envelope(surface, 'attempt-2')),

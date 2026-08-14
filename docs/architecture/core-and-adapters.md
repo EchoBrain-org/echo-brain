@@ -113,6 +113,15 @@ adapter.
 
 ## Capability checklists
 
+Provider verification is an endpoint-specific protocol, not a generic HTTP
+success check. Each adapter must test the documented method and parameter
+encoding, keep credentials out of URLs, refuse redirects, and reject malformed
+success bodies. Health proves reachability only. Authorization-grade identity
+must correlate the provider's tenant, user, bot, application, scope, and
+disabled/deleted state across every endpoint used in the proof. Real-provider
+probes must record only sanitized identifiers and outcomes, never credentials
+or source content.
+
 ### Meeting source
 
 - State the strongest provider account or tenant identity the API can prove and
@@ -135,7 +144,10 @@ adapter.
 
 The bundled `llm` processor is one semantic adapter with narrow provider
 drivers. The shared processor owns the prompt, canonical structured-output
-schema, parsing, decision validation, and verbatim evidence gate. Ollama,
+schema, parsing, decision validation, and request-local source-block evidence
+gate. The model cites a short block alias; the adapter resolves it to the
+canonical meeting block without asking the model to reproduce source text.
+Ollama,
 OpenAI, Anthropic, and OpenRouter drivers own only authentication, wire-format
 translation, model capability checks, response extraction, and error
 normalization. A provider driver must not weaken or specialize the semantic

@@ -264,6 +264,12 @@ const GATED: readonly (readonly [string, (configPath: string) => string[]])[] =
     ]],
     ["organization status", (c) => ["organization", "status", "--config", c]],
     ["organization refresh", (c) => ["organization", "refresh", "--config", c]],
+    ["organization record-flush", (c) => [
+      "organization",
+      "record-flush",
+      "--config",
+      c,
+    ]],
     ["organization recent-decisions", (c) => [
       "organization",
       "recent-decisions",

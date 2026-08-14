@@ -500,16 +500,21 @@ export class ComposedOrganizationIntegrationsApplication
     if (replay !== null) return replay;
 
     const legacy = this.options.repository.legacySlackOrganizationTool();
+    const upgradeable =
+      legacy === null
+        ? this.options.repository.upgradeableSlackOrganizationTool()
+        : null;
+    const existingTool = legacy ?? upgradeable;
     let verificationToken = slackBotToken;
-    if (legacy !== null) {
-      if (request.channel_id !== legacy.channel_id) {
+    if (existingTool !== null) {
+      if (request.channel_id !== existingTool.channel_id) {
         throw new AuthorityOperationError(
           'conflict',
           'Slack onboarding channel differs from the existing organization tool',
         );
       }
       try {
-        verificationToken = this.options.secrets.read(legacy.secret);
+        verificationToken = this.options.secrets.read(existingTool.secret);
       } catch {
         throw new AuthorityOperationError(
           'unavailable',
@@ -546,8 +551,10 @@ export class ComposedOrganizationIntegrationsApplication
             'organization integration authority state changed during verification',
           );
         }
-        secret ??= legacy?.secret ?? this.options.secrets.create(slackBotToken);
-        createdSecret ||= legacy === null;
+        const secretForInput =
+          existingTool?.secret ?? this.options.secrets.create(slackBotToken);
+        secret ??= secretForInput;
+        createdSecret ||= existingTool === null;
         const descriptor = this.options.authority.descriptor();
         const input: OnboardSlackOrganizationToolInput = {
           command_id: request.command_id,
@@ -558,7 +565,7 @@ export class ComposedOrganizationIntegrationsApplication
           administrator_membership_id: after.administrator.membership_id,
           connection,
           channel,
-          secret,
+          secret: secretForInput,
           now: this.now(),
         };
         return this.options.repository.onboardSlackOrganizationTool(input);
@@ -1007,11 +1014,15 @@ export class ComposedOrganizationIntegrationsApplication
               : candidate.approve_reaction,
           user_id: request.provider_subject_id,
           expected_presentation: expectedPresentation,
-          // The parser always recognizes the reviewer namespace as an
-          // extension. A reviewer card may still be rejected through this
-          // unchanged schema-v1 path; the approval call is untouched.
+          // The parsers recognize both exact Authority card namespaces as
+          // closed extensions. Reviewer and organization-member cards may
+          // still be rejected through this unchanged schema-v1 path; their
+          // dedicated positive-approval calls are untouched.
           ...(request.action === 'reject'
-            ? { parse_reviewer_card_reactions: true }
+            ? {
+                parse_reviewer_card_reactions: true,
+                parse_organization_member_card_reactions: true,
+              }
             : {}),
         },
         signal,
@@ -1089,16 +1100,32 @@ export class ComposedOrganizationIntegrationsApplication
       }
       return decision;
     }
-    // A rejected reviewer card must prove both of its own frozen reaction
-    // names against the current active binding pair. Any pair rotation or
-    // conflicting reaction denies rather than reinterpreting the card.
+    // A rejected exact Authority card must prove both of its own frozen
+    // reaction names against the current active binding pair. Any pair
+    // rotation, conflicting reaction, or ambiguous parser result denies
+    // rather than reinterpreting the card.
     const reviewerCardReactions = providerVerification?.reviewer_card_reactions;
-    if (reviewerCardReactions !== undefined) {
+    const memberCardReactions =
+      providerVerification?.organization_member_card_reactions;
+    if (
+      reviewerCardReactions !== undefined &&
+      memberCardReactions !== undefined
+    ) {
+      return this.recordDecision(
+        request,
+        current,
+        candidate,
+        false,
+        'provider_identity_mismatch',
+      );
+    }
+    const exactCardReactions = reviewerCardReactions ?? memberCardReactions;
+    if (exactCardReactions !== undefined) {
       if (
         request.action !== 'reject' ||
-        request.reaction_name !== reviewerCardReactions.reject_reaction ||
-        reviewerCardReactions.reject_reaction !== candidate.reject_reaction ||
-        reviewerCardReactions.approve_reaction !== candidate.approve_reaction
+        request.reaction_name !== exactCardReactions.reject_reaction ||
+        exactCardReactions.reject_reaction !== candidate.reject_reaction ||
+        exactCardReactions.approve_reaction !== candidate.approve_reaction
       ) {
         return this.recordDecision(
           request,

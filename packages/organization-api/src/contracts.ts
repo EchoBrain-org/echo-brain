@@ -17,6 +17,9 @@ export type OrganizationApiSha256Digest = Sha256Digest;
 export type OrganizationApiSignedIntegrityV1 = SignedIntegrity;
 export type OrganizationApiPageCursorV1 = string;
 
+export const MIN_ORGANIZATION_ACCESS_LEASE_REQUEST_TTL_MS = 1;
+export const MAX_ORGANIZATION_ACCESS_LEASE_REQUEST_TTL_MS = 30 * 60 * 1000;
+
 export interface OrganizationAccessLeaseRequestPayloadV1 {
   schema_version: 1;
   kind: 'echo-organization-access-lease-request';
@@ -32,12 +35,40 @@ export interface OrganizationAccessLeaseRequestPayloadV1 {
 }
 
 /**
+ * An opt-in lease request that lets a current installation ask the Authority
+ * for one bounded active lease lifetime. V1 intentionally has no TTL field,
+ * so its canonical bytes and Authority-defined lifetime remain unchanged.
+ */
+export interface OrganizationAccessLeaseRequestPayloadV2 {
+  schema_version: 2;
+  kind: 'echo-organization-access-lease-request';
+  request_id: string;
+  authority_id: string;
+  authority_key_id: OrganizationApiSha256Digest;
+  organization_id: string;
+  enrollment_id: string;
+  installation_id: string;
+  installation_key_id: OrganizationApiSha256Digest;
+  previous_access_state_sha256: OrganizationApiSha256Digest;
+  requested_active_lease_ttl_ms: number;
+  requested_at: string;
+}
+
+/**
  * An ordinary authenticated API command, not a durable organization trust
  * fact. The enrolled installation signs it with the key named by its receipt.
  */
 export interface OrganizationAccessLeaseRequestV1 extends OrganizationAccessLeaseRequestPayloadV1 {
   integrity: OrganizationApiSignedIntegrityV1;
 }
+
+export interface OrganizationAccessLeaseRequestV2 extends OrganizationAccessLeaseRequestPayloadV2 {
+  integrity: OrganizationApiSignedIntegrityV1;
+}
+
+export type OrganizationAccessLeaseRequestAnyVersion =
+  | OrganizationAccessLeaseRequestV1
+  | OrganizationAccessLeaseRequestV2;
 
 export type OrganizationPermissionActionV1 = 'approve' | 'reject';
 

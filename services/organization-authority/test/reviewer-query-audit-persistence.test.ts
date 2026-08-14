@@ -94,7 +94,6 @@ function fixture(initializedAt = '2026-01-01T00:00:00.000Z'): Fixture {
     descriptor,
     authority_pin_sha256: organizationAuthorityPinSha256(descriptor),
     organization_display_name: 'Example Company',
-    maximum_active_lease_ttl_ms: 5 * 60 * 1000,
     initialized_at: initializedAt,
   });
   const owner: StoredAuthorityMembership = {
@@ -125,7 +124,6 @@ function fixture(initializedAt = '2026-01-01T00:00:00.000Z'): Fixture {
           descriptor,
           authority_pin_sha256: organizationAuthorityPinSha256(descriptor),
           organization_display_name: 'Example Company',
-          maximum_active_lease_ttl_ms: 5 * 60 * 1000,
         },
       });
       openedMaintenance.push(opened);

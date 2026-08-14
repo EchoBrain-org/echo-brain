@@ -16,6 +16,7 @@ import {
 import {
   assertProductAccess,
   assertRetiredFounderProvenanceRefused,
+  DEFAULT_ORGANIZATION_RECORD_SWEEP_TIMEOUT_MS,
   prepareProductComposition,
   prepareProductStateRoot,
   resolveProductClock,
@@ -60,7 +61,8 @@ import type { InstallationSigner } from "./machine/security/installation-signer.
 import {
   createLocalOrganizationRuntime,
   createOrganizationIngestExclusion,
-  DEFAULT_LOCAL_ORGANIZATION_LEASE_TTL_MS,
+  DEFAULT_LOCAL_ORGANIZATION_ACCESS_CLOCK_SKEW_MS,
+  MAX_LOCAL_ORGANIZATION_ACTIVE_LEASE_TTL_MS,
   HttpOrganizationAuthorityClient,
   HttpOrganizationRecordClient,
   OrganizationApprovalActionAuthorizer,
@@ -81,7 +83,16 @@ import {
   type StoredOrganizationEnrollment,
   verifyOrganizationAuthorityPin,
 } from "./organization/index.js";
-import { signWithInstallationKey } from "./machine/security/installation-signer.js";
+import {
+  classifyOrganizationComposition,
+  type OrganizationCompositionState,
+} from './organization/state/organization-composition-state.js';
+import type { OrganizationApprovalActionAuthorizerOptions } from './organization/approval-action-authorizer.js';
+import type { OrganizationStateStore } from './organization/state/organization-state-store.js';
+import {
+  signWithInstallationKey,
+  verifyInstallationKeyDescriptor,
+} from "./machine/security/installation-signer.js";
 import { readPrivateCredentialFile } from "./credentials.js";
 import { resolveProductStatePaths } from "./paths.js";
 import { readFileNoFollow } from "./secure-local-files.js";
@@ -240,6 +251,7 @@ Usage:
   echo-brain organization enroll --config <absolute-path> --invitation <absolute-path> --authority-pin <sha256:...> [--authority-ca <absolute-path>] --allow-exportable-software-key
   echo-brain organization status --config <absolute-path>
   echo-brain organization refresh --config <absolute-path>
+  echo-brain organization record-flush --config <absolute-path>
   echo-brain organization recent-decisions --config <absolute-path>
   echo-brain organization reviewer-recent-decisions --config <absolute-path>
   echo-brain organization readable-search --config <absolute-path> --query <text>
@@ -351,6 +363,7 @@ const RULES: Readonly<Record<string, CommandRule>> = {
   },
   "organization status": NONE,
   "organization refresh": NONE,
+  "organization record-flush": NONE,
   "organization recent-decisions": NONE,
   "organization reviewer-recent-decisions": NONE,
   "organization readable-search": { accepts: ["query"], requires: ["query"] },
@@ -390,6 +403,7 @@ const ACTIONS: Readonly<Record<string, readonly string[]>> = {
     "enroll",
     "status",
     "refresh",
+    "record-flush",
     "recent-decisions",
     "reviewer-recent-decisions",
     "readable-search",
@@ -721,6 +735,29 @@ interface ResolvedOrganizationAuthorization {
   recordSubmitter: OrganizationRecordSubmitter | undefined;
 }
 
+/**
+ * The Slack reviewer renderer is pure local code, so it must be present even
+ * before an installation has organization authority. In particular, startup
+ * preflight needs it to fingerprint an unresolved frozen card's credential
+ * and distinguish a real rotation from unavailable authority wiring.
+ *
+ * When authority is available, the exact same authorizer handles the legacy
+ * approval path and the reviewer path.
+ */
+function approvalSurfaceFactoryOptions(
+  approvalActionAuthorizer: OrganizationApprovalActionAuthorizer | undefined,
+) {
+  return {
+    reviewerPresentationRenderer: reviewerApprovalPresentationRenderer,
+    ...(approvalActionAuthorizer === undefined
+      ? {}
+      : {
+          approvalActionAuthorizer,
+          reviewerApprovalActionAuthorizer: approvalActionAuthorizer,
+        }),
+  };
+}
+
 function configuredOrganizationIngestExclusion(
   config: ProductRuntimeConfig,
 ): OrganizationIngestExclusion {
@@ -729,37 +766,217 @@ function configuredOrganizationIngestExclusion(
   );
 }
 
+interface DoctorOrganizationResolution {
+  approvalActionAuthorizer: OrganizationApprovalActionAuthorizer | undefined;
+  diagnostic: { ok: boolean; detail: string };
+}
+
+function configuredApprovalRequiresOrganizationAuthorization(
+  config: ProductRuntimeConfig,
+): boolean {
+  if (config.approval_mode !== 'adapter') return false;
+  const mode = config.approval_surface.settings['presentation_mode'];
+  return (
+    mode === 'restricted-reviewer-v1' ||
+    mode === 'organization-member-readable-v1'
+  );
+}
+
+function organizationInstallationSigner(
+  config: ProductRuntimeConfig,
+  dependencies: ProductCliDependencies,
+): InstallationSigner {
+  return (
+    dependencies.organization?.installationSigner ??
+    new FileInstallationSigner(join(config.state_dir, 'installation', 'keys'))
+  );
+}
+
+function createApprovalActionAuthorizer(input: {
+  authorityBaseUrl: string;
+  authorityCaPem: string | null;
+  dependencies: ProductCliDependencies;
+  signer: InstallationSigner;
+  now: () => string;
+  openState: OrganizationApprovalActionAuthorizerOptions['openState'];
+}): OrganizationApprovalActionAuthorizer {
+  return new OrganizationApprovalActionAuthorizer({
+    openState: input.openState,
+    authorityClient: new HttpOrganizationAuthorityClient({
+      baseUrl: input.authorityBaseUrl,
+      ...organizationAuthorityTransportOptions(
+        input.dependencies.organization,
+        input.authorityCaPem,
+      ),
+    }),
+    installationSigner: input.signer,
+    now: input.now,
+  });
+}
+
+function snapshotEnrollmentReader(
+  enrollment: StoredOrganizationEnrollment,
+): Pick<OrganizationStateStore, 'readEnrollment' | 'close'> {
+  let closed = false;
+  return {
+    readEnrollment() {
+      if (closed) throw new Error('organization state reader is closed');
+      return enrollment;
+    },
+    close() {
+      closed = true;
+    },
+  };
+}
+
+async function resolveDoctorOrganization(
+  config: ProductRuntimeConfig,
+  dependencies: ProductCliDependencies,
+): Promise<DoctorOrganizationResolution> {
+  const databasePath = resolveProductStatePaths(config.state_dir).database;
+  const state = classifyOrganizationComposition(
+    SqliteOrganizationStateStore.inspectReadOnly(databasePath),
+  );
+  if (state.kind === 'corrupt' || state.kind === 'unavailable') {
+    return {
+      approvalActionAuthorizer: undefined,
+      diagnostic: {
+        ok: false,
+        detail: `organization state is ${state.kind}: ${state.detail}`,
+      },
+    };
+  }
+  if (state.kind === 'unmanaged') {
+    const required = configuredApprovalRequiresOrganizationAuthorization(config);
+    return {
+      approvalActionAuthorizer: undefined,
+      diagnostic: {
+        ok: !required,
+        detail: required
+          ? 'the configured approval presentation requires organization authorization, but organization state is not configured'
+          : state.source === 'pre-organization-schema'
+            ? `organization is not configured; database schema v${String(state.schemaVersion)} predates organization state`
+            : 'organization is not configured for this installation',
+      },
+    };
+  }
+  if (state.kind === 'pinned-unenrolled') {
+    return {
+      approvalActionAuthorizer: undefined,
+      diagnostic: {
+        ok: false,
+        detail: `organization authority is pinned but enrollment is ${state.phase.replaceAll('-', ' ')}`,
+      },
+    };
+  }
+  if (state.kind === 'enrolled-disconnected') {
+    return {
+      approvalActionAuthorizer: undefined,
+      diagnostic: {
+        ok: false,
+        detail:
+          'organization enrollment is accepted but its authority connection is unavailable',
+      },
+    };
+  }
+
+  const signer = organizationInstallationSigner(config, dependencies);
+  try {
+    const expected = state.enrollment.request.installation_signing_key;
+    const descriptor = await signer.inspect(
+      state.enrollment.request.installation_id,
+    );
+    if (descriptor === null) {
+      throw new Error('organization installation signing key is unavailable');
+    }
+    verifyInstallationKeyDescriptor(descriptor);
+    if (
+      descriptor.installation_id !==
+        state.enrollment.request.installation_id ||
+      descriptor.key_id !== expected.key_id ||
+      descriptor.algorithm !== expected.algorithm ||
+      descriptor.public_key_spki_der_base64 !==
+        expected.public_key_spki_der_base64
+    ) {
+      throw new Error(
+        'organization installation signer no longer matches the enrollment',
+      );
+    }
+  } catch (error) {
+    return {
+      approvalActionAuthorizer: undefined,
+      diagnostic: { ok: false, detail: (error as Error).message },
+    };
+  }
+  return {
+    approvalActionAuthorizer: createApprovalActionAuthorizer({
+      authorityBaseUrl: state.authorityConnection.authority_base_url,
+      authorityCaPem: state.authorityConnection.authority_ca_pem,
+      dependencies,
+      signer,
+      now: resolveProductClock(dependencies.now),
+      openState: () => snapshotEnrollmentReader(state.enrollment),
+    }),
+    diagnostic: {
+      ok: true,
+      detail:
+        'organization enrollment, authority connection, and installation signer are locally consistent',
+    },
+  };
+}
+
+function readRuntimeOrganizationCompositionState(
+  databasePath: string,
+): OrganizationCompositionState {
+  const state = new SqliteOrganizationStateStore(databasePath);
+  try {
+    return classifyOrganizationComposition(
+      state.readCompositionObservation(),
+    );
+  } finally {
+    state.close();
+  }
+}
+
 function resolveOrganizationAuthorization(
   config: ProductRuntimeConfig,
   dependencies: ProductCliDependencies,
 ): ResolvedOrganizationAuthorization {
   const databasePath = resolveProductStatePaths(config.state_dir).database;
-  const state = new SqliteOrganizationStateStore(databasePath);
-  let hasPin = false;
-  let enrolled = false;
-  let authorityBaseUrl: string | null = null;
-  let authorityCaPem: string | null = null;
-  let pinnedAuthority: PinnedOrganizationAuthority | null = null;
-  let enrollment: StoredOrganizationEnrollment | null = null;
-  try {
-    pinnedAuthority = state.readPinnedAuthority();
-    hasPin = pinnedAuthority !== null;
-    enrollment = state.readEnrollment();
-    enrolled =
-      enrollment?.receipt !== null &&
-      enrollment?.receipt !== undefined &&
-      enrollment.accepted_access_sequence > 0;
-    const connection = state.readAuthorityConnection();
-    authorityBaseUrl = connection?.authority_base_url ?? null;
-    authorityCaPem = connection?.authority_ca_pem ?? null;
-  } finally {
-    state.close();
+  const organizationState = readRuntimeOrganizationCompositionState(databasePath);
+  if (
+    organizationState.kind === 'corrupt' ||
+    organizationState.kind === 'unavailable'
+  ) {
+    throw new Error(
+      `organization state is ${organizationState.kind}: ${organizationState.detail}`,
+    );
   }
-  if (enrolled && authorityBaseUrl === null) {
+  if (organizationState.kind === 'enrolled-disconnected') {
     throw new Error(
       "organization authority connection is unavailable for approval authorization",
     );
   }
+  const hasPin = organizationState.kind !== 'unmanaged';
+  const enrolled = organizationState.kind === 'enrolled-connected';
+  const authorityConnection =
+    organizationState.kind === 'enrolled-connected' ||
+    organizationState.kind === 'pinned-unenrolled'
+      ? organizationState.authorityConnection
+      : null;
+  const authorityBaseUrl =
+    authorityConnection?.authority_base_url ?? null;
+  const authorityCaPem = authorityConnection?.authority_ca_pem ?? null;
+  const pinnedAuthority =
+    organizationState.kind === 'enrolled-connected' ||
+    organizationState.kind === 'pinned-unenrolled'
+      ? organizationState.pinnedAuthority
+      : null;
+  const enrollment =
+    organizationState.kind === 'enrolled-connected' ||
+    organizationState.kind === 'pinned-unenrolled'
+      ? organizationState.enrollment
+      : null;
   const configuredAccessGate = dependencies.composition?.accessGate;
   if (!enrolled && (configuredAccessGate !== undefined || !hasPin)) {
     return {
@@ -768,11 +985,7 @@ function resolveOrganizationAuthorization(
       recordSubmitter: undefined,
     };
   }
-  const signer =
-    dependencies.organization?.installationSigner ??
-    new FileInstallationSigner(
-      join(config.state_dir, "installation", "keys"),
-    );
+  const signer = organizationInstallationSigner(config, dependencies);
   const now = resolveProductClock(dependencies.now);
   const transport = organizationAuthorityTransportOptions(
     dependencies.organization,
@@ -812,14 +1025,13 @@ function resolveOrganizationAuthorization(
   }
   return {
     accessGate,
-    approvalActionAuthorizer: new OrganizationApprovalActionAuthorizer({
-      openState: () => new SqliteOrganizationStateStore(databasePath),
-      authorityClient: new HttpOrganizationAuthorityClient({
-        baseUrl: authorityBaseUrl,
-        ...transport,
-      }),
-      installationSigner: signer,
+    approvalActionAuthorizer: createApprovalActionAuthorizer({
+      authorityBaseUrl,
+      authorityCaPem,
+      dependencies,
+      signer,
       now,
+      openState: () => new SqliteOrganizationStateStore(databasePath),
     }),
     recordSubmitter: createOrganizationRecordSubmitter({
       config,
@@ -888,6 +1100,289 @@ function createOrganizationRecordSubmitter(input: {
   });
 }
 
+interface OrganizationRecordFlushTransition {
+  approval_id: string;
+  outcome: "published" | "rejected";
+  receipt_summary?: {
+    schema_version: 1;
+    kind: "echo-organization-record-receipt";
+    authority_id: string;
+    organization_id: string;
+    envelope_id: string;
+    envelope_sha256: string;
+    installation_id: string;
+    idempotency_key: string;
+    position: number;
+    record_hash: string;
+    recorded_at: string;
+  };
+  rejection?: {
+    envelope_id: string;
+    envelope_sha256: string;
+    idempotency_key: string;
+    reason_code: string;
+  };
+}
+
+/**
+ * Runs the narrow operator recovery path for already-resolved records.
+ *
+ * The candidate ids are captured before the sweep, so output describes only
+ * transitions caused (or completed idempotently) by this invocation. A prior
+ * published receipt can never be misreported as fresh recovery evidence.
+ */
+async function flushOrganizationRecords(
+  config: ProductRuntimeConfig,
+  dependencies: ProductCliDependencies,
+): Promise<{
+  ok: boolean;
+  candidate_records: number;
+  sweep: OrganizationRecordSweepResult;
+  published_records: readonly OrganizationRecordFlushTransition[];
+  rejected_records: readonly OrganizationRecordFlushTransition[];
+}> {
+  // The early dispatch gate ran before lifecycle acquisition. Re-check inside
+  // the exclusive window before opening organization SQLite, inspecting the
+  // signer, refreshing access, or contacting the Authority.
+  refuseRetiredFounderProvenance(config.state_dir);
+  const { accessGate, recordSubmitter } = resolveOrganizationAuthorization(
+    config,
+    dependencies,
+  );
+  try {
+    if (recordSubmitter === undefined) {
+      throw new Error(
+        "organization record flush requires an enrolled, connected organization",
+      );
+    }
+    await assertProductAccess(accessGate);
+    const nodes = new DecisionNodeStore(config.state_dir, {
+      now: dependencies.now,
+    });
+    const before = await nodes.listForSubmission();
+    const candidates = new Set(
+      before.nodes
+        .filter(
+          (node) =>
+            node.organization_record.status === "pending" ||
+            node.organization_record.status === "outbound",
+        )
+        .map((node) => node.approval_id),
+    );
+    // Exactly one awaited submitter sweep. This command does not construct a
+    // product composition, adapter registry, or core state store.
+    const sweep = await recordSubmitter.sweep({});
+    const after = await nodes.listForSubmission();
+    const transitions: OrganizationRecordFlushTransition[] = [];
+    for (const node of after.nodes) {
+      if (!candidates.has(node.approval_id)) continue;
+      const record = node.organization_record;
+      if (record.status === "published" && record.receipt !== null) {
+        const receipt = record.receipt;
+        transitions.push({
+          approval_id: node.approval_id,
+          outcome: "published",
+          receipt_summary: {
+            schema_version: receipt.schema_version,
+            kind: receipt.kind,
+            authority_id: receipt.authority_id,
+            organization_id: receipt.organization_id,
+            envelope_id: receipt.envelope_id,
+            envelope_sha256: receipt.envelope_sha256,
+            installation_id: receipt.installation_id,
+            idempotency_key: receipt.idempotency_key,
+            position: receipt.position,
+            record_hash: receipt.record_hash,
+            recorded_at: receipt.recorded_at,
+          },
+        });
+      } else if (record.status === "rejected" && record.rejection !== null) {
+        const rejection = record.rejection;
+        transitions.push({
+          approval_id: node.approval_id,
+          outcome: "rejected",
+          rejection: {
+            envelope_id: rejection.envelope_id,
+            envelope_sha256: rejection.envelope_sha256,
+            idempotency_key: rejection.idempotency_key,
+            reason_code: rejection.reason_code,
+          },
+        });
+      }
+    }
+    return {
+      // `sweep.ok` means no alert. A retry is deliberately alert-free in the
+      // submitter because it remains recoverable, but this one-shot command
+      // must not call an undelivered result successful.
+      ok:
+        sweep.ok &&
+        sweep.retried === 0 &&
+        sweep.rejected === 0 &&
+        transitions.filter(
+          (transition) => transition.outcome === "published",
+        ).length === candidates.size,
+      candidate_records: candidates.size,
+      sweep,
+      published_records: transitions.filter(
+        (transition) => transition.outcome === "published",
+      ),
+      rejected_records: transitions.filter(
+        (transition) => transition.outcome === "rejected",
+      ),
+    };
+  } finally {
+    await accessGate?.close?.();
+  }
+}
+
+/**
+ * Serializes organization-record sweeps without losing an approval that
+ * resolves while a service-cycle sweep is already looking at the node set.
+ *
+ * The first caller receives one outer batch promise. A request that arrives
+ * while its first physical sweep runs adds one signal-free follow-up to that
+ * same batch, so its result carries both passes and composition cannot close
+ * between them. The coordinator owns a lifetime abort controller for each
+ * physical pass and its `close()` drains the active batch before the runtime
+ * lock is released. Requests during the follow-up share that batch instead of
+ * scheduling a third pass; the next service cycle is their durable retry path.
+ */
+export interface OrganizationRecordSweepCoordinator {
+  sweep(options: {
+    signal?: AbortSignal;
+  }): Promise<OrganizationRecordSweepResult>;
+  close(): Promise<void>;
+}
+
+function mergeOrganizationRecordSweepResults(
+  first: OrganizationRecordSweepResult,
+  second: OrganizationRecordSweepResult,
+): OrganizationRecordSweepResult {
+  return {
+    ok: first.ok && second.ok,
+    examined: first.examined + second.examined,
+    excluded: first.excluded + second.excluded,
+    skipped: first.skipped + second.skipped,
+    published: first.published + second.published,
+    rejected: first.rejected + second.rejected,
+    retried: first.retried + second.retried,
+    alerts: [...first.alerts, ...second.alerts],
+  };
+}
+
+export function createOrganizationRecordSweepCoordinator(
+  sweep: (options: {
+    signal?: AbortSignal;
+  }) => Promise<OrganizationRecordSweepResult>,
+  options: {
+    timeoutMs?: number;
+  } = {},
+): OrganizationRecordSweepCoordinator {
+  const timeoutMs =
+    options.timeoutMs ?? DEFAULT_ORGANIZATION_RECORD_SWEEP_TIMEOUT_MS;
+  let activeBatch: Promise<OrganizationRecordSweepResult> | null = null;
+  let activeController: AbortController | null = null;
+  let followUpRequested = false;
+  let acceptingFollowUp = false;
+  let closed = false;
+
+  const physicalSweep = async (
+    options: { signal?: AbortSignal },
+  ): Promise<OrganizationRecordSweepResult> => {
+    const controller = new AbortController();
+    const abortForParent = (): void => {
+      controller.abort(options.signal?.reason);
+    };
+    if (options.signal?.aborted === true) abortForParent();
+    else
+      options.signal?.addEventListener('abort', abortForParent, {
+        once: true,
+      });
+    activeController = controller;
+    const timer = setTimeout(
+      () =>
+        controller.abort(
+          new Error(`organization record sweep timed out after ${timeoutMs}ms`),
+        ),
+      timeoutMs,
+    );
+    try {
+      return await sweep({ signal: controller.signal });
+    } finally {
+      clearTimeout(timer);
+      options.signal?.removeEventListener('abort', abortForParent);
+      if (activeController === controller) activeController = null;
+    }
+  };
+
+  const runBatch = async (
+    firstOptions: { signal?: AbortSignal },
+  ): Promise<OrganizationRecordSweepResult> => {
+    let first: OrganizationRecordSweepResult | undefined;
+    let firstFailure: unknown;
+    try {
+      first = await physicalSweep(firstOptions);
+    } catch (error) {
+      firstFailure = error;
+    }
+    acceptingFollowUp = false;
+    if (followUpRequested && !closed) {
+      followUpRequested = false;
+      let second: OrganizationRecordSweepResult | undefined;
+      let secondFailure: unknown;
+      try {
+        // The cycle timeout belongs to its first pass only. This independent
+        // pass is still bounded by the composition lifetime controller above.
+        second = await physicalSweep({});
+      } catch (error) {
+        secondFailure = error;
+      }
+      if (firstFailure !== undefined) throw firstFailure;
+      if (secondFailure !== undefined) throw secondFailure;
+      if (first === undefined || second === undefined) {
+        throw new Error('organization record sweep returned no result');
+      }
+      return mergeOrganizationRecordSweepResults(first, second);
+    }
+    followUpRequested = false;
+    if (firstFailure !== undefined) throw firstFailure;
+    if (first === undefined) {
+      throw new Error('organization record sweep returned no result');
+    }
+    return first;
+  };
+
+  return {
+    sweep(options) {
+      if (closed) {
+        return Promise.reject(
+          new Error('organization record sweep coordinator is closed'),
+        );
+      }
+      if (activeBatch !== null) {
+        if (acceptingFollowUp) followUpRequested = true;
+        return activeBatch;
+      }
+      acceptingFollowUp = true;
+      const batch = runBatch(options);
+      activeBatch = batch.finally(() => {
+        if (activeBatch === tracked) activeBatch = null;
+      });
+      const tracked = activeBatch;
+      return tracked;
+    },
+    async close() {
+      closed = true;
+      followUpRequested = false;
+      acceptingFollowUp = false;
+      activeController?.abort(
+        new Error('organization record sweep coordinator is closing'),
+      );
+      await activeBatch?.catch(() => undefined);
+    },
+  };
+}
+
 async function createCliComposition(
   config: ProductRuntimeConfig,
   classifier: ClassifyStateFilesystem,
@@ -902,24 +1397,23 @@ async function createCliComposition(
   const customComposition = dependencies.composition;
   const { accessGate, approvalActionAuthorizer, recordSubmitter } =
     resolveOrganizationAuthorization(config, dependencies);
-  // One serialized sweep at a time. The post-resolve hook and each cycle reach
-  // the same function; overlapping them would resend the same frozen envelopes
-  // concurrently for no benefit.
-  let activeSweep: Promise<OrganizationRecordSweepResult> | null = null;
-  const sweepOrganizationRecord =
+  // One serialized sweep at a time. A resolution during the cycle's sweep
+  // coalesces into one independent follow-up rather than disappearing behind
+  // the already-active snapshot.
+  const recordSweepCoordinator =
     recordSubmitter === undefined
       ? undefined
-      : (options: {
-          signal?: AbortSignal;
-        }): Promise<OrganizationRecordSweepResult> => {
-          if (activeSweep !== null) return activeSweep;
-          activeSweep = recordSubmitter
-            .sweep(options)
-            .finally(() => {
-              activeSweep = null;
-            });
-          return activeSweep;
-        };
+      : createOrganizationRecordSweepCoordinator((options) =>
+          recordSubmitter.sweep(options),
+          {
+            timeoutMs:
+              customComposition?.organizationRecordSweepTimeoutMs ??
+              DEFAULT_ORGANIZATION_RECORD_SWEEP_TIMEOUT_MS,
+          },
+        );
+  const sweepOrganizationRecord = recordSweepCoordinator?.sweep.bind(
+    recordSweepCoordinator,
+  );
   // This check precedes adapter factories and credential resolution. The
   // composition repeats it immediately before health checks and every cycle.
   await assertProductAccess(accessGate);
@@ -943,21 +1437,12 @@ async function createCliComposition(
   const registry = await createConfiguredAdapterRegistry(config, factories, {
     environment: dependencies.environment,
     now,
-    ...(approvalActionAuthorizer === undefined
-      ? {}
-      : {
-          approvalActionAuthorizer,
-          // The same authorizer object owns both the landed schema-v1 path and
-          // the schema-v2 reviewer approval; the renderer is the one local
-          // reviewer card projection.
-          reviewerApprovalActionAuthorizer: approvalActionAuthorizer,
-          reviewerPresentationRenderer: reviewerApprovalPresentationRenderer,
-        }),
+    ...approvalSurfaceFactoryOptions(approvalActionAuthorizer),
     ...(sweepOrganizationRecord === undefined
       ? {}
       : {
-          // Best-effort: a human act reaches the organization immediately, and
-          // a failure here is already covered by the next cycle's sweep.
+          // The human act remains local and immediate. The coordinator owns
+          // the bounded background pass and composition close drains it.
           afterDecisionResolved: () => {
             void sweepOrganizationRecord({}).catch(() => undefined);
           },
@@ -970,6 +1455,13 @@ async function createCliComposition(
     ...(sweepOrganizationRecord === undefined
       ? {}
       : { organizationRecordSweep: sweepOrganizationRecord }),
+    closeResources: async () => {
+      try {
+        await recordSweepCoordinator?.close();
+      } finally {
+        await customComposition?.closeResources?.();
+      }
+    },
     ...(now === undefined ? {} : { now }),
   });
 }
@@ -1701,6 +2193,7 @@ export async function runProductCli(
 
     let releases: readonly ReleaseProductLifecycleLock[] = [];
     let organizationResult: object | undefined;
+    let organizationStatus = 0;
     let operationFailure: unknown;
     try {
       releases =
@@ -1724,7 +2217,15 @@ export async function runProductCli(
       const paths = resolveProductStatePaths(config.state_dir);
       const now = resolveProductClock(dependencies.now);
 
-      if (action === "status") {
+      if (action === "record-flush") {
+        const flushed = await flushOrganizationRecords(config, dependencies);
+        organizationStatus = flushed.ok ? 0 : 1;
+        organizationResult = {
+          command: parsed.command,
+          action,
+          ...flushed,
+        };
+      } else if (action === "status") {
         const state = new SqliteOrganizationStateStore(paths.database);
         try {
           const connection = state.readAuthorityConnection();
@@ -1755,7 +2256,9 @@ export async function runProductCli(
             const decision = state.verifyCurrentAccess({
               now: now(),
               maximum_active_ttl_ms:
-                DEFAULT_LOCAL_ORGANIZATION_LEASE_TTL_MS,
+                MAX_LOCAL_ORGANIZATION_ACTIVE_LEASE_TTL_MS,
+              allowed_clock_skew_ms:
+                DEFAULT_LOCAL_ORGANIZATION_ACCESS_CLOCK_SKEW_MS,
             });
             organizationResult = {
               ok: true,
@@ -2080,8 +2583,8 @@ export async function runProductCli(
       );
       return 1;
     }
-    print(stdout, organizationResult!);
-    return 0;
+    print(organizationStatus === 0 ? stdout : stderr, organizationResult!);
+    return organizationStatus;
   }
   if (parsed.command === "service-run") {
     try {
@@ -2225,8 +2728,31 @@ export async function runProductCli(
       }
       let adapters: Awaited<ReturnType<typeof diagnoseConfiguredAdapters>> = [];
       let adapterError: string | undefined;
+      let organizationDiagnostic:
+        | DoctorOrganizationResolution['diagnostic']
+        | undefined;
       if (parsed.doctorLocalOnly !== true) {
+        let approvalActionAuthorizer:
+          | OrganizationApprovalActionAuthorizer
+          | undefined;
         try {
+          const organization = await resolveDoctorOrganization(
+            config,
+            dependencies,
+          );
+          organizationDiagnostic = organization.diagnostic;
+          approvalActionAuthorizer =
+            organization.approvalActionAuthorizer;
+        } catch (error) {
+          organizationDiagnostic = {
+            ok: false,
+            detail: `organization state inspection failed: ${(error as Error).message}`,
+          };
+          adapterError =
+            'adapter diagnostics were skipped because organization state inspection failed';
+        }
+        if (adapterError === undefined) {
+          try {
           const factories =
             dependencies.adapterFactories ?? createDefaultAdapterFactories();
           const registry = await createConfiguredAdapterRegistry(
@@ -2235,6 +2761,9 @@ export async function runProductCli(
             {
               environment: dependencies.environment,
               now: dependencies.now,
+              ...approvalSurfaceFactoryOptions(
+                approvalActionAuthorizer,
+              ),
             },
           );
           adapters = await diagnoseConfiguredAdapters(
@@ -2242,8 +2771,9 @@ export async function runProductCli(
             registry,
             dependencies.doctorHealthTimeoutMs ?? 10_000,
           );
-        } catch (error) {
-          adapterError = (error as Error).message;
+          } catch (error) {
+            adapterError = (error as Error).message;
+          }
         }
       }
       try {
@@ -2251,6 +2781,9 @@ export async function runProductCli(
           filesystem,
           adapters,
           includeAdapters: parsed.doctorLocalOnly !== true,
+          ...(organizationDiagnostic === undefined
+            ? {}
+            : { organizationDiagnostic }),
           ...(adapterError === undefined ? {} : { adapterError }),
         });
         print(report.ok ? stdout : stderr, {

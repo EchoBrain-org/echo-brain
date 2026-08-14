@@ -1,4 +1,6 @@
 import { isAbsolute, join, relative, resolve, sep } from 'node:path';
+import type { OrganizationRecordingPolicyV1 } from '../application/organization-recording-policy.js';
+export type { OrganizationRecordingPolicyV1 } from '../application/organization-recording-policy.js';
 
 export interface DevelopmentSignerConfig {
   authority_id: string;
@@ -6,15 +8,15 @@ export interface DevelopmentSignerConfig {
   key_directory: string;
 }
 
-export interface OrganizationRecordingPolicyV1 {
+export interface OrganizationMemberRecordingActivationBindingV1 {
   schema_version: 1;
-  kind: 'organization-recording-policy-v1';
-  decision_processor_adapter_instance_id: string;
-  approval_surface_adapter_instance_id: string;
-  presentation_mode:
-    | 'restricted-reviewer-v1'
-    | 'organization-member-readable-v1';
-  policy_contract_sha256: `sha256:${string}`;
+  kind: 'organization-member-recording-activation-binding-v1';
+  command_sha256: `sha256:${string}`;
+  activation_sha256: `sha256:${string}`;
+  initialized_runtime_config_sha256: `sha256:${string}`;
+  initialization_manifest_sha256: `sha256:${string}`;
+  activated_at: string;
+  audit_sequence: number;
 }
 
 export interface AuthorityServeConfig extends DevelopmentSignerConfig {
@@ -36,6 +38,9 @@ export interface AuthorityServeConfig extends DevelopmentSignerConfig {
    * deliberately leaves the existing runtime and fingerprint unchanged.
    */
   organization_recording_policy_v1?: OrganizationRecordingPolicyV1;
+  /** Verified additive overlay; absent when the immutable config owns policy. */
+  organization_member_recording_activation_v1?:
+    OrganizationMemberRecordingActivationBindingV1;
 }
 
 function normalizedAbsolute(path: string): boolean {

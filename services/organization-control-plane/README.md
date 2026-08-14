@@ -21,9 +21,12 @@ requires the explicit `install-integrations` maintenance command; normal
 
 Raw Slack credentials live only in customer-owned mode-0600 secret storage.
 SQLite stores their opaque handles. Organization onboarding verifies the bot,
-workspace, required scopes, and public channel before activation. Existing
-profileless Internal Live connections remain usable by their approval bindings
-until the same credential and channel are explicitly reverified.
+workspace, required scopes, public channel, and a canonical non-null Slack app
+ID before activation. `auth.test` supplies the token-bound bot context and
+`bots.info` for that exact bot supplies the app proof; a missing app ID from
+`auth.test` is not an identity value. Existing profileless Internal Live
+connections remain usable by their approval bindings until the same credential
+and channel are explicitly reverified.
 
 ## Migration invariant
 
@@ -32,6 +35,15 @@ history. Forward migration `0003_single_canonical_slack_promotion.sql` prevents
 a parallel active organization Slack connection and permits only an in-place,
 provider-reverified promotion of the existing connection. Its connection ID,
 secret handle, binding, and grants remain unchanged.
+
+Forward migration `0005_slack_app_identity_promotion.sql` installs the narrow
+guard for historical profileless and ready tools whose stored Slack app ID is
+`null`. It performs no automatic backfill. Only explicit owner re-onboarding,
+after fresh `auth.test` plus `bots.info` proof, may atomically set the canonical
+app ID on that connection and all its exact active Slack approval bindings. The
+repair preserves connection and binding IDs, opaque secret handles, direct
+grants, and historical audit rows; it appends a new audit record instead of
+rewriting history.
 
 The minimum-v1 schema is closed by default. New persisted state requires an
 accepted observable behavior and an executable schema-contract update.

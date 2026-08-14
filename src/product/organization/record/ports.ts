@@ -35,8 +35,7 @@ export type OrganizationRecordEventType = 'approval' | 'rejection';
  * dropping any of them would leave the Authority's pre-append audit lookup
  * unable to match the evidence it is asked to confirm.
  */
-export interface OrganizationRecordAuthorizationEvidence {
-  readonly schema_version: 1;
+interface OrganizationRecordAuthorizationEvidenceBase {
   readonly kind: 'echo-organization-authorization-evidence';
   readonly authority_id: string;
   readonly organization_id: string;
@@ -55,6 +54,47 @@ export interface OrganizationRecordAuthorizationEvidence {
   readonly permission_grant_id: string;
   readonly evaluated_at: string;
 }
+
+export interface OrganizationRecordAuthorizationEvidenceV1
+  extends OrganizationRecordAuthorizationEvidenceBase {
+  readonly schema_version: 1;
+  readonly action: OrganizationRecordAction;
+  readonly reason_code: string;
+}
+
+export interface OrganizationRecordReviewerAuthorizationEvidenceV2
+  extends OrganizationRecordAuthorizationEvidenceBase {
+  readonly schema_version: 2;
+  readonly action: 'approve';
+  readonly reason_code: 'active_reviewer_restricted_notice_v1';
+  readonly authorization_audit_event_id: string;
+  readonly authorization_audit_entry_sha256: string;
+  readonly reviewer_release_draft_sha256: string;
+  readonly approval_presentation_sha256: string;
+  readonly semantic_intent_sha256: string;
+  readonly message_presentation_sha256: string;
+}
+
+export interface OrganizationRecordOrganizationMemberAuthorizationEvidenceV3
+  extends OrganizationRecordAuthorizationEvidenceBase {
+  readonly schema_version: 3;
+  readonly action: 'approve';
+  readonly reason_code: 'active_organization_member_readable_notice_v1';
+  readonly policy_id: 'organization-member-readable-v1';
+  readonly policy_contract_sha256: string;
+  readonly authorization_audit_event_id: string;
+  readonly authorization_audit_entry_sha256: string;
+  readonly release_draft_sha256: string;
+  readonly approval_presentation_sha256: string;
+  readonly semantic_intent_sha256: string;
+  readonly message_presentation_sha256: string;
+}
+
+/** Every closed authorization family the record submitter may carry. */
+export type OrganizationRecordAuthorizationEvidence =
+  | OrganizationRecordAuthorizationEvidenceV1
+  | OrganizationRecordReviewerAuthorizationEvidenceV2
+  | OrganizationRecordOrganizationMemberAuthorizationEvidenceV3;
 
 export type OrganizationRecordAction = 'approve' | 'reject';
 

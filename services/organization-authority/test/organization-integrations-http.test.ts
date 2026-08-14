@@ -740,18 +740,38 @@ describe('organization integrations HTTP routes', () => {
     }
   });
 
-  it('dispatches a signed schema-v3 request and returns its closed decision unchanged', async () => {
+  it('dispatches schema-v3 with both application receivers intact', async () => {
     const command = organizationMemberPermissionRequest();
     const decision = organizationMemberPermissionDecision(command, true);
-    const checkOrganizationMemberReadablePermission = vi.fn(async () =>
-      decision,
-    );
+    let checkSubject!: NonNullable<
+      OrganizationAuthorityHttpApplication['checkOrganizationMemberReadablePermissionSubject']
+    >;
+    let checkPermission!: NonNullable<
+      OrganizationIntegrationsHttpApplication['checkOrganizationMemberReadablePermission']
+    >;
+    checkSubject = vi.fn(function (
+      this: OrganizationAuthorityHttpApplication,
+      request,
+    ) {
+      if (
+        this.checkOrganizationMemberReadablePermissionSubject !== checkSubject
+      )
+        throw new Error('schema-v3 subject receiver was lost');
+      return { installation_id: request.installation_id };
+    });
+    checkPermission = vi.fn(async function (
+      this: OrganizationIntegrationsHttpApplication,
+    ) {
+      if (this.checkOrganizationMemberReadablePermission !== checkPermission)
+        throw new Error('schema-v3 integration receiver was lost');
+      return decision;
+    });
     const server = integrationServer(
-      integrationsApplication({ checkOrganizationMemberReadablePermission }),
+      integrationsApplication({
+        checkOrganizationMemberReadablePermission: checkPermission,
+      }),
       {
-        checkOrganizationMemberReadablePermissionSubject: (request) => ({
-          installation_id: request.installation_id,
-        }),
+        checkOrganizationMemberReadablePermissionSubject: checkSubject,
       },
     );
     const origin = await listen(server);
@@ -766,7 +786,9 @@ describe('organization integrations HTTP routes', () => {
       );
       expect(response.status).toBe(200);
       expect(await response.text()).toBe(canonicalJson(decision));
-      expect(checkOrganizationMemberReadablePermission).toHaveBeenCalledWith(
+      expect(checkSubject).toHaveBeenCalledOnce();
+      expect(checkPermission).toHaveBeenCalledOnce();
+      expect(checkPermission).toHaveBeenCalledWith(
         command,
         expect.any(AbortSignal),
       );

@@ -264,17 +264,49 @@ describe("SlackWebApiClient", () => {
     );
   });
 
-  it("captures strict workspace and bot identifiers without changing authTest health behavior", async () => {
-    const response = {
+  it("resolves one canonical app identity without changing authTest health behavior", async () => {
+    const authResponse = {
       ok: true,
       team_id: "T123ABC",
       enterprise_id: "E456DEF",
       user_id: "U789GHI",
       bot_id: "B123ABC",
-      app_id: "A456DEF",
     };
+    const methods: string[] = [];
+    const requests: Array<{
+      method: string;
+      httpMethod: string | undefined;
+      body: BodyInit | null | undefined;
+      contentType: string | null;
+    }> = [];
     const client = new SlackWebApiClient("xoxb-test", {
-      fetchImpl: fetchReturning(() => jsonResponse(response)),
+      fetchImpl: (async (input, init) => {
+        const url = new URL(String(input));
+        const method = url.pathname.split("/").pop() ?? "";
+        methods.push(method);
+        requests.push({
+          method,
+          httpMethod: init?.method,
+          body: init?.body,
+          contentType: new Headers(init?.headers).get("content-type"),
+        });
+        if (method === "bots.info") {
+          expect(url.searchParams.get("bot")).toBe("B123ABC");
+        }
+        return method === "auth.test"
+          ? jsonResponse(authResponse, {
+              headers: { "x-oauth-scopes": "chat:write, users:read" },
+            })
+          : jsonResponse({
+              ok: true,
+              bot: {
+                id: "B123ABC",
+                user_id: "U789GHI",
+                app_id: "A456DEF",
+                deleted: false,
+              },
+            });
+      }) as typeof fetch,
     });
 
     await expect(client.authTest()).resolves.toEqual({ user_id: "U789GHI" });
@@ -285,23 +317,226 @@ describe("SlackWebApiClient", () => {
       bot_id: "B123ABC",
       app_id: "A456DEF",
     });
+    expect(methods).toEqual(["auth.test", "auth.test", "bots.info"]);
+    expect(requests.slice(0, 2)).toEqual([
+      {
+        method: "auth.test",
+        httpMethod: "POST",
+        body: "{}",
+        contentType: "application/json; charset=utf-8",
+      },
+      {
+        method: "auth.test",
+        httpMethod: "POST",
+        body: "{}",
+        contentType: "application/json; charset=utf-8",
+      },
+    ]);
+    expect(requests.at(-1)).toEqual({
+      method: "bots.info",
+      httpMethod: "GET",
+      body: undefined,
+      contentType: null,
+    });
   });
 
   it.each([
-    { team_id: undefined, user_id: "U789GHI" },
-    { team_id: "not-a-team", user_id: "U789GHI" },
-    { team_id: "T123ABC", user_id: undefined },
-    { team_id: "T123ABC", user_id: "not-a-user" },
+    { team_id: undefined, user_id: "U789GHI", bot_id: "B123ABC" },
+    { team_id: "not-a-team", user_id: "U789GHI", bot_id: "B123ABC" },
+    { team_id: "T123ABC", user_id: undefined, bot_id: "B123ABC" },
+    { team_id: "T123ABC", user_id: "not-a-user", bot_id: "B123ABC" },
+    { team_id: "T123ABC", user_id: "U789GHI", bot_id: undefined },
     { team_id: "T123ABC", user_id: "U789GHI", bot_id: "not-a-bot" },
-    { team_id: "T123ABC", user_id: "U789GHI", enterprise_id: "bad" },
+    {
+      team_id: "T123ABC",
+      user_id: "U789GHI",
+      bot_id: "B123ABC",
+      enterprise_id: "bad",
+    },
+    {
+      team_id: "T123ABC",
+      user_id: "U789GHI",
+      bot_id: "B123ABC",
+      app_id: "not-an-app",
+    },
   ])("rejects malformed auth.test identity fields: %o", async (fields) => {
     const client = new SlackWebApiClient("xoxb-test", {
-      fetchImpl: fetchReturning(() => jsonResponse({ ok: true, ...fields })),
+      fetchImpl: fetchReturning(() =>
+        jsonResponse(
+          { ok: true, ...fields },
+          { headers: { "x-oauth-scopes": "users:read" } },
+        ),
+      ),
     });
 
     await expect(client.authIdentity()).rejects.toMatchObject({
       name: "SlackApiError",
       code: "invalid",
+      retryable: false,
+    });
+  });
+
+  it.each([
+    { label: "missing", scopes: undefined, code: "invalid" },
+    { label: "malformed", scopes: "users:read, BAD SCOPE", code: "invalid" },
+    { label: "insufficient", scopes: "chat:write", code: "auth" },
+  ])("rejects $label OAuth scope evidence before bots.info", async ({ scopes, code }) => {
+    const methods: string[] = [];
+    const client = new SlackWebApiClient("xoxb-test", {
+      fetchImpl: (async (input) => {
+        methods.push(String(input).split("/").pop() ?? "");
+        return jsonResponse(
+          {
+            ok: true,
+            team_id: "T123ABC",
+            user_id: "U789GHI",
+            bot_id: "B123ABC",
+          },
+          {
+            headers:
+              scopes === undefined ? undefined : { "x-oauth-scopes": scopes },
+          },
+        );
+      }) as typeof fetch,
+    });
+
+    await expect(client.authIdentity()).rejects.toMatchObject({
+      name: "SlackApiError",
+      code,
+      retryable: false,
+    });
+    expect(methods).toEqual(["auth.test"]);
+  });
+
+  it("rejects an auth.test app ID that conflicts with bots.info", async () => {
+    const client = new SlackWebApiClient("xoxb-test", {
+      fetchImpl: (async (input) =>
+        String(input).endsWith("/auth.test")
+          ? jsonResponse(
+              {
+                ok: true,
+                team_id: "T123ABC",
+                user_id: "U789GHI",
+                bot_id: "B123ABC",
+                app_id: "A999OTHER",
+              },
+              { headers: { "x-oauth-scopes": "users:read" } },
+            )
+          : jsonResponse({
+              ok: true,
+              bot: {
+                id: "B123ABC",
+                user_id: "U789GHI",
+                app_id: "A456DEF",
+                deleted: false,
+              },
+            })) as typeof fetch,
+    });
+
+    await expect(client.authIdentity()).rejects.toMatchObject({
+      name: "SlackApiError",
+      code: "auth",
+      retryable: false,
+    });
+  });
+
+  it.each([
+    {
+      label: "missing bot object",
+      body: { ok: true },
+      code: "invalid",
+    },
+    {
+      label: "missing app ID",
+      body: {
+        ok: true,
+        bot: { id: "B123ABC", user_id: "U789GHI", deleted: false },
+      },
+      code: "invalid",
+    },
+    {
+      label: "malformed app ID",
+      body: {
+        ok: true,
+        bot: {
+          id: "B123ABC",
+          user_id: "U789GHI",
+          app_id: "not-an-app",
+          deleted: false,
+        },
+      },
+      code: "invalid",
+    },
+    {
+      label: "different bot ID",
+      body: {
+        ok: true,
+        bot: {
+          id: "B999OTHER",
+          user_id: "U789GHI",
+          app_id: "A456DEF",
+          deleted: false,
+        },
+      },
+      code: "auth",
+    },
+    {
+      label: "different bot user ID",
+      body: {
+        ok: true,
+        bot: {
+          id: "B123ABC",
+          user_id: "U999OTHER",
+          app_id: "A456DEF",
+          deleted: false,
+        },
+      },
+      code: "auth",
+    },
+    {
+      label: "deleted bot",
+      body: {
+        ok: true,
+        bot: {
+          id: "B123ABC",
+          user_id: "U789GHI",
+          app_id: "A456DEF",
+          deleted: true,
+        },
+      },
+      code: "auth",
+    },
+    {
+      label: "missing deletion state",
+      body: {
+        ok: true,
+        bot: {
+          id: "B123ABC",
+          user_id: "U789GHI",
+          app_id: "A456DEF",
+        },
+      },
+      code: "invalid",
+    },
+  ])("rejects bots.info with $label", async ({ body, code }) => {
+    const client = new SlackWebApiClient("xoxb-test", {
+      fetchImpl: (async (input) =>
+        String(input).endsWith("/auth.test")
+          ? jsonResponse(
+              {
+                ok: true,
+                team_id: "T123ABC",
+                user_id: "U789GHI",
+                bot_id: "B123ABC",
+              },
+              { headers: { "x-oauth-scopes": "users:read" } },
+            )
+          : jsonResponse(body)) as typeof fetch,
+    });
+
+    await expect(client.authIdentity()).rejects.toMatchObject({
+      name: "SlackApiError",
+      code,
       retryable: false,
     });
   });
@@ -358,7 +593,7 @@ describe("SlackWebApiClient", () => {
     let requestBody: unknown;
     const fetchImpl = (async (_input, init) => {
       requestBody = JSON.parse(String(init?.body));
-      return jsonResponse({ ok: true, channel: "C123", ts: "1700.100" });
+      return jsonResponse({ ok: true, channel: "C123", ts: "1700.100000" });
     }) as typeof fetch;
     const client = new SlackWebApiClient("xoxb-test", { fetchImpl });
 
@@ -367,7 +602,7 @@ describe("SlackWebApiClient", () => {
         channel: "C123",
         text: "https://sensitive.example",
       }),
-    ).resolves.toEqual({ channel: "C123", ts: "1700.100" });
+    ).resolves.toEqual({ channel: "C123", ts: "1700.100000" });
     expect(requestBody).toMatchObject({
       channel: "C123",
       unfurl_links: false,
@@ -375,7 +610,7 @@ describe("SlackWebApiClient", () => {
     });
   });
 
-  it("binds strict acknowledged blocks to the exact posted Slack message", async () => {
+  it("binds every post only to the exact top-level Slack message identity", async () => {
     const blocks = [{ type: "context", block_id: "approval-0" }];
     const client = new SlackWebApiClient("xoxb-test", {
       fetchImpl: fetchReturning(() =>
@@ -393,30 +628,11 @@ describe("SlackWebApiClient", () => {
         channel: "C123",
         text: "approval",
         blocks,
-        strictEvidence: true,
       }),
-    ).resolves.toEqual({ channel: "C123", ts: "1700.100000", blocks });
+    ).resolves.toEqual({ channel: "C123", ts: "1700.100000" });
   });
 
   it.each([
-    {
-      name: "missing message timestamp",
-      body: {
-        ok: true,
-        channel: "C123",
-        ts: "1700.100000",
-        message: { blocks: [] },
-      },
-    },
-    {
-      name: "mismatched message timestamp",
-      body: {
-        ok: true,
-        channel: "C123",
-        ts: "1700.100000",
-        message: { ts: "1700.999999", blocks: [] },
-      },
-    },
     {
       name: "mismatched channel",
       body: {
@@ -436,28 +652,14 @@ describe("SlackWebApiClient", () => {
       },
     },
     {
-      name: "mismatched fallback text",
+      name: "unbounded timestamp seconds",
       body: {
         ok: true,
         channel: "C123",
-        ts: "1700.100000",
-        message: {
-          ts: "1700.100000",
-          text: "changed",
-          blocks: [],
-        },
+        ts: "12345678901234567.100000",
       },
     },
-    {
-      name: "missing acknowledged blocks",
-      body: {
-        ok: true,
-        channel: "C123",
-        ts: "1700.100000",
-        message: { ts: "1700.100000" },
-      },
-    },
-  ])("rejects strict post evidence with $name", async ({ body }) => {
+  ])("rejects post identity with $name", async ({ body }) => {
     const client = new SlackWebApiClient("xoxb-test", {
       fetchImpl: fetchReturning(() => jsonResponse(body)),
     });
@@ -467,12 +669,62 @@ describe("SlackWebApiClient", () => {
         channel: "C123",
         text: "approval",
         blocks: [],
-        strictEvidence: true,
       }),
     ).rejects.toMatchObject({
       name: "SlackApiError",
       code: "unknown_outcome",
       retryable: true,
+    });
+  });
+
+  it("reads the exact unedited stored card through reactions.get", async () => {
+    const blocks = [{ type: "context", block_id: "approval-0" }];
+    const client = new SlackWebApiClient("xoxb-test", {
+      fetchImpl: fetchReturning(() =>
+        jsonResponse({
+          ok: true,
+          message: {
+            ts: "1700.100000",
+            text: "first line\nsecond line",
+            blocks,
+          },
+        }),
+      ),
+    });
+
+    await expect(client.readMessage("C123", "1700.100000")).resolves.toEqual({
+      ts: "1700.100000",
+      text: "first line\nsecond line",
+      blocks,
+    });
+  });
+
+  it.each([
+    {
+      name: "edited",
+      message: {
+        ts: "1700.100000",
+        text: "card",
+        blocks: [],
+        edited: { ts: "1700.200000" },
+      },
+    },
+    {
+      name: "wrong timestamp",
+      message: { ts: "1700.999999", text: "card", blocks: [] },
+    },
+    { name: "missing blocks", message: { ts: "1700.100000", text: "card" } },
+  ])("refuses $name strict stored-card evidence", async ({ message }) => {
+    const client = new SlackWebApiClient("xoxb-test", {
+      fetchImpl: fetchReturning(() => jsonResponse({ ok: true, message })),
+    });
+
+    await expect(
+      client.readMessage("C123", "1700.100000"),
+    ).rejects.toMatchObject({
+      name: "SlackApiError",
+      code: "invalid",
+      retryable: false,
     });
   });
 

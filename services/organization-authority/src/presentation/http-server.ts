@@ -34,7 +34,7 @@ import {
   validateCompleteOrganizationEnrollmentRequest,
   validateApproveOrganizationInternalLiveReleaseRequest,
   validateIssueOrganizationEnrollmentGrantRequest,
-  validateOrganizationAccessLeaseRequest,
+  validateOrganizationAccessLeaseRequestAnyVersion,
   validateOrganizationInternalLiveDirectiveRequest,
   validateOrganizationInternalLiveUpdateReceipt,
   validateOrganizationPermissionCheckRequest,
@@ -1063,7 +1063,7 @@ export function createOrganizationAuthorityHttpServer(
           method === 'POST' &&
           url.pathname === ORGANIZATION_API_ACCESS_LEASES_PATH
         ) {
-          const command = validateOrganizationAccessLeaseRequest(
+          const command = validateOrganizationAccessLeaseRequestAnyVersion(
             await readJsonBody(request),
           );
           const state = await options.application.issueAccessLease(command);
@@ -1202,7 +1202,8 @@ export function createOrganizationAuthorityHttpServer(
             }
             let organizationMemberAuthenticated: { installation_id: string };
             try {
-              organizationMemberAuthenticated = checkSubject(
+              organizationMemberAuthenticated = checkSubject.call(
+                options.application,
                 organizationMemberCommand,
                 null,
               );
@@ -1235,7 +1236,8 @@ export function createOrganizationAuthorityHttpServer(
                 200,
                 Buffer.from(
                   canonicalOrganizationMemberReadablePermissionCheckDecisionBytes(
-                    await checkPermission(
+                    await checkPermission.call(
+                      integrations,
                       organizationMemberCommand,
                       lifecycle.shutdownController.signal,
                     ),
