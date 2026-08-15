@@ -2,7 +2,7 @@
 
 import { randomBytes, randomUUID } from "node:crypto";
 import { readFileSync, realpathSync } from "node:fs";
-import { isAbsolute, join } from "node:path";
+import { dirname, isAbsolute, join } from "node:path";
 import { parseArgs } from "node:util";
 import type { Writable } from "node:stream";
 import { fileURLToPath } from "node:url";
@@ -95,6 +95,16 @@ import {
 } from "./machine/security/installation-signer.js";
 import { readPrivateCredentialFile } from "./credentials.js";
 import { resolveProductStatePaths } from "./paths.js";
+import {
+  runOnboardingFlow,
+  type OnboardingStepDefinition,
+} from "./onboarding/onboarding-coordinator.js";
+import {
+  deriveOnboardingIdentity,
+  type OnboardingPublicStatus,
+  type OnboardingStepName,
+} from "./onboarding/onboarding-transaction.js";
+import { FileOnboardingTransactionStore } from "./onboarding/onboarding-transaction-store.js";
 import { readFileNoFollow } from "./secure-local-files.js";
 import {
   GRANOLA_API_KEY_RE,
@@ -167,6 +177,7 @@ export interface ProductCliDependencies {
 
 type CliCommand =
   | "bootstrap"
+  | "onboard"
   | "init"
   | "reconfigure"
   | "status"
@@ -244,6 +255,7 @@ const HELP = `echo-brain ${PRODUCT_VERSION}
 
 Usage:
   echo-brain bootstrap --config <new-absolute-path> --state-dir <new-absolute-path> --owner-email <canonical-lowercase-email> --slack-channel-id <C...> --slack-reviewer-user-id <U...> --slack-reviewer-name <name> --invitation <absolute-path> --authority-pin <sha256:...> [--authority-ca <absolute-path>] --allow-exportable-software-key
+  echo-brain onboard --config <absolute-path> --state-dir <absolute-path> --owner-email <canonical-lowercase-email> --slack-channel-id <C...> --slack-reviewer-user-id <U...> --slack-reviewer-name <name> --invitation <absolute-path> --authority-pin <sha256:...> [--authority-ca <absolute-path>] [--allow-exportable-software-key]
   echo-brain init --config <absolute-path>
   echo-brain reconfigure --config <absolute-path>
   echo-brain status --config <absolute-path>
@@ -325,6 +337,29 @@ const SERVICE_ACTIONS = [
  */
 const RULES: Readonly<Record<string, CommandRule>> = {
   bootstrap: {
+    accepts: [
+      "state-dir",
+      "owner-email",
+      "slack-channel-id",
+      "slack-reviewer-user-id",
+      "slack-reviewer-name",
+      "invitation",
+      "authority-pin",
+      "authority-ca",
+      "allow-exportable-software-key",
+    ],
+    requires: [
+      "state-dir",
+      "owner-email",
+      "slack-channel-id",
+      "slack-reviewer-user-id",
+      "slack-reviewer-name",
+      "invitation",
+      "authority-pin",
+    ],
+    absolute: ["state-dir", "invitation", "authority-ca"],
+  },
+  onboard: {
     accepts: [
       "state-dir",
       "owner-email",
@@ -2039,6 +2074,309 @@ async function runBootstrapCommand(
   }
 }
 
+/**
+ * `echo-brain onboard` (RFC-0001, Slice 1): one resumable coordinator over the
+ * existing bootstrap, enrollment, service, doctor, and readiness steps.
+ *
+ * The durable transaction lives next to the config (never inside state, so a
+ * state restore cannot rewind it) and records prepared operation identities
+ * before any effect. A rerun after interruption resumes with the same
+ * identities; the underlying steps are the existing idempotent commands. The
+ * output is the public status algebra -- it never ends with a list of
+ * follow-up commands.
+ */
+async function runOnboardCommand(
+  parsed: ParsedCommand,
+  dependencies: ProductCliDependencies,
+  stdout: Pick<Writable, "write">,
+): Promise<number> {
+  let invitation: ReturnType<
+    typeof readPrivateOrganizationEnrollmentInvitation
+  >;
+  try {
+    invitation = readPrivateOrganizationEnrollmentInvitation(
+      parsed.invitationPath!,
+    );
+  } catch (error) {
+    print(stdout, {
+      ok: false,
+      command: "onboard",
+      status: "denied",
+      reason_code: "invitation_invalid",
+      error: (error as Error).message,
+    });
+    return 1;
+  }
+  const identity = deriveOnboardingIdentity({
+    authorityId: invitation.authority_id,
+    organizationId: invitation.organization_id,
+    membershipId: invitation.membership_id,
+    invitationCommandId: invitation.command_id,
+    enrollmentGrantSha256: invitation.enrollment_grant_sha256,
+  });
+  const store = new FileOnboardingTransactionStore({
+    directory: join(dirname(parsed.configPath), "onboarding"),
+    stateDir: parsed.stateDirectory!,
+  });
+  const fileSystem =
+    dependencies.operator?.fileSystem ?? nodeOperatorFileSystem;
+  const captured = async (label: string, argv: readonly string[]) =>
+    await runCapturedCliStep(label, argv, dependencies);
+  const statusIsStopped = (report: Record<string, unknown>) => {
+    const service = report["service"];
+    return (
+      service !== null &&
+      typeof service === "object" &&
+      !Array.isArray(service) &&
+      (service as Record<string, unknown>)["installed"] === false &&
+      (service as Record<string, unknown>)["loaded"] === false &&
+      (service as Record<string, unknown>)["running"] === false
+    );
+  };
+  const serviceIsRunning = (report: Record<string, unknown>) => {
+    const service = report["service"];
+    return (
+      service !== null &&
+      typeof service === "object" &&
+      !Array.isArray(service) &&
+      (service as Record<string, unknown>)["installed"] === true &&
+      (service as Record<string, unknown>)["loaded"] === true &&
+      (service as Record<string, unknown>)["running"] === true
+    );
+  };
+
+  const steps: Record<OnboardingStepName, OnboardingStepDefinition> = {
+    classify: {
+      run: async () => {
+        const buildIdentity =
+          dependencies.operator?.buildIdentity ?? packagedBuildIdentity();
+        if (buildIdentity.source_kind !== "materialized-commit") {
+          return { result: "denied", reasonCode: "unverified_build" };
+        }
+        const platform = dependencies.operator?.platform ?? process.platform;
+        const architecture =
+          dependencies.operator?.architecture ?? process.arch;
+        if (platform !== "darwin" || architecture !== "arm64") {
+          return { result: "denied", reasonCode: "unsupported_platform" };
+        }
+        const nodeVersion =
+          dependencies.operator?.nodeVersion ?? process.version;
+        if (nodeVersion !== "v22.22.1") {
+          return { result: "denied", reasonCode: "unsupported_node_runtime" };
+        }
+        try {
+          refuseRetiredFounderProvenance(parsed.stateDirectory!);
+        } catch {
+          return {
+            result: "preserved",
+            reasonCode: "retired_residue_preserved",
+          };
+        }
+        const classifier =
+          dependencies.classifyStateFilesystem ?? classifyStateFilesystem;
+        const filesystem = await classifier(parsed.stateDirectory!);
+        if (filesystem.kind !== "local") {
+          return {
+            result: "preserved",
+            reasonCode: "nonlocal_state_filesystem",
+          };
+        }
+        const configExists = fileSystem.exists(parsed.configPath);
+        const stateExists = fileSystem.exists(parsed.stateDirectory!);
+        if (configExists && !stateExists) {
+          return {
+            result: "preserved",
+            reasonCode: "incomplete_config_state_pair",
+          };
+        }
+        if (configExists) {
+          const report = await captured("onboard classify status", [
+            "status",
+            "--config",
+            parsed.configPath,
+          ]);
+          if (!statusIsStopped(report)) {
+            return {
+              result: "preserved",
+              reasonCode: "existing_installation_use_update",
+            };
+          }
+        }
+        return { result: "succeeded", reasonCode: "machine_supported" };
+      },
+    },
+    verify_trust: {
+      run: async () => {
+        if (invitation.status !== "issued" || invitation.issued === null) {
+          return { result: "denied", reasonCode: "invitation_not_issued" };
+        }
+        if (invitation.authority_pin_sha256 !== parsed.authorityPin) {
+          return { result: "denied", reasonCode: "authority_pin_mismatch" };
+        }
+        return { result: "succeeded", reasonCode: "trust_verified" };
+      },
+    },
+    confirm_human: {
+      run: async () =>
+        parsed.allowExportableSoftwareKey === true
+          ? { result: "succeeded", reasonCode: "software_key_acknowledged" }
+          : {
+              result: "waiting_for_user",
+              reasonCode: "software_key_consent_required",
+            },
+    },
+    stage_local: {
+      // Central enrollment may occur the moment this step runs: the durable
+      // effect boundary is recorded before the executor is called.
+      effect: "central_enrollment",
+      run: async () => {
+        await captured("onboard bootstrap", [
+          "bootstrap",
+          "--config",
+          parsed.configPath,
+          "--state-dir",
+          parsed.stateDirectory!,
+          "--owner-email",
+          parsed.ownerEmail!,
+          "--slack-channel-id",
+          parsed.slackChannelId!,
+          "--slack-reviewer-user-id",
+          parsed.slackReviewerUserId!,
+          "--slack-reviewer-name",
+          parsed.slackReviewerName!,
+          "--invitation",
+          parsed.invitationPath!,
+          "--authority-pin",
+          parsed.authorityPin!,
+          "--allow-exportable-software-key",
+          ...(parsed.authorityCaPath === undefined
+            ? []
+            : ["--authority-ca", parsed.authorityCaPath]),
+        ]);
+        return { result: "succeeded", reasonCode: "bootstrap_complete" };
+      },
+    },
+    enroll: {
+      run: async () => {
+        const organizationState = new SqliteOrganizationStateStore(
+          resolveProductStatePaths(parsed.stateDirectory!).database,
+        );
+        let enrolled = false;
+        try {
+          const enrollment = organizationState.readEnrollment();
+          enrolled =
+            enrollment !== null &&
+            enrollment.receipt !== null &&
+            enrollment.accepted_access_sequence > 0;
+        } finally {
+          organizationState.close();
+        }
+        if (!enrolled) {
+          return {
+            result: "retryable",
+            reasonCode: "enrollment_receipt_missing",
+          };
+        }
+        const refreshed = await captured("onboard access refresh", [
+          "organization",
+          "refresh",
+          "--config",
+          parsed.configPath,
+        ]);
+        const access = refreshed["access"];
+        if (
+          access === null ||
+          typeof access !== "object" ||
+          Array.isArray(access) ||
+          (access as Record<string, unknown>)["permitted"] !== true ||
+          (access as Record<string, unknown>)["status"] !== "active"
+        ) {
+          return {
+            result: "retryable",
+            reasonCode: "organization_access_inactive",
+          };
+        }
+        return { result: "succeeded", reasonCode: "enrollment_active" };
+      },
+    },
+    service_install: {
+      effect: "service_activation",
+      run: async () => {
+        await captured("onboard service install", [
+          "service",
+          "install",
+          "--config",
+          parsed.configPath,
+        ]);
+        return { result: "succeeded", reasonCode: "service_installed" };
+      },
+    },
+    service_start: {
+      run: async () => {
+        const report = await captured("onboard service status", [
+          "status",
+          "--config",
+          parsed.configPath,
+        ]);
+        return serviceIsRunning(report)
+          ? { result: "succeeded", reasonCode: "service_running" }
+          : { result: "retryable", reasonCode: "service_not_running" };
+      },
+    },
+    doctor: {
+      run: async () => {
+        await captured("onboard doctor", [
+          "doctor",
+          "--config",
+          parsed.configPath,
+          "--local-only",
+        ]);
+        return { result: "succeeded", reasonCode: "doctor_passed" };
+      },
+    },
+    readiness: {
+      run: async () => {
+        const report = await captured("onboard readiness status", [
+          "status",
+          "--config",
+          parsed.configPath,
+        ]);
+        const issues = report["issues"];
+        if (
+          report["initialized"] !== true ||
+          !Array.isArray(issues) ||
+          issues.length !== 0
+        ) {
+          return {
+            result: "retryable",
+            reasonCode: "installation_not_ready",
+          };
+        }
+        return { result: "succeeded", reasonCode: "installation_ready" };
+      },
+    },
+    activate: {
+      run: async () => ({ result: "succeeded", reasonCode: "profile_ready" }),
+    },
+  };
+
+  const status: OnboardingPublicStatus = await runOnboardingFlow({
+    store,
+    steps,
+    identity,
+    configPath: parsed.configPath,
+    stateDirectory: parsed.stateDirectory!,
+    ...(dependencies.now === undefined ? {} : { now: dependencies.now }),
+    nextOperationId: (step) => `onb-${step}-${randomUUID()}`,
+  });
+  print(stdout, {
+    ok: status.status === "ready",
+    command: "onboard",
+    ...status,
+  });
+  return status.status === "denied" || status.status === "preserved" ? 1 : 0;
+}
+
 export async function runProductCli(
   argv: readonly string[],
   dependencies: ProductCliDependencies = {},
@@ -2067,6 +2405,9 @@ export async function runProductCli(
       stdout,
       stderr,
     );
+  }
+  if (parsed.command === "onboard") {
+    return await runOnboardCommand(parsed, dependencies, stdout);
   }
   let config: ProductRuntimeConfig;
   try {

@@ -147,8 +147,17 @@ describe('product hermeticity setup', () => {
       'adapter-factories.ts',
       'approval/decision-node-store.ts',
       'composition.ts',
+      'onboarding/onboarding-coordinator.ts',
       'organization/enrollment/local-organization-coordinator.ts',
     ]);
+    expect(
+      readFileSync(
+        join(productRoot, 'onboarding/onboarding-coordinator.ts'),
+        'utf8',
+      ),
+    ).toMatch(
+      /now = options\.now \?\? \(\(\) => new Date\(\)\.toISOString\(\)\)/,
+    );
     expect(
       readFileSync(join(productRoot, 'adapter-factories.ts'), 'utf8'),
     ).toMatch(

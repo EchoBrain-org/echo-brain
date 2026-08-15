@@ -37,7 +37,6 @@ describe('standalone CLI basics', () => {
       'echo-brain export',
       'identity-bootstrap',
       '--independent-copy-root',
-      'echo-brain onboard',
       'echo-brain selftest',
       'echo-brain approve',
       'echo-brain reject',
@@ -52,7 +51,6 @@ describe('standalone CLI basics', () => {
     for (const argv of [
       ['export', '--config', '/tmp/echo-missing.json'],
       ['identity-bootstrap', 'begin', '--config', '/tmp/echo-missing.json'],
-      ['onboard', '--config', '/tmp/echo-missing.json'],
       ['selftest', '--config', '/tmp/echo-missing.json'],
       ['approve', '--config', '/tmp/echo-missing.json'],
       ['reject', '--config', '/tmp/echo-missing.json'],
@@ -61,9 +59,20 @@ describe('standalone CLI basics', () => {
     ]) {
       const stderr = output();
       expect(await runProductCli(argv, { stderr: stderr.stream })).toBe(2);
-      expect(stderr.read()).toContain('usage: echo-brain <bootstrap|init|');
+      expect(stderr.read()).toContain('usage: echo-brain <bootstrap|onboard|init|');
       expect(stderr.read()).not.toContain('service-run');
     }
+
+    // RFC-0001 slice 1 deliberately reintroduces `onboard` as the resumable
+    // coordinator. The retired v1 shape -- bare `onboard --config` with no
+    // invitation, pin, owner, or state flags -- must still be refused.
+    const onboardStderr = output();
+    expect(
+      await runProductCli(['onboard', '--config', '/tmp/echo-missing.json'], {
+        stderr: onboardStderr.stream,
+      }),
+    ).toBe(2);
+    expect(onboardStderr.read()).toContain('onboard');
   });
 
   it('requires an absolute --config for every command', async () => {

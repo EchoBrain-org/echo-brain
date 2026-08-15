@@ -64,9 +64,13 @@
     {
       "name": "core-is-tool-agnostic",
       "from": "src/core/**",
-      "allowed_imports": ["src/core/**"],
+      "allowed_imports": [
+        "src/core/**"
+      ],
       "allowed_packages": [],
-      "allowed_node_builtins": ["crypto"]
+      "allowed_node_builtins": [
+        "crypto"
+      ]
     },
     {
       "name": "adapters-depend-on-contracts-and-narrow-infrastructure",
@@ -88,9 +92,18 @@
     {
       "name": "infrastructure-is-product-independent",
       "from": "src/infrastructure/**",
-      "allowed_imports": ["src/infrastructure/**"],
-      "allowed_packages": ["better-sqlite3"],
-      "allowed_node_builtins": ["crypto", "fs", "fs/promises", "path"]
+      "allowed_imports": [
+        "src/infrastructure/**"
+      ],
+      "allowed_packages": [
+        "better-sqlite3"
+      ],
+      "allowed_node_builtins": [
+        "crypto",
+        "fs",
+        "fs/promises",
+        "path"
+      ]
     },
     {
       "name": "product-storage-implements-core-ports",
@@ -100,8 +113,14 @@
         "src/core/**",
         "src/infrastructure/sqlite/**"
       ],
-      "allowed_packages": ["better-sqlite3"],
-      "allowed_node_builtins": ["fs", "path", "url"]
+      "allowed_packages": [
+        "better-sqlite3"
+      ],
+      "allowed_node_builtins": [
+        "fs",
+        "path",
+        "url"
+      ]
     },
     {
       "name": "machine-security-owns-os-key-lifecycle",
@@ -111,8 +130,14 @@
         "src/product/secure-local-files.ts",
         "src/infrastructure/filesystem/atomic-create.ts"
       ],
-      "allowed_packages": ["@echo-brain/federation-protocol"],
-      "allowed_node_builtins": ["crypto", "fs", "path"]
+      "allowed_packages": [
+        "@echo-brain/federation-protocol"
+      ],
+      "allowed_node_builtins": [
+        "crypto",
+        "fs",
+        "path"
+      ]
     },
     {
       "name": "llm-provider-drivers-own-only-transport",
@@ -133,7 +158,9 @@
         "src/adapters/meeting-sources/granola/record-owner-observation.ts"
       ],
       "allowed_packages": [],
-      "allowed_node_builtins": ["crypto"]
+      "allowed_node_builtins": [
+        "crypto"
+      ]
     },
     {
       "name": "product-root-composes-the-runtime",
@@ -142,6 +169,7 @@
         "src/product/*.ts",
         "src/product/approval/**",
         "src/product/machine/**",
+        "src/product/onboarding/**",
         "src/product/organization/**",
         "src/product/storage/**",
         "src/product/update/**",
@@ -150,7 +178,10 @@
         "src/infrastructure/**",
         "src/util/**"
       ],
-      "allowed_packages": ["ajv", "better-sqlite3"],
+      "allowed_packages": [
+        "ajv",
+        "better-sqlite3"
+      ],
       "allowed_node_builtins": [
         "child_process",
         "crypto",
@@ -161,6 +192,23 @@
         "stream",
         "url",
         "util"
+      ]
+    },
+    {
+      "name": "onboarding-coordinator-owns-resumable-flow",
+      "from": "src/product/onboarding/**",
+      "allowed_imports": [
+        "src/product/onboarding/**",
+        "src/product/secure-local-files.ts",
+        "src/infrastructure/filesystem/atomic-write.ts"
+      ],
+      "allowed_packages": [
+        "@echo-brain/federation-protocol"
+      ],
+      "allowed_node_builtins": [
+        "crypto",
+        "fs",
+        "path"
       ]
     },
     {
@@ -185,7 +233,11 @@
         "@echo-brain/federation-protocol",
         "@echo-brain/organization-api"
       ],
-      "allowed_node_builtins": ["crypto", "fs", "path"]
+      "allowed_node_builtins": [
+        "crypto",
+        "fs",
+        "path"
+      ]
     },
     {
       "name": "organization-client-speaks-only-the-authority-protocols",
@@ -201,7 +253,13 @@
         "@echo-brain/organization-api",
         "@echo-brain/organization-protocol"
       ],
-      "allowed_node_builtins": ["buffer", "crypto", "fs", "https", "path"]
+      "allowed_node_builtins": [
+        "buffer",
+        "crypto",
+        "fs",
+        "https",
+        "path"
+      ]
     },
     {
       "name": "approval-gates-use-the-retirement-fence",
@@ -214,14 +272,20 @@
         "src/util/**"
       ],
       "allowed_packages": [],
-      "allowed_node_builtins": ["crypto", "fs", "path"]
+      "allowed_node_builtins": [
+        "crypto",
+        "fs",
+        "path"
+      ]
     },
     {
       "name": "util-is-leaf-shared-code",
       "from": "src/util/**",
       "allowed_imports": [],
       "allowed_packages": [],
-      "allowed_node_builtins": ["fs"]
+      "allowed_node_builtins": [
+        "fs"
+      ]
     }
   ],
   "adapter_architecture": {
