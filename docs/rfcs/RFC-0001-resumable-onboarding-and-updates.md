@@ -40,6 +40,20 @@ implemented. It was written against source commit
 `4665c3a93187095d5d14acbe95e825cd69aaf31e` and tracks the outcomes in GitHub
 issues 51, 52, and 53.
 
+The first adversarial review of RFC commit
+`bf3c8a52578db563e62d73a3951392a4a299d46d` found one approval-transport gap
+and thirteen related trust, identity, liveness, and proof-algebra gaps. This
+revision resolves them at four shared roots:
+
+1. an organization-owned credential is useful only when the owning boundary
+   also owns the provider operation, idempotency, reconciliation, and receipt;
+2. stable member profile, per-invitation flow, private identity/credential
+   store, mutable state, and backup are separate ownership domains;
+3. the launcher owns an execution gate and recovery term, not merely a PID lock
+   or a path to the current product; and
+4. central status is derived from Authority facts and signed terminal receipts,
+   not a second client-pushed lifecycle-event history.
+
 The proposal deliberately does not add WorkOS or another identity or
 integration vendor. ECHO remains responsible for its enrollment, local
 installation, adapter, update, and permission boundaries. A later external
@@ -75,9 +89,9 @@ Every external or mutating effect is prepared durably with one stable
 operation identity before execution. After interruption, the coordinator
 reconciles observed state with that prepared intent and either accepts the
 existing exact effect or replays the same effect. It never guesses that a
-timeout means failure and never creates a second membership, enrollment,
-installation, credential, service, or update transaction merely to make
-progress.
+timeout means failure. A replacement effect is allowed only after the owning
+boundary has made the earlier attempt terminal and recorded explicit
+supersession; it is never an accidental retry with a new identity.
 
 Provisioning profiles choose which local capabilities to configure. They do
 not grant permission. The Organization Authority remains the source of
@@ -130,6 +144,9 @@ The recurring root causes are ownership fragmentation and response ambiguity:
 - organization-owned Slack app credentials are collected per employee;
 - one fixed contributor/reviewer configuration is treated as universal;
 - progress is inferred from a command sequence rather than one durable plan;
+- provider credentials, installation keys, mutable state, and backup share one
+  filesystem ownership boundary;
+- the updater lock and normal product-work lock are different protocols;
 - a step's local completion is sometimes treated as proof of its external
   effect; and
 - rollback is described as universal even after a candidate may have caused
@@ -154,7 +171,7 @@ The recurring root causes are ownership fragmentation and response ambiguity:
    a post-commit failure is clearly forward-only and never performs an unsafe
    state rewind.
 9. Administrators can see non-secret progress and one actionable blocker per
-   installation without remote shell access.
+   installation without accepting unauthenticated pre-enrollment events.
 10. Tests inject interruption at every durable boundary and prove exact resume
     or fail-closed preservation.
 
@@ -171,6 +188,12 @@ The recurring root causes are ownership fragmentation and response ambiguity:
 - Rolling back externally visible provider actions or accepted organization
   writes by restoring a local backup.
 - Requiring every employee to run a background ingestion service.
+- Automatic Authority trust-pin or signing-key rotation. Minimum V1 supports
+  the initial independent pin and same-pin endpoint/CA rebind only; any other
+  trust change fails closed for administrator handling under issues 18 and 19.
+- Authority-managed fleet artifact leases. Minimum V1 freezes a completely
+  verified artifact locally before mutation; broader fleet coordination in
+  issue 27 remains a separate design.
 
 ## Scope assumptions
 
@@ -217,6 +240,7 @@ The interactive result is always one of:
 | `waiting_for_user` | A specific identity, provider, or OS consent is required. | Complete the one displayed action. |
 | `waiting_for_administrator` | A central prerequisite is absent or inconsistent. | None; the administrator receives the blocker. |
 | `retryable` | A bounded transport or provider operation is unavailable. | Leave the flow open or resume later. |
+| `denied` | Trust, identity, access, or plan binding failed closed. | Supply new valid trusted input or wait for an administrator action. |
 | `preserved` | Existing or partial state cannot be changed safely. | Contact support with the opaque incident ID. |
 
 Machine-readable output additionally includes a stable reason code, flow ID,
@@ -237,15 +261,17 @@ delivered through a different trusted channel.
 
 The onboarding plan contains:
 
-- plan ID and schema version;
+- plan ID, monotonic plan revision, optional superseded plan ID, and schema
+  version;
 - Authority, organization, principal, and membership identities;
+- an invitation binding containing the canonical Authority origin and ID,
+  organization and membership IDs, principal ID from the issued grant,
+  invitation command ID, and enrollment-grant digest;
 - membership type and human-readable organization display name;
 - provisioning profile and required capabilities;
 - exact approved bootstrap release identity and compatibility tuple;
 - safe adapter instance choices, approval-routing policy, organization-owned
   tool binding IDs, and any bounded activation-intent ID;
-- default local config/state policy, expressed as a policy name rather than a
-  private absolute path;
 - issued and expiry timestamps; and
 - the Authority signature and signing-key identity.
 
@@ -254,9 +280,12 @@ provider identity roster, or permission allow. Its profile is a provisioning
 request, not an authorization decision.
 
 The launcher verifies the plan signature using the independently pinned
-Authority descriptor. After enrollment, it fetches the current plan again
-through the installation-signed channel and requires the same plan ID and
-profile before activating any capability.
+Authority descriptor. Before it reserves a profile or asks for a provider
+credential, it requires every invitation-binding field to equal the validated
+invitation and its issued grant. Independently valid but differently bound
+artifacts are a closed denial. After enrollment, it fetches the current plan
+again through the installation-signed channel and requires the same plan ID,
+revision, invitation binding, and profile before activating any capability.
 
 ### Employee-provided information
 
@@ -326,28 +355,75 @@ The onboarding coordinator consumes an explicit adapter ownership descriptor:
   stored through the governed local credential store.
 - `none`: the capability needs no provider credential on the Mac.
 
-Slack approval is organization-owned. The existing per-employee Slack bot
-token prompt must be removed from the final flow. The Authority's active Slack
-tool remains responsible for provider app identity and transport; the
-employee's separate Slack challenge binds the human identity used by approval
-policy. A contributor's plan selects a central approval-routing policy rather
-than copying one reviewer identity into the contributor's config.
+Slack approval is organization-owned only when the central integration
+boundary owns the operation as well as the credential. The existing local
+approval adapter is currently the only code that publishes approval cards and
+polls their reactions. Removing its token without replacing that operation
+would break approval. Minimum V1 therefore adds an Authority-owned Slack
+approval relay with these contracts:
 
-When reviewer permission should become active during onboarding, the
-administrator creates a bounded activation intent before issuing the
-invitation. The intent identifies the membership, provider subject
-expectation, tool, adapter, actions, and expiry, but is not itself a grant.
-After the employee proves the exact Slack human and the Authority creates the
-link and adapter binding, the Authority atomically consumes the matching
-intent and creates the exact grants. A missing, expired, already-consumed, or
-mismatched intent becomes `waiting_for_administrator`; the employee never
-transfers binding IDs between terminals.
+- the Authority alone resolves the active organization Slack credential and
+  makes provider publish/read calls;
+- an installation sends a signed, capability-scoped publish or observe
+  command bound to the approval ID, frozen presentation and policy digests,
+  organization tool, channel policy, and one stable operation ID;
+- the publish command carries one bounded canonical card payload; only the
+  private relay outbox may persist those bytes, while status, audit summaries,
+  and receipts retain digests and provider references only;
+- the relay persists a canonical outbox intent before a provider call and an
+  immutable provider-reference receipt after it;
+- a deterministic non-secret publication marker lets the relay reconcile an
+  unknown provider outcome before reposting; zero, one, or ambiguous exact
+  matches respectively mean post, accept, or fail closed; and
+- the product consumes only the Authority decision receipt, which re-proves
+  the current link, binding, action grant, policy, provider identity, and exact
+  frozen card. It never polls Slack or receives the organization token.
 
-Granola is employee-owned in V1. Its credential is collected through a hidden
-or browser-mediated provider step and committed to the governed credential
-store only after exact owner verification. The onboarding transaction stores
-only an opaque credential reference and verification receipt, never the
-credential or a reusable digest of it.
+The local Slack approval adapter is retained only inside stopped legacy
+migration. No local Slack approval adapter runs in a new organization-owned
+profile; deterministic rendering moves behind the Authority relay contract.
+A contributor's plan selects a central approval-routing policy rather than
+copying one reviewer identity into the contributor's config.
+
+Slack identity linking has its own attempt protocol. The private store holds
+the raw challenge code, stable begin/complete request IDs, attempt ID, and
+provider reference only for the bounded challenge lifetime. The public
+onboarding transaction holds opaque references and digests. The Authority
+returns the existing attempt or result for an exact replay. If the private
+code is irrecoverably lost or expires, the coordinator first makes that
+attempt terminal, records `expired` or `superseded`, and only then creates one
+replacement attempt. That explicit bounded supersession is not represented as
+an idempotent replay.
+
+```text
+prepared_private -> begin_prepared -> challenge_posted -> proof_observed
+  -> linked -> activation_pending -> granted
+any non-terminal attempt -> expired | superseded
+```
+
+An activation intent has one of two closed subject modes:
+
+- `exact_subject` contains the immutable Slack user ID already known and
+  verified by the administrator; the observed link must equal it before link,
+  binding, and grants commit atomically; or
+- `confirm_after_link` creates no grant. After link verification, the
+  Authority presents the exact provider subject to a currently authorized
+  administrator, whose separate confirmation atomically activates the exact
+  binding and grants.
+
+Wildcard workspace membership, display-name matching, and email-only matching
+are forbidden grant inputs. Intent creation and confirmation derive the
+administrator from current Authority state; request fields cannot self-assert
+administrator membership. A missing, expired, consumed, or mismatched intent,
+or an unconfirmed linked subject, becomes `waiting_for_administrator`. The
+employee never transfers provider or binding IDs between terminals.
+
+Granola is employee-owned in V1. Its credential is collected through one
+hidden local prompt and committed to the governed private store only after
+exact owner verification. A browser authorization flow is deferred until it
+has its own exact callback and resume contract. The onboarding transaction
+stores only an opaque credential reference and verification receipt, never
+the credential or a reusable digest of it.
 
 Adapter transport, identity, scopes, and health remain independently verified
 at their owning boundary. A generic `connected` boolean is not enough to mark
@@ -355,36 +431,72 @@ an adapter ready.
 
 ## Stable launcher and versioned installation layout
 
-The clean-Mac launcher is a small signed and notarized artifact whose update
-surface is intentionally narrower than the product. It owns:
+The clean-Mac launcher has a stable signed bootstrap anchor and a versioned
+launcher engine. The anchor's surface is intentionally narrower than the
+product. It resolves the active launcher engine, can start the retained prior
+engine for recovery, and is replaceable only by a separately signed and
+notarized installer. The anchor embeds the allowed publisher trust root,
+signing policy, and Team ID. Launcher pointers and promotion records are
+selection data only: before every engine execution, including `pending` and
+`last_healthy`, the anchor revalidates the canonical signed engine manifest,
+every bundle-file digest, code signature/notarization, contained immutable
+path, and allowed signer. A pointer or promotion record can never make
+unverified bytes executable. If no retained engine verifies, the anchor fails
+closed to the separately signed repair installer. The versioned engine owns:
 
 - platform and filesystem preflight;
 - verification and installation of one complete offline-capable runtime
   bundle;
 - versioned product directories;
 - the active-version pointer;
-- the machine-wide onboarding/update coordination lock;
+- the machine-wide resume agent and installation execution gate;
 - invocation of the product coordinator from the exact installed version; and
 - recovery into either the previous healthy version or a preserved state.
 
+The launcher engine is updated through its own transaction. The active engine
+stages and verifies a new immutable engine and records it as `pending` for the
+next process invocation. The stable anchor verifies the candidate's signed
+manifest, launches it in a no-product-work promotion probe, independently
+checks that it can resolve and verify the active product tuple, and only then
+writes the durable `last_healthy` promotion record and clears `pending`. A
+pending engine is never fallback authority. A crash, failed probe, or missing
+promotion record makes the anchor choose the retained `last_healthy` engine.
+Plans and release directives carry minimum anchor and launcher-engine versions
+plus a launcher/product protocol range. If the anchor or all retained engines
+are below the required floor, product mutation stops at
+`waiting_for_administrator`; an older launcher never interprets a newer plan.
+
 The product must not replace the executable currently coordinating its own
-replacement. The LaunchAgent points at the stable launcher, which resolves the
-committed active-version pointer. A release is installed into a new immutable
-version directory and verified in place. No global npm prefix is mutated
-in-place during normal onboarding or update.
+replacement. Every LaunchAgent points at the stable anchor, which resolves the
+committed launcher and product pointers. A product release is installed into a
+new immutable version directory and verified in place. No global npm prefix is
+mutated in-place during normal onboarding or update.
 
 Conceptual layout:
 
 ```text
 ~/Library/Application Support/Echo Brain/
-  launcher/
+  launcher/anchor/
+  launcher/versions/<launcher-identity>/
+  launcher/active-launcher.v1.json
   installs/<release-identity>/
   active-installation.v1.json
   onboarding/<flow-id>/
   updates/<installation-id>/<transaction-id>/
   profiles/<profile-id>/config/runtime.json
   profiles/<profile-id>/state/
+  private-store/<profile-id>/credentials/<adapter-binding-id>/
+  private-store/<profile-id>/installation/keys/
+  backups/<profile-id>/<backup-id>/
 ```
+
+Minimum V1 supports one active organization membership profile per macOS user
+and therefore one active product pointer and execution gate. The plural
+directories retain staged, abandoned, or migration evidence; they do not imply
+simultaneous active profiles. A second active membership on the same account is
+`preserved` for a later multi-profile design rather than sharing the global
+pointer unsafely. Multi-employee tests use separately rooted launcher fixtures
+or separate OS accounts/Macs.
 
 Exact paths remain an implementation decision of the launcher and are never
 user input. Directories and files use the current ownership, mode, ACL,
@@ -392,17 +504,43 @@ canonical-path, local-filesystem, and no-symlink rules. The pointer and every
 transaction file are canonical, exact-key, atomically replaced, and durably
 synced with their parent directory.
 
+The private store is not a child of profile state and is never included in a
+state backup. Config stores opaque governed references into that store.
+Backups may contain private product content, but their manifest must declare
+`contains_credentials: false`, bind the stable profile identity, config/state
+schema, and credential-reference-set digest, and contain neither provider
+credentials nor installation keys. Restore verifies those bindings and never
+opens, creates, overwrites, deletes, or rolls back the private store.
+
+One machine-wide resume agent belongs to the launcher, not to a contributor
+service. It starts at login and on a bounded maintenance schedule, reconciles
+every non-terminal onboarding, launcher-update, and product-update transaction
+before starting new work, and uses no provider or organization-content
+adapter. A reader skips the ingestion worker, not this coordinator. An
+interactive launcher invocation performs the same reconciliation first.
+
 ## Onboarding transaction
 
 ### Identity and storage
 
-One flow ID and local profile ID are deterministically bound to the signed
-onboarding plan and the invitation's public command, Authority, organization,
-and membership IDs. Neither derives from the bearer grant bytes. The
-coordinator refuses a second active flow for the same plan or target profile.
+The stable local profile ID is derived only from the Authority, organization,
+and membership IDs. It names one member's private store, config, mutable state,
+and service ownership across invitation re-issue. It never contains a plan,
+invitation command, or bearer-grant value.
 
-The transaction is secret-free. Secret-bearing invitation and credential
-material remain in separate private stores with independent lifecycle rules.
+A flow ID is separately derived from the signed plan ID and revision,
+invitation command, Authority, organization, membership, and enrollment-grant
+digest. It identifies one attempt, not the member profile. A newer
+Authority-signed plan for the same stable profile may supersede an expired or
+abandoned flow and adopt its exact reservation only after checking the prior
+flow's effect boundary. The profile reservation carries the accepted plan
+revision. A stale or parallel flow cannot mutate or activate the profile after
+a newer revision owns it. A changed capability set enters explicit migration
+or `preserved`; it never overwrites the reservation by inference.
+
+The transaction is secret-free. Secret-bearing invitation, short-lived Slack
+challenge, provider credential, and installation-key material remain in the
+separate private store with independent lifecycle rules.
 The transaction records:
 
 - schema, kind, flow ID, plan digest, and pinned Authority identity;
@@ -429,13 +567,18 @@ Each step is one of:
 - `prepared`;
 - `reconciling`;
 - `succeeded`;
-- `retryable`; or
+- `terminal_denied`;
+- `terminal_abandoned`; or
 - `terminal_preserved`.
 
 `running` is not a durable truth. A process can die immediately after a side
 effect and before recording completion. On restart, any `prepared` or
 `reconciling` step observes local or authoritative remote state before deciding
 whether to accept or replay the same operation.
+
+`retryable` is a presentation result with a retry policy over a prepared or
+reconciling operation, not a durable phase. Transport recovery never changes
+the operation identity.
 
 ### Ordered flow
 
@@ -444,7 +587,9 @@ whether to accept or replay the same operation.
    flows without mutation.
 2. **Verify trust and plan.** Parse the private invitation, compare the
    independently entered pin, verify the Authority descriptor and signed plan,
-   and verify expiry and compatibility.
+   verify expiry and compatibility, and require the exact invitation-binding
+   tuple to match. No profile path is reserved and no provider input is
+   requested before this check succeeds.
 3. **Verify release.** Validate the sealed runtime/product bundle completely
    before changing an existing installation.
 4. **Confirm the human boundary.** Display organization, employee, requested
@@ -456,7 +601,8 @@ whether to accept or replay the same operation.
    roots, and atomically reserve the config/state identity without initializing
    product state.
 7. **Collect required employee adapters.** Complete only the provider actions
-   required by the signed profile. Store secrets outside the transaction.
+   required by the signed profile. Store secrets outside the transaction and
+   mutable state. Granola uses the one hidden local prompt in V1.
 8. **Stage and validate config.** Generate exact profile config, validate it
    offline, and commit it atomically without overwriting any existing config.
 9. **Initialize local state.** Create the installation key and product state
@@ -468,28 +614,63 @@ whether to accept or replay the same operation.
 11. **Refresh the signed plan.** Fetch the installation-bound current plan and
     require it to match the locally verified plan and current central state.
 12. **Complete central bindings.** For a reviewer, drive the Slack challenge in
-    the same flow and poll for the exact link, binding, activation-intent
-    consumption, and grant result. The employee is never told to pass IDs to
-    an administrator.
+    the same flow using the private attempt record and stable begin/complete
+    operation IDs. Poll for the exact link and either exact-subject activation
+    or post-link administrator confirmation. Then require the exact binding,
+    intent consumption, and grant receipt. The employee is never told to pass
+    IDs to an administrator.
 13. **Install and start service when required.** Reader-only profiles skip this
     step by contract. Contributor profiles install the stable-launcher
     LaunchAgent, start in readiness quarantine, and prevent product work until
     readiness commits.
 14. **Run profile doctor.** Use a profile-derived check set; do not require
     irrelevant services or adapters.
-15. **Run a no-content permission readiness probe.** Exercise installation
-    signature, current Person resolution, active access, applicable policy,
-    generation readiness when required, final fence availability, and audit
-    writability without returning organization content or opening unrelated
-    adapter planes.
-16. **Activate.** Commit the active profile/version pointer, release any
-    quarantined service into normal work, write the immutable onboarding
-    receipt, and report `ready`.
+15. **Run a no-content permission readiness probe.** Use an explicit
+    readiness-only target in the existing permission-check operation family.
+    Exercise installation signature, current Person resolution, active access,
+    applicable policy, generation readiness when required, final fence
+    availability, and audit writability without returning organization content
+    or opening unrelated adapter planes.
+16. **Activate.** Prepare the exact signed `ready` receipt, commit the active
+    profile/version pointer while the execution gate and service remain
+    quarantined, submit and reconcile that receipt under the Authority-owned
+    terminal projection key, persist the accepted receipt, and only then open
+    the gate and release normal work. An unknown receipt outcome remains
+    quarantined and replays the same bytes; it never reports `ready` or rolls
+    back until Authority outcome is known.
 
-The no-content probe is a new bounded operation, not a magic search query that
-might accidentally match private content. It must share the same live identity
-and permission dependencies as the corresponding read path while returning
-only readiness booleans and opaque digests permitted by its contract.
+The no-content probe is not a new authorization family and is not a magic
+search query that might accidentally match private content. It must share the
+same live identity and permission dependencies as the corresponding read path
+while returning only readiness booleans and opaque digests permitted by its
+contract. Revoked or inactive access must deny before any adapter, index, or
+content plane opens.
+
+The current schema-v3 permission check is hard-coded to one Slack approval
+reaction and cannot represent this probe. Minimum V1 adds a closed
+`profile_readiness_v1` target as a new version of the existing signed
+`POST /v1/permission-checks` operation family. Its exact request binds:
+
+- Authority, organization, enrollment, installation, installation key, and
+  current membership identities;
+- current signed plan ID and revision plus its invitation-binding digest;
+- one canonical profile and exact sorted capability set;
+- request ID, requested timestamp, HTTP method/path, and installation
+  signature; and
+- no provider subject/event, approval/card, query, content, or local-path
+  field.
+
+The Authority verifies the current installation key, membership, enrollment,
+access lease, current plan revision, and capability-specific control-plane and
+serve-readiness facts. Read capability checks the same admitted Layer 1/2
+generation and final-fence availability used by readable search, but through a
+readiness port that is structurally unable to construct provider clients or
+open fact, index, or content handles. Reviewer readiness checks current exact
+link/binding/grant and central relay availability from Authority-owned state;
+it does not call Slack. The response contains only schema/kind, request digest,
+`allowed`, a closed reason code, evaluation time, and authorization-audit
+record ID and entry digest. Exact audit failure returns unavailable and no
+success.
 
 ## Resume and abandonment rules
 
@@ -497,7 +678,10 @@ only readiness booleans and opaque digests permitted by its contract.
 
 The flow can abandon cleanly by deleting only its uncommitted staging area and
 unreferenced version directory. Invitation and credentials are removed only
-according to their own ownership rules. Existing profiles are untouched.
+according to their own ownership rules. An expired invitation may be reissued:
+the newer signed flow adopts the same membership-derived profile reservation
+under its higher plan revision, while the old flow becomes terminal. Existing
+active profiles are untouched.
 
 ### After enrollment and before activation
 
@@ -507,6 +691,11 @@ authorized central operation to revoke or mark the incomplete installation
 abandoned. The local private key and receipt are preserved until that outcome
 is durably known. A second onboarding attempt does not reuse or conceal the
 abandoned installation.
+
+State backup and restore never include the private identity/credential store.
+A restore is valid only for the same stable profile and exact
+credential-reference-set digest, and it leaves every credential and
+installation-key byte unchanged.
 
 ### After provider connection or identity link
 
@@ -531,8 +720,9 @@ update operates on an existing installation and has a rollback boundary.
 
 ### Background preparation
 
-While the current service remains healthy, the launcher or its supervised
-agent may:
+The machine-wide launcher resume agent may prepare an update while the current
+profile remains healthy. It is also the named owner after reboot and for reader
+profiles that have no ingestion service. It may:
 
 1. request the applicable signed release directive;
 2. download the exact sealed bundle;
@@ -540,38 +730,55 @@ agent may:
    policy, disk space, paths, config/state identity, credential references,
    backup eligibility, and retained previous bytes;
 4. install and inspect the candidate in an inactive version directory; and
-5. report `verified` without stopping product work.
+5. record the candidate as staged without stopping product work.
 
 No release is claimed merely because it is currently pointed to by the
-Authority. The installation durably claims one directive sequence, manifest
-digest, artifact digest, source SHA, and version. A resumed transaction cannot
-drift to a newer release.
+Authority. Minimum V1 uses a local claim, not an invented fleet lease. Only
+after the complete bundle is verified and retained in an immutable candidate
+directory does the installation durably bind its transaction ID, directive
+sequence, manifest digest, artifact digest, source SHA, version, and local
+candidate identity. Resume uses those exact retained bytes without consulting
+the moving current directive. A newer directive may supersede only staged,
+unclaimed work. Authority-managed artifact retention and cross-installation
+leases remain issue 27 scope.
 
 ### Update transaction phases
 
+Minimum V1 has seven durable local states:
+
 ```text
-offered
-  -> downloading
-  -> verified
-  -> claimed
-  -> quiescing
-  -> backing_up
-  -> migrating_candidate
-  -> candidate_ready
-  -> activating
-  -> healthy
+staging -> claimed -> switching -> healthy
+   |          |          |------> rolled_back
+   |          |-----------------> rejected
+   |----------------------------> rejected
+              any unsafe ambiguity -> preserved
 ```
 
-Failure before activation enters `rolling_back` and then either
-`rolled_back` or `preserved`. A non-critical unclaimed release may be
-`deferred`; a newer release may supersede only an unclaimed candidate.
+`staging` includes offer discovery, download, and verification while the active
+tuple is untouched. `claimed` freezes exact local candidate bytes while the old
+profile still works. `switching` owns durable substeps for quiesce, backup,
+migration, candidate doctor, pointer activation, and quarantine release.
+`rejected` is terminal only when the active tuple was never mutated, so it does
+not pretend a rollback occurred. A switching failure before activation proves
+and records `rolled_back`; an indeterminate effect or unsafe post-activation
+failure is `preserved` and fixed-forward. `retryable` is an outcome over the
+current state, never a phase.
 
 Each mutation phase persists intent before effect and reconciles the exact
 effect after interruption. Reconciliation checks the actual version pointer,
 installed bytes, config digest, state generation, backup receipt, service
 owner, and doctor receipt. It does not infer success from phase order.
 
-### Quarantine and commit boundary
+### Execution gate, quarantine, and commit boundary
+
+Before the first active-tuple mutation, update takes the installation's
+exclusive execution gate, durably changes it from `open` to `draining`, rejects
+new product work as retryable, stops the managed worker, and drains every
+outstanding work lease. It records `fenced` only after no provider, Authority,
+delivery, approval, or append effect remains live. Backup, migration, and
+pointer mutation are forbidden before that receipt. A crash or reboot leaves
+the gate fenced until exact transaction reconciliation chooses the old or new
+tuple.
 
 The candidate service starts in update quarantine. It may open only the local
 state and non-mutating diagnostic dependencies required for migration and
@@ -582,79 +789,106 @@ Activation is one durable boundary:
 
 1. candidate bytes, config, migration, local doctor, and permission readiness
    are proven;
-2. the active-version pointer and service generation are committed;
-3. the candidate is released from quarantine; and
-4. the signed healthy receipt is submitted idempotently.
+2. the exact signed healthy receipt intent is prepared;
+3. the active-version pointer and service generation are committed while the
+   execution gate remains fenced and the candidate remains quarantined;
+4. the Authority validates, stores, and returns the exact terminal projection
+   receipt, whose accepted bytes are persisted locally; and
+5. only then is the candidate released from quarantine and the gate opened.
 
-Before this boundary, the complete previous package/config/state/service tuple
-may be restored. After this boundary, an observed external or append-only
-effect makes state rewind unsafe. Recovery is then fixed-forward unless a
-separately proven backward-compatible rollback can preserve every committed
-effect. The UI and fleet state call this boundary out explicitly.
+An unknown step-4 outcome keeps the candidate fenced and replays the same
+receipt. It cannot roll back or release work until reconciliation proves
+whether the Authority accepted `healthy`. Once accepted, recovery is
+fixed-forward even if the final local release step fails.
+
+Before terminal receipt acceptance is known, and only after reconciliation
+proves it was not accepted, the complete previous package/config/state/service
+tuple may be restored. Receipt acceptance is the forward-only control-plane
+boundary; quarantine release can then create provider or append-only effects
+that independently make rewind unsafe. Recovery after either boundary is
+fixed-forward unless a separately proven backward-compatible rollback can
+preserve the accepted projection and every committed effect. The UI and fleet
+state call this boundary out explicitly.
 
 ### User interaction
 
-Normal approved updates are prepared and applied automatically within the
-configured maintenance policy. The user may:
-
-- defer a non-critical unclaimed release;
-- choose an allowed maintenance window; or
-- approve one clearly explained security-sensitive migration.
+Normal approved updates are prepared and applied automatically by the launcher
+resume agent or on the next launcher invocation. Maintenance-window and defer
+UI are outside minimum V1. The user is asked only to approve one clearly
+explained security-sensitive, non-backward-compatible migration.
 
 Retries of the same exact approved migration do not request consent again.
 The employee is never asked for a config path, Node/npm command, service
 command, credential, access refresh, backup action, or doctor action.
 
-The final result is exactly one of `updated`, `already_current`, `deferred`,
+The final result is exactly one of `updated`, `already_current`, `rejected`,
 `rolled_back`, `retryable`, or `preserved` with one stable reason code.
 
 ## Central status and privacy
 
-The Authority accepts signed, idempotent, non-secret lifecycle events keyed by
-installation and flow or update transaction. Minimum onboarding states are:
+Central status is a projection, not a client-authored event history.
+Pre-enrollment `started` and `waiting_*` states are local and explicitly
+unauthenticated; the Authority does not accept them or reserve their flow IDs.
+The only pre-enrollment remote mutation is the existing signed enrollment
+request plus enrollment-grant digest. Grant consumption, enrollment creation,
+and the Authority's `enrolled` fact commit atomically, and exact request replay
+returns the stored result.
 
-- invited;
-- started;
-- waiting for employee;
-- waiting for administrator;
-- enrolled;
-- configuring adapters;
-- validating;
-- ready;
-- expired;
-- abandoned; and
-- preserved.
+Minimum central onboarding status is derived as follows:
 
-Minimum update states are:
+- `invited` or `expired` from the bounded enrollment grant;
+- `enrolled` from the accepted enrollment and current installation access;
+- `ready` from one installation-signed immutable onboarding receipt;
+- `abandoned` from an installation-signed or administrator-authorized terminal
+  operation; and
+- `preserved` from an installation-signed terminal receipt after enrollment.
 
-- not offered;
-- offered;
-- downloading;
-- verified;
-- claimed;
-- installing;
-- healthy;
-- deferred;
-- rolled back;
-- failed;
-- preserved; and
-- superseded.
+An installation signature is necessary but not sufficient to change this
+projection. At receipt acceptance the Authority re-resolves the exact current
+enrollment, active installation key, membership, access, plan revision, and
+invitation binding. The onboarding receipt binds the enrollment and
+installation IDs, stable membership profile, plan ID/revision, flow ID,
+invitation command/grant digest, exact product/launcher/config identities, and
+one legal terminal result. The Authority owns one terminal projection key per
+installation and plan revision. Exact replay returns its stored receipt; a
+second receipt ID, different bytes, stale/revoked installation, or illegal
+terminal transition is rejected and cannot affect status.
 
-Events contain exact source/artifact/config identities, step/result codes, and
-timestamps where required. They never contain provider credentials, raw
-invitation bytes, local paths, queries, content, provider payloads, or terminal
-logs. A successful event commit is an observed lifecycle attempt, not proof
-that the employee saw the UI response.
+Administrator prerequisites are derived from current plan, organization-tool,
+activation-intent, membership, and installation facts. Employee-only waiting
+states remain private local presentation. No unauthenticated client can squat a
+deterministic flow ID or publish a false central blocker.
 
-Event delivery is at least once. The Authority applies exact idempotency and
-rejects the same event identity with different canonical bytes. Polling or a
-replayable ordered event feed is preferred over using unordered webhook
-arrival as the source of truth.
+Minimum central update status reuses the current directive plus one signed
+terminal update receipt. Its six projected values are `no_release`, `pending`,
+`healthy`, `rolled_back`, `rejected`, and `preserved`.
+Download and switching detail remains in the local secret-free transaction;
+it is not a second mutable central state machine.
+
+The update receipt binds one Authority-owned projection key consisting of the
+installation ID and update transaction ID to the exact issued directive
+sequence, source/manifest/artifact identities, and legal terminal result. The
+Authority re-proves the active installation and exact issued-directive history
+before acceptance, then permits only exact replay for that projection key. An
+older validated outcome remains immutable history; when a newer directive is
+current, installation status is simply `pending`. A stale or revoked signer
+and a receipt for an unknown directive never create a fleet state.
+Directive-history validation is distinct from an artifact lease; minimum V1
+still makes no central byte-retention claim.
+
+Validated terminal projection receipts contain exact source/artifact/config
+identities, stable
+result codes, and required timestamps. They never contain provider
+credentials, raw invitation bytes, local paths, queries, content, provider
+payloads, or terminal logs. Receipt submission is at least once, but alternate
+receipt identities cannot bypass the Authority-owned projection key. A
+successful commit records an attempted outcome, not proof that the employee
+saw the UI response.
 
 ## Error and retry algebra
 
 Internal errors retain their owning layer and stable machine code. Presentation
-maps them into the five public onboarding states without destroying the code
+maps them into the six public onboarding states without destroying the code
 needed for support and exact retry.
 
 | Class | Examples | Behavior |
@@ -664,7 +898,7 @@ needed for support and exact retry.
 | Retryable availability | Network loss, provider unavailable, Authority 503, download interruption. | Keep exact prepared intent and retry with bounds. |
 | Closed denial | Wrong pin, wrong person, revoked membership, plan/profile mismatch. | No broader fallback; preserve evidence and stop. |
 | Local conflict | Existing unrelated config/state/service, symlink, wrong owner or filesystem. | Inspect only; never overwrite or guess ownership. |
-| Unknown external outcome | Timeout after enrollment, link, event, or receipt submission. | Reconcile or exactly replay; never create a replacement effect. |
+| Unknown external outcome | Timeout after enrollment, link, relay publication, or receipt submission. | Reconcile or exactly replay; supersede only after the owning boundary makes the prior attempt terminal. |
 | Post-commit failure | Product work or append may have occurred after activation. | Stop unsafe work and fix forward; no automatic state rewind. |
 
 Provider and Authority transports must preserve status and stable error code to
@@ -674,18 +908,34 @@ conflict, or response loss.
 
 ## Concurrency and ownership
 
-- One machine-wide launcher lock serializes installation pointer changes.
-- One profile lock serializes onboarding, update, restore, and service
-  lifecycle for an installation.
+- One machine-wide launcher mutation lease serializes launcher and product
+  pointer changes.
+- One per-installation execution gate has a durable term and the states `open`,
+  `draining`, `fenced`, and `recovering`. Every product-work ingress, including
+  the managed worker and manual `run-once`, must acquire a non-transferable
+  work lease for the current term before constructing adapters or contacting a
+  provider or Authority. Direct product-binary invocation that bypasses the
+  launcher gate is unsupported and refused.
+- Onboarding, update, restore, and service lifecycle take the same gate. Update
+  obtains its exclusive mutation lease only after durable drain intent and all
+  work leases have ended.
 - Canonical path and installation identity, not the spelling of a CLI path,
   determine lock ownership.
+- Process exclusion uses a kernel-backed advisory lock held for the process
+  lifetime. Persisted diagnostics include boot-session ID, PID, process-start
+  token, installation, operation, random owner token, and gate term, but are
+  never liveness authority. A contender overwrites stale diagnostics only
+  after acquiring the kernel lock; it never reclaims by mtime or `kill(pid, 0)`
+  alone. Kernel release on exit or reboot prevents PID reuse from wedging V1.
 - The coordinator owns all child tasks and cancellation. No adapter health,
-  provider poll, enrollment refresh, or lifecycle event outlives the flow that
+  provider poll, enrollment refresh, or receipt submission outlives the flow that
   started it.
 - A second process may inspect public status but cannot mutate the active
   transaction.
 - Signals leave a durable resumable intent and stop or quarantine owned child
   processes before exit.
+- Every launcher start and resume-agent tick reconciles non-terminal
+  transactions before admitting ordinary product work.
 
 ## Threat analysis and required controls
 
@@ -705,10 +955,27 @@ values fail closed.
 
 ### Secret leakage through resumption
 
-Transactions, events, logs, crash reports, arguments, environment summaries,
+Transactions, receipts, logs, crash reports, arguments, environment summaries,
 and diagnostics contain opaque credential references only. Tests scan stdout,
-stderr, journals, service logs, backups, and lifecycle events for invitation
-and credential material.
+stderr, journals, service logs, backups, and terminal receipts for invitation,
+challenge, installation-key, and credential material. State backups assert
+`contains_credentials: false`; legacy state-root credentials must be relocated
+or the installation is preserved before the new backup/update path runs.
+
+### Independently valid but differently bound artifacts
+
+Plan signature, invitation validation, and Authority pin verification are not
+separate success flags. Their exact Authority origin/ID, organization,
+membership, principal, command, and grant-digest tuple must agree before local
+reservation or credential collection. A reissued invitation creates a new flow
+for the same membership profile and must carry a newer current plan revision.
+
+### Organization credential without organization operation ownership
+
+Removing a local Slack token is safe only after the central relay owns publish,
+reconciliation, decision observation, and immutable receipt. Slice 3 cannot
+claim success from identity linking alone; it must prove an approval card round
+trip with no local Slack credential.
 
 ### Partial local creation
 
@@ -725,15 +992,31 @@ is forbidden until the previous operation is terminal.
 
 ### Moving release pointer
 
-The update claims an exact directive sequence and artifact identity before
-quiescing. Resume uses those bytes even if a newer release becomes current.
-Only an unclaimed candidate can be superseded.
+The update locally claims an exact directive sequence and completely verified
+immutable candidate before quiescing. Resume uses those retained bytes even if
+a newer directive becomes current. Only staged, unclaimed work can be
+superseded; V1 makes no central lease or artifact-retention claim.
 
 ### In-place package corruption
 
 The stable launcher and active product live in separate versioned locations.
 Candidate installation cannot damage the running or retained previous version.
 The active pointer changes only after candidate verification.
+
+### Launcher below the product protocol floor
+
+The plan and directive state their minimum launcher and protocol range. A
+compatible launcher engine is updated and made healthy before product
+mutation. If the stable anchor cannot start any compatible engine, the flow
+waits for the signed administrator installer rather than guessing how to
+interpret the newer plan.
+
+### Reboot, PID reuse, or work during quiesce
+
+Kernel-backed exclusion supplies liveness; persisted process identity is
+diagnostic only. The durable execution-gate term survives process loss, so a
+reboot does not reopen product work during an unresolved switch. All effectful
+product entrypoints use that gate, not only the managed service.
 
 ### Rollback after disclosure or append
 
@@ -768,13 +1051,33 @@ Existing configs remain valid. Their inferred profile is
 Inference never creates missing bindings or rewrites credentials. A normal
 existing installation is routed to update; an ambiguous one is preserved.
 
+### Existing state-root credentials and installation keys
+
+The current layout places provider credentials and the installation key below
+`state_dir`, and current backup deliberately copies them. Before an imported
+installation can use the V1 backup or automatic-update path, a stopped
+relocation transaction must:
+
+1. classify every current credential and installation-key file without
+   printing its value;
+2. create the canonical private-store target with no-overwrite semantics;
+3. move and rebind exact governed references atomically;
+4. prove the old state-root secret paths are absent and the service can resolve
+   only the new references; and
+5. create a credential-free state backup whose restore leaves the private store
+   byte-identical.
+
+Unknown, duplicated, aliased, or partially moved secret material yields
+`preserved`; update may not silently retain a secret-bearing backup format.
+
 ### Existing per-Mac Slack bot credentials
 
 They remain readable only for the old config version during migration. The
-new profile migrates to the centrally owned Slack tool under stopped
+new profile migrates to the Authority-owned Slack relay under stopped
 reconfiguration and frozen-pending-work preflight. The old secret is deleted
-only after the new central binding and exact profile are active and its
-provider-side revocation/retirement policy is known.
+only after the relay has completed one exact approval round trip, the new
+central binding and exact profile are active, and its provider-side
+revocation/retirement policy is known.
 
 ### Existing global npm installation
 
@@ -788,35 +1091,40 @@ new launcher-managed version is healthy and its recovery window closes.
 Current V1 invitation validation remains supported. The signed onboarding plan
 may initially travel as a second file in the private package. A future
 invitation schema may embed it only after protocol review; the bearer grant is
-never put into a non-secret plan or status event.
+never put into a non-secret plan or status receipt. The separate files must
+carry the exact invitation binding described above.
 
 ## Implementation ownership
 
 The expected source boundaries are:
 
-- `packages/organization-api/`: signed onboarding-plan and lifecycle-event
+- `packages/organization-api/`: signed onboarding-plan, invitation-binding,
+  Slack-relay command/receipt, and terminal onboarding/update receipt
   contracts, validators, canonicalization, and HTTP shapes;
 - `services/organization-authority/`: plan ownership, current prerequisite
-  checks, exact lifecycle-event idempotency, profile status, and the no-content
-  permission readiness operation;
+  checks, derived profile/update status, exact relay and terminal-receipt
+  idempotency, Slack approval relay, activation-subject confirmation, and the
+  readiness-only permission-check mode;
 - `src/product/onboarding/`: coordinator, transaction parser/store, step
   algebra, reconciliation, profile composition, and presentation model;
 - `src/product/organization/`: enrollment and plan clients, Slack identity-link
-  coordination, and current access refresh;
+  attempt coordination, Slack approval-relay client, and current access
+  refresh;
 - `src/product/update/`: exact release claim, versioned candidate lifecycle,
   quarantine, reconciliation, activation, and rollback;
-- `src/product/`: profile-aware config, operator status, doctor, service, and
-  command dispatch;
+- `src/product/`: profile-aware config, private-store and backup boundaries,
+  operator status, doctor, service, and command dispatch;
 - `src/adapters/`: employee-owned credential verification and provider-specific
   health without authorization widening;
-- `tools/` and release workflows: sealed runtime production, launcher signing,
+- `tools/` and release workflows: stable anchor, versioned launcher engine,
+  execution gate and resume agent, sealed runtime production, launcher signing,
   publication, and exact-artifact evidence; and
 - `tests/product/`, `tests/machine/`, service tests, and protocol tests: failure
   injection and end-to-end qualification.
 
 The coordinator depends on ports for clock, randomness, filesystem,
 credential store, launcher, release source, enrollment, plan, adapter setup,
-service, doctor, permission readiness, and lifecycle events. Domain step logic
+service, doctor, permission readiness, relay, and terminal receipts. Domain step logic
 must not call process-global filesystem, terminal, network, launchd, or provider
 APIs directly.
 
@@ -827,14 +1135,19 @@ implementation:
 
 | Issue | Responsibility in this design |
 | --- | --- |
-| 18 and 19 | An enrolled installation can recover stale Authority trust without being stranded or silently accepting a new Authority. |
 | 25 | Canonical source and release protection remains the publisher-side trust boundary. |
 | 26 | The stable launcher consumes one complete offline-installable Darwin arm64 runtime bundle. |
-| 27 | Exact release claim, supersession, lease, and fleet coordination. |
 | 30 | Idempotent publication of the exact tested release bytes. |
 | 51 | Employee-facing onboarding coordinator and acceptance outcome. |
 | 52 | Employee-facing automatic update and recovery outcome. |
 | 53 | Cross-issue readiness ordering and closure discipline. |
+
+This RFC does not close issues 18, 19, or the fleet-lease portion of 27.
+Minimum V1 supports initial independent pinning, same-pin endpoint/CA rebind,
+and one local immutable artifact claim. Any trust-pin/key change becomes
+`waiting_for_administrator`; any central lease or multi-installation rollout
+claim requires its own reviewed protocol. Those issues remain explicit
+dependencies, not table-assigned promises without a mechanism.
 
 Implementation PRs close leaf issues only with their own tests and evidence.
 Completing one RFC slice is not permission to close a dependency whose exact
@@ -852,69 +1165,124 @@ the final clean-Mac outcome early.
 - Derive standard config/state paths and retain the existing exact
   contributor/reviewer inputs where they cannot yet be derived.
 - Persist a secret-free transaction and prepared effect identities.
-- Resume after interruption without repeating enrollment or service creation.
+- Inject a real interruption after one prepared external effect and resume with
+  the same operation identity without repeating enrollment or service
+  creation.
 - Replace the `next_steps` command list with the public status algebra.
 
 Exit: on an already verified compatible installation, one command reaches the
-same safe state as the current multi-command ceremony. This is source-tested
-and founder-rehearsal only, not clean-Mac qualified.
+same safe state as the current multi-command ceremony, and `ONB-RESUME-01`
+and `ONB-PREAUTH-01` pass. This is source-tested and founder-rehearsal only,
+not clean-Mac qualified.
 
 ### Slice 2: Signed plan and profile-aware readiness
 
-- Add the signed onboarding plan and post-enrollment confirmation.
+- Add the signed onboarding plan, exact invitation binding, plan revision and
+  profile-reservation adoption fence, and post-enrollment confirmation.
 - Add reader, contributor, reviewer, and combined profile composition.
 - Make status and doctor require only profile-relevant services/adapters.
-- Add the no-content permission readiness operation.
+- Add the readiness-only target to the existing permission-check family.
+- Establish the separate private-store and credential-free backup boundary.
 - Remove user-entered IDs and paths now supplied by the plan or central state.
 
-Exit: reader onboarding requires no adapter credential or LaunchAgent;
-contributor and reviewer flows ask only for their required human actions.
+Exit: reader onboarding requires no adapter credential or profile ingestion
+LaunchAgent (the machine-wide launcher resume agent is not product work);
+contributor and reviewer flows ask only for their required human actions, and
+`ONB-PLAN-BIND-01`, `ONB-REISSUE-01`, `ONB-BACKUP-PRIVATE-01`, and
+`ONB-PROBE-REVOKED-01` pass.
 
 ### Slice 3: Organization-owned Slack onboarding
 
 - Drive Slack link begin/complete inside the coordinator.
-- Poll or reconcile exact central link, binding, and grant state.
+- Add the Authority-owned approval-card publish/observe relay and immutable
+  decision receipt.
+- Persist the bounded private challenge attempt and reconcile or explicitly
+  supersede it.
+- Poll exact central link, subject-confirmation, binding, and grant state.
 - Remove the per-employee Slack bot-token prompt from new profiles.
 - Migrate an existing local Slack credential only through stopped exact
   reconfiguration and explicit retirement evidence.
 
 Exit: a reviewer pauses only for the Slack human challenge; no Slack token,
-channel ID, user ID, binding ID, or admin command crosses the employee UI.
+channel ID, user ID, binding ID, or admin command crosses the employee UI. One
+contributor decision is published, reacted to, authorized, and resolved
+end-to-end with zero local Slack credential, and
+`ONB-SLACK-RELAY-01`, `ONB-SLACK-RESPONSE-LOSS-01`, and
+`ONB-ACTIVATION-SUBJECT-01` pass.
 
 ### Slice 4: Stable sealed launcher
 
-- Build and sign the stable launcher and complete Darwin arm64 runtime bundle.
+- Build and sign the stable anchor, versioned launcher engine, and complete
+  Darwin arm64 runtime bundle.
+- Add staged next-exec launcher update, minimum-version/protocol floors, a
+  retained compatible engine, and pre-health recovery.
+- Install the machine-wide resume agent and execution gate before profile
+  activation.
 - Install into immutable version directories and use an atomic active pointer.
 - Route LaunchAgent execution through the launcher.
 - Import or preserve existing global installations without in-place mutation.
 
 Exit: a clean supported Mac begins from one artifact/entrypoint and needs no
-preinstalled Node, npm, global package, PATH edit, or terminal recipe.
+preinstalled Node, npm, global package, PATH edit, or terminal recipe;
+`LCH-TRUST-01`, `LCH-FLOOR-01`, `LCH-LOCK-REBOOT-01`, and
+`LCH-READER-RESUME-01` pass.
 
 ### Slice 5: Automatic resumable update
 
 - Reuse launcher verification and versioned installation.
-- Add background download/preflight, exact directive claim, reconciliation,
-  quarantine, atomic activation, and honest rollback boundary.
+- Add background download/preflight, local exact-artifact claim, seven-state
+  reconciliation, execution-gate drain, quarantine, atomic activation, and
+  honest rollback boundary.
 - Preserve enrollment, key, credential references, config, state, and pending
   frozen work.
-- Add maintenance policy, defer, and one-time sensitive-migration consent.
+- Add one-time sensitive-migration consent; maintenance-window and defer UI
+  remain outside minimum V1.
 
 Exit: every healthy profile reaches the exact approved version or returns to
 the previous healthy tuple without shell remediation or credential re-entry.
+`UPD-EXEC-GATE-01`, `UPD-REJECT-01`, `UPD-CLAIM-RESUME-01`, and the required
+exact-artifact hardware rollback `UPD-ROLLBACK-MACHINE-01` pass.
 
 ### Slice 6: Fleet status and qualification
 
-- Add non-secret central onboarding/update status and actionable admin views.
-- Run the ten-profile failure matrix and macOS machine tests.
+- Add derived non-secret central onboarding/update status and actionable admin
+  views from Authority facts and terminal receipts; do not add a client event
+  stream.
+- Run the ten-fixture failure matrix and macOS machine tests.
 - Produce exact artifact, config, state, and evidence receipts.
 - Update architecture, invariants, failure patterns, runbooks, qualification,
   and release claims only after their corresponding evidence exists.
 
-Exit: issues 51 and 52 may close only when their named acceptance outcomes are
-proven on one exact artifact. Issue 53 remains the broader readiness tracker.
+Exit: `STATUS-TERMINAL-01` passes, and issues 51 and 52 may close only when
+their named acceptance outcomes are proven on one exact artifact. Issue 53
+remains the broader readiness tracker.
 
 ## Test and qualification plan
+
+### Named minimum acceptance rows
+
+These rows are release gates, not illustrative test ideas:
+
+| ID | Required proof |
+| --- | --- |
+| `ONB-RESUME-01` | Crash immediately before and after the persisted enrollment call and service creation; rerun the same entrypoint and prove the same operation IDs, exactly one enrollment, and exactly one service identity. |
+| `ONB-PREAUTH-01` | Fabricated or conflicting pre-enrollment `started`/`waiting` flow IDs create no Authority state; exact signed enrollment response-loss replay yields one server-derived enrollment. |
+| `ONB-PLAN-BIND-01` | Any Authority, origin, organization, membership, principal, command, grant-digest, plan-revision, or profile mismatch denies before profile reservation or provider input. |
+| `ONB-REISSUE-01` | Reserve a profile, expire and reissue the invitation, then prove the new flow adopts the same membership-derived profile while the stale flow cannot mutate or activate it. |
+| `ONB-BACKUP-PRIVATE-01` | Relocate a legacy secret-bearing state safely; prove new backup contains no credential/key bytes, cross-profile or reference-set restore is denied, and restore leaves the private store byte-identical. |
+| `ONB-PROBE-REVOKED-01` | Revoke access before the readiness probe; prove closed denial, no activation, no content, and no provider/index/content plane opened. |
+| `ONB-SLACK-RELAY-01` | With no local Slack credential, publish one real contributor approval card through the central relay, observe one decisive reaction, authorize it, and resolve the decision from the exact Authority receipt. |
+| `ONB-SLACK-RESPONSE-LOSS-01` | Lose responses after challenge post, card post, and decision observation; resume the same attempts/receipts without an unintended duplicate. When the private challenge is irrecoverable, prove explicit terminal supersession before one replacement. |
+| `ONB-ACTIVATION-SUBJECT-01` | Exact-subject mismatch creates no binding/grant; confirm-after-link creates no grant until a current administrator confirms the exact observed subject. |
+| `LCH-TRUST-01` | Tamper the engine pointer, promotion record, manifest, signature, signer identity, and one engine byte in turn; prove the anchor executes no unverified candidate and uses only a freshly verified retained engine or the signed repair boundary. |
+| `LCH-FLOOR-01` | A product plan above the active launcher floor blocks product mutation; launcher-first staged next-exec update succeeds, and failure at every engine-pointer/health boundary restores a compatible retained engine. |
+| `LCH-LOCK-REBOOT-01` | A prior-boot diagnostic with a PID reused by an unrelated live process cannot wedge or grant the kernel lock; a real concurrent holder remains exclusive. |
+| `LCH-READER-RESUME-01` | Reboot a reader during onboarding and during a claimed update; the machine-wide resume agent reconciles once with no ingestion adapter or content access. |
+| `UPD-EXEC-GATE-01` | Hold product work through a provider/append effect, start update, and prove drain waits for its terminal receipt; work started after drain intent is rejected before adapter construction, including after reboot. |
+| `UPD-REJECT-01` | An invalid or incompatible candidate before quiesce ends `rejected` with the active tuple unchanged and no rollback claim. |
+| `UPD-CLAIM-RESUME-01` | Claim exact candidate bytes, publish a newer directive, crash during switching, and prove resume uses only the original locally claimed bytes. |
+| `UPD-ROLLBACK-MACHINE-01` | On the exact signed artifact and real Mac, inject candidate doctor failure after backup/migration and prove old launcher/product pointers, service, config/state digests, and credential references are restored with no external work. |
+| `STATUS-TERMINAL-01` | Submit onboarding and update terminal receipts under active installations; prove exact replay returns one projection, alternate IDs/bytes or illegal transitions conflict, and revoked/stale signers cannot change status. Response loss before an activating `ready`/`healthy` outcome is resolved keeps candidate work quarantined; a non-activating result never opens candidate work or stops the retained healthy tuple. |
 
 ### Deterministic coordinator tests
 
@@ -926,6 +1294,8 @@ proven on one exact artifact. Issue 53 remains the broader readiness tracker.
   exactly one accepted effect.
 - Inject response loss after the Authority or provider commits successfully.
 - Inject a stale or conflicting response for the same operation identity.
+- Prove a sanctioned replacement effect requires an explicit terminal
+  supersession receipt for the prior attempt.
 - Prove cancellation drains owned work and leaves no provider poll or service
   callback alive.
 
@@ -935,20 +1305,29 @@ proven on one exact artifact. Issue 53 remains the broader readiness tracker.
 - Wrong pin, wrong Authority, tampered plan, profile escalation, wrong provider
   person, missing provider scope, unavailable provider, and expired invitation.
 - Invitation expiry before consumption and response loss after consumption.
+- Reissued invitation after profile reservation, stale-flow activation, and
+  conflicting plan/invitation binding.
+- Slack challenge/card response loss, private-code loss and expiry, exact
+  subject mismatch, post-link administrator confirmation, and one end-to-end
+  contributor approval with no local Slack credential.
+- Revoked access before readiness and legacy state-root secret relocation,
+  credential-free backup, and credential-preserving restore.
 - Existing healthy install, older updater-capable install, partial local
   staging, retired founder residue, nonlocal filesystem, symlink ancestor,
   wrong owner/mode/ACL, and path alias.
 - Reboot or process death at every durable boundary.
-- Two concurrent launches for one plan and ten independent plans with no
-  identity, key, path, credential, or service crossover.
+- Two concurrent launches for one plan on one Mac, plus ten independent plans
+  in separately rooted launcher fixtures or OS accounts, with no identity,
+  key, path, credential, or service crossover.
 - Secret scans across process arguments, environment summaries, stdout,
-  stderr, journal, receipts, lifecycle events, service logs, and backups.
+  stderr, journal, receipts, private/public boundary projections, service logs,
+  and backups.
 - Human-pause accounting: every pause maps to an allowed human action and
   deterministic pauses equal zero.
 
 ### Update integration matrix
 
-- Already current, one version old, deferred, superseded before claim,
+- Already current, one version old, superseded before claim,
   interrupted download, corrupt bundle, insufficient disk, expired access,
   stale Authority trust, config incompatibility, migration failure, candidate
   doctor failure, restart failure, receipt response loss, and power loss.
@@ -960,6 +1339,11 @@ proven on one exact artifact. Issue 53 remains the broader readiness tracker.
   service tuple and post-activation failure never silently rewinds state.
 - Prove two aliases cannot update one installation concurrently and a claimed
   release cannot drift to a newer directive.
+- Race effectful `run-once` with drain intent; prove no active-tuple mutation
+  until its receipt is durable and no new work constructs an adapter after the
+  gate leaves `open`.
+- Simulate reboot with a reused PID and prove kernel exclusion plus the durable
+  gate term, not the persisted PID record, controls recovery.
 
 ### Founder and client evidence boundaries
 
@@ -971,8 +1355,8 @@ qualified. The first exact-artifact founder run must record:
 - exact release, launcher, config, state, plan, and Authority identities;
 - resume behavior after at least one real interruption;
 - adapter and permission readiness without content in diagnostic evidence;
-- update to a second exact release and either healthy activation or proven
-  rollback; and
+- update to a second exact release with healthy activation, plus the required
+  exact-artifact real-machine rollback row `UPD-ROLLBACK-MACHINE-01`; and
 - absence of secrets and private content from tracked evidence.
 
 Client Live remains a separate promotion stage.
@@ -1035,7 +1419,7 @@ The review should attempt to disprove at least these claims:
 2. Is any effect still represented only by a mutable phase rather than a
    prepared operation plus authoritative reconciliation?
 3. Can a crash after remote success create a second enrollment, installation,
-   Slack link, grant, lifecycle event, or update receipt?
+   Slack link, approval card, grant, or terminal receipt?
 4. Can a secret enter arguments, environment, transaction state, logs,
    diagnostics, backups, or central status?
 5. Can a reader be forced to configure a service or adapter it does not need?
@@ -1049,7 +1433,7 @@ The review should attempt to disprove at least these claims:
    append-only organization effect?
 10. Can a moving release, alias path, second process, reboot, or stale response
     change the identity of an active transaction?
-11. Does the no-content readiness operation actually exercise the required
+11. Does the readiness-only permission check actually exercise the required
     permission dependencies without opening or returning content?
 12. Are any administrator prerequisites still converted into employee shell
     instructions?
@@ -1059,18 +1443,44 @@ The review should attempt to disprove at least these claims:
 15. Which proposed port, schema, or status is unnecessary and can be removed
     without weakening the guarantees?
 
+## First adversarial review resolution
+
+This table records design closure only. Every row remains unimplemented until
+its named slice and acceptance proof pass.
+
+| Finding | Root closure in this revision |
+| --- | --- |
+| F1 | Organization-owned Slack now includes an Authority publish/observe relay and exact decision receipt; Slice 3 requires a real approval round trip without a local token. |
+| F2 | Provider credentials and installation keys move to a separate private store; state backup/restore is credential-free and cannot touch that store. |
+| F3 | Pre-enrollment progress is local-only; central onboarding status is derived from grant/enrollment facts and post-enrollment signed terminal receipts. |
+| F4 | A publisher-root-pinned anchor revalidates every selected engine and owns staged next-exec update, protocol floors, durable promotion, retained-engine recovery, and the fail-closed signed repair boundary. |
+| F5 | Stable profile identity is membership-derived; per-invitation flow identity and monotonic plan-revision adoption are separate. |
+| F6 | Activation intents permit exact provider subject or post-link administrator confirmation only; wildcard identity cannot create grants. |
+| F7 | Every effectful product ingress participates in the launcher execution gate; quiesce drains that same gate before mutation. |
+| F8 | Kernel-backed exclusion owns liveness; boot/PID/start diagnostics cannot reclaim or wedge the lock. |
+| F9 | Slack challenge secret and operation IDs live in a bounded private attempt; retry reconciles, while replacement requires explicit expiry/supersession. |
+| F10 | Local claim and a seven-state update algebra replace the undefined fleet claim; `rejected` closes the untouched pre-mutation path, and issues 18/19/27 are no longer implied. |
+| F11 | A machine-wide launcher resume agent owns reboot recovery and reader updates independently of the ingestion service. |
+| F12 | The signed plan carries and verifies the exact invitation-binding tuple before reservation or provider input. |
+| F13 | The client lifecycle-event stream, maintenance/defer UI, path-policy field, standalone readiness operation, and browser Granola flow were removed from minimum V1. |
+| F14 | Slice exits now cite mandatory resume, reissue, revoked-probe, relay, launcher, execution-gate, claim-resume, and real-machine rollback rows. |
+
 ## Acceptance decision
 
 Before implementation, adversarial review must resolve:
 
 - the signed plan transport and post-enrollment confirmation;
-- the exact launcher trust, signing, and distribution boundary;
+- the exact invitation binding and membership-derived profile identity;
+- the exact launcher anchor/engine trust, self-update, signing, protocol floor,
+  and distribution boundary;
 - the profile-aware config migration from today's fixed profile;
-- the organization-owned Slack transport boundary;
-- the no-content permission readiness contract;
+- the separate private-store and credential-free backup/restore boundary;
+- the Authority-owned Slack relay and closed activation-subject boundary;
+- the readiness-only permission-check contract;
+- the execution-gate, reboot, and reader-resume protocol;
 - the update quarantine and activation transaction; and
-- the minimum status events needed for support without creating a second
-  mutable source of truth.
+- the minimum derived status and signed terminal receipts needed for support
+  without creating a second mutable source of truth.
 
 Accepted choices should be extracted into ADRs and invariants. Reusable defects
 found during implementation should become failure-pattern records. Exact
