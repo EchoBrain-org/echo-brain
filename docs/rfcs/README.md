@@ -21,3 +21,7 @@ qualification status separately.
 - unresolved questions and disposition.
 
 Use the [RFC template](../_templates/rfc.md).
+
+## Active proposals
+
+- [RFC-0001: Resumable profile-aware onboarding and updates](RFC-0001-resumable-onboarding-and-updates.md)
