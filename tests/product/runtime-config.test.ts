@@ -477,6 +477,10 @@ describe('product runtime configuration', () => {
 
   it('makes a production cycle report every unavailable adapter before probing state', async () => {
     const configPath = writeConfig(validConfig());
+    // The product-work admission gate reads the machine onboarding root;
+    // isolate it so an operator's real onboarding state cannot leak in.
+    const homeDirectory = mkdtempSync(join(tmpdir(), 'echo-product-home-'));
+    directories.push(homeDirectory);
     let probes = 0;
     let stderr = '';
     const status = await runProductCli(['run-once', '--config', configPath], {
@@ -484,6 +488,7 @@ describe('product runtime configuration', () => {
         probes += 1;
         return { kind: 'local', raw: 'apfs' };
       },
+      operator: { homeDirectory },
       stdout: { write: () => true },
       stderr: { write: (chunk) => ((stderr += String(chunk)), true) },
     });

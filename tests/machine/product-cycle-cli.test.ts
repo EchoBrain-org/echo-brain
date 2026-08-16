@@ -213,6 +213,9 @@ describe('standalone composed cycle', () => {
       environment: { SLACK_BOT_TOKEN: 'xoxb-test' },
       now: () => fixedTime,
       composition: { createId: () => `slack-generated-${++id}` },
+      // The product-work admission gate reads the machine onboarding root;
+      // isolate it so an operator's real onboarding state cannot leak in.
+      operator: { homeDirectory: join(root, 'home') },
     };
 
     const firstOut = output();
@@ -360,6 +363,9 @@ describe('standalone composed cycle', () => {
         raw: 'test-local',
       }),
       now: () => fixedTime,
+      // The product-work admission gate reads the machine onboarding root;
+      // isolate it so an operator's real onboarding state cannot leak in.
+      operator: { homeDirectory: join(root, 'home') },
       stdout: out.stream,
       stderr: err.stream,
     });

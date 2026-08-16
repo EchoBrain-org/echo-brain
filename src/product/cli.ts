@@ -2721,11 +2721,19 @@ async function runOnboardCommand(
   const ensureAcceptedAuthorityDescriptor = async () =>
     acceptedAuthorityDescriptor ??
     (await refreshAcceptedAuthorityDescriptor());
+  // The wrapped bootstrap's stdout/stderr are capture buffers, so its default
+  // hidden-credential prompts would render invisibly; bind them to the
+  // invoking terminal here. Injected test/host readers still take precedence.
+  const promptTerminal = dependencies.stderr ?? process.stderr;
   const preparedBootstrapDependencies = (
     authorityDescriptor: NonNullable<typeof acceptedAuthorityDescriptor>,
   ): ProductCliDependencies => ({
     ...dependencies,
     bootstrap: {
+      readGranolaCredential: () =>
+        readHiddenCredential("Granola API token", promptTerminal),
+      readSlackCredential: () =>
+        readHiddenCredential("Slack bot token", promptTerminal),
       ...dependencies.bootstrap,
       preparedOrganizationEnrollment: {
         invitationPath: parsed.invitationPath!,

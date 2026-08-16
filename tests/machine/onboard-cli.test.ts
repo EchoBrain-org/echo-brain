@@ -137,6 +137,59 @@ function managedLaunchd(): ManagedLaunchd {
   };
 }
 
+interface SimulatedTerminal {
+  rawModeCalls: boolean[];
+  restore(): void;
+}
+
+/**
+ * Simulates a controlling terminal on process.stdin for the hidden credential
+ * prompts: raw-mode capable and scripted to answer each prompt as raw mode is
+ * entered. Every patched property is restored so other tests observe the real
+ * worker stdin.
+ */
+function simulatedTerminalStdin(answers: readonly string[]): SimulatedTerminal {
+  const stdin = process.stdin as NodeJS.ReadStream & { isRaw?: boolean };
+  const pending = [...answers];
+  const rawModeCalls: boolean[] = [];
+  const saved = new Map<string, PropertyDescriptor | undefined>(
+    ['isTTY', 'isRaw', 'setRawMode'].map((name) => [
+      name,
+      Object.getOwnPropertyDescriptor(stdin, name),
+    ]),
+  );
+  Object.defineProperty(stdin, 'isTTY', { value: true, configurable: true });
+  Object.defineProperty(stdin, 'isRaw', {
+    value: false,
+    configurable: true,
+    writable: true,
+  });
+  Object.defineProperty(stdin, 'setRawMode', {
+    configurable: true,
+    value(mode: boolean) {
+      rawModeCalls.push(mode);
+      stdin.isRaw = mode;
+      if (mode && pending.length > 0) {
+        const answer = pending.shift()!;
+        setImmediate(() => stdin.emit('data', Buffer.from(answer, 'utf8')));
+      }
+      return stdin;
+    },
+  });
+  return {
+    rawModeCalls,
+    restore() {
+      for (const [name, descriptor] of saved) {
+        if (descriptor === undefined) {
+          delete (stdin as unknown as Record<string, unknown>)[name];
+        } else {
+          Object.defineProperty(stdin, name, descriptor);
+        }
+      }
+    },
+  };
+}
+
 function invitationDocument(authority: TestAuthority) {
   const grantSha256 = organizationEnrollmentGrantSha256(GRANT);
   return {
@@ -539,6 +592,35 @@ describe('onboard CLI (RFC-0001 slice 1)', () => {
     const transaction = parseJson(readFileSync(test.transactionPath, 'utf8'));
     expect(transaction['finished_at']).not.toBeNull();
     expect(existsSync(test.receiptsDirectory)).toBe(true);
+  });
+
+  it('ONB-PROMPT-01: hidden credential prompt labels reach the onboard terminal, not the captured bootstrap diagnostics', async () => {
+    const test = fixture();
+    test.dependencies.bootstrap = {
+      observeGranolaRecordOwner:
+        test.dependencies.bootstrap!.observeGranolaRecordOwner!,
+    };
+    const terminal = simulatedTerminalStdin([
+      `${GRANOLA_TOKEN}\r`,
+      `${SLACK_TOKEN}\r`,
+    ]);
+    try {
+      const result = await command(
+        onboardArgv({
+          configPath: test.configPath,
+          stateDirectory: test.stateDirectory,
+          invitationPath: test.invitation,
+          authorityPin: test.authority.pin,
+        }),
+        test.dependencies,
+      );
+      expect(result.status).toBe(0);
+      expect(parseJson(result.stdout)['status']).toBe('ready');
+      expect(result.stderr).toContain('Granola API token (hidden): ');
+      expect(result.stderr).toContain('Slack bot token (hidden): ');
+    } finally {
+      terminal.restore();
+    }
   });
 
   it('ONB-RESUME-01: resumes a lost enrollment response after invitation expiry with the same operation identity and exactly one enrollment', async () => {
