@@ -623,6 +623,32 @@ describe('onboard CLI (RFC-0001 slice 1)', () => {
     }
   });
 
+  it('ONB-PROMPT-02: a stage_local failure surfaces its one-line reason on the onboard terminal while the public status stays interruption-shaped', async () => {
+    const test = fixture();
+    test.dependencies.bootstrap = {
+      ...test.dependencies.bootstrap,
+      observeGranolaRecordOwner: async () => {
+        throw new Error('granola record owner observation refused');
+      },
+    };
+    const result = await command(
+      onboardArgv({
+        configPath: test.configPath,
+        stateDirectory: test.stateDirectory,
+        invitationPath: test.invitation,
+        authorityPin: test.authority.pin,
+      }),
+      test.dependencies,
+    );
+    expect(result.status).toBe(0);
+    const report = parseJson(result.stdout);
+    expect(report['status']).toBe('retryable');
+    expect(report['reason_code']).toBe('stage_local_interrupted');
+    expect(result.stderr).toContain(
+      'granola record owner observation refused',
+    );
+  });
+
   it('ONB-RESUME-01: resumes a lost enrollment response after invitation expiry with the same operation identity and exactly one enrollment', async () => {
     const test = fixture();
     const argv = onboardArgv({

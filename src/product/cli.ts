@@ -3063,33 +3063,44 @@ async function runOnboardCommand(
       run: async () => {
         const authorityDescriptor =
           await ensureAcceptedAuthorityDescriptor();
-        await captured(
-          "onboard bootstrap",
-          [
-            "bootstrap",
-            "--config",
-            configPath,
-            "--state-dir",
-            stateDirectory,
-            "--owner-email",
-            parsed.ownerEmail!,
-            "--slack-channel-id",
-            parsed.slackChannelId!,
-            "--slack-reviewer-user-id",
-            parsed.slackReviewerUserId!,
-            "--slack-reviewer-name",
-            parsed.slackReviewerName!,
-            "--invitation",
-            parsed.invitationPath!,
-            "--authority-pin",
-            parsed.authorityPin!,
-            "--allow-exportable-software-key",
-            ...(parsed.authorityCaPath === undefined
-              ? []
-              : ["--authority-ca", parsed.authorityCaPath]),
-          ],
-          preparedBootstrapDependencies(authorityDescriptor),
-        );
+        try {
+          await captured(
+            "onboard bootstrap",
+            [
+              "bootstrap",
+              "--config",
+              configPath,
+              "--state-dir",
+              stateDirectory,
+              "--owner-email",
+              parsed.ownerEmail!,
+              "--slack-channel-id",
+              parsed.slackChannelId!,
+              "--slack-reviewer-user-id",
+              parsed.slackReviewerUserId!,
+              "--slack-reviewer-name",
+              parsed.slackReviewerName!,
+              "--invitation",
+              parsed.invitationPath!,
+              "--authority-pin",
+              parsed.authorityPin!,
+              "--allow-exportable-software-key",
+              ...(parsed.authorityCaPath === undefined
+                ? []
+                : ["--authority-ca", parsed.authorityCaPath]),
+            ],
+            preparedBootstrapDependencies(authorityDescriptor),
+          );
+        } catch (error) {
+          // The wrapped child's stdout/stderr are capture buffers, so its
+          // one-line failure reason would otherwise vanish with the capture;
+          // mirror it to the invoking terminal before recording the
+          // interruption.
+          promptTerminal.write(
+            `${error instanceof Error ? error.message : String(error)}\n`,
+          );
+          throw error;
+        }
         try {
           return {
             result: "succeeded",
