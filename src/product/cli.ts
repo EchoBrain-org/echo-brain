@@ -2032,6 +2032,10 @@ async function readHiddenCredential(
   return await new Promise<string>((resolve, reject) => {
     let value = "";
     let settled = false;
+    // Terminal escape sequences (bracketed-paste markers, cursor keys) are
+    // control traffic, never part of a secret; skip ESC-led CSI/SS3
+    // sequences through their final byte, across chunk boundaries.
+    let escapeState: "none" | "escape" | "sequence" = "none";
     const finish = (error?: Error) => {
       if (settled) return;
       settled = true;
@@ -2044,6 +2048,19 @@ async function readHiddenCredential(
     };
     const onData = (chunk: Buffer | string) => {
       for (const character of chunk.toString("utf8")) {
+        if (escapeState === "escape") {
+          escapeState =
+            character === "[" || character === "O" ? "sequence" : "none";
+          continue;
+        }
+        if (escapeState === "sequence") {
+          if (character >= "@" && character <= "~") escapeState = "none";
+          continue;
+        }
+        if (character.charCodeAt(0) === 27) {
+          escapeState = "escape";
+          continue;
+        }
         if (character === "\u0003" || character === "\u0004") {
           finish(new Error(`${label} entry was cancelled`));
           return;

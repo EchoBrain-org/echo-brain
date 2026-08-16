@@ -623,6 +623,37 @@ describe('onboard CLI (RFC-0001 slice 1)', () => {
     }
   });
 
+  it('ONB-PROMPT-03: bracketed-paste wrapped credentials are read as the bare token', async () => {
+    const test = fixture();
+    test.dependencies.bootstrap = {
+      observeGranolaRecordOwner:
+        test.dependencies.bootstrap!.observeGranolaRecordOwner!,
+    };
+    // Terminal emulators wrap pastes in ESC[200~ ... ESC[201~ while
+    // bracketed paste mode is active; the hidden reader must not retain the
+    // markers in the secret.
+    const terminal = simulatedTerminalStdin([
+      `[200~${GRANOLA_TOKEN}[201~\r`,
+      `[200~${SLACK_TOKEN}[201~\r`,
+    ]);
+    try {
+      const result = await command(
+        onboardArgv({
+          configPath: test.configPath,
+          stateDirectory: test.stateDirectory,
+          invitationPath: test.invitation,
+          authorityPin: test.authority.pin,
+        }),
+        test.dependencies,
+      );
+      expect(result.stderr).not.toContain('not a valid API token');
+      expect(result.status).toBe(0);
+      expect(parseJson(result.stdout)['status']).toBe('ready');
+    } finally {
+      terminal.restore();
+    }
+  });
+
   it('ONB-PROMPT-02: a stage_local failure surfaces its one-line reason on the onboard terminal while the public status stays interruption-shaped', async () => {
     const test = fixture();
     test.dependencies.bootstrap = {
