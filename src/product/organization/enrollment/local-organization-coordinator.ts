@@ -287,10 +287,23 @@ export class LocalOrganizationCoordinator {
       }),
     );
     this.options.state.saveEnrollmentReceipt(response.enrollment_receipt);
-    return this.options.state.acceptAccessState(
-      response.access_state,
-      this.verificationPolicy(),
-    );
+    const policy = this.verificationPolicy();
+    if (
+      response.access_state.status === 'active' &&
+      Date.parse(response.access_state.valid_until) <= Date.parse(policy.now)
+    ) {
+      // An exact response-loss replay can return the original initial lease
+      // after its validity window has closed. The enrollment receipt is the
+      // durable append-only fact: record the replayed state as history at its
+      // own evaluation instant, then require a fresh lease before reporting
+      // access. The trusted-time watermark only moves forward from here.
+      this.options.state.acceptAccessState(response.access_state, {
+        ...policy,
+        now: response.access_state.evaluated_at,
+      });
+      return await this.refreshAccess();
+    }
+    return this.options.state.acceptAccessState(response.access_state, policy);
   }
 
   async refreshAccess(): Promise<OrganizationInstallationAccessDecisionV1> {

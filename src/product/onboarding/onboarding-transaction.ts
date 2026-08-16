@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto';
+import { canonicalSha256 } from '@echo-brain/federation-protocol';
 
 /**
  * Durable resumable onboarding transaction (RFC-0001, Slice 1).
@@ -16,7 +17,6 @@ export const ONBOARDING_STEPS = [
   'stage_local',
   'enroll',
   'service_install',
-  'service_start',
   'doctor',
   'readiness',
   'activate',
@@ -49,6 +49,10 @@ const PUBLIC_STATES = [
 
 export type OnboardingPublicState = (typeof PUBLIC_STATES)[number];
 
+const ONBOARDING_RESULTS = ['ready', 'denied', 'abandoned', 'preserved'] as const;
+
+export type OnboardingResult = (typeof ONBOARDING_RESULTS)[number];
+
 export interface OnboardingStepRecord {
   state: OnboardingStepState;
   attempt_count: number;
@@ -70,6 +74,7 @@ export interface OnboardingTransactionV1 {
   kind: 'echo-onboarding-transaction';
   flow_id: string;
   profile_id: string;
+  input_sha256: string;
   config_path: string;
   state_dir: string;
   steps: Record<OnboardingStepName, OnboardingStepRecord>;
@@ -79,12 +84,14 @@ export interface OnboardingTransactionV1 {
   started_at: string;
   updated_at: string;
   finished_at: string | null;
+  terminal_result: OnboardingResult | null;
 }
 
 export type OnboardingTransactionErrorCode =
   | 'invalid_identity'
   | 'invalid_transaction'
-  | 'illegal_transition';
+  | 'illegal_transition'
+  | 'busy';
 
 export class OnboardingTransactionError extends Error {
   readonly code: OnboardingTransactionErrorCode;
@@ -142,8 +149,21 @@ function optionalSha256(value: unknown, label: string): string | null {
   return value;
 }
 
+function sha256Reference(value: unknown, label: string): string {
+  const parsed = optionalSha256(value, label);
+  if (parsed === null) {
+    fail('invalid_transaction', `${label} is required`);
+  }
+  return parsed;
+}
+
 function isoInstant(value: unknown, label: string): string {
-  if (typeof value !== 'string' || !ISO_INSTANT_PATTERN.test(value)) {
+  if (
+    typeof value !== 'string' ||
+    !ISO_INSTANT_PATTERN.test(value) ||
+    Number.isNaN(Date.parse(value)) ||
+    new Date(value).toISOString() !== value
+  ) {
     fail('invalid_transaction', `${label} must be a UTC ISO instant`);
   }
   return value;
@@ -169,14 +189,19 @@ function booleanField(value: unknown, label: string): boolean {
 }
 
 function requiredIdentityField(value: unknown, label: string): string {
-  if (typeof value !== 'string' || value.length === 0) {
-    fail('invalid_identity', `${label} must be a non-empty string`);
+  if (typeof value !== 'string' || !SAFE_REFERENCE_PATTERN.test(value)) {
+    fail('invalid_identity', `${label} must be a bounded safe reference`);
   }
   return value;
 }
 
 function digestReference(prefix: string, material: string): string {
   return `${prefix}-${createHash('sha256').update(material).digest('hex')}`;
+}
+
+/** One canonical digest implementation for all onboarding-owned documents. */
+export function onboardingDocumentSha256(value: unknown): string {
+  return canonicalSha256(value);
 }
 
 export interface OnboardingIdentityInput {
@@ -221,20 +246,23 @@ export function deriveOnboardingIdentity(
   ) {
     fail('invalid_identity', 'enrollment grant digest must be a sha256 reference');
   }
-  const profileMaterial = [
-    'echo-onboarding-profile-identity',
-    authorityId,
-    organizationId,
-    membershipId,
-  ].join('\n');
-  const flowMaterial = [
-    'echo-onboarding-flow-identity',
-    authorityId,
-    organizationId,
-    membershipId,
-    invitationCommandId,
-    input.enrollmentGrantSha256,
-  ].join('\n');
+  // Structured JSON is the complete preimage. Delimiter-joined strings admit
+  // tuple collisions when a field contains the delimiter and must never own a
+  // durable identity.
+  const profileMaterial = JSON.stringify({
+    kind: 'echo-onboarding-profile-identity-v1',
+    authority_id: authorityId,
+    organization_id: organizationId,
+    membership_id: membershipId,
+  });
+  const flowMaterial = JSON.stringify({
+    kind: 'echo-onboarding-flow-identity-v1',
+    authority_id: authorityId,
+    organization_id: organizationId,
+    membership_id: membershipId,
+    invitation_command_id: invitationCommandId,
+    enrollment_grant_sha256: input.enrollmentGrantSha256,
+  });
   return {
     profile_id: digestReference('prf', profileMaterial),
     flow_id: digestReference('flw', flowMaterial),
@@ -243,6 +271,7 @@ export function deriveOnboardingIdentity(
 
 export interface CreateOnboardingTransactionInput {
   identity: OnboardingIdentity;
+  inputSha256: string;
   configPath: string;
   stateDirectory: string;
   now: string;
@@ -267,6 +296,7 @@ export function createOnboardingTransaction(
     kind: 'echo-onboarding-transaction',
     flow_id: input.identity.flow_id,
     profile_id: input.identity.profile_id,
+    input_sha256: sha256Reference(input.inputSha256, 'onboarding input digest'),
     config_path: input.configPath,
     state_dir: input.stateDirectory,
     steps,
@@ -282,6 +312,7 @@ export function createOnboardingTransaction(
     started_at: now,
     updated_at: now,
     finished_at: null,
+    terminal_result: null,
   });
 }
 
@@ -320,18 +351,60 @@ function parseStepRecord(value: unknown, label: string): OnboardingStepRecord {
     step['operation_id'] === null
       ? null
       : safeReference(step['operation_id'], `${label} operation id`);
+  const preparedRequestSha256 = optionalSha256(
+    step['prepared_request_sha256'],
+    `${label} prepared request digest`,
+  );
+  const acceptedReceiptSha256 = optionalSha256(
+    step['accepted_receipt_sha256'],
+    `${label} accepted receipt digest`,
+  );
+  if (state === 'not_started') {
+    if (
+      attempts !== 0 ||
+      operationId !== null ||
+      preparedRequestSha256 !== null ||
+      acceptedReceiptSha256 !== null
+    ) {
+      fail('invalid_transaction', `${label} not_started state carries effect evidence`);
+    }
+  } else if (operationId === null) {
+    if (
+      state !== 'waiting_for_user' &&
+      state !== 'waiting_for_administrator'
+    ) {
+      fail('invalid_transaction', `${label} state requires an operation identity`);
+    }
+    if (
+      attempts !== 0 ||
+      preparedRequestSha256 !== null ||
+      acceptedReceiptSha256 !== null
+    ) {
+      fail('invalid_transaction', `${label} unprepared pause carries effect evidence`);
+    }
+  } else {
+    if (attempts < 1 || preparedRequestSha256 === null) {
+      fail(
+        'invalid_transaction',
+        `${label} prepared state requires an attempt and request digest`,
+      );
+    }
+    if (state === 'succeeded' && acceptedReceiptSha256 === null) {
+      fail('invalid_transaction', `${label} succeeded state requires a receipt digest`);
+    }
+    if (state !== 'succeeded' && acceptedReceiptSha256 !== null) {
+      fail(
+        'invalid_transaction',
+        `${label} may retain an accepted receipt only after success`,
+      );
+    }
+  }
   return {
     state: state as OnboardingStepState,
     attempt_count: attempts,
     operation_id: operationId,
-    prepared_request_sha256: optionalSha256(
-      step['prepared_request_sha256'],
-      `${label} prepared request digest`,
-    ),
-    accepted_receipt_sha256: optionalSha256(
-      step['accepted_receipt_sha256'],
-      `${label} accepted receipt digest`,
-    ),
+    prepared_request_sha256: preparedRequestSha256,
+    accepted_receipt_sha256: acceptedReceiptSha256,
   };
 }
 
@@ -385,6 +458,21 @@ function assertLegalTransition(
   }
 }
 
+function assertMutableInstant(
+  transaction: OnboardingTransactionV1,
+  now: string,
+): void {
+  if (transaction.finished_at !== null) {
+    fail(
+      'illegal_transition',
+      'onboarding transaction is finished and immutable',
+    );
+  }
+  if (Date.parse(now) < Date.parse(transaction.updated_at)) {
+    fail('illegal_transition', 'onboarding transaction time cannot move backward');
+  }
+}
+
 /**
  * One legal step transition. The operation identity is minted exactly once on
  * the first preparation and is immutable until the step is terminal; a resume
@@ -396,6 +484,7 @@ export function transitionOnboardingStep(
   input: OnboardingStepTransitionInput,
 ): OnboardingTransactionV1 {
   const now = isoInstant(input.now, 'transaction update instant');
+  assertMutableInstant(transaction, now);
   const current = transaction.steps[stepName];
   if (current === undefined) {
     fail('invalid_transaction', `unknown onboarding step: ${stepName}`);
@@ -424,21 +513,27 @@ export function transitionOnboardingStep(
       `onboarding step ${stepName} operation id`,
     );
     next.attempt_count = current.attempt_count + 1;
-    if (input.preparedRequestSha256 !== undefined) {
-      if (
-        current.prepared_request_sha256 !== null &&
-        current.prepared_request_sha256 !== input.preparedRequestSha256
-      ) {
-        fail(
-          'illegal_transition',
-          `onboarding step ${stepName} prepared request digest is immutable`,
-        );
-      }
-      next.prepared_request_sha256 = optionalSha256(
-        input.preparedRequestSha256,
-        `onboarding step ${stepName} prepared request digest`,
+    const effectiveRequestSha256 =
+      input.preparedRequestSha256 ?? current.prepared_request_sha256;
+    if (effectiveRequestSha256 === null) {
+      fail(
+        'invalid_transaction',
+        `onboarding step ${stepName} requires a prepared request digest`,
       );
     }
+    if (
+      current.prepared_request_sha256 !== null &&
+      current.prepared_request_sha256 !== effectiveRequestSha256
+    ) {
+      fail(
+        'illegal_transition',
+        `onboarding step ${stepName} prepared request digest is immutable`,
+      );
+    }
+    next.prepared_request_sha256 = optionalSha256(
+      effectiveRequestSha256,
+      `onboarding step ${stepName} prepared request digest`,
+    );
   } else if (input.operationId !== undefined) {
     fail(
       'invalid_transaction',
@@ -456,6 +551,11 @@ export function transitionOnboardingStep(
       input.acceptedReceiptSha256,
       `onboarding step ${stepName} accepted receipt digest`,
     );
+  } else if (input.to === 'succeeded') {
+    fail(
+      'invalid_transaction',
+      `onboarding step ${stepName} requires an accepted receipt digest`,
+    );
   }
   return parseOnboardingTransaction({
     ...transaction,
@@ -472,10 +572,12 @@ export function markOnboardingEffect(
   if (!(effect in transaction.effects)) {
     fail('invalid_transaction', `unknown onboarding effect: ${String(effect)}`);
   }
+  const instant = isoInstant(now, 'transaction update instant');
+  assertMutableInstant(transaction, instant);
   return parseOnboardingTransaction({
     ...transaction,
     effects: { ...transaction.effects, [effect]: true },
-    updated_at: isoInstant(now, 'transaction update instant'),
+    updated_at: instant,
   });
 }
 
@@ -533,12 +635,16 @@ export function presentOnboardingStatus(
   } else if (waitingUser !== undefined) {
     status = 'waiting_for_user';
     step = waitingUser;
-  } else if (unfinished === undefined) {
+  } else if (
+    unfinished === undefined &&
+    transaction.finished_at !== null &&
+    transaction.terminal_result === 'ready'
+  ) {
     status = 'ready';
     step = ONBOARDING_STEPS[ONBOARDING_STEPS.length - 1];
   } else {
     status = 'retryable';
-    step = unfinished;
+    step = unfinished ?? ONBOARDING_STEPS[ONBOARDING_STEPS.length - 1];
   }
   return {
     status,
@@ -549,15 +655,13 @@ export function presentOnboardingStatus(
   };
 }
 
-const ONBOARDING_RESULTS = ['ready', 'denied', 'abandoned', 'preserved'] as const;
-
-export type OnboardingResult = (typeof ONBOARDING_RESULTS)[number];
-
 export interface OnboardingReceiptV1 {
   schema_version: 1;
   kind: 'echo-onboarding-receipt';
   flow_id: string;
   profile_id: string;
+  input_sha256: string;
+  transaction_sha256: string;
   result: OnboardingResult;
   reason_code: string;
   effects: OnboardingEffects;
@@ -574,6 +678,8 @@ export function parseOnboardingReceipt(value: unknown): OnboardingReceiptV1 {
       'kind',
       'flow_id',
       'profile_id',
+      'input_sha256',
+      'transaction_sha256',
       'result',
       'reason_code',
       'effects',
@@ -596,9 +702,10 @@ export function parseOnboardingReceipt(value: unknown): OnboardingReceiptV1 {
     fail('invalid_transaction', 'onboarding receipt result is unknown');
   }
   const reasonCode = receipt['reason_code'];
-  if (typeof reasonCode !== 'string' || reasonCode.length === 0) {
-    fail('invalid_transaction', 'onboarding receipt reason code is required');
-  }
+  const parsedReasonCode = safeReference(
+    reasonCode,
+    'onboarding receipt reason code',
+  );
   const effects = record(receipt['effects'], 'onboarding receipt effects');
   exactKeys(
     effects,
@@ -611,6 +718,11 @@ export function parseOnboardingReceipt(value: unknown): OnboardingReceiptV1 {
     ],
     'onboarding receipt effects',
   );
+  const startedAt = isoInstant(receipt['started_at'], 'receipt start instant');
+  const finishedAt = isoInstant(receipt['finished_at'], 'receipt finish instant');
+  if (Date.parse(finishedAt) < Date.parse(startedAt)) {
+    fail('invalid_transaction', 'onboarding receipt finishes before it starts');
+  }
   return {
     schema_version: 1,
     kind: 'echo-onboarding-receipt',
@@ -619,8 +731,16 @@ export function parseOnboardingReceipt(value: unknown): OnboardingReceiptV1 {
       receipt['profile_id'],
       'onboarding receipt profile id',
     ),
+    input_sha256: sha256Reference(
+      receipt['input_sha256'],
+      'onboarding receipt input digest',
+    ),
+    transaction_sha256: sha256Reference(
+      receipt['transaction_sha256'],
+      'onboarding receipt transaction digest',
+    ),
     result: result as OnboardingResult,
-    reason_code: reasonCode,
+    reason_code: parsedReasonCode,
     effects: {
       local_mutation: booleanField(effects['local_mutation'], 'local mutation'),
       central_enrollment: booleanField(
@@ -637,8 +757,8 @@ export function parseOnboardingReceipt(value: unknown): OnboardingReceiptV1 {
       ),
       product_work: booleanField(effects['product_work'], 'product work'),
     },
-    started_at: isoInstant(receipt['started_at'], 'receipt start instant'),
-    finished_at: isoInstant(receipt['finished_at'], 'receipt finish instant'),
+    started_at: startedAt,
+    finished_at: finishedAt,
   };
 }
 
@@ -660,6 +780,7 @@ export function finishOnboardingTransaction(
       'onboarding transaction is already finished and immutable',
     );
   }
+  assertMutableInstant(transaction, finishedAt);
   if (
     result === 'ready' &&
     ONBOARDING_STEPS.some(
@@ -671,27 +792,52 @@ export function finishOnboardingTransaction(
       'onboarding cannot report ready before every step succeeded',
     );
   }
+  const parsedReasonCode = safeReference(reasonCode, 'onboarding finish reason code');
   const publicState: OnboardingPublicState =
     result === 'abandoned' ? 'preserved' : result;
   const finished = parseOnboardingTransaction({
     ...transaction,
     last_public_state: publicState,
-    last_reason_code: reasonCode,
+    last_reason_code: parsedReasonCode,
     updated_at: finishedAt,
     finished_at: finishedAt,
+    terminal_result: result,
   });
-  const receipt = parseOnboardingReceipt({
+  return {
+    transaction: finished,
+    receipt: onboardingReceiptForFinishedTransaction(finished),
+  };
+}
+
+/**
+ * Deterministically reconstruct the only legal terminal receipt. This is the
+ * recovery seam for a crash after the terminal journal was published but
+ * before its write-once receipt was linked into place.
+ */
+export function onboardingReceiptForFinishedTransaction(
+  transaction: OnboardingTransactionV1,
+): OnboardingReceiptV1 {
+  const validated = parseOnboardingTransaction(transaction);
+  if (
+    validated.finished_at === null ||
+    validated.terminal_result === null ||
+    validated.last_reason_code === null
+  ) {
+    fail('invalid_transaction', 'unfinished onboarding has no terminal receipt');
+  }
+  return parseOnboardingReceipt({
     schema_version: 1,
     kind: 'echo-onboarding-receipt',
-    flow_id: finished.flow_id,
-    profile_id: finished.profile_id,
-    result,
-    reason_code: reasonCode,
-    effects: { ...finished.effects },
-    started_at: finished.started_at,
-    finished_at: finishedAt,
+    flow_id: validated.flow_id,
+    profile_id: validated.profile_id,
+    input_sha256: validated.input_sha256,
+    transaction_sha256: onboardingDocumentSha256(validated),
+    result: validated.terminal_result,
+    reason_code: validated.last_reason_code,
+    effects: { ...validated.effects },
+    started_at: validated.started_at,
+    finished_at: validated.finished_at,
   });
-  return { transaction: finished, receipt };
 }
 
 export function parseOnboardingTransaction(
@@ -705,6 +851,7 @@ export function parseOnboardingTransaction(
       'kind',
       'flow_id',
       'profile_id',
+      'input_sha256',
       'config_path',
       'state_dir',
       'steps',
@@ -714,6 +861,7 @@ export function parseOnboardingTransaction(
       'started_at',
       'updated_at',
       'finished_at',
+      'terminal_result',
     ],
     'onboarding transaction',
   );
@@ -728,6 +876,21 @@ export function parseOnboardingTransaction(
   const steps = {} as Record<OnboardingStepName, OnboardingStepRecord>;
   for (const step of ONBOARDING_STEPS) {
     steps[step] = parseStepRecord(stepsRecord[step], `onboarding step ${step}`);
+  }
+  let frontierSeen = false;
+  for (const step of ONBOARDING_STEPS) {
+    const state = steps[step].state;
+    if (!frontierSeen && state === 'succeeded') continue;
+    if (!frontierSeen) {
+      frontierSeen = true;
+      continue;
+    }
+    if (state !== 'not_started') {
+      fail(
+        'invalid_transaction',
+        'onboarding steps must form one succeeded prefix and one active frontier',
+      );
+    }
   }
   const effectsRecord = record(transaction['effects'], 'onboarding effects');
   exactKeys(
@@ -750,10 +913,92 @@ export function parseOnboardingTransaction(
     fail('invalid_transaction', 'onboarding public state is unknown');
   }
   const lastReasonCode = transaction['last_reason_code'];
-  if (lastReasonCode !== null && typeof lastReasonCode !== 'string') {
-    fail('invalid_transaction', 'onboarding reason code must be a string');
-  }
+  const parsedReasonCode =
+    lastReasonCode === null
+      ? null
+      : safeReference(lastReasonCode, 'onboarding reason code');
   const finishedAt = transaction['finished_at'];
+  const terminalResult = transaction['terminal_result'];
+  if (
+    terminalResult !== null &&
+    (typeof terminalResult !== 'string' ||
+      !ONBOARDING_RESULTS.includes(terminalResult as OnboardingResult))
+  ) {
+    fail('invalid_transaction', 'onboarding terminal result is unknown');
+  }
+  const startedAt = isoInstant(
+    transaction['started_at'],
+    'transaction start instant',
+  );
+  const updatedAt = isoInstant(
+    transaction['updated_at'],
+    'transaction update instant',
+  );
+  const parsedFinishedAt =
+    finishedAt === null
+      ? null
+      : isoInstant(finishedAt, 'transaction finish instant');
+  if (Date.parse(updatedAt) < Date.parse(startedAt)) {
+    fail('invalid_transaction', 'onboarding transaction update precedes its start');
+  }
+  if (
+    parsedFinishedAt !== null &&
+    (parsedFinishedAt !== updatedAt || Date.parse(parsedFinishedAt) < Date.parse(startedAt))
+  ) {
+    fail(
+      'invalid_transaction',
+      'onboarding transaction finish must equal its final update',
+    );
+  }
+  if ((parsedFinishedAt === null) !== (terminalResult === null)) {
+    fail(
+      'invalid_transaction',
+      'onboarding terminal result and finish instant must be committed together',
+    );
+  }
+  if (parsedFinishedAt === null) {
+    if (
+      lastPublicState === 'ready' ||
+      lastPublicState === 'denied' ||
+      lastPublicState === 'preserved'
+    ) {
+      fail('invalid_transaction', 'unfinished onboarding claims a terminal state');
+    }
+  } else {
+    if (parsedReasonCode === null) {
+      fail('invalid_transaction', 'finished onboarding requires a reason code');
+    }
+    const expectedPublicState: OnboardingPublicState =
+      terminalResult === 'abandoned' ? 'preserved' : terminalResult as OnboardingPublicState;
+    if (lastPublicState !== expectedPublicState) {
+      fail('invalid_transaction', 'finished onboarding public state conflicts');
+    }
+    if (
+      terminalResult === 'ready' &&
+      ONBOARDING_STEPS.some((step) => steps[step].state !== 'succeeded')
+    ) {
+      fail('invalid_transaction', 'ready onboarding has unfinished steps');
+    }
+    const expectedTerminalState =
+      terminalResult === 'denied'
+        ? 'terminal_denied'
+        : terminalResult === 'preserved'
+          ? 'terminal_preserved'
+          : terminalResult === 'abandoned'
+            ? 'terminal_abandoned'
+            : null;
+    if (
+      expectedTerminalState !== null &&
+      !ONBOARDING_STEPS.some(
+        (step) => steps[step].state === expectedTerminalState,
+      )
+    ) {
+      fail(
+        'invalid_transaction',
+        `${terminalResult} onboarding has no matching terminal step`,
+      );
+    }
+  }
   return {
     schema_version: 1,
     kind: 'echo-onboarding-transaction',
@@ -761,6 +1006,10 @@ export function parseOnboardingTransaction(
     profile_id: safeReference(
       transaction['profile_id'],
       'onboarding profile id',
+    ),
+    input_sha256: sha256Reference(
+      transaction['input_sha256'],
+      'onboarding input digest',
     ),
     config_path: absolutePath(
       transaction['config_path'],
@@ -791,15 +1040,10 @@ export function parseOnboardingTransaction(
       ),
     },
     last_public_state: lastPublicState as OnboardingPublicState | null,
-    last_reason_code: lastReasonCode,
-    started_at: isoInstant(transaction['started_at'], 'transaction start instant'),
-    updated_at: isoInstant(
-      transaction['updated_at'],
-      'transaction update instant',
-    ),
-    finished_at:
-      finishedAt === null
-        ? null
-        : isoInstant(finishedAt, 'transaction finish instant'),
+    last_reason_code: parsedReasonCode,
+    started_at: startedAt,
+    updated_at: updatedAt,
+    finished_at: parsedFinishedAt,
+    terminal_result: terminalResult as OnboardingResult | null,
   };
 }

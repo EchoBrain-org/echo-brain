@@ -178,9 +178,12 @@ function fixture() {
   const invitation = invitationPath(root, authority);
   const launchd = stoppedLaunchd();
   const authorityPaths: string[] = [];
+  const enrollmentRequests: OrganizationEnrollmentRequestV1[] = [];
+  const enrollmentIds: string[] = [];
   let enrollmentRequest: OrganizationEnrollmentRequestV1 | null = null;
   let enrollmentReceipt: OrganizationEnrollmentReceiptV1 | null = null;
   let accessState: OrganizationInstallationAccessStateV1 | null = null;
+  let currentNow = NOW;
   let loseNextEnrollmentResponse = false;
   let granolaCredentialReads = 0;
   let granolaOwnerObservations = 0;
@@ -216,7 +219,9 @@ function fixture() {
         enrollment_request: OrganizationEnrollmentRequestV1;
       };
       enrollmentRequest = body.enrollment_request;
+      enrollmentRequests.push(body.enrollment_request);
       const completion = await authority.complete(body.enrollment_request);
+      enrollmentIds.push(completion.enrollment_receipt.enrollment_id);
       enrollmentReceipt = completion.enrollment_receipt;
       accessState = completion.access_state;
       if (loseNextEnrollmentResponse) {
@@ -241,6 +246,7 @@ function fixture() {
         enrollmentReceipt,
         accessState,
         activeLeaseTtlMs,
+        currentNow,
       );
       return Response.json({ access_state: accessState });
     }
@@ -275,7 +281,7 @@ function fixture() {
         return SLACK_TOKEN;
       },
     },
-    now: () => NOW,
+    now: () => currentNow,
     operator: {
       launchctl: launchd.runner,
       platform: 'darwin',
@@ -304,6 +310,8 @@ function fixture() {
     invitation,
     launchd,
     authorityPaths,
+    enrollmentRequests,
+    enrollmentIds,
     adapterConstructions: () => adapterConstructions,
     granolaCredentialReads: () => granolaCredentialReads,
     granolaOwnerObservations: () => granolaOwnerObservations,
@@ -313,6 +321,9 @@ function fixture() {
     },
     loseNextEnrollmentResponse: () => {
       loseNextEnrollmentResponse = true;
+    },
+    setNow: (value: string) => {
+      currentNow = value;
     },
     dependencies,
   };
@@ -451,7 +462,10 @@ describe('internal-live employee bootstrap CLI', () => {
     expect(readFileSync(test.configPath, 'utf8')).toBe(configBeforeRetry);
     expect(test.authorityPaths.at(-1)).toBe('/v1/access-leases');
     expect(test.granolaCredentialReads()).toBe(1);
-    expect(test.granolaOwnerObservations()).toBe(2);
+    // A completed local enrollment request proves the owner-observation gate
+    // was already crossed. Resume refreshes Authority access without making
+    // the provider availability a second prerequisite.
+    expect(test.granolaOwnerObservations()).toBe(1);
     expect(test.slackCredentialReads()).toBe(1);
     expect(
       test.launchd.calls.every((args) => args[0] === 'print'),
@@ -480,7 +494,7 @@ describe('internal-live employee bootstrap CLI', () => {
     expect(test.granolaCredentialReads()).toBe(1);
     expect(test.granolaOwnerObservations()).toBe(1);
     expect(test.slackCredentialReads()).toBe(0);
-    expect(test.authorityPaths).toEqual([]);
+    expect(test.authorityPaths).toEqual(['/v1/authority-descriptor']);
     expect(test.adapterConstructions()).toBe(0);
     expect(
       existsSync(
@@ -489,7 +503,7 @@ describe('internal-live employee bootstrap CLI', () => {
     ).toBe(false);
   });
 
-  it('resumes an exact enrollment after the Authority response is lost', async () => {
+  it('resumes the exact committed enrollment after response loss even when the invitation later expires', async () => {
     const test = fixture();
     const argv = bootstrapArgv({
       configPath: test.configPath,
@@ -509,6 +523,7 @@ describe('internal-live employee bootstrap CLI', () => {
     expect(test.granolaOwnerObservations()).toBe(1);
     expect(test.slackCredentialReads()).toBe(1);
 
+    test.setNow('2026-07-22T01:01:00.000Z');
     const resumed = await command(argv, test.dependencies);
     expect(resumed.status, resumed.stderr).toBe(0);
     expect(JSON.parse(resumed.stdout)).toMatchObject({
@@ -523,7 +538,12 @@ describe('internal-live employee bootstrap CLI', () => {
       product_work_started: false,
     });
     expect(test.granolaCredentialReads()).toBe(1);
-    expect(test.granolaOwnerObservations()).toBe(2);
+    expect(test.granolaOwnerObservations()).toBe(1);
+    expect(test.enrollmentRequests).toHaveLength(2);
+    expect(canonicalJson(test.enrollmentRequests[0])).toBe(
+      canonicalJson(test.enrollmentRequests[1]),
+    );
+    expect(new Set(test.enrollmentIds).size).toBe(1);
     expect(test.adapterConstructions()).toBe(0);
     expect(
       test.launchd.calls.every((args) => args[0] === 'print'),

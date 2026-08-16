@@ -136,7 +136,9 @@ describe('product hermeticity setup', () => {
     const offenders = productSourceFiles(join(REPO_ROOT, 'src/product')).filter(
       (path) => {
         const source = readFileSync(path, 'utf8');
-        return /\bDate\.now\s*\(|\bnew\s+Date\s*\(/.test(source);
+        // Only argless `new Date()` reads the wall clock; `new Date(value)`
+        // parses a caller-supplied instant and stays allowed everywhere.
+        return /\bDate\.now\s*\(|\bnew\s+Date\s*\(\s*\)/.test(source);
       },
     );
     const productRoot = join(REPO_ROOT, 'src/product');

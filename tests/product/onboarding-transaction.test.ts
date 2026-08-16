@@ -4,6 +4,7 @@ import {
   OnboardingTransactionError,
   createOnboardingTransaction,
   deriveOnboardingIdentity,
+  finishOnboardingTransaction,
   markOnboardingEffect,
   parseOnboardingTransaction,
   presentOnboardingStatus,
@@ -20,14 +21,37 @@ const IDENTITY_INPUT = {
 };
 
 const NOW = '2026-08-15T12:00:00.000Z';
+const INPUT_SHA256 = `sha256:${'b'.repeat(64)}`;
+const REQUEST_SHA256 = `sha256:${'c'.repeat(64)}`;
+const RECEIPT_SHA256 = `sha256:${'d'.repeat(64)}`;
 
 function freshTransaction() {
   return createOnboardingTransaction({
     identity: deriveOnboardingIdentity(IDENTITY_INPUT),
+    inputSha256: INPUT_SHA256,
     configPath: '/private/example/config.json',
     stateDirectory: '/private/example/state',
     now: NOW,
   });
+}
+
+function transactionAt(stepName: (typeof ONBOARDING_STEPS)[number]) {
+  let transaction = freshTransaction();
+  for (const step of ONBOARDING_STEPS) {
+    if (step === stepName) break;
+    transaction = transitionOnboardingStep(transaction, step, {
+      to: 'prepared',
+      operationId: `onb-prefix-${step}`,
+      preparedRequestSha256: REQUEST_SHA256,
+      now: LATER,
+    });
+    transaction = transitionOnboardingStep(transaction, step, {
+      to: 'succeeded',
+      acceptedReceiptSha256: RECEIPT_SHA256,
+      now: LATER,
+    });
+  }
+  return transaction;
 }
 
 describe('deriveOnboardingIdentity', () => {
@@ -60,6 +84,15 @@ describe('deriveOnboardingIdentity', () => {
       expect(value).not.toContain(IDENTITY_INPUT.membershipId);
       expect(value).not.toContain('sha256:');
     }
+  });
+
+  it('rejects delimiter-bearing identity fields instead of admitting tuple collisions', () => {
+    expect(() =>
+      deriveOnboardingIdentity({
+        ...IDENTITY_INPUT,
+        authorityId: 'auth_a\norg_b',
+      }),
+    ).toThrow(/safe reference/u);
   });
 });
 
@@ -131,25 +164,114 @@ describe('parseOnboardingTransaction', () => {
       /timestamp|instant/iu,
     );
   });
+
+  it('rejects an impossible timestamp and a clock rewind', () => {
+    const impossible = JSON.parse(JSON.stringify(freshTransaction()));
+    impossible.updated_at = '2026-02-30T12:00:00.000Z';
+    expect(() => parseOnboardingTransaction(impossible)).toThrow(/instant/u);
+
+    const rewound = JSON.parse(JSON.stringify(freshTransaction()));
+    rewound.updated_at = '2026-08-15T11:59:59.000Z';
+    expect(() => parseOnboardingTransaction(rewound)).toThrow(/precedes/u);
+  });
+
+  it('rejects succeeded state without its prepared intent and receipt evidence', () => {
+    const poisoned = JSON.parse(JSON.stringify(freshTransaction()));
+    poisoned.steps.classify.state = 'succeeded';
+    expect(() => parseOnboardingTransaction(poisoned)).toThrow(
+      /operation identity|receipt digest/u,
+    );
+  });
+
+  it('rejects multiple frontiers and a succeeded step after an unfinished step', () => {
+    const twoFrontiers = JSON.parse(
+      JSON.stringify(transactionAt('doctor')),
+    );
+    twoFrontiers.steps.doctor = {
+      state: 'prepared',
+      attempt_count: 1,
+      operation_id: 'onb-doctor',
+      prepared_request_sha256: REQUEST_SHA256,
+      accepted_receipt_sha256: null,
+    };
+    twoFrontiers.steps.readiness = {
+      state: 'prepared',
+      attempt_count: 1,
+      operation_id: 'onb-readiness',
+      prepared_request_sha256: REQUEST_SHA256,
+      accepted_receipt_sha256: null,
+    };
+    expect(() => parseOnboardingTransaction(twoFrontiers)).toThrow(
+      OnboardingTransactionError,
+    );
+
+    const outOfOrder = JSON.parse(JSON.stringify(transactionAt('doctor')));
+    outOfOrder.steps.readiness = {
+      state: 'succeeded',
+      attempt_count: 1,
+      operation_id: 'onb-readiness',
+      prepared_request_sha256: REQUEST_SHA256,
+      accepted_receipt_sha256: RECEIPT_SHA256,
+    };
+    expect(() => parseOnboardingTransaction(outOfOrder)).toThrow(
+      OnboardingTransactionError,
+    );
+  });
+
+  it('rejects terminal result, public-state, and timestamp half-commits', () => {
+    let denied = transactionAt('verify_trust');
+    denied = transitionOnboardingStep(denied, 'verify_trust', {
+      to: 'prepared',
+      operationId: 'onb-denied',
+      preparedRequestSha256: REQUEST_SHA256,
+      now: LATER,
+    });
+    denied = transitionOnboardingStep(denied, 'verify_trust', {
+      to: 'terminal_denied',
+      now: LATER,
+    });
+    const terminal = finishOnboardingTransaction(
+      denied,
+      'denied',
+      'pin_mismatch',
+      LATER,
+    ).transaction;
+    const mismatchedResult = JSON.parse(JSON.stringify(terminal));
+    mismatchedResult.terminal_result = 'preserved';
+    mismatchedResult.last_public_state = 'preserved';
+    expect(() => parseOnboardingTransaction(mismatchedResult)).toThrow(
+      OnboardingTransactionError,
+    );
+
+    const mismatchedPublic = JSON.parse(JSON.stringify(terminal));
+    mismatchedPublic.last_public_state = 'retryable';
+    expect(() => parseOnboardingTransaction(mismatchedPublic)).toThrow(
+      OnboardingTransactionError,
+    );
+
+    const halfCommitted = JSON.parse(JSON.stringify(freshTransaction()));
+    halfCommitted.finished_at = LATER;
+    expect(() => parseOnboardingTransaction(halfCommitted)).toThrow(
+      OnboardingTransactionError,
+    );
+  });
 });
 
 const LATER = '2026-08-15T12:05:00.000Z';
 
 describe('transitionOnboardingStep', () => {
   it('prepares a not_started step with a new operation identity', () => {
-    const prepared = transitionOnboardingStep(freshTransaction(), 'enroll', {
+    const prepared = transitionOnboardingStep(transactionAt('enroll'), 'enroll', {
       to: 'prepared',
       operationId: 'onb-op-1',
-      preparedRequestSha256:
-        `sha256:${'c'.repeat(64)}`,
+      preparedRequestSha256: REQUEST_SHA256,
       now: LATER,
     });
     expect(prepared.steps.enroll).toEqual({
       state: 'prepared',
       attempt_count: 1,
       operation_id: 'onb-op-1',
-      prepared_request_sha256:
-        `sha256:${'c'.repeat(64)}`,
+      prepared_request_sha256: REQUEST_SHA256,
       accepted_receipt_sha256: null,
     });
     expect(prepared.updated_at).toBe(LATER);
@@ -157,7 +279,7 @@ describe('transitionOnboardingStep', () => {
 
   it('refuses to prepare without an operation identity', () => {
     expect(() =>
-      transitionOnboardingStep(freshTransaction(), 'enroll', {
+      transitionOnboardingStep(transactionAt('enroll'), 'enroll', {
         to: 'prepared',
         now: LATER,
       }),
@@ -165,21 +287,24 @@ describe('transitionOnboardingStep', () => {
   });
 
   it('keeps the operation identity immutable until the step is terminal', () => {
-    const prepared = transitionOnboardingStep(freshTransaction(), 'enroll', {
+    const prepared = transitionOnboardingStep(transactionAt('enroll'), 'enroll', {
       to: 'prepared',
       operationId: 'onb-op-1',
+      preparedRequestSha256: REQUEST_SHA256,
       now: LATER,
     });
     expect(() =>
       transitionOnboardingStep(prepared, 'enroll', {
         to: 'prepared',
         operationId: 'onb-op-2',
+        preparedRequestSha256: REQUEST_SHA256,
         now: LATER,
       }),
     ).toThrow(/operation identity/u);
     const replayed = transitionOnboardingStep(prepared, 'enroll', {
       to: 'prepared',
       operationId: 'onb-op-1',
+      preparedRequestSha256: REQUEST_SHA256,
       now: LATER,
     });
     expect(replayed.steps.enroll.operation_id).toBe('onb-op-1');
@@ -188,7 +313,7 @@ describe('transitionOnboardingStep', () => {
 
   it('refuses to succeed a step that was never prepared', () => {
     expect(() =>
-      transitionOnboardingStep(freshTransaction(), 'enroll', {
+      transitionOnboardingStep(transactionAt('enroll'), 'enroll', {
         to: 'succeeded',
         now: LATER,
       }),
@@ -196,55 +321,69 @@ describe('transitionOnboardingStep', () => {
   });
 
   it('records the accepted receipt digest when a prepared step succeeds', () => {
-    const prepared = transitionOnboardingStep(freshTransaction(), 'enroll', {
+    const prepared = transitionOnboardingStep(transactionAt('enroll'), 'enroll', {
       to: 'prepared',
       operationId: 'onb-op-1',
+      preparedRequestSha256: REQUEST_SHA256,
       now: LATER,
     });
     const succeeded = transitionOnboardingStep(prepared, 'enroll', {
       to: 'succeeded',
-      acceptedReceiptSha256:
-        `sha256:${'d'.repeat(64)}`,
+      acceptedReceiptSha256: RECEIPT_SHA256,
       now: LATER,
     });
     expect(succeeded.steps.enroll.state).toBe('succeeded');
     expect(succeeded.steps.enroll.accepted_receipt_sha256).toBe(
-      `sha256:${'d'.repeat(64)}`,
+      RECEIPT_SHA256,
     );
   });
 
   it('freezes succeeded and terminal steps', () => {
-    const prepared = transitionOnboardingStep(freshTransaction(), 'enroll', {
+    const prepared = transitionOnboardingStep(transactionAt('enroll'), 'enroll', {
       to: 'prepared',
       operationId: 'onb-op-1',
+      preparedRequestSha256: REQUEST_SHA256,
       now: LATER,
     });
     const succeeded = transitionOnboardingStep(prepared, 'enroll', {
       to: 'succeeded',
+      acceptedReceiptSha256: RECEIPT_SHA256,
       now: LATER,
     });
     expect(() =>
       transitionOnboardingStep(succeeded, 'enroll', {
         to: 'prepared',
         operationId: 'onb-op-1',
+        preparedRequestSha256: REQUEST_SHA256,
         now: LATER,
       }),
     ).toThrow(/illegal/iu);
-    const denied = transitionOnboardingStep(freshTransaction(), 'verify_trust', {
+    const denialPrepared = transitionOnboardingStep(
+      transactionAt('verify_trust'),
+      'verify_trust',
+      {
+        to: 'prepared',
+        operationId: 'onb-op-denied',
+        preparedRequestSha256: REQUEST_SHA256,
+        now: LATER,
+      },
+    );
+    const denied = transitionOnboardingStep(denialPrepared, 'verify_trust', {
       to: 'terminal_denied',
       now: LATER,
     });
     expect(() =>
       transitionOnboardingStep(denied, 'verify_trust', {
         to: 'prepared',
-        operationId: 'onb-op-1',
+        operationId: 'onb-op-denied',
+        preparedRequestSha256: REQUEST_SHA256,
         now: LATER,
       }),
     ).toThrow(/illegal/iu);
   });
 
   it('pauses without consuming an operation identity and resumes with one', () => {
-    const waiting = transitionOnboardingStep(freshTransaction(), 'confirm_human', {
+    const waiting = transitionOnboardingStep(transactionAt('confirm_human'), 'confirm_human', {
       to: 'waiting_for_user',
       now: LATER,
     });
@@ -253,6 +392,7 @@ describe('transitionOnboardingStep', () => {
     const resumed = transitionOnboardingStep(waiting, 'confirm_human', {
       to: 'prepared',
       operationId: 'onb-op-3',
+      preparedRequestSha256: REQUEST_SHA256,
       now: LATER,
     });
     expect(resumed.steps.confirm_human.attempt_count).toBe(1);
@@ -269,6 +409,40 @@ describe('markOnboardingEffect', () => {
     expect(marked.effects.central_enrollment).toBe(true);
     const again = markOnboardingEffect(marked, 'central_enrollment', LATER);
     expect(again.effects.central_enrollment).toBe(true);
+  });
+
+  it('cannot mutate effects after the transaction is finished', () => {
+    let transaction = freshTransaction();
+    for (const step of ONBOARDING_STEPS) {
+      transaction = transitionOnboardingStep(transaction, step, {
+        to: 'prepared',
+        operationId: `onb-op-${step}`,
+        preparedRequestSha256: REQUEST_SHA256,
+        now: LATER,
+      });
+      transaction = transitionOnboardingStep(transaction, step, {
+        to: 'succeeded',
+        acceptedReceiptSha256: RECEIPT_SHA256,
+        now: LATER,
+      });
+    }
+    const finished = finishOnboardingTransaction(
+      transaction,
+      'ready',
+      'profile_ready',
+      LATER,
+    ).transaction;
+    expect(() =>
+      markOnboardingEffect(finished, 'product_work', LATER),
+    ).toThrow(/finished|immutable/u);
+    expect(() =>
+      transitionOnboardingStep(finished, 'classify', {
+        to: 'prepared',
+        operationId: 'onb-op-classify',
+        preparedRequestSha256: REQUEST_SHA256,
+        now: LATER,
+      }),
+    ).toThrow(/finished|immutable/u);
   });
 });
 
@@ -292,7 +466,7 @@ describe('presentOnboardingStatus', () => {
   });
 
   it('reports waiting_for_user at the first waiting step', () => {
-    const waiting = transitionOnboardingStep(freshTransaction(), 'confirm_human', {
+    const waiting = transitionOnboardingStep(transactionAt('confirm_human'), 'confirm_human', {
       to: 'waiting_for_user',
       now: LATER,
     });
@@ -301,9 +475,11 @@ describe('presentOnboardingStatus', () => {
     expect(status.step).toBe('confirm_human');
   });
 
-  it('reports denied over waiting when any step is terminally denied', () => {
-    let transaction = transitionOnboardingStep(freshTransaction(), 'confirm_human', {
-      to: 'waiting_for_user',
+  it('reports denied at the one active frontier', () => {
+    let transaction = transitionOnboardingStep(transactionAt('verify_trust'), 'verify_trust', {
+      to: 'prepared',
+      operationId: 'onb-op-denied',
+      preparedRequestSha256: REQUEST_SHA256,
       now: LATER,
     });
     transaction = transitionOnboardingStep(transaction, 'verify_trust', {
@@ -315,9 +491,11 @@ describe('presentOnboardingStatus', () => {
     );
   });
 
-  it('reports preserved above every other state', () => {
-    let transaction = transitionOnboardingStep(freshTransaction(), 'verify_trust', {
-      to: 'terminal_denied',
+  it('reports preserved at the one active frontier', () => {
+    let transaction = transitionOnboardingStep(freshTransaction(), 'classify', {
+      to: 'prepared',
+      operationId: 'onb-op-preserved',
+      preparedRequestSha256: REQUEST_SHA256,
       now: LATER,
     });
     transaction = transitionOnboardingStep(transaction, 'classify', {
@@ -335,15 +513,43 @@ describe('presentOnboardingStatus', () => {
       transaction = transitionOnboardingStep(transaction, step, {
         to: 'prepared',
         operationId: `onb-op-${step}`,
+        preparedRequestSha256: REQUEST_SHA256,
         now: LATER,
       });
       transaction = transitionOnboardingStep(transaction, step, {
         to: 'succeeded',
+        acceptedReceiptSha256: RECEIPT_SHA256,
         now: LATER,
       });
     }
-    const status = presentOnboardingStatus(transaction, 'profile_ready');
+    const finished = finishOnboardingTransaction(
+      transaction,
+      'ready',
+      'profile_ready',
+      LATER,
+    ).transaction;
+    const status = presentOnboardingStatus(finished, 'profile_ready');
     expect(status.status).toBe('ready');
     expect(status.step).toBe('activate');
+  });
+
+  it('does not report ready before the terminal receipt preimage is committed', () => {
+    let transaction = freshTransaction();
+    for (const step of ONBOARDING_STEPS) {
+      transaction = transitionOnboardingStep(transaction, step, {
+        to: 'prepared',
+        operationId: `onb-op-${step}`,
+        preparedRequestSha256: REQUEST_SHA256,
+        now: LATER,
+      });
+      transaction = transitionOnboardingStep(transaction, step, {
+        to: 'succeeded',
+        acceptedReceiptSha256: RECEIPT_SHA256,
+        now: LATER,
+      });
+    }
+    expect(presentOnboardingStatus(transaction, 'not_finished').status).toBe(
+      'retryable',
+    );
   });
 });

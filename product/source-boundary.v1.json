@@ -200,6 +200,8 @@
       "allowed_imports": [
         "src/product/onboarding/**",
         "src/product/secure-local-files.ts",
+        "src/infrastructure/filesystem/atomic-create.ts",
+        "src/infrastructure/filesystem/process-file-lock.ts",
         "src/infrastructure/filesystem/atomic-write.ts"
       ],
       "allowed_packages": [

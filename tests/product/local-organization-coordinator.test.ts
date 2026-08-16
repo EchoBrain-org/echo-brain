@@ -338,6 +338,76 @@ describe('local organization coordinator', () => {
     ).toBe(true);
   });
 
+  it('recovers a lost enrollment past the initial lease window with one enrollment and a fresh lease', async () => {
+    const authority = new TestAuthority();
+    const state = new MemoryOrganizationStateStore();
+    const installationSigner = new TestInstallationSigner();
+    const clock = mutableClock();
+    let enrollmentCalls = 0;
+    let completion: Awaited<ReturnType<TestAuthority['complete']>> | null =
+      null;
+    const client = descriptorClient(authority, {
+      completeEnrollment: async ({ enrollmentRequest }) => {
+        enrollmentCalls += 1;
+        completion =
+          completion ?? (await authority.complete(enrollmentRequest));
+        if (enrollmentCalls === 1) {
+          throw new Error('simulated response loss after Authority commit');
+        }
+        return completion;
+      },
+      issueAccessLease: async (request) => {
+        verifyOrganizationAccessLeaseRequestAnyVersion(
+          request,
+          protocolInstallationKey(installationSigner),
+        );
+        const enrollment = state.readEnrollment();
+        if (
+          enrollment?.receipt === null ||
+          enrollment?.receipt === undefined ||
+          completion === null
+        ) {
+          throw new Error('enrollment disappeared');
+        }
+        return {
+          access_state: await authority.nextActiveState(
+            enrollment.request,
+            enrollment.receipt,
+            completion.access_state,
+            MAX_TTL_MS,
+            clock.value ?? resumedAt,
+          ),
+        };
+      },
+    });
+
+    await expect(
+      coordinator(state, client, installationSigner, clock).enroll(
+        enrollmentInput(authority),
+      ),
+    ).rejects.toThrow('simulated response loss');
+
+    const resumedAt = new Date(
+      Date.parse(clock.value ?? REFRESHED_AT) + 61 * 60_000,
+    ).toISOString();
+    clock.value = resumedAt;
+    const decision = await coordinator(
+      state,
+      client,
+      installationSigner,
+      clock,
+    ).enroll(enrollmentInput(authority));
+
+    expect(enrollmentCalls).toBe(2);
+    expect(decision.permitted).toBe(true);
+    expect(decision.state.status).toBe('active');
+    expect(decision.state.access_state_sequence).toBe(2);
+    const validUntil = decision.state.valid_until;
+    expect(validUntil).not.toBeNull();
+    expect(Date.parse(validUntil!)).toBeGreaterThan(Date.parse(resumedAt));
+    expect(state.readEnrollment()?.accepted_access_sequence).toBe(2);
+  });
+
   it('refuses a mismatched remote descriptor before signing or sending the grant', async () => {
     const authority = new TestAuthority();
     const remote = new TestAuthority(2);

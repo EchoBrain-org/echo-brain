@@ -1,8 +1,9 @@
 #!/usr/bin/env node
 
-import { randomBytes, randomUUID } from "node:crypto";
+import { createHash, randomBytes, randomUUID } from "node:crypto";
 import { readFileSync, realpathSync } from "node:fs";
-import { dirname, isAbsolute, join } from "node:path";
+import { homedir } from "node:os";
+import { isAbsolute, join } from "node:path";
 import { parseArgs } from "node:util";
 import type { Writable } from "node:stream";
 import { fileURLToPath } from "node:url";
@@ -39,8 +40,10 @@ import {
   createProductBootstrapCredential,
   createProductOnboardConfig,
   onboardProduct,
+  preflightProductOnboard,
   ProductOperator,
   ProductOperatorError,
+  type ProductDoctorReport,
   type ProductOperatorDependencies,
   type ProductServiceAction,
 } from "./operator-lifecycle.js";
@@ -101,11 +104,19 @@ import {
 } from "./onboarding/onboarding-coordinator.js";
 import {
   deriveOnboardingIdentity,
+  onboardingDocumentSha256,
+  onboardingReceiptForFinishedTransaction,
+  OnboardingTransactionError,
   type OnboardingPublicStatus,
   type OnboardingStepName,
+  type OnboardingTransactionV1,
 } from "./onboarding/onboarding-transaction.js";
 import { FileOnboardingTransactionStore } from "./onboarding/onboarding-transaction-store.js";
-import { readFileNoFollow } from "./secure-local-files.js";
+import {
+  assertDisjointPaths,
+  canonicalLocalPath,
+  readFileNoFollow,
+} from "./secure-local-files.js";
 import {
   GRANOLA_API_KEY_RE,
   HttpGranolaApiClient,
@@ -149,7 +160,7 @@ export interface ProductCliDependencies {
   acquireLifecycleLock?: (
     stateDirectory: string,
     kind: ProductLifecycleLockKind,
-    options: { timeoutMs: number },
+    options: { timeoutMs: number; staleMs?: number },
   ) => Promise<ReleaseProductLifecycleLock>;
   organization?: {
     installationSigner?: InstallationSigner;
@@ -172,6 +183,22 @@ export interface ProductCliDependencies {
     ) => Promise<GranolaRecordOwnerObservation>;
     /** Test/host seam; the default reads a second hidden value from the TTY. */
     readSlackCredential?: () => string | Promise<string>;
+    /**
+     * In-memory only: `onboard` hands its already-validated invitation and CA
+     * snapshot through the legacy bootstrap/enrollment wrapper so a path swap
+     * cannot change the trusted bytes after the transaction intent is frozen.
+     */
+    preparedOrganizationEnrollment?: {
+      invitationPath: string;
+      invitation: ReturnType<
+        typeof readPrivateOrganizationEnrollmentInvitation
+      >;
+      authorityCaPath?: string;
+      authorityCaPem?: string;
+      authorityDescriptor?: ReturnType<
+        typeof validateOrganizationAuthorityDescriptorResponse
+      >['authority_descriptor'];
+    };
   };
 }
 
@@ -255,7 +282,7 @@ const HELP = `echo-brain ${PRODUCT_VERSION}
 
 Usage:
   echo-brain bootstrap --config <new-absolute-path> --state-dir <new-absolute-path> --owner-email <canonical-lowercase-email> --slack-channel-id <C...> --slack-reviewer-user-id <U...> --slack-reviewer-name <name> --invitation <absolute-path> --authority-pin <sha256:...> [--authority-ca <absolute-path>] --allow-exportable-software-key
-  echo-brain onboard --config <absolute-path> --state-dir <absolute-path> --owner-email <canonical-lowercase-email> --slack-channel-id <C...> --slack-reviewer-user-id <U...> --slack-reviewer-name <name> --invitation <absolute-path> --authority-pin <sha256:...> [--authority-ca <absolute-path>] [--allow-exportable-software-key]
+  echo-brain onboard --owner-email <canonical-lowercase-email> --slack-channel-id <C...> --slack-reviewer-user-id <U...> --slack-reviewer-name <name> --invitation <absolute-path> --authority-pin <sha256:...> [--config <absolute-path>] [--state-dir <absolute-path>] [--authority-ca <absolute-path>] [--allow-exportable-software-key]
   echo-brain init --config <absolute-path>
   echo-brain reconfigure --config <absolute-path>
   echo-brain status --config <absolute-path>
@@ -310,8 +337,10 @@ const OPTIONS = {
 type CliOption = keyof typeof OPTIONS;
 
 interface CommandRule {
-  /** Options accepted in addition to the always-required `--config`. */
+  /** Options accepted in addition to `--config`. */
   accepts?: readonly CliOption[];
+  /** Only onboarding can derive a standard config path. */
+  configOptional?: boolean;
   /** Options the command cannot run without. */
   requires?: readonly CliOption[];
   /** Path options that must be absolute, in addition to `--config`. */
@@ -360,6 +389,7 @@ const RULES: Readonly<Record<string, CommandRule>> = {
     absolute: ["state-dir", "invitation", "authority-ca"],
   },
   onboard: {
+    configOptional: true,
     accepts: [
       "state-dir",
       "owner-email",
@@ -372,7 +402,6 @@ const RULES: Readonly<Record<string, CommandRule>> = {
       "allow-exportable-software-key",
     ],
     requires: [
-      "state-dir",
       "owner-email",
       "slack-channel-id",
       "slack-reviewer-user-id",
@@ -497,7 +526,10 @@ function parseCommand(argv: readonly string[]): ParsedCommand {
       throw new Error(`--${name} is not valid with \`echo-brain ${key}\``);
     }
   }
-  for (const name of ["config", ...(rule.requires ?? [])] as const) {
+  for (const name of [
+    ...(rule.configOptional === true ? [] : ["config" as const]),
+    ...(rule.requires ?? []),
+  ] as const) {
     if (values[name] === undefined) {
       throw new Error(`\`echo-brain ${key}\` requires --${name}`);
     }
@@ -515,7 +547,9 @@ function parseCommand(argv: readonly string[]): ParsedCommand {
   return {
     command: command as CliCommand,
     action,
-    configPath: text("config")!,
+    // `onboard` resolves this sentinel to its profile-owned standard path.
+    // Every other command requires a nonempty absolute --config above.
+    configPath: text("config") ?? "",
     stateDirectory: text("state-dir"),
     backupRoot: text("backup-root"),
     backupDirectory: text("backup"),
@@ -762,6 +796,37 @@ function organizationAuthorityTransportOptions(
       ? {}
       : { allowInsecureLoopback: organization.allowInsecureLoopback }),
   };
+}
+
+async function verifyOnboardingAuthorityDescriptor(input: {
+  invitation: ReturnType<typeof readPrivateOrganizationEnrollmentInvitation>;
+  authorityPin: string;
+  authorityCaPem?: string;
+  dependencies: ProductCliDependencies;
+}): Promise<
+  ReturnType<
+    typeof validateOrganizationAuthorityDescriptorResponse
+  >['authority_descriptor']
+> {
+  const descriptor = validateOrganizationAuthorityDescriptorResponse(
+    await new HttpOrganizationAuthorityClient({
+      baseUrl: input.invitation.authority_base_url,
+      ...organizationAuthorityTransportOptions(
+        input.dependencies.organization,
+        input.authorityCaPem,
+      ),
+    }).readAuthorityDescriptor(),
+  ).authority_descriptor;
+  verifyOrganizationAuthorityPin(descriptor, input.authorityPin);
+  if (
+    descriptor.authority_id !== input.invitation.authority_id ||
+    descriptor.organization_id !== input.invitation.organization_id
+  ) {
+    throw new Error(
+      'organization invitation does not identify the authority at its configured origin',
+    );
+  }
+  return descriptor;
 }
 
 interface ResolvedOrganizationAuthorization {
@@ -1525,15 +1590,253 @@ function createProductOperator(
   });
 }
 
+async function diagnoseProductInstallation(input: {
+  configPath: string;
+  config: ProductRuntimeConfig;
+  dependencies: ProductCliDependencies;
+  serviceExpectation?: 'running' | 'staged';
+}): Promise<ProductDoctorReport> {
+  const classifier =
+    input.dependencies.classifyStateFilesystem ?? classifyStateFilesystem;
+  let filesystem: Awaited<ReturnType<ClassifyStateFilesystem>>;
+  try {
+    filesystem = await classifier(input.config.state_dir);
+  } catch (error) {
+    filesystem = {
+      kind: 'unknown',
+      raw: `filesystem probe failed: ${(error as Error).message}`,
+    };
+  }
+  let adapters: Awaited<ReturnType<typeof diagnoseConfiguredAdapters>> = [];
+  let adapterError: string | undefined;
+  let organizationDiagnostic:
+    | DoctorOrganizationResolution['diagnostic']
+    | undefined;
+  let approvalActionAuthorizer: OrganizationApprovalActionAuthorizer | undefined;
+  try {
+    const organization = await resolveDoctorOrganization(
+      input.config,
+      input.dependencies,
+    );
+    organizationDiagnostic = organization.diagnostic;
+    approvalActionAuthorizer = organization.approvalActionAuthorizer;
+  } catch (error) {
+    organizationDiagnostic = {
+      ok: false,
+      detail: `organization state inspection failed: ${(error as Error).message}`,
+    };
+    adapterError =
+      'adapter diagnostics were skipped because organization state inspection failed';
+  }
+  if (adapterError === undefined) {
+    try {
+      const factories =
+        input.dependencies.adapterFactories ?? createDefaultAdapterFactories();
+      const registry = await createConfiguredAdapterRegistry(
+        input.config,
+        factories,
+        {
+          environment: input.dependencies.environment,
+          now: input.dependencies.now,
+          ...approvalSurfaceFactoryOptions(approvalActionAuthorizer),
+        },
+      );
+      adapters = await diagnoseConfiguredAdapters(
+        input.config,
+        registry,
+        input.dependencies.doctorHealthTimeoutMs ?? 10_000,
+      );
+    } catch (error) {
+      adapterError = (error as Error).message;
+    }
+  }
+  return await createProductOperator(
+    input.configPath,
+    input.config,
+    input.dependencies,
+  ).doctor({
+    filesystem,
+    adapters,
+    includeAdapters: true,
+    ...(organizationDiagnostic === undefined
+      ? {}
+      : { organizationDiagnostic }),
+    ...(adapterError === undefined ? {} : { adapterError }),
+    ...(input.serviceExpectation === undefined
+      ? {}
+      : { serviceExpectation: input.serviceExpectation }),
+  });
+}
+
+async function currentOnboardingProfileBindingSha256(input: {
+  profileId: string;
+  configPath: string;
+  stateDirectory: string;
+  dependencies: ProductCliDependencies;
+}): Promise<string> {
+  const config = loadProductRuntimeConfig(input.configPath);
+  const organizationState = new SqliteOrganizationStateStore(
+    resolveProductStatePaths(input.stateDirectory).database,
+  );
+  try {
+    const enrollment = organizationState.readEnrollment();
+    if (enrollment?.receipt === null || enrollment?.receipt === undefined) {
+      throw new Error('organization enrollment receipt is unavailable');
+    }
+    const organization = await resolveDoctorOrganization(
+      config,
+      input.dependencies,
+    );
+    if (!organization.diagnostic.ok) {
+      throw new Error(organization.diagnostic.detail);
+    }
+    const operator = createProductOperator(
+      input.configPath,
+      config,
+      input.dependencies,
+    );
+    const status = await operator.status();
+    if (
+      status.initialized !== true ||
+      status.config_path !== input.configPath ||
+      status.state_dir !== input.stateDirectory ||
+      status.issues.length !== 0
+    ) {
+      throw new Error('onboarding installation identity is unavailable');
+    }
+    const executionIdentity = operator.currentExecutionIdentity();
+    return onboardingDocumentSha256({
+      schema_version: 1,
+      kind: 'echo-onboarding-profile-binding',
+      profile_id: input.profileId,
+      config_path: input.configPath,
+      state_dir: input.stateDirectory,
+      config_sha256: canonicalProductConfigSha256(config),
+      package_identity: status.package_identity,
+      execution_identity: executionIdentity,
+      enrollment_request_sha256: onboardingDocumentSha256(enrollment.request),
+      enrollment_receipt_sha256: onboardingDocumentSha256(enrollment.receipt),
+      installation_id: enrollment.request.installation_id,
+      enrollment_id: enrollment.receipt.enrollment_id,
+      service: {
+        label: status.service.label,
+        plist_path: status.service.plist_path,
+        installation_path: status.installation_path,
+      },
+    });
+  } finally {
+    organizationState.close();
+  }
+}
+
 function lifecycleLock(
   dependencies: ProductCliDependencies,
   stateDirectory: string,
   kind: ProductLifecycleLockKind,
   timeoutMs: number,
+  staleMs?: number,
 ): Promise<ReleaseProductLifecycleLock> {
   const acquire =
     dependencies.acquireLifecycleLock ?? acquireProductLifecycleLock;
-  return acquire(stateDirectory, kind, { timeoutMs });
+  return acquire(stateDirectory, kind, {
+    timeoutMs,
+    ...(staleMs === undefined ? {} : { staleMs }),
+  });
+}
+
+async function withRuntimeMutationFence<T>(
+  operator: ProductOperator,
+  dependencies: ProductCliDependencies,
+  stateDirectory: string,
+  effect: () => Promise<T>,
+): Promise<T> {
+  const before = await operator.status();
+  if (before.service.running) return await effect();
+  const release = await lifecycleLock(
+    dependencies,
+    stateDirectory,
+    'runtime',
+    15_000,
+    0,
+  );
+  try {
+    return await effect();
+  } finally {
+    await release();
+  }
+}
+
+async function serviceWithRuntimeLock(
+  operator: ProductOperator,
+  action: 'install' | 'start',
+  dependencies: ProductCliDependencies,
+  stateDirectory: string,
+  beforeWork?: () => Promise<void>,
+): Promise<Awaited<ReturnType<ProductOperator['service']>>> {
+  return await withRuntimeMutationFence(
+    operator,
+    dependencies,
+    stateDirectory,
+    async () => {
+      await beforeWork?.();
+      return await operator.service(action);
+    },
+  );
+}
+
+async function serviceLifecycleActionWithRuntimeLock(
+  operator: ProductOperator,
+  action: ProductServiceAction,
+  dependencies: ProductCliDependencies,
+  stateDirectory: string,
+  beforeWork?: () => Promise<void>,
+): Promise<Awaited<ReturnType<ProductOperator['service']>>> {
+  if (action === 'install' || action === 'start') {
+    return await serviceWithRuntimeLock(
+      operator,
+      action,
+      dependencies,
+      stateDirectory,
+      beforeWork,
+    );
+  }
+  if (action !== 'stop' && action !== 'uninstall' && action !== 'restart') {
+    return await operator.service(action);
+  }
+
+  if (action === 'restart') operator.preflightServiceStart();
+  const before = await operator.status();
+  let stopped:
+    | Awaited<ReturnType<ProductOperator['service']>>
+    | undefined;
+  // A healthy daemon owns the runtime lock for its lifetime, so it must be
+  // booted out before this command can acquire the same fence. Destructive
+  // mutation (notably unlinking the plist) remains inside the fence below.
+  if (before.service.running) stopped = await operator.service('stop');
+
+  const release = await lifecycleLock(
+    dependencies,
+    stateDirectory,
+    'runtime',
+    15_000,
+  );
+  try {
+    if (action === 'stop') {
+      return stopped ?? (await operator.service('stop'));
+    }
+    if (action === 'uninstall') {
+      return await operator.service('uninstall');
+    }
+    await beforeWork?.();
+    const started = await operator.service('start');
+    return {
+      ...started,
+      action: 'restart',
+      changed: stopped?.changed === true || started.changed,
+    };
+  } finally {
+    await release();
+  }
 }
 
 async function releaseLifecycleLocks(
@@ -1772,6 +2075,41 @@ async function runBootstrapCommand(
   stdout: Pick<Writable, "write">,
   stderr: Pick<Writable, "write">,
 ): Promise<number> {
+  let releaseOnboardingMutationLock: (() => Promise<void>) | undefined;
+  if (dependencies.bootstrap?.preparedOrganizationEnrollment === undefined) {
+    try {
+      const bootstrapHome = canonicalLocalPath(
+        dependencies.operator?.homeDirectory ?? homedir(),
+        "bootstrap home directory",
+        false,
+      );
+      const onboardingDirectory = join(
+        bootstrapHome,
+        "Library",
+        "Application Support",
+        "Echo Brain",
+        "onboarding",
+      );
+      assertDisjointPaths(
+        canonicalLocalPath(
+          parsed.configPath,
+          "bootstrap config path",
+          false,
+        ),
+        onboardingDirectory,
+        "bootstrap config path",
+        "onboarding transaction directory",
+      );
+      const lockStore = new FileOnboardingTransactionStore({
+        directory: onboardingDirectory,
+        stateDir: parsed.stateDirectory!,
+      });
+      releaseOnboardingMutationLock = await lockStore.acquireMutationLock();
+    } catch (error) {
+      printOperatorError(stderr, "bootstrap", error);
+      return 1;
+    }
+  }
   try {
     const buildIdentity =
       dependencies.operator?.buildIdentity ?? packagedBuildIdentity();
@@ -1793,11 +2131,6 @@ async function runBootstrapCommand(
         `bootstrap requires Node v22.22.1; observed ${nodeVersion}`,
       );
     }
-    if (parsed.allowExportableSoftwareKey !== true) {
-      throw new Error(
-        "bootstrap requires --allow-exportable-software-key for the pilot-grade installation key",
-      );
-    }
     const fileSystem =
       dependencies.operator?.fileSystem ?? nodeOperatorFileSystem;
     const pathExists = (path: string) => fileSystem.exists(path);
@@ -1817,17 +2150,6 @@ async function runBootstrapCommand(
         "bootstrap found an incomplete config/state pair and will not guess ownership",
       );
     }
-    const invitation = readPrivateOrganizationEnrollmentInvitation(
-      parsed.invitationPath!,
-    );
-    if (invitation.status !== "issued" || invitation.issued === null) {
-      throw new Error("organization invitation has not been issued");
-    }
-    if (invitation.authority_pin_sha256 !== parsed.authorityPin) {
-      throw new Error(
-        "independently supplied authority PIN does not match the invitation",
-      );
-    }
     const slackApproval = {
       channelId: parsed.slackChannelId!,
       reviewerUserId: parsed.slackReviewerUserId!,
@@ -1838,6 +2160,112 @@ async function runBootstrapCommand(
       parsed.ownerEmail!,
       slackApproval,
     );
+    if (!configExists) {
+      preflightProductOnboard(parsed.configPath, parsed.stateDirectory!, {
+        fileSystem,
+        granolaOwnerEmail: parsed.ownerEmail!,
+        slackApproval,
+      });
+    }
+    const preparedEnrollment =
+      dependencies.bootstrap?.preparedOrganizationEnrollment;
+    if (
+      preparedEnrollment !== undefined &&
+      (preparedEnrollment.invitationPath !== parsed.invitationPath ||
+        preparedEnrollment.authorityCaPath !== parsed.authorityCaPath)
+    ) {
+      throw new Error("prepared enrollment input does not match bootstrap paths");
+    }
+    const invitation =
+      preparedEnrollment?.invitation ??
+      readPrivateOrganizationEnrollmentInvitation(parsed.invitationPath!);
+    if (invitation.status !== "issued" || invitation.issued === null) {
+      throw new Error("organization invitation has not been issued");
+    }
+    if (invitation.authority_pin_sha256 !== parsed.authorityPin) {
+      throw new Error(
+        "independently supplied authority PIN does not match the invitation",
+      );
+    }
+    const invitationExpired =
+      Date.parse(invitation.issued.expires_at) <=
+      Date.parse(resolveProductClock(dependencies.now)());
+    const databasePath = resolveProductStatePaths(
+      parsed.stateDirectory!,
+    ).database;
+    let retainedEnrollment: StoredOrganizationEnrollment | null = null;
+    if (pathExists(databasePath)) {
+      const state = new SqliteOrganizationStateStore(databasePath);
+      try {
+        const enrollment = state.readEnrollment();
+        if (enrollment !== null) {
+          const connection = state.readAuthorityConnection();
+          const pinned = state.readPinnedAuthority();
+          if (
+            enrollment.request.authority_id !== invitation.authority_id ||
+            enrollment.request.organization_id !==
+              invitation.organization_id ||
+            enrollment.request.principal_id !==
+              invitation.issued.principal_id ||
+            enrollment.request.membership_id !== invitation.membership_id ||
+            enrollment.request.enrollment_grant_sha256 !==
+              invitation.enrollment_grant_sha256 ||
+            connection?.authority_base_url !== invitation.authority_base_url ||
+            pinned?.authority_pin_sha256 !== invitation.authority_pin_sha256
+          ) {
+            throw new Error(
+              "bootstrap invitation does not match the enrolled organization identity",
+            );
+          }
+          retainedEnrollment = enrollment;
+        }
+      } finally {
+        state.close();
+      }
+    }
+    if (invitationExpired && retainedEnrollment === null) {
+      throw new Error("organization invitation has expired");
+    }
+    const authorityCaPem =
+      preparedEnrollment?.authorityCaPem ??
+      readOrganizationAuthorityCa(parsed.authorityCaPath);
+    const authorityDescriptor =
+      preparedEnrollment?.authorityDescriptor ??
+      (await verifyOnboardingAuthorityDescriptor({
+        invitation,
+        authorityPin: parsed.authorityPin!,
+        ...(authorityCaPem === undefined ? {} : { authorityCaPem }),
+        dependencies,
+      }));
+    verifyOrganizationAuthorityPin(authorityDescriptor, parsed.authorityPin);
+    if (
+      authorityDescriptor.authority_id !== invitation.authority_id ||
+      authorityDescriptor.organization_id !== invitation.organization_id
+    ) {
+      throw new Error(
+        "organization invitation does not identify the authority at its configured origin",
+      );
+    }
+    const bootstrapStepDependencies: ProductCliDependencies = {
+      ...dependencies,
+      bootstrap: {
+        ...dependencies.bootstrap,
+        preparedOrganizationEnrollment: {
+          invitationPath: parsed.invitationPath!,
+          invitation,
+          ...(parsed.authorityCaPath === undefined
+            ? {}
+            : { authorityCaPath: parsed.authorityCaPath }),
+          ...(authorityCaPem === undefined ? {} : { authorityCaPem }),
+          authorityDescriptor,
+        },
+      },
+    };
+    if (parsed.allowExportableSoftwareKey !== true) {
+      throw new Error(
+        "bootstrap requires --allow-exportable-software-key for the pilot-grade installation key",
+      );
+    }
     const credentialPath = join(
       parsed.stateDirectory!,
       "credentials",
@@ -1907,14 +2335,23 @@ async function runBootstrapCommand(
         "Granola credential is not a valid API token",
       );
     }
-    const granolaOwnerObservation = await (
-      dependencies.bootstrap?.observeGranolaRecordOwner ??
-      (async (credential: string, ownerEmail: string) =>
-        await observeGranolaRecordOwner(
-          new HttpGranolaApiClient(credential),
-          ownerEmail,
-        ))
-    )(granolaCredential, parsed.ownerEmail!);
+    // Verify one exact owner observation before retaining a new credential
+    // (RFC-0001: an employee-owned credential is committed to the governed
+    // store only after exact owner verification). The observation is a
+    // read-only provider call with no provider-side commit, so a retry after
+    // interruption may safely prompt again; an already-enrolled resume skips
+    // re-observation and may repair the missing private file directly.
+    let granolaOwnerObservation: GranolaRecordOwnerObservation | null = null;
+    if (retainedEnrollment === null) {
+      granolaOwnerObservation = await (
+        dependencies.bootstrap?.observeGranolaRecordOwner ??
+        (async (credential: string, ownerEmail: string) =>
+          await observeGranolaRecordOwner(
+            new HttpGranolaApiClient(credential),
+            ownerEmail,
+          ))
+      )(granolaCredential, parsed.ownerEmail!);
+    }
     if (!granolaCredentialExists) {
       createProductBootstrapCredential(
         credentialPath,
@@ -1931,12 +2368,13 @@ async function runBootstrapCommand(
         fileSystem,
       );
     }
-
-    await runCapturedCliStep(
-      "initialize",
-      ["init", "--config", parsed.configPath],
-      dependencies,
-    );
+    if (retainedEnrollment === null) {
+      await runCapturedCliStep(
+        "initialize",
+        ["init", "--config", parsed.configPath],
+        dependencies,
+      );
+    }
     const initializedConfig = loadProductRuntimeConfig(parsed.configPath);
     createProductOperator(
       parsed.configPath,
@@ -1957,39 +2395,10 @@ async function runBootstrapCommand(
         ? []
         : ["--authority-ca", parsed.authorityCaPath]),
     ];
-    const organizationState = new SqliteOrganizationStateStore(
-      resolveProductStatePaths(parsed.stateDirectory!).database,
-    );
-    let alreadyEnrolled = false;
-    try {
-      const enrollment = organizationState.readEnrollment();
-      if (
-        enrollment !== null &&
-        enrollment.receipt !== null &&
-        enrollment.accepted_access_sequence > 0
-      ) {
-        alreadyEnrolled = true;
-        const request = enrollment.request;
-        const connection = organizationState.readAuthorityConnection();
-        const pinned = organizationState.readPinnedAuthority();
-        if (
-          request.authority_id !== invitation.authority_id ||
-          request.organization_id !== invitation.organization_id ||
-          request.principal_id !== invitation.issued.principal_id ||
-          request.membership_id !== invitation.membership_id ||
-          request.enrollment_grant_sha256 !==
-            invitation.enrollment_grant_sha256 ||
-          connection?.authority_base_url !== invitation.authority_base_url ||
-          pinned?.authority_pin_sha256 !== invitation.authority_pin_sha256
-        ) {
-          throw new Error(
-            "bootstrap invitation does not match the enrolled organization identity",
-          );
-        }
-      }
-    } finally {
-      organizationState.close();
-    }
+    const alreadyEnrolled =
+      retainedEnrollment?.receipt !== null &&
+      retainedEnrollment?.receipt !== undefined &&
+      retainedEnrollment.accepted_access_sequence > 0;
     const organization = await runCapturedCliStep(
       alreadyEnrolled
         ? "organization access refresh"
@@ -1997,7 +2406,7 @@ async function runBootstrapCommand(
       alreadyEnrolled
         ? ["organization", "refresh", "--config", parsed.configPath]
         : enrollmentArgs,
-      dependencies,
+      bootstrapStepDependencies,
     );
     const access = organization["access"];
     if (
@@ -2071,6 +2480,8 @@ async function runBootstrapCommand(
   } catch (error) {
     printOperatorError(stderr, "bootstrap", error);
     return 1;
+  } finally {
+    await releaseOnboardingMutationLock?.();
   }
 }
 
@@ -2078,12 +2489,12 @@ async function runBootstrapCommand(
  * `echo-brain onboard` (RFC-0001, Slice 1): one resumable coordinator over the
  * existing bootstrap, enrollment, service, doctor, and readiness steps.
  *
- * The durable transaction lives next to the config (never inside state, so a
- * state restore cannot rewind it) and records prepared operation identities
- * before any effect. A rerun after interruption resumes with the same
- * identities; the underlying steps are the existing idempotent commands. The
- * output is the public status algebra -- it never ends with a list of
- * follow-up commands.
+ * The durable transaction lives under one machine-owned onboarding root
+ * (never beside user-selected config or inside mutable state) and records
+ * prepared operation identities before any effect. A rerun after interruption
+ * resumes with the same identities; the underlying steps are the existing
+ * idempotent commands. The output is the public status algebra -- it never
+ * ends with a list of follow-up commands.
  */
 async function runOnboardCommand(
   parsed: ParsedCommand,
@@ -2097,13 +2508,12 @@ async function runOnboardCommand(
     invitation = readPrivateOrganizationEnrollmentInvitation(
       parsed.invitationPath!,
     );
-  } catch (error) {
+  } catch {
     print(stdout, {
       ok: false,
       command: "onboard",
       status: "denied",
       reason_code: "invitation_invalid",
-      error: (error as Error).message,
     });
     return 1;
   }
@@ -2114,267 +2524,902 @@ async function runOnboardCommand(
     invitationCommandId: invitation.command_id,
     enrollmentGrantSha256: invitation.enrollment_grant_sha256,
   });
-  const store = new FileOnboardingTransactionStore({
-    directory: join(dirname(parsed.configPath), "onboarding"),
-    stateDir: parsed.stateDirectory!,
+  let configPath: string;
+  let stateDirectory: string;
+  let onboardingDirectory: string;
+  let onboardingHomeDirectory: string;
+  let onboardingNodePath: string;
+  let onboardingCliPath: string;
+  let onboardingUid: number;
+  let authorityCaSha256: string | null = null;
+  let authorityCaPem: string | undefined;
+  try {
+    onboardingHomeDirectory = canonicalLocalPath(
+      dependencies.operator?.homeDirectory ?? homedir(),
+      "onboarding home directory",
+      false,
+    );
+    onboardingNodePath = canonicalLocalPath(
+      dependencies.operator?.nodePath ?? process.execPath,
+      "onboarding Node executable",
+      true,
+    );
+    onboardingCliPath = canonicalLocalPath(
+      dependencies.operator?.cliPath ?? CLI_PATH,
+      "onboarding CLI executable",
+      true,
+    );
+    onboardingUid = dependencies.operator?.uid ?? process.getuid?.() ?? -1;
+    if (!Number.isSafeInteger(onboardingUid) || onboardingUid < 0) {
+      throw new Error("onboarding requires a numeric local user id");
+    }
+    const machineRoot = join(
+      onboardingHomeDirectory,
+      "Library",
+      "Application Support",
+      "Echo Brain",
+    );
+    const profileRoot = join(machineRoot, "profiles", identity.profile_id);
+    onboardingDirectory = join(machineRoot, "onboarding");
+    configPath = canonicalLocalPath(
+      parsed.configPath === ""
+        ? join(profileRoot, "config", "runtime.json")
+        : parsed.configPath,
+      "onboarding config path",
+      false,
+    );
+    stateDirectory = canonicalLocalPath(
+      parsed.stateDirectory ?? join(profileRoot, "state"),
+      "onboarding state directory",
+      false,
+    );
+    assertDisjointPaths(
+      configPath,
+      stateDirectory,
+      "onboarding config path",
+      "onboarding state directory",
+    );
+    assertDisjointPaths(
+      configPath,
+      onboardingDirectory,
+      "onboarding config path",
+      "onboarding transaction directory",
+    );
+    assertDisjointPaths(
+      stateDirectory,
+      onboardingDirectory,
+      "onboarding state directory",
+      "onboarding transaction directory",
+    );
+    if (parsed.authorityCaPath !== undefined) {
+      authorityCaPem = readOrganizationAuthorityCa(parsed.authorityCaPath);
+      if (authorityCaPem === undefined) {
+        throw new Error("organization authority CA snapshot is unavailable");
+      }
+      authorityCaSha256 = `sha256:${createHash("sha256")
+        .update(authorityCaPem)
+        .digest("hex")}`;
+    }
+  } catch {
+    print(stdout, {
+      ok: false,
+      command: "onboard",
+      status: "preserved",
+      reason_code: "local_target_invalid",
+      flow_id: identity.flow_id,
+    });
+    return 1;
+  }
+  let onboardingBuildIdentity: Pick<
+    PackagedBuildIdentityV1,
+    "source_sha" | "source_kind"
+  >;
+  try {
+    onboardingBuildIdentity =
+      dependencies.operator?.buildIdentity ?? packagedBuildIdentity();
+  } catch {
+    print(stdout, {
+      ok: false,
+      command: "onboard",
+      status: "denied",
+      reason_code: "unverified_build",
+      flow_id: identity.flow_id,
+      step: "classify",
+      effects: {
+        local_mutation: false,
+        central_enrollment: false,
+        provider_connection: false,
+        service_activation: false,
+        product_work: false,
+      },
+    });
+    return 1;
+  }
+  const onboardingPlatform = dependencies.operator?.platform ?? process.platform;
+  const onboardingArchitecture =
+    dependencies.operator?.architecture ?? process.arch;
+  const onboardingNodeVersion =
+    dependencies.operator?.nodeVersion ?? process.version;
+  const inputSha256 = onboardingDocumentSha256({
+    schema_version: 1,
+    kind: "echo-onboarding-input-binding",
+    flow_id: identity.flow_id,
+    profile_id: identity.profile_id,
+    authority_base_url: invitation.authority_base_url,
+    authority_id: invitation.authority_id,
+    organization_id: invitation.organization_id,
+    membership_id: invitation.membership_id,
+    principal_id: invitation.issued?.principal_id ?? null,
+    invitation_command_id: invitation.command_id,
+    enrollment_grant_sha256: invitation.enrollment_grant_sha256,
+    authority_pin_sha256: parsed.authorityPin!,
+    authority_ca_sha256: authorityCaSha256,
+    invitation_sha256: onboardingDocumentSha256(invitation),
+    product_version:
+      dependencies.operator?.productVersion ?? PRODUCT_VERSION,
+    source_sha: onboardingBuildIdentity.source_sha,
+    source_kind: onboardingBuildIdentity.source_kind,
+    platform: onboardingPlatform,
+    architecture: onboardingArchitecture,
+    node_version: onboardingNodeVersion,
+    node_path: onboardingNodePath,
+    cli_path: onboardingCliPath,
+    home_directory: onboardingHomeDirectory,
+    uid: onboardingUid,
+    config_path: configPath,
+    state_dir: stateDirectory,
+    owner_email: parsed.ownerEmail!,
+    slack_channel_id: parsed.slackChannelId!,
+    slack_reviewer_user_id: parsed.slackReviewerUserId!,
+    slack_reviewer_name: parsed.slackReviewerName!,
   });
+  let store: FileOnboardingTransactionStore;
+  try {
+    store = new FileOnboardingTransactionStore({
+      directory: onboardingDirectory,
+      stateDir: stateDirectory,
+    });
+  } catch {
+    print(stdout, {
+      ok: false,
+      command: "onboard",
+      status: "preserved",
+      reason_code: "onboarding_store_unavailable",
+      flow_id: identity.flow_id,
+      step: "classify",
+      effects: {
+        local_mutation: false,
+        central_enrollment: false,
+        provider_connection: false,
+        service_activation: false,
+        product_work: false,
+      },
+    });
+    return 1;
+  }
   const fileSystem =
     dependencies.operator?.fileSystem ?? nodeOperatorFileSystem;
-  const captured = async (label: string, argv: readonly string[]) =>
-    await runCapturedCliStep(label, argv, dependencies);
-  const statusIsStopped = (report: Record<string, unknown>) => {
-    const service = report["service"];
-    return (
-      service !== null &&
-      typeof service === "object" &&
-      !Array.isArray(service) &&
-      (service as Record<string, unknown>)["installed"] === false &&
-      (service as Record<string, unknown>)["loaded"] === false &&
-      (service as Record<string, unknown>)["running"] === false
-    );
+  const captured = async (
+    label: string,
+    argv: readonly string[],
+    stepDependencies: ProductCliDependencies = dependencies,
+  ) => await runCapturedCliStep(label, argv, stepDependencies);
+  let acceptedAuthorityDescriptor:
+    | ReturnType<
+        typeof validateOrganizationAuthorityDescriptorResponse
+      >['authority_descriptor']
+    | undefined;
+  const refreshAcceptedAuthorityDescriptor = async () => {
+    acceptedAuthorityDescriptor = await verifyOnboardingAuthorityDescriptor({
+      invitation,
+      authorityPin: parsed.authorityPin!,
+      ...(authorityCaPem === undefined ? {} : { authorityCaPem }),
+      dependencies,
+    });
+    return acceptedAuthorityDescriptor;
   };
-  const serviceIsRunning = (report: Record<string, unknown>) => {
-    const service = report["service"];
-    return (
-      service !== null &&
-      typeof service === "object" &&
-      !Array.isArray(service) &&
-      (service as Record<string, unknown>)["installed"] === true &&
-      (service as Record<string, unknown>)["loaded"] === true &&
-      (service as Record<string, unknown>)["running"] === true
+  const ensureAcceptedAuthorityDescriptor = async () =>
+    acceptedAuthorityDescriptor ??
+    (await refreshAcceptedAuthorityDescriptor());
+  const preparedBootstrapDependencies = (
+    authorityDescriptor: NonNullable<typeof acceptedAuthorityDescriptor>,
+  ): ProductCliDependencies => ({
+    ...dependencies,
+    bootstrap: {
+      ...dependencies.bootstrap,
+      preparedOrganizationEnrollment: {
+        invitationPath: parsed.invitationPath!,
+        invitation,
+        ...(parsed.authorityCaPath === undefined
+          ? {}
+          : { authorityCaPath: parsed.authorityCaPath }),
+        ...(authorityCaPem === undefined ? {} : { authorityCaPem }),
+        authorityDescriptor,
+      },
+    },
+  });
+  const currentProfileBindingSha256 = async (): Promise<string> =>
+    await currentOnboardingProfileBindingSha256({
+      profileId: identity.profile_id,
+      configPath,
+      stateDirectory,
+      dependencies,
+    });
+
+  const currentServiceStageSha256 = async (): Promise<string> => {
+    const operator = createProductOperator(
+      configPath,
+      loadProductRuntimeConfig(configPath),
+      dependencies,
     );
+    const staged = operator.inspectStagedService();
+    if (!staged.staged) {
+      const status = await operator.status();
+      if (
+        !status.service.installed ||
+        status.issues.length !== 0
+      ) {
+        throw new Error("onboarding service stage is unavailable");
+      }
+    }
+    return onboardingDocumentSha256({
+      schema_version: 1,
+      kind: "echo-onboarding-service-stage-observation",
+      stage_path: staged.stage_path,
+      stage_sha256: staged.stage_sha256,
+      label: staged.label,
+      plist_path: staged.plist_path,
+    });
+  };
+
+  const validateProfileBinding = async (
+    transaction: OnboardingTransactionV1,
+  ) => {
+    const stage = transaction.steps.stage_local;
+    if (stage.state !== "succeeded") return null;
+    try {
+      const profileMatches =
+        (await currentProfileBindingSha256()) ===
+        stage.accepted_receipt_sha256;
+      const serviceStage = transaction.steps.service_install;
+      const serviceMatches =
+        serviceStage.state !== "succeeded" ||
+        (await currentServiceStageSha256()) ===
+          serviceStage.accepted_receipt_sha256;
+      if (!profileMatches || !serviceMatches) {
+        return {
+          result: "preserved" as const,
+          reasonCode: "profile_binding_mismatch",
+        };
+      }
+      const authorization = resolveOrganizationAuthorization(
+        loadProductRuntimeConfig(configPath),
+        dependencies,
+      );
+      if (authorization.accessGate === undefined) {
+        return {
+          result: "waiting_for_administrator" as const,
+          reasonCode: "organization_access_refresh_required",
+        };
+      }
+      try {
+        await authorization.accessGate.assertAuthorized();
+      } catch {
+        const state = new SqliteOrganizationStateStore(
+          resolveProductStatePaths(stateDirectory).database,
+        );
+        try {
+          const decision = state.verifyCurrentAccess({
+            now: resolveProductClock(dependencies.now)(),
+            maximum_active_ttl_ms:
+              MAX_LOCAL_ORGANIZATION_ACTIVE_LEASE_TTL_MS,
+            allowed_clock_skew_ms:
+              DEFAULT_LOCAL_ORGANIZATION_ACCESS_CLOCK_SKEW_MS,
+          });
+          if (!decision.permitted) {
+            return {
+              result: "waiting_for_administrator" as const,
+              reasonCode: "organization_access_revoked",
+            };
+          }
+        } catch {
+          // An expired/missing lease plus an unavailable refresh is an
+          // operational retry, not an administrator action.
+        } finally {
+          state.close();
+        }
+        return {
+          result: "retryable" as const,
+          reasonCode: "organization_access_refresh_unavailable",
+        };
+      } finally {
+        await authorization.accessGate.close?.();
+      }
+      const organizationState = new SqliteOrganizationStateStore(
+        resolveProductStatePaths(stateDirectory).database,
+      );
+      try {
+        const enrollment = organizationState.readEnrollment();
+        const decision = organizationState.verifyCurrentAccess({
+          now: resolveProductClock(dependencies.now)(),
+          maximum_active_ttl_ms:
+            MAX_LOCAL_ORGANIZATION_ACTIVE_LEASE_TTL_MS,
+          allowed_clock_skew_ms:
+            DEFAULT_LOCAL_ORGANIZATION_ACCESS_CLOCK_SKEW_MS,
+        });
+        if (enrollment?.receipt === null || enrollment?.receipt === undefined) {
+          return {
+            result: "preserved" as const,
+            reasonCode: "profile_binding_unavailable",
+          };
+        }
+        if (!decision.permitted || decision.state.status !== "active") {
+          return {
+            result: "waiting_for_administrator" as const,
+            reasonCode: "organization_access_revoked",
+          };
+        }
+        if (
+          decision.state.authority_id !== enrollment.request.authority_id ||
+          decision.state.organization_id !==
+            enrollment.request.organization_id ||
+          decision.state.principal_id !== enrollment.request.principal_id ||
+          decision.state.membership_id !== enrollment.request.membership_id ||
+          decision.state.installation_id !==
+            enrollment.request.installation_id ||
+          decision.state.enrollment_id !== enrollment.receipt.enrollment_id
+        ) {
+          return {
+            result: "preserved" as const,
+            reasonCode: "profile_binding_mismatch",
+          };
+        }
+      } catch {
+        return {
+          result: "retryable" as const,
+          reasonCode: "organization_access_refresh_unavailable",
+        };
+      } finally {
+        organizationState.close();
+      }
+      return null;
+    } catch {
+      return {
+        result: "preserved" as const,
+        reasonCode: "profile_binding_unavailable",
+      };
+    }
+  };
+
+  const inspectNewTarget = async () => {
+    if (onboardingBuildIdentity.source_kind !== "materialized-commit") {
+      return {
+        status: "denied" as const,
+        reasonCode: "unverified_build",
+        step: "classify" as const,
+      };
+    }
+    if (
+      onboardingPlatform !== "darwin" ||
+      onboardingArchitecture !== "arm64"
+    ) {
+      return {
+        status: "denied" as const,
+        reasonCode: "unsupported_platform",
+        step: "classify" as const,
+      };
+    }
+    if (onboardingNodeVersion !== "v22.22.1") {
+      return {
+        status: "denied" as const,
+        reasonCode: "unsupported_node_runtime",
+        step: "classify" as const,
+      };
+    }
+    if (invitation.status !== "issued" || invitation.issued === null) {
+      return {
+        status: "denied" as const,
+        reasonCode: "invitation_not_issued",
+        step: "verify_trust" as const,
+      };
+    }
+    if (
+      Date.parse(invitation.issued.expires_at) <=
+      Date.parse(resolveProductClock(dependencies.now)())
+    ) {
+      return {
+        status: "denied" as const,
+        reasonCode: "invitation_expired",
+        step: "verify_trust" as const,
+      };
+    }
+    if (invitation.authority_pin_sha256 !== parsed.authorityPin) {
+      return {
+        status: "denied" as const,
+        reasonCode: "authority_pin_mismatch",
+        step: "verify_trust" as const,
+      };
+    }
+    try {
+      const classifier =
+        dependencies.classifyStateFilesystem ?? classifyStateFilesystem;
+      const filesystem = await classifier(stateDirectory);
+      if (filesystem.kind !== "local") {
+        return {
+          status: "preserved" as const,
+          reasonCode: "nonlocal_state_filesystem",
+          step: "classify" as const,
+        };
+      }
+    } catch {
+      return {
+        status: "preserved" as const,
+        reasonCode: "existing_installation_ambiguous",
+        step: "classify" as const,
+      };
+    }
+    try {
+      refuseRetiredFounderProvenance(stateDirectory);
+    } catch {
+      return {
+        status: "preserved" as const,
+        reasonCode: "retired_residue_preserved",
+        step: "classify" as const,
+      };
+    }
+    try {
+      preflightProductOnboard(configPath, stateDirectory, {
+        fileSystem,
+        granolaOwnerEmail: parsed.ownerEmail!,
+        slackApproval: {
+          channelId: parsed.slackChannelId!,
+          reviewerUserId: parsed.slackReviewerUserId!,
+          reviewerName: parsed.slackReviewerName!,
+        },
+      });
+    } catch (error) {
+      const invalidHumanInput =
+        error instanceof ProductOperatorError &&
+        error.code === "invalid_onboard_input";
+      const occupiedTarget =
+        error instanceof ProductOperatorError &&
+        error.code === "onboard_target_occupied";
+      const existingInstallation =
+        error instanceof ProductOperatorError &&
+        error.code === "existing_onboard_installation";
+      return {
+        status: invalidHumanInput
+          ? ("waiting_for_user" as const)
+          : ("preserved" as const),
+        reasonCode: invalidHumanInput
+          ? "onboarding_input_invalid"
+          : existingInstallation
+            ? "existing_installation_use_update"
+            : occupiedTarget
+            ? "incomplete_config_state_pair"
+            : "local_target_invalid",
+        step: invalidHumanInput
+          ? ("confirm_human" as const)
+          : ("classify" as const),
+      };
+    }
+    try {
+      await ensureAcceptedAuthorityDescriptor();
+    } catch (error) {
+      return {
+        status:
+          error instanceof OrganizationAuthorityTransportError
+            ? ("retryable" as const)
+            : ("denied" as const),
+        reasonCode:
+          error instanceof OrganizationAuthorityTransportError
+            ? "authority_descriptor_unavailable"
+            : "authority_descriptor_mismatch",
+        step: "verify_trust" as const,
+      };
+    }
+    if (parsed.allowExportableSoftwareKey !== true) {
+      return {
+        status: "waiting_for_user" as const,
+        reasonCode: "software_key_consent_required",
+        step: "confirm_human" as const,
+      };
+    }
+    return null;
   };
 
   const steps: Record<OnboardingStepName, OnboardingStepDefinition> = {
     classify: {
-      run: async () => {
-        const buildIdentity =
-          dependencies.operator?.buildIdentity ?? packagedBuildIdentity();
-        if (buildIdentity.source_kind !== "materialized-commit") {
-          return { result: "denied", reasonCode: "unverified_build" };
-        }
-        const platform = dependencies.operator?.platform ?? process.platform;
-        const architecture =
-          dependencies.operator?.architecture ?? process.arch;
-        if (platform !== "darwin" || architecture !== "arm64") {
-          return { result: "denied", reasonCode: "unsupported_platform" };
-        }
-        const nodeVersion =
-          dependencies.operator?.nodeVersion ?? process.version;
-        if (nodeVersion !== "v22.22.1") {
-          return { result: "denied", reasonCode: "unsupported_node_runtime" };
-        }
-        try {
-          refuseRetiredFounderProvenance(parsed.stateDirectory!);
-        } catch {
-          return {
-            result: "preserved",
-            reasonCode: "retired_residue_preserved",
-          };
-        }
-        const classifier =
-          dependencies.classifyStateFilesystem ?? classifyStateFilesystem;
-        const filesystem = await classifier(parsed.stateDirectory!);
-        if (filesystem.kind !== "local") {
-          return {
-            result: "preserved",
-            reasonCode: "nonlocal_state_filesystem",
-          };
-        }
-        const configExists = fileSystem.exists(parsed.configPath);
-        const stateExists = fileSystem.exists(parsed.stateDirectory!);
-        if (configExists && !stateExists) {
-          return {
-            result: "preserved",
-            reasonCode: "incomplete_config_state_pair",
-          };
-        }
-        if (configExists) {
-          const report = await captured("onboard classify status", [
-            "status",
-            "--config",
-            parsed.configPath,
-          ]);
-          if (!statusIsStopped(report)) {
-            return {
-              result: "preserved",
-              reasonCode: "existing_installation_use_update",
-            };
-          }
-        }
-        return { result: "succeeded", reasonCode: "machine_supported" };
-      },
+      run: async () => ({
+        result: "succeeded",
+        reasonCode: "machine_supported",
+      }),
     },
     verify_trust: {
-      run: async () => {
-        if (invitation.status !== "issued" || invitation.issued === null) {
-          return { result: "denied", reasonCode: "invitation_not_issued" };
-        }
-        if (invitation.authority_pin_sha256 !== parsed.authorityPin) {
-          return { result: "denied", reasonCode: "authority_pin_mismatch" };
-        }
-        return { result: "succeeded", reasonCode: "trust_verified" };
-      },
+      run: async () => ({
+        result: "succeeded",
+        reasonCode: "trust_verified",
+      }),
     },
     confirm_human: {
-      run: async () =>
-        parsed.allowExportableSoftwareKey === true
-          ? { result: "succeeded", reasonCode: "software_key_acknowledged" }
-          : {
-              result: "waiting_for_user",
-              reasonCode: "software_key_consent_required",
-            },
+      run: async () => ({
+        result: "succeeded",
+        reasonCode: "software_key_acknowledged",
+      }),
     },
     stage_local: {
-      // Central enrollment may occur the moment this step runs: the durable
-      // effect boundary is recorded before the executor is called.
-      effect: "central_enrollment",
+      // The legacy bootstrap wrapper crosses three independently meaningful
+      // boundaries. Until Slice 2 splits them, record every may-have-occurred
+      // effect before invoking it.
+      effects: ["local_mutation", "provider_connection", "central_enrollment"],
       run: async () => {
-        await captured("onboard bootstrap", [
-          "bootstrap",
-          "--config",
-          parsed.configPath,
-          "--state-dir",
-          parsed.stateDirectory!,
-          "--owner-email",
-          parsed.ownerEmail!,
-          "--slack-channel-id",
-          parsed.slackChannelId!,
-          "--slack-reviewer-user-id",
-          parsed.slackReviewerUserId!,
-          "--slack-reviewer-name",
-          parsed.slackReviewerName!,
-          "--invitation",
-          parsed.invitationPath!,
-          "--authority-pin",
-          parsed.authorityPin!,
-          "--allow-exportable-software-key",
-          ...(parsed.authorityCaPath === undefined
-            ? []
-            : ["--authority-ca", parsed.authorityCaPath]),
-        ]);
-        return { result: "succeeded", reasonCode: "bootstrap_complete" };
+        const authorityDescriptor =
+          await ensureAcceptedAuthorityDescriptor();
+        await captured(
+          "onboard bootstrap",
+          [
+            "bootstrap",
+            "--config",
+            configPath,
+            "--state-dir",
+            stateDirectory,
+            "--owner-email",
+            parsed.ownerEmail!,
+            "--slack-channel-id",
+            parsed.slackChannelId!,
+            "--slack-reviewer-user-id",
+            parsed.slackReviewerUserId!,
+            "--slack-reviewer-name",
+            parsed.slackReviewerName!,
+            "--invitation",
+            parsed.invitationPath!,
+            "--authority-pin",
+            parsed.authorityPin!,
+            "--allow-exportable-software-key",
+            ...(parsed.authorityCaPath === undefined
+              ? []
+              : ["--authority-ca", parsed.authorityCaPath]),
+          ],
+          preparedBootstrapDependencies(authorityDescriptor),
+        );
+        try {
+          return {
+            result: "succeeded",
+            reasonCode: "bootstrap_complete",
+            receiptSha256: await currentProfileBindingSha256(),
+          };
+        } catch {
+          return {
+            result: "retryable",
+            reasonCode: "profile_binding_unavailable",
+          };
+        }
       },
     },
     enroll: {
       run: async () => {
         const organizationState = new SqliteOrganizationStateStore(
-          resolveProductStatePaths(parsed.stateDirectory!).database,
+          resolveProductStatePaths(stateDirectory).database,
         );
-        let enrolled = false;
+        let enrollmentIdentity:
+          | {
+              authority_id: string;
+              organization_id: string;
+              principal_id: string;
+              membership_id: string;
+              installation_id: string;
+              enrollment_id: string;
+              enrollment_receipt_sha256: string;
+            }
+          | null = null;
         try {
           const enrollment = organizationState.readEnrollment();
-          enrolled =
+          if (
             enrollment !== null &&
             enrollment.receipt !== null &&
-            enrollment.accepted_access_sequence > 0;
+            enrollment.accepted_access_sequence > 0
+          ) {
+            enrollmentIdentity = {
+              authority_id: enrollment.request.authority_id,
+              organization_id: enrollment.request.organization_id,
+              principal_id: enrollment.request.principal_id,
+              membership_id: enrollment.request.membership_id,
+              installation_id: enrollment.request.installation_id,
+              enrollment_id: enrollment.receipt.enrollment_id,
+              enrollment_receipt_sha256: onboardingDocumentSha256(
+                enrollment.receipt,
+              ),
+            };
+          }
         } finally {
           organizationState.close();
         }
-        if (!enrolled) {
+        if (enrollmentIdentity === null) {
           return {
             result: "retryable",
             reasonCode: "enrollment_receipt_missing",
           };
         }
-        const refreshed = await captured("onboard access refresh", [
-          "organization",
-          "refresh",
-          "--config",
-          parsed.configPath,
-        ]);
-        const access = refreshed["access"];
+        const state = new SqliteOrganizationStateStore(
+          resolveProductStatePaths(stateDirectory).database,
+        );
+        let access: OrganizationInstallationAccessDecisionV1;
+        try {
+          access = state.verifyCurrentAccess({
+            now: resolveProductClock(dependencies.now)(),
+            maximum_active_ttl_ms:
+              MAX_LOCAL_ORGANIZATION_ACTIVE_LEASE_TTL_MS,
+            allowed_clock_skew_ms:
+              DEFAULT_LOCAL_ORGANIZATION_ACCESS_CLOCK_SKEW_MS,
+          });
+        } finally {
+          state.close();
+        }
         if (
-          access === null ||
-          typeof access !== "object" ||
-          Array.isArray(access) ||
-          (access as Record<string, unknown>)["permitted"] !== true ||
-          (access as Record<string, unknown>)["status"] !== "active"
+          !access.permitted ||
+          access.state.status !== "active" ||
+          access.state.authority_id !== enrollmentIdentity.authority_id ||
+          access.state.organization_id !== enrollmentIdentity.organization_id ||
+          access.state.principal_id !== enrollmentIdentity.principal_id ||
+          access.state.membership_id !== enrollmentIdentity.membership_id ||
+          access.state.installation_id !== enrollmentIdentity.installation_id ||
+          access.state.enrollment_id !== enrollmentIdentity.enrollment_id
         ) {
           return {
             result: "retryable",
             reasonCode: "organization_access_inactive",
           };
         }
-        return { result: "succeeded", reasonCode: "enrollment_active" };
+        return {
+          result: "succeeded",
+          reasonCode: "enrollment_active",
+          receiptSha256: onboardingDocumentSha256({
+            schema_version: 1,
+            kind: "echo-onboarding-access-observation",
+            enrollment_receipt_sha256:
+              enrollmentIdentity.enrollment_receipt_sha256,
+            access,
+          }),
+        };
       },
     },
     service_install: {
-      effect: "service_activation",
+      effects: ["local_mutation"],
       run: async () => {
-        await captured("onboard service install", [
-          "service",
-          "install",
-          "--config",
-          parsed.configPath,
-        ]);
-        return { result: "succeeded", reasonCode: "service_installed" };
-      },
-    },
-    service_start: {
-      run: async () => {
-        const report = await captured("onboard service status", [
-          "status",
-          "--config",
-          parsed.configPath,
-        ]);
-        return serviceIsRunning(report)
-          ? { result: "succeeded", reasonCode: "service_running" }
-          : { result: "retryable", reasonCode: "service_not_running" };
+        const config = loadProductRuntimeConfig(configPath);
+        const operator = createProductOperator(configPath, config, dependencies);
+        const staged = await withRuntimeMutationFence(
+          operator,
+          dependencies,
+          stateDirectory,
+          async () => await operator.stageService(),
+        );
+        if (!staged.staged) {
+          return {
+            result: "retryable",
+            reasonCode: "service_not_staged",
+          };
+        }
+        return {
+          result: "succeeded",
+          reasonCode: "service_staged",
+          receiptSha256: await currentServiceStageSha256(),
+        };
       },
     },
     doctor: {
       run: async () => {
-        await captured("onboard doctor", [
-          "doctor",
-          "--config",
-          parsed.configPath,
-          "--local-only",
-        ]);
-        return { result: "succeeded", reasonCode: "doctor_passed" };
+        const config = loadProductRuntimeConfig(configPath);
+        const report = await diagnoseProductInstallation({
+          configPath,
+          config,
+          dependencies,
+          serviceExpectation: "staged",
+        });
+        return report.ok
+          ? {
+              result: "succeeded",
+              reasonCode: "doctor_passed",
+              receiptSha256: onboardingDocumentSha256(report),
+            }
+          : { result: "retryable", reasonCode: "doctor_failed" };
       },
     },
     readiness: {
       run: async () => {
-        const report = await captured("onboard readiness status", [
-          "status",
-          "--config",
-          parsed.configPath,
-        ]);
-        const issues = report["issues"];
+        const report = await createProductOperator(
+          configPath,
+          loadProductRuntimeConfig(configPath),
+          dependencies,
+        ).status();
+        let staged = false;
+        try {
+          staged = createProductOperator(
+            configPath,
+            loadProductRuntimeConfig(configPath),
+            dependencies,
+          ).inspectStagedService().staged;
+        } catch {
+          staged = false;
+        }
         if (
-          report["initialized"] !== true ||
-          !Array.isArray(issues) ||
-          issues.length !== 0
+          report.initialized !== true ||
+          report.issues.length !== 0 ||
+          report.service.installed ||
+          report.service.loaded ||
+          report.service.running ||
+          !staged
         ) {
           return {
             result: "retryable",
             reasonCode: "installation_not_ready",
           };
         }
-        return { result: "succeeded", reasonCode: "installation_ready" };
+        return {
+          result: "succeeded",
+          reasonCode: "installation_ready",
+          receiptSha256: onboardingDocumentSha256({
+            schema_version: 1,
+            kind: "echo-onboarding-readiness-observation",
+            profile_binding_sha256: await currentProfileBindingSha256(),
+            service_stage_sha256: await currentServiceStageSha256(),
+            package_identity: report.package_identity,
+            service: report.service,
+          }),
+        };
       },
     },
     activate: {
-      run: async () => ({ result: "succeeded", reasonCode: "profile_ready" }),
+      effects: ["service_activation", "product_work"],
+      run: async ({ operationId }) => ({
+        result: "succeeded",
+        reasonCode: "activation_authorized",
+        receiptSha256: onboardingDocumentSha256({
+          schema_version: 1,
+          kind: "echo-onboarding-activation-authorization",
+          operation_id: operationId,
+          profile_binding_sha256: await currentProfileBindingSha256(),
+        }),
+      }),
     },
   };
 
-  const status: OnboardingPublicStatus = await runOnboardingFlow({
-    store,
-    steps,
-    identity,
-    configPath: parsed.configPath,
-    stateDirectory: parsed.stateDirectory!,
-    ...(dependencies.now === undefined ? {} : { now: dependencies.now }),
-    nextOperationId: (step) => `onb-${step}-${randomUUID()}`,
-  });
+  let status: OnboardingPublicStatus;
+  try {
+    status = await runOnboardingFlow({
+      store,
+      steps,
+      identity,
+      configPath,
+      stateDirectory,
+      inputSha256,
+      ...(dependencies.now === undefined ? {} : { now: dependencies.now }),
+      nextOperationId: (step) => `onb-${step}-${randomUUID()}`,
+      beforeCreate: inspectNewTarget,
+      validateResume: validateProfileBinding,
+      withReadyCommit: async (commit) => {
+        const operator = createProductOperator(
+          configPath,
+          loadProductRuntimeConfig(configPath),
+          dependencies,
+        );
+        return await withRuntimeMutationFence(
+          operator,
+          dependencies,
+          stateDirectory,
+          commit,
+        );
+      },
+      afterReadyCommit: async ({ transaction, operationId }) => {
+        const expectedBinding =
+          transaction.steps.stage_local.accepted_receipt_sha256;
+        if (expectedBinding === null) {
+          throw new Error("activation has no accepted profile binding");
+        }
+        if ((await currentProfileBindingSha256()) !== expectedBinding) {
+          throw new Error("activation profile binding changed");
+        }
+        const config = loadProductRuntimeConfig(configPath);
+        const operator = createProductOperator(
+          configPath,
+          config,
+          dependencies,
+        );
+        const activated = await operator.activateStagedService();
+        if (
+          !activated.installed ||
+          !activated.service.loaded ||
+          !activated.service.running
+        ) {
+          throw new Error("activation did not start the exact service");
+        }
+        if ((await currentProfileBindingSha256()) !== expectedBinding) {
+          throw new Error("activation profile binding changed during start");
+        }
+        if (transaction.steps.activate.operation_id !== operationId) {
+          throw new Error("activation operation identity changed");
+        }
+      },
+    });
+  } catch (error) {
+    const transactionConflict =
+      error instanceof OnboardingTransactionError &&
+      error.code === "invalid_transaction";
+    const retryable = !transactionConflict;
+    print(stdout, {
+      ok: false,
+      command: "onboard",
+      status: retryable ? "retryable" : "preserved",
+      reason_code:
+        error instanceof OnboardingTransactionError && error.code === "busy"
+          ? "onboarding_in_progress"
+          : transactionConflict
+            ? "onboarding_transaction_conflict"
+            : "onboarding_operation_interrupted",
+      flow_id: identity.flow_id,
+      step: "classify",
+      effects: {
+        local_mutation: true,
+        central_enrollment: true,
+        provider_connection: true,
+        service_activation: true,
+        product_work: true,
+      },
+    });
+    return retryable ? 0 : 1;
+  }
   print(stdout, {
     ok: status.status === "ready",
     command: "onboard",
     ...status,
   });
   return status.status === "denied" || status.status === "preserved" ? 1 : 0;
+}
+
+async function assertOnboardingProductWorkAdmitted(
+  configPath: string,
+  stateDirectory: string,
+  dependencies: ProductCliDependencies,
+): Promise<boolean> {
+  const onboardingDirectory = join(
+    dependencies.operator?.homeDirectory ?? homedir(),
+    "Library",
+    "Application Support",
+    "Echo Brain",
+    "onboarding",
+  );
+  const fileSystem =
+    dependencies.operator?.fileSystem ?? nodeOperatorFileSystem;
+  if (!fileSystem.exists(onboardingDirectory)) return false;
+  const store = new FileOnboardingTransactionStore({
+    directory: onboardingDirectory,
+    stateDir: stateDirectory,
+  });
+  const active = await store.loadActive();
+  if (active === null) return false;
+  const exactTarget =
+    active.config_path === canonicalLocalPath(
+      configPath,
+      "product config path",
+      true,
+    ) &&
+    active.state_dir === canonicalLocalPath(
+      stateDirectory,
+      "product state directory",
+      true,
+    );
+  if (
+    exactTarget &&
+    active.finished_at !== null &&
+    active.terminal_result === "ready" &&
+    (await store.hasReceipt(onboardingReceiptForFinishedTransaction(active)))
+  ) {
+    return true;
+  }
+  throw new ProductOperatorError(
+    "service_conflict",
+    "product work is reserved by an onboarding transaction that has no exact ready receipt",
+  );
 }
 
 export async function runProductCli(
@@ -2444,6 +3489,11 @@ export async function runProductCli(
       return 1;
     }
     try {
+      await assertOnboardingProductWorkAdmitted(
+        parsed.configPath,
+        config.state_dir,
+        dependencies,
+      );
       const execute =
         dependencies.internalLive?.execute ?? runInternalLiveUpdate;
       const result = await execute({
@@ -2516,6 +3566,13 @@ export async function runProductCli(
     if ((await requireLocalState(parsed, config, classifier, stderr)) === null)
       return 1;
     try {
+      if (action !== "enroll" && action !== "refresh" && action !== "status") {
+        await assertOnboardingProductWorkAdmitted(
+          parsed.configPath,
+          config.state_dir,
+          dependencies,
+        );
+      }
       const initialized = await createProductOperator(
         parsed.configPath,
         config,
@@ -2614,9 +3671,20 @@ export async function runProductCli(
           state.close();
         }
       } else if (action === "enroll") {
-        const invitation = readPrivateOrganizationEnrollmentInvitation(
-          parsed.invitationPath!,
-        );
+        const preparedEnrollment =
+          dependencies.bootstrap?.preparedOrganizationEnrollment;
+        if (
+          preparedEnrollment !== undefined &&
+          (preparedEnrollment.invitationPath !== parsed.invitationPath ||
+            preparedEnrollment.authorityCaPath !== parsed.authorityCaPath)
+        ) {
+          throw new Error(
+            "prepared enrollment input does not match enrollment paths",
+          );
+        }
+        const invitation =
+          preparedEnrollment?.invitation ??
+          readPrivateOrganizationEnrollmentInvitation(parsed.invitationPath!);
         if (invitation.status !== "issued" || invitation.issued === null) {
           throw new Error(
             "organization invitation has not been issued by its authority",
@@ -2632,9 +3700,9 @@ export async function runProductCli(
           new FileInstallationSigner(
             join(config.state_dir, "installation", "keys"),
           );
-        const authorityCaPem = readOrganizationAuthorityCa(
-          parsed.authorityCaPath,
-        );
+        const authorityCaPem =
+          preparedEnrollment?.authorityCaPem ??
+          readOrganizationAuthorityCa(parsed.authorityCaPath);
         const runtime = createLocalOrganizationRuntime({
           databasePath: paths.database,
           authorityBaseUrl: invitation.authority_base_url,
@@ -2647,9 +3715,11 @@ export async function runProductCli(
         });
         try {
           const descriptor =
+            preparedEnrollment?.authorityDescriptor ??
             validateOrganizationAuthorityDescriptorResponse(
               await runtime.authorityClient.readAuthorityDescriptor(),
             ).authority_descriptor;
+          verifyOrganizationAuthorityPin(descriptor, parsed.authorityPin);
           if (
             descriptor.authority_id !== invitation.authority_id ||
             descriptor.organization_id !== invitation.organization_id
@@ -2929,6 +3999,11 @@ export async function runProductCli(
   }
   if (parsed.command === "service-run") {
     try {
+      await assertOnboardingProductWorkAdmitted(
+        parsed.configPath,
+        config.state_dir,
+        dependencies,
+      );
       createProductOperator(
         parsed.configPath,
         config,
@@ -2938,10 +4013,16 @@ export async function runProductCli(
       printOperatorError(stderr, parsed.command, error);
       return 1;
     }
-    return await runServiceDaemon(config, classifier, dependencies, {
+    return await runServiceDaemon(
+      parsed.configPath,
+      config,
+      classifier,
+      dependencies,
+      {
       stdout,
       stderr,
-    });
+      },
+    );
   }
   if (parsed.command === "backup" || parsed.command === "restore") {
     if ((await requireLocalState(parsed, config, classifier, stderr)) === null)
@@ -3196,54 +4277,32 @@ export async function runProductCli(
       return 1;
     }
     try {
-      let result: Awaited<ReturnType<ProductOperator["service"]>>;
-      if (action === "restart") {
-        operator.preflightServiceStart();
-        await operator.service("stop");
-        const release = await lifecycleLock(
-          dependencies,
-          config.state_dir,
-          "runtime",
-          15_000,
-        );
-        try {
-          const started = await operator.service("start");
-          result = { ...started, action: "restart", changed: true };
-        } finally {
-          await release();
-        }
-      } else if (
+      if (
         action === "install" ||
-        action === "start"
+        action === "start" ||
+        action === "restart"
       ) {
-        const before = await operator.status();
-        if (before.service.running) {
-          result = await operator.service(action);
-        } else {
-          const release = await lifecycleLock(
-            dependencies,
-            config.state_dir,
-            "runtime",
-            15_000,
-          );
-          try {
-            result = await operator.service(action);
-          } finally {
-            await release();
-          }
-        }
-      } else if (action === "stop" || action === "uninstall") {
-        result = await operator.service(action);
-        const release = await lifecycleLock(
-          dependencies,
+        await assertOnboardingProductWorkAdmitted(
+          parsed.configPath,
           config.state_dir,
-          "runtime",
-          15_000,
+          dependencies,
         );
-        await release();
-      } else {
-        result = await operator.service(action);
       }
+      let result: Awaited<ReturnType<ProductOperator["service"]>>;
+      result = await serviceLifecycleActionWithRuntimeLock(
+        operator,
+        action,
+        dependencies,
+        config.state_dir,
+        action === "install" || action === "start" || action === "restart"
+          ? async () =>
+              void (await assertOnboardingProductWorkAdmitted(
+                parsed.configPath,
+                config.state_dir,
+                dependencies,
+              ))
+          : undefined,
+      );
       print(stdout, {
         ok: true,
         command: parsed.command,
@@ -3355,6 +4414,18 @@ export async function runProductCli(
         15_000,
       );
       try {
+        const onboardingOwned = await assertOnboardingProductWorkAdmitted(
+          parsed.configPath,
+          config.state_dir,
+          dependencies,
+        );
+        if (onboardingOwned) {
+          createProductOperator(
+            parsed.configPath,
+            config,
+            dependencies,
+          ).preflightProductWork();
+        }
         prepareProductStateRoot(config.state_dir);
         const composition = await createCliComposition(
           config,
@@ -3397,6 +4468,7 @@ export async function runProductCli(
  * SIGTERM, holding the runtime lifecycle lock throughout.
  */
 async function runServiceDaemon(
+  configPath: string,
   config: ProductRuntimeConfig,
   classifier: ClassifyStateFilesystem,
   dependencies: ProductCliDependencies,
@@ -3419,6 +4491,16 @@ async function runServiceDaemon(
     return 1;
   }
   try {
+    await assertOnboardingProductWorkAdmitted(
+      configPath,
+      config.state_dir,
+      dependencies,
+    );
+    createProductOperator(
+      configPath,
+      config,
+      dependencies,
+    ).preflightServiceRun();
     prepareProductStateRoot(config.state_dir);
     const processLike = dependencies.process ?? process;
     let signalWaiter: SignalWaiter;

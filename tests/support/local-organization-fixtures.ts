@@ -262,6 +262,7 @@ export class TestAuthority {
     receipt: OrganizationEnrollmentReceiptV1,
     previousState: OrganizationInstallationAccessStateV1,
     activeLeaseTtlMs = MAX_TTL_MS,
+    evaluatedAt = REFRESHED_AT,
   ): Promise<OrganizationInstallationAccessStateV1> {
     const pinned = verifyOrganizationAuthorityPin(this.descriptor, this.pin);
     return createOrganizationInstallationAccessState(
@@ -270,10 +271,10 @@ export class TestAuthority {
         receipt,
         previous_state: previousState,
         access_state_sequence: previousState.access_state_sequence + 1,
-        evaluated_at: REFRESHED_AT,
+        evaluated_at: evaluatedAt,
         status: 'active',
         valid_until: new Date(
-          Date.parse(REFRESHED_AT) + activeLeaseTtlMs,
+          Date.parse(evaluatedAt) + activeLeaseTtlMs,
         ).toISOString(),
         maximum_active_ttl_ms: activeLeaseTtlMs,
       },

@@ -31,6 +31,7 @@ import {
   type ProductCredentialResolver,
 } from './credentials.js';
 import {
+  assertDisjointPaths,
   assertNoPermissiveDarwinAcl,
   pathIsWithin,
 } from './secure-local-files.js';
@@ -54,6 +55,9 @@ export type ProductServiceAction =
 export type OperatorFailureCode =
   | 'unsupported_platform'
   | 'invalid_operator_path'
+  | 'invalid_onboard_input'
+  | 'existing_onboard_installation'
+  | 'onboard_target_occupied'
   | 'not_initialized'
   | 'installation_conflict'
   | 'service_conflict'
@@ -141,6 +145,20 @@ export interface ProductOperatorStatus {
   issues: readonly string[];
 }
 
+export interface ProductStagedService {
+  staged: boolean;
+  stage_path: string;
+  stage_sha256: string;
+  label: string;
+  plist_path: string;
+}
+
+export interface ProductExecutionIdentity {
+  uid: number;
+  staged_plist_path: string;
+  installation: ProductInstallationRecord;
+}
+
 export interface ProductDoctorCheck {
   id:
     | 'platform'
@@ -152,6 +170,7 @@ export interface ProductDoctorCheck {
     | 'cli-entrypoint'
     | 'service-plist'
     | 'service-running'
+    | 'service-staged'
     | 'service-credentials'
     | 'organization-state'
     | 'adapters';
@@ -171,6 +190,7 @@ interface OperatorContext {
   installationPath: string;
   label: string;
   plistPath: string;
+  stagedPlistPath: string;
   stdoutPath: string;
   stderrPath: string;
   credentialsDirectory: string;
@@ -277,6 +297,8 @@ export interface ProductOnboardOptions {
   slackApproval: ProductSlackApprovalBootstrapProfile;
 }
 
+export type ProductOnboardPreflight = ProductOnboardResult;
+
 function canonicalLowercaseEmail(value: string): boolean {
   if (value.length === 0 || value.length > 254 || /\s/u.test(value)) return false;
   const [local, domain, extra] = value.split('@');
@@ -298,19 +320,19 @@ export function createProductOnboardConfig(
 ): ProductRuntimeConfig {
   if (!canonicalLowercaseEmail(granolaOwnerEmail)) {
     throw new ProductOperatorError(
-      'installation_conflict',
+      'invalid_onboard_input',
       'Granola owner must be a canonical lowercase email address',
     );
   }
   if (!/^C[A-Z0-9]{2,}$/.test(slackApproval.channelId)) {
     throw new ProductOperatorError(
-      'installation_conflict',
+      'invalid_onboard_input',
       'Slack approval channel must be a canonical Slack channel ID',
     );
   }
   if (!/^[UW][A-Z0-9]{2,}$/.test(slackApproval.reviewerUserId)) {
     throw new ProductOperatorError(
-      'installation_conflict',
+      'invalid_onboard_input',
       'Slack approval reviewer must be a canonical Slack user ID',
     );
   }
@@ -320,7 +342,7 @@ export function createProductOnboardConfig(
     slackApproval.reviewerName.length > 256
   ) {
     throw new ProductOperatorError(
-      'installation_conflict',
+      'invalid_onboard_input',
       'Slack approval reviewer name must be a trimmed non-empty name',
     );
   }
@@ -376,6 +398,94 @@ export function createProductOnboardConfig(
       },
     },
   });
+}
+
+/**
+ * Validate a brand-new onboarding target without creating or changing files.
+ *
+ * The coordinator calls this before it publishes an effect-bearing intent;
+ * `onboardProduct` calls it again at the mutation edge to close the TOCTOU
+ * window. Keep every deterministic input/path rejection on this shared side
+ * of the first local, provider, or Authority effect.
+ */
+export function preflightProductOnboard(
+  configPath: string,
+  stateDirectory: string,
+  options: ProductOnboardOptions,
+): ProductOnboardPreflight {
+  const fileSystem = options.fileSystem ?? nodeOperatorFileSystem;
+  if (!normalizedAbsolute(configPath)) {
+    throw new ProductOperatorError(
+      'invalid_operator_path',
+      'onboard --config must be a normalized absolute path',
+    );
+  }
+  if (!normalizedAbsolute(stateDirectory)) {
+    throw new ProductOperatorError(
+      'invalid_operator_path',
+      'onboard --state-dir must be a normalized absolute path',
+    );
+  }
+  try {
+    assertDisjointPaths(
+      configPath,
+      stateDirectory,
+      'onboard config',
+      'onboard state directory',
+    );
+  } catch {
+    throw new ProductOperatorError(
+      'invalid_operator_path',
+      'onboard config must live outside state_dir so state restore cannot replace its own control file',
+    );
+  }
+  if (fileSystem.exists(configPath)) {
+    throw new ProductOperatorError(
+      'existing_onboard_installation',
+      `refusing to replace existing config: ${configPath}`,
+    );
+  }
+  assertCanonicalDirectoryPath(
+    dirname(configPath),
+    'onboard config path',
+    fileSystem,
+  );
+  assertCanonicalDirectoryPath(
+    stateDirectory,
+    'onboard state path',
+    fileSystem,
+  );
+  if (fileSystem.exists(stateDirectory)) {
+    const info = fileSystem.lstat(stateDirectory);
+    if (
+      info.isSymbolicLink() ||
+      !info.isDirectory() ||
+      fileSystem.list(stateDirectory).length > 0
+    ) {
+      throw new ProductOperatorError(
+        'onboard_target_occupied',
+        `onboard state target must be a new or empty direct directory: ${stateDirectory}`,
+      );
+    }
+  }
+  const credentialPath = join(stateDirectory, 'credentials', 'granola-api-key');
+  const slackCredentialPath = join(
+    stateDirectory,
+    'credentials',
+    'slack-bot-token',
+  );
+  const config = createProductOnboardConfig(
+    stateDirectory,
+    options.granolaOwnerEmail,
+    options.slackApproval,
+  );
+  return {
+    config_path: configPath,
+    state_dir: stateDirectory,
+    credential_path: credentialPath,
+    slack_credential_path: slackCredentialPath,
+    config,
+  };
 }
 
 function slackChannelId(adapter: AdapterInstanceConfig): string | undefined {
@@ -517,67 +627,16 @@ export function onboardProduct(
   options: ProductOnboardOptions,
 ): ProductOnboardResult {
   const fileSystem = options.fileSystem ?? nodeOperatorFileSystem;
-  if (!normalizedAbsolute(configPath)) {
-    throw new ProductOperatorError(
-      'invalid_operator_path',
-      'onboard --config must be a normalized absolute path',
-    );
-  }
-  if (!normalizedAbsolute(stateDirectory)) {
-    throw new ProductOperatorError(
-      'invalid_operator_path',
-      'onboard --state-dir must be a normalized absolute path',
-    );
-  }
-  if (
-    configPath === stateDirectory ||
-    pathIsWithin(configPath, stateDirectory)
-  ) {
-    throw new ProductOperatorError(
-      'invalid_operator_path',
-      'onboard config must live outside state_dir so state restore cannot replace its own control file',
-    );
-  }
-  if (fileSystem.exists(configPath)) {
-    throw new ProductOperatorError(
-      'installation_conflict',
-      `refusing to replace existing config: ${configPath}`,
-    );
-  }
-  assertCanonicalDirectoryPath(
-    dirname(configPath),
-    'onboard config path',
-    fileSystem,
-  );
-  assertCanonicalDirectoryPath(
+  const preflight = preflightProductOnboard(
+    configPath,
     stateDirectory,
-    'onboard state path',
-    fileSystem,
+    options,
   );
-  if (fileSystem.exists(stateDirectory)) {
-    const info = fileSystem.lstat(stateDirectory);
-    if (
-      info.isSymbolicLink() ||
-      !info.isDirectory() ||
-      fileSystem.list(stateDirectory).length > 0
-    ) {
-      throw new ProductOperatorError(
-        'installation_conflict',
-        `onboard state target must be a new or empty direct directory: ${stateDirectory}`,
-      );
-    }
-  }
-  const credentialPath = join(stateDirectory, 'credentials', 'granola-api-key');
-  const slackCredentialPath = join(
-    stateDirectory,
-    'credentials',
-    'slack-bot-token',
-  );
-  const config = createProductOnboardConfig(
-    stateDirectory,
-    options.granolaOwnerEmail,
-    options.slackApproval,
-  );
+  const {
+    credential_path: credentialPath,
+    slack_credential_path: slackCredentialPath,
+    config,
+  } = preflight;
   const configParent = dirname(configPath);
   if (!fileSystem.exists(configParent)) {
     fileSystem.mkdir(configParent, { recursive: true, mode: 0o700 });
@@ -748,6 +807,17 @@ export class ProductOperator {
         resolve(this.homeDirectory),
         'Library',
         'LaunchAgents',
+        `${label}.plist`,
+      ),
+      // Onboarding stages the exact service definition somewhere launchd does
+      // not scan. Publication into ~/Library/LaunchAgents is the activation
+      // effect and happens only after the durable ready receipt exists.
+      stagedPlistPath: join(
+        resolve(this.homeDirectory),
+        'Library',
+        'Application Support',
+        'Echo Brain',
+        'service-staging',
         `${label}.plist`,
       ),
       stdoutPath: join(paths.logs, 'service.stdout.log'),
@@ -969,8 +1039,14 @@ export class ProductOperator {
   }
 
   preflightServiceStart(): void {
+    this.preflightProductWork();
+  }
+
+  /** Validate the owned installation before any adapter/provider work opens. */
+  preflightProductWork(): void {
     this.assertSupportedPlatform();
     this.requireCurrentRecord();
+    this.requireNoOnboardingServiceReservation();
     this.assertServiceCredentialsReadable();
   }
 
@@ -984,6 +1060,7 @@ export class ProductOperator {
         'LaunchAgent plist is missing for this service invocation',
       );
     }
+    this.requireNoOnboardingServiceReservation();
     this.assertServiceCredentialsReadable();
   }
 
@@ -1094,6 +1171,157 @@ export class ProductOperator {
       );
     }
     return true;
+  }
+
+  private stagedPlistInstalled(): boolean {
+    const path = this.context.stagedPlistPath;
+    if (!this.fileSystem.exists(path)) return false;
+    const info = this.fileSystem.lstat(path);
+    if (info.isSymbolicLink() || !info.isFile()) {
+      throw new ProductOperatorError(
+        'service_conflict',
+        'staged LaunchAgent plist is not a regular file',
+      );
+    }
+    if (!modeIsPrivate(info.mode, 0o600)) {
+      throw new ProductOperatorError(
+        'service_conflict',
+        'staged LaunchAgent plist is not mode 0600',
+      );
+    }
+    if (this.fileSystem.readText(path) !== this.expectedPlist()) {
+      throw new ProductOperatorError(
+        'service_conflict',
+        'staged LaunchAgent plist does not belong to this installation',
+      );
+    }
+    return true;
+  }
+
+  private requireNoOnboardingServiceReservation(): void {
+    if (this.fileSystem.exists(this.context.stagedPlistPath)) {
+      throw new ProductOperatorError(
+        'service_conflict',
+        'service is reserved by incomplete onboarding and cannot start before its ready receipt',
+      );
+    }
+  }
+
+  inspectStagedService(): ProductStagedService {
+    this.assertSupportedPlatform();
+    this.requireCurrentRecord();
+    const staged = this.stagedPlistInstalled();
+    return {
+      staged,
+      stage_path: this.context.stagedPlistPath,
+      stage_sha256: createHash('sha256')
+        .update(this.expectedPlist())
+        .digest('hex'),
+      label: this.context.label,
+      plist_path: this.context.plistPath,
+    };
+  }
+
+  async stageService(): Promise<ProductStagedService> {
+    this.assertSupportedPlatform();
+    this.requireCurrentRecord();
+    this.assertServiceCredentialsReadable();
+    const target = launchdTarget(this.context.uid, this.context.label);
+    const active = await inspectLaunchdService(this.launchctl, target);
+    if (active.loaded || this.plistInstalled()) {
+      throw new ProductOperatorError(
+        'service_conflict',
+        'service is already published or loaded; onboarding requires a quarantined service stage',
+      );
+    }
+    this.ensureDirectory(dirname(this.context.stagedPlistPath));
+    this.fileSystem.createExclusive(
+      this.context.stagedPlistPath,
+      this.expectedPlist(),
+      0o600,
+    );
+    return this.inspectStagedService();
+  }
+
+  async activateStagedService(): Promise<{
+    installed: boolean;
+    service: LaunchdServiceState;
+    changed: boolean;
+  }> {
+    this.assertSupportedPlatform();
+    this.requireCurrentRecord();
+    this.assertServiceCredentialsReadable();
+    const context = this.context;
+    const target = launchdTarget(context.uid, context.label);
+    let before = await inspectLaunchdService(this.launchctl, target);
+    let installed = this.plistInstalled();
+    let changed = false;
+    try {
+      if (!installed) {
+        if (!this.stagedPlistInstalled()) {
+          throw new ProductOperatorError(
+            'not_initialized',
+            'the exact onboarding service stage is unavailable',
+          );
+        }
+        if (before.loaded) {
+          throw new ProductOperatorError(
+            'service_conflict',
+            'launchd label is loaded without the owned installation plist',
+          );
+        }
+        const launchAgents = join(
+          resolve(this.homeDirectory),
+          'Library',
+          'LaunchAgents',
+        );
+        this.ensureDirectory(launchAgents);
+        this.fileSystem.writePrivate(context.plistPath, this.expectedPlist());
+        this.fileSystem.chmod(context.plistPath, 0o600);
+        installed = true;
+        changed = true;
+      } else if (
+        !modeIsPrivate(this.fileSystem.lstat(context.plistPath).mode, 0o600)
+      ) {
+        this.fileSystem.chmod(context.plistPath, 0o600);
+        changed = true;
+      }
+      // Publication is now authoritative and the ready receipt was committed
+      // before this method was entered. Removing the private stage releases
+      // normal service commands; a crash before this unlink stays fenced, and
+      // a crash after it can reconcile from the exact published plist.
+      if (this.fileSystem.exists(context.stagedPlistPath)) {
+        this.fileSystem.unlink(context.stagedPlistPath);
+      }
+      if (!before.loaded) {
+        await requireLaunchctlSuccess(
+          this.launchctl,
+          ['bootstrap', `gui/${context.uid}`, context.plistPath],
+          'launchd bootstrap',
+        );
+        before = await inspectLaunchdService(this.launchctl, target);
+        changed = true;
+      }
+      if (!before.running) {
+        await requireLaunchctlSuccess(
+          this.launchctl,
+          ['kickstart', target],
+          'launchd start',
+        );
+        changed = true;
+      }
+    } catch (error) {
+      if (error instanceof ProductOperatorError) throw error;
+      throw new ProductOperatorError(
+        'service_command_failed',
+        (error as Error).message,
+      );
+    }
+    return {
+      installed,
+      service: await inspectLaunchdService(this.launchctl, target),
+      changed,
+    };
   }
 
   async init(): Promise<{
@@ -1289,12 +1517,27 @@ export class ProductOperator {
     };
   }
 
+  /**
+   * Exact executable/service identity currently authorized by the immutable
+   * installation record. Onboarding binds this whole tuple, not just package
+   * version text, so a resumed flow cannot silently switch Node, CLI, uid, or
+   * launchd paths between local staging and activation.
+   */
+  currentExecutionIdentity(): ProductExecutionIdentity {
+    return {
+      uid: this.context.uid,
+      staged_plist_path: this.context.stagedPlistPath,
+      installation: this.requireCurrentRecord(),
+    };
+  }
+
   async doctor(input: {
     filesystem: StateFilesystemClassification;
     adapters: readonly AdapterDiagnostic[];
     adapterError?: string;
     includeAdapters?: boolean;
     organizationDiagnostic?: { ok: boolean; detail: string };
+    serviceExpectation?: 'running' | 'staged';
   }): Promise<ProductDoctorReport> {
     const checks: ProductDoctorCheck[] = [];
     const platformOk =
@@ -1383,6 +1626,7 @@ export class ProductOperator {
         cliOk ? this.context.cliPath : 'CLI entrypoint is missing',
       ),
     );
+    const serviceExpectation = input.serviceExpectation ?? 'running';
     let plistOk = false;
     try {
       plistOk =
@@ -1394,13 +1638,23 @@ export class ProductOperator {
     } catch {
       plistOk = false;
     }
+    let stagedPlistOk = false;
+    if (serviceExpectation === 'staged') {
+      try {
+        stagedPlistOk = this.stagedPlistInstalled();
+      } catch {
+        stagedPlistOk = false;
+      }
+    }
     checks.push(
       check(
         'service-plist',
-        plistOk,
-        plistOk
-          ? 'LaunchAgent plist matches this installation and is mode 0600'
-          : 'LaunchAgent plist is missing, conflicting, or not mode 0600',
+        serviceExpectation === 'staged' ? stagedPlistOk && !plistOk : plistOk,
+        serviceExpectation === 'staged' && stagedPlistOk && !plistOk
+          ? 'exact LaunchAgent plist is staged privately outside launchd and is mode 0600'
+          : plistOk
+            ? 'LaunchAgent plist matches this installation and is mode 0600'
+            : 'LaunchAgent plist is missing, conflicting, or not mode 0600',
       ),
     );
     const serviceState = platformOk
@@ -1409,11 +1663,17 @@ export class ProductOperator {
           launchdTarget(this.context.uid, this.context.label),
         )
       : { loaded: false, running: false };
+    const serviceMatchesExpectation =
+      serviceExpectation === 'running'
+        ? serviceState.loaded && serviceState.running
+        : stagedPlistOk && !plistOk && !serviceState.loaded && !serviceState.running;
     checks.push(
       check(
-        'service-running',
-        serviceState.loaded && serviceState.running,
-        serviceState.running
+        serviceExpectation === 'running' ? 'service-running' : 'service-staged',
+        serviceMatchesExpectation,
+        serviceExpectation === 'staged' && serviceMatchesExpectation
+          ? 'LaunchAgent is privately staged and cannot be loaded by launchd during onboarding'
+          : serviceState.running
           ? `LaunchAgent is running${serviceState.pid === undefined ? '' : ` as pid ${serviceState.pid}`}`
           : serviceState.loaded
             ? 'LaunchAgent is loaded but stopped'
@@ -1472,7 +1732,9 @@ export class ProductOperator {
     };
   }
 
-  async service(action: ProductServiceAction): Promise<{
+  async service(
+    action: ProductServiceAction,
+  ): Promise<{
     action: ProductServiceAction;
     installed: boolean;
     service: LaunchdServiceState;
@@ -1490,6 +1752,7 @@ export class ProductOperator {
       action === 'restart'
     ) {
       this.assertServiceCredentialsReadable();
+      this.requireNoOnboardingServiceReservation();
     }
     const context = this.context;
     const target = launchdTarget(context.uid, context.label);

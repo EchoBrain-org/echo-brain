@@ -1,17 +1,23 @@
 import { lstatSync } from 'node:fs';
 import { join } from 'node:path';
-import { canonicalJson } from '@echo-brain/federation-protocol';
+import {
+  canonicalJson,
+  parseCanonicalJson,
+} from '@echo-brain/federation-protocol';
 import { atomicWrite } from '../../infrastructure/filesystem/atomic-write.js';
+import { atomicCreate } from '../../infrastructure/filesystem/atomic-create.js';
+import {
+  acquireProcessFileLock,
+  ProcessFileLockError,
+} from '../../infrastructure/filesystem/process-file-lock.js';
 import {
   assertDisjointPaths,
   assertPrivateOwnedDirectory,
   assertPrivateOwnedRegularFile,
   canonicalLocalPath,
   ensureDirectory,
-  fsyncDirectory,
   pathEntryExists,
   readFileNoFollow,
-  writeFileExclusive,
 } from '../secure-local-files.js';
 import {
   OnboardingTransactionError,
@@ -23,6 +29,7 @@ import {
 
 const ACTIVE_TRANSACTION_FILE = 'active-transaction.v1.json';
 const RECEIPTS_DIRECTORY = 'receipts';
+const MUTATION_LOCK = 'mutation.lock';
 const MAX_DURABLE_DOCUMENT_BYTES = 64 * 1024;
 
 export interface FileOnboardingTransactionStoreOptions {
@@ -47,7 +54,9 @@ function readBoundedPrivateJson(path: string, label: string): unknown {
     );
   }
   try {
-    return JSON.parse(readFileNoFollow(path, label).toString('utf8')) as unknown;
+    return parseCanonicalJson(
+      readFileNoFollow(path, label).toString('utf8'),
+    ) as unknown;
   } catch (error) {
     if (error instanceof OnboardingTransactionError) throw error;
     throw new OnboardingTransactionError(
@@ -58,7 +67,7 @@ function readBoundedPrivateJson(path: string, label: string): unknown {
 }
 
 function serialized(value: unknown): string {
-  return `${JSON.stringify(value, null, 2)}\n`;
+  return canonicalJson(value);
 }
 
 /**
@@ -110,6 +119,28 @@ export class FileOnboardingTransactionStore {
     this.activePath = join(this.directory, ACTIVE_TRANSACTION_FILE);
   }
 
+  async acquireMutationLock(): Promise<() => Promise<void>> {
+    try {
+      return await acquireProcessFileLock(join(this.directory, MUTATION_LOCK), {
+        timeoutMs: 0,
+        // Onboarding crash recovery must be immediately resumable. A dead
+        // owner is therefore reclaimable without the generic lock's grace
+        // period; a live owner remains exclusive. Slice 4 replaces this
+        // process-identity lock with the launcher's kernel-backed gate.
+        staleMs: 0,
+        retryMs: 50,
+      });
+    } catch (error) {
+      if (error instanceof ProcessFileLockError && error.code === 'busy') {
+        throw new OnboardingTransactionError(
+          'busy',
+          'another onboarding coordinator owns this transaction',
+        );
+      }
+      throw error;
+    }
+  }
+
   async loadActive(): Promise<OnboardingTransactionV1 | null> {
     if (!pathEntryExists(this.activePath)) return null;
     return parseOnboardingTransaction(
@@ -130,7 +161,7 @@ export class FileOnboardingTransactionStore {
     const validated = parseOnboardingReceipt(receipt);
     const path = join(
       this.receiptsDirectory,
-      `${validated.flow_id}.receipt.v1.json`,
+      `${validated.flow_id}.${validated.input_sha256.slice('sha256:'.length)}.receipt.v1.json`,
     );
     const content = serialized(validated);
     const conflict = (): never => {
@@ -144,20 +175,20 @@ export class FileOnboardingTransactionStore {
       if (canonicalJson(existing) !== canonicalJson(validated)) conflict();
       return;
     }
-    try {
-      writeFileExclusive(path, content, 0o600);
-      fsyncDirectory(this.receiptsDirectory);
-    } catch (error) {
-      if (
-        error instanceof Error &&
-        'code' in error &&
-        (error as NodeJS.ErrnoException).code === 'EEXIST'
-      ) {
-        const existing = readBoundedPrivateJson(path, 'onboarding receipt');
-        if (canonicalJson(existing) === canonicalJson(validated)) return;
-        conflict();
-      }
-      throw error;
-    }
+    if (atomicCreate({ filePath: path, content, mode: 0o600 })) return;
+    const existing = readBoundedPrivateJson(path, 'onboarding receipt');
+    if (canonicalJson(existing) === canonicalJson(validated)) return;
+    conflict();
+  }
+
+  async hasReceipt(receipt: OnboardingReceiptV1): Promise<boolean> {
+    const validated = parseOnboardingReceipt(receipt);
+    const path = join(
+      this.receiptsDirectory,
+      `${validated.flow_id}.${validated.input_sha256.slice('sha256:'.length)}.receipt.v1.json`,
+    );
+    if (!pathEntryExists(path)) return false;
+    const existing = readBoundedPrivateJson(path, 'onboarding receipt');
+    return canonicalJson(existing) === canonicalJson(validated);
   }
 }
