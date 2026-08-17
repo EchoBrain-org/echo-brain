@@ -107,10 +107,6 @@ import {
   loadPackagedBuildIdentity,
   type PackagedBuildIdentityV1,
 } from "./build-identity.js";
-import {
-  runInternalLiveUpdate,
-  type RunInternalLiveUpdateOptions,
-} from "./update/internal-live-runner.js";
 import { parseJson } from "../util/json.js";
 import { nodeOperatorFileSystem } from "./operator-io.js";
 
@@ -147,11 +143,6 @@ export interface ProductCliDependencies {
     createInstallationId?: () => string;
     allowInsecureLoopback?: boolean;
   };
-  internalLive?: {
-    execute?: (
-      options: RunInternalLiveUpdateOptions,
-    ) => ReturnType<typeof runInternalLiveUpdate>;
-  };
   bootstrap?: {
     /** Test/host seam; the default reads a hidden value from the controlling TTY. */
     readGranolaCredential?: () => string | Promise<string>;
@@ -172,7 +163,6 @@ type CliCommand =
   | "status"
   | "doctor"
   | "organization"
-  | "update"
   | "service"
   | "service-run"
   | "backup"
@@ -258,7 +248,6 @@ Usage:
   echo-brain organization rebind --config <absolute-path> --authority-url <https-origin> --authority-pin <sha256:...> [--authority-ca <absolute-path>]
   echo-brain organization slack-link-begin --config <absolute-path>
   echo-brain organization slack-link-complete --config <absolute-path> --challenge-attempt <cat_...> --challenge-message-ts <Slack timestamp>  # reads ECHO_SLACK_LINK_CODE
-  echo-brain update apply --channel internal-live --config <absolute-path>
   echo-brain service <install|start|stop|restart|status|uninstall> --config <absolute-path>
   echo-brain backup --config <absolute-path> --backup-root <absolute-path> [--id <operation-id>]
   echo-brain restore --config <absolute-path> --backup <absolute-path> --backup-root <absolute-path> --id <operation-id>
@@ -286,7 +275,6 @@ const OPTIONS = {
   query: { type: "string" },
   "challenge-attempt": { type: "string" },
   "challenge-message-ts": { type: "string" },
-  channel: { type: "string" },
   "owner-email": { type: "string" },
   "slack-channel-id": { type: "string" },
   "slack-reviewer-user-id": { type: "string" },
@@ -377,7 +365,6 @@ const RULES: Readonly<Record<string, CommandRule>> = {
     accepts: ["challenge-attempt", "challenge-message-ts"],
     requires: ["challenge-attempt", "challenge-message-ts"],
   },
-  "update apply": { accepts: ["channel"], requires: ["channel"] },
   ...Object.fromEntries(
     SERVICE_ACTIONS.map((action) => [`service ${action}`, NONE] as const),
   ),
@@ -411,7 +398,6 @@ const ACTIONS: Readonly<Record<string, readonly string[]>> = {
     "slack-link-begin",
     "slack-link-complete",
   ],
-  update: ["apply"],
   service: SERVICE_ACTIONS,
 };
 
@@ -473,10 +459,6 @@ function parseCommand(argv: readonly string[]): ParsedCommand {
       throw new Error(`--${name} must be an absolute path`);
     }
   }
-  if (key === "update apply" && text("channel") !== "internal-live") {
-    throw new Error("update apply requires --channel internal-live");
-  }
-
   return {
     command: command as CliCommand,
     action,
@@ -2094,65 +2076,6 @@ export async function runProductCli(
   }
   const classifier =
     dependencies.classifyStateFilesystem ?? classifyStateFilesystem;
-  if (parsed.command === "update") {
-    if (
-      (await requireLocalState(parsed, config, classifier, stderr, {
-        channel: "internal-live",
-      })) === null
-    ) {
-      return 1;
-    }
-    try {
-      const execute =
-        dependencies.internalLive?.execute ?? runInternalLiveUpdate;
-      const result = await execute({
-        configPath: parsed.configPath,
-        config,
-        cliPath: dependencies.operator?.cliPath ?? CLI_PATH,
-        productVersion:
-          dependencies.operator?.productVersion ?? PRODUCT_VERSION,
-        buildIdentity:
-          dependencies.operator?.buildIdentity === undefined
-            ? packagedBuildIdentity()
-            : {
-                schema_version: 1,
-                kind: "echo-packaged-build-identity",
-                product_version:
-                  dependencies.operator.productVersion ?? PRODUCT_VERSION,
-                ...dependencies.operator.buildIdentity,
-              },
-        now: resolveProductClock(dependencies.now),
-        ...(dependencies.organization?.installationSigner === undefined
-          ? {}
-          : {
-              installationSigner:
-                dependencies.organization.installationSigner,
-            }),
-        ...(dependencies.organization?.fetch === undefined
-          ? {}
-          : { authorityFetch: dependencies.organization.fetch }),
-        ...(dependencies.organization?.allowInsecureLoopback === undefined
-          ? {}
-          : {
-              allowInsecureLoopback:
-                dependencies.organization.allowInsecureLoopback,
-            }),
-      });
-      const ok = result.receipt.outcome === "healthy";
-      print(ok ? stdout : stderr, {
-        ok,
-        command: parsed.command,
-        action: parsed.action,
-        channel: "internal-live",
-        directive_sequence: result.directive_sequence,
-        receipt: result.receipt,
-      });
-      return ok ? 0 : 1;
-    } catch (error) {
-      printOperatorError(stderr, "update apply", error);
-      return 1;
-    }
-  }
   if (parsed.command === "organization") {
     const action = parsed.action!;
     const usesDefaultFileSigner =

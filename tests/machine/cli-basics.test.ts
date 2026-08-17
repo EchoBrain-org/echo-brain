@@ -24,9 +24,6 @@ describe('standalone CLI basics', () => {
     expect(stdout.read()).toContain('echo-brain organization enroll');
     expect(stdout.read()).toContain('echo-brain organization recent-decisions');
     expect(stdout.read()).toContain('echo-brain organization record-flush');
-    expect(stdout.read()).toContain(
-      'echo-brain update apply --channel internal-live',
-    );
     expect(stdout.read()).toContain('--allow-exportable-software-key');
   });
 

@@ -117,9 +117,6 @@ function instrumented(): TouchLog {
           return "token";
         },
       },
-      internalLive: {
-        execute: (async () => trap("internalLive.execute")) as never,
-      },
       organization: {
         fetch: (async () => trap("organization.fetch")) as never,
         installationSigner: new Proxy(
@@ -243,14 +240,6 @@ const GATED: readonly (readonly [string, (configPath: string) => string[]])[] =
     ["init", (c) => ["init", "--config", c]],
     ["reconfigure", (c) => ["reconfigure", "--config", c]],
     ["doctor", (c) => ["doctor", "--config", c]],
-    ["update apply internal-live", (c) => [
-      "update",
-      "apply",
-      "--channel",
-      "internal-live",
-      "--config",
-      c,
-    ]],
     ["organization enroll", (c) => [
       "organization",
       "enroll",
