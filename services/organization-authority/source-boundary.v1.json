@@ -139,6 +139,60 @@
       "allowed_workspace_packages": [],
       "allowed_external_packages": [],
       "allowed_node_builtins": ["crypto"]
+    },
+    {
+      "name": "processing-decision-processors-namespace-index",
+      "from": "services/organization-authority/src/processing/adapters/decision-processors/index.ts",
+      "allowed_imports": [
+        "services/organization-authority/src/processing/core/**",
+        "services/organization-authority/src/processing/adapters/decision-processors/**"
+      ],
+      "allowed_workspace_packages": [],
+      "allowed_external_packages": [],
+      "allowed_node_builtins": []
+    },
+    {
+      "name": "processing-llm-namespace-index",
+      "from": "services/organization-authority/src/processing/adapters/decision-processors/llm/index.ts",
+      "allowed_imports": [
+        "services/organization-authority/src/processing/adapters/decision-processors/llm/**"
+      ],
+      "allowed_workspace_packages": [],
+      "allowed_external_packages": [],
+      "allowed_node_builtins": []
+    },
+    {
+      "name": "processing-llm-decision-processor-composes-provider-drivers",
+      "from": "services/organization-authority/src/processing/adapters/decision-processors/llm/llm-*.ts",
+      "allowed_imports": [
+        "services/organization-authority/src/processing/core/**",
+        "services/organization-authority/src/processing/adapters/decision-processors/llm/**"
+      ],
+      "allowed_workspace_packages": [],
+      "allowed_external_packages": [],
+      "allowed_node_builtins": ["crypto"]
+    },
+    {
+      "name": "processing-llm-provider-drivers-own-only-transport",
+      "from": "services/organization-authority/src/processing/adapters/decision-processors/llm/*-client.ts",
+      "allowed_imports": [
+        "services/organization-authority/src/processing/core/**",
+        "services/organization-authority/src/processing/adapters/decision-processors/llm/llm-provider.ts"
+      ],
+      "allowed_workspace_packages": [],
+      "allowed_external_packages": [],
+      "allowed_node_builtins": []
+    },
+    {
+      "name": "processing-structured-text-decision-processor-is-deterministic",
+      "from": "services/organization-authority/src/processing/adapters/decision-processors/structured-text/**",
+      "allowed_imports": [
+        "services/organization-authority/src/processing/core/**",
+        "services/organization-authority/src/processing/adapters/decision-processors/structured-text/**"
+      ],
+      "allowed_workspace_packages": [],
+      "allowed_external_packages": [],
+      "allowed_node_builtins": ["crypto"]
     }
   ]
 }

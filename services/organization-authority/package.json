@@ -13,6 +13,10 @@
     "./processing/core/*.js": {
       "types": "./dist/processing/core/*.d.ts",
       "import": "./dist/processing/core/*.js"
+    },
+    "./processing/adapters/decision-processors/*.js": {
+      "types": "./dist/processing/adapters/decision-processors/*.d.ts",
+      "import": "./dist/processing/adapters/decision-processors/*.js"
     }
   },
   "files": [

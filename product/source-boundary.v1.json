@@ -5,8 +5,6 @@
     "src/product/index.ts",
     "src/adapters/index.ts",
     "src/adapters/meeting-sources/granola/index.ts",
-    "src/adapters/decision-processors/structured-text/index.ts",
-    "src/adapters/decision-processors/llm/index.ts",
     "src/adapters/delivery-surfaces/jsonl-outbox/index.ts",
     "src/adapters/delivery-surfaces/slack/index.ts",
     "src/adapters/approval-surfaces/slack-reactions/index.ts",
@@ -106,13 +104,6 @@
       ],
       "allowed_packages": ["@echo-brain/federation-protocol"],
       "allowed_node_builtins": ["crypto", "fs", "path"]
-    },
-    {
-      "name": "llm-provider-drivers-own-only-transport",
-      "from": "src/adapters/decision-processors/llm/*-client.ts",
-      "allowed_imports": ["src/adapters/decision-processors/llm/llm-provider.ts"],
-      "allowed_packages": ["@echo-brain/organization-authority"],
-      "allowed_node_builtins": []
     },
     {
       "name": "granola-canonical-adapter-avoids-compatibility",

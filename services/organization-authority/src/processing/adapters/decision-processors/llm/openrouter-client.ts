@@ -1,4 +1,4 @@
-import { AdapterError } from '@echo-brain/organization-authority/processing/core/index.js';
+import { AdapterError } from '../../../core/index.js';
 import {
   createHostedLlmRequester,
   invalidProviderResponse,

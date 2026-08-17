@@ -18,7 +18,7 @@ export type {
   EvidenceSpan,
   MeetingDocument,
   RationaleSignal,
-} from '@echo-brain/organization-authority/processing/core/index.js';
+} from '../../core/index.js';
 
 export * from './structured-text/index.js';
 export * from './llm/index.js';

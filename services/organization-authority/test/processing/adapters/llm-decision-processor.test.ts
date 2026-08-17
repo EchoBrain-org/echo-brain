@@ -5,14 +5,14 @@ import {
   meetingProcessingKey,
   type AdapterConfig,
   type MeetingDocument,
-} from '@echo-brain/organization-authority/processing/core/index.js';
+} from '../../../src/processing/core/index.js';
 import {
   LlmDecisionProcessor,
   llmProcessingVersion,
   type LlmProviderClient,
   type StructuredGenerationRequest,
-} from '../../src/adapters/decision-processors/llm/index.js';
-import { adapterConformance } from '../support/adapter-conformance.js';
+} from '../../../src/processing/adapters/decision-processors/llm/index.js';
+import { adapterConformance } from '../../../../../tests/support/adapter-conformance.js';
 
 const processorConfig: AdapterConfig = {
   adapter_id: 'llm',

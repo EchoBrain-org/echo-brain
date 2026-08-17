@@ -886,13 +886,13 @@ describe('workspace source boundaries', () => {
     writeFileSync(join(fixture, 'src/util/json.ts'), 'export {};\n');
     const forbiddenAdapterPath = '../../delivery-surfaces/slack/index.js';
     writeFileSync(
-      join(fixture, 'src/adapters/decision-processors/llm/anthropic-client.ts'),
+      join(fixture, 'src/adapters/meeting-sources/granola/meeting-source-adapter.ts'),
       `export * from '${forbiddenAdapterPath}';\n`,
     );
     const narrowDriverResult = runBoundary(fixture);
     expect(narrowDriverResult.status).not.toBe(0);
     expect(narrowDriverResult.stdout + narrowDriverResult.stderr).toContain(
-      "layer rule 'llm-provider-drivers-own-only-transport' rejects edge",
+      "layer rule 'granola-canonical-adapter-avoids-compatibility' rejects edge",
     );
   });
 

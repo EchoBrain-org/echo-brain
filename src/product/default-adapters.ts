@@ -1,6 +1,6 @@
 import { createGranolaMeetingSourceAdapter } from '../adapters/meeting-sources/granola/meeting-source-adapter.js';
-import { createLlmDecisionProcessor } from '../adapters/decision-processors/llm/llm-decision-processor.js';
-import { createStructuredTextDecisionProcessor } from '../adapters/decision-processors/structured-text/structured-text-decision-processor.js';
+import { createLlmDecisionProcessor } from '@echo-brain/organization-authority/processing/adapters/decision-processors/llm/llm-decision-processor.js';
+import { createStructuredTextDecisionProcessor } from '@echo-brain/organization-authority/processing/adapters/decision-processors/structured-text/structured-text-decision-processor.js';
 import { createJsonlOutboxDeliverySurface } from '../adapters/delivery-surfaces/jsonl-outbox/jsonl-outbox-delivery-surface.js';
 import { createSlackDeliverySurface } from '../adapters/delivery-surfaces/slack/slack-delivery-surface.js';
 import { FileSlackDeliveryReceiptStore } from '../adapters/delivery-surfaces/slack/slack-delivery-receipt-store.js';

@@ -5,7 +5,7 @@ import {
   OpenAiClient,
   OpenRouterClient,
   type StructuredGenerationRequest,
-} from '../../src/adapters/decision-processors/llm/index.js';
+} from '../../../src/processing/adapters/decision-processors/llm/index.js';
 
 const generationRequest: StructuredGenerationRequest = {
   model: 'provider-model',

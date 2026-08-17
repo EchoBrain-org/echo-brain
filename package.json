@@ -29,14 +29,6 @@
       "types": "./dist/adapters/meeting-sources/granola/index.d.ts",
       "import": "./dist/adapters/meeting-sources/granola/index.js"
     },
-    "./adapters/decision-processors/structured-text": {
-      "types": "./dist/adapters/decision-processors/structured-text/index.d.ts",
-      "import": "./dist/adapters/decision-processors/structured-text/index.js"
-    },
-    "./adapters/decision-processors/llm": {
-      "types": "./dist/adapters/decision-processors/llm/index.d.ts",
-      "import": "./dist/adapters/decision-processors/llm/index.js"
-    },
     "./adapters/delivery-surfaces/jsonl-outbox": {
       "types": "./dist/adapters/delivery-surfaces/jsonl-outbox/index.d.ts",
       "import": "./dist/adapters/delivery-surfaces/jsonl-outbox/index.js"
