@@ -10,6 +10,8 @@ component_ids:
 created_at: 2026-08-13
 reviewed_at: 2026-08-13
 reviewed_ref: 808ac89eaf3e8eba529b356bd80d4509b9a2a293
+decision_ids:
+  - ADR-0001
 invariant_ids:
   - INV-ADAPTERS-002
   - INV-RUNTIME-001

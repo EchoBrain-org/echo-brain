@@ -20,9 +20,12 @@ separately.
 
 ## Index
 
-No standalone ADRs have been migrated yet. Existing decisions remain embedded
-in `docs/product/` design contracts and architecture pages. Extract them
-incrementally when the affected boundary changes; do not perform a mechanical
-rewrite that loses context.
+| ADR | Title | Status |
+| --- | --- | --- |
+| [ADR-0001](ADR-0001-organization-operated-server-core.md) | Organization-operated server-core processing | accepted |
+
+Other decisions remain embedded in `docs/product/` design contracts and
+architecture pages. Extract them incrementally when the affected boundary
+changes; do not perform a mechanical rewrite that loses context.
 
 Use the [ADR template](../_templates/adr.md).
