@@ -101,7 +101,7 @@ import {
   HttpGranolaApiClient,
   observeGranolaRecordOwner,
   type GranolaRecordOwnerObservation,
-} from "../adapters/meeting-sources/granola/index.js";
+} from "@echo-brain/organization-authority/processing/adapters/meeting-sources/granola/index.js";
 import { SLACK_REACTIONS_APPROVAL_SURFACE_ADAPTER_VERSION } from "../adapters/approval-surfaces/slack-reactions/slack-reactions-approval-surface.js";
 import {
   loadPackagedBuildIdentity,

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { AdapterError, type AdapterConfig } from "@echo-brain/organization-authority/processing/core/index.js";
+import { AdapterError, type AdapterConfig } from "../../../src/processing/core/index.js";
 import {
   GranolaApiError,
   GranolaMeetingSourceAdapter,
@@ -8,8 +8,8 @@ import {
   type GranolaListParams,
   type GranolaListResponse,
   type GranolaNoteDetail,
-} from "../../src/adapters/meeting-sources/granola/index.js";
-import { adapterConformance } from "../support/adapter-conformance.js";
+} from "../../../src/processing/adapters/meeting-sources/granola/index.js";
+import { adapterConformance } from "../../../../../tests/support/adapter-conformance.js";
 
 const config: AdapterConfig = {
   adapter_id: "granola",

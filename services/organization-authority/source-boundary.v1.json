@@ -193,6 +193,57 @@
       "allowed_workspace_packages": [],
       "allowed_external_packages": [],
       "allowed_node_builtins": ["crypto"]
+    },
+    {
+      "name": "processing-meeting-sources-namespace-index",
+      "from": "services/organization-authority/src/processing/adapters/meeting-sources/index.ts",
+      "allowed_imports": [
+        "services/organization-authority/src/processing/core/**",
+        "services/organization-authority/src/processing/adapters/meeting-sources/**"
+      ],
+      "allowed_workspace_packages": [],
+      "allowed_external_packages": [],
+      "allowed_node_builtins": []
+    },
+    {
+      "name": "processing-granola-namespace-index",
+      "from": "services/organization-authority/src/processing/adapters/meeting-sources/granola/index.ts",
+      "allowed_imports": [
+        "services/organization-authority/src/processing/adapters/meeting-sources/granola/**"
+      ],
+      "allowed_workspace_packages": [],
+      "allowed_external_packages": [],
+      "allowed_node_builtins": []
+    },
+    {
+      "name": "processing-granola-canonical-adapter-avoids-compatibility",
+      "from": "services/organization-authority/src/processing/adapters/meeting-sources/granola/meeting-source-adapter.ts",
+      "allowed_imports": [
+        "services/organization-authority/src/processing/core/**",
+        "services/organization-authority/src/processing/adapters/meeting-sources/granola/granola-api-client.ts",
+        "services/organization-authority/src/processing/adapters/meeting-sources/granola/record-owner-observation.ts"
+      ],
+      "allowed_workspace_packages": [],
+      "allowed_external_packages": [],
+      "allowed_node_builtins": ["crypto"]
+    },
+    {
+      "name": "processing-granola-api-client-owns-only-transport",
+      "from": "services/organization-authority/src/processing/adapters/meeting-sources/granola/granola-api-client.ts",
+      "allowed_imports": [],
+      "allowed_workspace_packages": [],
+      "allowed_external_packages": [],
+      "allowed_node_builtins": []
+    },
+    {
+      "name": "processing-granola-record-owner-observation-reads-only-the-api-client",
+      "from": "services/organization-authority/src/processing/adapters/meeting-sources/granola/record-owner-observation.ts",
+      "allowed_imports": [
+        "services/organization-authority/src/processing/adapters/meeting-sources/granola/granola-api-client.ts"
+      ],
+      "allowed_workspace_packages": [],
+      "allowed_external_packages": [],
+      "allowed_node_builtins": []
     }
   ]
 }

@@ -25,10 +25,6 @@
       "types": "./dist/adapters/index.d.ts",
       "import": "./dist/adapters/index.js"
     },
-    "./adapters/meeting-sources/granola": {
-      "types": "./dist/adapters/meeting-sources/granola/index.d.ts",
-      "import": "./dist/adapters/meeting-sources/granola/index.js"
-    },
     "./adapters/delivery-surfaces/jsonl-outbox": {
       "types": "./dist/adapters/delivery-surfaces/jsonl-outbox/index.d.ts",
       "import": "./dist/adapters/delivery-surfaces/jsonl-outbox/index.js"

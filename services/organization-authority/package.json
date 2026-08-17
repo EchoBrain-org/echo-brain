@@ -17,6 +17,10 @@
     "./processing/adapters/decision-processors/*.js": {
       "types": "./dist/processing/adapters/decision-processors/*.d.ts",
       "import": "./dist/processing/adapters/decision-processors/*.js"
+    },
+    "./processing/adapters/meeting-sources/*.js": {
+      "types": "./dist/processing/adapters/meeting-sources/*.d.ts",
+      "import": "./dist/processing/adapters/meeting-sources/*.js"
     }
   },
   "files": [

@@ -3,7 +3,7 @@ import {
   observeGranolaRecordOwner,
   type GranolaApiClient,
   type GranolaListParams,
-} from "../../src/adapters/meeting-sources/granola/index.js";
+} from "../../../src/processing/adapters/meeting-sources/granola/index.js";
 
 function client(options: {
   notes: Array<{ id: string; title?: string; owner?: unknown }>;

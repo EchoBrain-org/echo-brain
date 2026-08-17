@@ -4,7 +4,6 @@
     "src/product/cli.ts",
     "src/product/index.ts",
     "src/adapters/index.ts",
-    "src/adapters/meeting-sources/granola/index.ts",
     "src/adapters/delivery-surfaces/jsonl-outbox/index.ts",
     "src/adapters/delivery-surfaces/slack/index.ts",
     "src/adapters/approval-surfaces/slack-reactions/index.ts",
@@ -33,7 +32,7 @@
     "src/storage/",
     "src/echo-home/",
     "src/enrich/",
-    "src/adapters/meeting-sources/granola/compatibility/",
+    "services/organization-authority/src/processing/adapters/meeting-sources/granola/compatibility/",
     "src/adapters/communication-channels/",
     "src/product/federation/"
   ],
@@ -104,16 +103,6 @@
       ],
       "allowed_packages": ["@echo-brain/federation-protocol"],
       "allowed_node_builtins": ["crypto", "fs", "path"]
-    },
-    {
-      "name": "granola-canonical-adapter-avoids-compatibility",
-      "from": "src/adapters/meeting-sources/granola/meeting-source-adapter.ts",
-      "allowed_imports": [
-        "src/adapters/meeting-sources/granola/granola-api-client.ts",
-        "src/adapters/meeting-sources/granola/record-owner-observation.ts"
-      ],
-      "allowed_packages": ["@echo-brain/organization-authority"],
-      "allowed_node_builtins": ["crypto"]
     },
     {
       "name": "product-root-composes-the-runtime",

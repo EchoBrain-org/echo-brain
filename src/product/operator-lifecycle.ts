@@ -36,7 +36,7 @@ import {
 } from './secure-local-files.js';
 import { canonicalProductConfigSha256 } from './lifecycle-lock.js';
 import type { PackagedBuildIdentityV1 } from './build-identity.js';
-import { GRANOLA_API_KEY_RE } from '../adapters/meeting-sources/granola/granola-api-client.js';
+import { GRANOLA_API_KEY_RE } from '@echo-brain/organization-authority/processing/adapters/meeting-sources/granola/granola-api-client.js';
 import {
   DEFAULT_APPROVE_REACTION,
   DEFAULT_REJECT_REACTION,
