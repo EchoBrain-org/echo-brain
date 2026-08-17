@@ -356,6 +356,16 @@
       "allowed_workspace_packages": [],
       "allowed_external_packages": [],
       "allowed_node_builtins": ["crypto"]
+    },
+    {
+      "name": "processing-reviewer-publication-preflight-reads-the-presentation-contract",
+      "from": "services/organization-authority/src/processing/authorization/reviewer-publication-preflight.ts",
+      "allowed_imports": [
+        "services/organization-authority/src/processing/approval/decision-node.ts"
+      ],
+      "allowed_workspace_packages": [],
+      "allowed_external_packages": [],
+      "allowed_node_builtins": []
     }
   ]
 }

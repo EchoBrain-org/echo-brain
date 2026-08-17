@@ -23,8 +23,8 @@ import {
 import {
   validateOrganizationMemberAuthorizationEvidence,
 } from '@echo-brain/organization-authority/processing/authorization/organization-member-authorization-evidence.js';
-import { assertReviewerPublicationPreflight } from './approval/reviewer-publication-preflight.js';
-import type { ApprovalPublicationMode } from './approval/reviewer-publication-preflight.js';
+import { assertReviewerPublicationPreflight } from '@echo-brain/organization-authority/processing/authorization/reviewer-publication-preflight.js';
+import type { ApprovalPublicationMode } from '@echo-brain/organization-authority/processing/authorization/reviewer-publication-preflight.js';
 import {
   organizationMemberApprovalPresentationRenderer,
   organizationMemberApprovalPolicyContractSha256,
