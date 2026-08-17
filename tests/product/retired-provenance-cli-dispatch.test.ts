@@ -356,44 +356,6 @@ const EXCEPTIONS: readonly (readonly [
       },
     }),
   ],
-  [
-    "backup",
-    (c, stateDir) => ({
-      argv: [
-        "backup",
-        "--config",
-        c,
-        "--backup-root",
-        join(stateDir, "..", "backups"),
-      ],
-      expectReached: (output, calls) => {
-        expect(calls).toContain("classifyStateFilesystem");
-        expect(calls).toContain("operator.fileSystem.lstat");
-        expect(lastJson(output)).toMatchObject({ command: "backup" });
-      },
-    }),
-  ],
-  [
-    "restore",
-    (c, stateDir) => ({
-      argv: [
-        "restore",
-        "--config",
-        c,
-        "--backup",
-        join(stateDir, "..", "backups", "some-backup"),
-        "--backup-root",
-        join(stateDir, "..", "backups"),
-        "--id",
-        "restore-1",
-      ],
-      expectReached: (output, calls) => {
-        expect(calls).toContain("classifyStateFilesystem");
-        expect(calls).toContain("operator.fileSystem.lstat");
-        expect(lastJson(output)).toMatchObject({ command: "restore" });
-      },
-    }),
-  ],
   ...(["stop", "status", "uninstall"] as const).map(
     (action) =>
       [

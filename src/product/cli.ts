@@ -46,16 +46,10 @@ import {
 } from "./operator-lifecycle.js";
 import {
   acquireProductLifecycleLock,
-  acquireProductMaintenanceLease,
   canonicalProductConfigSha256,
-  type ProductMaintenanceLease,
   type ProductLifecycleLockKind,
   type ReleaseProductLifecycleLock,
 } from "./lifecycle-lock.js";
-import {
-  createProductStateBackup,
-  restoreProductStateBackup,
-} from "./state-backup.js";
 import { FileInstallationSigner } from "./machine/security/file-installation-signer.js";
 import type { InstallationSigner } from "./machine/security/installation-signer.js";
 import {
@@ -165,8 +159,6 @@ type CliCommand =
   | "organization"
   | "service"
   | "service-run"
-  | "backup"
-  | "restore"
   | "validate-config"
   | "run-once"
   | "approvals";
@@ -177,9 +169,6 @@ interface ParsedCommand {
   action?: string;
   configPath: string;
   stateDirectory?: string;
-  backupRoot?: string;
-  backupDirectory?: string;
-  operationId?: string;
   allowExportableSoftwareKey: boolean;
   doctorLocalOnly: boolean;
   ownerEmail?: string;
@@ -249,8 +238,6 @@ Usage:
   echo-brain organization slack-link-begin --config <absolute-path>
   echo-brain organization slack-link-complete --config <absolute-path> --challenge-attempt <cat_...> --challenge-message-ts <Slack timestamp>  # reads ECHO_SLACK_LINK_CODE
   echo-brain service <install|start|stop|restart|status|uninstall> --config <absolute-path>
-  echo-brain backup --config <absolute-path> --backup-root <absolute-path> [--id <operation-id>]
-  echo-brain restore --config <absolute-path> --backup <absolute-path> --backup-root <absolute-path> --id <operation-id>
   echo-brain validate-config --config <absolute-path>
   echo-brain run-once --config <absolute-path>
   echo-brain approvals --config <absolute-path>
@@ -265,9 +252,6 @@ function print(stream: Pick<Writable, "write">, value: unknown): void {
 const OPTIONS = {
   config: { type: "string" },
   "state-dir": { type: "string" },
-  id: { type: "string" },
-  "backup-root": { type: "string" },
-  backup: { type: "string" },
   invitation: { type: "string" },
   "authority-pin": { type: "string" },
   "authority-url": { type: "string" },
@@ -368,16 +352,6 @@ const RULES: Readonly<Record<string, CommandRule>> = {
   ...Object.fromEntries(
     SERVICE_ACTIONS.map((action) => [`service ${action}`, NONE] as const),
   ),
-  backup: {
-    accepts: ["backup-root", "id"],
-    requires: ["backup-root"],
-    absolute: ["backup-root"],
-  },
-  restore: {
-    accepts: ["backup-root", "backup", "id"],
-    requires: ["backup-root", "backup", "id"],
-    absolute: ["backup-root", "backup"],
-  },
   "validate-config": NONE,
   "run-once": NONE,
   approvals: NONE,
@@ -464,9 +438,6 @@ function parseCommand(argv: readonly string[]): ParsedCommand {
     action,
     configPath: text("config")!,
     stateDirectory: text("state-dir"),
-    backupRoot: text("backup-root"),
-    backupDirectory: text("backup"),
-    operationId: text("id"),
     allowExportableSoftwareKey:
       values["allow-exportable-software-key"] === true,
     doctorLocalOnly: values["local-only"] === true,
@@ -679,8 +650,6 @@ function retiredProvenanceGateApplies(parsed: ParsedCommand): boolean {
   switch (parsed.command) {
     case "validate-config":
     case "status":
-    case "backup":
-    case "restore":
       return false;
     case "service":
       return (
@@ -1520,22 +1489,6 @@ async function acquireMaintenanceWindow(
     await runtime();
     throw error;
   }
-}
-
-function operationId(
-  prefix: "backup" | "restore" | "pre-restore",
-  timestamp: string,
-  requested?: string,
-): string {
-  if (requested !== undefined) {
-    if (!/^[A-Za-z0-9][A-Za-z0-9._-]{0,99}$/.test(requested)) {
-      throw new Error(
-        "operation id must be 1-100 letters, numbers, dots, underscores, or hyphens",
-      );
-    }
-    return requested;
-  }
-  return `${prefix}-${timestamp.replace(/[^0-9A-Za-z]/g, "")}`;
 }
 
 function printOperatorError(
@@ -2524,96 +2477,6 @@ export async function runProductCli(
       stdout,
       stderr,
     });
-  }
-  if (parsed.command === "backup" || parsed.command === "restore") {
-    if ((await requireLocalState(parsed, config, classifier, stderr)) === null)
-      return 1;
-    let operator: ProductOperator;
-    try {
-      operator = createProductOperator(parsed.configPath, config, dependencies);
-    } catch (error) {
-      printOperatorError(stderr, parsed.command, error);
-      return 1;
-    }
-    let maintenanceLease: ProductMaintenanceLease | undefined;
-    let maintenanceResult: Record<string, unknown> | undefined;
-    try {
-      maintenanceLease = await acquireProductMaintenanceLease(
-        config.state_dir,
-        { timeoutMs: 0 },
-      );
-      const status = await operator.status();
-      if (!status.service.supported) {
-        throw new ProductOperatorError(
-          "unsupported_platform",
-          "cannot prove the product service is stopped on this platform",
-        );
-      }
-      if (status.service.loaded) {
-        throw new ProductOperatorError(
-          "service_command_failed",
-          "service is loaded; run `echo-brain service stop --config <absolute-path>` before maintenance",
-        );
-      }
-      if (parsed.command === "backup" && !status.initialized) {
-        throw new ProductOperatorError(
-          "not_initialized",
-          "run `echo-brain init --config <absolute-path>` before backup",
-        );
-      }
-      const timestamp = resolveProductClock(dependencies.now)();
-      const canonicalConfigSha256 = canonicalProductConfigSha256(config);
-      if (parsed.command === "backup") {
-        const created = await createProductStateBackup({
-          stateDir: config.state_dir,
-          backupRoot: parsed.backupRoot!,
-          backupId: operationId("backup", timestamp, parsed.operationId),
-          createdAt: timestamp,
-          canonicalConfigSha256,
-          maintenanceLease,
-        });
-        maintenanceResult = {
-          ok: true,
-          command: parsed.command,
-          backup_directory: created.backupDirectory,
-          evidence: created.evidence,
-        };
-      } else {
-        const restoreId = operationId("restore", timestamp, parsed.operationId);
-        const restored = await restoreProductStateBackup({
-          stateDir: config.state_dir,
-          backupDirectory: parsed.backupDirectory!,
-          automaticBackupRoot: parsed.backupRoot!,
-          operationId: restoreId,
-          restoredAt: timestamp,
-          preRestoreBackupId: `pre-${restoreId}`,
-          preRestoreBackupCreatedAt: timestamp,
-          canonicalConfigSha256,
-          maintenanceLease,
-        });
-        maintenanceResult = {
-          ok: true,
-          command: parsed.command,
-          evidence: restored.evidence,
-          next_steps: [
-            `echo-brain service start --config ${parsed.configPath}`,
-            `echo-brain doctor --config ${parsed.configPath}`,
-          ],
-        };
-      }
-    } catch (error) {
-      printOperatorError(stderr, parsed.command, error);
-      return 1;
-    } finally {
-      try {
-        await maintenanceLease?.release();
-      } catch (error) {
-        printOperatorError(stderr, `${parsed.command} lock-release`, error);
-        return 1;
-      }
-    }
-    print(stdout, maintenanceResult!);
-    return 0;
   }
   if (
     parsed.command === "init" ||

@@ -1104,40 +1104,6 @@ describe('operator onboarding and lifecycle CLI', () => {
     expect(readFileSync(installationPath, 'utf8')).toBe(pinned);
   });
 
-  it('fails closed when launchd cannot prove that the service is absent', async () => {
-    const unavailable: FakeLaunchd = {
-      calls: [],
-      runner: async (args) => {
-        unavailable.calls.push([...args]);
-        return { status: 1, stdout: '', stderr: 'permission denied' };
-      },
-    };
-    const { dependencies, ...fixture } = installation(
-      'echo-launchd-inspection-',
-      unavailable,
-    );
-    await expectOk(['init', '--config', fixture.configPath], dependencies);
-    const backup = await command(
-      [
-        'backup',
-        '--config',
-        fixture.configPath,
-        '--backup-root',
-        join(fixture.root, 'backups'),
-        '--id',
-        'must-not-run',
-      ],
-      dependencies,
-    );
-    expect(backup.status).toBe(1);
-    expect(backup.stderr).toContain(
-      'launchd inspection failed: permission denied',
-    );
-    expect(existsSync(join(fixture.root, 'backups', 'must-not-run'))).toBe(
-      false,
-    );
-  });
-
   it('runs bounded live adapter health checks without a core cycle', async () => {
     const { dependencies, ...fixture } = installation('echo-doctor-');
     await command(['init', '--config', fixture.configPath], dependencies);
@@ -1518,82 +1484,6 @@ describe('operator onboarding and lifecycle CLI', () => {
     } finally {
       globalThis.fetch = originalFetch;
     }
-  });
-
-  it('backs up and restores stopped product state through the CLI', async () => {
-    const { dependencies, ...fixture } = installation('echo-recovery-cli-');
-    const backupRoot = join(fixture.root, 'backups');
-
-    await expectOk(['init', '--config', fixture.configPath], dependencies);
-    const marker = join(fixture.stateDirectory, 'operator-marker.txt');
-    writeFileSync(marker, 'before\n', { mode: 0o600 });
-
-    const backup = await expectOk(
-      [
-        'backup',
-        '--config',
-        fixture.configPath,
-        '--backup-root',
-        backupRoot,
-        '--id',
-        'known-good',
-      ],
-      dependencies,
-    );
-    expect(JSON.parse(backup.stdout)).toMatchObject({
-      ok: true,
-      command: 'backup',
-      backup_directory: join(backupRoot, 'known-good'),
-      evidence: { backup_id: 'known-good' },
-    });
-
-    await expectOk(
-      ['service', 'install', '--config', fixture.configPath],
-      dependencies,
-    );
-    const whileLoaded = await command(
-      [
-        'backup',
-        '--config',
-        fixture.configPath,
-        '--backup-root',
-        backupRoot,
-        '--id',
-        'must-not-run',
-      ],
-      dependencies,
-    );
-    expect(whileLoaded.status).toBe(1);
-    expect(whileLoaded.stderr).toContain('service is loaded');
-    await expectOk(
-      ['service', 'stop', '--config', fixture.configPath],
-      dependencies,
-    );
-
-    writeFileSync(marker, 'after\n', { mode: 0o600 });
-    const restore = await expectOk(
-      [
-        'restore',
-        '--config',
-        fixture.configPath,
-        '--backup',
-        join(backupRoot, 'known-good'),
-        '--backup-root',
-        backupRoot,
-        '--id',
-        'restore-known-good',
-      ],
-      dependencies,
-    );
-    expect(JSON.parse(restore.stdout)).toMatchObject({
-      ok: true,
-      command: 'restore',
-      evidence: {
-        operation_id: 'restore-known-good',
-        restored_backup_id: 'known-good',
-      },
-    });
-    expect(readFileSync(marker, 'utf8')).toBe('before\n');
   });
 
   it('rejects interactive env credentials and unsupported platforms without leaking values', async () => {
