@@ -13,7 +13,7 @@ import type {
   ReviewerApprovalActionAuthorizer,
   ReviewerApprovalPresentationRenderer,
 } from '../adapters/approval-surfaces/slack-reactions/slack-reactions-approval-surface.js';
-import type { AdapterConfig } from '../core/index.js';
+import type { AdapterConfig } from '@echo-brain/organization-authority/processing/core/index.js';
 import { SLACK_REACTIONS_APPROVAL_SURFACE_ADAPTER_VERSION } from '../adapters/approval-surfaces/slack-reactions/slack-reactions-approval-surface.js';
 import { DecisionNodeStore } from './approval/decision-node-store.js';
 import {
@@ -323,7 +323,7 @@ function organizationMemberAuthorizer(
  * Adapters bundled with the standalone package.
  *
  * This is the composition root: concrete implementations may be named here,
- * while `src/core` remains unaware of every tool and protocol.
+ * while the processing core remains unaware of every tool and protocol.
  *
  * Each factory's `validateStaticConfig` reuses its adapter's own
  * `validateConfig` through an inert construction: the adapter is built with

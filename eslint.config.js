@@ -10,7 +10,6 @@ export default [
       'src/**/*.ts',
       'tests/machine/**/*.ts',
       'tests/architecture/**/*.ts',
-      'tests/core/**/*.ts',
       'tests/adapters/**/*.ts',
       'tests/infrastructure/**/*.ts',
       'tests/integration/**/*.ts',

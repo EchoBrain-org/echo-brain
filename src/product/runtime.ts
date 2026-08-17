@@ -6,7 +6,7 @@ import type {
   DeliverySurfaceAdapter,
   DecisionProcessorAdapter,
   MeetingSourceAdapter,
-} from '../core/index.js';
+} from '@echo-brain/organization-authority/processing/core/index.js';
 import type { ProductRuntimeConfig } from './config.js';
 
 export interface ProductRuntimeAdapters {

@@ -3,17 +3,17 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import Database from 'better-sqlite3';
 import { afterEach, describe, expect, it } from 'vitest';
-import type { ApprovalDecision } from '../../src/core/approval/approval-gate.js';
+import type { ApprovalDecision } from '@echo-brain/organization-authority/processing/core/approval/approval-gate.js';
 import type {
   DecisionSet,
   DecisionSignal,
-} from '../../src/core/contracts/decision.js';
+} from '@echo-brain/organization-authority/processing/core/contracts/decision.js';
 import type {
   DecisionBrief,
   DeliveryEnvelope,
   DeliveryReceipt,
-} from '../../src/core/contracts/delivery.js';
-import type { MeetingDocument } from '../../src/core/contracts/meeting.js';
+} from '@echo-brain/organization-authority/processing/core/contracts/delivery.js';
+import type { MeetingDocument } from '@echo-brain/organization-authority/processing/core/contracts/meeting.js';
 import { SqliteCoreStateStore } from '../../src/product/storage/sqlite-core-state-store.js';
 
 const source = {

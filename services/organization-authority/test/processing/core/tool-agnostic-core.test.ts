@@ -21,7 +21,7 @@ import {
   type MeetingDocument,
   type MeetingPullRequest,
   type MeetingSourceAdapter,
-} from '../../src/core/index.js';
+} from '../../../src/processing/core/index.js';
 
 const meeting: MeetingDocument = {
   schema_version: 1,

@@ -9,7 +9,7 @@ import {
 } from 'node:fs';
 import { dirname, isAbsolute, normalize, parse, resolve, sep } from 'node:path';
 import { Ajv, type ErrorObject, type ValidateFunction } from 'ajv';
-import type { AdapterInstanceConfig } from '../core/index.js';
+import type { AdapterInstanceConfig } from '@echo-brain/organization-authority/processing/core/index.js';
 import { parseJson } from '../util/json.js';
 import {
   type OrganizationIngestExclusionConfig,

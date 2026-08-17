@@ -4,7 +4,7 @@ import { describe, expect, it } from 'vitest';
 import {
   assertCanonicalMeetingDocument,
   type MeetingDocument,
-} from '../../src/core/index.js';
+} from '../../../src/processing/core/index.js';
 
 const source = {
   kind: 'meeting-source' as const,
@@ -37,7 +37,7 @@ const minimalMeeting: MeetingDocument = {
 
 const schema = JSON.parse(
   readFileSync(
-    new URL('../../schemas/meeting-context.v1.schema.json', import.meta.url),
+    new URL('../../../../../schemas/meeting-context.v1.schema.json', import.meta.url),
     'utf8',
   ),
 ) as AnySchema;

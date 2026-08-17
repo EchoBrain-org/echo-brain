@@ -2,7 +2,7 @@ import {
   AdapterError,
   type AdapterErrorCode,
   type JsonObject,
-} from '../../../core/index.js';
+} from '@echo-brain/organization-authority/processing/core/index.js';
 
 export type LlmProviderId = 'ollama' | 'openai' | 'anthropic' | 'openrouter';
 

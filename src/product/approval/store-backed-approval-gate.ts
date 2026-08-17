@@ -1,4 +1,4 @@
-import type { ApprovalDecision, ApprovalGate, ApprovalRequest } from '../../core/index.js';
+import type { ApprovalDecision, ApprovalGate, ApprovalRequest } from '@echo-brain/organization-authority/processing/core/index.js';
 import { toApprovalDecision } from './decision-node.js';
 import type { DecisionNodeStore } from './decision-node-store.js';
 

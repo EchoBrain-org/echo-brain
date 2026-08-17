@@ -36,7 +36,7 @@ import {
 import type {
   ApprovalRequest,
   MeetingSourceAdapter,
-} from '../../src/core/index.js';
+} from '@echo-brain/organization-authority/processing/core/index.js';
 import { ProductAdapterFactoryRegistry } from '../../src/product/adapter-factories.js';
 import { decisionApprovalId } from '../../src/product/approval/decision-node.js';
 import { DecisionNodeStore } from '../../src/product/approval/decision-node-store.js';

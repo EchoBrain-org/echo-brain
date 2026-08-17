@@ -14,7 +14,7 @@ import {
   type DecisionBrief,
   type DeliveryEnvelope,
   type MeetingDocument,
-} from '../../src/core/index.js';
+} from '@echo-brain/organization-authority/processing/core/index.js';
 import { StructuredTextDecisionProcessor } from '../../src/adapters/decision-processors/structured-text/index.js';
 import {
   JsonlOutboxDeliverySurface,

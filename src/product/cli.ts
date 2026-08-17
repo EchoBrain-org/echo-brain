@@ -6,7 +6,7 @@ import { isAbsolute, join } from "node:path";
 import { parseArgs } from "node:util";
 import type { Writable } from "node:stream";
 import { fileURLToPath } from "node:url";
-import type { AdapterInstanceConfig } from "../core/index.js";
+import type { AdapterInstanceConfig } from "@echo-brain/organization-authority/processing/core/index.js";
 import {
   assertConfiguredAdapterFactoriesAvailable,
   assertConfiguredAdaptersValid,

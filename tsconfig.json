@@ -11,7 +11,6 @@
     "services/*/test/**/*.ts",
     "tests/architecture/**/*.ts",
     "tests/machine/**/*.ts",
-    "tests/core/**/*.ts",
     "tests/adapters/**/*.ts",
     "tests/infrastructure/**/*.ts",
     "tests/integration/**/*.ts",

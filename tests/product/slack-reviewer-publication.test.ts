@@ -7,7 +7,7 @@ import type {
   AdapterConfig,
   ApprovalRequest,
   JsonObject,
-} from '../../src/core/index.js';
+} from '@echo-brain/organization-authority/processing/core/index.js';
 import {
   createSlackReactionsApprovalSurface,
   type ApprovalActionAuthorizationResult,

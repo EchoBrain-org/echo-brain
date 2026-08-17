@@ -1,10 +1,10 @@
 import type Database from 'better-sqlite3';
-import type { ApprovalDecision } from '../../core/approval/approval-gate.js';
-import type { AdapterIdentity } from '../../core/contracts/adapter.js';
-import type { DecisionSet } from '../../core/contracts/decision.js';
-import type { DeliveryEnvelope, DeliveryReceipt } from '../../core/contracts/delivery.js';
-import type { AdapterCursor, MeetingDocument } from '../../core/contracts/meeting.js';
-import type { CoreStateStore } from '../../core/storage/core-state-store.js';
+import type { ApprovalDecision } from '@echo-brain/organization-authority/processing/core/approval/approval-gate.js';
+import type { AdapterIdentity } from '@echo-brain/organization-authority/processing/core/contracts/adapter.js';
+import type { DecisionSet } from '@echo-brain/organization-authority/processing/core/contracts/decision.js';
+import type { DeliveryEnvelope, DeliveryReceipt } from '@echo-brain/organization-authority/processing/core/contracts/delivery.js';
+import type { AdapterCursor, MeetingDocument } from '@echo-brain/organization-authority/processing/core/contracts/meeting.js';
+import type { CoreStateStore } from '@echo-brain/organization-authority/processing/core/storage/core-state-store.js';
 import { openProductDatabase } from './open-product-database.js';
 
 interface CursorRow {

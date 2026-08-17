@@ -5,7 +5,7 @@ import {
   type AdapterConfigValidation,
   type AdapterKind,
   type AnyAdapter,
-} from '../core/index.js';
+} from '@echo-brain/organization-authority/processing/core/index.js';
 import type { ProductRuntimeConfig } from './config.js';
 import type {
   ApprovalActionAuthorizer,

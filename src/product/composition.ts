@@ -7,8 +7,8 @@ import type {
   CoreCycleResult,
   CoreCycleDeadlines,
   CoreStateStore,
-} from '../core/index.js';
-import { runCoreCycle } from '../core/index.js';
+} from '@echo-brain/organization-authority/processing/core/index.js';
+import { runCoreCycle } from '@echo-brain/organization-authority/processing/core/index.js';
 import { SqliteCoreStateStore } from './storage/sqlite-core-state-store.js';
 import type {
   ClassifyStateFilesystem,
@@ -26,7 +26,7 @@ import {
   resolveConfiguredAdapters,
   type ProductRuntimeAdapters,
 } from './runtime.js';
-import type { AdapterRegistry } from '../core/index.js';
+import type { AdapterRegistry } from '@echo-brain/organization-authority/processing/core/index.js';
 
 export interface ProductSourceCycleResult {
   source: AdapterIdentity & { kind: 'meeting-source' };

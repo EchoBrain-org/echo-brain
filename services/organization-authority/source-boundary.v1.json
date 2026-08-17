@@ -129,6 +129,16 @@
       ],
       "allowed_external_packages": [],
       "allowed_node_builtins": ["crypto", "events", "fs", "http", "net", "path"]
+    },
+    {
+      "name": "processing-core-is-tool-agnostic",
+      "from": "services/organization-authority/src/processing/core/**",
+      "allowed_imports": [
+        "services/organization-authority/src/processing/core/**"
+      ],
+      "allowed_workspace_packages": [],
+      "allowed_external_packages": [],
+      "allowed_node_builtins": ["crypto"]
     }
   ]
 }

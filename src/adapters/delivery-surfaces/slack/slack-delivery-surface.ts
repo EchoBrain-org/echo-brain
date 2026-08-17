@@ -7,11 +7,11 @@ import type {
   DeliveryEnvelope,
   DeliveryReceipt,
   DeliverySurfaceAdapter,
-} from '../../../core/index.js';
+} from '@echo-brain/organization-authority/processing/core/index.js';
 import {
   AdapterError,
   assertCanonicalDeliveryEnvelope,
-} from '../../../core/index.js';
+} from '@echo-brain/organization-authority/processing/core/index.js';
 import {
   SlackApiError,
   SlackWebApiClient,

@@ -1,7 +1,7 @@
 import {
   isCanonicalTimestamp,
   type JsonObject,
-} from '../../core/index.js';
+} from '@echo-brain/organization-authority/processing/core/index.js';
 
 const DIGEST = /^sha256:[a-f0-9]{64}$/;
 const APPROVAL_ID = /^[a-f0-9]{64}$/;

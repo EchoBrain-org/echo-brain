@@ -5,7 +5,7 @@ import {
   meetingProcessingKey,
   type AdapterConfig,
   type MeetingDocument,
-} from '../../src/core/index.js';
+} from '@echo-brain/organization-authority/processing/core/index.js';
 import {
   LlmDecisionProcessor,
   llmProcessingVersion,

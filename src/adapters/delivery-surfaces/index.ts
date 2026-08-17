@@ -15,7 +15,7 @@ export type {
   DecisionBrief,
   DeliveryEnvelope,
   DeliveryReceipt,
-} from '../../core/index.js';
+} from '@echo-brain/organization-authority/processing/core/index.js';
 
 export * from './jsonl-outbox/index.js';
 export * from './slack/index.js';

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { AdapterError, type AdapterConfig } from "../../src/core/index.js";
+import { AdapterError, type AdapterConfig } from "@echo-brain/organization-authority/processing/core/index.js";
 import {
   GranolaApiError,
   GranolaMeetingSourceAdapter,

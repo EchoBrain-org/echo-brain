@@ -8,12 +8,12 @@ import {
 } from "node:fs";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { AdapterRegistry } from "../../src/core/index.js";
+import { AdapterRegistry } from "@echo-brain/organization-authority/processing/core/index.js";
 import type {
   DecisionProcessorAdapter,
   DeliverySurfaceAdapter,
   MeetingSourceAdapter,
-} from "../../src/core/index.js";
+} from "@echo-brain/organization-authority/processing/core/index.js";
 import { prepareProductComposition } from "../../src/product/composition.js";
 import { DecisionNodeStore } from "../../src/product/approval/decision-node-store.js";
 import { resolveProductStatePaths } from "../../src/product/paths.js";

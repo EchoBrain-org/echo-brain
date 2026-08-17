@@ -11,8 +11,8 @@ import type {
   ExtractedSignal,
   MeetingContentBlock,
   MeetingDocument,
-} from '../../../core/index.js';
-import { AdapterError } from '../../../core/index.js';
+} from '@echo-brain/organization-authority/processing/core/index.js';
+import { AdapterError } from '@echo-brain/organization-authority/processing/core/index.js';
 
 export const STRUCTURED_TEXT_DECISION_PROCESSOR_ADAPTER_ID = 'structured-text';
 export const STRUCTURED_TEXT_DECISION_PROCESSOR_ADAPTER_VERSION = '1.0.0';

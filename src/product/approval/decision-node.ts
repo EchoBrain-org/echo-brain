@@ -5,7 +5,7 @@ import {
   type ApprovalDecision,
   type DecisionBrief,
   type JsonObject,
-} from '../../core/index.js';
+} from '@echo-brain/organization-authority/processing/core/index.js';
 import { assertReviewerDisplayName } from './reviewer-authorization-evidence.js';
 
 /**

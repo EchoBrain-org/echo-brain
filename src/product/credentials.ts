@@ -7,7 +7,7 @@ import {
   realpathSync,
 } from 'node:fs';
 import { dirname, isAbsolute, normalize, relative, sep } from 'node:path';
-import { AdapterError } from '../core/index.js';
+import { AdapterError } from '@echo-brain/organization-authority/processing/core/index.js';
 
 const ENV_REFERENCE = /^env:([A-Za-z][A-Za-z0-9_.-]*)$/;
 const FILE_PREFIX = 'file:';

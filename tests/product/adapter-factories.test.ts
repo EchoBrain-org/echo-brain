@@ -3,7 +3,7 @@ import type {
   AdapterConfigValidation,
   AdapterHealth,
   MeetingSourceAdapter,
-} from '../../src/core/index.js';
+} from '@echo-brain/organization-authority/processing/core/index.js';
 import {
   assertConfiguredAdaptersValid,
   createConfiguredAdapterRegistry,

@@ -89,7 +89,7 @@ import {
   TRUSTED_PROXY_AUTHORIZATION_HEADER,
   TRUSTED_PROXY_CLIENT_ID_HEADER,
 } from '../../services/organization-authority/src/presentation/trusted-proxy-client-identity.js';
-import type { ApprovalRequest } from '../../src/core/index.js';
+import type { ApprovalRequest } from '@echo-brain/organization-authority/processing/core/index.js';
 import { DecisionNodeStore } from '../../src/product/approval/decision-node-store.js';
 import type {
   InstallationKeyDescriptor,

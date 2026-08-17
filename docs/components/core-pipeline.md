@@ -41,8 +41,8 @@ depend outward on them.
 ## Current references
 
 - [Core and adapters](../architecture/core-and-adapters.md)
-- Source: [`src/core/`](../../src/core)
-- Core tests: [`tests/core/`](../../tests/core)
+- Source: [`services/organization-authority/src/processing/core/`](../../services/organization-authority/src/processing/core)
+- Core tests: [`services/organization-authority/test/processing/core/`](../../services/organization-authority/test/processing/core)
 
 ## Durable records
 

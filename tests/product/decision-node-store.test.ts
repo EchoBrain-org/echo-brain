@@ -11,7 +11,7 @@ import {
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
-import type { ApprovalRequest } from '../../src/core/index.js';
+import type { ApprovalRequest } from '@echo-brain/organization-authority/processing/core/index.js';
 import {
   DecisionNodeStore,
   decisionApprovalId,

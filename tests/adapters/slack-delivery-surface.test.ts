@@ -6,8 +6,8 @@ import type {
   AdapterConfig,
   DecisionBrief,
   DeliveryEnvelope,
-} from '../../src/core/index.js';
-import { AdapterError, assertDeliveryReceipt } from '../../src/core/index.js';
+} from '@echo-brain/organization-authority/processing/core/index.js';
+import { AdapterError, assertDeliveryReceipt } from '@echo-brain/organization-authority/processing/core/index.js';
 import {
   FileSlackDeliveryReceiptStore,
   SlackDeliverySurface,

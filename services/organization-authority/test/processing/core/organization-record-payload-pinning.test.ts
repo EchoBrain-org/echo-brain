@@ -5,7 +5,7 @@
 // and any divergence fails on one side or the other.
 import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
-import { assertCanonicalDecisionBrief } from '../../src/core/index.js';
+import { assertCanonicalDecisionBrief } from '../../../src/processing/core/index.js';
 
 interface PayloadConformanceFixture {
   fixture_version: number;
@@ -23,7 +23,7 @@ interface PayloadConformanceFixture {
 const conformance = JSON.parse(
   readFileSync(
     new URL(
-      '../../packages/organization-protocol/fixtures/organization-record-payload-conformance.v1.json',
+      '../../../../../packages/organization-protocol/fixtures/organization-record-payload-conformance.v1.json',
       import.meta.url,
     ),
     'utf8',

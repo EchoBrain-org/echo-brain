@@ -865,10 +865,10 @@ describe('workspace source boundaries', () => {
   it('applies package and builtin allowlists to root product layers', () => {
     const fixture = fixtureRepository();
     writeFileSync(
-      join(fixture, 'src/core/index.ts'),
+      join(fixture, 'src/util/json.ts'),
       [
         `import '@echo-brain/organization-api';`,
-        `import 'node:fs';`,
+        `import 'node:crypto';`,
         'export {};',
         '',
       ].join('\n'),
@@ -877,13 +877,13 @@ describe('workspace source boundaries', () => {
     const result = runBoundary(fixture);
     expect(result.status).not.toBe(0);
     expect(result.stdout + result.stderr).toContain(
-      "layer rule 'core-is-tool-agnostic' rejects package @echo-brain/organization-api",
+      "layer rule 'util-is-leaf-shared-code' rejects package @echo-brain/organization-api",
     );
     expect(result.stdout + result.stderr).toContain(
-      "layer rule 'core-is-tool-agnostic' rejects Node builtin node:fs",
+      "layer rule 'util-is-leaf-shared-code' rejects Node builtin node:crypto",
     );
 
-    writeFileSync(join(fixture, 'src/core/index.ts'), 'export {};\n');
+    writeFileSync(join(fixture, 'src/util/json.ts'), 'export {};\n');
     const forbiddenAdapterPath = '../../delivery-surfaces/slack/index.js';
     writeFileSync(
       join(fixture, 'src/adapters/decision-processors/llm/anthropic-client.ts'),
@@ -939,7 +939,7 @@ describe('workspace source boundaries', () => {
     manifest.owned_source_paths = [
       'services/organization-authority/src/domain/**',
     ];
-    manifest.entry_points = ['src/core/index.ts'];
+    manifest.entry_points = ['src/product/index.ts'];
     writeFixtureJson(fixture, manifestPath, manifest);
 
     const result = runBoundary(fixture);

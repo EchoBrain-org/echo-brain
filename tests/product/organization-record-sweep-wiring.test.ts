@@ -7,7 +7,7 @@ import {
   type DecisionProcessorAdapter,
   type DeliverySurfaceAdapter,
   type MeetingSourceAdapter,
-} from '../../src/core/index.js';
+} from '@echo-brain/organization-authority/processing/core/index.js';
 import { prepareProductComposition } from '../../src/product/composition.js';
 import type { ProductOrganizationRecordSweepReport } from '../../src/product/composition.js';
 import { createOrganizationRecordSweepCoordinator } from '../../src/product/cli.js';

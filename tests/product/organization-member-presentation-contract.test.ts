@@ -2,7 +2,7 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
-import type { ApprovalRequest, JsonObject } from '../../src/core/index.js';
+import type { ApprovalRequest, JsonObject } from '@echo-brain/organization-authority/processing/core/index.js';
 import {
   DecisionNodeStore,
   ORGANIZATION_MEMBER_READABLE_SURFACE,

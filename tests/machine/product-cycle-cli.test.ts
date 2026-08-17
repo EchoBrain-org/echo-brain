@@ -8,7 +8,7 @@ import {
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import type { MeetingSourceAdapter } from '../../src/core/index.js';
+import type { MeetingSourceAdapter } from '@echo-brain/organization-authority/processing/core/index.js';
 import { ProductAdapterFactoryRegistry } from '../../src/product/adapter-factories.js';
 import { runProductCli } from '../../src/product/cli.js';
 import { createDefaultAdapterFactories } from '../../src/product/default-adapters.js';

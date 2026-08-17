@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto';
 import { homedir } from 'node:os';
 import { dirname, isAbsolute, join, resolve } from 'node:path';
-import type { AdapterInstanceConfig } from '../core/index.js';
+import type { AdapterInstanceConfig } from '@echo-brain/organization-authority/processing/core/index.js';
 import type { AdapterDiagnostic } from './adapter-diagnostics.js';
 import {
   validateProductRuntimeConfig,

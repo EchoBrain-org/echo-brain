@@ -16,7 +16,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import type {
   ApprovalRequest,
   MeetingSourceAdapter,
-} from '../../src/core/index.js';
+} from '@echo-brain/organization-authority/processing/core/index.js';
 import { ProductAdapterFactoryRegistry } from '../../src/product/adapter-factories.js';
 import {
   runProductCli,

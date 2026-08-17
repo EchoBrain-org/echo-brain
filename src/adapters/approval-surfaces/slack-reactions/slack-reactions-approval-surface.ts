@@ -9,8 +9,8 @@ import type {
   DecisionBrief,
   JsonObject,
   JsonValue,
-} from '../../../core/index.js';
-import { AdapterError } from '../../../core/index.js';
+} from '@echo-brain/organization-authority/processing/core/index.js';
+import { AdapterError } from '@echo-brain/organization-authority/processing/core/index.js';
 import {
   SlackApiError,
   SlackWebApiClient,

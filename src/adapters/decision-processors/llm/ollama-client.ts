@@ -1,4 +1,4 @@
-import { AdapterError } from '../../../core/index.js';
+import { AdapterError } from '@echo-brain/organization-authority/processing/core/index.js';
 import {
   DEFAULT_LLM_REQUEST_TIMEOUT_MS,
   invalidProviderResponse,

@@ -5,6 +5,16 @@
   "license": "MIT",
   "type": "module",
   "main": "dist/main.js",
+  "exports": {
+    ".": {
+      "types": "./dist/main.d.ts",
+      "import": "./dist/main.js"
+    },
+    "./processing/core/*.js": {
+      "types": "./dist/processing/core/*.d.ts",
+      "import": "./dist/processing/core/*.js"
+    }
+  },
   "files": [
     "dist/**/*.js",
     "dist/**/*.js.map",

@@ -13,8 +13,8 @@ import type {
   MeetingParticipant,
   MeetingPullRequest,
   MeetingSourceAdapter,
-} from "../../../core/index.js";
-import { AdapterError } from "../../../core/index.js";
+} from "@echo-brain/organization-authority/processing/core/index.js";
+import { AdapterError } from "@echo-brain/organization-authority/processing/core/index.js";
 import {
   DEFAULT_GRANOLA_PAGE_SIZE,
   DEFAULT_GRANOLA_REQUEST_TIMEOUT_MS,

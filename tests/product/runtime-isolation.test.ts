@@ -21,7 +21,7 @@ import {
   type DeliverySurfaceAdapter,
   type DecisionProcessorAdapter,
   type MeetingSourceAdapter,
-} from '../../src/core/index.js';
+} from '@echo-brain/organization-authority/processing/core/index.js';
 
 const directories: string[] = [];
 

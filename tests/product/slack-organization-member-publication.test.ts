@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto';
 import { describe, expect, it } from 'vitest';
-import type { AdapterConfig, ApprovalRequest, JsonObject } from '../../src/core/index.js';
+import type { AdapterConfig, ApprovalRequest, JsonObject } from '@echo-brain/organization-authority/processing/core/index.js';
 import {
   createSlackReactionsApprovalSurface,
   type ApprovalActionAuthorizer,

@@ -13,7 +13,7 @@ import {
   type JsonObject,
   type MeetingContentBlock,
   type MeetingDocument,
-} from '../../../core/index.js';
+} from '@echo-brain/organization-authority/processing/core/index.js';
 import { AnthropicClient } from './anthropic-client.js';
 import {
   DEFAULT_MAX_OUTPUT_TOKENS,

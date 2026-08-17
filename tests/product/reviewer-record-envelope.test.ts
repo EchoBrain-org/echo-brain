@@ -26,7 +26,7 @@ import type {
   OrganizationRecordAuthorizationEvidence,
   OrganizationRecordEnvelopeBuildInput,
 } from '../../src/product/organization/record/index.js';
-import type { ApprovalRequest } from '../../src/core/index.js';
+import type { ApprovalRequest } from '@echo-brain/organization-authority/processing/core/index.js';
 import {
   DecisionNodeStore,
   decisionApprovalId,

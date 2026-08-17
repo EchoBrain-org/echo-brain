@@ -1,4 +1,4 @@
-export * from '../core/index.js';
+export * from '@echo-brain/organization-authority/processing/core/index.js';
 export { SqliteCoreStateStore } from './storage/sqlite-core-state-store.js';
 export * from './adapter-factories.js';
 export * from './composition.js';

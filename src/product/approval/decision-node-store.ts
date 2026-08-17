@@ -13,7 +13,7 @@ import {
   isCanonicalTimestamp,
   type ApprovalRequest,
   type JsonObject,
-} from '../../core/index.js';
+} from '@echo-brain/organization-authority/processing/core/index.js';
 import { atomicCreate } from '../../infrastructure/filesystem/atomic-create.js';
 import { parseJson } from '../../util/json.js';
 import { acquireProcessFileLock } from '../../infrastructure/filesystem/process-file-lock.js';

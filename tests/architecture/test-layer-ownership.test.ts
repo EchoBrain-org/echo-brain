@@ -38,14 +38,9 @@ interface TestLayerRule {
 
 const rules: readonly TestLayerRule[] = [
   {
-    root: 'tests/core',
-    allows: (path) =>
-      path.startsWith('src/core/') || path.startsWith('tests/support/'),
-  },
-  {
     root: 'tests/adapters',
     allows: (path) =>
-      path.startsWith('src/core/') ||
+      path === 'workspace:@echo-brain/organization-authority' ||
       path.startsWith('src/adapters/') ||
       path.startsWith('src/infrastructure/') ||
       path.startsWith('tests/support/'),
