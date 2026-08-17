@@ -18,4 +18,4 @@ export type {
 } from '@echo-brain/organization-authority/processing/core/index.js';
 
 export * from './jsonl-outbox/index.js';
-export * from './slack/index.js';
+export * from '@echo-brain/organization-authority/processing/adapters/delivery-surfaces/slack/index.js';

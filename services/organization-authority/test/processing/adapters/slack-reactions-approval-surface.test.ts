@@ -4,8 +4,8 @@ import type {
   AdapterConfig,
   ApprovalRequest,
   JsonObject,
-} from '@echo-brain/organization-authority/processing/core/index.js';
-import { AdapterError } from '@echo-brain/organization-authority/processing/core/index.js';
+} from '../../../src/processing/core/index.js';
+import { AdapterError } from '../../../src/processing/core/index.js';
 import {
   createSlackReactionsApprovalSurface,
   type ApprovalActionAuthorizationRequest,
@@ -14,8 +14,8 @@ import {
   type ApprovalDecisionStoreView,
   type FrozenSlackApprovalPresentationContract,
   type ReviewerApprovalPresentationRenderer,
-} from '../../src/adapters/approval-surfaces/slack-reactions/slack-reactions-approval-surface.js';
-import { adapterConformance } from '../support/adapter-conformance.js';
+} from '../../../src/processing/adapters/approval-surfaces/slack-reactions/slack-reactions-approval-surface.js';
+import { adapterConformance } from '../../../../../tests/support/adapter-conformance.js';
 
 function decisionApprovalId(processingKey: string): string {
   return createHash('sha256').update(processingKey).digest('hex');

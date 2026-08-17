@@ -11,7 +11,7 @@ import type {
   ApprovalActionAuthorizer,
   ReviewerApprovalActionAuthorizer,
   ReviewerApprovalPresentationRenderer,
-} from '../adapters/approval-surfaces/slack-reactions/slack-reactions-approval-surface.js';
+} from '@echo-brain/organization-authority/processing/adapters/approval-surfaces/slack-reactions/slack-reactions-approval-surface.js';
 import {
   createProductCredentialResolver,
   type ProductCredentialResolver,

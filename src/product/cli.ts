@@ -102,7 +102,7 @@ import {
   observeGranolaRecordOwner,
   type GranolaRecordOwnerObservation,
 } from "@echo-brain/organization-authority/processing/adapters/meeting-sources/granola/index.js";
-import { SLACK_REACTIONS_APPROVAL_SURFACE_ADAPTER_VERSION } from "../adapters/approval-surfaces/slack-reactions/slack-reactions-approval-surface.js";
+import { SLACK_REACTIONS_APPROVAL_SURFACE_ADAPTER_VERSION } from "@echo-brain/organization-authority/processing/adapters/approval-surfaces/slack-reactions/slack-reactions-approval-surface.js";
 import {
   loadPackagedBuildIdentity,
   type PackagedBuildIdentityV1,

@@ -13,7 +13,7 @@ import { isAbsolute, join, normalize } from 'node:path';
 import {
   acquireProcessFileLock,
   ProcessFileLockError,
-} from '../../../infrastructure/filesystem/process-file-lock.js';
+} from '../../../infrastructure/process-file-lock.js';
 
 const MAX_RECORD_BYTES = 64 * 1024;
 const LOCK_RETRY_MS = 20;

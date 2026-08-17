@@ -2,9 +2,9 @@ import { createGranolaMeetingSourceAdapter } from '@echo-brain/organization-auth
 import { createLlmDecisionProcessor } from '@echo-brain/organization-authority/processing/adapters/decision-processors/llm/llm-decision-processor.js';
 import { createStructuredTextDecisionProcessor } from '@echo-brain/organization-authority/processing/adapters/decision-processors/structured-text/structured-text-decision-processor.js';
 import { createJsonlOutboxDeliverySurface } from '../adapters/delivery-surfaces/jsonl-outbox/jsonl-outbox-delivery-surface.js';
-import { createSlackDeliverySurface } from '../adapters/delivery-surfaces/slack/slack-delivery-surface.js';
-import { FileSlackDeliveryReceiptStore } from '../adapters/delivery-surfaces/slack/slack-delivery-receipt-store.js';
-import { createSlackReactionsApprovalSurface } from '../adapters/approval-surfaces/slack-reactions/slack-reactions-approval-surface.js';
+import { createSlackDeliverySurface } from '@echo-brain/organization-authority/processing/adapters/delivery-surfaces/slack/slack-delivery-surface.js';
+import { FileSlackDeliveryReceiptStore } from '@echo-brain/organization-authority/processing/adapters/delivery-surfaces/slack/slack-delivery-receipt-store.js';
+import { createSlackReactionsApprovalSurface } from '@echo-brain/organization-authority/processing/adapters/approval-surfaces/slack-reactions/slack-reactions-approval-surface.js';
 import type {
   ApprovalActionAuthorizer,
   ApprovalDecisionStore,
@@ -12,9 +12,9 @@ import type {
   OrganizationMemberApprovalPresentationRenderer,
   ReviewerApprovalActionAuthorizer,
   ReviewerApprovalPresentationRenderer,
-} from '../adapters/approval-surfaces/slack-reactions/slack-reactions-approval-surface.js';
+} from '@echo-brain/organization-authority/processing/adapters/approval-surfaces/slack-reactions/slack-reactions-approval-surface.js';
 import type { AdapterConfig } from '@echo-brain/organization-authority/processing/core/index.js';
-import { SLACK_REACTIONS_APPROVAL_SURFACE_ADAPTER_VERSION } from '../adapters/approval-surfaces/slack-reactions/slack-reactions-approval-surface.js';
+import { SLACK_REACTIONS_APPROVAL_SURFACE_ADAPTER_VERSION } from '@echo-brain/organization-authority/processing/adapters/approval-surfaces/slack-reactions/slack-reactions-approval-surface.js';
 import { DecisionNodeStore } from './approval/decision-node-store.js';
 import {
   assertReviewerDisplayName,

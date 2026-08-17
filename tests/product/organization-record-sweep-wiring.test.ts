@@ -14,7 +14,7 @@ import { createOrganizationRecordSweepCoordinator } from '../../src/product/cli.
 import { validateProductRuntimeConfig } from '../../src/product/config.js';
 import { notifyOnResolve } from '../../src/product/default-adapters.js';
 import type { OrganizationRecordSweepResult } from '../../src/product/organization/index.js';
-import type { ApprovalDecisionStore } from '../../src/adapters/approval-surfaces/slack-reactions/slack-reactions-approval-surface.js';
+import type { ApprovalDecisionStore } from '@echo-brain/organization-authority/processing/adapters/approval-surfaces/slack-reactions/slack-reactions-approval-surface.js';
 
 const directories: string[] = [];
 

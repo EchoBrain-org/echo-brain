@@ -5,8 +5,6 @@
     "src/product/index.ts",
     "src/adapters/index.ts",
     "src/adapters/delivery-surfaces/jsonl-outbox/index.ts",
-    "src/adapters/delivery-surfaces/slack/index.ts",
-    "src/adapters/approval-surfaces/slack-reactions/index.ts",
     "src/product/organization/index.ts"
   ],
   "allowed_internal_paths": [

@@ -16,6 +16,6 @@ export type {
   ApprovalRequest,
   ApprovalSurfaceAdapter,
   DecisionBrief,
-} from '@echo-brain/organization-authority/processing/core/index.js';
+} from '../../core/index.js';
 
 export * from './slack-reactions/index.js';

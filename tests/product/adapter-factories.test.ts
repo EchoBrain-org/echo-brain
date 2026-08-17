@@ -11,7 +11,7 @@ import {
 } from '../../src/product/adapter-factories.js';
 import { createDefaultAdapterFactories } from '../../src/product/default-adapters.js';
 import { validateProductRuntimeConfig } from '../../src/product/config.js';
-import type { ApprovalActionAuthorizer } from '../../src/adapters/approval-surfaces/slack-reactions/slack-reactions-approval-surface.js';
+import type { ApprovalActionAuthorizer } from '@echo-brain/organization-authority/processing/adapters/approval-surfaces/slack-reactions/slack-reactions-approval-surface.js';
 
 function config(adapterId = 'meeting-fixture') {
   return validateProductRuntimeConfig({

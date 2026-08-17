@@ -884,7 +884,7 @@ describe('workspace source boundaries', () => {
     );
 
     writeFileSync(join(fixture, 'src/util/json.ts'), 'export {};\n');
-    const forbiddenAdapterPath = '../../adapters/delivery-surfaces/slack/index.js';
+    const forbiddenAdapterPath = '../../adapters/delivery-surfaces/jsonl-outbox/index.js';
     writeFileSync(
       join(fixture, 'src/product/approval/probe.ts'),
       `export * from '${forbiddenAdapterPath}';\n`,

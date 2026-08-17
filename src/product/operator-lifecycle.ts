@@ -40,7 +40,7 @@ import { GRANOLA_API_KEY_RE } from '@echo-brain/organization-authority/processin
 import {
   DEFAULT_APPROVE_REACTION,
   DEFAULT_REJECT_REACTION,
-} from '../adapters/approval-surfaces/slack-reactions/slack-reactions-approval-surface.js';
+} from '@echo-brain/organization-authority/processing/adapters/approval-surfaces/slack-reactions/slack-reactions-approval-surface.js';
 import { assertConfiguredApprovalPublicationPreflight } from './default-adapters.js';
 
 export type ProductServiceAction =

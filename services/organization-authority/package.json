@@ -21,6 +21,14 @@
     "./processing/adapters/meeting-sources/*.js": {
       "types": "./dist/processing/adapters/meeting-sources/*.d.ts",
       "import": "./dist/processing/adapters/meeting-sources/*.js"
+    },
+    "./processing/adapters/approval-surfaces/*.js": {
+      "types": "./dist/processing/adapters/approval-surfaces/*.d.ts",
+      "import": "./dist/processing/adapters/approval-surfaces/*.js"
+    },
+    "./processing/adapters/delivery-surfaces/*.js": {
+      "types": "./dist/processing/adapters/delivery-surfaces/*.d.ts",
+      "import": "./dist/processing/adapters/delivery-surfaces/*.js"
     }
   },
   "files": [

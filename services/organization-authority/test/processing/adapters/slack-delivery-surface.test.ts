@@ -6,13 +6,13 @@ import type {
   AdapterConfig,
   DecisionBrief,
   DeliveryEnvelope,
-} from '@echo-brain/organization-authority/processing/core/index.js';
-import { AdapterError, assertDeliveryReceipt } from '@echo-brain/organization-authority/processing/core/index.js';
+} from '../../../src/processing/core/index.js';
+import { AdapterError, assertDeliveryReceipt } from '../../../src/processing/core/index.js';
 import {
   FileSlackDeliveryReceiptStore,
   SlackDeliverySurface,
-} from '../../src/adapters/delivery-surfaces/slack/index.js';
-import { adapterConformance } from '../support/adapter-conformance.js';
+} from '../../../src/processing/adapters/delivery-surfaces/slack/index.js';
+import { adapterConformance } from '../../../../../tests/support/adapter-conformance.js';
 
 const roots: string[] = [];
 

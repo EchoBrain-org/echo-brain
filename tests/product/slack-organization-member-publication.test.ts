@@ -9,7 +9,7 @@ import {
   type FrozenOrganizationMemberApprovalPresentationContract,
   type FrozenSlackApprovalPresentationContract,
   type OrganizationMemberApprovalActionAuthorizationRequest,
-} from '../../src/adapters/approval-surfaces/slack-reactions/slack-reactions-approval-surface.js';
+} from '@echo-brain/organization-authority/processing/adapters/approval-surfaces/slack-reactions/slack-reactions-approval-surface.js';
 import { validateOrganizationMemberAuthorizationEvidence } from '../../src/product/approval/organization-member-authorization-evidence.js';
 import {
   organizationMemberApprovalPresentationRenderer,

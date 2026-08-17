@@ -26,6 +26,7 @@
     "crypto",
     "events",
     "fs",
+    "fs/promises",
     "http",
     "net",
     "path",
@@ -244,6 +245,96 @@
       "allowed_workspace_packages": [],
       "allowed_external_packages": [],
       "allowed_node_builtins": []
+    },
+    {
+      "name": "processing-shared-slack-transport-is-capability-neutral",
+      "from": "services/organization-authority/src/processing/adapters/shared/slack/**",
+      "allowed_imports": [],
+      "allowed_workspace_packages": [],
+      "allowed_external_packages": [],
+      "allowed_node_builtins": []
+    },
+    {
+      "name": "processing-approval-surfaces-namespace-index",
+      "from": "services/organization-authority/src/processing/adapters/approval-surfaces/index.ts",
+      "allowed_imports": [
+        "services/organization-authority/src/processing/core/**",
+        "services/organization-authority/src/processing/adapters/approval-surfaces/**"
+      ],
+      "allowed_workspace_packages": [],
+      "allowed_external_packages": [],
+      "allowed_node_builtins": []
+    },
+    {
+      "name": "processing-slack-reactions-namespace-index",
+      "from": "services/organization-authority/src/processing/adapters/approval-surfaces/slack-reactions/index.ts",
+      "allowed_imports": [
+        "services/organization-authority/src/processing/adapters/approval-surfaces/slack-reactions/**"
+      ],
+      "allowed_workspace_packages": [],
+      "allowed_external_packages": [],
+      "allowed_node_builtins": []
+    },
+    {
+      "name": "processing-slack-reactions-approval-surface-uses-the-shared-transport",
+      "from": "services/organization-authority/src/processing/adapters/approval-surfaces/slack-reactions/slack-reactions-approval-surface.ts",
+      "allowed_imports": [
+        "services/organization-authority/src/processing/core/**",
+        "services/organization-authority/src/processing/adapters/shared/slack/**"
+      ],
+      "allowed_workspace_packages": [],
+      "allowed_external_packages": [],
+      "allowed_node_builtins": []
+    },
+    {
+      "name": "processing-slack-reactions-transport-reexport-owns-no-logic",
+      "from": "services/organization-authority/src/processing/adapters/approval-surfaces/slack-reactions/slack-web-api-client.ts",
+      "allowed_imports": [
+        "services/organization-authority/src/processing/adapters/shared/slack/slack-web-api-client.ts"
+      ],
+      "allowed_workspace_packages": [],
+      "allowed_external_packages": [],
+      "allowed_node_builtins": []
+    },
+    {
+      "name": "processing-slack-delivery-namespace-index",
+      "from": "services/organization-authority/src/processing/adapters/delivery-surfaces/slack/index.ts",
+      "allowed_imports": [
+        "services/organization-authority/src/processing/adapters/delivery-surfaces/slack/**"
+      ],
+      "allowed_workspace_packages": [],
+      "allowed_external_packages": [],
+      "allowed_node_builtins": []
+    },
+    {
+      "name": "processing-slack-delivery-surface-uses-the-shared-transport",
+      "from": "services/organization-authority/src/processing/adapters/delivery-surfaces/slack/slack-delivery-surface.ts",
+      "allowed_imports": [
+        "services/organization-authority/src/processing/core/**",
+        "services/organization-authority/src/processing/adapters/shared/slack/**",
+        "services/organization-authority/src/processing/adapters/delivery-surfaces/slack/slack-delivery-receipt-store.ts"
+      ],
+      "allowed_workspace_packages": [],
+      "allowed_external_packages": [],
+      "allowed_node_builtins": []
+    },
+    {
+      "name": "processing-slack-delivery-receipt-store-owns-only-durable-receipts",
+      "from": "services/organization-authority/src/processing/adapters/delivery-surfaces/slack/slack-delivery-receipt-store.ts",
+      "allowed_imports": [
+        "services/organization-authority/src/processing/infrastructure/process-file-lock.ts"
+      ],
+      "allowed_workspace_packages": [],
+      "allowed_external_packages": [],
+      "allowed_node_builtins": ["crypto", "fs", "fs/promises", "path"]
+    },
+    {
+      "name": "processing-infrastructure-is-product-independent",
+      "from": "services/organization-authority/src/processing/infrastructure/**",
+      "allowed_imports": [],
+      "allowed_workspace_packages": [],
+      "allowed_external_packages": [],
+      "allowed_node_builtins": ["crypto", "fs", "fs/promises", "path"]
     }
   ]
 }

@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   SlackApiError,
   SlackWebApiClient,
-} from "../../src/adapters/approval-surfaces/slack-reactions/slack-web-api-client.js";
+} from "../../../src/processing/adapters/approval-surfaces/slack-reactions/slack-web-api-client.js";
 
 function jsonResponse(
   body: unknown,

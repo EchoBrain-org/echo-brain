@@ -18,7 +18,7 @@ import {
   type ReviewerApprovalActionAuthorizationRequest,
   type ReviewerApprovalActionAuthorizer,
   type ReviewerApprovalPresentationRenderer,
-} from '../../src/adapters/approval-surfaces/slack-reactions/slack-reactions-approval-surface.js';
+} from '@echo-brain/organization-authority/processing/adapters/approval-surfaces/slack-reactions/slack-reactions-approval-surface.js';
 import {
   assertReviewerDisplayName,
   validateReviewerAuthorizationEvidence,
