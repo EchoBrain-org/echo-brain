@@ -10,3 +10,4 @@ deploy/organization-authority/data/
 *.tgz
 organization-authority-data-*.tar.gz*
 *.log
+.migration/
