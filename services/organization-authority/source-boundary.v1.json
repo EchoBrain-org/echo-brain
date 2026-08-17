@@ -335,6 +335,16 @@
       "allowed_workspace_packages": [],
       "allowed_external_packages": [],
       "allowed_node_builtins": ["crypto", "fs", "fs/promises", "path"]
+    },
+    {
+      "name": "processing-authorization-evidence-validators-read-only-core",
+      "from": "services/organization-authority/src/processing/authorization/*-authorization-evidence.ts",
+      "allowed_imports": [
+        "services/organization-authority/src/processing/core/**"
+      ],
+      "allowed_workspace_packages": [],
+      "allowed_external_packages": [],
+      "allowed_node_builtins": []
     }
   ]
 }

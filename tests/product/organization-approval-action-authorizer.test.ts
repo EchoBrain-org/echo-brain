@@ -15,8 +15,8 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { OrganizationApprovalActionAuthorizer } from '../../src/product/organization/approval-action-authorizer.js';
-import { validateReviewerAuthorizationEvidence } from '../../src/product/approval/reviewer-authorization-evidence.js';
-import { validateOrganizationMemberAuthorizationEvidence } from '../../src/product/approval/organization-member-authorization-evidence.js';
+import { validateReviewerAuthorizationEvidence } from '@echo-brain/organization-authority/processing/authorization/reviewer-authorization-evidence.js';
+import { validateOrganizationMemberAuthorizationEvidence } from '@echo-brain/organization-authority/processing/authorization/organization-member-authorization-evidence.js';
 import { LocalOrganizationCoordinator } from '../../src/product/organization/enrollment/local-organization-coordinator.js';
 import { SqliteOrganizationStateStore } from '../../src/product/organization/state/sqlite-organization-state-store.js';
 import {

@@ -19,10 +19,10 @@ import { DecisionNodeStore } from './approval/decision-node-store.js';
 import {
   assertReviewerDisplayName,
   validateReviewerAuthorizationEvidence,
-} from './approval/reviewer-authorization-evidence.js';
+} from '@echo-brain/organization-authority/processing/authorization/reviewer-authorization-evidence.js';
 import {
   validateOrganizationMemberAuthorizationEvidence,
-} from './approval/organization-member-authorization-evidence.js';
+} from '@echo-brain/organization-authority/processing/authorization/organization-member-authorization-evidence.js';
 import { assertReviewerPublicationPreflight } from './approval/reviewer-publication-preflight.js';
 import type { ApprovalPublicationMode } from './approval/reviewer-publication-preflight.js';
 import {

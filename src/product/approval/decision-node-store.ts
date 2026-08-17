@@ -21,10 +21,10 @@ import { assertFounderProvenanceRetired } from '../retired-founder-provenance.js
 import {
   assertReviewerDisplayName,
   validateReviewerAuthorizationEvidence,
-} from './reviewer-authorization-evidence.js';
+} from '@echo-brain/organization-authority/processing/authorization/reviewer-authorization-evidence.js';
 import {
   validateOrganizationMemberAuthorizationEvidence,
-} from './organization-member-authorization-evidence.js';
+} from '@echo-brain/organization-authority/processing/authorization/organization-member-authorization-evidence.js';
 import {
   APPROVAL_PRESENTATION_CONTRACT_SURFACE,
   assertApprovalPresentationContract,

@@ -22,7 +22,7 @@ import {
 import {
   assertReviewerDisplayName,
   validateReviewerAuthorizationEvidence,
-} from '../../src/product/approval/reviewer-authorization-evidence.js';
+} from '@echo-brain/organization-authority/processing/authorization/reviewer-authorization-evidence.js';
 import { DecisionNodeStore } from '../../src/product/approval/decision-node-store.js';
 /**
  * The product-composed adapter takes the renderer as an injected port and

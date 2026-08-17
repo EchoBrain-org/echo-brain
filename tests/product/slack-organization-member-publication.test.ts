@@ -10,11 +10,11 @@ import {
   type FrozenSlackApprovalPresentationContract,
   type OrganizationMemberApprovalActionAuthorizationRequest,
 } from '@echo-brain/organization-authority/processing/adapters/approval-surfaces/slack-reactions/slack-reactions-approval-surface.js';
-import { validateOrganizationMemberAuthorizationEvidence } from '../../src/product/approval/organization-member-authorization-evidence.js';
+import { validateOrganizationMemberAuthorizationEvidence } from '@echo-brain/organization-authority/processing/authorization/organization-member-authorization-evidence.js';
 import {
   organizationMemberApprovalPresentationRenderer,
 } from '../../src/product/organization/record/adapters/organization-member-presentation-renderer.js';
-import { assertReviewerDisplayName } from '../../src/product/approval/reviewer-authorization-evidence.js';
+import { assertReviewerDisplayName } from '@echo-brain/organization-authority/processing/authorization/reviewer-authorization-evidence.js';
 
 const REVIEWER = 'U012REVIEWER';
 const EVALUATED_AT = '2026-08-11T12:00:00.000Z';

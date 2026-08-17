@@ -29,6 +29,10 @@
     "./processing/adapters/delivery-surfaces/*.js": {
       "types": "./dist/processing/adapters/delivery-surfaces/*.d.ts",
       "import": "./dist/processing/adapters/delivery-surfaces/*.js"
+    },
+    "./processing/authorization/*.js": {
+      "types": "./dist/processing/authorization/*.d.ts",
+      "import": "./dist/processing/authorization/*.js"
     }
   },
   "files": [
