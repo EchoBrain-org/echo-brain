@@ -38,7 +38,7 @@ import type {
   MeetingSourceAdapter,
 } from '@echo-brain/organization-authority/processing/core/index.js';
 import { ProductAdapterFactoryRegistry } from '../../src/product/adapter-factories.js';
-import { decisionApprovalId } from '../../src/product/approval/decision-node.js';
+import { decisionApprovalId } from '@echo-brain/organization-authority/processing/approval/decision-node.js';
 import { DecisionNodeStore } from '../../src/product/approval/decision-node-store.js';
 import {
   runProductCli,

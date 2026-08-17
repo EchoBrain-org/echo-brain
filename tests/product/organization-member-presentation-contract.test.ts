@@ -11,8 +11,8 @@ import {
 import type {
   OrganizationMemberSlackApprovalPresentationContract,
   SlackApprovalPresentationContract,
-} from '../../src/product/approval/decision-node.js';
-import { decisionApprovalId } from '../../src/product/approval/decision-node.js';
+} from '@echo-brain/organization-authority/processing/approval/decision-node.js';
+import { decisionApprovalId } from '@echo-brain/organization-authority/processing/approval/decision-node.js';
 
 const roots: string[] = [];
 const PROCESSING_KEY =

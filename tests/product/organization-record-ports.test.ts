@@ -7,7 +7,7 @@ import type {
   DecisionOrganizationRecordReceipt,
   DecisionOrganizationRecordReceiptIntegrity,
   DecisionSourceLocator,
-} from '../../src/product/approval/decision-node.js';
+} from '@echo-brain/organization-authority/processing/approval/decision-node.js';
 import type {
   OrganizationApprovalActionAuthorizationResult,
   OrganizationMemberApprovalAuthorizationResult,

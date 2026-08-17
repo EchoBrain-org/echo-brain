@@ -4,7 +4,7 @@ export * from './adapter-factories.js';
 export * from './composition.js';
 export * from './config.js';
 export * from './default-adapters.js';
-export * from './approval/decision-node.js';
+export * from '@echo-brain/organization-authority/processing/approval/decision-node.js';
 export * from './approval/decision-node-store.js';
 export * from './approval/reviewer-publication-preflight.js';
 export * from './approval/store-backed-approval-gate.js';

@@ -51,7 +51,7 @@ import {
   type DecisionPublishedEvent,
   type DecisionRequestedEvent,
   type DecisionResolvedEvent,
-} from './decision-node.js';
+} from '@echo-brain/organization-authority/processing/approval/decision-node.js';
 const LOCK_TIMEOUT_MS = 2_000;
 const LOCK_STALE_MS = 30_000;
 const LOCK_RETRY_MS = 20;
@@ -342,12 +342,12 @@ export class DecisionNodeStore {
    */
   async freezeApprovalPresentationContract(input: {
     approvalId: string;
-    contract: import('./decision-node.js').OrganizationMemberSlackApprovalPresentationContract;
-  }): Promise<import('./decision-node.js').OrganizationMemberSlackApprovalPresentationContract>;
+    contract: import('@echo-brain/organization-authority/processing/approval/decision-node.js').OrganizationMemberSlackApprovalPresentationContract;
+  }): Promise<import('@echo-brain/organization-authority/processing/approval/decision-node.js').OrganizationMemberSlackApprovalPresentationContract>;
   async freezeApprovalPresentationContract(input: {
     approvalId: string;
-    contract: import('./decision-node.js').SlackApprovalPresentationContract;
-  }): Promise<import('./decision-node.js').SlackApprovalPresentationContract>;
+    contract: import('@echo-brain/organization-authority/processing/approval/decision-node.js').SlackApprovalPresentationContract;
+  }): Promise<import('@echo-brain/organization-authority/processing/approval/decision-node.js').SlackApprovalPresentationContract>;
   async freezeApprovalPresentationContract(input: {
     approvalId: string;
     contract: ApprovalPresentationContract;
@@ -409,7 +409,7 @@ export class DecisionNodeStore {
    */
   readApprovalPresentationContract(
     approvalId: string,
-  ): import('./decision-node.js').SlackApprovalPresentationContract | null {
+  ): import('@echo-brain/organization-authority/processing/approval/decision-node.js').SlackApprovalPresentationContract | null {
     const contract = this.readFrozenApprovalPresentationContract(approvalId);
     return contract?.mode === RESTRICTED_REVIEWER_PRESENTATION_MODE
       ? contract
@@ -459,7 +459,7 @@ export class DecisionNodeStore {
    */
   listUnresolvedApprovalPresentationContracts(): readonly {
     approval_id: string;
-    contract: import('./decision-node.js').SlackApprovalPresentationContract | null;
+    contract: import('@echo-brain/organization-authority/processing/approval/decision-node.js').SlackApprovalPresentationContract | null;
   }[] {
     return this.listUnresolvedFrozenApprovalPresentationContracts().map(
       (slot) => ({

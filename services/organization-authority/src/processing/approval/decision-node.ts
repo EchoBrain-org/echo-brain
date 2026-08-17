@@ -5,8 +5,8 @@ import {
   type ApprovalDecision,
   type DecisionBrief,
   type JsonObject,
-} from '@echo-brain/organization-authority/processing/core/index.js';
-import { assertReviewerDisplayName } from '@echo-brain/organization-authority/processing/authorization/reviewer-authorization-evidence.js';
+} from '../core/index.js';
+import { assertReviewerDisplayName } from '../authorization/reviewer-authorization-evidence.js';
 
 /**
  * A decision node is one link in the decision chain: what was decided, by

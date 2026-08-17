@@ -1,6 +1,6 @@
 import type {
   ApprovalPresentationContract,
-} from './decision-node.js';
+} from '@echo-brain/organization-authority/processing/approval/decision-node.js';
 
 /**
  * The local lifecycle preflight for the reviewer publication mode.

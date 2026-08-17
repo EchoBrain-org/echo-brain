@@ -32,7 +32,7 @@ import {
 } from "./config.js";
 import { createDefaultAdapterFactories } from "./default-adapters.js";
 import { DecisionNodeStore } from "./approval/decision-node-store.js";
-import { projectDecisionOrganizationRecord } from "./approval/decision-node.js";
+import { projectDecisionOrganizationRecord } from "@echo-brain/organization-authority/processing/approval/decision-node.js";
 import { ProductRuntimeFailure } from "./runtime.js";
 import { diagnoseConfiguredAdapters } from "./adapter-diagnostics.js";
 import {
