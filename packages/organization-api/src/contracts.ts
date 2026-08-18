@@ -233,6 +233,46 @@ export interface OrganizationMemberReadablePermissionCheckDecisionV3 {
 }
 
 /**
+ * The session-authenticated Person read bodies deliberately carry only the
+ * asserted Person subject and exact operation. The transport credential and
+ * Authority-resolved membership stay outside the body, and the Authority owns
+ * final transaction/audit timing.
+ */
+export interface OrganizationPersonRecentDecisionsRequestV2 {
+  schema_version: 2;
+  kind: 'echo-organization-person-recent-decisions-request';
+  request_id: string;
+  authority_id: string;
+  organization_id: string;
+  subject_principal_id: string;
+  http_method: 'POST';
+  http_path: '/v2/recent-decisions';
+}
+
+export interface OrganizationPersonReviewerRecentDecisionsRequestV2 {
+  schema_version: 2;
+  kind: 'echo-organization-person-reviewer-recent-decisions-request';
+  request_id: string;
+  authority_id: string;
+  organization_id: string;
+  subject_principal_id: string;
+  http_method: 'POST';
+  http_path: '/v2/reviewer-recent-decisions';
+}
+
+export interface OrganizationPersonReadableSearchRequestV2 {
+  schema_version: 2;
+  kind: 'echo-organization-person-readable-search-request';
+  request_id: string;
+  authority_id: string;
+  organization_id: string;
+  subject_principal_id: string;
+  http_method: 'POST';
+  http_path: '/v2/readable-search';
+  query: string;
+}
+
+/**
  * The signed, target-free reviewer read. The caller supplies no target,
  * policy, limit, cursor, sort, query, or atom id, and query parameters are
  * invalid.

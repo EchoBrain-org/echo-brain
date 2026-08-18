@@ -30,6 +30,9 @@ export type {
   OrganizationPermissionCheckDecisionV1,
   OrganizationPermissionCheckRequestPayloadV1,
   OrganizationPermissionCheckRequestV1,
+  OrganizationPersonReadableSearchRequestV2,
+  OrganizationPersonRecentDecisionsRequestV2,
+  OrganizationPersonReviewerRecentDecisionsRequestV2,
   OrganizationRecentDecisionItemV1,
   OrganizationRecentDecisionKindV1,
   OrganizationRecentDecisionsRequestPayloadV1,
@@ -141,6 +144,9 @@ export {
   ORGANIZATION_API_INTERNAL_LIVE_DIRECTIVES_PATH,
   ORGANIZATION_API_INTERNAL_LIVE_RECEIPTS_PATH,
   ORGANIZATION_API_PERMISSION_CHECKS_PATH,
+  ORGANIZATION_API_PERSON_READABLE_SEARCH_PATH,
+  ORGANIZATION_API_PERSON_RECENT_DECISIONS_PATH,
+  ORGANIZATION_API_PERSON_REVIEWER_RECENT_DECISIONS_PATH,
   ORGANIZATION_API_RECENT_DECISIONS_PATH,
   ORGANIZATION_API_READABLE_SEARCH_PATH,
   ORGANIZATION_API_REVIEWER_RECENT_DECISIONS_PATH,
@@ -155,6 +161,14 @@ export {
   TRUSTED_PROXY_AUTHORIZATION_HEADER,
   TRUSTED_PROXY_CLIENT_ID_HEADER,
 } from './http.js';
+export {
+  canonicalOrganizationPersonReadableSearchRequestBytes,
+  canonicalOrganizationPersonRecentDecisionsRequestBytes,
+  canonicalOrganizationPersonReviewerRecentDecisionsRequestBytes,
+  validateOrganizationPersonReadableSearchRequest,
+  validateOrganizationPersonRecentDecisionsRequest,
+  validateOrganizationPersonReviewerRecentDecisionsRequest,
+} from './person-read-requests.js';
 export {
   createOrganizationAccessLeaseRequest,
   createOrganizationAccessLeaseRequestV2,
