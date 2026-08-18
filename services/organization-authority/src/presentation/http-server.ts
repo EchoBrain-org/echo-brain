@@ -113,6 +113,10 @@ const PERSON_READ_INVALID_REQUEST_BYTES = Buffer.from(
   '{"error":{"code":"invalid_request","message":"request is invalid"}}',
   'utf8',
 );
+const PERSON_SESSION_UNAVAILABLE_BYTES = Buffer.from(
+  '{"error":{"code":"unavailable","message":"service is temporarily unavailable"}}',
+  'utf8',
+);
 import {
   assertAuthorityRuntimeStatusNonce,
   AUTHORITY_RUNTIME_STATUS_NONCE_HEADER,
@@ -125,6 +129,14 @@ import type { OrganizationRecordHttpApplication } from './organization-record-ht
 import type { OrganizationRecentDecisionsHttpApplication } from './organization-recent-decisions-http-application.js';
 import type { OrganizationReviewerRecentDecisionsHttpApplication } from './organization-reviewer-recent-decisions-http-application.js';
 import type { OrganizationReadableSearchHttpApplication } from './organization-readable-search-http-application.js';
+import {
+  PERSON_SESSION_ADMIN_MEMBERSHIPS_PATH,
+  PERSON_SESSION_OIDC_BEGIN_PATH,
+  PERSON_SESSION_OIDC_CALLBACK_PATH,
+  PERSON_SESSION_REFRESH_PATH,
+  PERSON_SESSION_REVOCATIONS_PATH,
+  type PersonIdentitySessionHttpApplication,
+} from './person-identity-session-http-application.js';
 import { handleAdminConsoleRequest } from './admin-console/routes.js';
 import type { AdminConsoleSessionStore } from './admin-console/sessions.js';
 import {
@@ -146,6 +158,9 @@ const UUID_V4_SOURCE =
   '[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}';
 const GRANT_ROUTE = new RegExp(
   `^${ORGANIZATION_API_ADMIN_MEMBERSHIPS_PATH}/(mem_${UUID_V4_SOURCE})/enrollment-grants$`,
+);
+const PERSON_LOGIN_GRANT_ROUTE = new RegExp(
+  `^${PERSON_SESSION_ADMIN_MEMBERSHIPS_PATH}/(mem_${UUID_V4_SOURCE})/person-login-grants$`,
 );
 const MEMBERSHIP_REVOCATION_ROUTE = new RegExp(
   `^${ORGANIZATION_API_ADMIN_MEMBERSHIPS_PATH}/(mem_${UUID_V4_SOURCE})/revocations$`,
@@ -563,6 +578,164 @@ function personAccessToken(authorizationHeader: string | undefined): string {
   );
 }
 
+function personSessionRequestObject(
+  value: unknown,
+  expectedKeys: readonly string[],
+): Record<string, unknown> {
+  if (
+    value === null ||
+    typeof value !== 'object' ||
+    Array.isArray(value) ||
+    Object.keys(value).sort().join(',') !== [...expectedKeys].sort().join(',')
+  ) {
+    throw new AuthorityOperationError(
+      'invalid_request',
+      'Person session request is invalid',
+    );
+  }
+  return value as Record<string, unknown>;
+}
+
+function personSessionString(
+  value: unknown,
+  label: string,
+): string {
+  if (typeof value !== 'string') {
+    throw new AuthorityOperationError(
+      'invalid_request',
+      `Person session ${label} is invalid`,
+    );
+  }
+  return value;
+}
+
+function personOidcBeginInput(value: unknown):
+  | { kind: 'identity_bootstrap'; login_grant: string }
+  | { kind: 'existing_identity_login' } {
+  if (
+    value !== null &&
+    typeof value === 'object' &&
+    !Array.isArray(value) &&
+    (value as Record<string, unknown>)['kind'] === 'existing_identity_login'
+  ) {
+    personSessionRequestObject(value, ['kind']);
+    return { kind: 'existing_identity_login' };
+  }
+  const body = personSessionRequestObject(value, ['kind', 'login_grant']);
+  if (body['kind'] !== 'identity_bootstrap') {
+    throw new AuthorityOperationError(
+      'invalid_request',
+      'Person session login kind is invalid',
+    );
+  }
+  return {
+    kind: 'identity_bootstrap',
+    login_grant: personSessionString(body['login_grant'], 'login grant'),
+  };
+}
+
+type PersonOidcCallbackInput =
+  | { kind: 'authorization_code'; state: string; authorization_code: string }
+  | { kind: 'provider_error'; state: string };
+
+const PERSON_OIDC_CALLBACK_KEYS = new Set([
+  'code',
+  'error',
+  'error_description',
+  'error_uri',
+  'iss',
+  'session_state',
+  'state',
+]);
+const MAXIMUM_PERSON_OIDC_CALLBACK_ANCILLARY_CHARACTERS = 4096;
+
+function boundedPersonOidcCallbackAncillary(value: string): boolean {
+  return (
+    value.length > 0 &&
+    value.length <= MAXIMUM_PERSON_OIDC_CALLBACK_ANCILLARY_CHARACTERS &&
+    !/[\u0000-\u001f\u007f]/.test(value)
+  );
+}
+
+function personOidcCallbackInput(
+  url: URL,
+  expectedIssuer: string,
+): PersonOidcCallbackInput {
+  const values = new Map<string, string>();
+  for (const key of url.searchParams.keys()) {
+    if (!PERSON_OIDC_CALLBACK_KEYS.has(key) || values.has(key)) {
+      throw new AuthorityOperationError(
+        'unauthorized',
+        'person authentication failed',
+      );
+    }
+    const candidates = url.searchParams.getAll(key);
+    if (candidates.length !== 1) {
+      throw new AuthorityOperationError(
+        'unauthorized',
+        'person authentication failed',
+      );
+    }
+    values.set(key, candidates[0]!);
+  }
+
+  const state = values.get('state');
+  const code = values.get('code');
+  const error = values.get('error');
+  if (
+    state === undefined ||
+    state.length === 0 ||
+    (code === undefined) === (error === undefined) ||
+    (code !== undefined && code.length === 0) ||
+    (error !== undefined && error.length === 0)
+  ) {
+    throw new AuthorityOperationError(
+      'unauthorized',
+      'person authentication failed',
+    );
+  }
+
+  for (const key of [
+    'iss',
+    'session_state',
+    'error_description',
+    'error_uri',
+  ] as const) {
+    const value = values.get(key);
+    if (value !== undefined && !boundedPersonOidcCallbackAncillary(value)) {
+      throw new AuthorityOperationError(
+        'unauthorized',
+        'person authentication failed',
+      );
+    }
+  }
+  const issuer = values.get('iss');
+  if (issuer !== undefined && issuer !== expectedIssuer) {
+    throw new AuthorityOperationError(
+      'unauthorized',
+      'person authentication failed',
+    );
+  }
+  if (
+    code !== undefined &&
+    (values.has('error_description') || values.has('error_uri'))
+  ) {
+    throw new AuthorityOperationError(
+      'unauthorized',
+      'person authentication failed',
+    );
+  }
+
+  if (code !== undefined) {
+    return {
+      kind: 'authorization_code',
+      state,
+      authorization_code: code,
+    };
+  }
+  return { kind: 'provider_error', state };
+}
+
 export function decodeOrganizationApiJsonBody(bytes: Uint8Array): unknown {
   let text: string;
   try {
@@ -680,6 +853,8 @@ export interface OrganizationAuthorityHttpServerOptions {
   /** Omitted until the Person session runtime is configured. */
   personRecentDecisions?: PersonRecentDecisionsApplication;
   personReadableSearch?: Pick<PersonReadableSearchService, 'search'>;
+  /** Omitted until the provider-neutral Person session runtime is configured. */
+  personSessions?: PersonIdentitySessionHttpApplication;
   adminAuthenticator: AdminRequestAuthenticator;
   clientIdentityResolver: RequestClientIdentityResolver;
   adminConsole?: {
@@ -856,13 +1031,20 @@ export function createOrganizationAuthorityHttpServer(
         return;
       }
       const clientIdentity = options.clientIdentityResolver.resolve(request);
-      authenticationChallenge = url.pathname.startsWith('/v1/admin/')
+      authenticationChallenge =
+        url.pathname.startsWith('/v1/admin/') ||
+        url.pathname.startsWith('/v2/admin/')
         ? ORGANIZATION_API_ADMIN_AUTH_SCHEME
         : method === 'POST' &&
             url.pathname === ORGANIZATION_API_ENROLLMENTS_PATH
           ? ORGANIZATION_API_ENROLLMENT_AUTH_SCHEME
           : undefined;
-      if (method === 'POST') {
+      if (
+        method === 'GET' &&
+        url.pathname === PERSON_SESSION_OIDC_CALLBACK_PATH
+      ) {
+        consumeRateLimit(rateLimiter, `${clientIdentity}:person-session`);
+      } else if (method === 'POST') {
         if (url.pathname === ORGANIZATION_API_PERMISSION_CHECKS_PATH) {
           consumeRateLimit(
             permissionGlobalIngressRateLimiter,
@@ -881,7 +1063,8 @@ export function createOrganizationAuthorityHttpServer(
           const routeClass =
             url.pathname === '/admin' || url.pathname.startsWith('/admin/')
               ? 'admin-console'
-              : url.pathname.startsWith('/v1/admin/')
+              : url.pathname.startsWith('/v1/admin/') ||
+                  url.pathname.startsWith('/v2/admin/')
                 ? 'admin'
                 : url.pathname === ORGANIZATION_API_ENROLLMENTS_PATH
                   ? 'enrollment'
@@ -891,7 +1074,9 @@ export function createOrganizationAuthorityHttpServer(
                       ? 'record'
                       : url.pathname === ORGANIZATION_API_RECENT_DECISIONS_PATH
                         ? 'recent-decisions'
-                        : 'other';
+                        : url.pathname.startsWith('/v2/session/')
+                          ? 'person-session'
+                          : 'other';
           consumeRateLimit(rateLimiter, `${clientIdentity}:${routeClass}`);
         }
       }
@@ -1045,6 +1230,149 @@ export function createOrganizationAuthorityHttpServer(
           access_token: personAccessToken(request.headers.authorization),
         });
         sendSerializedJson(response, prepared.status_code, prepared.body);
+        return;
+      }
+
+      const personLoginGrantRoute = PERSON_LOGIN_GRANT_ROUTE.exec(url.pathname);
+      if (personLoginGrantRoute !== null) {
+        if (method !== 'POST' || url.search !== '') {
+          throw new AuthorityOperationError(
+            'invalid_request',
+            'Person login-grant method or query is invalid',
+          );
+        }
+        requireAdmin(request);
+        if (options.personSessions === undefined) {
+          sendSerializedJson(response, 503, PERSON_SESSION_UNAVAILABLE_BYTES);
+          return;
+        }
+        personSessionRequestObject(await readJsonBody(request), []);
+        sendJson(
+          response,
+          201,
+          await options.personSessions.issueBootstrapLoginGrant({
+            target_membership_id: personLoginGrantRoute[1]!,
+          }),
+        );
+        return;
+      }
+
+      if (url.pathname === PERSON_SESSION_OIDC_BEGIN_PATH) {
+        if (method !== 'POST' || url.search !== '') {
+          throw new AuthorityOperationError(
+            'invalid_request',
+            'Person OIDC begin method or query is invalid',
+          );
+        }
+        if (options.personSessions === undefined) {
+          sendSerializedJson(response, 503, PERSON_SESSION_UNAVAILABLE_BYTES);
+          return;
+        }
+        sendJson(
+          response,
+          201,
+          await options.personSessions.beginOidcLogin(
+            personOidcBeginInput(await readJsonBody(request)),
+          ),
+        );
+        return;
+      }
+
+      if (url.pathname === PERSON_SESSION_OIDC_CALLBACK_PATH) {
+        if (method !== 'GET') {
+          throw new AuthorityOperationError(
+            'invalid_request',
+            'Person OIDC callback method is invalid',
+          );
+        }
+        if (options.personSessions === undefined) {
+          sendSerializedJson(response, 503, PERSON_SESSION_UNAVAILABLE_BYTES);
+          return;
+        }
+        const callback = personOidcCallbackInput(
+          url,
+          options.personSessions.expected_issuer,
+        );
+        if (callback.kind === 'provider_error') {
+          try {
+            await options.personSessions.completeOidcLogin({
+              state: callback.state,
+              authorization_code: '',
+            });
+          } catch {
+            // The application owns terminalization. Every provider error has
+            // the same public result whether that terminal write succeeds.
+          }
+          throw new AuthorityOperationError(
+            'unauthorized',
+            'person authentication failed',
+          );
+        }
+        sendJson(
+          response,
+          200,
+          await options.personSessions.completeOidcLogin({
+            state: callback.state,
+            authorization_code: callback.authorization_code,
+          }),
+        );
+        return;
+      }
+
+      if (url.pathname === PERSON_SESSION_REFRESH_PATH) {
+        if (method !== 'POST' || url.search !== '') {
+          throw new AuthorityOperationError(
+            'invalid_request',
+            'Person session refresh method or query is invalid',
+          );
+        }
+        if (options.personSessions === undefined) {
+          sendSerializedJson(response, 503, PERSON_SESSION_UNAVAILABLE_BYTES);
+          return;
+        }
+        const body = personSessionRequestObject(
+          await readJsonBody(request),
+          ['refresh_token'],
+        );
+        sendJson(
+          response,
+          200,
+          await options.personSessions.refresh({
+            refresh_token: personSessionString(
+              body['refresh_token'],
+              'refresh token',
+            ),
+          }),
+        );
+        return;
+      }
+
+      if (url.pathname === PERSON_SESSION_REVOCATIONS_PATH) {
+        if (method !== 'POST' || url.search !== '') {
+          throw new AuthorityOperationError(
+            'invalid_request',
+            'Person session revocation method or query is invalid',
+          );
+        }
+        if (options.personSessions === undefined) {
+          sendSerializedJson(response, 503, PERSON_SESSION_UNAVAILABLE_BYTES);
+          return;
+        }
+        personSessionRequestObject(await readJsonBody(request), []);
+        authenticationChallenge = ORGANIZATION_API_ADMIN_AUTH_SCHEME;
+        const accessToken = personAccessToken(request.headers.authorization);
+        if (accessToken === '') {
+          throw new AuthorityOperationError(
+            'unauthorized',
+            'person authentication failed',
+          );
+        }
+        await options.personSessions.revoke({
+          credential_kind: 'access',
+          credential: accessToken,
+          reason: 'person_logout',
+        });
+        sendNoContent(response);
         return;
       }
 

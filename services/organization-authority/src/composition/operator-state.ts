@@ -146,6 +146,7 @@ import {
 } from './operator-config.js';
 import type { AuthorityServeConfig } from './config.js';
 import type { OrganizationMemberRecordingActivationBindingV1 } from './config.js';
+import { readAuthorityPersonSessionRuntimeOverlay } from './person-session-runtime-config.js';
 import {
   assertOrganizationMemberRecordingActivationFresh,
   validateOrganizationMemberRecordingActivationCommand,
@@ -1746,9 +1747,9 @@ function assertActivationMatchesInitializedBaseline(
 }
 
 /**
- * Folds the immutable initialized config with the one supported additive
- * activation. A legacy schema has no activation table and therefore preserves
- * the initialized policy until serving, under the runtime lock, migrates it.
+ * Folds the immutable initialized config with additive runtime state. A legacy
+ * schema has no recording-activation table and therefore preserves the
+ * initialized policy; the fixed Person-session overlay remains independent.
  */
 export function resolveEffectiveAuthorityServeConfig(
   configPath: string,
@@ -1756,17 +1757,27 @@ export function resolveEffectiveAuthorityServeConfig(
 ): AuthorityServeConfig {
   const base = resolveAuthorityServeConfig(config);
   const inspected = inspectAuthorityDatabaseForServe(config.database_path);
-  if (inspected.schema_version < 8) return base;
-  const activation = readOrganizationMemberRecordingActivation(
-    config.database_path,
-  );
-  if (activation === null) return base;
-  assertActivationMatchesInitializedBaseline(configPath, config, activation);
+  let effective = base;
+  if (inspected.schema_version >= 8) {
+    const activation = readOrganizationMemberRecordingActivation(
+      config.database_path,
+    );
+    if (activation !== null) {
+      assertActivationMatchesInitializedBaseline(configPath, config, activation);
+      effective = Object.freeze({
+        ...base,
+        organization_recording_policy_v1: activation.command.target_policy,
+        organization_member_recording_activation_v1:
+          activationBinding(activation),
+      });
+    }
+  }
+  const personSessionRuntime =
+    readAuthorityPersonSessionRuntimeOverlay(config);
+  if (personSessionRuntime === undefined) return effective;
   return Object.freeze({
-    ...base,
-    organization_recording_policy_v1: activation.command.target_policy,
-    organization_member_recording_activation_v1:
-      activationBinding(activation),
+    ...effective,
+    person_session_runtime_v1: personSessionRuntime,
   });
 }
 

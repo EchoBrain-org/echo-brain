@@ -1,5 +1,6 @@
 import { isAbsolute, join, relative, resolve, sep } from 'node:path';
 import type { OrganizationRecordingPolicyV1 } from '../application/organization-recording-policy.js';
+import type { ResolvedAuthorityPersonSessionRuntimeV1 } from './person-session-runtime-config.js';
 export type { OrganizationRecordingPolicyV1 } from '../application/organization-recording-policy.js';
 
 export interface DevelopmentSignerConfig {
@@ -41,6 +42,8 @@ export interface AuthorityServeConfig extends DevelopmentSignerConfig {
   /** Verified additive overlay; absent when the immutable config owns policy. */
   organization_member_recording_activation_v1?:
     OrganizationMemberRecordingActivationBindingV1;
+  /** Optional fixed-path overlay; absence leaves every Person route disabled. */
+  person_session_runtime_v1?: ResolvedAuthorityPersonSessionRuntimeV1;
 }
 
 function normalizedAbsolute(path: string): boolean {

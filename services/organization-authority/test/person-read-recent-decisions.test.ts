@@ -343,6 +343,52 @@ describe('Person recent-decision V2 reads', () => {
     );
   });
 
+  it('keeps reviewer reads available when the recent-decisions pilot is absent', () => {
+    const recent = createPort({});
+    const withoutPilot = createPersonReadRecentDecisionsApplication({
+      descriptor,
+      authorization: recent.port,
+      reviewer_recent_decisions: {
+        load: () => ({
+          items: [
+            {
+              kind: 'decision',
+              text: 'Reviewer-only decision.',
+              atom_id: digest('reviewer atom'),
+              record_hash: digest('reviewer record'),
+            },
+          ],
+        }),
+      },
+    });
+
+    expect(() =>
+      withoutPilot.recentDecisions({
+        request: recentRequest(),
+        access_token: 'valid',
+      }),
+    ).toThrow(
+      expect.objectContaining<Partial<OrganizationRecentDecisionsError>>({
+        code: 'unavailable',
+      }),
+    );
+    expect(
+      withoutPilot.reviewerRecentDecisions({
+        request: reviewerRequest(),
+        access_token: 'valid',
+      }).body,
+    ).toEqual(
+      prepareReviewerRecentDecisionsResponse([
+        {
+          kind: 'decision',
+          text: 'Reviewer-only decision.',
+          atom_id: digest('reviewer atom'),
+          record_hash: digest('reviewer record'),
+        },
+      ]).body,
+    );
+  });
+
   it('audits a final revocation and releases no prepared content', () => {
     const { port, audits } = createPort({
       final: {

@@ -24,6 +24,12 @@ export function loadReviewerRecentDecisionsSource(
   evidence: OrganizationRecordAuthorizationEvidenceStore,
   caller: ReviewerRecentDecisionsSourceInput,
 ): ReviewerRecentDecisionsSourceOutput {
+  if (records.reviewerRestrictedHealth.kind === 'degraded') {
+    unavailable(
+      'reviewer-restricted runtime is unavailable',
+      records.reviewerRestrictedHealth.failure,
+    );
+  }
   if (records.fatalFailure !== null) {
     unavailable('reviewer record runtime is unavailable', records.fatalFailure);
   }

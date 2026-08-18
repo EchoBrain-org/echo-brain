@@ -20,7 +20,7 @@
     "@echo-brain/organization-record",
     "@echo-brain/organization-retrieval"
   ],
-  "allowed_external_packages": ["better-sqlite3"],
+  "allowed_external_packages": ["better-sqlite3", "openid-client"],
   "allowed_node_builtins": [
     "buffer",
     "crypto",
@@ -89,8 +89,56 @@
       "allowed_node_builtins": ["buffer"]
     },
     {
-      "name": "authority-adapters-implement-application-ports",
-      "from": "services/organization-authority/src/adapters/**",
+      "name": "authority-file-adapters-implement-application-ports",
+      "from": "services/organization-authority/src/adapters/files/**",
+      "allowed_imports": [
+        "services/organization-authority/src/domain/**",
+        "services/organization-authority/src/application/**",
+        "services/organization-authority/src/adapters/**"
+      ],
+      "allowed_workspace_packages": [
+        "@echo-brain/federation-protocol",
+        "@echo-brain/organization-protocol",
+        "@echo-brain/organization-api"
+      ],
+      "allowed_external_packages": [],
+      "allowed_node_builtins": ["crypto", "events", "fs", "net", "path"]
+    },
+    {
+      "name": "authority-http-adapters-implement-application-ports",
+      "from": "services/organization-authority/src/adapters/http/**",
+      "allowed_imports": [
+        "services/organization-authority/src/domain/**",
+        "services/organization-authority/src/application/**",
+        "services/organization-authority/src/adapters/**"
+      ],
+      "allowed_workspace_packages": [
+        "@echo-brain/federation-protocol",
+        "@echo-brain/organization-protocol",
+        "@echo-brain/organization-api"
+      ],
+      "allowed_external_packages": [],
+      "allowed_node_builtins": ["crypto", "events", "fs", "net", "path"]
+    },
+    {
+      "name": "authority-oidc-adapter-implements-person-session-port",
+      "from": "services/organization-authority/src/adapters/oidc/**",
+      "allowed_imports": [
+        "services/organization-authority/src/domain/**",
+        "services/organization-authority/src/application/**",
+        "services/organization-authority/src/adapters/**"
+      ],
+      "allowed_workspace_packages": [
+        "@echo-brain/federation-protocol",
+        "@echo-brain/organization-protocol",
+        "@echo-brain/organization-api"
+      ],
+      "allowed_external_packages": ["openid-client"],
+      "allowed_node_builtins": ["crypto", "events", "fs", "net", "path"]
+    },
+    {
+      "name": "authority-persistence-adapters-implement-application-ports",
+      "from": "services/organization-authority/src/adapters/persistence/**",
       "allowed_imports": [
         "services/organization-authority/src/domain/**",
         "services/organization-authority/src/application/**",
@@ -102,6 +150,38 @@
         "@echo-brain/organization-api"
       ],
       "allowed_external_packages": ["better-sqlite3"],
+      "allowed_node_builtins": ["crypto", "events", "fs", "net", "path"]
+    },
+    {
+      "name": "authority-runtime-adapters-implement-application-ports",
+      "from": "services/organization-authority/src/adapters/runtime/**",
+      "allowed_imports": [
+        "services/organization-authority/src/domain/**",
+        "services/organization-authority/src/application/**",
+        "services/organization-authority/src/adapters/**"
+      ],
+      "allowed_workspace_packages": [
+        "@echo-brain/federation-protocol",
+        "@echo-brain/organization-protocol",
+        "@echo-brain/organization-api"
+      ],
+      "allowed_external_packages": [],
+      "allowed_node_builtins": ["crypto", "events", "fs", "net", "path"]
+    },
+    {
+      "name": "authority-security-adapters-implement-application-ports",
+      "from": "services/organization-authority/src/adapters/security/**",
+      "allowed_imports": [
+        "services/organization-authority/src/domain/**",
+        "services/organization-authority/src/application/**",
+        "services/organization-authority/src/adapters/**"
+      ],
+      "allowed_workspace_packages": [
+        "@echo-brain/federation-protocol",
+        "@echo-brain/organization-protocol",
+        "@echo-brain/organization-api"
+      ],
+      "allowed_external_packages": [],
       "allowed_node_builtins": ["crypto", "events", "fs", "net", "path"]
     },
     {

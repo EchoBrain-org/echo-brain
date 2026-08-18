@@ -16,8 +16,13 @@ import { createServer as createHttpServer } from 'node:http';
 import { createServer as createNetServer, type Socket } from 'node:net';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import Database from 'better-sqlite3';
+import {
+  ORGANIZATION_API_PROXY_AUTH_SCHEME,
+  TRUSTED_PROXY_AUTHORIZATION_HEADER,
+  TRUSTED_PROXY_CLIENT_ID_HEADER,
+} from '@echo-brain/organization-api';
 import {
   initializeOrganizationControlDatabase,
   inspectOrganizationControlDatabaseForServe,
@@ -51,10 +56,20 @@ import {
   installAuthorityIntegrations,
   inspectAuthorityServePreflight,
   inspectInitializedAuthorityState,
+  resolveEffectiveAuthorityServeConfig,
   type AuthorityIntegrationsInstallationFaultPoint,
 } from '../src/composition/operator-state.js';
+import {
+  AUTHORITY_PERSON_SESSION_PKCE_KEY_FILENAME,
+  AUTHORITY_PERSON_SESSION_RUNTIME_OVERLAY_FILENAME,
+} from '../src/composition/person-session-runtime-config.js';
 import { startOrganizationAuthority } from '../src/composition/runtime.js';
 import { reviewerPolicyContractSha256 } from '../src/application/reviewer-policy-contract.js';
+import { PersonIdentitySessionApplication } from '../src/application/person-identity-sessions.js';
+import {
+  PERSON_SESSION_OIDC_BEGIN_PATH,
+  PERSON_SESSION_REFRESH_PATH,
+} from '../src/presentation/person-identity-session-http-application.js';
 import {
   inspectAuthorityRuntimeOwnership,
   inspectAuthorityStatus,
@@ -459,6 +474,167 @@ describe('organization authority operator lifecycle', () => {
     expect(() =>
       inspectAuthorityDatabaseReadOnly(paths.database_path),
     ).toThrow('organization authority database table set is invalid');
+  });
+
+  it('folds the opt-in Person overlay without rewriting initialized intent', async () => {
+    const fixture = await initializedFixture();
+    const config = readAuthorityRuntimeConfig(fixture.configPath);
+    const paths = authorityStatePaths(fixture.stateDirectory);
+    const configBytes = readFileSync(fixture.configPath);
+    const manifestBytes = readFileSync(paths.initialization_manifest_path);
+    const keyPath = join(
+      paths.credential_directory,
+      AUTHORITY_PERSON_SESSION_PKCE_KEY_FILENAME,
+    );
+    const overlayPath = join(
+      paths.state_directory,
+      AUTHORITY_PERSON_SESSION_RUNTIME_OVERLAY_FILENAME,
+    );
+    writeFileSync(keyPath, Buffer.alloc(32, 6).toString('base64url'), {
+      mode: 0o600,
+    });
+    chmodSync(keyPath, 0o600);
+    writeFileSync(
+      overlayPath,
+      `${JSON.stringify({
+        schema_version: 1,
+        kind: 'echo-organization-authority-person-session-runtime-overlay',
+        authority_id: config.authority.authority_id,
+        organization_id: config.organization.organization_id,
+        oidc: {
+          issuer: 'https://identity.example/tenant',
+          client_id: 'echo-person-client',
+          redirect_uri:
+            'https://authority.example/v2/session/oidc/callback',
+          tenant: { kind: 'issuer' },
+          id_token_algorithms: ['RS256'],
+          client_authentication: { method: 'none' },
+        },
+        pkce_sealing_key_ref: `file:${keyPath}`,
+      })}\n`,
+      { mode: 0o600 },
+    );
+    chmodSync(overlayPath, 0o600);
+
+    const baseline = authorityRuntimeFingerprint(
+      resolveAuthorityServeConfig(config),
+    );
+    const first = resolveEffectiveAuthorityServeConfig(
+      fixture.configPath,
+      config,
+    );
+    const firstFingerprint = authorityRuntimeFingerprint(first);
+    expect(first.person_session_runtime_v1).toBeDefined();
+    expect(firstFingerprint).not.toBe(baseline);
+    expect(readFileSync(fixture.configPath)).toEqual(configBytes);
+    expect(readFileSync(paths.initialization_manifest_path)).toEqual(
+      manifestBytes,
+    );
+
+    writeFileSync(keyPath, Buffer.alloc(32, 7).toString('base64url'));
+    const rotated = resolveEffectiveAuthorityServeConfig(
+      fixture.configPath,
+      config,
+    );
+    expect(authorityRuntimeFingerprint(rotated)).not.toBe(firstFingerprint);
+  });
+
+  it('starts configured Person sessions offline and runs bounded attempt expiry', async () => {
+    const fixture = await initializedFixture();
+    const base = resolveAuthorityServeConfig(
+      readAuthorityRuntimeConfig(fixture.configPath),
+    );
+    const configured = {
+      ...base,
+      person_session_runtime_v1: Object.freeze({
+        overlay_sha256: `sha256:${'a'.repeat(64)}` as const,
+        oidc_configuration: Object.freeze({
+          issuer: 'https://identity.example/tenant',
+          client_id: 'echo-person-client',
+          redirect_uri:
+            'https://authority.example/v2/session/oidc/callback',
+          tenant: Object.freeze({ kind: 'issuer' as const }),
+          id_token_algorithms: Object.freeze(['RS256']),
+        }),
+        client_authentication: Object.freeze({ method: 'none' as const }),
+        pkce_sealing_key: new Uint8Array(32).fill(7),
+      }),
+    };
+    const expire = vi.spyOn(
+      PersonIdentitySessionApplication.prototype,
+      'expireOidcLoginAttempts',
+    );
+    const begin = vi.spyOn(
+      PersonIdentitySessionApplication.prototype,
+      'beginOidcLogin',
+    );
+    let discoveryCalls = 0;
+    let runtime: Awaited<ReturnType<typeof startOrganizationAuthority>> | undefined;
+    try {
+      runtime = await startOrganizationAuthority(configured, {
+        discoverPersonSessionOidcProvider: async () => {
+          discoveryCalls += 1;
+          if (discoveryCalls === 1) {
+            throw new Error('identity provider is temporarily unavailable');
+          }
+          return {
+            buildAuthorizationUrl: (attempt) =>
+              `https://identity.example/authorize?state=${encodeURIComponent(attempt.state)}`,
+            redeemAuthorizationCode: async () =>
+              ({ kind: 'terminal_failure' }) as const,
+          };
+        },
+      });
+      expect(discoveryCalls).toBe(0);
+      expect(expire).toHaveBeenCalledTimes(1);
+      expect(expire).toHaveBeenLastCalledWith({ limit: 1000 });
+
+      const origin = `http://127.0.0.1:${String(runtime.address.port)}`;
+      const proxyHeaders = {
+        [TRUSTED_PROXY_AUTHORIZATION_HEADER]:
+          `${ORGANIZATION_API_PROXY_AUTH_SCHEME} ${configured.trusted_proxy_token}`,
+        [TRUSTED_PROXY_CLIENT_ID_HEADER]: `cid_${createHash('sha256')
+          .update('offline-person-session-runtime-test')
+          .digest('base64url')}`,
+        'content-type': 'application/json',
+      };
+      const refresh = await fetch(`${origin}${PERSON_SESSION_REFRESH_PATH}`, {
+        method: 'POST',
+        headers: proxyHeaders,
+        body: JSON.stringify({ refresh_token: 'R'.repeat(43) }),
+      });
+      expect(refresh.status).toBe(401);
+      expect(discoveryCalls).toBe(0);
+      expect(expire).toHaveBeenCalledTimes(1);
+
+      const unavailable = await fetch(
+        `${origin}${PERSON_SESSION_OIDC_BEGIN_PATH}`,
+        {
+          method: 'POST',
+          headers: proxyHeaders,
+          body: JSON.stringify({ kind: 'existing_identity_login' }),
+        },
+      );
+      expect(unavailable.status).toBe(503);
+      expect(discoveryCalls).toBe(1);
+      expect(expire).toHaveBeenCalledTimes(2);
+      expect(begin).not.toHaveBeenCalled();
+
+      const begun = await fetch(`${origin}${PERSON_SESSION_OIDC_BEGIN_PATH}`, {
+        method: 'POST',
+        headers: proxyHeaders,
+        body: JSON.stringify({ kind: 'existing_identity_login' }),
+      });
+      expect(begun.status).toBe(201);
+      expect(discoveryCalls).toBe(2);
+      expect(expire).toHaveBeenCalledTimes(3);
+      expect(expire).toHaveBeenLastCalledWith({ limit: 1000 });
+      expect(begin).toHaveBeenCalledTimes(1);
+    } finally {
+      await runtime?.close();
+      expire.mockRestore();
+      begin.mockRestore();
+    }
   });
 
   it('serializes concurrent initialization and safely completes a published state without config', async () => {

@@ -52,7 +52,7 @@ export interface PersonRecentDecisionsSource {
 
 export interface PersonReviewerRecentDecisionsSource {
   load(input: {
-    readonly request_sha256: string;
+    readonly request_sha256: `sha256:${string}`;
     readonly reviewer_principal_id: string;
     readonly reviewer_membership_id: string;
   }): {
@@ -66,7 +66,7 @@ export interface CreatePersonReadRecentDecisionsApplicationOptions {
     'authority_id' | 'organization_id'
   >;
   readonly authorization: PersonReadAuthorizationPort;
-  readonly recent_decisions: {
+  readonly recent_decisions?: {
     readonly activation: OrganizationRecentDecisionsPilotActivation;
     readonly source: PersonRecentDecisionsSource;
   };
@@ -214,8 +214,15 @@ export function createPersonReadRecentDecisionsApplication(
 
   return {
     recentDecisions(input) {
+      const recentDecisions = options.recent_decisions;
+      if (recentDecisions === undefined) {
+        throw new OrganizationRecentDecisionsError(
+          'unavailable',
+          'recent decisions permission pilot is unavailable',
+        );
+      }
       const activation = validateRecentDecisionsPilotActivation(
-        options.recent_decisions.activation,
+        recentDecisions.activation,
       );
       if (activation.organization_id !== options.descriptor.organization_id) {
         throw new OrganizationRecentDecisionsError(
@@ -258,7 +265,7 @@ export function createPersonReadRecentDecisionsApplication(
         admission.membership_id,
       );
       const prepared = permitted
-        ? prepareAllowedRecentDecisionsResponse(options.recent_decisions.source.load())
+        ? prepareAllowedRecentDecisionsResponse(recentDecisions.source.load())
         : {
             status_code: 404 as const,
             body: fixedRecentDecisionsErrorBytes(404),

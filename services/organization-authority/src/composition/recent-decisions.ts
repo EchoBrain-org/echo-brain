@@ -18,7 +18,7 @@ import {
 import type { OrganizationRecentDecisionsHttpApplication } from '../presentation/organization-recent-decisions-http-application.js';
 import type { OrganizationRecordRuntime } from './organization-record.js';
 
-function activationView(
+export function organizationRecentDecisionsPilotActivation(
   marker: OrganizationPermissionPilotActivationMarkerV1,
 ): OrganizationRecentDecisionsPilotActivation {
   return {
@@ -119,7 +119,7 @@ export function composeOrganizationRecentDecisions(
     };
   }
   const marker = health.activation;
-  const activation = activationView(marker);
+  const activation = organizationRecentDecisionsPilotActivation(marker);
   return {
     recentDecisions(
       request: OrganizationRecentDecisionsRequestV1,

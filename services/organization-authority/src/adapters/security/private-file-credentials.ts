@@ -35,13 +35,16 @@ export function authorityCredentialPath(reference: string): string {
   return path;
 }
 
-function assertPrivateCredentialFile(path: string): Stats {
+function assertPrivateCredentialFile(
+  path: string,
+  minimumBytes = MINIMUM_CREDENTIAL_BYTES,
+): Stats {
   const state = lstatSync(path);
   const currentUid = process.getuid?.();
   if (
     state.isSymbolicLink() ||
     !state.isFile() ||
-    state.size < MINIMUM_CREDENTIAL_BYTES ||
+    state.size < minimumBytes ||
     state.size > MAXIMUM_CREDENTIAL_BYTES ||
     (currentUid !== undefined && state.uid !== currentUid) ||
     (state.mode & 0o777) !== 0o600
@@ -51,9 +54,12 @@ function assertPrivateCredentialFile(path: string): Stats {
   return state;
 }
 
-export function readPrivateAuthorityCredential(reference: string): string {
+function readPrivateVisibleAsciiCredential(
+  reference: string,
+  minimumBytes: number,
+): string {
   const path = authorityCredentialPath(reference);
-  const state = assertPrivateCredentialFile(path);
+  const state = assertPrivateCredentialFile(path, minimumBytes);
   const noFollow = fsConstants.O_NOFOLLOW ?? 0;
   const file = openSync(path, fsConstants.O_RDONLY | noFollow);
   try {
@@ -62,13 +68,46 @@ export function readPrivateAuthorityCredential(reference: string): string {
       fail('file changed while opening');
     }
     const value = readFileSync(file, 'utf8');
-    if (!/^[\x21-\x7e]{32,4096}$/.test(value)) {
-      fail('value must be 32-4096 visible ASCII bytes');
+    if (
+      value.length < minimumBytes ||
+      value.length > MAXIMUM_CREDENTIAL_BYTES ||
+      !/^[\x21-\x7e]+$/.test(value)
+    ) {
+      fail('value must contain only bounded visible ASCII bytes');
     }
     return value;
   } finally {
     closeSync(file);
   }
+}
+
+export function readPrivateAuthorityCredential(reference: string): string {
+  return readPrivateVisibleAsciiCredential(
+    reference,
+    MINIMUM_CREDENTIAL_BYTES,
+  );
+}
+
+/** Reads the exact 32-byte Person-session PKCE key from canonical base64url. */
+export function readPrivateAuthorityPersonSessionPkceKey(
+  reference: string,
+): Uint8Array {
+  const encoded = readPrivateVisibleAsciiCredential(reference, 43);
+  if (!/^[A-Za-z0-9_-]{43}$/.test(encoded)) {
+    fail('Person-session PKCE key must be canonical base64url');
+  }
+  const key = Buffer.from(encoded, 'base64url');
+  if (key.byteLength !== 32 || key.toString('base64url') !== encoded) {
+    fail('Person-session PKCE key must decode to exactly 32 bytes');
+  }
+  return Uint8Array.from(key);
+}
+
+/** Provider-owned client-secret lengths vary; visible ASCII and file privacy do not. */
+export function readPrivateAuthorityOidcClientSecret(
+  reference: string,
+): string {
+  return readPrivateVisibleAsciiCredential(reference, 1);
 }
 
 export function createPrivateAuthorityCredential(path: string): string {
