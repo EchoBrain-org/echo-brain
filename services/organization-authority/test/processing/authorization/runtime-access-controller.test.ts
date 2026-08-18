@@ -2,8 +2,8 @@ import { describe, expect, it } from 'vitest';
 import type { OrganizationInstallationAccessDecisionV1 } from '@echo-brain/organization-protocol';
 import {
   OrganizationRuntimeAccessController,
-  type LocalOrganizationRuntime,
-} from '../../src/product/organization/index.js';
+  type OrganizationRuntimeAccessSession,
+} from '../../../src/processing/authorization/runtime-access-controller.js';
 
 function active(validUntil: string): OrganizationInstallationAccessDecisionV1 {
   return {
@@ -29,14 +29,14 @@ function runtime(options: {
   current(): OrganizationInstallationAccessDecisionV1;
   refresh(): Promise<OrganizationInstallationAccessDecisionV1>;
   closed(): void;
-}): LocalOrganizationRuntime {
+}): OrganizationRuntimeAccessSession {
   return {
     coordinator: {
       currentAccess: options.current,
       refreshAccess: options.refresh,
     },
     close: options.closed,
-  } as unknown as LocalOrganizationRuntime;
+  };
 }
 
 describe('organization runtime access controller', () => {

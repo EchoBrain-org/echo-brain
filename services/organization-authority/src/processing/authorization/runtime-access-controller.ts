@@ -1,8 +1,16 @@
 import type { OrganizationInstallationAccessDecisionV1 } from '@echo-brain/organization-protocol';
-import type { LocalOrganizationRuntime } from './composition.js';
+
+/** The bounded access-session capability used by the processing runtime. */
+export interface OrganizationRuntimeAccessSession {
+  readonly coordinator: {
+    currentAccess(): OrganizationInstallationAccessDecisionV1;
+    refreshAccess(): Promise<OrganizationInstallationAccessDecisionV1>;
+  };
+  close(): void;
+}
 
 export interface OrganizationRuntimeAccessControllerOptions {
-  openRuntime(): LocalOrganizationRuntime;
+  openRuntime(): OrganizationRuntimeAccessSession;
   now: () => string;
   renewalLeadMs?: number;
   renewalIntervalMs?: number;

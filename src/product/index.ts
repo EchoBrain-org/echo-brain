@@ -7,6 +7,7 @@ export * from './default-adapters.js';
 export * from '@echo-brain/organization-authority/processing/approval/decision-node.js';
 export * from './approval/decision-node-store.js';
 export * from '@echo-brain/organization-authority/processing/authorization/reviewer-publication-preflight.js';
+export * from '@echo-brain/organization-authority/processing/authorization/runtime-access-controller.js';
 export * from '@echo-brain/organization-authority/processing/approval/store-backed-approval-gate.js';
 export * from './paths.js';
 export * from './runtime.js';

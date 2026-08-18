@@ -77,5 +77,3 @@ export type {
   OrganizationRecordSubmissionOutcome,
   OrganizationRecordSubmissionRequest,
 } from './client/http-organization-record-client.js';
-export { OrganizationRuntimeAccessController } from './runtime-access-controller.js';
-export type { OrganizationRuntimeAccessControllerOptions } from './runtime-access-controller.js';

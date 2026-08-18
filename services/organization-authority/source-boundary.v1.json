@@ -379,6 +379,16 @@
       "allowed_node_builtins": []
     },
     {
+      "name": "processing-runtime-access-controller-uses-organization-protocol",
+      "from": "services/organization-authority/src/processing/authorization/runtime-access-controller.ts",
+      "allowed_imports": [],
+      "allowed_workspace_packages": [
+        "@echo-brain/organization-protocol"
+      ],
+      "allowed_external_packages": [],
+      "allowed_node_builtins": []
+    },
+    {
       "name": "processing-record-envelope-ports-use-json-contract",
       "from": "services/organization-authority/src/processing/record/ports.ts",
       "allowed_imports": [],

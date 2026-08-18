@@ -7,6 +7,7 @@ import { parseArgs } from "node:util";
 import type { Writable } from "node:stream";
 import { fileURLToPath } from "node:url";
 import type { AdapterInstanceConfig } from "@echo-brain/organization-authority/processing/core/index.js";
+import { OrganizationRuntimeAccessController } from "@echo-brain/organization-authority/processing/authorization/runtime-access-controller.js";
 import {
   assertConfiguredAdapterFactoriesAvailable,
   assertConfiguredAdaptersValid,
@@ -61,7 +62,6 @@ import {
   HttpOrganizationRecordClient,
   OrganizationApprovalActionAuthorizer,
   OrganizationRecordSubmitter,
-  OrganizationRuntimeAccessController,
   OrganizationAuthorityTransportError,
   organizationEnrollmentGrantSha256,
   ProtocolOrganizationRecordEnvelopeBuilder,
