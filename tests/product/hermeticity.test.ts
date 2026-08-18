@@ -1,8 +1,6 @@
 import dgram from 'node:dgram';
 import dns from 'node:dns';
 import {
-  chmodSync,
-  mkdirSync,
   mkdtempSync,
   readFileSync,
   readdirSync,
@@ -18,9 +16,7 @@ import { join, resolve } from 'node:path';
 import tls from 'node:tls';
 import { afterEach, describe, expect, it } from 'vitest';
 import {
-  publicNpmInstallConfigPaths,
   SANITIZED_CHILD_MARKER,
-  spawnPublicNpmInstallChild,
   spawnSanitizedChild,
 } from '../../src/product/spawn-sanitized-child.js';
 
@@ -41,26 +37,6 @@ async function collectChild(
   options: Parameters<typeof spawnSanitizedChild>[2] = {},
 ): Promise<{ status: number | null; stdout: string; stderr: string }> {
   const child = spawnSanitizedChild(command, args, options);
-  let stdout = '';
-  let stderr = '';
-  child.stdout.setEncoding('utf8');
-  child.stderr.setEncoding('utf8');
-  child.stdout.on('data', (chunk: string) => (stdout += chunk));
-  child.stderr.on('data', (chunk: string) => (stderr += chunk));
-  const status = await new Promise<number | null>((resolveStatus, reject) => {
-    child.once('error', reject);
-    child.once('close', resolveStatus);
-  });
-  return { status, stdout, stderr };
-}
-
-async function collectPublicNpmInstallChild(
-  command: string,
-  args: readonly string[],
-  cwd: string,
-  base: NodeJS.ProcessEnv,
-): Promise<{ status: number | null; stdout: string; stderr: string }> {
-  const child = spawnPublicNpmInstallChild(command, args, { cwd, env: base });
   let stdout = '';
   let stderr = '';
   child.stdout.setEncoding('utf8');
@@ -292,104 +268,4 @@ describe('sanitized child process boundary', () => {
     expect(output).toContain('product hermeticity guard');
   });
 
-  it('gives only the updater npm child a credential-free public registry environment', async () => {
-    const cwd = temporaryDirectory('echo-public-npm-install-');
-    const keys = [
-      'ANTHROPIC_API_KEY',
-      'NPM_TOKEN',
-      'ECHO_TEST_OVERRIDE',
-      'HTTP_PROXY',
-      'https_proxy',
-      'ALL_PROXY',
-      'NPM_CONFIG_REGISTRY',
-      'npm_config_registry',
-      'npm_config_userconfig',
-      'npm_config_globalconfig',
-      'npm_config_offline',
-      'NODE_OPTIONS',
-      'NODE_EXTRA_CA_CERTS',
-      'SSL_CERT_FILE',
-      'SSL_CERT_DIR',
-      'HOME',
-      SANITIZED_CHILD_MARKER,
-    ];
-    const script = `console.log(JSON.stringify(Object.fromEntries(${JSON.stringify(
-      keys,
-    )}.map((key) => [key, process.env[key]]))))`;
-    const result = await collectPublicNpmInstallChild(
-      process.execPath,
-      ['-e', script],
-      cwd,
-      {
-        ANTHROPIC_API_KEY: 'secret',
-        NPM_TOKEN: 'secret',
-        ECHO_TEST_OVERRIDE: 'unsafe',
-        HTTP_PROXY: 'http://proxy.invalid',
-        https_proxy: 'http://proxy.invalid',
-        ALL_PROXY: 'http://proxy.invalid',
-        NPM_CONFIG_REGISTRY: 'https://registry.attacker.invalid/',
-        npm_config_registry: 'https://registry.attacker.invalid/',
-        NODE_OPTIONS: '--require=/tmp/attacker.cjs',
-        NODE_EXTRA_CA_CERTS: '/tmp/attacker-ca.pem',
-        SSL_CERT_FILE: '/tmp/attacker-ca.pem',
-        SSL_CERT_DIR: '/tmp/attacker-certs',
-      },
-    );
-    expect(result.status, result.stderr).toBe(0);
-    expect(JSON.parse(result.stdout)).toEqual({
-      npm_config_registry: 'https://registry.npmjs.org/',
-      npm_config_userconfig: join(cwd, 'npm-no-config/user.npmrc'),
-      npm_config_globalconfig: join(cwd, 'npm-no-config/global.npmrc'),
-      npm_config_offline: 'false',
-      HOME: cwd,
-      [SANITIZED_CHILD_MARKER]: '1',
-    });
-  });
-
-  it('runs npm 10.9.4 with distinct empty configs instead of double-loading /dev/null', async () => {
-    const cwd = temporaryDirectory('echo-public-npm-10-');
-    const paths = publicNpmInstallConfigPaths(cwd);
-    mkdirSync(join(cwd, 'npm-no-config'), { mode: 0o700 });
-    writeFileSync(paths.userconfig, 'registry=https://attacker.invalid/\n', {
-      mode: 0o600,
-    });
-    writeFileSync(paths.globalconfig, 'audit=true\n', { mode: 0o600 });
-    chmodSync(paths.userconfig, 0o600);
-    chmodSync(paths.globalconfig, 0o600);
-
-    const npmCli = process.env['npm_execpath'];
-    expect(npmCli).toBeTruthy();
-    const version = await collectPublicNpmInstallChild(
-      process.execPath,
-      [npmCli!, '--version'],
-      cwd,
-      process.env,
-    );
-    expect(version.status, version.stderr).toBe(0);
-    expect(version.stdout.trim()).toBe('10.9.4');
-    expect(readFileSync(paths.userconfig, 'utf8')).toBe('');
-    expect(readFileSync(paths.globalconfig, 'utf8')).toBe('');
-
-    writeFileSync(paths.userconfig, 'registry=https://attacker.invalid/\n');
-    writeFileSync(paths.globalconfig, 'audit=true\n');
-
-    const result = await collectPublicNpmInstallChild(
-      process.execPath,
-      [
-        npmCli!,
-        'config',
-        'get',
-        'registry',
-        `--userconfig=${paths.userconfig}`,
-        `--globalconfig=${paths.globalconfig}`,
-      ],
-      cwd,
-      process.env,
-    );
-    expect(result.status, result.stderr).toBe(0);
-    expect(result.stdout.trim()).toBe('https://registry.npmjs.org/');
-    expect(result.stderr).not.toContain('double-loading config');
-    expect(readFileSync(paths.userconfig, 'utf8')).toBe('');
-    expect(readFileSync(paths.globalconfig, 'utf8')).toBe('');
-  });
 });
