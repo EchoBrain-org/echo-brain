@@ -75,8 +75,8 @@ operators must preserve the old state for continuity.
 
 A state root left behind by the retired founder-provenance mode is detected
 and refused, never downgraded. The shared observational gate, the commands it
-fences and spares, and the `service stop` → `backup` → `bootstrap` recovery
-path are documented once in
+fences and spares, and the `service stop` → out-of-band preservation →
+`service uninstall` → fresh `bootstrap` recovery path are documented once in
 [Product runtime](product-runtime.md#identity-modes).
 
 Organization ingest, search, embeddings, participant resolution, IdP/SCIM,

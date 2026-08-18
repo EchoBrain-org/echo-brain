@@ -165,7 +165,7 @@ type CliCommand =
 
 interface ParsedCommand {
   command: CliCommand;
-  /** The validated sub-action word of `organization`, `update`, or `service`. */
+  /** The validated sub-action word of `organization` or `service`. */
   action?: string;
   configPath: string;
   stateDirectory?: string;
@@ -626,25 +626,20 @@ function refuseRetiredFounderProvenance(stateDirectory: string): void {
  * credentials, opens or migrates SQLite, contacts a provider or the Authority,
  * or invokes an injected callback.
  *
- * The listed exceptions are not "everything that does not write": several of
- * them do write. They are the commands whose whole purpose is to diagnose,
- * preserve, or quiesce a fenced profile, and each is safe only because of what
- * its own implementation already does:
+ * The listed exceptions are the commands whose purpose is to diagnose or
+ * quiesce a fenced profile:
  *
  * - `--help` / `--version` never touch a state path at all;
  * - `validate-config` reports on configuration;
  * - `status` reports operator/service state;
- * - `backup` preserves the profile (state files byte-for-byte, SQLite as a
- *   consistent SQLite backup), and `restore`'s own preflight refuses founder
- *   residue in the target and in the validated payload before changing any
- *   state;
  * - `service stop`, `status`, and `uninstall` quiesce a fenced machine.
  *
  * `organization status` is deliberately NOT an exception: it opens and migrates
  * writable SQLite, so it is gated with every other organization action.
  *
- * The shared fence refusal carries the recovery runbook. Its order matters:
- * `backup` refuses while the service is loaded, so `service stop` comes first.
+ * The shared fence refusal carries the recovery runbook: stop first, preserve
+ * out of band under a reviewed procedure, uninstall the old LaunchAgent, then
+ * bootstrap a residue-free path.
  */
 function retiredProvenanceGateApplies(parsed: ParsedCommand): boolean {
   switch (parsed.command) {
@@ -658,7 +653,7 @@ function retiredProvenanceGateApplies(parsed: ParsedCommand): boolean {
         parsed.action === "restart"
       );
     default:
-      // init, reconfigure, doctor, update, organization (every action),
+      // init, reconfigure, doctor, organization (every action),
       // approvals, run-once, service-run.
       return true;
   }
@@ -1789,7 +1784,7 @@ async function runBootstrapCommand(
         (service as Record<string, unknown>)["running"] !== false
       ) {
         throw new Error(
-          "bootstrap will not resume an activated installation; use update apply",
+          "bootstrap will not resume an activated installation; use a reviewed out-of-band maintenance procedure",
         );
       }
     }
@@ -1964,7 +1959,7 @@ async function runBootstrapCommand(
         "inspect the JSONL outbox, then run once again and confirm no duplicate delivery",
         `echo-brain service install --config ${parsed.configPath}`,
         `echo-brain doctor --config ${parsed.configPath}`,
-        `echo-brain update apply --channel internal-live --config ${parsed.configPath}`,
+        "future package or state changes require a reviewed out-of-band preservation and rollback procedure; no in-product update command exists",
       ],
     });
     return 0;

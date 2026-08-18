@@ -290,10 +290,12 @@ describe("retired founder-provenance residue matrix", () => {
     const retired = failure as RetiredFounderProvenanceError;
     expect(retired.code).toBe("retired_founder_provenance");
     expect(retired.message).toMatch(/is retired/);
-    // The runbook: quiesce, preserve, then fresh central bootstrap.
+    // The runbook: quiesce, preserve out of band, remove auto-start, then fresh bootstrap.
     expect(retired.message).toMatch(/echo-brain service stop/);
-    expect(retired.message).toMatch(/echo-brain backup/);
+    expect(retired.message).toMatch(/out-of-band procedure/);
+    expect(retired.message).toMatch(/echo-brain service uninstall/);
     expect(retired.message).toMatch(/echo-brain bootstrap/);
+    expect(retired.message).not.toMatch(/echo-brain (?:backup|restore|update)/);
     expect(retired.findings.join(" ")).toMatch(/signed identity documents/);
     expect(lstatSync(residueFile).mtimeMs).toBe(before);
   });

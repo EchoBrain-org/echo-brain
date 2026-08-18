@@ -371,6 +371,9 @@ describe('internal-live employee bootstrap CLI', () => {
     expect(report.next_steps).toContainEqual(
       expect.stringContaining('echo-organization-admin slack approval activate'),
     );
+    expect(report.next_steps.join('\n')).not.toMatch(
+      /echo-brain (?:update|backup|restore)(?:\s|$)/u,
+    );
 
     const config = JSON.parse(readFileSync(test.configPath, 'utf8'));
     expect(config.meeting_sources).toHaveLength(1);

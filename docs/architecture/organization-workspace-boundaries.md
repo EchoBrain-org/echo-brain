@@ -15,8 +15,6 @@ src/
   product/                      CLI, runtime composition, approval, storage
   product/machine/              installation key and OS ports
   product/organization/         enrollment client and access state
-  product/update/               internal-live release channel and update
-                                application
   infrastructure/               atomic writes, SQLite migration, file locks
   util/                         narrow shared primitives
 

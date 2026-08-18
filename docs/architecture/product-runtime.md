@@ -27,11 +27,11 @@ execution use the same composition.
 
 ## State authority
 
-One explicit private local state root is the installation's authority and
-restore unit for mutable runtime state. The runtime does not infer an ambient
-Echo home. Where a retired founder profile left its external cutover guard,
-that guard sits beside the state root rather than inside it and does not roll
-back with it.
+One explicit private local state root is the installation's authority for
+mutable runtime state. External preservation procedures must treat it as one
+unit. The runtime does not infer an ambient Echo home. Where a retired founder
+profile left its external cutover guard, that guard sits beside the state root
+rather than inside it and must be preserved with the root.
 
 Control configuration remains outside restored state. Credentials are
 referenced and resolved by the host; secrets never enter canonical records.
@@ -93,39 +93,35 @@ continue until that composition is closed, but every new processing cycle is
 gated.
 
 The CLI applies this as one early dispatch policy, as soon as the state path is
-known. `bootstrap`, `init`, `reconfigure`, `doctor`, `update`, every
+known. `bootstrap`, `init`, `reconfigure`, `doctor`, every
 `organization` action (including `status`, which opens and migrates writable
 SQLite), `approvals`, `run-once`, `service-run`, and `service
 install`/`start`/`restart` are refused before any operator, probe, lock,
 directory, credential, database, network, or injected callback. The exceptions
-are the inspect/preserve/quiesce commands -- `validate-config`, general
-`status`, `backup`, `restore`, and `service
-stop`/`status`/`uninstall` -- not a claim that they never write.
+are the inspect/quiesce commands -- `validate-config`, general `status`, and
+`service stop`/`status`/`uninstall`.
 
-Recovery is not a restore. `backup` stays available for a fenced profile --
-regular state-tree files are copied byte-for-byte, the SQLite database is
-captured as a consistent SQLite backup, and the external cutover guard stays
-beside the original state path, outside the backup; `restore` refuses -- before its safety pre-backup, its
-durable transaction marker, staging, or any live change -- whenever the live
-target holds founder residue or the validated backup payload would reintroduce
-it, and it stops without touching interrupted restore artifacts that involve
-that residue. Because `backup` refuses
-while the service is loaded, the executable order is: `service stop`, `backup`,
-then `bootstrap` onto a founder-residue-free new config and state path with the
-administrator-issued invitation and Authority PIN. That one command provisions
-the credentials, initializes, and enrolls the new installation; fresh central
-bootstrap is the only forward path. The decision
+This build exposes no backup or restore command. A fenced profile can only be
+stopped and preserved through a separately reviewed out-of-band procedure that
+does not mutate or reinterpret its state. `service stop` is not durable across
+login, so after preservation the operator uses `service uninstall` with the old
+config to remove its LaunchAgent. Recovery then uses `bootstrap` on a
+founder-residue-free new config and state path with the administrator-issued
+invitation and Authority PIN. That one command provisions the credentials,
+initializes, and enrolls the new installation; fresh central bootstrap is the
+only forward path. The decision
 store's federation capture port is deleted. New approval nodes always store
 local metadata; a historical node with an own `requested.metadata.federation`
 field is refused on every read or mutation, while similarly named fields in
 publication references or resolution metadata remain opaque.
 
-## Update channel
+## Internal Live release artifacts
 
-`src/product/update/` applies internal-live releases under its own boundary
-layer rule (`internal-live-updater-owns-release-application`), with
-`tools/internal-live-release.mjs` producing the release artifacts. The
-operator flow is documented in the root [README](../../README.md).
+`tools/internal-live-release.mjs` and the release workflow produce and verify
+Internal Live artifacts. The product CLI does not apply those releases, back up
+state, or restore state. Clean-machine bootstrap and the requirement for a
+separately reviewed enrolled-machine maintenance procedure are documented in
+the root [README](../../README.md).
 
 ## Product boundary
 

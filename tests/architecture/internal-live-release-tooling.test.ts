@@ -211,10 +211,10 @@ describe('INTERNAL LIVE release tooling', () => {
     expect(workflow).not.toContain('internal-live-trusted-root.v1.jsonl');
   });
 
-  it('documents one exact bootstrap bridge for clean and pre-updater Macs', () => {
+  it('documents one exact clean-machine bootstrap without retired machine commands', () => {
     const readme = readFileSync(README, 'utf8');
-    const start = readme.indexOf('### One-time updater bootstrap');
-    const end = readme.indexOf('### Normal enrolled-machine updates', start);
+    const start = readme.indexOf('### Clean-machine bootstrap');
+    const end = readme.indexOf('### Enrolled-machine maintenance', start);
     const bootstrap = readme.slice(start, end);
     const attestation = bootstrap.indexOf(
       'gh attestation verify "$BOOTSTRAP_ARTIFACT_PATH"',
@@ -306,10 +306,7 @@ describe('INTERNAL LIVE release tooling', () => {
     expect(bootstrap).toMatch(
       /`installed: false`, `loaded: false`,\s+`running: false`/u,
     );
-    expect(bootstrap).toContain('An already-enrolled Mac whose CLI predates');
-    expect(bootstrap).toMatch(
-      /installation's\s+healthy receipt centrally/u,
-    );
+    expect(bootstrap).toContain('An already-enrolled Mac is maintenance');
     expect(bootstrap).toContain(
       'echo-brain organization slack-link-begin --config',
     );
@@ -322,7 +319,14 @@ describe('INTERNAL LIVE release tooling', () => {
     expect(bootstrap).toContain(
       'test "$(wc -l < "$ECHO_STATE/outbox.jsonl" | tr -d \' \')" = 1',
     );
-    expect(readme.slice(end)).toContain('echo-brain update apply \\');
+    expect(bootstrap).toContain(
+      'echo-brain service install --config "$ECHO_CONFIG"',
+    );
+    expect(bootstrap).toContain('echo-brain doctor --config "$ECHO_CONFIG"');
+    expect(readme.slice(end)).toContain(
+      'The product CLI does not currently update, back up, or restore',
+    );
+    expect(readme).not.toMatch(/echo-brain (?:update|backup|restore)(?:\s|$)/u);
   });
 
   it('requires every new INTERNAL LIVE version to increase the numeric tuple', () => {

@@ -17,15 +17,15 @@ export const RETIRED_FOUNDER_PROVENANCE_MESSAGE =
   'this state root holds founder identity or cutover material; the ' +
   'founder-provenance mode that produced it is retired. No product-work ' +
   'command, runtime start, or new processing cycle can resume on this ' +
-  'profile. Inspection, preservation, and quiescing stay available: ' +
-  'validate-config, status, backup, and service stop/status/uninstall; ' +
-  'restore refuses a target that still holds this residue before changing ' +
-  'any state. To move forward, in this order: `echo-brain service stop` ' +
-  '(backup refuses while the service is loaded), `echo-brain backup`, then ' +
-  '`echo-brain bootstrap` onto a new founder-residue-free config and state ' +
-  'path with the administrator-issued invitation and the Authority PIN from ' +
-  'an independent trusted channel; that one command provisions the ' +
-  'credentials, initializes, and enrolls the new installation.';
+  'profile. Inspection and quiescing stay available: validate-config, status, ' +
+  'and service stop/status/uninstall. To move forward, run `echo-brain service ' +
+  'stop`, preserve the fenced profile with a reviewed out-of-band procedure ' +
+  'that does not mutate or reinterpret it, run `echo-brain service uninstall` ' +
+  'with the old config to remove its LaunchAgent, then run `echo-brain ' +
+  'bootstrap` onto a new founder-residue-free config and state path with the ' +
+  'administrator-issued invitation and the Authority PIN from an independent ' +
+  'trusted channel; that one command provisions the credentials, initializes, ' +
+  'and enrolls the new installation.';
 
 export interface FounderProvenanceResidue {
   present: boolean;
@@ -251,13 +251,12 @@ export function inspectFounderProvenanceResidue(
  * mutates approvals, or invokes a caller-supplied callback calls this first, so
  * an injected approval store or callback cannot resume the retired mode.
  *
- * It is deliberately NOT called by the inspection, preservation, and quiescing
- * commands, which must stay usable on a fenced profile: `validate-config`,
- * general `status`, `backup`, `restore`, and
- * `service stop`/`status`/`uninstall`. Several of those write; the distinction
- * is product work, not writes. `src/product/cli.ts` owns the exact dispatch
- * policy, and restore's own preflight refuses a fenced target before it
- * changes any state.
+ * It is deliberately NOT called by the inspection and quiescing commands,
+ * which must stay usable on a fenced profile: `validate-config`, general
+ * `status`, and `service stop`/`status`/`uninstall`. The service operations may
+ * write; the distinction is product work, not writes. `src/product/cli.ts`
+ * owns the exact dispatch policy. Preservation is an external reviewed
+ * procedure, not a product command.
  *
  * This is a fail-closed gate on trusted in-process callers, not a sandbox: a
  * caller-supplied implementation that reaches past the documented seams and

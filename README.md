@@ -20,7 +20,7 @@ employees. The repository contains:
 - deterministic and LLM decision processors;
 - local and Slack approval;
 - JSONL and Slack delivery;
-- SQLite product state, onboarding, backup, and restore;
+- SQLite product state and onboarding;
 - one customer-hosted organization authority for enrollment and access;
 - a minimum customer-owned organization control plane for one verified
   organization Slack tool, exact provider identity links and adapter bindings,
@@ -66,7 +66,7 @@ package history automatically, so retain an older installed package tree when
 its previously recorded artifact identity must remain verifiable after an
 upgrade.
 
-## Internal Live releases and machine updates
+## Internal Live releases and clean-machine bootstrap
 
 Internal Live is the small, controlled release lane for ECHO employees. It is
 not a client release. A manual GitHub workflow builds the npm package once from
@@ -75,9 +75,9 @@ protected `internal-live` environment, and publishes a prerelease bundle whose
 exact bytes are pinned by a manifest and checksums, with bundled provenance
 evidence attached.
 
-### One-time updater bootstrap
+### Clean-machine bootstrap
 
-A clean Mac needs one manual install of an updater-capable release. The
+A clean Mac needs one manual install of an exact verified release. The
 administrator chooses one exact release as the bootstrap anchor and transfers
 that release's artifact, manifest, checksums, and attestation bundle as one
 directory. The version, source SHA, and artifact SHA-256 travel over
@@ -89,21 +89,18 @@ Mac must not receive or require those credentials.
 Before a new employee runs `bootstrap` and becomes an active installation, the
 administrator must approve this exact manifest as the Authority's current
 Internal Live release. Version, source SHA, and artifact SHA-256 must match the
-transferred bundle. This ordering matters: the rollout gate may require every
-existing active installation to be healthy on the previous release before it
-accepts the next one. With no current directive the final update stops; it also
-refuses to install a lower Internal Live version than the one already installed.
+transferred bundle. Release approval records the intended artifact; it does not
+install or replace software on an employee machine.
 
-An already-enrolled Mac whose CLI predates `update apply` is a maintenance
-migration, not a clean bootstrap. Verify the release first, then use a reviewed
-operator procedure that retains the old package, stops the service before
-backing up state, restores both on failure, and finishes with native
-`update apply`. Do not paste the clean-install command over a running enrolled
-installation. All current Internal Live pilot Macs have completed this
-transition; future releases use the normal updater below.
+An already-enrolled Mac is maintenance, not a clean bootstrap. This build has
+no in-product update, backup, or restore command. Any package or state change
+on an enrolled machine requires a separately reviewed out-of-band procedure
+that stops the service first and preserves the prior package and state before
+changing either. Do not paste the clean-install commands over a running or
+enrolled installation.
 
-First perform every non-mutating trust check while any existing service remains
-running. On either kind of Mac, replace every angle-bracket value with the
+First perform every non-mutating trust check before installing on the clean
+Mac. Replace every angle-bracket value with the
 administrator's exact approved coordinates and point `BOOTSTRAP_DIRECTORY` at
 the transferred release directory. The independently communicated artifact
 SHA-256 is the employee's bootstrap integrity anchor. The bundled Sigstore
@@ -307,40 +304,26 @@ test "$(wc -l < "$ECHO_STATE/outbox.jsonl" | tr -d ' ')" = 1
 
 The first pass creates and posts one pending approval. The reviewer reaction is
 checked live by the Authority; the second pass resolves and writes exactly one
-JSONL delivery; the third confirms it is not duplicated. Then run the normal
-`service install`, green doctor, and native `update apply`. That last command
-exercises the Authority's signed release path and records the installation's
-healthy receipt centrally. The manual first package install is the sole
-pre-Authority exception.
+JSONL delivery; the third confirms it is not duplicated. Then install the
+service and require a green doctor result.
 
 ```sh
 echo-brain service install --config "$ECHO_CONFIG"
 echo-brain doctor --config "$ECHO_CONFIG"
-echo-brain update apply --channel internal-live --config "$ECHO_CONFIG"
 ```
 
-### Normal enrolled-machine updates
+### Enrolled-machine maintenance
 
-After the one-time bootstrap and enrollment, every later update is one command:
+The product CLI does not currently update, back up, or restore an enrolled
+machine. Published bundles remain verifiable release evidence, but applying one
+is an explicit external maintenance operation. Use only a separately reviewed
+procedure with a stopped service, an out-of-band preservation and rollback
+plan, and post-change `reconfigure`, `service start`, and `doctor` checks.
+Release approval must never be interpreted as proof that a machine installed
+the release.
 
-```sh
-echo-brain update apply \
-  --channel internal-live \
-  --config /absolute/path/runtime.json
-```
-
-That command asks the organization Authority for the currently approved
-release, verifies the public manifest and package in full before stopping the
-service, backs up local state, retains the installed package, installs the new
-version, reapplies the existing configuration, starts the service, and runs
-a local-only `doctor` covering package identity, config/state, LaunchAgent,
-runtime, and credential files. It does not call Granola, Slack, or an LLM. If
-the candidate fails, it restores the previous package and state. The Authority
-receives only a signed, non-secret outcome receipt so the admin can see which
-enrolled Macs are pending, healthy, rolled back, or failed.
-
-The admin approves a tested manifest and reads rollout status from the
-organization-authority checkout:
+The admin can register a tested manifest and inspect the Authority's release
+record from the organization-authority checkout:
 
 ```sh
 npm run organization-authority:admin -- internal-live release approve \
@@ -351,24 +334,10 @@ npm run organization-authority:admin -- internal-live rollout status \
   --config /absolute/path/authority.json
 ```
 
-Minimum V1 keeps one rollout current at a time. Before any active installation
-reports a receipt, the admin may replace an approved release with a strictly
-newer one. After the first receipt, the Authority will not approve the next
-release until every active installation has reported healthy on the current
-one. Retry a rolled-back Mac, or explicitly revoke an installation that is no
-longer in service, before advancing. This keeps an interrupted command pinned
-to the manifest it was already applying without adding rollout rings or a
-remote recovery system.
-
-V1 does not install a second privileged updater. If power is lost during npm's
-own in-place package replacement and the `echo-brain` command itself is absent,
-reinstall the retained package from the config directory's
-`internal-live-updates/retained-packages/` folder, then rerun the same update
-command.
-
-The V1 intentionally has no background auto-update, remote shell, MDM,
-dashboard, rollout rings, or automatic live Granola/Slack test. A person starts
-each release and each machine update.
+Those commands mutate Authority release metadata only. No surviving product
+command consumes a directive or emits an installation outcome receipt. The V1
+intentionally has no in-product updater, background auto-update, remote shell,
+MDM, dashboard, rollout rings, or automatic live Granola/Slack test.
 
 `bootstrap` is the only supported v1 setup path: it writes the private config
 and state, provisions the credentials, initializes, and enrolls in one command.
@@ -399,7 +368,7 @@ independent copy behind them -- is retired and removed from this build.
 
 A state root that still holds founder identity or cutover material is detected
 and refused, not downgraded. One early dispatch gate refuses `bootstrap`,
-`init`, `reconfigure`, `doctor`, `update`, every `organization` action,
+`init`, `reconfigure`, `doctor`, every `organization` action,
 `approvals`, `run-once`, the launchd `service-run` child, and `service
 install`/`start`/`restart` — before a `ProductOperator` is constructed, the
 filesystem is probed, a lifecycle lock is taken, a directory is created or
@@ -407,33 +376,25 @@ chmodded, credentials are resolved, SQLite is opened or migrated, a provider or
 the Authority is contacted, or an injected callback runs. An injected approval
 store or callback cannot bypass it.
 
-The exceptions are not "commands that do not write" — several of them do write.
-They are the commands whose purpose is to inspect, preserve, or quiesce a
-fenced profile: `--help`/`--version`, `validate-config`, `status`, `backup`,
-`restore`, and `service stop`/`status`/`uninstall`.
+The exceptions are the commands whose purpose is to inspect or quiesce a
+fenced profile: `--help`/`--version`, `validate-config`, `status`, and
+`service stop`/`status`/`uninstall`.
 `organization status` is **not** an exception: it opens and migrates writable
 SQLite, so it is gated with every other organization action.
 
 Old founder state is never parsed: the code that read, validated, or recovered
-it is deleted, and detection is presence-only. `backup` of a fenced profile
-stays available: regular state-tree files are copied byte-for-byte, the SQLite
-database is captured as a consistent SQLite backup, and the external cutover
-guard remains beside the original state path, outside the backup. Recovery
-does not go through a
-restore: `restore` refuses — before its safety pre-backup, its durable marker,
-staging, or any live change — whenever the live target holds founder residue
-*or* the validated backup payload would reintroduce it, and it will not
-recover, roll back, or report success over interrupted restore artifacts that
-involve that residue.
-
-The executable order matters, because `backup` refuses to run while the service
-is loaded:
+it is deleted, and detection is presence-only. This build exposes no backup or
+restore command. Quiesce the profile, then preserve it with a separately
+reviewed out-of-band procedure that does not mutate or reinterpret the fenced
+state. Then uninstall the old LaunchAgent while its config is still available;
+`service stop` alone is not durable across login. Recovery always bootstraps a
+new founder-residue-free config and state path; it never repairs or resumes the
+fenced profile.
 
 ```sh
 echo-brain service stop --config /absolute/path/retired-runtime.json
-echo-brain backup --config /absolute/path/retired-runtime.json \
-  --backup-root /absolute/path/backups
-
+# Preserve the old config, state, and adjacent cutover guard out of band.
+echo-brain service uninstall --config /absolute/path/retired-runtime.json
 echo-brain bootstrap \
   --config /absolute/path/new-runtime.json \
   --state-dir /absolute/path/new-state \
@@ -580,23 +541,9 @@ local metadata.
 
 `status` reports the recorded installation and the LaunchAgent state.
 
-Backups and restores are explicit maintenance operations:
-
-```sh
-echo-brain backup \
-  --config /absolute/path/runtime.json \
-  --backup-root /absolute/path/backups \
-  --id before-change
-
-echo-brain restore \
-  --config /absolute/path/runtime.json \
-  --backup /absolute/path/backups/before-change \
-  --backup-root /absolute/path/backups \
-  --id restore-before-change
-```
-
-Backups can contain credentials and raw meeting state. Protect them like the
-live state.
+There is no in-product backup or restore command. Any external preservation
+copy can contain credentials and raw meeting state; protect it like the live
+state and use only a reviewed procedure with the service stopped.
 
 ## Persistent service
 
@@ -621,8 +568,9 @@ content or product version changes. Before rewriting the manifest it proves
 statically that this package can run the recorded configuration: every
 configured adapter factory exists and each one's own static validator accepts
 its configuration. That proof constructs no adapter and reads no credential,
-environment, state store, or provider, so update and recovery never depend on
-provider uptime or on anything outside the config file. A factory that exposes
+environment, state store, or provider, so reconfiguration after an externally
+managed package change does not depend on provider uptime or on anything
+outside the config file. A factory that exposes
 no static validator is refused rather than skipped, and every rejection in a
 pass is reported together. `reconfigure` requires the service to be stopped and
 refuses to change the config path, state directory, Node, CLI, or service

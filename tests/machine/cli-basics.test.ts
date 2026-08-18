@@ -40,6 +40,9 @@ describe('standalone CLI basics', () => {
       'echo-brain reject',
       'echo-brain run --config',
       'echo-brain identity-check',
+      'echo-brain update',
+      'echo-brain backup',
+      'echo-brain restore',
       // The launchd child command stays unadvertised.
       'echo-brain service-run',
     ]) {
@@ -55,6 +58,9 @@ describe('standalone CLI basics', () => {
       ['reject', '--config', '/tmp/echo-missing.json'],
       ['run', '--config', '/tmp/echo-missing.json'],
       ['identity-check', '--config', '/tmp/echo-missing.json'],
+      ['update', 'apply', '--config', '/tmp/echo-missing.json'],
+      ['backup', '--config', '/tmp/echo-missing.json'],
+      ['restore', '--config', '/tmp/echo-missing.json'],
     ]) {
       const stderr = output();
       expect(await runProductCli(argv, { stderr: stderr.stream })).toBe(2);
