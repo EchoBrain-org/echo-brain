@@ -618,11 +618,13 @@ function main() {
 
   const discoveredAdapterIds = new Set();
   if (adapterArchitecture?.forbid_discovered_adapter_ids_in_core === true) {
-    for (const [path] of tree) {
-      if (!path.startsWith(adapterArchitecture.adapters_root)) continue;
-      const relative = path.slice(adapterArchitecture.adapters_root.length);
-      const parts = relative.split('/');
-      if (parts.length >= 3) discoveredAdapterIds.add(parts[1]);
+    for (const adaptersRoot of adapterArchitecture.adapters_roots) {
+      for (const [path] of tree) {
+        if (!path.startsWith(adaptersRoot)) continue;
+        const relative = path.slice(adaptersRoot.length);
+        const parts = relative.split('/');
+        if (parts.length >= 3) discoveredAdapterIds.add(parts[1]);
+      }
     }
     for (const [path] of tree) {
       if (

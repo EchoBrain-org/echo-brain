@@ -863,6 +863,34 @@ describe('workspace source boundaries', () => {
     );
   });
 
+  it('discovers adapter ids across all roots and rejects leaks in processing core', () => {
+    const fixture = fixtureRepository();
+    let result = runBoundary(fixture);
+    expect(result.status, result.stdout + result.stderr).toBe(0);
+    const report = JSON.parse(result.stdout) as {
+      discovered_adapter_ids: string[];
+    };
+    expect(report.discovered_adapter_ids).toEqual([
+      'granola',
+      'jsonl-outbox',
+      'llm',
+      'slack',
+      'slack-reactions',
+      'structured-text',
+    ]);
+
+    const probe = join(
+      fixture,
+      'services/organization-authority/src/processing/core/adapter-id-leak-probe.ts',
+    );
+    writeFileSync(probe, `export const leakedAdapterId = 'granola';\n`);
+    result = runBoundary(fixture);
+    expect(result.status).not.toBe(0);
+    expect(result.stdout + result.stderr).toContain(
+      "adapter id 'granola' leaked into tool-agnostic core module: services/organization-authority/src/processing/core/adapter-id-leak-probe.ts",
+    );
+  });
+
   it('applies package and builtin allowlists to root product layers', () => {
     const fixture = fixtureRepository();
     writeFileSync(

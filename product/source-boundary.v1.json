@@ -171,7 +171,10 @@
   ],
   "adapter_architecture": {
     "core_root": "services/organization-authority/src/processing/core/**",
-    "adapters_root": "src/adapters/",
+    "adapters_roots": [
+      "src/adapters/",
+      "services/organization-authority/src/processing/adapters/"
+    ],
     "forbid_discovered_adapter_ids_in_core": true
   },
   "child_process_owner": "src/product/spawn-sanitized-child.ts"
