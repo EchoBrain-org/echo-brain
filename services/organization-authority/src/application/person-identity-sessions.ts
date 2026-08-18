@@ -147,6 +147,14 @@ export interface PersonReadAuthorizationPort {
   }): SynchronousResult<T>;
 }
 
+/** Only the read port's expected, already-audited denials use this sentinel. */
+export class PersonReadUnauthorizedError extends AuthorityOperationError {
+  constructor() {
+    super("unauthorized", "person authentication failed");
+    this.name = "PersonReadUnauthorizedError";
+  }
+}
+
 interface SessionCredentialCandidate {
   access_credential_id: string;
   access_token: string;
@@ -847,53 +855,49 @@ export class PersonIdentitySessionApplication {
         let outcome:
           | { kind: "allowed"; authorization: PersonAccessAuthorization }
           | { kind: "denied" };
-        try {
-          outcome = this.repository.writeAtLinearization(
-            () => this.runtime.clock.now(),
-            (transaction, checkedAt) => {
-              const resolution =
-                tokenSha256 === undefined
-                  ? ({ kind: "denied" } as const)
-                  : this.resolveAccess(transaction, tokenSha256, checkedAt);
-              if (resolution.kind === "denied") {
-                const committed = input.commitStartDeny(
-                  {
-                    decision: "deny",
-                    reason_code: "person_or_session_inactive",
-                    authorization: null,
-                    checked_at: checkedAt,
-                  },
-                  transaction,
-                );
-                this.assertSynchronousCommit(committed);
-                return { kind: "denied" as const };
-              }
-              if (
-                resolution.authorization.principal_id !==
-                input.subject_principal_id
-              ) {
-                const committed = input.commitStartDeny(
-                  {
-                    decision: "deny",
-                    reason_code: "caller_subject_mismatch",
-                    authorization: resolution.authorization,
-                    checked_at: checkedAt,
-                  },
-                  transaction,
-                );
-                this.assertSynchronousCommit(committed);
-                return { kind: "denied" as const };
-              }
-              return {
-                kind: "allowed" as const,
-                authorization: resolution.authorization,
-              };
-            },
-          );
-        } catch {
-          throw personSessionUnauthorized();
-        }
-        if (outcome.kind === "denied") throw personSessionUnauthorized();
+        outcome = this.repository.writeAtLinearization(
+          () => this.runtime.clock.now(),
+          (transaction, checkedAt) => {
+            const resolution =
+              tokenSha256 === undefined
+                ? ({ kind: "denied" } as const)
+                : this.resolveAccess(transaction, tokenSha256, checkedAt);
+            if (resolution.kind === "denied") {
+              const committed = input.commitStartDeny(
+                {
+                  decision: "deny",
+                  reason_code: "person_or_session_inactive",
+                  authorization: null,
+                  checked_at: checkedAt,
+                },
+                transaction,
+              );
+              this.assertSynchronousCommit(committed);
+              return { kind: "denied" as const };
+            }
+            if (
+              resolution.authorization.principal_id !==
+              input.subject_principal_id
+            ) {
+              const committed = input.commitStartDeny(
+                {
+                  decision: "deny",
+                  reason_code: "caller_subject_mismatch",
+                  authorization: resolution.authorization,
+                  checked_at: checkedAt,
+                },
+                transaction,
+              );
+              this.assertSynchronousCommit(committed);
+              return { kind: "denied" as const };
+            }
+            return {
+              kind: "allowed" as const,
+              authorization: resolution.authorization,
+            };
+          },
+        );
+        if (outcome.kind === "denied") throw new PersonReadUnauthorizedError();
         const authorization = outcome.authorization;
         const admission: PersonReadAdmission = { ...authorization };
         this.admissionCredentialDigests.set(
@@ -913,7 +917,9 @@ export class PersonIdentitySessionApplication {
         const tokenSha256 = this.admissionCredentialDigests.get(
           input.admission,
         );
-        if (tokenSha256 === undefined) throw personSessionUnauthorized();
+        if (tokenSha256 === undefined) {
+          throw new Error("Person read admission is invalid or already finalized");
+        }
         this.admissionCredentialDigests.delete(input.admission);
         const outcome = this.repository.writeAtLinearization(
           () => this.runtime.clock.now(),
@@ -980,7 +986,7 @@ export class PersonIdentitySessionApplication {
             };
           },
         );
-        if (outcome.kind === "denied") throw personSessionUnauthorized();
+        if (outcome.kind === "denied") throw new PersonReadUnauthorizedError();
         return outcome.value;
       },
     };

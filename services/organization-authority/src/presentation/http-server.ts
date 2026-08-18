@@ -5,6 +5,9 @@ import { TextDecoder } from 'node:util';
 import {
   isOrganizationApiValidationError,
   canonicalOrganizationMemberReadablePermissionCheckDecisionBytes,
+  canonicalOrganizationPersonReadableSearchRequestBytes,
+  canonicalOrganizationPersonRecentDecisionsRequestBytes,
+  canonicalOrganizationPersonReviewerRecentDecisionsRequestBytes,
   canonicalOrganizationReadableSearchRequestBytes,
   canonicalOrganizationReviewerPermissionCheckDecisionBytes,
   MAX_ORGANIZATION_API_BODY_BYTES,
@@ -23,6 +26,9 @@ import {
   ORGANIZATION_API_INTERNAL_LIVE_DIRECTIVES_PATH,
   ORGANIZATION_API_INTERNAL_LIVE_RECEIPTS_PATH,
   ORGANIZATION_API_PERMISSION_CHECKS_PATH,
+  ORGANIZATION_API_PERSON_READABLE_SEARCH_PATH,
+  ORGANIZATION_API_PERSON_RECENT_DECISIONS_PATH,
+  ORGANIZATION_API_PERSON_REVIEWER_RECENT_DECISIONS_PATH,
   ORGANIZATION_API_READABLE_SEARCH_PATH,
   ORGANIZATION_API_RECENT_DECISIONS_PATH,
   ORGANIZATION_API_REVIEWER_RECENT_DECISIONS_PATH,
@@ -39,6 +45,9 @@ import {
   validateOrganizationInternalLiveUpdateReceipt,
   validateOrganizationPermissionCheckRequest,
   validateOrganizationMemberReadablePermissionCheckRequest,
+  validateOrganizationPersonReadableSearchRequest,
+  validateOrganizationPersonRecentDecisionsRequest,
+  validateOrganizationPersonReviewerRecentDecisionsRequest,
   validateOrganizationReviewerPermissionCheckRequest,
   validateOrganizationRecentDecisionsRequest,
   validateOrganizationReadableSearchRequest,
@@ -75,6 +84,11 @@ import {
   ReviewerRecentDecisionsError,
 } from '../application/reviewer-recent-decisions.js';
 import {
+  PersonReadRequestError,
+  type PersonRecentDecisionsApplication,
+} from '../application/person-read-recent-decisions.js';
+import type { PersonReadableSearchService } from '../application/person-readable-search.js';
+import {
   fixedReadableSearchErrorBytes,
   ReadableSearchError,
 } from '../application/readable-search.js';
@@ -93,6 +107,10 @@ const READABLE_SEARCH_INVALID_REQUEST_BYTES = Buffer.from(
 );
 const READABLE_SEARCH_UNAVAILABLE_BYTES = Buffer.from(
   '{"error":{"code":"unavailable","message":"service is temporarily unavailable"}}',
+  'utf8',
+);
+const PERSON_READ_INVALID_REQUEST_BYTES = Buffer.from(
+  '{"error":{"code":"invalid_request","message":"request is invalid"}}',
   'utf8',
 );
 import {
@@ -518,6 +536,33 @@ async function readReadableSearchRequest(
   }
 }
 
+async function readCanonicalPersonRequest<T>(
+  request: IncomingMessage,
+  validate: (value: unknown) => T,
+  canonicalBytes: (value: unknown) => Uint8Array,
+): Promise<T> {
+  let bytes: Buffer;
+  try {
+    bytes = await readJsonBodyBytes(request);
+    const command = validate(decodeOrganizationApiJsonBody(bytes));
+    if (!bytes.equals(Buffer.from(canonicalBytes(command)))) {
+      throw new Error('Person read request bytes are not RFC8785 canonical');
+    }
+    return command;
+  } catch (error) {
+    if (error instanceof PayloadTooLargeError) throw error;
+    throw new PersonReadRequestError('Person read request is invalid', {
+      cause: error,
+    });
+  }
+}
+
+function personAccessToken(authorizationHeader: string | undefined): string {
+  return (
+    /^Bearer ([A-Za-z0-9_-]{43})$/.exec(authorizationHeader ?? '')?.[1] ?? ''
+  );
+}
+
 export function decodeOrganizationApiJsonBody(bytes: Uint8Array): unknown {
   let text: string;
   try {
@@ -632,6 +677,9 @@ export interface OrganizationAuthorityHttpServerOptions {
   reviewerRecentDecisions?: OrganizationReviewerRecentDecisionsHttpApplication;
   /** Omitted means no admitted readable-search runtime is available. */
   readableSearch?: OrganizationReadableSearchHttpApplication;
+  /** Omitted until the Person session runtime is configured. */
+  personRecentDecisions?: PersonRecentDecisionsApplication;
+  personReadableSearch?: Pick<PersonReadableSearchService, 'search'>;
   adminAuthenticator: AdminRequestAuthenticator;
   clientIdentityResolver: RequestClientIdentityResolver;
   adminConsole?: {
@@ -900,6 +948,103 @@ export function createOrganizationAuthorityHttpServer(
         } finally {
           abortLease.release();
         }
+        return;
+      }
+
+      if (url.pathname === ORGANIZATION_API_PERSON_READABLE_SEARCH_PATH) {
+        if (method !== 'POST' || url.search !== '') {
+          throw new PersonReadRequestError(
+            'Person readable-search method or query is invalid',
+          );
+        }
+        if (options.personReadableSearch === undefined) {
+          sendSerializedJson(response, 503, READABLE_SEARCH_UNAVAILABLE_BYTES);
+          return;
+        }
+        const command = await readCanonicalPersonRequest(
+          request,
+          validateOrganizationPersonReadableSearchRequest,
+          canonicalOrganizationPersonReadableSearchRequestBytes,
+        );
+        const abortLease = readableSearchAbortLease(
+          request,
+          response,
+          lifecycle.shutdownController.signal,
+        );
+        try {
+          const prepared = await options.personReadableSearch.search(
+            command,
+            personAccessToken(request.headers.authorization),
+            { signal: abortLease.signal },
+          );
+          handoffPreparedReadableSearchResponse(
+            (body) =>
+              sendPreparedReadableSearchJson(
+                response,
+                prepared.status_code,
+                body,
+              ),
+            prepared,
+          );
+        } finally {
+          abortLease.release();
+        }
+        return;
+      }
+
+      if (url.pathname === ORGANIZATION_API_PERSON_RECENT_DECISIONS_PATH) {
+        if (method !== 'POST' || url.search !== '') {
+          throw new PersonReadRequestError(
+            'Person recent-decisions method or query is invalid',
+          );
+        }
+        if (options.personRecentDecisions === undefined) {
+          sendSerializedJson(
+            response,
+            503,
+            fixedRecentDecisionsErrorBytes(503),
+          );
+          return;
+        }
+        const command = await readCanonicalPersonRequest(
+          request,
+          validateOrganizationPersonRecentDecisionsRequest,
+          canonicalOrganizationPersonRecentDecisionsRequestBytes,
+        );
+        const prepared = options.personRecentDecisions.recentDecisions({
+          request: command,
+          access_token: personAccessToken(request.headers.authorization),
+        });
+        sendSerializedJson(response, prepared.status_code, prepared.body);
+        return;
+      }
+
+      if (
+        url.pathname === ORGANIZATION_API_PERSON_REVIEWER_RECENT_DECISIONS_PATH
+      ) {
+        if (method !== 'POST' || url.search !== '') {
+          throw new PersonReadRequestError(
+            'Person reviewer recent-decisions method or query is invalid',
+          );
+        }
+        if (options.personRecentDecisions === undefined) {
+          sendSerializedJson(
+            response,
+            503,
+            fixedReviewerRecentDecisionsErrorBytes(503),
+          );
+          return;
+        }
+        const command = await readCanonicalPersonRequest(
+          request,
+          validateOrganizationPersonReviewerRecentDecisionsRequest,
+          canonicalOrganizationPersonReviewerRecentDecisionsRequestBytes,
+        );
+        const prepared = options.personRecentDecisions.reviewerRecentDecisions({
+          request: command,
+          access_token: personAccessToken(request.headers.authorization),
+        });
+        sendSerializedJson(response, prepared.status_code, prepared.body);
         return;
       }
 
@@ -1512,6 +1657,10 @@ export function createOrganizationAuthorityHttpServer(
 
         sendJson(response, 404, errorBody('not_found', 'route was not found'));
       } catch (error) {
+        if (error instanceof PersonReadRequestError) {
+          sendSerializedJson(response, 400, PERSON_READ_INVALID_REQUEST_BYTES);
+          return;
+        }
         if (error instanceof ReadableSearchError) {
           const status =
             error.code === 'invalid_request'

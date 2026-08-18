@@ -236,6 +236,7 @@ describe('readable-search HTTP route', () => {
       openScope: vi.fn(() => { throw new Error('must not open'); }),
       search: vi.fn(() => []),
       fetch: vi.fn(() => []),
+      finalStateStillMatches: vi.fn(() => false),
       close: vi.fn(),
     };
     const readableSearch = new ReadableSearchService({

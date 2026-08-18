@@ -260,14 +260,22 @@ of an authenticated installation acting for the named principal and
 membership. Every existing v1 request, record envelope, receipt, eligibility
 fact, scope binding, and audit row keeps that meaning forever.
 
-The v2 caller binding means: the exact request was made by the named
-`principal_id`, `membership_id`, and `membership_type` through one active
-Authority `session_family_id` and the exact presented session-credential
-digest. It binds both the fresh Person-state digest and fresh session-state
-digest, plus the same operation, generation, record head, policy contracts,
-and admitted segments already bound by v1. It contains no `enrollment_id`,
-`installation_id`, or installation key. The second lookup in decision 5 must
-match those v2 digests before response release.
+V2 uses two domain-separated receipts in the existing
+`caller_binding_sha256` audit field. The stage-1
+`echo-authority-person-read-caller-binding-v2` receipt means the exact request
+was made by the named `principal_id`, `membership_id`, and `membership_type`
+through one active Authority `session_family_id` and the exact presented
+session-credential digest. It binds both the fresh Person-state digest and
+fresh session-state digest. A start-gate denial retains this stage-1 receipt.
+
+After readable-search opens an opaque scope, every final allow or session
+denial instead retains the stage-2 `readable-search-scope-binding-v2` receipt
+passed to that scope. Stage 2 nests the stage-1 digest with the generation,
+record head, policy contracts, and admitted segments. It is a refinement of
+the same decision evidence, not a schema change. Neither stage contains an
+`enrollment_id`, `installation_id`, or installation key. The second lookup in
+decision 5 must match the v2 Person and session digests, generation, head,
+contracts, and selected policy paths before response release.
 
 V2 is a new schema and domain-separated preimage, not a new interpretation of
 v1 bytes. Readers and audit tools remain dual-version until historical v1

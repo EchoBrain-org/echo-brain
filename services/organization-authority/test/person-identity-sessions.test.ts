@@ -891,13 +891,13 @@ describe("PersonIdentitySessionApplication", () => {
       }),
     ).toBe("committed-response");
     expect(allowedDecisions).toEqual(["allow"]);
-    expectOpaqueDenial(() =>
+    expect(() =>
       port.finalizeSelfRead({
         admission,
         subject_principal_id: fixture.membership.principal_id,
         commit: () => "must-not-commit-twice",
       }),
-    );
+    ).toThrow("Person read admission is invalid or already finalized");
     const driftAdmission = port.admitSelfRead({
       access_token: session.access_token,
       subject_principal_id: fixture.membership.principal_id,
@@ -952,7 +952,7 @@ describe("PersonIdentitySessionApplication", () => {
     const fixture = setup();
     const { session } = await bootstrapSession(fixture);
     const port = fixture.application.createPersonReadAuthorizationPort();
-    expectOpaqueDenial(() =>
+    expect(() =>
       port.admitSelfRead({
         access_token: "malformed-session-token",
         subject_principal_id: fixture.membership.principal_id,
@@ -966,7 +966,7 @@ describe("PersonIdentitySessionApplication", () => {
           });
         },
       }),
-    );
+    ).toThrow("Person read audit commit must be synchronous");
     expect(
       fixture.repository.read((transaction) =>
         transaction
@@ -1015,7 +1015,7 @@ describe("PersonIdentitySessionApplication", () => {
       ),
     ).toBe(false);
     let reusedCommit = false;
-    expectOpaqueDenial(() =>
+    expect(() =>
       port.finalizeSelfRead({
         admission,
         subject_principal_id: fixture.membership.principal_id,
@@ -1024,7 +1024,7 @@ describe("PersonIdentitySessionApplication", () => {
           return "must-not-reuse-failed-admission";
         },
       }),
-    );
+    ).toThrow("Person read admission is invalid or already finalized");
     expect(reusedCommit).toBe(false);
     fixture.repository.close();
   });

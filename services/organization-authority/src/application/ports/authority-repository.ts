@@ -502,7 +502,11 @@ export interface PersonReadAuthenticatedEvidence
   identity_binding_id: string;
   session_family_id: string;
   access_credential_sha256: Sha256Digest;
-  /** Digest of the route's canonical versioned V2 caller-binding preimage. */
+  /**
+   * Start denies retain the stage-1 session caller receipt. Final decisions
+   * made after a readable-search scope opens retain its stage-2 scope receipt,
+   * which nests stage 1 with generation, head, contracts, and segments.
+   */
   caller_binding_sha256: Sha256Digest;
   person_state_sha256: Sha256Digest;
   session_state_sha256: Sha256Digest;
