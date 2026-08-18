@@ -12,7 +12,7 @@ import {
   writeFileSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { dirname, join, resolve } from 'node:path';
+import { dirname, join, posix, resolve } from 'node:path';
 import { afterAll, describe, expect, it } from 'vitest';
 
 const REPO = resolve(import.meta.dirname, '../..');
@@ -908,6 +908,91 @@ describe('workspace source boundaries', () => {
     expect(result.stdout + result.stderr).toContain(
       "@echo-brain/organization-authority: layer rule 'authority-composition-may-wire-pre-processing-layers' rejects edge: services/organization-authority/src/composition/config.ts -> services/organization-authority/src/processing/core/index.ts",
     );
+  });
+
+  it('enforces every Authority processing layer against domain imports', () => {
+    const fixture = fixtureRepository();
+    const manifestPath =
+      'services/organization-authority/source-boundary.v1.json';
+    const domainErrors =
+      'services/organization-authority/src/domain/errors.ts';
+    const manifest = readFixtureJson<BoundaryManifest>(fixture, manifestPath);
+    const processingRules = manifest.layer_rules.filter((rule) =>
+      rule.name.startsWith('processing-'),
+    );
+
+    expect(processingRules.length).toBeGreaterThan(0);
+    expect(existsSync(join(fixture, domainErrors))).toBe(true);
+
+    // Mirror tools/lib/repository-files.mjs so a dead glob cannot pass by
+    // selecting a path the checker itself never scans.
+    const listed = spawnSync(
+      'git',
+      ['ls-files', '-z', '--cached', '--others', '--exclude-standard'],
+      { cwd: fixture, encoding: 'buffer' },
+    );
+    expect(listed.status, listed.stderr?.toString('utf8')).toBe(0);
+    const sourcePaths = listed.stdout
+      .toString('utf8')
+      .split('\0')
+      .filter(
+        (path) =>
+          path !== '' &&
+          /\.(?:[cm]?[jt]sx?)$/.test(path) &&
+          existsSync(join(fixture, path)) &&
+          lstatSync(join(fixture, path)).isFile(),
+      )
+      .sort();
+
+    const probes = processingRules.map((rule) => {
+      const sourcePath = sourcePaths.find((path) =>
+        matchesGlob(path, rule.from),
+      );
+      if (sourcePath === undefined) {
+        throw new Error(
+          `processing layer rule '${rule.name}' matches no real source`,
+        );
+      }
+      return { rule, sourcePath };
+    });
+
+    // The clean checker rejects overlapping rules; keep each mutation and
+    // restoration unambiguous if the manifest ever regresses.
+    expect(new Set(probes.map(({ sourcePath }) => sourcePath)).size).toBe(
+      probes.length,
+    );
+
+    const baseline = runBoundary(fixture);
+    expect(baseline.status, baseline.stdout + baseline.stderr).toBe(0);
+
+    for (const { rule, sourcePath } of probes) {
+      const absolutePath = join(fixture, sourcePath);
+      const original = readFileSync(absolutePath, 'utf8');
+      const relativeTarget = posix
+        .relative(posix.dirname(sourcePath), domainErrors)
+        .replace(/\.ts$/, '.js');
+      const specifier = relativeTarget.startsWith('.')
+        ? relativeTarget
+        : `./${relativeTarget}`;
+
+      try {
+        writeFileSync(
+          absolutePath,
+          `${original}${original.endsWith('\n') ? '' : '\n'}import '${specifier}';\n`,
+        );
+        const result = runBoundary(fixture);
+        expect(result.status, result.stdout + result.stderr).toBe(1);
+        const report = JSON.parse(result.stdout) as { errors: string[] };
+        expect(report.errors, rule.name).toEqual([
+          `@echo-brain/organization-authority: layer rule '${rule.name}' rejects edge: ${sourcePath} -> ${domainErrors}`,
+        ]);
+      } finally {
+        writeFileSync(absolutePath, original);
+      }
+    }
+
+    const restored = runBoundary(fixture);
+    expect(restored.status, restored.stdout + restored.stderr).toBe(0);
   });
 
   it('applies package and builtin allowlists to root product layers', () => {
