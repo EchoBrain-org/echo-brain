@@ -364,6 +364,16 @@
       "allowed_node_builtins": ["crypto"]
     },
     {
+      "name": "processing-approval-outcome-instrument-reads-only-core",
+      "from": "services/organization-authority/src/processing/approval/approval-outcome-instrument.ts",
+      "allowed_imports": [
+        "services/organization-authority/src/processing/core/**"
+      ],
+      "allowed_workspace_packages": [],
+      "allowed_external_packages": [],
+      "allowed_node_builtins": []
+    },
+    {
       "name": "processing-store-backed-approval-gate-uses-decision-node-port",
       "from": "services/organization-authority/src/processing/approval/store-backed-approval-gate.ts",
       "allowed_imports": [
@@ -393,6 +403,19 @@
       ],
       "allowed_external_packages": [],
       "allowed_node_builtins": []
+    },
+    {
+      "name": "processing-synthetic-replay-is-offline",
+      "from": "services/organization-authority/src/processing/replay/**",
+      "allowed_imports": [
+        "services/organization-authority/src/processing/core/**",
+        "services/organization-authority/src/processing/approval/decision-node.ts",
+        "services/organization-authority/src/processing/adapters/decision-processors/structured-text/**",
+        "services/organization-authority/src/processing/replay/**"
+      ],
+      "allowed_workspace_packages": [],
+      "allowed_external_packages": [],
+      "allowed_node_builtins": ["crypto"]
     },
     {
       "name": "processing-record-envelope-ports-use-json-contract",

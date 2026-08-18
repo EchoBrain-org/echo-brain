@@ -38,6 +38,10 @@
       "types": "./dist/processing/approval/*.d.ts",
       "import": "./dist/processing/approval/*.js"
     },
+    "./processing/replay/*.js": {
+      "types": "./dist/processing/replay/*.d.ts",
+      "import": "./dist/processing/replay/*.js"
+    },
     "./processing/record/*.js": {
       "types": "./dist/processing/record/*.d.ts",
       "import": "./dist/processing/record/*.js"

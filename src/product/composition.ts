@@ -17,6 +17,11 @@ import type {
 import { DecisionNodeStore } from './approval/decision-node-store.js';
 import { StoreBackedApprovalGate } from '@echo-brain/organization-authority/processing/approval/store-backed-approval-gate.js';
 import {
+  instrumentApprovalGate,
+  type ApprovalOutcomeClassification,
+  type ApprovalOutcomeInstrument,
+} from '@echo-brain/organization-authority/processing/approval/approval-outcome-instrument.js';
+import {
   assertFounderProvenanceRetired,
   FounderProvenanceGateError,
 } from './retired-founder-provenance.js';
@@ -117,6 +122,15 @@ export interface ProductAccessGate {
   close?(): void | Promise<void>;
 }
 
+/**
+ * Installs approval-outcome recording as one atomic option so its synthetic
+ * and capacity classification can never be omitted accidentally.
+ */
+export interface ProductApprovalOutcomeInstrumentation {
+  readonly instrument: ApprovalOutcomeInstrument;
+  readonly classification: ApprovalOutcomeClassification;
+}
+
 export interface PrepareProductCompositionOptions {
   classifyStateFilesystem: ClassifyStateFilesystem;
   state?: CoreStateStore & { close?: () => void };
@@ -127,6 +141,7 @@ export interface PrepareProductCompositionOptions {
   healthTimeoutMs?: number;
   operationDeadlines?: Partial<CoreCycleDeadlines>;
   accessGate?: ProductAccessGate;
+  approvalOutcomeInstrumentation?: ProductApprovalOutcomeInstrumentation;
   /**
    * Best-effort organization record submission sweep. It starts beside local
    * work on every cycle and cannot change the local cycle verdict.
@@ -466,11 +481,19 @@ export async function prepareProductComposition(
       createId: options.createId,
     });
   await approvals.initialize();
-  const approvalGate =
+  const configuredApprovalGate =
     options.approvalGate ??
     (config.approval_mode === 'adapter'
       ? (adapters.approvalSurface as ApprovalGate)
       : new StoreBackedApprovalGate(approvals));
+  const approvalGate =
+    options.approvalOutcomeInstrumentation === undefined
+      ? configuredApprovalGate
+      : instrumentApprovalGate(
+          configuredApprovalGate,
+          options.approvalOutcomeInstrumentation.instrument,
+          options.approvalOutcomeInstrumentation.classification,
+        );
   const now = resolveProductClock(options.now);
   const createId = options.createId ?? randomUUID;
   let closed = false;
