@@ -483,6 +483,77 @@ export type NewPersonSessionCredential = Omit<
   'issued_at' | 'consumed_at' | 'revoked_at' | 'revocation_reason'
 >;
 
+export const PERSON_READ_DECISION_AUDIT_RETENTION_DAYS = 180;
+
+export type PersonReadOperation =
+  | 'recent_decisions'
+  | 'reviewer_recent_decisions'
+  | 'readable_search';
+
+export type PersonReadDecisionReasonCode =
+  | 'active_person_session'
+  | 'person_or_session_inactive'
+  | 'caller_subject_mismatch'
+  | 'authorization_state_changed'
+  | 'operation_not_permitted';
+
+export interface PersonReadAuthenticatedEvidence
+  extends AuthorityPersonMembershipBinding {
+  identity_binding_id: string;
+  session_family_id: string;
+  access_credential_sha256: Sha256Digest;
+  /** Digest of the route's canonical versioned V2 caller-binding preimage. */
+  caller_binding_sha256: Sha256Digest;
+  person_state_sha256: Sha256Digest;
+  session_state_sha256: Sha256Digest;
+}
+
+interface PersonReadDecisionAuditInputBase {
+  operation: PersonReadOperation;
+  /** SHA-256 of the operation's validated canonical request bytes. */
+  request_sha256: Sha256Digest;
+  /** Exact prepared response bytes. Only their SHA-256 is retained. */
+  response_bytes: Uint8Array;
+  asserted_subject_principal_id: string;
+}
+
+export type PersonReadDecisionAuditEntry = PersonReadDecisionAuditInputBase &
+  (
+    | {
+        decision: 'allow';
+        reason_code: 'active_person_session';
+        authenticated: PersonReadAuthenticatedEvidence;
+      }
+    | {
+        decision: 'deny';
+        reason_code: 'person_or_session_inactive';
+        authenticated: PersonReadAuthenticatedEvidence | null;
+      }
+    | {
+        decision: 'deny';
+        reason_code:
+          | 'caller_subject_mismatch'
+          | 'authorization_state_changed'
+          | 'operation_not_permitted';
+        authenticated: PersonReadAuthenticatedEvidence;
+      }
+  );
+
+export interface StoredPersonReadDecisionAudit {
+  audit_sequence: number;
+  occurred_at: string;
+  retain_until: string;
+  authority_id: string;
+  organization_id: string;
+  operation: PersonReadOperation;
+  request_sha256: Sha256Digest;
+  response_sha256: Sha256Digest;
+  asserted_subject_principal_id: string;
+  decision: 'allow' | 'deny';
+  reason_code: PersonReadDecisionReasonCode;
+  authenticated: PersonReadAuthenticatedEvidence | null;
+}
+
 export interface AuthorityReadTransaction {
   metadata(): StoredAuthorityMetadata;
   membership(membershipId: string): StoredAuthorityMembership | undefined;
@@ -656,6 +727,10 @@ export interface AuthorityWriteTransaction extends AuthorityReadTransaction {
     sessionFamilyId: string,
     reason: string,
   ): boolean;
+  /** Appends one isolated V2 Person read decision at the transaction time. */
+  appendPersonReadDecisionAudit(
+    entry: PersonReadDecisionAuditEntry,
+  ): StoredPersonReadDecisionAudit;
   appendAudit(entry: AuthorityAuditEntry): void;
   /**
    * Appends one reviewer query decision at this transaction's own final time.

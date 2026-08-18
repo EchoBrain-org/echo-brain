@@ -36,6 +36,7 @@ const AUTHORITY_TABLES = Object.freeze([
   'authority_oidc_login_attempts',
   'authority_organization_member_recording_activation',
   'authority_person_login_grants',
+  'authority_person_read_decision_audit',
   'authority_person_session_credentials',
   'authority_person_session_families',
   'authority_principals',

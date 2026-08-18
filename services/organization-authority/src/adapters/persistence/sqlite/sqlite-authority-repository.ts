@@ -3,6 +3,7 @@ import {
   canonicalSha256,
   parseCanonicalJson,
 } from '@echo-brain/federation-protocol';
+import { createHash } from 'node:crypto';
 import type { Sha256Digest } from '@echo-brain/federation-protocol';
 import {
   validateOrganizationAuthorityDescriptor,
@@ -42,6 +43,8 @@ import type {
   OidcLoginAttemptCompletion,
   NewAuthorityEnrollment,
   NewInternalLiveRelease,
+  PersonReadDecisionAuditEntry,
+  PersonReadOperation,
   NewPersonLoginGrant,
   NewPersonSessionCredential,
   NewPersonSessionFamily,
@@ -58,6 +61,7 @@ import type {
   StoredOidcIdentityBinding,
   StoredOidcLoginAttempt,
   StoredPersonLoginGrant,
+  StoredPersonReadDecisionAudit,
   StoredPersonSessionCredential,
   StoredPersonSessionFamily,
   ReviewerQueryAuditEntry,
@@ -68,6 +72,7 @@ import type {
   StoredReviewerQueryAuditEntry,
 } from '../../../application/ports/authority-repository.js';
 import {
+  PERSON_READ_DECISION_AUDIT_RETENTION_DAYS,
   READABLE_SEARCH_QUERY_AUDIT_OPERATION,
   REVIEWER_QUERY_AUDIT_EXPIRED_ACTION,
   REVIEWER_QUERY_AUDIT_EXPORT_ACTION,
@@ -308,6 +313,29 @@ interface PersonSessionCredentialRow {
   revocation_reason: string | null;
 }
 
+interface PersonReadDecisionAuditRow {
+  audit_sequence: number;
+  occurred_at: string;
+  retain_until: string;
+  authority_id: string;
+  organization_id: string;
+  operation: string;
+  request_sha256: string;
+  response_sha256: string;
+  asserted_subject_principal_id: string;
+  decision: string;
+  reason_code: string;
+  authenticated_principal_id: string | null;
+  authenticated_membership_id: string | null;
+  authenticated_membership_type: string | null;
+  identity_binding_id: string | null;
+  session_family_id: string | null;
+  access_credential_sha256: string | null;
+  caller_binding_sha256: string | null;
+  person_state_sha256: string | null;
+  session_state_sha256: string | null;
+}
+
 interface PersistedAuthorityTrustContext {
   descriptor: OrganizationAuthorityDescriptorV1;
   pinned_authority: PinnedOrganizationAuthority;
@@ -337,6 +365,183 @@ function assertLocalUuid(
     ).test(value),
     `${label} is invalid`,
   );
+}
+
+function assertFederationUuid(
+  value: string,
+  prefix: 'oau' | 'org' | 'prn' | 'mem',
+  label: string,
+): void {
+  invariant(
+    new RegExp(
+      `^${prefix}_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$`,
+    ).test(value),
+    `${label} is invalid`,
+  );
+}
+
+function personReadAuditRetainUntil(occurredAt: string): string {
+  return new Date(
+    timestampMillis(occurredAt, 'Person read decision audit time') +
+      PERSON_READ_DECISION_AUDIT_RETENTION_DAYS * 24 * 60 * 60 * 1000,
+  ).toISOString();
+}
+
+function personReadDecisionAuditFromRow(
+  row: PersonReadDecisionAuditRow,
+): StoredPersonReadDecisionAudit {
+  invariant(
+    Number.isSafeInteger(row.audit_sequence) && row.audit_sequence > 0,
+    'Person read decision audit sequence is invalid',
+  );
+  timestampMillis(row.occurred_at, 'stored Person read decision audit time');
+  invariant(
+    row.retain_until === personReadAuditRetainUntil(row.occurred_at),
+    'Person read decision audit retention is invalid',
+  );
+  assertFederationUuid(row.authority_id, 'oau', 'Person read audit authority');
+  assertFederationUuid(
+    row.organization_id,
+    'org',
+    'Person read audit organization',
+  );
+  invariant(
+    row.operation === 'recent_decisions' ||
+      row.operation === 'reviewer_recent_decisions' ||
+      row.operation === 'readable_search',
+    'Person read audit operation is invalid',
+  );
+  assertDigest(row.request_sha256, 'Person read audit request');
+  assertDigest(row.response_sha256, 'Person read audit response');
+  assertFederationUuid(
+    row.asserted_subject_principal_id,
+    'prn',
+    'Person read audit asserted subject',
+  );
+  invariant(
+    (row.decision === 'allow' &&
+      row.reason_code === 'active_person_session') ||
+      (row.decision === 'deny' &&
+        (row.reason_code === 'person_or_session_inactive' ||
+          row.reason_code === 'caller_subject_mismatch' ||
+          row.reason_code === 'authorization_state_changed' ||
+          row.reason_code === 'operation_not_permitted')),
+    'Person read audit decision reason is invalid',
+  );
+  const authenticatedColumns = [
+    row.authenticated_principal_id,
+    row.authenticated_membership_id,
+    row.authenticated_membership_type,
+    row.identity_binding_id,
+    row.session_family_id,
+    row.access_credential_sha256,
+    row.caller_binding_sha256,
+    row.person_state_sha256,
+    row.session_state_sha256,
+  ];
+  const allNull = authenticatedColumns.every((value) => value === null);
+  const allPresent = authenticatedColumns.every((value) => value !== null);
+  invariant(
+    allNull || allPresent,
+    'Person read audit authenticated evidence is partial',
+  );
+  if (allNull) {
+    invariant(
+      row.decision === 'deny' &&
+        row.reason_code === 'person_or_session_inactive',
+      'unauthenticated Person read audit reason is invalid',
+    );
+    return {
+      audit_sequence: row.audit_sequence,
+      occurred_at: row.occurred_at,
+      retain_until: row.retain_until,
+      authority_id: row.authority_id,
+      organization_id: row.organization_id,
+      operation: row.operation as PersonReadOperation,
+      request_sha256: row.request_sha256 as Sha256Digest,
+      response_sha256: row.response_sha256 as Sha256Digest,
+      asserted_subject_principal_id: row.asserted_subject_principal_id,
+      decision: 'deny',
+      reason_code: 'person_or_session_inactive',
+      authenticated: null,
+    };
+  }
+  invariant(
+    row.authenticated_principal_id !== null &&
+      row.authenticated_membership_id !== null &&
+      row.authenticated_membership_type !== null &&
+      row.identity_binding_id !== null &&
+      row.session_family_id !== null &&
+      row.access_credential_sha256 !== null &&
+      row.caller_binding_sha256 !== null &&
+      row.person_state_sha256 !== null &&
+      row.session_state_sha256 !== null,
+    'Person read audit authenticated evidence is missing',
+  );
+  assertFederationUuid(
+    row.authenticated_principal_id,
+    'prn',
+    'Person read audit authenticated principal',
+  );
+  assertFederationUuid(
+    row.authenticated_membership_id,
+    'mem',
+    'Person read audit authenticated membership',
+  );
+  invariant(
+    row.authenticated_membership_type === 'owner' ||
+      row.authenticated_membership_type === 'employee',
+    'Person read audit authenticated membership type is invalid',
+  );
+  assertLocalUuid(
+    row.identity_binding_id,
+    'oib',
+    'Person read audit identity binding',
+  );
+  assertLocalUuid(
+    row.session_family_id,
+    'psf',
+    'Person read audit session family',
+  );
+  assertDigest(
+    row.access_credential_sha256,
+    'Person read audit access credential',
+  );
+  assertDigest(row.caller_binding_sha256, 'Person read audit caller binding');
+  assertDigest(row.person_state_sha256, 'Person read audit person state');
+  assertDigest(row.session_state_sha256, 'Person read audit session state');
+  invariant(
+    row.reason_code === 'caller_subject_mismatch'
+      ? row.asserted_subject_principal_id !== row.authenticated_principal_id
+      : row.asserted_subject_principal_id === row.authenticated_principal_id,
+    'Person read audit asserted subject relationship is invalid',
+  );
+  return {
+    audit_sequence: row.audit_sequence,
+    occurred_at: row.occurred_at,
+    retain_until: row.retain_until,
+    authority_id: row.authority_id,
+    organization_id: row.organization_id,
+    operation: row.operation as PersonReadOperation,
+    request_sha256: row.request_sha256 as Sha256Digest,
+    response_sha256: row.response_sha256 as Sha256Digest,
+    asserted_subject_principal_id: row.asserted_subject_principal_id,
+    decision: row.decision as 'allow' | 'deny',
+    reason_code: row.reason_code as StoredPersonReadDecisionAudit['reason_code'],
+    authenticated: {
+      organization_id: row.organization_id,
+      principal_id: row.authenticated_principal_id,
+      membership_id: row.authenticated_membership_id,
+      membership_type: row.authenticated_membership_type,
+      identity_binding_id: row.identity_binding_id,
+      session_family_id: row.session_family_id,
+      access_credential_sha256:
+        row.access_credential_sha256 as Sha256Digest,
+      caller_binding_sha256: row.caller_binding_sha256 as Sha256Digest,
+      person_state_sha256: row.person_state_sha256 as Sha256Digest,
+      session_state_sha256: row.session_state_sha256 as Sha256Digest,
+    },
+  };
 }
 
 function assertBoundedText(value: string, maximum: number, label: string): void {
@@ -3030,6 +3235,109 @@ class SqliteAuthorityTransaction
       )
       .run(revokedAt, reason, sessionFamilyId);
     return true;
+  }
+
+  appendPersonReadDecisionAudit(
+    entry: PersonReadDecisionAuditEntry,
+  ): StoredPersonReadDecisionAudit {
+    const metadata = this.metadata();
+    const occurredAt = this.transactionTime();
+    invariant(
+      entry.response_bytes instanceof Uint8Array,
+      'Person read audit response bytes are invalid',
+    );
+    if (entry.authenticated !== null) {
+      invariant(
+        entry.authenticated.organization_id === metadata.organization_id,
+        'Person read audit authentication belongs to another organization',
+      );
+    }
+    const responseSha256 =
+      `sha256:${createHash('sha256')
+        .update(entry.response_bytes)
+        .digest('hex')}` as Sha256Digest;
+    const candidate: PersonReadDecisionAuditRow = {
+      audit_sequence: 1,
+      occurred_at: occurredAt,
+      retain_until: personReadAuditRetainUntil(occurredAt),
+      authority_id: metadata.authority_id,
+      organization_id: metadata.organization_id,
+      operation: entry.operation,
+      request_sha256: entry.request_sha256,
+      response_sha256: responseSha256,
+      asserted_subject_principal_id: entry.asserted_subject_principal_id,
+      decision: entry.decision,
+      reason_code: entry.reason_code,
+      authenticated_principal_id:
+        entry.authenticated?.principal_id ?? null,
+      authenticated_membership_id:
+        entry.authenticated?.membership_id ?? null,
+      authenticated_membership_type:
+        entry.authenticated?.membership_type ?? null,
+      identity_binding_id:
+        entry.authenticated?.identity_binding_id ?? null,
+      session_family_id: entry.authenticated?.session_family_id ?? null,
+      access_credential_sha256:
+        entry.authenticated?.access_credential_sha256 ?? null,
+      caller_binding_sha256:
+        entry.authenticated?.caller_binding_sha256 ?? null,
+      person_state_sha256:
+        entry.authenticated?.person_state_sha256 ?? null,
+      session_state_sha256:
+        entry.authenticated?.session_state_sha256 ?? null,
+    };
+    personReadDecisionAuditFromRow(candidate);
+    const inserted = this.database
+      .prepare(
+        `INSERT INTO authority_person_read_decision_audit (
+           occurred_at, retain_until, authority_id, organization_id,
+           operation, request_sha256, response_sha256,
+           asserted_subject_principal_id, decision, reason_code,
+           authenticated_principal_id, authenticated_membership_id,
+           authenticated_membership_type, identity_binding_id,
+           session_family_id, access_credential_sha256,
+           caller_binding_sha256, person_state_sha256, session_state_sha256
+         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .run(
+        candidate.occurred_at,
+        candidate.retain_until,
+        candidate.authority_id,
+        candidate.organization_id,
+        candidate.operation,
+        candidate.request_sha256,
+        candidate.response_sha256,
+        candidate.asserted_subject_principal_id,
+        candidate.decision,
+        candidate.reason_code,
+        candidate.authenticated_principal_id,
+        candidate.authenticated_membership_id,
+        candidate.authenticated_membership_type,
+        candidate.identity_binding_id,
+        candidate.session_family_id,
+        candidate.access_credential_sha256,
+        candidate.caller_binding_sha256,
+        candidate.person_state_sha256,
+        candidate.session_state_sha256,
+      );
+    const row = this.database
+      .prepare(
+        `SELECT audit_sequence, occurred_at, retain_until, authority_id,
+                organization_id, operation, request_sha256, response_sha256,
+                asserted_subject_principal_id, decision, reason_code,
+                authenticated_principal_id, authenticated_membership_id,
+                authenticated_membership_type, identity_binding_id,
+                session_family_id, access_credential_sha256,
+                caller_binding_sha256, person_state_sha256,
+                session_state_sha256
+           FROM authority_person_read_decision_audit
+          WHERE audit_sequence = ?`,
+      )
+      .get(Number(inserted.lastInsertRowid)) as
+      | PersonReadDecisionAuditRow
+      | undefined;
+    invariant(row !== undefined, 'Person read decision audit was not stored');
+    return personReadDecisionAuditFromRow(row);
   }
 
   appendAudit(entry: AuthorityAuditEntry): void {

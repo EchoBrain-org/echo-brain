@@ -384,6 +384,7 @@ describe('organization authority operator lifecycle', () => {
       'authority_oidc_login_attempts',
       'authority_organization_member_recording_activation',
       'authority_person_login_grants',
+      'authority_person_read_decision_audit',
       'authority_person_session_credentials',
       'authority_person_session_families',
       'authority_principals',
@@ -1252,7 +1253,7 @@ describe('organization authority operator lifecycle', () => {
     expect(
       inspectAuthorityDatabaseReadOnly(config.database_path),
     ).toMatchObject({
-      schema_version: 9,
+      schema_version: 10,
       integrations_control_plane_id: integrationsIdentity.control_plane_id,
       integrations_marker_sha256: expect.stringMatching(
         /^sha256:[0-9a-f]{64}$/,
@@ -1343,7 +1344,7 @@ describe('organization authority operator lifecycle', () => {
       const interruptedAuthority = inspectAuthorityDatabaseReadOnly(
         config.database_path,
       );
-      expect(interruptedAuthority.schema_version).toBe(9);
+      expect(interruptedAuthority.schema_version).toBe(10);
       expect(
         interruptedAuthority.integrations_control_plane_id !== null,
       ).toBe(anchoredAfterFault);
@@ -1360,7 +1361,7 @@ describe('organization authority operator lifecycle', () => {
         config.database_path,
       );
       expect(recoveredAuthority).toMatchObject({
-        schema_version: 9,
+        schema_version: 10,
         integrations_control_plane_id: recovered.control_plane_id,
         integrations_marker_sha256: expect.stringMatching(
           /^sha256:[0-9a-f]{64}$/,

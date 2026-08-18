@@ -20,6 +20,7 @@ const AUTHORITY_TABLES = [
   'authority_oidc_login_attempts',
   'authority_organization_member_recording_activation',
   'authority_person_login_grants',
+  'authority_person_read_decision_audit',
   'authority_person_session_credentials',
   'authority_person_session_families',
   'authority_principals',
@@ -47,7 +48,7 @@ describe('organization authority database migrations', () => {
     openAuthorityDatabase(path).close();
 
     const database = new Database(path, { readonly: true });
-    expect(database.pragma('user_version', { simple: true })).toBe(9);
+    expect(database.pragma('user_version', { simple: true })).toBe(10);
     const tables = database
       .prepare(
         `SELECT name FROM sqlite_master
@@ -68,6 +69,7 @@ describe('organization authority database migrations', () => {
       'authority_oidc_identity_bindings',
       'authority_oidc_login_attempts',
       'authority_person_login_grants',
+      'authority_person_read_decision_audit',
       'authority_person_session_credentials',
       'authority_person_session_families',
     ]);
@@ -164,7 +166,7 @@ describe('organization authority database migrations', () => {
 
     openAuthorityDatabase(path).close();
     const upgraded = new Database(path);
-    expect(upgraded.pragma('user_version', { simple: true })).toBe(9);
+    expect(upgraded.pragma('user_version', { simple: true })).toBe(10);
     const tables = upgraded
       .prepare(
         `SELECT name FROM sqlite_master
@@ -413,11 +415,11 @@ describe('organization authority database migrations', () => {
   it('rejects a database newer than this authority binary', () => {
     const path = databasePath();
     const future = new Database(path);
-    future.pragma('user_version = 10');
+    future.pragma('user_version = 11');
     future.close();
 
     expect(() => openAuthorityDatabase(path)).toThrow(
-      'newer than supported schema 9',
+      'newer than supported schema 10',
     );
   });
 });
