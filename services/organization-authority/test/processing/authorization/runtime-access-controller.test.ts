@@ -1,9 +1,12 @@
 import { describe, expect, it } from 'vitest';
-import type { OrganizationInstallationAccessDecisionV1 } from '@echo-brain/organization-protocol';
 import {
   OrganizationRuntimeAccessController,
   type OrganizationRuntimeAccessSession,
 } from '../../../src/processing/authorization/runtime-access-controller.js';
+
+type OrganizationInstallationAccessDecisionV1 = ReturnType<
+  OrganizationRuntimeAccessSession['coordinator']['currentAccess']
+>;
 
 function active(validUntil: string): OrganizationInstallationAccessDecisionV1 {
   return {

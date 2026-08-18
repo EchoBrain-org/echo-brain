@@ -53,6 +53,12 @@ const rules: readonly TestLayerRule[] = [
       path === 'workspace:@echo-brain/federation-protocol',
   },
   {
+    root: 'services/organization-authority/test/processing',
+    allows: (path) =>
+      path.startsWith('services/organization-authority/src/processing/') ||
+      path.startsWith('tests/support/'),
+  },
+  {
     root: 'tests/product',
     allows: (path) => !path.startsWith('services/'),
   },
