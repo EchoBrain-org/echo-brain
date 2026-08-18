@@ -380,7 +380,12 @@ describe('organization authority operator lifecycle', () => {
       'authority_internal_live_update_receipts',
       'authority_memberships',
       'authority_metadata',
+      'authority_oidc_identity_bindings',
+      'authority_oidc_login_attempts',
       'authority_organization_member_recording_activation',
+      'authority_person_login_grants',
+      'authority_person_session_credentials',
+      'authority_person_session_families',
       'authority_principals',
       'authority_query_decision_audit',
       'authority_readable_search_active_generation',
@@ -430,6 +435,21 @@ describe('organization authority operator lifecycle', () => {
     expect(repeated.authority_descriptor.authority_id).toBe(
       firstConfig.authority.authority_id,
     );
+  });
+
+  it('keeps current-schema read-only inspection fail-closed on extra tables', async () => {
+    const fixture = await initializedFixture();
+    const paths = authorityStatePaths(fixture.stateDirectory);
+    const database = new Database(paths.database_path);
+    try {
+      database.exec('CREATE TABLE unexpected_authority_state (value TEXT)');
+    } finally {
+      database.close();
+    }
+
+    expect(() =>
+      inspectAuthorityDatabaseReadOnly(paths.database_path),
+    ).toThrow('organization authority database table set is invalid');
   });
 
   it('serializes concurrent initialization and safely completes a published state without config', async () => {
@@ -1232,7 +1252,7 @@ describe('organization authority operator lifecycle', () => {
     expect(
       inspectAuthorityDatabaseReadOnly(config.database_path),
     ).toMatchObject({
-      schema_version: 8,
+      schema_version: 9,
       integrations_control_plane_id: integrationsIdentity.control_plane_id,
       integrations_marker_sha256: expect.stringMatching(
         /^sha256:[0-9a-f]{64}$/,
@@ -1323,7 +1343,7 @@ describe('organization authority operator lifecycle', () => {
       const interruptedAuthority = inspectAuthorityDatabaseReadOnly(
         config.database_path,
       );
-      expect(interruptedAuthority.schema_version).toBe(8);
+      expect(interruptedAuthority.schema_version).toBe(9);
       expect(
         interruptedAuthority.integrations_control_plane_id !== null,
       ).toBe(anchoredAfterFault);
@@ -1340,7 +1360,7 @@ describe('organization authority operator lifecycle', () => {
         config.database_path,
       );
       expect(recoveredAuthority).toMatchObject({
-        schema_version: 8,
+        schema_version: 9,
         integrations_control_plane_id: recovered.control_plane_id,
         integrations_marker_sha256: expect.stringMatching(
           /^sha256:[0-9a-f]{64}$/,

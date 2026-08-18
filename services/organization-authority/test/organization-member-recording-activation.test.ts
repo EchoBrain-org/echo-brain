@@ -82,6 +82,33 @@ function downgradeToPreActivationSchema(databasePath: string): void {
   const database = new Database(databasePath);
   try {
     database.exec(`
+      DROP TRIGGER authority_person_login_grants_initial_state_insert;
+      DROP TRIGGER authority_oidc_identity_bindings_provenance_insert;
+      DROP TRIGGER authority_oidc_identity_bindings_terminal_update;
+      DROP TRIGGER authority_oidc_identity_bindings_revoke_families;
+      DROP TRIGGER authority_oidc_identity_bindings_delete_denied;
+      DROP TRIGGER authority_oidc_login_attempts_bootstrap_grant_insert;
+      DROP TRIGGER authority_oidc_login_attempts_initial_state_insert;
+      DROP TRIGGER authority_oidc_login_attempts_terminal_bootstrap_grant;
+      DROP TRIGGER authority_oidc_login_attempts_state_transition_only;
+      DROP TRIGGER authority_oidc_login_attempts_delete_denied;
+      DROP TRIGGER authority_person_login_grants_consume_only;
+      DROP TRIGGER authority_person_login_grants_delete_denied;
+      DROP TRIGGER authority_person_session_families_provenance_insert;
+      DROP TRIGGER authority_person_session_families_terminal_update;
+      DROP TRIGGER authority_person_session_families_revoke_credentials;
+      DROP TRIGGER authority_person_session_families_delete_denied;
+      DROP TRIGGER authority_memberships_revoke_person_session_families;
+      DROP TRIGGER authority_person_session_credentials_policy_insert;
+      DROP TRIGGER authority_person_session_credentials_initial_state_insert;
+      DROP TRIGGER authority_person_session_credentials_contiguous;
+      DROP TRIGGER authority_person_session_credentials_terminal_update;
+      DROP TRIGGER authority_person_session_credentials_delete_denied;
+      DROP TABLE authority_person_session_credentials;
+      DROP TABLE authority_person_session_families;
+      DROP TABLE authority_oidc_identity_bindings;
+      DROP TABLE authority_oidc_login_attempts;
+      DROP TABLE authority_person_login_grants;
       DROP TRIGGER authority_audit_log_recording_activation_immutable_update;
       DROP TRIGGER authority_audit_log_recording_activation_delete_denied;
       DROP TABLE authority_organization_member_recording_activation;
@@ -268,7 +295,7 @@ describe('organization-member recording activation lifecycle', () => {
     ).rejects.toThrow('fault:after-audit');
 
     const rolledBack = new Database(runtimeConfig.database_path);
-    expect(rolledBack.pragma('user_version', { simple: true })).toBe(8);
+    expect(rolledBack.pragma('user_version', { simple: true })).toBe(9);
     expect(
       (
         rolledBack

@@ -16,7 +16,12 @@ const AUTHORITY_TABLES = [
   'authority_internal_live_update_receipts',
   'authority_memberships',
   'authority_metadata',
+  'authority_oidc_identity_bindings',
+  'authority_oidc_login_attempts',
   'authority_organization_member_recording_activation',
+  'authority_person_login_grants',
+  'authority_person_session_credentials',
+  'authority_person_session_families',
   'authority_principals',
   'authority_query_decision_audit',
   'authority_readable_search_active_generation',
@@ -42,7 +47,7 @@ describe('organization authority database migrations', () => {
     openAuthorityDatabase(path).close();
 
     const database = new Database(path, { readonly: true });
-    expect(database.pragma('user_version', { simple: true })).toBe(8);
+    expect(database.pragma('user_version', { simple: true })).toBe(9);
     const tables = database
       .prepare(
         `SELECT name FROM sqlite_master
@@ -51,6 +56,36 @@ describe('organization authority database migrations', () => {
       )
       .all() as Array<{ name: string }>;
     expect(tables.map(({ name }) => name)).toEqual(AUTHORITY_TABLES);
+    expect(
+      tables
+        .map(({ name }) => name)
+        .filter(
+          (name) =>
+            name.startsWith('authority_person_') ||
+            name.startsWith('authority_oidc_'),
+        ),
+    ).toEqual([
+      'authority_oidc_identity_bindings',
+      'authority_oidc_login_attempts',
+      'authority_person_login_grants',
+      'authority_person_session_credentials',
+      'authority_person_session_families',
+    ]);
+    const attemptColumns = database.pragma(
+      'table_xinfo(authority_oidc_login_attempts)',
+    ) as Array<{ name: string }>;
+    expect(attemptColumns.map(({ name }) => name)).toEqual(
+      expect.arrayContaining([
+        'terminal_outcome',
+        'completed_at',
+        'redemption_claim_id',
+        'redemption_claimed_at',
+        'resolved_identity_binding_id',
+        'upstream_auth_time',
+        'bootstrap_initial_login_attempt_id',
+      ]),
+    );
+    expect(attemptColumns.map(({ name }) => name)).not.toContain('consumed_at');
     for (const table of [
       'authority_memberships',
       'authority_enrollment_grants',
@@ -129,7 +164,7 @@ describe('organization authority database migrations', () => {
 
     openAuthorityDatabase(path).close();
     const upgraded = new Database(path);
-    expect(upgraded.pragma('user_version', { simple: true })).toBe(8);
+    expect(upgraded.pragma('user_version', { simple: true })).toBe(9);
     const tables = upgraded
       .prepare(
         `SELECT name FROM sqlite_master
@@ -378,11 +413,11 @@ describe('organization authority database migrations', () => {
   it('rejects a database newer than this authority binary', () => {
     const path = databasePath();
     const future = new Database(path);
-    future.pragma('user_version = 9');
+    future.pragma('user_version = 10');
     future.close();
 
     expect(() => openAuthorityDatabase(path)).toThrow(
-      'newer than supported schema 8',
+      'newer than supported schema 9',
     );
   });
 });
