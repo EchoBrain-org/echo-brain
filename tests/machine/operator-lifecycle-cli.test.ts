@@ -1104,6 +1104,32 @@ describe('operator onboarding and lifecycle CLI', () => {
     expect(readFileSync(installationPath, 'utf8')).toBe(pinned);
   });
 
+  it('fails closed when launchd cannot prove the service status', async () => {
+    const unavailable: FakeLaunchd = {
+      calls: [],
+      runner: async (args) => {
+        unavailable.calls.push([...args]);
+        return { status: 1, stdout: '', stderr: 'permission denied' };
+      },
+    };
+    const { dependencies, ...fixture } = installation(
+      'echo-launchd-inspection-',
+      unavailable,
+    );
+    await expectOk(['init', '--config', fixture.configPath], dependencies);
+
+    const status = await command(
+      ['status', '--config', fixture.configPath],
+      dependencies,
+    );
+
+    expect(status.status).toBe(1);
+    expect(status.stderr).toContain(
+      'launchd inspection failed: permission denied',
+    );
+    expect(unavailable.calls.some((args) => args[0] === 'print')).toBe(true);
+  });
+
   it('runs bounded live adapter health checks without a core cycle', async () => {
     const { dependencies, ...fixture } = installation('echo-doctor-');
     await command(['init', '--config', fixture.configPath], dependencies);
