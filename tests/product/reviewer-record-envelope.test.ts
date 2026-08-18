@@ -21,7 +21,7 @@ import {
   verifyOrganizationAuthorityPin,
 } from '@echo-brain/organization-protocol';
 import type { OrganizationAuthorityDescriptorV1 } from '@echo-brain/organization-protocol';
-import { ProtocolOrganizationRecordEnvelopeBuilder } from '../../src/product/organization/record/adapters/protocol-record-envelope-builder.js';
+import { ProtocolOrganizationRecordEnvelopeBuilder } from '@echo-brain/organization-authority/processing/record/protocol-record-envelope-builder.js';
 import type {
   OrganizationRecordAuthorizationEvidence,
   OrganizationRecordEnvelopeBuildInput,

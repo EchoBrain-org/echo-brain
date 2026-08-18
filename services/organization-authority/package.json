@@ -37,6 +37,10 @@
     "./processing/approval/*.js": {
       "types": "./dist/processing/approval/*.d.ts",
       "import": "./dist/processing/approval/*.js"
+    },
+    "./processing/record/*.js": {
+      "types": "./dist/processing/record/*.d.ts",
+      "import": "./dist/processing/record/*.js"
     }
   },
   "files": [

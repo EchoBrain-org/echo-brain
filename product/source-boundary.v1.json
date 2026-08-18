@@ -144,6 +144,7 @@
       "allowed_packages": [
         "@echo-brain/federation-protocol",
         "@echo-brain/organization-api",
+        "@echo-brain/organization-authority",
         "@echo-brain/organization-protocol"
       ],
       "allowed_node_builtins": ["buffer", "crypto", "fs", "https", "path"]

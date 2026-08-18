@@ -15,6 +15,7 @@
   ],
   "allowed_workspace_packages": [
     "@echo-brain/federation-protocol",
+    "@echo-brain/organization-authority",
     "@echo-brain/organization-protocol",
     "@echo-brain/organization-api"
   ],
@@ -152,7 +153,10 @@
       "name": "local-organization-record-submits-through-injected-ports",
       "from": "src/product/organization/record/*.ts",
       "allowed_imports": ["src/product/organization/record/**"],
-      "allowed_workspace_packages": ["@echo-brain/federation-protocol"],
+      "allowed_workspace_packages": [
+        "@echo-brain/federation-protocol",
+        "@echo-brain/organization-authority"
+      ],
       "allowed_external_packages": [],
       "allowed_node_builtins": []
     },

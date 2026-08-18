@@ -39,8 +39,8 @@ export type {
   ReviewerPresentationRenderInput,
   ReviewerPresentationRendering,
 } from './adapters/reviewer-presentation-renderer.js';
-export { ProtocolOrganizationRecordEnvelopeBuilder } from './adapters/protocol-record-envelope-builder.js';
-export type { ProtocolOrganizationRecordEnvelopeBuilderOptions } from './adapters/protocol-record-envelope-builder.js';
+export { ProtocolOrganizationRecordEnvelopeBuilder } from '@echo-brain/organization-authority/processing/record/protocol-record-envelope-builder.js';
+export type { ProtocolOrganizationRecordEnvelopeBuilderOptions } from '@echo-brain/organization-authority/processing/record/protocol-record-envelope-builder.js';
 export {
   OrganizationRecordSubmitter,
 } from './record-submitter.js';

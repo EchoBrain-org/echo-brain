@@ -27,7 +27,7 @@ import type {
   BuiltOrganizationRecordEnvelope,
   OrganizationRecordEnvelopeBuildInput,
   OrganizationRecordEnvelopeBuilder,
-} from '../ports.js';
+} from './ports.js';
 
 export interface ProtocolOrganizationRecordEnvelopeBuilderOptions {
   /** The out-of-band pinned authority this member is enrolled with. */

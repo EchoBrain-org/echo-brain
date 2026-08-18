@@ -25,7 +25,7 @@ import type {
   OrganizationRecordReceiptV1,
 } from '@echo-brain/organization-protocol';
 import { HttpOrganizationRecordClient } from '../../src/product/organization/client/http-organization-record-client.js';
-import { ProtocolOrganizationRecordEnvelopeBuilder } from '../../src/product/organization/record/adapters/protocol-record-envelope-builder.js';
+import { ProtocolOrganizationRecordEnvelopeBuilder } from '@echo-brain/organization-authority/processing/record/protocol-record-envelope-builder.js';
 import type {
   OrganizationRecordAuthorizationEvidence,
   OrganizationRecordEnvelopeBuildInput,

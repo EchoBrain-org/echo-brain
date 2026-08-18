@@ -366,6 +366,29 @@
       "allowed_workspace_packages": [],
       "allowed_external_packages": [],
       "allowed_node_builtins": []
+    },
+    {
+      "name": "processing-record-envelope-ports-use-json-contract",
+      "from": "services/organization-authority/src/processing/record/ports.ts",
+      "allowed_imports": [],
+      "allowed_workspace_packages": [
+        "@echo-brain/federation-protocol"
+      ],
+      "allowed_external_packages": [],
+      "allowed_node_builtins": []
+    },
+    {
+      "name": "processing-record-envelope-builder-uses-protocol-contracts",
+      "from": "services/organization-authority/src/processing/record/protocol-record-envelope-builder.ts",
+      "allowed_imports": [
+        "services/organization-authority/src/processing/record/ports.ts"
+      ],
+      "allowed_workspace_packages": [
+        "@echo-brain/federation-protocol",
+        "@echo-brain/organization-protocol"
+      ],
+      "allowed_external_packages": [],
+      "allowed_node_builtins": []
     }
   ]
 }
