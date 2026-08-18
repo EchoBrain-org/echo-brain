@@ -356,6 +356,22 @@ export class PersonIdentitySessionApplication {
             this.configuration.oidc_configuration_sha256,
           expires_at: expiresAt,
         });
+        transaction.appendAudit({
+          occurred_at: stored.issued_at,
+          actor_kind: "admin",
+          action: "person_login_grant.issued",
+          subject_id: stored.membership_id,
+          detail: {
+            organization_id: stored.organization_id,
+            principal_id: stored.principal_id,
+            membership_id: stored.membership_id,
+            membership_type: stored.membership_type,
+            login_grant_sha256: stored.login_grant_sha256,
+            expected_issuer: stored.expected_issuer,
+            issued_at: stored.issued_at,
+            expires_at: stored.expires_at,
+          },
+        });
         return {
           organization_id: stored.organization_id,
           principal_id: stored.principal_id,

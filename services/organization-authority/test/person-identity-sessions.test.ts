@@ -344,6 +344,96 @@ function rejectUnexpectedStartDeny(): never {
 }
 
 describe("PersonIdentitySessionApplication", () => {
+  it("audits an issued bootstrap login grant without persisting its raw bytes", () => {
+    const fixture = setup();
+    const issued = fixture.application.issueBootstrapLoginGrant({
+      target_membership_id: fixture.membership.membership_id,
+      expected_issuer: OIDC_CONFIGURATION.issuer,
+    });
+    const loginGrantSha256 = digestSecret(issued.login_grant);
+
+    const stored = fixture.repository.read((transaction) => ({
+      grant: transaction.personLoginGrant(loginGrantSha256),
+      audit: transaction
+        .recentAuditBefore(undefined, 10)
+        .find(({ action }) => action === "person_login_grant.issued"),
+    }));
+    expect(stored.grant).toMatchObject({
+      login_grant_sha256: loginGrantSha256,
+      organization_id: fixture.membership.organization_id,
+      principal_id: fixture.membership.principal_id,
+      membership_id: fixture.membership.membership_id,
+      membership_type: fixture.membership.membership_type,
+      expected_issuer: OIDC_CONFIGURATION.issuer,
+      issued_at: issued.issued_at,
+      expires_at: issued.expires_at,
+    });
+    expect(stored.audit).toEqual({
+      audit_sequence: expect.any(Number),
+      occurred_at: issued.issued_at,
+      actor_kind: "admin",
+      action: "person_login_grant.issued",
+      subject_id: fixture.membership.membership_id,
+      detail: {
+        organization_id: fixture.membership.organization_id,
+        principal_id: fixture.membership.principal_id,
+        membership_id: fixture.membership.membership_id,
+        membership_type: fixture.membership.membership_type,
+        login_grant_sha256: loginGrantSha256,
+        expected_issuer: OIDC_CONFIGURATION.issuer,
+        issued_at: issued.issued_at,
+        expires_at: issued.expires_at,
+      },
+    });
+    expect(JSON.stringify(stored)).not.toContain(issued.login_grant);
+
+    fixture.repository.close();
+    expect(
+      readFileSync(fixture.path).includes(
+        Buffer.from(issued.login_grant, "utf8"),
+      ),
+    ).toBe(false);
+  });
+
+  it("rolls back a bootstrap login grant when its audit insert fails", () => {
+    const fixture = setup();
+    const database = new Database(fixture.path);
+    database.exec(`
+      CREATE TRIGGER test_person_login_grant_audit_failure
+      BEFORE INSERT ON authority_audit_log
+      WHEN NEW.action = 'person_login_grant.issued'
+      BEGIN
+        SELECT RAISE(ABORT, 'forced person login grant audit failure');
+      END;
+    `);
+    database.close();
+
+    expect(() =>
+      fixture.application.issueBootstrapLoginGrant({
+        target_membership_id: fixture.membership.membership_id,
+        expected_issuer: OIDC_CONFIGURATION.issuer,
+      }),
+    ).toThrow("forced person login grant audit failure");
+
+    expect(
+      fixture.repository.read((transaction) =>
+        transaction
+          .recentAuditBefore(undefined, 10)
+          .some(({ action }) => action === "person_login_grant.issued"),
+      ),
+    ).toBe(false);
+    fixture.repository.close();
+
+    const persisted = new Database(fixture.path, { readonly: true });
+    expect(
+      persisted
+        .prepare("SELECT count(*) FROM authority_person_login_grants")
+        .pluck()
+        .get(),
+    ).toBe(0);
+    persisted.close();
+  });
+
   it("boots an exact Person session, persists only digests/sealed PKCE, and authenticates after restart", async () => {
     const fixture = setup();
     const { begun, session, loginGrant, loginGrantExpiresAt } =
