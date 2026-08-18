@@ -15,7 +15,7 @@ import type {
   ProductRuntimeConfig,
 } from './config.js';
 import { DecisionNodeStore } from './approval/decision-node-store.js';
-import { StoreBackedApprovalGate } from './approval/store-backed-approval-gate.js';
+import { StoreBackedApprovalGate } from '@echo-brain/organization-authority/processing/approval/store-backed-approval-gate.js';
 import {
   assertFounderProvenanceRetired,
   FounderProvenanceGateError,

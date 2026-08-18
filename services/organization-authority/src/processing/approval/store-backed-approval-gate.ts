@@ -1,6 +1,13 @@
-import type { ApprovalDecision, ApprovalGate, ApprovalRequest } from '@echo-brain/organization-authority/processing/core/index.js';
-import { toApprovalDecision } from '@echo-brain/organization-authority/processing/approval/decision-node.js';
-import type { DecisionNodeStore } from './decision-node-store.js';
+import type { ApprovalDecision, ApprovalGate, ApprovalRequest } from '../core/index.js';
+import {
+  toApprovalDecision,
+  type DecisionNodeState,
+} from './decision-node.js';
+
+/** The create-once request capability the gate needs from durable storage. */
+export interface DecisionNodeRequestStore {
+  ensureRequested(request: ApprovalRequest): Promise<DecisionNodeState>;
+}
 
 /**
  * Manual-mode approval gate: stage the request as a decision node and report
@@ -8,7 +15,7 @@ import type { DecisionNodeStore } from './decision-node-store.js';
  * surface that writes to the same store (CLI today, others later).
  */
 export class StoreBackedApprovalGate implements ApprovalGate {
-  constructor(private readonly store: DecisionNodeStore) {}
+  constructor(private readonly store: DecisionNodeRequestStore) {}
 
   async review(request: ApprovalRequest): Promise<ApprovalDecision> {
     return toApprovalDecision(await this.store.ensureRequested(request));

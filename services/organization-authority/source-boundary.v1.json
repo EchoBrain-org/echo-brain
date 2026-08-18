@@ -347,8 +347,8 @@
       "allowed_node_builtins": []
     },
     {
-      "name": "processing-approval-decision-chain-reads-core-and-evidence",
-      "from": "services/organization-authority/src/processing/approval/**",
+      "name": "processing-approval-decision-node-reads-core-and-evidence",
+      "from": "services/organization-authority/src/processing/approval/decision-node.ts",
       "allowed_imports": [
         "services/organization-authority/src/processing/core/**",
         "services/organization-authority/src/processing/authorization/**"
@@ -356,6 +356,17 @@
       "allowed_workspace_packages": [],
       "allowed_external_packages": [],
       "allowed_node_builtins": ["crypto"]
+    },
+    {
+      "name": "processing-store-backed-approval-gate-uses-decision-node-port",
+      "from": "services/organization-authority/src/processing/approval/store-backed-approval-gate.ts",
+      "allowed_imports": [
+        "services/organization-authority/src/processing/core/**",
+        "services/organization-authority/src/processing/approval/decision-node.ts"
+      ],
+      "allowed_workspace_packages": [],
+      "allowed_external_packages": [],
+      "allowed_node_builtins": []
     },
     {
       "name": "processing-reviewer-publication-preflight-reads-the-presentation-contract",
