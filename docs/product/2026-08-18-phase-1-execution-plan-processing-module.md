@@ -8,9 +8,11 @@ terminal), written 2026-08-17 for the work that follows
 It continues on the same branch the overnight spike produced, building on the
 accepted ADR commit rather than re-deriving the relocate.
 
-**Baseline for this run:** branch `migration/server-core-relocate-retire` at
-its current HEAD (the ADR-0001 acceptance commit). The spike already relocated
-seven units and retired two; this run finishes the four held relocate units,
+**Baseline for this run:** branch `migration/server-core-relocate-retire` with
+`7b582fa` (`docs: add Phase 1 execution runbook`) as an ancestor. The accepted
+ADR commit is its parent, `47b59cc`; requiring that parent to remain `HEAD`
+would make this runbook invalidate itself. The spike already relocated seven
+units and retired two; this run finishes the four held relocate units,
 stands the pipeline up as a runnable module inside the authority process, and
 proves it by fixture replay. It does **not** start Phase 2 (person sessions),
 Phase 3 (cutover), or any deletion beyond what the spike already did.
@@ -45,7 +47,8 @@ Two work bands, each a sequence of small independently-green commits:
 
 ```text
 Band A  finish the four held relocate units          -> tag phase1/relocate-complete
-Band B  stand up + fixture-replay the pipeline        -> tag phase1/replay-green
+Band B  stand up + fixture-replay the pipeline        -> tag phase1/replay-synthetic-green
+                                                        or phase1/replay-green
 ```
 
 Progress is counted in **units and criteria met, not in reaching Band B.** A
@@ -57,7 +60,8 @@ even if full parity needs a second pass.
 ## Hard-stop rules (override best-effort; never violate)
 
 1. **Never touch `main`.** All work on `migration/server-core-relocate-retire`.
-   No push, no merge to main, no rebase of main.
+   Push only full-check-green commits and verified checkpoint tags to the
+   existing remote branch. No merge to main and no rebase of main.
 2. **No live, external, or credentialed call.** No Slack, Granola, LLM
    provider, or Authority network request; no real credential read or move;
    no `service`/daemon start. Replay uses fixtures and fakes only. A task that
@@ -101,14 +105,15 @@ host as the overnight run. The device-bridge/cloud environment cannot run
 ```sh
 cd <repo-root>
 git switch migration/server-core-relocate-retire
-git log -1 --format='%H %s'   # MUST show the ADR-0001 acceptance commit as HEAD
+git merge-base --is-ancestor 7b582fa HEAD  # MUST exit 0
+git show -s --format='%H %s' 7b582fa
 git status --porcelain        # MUST be empty
 node -v                       # MUST be v22.22.1 (npm on PATH: ~/.nvm/versions/node/v22.22.1/bin)
 npm ci
 npm run check                 # MUST be green before any change
 ```
 
-If HEAD is not the ADR acceptance commit, or `npm run check` is not green,
+If `7b582fa` is not an ancestor of `HEAD`, or `npm run check` is not green,
 stop and log — do not start on an unverified base. This is the operator's
 outstanding item from the overnight handoff: **if you have not personally
 re-run `npm run check` at `pre-migration/4665c3a`, `checkpoint/relocated`, and
@@ -126,7 +131,9 @@ Continue the same `.migration/` tracking files (git-ignored): `STATUS.md`,
 - Branch isolation unchanged; `main` never moves; ultimate rollback is
   deleting the branch.
 - New checkpoints this run, each a verified-green annotated tag:
-  `phase1/relocate-complete`, `phase1/replay-green`.
+  `phase1/relocate-complete`; `phase1/replay-synthetic-green` for synthetic
+  engineering evidence; and `phase1/replay-green` only after the canonical
+  real-corpus requirement is satisfied.
 - Restore commands (record in `ROLLBACK.md`):
 
 ```sh
@@ -234,8 +241,9 @@ pipeline stays the only real writer (rule 3).
   `MeetingDocument` JSON, not a live pull. If real meeting data is not
   available without a live Granola call (rule 2), synthesize representative
   fixtures from the existing test corpus and **log that the corpus is
-  synthetic** — a synthetic corpus still proves pipeline equivalence, it just
-  does not prove real-provider canonicalization (that is Phase 3).
+  synthetic** — a synthetic corpus still proves pipeline equivalence, but it
+  does not satisfy the canonical Phase-1 real-corpus exit criterion and must
+  not receive the `phase1/replay-green` tag.
 - Record the corpus location and its **disposal date: within 7 days of Band B
   exit (ADR decision 5).** The corpus is real-shaped meeting content; it is
   governed pre-record data, not a permanent test asset.
@@ -288,10 +296,14 @@ signal** (ADR/v3: the metric accrues from Phase 3). Build it, test it against
 the synthetic corpus, and state in `STATUS.md` that its Phase-1 output is not
 a capacity measurement.
 
-**Band B exit / tag.**
+**Band B engineering exit / tag.** A synthetic corpus completes the code and
+deterministic replay work first, but leaves the canonical real-corpus evidence
+gate open. Use exactly one tag according to the corpus actually exercised:
 
 ```sh
-git tag -a phase1/replay-green -m "Processing module fixture-replay parity green (deterministic processor); npm run check green (clean rebuild)"
+git tag -a phase1/replay-synthetic-green -m "Processing module synthetic fixture-replay parity green (deterministic processor); real-corpus gate remains open; npm run check green (clean rebuild)"
+# Only after >=30 real batches across >=3 meeting types pass the same gate:
+git tag -a phase1/replay-green -m "Processing module real-corpus fixture-replay parity green (deterministic processor); npm run check green (clean rebuild)"
 ```
 
 Record the parity result verbatim in `STATUS.md`: corpus size and whether it
@@ -307,7 +319,7 @@ resolution results, and the disposal date set for the corpus.
   unit, revert it (`git reset --hard HEAD`), log it as Phase-2, continue with
   the next. Halting the whole band happens only if no unit can proceed.
 - **Band B kill:** if key-chain parity is not 100%, or create-once cannot be
-  proved under concurrency, stop and log — do not tag `phase1/replay-green`.
+  proved under concurrency, stop and log — do not tag either replay checkpoint.
   The machine pipeline remains the only writer; nothing is wired live. State
   returned to: `phase1/relocate-complete`.
 - **No hold into Phase 2/3 from here.** Phase 1 exit is a stopping point for
@@ -320,15 +332,17 @@ resolution results, and the disposal date set for the corpus.
 
 The run is a success if all hold, regardless of how far Band B reached:
 
-- `main` untouched; work on the isolated branch; nothing pushed; nothing
-  live/external/credentialed touched; no second canonical writer created.
+- `main` untouched; work on the isolated branch; only green commits and
+  checkpoint tags pushed; nothing live/external/credentialed touched; no
+  second canonical writer created.
 - Every commit green under the full `npm run check` (WIP only on `wip/*`).
 - Band A: units 1–2 landed or explicitly held-with-proof as Phase-2; units
   3–4 landed or held-with-proof; `phase1/relocate-complete` tagged green.
 - Any pre-record storage created is governed in the same commit (rule 6b).
 - If Band B ran: a replay harness exists, the corpus disposal date is
-  recorded, and the parity result is in `STATUS.md`; if parity is green,
-  `phase1/replay-green` is tagged.
+  recorded, and the parity result is in `STATUS.md`; green synthetic evidence
+  receives `phase1/replay-synthetic-green`, while `phase1/replay-green`
+  remains reserved for the later real-corpus exit gate.
 - `.migration/STATUS.md`, `DECISIONS.md`, `ROLLBACK.md` current, with a
   HANDOFF section naming the single most important thing for the operator to
   check first — expected to be either the parity result or, if Band A held
