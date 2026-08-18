@@ -198,7 +198,10 @@ export class SqliteCoreStateStore implements CoreStateStore {
     return row.count > 0;
   }
 
-  async saveMeeting(meeting: MeetingDocument): Promise<void> {
+  async admitAndSaveMeeting(
+    meeting: MeetingDocument,
+    _processingKey: string,
+  ): Promise<'saved'> {
     this.saveMeetingStatement.run({
       source_adapter_id: meeting.provenance.source.adapter_id,
       source_instance_id: meeting.provenance.source.instance_id,
@@ -207,9 +210,11 @@ export class SqliteCoreStateStore implements CoreStateStore {
       meeting_id: meeting.id,
       document_json: JSON.stringify(meeting),
     });
+    return 'saved';
   }
 
   async saveDecisionSet(
+    _processingKey: string,
     meeting: MeetingDocument,
     decisions: DecisionSet,
   ): Promise<void> {
@@ -227,6 +232,7 @@ export class SqliteCoreStateStore implements CoreStateStore {
   }
 
   async getDecisionSet(
+    _processingKey: string,
     meeting: MeetingDocument,
     processor: AdapterIdentity & { kind: 'decision-processor' },
   ): Promise<DecisionSet | undefined> {
@@ -263,6 +269,7 @@ export class SqliteCoreStateStore implements CoreStateStore {
   }
 
   async saveDeliveryReceipt(
+    _processingKey: string,
     envelope: DeliveryEnvelope,
     receipt: DeliveryReceipt,
   ): Promise<void> {

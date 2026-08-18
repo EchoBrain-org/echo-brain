@@ -24,6 +24,14 @@ const AUTHORITY_TABLES = [
   'authority_person_session_credentials',
   'authority_person_session_families',
   'authority_principals',
+  'authority_processing_candidates',
+  'authority_processing_delivery_receipts',
+  'authority_processing_member_exclusions',
+  'authority_processing_processed_markers',
+  'authority_processing_resolutions',
+  'authority_processing_slots',
+  'authority_processing_source_cursors',
+  'authority_processing_source_owner_bindings',
   'authority_query_decision_audit',
   'authority_readable_search_active_generation',
   'authority_readable_search_query_audit',
@@ -48,7 +56,7 @@ describe('organization authority database migrations', () => {
     openAuthorityDatabase(path).close();
 
     const database = new Database(path, { readonly: true });
-    expect(database.pragma('user_version', { simple: true })).toBe(10);
+    expect(database.pragma('user_version', { simple: true })).toBe(11);
     const tables = database
       .prepare(
         `SELECT name FROM sqlite_master
@@ -88,6 +96,98 @@ describe('organization authority database migrations', () => {
       ]),
     );
     expect(attemptColumns.map(({ name }) => name)).not.toContain('consumed_at');
+    const processingColumns = Object.fromEntries(
+      [
+        'authority_processing_source_owner_bindings',
+        'authority_processing_source_cursors',
+        'authority_processing_candidates',
+        'authority_processing_slots',
+        'authority_processing_resolutions',
+        'authority_processing_processed_markers',
+        'authority_processing_delivery_receipts',
+        'authority_processing_member_exclusions',
+      ].map((table) => [
+        table,
+        (
+          database.pragma(`table_info(${table})`) as Array<{ name: string }>
+        ).map(({ name }) => name),
+      ]),
+    );
+    expect(processingColumns).toEqual({
+      authority_processing_source_owner_bindings: [
+        'source_adapter_id',
+        'source_instance_id',
+        'organization_id',
+        'principal_id',
+        'membership_id',
+        'membership_type',
+        'bound_at',
+      ],
+      authority_processing_source_cursors: [
+        'source_adapter_id',
+        'source_instance_id',
+        'source_version',
+        'cursor',
+        'updated_at',
+      ],
+      authority_processing_candidates: [
+        'processing_key',
+        'source_adapter_id',
+        'source_instance_id',
+        'source_version',
+        'external_id',
+        'meeting_revision',
+        'meeting_id',
+        'raw_document_sha256',
+        'raw_document_json',
+        'admitted_at',
+      ],
+      authority_processing_slots: [
+        'processing_key',
+        'slot_name',
+        'document_sha256',
+        'document_json',
+        'request_order_at',
+        'request_approval_id',
+        'created_at',
+      ],
+      authority_processing_resolutions: [
+        'processing_key',
+        'terminal_status',
+        'resolution_sha256',
+        'resolution_json',
+        'resolved_at',
+        'retain_until',
+      ],
+      authority_processing_processed_markers: [
+        'processing_key',
+        'source_adapter_id',
+        'source_instance_id',
+        'processed_at',
+      ],
+      authority_processing_delivery_receipts: [
+        'receipt_sequence',
+        'envelope_id',
+        'processing_key',
+        'idempotency_key',
+        'envelope_sha256',
+        'receipt_sha256',
+        'status',
+        'recorded_at',
+        'retryable',
+      ],
+      authority_processing_member_exclusions: [
+        'organization_id',
+        'principal_id',
+        'membership_id',
+        'membership_type',
+        'source_adapter_id',
+        'source_instance_id',
+        'scope_kind',
+        'external_id',
+        'created_at',
+      ],
+    });
     for (const table of [
       'authority_memberships',
       'authority_enrollment_grants',
@@ -166,7 +266,7 @@ describe('organization authority database migrations', () => {
 
     openAuthorityDatabase(path).close();
     const upgraded = new Database(path);
-    expect(upgraded.pragma('user_version', { simple: true })).toBe(10);
+    expect(upgraded.pragma('user_version', { simple: true })).toBe(11);
     const tables = upgraded
       .prepare(
         `SELECT name FROM sqlite_master
@@ -415,11 +515,11 @@ describe('organization authority database migrations', () => {
   it('rejects a database newer than this authority binary', () => {
     const path = databasePath();
     const future = new Database(path);
-    future.pragma('user_version = 11');
+    future.pragma('user_version = 12');
     future.close();
 
     expect(() => openAuthorityDatabase(path)).toThrow(
-      'newer than supported schema 10',
+      'newer than supported schema 11',
     );
   });
 });

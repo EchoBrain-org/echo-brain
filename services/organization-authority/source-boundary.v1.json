@@ -42,7 +42,8 @@
     "services/organization-authority/migrations/0007_readable_search_state.sql",
     "services/organization-authority/migrations/0008_organization_member_recording_activation.sql",
     "services/organization-authority/migrations/0009_person_identity_and_sessions.sql",
-    "services/organization-authority/migrations/0010_person_read_decision_audit.sql"
+    "services/organization-authority/migrations/0010_person_read_decision_audit.sql",
+    "services/organization-authority/migrations/0011_authority_processing_state.sql"
   ],
   "layer_rules": [
     {
@@ -147,6 +148,20 @@
       ],
       "allowed_workspace_packages": [],
       "allowed_external_packages": [],
+      "allowed_node_builtins": ["crypto"]
+    },
+    {
+      "name": "processing-storage-owns-authority-durability",
+      "from": "services/organization-authority/src/processing/storage/**",
+      "allowed_imports": [
+        "services/organization-authority/src/adapters/persistence/sqlite/open-database.ts",
+        "services/organization-authority/src/processing/core/**",
+        "services/organization-authority/src/processing/storage/**"
+      ],
+      "allowed_workspace_packages": [
+        "@echo-brain/federation-protocol"
+      ],
+      "allowed_external_packages": ["better-sqlite3"],
       "allowed_node_builtins": ["crypto"]
     },
     {

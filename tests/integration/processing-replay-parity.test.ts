@@ -353,7 +353,11 @@ describe('Phase 1 direct-versus-machine synthetic replay parity', () => {
         const processingKey = meetingProcessingKey(meeting, processor);
         const approvalId = decisionApprovalId(processingKey);
         const machineDecisions =
-          (await machineState.getDecisionSet(meeting, processor.identity)) ??
+          (await machineState.getDecisionSet(
+            processingKey,
+            meeting,
+            processor.identity,
+          )) ??
           null;
         const machineApproval =
           (await machineState.getApproval(processingKey)) ?? null;

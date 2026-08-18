@@ -317,6 +317,7 @@ class InvalidApprovedBriefGate implements ApprovalGate {
 
 class StateFake implements CoreStateStore {
   cursor: string | undefined = 'cursor-1';
+  meetingAdmission: 'saved' | 'excluded' = 'saved';
   readonly processed = new Set<string>();
   readonly meetings: MeetingDocument[] = [];
   readonly decisions: DecisionSet[] = [];
@@ -343,11 +344,17 @@ class StateFake implements CoreStateStore {
     return this.processed.has(processingKey);
   }
 
-  async saveMeeting(value: MeetingDocument): Promise<void> {
+  async admitAndSaveMeeting(
+    value: MeetingDocument,
+    _processingKey: string,
+  ): Promise<'saved' | 'excluded'> {
+    if (this.meetingAdmission === 'excluded') return 'excluded';
     this.meetings.push(value);
+    return 'saved';
   }
 
   async saveDecisionSet(
+    _processingKey: string,
     meeting: MeetingDocument,
     value: DecisionSet,
   ): Promise<void> {
@@ -356,6 +363,7 @@ class StateFake implements CoreStateStore {
   }
 
   async getDecisionSet(
+    _processingKey: string,
     meeting: MeetingDocument,
     processor: DecisionProcessorAdapter['identity'],
   ): Promise<DecisionSet | undefined> {
@@ -396,6 +404,7 @@ class StateFake implements CoreStateStore {
   }
 
   async saveDeliveryReceipt(
+    _processingKey: string,
     _envelope: DeliveryEnvelope,
     receipt: DeliveryReceipt,
   ): Promise<void> {
@@ -491,6 +500,38 @@ describe('tool-agnostic core cycle', () => {
       cursor_advanced: true,
     });
     expect(source.requests).toEqual([{ cursor: 'cursor-1' }]);
+    expect(state.cursor).toBe('cursor-2');
+    expect(state.meetings).toEqual([]);
+    expect(state.decisions).toEqual([]);
+    expect(state.approvals).toEqual([]);
+    expect(state.receipts).toEqual([]);
+    expect(state.processed.size).toBe(0);
+    expect(processor.contexts).toEqual([]);
+    expect(gate.requests).toEqual([]);
+    expect(surface.envelopes).toEqual([]);
+  });
+
+  it('advances past an excluded meeting without retaining or processing it', async () => {
+    const processor = new ProcessorFake();
+    const gate = new GateFake('approved');
+    const surface = new DeliverySurfaceFake();
+    const state = new StateFake();
+    state.meetingAdmission = 'excluded';
+
+    const result = await runCoreCycle(cycleInput({
+      decisionProcessor: processor,
+      approvalGate: gate,
+      deliverySurfaces: [surface],
+      state,
+    }));
+
+    expect(result).toMatchObject({
+      ok: true,
+      meetings_seen: 1,
+      meetings_processed: 0,
+      meetings_skipped: 1,
+      cursor_advanced: true,
+    });
     expect(state.cursor).toBe('cursor-2');
     expect(state.meetings).toEqual([]);
     expect(state.decisions).toEqual([]);

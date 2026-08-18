@@ -166,19 +166,23 @@ describe('SqliteCoreStateStore', () => {
     expect(await first.getSourceCursor(source)).toBeUndefined();
     expect(await first.hasProcessed(processingKey)).toBe(false);
     await first.setSourceCursor(source, 'cursor-1');
-    await first.saveMeeting(meeting);
-    await first.saveDecisionSet(meeting, decisions);
+    await first.admitAndSaveMeeting(meeting, processingKey);
+    await first.saveDecisionSet(processingKey, meeting, decisions);
     await first.saveApproval(processingKey, approval);
-    await first.saveDeliveryReceipt(envelope, receipt);
+    await first.saveDeliveryReceipt(processingKey, envelope, receipt);
     await first.markProcessed(processingKey);
     first.close();
 
     const reopened = new SqliteCoreStateStore(databasePath);
     expect(await reopened.getSourceCursor(source)).toBe('cursor-1');
     expect(await reopened.hasProcessed(processingKey)).toBe(true);
-    expect(await reopened.getDecisionSet(meeting, decisions.processor)).toEqual(
-      decisions,
-    );
+    expect(
+      await reopened.getDecisionSet(
+        processingKey,
+        meeting,
+        decisions.processor,
+      ),
+    ).toEqual(decisions);
     reopened.close();
 
     const db = new Database(databasePath, { readonly: true });
@@ -220,16 +224,16 @@ describe('SqliteCoreStateStore', () => {
     await store.setSourceCursor(source, 'cursor-1');
     await store.setSourceCursor({ ...source, version: '1.1.0' }, 'cursor-2');
 
-    await store.saveMeeting(meeting);
+    await store.admitAndSaveMeeting(meeting, processingKey);
     const updatedMeeting = { ...meeting, title: 'Updated architecture review' };
-    await store.saveMeeting(updatedMeeting);
+    await store.admitAndSaveMeeting(updatedMeeting, processingKey);
 
-    await store.saveDecisionSet(meeting, decisions);
+    await store.saveDecisionSet(processingKey, meeting, decisions);
     const updatedDecisions = {
       ...decisions,
       generated_at: '2026-07-16T17:02:30.000Z',
     };
-    await store.saveDecisionSet(meeting, updatedDecisions);
+    await store.saveDecisionSet(processingKey, meeting, updatedDecisions);
 
     await store.saveApproval(processingKey, approval);
     const updatedApproval: ApprovalDecision = {
@@ -241,14 +245,18 @@ describe('SqliteCoreStateStore', () => {
     };
     await store.saveApproval(processingKey, updatedApproval);
 
-    await store.saveDeliveryReceipt(envelope, receipt);
+    await store.saveDeliveryReceipt(processingKey, envelope, receipt);
     const updatedEnvelope = { ...envelope, id: 'envelope-2' };
     const updatedReceipt: DeliveryReceipt = {
       ...receipt,
       envelope_id: updatedEnvelope.id,
       external_id: 'message-2',
     };
-    await store.saveDeliveryReceipt(updatedEnvelope, updatedReceipt);
+    await store.saveDeliveryReceipt(
+      processingKey,
+      updatedEnvelope,
+      updatedReceipt,
+    );
     await store.markProcessed(processingKey);
     await store.markProcessed(processingKey);
 
@@ -306,7 +314,11 @@ describe('SqliteCoreStateStore', () => {
     };
 
     await expect(
-      store.saveDeliveryReceipt(envelope, mismatchedReceipt),
+      store.saveDeliveryReceipt(
+        'processing-1',
+        envelope,
+        mismatchedReceipt,
+      ),
     ).rejects.toThrow(/does not match its envelope/);
     store.close();
 
@@ -376,14 +388,26 @@ describe('SqliteCoreStateStore', () => {
       ],
     };
 
-    await store.saveDecisionSet(meeting, emptyDecisions);
-    await store.saveDecisionSet(otherMeeting, otherDecisions);
-
-    expect(await store.getDecisionSet(meeting, decisions.processor)).toEqual(
-      emptyDecisions,
+    await store.saveDecisionSet('processing-primary', meeting, emptyDecisions);
+    await store.saveDecisionSet(
+      'processing-secondary',
+      otherMeeting,
+      otherDecisions,
     );
+
     expect(
-      await store.getDecisionSet(otherMeeting, decisions.processor),
+      await store.getDecisionSet(
+        'processing-primary',
+        meeting,
+        decisions.processor,
+      ),
+    ).toEqual(emptyDecisions);
+    expect(
+      await store.getDecisionSet(
+        'processing-secondary',
+        otherMeeting,
+        decisions.processor,
+      ),
     ).toEqual(otherDecisions);
     store.close();
   });
@@ -397,9 +421,9 @@ describe('SqliteCoreStateStore', () => {
       external_id: null,
       retryable: true,
     };
-    await store.saveDeliveryReceipt(envelope, uncertainReceipt);
-    await store.saveDeliveryReceipt(envelope, receipt);
-    await store.saveDeliveryReceipt(envelope, uncertainReceipt);
+    await store.saveDeliveryReceipt('processing-1', envelope, uncertainReceipt);
+    await store.saveDeliveryReceipt('processing-1', envelope, receipt);
+    await store.saveDeliveryReceipt('processing-1', envelope, uncertainReceipt);
     store.close();
 
     const db = new Database(databasePath, { readonly: true });

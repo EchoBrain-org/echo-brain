@@ -193,8 +193,18 @@ export async function runCoreCycle(
     let stage: CoreCycleFailure['stage'] = 'processing';
     try {
       assertMeetingSource(meeting, dependencies.meetingSource);
-      await dependencies.state.saveMeeting(meeting);
+      if (
+        (await dependencies.state.admitAndSaveMeeting(
+          meeting,
+          processingKey,
+        )) ===
+        'excluded'
+      ) {
+        meetingsSkipped += 1;
+        continue;
+      }
       let decisions = await dependencies.state.getDecisionSet(
+        processingKey,
         meeting,
         dependencies.decisionProcessor.identity,
       );
@@ -215,7 +225,11 @@ export async function runCoreCycle(
             ),
         );
         assertProcessorResult(meeting, dependencies.decisionProcessor, decisions);
-        await dependencies.state.saveDecisionSet(meeting, decisions);
+        await dependencies.state.saveDecisionSet(
+          processingKey,
+          meeting,
+          decisions,
+        );
       }
       assertProcessorResult(meeting, dependencies.decisionProcessor, decisions);
       const brief = compileDecisionBrief(createId(), meeting, decisions);
@@ -288,7 +302,11 @@ export async function runCoreCycle(
               await deliverySurface.publish(envelope, { signal }),
           );
           assertDeliveryReceipt(envelope, receipt);
-          await dependencies.state.saveDeliveryReceipt(envelope, receipt);
+          await dependencies.state.saveDeliveryReceipt(
+            processingKey,
+            envelope,
+            receipt,
+          );
           if (receipt.status !== 'delivered') {
             const message =
               receipt.message ?? `delivery ended with status ${receipt.status}`;

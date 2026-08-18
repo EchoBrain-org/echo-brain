@@ -82,6 +82,23 @@ function downgradeToPreActivationSchema(databasePath: string): void {
   const database = new Database(databasePath);
   try {
     database.exec(`
+      DROP TRIGGER authority_processing_member_exclusions_immutable_update;
+      DROP TRIGGER authority_processing_delivery_receipts_immutable_update;
+      DROP TRIGGER authority_processing_processed_markers_delete_denied;
+      DROP TRIGGER authority_processing_processed_markers_immutable_update;
+      DROP TRIGGER authority_processing_resolutions_immutable_update;
+      DROP TRIGGER authority_processing_slots_immutable_update;
+      DROP TRIGGER authority_processing_candidates_immutable_update;
+      DROP TRIGGER authority_processing_source_owner_bindings_delete_denied;
+      DROP TRIGGER authority_processing_source_owner_bindings_immutable_update;
+      DROP TABLE authority_processing_delivery_receipts;
+      DROP TABLE authority_processing_resolutions;
+      DROP TABLE authority_processing_slots;
+      DROP TABLE authority_processing_candidates;
+      DROP TABLE authority_processing_processed_markers;
+      DROP TABLE authority_processing_source_cursors;
+      DROP TABLE authority_processing_member_exclusions;
+      DROP TABLE authority_processing_source_owner_bindings;
       DROP TRIGGER authority_person_read_decision_audit_immutable_update;
       DROP TRIGGER authority_person_read_decision_audit_delete_denied;
       DROP TABLE authority_person_read_decision_audit;
@@ -298,7 +315,7 @@ describe('organization-member recording activation lifecycle', () => {
     ).rejects.toThrow('fault:after-audit');
 
     const rolledBack = new Database(runtimeConfig.database_path);
-    expect(rolledBack.pragma('user_version', { simple: true })).toBe(10);
+    expect(rolledBack.pragma('user_version', { simple: true })).toBe(11);
     expect(
       (
         rolledBack

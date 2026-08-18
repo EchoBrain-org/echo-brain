@@ -168,12 +168,17 @@ export class SyntheticMonotonicCoreStateStore implements CoreStateStore {
     return this.processed.has(processingKey);
   }
 
-  async saveMeeting(meeting: MeetingDocument): Promise<void> {
+  async admitAndSaveMeeting(
+    meeting: MeetingDocument,
+    _processingKey: string,
+  ): Promise<'saved'> {
     const key = syntheticObservationId(meeting);
     if (!this.meetings.has(key)) this.meetings.set(key, clone(meeting));
+    return 'saved';
   }
 
   async getDecisionSet(
+    _processingKey: string,
     meeting: MeetingDocument,
     processor: { adapter_id: string; instance_id: string; version: string },
   ): Promise<DecisionSet | undefined> {
@@ -181,7 +186,11 @@ export class SyntheticMonotonicCoreStateStore implements CoreStateStore {
     return decisions === undefined ? undefined : clone(decisions);
   }
 
-  async saveDecisionSet(meeting: MeetingDocument, decisions: DecisionSet): Promise<void> {
+  async saveDecisionSet(
+    _processingKey: string,
+    meeting: MeetingDocument,
+    decisions: DecisionSet,
+  ): Promise<void> {
     const key = decisionStoreKey(meeting, decisions.processor);
     if (!this.decisions.has(key)) this.decisions.set(key, clone(decisions));
   }
@@ -201,7 +210,11 @@ export class SyntheticMonotonicCoreStateStore implements CoreStateStore {
     }
   }
 
-  async saveDeliveryReceipt(envelope: DeliveryEnvelope, receipt: DeliveryReceipt): Promise<void> {
+  async saveDeliveryReceipt(
+    _processingKey: string,
+    envelope: DeliveryEnvelope,
+    receipt: DeliveryReceipt,
+  ): Promise<void> {
     if (!this.receipts.has(envelope.idempotency_key)) {
       this.receipts.set(envelope.idempotency_key, clone(receipt));
     }
@@ -410,7 +423,11 @@ export function createSyntheticReplayHarness(
         const observationId = syntheticObservationId(meeting);
         const processingKey = meetingProcessingKey(meeting, processor);
         const approvalId = decisionApprovalId(processingKey);
-        const decisions = await state.getDecisionSet(meeting, processor.identity);
+        const decisions = await state.getDecisionSet(
+          processingKey,
+          meeting,
+          processor.identity,
+        );
         const approval = await state.getApproval(processingKey);
         const deliveryKey =
           approval?.status === 'approved'

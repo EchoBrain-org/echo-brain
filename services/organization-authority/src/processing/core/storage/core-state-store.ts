@@ -4,6 +4,9 @@ import type { DecisionSet } from '../contracts/decision.js';
 import type { DeliveryEnvelope, DeliveryReceipt } from '../contracts/delivery.js';
 import type { ApprovalDecision } from '../approval/approval-gate.js';
 
+/** The atomic pre-record admission result for one canonical meeting. */
+export type MeetingPreRecordAdmission = 'saved' | 'excluded';
+
 export interface CoreStateStore {
   getSourceCursor(source: AdapterIdentity & { kind: 'meeting-source' }): Promise<AdapterCursor | undefined>;
   setSourceCursor(
@@ -11,14 +14,31 @@ export interface CoreStateStore {
     cursor: AdapterCursor,
   ): Promise<void>;
   hasProcessed(processingKey: string): Promise<boolean>;
-  saveMeeting(meeting: MeetingDocument): Promise<void>;
+  /**
+   * Checks the member-owned ingestion valve and stores the raw meeting at one
+   * linearization point. Implementations without a valve always return
+   * `saved`; an Authority store must not split the check from the insert.
+   */
+  admitAndSaveMeeting(
+    meeting: MeetingDocument,
+    processingKey: string,
+  ): Promise<MeetingPreRecordAdmission>;
   getDecisionSet(
+    processingKey: string,
     meeting: MeetingDocument,
     processor: AdapterIdentity & { kind: 'decision-processor' },
   ): Promise<DecisionSet | undefined>;
-  saveDecisionSet(meeting: MeetingDocument, decisions: DecisionSet): Promise<void>;
+  saveDecisionSet(
+    processingKey: string,
+    meeting: MeetingDocument,
+    decisions: DecisionSet,
+  ): Promise<void>;
   getApproval(processingKey: string): Promise<ApprovalDecision | undefined>;
   saveApproval(processingKey: string, decision: ApprovalDecision): Promise<void>;
-  saveDeliveryReceipt(envelope: DeliveryEnvelope, receipt: DeliveryReceipt): Promise<void>;
+  saveDeliveryReceipt(
+    processingKey: string,
+    envelope: DeliveryEnvelope,
+    receipt: DeliveryReceipt,
+  ): Promise<void>;
   markProcessed(processingKey: string): Promise<void>;
 }
