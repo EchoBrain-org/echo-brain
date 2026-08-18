@@ -117,9 +117,15 @@
       "allowed_node_builtins": ["buffer", "crypto", "http", "net", "util"]
     },
     {
-      "name": "authority-composition-may-wire-all-layers",
+      "name": "authority-composition-may-wire-pre-processing-layers",
       "from": "services/organization-authority/src/composition/**",
-      "allowed_imports": ["services/organization-authority/src/**"],
+      "allowed_imports": [
+        "services/organization-authority/src/adapters/**",
+        "services/organization-authority/src/application/**",
+        "services/organization-authority/src/composition/**",
+        "services/organization-authority/src/domain/**",
+        "services/organization-authority/src/presentation/**"
+      ],
       "allowed_workspace_packages": [
         "@echo-brain/federation-protocol",
         "@echo-brain/organization-control-plane",

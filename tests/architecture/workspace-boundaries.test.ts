@@ -891,6 +891,25 @@ describe('workspace source boundaries', () => {
     );
   });
 
+  it('rejects Authority composition imports into processing core', () => {
+    const fixture = fixtureRepository();
+    const compositionPath = join(
+      fixture,
+      'services/organization-authority/src/composition/config.ts',
+    );
+    writeFileSync(
+      compositionPath,
+      `${readFileSync(compositionPath, 'utf8')}\nexport * from '../processing/core/index.js';\n`,
+    );
+
+    const result = runBoundary(fixture);
+
+    expect(result.status).not.toBe(0);
+    expect(result.stdout + result.stderr).toContain(
+      "@echo-brain/organization-authority: layer rule 'authority-composition-may-wire-pre-processing-layers' rejects edge: services/organization-authority/src/composition/config.ts -> services/organization-authority/src/processing/core/index.ts",
+    );
+  });
+
   it('applies package and builtin allowlists to root product layers', () => {
     const fixture = fixtureRepository();
     writeFileSync(
