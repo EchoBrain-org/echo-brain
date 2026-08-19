@@ -29,6 +29,13 @@ import {
   meetingProcessingKey,
   runCoreCycle,
 } from '../../../src/processing/core/processing/run-core-cycle.js';
+import type {
+  ApprovalDecisionStore,
+  FrozenOrganizationMemberApprovalPresentationContract,
+  FrozenSlackApprovalPresentationContract,
+} from '../../../src/processing/adapters/approval-surfaces/slack-reactions/slack-reactions-approval-surface.js';
+import type { FrozenOrganizationRecordEnvelopeStore } from '../../../src/processing/record/adapters/organization-member-record-first-delivery.js';
+import type { BuiltOrganizationRecordEnvelope } from '../../../src/processing/record/ports.js';
 import {
   AuthorityProcessingApprovalGate,
   SqliteAuthorityProcessingStore,
@@ -148,6 +155,74 @@ function request(
     decisions: set,
     brief: brief(input, set, briefId),
     requested_at: requestedAt,
+  };
+}
+
+const SHA256_A = `sha256:${'a'.repeat(64)}`;
+const SHA256_B = `sha256:${'b'.repeat(64)}`;
+
+function reviewerPresentationContract(
+  overrides: Partial<FrozenSlackApprovalPresentationContract> = {},
+): FrozenSlackApprovalPresentationContract {
+  return {
+    schema_version: 1,
+    kind: 'echo-slack-approval-presentation-contract',
+    mode: 'restricted-reviewer-v1',
+    adapter_id: 'slack-reactions',
+    adapter_instance_id: 'team-decisions',
+    adapter_version: '1.0.0',
+    channel_id: 'C123',
+    reviewer_slack_user_id: 'U123',
+    reviewer_name: 'Reviewer',
+    credential_ref: 'file:/private/slack-token',
+    credential_fingerprint_sha256: SHA256_A,
+    approve_reaction: 'white_check_mark',
+    reject_reaction: 'x',
+    reviewer_release_draft_sha256: SHA256_A,
+    approval_presentation_sha256: SHA256_B,
+    ...overrides,
+  };
+}
+
+function organizationMemberPresentationContract(): FrozenOrganizationMemberApprovalPresentationContract {
+  return {
+    schema_version: 1,
+    kind: 'echo-slack-approval-presentation-contract',
+    mode: 'organization-member-readable-v1',
+    adapter_id: 'slack-reactions',
+    adapter_instance_id: 'team-decisions',
+    adapter_version: '1.0.0',
+    channel_id: 'C123',
+    reviewer_slack_user_id: 'U123',
+    reviewer_name: 'Reviewer',
+    credential_ref: 'file:/private/slack-token',
+    credential_fingerprint_sha256: SHA256_A,
+    approve_reaction: 'white_check_mark',
+    reject_reaction: 'x',
+    policy_id: 'organization-member-readable-v1',
+    policy_contract_sha256: SHA256_A,
+    release_draft_sha256: SHA256_A,
+    approval_presentation_sha256: SHA256_B,
+  };
+}
+
+function signedRecordEnvelope(
+  approvalId: string,
+  envelopeId = 'rec_00000000-0000-4000-8000-000000000001',
+  signature = 'signed-envelope-bytes',
+): BuiltOrganizationRecordEnvelope {
+  return {
+    envelope_id: envelopeId,
+    idempotency_key: approvalId,
+    event_type: 'approval',
+    envelope: {
+      schema_version: 3,
+      kind: 'echo-organization-record-envelope',
+      envelope_id: envelopeId,
+      idempotency_key: approvalId,
+      event_type: 'approval',
+      integrity: { signature_der_base64: signature },
+    } as unknown as BuiltOrganizationRecordEnvelope['envelope'],
   };
 }
 
@@ -730,6 +805,296 @@ describe('SqliteAuthorityProcessingStore', () => {
       '1 through 100',
     );
     store.close();
+  });
+
+  it('implements the Slack store port with create-once contracts and publications', async () => {
+    const context = setup();
+    const store = context.create();
+    const slackStore: ApprovalDecisionStore = store;
+    const input = meeting();
+    const set = decisions(input);
+    const processingKey = 'slack-store-contract';
+    await store.admitAndSaveMeeting(input, processingKey);
+    await store.saveDecisionSet(processingKey, input, set);
+    const staged = await slackStore.ensureRequested(
+      request(
+        processingKey,
+        input,
+        set,
+        '2026-08-18T00:01:00.000Z',
+        'slack-brief',
+      ),
+    );
+    expect(staged).toMatchObject({
+      status: 'pending',
+      brief: { id: 'slack-brief' },
+      published: [],
+    });
+
+    const reviewer = reviewerPresentationContract();
+    await expect(
+      slackStore.freezeApprovalPresentationContract?.({
+        approvalId: staged.approval_id,
+        contract: reviewer,
+      }),
+    ).resolves.toEqual(reviewer);
+    await expect(
+      slackStore.freezeApprovalPresentationContract?.({
+        approvalId: staged.approval_id,
+        contract: reviewer,
+      }),
+    ).resolves.toEqual(reviewer);
+    expect(
+      slackStore.readApprovalPresentationContract?.(staged.approval_id),
+    ).toEqual(reviewer);
+    expect(
+      store.readFrozenApprovalPresentationContract(staged.approval_id),
+    ).toEqual(reviewer);
+    await expect(
+      slackStore.freezeApprovalPresentationContract?.({
+        approvalId: staged.approval_id,
+        contract: reviewerPresentationContract({ reviewer_name: 'Changed' }),
+      }),
+    ).rejects.toThrow('different bytes');
+
+    const published = await slackStore.recordPublished({
+      processingKey,
+      surface: 'slack-authority-v1',
+      reference: { channel: 'C123', message_ts: '1700000000.000001' },
+    });
+    expect(published.published).toEqual([
+      {
+        surface: 'slack-authority-v1',
+        reference: { channel: 'C123', message_ts: '1700000000.000001' },
+      },
+    ]);
+    await expect(
+      slackStore.recordPublished({
+        processingKey,
+        surface: 'slack-authority-v1',
+        reference: { channel: 'C123', message_ts: '1700000000.000001' },
+      }),
+    ).resolves.toEqual(published);
+    await expect(
+      slackStore.recordPublished({
+        processingKey,
+        surface: 'slack-authority-v1',
+        reference: { channel: 'C123', message_ts: '1700000000.000002' },
+      }),
+    ).rejects.toThrow('already published different bytes');
+
+    const secondInput = meeting(2);
+    const secondSet = decisions(secondInput);
+    const secondKey = 'slack-store-organization-member-contract';
+    await store.admitAndSaveMeeting(secondInput, secondKey);
+    await store.saveDecisionSet(secondKey, secondInput, secondSet);
+    const second = await slackStore.ensureRequested(
+      request(
+        secondKey,
+        secondInput,
+        secondSet,
+        '2026-08-18T00:01:01.000Z',
+      ),
+    );
+    const organizationMember = organizationMemberPresentationContract();
+    await expect(
+      store.freezeApprovalPresentationContract({
+        approvalId: second.approval_id,
+        contract: organizationMember,
+      }),
+    ).resolves.toEqual(organizationMember);
+    expect(
+      store.readFrozenApprovalPresentationContract(second.approval_id),
+    ).toEqual(organizationMember);
+    expect(store.readApprovalPresentationContract(second.approval_id)).toBeNull();
+    store.close();
+  });
+
+  it('resolves Slack approval once with durable authorization metadata', async () => {
+    const context = setup();
+    const store = context.create();
+    const slackStore: ApprovalDecisionStore = store;
+    const input = meeting();
+    const set = decisions(input);
+    const processingKey = 'slack-store-resolution';
+    await store.admitAndSaveMeeting(input, processingKey);
+    await store.saveDecisionSet(processingKey, input, set);
+    const staged = await slackStore.ensureRequested(
+      request(
+        processingKey,
+        input,
+        set,
+        '2026-08-18T00:01:00.000Z',
+        'approved-slack-brief',
+      ),
+    );
+    const metadata = {
+      authorization: {
+        schema_version: 1,
+        kind: 'person-slack-approval-evidence',
+        identity_link_id: 'clm_00000000-0000-4000-8000-000000000001',
+      },
+    } as const;
+    context.setNow('2026-08-18T00:02:00.000Z');
+    const resolved = await slackStore.resolve({
+      approvalId: staged.approval_id,
+      status: 'approved',
+      reviewedBy: 'Reviewer',
+      reason: 'Confirmed in the Slack thread',
+      surface: 'slack-organization-member-readable-v1',
+      metadata,
+    });
+    expect(resolved).toMatchObject({
+      approval_id: staged.approval_id,
+      status: 'approved',
+      reviewed_at: '2026-08-18T00:02:00.000Z',
+      reviewed_by: 'Reviewer',
+      reason: 'Confirmed in the Slack thread',
+      brief: { id: 'approved-slack-brief' },
+    });
+    expect(await store.getApproval(processingKey)).toEqual({
+      status: 'approved',
+      reviewed_at: '2026-08-18T00:02:00.000Z',
+      reviewed_by: 'Reviewer',
+      reason: 'Confirmed in the Slack thread',
+      approved_brief: request(
+        processingKey,
+        input,
+        set,
+        '2026-08-18T00:01:00.000Z',
+        'approved-slack-brief',
+      ).brief,
+    });
+    expect(store.readApprovalResolutionMetadata(staged.approval_id)).toEqual({
+      approval_id: staged.approval_id,
+      surface: 'slack-organization-member-readable-v1',
+      metadata,
+      resolved_at: '2026-08-18T00:02:00.000Z',
+    });
+
+    context.setNow('2026-08-18T00:03:00.000Z');
+    await expect(
+      slackStore.resolve({
+        approvalId: staged.approval_id,
+        status: 'approved',
+        reviewedBy: 'Reviewer',
+        reason: 'Confirmed in the Slack thread',
+        surface: 'slack-organization-member-readable-v1',
+        metadata,
+      }),
+    ).resolves.toEqual(resolved);
+    await expect(
+      slackStore.resolve({
+        approvalId: staged.approval_id,
+        status: 'approved',
+        reviewedBy: 'Reviewer',
+        reason: 'Confirmed in the Slack thread',
+        surface: 'slack-organization-member-readable-v1',
+        metadata: { authorization: { changed: true } },
+      }),
+    ).rejects.toThrow('different resolution metadata');
+    await expect(
+      slackStore.resolve({
+        approvalId: staged.approval_id,
+        status: 'rejected',
+        reviewedBy: 'Reviewer',
+        reason: 'Changed outcome',
+        surface: 'slack',
+        metadata,
+      }),
+    ).rejects.toThrow('different terminal resolution');
+    store.close();
+
+    const reopened = context.create();
+    await reopened.initialize();
+    expect(reopened.readApprovalResolutionMetadata(staged.approval_id)).toEqual({
+      approval_id: staged.approval_id,
+      surface: 'slack-organization-member-readable-v1',
+      metadata,
+      resolved_at: '2026-08-18T00:02:00.000Z',
+    });
+    reopened.close();
+  });
+
+  it('freezes one signed record envelope across concurrent retries and restarts', async () => {
+    const context = setup();
+    const store = context.create();
+    const recordStore: FrozenOrganizationRecordEnvelopeStore = store;
+    const input = meeting();
+    const set = decisions(input);
+    const processingKey = 'frozen-record-envelope';
+    await store.admitAndSaveMeeting(input, processingKey);
+    await store.saveDecisionSet(processingKey, input, set);
+    const staged = await store.ensureRequested(
+      request(
+        processingKey,
+        input,
+        set,
+        '2026-08-18T00:01:00.000Z',
+        'frozen-record-brief',
+      ),
+    );
+    const first = signedRecordEnvelope(staged.approval_id);
+    const divergent = signedRecordEnvelope(
+      staged.approval_id,
+      'rec_00000000-0000-4000-8000-000000000002',
+      'different-signed-envelope-bytes',
+    );
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    let firstCreates = 0;
+    let secondCreates = 0;
+    const firstRetry = recordStore.getOrCreate(staged.approval_id, async () => {
+      firstCreates += 1;
+      await gate;
+      return first;
+    });
+    const concurrentRetry = recordStore.getOrCreate(
+      staged.approval_id,
+      async () => {
+        secondCreates += 1;
+        return divergent;
+      },
+    );
+    release();
+    const [created, concurrent] = await Promise.all([
+      firstRetry,
+      concurrentRetry,
+    ]);
+    expect(created).toEqual(first);
+    expect(concurrent).toEqual(first);
+    expect(firstCreates).toBe(1);
+    expect(secondCreates).toBe(0);
+    expect(
+      store.readFrozenOrganizationRecordEnvelope(staged.approval_id),
+    ).toEqual(first);
+    await expect(
+      store.freezeOrganizationRecordEnvelope({
+        approvalId: staged.approval_id,
+        record: first,
+      }),
+    ).resolves.toEqual(first);
+    await expect(
+      store.freezeOrganizationRecordEnvelope({
+        approvalId: staged.approval_id,
+        record: divergent,
+      }),
+    ).rejects.toThrow('different frozen record envelope');
+    store.close();
+
+    const reopened = context.create();
+    const reopenedPort: FrozenOrganizationRecordEnvelopeStore = reopened;
+    let restartCreates = 0;
+    await expect(
+      reopenedPort.getOrCreate(staged.approval_id, async () => {
+        restartCreates += 1;
+        return divergent;
+      }),
+    ).resolves.toEqual(first);
+    expect(restartCreates).toBe(0);
+    reopened.close();
   });
 
   it('stages a normal core pending cycle and preserves the first request across retry ids and times', async () => {

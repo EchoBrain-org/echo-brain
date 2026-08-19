@@ -63,6 +63,7 @@ const liveCalendarShapeDetail: GranolaNoteDetail = {
   title: "Live calendar shape",
   created_at: "2026-07-15T16:00:00.000Z",
   updated_at: "2026-07-15T17:00:00.000Z",
+  summary_text: "Preserve the live calendar fields.",
   calendar_event: {
     calendar_event_id: "calendar-event-123",
     event_title: "Live calendar shape",
@@ -94,6 +95,7 @@ const documentedSpeakerShapeDetail = {
   title: "Documented speaker shape",
   created_at: "2026-07-15T18:00:00.000Z",
   updated_at: "2026-07-15T19:00:00.000Z",
+  summary_text: "Documented speaker-shape summary.",
   owner: { name: "Note Owner", email: "owner@example.com" },
   transcript: [
     {
@@ -373,6 +375,102 @@ describe("Granola canonical meeting mapping", () => {
     );
   });
 
+  it("skips notes without both generated summary and transcript content", async () => {
+    const missingSummary: GranolaNoteDetail = {
+      ...detail,
+      id: "note-missing-summary",
+      summary_markdown: null,
+      summary_text: null,
+    };
+    const missingTranscript: GranolaNoteDetail = {
+      ...detail,
+      id: "note-missing-transcript",
+      transcript: [{ text: "   " }],
+    };
+    const client = new FakeClient(
+      [
+        {
+          notes: [
+            {
+              id: missingSummary.id,
+              updated_at: missingSummary.updated_at,
+            },
+            {
+              id: missingTranscript.id,
+              updated_at: missingTranscript.updated_at,
+            },
+          ],
+          hasMore: false,
+          cursor: null,
+        },
+      ],
+      new Map([
+        [missingSummary.id, missingSummary],
+        [missingTranscript.id, missingTranscript],
+      ]),
+    );
+
+    const batch = await new GranolaMeetingSourceAdapter(config, {
+      client,
+      now: () => "2026-07-16T00:00:00.000Z",
+    }).pull({});
+
+    expect(client.detailCalls).toEqual([
+      missingSummary.id,
+      missingTranscript.id,
+    ]);
+    expect(batch.meetings).toEqual([]);
+  });
+
+  it("admits a skipped note after Granola publishes a completed revision", async () => {
+    const partial: GranolaNoteDetail = {
+      ...detail,
+      id: "note-completes-later",
+      updated_at: "2026-07-15T17:00:00.000Z",
+      transcript: null,
+    };
+    const completed: GranolaNoteDetail = {
+      ...partial,
+      updated_at: "2026-07-15T18:00:00.000Z",
+      transcript: [{ text: "The transcript is now complete." }],
+    };
+    const details = new Map([[partial.id, partial]]);
+    const client = new FakeClient(
+      [
+        {
+          notes: [{ id: partial.id, updated_at: partial.updated_at }],
+          hasMore: false,
+          cursor: null,
+        },
+        {
+          notes: [{ id: completed.id, updated_at: completed.updated_at }],
+          hasMore: false,
+          cursor: null,
+        },
+      ],
+      details,
+    );
+    const adapter = new GranolaMeetingSourceAdapter(config, {
+      client,
+      now: () => "2026-07-16T00:00:00.000Z",
+    });
+
+    const first = await adapter.pull({});
+    details.set(completed.id, completed);
+    const second = await adapter.pull({ cursor: first.next_cursor });
+
+    expect(first.meetings).toEqual([]);
+    expect(second.meetings).toHaveLength(1);
+    expect(second.meetings[0]).toMatchObject({
+      id: "granola:primary:note-completes-later",
+      capture: { state: "complete" },
+    });
+    expect(client.listCalls).toEqual([
+      { page_size: 2 },
+      { updated_after: "2026-07-15T16:59:59.000Z", page_size: 2 },
+    ]);
+  });
+
   it("stores one summary form: Markdown wins and the plain-text copy is not duplicated", async () => {
     const bothFormsDetail: GranolaNoteDetail = {
       id: "note-both-forms",
@@ -382,7 +480,7 @@ describe("Granola canonical meeting mapping", () => {
       updated_at: "2026-07-15T17:00:00.000Z",
       summary_markdown: "## Decision\nShip the canonical bridge.",
       summary_text: "Decision\nShip the canonical bridge.",
-      transcript: [],
+      transcript: [{ text: "Transcript available." }],
     };
     const response: GranolaListResponse = {
       notes: [
@@ -399,15 +497,13 @@ describe("Granola canonical meeting mapping", () => {
       now: () => "2026-07-16T00:00:00.000Z",
     }).pull({ limit: 1 });
 
-    expect(batch.meetings[0]!.content).toEqual([
-      {
-        id: "note-both-forms:summary",
-        kind: "summary",
-        text: "## Decision\nShip the canonical bridge.",
-        origin: "source_ai",
-        metadata: { format: "markdown" },
-      },
-    ]);
+    expect(batch.meetings[0]!.content[0]).toEqual({
+      id: "note-both-forms:summary",
+      kind: "summary",
+      text: "## Decision\nShip the canonical bridge.",
+      origin: "source_ai",
+      metadata: { format: "markdown" },
+    });
   });
 
   it("falls back to the plain-text summary when Granola sends no Markdown", async () => {
@@ -418,7 +514,7 @@ describe("Granola canonical meeting mapping", () => {
       created_at: "2026-07-15T16:00:00.000Z",
       updated_at: "2026-07-15T17:00:00.000Z",
       summary_text: "Decision: ship the canonical bridge.",
-      transcript: [],
+      transcript: [{ text: "Transcript available." }],
     };
     const response: GranolaListResponse = {
       notes: [
@@ -435,15 +531,13 @@ describe("Granola canonical meeting mapping", () => {
       now: () => "2026-07-16T00:00:00.000Z",
     }).pull({ limit: 1 });
 
-    expect(batch.meetings[0]!.content).toEqual([
-      {
-        id: "note-plain-only:summary",
-        kind: "summary",
-        text: "Decision: ship the canonical bridge.",
-        origin: "source_ai",
-        metadata: { format: "text" },
-      },
-    ]);
+    expect(batch.meetings[0]!.content[0]).toEqual({
+      id: "note-plain-only:summary",
+      kind: "summary",
+      text: "Decision: ship the canonical bridge.",
+      origin: "source_ai",
+      metadata: { format: "text" },
+    });
   });
 
   it("normalizes the live Granola calendar shape and links its people to transcript turns", async () => {
@@ -494,7 +588,9 @@ describe("Granola canonical meeting mapping", () => {
         }),
       ]),
     );
-    expect(meeting.content).toEqual([
+    expect(
+      meeting.content.filter((block) => block.kind === "transcript"),
+    ).toEqual([
       expect.objectContaining({
         id: "note-live-calendar-shape:transcript:0",
         speaker_participant_id: "email:founder@example.com",
@@ -533,7 +629,10 @@ describe("Granola canonical meeting mapping", () => {
     }).pull({ limit: 1 });
 
     const meeting = first.meetings[0]!;
-    const speakerReferences = meeting.content.map(
+    const transcript = meeting.content.filter(
+      (block) => block.kind === "transcript",
+    );
+    const speakerReferences = transcript.map(
       (block) => block.speaker_participant_id,
     );
     expect(speakerReferences).toHaveLength(6);
@@ -547,7 +646,9 @@ describe("Granola canonical meeting mapping", () => {
     expect(speakerReferences[4]).toBeDefined();
     expect(speakerReferences[3]).not.toBe(speakerReferences[4]);
     expect(
-      second.meetings[0]!.content.map((block) => block.speaker_participant_id),
+      second.meetings[0]!.content
+        .filter((block) => block.kind === "transcript")
+        .map((block) => block.speaker_participant_id),
     ).toEqual(speakerReferences);
 
     expect(meeting.participants).toHaveLength(2);
@@ -571,21 +672,21 @@ describe("Granola canonical meeting mapping", () => {
       ).not.toBe(true);
     }
 
-    expect(meeting.content[0]?.metadata).toMatchObject({
+    expect(transcript[0]?.metadata).toMatchObject({
       source_index: 0,
       granola: {
         speaker: { source: "microphone" },
         speaker_resolution: "audio_channel",
       },
     });
-    expect(meeting.content[1]?.metadata).toMatchObject({
+    expect(transcript[1]?.metadata).toMatchObject({
       source_index: 1,
       granola: {
         speaker: { source: "speaker" },
         speaker_resolution: "audio_channel",
       },
     });
-    expect(meeting.content[3]?.metadata).toMatchObject({
+    expect(transcript[3]?.metadata).toMatchObject({
       source_index: 3,
       granola: {
         speaker: { source: "microphone", diarization_label: "Speaker A" },

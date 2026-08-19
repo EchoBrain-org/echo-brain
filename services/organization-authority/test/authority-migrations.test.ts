@@ -25,8 +25,12 @@ const AUTHORITY_TABLES = [
   'authority_person_session_credentials',
   'authority_person_session_families',
   'authority_principals',
+  'authority_processing_approval_presentation_contracts',
+  'authority_processing_approval_publications',
+  'authority_processing_approval_resolution_metadata',
   'authority_processing_candidates',
   'authority_processing_delivery_receipts',
+  'authority_processing_frozen_record_envelopes',
   'authority_processing_member_exclusions',
   'authority_processing_processed_markers',
   'authority_processing_resolutions',
@@ -58,7 +62,7 @@ describe('organization authority database migrations', () => {
     openAuthorityDatabase(path).close();
 
     const database = new Database(path, { readonly: true });
-    expect(database.pragma('user_version', { simple: true })).toBe(15);
+    expect(database.pragma('user_version', { simple: true })).toBe(17);
     const tables = database
       .prepare(
         `SELECT name FROM sqlite_master
@@ -120,6 +124,10 @@ describe('organization authority database migrations', () => {
         'authority_processing_candidates',
         'authority_processing_slots',
         'authority_processing_resolutions',
+        'authority_processing_approval_presentation_contracts',
+        'authority_processing_approval_publications',
+        'authority_processing_approval_resolution_metadata',
+        'authority_processing_frozen_record_envelopes',
         'authority_processing_processed_markers',
         'authority_processing_delivery_receipts',
         'authority_processing_member_exclusions',
@@ -183,6 +191,39 @@ describe('organization authority database migrations', () => {
         'resolution_json',
         'resolved_at',
         'retain_until',
+      ],
+      authority_processing_approval_presentation_contracts: [
+        'processing_key',
+        'approval_id',
+        'contract_mode',
+        'contract_sha256',
+        'contract_json',
+        'created_at',
+      ],
+      authority_processing_approval_publications: [
+        'processing_key',
+        'approval_id',
+        'surface',
+        'reference_sha256',
+        'reference_json',
+        'published_at',
+      ],
+      authority_processing_approval_resolution_metadata: [
+        'processing_key',
+        'approval_id',
+        'surface',
+        'metadata_sha256',
+        'metadata_json',
+        'created_at',
+      ],
+      authority_processing_frozen_record_envelopes: [
+        'processing_key',
+        'approval_id',
+        'envelope_id',
+        'event_type',
+        'envelope_sha256',
+        'envelope_json',
+        'created_at',
       ],
       authority_processing_processed_markers: [
         'processing_key',
@@ -291,7 +332,7 @@ describe('organization authority database migrations', () => {
 
     openAuthorityDatabase(path).close();
     const upgraded = new Database(path);
-    expect(upgraded.pragma('user_version', { simple: true })).toBe(15);
+    expect(upgraded.pragma('user_version', { simple: true })).toBe(17);
     const tables = upgraded
       .prepare(
         `SELECT name FROM sqlite_master
@@ -540,11 +581,11 @@ describe('organization authority database migrations', () => {
   it('rejects a database newer than this authority binary', () => {
     const path = databasePath();
     const future = new Database(path);
-    future.pragma('user_version = 16');
+    future.pragma('user_version = 18');
     future.close();
 
     expect(() => openAuthorityDatabase(path)).toThrow(
-      'newer than supported schema 15',
+      'newer than supported schema 17',
     );
   });
 });

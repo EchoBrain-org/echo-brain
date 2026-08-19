@@ -27,6 +27,7 @@ export {
   SLACK_ORGANIZATION_TOOL_PROFILE,
   SLACK_ORGANIZATION_TOOL_REQUIRED_SCOPES,
   type ActiveSlackOrganizationTool,
+  type ActiveSlackApprovalRuntimeBinding,
   type BeginPersonSlackIdentityLinkChallengeInput,
   type BeginSlackIdentityLinkChallengeInput,
   type BegunSlackIdentityLinkChallenge,

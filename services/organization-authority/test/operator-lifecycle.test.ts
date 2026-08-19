@@ -404,8 +404,12 @@ describe('organization authority operator lifecycle', () => {
       'authority_person_session_credentials',
       'authority_person_session_families',
       'authority_principals',
+      'authority_processing_approval_presentation_contracts',
+      'authority_processing_approval_publications',
+      'authority_processing_approval_resolution_metadata',
       'authority_processing_candidates',
       'authority_processing_delivery_receipts',
+      'authority_processing_frozen_record_envelopes',
       'authority_processing_member_exclusions',
       'authority_processing_processed_markers',
       'authority_processing_resolutions',
@@ -977,6 +981,25 @@ describe('organization authority operator lifecycle', () => {
     ).toBe(false);
   });
 
+  it('owns the live meeting worker for the full server lifecycle', async () => {
+    const fixture = await initializedFixture();
+    const serveConfig = resolveAuthorityServeConfig(
+      readAuthorityRuntimeConfig(fixture.configPath),
+    );
+    const closeMeetingProcessing = vi.fn(async () => undefined);
+    const openMeetingProcessingRuntime = vi.fn(async () => ({
+      close: closeMeetingProcessing,
+    }));
+    const runtime = await startOrganizationAuthority(serveConfig, {
+      openMeetingProcessingRuntime,
+    });
+
+    expect(openMeetingProcessingRuntime).toHaveBeenCalledOnce();
+    expect(closeMeetingProcessing).not.toHaveBeenCalled();
+    await runtime.close();
+    expect(closeMeetingProcessing).toHaveBeenCalledOnce();
+  });
+
   it('abandons kernel ownership but preserves recovery state when shutdown fails', async () => {
     const fixture = await initializedFixture();
     const config = readAuthorityRuntimeConfig(fixture.configPath);
@@ -1439,7 +1462,7 @@ describe('organization authority operator lifecycle', () => {
     expect(
       inspectAuthorityDatabaseReadOnly(config.database_path),
     ).toMatchObject({
-      schema_version: 15,
+      schema_version: 17,
       integrations_control_plane_id: integrationsIdentity.control_plane_id,
       integrations_marker_sha256: expect.stringMatching(
         /^sha256:[0-9a-f]{64}$/,
@@ -1530,7 +1553,7 @@ describe('organization authority operator lifecycle', () => {
       const interruptedAuthority = inspectAuthorityDatabaseReadOnly(
         config.database_path,
       );
-      expect(interruptedAuthority.schema_version).toBe(15);
+      expect(interruptedAuthority.schema_version).toBe(17);
       expect(
         interruptedAuthority.integrations_control_plane_id !== null,
       ).toBe(anchoredAfterFault);
@@ -1547,7 +1570,7 @@ describe('organization authority operator lifecycle', () => {
         config.database_path,
       );
       expect(recoveredAuthority).toMatchObject({
-        schema_version: 15,
+        schema_version: 17,
         integrations_control_plane_id: recovered.control_plane_id,
         integrations_marker_sha256: expect.stringMatching(
           /^sha256:[0-9a-f]{64}$/,

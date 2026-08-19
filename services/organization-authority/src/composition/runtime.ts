@@ -86,6 +86,10 @@ import {
   type PersonSessionOidcAuthorizationProvider,
 } from './lazy-person-session-oidc-provider.js';
 import { PersonSlackIdentityLinkService } from './person-slack-identity-link.js';
+import {
+  openAuthorityMeetingProcessingRuntime,
+  type AuthorityMeetingProcessingRuntime,
+} from './meeting-processing-runtime.js';
 
 export interface RunningOrganizationAuthority {
   address: AddressInfo;
@@ -114,6 +118,7 @@ export interface OrganizationAuthorityRuntimeDependencies {
   discoverPersonSessionOidcProvider?: (
     options: Parameters<typeof OpenIdClientPersonSessionProvider.discover>[0],
   ) => Promise<PersonSessionOidcAuthorizationProvider>;
+  openMeetingProcessingRuntime?: typeof openAuthorityMeetingProcessingRuntime;
 }
 
 function assertOrganizationMemberRecordingRuntimeBinding(
@@ -258,6 +263,7 @@ export async function startOrganizationAuthority(
   let application: OrganizationAuthorityApplication | undefined;
   const authorizationFence = new ReadableSearchAuthorizationFence();
   let records: OrganizationRecordRuntime | undefined;
+  let meetingProcessing: AuthorityMeetingProcessingRuntime | null | undefined;
   let server: OrganizationAuthorityHttpServer | undefined;
   let signalFatalFailure: (failure: Error) => void = () => undefined;
   // Resolve-only: a promise that never rejects cannot become an unhandled
@@ -274,6 +280,7 @@ export async function startOrganizationAuthority(
   const shutdown = (): Promise<void> => {
     shutdownPromise ??= (async (): Promise<void> => {
       const runningServer = server;
+      const runningMeetingProcessing = meetingProcessing;
       const runningRecords = records;
       const runningApplication = application;
       const runningIntegrationsDatabase = integrationsDatabase;
@@ -283,6 +290,13 @@ export async function startOrganizationAuthority(
           await closeAuthorityServer(runningServer);
         } catch (error) {
           failures.push(error);
+          if (runningMeetingProcessing !== undefined && runningMeetingProcessing !== null) {
+            try {
+              await runningMeetingProcessing.close();
+            } catch (processingError) {
+              failures.push(processingError);
+            }
+          }
           abandonUncertainServer(runningServer, failures);
           try {
             await runtimeLock.abandon();
@@ -299,12 +313,21 @@ export async function startOrganizationAuthority(
           );
         }
       }
+      // Stop polling before either database it depends on is drained or closed.
+      let ownershipUncertain = false;
+      if (runningMeetingProcessing !== undefined && runningMeetingProcessing !== null) {
+        try {
+          await runningMeetingProcessing.close();
+        } catch (error) {
+          failures.push(error);
+          ownershipUncertain = true;
+        }
+      }
       // Records first, and awaited: its close drains derive, verifies the
       // chain, and only then releases both handles. Draining can still need
       // the authority (an unmaterialized receipt) and the integration audit, so
       // closing either of those first would race a stop that is supposed to
       // leave a backup-safe state behind.
-      let ownershipUncertain = false;
       if (runningRecords !== undefined) {
         try {
           await runningRecords.close();
@@ -744,6 +767,19 @@ export async function startOrganizationAuthority(
     if (address === null || typeof address === 'string') {
       throw new Error('organization authority did not bind a TCP address');
     }
+    meetingProcessing = await (
+      dependencies.openMeetingProcessingRuntime ??
+      openAuthorityMeetingProcessingRuntime
+    )({
+      config,
+      authority: application,
+      authorityRepository,
+      authorizationFence,
+      integrations,
+      integrationsRepository,
+      integrationSecrets,
+      records: recordRuntime,
+    });
     return {
       address,
       fatalFailure,
@@ -764,6 +800,13 @@ export async function startOrganizationAuthority(
       }
     }
     if (serverCleanupFailed && server !== undefined) {
+      if (meetingProcessing !== undefined && meetingProcessing !== null) {
+        try {
+          await meetingProcessing.close();
+        } catch (cleanupError) {
+          failures.push(cleanupError);
+        }
+      }
       abandonUncertainServer(server, failures);
       try {
         await runtimeLock.abandon();
@@ -777,9 +820,16 @@ export async function startOrganizationAuthority(
         'organization authority startup and ownership cleanup failed',
       );
     }
-    // Same order as the ordinary stop: records first and awaited, so its drain
-    // and chain verification run while everything they might read is still
-    // open.
+    // Same order as the ordinary stop: halt polling, then drain records while
+    // everything record derive might read is still open.
+    try {
+      if (meetingProcessing !== undefined && meetingProcessing !== null) {
+        await meetingProcessing.close();
+      }
+    } catch (cleanupError) {
+      cleanupFailed = true;
+      failures.push(cleanupError);
+    }
     try {
       if (records !== undefined) await records.close();
     } catch (cleanupError) {

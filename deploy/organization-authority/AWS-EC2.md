@@ -512,13 +512,17 @@ does not switch a product installation. Reconfigure each stopped producer
 separately, where its local frozen-card preflight must pass before it can emit
 organization-member-readable cards.
 
-## Founder-live one-meeting ingress gate
+## Founder-live source provisioning and one-meeting canary
 
-This is the minimum live-processing rung. It proves only server-owned source
-pull, deterministic extraction, durable admission, and pending approval. It is
-not a daemon, approval resolver, record append, delivery, client cutover, or
-release. The command pulls at most one meeting and is unavailable while
-`serve` owns the Authority singleton.
+This is the minimum live-processing rung. With the stack stopped,
+`process-one-meeting` is the bounded source-provisioning and admission canary:
+it pulls at most one meeting, performs deterministic extraction, and creates or
+reuses one durable pending approval. It is not a daemon and is unavailable
+while `serve` owns the Authority singleton. After that explicit source binding
+exists, `serve` owns the live pipeline: one serialized, limit-1 cycle runs
+immediately and then 30 seconds after each prior cycle completes. No two cycles
+overlap. An approved Slack review appends the organization-member-readable
+record first and only then sends the final Slack delivery.
 
 Use only an organization-owned Granola workspace/admin credential. The old
 machine's personal credential is not eligible. A Granola workspace admin must
@@ -535,10 +539,11 @@ record is absent or ambiguous. See
 
 Workspace keys expose only public workspace notes and notes in spaces where
 **Allow Granola API access** is enabled; they cannot read private notes or
-unshared private folders. Put the intended canary meeting in a deliberately
-API-enabled space (or the public Team space), and record that non-secret space
-selection with the provenance evidence. Otherwise `no_meeting` can mean the
-workspace correctly withheld the note rather than that source ingestion is
+unshared private folders. Put only the intended canary meeting in a
+deliberately API-enabled space (or the public Team space only when it exposes no
+other eligible completed meeting during the canary), and record that non-secret
+space selection with the provenance evidence. Otherwise `no_meeting` can mean
+the workspace correctly withheld the note rather than that source ingestion is
 broken.
 
 In the AWS Console, create or rotate the JSON secret identified by protected
@@ -585,6 +590,32 @@ The corresponding fixed container paths are
 `/echo/state/credentials/granola-organization-owner-email`, and
 `/echo/state/credentials/granola-organization-credential-scope`. The processing
 command has no owner-email, credential-scope, or API-key argument.
+
+Before starting `serve`, use a protected operator transfer to place the exact
+existing exportable installation key at the host path
+`/srv/echo-authority/data/state/credentials/processing/installation-key-state.v1.json`.
+It appears in the container as
+`/echo/state/credentials/processing/installation-key-state.v1.json`. The
+`processing` directory must be mode `0700` and the key file mode `0600`, both
+owned by `echo-authority:echo-authority`. Do not generate or substitute a key
+for this deployment. Verify structure and permissions without printing,
+hashing, or otherwise reading the private key material:
+
+```bash
+set -euo pipefail
+PROCESSING_KEY_DIRECTORY=/srv/echo-authority/data/state/credentials/processing
+PROCESSING_KEY_PATH="$PROCESSING_KEY_DIRECTORY/installation-key-state.v1.json"
+[[ -d $PROCESSING_KEY_DIRECTORY && ! -L $PROCESSING_KEY_DIRECTORY ]]
+[[ $(stat -c '%a:%U:%G' "$PROCESSING_KEY_DIRECTORY") == 700:echo-authority:echo-authority ]]
+[[ -f $PROCESSING_KEY_PATH && ! -L $PROCESSING_KEY_PATH && -s $PROCESSING_KEY_PATH ]]
+[[ $(stat -c '%a:%U:%G' "$PROCESSING_KEY_PATH") == 600:echo-authority:echo-authority ]]
+```
+
+At startup the key's installation and key IDs must match the exact active Slack
+approval binding. The key's public signing material and that binding's
+principal and membership must also match the active Authority enrollment. Any
+mismatch is a failed startup; do not change the binding or enrollment to make a
+different key fit.
 
 Before the first processing write, stop public ingress and quiesce every
 container. Capture the existing Authority container before stopping it so its
@@ -876,8 +907,10 @@ the command stderr mode `0600` in private evidence; do not paste either into a
 tracked file or chat.
 
 After an accepted outcome, start `authority` and `proxy` while ingress remains
-off, prove private health, and only then enable the Tunnel. Do not reverse this
-order:
+off and prove private health. Starting `serve` also starts the serialized live
+worker because the source now exists; outbound Granola and Slack calls do not
+require the Tunnel. Keep public ingress off through the controlled approval
+canary. Do not reverse this order:
 
 ```bash
 set -euo pipefail
@@ -903,6 +936,21 @@ ECHO_AUTHORITY_HOST="${AUTHORITY_HOST_LINES[0]}"
 curl --fail --silent --show-error \
   -H "Host: $ECHO_AUTHORITY_HOST" \
   http://127.0.0.1/v1/authority-descriptor >/dev/null
+```
+
+Allow the worker to present the one pending approval in the configured Slack
+channel. Have only the exact bound reviewer apply the configured approval
+reaction. Require the approved record to appear in the Authority record before
+the final Slack delivery appears; retain both results in protected canary
+evidence. A record failure must leave final Slack unsent, and a Slack failure
+must retry against the same frozen signed record bytes. Keep the stack private
+and stop the canary on any other ordering or identity result.
+
+Only after that canary passes, enable the Tunnel and verify its single EC2
+connector:
+
+```bash
+set -euo pipefail
 
 systemctl enable --now cloudflared-echo-authority.service
 systemctl is-enabled --quiet cloudflared-echo-authority.service
@@ -917,11 +965,11 @@ for attempt in {1..12}; do
 done
 ```
 
-There is no processing service to disable after the run: the command exits and
-the normal runtime has no processing loop. A pending candidate is durable and
-is not retention-eligible until a later audited approval or rejection resolves
-it. Do not run a second meeting after `pending_created` until approval and
-in-process record-delivery stages are intentionally composed and tested.
+`process-one-meeting` exits after its bounded provisioning/canary run; `serve`
+is now the processing owner and continues the serialized 30-second, limit-1
+loop until the Authority shuts down. A pending candidate is durable and is not
+retention-eligible until the bound Slack reviewer resolves it. Keep only the
+one intended meeting eligible during this minimum-V1 canary.
 
 ## Minimum operating checkpoint
 

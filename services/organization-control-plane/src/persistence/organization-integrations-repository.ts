@@ -9,6 +9,7 @@ import {
   SLACK_PROVIDER,
   SLACK_PROVIDER_ISSUER,
   type ActiveSlackOrganizationTool,
+  type ActiveSlackApprovalRuntimeBinding,
   type ActivateExistingSlackApprovalInput,
   type ActivateExistingSlackApprovalResult,
   type ApprovalAuthorizationEvidenceLookup,
@@ -184,6 +185,15 @@ interface ActiveSlackApprovalGrantRow {
   membership_id: string;
   action: "approve" | "reject";
   resource_scope_json: string;
+}
+
+interface ActiveSlackApprovalRuntimeBindingRow extends ActiveSlackBindingRow {
+  identity_link_id: string;
+  principal_id: string;
+  membership_id: string;
+  reviewer_slack_user_id: string;
+  approve_permission_grant_id: string;
+  reject_permission_grant_id: string;
 }
 
 interface SlackIdentityLinkCompletionReplayKey {
@@ -1015,6 +1025,114 @@ export class OrganizationIntegrationsRepository {
       }
     }
     return rows.length > 0;
+  }
+
+  /**
+   * Resolves the exact single-reviewer Slack capability used by the live
+   * meeting worker. A partial binding is simply not ready; competing complete
+   * bindings are a configuration conflict rather than an arbitrary choice.
+   */
+  activeSlackApprovalRuntimeBinding(
+    adapterInstanceId: string,
+  ): ActiveSlackApprovalRuntimeBinding | null {
+    const tool = this.activeSlackOrganizationTool();
+    if (tool === null) return null;
+    const bindings = this.database
+      .prepare(
+        `SELECT adapter_binding_id, installation_id, installation_key_id,
+                adapter_id, adapter_instance_id, adapter_version,
+                connection_id, public_configuration_json,
+                public_configuration_sha256
+           FROM organization_adapter_bindings
+          WHERE organization_id = ?
+            AND product_namespace = 'echo-brain'
+            AND adapter_kind = 'approval-surface'
+            AND adapter_id = 'slack-reactions'
+            AND adapter_instance_id = ?
+            AND connection_id = ?
+            AND status = 'active'
+          ORDER BY adapter_binding_id`,
+      )
+      .all(
+        this.identity.organization_id,
+        adapterInstanceId,
+        tool.connection_id,
+      ) as ActiveSlackBindingRow[];
+    for (const binding of bindings) {
+      if (!slackApprovalBindingMatchesTool(binding, tool)) {
+        throw new OrganizationIntegrationConflictError(
+          "active Slack approval binding is not an exact organization-tool binding",
+        );
+      }
+    }
+    if (bindings.length === 0) return null;
+    if (bindings.length !== 1) {
+      throw new OrganizationIntegrationConflictError(
+        "Slack approval runtime binding is ambiguous",
+      );
+    }
+    const rows = this.database
+      .prepare(
+        `SELECT binding.adapter_binding_id, binding.installation_id,
+                binding.installation_key_id, binding.adapter_id,
+                binding.adapter_instance_id, binding.adapter_version,
+                binding.connection_id, binding.public_configuration_json,
+                binding.public_configuration_sha256,
+                identity.identity_link_id, identity.principal_id,
+                identity.membership_id,
+                identity.provider_subject_id AS reviewer_slack_user_id,
+                approve.permission_grant_id AS approve_permission_grant_id,
+                reject.permission_grant_id AS reject_permission_grant_id
+           FROM organization_adapter_bindings AS binding
+           JOIN organization_permission_grants AS approve
+             ON approve.organization_id = binding.organization_id
+            AND approve.adapter_binding_id = binding.adapter_binding_id
+            AND approve.action = 'approve' AND approve.status = 'active'
+           JOIN organization_permission_grants AS reject
+             ON reject.organization_id = binding.organization_id
+            AND reject.adapter_binding_id = binding.adapter_binding_id
+            AND reject.principal_id = approve.principal_id
+            AND reject.membership_id = approve.membership_id
+            AND reject.action = 'reject' AND reject.status = 'active'
+           JOIN organization_external_identity_links AS identity
+             ON identity.organization_id = binding.organization_id
+            AND identity.principal_id = approve.principal_id
+            AND identity.membership_id = approve.membership_id
+            AND identity.provider = 'slack'
+            AND identity.provider_issuer = 'https://slack.com'
+            AND identity.provider_tenant_kind = 'workspace'
+            AND identity.provider_tenant_id = ?
+            AND identity.status = 'active'
+          WHERE binding.adapter_binding_id = ?
+          ORDER BY identity.identity_link_id`,
+      )
+      .all(tool.team_id, bindings[0]!.adapter_binding_id) as
+      ActiveSlackApprovalRuntimeBindingRow[];
+    if (rows.length === 0) return null;
+    if (rows.length !== 1) {
+      throw new OrganizationIntegrationConflictError(
+        "Slack approval runtime reviewer is ambiguous",
+      );
+    }
+    const row = rows[0]!;
+    if (row.adapter_id !== "slack-reactions") {
+      throw new Error("stored Slack approval runtime binding is invalid");
+    }
+    return Object.freeze({
+      organization_tool: tool,
+      identity_link_id: row.identity_link_id,
+      principal_id: row.principal_id,
+      membership_id: row.membership_id,
+      reviewer_slack_user_id: row.reviewer_slack_user_id,
+      adapter_binding_id: row.adapter_binding_id,
+      installation_id: row.installation_id,
+      installation_key_id: row.installation_key_id as `sha256:${string}`,
+      adapter_id: "slack-reactions",
+      adapter_instance_id: row.adapter_instance_id,
+      adapter_version: row.adapter_version,
+      approve_permission_grant_id: row.approve_permission_grant_id,
+      reject_permission_grant_id: row.reject_permission_grant_id,
+    });
   }
 
   upgradeableSlackOrganizationTool(): UpgradeableSlackOrganizationTool | null {

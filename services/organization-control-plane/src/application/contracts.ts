@@ -477,6 +477,28 @@ export interface SlackApprovalPermissionCandidate {
   reject_reaction: string;
 }
 
+/**
+ * The one complete active Slack approval binding a server runtime may compose.
+ * It is deliberately narrower than the administrator overview: both action
+ * grants and the exact linked human must already exist before this view is
+ * returned.
+ */
+export interface ActiveSlackApprovalRuntimeBinding {
+  organization_tool: ActiveSlackOrganizationTool;
+  identity_link_id: string;
+  principal_id: string;
+  membership_id: string;
+  reviewer_slack_user_id: string;
+  adapter_binding_id: string;
+  installation_id: string;
+  installation_key_id: `sha256:${string}`;
+  adapter_id: "slack-reactions";
+  adapter_instance_id: string;
+  adapter_version: string;
+  approve_permission_grant_id: string;
+  reject_permission_grant_id: string;
+}
+
 export type OrganizationPermissionReasonCode =
   | "active_membership_and_direct_grant"
   | "active_membership_direct_grant_pilot_notice_v1"

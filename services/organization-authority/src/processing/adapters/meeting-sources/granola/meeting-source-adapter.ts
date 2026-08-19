@@ -727,6 +727,20 @@ function noteContent(
   return blocks;
 }
 
+function hasCompletedMeetingContent(note: GranolaNoteDetail): boolean {
+  const hasSummary =
+    isNonEmptyString(note.summary_markdown) ||
+    isNonEmptyString(note.summary_text);
+  const hasTranscript = (note.transcript ?? []).some((turn) =>
+    isNonEmptyString(turn.text),
+  );
+
+  // Granola's public Notes API exposes a note only after summary and transcript
+  // generation complete. Fail closed if a response violates that contract; a
+  // later completed revision will be observed through its newer updated_at.
+  return hasSummary && hasTranscript;
+}
+
 function sourceExtensions(note: GranolaNoteDetail): JsonObject | undefined {
   const granola = sanitizeJson({
     object: note.object,
@@ -1133,6 +1147,7 @@ export class GranolaMeetingSourceAdapter implements MeetingSourceAdapter {
           detail.updated_at,
           detail.created_at,
         );
+        if (!hasCompletedMeetingContent(detail)) continue;
         meetings.push(this.toMeeting(detail, observedAt));
       }
 

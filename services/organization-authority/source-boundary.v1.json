@@ -47,7 +47,9 @@
     "services/organization-authority/migrations/0012_member_exclusion_read_audit.sql",
     "services/organization-authority/migrations/0013_person_session_assertion_issued_at.sql",
     "services/organization-authority/migrations/0014_person_login_grant_expected_email.sql",
-    "services/organization-authority/migrations/0015_processing_source_configuration_binding.sql"
+    "services/organization-authority/migrations/0015_processing_source_configuration_binding.sql",
+    "services/organization-authority/migrations/0016_processing_slack_approval_state.sql",
+    "services/organization-authority/migrations/0017_processing_frozen_record_envelopes.sql"
   ],
   "layer_rules": [
     {
@@ -212,7 +214,14 @@
         "services/organization-authority/src/composition/**",
         "services/organization-authority/src/domain/**",
         "services/organization-authority/src/presentation/**",
-        "services/organization-authority/src/processing/live/**"
+        "services/organization-authority/src/processing/adapters/approval-surfaces/slack-reactions/**",
+        "services/organization-authority/src/processing/adapters/decision-processors/structured-text/**",
+        "services/organization-authority/src/processing/adapters/delivery-surfaces/slack/**",
+        "services/organization-authority/src/processing/adapters/meeting-sources/granola/**",
+        "services/organization-authority/src/processing/authorization/**",
+        "services/organization-authority/src/processing/live/**",
+        "services/organization-authority/src/processing/record/**",
+        "services/organization-authority/src/processing/storage/**"
       ],
       "allowed_workspace_packages": [
         "@echo-brain/federation-protocol",
@@ -251,7 +260,7 @@
     },
     {
       "name": "processing-live-composes-one-bounded-cycle",
-      "from": "services/organization-authority/src/processing/live/**",
+      "from": "services/organization-authority/src/processing/live/run-one-meeting.ts",
       "allowed_imports": [
         "services/organization-authority/src/processing/adapters/decision-processors/structured-text/**",
         "services/organization-authority/src/processing/adapters/meeting-sources/granola/**",
@@ -263,6 +272,16 @@
       "allowed_workspace_packages": [
         "@echo-brain/federation-protocol"
       ],
+      "allowed_external_packages": [],
+      "allowed_node_builtins": []
+    },
+    {
+      "name": "processing-live-runs-one-fixed-cycle",
+      "from": "services/organization-authority/src/processing/live/run-live-meeting-cycle.ts",
+      "allowed_imports": [
+        "services/organization-authority/src/processing/core/**"
+      ],
+      "allowed_workspace_packages": [],
       "allowed_external_packages": [],
       "allowed_node_builtins": []
     },
@@ -389,6 +408,33 @@
       "allowed_node_builtins": ["crypto", "fs", "fs/promises", "path"]
     },
     {
+      "name": "processing-server-installation-key-is-read-only-compatibility",
+      "from": "services/organization-authority/src/processing/authorization/security/existing-exportable-installation-key.ts",
+      "allowed_imports": [],
+      "allowed_workspace_packages": [
+        "@echo-brain/federation-protocol"
+      ],
+      "allowed_external_packages": [],
+      "allowed_node_builtins": ["crypto", "fs", "path"]
+    },
+    {
+      "name": "processing-server-installation-bridge-uses-current-authority-contracts",
+      "from": "services/organization-authority/src/processing/authorization/server-installation-compatibility-bridge.ts",
+      "allowed_imports": [
+        "services/organization-authority/src/application/ports/authority-repository.ts",
+        "services/organization-authority/src/processing/adapters/approval-surfaces/slack-reactions/slack-reactions-approval-surface.ts",
+        "services/organization-authority/src/processing/authorization/organization-member-authorization-evidence.ts",
+        "services/organization-authority/src/processing/authorization/security/existing-exportable-installation-key.ts"
+      ],
+      "allowed_workspace_packages": [
+        "@echo-brain/federation-protocol",
+        "@echo-brain/organization-api",
+        "@echo-brain/organization-protocol"
+      ],
+      "allowed_external_packages": [],
+      "allowed_node_builtins": ["crypto"]
+    },
+    {
       "name": "processing-authorization-evidence-validators-read-only-core",
       "from": "services/organization-authority/src/processing/authorization/*-authorization-evidence.ts",
       "allowed_imports": [
@@ -417,6 +463,79 @@
         "services/organization-authority/src/processing/replay/**"
       ],
       "allowed_workspace_packages": [],
+      "allowed_external_packages": [],
+      "allowed_node_builtins": ["crypto"]
+    },
+    {
+      "name": "processing-record-envelope-ports-use-protocol-contracts",
+      "from": "services/organization-authority/src/processing/record/ports.ts",
+      "allowed_imports": [],
+      "allowed_workspace_packages": [
+        "@echo-brain/federation-protocol",
+        "@echo-brain/organization-protocol"
+      ],
+      "allowed_external_packages": [],
+      "allowed_node_builtins": []
+    },
+    {
+      "name": "processing-record-envelope-builder-uses-protocol-contracts",
+      "from": "services/organization-authority/src/processing/record/protocol-record-envelope-builder.ts",
+      "allowed_imports": [
+        "services/organization-authority/src/processing/record/ports.ts"
+      ],
+      "allowed_workspace_packages": [
+        "@echo-brain/federation-protocol",
+        "@echo-brain/organization-protocol"
+      ],
+      "allowed_external_packages": [],
+      "allowed_node_builtins": []
+    },
+    {
+      "name": "processing-organization-member-renderer-uses-v3-protocol",
+      "from": "services/organization-authority/src/processing/record/adapters/organization-member-presentation-renderer.ts",
+      "allowed_imports": [],
+      "allowed_workspace_packages": [
+        "@echo-brain/federation-protocol",
+        "@echo-brain/organization-protocol"
+      ],
+      "allowed_external_packages": [],
+      "allowed_node_builtins": []
+    },
+    {
+      "name": "processing-organization-member-record-first-delivery-coordinates-ports",
+      "from": "services/organization-authority/src/processing/record/adapters/organization-member-record-first-delivery.ts",
+      "allowed_imports": [
+        "services/organization-authority/src/processing/core/**",
+        "services/organization-authority/src/processing/record/ports.ts"
+      ],
+      "allowed_workspace_packages": [
+        "@echo-brain/organization-api",
+        "@echo-brain/organization-protocol"
+      ],
+      "allowed_external_packages": [],
+      "allowed_node_builtins": []
+    },
+    {
+      "name": "processing-serialized-authority-meeting-worker-is-generic",
+      "from": "services/organization-authority/src/processing/live/serialized-authority-meeting-worker.ts",
+      "allowed_imports": [],
+      "allowed_workspace_packages": [],
+      "allowed_external_packages": [],
+      "allowed_node_builtins": []
+    },
+    {
+      "name": "processing-organization-member-record-metadata-rejoins-authority-state",
+      "from": "services/organization-authority/src/processing/record/adapters/organization-member-record-metadata.ts",
+      "allowed_imports": [
+        "services/organization-authority/src/processing/authorization/organization-member-authorization-evidence.ts",
+        "services/organization-authority/src/processing/core/**",
+        "services/organization-authority/src/processing/record/adapters/organization-member-record-first-delivery.ts",
+        "services/organization-authority/src/processing/storage/sqlite-authority-processing-store.ts"
+      ],
+      "allowed_workspace_packages": [
+        "@echo-brain/federation-protocol",
+        "@echo-brain/organization-protocol"
+      ],
       "allowed_external_packages": [],
       "allowed_node_builtins": ["crypto"]
     }

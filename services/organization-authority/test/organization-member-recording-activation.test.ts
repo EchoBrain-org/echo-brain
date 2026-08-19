@@ -88,6 +88,14 @@ function downgradeToPreActivationSchema(databasePath: string): void {
       DROP TRIGGER authority_member_exclusion_read_audit_immutable_update;
       DROP TRIGGER authority_member_exclusion_read_audit_delete_denied;
       DROP TABLE authority_member_exclusion_read_audit;
+      DROP TRIGGER authority_processing_approval_presentation_contracts_immutable;
+      DROP TRIGGER authority_processing_approval_publications_immutable;
+      DROP TRIGGER authority_processing_approval_resolution_metadata_immutable;
+      DROP TRIGGER authority_processing_frozen_record_envelopes_immutable;
+      DROP TABLE authority_processing_frozen_record_envelopes;
+      DROP TABLE authority_processing_approval_resolution_metadata;
+      DROP TABLE authority_processing_approval_publications;
+      DROP TABLE authority_processing_approval_presentation_contracts;
       DROP TRIGGER authority_processing_member_exclusions_immutable_update;
       DROP TRIGGER authority_processing_delivery_receipts_immutable_update;
       DROP TRIGGER authority_processing_processed_markers_delete_denied;
@@ -321,7 +329,7 @@ describe('organization-member recording activation lifecycle', () => {
     ).rejects.toThrow('fault:after-audit');
 
     const rolledBack = new Database(runtimeConfig.database_path);
-    expect(rolledBack.pragma('user_version', { simple: true })).toBe(15);
+    expect(rolledBack.pragma('user_version', { simple: true })).toBe(17);
     expect(
       (
         rolledBack

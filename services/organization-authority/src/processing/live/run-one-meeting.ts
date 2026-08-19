@@ -83,7 +83,7 @@ export interface AuthorityOneMeetingRunResult {
   readonly pending_approval_ids: readonly string[];
 }
 
-function authorityProcessingCredentialReferenceSha256(
+export function authorityProcessingCredentialReferenceSha256(
   credentialReference: string,
 ): `sha256:${string}` {
   return canonicalSha256({

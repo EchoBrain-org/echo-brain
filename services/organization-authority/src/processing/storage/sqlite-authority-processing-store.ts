@@ -17,6 +17,8 @@ import type {
   AdapterCursor,
   MeetingDocument,
 } from '../core/contracts/meeting.js';
+import type { JsonObject } from '../core/contracts/json.js';
+import { assertCanonicalApprovalDecision } from '../core/contracts/validation.js';
 import type {
   CoreStateStore,
   MeetingPreRecordAdmission,
@@ -109,6 +111,117 @@ export interface CleanupTerminalCandidatesInput {
   readonly limit?: number;
 }
 
+/** Storage-local restatement of the two Slack contracts this layer persists. */
+export interface AuthorityFrozenReviewerApprovalPresentationContract {
+  readonly schema_version: 1;
+  readonly kind: 'echo-slack-approval-presentation-contract';
+  readonly mode: 'restricted-reviewer-v1';
+  readonly adapter_id: string;
+  readonly adapter_instance_id: string;
+  readonly adapter_version: string;
+  readonly channel_id: string;
+  readonly reviewer_slack_user_id: string;
+  readonly reviewer_name: string;
+  readonly credential_ref: string;
+  readonly credential_fingerprint_sha256: string;
+  readonly approve_reaction: string;
+  readonly reject_reaction: string;
+  readonly reviewer_release_draft_sha256: string;
+  readonly approval_presentation_sha256: string;
+}
+
+export interface AuthorityFrozenOrganizationMemberApprovalPresentationContract {
+  readonly schema_version: 1;
+  readonly kind: 'echo-slack-approval-presentation-contract';
+  readonly mode: 'organization-member-readable-v1';
+  readonly adapter_id: string;
+  readonly adapter_instance_id: string;
+  readonly adapter_version: string;
+  readonly channel_id: string;
+  readonly reviewer_slack_user_id: string;
+  readonly reviewer_name: string;
+  readonly credential_ref: string;
+  readonly credential_fingerprint_sha256: string;
+  readonly approve_reaction: string;
+  readonly reject_reaction: string;
+  readonly policy_id: 'organization-member-readable-v1';
+  readonly policy_contract_sha256: string;
+  readonly release_draft_sha256: string;
+  readonly approval_presentation_sha256: string;
+}
+
+export type AuthorityFrozenApprovalPresentationContract =
+  | AuthorityFrozenReviewerApprovalPresentationContract
+  | AuthorityFrozenOrganizationMemberApprovalPresentationContract;
+
+export interface AuthorityApprovalDecisionStoreView {
+  readonly approval_id: string;
+  readonly status: 'pending' | 'approved' | 'rejected';
+  readonly reviewed_at: string | null;
+  readonly reviewed_by: string | null;
+  readonly reason: string | null;
+  readonly brief: ApprovalRequest['brief'];
+  readonly requested_metadata?: JsonObject;
+  readonly published: readonly {
+    readonly surface: string;
+    readonly reference: JsonObject;
+  }[];
+}
+
+export interface AuthorityApprovalResolutionMetadata {
+  readonly approval_id: string;
+  readonly surface: string;
+  readonly metadata: JsonObject;
+  readonly resolved_at: string;
+}
+
+export interface AuthorityApprovalDecisionStore {
+  ensureRequested(
+    request: ApprovalRequest,
+  ): Promise<AuthorityApprovalDecisionStoreView>;
+  freezeApprovalPresentationContract<
+    T extends AuthorityFrozenApprovalPresentationContract,
+  >(input: {
+    readonly approvalId: string;
+    readonly contract: T;
+  }): Promise<T>;
+  readApprovalPresentationContract(
+    approvalId: string,
+  ): AuthorityFrozenReviewerApprovalPresentationContract | null;
+  readFrozenApprovalPresentationContract(
+    approvalId: string,
+  ): AuthorityFrozenApprovalPresentationContract | null;
+  recordPublished(input: {
+    readonly processingKey: string;
+    readonly surface: string;
+    readonly reference: JsonObject;
+  }): Promise<AuthorityApprovalDecisionStoreView>;
+  resolve(input: {
+    readonly approvalId: string;
+    readonly status: 'approved' | 'rejected';
+    readonly reviewedBy: string;
+    readonly reason?: string | null;
+    readonly surface: string;
+    readonly metadata?: JsonObject;
+    readonly reviewedAt?: string;
+  }): Promise<AuthorityApprovalDecisionStoreView>;
+}
+
+/** Storage-local shape of the record builder result kept by the frozen slot. */
+export interface AuthorityBuiltOrganizationRecordEnvelope {
+  readonly envelope_id: string;
+  readonly idempotency_key: string;
+  readonly event_type: string;
+  readonly envelope: unknown;
+}
+
+export interface AuthorityFrozenOrganizationRecordEnvelopeStore {
+  getOrCreate<T extends AuthorityBuiltOrganizationRecordEnvelope>(
+    idempotencyKey: string,
+    create: () => Promise<T>,
+  ): Promise<T>;
+}
+
 interface CursorRow {
   cursor: string;
   source_version: string;
@@ -156,6 +269,46 @@ interface ExistingReceiptRow {
   retryable: number;
 }
 
+interface ApprovalRequestIdentityRow {
+  processing_key: string;
+  document_json: string;
+  document_sha256: string;
+  request_approval_id: string;
+}
+
+interface ApprovalPresentationContractRow {
+  processing_key: string;
+  approval_id: string;
+  contract_mode:
+    | 'restricted-reviewer-v1'
+    | 'organization-member-readable-v1';
+  contract_sha256: string;
+  contract_json: string;
+}
+
+interface ApprovalPublicationRow {
+  surface: string;
+  reference_sha256: string;
+  reference_json: string;
+}
+
+interface ApprovalResolutionMetadataRow {
+  approval_id: string;
+  surface: string;
+  metadata_sha256: string;
+  metadata_json: string;
+  resolved_at: string;
+}
+
+interface FrozenRecordEnvelopeRow {
+  processing_key: string;
+  approval_id: string;
+  envelope_id: string;
+  event_type: string;
+  envelope_sha256: string;
+  envelope_json: string;
+}
+
 function digestCanonicalJson(json: string): `sha256:${string}` {
   return `sha256:${createHash('sha256').update(json, 'utf8').digest('hex')}`;
 }
@@ -197,6 +350,48 @@ function approvalId(processingKey: string): string {
   return createHash('sha256').update(processingKey, 'utf8').digest('hex');
 }
 
+function assertApprovalId(value: string): string {
+  if (!/^[0-9a-f]{64}$/.test(value)) {
+    throw new Error('authority processing approval id is invalid');
+  }
+  return value;
+}
+
+function assertBoundedSurface(value: string): string {
+  if (typeof value !== 'string' || value.length < 1 || value.length > 128) {
+    throw new Error('authority processing approval surface is invalid');
+  }
+  return value;
+}
+
+function assertJsonObject(value: unknown, label: string): JsonObject {
+  if (value === null || typeof value !== 'object' || Array.isArray(value)) {
+    throw new Error(`${label} must be a JSON object`);
+  }
+  exactJson(value);
+  return value as JsonObject;
+}
+
+function approvalPresentationMode(
+  value: unknown,
+): AuthorityFrozenApprovalPresentationContract['mode'] {
+  const contract = assertJsonObject(
+    value,
+    'authority processing approval presentation contract',
+  );
+  if (
+    contract['schema_version'] !== 1 ||
+    contract['kind'] !== 'echo-slack-approval-presentation-contract' ||
+    (contract['mode'] !== 'restricted-reviewer-v1' &&
+      contract['mode'] !== 'organization-member-readable-v1')
+  ) {
+    throw new Error(
+      'authority processing approval presentation contract identity is invalid',
+    );
+  }
+  return contract['mode'];
+}
+
 function boundedLimit(value: number | undefined, maximum: number, field: string): number {
   const resolved = value ?? maximum;
   if (!Number.isSafeInteger(resolved) || resolved < 1 || resolved > maximum) {
@@ -211,9 +406,18 @@ function boundedLimit(value: number | undefined, maximum: number, field: string)
  * surface: its content-bearing reads are capabilities of the processing
  * runtime bound to the exact membership and source passed to the constructor.
  */
-export class SqliteAuthorityProcessingStore implements CoreStateStore {
+export class SqliteAuthorityProcessingStore
+  implements
+    CoreStateStore,
+    AuthorityApprovalDecisionStore,
+    AuthorityFrozenOrganizationRecordEnvelopeStore
+{
   private readonly database: Database.Database;
   private readonly now: () => string;
+  private readonly recordEnvelopeCreates = new Map<
+    string,
+    Promise<AuthorityBuiltOrganizationRecordEnvelope>
+  >();
   private initialized = false;
   private provisioningStatus: AuthorityProcessingSourceProvisioningStatus | null = null;
 
@@ -738,6 +942,311 @@ export class SqliteAuthorityProcessingStore implements CoreStateStore {
     });
   }
 
+  /** Slack's store port: stage once, then return the durable winning view. */
+  async ensureRequested(
+    request: ApprovalRequest,
+  ): Promise<AuthorityApprovalDecisionStoreView> {
+    const id = await this.stageApprovalRequest(request);
+    return this.approvalDecisionStoreView(id);
+  }
+
+  async freezeApprovalPresentationContract<
+    T extends AuthorityFrozenApprovalPresentationContract,
+  >(input: {
+    readonly approvalId: string;
+    readonly contract: T;
+  }): Promise<T> {
+    await this.initialize();
+    const id = assertApprovalId(input.approvalId);
+    const mode = approvalPresentationMode(input.contract);
+    const encoded = exactJson(input.contract);
+    return this.immediate(() => {
+      this.assertActiveBinding();
+      const request = this.approvalRequestIdentity(id);
+      let stored = this.approvalPresentationContractRow(id);
+      if (stored === undefined) {
+        this.database
+          .prepare(
+            `INSERT INTO authority_processing_approval_presentation_contracts (
+               processing_key, approval_id, contract_mode, contract_sha256,
+               contract_json, created_at
+             ) VALUES (?, ?, ?, ?, ?, ?)`,
+          )
+          .run(
+            request.processing_key,
+            id,
+            mode,
+            encoded.sha256,
+            encoded.json,
+            assertCanonicalTimestamp(
+              this.now(),
+              'approval presentation contract created_at',
+            ),
+          );
+        stored = this.approvalPresentationContractRow(id);
+      }
+      if (
+        stored === undefined ||
+        stored.processing_key !== request.processing_key ||
+        stored.contract_mode !== mode ||
+        stored.contract_sha256 !== encoded.sha256 ||
+        stored.contract_json !== encoded.json
+      ) {
+        throw new Error(
+          'authority processing approval presentation contract already contains different bytes',
+        );
+      }
+      return this.decodeApprovalPresentationContract(stored) as T;
+    });
+  }
+
+  readApprovalPresentationContract(
+    approvalIdValue: string,
+  ): AuthorityFrozenReviewerApprovalPresentationContract | null {
+    const stored = this.readFrozenApprovalPresentationContract(approvalIdValue);
+    return stored?.mode === 'restricted-reviewer-v1' ? stored : null;
+  }
+
+  readFrozenApprovalPresentationContract(
+    approvalIdValue: string,
+  ): AuthorityFrozenApprovalPresentationContract | null {
+    this.assertInitialized();
+    this.assertActiveBinding();
+    const id = assertApprovalId(approvalIdValue);
+    this.approvalRequestIdentity(id);
+    const stored = this.approvalPresentationContractRow(id);
+    return stored === undefined
+      ? null
+      : this.decodeApprovalPresentationContract(stored);
+  }
+
+  async recordPublished(input: {
+    readonly processingKey: string;
+    readonly surface: string;
+    readonly reference: JsonObject;
+  }): Promise<AuthorityApprovalDecisionStoreView> {
+    await this.initialize();
+    this.assertProcessingKey(input.processingKey);
+    const surface = assertBoundedSurface(input.surface);
+    const reference = assertJsonObject(
+      input.reference,
+      'authority processing approval publication reference',
+    );
+    const encoded = exactJson(reference);
+    const id = approvalId(input.processingKey);
+    this.immediate(() => {
+      this.assertActiveBinding();
+      const request = this.approvalRequestIdentity(id);
+      if (request.processing_key !== input.processingKey) {
+        throw new Error(
+          'authority processing approval publication belongs to another request',
+        );
+      }
+      let stored = this.approvalPublicationRow(input.processingKey, surface);
+      if (stored === undefined) {
+        this.database
+          .prepare(
+            `INSERT INTO authority_processing_approval_publications (
+               processing_key, approval_id, surface, reference_sha256,
+               reference_json, published_at
+             ) VALUES (?, ?, ?, ?, ?, ?)`,
+          )
+          .run(
+            input.processingKey,
+            id,
+            surface,
+            encoded.sha256,
+            encoded.json,
+            assertCanonicalTimestamp(this.now(), 'approval published_at'),
+          );
+        stored = this.approvalPublicationRow(input.processingKey, surface);
+      }
+      if (
+        stored === undefined ||
+        stored.reference_sha256 !== encoded.sha256 ||
+        stored.reference_json !== encoded.json
+      ) {
+        throw new Error(
+          'authority processing approval surface already published different bytes',
+        );
+      }
+    });
+    return this.approvalDecisionStoreView(id);
+  }
+
+  async resolve(input: {
+    readonly approvalId: string;
+    readonly status: 'approved' | 'rejected';
+    readonly reviewedBy: string;
+    readonly reason?: string | null;
+    readonly surface: string;
+    readonly metadata?: JsonObject;
+    readonly reviewedAt?: string;
+  }): Promise<AuthorityApprovalDecisionStoreView> {
+    await this.initialize();
+    const id = assertApprovalId(input.approvalId);
+    const surface = assertBoundedSurface(input.surface);
+    const metadata = assertJsonObject(
+      input.metadata ?? {},
+      'authority processing approval resolution metadata',
+    );
+    const encodedMetadata = exactJson(metadata);
+    this.immediate(() => {
+      this.assertActiveBinding();
+      const requestIdentity = this.approvalRequestIdentity(id);
+      const request = JSON.parse(requestIdentity.document_json) as ApprovalRequest;
+      const existing = this.resolution(requestIdentity.processing_key);
+      const reviewedAt =
+        input.reviewedAt === undefined
+          ? existing?.resolved_at ??
+            assertCanonicalTimestamp(this.now(), 'approval reviewed_at')
+          : assertCanonicalTimestamp(input.reviewedAt, 'approval reviewed_at');
+      const decision = this.slackApprovalDecision(request, input, reviewedAt);
+      const encodedDecision = exactJson(decision);
+      const retainUntil = new Date(
+        Date.parse(reviewedAt) + RETENTION_MILLISECONDS,
+      ).toISOString();
+
+      if (existing === undefined) {
+        this.database
+          .prepare(
+            `INSERT INTO authority_processing_resolutions (
+               processing_key, terminal_status, resolution_sha256,
+               resolution_json, resolved_at, retain_until
+             ) VALUES (?, ?, ?, ?, ?, ?)`,
+          )
+          .run(
+            requestIdentity.processing_key,
+            input.status,
+            encodedDecision.sha256,
+            encodedDecision.json,
+            reviewedAt,
+            retainUntil,
+          );
+      }
+      const storedResolution = this.resolution(requestIdentity.processing_key);
+      if (
+        storedResolution === undefined ||
+        storedResolution.terminal_status !== input.status ||
+        storedResolution.resolution_sha256 !== encodedDecision.sha256 ||
+        storedResolution.resolution_json !== encodedDecision.json ||
+        storedResolution.resolved_at !== reviewedAt ||
+        storedResolution.retain_until !== retainUntil
+      ) {
+        throw new Error(
+          'authority processing candidate already has a different terminal resolution',
+        );
+      }
+
+      let storedMetadata = this.approvalResolutionMetadataRow(id);
+      if (storedMetadata === undefined) {
+        this.database
+          .prepare(
+            `INSERT INTO authority_processing_approval_resolution_metadata (
+               processing_key, approval_id, surface, metadata_sha256,
+               metadata_json, created_at
+             ) VALUES (?, ?, ?, ?, ?, ?)`,
+          )
+          .run(
+            requestIdentity.processing_key,
+            id,
+            surface,
+            encodedMetadata.sha256,
+            encodedMetadata.json,
+            reviewedAt,
+          );
+        storedMetadata = this.approvalResolutionMetadataRow(id);
+      }
+      if (
+        storedMetadata === undefined ||
+        storedMetadata.surface !== surface ||
+        storedMetadata.metadata_sha256 !== encodedMetadata.sha256 ||
+        storedMetadata.metadata_json !== encodedMetadata.json ||
+        storedMetadata.resolved_at !== reviewedAt
+      ) {
+        throw new Error(
+          'authority processing approval already has different resolution metadata',
+        );
+      }
+    });
+    return this.approvalDecisionStoreView(id);
+  }
+
+  readApprovalResolutionMetadata(
+    approvalIdValue: string,
+  ): AuthorityApprovalResolutionMetadata | null {
+    this.assertInitialized();
+    this.assertActiveBinding();
+    const id = assertApprovalId(approvalIdValue);
+    this.approvalRequestIdentity(id);
+    const row = this.approvalResolutionMetadataRow(id);
+    if (row === undefined) return null;
+    const metadata = assertJsonObject(
+      JSON.parse(row.metadata_json) as unknown,
+      'stored authority processing approval resolution metadata',
+    );
+    if (digestCanonicalJson(row.metadata_json) !== row.metadata_sha256) {
+      throw new Error(
+        'stored authority processing approval resolution metadata digest is invalid',
+      );
+    }
+    return Object.freeze({
+      approval_id: row.approval_id,
+      surface: row.surface,
+      metadata,
+      resolved_at: row.resolved_at,
+    });
+  }
+
+  async getOrCreate<T extends AuthorityBuiltOrganizationRecordEnvelope>(
+    idempotencyKey: string,
+    create: () => Promise<T>,
+  ): Promise<T> {
+    await this.initialize();
+    const id = assertApprovalId(idempotencyKey);
+    const stored = this.readFrozenOrganizationRecordEnvelope(id);
+    if (stored !== null) return stored as T;
+
+    const existingCreate = this.recordEnvelopeCreates.get(id);
+    if (existingCreate !== undefined) return (await existingCreate) as T;
+
+    const pending = this.createFrozenOrganizationRecordEnvelope(id, create);
+    this.recordEnvelopeCreates.set(id, pending);
+    try {
+      return (await pending) as T;
+    } finally {
+      if (this.recordEnvelopeCreates.get(id) === pending) {
+        this.recordEnvelopeCreates.delete(id);
+      }
+    }
+  }
+
+  /** Explicit exact-replay seam used by migrations and store verification. */
+  async freezeOrganizationRecordEnvelope<
+    T extends AuthorityBuiltOrganizationRecordEnvelope,
+  >(input: {
+    readonly approvalId: string;
+    readonly record: T;
+  }): Promise<T> {
+    await this.initialize();
+    return this.freezeOrganizationRecordEnvelopeNow(
+      assertApprovalId(input.approvalId),
+      input.record,
+      false,
+    ) as T;
+  }
+
+  readFrozenOrganizationRecordEnvelope(
+    approvalIdValue: string,
+  ): AuthorityBuiltOrganizationRecordEnvelope | null {
+    this.assertInitialized();
+    this.assertActiveBinding();
+    const id = assertApprovalId(approvalIdValue);
+    this.approvalRequestIdentity(id);
+    const row = this.frozenRecordEnvelopeRow(id);
+    return row === undefined ? null : this.decodeFrozenRecordEnvelope(row);
+  }
+
   async getCandidate(
     processingKey: string,
   ): Promise<AuthorityProcessingCandidate | undefined> {
@@ -1037,6 +1546,377 @@ export class SqliteAuthorityProcessingStore implements CoreStateStore {
       } catch {}
       throw error;
     }
+  }
+
+  private assertInitialized(): void {
+    if (!this.initialized) {
+      throw new Error('authority processing store is not initialized');
+    }
+  }
+
+  private approvalRequestIdentity(
+    approvalIdValue: string,
+  ): ApprovalRequestIdentityRow {
+    const id = assertApprovalId(approvalIdValue);
+    const rows = this.database
+      .prepare(
+        `SELECT q.processing_key, q.document_json, q.document_sha256,
+                q.request_approval_id
+           FROM authority_processing_slots q
+           JOIN authority_processing_candidates c
+             ON c.processing_key = q.processing_key
+          WHERE q.slot_name = '${APPROVAL_REQUEST_SLOT}'
+            AND q.request_approval_id = ?
+            AND c.source_adapter_id = ? AND c.source_instance_id = ?`,
+      )
+      .all(
+        id,
+        this.binding.source_adapter_id,
+        this.binding.source_instance_id,
+      ) as ApprovalRequestIdentityRow[];
+    if (rows.length !== 1) {
+      throw new Error(
+        'authority processing approval request is not owned by this source',
+      );
+    }
+    const row = rows[0]!;
+    const parsed = JSON.parse(row.document_json) as unknown;
+    const encoded = exactJson(parsed);
+    if (
+      row.request_approval_id !== id ||
+      approvalId(row.processing_key) !== id ||
+      row.document_json !== encoded.json ||
+      row.document_sha256 !== encoded.sha256
+    ) {
+      throw new Error('authority processing approval request is invalid');
+    }
+    return row;
+  }
+
+  private approvalPresentationContractRow(
+    approvalIdValue: string,
+  ): ApprovalPresentationContractRow | undefined {
+    return this.database
+      .prepare(
+        `SELECT p.processing_key, p.approval_id, p.contract_mode,
+                p.contract_sha256, p.contract_json
+           FROM authority_processing_approval_presentation_contracts p
+           JOIN authority_processing_slots q
+             ON q.processing_key = p.processing_key
+            AND q.slot_name = '${APPROVAL_REQUEST_SLOT}'
+            AND q.request_approval_id = p.approval_id
+           JOIN authority_processing_candidates c
+             ON c.processing_key = p.processing_key
+          WHERE p.approval_id = ?
+            AND c.source_adapter_id = ? AND c.source_instance_id = ?`,
+      )
+      .get(
+        approvalIdValue,
+        this.binding.source_adapter_id,
+        this.binding.source_instance_id,
+      ) as ApprovalPresentationContractRow | undefined;
+  }
+
+  private decodeApprovalPresentationContract(
+    row: ApprovalPresentationContractRow,
+  ): AuthorityFrozenApprovalPresentationContract {
+    const parsed = JSON.parse(row.contract_json) as unknown;
+    const mode = approvalPresentationMode(parsed);
+    const encoded = exactJson(parsed);
+    if (
+      mode !== row.contract_mode ||
+      encoded.json !== row.contract_json ||
+      encoded.sha256 !== row.contract_sha256
+    ) {
+      throw new Error(
+        'stored authority processing approval presentation contract is invalid',
+      );
+    }
+    return Object.freeze({
+      ...(parsed as AuthorityFrozenApprovalPresentationContract),
+    });
+  }
+
+  private approvalPublicationRow(
+    processingKey: string,
+    surface: string,
+  ): ApprovalPublicationRow | undefined {
+    return this.database
+      .prepare(
+        `SELECT surface, reference_sha256, reference_json
+           FROM authority_processing_approval_publications
+          WHERE processing_key = ? AND surface = ?`,
+      )
+      .get(processingKey, surface) as ApprovalPublicationRow | undefined;
+  }
+
+  private approvalPublications(
+    processingKey: string,
+  ): AuthorityApprovalDecisionStoreView['published'] {
+    const rows = this.database
+      .prepare(
+        `SELECT surface, reference_sha256, reference_json
+           FROM authority_processing_approval_publications
+          WHERE processing_key = ?
+          ORDER BY published_at, surface`,
+      )
+      .all(processingKey) as ApprovalPublicationRow[];
+    return rows.map((row) => {
+      const parsed = JSON.parse(row.reference_json) as unknown;
+      const reference = assertJsonObject(
+        parsed,
+        'stored authority processing approval publication reference',
+      );
+      const encoded = exactJson(reference);
+      if (
+        encoded.json !== row.reference_json ||
+        encoded.sha256 !== row.reference_sha256
+      ) {
+        throw new Error(
+          'stored authority processing approval publication reference is invalid',
+        );
+      }
+      return Object.freeze({ surface: row.surface, reference });
+    });
+  }
+
+  private approvalResolutionMetadataRow(
+    approvalIdValue: string,
+  ): ApprovalResolutionMetadataRow | undefined {
+    return this.database
+      .prepare(
+        `SELECT m.approval_id, m.surface, m.metadata_sha256, m.metadata_json,
+                r.resolved_at
+           FROM authority_processing_approval_resolution_metadata m
+           JOIN authority_processing_resolutions r
+             ON r.processing_key = m.processing_key
+           JOIN authority_processing_slots q
+             ON q.processing_key = m.processing_key
+            AND q.slot_name = '${APPROVAL_REQUEST_SLOT}'
+            AND q.request_approval_id = m.approval_id
+           JOIN authority_processing_candidates c
+             ON c.processing_key = m.processing_key
+          WHERE m.approval_id = ?
+            AND c.source_adapter_id = ? AND c.source_instance_id = ?`,
+      )
+      .get(
+        approvalIdValue,
+        this.binding.source_adapter_id,
+        this.binding.source_instance_id,
+      ) as ApprovalResolutionMetadataRow | undefined;
+  }
+
+  private slackApprovalDecision(
+    request: ApprovalRequest,
+    input: Parameters<AuthorityApprovalDecisionStore['resolve']>[0],
+    reviewedAt: string,
+  ): ApprovalDecision {
+    const decision: ApprovalDecision =
+      input.status === 'approved'
+        ? {
+            status: 'approved',
+            reviewed_at: reviewedAt,
+            reviewed_by: input.reviewedBy,
+            reason: input.reason ?? null,
+            approved_brief: request.brief,
+          }
+        : {
+            status: 'rejected',
+            reviewed_at: reviewedAt,
+            reviewed_by: input.reviewedBy,
+            reason: input.reason ?? null,
+            approved_brief: null,
+          };
+    assertCanonicalApprovalDecision(decision, {
+      meeting: request.meeting,
+      processor: request.decisions.processor,
+      decisions: request.decisions,
+    });
+    return decision;
+  }
+
+  private approvalDecisionStoreView(
+    approvalIdValue: string,
+  ): AuthorityApprovalDecisionStoreView {
+    this.assertInitialized();
+    this.assertActiveBinding();
+    const requestIdentity = this.approvalRequestIdentity(approvalIdValue);
+    const request = JSON.parse(requestIdentity.document_json) as ApprovalRequest;
+    const stored = this.resolution(requestIdentity.processing_key);
+    let resolution: ApprovalDecision | null = null;
+    if (stored !== undefined) {
+      const parsed = JSON.parse(stored.resolution_json) as unknown;
+      assertCanonicalApprovalDecision(parsed, {
+        meeting: request.meeting,
+        processor: request.decisions.processor,
+        decisions: request.decisions,
+      });
+      const encoded = exactJson(parsed);
+      if (
+        parsed.status !== stored.terminal_status ||
+        parsed.reviewed_at !== stored.resolved_at ||
+        encoded.json !== stored.resolution_json ||
+        encoded.sha256 !== stored.resolution_sha256
+      ) {
+        throw new Error(
+          'stored authority processing approval resolution is invalid',
+        );
+      }
+      resolution = parsed;
+    }
+    return Object.freeze({
+      approval_id: requestIdentity.request_approval_id,
+      status: resolution?.status ?? 'pending',
+      reviewed_at: resolution?.reviewed_at ?? null,
+      reviewed_by: resolution?.reviewed_by ?? null,
+      reason: resolution?.reason ?? null,
+      brief: request.brief,
+      published: this.approvalPublications(requestIdentity.processing_key),
+    });
+  }
+
+  private async createFrozenOrganizationRecordEnvelope<
+    T extends AuthorityBuiltOrganizationRecordEnvelope,
+  >(approvalIdValue: string, create: () => Promise<T>): Promise<T> {
+    const existing = this.readFrozenOrganizationRecordEnvelope(approvalIdValue);
+    if (existing !== null) return existing as T;
+    const created = await create();
+    return this.freezeOrganizationRecordEnvelopeNow(
+      approvalIdValue,
+      created,
+      true,
+    ) as T;
+  }
+
+  private freezeOrganizationRecordEnvelopeNow(
+    approvalIdValue: string,
+    record: AuthorityBuiltOrganizationRecordEnvelope,
+    returnWinner: boolean,
+  ): AuthorityBuiltOrganizationRecordEnvelope {
+    const id = assertApprovalId(approvalIdValue);
+    const candidate = this.validateOrganizationRecordEnvelope(id, record);
+    const encoded = exactJson(candidate.envelope);
+    return this.immediate(() => {
+      this.assertActiveBinding();
+      const request = this.approvalRequestIdentity(id);
+      this.database
+        .prepare(
+          `INSERT INTO authority_processing_frozen_record_envelopes (
+             processing_key, approval_id, envelope_id, event_type,
+             envelope_sha256, envelope_json, created_at
+           ) VALUES (?, ?, ?, ?, ?, ?, ?)
+           ON CONFLICT (processing_key) DO NOTHING`,
+        )
+        .run(
+          request.processing_key,
+          id,
+          candidate.envelope_id,
+          candidate.event_type,
+          encoded.sha256,
+          encoded.json,
+          assertCanonicalTimestamp(this.now(), 'record envelope created_at'),
+        );
+      const row = this.frozenRecordEnvelopeRow(id);
+      if (row === undefined) {
+        throw new Error('authority processing frozen record envelope was not stored');
+      }
+      const stored = this.decodeFrozenRecordEnvelope(row);
+      const exactReplay =
+        row.processing_key === request.processing_key &&
+        row.approval_id === id &&
+        row.envelope_id === candidate.envelope_id &&
+        row.event_type === candidate.event_type &&
+        row.envelope_sha256 === encoded.sha256 &&
+        row.envelope_json === encoded.json;
+      if (!exactReplay && !returnWinner) {
+        throw new Error(
+          'authority processing approval already has a different frozen record envelope',
+        );
+      }
+      return stored;
+    });
+  }
+
+  private validateOrganizationRecordEnvelope(
+    approvalIdValue: string,
+    record: AuthorityBuiltOrganizationRecordEnvelope,
+  ): AuthorityBuiltOrganizationRecordEnvelope & { readonly envelope: JsonObject } {
+    const id = assertApprovalId(approvalIdValue);
+    if (
+      typeof record.envelope_id !== 'string' ||
+      record.envelope_id.length < 1 ||
+      record.envelope_id.length > 256 ||
+      record.idempotency_key !== id ||
+      record.event_type !== 'approval'
+    ) {
+      throw new Error(
+        'authority processing frozen record envelope wrapper is invalid',
+      );
+    }
+    const envelope = assertJsonObject(
+      record.envelope,
+      'authority processing frozen record envelope',
+    );
+    if (
+      envelope['schema_version'] !== 3 ||
+      envelope['kind'] !== 'echo-organization-record-envelope' ||
+      envelope['envelope_id'] !== record.envelope_id ||
+      envelope['idempotency_key'] !== id ||
+      envelope['event_type'] !== 'approval'
+    ) {
+      throw new Error(
+        'authority processing frozen record envelope identity is invalid',
+      );
+    }
+    return Object.freeze({ ...record, envelope });
+  }
+
+  private frozenRecordEnvelopeRow(
+    approvalIdValue: string,
+  ): FrozenRecordEnvelopeRow | undefined {
+    return this.database
+      .prepare(
+        `SELECT f.processing_key, f.approval_id, f.envelope_id, f.event_type,
+                f.envelope_sha256, f.envelope_json
+           FROM authority_processing_frozen_record_envelopes f
+           JOIN authority_processing_slots q
+             ON q.processing_key = f.processing_key
+            AND q.slot_name = '${APPROVAL_REQUEST_SLOT}'
+            AND q.request_approval_id = f.approval_id
+           JOIN authority_processing_candidates c
+             ON c.processing_key = f.processing_key
+          WHERE f.approval_id = ?
+            AND c.source_adapter_id = ? AND c.source_instance_id = ?`,
+      )
+      .get(
+        approvalIdValue,
+        this.binding.source_adapter_id,
+        this.binding.source_instance_id,
+      ) as FrozenRecordEnvelopeRow | undefined;
+  }
+
+  private decodeFrozenRecordEnvelope(
+    row: FrozenRecordEnvelopeRow,
+  ): AuthorityBuiltOrganizationRecordEnvelope {
+    const envelope = assertJsonObject(
+      JSON.parse(row.envelope_json) as unknown,
+      'stored authority processing frozen record envelope',
+    );
+    const encoded = exactJson(envelope);
+    if (
+      encoded.json !== row.envelope_json ||
+      encoded.sha256 !== row.envelope_sha256
+    ) {
+      throw new Error(
+        'stored authority processing frozen record envelope digest is invalid',
+      );
+    }
+    return this.validateOrganizationRecordEnvelope(row.approval_id, {
+      envelope_id: row.envelope_id,
+      idempotency_key: row.approval_id,
+      event_type: row.event_type,
+      envelope,
+    });
   }
 
   private assertActiveMembership(): void {

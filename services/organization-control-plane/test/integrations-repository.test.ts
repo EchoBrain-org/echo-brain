@@ -1074,6 +1074,24 @@ describe("organization integrations repository", () => {
       ),
     ).toEqual(result);
     expect(repository.activateExistingSlackApproval(input)).toEqual(result);
+    expect(
+      repository.activeSlackApprovalRuntimeBinding("founder-approvals"),
+    ).toMatchObject({
+      principal_id: PRINCIPAL_ID,
+      membership_id: MEMBERSHIP_ID,
+      reviewer_slack_user_id: "U_ZHEN",
+      installation_id: INSTALLATION_ID,
+      adapter_binding_id: linked.adapter_binding_id,
+      approve_permission_grant_id: result.approve_permission_grant_id,
+      reject_permission_grant_id: result.reject_permission_grant_id,
+      organization_tool: {
+        team_id: "T123TEAM",
+        channel_id: "C123CHANNEL",
+      },
+    });
+    expect(
+      repository.activeSlackApprovalRuntimeBinding("missing-approvals"),
+    ).toBeNull();
     expect(() =>
       repository.slackApprovalActivationReplay(
         input.command_id,
