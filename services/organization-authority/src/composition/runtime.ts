@@ -635,6 +635,7 @@ export async function startOrganizationAuthority(
             expected_issuer: personSessionConfig.oidc_configuration.issuer,
             issueBootstrapLoginGrant: (input: {
               target_membership_id: string;
+              expected_email: string;
             }) =>
               personIdentitySessions.issueBootstrapLoginGrant({
                 ...input,

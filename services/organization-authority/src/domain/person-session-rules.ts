@@ -8,6 +8,25 @@ export const PERSON_SESSION_HARD_REAUTHENTICATION_MS = 7 * 24 * 60 * 60 * 1000;
 export const OIDC_ASSERTION_ISSUED_AT_SKEW_MS = 60 * 1000;
 export const PERSON_SESSION_SECRET_BYTES = 32;
 
+export function isCanonicalPersonEmail(value: unknown): value is string {
+  if (
+    typeof value !== "string" ||
+    value.length < 3 ||
+    value.length > 254 ||
+    value !== value.trim() ||
+    value !== value.toLowerCase() ||
+    !/^[!-~]+$/.test(value)
+  ) {
+    return false;
+  }
+  const separator = value.indexOf("@");
+  return (
+    separator > 0 &&
+    separator === value.lastIndexOf("@") &&
+    separator < value.length - 1
+  );
+}
+
 const OPAQUE_FAILURE_MESSAGE = "person authentication failed";
 
 export function personSessionUnauthorized(): AuthorityOperationError {

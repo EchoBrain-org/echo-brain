@@ -28,6 +28,7 @@ const STATE = 'B'.repeat(43);
 const NONCE = 'C'.repeat(43);
 const CODE_CHALLENGE = 'D'.repeat(43);
 const KEY_ID = 'test-rs256-key';
+const VERIFIED_EMAIL = 'person@echobrain.org';
 
 const CONFIGURATION = {
   issuer: ISSUER,
@@ -159,6 +160,8 @@ class OfflineOidcIssuer {
           exp: now + 300,
           nonce: this.mode === 'invalid_nonce_claim' ? 42 : NONCE,
           tenant_id: CONFIGURATION.tenant.claim_value,
+          email: VERIFIED_EMAIL,
+          email_verified: true,
         });
         if (this.mode === 'tampered_signature') {
           const parts = idToken.split('.');
@@ -285,6 +288,8 @@ describe('OpenIdClientPersonSessionProvider', () => {
         issued_at: expect.any(Number),
         claims: {
           tenant_id: CONFIGURATION.tenant.claim_value,
+          email: VERIFIED_EMAIL,
+          email_verified: true,
         },
       },
     });

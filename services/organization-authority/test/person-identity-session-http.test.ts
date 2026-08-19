@@ -6,6 +6,7 @@ import {
   ORGANIZATION_API_ADMIN_AUTH_SCHEME,
   ORGANIZATION_API_PROXY_AUTH_SCHEME,
 } from '@echo-brain/organization-api';
+import { canonicalSha256 } from '@echo-brain/federation-protocol';
 import { describe, expect, it, vi } from 'vitest';
 import { AuthorityOperationError } from '../src/domain/errors.js';
 import {
@@ -40,6 +41,12 @@ const STATE = 'S'.repeat(43);
 const ACCESS_TOKEN = 'A'.repeat(43);
 const REFRESH_TOKEN = 'R'.repeat(43);
 const EXPECTED_ISSUER = 'https://identity.example.test/';
+const EXPECTED_EMAIL = 'person@echobrain.org';
+const EXPECTED_EMAIL_SHA256 = canonicalSha256({
+  schema_version: 1,
+  kind: 'authority-person-login-grant-expected-email-v1',
+  expected_email: EXPECTED_EMAIL,
+});
 
 const LOGIN_GRANT_RESULT = {
   organization_id: ORGANIZATION_ID,
@@ -48,6 +55,7 @@ const LOGIN_GRANT_RESULT = {
   membership_type: 'owner' as const,
   login_grant: LOGIN_GRANT,
   expected_issuer: 'https://identity.example.test/',
+  expected_email_sha256: EXPECTED_EMAIL_SHA256,
   issued_at: '2026-08-18T00:00:00.000Z',
   expires_at: '2026-08-18T00:15:00.000Z',
 };
@@ -147,7 +155,7 @@ describe('Person identity session HTTP routes', () => {
           authorization: `${ORGANIZATION_API_ADMIN_AUTH_SCHEME} ${ADMIN_TOKEN}`,
           'content-type': 'application/json',
         },
-        body: '{}',
+        body: JSON.stringify({ expected_email: EXPECTED_EMAIL }),
       });
       expect(grant.status).toBe(201);
       expect(grant.headers.get('cache-control')).toBe('no-store');
@@ -205,6 +213,7 @@ describe('Person identity session HTTP routes', () => {
 
     expect(personSessions.issueBootstrapLoginGrant).toHaveBeenCalledWith({
       target_membership_id: MEMBERSHIP_ID,
+      expected_email: EXPECTED_EMAIL,
     });
     expect(personSessions.beginOidcLogin).toHaveBeenNthCalledWith(1, {
       kind: 'identity_bootstrap',
@@ -235,7 +244,7 @@ describe('Person identity session HTTP routes', () => {
         path: `${PERSON_SESSION_ADMIN_MEMBERSHIPS_PATH}/${MEMBERSHIP_ID}/person-login-grants`,
         method: 'POST',
         authorization: `${ORGANIZATION_API_ADMIN_AUTH_SCHEME} ${ADMIN_TOKEN}`,
-        body: '{}',
+        body: JSON.stringify({ expected_email: EXPECTED_EMAIL }),
       },
       {
         path: PERSON_SESSION_OIDC_BEGIN_PATH,
@@ -291,7 +300,7 @@ describe('Person identity session HTTP routes', () => {
         {
           method: 'POST',
           headers: { ...proxyHeaders(), 'content-type': 'application/json' },
-          body: '{}',
+          body: JSON.stringify({ expected_email: EXPECTED_EMAIL }),
         },
       );
       expect(response.status).toBe(401);
@@ -314,7 +323,12 @@ describe('Person identity session HTTP routes', () => {
         {
           path: `${PERSON_SESSION_ADMIN_MEMBERSHIPS_PATH}/${MEMBERSHIP_ID}/person-login-grants`,
           authorization: `${ORGANIZATION_API_ADMIN_AUTH_SCHEME} ${ADMIN_TOKEN}`,
-          body: { extra: true },
+          body: {},
+        },
+        {
+          path: `${PERSON_SESSION_ADMIN_MEMBERSHIPS_PATH}/${MEMBERSHIP_ID}/person-login-grants`,
+          authorization: `${ORGANIZATION_API_ADMIN_AUTH_SCHEME} ${ADMIN_TOKEN}`,
+          body: { expected_email: EXPECTED_EMAIL, extra: true },
         },
         {
           path: PERSON_SESSION_OIDC_BEGIN_PATH,

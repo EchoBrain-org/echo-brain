@@ -60,8 +60,9 @@ principal or membership identity and naturally dies on Authority restart.
 
 Person sign-in uses the OIDC Authorization Code flow. `response_type=code`,
 `scope=openid email`, and `code_challenge_method=S256` are mandatory. Email is
-requested only because providers such as Google require one basic identity
-scope alongside `openid`; it never identifies or binds an EchoBrain Person.
+requested so the first binding can prove that the signed, verified provider
+address matches the exact work email approved by the administrator. It is not
+the durable Person identifier; that remains `(issuer, sub)`.
 Implicit, hybrid, password, device-code, and caller-supplied bearer-token
 sign-in are not accepted. The PKCE verifier is 32 random bytes encoded as
 unpadded base64url; the challenge is unpadded base64url SHA-256 of the ASCII
@@ -153,20 +154,30 @@ rules:
 - The configured tenant rule succeeds before any identity lookup.
 - The returned nonce hashes to the exact unconsumed attempt's `nonce` digest.
 
-Email, email-verification status, display name, username, provider profile
-fields, and token possession never find, create, merge, recover, or rebind a
-principal. They may be displayed only as untrusted presentation metadata.
+For the first binding only, the signed ID token must contain a canonical
+lowercase ASCII `email` and strict boolean `email_verified=true`. Its
+domain-separated digest must equal the expected-email digest on the bootstrap
+grant. Plaintext email is not persisted. This check authorizes the
+administrator-declared recipient to create the initial binding; email still
+does not become an identity key. Later grantless sign-ins resolve only the
+existing `(issuer, sub)` binding and deliberately ignore email changes or
+absence. Display name, username, other provider profile fields, and token
+possession never find, merge, recover, or rebind a principal.
 
 Before the subject is known, an administrator issues an opaque, digest-only
 Person login grant for one exact active Authority organization, principal,
-membership, membership type, and expected issuer. The administrator neither
-supplies nor predicts the provider's opaque subject. The grant expires exactly
-15 minutes after issue and cannot be extended or reused. A bootstrap login
-attempt references that grant. Its first verified callback rechecks the exact
-active membership tuple and expected issuer, then atomically consumes both
-attempt and grant, creates the unique `(issuer, sub)` binding, and issues the
-first session family. An existing pair bound to another principal, or a
-principal selected only by matching email, denies.
+membership, membership type, expected issuer, and canonical invited work email.
+Only the domain-separated email digest is retained in the grant and audit. The
+administrator neither supplies nor predicts the provider's opaque subject. The
+grant expires exactly 15 minutes after issue and cannot be extended or reused.
+A lean-v1 grant proves an administrator-declared recipient match; it does not
+send or prove delivery of an email invitation.
+A bootstrap login attempt references that grant. Its first verified callback
+rechecks the exact active membership tuple, expected issuer, and signed verified
+email digest, then atomically consumes both attempt and grant, creates the
+unique `(issuer, sub)` binding, and issues the first session family. An existing
+pair bound to another principal, or an email match without the exact grant,
+denies.
 
 Later sign-ins for an existing binding use a grantless attempt. Only after the
 ID token passes every check does the Authority resolve the exact existing
@@ -312,7 +323,7 @@ migrations `0001` through `0008`:
 
 | Table | Semantic contract |
 | --- | --- |
-| `authority_person_login_grants` | Current administrator authorization to bind one exact active organization, principal, membership, membership type, and expected issuer. Stores only the one-time grant digest, exact target, issue/expiry, and consumption state. It intentionally has no expected subject. |
+| `authority_person_login_grants` | Current administrator authorization to bind one exact active organization, principal, membership, membership type, expected issuer, and invited work-email digest. Stores only the one-time grant digest, domain-separated email digest, exact target, issue/expiry, and consumption state. It intentionally has no expected subject or plaintext email. |
 | `authority_oidc_identity_bindings` | The unique exact `(issuer, sub)` to Authority-principal and membership binding, with `tenant_constraint_sha256`, `oidc_configuration_sha256`, unique `initial_login_grant_sha256`, creation, and explicit revocation state. It has no email-derived key and is never retargeted in place. Bootstrap creation is atomic with grant and attempt consumption. |
 | `authority_oidc_login_attempts` | Bounded single-use authorization attempts: exact issuer, client, redirect and tenant/configuration digests; state and nonce digests; nullable sealed PKCE verifier plus sealing-key ID; optional bootstrap-grant digest; and creation, expiry, terminal outcome, assertion-issuance, and completion state. A null grant denotes an existing-binding login. Terminal completion atomically scrubs both sealed fields while retaining digest/timestamp replay evidence; expired rows require explicit maintenance. It stores no authorization code or upstream token. |
 | `authority_person_session_families` | One authenticated family bound by exact foreign keys to an identity binding and current Person tuple, with `upstream_assertion_issued_at`, `oidc_configuration_sha256`, creation, the seven-day hard-reauthentication deadline derived from that time, and family-wide revocation reason/time. Its hard deadline is immutable. |
@@ -321,6 +332,10 @@ migrations `0001` through `0008`:
 Migration `0013_person_session_assertion_issued_at.sql` renames the two original
 `upstream_auth_time` columns to `upstream_assertion_issued_at`. This preserves
 the data and constraints while making the stored guarantee precise.
+Migration `0014_person_login_grant_expected_email.sql` adds the required
+invited-email digest to bootstrap grants and makes it immutable. It is a
+pre-live migration that requires the grant table to be empty; no identity data
+is guessed or backfilled.
 
 All five tables bind to the existing Authority organization, principal,
 membership, and audit authority. Cross-row constraints enforce exact

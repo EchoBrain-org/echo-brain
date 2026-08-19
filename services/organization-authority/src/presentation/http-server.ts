@@ -1449,12 +1449,18 @@ export function createOrganizationAuthorityHttpServer(
           sendSerializedJson(response, 503, PERSON_SESSION_UNAVAILABLE_BYTES);
           return;
         }
-        personSessionRequestObject(await readJsonBody(request), []);
+        const body = personSessionRequestObject(await readJsonBody(request), [
+          'expected_email',
+        ]);
         sendJson(
           response,
           201,
           await options.personSessions.issueBootstrapLoginGrant({
             target_membership_id: personLoginGrantRoute[1]!,
+            expected_email: personSessionString(
+              body['expected_email'],
+              'expected email',
+            ),
           }),
         );
         return;

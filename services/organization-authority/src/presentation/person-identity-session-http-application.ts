@@ -23,6 +23,7 @@ export interface PersonIdentitySessionHttpApplication {
   readonly expected_issuer: string;
   issueBootstrapLoginGrant(input: {
     target_membership_id: string;
+    expected_email: string;
   }): IssuedPersonLoginGrant | Promise<IssuedPersonLoginGrant>;
   beginOidcLogin(
     input: BeginPersonOidcLoginInput,

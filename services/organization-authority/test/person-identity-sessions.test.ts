@@ -11,6 +11,7 @@ import { join } from "node:path";
 import Database from "better-sqlite3";
 import { afterEach, describe, expect, it } from "vitest";
 import {
+  canonicalJson,
   federationId,
   p256KeyId,
   sha256Digest,
@@ -184,6 +185,20 @@ const OIDC_CONFIGURATION = {
   },
   id_token_algorithms: ["ES256"] as const,
 };
+const EXPECTED_EMAIL = "session.owner@example.test";
+
+function expectedEmailSha256(email = EXPECTED_EMAIL): Sha256Digest {
+  return sha256Digest(
+    Buffer.from(
+      canonicalJson({
+        schema_version: 1,
+        kind: "authority-person-login-grant-expected-email-v1",
+        expected_email: email,
+      }),
+      "utf8",
+    ),
+  );
+}
 
 function descriptor(): OrganizationAuthorityDescriptorV1 {
   const pair = generateKeyPairSync("ec", { namedCurve: "prime256v1" });
@@ -270,7 +285,11 @@ function verifiedResult(
       audience: OIDC_CONFIGURATION.client_id,
       nonce: begun.nonce,
       issued_at: Date.parse(begun.created_at) / 1000,
-      claims: { tenant_id: OIDC_CONFIGURATION.tenant.claim_value },
+      claims: {
+        tenant_id: OIDC_CONFIGURATION.tenant.claim_value,
+        email: EXPECTED_EMAIL,
+        email_verified: true,
+      },
       ...overrides,
     },
   };
@@ -288,6 +307,7 @@ async function bootstrapSession(
   const issued = fixture.application.issueBootstrapLoginGrant({
     target_membership_id: fixture.membership.membership_id,
     expected_issuer: OIDC_CONFIGURATION.issuer,
+    expected_email: EXPECTED_EMAIL,
   });
   const begun = fixture.application.beginOidcLogin({
     kind: "identity_bootstrap",
@@ -349,8 +369,10 @@ describe("PersonIdentitySessionApplication", () => {
     const issued = fixture.application.issueBootstrapLoginGrant({
       target_membership_id: fixture.membership.membership_id,
       expected_issuer: OIDC_CONFIGURATION.issuer,
+      expected_email: EXPECTED_EMAIL,
     });
     const loginGrantSha256 = digestSecret(issued.login_grant);
+    expect(issued.expected_email_sha256).toBe(expectedEmailSha256());
 
     const stored = fixture.repository.read((transaction) => ({
       grant: transaction.personLoginGrant(loginGrantSha256),
@@ -365,6 +387,7 @@ describe("PersonIdentitySessionApplication", () => {
       membership_id: fixture.membership.membership_id,
       membership_type: fixture.membership.membership_type,
       expected_issuer: OIDC_CONFIGURATION.issuer,
+      expected_email_sha256: expectedEmailSha256(),
       issued_at: issued.issued_at,
       expires_at: issued.expires_at,
     });
@@ -381,11 +404,13 @@ describe("PersonIdentitySessionApplication", () => {
         membership_type: fixture.membership.membership_type,
         login_grant_sha256: loginGrantSha256,
         expected_issuer: OIDC_CONFIGURATION.issuer,
+        expected_email_sha256: expectedEmailSha256(),
         issued_at: issued.issued_at,
         expires_at: issued.expires_at,
       },
     });
     expect(JSON.stringify(stored)).not.toContain(issued.login_grant);
+    expect(JSON.stringify(stored)).not.toContain(EXPECTED_EMAIL);
 
     fixture.repository.close();
     expect(
@@ -393,6 +418,38 @@ describe("PersonIdentitySessionApplication", () => {
         Buffer.from(issued.login_grant, "utf8"),
       ),
     ).toBe(false);
+    expect(readFileSync(fixture.path).includes(Buffer.from(EXPECTED_EMAIL))).toBe(
+      false,
+    );
+  });
+
+  it.each([
+    "Session.Owner@example.test",
+    " session.owner@example.test",
+    "session.owner.example.test",
+    "session owner@example.test",
+  ])("rejects a non-canonical invited email: %s", (expectedEmail) => {
+    const fixture = setup();
+    expect(() =>
+      fixture.application.issueBootstrapLoginGrant({
+        target_membership_id: fixture.membership.membership_id,
+        expected_issuer: OIDC_CONFIGURATION.issuer,
+        expected_email: expectedEmail,
+      }),
+    ).toThrowError(
+      expect.objectContaining({
+        code: "invalid_request",
+        message: "login grant expected email must be canonical lowercase ASCII",
+      }),
+    );
+    expect(
+      fixture.repository.read((transaction) =>
+        transaction
+          .recentAuditBefore(undefined, 10)
+          .some(({ action }) => action === "person_login_grant.issued"),
+      ),
+    ).toBe(false);
+    fixture.repository.close();
   });
 
   it("rolls back a bootstrap login grant when its audit insert fails", () => {
@@ -412,6 +469,7 @@ describe("PersonIdentitySessionApplication", () => {
       fixture.application.issueBootstrapLoginGrant({
         target_membership_id: fixture.membership.membership_id,
         expected_issuer: OIDC_CONFIGURATION.issuer,
+        expected_email: EXPECTED_EMAIL,
       }),
     ).toThrow("forced person login grant audit failure");
 
@@ -487,6 +545,11 @@ describe("PersonIdentitySessionApplication", () => {
     fixture.provider.result = verifiedResult(
       existingLogin,
       "opaque-provider-subject-001",
+      {
+        claims: {
+          tenant_id: OIDC_CONFIGURATION.tenant.claim_value,
+        },
+      },
     );
     const reauthenticated = await fixture.application.completeOidcLogin({
       state: existingLogin.state,
@@ -552,6 +615,7 @@ describe("PersonIdentitySessionApplication", () => {
     const grant = fixture.application.issueBootstrapLoginGrant({
       target_membership_id: fixture.membership.membership_id,
       expected_issuer: OIDC_CONFIGURATION.issuer,
+      expected_email: EXPECTED_EMAIL,
     });
     const begun = fixture.application.beginOidcLogin({
       kind: "identity_bootstrap",
@@ -618,6 +682,7 @@ describe("PersonIdentitySessionApplication", () => {
     const expiringGrant = fixture.application.issueBootstrapLoginGrant({
       target_membership_id: fixture.membership.membership_id,
       expected_issuer: OIDC_CONFIGURATION.issuer,
+      expected_email: EXPECTED_EMAIL,
     });
     const expiring = fixture.application.beginOidcLogin({
       kind: "identity_bootstrap",
@@ -644,6 +709,7 @@ describe("PersonIdentitySessionApplication", () => {
     const shortWindowGrant = fixture.application.issueBootstrapLoginGrant({
       target_membership_id: fixture.membership.membership_id,
       expected_issuer: OIDC_CONFIGURATION.issuer,
+      expected_email: EXPECTED_EMAIL,
     });
     fixture.clock.current = shortWindowGrant.expires_at;
     expectOpaqueDenial(() =>
@@ -660,6 +726,7 @@ describe("PersonIdentitySessionApplication", () => {
     const grant = fixture.application.issueBootstrapLoginGrant({
       target_membership_id: fixture.membership.membership_id,
       expected_issuer: OIDC_CONFIGURATION.issuer,
+      expected_email: EXPECTED_EMAIL,
     });
     const begun = fixture.application.beginOidcLogin({
       kind: "identity_bootstrap",
@@ -711,6 +778,7 @@ describe("PersonIdentitySessionApplication", () => {
     const grant = fixture.application.issueBootstrapLoginGrant({
       target_membership_id: fixture.membership.membership_id,
       expected_issuer: OIDC_CONFIGURATION.issuer,
+      expected_email: EXPECTED_EMAIL,
     });
     fixture.clock.current = "2026-08-18T00:06:02.000Z";
     const begun = fixture.application.beginOidcLogin({
@@ -741,6 +809,7 @@ describe("PersonIdentitySessionApplication", () => {
     const grant = fixture.application.issueBootstrapLoginGrant({
       target_membership_id: fixture.membership.membership_id,
       expected_issuer: OIDC_CONFIGURATION.issuer,
+      expected_email: EXPECTED_EMAIL,
     });
     const begun = fixture.application.beginOidcLogin({
       kind: "identity_bootstrap",
@@ -847,6 +916,89 @@ describe("PersonIdentitySessionApplication", () => {
       pkce_verifier_sealed: null,
     });
     expect(personSessionRowCounts(fixture.path)).toEqual(rowsBefore);
+    fixture.repository.close();
+  });
+
+  it.each([
+    {
+      name: "a different same-tenant email",
+      claims: {
+        tenant_id: OIDC_CONFIGURATION.tenant.claim_value,
+        email: "another.owner@example.test",
+        email_verified: true,
+      },
+    },
+    {
+      name: "a missing email",
+      claims: {
+        tenant_id: OIDC_CONFIGURATION.tenant.claim_value,
+        email_verified: true,
+      },
+    },
+    {
+      name: "a non-canonical email",
+      claims: {
+        tenant_id: OIDC_CONFIGURATION.tenant.claim_value,
+        email: "Session.Owner@example.test",
+        email_verified: true,
+      },
+    },
+    {
+      name: "an unverified email",
+      claims: {
+        tenant_id: OIDC_CONFIGURATION.tenant.claim_value,
+        email: EXPECTED_EMAIL,
+        email_verified: false,
+      },
+    },
+    {
+      name: "a missing email verification claim",
+      claims: {
+        tenant_id: OIDC_CONFIGURATION.tenant.claim_value,
+        email: EXPECTED_EMAIL,
+      },
+    },
+  ])("burns a bootstrap grant for $name", async ({ claims }) => {
+    const fixture = setup();
+    const grant = fixture.application.issueBootstrapLoginGrant({
+      target_membership_id: fixture.membership.membership_id,
+      expected_issuer: OIDC_CONFIGURATION.issuer,
+      expected_email: EXPECTED_EMAIL,
+    });
+    const begun = fixture.application.beginOidcLogin({
+      kind: "identity_bootstrap",
+      login_grant: grant.login_grant,
+    });
+    fixture.provider.result = verifiedResult(begun, undefined, { claims });
+
+    await expect(
+      fixture.application.completeOidcLogin({
+        state: begun.state,
+        authorization_code: "wrong-bootstrap-email-code",
+      }),
+    ).rejects.toMatchObject({
+      code: "unauthorized",
+      message: "person authentication failed",
+    });
+    expect(
+      fixture.repository.read((transaction) => ({
+        grant: transaction.personLoginGrant(digestSecret(grant.login_grant)),
+        attempt: transaction.oidcLoginAttempt(digestSecret(begun.state)),
+      })),
+    ).toMatchObject({
+      grant: { consumed_at: fixture.clock.current },
+      attempt: {
+        terminal_outcome: "denied",
+        completed_at: fixture.clock.current,
+        resolved_identity_binding_id: null,
+        pkce_verifier_seal_key_id: null,
+        pkce_verifier_sealed: null,
+      },
+    });
+    expect(personSessionRowCounts(fixture.path)).toEqual({
+      families: 0,
+      credentials: 0,
+    });
     fixture.repository.close();
   });
 
@@ -1123,6 +1275,7 @@ describe("PersonIdentitySessionApplication", () => {
     const grant = fixture.application.issueBootstrapLoginGrant({
       target_membership_id: fixture.membership.membership_id,
       expected_issuer: OIDC_CONFIGURATION.issuer,
+      expected_email: EXPECTED_EMAIL,
     });
     const begun = fixture.application.beginOidcLogin({
       kind: "identity_bootstrap",
@@ -1173,6 +1326,7 @@ describe("PersonIdentitySessionApplication", () => {
     const grant = fixture.application.issueBootstrapLoginGrant({
       target_membership_id: fixture.membership.membership_id,
       expected_issuer: OIDC_CONFIGURATION.issuer,
+      expected_email: EXPECTED_EMAIL,
     });
     const begun = fixture.application.beginOidcLogin({
       kind: "identity_bootstrap",

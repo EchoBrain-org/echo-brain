@@ -7,6 +7,7 @@ import {
   assertOpaqueSubject,
   assertSessionRevocationReason,
   earlierTimestamp,
+  isCanonicalPersonEmail,
   isStrictlyBefore,
   OIDC_ASSERTION_ISSUED_AT_SKEW_MS,
   OIDC_LOGIN_ATTEMPT_LIFETIME_MS,
@@ -44,6 +45,7 @@ const BASE64URL_PATTERN = /^[A-Za-z0-9_-]+$/;
 export interface IssuedPersonLoginGrant extends AuthorityPersonMembershipBinding {
   login_grant: string;
   expected_issuer: string;
+  expected_email_sha256: Sha256Digest;
   issued_at: string;
   expires_at: string;
 }
@@ -166,6 +168,7 @@ interface SessionCredentialCandidate {
 interface VerifiedIdentity {
   issuer: string;
   subject: string;
+  bootstrap_email_sha256: Sha256Digest | null;
   upstream_assertion_issued_at: string;
 }
 
@@ -314,6 +317,7 @@ export class PersonIdentitySessionApplication {
   issueBootstrapLoginGrant(input: {
     target_membership_id: string;
     expected_issuer: string;
+    expected_email: string;
   }): IssuedPersonLoginGrant {
     if (input.expected_issuer !== this.configuration.issuer) {
       throw new AuthorityOperationError(
@@ -321,8 +325,15 @@ export class PersonIdentitySessionApplication {
         "login grant issuer does not match Authority configuration",
       );
     }
+    if (!isCanonicalPersonEmail(input.expected_email)) {
+      throw new AuthorityOperationError(
+        "invalid_request",
+        "login grant expected email must be canonical lowercase ASCII",
+      );
+    }
     const loginGrant = this.secret("login_grant");
     const loginGrantSha256 = this.digestSecret(loginGrant);
+    const expectedEmailSha256 = this.expectedEmailSha256(input.expected_email);
     return this.repository.writeAtLinearization(
       () => this.runtime.clock.now(),
       (transaction, issuedAt) => {
@@ -351,6 +362,7 @@ export class PersonIdentitySessionApplication {
           membership_id: membership.membership_id,
           membership_type: membership.membership_type,
           expected_issuer: input.expected_issuer,
+          expected_email_sha256: expectedEmailSha256,
           oidc_configuration_sha256:
             this.configuration.oidc_configuration_sha256,
           expires_at: expiresAt,
@@ -367,6 +379,7 @@ export class PersonIdentitySessionApplication {
             membership_type: stored.membership_type,
             login_grant_sha256: stored.login_grant_sha256,
             expected_issuer: stored.expected_issuer,
+            expected_email_sha256: stored.expected_email_sha256,
             issued_at: stored.issued_at,
             expires_at: stored.expires_at,
           },
@@ -378,6 +391,7 @@ export class PersonIdentitySessionApplication {
           membership_type: stored.membership_type,
           login_grant: loginGrant,
           expected_issuer: stored.expected_issuer,
+          expected_email_sha256: stored.expected_email_sha256,
           issued_at: stored.issued_at,
           expires_at: stored.expires_at,
         };
@@ -589,6 +603,9 @@ export class PersonIdentitySessionApplication {
               grant === undefined ||
               grant.consumed_at !== null ||
               grant.expected_issuer !== identity.issuer ||
+              identity.bootstrap_email_sha256 === null ||
+              grant.expected_email_sha256 !==
+                identity.bootstrap_email_sha256 ||
               grant.oidc_configuration_sha256 !==
                 current.oidc_configuration_sha256 ||
               !isStrictlyBefore(observedAt, grant.expires_at)
@@ -1127,9 +1144,21 @@ export class PersonIdentitySessionApplication {
     ) {
       throw personSessionUnauthorized();
     }
+    let bootstrapEmailSha256: Sha256Digest | null = null;
+    if (attempt.attempt_purpose === "identity_bootstrap") {
+      const email = token.claims["email"];
+      if (
+        !isCanonicalPersonEmail(email) ||
+        token.claims["email_verified"] !== true
+      ) {
+        throw personSessionUnauthorized();
+      }
+      bootstrapEmailSha256 = this.expectedEmailSha256(email);
+    }
     return {
       issuer: token.issuer,
       subject: token.subject,
+      bootstrap_email_sha256: bootstrapEmailSha256,
       upstream_assertion_issued_at: new Date(
         assertionIssuedAtMilliseconds,
       ).toISOString(),
@@ -1468,6 +1497,14 @@ export class PersonIdentitySessionApplication {
 
   private digestCanonical(value: unknown): Sha256Digest {
     return this.digestUtf8Unchecked(canonicalJson(value));
+  }
+
+  private expectedEmailSha256(expectedEmail: string): Sha256Digest {
+    return this.digestCanonical({
+      schema_version: 1,
+      kind: "authority-person-login-grant-expected-email-v1",
+      expected_email: expectedEmail,
+    });
   }
 
   private digestUtf8Unchecked(value: string): Sha256Digest {

@@ -205,8 +205,9 @@ describe('person identity and session persistence', () => {
             `INSERT INTO authority_person_login_grants (
                login_grant_sha256, grant_purpose, organization_id,
                principal_id, membership_id, membership_type, expected_issuer,
-               oidc_configuration_sha256, issued_at, expires_at, consumed_at
-             ) VALUES (?, 'oidc_identity_bootstrap', ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+               expected_email_sha256, oidc_configuration_sha256, issued_at,
+               expires_at, consumed_at
+             ) VALUES (?, 'oidc_identity_bootstrap', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
           )
           .run(
             digest('preconsumed grant insertion'),
@@ -215,6 +216,7 @@ describe('person identity and session persistence', () => {
             membership.membership_id,
             membership.membership_type,
             'https://issuer.example/',
+            digest('preconsumed expected email'),
             digest('OIDC configuration v1'),
             '2026-08-18T00:00:00.000Z',
             '2026-08-18T00:15:00.000Z',
@@ -251,6 +253,7 @@ describe('person identity and session persistence', () => {
           membership_id: membership.membership_id,
           membership_type: membership.membership_type,
           expected_issuer: issuer,
+          expected_email_sha256: digest('expected email'),
           oidc_configuration_sha256: configurationSha256,
           expires_at: '2026-08-18T00:15:01.000Z',
         });
@@ -266,6 +269,7 @@ describe('person identity and session persistence', () => {
         membership_id: membership.membership_id,
         membership_type: membership.membership_type,
         expected_issuer: issuer,
+        expected_email_sha256: digest('expected email'),
         oidc_configuration_sha256: configurationSha256,
         expires_at: '2026-08-18T00:15:01.000Z',
       });
@@ -553,6 +557,7 @@ describe('person identity and session persistence', () => {
         membership_id: membership.membership_id,
         membership_type: membership.membership_type,
         expected_issuer: issuer,
+        expected_email_sha256: digest('expected email'),
         oidc_configuration_sha256: configurationSha256,
         expires_at: '2026-08-18T00:17:01.000Z',
       });
@@ -615,6 +620,14 @@ describe('person identity and session persistence', () => {
               WHERE login_grant_sha256 = ?`,
           )
           .run(grantSha256),
+      (database: Database.Database) =>
+        database
+          .prepare(
+            `UPDATE authority_person_login_grants
+                SET expected_email_sha256 = ?
+              WHERE login_grant_sha256 = ?`,
+          )
+          .run(digest('retargeted expected email'), grantSha256),
       (database: Database.Database) =>
         database
           .prepare(
@@ -783,6 +796,7 @@ describe('person identity and session persistence', () => {
         membership_id: membership.membership_id,
         membership_type: membership.membership_type,
         expected_issuer: issuer,
+        expected_email_sha256: digest('expected email'),
         oidc_configuration_sha256: configurationSha256,
         expires_at: '2026-08-18T00:18:21.000Z',
       });
@@ -1070,6 +1084,7 @@ describe('person identity and session persistence', () => {
         membership_id: membership.membership_id,
         membership_type: membership.membership_type,
         expected_issuer: issuer,
+        expected_email_sha256: digest('expected email'),
         oidc_configuration_sha256: configurationSha256,
         expires_at: '2026-08-18T00:19:10.000Z',
       });
@@ -1115,6 +1130,7 @@ describe('person identity and session persistence', () => {
         membership_id: membership.membership_id,
         membership_type: membership.membership_type,
         expected_issuer: issuer,
+        expected_email_sha256: digest('expected email'),
         oidc_configuration_sha256: configurationSha256,
         expires_at: '2026-08-18T00:19:40.000Z',
       });
@@ -1425,6 +1441,7 @@ describe('person identity and session persistence', () => {
         membership_id: membership.membership_id,
         membership_type: membership.membership_type,
         expected_issuer: issuer,
+        expected_email_sha256: digest('expected email'),
         oidc_configuration_sha256: configurationSha256,
         expires_at: '2026-08-18T01:15:01.000Z',
       });
@@ -1530,6 +1547,7 @@ describe('person identity and session persistence', () => {
         membership_id: membership.membership_id,
         membership_type: membership.membership_type,
         expected_issuer: issuer,
+        expected_email_sha256: digest('expected email'),
         oidc_configuration_sha256: configurationSha256,
         expires_at: '2026-08-18T01:16:10.000Z',
       });
@@ -1577,6 +1595,7 @@ describe('person identity and session persistence', () => {
         membership_id: membership.membership_id,
         membership_type: membership.membership_type,
         expected_issuer: issuer,
+        expected_email_sha256: digest('expected email'),
         oidc_configuration_sha256: configurationSha256,
         expires_at: '2026-08-18T01:16:31.000Z',
       });

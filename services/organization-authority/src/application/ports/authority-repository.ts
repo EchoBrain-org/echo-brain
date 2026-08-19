@@ -431,6 +431,8 @@ export interface StoredPersonLoginGrant
   grant_purpose: 'oidc_identity_bootstrap';
   /** Exact issuer this bootstrap grant permits; no subject is known yet. */
   expected_issuer: string;
+  /** Domain-separated digest of the canonical invited work email. */
+  expected_email_sha256: Sha256Digest;
   oidc_configuration_sha256: Sha256Digest;
   issued_at: string;
   expires_at: string;

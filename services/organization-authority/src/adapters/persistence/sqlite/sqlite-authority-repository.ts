@@ -279,6 +279,7 @@ interface PersonLoginGrantRow {
   membership_id: string;
   membership_type: string;
   expected_issuer: string;
+  expected_email_sha256: string;
   oidc_configuration_sha256: string;
   issued_at: string;
   expires_at: string;
@@ -2126,6 +2127,7 @@ class SqliteAuthorityTransaction
       'person login grant purpose is invalid',
     );
     assertOidcIssuer(row.expected_issuer, 'person login grant expected issuer');
+    assertDigest(row.expected_email_sha256, 'person login grant expected email');
     assertDigest(row.oidc_configuration_sha256, 'OIDC configuration');
     this.assertExactPersonMembership(row, 'person login grant');
     const { begins, ends } = assertInterval(
@@ -2153,6 +2155,7 @@ class SqliteAuthorityTransaction
       grant_purpose: 'oidc_identity_bootstrap',
       membership_type: row.membership_type as OrganizationMembershipTypeV1,
       login_grant_sha256: row.login_grant_sha256 as Sha256Digest,
+      expected_email_sha256: row.expected_email_sha256 as Sha256Digest,
       oidc_configuration_sha256:
         row.oidc_configuration_sha256 as Sha256Digest,
     };
@@ -2165,7 +2168,8 @@ class SqliteAuthorityTransaction
       .prepare(
         `SELECT login_grant_sha256, grant_purpose, organization_id,
                 principal_id, membership_id, membership_type, expected_issuer,
-                oidc_configuration_sha256, issued_at, expires_at, consumed_at
+                expected_email_sha256, oidc_configuration_sha256, issued_at,
+                expires_at, consumed_at
            FROM authority_person_login_grants WHERE login_grant_sha256 = ?`,
       )
       .get(loginGrantSha256) as PersonLoginGrantRow | undefined;
@@ -2755,8 +2759,9 @@ class SqliteAuthorityTransaction
         `INSERT INTO authority_person_login_grants (
            login_grant_sha256, grant_purpose, organization_id, principal_id,
            membership_id, membership_type, expected_issuer,
-           oidc_configuration_sha256, issued_at, expires_at, consumed_at
-         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL)`,
+           expected_email_sha256, oidc_configuration_sha256, issued_at,
+           expires_at, consumed_at
+         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL)`,
       )
       .run(
         grant.login_grant_sha256,
@@ -2766,6 +2771,7 @@ class SqliteAuthorityTransaction
         grant.membership_id,
         grant.membership_type,
         grant.expected_issuer,
+        grant.expected_email_sha256,
         grant.oidc_configuration_sha256,
         issuedAt,
         grant.expires_at,
