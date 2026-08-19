@@ -540,7 +540,7 @@ describe('organization authority operator lifecycle', () => {
     expect(authorityRuntimeFingerprint(rotated)).not.toBe(firstFingerprint);
   });
 
-  it('starts configured Person sessions offline and runs bounded attempt expiry', async () => {
+  it('starts a slashless-root Person issuer offline and expires attempts', async () => {
     const fixture = await initializedFixture();
     const base = resolveAuthorityServeConfig(
       readAuthorityRuntimeConfig(fixture.configPath),
@@ -550,7 +550,7 @@ describe('organization authority operator lifecycle', () => {
       person_session_runtime_v1: Object.freeze({
         overlay_sha256: `sha256:${'a'.repeat(64)}` as const,
         oidc_configuration: Object.freeze({
-          issuer: 'https://identity.example/tenant',
+          issuer: 'https://accounts.google.com',
           client_id: 'echo-person-client',
           redirect_uri:
             'https://authority.example/v2/session/oidc/callback',

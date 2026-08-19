@@ -572,7 +572,7 @@ function assertOidcIssuer(value: string, label: string): void {
       parsed.password === '' &&
       parsed.search === '' &&
       parsed.hash === '' &&
-      parsed.href === value,
+      (value === parsed.origin || parsed.href === value),
     `${label} is not a canonical HTTPS issuer`,
   );
 }

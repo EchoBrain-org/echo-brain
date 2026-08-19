@@ -182,19 +182,24 @@ type CallbackWriteResult =
 type RefreshWriteResult =
   { kind: "issued"; session: IssuedPersonSession } | { kind: "denied" };
 
-function validateHttpsUrl(value: string, label: string): void {
+function validateHttpsUrl(
+  value: string,
+  label: string,
+  canonicalRootMayOmitSlash = false,
+): void {
   let parsed: URL;
   try {
     parsed = new URL(value);
   } catch {
     throw new Error(`${label} must be an absolute HTTPS URL`);
   }
+  const exactRoot = canonicalRootMayOmitSlash && value === parsed.origin;
   if (
     parsed.protocol !== "https:" ||
     parsed.username.length > 0 ||
     parsed.password.length > 0 ||
     parsed.hash.length > 0 ||
-    parsed.href !== value
+    (!exactRoot && parsed.href !== value)
   ) {
     throw new Error(`${label} must be an absolute HTTPS URL`);
   }
@@ -218,7 +223,7 @@ function validateText(
 function validateOidcConfiguration(
   configuration: PersonSessionOidcConfiguration,
 ): void {
-  validateHttpsUrl(configuration.issuer, "OIDC issuer");
+  validateHttpsUrl(configuration.issuer, "OIDC issuer", true);
   if (new URL(configuration.issuer).search.length > 0) {
     throw new Error("OIDC issuer must not contain a query");
   }
