@@ -68,12 +68,46 @@ export interface VerifiedOidcIdentityToken {
   claims: Readonly<Record<string, unknown>>;
 }
 
+export type OidcTerminalFailureStage =
+  | "configuration"
+  | "redemption"
+  | "response"
+  | "verification";
+
 export type OidcAuthorizationCodeResult =
   | { kind: "verified"; token: VerifiedOidcIdentityToken }
   /** Failure known before the authorization code could have been redeemed. */
   | { kind: "retryable_before_redemption" }
   /** Redemption or verification reached a terminal, non-replayable result. */
-  | { kind: "terminal_failure" };
+  | {
+      kind: "terminal_failure";
+      /** Fixed, secret-free operator diagnostic; never provider text. */
+      diagnostic_stage?: OidcTerminalFailureStage;
+    };
+
+export type PersonSessionOidcFailureReason =
+  | "attempt_unavailable"
+  | "attempt_invalid"
+  | "provider_authorization_failed"
+  | "provider_configuration_failed"
+  | "provider_redemption_failed"
+  | "provider_response_invalid"
+  | "provider_verification_failed"
+  | "claim_issuer_mismatch"
+  | "claim_subject_invalid"
+  | "claim_audience_mismatch"
+  | "claim_nonce_mismatch"
+  | "claim_issued_at_invalid"
+  | "claim_tenant_mismatch"
+  | "claim_email_invalid"
+  | "bootstrap_binding_denied"
+  | "identity_binding_denied"
+  | "internal_failure";
+
+export interface PersonSessionDiagnosticPort {
+  /** Receives only the closed reason enum above; never identity or credential data. */
+  oidcLoginDenied(reason: PersonSessionOidcFailureReason): void;
+}
 
 export interface PersonSessionOidcProvider {
   /**
@@ -96,4 +130,5 @@ export interface PersonSessionRuntime {
   hash: PersonSessionHashPort;
   pkce_sealer: PersonSessionPkceSealer;
   oidc_provider: PersonSessionOidcProvider;
+  diagnostics?: PersonSessionDiagnosticPort;
 }

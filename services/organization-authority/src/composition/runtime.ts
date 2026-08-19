@@ -409,6 +409,13 @@ export async function startOrganizationAuthority(
           hash: crypto,
           pkce_sealer: crypto,
           oidc_provider: personOidcProvider,
+          diagnostics: {
+            oidcLoginDenied(reason) {
+              process.stderr.write(
+                `authority_person_session_oidc_denied reason=${reason}\n`,
+              );
+            },
+          },
         },
       );
     }

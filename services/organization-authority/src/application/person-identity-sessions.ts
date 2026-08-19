@@ -33,6 +33,7 @@ import type {
   OidcTenantConstraint,
   PersonSessionHashPort,
   PersonSessionOidcConfiguration,
+  PersonSessionOidcFailureReason,
   PersonSessionRandomPurpose,
   PersonSessionRuntime,
   VerifiedOidcIdentityToken,
@@ -172,12 +173,20 @@ interface VerifiedIdentity {
   upstream_assertion_issued_at: string;
 }
 
+class PersonSessionOidcDiagnosticError extends Error {
+  constructor(readonly reason: PersonSessionOidcFailureReason) {
+    super(reason);
+    this.name = "PersonSessionOidcDiagnosticError";
+  }
+}
+
 type AccessResolution =
   | { kind: "allowed"; authorization: PersonAccessAuthorization }
   | { kind: "denied" };
 
 type CallbackWriteResult =
-  { kind: "issued"; session: IssuedPersonSession } | { kind: "denied" };
+  | { kind: "issued"; session: IssuedPersonSession }
+  | { kind: "denied"; reason: PersonSessionOidcFailureReason };
 
 type RefreshWriteResult =
   { kind: "issued"; session: IssuedPersonSession } | { kind: "denied" };
@@ -510,7 +519,13 @@ export class PersonIdentitySessionApplication {
     state: string;
     authorization_code: string;
   }): Promise<IssuedPersonSession> {
-    const stateSha256 = this.digestSecret(input.state);
+    let stateSha256: Sha256Digest;
+    try {
+      stateSha256 = this.digestSecret(input.state);
+    } catch {
+      this.diagnoseOidcFailure("attempt_unavailable");
+      throw personSessionUnauthorized();
+    }
     const redemptionClaimId = this.localId("olc", "oidc_redemption_claim_id");
     let attempt: StoredOidcLoginAttempt | undefined;
     try {
@@ -520,31 +535,49 @@ export class PersonIdentitySessionApplication {
           transaction.claimOidcLoginAttempt(stateSha256, redemptionClaimId),
       );
     } catch {
+      this.diagnoseOidcFailure("attempt_unavailable");
       throw personSessionUnauthorized();
     }
     if (attempt === undefined) {
+      this.diagnoseOidcFailure("attempt_unavailable");
       throw personSessionUnauthorized();
     }
     let releasedForRetry = false;
     try {
       if (!this.attemptUsesCurrentConfiguration(attempt)) {
-        throw new Error("claimed OIDC attempt uses a stale configuration");
+        throw new PersonSessionOidcDiagnosticError("attempt_invalid");
       }
       if (
         typeof input.authorization_code !== "string" ||
-        input.authorization_code.length === 0 ||
         input.authorization_code.length > 16_384 ||
         /[\u0000-\u001f\u007f]/.test(input.authorization_code)
       ) {
-        throw new Error("OIDC authorization code is invalid");
+        throw new PersonSessionOidcDiagnosticError("attempt_invalid");
       }
-      const verifier = this.unsealVerifier(attempt);
-      const providerResult =
-        await this.runtime.oidc_provider.redeemAuthorizationCode({
-          configuration: this.configuration,
-          authorization_code: input.authorization_code,
-          pkce_verifier: verifier,
-        });
+      if (input.authorization_code.length === 0) {
+        throw new PersonSessionOidcDiagnosticError(
+          "provider_authorization_failed",
+        );
+      }
+      let verifier: string;
+      try {
+        verifier = this.unsealVerifier(attempt);
+      } catch {
+        throw new PersonSessionOidcDiagnosticError("attempt_invalid");
+      }
+      let providerResult;
+      try {
+        providerResult =
+          await this.runtime.oidc_provider.redeemAuthorizationCode({
+            configuration: this.configuration,
+            authorization_code: input.authorization_code,
+            pkce_verifier: verifier,
+          });
+      } catch {
+        throw new PersonSessionOidcDiagnosticError(
+          "provider_redemption_failed",
+        );
+      }
       if (providerResult?.kind === "retryable_before_redemption") {
         const released = this.repository.writeAtLinearization(
           () => this.runtime.clock.now(),
@@ -558,10 +591,21 @@ export class PersonIdentitySessionApplication {
           throw new Error("OIDC redemption claim could not be released");
         }
         releasedForRetry = true;
-        throw personSessionUnauthorized();
+        throw new PersonSessionOidcDiagnosticError(
+          "provider_redemption_failed",
+        );
       }
       if (providerResult?.kind !== "verified") {
-        throw new Error("OIDC redemption reached a terminal outcome");
+        const stage = providerResult?.diagnostic_stage;
+        throw new PersonSessionOidcDiagnosticError(
+          stage === "configuration"
+            ? "provider_configuration_failed"
+            : stage === "redemption"
+              ? "provider_redemption_failed"
+              : stage === "response"
+                ? "provider_response_invalid"
+              : "provider_verification_failed",
+        );
       }
       const identity = this.validateVerifiedIdentity(
         attempt,
@@ -581,7 +625,7 @@ export class PersonIdentitySessionApplication {
             current.redemption_claim_id !== redemptionClaimId ||
             !isStrictlyBefore(observedAt, current.expires_at)
           ) {
-            return { kind: "denied" };
+            return { kind: "denied", reason: "attempt_unavailable" };
           }
           if (!this.attemptUsesCurrentConfiguration(current)) {
             this.completeDeniedAttempt(
@@ -589,7 +633,7 @@ export class PersonIdentitySessionApplication {
               stateSha256,
               redemptionClaimId,
             );
-            return { kind: "denied" };
+            return { kind: "denied", reason: "attempt_invalid" };
           }
 
           let binding: StoredOidcIdentityBinding;
@@ -601,7 +645,7 @@ export class PersonIdentitySessionApplication {
                 stateSha256,
                 redemptionClaimId,
               );
-              return { kind: "denied" };
+              return { kind: "denied", reason: "bootstrap_binding_denied" };
             }
             const grant = transaction.personLoginGrant(grantSha256);
             if (
@@ -620,7 +664,7 @@ export class PersonIdentitySessionApplication {
                 stateSha256,
                 redemptionClaimId,
               );
-              return { kind: "denied" };
+              return { kind: "denied", reason: "bootstrap_binding_denied" };
             }
             const existing = transaction.oidcIdentityBinding(
               identity.issuer,
@@ -636,7 +680,7 @@ export class PersonIdentitySessionApplication {
                 stateSha256,
                 redemptionClaimId,
               );
-              return { kind: "denied" };
+              return { kind: "denied", reason: "bootstrap_binding_denied" };
             }
             const consumedGrant =
               transaction.consumePersonLoginGrant(grantSha256);
@@ -646,7 +690,7 @@ export class PersonIdentitySessionApplication {
                 stateSha256,
                 redemptionClaimId,
               );
-              return { kind: "denied" };
+              return { kind: "denied", reason: "bootstrap_binding_denied" };
             }
             if (
               transaction.completeOidcLoginAttempt(
@@ -682,7 +726,7 @@ export class PersonIdentitySessionApplication {
                 stateSha256,
                 redemptionClaimId,
               );
-              return { kind: "denied" };
+              return { kind: "denied", reason: "attempt_invalid" };
             }
             const existing = transaction.oidcIdentityBinding(
               identity.issuer,
@@ -698,7 +742,7 @@ export class PersonIdentitySessionApplication {
                 stateSha256,
                 redemptionClaimId,
               );
-              return { kind: "denied" };
+              return { kind: "denied", reason: "identity_binding_denied" };
             }
             binding = existing;
             if (
@@ -730,10 +774,10 @@ export class PersonIdentitySessionApplication {
         },
       );
       if (outcome.kind === "denied") {
-        throw personSessionUnauthorized();
+        throw new PersonSessionOidcDiagnosticError(outcome.reason);
       }
       return outcome.session;
-    } catch {
+    } catch (error) {
       if (!releasedForRetry) {
         try {
           this.terminalizeAttempt(stateSha256, redemptionClaimId);
@@ -742,6 +786,11 @@ export class PersonIdentitySessionApplication {
           // it if durable terminalization is temporarily unavailable.
         }
       }
+      this.diagnoseOidcFailure(
+        error instanceof PersonSessionOidcDiagnosticError
+          ? error.reason
+          : "internal_failure",
+      );
       throw personSessionUnauthorized();
     }
   }
@@ -1030,6 +1079,14 @@ export class PersonIdentitySessionApplication {
     };
   }
 
+  private diagnoseOidcFailure(reason: PersonSessionOidcFailureReason): void {
+    try {
+      this.runtime.diagnostics?.oidcLoginDenied(reason);
+    } catch {
+      // Operator diagnostics must never alter authentication state or outcome.
+    }
+  }
+
   private completeDeniedAttempt(
     transaction: AuthorityWriteTransaction,
     stateSha256: Sha256Digest,
@@ -1092,9 +1149,13 @@ export class PersonIdentitySessionApplication {
     validatedAt: string,
   ): VerifiedIdentity {
     if (token.issuer !== this.configuration.issuer) {
-      throw personSessionUnauthorized();
+      throw new PersonSessionOidcDiagnosticError("claim_issuer_mismatch");
     }
-    assertOpaqueSubject(token.subject);
+    try {
+      assertOpaqueSubject(token.subject);
+    } catch {
+      throw new PersonSessionOidcDiagnosticError("claim_subject_invalid");
+    }
     const audiences =
       typeof token.audience === "string"
         ? [token.audience]
@@ -1113,16 +1174,16 @@ export class PersonIdentitySessionApplication {
         token.authorized_party !== undefined &&
         token.authorized_party !== this.configuration.client_id)
     ) {
-      throw personSessionUnauthorized();
+      throw new PersonSessionOidcDiagnosticError("claim_audience_mismatch");
     }
     if (
       typeof token.nonce !== "string" ||
       this.digestUtf8(token.nonce) !== attempt.nonce_sha256
     ) {
-      throw personSessionUnauthorized();
+      throw new PersonSessionOidcDiagnosticError("claim_nonce_mismatch");
     }
     if (!Number.isSafeInteger(token.issued_at)) {
-      throw personSessionUnauthorized();
+      throw new PersonSessionOidcDiagnosticError("claim_issued_at_invalid");
     }
     const assertionIssuedAtMilliseconds = token.issued_at * 1000;
     const attemptMilliseconds = timestampMillis(
@@ -1140,14 +1201,14 @@ export class PersonIdentitySessionApplication {
       assertionIssuedAtMilliseconds >
         validationMilliseconds + OIDC_ASSERTION_ISSUED_AT_SKEW_MS
     ) {
-      throw personSessionUnauthorized();
+      throw new PersonSessionOidcDiagnosticError("claim_issued_at_invalid");
     }
     if (
       this.configuration.tenant.kind === "claim" &&
       token.claims[this.configuration.tenant.claim_name] !==
         this.configuration.tenant.claim_value
     ) {
-      throw personSessionUnauthorized();
+      throw new PersonSessionOidcDiagnosticError("claim_tenant_mismatch");
     }
     let bootstrapEmailSha256: Sha256Digest | null = null;
     if (attempt.attempt_purpose === "identity_bootstrap") {
@@ -1156,7 +1217,7 @@ export class PersonIdentitySessionApplication {
         !isCanonicalPersonEmail(email) ||
         token.claims["email_verified"] !== true
       ) {
-        throw personSessionUnauthorized();
+        throw new PersonSessionOidcDiagnosticError("claim_email_invalid");
       }
       bootstrapEmailSha256 = this.expectedEmailSha256(email);
     }
@@ -1195,7 +1256,7 @@ export class PersonIdentitySessionApplication {
       PERSON_SESSION_HARD_REAUTHENTICATION_MS,
     );
     if (!isStrictlyBefore(observedAt, hardReauthenticationAt)) {
-      return { kind: "denied" };
+      return { kind: "denied", reason: "claim_issued_at_invalid" };
     }
     const family = transaction.insertPersonSessionFamily({
       session_family_id: familyId,

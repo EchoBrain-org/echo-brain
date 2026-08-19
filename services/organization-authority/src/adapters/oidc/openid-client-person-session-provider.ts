@@ -9,7 +9,43 @@ import type {
 } from '../../application/ports/person-session-runtime.js';
 
 const DEFAULT_REQUEST_TIMEOUT_SECONDS = 15;
-const TERMINAL_FAILURE = { kind: 'terminal_failure' } as const;
+const TERMINAL_CONFIGURATION_FAILURE = {
+  kind: 'terminal_failure',
+  diagnostic_stage: 'configuration',
+} as const;
+const TERMINAL_REDEMPTION_FAILURE = {
+  kind: 'terminal_failure',
+  diagnostic_stage: 'redemption',
+} as const;
+const TERMINAL_RESPONSE_FAILURE = {
+  kind: 'terminal_failure',
+  diagnostic_stage: 'response',
+} as const;
+const TERMINAL_VERIFICATION_FAILURE = {
+  kind: 'terminal_failure',
+  diagnostic_stage: 'verification',
+} as const;
+
+const OIDC_VERIFICATION_ERROR_CODES = new Set([
+  'OAUTH_JWT_CLAIM_COMPARISON_FAILED',
+  'OAUTH_JWT_TIMESTAMP_CHECK_FAILED',
+  'OAUTH_KEY_SELECTION_FAILED',
+]);
+
+function terminalFailure(error: unknown): OidcAuthorizationCodeResult {
+  const code =
+    error !== null &&
+    typeof error === 'object' &&
+    typeof (error as { code?: unknown }).code === 'string'
+      ? (error as { code: string }).code
+      : undefined;
+  if (code === 'OAUTH_INVALID_RESPONSE') {
+    return TERMINAL_RESPONSE_FAILURE;
+  }
+  return code !== undefined && OIDC_VERIFICATION_ERROR_CODES.has(code)
+    ? TERMINAL_VERIFICATION_FAILURE
+    : TERMINAL_REDEMPTION_FAILURE;
+}
 
 export type OpenIdClientAuthentication =
   | { method: 'none' }
@@ -206,7 +242,7 @@ export class OpenIdClientPersonSessionProvider
     pkce_verifier: string;
   }): Promise<OidcAuthorizationCodeResult> {
     if (!exactConfiguration(this.configuration, input.configuration)) {
-      return TERMINAL_FAILURE;
+      return TERMINAL_CONFIGURATION_FAILURE;
     }
     try {
       // State is claimed by the application before this call. The application
@@ -222,11 +258,11 @@ export class OpenIdClientPersonSessionProvider
       );
       const token = verifiedToken(response.id_token, response.claims());
       return token === undefined
-        ? TERMINAL_FAILURE
+        ? TERMINAL_VERIFICATION_FAILURE
         : { kind: 'verified', token };
-    } catch {
+    } catch (error) {
       // Once redemption may have begun, replay safety requires terminalization.
-      return TERMINAL_FAILURE;
+      return terminalFailure(error);
     }
   }
 }

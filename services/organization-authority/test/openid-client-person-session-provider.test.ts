@@ -73,6 +73,7 @@ type ProviderFetch = NonNullable<
 
 type TokenMode =
   | 'valid'
+  | 'missing_access_token'
   | 'missing_id_token'
   | 'missing_issued_at'
   | 'tampered_signature'
@@ -143,6 +144,9 @@ class OfflineOidcIssuer {
         });
         if (this.mode === 'transport_failure') {
           throw new Error('ambiguous token transport failure');
+        }
+        if (this.mode === 'missing_access_token') {
+          return jsonResponse({ token_type: 'Bearer' });
         }
         if (this.mode === 'missing_id_token') {
           return jsonResponse({
@@ -329,19 +333,24 @@ describe('OpenIdClientPersonSessionProvider', () => {
     expect(issuer.tokenRequests[0]?.body.get('client_id')).toBe(CLIENT_ID);
   });
 
-  it.each<TokenMode>([
-    'missing_id_token',
-    'missing_issued_at',
-    'tampered_signature',
-    'invalid_nonce_claim',
-    'transport_failure',
-  ])('maps %s to a terminal result after redemption may begin', async (mode) => {
+  it.each<{
+    mode: TokenMode;
+    diagnosticStage: 'redemption' | 'response' | 'verification';
+  }>([
+    { mode: 'missing_access_token', diagnosticStage: 'response' },
+    { mode: 'missing_id_token', diagnosticStage: 'verification' },
+    { mode: 'missing_issued_at', diagnosticStage: 'response' },
+    { mode: 'tampered_signature', diagnosticStage: 'response' },
+    { mode: 'invalid_nonce_claim', diagnosticStage: 'verification' },
+    { mode: 'transport_failure', diagnosticStage: 'redemption' },
+  ])('maps $mode to a secret-free terminal stage', async ({ mode, diagnosticStage }) => {
     const issuer = new OfflineOidcIssuer();
     issuer.mode = mode;
     const provider = await discover(issuer);
 
     await expect(redeem(provider)).resolves.toEqual({
       kind: 'terminal_failure',
+      diagnostic_stage: diagnosticStage,
     });
     expect(issuer.tokenRequests).toHaveLength(1);
   });
@@ -372,7 +381,10 @@ describe('OpenIdClientPersonSessionProvider', () => {
         ...FROZEN_CONFIGURATION,
         client_id: 'another-client',
       }),
-    ).resolves.toEqual({ kind: 'terminal_failure' });
+    ).resolves.toEqual({
+      kind: 'terminal_failure',
+      diagnostic_stage: 'configuration',
+    });
     expect(issuer.tokenRequests).toHaveLength(0);
   });
 });

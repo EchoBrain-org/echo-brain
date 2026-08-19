@@ -33,6 +33,7 @@ import type {
   FrozenPersonSessionOidcConfiguration,
   OidcAuthorizationCodeResult,
   PersonSessionHashPort,
+  PersonSessionOidcFailureReason,
   PersonSessionOidcProvider,
   PersonSessionPkceSealer,
   PersonSessionRandomPurpose,
@@ -168,6 +169,7 @@ interface Fixture {
   authority: OrganizationAuthorityDescriptorV1;
   clock: MutableClock;
   provider: FakeOidcProvider;
+  diagnosticReasons: PersonSessionOidcFailureReason[];
   runtime: PersonSessionRuntime;
   repository: SqliteOrganizationAuthorityRepository;
   membership: StoredAuthorityMembership;
@@ -249,18 +251,25 @@ function setup(): Fixture {
   });
   const clock = new MutableClock("2026-08-18T00:00:02.000Z");
   const provider = new FakeOidcProvider();
+  const diagnosticReasons: PersonSessionOidcFailureReason[] = [];
   const runtime: PersonSessionRuntime = {
     clock,
     random: new DeterministicRandom(),
     hash: new NodeHashPort(),
     pkce_sealer: new TestPkceSealer(),
     oidc_provider: provider,
+    diagnostics: {
+      oidcLoginDenied(reason) {
+        diagnosticReasons.push(reason);
+      },
+    },
   };
   return {
     path,
     authority,
     clock,
     provider,
+    diagnosticReasons,
     runtime,
     repository,
     membership,
@@ -631,6 +640,9 @@ describe("PersonIdentitySessionApplication", () => {
       code: "unauthorized",
       message: "person authentication failed",
     });
+    expect(fixture.diagnosticReasons).toEqual([
+      "provider_redemption_failed",
+    ]);
     expect(
       fixture.repository.read((transaction) =>
         transaction.oidcLoginAttempt(digestSecret(begun.state)),
@@ -667,6 +679,10 @@ describe("PersonIdentitySessionApplication", () => {
       code: "unauthorized",
       message: "person authentication failed",
     });
+    expect(fixture.diagnosticReasons).toEqual([
+      "provider_redemption_failed",
+      "provider_verification_failed",
+    ]);
     expect(
       fixture.repository.read((transaction) =>
         transaction.oidcLoginAttempt(digestSecret(terminal.state)),
@@ -750,6 +766,9 @@ describe("PersonIdentitySessionApplication", () => {
       code: "unauthorized",
       message: "person authentication failed",
     });
+    expect(fixture.diagnosticReasons).toEqual([
+      "provider_redemption_failed",
+    ]);
     expect(
       fixture.repository.read((transaction) => ({
         attempt: transaction.oidcLoginAttempt(digestSecret(begun.state)),
@@ -770,6 +789,49 @@ describe("PersonIdentitySessionApplication", () => {
         login_grant: grant.login_grant,
       }),
     );
+    fixture.repository.close();
+  });
+
+  it("keeps denial terminal when the operator diagnostic sink throws", async () => {
+    const fixture = setup();
+    const grant = fixture.application.issueBootstrapLoginGrant({
+      target_membership_id: fixture.membership.membership_id,
+      expected_issuer: OIDC_CONFIGURATION.issuer,
+      expected_email: EXPECTED_EMAIL,
+    });
+    const begun = fixture.application.beginOidcLogin({
+      kind: "identity_bootstrap",
+      login_grant: grant.login_grant,
+    });
+    fixture.runtime.diagnostics = {
+      oidcLoginDenied() {
+        throw new Error("test diagnostic sink failure");
+      },
+    };
+    fixture.provider.result = {
+      kind: "terminal_failure",
+      diagnostic_stage: "verification",
+    };
+
+    await expect(
+      fixture.application.completeOidcLogin({
+        state: begun.state,
+        authorization_code: "terminal-code-with-failed-diagnostic-sink",
+      }),
+    ).rejects.toMatchObject({
+      code: "unauthorized",
+      message: "person authentication failed",
+    });
+    expect(
+      fixture.repository.read((transaction) =>
+        transaction.oidcLoginAttempt(digestSecret(begun.state)),
+      ),
+    ).toMatchObject({
+      terminal_outcome: "denied",
+      redemption_claim_id: null,
+      pkce_verifier_seal_key_id: null,
+      pkce_verifier_sealed: null,
+    });
     fixture.repository.close();
   });
 
@@ -846,44 +908,131 @@ describe("PersonIdentitySessionApplication", () => {
     fixture.repository.close();
   });
 
+  it("reports an unbound existing-identity login without bootstrap wording", async () => {
+    const fixture = setup();
+    const begun = fixture.application.beginOidcLogin({
+      kind: "existing_identity_login",
+    });
+    fixture.provider.result = verifiedResult(begun);
+
+    await expect(
+      fixture.application.completeOidcLogin({
+        state: begun.state,
+        authorization_code: "unbound-existing-identity-code",
+      }),
+    ).rejects.toMatchObject({
+      code: "unauthorized",
+      message: "person authentication failed",
+    });
+    expect(fixture.diagnosticReasons).toEqual(["identity_binding_denied"]);
+    expect(
+      fixture.repository.read((transaction) =>
+        transaction.oidcLoginAttempt(digestSecret(begun.state)),
+      ),
+    ).toMatchObject({
+      terminal_outcome: "denied",
+      resolved_identity_binding_id: null,
+      pkce_verifier_seal_key_id: null,
+      pkce_verifier_sealed: null,
+    });
+    fixture.repository.close();
+  });
+
+  it("categorizes a provider authorization denial without redeeming a code", async () => {
+    const fixture = setup();
+    const grant = fixture.application.issueBootstrapLoginGrant({
+      target_membership_id: fixture.membership.membership_id,
+      expected_issuer: OIDC_CONFIGURATION.issuer,
+      expected_email: EXPECTED_EMAIL,
+    });
+    const begun = fixture.application.beginOidcLogin({
+      kind: "identity_bootstrap",
+      login_grant: grant.login_grant,
+    });
+
+    await expect(
+      fixture.application.completeOidcLogin({
+        state: begun.state,
+        authorization_code: "",
+      }),
+    ).rejects.toMatchObject({
+      code: "unauthorized",
+      message: "person authentication failed",
+    });
+
+    expect(fixture.provider.calls).toHaveLength(0);
+    expect(fixture.diagnosticReasons).toEqual([
+      "provider_authorization_failed",
+    ]);
+    expect(
+      fixture.repository.read((transaction) =>
+        transaction.oidcLoginAttempt(digestSecret(begun.state)),
+      ),
+    ).toMatchObject({
+      terminal_outcome: "denied",
+      redemption_claim_id: null,
+      pkce_verifier_seal_key_id: null,
+      pkce_verifier_sealed: null,
+    });
+    fixture.repository.close();
+  });
+
   it.each([
     {
       name: "issuer mismatch",
+      expectedReason: "claim_issuer_mismatch",
       override: () => ({ issuer: "https://wrong-issuer.example.test/" }),
     },
-    { name: "empty subject", override: () => ({ subject: "" }) },
+    {
+      name: "empty subject",
+      expectedReason: "claim_subject_invalid",
+      override: () => ({ subject: "" }),
+    },
     {
       name: "missing audience",
+      expectedReason: "claim_audience_mismatch",
       override: () => ({ audience: "another-client" }),
     },
     {
       name: "multiple audiences without azp",
+      expectedReason: "claim_audience_mismatch",
       override: () => ({
         audience: [OIDC_CONFIGURATION.client_id, "another-client"],
       }),
     },
     {
       name: "wrong azp",
+      expectedReason: "claim_audience_mismatch",
       override: () => ({ authorized_party: "another-client" }),
     },
-    { name: "nonce mismatch", override: () => ({ nonce: "wrong-nonce" }) },
+    {
+      name: "nonce mismatch",
+      expectedReason: "claim_nonce_mismatch",
+      override: () => ({ nonce: "wrong-nonce" }),
+    },
     {
       name: "tenant mismatch",
+      expectedReason: "claim_tenant_mismatch",
       override: () => ({ claims: { tenant_id: "wrong-tenant" } }),
     },
     {
       name: "issued_at before the lower skew boundary",
+      expectedReason: "claim_issued_at_invalid",
       override: (begun: BegunPersonOidcLogin) => ({
         issued_at: (Date.parse(begun.created_at) - 61_000) / 1000,
       }),
     },
     {
       name: "issued_at beyond the future skew boundary",
+      expectedReason: "claim_issued_at_invalid",
       override: (_begun: BegunPersonOidcLogin, fixture: Fixture) => ({
         issued_at: (Date.parse(fixture.clock.current) + 61_000) / 1000,
       }),
     },
-  ])("terminalizes an invalid verified claim: $name", async ({ override }) => {
+  ])("terminalizes an invalid verified claim: $name", async ({
+    expectedReason,
+    override,
+  }) => {
     const fixture = setup();
     await bootstrapSession(fixture, "opaque-provider-subject-001");
     const rowsBefore = personSessionRowCounts(fixture.path);
@@ -916,12 +1065,14 @@ describe("PersonIdentitySessionApplication", () => {
       pkce_verifier_sealed: null,
     });
     expect(personSessionRowCounts(fixture.path)).toEqual(rowsBefore);
+    expect(fixture.diagnosticReasons).toEqual([expectedReason]);
     fixture.repository.close();
   });
 
   it.each([
     {
       name: "a different same-tenant email",
+      expectedReason: "bootstrap_binding_denied",
       claims: {
         tenant_id: OIDC_CONFIGURATION.tenant.claim_value,
         email: "another.owner@example.test",
@@ -930,6 +1081,7 @@ describe("PersonIdentitySessionApplication", () => {
     },
     {
       name: "a missing email",
+      expectedReason: "claim_email_invalid",
       claims: {
         tenant_id: OIDC_CONFIGURATION.tenant.claim_value,
         email_verified: true,
@@ -937,6 +1089,7 @@ describe("PersonIdentitySessionApplication", () => {
     },
     {
       name: "a non-canonical email",
+      expectedReason: "claim_email_invalid",
       claims: {
         tenant_id: OIDC_CONFIGURATION.tenant.claim_value,
         email: "Session.Owner@example.test",
@@ -945,6 +1098,7 @@ describe("PersonIdentitySessionApplication", () => {
     },
     {
       name: "an unverified email",
+      expectedReason: "claim_email_invalid",
       claims: {
         tenant_id: OIDC_CONFIGURATION.tenant.claim_value,
         email: EXPECTED_EMAIL,
@@ -953,12 +1107,13 @@ describe("PersonIdentitySessionApplication", () => {
     },
     {
       name: "a missing email verification claim",
+      expectedReason: "claim_email_invalid",
       claims: {
         tenant_id: OIDC_CONFIGURATION.tenant.claim_value,
         email: EXPECTED_EMAIL,
       },
     },
-  ])("burns a bootstrap grant for $name", async ({ claims }) => {
+  ])("burns a bootstrap grant for $name", async ({ claims, expectedReason }) => {
     const fixture = setup();
     const grant = fixture.application.issueBootstrapLoginGrant({
       target_membership_id: fixture.membership.membership_id,
@@ -999,6 +1154,7 @@ describe("PersonIdentitySessionApplication", () => {
       families: 0,
       credentials: 0,
     });
+    expect(fixture.diagnosticReasons).toEqual([expectedReason]);
     fixture.repository.close();
   });
 
