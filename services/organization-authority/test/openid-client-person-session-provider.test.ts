@@ -129,6 +129,7 @@ class OfflineOidcIssuer {
           token_endpoint_auth_methods_supported: [
             'none',
             'client_secret_basic',
+            'client_secret_post',
           ],
           code_challenge_methods_supported: ['S256'],
         });
@@ -331,6 +332,28 @@ describe('OpenIdClientPersonSessionProvider', () => {
     expect(issuer.tokenRequests).toHaveLength(1);
     expect(issuer.tokenRequests[0]?.authorization).toBeNull();
     expect(issuer.tokenRequests[0]?.body.get('client_id')).toBe(CLIENT_ID);
+  });
+
+  it('uses client_secret_post without an authorization header', async () => {
+    const issuer = new OfflineOidcIssuer();
+    const provider = await discover(issuer, {
+      method: 'client_secret_post',
+      client_secret: CLIENT_SECRET,
+    });
+
+    await expect(redeem(provider)).resolves.toMatchObject({
+      kind: 'verified',
+    });
+    expect(issuer.tokenRequests).toHaveLength(1);
+    expect(issuer.tokenRequests[0]?.authorization).toBeNull();
+    expect(Object.fromEntries(issuer.tokenRequests[0]!.body)).toMatchObject({
+      client_id: CLIENT_ID,
+      client_secret: CLIENT_SECRET,
+      grant_type: 'authorization_code',
+      code: AUTHORIZATION_CODE,
+      redirect_uri: REDIRECT_URI,
+      code_verifier: PKCE_VERIFIER,
+    });
   });
 
   it.each<{

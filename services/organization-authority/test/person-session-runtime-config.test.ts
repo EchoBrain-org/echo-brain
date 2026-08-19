@@ -214,14 +214,17 @@ describe('Person-session runtime overlay', () => {
     ).toBe('https://accounts.google.com');
   });
 
-  it('reads client_secret_basic only from its fixed private file', () => {
+  it.each([
+    { method: 'client_secret_basic' as const },
+    { method: 'client_secret_post' as const },
+  ])('reads $method only from its fixed private file', ({ method }) => {
     const { config, overlayPath, keyPath, clientSecretPath } = fixture();
     writePrivateCredential(keyPath, Buffer.alloc(32, 7).toString('base64url'));
     writePrivateCredential(clientSecretPath, 'provider-secret');
     writePrivateJson(
       overlayPath,
       overlay(config, keyPath, {
-        method: 'client_secret_basic',
+        method,
         client_secret_ref: `file:${clientSecretPath}`,
       }),
     );
@@ -229,7 +232,7 @@ describe('Person-session runtime overlay', () => {
     expect(
       readAuthorityPersonSessionRuntimeOverlay(config)?.client_authentication,
     ).toEqual({
-      method: 'client_secret_basic',
+      method,
       client_secret: 'provider-secret',
     });
   });
@@ -319,13 +322,27 @@ describe('Person-session runtime overlay', () => {
     });
     expect(firstFingerprint).not.toBe(absent);
 
+    writePrivateJson(
+      overlayPath,
+      overlay(config, keyPath, {
+        method: 'client_secret_post',
+        client_secret_ref: `file:${clientSecretPath}`,
+      }),
+    );
+    const post = readAuthorityPersonSessionRuntimeOverlay(config)!;
+    const postFingerprint = authorityRuntimeFingerprint({
+      ...base,
+      person_session_runtime_v1: post,
+    });
+    expect(postFingerprint).not.toBe(firstFingerprint);
+
     writePrivateCredential(keyPath, Buffer.alloc(32, 5).toString('base64url'));
     const changedKey = readAuthorityPersonSessionRuntimeOverlay(config)!;
     const changedKeyFingerprint = authorityRuntimeFingerprint({
       ...base,
       person_session_runtime_v1: changedKey,
     });
-    expect(changedKeyFingerprint).not.toBe(firstFingerprint);
+    expect(changedKeyFingerprint).not.toBe(postFingerprint);
 
     writePrivateCredential(clientSecretPath, 'second-provider-secret');
     const changedSecret = readAuthorityPersonSessionRuntimeOverlay(config)!;

@@ -30,7 +30,7 @@ const PERSON_SESSION_CALLBACK_PATH = '/v2/session/oidc/callback';
 export type AuthorityPersonSessionClientAuthenticationV1 =
   | { method: 'none' }
   | {
-      method: 'client_secret_basic';
+      method: 'client_secret_basic' | 'client_secret_post';
       client_secret_ref: string;
     };
 
@@ -50,7 +50,10 @@ export interface ResolvedAuthorityPersonSessionRuntimeV1 {
   oidc_configuration: PersonSessionOidcConfiguration;
   client_authentication:
     | { method: 'none' }
-    | { method: 'client_secret_basic'; client_secret: string };
+    | {
+        method: 'client_secret_basic' | 'client_secret_post';
+        client_secret: string;
+      };
   pkce_sealing_key: Uint8Array;
 }
 
@@ -155,7 +158,10 @@ function clientAuthentication(
     exactKeys(authentication, ['method'], 'Person-session public client');
     return { method: 'none' };
   }
-  if (authentication.method === 'client_secret_basic') {
+  if (
+    authentication.method === 'client_secret_basic' ||
+    authentication.method === 'client_secret_post'
+  ) {
     exactKeys(
       authentication,
       ['method', 'client_secret_ref'],
@@ -167,7 +173,7 @@ function clientAuthentication(
       );
     }
     return {
-      method: 'client_secret_basic',
+      method: authentication.method,
       client_secret_ref: clientSecretReference,
     };
   }
@@ -352,7 +358,7 @@ export function readAuthorityPersonSessionRuntimeOverlay(
       authentication.method === 'none'
         ? Object.freeze({ method: 'none' as const })
         : Object.freeze({
-            method: 'client_secret_basic' as const,
+            method: authentication.method,
             client_secret: readPrivateAuthorityOidcClientSecret(
               authentication.client_secret_ref,
             ),

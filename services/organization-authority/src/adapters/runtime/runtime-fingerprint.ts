@@ -67,7 +67,10 @@ export interface AuthorityRuntimeFingerprintInput {
     };
     client_authentication:
       | { method: 'none' }
-      | { method: 'client_secret_basic'; client_secret: string };
+      | {
+          method: 'client_secret_basic' | 'client_secret_post';
+          client_secret: string;
+        };
     pkce_sealing_key: Uint8Array;
   };
 }
@@ -259,7 +262,9 @@ export function authorityRuntimeFingerprint(
                 'none'
                   ? { method: 'none' }
                   : {
-                      method: 'client_secret_basic',
+                      method:
+                        config.person_session_runtime_v1
+                          .client_authentication.method,
                       client_secret_sha256: sha256(
                         config.person_session_runtime_v1
                           .client_authentication.client_secret,

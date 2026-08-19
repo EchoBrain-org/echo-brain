@@ -49,7 +49,10 @@ function terminalFailure(error: unknown): OidcAuthorizationCodeResult {
 
 export type OpenIdClientAuthentication =
   | { method: 'none' }
-  | { method: 'client_secret_basic'; client_secret: string };
+  | {
+      method: 'client_secret_basic' | 'client_secret_post';
+      client_secret: string;
+    };
 
 export interface OpenIdClientPersonSessionProviderOptions {
   configuration: PersonSessionOidcConfiguration;
@@ -160,13 +163,19 @@ export class OpenIdClientPersonSessionProvider
     if (options.client_authentication.method === 'none') {
       authentication = openid.None();
     } else if (
-      options.client_authentication.method === 'client_secret_basic' &&
+      (options.client_authentication.method === 'client_secret_basic' ||
+        options.client_authentication.method === 'client_secret_post') &&
       typeof options.client_authentication.client_secret === 'string' &&
       options.client_authentication.client_secret.length > 0
     ) {
-      authentication = openid.ClientSecretBasic(
-        options.client_authentication.client_secret,
-      );
+      authentication =
+        options.client_authentication.method === 'client_secret_basic'
+          ? openid.ClientSecretBasic(
+              options.client_authentication.client_secret,
+            )
+          : openid.ClientSecretPost(
+              options.client_authentication.client_secret,
+            );
     } else {
       throw new Error('Person-session OIDC client authentication is invalid');
     }
