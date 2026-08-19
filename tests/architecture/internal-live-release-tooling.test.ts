@@ -17,12 +17,6 @@ const REPO = resolve(import.meta.dirname, '../..');
 const TOOL = join(REPO, 'tools', 'internal-live-release.mjs');
 const WORKFLOW = join(REPO, '.github', 'workflows', 'internal-live-release.yml');
 const CI_WORKFLOW = join(REPO, '.github', 'workflows', 'ci.yml');
-const MACOS_SMOKE = join(
-  REPO,
-  '.github',
-  'scripts',
-  'internal-live-macos-smoke.sh',
-);
 const README = join(REPO, 'README.md');
 const VERSION = '0.1.0-internal.6';
 const SOURCE_SHA = 'a'.repeat(40);
@@ -158,26 +152,27 @@ function monotonic(releaseVersion: string, existingTags: readonly string[]) {
 }
 
 describe('INTERNAL LIVE release tooling', () => {
-  it('shares the stronger macOS package smoke with the regular CI gate', () => {
+  it('keeps regular CI on the standalone Person-client package', () => {
     const workflow = readFileSync(CI_WORKFLOW, 'utf8');
-    const jobStart = workflow.indexOf('  macos-launchagent:');
+    const jobStart = workflow.indexOf('  person-client-package:');
     const nextJob = workflow.indexOf('  authority-container:', jobStart);
     const job = workflow.slice(jobStart, nextJob);
 
     expect(jobStart).toBeGreaterThan(0);
     expect(nextJob).toBeGreaterThan(jobStart);
     expect(job).toContain('runs-on: macos-15');
-    expect(job).toContain('npm pack --pack-destination "$pack_dir"');
+    expect(job).toContain('npm run pack:person-client -- "$pack_dir"');
     expect(job).toContain(
-      'bash .github/scripts/internal-live-macos-smoke.sh \\\n' +
-        '            "$archive" \\\n' +
-        '            "$package_version"',
+      'require("./src/product/person-client/package.json").version',
     );
-    const smoke = readFileSync(MACOS_SMOKE, 'utf8');
-    expect(smoke).toContain('"$cli" init --config "$config"');
-    expect(smoke).toContain('"$cli" service install --config "$config"');
-    expect(smoke).not.toContain('"$cli" onboard');
-    expect(smoke).not.toContain('"$cli" selftest');
+    expect(job).toContain('npm install --ignore-scripts --offline');
+    expect(job).toContain('"$cli" --help');
+    expect(job).toContain('"$cli" person recent-decisions');
+    expect(job).not.toContain('npm pack --pack-destination');
+    expect(job).not.toContain('internal-live-macos-smoke.sh');
+    expect(job).not.toContain('service install');
+    expect(job).not.toContain('process-one-meeting');
+    expect(job).not.toContain('LaunchAgent');
   });
 
   it('keeps one lean publication behind approval and exact-bundle verification', () => {

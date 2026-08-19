@@ -22,6 +22,10 @@ const COMPILED_WORKSPACE_PATHS = [
   ['packages', 'federation-protocol'],
   ['packages', 'organization-protocol'],
   ['packages', 'organization-api'],
+  ['services', 'organization-control-plane'],
+  ['services', 'organization-record'],
+  ['services', 'organization-retrieval'],
+  ['services', 'organization-authority'],
   ['src', 'product', 'person-client'],
 ];
 
