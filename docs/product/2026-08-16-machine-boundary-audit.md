@@ -164,15 +164,31 @@ one-to-one. Deleted as plan phase 4b after `enrollment_id →
 principal/session` re-keying. Sizing belongs to phase 2, when the session
 model fixes what replaces each table.
 
-## Fate: STAYS (machine) — re-estimated in phase 2
+## Fate: STAYS (machine) — 1,727 direct LOC at lean-v1 checkpoint
 
-`readable-search-reader.ts` (107), `recent-decisions-reader.ts` (110),
-`reviewer-recent-decisions-reader.ts` (113), a session-authenticated
-client replacing the installation-signed transport, and ~600 LOC of
-`cli.ts` for the five surviving commands. The v1 figure (~1,400) was
-anchored to the 107-line reader, which is thin only because the
-installation signer authenticates it; the honest number comes from the
-phase-2 implementation.
+Measured from implementation commit
+`fd3e2a7191fafa493376b14c118f4c9ef8772b42`, the config-free Person client is
+**1,703 non-test TypeScript LOC across six files** plus **24 added lines** in
+the root CLI dispatch, for **1,727 direct machine LOC**:
+
+| Person-client file | LOC |
+| --- | ---: |
+| `authority-client.ts` | 497 |
+| `client.ts` | 290 |
+| `commands.ts` | 268 |
+| `index.ts` | 32 |
+| `requests.ts` | 153 |
+| `session-store.ts` | 463 |
+| **Person-client subtotal** | **1,703** |
+| Root `cli.ts` integration delta | 24 |
+| **Direct stays estimate** | **1,727** |
+
+This count excludes tests, JSON boundary manifests, and the shared 139-line
+organization-API session validator. It includes login/session lifecycle,
+the three retained reads, member exclusion control, and Slack identity
+linking. The old installation-authenticated readers remain until the later
+Phase-4 deletion; they are compatibility source, not additive final-client
+LOC. This measured implementation replaces the earlier ~1,400 estimate.
 
 ## Corrections applied since the conversation audit
 
