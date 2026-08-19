@@ -15,6 +15,7 @@ src/
   product/                      CLI, runtime composition, approval, storage
   product/machine/              installation key and OS ports
   product/organization/         enrollment client and access state
+  product/person-client/        installable Person-authenticated thin client
   infrastructure/               atomic writes, SQLite migration, file locks
   util/                         narrow shared primitives
 
@@ -32,10 +33,15 @@ services/
                                 generations
 ```
 
-The root package is the employee product. The authority is a separate
-workspace and deployment. They share the three protocol/API packages and never
-import one another. The authority additionally depends on the organization
-control plane, which the employee product does not.
+The shippable employee-side package is now `@echo-brain/person-client`. The
+root `echo-brain` package remains a migration compatibility and test shell; it
+is not a release artifact and cannot be installed offline from its tarball.
+The Person client and the separately deployed Authority share only the three
+protocol/API packages and never import one another's implementation. The
+Authority additionally depends on the organization control plane, which the
+Person client does not. `npm run pack:person-client -- /absolute/output/dir`
+is the sole machine-package path: it builds from a clean commit and emits the
+pinned tarball hash.
 
 `organization-control-plane`, `organization-record`, and
 `organization-retrieval` are libraries, not processes, despite their
@@ -62,7 +68,8 @@ are:
 
 | Workspace | Direct internal dependencies |
 | --- | --- |
-| employee product | `federation-protocol`, `organization-protocol`, `organization-api` |
+| Person client | `federation-protocol`, `organization-protocol`, `organization-api` |
+| root migration shell | `person-client`, `organization-authority`, all three protocol/API packages |
 | `federation-protocol` | none |
 | `organization-protocol` | `federation-protocol` |
 | `organization-api` | `federation-protocol`, `organization-protocol` |
@@ -99,11 +106,13 @@ allowlisted module no entry point can reach. Every tracked module under `src/`
 is therefore both allowlisted and reachable, and dead weight cannot accumulate
 inside the packed artifact.
 `tools/workspace-source-boundaries.v1.json` registers nine manifests that
-govern `packages/*/src`, `services/*/src`, and two refinement sub-boundaries
-inside `src/product` by ownership: every file under a declared `source_root`
-must be owned and must match exactly one layer rule. Paths under
-`src/product/organization/` and `src/product/person-client/` are intersections
-of the two artifacts, and both checks must pass.
+govern `packages/*/src`, `services/*/src`, and two boundaries inside
+`src/product` by ownership: every file under a declared `source_root` must be
+owned and must match exactly one layer rule. `src/product/organization/`
+remains a refinement of the root product boundary. The installable
+`src/product/person-client/` workspace is delegated out of the root product
+layer and closure checks; the root CLI can consume it only through its public
+package export.
 
 ## Authority layers
 

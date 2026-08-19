@@ -106,7 +106,7 @@ import { nodeOperatorFileSystem } from "./operator-io.js";
 import {
   runPersonClientCli,
   type PersonClientCliDependencies,
-} from "./person-client/index.js";
+} from "@echo-brain/person-client";
 
 export interface ProductCliProcess {
   once: (event: "SIGINT" | "SIGTERM", listener: () => void) => unknown;

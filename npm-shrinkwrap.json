@@ -17,6 +17,7 @@
         "packages/federation-protocol",
         "packages/organization-protocol",
         "packages/organization-api",
+        "src/product/person-client",
         "services/organization-authority",
         "services/organization-control-plane",
         "services/organization-record",
@@ -27,6 +28,7 @@
         "@echo-brain/organization-api": "0.0.0-dev.0",
         "@echo-brain/organization-authority": "0.0.0-dev.0",
         "@echo-brain/organization-protocol": "0.0.0-dev.0",
+        "@echo-brain/person-client": "0.1.0-internal.1",
         "ajv": "8.20.0",
         "better-sqlite3": "12.10.0"
       },
@@ -73,6 +75,10 @@
     },
     "node_modules/@echo-brain/organization-retrieval": {
       "resolved": "services/organization-retrieval",
+      "link": true
+    },
+    "node_modules/@echo-brain/person-client": {
+      "resolved": "src/product/person-client",
       "link": true
     },
     "node_modules/@emnapi/core": {
@@ -3662,6 +3668,28 @@
       "dependencies": {
         "@echo-brain/federation-protocol": "0.0.0-dev.0",
         "better-sqlite3": "12.10.0"
+      },
+      "engines": {
+        "node": "22.22.1",
+        "npm": "10.9.4"
+      }
+    },
+    "src/product/person-client": {
+      "name": "@echo-brain/person-client",
+      "version": "0.1.0-internal.1",
+      "bundleDependencies": [
+        "@echo-brain/federation-protocol",
+        "@echo-brain/organization-protocol",
+        "@echo-brain/organization-api"
+      ],
+      "license": "MIT",
+      "dependencies": {
+        "@echo-brain/federation-protocol": "0.0.0-dev.0",
+        "@echo-brain/organization-api": "0.0.0-dev.0",
+        "@echo-brain/organization-protocol": "0.0.0-dev.0"
+      },
+      "bin": {
+        "echo-brain": "dist/main.js"
       },
       "engines": {
         "node": "22.22.1",

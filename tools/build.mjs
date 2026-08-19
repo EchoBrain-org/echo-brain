@@ -18,10 +18,11 @@ import { fileURLToPath } from 'node:url';
 const repo = resolve(import.meta.dirname, '..');
 const dist = join(repo, 'dist');
 const ARTIFACT_EVIDENCE_FILE = 'package-artifact-evidence.v1.json';
-const BUNDLED_WORKSPACE_PATHS = [
+const COMPILED_WORKSPACE_PATHS = [
   ['packages', 'federation-protocol'],
   ['packages', 'organization-protocol'],
   ['packages', 'organization-api'],
+  ['src', 'product', 'person-client'],
 ];
 
 function gitOutput(args, cwd = repo) {
@@ -52,7 +53,7 @@ export function inspectRepositorySource(repository) {
 
 export function cleanBuildOutputs(repository) {
   rmSync(join(repository, 'dist'), { recursive: true, force: true });
-  for (const workspacePath of BUNDLED_WORKSPACE_PATHS) {
+  for (const workspacePath of COMPILED_WORKSPACE_PATHS) {
     rmSync(join(repository, ...workspacePath, 'dist'), {
       recursive: true,
       force: true,
@@ -126,17 +127,12 @@ function packedPackageFiles() {
   });
 }
 
-function writeBuildEvidence({
-  packageName,
+function writeBuildIdentity({
+  buildIdentityPath,
   packageVersion,
   sourceSha,
   sourceKind,
 }) {
-  const buildIdentityPath = join(
-    dist,
-    'product',
-    'build-identity.v1.json',
-  );
   writeFileSync(
     buildIdentityPath,
     `${JSON.stringify({
@@ -147,6 +143,20 @@ function writeBuildEvidence({
       source_kind: sourceKind,
     })}\n`,
   );
+}
+
+function writeBuildEvidence({
+  packageName,
+  packageVersion,
+  sourceSha,
+  sourceKind,
+}) {
+  writeBuildIdentity({
+    buildIdentityPath: join(dist, 'product', 'build-identity.v1.json'),
+    packageVersion,
+    sourceSha,
+    sourceKind,
+  });
 
   const manifestPath = join(dist, ARTIFACT_EVIDENCE_FILE);
   rmSync(manifestPath, { force: true });
@@ -183,9 +193,9 @@ function main() {
     [
       tsc,
       '-b',
-      join(repo, 'packages', 'federation-protocol'),
-      join(repo, 'packages', 'organization-protocol'),
-      join(repo, 'packages', 'organization-api'),
+      ...COMPILED_WORKSPACE_PATHS.map((workspacePath) =>
+        join(repo, ...workspacePath),
+      ),
     ],
     {
       cwd: repo,
@@ -222,9 +232,19 @@ function main() {
     },
   );
   chmodSync(join(dist, 'product', 'cli.js'), 0o755);
+  chmodSync(
+    join(repo, 'src', 'product', 'person-client', 'dist', 'main.js'),
+    0o755,
+  );
 
   const packageManifest = JSON.parse(
     readFileSync(join(repo, 'package.json'), 'utf8'),
+  );
+  const personClientManifest = JSON.parse(
+    readFileSync(
+      join(repo, 'src', 'product', 'person-client', 'package.json'),
+      'utf8',
+    ),
   );
   const sourceAfterBuild = inspectRepositorySource(repo);
   const sourceKind =
@@ -233,6 +253,19 @@ function main() {
     sourceAfterBuild.sourceSha === sourceAtStart.sourceSha
       ? 'materialized-commit'
       : 'worktree-head-unverified';
+  writeBuildIdentity({
+    buildIdentityPath: join(
+      repo,
+      'src',
+      'product',
+      'person-client',
+      'dist',
+      'build-identity.v1.json',
+    ),
+    packageVersion: personClientManifest.version,
+    sourceSha: sourceAtStart.sourceSha,
+    sourceKind,
+  });
   writeBuildEvidence({
     packageName: packageManifest.name,
     packageVersion: packageManifest.version,
@@ -248,6 +281,19 @@ function main() {
     (sourceAtEnd.sourceKind !== 'materialized-commit' ||
       sourceAtEnd.sourceSha !== sourceAtStart.sourceSha)
   ) {
+    writeBuildIdentity({
+      buildIdentityPath: join(
+        repo,
+        'src',
+        'product',
+        'person-client',
+        'dist',
+        'build-identity.v1.json',
+      ),
+      packageVersion: personClientManifest.version,
+      sourceSha: sourceAtStart.sourceSha,
+      sourceKind: 'worktree-head-unverified',
+    });
     writeBuildEvidence({
       packageName: packageManifest.name,
       packageVersion: packageManifest.version,

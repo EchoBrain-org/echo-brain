@@ -7,6 +7,7 @@
     "packages/federation-protocol",
     "packages/organization-protocol",
     "packages/organization-api",
+    "src/product/person-client",
     "services/organization-authority",
     "services/organization-control-plane",
     "services/organization-record",
@@ -59,6 +60,7 @@
   ],
   "scripts": {
     "clean": "node tools/build.mjs --clean",
+    "pack:person-client": "node tools/pack-person-client.mjs",
     "clean:workspaces": "tsc -b tsconfig.workspaces.json --clean",
     "build": "node tools/build.mjs",
     "build:workspaces": "tsc -b tsconfig.workspaces.json",
@@ -90,6 +92,7 @@
     "@echo-brain/organization-api": "0.0.0-dev.0",
     "@echo-brain/organization-authority": "0.0.0-dev.0",
     "@echo-brain/organization-protocol": "0.0.0-dev.0",
+    "@echo-brain/person-client": "0.1.0-internal.1",
     "ajv": "8.20.0",
     "better-sqlite3": "12.10.0"
   },

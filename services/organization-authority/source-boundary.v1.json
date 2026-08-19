@@ -44,7 +44,9 @@
     "services/organization-authority/migrations/0009_person_identity_and_sessions.sql",
     "services/organization-authority/migrations/0010_person_read_decision_audit.sql",
     "services/organization-authority/migrations/0011_authority_processing_state.sql",
-    "services/organization-authority/migrations/0012_member_exclusion_read_audit.sql"
+    "services/organization-authority/migrations/0012_member_exclusion_read_audit.sql",
+    "services/organization-authority/migrations/0013_person_session_assertion_issued_at.sql",
+    "services/organization-authority/migrations/0014_person_login_grant_expected_email.sql"
   ],
   "layer_rules": [
     {

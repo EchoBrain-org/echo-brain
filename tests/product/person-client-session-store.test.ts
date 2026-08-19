@@ -6,11 +6,11 @@ import {
 } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { describe, expect, it } from 'vitest';
 import {
   PersonClientSessionUnavailableError,
   PersonSessionStore,
-} from '../../src/product/person-client/session-store.js';
+} from '@echo-brain/person-client';
+import { describe, expect, it } from 'vitest';
 
 const id = (prefix: string, tail: string) =>
   `${prefix}_00000000-0000-4000-8000-${tail}`;

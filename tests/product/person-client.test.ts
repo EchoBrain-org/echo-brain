@@ -6,9 +6,9 @@ import {
   ORGANIZATION_RECENT_DECISIONS_POLICY_ID,
   ORGANIZATION_RECENT_DECISIONS_WITNESS,
 } from '@echo-brain/organization-api';
+import { PersonClient } from '@echo-brain/person-client';
 import { describe, expect, it } from 'vitest';
 import { runProductCli } from '../../src/product/cli.js';
-import { PersonClient } from '../../src/product/person-client/client.js';
 import {
   ORGANIZATION_IDS,
   TestAuthority,

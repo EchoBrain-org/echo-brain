@@ -193,10 +193,9 @@ describe('workspace source boundaries', () => {
     }
   });
 
-  // Both rulesets govern src/product/{federation,organization}: the registry
-  // pass and the product closure walk. A nested manifest that permits what the
-  // product boundary forbids passes one and fails the other on the first real
-  // import, so containment is asserted before any such import exists.
+  // The local-organization refinement is governed by both the registry pass
+  // and the product closure walk. Containment is asserted before a nested
+  // manifest can permit an import the root product boundary rejects.
   it('keeps every nested boundary inside the product boundary', () => {
     const registry = readJson<Registry>(REGISTRY);
     const product = readJson<ProductBoundary>(PRODUCT_BOUNDARY);
@@ -244,6 +243,43 @@ describe('workspace source boundaries', () => {
     expect(violations).toEqual([]);
   });
 
+  it('keeps product workspaces inside the governed product tree', () => {
+    const registry = readJson<Registry>(REGISTRY);
+    const product = readJson<ProductBoundary>(PRODUCT_BOUNDARY);
+    const listed = spawnSync(
+      'git',
+      ['ls-files', '--cached', '--others', '--exclude-standard', '-z'],
+      { cwd: REPO, encoding: 'utf8' },
+    );
+    expect(listed.status, listed.stdout + listed.stderr).toBe(0);
+    const sourceFiles = listed.stdout
+      .split('\0')
+      .filter((path) => /\.(?:[cm]?[jt]sx?)$/.test(path));
+    const outsideProduct: string[] = [];
+
+    for (const manifestPath of registry.manifests) {
+      const manifest = readJson<BoundaryManifest>(manifestPath);
+      if (
+        !manifest.workspace ||
+        !manifest.boundary_root.startsWith('src/product/')
+      ) {
+        continue;
+      }
+      for (const path of sourceFiles) {
+        if (
+          manifest.owned_source_paths.some((owned) => matchesGlob(path, owned)) &&
+          !product.allowed_internal_paths.some((allowed) =>
+            matchesGlob(path, allowed),
+          )
+        ) {
+          outsideProduct.push(`${manifest.name}: ${path}`);
+        }
+      }
+    }
+
+    expect(outsideProduct).toEqual([]);
+  });
+
   it('locks the one-way workspace dependency graph', () => {
     const registry = readJson<Registry>(REGISTRY);
     const graph = Object.fromEntries(
@@ -279,9 +315,10 @@ describe('workspace source boundaries', () => {
         '@echo-brain/organization-authority',
         '@echo-brain/organization-protocol',
       ],
-      'echo-brain/person-client': [
+      '@echo-brain/person-client': [
         '@echo-brain/federation-protocol',
         '@echo-brain/organization-api',
+        '@echo-brain/organization-protocol',
       ],
     });
   });
@@ -299,17 +336,6 @@ describe('workspace source boundaries', () => {
       'utf8',
     );
 
-    // The builder runs the root workspace build, so every declared workspace
-    // must be present in its selective Docker context. A parent COPY is valid
-    // only when it contains the complete workspace path.
-    for (const workspace of rootPackage.workspaces) {
-      const parent = workspace.split('/')[0]!;
-      const copied =
-        dockerfile.includes(`COPY ${workspace} ./${workspace}`) ||
-        dockerfile.includes(`COPY ${parent} ./${parent}`);
-      expect(copied, `builder omits workspace ${workspace}`).toBe(true);
-    }
-
     const runtimeClosure = new Set<string>();
     const visit = (workspace: string): void => {
       if (runtimeClosure.has(workspace)) return;
@@ -321,6 +347,41 @@ describe('workspace source boundaries', () => {
       }
     };
     visit('services/organization-authority');
+
+    // npm ci reads every workspace manifest, but the server builder compiles
+    // and receives source only for the Authority dependency closure.
+    for (const workspace of rootPackage.workspaces) {
+      const parent = workspace.split('/')[0]!;
+      const manifestCopied =
+        dockerfile.includes(`COPY ${workspace} ./${workspace}`) ||
+        dockerfile.includes(`COPY ${parent} ./${parent}`) ||
+        dockerfile.includes(
+          `COPY ${workspace}/package.json ./${workspace}/package.json`,
+        );
+      expect(
+        manifestCopied,
+        `builder omits workspace manifest ${workspace}`,
+      ).toBe(true);
+    }
+    for (const workspace of runtimeClosure) {
+      const parent = workspace.split('/')[0]!;
+      const sourceCopied =
+        dockerfile.includes(`COPY ${workspace} ./${workspace}`) ||
+        dockerfile.includes(`COPY ${parent} ./${parent}`);
+      expect(sourceCopied, `builder omits workspace source ${workspace}`).toBe(
+        true,
+      );
+    }
+    expect(dockerfile).toContain(
+      'npm run build --workspace @echo-brain/organization-authority',
+    );
+    expect(dockerfile).toContain(
+      'npm ci --omit=dev --workspace @echo-brain/organization-authority --include-workspace-root=false',
+    );
+    expect(dockerfile).not.toContain('npm run build:workspaces');
+    expect(dockerfile).not.toContain(
+      'COPY src/product/person-client ./src/product/person-client',
+    );
 
     // npm's workspace links resolve into these runtime directories. Every
     // reachable workspace therefore needs its package exports and compiled
