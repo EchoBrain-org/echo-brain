@@ -200,6 +200,20 @@ describe('Person-session runtime overlay', () => {
     expect(Buffer.from(resolved!.pkce_sealing_key)).toEqual(key);
   });
 
+  it('accepts a canonical root issuer without adding a trailing slash', () => {
+    const { config, overlayPath, keyPath } = fixture();
+    writePrivateCredential(keyPath, Buffer.alloc(32, 6).toString('base64url'));
+    const googleOverlay = overlay(config, keyPath);
+    (googleOverlay.oidc as Record<string, unknown>).issuer =
+      'https://accounts.google.com';
+    writePrivateJson(overlayPath, googleOverlay);
+
+    expect(
+      readAuthorityPersonSessionRuntimeOverlay(config)?.oidc_configuration
+        .issuer,
+    ).toBe('https://accounts.google.com');
+  });
+
   it('reads client_secret_basic only from its fixed private file', () => {
     const { config, overlayPath, keyPath, clientSecretPath } = fixture();
     writePrivateCredential(keyPath, Buffer.alloc(32, 7).toString('base64url'));

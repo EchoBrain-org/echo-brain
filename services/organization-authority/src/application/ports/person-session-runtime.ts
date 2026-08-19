@@ -63,8 +63,8 @@ export interface VerifiedOidcIdentityToken {
   audience: string | readonly string[];
   authorized_party?: unknown;
   nonce: string;
-  /** Raw OIDC NumericDate, in seconds. */
-  auth_time: number;
+  /** Raw OIDC `iat` NumericDate, in seconds. */
+  issued_at: number;
   claims: Readonly<Record<string, unknown>>;
 }
 

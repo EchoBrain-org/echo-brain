@@ -99,12 +99,13 @@ function exactHttpsUrl(
   } catch {
     throw new Error(`${label} must be an absolute HTTPS URL`);
   }
+  const exactRootIssuer = !callback && value === parsed.origin;
   if (
     parsed.protocol !== 'https:' ||
     parsed.username !== '' ||
     parsed.password !== '' ||
     parsed.hash !== '' ||
-    parsed.href !== value ||
+    (!exactRootIssuer && parsed.href !== value) ||
     parsed.search !== '' ||
     (callback && parsed.pathname !== PERSON_SESSION_CALLBACK_PATH)
   ) {

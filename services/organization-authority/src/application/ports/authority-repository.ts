@@ -399,7 +399,7 @@ export interface StoredOidcLoginAttempt {
   terminal_outcome: OidcLoginAttemptTerminalOutcome | null;
   completed_at: string | null;
   resolved_identity_binding_id: string | null;
-  upstream_auth_time: string | null;
+  upstream_assertion_issued_at: string | null;
 }
 
 export type NewOidcLoginAttempt = Omit<
@@ -410,7 +410,7 @@ export type NewOidcLoginAttempt = Omit<
   | 'redemption_claimed_at'
   | 'completed_at'
   | 'resolved_identity_binding_id'
-  | 'upstream_auth_time'
+  | 'upstream_assertion_issued_at'
   | 'pkce_verifier_seal_key_id'
   | 'pkce_verifier_sealed'
 > & {
@@ -421,7 +421,7 @@ export type OidcLoginAttemptCompletion =
   | {
       outcome: 'succeeded';
       resolved_identity_binding_id: string;
-      upstream_auth_time: string;
+      upstream_assertion_issued_at: string;
     }
   | { outcome: 'denied' };
 
@@ -448,7 +448,7 @@ export interface StoredPersonSessionFamily
   identity_binding_id: string;
   authentication_login_attempt_id: string;
   created_at: string;
-  upstream_auth_time: string;
+  upstream_assertion_issued_at: string;
   tenant_constraint_sha256: Sha256Digest;
   oidc_configuration_sha256: Sha256Digest;
   hard_reauthentication_at: string;

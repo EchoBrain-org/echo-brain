@@ -281,7 +281,7 @@ describe('person identity and session persistence', () => {
                nonce_sha256, pkce_verifier_seal_key_id,
                pkce_verifier_sealed, created_at, expires_at,
                redemption_claim_id, redemption_claimed_at, terminal_outcome,
-               completed_at, resolved_identity_binding_id, upstream_auth_time
+               completed_at, resolved_identity_binding_id, upstream_assertion_issued_at
              ) VALUES (
                ?, ?, 'existing_identity_login', 'echo-browser-client',
                'https://authority.example/auth/oidc/callback', ?, ?, NULL, ?, ?,
@@ -450,7 +450,7 @@ describe('person identity and session persistence', () => {
           {
             outcome: 'succeeded',
             resolved_identity_binding_id: bindingId,
-            upstream_auth_time: '2026-08-18T00:01:30.000Z',
+            upstream_assertion_issued_at: '2026-08-18T00:01:30.000Z',
           },
         ),
       ).toMatchObject({
@@ -480,7 +480,7 @@ describe('person identity and session persistence', () => {
         principal_id: membership.principal_id,
         membership_id: membership.membership_id,
         membership_type: membership.membership_type,
-        upstream_auth_time: '2026-08-18T00:01:30.000Z',
+        upstream_assertion_issued_at: '2026-08-18T00:01:30.000Z',
         tenant_constraint_sha256: tenantSha256,
         oidc_configuration_sha256: configurationSha256,
         hard_reauthentication_at: '2026-08-25T00:01:30.000Z',
@@ -603,7 +603,7 @@ describe('person identity and session persistence', () => {
             `UPDATE authority_oidc_login_attempts
                 SET terminal_outcome = NULL, completed_at = NULL,
                     resolved_identity_binding_id = NULL,
-                    upstream_auth_time = NULL
+                    upstream_assertion_issued_at = NULL
               WHERE state_sha256 = ?`,
           )
           .run(stateSha256),
@@ -712,7 +712,7 @@ describe('person identity and session persistence', () => {
           {
             outcome: 'succeeded',
             resolved_identity_binding_id: bindingId,
-            upstream_auth_time: '2026-08-18T00:04:20.001Z',
+            upstream_assertion_issued_at: '2026-08-18T00:04:20.001Z',
           },
         );
       }),
@@ -725,7 +725,7 @@ describe('person identity and session persistence', () => {
           {
             outcome: 'succeeded',
             resolved_identity_binding_id: bindingId,
-            upstream_auth_time: '2026-08-18T00:03:20.000Z',
+            upstream_assertion_issued_at: '2026-08-18T00:03:20.000Z',
           },
         );
         transaction.insertPersonSessionFamily({
@@ -736,7 +736,7 @@ describe('person identity and session persistence', () => {
           principal_id: membership.principal_id,
           membership_id: membership.membership_id,
           membership_type: membership.membership_type,
-          upstream_auth_time: '2026-08-18T00:03:20.000Z',
+          upstream_assertion_issued_at: '2026-08-18T00:03:20.000Z',
           tenant_constraint_sha256: rotatedTenantSha256,
           oidc_configuration_sha256: rotatedConfigurationSha256,
           hard_reauthentication_at: '2026-08-25T00:03:21.000Z',
@@ -751,7 +751,7 @@ describe('person identity and session persistence', () => {
           {
             outcome: 'succeeded',
             resolved_identity_binding_id: bindingId,
-            upstream_auth_time: '2026-08-18T00:03:20.000Z',
+            upstream_assertion_issued_at: '2026-08-18T00:03:20.000Z',
           },
         ),
       ).toBeDefined();
@@ -763,7 +763,7 @@ describe('person identity and session persistence', () => {
         principal_id: membership.principal_id,
         membership_id: membership.membership_id,
         membership_type: membership.membership_type,
-        upstream_auth_time: '2026-08-18T00:03:20.000Z',
+        upstream_assertion_issued_at: '2026-08-18T00:03:20.000Z',
         tenant_constraint_sha256: rotatedTenantSha256,
         oidc_configuration_sha256: rotatedConfigurationSha256,
         hard_reauthentication_at: '2026-08-25T00:03:20.000Z',
@@ -821,7 +821,7 @@ describe('person identity and session persistence', () => {
         .prepare(
           `UPDATE authority_oidc_login_attempts
               SET terminal_outcome = 'succeeded', completed_at = ?,
-                  resolved_identity_binding_id = ?, upstream_auth_time = ?,
+                  resolved_identity_binding_id = ?, upstream_assertion_issued_at = ?,
                   redemption_claim_id = NULL, redemption_claimed_at = NULL,
                   pkce_verifier_seal_key_id = NULL,
                   pkce_verifier_sealed = NULL
@@ -847,7 +847,7 @@ describe('person identity and session persistence', () => {
                  session_family_id, organization_id, principal_id,
                  membership_id, membership_type, identity_binding_id,
                  authentication_login_attempt_id, created_at,
-                 upstream_auth_time, tenant_constraint_sha256,
+                 upstream_assertion_issued_at, tenant_constraint_sha256,
                  oidc_configuration_sha256, hard_reauthentication_at,
                  status, revoked_at, revocation_reason
                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
@@ -1467,7 +1467,7 @@ describe('person identity and session persistence', () => {
           {
             outcome: 'succeeded',
             resolved_identity_binding_id: bindingId,
-            upstream_auth_time: '2026-08-18T01:00:10.000Z',
+            upstream_assertion_issued_at: '2026-08-18T01:00:10.000Z',
           },
         ),
       ).toBeDefined();
@@ -1492,7 +1492,7 @@ describe('person identity and session persistence', () => {
         principal_id: membership.principal_id,
         membership_id: membership.membership_id,
         membership_type: membership.membership_type,
-        upstream_auth_time: '2026-08-18T01:00:10.000Z',
+        upstream_assertion_issued_at: '2026-08-18T01:00:10.000Z',
         tenant_constraint_sha256: tenantSha256,
         oidc_configuration_sha256: configurationSha256,
         hard_reauthentication_at: '2026-08-25T01:00:10.000Z',
@@ -1628,7 +1628,7 @@ describe('person identity and session persistence', () => {
           .prepare(
             `UPDATE authority_oidc_login_attempts
                 SET terminal_outcome = 'succeeded', completed_at = ?,
-                    resolved_identity_binding_id = ?, upstream_auth_time = ?,
+                    resolved_identity_binding_id = ?, upstream_assertion_issued_at = ?,
                     redemption_claim_id = NULL, redemption_claimed_at = NULL,
                     pkce_verifier_seal_key_id = NULL,
                     pkce_verifier_sealed = NULL
@@ -1681,7 +1681,7 @@ describe('person identity and session persistence', () => {
         terminal_outcome: 'denied',
         completed_at: '2026-08-18T01:03:00.000Z',
         resolved_identity_binding_id: null,
-        upstream_auth_time: null,
+        upstream_assertion_issued_at: null,
         pkce_verifier_seal_key_id: null,
         pkce_verifier_sealed: null,
       });

@@ -318,7 +318,7 @@ describe('organization-member recording activation lifecycle', () => {
     ).rejects.toThrow('fault:after-audit');
 
     const rolledBack = new Database(runtimeConfig.database_path);
-    expect(rolledBack.pragma('user_version', { simple: true })).toBe(12);
+    expect(rolledBack.pragma('user_version', { simple: true })).toBe(13);
     expect(
       (
         rolledBack

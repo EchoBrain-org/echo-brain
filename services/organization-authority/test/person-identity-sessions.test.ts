@@ -269,7 +269,7 @@ function verifiedResult(
       subject,
       audience: OIDC_CONFIGURATION.client_id,
       nonce: begun.nonce,
-      auth_time: Date.parse(begun.created_at) / 1000,
+      issued_at: Date.parse(begun.created_at) / 1000,
       claims: { tenant_id: OIDC_CONFIGURATION.tenant.claim_value },
       ...overrides,
     },
@@ -445,8 +445,7 @@ describe("PersonIdentitySessionApplication", () => {
       redirect_uri: OIDC_CONFIGURATION.redirect_uri,
       code_challenge_method: "S256",
       response_type: "code",
-      scope: "openid",
-      max_age: 0,
+      scope: "openid email",
       created_at: "2026-08-18T00:00:02.000Z",
       expires_at: "2026-08-18T00:10:02.000Z",
     });
@@ -478,7 +477,7 @@ describe("PersonIdentitySessionApplication", () => {
       terminal_outcome: "succeeded",
       completed_at: fixture.clock.current,
       resolved_identity_binding_id: session.identity_binding_id,
-      upstream_auth_time: begun.created_at,
+      upstream_assertion_issued_at: begun.created_at,
       pkce_verifier_seal_key_id: null,
       pkce_verifier_sealed: null,
     });
@@ -612,7 +611,7 @@ describe("PersonIdentitySessionApplication", () => {
       terminal_outcome: "denied",
       completed_at: fixture.clock.current,
       resolved_identity_binding_id: null,
-      upstream_auth_time: null,
+      upstream_assertion_issued_at: null,
       pkce_verifier_seal_key_id: null,
       pkce_verifier_sealed: null,
     });
@@ -707,7 +706,7 @@ describe("PersonIdentitySessionApplication", () => {
     fixture.repository.close();
   });
 
-  it("accepts a live grant at six minutes and an upstream authentication two minutes later", async () => {
+  it("accepts a live grant at six minutes and an identity assertion two minutes later", async () => {
     const fixture = setup();
     const grant = fixture.application.issueBootstrapLoginGrant({
       target_membership_id: fixture.membership.membership_id,
@@ -720,7 +719,7 @@ describe("PersonIdentitySessionApplication", () => {
     });
     fixture.clock.current = "2026-08-18T00:08:02.000Z";
     fixture.provider.result = verifiedResult(begun, undefined, {
-      auth_time: Date.parse(fixture.clock.current) / 1000,
+      issued_at: Date.parse(fixture.clock.current) / 1000,
     });
     const session = await fixture.application.completeOidcLogin({
       state: begun.state,
@@ -804,15 +803,15 @@ describe("PersonIdentitySessionApplication", () => {
       override: () => ({ claims: { tenant_id: "wrong-tenant" } }),
     },
     {
-      name: "auth_time before the lower skew boundary",
+      name: "issued_at before the lower skew boundary",
       override: (begun: BegunPersonOidcLogin) => ({
-        auth_time: (Date.parse(begun.created_at) - 61_000) / 1000,
+        issued_at: (Date.parse(begun.created_at) - 61_000) / 1000,
       }),
     },
     {
-      name: "auth_time beyond the future skew boundary",
+      name: "issued_at beyond the future skew boundary",
       override: (_begun: BegunPersonOidcLogin, fixture: Fixture) => ({
-        auth_time: (Date.parse(fixture.clock.current) + 61_000) / 1000,
+        issued_at: (Date.parse(fixture.clock.current) + 61_000) / 1000,
       }),
     },
   ])("terminalizes an invalid verified claim: $name", async ({ override }) => {
@@ -1161,7 +1160,7 @@ describe("PersonIdentitySessionApplication", () => {
         terminal_outcome: "denied",
         completed_at: fixture.clock.current,
         resolved_identity_binding_id: null,
-        upstream_auth_time: null,
+        upstream_assertion_issued_at: null,
         pkce_verifier_seal_key_id: null,
         pkce_verifier_sealed: null,
       },

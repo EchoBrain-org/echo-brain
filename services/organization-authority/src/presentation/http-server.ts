@@ -671,7 +671,11 @@ const PERSON_OIDC_CALLBACK_KEYS = new Set([
   'error',
   'error_description',
   'error_uri',
+  'authuser',
+  'hd',
   'iss',
+  'prompt',
+  'scope',
   'session_state',
   'state',
 ]);
@@ -724,7 +728,11 @@ function personOidcCallbackInput(
   }
 
   for (const key of [
+    'authuser',
+    'hd',
     'iss',
+    'prompt',
+    'scope',
     'session_state',
     'error_description',
     'error_uri',

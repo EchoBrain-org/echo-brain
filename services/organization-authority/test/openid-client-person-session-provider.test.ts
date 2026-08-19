@@ -61,8 +61,7 @@ const BEGUN_ATTEMPT: BegunPersonOidcLogin = {
   code_challenge: CODE_CHALLENGE,
   code_challenge_method: 'S256',
   response_type: 'code',
-  scope: 'openid',
-  max_age: 0,
+  scope: 'openid email',
   created_at: '2026-08-18T00:00:00.000Z',
   expires_at: '2026-08-18T00:10:00.000Z',
 };
@@ -74,6 +73,7 @@ type ProviderFetch = NonNullable<
 type TokenMode =
   | 'valid'
   | 'missing_id_token'
+  | 'missing_issued_at'
   | 'tampered_signature'
   | 'invalid_nonce_claim'
   | 'transport_failure';
@@ -150,13 +150,13 @@ class OfflineOidcIssuer {
           });
         }
         const now = Math.floor(Date.now() / 1000);
+        const issuedAt = this.mode === 'missing_issued_at' ? undefined : now;
         let idToken = this.signIdToken({
           iss: ISSUER,
           sub: 'opaque-provider-subject',
           aud: CLIENT_ID,
-          iat: now,
+          ...(issuedAt === undefined ? {} : { iat: issuedAt }),
           exp: now + 300,
-          auth_time: now,
           nonce: this.mode === 'invalid_nonce_claim' ? 42 : NONCE,
           tenant_id: CONFIGURATION.tenant.claim_value,
         });
@@ -266,12 +266,12 @@ describe('OpenIdClientPersonSessionProvider', () => {
       client_id: CLIENT_ID,
       redirect_uri: REDIRECT_URI,
       response_type: 'code',
-      scope: 'openid',
+      scope: 'openid email',
       state: STATE,
       nonce: NONCE,
       code_challenge: CODE_CHALLENGE,
       code_challenge_method: 'S256',
-      max_age: '0',
+      prompt: 'select_account',
     });
 
     const result = await redeem(provider);
@@ -282,6 +282,7 @@ describe('OpenIdClientPersonSessionProvider', () => {
         subject: 'opaque-provider-subject',
         audience: CLIENT_ID,
         nonce: NONCE,
+        issued_at: expect.any(Number),
         claims: {
           tenant_id: CONFIGURATION.tenant.claim_value,
         },
@@ -325,6 +326,7 @@ describe('OpenIdClientPersonSessionProvider', () => {
 
   it.each<TokenMode>([
     'missing_id_token',
+    'missing_issued_at',
     'tampered_signature',
     'invalid_nonce_claim',
     'transport_failure',

@@ -268,7 +268,7 @@ interface OidcLoginAttemptRow {
   terminal_outcome: string | null;
   completed_at: string | null;
   resolved_identity_binding_id: string | null;
-  upstream_auth_time: string | null;
+  upstream_assertion_issued_at: string | null;
 }
 
 interface PersonLoginGrantRow {
@@ -294,7 +294,7 @@ interface PersonSessionFamilyRow {
   identity_binding_id: string;
   authentication_login_attempt_id: string;
   created_at: string;
-  upstream_auth_time: string;
+  upstream_assertion_issued_at: string;
   tenant_constraint_sha256: string;
   oidc_configuration_sha256: string;
   hard_reauthentication_at: string;
@@ -1940,7 +1940,7 @@ class SqliteAuthorityTransaction
       invariant(
         row.completed_at === null &&
           row.resolved_identity_binding_id === null &&
-          row.upstream_auth_time === null &&
+          row.upstream_assertion_issued_at === null &&
           typeof row.pkce_verifier_seal_key_id === 'string' &&
           row.pkce_verifier_seal_key_id.length > 0 &&
           row.pkce_verifier_seal_key_id.length <= 200 &&
@@ -2001,7 +2001,7 @@ class SqliteAuthorityTransaction
         invariant(
           completed < ends &&
             row.resolved_identity_binding_id !== null &&
-            row.upstream_auth_time !== null,
+            row.upstream_assertion_issued_at !== null,
           'successful OIDC login attempt lacks identity evidence',
         );
         assertLocalUuid(
@@ -2010,17 +2010,17 @@ class SqliteAuthorityTransaction
           'resolved OIDC identity binding ID',
         );
         const upstream = timestampMillis(
-          row.upstream_auth_time,
-          'stored upstream authentication time',
+          row.upstream_assertion_issued_at,
+          'stored upstream assertion issuance time',
         );
         invariant(
           upstream >= begins - 60_000 && upstream <= completed + 60_000,
-          'OIDC upstream authentication time is outside the accepted skew',
+          'OIDC assertion issuance time is outside the accepted skew',
         );
       } else {
         invariant(
           row.resolved_identity_binding_id === null &&
-            row.upstream_auth_time === null &&
+            row.upstream_assertion_issued_at === null &&
             (row.terminal_outcome === 'expired'
               ? completed >= ends
               : completed < ends),
@@ -2108,7 +2108,8 @@ class SqliteAuthorityTransaction
                 nonce_sha256, pkce_verifier_seal_key_id,
                 pkce_verifier_sealed, created_at, expires_at,
                 redemption_claim_id, redemption_claimed_at, terminal_outcome,
-                completed_at, resolved_identity_binding_id, upstream_auth_time
+                completed_at, resolved_identity_binding_id,
+                upstream_assertion_issued_at
            FROM authority_oidc_login_attempts WHERE ${where}`,
       )
       .get(value) as OidcLoginAttemptRow | undefined;
@@ -2190,8 +2191,8 @@ class SqliteAuthorityTransaction
       'stored person session family creation time',
     );
     const upstream = timestampMillis(
-      row.upstream_auth_time,
-      'stored upstream authentication time',
+      row.upstream_assertion_issued_at,
+      'stored upstream assertion issuance time',
     );
     const hard = timestampMillis(
       row.hard_reauthentication_at,
@@ -2240,7 +2241,8 @@ class SqliteAuthorityTransaction
         attempt.terminal_outcome === 'succeeded' &&
         attempt.completed_at === row.created_at &&
         attempt.resolved_identity_binding_id === row.identity_binding_id &&
-        attempt.upstream_auth_time === row.upstream_auth_time &&
+        attempt.upstream_assertion_issued_at ===
+          row.upstream_assertion_issued_at &&
         attempt.issuer === binding.issuer &&
         attempt.tenant_constraint_sha256 === row.tenant_constraint_sha256 &&
         attempt.oidc_configuration_sha256 ===
@@ -2265,7 +2267,7 @@ class SqliteAuthorityTransaction
         `SELECT session_family_id, organization_id, principal_id,
                 membership_id, membership_type, identity_binding_id,
                 authentication_login_attempt_id, created_at,
-                upstream_auth_time, tenant_constraint_sha256,
+                upstream_assertion_issued_at, tenant_constraint_sha256,
                 oidc_configuration_sha256, hard_reauthentication_at,
                 status, revoked_at, revocation_reason
            FROM authority_person_session_families WHERE session_family_id = ?`,
@@ -2809,7 +2811,7 @@ class SqliteAuthorityTransaction
       terminal_outcome: null,
       completed_at: null,
       resolved_identity_binding_id: null,
-      upstream_auth_time: null,
+      upstream_assertion_issued_at: null,
     };
     this.oidcLoginAttemptFromRow(row);
     invariant(
@@ -2836,7 +2838,7 @@ class SqliteAuthorityTransaction
            pkce_verifier_seal_key_id, pkce_verifier_sealed, created_at,
            expires_at, redemption_claim_id, redemption_claimed_at,
            terminal_outcome, completed_at,
-           resolved_identity_binding_id, upstream_auth_time
+           resolved_identity_binding_id, upstream_assertion_issued_at
          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL,
                    NULL, NULL, NULL, NULL)`,
       )
@@ -2940,9 +2942,9 @@ class SqliteAuthorityTransaction
         'oib',
         'resolved OIDC identity binding ID',
       );
-      const upstreamAuthTime = timestampMillis(
-        completion.upstream_auth_time,
-        'OIDC upstream authentication time',
+      const upstreamAssertionIssuedAt = timestampMillis(
+        completion.upstream_assertion_issued_at,
+        'OIDC assertion issuance time',
       );
       const attemptCreatedAt = timestampMillis(
         current.created_at,
@@ -2953,9 +2955,9 @@ class SqliteAuthorityTransaction
         'OIDC login attempt completion time',
       );
       invariant(
-        upstreamAuthTime >= attemptCreatedAt - 60_000 &&
-          upstreamAuthTime <= completionTime + 60_000,
-        'OIDC upstream authentication time is outside the accepted skew',
+        upstreamAssertionIssuedAt >= attemptCreatedAt - 60_000 &&
+          upstreamAssertionIssuedAt <= completionTime + 60_000,
+        'OIDC assertion issuance time is outside the accepted skew',
       );
       if (current.attempt_purpose === 'identity_bootstrap') {
         const grant =
@@ -2993,7 +2995,8 @@ class SqliteAuthorityTransaction
       .prepare(
         `UPDATE authority_oidc_login_attempts
             SET terminal_outcome = ?, completed_at = ?,
-                resolved_identity_binding_id = ?, upstream_auth_time = ?,
+                resolved_identity_binding_id = ?,
+                upstream_assertion_issued_at = ?,
                 redemption_claim_id = NULL,
                 redemption_claimed_at = NULL,
                 pkce_verifier_seal_key_id = NULL,
@@ -3009,7 +3012,7 @@ class SqliteAuthorityTransaction
           ? completion.resolved_identity_binding_id
           : null,
         completion.outcome === 'succeeded'
-          ? completion.upstream_auth_time
+          ? completion.upstream_assertion_issued_at
           : null,
         stateSha256,
         redemptionClaimId,
@@ -3134,22 +3137,23 @@ class SqliteAuthorityTransaction
         'person session hard reauthentication time',
       ) ===
         timestampMillis(
-          family.upstream_auth_time,
-          'person session upstream authentication time',
+          family.upstream_assertion_issued_at,
+          'person session upstream assertion issuance time',
         ) +
           7 * 24 * 60 * 60 * 1000 &&
         timestampMillis(
           family.hard_reauthentication_at,
           'person session hard reauthentication time',
         ) > timestampMillis(createdAt, 'person session family creation time'),
-      'person session hard reauthentication must be seven days after upstream authentication',
+      'person session hard reauthentication must be seven days after assertion issuance',
     );
     this.database
       .prepare(
         `INSERT INTO authority_person_session_families (
            session_family_id, organization_id, principal_id, membership_id,
            membership_type, identity_binding_id,
-           authentication_login_attempt_id, created_at, upstream_auth_time,
+           authentication_login_attempt_id, created_at,
+           upstream_assertion_issued_at,
            tenant_constraint_sha256,
            oidc_configuration_sha256, hard_reauthentication_at, status,
            revoked_at, revocation_reason
@@ -3164,7 +3168,7 @@ class SqliteAuthorityTransaction
         family.identity_binding_id,
         family.authentication_login_attempt_id,
         createdAt,
-        family.upstream_auth_time,
+        family.upstream_assertion_issued_at,
         family.tenant_constraint_sha256,
         family.oidc_configuration_sha256,
         family.hard_reauthentication_at,

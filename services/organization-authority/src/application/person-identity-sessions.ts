@@ -8,7 +8,7 @@ import {
   assertSessionRevocationReason,
   earlierTimestamp,
   isStrictlyBefore,
-  OIDC_AUTH_TIME_SKEW_MS,
+  OIDC_ASSERTION_ISSUED_AT_SKEW_MS,
   OIDC_LOGIN_ATTEMPT_LIFETIME_MS,
   PERSON_ACCESS_CREDENTIAL_LIFETIME_MS,
   PERSON_LOGIN_GRANT_LIFETIME_MS,
@@ -62,8 +62,7 @@ export interface BegunPersonOidcLogin {
   code_challenge: string;
   code_challenge_method: "S256";
   response_type: "code";
-  scope: "openid";
-  max_age: 0;
+  scope: "openid email";
   created_at: string;
   expires_at: string;
 }
@@ -167,7 +166,7 @@ interface SessionCredentialCandidate {
 interface VerifiedIdentity {
   issuer: string;
   subject: string;
-  upstream_auth_time: string;
+  upstream_assertion_issued_at: string;
 }
 
 type AccessResolution =
@@ -480,8 +479,7 @@ export class PersonIdentitySessionApplication {
           code_challenge: this.pkceChallenge(verifier),
           code_challenge_method: "S256",
           response_type: "code",
-          scope: "openid",
-          max_age: 0,
+          scope: "openid email",
           created_at: stored.created_at,
           expires_at: stored.expires_at,
         };
@@ -635,7 +633,8 @@ export class PersonIdentitySessionApplication {
                 {
                   outcome: "succeeded",
                   resolved_identity_binding_id: bindingId,
-                  upstream_auth_time: identity.upstream_auth_time,
+                  upstream_assertion_issued_at:
+                    identity.upstream_assertion_issued_at,
                 },
               ) === undefined
             ) {
@@ -687,7 +686,8 @@ export class PersonIdentitySessionApplication {
                 {
                   outcome: "succeeded",
                   resolved_identity_binding_id: binding.identity_binding_id,
-                  upstream_auth_time: identity.upstream_auth_time,
+                  upstream_assertion_issued_at:
+                    identity.upstream_assertion_issued_at,
                 },
               ) === undefined
             ) {
@@ -698,7 +698,7 @@ export class PersonIdentitySessionApplication {
           return this.issueFamily(
             transaction,
             observedAt,
-            identity.upstream_auth_time,
+            identity.upstream_assertion_issued_at,
             binding,
             current,
             familyId,
@@ -1099,10 +1099,10 @@ export class PersonIdentitySessionApplication {
     ) {
       throw personSessionUnauthorized();
     }
-    if (!Number.isSafeInteger(token.auth_time)) {
+    if (!Number.isSafeInteger(token.issued_at)) {
       throw personSessionUnauthorized();
     }
-    const authTimeMilliseconds = token.auth_time * 1000;
+    const assertionIssuedAtMilliseconds = token.issued_at * 1000;
     const attemptMilliseconds = timestampMillis(
       attempt.created_at,
       "OIDC attempt creation time",
@@ -1112,9 +1112,11 @@ export class PersonIdentitySessionApplication {
       "OIDC token validation time",
     );
     if (
-      !Number.isSafeInteger(authTimeMilliseconds) ||
-      authTimeMilliseconds < attemptMilliseconds - OIDC_AUTH_TIME_SKEW_MS ||
-      authTimeMilliseconds > validationMilliseconds + OIDC_AUTH_TIME_SKEW_MS
+      !Number.isSafeInteger(assertionIssuedAtMilliseconds) ||
+      assertionIssuedAtMilliseconds <
+        attemptMilliseconds - OIDC_ASSERTION_ISSUED_AT_SKEW_MS ||
+      assertionIssuedAtMilliseconds >
+        validationMilliseconds + OIDC_ASSERTION_ISSUED_AT_SKEW_MS
     ) {
       throw personSessionUnauthorized();
     }
@@ -1128,7 +1130,9 @@ export class PersonIdentitySessionApplication {
     return {
       issuer: token.issuer,
       subject: token.subject,
-      upstream_auth_time: new Date(authTimeMilliseconds).toISOString(),
+      upstream_assertion_issued_at: new Date(
+        assertionIssuedAtMilliseconds,
+      ).toISOString(),
     };
   }
 
@@ -1145,7 +1149,7 @@ export class PersonIdentitySessionApplication {
   private issueFamily(
     transaction: AuthorityWriteTransaction,
     observedAt: string,
-    upstreamAuthTime: string,
+    upstreamAssertionIssuedAt: string,
     binding: StoredOidcIdentityBinding,
     attempt: StoredOidcLoginAttempt,
     familyId: string,
@@ -1153,7 +1157,7 @@ export class PersonIdentitySessionApplication {
     rotationSequence: number,
   ): CallbackWriteResult {
     const hardReauthenticationAt = addPersonSessionMilliseconds(
-      upstreamAuthTime,
+      upstreamAssertionIssuedAt,
       PERSON_SESSION_HARD_REAUTHENTICATION_MS,
     );
     if (!isStrictlyBefore(observedAt, hardReauthenticationAt)) {
@@ -1167,7 +1171,7 @@ export class PersonIdentitySessionApplication {
       membership_type: binding.membership_type,
       identity_binding_id: binding.identity_binding_id,
       authentication_login_attempt_id: attempt.login_attempt_id,
-      upstream_auth_time: upstreamAuthTime,
+      upstream_assertion_issued_at: upstreamAssertionIssuedAt,
       tenant_constraint_sha256: attempt.tenant_constraint_sha256,
       oidc_configuration_sha256: attempt.oidc_configuration_sha256,
       hard_reauthentication_at: hardReauthenticationAt,
@@ -1293,7 +1297,7 @@ export class PersonIdentitySessionApplication {
         session_family_id: family.session_family_id,
         identity_binding_id: family.identity_binding_id,
         created_at: family.created_at,
-        upstream_auth_time: family.upstream_auth_time,
+        upstream_assertion_issued_at: family.upstream_assertion_issued_at,
         tenant_constraint_sha256: family.tenant_constraint_sha256,
         oidc_configuration_sha256: family.oidc_configuration_sha256,
         hard_reauthentication_at: family.hard_reauthentication_at,

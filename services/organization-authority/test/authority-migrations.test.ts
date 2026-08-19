@@ -57,7 +57,7 @@ describe('organization authority database migrations', () => {
     openAuthorityDatabase(path).close();
 
     const database = new Database(path, { readonly: true });
-    expect(database.pragma('user_version', { simple: true })).toBe(12);
+    expect(database.pragma('user_version', { simple: true })).toBe(13);
     const tables = database
       .prepare(
         `SELECT name FROM sqlite_master
@@ -92,11 +92,14 @@ describe('organization authority database migrations', () => {
         'redemption_claim_id',
         'redemption_claimed_at',
         'resolved_identity_binding_id',
-        'upstream_auth_time',
+        'upstream_assertion_issued_at',
         'bootstrap_initial_login_attempt_id',
       ]),
     );
     expect(attemptColumns.map(({ name }) => name)).not.toContain('consumed_at');
+    expect(attemptColumns.map(({ name }) => name)).not.toContain(
+      'upstream_auth_time',
+    );
     const processingColumns = Object.fromEntries(
       [
         'authority_processing_source_owner_bindings',
@@ -267,7 +270,7 @@ describe('organization authority database migrations', () => {
 
     openAuthorityDatabase(path).close();
     const upgraded = new Database(path);
-    expect(upgraded.pragma('user_version', { simple: true })).toBe(12);
+    expect(upgraded.pragma('user_version', { simple: true })).toBe(13);
     const tables = upgraded
       .prepare(
         `SELECT name FROM sqlite_master
@@ -516,11 +519,11 @@ describe('organization authority database migrations', () => {
   it('rejects a database newer than this authority binary', () => {
     const path = databasePath();
     const future = new Database(path);
-    future.pragma('user_version = 13');
+    future.pragma('user_version = 14');
     future.close();
 
     expect(() => openAuthorityDatabase(path)).toThrow(
-      'newer than supported schema 12',
+      'newer than supported schema 13',
     );
   });
 });

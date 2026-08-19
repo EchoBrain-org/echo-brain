@@ -59,11 +59,13 @@ principal or membership identity and naturally dies on Authority restart.
 ### 1. Use external OIDC Authorization Code plus PKCE S256
 
 Person sign-in uses the OIDC Authorization Code flow. `response_type=code`,
-`scope=openid`, and `code_challenge_method=S256` are mandatory. Implicit,
-hybrid, password, device-code, and caller-supplied bearer-token sign-in are not
-accepted. The PKCE verifier is 32 random bytes encoded as unpadded base64url;
-the challenge is unpadded base64url SHA-256 of the ASCII bytes of that exact
-verifier text.
+`scope=openid email`, and `code_challenge_method=S256` are mandatory. Email is
+requested only because providers such as Google require one basic identity
+scope alongside `openid`; it never identifies or binds an EchoBrain Person.
+Implicit, hybrid, password, device-code, and caller-supplied bearer-token
+sign-in are not accepted. The PKCE verifier is 32 random bytes encoded as
+unpadded base64url; the challenge is unpadded base64url SHA-256 of the ASCII
+bytes of that exact verifier text.
 
 Every attempt also has independent 32-byte random `state` and `nonce` values.
 They are single-use, are bound to the exact attempt, and expire after ten
@@ -115,7 +117,7 @@ attempt. A successful first callback copies `tenant_constraint_sha256`,
 `oidc_configuration_sha256`, and the unique
 `initial_login_grant_sha256` provenance to the identity binding. Every family
 points to that exact binding and separately records the configuration digest
-and verified upstream authentication time under which it was issued. A
+and verified upstream assertion-issuance time under which it was issued. A
 configuration change makes every pending attempt under the old digest
 unusable. It never rewrites a binding or extends a family. An issuer change
 produces a different `(issuer, sub)` identity and therefore requires a new
@@ -141,11 +143,13 @@ rules:
 - `aud` contains the exact configured `client_id`. If `aud` has more than one
   value, `azp` is required and equals that client ID. If `azp` is present for a
   single audience, it also equals that client ID.
-- `auth_time` is required and is an integer NumericDate. It cannot be more
-  than 60 seconds in the future or more than 60 seconds before the login
-  attempt began. The authorization request uses `max_age=0`, so creating a new
-  session family proves a new upstream authentication rather than reusing an
-  old provider login silently.
+- `iat` is required and is an integer NumericDate. It cannot be more than 60
+  seconds in the future or more than 60 seconds before the login attempt began.
+  Together with the attempt's unpredictable signed nonce, it proves a fresh
+  identity assertion for this EchoBrain login. It does not claim that the
+  provider forced new credential entry or MFA; an existing upstream SSO
+  session may satisfy the login. The authorization request uses
+  `prompt=select_account` so the person explicitly chooses the account.
 - The configured tenant rule succeeds before any identity lookup.
 - The returned nonce hashes to the exact unconsumed attempt's `nonce` digest.
 
@@ -184,10 +188,11 @@ An application/session credential expires at
 `min(issued_at + 12 hours, family hard expiration)`. A refresh credential is
 single-use, is accepted only at the refresh endpoint, and expires at the
 family hard expiration. A family hard-expires exactly seven days after the
-validated upstream `auth_time`; rotation never moves that deadline.
+verified identity assertion's `iat`; rotation never moves that deadline.
 Credentials and families are usable only while `now < expires_at` or
 `now < hard_reauthentication_at`; equality denies. Reauthentication creates a
-new family.
+new family through the EchoBrain OIDC flow; it does not promise that the
+provider will force the person to re-enter upstream credentials.
 
 Refresh consumes the presented refresh digest and issues a new session and
 refresh pair in one write transaction. A second presentation of a consumed,
@@ -211,6 +216,10 @@ above and returns the new Authority credential pair as JSON. The Phase-2 thin
 client imports that callback result explicitly; automatic browser-to-client
 handoff and a polished browser UI remain qualification work rather than a
 second credential-delivery protocol in lean v1.
+Provider callback metadata such as `scope`, `authuser`, `hd`, and `prompt` is
+accepted only as bounded, single-valued ancillary input and is ignored for
+identity, tenant, and authorization decisions; those decisions use the
+verified ID token exclusively.
 
 The thin client may retain its raw opaque credential only at
 `$HOME/.local/share/echo-brain/person/session.v1.json`. Its directory is `0700`
@@ -305,9 +314,13 @@ migrations `0001` through `0008`:
 | --- | --- |
 | `authority_person_login_grants` | Current administrator authorization to bind one exact active organization, principal, membership, membership type, and expected issuer. Stores only the one-time grant digest, exact target, issue/expiry, and consumption state. It intentionally has no expected subject. |
 | `authority_oidc_identity_bindings` | The unique exact `(issuer, sub)` to Authority-principal and membership binding, with `tenant_constraint_sha256`, `oidc_configuration_sha256`, unique `initial_login_grant_sha256`, creation, and explicit revocation state. It has no email-derived key and is never retargeted in place. Bootstrap creation is atomic with grant and attempt consumption. |
-| `authority_oidc_login_attempts` | Bounded single-use authorization attempts: exact issuer, client, redirect and tenant/configuration digests; state and nonce digests; nullable sealed PKCE verifier plus sealing-key ID; optional bootstrap-grant digest; and creation, expiry, terminal outcome, and completion state. A null grant denotes an existing-binding login. Terminal completion atomically scrubs both sealed fields while retaining digest/timestamp replay evidence; expired rows require explicit maintenance. It stores no authorization code or upstream token. |
-| `authority_person_session_families` | One authenticated family bound by exact foreign keys to an identity binding and current Person tuple, with `upstream_auth_time`, `oidc_configuration_sha256`, creation, the seven-day hard-reauthentication deadline derived from that time, and family-wide revocation reason/time. Its hard deadline is immutable. |
+| `authority_oidc_login_attempts` | Bounded single-use authorization attempts: exact issuer, client, redirect and tenant/configuration digests; state and nonce digests; nullable sealed PKCE verifier plus sealing-key ID; optional bootstrap-grant digest; and creation, expiry, terminal outcome, assertion-issuance, and completion state. A null grant denotes an existing-binding login. Terminal completion atomically scrubs both sealed fields while retaining digest/timestamp replay evidence; expired rows require explicit maintenance. It stores no authorization code or upstream token. |
+| `authority_person_session_families` | One authenticated family bound by exact foreign keys to an identity binding and current Person tuple, with `upstream_assertion_issued_at`, `oidc_configuration_sha256`, creation, the seven-day hard-reauthentication deadline derived from that time, and family-wide revocation reason/time. Its hard deadline is immutable. |
 | `authority_person_session_credentials` | Unique SHA-256 digests for typed session or refresh credentials, their family, rotation generation, issue/expiry, refresh consumption, and revocation state. It stores no raw credential; refresh replay closes the family transactionally. |
+
+Migration `0013_person_session_assertion_issued_at.sql` renames the two original
+`upstream_auth_time` columns to `upstream_assertion_issued_at`. This preserves
+the data and constraints while making the stored guarantee precise.
 
 All five tables bind to the existing Authority organization, principal,
 membership, and audit authority. Cross-row constraints enforce exact

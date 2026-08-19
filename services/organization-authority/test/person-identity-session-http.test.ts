@@ -171,7 +171,7 @@ describe('Person identity session HTTP routes', () => {
       }
 
       const callback = await fetch(
-        `${origin}${PERSON_SESSION_OIDC_CALLBACK_PATH}?code=authorization-code&iss=${encodeURIComponent(EXPECTED_ISSUER)}&session_state=provider-session&state=${STATE}`,
+        `${origin}${PERSON_SESSION_OIDC_CALLBACK_PATH}?code=authorization-code&iss=${encodeURIComponent(EXPECTED_ISSUER)}&scope=${encodeURIComponent('openid email')}&authuser=0&hd=echobrain.org&prompt=consent&session_state=provider-session&state=${STATE}`,
         { headers: proxyHeaders() },
       );
       expect(callback.status).toBe(200);

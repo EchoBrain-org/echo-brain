@@ -57,7 +57,7 @@ function verifiedToken(
     claims['sub'].length === 0 ||
     typeof claims['nonce'] !== 'string' ||
     claims['nonce'].length === 0 ||
-    !Number.isSafeInteger(claims['auth_time']) ||
+    !Number.isSafeInteger(claims['iat']) ||
     (claims['azp'] !== undefined && typeof claims['azp'] !== 'string')
   ) {
     return undefined;
@@ -87,7 +87,7 @@ function verifiedToken(
       ? {}
       : { authorized_party: claims['azp'] }),
     nonce: claims['nonce'],
-    auth_time: claims['auth_time'] as number,
+    issued_at: claims['iat'] as number,
     claims: copiedClaims,
   };
 }
@@ -179,9 +179,8 @@ export class OpenIdClientPersonSessionProvider
       attempt.client_id !== this.configuration.client_id ||
       attempt.redirect_uri !== this.configuration.redirect_uri ||
       attempt.response_type !== 'code' ||
-      attempt.scope !== 'openid' ||
-      attempt.code_challenge_method !== 'S256' ||
-      attempt.max_age !== 0
+      attempt.scope !== 'openid email' ||
+      attempt.code_challenge_method !== 'S256'
     ) {
       throw new Error(
         'Person-session OIDC attempt differs from provider configuration',
@@ -191,12 +190,12 @@ export class OpenIdClientPersonSessionProvider
       .buildAuthorizationUrl(this.client, {
         redirect_uri: this.configuration.redirect_uri,
         response_type: 'code',
-        scope: 'openid',
+        scope: 'openid email',
         state: attempt.state,
         nonce: attempt.nonce,
         code_challenge: attempt.code_challenge,
         code_challenge_method: 'S256',
-        max_age: '0',
+        prompt: 'select_account',
       })
       .href;
   }
@@ -210,8 +209,8 @@ export class OpenIdClientPersonSessionProvider
       return TERMINAL_FAILURE;
     }
     try {
-      // State is claimed by the application before this call; signed nonce and
-      // auth_time are checked there after this adapter returns verified claims.
+      // State is claimed by the application before this call. The application
+      // checks the signed nonce and assertion-issuance time after verification.
       const response = await openid.genericGrantRequest(
         this.client,
         'authorization_code',
