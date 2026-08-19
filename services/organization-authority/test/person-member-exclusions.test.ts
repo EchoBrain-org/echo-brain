@@ -131,7 +131,7 @@ describe('PersonMemberExclusionService', () => {
     expect(context.change).not.toHaveBeenCalled();
   });
 
-  it('holds the shared read fence until the durable mutation finishes', async () => {
+  it('holds the shared write fence until the durable mutation finishes', async () => {
     let releaseMutation!: () => void;
     let enteredMutation!: () => void;
     const entered = new Promise<void>((resolve) => {
@@ -148,15 +148,15 @@ describe('PersonMemberExclusionService', () => {
     );
     const mutation = context.application.change(request(), 'person-access-token');
     await entered;
-    let writerCommitted = false;
-    const writer = context.fence.withWrite(() => {
-      writerCommitted = true;
+    let readerCommitted = false;
+    const reader = context.fence.withRead(() => {
+      readerCommitted = true;
     });
     await Promise.resolve();
-    expect(writerCommitted).toBe(false);
+    expect(readerCommitted).toBe(false);
     releaseMutation();
     await mutation;
-    await writer;
-    expect(writerCommitted).toBe(true);
+    await reader;
+    expect(readerCommitted).toBe(true);
   });
 });

@@ -80,7 +80,7 @@ export class PersonMemberExclusionService {
       );
     }
 
-    await this.options.authorization_fence.withRead(async () => {
+    await this.options.authorization_fence.withWrite(async () => {
       const authorization = this.options.authentication.authenticateAccess({
         access_token: accessToken,
       });

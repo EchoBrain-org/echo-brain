@@ -14,6 +14,7 @@ const AUTHORITY_TABLES = [
   'authority_enrollments',
   'authority_internal_live_releases',
   'authority_internal_live_update_receipts',
+  'authority_member_exclusion_read_audit',
   'authority_memberships',
   'authority_metadata',
   'authority_oidc_identity_bindings',
@@ -56,7 +57,7 @@ describe('organization authority database migrations', () => {
     openAuthorityDatabase(path).close();
 
     const database = new Database(path, { readonly: true });
-    expect(database.pragma('user_version', { simple: true })).toBe(11);
+    expect(database.pragma('user_version', { simple: true })).toBe(12);
     const tables = database
       .prepare(
         `SELECT name FROM sqlite_master
@@ -266,7 +267,7 @@ describe('organization authority database migrations', () => {
 
     openAuthorityDatabase(path).close();
     const upgraded = new Database(path);
-    expect(upgraded.pragma('user_version', { simple: true })).toBe(11);
+    expect(upgraded.pragma('user_version', { simple: true })).toBe(12);
     const tables = upgraded
       .prepare(
         `SELECT name FROM sqlite_master
@@ -515,11 +516,11 @@ describe('organization authority database migrations', () => {
   it('rejects a database newer than this authority binary', () => {
     const path = databasePath();
     const future = new Database(path);
-    future.pragma('user_version = 12');
+    future.pragma('user_version = 13');
     future.close();
 
     expect(() => openAuthorityDatabase(path)).toThrow(
-      'newer than supported schema 11',
+      'newer than supported schema 12',
     );
   });
 });

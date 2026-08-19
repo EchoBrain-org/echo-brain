@@ -31,6 +31,7 @@ import { OrganizationAuthorityApplication } from '../application/organization-au
 import { PersonIdentitySessionApplication } from '../application/person-identity-sessions.js';
 import { PersonReadableSearchService } from '../application/person-readable-search.js';
 import { PersonMemberExclusionService } from '../application/person-member-exclusions.js';
+import { PersonMemberExclusionReadService } from '../application/person-member-exclusion-reads.js';
 import { createPersonReadRecentDecisionsApplication } from '../application/person-read-recent-decisions.js';
 import { AuthorityOperationError } from '../domain/errors.js';
 import { reviewerPolicyContractSha256 } from '../application/reviewer-policy-contract.js';
@@ -84,6 +85,7 @@ import {
   LazyPersonSessionOidcProvider,
   type PersonSessionOidcAuthorizationProvider,
 } from './lazy-person-session-oidc-provider.js';
+import { PersonSlackIdentityLinkService } from './person-slack-identity-link.js';
 
 export interface RunningOrganizationAuthority {
   address: AddressInfo;
@@ -423,6 +425,7 @@ export async function startOrganizationAuthority(
     personIdentitySessions?.expireOidcLoginAttempts({
       limit: PERSON_SESSION_OIDC_EXPIRY_BATCH_LIMIT,
     });
+    const authorityRepository = repository;
     repository = undefined;
     const integrationsRepository = new OrganizationIntegrationsRepository(
       integrationsDatabase,
@@ -487,11 +490,12 @@ export async function startOrganizationAuthority(
       },
     });
     const recordRuntime = records;
+    const slackIntegrationProvider = new SlackWebIntegrationProvider();
     const integrations = new ComposedOrganizationIntegrationsApplication({
       authority: application,
       repository: integrationsRepository,
       secrets: integrationSecrets,
-      slack: new SlackWebIntegrationProvider(),
+      slack: slackIntegrationProvider,
       permissionPilotHealth: recordRuntime.permissionPilotHealth,
       organizationRecordingPolicy: config.organization_recording_policy_v1,
       authorizationFence,
@@ -598,6 +602,30 @@ export async function startOrganizationAuthority(
             ),
             authorization_fence: authorizationFence,
           });
+    const personMemberExclusionReads =
+      personAuthorization === undefined
+        ? undefined
+        : new PersonMemberExclusionReadService({
+            authority_id: config.authority_id,
+            organization_id: config.organization_id,
+            authorization: personAuthorization,
+            repository: authorityRepository,
+            authorization_fence: authorizationFence,
+            fence_timeout_ms: READABLE_SEARCH_FENCE_TIMEOUT_MS,
+            now: () => new Date().toISOString(),
+          });
+    const personSlackIdentityLink =
+      personIdentitySessions === undefined
+        ? undefined
+        : new PersonSlackIdentityLinkService({
+            authority_id: config.authority_id,
+            organization_id: config.organization_id,
+            authentication: personIdentitySessions,
+            repository: integrationsRepository,
+            secrets: integrationSecrets,
+            slack: slackIntegrationProvider,
+            authorization_fence: authorizationFence,
+          });
     const personSessions =
       personIdentitySessions === undefined ||
       personOidcProvider === undefined ||
@@ -677,6 +705,12 @@ export async function startOrganizationAuthority(
       ...(personMemberExclusions === undefined
         ? {}
         : { personMemberExclusions }),
+      ...(personMemberExclusionReads === undefined
+        ? {}
+        : { personMemberExclusionReads }),
+      ...(personSlackIdentityLink === undefined
+        ? {}
+        : { personSlackIdentityLink }),
       adminAuthenticator,
       clientIdentityResolver,
       adminConsole: {

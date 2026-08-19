@@ -43,7 +43,8 @@
     "services/organization-authority/migrations/0008_organization_member_recording_activation.sql",
     "services/organization-authority/migrations/0009_person_identity_and_sessions.sql",
     "services/organization-authority/migrations/0010_person_read_decision_audit.sql",
-    "services/organization-authority/migrations/0011_authority_processing_state.sql"
+    "services/organization-authority/migrations/0011_authority_processing_state.sql",
+    "services/organization-authority/migrations/0012_member_exclusion_read_audit.sql"
   ],
   "layer_rules": [
     {

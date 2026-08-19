@@ -22,6 +22,22 @@ export const ORGANIZATION_API_PERSON_READABLE_SEARCH_PATH =
   '/v2/readable-search';
 export const ORGANIZATION_API_PERSON_MEMBER_EXCLUSIONS_PATH =
   '/v2/member-exclusions';
+export const ORGANIZATION_API_PERSON_MEMBER_EXCLUSION_LIST_PATH =
+  '/v2/member-exclusions/list';
+export const ORGANIZATION_API_ADMIN_MEMBER_EXCLUSION_BREAK_GLASS_PATH =
+  '/v2/admin/member-exclusions/break-glass';
+export const ORGANIZATION_API_PERSON_OIDC_BEGIN_PATH =
+  '/v2/session/oidc/begin';
+export const ORGANIZATION_API_PERSON_OIDC_CALLBACK_PATH =
+  '/v2/session/oidc/callback';
+export const ORGANIZATION_API_PERSON_SESSION_REFRESH_PATH =
+  '/v2/session/refresh';
+export const ORGANIZATION_API_PERSON_SESSION_REVOCATIONS_PATH =
+  '/v2/session/revocations';
+export const ORGANIZATION_API_PERSON_SLACK_LINK_CHALLENGES_PATH =
+  '/v2/integration-links/slack/challenges';
+export const ORGANIZATION_API_PERSON_SLACK_LINK_COMPLETIONS_PATH =
+  '/v2/integration-links/slack/completions';
 /**
  * The organization decision record ingest path. It is the only route bounded by
  * MAX_ORGANIZATION_RECORD_API_BODY_BYTES — the canonical-envelope contract plus

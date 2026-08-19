@@ -30,6 +30,7 @@ const AUTHORITY_TABLES = Object.freeze([
   'authority_enrollments',
   'authority_internal_live_releases',
   'authority_internal_live_update_receipts',
+  'authority_member_exclusion_read_audit',
   'authority_memberships',
   'authority_metadata',
   'authority_oidc_identity_bindings',

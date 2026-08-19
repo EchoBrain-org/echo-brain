@@ -15,7 +15,7 @@ export interface PersonReadCallerBindingInput {
   readonly authority_id: string;
   readonly organization_id: string;
   readonly subject_principal_id: string;
-  readonly operation: PersonReadOperation;
+  readonly operation: PersonReadOperation | 'member_exclusions';
   readonly request_sha256: Sha256Digest;
 }
 

@@ -38,6 +38,8 @@ import type {
   AuthorityReadTransaction,
   AuthorityWriteTransaction,
   InitializeAuthorityRepositoryInput,
+  MemberExclusionOwnerSource,
+  MemberExclusionReadAuditEntry,
   NewOidcIdentityBinding,
   NewOidcLoginAttempt,
   OidcLoginAttemptCompletion,
@@ -58,6 +60,7 @@ import type {
   StoredEnrollmentGrant,
   StoredInternalLiveRelease,
   StoredInternalLiveUpdateReceipt,
+  StoredMemberExclusionSelector,
   StoredOidcIdentityBinding,
   StoredOidcLoginAttempt,
   StoredPersonLoginGrant,
@@ -2375,6 +2378,108 @@ class SqliteAuthorityTransaction
     });
   }
 
+  memberExclusionsForOwnerSource(
+    source: MemberExclusionOwnerSource,
+  ): readonly StoredMemberExclusionSelector[] | undefined {
+    const metadata = this.metadata();
+    invariant(
+      source.organization_id === metadata.organization_id,
+      'member exclusion source belongs to another organization',
+    );
+    assertFederationUuid(
+      source.principal_id,
+      'prn',
+      'member exclusion source principal',
+    );
+    assertFederationUuid(
+      source.membership_id,
+      'mem',
+      'member exclusion source membership',
+    );
+    invariant(
+      source.membership_type === 'owner' ||
+        source.membership_type === 'employee',
+      'member exclusion source membership type is invalid',
+    );
+    assertBoundedText(
+      source.source_adapter_id,
+      128,
+      'member exclusion source adapter ID',
+    );
+    assertBoundedText(
+      source.source_instance_id,
+      128,
+      'member exclusion source instance ID',
+    );
+    const owned = this.database
+      .prepare(
+        `SELECT 1
+           FROM authority_processing_source_owner_bindings b
+           JOIN authority_memberships m
+             ON m.membership_id = b.membership_id
+            AND m.organization_id = b.organization_id
+            AND m.principal_id = b.principal_id
+            AND m.membership_type = b.membership_type
+          WHERE b.source_adapter_id = ? AND b.source_instance_id = ?
+            AND b.organization_id = ? AND b.principal_id = ?
+            AND b.membership_id = ? AND b.membership_type = ?
+            AND m.status = 'active'`,
+      )
+      .get(
+        source.source_adapter_id,
+        source.source_instance_id,
+        source.organization_id,
+        source.principal_id,
+        source.membership_id,
+        source.membership_type,
+      );
+    if (owned === undefined) return undefined;
+    const rows = this.database
+      .prepare(
+        `SELECT scope_kind, external_id
+           FROM authority_processing_member_exclusions
+          WHERE organization_id = ? AND principal_id = ?
+            AND membership_id = ? AND membership_type = ?
+            AND source_adapter_id = ? AND source_instance_id = ?
+          ORDER BY CASE scope_kind WHEN 'source' THEN 0 ELSE 1 END,
+                   external_id`,
+      )
+      .all(
+        source.organization_id,
+        source.principal_id,
+        source.membership_id,
+        source.membership_type,
+        source.source_adapter_id,
+        source.source_instance_id,
+      ) as Array<{ scope_kind: string; external_id: string }>;
+    return rows.map((row): StoredMemberExclusionSelector => {
+      if (row.scope_kind === 'source') {
+        invariant(
+          row.external_id === '',
+          'whole-source member exclusion external ID is invalid',
+        );
+        return {
+          scope: 'source',
+          source_adapter_id: source.source_adapter_id,
+          source_instance_id: source.source_instance_id,
+        };
+      }
+      invariant(
+        row.scope_kind === 'meeting' &&
+          row.external_id.length > 0 &&
+          row.external_id.length <= 4096 &&
+          !row.external_id.includes('\0'),
+        'meeting member exclusion is invalid',
+      );
+      return {
+        scope: 'meeting',
+        source_adapter_id: source.source_adapter_id,
+        source_instance_id: source.source_instance_id,
+        external_id: row.external_id,
+      };
+    });
+  }
+
   activeReadableSearchGeneration(): StoredReadableSearchActiveGeneration | null {
     const row = this.database
       .prepare(
@@ -3338,6 +3443,91 @@ class SqliteAuthorityTransaction
       | undefined;
     invariant(row !== undefined, 'Person read decision audit was not stored');
     return personReadDecisionAuditFromRow(row);
+  }
+
+  appendMemberExclusionReadAudit(
+    entry: MemberExclusionReadAuditEntry,
+  ): void {
+    const metadata = this.metadata();
+    const occurredAt = this.transactionTime();
+    assertDigest(entry.request_sha256, 'member exclusion read audit request');
+    invariant(
+      entry.response_bytes instanceof Uint8Array,
+      'member exclusion read audit response bytes are invalid',
+    );
+    invariant(
+      Number.isSafeInteger(entry.result_count) && entry.result_count >= 0,
+      'member exclusion read audit result count is invalid',
+    );
+    invariant(
+      entry.decision === 'allow' || entry.result_count === 0,
+      'denied member exclusion read audit must have zero results',
+    );
+    const responseSha256 =
+      `sha256:${createHash('sha256')
+        .update(entry.response_bytes)
+        .digest('hex')}` as Sha256Digest;
+    const isPerson = entry.actor_kind === 'person';
+    const authenticated = isPerson ? entry.authenticated : null;
+    if (authenticated !== null) {
+      invariant(
+        authenticated.organization_id === metadata.organization_id,
+        'member exclusion read audit authentication belongs to another organization',
+      );
+    }
+    const actorBindingSha256 = isPerson
+      ? authenticated?.caller_binding_sha256 ?? null
+      : entry.actor_binding_sha256;
+    if (actorBindingSha256 !== null) {
+      assertDigest(
+        actorBindingSha256,
+        'member exclusion read audit actor binding',
+      );
+    }
+    if (isPerson) {
+      assertFederationUuid(
+        entry.asserted_subject_principal_id,
+        'prn',
+        'member exclusion read audit asserted subject',
+      );
+    }
+    this.database
+      .prepare(
+        `INSERT INTO authority_member_exclusion_read_audit (
+           occurred_at, retain_until, authority_id, organization_id,
+           actor_kind, actor_binding_version, actor_binding_sha256,
+           operation, request_sha256, response_sha256, result_count,
+           asserted_subject_principal_id, decision, reason_code,
+           authenticated_principal_id, authenticated_membership_id,
+           authenticated_membership_type, identity_binding_id,
+           session_family_id, access_credential_sha256,
+           caller_binding_sha256, person_state_sha256, session_state_sha256
+         ) VALUES (?, ?, ?, ?, ?, 1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .run(
+        occurredAt,
+        personReadAuditRetainUntil(occurredAt),
+        metadata.authority_id,
+        metadata.organization_id,
+        entry.actor_kind,
+        actorBindingSha256,
+        isPerson ? 'member_exclusions' : 'member_exclusions_break_glass',
+        entry.request_sha256,
+        responseSha256,
+        entry.result_count,
+        isPerson ? entry.asserted_subject_principal_id : null,
+        entry.decision,
+        entry.reason_code,
+        authenticated?.principal_id ?? null,
+        authenticated?.membership_id ?? null,
+        authenticated?.membership_type ?? null,
+        authenticated?.identity_binding_id ?? null,
+        authenticated?.session_family_id ?? null,
+        authenticated?.access_credential_sha256 ?? null,
+        authenticated?.caller_binding_sha256 ?? null,
+        authenticated?.person_state_sha256 ?? null,
+        authenticated?.session_state_sha256 ?? null,
+      );
   }
 
   appendAudit(entry: AuthorityAuditEntry): void {

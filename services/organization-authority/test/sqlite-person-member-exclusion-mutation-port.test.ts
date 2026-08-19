@@ -1,5 +1,5 @@
 import { Buffer } from 'node:buffer';
-import { generateKeyPairSync } from 'node:crypto';
+import { createHash, generateKeyPairSync } from 'node:crypto';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -132,6 +132,18 @@ describe('SqlitePersonMemberExclusionMutationPort', () => {
       transaction.insertMembership(owner);
       transaction.insertMembership(other);
     });
+    const admin = new OrganizationAuthorityAdminQueries(repository, {
+      now: () => NOW,
+    });
+    const adminViews = (): string =>
+      canonicalJson({
+        overview: admin.overview(),
+        memberships: admin.memberships(),
+        installations: admin.installations(),
+        enrollment_grants: admin.enrollmentGrants(),
+        audit: admin.audit(),
+      } as never);
+    const adminViewsBeforeExclusions = adminViews();
 
     const seed = new Database(databasePath);
     seed.pragma('foreign_keys = ON');
@@ -172,6 +184,42 @@ describe('SqlitePersonMemberExclusionMutationPort', () => {
     await port.change(meeting);
     await port.change(meeting);
 
+    const auditResponseBytes = Buffer.from(
+      canonicalJson({ SOURCE_ADAPTER_ID, SOURCE_INSTANCE_ID, EXTERNAL_ID }),
+    );
+    repository.write(NOW, (transaction) => {
+      transaction.appendMemberExclusionReadAudit({
+        actor_kind: 'person',
+        request_sha256: digest('3'),
+        response_bytes: auditResponseBytes,
+        result_count: 2,
+        asserted_subject_principal_id: OWNER_PRINCIPAL_ID,
+        decision: 'allow',
+        reason_code: 'active_person_session',
+        authenticated: {
+          organization_id: ORGANIZATION_ID,
+          principal_id: OWNER_PRINCIPAL_ID,
+          membership_id: OWNER_MEMBERSHIP_ID,
+          membership_type: 'employee',
+          identity_binding_id: 'oib_00000000-0000-4000-8000-000000000001',
+          session_family_id: 'psf_00000000-0000-4000-8000-000000000001',
+          access_credential_sha256: digest('4'),
+          caller_binding_sha256: digest('5'),
+          person_state_sha256: digest('6'),
+          session_state_sha256: digest('7'),
+        },
+      });
+      transaction.appendMemberExclusionReadAudit({
+        actor_kind: 'admin_break_glass',
+        actor_binding_sha256: digest('8'),
+        request_sha256: digest('9'),
+        response_bytes: auditResponseBytes,
+        result_count: 2,
+        decision: 'allow',
+        reason_code: 'break_glass_authorized',
+      });
+    });
+
     const inspect = new Database(databasePath, { readonly: true });
     expect(
       inspect
@@ -186,19 +234,76 @@ describe('SqlitePersonMemberExclusionMutationPort', () => {
       { scope_kind: 'source', external_id: '' },
     ]);
 
-    const admin = new OrganizationAuthorityAdminQueries(repository, {
-      now: () => NOW,
-    });
-    const serializedAdminViews = canonicalJson({
-      overview: admin.overview(),
-      memberships: admin.memberships(),
-      installations: admin.installations(),
-      enrollment_grants: admin.enrollmentGrants(),
-      audit: admin.audit(),
-    } as never);
+    const serializedAdminViews = adminViews();
+    expect(serializedAdminViews).toBe(adminViewsBeforeExclusions);
     expect(serializedAdminViews).not.toContain(SOURCE_ADAPTER_ID);
     expect(serializedAdminViews).not.toContain(SOURCE_INSTANCE_ID);
     expect(serializedAdminViews).not.toContain(EXTERNAL_ID);
+    const auditRows = inspect
+      .prepare(
+        `SELECT actor_kind, actor_binding_version, request_sha256,
+                response_sha256, result_count, decision, reason_code,
+                authenticated_principal_id, authenticated_membership_id
+           FROM authority_member_exclusion_read_audit
+          ORDER BY audit_sequence`,
+      )
+      .all();
+    const responseSha256 = `sha256:${createHash('sha256')
+      .update(auditResponseBytes)
+      .digest('hex')}`;
+    expect(auditRows).toHaveLength(2);
+    expect(auditRows).toMatchObject([
+      {
+        actor_kind: 'person',
+        actor_binding_version: 1,
+        request_sha256: digest('3'),
+        response_sha256: responseSha256,
+        result_count: 2,
+        decision: 'allow',
+      },
+      {
+        actor_kind: 'admin_break_glass',
+        actor_binding_version: 1,
+        request_sha256: digest('9'),
+        response_sha256: responseSha256,
+        result_count: 2,
+        decision: 'allow',
+      },
+    ]);
+    const serializedAuditRows = canonicalJson(auditRows as never);
+    expect(serializedAuditRows).not.toContain(SOURCE_ADAPTER_ID);
+    expect(serializedAuditRows).not.toContain(SOURCE_INSTANCE_ID);
+    expect(serializedAuditRows).not.toContain(EXTERNAL_ID);
+    const auditColumnNames = (
+      inspect.pragma('table_info(authority_member_exclusion_read_audit)') as Array<{
+        name: string;
+      }>
+    ).map(({ name }) => name);
+    expect(auditColumnNames).not.toEqual(
+      expect.arrayContaining([
+        'source_adapter_id',
+        'source_instance_id',
+        'scope_kind',
+        'external_id',
+      ]),
+    );
+    const auditMutation = new Database(databasePath);
+    expect(() =>
+      auditMutation
+        .prepare(
+          `UPDATE authority_member_exclusion_read_audit
+              SET result_count = 0 WHERE audit_sequence = 1`,
+        )
+        .run(),
+    ).toThrow('member exclusion read audit is immutable');
+    expect(() =>
+      auditMutation
+        .prepare(
+          'DELETE FROM authority_member_exclusion_read_audit WHERE audit_sequence = 1',
+        )
+        .run(),
+    ).toThrow('member exclusion read audit deletion is denied');
+    auditMutation.close();
 
     const failures: Error[] = [];
     for (const denied of [

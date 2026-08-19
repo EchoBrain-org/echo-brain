@@ -3,12 +3,14 @@ import type {
   IssuedPersonLoginGrant,
   IssuedPersonSession,
 } from '../application/person-identity-sessions.js';
+export {
+  ORGANIZATION_API_PERSON_OIDC_BEGIN_PATH as PERSON_SESSION_OIDC_BEGIN_PATH,
+  ORGANIZATION_API_PERSON_OIDC_CALLBACK_PATH as PERSON_SESSION_OIDC_CALLBACK_PATH,
+  ORGANIZATION_API_PERSON_SESSION_REFRESH_PATH as PERSON_SESSION_REFRESH_PATH,
+  ORGANIZATION_API_PERSON_SESSION_REVOCATIONS_PATH as PERSON_SESSION_REVOCATIONS_PATH,
+} from '@echo-brain/organization-api';
 
 export const PERSON_SESSION_ADMIN_MEMBERSHIPS_PATH = '/v2/admin/memberships';
-export const PERSON_SESSION_OIDC_BEGIN_PATH = '/v2/session/oidc/begin';
-export const PERSON_SESSION_OIDC_CALLBACK_PATH = '/v2/session/oidc/callback';
-export const PERSON_SESSION_REFRESH_PATH = '/v2/session/refresh';
-export const PERSON_SESSION_REVOCATIONS_PATH = '/v2/session/revocations';
 
 export interface BegunPersonOidcHttpLogin {
   authorization_url: string;

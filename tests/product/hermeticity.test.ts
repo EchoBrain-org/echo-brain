@@ -124,6 +124,7 @@ describe('product hermeticity setup', () => {
       'approval/decision-node-store.ts',
       'composition.ts',
       'organization/enrollment/local-organization-coordinator.ts',
+      'person-client/client.ts',
     ]);
     expect(
       readFileSync(join(productRoot, 'adapter-factories.ts'), 'utf8'),
@@ -156,6 +157,11 @@ describe('product hermeticity setup', () => {
       ),
     ).toMatch(
       /this\.clock = options\.clock \?\? \{ now: \(\) => new Date\(\)\.toISOString\(\) \}/,
+    );
+    expect(
+      readFileSync(join(productRoot, 'person-client/client.ts'), 'utf8'),
+    ).toMatch(
+      /this\.now = options\.now \?\? \(\(\) => new Date\(\)\.toISOString\(\)\)/,
     );
   });
 });

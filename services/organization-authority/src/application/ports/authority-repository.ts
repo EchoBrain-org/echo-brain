@@ -558,6 +558,72 @@ export interface StoredPersonReadDecisionAudit {
   authenticated: PersonReadAuthenticatedEvidence | null;
 }
 
+export interface MemberExclusionOwnerSource {
+  organization_id: string;
+  principal_id: string;
+  membership_id: string;
+  membership_type: OrganizationMembershipTypeV1;
+  source_adapter_id: string;
+  source_instance_id: string;
+}
+
+export type StoredMemberExclusionSelector =
+  | {
+      scope: 'source';
+      source_adapter_id: string;
+      source_instance_id: string;
+    }
+  | {
+      scope: 'meeting';
+      source_adapter_id: string;
+      source_instance_id: string;
+      external_id: string;
+    };
+
+interface MemberExclusionReadAuditInputBase {
+  request_sha256: Sha256Digest;
+  response_bytes: Uint8Array;
+  result_count: number;
+}
+
+export type MemberExclusionReadAuditEntry =
+  | (MemberExclusionReadAuditInputBase & {
+      actor_kind: 'person';
+      asserted_subject_principal_id: string;
+      decision: 'allow';
+      reason_code: 'active_person_session';
+      authenticated: PersonReadAuthenticatedEvidence;
+    })
+  | (MemberExclusionReadAuditInputBase & {
+      actor_kind: 'person';
+      asserted_subject_principal_id: string;
+      decision: 'deny';
+      reason_code: 'person_or_session_inactive';
+      authenticated: PersonReadAuthenticatedEvidence | null;
+    })
+  | (MemberExclusionReadAuditInputBase & {
+      actor_kind: 'person';
+      asserted_subject_principal_id: string;
+      decision: 'deny';
+      reason_code:
+        | 'caller_subject_mismatch'
+        | 'authorization_state_changed'
+        | 'operation_not_permitted';
+      authenticated: PersonReadAuthenticatedEvidence;
+    })
+  | (MemberExclusionReadAuditInputBase & {
+      actor_kind: 'admin_break_glass';
+      actor_binding_sha256: Sha256Digest;
+      decision: 'allow';
+      reason_code: 'break_glass_authorized';
+    })
+  | (MemberExclusionReadAuditInputBase & {
+      actor_kind: 'admin_break_glass';
+      actor_binding_sha256: Sha256Digest;
+      decision: 'deny';
+      reason_code: 'break_glass_target_unavailable';
+    });
+
 export interface AuthorityReadTransaction {
   metadata(): StoredAuthorityMetadata;
   membership(membershipId: string): StoredAuthorityMembership | undefined;
@@ -652,6 +718,10 @@ export interface AuthorityReadTransaction {
   personSessionCredentialsForFamily(
     sessionFamilyId: string,
   ): StoredPersonSessionCredential[];
+  /** Returns `undefined` unless this exact source has this active owner. */
+  memberExclusionsForOwnerSource(
+    source: MemberExclusionOwnerSource,
+  ): readonly StoredMemberExclusionSelector[] | undefined;
   /** `null` is the clean, never-built state; corruption throws. */
   activeReadableSearchGeneration(): StoredReadableSearchActiveGeneration | null;
 }
@@ -735,6 +805,8 @@ export interface AuthorityWriteTransaction extends AuthorityReadTransaction {
   appendPersonReadDecisionAudit(
     entry: PersonReadDecisionAuditEntry,
   ): StoredPersonReadDecisionAudit;
+  /** Appends minimized INV-10 evidence; exclusion coordinates are never stored. */
+  appendMemberExclusionReadAudit(entry: MemberExclusionReadAuditEntry): void;
   appendAudit(entry: AuthorityAuditEntry): void;
   /**
    * Appends one reviewer query decision at this transaction's own final time.

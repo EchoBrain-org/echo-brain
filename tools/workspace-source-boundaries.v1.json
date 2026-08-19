@@ -9,6 +9,7 @@
     "services/organization-control-plane/source-boundary.v1.json",
     "services/organization-record/source-boundary.v1.json",
     "services/organization-retrieval/source-boundary.v1.json",
-    "src/product/organization/source-boundary.v1.json"
+    "src/product/organization/source-boundary.v1.json",
+    "src/product/person-client/source-boundary.v1.json"
   ]
 }

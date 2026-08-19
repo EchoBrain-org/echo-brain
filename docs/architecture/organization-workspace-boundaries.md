@@ -98,11 +98,11 @@ directions: a reachable module outside the allowlist is an error, and so is an
 allowlisted module no entry point can reach. Every tracked module under `src/`
 is therefore both allowlisted and reachable, and dead weight cannot accumulate
 inside the packed artifact.
-`tools/workspace-source-boundaries.v1.json` registers eight manifests that
-govern `packages/*/src`, `services/*/src`, and one refinement sub-boundary
+`tools/workspace-source-boundaries.v1.json` registers nine manifests that
+govern `packages/*/src`, `services/*/src`, and two refinement sub-boundaries
 inside `src/product` by ownership: every file under a declared `source_root`
 must be owned and must match exactly one layer rule. Paths under
-`src/product/organization/` are the intersection
+`src/product/organization/` and `src/product/person-client/` are intersections
 of the two artifacts, and both checks must pass.
 
 ## Authority layers

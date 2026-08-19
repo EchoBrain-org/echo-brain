@@ -1,11 +1,16 @@
 import { Buffer } from 'node:buffer';
+import { createHash } from 'node:crypto';
 import { createServer } from 'node:http';
 import type { IncomingMessage, Server, ServerResponse } from 'node:http';
 import { TextDecoder } from 'node:util';
 import {
   isOrganizationApiValidationError,
   canonicalOrganizationMemberReadablePermissionCheckDecisionBytes,
+  canonicalOrganizationAdminMemberExclusionBreakGlassReadRequestBytes,
+  canonicalOrganizationPersonMemberExclusionListRequestBytes,
   canonicalOrganizationPersonMemberExclusionChangeRequestBytes,
+  canonicalOrganizationPersonSlackLinkBeginRequestBytes,
+  canonicalOrganizationPersonSlackLinkCompleteRequestBytes,
   canonicalOrganizationPersonReadableSearchRequestBytes,
   canonicalOrganizationPersonRecentDecisionsRequestBytes,
   canonicalOrganizationPersonReviewerRecentDecisionsRequestBytes,
@@ -13,6 +18,7 @@ import {
   canonicalOrganizationReviewerPermissionCheckDecisionBytes,
   MAX_ORGANIZATION_API_BODY_BYTES,
   ORGANIZATION_API_ACCESS_LEASES_PATH,
+  ORGANIZATION_API_ADMIN_MEMBER_EXCLUSION_BREAK_GLASS_PATH,
   ORGANIZATION_API_ADMIN_AUDIT_PATH,
   ORGANIZATION_API_ADMIN_INTERNAL_LIVE_RELEASES_PATH,
   ORGANIZATION_API_ADMIN_INTERNAL_LIVE_ROLLOUT_PATH,
@@ -28,6 +34,9 @@ import {
   ORGANIZATION_API_INTERNAL_LIVE_RECEIPTS_PATH,
   ORGANIZATION_API_PERMISSION_CHECKS_PATH,
   ORGANIZATION_API_PERSON_MEMBER_EXCLUSIONS_PATH,
+  ORGANIZATION_API_PERSON_MEMBER_EXCLUSION_LIST_PATH,
+  ORGANIZATION_API_PERSON_SLACK_LINK_CHALLENGES_PATH,
+  ORGANIZATION_API_PERSON_SLACK_LINK_COMPLETIONS_PATH,
   ORGANIZATION_API_PERSON_READABLE_SEARCH_PATH,
   ORGANIZATION_API_PERSON_RECENT_DECISIONS_PATH,
   ORGANIZATION_API_PERSON_REVIEWER_RECENT_DECISIONS_PATH,
@@ -47,7 +56,11 @@ import {
   validateOrganizationInternalLiveUpdateReceipt,
   validateOrganizationPermissionCheckRequest,
   validateOrganizationMemberReadablePermissionCheckRequest,
+  validateOrganizationAdminMemberExclusionBreakGlassReadRequest,
   validateOrganizationPersonMemberExclusionChangeRequest,
+  validateOrganizationPersonMemberExclusionListRequest,
+  validateOrganizationPersonSlackLinkBeginRequest,
+  validateOrganizationPersonSlackLinkCompleteRequest,
   validateOrganizationPersonReadableSearchRequest,
   validateOrganizationPersonRecentDecisionsRequest,
   validateOrganizationPersonReviewerRecentDecisionsRequest,
@@ -92,6 +105,8 @@ import {
 } from '../application/person-read-recent-decisions.js';
 import type { PersonReadableSearchService } from '../application/person-readable-search.js';
 import type { PersonMemberExclusionService } from '../application/person-member-exclusions.js';
+import type { PersonMemberExclusionReadService } from '../application/person-member-exclusion-reads.js';
+import type { PersonSlackIdentityLinkHttpApplication } from './person-slack-identity-link-http-application.js';
 import {
   fixedReadableSearchErrorBytes,
   ReadableSearchError,
@@ -582,6 +597,15 @@ function personAccessToken(authorizationHeader: string | undefined): string {
   );
 }
 
+function memberExclusionBreakGlassActorBindingSha256(
+  authorizationHeader: string | undefined,
+): `sha256:${string}` {
+  return `sha256:${createHash('sha256')
+    .update('echo-authority-member-exclusion-break-glass-admin-v1\0', 'utf8')
+    .update(authorizationHeader ?? '', 'utf8')
+    .digest('hex')}`;
+}
+
 function personSessionRequestObject(
   value: unknown,
   expectedKeys: readonly string[],
@@ -858,6 +882,11 @@ export interface OrganizationAuthorityHttpServerOptions {
   personRecentDecisions?: PersonRecentDecisionsApplication;
   personReadableSearch?: Pick<PersonReadableSearchService, 'search'>;
   personMemberExclusions?: Pick<PersonMemberExclusionService, 'change'>;
+  personMemberExclusionReads?: Pick<
+    PersonMemberExclusionReadService,
+    'listOwn' | 'breakGlass'
+  >;
+  personSlackIdentityLink?: PersonSlackIdentityLinkHttpApplication;
   /** Omitted until the provider-neutral Person session runtime is configured. */
   personSessions?: PersonIdentitySessionHttpApplication;
   adminAuthenticator: AdminRequestAuthenticator;
@@ -1080,7 +1109,13 @@ export function createOrganizationAuthorityHttpServer(
                       : url.pathname === ORGANIZATION_API_RECENT_DECISIONS_PATH
                         ? 'recent-decisions'
                         : url.pathname ===
-                            ORGANIZATION_API_PERSON_MEMBER_EXCLUSIONS_PATH
+                              ORGANIZATION_API_PERSON_MEMBER_EXCLUSIONS_PATH ||
+                            url.pathname ===
+                              ORGANIZATION_API_PERSON_MEMBER_EXCLUSION_LIST_PATH ||
+                            url.pathname ===
+                              ORGANIZATION_API_PERSON_SLACK_LINK_CHALLENGES_PATH ||
+                            url.pathname ===
+                              ORGANIZATION_API_PERSON_SLACK_LINK_COMPLETIONS_PATH
                           ? 'person-control'
                         : url.pathname.startsWith('/v2/session/')
                           ? 'person-session'
@@ -1205,6 +1240,135 @@ export function createOrganizationAuthorityHttpServer(
           personAccessToken(request.headers.authorization),
         );
         sendNoContent(response);
+        return;
+      }
+
+      if (
+        url.pathname === ORGANIZATION_API_PERSON_MEMBER_EXCLUSION_LIST_PATH
+      ) {
+        if (method !== 'POST' || url.search !== '') {
+          throw new PersonReadRequestError(
+            'Person member-exclusion list method or query is invalid',
+          );
+        }
+        if (options.personMemberExclusionReads === undefined) {
+          sendSerializedJson(response, 503, PERSON_SESSION_UNAVAILABLE_BYTES);
+          return;
+        }
+        const command = await readCanonicalPersonRequest(
+          request,
+          validateOrganizationPersonMemberExclusionListRequest,
+          canonicalOrganizationPersonMemberExclusionListRequestBytes,
+        );
+        const prepared = await options.personMemberExclusionReads.listOwn(
+          command,
+          personAccessToken(request.headers.authorization),
+        );
+        handoffPreparedReadableSearchResponse(
+          (body) =>
+            sendPreparedReadableSearchJson(
+              response,
+              prepared.status_code,
+              body,
+            ),
+          prepared,
+        );
+        return;
+      }
+
+      if (
+        url.pathname ===
+        ORGANIZATION_API_ADMIN_MEMBER_EXCLUSION_BREAK_GLASS_PATH
+      ) {
+        if (method !== 'POST' || url.search !== '') {
+          throw new AuthorityOperationError(
+            'invalid_request',
+            'admin member-exclusion break-glass method or query is invalid',
+          );
+        }
+        requireAdmin(request);
+        if (options.personMemberExclusionReads === undefined) {
+          sendSerializedJson(response, 503, PERSON_SESSION_UNAVAILABLE_BYTES);
+          return;
+        }
+        const command = await readCanonicalPersonRequest(
+          request,
+          validateOrganizationAdminMemberExclusionBreakGlassReadRequest,
+          canonicalOrganizationAdminMemberExclusionBreakGlassReadRequestBytes,
+        );
+        const prepared = await options.personMemberExclusionReads.breakGlass(
+          command,
+          memberExclusionBreakGlassActorBindingSha256(
+            request.headers.authorization,
+          ),
+        );
+        handoffPreparedReadableSearchResponse(
+          (body) =>
+            sendPreparedReadableSearchJson(
+              response,
+              prepared.status_code,
+              body,
+            ),
+          prepared,
+        );
+        return;
+      }
+
+      if (
+        url.pathname === ORGANIZATION_API_PERSON_SLACK_LINK_CHALLENGES_PATH
+      ) {
+        if (method !== 'POST' || url.search !== '') {
+          throw new PersonReadRequestError(
+            'Person Slack identity-link begin method or query is invalid',
+          );
+        }
+        if (options.personSlackIdentityLink === undefined) {
+          sendSerializedJson(response, 503, PERSON_SESSION_UNAVAILABLE_BYTES);
+          return;
+        }
+        const command = await readCanonicalPersonRequest(
+          request,
+          validateOrganizationPersonSlackLinkBeginRequest,
+          canonicalOrganizationPersonSlackLinkBeginRequestBytes,
+        );
+        sendJson(
+          response,
+          201,
+          await options.personSlackIdentityLink.begin(
+            command,
+            personAccessToken(request.headers.authorization),
+            lifecycle.shutdownController.signal,
+          ),
+        );
+        return;
+      }
+
+      if (
+        url.pathname === ORGANIZATION_API_PERSON_SLACK_LINK_COMPLETIONS_PATH
+      ) {
+        if (method !== 'POST' || url.search !== '') {
+          throw new PersonReadRequestError(
+            'Person Slack identity-link complete method or query is invalid',
+          );
+        }
+        if (options.personSlackIdentityLink === undefined) {
+          sendSerializedJson(response, 503, PERSON_SESSION_UNAVAILABLE_BYTES);
+          return;
+        }
+        const command = await readCanonicalPersonRequest(
+          request,
+          validateOrganizationPersonSlackLinkCompleteRequest,
+          canonicalOrganizationPersonSlackLinkCompleteRequestBytes,
+        );
+        sendJson(
+          response,
+          200,
+          await options.personSlackIdentityLink.complete(
+            command,
+            personAccessToken(request.headers.authorization),
+            lifecycle.shutdownController.signal,
+          ),
+        );
         return;
       }
 

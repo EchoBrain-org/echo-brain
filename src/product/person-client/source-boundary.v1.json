@@ -1,0 +1,71 @@
+{
+  "boundary_version": 1,
+  "kind": "echo-workspace-source-boundary",
+  "name": "echo-brain/person-client",
+  "workspace": false,
+  "boundary_root": "src/product/person-client",
+  "source_root": "src/product/person-client",
+  "entry_points": ["src/product/person-client/index.ts"],
+  "owned_source_paths": ["src/product/person-client/**"],
+  "allowed_internal_paths": ["src/product/person-client/**"],
+  "allowed_workspace_packages": [
+    "@echo-brain/federation-protocol",
+    "@echo-brain/organization-api"
+  ],
+  "allowed_external_packages": [],
+  "allowed_node_builtins": ["buffer", "crypto", "fs", "os", "path", "util"],
+  "runtime_assets": [],
+  "layer_rules": [
+    {
+      "name": "person-client-http-speaks-public-contracts",
+      "from": "src/product/person-client/authority-client.ts",
+      "allowed_imports": [],
+      "allowed_workspace_packages": [
+        "@echo-brain/federation-protocol",
+        "@echo-brain/organization-api"
+      ],
+      "allowed_external_packages": [],
+      "allowed_node_builtins": ["buffer"]
+    },
+    {
+      "name": "person-client-composes-session-and-requests",
+      "from": "src/product/person-client/client.ts",
+      "allowed_imports": ["src/product/person-client/**"],
+      "allowed_workspace_packages": ["@echo-brain/organization-api"],
+      "allowed_external_packages": [],
+      "allowed_node_builtins": ["buffer", "crypto"]
+    },
+    {
+      "name": "person-client-cli-composes-client",
+      "from": "src/product/person-client/commands.ts",
+      "allowed_imports": ["src/product/person-client/**"],
+      "allowed_workspace_packages": [],
+      "allowed_external_packages": [],
+      "allowed_node_builtins": ["buffer", "os", "util"]
+    },
+    {
+      "name": "person-client-entry-exports-owned-modules",
+      "from": "src/product/person-client/index.ts",
+      "allowed_imports": ["src/product/person-client/**"],
+      "allowed_workspace_packages": [],
+      "allowed_external_packages": [],
+      "allowed_node_builtins": []
+    },
+    {
+      "name": "person-client-requests-use-public-api",
+      "from": "src/product/person-client/requests.ts",
+      "allowed_imports": [],
+      "allowed_workspace_packages": ["@echo-brain/organization-api"],
+      "allowed_external_packages": [],
+      "allowed_node_builtins": []
+    },
+    {
+      "name": "person-session-store-owns-private-files",
+      "from": "src/product/person-client/session-store.ts",
+      "allowed_imports": [],
+      "allowed_workspace_packages": ["@echo-brain/organization-api"],
+      "allowed_external_packages": [],
+      "allowed_node_builtins": ["buffer", "crypto", "fs", "path"]
+    }
+  ]
+}

@@ -103,6 +103,10 @@ import {
 } from "./build-identity.js";
 import { parseJson } from "../util/json.js";
 import { nodeOperatorFileSystem } from "./operator-io.js";
+import {
+  runPersonClientCli,
+  type PersonClientCliDependencies,
+} from "./person-client/index.js";
 
 export interface ProductCliProcess {
   once: (event: "SIGINT" | "SIGTERM", listener: () => void) => unknown;
@@ -137,6 +141,7 @@ export interface ProductCliDependencies {
     createInstallationId?: () => string;
     allowInsecureLoopback?: boolean;
   };
+  person?: Omit<PersonClientCliDependencies, "stdout" | "stderr">;
   bootstrap?: {
     /** Test/host seam; the default reads a hidden value from the controlling TTY. */
     readGranolaCredential?: () => string | Promise<string>;
@@ -237,6 +242,7 @@ Usage:
   echo-brain organization rebind --config <absolute-path> --authority-url <https-origin> --authority-pin <sha256:...> [--authority-ca <absolute-path>]
   echo-brain organization slack-link-begin --config <absolute-path>
   echo-brain organization slack-link-complete --config <absolute-path> --challenge-attempt <cat_...> --challenge-message-ts <Slack timestamp>  # reads ECHO_SLACK_LINK_CODE
+  echo-brain person <login-begin|session-install|session-refresh|logout|recent-decisions|reviewer-recent-decisions|readable-search|exclusions|exclude|include|slack-link-begin|slack-link-complete> [options]
   echo-brain service <install|start|stop|restart|status|uninstall> --config <absolute-path>
   echo-brain validate-config --config <absolute-path>
   echo-brain run-once --config <absolute-path>
@@ -1982,6 +1988,24 @@ export async function runProductCli(
   if (argv[0] === "--version" || argv[0] === "-v") {
     stdout.write(`${PRODUCT_VERSION}\n`);
     return 0;
+  }
+  if (argv[0] === "person") {
+    const person = dependencies.person ?? {};
+    return await runPersonClientCli(argv.slice(1), {
+      ...person,
+      stdout,
+      stderr,
+      ...(person.fetch !== undefined || dependencies.organization?.fetch === undefined
+        ? {}
+        : { fetch: dependencies.organization.fetch }),
+      ...(person.allow_insecure_loopback !== undefined ||
+      dependencies.organization?.allowInsecureLoopback === undefined
+        ? {}
+        : {
+            allow_insecure_loopback:
+              dependencies.organization.allowInsecureLoopback,
+          }),
+    });
   }
   let parsed: ParsedCommand;
   try {

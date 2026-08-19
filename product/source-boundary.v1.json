@@ -110,6 +110,7 @@
         "src/product/approval/**",
         "src/product/machine/**",
         "src/product/organization/**",
+        "src/product/person-client/**",
         "src/product/storage/**",
         "src/adapters/**",
         "src/infrastructure/**",
@@ -148,6 +149,51 @@
         "@echo-brain/organization-protocol"
       ],
       "allowed_node_builtins": ["buffer", "crypto", "fs", "https", "path"]
+    },
+    {
+      "name": "person-client-http-speaks-public-contracts",
+      "from": "src/product/person-client/authority-client.ts",
+      "allowed_imports": [],
+      "allowed_packages": [
+        "@echo-brain/federation-protocol",
+        "@echo-brain/organization-api"
+      ],
+      "allowed_node_builtins": ["buffer"]
+    },
+    {
+      "name": "person-client-composes-session-and-requests",
+      "from": "src/product/person-client/client.ts",
+      "allowed_imports": ["src/product/person-client/**"],
+      "allowed_packages": ["@echo-brain/organization-api"],
+      "allowed_node_builtins": ["buffer", "crypto"]
+    },
+    {
+      "name": "person-client-cli-composes-client",
+      "from": "src/product/person-client/commands.ts",
+      "allowed_imports": ["src/product/person-client/**"],
+      "allowed_packages": [],
+      "allowed_node_builtins": ["buffer", "os", "util"]
+    },
+    {
+      "name": "person-client-entry-exports-owned-modules",
+      "from": "src/product/person-client/index.ts",
+      "allowed_imports": ["src/product/person-client/**"],
+      "allowed_packages": [],
+      "allowed_node_builtins": []
+    },
+    {
+      "name": "person-client-requests-use-public-api",
+      "from": "src/product/person-client/requests.ts",
+      "allowed_imports": [],
+      "allowed_packages": ["@echo-brain/organization-api"],
+      "allowed_node_builtins": []
+    },
+    {
+      "name": "person-session-store-owns-private-files",
+      "from": "src/product/person-client/session-store.ts",
+      "allowed_imports": [],
+      "allowed_packages": ["@echo-brain/organization-api"],
+      "allowed_node_builtins": ["buffer", "crypto", "fs", "path"]
     },
     {
       "name": "approval-gates-use-the-retirement-fence",

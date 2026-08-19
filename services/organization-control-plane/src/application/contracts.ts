@@ -331,6 +331,64 @@ export interface CompletedSlackIdentityLink {
   permission_grants_created: 0;
 }
 
+/**
+ * The stable Authority-owned Person session coordinates that bind one Slack
+ * challenge. Access credentials and their digests remain Authority-private;
+ * completion re-authenticates this exact identity binding and family.
+ */
+export interface PersonSlackIdentityLinkSession {
+  authority_id: string;
+  organization_id: string;
+  principal_id: string;
+  membership_id: string;
+  identity_binding_id: string;
+  session_family_id: string;
+}
+
+export interface BeginPersonSlackIdentityLinkChallengeInput {
+  request_sha256: `sha256:${string}`;
+  challenge_code_sha256: `sha256:${string}`;
+  person_session: PersonSlackIdentityLinkSession;
+  organization_tool: ActiveSlackOrganizationTool;
+  now: string;
+}
+
+export interface PendingPersonSlackIdentityLinkChallenge
+  extends BegunSlackIdentityLinkChallenge {
+  principal_id: string;
+  membership_id: string;
+}
+
+export interface CompletePersonSlackIdentityLinkChallengeInput {
+  command_id: string;
+  command_sha256: `sha256:${string}`;
+  challenge_attempt_id: string;
+  challenge_code_sha256: `sha256:${string}`;
+  challenge_message_ts: string;
+  person_session: PersonSlackIdentityLinkSession;
+  organization_tool: ActiveSlackOrganizationTool;
+  observed: ObservedSlackIdentityLinkChallenge;
+  authority_checked_at: string;
+  now: string;
+}
+
+/** Person-v2 completion creates or reuses only the external identity link. */
+export interface CompletedPersonSlackIdentityLink {
+  schema_version: 2;
+  kind: "echo-organization-person-slack-link-result";
+  identity_link_id: string;
+  connection_id: string;
+  organization_id: string;
+  principal_id: string;
+  membership_id: string;
+  provider: "slack";
+  provider_tenant_id: string;
+  provider_subject_id: string;
+  channel_id: string;
+  linked_at: string;
+  identity_link_created: boolean;
+}
+
 export interface ActivateExistingSlackApprovalInput {
   command_id: string;
   command_sha256: `sha256:${string}`;

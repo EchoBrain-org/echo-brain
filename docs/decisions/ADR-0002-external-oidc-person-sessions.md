@@ -197,23 +197,36 @@ revocation, identity-binding revocation, or membership revocation has the
 same family-wide effect. Expiry and revocation take effect on the next
 request; there is no positive authorization cache.
 
-The browser uses Secure, HttpOnly, host-only cookies with `Path=/`, no
-`Domain`, and `SameSite=Lax`. Every cookie-authenticated Person mutation,
-including refresh, logout, Slack identity linking, and member-valve changes,
-also requires both an `Origin` header that exactly equals the configured
-Authority origin and an independent CSRF proof bound to the session. A
-missing, `null`, multiple, or mismatched origin or a missing or mismatched CSRF
-proof denies before mutation. Cookie attributes and possession of the session
-credential are not themselves CSRF proof. The OIDC callback is the cross-site
-redirect exception: its independent protection is the exact single-use state
-and nonce binding above, and it performs no already-authenticated Person
-mutation.
+The lean-v1 Person transport uses the opaque access credential only in the
+`Authorization: Bearer` header. The Authority does not set an authentication
+cookie, and the client does not place either credential in a URL, browser
+storage, or a request body other than the refresh credential at the refresh
+endpoint. Because no ambient browser credential exists, `Origin` and CSRF
+tokens are not authorization inputs for this bearer transport. Introducing a
+cookie-authenticated browser session would be a distinct transport change and
+must add exact Origin and independent CSRF enforcement before it is enabled.
 
-The thin client may retain its raw opaque credential only in the Phase-2
-private session store. That client-side file's exact path, mode, crash
-semantics, and refresh transaction are an implementation exit item below; no
-general machine database, upstream token, installation key, or access lease
-is a permitted substitute.
+The OIDC callback is protected by the exact single-use state and nonce binding
+above and returns the new Authority credential pair as JSON. The Phase-2 thin
+client imports that callback result explicitly; automatic browser-to-client
+handoff and a polished browser UI remain qualification work rather than a
+second credential-delivery protocol in lean v1.
+
+The thin client may retain its raw opaque credential only at
+`$HOME/.local/share/echo-brain/person/session.v1.json`. Its directory is `0700`
+and its live and transition files are `0600`, current-user-owned regular files;
+`session-store.ts` is the only Person-client source file permitted to import
+`node:fs`. The stored document contains only the Authority origin and ID plus
+the Authority-issued Person/session tuple and credential pair. It contains no
+general machine database, upstream token, installation key, or access lease.
+
+Refresh atomically moves the live pair behind one unique local claim before
+sending the one-time refresh credential. Only that exact claimant may publish
+the rotation, and publication cannot replace a newer explicit login. An
+ambiguous outcome leaves no usable live credential and is never retried; the
+Person signs in again. A completed rotation is installed durably before its
+transition files are removed, so a crash after publication recovers the new
+pair rather than replaying the old one.
 
 ### 5. Re-resolve both session and Person state around every read
 
@@ -393,18 +406,22 @@ Phase 2 is not complete while any of these blockers remains:
 
 - `phase1/replay-synthetic-green` leaves the real-corpus Phase-1 evidence gate
   open; the migration plan does not permit Phase-2 exit before Phase 1 exits.
-- No live issuer, client registration, redirect URI, tenant rule, algorithm
-  allowlist, or client-secret reference has been provisioned and verified.
-- Migration `0009`, the OIDC verifier, sealed-verifier lifecycle,
-  session-family store, refresh rotation/replay revocation, and family-wide
-  revocation are not yet implemented and race-tested.
-- No v2 caller-binding or v2 query-audit schema is implemented, and every
-  Person-authenticated read does not yet have start/end Person and session
-  lookups, caller-versus-subject denial tests, and mid-read revocation tests.
-- The thin client's exact private credential path, mode, crash-safe refresh,
-  and Phase-4 boundary carve-out are not implemented and measured.
-- The member exclusion valve, browser Slack identity-link flow, and thin
-  client v0 have not met the Phase-2 exit tests.
+- The additive session schema, OIDC verifier, session-family lifecycle,
+  refresh replay handling, and bearer routes are implemented and race-tested
+  offline, but no live issuer, client registration, redirect URI, tenant rule,
+  algorithm allowlist, or client-secret reference has been provisioned and
+  verified.
+- The current V2 Person reads have additive caller/audit meanings, start/end
+  Person lookups, self-only denials, and revocation races. The remaining
+  organization-record, control-plane, protocol, and surviving-operation
+  actor re-keying is still open.
+- Thin client v0 has the exact private store, crash-safe one-time refresh, and
+  file-scoped Phase-4 carve-out described above. Its measured checkpoint and
+  live IdP/browser qualification remain separate evidence gates.
+- The member exclusion valve and its audited exact-source readers are wired
+  offline. Slack identity linking is production-wired and verified offline
+  with a fake provider and explicit callback/session import, not yet as the
+  live browser flow required for Phase-2 exit.
 - Rung-1 and processing-service-principal constitution amendments have not
   completed their review process.
 - The additive organization-record, control-plane, query-audit, and protocol
