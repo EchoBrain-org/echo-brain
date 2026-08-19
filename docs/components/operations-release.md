@@ -37,8 +37,9 @@ This component owns the procedures and automation that turn source into a
 tested artifact, deploy compatible product and Authority generations, operate
 them, preserve backups, recover state, and record qualification evidence.
 
-Primary roots are `.github/`, `tools/`, and `deploy/` plus the lifecycle and
-update code under `src/product/`.
+Primary roots are `.github/`, `tools/`, and `deploy/`. The Person artifact has
+no lifecycle daemon or fleet updater; the Authority uses the server deployment
+and rollback procedure.
 
 ## Claim boundaries
 

@@ -21,10 +21,7 @@ import type {
 } from '@echo-brain/organization-protocol';
 import {
   MAX_ORGANIZATION_ACCESS_LEASE_REQUEST_TTL_MS,
-  organizationInternalLiveManifestSha256,
-  validateOrganizationInternalLiveReleaseManifest,
   verifyOrganizationAccessLeaseRequestAnyVersion,
-  verifyOrganizationInternalLiveUpdateReceipt,
 } from '@echo-brain/organization-api';
 import type Database from 'better-sqlite3';
 import {
@@ -44,7 +41,6 @@ import type {
   NewOidcLoginAttempt,
   OidcLoginAttemptCompletion,
   NewAuthorityEnrollment,
-  NewInternalLiveRelease,
   PersonReadDecisionAuditEntry,
   PersonReadOperation,
   NewPersonLoginGrant,
@@ -58,8 +54,6 @@ import type {
   StoredAuthorityMembership,
   StoredAuthorityMetadata,
   StoredEnrollmentGrant,
-  StoredInternalLiveRelease,
-  StoredInternalLiveUpdateReceipt,
   StoredMemberExclusionSelector,
   StoredOidcIdentityBinding,
   StoredOidcLoginAttempt,
@@ -181,32 +175,6 @@ interface AccessLeaseRequestRow {
   enrollment_id: string;
   previous_access_state_sha256: string;
   resulting_state_sha256: string;
-  received_at: string;
-}
-
-interface InternalLiveReleaseRow {
-  directive_sequence: number;
-  command_id: string;
-  command_sha256: string;
-  manifest_url: string;
-  manifest_sha256: string;
-  manifest_json: string;
-  release_version: string;
-  release_tag: string;
-  source_sha: string;
-  artifact_sha256: string;
-  approved_at: string;
-}
-
-interface InternalLiveUpdateReceiptRow {
-  receipt_sequence: number;
-  transaction_id: string;
-  payload_sha256: string;
-  receipt_json: string;
-  installation_id: string;
-  directive_sequence: number;
-  outcome: string;
-  finished_at: string;
   received_at: string;
 }
 
@@ -1402,156 +1370,6 @@ class SqliteAuthorityTransaction
     return this.accessStateFromRow(row);
   }
 
-  private internalLiveReleaseFromRow(
-    row: InternalLiveReleaseRow | undefined,
-  ): StoredInternalLiveRelease | undefined {
-    if (row === undefined) return undefined;
-    invariant(
-      Number.isSafeInteger(row.directive_sequence) &&
-        row.directive_sequence > 0,
-      'internal-live directive sequence is invalid',
-    );
-    assertDigest(row.command_sha256, 'internal-live approval command');
-    invariant(
-      /^[0-9a-f]{64}$/.test(row.manifest_sha256) &&
-        /^[0-9a-f]{64}$/.test(row.artifact_sha256) &&
-        /^[0-9a-f]{40}$/.test(row.source_sha),
-      'internal-live release digests are invalid',
-    );
-    timestampMillis(row.approved_at, 'internal-live approval time');
-    const manifest = verifiedPersistedValue('internal-live release manifest', () =>
-      validateOrganizationInternalLiveReleaseManifest(
-        parseStoredJson(row.manifest_json),
-      ),
-    );
-    invariant(
-      organizationInternalLiveManifestSha256(manifest) ===
-          row.manifest_sha256 &&
-        manifest.release_version === row.release_version &&
-        manifest.release_tag === row.release_tag &&
-        manifest.source.sha === row.source_sha &&
-        manifest.artifact.sha256 === row.artifact_sha256 &&
-        row.manifest_url ===
-          `https://github.com/${manifest.build.repository}/releases/download/${encodeURIComponent(manifest.release_tag)}/internal-live-release-manifest.v1.json`,
-      'internal-live release columns differ from its manifest',
-    );
-    return {
-      directive_sequence: row.directive_sequence,
-      command_id: row.command_id,
-      command_sha256: row.command_sha256 as Sha256Digest,
-      manifest_url: row.manifest_url,
-      manifest_sha256: row.manifest_sha256,
-      manifest,
-      release_version: row.release_version,
-      release_tag: row.release_tag,
-      source_sha: row.source_sha,
-      artifact_sha256: row.artifact_sha256,
-      approved_at: row.approved_at,
-    };
-  }
-
-  internalLiveReleaseByCommand(
-    commandId: string,
-  ): StoredInternalLiveRelease | undefined {
-    const row = this.database
-      .prepare(
-        `SELECT * FROM authority_internal_live_releases
-         WHERE command_id = ?`,
-      )
-      .get(commandId) as InternalLiveReleaseRow | undefined;
-    return this.internalLiveReleaseFromRow(row);
-  }
-
-  internalLiveReleaseBySequence(
-    directiveSequence: number,
-  ): StoredInternalLiveRelease | undefined {
-    const row = this.database
-      .prepare(
-        `SELECT * FROM authority_internal_live_releases
-         WHERE directive_sequence = ?`,
-      )
-      .get(directiveSequence) as InternalLiveReleaseRow | undefined;
-    return this.internalLiveReleaseFromRow(row);
-  }
-
-  currentInternalLiveRelease(): StoredInternalLiveRelease | undefined {
-    const row = this.database
-      .prepare(
-        `SELECT * FROM authority_internal_live_releases
-         ORDER BY directive_sequence DESC LIMIT 1`,
-      )
-      .get() as InternalLiveReleaseRow | undefined;
-    return this.internalLiveReleaseFromRow(row);
-  }
-
-  private internalLiveReceiptFromRow(
-    row: InternalLiveUpdateReceiptRow | undefined,
-  ): StoredInternalLiveUpdateReceipt | undefined {
-    if (row === undefined) return undefined;
-    invariant(
-      Number.isSafeInteger(row.receipt_sequence) && row.receipt_sequence > 0,
-      'internal-live receipt sequence is invalid',
-    );
-    assertDigest(row.payload_sha256, 'internal-live update receipt payload');
-    timestampMillis(row.received_at, 'internal-live receipt received time');
-    const enrollment = this.enrollmentByInstallation(row.installation_id);
-    invariant(
-      enrollment !== undefined,
-      'internal-live receipt enrollment is missing or invalid',
-    );
-    const receipt = verifiedPersistedValue('internal-live update receipt', () =>
-      verifyOrganizationInternalLiveUpdateReceipt(
-        parseStoredJson(row.receipt_json),
-        enrollment.installation_signing_key,
-      ),
-    );
-    invariant(
-      receipt.integrity.payload_sha256 === row.payload_sha256 &&
-        receipt.transaction_id === row.transaction_id &&
-        receipt.enrollment_id === enrollment.enrollment_id &&
-        receipt.installation_id === row.installation_id &&
-        receipt.directive_sequence === row.directive_sequence &&
-        receipt.outcome === row.outcome &&
-        receipt.finished_at === row.finished_at,
-      'internal-live receipt columns differ from its authenticated document',
-    );
-    return {
-      receipt_sequence: row.receipt_sequence,
-      payload_sha256: row.payload_sha256 as Sha256Digest,
-      receipt,
-      received_at: row.received_at,
-    };
-  }
-
-  internalLiveUpdateReceiptByTransaction(
-    transactionId: string,
-  ): StoredInternalLiveUpdateReceipt | undefined {
-    const row = this.database
-      .prepare(
-        `SELECT * FROM authority_internal_live_update_receipts
-         WHERE transaction_id = ?`,
-      )
-      .get(transactionId) as InternalLiveUpdateReceiptRow | undefined;
-    return this.internalLiveReceiptFromRow(row);
-  }
-
-  latestInternalLiveUpdateReceipt(
-    installationId: string,
-    directiveSequence: number,
-  ): StoredInternalLiveUpdateReceipt | undefined {
-    const row = this.database
-      .prepare(
-        `SELECT * FROM authority_internal_live_update_receipts
-         WHERE installation_id = ? AND directive_sequence = ?
-         ORDER BY receipt_sequence DESC LIMIT 1`,
-      )
-      .get(
-        installationId,
-        directiveSequence,
-      ) as InternalLiveUpdateReceiptRow | undefined;
-    return this.internalLiveReceiptFromRow(row);
-  }
-
   private leaseRequestFromRow(
     row: AccessLeaseRequestRow | undefined,
   ): StoredAccessLeaseRequest | undefined {
@@ -2648,54 +2466,6 @@ class SqliteAuthorityTransaction
         request.previous_access_state_sha256,
         request.resulting_state_sha256,
         request.received_at,
-      );
-  }
-
-  insertInternalLiveRelease(release: NewInternalLiveRelease): void {
-    const command = release.command;
-    const manifest = command.manifest;
-    this.database
-      .prepare(
-        `INSERT INTO authority_internal_live_releases (
-           command_id, command_sha256, manifest_url, manifest_sha256,
-           manifest_json, release_version, release_tag, source_sha,
-           artifact_sha256, approved_at
-         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      )
-      .run(
-        command.command_id,
-        release.command_sha256,
-        command.manifest_url,
-        command.manifest_sha256,
-        canonicalJson(manifest),
-        manifest.release_version,
-        manifest.release_tag,
-        manifest.source.sha,
-        manifest.artifact.sha256,
-        release.approved_at,
-      );
-  }
-
-  insertInternalLiveUpdateReceipt(
-    stored: Omit<StoredInternalLiveUpdateReceipt, 'receipt_sequence'>,
-  ): void {
-    const receipt = stored.receipt;
-    this.database
-      .prepare(
-        `INSERT INTO authority_internal_live_update_receipts (
-           transaction_id, payload_sha256, receipt_json, installation_id,
-           directive_sequence, outcome, finished_at, received_at
-         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-      )
-      .run(
-        receipt.transaction_id,
-        stored.payload_sha256,
-        canonicalJson(receipt),
-        receipt.installation_id,
-        receipt.directive_sequence,
-        receipt.outcome,
-        receipt.finished_at,
-        stored.received_at,
       );
   }
 

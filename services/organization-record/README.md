@@ -12,8 +12,9 @@ Like `organization-control-plane`, this is a **library, not a service**, despite
 its `services/` path: no `bin`, no process entry point, no listener. It is
 linked into the customer-hosted authority process and hosted behind that
 process's authenticated singleton guard. Charters are enforced at the database
-level, so the authority's "does not store decisions" stays true of
-`authority.sqlite`.
+level: canonical approved organization-record truth lives here, while
+`authority.sqlite` separately holds bounded pre-record meeting and decision
+processing state.
 
 ## Two databases
 
@@ -30,7 +31,7 @@ contiguous `NNNN_name.sql` migrations applied under `BEGIN IMMEDIATE` with
 `application_id`s (`ECRL`, `ECRD`) mean the wrong file is refused before any
 statement runs.
 
-## Three machines, two of them here
+## Three state machines, two of them here
 
 Append, derive, and retrieve never call each other; they communicate only
 through data at rest. The boundary manifest enforces it — `src/derive/**`
@@ -149,8 +150,8 @@ database or exposes a generic record query.
 
 | Port | What the host supplies |
 | --- | --- |
-| `OrganizationRecordAuthorityPort` | The authority application's verification: current access lease, installation signature over the canonical bytes, envelope and payload schema validation, and the exact allowed authorization-evidence lookup in the integration audit. Throwing means permanent rejection. |
-| `OrganizationRecordReceiptSignerPort` | Signing with the existing authority signing key that member machines already pin. Never a new service identity. |
+| `OrganizationRecordAuthorityPort` | The retained V1 authority verification: current access lease, installation signature over the canonical bytes, envelope and payload schema validation, and the exact allowed authorization-evidence lookup in the integration audit. Throwing means permanent rejection. No shipped Person client currently calls this compatibility path. |
+| `OrganizationRecordReceiptSignerPort` | Signing with the existing Authority signing key. Never a new service identity. Historical installation clients pinned this key; the Person client does not yet submit record envelopes. |
 | `OrganizationRecordClock` | Record time, injected because it is inside the hashed frame. |
 | `OrganizationRecordAlertPort` | Operator alerts. This library never calls `process.exit` on its caller's behalf. |
 
@@ -166,7 +167,7 @@ does not import it and does not copy it. `src/application/contracts.ts` holds
 only the **minimum structural views** this module reads, so a protocol type
 carrying more fields is assignable without an import edge.
 
-The adapter the host writes is thin:
+The retained V1 adapter the host wires is thin:
 
 ```ts
 const authority: OrganizationRecordAuthorityPort = {
@@ -202,9 +203,11 @@ this projection.
 ## One canonicalization
 
 Every digest here is RFC 8785 from `@echo-brain/federation-protocol`. This
-workspace adds no canonical-JSON implementation, and core's divergent delivery
-digest (`src/core/delivery/envelope.ts`) is never used for organization-record
-artifacts. Runtime dependencies: `better-sqlite3` and
+workspace adds no canonical-JSON implementation, and the processing core's
+delivery digest
+(`services/organization-authority/src/processing/core/delivery/envelope.ts`)
+is never used for organization-record artifacts. Runtime dependencies:
+`better-sqlite3` and
 `@echo-brain/federation-protocol`. Nothing else.
 
 ## Deliberate deviation from the design text
@@ -239,10 +242,11 @@ catch-up rather than leaving a stale process looking healthy.
 
 ## Not here
 
-Route definitions and HTTP hosting (the authority owns both), the member
-submitter (`src/product/organization/`), generic retrieval, generic permission
+Route definitions and HTTP hosting (the Authority owns both), a Person-bound
+record writer (not yet implemented), generic retrieval, generic permission
 resolution, observation-to-principal resolution, interpretive derivation,
-`correction` events, witnessed checkpoints, and Merkle inclusion proofs.
+`correction` events, witnessed checkpoints, and Merkle inclusion proofs. The
+deleted machine product is not a supported submitter.
 
 ## Tests
 

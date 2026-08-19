@@ -1,16 +1,20 @@
 # Organization authority
 
-The authority is the centrally hosted onboarding and access service for one
-organization. It manages principals, memberships, one-time enrollment grants,
-installation enrollment, short access leases, revocation, and append-only
-organization decision records. Its governed pre-record tables may retain raw
-canonical meetings and deterministic extraction state for processing; they
-have no human-readable application route and become cleanup-eligible 30 days
-after terminal approval or rejection. The authority stores no embeddings.
+The Authority is the centrally hosted identity, processing, and data service
+for one organization. Its current machine-facing identity is an external-OIDC
+Person session. It manages principals, memberships, rotating sessions,
+revocation, provider integrations, and append-only organization decision
+records. Installation enrollment and access leases remain as server-side V1
+compatibility; no shipped machine client calls them. Its governed pre-record
+tables may retain raw canonical meetings and deterministic extraction state
+for processing; they have no human-readable application route and become
+cleanup-eligible 30 days after terminal approval or rejection. The Authority
+stores no embeddings.
 
 One process and four persistent SQLite databases are the supported topology:
-`authority.sqlite` remains the source of membership and installation truth and
-also owns the source-bound pre-record processing tables, while
+`authority.sqlite` is the source of membership, Person identity and session,
+retained installation compatibility, and source-bound pre-record processing
+truth, while
 `integrations.sqlite` contains customer-owned provider links,
 connections, adapter bindings, direct grants, and integration audit.
 `record-log.sqlite` is the append-only record of truth, and
@@ -47,10 +51,32 @@ pending cursor, or start itself again. The EC2 stop/checkpoint/run/restart gate
 is documented in
 [`deploy/organization-authority/AWS-EC2.md`](../../deploy/organization-authority/AWS-EC2.md).
 
+Normal `serve` does not compose a meeting-processing worker. The only current
+processing composition is this stopped command: Granola source,
+`structured-text` processor, pending-only approval gate, and Authority SQLite
+state. LLM, Slack approval, and Slack delivery modules are bundled foundations,
+not active runtime wiring.
+
 ## HTTP surface
 
-The employee and administrator surfaces share one listener and one public
-origin:
+The Person, retained compatibility, and administrator surfaces share one
+listener and one public origin. Current Person routes are:
+
+- `POST /v2/session/oidc/begin`
+- `GET /v2/session/oidc/callback`
+- `POST /v2/session/refresh`
+- `POST /v2/session/revocations`
+- `POST /v2/recent-decisions`
+- `POST /v2/reviewer-recent-decisions`
+- `POST /v2/readable-search`
+- `POST /v2/member-exclusions`
+- `POST /v2/member-exclusions/list`
+- `POST /v2/integration-links/slack/challenges`
+- `POST /v2/integration-links/slack/completions`
+- `POST /v2/admin/memberships/:membership_id/person-login-grants`
+- `POST /v2/admin/member-exclusions/break-glass`
+
+The following V1 routes remain for installation-bound compatibility:
 
 - `GET /v1/authority-descriptor`
 - `POST /v1/enrollments`
@@ -90,32 +116,15 @@ the ingress contract below keeps unreachable from outside.
 
 Administrator requests use `Authorization: Bearer <token>`. Enrollment uses
 `Authorization: Echo-Enrollment <grant>`. Lease refresh, permission checks,
-and readable search use installation-signed commands.
+and V1 readable search use installation-signed commands. Current Person routes
+use the Authority-issued Person bearer access token.
 
-The access-lease route accepts both request versions. V1 has no lifetime field
-and retains the operator-configured lifetime of at most five minutes. V2 binds
-an explicit requested maximum into the installation signature and accepts at
-most 30 minutes; the current product asks for the full 30 minutes. The
-Authority may issue any positive lifetime at or below that bound. Repository
-verification uses the stable 30-minute historical ceiling independently of the
-current V1 issuance setting, so lowering that setting cannot make already
-signed states unreadable.
-
-| Authority | Product | Lease behavior |
-| --- | --- | --- |
-| pre-V2 | legacy V1 | five-minute V1 |
-| V2-capable | legacy V1 | five-minute V1 |
-| V2-capable | V2-capable | bounded V2, currently 30 minutes |
-| pre-V2 | V2-capable | fails closed; deploy the Authority first |
-
-After the first V2 lease longer than five minutes is stored, a code-only
-rollback to an Authority build that predates V2 is not state-compatible: that
-older verifier still applies its five-minute setting to historical states. A
-rollback at that point must use a V2-capable build or restore the matching
-pre-V2 Authority data together with each affected installation's matching
-local state (or explicitly recover/re-enroll that installation). Before any
-longer V2 state is issued, the previous image remains a code-only rollback
-option.
+The compatibility access-lease route accepts both request versions. V1 keeps
+the operator-configured lifetime of at most five minutes; V2 signs an explicit
+requested maximum of at most 30 minutes. The current Person product uses
+neither version: its access and refresh expirations are part of the Person
+session protocol. Retained installation state and matching old client state
+must still be restored together when investigating that historical path.
 
 When a readable-search-capable image is selected,
 `POST /v1/readable-search` provides the bounded two-policy behavior. It is
@@ -150,61 +159,45 @@ handles, and prior audit rows are preserved; the repair appends a fresh audit
 entry. The bot token is neither returned by the route nor logged, rendered,
 stored in SQLite, or placed in browser storage.
 
-The browser console creates invitation secrets locally with Web Crypto and
-sends only their digest to the authority. Its invitation records the current
-HTTPS origin as the employee authority URL. The administrator credential is
-exchanged for a bounded in-memory session with CSRF protection and is not
-stored in JavaScript, cookies, or SQLite. The organization-tool form sends the
-bot token only to the same-origin Authority and never places it in browser
-storage or renders it back into the console.
+The browser console still exposes V1 installation invitation creation for
+server compatibility, but no shipped client consumes those invitations. It
+creates their secrets locally with Web Crypto and sends only the digest to the
+Authority. The administrator credential is exchanged for a bounded in-memory
+session with CSRF protection and is not stored in JavaScript, cookies, or
+SQLite. The organization-tool form sends the bot token only to the same-origin
+Authority and never places it in browser storage or renders it back into the
+console.
 
-An enrolled installation can perform the minimum manual Slack identity-link
-challenge after the organization tool is active. The Authority derives the
-membership from the installation signature, derives the human from the exact
-Slack thread reply, requires that human to match the installation's configured
-Slack reviewer, and creates no permission grants. The configured approval
-surface must already use the organization-approved channel and contain one
-`reviewer.slack_user_id`.
+After the organization tool is active, a signed-in Person performs the manual
+Slack identity proof with:
 
-The manual ceremony is:
+1. `echo-brain person slack-link-begin`;
+2. reply with the returned one-time challenge code in the exact Slack thread;
+3. retain the returned challenge-attempt ID and message timestamp; and
+4. pass the code on standard input to `echo-brain person slack-link-complete`
+   with those two identifiers.
 
-1. run `echo-brain organization slack-link-begin --config '<path>'`;
-2. copy only the one-time code into a reply to the exact Slack challenge
-   thread;
-3. retain the returned attempt ID and Slack message timestamp;
-4. read the code without terminal echo using
-   `read -r -s ECHO_SLACK_LINK_CODE`, then run the emitted
-   `slack-link-complete` command and immediately
-   `unset ECHO_SLACK_LINK_CODE`;
-5. give the returned membership, installation, identity-link, and binding IDs
-   to an owner, who runs
-   `echo-organization-admin slack approval activate --config '<Authority
-   config>' --administrator-membership-id '<owner mem_...>'
-   --target-membership-id '<employee mem_...>' --installation-id '<ins_...>'
-   --identity-link-id '<clm_...>' --adapter-binding-id '<bnd_...>'`;
-6. run `echo-brain doctor --config '<path>'` before restarting the service.
+The Authority re-authenticates the Person session, derives the human from the
+exact Slack thread reply, and creates or reuses only the external identity
+link for that exact principal and membership. Do not paste the one-time code
+into tickets, chat, logs, or a command-line argument. This Person flow creates
+no adapter binding and no permission grant.
 
-Do not paste the one-time code into tickets, chat, logs, or a command-line
-argument. Automatic tool
-propagation, non-Slack tools, credential or channel rotation, and fine-grained
-integration lifecycle controls remain deferred. Membership and installation
-revocation are the v1 access controls.
+The administrator-authenticated
+`POST /v1/admin/integrations/slack-approval-activation` route remains a V1
+installation-bound compatibility surface. It accepts
+`administrator_membership_id`, `target_membership_id`, `installation_id`, an
+existing identity link, and an existing adapter binding, then creates the exact
+`approve` and `reject` grants. The Person identity-link flow cannot satisfy
+that old binding contract. A Person-bound approval activation path is not yet
+implemented, and the bundled Slack approval adapter is not composed into
+`serve` or `process-one-meeting`.
 
-Approval authority is activated only after the employee's manual ceremony has
-created an identity link and adapter binding. The administrator-authenticated
-`POST /v1/admin/integrations/slack-approval-activation` route accepts six flat
-strings: `command_id` (`adm_` UUIDv4, the idempotency handle),
-`administrator_membership_id`, `target_membership_id`, `installation_id`,
-`identity_link_id`, and `adapter_binding_id`. It creates only the exact
-`approve` and `reject` grants for those existing records. It accepts no Slack
-credential or provider configuration, makes no Slack API call, and does not
-create or replace an identity link or adapter binding. In v1 the target
-membership must own the enrolled installation. The call is audited as
-`slack_approval.activated`.
+### Retained installation access recovery
 
-### Recovering stale installation access
-
-An installation refreshes its own lease, and the Authority recovers exactly one
+This section describes server-side V1 compatibility, not a current Person
+operation. An old installation refreshes its own lease, and the Authority
+recovers exactly one
 skipped head automatically. An installation left further behind than that —
 because signed renewal responses were lost before it could store them, or
 because its local state is otherwise missing heads the Authority already
@@ -241,22 +234,11 @@ npm run organization-authority:admin -- installation access-recover \
 ```
 
 The repaired head is not in that response and is never handed to the operator.
-It reaches the installation through the ordinary lease route: the next
-`POST /v1/access-leases` signed from the stale local head is answered with the
-usual `409` stale-state response, and that response body carries the repaired
-head, which the installation verifies and stores like any other.
-
-So the recovery is only half done when the command returns. The stranded
-machine must run
-
-```sh
-echo-brain organization refresh --config /absolute/path/runtime.json
-```
-
-before the `valid_until` the command reported. The repaired head is an ordinary
-lease with the ordinary TTL, so if it expires first nothing is broken and
-nothing is recovered — run the administrator recovery again and refresh inside
-the new window.
+It can be recovered only by an installation-signed `POST /v1/access-leases`
+request from matching retained V1 client state. The shipped Person client has
+no installation signer, lease-refresh command, or `runtime.json`, so the admin
+command alone cannot make a legacy installation operational. Do not use this
+route for Person-session recovery.
 
 ## Ingress contract
 
@@ -272,7 +254,7 @@ The shared token is stored in the initialized state directory. The client ID
 is a bounded rate-limit identity, not authorization. Missing or malformed proxy
 identity fails before routing.
 
-The portable one-machine deployment is in
+The portable single-Authority deployment is in
 [`deploy/organization-authority`](../../deploy/organization-authority/README.md).
 
 ## Operator lifecycle
@@ -336,12 +318,12 @@ after a stopped readable-search rebuild publishes a complete immutable
 generation. The active-generation pointer remains in `authority.sqlite`; a
 generation directory must never be copied, repaired, or swapped on its own.
 
-### Readable-search configuration and maintenance
+### Readable-search and retained V1 recording configuration
 
 This section applies only to a readable-search-capable image. Historical
 images without these commands retain their own immutable runbook requirements.
 
-The runtime-config schema retains an optional closed
+The Authority config format retains an optional closed
 `organization_recording_policy_v1` object for source compatibility. The
 current initializer leaves it absent, and an operator must not add it by
 editing an initialized config. When present in an already materialized
@@ -351,7 +333,7 @@ baseline it contains exactly:
 {
   "schema_version": 1,
   "kind": "organization-recording-policy-v1",
-  "decision_processor_adapter_instance_id": "<product-local provenance instance>",
+  "decision_processor_adapter_instance_id": "<legacy producer provenance instance>",
   "approval_surface_adapter_instance_id": "<centrally enforced surface instance>",
   "presentation_mode": "organization-member-readable-v1",
   "policy_contract_sha256": "sha256:<matching policy contract>"
@@ -391,7 +373,7 @@ The mode-0600 canonical command contains exactly:
   "target_policy": {
     "schema_version": 1,
     "kind": "organization-recording-policy-v1",
-    "decision_processor_adapter_instance_id": "<product-local provenance instance>",
+    "decision_processor_adapter_instance_id": "<legacy producer provenance instance>",
     "approval_surface_adapter_instance_id": "<exact active Slack surface instance>",
     "presentation_mode": "organization-member-readable-v1",
     "policy_contract_sha256": "sha256:<exact-built-in-contract>"
@@ -415,12 +397,11 @@ initialization manifest remains history. Repeating the exact command is
 read-only and returns `created: false`; reusing its ID for different bytes or
 trying to activate a different policy is refused.
 
-This activates a shared central capability. It does not switch any producer.
-Each product installation must be stopped and reconfigured independently;
-that local reconfigure refuses a mode change while an old frozen Slack card is
-unresolved. The activation adds member-v3 admission without replacing the
-existing reviewer-v2 family. There is no generic policy editor or in-place
-rollback in V1.
+This activates retained V1 installation-bound admission only. It does not
+switch a current producer: the Person client does not submit record envelopes,
+and the deleted machine product has no supported reconfigure command. The
+activation adds member-v3 admission without replacing the existing reviewer-v2
+family. There is no generic policy editor or in-place rollback in V1.
 
 For schema-v3 ingest, the installation-signed envelope contains a bounded
 processor instance as signed provenance. Authority validates it structurally
@@ -678,6 +659,7 @@ npm run organization-authority:admin -- member create \
   --membership-type employee
 ```
 
-The included private-key adapter is an explicitly labeled exportable software
-key for the pilot. A later hardware-backed adapter can implement the same
-signer port without changing enrollment or lease protocols.
+The included Authority private-key adapter is an explicitly labeled exportable
+software key for the pilot. A later hardware-backed Authority adapter can
+implement the same signer port. This is server key custody; the Person client
+has no installation signing key.

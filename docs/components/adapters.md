@@ -33,7 +33,8 @@ qualification_ids:
 
 ## Responsibility
 
-`src/adapters/` translates between core ports and external capabilities:
+`services/organization-authority/src/processing/adapters/` translates between
+processing ports and external capabilities:
 
 - meeting sources;
 - decision processors, including LLM providers;
@@ -54,8 +55,8 @@ semantics.
 ## Current references
 
 - [Core and adapters](../architecture/core-and-adapters.md)
-- Source: [`src/adapters/`](../../src/adapters)
-- Adapter tests: [`tests/adapters/`](../../tests/adapters)
+- Source: [`services/organization-authority/src/processing/adapters/`](../../services/organization-authority/src/processing/adapters)
+- Adapter tests: [`services/organization-authority/test/processing/adapters/`](../../services/organization-authority/test/processing/adapters)
 - [Failure-pattern registry](../failure-patterns/README.md)
 - [Qualification](../qualification/README.md)
 

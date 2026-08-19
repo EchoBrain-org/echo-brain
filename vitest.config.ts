@@ -5,10 +5,8 @@ export default defineConfig({
     include: [
       'packages/*/test/**/*.test.ts',
       'services/*/test/**/*.test.ts',
+      'tests/person-client/**/*.test.ts',
       'tests/architecture/**/*.test.ts',
-      'tests/machine/**/*.test.ts',
-      'tests/adapters/**/*.test.ts',
-      'tests/infrastructure/**/*.test.ts',
       'tests/integration/**/*.test.ts',
     ],
     testTimeout: 180_000,

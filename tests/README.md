@@ -1,23 +1,20 @@
 # Test ownership
 
-Tests live at the narrowest layer whose public behavior they exercise:
+Tests live at the narrowest active boundary they exercise:
 
 | Path | Scope |
 | --- | --- |
-| `tests/core/` | vendor-neutral processing |
-| `tests/adapters/` | source, processor, approval, and delivery adapters |
-| `tests/infrastructure/` | filesystem and process primitives |
-| `tests/architecture/` | source, workspace, and cross-boundary conformance |
-| `tests/product/` | product composition, state, and local identity |
-| `tests/machine/` | CLI, lifecycle, credentials, backup, and signer |
-| `tests/integration/` | deliberate product/service crossings |
-| `packages/*/test/` | shared protocols |
-| `services/organization-authority/test/` | central authority |
-| `services/organization-control-plane/test/` | provider connections and grants |
+| `tests/person-client/` | thin Person CLI and private session behavior |
+| `tests/architecture/` | source, workspace, and artifact boundaries |
+| `tests/integration/` | deliberate cross-workspace processing checks |
+| `packages/*/test/` | shared protocol and API contracts |
+| `services/*/test/` | server application, persistence, and runtime behavior |
 
-Useful commands are `npm test`, `npm run test:core`, `npm run test:adapters`,
-`npm run test:infrastructure`, `npm run test:architecture`,
-`npm run test:integration`, `npm run test:product`, `npm run test:machine`,
-`npm run test:local-org`,
-`npm run test:protocols`, `npm run test:authority`, and
-`npm run test:control-plane`. Shared helpers live in `tests/support/`.
+Use `npm test` for the complete active suite. Focused commands include
+`npm run test:person`, `npm run test:authority`, `npm run test:protocols`,
+`npm run test:integration`, and `npm run test:architecture`.
+
+Tests for the retired LaunchAgent machine runtime, local product database,
+installation enrollment client, JSONL outbox, and fleet updater were deleted
+with that production code. Historical qualification evidence remains in
+`docs/qualification/`.

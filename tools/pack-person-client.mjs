@@ -32,7 +32,7 @@ function gitOutput(args) {
 function runCleanBuild() {
   const result = spawnSync(
     process.execPath,
-    [join(repo, 'tools', 'build.mjs')],
+    [join(repo, 'tools', 'build.mjs'), '--person-client'],
     {
       cwd: repo,
       encoding: 'utf8',

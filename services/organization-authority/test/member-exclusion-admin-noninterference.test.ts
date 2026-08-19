@@ -12,7 +12,6 @@ import {
   ORGANIZATION_API_ADMIN_AUDIT_PATH,
   ORGANIZATION_API_ADMIN_ENROLLMENT_GRANTS_PATH,
   ORGANIZATION_API_ADMIN_INSTALLATIONS_PATH,
-  ORGANIZATION_API_ADMIN_INTERNAL_LIVE_ROLLOUT_PATH,
   ORGANIZATION_API_ADMIN_MEMBERSHIPS_PATH,
   ORGANIZATION_API_ADMIN_OVERVIEW_PATH,
   ORGANIZATION_API_PROXY_AUTH_SCHEME,
@@ -120,14 +119,6 @@ function application(
     listEnrollmentGrants: (input?: PageInput) =>
       admin.enrollmentGrants(input),
     listAudit: (input?: PageInput) => admin.audit(input),
-    internalLiveRolloutStatus: () => ({
-      schema_version: 1,
-      kind: 'echo-internal-live-rollout-status',
-      channel: 'internal-live',
-      evaluated_at: NOW,
-      approved_release: null,
-      installations: [],
-    }),
   } as unknown as OrganizationAuthorityHttpApplication;
 }
 
@@ -162,7 +153,6 @@ const ADMIN_PATHS = [
   ORGANIZATION_API_ADMIN_INSTALLATIONS_PATH,
   ORGANIZATION_API_ADMIN_ENROLLMENT_GRANTS_PATH,
   ORGANIZATION_API_ADMIN_AUDIT_PATH,
-  ORGANIZATION_API_ADMIN_INTERNAL_LIVE_ROLLOUT_PATH,
   ORGANIZATION_API_ADMIN_INTEGRATIONS_PATH,
 ] as const;
 

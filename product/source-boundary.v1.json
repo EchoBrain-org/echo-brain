@@ -1,183 +1,28 @@
 {
   "boundary_version": 1,
-  "entry_points": [
-    "src/product/cli.ts",
-    "src/product/index.ts",
-    "src/adapters/index.ts",
-    "src/adapters/delivery-surfaces/jsonl-outbox/index.ts",
-    "src/product/organization/index.ts"
-  ],
-  "allowed_internal_paths": [
-    "src/product/**",
-    "src/adapters/**",
-    "src/infrastructure/filesystem/atomic-write.ts",
-    "src/infrastructure/filesystem/atomic-create.ts",
-    "src/infrastructure/sqlite/migrate.ts",
-    "src/util/json.ts",
-    "src/infrastructure/filesystem/process-file-lock.ts"
-  ],
-  "forbidden_internal_roots": [
-    "src/daemon/",
-    "src/mcp/",
-    "src/coord/",
-    "src/trace/",
-    "src/surfaces/ceo-slack-responder/",
-    "src/cli/commands/orchestration.ts"
-  ],
+  "entry_points": [],
+  "allowed_internal_paths": [],
+  "forbidden_internal_roots": [],
   "removed_internal_roots": [
-    "src/experimental/",
-    "src/capture/",
-    "src/storage/",
-    "src/echo-home/",
-    "src/enrich/",
-    "services/organization-authority/src/processing/adapters/meeting-sources/granola/compatibility/",
-    "src/adapters/communication-channels/",
-    "src/product/federation/"
+    "src/adapters/",
+    "src/infrastructure/",
+    "src/product/*.ts",
+    "src/product/approval/",
+    "src/product/machine/",
+    "src/product/organization/",
+    "src/product/storage/",
+    "src/product/update/",
+    "src/util/"
   ],
-  "allowed_external_runtime_packages": [
-    "@echo-brain/federation-protocol",
-    "@echo-brain/organization-api",
-    "@echo-brain/organization-authority",
-    "@echo-brain/person-client",
-    "@echo-brain/organization-protocol",
-    "ajv",
-    "better-sqlite3"
-  ],
-  "runtime_assets": [
-    "schemas/meeting-context.v1.schema.json",
-    "schemas/runtime-config.v1.schema.json",
-    "src/product/storage/migrations/0001_initial.sql",
-    "src/product/storage/migrations/0002_core_state.sql",
-    "src/product/storage/migrations/0003_federated_founder_identity.sql",
-    "src/product/storage/migrations/0004_remove_legacy_events.sql",
-    "src/product/storage/migrations/0005_organization_access.sql",
-    "src/product/storage/migrations/0006_organization_authority_connection.sql",
-    "src/product/storage/migrations/0007_organization_authority_rebind.sql",
-    "src/product/storage/migrations/0008_remove_federated_founder_identity.sql"
-  ],
-  "layer_rules": [
-    {
-      "name": "adapters-depend-on-contracts-and-narrow-infrastructure",
-      "from": "src/adapters/**",
-      "allowed_imports": [
-        "src/adapters/**",
-        "src/infrastructure/filesystem/process-file-lock.ts"
-      ],
-      "allowed_packages": ["@echo-brain/organization-authority"],
-      "allowed_node_builtins": [
-        "crypto",
-        "fs",
-        "fs/promises",
-        "path",
-        "readline"
-      ]
-    },
-    {
-      "name": "infrastructure-is-product-independent",
-      "from": "src/infrastructure/**",
-      "allowed_imports": ["src/infrastructure/**"],
-      "allowed_packages": ["better-sqlite3"],
-      "allowed_node_builtins": ["crypto", "fs", "fs/promises", "path"]
-    },
-    {
-      "name": "product-storage-implements-core-ports",
-      "from": "src/product/storage/**",
-      "allowed_imports": [
-        "src/product/storage/**",
-        "src/infrastructure/sqlite/**"
-      ],
-      "allowed_packages": [
-        "@echo-brain/organization-authority",
-        "better-sqlite3"
-      ],
-      "allowed_node_builtins": ["fs", "path", "url"]
-    },
-    {
-      "name": "machine-security-owns-os-key-lifecycle",
-      "from": "src/product/machine/**",
-      "allowed_imports": [
-        "src/product/machine/**",
-        "src/product/secure-local-files.ts",
-        "src/infrastructure/filesystem/atomic-create.ts"
-      ],
-      "allowed_packages": ["@echo-brain/federation-protocol"],
-      "allowed_node_builtins": ["crypto", "fs", "path"]
-    },
-    {
-      "name": "product-root-composes-the-runtime",
-      "from": "src/product/*.ts",
-      "allowed_imports": [
-        "src/product/*.ts",
-        "src/product/approval/**",
-        "src/product/machine/**",
-        "src/product/organization/**",
-        "src/product/storage/**",
-        "src/adapters/**",
-        "src/infrastructure/**",
-        "src/util/**"
-      ],
-      "allowed_packages": [
-        "@echo-brain/organization-authority",
-        "@echo-brain/person-client",
-        "ajv",
-        "better-sqlite3"
-      ],
-      "allowed_node_builtins": [
-        "child_process",
-        "crypto",
-        "fs",
-        "module",
-        "os",
-        "path",
-        "stream",
-        "url",
-        "util"
-      ]
-    },
-    {
-      "name": "organization-client-speaks-only-the-authority-protocols",
-      "from": "src/product/organization/**",
-      "allowed_imports": [
-        "src/product/organization/**",
-        "src/product/machine/**",
-        "src/product/storage/**",
-        "src/product/secure-local-files.ts"
-      ],
-      "allowed_packages": [
-        "@echo-brain/federation-protocol",
-        "@echo-brain/organization-api",
-        "@echo-brain/organization-authority",
-        "@echo-brain/organization-protocol"
-      ],
-      "allowed_node_builtins": ["buffer", "crypto", "fs", "https", "path"]
-    },
-    {
-      "name": "approval-gates-use-the-retirement-fence",
-      "from": "src/product/approval/**",
-      "allowed_imports": [
-        "src/product/approval/**",
-        "src/product/retired-founder-provenance.ts",
-        "src/infrastructure/**",
-        "src/util/**"
-      ],
-      "allowed_packages": ["@echo-brain/organization-authority"],
-      "allowed_node_builtins": ["crypto", "fs", "path"]
-    },
-    {
-      "name": "util-is-leaf-shared-code",
-      "from": "src/util/**",
-      "allowed_imports": [],
-      "allowed_packages": [],
-      "allowed_node_builtins": ["fs"]
-    }
-  ],
+  "allowed_external_runtime_packages": [],
+  "runtime_assets": [],
+  "layer_rules": [],
   "adapter_architecture": {
     "core_root": "services/organization-authority/src/processing/core/**",
     "adapters_roots": [
-      "src/adapters/",
       "services/organization-authority/src/processing/adapters/"
     ],
     "forbid_discovered_adapter_ids_in_core": true
   },
-  "child_process_owner": "src/product/spawn-sanitized-child.ts"
+  "child_process_owner": null
 }

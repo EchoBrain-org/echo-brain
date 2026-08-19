@@ -17,7 +17,6 @@ import { afterAll, describe, expect, it } from 'vitest';
 
 const REPO = resolve(import.meta.dirname, '../..');
 const REGISTRY = 'tools/workspace-source-boundaries.v1.json';
-const PRODUCT_BOUNDARY = 'product/source-boundary.v1.json';
 const tmpDirs: string[] = [];
 
 afterAll(() =>
@@ -48,12 +47,6 @@ interface BoundaryManifest {
   allowed_node_builtins: string[];
   forbidden_repository_roots?: string[];
   runtime_assets?: string[];
-  layer_rules: LayerRule[];
-}
-
-interface ProductBoundary {
-  allowed_internal_paths: string[];
-  runtime_assets: string[];
   layer_rules: LayerRule[];
 }
 
@@ -193,93 +186,6 @@ describe('workspace source boundaries', () => {
     }
   });
 
-  // The local-organization refinement is governed by both the registry pass
-  // and the product closure walk. Containment is asserted before a nested
-  // manifest can permit an import the root product boundary rejects.
-  it('keeps every nested boundary inside the product boundary', () => {
-    const registry = readJson<Registry>(REGISTRY);
-    const product = readJson<ProductBoundary>(PRODUCT_BOUNDARY);
-    const violations: string[] = [];
-
-    for (const manifestPath of registry.manifests) {
-      const manifest = readJson<BoundaryManifest>(manifestPath);
-      if (manifest.workspace) continue;
-      for (const path of manifest.allowed_internal_paths) {
-        if (
-          !product.allowed_internal_paths.some((allowed) =>
-            matchesGlob(path, allowed),
-          )
-        ) {
-          violations.push(
-            `${manifest.name}: allowed_internal_paths leaves the product boundary: ${path}`,
-          );
-        }
-      }
-      for (const rule of manifest.layer_rules) {
-        const productRules = product.layer_rules.filter((candidate) =>
-          matchesGlob(rule.from, candidate.from),
-        );
-        if (productRules.length !== 1) {
-          violations.push(
-            `${manifest.name}: layer rule '${rule.name}' matches ${productRules.length} product layer rules`,
-          );
-          continue;
-        }
-        const [productRule] = productRules;
-        for (const path of rule.allowed_imports) {
-          if (
-            !productRule.allowed_imports.some((allowed) =>
-              matchesGlob(path, allowed),
-            )
-          ) {
-            violations.push(
-              `${manifest.name}: layer rule '${rule.name}' allows an import product rule '${productRule.name}' rejects: ${path}`,
-            );
-          }
-        }
-      }
-    }
-
-    expect(violations).toEqual([]);
-  });
-
-  it('keeps product workspaces inside the governed product tree', () => {
-    const registry = readJson<Registry>(REGISTRY);
-    const product = readJson<ProductBoundary>(PRODUCT_BOUNDARY);
-    const listed = spawnSync(
-      'git',
-      ['ls-files', '--cached', '--others', '--exclude-standard', '-z'],
-      { cwd: REPO, encoding: 'utf8' },
-    );
-    expect(listed.status, listed.stdout + listed.stderr).toBe(0);
-    const sourceFiles = listed.stdout
-      .split('\0')
-      .filter((path) => /\.(?:[cm]?[jt]sx?)$/.test(path));
-    const outsideProduct: string[] = [];
-
-    for (const manifestPath of registry.manifests) {
-      const manifest = readJson<BoundaryManifest>(manifestPath);
-      if (
-        !manifest.workspace ||
-        !manifest.boundary_root.startsWith('src/product/')
-      ) {
-        continue;
-      }
-      for (const path of sourceFiles) {
-        if (
-          manifest.owned_source_paths.some((owned) => matchesGlob(path, owned)) &&
-          !product.allowed_internal_paths.some((allowed) =>
-            matchesGlob(path, allowed),
-          )
-        ) {
-          outsideProduct.push(`${manifest.name}: ${path}`);
-        }
-      }
-    }
-
-    expect(outsideProduct).toEqual([]);
-  });
-
   it('locks the one-way workspace dependency graph', () => {
     const registry = readJson<Registry>(REGISTRY);
     const graph = Object.fromEntries(
@@ -308,12 +214,6 @@ describe('workspace source boundaries', () => {
       '@echo-brain/organization-record': ['@echo-brain/federation-protocol'],
       '@echo-brain/organization-retrieval': [
         '@echo-brain/federation-protocol',
-      ],
-      'echo-brain/local-organization': [
-        '@echo-brain/federation-protocol',
-        '@echo-brain/organization-api',
-        '@echo-brain/organization-authority',
-        '@echo-brain/organization-protocol',
       ],
       '@echo-brain/person-client': [
         '@echo-brain/federation-protocol',
@@ -413,7 +313,6 @@ describe('workspace source boundaries', () => {
         'services/organization-control-plane',
         'services/organization-control-plane/source-boundary.v1.json',
       ],
-      ['src/product/storage', PRODUCT_BOUNDARY],
     ]) {
       const manifest = readJson<{ runtime_assets?: string[] }>(manifestPath);
       const migrations = readdirSync(join(REPO, root, 'migrations'))
@@ -916,15 +815,15 @@ describe('workspace source boundaries', () => {
     );
   });
 
-  it('rejects product source files that do not belong to a declared layer', () => {
+  it('keeps retired machine product roots absent', () => {
     const fixture = fixtureRepository();
-    const orphan = join(fixture, 'src/product/unlayered/orphan.ts');
+    const orphan = join(fixture, 'src/product/organization/orphan.ts');
     mkdirSync(dirname(orphan), { recursive: true });
     writeFileSync(orphan, 'export {};\n');
     const result = runBoundary(fixture);
     expect(result.status).not.toBe(0);
     expect(result.stdout + result.stderr).toContain(
-      'product source file has no layer rule',
+      'module remains under removed internal root',
     );
   });
 
@@ -937,7 +836,6 @@ describe('workspace source boundaries', () => {
     };
     expect(report.discovered_adapter_ids).toEqual([
       'granola',
-      'jsonl-outbox',
       'llm',
       'slack',
       'slack-reactions',
@@ -1060,40 +958,6 @@ describe('workspace source boundaries', () => {
     expect(restored.status, restored.stdout + restored.stderr).toBe(0);
   });
 
-  it('applies package and builtin allowlists to root product layers', () => {
-    const fixture = fixtureRepository();
-    writeFileSync(
-      join(fixture, 'src/util/json.ts'),
-      [
-        `import '@echo-brain/organization-api';`,
-        `import 'node:crypto';`,
-        'export {};',
-        '',
-      ].join('\n'),
-    );
-
-    const result = runBoundary(fixture);
-    expect(result.status).not.toBe(0);
-    expect(result.stdout + result.stderr).toContain(
-      "layer rule 'util-is-leaf-shared-code' rejects package @echo-brain/organization-api",
-    );
-    expect(result.stdout + result.stderr).toContain(
-      "layer rule 'util-is-leaf-shared-code' rejects Node builtin node:crypto",
-    );
-
-    writeFileSync(join(fixture, 'src/util/json.ts'), 'export {};\n');
-    const forbiddenAdapterPath = '../../adapters/delivery-surfaces/jsonl-outbox/index.js';
-    writeFileSync(
-      join(fixture, 'src/product/approval/probe.ts'),
-      `export * from '${forbiddenAdapterPath}';\n`,
-    );
-    const narrowDriverResult = runBoundary(fixture);
-    expect(narrowDriverResult.status).not.toBe(0);
-    expect(narrowDriverResult.stdout + narrowDriverResult.stderr).toContain(
-      "layer rule 'approval-gates-use-the-retirement-fence' rejects edge",
-    );
-  });
-
   it('applies builtin and external allowlists at the matching layer', () => {
     const fixture = fixtureRepository();
     const manifestPath =
@@ -1137,7 +1001,7 @@ describe('workspace source boundaries', () => {
     manifest.owned_source_paths = [
       'services/organization-authority/src/domain/**',
     ];
-    manifest.entry_points = ['src/product/index.ts'];
+    manifest.entry_points = ['tests/not-an-authority-entry.ts'];
     writeFixtureJson(fixture, manifestPath, manifest);
 
     const result = runBoundary(fixture);

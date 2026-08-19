@@ -26,9 +26,9 @@ qualification_ids:
 
 ## Responsibility
 
-`src/core/` owns the provider-neutral decision pipeline, domain contracts,
-ports, processing rules, approval state, delivery contracts, and storage
-interfaces.
+`services/organization-authority/src/processing/core/` owns the
+provider-neutral decision pipeline, domain contracts, ports, processing rules,
+approval state, delivery contracts, and storage interfaces.
 
 It does not own provider HTTP behavior, operating-system lifecycle,
 organization deployment, or concrete persistence.

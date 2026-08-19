@@ -6,18 +6,10 @@
     "types": ["node", "vitest/globals"]
   },
   "include": [
-    "src/**/*.ts",
     "packages/*/test/**/*.ts",
     "services/*/test/**/*.ts",
-    "tests/architecture/**/*.ts",
-    "tests/machine/**/*.ts",
-    "tests/adapters/**/*.ts",
-    "tests/infrastructure/**/*.ts",
-    "tests/integration/**/*.ts",
-    "tests/product/**/*.ts",
-    "tests/support/**/*.ts",
+    "tests/**/*.ts",
     "vitest.config.ts",
-    "vitest.package.config.ts",
-    "vitest.product.config.ts"
+    "vitest.package.config.ts"
   ]
 }

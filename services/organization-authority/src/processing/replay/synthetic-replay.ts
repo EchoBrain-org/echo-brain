@@ -31,13 +31,16 @@ import {
   type MeetingPullRequest,
   type MeetingSourceAdapter,
 } from '../core/index.js';
-import { decisionApprovalId } from '../approval/decision-node.js';
 import {
   STRUCTURED_TEXT_DECISION_PROCESSOR_ADAPTER_ID,
   createStructuredTextDecisionProcessor,
 } from '../adapters/decision-processors/structured-text/structured-text-decision-processor.js';
 
 export const SYNTHETIC_REPLAY_CLOCK = '2026-08-18T00:00:00.000Z';
+
+function decisionApprovalId(processingKey: string): string {
+  return createHash('sha256').update(processingKey).digest('hex');
+}
 
 export type SyntheticReviewDisposition = 'accept' | 'edit' | 'reject';
 

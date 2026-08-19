@@ -4,11 +4,11 @@ import { describe, expect, it } from 'vitest';
 import { canonicalJson } from '@echo-brain/federation-protocol';
 import {
   createStructuredTextDecisionProcessor,
-} from '@echo-brain/organization-authority/processing/adapters/decision-processors/structured-text/structured-text-decision-processor.js';
-import type { MeetingBatch, MeetingDocument } from '@echo-brain/organization-authority/processing/core/contracts/meeting.js';
+} from '../../services/organization-authority/src/processing/adapters/decision-processors/structured-text/structured-text-decision-processor.js';
+import type { MeetingBatch, MeetingDocument } from '../../services/organization-authority/src/processing/core/contracts/meeting.js';
 import {
   assertCanonicalMeetingBatch,
-} from '@echo-brain/organization-authority/processing/core/contracts/validation.js';
+} from '../../services/organization-authority/src/processing/core/contracts/validation.js';
 
 const FIXED_NOW = '2026-08-18T12:00:00.000Z';
 const corpusPath = new URL(

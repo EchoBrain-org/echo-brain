@@ -9,42 +9,6 @@
     ".": {
       "types": "./dist/main.d.ts",
       "import": "./dist/main.js"
-    },
-    "./processing/core/*.js": {
-      "types": "./dist/processing/core/*.d.ts",
-      "import": "./dist/processing/core/*.js"
-    },
-    "./processing/adapters/decision-processors/*.js": {
-      "types": "./dist/processing/adapters/decision-processors/*.d.ts",
-      "import": "./dist/processing/adapters/decision-processors/*.js"
-    },
-    "./processing/adapters/meeting-sources/*.js": {
-      "types": "./dist/processing/adapters/meeting-sources/*.d.ts",
-      "import": "./dist/processing/adapters/meeting-sources/*.js"
-    },
-    "./processing/adapters/approval-surfaces/*.js": {
-      "types": "./dist/processing/adapters/approval-surfaces/*.d.ts",
-      "import": "./dist/processing/adapters/approval-surfaces/*.js"
-    },
-    "./processing/adapters/delivery-surfaces/*.js": {
-      "types": "./dist/processing/adapters/delivery-surfaces/*.d.ts",
-      "import": "./dist/processing/adapters/delivery-surfaces/*.js"
-    },
-    "./processing/authorization/*.js": {
-      "types": "./dist/processing/authorization/*.d.ts",
-      "import": "./dist/processing/authorization/*.js"
-    },
-    "./processing/approval/*.js": {
-      "types": "./dist/processing/approval/*.d.ts",
-      "import": "./dist/processing/approval/*.js"
-    },
-    "./processing/replay/*.js": {
-      "types": "./dist/processing/replay/*.d.ts",
-      "import": "./dist/processing/replay/*.js"
-    },
-    "./processing/record/*.js": {
-      "types": "./dist/processing/record/*.d.ts",
-      "import": "./dist/processing/record/*.js"
     }
   },
   "files": [

@@ -2,47 +2,30 @@
 
 **Status:** Current
 
-Echo Brain has a tool-neutral core surrounded by replaceable adapters. Vendors
-may shape an adapter, but never the product's canonical records or processing
-rules.
+ECHO has a provider-neutral processing core surrounded by replaceable server
+adapters. Vendors may shape transport and mapping, but never canonical records
+or processing rules.
 
 ## Dependency direction
 
 ```text
-provider API -> adapter -> core contracts <- core orchestration
-                    |                 ^
-                    v                 |
-         narrow infrastructure   product composition
-                                      |
-                 machine ports + local stores + retirement fence
+provider API -> server adapter -> processing contracts <- processing cycle
+                                           ^                 |
+                                           |                 v
+                                  Authority composition -> durable server state
 ```
 
-- Core never imports adapters or vendor SDKs.
-- Adapters implement core ports and do not orchestrate sibling adapters.
-- Product composition selects concrete adapters, credentials, and stores.
-- Core tests use vendor-neutral fakes.
+- `services/organization-authority/src/processing/core/` imports no adapters,
+  vendor SDKs, Authority composition, or persistence implementation.
+- `processing/adapters/` implement typed core ports and own provider transport.
+- `processing/storage/` owns Authority processing durability.
+- `processing/live/` composes one bounded server cycle.
+- Authority composition selects concrete adapters, credentials, organization
+  policy, and stores.
 
-These directions are executable policy, not naming conventions:
-
-- `src/core/**` may import only core.
-- `src/adapters/**` may import adapters, core contracts, and specifically
-  declared infrastructure primitives.
-- `src/infrastructure/**` is product-independent.
-- `src/product/storage/**` implements core ports over narrow infrastructure.
-- `src/product/machine/**` owns operating-system and installation-bound
-  capabilities such as the private-key lifecycle.
-- Local organization code receives the machine signer port and product database
-  opener; portable trust primitives come from the shared
-  `@echo-brain/federation-protocol` workspace, and no product-local federation
-  implementation exists to import.
-
-`npm run check:boundary` enforces these rules. Test directories mirror the same
-ownership, with deliberate crossings confined to `tests/integration/`.
-Every root layer rule independently allowlists relative imports, runtime
-packages, and Node builtins; a dependency being available to the overall
-product does not make it available to core, adapters, infrastructure, storage,
-or machine code. Local organization also has its own non-workspace
-source-boundary manifest.
+`npm run check:boundary` enforces these rules for every owned source file, not
+only today's entry-point closure. Processing tests live beside the Authority;
+cross-workspace checks remain under `tests/integration/`.
 
 ## Canonical flow
 
@@ -50,134 +33,71 @@ source-boundary manifest.
 meeting source
   -> canonical meeting revision
   -> decision processor
-  -> canonical decisions, actions, rationales, and evidence
+  -> canonical signals and evidence
   -> exact approval snapshot
   -> delivery surface
-  -> delivery receipt
+  -> acknowledged delivery receipt
 ```
 
-Core owns the canonical records, pipeline semantics, and persistence ports.
-Product owns concrete durable state, approval history, local identity and the
-retired-founder cutover fence, and runtime lifecycle. Adapters own provider authentication, API behavior,
-mapping, pagination, and error translation.
+The server owns source cursors, processing state, pending approvals, delivery
+receipts, and organization-record submission. The Person client owns none of
+that state and cannot load provider adapters.
 
 ## Typed capabilities
 
-- A **meeting source** pulls changed meetings and returns canonical meeting
-  documents plus an opaque cursor.
-- A **decision processor** turns one canonical meeting revision into a canonical
-  decision set with evidence.
-- An **approval surface** presents the exact staged brief and records an explicit
-  human decision.
-- A **delivery surface** publishes an approved, destination-neutral envelope and
-  returns a receipt.
+- A **meeting source** pulls changed meetings and returns canonical documents
+  plus an opaque cursor.
+- A **decision processor** turns one canonical revision into decisions,
+  actions, rationales, and source-linked evidence.
+- An **approval surface** presents the exact staged brief and records an
+  explicit human outcome.
+- A **delivery surface** publishes an approved destination-neutral envelope
+  and returns a provider receipt.
 
-Approval and delivery are separate capabilities even when they use the same
-provider, connection, or channel.
-
-## Canonical boundary
-
-Canonical contracts live under `src/core`. Provider-specific values stay in
-adapter configuration or bounded extensions. Missing provider facts remain
-missing; adapters never invent portable data.
-
-Every extracted claim retains evidence resolving to an exact meeting revision
-and source location. Source revisions are preserved rather than overwritten.
-Processor identity and input fingerprint make extraction repeatable and
-auditable.
-
-Host configuration may select adapters, but core does not understand provider
-concepts such as workspaces, channels, notes, projects, or repositories.
-Cursors, destinations, and adapter settings remain opaque outside their owning
-adapter.
+Approval and delivery remain separate capabilities even when they share a
+provider or channel.
 
 ## Cross-capability invariants
 
-- Canonical source identity includes capability, adapter, instance, external ID,
-  and source revision. Processing identity additionally includes processor
-  adapter, instance, and version. Durable provider identity comes from
-  connection, tenant, and account evidence.
+- Source identity includes adapter, instance, external ID, and revision.
+  Processing identity also includes processor adapter, instance, and version.
 - Repeating the same source, processing, approval, or delivery operation is
   idempotent.
-- An opaque cursor returns only to the source instance and version that issued
-  it; version changes reset it unless that adapter explicitly migrates it.
-- Pending approval pins source progress and always refers to its original brief.
+- A cursor returns only to the exact source instance and version that issued
+  it.
+- Pending approval pins its source revision and staged brief.
 - Delivery uses the stored approved snapshot, never regenerated content.
-- Provider acknowledgement is required before a delivery is called successful.
+- Provider acknowledgement is required before success is recorded.
 - Unknown remote outcomes remain unknown and retry conservatively.
 - Authentication, invalid input, rejection, rate limiting, temporary failure,
-  and unknown outcome stay distinguishable.
+  and unknown outcome remain distinguishable.
 - Calls are bounded and cancellable.
 - Only explicit permanent rejection becomes a dead letter.
 
-## Capability checklists
+## Adapter responsibilities
 
-Provider verification is an endpoint-specific protocol, not a generic HTTP
-success check. Each adapter must test the documented method and parameter
-encoding, keep credentials out of URLs, refuse redirects, and reject malformed
-success bodies. Health proves reachability only. Authorization-grade identity
-must correlate the provider's tenant, user, bot, application, scope, and
-disabled/deleted state across every endpoint used in the proof. Real-provider
-probes must record only sanitized identifiers and outcomes, never credentials
-or source content.
+Each adapter must:
 
-### Meeting source
+- state the strongest provider account or tenant identity it can prove;
+- keep credentials out of URLs, records, logs, and Person responses;
+- refuse redirects where they could cross an authentication boundary;
+- validate success bodies rather than trusting HTTP status alone;
+- map available facts without inventing missing portable data;
+- preserve source revisions and exact evidence locations; and
+- define retry, crash, concurrency, and reconciliation behavior.
 
-- State the strongest provider account or tenant identity the API can prove and
-  the assurance recorded when it cannot.
-- Define stable source identity, deterministic revisions, and an opaque cursor.
-- Map available material without fabricating unavailable content.
-- Preserve participants, speakers, timestamps, and evidence locations when
-  known.
+The bundled `llm` decision processor owns one canonical prompt/output/evidence
+contract. Its Ollama, OpenAI, Anthropic, and OpenRouter drivers own only
+provider authentication, wire translation, capability checks, response
+extraction, and error normalization.
 
-### Decision processor
-
-- State the strongest provider account or tenant identity the API can prove and
-  the assurance recorded when it cannot.
-- Accept only canonical meetings and emit only canonical signals with evidence.
-- Declare processor identity and, when model-backed, model and
-  prompt/configuration version, so runtime records can distinguish which
-  processor produced a result. The retired standalone processor-attribution
-  wire contract and schema are not part of the minimum product.
-- Reject malformed output and bound retries and execution time.
-
-The bundled `llm` processor is one semantic adapter with narrow provider
-drivers. The shared processor owns the prompt, canonical structured-output
-schema, parsing, decision validation, and request-local source-block evidence
-gate. The model cites a short block alias; the adapter resolves it to the
-canonical meeting block without asking the model to reproduce source text.
-Ollama,
-OpenAI, Anthropic, and OpenRouter drivers own only authentication, wire-format
-translation, model capability checks, response extraction, and error
-normalization. A provider driver must not weaken or specialize the semantic
-prompt or evidence rules for an individual vendor or model.
-
-### Approval surface
-
-- State the strongest provider account or tenant identity the API can prove and
-  the assurance recorded when it cannot.
-- Present and resolve the exact staged snapshot; never regenerate it.
-- Record the presentation, provider reference, actor, reason, and observation.
-- Resolve only an explicit, unambiguous action by an enrolled or allowlisted
-  actor; missing or conflicting provider observations remain pending.
-- Namespace actors by provider tenant. Slack actors are at least
-  `(team_id, user_id)`, never a bare user ID.
-- Treat reviewer labels as display-only; the authoritative actor is the
-  tenant-namespaced provider subject with captured assurance.
-- Remain independent from delivery.
-
-### Delivery surface
-
-- State the strongest provider account or tenant identity the API can prove and
-  the assurance recorded when it cannot.
-- Accept only approved destination-neutral envelopes.
-- Keep provider destinations adapter-owned.
-- Honor idempotency and retain acknowledged external receipts.
-- Distinguish rejection, retryable failure, and unknown outcome.
+Slack approval and delivery adapters share a narrow transport but retain
+separate authorization, idempotency, and receipt semantics. Slack actors are
+tenant-namespaced `(team_id, user_id)` subjects, never bare user IDs.
 
 ## Extension rule
 
-A new integration begins as a typed capability, not a generic adapter. It must
-keep vendor types behind its boundary, declare identity and failure semantics,
-provide a conforming fake, and pass capability-level contract tests. The core
-must still compile and test when that adapter is removed.
+A new integration begins as a typed capability, not a generic plugin. It keeps
+vendor types behind its adapter boundary, declares identity and failure
+semantics, supplies deterministic fakes, and passes capability-level tests.
+The processing core must still compile and test when that adapter is absent.

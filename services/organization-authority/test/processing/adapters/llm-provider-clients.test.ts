@@ -1,11 +1,9 @@
 import { describe, expect, it } from 'vitest';
-import {
-  AnthropicClient,
-  OllamaClient,
-  OpenAiClient,
-  OpenRouterClient,
-  type StructuredGenerationRequest,
-} from '../../../src/processing/adapters/decision-processors/llm/index.js';
+import { AnthropicClient } from '../../../src/processing/adapters/decision-processors/llm/anthropic-client.js';
+import { OllamaClient } from '../../../src/processing/adapters/decision-processors/llm/ollama-client.js';
+import { OpenAiClient } from '../../../src/processing/adapters/decision-processors/llm/openai-client.js';
+import { OpenRouterClient } from '../../../src/processing/adapters/decision-processors/llm/openrouter-client.js';
+import type { StructuredGenerationRequest } from '../../../src/processing/adapters/decision-processors/llm/llm-provider.js';
 
 const generationRequest: StructuredGenerationRequest = {
   model: 'provider-model',

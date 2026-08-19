@@ -38,19 +38,19 @@ qualification_ids:
 
 ## Responsibility
 
-This cross-cutting domain establishes who a device or human is and whether the
-caller currently has organization access. It includes installation identity,
-Authority pinning, enrollment, Person sessions, principals, memberships,
-provider identity links, access renewal, expiry, and revocation.
+This cross-cutting domain establishes who a human is and whether the caller
+currently has organization access. It includes Authority pinning, Person
+sessions, principals, memberships, provider identity links, expiry, and
+revocation. Historical installation enrollment and access state remain as
+server compatibility until record and approval bindings are re-keyed.
 
 It does not decide which particular organization content a caller may read;
 that belongs to [permissions](permissions.md).
 
 ## Authority split
 
-- The Mac owns its installation key and locally accepted high-watermarks.
 - The Person client owns only its private Authority-issued session credential
-  pair and no organization/provider credential.
+  pair and no installation or organization/provider credential.
 - The central Authority owns organization principals, memberships,
   enrollments, grants, and current signed access state.
 - The control plane owns verified provider identity and its binding to central
@@ -62,7 +62,6 @@ that belongs to [permissions](permissions.md).
 
 - [Identity and onboarding](../architecture/identity-and-onboarding.md)
 - [Organization control plane](../architecture/organization-control-plane.md)
-- Local boundary: [`src/product/organization/`](../../src/product/organization)
 - Person-client boundary: [`src/product/person-client/`](../../src/product/person-client)
 - Authority: [`services/organization-authority/`](../../services/organization-authority)
 - Control plane: [`services/organization-control-plane/`](../../services/organization-control-plane)

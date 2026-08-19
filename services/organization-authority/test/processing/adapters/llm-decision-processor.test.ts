@@ -9,9 +9,11 @@ import {
 import {
   LlmDecisionProcessor,
   llmProcessingVersion,
-  type LlmProviderClient,
-  type StructuredGenerationRequest,
-} from '../../../src/processing/adapters/decision-processors/llm/index.js';
+} from '../../../src/processing/adapters/decision-processors/llm/llm-decision-processor.js';
+import type {
+  LlmProviderClient,
+  StructuredGenerationRequest,
+} from '../../../src/processing/adapters/decision-processors/llm/llm-provider.js';
 import { adapterConformance } from '../../../../../tests/support/adapter-conformance.js';
 
 const processorConfig: AdapterConfig = {

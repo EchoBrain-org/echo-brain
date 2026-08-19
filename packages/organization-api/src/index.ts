@@ -146,8 +146,6 @@ export {
 export {
   ORGANIZATION_API_ACCESS_LEASES_PATH,
   ORGANIZATION_API_ADMIN_AUDIT_PATH,
-  ORGANIZATION_API_ADMIN_INTERNAL_LIVE_RELEASES_PATH,
-  ORGANIZATION_API_ADMIN_INTERNAL_LIVE_ROLLOUT_PATH,
   ORGANIZATION_API_ADMIN_AUTH_SCHEME,
   ORGANIZATION_API_ADMIN_ENROLLMENT_GRANTS_PATH,
   ORGANIZATION_API_ADMIN_INSTALLATIONS_PATH,
@@ -156,8 +154,6 @@ export {
   ORGANIZATION_API_AUTHORITY_DESCRIPTOR_PATH,
   ORGANIZATION_API_ENROLLMENT_AUTH_SCHEME,
   ORGANIZATION_API_ENROLLMENTS_PATH,
-  ORGANIZATION_API_INTERNAL_LIVE_DIRECTIVES_PATH,
-  ORGANIZATION_API_INTERNAL_LIVE_RECEIPTS_PATH,
   ORGANIZATION_API_PERMISSION_CHECKS_PATH,
   ORGANIZATION_API_ADMIN_MEMBER_EXCLUSION_BREAK_GLASS_PATH,
   ORGANIZATION_API_PERSON_MEMBER_EXCLUSION_LIST_PATH,
@@ -316,32 +312,3 @@ export {
   verifyOrganizationReadableSearchRequest,
 } from './readable-search.js';
 export type { CreateOrganizationReadableSearchRequestInput } from './readable-search.js';
-export {
-  compareOrganizationInternalLiveReleaseVersions,
-  createOrganizationInternalLiveDirectiveRequest,
-  createOrganizationInternalLiveUpdateReceipt,
-  organizationInternalLiveDirectiveRequestSha256,
-  organizationInternalLiveManifestSha256,
-  organizationInternalLiveUpdateReceiptSha256,
-  validateApproveOrganizationInternalLiveReleaseRequest,
-  validateOrganizationInternalLiveDirectiveRequest,
-  validateOrganizationInternalLiveReleaseManifest,
-  validateOrganizationInternalLiveRolloutStatus,
-  validateOrganizationInternalLiveUpdateDirective,
-  validateOrganizationInternalLiveUpdateReceipt,
-  verifyOrganizationInternalLiveDirectiveRequest,
-  verifyOrganizationInternalLiveUpdateReceipt,
-} from './internal-live.js';
-export type {
-  ApproveOrganizationInternalLiveReleaseRequestV1,
-  OrganizationInternalLiveDirectiveRequestPayloadV1,
-  OrganizationInternalLiveDirectiveRequestV1,
-  OrganizationInternalLiveReleaseManifestV1,
-  OrganizationInternalLiveRolloutReceiptSummaryV1,
-  OrganizationInternalLiveRolloutStatusV1,
-  OrganizationInternalLiveUpdateDirectiveV1,
-  OrganizationInternalLiveUpdateFailurePhaseV1,
-  OrganizationInternalLiveUpdateOutcomeV1,
-  OrganizationInternalLiveUpdateReceiptPayloadV1,
-  OrganizationInternalLiveUpdateReceiptV1,
-} from './internal-live.js';

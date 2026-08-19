@@ -267,27 +267,6 @@
       "allowed_node_builtins": []
     },
     {
-      "name": "processing-decision-processors-namespace-index",
-      "from": "services/organization-authority/src/processing/adapters/decision-processors/index.ts",
-      "allowed_imports": [
-        "services/organization-authority/src/processing/core/**",
-        "services/organization-authority/src/processing/adapters/decision-processors/**"
-      ],
-      "allowed_workspace_packages": [],
-      "allowed_external_packages": [],
-      "allowed_node_builtins": []
-    },
-    {
-      "name": "processing-llm-namespace-index",
-      "from": "services/organization-authority/src/processing/adapters/decision-processors/llm/index.ts",
-      "allowed_imports": [
-        "services/organization-authority/src/processing/adapters/decision-processors/llm/**"
-      ],
-      "allowed_workspace_packages": [],
-      "allowed_external_packages": [],
-      "allowed_node_builtins": []
-    },
-    {
       "name": "processing-llm-decision-processor-composes-provider-drivers",
       "from": "services/organization-authority/src/processing/adapters/decision-processors/llm/llm-*.ts",
       "allowed_imports": [
@@ -319,17 +298,6 @@
       "allowed_workspace_packages": [],
       "allowed_external_packages": [],
       "allowed_node_builtins": ["crypto"]
-    },
-    {
-      "name": "processing-meeting-sources-namespace-index",
-      "from": "services/organization-authority/src/processing/adapters/meeting-sources/index.ts",
-      "allowed_imports": [
-        "services/organization-authority/src/processing/core/**",
-        "services/organization-authority/src/processing/adapters/meeting-sources/**"
-      ],
-      "allowed_workspace_packages": [],
-      "allowed_external_packages": [],
-      "allowed_node_builtins": []
     },
     {
       "name": "processing-granola-namespace-index",
@@ -380,52 +348,11 @@
       "allowed_node_builtins": []
     },
     {
-      "name": "processing-approval-surfaces-namespace-index",
-      "from": "services/organization-authority/src/processing/adapters/approval-surfaces/index.ts",
-      "allowed_imports": [
-        "services/organization-authority/src/processing/core/**",
-        "services/organization-authority/src/processing/adapters/approval-surfaces/**"
-      ],
-      "allowed_workspace_packages": [],
-      "allowed_external_packages": [],
-      "allowed_node_builtins": []
-    },
-    {
-      "name": "processing-slack-reactions-namespace-index",
-      "from": "services/organization-authority/src/processing/adapters/approval-surfaces/slack-reactions/index.ts",
-      "allowed_imports": [
-        "services/organization-authority/src/processing/adapters/approval-surfaces/slack-reactions/**"
-      ],
-      "allowed_workspace_packages": [],
-      "allowed_external_packages": [],
-      "allowed_node_builtins": []
-    },
-    {
       "name": "processing-slack-reactions-approval-surface-uses-the-shared-transport",
       "from": "services/organization-authority/src/processing/adapters/approval-surfaces/slack-reactions/slack-reactions-approval-surface.ts",
       "allowed_imports": [
         "services/organization-authority/src/processing/core/**",
         "services/organization-authority/src/processing/adapters/shared/slack/**"
-      ],
-      "allowed_workspace_packages": [],
-      "allowed_external_packages": [],
-      "allowed_node_builtins": []
-    },
-    {
-      "name": "processing-slack-reactions-transport-reexport-owns-no-logic",
-      "from": "services/organization-authority/src/processing/adapters/approval-surfaces/slack-reactions/slack-web-api-client.ts",
-      "allowed_imports": [
-        "services/organization-authority/src/processing/adapters/shared/slack/slack-web-api-client.ts"
-      ],
-      "allowed_workspace_packages": [],
-      "allowed_external_packages": [],
-      "allowed_node_builtins": []
-    },
-    {
-      "name": "processing-slack-delivery-namespace-index",
-      "from": "services/organization-authority/src/processing/adapters/delivery-surfaces/slack/index.ts",
-      "allowed_imports": [
-        "services/organization-authority/src/processing/adapters/delivery-surfaces/slack/**"
       ],
       "allowed_workspace_packages": [],
       "allowed_external_packages": [],
@@ -472,17 +399,6 @@
       "allowed_node_builtins": []
     },
     {
-      "name": "processing-approval-decision-node-reads-core-and-evidence",
-      "from": "services/organization-authority/src/processing/approval/decision-node.ts",
-      "allowed_imports": [
-        "services/organization-authority/src/processing/core/**",
-        "services/organization-authority/src/processing/authorization/**"
-      ],
-      "allowed_workspace_packages": [],
-      "allowed_external_packages": [],
-      "allowed_node_builtins": ["crypto"]
-    },
-    {
       "name": "processing-approval-outcome-instrument-reads-only-core",
       "from": "services/organization-authority/src/processing/approval/approval-outcome-instrument.ts",
       "allowed_imports": [
@@ -493,71 +409,16 @@
       "allowed_node_builtins": []
     },
     {
-      "name": "processing-store-backed-approval-gate-uses-decision-node-port",
-      "from": "services/organization-authority/src/processing/approval/store-backed-approval-gate.ts",
-      "allowed_imports": [
-        "services/organization-authority/src/processing/core/**",
-        "services/organization-authority/src/processing/approval/decision-node.ts"
-      ],
-      "allowed_workspace_packages": [],
-      "allowed_external_packages": [],
-      "allowed_node_builtins": []
-    },
-    {
-      "name": "processing-reviewer-publication-preflight-reads-the-presentation-contract",
-      "from": "services/organization-authority/src/processing/authorization/reviewer-publication-preflight.ts",
-      "allowed_imports": [
-        "services/organization-authority/src/processing/approval/decision-node.ts"
-      ],
-      "allowed_workspace_packages": [],
-      "allowed_external_packages": [],
-      "allowed_node_builtins": []
-    },
-    {
-      "name": "processing-runtime-access-controller-uses-organization-protocol",
-      "from": "services/organization-authority/src/processing/authorization/runtime-access-controller.ts",
-      "allowed_imports": [],
-      "allowed_workspace_packages": [
-        "@echo-brain/organization-protocol"
-      ],
-      "allowed_external_packages": [],
-      "allowed_node_builtins": []
-    },
-    {
       "name": "processing-synthetic-replay-is-offline",
       "from": "services/organization-authority/src/processing/replay/**",
       "allowed_imports": [
         "services/organization-authority/src/processing/core/**",
-        "services/organization-authority/src/processing/approval/decision-node.ts",
         "services/organization-authority/src/processing/adapters/decision-processors/structured-text/**",
         "services/organization-authority/src/processing/replay/**"
       ],
       "allowed_workspace_packages": [],
       "allowed_external_packages": [],
       "allowed_node_builtins": ["crypto"]
-    },
-    {
-      "name": "processing-record-envelope-ports-use-json-contract",
-      "from": "services/organization-authority/src/processing/record/ports.ts",
-      "allowed_imports": [],
-      "allowed_workspace_packages": [
-        "@echo-brain/federation-protocol"
-      ],
-      "allowed_external_packages": [],
-      "allowed_node_builtins": []
-    },
-    {
-      "name": "processing-record-envelope-builder-uses-protocol-contracts",
-      "from": "services/organization-authority/src/processing/record/protocol-record-envelope-builder.ts",
-      "allowed_imports": [
-        "services/organization-authority/src/processing/record/ports.ts"
-      ],
-      "allowed_workspace_packages": [
-        "@echo-brain/federation-protocol",
-        "@echo-brain/organization-protocol"
-      ],
-      "allowed_external_packages": [],
-      "allowed_node_builtins": []
     }
   ]
 }

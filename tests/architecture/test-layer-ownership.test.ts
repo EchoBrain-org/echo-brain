@@ -38,29 +38,19 @@ interface TestLayerRule {
 
 const rules: readonly TestLayerRule[] = [
   {
-    root: 'tests/adapters',
-    allows: (path) =>
-      path === 'workspace:@echo-brain/organization-authority' ||
-      path.startsWith('src/adapters/') ||
-      path.startsWith('src/infrastructure/') ||
-      path.startsWith('tests/support/'),
-  },
-  {
-    root: 'tests/infrastructure',
-    allows: (path) =>
-      path.startsWith('src/infrastructure/') ||
-      path.startsWith('tools/') ||
-      path === 'workspace:@echo-brain/federation-protocol',
-  },
-  {
     root: 'services/organization-authority/test/processing',
     allows: (path) =>
       path.startsWith('services/organization-authority/src/processing/') ||
       path.startsWith('tests/support/'),
   },
   {
-    root: 'tests/product',
-    allows: (path) => !path.startsWith('services/'),
+    root: 'tests/person-client',
+    allows: (path) =>
+      path.startsWith('src/product/person-client/') ||
+      path === 'workspace:@echo-brain/person-client' ||
+      path === 'workspace:@echo-brain/federation-protocol' ||
+      path === 'workspace:@echo-brain/organization-api' ||
+      path === 'workspace:@echo-brain/organization-protocol',
   },
 ];
 

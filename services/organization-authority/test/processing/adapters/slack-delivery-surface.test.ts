@@ -8,10 +8,8 @@ import type {
   DeliveryEnvelope,
 } from '../../../src/processing/core/index.js';
 import { AdapterError, assertDeliveryReceipt } from '../../../src/processing/core/index.js';
-import {
-  FileSlackDeliveryReceiptStore,
-  SlackDeliverySurface,
-} from '../../../src/processing/adapters/delivery-surfaces/slack/index.js';
+import { FileSlackDeliveryReceiptStore } from '../../../src/processing/adapters/delivery-surfaces/slack/slack-delivery-receipt-store.js';
+import { SlackDeliverySurface } from '../../../src/processing/adapters/delivery-surfaces/slack/slack-delivery-surface.js';
 import { adapterConformance } from '../../../../../tests/support/adapter-conformance.js';
 
 const roots: string[] = [];
