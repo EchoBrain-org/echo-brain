@@ -57,8 +57,13 @@ separate reverse proxy.
 
 Central state is authoritative for organization membership and access,
 provider integration policy, the append-only organization record, and
-centrally served retrieval generations. It must not receive raw meeting
-transcripts or unrestricted provider payloads.
+centrally served retrieval generations. Under an active organization-recording
+policy it may also hold governed pre-record meeting data from an exactly bound
+member identity and organization-owned source credential. That data remains in
+the pending approval boundary: it is not an organization record, retrieval
+input, or delivery payload until an audited resolution admits it. Central state
+must not accept unrestricted provider payloads or bypass that pending-only
+boundary.
 
 ## Current references
 

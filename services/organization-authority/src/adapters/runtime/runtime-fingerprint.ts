@@ -292,7 +292,8 @@ export function authorityMaintenanceFingerprint(
     | 'export-reviewer-query-audit'
     | 'expire-reviewer-query-audit'
     | 'export-readable-search-query-audit'
-    | 'expire-readable-search-query-audit',
+    | 'expire-readable-search-query-audit'
+    | 'process-one-meeting',
 ): `sha256:${string}` {
   const keyPath = join(
     config.key_directory,

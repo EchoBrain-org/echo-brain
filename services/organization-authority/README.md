@@ -3,12 +3,15 @@
 The authority is the centrally hosted onboarding and access service for one
 organization. It manages principals, memberships, one-time enrollment grants,
 installation enrollment, short access leases, revocation, and append-only
-organization decision records. It does not store raw meetings, reasoning
-state, or embeddings.
+organization decision records. Its governed pre-record tables may retain raw
+canonical meetings and deterministic extraction state for processing; they
+have no human-readable application route and become cleanup-eligible 30 days
+after terminal approval or rejection. The authority stores no embeddings.
 
 One process and four persistent SQLite databases are the supported topology:
-`authority.sqlite` remains the source of membership and installation truth,
-while `integrations.sqlite` contains customer-owned provider links,
+`authority.sqlite` remains the source of membership and installation truth and
+also owns the source-bound pre-record processing tables, while
+`integrations.sqlite` contains customer-owned provider links,
 connections, adapter bindings, direct grants, and integration audit.
 `record-log.sqlite` is the append-only record of truth, and
 `record-derived.sqlite` contains its replayable projection. All four databases
@@ -28,6 +31,21 @@ README does not mirror mutable deployment identity. Operators must require
 the route, generation, verifier, and query-audit procedures whenever the
 selected image is readable-search-capable. Historical images may not contain
 those commands.
+
+## Stopped one-meeting processing command
+
+`process-one-meeting` is a disabled-by-default founder-live ingress rung. It
+acquires the same singleton as `serve`, requires an exact active member/source
+binding and an operator-asserted organization-scoped Granola credential, pulls
+at most one meeting, runs only the deterministic structured-text processor,
+and stages the result as pending in `authority.sqlite`. It emits sanitized
+counts and opaque approval IDs only.
+
+The command is not a worker or complete product loop. It cannot run beside the
+HTTP Authority, does not resolve approval, deliver, append a record, advance a
+pending cursor, or start itself again. The EC2 stop/checkpoint/run/restart gate
+is documented in
+[`deploy/organization-authority/AWS-EC2.md`](../../deploy/organization-authority/AWS-EC2.md).
 
 ## HTTP surface
 

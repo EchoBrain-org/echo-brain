@@ -1082,6 +1082,12 @@ export class GranolaMeetingSourceAdapter implements MeetingSourceAdapter {
         },
         { signal: operation?.signal },
       );
+      if (request.limit !== undefined && response.notes.length > pageSize) {
+        throw new GranolaApiError(
+          'Granola returned more notes than the requested page size',
+          'pagination_failed',
+        );
+      }
       if (response.hasMore && !isNonEmptyString(response.cursor)) {
         throw new GranolaApiError(
           "Granola pagination indicated more results without a cursor",

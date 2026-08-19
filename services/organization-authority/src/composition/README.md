@@ -14,6 +14,11 @@ administrator command surface and verifies the runtime ownership proof before
 using credentials. Concrete key, credential, invitation-file, lock, proof, and
 SQLite behavior remains in `adapters/`.
 
+`process-one-meeting.ts` is the sole live-processing gateway in minimum V1. It
+owns the stopped-state singleton and fixed private credential boundary, then
+invokes one processing-module cycle with a hard limit of one. It adds no
+background loop to `runtime.ts` and no processing route to the HTTP surface.
+
 Serving composition is deliberately stricter than direct repository tests: it
 requires a persistent database path and an authenticated loopback-proxy client
 identity contract. Missing proxy credentials, an invalid proxy token, or

@@ -37,6 +37,12 @@ export interface AuthorityProcessingStoreBinding {
   readonly source_instance_id: string;
 }
 
+export interface AuthorityProcessingSourceConfigurationBinding {
+  readonly owner_email_sha256: `sha256:${string}`;
+  readonly credential_scope: 'organization';
+  readonly credential_reference_sha256: `sha256:${string}`;
+}
+
 export interface SqliteAuthorityProcessingStoreOptions {
   /**
    * Only source-runtime composition may provision a permanent owner binding.
@@ -44,8 +50,15 @@ export interface SqliteAuthorityProcessingStoreOptions {
    * caller cannot claim an arbitrary source identity by opening this store.
    */
   readonly bindingMode: 'provision' | 'require-existing';
+  /** Required by the live source composition; omitted by legacy read capabilities. */
+  readonly sourceConfiguration?: AuthorityProcessingSourceConfigurationBinding;
   readonly fileMustExist?: boolean;
   readonly now?: () => string;
+}
+
+export interface AuthorityProcessingSourceProvisioningStatus {
+  readonly owner_binding: 'provisioned' | 'existing';
+  readonly configuration_binding: 'provisioned' | 'existing';
 }
 
 export type AuthorityProcessingMemberExclusion =
@@ -202,6 +215,7 @@ export class SqliteAuthorityProcessingStore implements CoreStateStore {
   private readonly database: Database.Database;
   private readonly now: () => string;
   private initialized = false;
+  private provisioningStatus: AuthorityProcessingSourceProvisioningStatus | null = null;
 
   constructor(
     databasePath: string,
@@ -213,6 +227,27 @@ export class SqliteAuthorityProcessingStore implements CoreStateStore {
         throw new Error(`authority processing binding ${field} is required`);
       }
     }
+    const sourceConfiguration = options.sourceConfiguration;
+    if (sourceConfiguration !== undefined) {
+      for (const [field, value] of Object.entries(sourceConfiguration)) {
+        if (typeof value !== 'string' || value.length === 0) {
+          throw new Error(
+            `authority processing source configuration ${field} is required`,
+          );
+        }
+      }
+      if (
+        sourceConfiguration.credential_scope !== 'organization' ||
+        !/^sha256:[0-9a-f]{64}$/.test(sourceConfiguration.owner_email_sha256) ||
+        !/^sha256:[0-9a-f]{64}$/.test(
+          sourceConfiguration.credential_reference_sha256,
+        )
+      ) {
+        throw new Error(
+          'authority processing source configuration binding is invalid',
+        );
+      }
+    }
     this.database = openAuthorityDatabase(databasePath, {
       fileMustExist: options.fileMustExist,
     });
@@ -222,11 +257,13 @@ export class SqliteAuthorityProcessingStore implements CoreStateStore {
   /** Provisions or requires the permanent exact source-owner binding. */
   async initialize(): Promise<void> {
     if (this.initialized) return;
-    this.immediate(() => {
+    const status = this.immediate(() => {
+      let ownerBindingProvisioned = false;
+      let configurationBindingProvisioned = false;
       if (this.options.bindingMode === 'provision') {
         this.assertActiveMembership();
         const boundAt = assertCanonicalTimestamp(this.now(), 'bound_at');
-        this.database
+        const ownerBinding = this.database
           .prepare(
             `INSERT INTO authority_processing_source_owner_bindings (
                source_adapter_id, source_instance_id, organization_id,
@@ -243,10 +280,80 @@ export class SqliteAuthorityProcessingStore implements CoreStateStore {
             this.binding.membership_type,
             boundAt,
           );
+        ownerBindingProvisioned = ownerBinding.changes === 1;
+
+        const sourceConfiguration = this.options.sourceConfiguration;
+        if (sourceConfiguration !== undefined) {
+          const existingConfiguration = this.database
+            .prepare(
+              `SELECT 1
+                 FROM authority_processing_source_configuration_bindings
+                WHERE source_adapter_id = ? AND source_instance_id = ?`,
+            )
+            .get(
+              this.binding.source_adapter_id,
+              this.binding.source_instance_id,
+            );
+          if (existingConfiguration === undefined) {
+            this.assertNoStateBeforeSourceConfiguration();
+          }
+          const configurationBinding = this.database
+            .prepare(
+              `INSERT INTO authority_processing_source_configuration_bindings (
+                 source_adapter_id, source_instance_id, owner_email_sha256,
+                 credential_scope, credential_reference_sha256, bound_at
+               ) VALUES (?, ?, ?, ?, ?, ?)
+               ON CONFLICT (source_adapter_id, source_instance_id) DO NOTHING`,
+            )
+            .run(
+              this.binding.source_adapter_id,
+              this.binding.source_instance_id,
+              sourceConfiguration.owner_email_sha256,
+              sourceConfiguration.credential_scope,
+              sourceConfiguration.credential_reference_sha256,
+              boundAt,
+            );
+          configurationBindingProvisioned = configurationBinding.changes === 1;
+        }
       }
       this.assertActiveBinding();
+      this.assertExactSourceConfiguration();
+      return {
+        owner_binding: ownerBindingProvisioned ? 'provisioned' : 'existing',
+        configuration_binding: configurationBindingProvisioned
+          ? 'provisioned'
+          : 'existing',
+      } as const;
     });
+    this.provisioningStatus = status;
     this.initialized = true;
+  }
+
+  sourceProvisioningStatus(): AuthorityProcessingSourceProvisioningStatus {
+    if (!this.initialized || this.provisioningStatus === null) {
+      throw new Error('authority processing store is not initialized');
+    }
+    return Object.freeze({ ...this.provisioningStatus });
+  }
+
+  /** Any candidate without a durable processed marker blocks another pull. */
+  async countUnfinishedCandidates(): Promise<number> {
+    await this.initialize();
+    this.assertActiveBinding();
+    const row = this.database
+      .prepare(
+        `SELECT COUNT(*) AS count
+           FROM authority_processing_candidates c
+           LEFT JOIN authority_processing_processed_markers p
+             ON p.processing_key = c.processing_key
+          WHERE c.source_adapter_id = ? AND c.source_instance_id = ?
+            AND p.processing_key IS NULL`,
+      )
+      .get(
+        this.binding.source_adapter_id,
+        this.binding.source_instance_id,
+      ) as { count: number };
+    return row.count;
   }
 
   async getSourceCursor(
@@ -982,6 +1089,63 @@ export class SqliteAuthorityProcessingStore implements CoreStateStore {
     ) {
       throw new Error(
         'authority processing source is not bound to the exact active membership',
+      );
+    }
+  }
+
+  private assertExactSourceConfiguration(): void {
+    const sourceConfiguration = this.options.sourceConfiguration;
+    if (sourceConfiguration === undefined) return;
+    if (
+      this.database
+        .prepare(
+          `SELECT 1
+             FROM authority_processing_source_configuration_bindings
+            WHERE source_adapter_id = ? AND source_instance_id = ?
+              AND owner_email_sha256 = ? AND credential_scope = ?
+              AND credential_reference_sha256 = ?`,
+        )
+        .get(
+          this.binding.source_adapter_id,
+          this.binding.source_instance_id,
+          sourceConfiguration.owner_email_sha256,
+          sourceConfiguration.credential_scope,
+          sourceConfiguration.credential_reference_sha256,
+        ) === undefined
+    ) {
+      throw new Error(
+        'authority processing source configuration differs from its immutable binding',
+      );
+    }
+  }
+
+  private assertNoStateBeforeSourceConfiguration(): void {
+    const priorState = this.database
+      .prepare(
+        `SELECT 1
+           FROM authority_processing_source_cursors
+          WHERE source_adapter_id = ? AND source_instance_id = ?
+          UNION ALL
+         SELECT 1
+           FROM authority_processing_candidates
+          WHERE source_adapter_id = ? AND source_instance_id = ?
+          UNION ALL
+         SELECT 1
+           FROM authority_processing_processed_markers
+          WHERE source_adapter_id = ? AND source_instance_id = ?
+          LIMIT 1`,
+      )
+      .get(
+        this.binding.source_adapter_id,
+        this.binding.source_instance_id,
+        this.binding.source_adapter_id,
+        this.binding.source_instance_id,
+        this.binding.source_adapter_id,
+        this.binding.source_instance_id,
+      );
+    if (priorState !== undefined) {
+      throw new Error(
+        'authority processing source configuration cannot be retroactively bound to existing state',
       );
     }
   }

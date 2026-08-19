@@ -47,6 +47,7 @@ const AUTHORITY_TABLES = Object.freeze([
   'authority_processing_processed_markers',
   'authority_processing_resolutions',
   'authority_processing_slots',
+  'authority_processing_source_configuration_bindings',
   'authority_processing_source_cursors',
   'authority_processing_source_owner_bindings',
   'authority_query_decision_audit',

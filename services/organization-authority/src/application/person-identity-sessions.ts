@@ -38,6 +38,7 @@ import type {
   PersonSessionRuntime,
   VerifiedOidcIdentityToken,
 } from "./ports/person-session-runtime.js";
+import { personLoginGrantExpectedEmailDigestInput } from "../domain/person-email-binding.js";
 
 const SHA256_BYTES = 32;
 const LOCAL_UUID_BYTES = 16;
@@ -1566,11 +1567,9 @@ export class PersonIdentitySessionApplication {
   }
 
   private expectedEmailSha256(expectedEmail: string): Sha256Digest {
-    return this.digestCanonical({
-      schema_version: 1,
-      kind: "authority-person-login-grant-expected-email-v1",
-      expected_email: expectedEmail,
-    });
+    return this.digestCanonical(
+      personLoginGrantExpectedEmailDigestInput(expectedEmail),
+    );
   }
 
   private digestUtf8Unchecked(value: string): Sha256Digest {

@@ -46,7 +46,8 @@
     "services/organization-authority/migrations/0011_authority_processing_state.sql",
     "services/organization-authority/migrations/0012_member_exclusion_read_audit.sql",
     "services/organization-authority/migrations/0013_person_session_assertion_issued_at.sql",
-    "services/organization-authority/migrations/0014_person_login_grant_expected_email.sql"
+    "services/organization-authority/migrations/0014_person_login_grant_expected_email.sql",
+    "services/organization-authority/migrations/0015_processing_source_configuration_binding.sql"
   ],
   "layer_rules": [
     {
@@ -210,7 +211,8 @@
         "services/organization-authority/src/application/**",
         "services/organization-authority/src/composition/**",
         "services/organization-authority/src/domain/**",
-        "services/organization-authority/src/presentation/**"
+        "services/organization-authority/src/presentation/**",
+        "services/organization-authority/src/processing/live/**"
       ],
       "allowed_workspace_packages": [
         "@echo-brain/federation-protocol",
@@ -246,6 +248,23 @@
       ],
       "allowed_external_packages": ["better-sqlite3"],
       "allowed_node_builtins": ["crypto"]
+    },
+    {
+      "name": "processing-live-composes-one-bounded-cycle",
+      "from": "services/organization-authority/src/processing/live/**",
+      "allowed_imports": [
+        "services/organization-authority/src/processing/adapters/decision-processors/structured-text/**",
+        "services/organization-authority/src/processing/adapters/meeting-sources/granola/**",
+        "services/organization-authority/src/domain/person-email-binding.ts",
+        "services/organization-authority/src/processing/core/**",
+        "services/organization-authority/src/processing/live/**",
+        "services/organization-authority/src/processing/storage/**"
+      ],
+      "allowed_workspace_packages": [
+        "@echo-brain/federation-protocol"
+      ],
+      "allowed_external_packages": [],
+      "allowed_node_builtins": []
     },
     {
       "name": "processing-decision-processors-namespace-index",

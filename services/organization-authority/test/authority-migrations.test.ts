@@ -31,6 +31,7 @@ const AUTHORITY_TABLES = [
   'authority_processing_processed_markers',
   'authority_processing_resolutions',
   'authority_processing_slots',
+  'authority_processing_source_configuration_bindings',
   'authority_processing_source_cursors',
   'authority_processing_source_owner_bindings',
   'authority_query_decision_audit',
@@ -57,7 +58,7 @@ describe('organization authority database migrations', () => {
     openAuthorityDatabase(path).close();
 
     const database = new Database(path, { readonly: true });
-    expect(database.pragma('user_version', { simple: true })).toBe(14);
+    expect(database.pragma('user_version', { simple: true })).toBe(15);
     const tables = database
       .prepare(
         `SELECT name FROM sqlite_master
@@ -114,6 +115,7 @@ describe('organization authority database migrations', () => {
     const processingColumns = Object.fromEntries(
       [
         'authority_processing_source_owner_bindings',
+        'authority_processing_source_configuration_bindings',
         'authority_processing_source_cursors',
         'authority_processing_candidates',
         'authority_processing_slots',
@@ -136,6 +138,14 @@ describe('organization authority database migrations', () => {
         'principal_id',
         'membership_id',
         'membership_type',
+        'bound_at',
+      ],
+      authority_processing_source_configuration_bindings: [
+        'source_adapter_id',
+        'source_instance_id',
+        'owner_email_sha256',
+        'credential_scope',
+        'credential_reference_sha256',
         'bound_at',
       ],
       authority_processing_source_cursors: [
@@ -281,7 +291,7 @@ describe('organization authority database migrations', () => {
 
     openAuthorityDatabase(path).close();
     const upgraded = new Database(path);
-    expect(upgraded.pragma('user_version', { simple: true })).toBe(14);
+    expect(upgraded.pragma('user_version', { simple: true })).toBe(15);
     const tables = upgraded
       .prepare(
         `SELECT name FROM sqlite_master
@@ -530,11 +540,11 @@ describe('organization authority database migrations', () => {
   it('rejects a database newer than this authority binary', () => {
     const path = databasePath();
     const future = new Database(path);
-    future.pragma('user_version = 15');
+    future.pragma('user_version = 16');
     future.close();
 
     expect(() => openAuthorityDatabase(path)).toThrow(
-      'newer than supported schema 14',
+      'newer than supported schema 15',
     );
   });
 });

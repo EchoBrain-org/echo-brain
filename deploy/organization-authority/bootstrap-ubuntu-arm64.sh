@@ -10,6 +10,7 @@ ECR_REGISTRY=904560150024.dkr.ecr.us-west-2.amazonaws.com
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
 UNIT_SOURCE="$SCRIPT_DIR/cloudflared-echo-authority.service"
 TOKEN_INSTALLER_SOURCE="$SCRIPT_DIR/install-cloudflare-tunnel-token.sh"
+GRANOLA_INSTALLER_SOURCE="$SCRIPT_DIR/install-granola-organization-source.sh"
 ASM_EXEC_PATCH_SOURCE="$SCRIPT_DIR/asm-exec-structured-content.patch"
 
 fail() {
@@ -25,6 +26,7 @@ fail() {
 [[ ${ID:-} == ubuntu ]] || fail 'this bootstrap supports Ubuntu only'
 [[ -f "$UNIT_SOURCE" ]] || fail "missing $UNIT_SOURCE"
 [[ -f "$TOKEN_INSTALLER_SOURCE" ]] || fail "missing $TOKEN_INSTALLER_SOURCE"
+[[ -f "$GRANOLA_INSTALLER_SOURCE" ]] || fail "missing $GRANOLA_INSTALLER_SOURCE"
 [[ -f "$ASM_EXEC_PATCH_SOURCE" ]] || fail "missing $ASM_EXEC_PATCH_SOURCE"
 
 export DEBIAN_FRONTEND=noninteractive
@@ -102,6 +104,8 @@ install -o root -g root -m 0644 "$UNIT_SOURCE" \
   /etc/systemd/system/cloudflared-echo-authority.service
 install -o root -g root -m 0700 "$TOKEN_INSTALLER_SOURCE" \
   /usr/local/sbin/install-echo-authority-tunnel-token
+install -o root -g root -m 0700 "$GRANOLA_INSTALLER_SOURCE" \
+  /usr/local/sbin/install-echo-authority-granola-source
 systemctl daemon-reload
 systemctl disable cloudflared-echo-authority.service >/dev/null 2>&1 || true
 systemctl stop cloudflared-echo-authority.service >/dev/null 2>&1 || true

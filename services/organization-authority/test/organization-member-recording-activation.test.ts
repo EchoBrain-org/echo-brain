@@ -82,6 +82,9 @@ function downgradeToPreActivationSchema(databasePath: string): void {
   const database = new Database(databasePath);
   try {
     database.exec(`
+      DROP TRIGGER authority_processing_source_configuration_bindings_immutable_update;
+      DROP TRIGGER authority_processing_source_configuration_bindings_delete_denied;
+      DROP TABLE authority_processing_source_configuration_bindings;
       DROP TRIGGER authority_member_exclusion_read_audit_immutable_update;
       DROP TRIGGER authority_member_exclusion_read_audit_delete_denied;
       DROP TABLE authority_member_exclusion_read_audit;
@@ -318,7 +321,7 @@ describe('organization-member recording activation lifecycle', () => {
     ).rejects.toThrow('fault:after-audit');
 
     const rolledBack = new Database(runtimeConfig.database_path);
-    expect(rolledBack.pragma('user_version', { simple: true })).toBe(14);
+    expect(rolledBack.pragma('user_version', { simple: true })).toBe(15);
     expect(
       (
         rolledBack

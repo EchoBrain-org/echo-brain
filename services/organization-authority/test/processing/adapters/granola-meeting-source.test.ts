@@ -594,6 +594,27 @@ describe("Granola canonical meeting mapping", () => {
     });
   });
 
+  it("refuses an oversized provider page before fetching any note detail", async () => {
+    const client = new FakeClient([
+      {
+        notes: [{ id: "note-1" }, { id: "note-2" }],
+        hasMore: false,
+        cursor: null,
+      },
+    ]);
+    const adapter = new GranolaMeetingSourceAdapter(config, {
+      client,
+      now: () => "2026-07-16T00:00:00.000Z",
+    });
+
+    await expect(adapter.pull({ limit: 1 })).rejects.toMatchObject({
+      code: "temporarily_unavailable",
+      retryable: true,
+    });
+    expect(client.listCalls).toEqual([{ page_size: 1 }]);
+    expect(client.detailCalls).toEqual([]);
+  });
+
   it("keeps the page token and high-water mark in an opaque stable cursor", async () => {
     const secondDetail: GranolaNoteDetail = {
       ...detail,
