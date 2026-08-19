@@ -272,6 +272,43 @@ export interface OrganizationPersonReadableSearchRequestV2 {
   query: string;
 }
 
+/** Exact, whole-source member valve selector. */
+export interface OrganizationPersonMemberExclusionSourceSelectorV2 {
+  scope: 'source';
+  source_adapter_id: string;
+  source_instance_id: string;
+}
+
+/** Exact, one-meeting member valve selector. */
+export interface OrganizationPersonMemberExclusionMeetingSelectorV2 {
+  scope: 'meeting';
+  source_adapter_id: string;
+  source_instance_id: string;
+  external_id: string;
+}
+
+export type OrganizationPersonMemberExclusionSelectorV2 =
+  | OrganizationPersonMemberExclusionSourceSelectorV2
+  | OrganizationPersonMemberExclusionMeetingSelectorV2;
+
+/**
+ * Idempotent desired-state change for the authenticated Person's own
+ * pre-record exclusion. `excluded: true` adds the exact row and `false`
+ * removes it; neither operation implies erasure of an already-admitted row.
+ */
+export interface OrganizationPersonMemberExclusionChangeRequestV2 {
+  schema_version: 2;
+  kind: 'echo-organization-person-member-exclusion-change-request';
+  request_id: string;
+  authority_id: string;
+  organization_id: string;
+  subject_principal_id: string;
+  http_method: 'POST';
+  http_path: '/v2/member-exclusions';
+  excluded: boolean;
+  selector: OrganizationPersonMemberExclusionSelectorV2;
+}
+
 /**
  * The signed, target-free reviewer read. The caller supplies no target,
  * policy, limit, cursor, sort, query, or atom id, and query parameters are

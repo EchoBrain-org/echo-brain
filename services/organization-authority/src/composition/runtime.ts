@@ -25,10 +25,12 @@ import {
   SystemAuthorityClock,
 } from '../adapters/runtime/system-runtime-ports.js';
 import { SqliteOrganizationAuthorityRepository } from '../adapters/persistence/sqlite/sqlite-authority-repository.js';
+import { SqlitePersonMemberExclusionMutationPort } from '../adapters/persistence/sqlite/sqlite-person-member-exclusion-mutation-port.js';
 import { readOrganizationMemberRecordingActivation } from '../adapters/persistence/sqlite/organization-recording-policy-activation.js';
 import { OrganizationAuthorityApplication } from '../application/organization-authority.js';
 import { PersonIdentitySessionApplication } from '../application/person-identity-sessions.js';
 import { PersonReadableSearchService } from '../application/person-readable-search.js';
+import { PersonMemberExclusionService } from '../application/person-member-exclusions.js';
 import { createPersonReadRecentDecisionsApplication } from '../application/person-read-recent-decisions.js';
 import { AuthorityOperationError } from '../domain/errors.js';
 import { reviewerPolicyContractSha256 } from '../application/reviewer-policy-contract.js';
@@ -584,6 +586,18 @@ export async function startOrganizationAuthority(
             contract: readableSearchOptions.contract,
             fence_timeout_ms: READABLE_SEARCH_FENCE_TIMEOUT_MS,
           });
+    const personMemberExclusions =
+      personIdentitySessions === undefined
+        ? undefined
+        : new PersonMemberExclusionService({
+            authority_id: config.authority_id,
+            organization_id: config.organization_id,
+            authentication: personIdentitySessions,
+            mutations: new SqlitePersonMemberExclusionMutationPort(
+              config.database_path,
+            ),
+            authorization_fence: authorizationFence,
+          });
     const personSessions =
       personIdentitySessions === undefined ||
       personOidcProvider === undefined ||
@@ -660,6 +674,9 @@ export async function startOrganizationAuthority(
       ...(personReadableSearch === undefined
         ? {}
         : { personReadableSearch }),
+      ...(personMemberExclusions === undefined
+        ? {}
+        : { personMemberExclusions }),
       adminAuthenticator,
       clientIdentityResolver,
       adminConsole: {

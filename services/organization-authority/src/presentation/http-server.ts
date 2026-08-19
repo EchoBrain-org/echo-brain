@@ -5,6 +5,7 @@ import { TextDecoder } from 'node:util';
 import {
   isOrganizationApiValidationError,
   canonicalOrganizationMemberReadablePermissionCheckDecisionBytes,
+  canonicalOrganizationPersonMemberExclusionChangeRequestBytes,
   canonicalOrganizationPersonReadableSearchRequestBytes,
   canonicalOrganizationPersonRecentDecisionsRequestBytes,
   canonicalOrganizationPersonReviewerRecentDecisionsRequestBytes,
@@ -26,6 +27,7 @@ import {
   ORGANIZATION_API_INTERNAL_LIVE_DIRECTIVES_PATH,
   ORGANIZATION_API_INTERNAL_LIVE_RECEIPTS_PATH,
   ORGANIZATION_API_PERMISSION_CHECKS_PATH,
+  ORGANIZATION_API_PERSON_MEMBER_EXCLUSIONS_PATH,
   ORGANIZATION_API_PERSON_READABLE_SEARCH_PATH,
   ORGANIZATION_API_PERSON_RECENT_DECISIONS_PATH,
   ORGANIZATION_API_PERSON_REVIEWER_RECENT_DECISIONS_PATH,
@@ -45,6 +47,7 @@ import {
   validateOrganizationInternalLiveUpdateReceipt,
   validateOrganizationPermissionCheckRequest,
   validateOrganizationMemberReadablePermissionCheckRequest,
+  validateOrganizationPersonMemberExclusionChangeRequest,
   validateOrganizationPersonReadableSearchRequest,
   validateOrganizationPersonRecentDecisionsRequest,
   validateOrganizationPersonReviewerRecentDecisionsRequest,
@@ -88,6 +91,7 @@ import {
   type PersonRecentDecisionsApplication,
 } from '../application/person-read-recent-decisions.js';
 import type { PersonReadableSearchService } from '../application/person-readable-search.js';
+import type { PersonMemberExclusionService } from '../application/person-member-exclusions.js';
 import {
   fixedReadableSearchErrorBytes,
   ReadableSearchError,
@@ -853,6 +857,7 @@ export interface OrganizationAuthorityHttpServerOptions {
   /** Omitted until the Person session runtime is configured. */
   personRecentDecisions?: PersonRecentDecisionsApplication;
   personReadableSearch?: Pick<PersonReadableSearchService, 'search'>;
+  personMemberExclusions?: Pick<PersonMemberExclusionService, 'change'>;
   /** Omitted until the provider-neutral Person session runtime is configured. */
   personSessions?: PersonIdentitySessionHttpApplication;
   adminAuthenticator: AdminRequestAuthenticator;
@@ -1074,6 +1079,9 @@ export function createOrganizationAuthorityHttpServer(
                       ? 'record'
                       : url.pathname === ORGANIZATION_API_RECENT_DECISIONS_PATH
                         ? 'recent-decisions'
+                        : url.pathname ===
+                            ORGANIZATION_API_PERSON_MEMBER_EXCLUSIONS_PATH
+                          ? 'person-control'
                         : url.pathname.startsWith('/v2/session/')
                           ? 'person-session'
                           : 'other';
@@ -1174,6 +1182,29 @@ export function createOrganizationAuthorityHttpServer(
         } finally {
           abortLease.release();
         }
+        return;
+      }
+
+      if (url.pathname === ORGANIZATION_API_PERSON_MEMBER_EXCLUSIONS_PATH) {
+        if (method !== 'POST' || url.search !== '') {
+          throw new PersonReadRequestError(
+            'Person member-exclusion method or query is invalid',
+          );
+        }
+        if (options.personMemberExclusions === undefined) {
+          sendSerializedJson(response, 503, PERSON_SESSION_UNAVAILABLE_BYTES);
+          return;
+        }
+        const command = await readCanonicalPersonRequest(
+          request,
+          validateOrganizationPersonMemberExclusionChangeRequest,
+          canonicalOrganizationPersonMemberExclusionChangeRequestBytes,
+        );
+        await options.personMemberExclusions.change(
+          command,
+          personAccessToken(request.headers.authorization),
+        );
+        sendNoContent(response);
         return;
       }
 

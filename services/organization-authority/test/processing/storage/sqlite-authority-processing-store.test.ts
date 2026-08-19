@@ -155,7 +155,9 @@ function setup(now = '2026-08-18T00:00:00.000Z') {
   const directory = mkdtempSync(join(tmpdir(), 'echo-authority-processing-'));
   directories.push(directory);
   const path = join(directory, 'authority.sqlite');
-  const bootstrap = new SqliteAuthorityProcessingStore(path, BINDING);
+  const bootstrap = new SqliteAuthorityProcessingStore(path, BINDING, {
+    bindingMode: 'provision',
+  });
   bootstrap.close();
   const database = new Database(path);
   database.pragma('foreign_keys = ON');
@@ -195,6 +197,7 @@ function setup(now = '2026-08-18T00:00:00.000Z') {
   let current = now;
   const create = () =>
     new SqliteAuthorityProcessingStore(path, BINDING, {
+      bindingMode: 'provision',
       fileMustExist: true,
       now: () => current,
     });
@@ -218,6 +221,79 @@ async function healthy(): Promise<AdapterHealth> {
 }
 
 describe('SqliteAuthorityProcessingStore', () => {
+  it('requires an existing exact binding without claiming unknown or cross-owned sources', async () => {
+    const context = setup();
+    const owner = context.create();
+    await owner.initialize();
+
+    const unknown = new SqliteAuthorityProcessingStore(
+      context.path,
+      { ...BINDING, source_instance_id: 'unknown' },
+      { bindingMode: 'require-existing', fileMustExist: true },
+    );
+    await expect(unknown.initialize()).rejects.toThrow(
+      'not bound to the exact active membership',
+    );
+    unknown.close();
+
+    const database = new Database(context.path);
+    database.pragma('foreign_keys = ON');
+    database.exec(`
+      INSERT INTO authority_principals (
+        principal_id, organization_id, display_name, provisioned_at
+      ) VALUES (
+        'prn_00000000-0000-4000-8000-000000000002',
+        '${BINDING.organization_id}', 'Other Member',
+        '2026-08-18T00:00:00.000Z'
+      );
+      INSERT INTO authority_memberships (
+        membership_id, organization_id, principal_id, membership_type,
+        status, provisioned_at, revoked_at, revocation_reason,
+        admin_command_id, admin_command_sha256
+      ) VALUES (
+        'mem_00000000-0000-4000-8000-000000000002',
+        '${BINDING.organization_id}',
+        'prn_00000000-0000-4000-8000-000000000002', 'employee', 'active',
+        '2026-08-18T00:00:00.000Z', NULL, NULL,
+        'adm_00000000-0000-4000-8000-000000000002',
+        'sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc'
+      );
+    `);
+    database.close();
+
+    const crossOwner = new SqliteAuthorityProcessingStore(
+      context.path,
+      {
+        ...BINDING,
+        principal_id: 'prn_00000000-0000-4000-8000-000000000002',
+        membership_id: 'mem_00000000-0000-4000-8000-000000000002',
+      },
+      { bindingMode: 'require-existing', fileMustExist: true },
+    );
+    await expect(crossOwner.initialize()).rejects.toThrow(
+      'not bound to the exact active membership',
+    );
+    crossOwner.close();
+
+    const inspect = new Database(context.path, { readonly: true });
+    expect(
+      inspect
+        .prepare(
+          `SELECT source_adapter_id, source_instance_id, membership_id
+             FROM authority_processing_source_owner_bindings`,
+        )
+        .all(),
+    ).toEqual([
+      {
+        source_adapter_id: BINDING.source_adapter_id,
+        source_instance_id: BINDING.source_instance_id,
+        membership_id: BINDING.membership_id,
+      },
+    ]);
+    inspect.close();
+    owner.close();
+  });
+
   it('keeps one exact source owner and fails reads/admission after owner revocation', async () => {
     const context = setup();
     const owner = context.create();
@@ -256,7 +332,7 @@ describe('SqliteAuthorityProcessingStore', () => {
         principal_id: 'prn_00000000-0000-4000-8000-000000000002',
         membership_id: 'mem_00000000-0000-4000-8000-000000000002',
       },
-      { fileMustExist: true },
+      { bindingMode: 'require-existing', fileMustExist: true },
     );
     await expect(other.initialize()).rejects.toThrow(
       'not bound to the exact active membership',
@@ -442,6 +518,53 @@ describe('SqliteAuthorityProcessingStore', () => {
         .get(),
     ).toEqual({ count: 1 });
     database.close();
+    store.close();
+  });
+
+  it('applies exclusions only to first admission and lets an admitted exact candidate continue', async () => {
+    const context = setup();
+    const store = context.create();
+    await store.initialize();
+    const first = meeting(1);
+    const firstExclusion = {
+      scope: 'meeting' as const,
+      source_adapter_id: SOURCE.adapter_id,
+      source_instance_id: SOURCE.instance_id,
+      external_id: first.provenance.external_id,
+    };
+
+    await store.addOwnExclusion(firstExclusion);
+    await expect(
+      store.admitAndSaveMeeting(first, 'excluded-before-admission'),
+    ).resolves.toBe('excluded');
+    await expect(
+      store.getCandidate('excluded-before-admission'),
+    ).resolves.toBeUndefined();
+
+    const second = meeting(2);
+    await expect(
+      store.admitAndSaveMeeting(second, 'admitted-before-exclusion'),
+    ).resolves.toBe('saved');
+    await store.addOwnExclusion({
+      ...firstExclusion,
+      external_id: second.provenance.external_id,
+    });
+    await expect(
+      store.admitAndSaveMeeting(second, 'admitted-before-exclusion'),
+    ).resolves.toBe('saved');
+    await expect(
+      store.getCandidate('admitted-before-exclusion'),
+    ).resolves.toMatchObject({
+      processing_key: 'admitted-before-exclusion',
+      meeting: second,
+    });
+    await expect(
+      store.saveDecisionSet(
+        'admitted-before-exclusion',
+        second,
+        decisions(second),
+      ),
+    ).resolves.toBeUndefined();
     store.close();
   });
 

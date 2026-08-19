@@ -2,10 +2,11 @@
 --
 -- A meeting source is permanently bound to one exact Authority membership.
 -- Raw candidate content is admitted only while that membership is active and
--- only after the owning member's exact source/meeting exclusion is checked in
--- the same BEGIN IMMEDIATE transaction. Candidate content is retained for 30
--- days after its first approved/rejected resolution; processed markers deliberately
--- live outside the candidate cascade so cleanup cannot make work repeat.
+-- only after the owning member's exact source/meeting exclusion is checked on
+-- first admission in the same BEGIN IMMEDIATE transaction. Candidate content
+-- is retained for 30 days after its first approved/rejected resolution;
+-- processed markers deliberately live outside the candidate cascade so
+-- cleanup cannot make work repeat.
 
 CREATE TABLE authority_processing_source_owner_bindings (
   source_adapter_id TEXT NOT NULL CHECK (length(source_adapter_id) BETWEEN 1 AND 128),

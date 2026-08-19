@@ -26,6 +26,10 @@ export type {
   OrganizationInstallationSummaryV1,
   OrganizationMembershipPageV1,
   OrganizationMembershipSummaryV1,
+  OrganizationPersonMemberExclusionChangeRequestV2,
+  OrganizationPersonMemberExclusionMeetingSelectorV2,
+  OrganizationPersonMemberExclusionSelectorV2,
+  OrganizationPersonMemberExclusionSourceSelectorV2,
   OrganizationPermissionActionV1,
   OrganizationPermissionCheckDecisionV1,
   OrganizationPermissionCheckRequestPayloadV1,
@@ -144,6 +148,7 @@ export {
   ORGANIZATION_API_INTERNAL_LIVE_DIRECTIVES_PATH,
   ORGANIZATION_API_INTERNAL_LIVE_RECEIPTS_PATH,
   ORGANIZATION_API_PERMISSION_CHECKS_PATH,
+  ORGANIZATION_API_PERSON_MEMBER_EXCLUSIONS_PATH,
   ORGANIZATION_API_PERSON_READABLE_SEARCH_PATH,
   ORGANIZATION_API_PERSON_RECENT_DECISIONS_PATH,
   ORGANIZATION_API_PERSON_REVIEWER_RECENT_DECISIONS_PATH,
@@ -169,6 +174,10 @@ export {
   validateOrganizationPersonRecentDecisionsRequest,
   validateOrganizationPersonReviewerRecentDecisionsRequest,
 } from './person-read-requests.js';
+export {
+  canonicalOrganizationPersonMemberExclusionChangeRequestBytes,
+  validateOrganizationPersonMemberExclusionChangeRequest,
+} from './person-member-exclusion-change.js';
 export {
   createOrganizationAccessLeaseRequest,
   createOrganizationAccessLeaseRequestV2,

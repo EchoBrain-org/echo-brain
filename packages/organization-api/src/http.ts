@@ -20,6 +20,8 @@ export const ORGANIZATION_API_PERSON_REVIEWER_RECENT_DECISIONS_PATH =
   '/v2/reviewer-recent-decisions';
 export const ORGANIZATION_API_PERSON_READABLE_SEARCH_PATH =
   '/v2/readable-search';
+export const ORGANIZATION_API_PERSON_MEMBER_EXCLUSIONS_PATH =
+  '/v2/member-exclusions';
 /**
  * The organization decision record ingest path. It is the only route bounded by
  * MAX_ORGANIZATION_RECORD_API_BODY_BYTES — the canonical-envelope contract plus

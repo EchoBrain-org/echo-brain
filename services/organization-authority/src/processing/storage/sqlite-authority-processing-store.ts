@@ -38,6 +38,12 @@ export interface AuthorityProcessingStoreBinding {
 }
 
 export interface SqliteAuthorityProcessingStoreOptions {
+  /**
+   * Only source-runtime composition may provision a permanent owner binding.
+   * Member-facing capabilities must require the exact binding to exist so a
+   * caller cannot claim an arbitrary source identity by opening this store.
+   */
+  readonly bindingMode: 'provision' | 'require-existing';
   readonly fileMustExist?: boolean;
   readonly now?: () => string;
 }
@@ -200,7 +206,7 @@ export class SqliteAuthorityProcessingStore implements CoreStateStore {
   constructor(
     databasePath: string,
     private readonly binding: AuthorityProcessingStoreBinding,
-    options: SqliteAuthorityProcessingStoreOptions = {},
+    private readonly options: SqliteAuthorityProcessingStoreOptions,
   ) {
     for (const [field, value] of Object.entries(binding)) {
       if (typeof value !== 'string' || value.length === 0) {
@@ -213,29 +219,31 @@ export class SqliteAuthorityProcessingStore implements CoreStateStore {
     this.now = options.now ?? (() => new Date().toISOString());
   }
 
-  /** Creates or verifies the permanent exact source-owner binding. */
+  /** Provisions or requires the permanent exact source-owner binding. */
   async initialize(): Promise<void> {
     if (this.initialized) return;
     this.immediate(() => {
-      this.assertActiveMembership();
-      const boundAt = assertCanonicalTimestamp(this.now(), 'bound_at');
-      this.database
-        .prepare(
-          `INSERT INTO authority_processing_source_owner_bindings (
-             source_adapter_id, source_instance_id, organization_id,
-             principal_id, membership_id, membership_type, bound_at
-           ) VALUES (?, ?, ?, ?, ?, ?, ?)
-           ON CONFLICT (source_adapter_id, source_instance_id) DO NOTHING`,
-        )
-        .run(
-          this.binding.source_adapter_id,
-          this.binding.source_instance_id,
-          this.binding.organization_id,
-          this.binding.principal_id,
-          this.binding.membership_id,
-          this.binding.membership_type,
-          boundAt,
-        );
+      if (this.options.bindingMode === 'provision') {
+        this.assertActiveMembership();
+        const boundAt = assertCanonicalTimestamp(this.now(), 'bound_at');
+        this.database
+          .prepare(
+            `INSERT INTO authority_processing_source_owner_bindings (
+               source_adapter_id, source_instance_id, organization_id,
+               principal_id, membership_id, membership_type, bound_at
+             ) VALUES (?, ?, ?, ?, ?, ?, ?)
+             ON CONFLICT (source_adapter_id, source_instance_id) DO NOTHING`,
+          )
+          .run(
+            this.binding.source_adapter_id,
+            this.binding.source_instance_id,
+            this.binding.organization_id,
+            this.binding.principal_id,
+            this.binding.membership_id,
+            this.binding.membership_type,
+            boundAt,
+          );
+      }
       this.assertActiveBinding();
     });
     this.initialized = true;
@@ -322,6 +330,21 @@ export class SqliteAuthorityProcessingStore implements CoreStateStore {
     const raw = exactJson(meeting);
     return this.immediate(() => {
       this.assertActiveBinding();
+      const storedBeforeAdmission = this.rawCandidate(processingKey);
+      if (
+        this.database
+          .prepare(
+            `SELECT 1 FROM authority_processing_processed_markers
+              WHERE processing_key = ?`,
+          )
+          .get(processingKey) !== undefined
+      ) {
+        throw new Error('authority processing candidate is already processed');
+      }
+      if (storedBeforeAdmission !== undefined) {
+        this.assertSameRawCandidate(storedBeforeAdmission, meeting);
+        return 'saved';
+      }
       const excluded = this.database
         .prepare(
           `SELECT 1
@@ -345,16 +368,6 @@ export class SqliteAuthorityProcessingStore implements CoreStateStore {
           meeting.provenance.external_id,
         );
       if (excluded !== undefined) return 'excluded';
-      if (
-        this.database
-          .prepare(
-            `SELECT 1 FROM authority_processing_processed_markers
-              WHERE processing_key = ?`,
-          )
-          .get(processingKey) !== undefined
-      ) {
-        throw new Error('authority processing candidate is already processed');
-      }
       const admittedAt = assertCanonicalTimestamp(this.now(), 'admitted_at');
       this.database
         .prepare(
@@ -378,21 +391,10 @@ export class SqliteAuthorityProcessingStore implements CoreStateStore {
           admittedAt,
         );
       const stored = this.rawCandidate(processingKey);
-      if (
-        stored === undefined ||
-        stored.source_adapter_id !== this.binding.source_adapter_id ||
-        stored.source_instance_id !== this.binding.source_instance_id ||
-        stored.external_id !== meeting.provenance.external_id ||
-        stored.meeting_revision !== meeting.provenance.canonical_revision ||
-        stored.meeting_id !== meeting.id ||
-        canonicalMeetingIgnoringSourceVersion(
-          JSON.parse(stored.raw_document_json) as MeetingDocument,
-        ) !== canonicalMeetingIgnoringSourceVersion(meeting)
-      ) {
-        throw new Error(
-          'authority processing key already binds a different raw candidate',
-        );
+      if (stored === undefined) {
+        throw new Error('authority processing raw candidate was not stored');
       }
+      this.assertSameRawCandidate(stored, meeting);
       return 'saved';
     });
   }
@@ -1029,6 +1031,26 @@ export class SqliteAuthorityProcessingStore implements CoreStateStore {
           WHERE processing_key = ?`,
       )
       .get(processingKey) as RawCandidateRow | undefined;
+  }
+
+  private assertSameRawCandidate(
+    stored: RawCandidateRow,
+    meeting: MeetingDocument,
+  ): void {
+    if (
+      stored.source_adapter_id !== this.binding.source_adapter_id ||
+      stored.source_instance_id !== this.binding.source_instance_id ||
+      stored.external_id !== meeting.provenance.external_id ||
+      stored.meeting_revision !== meeting.provenance.canonical_revision ||
+      stored.meeting_id !== meeting.id ||
+      canonicalMeetingIgnoringSourceVersion(
+        JSON.parse(stored.raw_document_json) as MeetingDocument,
+      ) !== canonicalMeetingIgnoringSourceVersion(meeting)
+    ) {
+      throw new Error(
+        'authority processing key already binds a different raw candidate',
+      );
+    }
   }
 
   private assertOwnedCandidate(processingKey: string): RawCandidateRow {
