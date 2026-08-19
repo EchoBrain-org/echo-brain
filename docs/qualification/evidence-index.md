@@ -33,6 +33,7 @@ evidence system.
 | `EVID-AUTHORITY-RESTART-001` | `4796bf2046fa9f476132875cbc4435f9f266064c088ad5317b483d5c1866fe23` | Focused Authority restart and topology evidence | founder-private |
 | `EVID-JOB-B-ACTIVE-MEMBER-001` | `c75e10bf9ab58ecb97828a9771726c46935d035411f4cb18e0c2fe72e82a60dd` | Schema-V3 append, exact-head rebuild, active-owner read, cross-machine active-employee read, and central audit proof | founder-private |
 | `EVID-LAYER-123-MINIMUM-V1-001` | `096bd8a82a11bf93efc2590f06b4461683777f58ccf76c8deb964a474acdf013` | Exact-source Layers 1-3 tests, ordered restore proof, exact-artifact cutover, owner two-policy reads, later-member read, and revocation denial | founder-private |
+| `EVID-PERSON-CLIENT-FOUNDATION-001` | `81da60da994b24a5cb4550ca86dd7f93e96f0a8fb233784670ca4b85ed7bf06f` | Sanitized exact-source, artifact, offline-install, server-closure, side-by-side, and live Person-session foundation receipt | founder-private |
 
 ## Verification rule
 
