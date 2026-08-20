@@ -1095,6 +1095,7 @@ export interface SlackProviderHumanActionV2
   readonly approval_binding_id: string;
   readonly approval_binding_contract_sha256: ApprovalContractSha256;
   readonly external_identity_link_id: string;
+  readonly external_identity_link_contract_sha256: ApprovalContractSha256;
   readonly principal_id: string;
   readonly membership_id: string;
   readonly membership_type: PersonMembershipType;
@@ -1132,6 +1133,7 @@ const PROVIDER_HUMAN_ACTION_KEYS = [
   "approval_binding_contract_sha256",
   ...ADAPTER_KEYS,
   "external_identity_link_id",
+  "external_identity_link_contract_sha256",
   "principal_id",
   "membership_id",
   "membership_type",
@@ -1180,6 +1182,7 @@ export function validateSlackProviderHumanActionV2(
     "connection_contract_sha256",
     "connection_state_sha256",
     "approval_binding_contract_sha256",
+    "external_identity_link_contract_sha256",
     "action_capability_contract_sha256",
     "frozen_card_sha256",
     "approved_snapshot_sha256",
@@ -1522,6 +1525,7 @@ export interface ProviderHumanActionContractSetV2 {
   readonly connection_state: OrganizationToolConnectionStateV2;
   readonly connection_state_sha256: ApprovalContractSha256;
   readonly external_human_link: ExternalHumanIdentityLinkContractV2;
+  readonly external_identity_link_contract_sha256: ApprovalContractSha256;
   readonly approval_binding: PersonSlackApprovalBindingContractV2;
   readonly approval_binding_contract_sha256: ApprovalContractSha256;
   readonly action_capability: PersonSlackApprovalActionCapabilityV2;
@@ -1802,6 +1806,11 @@ function validateContractSet(
     link.external_identity_link_id,
     "action link",
   );
+  same(
+    actionBody.external_identity_link_contract_sha256,
+    input.external_identity_link_contract_sha256,
+    "action link digest",
+  );
   sameFields(
     asUnknownRecord(actionBody),
     asUnknownRecord(link),
@@ -1932,6 +1941,10 @@ function validateContractSet(
   for (const [digestValue, label] of [
     [input.connection_contract_sha256, "connection_contract_sha256"],
     [input.connection_state_sha256, "connection_state_sha256"],
+    [
+      input.external_identity_link_contract_sha256,
+      "external_identity_link_contract_sha256",
+    ],
     [
       input.approval_binding_contract_sha256,
       "approval_binding_contract_sha256",

@@ -69,6 +69,13 @@ and independently recomputed digests. Credential rotation may update the
 current-state proof without relabeling the stable provider identity; neither an
 unspecified digest nor partial comparison is proof.
 
+The provider-action commitment carries the independently recomputed digest of
+the exact immutable external-human-link body. The authorization proof and
+integration audit bind that provider-action digest, so changing the link's
+verification event, evidence, time, tenant, provider subject, principal, or
+membership provenance cannot replay the historical action. A copied link body
+or an unreferenced set-level digest is not evidence.
+
 The approval capability adapter identity binds at least kind, adapter ID,
 instance ID, version, provider connection/binding, approval channel and
 provider-object coordinate, action mapping, and the frozen policy/presentation

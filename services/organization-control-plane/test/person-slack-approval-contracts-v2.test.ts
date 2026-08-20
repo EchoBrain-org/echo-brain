@@ -113,6 +113,7 @@ function fixture(
     verification_evidence_sha256: digest("human link verification"),
     verified_at: VERIFIED_AT,
   });
+  const externalHumanLinkContractSha256 = canonicalSha256(externalHumanLink);
   const approvalBinding = d2.buildPersonSlackApprovalBindingContractV2({
     ...coordinates,
     approval_binding_id: BINDING_ID,
@@ -208,6 +209,7 @@ function fixture(
     approval_binding_contract_sha256: approvalBindingContractSha256,
     ...adapter,
     external_identity_link_id: LINK_ID,
+    external_identity_link_contract_sha256: externalHumanLinkContractSha256,
     principal_id: PRINCIPAL_ID,
     membership_id: MEMBERSHIP_ID,
     membership_type: "employee",
@@ -276,6 +278,7 @@ function fixture(
     connection_state: connectionState,
     connection_state_sha256: connectionStateSha256,
     external_human_link: externalHumanLink,
+    external_identity_link_contract_sha256: externalHumanLinkContractSha256,
     approval_binding: approvalBinding,
     approval_binding_contract_sha256: approvalBindingContractSha256,
     action_capability: actionCapability,
@@ -440,10 +443,12 @@ describe("Person Slack approval D2 contracts", () => {
       ),
     ).toThrow(/unexpected shape/);
     expect(() =>
-      d2.validateSlackProviderHumanActionV2({
-        ...set.provider_action,
-        external_identity_link_contract_sha256: digest("unowned link digest"),
-      }),
+      d2.validateSlackProviderHumanActionV2(
+        without(
+          set.provider_action,
+          "external_identity_link_contract_sha256",
+        ),
+      ),
     ).toThrow(/unexpected shape/);
     expect(() =>
       d2.validateProviderHumanAuthorizationAllowV2({
@@ -520,6 +525,15 @@ describe("Person Slack approval D2 contracts", () => {
           ...set,
           external_human_link: changed(set.external_human_link, {
             provider_subject_id: "U_DIFFERENT",
+          }),
+        },
+      },
+      {
+        label: "different external link digest",
+        set: {
+          ...set,
+          provider_action: changed(set.provider_action, {
+            external_identity_link_contract_sha256: digest("different link"),
           }),
         },
       },

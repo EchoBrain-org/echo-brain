@@ -587,7 +587,8 @@ The `echo-provider-human-action-v2` preimage contains exactly:
   `connection_state_sha256`;
 - approval binding ID and approval-binding contract digest;
 - approval adapter kind, ID, instance ID, and version;
-- external identity link ID, principal ID, membership ID, and membership type;
+- external identity link ID, `external_identity_link_contract_sha256`,
+  principal ID, membership ID, and membership type;
 - action-capability ID and capability contract digest;
 - provider object type and stable coordinates, provider actor subject, and
   semantic action `approve` or `reject`;
@@ -598,6 +599,12 @@ The `echo-provider-human-action-v2` preimage contains exactly:
 
 Every retained policy constructs the same preimage shape. Mutating any member
 changes the digest. No v1 provider-event digest can cross-admit.
+The external-link digest is recomputed from the exact stored
+`echo-external-human-link-contract-v2` body at the action-time identity
+intersection. Because it is a member of the provider-action preimage, the
+authorization proof, integration audit, semantic replay key, and durable
+locator bind that immutable link provenance transitively; a set-level copy of
+the link body or digest is not evidence by itself.
 
 `provider-human-approval-authorization-v2` is the closed Authority decision
 body over Authority, organization, lineage, approval ID, semantic action,

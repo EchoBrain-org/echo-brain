@@ -185,6 +185,27 @@ deliberately proves no concrete persistence, process restart, provider action,
 audit-result recovery, public export, or live runtime selection. Those remain
 D2-2B and Phase 3 evidence.
 
+**D2-2B offline finalization slice (2026-08-20):**
+`services/organization-control-plane/test/person-slack-approval-finalization-v2.test.ts`
+proves the private `{approval_id}` state machine around an abstract stable
+Authority/control-plane fence and an independently observing Slack provider
+port. It performs pre-call connection, current-state, binding, policy, and
+surface reproof; releases the fence for provider I/O; then atomically
+intersects the observed Slack subject with the exact current tenant-scoped
+Person link, membership tenure, and policy/action capability before building
+the observation, message, provider action, authorization allow, chained audit,
+semantic action, and durable D2 result. Recovery binds the requested approval,
+the exact external-link digest through the provider-action hash, and verified
+audit-chain membership before consulting mutable current edges or the provider.
+The suite covers both policies and both actions, concurrent exact replay and
+changed-expectation conflict, pre-call and in-flight revocation, atomic failure,
+post-audit replay, corrupt history, cancellation, and adversarial object
+shapes. It deliberately uses an injected Authority-owned frozen-approval
+reproof witness plus in-memory coordinator/provider fakes. Concrete
+persistence, process-restart proof, raw card/snapshot body ownership, the real
+cross-role lock, a Slack adapter implementation, public export, live runtime
+selection, and the later D3 resolution reference remain Phase 3/D3 evidence.
+
 The suite must prove:
 
 - Person Slack completion is link-only; the attempt ID is lookup/correlation,

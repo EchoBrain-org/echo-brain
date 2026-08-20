@@ -1275,6 +1275,29 @@ Phase 3 owns concrete persistence and the real shared Authority/control-plane
 fence. The retained D2-2A slice passed the full repository gate: 141 test
 files and 1,419 tests, plus boundary, documentation, type checking, and lint.
 
+**D2-2B finalization checkpoint (2026-08-20):** one private, non-live
+application state machine now accepts only an approval ID, recovers an exact
+durable result before consulting current edges, or prepares a server-owned
+Slack expectation under an abstract stable Authority/control-plane fence.
+Provider observation occurs outside the fence. The final fence independently
+reproves the frozen approval, connection/current state, active binding and
+adapter surface, exact tenant-scoped Person link and link digest, current
+membership tenure, selected policy/action capability, and verified audit-chain
+position before atomically saving the provider observation, message, action,
+authorization allow, chained integration audit, semantic input, and durable
+D2 result. Both policies and both actions share this installation-free shape;
+rejection remains a human act but gains no delivery or read authority. Exact
+post-audit replay survives later current-edge revocation without another
+provider call, while changed provider or frozen semantics conflict. This
+checkpoint still uses an injected frozen-approval reproof witness, an abstract
+provider observer, an in-memory transaction fake, and an abstract chain/fence
+proof. It has no SQLite schema, process-restart claim, public export, live
+selection, D3 reference, delivery, read, source, or model authority. Phase 3
+owns concrete persistence, the real shared lock, raw card/snapshot body
+ownership, and the live Slack observer/composition. The retained D2-2B slice
+passed the full repository gate: 142 test files and 1,441 tests, plus boundary,
+documentation, type checking, and lint.
+
 **Entry gate**
 
 - Phase 1 exit is green.
@@ -1332,11 +1355,15 @@ earlier red, and compatibility remains selectable until Phase 3 parity.
    **D2-2A is complete as an offline activation candidate:** it proves the
    administrator-only orchestration, current-edge reproof, exact
    replay/conflict, and one-resource/one-capability-set rules through an
-   abstract stable-fence transaction. D2-2B still owns provider action
-   finalization, immutable audit/result recovery, and the alternate
-   non-installation authorizer. Phase 3 alone owns durable restart proof,
-   concrete cross-role locking, baseline SQL, application IDs, lineage
-   manifests, and writable openers.
+   abstract stable-fence transaction.
+   **D2-2B is complete as an offline finalization candidate:** it proves
+   provider observation outside the fence, final current-edge intersection,
+   atomic installation-free action/audit/result construction, exact concurrent
+   conflict, and post-audit recovery against a verified chain position. Phase
+   3 alone owns durable restart proof, concrete cross-role locking and
+   persistence, the real Slack observer and live alternate-authorizer
+   selection, baseline SQL, application IDs, lineage manifests, and writable
+   openers.
 5. **Authority envelope, receipt, and Layer-1 facts.** Add the new envelope and
    receipt versions without changing V1-V3 readers. Reprove the exact human-act
    reference at the existing Record application boundary; append record and
