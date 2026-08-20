@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   AdapterError,
   AdapterRegistry,
+  assertCanonicalApprovalDecision,
   type AdapterOperationContext,
   runCoreCycle,
   type AdapterConfig,
@@ -23,6 +24,20 @@ import {
   type MeetingSourceAdapter,
   meetingProcessingKey,
 } from '../../../src/processing/core/index.js';
+
+function canonicalJsonRoundTrip<T>(value: T): T {
+  function sortObjectKeys(current: unknown): unknown {
+    if (Array.isArray(current)) return current.map(sortObjectKeys);
+    if (current === null || typeof current !== 'object') return current;
+    const record = current as Record<string, unknown>;
+    return Object.fromEntries(
+      Object.keys(record)
+        .sort()
+        .map((key) => [key, sortObjectKeys(record[key])]),
+    );
+  }
+  return JSON.parse(JSON.stringify(sortObjectKeys(value))) as T;
+}
 
 const meeting: MeetingDocument = {
   schema_version: 1,
@@ -76,12 +91,14 @@ class SourceFake implements MeetingSourceAdapter {
   };
   readonly requests: MeetingPullRequest[] = [];
 
+  constructor(private readonly returnedMeeting: MeetingDocument = meeting) {}
+
   validateConfig = validConfig;
   healthCheck = healthy;
 
   async pull(request: MeetingPullRequest): Promise<MeetingBatch> {
     this.requests.push(request);
-    return { meetings: [meeting], next_cursor: 'cursor-2' };
+    return { meetings: [this.returnedMeeting], next_cursor: 'cursor-2' };
   }
 }
 
@@ -288,7 +305,10 @@ class GateFake implements ApprovalGate {
 }
 
 class PendingGateFake implements ApprovalGate {
-  async review(): Promise<ApprovalDecision> {
+  readonly requests: ApprovalRequest[] = [];
+
+  async review(request: ApprovalRequest): Promise<ApprovalDecision> {
+    this.requests.push(request);
     return {
       status: 'pending',
       reviewed_at: null,
@@ -720,6 +740,84 @@ describe('tool-agnostic core cycle', () => {
     expect(processor.contexts).toHaveLength(1);
     expect(state.decisions).toHaveLength(1);
     expect(resumed).toMatchObject({ meetings_processed: 1, deliveries: 1 });
+  });
+
+  it('resumes a canonicalized approval while preserving participant order', async () => {
+    const sourceMeeting: MeetingDocument = {
+      ...meeting,
+      time: {
+        timezone: 'America/Los_Angeles',
+        actual_start_at: '2026-07-16T16:00:00.000Z',
+      },
+      participants: [
+        ...meeting.participants,
+        { id: 'participant-2', display_name: 'Reviewer' },
+      ],
+    };
+    const source = new SourceFake(sourceMeeting);
+    const processor = new ProcessorFake();
+    const surface = new DeliverySurfaceFake();
+    const state = new StateFake();
+    const gate = new PendingGateFake();
+    await runCoreCycle(cycleInput({
+      meetingSource: source,
+      decisionProcessor: processor,
+      deliverySurfaces: [surface],
+      approvalGate: gate,
+      state,
+    }));
+    const request = gate.requests[0]!;
+    const approval = canonicalJsonRoundTrip<ApprovalDecision>({
+      status: 'approved',
+      reviewed_at: '2026-07-16T17:04:00.000Z',
+      reviewed_by: 'reviewer-1',
+      reason: null,
+      approved_brief: request.brief,
+    });
+    const validationContext = {
+      meeting: sourceMeeting,
+      processor: processor.identity,
+      decisions: state.decisions[0]!,
+    };
+
+    expect(Object.keys(approval.approved_brief!.meeting.time!)).not.toEqual(
+      Object.keys(sourceMeeting.time!),
+    );
+    expect(() =>
+      assertCanonicalApprovalDecision(approval, validationContext),
+    ).not.toThrow();
+    expect(() => assertCanonicalApprovalDecision({
+      ...approval,
+      approved_brief: {
+        ...approval.approved_brief!,
+        meeting: {
+          ...approval.approved_brief!.meeting,
+          participants: [
+            ...approval.approved_brief!.meeting.participants,
+          ].reverse(),
+        },
+      },
+    }, validationContext)).toThrow(/meeting snapshot/);
+    state.approvalsByKey.set(
+      meetingProcessingKey(sourceMeeting, processor),
+      approval,
+    );
+
+    const resumed = await runCoreCycle(cycleInput({
+      meetingSource: source,
+      decisionProcessor: processor,
+      deliverySurfaces: [surface],
+      approvalGate: gate,
+      state,
+    }));
+
+    expect(gate.requests).toHaveLength(1);
+    expect(resumed).toMatchObject({
+      ok: true,
+      meetings_processed: 1,
+      deliveries: 1,
+      cursor_advanced: true,
+    });
   });
 
   it('does not mark or advance a revision whose delivery is unresolved', async () => {

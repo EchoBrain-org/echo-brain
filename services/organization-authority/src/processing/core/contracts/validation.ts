@@ -15,6 +15,38 @@ function object(value: unknown, label: string): Record<string, unknown> {
   return value as Record<string, unknown>;
 }
 
+function structurallyEqualJson(left: unknown, right: unknown): boolean {
+  if (left === right) return true;
+  if (Array.isArray(left) || Array.isArray(right)) {
+    return (
+      Array.isArray(left) &&
+      Array.isArray(right) &&
+      left.length === right.length &&
+      left.every((value, index) => structurallyEqualJson(value, right[index]))
+    );
+  }
+  if (
+    left === null ||
+    right === null ||
+    typeof left !== 'object' ||
+    typeof right !== 'object'
+  ) {
+    return false;
+  }
+  const leftRecord = left as Record<string, unknown>;
+  const rightRecord = right as Record<string, unknown>;
+  const leftKeys = Object.keys(leftRecord).sort();
+  const rightKeys = Object.keys(rightRecord).sort();
+  return (
+    leftKeys.length === rightKeys.length &&
+    leftKeys.every(
+      (key, index) =>
+        key === rightKeys[index] &&
+        structurallyEqualJson(leftRecord[key], rightRecord[key]),
+    )
+  );
+}
+
 function onlyKeys(
   value: Record<string, unknown>,
   allowed: readonly string[],
@@ -923,9 +955,11 @@ export function assertCanonicalDecisionBrief(
     context.meeting !== undefined &&
     (meeting['id'] !== context.meeting.id ||
       meeting['title'] !== context.meeting.title ||
-      JSON.stringify(meeting['time']) !== JSON.stringify(context.meeting.time) ||
-      JSON.stringify(meeting['participants']) !==
-        JSON.stringify(context.meeting.participants))
+      !structurallyEqualJson(meeting['time'], context.meeting.time) ||
+      !structurallyEqualJson(
+        meeting['participants'],
+        context.meeting.participants,
+      ))
   ) {
     throw new Error('approved brief meeting snapshot does not match its source meeting');
   }
