@@ -128,9 +128,10 @@ function boundedCycleFailure(result: AuthorityLiveMeetingCycleResult): Error {
 }
 
 /**
- * Opens the minimum live meeting pipeline only after a source has been
- * explicitly provisioned. An activated record policy without a source remains
- * a record-serving Authority and does not poll a provider by implication.
+ * Opens the minimum live meeting pipeline only after its source and exact
+ * installation-scoped approval capability have been explicitly provisioned.
+ * An incomplete pipeline remains a record-serving Authority and does not poll
+ * a provider by implication.
  */
 export async function openAuthorityMeetingProcessingRuntime(
   options: OpenAuthorityMeetingProcessingRuntimeOptions,
@@ -154,6 +155,79 @@ export async function openAuthorityMeetingProcessingRuntime(
     );
   }
 
+  const processingCredentialDirectory = join(
+    options.config.state_directory,
+    'credentials',
+    'processing',
+  );
+  const installationKey = new ExistingExportableInstallationKey(
+    join(
+      processingCredentialDirectory,
+      AUTHORITY_PROCESSING_INSTALLATION_KEY_FILENAME,
+    ),
+  );
+  const installationDescriptor = installationKey.inspect();
+  const installationSigningKey = protocolKey(installationDescriptor);
+  const reviewerEnrollment = options.authorityRepository.read((transaction) =>
+    transaction.enrollmentByInstallation(
+      installationDescriptor.installation_id,
+    ),
+  );
+  if (
+    reviewerEnrollment === undefined ||
+    reviewerEnrollment.status !== 'active' ||
+    reviewerEnrollment.authority_id !== options.config.authority_id ||
+    reviewerEnrollment.organization_id !== options.config.organization_id ||
+    reviewerEnrollment.installation_id !==
+      installationDescriptor.installation_id ||
+    reviewerEnrollment.installation_signing_key.key_id !==
+      installationSigningKey.key_id ||
+    reviewerEnrollment.installation_signing_key.algorithm !==
+      installationSigningKey.algorithm ||
+    reviewerEnrollment.installation_signing_key.public_key_spki_der_base64 !==
+      installationSigningKey.public_key_spki_der_base64
+  ) {
+    throw new Error(
+      'server installation key does not match the active Authority enrollment',
+    );
+  }
+
+  const slackBinding =
+    options.integrationsRepository.activeSlackApprovalRuntimeBinding(
+      policy.approval_surface_adapter_instance_id,
+      installationDescriptor.installation_id,
+      installationDescriptor.key_id,
+    );
+  if (slackBinding === null) {
+    process.stderr.write(
+      'organization authority meeting processing disabled: the current installation has no complete policy-surface Slack binding\n',
+    );
+    return null;
+  }
+  const reviewer = options.authorityRepository.read((transaction) =>
+    transaction.membership(slackBinding.membership_id),
+  );
+  if (
+    reviewer === undefined ||
+    reviewer.organization_id !== options.config.organization_id ||
+    reviewer.principal_id !== slackBinding.principal_id ||
+    reviewerEnrollment.principal_id !== slackBinding.principal_id ||
+    reviewerEnrollment.membership_id !== slackBinding.membership_id ||
+    reviewer.status !== 'active'
+  ) {
+    throw new Error(
+      'Slack approval reviewer is not the exact active Authority membership',
+    );
+  }
+  assertReviewerDisplayName(reviewer.display_name);
+  if (
+    installationDescriptor.installation_id !== slackBinding.installation_id ||
+    installationDescriptor.key_id !== slackBinding.installation_key_id
+  ) {
+    throw new Error(
+      'server installation key differs from the active Slack approval binding',
+    );
+  }
   const credentialDirectory = join(options.config.state_directory, 'credentials');
   const ownerEmail = readPrivateAuthorityGranolaOwnerEmail(
     `file:${join(
@@ -196,72 +270,6 @@ export async function openAuthorityMeetingProcessingRuntime(
       )}`,
     );
 
-  const slackBinding =
-    options.integrationsRepository.activeSlackApprovalRuntimeBinding(
-      policy.approval_surface_adapter_instance_id,
-    );
-  if (slackBinding === null) {
-    throw new Error(
-      'Authority meeting runtime requires one complete active Slack approval binding',
-    );
-  }
-  const reviewer = options.authorityRepository.read((transaction) =>
-    transaction.membership(slackBinding.membership_id),
-  );
-  if (
-    reviewer === undefined ||
-    reviewer.organization_id !== options.config.organization_id ||
-    reviewer.principal_id !== slackBinding.principal_id ||
-    reviewer.status !== 'active'
-  ) {
-    throw new Error(
-      'Slack approval reviewer is not the exact active Authority membership',
-    );
-  }
-  assertReviewerDisplayName(reviewer.display_name);
-
-  const processingCredentialDirectory = join(
-    credentialDirectory,
-    'processing',
-  );
-  const installationKey = new ExistingExportableInstallationKey(
-    join(
-      processingCredentialDirectory,
-      AUTHORITY_PROCESSING_INSTALLATION_KEY_FILENAME,
-    ),
-  );
-  const installationDescriptor = installationKey.inspect();
-  if (
-    installationDescriptor.installation_id !== slackBinding.installation_id ||
-    installationDescriptor.key_id !== slackBinding.installation_key_id
-  ) {
-    throw new Error(
-      'server installation key differs from the active Slack approval binding',
-    );
-  }
-  const installationSigningKey = protocolKey(installationDescriptor);
-  const reviewerEnrollment = options.authorityRepository.read((transaction) =>
-    transaction.enrollmentByInstallation(slackBinding.installation_id),
-  );
-  if (
-    reviewerEnrollment === undefined ||
-    reviewerEnrollment.status !== 'active' ||
-    reviewerEnrollment.authority_id !== options.config.authority_id ||
-    reviewerEnrollment.organization_id !== options.config.organization_id ||
-    reviewerEnrollment.principal_id !== slackBinding.principal_id ||
-    reviewerEnrollment.membership_id !== slackBinding.membership_id ||
-    reviewerEnrollment.installation_id !== slackBinding.installation_id ||
-    reviewerEnrollment.installation_signing_key.key_id !==
-      installationSigningKey.key_id ||
-    reviewerEnrollment.installation_signing_key.algorithm !==
-      installationSigningKey.algorithm ||
-    reviewerEnrollment.installation_signing_key.public_key_spki_der_base64 !==
-      installationSigningKey.public_key_spki_der_base64
-  ) {
-    throw new Error(
-      'server installation key does not match the active Authority enrollment',
-    );
-  }
   const authorityDescriptor = options.authority.descriptor();
 
   const slackCredential = options.integrationSecrets.read(

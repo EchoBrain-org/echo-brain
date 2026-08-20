@@ -190,8 +190,11 @@ installation-bound compatibility surface. It accepts
 existing identity link, and an existing adapter binding, then creates the exact
 `approve` and `reject` grants. The Person identity-link flow cannot satisfy
 that old binding contract. A Person-bound approval activation path is not yet
-implemented, and the bundled Slack approval adapter is not composed into
-`serve` or `process-one-meeting`.
+implemented. The retained installation-signed V1 Slack link remains the narrow
+way to create that exact binding. Once its grants and a processing source are
+ready, `serve` composes the bundled Slack approval adapter into the serialized
+meeting worker. `process-one-meeting` remains a bounded stopped-state admission
+command and does not publish an approval card.
 
 ### Retained installation access recovery
 

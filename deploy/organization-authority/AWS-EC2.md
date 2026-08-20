@@ -544,7 +544,8 @@ deliberately API-enabled space (or the public Team space only when it exposes no
 other eligible completed meeting during the canary), and record that non-secret
 space selection with the provenance evidence. Otherwise `no_meeting` can mean
 the workspace correctly withheld the note rather than that source ingestion is
-broken.
+broken. Either result fails the controlled live-meeting canary because
+`no_meeting` does not prove admission.
 
 In the AWS Console, create or rotate the JSON secret identified by protected
 input `GRANOLA_SOURCE_SECRET_ID`; its exact keys are `api_key`, `owner_email`,
@@ -611,11 +612,36 @@ PROCESSING_KEY_PATH="$PROCESSING_KEY_DIRECTORY/installation-key-state.v1.json"
 [[ $(stat -c '%a:%U:%G' "$PROCESSING_KEY_PATH") == 600:echo-authority:echo-authority ]]
 ```
 
-At startup the key's installation and key IDs must match the exact active Slack
-approval binding. The key's public signing material and that binding's
-principal and membership must also match the active Authority enrollment. Any
-mismatch is a failed startup; do not change the binding or enrollment to make a
-different key fit.
+Before the worker can start, the recording policy's approval-surface instance
+must have a complete active `slack-reactions` binding for this exact
+installation ID and full key ID. Historical installations on the same surface
+are retained but ignored. If the exact binding or its grants are missing,
+`serve` stays available with meeting polling disabled and emits one bounded
+diagnostic. Prefer a private operator route for the retained
+installation-signed V1 Slack link. If that preserved client requires its
+configured public Authority URL, allow one bounded Tunnel window for only the
+signed begin and complete requests while polling is disabled, then stop the
+Tunnel immediately. Run `slack approval activate` for the returned identity and
+binding and restart `serve` with the Tunnel off. The current Person client Slack
+link is not a substitute: it links a Person identity but creates no installation
+adapter binding or grants. Never clone rows with SQL or retarget the immutable
+recording policy.
+
+For this founder-live migration, “retained installation-signed V1 link” means
+the already-enrolled pre-migration product recorded by that machine's private
+`operator-installation.v1.json`, its manifest-pinned Node/CLI pair, and its
+`OrganizationSlackIdentityLinkCoordinator`. Use the reviewed private operator
+wrapper around that preserved coordinator, with
+`adapter_instance_id=internal-approvals` and `adapter_version=1.0.0`; do not
+install the current Person package in its place or change the enrolled key. Stop
+if the manifest-pinned package, local organization state, exact key file, or
+reviewed wrapper is unavailable. The wrapper and its one-time Slack challenge
+code remain private migration evidence and are not part of the shipped product.
+
+At worker startup the transferred key's public signing material must match its
+active Authority enrollment. The exact Slack binding's principal and membership
+must match that enrollment. A missing or incomplete exact capability leaves
+polling disabled; ambiguous or mismatched exact state fails worker composition.
 
 Before the first processing write, stop public ingress and quiesce every
 container. Capture the existing Authority container before stopping it so its
@@ -775,8 +801,10 @@ If snapshot creation, waiting, or exact verification fails, keep both the stack
 and Tunnel stopped. A pending or in-progress snapshot is not the checkpoint.
 
 After the snapshot is verified, return to the stopped EC2 root shell. Load the
-exact active Person/source tuple from protected operator evidence. Owner email,
-credential scope, and API key deliberately do not appear here:
+exact active Person tuple from protected operator evidence. Minimum V1 pins the
+single organization source instance so the first run and retry address the same
+durable binding. Owner email, credential scope, and API key deliberately do not
+appear here:
 
 ```bash
 set -euo pipefail
@@ -787,8 +815,9 @@ compose() { docker compose --env-file .env -f compose.yaml -f compose.ec2.yaml "
 : "${PROCESSING_PRINCIPAL_ID:?load from protected operator evidence}"
 : "${PROCESSING_MEMBERSHIP_ID:?load from protected operator evidence}"
 : "${PROCESSING_MEMBERSHIP_TYPE:?load from protected operator evidence}"
-: "${PROCESSING_SOURCE_INSTANCE:?load from protected operator evidence}"
+readonly PROCESSING_SOURCE_INSTANCE=granola-org1-primary
 [[ $PROCESSING_MEMBERSHIP_TYPE == owner || $PROCESSING_MEMBERSHIP_TYPE == employee ]]
+[[ $PROCESSING_SOURCE_INSTANCE =~ ^[a-z][a-z0-9-]{0,127}$ ]]
 
 EVIDENCE_DIRECTORY=/root/echo-authority-private-evidence
 [[ -d $EVIDENCE_DIRECTORY && ! -L $EVIDENCE_DIRECTORY ]]
@@ -821,84 +850,56 @@ jq -e --arg source "$PROCESSING_SOURCE_INSTANCE" '
   (.source_binding.configuration == "provisioned" or
     .source_binding.configuration == "existing") and
   .ok == true and .failure_count == 0 and .failure_stages == [] and
+  .outcome == "pending_created" and
+  .meetings_seen == 1 and .meetings_pending == 1 and
   .meetings_processed == 0 and .meetings_skipped == 0 and
   .meetings_rejected == 0 and .meetings_dead_lettered == 0 and
-  .deliveries == 0 and
-  (
-    (.outcome == "pending_created" and .meetings_seen == 1 and
-      .meetings_pending == 1 and .cursor_advanced == false and
-      (.pending_approval_ids | length) == 1 and
-      (.pending_approval_ids[0] | type) == "string" and
-      (.pending_approval_ids[0] | length) > 0) or
-    (.outcome == "no_meeting" and .meetings_seen == 0 and
-      .meetings_pending == 0 and
-      (.cursor_advanced | type) == "boolean" and
-      .pending_approval_ids == []) or
-    (.outcome == "pending_exists" and .meetings_seen == 0 and
-      .meetings_pending == 1 and .cursor_advanced == false and
-      (.pending_approval_ids | length) == 1 and
-      (.pending_approval_ids[0] | type) == "string" and
-      (.pending_approval_ids[0] | length) > 0)
-  )
+  .deliveries == 0 and .cursor_advanced == false and
+  (.pending_approval_ids | length) == 1 and
+  (.pending_approval_ids[0] | type) == "string" and
+  (.pending_approval_ids[0] | length) > 0
 ' "$RUN_RECEIPT" >/dev/null
-OUTCOME="$(jq -r '.outcome' "$RUN_RECEIPT")"
-if [[ $OUTCOME == pending_exists ]]; then
-  : "${PRIOR_PENDING_RECEIPT:?set to the prior private one-meeting receipt}"
-  [[ -f $PRIOR_PENDING_RECEIPT && ! -L $PRIOR_PENDING_RECEIPT ]]
-  PRIOR_APPROVAL_ID="$(jq -er '
-    select(.outcome == "pending_created" or .outcome == "pending_exists") |
-    .pending_approval_ids |
-    select(length == 1) |
-    .[0] |
-    select(type == "string" and length > 0)
-  ' "$PRIOR_PENDING_RECEIPT")"
-  jq -e --arg approval "$PRIOR_APPROVAL_ID" \
-    '.pending_approval_ids == [$approval]' "$RUN_RECEIPT" >/dev/null
-fi
+FIRST_APPROVAL_ID="$(jq -r '.pending_approval_ids[0]' "$RUN_RECEIPT")"
 ```
 
 The outcome rubric is exact:
 
-- `pending_created` is the one-meeting admission: one seen, zero processed,
-  skipped, rejected, dead-lettered, and delivered; one pending; no cursor
-  advance or failures; exactly one opaque approval ID. While still stopped,
-  rerun the same command once and require `pending_exists`, zero seen, and the
-  same approval ID. That exact-artifact retry returns before provider contact.
-- `no_meeting` is a safe bounded page with no pending ID and no delivery or
-  failure. The cursor may or may not advance. It is not a live-meeting
-  qualification; another bounded run is permitted while stopped.
-- `pending_exists` is acceptable only as retry evidence for an approval ID
-  already retained in the prior private receipt. It does not admit or qualify a
-  new meeting.
+- `pending_created` is the only passing first-run outcome: one seen, zero
+  processed, skipped, rejected, dead-lettered, and delivered; one pending; no
+  cursor advance or failures; and exactly one opaque approval ID.
+- `no_meeting` is bounded and side-effect-safe, but it fails this controlled
+  canary because it does not prove live-meeting admission. Keep the stack and
+  Tunnel stopped and correct meeting eligibility before trying a fresh
+  checkpointed canary.
+- `pending_exists` fails as a first-run result. It is accepted only for the one
+  immediate retry of the approval ID created by this run.
 - Any other output, nonzero exit, missing receipt, or failed assertion fails the
   gate. Keep the stack and Tunnel stopped. Do not edit or delete processing
   rows; minimum-V1 recovery is replacement from the whole pre-write snapshot.
 
-For a new `pending_created`, execute and validate the one intentional retry:
+Execute and validate the one intentional retry:
 
 ```bash
-if [[ $OUTCOME == pending_created ]]; then
-  FIRST_APPROVAL_ID="$(jq -r '.pending_approval_ids[0]' "$RUN_RECEIPT")"
-  RETRY_RECEIPT="$EVIDENCE_DIRECTORY/one-meeting-retry-$RUN_STAMP.json"
-  RETRY_ERROR="$EVIDENCE_DIRECTORY/one-meeting-retry-$RUN_STAMP.stderr"
-  if ! run_one_meeting > "$RETRY_RECEIPT" 2> "$RETRY_ERROR"; then
-    printf '%s\n' 'one-meeting retry failed; keep the stack and Tunnel stopped' >&2
-    exit 1
-  fi
-  jq -e --arg source "$PROCESSING_SOURCE_INSTANCE" \
-    --arg approval "$FIRST_APPROVAL_ID" '
-      .schema_version == 1 and
-      .kind == "echo-organization-authority-one-meeting-run" and
-      .source == {adapter_id:"granola",instance_id:$source} and
-      .outcome == "pending_exists" and .ok == true and
-      .meetings_seen == 0 and .meetings_processed == 0 and
-      .meetings_skipped == 0 and .meetings_pending == 1 and
-      .meetings_rejected == 0 and .meetings_dead_lettered == 0 and
-      .deliveries == 0 and .cursor_advanced == false and
-      .failure_count == 0 and .failure_stages == [] and
-      .pending_approval_ids == [$approval]
-    ' "$RETRY_RECEIPT" >/dev/null
+RETRY_RECEIPT="$EVIDENCE_DIRECTORY/one-meeting-retry-$RUN_STAMP.json"
+RETRY_ERROR="$EVIDENCE_DIRECTORY/one-meeting-retry-$RUN_STAMP.stderr"
+if ! run_one_meeting > "$RETRY_RECEIPT" 2> "$RETRY_ERROR"; then
+  printf '%s\n' 'one-meeting retry failed; keep the stack and Tunnel stopped' >&2
+  exit 1
 fi
+jq -e --arg source "$PROCESSING_SOURCE_INSTANCE" \
+  --arg approval "$FIRST_APPROVAL_ID" '
+    .schema_version == 1 and
+    .kind == "echo-organization-authority-one-meeting-run" and
+    .source == {adapter_id:"granola",instance_id:$source} and
+    .source_binding == {owner:"existing",configuration:"existing"} and
+    .outcome == "pending_exists" and .ok == true and
+    .meetings_seen == 0 and .meetings_processed == 0 and
+    .meetings_skipped == 0 and .meetings_pending == 1 and
+    .meetings_rejected == 0 and .meetings_dead_lettered == 0 and
+    .deliveries == 0 and .cursor_advanced == false and
+    .failure_count == 0 and .failure_stages == [] and
+    .pending_approval_ids == [$approval]
+  ' "$RETRY_RECEIPT" >/dev/null
 ```
 
 The receipts deliberately contain no title, transcript, summary, participant,
@@ -906,11 +907,12 @@ owner email, provider meeting ID, credential, or failure message. Keep them and
 the command stderr mode `0600` in private evidence; do not paste either into a
 tracked file or chat.
 
-After an accepted outcome, start `authority` and `proxy` while ingress remains
-off and prove private health. Starting `serve` also starts the serialized live
-worker because the source now exists; outbound Granola and Slack calls do not
-require the Tunnel. Keep public ingress off through the controlled approval
-canary. Do not reverse this order:
+After the required `pending_created` followed by exact `pending_exists`
+artifact pair passes, start `authority` and `proxy` while ingress remains off
+and prove private health. Starting `serve` also starts the serialized live
+worker because the source now exists and the exact Slack capability is ready;
+outbound Granola and Slack calls do not require the Tunnel. Keep public ingress
+off through the controlled approval canary. Do not reverse this order:
 
 ```bash
 set -euo pipefail

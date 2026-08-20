@@ -1075,7 +1075,11 @@ describe("organization integrations repository", () => {
     ).toEqual(result);
     expect(repository.activateExistingSlackApproval(input)).toEqual(result);
     expect(
-      repository.activeSlackApprovalRuntimeBinding("founder-approvals"),
+      repository.activeSlackApprovalRuntimeBinding(
+        "founder-approvals",
+        INSTALLATION_ID,
+        digest("installation-key"),
+      ),
     ).toMatchObject({
       principal_id: PRINCIPAL_ID,
       membership_id: MEMBERSHIP_ID,
@@ -1090,7 +1094,18 @@ describe("organization integrations repository", () => {
       },
     });
     expect(
-      repository.activeSlackApprovalRuntimeBinding("missing-approvals"),
+      repository.activeSlackApprovalRuntimeBinding(
+        "missing-approvals",
+        INSTALLATION_ID,
+        digest("installation-key"),
+      ),
+    ).toBeNull();
+    expect(
+      repository.activeSlackApprovalRuntimeBinding(
+        "founder-approvals",
+        INSTALLATION_ID,
+        digest("different-installation-key"),
+      ),
     ).toBeNull();
     expect(() =>
       repository.slackApprovalActivationReplay(
@@ -1143,6 +1158,55 @@ describe("organization integrations repository", () => {
       "slack_identity_link.completed",
       "organization_tool.slack.onboarded",
     ]);
+    repository.close();
+  });
+
+  it("ignores same-surface bindings owned by historical installations", () => {
+    const integrationDatabase = database();
+    const repository = new OrganizationIntegrationsRepository(
+      integrationDatabase,
+      {
+        organization_id: ORGANIZATION_ID,
+        authority_id: AUTHORITY_ID,
+      },
+    );
+    const linked = completeSlackIdentityLink(
+      repository,
+      "runtime-installation-scope",
+      "sch_19191919-1919-4191-8191-191919191919",
+    );
+    repository.activateExistingSlackApproval(approvalActivationInput(linked));
+    const organizationTool = repository.activeSlackOrganizationTool()!;
+    insertHistoricalSlackBinding(integrationDatabase, {
+      binding_id: "bnd_historical-internal-approvals",
+      installation_id: "ins_historical-installation",
+      adapter_instance_id: "founder-approvals",
+      connection_id: organizationTool.connection_id,
+      configuration: {
+        approve_reaction: organizationTool.approve_reaction,
+        channel_id: organizationTool.channel_id,
+        reject_reaction: organizationTool.reject_reaction,
+        slack_app_id: organizationTool.app_id,
+        slack_bot_id: organizationTool.bot_id,
+        slack_bot_user_id: organizationTool.bot_user_id,
+        slack_enterprise_id: organizationTool.enterprise_id,
+      },
+    });
+
+    expect(
+      repository.activeSlackApprovalRuntimeBinding(
+        "founder-approvals",
+        INSTALLATION_ID,
+        digest("installation-key"),
+      ),
+    ).toMatchObject({ adapter_binding_id: linked.adapter_binding_id });
+    expect(
+      repository.activeSlackApprovalRuntimeBinding(
+        "founder-approvals",
+        "ins_historical-installation",
+        digest("ins_historical-installation-key"),
+      ),
+    ).toBeNull();
     repository.close();
   });
 

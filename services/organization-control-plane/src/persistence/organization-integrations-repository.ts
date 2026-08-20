@@ -1028,12 +1028,15 @@ export class OrganizationIntegrationsRepository {
   }
 
   /**
-   * Resolves the exact single-reviewer Slack capability used by the live
-   * meeting worker. A partial binding is simply not ready; competing complete
-   * bindings are a configuration conflict rather than an arbitrary choice.
+   * Resolves the exact installation-scoped, single-reviewer Slack capability
+   * used by the live meeting worker. Historical installations on the same
+   * surface are irrelevant. A partial exact binding is simply not ready;
+   * competing complete rows for the exact key are a configuration conflict.
    */
   activeSlackApprovalRuntimeBinding(
     adapterInstanceId: string,
+    installationId: string,
+    installationKeyId: `sha256:${string}`,
   ): ActiveSlackApprovalRuntimeBinding | null {
     const tool = this.activeSlackOrganizationTool();
     if (tool === null) return null;
@@ -1049,6 +1052,8 @@ export class OrganizationIntegrationsRepository {
             AND adapter_kind = 'approval-surface'
             AND adapter_id = 'slack-reactions'
             AND adapter_instance_id = ?
+            AND installation_id = ?
+            AND installation_key_id = ?
             AND connection_id = ?
             AND status = 'active'
           ORDER BY adapter_binding_id`,
@@ -1056,6 +1061,8 @@ export class OrganizationIntegrationsRepository {
       .all(
         this.identity.organization_id,
         adapterInstanceId,
+        installationId,
+        installationKeyId,
         tool.connection_id,
       ) as ActiveSlackBindingRow[];
     for (const binding of bindings) {

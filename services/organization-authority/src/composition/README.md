@@ -14,10 +14,13 @@ administrator command surface and verifies the runtime ownership proof before
 using credentials. Concrete key, credential, invitation-file, lock, proof, and
 SQLite behavior remains in `adapters/`.
 
-`process-one-meeting.ts` is the sole live-processing gateway in minimum V1. It
-owns the stopped-state singleton and fixed private credential boundary, then
-invokes one processing-module cycle with a hard limit of one. It adds no
-background loop to `runtime.ts` and no processing route to the HTTP surface.
+`process-one-meeting.ts` is the bounded stopped-state source-provisioning and
+canary gateway in minimum V1. It owns the singleton and fixed private credential
+boundary, then invokes one processing-module cycle with a hard limit of one.
+When a source binding and its exact policy-surface Slack capability exist,
+`meeting-processing-runtime.ts` wires `serve` to one immediate serialized,
+limit-1 cycle and another 30 seconds after each prior cycle completes. No cycles
+overlap, and processing has no HTTP route.
 
 Serving composition is deliberately stricter than direct repository tests: it
 requires a persistent database path and an authenticated loopback-proxy client

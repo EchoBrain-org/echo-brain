@@ -1000,6 +1000,29 @@ describe('organization authority operator lifecycle', () => {
     expect(closeMeetingProcessing).toHaveBeenCalledOnce();
   });
 
+  it('remains healthy when meeting processing is not ready', async () => {
+    const fixture = await initializedFixture();
+    const serveConfig = resolveAuthorityServeConfig(
+      readAuthorityRuntimeConfig(fixture.configPath),
+    );
+    const openMeetingProcessingRuntime = vi.fn(async () => null);
+    const runtime = await startOrganizationAuthority(serveConfig, {
+      openMeetingProcessingRuntime,
+    });
+    try {
+      expect(openMeetingProcessingRuntime).toHaveBeenCalledOnce();
+      await expect(
+        inspectAuthorityStatus(fixture.configPath),
+      ).resolves.toMatchObject({
+        ok: true,
+        running: true,
+        healthy: true,
+      });
+    } finally {
+      await runtime.close();
+    }
+  });
+
   it('abandons kernel ownership but preserves recovery state when shutdown fails', async () => {
     const fixture = await initializedFixture();
     const config = readAuthorityRuntimeConfig(fixture.configPath);
