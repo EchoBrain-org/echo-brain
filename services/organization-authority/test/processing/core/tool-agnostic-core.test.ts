@@ -21,6 +21,7 @@ import {
   type MeetingDocument,
   type MeetingPullRequest,
   type MeetingSourceAdapter,
+  meetingProcessingKey,
 } from '../../../src/processing/core/index.js';
 
 const meeting: MeetingDocument = {
@@ -145,6 +146,16 @@ class ProcessorFake implements DecisionProcessorAdapter {
         },
       ],
     };
+  }
+}
+
+class EmptySignalProcessor extends ProcessorFake {
+  override async extract(
+    input: MeetingDocument,
+    context: DecisionExtractionContext,
+  ): Promise<DecisionSet> {
+    const result = await super.extract(input, context);
+    return { ...result, signals: [] };
   }
 }
 
@@ -530,6 +541,7 @@ describe('tool-agnostic core cycle', () => {
       meetings_seen: 1,
       meetings_processed: 0,
       meetings_skipped: 1,
+      meetings_no_signals: 0,
       cursor_advanced: true,
     });
     expect(state.cursor).toBe('cursor-2');
@@ -539,6 +551,64 @@ describe('tool-agnostic core cycle', () => {
     expect(state.receipts).toEqual([]);
     expect(state.processed.size).toBe(0);
     expect(processor.contexts).toEqual([]);
+    expect(gate.requests).toEqual([]);
+    expect(surface.envelopes).toEqual([]);
+  });
+
+  it('does not count an already-processed replay as an empty decision set', async () => {
+    const processor = new ProcessorFake();
+    const gate = new GateFake('approved');
+    const surface = new DeliverySurfaceFake();
+    const state = new StateFake();
+    state.processed.add(meetingProcessingKey(meeting, processor));
+
+    const result = await runCoreCycle(cycleInput({
+      decisionProcessor: processor,
+      approvalGate: gate,
+      deliverySurfaces: [surface],
+      state,
+    }));
+
+    expect(result).toMatchObject({
+      ok: true,
+      meetings_seen: 1,
+      meetings_processed: 0,
+      meetings_skipped: 1,
+      meetings_no_signals: 0,
+      cursor_advanced: true,
+    });
+    expect(processor.contexts).toEqual([]);
+    expect(gate.requests).toEqual([]);
+    expect(surface.envelopes).toEqual([]);
+  });
+
+  it('terminally skips an empty decision set without requesting approval', async () => {
+    const processor = new EmptySignalProcessor();
+    const gate = new GateFake('approved');
+    const surface = new DeliverySurfaceFake();
+    const state = new StateFake();
+
+    const result = await runCoreCycle(cycleInput({
+      decisionProcessor: processor,
+      approvalGate: gate,
+      deliverySurfaces: [surface],
+      state,
+    }));
+
+    expect(result).toMatchObject({
+      ok: true,
+      meetings_seen: 1,
+      meetings_processed: 0,
+      meetings_skipped: 1,
+      meetings_no_signals: 1,
+      meetings_pending: 0,
+      deliveries: 0,
+      cursor_advanced: true,
+    });
+    expect(state.cursor).toBe('cursor-2');
+    expect(state.decisions).toHaveLength(1);
+    expect(state.processed.size).toBe(1);
+    expect(state.approvals).toEqual([]);
     expect(gate.requests).toEqual([]);
     expect(surface.envelopes).toEqual([]);
   });

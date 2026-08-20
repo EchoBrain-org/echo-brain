@@ -40,5 +40,9 @@ export interface CoreStateStore {
     envelope: DeliveryEnvelope,
     receipt: DeliveryReceipt,
   ): Promise<void>;
+  /**
+   * Marks either a terminal approval result or a frozen empty decision set as
+   * complete. Empty extraction is a durable no-op, not an approval request.
+   */
   markProcessed(processingKey: string): Promise<void>;
 }

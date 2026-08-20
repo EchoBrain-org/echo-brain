@@ -8,7 +8,10 @@ import type {
   GranolaListParams,
   GranolaNoteDetail,
 } from '../../../src/processing/adapters/meeting-sources/granola/index.js';
-import { runOneAuthorityMeeting } from '../../../src/processing/live/run-one-meeting.js';
+import {
+  authorityProcessingCredentialReferenceSha256,
+  runOneAuthorityMeeting,
+} from '../../../src/processing/live/run-one-meeting.js';
 import {
   SqliteAuthorityProcessingStore,
   type AuthorityProcessingStoreBinding,
@@ -125,6 +128,22 @@ class OneNoteGranolaClient implements GranolaApiClient {
   }
 }
 
+class UnlabeledNoteGranolaClient extends OneNoteGranolaClient {
+  override async getNote(noteId: string): Promise<GranolaNoteDetail> {
+    this.detailCalls.push(noteId);
+    return {
+      ...NOTE,
+      summary_text: 'General project update.',
+      transcript: [
+        {
+          text: 'The team shared a general project update.',
+          speaker: { email: OWNER_EMAIL },
+        },
+      ],
+    };
+  }
+}
+
 class EmptyPageGranolaClient implements GranolaApiClient {
   readonly listCalls: GranolaListParams[] = [];
   readonly detailCalls: string[] = [];
@@ -151,6 +170,20 @@ function rowCount(database: Database.Database, table: string): number {
       count: number;
     }
   ).count;
+}
+
+function configuredStore(databasePath: string): SqliteAuthorityProcessingStore {
+  return new SqliteAuthorityProcessingStore(databasePath, BINDING, {
+    bindingMode: 'provision',
+    sourceConfiguration: {
+      owner_email_sha256: APPROVED_OWNER_EMAIL_SHA256,
+      credential_scope: 'organization',
+      credential_reference_sha256:
+        authorityProcessingCredentialReferenceSha256(CREDENTIAL_REFERENCE),
+    },
+    fileMustExist: true,
+    now: () => NOW,
+  });
 }
 
 describe('runOneAuthorityMeeting', () => {
@@ -308,6 +341,87 @@ describe('runOneAuthorityMeeting', () => {
     );
     expect(driftedClient.listCalls).toEqual([]);
     expect(driftedClient.detailCalls).toEqual([]);
+  });
+
+  it('durably skips a meeting with no actionable signals', async () => {
+    const databasePath = setupDatabase();
+    const client = new UnlabeledNoteGranolaClient();
+    const result = await runOneAuthorityMeeting(
+      {
+        database_path: databasePath,
+        binding: BINDING,
+        source_instance_id: BINDING.source_instance_id,
+        owner_email: OWNER_EMAIL,
+        approved_owner_email_sha256: APPROVED_OWNER_EMAIL_SHA256,
+        granola_credential: CREDENTIAL,
+        credential_scope: 'organization',
+        credential_reference: CREDENTIAL_REFERENCE,
+        decision_processor_instance_id: 'founder-structured-text',
+      },
+      { granola_client: client, now: () => NOW },
+    );
+
+    expect(result).toMatchObject({
+      outcome: 'no_signals',
+      ok: true,
+      meetings_seen: 1,
+      meetings_processed: 0,
+      meetings_skipped: 1,
+      meetings_pending: 0,
+      deliveries: 0,
+      cursor_advanced: true,
+      failure_count: 0,
+    });
+    expect(result.pending_approval_ids).toEqual([]);
+    const database = new Database(databasePath, { readonly: true });
+    expect(rowCount(database, 'authority_processing_candidates')).toBe(1);
+    expect(rowCount(database, 'authority_processing_slots')).toBe(1);
+    expect(rowCount(database, 'authority_processing_resolutions')).toBe(0);
+    expect(rowCount(database, 'authority_processing_processed_markers')).toBe(1);
+    expect(rowCount(database, 'authority_processing_source_cursors')).toBe(1);
+    database.close();
+  });
+
+  it('does not classify an excluded meeting as no signals', async () => {
+    const databasePath = setupDatabase();
+    const store = configuredStore(databasePath);
+    await store.initialize();
+    await store.addOwnExclusion({
+      scope: 'meeting',
+      source_adapter_id: BINDING.source_adapter_id,
+      source_instance_id: BINDING.source_instance_id,
+      external_id: NOTE.id,
+    });
+    store.close();
+
+    const client = new OneNoteGranolaClient();
+    const result = await runOneAuthorityMeeting(
+      {
+        database_path: databasePath,
+        binding: BINDING,
+        source_instance_id: BINDING.source_instance_id,
+        owner_email: OWNER_EMAIL,
+        approved_owner_email_sha256: APPROVED_OWNER_EMAIL_SHA256,
+        granola_credential: CREDENTIAL,
+        credential_scope: 'organization',
+        credential_reference: CREDENTIAL_REFERENCE,
+        decision_processor_instance_id: 'founder-structured-text',
+      },
+      { granola_client: client, now: () => NOW },
+    );
+
+    expect(result).toMatchObject({
+      outcome: 'failed',
+      ok: false,
+      meetings_seen: 1,
+      meetings_processed: 0,
+      meetings_skipped: 1,
+      meetings_pending: 0,
+      cursor_advanced: true,
+      failure_count: 1,
+      failure_stages: ['contract'],
+    });
+    expect(result.outcome).not.toBe('no_signals');
   });
 
   it('advances through an empty provider page and resumes from its cursor', async () => {

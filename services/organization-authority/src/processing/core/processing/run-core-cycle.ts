@@ -99,6 +99,7 @@ export interface CoreCycleResult {
   meetings_seen: number;
   meetings_processed: number;
   meetings_skipped: number;
+  meetings_no_signals: number;
   meetings_pending: number;
   meetings_rejected: number;
   meetings_dead_lettered: number;
@@ -179,6 +180,7 @@ export async function runCoreCycle(
   const deadLetters: CoreCycleDeadLetter[] = [];
   let meetingsProcessed = 0;
   let meetingsSkipped = 0;
+  let meetingsNoSignals = 0;
   let meetingsPending = 0;
   let meetingsRejected = 0;
   let meetingsDeadLettered = 0;
@@ -232,6 +234,12 @@ export async function runCoreCycle(
         );
       }
       assertProcessorResult(meeting, dependencies.decisionProcessor, decisions);
+      if (decisions.signals.length === 0) {
+        await dependencies.state.markProcessed(processingKey);
+        meetingsSkipped += 1;
+        meetingsNoSignals += 1;
+        continue;
+      }
       const brief = compileDecisionBrief(createId(), meeting, decisions);
       assertCanonicalDecisionBrief(brief, {
         meeting,
@@ -372,6 +380,7 @@ export async function runCoreCycle(
     meetings_seen: batch.meetings.length,
     meetings_processed: meetingsProcessed,
     meetings_skipped: meetingsSkipped,
+    meetings_no_signals: meetingsNoSignals,
     meetings_pending: meetingsPending,
     meetings_rejected: meetingsRejected,
     meetings_dead_lettered: meetingsDeadLettered,

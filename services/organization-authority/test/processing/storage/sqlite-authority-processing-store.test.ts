@@ -712,6 +712,56 @@ describe('SqliteAuthorityProcessingStore', () => {
     store.close();
   });
 
+  it('terminally skips a frozen empty decision set and hides an older pending request', async () => {
+    const context = setup();
+    const store = context.create();
+    const input = meeting();
+    const empty = { ...decisions(input), signals: [] };
+    const processingKey = 'empty-decision-set';
+    await store.initialize();
+    await store.admitAndSaveMeeting(input, processingKey);
+    await store.saveDecisionSet(processingKey, input, empty);
+    await store.stageApprovalRequest(
+      request(
+        processingKey,
+        input,
+        empty,
+        '2026-08-18T00:01:00.000Z',
+      ),
+    );
+    expect(await store.listPendingApprovals()).toHaveLength(1);
+
+    await expect(store.markProcessed(processingKey)).resolves.toBeUndefined();
+    await expect(store.markProcessed(processingKey)).resolves.toBeUndefined();
+    expect(await store.hasProcessed(processingKey)).toBe(true);
+    expect(await store.countUnfinishedCandidates()).toBe(0);
+    expect(await store.listPendingApprovals()).toEqual([]);
+    expect(
+      await store.cleanupTerminalCandidates({
+        now: '2026-09-16T23:59:59.999Z',
+      }),
+    ).toEqual([]);
+    expect(
+      await store.cleanupTerminalCandidates({
+        now: '2026-09-17T00:00:00.000Z',
+      }),
+    ).toEqual([processingKey]);
+    expect(await store.getCandidate(processingKey)).toBeUndefined();
+    expect(await store.hasProcessed(processingKey)).toBe(true);
+
+    const unresolved = meeting(2);
+    await store.admitAndSaveMeeting(unresolved, 'non-empty-unresolved');
+    await store.saveDecisionSet(
+      'non-empty-unresolved',
+      unresolved,
+      decisions(unresolved),
+    );
+    await expect(store.markProcessed('non-empty-unresolved')).rejects.toThrow(
+      'terminal resolution or empty decision set',
+    );
+    store.close();
+  });
+
   it('keeps content-free receipt observations so an unknown outcome can converge to delivered', async () => {
     const context = setup();
     const store = context.create();

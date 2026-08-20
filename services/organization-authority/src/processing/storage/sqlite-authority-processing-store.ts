@@ -18,7 +18,10 @@ import type {
   MeetingDocument,
 } from '../core/contracts/meeting.js';
 import type { JsonObject } from '../core/contracts/json.js';
-import { assertCanonicalApprovalDecision } from '../core/contracts/validation.js';
+import {
+  assertCanonicalApprovalDecision,
+  assertCanonicalDecisionSet,
+} from '../core/contracts/validation.js';
 import type {
   CoreStateStore,
   MeetingPreRecordAdmission,
@@ -865,11 +868,31 @@ export class SqliteAuthorityProcessingStore
       ) {
         return;
       }
-      this.assertOwnedCandidate(processingKey);
+      const candidate = this.assertOwnedCandidate(processingKey);
       if (this.resolution(processingKey) === undefined) {
-        throw new Error(
-          'authority processing candidate cannot be marked before terminal resolution',
-        );
+        const decisionSlot = this.slot(processingKey, DECISION_SLOT);
+        if (decisionSlot === undefined) {
+          throw new Error(
+            'authority processing candidate cannot be marked before terminal resolution or empty decision set',
+          );
+        }
+        const meeting = JSON.parse(
+          candidate.raw_document_json,
+        ) as MeetingDocument;
+        const decisions = JSON.parse(
+          decisionSlot.document_json,
+        ) as DecisionSet;
+        assertCanonicalDecisionSet(decisions, meeting, decisions.processor);
+        const encoded = exactJson(decisions);
+        if (
+          decisions.signals.length !== 0 ||
+          decisionSlot.document_json !== encoded.json ||
+          decisionSlot.document_sha256 !== encoded.sha256
+        ) {
+          throw new Error(
+            'authority processing candidate cannot be marked before terminal resolution or empty decision set',
+          );
+        }
       }
       this.database
         .prepare(
@@ -1291,9 +1314,14 @@ export class SqliteAuthorityProcessingStore
             AND d.slot_name = '${DECISION_SLOT}'
            LEFT JOIN authority_processing_resolutions r
              ON r.processing_key = c.processing_key
+           LEFT JOIN authority_processing_processed_markers p
+             ON p.processing_key = c.processing_key
+            AND p.source_adapter_id = c.source_adapter_id
+            AND p.source_instance_id = c.source_instance_id
           WHERE q.slot_name = '${APPROVAL_REQUEST_SLOT}'
             AND c.source_adapter_id = ? AND c.source_instance_id = ?
             AND r.processing_key IS NULL
+            AND p.processing_key IS NULL
             AND (
               ? IS NULL OR
               (q.request_order_at, q.request_approval_id, c.processing_key)
@@ -1392,28 +1420,48 @@ export class SqliteAuthorityProcessingStore
       TERMINAL_CLEANUP_LIMIT,
       'terminal cleanup limit',
     );
+    const emptyDecisionRetainBefore = new Date(
+      Date.parse(now) - RETENTION_MILLISECONDS,
+    ).toISOString();
     return this.immediate(() => {
       this.assertActiveBinding();
       const keys = (
         this.database
           .prepare(
-            `SELECT c.processing_key
-               FROM authority_processing_resolutions r
-               JOIN authority_processing_candidates c
-                 ON c.processing_key = r.processing_key
+            `SELECT c.processing_key,
+                    CASE
+                      WHEN r.retain_until IS NOT NULL THEN r.retain_until
+                      ELSE strftime(
+                        '%Y-%m-%dT%H:%M:%fZ', p.processed_at, '+30 days'
+                      )
+                    END AS cleanup_at
+               FROM authority_processing_candidates c
                JOIN authority_processing_processed_markers p
                  ON p.processing_key = c.processing_key
                 AND p.source_adapter_id = c.source_adapter_id
                 AND p.source_instance_id = c.source_instance_id
+               LEFT JOIN authority_processing_resolutions r
+                 ON r.processing_key = c.processing_key
+               LEFT JOIN authority_processing_slots d
+                 ON d.processing_key = c.processing_key
+                AND d.slot_name = '${DECISION_SLOT}'
               WHERE c.source_adapter_id = ? AND c.source_instance_id = ?
-                AND r.retain_until <= ?
-              ORDER BY r.retain_until, c.processing_key
+                AND (
+                  r.retain_until <= ? OR (
+                    r.processing_key IS NULL
+                    AND p.processed_at <= ?
+                    AND json_type(d.document_json, '$.signals') = 'array'
+                    AND json_array_length(d.document_json, '$.signals') = 0
+                  )
+                )
+              ORDER BY cleanup_at, c.processing_key
               LIMIT ?`,
           )
           .all(
             this.binding.source_adapter_id,
             this.binding.source_instance_id,
             now,
+            emptyDecisionRetainBefore,
             limit,
           ) as Array<{ processing_key: string }>
       ).map(({ processing_key }) => processing_key);

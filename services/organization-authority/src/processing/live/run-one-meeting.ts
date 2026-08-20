@@ -58,6 +58,7 @@ export interface AuthorityOneMeetingRunResult {
   readonly outcome:
     | 'pending_created'
     | 'pending_exists'
+    | 'no_signals'
     | 'no_meeting'
     | 'failed';
   readonly source_binding: {
@@ -302,6 +303,7 @@ export async function runOneAuthorityMeeting(
       result.meetings_seen === 1 &&
       result.meetings_processed === 0 &&
       result.meetings_skipped === 0 &&
+      result.meetings_no_signals === 0 &&
       result.meetings_pending === 1 &&
       result.meetings_rejected === 0 &&
       result.meetings_dead_lettered === 0 &&
@@ -313,18 +315,33 @@ export async function runOneAuthorityMeeting(
       result.meetings_seen === 0 &&
       result.meetings_processed === 0 &&
       result.meetings_skipped === 0 &&
+      result.meetings_no_signals === 0 &&
       result.meetings_pending === 0 &&
       result.meetings_rejected === 0 &&
       result.meetings_dead_lettered === 0 &&
       result.deliveries === 0 &&
       pendingAfter.length === 0;
+    const exactNoSignals =
+      result.ok &&
+      result.meetings_seen === 1 &&
+      result.meetings_processed === 0 &&
+      result.meetings_skipped === 1 &&
+      result.meetings_no_signals === 1 &&
+      result.meetings_pending === 0 &&
+      result.meetings_rejected === 0 &&
+      result.meetings_dead_lettered === 0 &&
+      result.deliveries === 0 &&
+      result.cursor_advanced &&
+      pendingAfter.length === 0;
     const contractFailure =
-      result.ok && !exactPendingCreated && !exactNoMeeting;
-    const outcome = exactPendingCreated
-      ? 'pending_created'
-      : exactNoMeeting
-        ? 'no_meeting'
-        : 'failed';
+      result.ok &&
+      !exactPendingCreated &&
+      !exactNoMeeting &&
+      !exactNoSignals;
+    let outcome: AuthorityOneMeetingRunResult['outcome'] = 'failed';
+    if (exactPendingCreated) outcome = 'pending_created';
+    else if (exactNoSignals) outcome = 'no_signals';
+    else if (exactNoMeeting) outcome = 'no_meeting';
     const output: AuthorityOneMeetingRunResult = {
       schema_version: 1,
       kind: 'echo-organization-authority-one-meeting-run',
