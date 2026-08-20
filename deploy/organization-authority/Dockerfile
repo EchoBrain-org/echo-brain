@@ -16,6 +16,9 @@ FROM node:22.22.1-bookworm-slim@sha256:4f77a690f2f8946ab16fe1e791a3ac0667ae1c357
 
 ENV NODE_ENV=production
 WORKDIR /app
+RUN apt-get update \
+  && DEBIAN_FRONTEND=noninteractive apt-get upgrade -y \
+  && rm -rf /var/lib/apt/lists/*
 COPY --from=build /app/node_modules ./node_modules
 COPY --from=build /app/packages/federation-protocol/package.json ./packages/federation-protocol/package.json
 COPY --from=build /app/packages/federation-protocol/dist ./packages/federation-protocol/dist
