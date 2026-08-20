@@ -161,6 +161,17 @@ digests, computed contract digests, v1 separation, and selector-swap digest
 separation. It does not claim approval binding, action-time authorization, or
 runtime cutover proof.
 
+**D2-1 contract-only slice (2026-08-20):**
+`services/organization-control-plane/test/person-slack-approval-contracts-v2.test.ts`
+freezes the exact private connection/current-state, link, approval binding,
+capability, provider observation/message/action, authorization, integration
+audit, semantic retry, and durable-result shapes. It mutates every identity
+join and cross-checks the accepted ADR-0005 policy bytes with the protocol
+source. It deliberately proves no persistence, administrator endpoint,
+provider call, crash recovery, public export, or live runtime selection; those
+remain D2-2 evidence. No application ID, baseline SQL, lineage genesis, or
+SQLite opener is introduced before Phase 3.
+
 The suite must prove:
 
 - Person Slack completion is link-only; the attempt ID is lookup/correlation,

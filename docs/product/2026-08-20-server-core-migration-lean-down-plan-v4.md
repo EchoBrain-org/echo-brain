@@ -1240,6 +1240,21 @@ completed Phase-2C tree plus the accepted D2 policy-contract candidate passed
 the full repository gate on 2026-08-20: 139 test files and 1,401 tests, plus
 boundary, documentation, type checking, and lint.
 
+**D2-1 contract checkpoint (2026-08-20):** the control-plane now has one
+private, non-live exact-contract module for the organization Slack connection
+and current state, tenant-scoped Person link, approval binding, per-policy and
+per-action capability, provider observation/message/action, authorization
+allow, immutable integration-audit entry, semantic retry input, and durable D2
+result locator. Focused mutation and cross-workspace tests keep both accepted
+ADR-0005 policy pairs exact and prove that link-only identity, approval
+authority, delivery, source custody, Person reads, and D3 record authority do
+not collapse into one another. This checkpoint deliberately adds no database
+baseline, application ID, initializer/opener, repository, public export, or
+live runtime selection. Those storage and executable behaviors remain D2-2,
+while fresh genesis and exact database identities remain Phase 3. The retained
+D2-1 slice passed the full repository gate: 140 test files and 1,409 tests,
+plus boundary, documentation, type checking, and lint.
+
 **Entry gate**
 
 - Phase 1 exit is green.
@@ -1291,6 +1306,13 @@ earlier red, and compatibility remains selectable until Phase 3 parity.
    reader selectors, consequence bytes, and contract digests. The candidate
    validator remains private and non-live until the isolated fresh-lineage
    identity/action state and later D3 consumer are green.
+   **D2-1 is complete as a contract-only candidate:** every identity and audit
+   body above has an exact private validator and cross-edge mutation evidence.
+   It is not persisted, exported, or selected by the live runtime. D2-2 owns
+   administrator-only activation, transactional persistence and independent
+   digest reproof, exact retry/conflict/restart recovery, and the alternate
+   non-installation authorizer. Phase 3 alone owns baseline SQL, application
+   IDs, lineage manifests, and writable openers.
 5. **Authority envelope, receipt, and Layer-1 facts.** Add the new envelope and
    receipt versions without changing V1-V3 readers. Reprove the exact human-act
    reference at the existing Record application boundary; append record and
