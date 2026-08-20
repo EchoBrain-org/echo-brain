@@ -49,7 +49,7 @@ artifact-bound disposition.
 | Independent permissions review or explicit founder waiver | independent Phase-0 review in progress; founder waiver pending |
 | D6 retention interval | proposed 30 days; pending acceptance |
 | D6 export position | proposed unsupported; pending acceptance |
-| D2 v2 policy IDs, exact contract bodies/selectors and digests, and consequence-byte acceptance | pending |
+| D2 v2 policy IDs, exact contract bodies/selectors and digests, and consequence-byte acceptance | accepted separately by ADR-0005; remaining D2 identity/action contracts pending |
 | Delivery behavior | initial V1 preserves main's configured delivery behavior and approval/delivery channel separation; any contraction is deferred |
 | Standalone reviewer-recent route | retained with Layer-1/log-backed availability in initial V1 |
 

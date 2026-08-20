@@ -1287,6 +1287,10 @@ earlier red, and compatibility remains selectable until Phase 3 parity.
    binding, Slack-to-Person link, current membership tenure, selected policy,
    frozen presentation, and immutable provider-action audit. Both policies and
    rejection return one stable resolution reference with exact retry/recovery.
+   **D2-0 is complete:** ADR-0005 accepts the two exact Person policy IDs,
+   reader selectors, consequence bytes, and contract digests. The candidate
+   validator remains private and non-live until the isolated fresh-lineage
+   identity/action state and later D3 consumer are green.
 5. **Authority envelope, receipt, and Layer-1 facts.** Add the new envelope and
    receipt versions without changing V1-V3 readers. Reprove the exact human-act
    reference at the existing Record application boundary; append record and

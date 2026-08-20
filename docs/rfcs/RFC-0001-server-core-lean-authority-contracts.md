@@ -482,7 +482,8 @@ membership, route, envelope, adapter, and provider values do not belong in
 this global policy contract; the record fact, D6 caller/scope, D3 envelope,
 and D2 identity contracts bind those values at their owning boundaries.
 
-These are new IDs and bytes. The installation-bearing
+These IDs, exact bodies, consequence bytes, and computed digests are accepted
+by ADR-0005. The installation-bearing
 `restricted-reviewer-v1` and `organization-member-readable-v1` contracts are
 rejected by the new lineage, not edited or aliased. Founder acceptance of the
 ADR MUST explicitly confirm that the v2 ID and authentication-version delta
@@ -1295,7 +1296,7 @@ bytes:
 | OQ-1 | D6 retention interval | Lean proposal: 30 days from Authority `occurred_at`, explicitly superseding the historical 180-day query-audit contracts |
 | OQ-2 | D6 export position | Lean proposal: deliberately unsupported, with no production export route, command, writer, or row-selection port |
 | OQ-3 | D1 review | Lean proposal: founder/constitution-owner acceptance plus the recorded independent contract review; founder explicitly waives a second human reviewer until first-external-organization re-entry |
-| OQ-4 | D2 version break | Explicitly accept the two v2 IDs, exact policy-contract bodies/selectors and computed digests, and exact consequence bytes while preserving reader sets |
+| OQ-4 | D2 version break | Resolved by ADR-0005: the two v2 IDs, exact policy-contract bodies/selectors and computed digests, and exact consequence bytes are accepted while preserving reader sets |
 | OQ-5 | Delivery behavior | Initial V1 preserves main's configured delivery behavior and approval/delivery channel separation; a single-destination or policy-specific contraction is deferred to a later decision |
 | OQ-6 | Standalone reviewer-recent route | Retain it in initial V1 with exact reviewer-tenure semantics and Layer-1/log-backed availability; route consolidation is deferred |
 
