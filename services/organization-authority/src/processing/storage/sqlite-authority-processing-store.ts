@@ -321,14 +321,16 @@ function exactJson(value: unknown): {
   return { json, sha256: digestCanonicalJson(json) };
 }
 
-function canonicalMeetingIgnoringSourceVersion(
-  meeting: MeetingDocument,
-): string {
+function canonicalMeetingForReplay(meeting: MeetingDocument): string {
   const source = meeting.provenance.source;
+  const provenance: Partial<MeetingDocument['provenance']> = {
+    ...meeting.provenance,
+  };
+  delete provenance.observed_at;
   return canonicalJson({
     ...meeting,
     provenance: {
-      ...meeting.provenance,
+      ...provenance,
       source: {
         kind: source.kind,
         adapter_id: source.adapter_id,
@@ -2087,9 +2089,9 @@ export class SqliteAuthorityProcessingStore
       stored.external_id !== meeting.provenance.external_id ||
       stored.meeting_revision !== meeting.provenance.canonical_revision ||
       stored.meeting_id !== meeting.id ||
-      canonicalMeetingIgnoringSourceVersion(
+      canonicalMeetingForReplay(
         JSON.parse(stored.raw_document_json) as MeetingDocument,
-      ) !== canonicalMeetingIgnoringSourceVersion(meeting)
+      ) !== canonicalMeetingForReplay(meeting)
     ) {
       throw new Error(
         'authority processing key already binds a different raw candidate',
@@ -2121,9 +2123,9 @@ export class SqliteAuthorityProcessingStore
       stored.external_id !== meeting.provenance.external_id ||
       stored.meeting_revision !== meeting.provenance.canonical_revision ||
       stored.meeting_id !== meeting.id ||
-      canonicalMeetingIgnoringSourceVersion(
+      canonicalMeetingForReplay(
         JSON.parse(stored.raw_document_json) as MeetingDocument,
-      ) !== canonicalMeetingIgnoringSourceVersion(meeting)
+      ) !== canonicalMeetingForReplay(meeting)
     ) {
       throw new Error('authority processing candidate meeting differs from raw');
     }

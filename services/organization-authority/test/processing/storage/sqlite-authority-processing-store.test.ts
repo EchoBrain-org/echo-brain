@@ -533,6 +533,32 @@ describe('SqliteAuthorityProcessingStore', () => {
     store.close();
   });
 
+  it('resumes an unprocessed candidate after the source observes it again', async () => {
+    const context = setup();
+    const store = context.create();
+    const original = meeting();
+    const observedAgain: MeetingDocument = {
+      ...original,
+      provenance: {
+        ...original.provenance,
+        observed_at: '2026-08-18T00:05:00.000Z',
+      },
+    };
+    const processingKey = 'source-observed-again';
+    await store.initialize();
+    await store.admitAndSaveMeeting(original, processingKey);
+    await store.saveDecisionSet(processingKey, original, decisions(original));
+
+    await expect(
+      store.admitAndSaveMeeting(observedAgain, processingKey),
+    ).resolves.toBe('saved');
+    await expect(
+      store.getDecisionSet(processingKey, observedAgain, PROCESSOR),
+    ).resolves.toBeDefined();
+    expect((await store.getCandidate(processingKey))?.meeting).toEqual(original);
+    store.close();
+  });
+
   it('applies exact own source/meeting exclusions atomically and stores no exclusion content', async () => {
     const context = setup();
     const store = context.create();
