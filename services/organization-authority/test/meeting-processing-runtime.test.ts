@@ -23,7 +23,10 @@ vi.mock(
   }),
 );
 
-import { openAuthorityMeetingProcessingRuntime } from '../src/composition/meeting-processing-runtime.js';
+import {
+  authorityLiveDecisionProcessorConfig,
+  openAuthorityMeetingProcessingRuntime,
+} from '../src/composition/meeting-processing-runtime.js';
 
 const ORGANIZATION_ID = 'org_00000000-0000-4000-8000-000000000001';
 const AUTHORITY_ID = 'oau_00000000-0000-4000-8000-000000000001';
@@ -104,6 +107,25 @@ afterEach(() => {
 });
 
 describe('Authority meeting processing runtime binding', () => {
+  it('uses the server-side OpenRouter DeepSeek processor with a private credential', () => {
+    expect(
+      authorityLiveDecisionProcessorConfig(
+        'primary',
+        'file:/private/openrouter-api-key',
+      ),
+    ).toEqual({
+      adapter_id: 'llm',
+      instance_id: 'primary',
+      credential_ref: 'file:/private/openrouter-api-key',
+      settings: {
+        provider: 'openrouter',
+        model: 'deepseek/deepseek-r1',
+        max_output_tokens: 8_192,
+        request_timeout_ms: 600_000,
+      },
+    });
+  });
+
   it('keeps polling disabled when the current key has no complete policy-surface binding', async () => {
     seams.readSourceBinding.mockReturnValue({
       organization_id: ORGANIZATION_ID,

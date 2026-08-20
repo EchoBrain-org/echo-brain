@@ -112,30 +112,44 @@ function extractionContext(instance: LlmDecisionProcessor) {
   };
 }
 
+function modelSignal(overrides: Record<string, unknown>) {
+  return {
+    kind: 'decision',
+    text: 'Signal',
+    status: 'unresolved',
+    owner: null,
+    due_at: null,
+    confidence: null,
+    evidence_id: 'e1',
+    supports_decision_indexes: [],
+    ...overrides,
+  };
+}
+
 const validModelOutput = JSON.stringify({
   signals: [
-    {
+    modelSignal({
       kind: 'decision',
       text: 'Use vendor X for hosting',
       status: 'decided',
       confidence: 0.9,
       evidence_id: 'e1',
-    },
-    {
+    }),
+    modelSignal({
       kind: 'action',
       text: 'Send the contract',
       owner: 'Zhen',
       due_at: '2026-07-24T00:00:00.000Z',
       confidence: 0.8,
       evidence_id: 'e1',
-    },
-    {
+    }),
+    modelSignal({
       kind: 'rationale',
       text: 'Vendor X was cheaper and faster',
       confidence: 0.7,
       evidence_id: 'e2',
       supports_decision_indexes: [0],
-    },
+    }),
   ],
 });
 
@@ -247,13 +261,13 @@ describe('llm decision processor extraction', () => {
   it('retries when every declared signal has invalid grounding', async () => {
     const hallucinated = JSON.stringify({
       signals: [
-        {
+        modelSignal({
           kind: 'decision',
           text: 'Adopt vendor Y',
           status: 'decided',
           confidence: 0.9,
           evidence_id: 'e999',
-        },
+        }),
       ],
     });
     const instance = processor(new FakeLlmClient(hallucinated));
@@ -270,18 +284,18 @@ describe('llm decision processor extraction', () => {
   it('keeps grounded signals when other aliases are invalid', async () => {
     const mixed = JSON.stringify({
       signals: [
-        {
+        modelSignal({
           kind: 'decision',
           text: 'Use vendor X',
           status: 'decided',
           evidence_id: 'e1',
-        },
-        {
+        }),
+        modelSignal({
           kind: 'decision',
           text: 'Adopt vendor Y',
           status: 'decided',
           evidence_id: 'e999',
-        },
+        }),
       ],
     });
     const instance = processor(new FakeLlmClient(mixed));
@@ -298,18 +312,18 @@ describe('llm decision processor extraction', () => {
   it('normalizes parseable due dates and clears invalid ones', async () => {
     const dueDates = JSON.stringify({
       signals: [
-        {
+        modelSignal({
           kind: 'action',
           text: 'Send the contract',
           due_at: '2026-07-24',
           evidence_id: 'e1',
-        },
-        {
+        }),
+        modelSignal({
           kind: 'action',
           text: 'Confirm the hosting choice',
           due_at: 'not-a-date',
           evidence_id: 'e1',
-        },
+        }),
       ],
     });
     const instance = processor(new FakeLlmClient(dueDates));
@@ -326,6 +340,24 @@ describe('llm decision processor extraction', () => {
 
   it('rejects malformed model output with a retryable taxonomy error', async () => {
     const instance = processor(new FakeLlmClient('not json at all'));
+    await expect(
+      instance.extract(meeting, extractionContext(instance)),
+    ).rejects.toMatchObject({
+      name: 'AdapterError',
+      code: 'temporarily_unavailable',
+      retryable: true,
+    });
+  });
+
+  it('rejects a partially malformed signal instead of silently dropping it', async () => {
+    const partial = JSON.stringify({
+      signals: [
+        modelSignal({ text: 'Use vendor X' }),
+        { kind: 'action', text: 'Missing the required fields' },
+      ],
+    });
+    const instance = processor(new FakeLlmClient(partial));
+
     await expect(
       instance.extract(meeting, extractionContext(instance)),
     ).rejects.toMatchObject({

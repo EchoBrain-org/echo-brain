@@ -29,11 +29,11 @@ import { OpenAiClient } from './openai-client.js';
 import { OpenRouterClient } from './openrouter-client.js';
 
 export const LLM_DECISION_PROCESSOR_ADAPTER_ID = 'llm';
-export const LLM_DECISION_PROCESSOR_ADAPTER_VERSION = '1.2.0';
+export const LLM_DECISION_PROCESSOR_ADAPTER_VERSION = '1.3.0';
 /** Bump with the adapter version whenever prompt/output semantics change. */
 export const LLM_DECISION_PROCESSOR_PROMPT_VERSION = 'decision-extraction-v3';
 export const LLM_DECISION_PROCESSOR_SCHEMA_VERSION =
-  'decision-extraction-schema-v3';
+  'decision-extraction-schema-v4';
 
 const DEFAULT_PROVIDER: LlmProviderId = 'ollama';
 
@@ -67,7 +67,7 @@ const EXTRACTION_FORMAT: JsonObject = {
           },
           owner: { type: ['string', 'null'] },
           due_at: { type: ['string', 'null'] },
-          confidence: { type: ['number', 'null'] },
+          confidence: { type: ['number', 'null'], minimum: 0, maximum: 1 },
           evidence_id: { type: 'string' },
           supports_decision_indexes: {
             type: 'array',
@@ -167,6 +167,36 @@ interface ParsedRawSignals {
   signals: RawSignal[];
 }
 
+const SIGNAL_FIELDS = [
+  'kind',
+  'text',
+  'status',
+  'owner',
+  'due_at',
+  'confidence',
+  'evidence_id',
+  'supports_decision_indexes',
+] as const;
+
+function extractionSchemaFailure(): never {
+  throw new AdapterError(
+    'temporarily_unavailable',
+    'LLM output did not match the extraction schema',
+    true,
+  );
+}
+
+function hasExactFields(
+  record: Record<string, unknown>,
+  fields: readonly string[],
+): boolean {
+  const keys = Object.keys(record);
+  return (
+    keys.length === fields.length &&
+    fields.every((field) => Object.hasOwn(record, field))
+  );
+}
+
 function rawSignals(content: string): ParsedRawSignals {
   let parsed: unknown;
   try {
@@ -178,49 +208,66 @@ function rawSignals(content: string): ParsedRawSignals {
       true,
     );
   }
-  const items =
-    typeof parsed === 'object' &&
-    parsed !== null &&
-    Array.isArray((parsed as { signals?: unknown }).signals)
-      ? (parsed as { signals: unknown[] }).signals
-      : null;
-  if (items === null) {
-    throw new AdapterError(
-      'temporarily_unavailable',
-      'LLM output did not match the extraction schema',
-      true,
-    );
+  if (
+    typeof parsed !== 'object' ||
+    parsed === null ||
+    Array.isArray(parsed) ||
+    !hasExactFields(parsed as Record<string, unknown>, ['signals'])
+  ) {
+    extractionSchemaFailure();
   }
+  const items = (parsed as { signals: unknown }).signals;
+  if (!Array.isArray(items)) extractionSchemaFailure();
   const signals: RawSignal[] = [];
   for (const [index, item] of items.entries()) {
-    if (typeof item !== 'object' || item === null) continue;
+    if (typeof item !== 'object' || item === null || Array.isArray(item)) {
+      extractionSchemaFailure();
+    }
     const record = item as Record<string, unknown>;
+    if (!hasExactFields(record, SIGNAL_FIELDS)) extractionSchemaFailure();
     const kind = record['kind'];
-    if (kind !== 'decision' && kind !== 'action' && kind !== 'rationale')
-      continue;
+    if (kind !== 'decision' && kind !== 'action' && kind !== 'rationale') {
+      extractionSchemaFailure();
+    }
     if (
       !isNonEmptyString(record['text']) ||
       !isNonEmptyString(record['evidence_id'])
     ) {
-      continue;
+      extractionSchemaFailure();
     }
     const status = record['status'];
-    const supports = Array.isArray(record['supports_decision_indexes'])
-      ? record['supports_decision_indexes'].filter((value): value is number =>
-          Number.isInteger(value),
-        )
-      : [];
+    if (
+      status !== 'proposed' &&
+      status !== 'decided' &&
+      status !== 'unresolved'
+    ) {
+      extractionSchemaFailure();
+    }
+    const owner = record['owner'];
+    if (owner !== null && !isNonEmptyString(owner)) extractionSchemaFailure();
+    const dueAt = record['due_at'];
+    if (dueAt !== null && !isNonEmptyString(dueAt)) extractionSchemaFailure();
+    const confidence = record['confidence'];
+    if (confidence !== null && normalizedConfidence(confidence) === null) {
+      extractionSchemaFailure();
+    }
+    const supports = record['supports_decision_indexes'];
+    if (
+      !Array.isArray(supports) ||
+      !supports.every(
+        (value): value is number => Number.isInteger(value) && value >= 0,
+      )
+    ) {
+      extractionSchemaFailure();
+    }
     signals.push({
       index,
       kind,
       text: record['text'].trim(),
-      status:
-        status === 'proposed' || status === 'decided' || status === 'unresolved'
-          ? status
-          : 'unresolved',
-      owner: isNonEmptyString(record['owner']) ? record['owner'].trim() : null,
-      dueAt: normalizedDueAt(record['due_at']),
-      confidence: normalizedConfidence(record['confidence']),
+      status,
+      owner: owner === null ? null : owner.trim(),
+      dueAt: normalizedDueAt(dueAt),
+      confidence: normalizedConfidence(confidence),
       evidenceId: record['evidence_id'],
       supports,
     });

@@ -18,7 +18,8 @@ values. The commands below require `AWS_PROFILE`, `AWS_REGION`, `AWS_ACCOUNT_ID`
 `ECR_REGISTRY`, `ECR_REPOSITORY`, `AUTHORITY_HOST`, `BACKUP_BUCKET`,
 `INSTANCE_ID`, `EXPECTED_AUTHORITY_ID`, `EXPECTED_ORGANIZATION_ID`,
 `AUTHORITY_VOLUME_ID`, `TUNNEL_TOKEN_SECRET_ID`,
-`GRANOLA_SOURCE_SECRET_ID`, `EXPECTED_RESTORE_SCRIPT_SHA256`,
+`GRANOLA_SOURCE_SECRET_ID`, `OPENROUTER_SECRET_ID`,
+`EXPECTED_RESTORE_SCRIPT_SHA256`,
 `OPS_ALERTS_TOPIC_ID`, `PRIVATE_EVIDENCE_DIR`, and `ECHO_REPO_ROOT` when
 applicable. The checked-in bootstrap and credential installers remain the
 executable owners of their registry, Region, and dynamic-reference pins; the
@@ -46,10 +47,12 @@ set -euo pipefail
 : "${AWS_PROFILE:?load from protected operator environment}"
 : "${AWS_REGION:?load from protected operator environment}"
 : "${AWS_ACCOUNT_ID:?load from protected operator environment}"
+: "${INSTANCE_ID:?load from protected operator environment}"
 : "${ECR_REGISTRY:?load from protected operator environment}"
 : "${ECR_REPOSITORY:?load from protected operator environment}"
 : "${TUNNEL_TOKEN_SECRET_ID:?load from protected operator environment}"
 : "${GRANOLA_SOURCE_SECRET_ID:?load from protected operator environment}"
+: "${OPENROUTER_SECRET_ID:?load from protected operator environment}"
 : "${ECHO_REPO_ROOT:?load from protected operator environment}"
 : "${SOURCE_IMAGE:?load from reviewed private release evidence}"
 : "${RELEASE_TAG:?load from reviewed private release evidence}"
@@ -59,7 +62,9 @@ DEPLOY_ROOT="$(git -C "$ECHO_REPO_ROOT" rev-parse --show-toplevel)/deploy/organi
 BOOTSTRAP="$DEPLOY_ROOT/bootstrap-ubuntu-arm64.sh"
 TOKEN_INSTALLER="$DEPLOY_ROOT/install-cloudflare-tunnel-token.sh"
 GRANOLA_INSTALLER="$DEPLOY_ROOT/install-granola-organization-source.sh"
-[[ -f $BOOTSTRAP && -f $TOKEN_INSTALLER && -f $GRANOLA_INSTALLER ]]
+OPENROUTER_INSTALLER="$DEPLOY_ROOT/install-openrouter-api-key.sh"
+[[ -f $BOOTSTRAP && -f $TOKEN_INSTALLER && -f $GRANOLA_INSTALLER && \
+  -f $OPENROUTER_INSTALLER ]]
 [[ $ECR_REGISTRY == "$AWS_ACCOUNT_ID.dkr.ecr.$AWS_REGION.amazonaws.com" ]]
 BOOTSTRAP_REGISTRY="$(sed -n 's/^ECR_REGISTRY=//p' "$BOOTSTRAP")"
 INSTALLER_REGION="$(sed -n 's/^AWS_REGION=//p' "$TOKEN_INSTALLER")"
@@ -77,6 +82,11 @@ GRANOLA_OWNER_REFERENCE="$(
 GRANOLA_SCOPE_REFERENCE="$(
   sed -n 's/^SCOPE_REFERENCE="\(.*\)"$/\1/p' "$GRANOLA_INSTALLER"
 )"
+OPENROUTER_INSTALLER_REGION="$(sed -n 's/^AWS_REGION=//p' "$OPENROUTER_INSTALLER")"
+OPENROUTER_INSTALLER_SECRET_ID="$(sed -n 's/^SECRET_ID=//p' "$OPENROUTER_INSTALLER")"
+OPENROUTER_API_REFERENCE="$(
+  sed -n 's/^API_KEY_REFERENCE="\(.*\)"$/\1/p' "$OPENROUTER_INSTALLER"
+)"
 [[ $BOOTSTRAP_REGISTRY == "$ECR_REGISTRY" ]]
 [[ $INSTALLER_REGION == "$AWS_REGION" ]]
 [[ $INSTALLER_REFERENCE == "{{resolve:secretsmanager:${TUNNEL_TOKEN_SECRET_ID}}}" ]]
@@ -85,6 +95,9 @@ GRANOLA_SCOPE_REFERENCE="$(
 [[ $GRANOLA_API_REFERENCE == '{{resolve:secretsmanager:${SECRET_ID}:SecretString:api_key}}' ]]
 [[ $GRANOLA_OWNER_REFERENCE == '{{resolve:secretsmanager:${SECRET_ID}:SecretString:owner_email}}' ]]
 [[ $GRANOLA_SCOPE_REFERENCE == '{{resolve:secretsmanager:${SECRET_ID}:SecretString:credential_scope}}' ]]
+[[ $OPENROUTER_INSTALLER_REGION == "$AWS_REGION" ]]
+[[ $OPENROUTER_INSTALLER_SECRET_ID == "$OPENROUTER_SECRET_ID" ]]
+[[ $OPENROUTER_API_REFERENCE == '{{resolve:secretsmanager:${SECRET_ID}:SecretString:api_key}}' ]]
 aws_operator() {
   env -u AWS_ACCESS_KEY_ID -u AWS_SECRET_ACCESS_KEY \
     -u AWS_SESSION_TOKEN -u AWS_SECURITY_TOKEN \
@@ -92,6 +105,13 @@ aws_operator() {
 }
 
 [[ $(aws_operator sts get-caller-identity --query Account --output text) == "$AWS_ACCOUNT_ID" ]]
+INSTANCE_METADATA_OPTIONS="$(aws_operator ec2 describe-instances \
+  --instance-ids "$INSTANCE_ID" \
+  --query 'Reservations[0].Instances[0].MetadataOptions' --output json)"
+jq -e '
+  .State == "applied" and .HttpEndpoint == "enabled" and
+  .HttpTokens == "required" and .HttpPutResponseHopLimit == 1
+' <<< "$INSTANCE_METADATA_OPTIONS" >/dev/null
 
 SOURCE_ID="$(docker image inspect "$SOURCE_IMAGE" --format '{{.Id}}')"
 [[ $SOURCE_ID == "$EXPECTED_DOCKER_IMAGE_ID" ]]
@@ -125,6 +145,7 @@ Copy `compose.yaml`, `compose.ec2.yaml`, `Caddyfile.ec2`,
 `bootstrap-ubuntu-arm64.sh`, `cloudflared-echo-authority.service`,
 `install-cloudflare-tunnel-token.sh`,
 `install-granola-organization-source.sh`,
+`install-openrouter-api-key.sh`,
 `asm-exec-structured-content.patch`, and `restore-authority-state.sh` to the
 new host through Session Manager. Then run:
 
@@ -140,9 +161,9 @@ CLI v2. It downloads and verifies the exact Cloudflare ARM64 package and
 `asm-exec` revision pinned in `bootstrap-ubuntu-arm64.sh`, applies the checked-in
 compatibility patch, verifies the patched bytes, and installs the hardened
 Tunnel unit **disabled and stopped**, with no token. It also installs the
-Granola source installer without resolving or writing a credential. The script
-is the single source for those version and digest pins; do not copy them into
-this runbook.
+Granola and OpenRouter secret installers without resolving or writing a
+credential. The script is the single source for those version and digest pins;
+do not copy them into this runbook.
 
 Create the target environment using `PINNED_IMAGE` from the private release
 record and `AUTHORITY_HOST` from the protected operator environment:
@@ -314,6 +335,104 @@ sidecars, all four database integrity results, and foreign keys. Transfer the
 complete `data/` directory as one unit. Never copy selected SQLite files,
 credentials, or keys. Do not transfer the runtime coordination volume or
 Caddy's old TLS volumes; EC2 Caddy is an HTTP-only origin behind Cloudflare.
+
+### Install and prove OpenRouter before any Authority start
+
+The live decision processor uses the fixed minimum-V1 model
+`deepseek/deepseek-r1` through OpenRouter. In the AWS Console, create or rotate
+the JSON secret identified by protected input `OPENROUTER_SECRET_ID`; its only
+key is `api_key`. Enter the value only in the Console's protected secret-value
+surface. Keep it out of CLI arguments, shell history, Compose environment,
+Authority configuration, databases, logs, and operator evidence.
+
+After the cold restore and before the first `compose up`, resolve and install
+the key, then verify only its filesystem boundary:
+
+```bash
+set -euo pipefail
+/usr/local/sbin/install-echo-authority-openrouter-key --check
+/usr/local/sbin/install-echo-authority-openrouter-key install
+
+OPENROUTER_KEY_PATH=/srv/echo-authority/data/state/credentials/processing/openrouter-api-key
+[[ -f $OPENROUTER_KEY_PATH && ! -L $OPENROUTER_KEY_PATH && -s $OPENROUTER_KEY_PATH ]]
+[[ $(stat -c '%a:%U:%G' "$OPENROUTER_KEY_PATH") == 600:echo-authority:echo-authority ]]
+```
+
+The fixed container reference is
+`file:/echo/state/credentials/processing/openrouter-api-key`. The Authority
+reads it once during startup and resolves only that exact reference. Rotation
+therefore requires re-running the installer and restarting the Compose
+`authority` service; never print, hash, or diff the installed key.
+
+Keep the stack and Tunnel stopped and run one content-free structured-output
+probe from the exact pinned image. This verifies model availability, the
+private credential mount, outbound HTTPS, and the provider's strict JSON-schema
+path without starting `serve` or reading meeting state:
+
+```bash
+set -euo pipefail
+cd /srv/echo-authority
+compose() { docker compose --env-file .env -f compose.yaml -f compose.ec2.yaml "$@"; }
+[[ -z $(compose ps -q --status running) ]]
+! systemctl is-active --quiet cloudflared-echo-authority.service
+
+OPENROUTER_PROBE="$(
+  compose run --rm --no-deps -T --entrypoint node authority \
+    --input-type=module --eval '
+      import { readPrivateAuthorityCredential } from
+        "./services/organization-authority/dist/adapters/security/private-file-credentials.js";
+      import { OpenRouterClient } from
+        "./services/organization-authority/dist/processing/adapters/decision-processors/llm/openrouter-client.js";
+
+      const reference = "file:/echo/state/credentials/processing/openrouter-api-key";
+      const credential = readPrivateAuthorityCredential(reference);
+      const client = new OpenRouterClient({
+        credentialRef: reference,
+        credentialResolver: (candidate) =>
+          candidate === reference ? credential : undefined,
+        requestTimeoutMs: 600000,
+      });
+      await client.verifyModel("deepseek/deepseek-r1");
+      const result = await client.generateStructured({
+        model: "deepseek/deepseek-r1",
+        systemPrompt: "Return only the requested structured result.",
+        userPrompt: "Set ok to true.",
+        schema: {
+          type: "object",
+          additionalProperties: false,
+          required: ["ok"],
+          properties: { ok: { type: "boolean" } },
+        },
+        maxOutputTokens: 1024,
+      });
+      const parsed = JSON.parse(result.content);
+      if (
+        parsed?.ok !== true ||
+        Object.keys(parsed).length !== 1 ||
+        result.stopReason !== "stop"
+      ) throw new Error("OpenRouter structured-output probe failed closed");
+      process.stdout.write(JSON.stringify({
+        ok: true,
+        request_id_present: typeof result.requestId === "string",
+        input_tokens: result.inputTokens,
+        output_tokens: result.outputTokens,
+        stop_reason: result.stopReason,
+      }));
+    '
+)"
+jq -e '
+  .ok == true and .request_id_present == true and
+  (.input_tokens | type) == "number" and .input_tokens >= 0 and
+  (.output_tokens | type) == "number" and .output_tokens >= 0 and
+  .stop_reason == "stop"
+' <<< "$OPENROUTER_PROBE" >/dev/null
+```
+
+Keep IMDSv2 required with response hop limit `1`. The OpenRouter runtime does
+not use the instance role from a container; the host-only installer resolves
+the one scoped secret before runtime. A failed probe is a hard stop: do not
+start the stack, connect the Tunnel, baseline a source, or create a canary
+meeting.
 
 ## 4. Validate the new origin while it is still private
 
@@ -564,13 +683,13 @@ Console's protected secret-value surface. Never put them in AWS CLI arguments,
 shell history, Compose environment, logs, this runbook, or operator evidence.
 
 The EC2 instance role may have `secretsmanager:GetSecretValue` only on the exact
-Granola secret ARN in addition to the independently scoped Tunnel secret. It
-does not need `ListSecrets`. If the secret uses a customer-managed KMS key,
-allow `kms:Decrypt` only on that key and only through the regional Secrets
-Manager service. Keep the reviewed policy and exact resource ARNs in private
-infrastructure evidence. Do not call `GetSecretValue` to test the policy and do
-not read the Secrets Manager Agent directly. The installed helper uses
-`asm-exec` dynamic references so plaintext exists only in its child process.
+Granola, OpenRouter, and independently scoped Tunnel secret ARNs. It does not
+need `ListSecrets`. If a secret uses a customer-managed KMS key, allow
+`kms:Decrypt` only on that key and only through the regional Secrets Manager
+service. Keep the reviewed policy and exact resource ARNs in private
+infrastructure evidence. Do not call `GetSecretValue` to test a policy and do
+not read the Secrets Manager Agent directly. The installed helpers use
+`asm-exec` dynamic references so plaintext exists only in their child process.
 
 On EC2, use a root Session Manager shell. Run the installer first, then verify
 only file structure and permissions. The three resolved values are written

@@ -11,6 +11,7 @@ SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
 UNIT_SOURCE="$SCRIPT_DIR/cloudflared-echo-authority.service"
 TOKEN_INSTALLER_SOURCE="$SCRIPT_DIR/install-cloudflare-tunnel-token.sh"
 GRANOLA_INSTALLER_SOURCE="$SCRIPT_DIR/install-granola-organization-source.sh"
+OPENROUTER_INSTALLER_SOURCE="$SCRIPT_DIR/install-openrouter-api-key.sh"
 ASM_EXEC_PATCH_SOURCE="$SCRIPT_DIR/asm-exec-structured-content.patch"
 
 fail() {
@@ -27,6 +28,7 @@ fail() {
 [[ -f "$UNIT_SOURCE" ]] || fail "missing $UNIT_SOURCE"
 [[ -f "$TOKEN_INSTALLER_SOURCE" ]] || fail "missing $TOKEN_INSTALLER_SOURCE"
 [[ -f "$GRANOLA_INSTALLER_SOURCE" ]] || fail "missing $GRANOLA_INSTALLER_SOURCE"
+[[ -f "$OPENROUTER_INSTALLER_SOURCE" ]] || fail "missing $OPENROUTER_INSTALLER_SOURCE"
 [[ -f "$ASM_EXEC_PATCH_SOURCE" ]] || fail "missing $ASM_EXEC_PATCH_SOURCE"
 
 export DEBIAN_FRONTEND=noninteractive
@@ -106,6 +108,8 @@ install -o root -g root -m 0700 "$TOKEN_INSTALLER_SOURCE" \
   /usr/local/sbin/install-echo-authority-tunnel-token
 install -o root -g root -m 0700 "$GRANOLA_INSTALLER_SOURCE" \
   /usr/local/sbin/install-echo-authority-granola-source
+install -o root -g root -m 0700 "$OPENROUTER_INSTALLER_SOURCE" \
+  /usr/local/sbin/install-echo-authority-openrouter-key
 systemctl daemon-reload
 systemctl disable cloudflared-echo-authority.service >/dev/null 2>&1 || true
 systemctl stop cloudflared-echo-authority.service >/dev/null 2>&1 || true

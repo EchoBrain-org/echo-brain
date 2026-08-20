@@ -215,6 +215,7 @@
         "services/organization-authority/src/domain/**",
         "services/organization-authority/src/presentation/**",
         "services/organization-authority/src/processing/adapters/approval-surfaces/slack-reactions/**",
+        "services/organization-authority/src/processing/adapters/decision-processors/llm/**",
         "services/organization-authority/src/processing/adapters/decision-processors/structured-text/**",
         "services/organization-authority/src/processing/adapters/delivery-surfaces/slack/**",
         "services/organization-authority/src/processing/adapters/meeting-sources/granola/**",

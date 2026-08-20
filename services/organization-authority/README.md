@@ -51,11 +51,14 @@ pending cursor, or start itself again. The EC2 stop/checkpoint/run/restart gate
 is documented in
 [`deploy/organization-authority/AWS-EC2.md`](../../deploy/organization-authority/AWS-EC2.md).
 
-Normal `serve` does not compose a meeting-processing worker. The only current
-processing composition is this stopped command: Granola source,
-`structured-text` processor, pending-only approval gate, and Authority SQLite
-state. LLM, Slack approval, and Slack delivery modules are bundled foundations,
-not active runtime wiring.
+`process-one-meeting` remains the deterministic stopped-state provisioning
+path. When `serve` finds the exact persisted source and Slack approval bindings,
+it composes the serialized live worker with the Granola source, the existing
+LLM decision processor over OpenRouter, Slack approval, record-first final
+delivery, and Authority SQLite state. Minimum V1 pins
+`deepseek/deepseek-r1` with strict structured output. The API key is read once
+at startup from the dedicated current-user `0600` credential file; it is not
+stored in Authority config, a database, Compose, or logs.
 
 ## HTTP surface
 

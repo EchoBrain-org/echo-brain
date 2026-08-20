@@ -11,6 +11,7 @@ import { readAuthorityProcessingSourceRuntimeBinding } from '../adapters/persist
 import { assertAuthorityProcessingOwnerEmailBinding } from '../adapters/persistence/sqlite/processing-source-identity.js';
 import { SqliteOrganizationAuthorityRepository } from '../adapters/persistence/sqlite/sqlite-authority-repository.js';
 import {
+  readPrivateAuthorityCredential,
   readPrivateAuthorityGranolaOrganizationCredential,
   readPrivateAuthorityGranolaOwnerEmail,
   readPrivateAuthorityOrganizationCredentialScope,
@@ -19,7 +20,7 @@ import type { OrganizationAuthorityApplication } from '../application/organizati
 import type { ReadableSearchAuthorizationFence } from '../application/readable-search-authorization-fence.js';
 import { isOrganizationMemberReadableRecordingPolicy } from '../application/organization-recording-policy.js';
 import { createSlackReactionsApprovalSurface } from '../processing/adapters/approval-surfaces/slack-reactions/slack-reactions-approval-surface.js';
-import { createStructuredTextDecisionProcessor } from '../processing/adapters/decision-processors/structured-text/structured-text-decision-processor.js';
+import { createLlmDecisionProcessor } from '../processing/adapters/decision-processors/llm/llm-decision-processor.js';
 import { FileSlackDeliveryReceiptStore } from '../processing/adapters/delivery-surfaces/slack/slack-delivery-receipt-store.js';
 import { SlackDeliverySurface } from '../processing/adapters/delivery-surfaces/slack/slack-delivery-surface.js';
 import { createGranolaMeetingSourceAdapter } from '../processing/adapters/meeting-sources/granola/index.js';
@@ -55,6 +56,9 @@ export const AUTHORITY_PROCESSING_INSTALLATION_KEY_FILENAME =
   'installation-key-state.v1.json';
 
 const GRANOLA_CREDENTIAL_REF = 'authority:granola-organization-api-key';
+const AUTHORITY_OPENROUTER_CREDENTIAL_FILENAME = 'openrouter-api-key';
+const AUTHORITY_OPENROUTER_MODEL = 'deepseek/deepseek-r1';
+const AUTHORITY_OPENROUTER_REQUEST_TIMEOUT_MS = 600_000;
 
 export interface AuthorityMeetingProcessingRuntime {
   close(): Promise<void>;
@@ -85,6 +89,23 @@ function adapterConfig(
       : { credential_ref: credentialReference }),
     settings,
   };
+}
+
+export function authorityLiveDecisionProcessorConfig(
+  instanceId: string,
+  credentialReference: string,
+): AuthorityLiveAdapterConfig {
+  return adapterConfig(
+    'llm',
+    instanceId,
+    {
+      provider: 'openrouter',
+      model: AUTHORITY_OPENROUTER_MODEL,
+      max_output_tokens: 8_192,
+      request_timeout_ms: AUTHORITY_OPENROUTER_REQUEST_TIMEOUT_MS,
+    },
+    credentialReference,
+  );
 }
 
 function assertValidAdapter(
@@ -270,6 +291,20 @@ export async function openAuthorityMeetingProcessingRuntime(
       )}`,
     );
 
+  const openRouterCredentialReference = `file:${join(
+    processingCredentialDirectory,
+    AUTHORITY_OPENROUTER_CREDENTIAL_FILENAME,
+  )}`;
+  const openRouterCredential = readPrivateAuthorityCredential(
+    openRouterCredentialReference,
+  );
+  const resolveOpenRouterCredential = (
+    reference: string,
+  ): string | undefined =>
+    reference === openRouterCredentialReference
+      ? openRouterCredential
+      : undefined;
+
   const authorityDescriptor = options.authority.descriptor();
 
   const slackCredential = options.integrationSecrets.read(
@@ -320,13 +355,18 @@ export async function openAuthorityMeetingProcessingRuntime(
     });
     assertValidAdapter('Granola meeting source', source, sourceConfig);
 
-    const processorConfig = adapterConfig(
-      'structured-text',
+    const processorConfig = authorityLiveDecisionProcessorConfig(
       policy.decision_processor_adapter_instance_id,
-      {},
+      openRouterCredentialReference,
     );
-    const processor = createStructuredTextDecisionProcessor(processorConfig);
-    assertValidAdapter('structured-text decision processor', processor, processorConfig);
+    const processor = createLlmDecisionProcessor(processorConfig, {
+      credentialResolver: resolveOpenRouterCredential,
+    });
+    assertValidAdapter(
+      'OpenRouter decision processor',
+      processor,
+      processorConfig,
+    );
 
     const bridge = new ServerInstallationCompatibilityBridge({
       authorityRepository: options.authorityRepository,
@@ -458,6 +498,7 @@ export async function openAuthorityMeetingProcessingRuntime(
             approvalGate: approval,
             deliverySurfaces: [delivery],
             state: store,
+            deadlines: { extractMs: AUTHORITY_OPENROUTER_REQUEST_TIMEOUT_MS },
           },
           signal,
         );
