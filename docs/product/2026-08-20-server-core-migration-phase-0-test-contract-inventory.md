@@ -172,6 +172,19 @@ provider call, crash recovery, public export, or live runtime selection; those
 remain D2-2 evidence. No application ID, baseline SQL, lineage genesis, or
 SQLite opener is introduced before Phase 3.
 
+**D2-2A offline activation slice (2026-08-20):**
+`services/organization-control-plane/test/person-slack-approval-activation-v2.test.ts`
+proves that an abstract Authority administrator credential, never an owner or
+employee Person session, activates one installation-free Slack approval
+binding and four ordered policy/action capabilities for an exact current
+linked owner or employee. It covers current owner/target membership, active
+link, connection-state and required-scope reproof, tenant/channel/adapter
+joins, atomic rollback, command replay/conflict, concurrent resource reuse,
+immutable versioning, and corrupt stored-body/digest/substitution denial. It
+deliberately proves no concrete persistence, process restart, provider action,
+audit-result recovery, public export, or live runtime selection. Those remain
+D2-2B and Phase 3 evidence.
+
 The suite must prove:
 
 - Person Slack completion is link-only; the attempt ID is lookup/correlation,

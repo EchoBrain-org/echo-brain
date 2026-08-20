@@ -1255,6 +1255,26 @@ while fresh genesis and exact database identities remain Phase 3. The retained
 D2-1 slice passed the full repository gate: 140 test files and 1,409 tests,
 plus boundary, documentation, type checking, and lint.
 
+**D2-2A activation checkpoint (2026-08-20):** one private, non-live
+application state machine now owns the exact administrator activation command
+and a separate command-ID-free resource commitment. An Authority
+administrator credential is the only admitted actor; the coordinator must
+provide its current owner tenure and the target link's exact current owner or
+employee tenure under one stable authorization fence. The state machine
+independently reparses and rehashes the immutable Slack connection and Person
+link, checks current connection state, required Slack scopes, link currency,
+tenant, channel, reactions, and adapter identity, then atomically creates one
+approval binding and the four ordered policy/action capabilities. Exact command
+replay returns the same result; distinct command IDs for the same resource
+reuse the same binding/capabilities; changed configuration mints a new immutable
+resource instead of relabeling the old one. The checkpoint deliberately has no
+SQLite schema, opener, public export, provider call, live selection, or claim
+of process-restart/cross-database linearization. D2-2B still owns provider
+action finalization, audit/result recovery, and the alternate authorizer;
+Phase 3 owns concrete persistence and the real shared Authority/control-plane
+fence. The retained D2-2A slice passed the full repository gate: 141 test
+files and 1,419 tests, plus boundary, documentation, type checking, and lint.
+
 **Entry gate**
 
 - Phase 1 exit is green.
@@ -1308,11 +1328,15 @@ earlier red, and compatibility remains selectable until Phase 3 parity.
    identity/action state and later D3 consumer are green.
    **D2-1 is complete as a contract-only candidate:** every identity and audit
    body above has an exact private validator and cross-edge mutation evidence.
-   It is not persisted, exported, or selected by the live runtime. D2-2 owns
-   administrator-only activation, transactional persistence and independent
-   digest reproof, exact retry/conflict/restart recovery, and the alternate
-   non-installation authorizer. Phase 3 alone owns baseline SQL, application
-   IDs, lineage manifests, and writable openers.
+   It is not persisted, exported, or selected by the live runtime.
+   **D2-2A is complete as an offline activation candidate:** it proves the
+   administrator-only orchestration, current-edge reproof, exact
+   replay/conflict, and one-resource/one-capability-set rules through an
+   abstract stable-fence transaction. D2-2B still owns provider action
+   finalization, immutable audit/result recovery, and the alternate
+   non-installation authorizer. Phase 3 alone owns durable restart proof,
+   concrete cross-role locking, baseline SQL, application IDs, lineage
+   manifests, and writable openers.
 5. **Authority envelope, receipt, and Layer-1 facts.** Add the new envelope and
    receipt versions without changing V1-V3 readers. Reprove the exact human-act
    reference at the existing Record application boundary; append record and
