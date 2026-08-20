@@ -271,6 +271,14 @@ export class ServerInstallationCompatibilityBridge
     return snapshot;
   }
 
+  /**
+   * Reestablishes the server installation's short-lived access lease without
+   * repeating an already-durable approval authorization.
+   */
+  async ensureCurrentInstallationAccess(signal?: AbortSignal): Promise<void> {
+    await this.currentState(this.installationKey.inspect(), signal);
+  }
+
   async authorize(
     input: ApprovalActionAuthorizationRequest,
     signal?: AbortSignal,

@@ -472,6 +472,57 @@ describe('server installation compatibility bridge', () => {
     expect(fixture.repository.reads).toBe(2);
   });
 
+  it('refreshes resumed-delivery access without repeating a permission check', async () => {
+    let checks = 0;
+    const fixture = bridgeFixture({
+      port: {
+        checkPermission: async (request) => {
+          checks += 1;
+          return ordinaryAllow(request);
+        },
+        checkOrganizationMemberReadablePermission: async (request) => {
+          checks += 1;
+          return memberAllow(request);
+        },
+      },
+    });
+    fixture.repository.access = {
+      ...fixture.state.access,
+      state: {
+        ...fixture.state.access.state,
+        valid_until: '2026-08-19T19:59:59.999Z',
+      },
+    } as StoredAuthorityAccessState;
+    let refreshes = 0;
+    const bridge = new ServerInstallationCompatibilityBridge({
+      authorityRepository: fixture.repository,
+      keyStatePath: fixture.installation.path,
+      permissionCheck: fixture.port,
+      now: () => NOW,
+      accessRefresh: {
+        refreshInstallationAccess: async () => {
+          refreshes += 1;
+          fixture.repository.access = {
+            ...fixture.state.access,
+            state_sha256: digest('6'),
+            state: {
+              ...fixture.state.access.state,
+              access_state_sequence: 2,
+              valid_until: '2026-08-19T20:10:00.000Z',
+            },
+          } as StoredAuthorityAccessState;
+        },
+      },
+    });
+
+    await expect(
+      bridge.ensureCurrentInstallationAccess(),
+    ).resolves.toBeUndefined();
+    expect(refreshes).toBe(1);
+    expect(fixture.repository.reads).toBe(2);
+    expect(checks).toBe(0);
+  });
+
   it('fails closed on revoked access without invoking refresh or permission', async () => {
     const fixture = bridgeFixture();
     fixture.repository.access = {

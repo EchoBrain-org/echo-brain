@@ -49,6 +49,11 @@ export interface OrganizationRecordAppendApplication {
   ): Promise<AcceptedOrganizationRecordV1>;
 }
 
+/** Keeps the server-held submitting installation current for a new append. */
+export interface OrganizationRecordSubmitterAccess {
+  ensureCurrentInstallationAccess(signal?: AbortSignal): Promise<void>;
+}
+
 /**
  * Durable create-once storage for the signed record envelope. The callback may
  * run only when this idempotency key has no frozen envelope; concurrent calls
@@ -65,6 +70,7 @@ export interface OrganizationMemberRecordFirstDeliveryOptions {
   readonly approvalMetadata: OrganizationMemberRecordApprovalMetadataLookup;
   readonly recordEnvelopes: FrozenOrganizationRecordEnvelopeStore;
   readonly recordEnvelopeBuilder: OrganizationRecordEnvelopeBuilder;
+  readonly installationAccess: OrganizationRecordSubmitterAccess;
   readonly records: OrganizationRecordAppendApplication;
   readonly finalDelivery: DeliverySurfaceAdapter;
 }
@@ -143,6 +149,10 @@ export class OrganizationMemberRecordFirstDeliverySurface
       );
     }
 
+    context?.signal.throwIfAborted();
+    await this.options.installationAccess.ensureCurrentInstallationAccess(
+      context?.signal,
+    );
     context?.signal.throwIfAborted();
     await this.options.records.submitRecordEnvelope({
       record_envelope: record.envelope,

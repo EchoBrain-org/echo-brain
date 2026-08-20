@@ -485,6 +485,7 @@ export async function openAuthorityMeetingProcessingRuntime(
         new SqliteOrganizationMemberRecordApprovalMetadataLookup(store),
       recordEnvelopes: store,
       recordEnvelopeBuilder,
+      installationAccess: bridge,
       records: options.records,
       finalDelivery: finalSlackDelivery,
     });

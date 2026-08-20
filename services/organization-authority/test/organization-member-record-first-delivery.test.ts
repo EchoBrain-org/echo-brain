@@ -152,6 +152,7 @@ class FrozenEnvelopeStore implements FrozenOrganizationRecordEnvelopeStore {
 }
 
 interface HarnessOptions {
+  readonly accessFailures?: number;
   readonly recordFailure?: Error;
   readonly slackFailures?: number;
 }
@@ -160,6 +161,7 @@ function harness(options: HarnessOptions = {}) {
   const calls: string[] = [];
   const buildInputs: OrganizationRecordEnvelopeBuildInput[] = [];
   const recordRequests: SubmitOrganizationRecordEnvelopeRequestV1[] = [];
+  let accessCalls = 0;
   let slackCalls = 0;
   const recordDocument = {
     schema_version: 3,
@@ -234,6 +236,15 @@ function harness(options: HarnessOptions = {}) {
     },
     recordEnvelopes: new FrozenEnvelopeStore(calls),
     recordEnvelopeBuilder: builder,
+    installationAccess: {
+      async ensureCurrentInstallationAccess() {
+        accessCalls += 1;
+        calls.push('access');
+        if (accessCalls <= (options.accessFailures ?? 0)) {
+          throw new Error('access unavailable');
+        }
+      },
+    },
     records,
     finalDelivery,
   });
@@ -258,6 +269,7 @@ describe('organization-member record-first delivery', () => {
       'lookup',
       'freeze:create',
       'build',
+      'access',
       'record',
       'slack:delivery-1',
     ]);
@@ -294,10 +306,12 @@ describe('organization-member record-first delivery', () => {
       'lookup',
       'freeze:create',
       'build',
+      'access',
       'record',
       'slack:delivery-1',
       'lookup',
       'freeze:hit',
+      'access',
       'record',
       'slack:delivery-2',
     ]);
@@ -319,7 +333,32 @@ describe('organization-member record-first delivery', () => {
       'lookup',
       'freeze:create',
       'build',
+      'access',
       'record',
     ]);
+  });
+
+  it('refreshes access on an approved retry without rebuilding or reaching Slack early', async () => {
+    const test = harness({ accessFailures: 1 });
+
+    await expect(test.surface.publish(delivery('delivery-1'))).rejects.toThrow(
+      'access unavailable',
+    );
+    const receipt = await test.surface.publish(delivery('delivery-2'));
+
+    expect(test.calls).toEqual([
+      'lookup',
+      'freeze:create',
+      'build',
+      'access',
+      'lookup',
+      'freeze:hit',
+      'access',
+      'record',
+      'slack:delivery-2',
+    ]);
+    expect(test.buildInputs).toHaveLength(1);
+    expect(test.recordRequests).toHaveLength(1);
+    expect(receipt.envelope_id).toBe('delivery-2');
   });
 });
