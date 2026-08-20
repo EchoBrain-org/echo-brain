@@ -514,8 +514,15 @@ organization-member-readable cards.
 
 ## Founder-live source provisioning and one-meeting canary
 
-This is the minimum live-processing rung. With the stack stopped,
-`process-one-meeting` is the bounded source-provisioning and admission canary:
+This is the minimum live-processing rung. After the common stopped-stack and
+snapshot gates below, choose one flow. This founder-live migration already
+has its exact source binding, so it uses the **live-only cutoff** flow and
+does not run `process-one-meeting`. A fresh deployment without that binding
+uses the **pre-baseline provisioning** flow instead. Do not combine the two
+flows in one canary.
+
+With the stack stopped, `process-one-meeting` is the bounded
+source-provisioning and admission canary:
 it pulls at most one meeting, performs deterministic extraction, and creates or
 reuses one durable pending approval. It is not a daemon and is unavailable
 while `serve` owns the Authority singleton. After that explicit source binding
@@ -800,6 +807,59 @@ chmod 0600 "$EVIDENCE_FILE"
 If snapshot creation, waiting, or exact verification fails, keep both the stack
 and Tunnel stopped. A pending or in-progress snapshot is not the checkpoint.
 
+### Live-only cutoff and post-cutoff canary
+
+For the minimum-V1 migration, the stopped stack now establishes the source
+cutoff before any live canary is created. The exact Granola source binding must
+already be persisted; this command neither accepts caller identity flags nor
+reads a credential or contacts Granola. It refuses unfinished candidates and
+an already-live cursor. Keep the stack and Tunnel stopped throughout:
+
+```bash
+set -euo pipefail
+cd /srv/echo-authority
+compose() { docker compose --env-file .env -f compose.yaml -f compose.ec2.yaml "$@"; }
+[[ -z $(compose ps -q --status running) ]]
+! systemctl is-active --quiet cloudflared-echo-authority.service
+
+EVIDENCE_DIRECTORY=/root/echo-authority-private-evidence
+BASELINE_STAMP="$(date -u +%Y%m%dT%H%M%SZ)"
+BASELINE_RECEIPT="$EVIDENCE_DIRECTORY/live-source-baseline-$BASELINE_STAMP.json"
+umask 077
+compose run --rm --no-deps authority \
+  baseline-live-source --config /echo/authority.json > "$BASELINE_RECEIPT"
+jq -e '
+  .schema_version == 1 and
+  .kind == "echo-organization-authority-meeting-live-source-baseline" and
+  .outcome == "baseline_created" and
+  .source.adapter_id == "granola" and
+  (.source.instance_id | type) == "string" and
+  (.source.instance_id | length) > 0 and
+  (.cutoff_at | type) == "string" and
+  (.cutoff_at | test("Z$"))
+' "$BASELINE_RECEIPT" >/dev/null
+```
+
+Only after that receipt is verified, create one **new** completed meeting in
+the deliberately API-enabled canary space. It must be created after the cutoff
+and include an explicit `Decision:`, `Action:`, or `Rationale:` line. Do not
+reuse, edit, or re-open a meeting from before the receipt. Then start only the
+private Authority and proxy stack using the private-start sequence below; the
+first live worker pull is the canary. Keep the Tunnel off until its Slack
+approval and record-first delivery checks pass. The receipt is intentionally
+content-free: do not add a title, provider cursor, note ID, credential, or
+meeting text to it.
+
+Do not run `process-one-meeting` after this baseline as part of the live-only
+migration flow. Its bounded procedure below remains a source-provisioning or
+diagnostic tool for a stopped pre-baseline state, not a substitute for the
+cutoff receipt.
+
+### Pre-baseline provisioning canary (alternative flow)
+
+Skip this flow when a live-only cutoff receipt was created above. It is only
+for a stopped source-provisioning or diagnostic run before a live baseline.
+
 After the snapshot is verified, return to the stopped EC2 root shell. Load the
 exact active Person tuple from protected operator evidence. Minimum V1 pins the
 single organization source instance so the first run and retry address the same
@@ -907,12 +967,16 @@ owner email, provider meeting ID, credential, or failure message. Keep them and
 the command stderr mode `0600` in private evidence; do not paste either into a
 tracked file or chat.
 
-After the required `pending_created` followed by exact `pending_exists`
-artifact pair passes, start `authority` and `proxy` while ingress remains off
-and prove private health. Starting `serve` also starts the serialized live
-worker because the source now exists and the exact Slack capability is ready;
-outbound Granola and Slack calls do not require the Tunnel. Keep public ingress
-off through the controlled approval canary. Do not reverse this order:
+### Private start and approval canary
+
+Start `authority` and `proxy` only after one flow passes: either the
+live-only cutoff receipt is verified and its one new post-cutoff meeting is
+complete, or the pre-baseline flow produced the required `pending_created`
+then exact `pending_exists` artifact pair. Keep ingress off and prove private
+health. Starting `serve` also starts the serialized live worker because the
+source now exists and the exact Slack capability is ready; outbound Granola
+and Slack calls do not require the Tunnel. Keep public ingress off through the
+controlled approval canary. Do not reverse this order:
 
 ```bash
 set -euo pipefail

@@ -18,11 +18,13 @@ import {
 import { startOrganizationAuthority } from './runtime.js';
 import { canonicalAuthorityStatus, inspectAuthorityStatus } from './status.js';
 import { processOneAuthorityMeeting } from './process-one-meeting.js';
+import { baselineAuthorityLiveSource } from './baseline-live-source.js';
 
 const USAGE = `usage:
   echo-organization-authority init-development --config <absolute-path> --state-dir <absolute-path> --organization-name <name> [--port <1-65535>]
   echo-organization-authority install-integrations --config <absolute-path>
   echo-organization-authority process-one-meeting --config <absolute-path> --principal-id <prn-id> --membership-id <mem-id> --membership-type <owner|employee> --source-instance <id>
+  echo-organization-authority baseline-live-source --config <absolute-path>
   echo-organization-authority activate-permission-pilot --config <absolute-path> --command <absolute-json-path>
   echo-organization-authority activate-organization-member-recording --config <absolute-path> --command <absolute-json-path>
   echo-organization-authority reviewer-query-audit-export --config <absolute-path> --command <absolute-json-path> --output <absolute-path>
@@ -206,6 +208,14 @@ export async function runOrganizationAuthorityCli(
     );
     io.stdout(`${canonicalJson(result as never)}\n`);
     return result.ok ? 0 : 1;
+  }
+  if (command === 'baseline-live-source') {
+    const flags = parseFlags(commandArguments, ['--config']);
+    const result = await baselineAuthorityLiveSource(
+      requiredFlag(flags, '--config'),
+    );
+    io.stdout(`${canonicalJson(result as never)}\n`);
+    return 0;
   }
   if (command === 'activate-permission-pilot') {
     const flags = parseFlags(commandArguments, ['--config', '--command']);

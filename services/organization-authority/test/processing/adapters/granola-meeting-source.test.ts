@@ -4,6 +4,8 @@ import {
   GranolaApiError,
   GranolaMeetingSourceAdapter,
   HttpGranolaApiClient,
+  createGranolaLiveOnlyCursor,
+  granolaCursorPhase,
   type GranolaApiClient,
   type GranolaListParams,
   type GranolaListResponse,
@@ -757,6 +759,63 @@ describe("Granola canonical meeting mapping", () => {
       { cursor: "private-page-token", page_size: 2 },
       { updated_after: "2026-07-15T17:59:59.000Z", page_size: 2 },
     ]);
+  });
+
+  it("keeps the update filter when continuing a live page", async () => {
+    const client = new FakeClient([
+      { notes: [], hasMore: false, cursor: null },
+    ]);
+    const adapter = new GranolaMeetingSourceAdapter(config, {
+      client,
+      now: () => "2026-07-16T00:00:00.000Z",
+    });
+    const cursor = `granola:v1:${Buffer.from(
+      JSON.stringify({
+        schema_version: 1,
+        watermark: "2026-07-15T18:00:00.000Z",
+        page_cursor: "private-live-page-token",
+        page_high_watermark: "2026-07-15T18:30:00.000Z",
+      }),
+    ).toString("base64url")}`;
+
+    await adapter.pull({ cursor });
+
+    expect(client.listCalls).toEqual([
+      {
+        cursor: "private-live-page-token",
+        updated_after: "2026-07-15T17:59:59.000Z",
+        page_size: 2,
+      },
+    ]);
+  });
+
+  it("creates and classifies a live-only cursor without exposing page state", async () => {
+    const cutoffAt = "2026-07-15T18:00:00.000Z";
+    const cursor = createGranolaLiveOnlyCursor(cutoffAt);
+    const initialHistoryCursor = `granola:v1:${Buffer.from(
+      JSON.stringify({
+        schema_version: 1,
+        watermark: null,
+        page_cursor: "private-initial-history-token",
+        page_high_watermark: "2026-07-15T17:00:00.000Z",
+      }),
+    ).toString("base64url")}`;
+    const client = new FakeClient([
+      { notes: [], hasMore: false, cursor: null },
+    ]);
+    const adapter = new GranolaMeetingSourceAdapter(config, { client });
+
+    expect(granolaCursorPhase(undefined)).toBe("uninitialized");
+    expect(granolaCursorPhase(initialHistoryCursor)).toBe("initial-history");
+    expect(granolaCursorPhase(cursor)).toBe("live");
+    expect(cursor).not.toContain("page_cursor");
+    await adapter.pull({ cursor });
+    expect(client.listCalls).toEqual([
+      { updated_after: cutoffAt, page_size: 2 },
+    ]);
+    expect(() => createGranolaLiveOnlyCursor("2026-07-15T18:00:00Z")).toThrow(
+      "canonical ISO timestamp",
+    );
   });
 
   it("accepts the legacy ISO high-water mark and emits a v1 cursor", async () => {
