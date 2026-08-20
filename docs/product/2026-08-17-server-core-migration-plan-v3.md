@@ -1,5 +1,11 @@
 # Server-core migration plan v3
 
+> **Operational status (2026-08-20):** the
+> [server-core migration lean-down plan v4](2026-08-20-server-core-migration-lean-down-plan-v4.md)
+> supersedes this document's execution and deletion sequence against the
+> migrated branch. V3 remains unchanged below as the direction-setting record
+> that led to ADR-0001; it is not the active cleanup checklist.
+
 **Status:** direction-setting plan, third version, written 2026-08-17 against
 `main` at `4665c3a`. Supersedes v2 (`4045154`) after a second review that
 made two premises explicit, found a second silent supersession, and

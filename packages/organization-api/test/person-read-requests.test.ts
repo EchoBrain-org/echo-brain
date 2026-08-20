@@ -34,30 +34,16 @@ const recentRequest = {
 } as const;
 
 const reviewerRecentRequest = {
-  schema_version: 2,
-  kind: 'echo-organization-person-reviewer-recent-decisions-request',
-  request_id: 'rrd_00000000-0000-4000-8000-000000000001',
-  authority_id: IDS.authority,
-  organization_id: IDS.organization,
   subject_principal_id: IDS.principal,
-  http_method: 'POST',
-  http_path: ORGANIZATION_API_PERSON_REVIEWER_RECENT_DECISIONS_PATH,
 } as const;
 
 const searchRequest = {
-  schema_version: 2,
-  kind: 'echo-organization-person-readable-search-request',
-  request_id: 'osq_00000000-0000-4000-8000-000000000001',
-  authority_id: IDS.authority,
-  organization_id: IDS.organization,
   subject_principal_id: IDS.principal,
-  http_method: 'POST',
-  http_path: ORGANIZATION_API_PERSON_READABLE_SEARCH_PATH,
   query: 'Launch pricing',
 } as const;
 
 describe('organization Person read requests', () => {
-  it('validates three distinct exact-operation schema-v2 bodies', () => {
+  it('keeps pilot recent intact and validates semantic-only reviewer and search bodies', () => {
     expect(
       validateOrganizationPersonRecentDecisionsRequest(recentRequest),
     ).toEqual(recentRequest);
@@ -117,7 +103,7 @@ describe('organization Person read requests', () => {
   it('rejects cross-route, cross-kind, and cross-version bodies', () => {
     expect(() =>
       validateOrganizationPersonReviewerRecentDecisionsRequest(recentRequest),
-    ).toThrow('version or kind is unsupported');
+    ).toThrow('unexpected shape');
     expect(() =>
       validateOrganizationPersonRecentDecisionsRequest({
         ...recentRequest,
@@ -141,6 +127,34 @@ describe('organization Person read requests', () => {
     expect(() => validateOrganizationReadableSearchRequest(searchRequest)).toThrow(
       'unexpected shape',
     );
+  });
+
+  it('rejects the retired reviewer and search transport envelopes', () => {
+    expect(() =>
+      validateOrganizationPersonReviewerRecentDecisionsRequest({
+        schema_version: 2,
+        kind: 'echo-organization-person-reviewer-recent-decisions-request',
+        request_id: 'rrd_00000000-0000-4000-8000-000000000001',
+        authority_id: IDS.authority,
+        organization_id: IDS.organization,
+        subject_principal_id: IDS.principal,
+        http_method: 'POST',
+        http_path: ORGANIZATION_API_PERSON_REVIEWER_RECENT_DECISIONS_PATH,
+      }),
+    ).toThrow('unexpected shape');
+    expect(() =>
+      validateOrganizationPersonReadableSearchRequest({
+        schema_version: 2,
+        kind: 'echo-organization-person-readable-search-request',
+        request_id: 'osq_00000000-0000-4000-8000-000000000001',
+        authority_id: IDS.authority,
+        organization_id: IDS.organization,
+        subject_principal_id: IDS.principal,
+        http_method: 'POST',
+        http_path: ORGANIZATION_API_PERSON_READABLE_SEARCH_PATH,
+        query: 'Launch pricing',
+      }),
+    ).toThrow('unexpected shape');
   });
 
   it('rejects a caller/subject naming mismatch and a non-POST method', () => {

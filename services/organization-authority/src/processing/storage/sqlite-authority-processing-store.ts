@@ -3,8 +3,11 @@ import type Database from 'better-sqlite3';
 import { canonicalJson } from '@echo-brain/federation-protocol';
 import { openAuthorityDatabase } from '../../adapters/persistence/sqlite/open-database.js';
 import type {
+  SlackDeliveryReceiptStore,
+  SlackStoredDelivery,
+} from '../adapters/delivery-surfaces/slack/slack-delivery-receipt-store.js';
+import type {
   ApprovalDecision,
-  ApprovalGate,
   ApprovalRequest,
 } from '../core/approval/approval-gate.js';
 import type { AdapterIdentity } from '../core/contracts/adapter.js';
@@ -29,8 +32,8 @@ import type {
 
 const DECISION_SLOT = 'decision-set';
 const APPROVAL_REQUEST_SLOT = 'approval-request';
-const PENDING_APPROVAL_LIMIT = 100;
 const TERMINAL_CLEANUP_LIMIT = 100;
+const TERMINAL_RECORD_RECOVERY_LIMIT = 100;
 const RETENTION_MILLISECONDS = 30 * 24 * 60 * 60 * 1000;
 
 export interface AuthorityProcessingStoreBinding {
@@ -66,18 +69,11 @@ export interface AuthorityProcessingSourceProvisioningStatus {
   readonly configuration_binding: 'provisioned' | 'existing';
 }
 
-export type AuthorityProcessingMemberExclusion =
-  | {
-      readonly scope: 'source';
-      readonly source_adapter_id: string;
-      readonly source_instance_id: string;
-    }
-  | {
-      readonly scope: 'meeting';
-      readonly source_adapter_id: string;
-      readonly source_instance_id: string;
-      readonly external_id: string;
-    };
+export interface AuthorityProcessingLiveSourceActivation {
+  readonly outcome: 'activated' | 'already_activated';
+  readonly cursor: AdapterCursor;
+  readonly source_binding: AuthorityProcessingSourceProvisioningStatus;
+}
 
 export interface AuthorityProcessingCandidate {
   readonly processing_key: string;
@@ -85,22 +81,6 @@ export interface AuthorityProcessingCandidate {
   readonly meeting: MeetingDocument;
   readonly first_decision: DecisionSet | null;
   readonly first_request: ApprovalRequest | null;
-}
-
-export interface PendingApprovalCursor {
-  readonly requested_at: string;
-  readonly approval_id: string;
-  readonly processing_key: string;
-}
-
-export interface PendingAuthorityApproval extends AuthorityProcessingCandidate {
-  readonly requested_at: string;
-  readonly approval_id: string;
-}
-
-export interface ListPendingAuthorityApprovalsInput {
-  readonly after?: PendingApprovalCursor;
-  readonly limit?: number;
 }
 
 export interface AuthorityTerminalProcessingResolution {
@@ -225,6 +205,23 @@ export interface AuthorityFrozenOrganizationRecordEnvelopeStore {
   ): Promise<T>;
 }
 
+/** Exact terminal facts available to finish a canonical append after revocation. */
+export interface AuthorityTerminalRecordAct {
+  readonly candidate: AuthorityProcessingCandidate;
+  readonly decision: Exclude<ApprovalDecision, { status: 'pending' }>;
+  readonly metadata: AuthorityApprovalResolutionMetadata;
+}
+
+export interface AuthorityTerminalRecordRecoveryCursor {
+  readonly resolved_at: string;
+  readonly processing_key: string;
+}
+
+export interface ListTerminalRecordRecoveryPageInput {
+  readonly limit?: number;
+  readonly after?: AuthorityTerminalRecordRecoveryCursor;
+}
+
 interface CursorRow {
   cursor: string;
   source_version: string;
@@ -236,11 +233,6 @@ interface CandidateRow {
   raw_document_json: string;
   decision_json: string | null;
   request_json: string | null;
-}
-
-interface PendingRow extends CandidateRow {
-  request_order_at: string;
-  request_approval_id: string;
 }
 
 interface JsonRow {
@@ -312,6 +304,15 @@ interface FrozenRecordEnvelopeRow {
   envelope_json: string;
 }
 
+interface SlackDeliveryAttemptRow {
+  idempotency_key: string;
+  status: string;
+  channel_id: string | null;
+  message_ts: string | null;
+  recorded_at: string;
+  message: string | null;
+}
+
 function digestCanonicalJson(json: string): `sha256:${string}` {
   return `sha256:${createHash('sha256').update(json, 'utf8').digest('hex')}`;
 }
@@ -349,6 +350,83 @@ function assertCanonicalTimestamp(value: string, field: string): string {
     throw new Error(`${field} must be a canonical timestamp`);
   }
   return value;
+}
+
+function assertSlackDeliveryText(
+  value: unknown,
+  field: string,
+  maximum: number,
+): string {
+  if (
+    typeof value !== 'string' ||
+    value.trim().length === 0 ||
+    value.length > maximum
+  ) {
+    throw new Error(`Slack delivery ${field} is invalid`);
+  }
+  return value;
+}
+
+function assertSlackStoredDelivery(
+  record: SlackStoredDelivery,
+): SlackStoredDelivery {
+  if (
+    record.schema_version !== 1 ||
+    record.record_type !== 'echo-brain.slack-delivery'
+  ) {
+    throw new Error('Slack delivery record identity is invalid');
+  }
+  assertSlackDeliveryText(record.idempotency_key, 'idempotency key', 8192);
+  assertCanonicalTimestamp(record.recorded_at, 'Slack delivery recorded_at');
+  if (record.status === 'delivered') {
+    assertSlackDeliveryText(record.channel_id, 'channel id', 4096);
+    assertSlackDeliveryText(record.message_ts, 'message timestamp', 4096);
+  } else if (record.status === 'unknown') {
+    if (record.channel_id !== null || record.message_ts !== null) {
+      throw new Error('unknown Slack delivery has provider identity');
+    }
+    assertSlackDeliveryText(record.message, 'unknown message', 4096);
+  } else {
+    throw new Error('Slack delivery status is invalid');
+  }
+  return record;
+}
+
+function slackStoredDelivery(
+  row: SlackDeliveryAttemptRow,
+): SlackStoredDelivery {
+  if (row.status !== 'unknown' && row.status !== 'delivered') {
+    throw new Error('stored Slack delivery status is invalid');
+  }
+  const record: SlackStoredDelivery =
+    row.status === 'delivered'
+      ? {
+          schema_version: 1,
+          record_type: 'echo-brain.slack-delivery',
+          idempotency_key: row.idempotency_key,
+          status: 'delivered',
+          channel_id: row.channel_id!,
+          message_ts: row.message_ts!,
+          recorded_at: row.recorded_at,
+        }
+      : {
+          schema_version: 1,
+          record_type: 'echo-brain.slack-delivery',
+          idempotency_key: row.idempotency_key,
+          status: 'unknown',
+          channel_id: null,
+          message_ts: null,
+          recorded_at: row.recorded_at,
+          message: row.message!,
+        };
+  return assertSlackStoredDelivery(record);
+}
+
+function sameSlackStoredDelivery(
+  left: SlackStoredDelivery,
+  right: SlackStoredDelivery,
+): boolean {
+  return canonicalJson(left as never) === canonicalJson(right as never);
 }
 
 function approvalId(processingKey: string): string {
@@ -415,7 +493,8 @@ export class SqliteAuthorityProcessingStore
   implements
     CoreStateStore,
     AuthorityApprovalDecisionStore,
-    AuthorityFrozenOrganizationRecordEnvelopeStore
+    AuthorityFrozenOrganizationRecordEnvelopeStore,
+    SlackDeliveryReceiptStore
 {
   private readonly database: Database.Database;
   private readonly now: () => string;
@@ -423,8 +502,7 @@ export class SqliteAuthorityProcessingStore
     string,
     Promise<AuthorityBuiltOrganizationRecordEnvelope>
   >();
-  private initialized = false;
-  private provisioningStatus: AuthorityProcessingSourceProvisioningStatus | null = null;
+  private initialization: 'normal' | 'terminal-record-recovery' | undefined;
 
   constructor(
     databasePath: string,
@@ -465,8 +543,13 @@ export class SqliteAuthorityProcessingStore
 
   /** Provisions or requires the permanent exact source-owner binding. */
   async initialize(): Promise<void> {
-    if (this.initialized) return;
-    const status = this.immediate(() => {
+    if (this.initialization === 'normal') return;
+    if (this.initialization === 'terminal-record-recovery') {
+      throw new Error(
+        'authority processing terminal-record recovery store cannot enter normal processing mode',
+      );
+    }
+    this.immediate(() => {
       let ownerBindingProvisioned = false;
       let configurationBindingProvisioned = false;
       if (this.options.bindingMode === 'provision') {
@@ -534,15 +617,324 @@ export class SqliteAuthorityProcessingStore
           : 'existing',
       } as const;
     });
-    this.provisioningStatus = status;
-    this.initialized = true;
+    this.initialization = 'normal';
   }
 
-  sourceProvisioningStatus(): AuthorityProcessingSourceProvisioningStatus {
-    if (!this.initialized || this.provisioningStatus === null) {
-      throw new Error('authority processing store is not initialized');
+  /**
+   * Narrow post-resolution recovery initialization. It verifies the immutable
+   * source-owner tuple but deliberately does not revive an inactive member.
+   * Only the terminal-record readers/frozen-envelope methods are usable after
+   * this; normal processing methods retain their active-custody checks.
+   */
+  async initializeTerminalRecordRecovery(): Promise<void> {
+    if (this.initialization === 'terminal-record-recovery') return;
+    if (this.initialization === 'normal') {
+      throw new Error(
+        'authority processing normal store cannot enter terminal-record recovery mode',
+      );
     }
-    return Object.freeze({ ...this.provisioningStatus });
+    this.immediate(() => {
+      this.assertExactSourceBinding();
+      this.assertExactSourceConfiguration();
+    });
+    this.initialization = 'terminal-record-recovery';
+  }
+
+  /**
+   * The stopped activation is the sole create path for the live source. It
+   * binds owner, credential configuration, and cutoff cursor in one SQLite
+   * immediate transaction. A lost response can be retried with the same
+   * binding: the stored cursor is returned without sampling a second cutoff.
+   */
+  async activateLiveSource(
+    source: AdapterIdentity & { kind: 'meeting-source' },
+    createCursor: (activatedAt: string) => AdapterCursor,
+    assertActivationCursor: (cursor: AdapterCursor) => void,
+  ): Promise<AuthorityProcessingLiveSourceActivation> {
+    if (this.initialization !== undefined) {
+      throw new Error('authority processing live source activation is already initialized');
+    }
+    if (
+      this.options.bindingMode !== 'provision' ||
+      this.options.sourceConfiguration === undefined
+    ) {
+      throw new Error('authority processing live source activation requires a provisioned source configuration');
+    }
+    this.assertSource(source);
+    const status = this.immediate(() => {
+      this.assertActiveMembership();
+      const otherSource = this.database
+        .prepare(
+          `SELECT source_adapter_id, source_instance_id
+             FROM authority_processing_source_owner_bindings
+            WHERE organization_id = ?
+              AND (source_adapter_id <> ? OR source_instance_id <> ?)
+            LIMIT 1`,
+        )
+        .get(
+          this.binding.organization_id,
+          this.binding.source_adapter_id,
+          this.binding.source_instance_id,
+        );
+      if (otherSource !== undefined) {
+        throw new Error('authority processing live source differs from the configured organization source');
+      }
+      const unfinished = this.database
+        .prepare(
+          `SELECT COUNT(*) AS count
+             FROM authority_processing_candidates c
+             LEFT JOIN authority_processing_processed_markers p
+               ON p.processing_key = c.processing_key
+            WHERE c.source_adapter_id = ? AND c.source_instance_id = ?
+              AND p.processing_key IS NULL`,
+        )
+        .get(
+          this.binding.source_adapter_id,
+          this.binding.source_instance_id,
+        ) as { count: number };
+      if (unfinished.count !== 0) {
+        throw new Error('authority processing live source activation requires zero unfinished candidates');
+      }
+      const preexistingOwner = this.database
+        .prepare(
+          `SELECT 1 FROM authority_processing_source_owner_bindings
+            WHERE source_adapter_id = ? AND source_instance_id = ?`,
+        )
+        .get(this.binding.source_adapter_id, this.binding.source_instance_id);
+      const preexistingConfiguration = this.database
+        .prepare(
+          `SELECT 1 FROM authority_processing_source_configuration_bindings
+            WHERE source_adapter_id = ? AND source_instance_id = ?`,
+        )
+        .get(this.binding.source_adapter_id, this.binding.source_instance_id);
+      const preexistingCursor = this.database
+        .prepare(
+          `SELECT source_version, cursor
+             FROM authority_processing_source_cursors
+            WHERE source_adapter_id = ? AND source_instance_id = ?`,
+        )
+        .get(
+          this.binding.source_adapter_id,
+          this.binding.source_instance_id,
+        ) as CursorRow | undefined;
+      if (
+        preexistingOwner !== undefined &&
+        preexistingConfiguration !== undefined &&
+        preexistingCursor !== undefined
+      ) {
+        this.assertActiveBinding();
+        this.assertExactSourceConfiguration();
+        if (preexistingCursor.source_version !== source.version) {
+          throw new Error('authority processing live source version differs from the immutable activation');
+        }
+        assertActivationCursor(preexistingCursor.cursor);
+        return {
+          outcome: 'already_activated' as const,
+          cursor: preexistingCursor.cursor,
+          source_binding: {
+            owner_binding: 'existing' as const,
+            configuration_binding: 'existing' as const,
+          },
+        };
+      }
+      const now = assertCanonicalTimestamp(this.now(), 'bound_at');
+      const owner = this.database
+        .prepare(
+          `INSERT INTO authority_processing_source_owner_bindings (
+             source_adapter_id, source_instance_id, organization_id,
+             principal_id, membership_id, membership_type, bound_at
+           ) VALUES (?, ?, ?, ?, ?, ?, ?)
+           ON CONFLICT (source_adapter_id, source_instance_id) DO NOTHING`,
+        )
+        .run(
+          this.binding.source_adapter_id,
+          this.binding.source_instance_id,
+          this.binding.organization_id,
+          this.binding.principal_id,
+          this.binding.membership_id,
+          this.binding.membership_type,
+          now,
+      );
+      this.assertActiveBinding();
+      const existingConfiguration = this.database
+        .prepare(
+          `SELECT 1
+             FROM authority_processing_source_configuration_bindings
+            WHERE source_adapter_id = ? AND source_instance_id = ?`,
+        )
+        .get(
+          this.binding.source_adapter_id,
+          this.binding.source_instance_id,
+        );
+      if (existingConfiguration === undefined) {
+        this.assertNoStateBeforeSourceConfiguration();
+      }
+      const configuration = this.database
+        .prepare(
+          `INSERT INTO authority_processing_source_configuration_bindings (
+             source_adapter_id, source_instance_id, owner_email_sha256,
+             credential_scope, credential_reference_sha256, bound_at
+           ) VALUES (?, ?, ?, ?, ?, ?)
+           ON CONFLICT (source_adapter_id, source_instance_id) DO NOTHING`,
+        )
+        .run(
+          this.binding.source_adapter_id,
+          this.binding.source_instance_id,
+          this.options.sourceConfiguration!.owner_email_sha256,
+          this.options.sourceConfiguration!.credential_scope,
+          this.options.sourceConfiguration!.credential_reference_sha256,
+          now,
+        );
+      this.assertExactSourceConfiguration();
+      const prior = this.database
+        .prepare(
+          `SELECT source_version, cursor
+             FROM authority_processing_source_cursors
+            WHERE source_adapter_id = ? AND source_instance_id = ?`,
+        )
+        .get(
+          this.binding.source_adapter_id,
+          this.binding.source_instance_id,
+        ) as CursorRow | undefined;
+      if (prior !== undefined) {
+        if (prior.source_version !== source.version) {
+          throw new Error('authority processing live source version differs from the immutable activation');
+        }
+        assertActivationCursor(prior.cursor);
+        const sourceBinding: AuthorityProcessingSourceProvisioningStatus = {
+          owner_binding: owner.changes === 1 ? 'provisioned' : 'existing',
+          configuration_binding:
+            configuration.changes === 1 ? 'provisioned' : 'existing',
+        };
+        return {
+          outcome: 'already_activated' as const,
+          cursor: prior.cursor,
+          source_binding: sourceBinding,
+        };
+      }
+      const cursor = createCursor(now);
+      if (typeof cursor !== 'string' || cursor.length === 0 || cursor.length > 8192) {
+        throw new Error('authority processing source cursor is invalid');
+      }
+      assertActivationCursor(cursor);
+      this.database
+        .prepare(
+          `INSERT INTO authority_processing_source_cursors (
+             source_adapter_id, source_instance_id, source_version, cursor,
+             updated_at
+           ) VALUES (?, ?, ?, ?, ?)`,
+        )
+        .run(
+          this.binding.source_adapter_id,
+          this.binding.source_instance_id,
+          source.version,
+          cursor,
+          now,
+        );
+      const sourceBinding: AuthorityProcessingSourceProvisioningStatus = {
+        owner_binding: owner.changes === 1 ? 'provisioned' : 'existing',
+        configuration_binding:
+          configuration.changes === 1 ? 'provisioned' : 'existing',
+      };
+      return {
+        outcome: 'activated' as const,
+        cursor,
+        source_binding: sourceBinding,
+      };
+    });
+    this.initialization = 'normal';
+    return Object.freeze({
+      ...status,
+      source_binding: Object.freeze({ ...status.source_binding }),
+    });
+  }
+
+  async healthCheck(): Promise<void> {
+    await this.initialize();
+    this.database
+      .prepare(
+        'SELECT 1 FROM authority_processing_slack_delivery_attempts LIMIT 1',
+      )
+      .get();
+  }
+
+  async claim(
+    attempt: SlackStoredDelivery & { readonly status: 'unknown' },
+  ): Promise<
+    | { readonly kind: 'claimed' }
+    | { readonly kind: 'existing'; readonly record: SlackStoredDelivery }
+  > {
+    await this.initialize();
+    assertSlackStoredDelivery(attempt);
+    return this.immediate(() => {
+      const inserted = this.database
+        .prepare(
+          `INSERT INTO authority_processing_slack_delivery_attempts (
+             idempotency_key, status, channel_id, message_ts, recorded_at,
+             message
+           ) VALUES (?, 'unknown', NULL, NULL, ?, ?)
+           ON CONFLICT (idempotency_key) DO NOTHING`,
+        )
+        .run(attempt.idempotency_key, attempt.recorded_at, attempt.message);
+      if (inserted.changes === 1) return { kind: 'claimed' };
+      const existing = this.slackDeliveryAttempt(attempt.idempotency_key);
+      if (existing === undefined) {
+        throw new Error('Slack delivery claim conflict has no durable row');
+      }
+      return { kind: 'existing', record: existing };
+    });
+  }
+
+  async recordOutcome(record: SlackStoredDelivery): Promise<void> {
+    await this.initialize();
+    assertSlackStoredDelivery(record);
+    this.immediate(() => {
+      const existing = this.slackDeliveryAttempt(record.idempotency_key);
+      if (existing === undefined) {
+        throw new Error('Slack delivery outcome has no claimed attempt');
+      }
+      if (existing.status === 'delivered') {
+        if (!sameSlackStoredDelivery(existing, record)) {
+          throw new Error(
+            'delivered Slack outcome conflicts with durable state',
+          );
+        }
+        return;
+      }
+      this.database
+        .prepare(
+          `UPDATE authority_processing_slack_delivery_attempts
+              SET status = ?, channel_id = ?, message_ts = ?, recorded_at = ?,
+                  message = ?
+            WHERE idempotency_key = ? AND status = 'unknown'`,
+        )
+        .run(
+          record.status,
+          record.channel_id,
+          record.message_ts,
+          record.recorded_at,
+          record.status === 'unknown' ? record.message : null,
+          record.idempotency_key,
+        );
+    });
+  }
+
+  async clearAttempt(idempotencyKey: string): Promise<void> {
+    await this.initialize();
+    assertSlackDeliveryText(idempotencyKey, 'idempotency key', 8192);
+    this.immediate(() => {
+      const removed = this.database
+        .prepare(
+          `DELETE FROM authority_processing_slack_delivery_attempts
+            WHERE idempotency_key = ? AND status = 'unknown'`,
+        )
+        .run(idempotencyKey);
+      if (removed.changes !== 1) {
+        throw new Error(
+          'Slack delivery attempt is not an active unknown claim',
+        );
+      }
+    });
   }
 
   /** Any candidate without a durable processed marker blocks another pull. */
@@ -1223,11 +1615,129 @@ export class SqliteAuthorityProcessingStore
     });
   }
 
+  readTerminalRecordAct(processingKey: string): AuthorityTerminalRecordAct | null {
+    this.assertInitialized();
+    this.assertProcessingKey(processingKey);
+    const candidateRow = this.candidateRow(processingKey);
+    const resolution = this.resolution(processingKey);
+    if (candidateRow === undefined || resolution === undefined) return null;
+    const candidate = this.decodeCandidate(candidateRow);
+    if (candidate.first_request === null || candidate.first_decision === null) {
+      throw new Error('stored terminal record act has no complete candidate facts');
+    }
+    const decision = JSON.parse(resolution.resolution_json) as ApprovalDecision;
+    assertCanonicalApprovalDecision(decision, {
+      meeting: candidate.first_request.meeting,
+      processor: candidate.first_decision.processor,
+      decisions: candidate.first_decision,
+    });
+    const encoded = exactJson(decision);
+    if (
+      decision.status === 'pending' ||
+      decision.status !== resolution.terminal_status ||
+      decision.reviewed_at !== resolution.resolved_at ||
+      encoded.json !== resolution.resolution_json ||
+      encoded.sha256 !== resolution.resolution_sha256
+    ) throw new Error('stored terminal record act decision is invalid');
+    const metadata = this.approvalResolutionMetadataRow(approvalId(processingKey));
+    if (metadata === undefined || metadata.resolved_at !== decision.reviewed_at) {
+      throw new Error('stored terminal record act metadata is invalid');
+    }
+    const parsedMetadata = assertJsonObject(
+      JSON.parse(metadata.metadata_json) as unknown,
+      'stored terminal record act metadata',
+    );
+    if (digestCanonicalJson(metadata.metadata_json) !== metadata.metadata_sha256) {
+      throw new Error('stored terminal record act metadata digest is invalid');
+    }
+    return Object.freeze({
+      candidate,
+      decision,
+      metadata: Object.freeze({
+        approval_id: metadata.approval_id,
+        surface: metadata.surface,
+        metadata: parsedMetadata,
+        resolved_at: metadata.resolved_at,
+      }),
+    });
+  }
+
+  /**
+   * Enumerates only complete, unprocessed terminal acts for this exact source.
+   * The method is intentionally unavailable to a normally initialized store:
+   * recovery composition must opt into the narrow, source-inactive mode.
+   */
+  listTerminalRecordRecoveryPage(
+    input: ListTerminalRecordRecoveryPageInput = {},
+  ): readonly AuthorityTerminalRecordRecoveryCursor[] {
+    if (this.initialization !== 'terminal-record-recovery') {
+      throw new Error(
+        'authority processing terminal-record recovery is not initialized',
+      );
+    }
+    const limit = boundedLimit(
+      input.limit,
+      TERMINAL_RECORD_RECOVERY_LIMIT,
+      'terminal record recovery limit',
+    );
+    const after = input.after;
+    if (after !== undefined) {
+      assertCanonicalTimestamp(
+        after.resolved_at,
+        'terminal record recovery cursor resolved_at',
+      );
+      this.assertProcessingKey(after.processing_key);
+    }
+    const rows = this.database
+      .prepare(
+        `SELECT r.resolved_at, c.processing_key
+           FROM authority_processing_candidates c
+           JOIN authority_processing_resolutions r
+             ON r.processing_key = c.processing_key
+            AND r.terminal_status IN ('approved', 'rejected')
+           JOIN authority_processing_slots d
+             ON d.processing_key = c.processing_key
+            AND d.slot_name = '${DECISION_SLOT}'
+           JOIN authority_processing_slots q
+             ON q.processing_key = c.processing_key
+            AND q.slot_name = '${APPROVAL_REQUEST_SLOT}'
+            AND q.request_approval_id IS NOT NULL
+           JOIN authority_processing_approval_resolution_metadata m
+             ON m.processing_key = c.processing_key
+            AND m.approval_id = q.request_approval_id
+           LEFT JOIN authority_processing_processed_markers p
+             ON p.processing_key = c.processing_key
+            AND p.source_adapter_id = c.source_adapter_id
+            AND p.source_instance_id = c.source_instance_id
+          WHERE c.source_adapter_id = ? AND c.source_instance_id = ?
+            AND p.processing_key IS NULL
+            AND (
+              ? IS NULL OR r.resolved_at > ? OR
+              (r.resolved_at = ? AND c.processing_key > ?)
+            )
+          ORDER BY r.resolved_at, c.processing_key
+          LIMIT ?`,
+      )
+      .all(
+        this.binding.source_adapter_id,
+        this.binding.source_instance_id,
+        after?.resolved_at ?? null,
+        after?.resolved_at ?? null,
+        after?.resolved_at ?? null,
+        after?.processing_key ?? null,
+        limit,
+      ) as AuthorityTerminalRecordRecoveryCursor[];
+    return Object.freeze(
+      rows.map((row) => Object.freeze({ ...row })),
+    );
+  }
+
   async getOrCreate<T extends AuthorityBuiltOrganizationRecordEnvelope>(
     idempotencyKey: string,
     create: () => Promise<T>,
   ): Promise<T> {
-    await this.initialize();
+    if (this.initialization === undefined) await this.initialize();
+    else this.assertInitialized();
     const id = assertApprovalId(idempotencyKey);
     const stored = this.readFrozenOrganizationRecordEnvelope(id);
     if (stored !== null) return stored as T;
@@ -1253,7 +1763,8 @@ export class SqliteAuthorityProcessingStore
     readonly approvalId: string;
     readonly record: T;
   }): Promise<T> {
-    await this.initialize();
+    if (this.initialization === undefined) await this.initialize();
+    else this.assertInitialized();
     return this.freezeOrganizationRecordEnvelopeNow(
       assertApprovalId(input.approvalId),
       input.record,
@@ -1265,9 +1776,8 @@ export class SqliteAuthorityProcessingStore
     approvalIdValue: string,
   ): AuthorityBuiltOrganizationRecordEnvelope | null {
     this.assertInitialized();
-    this.assertActiveBinding();
     const id = assertApprovalId(approvalIdValue);
-    this.approvalRequestIdentity(id);
+    this.assertTerminalRecordAct(id);
     const row = this.frozenRecordEnvelopeRow(id);
     return row === undefined ? null : this.decodeFrozenRecordEnvelope(row);
   }
@@ -1280,70 +1790,6 @@ export class SqliteAuthorityProcessingStore
     this.assertActiveBinding();
     const row = this.candidateRow(processingKey);
     return row === undefined ? undefined : this.decodeCandidate(row);
-  }
-
-  /** Lists only staged, unresolved requests in stable request-time order. */
-  async listPendingApprovals(
-    input: ListPendingAuthorityApprovalsInput = {},
-  ): Promise<readonly PendingAuthorityApproval[]> {
-    await this.initialize();
-    this.assertActiveBinding();
-    const limit = boundedLimit(
-      input.limit,
-      PENDING_APPROVAL_LIMIT,
-      'pending approval limit',
-    );
-    if (input.after !== undefined) {
-      assertCanonicalTimestamp(input.after.requested_at, 'after.requested_at');
-      if (!/^[0-9a-f]{64}$/.test(input.after.approval_id)) {
-        throw new Error('after.approval_id is invalid');
-      }
-      this.assertProcessingKey(input.after.processing_key);
-    }
-    const rows = this.database
-      .prepare(
-        `SELECT c.processing_key, c.admitted_at, c.raw_document_json,
-                d.document_json AS decision_json,
-                q.document_json AS request_json,
-                q.request_order_at, q.request_approval_id
-           FROM authority_processing_slots q
-           JOIN authority_processing_candidates c
-             ON c.processing_key = q.processing_key
-           LEFT JOIN authority_processing_slots d
-             ON d.processing_key = c.processing_key
-            AND d.slot_name = '${DECISION_SLOT}'
-           LEFT JOIN authority_processing_resolutions r
-             ON r.processing_key = c.processing_key
-           LEFT JOIN authority_processing_processed_markers p
-             ON p.processing_key = c.processing_key
-            AND p.source_adapter_id = c.source_adapter_id
-            AND p.source_instance_id = c.source_instance_id
-          WHERE q.slot_name = '${APPROVAL_REQUEST_SLOT}'
-            AND c.source_adapter_id = ? AND c.source_instance_id = ?
-            AND r.processing_key IS NULL
-            AND p.processing_key IS NULL
-            AND (
-              ? IS NULL OR
-              (q.request_order_at, q.request_approval_id, c.processing_key)
-                > (?, ?, ?)
-            )
-          ORDER BY q.request_order_at, q.request_approval_id, c.processing_key
-          LIMIT ?`,
-      )
-      .all(
-        this.binding.source_adapter_id,
-        this.binding.source_instance_id,
-        input.after?.requested_at ?? null,
-        input.after?.requested_at ?? '',
-        input.after?.approval_id ?? '',
-        input.after?.processing_key ?? '',
-        limit,
-      ) as PendingRow[];
-    return rows.map((row) => ({
-      ...this.decodeCandidate(row),
-      requested_at: row.request_order_at,
-      approval_id: row.request_approval_id,
-    }));
   }
 
   /** First terminal resolution wins; an exact replay is idempotent. */
@@ -1481,107 +1927,22 @@ export class SqliteAuthorityProcessingStore
     });
   }
 
-  async addOwnExclusion(
-    exclusion: AuthorityProcessingMemberExclusion,
-  ): Promise<boolean> {
-    await this.initialize();
-    this.assertExclusion(exclusion);
-    return this.immediate(() => {
-      this.assertActiveBinding();
-      const result = this.database
-        .prepare(
-          `INSERT INTO authority_processing_member_exclusions (
-             organization_id, principal_id, membership_id, membership_type,
-             source_adapter_id, source_instance_id, scope_kind, external_id,
-             created_at
-           ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-           ON CONFLICT (
-             membership_id, source_adapter_id, source_instance_id, scope_kind,
-             external_id
-           ) DO NOTHING`,
-        )
-        .run(
-          this.binding.organization_id,
-          this.binding.principal_id,
-          this.binding.membership_id,
-          this.binding.membership_type,
-          this.binding.source_adapter_id,
-          this.binding.source_instance_id,
-          exclusion.scope,
-          exclusion.scope === 'source' ? '' : exclusion.external_id,
-          assertCanonicalTimestamp(this.now(), 'created_at'),
-        );
-      return result.changes === 1;
-    });
-  }
-
-  async removeOwnExclusion(
-    exclusion: AuthorityProcessingMemberExclusion,
-  ): Promise<boolean> {
-    await this.initialize();
-    this.assertExclusion(exclusion);
-    return this.immediate(() => {
-      this.assertActiveBinding();
-      const result = this.database
-        .prepare(
-          `DELETE FROM authority_processing_member_exclusions
-            WHERE organization_id = ? AND principal_id = ?
-              AND membership_id = ? AND membership_type = ?
-              AND source_adapter_id = ? AND source_instance_id = ?
-              AND scope_kind = ? AND external_id = ?`,
-        )
-        .run(
-          this.binding.organization_id,
-          this.binding.principal_id,
-          this.binding.membership_id,
-          this.binding.membership_type,
-          this.binding.source_adapter_id,
-          this.binding.source_instance_id,
-          exclusion.scope,
-          exclusion.scope === 'source' ? '' : exclusion.external_id,
-        );
-      return result.changes === 1;
-    });
-  }
-
-  async listOwnExclusions(): Promise<readonly AuthorityProcessingMemberExclusion[]> {
-    await this.initialize();
-    this.assertActiveBinding();
-    const rows = this.database
-      .prepare(
-        `SELECT scope_kind, external_id
-           FROM authority_processing_member_exclusions
-          WHERE organization_id = ? AND principal_id = ?
-            AND membership_id = ? AND membership_type = ?
-            AND source_adapter_id = ? AND source_instance_id = ?
-          ORDER BY scope_kind, external_id`,
-      )
-      .all(
-        this.binding.organization_id,
-        this.binding.principal_id,
-        this.binding.membership_id,
-        this.binding.membership_type,
-        this.binding.source_adapter_id,
-        this.binding.source_instance_id,
-      ) as Array<{ scope_kind: 'source' | 'meeting'; external_id: string }>;
-    return rows.map((row) =>
-      row.scope_kind === 'source'
-        ? {
-            scope: 'source' as const,
-            source_adapter_id: this.binding.source_adapter_id,
-            source_instance_id: this.binding.source_instance_id,
-          }
-        : {
-            scope: 'meeting' as const,
-            source_adapter_id: this.binding.source_adapter_id,
-            source_instance_id: this.binding.source_instance_id,
-            external_id: row.external_id,
-          },
-    );
-  }
-
   close(): void {
     if (this.database.open) this.database.close();
+  }
+
+  private slackDeliveryAttempt(
+    idempotencyKey: string,
+  ): SlackStoredDelivery | undefined {
+    const row = this.database
+      .prepare(
+        `SELECT idempotency_key, status, channel_id, message_ts, recorded_at,
+                message
+           FROM authority_processing_slack_delivery_attempts
+          WHERE idempotency_key = ?`,
+      )
+      .get(idempotencyKey) as SlackDeliveryAttemptRow | undefined;
+    return row === undefined ? undefined : slackStoredDelivery(row);
   }
 
   private immediate<T>(operation: () => T): T {
@@ -1599,7 +1960,7 @@ export class SqliteAuthorityProcessingStore
   }
 
   private assertInitialized(): void {
-    if (!this.initialized) {
+    if (this.initialization === undefined) {
       throw new Error('authority processing store is not initialized');
     }
   }
@@ -1641,6 +2002,20 @@ export class SqliteAuthorityProcessingStore
       throw new Error('authority processing approval request is invalid');
     }
     return row;
+  }
+
+  private assertTerminalRecordAct(
+    approvalIdValue: string,
+  ): ApprovalRequestIdentityRow {
+    const request = this.approvalRequestIdentity(approvalIdValue);
+    const resolution = this.resolution(request.processing_key);
+    if (
+      resolution === undefined ||
+      !['approved', 'rejected'].includes(resolution.terminal_status)
+    ) {
+      throw new Error('authority processing record act is not terminal');
+    }
+    return request;
   }
 
   private approvalPresentationContractRow(
@@ -1847,8 +2222,15 @@ export class SqliteAuthorityProcessingStore
     const candidate = this.validateOrganizationRecordEnvelope(id, record);
     const encoded = exactJson(candidate.envelope);
     return this.immediate(() => {
-      this.assertActiveBinding();
-      const request = this.approvalRequestIdentity(id);
+      const request = this.assertTerminalRecordAct(id);
+      const terminal = this.resolution(request.processing_key);
+      const expectedEvent =
+        terminal?.terminal_status === 'approved' ? 'approval' : 'rejection';
+      if (candidate.event_type !== expectedEvent) {
+        throw new Error(
+          'authority processing frozen record envelope event does not match terminal resolution',
+        );
+      }
       this.database
         .prepare(
           `INSERT INTO authority_processing_frozen_record_envelopes (
@@ -1897,7 +2279,7 @@ export class SqliteAuthorityProcessingStore
       record.envelope_id.length < 1 ||
       record.envelope_id.length > 256 ||
       record.idempotency_key !== id ||
-      record.event_type !== 'approval'
+      (record.event_type !== 'approval' && record.event_type !== 'rejection')
     ) {
       throw new Error(
         'authority processing frozen record envelope wrapper is invalid',
@@ -1908,11 +2290,14 @@ export class SqliteAuthorityProcessingStore
       'authority processing frozen record envelope',
     );
     if (
-      envelope['schema_version'] !== 3 ||
+      ![1, 2, 3].includes(envelope['schema_version'] as number) ||
       envelope['kind'] !== 'echo-organization-record-envelope' ||
       envelope['envelope_id'] !== record.envelope_id ||
       envelope['idempotency_key'] !== id ||
-      envelope['event_type'] !== 'approval'
+      envelope['event_type'] !== record.event_type ||
+      (record.event_type === 'rejection' && envelope['schema_version'] !== 1) ||
+      (record.event_type === 'approval' &&
+        ![1, 2, 3].includes(envelope['schema_version'] as number))
     ) {
       throw new Error(
         'authority processing frozen record envelope identity is invalid',
@@ -2023,6 +2408,29 @@ export class SqliteAuthorityProcessingStore
     }
   }
 
+  private assertExactSourceBinding(): void {
+    if (
+      this.database
+        .prepare(
+          `SELECT 1
+             FROM authority_processing_source_owner_bindings
+            WHERE source_adapter_id = ? AND source_instance_id = ?
+              AND organization_id = ? AND principal_id = ?
+              AND membership_id = ? AND membership_type = ?`,
+        )
+        .get(
+          this.binding.source_adapter_id,
+          this.binding.source_instance_id,
+          this.binding.organization_id,
+          this.binding.principal_id,
+          this.binding.membership_id,
+          this.binding.membership_type,
+        ) === undefined
+    ) {
+      throw new Error('authority processing source differs from its immutable owner binding');
+    }
+  }
+
   private assertExactSourceConfiguration(): void {
     const sourceConfiguration = this.options.sourceConfiguration;
     if (sourceConfiguration === undefined) return;
@@ -2101,18 +2509,6 @@ export class SqliteAuthorityProcessingStore
       processingKey.length > 8192
     ) {
       throw new Error('authority processing key is invalid');
-    }
-  }
-
-  private assertExclusion(exclusion: AuthorityProcessingMemberExclusion): void {
-    if (
-      exclusion.source_adapter_id !== this.binding.source_adapter_id ||
-      exclusion.source_instance_id !== this.binding.source_instance_id ||
-      !['source', 'meeting'].includes(exclusion.scope) ||
-      (exclusion.scope === 'meeting' &&
-        (exclusion.external_id.length === 0 || exclusion.external_id.length > 4096))
-    ) {
-      throw new Error('authority processing member exclusion is invalid');
     }
   }
 
@@ -2272,23 +2668,5 @@ export class SqliteAuthorityProcessingStore
           ? null
           : (JSON.parse(row.request_json) as ApprovalRequest),
     };
-  }
-}
-
-/** Stages the first request before reporting the store's current resolution. */
-export class AuthorityProcessingApprovalGate implements ApprovalGate {
-  constructor(private readonly store: SqliteAuthorityProcessingStore) {}
-
-  async review(request: ApprovalRequest): Promise<ApprovalDecision> {
-    await this.store.stageApprovalRequest(request);
-    return (
-      (await this.store.getApproval(request.processing_key)) ?? {
-        status: 'pending',
-        reviewed_at: null,
-        reviewed_by: null,
-        reason: null,
-        approved_brief: null,
-      }
-    );
   }
 }

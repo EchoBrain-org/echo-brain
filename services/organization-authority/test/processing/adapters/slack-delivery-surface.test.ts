@@ -1,18 +1,54 @@
-import { mkdir, mkdtemp, rm, symlink } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
-import { join } from 'node:path';
-import { afterEach, describe, expect, it } from 'vitest';
+import { describe, expect, it } from 'vitest';
 import type {
   AdapterConfig,
   DecisionBrief,
   DeliveryEnvelope,
 } from '../../../src/processing/core/index.js';
 import { AdapterError, assertDeliveryReceipt } from '../../../src/processing/core/index.js';
-import { FileSlackDeliveryReceiptStore } from '../../../src/processing/adapters/delivery-surfaces/slack/slack-delivery-receipt-store.js';
+import type {
+  SlackDeliveryReceiptStore,
+  SlackStoredDelivery,
+} from '../../../src/processing/adapters/delivery-surfaces/slack/slack-delivery-receipt-store.js';
 import { SlackDeliverySurface } from '../../../src/processing/adapters/delivery-surfaces/slack/slack-delivery-surface.js';
 import { adapterConformance } from '../../../../../tests/support/adapter-conformance.js';
 
-const roots: string[] = [];
+class MemorySlackDeliveryReceiptStore implements SlackDeliveryReceiptStore {
+  readonly records = new Map<string, SlackStoredDelivery>();
+  failNextOutcome = false;
+  failClear = false;
+
+  async healthCheck(): Promise<void> {}
+
+  async claim(
+    attempt: SlackStoredDelivery & { readonly status: 'unknown' },
+  ): Promise<
+    | { readonly kind: 'claimed' }
+    | { readonly kind: 'existing'; readonly record: SlackStoredDelivery }
+  > {
+    const existing = this.records.get(attempt.idempotency_key);
+    if (existing !== undefined) return { kind: 'existing', record: existing };
+    this.records.set(attempt.idempotency_key, attempt);
+    return { kind: 'claimed' };
+  }
+
+  async recordOutcome(record: SlackStoredDelivery): Promise<void> {
+    if (this.failNextOutcome) {
+      this.failNextOutcome = false;
+      throw new Error('simulated outcome persistence failure');
+    }
+    if (!this.records.has(record.idempotency_key)) {
+      throw new Error('attempt is not claimed');
+    }
+    this.records.set(record.idempotency_key, record);
+  }
+
+  async clearAttempt(idempotencyKey: string): Promise<void> {
+    if (this.failClear) throw new Error('simulated clear failure');
+    if (!this.records.delete(idempotencyKey)) {
+      throw new Error('attempt is not claimed');
+    }
+  }
+}
 
 function config(overrides: Partial<AdapterConfig> = {}): AdapterConfig {
   return {
@@ -131,39 +167,24 @@ function fakeSlack(): FakeSlack {
   return slack;
 }
 
-async function stateRoot(): Promise<string> {
-  const root = await mkdtemp(join(tmpdir(), 'echo-slack-delivery-'));
-  roots.push(root);
-  return root;
-}
-
-function build(root: string, slack: FakeSlack, adapterConfig = config()) {
+function build(
+  store: SlackDeliveryReceiptStore,
+  slack: FakeSlack,
+  adapterConfig = config(),
+) {
   return new SlackDeliverySurface(adapterConfig, {
-    receiptStore: new FileSlackDeliveryReceiptStore(
-      root,
-      adapterConfig.instance_id,
-    ),
+    receiptStore: store,
     environment: { SLACK_BOT_TOKEN: 'xoxb-test' },
     now: () => '2026-07-18T20:02:00.000Z',
     fetchImpl: slack.fetchImpl,
   });
 }
 
-afterEach(async () => {
-  await Promise.all(
-    roots
-      .splice(0)
-      .map(async (root) => await rm(root, { recursive: true, force: true })),
-  );
-});
-
 adapterConformance({
   name: 'Slack delivery surface',
   kind: 'delivery-surface',
   create: () => {
-    const root = join(tmpdir(), `echo-slack-conformance-${process.pid}`);
-    roots.push(root);
-    return build(root, fakeSlack());
+    return build(new MemorySlackDeliveryReceiptStore(), fakeSlack());
   },
   validConfig: config(),
   invalidConfig: config({
@@ -175,9 +196,8 @@ adapterConformance({
 
 describe('Slack delivery surface', () => {
   it('publishes an approved brief and returns a canonical receipt', async () => {
-    const root = await stateRoot();
     const slack = fakeSlack();
-    const surface = build(root, slack);
+    const surface = build(new MemorySlackDeliveryReceiptStore(), slack);
     const candidate = envelope(surface);
 
     const receipt = await surface.publish(candidate);
@@ -203,23 +223,24 @@ describe('Slack delivery surface', () => {
     );
   });
 
-  it('deduplicates concurrently and across adapter restarts using durable channel/ts state', async () => {
-    const root = await stateRoot();
+  it('lets only the claimer post while concurrent callers observe the unknown marker', async () => {
+    const store = new MemorySlackDeliveryReceiptStore();
     const slack = fakeSlack();
-    const first = build(root, slack);
-    const second = build(root, slack);
+    const first = build(store, slack);
+    const second = build(store, slack);
     const [one, two] = await Promise.all([
       first.publish(envelope(first, 'attempt-1')),
       second.publish(envelope(second, 'attempt-2')),
     ]);
-    const restarted = build(root, slack);
+    const restarted = build(store, slack);
     const three = await restarted.publish(envelope(restarted, 'attempt-3'));
 
     expect(slack.postCalls).toBe(1);
     expect(one.external_id).toBe('slack:message:C123:1700.100000');
     expect(two).toMatchObject({
       envelope_id: 'attempt-2',
-      external_id: one.external_id,
+      status: 'unknown',
+      external_id: null,
       recorded_at: one.recorded_at,
     });
     expect(three).toMatchObject({
@@ -230,13 +251,13 @@ describe('Slack delivery surface', () => {
   });
 
   it('pins an ambiguous transport outcome and never reposts it', async () => {
-    const root = await stateRoot();
+    const store = new MemorySlackDeliveryReceiptStore();
     const slack = fakeSlack();
     slack.postMode = 'transport';
-    const first = build(root, slack);
+    const first = build(store, slack);
     const firstReceipt = await first.publish(envelope(first, 'attempt-1'));
     slack.postMode = 'success';
-    const restarted = build(root, slack);
+    const restarted = build(store, slack);
     const retryReceipt = await restarted.publish(
       envelope(restarted, 'attempt-2'),
     );
@@ -255,7 +276,7 @@ describe('Slack delivery surface', () => {
   });
 
   it('pins an unexpected response channel instead of claiming delivery', async () => {
-    const root = await stateRoot();
+    const store = new MemorySlackDeliveryReceiptStore();
     const slack = fakeSlack();
     const originalFetch = slack.fetchImpl;
     slack.fetchImpl = (async (input, init) => {
@@ -271,7 +292,7 @@ describe('Slack delivery surface', () => {
           )
         : response;
     }) as typeof fetch;
-    const surface = build(root, slack);
+    const surface = build(store, slack);
 
     await expect(surface.publish(envelope(surface))).resolves.toMatchObject({
       status: 'unknown',
@@ -280,7 +301,7 @@ describe('Slack delivery surface', () => {
       message: expect.stringMatching(/outcome could not be confirmed/),
     });
     await expect(
-      build(root, slack).publish(envelope(surface, 'attempt-2')),
+      build(store, slack).publish(envelope(surface, 'attempt-2')),
     ).resolves.toMatchObject({
       status: 'unknown',
     });
@@ -288,10 +309,10 @@ describe('Slack delivery surface', () => {
   });
 
   it('clears a known-safe API failure so a later retry can post', async () => {
-    const root = await stateRoot();
+    const store = new MemorySlackDeliveryReceiptStore();
     const slack = fakeSlack();
     slack.postMode = 'rate-limited';
-    const surface = build(root, slack);
+    const surface = build(store, slack);
 
     await expect(surface.publish(envelope(surface))).rejects.toMatchObject({
       code: 'rate_limited',
@@ -306,10 +327,55 @@ describe('Slack delivery surface', () => {
     expect(slack.postCalls).toBe(2);
   });
 
-  it('honors cancellation before touching durable state or Slack', async () => {
-    const root = await stateRoot();
+  it('keeps the pre-call unknown marker when Slack succeeds but outcome persistence fails', async () => {
+    const store = new MemorySlackDeliveryReceiptStore();
+    store.failNextOutcome = true;
     const slack = fakeSlack();
-    const surface = build(root, slack);
+    const surface = build(store, slack);
+
+    await expect(
+      surface.publish(envelope(surface, 'attempt-1')),
+    ).resolves.toMatchObject({
+      status: 'unknown',
+      external_id: null,
+      retryable: true,
+    });
+    await expect(
+      surface.publish(envelope(surface, 'attempt-2')),
+    ).resolves.toMatchObject({
+      status: 'unknown',
+      external_id: null,
+    });
+    expect(slack.postCalls).toBe(1);
+  });
+
+  it('does not repost when a known-no-write failure cannot clear its claim', async () => {
+    const store = new MemorySlackDeliveryReceiptStore();
+    store.failClear = true;
+    const slack = fakeSlack();
+    slack.postMode = 'rate-limited';
+    const surface = build(store, slack);
+
+    await expect(
+      surface.publish(envelope(surface, 'attempt-1')),
+    ).resolves.toMatchObject({
+      status: 'unknown',
+      external_id: null,
+    });
+    slack.postMode = 'success';
+    await expect(
+      surface.publish(envelope(surface, 'attempt-2')),
+    ).resolves.toMatchObject({
+      status: 'unknown',
+      external_id: null,
+    });
+    expect(slack.postCalls).toBe(1);
+  });
+
+  it('honors cancellation before touching durable state or Slack', async () => {
+    const store = new MemorySlackDeliveryReceiptStore();
+    const slack = fakeSlack();
+    const surface = build(store, slack);
     const controller = new AbortController();
     controller.abort(new Error('shutdown'));
 
@@ -322,12 +388,12 @@ describe('Slack delivery surface', () => {
       }),
     );
     expect(slack.postCalls).toBe(0);
+    expect(store.records.size).toBe(0);
   });
 
   it('rejects malformed and wrong-destination envelopes before posting', async () => {
-    const root = await stateRoot();
     const slack = fakeSlack();
-    const surface = build(root, slack);
+    const surface = build(new MemorySlackDeliveryReceiptStore(), slack);
     const malformed = envelope(surface);
     malformed.approved_at = 'not-a-date';
     await expect(surface.publish(malformed)).rejects.toMatchObject({
@@ -347,42 +413,10 @@ describe('Slack delivery surface', () => {
     expect(slack.postCalls).toBe(0);
   });
 
-  it('fails closed when the private receipt directory is a symbolic link', async () => {
-    const root = await stateRoot();
-    const target = await stateRoot();
-    await mkdir(join(root, 'delivery-surfaces', 'slack'), { recursive: true });
-    await symlink(
-      target,
-      join(root, 'delivery-surfaces', 'slack', 'team-decisions'),
-    );
-    const slack = fakeSlack();
-    const surface = build(root, slack);
-
-    await expect(surface.publish(envelope(surface))).rejects.toMatchObject({
-      code: 'invalid_config',
-      retryable: false,
-    });
-    expect(slack.postCalls).toBe(0);
-  });
-
-  it('fails closed when an intermediate receipt directory is a symbolic link', async () => {
-    const root = await stateRoot();
-    const target = await stateRoot();
-    await symlink(target, join(root, 'delivery-surfaces'));
-    const slack = fakeSlack();
-    const surface = build(root, slack);
-
-    await expect(surface.publish(envelope(surface))).rejects.toMatchObject({
-      code: 'invalid_config',
-      retryable: false,
-    });
-    expect(slack.postCalls).toBe(0);
-  });
-
   it('validates configuration strictly and reports credential health', async () => {
-    const root = await stateRoot();
+    const store = new MemorySlackDeliveryReceiptStore();
     const slack = fakeSlack();
-    const surface = build(root, slack);
+    const surface = build(store, slack);
     expect(surface.validateConfig(config())).toEqual({ ok: true, errors: [] });
     await expect(surface.healthCheck()).resolves.toMatchObject({
       status: 'healthy',
@@ -401,7 +435,7 @@ describe('Slack delivery surface', () => {
     }
 
     const missingCredential = new SlackDeliverySurface(config(), {
-      receiptStore: new FileSlackDeliveryReceiptStore(root, 'team-decisions'),
+      receiptStore: store,
       environment: {},
       fetchImpl: slack.fetchImpl,
     });

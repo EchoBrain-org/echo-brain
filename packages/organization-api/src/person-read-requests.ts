@@ -5,9 +5,7 @@ import type {
   OrganizationPersonReviewerRecentDecisionsRequestV2,
 } from './contracts.js';
 import {
-  ORGANIZATION_API_PERSON_READABLE_SEARCH_PATH,
   ORGANIZATION_API_PERSON_RECENT_DECISIONS_PATH,
-  ORGANIZATION_API_PERSON_REVIEWER_RECENT_DECISIONS_PATH,
 } from './http.js';
 import { validateOrganizationReadableSearchQuery } from './readable-search.js';
 import {
@@ -19,7 +17,7 @@ import {
   fail,
 } from './validation.js';
 
-const PERSON_READ_KEYS = [
+const PERSON_RECENT_READ_KEYS = [
   'schema_version',
   'kind',
   'request_id',
@@ -29,11 +27,6 @@ const PERSON_READ_KEYS = [
   'http_method',
   'http_path',
 ] as const;
-
-type PersonReadRequest =
-  | OrganizationPersonRecentDecisionsRequestV2
-  | OrganizationPersonReviewerRecentDecisionsRequestV2
-  | OrganizationPersonReadableSearchRequestV2;
 
 function canonicalSnapshot(value: unknown, label: string): unknown {
   assertOnlyEnumerableDataProperties(value, label);
@@ -68,8 +61,8 @@ function validatePersonReadIdentity(
 
 function validatePersonReadOperation(
   record: Record<string, unknown>,
-  expectedKind: PersonReadRequest['kind'],
-  expectedPath: PersonReadRequest['http_path'],
+  expectedKind: OrganizationPersonRecentDecisionsRequestV2['kind'],
+  expectedPath: OrganizationPersonRecentDecisionsRequestV2['http_path'],
   label: string,
 ): void {
   if (record.schema_version !== 2 || record.kind !== expectedKind) {
@@ -85,7 +78,7 @@ export function validateOrganizationPersonRecentDecisionsRequest(
 ): OrganizationPersonRecentDecisionsRequestV2 {
   const label = 'organization Person recent decisions request';
   const record = asRecord(canonicalSnapshot(value, label), label);
-  assertExactKeys(record, PERSON_READ_KEYS, label);
+  assertExactKeys(record, PERSON_RECENT_READ_KEYS, label);
   validatePersonReadOperation(
     record,
     'echo-organization-person-recent-decisions-request',
@@ -101,14 +94,12 @@ export function validateOrganizationPersonReviewerRecentDecisionsRequest(
 ): OrganizationPersonReviewerRecentDecisionsRequestV2 {
   const label = 'organization Person reviewer recent decisions request';
   const record = asRecord(canonicalSnapshot(value, label), label);
-  assertExactKeys(record, PERSON_READ_KEYS, label);
-  validatePersonReadOperation(
-    record,
-    'echo-organization-person-reviewer-recent-decisions-request',
-    ORGANIZATION_API_PERSON_REVIEWER_RECENT_DECISIONS_PATH,
-    label,
+  assertExactKeys(record, ['subject_principal_id'], label);
+  assertId(
+    record.subject_principal_id,
+    'prn',
+    `${label} subject_principal_id`,
   );
-  validatePersonReadIdentity(record, label, 'rrd');
   return record as unknown as OrganizationPersonReviewerRecentDecisionsRequestV2;
 }
 
@@ -117,14 +108,12 @@ export function validateOrganizationPersonReadableSearchRequest(
 ): OrganizationPersonReadableSearchRequestV2 {
   const label = 'organization Person readable search request';
   const record = asRecord(canonicalSnapshot(value, label), label);
-  assertExactKeys(record, [...PERSON_READ_KEYS, 'query'], label);
-  validatePersonReadOperation(
-    record,
-    'echo-organization-person-readable-search-request',
-    ORGANIZATION_API_PERSON_READABLE_SEARCH_PATH,
-    label,
+  assertExactKeys(record, ['subject_principal_id', 'query'], label);
+  assertId(
+    record.subject_principal_id,
+    'prn',
+    `${label} subject_principal_id`,
   );
-  validatePersonReadIdentity(record, label, 'osq');
   const query = validateOrganizationReadableSearchQuery(
     record.query,
     `${label} query`,

@@ -25,19 +25,14 @@ import { ReadableSearchAuthorizationFence } from '../src/application/readable-se
 import { readableSearchScopeBindingSha256 } from '../src/composition/readable-search.js';
 
 const digest = (character: string): Sha256Digest => `sha256:${character.repeat(64)}`;
+const AUTHORITY_ID = 'oau_00000000-0000-4000-8000-000000000001';
+const ORGANIZATION_ID = 'org_00000000-0000-4000-8000-000000000001';
 const request: OrganizationPersonReadableSearchRequestV2 = {
-  schema_version: 2,
-  kind: 'echo-organization-person-readable-search-request',
-  request_id: 'osq_00000000-0000-4000-8000-000000000001',
-  authority_id: 'oau_00000000-0000-4000-8000-000000000001',
-  organization_id: 'org_00000000-0000-4000-8000-000000000001',
   subject_principal_id: 'prn_00000000-0000-4000-8000-000000000001',
-  http_method: 'POST',
-  http_path: '/v2/readable-search',
   query: 'decision',
 };
 const admission = {
-  organization_id: request.organization_id,
+  organization_id: ORGANIZATION_ID,
   principal_id: request.subject_principal_id,
   membership_id: 'mem_00000000-0000-4000-8000-000000000001',
   membership_type: 'employee' as const,
@@ -138,7 +133,7 @@ function harness(config: {
   };
   const fence = new ReadableSearchAuthorizationFence();
   const service = new PersonReadableSearchService({
-    authority_id: request.authority_id, organization_id: request.organization_id,
+    authority_id: AUTHORITY_ID, organization_id: ORGANIZATION_ID,
     authorization, retrieval, fence,
     fence_timeout_ms: config.fence_timeout_ms ?? 1000,
     contract: {
@@ -154,8 +149,8 @@ function harness(config: {
 
 function stageOneCallerBinding(): Sha256Digest {
   return personReadAuthenticatedEvidence(admission, {
-    authority_id: request.authority_id,
-    organization_id: request.organization_id,
+    authority_id: AUTHORITY_ID,
+    organization_id: ORGANIZATION_ID,
     subject_principal_id: request.subject_principal_id,
     operation: 'readable_search',
     request_sha256: canonicalPersonReadRequestSha256(request),

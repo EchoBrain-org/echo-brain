@@ -1,44 +1,15 @@
 import {
   validateOrganizationPersonMemberExclusionChangeRequest,
   type OrganizationPersonMemberExclusionChangeRequestV2,
-  type OrganizationPersonMemberExclusionSelectorV2,
 } from '@echo-brain/organization-api';
 import { AuthorityOperationError } from '../domain/errors.js';
-import type { PersonAccessAuthorization } from './person-identity-sessions.js';
+import type { PersonAuthenticatedWritePort } from './person-identity-sessions.js';
 import { ReadableSearchAuthorizationFence } from './readable-search-authorization-fence.js';
-
-export interface PersonMemberExclusionAuthenticationPort {
-  authenticateAccess(input: {
-    readonly access_token: string;
-  }): PersonAccessAuthorization;
-}
-
-export interface PersonMemberExclusionMutation {
-  readonly organization_id: string;
-  readonly principal_id: string;
-  readonly membership_id: string;
-  readonly membership_type: 'owner' | 'employee';
-  readonly selector: OrganizationPersonMemberExclusionSelectorV2;
-  readonly excluded: boolean;
-}
-
-export interface PersonMemberExclusionMutationPort {
-  change(input: PersonMemberExclusionMutation): Promise<void>;
-}
-
-/** The exact source is absent, inactive, or belongs to another member. */
-export class PersonMemberExclusionSourceDeniedError extends Error {
-  constructor() {
-    super('member exclusion source is unavailable');
-    this.name = 'PersonMemberExclusionSourceDeniedError';
-  }
-}
 
 export interface PersonMemberExclusionServiceOptions {
   readonly authority_id: string;
   readonly organization_id: string;
-  readonly authentication: PersonMemberExclusionAuthenticationPort;
-  readonly mutations: PersonMemberExclusionMutationPort;
+  readonly authentication: PersonAuthenticatedWritePort;
   readonly authorization_fence: ReadableSearchAuthorizationFence;
 }
 
@@ -81,30 +52,33 @@ export class PersonMemberExclusionService {
     }
 
     await this.options.authorization_fence.withWrite(async () => {
-      const authorization = this.options.authentication.authenticateAccess({
+      this.options.authentication.withAuthenticatedWrite({
         access_token: accessToken,
+        commit: (authorization, transaction) => {
+          if (
+            authorization.organization_id !== request.organization_id ||
+            authorization.principal_id !== request.subject_principal_id
+          ) {
+            throw unauthorized();
+          }
+          const available = transaction.setMemberExclusionForOwner(
+            {
+              organization_id: authorization.organization_id,
+              principal_id: authorization.principal_id,
+              membership_id: authorization.membership_id,
+              membership_type: authorization.membership_type,
+              source_adapter_id: request.selector.source_adapter_id,
+              source_instance_id: request.selector.source_instance_id,
+            },
+            request.selector,
+            request.excluded,
+          );
+          if (!available) {
+            // Source absence and cross-owner binding are intentionally opaque.
+            throw unauthorized();
+          }
+        },
       });
-      if (
-        authorization.organization_id !== request.organization_id ||
-        authorization.principal_id !== request.subject_principal_id
-      ) {
-        throw unauthorized();
-      }
-      try {
-        await this.options.mutations.change({
-          organization_id: authorization.organization_id,
-          principal_id: authorization.principal_id,
-          membership_id: authorization.membership_id,
-          membership_type: authorization.membership_type,
-          selector: request.selector,
-          excluded: request.excluded,
-        });
-      } catch (error) {
-        if (error instanceof PersonMemberExclusionSourceDeniedError) {
-          throw unauthorized();
-        }
-        throw error;
-      }
     });
   }
 }

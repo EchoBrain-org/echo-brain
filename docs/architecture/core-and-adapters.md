@@ -35,7 +35,9 @@ meeting source
   -> decision processor
   -> canonical signals and evidence
   -> exact approval snapshot
-  -> delivery surface
+  -> exact human approve or reject resolution
+  -> canonical organization record and policy facts
+  -> delivery surface for an approved workflow
   -> acknowledged delivery receipt
 ```
 
@@ -54,13 +56,23 @@ that state and cannot load provider adapters.
 - A **delivery surface** publishes an approved destination-neutral envelope
   and returns a provider receipt.
 
-Approval and delivery remain separate capabilities even when they share a
-provider or channel.
+Approval and delivery remain separate capabilities. They may share a provider
+connection, but a generic Slack delivery channel must differ from the active
+Slack approval channel, preserving main's human-action/side-effect boundary.
+The current compatibility composition still reuses approval configuration for
+its one Slack delivery surface; Phase 2D/D5 must remove that coupling before
+claiming this target invariant and before compatibility deletion.
 
 ## Cross-capability invariants
 
 - Source identity includes adapter, instance, external ID, and revision.
   Processing identity also includes processor adapter, instance, and version.
+- Adapter identity names a capability implementation, not a provider account,
+  ECHO human, membership, or permission. Consequential provider actions must
+  resolve the separate connection, persisted adapter binding, tenant-scoped
+  provider actor, external identity link, exact principal/membership tenure,
+  and explicit action capability required by
+  [INV-IDENTITY-005](../invariants/INV-IDENTITY-005-adapter-to-echo-identity-chain.md).
 - Repeating the same source, processing, approval, or delivery operation is
   idempotent.
 - A cursor returns only to the exact source instance and version that issued
@@ -94,6 +106,26 @@ extraction, and error normalization.
 Slack approval and delivery adapters share a narrow transport but retain
 separate authorization, idempotency, and receipt semantics. Slack actors are
 tenant-namespaced `(team_id, user_id)` subjects, never bare user IDs.
+
+## Current composition
+
+The current server composition selects Granola as the meeting source,
+OpenRouter with the pinned DeepSeek processing version as the decision
+processor, Slack as separate approval and delivery capabilities, and Authority
+SQLite state. The other LLM transports are compiled alternatives, not active
+runtime dependencies.
+
+This source-processing model is not the future permission-aware read/model
+layer. It receives one admitted source revision through the processor port and
+has no Person session, retrieval-generation handle, broad corpus access, or
+authorization-widening fallback. Layer 4 remains uncomposed.
+
+The persisted approval contracts include both restricted-reviewer and
+organization-member modes, but current live composition accepts only the
+organization-member mode. That is a migration gap, not permission to delete the
+reviewer policy. The active
+[lean-down plan v4](../product/2026-08-20-server-core-migration-lean-down-plan-v4.md)
+requires both modes to be composed and tested before compatibility deletion.
 
 ## Extension rule
 

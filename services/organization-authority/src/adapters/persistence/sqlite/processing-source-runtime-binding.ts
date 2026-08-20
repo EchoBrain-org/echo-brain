@@ -15,15 +15,25 @@ export interface AuthorityProcessingSourceRuntimeBinding {
   readonly credential_reference_sha256: `sha256:${string}`;
 }
 
+export interface AuthorityProcessingSourceStoredBinding
+  extends AuthorityProcessingSourceRuntimeBinding {
+  /** Source custody follows the immutable owner membership's current status. */
+  readonly custody_status: 'active' | 'inactive';
+}
+
 interface SourceRuntimeBindingRow extends AuthorityProcessingSourceRuntimeBinding {
   membership_status: string;
 }
 
-/** Reads the single source admitted by the minimum server processing runtime. */
-export function readAuthorityProcessingSourceRuntimeBinding(
+/**
+ * Reads the immutable source/configuration tuple even after its custodian has
+ * been revoked. This is the only static reader suitable for terminal-record
+ * recovery; it grants no processing capability by itself.
+ */
+export function readAuthorityProcessingSourceStoredBinding(
   databasePath: string,
   organizationId: string,
-): AuthorityProcessingSourceRuntimeBinding | null {
+): AuthorityProcessingSourceStoredBinding | null {
   assertFederationId(
     organizationId,
     'org',
@@ -71,7 +81,8 @@ export function readAuthorityProcessingSourceRuntimeBinding(
       );
     }
     if (
-      row.membership_status !== 'active' ||
+      (row.membership_status !== 'active' &&
+        row.membership_status !== 'revoked') ||
       row.source_adapter_id !== 'granola' ||
       row.credential_scope !== 'organization' ||
       (row.membership_type !== 'owner' && row.membership_type !== 'employee') ||
@@ -84,8 +95,26 @@ export function readAuthorityProcessingSourceRuntimeBinding(
     assertFederationId(row.principal_id, 'prn', 'processing source principal_id');
     assertFederationId(row.membership_id, 'mem', 'processing source membership_id');
     const { membership_status: _membershipStatus, ...binding } = row;
-    return Object.freeze(binding);
+    return Object.freeze({
+      ...binding,
+      custody_status:
+        row.membership_status === 'active' ? 'active' : 'inactive',
+    });
   } finally {
     database.close();
   }
+}
+
+/** Reads only the active source admitted by the normal polling runtime. */
+export function readAuthorityProcessingSourceRuntimeBinding(
+  databasePath: string,
+  organizationId: string,
+): AuthorityProcessingSourceRuntimeBinding | null {
+  const stored = readAuthorityProcessingSourceStoredBinding(
+    databasePath,
+    organizationId,
+  );
+  if (stored === null || stored.custody_status !== 'active') return null;
+  const { custody_status: _custodyStatus, ...binding } = stored;
+  return Object.freeze(binding);
 }

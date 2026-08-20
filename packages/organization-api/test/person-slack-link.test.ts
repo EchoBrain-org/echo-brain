@@ -12,33 +12,37 @@ import {
   validateOrganizationPersonSlackLinkResult,
 } from '../src/index.js';
 
-const IDENTITY = {
-  authority_id: 'oau_00000000-0000-4000-8000-000000000001',
-  organization_id: 'org_00000000-0000-4000-8000-000000000001',
-  subject_principal_id: 'prn_00000000-0000-4000-8000-000000000001',
-} as const;
+const AUTHORITY_ID = 'oau_00000000-0000-4000-8000-000000000001';
+const ORGANIZATION_ID = 'org_00000000-0000-4000-8000-000000000001';
+const PRINCIPAL_ID = 'prn_00000000-0000-4000-8000-000000000001';
 
 const BEGIN = {
-  schema_version: 2,
-  kind: 'echo-organization-person-slack-link-begin-request',
   request_id: 'psb_00000000-0000-4000-8000-000000000001',
-  ...IDENTITY,
-  http_method: 'POST',
-  http_path: ORGANIZATION_API_PERSON_SLACK_LINK_CHALLENGES_PATH,
   challenge_code_sha256:
     'sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
 } as const;
 
 const COMPLETE = {
-  schema_version: 2,
-  kind: 'echo-organization-person-slack-link-complete-request',
   request_id: 'psc_00000000-0000-4000-8000-000000000001',
-  ...IDENTITY,
-  http_method: 'POST',
-  http_path: ORGANIZATION_API_PERSON_SLACK_LINK_COMPLETIONS_PATH,
   challenge_attempt_id: 'cat_00000000-0000-4000-8000-000000000001',
   challenge_message_ts: '1721678400.123456',
   challenge_code: 'AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA',
+} as const;
+
+const OLD_BEGIN_ENVELOPE = {
+  schema_version: 2,
+  kind: 'echo-organization-person-slack-link-begin-request',
+  authority_id: AUTHORITY_ID,
+  organization_id: ORGANIZATION_ID,
+  subject_principal_id: PRINCIPAL_ID,
+  http_method: 'POST',
+  http_path: ORGANIZATION_API_PERSON_SLACK_LINK_CHALLENGES_PATH,
+} as const;
+
+const OLD_COMPLETE_ENVELOPE = {
+  ...OLD_BEGIN_ENVELOPE,
+  kind: 'echo-organization-person-slack-link-complete-request',
+  http_path: ORGANIZATION_API_PERSON_SLACK_LINK_COMPLETIONS_PATH,
 } as const;
 
 describe('organization Person Slack identity link', () => {
@@ -57,6 +61,25 @@ describe('organization Person Slack identity link', () => {
     ).toBe(canonicalJson(COMPLETE));
   });
 
+  it('rejects every removed identity and route envelope field', () => {
+    for (const [key, value] of Object.entries(OLD_BEGIN_ENVELOPE)) {
+      expect(() =>
+        validateOrganizationPersonSlackLinkBeginRequest({
+          ...BEGIN,
+          [key]: value,
+        }),
+      ).toThrow('unexpected shape');
+    }
+    for (const [key, value] of Object.entries(OLD_COMPLETE_ENVELOPE)) {
+      expect(() =>
+        validateOrganizationPersonSlackLinkCompleteRequest({
+          ...COMPLETE,
+          [key]: value,
+        }),
+      ).toThrow('unexpected shape');
+    }
+  });
+
   it('does not accept installation, adapter, expected-subject, or secret fields', () => {
     for (const extra of [
       { installation_id: 'ins_00000000-0000-4000-8000-000000000001' },
@@ -73,13 +96,7 @@ describe('organization Person Slack identity link', () => {
     }
   });
 
-  it('refuses cross-route, cross-subject, and malformed challenge input', () => {
-    expect(() =>
-      validateOrganizationPersonSlackLinkBeginRequest({
-        ...BEGIN,
-        http_path: ORGANIZATION_API_PERSON_SLACK_LINK_COMPLETIONS_PATH,
-      }),
-    ).toThrow('unsupported');
+  it('refuses malformed request IDs and challenge input', () => {
     expect(() =>
       validateOrganizationPersonSlackLinkCompleteRequest({
         ...COMPLETE,
@@ -112,8 +129,8 @@ describe('organization Person Slack identity link', () => {
       kind: 'echo-organization-person-slack-link-result',
       identity_link_id: 'clm_00000000-0000-4000-8000-000000000001',
       connection_id: 'con_00000000-0000-4000-8000-000000000001',
-      organization_id: IDENTITY.organization_id,
-      principal_id: IDENTITY.subject_principal_id,
+      organization_id: ORGANIZATION_ID,
+      principal_id: PRINCIPAL_ID,
       membership_id: 'mem_00000000-0000-4000-8000-000000000001',
       provider: 'slack',
       provider_tenant_id: 'T12345678',

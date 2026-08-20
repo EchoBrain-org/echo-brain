@@ -12,6 +12,8 @@ reviewed_at: 2026-08-13
 reviewed_ref: 808ac89eaf3e8eba529b356bd80d4509b9a2a293
 decision_ids:
   - ADR-0002
+  - ADR-0003
+  - ADR-0004
 invariant_ids:
   - INV-IDENTITY-002
 failure_pattern_ids:

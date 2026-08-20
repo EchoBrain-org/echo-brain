@@ -2304,6 +2304,89 @@ class SqliteAuthorityTransaction
     });
   }
 
+  setMemberExclusionForOwner(
+    source: MemberExclusionOwnerSource,
+    selector: StoredMemberExclusionSelector,
+    excluded: boolean,
+  ): boolean {
+    const changedAt = this.transactionTime();
+    invariant(
+      typeof excluded === 'boolean',
+      'member exclusion desired state is invalid',
+    );
+    invariant(
+      selector.source_adapter_id === source.source_adapter_id &&
+        selector.source_instance_id === source.source_instance_id,
+      'member exclusion selector belongs to another source',
+    );
+    if (this.memberExclusionsForOwnerSource(source) === undefined) return false;
+
+    const externalId =
+      selector.scope === 'source'
+        ? ''
+        : selector.scope === 'meeting'
+          ? selector.external_id
+          : undefined;
+    invariant(
+      externalId !== undefined,
+      'member exclusion selector scope is invalid',
+    );
+    if (selector.scope === 'meeting') {
+      invariant(
+        selector.external_id.length > 0 &&
+          selector.external_id.length <= 4096 &&
+          !selector.external_id.includes('\0'),
+        'member exclusion meeting external ID is invalid',
+      );
+    }
+
+    if (excluded) {
+      this.database
+        .prepare(
+          `INSERT INTO authority_processing_member_exclusions (
+             organization_id, principal_id, membership_id, membership_type,
+             source_adapter_id, source_instance_id, scope_kind, external_id,
+             created_at
+           ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+           ON CONFLICT (
+             membership_id, source_adapter_id, source_instance_id,
+             scope_kind, external_id
+           ) DO NOTHING`,
+        )
+        .run(
+          source.organization_id,
+          source.principal_id,
+          source.membership_id,
+          source.membership_type,
+          source.source_adapter_id,
+          source.source_instance_id,
+          selector.scope,
+          externalId,
+          changedAt,
+        );
+    } else {
+      this.database
+        .prepare(
+          `DELETE FROM authority_processing_member_exclusions
+            WHERE organization_id = ? AND principal_id = ?
+              AND membership_id = ? AND membership_type = ?
+              AND source_adapter_id = ? AND source_instance_id = ?
+              AND scope_kind = ? AND external_id = ?`,
+        )
+        .run(
+          source.organization_id,
+          source.principal_id,
+          source.membership_id,
+          source.membership_type,
+          source.source_adapter_id,
+          source.source_instance_id,
+          selector.scope,
+          externalId,
+        );
+    }
+    return true;
+  }
+
   activeReadableSearchGeneration(): StoredReadableSearchActiveGeneration | null {
     const row = this.database
       .prepare(

@@ -36,26 +36,25 @@ the route, generation, verifier, and query-audit procedures whenever the
 selected image is readable-search-capable. Historical images may not contain
 those commands.
 
-## Stopped one-meeting processing command
+## Stopped meeting-source activation
 
-`process-one-meeting` is a disabled-by-default founder-live ingress rung. It
-acquires the same singleton as `serve`, requires an exact active member/source
-binding and an operator-asserted organization-scoped Granola credential, pulls
-at most one meeting, runs only the deterministic structured-text processor,
-and stages the result as pending in `authority.sqlite`. It emits sanitized
-counts and opaque approval IDs only.
+`activate-meeting-source` is the one stopped command that admits a Granola
+source. It takes the same singleton as `serve`, makes no provider calls, proves
+the configured organization credential and owner email locally, and requires
+that email to be bound to the exact active Person membership. One Authority
+SQLite transaction creates or verifies the immutable source-owner binding,
+credential-configuration digest, and a live-only cutoff cursor. A retry after
+a lost response returns that persisted cutoff without sampling a second one.
 
-The command is not a worker or complete product loop. It cannot run beside the
-HTTP Authority, does not resolve approval, deliver, append a record, advance a
-pending cursor, or start itself again. The EC2 stop/checkpoint/run/restart gate
-is documented in
-[`deploy/organization-authority/AWS-EC2.md`](../../deploy/organization-authority/AWS-EC2.md).
+The command refuses unfinished candidates, a different source, Person, or
+configuration. It does not pull a meeting, invoke a processor, publish,
+approve, append a record, or start a worker. Custodian revocation stops future
+pulls and pending advancement; replaceable source custody is a later contract.
 
-`process-one-meeting` remains the deterministic stopped-state provisioning
-path. When `serve` finds the exact persisted source and Slack approval bindings,
-it composes the serialized live worker with the Granola source, the existing
-LLM decision processor over OpenRouter, Slack approval, record-first final
-delivery, and Authority SQLite state. Minimum V1 pins
+When `serve` finds the exact persisted source and Slack approval bindings, it
+composes the serialized live worker with the Granola source, the existing LLM
+decision processor over OpenRouter, Slack approval, record-first final delivery,
+and Authority SQLite state. Minimum V1 pins
 `deepseek/deepseek-r1` with strict structured output. The API key is read once
 at startup from the dedicated current-user `0600` credential file; it is not
 stored in Authority config, a database, Compose, or logs.
@@ -196,8 +195,8 @@ that old binding contract. A Person-bound approval activation path is not yet
 implemented. The retained installation-signed V1 Slack link remains the narrow
 way to create that exact binding. Once its grants and a processing source are
 ready, `serve` composes the bundled Slack approval adapter into the serialized
-meeting worker. `process-one-meeting` remains a bounded stopped-state admission
-command and does not publish an approval card.
+meeting worker. `activate-meeting-source` creates no candidate or approval
+card. It only admits the source which the live LLM worker may subsequently use.
 
 ### Retained installation access recovery
 
@@ -348,7 +347,10 @@ baseline it contains exactly:
 
 `presentation_mode` is either `restricted-reviewer-v1` or
 `organization-member-readable-v1`; the contract digest must match that exact
-mode. Its absence never enables organization-member-readable admission.
+mode. Its absence never enables organization-member-readable admission. The
+persisted contract supports both modes, but current `serve` composition rejects
+restricted-reviewer mode; restoring both live policy paths is a v4 migration
+gate, not a reason to remove reviewer semantics.
 
 An Authority initialized before this mapping existed keeps its original
 runtime config and initialization manifest immutable. Enable the one supported
@@ -475,6 +477,11 @@ guessed at; nothing here is automatic recovery, and no command rebuilds a log.
 Missing or mismatched integration state always makes `serve` fail closed.
 
 ### Activating the two-person permission pilot
+
+This is a retained compatibility procedure, not the v4 organization model or a
+new onboarding path. The lean target supports one owner plus any number of
+employees through the reviewer and organization-member policies; it retires
+this fixed-audience Pilot only after its parity and lineage gates pass.
 
 Activation is an operator-confirmed local maintenance act, not an HTTP
 administrator act or proof of a named founder. Stop the Authority, create a

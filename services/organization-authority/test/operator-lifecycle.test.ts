@@ -413,6 +413,7 @@ describe('organization authority operator lifecycle', () => {
       'authority_processing_member_exclusions',
       'authority_processing_processed_markers',
       'authority_processing_resolutions',
+      'authority_processing_slack_delivery_attempts',
       'authority_processing_slots',
       'authority_processing_source_configuration_bindings',
       'authority_processing_source_cursors',
@@ -987,14 +988,29 @@ describe('organization authority operator lifecycle', () => {
       readAuthorityRuntimeConfig(fixture.configPath),
     );
     const closeMeetingProcessing = vi.fn(async () => undefined);
-    const openMeetingProcessingRuntime = vi.fn(async () => ({
-      close: closeMeetingProcessing,
-    }));
+    const startupOrder: string[] = [];
+    const recoverTerminalRecordActs = vi.fn(async () => {
+      startupOrder.push('terminal-record-recovery');
+      return {
+        source_binding: 'absent' as const,
+        recovered_processing_keys: [],
+      };
+    });
+    const openMeetingProcessingRuntime = vi.fn(async () => {
+      startupOrder.push('meeting-polling');
+      return { close: closeMeetingProcessing };
+    });
     const runtime = await startOrganizationAuthority(serveConfig, {
+      recoverTerminalRecordActs,
       openMeetingProcessingRuntime,
     });
 
+    expect(recoverTerminalRecordActs).toHaveBeenCalledOnce();
     expect(openMeetingProcessingRuntime).toHaveBeenCalledOnce();
+    expect(startupOrder).toEqual([
+      'terminal-record-recovery',
+      'meeting-polling',
+    ]);
     expect(closeMeetingProcessing).not.toHaveBeenCalled();
     await runtime.close();
     expect(closeMeetingProcessing).toHaveBeenCalledOnce();
@@ -1485,7 +1501,7 @@ describe('organization authority operator lifecycle', () => {
     expect(
       inspectAuthorityDatabaseReadOnly(config.database_path),
     ).toMatchObject({
-      schema_version: 17,
+      schema_version: 19,
       integrations_control_plane_id: integrationsIdentity.control_plane_id,
       integrations_marker_sha256: expect.stringMatching(
         /^sha256:[0-9a-f]{64}$/,
@@ -1576,7 +1592,7 @@ describe('organization authority operator lifecycle', () => {
       const interruptedAuthority = inspectAuthorityDatabaseReadOnly(
         config.database_path,
       );
-      expect(interruptedAuthority.schema_version).toBe(17);
+      expect(interruptedAuthority.schema_version).toBe(19);
       expect(
         interruptedAuthority.integrations_control_plane_id !== null,
       ).toBe(anchoredAfterFault);
@@ -1593,7 +1609,7 @@ describe('organization authority operator lifecycle', () => {
         config.database_path,
       );
       expect(recoveredAuthority).toMatchObject({
-        schema_version: 17,
+        schema_version: 19,
         integrations_control_plane_id: recovered.control_plane_id,
         integrations_marker_sha256: expect.stringMatching(
           /^sha256:[0-9a-f]{64}$/,

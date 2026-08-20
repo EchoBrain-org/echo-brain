@@ -12,9 +12,12 @@ reviewed_at: 2026-08-13
 reviewed_ref: 808ac89eaf3e8eba529b356bd80d4509b9a2a293
 decision_ids:
   - ADR-0001
+  - ADR-0003
+  - ADR-0004
 invariant_ids:
   - INV-ADAPTERS-003
   - INV-ADAPTERS-004
+  - INV-IDENTITY-005
 failure_pattern_ids:
   - FP-ADAPTERS-003
   - FP-ADAPTERS-004

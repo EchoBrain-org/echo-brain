@@ -54,27 +54,13 @@ function recentRequest() {
 
 function reviewerRequest() {
   return {
-    schema_version: 2,
-    kind: "echo-organization-person-reviewer-recent-decisions-request",
-    request_id: "rrd_00000000-0000-4000-8000-000000000001",
-    authority_id: AUTHORITY_ID,
-    organization_id: ORGANIZATION_ID,
     subject_principal_id: PRINCIPAL_ID,
-    http_method: "POST",
-    http_path: ORGANIZATION_API_PERSON_REVIEWER_RECENT_DECISIONS_PATH,
   } as const;
 }
 
 function searchRequest() {
   return {
-    schema_version: 2,
-    kind: "echo-organization-person-readable-search-request",
-    request_id: "osq_00000000-0000-4000-8000-000000000001",
-    authority_id: AUTHORITY_ID,
-    organization_id: ORGANIZATION_ID,
     subject_principal_id: PRINCIPAL_ID,
-    http_method: "POST",
-    http_path: ORGANIZATION_API_PERSON_READABLE_SEARCH_PATH,
     query: "pricing",
   } as const;
 }
@@ -178,6 +164,49 @@ describe("Person read HTTP routes", () => {
       expect(search).toHaveBeenCalledWith(searchRequest(), ACCESS_TOKEN, {
         signal: expect.any(AbortSignal),
       });
+    } finally {
+      await close(http);
+    }
+  });
+
+  it("rejects retired reviewer and search envelope fields before dispatch", async () => {
+    const reviewerRecentDecisions = vi.fn();
+    const search = vi.fn();
+    const http = server({
+      personRecentDecisions: {
+        recentDecisions: vi.fn(),
+        reviewerRecentDecisions,
+      },
+      personReadableSearch: { search },
+    });
+    const origin = await listen(http);
+    try {
+      const attempts = [
+        fetch(`${origin}${ORGANIZATION_API_PERSON_REVIEWER_RECENT_DECISIONS_PATH}`, {
+          method: "POST",
+          headers: { ...proxyHeaders(), "content-type": "application/json" },
+          body: canonicalJson({
+            ...reviewerRequest(),
+            schema_version: 2,
+            request_id: "rrd_00000000-0000-4000-8000-000000000001",
+            authority_id: AUTHORITY_ID,
+          }),
+        }),
+        fetch(`${origin}${ORGANIZATION_API_PERSON_READABLE_SEARCH_PATH}`, {
+          method: "POST",
+          headers: { ...proxyHeaders(), "content-type": "application/json" },
+          body: canonicalJson({
+            ...searchRequest(),
+            organization_id: ORGANIZATION_ID,
+            http_path: ORGANIZATION_API_PERSON_READABLE_SEARCH_PATH,
+          }),
+        }),
+      ];
+      for (const response of await Promise.all(attempts)) {
+        expect(response.status).toBe(400);
+      }
+      expect(reviewerRecentDecisions).not.toHaveBeenCalled();
+      expect(search).not.toHaveBeenCalled();
     } finally {
       await close(http);
     }

@@ -1,7 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
   AdapterError,
-  AdapterRegistry,
   assertCanonicalApprovalDecision,
   type AdapterOperationContext,
   runCoreCycle,
@@ -22,6 +21,7 @@ import {
   type MeetingDocument,
   type MeetingPullRequest,
   type MeetingSourceAdapter,
+  type ResolvedActWriter,
   meetingProcessingKey,
 } from '../../../src/processing/core/index.js';
 
@@ -231,6 +231,17 @@ class DeliverySurfaceFake implements DeliverySurfaceAdapter {
       recorded_at: '2026-07-16T17:05:00.000Z',
       retryable: this.nextRetryable ?? this.nextStatus !== 'delivered',
     };
+  }
+}
+
+class ResolvedActWriterFake implements ResolvedActWriter {
+  readonly writes: Parameters<ResolvedActWriter['write']>[0][] = [];
+  error: Error | undefined;
+  onWrite: (() => void) | undefined;
+  async write(input: Parameters<ResolvedActWriter['write']>[0]): Promise<void> {
+    this.writes.push(input);
+    this.onWrite?.();
+    if (this.error !== undefined) throw this.error;
   }
 }
 
@@ -454,49 +465,39 @@ function cycleInput(
     meetingSource: new SourceFake(),
     decisionProcessor: new ProcessorFake(),
     deliverySurfaces: [new DeliverySurfaceFake()],
+    resolvedActWriter: new ResolvedActWriterFake(),
     approvalGate: new GateFake('approved'),
     state: new StateFake(),
     ...overrides,
   };
 }
 
-describe('tool-agnostic adapter registry', () => {
-  it('registers typed capabilities and rejects duplicate instances', () => {
-    const registry = new AdapterRegistry();
-    const source = new SourceFake();
-    const processor = new ProcessorFake();
-    const surface = new DeliverySurfaceFake();
-    registry.register(source);
-    registry.register(processor);
-    registry.register(surface);
-
-    const settings = {};
-    expect(
-      registry.getMeetingSource({
-        adapter_id: 'source-alpha',
-        instance_id: 'primary',
-        settings,
-      }),
-    ).toBe(source);
-    expect(
-      registry.getDecisionProcessor({
-        adapter_id: 'processor-alpha',
-        instance_id: 'primary',
-        settings,
-      }),
-    ).toBe(processor);
-    expect(
-      registry.getDeliverySurface({
-        adapter_id: 'delivery-alpha',
-        instance_id: 'team-primary',
-        settings,
-      }),
-    ).toBe(surface);
-    expect(() => registry.register(source)).toThrow(/already registered/);
-  });
-});
-
 describe('tool-agnostic core cycle', () => {
+  it('does not resume across source, normalizer, or source-revision identity changes', () => {
+    const processor = new ProcessorFake();
+    const baseline = meetingProcessingKey(meeting, processor);
+    const variants: MeetingDocument[] = [
+      {
+        ...meeting,
+        provenance: {
+          ...meeting.provenance,
+          source: { ...meeting.provenance.source, version: '1.0.1' },
+        },
+      },
+      {
+        ...meeting,
+        provenance: { ...meeting.provenance, normalizer_version: '1.0.1' },
+      },
+      {
+        ...meeting,
+        provenance: { ...meeting.provenance, source_revision: 'provider-revision-2' },
+      },
+    ];
+    for (const variant of variants) {
+      expect(meetingProcessingKey(variant, processor)).not.toBe(baseline);
+    }
+  });
+
   it('rejects a malformed source batch before writing core state', async () => {
     const state = new StateFake();
     await expect(
@@ -669,11 +670,12 @@ describe('tool-agnostic core cycle', () => {
       surface.envelopes[0]!.idempotency_key.slice('delivery:v1:'.length),
     ) as string[];
     const processingParts = JSON.parse(
-      deliveryParts[0]!.slice('processing:v1:'.length),
+      deliveryParts[0]!.slice('processing:v2:'.length),
     ) as string[];
-    expect(processingParts.slice(0, 4)).toEqual([
+    expect(processingParts.slice(0, 5)).toEqual([
       'source-alpha',
       'primary',
+      '1.0.0',
       'external-meeting-1',
       'revision-1',
     ]);
@@ -682,10 +684,12 @@ describe('tool-agnostic core cycle', () => {
   it('records a rejection without publishing', async () => {
     const surface = new DeliverySurfaceFake();
     const state = new StateFake();
+    const writer = new ResolvedActWriterFake();
     const result = await runCoreCycle(cycleInput({
       deliverySurfaces: [surface],
       approvalGate: new GateFake('rejected'),
       state,
+      resolvedActWriter: writer,
     }));
 
     expect(result).toMatchObject({
@@ -694,7 +698,51 @@ describe('tool-agnostic core cycle', () => {
       deliveries: 0,
     });
     expect(surface.envelopes).toHaveLength(0);
+    expect(writer.writes).toHaveLength(1);
+    expect(writer.writes[0]!.decision.status).toBe('rejected');
     expect(state.processed.size).toBe(1);
+  });
+
+  it('writes the resolved act once before every approved delivery surface', async () => {
+    const events: string[] = [];
+    const writer = new ResolvedActWriterFake();
+    writer.onWrite = () => events.push('record');
+    const first = new DeliverySurfaceFake();
+    const second = new DeliverySurfaceFake();
+    const originalFirst = first.publish.bind(first);
+    const originalSecond = second.publish.bind(second);
+    first.publish = async (envelope) => {
+      events.push('first');
+      return await originalFirst(envelope);
+    };
+    second.publish = async (envelope) => {
+      events.push('second');
+      return await originalSecond(envelope);
+    };
+    const result = await runCoreCycle(cycleInput({
+      deliverySurfaces: [first, second],
+      resolvedActWriter: writer,
+    }));
+    expect(result.deliveries).toBe(2);
+    expect(writer.writes).toHaveLength(1);
+    expect(events).toEqual(['record', 'first', 'second']);
+  });
+
+  it('keeps the act nonterminal and cursor pinned when canonical writing fails', async () => {
+    const state = new StateFake();
+    const surface = new DeliverySurfaceFake();
+    const writer = new ResolvedActWriterFake();
+    writer.error = new Error('record append unavailable');
+    const result = await runCoreCycle(cycleInput({
+      state,
+      deliverySurfaces: [surface],
+      resolvedActWriter: writer,
+    }));
+    expect(result).toMatchObject({ ok: false, cursor_advanced: false });
+    expect(result.failures[0]).toMatchObject({ stage: 'record' });
+    expect(surface.envelopes).toHaveLength(0);
+    expect(state.processed.size).toBe(0);
+    expect(state.cursor).toBe('cursor-1');
   });
 
   it('keeps the source cursor pinned while manual approval is pending', async () => {

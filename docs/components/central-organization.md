@@ -13,11 +13,14 @@ reviewed_ref: 83819a57fd8635384d14d3cc8d591e8f76ad1260
 decision_ids:
   - ADR-0001
   - ADR-0002
+  - ADR-0003
+  - ADR-0004
 invariant_ids:
   - INV-IDENTITY-001
   - INV-IDENTITY-002
   - INV-IDENTITY-003
   - INV-IDENTITY-004
+  - INV-IDENTITY-005
   - INV-RUNTIME-001
   - INV-OPERATIONS-001
 failure_pattern_ids:

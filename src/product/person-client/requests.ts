@@ -1,11 +1,7 @@
 import {
   ORGANIZATION_API_PERSON_MEMBER_EXCLUSIONS_PATH,
   ORGANIZATION_API_PERSON_MEMBER_EXCLUSION_LIST_PATH,
-  ORGANIZATION_API_PERSON_READABLE_SEARCH_PATH,
   ORGANIZATION_API_PERSON_RECENT_DECISIONS_PATH,
-  ORGANIZATION_API_PERSON_REVIEWER_RECENT_DECISIONS_PATH,
-  ORGANIZATION_API_PERSON_SLACK_LINK_CHALLENGES_PATH,
-  ORGANIZATION_API_PERSON_SLACK_LINK_COMPLETIONS_PATH,
   organizationSlackLinkChallengeCodeSha256,
   validateOrganizationPersonMemberExclusionChangeRequest,
   validateOrganizationPersonMemberExclusionListRequest,
@@ -63,26 +59,18 @@ export function createPersonRecentDecisionsRequest(
 
 export function createPersonReviewerRecentDecisionsRequest(
   identity: PersonRequestIdentity,
-  requestId: string,
 ): OrganizationPersonReviewerRecentDecisionsRequestV2 {
   return validateOrganizationPersonReviewerRecentDecisionsRequest({
-    schema_version: 2,
-    kind: 'echo-organization-person-reviewer-recent-decisions-request',
-    ...base(identity, requestId),
-    http_path: ORGANIZATION_API_PERSON_REVIEWER_RECENT_DECISIONS_PATH,
+    subject_principal_id: identity.session.principal_id,
   });
 }
 
 export function createPersonReadableSearchRequest(
   identity: PersonRequestIdentity,
-  requestId: string,
   query: string,
 ): OrganizationPersonReadableSearchRequestV2 {
   return validateOrganizationPersonReadableSearchRequest({
-    schema_version: 2,
-    kind: 'echo-organization-person-readable-search-request',
-    ...base(identity, requestId),
-    http_path: ORGANIZATION_API_PERSON_READABLE_SEARCH_PATH,
+    subject_principal_id: identity.session.principal_id,
     query,
   });
 }
@@ -120,22 +108,17 @@ export function createPersonMemberExclusionListRequest(
 }
 
 export function createPersonSlackLinkBeginRequest(
-  identity: PersonRequestIdentity,
   requestId: string,
   challengeCode: string,
 ): OrganizationPersonSlackLinkBeginRequestV2 {
   return validateOrganizationPersonSlackLinkBeginRequest({
-    schema_version: 2,
-    kind: 'echo-organization-person-slack-link-begin-request',
-    ...base(identity, requestId),
-    http_path: ORGANIZATION_API_PERSON_SLACK_LINK_CHALLENGES_PATH,
+    request_id: requestId,
     challenge_code_sha256:
       organizationSlackLinkChallengeCodeSha256(challengeCode),
   });
 }
 
 export function createPersonSlackLinkCompleteRequest(
-  identity: PersonRequestIdentity,
   requestId: string,
   input: {
     readonly challenge_attempt_id: string;
@@ -144,10 +127,7 @@ export function createPersonSlackLinkCompleteRequest(
   },
 ): OrganizationPersonSlackLinkCompleteRequestV2 {
   return validateOrganizationPersonSlackLinkCompleteRequest({
-    schema_version: 2,
-    kind: 'echo-organization-person-slack-link-complete-request',
-    ...base(identity, requestId),
-    http_path: ORGANIZATION_API_PERSON_SLACK_LINK_COMPLETIONS_PATH,
+    request_id: requestId,
     ...input,
   });
 }

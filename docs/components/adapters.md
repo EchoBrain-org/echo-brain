@@ -10,12 +10,16 @@ component_ids:
 created_at: 2026-08-13
 reviewed_at: 2026-08-13
 reviewed_ref: 808ac89eaf3e8eba529b356bd80d4509b9a2a293
+decision_ids:
+  - ADR-0003
+  - ADR-0004
 invariant_ids:
   - INV-ADAPTERS-001
   - INV-ADAPTERS-002
   - INV-ADAPTERS-003
   - INV-ADAPTERS-004
   - INV-IDENTITY-001
+  - INV-IDENTITY-005
   - INV-PERMISSIONS-013
   - INV-PERMISSIONS-014
 failure_pattern_ids:

@@ -26,7 +26,6 @@ import type {
   SlackDeliveryReceiptStore,
   SlackStoredDelivery,
 } from './slack-delivery-receipt-store.js';
-import { SlackDeliveryReceiptStoreError } from './slack-delivery-receipt-store.js';
 
 export const SLACK_DELIVERY_SURFACE_ADAPTER_ID = 'slack';
 export const SLACK_DELIVERY_SURFACE_ADAPTER_VERSION = '1.0.0';
@@ -88,13 +87,6 @@ function mapSlackError(error: unknown): AdapterError {
       case 'invalid':
         return new AdapterError('permanently_rejected', error.message, false);
     }
-  }
-  if (error instanceof SlackDeliveryReceiptStoreError) {
-    return new AdapterError(
-      error.code === 'unsafe' ? 'invalid_config' : 'temporarily_unavailable',
-      error.message,
-      error.code !== 'unsafe',
-    );
   }
   return new AdapterError(
     'temporarily_unavailable',
@@ -259,92 +251,77 @@ export class SlackDeliverySurface implements DeliverySurfaceAdapter {
     this.apiClient();
 
     try {
-      const record = await this.receiptStore.runExclusive(
-        envelope.idempotency_key,
-        async () => {
-          const existing = await this.receiptStore.get(
-            envelope.idempotency_key,
-          );
-          if (existing !== undefined) return existing;
-          this.assertNotCancelled(operation?.signal, 'delivery');
-          const recordedAt = normalizedTimestamp(this.now());
-          if (recordedAt === null) {
-            throw new AdapterError(
-              'temporarily_unavailable',
-              'Slack delivery surface clock is invalid',
-              true,
-            );
-          }
-          const attempt = this.unknownRecord(
+      this.assertNotCancelled(operation?.signal, 'delivery');
+      const recordedAt = normalizedTimestamp(this.now());
+      if (recordedAt === null) {
+        throw new AdapterError(
+          'temporarily_unavailable',
+          'Slack delivery surface clock is invalid',
+          true,
+        );
+      }
+      const attempt = this.unknownRecord(envelope.idempotency_key, recordedAt);
+      const claim = await this.receiptStore.claim(attempt);
+      if (claim.kind === 'existing') {
+        return this.receipt(envelope.id, claim.record);
+      }
+      try {
+        this.assertNotCancelled(operation?.signal, 'delivery');
+        const posted = await this.apiClient().postMessage(
+          {
+            channel: this.settings.channelId,
+            text: this.messageText(envelope.brief),
+            blocks: this.messageBlocks(envelope.brief, envelope.approved_at),
+          },
+          operation?.signal,
+        );
+        if (posted.channel !== this.settings.channelId) {
+          const unexpectedDestination = this.unknownRecord(
             envelope.idempotency_key,
             recordedAt,
+            'Slack returned an unexpected destination; delivery outcome is unknown',
           );
-          await this.receiptStore.createAttempt(attempt);
-          this.assertNotCancelled(operation?.signal, 'delivery');
-          try {
-            const posted = await this.apiClient().postMessage(
-              {
-                channel: this.settings.channelId,
-                text: this.messageText(envelope.brief),
-                blocks: this.messageBlocks(
-                  envelope.brief,
-                  envelope.approved_at,
-                ),
-              },
-              operation?.signal,
-            );
-            if (posted.channel !== this.settings.channelId) {
-              const unexpectedDestination = this.unknownRecord(
-                envelope.idempotency_key,
-                recordedAt,
-                'Slack returned an unexpected destination; delivery outcome is unknown',
-              );
-              await this.receiptStore
-                .recordOutcome(unexpectedDestination)
-                .catch(() => undefined);
-              return unexpectedDestination;
-            }
-            const delivered: SlackStoredDelivery = {
-              schema_version: 1,
-              record_type: 'echo-brain.slack-delivery',
-              idempotency_key: envelope.idempotency_key,
-              status: 'delivered',
-              channel_id: posted.channel,
-              message_ts: posted.ts,
-              recorded_at: recordedAt,
-            };
-            try {
-              await this.receiptStore.recordOutcome(delivered);
-            } catch {
-              // Slack confirmed the post, but durable identity was not
-              // confirmed locally. Never claim success or repost blindly.
-              throw new AdapterError(
-                'unknown_outcome',
-                'Slack delivered the message but its receipt could not be persisted',
-                true,
-              );
-            }
-            return delivered;
-          } catch (error) {
-            const mapped = mapSlackError(error);
-            if (mapped.code === 'unknown_outcome') {
-              await this.receiptStore
-                .recordOutcome(attempt)
-                .catch(() => undefined);
-              return attempt;
-            }
-            try {
-              await this.receiptStore.clearAttempt(envelope.idempotency_key);
-            } catch {
-              // The marker is now the durable source of truth. Reporting it as
-              // unknown prevents a retry from making a second Slack post.
-              return attempt;
-            }
-            throw mapped;
-          }
-        },
-      );
-      return this.receipt(envelope.id, record);
+          await this.receiptStore
+            .recordOutcome(unexpectedDestination)
+            .catch(() => undefined);
+          return this.receipt(envelope.id, unexpectedDestination);
+        }
+        const delivered: SlackStoredDelivery = {
+          schema_version: 1,
+          record_type: 'echo-brain.slack-delivery',
+          idempotency_key: envelope.idempotency_key,
+          status: 'delivered',
+          channel_id: posted.channel,
+          message_ts: posted.ts,
+          recorded_at: recordedAt,
+        };
+        try {
+          await this.receiptStore.recordOutcome(delivered);
+        } catch {
+          // Slack confirmed the post, but durable identity was not confirmed
+          // locally. The pre-call unknown claim remains and blocks reposts.
+          throw new AdapterError(
+            'unknown_outcome',
+            'Slack delivered the message but its receipt could not be persisted',
+            true,
+          );
+        }
+        return this.receipt(envelope.id, delivered);
+      } catch (error) {
+        const mapped = mapSlackError(error);
+        if (mapped.code === 'unknown_outcome') {
+          await this.receiptStore.recordOutcome(attempt).catch(() => undefined);
+          return this.receipt(envelope.id, attempt);
+        }
+        try {
+          await this.receiptStore.clearAttempt(envelope.idempotency_key);
+        } catch {
+          // A surviving marker is the source of truth. Reporting unknown keeps
+          // every later caller from making a blind second Slack post.
+          return this.receipt(envelope.id, attempt);
+        }
+        throw mapped;
+      }
     } catch (error) {
       throw mapSlackError(error);
     }

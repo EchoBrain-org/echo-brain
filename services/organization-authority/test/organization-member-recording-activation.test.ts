@@ -82,6 +82,9 @@ function downgradeToPreActivationSchema(databasePath: string): void {
   const database = new Database(databasePath);
   try {
     database.exec(`
+      DROP TRIGGER authority_processing_slack_delivery_delivered_immutable;
+      DROP TRIGGER authority_processing_slack_delivery_delivered_delete_denied;
+      DROP TABLE authority_processing_slack_delivery_attempts;
       DROP TRIGGER authority_processing_source_configuration_bindings_immutable_update;
       DROP TRIGGER authority_processing_source_configuration_bindings_delete_denied;
       DROP TABLE authority_processing_source_configuration_bindings;
@@ -329,7 +332,7 @@ describe('organization-member recording activation lifecycle', () => {
     ).rejects.toThrow('fault:after-audit');
 
     const rolledBack = new Database(runtimeConfig.database_path);
-    expect(rolledBack.pragma('user_version', { simple: true })).toBe(17);
+    expect(rolledBack.pragma('user_version', { simple: true })).toBe(19);
     expect(
       (
         rolledBack

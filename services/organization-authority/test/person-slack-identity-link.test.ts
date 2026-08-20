@@ -1,7 +1,5 @@
 import { canonicalSha256 } from '@echo-brain/federation-protocol';
 import {
-  ORGANIZATION_API_PERSON_SLACK_LINK_CHALLENGES_PATH,
-  ORGANIZATION_API_PERSON_SLACK_LINK_COMPLETIONS_PATH,
   organizationSlackLinkChallengeCodeSha256,
 } from '@echo-brain/organization-api';
 import {
@@ -41,30 +39,27 @@ const AUTHORIZATION: PersonAccessAuthorization = {
   checked_at: NOW,
 };
 
+const OTHER_AUTHORIZATION: PersonAccessAuthorization = {
+  ...AUTHORIZATION,
+  principal_id: 'prn_cccccccc-cccc-4ccc-8ccc-cccccccccccc',
+  membership_id: 'mem_dddddddd-dddd-4ddd-8ddd-dddddddddddd',
+  identity_binding_id: 'oib_eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee',
+  session_family_id: 'psf_ffffffff-ffff-4fff-8fff-ffffffffffff',
+  access_credential_sha256: canonicalSha256('other-access'),
+  person_state_sha256: canonicalSha256('other-person-state'),
+  session_state_sha256: canonicalSha256('other-session-state'),
+};
+
 function beginRequest() {
   return {
-    schema_version: 2,
-    kind: 'echo-organization-person-slack-link-begin-request',
     request_id: 'psb_77777777-7777-4777-8777-777777777777',
-    authority_id: AUTHORITY_ID,
-    organization_id: ORGANIZATION_ID,
-    subject_principal_id: PRINCIPAL_ID,
-    http_method: 'POST',
-    http_path: ORGANIZATION_API_PERSON_SLACK_LINK_CHALLENGES_PATH,
     challenge_code_sha256: organizationSlackLinkChallengeCodeSha256(CODE),
   } as const;
 }
 
 function completeRequest(challengeAttemptId: string, challengeMessageTs: string) {
   return {
-    schema_version: 2,
-    kind: 'echo-organization-person-slack-link-complete-request',
     request_id: 'psc_88888888-8888-4888-8888-888888888888',
-    authority_id: AUTHORITY_ID,
-    organization_id: ORGANIZATION_ID,
-    subject_principal_id: PRINCIPAL_ID,
-    http_method: 'POST',
-    http_path: ORGANIZATION_API_PERSON_SLACK_LINK_COMPLETIONS_PATH,
     challenge_attempt_id: challengeAttemptId,
     challenge_message_ts: challengeMessageTs,
     challenge_code: CODE,
@@ -239,8 +234,9 @@ describe('PersonSlackIdentityLinkService', () => {
     expect(JSON.stringify({ request, result })).not.toContain(TOKEN);
   });
 
-  it('replays completion without calling Slack or appending another audit row', async () => {
-    const context = fixture();
+  it('replays completion for the same Person family without another Slack call or audit row', async () => {
+    let authorization = AUTHORIZATION;
+    const context = fixture({ authorization: () => authorization });
     const begun = await begin(context);
     const request = completeRequest(
       begun.challenge_attempt_id,
@@ -248,25 +244,110 @@ describe('PersonSlackIdentityLinkService', () => {
     );
     const first = await context.application.complete(request, ACCESS_TOKEN);
     const auditCount = context.repository.overview().recent_audit.length;
+    authorization = {
+      ...AUTHORIZATION,
+      access_credential_sha256: canonicalSha256('rotated-access'),
+      session_state_sha256: canonicalSha256('rotated-session-state'),
+    };
     const second = await context.application.complete(request, ACCESS_TOKEN);
     expect(second).toEqual(first);
     expect(context.slack.observeIdentityLinkChallenge).toHaveBeenCalledTimes(1);
     expect(context.repository.overview().recent_audit).toHaveLength(auditCount);
   });
 
-  it('denies a caller/subject mismatch before any Slack call', async () => {
-    const context = fixture();
-    await expect(
-      context.application.begin(
-        {
-          ...beginRequest(),
-          subject_principal_id:
-            'prn_cccccccc-cccc-4ccc-8ccc-cccccccccccc',
-        },
-        ACCESS_TOKEN,
-      ),
-    ).rejects.toMatchObject({ code: 'unauthorized' });
+  it('conflicts when another active Person reuses a completed request ID', async () => {
+    let authorization = AUTHORIZATION;
+    const context = fixture({ authorization: () => authorization });
+    const begun = await begin(context);
+    const request = completeRequest(
+      begun.challenge_attempt_id,
+      begun.challenge_message_ts,
+    );
+    const first = await context.application.complete(request, ACCESS_TOKEN);
+    const auditCount = context.repository.overview().recent_audit.length;
+
+    authorization = OTHER_AUTHORIZATION;
+    let rejected: unknown;
+    try {
+      await context.application.complete(request, ACCESS_TOKEN);
+    } catch (error) {
+      rejected = error;
+    }
+
+    expect(rejected).toMatchObject({
+      code: 'conflict',
+      message:
+        'organization integration command ID was reused with different input',
+    });
+    expect(rejected).not.toMatchObject({
+      identity_link_id: first.identity_link_id,
+    });
+    expect(context.slack.verifyConnection).toHaveBeenCalledTimes(1);
+    expect(context.slack.verifyChannel).toHaveBeenCalledTimes(2);
+    expect(context.slack.postIdentityLinkChallenge).toHaveBeenCalledTimes(1);
+    expect(context.slack.observeIdentityLinkChallenge).toHaveBeenCalledTimes(1);
+    expect(context.repository.overview().recent_audit).toHaveLength(auditCount);
+    expect(first.principal_id).toBe(PRINCIPAL_ID);
+    expect(context.repository.overview().identity_links).toEqual([
+      expect.objectContaining({
+        identity_link_id: first.identity_link_id,
+        membership_id: MEMBERSHIP_ID,
+      }),
+    ]);
+  });
+
+  it('denies an authentication failure before any Slack call', async () => {
+    const context = fixture({
+      authorization: () => {
+        throw new AuthorityOperationError(
+          'unauthorized',
+          'Person session is unauthorized',
+        );
+      },
+    });
+    for (const operation of [
+      () => context.application.begin(beginRequest(), ACCESS_TOKEN),
+      () =>
+        context.application.complete(
+          completeRequest(
+            'cat_cccccccc-cccc-4ccc-8ccc-cccccccccccc',
+            '1755518400.000001',
+          ),
+          ACCESS_TOKEN,
+        ),
+    ]) {
+      await expect(operation()).rejects.toMatchObject({ code: 'unauthorized' });
+    }
     expect(context.slack.verifyConnection).not.toHaveBeenCalled();
+    expect(context.slack.verifyChannel).not.toHaveBeenCalled();
+    expect(context.slack.postIdentityLinkChallenge).not.toHaveBeenCalled();
+    expect(context.slack.observeIdentityLinkChallenge).not.toHaveBeenCalled();
+  });
+
+  it('denies a bearer from another organization before any Slack call', async () => {
+    const context = fixture({
+      authorization: () => ({
+        ...AUTHORIZATION,
+        organization_id: 'org_cccccccc-cccc-4ccc-8ccc-cccccccccccc',
+      }),
+    });
+    for (const operation of [
+      () => context.application.begin(beginRequest(), ACCESS_TOKEN),
+      () =>
+        context.application.complete(
+          completeRequest(
+            'cat_cccccccc-cccc-4ccc-8ccc-cccccccccccc',
+            '1755518400.000001',
+          ),
+          ACCESS_TOKEN,
+        ),
+    ]) {
+      await expect(operation()).rejects.toMatchObject({ code: 'unauthorized' });
+    }
+    expect(context.slack.verifyConnection).not.toHaveBeenCalled();
+    expect(context.slack.verifyChannel).not.toHaveBeenCalled();
+    expect(context.slack.postIdentityLinkChallenge).not.toHaveBeenCalled();
+    expect(context.slack.observeIdentityLinkChallenge).not.toHaveBeenCalled();
   });
 
   it('rechecks the Person after Slack observation and commits nothing after revocation', async () => {

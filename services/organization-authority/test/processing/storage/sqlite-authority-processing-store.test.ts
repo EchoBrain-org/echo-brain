@@ -4,40 +4,22 @@ import { join } from 'node:path';
 import Database from 'better-sqlite3';
 import { afterEach, describe, expect, it } from 'vitest';
 import type { ApprovalRequest } from '../../../src/processing/core/approval/approval-gate.js';
-import type {
-  AdapterConfig,
-  AdapterConfigValidation,
-  AdapterHealth,
-} from '../../../src/processing/core/contracts/adapter.js';
 import type { DecisionSet } from '../../../src/processing/core/contracts/decision.js';
 import type {
   DecisionBrief,
   DeliveryEnvelope,
   DeliveryReceipt,
 } from '../../../src/processing/core/contracts/delivery.js';
-import type {
-  MeetingBatch,
-  MeetingDocument,
-  MeetingPullRequest,
-} from '../../../src/processing/core/contracts/meeting.js';
-import type {
-  DecisionProcessorAdapter,
-  DeliverySurfaceAdapter,
-  MeetingSourceAdapter,
-} from '../../../src/processing/core/ports/adapters.js';
-import {
-  meetingProcessingKey,
-  runCoreCycle,
-} from '../../../src/processing/core/processing/run-core-cycle.js';
+import type { MeetingDocument } from '../../../src/processing/core/contracts/meeting.js';
 import type {
   ApprovalDecisionStore,
   FrozenOrganizationMemberApprovalPresentationContract,
   FrozenSlackApprovalPresentationContract,
 } from '../../../src/processing/adapters/approval-surfaces/slack-reactions/slack-reactions-approval-surface.js';
-import type { FrozenOrganizationRecordEnvelopeStore } from '../../../src/processing/record/adapters/organization-member-record-first-delivery.js';
+import type { FrozenOrganizationRecordEnvelopeStore } from '../../../src/processing/record/adapters/resolved-organization-record-act-writer.js';
 import type { BuiltOrganizationRecordEnvelope } from '../../../src/processing/record/ports.js';
+import type { SlackStoredDelivery } from '../../../src/processing/adapters/delivery-surfaces/slack/slack-delivery-receipt-store.js';
 import {
-  AuthorityProcessingApprovalGate,
   SqliteAuthorityProcessingStore,
   type AuthorityProcessingStoreBinding,
 } from '../../../src/processing/storage/sqlite-authority-processing-store.js';
@@ -161,6 +143,35 @@ function request(
 const SHA256_A = `sha256:${'a'.repeat(64)}`;
 const SHA256_B = `sha256:${'b'.repeat(64)}`;
 
+function slackAttempt(
+  idempotencyKey = 'delivery:test:slack:team-decisions',
+): SlackStoredDelivery & { readonly status: 'unknown' } {
+  return {
+    schema_version: 1,
+    record_type: 'echo-brain.slack-delivery',
+    idempotency_key: idempotencyKey,
+    status: 'unknown',
+    channel_id: null,
+    message_ts: null,
+    recorded_at: '2026-08-18T00:02:00.000Z',
+    message: 'Slack delivery outcome could not be confirmed',
+  };
+}
+
+function slackDelivered(
+  idempotencyKey = 'delivery:test:slack:team-decisions',
+): SlackStoredDelivery & { readonly status: 'delivered' } {
+  return {
+    schema_version: 1,
+    record_type: 'echo-brain.slack-delivery',
+    idempotency_key: idempotencyKey,
+    status: 'delivered',
+    channel_id: 'C123',
+    message_ts: '1700.100000',
+    recorded_at: '2026-08-18T00:02:00.000Z',
+  };
+}
+
 function reviewerPresentationContract(
   overrides: Partial<FrozenSlackApprovalPresentationContract> = {},
 ): FrozenSlackApprovalPresentationContract {
@@ -210,17 +221,18 @@ function signedRecordEnvelope(
   approvalId: string,
   envelopeId = 'rec_00000000-0000-4000-8000-000000000001',
   signature = 'signed-envelope-bytes',
+  eventType: 'approval' | 'rejection' = 'approval',
 ): BuiltOrganizationRecordEnvelope {
   return {
     envelope_id: envelopeId,
     idempotency_key: approvalId,
-    event_type: 'approval',
+    event_type: eventType,
     envelope: {
-      schema_version: 3,
+      schema_version: eventType === 'approval' ? 3 : 1,
       kind: 'echo-organization-record-envelope',
       envelope_id: envelopeId,
       idempotency_key: approvalId,
-      event_type: 'approval',
+      event_type: eventType,
       integrity: { signature_der_base64: signature },
     } as unknown as BuiltOrganizationRecordEnvelope['envelope'],
   };
@@ -285,17 +297,323 @@ function setup(now = '2026-08-18T00:00:00.000Z') {
   };
 }
 
-function validConfig(config: AdapterConfig): AdapterConfigValidation {
-  return config.adapter_id.length > 0
-    ? { ok: true, errors: [] }
-    : { ok: false, errors: ['adapter_id is required'] };
+async function resolvedRecordFixture(status: 'approved' | 'rejected' = 'approved') {
+  const context = setup();
+  const store = context.create();
+  const input = meeting();
+  const set = decisions(input);
+  const processingKey = `recovery-record-${Math.random()}`;
+  await store.admitAndSaveMeeting(input, processingKey);
+  await store.saveDecisionSet(processingKey, input, set);
+  const staged = await store.ensureRequested(
+    request(processingKey, input, set, '2026-08-18T00:01:00.000Z', 'recovery-brief'),
+  );
+  await store.resolve({
+    approvalId: staged.approval_id,
+    status,
+    reviewedBy: 'Reviewer',
+    surface: 'slack-authority-v1',
+    metadata: {},
+    reviewedAt: '2026-08-18T00:02:00.000Z',
+  });
+  return { context, store, processingKey, approvalId: staged.approval_id };
 }
 
-async function healthy(): Promise<AdapterHealth> {
-  return { status: 'healthy', checked_at: '2026-08-18T00:00:00.000Z' };
+function revokeSourceCustodian(path: string): void {
+  const revoke = new Database(path);
+  revoke
+    .prepare(
+      `UPDATE authority_memberships
+          SET status = 'revoked', revoked_at = ?, revocation_reason = ?
+        WHERE membership_id = ?`,
+    )
+    .run(
+      '2026-08-18T00:03:00.000Z',
+      'source custody ended after terminal resolution',
+      BINDING.membership_id,
+    );
+  revoke.close();
+}
+
+function setMemberExclusionFixture(
+  path: string,
+  selector:
+    | {
+        readonly scope: 'source';
+        readonly source_adapter_id: string;
+        readonly source_instance_id: string;
+      }
+    | {
+        readonly scope: 'meeting';
+        readonly source_adapter_id: string;
+        readonly source_instance_id: string;
+        readonly external_id: string;
+      },
+  excluded: boolean,
+): void {
+  const database = new Database(path);
+  database.pragma('foreign_keys = ON');
+  const externalId = selector.scope === 'source' ? '' : selector.external_id;
+  if (excluded) {
+    database
+      .prepare(
+        `INSERT INTO authority_processing_member_exclusions (
+           organization_id, principal_id, membership_id, membership_type,
+           source_adapter_id, source_instance_id, scope_kind, external_id,
+           created_at
+         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+         ON CONFLICT (
+           membership_id, source_adapter_id, source_instance_id,
+           scope_kind, external_id
+         ) DO NOTHING`,
+      )
+      .run(
+        BINDING.organization_id,
+        BINDING.principal_id,
+        BINDING.membership_id,
+        BINDING.membership_type,
+        selector.source_adapter_id,
+        selector.source_instance_id,
+        selector.scope,
+        externalId,
+        '2026-08-18T00:00:00.000Z',
+      );
+  } else {
+    database
+      .prepare(
+        `DELETE FROM authority_processing_member_exclusions
+          WHERE membership_id = ? AND source_adapter_id = ?
+            AND source_instance_id = ? AND scope_kind = ? AND external_id = ?`,
+      )
+      .run(
+        BINDING.membership_id,
+        selector.source_adapter_id,
+        selector.source_instance_id,
+        selector.scope,
+        externalId,
+      );
+  }
+  database.close();
 }
 
 describe('SqliteAuthorityProcessingStore', () => {
+  it('atomically activates one exact live source and returns the persisted cursor on retry', async () => {
+    const context = setup();
+    const sourceConfiguration = {
+      owner_email_sha256: `sha256:${'c'.repeat(64)}` as const,
+      credential_scope: 'organization' as const,
+      credential_reference_sha256: `sha256:${'d'.repeat(64)}` as const,
+    };
+    const first = new SqliteAuthorityProcessingStore(context.path, BINDING, {
+      bindingMode: 'provision', sourceConfiguration, fileMustExist: true,
+      now: () => '2026-08-18T04:00:00.000Z',
+    });
+    const cursor = 'live-only-cursor';
+    await expect(first.activateLiveSource(SOURCE, (at) => {
+      expect(at).toBe('2026-08-18T04:00:00.000Z');
+      return cursor;
+    }, (value) => expect(value).toBe(cursor))).resolves.toMatchObject({
+      outcome: 'activated', cursor,
+      source_binding: { owner_binding: 'provisioned', configuration_binding: 'provisioned' },
+    });
+    first.close();
+
+    const retried = new SqliteAuthorityProcessingStore(context.path, BINDING, {
+      bindingMode: 'provision', sourceConfiguration, fileMustExist: true,
+      now: () => { throw new Error('must not sample a second cutoff'); },
+    });
+    await expect(retried.activateLiveSource(SOURCE, () => {
+      throw new Error('must not create a second cursor');
+    }, (value) => expect(value).toBe(cursor))).resolves.toMatchObject({
+      outcome: 'already_activated', cursor,
+      source_binding: { owner_binding: 'existing', configuration_binding: 'existing' },
+    });
+    retried.close();
+  });
+
+  it('refuses changed source ownership or unfinished historical state during activation', async () => {
+    const context = setup();
+    const sourceConfiguration = {
+      owner_email_sha256: `sha256:${'c'.repeat(64)}` as const,
+      credential_scope: 'organization' as const,
+      credential_reference_sha256: `sha256:${'d'.repeat(64)}` as const,
+    };
+    const first = new SqliteAuthorityProcessingStore(context.path, BINDING, {
+      bindingMode: 'provision', sourceConfiguration, fileMustExist: true,
+    });
+    await first.initialize();
+    await first.admitAndSaveMeeting(meeting(), 'unfinished-before-activation');
+    first.close();
+    const activation = new SqliteAuthorityProcessingStore(context.path, BINDING, {
+      bindingMode: 'provision', sourceConfiguration, fileMustExist: true,
+    });
+    await expect(activation.activateLiveSource(SOURCE, () => 'cursor', () => undefined)).rejects.toThrow('zero unfinished candidates');
+    activation.close();
+  });
+
+  it('rolls back activation when an existing cursor is not live-only', async () => {
+    const context = setup();
+    const sourceConfiguration = {
+      owner_email_sha256: `sha256:${'c'.repeat(64)}` as const,
+      credential_scope: 'organization' as const,
+      credential_reference_sha256: `sha256:${'d'.repeat(64)}` as const,
+    };
+    const seeded = new SqliteAuthorityProcessingStore(context.path, BINDING, {
+      bindingMode: 'provision', sourceConfiguration, fileMustExist: true,
+    });
+    await seeded.initialize();
+    await seeded.setSourceCursor(SOURCE, 'initial-history-pagination-cursor');
+    seeded.close();
+    const activation = new SqliteAuthorityProcessingStore(context.path, BINDING, {
+      bindingMode: 'provision', sourceConfiguration, fileMustExist: true,
+    });
+    await expect(activation.activateLiveSource(SOURCE, () => 'new-live-cursor', () => {
+      throw new Error('not a live-only cursor');
+    })).rejects.toThrow('not a live-only cursor');
+    activation.close();
+    const database = new Database(context.path, { readonly: true });
+    expect(database.prepare(
+      'SELECT cursor FROM authority_processing_source_cursors',
+    ).get()).toEqual({ cursor: 'initial-history-pagination-cursor' });
+    database.close();
+  });
+
+  it('rolls back a missing configuration when prior source state exists', async () => {
+    const context = setup();
+    const seeded = new SqliteAuthorityProcessingStore(context.path, BINDING, {
+      bindingMode: 'provision', fileMustExist: true,
+    });
+    await seeded.initialize();
+    await seeded.setSourceCursor(SOURCE, 'unconfigured-source-state');
+    seeded.close();
+    const activation = new SqliteAuthorityProcessingStore(context.path, BINDING, {
+      bindingMode: 'provision',
+      sourceConfiguration: {
+        owner_email_sha256: `sha256:${'c'.repeat(64)}`,
+        credential_scope: 'organization',
+        credential_reference_sha256: `sha256:${'d'.repeat(64)}`,
+      },
+      fileMustExist: true,
+    });
+    await expect(activation.activateLiveSource(SOURCE, () => 'new-live-cursor', () => undefined)).rejects.toThrow(
+      'cannot be retroactively bound',
+    );
+    activation.close();
+    const database = new Database(context.path, { readonly: true });
+    expect(database.prepare(
+      'SELECT COUNT(*) AS count FROM authority_processing_source_configuration_bindings',
+    ).get()).toEqual({ count: 0 });
+    database.close();
+  });
+
+  it('atomically claims Slack delivery once across independent store handles', async () => {
+    const context = setup();
+    const first = context.create();
+    const second = context.create();
+    const attempt = slackAttempt();
+
+    const [firstClaim, secondClaim] = await Promise.all([
+      first.claim(attempt),
+      second.claim(attempt),
+    ]);
+
+    expect(firstClaim).toEqual({ kind: 'claimed' });
+    expect(secondClaim).toEqual({ kind: 'existing', record: attempt });
+    const database = new Database(context.path, { readonly: true });
+    expect(
+      database
+        .prepare(
+          `SELECT idempotency_key, status, channel_id, message_ts, message
+             FROM authority_processing_slack_delivery_attempts`,
+        )
+        .all(),
+    ).toEqual([
+      {
+        idempotency_key: attempt.idempotency_key,
+        status: 'unknown',
+        channel_id: null,
+        message_ts: null,
+        message: attempt.message,
+      },
+    ]);
+    database.close();
+    first.close();
+    second.close();
+  });
+
+  it('recovers unknown and delivered Slack outcomes across store restarts', async () => {
+    const context = setup();
+    const attempt = slackAttempt();
+    const delivered = slackDelivered();
+    const first = context.create();
+    await expect(first.claim(attempt)).resolves.toEqual({ kind: 'claimed' });
+    first.close();
+
+    const second = context.create();
+    await expect(second.claim(attempt)).resolves.toEqual({
+      kind: 'existing',
+      record: attempt,
+    });
+    await second.recordOutcome(delivered);
+    await second.recordOutcome(delivered);
+    second.close();
+
+    const restarted = context.create();
+    await expect(restarted.claim(attempt)).resolves.toEqual({
+      kind: 'existing',
+      record: delivered,
+    });
+    await expect(
+      restarted.clearAttempt(attempt.idempotency_key),
+    ).rejects.toThrow('not an active unknown claim');
+    await expect(
+      restarted.recordOutcome({ ...delivered, message_ts: '1700.200000' }),
+    ).rejects.toThrow('conflicts with durable state');
+    restarted.close();
+  });
+
+  it('finishes an initialized Slack attempt after its source custodian is revoked', async () => {
+    const context = setup();
+    const store = context.create();
+    const attempt = slackAttempt('delivery:test:revoked-after-claim');
+    const delivered = slackDelivered(attempt.idempotency_key);
+    await expect(store.claim(attempt)).resolves.toEqual({ kind: 'claimed' });
+
+    const revoke = new Database(context.path);
+    revoke.pragma('foreign_keys = ON');
+    revoke
+      .prepare(
+        `UPDATE authority_memberships
+            SET status = 'revoked', revoked_at = ?, revocation_reason = ?
+          WHERE membership_id = ?`,
+      )
+      .run(
+        '2026-08-18T00:03:00.000Z',
+        'source custody ended after approval',
+        BINDING.membership_id,
+      );
+    revoke.close();
+
+    await expect(store.recordOutcome(delivered)).resolves.toBeUndefined();
+    await expect(store.claim(attempt)).resolves.toEqual({
+      kind: 'existing',
+      record: delivered,
+    });
+    await expect(store.healthCheck()).resolves.toBeUndefined();
+    store.close();
+  });
+
+  it('clears only a known-no-write unknown attempt and permits a fresh claim', async () => {
+    const context = setup();
+    const store = context.create();
+    const attempt = slackAttempt('delivery:test:known-no-write');
+    await store.healthCheck();
+    await expect(store.claim(attempt)).resolves.toEqual({ kind: 'claimed' });
+    await store.clearAttempt(attempt.idempotency_key);
+    await expect(store.claim(attempt)).resolves.toEqual({ kind: 'claimed' });
+    store.close();
+  });
+
   it('requires an existing exact binding without claiming unknown or cross-owned sources', async () => {
     const context = setup();
     const owner = context.create();
@@ -559,7 +877,7 @@ describe('SqliteAuthorityProcessingStore', () => {
     store.close();
   });
 
-  it('applies exact own source/meeting exclusions atomically and stores no exclusion content', async () => {
+  it('enforces persisted exact source and meeting exclusions during first admission', async () => {
     const context = setup();
     const store = context.create();
     await store.initialize();
@@ -569,9 +887,7 @@ describe('SqliteAuthorityProcessingStore', () => {
       source_instance_id: SOURCE.instance_id,
       external_id: meeting(1).provenance.external_id,
     };
-    expect(await store.addOwnExclusion(exact)).toBe(true);
-    expect(await store.addOwnExclusion(exact)).toBe(false);
-    expect(await store.listOwnExclusions()).toEqual([exact]);
+    setMemberExclusionFixture(context.path, exact, true);
     expect(await store.admitAndSaveMeeting(meeting(1), 'excluded-one')).toBe(
       'excluded',
     );
@@ -590,13 +906,12 @@ describe('SqliteAuthorityProcessingStore', () => {
       source_adapter_id: SOURCE.adapter_id,
       source_instance_id: SOURCE.instance_id,
     };
-    expect(await store.addOwnExclusion(wholeSource)).toBe(true);
+    setMemberExclusionFixture(context.path, wholeSource, true);
     expect(await store.admitAndSaveMeeting(meeting(3), 'excluded-three')).toBe(
       'excluded',
     );
-    expect(await store.removeOwnExclusion(wholeSource)).toBe(true);
-    expect(await store.removeOwnExclusion(exact)).toBe(true);
-    expect(await store.listOwnExclusions()).toEqual([]);
+    setMemberExclusionFixture(context.path, wholeSource, false);
+    setMemberExclusionFixture(context.path, exact, false);
 
     const database = new Database(context.path, { readonly: true });
     const columns = database.pragma(
@@ -634,7 +949,7 @@ describe('SqliteAuthorityProcessingStore', () => {
       external_id: first.provenance.external_id,
     };
 
-    await store.addOwnExclusion(firstExclusion);
+    setMemberExclusionFixture(context.path, firstExclusion, true);
     await expect(
       store.admitAndSaveMeeting(first, 'excluded-before-admission'),
     ).resolves.toBe('excluded');
@@ -646,10 +961,14 @@ describe('SqliteAuthorityProcessingStore', () => {
     await expect(
       store.admitAndSaveMeeting(second, 'admitted-before-exclusion'),
     ).resolves.toBe('saved');
-    await store.addOwnExclusion({
-      ...firstExclusion,
-      external_id: second.provenance.external_id,
-    });
+    setMemberExclusionFixture(
+      context.path,
+      {
+        ...firstExclusion,
+        external_id: second.provenance.external_id,
+      },
+      true,
+    );
     await expect(
       store.admitAndSaveMeeting(second, 'admitted-before-exclusion'),
     ).resolves.toBe('saved');
@@ -729,13 +1048,10 @@ describe('SqliteAuthorityProcessingStore', () => {
         '2026-08-18T00:01:00.000Z',
       ),
     );
-    expect(await store.listPendingApprovals()).toHaveLength(1);
-
     await expect(store.markProcessed(processingKey)).resolves.toBeUndefined();
     await expect(store.markProcessed(processingKey)).resolves.toBeUndefined();
     expect(await store.hasProcessed(processingKey)).toBe(true);
     expect(await store.countUnfinishedCandidates()).toBe(0);
-    expect(await store.listPendingApprovals()).toEqual([]);
     expect(
       await store.cleanupTerminalCandidates({
         now: '2026-09-16T23:59:59.999Z',
@@ -830,57 +1146,6 @@ describe('SqliteAuthorityProcessingStore', () => {
       ]),
     );
     database.close();
-  });
-
-  it('pages at 100 by the first actual request time and approval id', async () => {
-    const context = setup();
-    const store = context.create();
-    await store.initialize();
-    for (let index = 0; index < 105; index += 1) {
-      const input = meeting(index + 1);
-      const set = decisions(input);
-      const processingKey = `pending-${index.toString().padStart(3, '0')}`;
-      await store.admitAndSaveMeeting(input, processingKey);
-      await store.saveDecisionSet(processingKey, input, set);
-      await store.stageApprovalRequest(
-        request(
-          processingKey,
-          input,
-          set,
-          new Date(Date.UTC(2026, 7, 18, 1, 0, 104 - index)).toISOString(),
-        ),
-      );
-    }
-    await store.admitAndSaveMeeting(meeting(106), 'raw-without-request');
-
-    const first = await store.listPendingApprovals();
-    expect(first).toHaveLength(100);
-    expect(first[0]?.processing_key).toBe('pending-104');
-    expect(first[99]?.processing_key).toBe('pending-005');
-    const last = first.at(-1)!;
-    const second = await store.listPendingApprovals({
-      after: {
-        requested_at: last.requested_at,
-        approval_id: last.approval_id,
-        processing_key: last.processing_key,
-      },
-    });
-    expect(second.map(({ processing_key }) => processing_key)).toEqual([
-      'pending-004',
-      'pending-003',
-      'pending-002',
-      'pending-001',
-      'pending-000',
-    ]);
-    expect(
-      [...first, ...second].some(
-        ({ processing_key }) => processing_key === 'raw-without-request',
-      ),
-    ).toBe(false);
-    await expect(store.listPendingApprovals({ limit: 101 })).rejects.toThrow(
-      '1 through 100',
-    );
-    store.close();
   });
 
   it('implements the Slack store port with create-once contracts and publications', async () => {
@@ -1079,8 +1344,6 @@ describe('SqliteAuthorityProcessingStore', () => {
         metadata,
       }),
     ).rejects.toThrow('different terminal resolution');
-    store.close();
-
     const reopened = context.create();
     await reopened.initialize();
     expect(reopened.readApprovalResolutionMetadata(staged.approval_id)).toEqual({
@@ -1110,6 +1373,14 @@ describe('SqliteAuthorityProcessingStore', () => {
         'frozen-record-brief',
       ),
     );
+    await store.resolve({
+      approvalId: staged.approval_id,
+      status: 'approved',
+      reviewedBy: 'Reviewer',
+      surface: 'slack-authority-v1',
+      metadata: {},
+      reviewedAt: '2026-08-18T00:02:00.000Z',
+    });
     const first = signedRecordEnvelope(staged.approval_id);
     const divergent = signedRecordEnvelope(
       staged.approval_id,
@@ -1158,8 +1429,6 @@ describe('SqliteAuthorityProcessingStore', () => {
         record: divergent,
       }),
     ).rejects.toThrow('different frozen record envelope');
-    store.close();
-
     const reopened = context.create();
     const reopenedPort: FrozenOrganizationRecordEnvelopeStore = reopened;
     let restartCreates = 0;
@@ -1171,80 +1440,249 @@ describe('SqliteAuthorityProcessingStore', () => {
     ).resolves.toEqual(first);
     expect(restartCreates).toBe(0);
     reopened.close();
-  });
 
-  it('stages a normal core pending cycle and preserves the first request across retry ids and times', async () => {
-    const context = setup();
-    const store = context.create();
-    const input = meeting();
-    const source: MeetingSourceAdapter = {
-      identity: SOURCE,
-      validateConfig: validConfig,
-      healthCheck: healthy,
-      pull: async (_request: MeetingPullRequest): Promise<MeetingBatch> => ({
-        meetings: [input],
-      }),
-    };
-    const processor: DecisionProcessorAdapter = {
-      identity: PROCESSOR,
-      validateConfig: validConfig,
-      healthCheck: healthy,
-      extract: async () => decisions(input),
-    };
-    const gate = new AuthorityProcessingApprovalGate(store);
-    const delivery: DeliverySurfaceAdapter = {
-      identity: {
-        kind: 'delivery-surface',
-        adapter_id: 'delivery-alpha',
-        instance_id: 'primary',
-        version: '1.0.0',
-      },
-      destination: {
-        adapter_id: 'delivery-alpha',
-        instance_id: 'primary',
-        external_id: 'channel-1',
-      },
-      validateConfig: validConfig,
-      healthCheck: healthy,
-      publish: async () => {
-        throw new Error('pending approval must not publish');
-      },
-    };
-    const processingKey = meetingProcessingKey(input, processor);
-
-    const first = await runCoreCycle({
-      meetingSource: source,
-      decisionProcessor: processor,
-      approvalGate: gate,
-      deliverySurfaces: [delivery],
-      state: store,
-      now: () => '2026-08-18T02:00:00.000Z',
-      createId: () => 'first-brief-id',
-    });
-    expect(first).toMatchObject({ ok: true, meetings_pending: 1 });
-    const firstQueue = await store.listPendingApprovals();
-    expect(firstQueue).toHaveLength(1);
-    expect(firstQueue[0]).toMatchObject({
-      processing_key: processingKey,
-      requested_at: '2026-08-18T02:00:00.000Z',
-      first_request: {
-        requested_at: '2026-08-18T02:00:00.000Z',
-        brief: { id: 'first-brief-id' },
-      },
-    });
-
-    const retried = await runCoreCycle({
-      meetingSource: source,
-      decisionProcessor: processor,
-      approvalGate: gate,
-      deliverySurfaces: [delivery],
-      state: store,
-      now: () => '2026-08-18T03:00:00.000Z',
-      createId: () => 'retry-brief-id',
-    });
-    expect(retried).toMatchObject({ ok: true, meetings_pending: 1 });
-    const retryQueue = await store.listPendingApprovals();
-    expect(retryQueue).toEqual(firstQueue);
     store.close();
   });
+
+  it('rejects a frozen record event that conflicts with the terminal decision', async () => {
+    const approved = await resolvedRecordFixture();
+    await expect(
+      (approved.store as FrozenOrganizationRecordEnvelopeStore).getOrCreate(
+        approved.approvalId,
+        async () => signedRecordEnvelope(approved.approvalId, undefined, undefined, 'rejection'),
+      ),
+    ).rejects.toThrow('does not match terminal resolution');
+    approved.store.close();
+
+    const rejected = await resolvedRecordFixture('rejected');
+    await expect(
+      (rejected.store as FrozenOrganizationRecordEnvelopeStore).getOrCreate(
+        rejected.approvalId,
+        async () => signedRecordEnvelope(rejected.approvalId),
+      ),
+    ).rejects.toThrow('does not match terminal resolution');
+    rejected.store.close();
+  });
+
+  it('freezes the first terminal record after custody is revoked in an initialized store', async () => {
+    const { context, store, processingKey, approvalId: id } = await resolvedRecordFixture();
+    const first = signedRecordEnvelope(id);
+    revokeSourceCustodian(context.path);
+    await expect(
+      (store as FrozenOrganizationRecordEnvelopeStore).getOrCreate(id, async () => first),
+    ).resolves.toEqual(first);
+    expect(store.readTerminalRecordAct(processingKey)).toMatchObject({
+      decision: { status: 'approved' },
+    });
+    await expect(store.getCandidate(processingKey)).rejects.toThrow(
+      'not bound to the exact active membership',
+    );
+    store.close();
+  });
+
+  it('reopens only terminal-record recovery after custody revocation', async () => {
+    const { context, store, processingKey, approvalId: id } = await resolvedRecordFixture();
+    const first = signedRecordEnvelope(id);
+    expect(() => store.listTerminalRecordRecoveryPage()).toThrow(
+      'terminal-record recovery is not initialized',
+    );
+    revokeSourceCustodian(context.path);
+    store.close();
+    const recovered = context.create();
+    await recovered.initializeTerminalRecordRecovery();
+    expect(recovered.listTerminalRecordRecoveryPage()).toEqual([
+      {
+        resolved_at: '2026-08-18T00:02:00.000Z',
+        processing_key: processingKey,
+      },
+    ]);
+    await expect(
+      (recovered as FrozenOrganizationRecordEnvelopeStore).getOrCreate(id, async () => first),
+    ).resolves.toEqual(first);
+    await expect(
+      (recovered as FrozenOrganizationRecordEnvelopeStore).getOrCreate(
+        id,
+        async () => signedRecordEnvelope(id, 'rec_00000000-0000-4000-8000-000000000002'),
+      ),
+    ).resolves.toEqual(first);
+    await expect(recovered.getCandidate(processingKey)).rejects.toThrow(
+      'cannot enter normal processing mode',
+    );
+    await expect(recovered.getApproval(processingKey)).rejects.toThrow(
+      'cannot enter normal processing mode',
+    );
+    await expect(
+      recovered.saveApproval(processingKey, {
+        status: 'pending',
+        reviewed_at: null,
+        reviewed_by: null,
+        reason: null,
+        approved_brief: null,
+      }),
+    ).rejects.toThrow('cannot enter normal processing mode');
+    await expect(recovered.markProcessed(processingKey)).rejects.toThrow(
+      'cannot enter normal processing mode',
+    );
+    await expect(recovered.getSourceCursor(SOURCE)).rejects.toThrow(
+      'cannot enter normal processing mode',
+    );
+    await expect(
+      recovered.setSourceCursor(SOURCE, 'recovery-must-not-move-cursor'),
+    ).rejects.toThrow('cannot enter normal processing mode');
+    recovered.close();
+  });
+
+  it('enumerates only complete unprocessed terminal acts for the exact source', async () => {
+    const {
+      context,
+      store,
+      processingKey: eligibleKey,
+    } = await resolvedRecordFixture();
+
+    const pendingMeeting = meeting(2);
+    const pendingDecisions = decisions(pendingMeeting);
+    await store.admitAndSaveMeeting(pendingMeeting, 'recovery-pending');
+    await store.saveDecisionSet(
+      'recovery-pending',
+      pendingMeeting,
+      pendingDecisions,
+    );
+    await store.ensureRequested(
+      request(
+        'recovery-pending',
+        pendingMeeting,
+        pendingDecisions,
+        '2026-08-18T00:01:01.000Z',
+      ),
+    );
+
+    const missingMetadataMeeting = meeting(3);
+    const missingMetadataDecisions = decisions(missingMetadataMeeting);
+    const missingMetadataRequest = request(
+      'recovery-missing-metadata',
+      missingMetadataMeeting,
+      missingMetadataDecisions,
+      '2026-08-18T00:01:02.000Z',
+    );
+    await store.admitAndSaveMeeting(
+      missingMetadataMeeting,
+      'recovery-missing-metadata',
+    );
+    await store.saveDecisionSet(
+      'recovery-missing-metadata',
+      missingMetadataMeeting,
+      missingMetadataDecisions,
+    );
+    await store.ensureRequested(missingMetadataRequest);
+    await store.saveApproval('recovery-missing-metadata', {
+      status: 'approved',
+      reviewed_at: '2026-08-18T00:02:02.000Z',
+      reviewed_by: 'Reviewer',
+      reason: null,
+      approved_brief: missingMetadataRequest.brief,
+    });
+
+    const processedMeeting = meeting(4);
+    const processedDecisions = decisions(processedMeeting);
+    await store.admitAndSaveMeeting(processedMeeting, 'recovery-processed');
+    await store.saveDecisionSet(
+      'recovery-processed',
+      processedMeeting,
+      processedDecisions,
+    );
+    const processed = await store.ensureRequested(
+      request(
+        'recovery-processed',
+        processedMeeting,
+        processedDecisions,
+        '2026-08-18T00:01:03.000Z',
+      ),
+    );
+    await store.resolve({
+      approvalId: processed.approval_id,
+      status: 'approved',
+      reviewedBy: 'Reviewer',
+      surface: 'slack-authority-v1',
+      metadata: {},
+      reviewedAt: '2026-08-18T00:02:03.000Z',
+    });
+    await store.markProcessed('recovery-processed');
+
+    const foreignBinding: AuthorityProcessingStoreBinding = {
+      ...BINDING,
+      principal_id: 'prn_00000000-0000-4000-8000-000000000002',
+      membership_id: 'mem_00000000-0000-4000-8000-000000000002',
+      source_instance_id: 'foreign',
+    };
+    const database = new Database(context.path);
+    database.exec(`
+      INSERT INTO authority_principals (
+        principal_id, organization_id, display_name, provisioned_at
+      ) VALUES (
+        '${foreignBinding.principal_id}', '${BINDING.organization_id}',
+        'Foreign Source Owner', '2026-08-18T00:00:00.000Z'
+      );
+      INSERT INTO authority_memberships (
+        membership_id, organization_id, principal_id, membership_type,
+        status, provisioned_at, revoked_at, revocation_reason,
+        admin_command_id, admin_command_sha256
+      ) VALUES (
+        '${foreignBinding.membership_id}', '${BINDING.organization_id}',
+        '${foreignBinding.principal_id}', 'employee', 'active',
+        '2026-08-18T00:00:00.000Z', NULL, NULL,
+        'adm_00000000-0000-4000-8000-000000000002',
+        'sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc'
+      );
+    `);
+    database.close();
+    const foreign = new SqliteAuthorityProcessingStore(
+      context.path,
+      foreignBinding,
+      { bindingMode: 'provision', fileMustExist: true },
+    );
+    const foreignMeeting: MeetingDocument = {
+      ...meeting(5),
+      provenance: {
+        ...meeting(5).provenance,
+        source: { ...SOURCE, instance_id: 'foreign' },
+      },
+    };
+    const foreignDecisions = decisions(foreignMeeting);
+    await foreign.admitAndSaveMeeting(foreignMeeting, 'recovery-foreign');
+    await foreign.saveDecisionSet(
+      'recovery-foreign',
+      foreignMeeting,
+      foreignDecisions,
+    );
+    const foreignRequest = await foreign.ensureRequested(
+      request(
+        'recovery-foreign',
+        foreignMeeting,
+        foreignDecisions,
+        '2026-08-18T00:01:04.000Z',
+      ),
+    );
+    await foreign.resolve({
+      approvalId: foreignRequest.approval_id,
+      status: 'approved',
+      reviewedBy: 'Reviewer',
+      surface: 'slack-authority-v1',
+      metadata: {},
+      reviewedAt: '2026-08-18T00:02:04.000Z',
+    });
+    foreign.close();
+
+    revokeSourceCustodian(context.path);
+    store.close();
+    const recovery = context.create();
+    await recovery.initializeTerminalRecordRecovery();
+    expect(recovery.listTerminalRecordRecoveryPage()).toEqual([
+      {
+        resolved_at: '2026-08-18T00:02:00.000Z',
+        processing_key: eligibleKey,
+      },
+    ]);
+    recovery.close();
+  });
+
 });

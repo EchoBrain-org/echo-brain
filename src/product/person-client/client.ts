@@ -199,10 +199,7 @@ export class PersonClient {
   async reviewerRecentDecisions() {
     const stored = await this.accessSession();
     return await this.authority(stored.authority_origin).reviewerRecentDecisions(
-      createPersonReviewerRecentDecisionsRequest(
-        stored,
-        this.requestId('rrd'),
-      ),
+      createPersonReviewerRecentDecisionsRequest(stored),
       stored.session.access_token,
     );
   }
@@ -210,11 +207,7 @@ export class PersonClient {
   async readableSearch(query: string) {
     const stored = await this.accessSession();
     return await this.authority(stored.authority_origin).readableSearch(
-      createPersonReadableSearchRequest(
-        stored,
-        this.requestId('osq'),
-        query,
-      ),
+      createPersonReadableSearchRequest(stored, query),
       stored.session.access_token,
     );
   }
@@ -260,7 +253,6 @@ export class PersonClient {
         stored.authority_origin,
       ).beginSlackLink(
         createPersonSlackLinkBeginRequest(
-          stored,
           this.requestId('psb'),
           challengeCode,
         ),
@@ -280,7 +272,6 @@ export class PersonClient {
     const stored = await this.accessSession();
     return await this.authority(stored.authority_origin).completeSlackLink(
       createPersonSlackLinkCompleteRequest(
-        stored,
         this.requestId('psc'),
         input,
       ),

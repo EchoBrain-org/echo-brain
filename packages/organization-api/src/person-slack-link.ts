@@ -5,10 +5,6 @@ import type {
   OrganizationPersonSlackLinkCompleteRequestV2,
   OrganizationPersonSlackLinkResultV2,
 } from './contracts.js';
-import {
-  ORGANIZATION_API_PERSON_SLACK_LINK_CHALLENGES_PATH,
-  ORGANIZATION_API_PERSON_SLACK_LINK_COMPLETIONS_PATH,
-} from './http.js';
 import { isCanonicalOrganizationSlackLinkChallengeCode } from './slack-link-challenge-code.js';
 import {
   asRecord,
@@ -20,43 +16,13 @@ import {
   fail,
 } from './validation.js';
 
-const PERSON_KEYS = [
-  'schema_version',
-  'kind',
-  'request_id',
-  'authority_id',
-  'organization_id',
-  'subject_principal_id',
-  'http_method',
-  'http_path',
-] as const;
-
-function validatePersonIdentity(
-  record: Record<string, unknown>,
-  label: string,
-  prefix: 'psb' | 'psc',
-): void {
-  assertId(record.request_id, prefix, `${label} request_id`);
-  assertId(record.authority_id, 'oau', `${label} authority_id`);
-  assertId(record.organization_id, 'org', `${label} organization_id`);
-  assertId(record.subject_principal_id, 'prn', `${label} subject_principal_id`);
-  if (record.http_method !== 'POST') fail(`${label} HTTP method is unsupported`);
-}
-
 export function validateOrganizationPersonSlackLinkBeginRequest(
   value: unknown,
 ): OrganizationPersonSlackLinkBeginRequestV2 {
   const label = 'Person Slack link begin request';
   const record = asRecord(value, label);
-  assertExactKeys(record, [...PERSON_KEYS, 'challenge_code_sha256'], label);
-  if (
-    record.schema_version !== 2 ||
-    record.kind !== 'echo-organization-person-slack-link-begin-request' ||
-    record.http_path !== ORGANIZATION_API_PERSON_SLACK_LINK_CHALLENGES_PATH
-  ) {
-    fail(`${label} version, kind, or path is unsupported`);
-  }
-  validatePersonIdentity(record, label, 'psb');
+  assertExactKeys(record, ['request_id', 'challenge_code_sha256'], label);
+  assertId(record.request_id, 'psb', `${label} request_id`);
   assertDigest(record.challenge_code_sha256, `${label} challenge_code_sha256`);
   return record as unknown as OrganizationPersonSlackLinkBeginRequestV2;
 }
@@ -69,21 +35,14 @@ export function validateOrganizationPersonSlackLinkCompleteRequest(
   assertExactKeys(
     record,
     [
-      ...PERSON_KEYS,
+      'request_id',
       'challenge_attempt_id',
       'challenge_message_ts',
       'challenge_code',
     ],
     label,
   );
-  if (
-    record.schema_version !== 2 ||
-    record.kind !== 'echo-organization-person-slack-link-complete-request' ||
-    record.http_path !== ORGANIZATION_API_PERSON_SLACK_LINK_COMPLETIONS_PATH
-  ) {
-    fail(`${label} version, kind, or path is unsupported`);
-  }
-  validatePersonIdentity(record, label, 'psc');
+  assertId(record.request_id, 'psc', `${label} request_id`);
   assertId(record.challenge_attempt_id, 'cat', `${label} challenge_attempt_id`);
   assertPatternString(
     record.challenge_message_ts,

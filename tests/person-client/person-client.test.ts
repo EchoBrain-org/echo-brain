@@ -7,6 +7,7 @@ import { canonicalJson, p256KeyId } from '@echo-brain/federation-protocol';
 import {
   ORGANIZATION_RECENT_DECISIONS_POLICY_ID,
   ORGANIZATION_RECENT_DECISIONS_WITNESS,
+  organizationSlackLinkChallengeCodeSha256,
 } from '@echo-brain/organization-api';
 import type { OrganizationAuthorityDescriptorV1 } from '@echo-brain/organization-protocol';
 import { describe, expect, it } from 'vitest';
@@ -169,6 +170,168 @@ describe('Person client', () => {
       expect(client.sessionSummary().access_expires_at).toBe(
         ROTATED_SESSION.access_expires_at,
       );
+    });
+  });
+
+  it('sends semantic-only reviewer-recent and readable-search bodies', async () => {
+    await withHome(async (home) => {
+      const authority = authorityDescriptor();
+      const observed: Array<{ path: string; body: unknown }> = [];
+      const client = new PersonClient({
+        home_directory: home,
+        now: () => NOW,
+        fetch: async (input, init) => {
+          const path = new URL(String(input)).pathname;
+          if (path === '/v1/authority-descriptor') {
+            return json({ authority_descriptor: authority });
+          }
+          const body = JSON.parse(String(init?.body)) as unknown;
+          observed.push({ path, body });
+          expect(new Headers(init?.headers).get('authorization')).toBe(
+            `Bearer ${ROTATED_SESSION.access_token}`,
+          );
+          if (path === '/v2/reviewer-recent-decisions') {
+            return json({
+              schema_version: 1,
+              items: [],
+              policy_id: 'restricted-reviewer-v1',
+              witness:
+                'Allowed by restricted-reviewer-v1 because every returned item records you as its approving reviewer and that exact reviewer membership is currently active.',
+            });
+          }
+          expect(path).toBe('/v2/readable-search');
+          return json({
+            schema_version: 1,
+            contract_id: 'permission-aware-readable-search-v1',
+            items: [],
+          });
+        },
+      });
+
+      await client.installSession('https://authority.example', ROTATED_SESSION);
+      await client.reviewerRecentDecisions();
+      await client.readableSearch('pricing');
+
+      expect(observed).toEqual([
+        {
+          path: '/v2/reviewer-recent-decisions',
+          body: { subject_principal_id: SESSION.principal_id },
+        },
+        {
+          path: '/v2/readable-search',
+          body: {
+            query: 'pricing',
+            subject_principal_id: SESSION.principal_id,
+          },
+        },
+      ]);
+      for (const request of observed) {
+        expect(request.body).not.toHaveProperty('schema_version');
+        expect(request.body).not.toHaveProperty('request_id');
+        expect(request.body).not.toHaveProperty('authority_id');
+        expect(request.body).not.toHaveProperty('organization_id');
+        expect(request.body).not.toHaveProperty('http_method');
+        expect(request.body).not.toHaveProperty('http_path');
+      }
+    });
+  });
+
+  it('sends Slack link replay input without caller or route assertions', async () => {
+    await withHome(async (home) => {
+      const authority = authorityDescriptor();
+      const challengeCode = 'A'.repeat(43);
+      const challengeAttemptId = fixtureId('cat', 1);
+      const challengeMessageTs = '1755518400.000001';
+      const observed: Array<{ path: string; body: Record<string, unknown> }> = [];
+      const client = new PersonClient({
+        home_directory: home,
+        now: () => NOW,
+        random_bytes: (size) => new Uint8Array(size),
+        random_uuid: () => '00000000-0000-4000-8000-000000000113',
+        fetch: async (input, init) => {
+          const path = new URL(String(input)).pathname;
+          if (path === '/v1/authority-descriptor') {
+            return json({ authority_descriptor: authority });
+          }
+          expect(new Headers(init?.headers).get('authorization')).toBe(
+            `Bearer ${ROTATED_SESSION.access_token}`,
+          );
+          const body = JSON.parse(String(init?.body)) as Record<
+            string,
+            unknown
+          >;
+          observed.push({ path, body });
+          if (path === '/v2/integration-links/slack/challenges') {
+            return json(
+              {
+                schema_version: 2,
+                kind: 'echo-organization-person-slack-link-begin-response',
+                challenge_attempt_id: challengeAttemptId,
+                provider: 'slack',
+                provider_tenant_id: 'T123ABC',
+                channel_id: 'C123ABC',
+                challenge_message_ts: challengeMessageTs,
+                expires_at: '2026-08-18T00:17:00.000Z',
+              },
+              201,
+            );
+          }
+          expect(path).toBe('/v2/integration-links/slack/completions');
+          return json({
+            schema_version: 2,
+            kind: 'echo-organization-person-slack-link-result',
+            identity_link_id: fixtureId('clm', 1),
+            connection_id: fixtureId('con', 1),
+            organization_id: SESSION.organization_id,
+            principal_id: SESSION.principal_id,
+            membership_id: SESSION.membership_id,
+            provider: 'slack',
+            provider_tenant_id: 'T123ABC',
+            provider_subject_id: 'U123PERSON',
+            channel_id: 'C123ABC',
+            linked_at: NOW,
+            identity_link_created: true,
+          });
+        },
+      });
+
+      await client.installSession('https://authority.example', ROTATED_SESSION);
+      const begun = await client.beginSlackLink();
+      expect(begun.challenge_code).toBe(challengeCode);
+      await client.completeSlackLink({
+        challenge_attempt_id: begun.challenge_attempt_id,
+        challenge_message_ts: begun.challenge_message_ts,
+        challenge_code: begun.challenge_code,
+      });
+
+      expect(observed).toEqual([
+        {
+          path: '/v2/integration-links/slack/challenges',
+          body: {
+            challenge_code_sha256:
+              organizationSlackLinkChallengeCodeSha256(challengeCode),
+            request_id: 'psb_00000000-0000-4000-8000-000000000113',
+          },
+        },
+        {
+          path: '/v2/integration-links/slack/completions',
+          body: {
+            challenge_attempt_id: challengeAttemptId,
+            challenge_code: challengeCode,
+            challenge_message_ts: challengeMessageTs,
+            request_id: 'psc_00000000-0000-4000-8000-000000000113',
+          },
+        },
+      ]);
+      for (const { body } of observed) {
+        expect(body).not.toHaveProperty('schema_version');
+        expect(body).not.toHaveProperty('kind');
+        expect(body).not.toHaveProperty('authority_id');
+        expect(body).not.toHaveProperty('organization_id');
+        expect(body).not.toHaveProperty('subject_principal_id');
+        expect(body).not.toHaveProperty('http_method');
+        expect(body).not.toHaveProperty('http_path');
+      }
     });
   });
 

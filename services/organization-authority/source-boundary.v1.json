@@ -49,7 +49,9 @@
     "services/organization-authority/migrations/0014_person_login_grant_expected_email.sql",
     "services/organization-authority/migrations/0015_processing_source_configuration_binding.sql",
     "services/organization-authority/migrations/0016_processing_slack_approval_state.sql",
-    "services/organization-authority/migrations/0017_processing_frozen_record_envelopes.sql"
+    "services/organization-authority/migrations/0017_processing_frozen_record_envelopes.sql",
+    "services/organization-authority/migrations/0018_processing_slack_delivery_attempts.sql",
+    "services/organization-authority/migrations/0019_processing_frozen_record_rejections.sql"
   ],
   "layer_rules": [
     {
@@ -220,6 +222,8 @@
         "services/organization-authority/src/processing/adapters/delivery-surfaces/slack/**",
         "services/organization-authority/src/processing/adapters/meeting-sources/granola/**",
         "services/organization-authority/src/processing/authorization/**",
+        "services/organization-authority/src/processing/core/contracts/adapter.ts",
+        "services/organization-authority/src/processing/core/processing/run-core-cycle.ts",
         "services/organization-authority/src/processing/live/**",
         "services/organization-authority/src/processing/record/**",
         "services/organization-authority/src/processing/storage/**"
@@ -250,6 +254,7 @@
       "from": "services/organization-authority/src/processing/storage/**",
       "allowed_imports": [
         "services/organization-authority/src/adapters/persistence/sqlite/open-database.ts",
+        "services/organization-authority/src/processing/adapters/delivery-surfaces/slack/slack-delivery-receipt-store.ts",
         "services/organization-authority/src/processing/core/**",
         "services/organization-authority/src/processing/storage/**"
       ],
@@ -258,33 +263,6 @@
       ],
       "allowed_external_packages": ["better-sqlite3"],
       "allowed_node_builtins": ["crypto"]
-    },
-    {
-      "name": "processing-live-composes-one-bounded-cycle",
-      "from": "services/organization-authority/src/processing/live/run-one-meeting.ts",
-      "allowed_imports": [
-        "services/organization-authority/src/processing/adapters/decision-processors/structured-text/**",
-        "services/organization-authority/src/processing/adapters/meeting-sources/granola/**",
-        "services/organization-authority/src/domain/person-email-binding.ts",
-        "services/organization-authority/src/processing/core/**",
-        "services/organization-authority/src/processing/live/**",
-        "services/organization-authority/src/processing/storage/**"
-      ],
-      "allowed_workspace_packages": [
-        "@echo-brain/federation-protocol"
-      ],
-      "allowed_external_packages": [],
-      "allowed_node_builtins": []
-    },
-    {
-      "name": "processing-live-runs-one-fixed-cycle",
-      "from": "services/organization-authority/src/processing/live/run-live-meeting-cycle.ts",
-      "allowed_imports": [
-        "services/organization-authority/src/processing/core/**"
-      ],
-      "allowed_workspace_packages": [],
-      "allowed_external_packages": [],
-      "allowed_node_builtins": []
     },
     {
       "name": "processing-llm-decision-processor-composes-provider-drivers",
@@ -391,22 +369,12 @@
       "allowed_node_builtins": []
     },
     {
-      "name": "processing-slack-delivery-receipt-store-owns-only-durable-receipts",
+      "name": "processing-slack-delivery-receipt-store-is-a-port",
       "from": "services/organization-authority/src/processing/adapters/delivery-surfaces/slack/slack-delivery-receipt-store.ts",
-      "allowed_imports": [
-        "services/organization-authority/src/processing/infrastructure/process-file-lock.ts"
-      ],
-      "allowed_workspace_packages": [],
-      "allowed_external_packages": [],
-      "allowed_node_builtins": ["crypto", "fs", "fs/promises", "path"]
-    },
-    {
-      "name": "processing-infrastructure-is-product-independent",
-      "from": "services/organization-authority/src/processing/infrastructure/**",
       "allowed_imports": [],
       "allowed_workspace_packages": [],
       "allowed_external_packages": [],
-      "allowed_node_builtins": ["crypto", "fs", "fs/promises", "path"]
+      "allowed_node_builtins": []
     },
     {
       "name": "processing-server-installation-key-is-read-only-compatibility",
@@ -503,8 +471,8 @@
       "allowed_node_builtins": []
     },
     {
-      "name": "processing-organization-member-record-first-delivery-coordinates-ports",
-      "from": "services/organization-authority/src/processing/record/adapters/organization-member-record-first-delivery.ts",
+      "name": "processing-resolved-organization-record-act-writer-coordinates-ports",
+      "from": "services/organization-authority/src/processing/record/adapters/resolved-organization-record-act-writer.ts",
       "allowed_imports": [
         "services/organization-authority/src/processing/core/**",
         "services/organization-authority/src/processing/record/ports.ts"
@@ -529,8 +497,10 @@
       "from": "services/organization-authority/src/processing/record/adapters/organization-member-record-metadata.ts",
       "allowed_imports": [
         "services/organization-authority/src/processing/authorization/organization-member-authorization-evidence.ts",
+        "services/organization-authority/src/processing/authorization/reviewer-authorization-evidence.ts",
         "services/organization-authority/src/processing/core/**",
-        "services/organization-authority/src/processing/record/adapters/organization-member-record-first-delivery.ts",
+        "services/organization-authority/src/processing/record/adapters/resolved-organization-record-act-writer.ts",
+        "services/organization-authority/src/processing/record/ports.ts",
         "services/organization-authority/src/processing/storage/sqlite-authority-processing-store.ts"
       ],
       "allowed_workspace_packages": [

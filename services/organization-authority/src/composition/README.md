@@ -14,9 +14,13 @@ administrator command surface and verifies the runtime ownership proof before
 using credentials. Concrete key, credential, invitation-file, lock, proof, and
 SQLite behavior remains in `adapters/`.
 
-`process-one-meeting.ts` is the bounded stopped-state source-provisioning and
-canary gateway in minimum V1. It owns the singleton and fixed private credential
-boundary, then invokes one processing-module cycle with a hard limit of one.
+`activate-meeting-source.ts` owns the stopped singleton and fixed private
+credential boundary. It performs no provider call: one Authority SQLite
+transaction admits the exact active Person, digest-only organization credential
+configuration, and a live-only Granola cutoff. A retry returns the stored
+cutoff; changed custody or configuration conflicts. It is source admission,
+not a processor or approval handoff.
+
 When a source binding and its exact policy-surface Slack capability exist,
 `meeting-processing-runtime.ts` wires `serve` to one immediate serialized,
 limit-1 cycle and another 30 seconds after each prior cycle completes. No cycles

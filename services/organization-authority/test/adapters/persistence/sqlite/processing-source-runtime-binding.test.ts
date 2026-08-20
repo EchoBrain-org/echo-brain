@@ -3,7 +3,10 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import Database from 'better-sqlite3';
 import { afterEach, describe, expect, it } from 'vitest';
-import { readAuthorityProcessingSourceRuntimeBinding } from '../../../../src/adapters/persistence/sqlite/processing-source-runtime-binding.js';
+import {
+  readAuthorityProcessingSourceRuntimeBinding,
+  readAuthorityProcessingSourceStoredBinding,
+} from '../../../../src/adapters/persistence/sqlite/processing-source-runtime-binding.js';
 import { SqliteAuthorityProcessingStore } from '../../../../src/processing/storage/sqlite-authority-processing-store.js';
 
 const directories: string[] = [];
@@ -112,6 +115,46 @@ describe('Authority processing source runtime binding', () => {
       owner_email_sha256: OWNER_DIGEST,
       credential_scope: 'organization',
       credential_reference_sha256: CREDENTIAL_DIGEST,
+    });
+    expect(
+      readAuthorityProcessingSourceStoredBinding(path, ORGANIZATION_ID),
+    ).toEqual({
+      organization_id: ORGANIZATION_ID,
+      principal_id: PRINCIPAL_ID,
+      membership_id: MEMBERSHIP_ID,
+      membership_type: 'owner',
+      source_adapter_id: 'granola',
+      source_instance_id: 'primary',
+      owner_email_sha256: OWNER_DIGEST,
+      credential_scope: 'organization',
+      credential_reference_sha256: CREDENTIAL_DIGEST,
+      custody_status: 'active',
+    });
+
+    const database = new Database(path);
+    database
+      .prepare(
+        `UPDATE authority_memberships
+            SET status = 'revoked', revoked_at = ?, revocation_reason = ?
+          WHERE membership_id = ?`,
+      )
+      .run(
+        '2026-08-19T00:02:00.000Z',
+        'source custody ended',
+        MEMBERSHIP_ID,
+      );
+    database.close();
+
+    expect(
+      readAuthorityProcessingSourceRuntimeBinding(path, ORGANIZATION_ID),
+    ).toBeNull();
+    expect(
+      readAuthorityProcessingSourceStoredBinding(path, ORGANIZATION_ID),
+    ).toMatchObject({
+      membership_id: MEMBERSHIP_ID,
+      source_adapter_id: 'granola',
+      source_instance_id: 'primary',
+      custody_status: 'inactive',
     });
   });
 });

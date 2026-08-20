@@ -168,6 +168,14 @@ allow or deny, then append audit before returning
 Every dependency is an intersection. Missing, revoked, expired, unverifiable,
 or unreachable state denies.
 
+The replacement server approval path must preserve that intersection under
+[INV-IDENTITY-005](../invariants/INV-IDENTITY-005-adapter-to-echo-identity-chain.md).
+It removes installation authentication from the chain; it does not collapse or
+discard the verified provider connection, adapter identity/instance/binding,
+tenant-scoped external identity link, exact principal/membership tenure,
+explicit action capability, frozen provider object, or integration-audit
+proof. A Person identity link still grants no action by itself.
+
 ## Closed v1 schema
 
 The schema contains seven domain tables plus its migration ledger:
@@ -269,8 +277,10 @@ The connection and permission service must preserve these rules:
   message marker, and conflicting reactions before appending a new audit
   evaluation.
 - Keep the Slack approval surface the single resolver. The Person CLI ships no
-  approve/reject command, and the bundled Slack approval adapter is not yet
-  composed into the Authority runtime.
+  approve/reject command. The bundled Slack approval adapter is composed into
+  the Authority meeting runtime when the retained installation-bound binding
+  exists; the missing piece is a Person/server approval activation contract,
+  not Slack runtime composition.
 
 The Authority and integration layer run in one process. The retained V1
 permission lookup is authenticated by the enrolled installation key and never

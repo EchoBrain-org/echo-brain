@@ -8,6 +8,7 @@ import {
   ManifestSyntheticApprovalGate,
   SyntheticDeliveryCapture,
   SyntheticMonotonicCoreStateStore,
+  SyntheticResolvedActWriter,
   createSyntheticReplayHarness,
   syntheticObservationId,
   type SyntheticReplayManifest,
@@ -167,10 +168,12 @@ describe('offline synthetic replay harness', () => {
         },
       };
       let nextId = 0;
+      const resolvedActWriter = new SyntheticResolvedActWriter();
       const cycle = () => runCoreCycle({
         meetingSource: source,
         decisionProcessor: processor,
-        deliverySurfaces: [delivery],
+          deliverySurfaces: [delivery],
+          resolvedActWriter,
         approvalGate: gate,
         state,
         now: () => '2026-08-18T00:00:00.000Z',
@@ -189,6 +192,8 @@ describe('offline synthetic replay harness', () => {
       expect(results.map((result) => result.deliveries)).toEqual([1, 1]);
       expect(delivery.attempts).toBe(2);
       expect(delivery.envelopes.size).toBe(1);
+      expect(resolvedActWriter.attempts).toBe(2);
+      expect(resolvedActWriter.acts.size).toBe(1);
     }
   });
 });

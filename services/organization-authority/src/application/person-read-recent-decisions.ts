@@ -99,7 +99,7 @@ function isPersonUnauthorized(error: unknown): boolean {
 }
 
 function assertRequestAuthority(
-  request: ValidatedPersonReadRequest,
+  request: OrganizationPersonRecentDecisionsRequestV2,
   descriptor: CreatePersonReadRecentDecisionsApplicationOptions['descriptor'],
 ): void {
   if (
@@ -115,10 +115,11 @@ function assertRequestAuthority(
 function callerBinding(
   request: ValidatedPersonReadRequest,
   operation: PersonReadOperation,
+  descriptor: CreatePersonReadRecentDecisionsApplicationOptions['descriptor'],
 ): PersonReadCallerBindingInput {
   return {
-    authority_id: request.authority_id,
-    organization_id: request.organization_id,
+    authority_id: descriptor.authority_id,
+    organization_id: descriptor.organization_id,
     subject_principal_id: request.subject_principal_id,
     operation,
     request_sha256: canonicalPersonReadRequestSha256(request),
@@ -237,7 +238,11 @@ export function createPersonReadRecentDecisionsApplication(
         throw requestError(error);
       }
       assertRequestAuthority(request, options.descriptor);
-      const binding = callerBinding(request, 'recent_decisions');
+      const binding = callerBinding(
+        request,
+        'recent_decisions',
+        options.descriptor,
+      );
       const unauthorized = (): PreparedOrganizationRecentDecisionsResponse => ({
         status_code: 401,
         body: fixedRecentDecisionsErrorBytes(401),
@@ -314,8 +319,11 @@ export function createPersonReadRecentDecisionsApplication(
       } catch (error) {
         throw requestError(error);
       }
-      assertRequestAuthority(request, options.descriptor);
-      const binding = callerBinding(request, 'reviewer_recent_decisions');
+      const binding = callerBinding(
+        request,
+        'reviewer_recent_decisions',
+        options.descriptor,
+      );
       const unauthorized = (): PreparedReviewerRecentDecisionsResponse =>
         preparedReviewerDenial(401);
       let admission;

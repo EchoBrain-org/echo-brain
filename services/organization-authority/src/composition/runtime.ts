@@ -25,7 +25,6 @@ import {
   SystemAuthorityClock,
 } from '../adapters/runtime/system-runtime-ports.js';
 import { SqliteOrganizationAuthorityRepository } from '../adapters/persistence/sqlite/sqlite-authority-repository.js';
-import { SqlitePersonMemberExclusionMutationPort } from '../adapters/persistence/sqlite/sqlite-person-member-exclusion-mutation-port.js';
 import { readOrganizationMemberRecordingActivation } from '../adapters/persistence/sqlite/organization-recording-policy-activation.js';
 import { OrganizationAuthorityApplication } from '../application/organization-authority.js';
 import { PersonIdentitySessionApplication } from '../application/person-identity-sessions.js';
@@ -90,6 +89,7 @@ import {
   openAuthorityMeetingProcessingRuntime,
   type AuthorityMeetingProcessingRuntime,
 } from './meeting-processing-runtime.js';
+import { recoverAuthorityTerminalRecordActs } from './terminal-record-recovery.js';
 
 export interface RunningOrganizationAuthority {
   address: AddressInfo;
@@ -119,6 +119,7 @@ export interface OrganizationAuthorityRuntimeDependencies {
     options: Parameters<typeof OpenIdClientPersonSessionProvider.discover>[0],
   ) => Promise<PersonSessionOidcAuthorizationProvider>;
   openMeetingProcessingRuntime?: typeof openAuthorityMeetingProcessingRuntime;
+  recoverTerminalRecordActs?: typeof recoverAuthorityTerminalRecordActs;
 }
 
 function assertOrganizationMemberRecordingRuntimeBinding(
@@ -627,9 +628,6 @@ export async function startOrganizationAuthority(
             authority_id: config.authority_id,
             organization_id: config.organization_id,
             authentication: personIdentitySessions,
-            mutations: new SqlitePersonMemberExclusionMutationPort(
-              config.database_path,
-            ),
             authorization_fence: authorizationFence,
           });
     const personMemberExclusionReads =
@@ -703,12 +701,26 @@ export async function startOrganizationAuthority(
               PersonIdentitySessionApplication['revoke']
             >[0]) => personIdentitySessions.revoke(input),
           }), authorizationFence);
+    const processingRuntimeOptions = {
+      config,
+      authority: application,
+      authorityRepository,
+      authorizationFence,
+      integrations,
+      integrationsRepository,
+      integrationSecrets,
+      records: recordRuntime,
+    } as const;
     if (authorityRuntimeFingerprint(config) !== runtimeFingerprint) {
       throw new Error(
         'organization authority files changed while composing the runtime',
       );
     }
     assertOrganizationMemberRecordingRuntimeBinding(config);
+    await (
+      dependencies.recoverTerminalRecordActs ??
+      recoverAuthorityTerminalRecordActs
+    )(processingRuntimeOptions);
     server = createOrganizationAuthorityHttpServer({
       application: fenceAuthorizationRelevantAuthorityMutations(
         application,
@@ -770,16 +782,7 @@ export async function startOrganizationAuthority(
     meetingProcessing = await (
       dependencies.openMeetingProcessingRuntime ??
       openAuthorityMeetingProcessingRuntime
-    )({
-      config,
-      authority: application,
-      authorityRepository,
-      authorizationFence,
-      integrations,
-      integrationsRepository,
-      integrationSecrets,
-      records: recordRuntime,
-    });
+    )(processingRuntimeOptions);
     return {
       address,
       fatalFailure,

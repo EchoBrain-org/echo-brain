@@ -20,8 +20,6 @@ export interface AdapterConfig {
   settings: Readonly<JsonObject>;
 }
 
-export type AdapterInstanceConfig = AdapterConfig;
-
 export interface AdapterConfigValidation {
   ok: boolean;
   errors: readonly string[];
@@ -63,12 +61,4 @@ export interface Adapter {
   readonly identity: AdapterIdentity;
   validateConfig(config: AdapterConfig): AdapterConfigValidation;
   healthCheck(context?: AdapterOperationContext): Promise<AdapterHealth>;
-}
-
-export function adapterInstanceKey(
-  kind: AdapterKind,
-  adapterId: string,
-  instanceId: string,
-): string {
-  return `${kind}:${adapterId}:${instanceId}`;
 }

@@ -30,6 +30,7 @@ import {
   type MeetingDocument,
   type MeetingPullRequest,
   type MeetingSourceAdapter,
+  type ResolvedActWriter,
 } from '../core/index.js';
 import {
   STRUCTURED_TEXT_DECISION_PROCESSOR_ADAPTER_ID,
@@ -373,6 +374,24 @@ export class SyntheticDeliveryCapture implements DeliverySurfaceAdapter {
   }
 }
 
+/** Offline replay still exercises the core resolved-act invariant. */
+export class SyntheticResolvedActWriter implements ResolvedActWriter {
+  readonly acts = new Map<string, Parameters<ResolvedActWriter['write']>[0]>();
+  attempts = 0;
+
+  async write(input: Parameters<ResolvedActWriter['write']>[0]): Promise<void> {
+    this.attempts += 1;
+    const existing = this.acts.get(input.processing_key);
+    if (
+      existing !== undefined &&
+      JSON.stringify(existing.decision) !== JSON.stringify(input.decision)
+    ) {
+      throw new Error('synthetic resolved act changed after its first write');
+    }
+    if (existing === undefined) this.acts.set(input.processing_key, clone(input));
+  }
+}
+
 export interface SyntheticReplayHarness {
   readonly state: SyntheticMonotonicCoreStateStore;
   readonly gate: ManifestSyntheticApprovalGate;
@@ -398,6 +417,7 @@ export function createSyntheticReplayHarness(
   const now = options.now ?? (() => SYNTHETIC_REPLAY_CLOCK);
   const gate = new ManifestSyntheticApprovalGate(manifest, now);
   const delivery = new SyntheticDeliveryCapture(now);
+  const resolvedActWriter = new SyntheticResolvedActWriter();
   const processor = createStructuredTextDecisionProcessor(
     {
       adapter_id: STRUCTURED_TEXT_DECISION_PROCESSOR_ADAPTER_ID,
@@ -418,6 +438,7 @@ export function createSyntheticReplayHarness(
           meetingSource: new SyntheticMeetingSource([meeting]),
           decisionProcessor: processor,
           deliverySurfaces: [delivery],
+          resolvedActWriter,
           approvalGate: gate,
           state,
           now,

@@ -150,6 +150,21 @@ export interface PersonReadAuthorizationPort {
   }): SynchronousResult<T>;
 }
 
+/**
+ * Resolves an access token and commits one synchronous Person mutation under
+ * the same Authority write transaction. The callback cannot retain or await
+ * the transaction.
+ */
+export interface PersonAuthenticatedWritePort {
+  withAuthenticatedWrite<T>(input: {
+    access_token: string;
+    commit: (
+      authorization: PersonAccessAuthorization,
+      transaction: AuthorityWriteTransaction,
+    ) => SynchronousResult<T>;
+  }): SynchronousResult<T>;
+}
+
 /** Only the read port's expected, already-audited denials use this sentinel. */
 export class PersonReadUnauthorizedError extends AuthorityOperationError {
   constructor() {
@@ -808,6 +823,42 @@ export class PersonIdentitySessionApplication {
     return resolution.authorization;
   }
 
+  withAuthenticatedWrite<T>(input: {
+    access_token: string;
+    commit: (
+      authorization: PersonAccessAuthorization,
+      transaction: AuthorityWriteTransaction,
+    ) => SynchronousResult<T>;
+  }): SynchronousResult<T> {
+    let tokenSha256: Sha256Digest;
+    try {
+      tokenSha256 = this.digestSecret(input.access_token);
+    } catch {
+      throw personSessionUnauthorized();
+    }
+    const outcome = this.repository.writeAtLinearization(
+      () => this.runtime.clock.now(),
+      (transaction, checkedAt):
+        | { kind: "denied" }
+        | { kind: "committed"; result: SynchronousResult<T> } => {
+        const resolution = this.resolveAccess(
+          transaction,
+          tokenSha256,
+          checkedAt,
+        );
+        if (resolution.kind === "denied") return { kind: "denied" };
+        const result = input.commit(resolution.authorization, transaction);
+        this.assertSynchronousCommit(
+          result,
+          "Person authenticated write commit must be synchronous",
+        );
+        return { kind: "committed", result };
+      },
+    );
+    if (outcome.kind === "denied") throw personSessionUnauthorized();
+    return outcome.result;
+  }
+
   refresh(input: { refresh_token: string }): IssuedPersonSession {
     const tokenSha256 = this.digestSecret(input.refresh_token);
     const candidate = this.sessionCredentialCandidate();
@@ -1232,13 +1283,16 @@ export class PersonIdentitySessionApplication {
     };
   }
 
-  private assertSynchronousCommit(value: unknown): void {
+  private assertSynchronousCommit(
+    value: unknown,
+    message = "Person read audit commit must be synchronous",
+  ): void {
     if (
       value !== null &&
       (typeof value === "object" || typeof value === "function") &&
       typeof (value as { then?: unknown }).then === "function"
     ) {
-      throw new Error("Person read audit commit must be synchronous");
+      throw new Error(message);
     }
   }
 

@@ -16,6 +16,7 @@ import type {
   DeliverySurfaceAdapter,
   DecisionProcessorAdapter,
   MeetingSourceAdapter,
+  ResolvedActWriter,
 } from '../ports/adapters.js';
 import type { CoreStateStore } from '../storage/core-state-store.js';
 import { compileDecisionBrief } from './brief.js';
@@ -24,6 +25,7 @@ export interface CoreCycleDependencies {
   meetingSource: MeetingSourceAdapter;
   decisionProcessor: DecisionProcessorAdapter;
   deliverySurfaces: readonly DeliverySurfaceAdapter[];
+  resolvedActWriter: ResolvedActWriter;
   approvalGate: ApprovalGate;
   state: CoreStateStore;
   now?: () => string;
@@ -36,6 +38,7 @@ export interface CoreCycleDeadlines {
   pullMs: number;
   extractMs: number;
   approvalMs: number;
+  recordMs: number;
   publishMs: number;
 }
 
@@ -43,6 +46,7 @@ const DEFAULT_CORE_CYCLE_DEADLINES: CoreCycleDeadlines = {
   pullMs: 30_000,
   extractMs: 60_000,
   approvalMs: 30_000,
+  recordMs: 30_000,
   publishMs: 30_000,
 };
 
@@ -83,7 +87,7 @@ async function runBounded<T>(
 
 export interface CoreCycleFailure {
   meeting_id: string;
-  stage: 'processing' | 'approval' | 'delivery';
+  stage: 'processing' | 'approval' | 'record' | 'delivery';
   message: string;
 }
 
@@ -115,11 +119,14 @@ export function meetingProcessingKey(
 ): string {
   const source = meeting.provenance;
   const identity = processor.identity;
-  return `processing:v1:${JSON.stringify([
+  return `processing:v2:${JSON.stringify([
     source.source.adapter_id,
     source.source.instance_id,
+    source.source.version,
     source.external_id,
     source.canonical_revision,
+    source.normalizer_version,
+    source.source_revision ?? null,
     identity.adapter_id,
     identity.instance_id,
     identity.version,
@@ -285,6 +292,22 @@ export async function runCoreCycle(
         meetingsPending += 1;
         continue;
       }
+      stage = 'record';
+      await runBounded(
+        'resolved-act write',
+        deadlines.recordMs,
+        dependencies.signal,
+        async (signal) =>
+          await dependencies.resolvedActWriter.write(
+            {
+              processing_key: processingKey,
+              meeting,
+              decisions,
+              decision: approval,
+            },
+            { signal },
+          ),
+      );
       if (approval.status === 'rejected') {
         meetingsRejected += 1;
         await dependencies.state.markProcessed(processingKey);

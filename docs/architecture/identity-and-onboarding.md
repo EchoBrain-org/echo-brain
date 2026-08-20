@@ -25,6 +25,16 @@ credentials, processing state, and revocation.
 - Installation and enrollment rows describe the retained V1 protocol. They are
   not a second current machine identity mode.
 
+[INV-IDENTITY-005](../invariants/INV-IDENTITY-005-adapter-to-echo-identity-chain.md)
+makes the provider/adapter-to-ECHO chain load-bearing. A verified provider
+connection, adapter instance/binding, tenant-scoped external human link,
+principal, membership tenure, and explicit action capability are distinct
+edges. None implies another, and no display name, email, bare provider user ID,
+source owner, or meeting participant substitutes for one. Provider identity is
+resolved into the exact ECHO actor when a consequential human act is admitted;
+permission-aware read later resolves the current Person independently from
+canonical policy facts.
+
 ## Active Person onboarding and access
 
 For a new identity, an Authority administrator creates the membership and a

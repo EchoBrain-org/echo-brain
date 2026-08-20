@@ -1,8 +1,4 @@
-import { randomUUID } from 'node:crypto';
 import { join } from 'node:path';
-import type { P256SigningKeyDescriptor } from '@echo-brain/federation-protocol';
-import { createOrganizationAccessLeaseRequestV2 } from '@echo-brain/organization-api';
-import { verifyOrganizationAuthorityPin } from '@echo-brain/organization-protocol';
 import {
   FileOrganizationSecretStore,
   OrganizationIntegrationsRepository,
@@ -21,26 +17,17 @@ import type { ReadableSearchAuthorizationFence } from '../application/readable-s
 import { isOrganizationMemberReadableRecordingPolicy } from '../application/organization-recording-policy.js';
 import { createSlackReactionsApprovalSurface } from '../processing/adapters/approval-surfaces/slack-reactions/slack-reactions-approval-surface.js';
 import { createLlmDecisionProcessor } from '../processing/adapters/decision-processors/llm/llm-decision-processor.js';
-import { FileSlackDeliveryReceiptStore } from '../processing/adapters/delivery-surfaces/slack/slack-delivery-receipt-store.js';
 import { SlackDeliverySurface } from '../processing/adapters/delivery-surfaces/slack/slack-delivery-surface.js';
 import { createGranolaMeetingSourceAdapter } from '../processing/adapters/meeting-sources/granola/index.js';
 import { validateOrganizationMemberAuthorizationEvidence } from '../processing/authorization/organization-member-authorization-evidence.js';
 import { assertReviewerDisplayName } from '../processing/authorization/reviewer-authorization-evidence.js';
-import { ExistingExportableInstallationKey } from '../processing/authorization/security/existing-exportable-installation-key.js';
-import { ServerInstallationCompatibilityBridge } from '../processing/authorization/server-installation-compatibility-bridge.js';
+import type { AdapterConfig as AuthorityLiveAdapterConfig } from '../processing/core/contracts/adapter.js';
 import {
-  runAuthorityLiveMeetingCycle,
-  type AuthorityLiveAdapterConfig,
-  type AuthorityLiveMeetingCycleResult,
-} from '../processing/live/run-live-meeting-cycle.js';
-import {
-  authorityProcessingCredentialReferenceSha256,
-} from '../processing/live/run-one-meeting.js';
+  runCoreCycle,
+  type CoreCycleResult as AuthorityLiveMeetingCycleResult,
+} from '../processing/core/processing/run-core-cycle.js';
 import { SerializedAuthorityMeetingWorker } from '../processing/live/serialized-authority-meeting-worker.js';
 import { organizationMemberApprovalPresentationRenderer } from '../processing/record/adapters/organization-member-presentation-renderer.js';
-import { OrganizationMemberRecordFirstDeliverySurface } from '../processing/record/adapters/organization-member-record-first-delivery.js';
-import { SqliteOrganizationMemberRecordApprovalMetadataLookup } from '../processing/record/adapters/organization-member-record-metadata.js';
-import { ProtocolOrganizationRecordEnvelopeBuilder } from '../processing/record/protocol-record-envelope-builder.js';
 import { SqliteAuthorityProcessingStore } from '../processing/storage/sqlite-authority-processing-store.js';
 import type { OrganizationRecordRuntime } from './organization-record.js';
 import type { ComposedOrganizationIntegrationsApplication } from './organization-integrations.js';
@@ -50,10 +37,12 @@ import {
   AUTHORITY_GRANOLA_ORGANIZATION_CREDENTIAL_REFERENCE,
   AUTHORITY_GRANOLA_ORGANIZATION_OWNER_EMAIL_FILENAME,
   AUTHORITY_GRANOLA_ORGANIZATION_SCOPE_FILENAME,
-} from './process-one-meeting.js';
-
-export const AUTHORITY_PROCESSING_INSTALLATION_KEY_FILENAME =
-  'installation-key-state.v1.json';
+  authorityProcessingCredentialReferenceSha256,
+} from './processing-source-credentials.js';
+import {
+  composeServerInstallationRecordWriter,
+  inspectServerInstallationRecordIdentity,
+} from './server-installation-record-writer.js';
 
 const GRANOLA_CREDENTIAL_REF = 'authority:granola-organization-api-key';
 const AUTHORITY_OPENROUTER_CREDENTIAL_FILENAME = 'openrouter-api-key';
@@ -126,16 +115,6 @@ function assertValidAdapter(
   }
 }
 
-function protocolKey(
-  key: ReturnType<ExistingExportableInstallationKey['inspect']>,
-): P256SigningKeyDescriptor {
-  return Object.freeze({
-    key_id: key.key_id,
-    algorithm: key.algorithm,
-    public_key_spki_der_base64: key.public_key_spki_der_base64,
-  });
-}
-
 function boundedCycleFailure(result: AuthorityLiveMeetingCycleResult): Error {
   const stages = [
     ...new Set([
@@ -181,37 +160,11 @@ export async function openAuthorityMeetingProcessingRuntime(
     'credentials',
     'processing',
   );
-  const installationKey = new ExistingExportableInstallationKey(
-    join(
-      processingCredentialDirectory,
-      AUTHORITY_PROCESSING_INSTALLATION_KEY_FILENAME,
-    ),
-  );
-  const installationDescriptor = installationKey.inspect();
-  const installationSigningKey = protocolKey(installationDescriptor);
-  const reviewerEnrollment = options.authorityRepository.read((transaction) =>
-    transaction.enrollmentByInstallation(
-      installationDescriptor.installation_id,
-    ),
-  );
-  if (
-    reviewerEnrollment === undefined ||
-    reviewerEnrollment.status !== 'active' ||
-    reviewerEnrollment.authority_id !== options.config.authority_id ||
-    reviewerEnrollment.organization_id !== options.config.organization_id ||
-    reviewerEnrollment.installation_id !==
-      installationDescriptor.installation_id ||
-    reviewerEnrollment.installation_signing_key.key_id !==
-      installationSigningKey.key_id ||
-    reviewerEnrollment.installation_signing_key.algorithm !==
-      installationSigningKey.algorithm ||
-    reviewerEnrollment.installation_signing_key.public_key_spki_der_base64 !==
-      installationSigningKey.public_key_spki_der_base64
-  ) {
-    throw new Error(
-      'server installation key does not match the active Authority enrollment',
-    );
-  }
+  const installationIdentity = inspectServerInstallationRecordIdentity(options);
+  const {
+    installationDescriptor,
+    reviewerEnrollment,
+  } = installationIdentity;
 
   const slackBinding =
     options.integrationsRepository.activeSlackApprovalRuntimeBinding(
@@ -225,6 +178,11 @@ export async function openAuthorityMeetingProcessingRuntime(
     );
     return null;
   }
+  const recordWriting = composeServerInstallationRecordWriter(
+    options,
+    installationIdentity,
+  );
+  const bridge = recordWriting.compatibilityBridge;
   const reviewer = options.authorityRepository.read((transaction) =>
     transaction.membership(slackBinding.membership_id),
   );
@@ -305,8 +263,6 @@ export async function openAuthorityMeetingProcessingRuntime(
       ? openRouterCredential
       : undefined;
 
-  const authorityDescriptor = options.authority.descriptor();
-
   const slackCredential = options.integrationSecrets.read(
     slackBinding.organization_tool.secret,
   );
@@ -368,53 +324,6 @@ export async function openAuthorityMeetingProcessingRuntime(
       processorConfig,
     );
 
-    const bridge = new ServerInstallationCompatibilityBridge({
-      authorityRepository: options.authorityRepository,
-      keyStatePath: installationKey.path,
-      permissionCheck: options.integrations,
-      now: () => new Date().toISOString(),
-      accessRefresh: {
-        refreshInstallationAccess: async (input, signal) => {
-          signal?.throwIfAborted();
-          if (
-            input.installation_id !== installationDescriptor.installation_id ||
-            input.current_access_state_sha256 === null
-          ) {
-            throw new Error(
-              'server installation access cannot be refreshed from the current state',
-            );
-          }
-          const request = await createOrganizationAccessLeaseRequestV2(
-            {
-              request_id: `alr_${randomUUID()}`,
-              authority_id: authorityDescriptor.authority_id,
-              authority_key_id: authorityDescriptor.signing_key.key_id,
-              organization_id: authorityDescriptor.organization_id,
-              enrollment_id: input.enrollment_id,
-              installation_id: input.installation_id,
-              installation_signing_key: installationSigningKey,
-              previous_access_state_sha256:
-                input.current_access_state_sha256,
-              requested_active_lease_ttl_ms:
-                options.config.active_lease_ttl_ms,
-              requested_at: input.requested_at,
-            },
-            async (bytes) =>
-              installationKey.sign(
-                installationDescriptor.installation_id,
-                installationSigningKey.key_id,
-                bytes,
-              ),
-          );
-          signal?.throwIfAborted();
-          await options.authorizationFence.withWrite(
-            async () => await options.authority.issueAccessLease(request),
-            { ...(signal === undefined ? {} : { signal }) },
-          );
-        },
-      },
-    });
-
     const approvalConfig = adapterConfig(
       'slack-reactions',
       policy.approval_surface_adapter_instance_id,
@@ -459,49 +368,27 @@ export async function openAuthorityMeetingProcessingRuntime(
       slackCredentialReference,
     );
     const finalSlackDelivery = new SlackDeliverySurface(deliveryConfig, {
-      receiptStore: new FileSlackDeliveryReceiptStore(
-        options.config.state_directory,
-        deliveryConfig.instance_id,
-      ),
+      receiptStore: store,
       credentialResolver: resolveSlackCredential,
     });
     assertValidAdapter('Slack delivery surface', finalSlackDelivery, deliveryConfig);
 
-    const recordEnvelopeBuilder = new ProtocolOrganizationRecordEnvelopeBuilder({
-      pinnedAuthority: verifyOrganizationAuthorityPin(
-        authorityDescriptor,
-        options.authority.authorityPinSha256(),
-      ),
-      installationSigningKey,
-      sign: async (bytes) =>
-        installationKey.sign(
-          installationDescriptor.installation_id,
-          installationSigningKey.key_id,
-          bytes,
-        ),
-    });
-    const delivery = new OrganizationMemberRecordFirstDeliverySurface({
-      approvalMetadata:
-        new SqliteOrganizationMemberRecordApprovalMetadataLookup(store),
-      recordEnvelopes: store,
-      recordEnvelopeBuilder,
-      installationAccess: bridge,
-      records: options.records,
-      finalDelivery: finalSlackDelivery,
-    });
+    const resolvedActWriter = recordWriting.createResolvedActWriter(store);
 
     const worker = new SerializedAuthorityMeetingWorker({
       runCycle: async (signal) => {
-        const result = await runAuthorityLiveMeetingCycle(
+        const result = await runCoreCycle(
           {
             meetingSource: source,
             decisionProcessor: processor,
             approvalGate: approval,
-            deliverySurfaces: [delivery],
+            deliverySurfaces: [finalSlackDelivery],
+            resolvedActWriter,
             state: store,
             deadlines: { extractMs: AUTHORITY_OPENROUTER_REQUEST_TIMEOUT_MS },
+            signal,
           },
-          signal,
+          { limit: 1 },
         );
         if (!result.ok) throw boundedCycleFailure(result);
       },

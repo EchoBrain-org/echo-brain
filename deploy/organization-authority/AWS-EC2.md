@@ -631,24 +631,19 @@ does not switch a product installation. Reconfigure each stopped producer
 separately, where its local frozen-card preflight must pass before it can emit
 organization-member-readable cards.
 
-## Founder-live source provisioning and one-meeting canary
+## Founder-live source activation and approval canary
 
-This is the minimum live-processing rung. After the common stopped-stack and
-snapshot gates below, choose one flow. This founder-live migration already
-has its exact source binding, so it uses the **live-only cutoff** flow and
-does not run `process-one-meeting`. A fresh deployment without that binding
-uses the **pre-baseline provisioning** flow instead. Do not combine the two
-flows in one canary.
-
-With the stack stopped, `process-one-meeting` is the bounded
-source-provisioning and admission canary:
-it pulls at most one meeting, performs deterministic extraction, and creates or
-reuses one durable pending approval. It is not a daemon and is unavailable
-while `serve` owns the Authority singleton. After that explicit source binding
-exists, `serve` owns the live pipeline: one serialized, limit-1 cycle runs
-immediately and then 30 seconds after each prior cycle completes. No two cycles
-overlap. An approved Slack review appends the organization-member-readable
-record first and only then sends the final Slack delivery.
+This is the minimum live-processing rung. The **live-only cutoff** flow is the
+only current flow that may proceed into the live worker and approval canary.
+With the stack stopped, `activate-meeting-source` is a provider-free source
+admission command. It proves the configured organization credential and exact
+active Person membership locally, then atomically binds the source, credential
+configuration, and live-only cutoff. It creates no meeting candidate. After
+that explicit source binding and live-only cutoff exist,
+`serve` owns the live pipeline: one serialized, limit-1 cycle runs immediately
+and then 30 seconds after each prior cycle completes. No two cycles overlap. An
+approved Slack review appends the organization-member-readable record first and
+only then sends the final Slack delivery.
 
 Use only an organization-owned Granola workspace/admin credential. The old
 machine's personal credential is not eligible. A Granola workspace admin must
@@ -928,11 +923,10 @@ and Tunnel stopped. A pending or in-progress snapshot is not the checkpoint.
 
 ### Live-only cutoff and post-cutoff canary
 
-For the minimum-V1 migration, the stopped stack now establishes the source
-cutoff before any live canary is created. The exact Granola source binding must
-already be persisted; this command neither accepts caller identity flags nor
-reads a credential or contacts Granola. It refuses unfinished candidates and
-an already-live cursor. Keep the stack and Tunnel stopped throughout:
+For the minimum-V1 migration, the stopped stack establishes the source binding
+and cutoff before any live canary is created. Keep the stack and Tunnel stopped
+throughout. The command makes no provider call, creates no candidate, and a
+response-loss retry returns the persisted cutoff.
 
 ```bash
 set -euo pipefail
@@ -941,22 +935,34 @@ compose() { docker compose --env-file .env -f compose.yaml -f compose.ec2.yaml "
 [[ -z $(compose ps -q --status running) ]]
 ! systemctl is-active --quiet cloudflared-echo-authority.service
 
+ : "${PROCESSING_PRINCIPAL_ID:?load from protected operator evidence}"
+ : "${PROCESSING_MEMBERSHIP_ID:?load from protected operator evidence}"
+ : "${PROCESSING_MEMBERSHIP_TYPE:?load from protected operator evidence}"
+readonly PROCESSING_SOURCE_INSTANCE=granola-org1-primary
+[[ $PROCESSING_MEMBERSHIP_TYPE == owner || $PROCESSING_MEMBERSHIP_TYPE == employee ]]
+[[ $PROCESSING_SOURCE_INSTANCE =~ ^[a-z][a-z0-9-]{0,127}$ ]]
+
 EVIDENCE_DIRECTORY=/root/echo-authority-private-evidence
-BASELINE_STAMP="$(date -u +%Y%m%dT%H%M%SZ)"
-BASELINE_RECEIPT="$EVIDENCE_DIRECTORY/live-source-baseline-$BASELINE_STAMP.json"
+ACTIVATION_STAMP="$(date -u +%Y%m%dT%H%M%SZ)"
+ACTIVATION_RECEIPT="$EVIDENCE_DIRECTORY/meeting-source-activation-$ACTIVATION_STAMP.json"
 umask 077
 compose run --rm --no-deps authority \
-  baseline-live-source --config /echo/authority.json > "$BASELINE_RECEIPT"
-jq -e '
+  activate-meeting-source --config /echo/authority.json \
+  --principal-id "$PROCESSING_PRINCIPAL_ID" \
+  --membership-id "$PROCESSING_MEMBERSHIP_ID" \
+  --membership-type "$PROCESSING_MEMBERSHIP_TYPE" \
+  --source-instance "$PROCESSING_SOURCE_INSTANCE" > "$ACTIVATION_RECEIPT"
+jq -e --arg source "$PROCESSING_SOURCE_INSTANCE" '
   .schema_version == 1 and
-  .kind == "echo-organization-authority-meeting-live-source-baseline" and
-  .outcome == "baseline_created" and
-  .source.adapter_id == "granola" and
-  (.source.instance_id | type) == "string" and
-  (.source.instance_id | length) > 0 and
+  .kind == "echo-organization-authority-meeting-source-activation" and
+  (.outcome == "activated" or .outcome == "already_activated") and
+  .source.adapter_id == "granola" and .source.instance_id == $source and
+  (.source.version | type) == "string" and (.source.version | length) > 0 and
+  (.source_binding.owner == "provisioned" or .source_binding.owner == "existing") and
+  (.source_binding.configuration == "provisioned" or .source_binding.configuration == "existing") and
   (.cutoff_at | type) == "string" and
   (.cutoff_at | test("Z$"))
-' "$BASELINE_RECEIPT" >/dev/null
+' "$ACTIVATION_RECEIPT" >/dev/null
 ```
 
 Only after that receipt is verified, create one **new** completed meeting in
@@ -969,133 +975,14 @@ approval and record-first delivery checks pass. The receipt is intentionally
 content-free: do not add a title, provider cursor, note ID, credential, or
 meeting text to it.
 
-Do not run `process-one-meeting` after this baseline as part of the live-only
-migration flow. Its bounded procedure below remains a source-provisioning or
-diagnostic tool for a stopped pre-baseline state, not a substitute for the
-cutoff receipt.
-
-### Pre-baseline provisioning canary (alternative flow)
-
-Skip this flow when a live-only cutoff receipt was created above. It is only
-for a stopped source-provisioning or diagnostic run before a live baseline.
-
-After the snapshot is verified, return to the stopped EC2 root shell. Load the
-exact active Person tuple from protected operator evidence. Minimum V1 pins the
-single organization source instance so the first run and retry address the same
-durable binding. Owner email, credential scope, and API key deliberately do not
-appear here:
-
-```bash
-set -euo pipefail
-cd /srv/echo-authority
-compose() { docker compose --env-file .env -f compose.yaml -f compose.ec2.yaml "$@"; }
-[[ -z $(compose ps -q --status running) ]]
-! systemctl is-active --quiet cloudflared-echo-authority.service
-: "${PROCESSING_PRINCIPAL_ID:?load from protected operator evidence}"
-: "${PROCESSING_MEMBERSHIP_ID:?load from protected operator evidence}"
-: "${PROCESSING_MEMBERSHIP_TYPE:?load from protected operator evidence}"
-readonly PROCESSING_SOURCE_INSTANCE=granola-org1-primary
-[[ $PROCESSING_MEMBERSHIP_TYPE == owner || $PROCESSING_MEMBERSHIP_TYPE == employee ]]
-[[ $PROCESSING_SOURCE_INSTANCE =~ ^[a-z][a-z0-9-]{0,127}$ ]]
-
-EVIDENCE_DIRECTORY=/root/echo-authority-private-evidence
-[[ -d $EVIDENCE_DIRECTORY && ! -L $EVIDENCE_DIRECTORY ]]
-RUN_STAMP="$(date -u +%Y%m%dT%H%M%SZ)"
-RUN_RECEIPT="$EVIDENCE_DIRECTORY/one-meeting-$RUN_STAMP.json"
-RUN_ERROR="$EVIDENCE_DIRECTORY/one-meeting-$RUN_STAMP.stderr"
-umask 077
-run_one_meeting() {
-  compose run --rm --no-deps authority \
-    process-one-meeting \
-    --config /echo/authority.json \
-    --principal-id "$PROCESSING_PRINCIPAL_ID" \
-    --membership-id "$PROCESSING_MEMBERSHIP_ID" \
-    --membership-type "$PROCESSING_MEMBERSHIP_TYPE" \
-    --source-instance "$PROCESSING_SOURCE_INSTANCE"
-}
-if ! run_one_meeting > "$RUN_RECEIPT" 2> "$RUN_ERROR"; then
-  printf '%s\n' 'one-meeting command failed; keep the stack and Tunnel stopped' >&2
-  exit 1
-fi
-
-jq -e --arg source "$PROCESSING_SOURCE_INSTANCE" '
-  .schema_version == 1 and
-  .kind == "echo-organization-authority-one-meeting-run" and
-  .source == {adapter_id:"granola",instance_id:$source} and
-  .decision_processor.adapter_id == "structured-text" and
-  (.decision_processor.instance_id | type) == "string" and
-  (.decision_processor.instance_id | length) > 0 and
-  (.source_binding.owner == "provisioned" or .source_binding.owner == "existing") and
-  (.source_binding.configuration == "provisioned" or
-    .source_binding.configuration == "existing") and
-  .ok == true and .failure_count == 0 and .failure_stages == [] and
-  .outcome == "pending_created" and
-  .meetings_seen == 1 and .meetings_pending == 1 and
-  .meetings_processed == 0 and .meetings_skipped == 0 and
-  .meetings_rejected == 0 and .meetings_dead_lettered == 0 and
-  .deliveries == 0 and .cursor_advanced == false and
-  (.pending_approval_ids | length) == 1 and
-  (.pending_approval_ids[0] | type) == "string" and
-  (.pending_approval_ids[0] | length) > 0
-' "$RUN_RECEIPT" >/dev/null
-FIRST_APPROVAL_ID="$(jq -r '.pending_approval_ids[0]' "$RUN_RECEIPT")"
-```
-
-The outcome rubric is exact:
-
-- `pending_created` is the only passing first-run outcome: one seen, zero
-  processed, skipped, rejected, dead-lettered, and delivered; one pending; no
-  cursor advance or failures; and exactly one opaque approval ID.
-- `no_meeting` is bounded and side-effect-safe, but it fails this controlled
-  canary because it does not prove live-meeting admission. Keep the stack and
-  Tunnel stopped and correct meeting eligibility before trying a fresh
-  checkpointed canary.
-- `pending_exists` fails as a first-run result. It is accepted only for the one
-  immediate retry of the approval ID created by this run.
-- Any other output, nonzero exit, missing receipt, or failed assertion fails the
-  gate. Keep the stack and Tunnel stopped. Do not edit or delete processing
-  rows; minimum-V1 recovery is replacement from the whole pre-write snapshot.
-
-Execute and validate the one intentional retry:
-
-```bash
-RETRY_RECEIPT="$EVIDENCE_DIRECTORY/one-meeting-retry-$RUN_STAMP.json"
-RETRY_ERROR="$EVIDENCE_DIRECTORY/one-meeting-retry-$RUN_STAMP.stderr"
-if ! run_one_meeting > "$RETRY_RECEIPT" 2> "$RETRY_ERROR"; then
-  printf '%s\n' 'one-meeting retry failed; keep the stack and Tunnel stopped' >&2
-  exit 1
-fi
-jq -e --arg source "$PROCESSING_SOURCE_INSTANCE" \
-  --arg approval "$FIRST_APPROVAL_ID" '
-    .schema_version == 1 and
-    .kind == "echo-organization-authority-one-meeting-run" and
-    .source == {adapter_id:"granola",instance_id:$source} and
-    .source_binding == {owner:"existing",configuration:"existing"} and
-    .outcome == "pending_exists" and .ok == true and
-    .meetings_seen == 0 and .meetings_processed == 0 and
-    .meetings_skipped == 0 and .meetings_pending == 1 and
-    .meetings_rejected == 0 and .meetings_dead_lettered == 0 and
-    .deliveries == 0 and .cursor_advanced == false and
-    .failure_count == 0 and .failure_stages == [] and
-    .pending_approval_ids == [$approval]
-  ' "$RETRY_RECEIPT" >/dev/null
-```
-
-The receipts deliberately contain no title, transcript, summary, participant,
-owner email, provider meeting ID, credential, or failure message. Keep them and
-the command stderr mode `0600` in private evidence; do not paste either into a
-tracked file or chat.
-
 ### Private start and approval canary
 
-Start `authority` and `proxy` only after one flow passes: either the
-live-only cutoff receipt is verified and its one new post-cutoff meeting is
-complete, or the pre-baseline flow produced the required `pending_created`
-then exact `pending_exists` artifact pair. Keep ingress off and prove private
-health. Starting `serve` also starts the serialized live worker because the
-source now exists and the exact Slack capability is ready; outbound Granola
-and Slack calls do not require the Tunnel. Keep public ingress off through the
-controlled approval canary. Do not reverse this order:
+Start `authority` and `proxy` only after the live-only cutoff receipt is
+verified and its one new post-cutoff meeting is ready. Keep ingress off and
+prove private health. Starting `serve` also starts the serialized live
+worker because the source now exists and the exact Slack capability is ready;
+outbound Granola and Slack calls do not require the Tunnel. Keep public ingress
+off through the controlled approval canary. Do not reverse this order:
 
 ```bash
 set -euo pipefail
@@ -1123,13 +1010,14 @@ curl --fail --silent --show-error \
   http://127.0.0.1/v1/authority-descriptor >/dev/null
 ```
 
-Allow the worker to present the one pending approval in the configured Slack
-channel. Have only the exact bound reviewer apply the configured approval
-reaction. Require the approved record to appear in the Authority record before
-the final Slack delivery appears; retain both results in protected canary
-evidence. A record failure must leave final Slack unsent, and a Slack failure
-must retry against the same frozen signed record bytes. Keep the stack private
-and stop the canary on any other ordering or identity result.
+Allow the worker to pull and present the one new post-cutoff meeting in the
+configured Slack channel. This is a live-LLM candidate created by `serve`.
+Have only the exact bound reviewer apply the configured approval reaction. Require the approved
+record to appear in the Authority record before the final Slack delivery
+appears; retain both results in protected canary evidence. A record failure
+must leave final Slack unsent, and a Slack failure must retry against the same
+frozen signed record bytes. Keep the stack private and stop the canary on any
+other ordering or identity result.
 
 Only after that canary passes, enable the Tunnel and verify its single EC2
 connector:
@@ -1150,11 +1038,10 @@ for attempt in {1..12}; do
 done
 ```
 
-`process-one-meeting` exits after its bounded provisioning/canary run; `serve`
-is now the processing owner and continues the serialized 30-second, limit-1
-loop until the Authority shuts down. A pending candidate is durable and is not
-retention-eligible until the bound Slack reviewer resolves it. Keep only the
-one intended meeting eligible during this minimum-V1 canary.
+`serve` is the processing owner and continues the serialized 30-second,
+limit-1 loop until the Authority shuts down. A live-worker pending candidate is
+durable and is not retention-eligible until the bound Slack reviewer resolves
+it. Keep only the one intended meeting eligible during this minimum-V1 canary.
 
 ## Minimum operating checkpoint
 

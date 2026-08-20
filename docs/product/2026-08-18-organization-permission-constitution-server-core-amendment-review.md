@@ -3,7 +3,8 @@
 **Submission identifier:**
 `permission-constitution-server-core-amendment-v1-review-1`
 
-**Submission state:** submitted for review; disposition pending.
+**Submission state:** closed without acceptance; replacement candidate under
+review.
 
 **Submitted at:** 2026-08-18.
 
@@ -53,13 +54,31 @@ is committed.
 
 ## Disposition
 
-No reviewer decision is recorded.
+This exact v1 candidate received no acceptance. On 2026-08-20, the same
+server-core migration workstream that submitted it withdrew this review
+request because the candidate defines only the pre-record processing scope and
+does not close the record-resolution write, provider/adapter/ECHO identity,
+delivery, canonical rejection, or Person release boundaries required by the
+lean target. This is a submitter withdrawal and documentation-lifecycle
+closure, not a constitution-owner or security-review disposition.
 
-- **Status:** pending.
-- **Reviewer:** not recorded.
-- **Reviewed artifact digest:** not recorded.
-- **Decision reference:** not recorded.
-- **Required changes:** not recorded.
+- **Status:** withdrawn by submitter / no reviewer acceptance.
+- **Withdrawal recorded at:** 2026-08-20.
+- **Withdrawal authority:** server-core migration workstream that created this
+  submission; authority is limited to withdrawing its own candidate.
+- **Reviewer acceptance:** none recorded.
+- **Reviewed candidate digest:**
+  `ac5c643ea2f94d35b872c829f332074da82cdabad97602a815df0e9d66827e6c`.
+- **Replacement proposal:**
+  [RFC-0001 server-core lean Authority contracts](../rfcs/RFC-0001-server-core-lean-authority-contracts.md).
+- **Proposed decision:**
+  [ADR-0003 server-core lean Authority contracts](../decisions/ADR-0003-server-core-lean-authority-contracts.md).
+
+RFC-0001 and ADR-0003 remain draft/proposed. This disposition closes only the
+older review request; it does not accept the replacement or amend the
+constitution. The v1 proposal bytes and digest remain historical and are not
+edited. The proposal therefore continues to describe its original submitted
+state; this later review record owns the subsequent withdrawal state.
 
 Documentation validation proves only repository shape, link integrity, and
 safety scanning. It is not review acceptance, implementation evidence,

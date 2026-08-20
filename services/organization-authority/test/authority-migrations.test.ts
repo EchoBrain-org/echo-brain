@@ -34,6 +34,7 @@ const AUTHORITY_TABLES = [
   'authority_processing_member_exclusions',
   'authority_processing_processed_markers',
   'authority_processing_resolutions',
+  'authority_processing_slack_delivery_attempts',
   'authority_processing_slots',
   'authority_processing_source_configuration_bindings',
   'authority_processing_source_cursors',
@@ -62,7 +63,7 @@ describe('organization authority database migrations', () => {
     openAuthorityDatabase(path).close();
 
     const database = new Database(path, { readonly: true });
-    expect(database.pragma('user_version', { simple: true })).toBe(17);
+    expect(database.pragma('user_version', { simple: true })).toBe(19);
     const tables = database
       .prepare(
         `SELECT name FROM sqlite_master
@@ -130,6 +131,7 @@ describe('organization authority database migrations', () => {
         'authority_processing_frozen_record_envelopes',
         'authority_processing_processed_markers',
         'authority_processing_delivery_receipts',
+        'authority_processing_slack_delivery_attempts',
         'authority_processing_member_exclusions',
       ].map((table) => [
         table,
@@ -242,6 +244,14 @@ describe('organization authority database migrations', () => {
         'recorded_at',
         'retryable',
       ],
+      authority_processing_slack_delivery_attempts: [
+        'idempotency_key',
+        'status',
+        'channel_id',
+        'message_ts',
+        'recorded_at',
+        'message',
+      ],
       authority_processing_member_exclusions: [
         'organization_id',
         'principal_id',
@@ -332,7 +342,7 @@ describe('organization authority database migrations', () => {
 
     openAuthorityDatabase(path).close();
     const upgraded = new Database(path);
-    expect(upgraded.pragma('user_version', { simple: true })).toBe(17);
+    expect(upgraded.pragma('user_version', { simple: true })).toBe(19);
     const tables = upgraded
       .prepare(
         `SELECT name FROM sqlite_master
@@ -478,6 +488,40 @@ describe('organization authority database migrations', () => {
     upgraded.close();
   });
 
+  it('rejects partial Slack delivery attempt states at the migration boundary', () => {
+    const path = databasePath();
+    openAuthorityDatabase(path).close();
+    const database = new Database(path);
+    const insert = database.prepare(
+      `INSERT INTO authority_processing_slack_delivery_attempts (
+         idempotency_key, status, channel_id, message_ts, recorded_at, message
+       ) VALUES (?, ?, ?, ?, ?, ?)`,
+    );
+    const recordedAt = '2026-08-20T00:00:00.000Z';
+    const overlongKey = `${'k'.repeat(8192)} `;
+    const overlongValue = `${'v'.repeat(4096)} `;
+
+    for (const values of [
+      [null, 'unknown', null, null, recordedAt, 'unknown'],
+      ['   ', 'unknown', null, null, recordedAt, 'unknown'],
+      [overlongKey, 'unknown', null, null, recordedAt, 'unknown'],
+      ['unknown-null-message', 'unknown', null, null, recordedAt, null],
+      ['unknown-blank-message', 'unknown', null, null, recordedAt, '   '],
+      ['unknown-long-message', 'unknown', null, null, recordedAt, overlongValue],
+      ['unknown-provider-id', 'unknown', 'C123', null, recordedAt, 'unknown'],
+      ['delivered-null-channel', 'delivered', null, '1700.100000', recordedAt, null],
+      ['delivered-blank-channel', 'delivered', '   ', '1700.100000', recordedAt, null],
+      ['delivered-long-channel', 'delivered', overlongValue, '1700.100000', recordedAt, null],
+      ['delivered-null-ts', 'delivered', 'C123', null, recordedAt, null],
+      ['delivered-blank-ts', 'delivered', 'C123', '   ', recordedAt, null],
+      ['delivered-long-ts', 'delivered', 'C123', overlongValue, recordedAt, null],
+      ['delivered-message', 'delivered', 'C123', '1700.100000', recordedAt, 'unexpected'],
+    ] as const) {
+      expect(() => insert.run(...values)).toThrow();
+    }
+    database.close();
+  });
+
   it('is idempotent at the current schema version', () => {
     const path = databasePath();
     openAuthorityDatabase(path).close();
@@ -581,11 +625,11 @@ describe('organization authority database migrations', () => {
   it('rejects a database newer than this authority binary', () => {
     const path = databasePath();
     const future = new Database(path);
-    future.pragma('user_version = 18');
+    future.pragma('user_version = 20');
     future.close();
 
     expect(() => openAuthorityDatabase(path)).toThrow(
-      'newer than supported schema 17',
+      'newer than supported schema 19',
     );
   });
 });

@@ -69,14 +69,7 @@ function recentRequest() {
 
 function reviewerRequest() {
   return {
-    schema_version: 2,
-    kind: 'echo-organization-person-reviewer-recent-decisions-request',
-    request_id: 'rrd_00000000-0000-4000-8000-000000000001',
-    authority_id: descriptor.authority_id,
-    organization_id: descriptor.organization_id,
     subject_principal_id: principalId,
-    http_method: 'POST',
-    http_path: '/v2/reviewer-recent-decisions',
   } as const;
 }
 

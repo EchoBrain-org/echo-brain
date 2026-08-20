@@ -33,6 +33,7 @@ import { readableSearchReleaseDescriptor } from '../src/composition/operator-sta
 import { createReadableSearchRuntimeAdapter } from '../src/composition/readable-search.js';
 import { readableSearchCanonicalInput } from '../src/composition/readable-search-layer1.js';
 import { fenceAuthorizationRelevantAuthorityMutations } from '../src/composition/readable-search-authorization-writes.js';
+import { composeReviewerRecentDecisions } from '../src/composition/reviewer-recent-decisions.js';
 import {
   organizationMemberSegmentIdentity,
   reviewerSegmentIdentity,
@@ -406,14 +407,27 @@ describe('Layer 2 local readable-search lifecycle', () => {
       revokedAuditDatabase.close();
     }
 
+    const appendedReviewerText = 'Reviewer decision appended after the Layer 2 build.';
     await restarted.submitRecordEnvelope({
-      record_envelope: await fixture.organizationMemberApprovalEnvelope({
+      record_envelope: await fixture.reviewerApprovalEnvelope({
         approval_id: approvalId('layer-2-stale'),
+        brief: recordBrief({
+          decisions: [
+            { ...recordBrief().decisions[0]!, text: appendedReviewerText },
+          ],
+        }),
       }),
     });
     await expect(service.search(await fixture.readableSearchRequest('launch'))).rejects.toMatchObject({
       code: 'unavailable',
     } satisfies Partial<ReadableSearchError>);
+    const reviewerRecent = composeReviewerRecentDecisions(
+      fixture.application,
+      restarted,
+      fixture.integrations,
+    ).reviewerRecentDecisions(await fixture.reviewerRecentDecisionsRequest());
+    expect(reviewerRecent.status_code).toBe(200);
+    expect(reviewerRecent.body.toString('utf8')).toContain(appendedReviewerText);
   });
 
   it.each([

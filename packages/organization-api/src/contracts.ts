@@ -232,12 +232,7 @@ export interface OrganizationMemberReadablePermissionCheckDecisionV3 {
   authorization_audit_event_id: string | null; authorization_audit_entry_sha256: OrganizationApiSha256Digest | null; release_draft_sha256: OrganizationApiSha256Digest | null; approval_presentation_sha256: OrganizationApiSha256Digest | null; semantic_intent_sha256: OrganizationApiSha256Digest | null; message_presentation_sha256: OrganizationApiSha256Digest | null;
 }
 
-/**
- * The session-authenticated Person read bodies deliberately carry only the
- * asserted Person subject and exact operation. The transport credential and
- * Authority-resolved membership stay outside the body, and the Authority owns
- * final transaction/audit timing.
- */
+/** Legacy pilot transport envelope; intentionally unchanged in this phase. */
 export interface OrganizationPersonRecentDecisionsRequestV2 {
   schema_version: 2;
   kind: 'echo-organization-person-recent-decisions-request';
@@ -249,26 +244,17 @@ export interface OrganizationPersonRecentDecisionsRequestV2 {
   http_path: '/v2/recent-decisions';
 }
 
+/**
+ * Session-authenticated Person read bodies carry only the asserted Person
+ * subject plus operation-specific semantic input. The route, credential,
+ * Authority, organization and membership stay outside the body.
+ */
 export interface OrganizationPersonReviewerRecentDecisionsRequestV2 {
-  schema_version: 2;
-  kind: 'echo-organization-person-reviewer-recent-decisions-request';
-  request_id: string;
-  authority_id: string;
-  organization_id: string;
   subject_principal_id: string;
-  http_method: 'POST';
-  http_path: '/v2/reviewer-recent-decisions';
 }
 
 export interface OrganizationPersonReadableSearchRequestV2 {
-  schema_version: 2;
-  kind: 'echo-organization-person-readable-search-request';
-  request_id: string;
-  authority_id: string;
-  organization_id: string;
   subject_principal_id: string;
-  http_method: 'POST';
-  http_path: '/v2/readable-search';
   query: string;
 }
 
@@ -384,29 +370,22 @@ export interface OrganizationPersonSessionRefreshRequestV2 {
   refresh_token: string;
 }
 
-/** A Person-authenticated request to post one Slack identity challenge. */
+/**
+ * A Person-authenticated request to post one Slack identity challenge.
+ * Identity and route context come from the bearer credential and matched route.
+ */
 export interface OrganizationPersonSlackLinkBeginRequestV2 {
-  schema_version: 2;
-  kind: 'echo-organization-person-slack-link-begin-request';
   request_id: string;
-  authority_id: string;
-  organization_id: string;
-  subject_principal_id: string;
-  http_method: 'POST';
-  http_path: '/v2/integration-links/slack/challenges';
   challenge_code_sha256: OrganizationApiSha256Digest;
 }
 
-/** A Person-authenticated request to prove the exact reply to that challenge. */
+/**
+ * A Person-authenticated request to prove the exact reply to that challenge.
+ * The request ID and message timestamp remain transitional replay inputs until
+ * new-lineage challenge state owns the provider coordinate.
+ */
 export interface OrganizationPersonSlackLinkCompleteRequestV2 {
-  schema_version: 2;
-  kind: 'echo-organization-person-slack-link-complete-request';
   request_id: string;
-  authority_id: string;
-  organization_id: string;
-  subject_principal_id: string;
-  http_method: 'POST';
-  http_path: '/v2/integration-links/slack/completions';
   challenge_attempt_id: string;
   challenge_message_ts: string;
   challenge_code: string;

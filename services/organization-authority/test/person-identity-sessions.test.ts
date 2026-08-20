@@ -24,6 +24,7 @@ import {
   PersonIdentitySessionApplication,
   type BegunPersonOidcLogin,
   type IssuedPersonSession,
+  type PersonAccessAuthorization,
 } from "../src/application/person-identity-sessions.js";
 import type {
   AuthorityWriteTransaction,
@@ -219,7 +220,9 @@ function descriptor(): OrganizationAuthorityDescriptorV1 {
   };
 }
 
-function setup(): Fixture {
+function setup(
+  membershipType: StoredAuthorityMembership["membership_type"] = "owner",
+): Fixture {
   const directory = mkdtempSync(join(tmpdir(), "echo-person-session-app-"));
   directories.push(directory);
   const path = join(directory, "authority.sqlite");
@@ -235,8 +238,9 @@ function setup(): Fixture {
     organization_id: authority.organization_id,
     principal_id: federationId("prn"),
     membership_id: federationId("mem"),
-    display_name: "Session Owner",
-    membership_type: "owner",
+    display_name:
+      membershipType === "owner" ? "Session Owner" : "Session Employee",
+    membership_type: membershipType,
     status: "active",
     provisioned_at: "2026-08-18T00:00:01.000Z",
     revoked_at: null,
@@ -359,6 +363,37 @@ function personSessionRowCounts(path: string): {
   }
 }
 
+function personIdentityStateCounts(path: string): {
+  grants: number;
+  attempts: number;
+  bindings: number;
+  families: number;
+  credentials: number;
+} {
+  const database = new Database(path, { readonly: true });
+  try {
+    return database
+      .prepare(
+        `SELECT
+           (SELECT count(*) FROM authority_person_login_grants) AS grants,
+           (SELECT count(*) FROM authority_oidc_login_attempts) AS attempts,
+           (SELECT count(*) FROM authority_oidc_identity_bindings) AS bindings,
+           (SELECT count(*) FROM authority_person_session_families) AS families,
+           (SELECT count(*) FROM authority_person_session_credentials)
+             AS credentials`,
+      )
+      .get() as {
+      grants: number;
+      attempts: number;
+      bindings: number;
+      families: number;
+      credentials: number;
+    };
+  } finally {
+    database.close();
+  }
+}
+
 function expectOpaqueDenial(operation: () => unknown): void {
   expect(operation).toThrowError(
     expect.objectContaining({
@@ -373,6 +408,52 @@ function rejectUnexpectedStartDeny(): never {
 }
 
 describe("PersonIdentitySessionApplication", () => {
+  it("authenticates an invited employee and opaquely rejects its credentials at a foreign Authority without side effects", async () => {
+    const employee = setup("employee");
+    const bootstrapped = await bootstrapSession(
+      employee,
+      "opaque-employee-provider-subject-001",
+    );
+    expect(employee.provider.calls).toHaveLength(1);
+    expect(
+      employee.application.authenticateAccess({
+        access_token: bootstrapped.session.access_token,
+      }),
+    ).toMatchObject({
+      organization_id: employee.authority.organization_id,
+      principal_id: employee.membership.principal_id,
+      membership_id: employee.membership.membership_id,
+      membership_type: "employee",
+      session_family_id: bootstrapped.session.session_family_id,
+    });
+
+    const foreign = setup("employee");
+    const before = personIdentityStateCounts(foreign.path);
+    expectOpaqueDenial(() =>
+      foreign.application.beginOidcLogin({
+        kind: "identity_bootstrap",
+        login_grant: bootstrapped.loginGrant,
+      }),
+    );
+    expectOpaqueDenial(() =>
+      foreign.application.authenticateAccess({
+        access_token: bootstrapped.session.access_token,
+      }),
+    );
+    expect(foreign.provider.calls).toHaveLength(0);
+    expect(personIdentityStateCounts(foreign.path)).toEqual(before);
+    expect(before).toEqual({
+      grants: 0,
+      attempts: 0,
+      bindings: 0,
+      families: 0,
+      credentials: 0,
+    });
+
+    employee.repository.close();
+    foreign.repository.close();
+  });
+
   it("audits an issued bootstrap login grant without persisting its raw bytes", () => {
     const fixture = setup();
     const issued = fixture.application.issueBootstrapLoginGrant({
@@ -617,6 +698,78 @@ describe("PersonIdentitySessionApplication", () => {
       session_family_id: reauthenticated.session_family_id,
     });
     reopened.close();
+  });
+
+  it("resolves and commits an authenticated Person write in one synchronous Authority transaction", async () => {
+    const fixture = setup();
+    const { session } = await bootstrapSession(fixture);
+    expect(
+      fixture.application.withAuthenticatedWrite({
+        access_token: session.access_token,
+        commit: (authorization, transaction) => {
+          transaction.appendAudit({
+            occurred_at: authorization.checked_at,
+            actor_kind: "admin",
+            action: "test.authenticated_person_write",
+            subject_id: authorization.principal_id,
+            detail: { membership_id: authorization.membership_id },
+          });
+          return authorization.membership_id;
+        },
+      }),
+    ).toBe(fixture.membership.membership_id);
+    expect(
+      fixture.repository.read((transaction) =>
+        transaction
+          .recentAuditBefore(undefined, 10)
+          .some(({ action }) => action === "test.authenticated_person_write"),
+      ),
+    ).toBe(true);
+
+    let invalidCommitReached = false;
+    expectOpaqueDenial(() =>
+      fixture.application.withAuthenticatedWrite({
+        access_token: "malformed-session-token",
+        commit: () => {
+          invalidCommitReached = true;
+        },
+      }),
+    );
+    expect(invalidCommitReached).toBe(false);
+
+    const promiseLikeCommit = (
+      authorization: PersonAccessAuthorization,
+      transaction: AuthorityWriteTransaction,
+    ) => {
+      transaction.appendAudit({
+        occurred_at: authorization.checked_at,
+        actor_kind: "admin",
+        action: "test.async_authenticated_person_write_must_rollback",
+        subject_id: authorization.principal_id,
+        detail: { membership_id: authorization.membership_id },
+      });
+      return Promise.resolve("must-not-escape-the-write-transaction");
+    };
+    expect(() =>
+      fixture.application.withAuthenticatedWrite({
+        access_token: session.access_token,
+        commit: promiseLikeCommit as unknown as (
+          authorization: PersonAccessAuthorization,
+          transaction: AuthorityWriteTransaction,
+        ) => string,
+      }),
+    ).toThrow("Person authenticated write commit must be synchronous");
+    expect(
+      fixture.repository.read((transaction) =>
+        transaction
+          .recentAuditBefore(undefined, 10)
+          .some(
+            ({ action }) =>
+              action === "test.async_authenticated_person_write_must_rollback",
+          ),
+      ),
+    ).toBe(false);
+    fixture.repository.close();
   });
 
   it("releases only an explicit pre-redemption retry, then succeeds and scrubs terminal attempts", async () => {

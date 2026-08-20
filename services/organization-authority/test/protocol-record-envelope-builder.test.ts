@@ -28,7 +28,7 @@ import type { OrganizationRecordEnvelopeBuildInput } from '../src/processing/rec
 const NOW = '2026-08-19T12:00:00.000Z';
 const MEETING_ID = 'granola:meeting-2026-08-19';
 const PROCESSING_KEY =
-  'processing:v1:["granola","primary","meeting-2026-08-19","rev-1","structured-text","default","1.0.0"]';
+  'processing:v2:["granola","primary","2.2.0","meeting-2026-08-19","rev-1","2.2.0",null,"structured-text","default","1.0.0"]';
 
 function id(prefix: string, suffix: number): string {
   return `${prefix}_00000000-0000-4000-8000-${suffix

@@ -293,8 +293,7 @@ export function authorityMaintenanceFingerprint(
     | 'expire-reviewer-query-audit'
     | 'export-readable-search-query-audit'
     | 'expire-readable-search-query-audit'
-    | 'process-one-meeting'
-    | 'baseline-live-source',
+    | 'activate-meeting-source',
 ): `sha256:${string}` {
   const keyPath = join(
     config.key_directory,

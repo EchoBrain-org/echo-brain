@@ -7,7 +7,6 @@ export * from './contracts/validation.js';
 export * from './ports/adapters.js';
 export * from './approval/approval-gate.js';
 export * from './storage/core-state-store.js';
-export * from './runtime/adapter-registry.js';
 export * from './processing/brief.js';
 export * from './processing/run-core-cycle.js';
 export * from './delivery/envelope.js';

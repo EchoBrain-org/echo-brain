@@ -12,14 +12,13 @@ import {
 } from '@echo-brain/federation-protocol';
 import { organizationAuthorityPinSha256 } from '@echo-brain/organization-protocol';
 import type { OrganizationAuthorityDescriptorV1 } from '@echo-brain/organization-protocol';
-import { SqlitePersonMemberExclusionMutationPort } from '../src/adapters/persistence/sqlite/sqlite-person-member-exclusion-mutation-port.js';
 import { SqliteOrganizationAuthorityRepository } from '../src/adapters/persistence/sqlite/sqlite-authority-repository.js';
 import { OrganizationAuthorityAdminQueries } from '../src/application/admin-queries.js';
-import {
-  PersonMemberExclusionSourceDeniedError,
-  type PersonMemberExclusionMutation,
-} from '../src/application/person-member-exclusions.js';
-import type { StoredAuthorityMembership } from '../src/application/ports/authority-repository.js';
+import type {
+  MemberExclusionOwnerSource,
+  StoredAuthorityMembership,
+  StoredMemberExclusionSelector,
+} from '../src/application/ports/authority-repository.js';
 
 const NOW = '2026-08-18T00:00:00.000Z';
 const AUTHORITY_ID = 'oau_00000000-0000-4000-8000-000000000001';
@@ -31,6 +30,7 @@ const OTHER_MEMBERSHIP_ID = 'mem_00000000-0000-4000-8000-000000000002';
 const SOURCE_ADAPTER_ID = 'sentinel-sensitive-source';
 const SOURCE_INSTANCE_ID = 'sentinel-private-instance';
 const EXTERNAL_ID = 'sentinel-private-meeting';
+const OPAQUE_EXTERNAL_ID = 'opaque\nmeeting\u007f';
 
 const temporaryDirectories: string[] = [];
 const repositories: SqliteOrganizationAuthorityRepository[] = [];
@@ -84,9 +84,18 @@ function membership(input: {
   };
 }
 
+interface TestMemberExclusionMutation {
+  readonly organization_id: string;
+  readonly principal_id: string;
+  readonly membership_id: string;
+  readonly membership_type: 'owner' | 'employee';
+  readonly selector: StoredMemberExclusionSelector;
+  readonly excluded: boolean;
+}
+
 function mutation(
-  overrides: Partial<PersonMemberExclusionMutation> = {},
-): PersonMemberExclusionMutation {
+  overrides: Partial<TestMemberExclusionMutation> = {},
+): TestMemberExclusionMutation {
   return {
     organization_id: ORGANIZATION_ID,
     principal_id: OWNER_PRINCIPAL_ID,
@@ -102,7 +111,28 @@ function mutation(
   };
 }
 
-describe('SqlitePersonMemberExclusionMutationPort', () => {
+function change(
+  repository: SqliteOrganizationAuthorityRepository,
+  input: TestMemberExclusionMutation,
+): boolean {
+  const source: MemberExclusionOwnerSource = {
+    organization_id: input.organization_id,
+    principal_id: input.principal_id,
+    membership_id: input.membership_id,
+    membership_type: input.membership_type,
+    source_adapter_id: input.selector.source_adapter_id,
+    source_instance_id: input.selector.source_instance_id,
+  };
+  return repository.write(NOW, (transaction) =>
+    transaction.setMemberExclusionForOwner(
+      source,
+      input.selector,
+      input.excluded,
+    ),
+  );
+}
+
+describe('SQLite Authority member exclusion transaction', () => {
   it('changes only an exact owned binding and leaves every admin projection content-blind', async () => {
     const directory = mkdtempSync(join(tmpdir(), 'echo-member-exclusion-'));
     temporaryDirectories.push(directory);
@@ -165,10 +195,6 @@ describe('SqlitePersonMemberExclusionMutationPort', () => {
       );
     seed.close();
 
-    const port = new SqlitePersonMemberExclusionMutationPort(
-      databasePath,
-      () => NOW,
-    );
     const source = mutation();
     const meeting = mutation({
       selector: {
@@ -178,11 +204,21 @@ describe('SqlitePersonMemberExclusionMutationPort', () => {
         external_id: EXTERNAL_ID,
       },
     });
+    const opaqueMeeting = mutation({
+      selector: {
+        scope: 'meeting',
+        source_adapter_id: SOURCE_ADAPTER_ID,
+        source_instance_id: SOURCE_INSTANCE_ID,
+        external_id: OPAQUE_EXTERNAL_ID,
+      },
+    });
 
-    await port.change(source);
-    await port.change(source);
-    await port.change(meeting);
-    await port.change(meeting);
+    expect(change(repository, source)).toBe(true);
+    expect(change(repository, source)).toBe(true);
+    expect(change(repository, meeting)).toBe(true);
+    expect(change(repository, meeting)).toBe(true);
+    expect(change(repository, opaqueMeeting)).toBe(true);
+    expect(change(repository, opaqueMeeting)).toBe(true);
 
     const auditResponseBytes = Buffer.from(
       canonicalJson({ SOURCE_ADAPTER_ID, SOURCE_INSTANCE_ID, EXTERNAL_ID }),
@@ -230,6 +266,7 @@ describe('SqlitePersonMemberExclusionMutationPort', () => {
         )
         .all(),
     ).toEqual([
+      { scope_kind: 'meeting', external_id: OPAQUE_EXTERNAL_ID },
       { scope_kind: 'meeting', external_id: EXTERNAL_ID },
       { scope_kind: 'source', external_id: '' },
     ]);
@@ -305,7 +342,7 @@ describe('SqlitePersonMemberExclusionMutationPort', () => {
     ).toThrow('member exclusion read audit deletion is denied');
     auditMutation.close();
 
-    const failures: Error[] = [];
+    const unavailable: boolean[] = [];
     for (const denied of [
       mutation({
         selector: {
@@ -319,28 +356,9 @@ describe('SqlitePersonMemberExclusionMutationPort', () => {
         membership_id: OTHER_MEMBERSHIP_ID,
       }),
     ]) {
-      try {
-        await port.change(denied);
-      } catch (error) {
-        if (!(error instanceof Error)) throw error;
-        failures.push(error);
-      }
+      unavailable.push(change(repository, denied));
     }
-    expect(failures).toHaveLength(2);
-    expect(failures).toEqual([
-      expect.any(PersonMemberExclusionSourceDeniedError),
-      expect.any(PersonMemberExclusionSourceDeniedError),
-    ]);
-    expect(failures.map(({ name, message }) => ({ name, message }))).toEqual([
-      {
-        name: 'PersonMemberExclusionSourceDeniedError',
-        message: 'member exclusion source is unavailable',
-      },
-      {
-        name: 'PersonMemberExclusionSourceDeniedError',
-        message: 'member exclusion source is unavailable',
-      },
-    ]);
+    expect(unavailable).toEqual([false, false]);
     expect(
       inspect
         .prepare(
@@ -358,10 +376,20 @@ describe('SqlitePersonMemberExclusionMutationPort', () => {
       },
     ]);
 
-    await port.change(mutation({ excluded: false }));
-    await port.change(mutation({ excluded: false }));
-    await port.change(mutation({ ...meeting, excluded: false }));
-    await port.change(mutation({ ...meeting, excluded: false }));
+    expect(change(repository, mutation({ excluded: false }))).toBe(true);
+    expect(change(repository, mutation({ excluded: false }))).toBe(true);
+    expect(change(repository, mutation({ ...meeting, excluded: false }))).toBe(
+      true,
+    );
+    expect(
+      change(repository, mutation({ ...opaqueMeeting, excluded: false })),
+    ).toBe(true);
+    expect(
+      change(repository, mutation({ ...opaqueMeeting, excluded: false })),
+    ).toBe(true);
+    expect(change(repository, mutation({ ...meeting, excluded: false }))).toBe(
+      true,
+    );
     expect(
       inspect
         .prepare(

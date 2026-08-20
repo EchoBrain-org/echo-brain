@@ -53,10 +53,14 @@ const DENIAL_BYTES = fixedReadableSearchErrorBytes(401);
 function callerBinding(
   request: OrganizationPersonReadableSearchRequestV2,
   requestSha256: `sha256:${string}`,
+  boundary: Pick<
+    PersonReadableSearchServiceOptions,
+    'authority_id' | 'organization_id'
+  >,
 ): PersonReadCallerBindingInput {
   return Object.freeze({
-    authority_id: request.authority_id,
-    organization_id: request.organization_id,
+    authority_id: boundary.authority_id,
+    organization_id: boundary.organization_id,
     subject_principal_id: request.subject_principal_id,
     operation: 'readable_search',
     request_sha256: requestSha256,
@@ -169,16 +173,10 @@ export class PersonReadableSearchService {
     } catch (cause) {
       throw new ReadableSearchError('invalid_request', 'Person readable-search request is invalid', { cause });
     }
-    if (
-      request.authority_id !== this.options.authority_id ||
-      request.organization_id !== this.options.organization_id
-    ) {
-      throw new ReadableSearchError('invalid_request', 'Person readable-search targets another authority');
-    }
     // The validated V2 document is canonicalized before its session binding
     // and durable decision audit are derived.
     const requestSha256 = canonicalPersonReadRequestSha256(request);
-    const binding = callerBinding(request, requestSha256);
+    const binding = callerBinding(request, requestSha256, this.options);
     let admission: PersonReadAdmission;
     try {
       admission = this.options.authorization.admitSelfRead({

@@ -279,6 +279,17 @@ export function createGranolaLiveOnlyCursor(cutoffAt: string): string {
   });
 }
 
+/** Returns the stopped-time boundary without disclosing a pagination token. */
+export function granolaLiveOnlyCutoff(cursor: string): string {
+  const state = decodeCursor(cursor);
+  if (state.watermark === null || state.page_cursor !== null || state.page_high_watermark !== null) {
+    throw new Error('Granola cursor is not a live-only activation cursor');
+  }
+  return new Date(
+    new Date(state.watermark).getTime() - DEFAULT_GRANOLA_CURSOR_OVERLAP_MS,
+  ).toISOString();
+}
+
 function adapterError(error: unknown): AdapterError {
   if (error instanceof AdapterError) return error;
   if (error instanceof GranolaApiError) {

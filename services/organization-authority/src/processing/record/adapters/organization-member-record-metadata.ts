@@ -2,99 +2,98 @@ import { createHash } from 'node:crypto';
 import { canonicalJson } from '@echo-brain/federation-protocol';
 import {
   ORGANIZATION_MEMBER_READABLE_RECORD_SURFACE,
-  type OrganizationRecordOrganizationMemberAuthorizationV3,
+  RESTRICTED_REVIEWER_RECORD_SURFACE,
+  type OrganizationRecordReviewerAuthorizationV1,
 } from '@echo-brain/organization-protocol';
 import { validateOrganizationMemberAuthorizationEvidence } from '../../authorization/organization-member-authorization-evidence.js';
+import { validateReviewerAuthorizationEvidence } from '../../authorization/reviewer-authorization-evidence.js';
 import type { ApprovalDecision } from '../../core/approval/approval-gate.js';
-import type { DeliveryEnvelope } from '../../core/contracts/delivery.js';
-import { approvedBriefDigest } from '../../core/delivery/envelope.js';
 import type {
-  AuthorityApprovalResolutionMetadata,
-  AuthorityProcessingCandidate,
+  AuthorityTerminalRecordAct,
 } from '../../storage/sqlite-authority-processing-store.js';
 import type {
-  OrganizationMemberRecordApprovalMetadata,
-  OrganizationMemberRecordApprovalMetadataLookup,
-} from './organization-member-record-first-delivery.js';
+  ResolvedOrganizationRecordMetadata,
+  ResolvedOrganizationRecordMetadataLookup,
+} from './resolved-organization-record-act-writer.js';
+import type { OrganizationRecordAuthorizationEvidence } from '../ports.js';
 
-export interface OrganizationMemberRecordMetadataStore {
-  getCandidate(
-    processingKey: string,
-  ): Promise<AuthorityProcessingCandidate | undefined>;
-  getApproval(processingKey: string): Promise<ApprovalDecision | undefined>;
-  readApprovalResolutionMetadata(
-    approvalId: string,
-  ): AuthorityApprovalResolutionMetadata | null;
-}
-
-function deliveryProcessingKey(envelope: DeliveryEnvelope): string | null {
-  const prefix = 'delivery:v1:';
-  if (!envelope.idempotency_key.startsWith(prefix)) return null;
-  let identity: unknown;
-  try {
-    identity = JSON.parse(envelope.idempotency_key.slice(prefix.length));
-  } catch {
-    return null;
-  }
-  if (
-    !Array.isArray(identity) ||
-    identity.length !== 5 ||
-    identity.some((value) => typeof value !== 'string') ||
-    identity[1] !== approvedBriefDigest(envelope.brief) ||
-    identity[2] !== envelope.destination.adapter_id ||
-    identity[3] !== envelope.destination.instance_id ||
-    identity[4] !== envelope.destination.external_id
-  ) {
-    return null;
-  }
-  return identity[0] as string;
+export interface ResolvedOrganizationRecordMetadataStore {
+  readTerminalRecordAct(processingKey: string): AuthorityTerminalRecordAct | null;
 }
 
 function approvalId(processingKey: string): string {
   return createHash('sha256').update(processingKey, 'utf8').digest('hex');
 }
 
-/** Rejoins one core delivery to the immutable approval facts stored beside it. */
-export class SqliteOrganizationMemberRecordApprovalMetadataLookup
-  implements OrganizationMemberRecordApprovalMetadataLookup
+/** Rejoins a resolved core act to the immutable Authority facts stored beside it. */
+export class SqliteResolvedOrganizationRecordMetadataLookup
+  implements ResolvedOrganizationRecordMetadataLookup
 {
-  constructor(private readonly store: OrganizationMemberRecordMetadataStore) {}
+  constructor(private readonly store: ResolvedOrganizationRecordMetadataStore) {}
 
-  async findForDelivery(
-    envelope: DeliveryEnvelope,
-  ): Promise<OrganizationMemberRecordApprovalMetadata | null> {
-    const processingKey = deliveryProcessingKey(envelope);
-    if (processingKey === null) return null;
-    const candidate = await this.store.getCandidate(processingKey);
-    const approval = await this.store.getApproval(processingKey);
+  async findForResolvedAct(
+    processingKey: string,
+    decision: Exclude<ApprovalDecision, { status: 'pending' }>,
+  ): Promise<ResolvedOrganizationRecordMetadata | null> {
+    const stored = this.store.readTerminalRecordAct(processingKey);
+    const candidate = stored?.candidate;
+    const approval = stored?.decision;
     const id = approvalId(processingKey);
-    const resolution = this.store.readApprovalResolutionMetadata(id);
+    const resolution = stored?.metadata;
     if (
       candidate === undefined ||
       candidate.first_request === null ||
-      approval?.status !== 'approved' ||
-      resolution === null ||
+      approval === undefined ||
+      canonicalJson(approval) !== canonicalJson(decision) ||
+      approval.status !== decision.status ||
+      resolution === undefined ||
       resolution.approval_id !== id ||
-      resolution.surface !== ORGANIZATION_MEMBER_READABLE_RECORD_SURFACE ||
       resolution.resolved_at !== approval.reviewed_at ||
-      canonicalJson(candidate.first_request.brief) !==
-        canonicalJson(envelope.brief) ||
-      canonicalJson(approval.approved_brief) !== canonicalJson(envelope.brief)
+      (approval.status === 'approved' &&
+        (canonicalJson(candidate.first_request.brief) !== canonicalJson(approval.approved_brief) ||
+          approval.approved_brief === null))
     ) {
       return null;
     }
-    const evidence = validateOrganizationMemberAuthorizationEvidence(
-      resolution.metadata['authorization'],
-    );
-    if (
-      evidence.approval_id !== id ||
-      evidence.evaluated_at !== approval.reviewed_at
-    ) {
+    let authorization;
+    let surface: string;
+    try {
+      const evidence = resolution.metadata['authorization'];
+      const schema = (evidence as { schema_version?: unknown } | null)?.schema_version;
+      if (
+        schema === 3 &&
+        approval.status === 'approved' &&
+        resolution.surface === 'slack-organization-member-readable-v1'
+      ) {
+        authorization = validateOrganizationMemberAuthorizationEvidence(evidence);
+        surface = ORGANIZATION_MEMBER_READABLE_RECORD_SURFACE;
+      } else if (
+        schema === 2 &&
+        approval.status === 'approved' &&
+        resolution.surface === 'slack-reviewer-v1'
+      ) {
+        authorization = validateReviewerAuthorizationEvidence(evidence);
+        surface = RESTRICTED_REVIEWER_RECORD_SURFACE;
+      } else if (schema === 1 && resolution.surface === 'slack-authority-v1') {
+        const v1 = evidence as unknown as OrganizationRecordReviewerAuthorizationV1;
+        if (
+          v1?.kind !== 'echo-organization-authorization-evidence' ||
+          v1.approval_id !== id ||
+          v1.action !== (approval.status === 'approved' ? 'approve' : 'reject') ||
+          v1.allowed !== true ||
+          v1.evaluated_at !== approval.reviewed_at
+        ) return null;
+        authorization = v1;
+        surface = resolution.surface;
+      } else return null;
+      if (authorization.approval_id !== id || authorization.evaluated_at !== approval.reviewed_at) return null;
+    } catch {
       return null;
     }
     const source = candidate.meeting.provenance;
     return Object.freeze({
       approval_id: id,
+      meeting_id: candidate.meeting.id,
       source: {
         adapter_id: source.source.adapter_id,
         instance_id: source.source.instance_id,
@@ -102,8 +101,8 @@ export class SqliteOrganizationMemberRecordApprovalMetadataLookup
       },
       reviewed_by: approval.reviewed_by,
       submitted_at: resolution.resolved_at,
-      authorization:
-        evidence as OrganizationRecordOrganizationMemberAuthorizationV3,
+      authorization: authorization as OrganizationRecordAuthorizationEvidence,
+      surface,
     });
   }
 }

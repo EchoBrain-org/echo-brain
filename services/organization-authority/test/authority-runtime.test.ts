@@ -3,6 +3,7 @@ import { chmodSync, mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
+  createHash,
   generateKeyPairSync,
   randomBytes,
   randomUUID,
@@ -50,6 +51,8 @@ import type {
   OrganizationReviewerRecentDecisionsRequestV1,
 } from '@echo-brain/organization-api';
 import { OrganizationAuthorityApplication } from '../src/application/organization-authority.js';
+import { PersonIdentitySessionApplication } from '../src/application/person-identity-sessions.js';
+import type { PersonSessionRuntime } from '../src/application/ports/person-session-runtime.js';
 import type {
   AuthorityClock,
   AuthorityIdentifierGenerator,
@@ -167,6 +170,45 @@ async function createApplication(
     access_request_maximum_age_ms: 5 * 60 * 1000,
   });
   return { application, repository, signer };
+}
+
+function personIdentitySessions(
+  repository: SqliteOrganizationAuthorityRepository,
+  clock: FakeClock,
+): PersonIdentitySessionApplication {
+  const runtime: PersonSessionRuntime = {
+    clock,
+    random: {
+      bytes: (_purpose, length) => randomBytes(length),
+    },
+    hash: {
+      sha256: (value) => createHash('sha256').update(value).digest(),
+    },
+    pkce_sealer: {
+      seal: () => {
+        throw new Error('OIDC PKCE is outside this topology test');
+      },
+      unseal: () => {
+        throw new Error('OIDC PKCE is outside this topology test');
+      },
+    },
+    oidc_provider: {
+      redeemAuthorizationCode: async () => {
+        throw new Error('OIDC redemption is outside this topology test');
+      },
+    },
+  };
+  return new PersonIdentitySessionApplication(
+    repository,
+    {
+      issuer: 'https://identity.example.test/',
+      client_id: 'echo-person-browser',
+      redirect_uri: 'https://authority.example.test/v2/session/oidc/callback',
+      tenant: { kind: 'issuer' },
+      id_token_algorithms: ['ES256'],
+    },
+    runtime,
+  );
 }
 
 async function enroll(
@@ -404,6 +446,151 @@ function closeFixture(
 }
 
 describe('single-organization authority runtime', () => {
+  it('provisions one owner and three employees before issuing their exact Person login grants', async () => {
+    const directory = mkdtempSync(join(tmpdir(), 'echo-authority-people-'));
+    chmodSync(directory, 0o700);
+    const databasePath = join(directory, 'authority.sqlite');
+    const clock = new FakeClock(Date.parse('2026-08-20T16:00:00.000Z'));
+    const { application, repository } = await createApplication(
+      databasePath,
+      clock,
+    );
+    const sessions = personIdentitySessions(repository, clock);
+    try {
+      expect(() =>
+        sessions.issueBootstrapLoginGrant({
+          target_membership_id: federationId('mem'),
+          expected_issuer: 'https://identity.example.test/',
+          expected_email: 'not-yet-provisioned@example.test',
+        }),
+      ).toThrowError(expect.objectContaining({ code: 'not_found' }));
+
+      const people = [
+        ['Authority Owner', 'owner', 'owner@example.test'],
+        ['Employee One', 'employee', 'employee.one@example.test'],
+        ['Employee Two', 'employee', 'employee.two@example.test'],
+        ['Employee Three', 'employee', 'employee.three@example.test'],
+      ] as const;
+      const memberships = people.map(([displayName, membershipType]) =>
+        application.provisionMembership({
+          command_id: `adm_${randomUUID()}`,
+          display_name: displayName,
+          membership_type: membershipType,
+        }),
+      );
+      const grants = memberships.map((membership, index) =>
+        sessions.issueBootstrapLoginGrant({
+          target_membership_id: membership.membership_id,
+          expected_issuer: 'https://identity.example.test/',
+          expected_email: people[index]![2],
+        }),
+      );
+      expect(memberships.map(({ membership_type }) => membership_type)).toEqual(
+        ['owner', 'employee', 'employee', 'employee'],
+      );
+
+      const database = new Database(databasePath, { readonly: true });
+      try {
+        const grantRows = database
+          .prepare(
+            `SELECT login_grant_sha256, grant_purpose, organization_id,
+                    principal_id, membership_id, membership_type,
+                    expected_issuer, expected_email_sha256, consumed_at
+             FROM authority_person_login_grants
+             ORDER BY membership_id`,
+          )
+          .all();
+        expect(grantRows).toEqual(
+          grants
+            .map((grant) => ({
+              login_grant_sha256: sha256Digest(
+                Buffer.from(grant.login_grant, 'utf8'),
+              ),
+              grant_purpose: 'oidc_identity_bootstrap',
+              organization_id: grant.organization_id,
+              principal_id: grant.principal_id,
+              membership_id: grant.membership_id,
+              membership_type: grant.membership_type,
+              expected_issuer: grant.expected_issuer,
+              expected_email_sha256: grant.expected_email_sha256,
+              consumed_at: null,
+            }))
+            .sort((left, right) =>
+              left.membership_id.localeCompare(right.membership_id),
+            ),
+        );
+
+        const relevantAudit = database
+          .prepare(
+            `SELECT action, subject_id
+             FROM authority_audit_log
+             WHERE action IN ('membership.provisioned', 'person_login_grant.issued')
+             ORDER BY audit_sequence`,
+          )
+          .all();
+        expect(relevantAudit).toEqual([
+          ...memberships.map((membership) => ({
+            action: 'membership.provisioned',
+            subject_id: membership.membership_id,
+          })),
+          ...memberships.map((membership) => ({
+            action: 'person_login_grant.issued',
+            subject_id: membership.membership_id,
+          })),
+        ]);
+
+        const counts = database
+          .prepare(
+            `SELECT
+               (SELECT count(*) FROM authority_metadata) AS organizations,
+               (SELECT count(*) FROM authority_principals) AS principals,
+               (SELECT count(*) FROM authority_memberships) AS memberships,
+               (SELECT count(*) FROM authority_person_login_grants) AS person_login_grants`,
+          )
+          .get();
+        expect(counts).toEqual({
+          organizations: 1,
+          principals: 4,
+          memberships: 4,
+          person_login_grants: 4,
+        });
+
+        const legacyTables = [
+          [
+            'authority_enrollment_grants',
+            'SELECT count(*) FROM authority_enrollment_grants',
+          ],
+          [
+            'authority_enrollments',
+            'SELECT count(*) FROM authority_enrollments',
+          ],
+          [
+            'authority_access_states',
+            'SELECT count(*) FROM authority_access_states',
+          ],
+          [
+            'authority_access_lease_requests',
+            'SELECT count(*) FROM authority_access_lease_requests',
+          ],
+        ] as const;
+        const tableExists = database.prepare(
+          `SELECT 1 FROM sqlite_master
+           WHERE type = 'table' AND name = ?`,
+        );
+        for (const [tableName, countSql] of legacyTables) {
+          if (tableExists.get(tableName) !== undefined) {
+            expect(database.prepare(countSql).pluck().get()).toBe(0);
+          }
+        }
+      } finally {
+        database.close();
+      }
+    } finally {
+      application.close();
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
   it('samples a linearized write timestamp only after holding the writer lock', async () => {
     const fixture = await createEnrolledFixture('2026-08-02T19:55:00.000Z');
     try {

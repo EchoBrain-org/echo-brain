@@ -27,30 +27,18 @@ const UNAVAILABLE_BODY =
 const INVALID_BODY =
   '{"error":{"code":"invalid_request","message":"request is invalid"}}';
 
-const IDENTITY = {
-  authority_id: 'oau_00000000-0000-4000-8000-000000000001',
-  organization_id: 'org_00000000-0000-4000-8000-000000000001',
-  subject_principal_id: 'prn_00000000-0000-4000-8000-000000000001',
-} as const;
+const AUTHORITY_ID = 'oau_00000000-0000-4000-8000-000000000001';
+const ORGANIZATION_ID = 'org_00000000-0000-4000-8000-000000000001';
+const PRINCIPAL_ID = 'prn_00000000-0000-4000-8000-000000000001';
 
 const BEGIN = {
-  schema_version: 2,
-  kind: 'echo-organization-person-slack-link-begin-request',
   request_id: 'psb_00000000-0000-4000-8000-000000000001',
-  ...IDENTITY,
-  http_method: 'POST',
-  http_path: ORGANIZATION_API_PERSON_SLACK_LINK_CHALLENGES_PATH,
   challenge_code_sha256:
     'sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
 } as const;
 
 const COMPLETE = {
-  schema_version: 2,
-  kind: 'echo-organization-person-slack-link-complete-request',
   request_id: 'psc_00000000-0000-4000-8000-000000000001',
-  ...IDENTITY,
-  http_method: 'POST',
-  http_path: ORGANIZATION_API_PERSON_SLACK_LINK_COMPLETIONS_PATH,
   challenge_attempt_id: 'cat_00000000-0000-4000-8000-000000000001',
   challenge_message_ts: '1755518400.000001',
   challenge_code: 'AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA',
@@ -72,8 +60,8 @@ const COMPLETE_RESPONSE = {
   kind: 'echo-organization-person-slack-link-result',
   identity_link_id: 'clm_00000000-0000-4000-8000-000000000001',
   connection_id: 'con_00000000-0000-4000-8000-000000000001',
-  organization_id: IDENTITY.organization_id,
-  principal_id: IDENTITY.subject_principal_id,
+  organization_id: ORGANIZATION_ID,
+  principal_id: PRINCIPAL_ID,
   membership_id: 'mem_00000000-0000-4000-8000-000000000001',
   provider: 'slack',
   provider_tenant_id: 'T123ABC',
@@ -216,6 +204,38 @@ describe('Person Slack identity-link HTTP routes', () => {
         expect(response.status).toBe(400);
         expect(await response.text()).toBe(INVALID_BODY);
       }
+      expect(begin).not.toHaveBeenCalled();
+      expect(complete).not.toHaveBeenCalled();
+    } finally {
+      await close(http);
+    }
+  });
+
+  it('rejects the old caller and route envelope before dispatch', async () => {
+    const begin = vi.fn(async () => BEGIN_RESPONSE);
+    const complete = vi.fn(async () => COMPLETE_RESPONSE);
+    const http = server({ begin, complete });
+    const origin = await listen(http);
+    const oldEnvelope = {
+      schema_version: 2,
+      kind: 'echo-organization-person-slack-link-begin-request',
+      authority_id: AUTHORITY_ID,
+      organization_id: ORGANIZATION_ID,
+      subject_principal_id: PRINCIPAL_ID,
+      http_method: 'POST',
+      http_path: ORGANIZATION_API_PERSON_SLACK_LINK_CHALLENGES_PATH,
+    } as const;
+    try {
+      const response = await fetch(
+        `${origin}${ORGANIZATION_API_PERSON_SLACK_LINK_CHALLENGES_PATH}`,
+        {
+          method: 'POST',
+          headers: requestHeaders(),
+          body: canonicalJson({ ...BEGIN, ...oldEnvelope }),
+        },
+      );
+      expect(response.status).toBe(400);
+      expect(await response.text()).toBe(INVALID_BODY);
       expect(begin).not.toHaveBeenCalled();
       expect(complete).not.toHaveBeenCalled();
     } finally {

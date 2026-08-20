@@ -102,6 +102,23 @@ function personSession(
   });
 }
 
+function personSlackLinkRequestSha256(
+  kind:
+    | 'echo-person-slack-link-begin-request-binding-v1'
+    | 'echo-person-slack-link-complete-request-binding-v1',
+  session: ReturnType<typeof personSession>,
+  request:
+    | OrganizationPersonSlackLinkBeginRequestV2
+    | OrganizationPersonSlackLinkCompleteRequestV2,
+) {
+  return canonicalSha256({
+    schema_version: 1,
+    kind,
+    ...session,
+    request,
+  });
+}
+
 function samePersonSession(
   left: PersonAccessAuthorization,
   right: PersonAccessAuthorization,
@@ -184,13 +201,12 @@ export class PersonSlackIdentityLinkService {
         'Person Slack identity-link begin request is invalid',
       );
     }
-    this.assertTarget(request);
-    const before = this.authenticate(request, accessToken);
+    const before = this.authenticate(accessToken);
     const activeTool = this.requireActiveTool();
     const token = this.readToolSecret(activeTool);
     const verified = await this.verifyTool(token, activeTool, signal);
     const begun = await this.options.authorization_fence.withRead(() => {
-      const current = this.authenticate(request, accessToken);
+      const current = this.authenticate(accessToken);
       if (
         !samePersonSession(before, current) ||
         !sameTool(activeTool, this.options.repository.activeSlackOrganizationTool()) ||
@@ -201,11 +217,19 @@ export class PersonSlackIdentityLinkService {
           'Person or Slack state changed while beginning the identity link',
         );
       }
+      const currentSession = personSession(
+        current,
+        this.options.authority_id,
+      );
       return repositoryOperation(() =>
         this.options.repository.beginPersonSlackIdentityLinkChallenge({
-          request_sha256: canonicalSha256(request),
+          request_sha256: personSlackLinkRequestSha256(
+            'echo-person-slack-link-begin-request-binding-v1',
+            currentSession,
+            request,
+          ),
           challenge_code_sha256: request.challenge_code_sha256,
-          person_session: personSession(current, this.options.authority_id),
+          person_session: currentSession,
           organization_tool: activeTool,
           now: current.checked_at,
         }),
@@ -241,7 +265,7 @@ export class PersonSlackIdentityLinkService {
     }
 
     await this.options.authorization_fence.withRead(() => {
-      const current = this.authenticate(request, accessToken);
+      const current = this.authenticate(accessToken);
       if (
         !samePersonSession(before, current) ||
         !sameTool(activeTool, this.options.repository.activeSlackOrganizationTool()) ||
@@ -296,9 +320,13 @@ export class PersonSlackIdentityLinkService {
         'Person Slack identity-link completion request is invalid',
       );
     }
-    this.assertTarget(request);
-    const before = this.authenticate(request, accessToken);
-    const commandSha256 = canonicalSha256(request);
+    const before = this.authenticate(accessToken);
+    const session = personSession(before, this.options.authority_id);
+    const commandSha256 = personSlackLinkRequestSha256(
+      'echo-person-slack-link-complete-request-binding-v1',
+      session,
+      request,
+    );
     const commandReplay = repositoryOperation(() =>
       this.options.repository.personSlackIdentityLinkCompletionReplay(
         request.request_id,
@@ -310,7 +338,6 @@ export class PersonSlackIdentityLinkService {
     }
 
     const activeTool = this.requireActiveTool();
-    const session = personSession(before, this.options.authority_id);
     const codeSha256 = organizationSlackLinkChallengeCodeSha256(
       request.challenge_code,
     );
@@ -379,7 +406,7 @@ export class PersonSlackIdentityLinkService {
     }
 
     return await this.options.authorization_fence.withRead(() => {
-      const current = this.authenticate(request, accessToken);
+      const current = this.authenticate(accessToken);
       const currentTool = this.options.repository.activeSlackOrganizationTool();
       if (
         !samePersonSession(before, current) ||
@@ -411,32 +438,11 @@ export class PersonSlackIdentityLinkService {
     });
   }
 
-  private assertTarget(request: {
-    authority_id: string;
-    organization_id: string;
-  }): void {
-    if (
-      request.authority_id !== this.options.authority_id ||
-      request.organization_id !== this.options.organization_id
-    ) {
-      throw new AuthorityOperationError(
-        'invalid_request',
-        'Person Slack identity-link request targets another authority',
-      );
-    }
-  }
-
-  private authenticate(
-    request: { organization_id: string; subject_principal_id: string },
-    accessToken: string,
-  ): PersonAccessAuthorization {
+  private authenticate(accessToken: string): PersonAccessAuthorization {
     const authorization = this.options.authentication.authenticateAccess({
       access_token: accessToken,
     });
-    if (
-      authorization.organization_id !== request.organization_id ||
-      authorization.principal_id !== request.subject_principal_id
-    ) {
+    if (authorization.organization_id !== this.options.organization_id) {
       throw unauthorized();
     }
     return authorization;

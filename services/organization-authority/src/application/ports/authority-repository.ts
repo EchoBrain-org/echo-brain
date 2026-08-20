@@ -755,6 +755,18 @@ export interface AuthorityWriteTransaction extends AuthorityReadTransaction {
     sessionFamilyId: string,
     reason: string,
   ): boolean;
+  /**
+   * Applies idempotent member-owned exclusion state only when the exact source
+   * binding and membership are still active in this transaction.
+   *
+   * `false` is the opaque unavailable-source result; `true` means the desired
+   * state already held or was applied.
+   */
+  setMemberExclusionForOwner(
+    source: MemberExclusionOwnerSource,
+    selector: StoredMemberExclusionSelector,
+    excluded: boolean,
+  ): boolean;
   /** Appends one isolated V2 Person read decision at the transaction time. */
   appendPersonReadDecisionAudit(
     entry: PersonReadDecisionAuditEntry,

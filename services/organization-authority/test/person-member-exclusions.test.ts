@@ -1,10 +1,11 @@
 import { ORGANIZATION_API_PERSON_MEMBER_EXCLUSIONS_PATH } from '@echo-brain/organization-api';
 import { describe, expect, it, vi } from 'vitest';
-import {
-  PersonMemberExclusionService,
-  PersonMemberExclusionSourceDeniedError,
-} from '../src/application/person-member-exclusions.js';
-import type { PersonAccessAuthorization } from '../src/application/person-identity-sessions.js';
+import { PersonMemberExclusionService } from '../src/application/person-member-exclusions.js';
+import type {
+  PersonAccessAuthorization,
+  PersonAuthenticatedWritePort,
+} from '../src/application/person-identity-sessions.js';
+import type { AuthorityWriteTransaction } from '../src/application/ports/authority-repository.js';
 import { ReadableSearchAuthorizationFence } from '../src/application/readable-search-authorization-fence.js';
 import { AuthorityOperationError } from '../src/domain/errors.js';
 
@@ -48,18 +49,35 @@ function request() {
   } as const;
 }
 
-function service(change = vi.fn(async () => undefined)) {
+function service(
+  setMemberExclusionForOwner = vi.fn(() => true),
+  authorize: 'allow' | 'deny' = 'allow',
+) {
   const fence = new ReadableSearchAuthorizationFence();
-  const authenticateAccess = vi.fn(() => AUTHORIZATION);
+  const accessTokens: string[] = [];
+  const authentication: PersonAuthenticatedWritePort = {
+    withAuthenticatedWrite: (input) => {
+      accessTokens.push(input.access_token);
+      if (authorize === 'deny') {
+        throw new AuthorityOperationError(
+          'unauthorized',
+          'person authentication failed',
+        );
+      }
+      return input.commit(
+        AUTHORIZATION,
+        { setMemberExclusionForOwner } as unknown as AuthorityWriteTransaction,
+      );
+    },
+  };
   return {
     fence,
-    change,
-    authenticateAccess,
+    accessTokens,
+    setMemberExclusionForOwner,
     application: new PersonMemberExclusionService({
       authority_id: AUTHORITY_ID,
       organization_id: ORGANIZATION_ID,
-      authentication: { authenticateAccess },
-      mutations: { change },
+      authentication,
       authorization_fence: fence,
     }),
   };
@@ -71,17 +89,19 @@ describe('PersonMemberExclusionService', () => {
     await expect(
       context.application.change(request(), 'person-access-token'),
     ).resolves.toBeUndefined();
-    expect(context.authenticateAccess).toHaveBeenCalledWith({
-      access_token: 'person-access-token',
-    });
-    expect(context.change).toHaveBeenCalledWith({
-      organization_id: ORGANIZATION_ID,
-      principal_id: PRINCIPAL_ID,
-      membership_id: MEMBERSHIP_ID,
-      membership_type: 'employee',
-      excluded: true,
-      selector: request().selector,
-    });
+    expect(context.accessTokens).toEqual(['person-access-token']);
+    expect(context.setMemberExclusionForOwner).toHaveBeenCalledWith(
+      {
+        organization_id: ORGANIZATION_ID,
+        principal_id: PRINCIPAL_ID,
+        membership_id: MEMBERSHIP_ID,
+        membership_type: 'employee',
+        source_adapter_id: 'granola',
+        source_instance_id: 'member-source',
+      },
+      request().selector,
+      true,
+    );
   });
 
   it('collapses subject and source-owner mismatches to opaque authorization failure', async () => {
@@ -98,13 +118,9 @@ describe('PersonMemberExclusionService', () => {
     ).rejects.toMatchObject({
       code: 'unauthorized',
     });
-    expect(wrongSubject.change).not.toHaveBeenCalled();
+    expect(wrongSubject.setMemberExclusionForOwner).not.toHaveBeenCalled();
 
-    const wrongSource = service(
-      vi.fn(async () => {
-        throw new PersonMemberExclusionSourceDeniedError();
-      }),
-    );
+    const wrongSource = service(vi.fn(() => false));
     await expect(
       wrongSource.application.change(request(), 'person-access-token'),
     ).rejects.toMatchObject({
@@ -113,50 +129,24 @@ describe('PersonMemberExclusionService', () => {
   });
 
   it('re-authenticates every mutation and never reaches storage for an inactive session', async () => {
-    const context = service();
-    context.authenticateAccess.mockImplementation(() => {
-      throw new AuthorityOperationError(
-        'unauthorized',
-        'person authentication failed',
-      );
-    });
+    const context = service(vi.fn(() => true), 'deny');
     await expect(
       context.application.change(request(), ''),
     ).rejects.toMatchObject({
       code: 'unauthorized',
     });
-    expect(context.authenticateAccess).toHaveBeenCalledWith({
-      access_token: '',
-    });
-    expect(context.change).not.toHaveBeenCalled();
+    expect(context.accessTokens).toEqual(['']);
+    expect(context.setMemberExclusionForOwner).not.toHaveBeenCalled();
   });
 
-  it('holds the shared write fence until the durable mutation finishes', async () => {
-    let releaseMutation!: () => void;
-    let enteredMutation!: () => void;
-    const entered = new Promise<void>((resolve) => {
-      enteredMutation = resolve;
-    });
-    const blocked = new Promise<void>((resolve) => {
-      releaseMutation = resolve;
-    });
-    const context = service(
-      vi.fn(async () => {
-        enteredMutation();
-        await blocked;
-      }),
-    );
+  it('enters the authenticated transaction only after acquiring the shared write fence', async () => {
+    const context = service();
+    const reader = await context.fence.acquireRead();
     const mutation = context.application.change(request(), 'person-access-token');
-    await entered;
-    let readerCommitted = false;
-    const reader = context.fence.withRead(() => {
-      readerCommitted = true;
-    });
     await Promise.resolve();
-    expect(readerCommitted).toBe(false);
-    releaseMutation();
+    expect(context.accessTokens).toEqual([]);
+    reader.release();
     await mutation;
-    await reader;
-    expect(readerCommitted).toBe(true);
+    expect(context.accessTokens).toEqual(['person-access-token']);
   });
 });

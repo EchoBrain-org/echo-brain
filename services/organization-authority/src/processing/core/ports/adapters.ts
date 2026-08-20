@@ -18,6 +18,8 @@ import type {
   MeetingPullRequest,
 } from '../contracts/meeting.js';
 import type { ApprovalGate } from '../approval/approval-gate.js';
+import type { ApprovalDecision } from '../approval/approval-gate.js';
+import type { AdapterOperationContext as OperationContext } from '../contracts/adapter.js';
 
 export interface MeetingSourceAdapter extends Adapter {
   readonly identity: AdapterIdentity & { kind: 'meeting-source' };
@@ -45,12 +47,24 @@ export interface DeliverySurfaceAdapter extends Adapter {
   ): Promise<DeliveryReceipt>;
 }
 
+/**
+ * The one Authority-owned act performed for a resolved terminal decision.
+ * It intentionally precedes all delivery surfaces, so a human-readable
+ * delivery can never become the only durable representation of an approval
+ * or rejection.
+ */
+export interface ResolvedActWriter {
+  write(
+    input: {
+      readonly processing_key: string;
+      readonly meeting: MeetingDocument;
+      readonly decisions: DecisionSet;
+      readonly decision: Exclude<ApprovalDecision, { status: 'pending' }>;
+    },
+    context?: OperationContext,
+  ): Promise<void>;
+}
+
 export interface ApprovalSurfaceAdapter extends Adapter, ApprovalGate {
   readonly identity: AdapterIdentity & { kind: 'approval-surface' };
 }
-
-export type AnyAdapter =
-  | MeetingSourceAdapter
-  | DecisionProcessorAdapter
-  | DeliverySurfaceAdapter
-  | ApprovalSurfaceAdapter;
