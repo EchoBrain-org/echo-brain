@@ -14,7 +14,7 @@ import {
 import type { JsonValue, Sha256Digest } from '@echo-brain/federation-protocol';
 import { organizationAuthorityPinSha256 } from '@echo-brain/organization-protocol';
 import type { OrganizationAuthorityDescriptorV1 } from '@echo-brain/organization-protocol';
-import { openAuthorityDatabase } from '../src/adapters/persistence/sqlite/open-database.js';
+import { openAndMigrateAuthorityDatabase } from '../src/adapters/persistence/sqlite/open-database.js';
 import { SqliteReviewerQueryAuditMaintenanceRepository } from '../src/adapters/persistence/sqlite/reviewer-query-audit-maintenance.js';
 import { SqliteOrganizationAuthorityRepository } from '../src/adapters/persistence/sqlite/sqlite-authority-repository.js';
 import {
@@ -251,7 +251,7 @@ function rawDatabase<T>(path: string, operation: (db: Database.Database) => T): 
 describe('reviewer query audit persistence', () => {
   it('installs the separate table, retention index, immutable guards, and no cutoff table', () => {
     const context = fixture();
-    const database = openAuthorityDatabase(context.path, { fileMustExist: true });
+    const database = openAndMigrateAuthorityDatabase(context.path, { fileMustExist: true });
     try {
       const names = database
         .prepare(

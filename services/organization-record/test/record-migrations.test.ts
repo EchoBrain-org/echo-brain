@@ -5,6 +5,7 @@ import Database from 'better-sqlite3';
 import { afterAll, describe, expect, it } from 'vitest';
 import {
   inspectOrganizationRecordDatabaseSchema,
+  openAndMigrateOrganizationRecordDatabase,
   openOrganizationRecordDatabase,
   ORGANIZATION_RECORD_DERIVED_DATABASE,
   ORGANIZATION_RECORD_LOG_DATABASE,
@@ -105,7 +106,7 @@ function open(
   definition: OrganizationRecordDatabaseDefinition,
   filename: string,
 ): Database.Database {
-  return openOrganizationRecordDatabase(
+  return openAndMigrateOrganizationRecordDatabase(
     join(temporaryStateDirectory(), filename),
     definition,
   );
@@ -194,10 +195,10 @@ describe('organization record migrations', () => {
 
   it('refuses a database that belongs to the other record charter', () => {
     const path = join(temporaryStateDirectory(), 'log.sqlite');
-    const log = openOrganizationRecordDatabase(path, ORGANIZATION_RECORD_LOG_DATABASE);
+    const log = openAndMigrateOrganizationRecordDatabase(path, ORGANIZATION_RECORD_LOG_DATABASE);
     log.close();
     expect(() =>
-      openOrganizationRecordDatabase(path, ORGANIZATION_RECORD_DERIVED_DATABASE),
+      openAndMigrateOrganizationRecordDatabase(path, ORGANIZATION_RECORD_DERIVED_DATABASE),
     ).toThrow(/not an organization record derived database/);
   });
 
@@ -207,17 +208,17 @@ describe('organization record migrations', () => {
     foreign.exec('CREATE TABLE someone_elses_table (id INTEGER PRIMARY KEY) STRICT');
     foreign.close();
     expect(() =>
-      openOrganizationRecordDatabase(path, ORGANIZATION_RECORD_LOG_DATABASE),
+      openAndMigrateOrganizationRecordDatabase(path, ORGANIZATION_RECORD_LOG_DATABASE),
     ).toThrow(/current-user 0600 regular file/);
     chmodSync(path, 0o600);
     expect(() =>
-      openOrganizationRecordDatabase(path, ORGANIZATION_RECORD_LOG_DATABASE),
+      openAndMigrateOrganizationRecordDatabase(path, ORGANIZATION_RECORD_LOG_DATABASE),
     ).toThrow(/refusing to claim a non-empty uninitialized/);
   });
 
   it('rejects a tampered migration ledger', () => {
     const path = join(temporaryStateDirectory(), 'tampered.sqlite');
-    const database = openOrganizationRecordDatabase(
+    const database = openAndMigrateOrganizationRecordDatabase(
       path,
       ORGANIZATION_RECORD_LOG_DATABASE,
     );
@@ -233,7 +234,7 @@ describe('organization record migrations', () => {
 
   it('rejects a schema newer than this build supports', () => {
     const path = join(temporaryStateDirectory(), 'newer.sqlite');
-    const database = openOrganizationRecordDatabase(
+    const database = openAndMigrateOrganizationRecordDatabase(
       path,
       ORGANIZATION_RECORD_LOG_DATABASE,
     );
@@ -251,7 +252,7 @@ describe('organization record migrations', () => {
   it('applies a later migration onto an existing database', () => {
     const definition = ORGANIZATION_RECORD_LOG_DATABASE;
     const path = join(temporaryStateDirectory(), 'upgrade.sqlite');
-    const database = openOrganizationRecordDatabase(path, definition);
+    const database = openAndMigrateOrganizationRecordDatabase(path, definition);
     const applied = organizationRecordMigrations(definition);
     const nextSql = 'CREATE TABLE organization_record_future (id INTEGER PRIMARY KEY) STRICT;\n';
     const next: OrganizationRecordMigration = {
@@ -272,7 +273,7 @@ describe('organization record migrations', () => {
   it('rejects non-contiguous migration series', () => {
     const definition = ORGANIZATION_RECORD_LOG_DATABASE;
     const path = join(temporaryStateDirectory(), 'gap.sqlite');
-    const database = openOrganizationRecordDatabase(path, definition);
+    const database = openAndMigrateOrganizationRecordDatabase(path, definition);
     const applied = organizationRecordMigrations(definition);
     expect(() =>
       migrateOrganizationRecordDatabaseWithMigrations(database, definition, [
@@ -432,5 +433,52 @@ describe('organization record log immutability triggers', () => {
     } finally {
       database.close();
     }
+  });
+});
+
+describe('organization record opening is split from migration', () => {
+  it('opens a fresh database without installing any schema', () => {
+    const path = join(temporaryStateDirectory(), 'pure-open.sqlite');
+    const database = openOrganizationRecordDatabase(path);
+    try {
+      expect(database.pragma('user_version', { simple: true })).toBe(0);
+      expect(
+        database
+          .prepare(
+            `SELECT name FROM sqlite_master WHERE name NOT LIKE 'sqlite_%'`,
+          )
+          .all(),
+      ).toEqual([]);
+    } finally {
+      database.close();
+    }
+  });
+
+  it('never upgrades or judges an existing schema on open', () => {
+    // A charter mismatch refuses under migration, not under opening. Identity
+    // and version judgment move to migration now and to the pre-open
+    // state-lineage guard once new-lineage composition wires it.
+    const path = join(temporaryStateDirectory(), 'pure-open-foreign.sqlite');
+    const log = openAndMigrateOrganizationRecordDatabase(
+      path,
+      ORGANIZATION_RECORD_LOG_DATABASE,
+    );
+    const version = log.pragma('user_version', { simple: true }) as number;
+    log.close();
+
+    const reopened = openOrganizationRecordDatabase(path, {
+      fileMustExist: true,
+    });
+    try {
+      expect(reopened.pragma('user_version', { simple: true })).toBe(version);
+    } finally {
+      reopened.close();
+    }
+    expect(() =>
+      openAndMigrateOrganizationRecordDatabase(
+        path,
+        ORGANIZATION_RECORD_DERIVED_DATABASE,
+      ),
+    ).toThrow(/not an organization record derived database/);
   });
 });

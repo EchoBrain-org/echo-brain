@@ -12,7 +12,7 @@ import {
   inspectOrganizationControlDatabaseReadOnly,
   type OrganizationControlDatabaseIdentity,
 } from './inspect-database.js';
-import { openOrganizationControlDatabase } from './open-database.js';
+import { openAndMigrateOrganizationControlDatabase } from './open-database.js';
 
 export interface InitializeOrganizationControlDatabaseInput {
   readonly organization_id: string;
@@ -39,7 +39,7 @@ export function initializeOrganizationControlDatabase(
   closeSync(descriptor);
 
   try {
-    const database = openOrganizationControlDatabase(databasePath, {
+    const database = openAndMigrateOrganizationControlDatabase(databasePath, {
       fileMustExist: true,
     });
     try {

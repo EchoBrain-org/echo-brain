@@ -3,7 +3,10 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import Database from 'better-sqlite3';
 import { afterEach, describe, expect, it } from 'vitest';
-import { openAuthorityDatabase } from '../src/adapters/persistence/sqlite/open-database.js';
+import {
+  openAndMigrateAuthorityDatabase,
+  openAuthorityDatabase,
+} from '../src/adapters/persistence/sqlite/open-database.js';
 import { SqliteOrganizationAuthorityRepository } from '../src/adapters/persistence/sqlite/sqlite-authority-repository.js';
 
 const AUTHORITY_TABLES = [
@@ -60,7 +63,7 @@ afterEach(() => {
 describe('organization authority database migrations', () => {
   it('installs the complete current schema on a fresh database', () => {
     const path = databasePath();
-    openAuthorityDatabase(path).close();
+    openAndMigrateAuthorityDatabase(path).close();
 
     const database = new Database(path, { readonly: true });
     expect(database.pragma('user_version', { simple: true })).toBe(19);
@@ -340,7 +343,7 @@ describe('organization authority database migrations', () => {
     legacy.pragma('user_version = 1');
     legacy.close();
 
-    openAuthorityDatabase(path).close();
+    openAndMigrateAuthorityDatabase(path).close();
     const upgraded = new Database(path);
     expect(upgraded.pragma('user_version', { simple: true })).toBe(19);
     const tables = upgraded
@@ -490,7 +493,7 @@ describe('organization authority database migrations', () => {
 
   it('rejects partial Slack delivery attempt states at the migration boundary', () => {
     const path = databasePath();
-    openAuthorityDatabase(path).close();
+    openAndMigrateAuthorityDatabase(path).close();
     const database = new Database(path);
     const insert = database.prepare(
       `INSERT INTO authority_processing_slack_delivery_attempts (
@@ -524,13 +527,13 @@ describe('organization authority database migrations', () => {
 
   it('is idempotent at the current schema version', () => {
     const path = databasePath();
-    openAuthorityDatabase(path).close();
-    expect(() => openAuthorityDatabase(path).close()).not.toThrow();
+    openAndMigrateAuthorityDatabase(path).close();
+    expect(() => openAndMigrateAuthorityDatabase(path).close()).not.toThrow();
   });
 
   it('keeps readable-search publication state strict and query decisions isolated', () => {
     const path = databasePath();
-    openAuthorityDatabase(path).close();
+    openAndMigrateAuthorityDatabase(path).close();
     const database = new Database(path);
     const digest = `sha256:${'a'.repeat(64)}`;
 
@@ -628,7 +631,67 @@ describe('organization authority database migrations', () => {
     future.pragma('user_version = 20');
     future.close();
 
-    expect(() => openAuthorityDatabase(path)).toThrow(
+    expect(() => openAndMigrateAuthorityDatabase(path)).toThrow(
+      'newer than supported schema 19',
+    );
+  });
+});
+
+describe('organization authority opening is split from migration', () => {
+  it('opens a fresh database without installing any schema', () => {
+    const path = databasePath();
+    const database = openAuthorityDatabase(path);
+    try {
+      expect(database.pragma('user_version', { simple: true })).toBe(0);
+      expect(
+        database
+          .prepare(
+            `SELECT name FROM sqlite_master WHERE name NOT LIKE 'sqlite_%'`,
+          )
+          .all(),
+      ).toEqual([]);
+    } finally {
+      database.close();
+    }
+  });
+
+  it('never upgrades an older schema on open', () => {
+    const path = databasePath();
+    const legacy = new Database(path);
+    legacy.exec('CREATE TABLE legacy_only (id INTEGER PRIMARY KEY) STRICT');
+    legacy.pragma('user_version = 1');
+    legacy.close();
+
+    const database = openAuthorityDatabase(path, { fileMustExist: true });
+    try {
+      expect(database.pragma('user_version', { simple: true })).toBe(1);
+      expect(
+        database
+          .prepare(
+            `SELECT name FROM sqlite_master
+             WHERE type = 'table' AND name NOT LIKE 'sqlite_%'`,
+          )
+          .pluck()
+          .all(),
+      ).toEqual(['legacy_only']);
+    } finally {
+      database.close();
+    }
+  });
+
+  it('opens a future schema without judging it; only migration rejects it', () => {
+    const path = databasePath();
+    const future = new Database(path);
+    future.pragma('user_version = 99');
+    future.close();
+
+    const database = openAuthorityDatabase(path, { fileMustExist: true });
+    try {
+      expect(database.pragma('user_version', { simple: true })).toBe(99);
+    } finally {
+      database.close();
+    }
+    expect(() => openAndMigrateAuthorityDatabase(path)).toThrow(
       'newer than supported schema 19',
     );
   });

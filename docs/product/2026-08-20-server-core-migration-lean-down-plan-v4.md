@@ -1703,11 +1703,25 @@ environment read — and refuses every family in the canonical refusal matrix,
 plus a malformed expectation as the invalid-input caller-error family;
 its 17-test suite proves each family plus the coherent positive paths, and
 the 7-test manifest suite freezes both bodies, the role locations, and the
-role application IDs. The four production open-database entry points still
-migrate inside the open call, so wiring the guard into composition remains
-unauthorized until a later slice splits open from migrate. Baseline SQL,
-fresh initialization, the D5 corpus, and the reset rehearsal remain later
-Phase 3 slices.
+role application IDs. Baseline SQL, fresh initialization, the D5 corpus, and
+the reset rehearsal remain later Phase 3 slices.
+
+**Progress, slice 2 (2026-08-21):** open is split from migrate at all four
+production open-database entry points (authority, control-plane, record,
+readable-search plane). Each `open*` function now only hardens paths, opens
+the handle, and applies pragmas; it never creates, upgrades, or rejects a
+schema version, proven by a purity suite in each package. The legacy
+open-then-migrate behavior is preserved exactly — same option defaults,
+refusal messages, and error paths — under the honestly named
+`openAndMigrate*` entry points, which every existing writable caller now
+calls explicitly; the record read-only paths call the pure opener, which no
+longer takes a database definition. Schema and identity refusals (foreign
+application ID, occupied file, partial ledger, future version, tampered
+fingerprint, wrong record charter) are migration-step refusals until the
+pre-open guard assumes them at wiring time. Wiring the guard into
+composition is therefore no longer blocked by the openers, but remains
+unauthorized until the slice that introduces fresh new-lineage
+initialization; the guard and manifests stay private and unwired.
 
 **Entry gate**
 

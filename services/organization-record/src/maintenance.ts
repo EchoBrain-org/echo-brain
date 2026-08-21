@@ -12,7 +12,10 @@ export {
   ORGANIZATION_RECORD_LOG_DATABASE,
 } from './persistence/database-definition.js';
 export { inspectOrganizationRecordDatabaseSchema } from './persistence/migrate.js';
-export { openOrganizationRecordDatabase } from './persistence/open-database.js';
+export {
+  openAndMigrateOrganizationRecordDatabase,
+  openOrganizationRecordDatabase,
+} from './persistence/open-database.js';
 export {
   projectReviewerPolicyFacts,
   readReviewerRestrictedEnvelope,

@@ -5,7 +5,7 @@ import {
 import {
   AUTHORITY_FILE_SECRET_BACKEND,
   OrganizationIntegrationsRepository,
-  openOrganizationControlDatabase,
+  openAndMigrateOrganizationControlDatabase,
   type OrganizationSecretStore,
   type SlackIntegrationProvider,
 } from '@echo-brain/organization-control-plane';
@@ -67,7 +67,7 @@ function completeRequest(challengeAttemptId: string, challengeMessageTs: string)
 }
 
 function openRepository(): OrganizationIntegrationsRepository {
-  const database = openOrganizationControlDatabase(':memory:');
+  const database = openAndMigrateOrganizationControlDatabase(':memory:');
   database
     .prepare(
       `INSERT INTO organization_control_plane_metadata (

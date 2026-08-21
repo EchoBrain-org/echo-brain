@@ -1,5 +1,5 @@
 import { assertFederationId } from '@echo-brain/federation-protocol';
-import { openAuthorityDatabase } from './open-database.js';
+import { openAndMigrateAuthorityDatabase } from './open-database.js';
 
 const DIGEST = /^sha256:[0-9a-f]{64}$/;
 
@@ -39,7 +39,7 @@ export function readAuthorityProcessingSourceStoredBinding(
     'org',
     'processing runtime organization_id',
   );
-  const database = openAuthorityDatabase(databasePath, {
+  const database = openAndMigrateAuthorityDatabase(databasePath, {
     fileMustExist: true,
   });
   try {

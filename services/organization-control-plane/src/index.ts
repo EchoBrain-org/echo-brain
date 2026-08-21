@@ -15,6 +15,7 @@ export {
   type OrganizationControlDatabaseIdentity,
 } from "./persistence/inspect-database.js";
 export {
+  openAndMigrateOrganizationControlDatabase,
   openOrganizationControlDatabase,
   type OpenOrganizationControlDatabaseOptions,
 } from "./persistence/open-database.js";

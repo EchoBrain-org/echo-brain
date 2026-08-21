@@ -11,10 +11,7 @@ import {
   readableSearchSourceBytesSha256,
 } from '@echo-brain/organization-retrieval/build';
 import { admitReadableSearchGenerationDirectory } from '@echo-brain/organization-retrieval/serve';
-import {
-  ORGANIZATION_RECORD_LOG_DATABASE,
-  openOrganizationRecordDatabase,
-} from '@echo-brain/organization-record/maintenance';
+import { openOrganizationRecordDatabase } from '@echo-brain/organization-record/maintenance';
 import { createOrganizationRecordRetrievalBuildPort } from '@echo-brain/organization-record/retrieval-build';
 import { organizationMemberReadablePolicyContractSha256 } from '@echo-brain/organization-protocol';
 import { reviewerPolicyContractSha256 } from '../src/application/reviewer-policy-contract.js';
@@ -89,7 +86,6 @@ function buildAndPublish(
 ): void {
   const database = openOrganizationRecordDatabase(
     input.fixture.recordLogDatabasePath,
-    ORGANIZATION_RECORD_LOG_DATABASE,
     { readonly: true, fileMustExist: true },
   );
   try {

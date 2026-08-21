@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto';
 import type Database from 'better-sqlite3';
 import { canonicalJson } from '@echo-brain/federation-protocol';
-import { openAuthorityDatabase } from '../../adapters/persistence/sqlite/open-database.js';
+import { openAndMigrateAuthorityDatabase } from '../../adapters/persistence/sqlite/open-database.js';
 import type {
   SlackDeliveryReceiptStore,
   SlackStoredDelivery,
@@ -535,7 +535,7 @@ export class SqliteAuthorityProcessingStore
         );
       }
     }
-    this.database = openAuthorityDatabase(databasePath, {
+    this.database = openAndMigrateAuthorityDatabase(databasePath, {
       fileMustExist: options.fileMustExist,
     });
     this.now = options.now ?? (() => new Date().toISOString());

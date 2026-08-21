@@ -38,7 +38,7 @@ import {
   inspectAuthorityDatabaseForServe,
   inspectAuthorityDatabaseReadOnly,
 } from '../src/adapters/persistence/sqlite/read-only-inspection.js';
-import { openAuthorityDatabase } from '../src/adapters/persistence/sqlite/open-database.js';
+import { openAndMigrateAuthorityDatabase } from '../src/adapters/persistence/sqlite/open-database.js';
 import { authorityRuntimeFingerprint } from '../src/adapters/runtime/runtime-fingerprint.js';
 import {
   acquireAuthorityRuntimeLock,
@@ -1649,7 +1649,7 @@ describe('organization authority operator lifecycle', () => {
     ) as { control_plane_id: string };
     replaceAuthorityDatabaseWithLegacyV2(config.database_path);
     unlinkSync(paths.integrations_database_path);
-    openAuthorityDatabase(config.database_path, {
+    openAndMigrateAuthorityDatabase(config.database_path, {
       fileMustExist: true,
     }).close();
 
@@ -1672,7 +1672,7 @@ describe('organization authority operator lifecycle', () => {
     replaceAuthorityDatabaseWithLegacyV2(config.database_path);
     unlinkSync(paths.integrations_database_path);
     unlinkSync(paths.integrations_installation_marker_path);
-    openAuthorityDatabase(config.database_path, {
+    openAndMigrateAuthorityDatabase(config.database_path, {
       fileMustExist: true,
     }).close();
     const foreign = initializeOrganizationControlDatabase(
@@ -1822,7 +1822,7 @@ describe('organization authority operator lifecycle', () => {
     const fixture = await initializedFixture();
     const config = readAuthorityRuntimeConfig(fixture.configPath);
     unlinkSync(config.database_path);
-    openAuthorityDatabase(config.database_path).close();
+    openAndMigrateAuthorityDatabase(config.database_path).close();
 
     await expect(
       startOrganizationAuthority(resolveAuthorityServeConfig(config)),

@@ -32,7 +32,7 @@ import {
   inspectOpenOrganizationControlDatabase,
   inspectOrganizationControlDatabaseForServe,
   inspectOrganizationControlDatabaseReadOnly,
-  openOrganizationControlDatabase,
+  openAndMigrateOrganizationControlDatabase,
   openOrganizationControlDatabaseReadOnly,
   OrganizationIntegrationsRepository,
   type OrganizationControlDatabaseIdentity,
@@ -89,7 +89,7 @@ import {
   readActiveReadableSearchGenerationReadOnly,
   type AuthorityDatabaseInspection,
 } from '../adapters/persistence/sqlite/read-only-inspection.js';
-import { openAuthorityDatabase } from '../adapters/persistence/sqlite/open-database.js';
+import { openAndMigrateAuthorityDatabase } from '../adapters/persistence/sqlite/open-database.js';
 import { SqliteOrganizationAuthorityRepository } from '../adapters/persistence/sqlite/sqlite-authority-repository.js';
 import { SqliteReviewerQueryAuditMaintenanceRepository } from '../adapters/persistence/sqlite/reviewer-query-audit-maintenance.js';
 import { SqliteReadableSearchQueryAuditMaintenanceRepository } from '../adapters/persistence/sqlite/readable-search-query-audit-maintenance.js';
@@ -852,7 +852,7 @@ function inspectRecordDatabase(
       `authority ${label} database is missing; restore the published state directory`,
     );
   }
-  const database = openOrganizationRecordDatabase(path, definition, {
+  const database = openOrganizationRecordDatabase(path, {
     readonly: true,
   });
   try {
@@ -1071,7 +1071,7 @@ function recordIntegrationsInstallationAnchor(
   marker: AuthorityIntegrationsInstallationMarkerV1,
 ): AuthorityIntegrationsInstallationAnchor {
   const requested = integrationsInstallationAnchorForMarker(marker);
-  const database = openAuthorityDatabase(databasePath, {
+  const database = openAndMigrateAuthorityDatabase(databasePath, {
     fileMustExist: true,
   });
   try {
@@ -1334,7 +1334,7 @@ function commitRecordInstallationAnchor(
   marker: AuthorityRecordInstallationMarkerV1,
 ): AuthorityRecordInstallationAnchor {
   const requested = recordInstallationAnchorForMarker(marker);
-  const database = openAuthorityDatabase(databasePath, { fileMustExist: true });
+  const database = openAndMigrateAuthorityDatabase(databasePath, { fileMustExist: true });
   try {
     database.exec('BEGIN IMMEDIATE');
     try {
@@ -1537,7 +1537,7 @@ function migrateIntegrationsDatabase(
   ).integrations_database_path;
   const before = inspectOrganizationControlDatabaseForServe(databasePath);
   assertIntegrationsIdentity(before, config);
-  const database = openOrganizationControlDatabase(databasePath, {
+  const database = openAndMigrateOrganizationControlDatabase(databasePath, {
     fileMustExist: true,
   });
   database.close();
@@ -1563,7 +1563,7 @@ function migrateIntegrationsDatabase(
 function migrateAuthorityForIntegrationsInstallation(
   config: AuthorityRuntimeConfigV1,
 ): AuthorityDatabaseInspection {
-  const database = openAuthorityDatabase(config.database_path, {
+  const database = openAndMigrateAuthorityDatabase(config.database_path, {
     fileMustExist: true,
   });
   database.close();
@@ -2759,7 +2759,7 @@ export async function activateOrganizationMemberRecording(
       // The singleton maintenance lock is held before the write-capable open:
       // migrate a legacy v7 Authority to the activation schema while serving
       // is conclusively stopped, then require the complete current preflight.
-      const migrated = openAuthorityDatabase(config.database_path, {
+      const migrated = openAndMigrateAuthorityDatabase(config.database_path, {
         fileMustExist: true,
       });
       migrated.close();
@@ -2795,7 +2795,7 @@ export async function activateOrganizationMemberRecording(
           existing,
         );
       }
-      const control = openOrganizationControlDatabase(
+      const control = openAndMigrateOrganizationControlDatabase(
         paths.integrations_database_path,
         { fileMustExist: true },
       );
@@ -3162,7 +3162,6 @@ async function rebuildAuthorityDerivedRecordStoreLocked(
   try {
     const logDatabase = openOrganizationRecordDatabase(
       paths.record_log_database_path,
-      ORGANIZATION_RECORD_LOG_DATABASE,
       { readonly: true },
     );
     let headPosition: number;
@@ -3336,7 +3335,7 @@ async function rebuildAuthorityReadableSearchLocked(
   const effectiveConfig = resolveEffectiveAuthorityServeConfig(configPath, config);
   const paths = authorityStatePaths(config.state_dir);
   assertNoSqliteSidecars(paths.record_log_database_path, 'record log database');
-  const control = openOrganizationControlDatabase(paths.integrations_database_path, {
+  const control = openAndMigrateOrganizationControlDatabase(paths.integrations_database_path, {
     fileMustExist: true,
   });
   const evidence = new OrganizationIntegrationsRepository(control, {
@@ -3345,7 +3344,6 @@ async function rebuildAuthorityReadableSearchLocked(
   });
   const record = openOrganizationRecordDatabase(
     paths.record_log_database_path,
-    ORGANIZATION_RECORD_LOG_DATABASE,
     { readonly: true, fileMustExist: true },
   );
   let repository: SqliteOrganizationAuthorityRepository | undefined;
@@ -3610,7 +3608,6 @@ function readReadableSearchBackupRecordHeads(
 ): VerifiedReadableSearchRecordHeads {
   const record = openOrganizationRecordDatabase(
     paths.record_log_database_path,
-    ORGANIZATION_RECORD_LOG_DATABASE,
     { readonly: true, fileMustExist: true },
   );
   try {
@@ -3676,7 +3673,6 @@ function readReadableSearchBackupLayer1Projection(
   try {
     record = openOrganizationRecordDatabase(
       paths.record_log_database_path,
-      ORGANIZATION_RECORD_LOG_DATABASE,
       { readonly: true, fileMustExist: true },
     );
   } catch (error) {

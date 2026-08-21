@@ -90,7 +90,7 @@ import { ORGANIZATION_MEMBER_RECORDING_ACTIVATED_ACTION } from '../../../applica
 import { reviewerQueryAuditRowBySequence } from './reviewer-query-audit-rows.js';
 import type { AuthorityAuditRow } from './reviewer-query-audit-rows.js';
 import {
-  openAuthorityDatabase,
+  openAndMigrateAuthorityDatabase,
   type OpenAuthorityDatabaseOptions,
 } from './open-database.js';
 
@@ -3576,7 +3576,7 @@ export class SqliteOrganizationAuthorityRepository
       allowInitialization?: boolean;
     } = {},
   ) {
-    this.database = openAuthorityDatabase(databasePath, options);
+    this.database = openAndMigrateAuthorityDatabase(databasePath, options);
     this.transaction = new SqliteAuthorityTransaction(this.database);
     this.allowInitialization = options.allowInitialization ?? true;
   }

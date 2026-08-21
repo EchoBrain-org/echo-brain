@@ -119,7 +119,6 @@ function appendOneRecord(config: AuthorityRuntimeConfigV1): void {
 function recordLogHeadPosition(databasePath: string): number {
   const database = openOrganizationRecordDatabase(
     databasePath,
-    ORGANIZATION_RECORD_LOG_DATABASE,
     { readonly: true },
   );
   try {
@@ -187,7 +186,7 @@ describe('organization record persistence lifecycle', () => {
       // DELETE journaling, so a stopped database is inspectable read-only and
       // `state-backup` — which refuses WAL sidecars — keeps working.
       expect(existsSync(`${path}-wal`)).toBe(false);
-      const database = openOrganizationRecordDatabase(path, definition, {
+      const database = openOrganizationRecordDatabase(path, {
         readonly: true,
       });
       try {
@@ -267,17 +266,11 @@ describe('organization record persistence lifecycle', () => {
 
     // A clean shutdown leaves both files reopenable, which a leaked handle or
     // an unfinished transaction would prevent.
-    for (const [path, definition] of [
-      [
-        serveConfig.record_log_database_path,
-        ORGANIZATION_RECORD_LOG_DATABASE,
-      ],
-      [
-        serveConfig.record_derived_database_path,
-        ORGANIZATION_RECORD_DERIVED_DATABASE,
-      ],
+    for (const path of [
+      serveConfig.record_log_database_path,
+      serveConfig.record_derived_database_path,
     ] as const) {
-      const database = openOrganizationRecordDatabase(path, definition, {
+      const database = openOrganizationRecordDatabase(path, {
         readonly: true,
       });
       database.close();

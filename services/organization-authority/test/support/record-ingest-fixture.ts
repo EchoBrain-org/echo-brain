@@ -79,7 +79,7 @@ import type {
 import {
   OrganizationIntegrationsRepository,
   organizationMemberMessagePresentationPreimage,
-  openOrganizationControlDatabase,
+  openAndMigrateOrganizationControlDatabase,
   reviewerMessagePresentationPreimage,
   type OrganizationSecretStore,
   type OrganizationPermissionReasonCode,
@@ -483,7 +483,7 @@ export async function createRecordIngestFixture(
   });
   const otherEnrollmentId = otherEnrolled.enrollment_receipt.enrollment_id;
 
-  const controlDatabase = openOrganizationControlDatabase(':memory:');
+  const controlDatabase = openAndMigrateOrganizationControlDatabase(':memory:');
   controlDatabase
     .prepare(
       `INSERT INTO organization_control_plane_metadata (

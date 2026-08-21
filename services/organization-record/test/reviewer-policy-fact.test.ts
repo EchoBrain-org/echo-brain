@@ -404,6 +404,7 @@ describe('reviewer public export surface', () => {
       'OrganizationRecordLogStore',
       'OrganizationRecordDerivedStore',
       'openOrganizationRecordDatabase',
+      'openAndMigrateOrganizationRecordDatabase',
     ]) {
       expect(Object.keys(entry)).not.toContain(forbidden);
     }

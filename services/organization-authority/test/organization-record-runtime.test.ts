@@ -9,10 +9,7 @@ import {
   organizationRecordReceiptPayload,
 } from '@echo-brain/organization-record';
 import { OrganizationRecordLogStore } from '@echo-brain/organization-record/append';
-import {
-  ORGANIZATION_RECORD_DERIVED_DATABASE,
-  openOrganizationRecordDatabase,
-} from '@echo-brain/organization-record/maintenance';
+import { openOrganizationRecordDatabase } from '@echo-brain/organization-record/maintenance';
 import { AuthorityOperationError } from '../src/domain/errors.js';
 import { openOrganizationRecordRuntime } from '../src/composition/organization-record.js';
 import {
@@ -130,7 +127,6 @@ function appendUnderivableRecord(test: RecordIngestFixture): void {
 function derivedCursorPosition(databasePath: string): number {
   const database = openOrganizationRecordDatabase(
     databasePath,
-    ORGANIZATION_RECORD_DERIVED_DATABASE,
     { readonly: true },
   );
   try {

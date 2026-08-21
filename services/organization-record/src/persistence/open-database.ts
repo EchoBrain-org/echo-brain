@@ -55,7 +55,7 @@ function assertPrivatePaths(databasePath: string, fileMustExist: boolean): void 
 }
 
 /**
- * Opens one organization-record database and brings it to the current schema.
+ * Opens one organization-record database without touching its schema.
  *
  * Both databases follow the existing service convention: `journal_mode =
  * DELETE`, so a stopped database is inspectable read-only without WAL/SHM
@@ -63,10 +63,15 @@ function assertPrivatePaths(databasePath: string, fileMustExist: boolean): void 
  * The record module is hosted in the authority process and does not claim
  * process ownership here; the host acquires its authenticated singleton guard
  * before calling this.
+ *
+ * The open step is split from migration so a pre-open state-lineage guard can
+ * run between filesystem verification and any schema decision; opening alone
+ * never creates, upgrades, or rejects a schema version. Writable callers that
+ * need the legacy open-then-migrate behavior use
+ * `openAndMigrateOrganizationRecordDatabase`.
  */
 export function openOrganizationRecordDatabase(
   databasePath: string,
-  definition: OrganizationRecordDatabaseDefinition,
   options: OpenOrganizationRecordDatabaseOptions = {},
 ): Database.Database {
   const readOnly = options.readonly ?? false;
@@ -83,7 +88,32 @@ export function openOrganizationRecordDatabase(
     database.pragma('foreign_keys = ON');
     database.pragma('busy_timeout = 5000');
     database.pragma('temp_store = MEMORY');
-    if (!readOnly) migrateOrganizationRecordDatabase(database, definition);
+    return database;
+  } catch (error) {
+    database.close();
+    throw error;
+  }
+}
+
+/**
+ * Opens one writable organization-record database and brings it to the
+ * definition's current schema. This is the legacy-lineage entry point: every
+ * existing writable caller keeps the open-then-migrate behavior through this
+ * name, while new-lineage composition will pair the pure opener with the
+ * pre-open guard and an explicit initializer instead of implicit migration.
+ * Read-only callers use `openOrganizationRecordDatabase` directly; a
+ * read-only handle never migrated and never will.
+ */
+export function openAndMigrateOrganizationRecordDatabase(
+  databasePath: string,
+  definition: OrganizationRecordDatabaseDefinition,
+  options: { readonly fileMustExist?: boolean } = {},
+): Database.Database {
+  const database = openOrganizationRecordDatabase(databasePath, {
+    fileMustExist: options.fileMustExist ?? false,
+  });
+  try {
+    migrateOrganizationRecordDatabase(database, definition);
     return database;
   } catch (error) {
     database.close();

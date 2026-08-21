@@ -20,7 +20,7 @@ import {
   FileOrganizationSecretStore,
   OrganizationIntegrationConflictError,
   OrganizationIntegrationsRepository,
-  openOrganizationControlDatabase,
+  openAndMigrateOrganizationControlDatabase,
   type ActivateExistingSlackApprovalInput,
   type CompletePersonSlackIdentityLinkChallengeInput,
   type CompletedPersonSlackIdentityLink,
@@ -43,7 +43,7 @@ function digest(value: string): `sha256:${string}` {
 }
 
 function database() {
-  const database = openOrganizationControlDatabase(":memory:");
+  const database = openAndMigrateOrganizationControlDatabase(":memory:");
   database
     .prepare(
       `INSERT INTO organization_control_plane_metadata (

@@ -1,11 +1,11 @@
 import type { RetrievalContentAtom } from '../application/contracts.js';
 import { READABLE_SEARCH_CONTENT_DATABASE } from './database-definition.js';
-import { openReadableSearchPlane } from './open-plane.js';
+import { openAndMigrateReadableSearchPlane } from './open-plane.js';
 import { ReadableSearchPlaneStore } from './plane-store.js';
 
 export class ReadableSearchContentStore extends ReadableSearchPlaneStore {
   private constructor(path: string) {
-    super(openReadableSearchPlane(path, READABLE_SEARCH_CONTENT_DATABASE), 'content');
+    super(openAndMigrateReadableSearchPlane(path, READABLE_SEARCH_CONTENT_DATABASE), 'content');
   }
 
   static open(path: string): ReadableSearchContentStore {

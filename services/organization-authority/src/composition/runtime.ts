@@ -12,7 +12,7 @@ import { organizationMemberReadablePolicyContractSha256 } from '@echo-brain/orga
 import {
   FileOrganizationSecretStore,
   inspectOpenOrganizationControlDatabase,
-  openOrganizationControlDatabase,
+  openAndMigrateOrganizationControlDatabase,
   OrganizationIntegrationsRepository,
   SlackWebIntegrationProvider,
 } from '@echo-brain/organization-control-plane';
@@ -259,7 +259,7 @@ export async function startOrganizationAuthority(
   );
   let repository: SqliteOrganizationAuthorityRepository | undefined;
   let integrationsDatabase:
-    | ReturnType<typeof openOrganizationControlDatabase>
+    | ReturnType<typeof openAndMigrateOrganizationControlDatabase>
     | undefined;
   let application: OrganizationAuthorityApplication | undefined;
   const authorizationFence = new ReadableSearchAuthorizationFence();
@@ -390,7 +390,7 @@ export async function startOrganizationAuthority(
     // activation that won the startup race is detected rather than served
     // under the caller's stale policy snapshot.
     assertOrganizationMemberRecordingRuntimeBinding(config);
-    integrationsDatabase = openOrganizationControlDatabase(
+    integrationsDatabase = openAndMigrateOrganizationControlDatabase(
       config.integrations_database_path,
       { fileMustExist: true },
     );
