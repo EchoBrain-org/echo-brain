@@ -152,6 +152,7 @@ The new lineage uses these normative identifiers:
 | Provider action commitment | `echo-provider-human-action-v2` |
 | Integration audit entry | `echo-integration-audit-entry-v2` |
 | Human-act resolution reference | `echo-human-act-resolution-ref-v1` |
+| Human-act event commitment | `echo-human-act-event-commitment-v1` |
 | Record envelope | `echo-organization-record-envelope-v4` |
 | Record signature | `echo-organization-record-signature-v4` |
 | Record receipt | `echo-organization-record-receipt-v2` |
@@ -818,9 +819,20 @@ mutable connection configuration, display identity, or resolved reader lists.
 Detailed provider identity remains in immutable integration audit. The record
 contains the stable reference and proof required to reprove it.
 
-The approved or rejected closed `event` is independently hashed as
-`human_act_event_sha256`. The `echo-authority-human-act-idempotency-v2`
-preimage has these exact keys:
+The approved or rejected closed `event` is independently committed through
+the exact canonical object below:
+
+```text
+schema_version
+kind
+event
+```
+
+`schema_version` is `1`, `kind` is
+`echo-human-act-event-commitment-v1`, and `event` is exactly one of the two
+closed variants above. The canonical SHA-256 of this domain-separated object
+is `human_act_event_sha256`; hashing the nested event directly is forbidden.
+The `echo-authority-human-act-idempotency-v2` preimage has these exact keys:
 
 ```text
 schema_version

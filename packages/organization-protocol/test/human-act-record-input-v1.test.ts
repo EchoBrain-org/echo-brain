@@ -2,14 +2,17 @@ import { describe, expect, it } from "vitest";
 import {
   APPROVED_DECISION_SNAPSHOT_V2_KIND,
   AUTHORITY_HUMAN_ACT_IDEMPOTENCY_V2_KIND,
+  HUMAN_ACT_EVENT_COMMITMENT_V1_KIND,
   HUMAN_ACT_RESOLUTION_REF_V1_KIND,
   approvedDecisionSnapshotV2Sha256,
+  buildHumanActEventCommitmentV1,
   buildHumanActRecordInputV1,
   humanActEventV1Sha256,
   humanActIdempotencyV2Sha256,
   humanActResolutionRefV1Sha256,
   validateApprovedDecisionSnapshotV2,
   validateHumanActEventV1,
+  validateHumanActEventCommitmentV1,
   validateHumanActIdempotencyV2,
   validateHumanActRecordInputV1,
   validateHumanActResolutionRefV1,
@@ -290,10 +293,29 @@ describe("D3 human-act record input v1", () => {
       ORGANIZATION_MEMBER_READABLE_PERSON_POLICY_ID,
     ]) {
       const event = approvedEvent(policyId);
-      const baseline = humanActEventV1Sha256(validateHumanActEventV1(event));
+      const validatedEvent = validateHumanActEventV1(event);
+      const commitment = buildHumanActEventCommitmentV1(validatedEvent);
+      expect(commitment).toEqual({
+        schema_version: 1,
+        kind: HUMAN_ACT_EVENT_COMMITMENT_V1_KIND,
+        event: validatedEvent,
+      });
+      expect(
+        validateHumanActEventCommitmentV1(commitment),
+      ).toEqual(commitment);
+      expect(() =>
+        validateHumanActEventCommitmentV1({ ...commitment, extra: true }),
+      ).toThrow();
+      expect(() =>
+        validateHumanActEventCommitmentV1({ ...commitment, schema_version: 2 }),
+      ).toThrow();
+      expect(() =>
+        validateHumanActEventCommitmentV1({ ...commitment, kind: "wrong" }),
+      ).toThrow();
+      const baseline = humanActEventV1Sha256(validatedEvent);
       if (policyId === RESTRICTED_REVIEWER_PERSON_POLICY_ID) {
         expect(baseline).toBe(
-          "sha256:8211699f481cc9768394076cc3b6a158362ac8cbaf8c059abce1465bb376d76e",
+          "sha256:4eb245ba3334254afcbaaf06596cd8eba6a4fb57ff581bb00f4339277f7dac29",
         );
       }
       const modifiedSnapshot = structuredClone(event.approved_snapshot) as Record<string, unknown>;
@@ -367,7 +389,7 @@ describe("D3 human-act record input v1", () => {
       const baseline = humanActIdempotencyV2Sha256(validateHumanActIdempotencyV2(input));
       if (action === "approve") {
         expect(baseline).toBe(
-          "sha256:628bb11c64c6a605a96520f5183639b73763e629e42c30b3aafaf471dab40132",
+          "sha256:c6ad64b79d96c72ca17f2909e18a0e872410606149576332d27b805aef661db2",
         );
       }
       const changes: Record<string, unknown> = {
@@ -397,6 +419,23 @@ describe("D3 human-act record input v1", () => {
     const withSymbol = snapshot();
     Object.defineProperty(withSymbol, symbol, { value: "hidden" });
     expect(() => validateApprovedDecisionSnapshotV2(withSymbol)).toThrow();
+    let commitmentReads = 0;
+    const accessorCommitment = {
+      schema_version: 1,
+      kind: HUMAN_ACT_EVENT_COMMITMENT_V1_KIND,
+      event: approvedEvent(),
+    };
+    Object.defineProperty(accessorCommitment, "event", {
+      enumerable: true,
+      get: () => {
+        commitmentReads += 1;
+        return approvedEvent();
+      },
+    });
+    expect(() =>
+      validateHumanActEventCommitmentV1(accessorCommitment),
+    ).toThrow();
+    expect(commitmentReads).toBe(0);
     const customPrototype = snapshot();
     Object.setPrototypeOf(customPrototype, null);
     expect(() => validateApprovedDecisionSnapshotV2(customPrototype)).toThrow();

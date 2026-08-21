@@ -252,9 +252,10 @@ and provider-unknown cases.
 **D3-1 private leaf-contract slice (2026-08-20):**
 `packages/organization-protocol/test/human-act-record-input-v1.test.ts`
 freezes the exact approved snapshot, installation-free resolution reference,
-approved/rejected events, canonical leaf digests, and semantic-idempotency
-preimage. It proves both Person-v2 policies, both actions, exact policy and
-snapshot joins, bounded retained rejection payload, zero-signal payload
+approved/rejected events, domain-separated event commitment, canonical leaf
+digests, and semantic-idempotency preimage. It proves both Person-v2 policies,
+both actions, exact policy and snapshot joins, bounded retained rejection
+payload, zero-signal payload
 acceptance, golden hashes, cross-version denial, and adversarial object/I-JSON
 rejection. It deliberately proves no D2 audit/body lookup, staged/final-content
 preimage, signed envelope, source/processor provenance, receipt, policy facts,

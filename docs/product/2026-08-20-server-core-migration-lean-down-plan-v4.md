@@ -1301,10 +1301,11 @@ documentation, type checking, and lint.
 **D3-1 human-act leaf checkpoint (2026-08-20):** one private, non-exported
 organization-protocol module now freezes the exact approved-snapshot body,
 installation-free human-act resolution reference, approved/rejected event
-union, event/reference digests, and organization-scoped semantic-idempotency
-preimage. The aggregate validator independently canonicalizes and hashes each
-body and joins Authority, organization, lineage, approval, action, policy, and
-snapshot identity. Approval embeds only the retained exact V1 payload under
+union, domain-separated event commitment, reference digest, and
+organization-scoped semantic-idempotency preimage. The aggregate validator
+independently canonicalizes and hashes each body and joins Authority,
+organization, lineage, approval, action, policy, and snapshot identity.
+Approval embeds only the retained exact V1 payload under
 the accepted Person-v2 policy tuple. Rejection retains the bounded V1
 rejection payload and only candidate/snapshot/card/policy commitments; it
 rejects approved content, readable facts, and delivery fields. This checkpoint

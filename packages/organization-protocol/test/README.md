@@ -22,6 +22,8 @@ tampered receipt still fails the signature.
 
 The private D3-1 leaf suite freezes the approved-snapshot, installation-free
 human-act reference, approved/rejected event, and semantic-idempotency bodies.
-It reuses the retained payload grammar, pins representative canonical hashes,
-and proves exact policy/action/coordinate joins without exporting or selecting
-a new envelope, receipt, persistence, or live writer.
+The event digest uses its own schema-and-kind commitment wrapper rather than
+hashing an unversioned event directly. The suite reuses the retained payload
+grammar, pins representative canonical hashes, and proves exact policy,
+action, and coordinate joins without exporting or selecting a new envelope,
+receipt, persistence, or live writer.

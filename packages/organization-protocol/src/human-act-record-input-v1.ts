@@ -32,6 +32,8 @@ export const APPROVED_DECISION_SNAPSHOT_V2_KIND =
   "echo-approved-decision-snapshot-v2" as const;
 export const HUMAN_ACT_RESOLUTION_REF_V1_KIND =
   "echo-human-act-resolution-ref-v1" as const;
+export const HUMAN_ACT_EVENT_COMMITMENT_V1_KIND =
+  "echo-human-act-event-commitment-v1" as const;
 export const AUTHORITY_HUMAN_ACT_IDEMPOTENCY_V2_KIND =
   "echo-authority-human-act-idempotency-v2" as const;
 
@@ -81,6 +83,11 @@ const REJECTED_EVENT_KEYS = [
   "policy_consequence_sha256",
   "action",
   "rejection_payload",
+] as const;
+const HUMAN_ACT_EVENT_COMMITMENT_KEYS = [
+  "schema_version",
+  "kind",
+  "event",
 ] as const;
 const HUMAN_ACT_IDEMPOTENCY_KEYS = [
   "schema_version",
@@ -155,6 +162,12 @@ export interface RejectedHumanActEventV1 {
 export type HumanActEventV1 =
   | ApprovedHumanActEventV1
   | RejectedHumanActEventV1;
+
+export interface HumanActEventCommitmentV1 {
+  readonly schema_version: 1;
+  readonly kind: typeof HUMAN_ACT_EVENT_COMMITMENT_V1_KIND;
+  readonly event: HumanActEventV1;
+}
 
 export interface HumanActIdempotencyV2 {
   readonly schema_version: 2;
@@ -468,8 +481,39 @@ export function validateHumanActEventV1(value: unknown): HumanActEventV1 {
   fail("Human act event v1 kind is unsupported");
 }
 
+export function validateHumanActEventCommitmentV1(
+  value: unknown,
+): HumanActEventCommitmentV1 {
+  const commitment = exactObject(
+    value,
+    HUMAN_ACT_EVENT_COMMITMENT_KEYS,
+    "Human act event commitment v1",
+  );
+  if (
+    commitment.schema_version !== 1 ||
+    commitment.kind !== HUMAN_ACT_EVENT_COMMITMENT_V1_KIND
+  ) {
+    fail("Human act event commitment v1 has an unsupported envelope");
+  }
+  return {
+    schema_version: 1,
+    kind: HUMAN_ACT_EVENT_COMMITMENT_V1_KIND,
+    event: validateHumanActEventV1(commitment.event),
+  };
+}
+
+export function buildHumanActEventCommitmentV1(
+  event: HumanActEventV1,
+): HumanActEventCommitmentV1 {
+  return validateHumanActEventCommitmentV1({
+    schema_version: 1,
+    kind: HUMAN_ACT_EVENT_COMMITMENT_V1_KIND,
+    event,
+  });
+}
+
 export function humanActEventV1Sha256(event: HumanActEventV1): Sha256Digest {
-  return canonicalSha256(validateHumanActEventV1(event));
+  return canonicalSha256(buildHumanActEventCommitmentV1(event));
 }
 
 export function validateHumanActIdempotencyV2(
