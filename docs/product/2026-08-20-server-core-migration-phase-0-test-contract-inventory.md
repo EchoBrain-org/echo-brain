@@ -411,7 +411,7 @@ caller-supplied-subject removal remain future T09 coverage.
 **D6-3 private structural checkpoint (2026-08-20):**
 `OA/person-read-audit-contracts-v2.test.ts` freezes body-plus-digest golden
 fixtures for the exact `echo-person-read-decision-audit-v2` append-once row and
-`echo-audit-expiry-control-v1` whole-row-expiry control. The 15-test focused
+`echo-audit-expiry-control-v1` whole-row-expiry control. The 17-test focused
 suite revalidates and rehashes the complete D6-1 request/caller and D6-2A scope
 joins, recomputes the D6-2B release binding for byte-returning allows, and
 snapshots and hashes the exact supplied denial bytes, so every deny binds
@@ -420,10 +420,12 @@ three context stages and their permitted reasons, the exact per-outcome variant
 keys, the digest-free mutation acknowledgement, `retain_until` exactly thirty
 days from `evaluated_at`, ascending unique expiry batches of at most five
 hundred row digests with `cutoff` equal to its own `occurred_at`, refused empty
-batches, hostile shapes, and cross-variant substitution. Audit and retention
-persistence, SQL, the export capability, final fences, semantic preimage
-reproof, live wiring, and caller-supplied-subject removal remain future T09
-coverage.
+batches, hostile shapes, and cross-variant substitution. It also covers the
+closed `unsupported` `echo-audit-export-capability-v1` result: its three exact
+keys, its single legal `status` literal, and its absent identity members and
+absent stored wrapper. Audit and retention persistence, SQL, the legacy export
+command and writer removals, final fences, semantic preimage reproof, live
+wiring, and caller-supplied-subject removal remain future T09 coverage.
 
 **Future suite:**
 `tests/integration/server-core-v4/person-read-release-audit.test.ts`.

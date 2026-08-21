@@ -37,14 +37,17 @@ import type { PersonScopeBindingV2 } from "./person-read-scope-contracts-v2.js";
  * joins between them and the earlier checkpoints: every digest stored in a row
  * is recomputed here from the complete D6-1 request and caller bodies, the
  * D6-2A scope body, the D6-2B release evidence, or the exact denial bytes,
- * never trusted from its caller. It owns no SQL, persistence, transaction,
- * deletion, scheduler, final fence, route, transport, or live audit behavior,
- * and it does not freeze the unsupported-export capability.
+ * never trusted from its caller. It also freezes the closed unsupported
+ * export-capability result and still owns no export route, command, writer, or
+ * row-selection port. It owns no SQL, persistence, transaction, deletion,
+ * scheduler, final fence, route, transport, or live audit behavior.
  */
 
 export const PERSON_READ_DECISION_AUDIT_KIND =
   "echo-person-read-decision-audit-v2" as const;
 export const AUDIT_EXPIRY_CONTROL_KIND = "echo-audit-expiry-control-v1" as const;
+export const AUDIT_EXPORT_CAPABILITY_KIND =
+  "echo-audit-export-capability-v1" as const;
 
 export type PersonReadAuditDecisionV2 = "allow" | "deny";
 
@@ -240,6 +243,22 @@ export interface BuildAuditExpiryControlRowV1Input {
   readonly occurred_at: string;
 }
 
+/**
+ * The closed result of an audit-export capability query. Its subject is this
+ * contract version's own surface, not one organization's state, so it carries
+ * no Authority, organization, or lineage member: export is absent from every
+ * Authority built from this artifact at every lineage, and an identity member
+ * would falsely imply a per-organization decision that could differ. It is
+ * returned, never stored, so it has no `{body, row_sha256}` wrapper, no
+ * retention, and no row. Supporting export is a new version and decision, not
+ * another `status` value.
+ */
+export interface AuditExportCapabilityV1 {
+  readonly schema_version: 1;
+  readonly kind: typeof AUDIT_EXPORT_CAPABILITY_KIND;
+  readonly status: "unsupported";
+}
+
 type UnknownRecord = Record<string, unknown>;
 
 const DIGEST = /^sha256:[0-9a-f]{64}$/;
@@ -351,6 +370,8 @@ const BUILD_EXPIRY_ROW_KEYS = [
   "expired_row_sha256s",
   "occurred_at",
 ] as const;
+const EXPORT_CAPABILITY_KEYS = ["schema_version", "kind", "status"] as const;
+const AUDIT_EXPORT_CAPABILITY_STATUS = "unsupported" as const;
 
 const REASON_CODE_STAGE: Readonly<
   Record<PersonReadAuditReasonCodeV2, PersonReadAuditContextKindV2>
@@ -1313,4 +1334,41 @@ export function buildAuditExpiryControlRowV1(
     body,
     row_sha256: canonicalSha256(body as unknown as JsonValue),
   });
+}
+
+export function validateAuditExportCapabilityV1(
+  value: unknown,
+): AuditExportCapabilityV1 {
+  const label = "Audit export capability v1";
+  const record = exactRecord(value, EXPORT_CAPABILITY_KEYS, label);
+  expectLiteral(record.schema_version, 1, label + " schema_version");
+  expectLiteral(record.kind, AUDIT_EXPORT_CAPABILITY_KIND, label + " kind");
+  expectLiteral(
+    record.status,
+    AUDIT_EXPORT_CAPABILITY_STATUS,
+    label + " status",
+  );
+  return freezeCanonicalDocument(
+    {
+      schema_version: 1,
+      kind: AUDIT_EXPORT_CAPABILITY_KIND,
+      status: AUDIT_EXPORT_CAPABILITY_STATUS,
+    },
+    label,
+    MAX_PERSON_AUDIT_CANONICAL_BYTES,
+  );
+}
+
+export function auditExportCapabilityV1(): AuditExportCapabilityV1 {
+  return validateAuditExportCapabilityV1({
+    schema_version: 1,
+    kind: AUDIT_EXPORT_CAPABILITY_KIND,
+    status: AUDIT_EXPORT_CAPABILITY_STATUS,
+  });
+}
+
+export function auditExportCapabilitySha256V1(value: unknown): Sha256Digest {
+  return canonicalSha256(
+    validateAuditExportCapabilityV1(value) as unknown as JsonValue,
+  );
 }

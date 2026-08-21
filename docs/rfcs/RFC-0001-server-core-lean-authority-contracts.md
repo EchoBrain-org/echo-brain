@@ -177,6 +177,7 @@ The new lineage uses these normative identifiers:
 | Person semantic request | `echo-person-request-commitment-v2` |
 | Person read audit | `echo-person-read-decision-audit-v2` |
 | Audit expiry control | `echo-audit-expiry-control-v1` |
+| Audit export capability | `echo-audit-export-capability-v1` |
 | Person caller binding | `echo-person-caller-binding-v2` |
 | Person scope binding | `echo-person-scope-binding-v2` |
 | Person release binding | `echo-person-release-binding-v2` |
@@ -1154,10 +1155,12 @@ The private D6-1 checkpoint freezes only these semantic-request and
 caller-binding bodies, validators, builders, and golden digests. It is not
 wired or publicly exported. The private D6-2A checkpoint below separately
 freezes the structural scope body and digest. D6-2B separately freezes the
-structural release bodies, digests, and copied response snapshot. Final-fence
-authorization, shared audit and retention persistence, the unsupported-export
-capability, transport handoff, live orchestration, and removal of
-caller-supplied identity from transitional DTOs remain later D6 work. In
+structural release bodies, digests, and copied response snapshot. D6-3
+separately freezes the structural audit row, expiry control, and
+unsupported-export capability result. Final-fence authorization, shared audit
+and retention persistence, the legacy export removals, transport handoff, live
+orchestration, and removal of caller-supplied identity from transitional DTOs
+remain later D6 work. In
 particular, the live subject field is removed only when a bearer-derived caller
 and the fresh-lineage audit contract can own the same transition atomically;
 none of these private checkpoints weakens the current audit schemas that still
@@ -1410,24 +1413,44 @@ most 500 row digests whose `cutoff` equals the control row's own `occurred_at`.
 That the adapter supplies the same fixed opaque denial bytes for every deny is
 not proved here; it remains a final-fence and live-parity obligation deferred
 to Phase 3 with result-witness reproof. D6-3 does not authorize snapshot
-handoff. It adds no final fence, audit or retention persistence, SQL, export
-capability, public export, route, transport, or live behavior.
+handoff. It freezes the closed `unsupported` export-capability result and still
+owns no export route, command, writer, or row-selection port. It adds no final
+fence, audit or retention persistence, SQL, public export, route, transport, or
+live behavior.
 
-### Retention and export choices requiring disposition
+### Accepted retention and export dispositions
 
-This draft recommends the lean disposition below, but it remains unresolved
-until the exact founder review accepts it:
+The founder accepted the lean disposition below on 2026-08-20 for initial V1.
+Either choice may be revisited before Phase 3 cutover, but only as a new dated
+disposition:
 
 1. **Retention interval:** 30 days from Authority-owned `evaluated_at`. This is
    an explicit replacement of the two historical 180-day query-audit
    contracts, not an inference that their data was unimportant.
 2. **Export position:** deliberately unsupported. The lean runtime has no
    query-audit export route, command, file writer, or row-selection port. A
-   capability query may return one closed `unsupported` result without
-   selecting audit rows or opening an output path. The negative contract names
-   and removes both legacy export commands, their command/document kinds,
-   maintenance repositories and row-selection helpers, operator-state file
-   writers, runtime-fingerprint modes, and CLI dispatch branches.
+   capability query may return one closed `unsupported` result, defined
+   exactly below, without selecting audit rows or opening an output path. The
+   negative contract names and removes both legacy export commands, their
+   command/document kinds, maintenance repositories and row-selection helpers,
+   operator-state file writers, runtime-fingerprint modes, and CLI dispatch
+   branches.
+
+That result is an `echo-audit-export-capability-v1` object containing exactly:
+
+```text
+schema_version = 1
+kind = echo-audit-export-capability-v1
+status = unsupported
+```
+
+`status` has one legal literal, so a supported export is unrepresentable in v1
+and enabling one requires a new version and decision. The object is
+identity-free and unwrapped: it commits the artifact's contract surface rather
+than tenant state, so it carries no Authority, organization, or lineage
+member, and it is returned rather than stored, with no `{body, row_sha256}`
+wrapper, retention, or chain. The capability query takes no input and selects
+nothing, so it has no request-side commitment body.
 
 Expiry deletes whole rows in one transaction and commits the exact
 `echo-audit-expiry-control-v1` `{body, row_sha256}` defined above, containing
@@ -1613,12 +1636,12 @@ bytes:
 
 | ID | Choice | Least semantic-delta proposal |
 | --- | --- | --- |
-| OQ-1 | D6 retention interval | Lean proposal: 30 days from Authority `evaluated_at`, explicitly superseding the historical 180-day query-audit contracts |
-| OQ-2 | D6 export position | Lean proposal: deliberately unsupported, with no production export route, command, writer, or row-selection port |
+| OQ-1 | D6 retention interval | Accepted by the founder 2026-08-20 for initial V1: 30 days from Authority `evaluated_at`, explicitly superseding the historical 180-day query-audit contracts; a different interval is a new dated disposition before Phase 3 cutover |
+| OQ-2 | D6 export position | Accepted by the founder 2026-08-20 for initial V1: deliberately unsupported, with no production export route, command, writer, or row-selection port; a different position is a new dated disposition before Phase 3 cutover |
 | OQ-3 | D1 review | Lean proposal: founder/constitution-owner acceptance plus the recorded independent contract review; founder explicitly waives a second human reviewer until first-external-organization re-entry |
 | OQ-4 | D2 version break | Resolved by ADR-0005: the two v2 IDs, exact policy-contract bodies/selectors and computed digests, and exact consequence bytes are accepted while preserving reader sets |
-| OQ-5 | Delivery behavior | Initial V1 preserves main's configured delivery behavior and approval/delivery channel separation; a single-destination or policy-specific contraction is deferred to a later decision |
-| OQ-6 | Standalone reviewer-recent route | Retain it in initial V1 with exact reviewer-tenure semantics and Layer-1/log-backed availability; route consolidation is deferred |
+| OQ-5 | Delivery behavior | Accepted by the founder 2026-08-20 for initial V1: preserve main's configured delivery behavior and approval/delivery channel separation; a single-destination or policy-specific contraction remains deferred and enters only as a new dated disposition before Phase 3 cutover |
+| OQ-6 | Standalone reviewer-recent route | Accepted by the founder 2026-08-20 for initial V1: retain the route with exact reviewer-tenure semantics and Layer-1/log-backed availability; route consolidation remains deferred and enters only as a new dated disposition before Phase 3 cutover |
 
 Resolving an open question in an ADR without updating the corresponding
 normative RFC bytes is invalid. If a choice changes this RFC, commit the new

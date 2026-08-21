@@ -52,13 +52,16 @@ denial bytes, so every deny binds `response_sha256` with no release
 binding and no item metadata while a mutation acknowledgement carries no digest
 at all. `retain_until` is exactly thirty days from Authority-owned
 `evaluated_at`; expiry commits ascending unique batches of at most five hundred
-row digests with `cutoff` equal to its own `occurred_at`.
+row digests with `cutoff` equal to its own `occurred_at`. It also freezes the
+closed `unsupported` `echo-audit-export-capability-v1` result, which is
+returned rather than stored and carries no identity member, and still owns no
+export route, command, writer, or row-selection port.
 
 These modules validate closed structural bytes and recompute the request and
 caller/scope digests. They do not prove the opaque policy, retrieval,
 generation, segment, record-head, result, ownership, or exclusion preimages and
 do not add final-fence authorization, audit or retention persistence, SQL,
-export capability, protected-handle, route, transport, or other live behavior.
+protected-handle, route, transport, or other live behavior.
 Fresh-lineage persistence and live reproof remain Phase 3 work; the current
 Person routes and audit stores are unchanged.
 

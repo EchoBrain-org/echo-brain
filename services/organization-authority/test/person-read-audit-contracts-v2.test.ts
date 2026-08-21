@@ -8,10 +8,14 @@ import type { Sha256Digest } from "@echo-brain/federation-protocol";
 import { describe, expect, it } from "vitest";
 import {
   AUDIT_EXPIRY_CONTROL_KIND,
+  AUDIT_EXPORT_CAPABILITY_KIND,
   PERSON_READ_DECISION_AUDIT_KIND,
+  auditExportCapabilitySha256V1,
+  auditExportCapabilityV1,
   buildAuditExpiryControlRowV1,
   buildPersonReadDecisionAuditRowV2,
   personReadDecisionAuditBodySha256V2,
+  validateAuditExportCapabilityV1,
   validateAuditExpiryControlBodyV1,
   validateAuditExpiryControlRowV1,
   validatePersonReadDecisionAuditBodyV2,
@@ -1300,5 +1304,121 @@ describe("private D6-3 Person read audit and retention commitments", () => {
       "must be an enumerable data property",
     );
     expect(getterCalls).toBe(0);
+  });
+
+  it("freezes the exact unsupported export capability and golden digest", () => {
+    const capability = auditExportCapabilityV1();
+
+    expect(Object.keys(capability)).toEqual([
+      "schema_version",
+      "kind",
+      "status",
+    ]);
+    expect(capability).toEqual({
+      schema_version: 1,
+      kind: AUDIT_EXPORT_CAPABILITY_KIND,
+      status: "unsupported",
+    });
+    expect(AUDIT_EXPORT_CAPABILITY_KIND).toBe("echo-audit-export-capability-v1");
+    expect(auditExportCapabilitySha256V1(capability)).toBe(
+      "sha256:6174fed96ec14169886445ffb5a221f25c7af225cf7912d7fbb1a8f9cf37e1c2",
+    );
+    expect(validateAuditExportCapabilityV1(capability)).toEqual(capability);
+    expect(Object.isFrozen(capability)).toBe(true);
+
+    // The result states this contract version's own surface, so it names no
+    // organization, no row, and no output path.
+    const canonical = canonicalJson(capability);
+    for (const forbidden of [
+      "sha256:",
+      "authority",
+      "organization",
+      "lineage",
+      "row_count",
+      "ordered_rows_sha256",
+      "export_sha256",
+      "output_path",
+      "from_inclusive",
+      "until_exclusive",
+      "cutoff",
+      "retention_days",
+    ]) {
+      expect(canonical).not.toContain(forbidden);
+    }
+    expect(auditExportCapabilitySha256V1(capability)).not.toBe(
+      buildAuditExpiryControlRowV1(expiryInput()).row_sha256,
+    );
+  });
+
+  it("rejects supported, extended, and identity-bearing capability bodies", () => {
+    const capability = auditExportCapabilityV1();
+
+    for (const status of ["supported", "unavailable", "", "UNSUPPORTED"]) {
+      expect(() =>
+        validateAuditExportCapabilityV1({ ...capability, status }),
+      ).toThrow("status must be unsupported");
+    }
+    for (const member of [
+      "authority_id",
+      "organization_id",
+      "state_lineage_id",
+      "row_count",
+      "ordered_rows_sha256",
+      "export_sha256",
+      "output_path_sha256",
+      "retention_days",
+    ]) {
+      expect(() =>
+        validateAuditExportCapabilityV1({ ...capability, [member]: "value" }),
+      ).toThrow("unexpected shape");
+    }
+    expect(() =>
+      validateAuditExportCapabilityV1({ ...capability, schema_version: 2 }),
+    ).toThrow("schema_version must be 1");
+    expect(() =>
+      validateAuditExportCapabilityV1({
+        ...capability,
+        kind: AUDIT_EXPIRY_CONTROL_KIND,
+      }),
+    ).toThrow("kind must be " + AUDIT_EXPORT_CAPABILITY_KIND);
+    expect(() =>
+      validateAuditExportCapabilityV1({ schema_version: 1, status: "unsupported" }),
+    ).toThrow("unexpected shape");
+
+    // A returned capability statement is never a stored row.
+    expect(() =>
+      validateAuditExportCapabilityV1({
+        body: capability,
+        row_sha256: digest("f"),
+      }),
+    ).toThrow("unexpected shape");
+
+    let getterCalls = 0;
+    const hostile = { schema_version: 1, kind: AUDIT_EXPORT_CAPABILITY_KIND } as Record<
+      string,
+      unknown
+    >;
+    Object.defineProperty(hostile, "status", {
+      enumerable: true,
+      get() {
+        getterCalls += 1;
+        return "unsupported";
+      },
+    });
+    expect(() => validateAuditExportCapabilityV1(hostile)).toThrow(
+      "must be an enumerable data property",
+    );
+    expect(getterCalls).toBe(0);
+
+    const symbolled = { ...capability } as Record<PropertyKey, unknown>;
+    symbolled[Symbol("hidden")] = digest("f");
+    expect(() => validateAuditExportCapabilityV1(symbolled)).toThrow(
+      "symbol keys",
+    );
+    expect(() =>
+      validateAuditExportCapabilityV1(
+        Object.assign(Object.create({ inherited: true }), capability),
+      ),
+    ).toThrow("must be a plain object");
   });
 });

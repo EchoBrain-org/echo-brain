@@ -845,9 +845,9 @@ policy contracts are expected to change. The human-visible policy delta is
 that a current Person/session replaces installation plus lease. Reviewer-tenure
 and organization-membership reader sets, revocation, later-member behavior,
 policy separation, denial, recent-read availability, and non-disclosure may not
-change. D6 may separately accept the proposed audit retention and export
-changes. Delivery cardinality, destination policy, and route consolidation are
-not implicit migration deltas; the initial V1 keeps main behavior unless a
+change. D6 separately accepted the audit retention and export changes on
+2026-08-20. Delivery cardinality, destination policy, and route consolidation
+are not implicit migration deltas; the initial V1 keeps main behavior unless a
 later accepted decision names and proves a change.
 
 The corpus contains one organization with one owner and at least three
@@ -913,7 +913,7 @@ candidate substrate.
 - commit-before-release and failure-denies semantics;
 - one explicit retention interval, whole-row expiry action and audit;
   and
-- the explicitly proposed export position: deliberately unsupported, with no
+- the accepted export position: deliberately unsupported, with no
   production route, command, file writer, row-selection port, renamed alias,
   or output-path open. A capability query returns only the closed
   `unsupported` result and selects zero rows.
@@ -1427,13 +1427,15 @@ with no release binding and no item metadata; mutation acknowledgements carry
 no digests. `retain_until` is exactly thirty days from Authority-owned
 `evaluated_at`. Expiry commits ascending, unique batches of at most five
 hundred row digests with `cutoff` equal to its own `occurred_at`; empty
-batches are not written. The focused suite is 15 tests and the full Authority
-workspace is 88 test files and 856 tests; the full repository gate passes 150
-test files and 1,528 tests plus boundary, documentation, type checking, and
-lint. This checkpoint adds no final fence, audit
-persistence, SQL, export capability, route, transport, or live behavior, and
-the thirty-day retention and unsupported-export dispositions remain explicitly
-open for founder acceptance.
+batches are not written. The focused suite is 17 tests and the full Authority
+workspace is 88 test files and 858 tests; the full repository gate passes 150
+test files and 1,530 tests plus boundary, documentation, type checking, and
+lint. This checkpoint freezes the closed `unsupported` export-capability result
+and still owns no export route, command, writer, or row-selection port. It adds
+no final fence, audit persistence, SQL, route, transport, or live behavior. The
+founder accepted the thirty-day retention and unsupported-export dispositions
+on 2026-08-20 for initial V1, revisitable before Phase 3 cutover only as a new
+dated disposition.
 
 **Entry gate**
 
