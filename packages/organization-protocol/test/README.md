@@ -19,3 +19,9 @@ Receipt coverage pins the record core's field names (`position`, no restated
 signing key) and proves the pinned-key comparison is against
 `integrity.key_id`: a receipt naming a foreign key fails the pin, and a
 tampered receipt still fails the signature.
+
+The private D3-1 leaf suite freezes the approved-snapshot, installation-free
+human-act reference, approved/rejected event, and semantic-idempotency bodies.
+It reuses the retained payload grammar, pins representative canonical hashes,
+and proves exact policy/action/coordinate joins without exporting or selecting
+a new envelope, receipt, persistence, or live writer.

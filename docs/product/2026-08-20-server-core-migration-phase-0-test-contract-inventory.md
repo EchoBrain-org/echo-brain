@@ -249,6 +249,17 @@ and provider-unknown cases.
 **Future suite:**
 `tests/integration/server-core-v4/authority-record-resolution.test.ts`.
 
+**D3-1 private leaf-contract slice (2026-08-20):**
+`packages/organization-protocol/test/human-act-record-input-v1.test.ts`
+freezes the exact approved snapshot, installation-free resolution reference,
+approved/rejected events, canonical leaf digests, and semantic-idempotency
+preimage. It proves both Person-v2 policies, both actions, exact policy and
+snapshot joins, bounded retained rejection payload, zero-signal payload
+acceptance, golden hashes, cross-version denial, and adversarial object/I-JSON
+rejection. It deliberately proves no D2 audit/body lookup, staged/final-content
+preimage, signed envelope, source/processor provenance, receipt, policy facts,
+persistence, restart, public export, or live writer selection.
+
 The suite must prove:
 
 - approve and reject both carry one opaque monotonic
@@ -263,11 +274,11 @@ The suite must prove:
   recovers the same act, audit entry, record, and receipt without a descriptive
   scan, second act, or second audit entry;
 - approve and reject remain nonterminal until the append receipt is returned;
-  rejection rejects every approved-payload, staged/final-content,
-  policy-fact, rejection-text, candidate-content, or non-`none` delivery
-  field, allows only the exact `none` publication-consequence digest as
-  presentation proof, and appends no eligibility/readable fact or delivery
-  intent;
+  rejection rejects every approved-snapshot/payload, policy-fact,
+  candidate-content, or delivery field, retains only the exact bounded
+  rejection payload plus candidate/snapshot/frozen-card/policy commitments,
+  appends no eligibility/readable fact, and creates no delivery claim,
+  attempt, or provider call;
 - record and receipt fixtures independently mutate body hash, signature
   preimage, signing key, predecessor, event discriminator, policy-fact outcome,
   and wrapper/body field placement; and
@@ -275,26 +286,28 @@ The suite must prove:
   enrollment, lease, installation key, synthetic Person, provider credential,
   live provider configuration, display identity, or resolved reader list.
 
-### T07 — delivery identity, intent, and recovery
+### T07 — delivery identity and recovery
 
 **Future suite:**
 `tests/integration/server-core-v4/delivery-identity-recovery.test.ts`.
 
 The suite must prove:
 
-- an exact current owner/admin act separately activates a stable delivery
-  binding/contract, distinct adapter kind/ID/instance, immutable destination,
-  and current organization tool connection without creating an approval grant;
-- the human act and record freeze exactly `none` or the matching binding,
-  contract, destination, digest, and approved-snapshot digest;
-- restricted-reviewer records freeze `none` absent a separately accepted exact-
-  audience proof;
-- wrong destination/audience, revoked or drifted binding/connection, approval-
-  instance substitution, snapshot mutation, or absent intent makes zero
-  provider calls and never changes the canonical act;
-- the semantic delivery key binds Authority, organization, lineage, record
-  identity/hash, snapshot, binding/contract, and destination, while credential,
-  connection, and implementation revisions remain attempt provenance; and
+- enabled processing has at least one configured delivery surface, approval
+  and generic Slack delivery use distinct channels, and an approved canonical
+  snapshot fans out to every configured surface in deterministic array order;
+- the human act and record contain no delivery destination, intent, audience,
+  binding, or claim. Both reader policies use the same configured fan-out and
+  can neither add nor remove a surface;
+- each surface independently validates its current adapter instance,
+  configuration, destination, and provider connection after the canonical
+  approval receipt. Wrong or drifted delivery state makes zero calls for that
+  attempt and never changes the canonical act;
+- the semantic delivery key binds Authority, organization, lineage, canonical
+  record identity/hash, exact approved snapshot, adapter instance,
+  configuration, and destination, while credentials and provider response
+  details remain attempt provenance;
+- rejection creates no delivery claim, attempt, or provider call; and
 - SQLite claim/unknown/outcome recovery covers crash before call, known-no-
   write retry, provider success before persistence, ambiguous outcome, restart,
   and core-receipt crash without blind repost.

@@ -503,26 +503,37 @@ decision and new canonical vectors.
 
 One closed `echo-approved-decision-snapshot-v2` body is the content package
 shown for approval, appended on approval, and delivered when delivery is
-enabled. It contains exactly:
+enabled. Its exact keys are:
 
-- `schema_version: 2` and kind
-  `echo-approved-decision-snapshot-v2`;
-- the exact approval ID;
-- `staged_content_sha256` and `final_content_sha256`;
-- literal `payload_contract_id: organization-record-approval-payload-v1`; and
-- `approved_payload`, accepted by the existing closed
-  `OrganizationRecordApprovalPayloadV1` validator with exact keys `brief`,
-  `source`, `alternatives`, `links`, `reviewed_at`, and `surface`, including
-  its nested closed validators and required empty `alternatives`/null `links`.
+```text
+schema_version
+kind
+approval_id
+staged_content_sha256
+final_content_sha256
+payload_contract_id
+approved_payload
+```
+
+`schema_version` is `2`, `kind` is
+`echo-approved-decision-snapshot-v2`, and `payload_contract_id` is
+`organization-record-approval-payload-v1`. `approved_payload` is accepted by
+the existing closed `OrganizationRecordApprovalPayloadV1` validator with exact
+keys `brief`, `source`, `alternatives`, `links`, `reviewed_at`, and `surface`,
+including its nested closed validators and required empty `alternatives` and
+null `links`.
 
 `approved_snapshot_sha256` is the RFC-8785 canonical SHA-256 of that complete
 body. The frozen card, provider message/action, human-act reproof, approved or
 rejected record event, and every delivery submission bind this same digest.
-An approved record embeds the complete body and the digest and independently
-recomputes both content digests and the payload projection. A rejected record
-stores only the digest as proof of what was declined; it never embeds the
-snapshot body or makes its content readable. There is no separate unlinked
-"staged snapshot" or delivery snapshot digest.
+An approved record embeds the complete body and digest, revalidates the exact
+payload, and recomputes the snapshot digest. Before live V4 admission, the
+writer must also name and reprove the owners of `staged_content_sha256` and
+`final_content_sha256`; the private D3-1 structural candidate treats them only
+as opaque frozen commitments and does not claim their preimages. A rejected
+record stores only the snapshot digest as proof of what was declined; it never
+embeds the snapshot body or makes its content readable. There is no separate
+unlinked staged or delivery snapshot digest.
 
 ### Frozen approval contract
 
@@ -543,7 +554,7 @@ authorizes a delivery destination.
 At action time the Authority rechecks every current edge consumed by approval:
 the connection, link, target membership, approval binding, capability, frozen
 adapter version, provider object, actor, channel, card, reaction mapping,
-policy contract, and presentation digest. A missing, revoked, replaced,
+policy contract, and frozen-card digest. A missing, revoked, replaced,
 cross-tenant, or mismatched edge denies with zero canonical append and zero
 delivery call.
 
@@ -610,7 +621,7 @@ the link body or digest is not evidence by itself.
 body over Authority, organization, lineage, approval ID, semantic action,
 policy ID/contract digest, exact principal and membership tenure/type,
 capability ID/contract digest, `provider_observation_sha256`, provider-message
-digest, provider-action digest, frozen card/presentation digest, decision
+digest, provider-action digest, frozen-card digest, decision
 `allow`, and evaluated time. Its digest is `authorization_proof_sha256`.
 Denials use a separate minimized decision row with no human-act resolution
 reference. Only an allow body may enter the immutable integration audit and
@@ -690,14 +701,32 @@ resolveHumanAct(reference, frozen_record_input)
   -> canonical append receipt | closed denial
 ```
 
-The `echo-human-act-resolution-ref-v1` closed object contains:
+The `echo-human-act-resolution-ref-v1` closed object has these exact keys:
 
-- Authority, organization, and lineage;
-- approval ID and action `approve` or `reject`;
-- frozen policy ID and policy contract digest;
-- authorization audit event ID, sequence, and entry hash;
-- provider-action digest and its kind/version; and
-- authorization proof digest.
+```text
+schema_version
+kind
+authority_id
+organization_id
+state_lineage_id
+approval_id
+action
+policy_id
+policy_contract_sha256
+audit_event_id
+audit_sequence
+audit_entry_sha256
+provider_action_kind
+provider_action_schema_version
+provider_action_sha256
+authorization_proof_sha256
+```
+
+`schema_version` is `1`, `kind` is
+`echo-human-act-resolution-ref-v1`, `action` is `approve` or `reject`, and the
+provider-action kind/version pair is exactly
+`echo-provider-human-action-v2`/`2`. The canonical digest of the complete body
+is `human_act_resolution_ref_sha256`.
 
 The resolver uses the exact reference key. It never searches by display name,
 provider actor, timestamp range, `reviewed_by`, or a subset of fields. Unknown
@@ -722,20 +751,41 @@ The closed `body` contains only:
   digest; and
 - exactly one discriminated `event` object below.
 
-For `event.kind: approved`, the closed event contains:
+For `event.kind: approved`, the exact keys are:
 
-- the complete closed `echo-approved-decision-snapshot-v2` body plus
-  `approved_snapshot_sha256`, both independently recomputed. V4 reuses the
-  existing deterministic approved-payload validator inside that body; it does
-  not invent a looser package object or duplicate source/provider authority;
-- exactly one v2 policy ID, policy-contract digest, and exact reader-policy
-  consequence bytes/digest. Delivery destination/configuration is not part of
-  this initial-V1 human-act event.
+```text
+kind
+approved_snapshot
+approved_snapshot_sha256
+policy_id
+policy_contract_sha256
+policy_consequence_text
+policy_consequence_sha256
+```
 
-For `event.kind: rejected`, the closed event contains candidate digest,
-`approved_snapshot_sha256`, presentation digest, presented policy ID/contract/
-consequence digest as provenance, semantic action `reject`, and one
-`rejection_payload` accepted by the
+The event embeds the complete closed snapshot body and its independently
+recomputed digest. It accepts exactly one v2 policy ID, policy-contract digest,
+and the matching exact reader-policy consequence text/raw UTF-8 digest.
+Delivery destination/configuration is not part of this initial-V1 human-act
+event.
+
+For `event.kind: rejected`, the exact keys are:
+
+```text
+kind
+candidate_sha256
+approved_snapshot_sha256
+frozen_card_sha256
+policy_id
+policy_contract_sha256
+policy_consequence_sha256
+action
+rejection_payload
+```
+
+The event pins `kind: rejected`, semantic `action: reject`, the same frozen
+card commitment owned by the D2 provider action, and the exact presented v2
+policy tuple as provenance. `rejection_payload` is accepted by the
 retained closed `OrganizationRecordRejectionPayloadV1` validator. That bounded
 payload contains the exact source locator, meeting ID, rejected time, nullable
 organization-visible reason of at most 2 KiB UTF-8, and nullable
@@ -770,9 +820,25 @@ contains the stable reference and proof required to reprove it.
 
 The approved or rejected closed `event` is independently hashed as
 `human_act_event_sha256`. The `echo-authority-human-act-idempotency-v2`
-preimage contains Authority, organization, lineage, approval ID, action,
-human-act-reference digest, and `human_act_event_sha256`. Exact retry returns
-the same record and receipt. Its canonical SHA-256 is the exact
+preimage has these exact keys:
+
+```text
+schema_version
+kind
+authority_id
+organization_id
+state_lineage_id
+approval_id
+action
+human_act_resolution_ref_sha256
+human_act_event_sha256
+```
+
+`schema_version` is `2`; `kind` is
+`echo-authority-human-act-idempotency-v2`. Its coordinate and action members
+must equal the resolution reference, and its two digests are recomputed from
+the exact reference and event bodies. Exact retry returns the same record and
+receipt. Its canonical SHA-256 is the exact
 `semantic_idempotency_key` stored in both the envelope body and receipt body;
 an opaque caller-selected key is forbidden. Reuse with any different semantic
 member conflicts. Concurrent exact submissions append once.

@@ -1298,6 +1298,23 @@ ownership, and the live Slack observer/composition. The retained D2-2B slice
 passed the full repository gate: 142 test files and 1,441 tests, plus boundary,
 documentation, type checking, and lint.
 
+**D3-1 human-act leaf checkpoint (2026-08-20):** one private, non-exported
+organization-protocol module now freezes the exact approved-snapshot body,
+installation-free human-act resolution reference, approved/rejected event
+union, event/reference digests, and organization-scoped semantic-idempotency
+preimage. The aggregate validator independently canonicalizes and hashes each
+body and joins Authority, organization, lineage, approval, action, policy, and
+snapshot identity. Approval embeds only the retained exact V1 payload under
+the accepted Person-v2 policy tuple. Rejection retains the bounded V1
+rejection payload and only candidate/snapshot/card/policy commitments; it
+rejects approved content, readable facts, and delivery fields. This checkpoint
+does not derive the opaque staged/final-content commitments and does not add an
+envelope wrapper, signature, source/processor provenance, receipt, fact
+projector, persistence, public export, or live writer. Those remain D3-2,
+D3-3, and Phase 3 work. The retained tree passes the full repository gate:
+143 test files and 1,447 tests, plus boundary, documentation, type checking,
+and lint.
+
 **Entry gate**
 
 - Phase 1 exit is green.
@@ -1364,12 +1381,16 @@ earlier red, and compatibility remains selectable until Phase 3 parity.
    persistence, the real Slack observer and live alternate-authorizer
    selection, baseline SQL, application IDs, lineage manifests, and writable
    openers.
-5. **Authority envelope, receipt, and Layer-1 facts.** Add the new envelope and
-   receipt versions without changing V1-V3 readers. Reprove the exact human-act
-   reference at the existing Record application boundary; append record and
-   the complete policy-specific text-free facts atomically; rejection appends
-   no readable facts. Wire bounded terminal cleanup only after the receipt is
-   durable.
+5. **Authority envelope, receipt, and Layer-1 facts — D3-1 leaf contracts
+   complete.** The private D3-1 checkpoint freezes the snapshot, resolution
+   reference, approved/rejected event, and semantic-idempotency leaf graph
+   without changing V1-V3 readers. D3-2 adds the exact envelope body/wrapper,
+   source/processor provenance, and P-256 signature preimage. D3-3 adds the
+   receipt body/wrapper and pure policy-specific fact projector. Phase 3 then
+   reproves the exact human-act reference at the Record application boundary,
+   appends record and the complete policy-specific text-free facts atomically,
+   makes rejection append no readable facts, and wires bounded terminal
+   cleanup only after the receipt is durable.
 6. **Caller-neutral Person read boundary.** Share current caller resolution,
    final fence, audit-before-release, and immutable response-byte handoff while
    keeping reviewer-recent Layer-1/log-backed and readable search Layer-2/
