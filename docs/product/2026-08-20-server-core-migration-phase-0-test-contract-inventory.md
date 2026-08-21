@@ -370,6 +370,16 @@ The suite must prove:
 
 ### T09 — Layer 3 Person release and D6 audit
 
+**D6-1 private structural checkpoint (2026-08-20):**
+`OA/person-read-contracts-v2.test.ts` freezes the exact four semantic request
+bodies and golden digests plus the exact 13-key, bearer-derived caller-binding
+body and digest. It covers closed variants, retained query grammar, opaque
+meeting IDs, cross-domain substitution, hostile objects without getter
+invocation, bounded I-JSON, organization mismatch, and independent caller-field
+mutation. This private, unwired module changes no live request DTO and does not
+satisfy T09: scope, release, audit, retention, export, persistence, live wiring,
+and caller-supplied-subject removal remain future coverage.
+
 **Future suite:**
 `tests/integration/server-core-v4/person-read-release-audit.test.ts`.
 

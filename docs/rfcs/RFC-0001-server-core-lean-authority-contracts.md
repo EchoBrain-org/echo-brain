@@ -1114,15 +1114,19 @@ the retrieval contract. The change selector is exactly either
 `{scope: source, source_adapter_id, source_instance_id}` or
 `{scope: meeting, source_adapter_id, source_instance_id, external_id}`;
 provider-owned `external_id` bytes are opaque, nonempty, NUL-free, and bounded
-to the retained 4,096-code-unit contract. Fields from the other selector
-variant are forbidden. The canonical SHA-256 of the complete commitment body
-is `request_sha256`; that same value appears in the scope and D6 audit. A
-route/operation mismatch or digest from another input variant denies.
+to the retained 4,096-code-unit contract, but must still contain only Unicode
+scalar values so the body is I-JSON. Fields from the other selector variant
+are forbidden. Every accepted commitment is at most 16 KiB in canonical JSON
+bytes. The canonical SHA-256 of the complete commitment body is
+`request_sha256`; that same value appears in the scope and D6 audit. A route/
+operation mismatch or digest from another input variant denies.
 
 ### Caller binding
 
-The `echo-person-caller-binding-v2` preimage contains exactly:
+The caller-binding preimage is one bounded I-JSON body containing exactly:
 
+- `schema_version: 2`;
+- `kind: echo-person-caller-binding-v2`;
 - `authority_id`;
 - `organization_id`;
 - `state_lineage_id`;
@@ -1135,8 +1139,23 @@ The `echo-person-caller-binding-v2` preimage contains exactly:
 - `person_state_sha256`; and
 - `session_state_sha256`.
 
-The resulting digest is `caller_binding_sha256`. The Authority resolves every
-member from current state; no request field supplies one.
+The resulting digest over the complete body is `caller_binding_sha256`. The
+server boundary supplies Authority, organization, and fresh-state lineage;
+the reduced current-bearer authorization supplies the caller coordinates and
+state digests, and its organization must equal the boundary organization. The
+body contains no subject, operation, request, method, path, provider, or
+display field. The Authority resolves every member from current state; no
+request field supplies one.
+
+The private D6-1 checkpoint freezes only these semantic-request and
+caller-binding bodies, validators, builders, and golden digests. It is not
+wired or publicly exported. Scope and release commitments, shared audit and
+retention persistence, the unsupported-export capability, live orchestration,
+and removal of caller-supplied identity from transitional DTOs remain later D6
+work. In particular, the live subject field is removed only when a
+bearer-derived caller and the fresh-lineage audit contract can own the same
+transition atomically; D6-1 does not weaken the current audit schemas that
+still require it.
 
 ### Scope binding
 

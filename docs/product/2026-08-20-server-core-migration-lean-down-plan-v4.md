@@ -898,10 +898,11 @@ denial family, but neither may silently inherit the other's availability or
 candidate substrate.
 
 - a closed caller binding containing exactly the material current authorization
-  resolved: `authority_id`, `organization_id`, `state_lineage_id`,
-  `principal_id`, `membership_id`, `membership_type`, OIDC
-  `identity_binding_id`, `session_family_id`, `access_credential_sha256`,
-  `person_state_sha256`, and `session_state_sha256`;
+  resolved: `schema_version: 2`, `kind: echo-person-caller-binding-v2`,
+  `authority_id`, `organization_id`, `state_lineage_id`, `principal_id`,
+  `membership_id`, `membership_type`, OIDC `identity_binding_id`,
+  `session_family_id`, `access_credential_sha256`, `person_state_sha256`, and
+  `session_state_sha256`;
 - operation and request digest without query text, terms, content, titles,
   participants, source identifiers, or caller-supplied identity fields;
 - allow/deny, safe reason code, exact closed retrieval or Authority-state scope
@@ -1354,6 +1355,22 @@ persist and reproject record, complete facts, and receipt. The retained tree
 passes the full repository gate: 146 test files and 1,481 tests, plus boundary,
 documentation, type checking, and lint.
 
+**D6-1 private request/caller checkpoint (2026-08-20):** one non-exported,
+unwired Authority application module freezes the exact four semantic request
+variants and their domain-separated golden digests. It separately freezes the
+exact 13-key `echo-person-caller-binding-v2` body from server boundary plus a
+reduced current-bearer authorization, including an organization match and
+independent digest sensitivity for every caller coordinate. Closed shapes,
+hostile-object handling, I-JSON strings, and the 16-KiB canonical-document
+bound fail before a body is returned. The focused Authority suite is 11 tests;
+the full Authority workspace is 85 test files and 820 tests, and the full
+repository gate passes 147 test files and 1,492 tests plus boundary,
+documentation, type checking, and lint. This checkpoint does not implement
+scope, release, audit, retention, export, persistence, public exports, live
+wiring, or live DTO removal. Caller-supplied subject remains until
+bearer-derived caller resolution and the fresh-lineage audit transition can
+replace it atomically.
+
 **Entry gate**
 
 - Phase 1 exit is green.
@@ -1431,13 +1448,15 @@ earlier red, and compatibility remains selectable until Phase 3 parity.
    appends record and the complete policy-specific text-free facts atomically,
    makes rejection append no readable facts, and wires bounded terminal
    cleanup only after the receipt is durable.
-6. **Caller-neutral Person read boundary.** Share current caller resolution,
-   final fence, audit-before-release, and immutable response-byte handoff while
-   keeping reviewer-recent Layer-1/log-backed and readable search Layer-2/
-   exact-head. Reuse current repository materializers; do not add the proposed
-   roughly 400-line joined query without profiling. The final single audit
-   baseline lands with the accepted D6/new-lineage schema, not as another
-   transitional persistence system.
+6. **Caller-neutral Person read boundary — D6-1 structural request/caller
+   contracts complete; live boundary pending.** Share current caller
+   resolution, final fence, audit-before-release, and immutable response-byte
+   handoff while keeping reviewer-recent Layer-1/log-backed and readable search
+   Layer-2/exact-head. Reuse current repository materializers; do not add the
+   proposed roughly 400-line joined query without profiling. The final single
+   audit baseline lands with the accepted D6/new-lineage schema, not as another
+   transitional persistence system. D6-1 changes no live DTO, route, repository,
+   database, or export.
 
 Every tranche selects exactly one writer in tests, can be reverted without a
 state downgrade, and has its own focused/full-suite exit record.
