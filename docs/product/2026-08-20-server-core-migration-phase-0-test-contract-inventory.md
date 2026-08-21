@@ -377,8 +377,21 @@ body and digest. It covers closed variants, retained query grammar, opaque
 meeting IDs, cross-domain substitution, hostile objects without getter
 invocation, bounded I-JSON, organization mismatch, and independent caller-field
 mutation. This private, unwired module changes no live request DTO and does not
-satisfy T09: scope, release, audit, retention, export, persistence, live wiring,
-and caller-supplied-subject removal remain future coverage.
+satisfy T09 by itself.
+
+**D6-2A private structural checkpoint (2026-08-20):**
+`OA/person-read-scope-contracts-v2.test.ts` freezes body-plus-digest golden
+fixtures for three exact `echo-person-scope-binding-v2` variants. Reviewer-log
+binds the singleton reviewer-v2 policy plus record head and has no generation;
+readable-search binds fixed member-then-reviewer policies, retrieval contract,
+generation, record head, and member-first optional reviewer segments including
+each `segment_id`; Authority-state binds exactly source activation, owned
+resource, and exclusion state for its two operations. The 10-test focused suite
+recomputes both D6-1 joins and covers hostile shapes, mapping, order, head, and
+digest substitution. This private, unwired module validates opaque digests only
+structurally. Release, audit, retention, export, persistence, semantic preimage
+reproof, protected-handle wiring, and caller-supplied-subject removal remain
+future T09 coverage.
 
 **Future suite:**
 `tests/integration/server-core-v4/person-read-release-audit.test.ts`.
@@ -397,11 +410,17 @@ prove:
 - exact caller binding over Authority, organization, state lineage, principal,
   membership, membership type, OIDC binding, session family, access credential
   digest, Person-state digest, and session-state digest;
-- normative closed retrieval scope over caller, operation/request, ordered
-  policies, retrieval contract/generation/manifest, record head, and every
-  admitted path/segment and manifest, plus a non-substitutable closed
-  Authority-state scope over source ownership and exclusion state for those
-  operations, neither containing query/content text or returned items;
+- normative closed reviewer-log scope over caller, operation/request, the
+  singleton reviewer-v2 policy and exact Layer-1/log head, with no generation
+  or segment keys and no loss of append-before-rebuild availability;
+- normative closed readable-search scope over caller, operation/request, fixed
+  member-then-reviewer policies, retrieval contract/generation/manifest,
+  record head, and a member-first optional reviewer segment list binding each
+  `segment_id` and manifest;
+- a non-substitutable Authority-state scope containing exactly source-
+  activation-binding, owned-resource, and exclusion-state digests for those
+  operations, with no second mutation-command digest; no scope contains query/
+  content text or returned items;
 - post-search release binding over caller, scope, exact response digest, and a
   closed retrieval tuple or Authority-resource/state tuple; an uninformative
   mutation acknowledgement has no release binding but co-commits its audit;

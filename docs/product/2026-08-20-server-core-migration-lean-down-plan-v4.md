@@ -926,15 +926,20 @@ scope receipt, computes the release commitment, and commits the outcome at one
 fence.
 
 The versioned `scope_binding_sha256` preimage is normative and discriminated.
-Every variant contains `caller_binding_sha256`, operation, and request digest.
-The retrieval variant additionally contains ordered active policy
-IDs/versions/contract digests, retrieval contract, generation ID/manifest,
-exact record-head position/hash, and every admitted policy-path/segment ID plus
-manifest. The Authority-state variant instead contains the exact Authority
-state contract, source activation/binding, current custodian/ownership, owned
-resource, exclusion-state, and mutation-command commitments. Keys from the
-other variant are forbidden. The scope is created before its protected handle
-opens and contains no returned item.
+Every variant contains `schema_version: 2`,
+`kind: echo-person-scope-binding-v2`, `scope_kind`,
+`caller_binding_sha256`, operation, and request digest. The
+`reviewer_log` variant for reviewer-recent adds only the exact singleton
+restricted-reviewer-v2 policy contract and record head; it has no generation
+or segment state and preserves the Layer-1/log-backed product path. The
+`readable_search` variant adds the fixed member-then-reviewer policy order,
+retrieval contract, generation ID/manifest, exact record head, and a required
+member segment followed by an optional reviewer segment, each binding its
+`segment_id` and manifest. The `authority_state` variant instead adds exactly
+the source-activation-binding, owned-resource, and exclusion-state digests;
+the common request digest owns the complete mutation command. Keys from
+another variant are forbidden. Each live scope must be created before its
+protected handle opens and contains no query, content, or returned item.
 
 The versioned `release_binding_sha256` similarly contains the caller and scope
 commitments, exact response digest, and either ordered returned
@@ -1371,6 +1376,26 @@ wiring, or live DTO removal. Caller-supplied subject remains until
 bearer-derived caller resolution and the fresh-lineage audit transition can
 replace it atomically.
 
+**D6-2A private scope checkpoint (2026-08-20):** one additional non-exported,
+unwired Authority application module freezes the three exact
+`echo-person-scope-binding-v2` bodies and canonical digests. Reviewer-recent
+binds its singleton reviewer-v2 policy and exact Layer-1/log record head with
+no generation. Readable search binds fixed member-then-reviewer policy order,
+retrieval contract, generation, record head, and a member segment optionally
+followed by a reviewer segment, with `segment_id` in every entry. Authority-state
+list and mutation operations bind exactly source activation, owned resource,
+and exclusion state. The builders revalidate the complete D6-1 request and
+caller bodies and recompute both joins; cross-operation, cross-variant,
+hostile-object/array, head, policy, ordering, and digest substitutions deny.
+The focused suite is 10 tests and the full Authority workspace is 86 test
+files and 830 tests; the full repository gate passes 148 test files and 1,502
+tests plus boundary, documentation, type checking, and lint. This structural
+checkpoint preserves body plus digest but does not possess or semantically
+reprove the opaque digest preimages. It adds no release, audit, retention,
+export, SQL, persistence, public export, live wiring, protected-handle claim,
+or live DTO removal; Phase 3 must own exact preimage materialization and
+persistence.
+
 **Entry gate**
 
 - Phase 1 exit is green.
@@ -1448,15 +1473,15 @@ earlier red, and compatibility remains selectable until Phase 3 parity.
    appends record and the complete policy-specific text-free facts atomically,
    makes rejection append no readable facts, and wires bounded terminal
    cleanup only after the receipt is durable.
-6. **Caller-neutral Person read boundary — D6-1 structural request/caller
-   contracts complete; live boundary pending.** Share current caller
+6. **Caller-neutral Person read boundary — D6-1 request/caller and D6-2A scope
+   structural contracts complete; release and live boundary pending.** Share current caller
    resolution, final fence, audit-before-release, and immutable response-byte
    handoff while keeping reviewer-recent Layer-1/log-backed and readable search
    Layer-2/exact-head. Reuse current repository materializers; do not add the
    proposed roughly 400-line joined query without profiling. The final single
    audit baseline lands with the accepted D6/new-lineage schema, not as another
-   transitional persistence system. D6-1 changes no live DTO, route, repository,
-   database, or export.
+   transitional persistence system. D6-1 and D6-2A change no live DTO, route,
+   repository, database, release, audit, or export.
 
 Every tranche selects exactly one writer in tests, can be reverted without a
 state downgrade, and has its own focused/full-suite exit record.

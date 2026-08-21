@@ -1149,31 +1149,61 @@ request field supplies one.
 
 The private D6-1 checkpoint freezes only these semantic-request and
 caller-binding bodies, validators, builders, and golden digests. It is not
-wired or publicly exported. Scope and release commitments, shared audit and
-retention persistence, the unsupported-export capability, live orchestration,
-and removal of caller-supplied identity from transitional DTOs remain later D6
-work. In particular, the live subject field is removed only when a
-bearer-derived caller and the fresh-lineage audit contract can own the same
-transition atomically; D6-1 does not weaken the current audit schemas that
-still require it.
+wired or publicly exported. The private D6-2A checkpoint below separately
+freezes the structural scope body and digest. Release commitments, shared audit
+and retention persistence, the unsupported-export capability, live
+orchestration, and removal of caller-supplied identity from transitional DTOs
+remain later D6 work. In particular, the live subject field is removed only
+when a bearer-derived caller and the fresh-lineage audit contract can own the
+same transition atomically; neither private checkpoint weakens the current
+audit schemas that still require it.
 
 ### Scope binding
 
 Before any protected data handle opens, the application constructs one closed
-`echo-person-scope-binding-v2` variant. Both variants contain
-`caller_binding_sha256`, operation, and `request_sha256`.
+`echo-person-scope-binding-v2` variant. All three variants contain exactly
+`schema_version: 2`, `kind: echo-person-scope-binding-v2`, `scope_kind`,
+`caller_binding_sha256`, operation, and `request_sha256` before their
+variant-specific keys. The request and caller digests are recomputed from the
+complete separately validated D6-1 bodies; a supplied digest is never trusted
+as their substitute.
 
-The `scope_kind: retrieval` variant additionally contains ordered active
-policy IDs/versions/contract digests, retrieval-contract digest, retrieval
-generation ID and manifest digest, exact record-head position/hash, and every
-ordered admitted policy-path or segment ID plus segment-manifest digest. It is
-created before lexical or content handles open. Candidate selection,
-statistics, scoring, and retrieval may operate only inside this scope.
+The `scope_kind: reviewer_log` variant is used only for
+`reviewer_recent_decisions`. It additionally contains `policy_contracts` as
+the exact singleton
+`{policy_id: restricted-reviewer-person-v2, policy_schema_version: 2,
+policy_contract_sha256:
+sha256:c0b1676ad1bd2f27d9d781605420beac2e6fd3cd18ffa69f0d18ea62fe48f043}`
+and `record_head` as the exact `{position, record_hash}` pair. Position is a
+non-negative safe integer; hash is null exactly at position zero and otherwise
+a lowercase SHA-256 digest. This scope contains no retrieval contract,
+generation, segment, path, query, or returned-item key. The live resolver must
+construct and reprove it before opening the exact reviewer-tenure Layer-1/log
+fact or canonical-record handle, preserving main's append-before-rebuild
+availability and response limit/order.
 
-The `scope_kind: authority_state` variant is used only for a self-owned source
-or meeting-exclusion read or mutation. It additionally contains the Authority
-source-activation binding digest, owned-resource digest, and current exclusion-
-state digest. The caller binding plus exact source-activation commitment own
+The `scope_kind: readable_search` variant is used only for `readable_search`.
+It additionally contains `policy_contracts` in the fixed order
+`organization-member-readable-person-v2`, then
+`restricted-reviewer-person-v2`, each with `policy_schema_version: 2` and the
+accepted contract digests
+`sha256:7a874f8b8c0bea7fd58066f93e4f4a26f6f6c05bbbdfe45bf2141f0b2f3ff5e3`
+and
+`sha256:c0b1676ad1bd2f27d9d781605420beac2e6fd3cd18ffa69f0d18ea62fe48f043`.
+It then contains `retrieval_contract_sha256`, exact
+`generation: {generation_id, manifest_sha256}`, exact
+`record_head: {position, record_hash}`, and `admitted_segments`. The admitted
+segments are one member-policy segment followed by an optional reviewer-policy
+segment; there is no null placeholder. Every segment contains exactly
+`policy_id`, `segment_id`, and `segment_manifest_sha256`. It is created before
+fact, lexical, or content handles open. Candidate selection, statistics,
+scoring, and retrieval may operate only inside this scope.
+
+The `scope_kind: authority_state` variant is used only for
+`list_member_exclusions` or `change_member_exclusion`. It additionally
+contains exactly `source_activation_binding_sha256`, `owned_resource_sha256`,
+and `exclusion_state_sha256`. The caller binding plus exact source-activation
+commitment own
 the custodian principal and membership; the scope does not duplicate those
 identifiers. For a mutation, the common `request_sha256` is the complete
 mutation-command commitment; no second command digest is added.
@@ -1182,11 +1212,21 @@ membership, source ownership, and state commitments and performs the mutation
 plus audit in the same Authority write transaction. It opens no retrieval
 generation, segment, lexical, content, or record-log handle.
 
-Keys from the other variant are forbidden rather than nullable. Neither
-variant contains query text, terms, title, participant, source locator,
-content, score, count, or returned item. The resulting digest is
-`scope_binding_sha256`; the discriminator prevents a retrieval scope from
-replaying as an Authority-state mutation or conversely.
+Keys from another variant are forbidden rather than nullable. No variant
+contains query text, terms, title, participant, source locator, content, score,
+count, or returned item. The resulting canonical digest is
+`scope_binding_sha256`; the three discriminators prevent a reviewer-log,
+readable-search, or Authority-state scope from replaying as another.
+
+The private D6-2A implementation validates these exact shapes, operation
+mapping, record-head invariant, fixed policy and segment order, and lowercase
+digest syntax; it preserves the frozen body beside its digest and recomputes
+both D6-1 joins. It does not yet possess the opaque preimages behind policy,
+retrieval, generation, segment, record-head, source-activation, owned-resource,
+or exclusion-state digests and therefore cannot claim semantic reproof. Phase
+3 persistence and live resolvers must materialize and reprove those exact
+preimages at the protected-handle and final fences. D6-2A adds no release,
+audit, SQL, export, public export, or live-route behavior.
 
 ### Release binding
 

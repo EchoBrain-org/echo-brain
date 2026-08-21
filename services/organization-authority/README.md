@@ -25,6 +25,25 @@ builds also keep immutable retrieval generations below
 source of truth. There is no tenant registry, organization switcher, billing
 layer, or multi-replica coordination.
 
+## Private migration contracts
+
+The Authority contains two unwired, non-package-exported D6 structural
+checkpoints. D6-1 freezes the four semantic Person request commitments and the
+bearer-derived caller binding. D6-2A freezes body-plus-digest
+`echo-person-scope-binding-v2` commitments with three closed variants:
+reviewer-log binds the singleton reviewer-v2 policy and Layer-1/log record head
+without generation state; readable-search binds fixed member-then-reviewer
+policies, retrieval generation and head, and member-first optional reviewer
+segments including `segment_id`; Authority-state binds exactly source
+activation, owned resource, and exclusion state for list or mutation.
+
+These modules validate closed structural bytes and recompute the request and
+caller digests. They do not prove the opaque policy, retrieval, generation,
+segment, record-head, ownership, or exclusion preimages and do not add release,
+audit, retention, SQL, export, protected-handle, route, or other live behavior.
+Fresh-lineage persistence and live reproof remain Phase 3 work; the current
+Person routes and audit stores are unchanged.
+
 ## Release boundary
 
 The bounded two-policy readable-search path has one exact deployed
