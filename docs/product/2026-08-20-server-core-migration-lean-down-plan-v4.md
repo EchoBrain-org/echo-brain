@@ -1723,6 +1723,33 @@ composition is therefore no longer blocked by the openers, but remains
 unauthorized until the slice that introduces fresh new-lineage
 initialization; the guard and manifests stay private and unwired.
 
+**Progress, slice 3 (2026-08-21):** new-lineage baseline v1 exists for the
+four mechanically clean roles — record-derived and the three readable-search
+planes — as committed exact SQL files with private, unwired applier modules
+and frozen digests. Founder dispositions (2026-08-21, initial-V1): the
+legacy migration-ledger machinery (`*_schema_migrations` tables, their
+immutability triggers, and per-row fingerprints) is excluded from every
+new-lineage baseline — schema identity is carried by the manifest
+`schema_sha256` and the guard's exact-version check — and every role's
+baseline stamps `user_version = 1`, recording lineage intent rather than a
+refusal mechanism: the exact-version check alone discriminates legacy state
+only where the legacy terminal version differs (record-derived at 3; the
+control-plane at 5 once its baseline exists), while each readable-search
+plane's legacy terminal version is also 1, so a legacy plane database is
+refused by its missing or legacy manifest, never by the version number
+(bound correction 2026-08-21: the disposition was first recorded with the
+overclaim "a legacy database fails the exact-version check on its own").
+Each baseline is proved equal to its
+terminal migrated schema minus exactly the ledger objects, proved free of
+installation-era objects, and applies only to a completely empty database.
+The control-plane and record-log baselines are deliberately absent from this
+slice: `organization_adapter_bindings` and `organization_integration_audit`
+carry installation identity columns and an `installation` actor class, and
+`organization_record_log` dedupes on an installation-scoped identity, so
+their installation-free new-lineage shapes are contract work owned by the
+same later slice as the authority baseline, drawing on the frozen D2-2B
+installation-free action/audit chain and the D3 envelope/receipt identity.
+
 **Entry gate**
 
 - Phase 2 exit is green.

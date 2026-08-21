@@ -10,6 +10,12 @@ import {
   ORGANIZATION_RECORD_DERIVED_DATABASE,
   ORGANIZATION_RECORD_LOG_DATABASE,
 } from '../src/maintenance.js';
+import {
+  applyOrganizationRecordDerivedBaselineV1,
+  ORGANIZATION_RECORD_DERIVED_BASELINE_SCHEMA_VERSION_V1,
+  organizationRecordDerivedBaselineSha256V1,
+  organizationRecordDerivedBaselineSqlV1,
+} from '../src/persistence/baseline.js';
 import type { OrganizationRecordDatabaseDefinition } from '../src/persistence/database-definition.js';
 import {
   currentOrganizationRecordSchemaVersion,
@@ -480,5 +486,103 @@ describe('organization record opening is split from migration', () => {
         ORGANIZATION_RECORD_DERIVED_DATABASE,
       ),
     ).toThrow(/not an organization record derived database/);
+  });
+});
+
+describe('organization record derived new-lineage baseline v1', () => {
+  const INSTALLATION_ERA = /enrollment|installation|(?<!re)lease/i;
+
+  function schemaObjects(database: Database.Database) {
+    return database
+      .prepare(
+        `SELECT type, name, sql FROM sqlite_master
+         WHERE name NOT LIKE 'sqlite_%' AND sql IS NOT NULL
+         ORDER BY type, name`,
+      )
+      .all() as { type: string; name: string; sql: string }[];
+  }
+
+  it('creates the terminal derived schema exactly, minus the migration ledger', () => {
+    const migrated = openAndMigrateOrganizationRecordDatabase(
+      join(temporaryStateDirectory(), 'derived-migrated.sqlite'),
+      ORGANIZATION_RECORD_DERIVED_DATABASE,
+    );
+    const allMigratedObjects = schemaObjects(migrated);
+    migrated.close();
+    const migratedObjects = allMigratedObjects.filter(
+      (row) => !row.name.includes('schema_migrations'),
+    );
+    // The excluded set must be exactly the ledger machinery; a behavior
+    // object whose name merely matched the filter would silently vanish
+    // from both sides of the equivalence.
+    expect(
+      allMigratedObjects
+        .filter((row) => row.name.includes('schema_migrations'))
+        .map((row) => `${row.type}:${row.name}`)
+        .sort(),
+    ).toEqual([
+      'table:organization_record_schema_migrations',
+      'trigger:organization_record_schema_migrations_immutable_delete',
+      'trigger:organization_record_schema_migrations_immutable_update',
+    ]);
+    expect(migratedObjects.length).toBeGreaterThan(0);
+
+    const database = openOrganizationRecordDatabase(
+      join(temporaryStateDirectory(), 'derived-baseline.sqlite'),
+    );
+    try {
+      applyOrganizationRecordDerivedBaselineV1(database);
+      const objects = schemaObjects(database);
+      expect(objects).toEqual(migratedObjects);
+      expect(
+        objects.some((row) => row.name.includes('schema_migrations')),
+      ).toBe(false);
+      expect(database.pragma('user_version', { simple: true })).toBe(
+        ORGANIZATION_RECORD_DERIVED_BASELINE_SCHEMA_VERSION_V1,
+      );
+      expect(database.pragma('application_id', { simple: true })).toBe(
+        ORGANIZATION_RECORD_DERIVED_DATABASE.application_id,
+      );
+    } finally {
+      database.close();
+    }
+  });
+
+  it('contains no installation-era object and freezes the baseline digest', () => {
+    const sql = organizationRecordDerivedBaselineSqlV1();
+    expect(INSTALLATION_ERA.test(sql)).toBe(false);
+    expect(organizationRecordDerivedBaselineSha256V1()).toBe(
+      'sha256:06f5ac7ee52a3a6be7583743db99c7d75c32923b559388e2b7a52bf26d76d99d',
+    );
+  });
+
+  it('refuses any database that is not completely empty', () => {
+    const path = join(temporaryStateDirectory(), 'derived-occupied.sqlite');
+    const database = openOrganizationRecordDatabase(path);
+    try {
+      applyOrganizationRecordDerivedBaselineV1(database);
+      expect(() => applyOrganizationRecordDerivedBaselineV1(database)).toThrow(
+        /completely empty database/,
+      );
+    } finally {
+      database.close();
+    }
+
+    const migrated = openAndMigrateOrganizationRecordDatabase(
+      join(temporaryStateDirectory(), 'derived-legacy.sqlite'),
+      ORGANIZATION_RECORD_DERIVED_DATABASE,
+    );
+    try {
+      expect(() => applyOrganizationRecordDerivedBaselineV1(migrated)).toThrow(
+        /completely empty database/,
+      );
+      expect(
+        schemaObjects(migrated).some((row) =>
+          row.name.includes('schema_migrations'),
+        ),
+      ).toBe(true);
+    } finally {
+      migrated.close();
+    }
   });
 });
