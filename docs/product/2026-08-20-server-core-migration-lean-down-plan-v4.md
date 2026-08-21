@@ -144,7 +144,7 @@ permission model itself:
 5. Use the atomic stopped source-activation command that replaced the
    incompatible one-meeting canary, structured-text live orchestration, and
    canary-only store APIs in Phase 2B. Keep structured-text only behind the
-   offline replay corpus; move or delete that remaining migration evidence
+   D5 parity corpus; move or delete that remaining migration evidence
    only after parity gate D5 closes.
 6. Replace the separate file delivery journal with the same pre-call
    attempt/unknown/outcome semantics in SQLite, then delete the file-locking and
@@ -421,7 +421,7 @@ disposition:
 | Reviewer and readable-search designs freeze separate 180-day audit/export/expiry systems.                                                                                                                                                     | Those parallel maintenance systems duplicate one semantic decision fence.                            | Keep audit-before-release. D6 must accept one minimized Person-read audit, explicit retention, whole-row expiry, and an explicit export decision before old audit systems are deleted.                           |
 | [Append/derive design](2026-08-07-org-decision-record-append-derive-design.md) and the Layer-2 design freeze separate canonical, derived, facts, content, and lexical storage roles.                                                          | Merging databases looks lean by file count but erases a qualified trust boundary.                    | Preserve the logical and current physical roles in v4. Squash history only within a brand-new lineage; database consolidation is not part of this plan.                                                          |
 | ADR-0001 requires frozen pre-record work, approve/edit/reject outcome evidence, a member exclusion valve, and 30-day terminal cleanup.                                                                                                        | Some implementations are currently test-only or unwired and therefore look dead in a caller scan.    | Treat them as missing required behavior: wire a lean report/cleanup path or obtain an explicit superseding decision. Do not delete them as unused code.                                                          |
-| ADR-0002 and workspace architecture require old bytes to keep their meaning and old migrations to remain immutable while served.                                                                                                              | A migration squash would otherwise appear to rewrite history.                                        | D0 authorizes a whole-state reset; the new artifact uses new application IDs, manifests, envelope kinds/versions, and genesis, and rejects all old or mixed state. Historical files remain unchanged in history. |
+| ADR-0002 and workspace architecture require old bytes to keep their meaning and old migrations to remain immutable while served.                                                                                                              | A migration squash would otherwise appear to rewrite history.                                        | D0 authorizes a whole-state reset; the new artifact uses role-stable application IDs, fresh lineage manifests, new envelope kinds/versions, and genesis, and rejects all old or mixed state. Historical files remain unchanged in history. |
 | Existing qualification reports are green for exact old artifacts and two-policy generations.                                                                                                                                                  | Source, schema, adapter, actor, or state-lineage changes invalidate those claims.                    | Mark them historical; never rewrite them. Phase 6 creates a new matrix and exact run for the lean artifact.                                                                                                      |
 | Current adapter docs promise four LLM transports and a canary-to-worker flow; current composition selects OpenRouter and cannot resume the structured-text canary candidate.                                                                  | Architectural allowance and operational reality are conflated.                                       | Preserve the provider-neutral processor port. Rebaseline concrete drivers and replace the canary as described below; do not call either old claim current.                                                       |
 
@@ -572,7 +572,7 @@ contracts, or boundary tests merely because a request transport is deleted.
 | `organization_recording_policy_v1` combines decision-processor routing with approval policy/adapter authorization.                                                                                | Split it in the new lineage. Source/pipeline activation owns source adapter identity, processor adapter ID/instance/version, processor/config contract digest, and cutoff. D2 owns policy ID/digest plus approval-surface identity/binding. Candidate creation freezes both; processor identity remains provenance and never becomes human authorization. Delete the overlay only after both contracts exist and exact restart/config-drift tests pass.                                                                                                                        |
 | Live Slack delivery reuses approval-instance configuration and a separate file attempt journal.                                                                                                   | Preserve main's typed delivery-surface array and different-channel rule, derive no reader audience from delivery, and keep approval identity from authorizing delivery. Move the existing claim/unknown/outcome recovery semantics into SQLite, preserve deterministic configured-surface fan-out and exact snapshot identity, then delete the file journal. A future persisted delivery-activation contract is a separate product iteration.                                                                                                                                  |
 | The current processing key omits the meeting-source adapter version and replay normalization strips it; activation-time identity is also conflated with values learned only after a meeting pull. | Create a no-pull pipeline contract for source kind/ID/instance/version, cursor/cutoff lineage, normalizer contract, and processor kind/ID/instance/version/config digest. The new processing key combines that digest with actual external object ID, canonical revision, `normalizer_version`, and nullable provider `source_revision` learned at candidate creation. Replay must preserve every field. Mutating a pipeline or per-meeting member creates a distinct/conflicting candidate; a newly authorized custodian may resume only the exact unchanged tuple and bytes. |
-| `process-one-meeting` staged a `structured-text` processing key, while `serve` selected the OpenRouter `llm` key.                                                                                | Completed in Phase 2B. One stopped, atomic `activate-meeting-source` operation validates the exact Person/member and organization credential, freezes the live-only cutoff without pulling a meeting, and converges under retry/concurrency. The canary, baseline helper, canary-only store APIs, and false handoff runbook are deleted. The offline replay corpus remains isolated until D5.                                                                                                                             |
+| `process-one-meeting` staged a `structured-text` processing key, while `serve` selected the OpenRouter `llm` key.                                                                                | Completed in Phase 2B. One stopped, atomic `activate-meeting-source` operation validates the exact Person/member and organization credential, freezes the live-only cutoff without pulling a meeting, and converges under retry/concurrency. The canary, baseline helper, canary-only store APIs, and false handoff runbook are deleted. The Phase-1 replay corpus is disposed on 2026-08-25; the D5 parity corpus authored in Phase 3 replaces it.                                                                                                                             |
 | The Slack approval adapter multiplexes ordinary, Pilot, reviewer, and member presentation/authorization branches, while live composition currently rejects reviewer mode.                         | Compose both retained policies from the frozen pending contract. Keep reviewer schema-v2 approval, member schema-v3 approval, and the common durable rejection authorization. After a state preflight proves no unresolved ordinary/Pilot card, delete only their new-card branches and compatibility resolvers.                                                                                                                                                                                                                                                               |
 | Core marks rejection terminal without the same record-first resolution used for approval.                                                                                                         | Add one narrow record-resolution port for both terminal human outcomes. Freeze and append a bounded rejection act before terminal marking; it creates no approved atom, policy fact, retrieval entry, or delivery. Delete older rejection transport only after retry/restart/race tests pass.                                                                                                                                                                                                                                                                                  |
 | Slack delivery previously wrote a pre-call attempt/outcome file while core stored provider receipts in Authority SQLite.                                                                          | Phase 2 now puts the atomic pre-call claim and unknown/delivered outcome in the existing Authority processing store. Concurrent and restarted callers observe the durable unknown marker instead of posting. The file journal and process-file lock are deleted; live cutover still requires proof that no old file entry needs import.                                                                                                                                                                                                                                        |
@@ -1002,12 +1002,79 @@ Every writable database carries a manifest binding at least:
 - canonical schema digest; and
 - creation time and creating artifact revision.
 
+The seven roles are not seven sibling files. Four top-level state files carry
+one database each: `authority.sqlite`, `integrations.sqlite`,
+`record-log.sqlite`, and `record-derived.sqlite`. The three retrieval roles
+live per segment per generation below `record-retrieval/generations/`, so a
+state directory holds as many retrieval databases as its generations hold
+segments, and an absent `record-retrieval/` tree is the coherent
+not-yet-built state, not a refusal. One root manifest binds the state
+directory as a whole: it declares all seven roles with their exact canonical
+locations and role application IDs, and carries the same Authority,
+organization, lineage, creation, and artifact members as the per-database
+manifests; the retrieval roles' tree remains legally absent until first
+built. The two closed manifest contracts are
+`echo-state-lineage-root-manifest-v1` and
+`echo-state-lineage-database-manifest-v1`, owned as private unwired bodies in
+the Authority's `state-lineage` module beside the pre-open guard. Like the
+Authority initialization manifest, they are composition-owned migration
+mechanics recorded here, not Authority protocol contract surface, and they do
+not enter the RFC identifier table.
+
 The new lineage contains no employee installation, enrollment, access lease,
 installation key, or installation actor column. Authority startup validates
 that every opened database belongs to the same exact Authority, organization,
 and lineage before any writable handle, provider call, processing cycle, or
-listener is available. A missing, legacy, mixed-role, mixed-organization, or
-mixed-lineage manifest fails closed with no automatic upgrade.
+listener is available.
+
+Each database role carries one unique application ID, four ASCII bytes. The
+IDs are role-stable: the application ID discriminates role — whether a file
+is the kind of database it claims to be — while lineage, Authority, and
+organization identity is carried only by the manifests. A legacy database
+therefore presents its correct role ID and is refused by its missing or
+legacy manifest, which lets a refusal distinguish "right role, legacy
+lineage" from "not this role's file at all".
+
+| Database role | Application ID |
+| --- | --- |
+| `authority` | `0x45434155` (`ECAU`) |
+| `control-plane` | `0x45434f50` (`ECOP`) |
+| `record-log` | `0x4543524c` (`ECRL`) |
+| `record-derived` | `0x45435244` (`ECRD`) |
+| `retrieval-facts` | `0x45524654` (`ERFT`) |
+| `retrieval-lexical` | `0x45524c58` (`ERLX`) |
+| `retrieval-content` | `0x45524354` (`ERCT`) |
+
+Six values are the shipped ones. `authority` is the single new assignment: no
+existing `authority.sqlite` carries an application ID at all, so only the
+new-lineage initializer writes `ECAU`, by design.
+
+This is the canonical refusal matrix. Opening fails closed, with no automatic
+upgrade, on:
+
+- a missing state directory, a missing or unreadable top-level database, or a
+  missing or unreadable retrieval plane inside a present segment;
+- a missing, duplicated, swapped, or legacy manifest;
+- a manifest disagreeing with the expected Authority, organization, lineage, or
+  role binding (wrong-X);
+- databases disagreeing among themselves on Authority, organization, or lineage
+  even when one of them matches the expectation (mixed-X, a distinct family
+  from wrong-X);
+- a wrong application ID for the role;
+- a schema version that is not exact;
+- a partial publish, meaning a generation directory without its manifest,
+  `.staging-` debris below `record-retrieval/generations/`, `.installing-`
+  or `.rebuilding-` debris in the state root, or a generation or segment
+  entry that cannot be read — an absent active-generation pointer row is the
+  legal not-built state, never a refusal;
+- an active-generation pointer row naming a generation whose directory is
+  absent; and
+- a mismatched artifact/state pair in either direction, both
+  old-artifact/new-state and new-artifact/old-state.
+
+A malformed caller expectation is refused as invalid input before any state
+is read; that is a caller-error family outside this state matrix, not a state
+condition.
 
 The record log begins at a new genesis. Derived and retrieval state is created
 empty and must rebuild from that log. Authority and control-plane state is
@@ -1155,9 +1222,10 @@ lines of duplicate row validation to optimize an unmeasured no-customer path.
 4. Freeze the closed offline lineage-manifest contract and its role-coherence
    negatives without opening SQLite or adding a test-only production module.
    Current migration runners auto-upgrade legacy state and therefore are not a
-   valid new-lineage initializer. The actual application IDs, baseline SQL,
-   pre-open filesystem guard, and fresh initialization land only after the
-   Phase 2 schemas settle and are exercised in Phase 3.
+   valid new-lineage initializer. The baseline SQL, pre-open filesystem guard,
+   and fresh initialization land only after the Phase 2 schemas settle and are
+   exercised in Phase 3; the application IDs themselves are now named in the
+   lineage contract.
 5. Add the one-Authority, one-owner-plus-three-employee fixture and a bounded
    foreign-Authority negative fixture without introducing a cross-organization
    registry.
@@ -1243,7 +1311,7 @@ configuration-derived identity version. The current exact source custodian is
 still immutable and fail-closed: revocation stops future source work. A
 replaceable custody activation remains a later Phase-2 contract; this tranche
 does not add a second custody system. Structured-text remains only for the
-offline replay corpus pending D5.
+D5 parity corpus authored in Phase 3.
 
 The initial compatibility writer now appends one canonical approval or
 rejection act before any terminal marker or delivery fan-out. Record creation
@@ -1471,7 +1539,7 @@ earlier red, and compatibility remains selectable until Phase 3 parity.
    processing-key preimage with source/normalizer/provider revisions. After
    this is green, delete `process-one-meeting`, `baseline-live-source`, and
    their structured-text canary orchestration; keep structured-text only where
-   the still-required offline replay corpus consumes it.
+   the D5 parity corpus consumes it.
 3. **Canonical act before delivery — complete for compatibility V1.** Add one internal resolved-act writer port
    to the core. Adapt the current compatibility builder/ingest path behind it
    first: approve and reject obtain an idempotent canonical receipt before the
@@ -1595,6 +1663,23 @@ state downgrade, and has its own focused/full-suite exit record.
 - Terminal cleanup and outcome reporting are owned by the one lifecycle and
   require no second write-only evidence system.
 
+**Phase 2 exit, declared green for contracts (2026-08-20):** the founder
+declared Phase 2 exit on the contract properties above by dated disposition.
+Every tranche's structural bodies, digests, and negative cases are frozen and
+gated. The runtime properties in this gate are not claimed: rebuild of record,
+facts, derive, retrieval, and audit in isolated state with stable hashes;
+Slack approval and delivery channel separation; replaceable custody
+activation; terminal cleanup and approval-outcome reporting wiring;
+OIDC-retarget denial and later-member behavior; concurrent append admitting
+once; missing or drifted destination state making zero provider calls; replay
+after rotation not duplicating a delivered artifact; persisted
+pipeline-routing-versus-approval contracts; revocation-during-call discard;
+and INV-IDENTITY-005 end-to-end qualification. Those carry forward as named
+debt that Phase 3's own gates must prove. The rebuild item is circular with
+Phase 3 work item 1, which builds the baselines that item needs, and is proved
+only once they exist. This declaration disposes contracts only; Phase 3 may
+not treat a carried item as satisfied by it.
+
 **Kill gate**
 
 Stop on any record without an exact human act, any policy fallback, any
@@ -1610,13 +1695,39 @@ envelope through the old writer or vice versa.
 
 ### Phase 3 — prove parity and rehearse reset
 
+**Progress, slice 1 (2026-08-21):** the lineage-manifest contracts and the
+read-only pre-open guard are implemented as private, unwired Authority
+`state-lineage` modules with golden digests. The guard verifies a state
+directory against an explicit expectation — no default, discovery, or
+environment read — and refuses every family in the canonical refusal matrix,
+plus a malformed expectation as the invalid-input caller-error family;
+its 17-test suite proves each family plus the coherent positive paths, and
+the 7-test manifest suite freezes both bodies, the role locations, and the
+role application IDs. The four production open-database entry points still
+migrate inside the open call, so wiring the guard into composition remains
+unauthorized until a later slice splits open from migrate. Baseline SQL,
+fresh initialization, the D5 corpus, and the reset rehearsal remain later
+Phase 3 slices.
+
 **Entry gate**
 
 - Phase 2 exit is green.
 - The implemented D6 audit shape is stable enough for the parity comparison;
   formal acceptance remains a Phase 4 entry requirement.
-- The parity corpus and comparison rules in D5 are checked in.
+- The parity corpus and comparison rules in D5 are checked in. By the corpus
+  disposition below this item is not satisfied at phase entry: the corpus is
+  authored inside Phase 3, so the gate is met before the parity run rather
+  than before the phase begins.
 - The old and new writer paths can be run only in isolated state directories.
+
+**Corpus disposition (2026-08-20):** the founder disposed the Phase-1 synthetic
+replay corpus on schedule at its declared `disposal_due_at` of 2026-08-25;
+operator removal remains required and nothing authorizes earlier deletion by
+inference. The D5 parity corpus is authored fresh as Phase 3 work with the
+D5-required structure: one owner plus three employees, both policy families, a
+rejection, an approval/rejection conflict, retries, a revoked former employee,
+a later-joining employee, an OIDC-retarget denial, and a bounded
+foreign-Authority fixture. Its comparison rules become executable alongside it.
 
 **Work**
 
@@ -1627,7 +1738,8 @@ envelope through the old writer or vice versa.
    D6 audit baseline persists exactly the frozen rows under the accepted
    commitment-only semantics recorded in D6 above, with no companion
    preimage store.
-2. Run the D5 corpus through the old compatibility path and new server path.
+2. Author the D5 parity corpus and its executable comparison rules, then run
+   that corpus through the old compatibility path and new server path.
 3. Compare semantic outcomes, policy facts, projections, visibility, witnesses,
    audits, retries, and delivery independently of expected envelope-version
    changes.
@@ -1641,10 +1753,9 @@ envelope through the old writer or vice versa.
 
 - The D5 report has zero unexplained semantic mismatch and is ready for
   artifact-bound acceptance at the Phase 4 gate.
-- Fresh initialization and byte-stable restart pass; missing, duplicated,
-  swapped, legacy, wrong-Authority, wrong-organization, wrong-lineage, wrong-
-  role, wrong-application-ID, and partial-publish state all refuse before a
-  writable database or provider/listener is opened.
+- Fresh initialization and byte-stable restart pass; every family in the
+  canonical refusal matrix of the lineage contract refuses before a writable
+  database or provider/listener is opened.
 - A clean reset and rollback rehearsal both complete without row copying,
   dual writing, or provider side effects against the live organization.
 - The new runtime closure has no unclassified installation-era dependency.
@@ -1859,7 +1970,7 @@ completion label is reversible; record or identity meaning is not.
 | Layer 3                        | Start/end Person resolution, self-only caller binding, pre-search caller-bound scope receipt, prepare/private deterministic serialization/finalize/release ordering, post-search release binding, mutation race, exact-head fence, safe witness, minimized allow/deny audit, audit failure discarding the buffer, and only the exact audited bytes written after commit.                                                                                                                                                                                                                                                           | `npm run test:authority`; `npm run test:integration`                                                                                        |
 | Audit/retention                | One D6 row shape for every retained Person operation; distinct caller/scope/release digests; no content/query leakage; exact returned opaque bindings and response digest; 30-day whole-row expiry and its audit; a closed unsupported capability result that selects zero rows and opens/writes no file; and zero legacy export route, command, writer, selector, runtime mode, or CLI branch.                                                                                                                                                                                                                                    | Authority audit repository/application/HTTP/CLI tests plus T09 and T13                                                                      |
 | Operator surface               | Organization initialization, owner plus three employee invitations, revocation, organization Slack/source onboarding, Person links, approval activation, typed delivery-surface configuration, binding inspection, and required recovery through JSON API and thin CLI without browser-console dependency.                                                                                                                                                                                                                                                                                                                             | Admin API/CLI and fresh-state integration suite                                                                                             |
-| Lineage                        | Fresh init, restart, schema digest, legacy refusal, missing manifest refusal, mixed role/org/Authority/lineage refusal, old/new artifact-state mismatch, and no auto-upgrade.                                                                                                                                                                                                                                                                                                                                                                                                                                                      | Exact-schema tests and reset rehearsal report                                                                                               |
+| Lineage                        | Fresh init, restart, schema digest, and every family in the canonical refusal matrix of the lineage contract: missing state directory or missing/unreadable database, missing/duplicated/swapped/legacy manifest, wrong-X, mixed-X, wrong application ID, inexact schema version, partial publish, a pointer row naming an absent generation, and artifact/state mismatch in either direction, with no auto-upgrade.                                                                                                                                                                                                                                                                                                                                                                                                                                                      | Exact-schema tests and reset rehearsal report                                                                                               |
 | Deletion                       | Zero runtime callers, exports, routes, SQL objects, artifact files, or direct dependencies for retired installation surfaces; historical references allowlisted by path.                                                                                                                                                                                                                                                                                                                                                                                                                                                           | Checked `rg`/manifest scan plus architecture test                                                                                           |
 | Full repository                | Build, docs, boundaries, types, lint, all workspace and integration tests from a clean checkout.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   | `npm run check`                                                                                                                             |
 | Layer 4 exclusion              | No new answer-composition route, retrieval-to-model dependency, prompt/answer audit schema, agent/tool path, or streaming response in this change.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 | Boundary manifest and dependency scan                                                                                                       |

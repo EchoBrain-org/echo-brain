@@ -83,9 +83,30 @@ The suite must prove:
 - a bounded foreign-Authority fixture cannot contribute a session, provider
   link, record, fact, generation, segment, or result to the target Authority;
   and
-- missing, legacy, mixed-role, mixed-Authority, mixed-organization, mixed-
-  lineage, and old-artifact/new-state combinations fail with zero mutation or
-  provider traffic and no automatic upgrade.
+- every family in the canonical refusal matrix fails with zero mutation or
+  provider traffic and no automatic upgrade: a missing state directory or a
+  missing or unreadable database or retrieval plane; a missing, duplicated,
+  swapped, or legacy manifest; a manifest disagreeing with the expected Authority,
+  organization, lineage, or role binding; databases disagreeing among
+  themselves on Authority, organization, or lineage even when one matches; a
+  wrong application ID for the role; an inexact schema version; a partial
+  publish, meaning a generation directory without its manifest, `.staging-`
+  debris below the generations tree, `.installing-` or `.rebuilding-`
+  debris in the state root, or a generation or segment entry that cannot be
+  read, with an absent active-generation pointer row
+  remaining the legal not-built state; a pointer row naming a generation
+  whose directory is absent; and a mismatched artifact/state pair in either
+  direction.
+
+**Initial contract slice (2026-08-21):**
+`OA/state-lineage-manifest-v1.test.ts` freezes the root and per-database
+manifest bodies, the canonical role locations, and the role application IDs
+with golden digests. `OA/state-lineage-preopen-guard.test.ts` proves every
+refusal family of the canonical matrix plus the coherent positive paths
+against fixture state directories, strictly read-only, including that fixture
+bytes are identical before and after the guard. Fresh initialization,
+genesis, restart, live wiring, and the foreign-Authority fixture remain
+future T01 coverage.
 
 ### T02 — Person onboarding and identity lifecycle
 

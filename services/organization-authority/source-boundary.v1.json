@@ -240,6 +240,16 @@
       "allowed_node_builtins": ["crypto", "events", "fs", "http", "net", "path"]
     },
     {
+      "name": "state-lineage-guard-is-unwired-and-read-only",
+      "from": "services/organization-authority/src/state-lineage/**",
+      "allowed_imports": [
+        "services/organization-authority/src/state-lineage/**"
+      ],
+      "allowed_workspace_packages": ["@echo-brain/federation-protocol"],
+      "allowed_external_packages": ["better-sqlite3"],
+      "allowed_node_builtins": ["fs", "path"]
+    },
+    {
       "name": "processing-core-is-tool-agnostic",
       "from": "services/organization-authority/src/processing/core/**",
       "allowed_imports": [
