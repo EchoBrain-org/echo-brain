@@ -1150,13 +1150,15 @@ request field supplies one.
 The private D6-1 checkpoint freezes only these semantic-request and
 caller-binding bodies, validators, builders, and golden digests. It is not
 wired or publicly exported. The private D6-2A checkpoint below separately
-freezes the structural scope body and digest. Release commitments, shared audit
-and retention persistence, the unsupported-export capability, live
-orchestration, and removal of caller-supplied identity from transitional DTOs
-remain later D6 work. In particular, the live subject field is removed only
-when a bearer-derived caller and the fresh-lineage audit contract can own the
-same transition atomically; neither private checkpoint weakens the current
-audit schemas that still require it.
+freezes the structural scope body and digest. D6-2B separately freezes the
+structural release bodies, digests, and copied response snapshot. Final-fence
+authorization, shared audit and retention persistence, the unsupported-export
+capability, transport handoff, live orchestration, and removal of
+caller-supplied identity from transitional DTOs remain later D6 work. In
+particular, the live subject field is removed only when a bearer-derived caller
+and the fresh-lineage audit contract can own the same transition atomically;
+none of these private checkpoints weakens the current audit schemas that still
+require it.
 
 ### Scope binding
 
@@ -1236,17 +1238,35 @@ Serialization is not release. It provides the exact response digest and opaque
 result bindings to finalization.
 
 For an allow that returns protected bytes,
-`echo-person-release-binding-v2` contains `caller_binding_sha256`,
+`echo-person-release-binding-v2` contains exactly `schema_version: 2`,
+`kind: echo-person-release-binding-v2`, `caller_binding_sha256`,
 `scope_binding_sha256`, `serialized_response_sha256` over the exact private
-immutable response-buffer bytes, and one closed result variant. A
-`result_kind: retrieval` variant contains every ordered returned tuple of
-`atom_id`, `record_hash`, `policy_id`, `content_binding_sha256`, and
-`provenance_binding_sha256`. A `result_kind: authority_state` variant has no
-additional member: the caller, exact Authority-state scope, and immutable
-response bytes already bind the result without copying resource identifiers
-into release evidence. Keys from the other variant are forbidden. A mutation that returns
-only an uninformative success code has no release binding; its allow audit and
-state mutation still commit atomically before that code is written.
+immutable response-buffer bytes, and `result_kind` before any
+variant-specific key. A `result_kind: retrieval` variant additionally
+contains `returned_items` as an ordered dense array of zero through ten exact
+tuples. Every tuple contains exactly `atom_id`, `record_hash`, `policy_id`,
+`content_binding_sha256`, and `provenance_binding_sha256`. A reviewer-log
+scope permits only the reviewer policy. A readable-search scope permits only
+policies with an admitted segment in that exact scope. Empty successful
+retrieval is represented by present `returned_items: []`, not omission. A
+`result_kind: authority_state` variant has no additional member and is valid
+only for `list_member_exclusions`: the caller, exact Authority-state scope,
+and immutable response bytes already bind the result without copying resource
+identifiers into release evidence. Keys from the other variant are forbidden.
+A `change_member_exclusion` mutation that returns only an uninformative success
+code has no release binding; its allow audit and state mutation still commit
+atomically before that code is written.
+
+The private D6-2B implementation revalidates the complete D6-1 request and
+caller bodies, revalidates the D6-2A scope against them, and recomputes the
+caller and scope commitments. It takes serialized bytes rather than a supplied
+response digest, retains the exact copied bytes behind a frozen fresh-copy
+snapshot capability, and hashes that retained snapshot itself. Its injected
+already-reproved result witness is checked only for the closed tuple structure,
+ordering, bound, exact body equality, and policy-to-scope join. D6-2B does not
+prove atom, record, content, provenance, or Authority-state preimages and does
+not authorize snapshot handoff. It adds no final fence, audit, retention, SQL,
+export, public export, route, transport, or live release behavior.
 
 The final fence re-resolves the caller and rechecks the exact scope variant:
 policy contracts, generation pointer/manifest, record head, and every admitted

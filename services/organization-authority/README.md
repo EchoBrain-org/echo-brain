@@ -27,7 +27,7 @@ layer, or multi-replica coordination.
 
 ## Private migration contracts
 
-The Authority contains two unwired, non-package-exported D6 structural
+The Authority contains three unwired, non-package-exported D6 structural
 checkpoints. D6-1 freezes the four semantic Person request commitments and the
 bearer-derived caller binding. D6-2A freezes body-plus-digest
 `echo-person-scope-binding-v2` commitments with three closed variants:
@@ -37,12 +37,20 @@ policies, retrieval generation and head, and member-first optional reviewer
 segments including `segment_id`; Authority-state binds exactly source
 activation, owned resource, and exclusion state for list or mutation.
 
+D6-2B freezes body-plus-digest `echo-person-release-binding-v2` commitments.
+It revalidates and rehashes the complete D6-1 and D6-2A joins, hashes a copied
+serialized-response snapshot, and retains the same bytes behind a fresh-copy
+capability. Retrieval uses a present ordered zero-through-ten exact five-field
+opaque tuple array with policy-to-scope admission; Authority-state is keyless
+and list-only, and mutation cannot create a release binding.
+
 These modules validate closed structural bytes and recompute the request and
-caller digests. They do not prove the opaque policy, retrieval, generation,
-segment, record-head, ownership, or exclusion preimages and do not add release,
-audit, retention, SQL, export, protected-handle, route, or other live behavior.
-Fresh-lineage persistence and live reproof remain Phase 3 work; the current
-Person routes and audit stores are unchanged.
+caller/scope digests. They do not prove the opaque policy, retrieval,
+generation, segment, record-head, result, ownership, or exclusion preimages and
+do not add final-fence authorization, audit, retention, SQL, export,
+protected-handle, route, transport, or other live behavior. Fresh-lineage
+persistence and live reproof remain Phase 3 work; the current Person routes and
+audit stores are unchanged.
 
 ## Release boundary
 

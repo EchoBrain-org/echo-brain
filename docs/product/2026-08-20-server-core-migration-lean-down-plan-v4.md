@@ -942,10 +942,11 @@ another variant are forbidden. Each live scope must be created before its
 protected handle opens and contains no query, content, or returned item.
 
 The versioned `release_binding_sha256` similarly contains the caller and scope
-commitments, exact response digest, and either ordered returned
+commitments, exact response digest, and either present ordered `returned_items`
 `(atom_id, record_hash, policy_id, content_binding_sha256,
-provenance_binding_sha256)` tuples or opaque Authority-resource/state
-bindings. An uninformative mutation acknowledgement has no release binding;
+provenance_binding_sha256)` tuples or a keyless `authority_state` result for a
+list read. Retrieval binds zero through ten tuples; empty success retains the
+empty array. An uninformative mutation acknowledgement has no release binding;
 the mutation and allow audit still co-commit. Neither preimage contains query
 or content text. The final fence rechecks the exact scope variant and current
 caller state. Mutating any scope or release member, or failing the audit
@@ -1396,6 +1397,24 @@ export, SQL, persistence, public export, live wiring, protected-handle claim,
 or live DTO removal; Phase 3 must own exact preimage materialization and
 persistence.
 
+**D6-2B private release checkpoint (2026-08-20):** one additional
+non-exported, unwired Authority application module freezes the exact
+`echo-person-release-binding-v2` retrieval and Authority-state bodies plus
+canonical digests. The aggregate revalidates the complete D6-1 request/caller
+and D6-2A scope bodies, recomputes both joins, copies and hashes exact serialized
+response bytes itself, and retains that same snapshot behind a frozen
+fresh-copy capability. Retrieval binds a present ordered zero-through-ten
+`returned_items` array of exact atom, record, policy, content-binding, and
+provenance-binding fields. Reviewer results permit only reviewer policy;
+search results require an admitted segment; Authority-state has no additional
+result member and is list-only; mutation has no release binding. The focused
+suite is 11 tests and the full Authority workspace is 87 test files and 841
+tests; the full repository gate passes 149 test files and 1,513 tests plus
+boundary, documentation, type checking, and lint. The injected result witness
+is structurally checked only after a future caller has re-proved it. This
+checkpoint adds no final fence, audit, retention, SQL, persistence, export,
+public export, route, transport, protected-handle, or live release behavior.
+
 **Entry gate**
 
 - Phase 1 exit is green.
@@ -1473,15 +1492,15 @@ earlier red, and compatibility remains selectable until Phase 3 parity.
    appends record and the complete policy-specific text-free facts atomically,
    makes rejection append no readable facts, and wires bounded terminal
    cleanup only after the receipt is durable.
-6. **Caller-neutral Person read boundary — D6-1 request/caller and D6-2A scope
-   structural contracts complete; release and live boundary pending.** Share current caller
+6. **Caller-neutral Person read boundary — D6-1 through D6-2B private
+   structural contracts complete; audit and live boundary pending.** Share current caller
    resolution, final fence, audit-before-release, and immutable response-byte
    handoff while keeping reviewer-recent Layer-1/log-backed and readable search
    Layer-2/exact-head. Reuse current repository materializers; do not add the
    proposed roughly 400-line joined query without profiling. The final single
    audit baseline lands with the accepted D6/new-lineage schema, not as another
-   transitional persistence system. D6-1 and D6-2A change no live DTO, route,
-   repository, database, release, audit, or export.
+   transitional persistence system. D6-1 through D6-2B change no live DTO,
+   route, repository, database, final fence, audit, export, or byte release.
 
 Every tranche selects exactly one writer in tests, can be reverted without a
 state downgrade, and has its own focused/full-suite exit record.

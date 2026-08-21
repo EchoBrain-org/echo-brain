@@ -393,6 +393,21 @@ structurally. Release, audit, retention, export, persistence, semantic preimage
 reproof, protected-handle wiring, and caller-supplied-subject removal remain
 future T09 coverage.
 
+**D6-2B private structural checkpoint (2026-08-20):**
+`OA/person-read-release-contracts-v2.test.ts` freezes body-plus-digest golden
+fixtures for the exact `echo-person-release-binding-v2` retrieval and
+Authority-state variants. The 11-test focused suite revalidates and rehashes
+the complete D6-1 request/caller and D6-2A scope joins, copies and hashes the
+serialized response bytes, retains that snapshot behind a fresh-copy
+capability, and binds an ordered zero-through-ten `returned_items` array of
+exact five-field opaque tuples. It covers empty retrieval, all tuple fields and
+order, reviewer/search policy admission, list-only keyless Authority state,
+mutation prohibition, byte and returned-copy mutation, hostile shapes, and
+cross-variant substitution. The injected already-reproved witness is validated
+only structurally. Semantic result/preimage reproof, final fences, shared audit,
+retention, export, persistence, protected-handle wiring, live handoff, and
+caller-supplied-subject removal remain future T09 coverage.
+
 **Future suite:**
 `tests/integration/server-core-v4/person-read-release-audit.test.ts`.
 
@@ -422,8 +437,9 @@ prove:
   operations, with no second mutation-command digest; no scope contains query/
   content text or returned items;
 - post-search release binding over caller, scope, exact response digest, and a
-  closed retrieval tuple or Authority-resource/state tuple; an uninformative
-  mutation acknowledgement has no release binding but co-commits its audit;
+  present ordered zero-through-ten retrieval tuple array or the keyless
+  Authority-state list variant; an uninformative mutation acknowledgement has
+  no release binding but co-commits its audit;
 - `prepare -> deterministic private serialization -> final fence and audit ->
   release unchanged bytes` ordering, with no early write or reserialization;
 - start/end Person resolution, exact retrieval or Authority-state scope
