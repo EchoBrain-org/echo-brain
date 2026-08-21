@@ -116,6 +116,15 @@ equal the `serialized_response_sha256` in the release binding for the same
 release; it is not a second serialization or digest. Every other digest
 introduced by this RFC follows the closed-object rule above.
 
+Two Layer-1 identities are retained byte-for-byte from main rather than
+introduced as new digest-contract namespaces: `signal_id_sha256` is SHA-256
+over the exact raw UTF-8 signal-ID bytes, and `atom_id` is the canonical
+SHA-256 of the historical closed object
+`{kind: "echo-organization-record-atom", record_hash, signal_id}`. New
+Person-v2 fact rows reuse those exact values so existing atom identity does not
+fork during migration. Neither value may substitute for a versioned contract
+digest.
+
 The `kind` literal is the domain separator. A digest from one kind or version
 MUST NOT verify as another kind or version. IDs are opaque stable identifiers;
 display names, emails, provider labels, and mutable configuration are never
@@ -917,13 +926,79 @@ policy namespaces remain distinct: member-readable segments bind organization
 and exact policy; reviewer segments additionally bind exact principal and
 membership tenure.
 
+The private D3-3 structural projector emits one text-free row per approved
+signal. Every row has these exact fields:
+
+```text
+authority_id
+organization_id
+state_lineage_id
+approval_id
+action
+policy_id
+policy_contract_sha256
+record_position
+record_sha256
+atom_order
+signal_id_sha256
+atom_id
+item_kind
+audit_event_id
+audit_sequence
+audit_entry_sha256
+provider_action_sha256
+authorization_proof_sha256
+```
+
+`action` is `approve`; `item_kind` is `decision`, `action`, or `rationale`.
+Projection preserves the approved snapshot's decisions, then actions, then
+rationales, with dense zero-based `atom_order`. Organization-member rows have
+exactly the common fields above and contain no actor selector. Restricted-
+reviewer rows additionally and obligatorily contain
+`reviewer_principal_id` and `reviewer_membership_id`, taken only from the
+independently re-proved immutable D2 authorization allow and matching audit
+actor. The rows contain no signal text, title, source locator, display
+identity, current-membership snapshot, resolved reader list, provider
+configuration, or delivery state.
+
+A valid zero-item approval produces zero rows but still has
+`policy_fact_outcome: {kind: appended, policy_id}`. Rejection produces zero
+rows and `{kind: none}` without inspecting or hashing rejection content. No
+sentinel row or free-standing fact-set digest is created. D3-3 is a pure
+projection checkpoint only: Phase 3 must supply unforgeable verified-envelope,
+append-allocation, and D2 audit-reproof capabilities and atomically compare and
+persist the complete projection with the record and receipt.
+
 ### Receipt v2
 
 `echo-organization-record-receipt-v2` is a closed signed wrapper with `body`,
 `receipt_sha256`, `signing_key_descriptor`, and `signature`. Its closed body
-contains Authority, organization, lineage, envelope ID, semantic idempotency
-key, event kind, record position/hash, predecessor hash, resulting record-head
-position/hash, issued time, and one closed `policy_fact_outcome` variant.
+has these exact keys:
+
+```text
+schema_version
+kind
+authority_id
+organization_id
+state_lineage_id
+envelope_id
+semantic_idempotency_key
+event_kind
+record_position
+record_sha256
+predecessor_record_sha256
+record_head_position
+record_head_sha256
+issued_at
+policy_fact_outcome
+```
+
+`schema_version` is `2`; `kind` is
+`echo-organization-record-receipt-v2`. `record_position` is `1` exactly when
+the verified envelope has the null genesis predecessor pair; otherwise it is
+the envelope predecessor position plus one. The predecessor digest equals the
+envelope predecessor digest, and the resulting head position/hash equal the
+new record position/hash.
 Rejection uses only `{kind: none}`. Approval uses only
 `{kind: appended, policy_id}`. The canonical record hash, log position, and
 policy ID already determine the complete append-atomic, text-free fact set;
@@ -936,10 +1011,11 @@ checkpoints remain outside v2; no free-standing checkpoint ID or digest is
 embedded in the receipt.
 
 `receipt_sha256` is SHA-256 of canonical receipt-body bytes and is absent from
-that body. The receipt-signature input is the canonical closed object containing
-schema version 2, kind `echo-organization-record-receipt-signature-v2`,
-Authority, organization, lineage, signing-key ID, and `receipt_sha256`. The
-signature is over those bytes. Receipt verification recomputes both digests
+that body. The receipt-signature input has exact keys `schema_version`, `kind`,
+`authority_id`, `organization_id`, `state_lineage_id`, `signing_key_id`, and
+`receipt_sha256`; version is `2` and kind is
+`echo-organization-record-receipt-signature-v2`. The signature is over those
+canonical bytes. Receipt verification recomputes both digests
 and rejects cross-version, extra-field, mixed-outcome, and signature/key
 substitution. The receipt is the only signal that pending approve or reject
 work may become terminal.

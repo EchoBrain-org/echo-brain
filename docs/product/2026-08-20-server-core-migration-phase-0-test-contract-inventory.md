@@ -273,7 +273,27 @@ and explicit-lineage denial, asynchronous signer snapshot safety,
 cross-version denial, and hostile-object rejection. It deliberately proves no
 processor-contract, staged/final-content, or rejected-candidate preimage; no D2
 audit lookup; and no receipt, policy facts, persistence, restart, public export,
-route, or live writer selection. Those remain D3-3/Phase 3 evidence.
+route, or live writer selection. D3-3 supplies the separate receipt/fact
+structural evidence below; concrete reproof, persistence, restart, and live
+selection remain Phase 3 evidence.
+
+**D3-3 private receipt/fact slice (2026-08-20):**
+`packages/organization-protocol/test/organization-record-receipt-v2.test.ts`
+freezes the exact receipt body, approval/rejection fact-outcome union, wrapper,
+body digest, detached signature preimage, and pinned Authority/lineage checks.
+It independently rejoins the exact verified v4 envelope, next append position,
+predecessor, resulting head, event, policy, and semantic-idempotency key and
+denies cross-version, re-signed field substitution, alternate-key trust,
+malformed/high-S signatures, asynchronous mutation, and hostile objects.
+`services/organization-record/test/person-policy-facts-v2.test.ts` proves the
+pure decisions/actions/rationales projection for both Person-v2 policies,
+exact reviewer tenure and member selector omission, full reduced-reference to
+already-reproved D2 allow/audit joins, text-free rows, inherited atom identity,
+within-record uniqueness, zero-item approval as an appended empty set, and
+rejection as `none` with no content read. The slice deliberately proves no
+concrete D2 reproof capability, append allocation, SQL schema, atomic
+record/fact/receipt transaction, duplicate/restart recovery, public export,
+route, or live writer. Those remain Phase 3 evidence.
 
 The suite must prove:
 

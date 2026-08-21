@@ -1313,10 +1313,10 @@ Approval embeds only the retained exact V1 payload under
 the accepted Person-v2 policy tuple. Rejection retains the bounded V1
 rejection payload and only candidate/snapshot/card/policy commitments; it
 rejects approved content, readable facts, and delivery fields. This checkpoint
-does not derive the opaque staged/final-content commitments. D3-2 now owns the
-private envelope/provenance/signature structural checkpoint below; receipt,
-fact projector, persistence, public export, and live writer remain D3-3 and
-Phase 3 work. The retained D3-1 tree passed the full repository gate:
+does not derive the opaque staged/final-content commitments. D3-2 owns the
+private envelope/provenance/signature structural checkpoint below, and D3-3
+owns the private receipt and fact-projection checkpoint. Persistence, public
+export, and live writer remain Phase 3 work. The retained D3-1 tree passed the full repository gate:
 143 test files and 1,447 tests, plus boundary, documentation, type checking,
 and lint.
 
@@ -1331,10 +1331,28 @@ meeting revision, and complete processor identity. The processor adapter
 version and opaque processor-contract digest remain independent mutation
 dimensions. D3-2 does not claim the processor-contract preimage, rejected-
 candidate preimage, staged/final-content preimages, D2 audit lookup, receipt,
-facts, persistence, public export, or live writer; Phase 3 must own and reprove
-those inputs before admission. The retained tree passes the full repository
-gate: 144 test files and 1,458 tests, plus boundary, documentation, type
-checking, and lint.
+facts, persistence, public export, or live writer. D3-3 supplies private
+structural receipt and fact contracts; Phase 3 must own concrete D2 and upstream
+reproof, append allocation, durable persistence and reprojection, restart, and
+live selection. The retained tree passes the full repository gate: 144 test
+files and 1,458 tests, plus boundary, documentation, type checking, and lint.
+
+**D3-3 private receipt/fact checkpoint (2026-08-20):** one non-exported
+organization-protocol module freezes the exact receipt-v2 body, outcome union,
+four-member wrapper, and detached Authority signature; it derives every
+envelope-binding and outcome field from a separately verified v4 envelope and
+exact next append position, while accepting and snapshotting a separately
+validated `issued_at`. One non-exported organization-record pure projector
+consumes only a reduced verified-v4 view and an injected already-reproved
+immutable D2 allow/audit witness. It emits ordered text-free member facts or
+exact reviewer-principal/membership facts, preserves main's atom identities,
+treats a zero-item approval as a complete appended empty set, and makes
+rejection produce no facts. This structural checkpoint does not prove the D2 bodies,
+audit chain, append allocation, durable fact schema, transaction, duplicate or
+restart state; Phase 3 must supply those unforgeable capabilities and atomically
+persist and reproject record, complete facts, and receipt. The retained tree
+passes the full repository gate: 146 test files and 1,481 tests, plus boundary,
+documentation, type checking, and lint.
 
 **Entry gate**
 
@@ -1402,13 +1420,13 @@ earlier red, and compatibility remains selectable until Phase 3 parity.
    persistence, the real Slack observer and live alternate-authorizer
    selection, baseline SQL, application IDs, lineage manifests, and writable
    openers.
-5. **Authority envelope, receipt, and Layer-1 facts — D3-1 leaf and D3-2
-   envelope structural contracts complete.** The private D3-1 checkpoint freezes the snapshot, resolution
+5. **Authority envelope, receipt, and Layer-1 facts — D3-1 through D3-3
+   structural contracts complete.** The private D3-1 checkpoint freezes the snapshot, resolution
    reference, approved/rejected event, and semantic-idempotency leaf graph
    without changing V1-V3 readers. D3-2 freezes the exact envelope
    body/wrapper, source/processor provenance, and P-256 signature preimage
-   without exporting or selecting them. D3-3 adds the
-   receipt body/wrapper and pure policy-specific fact projector. Phase 3 then
+   without exporting or selecting them. D3-3 freezes the receipt body/wrapper
+   and pure policy-specific fact projector without claiming persistence. Phase 3 then
    reproves the exact human-act reference at the Record application boundary,
    appends record and the complete policy-specific text-free facts atomically,
    makes rejection append no readable facts, and wires bounded terminal

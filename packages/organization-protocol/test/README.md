@@ -38,3 +38,14 @@ substitution. Processor version and the opaque processor-contract digest are
 independent commitments; the latter's preimage/reproof, plus receipt, facts,
 persistence, exports, routes, and live selection, remain outside this private
 structural checkpoint.
+
+The private D3-3 receipt suite freezes the closed receipt-v2 body,
+approval/rejection policy-fact outcome, four-member wrapper, body digest, and
+detached Authority signature preimage. It derives and independently verifies
+the receipt against the exact signed v4 envelope, next append position,
+predecessor, resulting head, policy, event, and semantic-idempotency key. It
+also proves pinned-key and lineage trust, canonical low-S signatures,
+cross-version isolation, asynchronous input snapshots, and hostile-object
+denial. The suite does not claim record/fact/receipt transaction atomicity,
+persistence, duplicate/restart recovery, public export, or live selection;
+those remain Phase 3 responsibilities.
