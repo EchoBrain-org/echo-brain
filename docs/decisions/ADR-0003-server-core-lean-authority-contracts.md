@@ -47,11 +47,11 @@ artifact-bound disposition.
 | RFC candidate SHA-256 | pending |
 | Constitution owner/founder disposition | partial: D6 retention interval, D6 export position, delivery behavior, and the standalone reviewer-recent route accepted 2026-08-20 for initial V1; D1 review and the remaining D2 identity/action contracts pending |
 | Independent permissions review or explicit founder waiver | independent Phase-0 review in progress; founder waiver pending |
-| D6 retention interval | accepted by the founder 2026-08-20 for initial V1: 30 days from Authority-owned `evaluated_at`; a different interval is a new dated disposition before Phase 3 cutover |
-| D6 export position | accepted by the founder 2026-08-20 for initial V1: deliberately unsupported; a different position is a new dated disposition before Phase 3 cutover |
+| D6 retention interval | accepted by the founder 2026-08-20 for initial V1: 30 days from Authority-owned `evaluated_at`; a different interval is a new dated disposition before Phase 4 cutover |
+| D6 export position | accepted by the founder 2026-08-20 for initial V1: deliberately unsupported; a different position is a new dated disposition before Phase 4 cutover |
 | D2 v2 policy IDs, exact contract bodies/selectors and digests, and consequence-byte acceptance | accepted separately by ADR-0005; remaining D2 identity/action contracts pending |
-| Delivery behavior | accepted by the founder 2026-08-20 for initial V1: preserve main's configured delivery behavior and approval/delivery channel separation; any contraction remains deferred and enters only as a new dated disposition before Phase 3 cutover |
-| Standalone reviewer-recent route | accepted by the founder 2026-08-20 for initial V1: retained with exact reviewer-tenure semantics and Layer-1/log-backed availability; route consolidation remains deferred and enters only as a new dated disposition before Phase 3 cutover |
+| Delivery behavior | accepted by the founder 2026-08-20 for initial V1: preserve main's configured delivery behavior and approval/delivery channel separation; any contraction remains deferred and enters only as a new dated disposition before Phase 4 cutover |
+| Standalone reviewer-recent route | accepted by the founder 2026-08-20 for initial V1: retained with exact reviewer-tenure semantics and Layer-1/log-backed availability; route consolidation remains deferred and enters only as a new dated disposition before Phase 4 cutover |
 
 Updating only this table, the ADR lifecycle status, `reviewed_at`, and
 `reviewed_ref` after review is lifecycle metadata. Any change to context,

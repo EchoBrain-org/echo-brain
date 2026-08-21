@@ -925,6 +925,15 @@ post-search release evidence. Finalization re-resolves the caller, rechecks the
 scope receipt, computes the release commitment, and commits the outcome at one
 fence.
 
+The founder accepted commitment-only audit semantics on 2026-08-20 for initial
+V1: Phase 3 persists exactly these frozen rows and adds no companion evidence
+store retaining caller, scope, or release preimages. The cost is accepted
+explicitly. An audit row proves that an access happened and can verify a
+re-presented preimage, but cannot by itself reconstruct which caller read what;
+main's inspectable-evidence query audits are deliberately not carried forward.
+A companion evidence store enters only as a new dated disposition before
+Phase 3 audit persistence lands.
+
 The versioned `scope_binding_sha256` preimage is normative and discriminated.
 Every variant contains `schema_version: 2`,
 `kind: echo-person-scope-binding-v2`, `scope_kind`,
@@ -1434,7 +1443,7 @@ lint. This checkpoint freezes the closed `unsupported` export-capability result
 and still owns no export route, command, writer, or row-selection port. It adds
 no final fence, audit persistence, SQL, route, transport, or live behavior. The
 founder accepted the thirty-day retention and unsupported-export dispositions
-on 2026-08-20 for initial V1, revisitable before Phase 3 cutover only as a new
+on 2026-08-20 for initial V1, revisitable before Phase 4 cutover only as a new
 dated disposition.
 
 **Entry gate**
@@ -1614,7 +1623,10 @@ envelope through the old writer or vice versa.
 1. Build the fresh baselines for the now-settled retained schemas and the
    filesystem pre-open guard. The guard authenticates the root manifest and
    SQLite headers/lineage rows before any writable opener runs; new-lineage
-   state is exact-version-only and never auto-upgrades a legacy database.
+   state is exact-version-only and never auto-upgrades a legacy database. The
+   D6 audit baseline persists exactly the frozen rows under the accepted
+   commitment-only semantics recorded in D6 above, with no companion
+   preimage store.
 2. Run the D5 corpus through the old compatibility path and new server path.
 3. Compare semantic outcomes, policy facts, projections, visibility, witnesses,
    audits, retries, and delivery independently of expected envelope-version

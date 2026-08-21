@@ -1328,6 +1328,11 @@ only the caller- and scope-binding digests, never the source, custodian,
 resource, policy-path, segment, generation, manifest, or record-head members
 committed inside the scope preimage.
 
+Persistence is commitment-only. No companion evidence store retains those
+preimages beside the row. A stored row therefore proves that an access
+happened and can verify a re-presented preimage, but cannot by itself
+reconstruct which caller read what.
+
 `outcome` is exactly one of:
 
 ```text
@@ -1421,7 +1426,7 @@ live behavior.
 ### Accepted retention and export dispositions
 
 The founder accepted the lean disposition below on 2026-08-20 for initial V1.
-Either choice may be revisited before Phase 3 cutover, but only as a new dated
+Either choice may be revisited before Phase 4 cutover, but only as a new dated
 disposition:
 
 1. **Retention interval:** 30 days from Authority-owned `evaluated_at`. This is
@@ -1636,12 +1641,12 @@ bytes:
 
 | ID | Choice | Least semantic-delta proposal |
 | --- | --- | --- |
-| OQ-1 | D6 retention interval | Accepted by the founder 2026-08-20 for initial V1: 30 days from Authority `evaluated_at`, explicitly superseding the historical 180-day query-audit contracts; a different interval is a new dated disposition before Phase 3 cutover |
-| OQ-2 | D6 export position | Accepted by the founder 2026-08-20 for initial V1: deliberately unsupported, with no production export route, command, writer, or row-selection port; a different position is a new dated disposition before Phase 3 cutover |
+| OQ-1 | D6 retention interval | Accepted by the founder 2026-08-20 for initial V1: 30 days from Authority `evaluated_at`, explicitly superseding the historical 180-day query-audit contracts; a different interval is a new dated disposition before Phase 4 cutover |
+| OQ-2 | D6 export position | Accepted by the founder 2026-08-20 for initial V1: deliberately unsupported, with no production export route, command, writer, or row-selection port; a different position is a new dated disposition before Phase 4 cutover |
 | OQ-3 | D1 review | Lean proposal: founder/constitution-owner acceptance plus the recorded independent contract review; founder explicitly waives a second human reviewer until first-external-organization re-entry |
 | OQ-4 | D2 version break | Resolved by ADR-0005: the two v2 IDs, exact policy-contract bodies/selectors and computed digests, and exact consequence bytes are accepted while preserving reader sets |
-| OQ-5 | Delivery behavior | Accepted by the founder 2026-08-20 for initial V1: preserve main's configured delivery behavior and approval/delivery channel separation; a single-destination or policy-specific contraction remains deferred and enters only as a new dated disposition before Phase 3 cutover |
-| OQ-6 | Standalone reviewer-recent route | Accepted by the founder 2026-08-20 for initial V1: retain the route with exact reviewer-tenure semantics and Layer-1/log-backed availability; route consolidation remains deferred and enters only as a new dated disposition before Phase 3 cutover |
+| OQ-5 | Delivery behavior | Accepted by the founder 2026-08-20 for initial V1: preserve main's configured delivery behavior and approval/delivery channel separation; a single-destination or policy-specific contraction remains deferred and enters only as a new dated disposition before Phase 4 cutover |
+| OQ-6 | Standalone reviewer-recent route | Accepted by the founder 2026-08-20 for initial V1: retain the route with exact reviewer-tenure semantics and Layer-1/log-backed availability; route consolidation remains deferred and enters only as a new dated disposition before Phase 4 cutover |
 
 Resolving an open question in an ADR without updating the corresponding
 normative RFC bytes is invalid. If a choice changes this RFC, commit the new
