@@ -22,6 +22,8 @@ Primary minimum-V1 records:
 
 - [Readable-search minimum-V1 Layers 1-3 matrix](readable-search-minimum-v1-source-readiness-matrix.md)
 - [Readable-search Layers 1-3 founder-live qualification](QUAL-20260814-194049-001-readable-search-minimum-v1.md)
+- [Person-client minimum lean V1 foundation matrix](person-client-foundation-v1-matrix.md)
+- [Person-client minimum lean V1 founder-live qualification](QUAL-20260819-193536-001-person-client-foundation-v1.md)
 
 Supporting matrices and bounded predecessor runs:
 

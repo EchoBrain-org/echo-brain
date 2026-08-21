@@ -43,7 +43,7 @@ import type {
   AuthorityAuditRow,
   RawReviewerQueryAuditRow,
 } from './reviewer-query-audit-rows.js';
-import { openAuthorityDatabase } from './open-database.js';
+import { openAndMigrateAuthorityDatabase } from './open-database.js';
 import {
   createAuthorityStateReader,
   type AuthorityStateReader,
@@ -483,7 +483,7 @@ export class SqliteReviewerQueryAuditMaintenanceRepository
   ): SqliteReviewerQueryAuditMaintenanceRepository {
     // The authority must already exist: maintenance never creates or
     // initializes state, it only accounts for state a served authority wrote.
-    const database = openAuthorityDatabase(input.database_path, {
+    const database = openAndMigrateAuthorityDatabase(input.database_path, {
       fileMustExist: true,
     });
     try {

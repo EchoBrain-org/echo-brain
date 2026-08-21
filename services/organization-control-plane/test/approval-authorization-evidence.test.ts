@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import { describe, expect, it } from "vitest";
 import type Database from "better-sqlite3";
-import { openOrganizationControlDatabase } from "../src/persistence/open-database.js";
+import { openAndMigrateOrganizationControlDatabase } from "../src/persistence/open-database.js";
 import { OrganizationIntegrationsRepository } from "../src/persistence/organization-integrations-repository.js";
 import type {
   ApprovalAuthorizationEvidenceLookup,
@@ -29,7 +29,7 @@ function openRepository(): {
   repository: OrganizationIntegrationsRepository;
   database: Database.Database;
 } {
-  const database = openOrganizationControlDatabase(":memory:");
+  const database = openAndMigrateOrganizationControlDatabase(":memory:");
   // This suite exercises the lookup in isolation. The binding and grant rows
   // a real evaluation references are seeded end to end by the authority's
   // record-ingest suite; here only the audit row's own columns matter.

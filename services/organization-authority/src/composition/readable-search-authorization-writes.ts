@@ -18,6 +18,7 @@ import type {
 } from '../application/organization-authority.js';
 import { ReadableSearchAuthorizationFence } from '../application/readable-search-authorization-fence.js';
 import type { OrganizationAuthorityHttpApplication } from '../presentation/organization-authority-http-application.js';
+import type { PersonIdentitySessionHttpApplication } from '../presentation/person-identity-session-http-application.js';
 
 /**
  * The complete production Authority mutation set that can change the current
@@ -33,6 +34,11 @@ export const AUTHORIZATION_RELEVANT_AUTHORITY_MUTATIONS = Object.freeze([
   'revokeMembership',
   'revokeInstallation',
   'recoverInstallationAccess',
+] as const);
+
+export const AUTHORIZATION_RELEVANT_PERSON_SESSION_MUTATIONS = Object.freeze([
+  'refresh',
+  'revoke',
 ] as const);
 
 /**
@@ -84,4 +90,26 @@ export function fenceAuthorizationRelevantAuthorityMutations(
       application.recoverInstallationAccess(installationId, input),
     );
   return Object.freeze(facade);
+}
+
+/**
+ * Refresh and logout invalidate credentials used by Person reads. Keep their
+ * commits ordered against the same response-handoff fence as membership
+ * changes; login setup and completion do not invalidate an existing family.
+ */
+export function fenceAuthorizationRelevantPersonSessionMutations(
+  application: PersonIdentitySessionHttpApplication,
+  fence: ReadableSearchAuthorizationFence,
+): PersonIdentitySessionHttpApplication {
+  return Object.freeze({
+    ...application,
+    refresh: async (
+      input: Parameters<PersonIdentitySessionHttpApplication['refresh']>[0],
+    ) =>
+      await fence.withWrite(() => application.refresh(input)),
+    revoke: async (
+      input: Parameters<PersonIdentitySessionHttpApplication['revoke']>[0],
+    ) =>
+      await fence.withWrite(() => application.revoke(input)),
+  });
 }

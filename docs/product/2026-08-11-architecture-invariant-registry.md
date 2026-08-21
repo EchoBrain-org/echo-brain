@@ -125,7 +125,7 @@ Pilot evidence is concentrated in:
 - [pilot reader](../../services/organization-record/src/retrieve/permission-pilot-reader.ts);
 - [Authority recent-decision flow](../../services/organization-authority/src/application/organization-authority.ts);
 - [record pilot tests](../../services/organization-record/test/permission-pilot.test.ts); and
-- [full acceptance test](../../tests/integration/permission-pilot-full-acceptance.test.ts).
+- [Authority activation test](../../services/organization-authority/test/organization-permission-pilot-activation.test.ts).
 
 Two constitutional invariants are not classified as pilot-enforced controls:
 

@@ -17,7 +17,7 @@ import {
   AUTHORITY_FILE_SECRET_BACKEND,
   OrganizationIntegrationsRepository,
   SlackIntegrationProviderError,
-  openOrganizationControlDatabase,
+  openAndMigrateOrganizationControlDatabase,
   reviewerMessagePresentationPreimage,
   organizationMemberMessagePresentationPreimage,
   type OrganizationSecretStore,
@@ -92,7 +92,7 @@ const PILOT_ACTIVATION = {
 } as const satisfies OrganizationPermissionPilotActivationMarkerV1;
 
 function openRepository(): OrganizationIntegrationsRepository {
-  const database = openOrganizationControlDatabase(':memory:');
+  const database = openAndMigrateOrganizationControlDatabase(':memory:');
   database
     .prepare(
       `INSERT INTO organization_control_plane_metadata (

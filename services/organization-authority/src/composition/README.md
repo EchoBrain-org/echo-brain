@@ -14,6 +14,18 @@ administrator command surface and verifies the runtime ownership proof before
 using credentials. Concrete key, credential, invitation-file, lock, proof, and
 SQLite behavior remains in `adapters/`.
 
+`activate-meeting-source.ts` owns the stopped singleton and fixed private
+credential boundary. It performs no provider call: one Authority SQLite
+transaction admits the exact active Person, digest-only organization credential
+configuration, and a live-only Granola cutoff. A retry returns the stored
+cutoff; changed custody or configuration conflicts. It is source admission,
+not a processor or approval handoff.
+
+When a source binding and its exact policy-surface Slack capability exist,
+`meeting-processing-runtime.ts` wires `serve` to one immediate serialized,
+limit-1 cycle and another 30 seconds after each prior cycle completes. No cycles
+overlap, and processing has no HTTP route.
+
 Serving composition is deliberately stricter than direct repository tests: it
 requires a persistent database path and an authenticated loopback-proxy client
 identity contract. Missing proxy credentials, an invalid proxy token, or

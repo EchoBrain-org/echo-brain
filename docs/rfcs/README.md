@@ -8,6 +8,12 @@ An RFC is not an accepted decision. When its significant choices are accepted,
 record the durable result in one or more ADRs and link the implementation and
 qualification status separately.
 
+## Index
+
+| RFC | Title | Status |
+| --- | --- | --- |
+| [RFC-0001](RFC-0001-server-core-lean-authority-contracts.md) | Server-core lean Authority contracts | draft |
+
 ## Required content
 
 - problem, goals, non-goals, and affected components;

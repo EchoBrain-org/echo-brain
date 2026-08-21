@@ -25,7 +25,7 @@ import {
   type OrganizationRecordLogPort,
 } from '../application/ports.js';
 import { ORGANIZATION_RECORD_LOG_DATABASE } from '../persistence/database-definition.js';
-import { openOrganizationRecordDatabase } from '../persistence/open-database.js';
+import { openAndMigrateOrganizationRecordDatabase } from '../persistence/open-database.js';
 import { appendOrganizationPermissionPilotEligibility } from './permission-pilot.js';
 import {
   assertCommittedReviewerPolicyFactsMatch,
@@ -117,7 +117,7 @@ export class OrganizationRecordLogStore implements OrganizationRecordLogPort {
     databasePath: string,
     options: OpenOrganizationRecordLogOptions,
   ): OrganizationRecordLogStore {
-    const database = openOrganizationRecordDatabase(
+    const database = openAndMigrateOrganizationRecordDatabase(
       databasePath,
       ORGANIZATION_RECORD_LOG_DATABASE,
     );

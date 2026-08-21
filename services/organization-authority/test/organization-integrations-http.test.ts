@@ -26,7 +26,6 @@ import {
 } from '@echo-brain/organization-api';
 import { canonicalJson } from '@echo-brain/federation-protocol';
 import { organizationMemberReadablePolicyContractSha256 } from '@echo-brain/organization-protocol';
-import { HttpOrganizationAuthorityClient } from '../../../src/product/organization/client/http-organization-authority-client.js';
 import {
   beginOrganizationAuthorityHttpServerShutdown,
   createOrganizationAuthorityHttpServer,
@@ -109,10 +108,6 @@ function application(
     listInstallations: unexpected,
     listEnrollmentGrants: unexpected,
     listAudit: unexpected,
-    internalLiveRolloutStatus: unexpected,
-    approveInternalLiveRelease: unexpected,
-    fetchInternalLiveDirective: unexpected,
-    recordInternalLiveUpdateReceipt: unexpected,
     provisionMembership: unexpected,
     issueEnrollmentGrant: unexpected,
     completeEnrollment: unexpected,
@@ -797,7 +792,7 @@ describe('organization integrations HTTP routes', () => {
     }
   });
 
-  it('round-trips exact canonical schema-v2 and schema-v3 allow and denial decisions through the HTTP server and client', async () => {
+  it('round-trips exact canonical schema-v2 and schema-v3 allow and denial decisions through HTTP', async () => {
     const reviewerCommand = reviewerPermissionRequest();
     const reviewerDenial = reviewerPermissionDecision(reviewerCommand);
     const reviewerAllow = reviewerPermissionDecision(reviewerCommand, true);
@@ -834,30 +829,45 @@ describe('organization integrations HTTP routes', () => {
     );
     const origin = await listen(server);
     const observedWire: Array<{ request: string; response: string }> = [];
-    const client = new HttpOrganizationAuthorityClient({
-      baseUrl: origin,
-      fetch: async (input, init) => {
-        const response = await proxyFetch(input, init);
-        observedWire.push({
-          request: String(init?.body),
-          response: await response.clone().text(),
-        });
-        return response;
-      },
-      allowInsecureLoopback: true,
-    });
+    const roundTripPermission = async <Response>(
+      request:
+        | OrganizationReviewerPermissionCheckRequestV2
+        | OrganizationMemberReadablePermissionCheckRequestV3,
+    ): Promise<Response> => {
+      const requestBody = canonicalJson(request);
+      const response = await proxyFetch(
+        `${origin}${ORGANIZATION_API_PERMISSION_CHECKS_PATH}`,
+        {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: requestBody,
+        },
+      );
+      const responseBody = await response.text();
+      observedWire.push({ request: requestBody, response: responseBody });
+      expect(response.status).toBe(200);
+      return JSON.parse(responseBody) as Response;
+    };
     try {
       await expect(
-        client.checkReviewerPermission(reviewerCommand),
+        roundTripPermission<OrganizationReviewerPermissionCheckDecisionV2>(
+          reviewerCommand,
+        ),
       ).resolves.toEqual(reviewerDenial);
       await expect(
-        client.checkOrganizationMemberPermission(organizationMemberCommand),
+        roundTripPermission<OrganizationMemberReadablePermissionCheckDecisionV3>(
+          organizationMemberCommand,
+        ),
       ).resolves.toEqual(organizationMemberDenial);
       await expect(
-        client.checkReviewerPermission(reviewerCommand),
+        roundTripPermission<OrganizationReviewerPermissionCheckDecisionV2>(
+          reviewerCommand,
+        ),
       ).resolves.toEqual(reviewerAllow);
       await expect(
-        client.checkOrganizationMemberPermission(organizationMemberCommand),
+        roundTripPermission<OrganizationMemberReadablePermissionCheckDecisionV3>(
+          organizationMemberCommand,
+        ),
       ).resolves.toEqual(organizationMemberAllow);
       expect(observedWire).toEqual([
         {

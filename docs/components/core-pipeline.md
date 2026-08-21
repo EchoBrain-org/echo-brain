@@ -10,9 +10,14 @@ component_ids:
 created_at: 2026-08-13
 reviewed_at: 2026-08-13
 reviewed_ref: 808ac89eaf3e8eba529b356bd80d4509b9a2a293
+decision_ids:
+  - ADR-0001
+  - ADR-0003
+  - ADR-0004
 invariant_ids:
   - INV-ADAPTERS-003
   - INV-ADAPTERS-004
+  - INV-IDENTITY-005
 failure_pattern_ids:
   - FP-ADAPTERS-003
   - FP-ADAPTERS-004
@@ -24,9 +29,9 @@ qualification_ids:
 
 ## Responsibility
 
-`src/core/` owns the provider-neutral decision pipeline, domain contracts,
-ports, processing rules, approval state, delivery contracts, and storage
-interfaces.
+`services/organization-authority/src/processing/core/` owns the
+provider-neutral decision pipeline, domain contracts, ports, processing rules,
+approval state, delivery contracts, and storage interfaces.
 
 It does not own provider HTTP behavior, operating-system lifecycle,
 organization deployment, or concrete persistence.
@@ -41,8 +46,8 @@ depend outward on them.
 ## Current references
 
 - [Core and adapters](../architecture/core-and-adapters.md)
-- Source: [`src/core/`](../../src/core)
-- Core tests: [`tests/core/`](../../tests/core)
+- Source: [`services/organization-authority/src/processing/core/`](../../services/organization-authority/src/processing/core)
+- Core tests: [`services/organization-authority/test/processing/core/`](../../services/organization-authority/test/processing/core)
 
 ## Durable records
 

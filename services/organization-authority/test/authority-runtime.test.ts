@@ -3,6 +3,7 @@ import { chmodSync, mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
+  createHash,
   generateKeyPairSync,
   randomBytes,
   randomUUID,
@@ -38,14 +39,11 @@ import type {
 import {
   createOrganizationAccessLeaseRequest,
   createOrganizationAccessLeaseRequestV2,
-  createOrganizationInternalLiveDirectiveRequest,
-  createOrganizationInternalLiveUpdateReceipt,
   createOrganizationPermissionCheckRequest,
   createOrganizationRecentDecisionsRequest,
   createOrganizationReviewerRecentDecisionsRequest,
   createOrganizationSlackLinkBeginRequest,
   MAX_ORGANIZATION_ACCESS_LEASE_REQUEST_TTL_MS,
-  organizationInternalLiveManifestSha256,
 } from '@echo-brain/organization-api';
 import type {
   OrganizationPermissionCheckRequestV1,
@@ -53,6 +51,8 @@ import type {
   OrganizationReviewerRecentDecisionsRequestV1,
 } from '@echo-brain/organization-api';
 import { OrganizationAuthorityApplication } from '../src/application/organization-authority.js';
+import { PersonIdentitySessionApplication } from '../src/application/person-identity-sessions.js';
+import type { PersonSessionRuntime } from '../src/application/ports/person-session-runtime.js';
 import type {
   AuthorityClock,
   AuthorityIdentifierGenerator,
@@ -170,6 +170,45 @@ async function createApplication(
     access_request_maximum_age_ms: 5 * 60 * 1000,
   });
   return { application, repository, signer };
+}
+
+function personIdentitySessions(
+  repository: SqliteOrganizationAuthorityRepository,
+  clock: FakeClock,
+): PersonIdentitySessionApplication {
+  const runtime: PersonSessionRuntime = {
+    clock,
+    random: {
+      bytes: (_purpose, length) => randomBytes(length),
+    },
+    hash: {
+      sha256: (value) => createHash('sha256').update(value).digest(),
+    },
+    pkce_sealer: {
+      seal: () => {
+        throw new Error('OIDC PKCE is outside this topology test');
+      },
+      unseal: () => {
+        throw new Error('OIDC PKCE is outside this topology test');
+      },
+    },
+    oidc_provider: {
+      redeemAuthorizationCode: async () => {
+        throw new Error('OIDC redemption is outside this topology test');
+      },
+    },
+  };
+  return new PersonIdentitySessionApplication(
+    repository,
+    {
+      issuer: 'https://identity.example.test/',
+      client_id: 'echo-person-browser',
+      redirect_uri: 'https://authority.example.test/v2/session/oidc/callback',
+      tenant: { kind: 'issuer' },
+      id_token_algorithms: ['ES256'],
+    },
+    runtime,
+  );
 }
 
 async function enroll(
@@ -406,53 +445,152 @@ function closeFixture(
   rmSync(fixture.directory, { recursive: true, force: true });
 }
 
-function internalLiveReleaseApproval(
-  releaseVersion: string,
-  sourceCharacter: string,
-  artifactCharacter: string,
-) {
-  const releaseTag = `internal-v${releaseVersion}`;
-  const manifest = {
-    schema_version: 1 as const,
-    kind: 'echo-internal-live-release' as const,
-    channel: 'internal-live' as const,
-    release_version: releaseVersion,
-    release_tag: releaseTag,
-    source: {
-      sha: sourceCharacter.repeat(40),
-      kind: 'materialized-commit' as const,
-    },
-    artifact: {
-      package: 'echo-brain' as const,
-      filename: `echo-brain-${releaseVersion}.tgz`,
-      download_url: `https://github.com/EchoBrain-org/echo-brain/releases/download/${releaseTag}/echo-brain-${releaseVersion}.tgz`,
-      size_bytes: 1234,
-      sha256: artifactCharacter.repeat(64),
-    },
-    compatibility: {
-      os: 'darwin' as const,
-      arch: 'arm64' as const,
-      node: '22.22.1',
-      npm: '10.9.4',
-    },
-    build: {
-      repository: 'EchoBrain-org/echo-brain',
-      workflow: 'internal-live-release.yml' as const,
-      run_id: '123456789',
-      run_attempt: 1,
-    },
-  };
-  return {
-    schema_version: 1 as const,
-    kind: 'echo-internal-live-release-approval-request' as const,
-    command_id: `adm_${randomUUID()}`,
-    manifest_url: `https://github.com/EchoBrain-org/echo-brain/releases/download/${releaseTag}/internal-live-release-manifest.v1.json`,
-    manifest_sha256: organizationInternalLiveManifestSha256(manifest),
-    manifest,
-  };
-}
-
 describe('single-organization authority runtime', () => {
+  it('provisions one owner and three employees before issuing their exact Person login grants', async () => {
+    const directory = mkdtempSync(join(tmpdir(), 'echo-authority-people-'));
+    chmodSync(directory, 0o700);
+    const databasePath = join(directory, 'authority.sqlite');
+    const clock = new FakeClock(Date.parse('2026-08-20T16:00:00.000Z'));
+    const { application, repository } = await createApplication(
+      databasePath,
+      clock,
+    );
+    const sessions = personIdentitySessions(repository, clock);
+    try {
+      expect(() =>
+        sessions.issueBootstrapLoginGrant({
+          target_membership_id: federationId('mem'),
+          expected_issuer: 'https://identity.example.test/',
+          expected_email: 'not-yet-provisioned@example.test',
+        }),
+      ).toThrowError(expect.objectContaining({ code: 'not_found' }));
+
+      const people = [
+        ['Authority Owner', 'owner', 'owner@example.test'],
+        ['Employee One', 'employee', 'employee.one@example.test'],
+        ['Employee Two', 'employee', 'employee.two@example.test'],
+        ['Employee Three', 'employee', 'employee.three@example.test'],
+      ] as const;
+      const memberships = people.map(([displayName, membershipType]) =>
+        application.provisionMembership({
+          command_id: `adm_${randomUUID()}`,
+          display_name: displayName,
+          membership_type: membershipType,
+        }),
+      );
+      const grants = memberships.map((membership, index) =>
+        sessions.issueBootstrapLoginGrant({
+          target_membership_id: membership.membership_id,
+          expected_issuer: 'https://identity.example.test/',
+          expected_email: people[index]![2],
+        }),
+      );
+      expect(memberships.map(({ membership_type }) => membership_type)).toEqual(
+        ['owner', 'employee', 'employee', 'employee'],
+      );
+
+      const database = new Database(databasePath, { readonly: true });
+      try {
+        const grantRows = database
+          .prepare(
+            `SELECT login_grant_sha256, grant_purpose, organization_id,
+                    principal_id, membership_id, membership_type,
+                    expected_issuer, expected_email_sha256, consumed_at
+             FROM authority_person_login_grants
+             ORDER BY membership_id`,
+          )
+          .all();
+        expect(grantRows).toEqual(
+          grants
+            .map((grant) => ({
+              login_grant_sha256: sha256Digest(
+                Buffer.from(grant.login_grant, 'utf8'),
+              ),
+              grant_purpose: 'oidc_identity_bootstrap',
+              organization_id: grant.organization_id,
+              principal_id: grant.principal_id,
+              membership_id: grant.membership_id,
+              membership_type: grant.membership_type,
+              expected_issuer: grant.expected_issuer,
+              expected_email_sha256: grant.expected_email_sha256,
+              consumed_at: null,
+            }))
+            .sort((left, right) =>
+              left.membership_id.localeCompare(right.membership_id),
+            ),
+        );
+
+        const relevantAudit = database
+          .prepare(
+            `SELECT action, subject_id
+             FROM authority_audit_log
+             WHERE action IN ('membership.provisioned', 'person_login_grant.issued')
+             ORDER BY audit_sequence`,
+          )
+          .all();
+        expect(relevantAudit).toEqual([
+          ...memberships.map((membership) => ({
+            action: 'membership.provisioned',
+            subject_id: membership.membership_id,
+          })),
+          ...memberships.map((membership) => ({
+            action: 'person_login_grant.issued',
+            subject_id: membership.membership_id,
+          })),
+        ]);
+
+        const counts = database
+          .prepare(
+            `SELECT
+               (SELECT count(*) FROM authority_metadata) AS organizations,
+               (SELECT count(*) FROM authority_principals) AS principals,
+               (SELECT count(*) FROM authority_memberships) AS memberships,
+               (SELECT count(*) FROM authority_person_login_grants) AS person_login_grants`,
+          )
+          .get();
+        expect(counts).toEqual({
+          organizations: 1,
+          principals: 4,
+          memberships: 4,
+          person_login_grants: 4,
+        });
+
+        const legacyTables = [
+          [
+            'authority_enrollment_grants',
+            'SELECT count(*) FROM authority_enrollment_grants',
+          ],
+          [
+            'authority_enrollments',
+            'SELECT count(*) FROM authority_enrollments',
+          ],
+          [
+            'authority_access_states',
+            'SELECT count(*) FROM authority_access_states',
+          ],
+          [
+            'authority_access_lease_requests',
+            'SELECT count(*) FROM authority_access_lease_requests',
+          ],
+        ] as const;
+        const tableExists = database.prepare(
+          `SELECT 1 FROM sqlite_master
+           WHERE type = 'table' AND name = ?`,
+        );
+        for (const [tableName, countSql] of legacyTables) {
+          if (tableExists.get(tableName) !== undefined) {
+            expect(database.prepare(countSql).pluck().get()).toBe(0);
+          }
+        }
+      } finally {
+        database.close();
+      }
+    } finally {
+      application.close();
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
   it('samples a linearized write timestamp only after holding the writer lock', async () => {
     const fixture = await createEnrolledFixture('2026-08-02T19:55:00.000Z');
     try {
@@ -485,357 +623,6 @@ describe('single-organization authority runtime', () => {
           (transaction) => transaction.metadata().last_observed_at,
         ),
       ).toBe(committedAt);
-    } finally {
-      closeFixture(fixture);
-    }
-  });
-
-  it('approves one immutable internal-live pointer and records signed redacted rollout receipts', async () => {
-    const fixture = await createEnrolledFixture('2026-08-02T20:00:00.000Z');
-    try {
-      const approval = internalLiveReleaseApproval(
-        '0.1.0-internal.1',
-        'a',
-        'b',
-      );
-      const { manifest } = approval;
-      expect(fixture.application.internalLiveRolloutStatus()).toMatchObject({
-        channel: 'internal-live',
-        approved_release: null,
-        installations: [
-          {
-            installation_id: fixture.enrolled.installationId,
-            rollout_state: 'no_release',
-            receipt: null,
-          },
-        ],
-      });
-      const approvalForVersion = (
-        releaseVersion: string,
-        sourceCharacter: string,
-        artifactCharacter: string,
-      ) =>
-        internalLiveReleaseApproval(
-          releaseVersion,
-          sourceCharacter,
-          artifactCharacter,
-        );
-      fixture.clock.advance(1);
-      const approved = fixture.application.approveInternalLiveRelease(approval);
-      expect(approved).toMatchObject({
-        kind: 'echo-internal-live-update-directive',
-        channel: 'internal-live',
-        directive_sequence: 1,
-        manifest_url: approval.manifest_url,
-        manifest_sha256: approval.manifest_sha256,
-      });
-      expect(fixture.application.approveInternalLiveRelease(approval)).toEqual(
-        approved,
-      );
-      expect(() =>
-        fixture.application.approveInternalLiveRelease({
-          ...approval,
-          manifest_url: approval.manifest_url.replace(
-            'internal-live-release-manifest',
-            'different',
-          ),
-        }),
-      ).toThrow();
-      for (const candidate of [
-        approvalForVersion('0.1.0-internal.0', 'c', 'd'),
-        approvalForVersion('0.1.0-internal.1', 'd', 'e'),
-      ]) {
-        expect(() =>
-          fixture.application.approveInternalLiveRelease(candidate),
-        ).toThrow(/version must increase monotonically/);
-      }
-
-      fixture.clock.advance(1);
-      const directiveRequest =
-        await createOrganizationInternalLiveDirectiveRequest(
-          {
-            request_id: `udr_${randomUUID()}`,
-            authority_id:
-              fixture.enrolled.result.enrollment_receipt.authority_id,
-            authority_key_id:
-              fixture.enrolled.result.enrollment_receipt.authority_key_id,
-            organization_id:
-              fixture.enrolled.result.enrollment_receipt.organization_id,
-            enrollment_id:
-              fixture.enrolled.result.enrollment_receipt.enrollment_id,
-            installation_id: fixture.enrolled.installationId,
-            installation_signing_key: fixture.enrolled.installation.descriptor,
-            requested_at: fixture.clock.now(),
-          },
-          async (bytes) => sign(fixture.enrolled.installation, bytes),
-        );
-      expect(
-        fixture.application.fetchInternalLiveDirective(directiveRequest),
-      ).toMatchObject({
-        directive_sequence: 1,
-        manifest_sha256: approval.manifest_sha256,
-      });
-
-      const higherApproval = approvalForVersion('0.1.0-internal.2', 'e', 'f');
-      const rolledBackReceipt =
-        await createOrganizationInternalLiveUpdateReceipt(
-          {
-            authority_id:
-              fixture.enrolled.result.enrollment_receipt.authority_id,
-            authority_key_id:
-              fixture.enrolled.result.enrollment_receipt.authority_key_id,
-            organization_id:
-              fixture.enrolled.result.enrollment_receipt.organization_id,
-            enrollment_id:
-              fixture.enrolled.result.enrollment_receipt.enrollment_id,
-            installation_id: fixture.enrolled.installationId,
-            installation_signing_key: fixture.enrolled.installation.descriptor,
-            transaction_id: `upd_${randomUUID()}`,
-            directive_sequence: 1,
-            release_version: manifest.release_version,
-            manifest_sha256: approval.manifest_sha256,
-            artifact_sha256: manifest.artifact.sha256,
-            source_sha: manifest.source.sha,
-            outcome: 'rolled_back',
-            doctor: { ok: true, passed: 10, total: 10 },
-            failure: { phase: 'doctor', code: 'doctor_failed' },
-            finished_at: fixture.clock.now(),
-          },
-          async (bytes) => sign(fixture.enrolled.installation, bytes),
-        );
-      fixture.application.recordInternalLiveUpdateReceipt(rolledBackReceipt);
-      expect(() =>
-        fixture.application.approveInternalLiveRelease(higherApproval),
-      ).toThrow(/not healthy on every active installation/);
-
-      const secondMembership = fixture.application.provisionMembership({
-        command_id: `adm_${randomUUID()}`,
-        display_name: 'Second Rollout Employee',
-        membership_type: 'employee',
-      });
-      const secondEnrolled = await enroll(
-        fixture.application,
-        secondMembership,
-        fixture.clock,
-      );
-
-      const transactionId = `upd_${randomUUID()}`;
-      fixture.clock.advance(1);
-      const receiptPayload = {
-        authority_id: fixture.enrolled.result.enrollment_receipt.authority_id,
-        authority_key_id:
-          fixture.enrolled.result.enrollment_receipt.authority_key_id,
-        organization_id:
-          fixture.enrolled.result.enrollment_receipt.organization_id,
-        enrollment_id: fixture.enrolled.result.enrollment_receipt.enrollment_id,
-        installation_id: fixture.enrolled.installationId,
-        installation_signing_key: fixture.enrolled.installation.descriptor,
-        transaction_id: transactionId,
-        directive_sequence: 1,
-        release_version: manifest.release_version,
-        manifest_sha256: approval.manifest_sha256,
-        artifact_sha256: manifest.artifact.sha256,
-        source_sha: manifest.source.sha,
-        outcome: 'healthy' as const,
-        doctor: { ok: true, passed: 11, total: 11 },
-        failure: null,
-        finished_at: fixture.clock.now(),
-      };
-      const receipt = await createOrganizationInternalLiveUpdateReceipt(
-        receiptPayload,
-        async (bytes) => sign(fixture.enrolled.installation, bytes),
-      );
-      fixture.clock.advance(5 * 60 * 1000 + 1);
-      expect(() =>
-        fixture.application.recordInternalLiveUpdateReceipt(receipt),
-      ).toThrow(
-        expect.objectContaining<Partial<AuthorityOperationError>>({
-          code: 'unauthorized',
-        }),
-      );
-      const renewedAccessRequest = await createOrganizationAccessLeaseRequest(
-        {
-          request_id: `alr_${randomUUID()}`,
-          authority_id:
-            fixture.enrolled.result.enrollment_receipt.authority_id,
-          authority_key_id:
-            fixture.enrolled.result.enrollment_receipt.authority_key_id,
-          organization_id:
-            fixture.enrolled.result.enrollment_receipt.organization_id,
-          enrollment_id:
-            fixture.enrolled.result.enrollment_receipt.enrollment_id,
-          installation_id: fixture.enrolled.installationId,
-          installation_signing_key: fixture.enrolled.installation.descriptor,
-          previous_access_state_sha256: canonicalSha256(
-            fixture.enrolled.result.access_state,
-          ),
-          requested_at: fixture.clock.now(),
-        },
-        async (bytes) => sign(fixture.enrolled.installation, bytes),
-      );
-      await fixture.application.issueAccessLease(renewedAccessRequest);
-      const secondRenewedAccessRequest =
-        await createOrganizationAccessLeaseRequest(
-          {
-            request_id: `alr_${randomUUID()}`,
-            authority_id:
-              secondEnrolled.result.enrollment_receipt.authority_id,
-            authority_key_id:
-              secondEnrolled.result.enrollment_receipt.authority_key_id,
-            organization_id:
-              secondEnrolled.result.enrollment_receipt.organization_id,
-            enrollment_id:
-              secondEnrolled.result.enrollment_receipt.enrollment_id,
-            installation_id: secondEnrolled.installationId,
-            installation_signing_key: secondEnrolled.installation.descriptor,
-            previous_access_state_sha256: canonicalSha256(
-              secondEnrolled.result.access_state,
-            ),
-            requested_at: fixture.clock.now(),
-          },
-          async (bytes) => sign(secondEnrolled.installation, bytes),
-        );
-      await fixture.application.issueAccessLease(secondRenewedAccessRequest);
-      expect(() =>
-        fixture.application.recordInternalLiveUpdateReceipt(receipt),
-      ).not.toThrow();
-      const resignedReceipt = await createOrganizationInternalLiveUpdateReceipt(
-        receiptPayload,
-        async (bytes) => sign(fixture.enrolled.installation, bytes),
-      );
-      expect(() =>
-        fixture.application.recordInternalLiveUpdateReceipt(resignedReceipt),
-      ).not.toThrow();
-      expect(() =>
-        fixture.application.approveInternalLiveRelease(higherApproval),
-      ).toThrow(/not healthy on every active installation/);
-      const divergentReceipt =
-        await createOrganizationInternalLiveUpdateReceipt(
-          {
-            ...receiptPayload,
-            outcome: 'failed',
-            doctor: null,
-            failure: { phase: 'doctor', code: 'doctor_failed' },
-            finished_at: fixture.clock.now(),
-          },
-          async (bytes) => sign(fixture.enrolled.installation, bytes),
-        );
-      expect(() =>
-        fixture.application.recordInternalLiveUpdateReceipt(divergentReceipt),
-      ).toThrow(/transaction ID was reused/);
-      const futureReceipt = await createOrganizationInternalLiveUpdateReceipt(
-        {
-          ...receiptPayload,
-          transaction_id: `upd_${randomUUID()}`,
-          finished_at: new Date(
-            Date.parse(fixture.clock.now()) + 1,
-          ).toISOString(),
-        },
-        async (bytes) => sign(fixture.enrolled.installation, bytes),
-      );
-      expect(() =>
-        fixture.application.recordInternalLiveUpdateReceipt(futureReceipt),
-      ).toThrow(/finished_at cannot be in the future/);
-      const secondReceipt = await createOrganizationInternalLiveUpdateReceipt(
-        {
-          ...receiptPayload,
-          enrollment_id: secondEnrolled.result.enrollment_receipt.enrollment_id,
-          installation_id: secondEnrolled.installationId,
-          installation_signing_key: secondEnrolled.installation.descriptor,
-          transaction_id: `upd_${randomUUID()}`,
-          finished_at: fixture.clock.now(),
-        },
-        async (bytes) => sign(secondEnrolled.installation, bytes),
-      );
-      fixture.application.recordInternalLiveUpdateReceipt(secondReceipt);
-      const rolloutStatus = fixture.application.internalLiveRolloutStatus();
-      expect(rolloutStatus).toMatchObject({
-        approved_release: {
-          directive_sequence: 1,
-          release_version: manifest.release_version,
-        },
-      });
-      expect(rolloutStatus.installations).toHaveLength(2);
-      expect(
-        rolloutStatus.installations.every(
-          (installation) => installation.rollout_state === 'healthy',
-        ),
-      ).toBe(true);
-      expect(
-        rolloutStatus.installations.find(
-          (installation) =>
-            installation.installation_id === fixture.enrolled.installationId,
-        ),
-      ).toMatchObject({
-        receipt: {
-          release_version: manifest.release_version,
-          doctor: { ok: true, passed: 11, total: 11 },
-        },
-      });
-      const higher =
-        fixture.application.approveInternalLiveRelease(higherApproval);
-      expect(higher.directive_sequence).toBe(2);
-
-      const database = new Database(fixture.databasePath, { readonly: true });
-      try {
-        const rows = database
-          .prepare(
-            `SELECT receipt_json FROM authority_internal_live_update_receipts`,
-          )
-          .all() as Array<{ receipt_json: string }>;
-        expect(rows).toHaveLength(3);
-        // Persist exactly the validated, redacted receipt documents. Scanning
-        // the whole signed JSON for short words is probabilistic: random IDs,
-        // digests, or signature bytes can eventually spell e.g. "log".
-        expect(rows.map((row) => row.receipt_json).sort()).toEqual(
-          [rolledBackReceipt, receipt, secondReceipt]
-            .map((value) => canonicalJson(value))
-            .sort(),
-        );
-      } finally {
-        database.close();
-      }
-    } finally {
-      closeFixture(fixture);
-    }
-  });
-
-  it('allows a strictly newer release to replace a pre-rollout approval', async () => {
-    const fixture = await createEnrolledFixture('2026-08-02T21:00:00.000Z');
-    try {
-      const first = internalLiveReleaseApproval('0.1.0-internal.1', 'a', 'b');
-      const second = internalLiveReleaseApproval('0.1.0-internal.2', 'c', 'd');
-
-      expect(
-        fixture.application.approveInternalLiveRelease(first),
-      ).toMatchObject({
-        directive_sequence: 1,
-        manifest_sha256: first.manifest_sha256,
-      });
-      expect(
-        fixture.application.approveInternalLiveRelease(second),
-      ).toMatchObject({
-        directive_sequence: 2,
-        manifest_sha256: second.manifest_sha256,
-      });
-      expect(fixture.application.internalLiveRolloutStatus()).toMatchObject({
-        approved_release: {
-          directive_sequence: 2,
-          release_version: '0.1.0-internal.2',
-        },
-        installations: [
-          {
-            installation_id: fixture.enrolled.installationId,
-            rollout_state: 'pending',
-            receipt: null,
-          },
-        ],
-      });
-
-      const older = internalLiveReleaseApproval('0.1.0-internal.1', 'e', 'f');
-      expect(() =>
-        fixture.application.approveInternalLiveRelease(older),
-      ).toThrow(/version must increase monotonically/);
     } finally {
       closeFixture(fixture);
     }

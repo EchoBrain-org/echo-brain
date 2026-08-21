@@ -11,6 +11,17 @@ failures, operations, and proof for exact runs.
 - Investigating: start with [failure patterns](failure-patterns/README.md), then its playbook or runbook.
 - Making a durable choice: use an [ADR](decisions/README.md); use an [RFC](rfcs/README.md) for a proposed coordinated change.
 - Claiming readiness: use [qualification](qualification/README.md). Source, deployment, and qualification are separate claims.
+- Finishing the server migration: use the active
+  [server-core lean-down plan v4](product/2026-08-20-server-core-migration-lean-down-plan-v4.md).
+  V2, v3, and existing qualification reports remain historical context, not
+  the current deletion sequence.
+- Closing its first gate: review the
+  [Phase 0 closure ledger](product/2026-08-20-server-core-migration-phase-0-closure.md),
+  [test-contract inventory](product/2026-08-20-server-core-migration-phase-0-test-contract-inventory.md),
+  [coordinated RFC](rfcs/RFC-0001-server-core-lean-authority-contracts.md),
+  and proposed [technical](decisions/ADR-0003-server-core-lean-authority-contracts.md)
+  and [clean-state reset](decisions/ADR-0004-founder-authority-clean-state-reset.md)
+  decisions. Phase 0 remains open until their exact dispositions are recorded.
 
 Components are the navigation layer. Cross-cutting records are written once,
 linked by stable ID, and not copied between component pages.

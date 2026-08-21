@@ -1,9 +1,11 @@
 # Single-origin authority deployment
 
 This is the pilot deployment for one organization. One public HTTPS origin
-serves employee enrollment/access routes and the `/admin` console. Caddy strips
-external proxy-identity headers, authenticates its loopback hop, and supplies
-the bounded client identity expected by the authority.
+serves Person login, session, read, exclusion, and Slack-link routes plus the
+`/admin` console. Retained V1 installation enrollment and access routes share
+the listener for server compatibility, but no shipped machine client calls
+them. Caddy strips external proxy-identity headers, authenticates its loopback
+hop, and supplies the bounded client identity expected by the Authority.
 
 Set a public DNS name and initialize the persistent state once:
 
@@ -51,11 +53,13 @@ trusted-proxy token, not the administrator token, databases, or authority
 signing key. The private runtime-status route is not forwarded by the public
 proxy.
 
-The authority container owns four private SQLite files in the same durable
-state directory: `authority.sqlite` for membership and installation truth,
-`integrations.sqlite` for provider connections and grants, `record-log.sqlite`
-for append-only organization record truth, and `record-derived.sqlite` for its
-rebuildable projection. A readable-search-capable Authority also publishes
+The Authority container owns four private SQLite files in the same durable
+state directory: `authority.sqlite` for membership, Person identity and
+sessions, retained installation compatibility, and bounded pre-record
+processing state; `integrations.sqlite` for provider connections and grants;
+`record-log.sqlite` for append-only organization record truth; and
+`record-derived.sqlite` for its rebuildable projection. A
+readable-search-capable Authority also publishes
 immutable retrieval generations below
 `data/state/record-retrieval/generations/`; they are not a fifth mutable source
 of truth. All run in one process under one authenticated singleton guard.
@@ -293,11 +297,11 @@ organization tool. Its public configuration pins Slack identity, channel, and
 reactions, not the product-local `presentation_mode`; a missing, inactive, or
 drifted instance refuses activation.
 
-Starting the Authority after this operation enables only the central
-capability. Reconfigure each stopped product installation separately. Product
-reconfigure refuses the new mode until every frozen card on that installation
-has resolved under its original mode, so central activation does not silently
-reinterpret an existing Slack card.
+Starting the Authority after this operation enables only the retained V1
+installation-bound record-admission capability. No shipped Person client
+submits that envelope or has a product-reconfigure command. Do not treat this
+activation as enabling the current Person product; a Person-bound record
+writer is a later additive server path.
 
 For a readable-search-capable image, use the same stopped snapshot boundary
 before activation, a generation rebuild, or query-audit maintenance. The route
@@ -410,33 +414,28 @@ client-live, or release qualification.
 That `data` archive is sufficient for this in-place upgrade rollback because
 `docker compose down` leaves the named Caddy volumes intact. It is not by
 itself a host-loss disaster-recovery backup. Localhost and private-CA clients
-pin Caddy's root certificate, whose private CA key lives in `caddy_data`; back
+trust Caddy's root certificate, whose private CA key lives in `caddy_data`; back
 up and restore the `caddy_data` and `caddy_config` named volumes with the same
 recovery generation, or use an externally managed stable TLS certificate and
-CA. Losing that CA while retaining Authority state makes already-enrolled
-clients reject the replacement TLS identity.
+CA. Losing that CA while retaining Authority state makes clients that trusted
+it reject the replacement TLS identity.
 
 For `localhost`, Caddy uses its local CA. Export its public root after the stack
-starts, then supply it during product enrollment:
+starts only if it will be installed into the client operating system's trust
+store:
 
 ```sh
 docker compose exec -T proxy \
   cat /data/caddy/pki/authorities/local/root.crt \
   > data/caddy-local-root.crt
 chmod 0600 data/caddy-local-root.crt
-
-echo-brain organization enroll \
-  --config /absolute/path/runtime.json \
-  --invitation /absolute/path/echo-organization-invitation.json \
-  --authority-pin sha256:PIN_FROM_A_SEPARATE_TRUSTED_CHANNEL \
-  --authority-ca /absolute/path/to/data/caddy-local-root.crt \
-  --allow-exportable-software-key
 ```
 
-The product persists this public CA with the verified authority connection so
-background lease renewal uses the same TLS trust after restart. For a public
-DNS name, ports 80 and 443 must reach this machine so Caddy can obtain and
-renew the certificate; `--authority-ca` is then normally unnecessary.
+The Person client uses the operating system's HTTPS trust and has no
+`--authority-ca` option or installation-enrollment command. Prefer a public DNS
+name for live use; ports 80 and 443 must reach this host so Caddy can obtain and
+renew its certificate. Preserve `caddy_data` and `caddy_config` with Authority
+state so an intentionally trusted local CA does not change after recovery.
 
 The default proxy client ID intentionally represents this one pilot proxy, not
 individual employees. Replace `ECHO_PROXY_CLIENT_ID` with a stable canonical

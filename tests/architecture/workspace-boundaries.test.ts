@@ -12,12 +12,11 @@ import {
   writeFileSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { dirname, join, resolve } from 'node:path';
+import { dirname, join, posix, resolve } from 'node:path';
 import { afterAll, describe, expect, it } from 'vitest';
 
 const REPO = resolve(import.meta.dirname, '../..');
 const REGISTRY = 'tools/workspace-source-boundaries.v1.json';
-const PRODUCT_BOUNDARY = 'product/source-boundary.v1.json';
 const tmpDirs: string[] = [];
 
 afterAll(() =>
@@ -48,12 +47,6 @@ interface BoundaryManifest {
   allowed_node_builtins: string[];
   forbidden_repository_roots?: string[];
   runtime_assets?: string[];
-  layer_rules: LayerRule[];
-}
-
-interface ProductBoundary {
-  allowed_internal_paths: string[];
-  runtime_assets: string[];
   layer_rules: LayerRule[];
 }
 
@@ -193,57 +186,6 @@ describe('workspace source boundaries', () => {
     }
   });
 
-  // Both rulesets govern src/product/{federation,organization}: the registry
-  // pass and the product closure walk. A nested manifest that permits what the
-  // product boundary forbids passes one and fails the other on the first real
-  // import, so containment is asserted before any such import exists.
-  it('keeps every nested boundary inside the product boundary', () => {
-    const registry = readJson<Registry>(REGISTRY);
-    const product = readJson<ProductBoundary>(PRODUCT_BOUNDARY);
-    const violations: string[] = [];
-
-    for (const manifestPath of registry.manifests) {
-      const manifest = readJson<BoundaryManifest>(manifestPath);
-      if (manifest.workspace) continue;
-      for (const path of manifest.allowed_internal_paths) {
-        if (
-          !product.allowed_internal_paths.some((allowed) =>
-            matchesGlob(path, allowed),
-          )
-        ) {
-          violations.push(
-            `${manifest.name}: allowed_internal_paths leaves the product boundary: ${path}`,
-          );
-        }
-      }
-      for (const rule of manifest.layer_rules) {
-        const productRules = product.layer_rules.filter((candidate) =>
-          matchesGlob(rule.from, candidate.from),
-        );
-        if (productRules.length !== 1) {
-          violations.push(
-            `${manifest.name}: layer rule '${rule.name}' matches ${productRules.length} product layer rules`,
-          );
-          continue;
-        }
-        const [productRule] = productRules;
-        for (const path of rule.allowed_imports) {
-          if (
-            !productRule.allowed_imports.some((allowed) =>
-              matchesGlob(path, allowed),
-            )
-          ) {
-            violations.push(
-              `${manifest.name}: layer rule '${rule.name}' allows an import product rule '${productRule.name}' rejects: ${path}`,
-            );
-          }
-        }
-      }
-    }
-
-    expect(violations).toEqual([]);
-  });
-
   it('locks the one-way workspace dependency graph', () => {
     const registry = readJson<Registry>(REGISTRY);
     const graph = Object.fromEntries(
@@ -273,7 +215,7 @@ describe('workspace source boundaries', () => {
       '@echo-brain/organization-retrieval': [
         '@echo-brain/federation-protocol',
       ],
-      'echo-brain/local-organization': [
+      '@echo-brain/person-client': [
         '@echo-brain/federation-protocol',
         '@echo-brain/organization-api',
         '@echo-brain/organization-protocol',
@@ -294,17 +236,6 @@ describe('workspace source boundaries', () => {
       'utf8',
     );
 
-    // The builder runs the root workspace build, so every declared workspace
-    // must be present in its selective Docker context. A parent COPY is valid
-    // only when it contains the complete workspace path.
-    for (const workspace of rootPackage.workspaces) {
-      const parent = workspace.split('/')[0]!;
-      const copied =
-        dockerfile.includes(`COPY ${workspace} ./${workspace}`) ||
-        dockerfile.includes(`COPY ${parent} ./${parent}`);
-      expect(copied, `builder omits workspace ${workspace}`).toBe(true);
-    }
-
     const runtimeClosure = new Set<string>();
     const visit = (workspace: string): void => {
       if (runtimeClosure.has(workspace)) return;
@@ -316,6 +247,41 @@ describe('workspace source boundaries', () => {
       }
     };
     visit('services/organization-authority');
+
+    // npm ci reads every workspace manifest, but the server builder compiles
+    // and receives source only for the Authority dependency closure.
+    for (const workspace of rootPackage.workspaces) {
+      const parent = workspace.split('/')[0]!;
+      const manifestCopied =
+        dockerfile.includes(`COPY ${workspace} ./${workspace}`) ||
+        dockerfile.includes(`COPY ${parent} ./${parent}`) ||
+        dockerfile.includes(
+          `COPY ${workspace}/package.json ./${workspace}/package.json`,
+        );
+      expect(
+        manifestCopied,
+        `builder omits workspace manifest ${workspace}`,
+      ).toBe(true);
+    }
+    for (const workspace of runtimeClosure) {
+      const parent = workspace.split('/')[0]!;
+      const sourceCopied =
+        dockerfile.includes(`COPY ${workspace} ./${workspace}`) ||
+        dockerfile.includes(`COPY ${parent} ./${parent}`);
+      expect(sourceCopied, `builder omits workspace source ${workspace}`).toBe(
+        true,
+      );
+    }
+    expect(dockerfile).toContain(
+      'npm run build --workspace @echo-brain/organization-authority',
+    );
+    expect(dockerfile).toContain(
+      'npm ci --omit=dev --workspace @echo-brain/organization-authority --include-workspace-root=false',
+    );
+    expect(dockerfile).not.toContain('npm run build:workspaces');
+    expect(dockerfile).not.toContain(
+      'COPY src/product/person-client ./src/product/person-client',
+    );
 
     // npm's workspace links resolve into these runtime directories. Every
     // reachable workspace therefore needs its package exports and compiled
@@ -347,7 +313,6 @@ describe('workspace source boundaries', () => {
         'services/organization-control-plane',
         'services/organization-control-plane/source-boundary.v1.json',
       ],
-      ['src/product/storage', PRODUCT_BOUNDARY],
     ]) {
       const manifest = readJson<{ runtime_assets?: string[] }>(manifestPath);
       const migrations = readdirSync(join(REPO, root, 'migrations'))
@@ -850,50 +815,147 @@ describe('workspace source boundaries', () => {
     );
   });
 
-  it('rejects product source files that do not belong to a declared layer', () => {
+  it('keeps retired machine product roots absent', () => {
     const fixture = fixtureRepository();
-    const orphan = join(fixture, 'src/product/unlayered/orphan.ts');
+    const orphan = join(fixture, 'src/product/organization/orphan.ts');
     mkdirSync(dirname(orphan), { recursive: true });
     writeFileSync(orphan, 'export {};\n');
     const result = runBoundary(fixture);
     expect(result.status).not.toBe(0);
     expect(result.stdout + result.stderr).toContain(
-      'product source file has no layer rule',
+      'module remains under removed internal root',
     );
   });
 
-  it('applies package and builtin allowlists to root product layers', () => {
+  it('discovers adapter ids across all roots and rejects leaks in processing core', () => {
     const fixture = fixtureRepository();
+    let result = runBoundary(fixture);
+    expect(result.status, result.stdout + result.stderr).toBe(0);
+    const report = JSON.parse(result.stdout) as {
+      discovered_adapter_ids: string[];
+    };
+    expect(report.discovered_adapter_ids).toEqual([
+      'granola',
+      'llm',
+      'slack',
+      'slack-reactions',
+      'structured-text',
+    ]);
+
+    const probe = join(
+      fixture,
+      'services/organization-authority/src/processing/core/adapter-id-leak-probe.ts',
+    );
+    writeFileSync(probe, `export const leakedAdapterId = 'granola';\n`);
+    result = runBoundary(fixture);
+    expect(result.status).not.toBe(0);
+    expect(result.stdout + result.stderr).toContain(
+      "adapter id 'granola' leaked into tool-agnostic core module: services/organization-authority/src/processing/core/adapter-id-leak-probe.ts",
+    );
+  });
+
+  it('rejects Authority composition imports into processing core', () => {
+    const fixture = fixtureRepository();
+    const compositionPath = join(
+      fixture,
+      'services/organization-authority/src/composition/config.ts',
+    );
     writeFileSync(
-      join(fixture, 'src/core/index.ts'),
-      [
-        `import '@echo-brain/organization-api';`,
-        `import 'node:fs';`,
-        'export {};',
-        '',
-      ].join('\n'),
+      compositionPath,
+      `${readFileSync(compositionPath, 'utf8')}\nexport * from '../processing/core/index.js';\n`,
     );
 
     const result = runBoundary(fixture);
+
     expect(result.status).not.toBe(0);
     expect(result.stdout + result.stderr).toContain(
-      "layer rule 'core-is-tool-agnostic' rejects package @echo-brain/organization-api",
+      "@echo-brain/organization-authority: layer rule 'authority-composition-may-wire-pre-processing-layers' rejects edge: services/organization-authority/src/composition/config.ts -> services/organization-authority/src/processing/core/index.ts",
     );
-    expect(result.stdout + result.stderr).toContain(
-      "layer rule 'core-is-tool-agnostic' rejects Node builtin node:fs",
+  });
+
+  it('enforces every Authority processing layer against domain imports', () => {
+    const fixture = fixtureRepository();
+    const manifestPath =
+      'services/organization-authority/source-boundary.v1.json';
+    const domainErrors =
+      'services/organization-authority/src/domain/errors.ts';
+    const manifest = readFixtureJson<BoundaryManifest>(fixture, manifestPath);
+    const processingRules = manifest.layer_rules.filter((rule) =>
+      rule.name.startsWith('processing-'),
     );
 
-    writeFileSync(join(fixture, 'src/core/index.ts'), 'export {};\n');
-    const forbiddenAdapterPath = '../../delivery-surfaces/slack/index.js';
-    writeFileSync(
-      join(fixture, 'src/adapters/decision-processors/llm/anthropic-client.ts'),
-      `export * from '${forbiddenAdapterPath}';\n`,
+    expect(processingRules.length).toBeGreaterThan(0);
+    expect(existsSync(join(fixture, domainErrors))).toBe(true);
+
+    // Mirror tools/lib/repository-files.mjs so a dead glob cannot pass by
+    // selecting a path the checker itself never scans.
+    const listed = spawnSync(
+      'git',
+      ['ls-files', '-z', '--cached', '--others', '--exclude-standard'],
+      { cwd: fixture, encoding: 'buffer' },
     );
-    const narrowDriverResult = runBoundary(fixture);
-    expect(narrowDriverResult.status).not.toBe(0);
-    expect(narrowDriverResult.stdout + narrowDriverResult.stderr).toContain(
-      "layer rule 'llm-provider-drivers-own-only-transport' rejects edge",
+    expect(listed.status, listed.stderr?.toString('utf8')).toBe(0);
+    const sourcePaths = listed.stdout
+      .toString('utf8')
+      .split('\0')
+      .filter(
+        (path) =>
+          path !== '' &&
+          /\.(?:[cm]?[jt]sx?)$/.test(path) &&
+          existsSync(join(fixture, path)) &&
+          lstatSync(join(fixture, path)).isFile(),
+      )
+      .sort();
+
+    const probes = processingRules.map((rule) => {
+      const sourcePath = sourcePaths.find((path) =>
+        matchesGlob(path, rule.from),
+      );
+      if (sourcePath === undefined) {
+        throw new Error(
+          `processing layer rule '${rule.name}' matches no real source`,
+        );
+      }
+      return { rule, sourcePath };
+    });
+
+    // The clean checker rejects overlapping rules; keep each mutation and
+    // restoration unambiguous if the manifest ever regresses.
+    expect(new Set(probes.map(({ sourcePath }) => sourcePath)).size).toBe(
+      probes.length,
     );
+
+    const baseline = runBoundary(fixture);
+    expect(baseline.status, baseline.stdout + baseline.stderr).toBe(0);
+
+    for (const { rule, sourcePath } of probes) {
+      const absolutePath = join(fixture, sourcePath);
+      const original = readFileSync(absolutePath, 'utf8');
+      const relativeTarget = posix
+        .relative(posix.dirname(sourcePath), domainErrors)
+        .replace(/\.ts$/, '.js');
+      const specifier = relativeTarget.startsWith('.')
+        ? relativeTarget
+        : `./${relativeTarget}`;
+
+      try {
+        writeFileSync(
+          absolutePath,
+          `${original}${original.endsWith('\n') ? '' : '\n'}import '${specifier}';\n`,
+        );
+        const result = runBoundary(fixture);
+        expect(result.status, result.stdout + result.stderr).toBe(1);
+        const report = JSON.parse(result.stdout) as { errors: string[] };
+        expect(report.errors, rule.name).toEqual([
+          `@echo-brain/organization-authority: layer rule '${rule.name}' rejects edge: ${sourcePath} -> ${domainErrors}`,
+        ]);
+      } finally {
+        writeFileSync(absolutePath, original);
+      }
+    }
+
+    const restored = runBoundary(fixture);
+    expect(restored.status, restored.stdout + restored.stderr).toBe(0);
   });
 
   it('applies builtin and external allowlists at the matching layer', () => {
@@ -939,7 +1001,7 @@ describe('workspace source boundaries', () => {
     manifest.owned_source_paths = [
       'services/organization-authority/src/domain/**',
     ];
-    manifest.entry_points = ['src/core/index.ts'];
+    manifest.entry_points = ['tests/not-an-authority-entry.ts'];
     writeFixtureJson(fixture, manifestPath, manifest);
 
     const result = runBoundary(fixture);

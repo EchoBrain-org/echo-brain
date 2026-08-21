@@ -1,17 +1,25 @@
 import { Buffer } from 'node:buffer';
+import { createHash } from 'node:crypto';
 import { createServer } from 'node:http';
 import type { IncomingMessage, Server, ServerResponse } from 'node:http';
 import { TextDecoder } from 'node:util';
 import {
   isOrganizationApiValidationError,
   canonicalOrganizationMemberReadablePermissionCheckDecisionBytes,
+  canonicalOrganizationAdminMemberExclusionBreakGlassReadRequestBytes,
+  canonicalOrganizationPersonMemberExclusionListRequestBytes,
+  canonicalOrganizationPersonMemberExclusionChangeRequestBytes,
+  canonicalOrganizationPersonSlackLinkBeginRequestBytes,
+  canonicalOrganizationPersonSlackLinkCompleteRequestBytes,
+  canonicalOrganizationPersonReadableSearchRequestBytes,
+  canonicalOrganizationPersonRecentDecisionsRequestBytes,
+  canonicalOrganizationPersonReviewerRecentDecisionsRequestBytes,
   canonicalOrganizationReadableSearchRequestBytes,
   canonicalOrganizationReviewerPermissionCheckDecisionBytes,
   MAX_ORGANIZATION_API_BODY_BYTES,
   ORGANIZATION_API_ACCESS_LEASES_PATH,
+  ORGANIZATION_API_ADMIN_MEMBER_EXCLUSION_BREAK_GLASS_PATH,
   ORGANIZATION_API_ADMIN_AUDIT_PATH,
-  ORGANIZATION_API_ADMIN_INTERNAL_LIVE_RELEASES_PATH,
-  ORGANIZATION_API_ADMIN_INTERNAL_LIVE_ROLLOUT_PATH,
   ORGANIZATION_API_ADMIN_AUTH_SCHEME,
   ORGANIZATION_API_ADMIN_ENROLLMENT_GRANTS_PATH,
   ORGANIZATION_API_ADMIN_INSTALLATIONS_PATH,
@@ -20,9 +28,14 @@ import {
   ORGANIZATION_API_AUTHORITY_DESCRIPTOR_PATH,
   ORGANIZATION_API_ENROLLMENT_AUTH_SCHEME,
   ORGANIZATION_API_ENROLLMENTS_PATH,
-  ORGANIZATION_API_INTERNAL_LIVE_DIRECTIVES_PATH,
-  ORGANIZATION_API_INTERNAL_LIVE_RECEIPTS_PATH,
   ORGANIZATION_API_PERMISSION_CHECKS_PATH,
+  ORGANIZATION_API_PERSON_MEMBER_EXCLUSIONS_PATH,
+  ORGANIZATION_API_PERSON_MEMBER_EXCLUSION_LIST_PATH,
+  ORGANIZATION_API_PERSON_SLACK_LINK_CHALLENGES_PATH,
+  ORGANIZATION_API_PERSON_SLACK_LINK_COMPLETIONS_PATH,
+  ORGANIZATION_API_PERSON_READABLE_SEARCH_PATH,
+  ORGANIZATION_API_PERSON_RECENT_DECISIONS_PATH,
+  ORGANIZATION_API_PERSON_REVIEWER_RECENT_DECISIONS_PATH,
   ORGANIZATION_API_READABLE_SEARCH_PATH,
   ORGANIZATION_API_RECENT_DECISIONS_PATH,
   ORGANIZATION_API_REVIEWER_RECENT_DECISIONS_PATH,
@@ -32,13 +45,18 @@ import {
   MAX_ORGANIZATION_RECORD_API_BODY_BYTES,
   MAX_ORGANIZATION_READABLE_SEARCH_REQUEST_BYTES,
   validateCompleteOrganizationEnrollmentRequest,
-  validateApproveOrganizationInternalLiveReleaseRequest,
   validateIssueOrganizationEnrollmentGrantRequest,
   validateOrganizationAccessLeaseRequestAnyVersion,
-  validateOrganizationInternalLiveDirectiveRequest,
-  validateOrganizationInternalLiveUpdateReceipt,
   validateOrganizationPermissionCheckRequest,
   validateOrganizationMemberReadablePermissionCheckRequest,
+  validateOrganizationAdminMemberExclusionBreakGlassReadRequest,
+  validateOrganizationPersonMemberExclusionChangeRequest,
+  validateOrganizationPersonMemberExclusionListRequest,
+  validateOrganizationPersonSlackLinkBeginRequest,
+  validateOrganizationPersonSlackLinkCompleteRequest,
+  validateOrganizationPersonReadableSearchRequest,
+  validateOrganizationPersonRecentDecisionsRequest,
+  validateOrganizationPersonReviewerRecentDecisionsRequest,
   validateOrganizationReviewerPermissionCheckRequest,
   validateOrganizationRecentDecisionsRequest,
   validateOrganizationReadableSearchRequest,
@@ -75,6 +93,14 @@ import {
   ReviewerRecentDecisionsError,
 } from '../application/reviewer-recent-decisions.js';
 import {
+  PersonReadRequestError,
+  type PersonRecentDecisionsApplication,
+} from '../application/person-read-recent-decisions.js';
+import type { PersonReadableSearchService } from '../application/person-readable-search.js';
+import type { PersonMemberExclusionService } from '../application/person-member-exclusions.js';
+import type { PersonMemberExclusionReadService } from '../application/person-member-exclusion-reads.js';
+import type { PersonSlackIdentityLinkHttpApplication } from './person-slack-identity-link-http-application.js';
+import {
   fixedReadableSearchErrorBytes,
   ReadableSearchError,
 } from '../application/readable-search.js';
@@ -95,6 +121,14 @@ const READABLE_SEARCH_UNAVAILABLE_BYTES = Buffer.from(
   '{"error":{"code":"unavailable","message":"service is temporarily unavailable"}}',
   'utf8',
 );
+const PERSON_READ_INVALID_REQUEST_BYTES = Buffer.from(
+  '{"error":{"code":"invalid_request","message":"request is invalid"}}',
+  'utf8',
+);
+const PERSON_SESSION_UNAVAILABLE_BYTES = Buffer.from(
+  '{"error":{"code":"unavailable","message":"service is temporarily unavailable"}}',
+  'utf8',
+);
 import {
   assertAuthorityRuntimeStatusNonce,
   AUTHORITY_RUNTIME_STATUS_NONCE_HEADER,
@@ -107,6 +141,14 @@ import type { OrganizationRecordHttpApplication } from './organization-record-ht
 import type { OrganizationRecentDecisionsHttpApplication } from './organization-recent-decisions-http-application.js';
 import type { OrganizationReviewerRecentDecisionsHttpApplication } from './organization-reviewer-recent-decisions-http-application.js';
 import type { OrganizationReadableSearchHttpApplication } from './organization-readable-search-http-application.js';
+import {
+  PERSON_SESSION_ADMIN_MEMBERSHIPS_PATH,
+  PERSON_SESSION_OIDC_BEGIN_PATH,
+  PERSON_SESSION_OIDC_CALLBACK_PATH,
+  PERSON_SESSION_REFRESH_PATH,
+  PERSON_SESSION_REVOCATIONS_PATH,
+  type PersonIdentitySessionHttpApplication,
+} from './person-identity-session-http-application.js';
 import { handleAdminConsoleRequest } from './admin-console/routes.js';
 import type { AdminConsoleSessionStore } from './admin-console/sessions.js';
 import {
@@ -128,6 +170,9 @@ const UUID_V4_SOURCE =
   '[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}';
 const GRANT_ROUTE = new RegExp(
   `^${ORGANIZATION_API_ADMIN_MEMBERSHIPS_PATH}/(mem_${UUID_V4_SOURCE})/enrollment-grants$`,
+);
+const PERSON_LOGIN_GRANT_ROUTE = new RegExp(
+  `^${PERSON_SESSION_ADMIN_MEMBERSHIPS_PATH}/(mem_${UUID_V4_SOURCE})/person-login-grants$`,
 );
 const MEMBERSHIP_REVOCATION_ROUTE = new RegExp(
   `^${ORGANIZATION_API_ADMIN_MEMBERSHIPS_PATH}/(mem_${UUID_V4_SOURCE})/revocations$`,
@@ -518,6 +563,208 @@ async function readReadableSearchRequest(
   }
 }
 
+async function readCanonicalPersonRequest<T>(
+  request: IncomingMessage,
+  validate: (value: unknown) => T,
+  canonicalBytes: (value: unknown) => Uint8Array,
+): Promise<T> {
+  let bytes: Buffer;
+  try {
+    bytes = await readJsonBodyBytes(request);
+    const command = validate(decodeOrganizationApiJsonBody(bytes));
+    if (!bytes.equals(Buffer.from(canonicalBytes(command)))) {
+      throw new Error('Person read request bytes are not RFC8785 canonical');
+    }
+    return command;
+  } catch (error) {
+    if (error instanceof PayloadTooLargeError) throw error;
+    throw new PersonReadRequestError('Person read request is invalid', {
+      cause: error,
+    });
+  }
+}
+
+function personAccessToken(authorizationHeader: string | undefined): string {
+  return (
+    /^Bearer ([A-Za-z0-9_-]{43})$/.exec(authorizationHeader ?? '')?.[1] ?? ''
+  );
+}
+
+function memberExclusionBreakGlassActorBindingSha256(
+  authorizationHeader: string | undefined,
+): `sha256:${string}` {
+  return `sha256:${createHash('sha256')
+    .update('echo-authority-member-exclusion-break-glass-admin-v1\0', 'utf8')
+    .update(authorizationHeader ?? '', 'utf8')
+    .digest('hex')}`;
+}
+
+function personSessionRequestObject(
+  value: unknown,
+  expectedKeys: readonly string[],
+): Record<string, unknown> {
+  if (
+    value === null ||
+    typeof value !== 'object' ||
+    Array.isArray(value) ||
+    Object.keys(value).sort().join(',') !== [...expectedKeys].sort().join(',')
+  ) {
+    throw new AuthorityOperationError(
+      'invalid_request',
+      'Person session request is invalid',
+    );
+  }
+  return value as Record<string, unknown>;
+}
+
+function personSessionString(
+  value: unknown,
+  label: string,
+): string {
+  if (typeof value !== 'string') {
+    throw new AuthorityOperationError(
+      'invalid_request',
+      `Person session ${label} is invalid`,
+    );
+  }
+  return value;
+}
+
+function personOidcBeginInput(value: unknown):
+  | { kind: 'identity_bootstrap'; login_grant: string }
+  | { kind: 'existing_identity_login' } {
+  if (
+    value !== null &&
+    typeof value === 'object' &&
+    !Array.isArray(value) &&
+    (value as Record<string, unknown>)['kind'] === 'existing_identity_login'
+  ) {
+    personSessionRequestObject(value, ['kind']);
+    return { kind: 'existing_identity_login' };
+  }
+  const body = personSessionRequestObject(value, ['kind', 'login_grant']);
+  if (body['kind'] !== 'identity_bootstrap') {
+    throw new AuthorityOperationError(
+      'invalid_request',
+      'Person session login kind is invalid',
+    );
+  }
+  return {
+    kind: 'identity_bootstrap',
+    login_grant: personSessionString(body['login_grant'], 'login grant'),
+  };
+}
+
+type PersonOidcCallbackInput =
+  | { kind: 'authorization_code'; state: string; authorization_code: string }
+  | { kind: 'provider_error'; state: string };
+
+const PERSON_OIDC_CALLBACK_KEYS = new Set([
+  'code',
+  'error',
+  'error_description',
+  'error_uri',
+  'authuser',
+  'hd',
+  'iss',
+  'prompt',
+  'scope',
+  'session_state',
+  'state',
+]);
+const MAXIMUM_PERSON_OIDC_CALLBACK_ANCILLARY_CHARACTERS = 4096;
+
+function boundedPersonOidcCallbackAncillary(value: string): boolean {
+  return (
+    value.length > 0 &&
+    value.length <= MAXIMUM_PERSON_OIDC_CALLBACK_ANCILLARY_CHARACTERS &&
+    !/[\u0000-\u001f\u007f]/.test(value)
+  );
+}
+
+function personOidcCallbackInput(
+  url: URL,
+  expectedIssuer: string,
+): PersonOidcCallbackInput {
+  const values = new Map<string, string>();
+  for (const key of url.searchParams.keys()) {
+    if (!PERSON_OIDC_CALLBACK_KEYS.has(key) || values.has(key)) {
+      throw new AuthorityOperationError(
+        'unauthorized',
+        'person authentication failed',
+      );
+    }
+    const candidates = url.searchParams.getAll(key);
+    if (candidates.length !== 1) {
+      throw new AuthorityOperationError(
+        'unauthorized',
+        'person authentication failed',
+      );
+    }
+    values.set(key, candidates[0]!);
+  }
+
+  const state = values.get('state');
+  const code = values.get('code');
+  const error = values.get('error');
+  if (
+    state === undefined ||
+    state.length === 0 ||
+    (code === undefined) === (error === undefined) ||
+    (code !== undefined && code.length === 0) ||
+    (error !== undefined && error.length === 0)
+  ) {
+    throw new AuthorityOperationError(
+      'unauthorized',
+      'person authentication failed',
+    );
+  }
+
+  for (const key of [
+    'authuser',
+    'hd',
+    'iss',
+    'prompt',
+    'scope',
+    'session_state',
+    'error_description',
+    'error_uri',
+  ] as const) {
+    const value = values.get(key);
+    if (value !== undefined && !boundedPersonOidcCallbackAncillary(value)) {
+      throw new AuthorityOperationError(
+        'unauthorized',
+        'person authentication failed',
+      );
+    }
+  }
+  const issuer = values.get('iss');
+  if (issuer !== undefined && issuer !== expectedIssuer) {
+    throw new AuthorityOperationError(
+      'unauthorized',
+      'person authentication failed',
+    );
+  }
+  if (
+    code !== undefined &&
+    (values.has('error_description') || values.has('error_uri'))
+  ) {
+    throw new AuthorityOperationError(
+      'unauthorized',
+      'person authentication failed',
+    );
+  }
+
+  if (code !== undefined) {
+    return {
+      kind: 'authorization_code',
+      state,
+      authorization_code: code,
+    };
+  }
+  return { kind: 'provider_error', state };
+}
+
 export function decodeOrganizationApiJsonBody(bytes: Uint8Array): unknown {
   let text: string;
   try {
@@ -632,6 +879,17 @@ export interface OrganizationAuthorityHttpServerOptions {
   reviewerRecentDecisions?: OrganizationReviewerRecentDecisionsHttpApplication;
   /** Omitted means no admitted readable-search runtime is available. */
   readableSearch?: OrganizationReadableSearchHttpApplication;
+  /** Omitted until the Person session runtime is configured. */
+  personRecentDecisions?: PersonRecentDecisionsApplication;
+  personReadableSearch?: Pick<PersonReadableSearchService, 'search'>;
+  personMemberExclusions?: Pick<PersonMemberExclusionService, 'change'>;
+  personMemberExclusionReads?: Pick<
+    PersonMemberExclusionReadService,
+    'listOwn' | 'breakGlass'
+  >;
+  personSlackIdentityLink?: PersonSlackIdentityLinkHttpApplication;
+  /** Omitted until the provider-neutral Person session runtime is configured. */
+  personSessions?: PersonIdentitySessionHttpApplication;
   adminAuthenticator: AdminRequestAuthenticator;
   clientIdentityResolver: RequestClientIdentityResolver;
   adminConsole?: {
@@ -808,13 +1066,20 @@ export function createOrganizationAuthorityHttpServer(
         return;
       }
       const clientIdentity = options.clientIdentityResolver.resolve(request);
-      authenticationChallenge = url.pathname.startsWith('/v1/admin/')
+      authenticationChallenge =
+        url.pathname.startsWith('/v1/admin/') ||
+        url.pathname.startsWith('/v2/admin/')
         ? ORGANIZATION_API_ADMIN_AUTH_SCHEME
         : method === 'POST' &&
             url.pathname === ORGANIZATION_API_ENROLLMENTS_PATH
           ? ORGANIZATION_API_ENROLLMENT_AUTH_SCHEME
           : undefined;
-      if (method === 'POST') {
+      if (
+        method === 'GET' &&
+        url.pathname === PERSON_SESSION_OIDC_CALLBACK_PATH
+      ) {
+        consumeRateLimit(rateLimiter, `${clientIdentity}:person-session`);
+      } else if (method === 'POST') {
         if (url.pathname === ORGANIZATION_API_PERMISSION_CHECKS_PATH) {
           consumeRateLimit(
             permissionGlobalIngressRateLimiter,
@@ -833,7 +1098,8 @@ export function createOrganizationAuthorityHttpServer(
           const routeClass =
             url.pathname === '/admin' || url.pathname.startsWith('/admin/')
               ? 'admin-console'
-              : url.pathname.startsWith('/v1/admin/')
+              : url.pathname.startsWith('/v1/admin/') ||
+                  url.pathname.startsWith('/v2/admin/')
                 ? 'admin'
                 : url.pathname === ORGANIZATION_API_ENROLLMENTS_PATH
                   ? 'enrollment'
@@ -843,7 +1109,18 @@ export function createOrganizationAuthorityHttpServer(
                       ? 'record'
                       : url.pathname === ORGANIZATION_API_RECENT_DECISIONS_PATH
                         ? 'recent-decisions'
-                        : 'other';
+                        : url.pathname ===
+                              ORGANIZATION_API_PERSON_MEMBER_EXCLUSIONS_PATH ||
+                            url.pathname ===
+                              ORGANIZATION_API_PERSON_MEMBER_EXCLUSION_LIST_PATH ||
+                            url.pathname ===
+                              ORGANIZATION_API_PERSON_SLACK_LINK_CHALLENGES_PATH ||
+                            url.pathname ===
+                              ORGANIZATION_API_PERSON_SLACK_LINK_COMPLETIONS_PATH
+                          ? 'person-control'
+                        : url.pathname.startsWith('/v2/session/')
+                          ? 'person-session'
+                          : 'other';
           consumeRateLimit(rateLimiter, `${clientIdentity}:${routeClass}`);
         }
       }
@@ -900,6 +1177,404 @@ export function createOrganizationAuthorityHttpServer(
         } finally {
           abortLease.release();
         }
+        return;
+      }
+
+      if (url.pathname === ORGANIZATION_API_PERSON_READABLE_SEARCH_PATH) {
+        if (method !== 'POST' || url.search !== '') {
+          throw new PersonReadRequestError(
+            'Person readable-search method or query is invalid',
+          );
+        }
+        if (options.personReadableSearch === undefined) {
+          sendSerializedJson(response, 503, READABLE_SEARCH_UNAVAILABLE_BYTES);
+          return;
+        }
+        const command = await readCanonicalPersonRequest(
+          request,
+          validateOrganizationPersonReadableSearchRequest,
+          canonicalOrganizationPersonReadableSearchRequestBytes,
+        );
+        const abortLease = readableSearchAbortLease(
+          request,
+          response,
+          lifecycle.shutdownController.signal,
+        );
+        try {
+          const prepared = await options.personReadableSearch.search(
+            command,
+            personAccessToken(request.headers.authorization),
+            { signal: abortLease.signal },
+          );
+          handoffPreparedReadableSearchResponse(
+            (body) =>
+              sendPreparedReadableSearchJson(
+                response,
+                prepared.status_code,
+                body,
+              ),
+            prepared,
+          );
+        } finally {
+          abortLease.release();
+        }
+        return;
+      }
+
+      if (url.pathname === ORGANIZATION_API_PERSON_MEMBER_EXCLUSIONS_PATH) {
+        if (method !== 'POST' || url.search !== '') {
+          throw new PersonReadRequestError(
+            'Person member-exclusion method or query is invalid',
+          );
+        }
+        if (options.personMemberExclusions === undefined) {
+          sendSerializedJson(response, 503, PERSON_SESSION_UNAVAILABLE_BYTES);
+          return;
+        }
+        const command = await readCanonicalPersonRequest(
+          request,
+          validateOrganizationPersonMemberExclusionChangeRequest,
+          canonicalOrganizationPersonMemberExclusionChangeRequestBytes,
+        );
+        await options.personMemberExclusions.change(
+          command,
+          personAccessToken(request.headers.authorization),
+        );
+        sendNoContent(response);
+        return;
+      }
+
+      if (
+        url.pathname === ORGANIZATION_API_PERSON_MEMBER_EXCLUSION_LIST_PATH
+      ) {
+        if (method !== 'POST' || url.search !== '') {
+          throw new PersonReadRequestError(
+            'Person member-exclusion list method or query is invalid',
+          );
+        }
+        if (options.personMemberExclusionReads === undefined) {
+          sendSerializedJson(response, 503, PERSON_SESSION_UNAVAILABLE_BYTES);
+          return;
+        }
+        const command = await readCanonicalPersonRequest(
+          request,
+          validateOrganizationPersonMemberExclusionListRequest,
+          canonicalOrganizationPersonMemberExclusionListRequestBytes,
+        );
+        const prepared = await options.personMemberExclusionReads.listOwn(
+          command,
+          personAccessToken(request.headers.authorization),
+        );
+        handoffPreparedReadableSearchResponse(
+          (body) =>
+            sendPreparedReadableSearchJson(
+              response,
+              prepared.status_code,
+              body,
+            ),
+          prepared,
+        );
+        return;
+      }
+
+      if (
+        url.pathname ===
+        ORGANIZATION_API_ADMIN_MEMBER_EXCLUSION_BREAK_GLASS_PATH
+      ) {
+        if (method !== 'POST' || url.search !== '') {
+          throw new AuthorityOperationError(
+            'invalid_request',
+            'admin member-exclusion break-glass method or query is invalid',
+          );
+        }
+        requireAdmin(request);
+        if (options.personMemberExclusionReads === undefined) {
+          sendSerializedJson(response, 503, PERSON_SESSION_UNAVAILABLE_BYTES);
+          return;
+        }
+        const command = await readCanonicalPersonRequest(
+          request,
+          validateOrganizationAdminMemberExclusionBreakGlassReadRequest,
+          canonicalOrganizationAdminMemberExclusionBreakGlassReadRequestBytes,
+        );
+        const prepared = await options.personMemberExclusionReads.breakGlass(
+          command,
+          memberExclusionBreakGlassActorBindingSha256(
+            request.headers.authorization,
+          ),
+        );
+        handoffPreparedReadableSearchResponse(
+          (body) =>
+            sendPreparedReadableSearchJson(
+              response,
+              prepared.status_code,
+              body,
+            ),
+          prepared,
+        );
+        return;
+      }
+
+      if (
+        url.pathname === ORGANIZATION_API_PERSON_SLACK_LINK_CHALLENGES_PATH
+      ) {
+        if (method !== 'POST' || url.search !== '') {
+          throw new PersonReadRequestError(
+            'Person Slack identity-link begin method or query is invalid',
+          );
+        }
+        if (options.personSlackIdentityLink === undefined) {
+          sendSerializedJson(response, 503, PERSON_SESSION_UNAVAILABLE_BYTES);
+          return;
+        }
+        const command = await readCanonicalPersonRequest(
+          request,
+          validateOrganizationPersonSlackLinkBeginRequest,
+          canonicalOrganizationPersonSlackLinkBeginRequestBytes,
+        );
+        sendJson(
+          response,
+          201,
+          await options.personSlackIdentityLink.begin(
+            command,
+            personAccessToken(request.headers.authorization),
+            lifecycle.shutdownController.signal,
+          ),
+        );
+        return;
+      }
+
+      if (
+        url.pathname === ORGANIZATION_API_PERSON_SLACK_LINK_COMPLETIONS_PATH
+      ) {
+        if (method !== 'POST' || url.search !== '') {
+          throw new PersonReadRequestError(
+            'Person Slack identity-link complete method or query is invalid',
+          );
+        }
+        if (options.personSlackIdentityLink === undefined) {
+          sendSerializedJson(response, 503, PERSON_SESSION_UNAVAILABLE_BYTES);
+          return;
+        }
+        const command = await readCanonicalPersonRequest(
+          request,
+          validateOrganizationPersonSlackLinkCompleteRequest,
+          canonicalOrganizationPersonSlackLinkCompleteRequestBytes,
+        );
+        sendJson(
+          response,
+          200,
+          await options.personSlackIdentityLink.complete(
+            command,
+            personAccessToken(request.headers.authorization),
+            lifecycle.shutdownController.signal,
+          ),
+        );
+        return;
+      }
+
+      if (url.pathname === ORGANIZATION_API_PERSON_RECENT_DECISIONS_PATH) {
+        if (method !== 'POST' || url.search !== '') {
+          throw new PersonReadRequestError(
+            'Person recent-decisions method or query is invalid',
+          );
+        }
+        if (options.personRecentDecisions === undefined) {
+          sendSerializedJson(
+            response,
+            503,
+            fixedRecentDecisionsErrorBytes(503),
+          );
+          return;
+        }
+        const command = await readCanonicalPersonRequest(
+          request,
+          validateOrganizationPersonRecentDecisionsRequest,
+          canonicalOrganizationPersonRecentDecisionsRequestBytes,
+        );
+        const prepared = options.personRecentDecisions.recentDecisions({
+          request: command,
+          access_token: personAccessToken(request.headers.authorization),
+        });
+        sendSerializedJson(response, prepared.status_code, prepared.body);
+        return;
+      }
+
+      if (
+        url.pathname === ORGANIZATION_API_PERSON_REVIEWER_RECENT_DECISIONS_PATH
+      ) {
+        if (method !== 'POST' || url.search !== '') {
+          throw new PersonReadRequestError(
+            'Person reviewer recent-decisions method or query is invalid',
+          );
+        }
+        if (options.personRecentDecisions === undefined) {
+          sendSerializedJson(
+            response,
+            503,
+            fixedReviewerRecentDecisionsErrorBytes(503),
+          );
+          return;
+        }
+        const command = await readCanonicalPersonRequest(
+          request,
+          validateOrganizationPersonReviewerRecentDecisionsRequest,
+          canonicalOrganizationPersonReviewerRecentDecisionsRequestBytes,
+        );
+        const prepared = options.personRecentDecisions.reviewerRecentDecisions({
+          request: command,
+          access_token: personAccessToken(request.headers.authorization),
+        });
+        sendSerializedJson(response, prepared.status_code, prepared.body);
+        return;
+      }
+
+      const personLoginGrantRoute = PERSON_LOGIN_GRANT_ROUTE.exec(url.pathname);
+      if (personLoginGrantRoute !== null) {
+        if (method !== 'POST' || url.search !== '') {
+          throw new AuthorityOperationError(
+            'invalid_request',
+            'Person login-grant method or query is invalid',
+          );
+        }
+        requireAdmin(request);
+        if (options.personSessions === undefined) {
+          sendSerializedJson(response, 503, PERSON_SESSION_UNAVAILABLE_BYTES);
+          return;
+        }
+        const body = personSessionRequestObject(await readJsonBody(request), [
+          'expected_email',
+        ]);
+        sendJson(
+          response,
+          201,
+          await options.personSessions.issueBootstrapLoginGrant({
+            target_membership_id: personLoginGrantRoute[1]!,
+            expected_email: personSessionString(
+              body['expected_email'],
+              'expected email',
+            ),
+          }),
+        );
+        return;
+      }
+
+      if (url.pathname === PERSON_SESSION_OIDC_BEGIN_PATH) {
+        if (method !== 'POST' || url.search !== '') {
+          throw new AuthorityOperationError(
+            'invalid_request',
+            'Person OIDC begin method or query is invalid',
+          );
+        }
+        if (options.personSessions === undefined) {
+          sendSerializedJson(response, 503, PERSON_SESSION_UNAVAILABLE_BYTES);
+          return;
+        }
+        sendJson(
+          response,
+          201,
+          await options.personSessions.beginOidcLogin(
+            personOidcBeginInput(await readJsonBody(request)),
+          ),
+        );
+        return;
+      }
+
+      if (url.pathname === PERSON_SESSION_OIDC_CALLBACK_PATH) {
+        if (method !== 'GET') {
+          throw new AuthorityOperationError(
+            'invalid_request',
+            'Person OIDC callback method is invalid',
+          );
+        }
+        if (options.personSessions === undefined) {
+          sendSerializedJson(response, 503, PERSON_SESSION_UNAVAILABLE_BYTES);
+          return;
+        }
+        const callback = personOidcCallbackInput(
+          url,
+          options.personSessions.expected_issuer,
+        );
+        if (callback.kind === 'provider_error') {
+          try {
+            await options.personSessions.completeOidcLogin({
+              state: callback.state,
+              authorization_code: '',
+            });
+          } catch {
+            // The application owns terminalization. Every provider error has
+            // the same public result whether that terminal write succeeds.
+          }
+          throw new AuthorityOperationError(
+            'unauthorized',
+            'person authentication failed',
+          );
+        }
+        sendJson(
+          response,
+          200,
+          await options.personSessions.completeOidcLogin({
+            state: callback.state,
+            authorization_code: callback.authorization_code,
+          }),
+        );
+        return;
+      }
+
+      if (url.pathname === PERSON_SESSION_REFRESH_PATH) {
+        if (method !== 'POST' || url.search !== '') {
+          throw new AuthorityOperationError(
+            'invalid_request',
+            'Person session refresh method or query is invalid',
+          );
+        }
+        if (options.personSessions === undefined) {
+          sendSerializedJson(response, 503, PERSON_SESSION_UNAVAILABLE_BYTES);
+          return;
+        }
+        const body = personSessionRequestObject(
+          await readJsonBody(request),
+          ['refresh_token'],
+        );
+        sendJson(
+          response,
+          200,
+          await options.personSessions.refresh({
+            refresh_token: personSessionString(
+              body['refresh_token'],
+              'refresh token',
+            ),
+          }),
+        );
+        return;
+      }
+
+      if (url.pathname === PERSON_SESSION_REVOCATIONS_PATH) {
+        if (method !== 'POST' || url.search !== '') {
+          throw new AuthorityOperationError(
+            'invalid_request',
+            'Person session revocation method or query is invalid',
+          );
+        }
+        if (options.personSessions === undefined) {
+          sendSerializedJson(response, 503, PERSON_SESSION_UNAVAILABLE_BYTES);
+          return;
+        }
+        personSessionRequestObject(await readJsonBody(request), []);
+        authenticationChallenge = ORGANIZATION_API_ADMIN_AUTH_SCHEME;
+        const accessToken = personAccessToken(request.headers.authorization);
+        if (accessToken === '') {
+          throw new AuthorityOperationError(
+            'unauthorized',
+            'person authentication failed',
+          );
+        }
+        await options.personSessions.revoke({
+          credential_kind: 'access',
+          credential: accessToken,
+          reason: 'person_logout',
+        });
+        sendNoContent(response);
         return;
       }
 
@@ -982,25 +1657,6 @@ export function createOrganizationAuthorityHttpServer(
             response,
             200,
             options.application.listAudit(adminPageRequest(url)),
-          );
-          return;
-        }
-
-        if (
-          method === 'GET' &&
-          url.pathname === ORGANIZATION_API_ADMIN_INTERNAL_LIVE_ROLLOUT_PATH
-        ) {
-          requireAdmin(request);
-          if (url.search !== '') {
-            throw new AuthorityOperationError(
-              'invalid_request',
-              'internal-live rollout query parameters are not supported',
-            );
-          }
-          sendJson(
-            response,
-            200,
-            options.application.internalLiveRolloutStatus(),
           );
           return;
         }
@@ -1174,33 +1830,6 @@ export function createOrganizationAuthorityHttpServer(
           const prepared =
             options.reviewerRecentDecisions.reviewerRecentDecisions(command);
           sendSerializedJson(response, prepared.status_code, prepared.body);
-          return;
-        }
-
-        if (
-          method === 'POST' &&
-          url.pathname === ORGANIZATION_API_INTERNAL_LIVE_DIRECTIVES_PATH
-        ) {
-          const command = validateOrganizationInternalLiveDirectiveRequest(
-            await readJsonBody(request),
-          );
-          sendJson(
-            response,
-            200,
-            options.application.fetchInternalLiveDirective(command),
-          );
-          return;
-        }
-
-        if (
-          method === 'POST' &&
-          url.pathname === ORGANIZATION_API_INTERNAL_LIVE_RECEIPTS_PATH
-        ) {
-          const receipt = validateOrganizationInternalLiveUpdateReceipt(
-            await readJsonBody(request),
-          );
-          options.application.recordInternalLiveUpdateReceipt(receipt);
-          sendNoContent(response);
           return;
         }
 
@@ -1424,22 +2053,6 @@ export function createOrganizationAuthorityHttpServer(
 
         if (
           method === 'POST' &&
-          url.pathname === ORGANIZATION_API_ADMIN_INTERNAL_LIVE_RELEASES_PATH
-        ) {
-          requireAdmin(request);
-          const command = validateApproveOrganizationInternalLiveReleaseRequest(
-            await readJsonBody(request),
-          );
-          sendJson(
-            response,
-            201,
-            options.application.approveInternalLiveRelease(command),
-          );
-          return;
-        }
-
-        if (
-          method === 'POST' &&
           url.pathname ===
             ORGANIZATION_API_ADMIN_SLACK_APPROVAL_ACTIVATION_PATH
         ) {
@@ -1512,6 +2125,10 @@ export function createOrganizationAuthorityHttpServer(
 
         sendJson(response, 404, errorBody('not_found', 'route was not found'));
       } catch (error) {
+        if (error instanceof PersonReadRequestError) {
+          sendSerializedJson(response, 400, PERSON_READ_INVALID_REQUEST_BYTES);
+          return;
+        }
         if (error instanceof ReadableSearchError) {
           const status =
             error.code === 'invalid_request'

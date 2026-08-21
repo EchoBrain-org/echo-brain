@@ -1,26 +1,13 @@
 import { createHash, randomBytes, randomUUID } from 'node:crypto';
 import {
-  closeSync,
-  constants as fsConstants,
-  fstatSync,
-  lstatSync,
-  openSync,
-  readFileSync,
-  realpathSync,
-} from 'node:fs';
-import {
   MAX_ENROLLMENT_GRANT_LIFETIME_SECONDS,
   MAX_ORGANIZATION_API_CURSOR_CHARACTERS,
   MAX_ORGANIZATION_API_PAGE_ITEMS,
-  organizationInternalLiveManifestSha256,
-  validateApproveOrganizationInternalLiveReleaseRequest,
-  validateOrganizationInternalLiveReleaseManifest,
   validateProvisionOrganizationMembershipRequest,
   validateRecoverOrganizationInstallationAccessRequest,
   validateRevokeOrganizationSubjectRequest,
 } from '@echo-brain/organization-api';
 import type {
-  ApproveOrganizationInternalLiveReleaseRequestV1,
   IssueOrganizationEnrollmentGrantRequestV1,
   IssuedOrganizationEnrollmentGrantV1,
   OrganizationAdminOverviewV1,
@@ -28,9 +15,6 @@ import type {
   OrganizationAuditPageV1,
   OrganizationEnrollmentGrantPageV1,
   OrganizationInstallationPageV1,
-  OrganizationInternalLiveReleaseManifestV1,
-  OrganizationInternalLiveRolloutStatusV1,
-  OrganizationInternalLiveUpdateDirectiveV1,
   OrganizationMembershipPageV1,
   ProvisionedOrganizationMembershipV1,
   ProvisionOrganizationMembershipRequestV1,
@@ -55,7 +39,6 @@ import {
   recordOrganizationInvitationIssued,
 } from '../adapters/files/private-organization-invitation.js';
 import {
-  normalizedAbsolutePath,
   readAuthorityRuntimeConfig,
   resolveAuthorityServeConfig,
 } from './operator-config.js';
@@ -75,11 +58,7 @@ const USAGE = `usage:
   echo-organization-admin member revoke --config <absolute-path> --membership-id <mem_UUIDv4> --reason <reason>
   echo-organization-admin installation revoke --config <absolute-path> --installation-id <ins_UUIDv4> --reason <reason>
   echo-organization-admin installation access-recover --config <absolute-path> --installation-id <ins_UUIDv4> --local-access-sequence <positive-integer> --reason <reason>
-  echo-organization-admin slack approval activate --config <absolute-path> --administrator-membership-id <mem_UUIDv4> --target-membership-id <mem_UUIDv4> --installation-id <ins_UUIDv4> --identity-link-id <clm_UUIDv4> --adapter-binding-id <bnd_UUIDv4> [--command-id <adm_UUIDv4>]
-
-INTERNAL LIVE:
-  echo-organization-admin internal-live release approve --config <absolute-path> --manifest <absolute-path> [--command-id <adm_UUIDv4>]
-  echo-organization-admin internal-live rollout status --config <absolute-path>`;
+  echo-organization-admin slack approval activate --config <absolute-path> --administrator-membership-id <mem_UUIDv4> --target-membership-id <mem_UUIDv4> --installation-id <ins_UUIDv4> --identity-link-id <clm_UUIDv4> --adapter-binding-id <bnd_UUIDv4> [--command-id <adm_UUIDv4>]`;
 
 const UUID_V4_SOURCE =
   '[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}';
@@ -90,9 +69,6 @@ const IDENTITY_LINK_ID_PATTERN = new RegExp(`^clm_${UUID_V4_SOURCE}$`);
 const ADAPTER_BINDING_ID_PATTERN = new RegExp(`^bnd_${UUID_V4_SOURCE}$`);
 const MAX_CLI_ARGUMENTS = 24;
 const MAX_CLI_ARGUMENT_CHARACTERS = 4096;
-const MAX_INTERNAL_LIVE_MANIFEST_BYTES = 64 * 1024;
-const INTERNAL_LIVE_MANIFEST_FILENAME =
-  'internal-live-release-manifest.v1.json';
 
 export interface OrganizationAdminCliIo {
   stdout(value: string): void;
@@ -135,10 +111,6 @@ export interface OrganizationAdminCliClient {
   activateSlackApproval(
     input: ActivateOrganizationSlackApprovalRequest,
   ): Promise<ActivatedOrganizationSlackApproval>;
-  approveInternalLiveRelease(
-    input: ApproveOrganizationInternalLiveReleaseRequestV1,
-  ): Promise<OrganizationInternalLiveUpdateDirectiveV1>;
-  internalLiveRolloutStatus(): Promise<OrganizationInternalLiveRolloutStatusV1>;
 }
 
 export interface OrganizationAdminCliDependencies {
@@ -290,75 +262,6 @@ function validateBoundedText(
 
 function generatedCommandId(randomUuid: () => string): string {
   return canonicalId(`adm_${randomUuid()}`, COMMAND_ID_PATTERN, 'command_id');
-}
-
-function readInternalLiveManifest(
-  manifestPath: string,
-): OrganizationInternalLiveReleaseManifestV1 {
-  let bytes: Buffer;
-  try {
-    const path = normalizedAbsolutePath(
-      manifestPath,
-      'INTERNAL LIVE manifest path',
-    );
-    const state = lstatSync(path);
-    const currentUid = process.getuid?.();
-    if (
-      state.isSymbolicLink() ||
-      !state.isFile() ||
-      state.size <= 0 ||
-      state.size > MAX_INTERNAL_LIVE_MANIFEST_BYTES ||
-      (currentUid !== undefined && state.uid !== currentUid) ||
-      (state.mode & 0o022) !== 0 ||
-      realpathSync(path) !== path
-    ) {
-      throw new Error('unsafe manifest file');
-    }
-    const noFollow = fsConstants.O_NOFOLLOW ?? 0;
-    const file = openSync(path, fsConstants.O_RDONLY | noFollow);
-    try {
-      const opened = fstatSync(file);
-      if (
-        opened.dev !== state.dev ||
-        opened.ino !== state.ino ||
-        opened.size !== state.size ||
-        !opened.isFile()
-      ) {
-        throw new Error('manifest changed while opening');
-      }
-      bytes = readFileSync(file);
-      const afterRead = fstatSync(file);
-      if (
-        bytes.byteLength !== opened.size ||
-        afterRead.size !== opened.size ||
-        afterRead.mtimeMs !== opened.mtimeMs ||
-        afterRead.ctimeMs !== opened.ctimeMs
-      ) {
-        throw new Error('manifest changed while reading');
-      }
-    } finally {
-      closeSync(file);
-    }
-  } catch {
-    throw new Error(
-      'INTERNAL LIVE manifest must be a bounded current-user canonical regular file that is not writable by group or others',
-    );
-  }
-
-  let parsed: unknown;
-  try {
-    const text = new TextDecoder('utf-8', { fatal: true }).decode(bytes);
-    parsed = JSON.parse(text) as unknown;
-  } catch {
-    throw new Error('INTERNAL LIVE manifest must contain valid UTF-8 JSON');
-  }
-  return validateOrganizationInternalLiveReleaseManifest(parsed);
-}
-
-function internalLiveManifestUrl(
-  manifest: OrganizationInternalLiveReleaseManifestV1,
-): string {
-  return `https://github.com/${manifest.build.repository}/releases/download/${encodeURIComponent(manifest.release_tag)}/${INTERNAL_LIVE_MANIFEST_FILENAME}`;
 }
 
 function baseUrl(host: '127.0.0.1' | '::1', port: number): string {
@@ -724,72 +627,6 @@ async function runSlackApprovalActivate(
   return 0;
 }
 
-async function runInternalLiveReleaseApprove(
-  arguments_: readonly string[],
-  io: OrganizationAdminCliIo,
-  dependencies: OrganizationAdminCliDependencies,
-): Promise<number> {
-  const flags = parseFlags(arguments_, [
-    '--config',
-    '--manifest',
-    '--command-id',
-  ]);
-  const suppliedCommand = optionalCanonicalId(
-    flags['--command-id'],
-    COMMAND_ID_PATTERN,
-    'command_id',
-  );
-  const manifest = readInternalLiveManifest(
-    requiredFlag(flags, '--manifest'),
-  );
-  const manifestSha256 = organizationInternalLiveManifestSha256(manifest);
-  const request = validateApproveOrganizationInternalLiveReleaseRequest({
-    schema_version: 1,
-    kind: 'echo-internal-live-release-approval-request',
-    command_id:
-      suppliedCommand ??
-      generatedCommandId(dependencies.random_uuid ?? randomUUID),
-    manifest_url: internalLiveManifestUrl(manifest),
-    manifest_sha256: manifestSha256,
-    manifest,
-  });
-  const context = await commandContext(
-    requiredFlag(flags, '--config'),
-    dependencies,
-  );
-  const directive = await context.client.approveInternalLiveRelease(request);
-  outputJson(io, {
-    schema_version: 1,
-    kind: 'echo-organization-internal-live-release-approved',
-    promotion_stage: 'INTERNAL LIVE',
-    command_id: request.command_id,
-    release: {
-      release_version: manifest.release_version,
-      release_tag: manifest.release_tag,
-      source_sha: manifest.source.sha,
-      artifact_filename: manifest.artifact.filename,
-      artifact_sha256: manifest.artifact.sha256,
-      manifest_sha256: manifestSha256,
-    },
-    directive,
-  });
-  return 0;
-}
-
-async function runInternalLiveRolloutStatus(
-  arguments_: readonly string[],
-  io: OrganizationAdminCliIo,
-  dependencies: OrganizationAdminCliDependencies,
-): Promise<number> {
-  const flags = parseFlags(arguments_, ['--config']);
-  const context = await commandContext(
-    requiredFlag(flags, '--config'),
-    dependencies,
-  );
-  outputJson(io, await context.client.internalLiveRolloutStatus());
-  return 0;
-}
-
 export async function runOrganizationAuthorityAdminCli(
   arguments_: readonly string[],
   io: OrganizationAdminCliIo = PROCESS_IO,
@@ -831,29 +668,6 @@ export async function runOrganizationAuthorityAdminCli(
 
   if (first === 'slack' && second === 'approval' && third === 'activate') {
     return await runSlackApprovalActivate(
-      arguments_.slice(3),
-      io,
-      dependencies,
-    );
-  }
-
-  if (
-    first === 'internal-live' &&
-    second === 'release' &&
-    third === 'approve'
-  ) {
-    return await runInternalLiveReleaseApprove(
-      arguments_.slice(3),
-      io,
-      dependencies,
-    );
-  }
-  if (
-    first === 'internal-live' &&
-    second === 'rollout' &&
-    third === 'status'
-  ) {
-    return await runInternalLiveRolloutStatus(
       arguments_.slice(3),
       io,
       dependencies,

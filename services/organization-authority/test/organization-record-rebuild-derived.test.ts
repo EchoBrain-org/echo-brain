@@ -52,7 +52,6 @@ import {
   type OrganizationAuthorityDescriptorV1,
 } from '@echo-brain/organization-protocol';
 import {
-  ORGANIZATION_RECORD_DERIVED_DATABASE,
   OrganizationRecordLogStore,
   openOrganizationRecordDatabase,
 } from '@echo-brain/organization-record/maintenance';
@@ -70,7 +69,7 @@ import {
 } from '@echo-brain/organization-retrieval/build';
 import {
   OrganizationIntegrationsRepository,
-  openOrganizationControlDatabase,
+  openAndMigrateOrganizationControlDatabase,
   organizationMemberMessagePresentationPreimage,
   organizationMemberReadableAuditDetail,
   organizationMemberReadableSemanticPreimage,
@@ -371,7 +370,6 @@ async function appendOrganizationMemberRecord(
 function derivedCursorPosition(databasePath: string): number {
   const database = openOrganizationRecordDatabase(
     databasePath,
-    ORGANIZATION_RECORD_DERIVED_DATABASE,
     { readonly: true },
   );
   try {
@@ -643,7 +641,7 @@ async function policyQualifiedBackupFixture(): Promise<PolicyQualifiedBackupFixt
     { now: () => requestedAt },
   );
 
-  const control = openOrganizationControlDatabase(
+  const control = openAndMigrateOrganizationControlDatabase(
     paths.integrations_database_path,
     { fileMustExist: true },
   );

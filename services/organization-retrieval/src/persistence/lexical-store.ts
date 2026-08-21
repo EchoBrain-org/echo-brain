@@ -1,11 +1,11 @@
 import type { RetrievalLexicalDocument, RetrievalTermPosting } from '../application/contracts.js';
 import { READABLE_SEARCH_LEXICAL_DATABASE } from './database-definition.js';
-import { openReadableSearchPlane } from './open-plane.js';
+import { openAndMigrateReadableSearchPlane } from './open-plane.js';
 import { ReadableSearchPlaneStore } from './plane-store.js';
 
 export class ReadableSearchLexicalStore extends ReadableSearchPlaneStore {
   private constructor(path: string) {
-    super(openReadableSearchPlane(path, READABLE_SEARCH_LEXICAL_DATABASE), 'lexical');
+    super(openAndMigrateReadableSearchPlane(path, READABLE_SEARCH_LEXICAL_DATABASE), 'lexical');
   }
 
   static open(path: string): ReadableSearchLexicalStore {

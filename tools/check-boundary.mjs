@@ -150,14 +150,16 @@ function isStringArray(value) {
 
 function checkWorkspaceBoundaries(tree, errors) {
   const registry = parseJsonFile(tree, WORKSPACE_BOUNDARY_REGISTRY, errors);
-  if (registry === null) return [];
+  if (registry === null) {
+    return { report: [], productWorkspaceSourceRoots: [] };
+  }
   if (
     registry.registry_version !== 1 ||
     registry.kind !== 'echo-workspace-source-boundary-registry' ||
     !Array.isArray(registry.manifests)
   ) {
     errors.push(`invalid workspace boundary registry: ${WORKSPACE_BOUNDARY_REGISTRY}`);
-    return [];
+    return { report: [], productWorkspaceSourceRoots: [] };
   }
   if (new Set(registry.manifests).size !== registry.manifests.length) {
     errors.push(`workspace boundary registry contains duplicate manifest paths`);
@@ -553,15 +555,23 @@ function checkWorkspaceBoundaries(tree, errors) {
     }
   }
 
-  return boundaries
-    .map(({ manifest }) => ({
-      name: manifest.name,
-      root: manifest.boundary_root,
-      entry_points: [...manifest.entry_points].sort(),
-      allowed_workspace_packages: [...manifest.allowed_workspace_packages].sort(),
-      layer_rules: (manifest.layer_rules ?? []).map((rule) => rule.name).sort(),
-    }))
-    .sort((left, right) => left.name.localeCompare(right.name));
+  return {
+    report: boundaries
+      .map(({ manifest }) => ({
+        name: manifest.name,
+        root: manifest.boundary_root,
+        entry_points: [...manifest.entry_points].sort(),
+        allowed_workspace_packages: [...manifest.allowed_workspace_packages].sort(),
+        layer_rules: (manifest.layer_rules ?? []).map((rule) => rule.name).sort(),
+      }))
+      .sort((left, right) => left.name.localeCompare(right.name)),
+    productWorkspaceSourceRoots: boundaries
+      .filter(
+        ({ manifest }) =>
+          manifest.workspace === true && isWithin(manifest.source_root, 'src/product'),
+      )
+      .map(({ manifest }) => manifest.source_root),
+  };
 }
 
 function main() {
@@ -574,13 +584,18 @@ function main() {
   const layerRules = boundary.layer_rules ?? [];
   const adapterArchitecture = boundary.adapter_architecture;
   const errors = [];
-  const workspaceBoundaries = checkWorkspaceBoundaries(tree, errors);
+  const {
+    report: workspaceBoundaries,
+    productWorkspaceSourceRoots,
+  } = checkWorkspaceBoundaries(tree, errors);
   const runtimeAssets = boundary.runtime_assets ?? [];
   for (const asset of runtimeAssets) {
     if (!tree.has(asset)) errors.push(`runtime asset missing from worktree: ${asset}`);
   }
 
-  const isAllowed = (p) => allowed.some((g) => matchesGlob(p, g));
+  const isAllowed = (p) =>
+    allowed.some((g) => matchesGlob(p, g)) &&
+    !productWorkspaceSourceRoots.some((root) => isWithin(p, root));
   const isForbidden = (p) => forbidden.some((g) => matchesGlob(p, g));
 
   for (const rule of layerRules) {
@@ -618,11 +633,13 @@ function main() {
 
   const discoveredAdapterIds = new Set();
   if (adapterArchitecture?.forbid_discovered_adapter_ids_in_core === true) {
-    for (const [path] of tree) {
-      if (!path.startsWith(adapterArchitecture.adapters_root)) continue;
-      const relative = path.slice(adapterArchitecture.adapters_root.length);
-      const parts = relative.split('/');
-      if (parts.length >= 3) discoveredAdapterIds.add(parts[1]);
+    for (const adaptersRoot of adapterArchitecture.adapters_roots) {
+      for (const [path] of tree) {
+        if (!path.startsWith(adaptersRoot)) continue;
+        const relative = path.slice(adaptersRoot.length);
+        const parts = relative.split('/');
+        if (parts.length >= 3) discoveredAdapterIds.add(parts[1]);
+      }
     }
     for (const [path] of tree) {
       if (

@@ -26,7 +26,7 @@ import {
 } from '../application/log-row.js';
 import { verifyOrganizationRecordChain } from './chain-verification.js';
 import { ORGANIZATION_RECORD_LOG_DATABASE } from '../persistence/database-definition.js';
-import { openOrganizationRecordDatabase } from '../persistence/open-database.js';
+import { openAndMigrateOrganizationRecordDatabase } from '../persistence/open-database.js';
 
 interface StoredActivationRow {
   organization_id: string;
@@ -183,7 +183,7 @@ export class OrganizationPermissionPilotLog {
     databasePath: string,
     options: { readonly organization_id: string; readonly authority_id: string },
   ): OrganizationPermissionPilotLog {
-    const database = openOrganizationRecordDatabase(
+    const database = openAndMigrateOrganizationRecordDatabase(
       databasePath,
       ORGANIZATION_RECORD_LOG_DATABASE,
       { fileMustExist: true },

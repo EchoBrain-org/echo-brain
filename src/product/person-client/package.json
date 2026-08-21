@@ -1,0 +1,40 @@
+{
+  "name": "@echo-brain/person-client",
+  "version": "0.1.0-internal.1",
+  "private": true,
+  "description": "Thin Person-authenticated client for an organization-operated ECHO Authority",
+  "license": "MIT",
+  "type": "module",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "bin": {
+    "echo-brain": "dist/main.js"
+  },
+  "files": [
+    "dist/**"
+  ],
+  "bundleDependencies": [
+    "@echo-brain/federation-protocol",
+    "@echo-brain/organization-protocol",
+    "@echo-brain/organization-api"
+  ],
+  "scripts": {
+    "build": "tsc -b",
+    "clean": "tsc -b --clean"
+  },
+  "dependencies": {
+    "@echo-brain/federation-protocol": "0.0.0-dev.0",
+    "@echo-brain/organization-api": "0.0.0-dev.0",
+    "@echo-brain/organization-protocol": "0.0.0-dev.0"
+  },
+  "engines": {
+    "node": "22.22.1",
+    "npm": "10.9.4"
+  }
+}

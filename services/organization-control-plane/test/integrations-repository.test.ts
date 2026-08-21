@@ -20,10 +20,13 @@ import {
   FileOrganizationSecretStore,
   OrganizationIntegrationConflictError,
   OrganizationIntegrationsRepository,
-  openOrganizationControlDatabase,
+  openAndMigrateOrganizationControlDatabase,
   type ActivateExistingSlackApprovalInput,
+  type CompletePersonSlackIdentityLinkChallengeInput,
+  type CompletedPersonSlackIdentityLink,
   type CompletedSlackIdentityLink,
   type OnboardSlackOrganizationToolInput,
+  type PersonSlackIdentityLinkSession,
 } from "../src/index.js";
 import { migrateOrganizationControlDatabaseWithMigrations } from "../src/persistence/migrate.js";
 
@@ -40,7 +43,7 @@ function digest(value: string): `sha256:${string}` {
 }
 
 function database() {
-  const database = openOrganizationControlDatabase(":memory:");
+  const database = openAndMigrateOrganizationControlDatabase(":memory:");
   database
     .prepare(
       `INSERT INTO organization_control_plane_metadata (
@@ -179,6 +182,54 @@ const INSTALLATION = {
   installation_id: INSTALLATION_ID,
   installation_key_id: digest("installation-key"),
 } as const;
+
+const PERSON_SESSION = {
+  authority_id: AUTHORITY_ID,
+  organization_id: ORGANIZATION_ID,
+  principal_id: PRINCIPAL_ID,
+  membership_id: MEMBERSHIP_ID,
+  identity_binding_id: "oib_11111111-1111-4111-8111-111111111111",
+  session_family_id: "psf_22222222-2222-4222-8222-222222222222",
+} as const satisfies PersonSlackIdentityLinkSession;
+
+function personSlackIdentityLinkCompletion(
+  challengeAttemptId: string,
+  organizationTool: NonNullable<
+    ReturnType<OrganizationIntegrationsRepository["activeSlackOrganizationTool"]>
+  >,
+  input: {
+    command?: string;
+    challenge?: string;
+    message_ts?: string;
+    user_id?: string;
+    person_session?: PersonSlackIdentityLinkSession;
+    now?: string;
+  } = {},
+): CompletePersonSlackIdentityLinkChallengeInput {
+  const command = input.command ?? "person-link-complete-one";
+  const challenge = input.challenge ?? "person-challenge-one";
+  const messageTs = input.message_ts ?? "1753822800.000001";
+  const now = input.now ?? NOW;
+  return {
+    command_id: `psc_${command}`,
+    command_sha256: digest(command),
+    challenge_attempt_id: challengeAttemptId,
+    challenge_code_sha256: digest(challenge),
+    challenge_message_ts: messageTs,
+    person_session: input.person_session ?? PERSON_SESSION,
+    organization_tool: organizationTool,
+    observed: {
+      team_id: "T123TEAM",
+      user_id: input.user_id ?? "U_PERSON",
+      channel_id: "C123CHANNEL",
+      challenge_message_ts: messageTs,
+      reply_message_ts: "1753822801.000001",
+      verification_evidence_sha256: digest(`${command}-observation`),
+    },
+    authority_checked_at: now,
+    now,
+  };
+}
 
 function completeSlackIdentityLink(
   repository: OrganizationIntegrationsRepository,
@@ -745,6 +796,252 @@ describe("organization integrations repository", () => {
     repository.close();
   });
 
+  it("links a Slack human to an exact Person session without creating an installation binding or grant", () => {
+    const integrationDatabase = database();
+    const repository = new OrganizationIntegrationsRepository(
+      integrationDatabase,
+      {
+        organization_id: ORGANIZATION_ID,
+        authority_id: AUTHORITY_ID,
+      },
+    );
+    repository.onboardSlackOrganizationTool(
+      organizationToolInput(
+        "organization-slack-before-person-link",
+        "sch_55555555-5555-4555-8555-555555555555",
+      ),
+    );
+    const organizationTool = repository.activeSlackOrganizationTool()!;
+    const begun = repository.beginPersonSlackIdentityLinkChallenge({
+      request_sha256: digest("person-link-begin-one"),
+      challenge_code_sha256: digest("person-challenge-one"),
+      person_session: PERSON_SESSION,
+      organization_tool: organizationTool,
+      now: NOW,
+    });
+
+    expect(
+      repository.personSlackIdentityLinkChallenge({
+        challenge_attempt_id: begun.challenge_attempt_id,
+        challenge_code_sha256: digest("person-challenge-one"),
+        person_session: PERSON_SESSION,
+        organization_tool: organizationTool,
+        now: NOW,
+      }),
+    ).toEqual({
+      ...begun,
+      principal_id: PRINCIPAL_ID,
+      membership_id: MEMBERSHIP_ID,
+    });
+
+    const completion = personSlackIdentityLinkCompletion(
+      begun.challenge_attempt_id,
+      organizationTool,
+    );
+    const completed =
+      repository.completePersonSlackIdentityLinkChallenge(completion);
+    expect(completed).toMatchObject({
+      schema_version: 2,
+      kind: "echo-organization-person-slack-link-result",
+      organization_id: ORGANIZATION_ID,
+      principal_id: PRINCIPAL_ID,
+      membership_id: MEMBERSHIP_ID,
+      provider_subject_id: "U_PERSON",
+      identity_link_created: true,
+    } satisfies Partial<CompletedPersonSlackIdentityLink>);
+    expect(
+      repository.personSlackIdentityLinkCompletionReplay(
+        completion.command_id,
+        completion.command_sha256,
+      ),
+    ).toEqual(completed);
+    expect(repository.completePersonSlackIdentityLinkChallenge(completion)).toEqual(
+      completed,
+    );
+    expect(
+      repository.completePersonSlackIdentityLinkChallenge({
+        ...completion,
+        command_id: "psc_person-link-response-loss-retry",
+        command_sha256: digest("person-link-response-loss-retry"),
+      }),
+    ).toEqual(completed);
+
+    const overview = repository.overview();
+    expect(overview.identity_links).toEqual([
+      expect.objectContaining({
+        identity_link_id: completed.identity_link_id,
+        membership_id: MEMBERSHIP_ID,
+        provider_subject_id: "U_PERSON",
+      }),
+    ]);
+    expect(overview.adapter_bindings).toEqual([]);
+    expect(overview.permission_grants).toEqual([]);
+    expect(overview.recent_audit[0]).toMatchObject({
+      actor_kind: "membership",
+      action: "person_slack_identity_link.completed",
+      outcome: "succeeded",
+      reason_code: "person_proved_slack_identity",
+    });
+    expect(
+      integrationDatabase
+        .prepare(
+          `SELECT actor_principal_id, actor_membership_id,
+                  actor_installation_id, identity_link_id,
+                  adapter_binding_id, permission_grant_id
+           FROM organization_integration_audit
+           WHERE action = 'person_slack_identity_link.completed'`,
+        )
+        .get(),
+    ).toEqual({
+      actor_principal_id: PRINCIPAL_ID,
+      actor_membership_id: MEMBERSHIP_ID,
+      actor_installation_id: null,
+      identity_link_id: completed.identity_link_id,
+      adapter_binding_id: null,
+      permission_grant_id: null,
+    });
+    expect(repository.verifyIntegrationAuditChain()).toMatchObject({
+      valid: true,
+    });
+    expect(
+      integrationDatabase
+        .prepare(
+          `SELECT redirect_uri, status
+           FROM organization_connection_attempts
+           WHERE connection_attempt_id = ?`,
+        )
+        .get(begun.challenge_attempt_id),
+    ).toEqual({
+      redirect_uri: "urn:echo:organization:person:slack-channel-link",
+      status: "succeeded",
+    });
+    repository.close();
+  });
+
+  it("binds a Person Slack challenge to its exact session and active membership identity", () => {
+    const integrationDatabase = database();
+    const repository = new OrganizationIntegrationsRepository(
+      integrationDatabase,
+      {
+        organization_id: ORGANIZATION_ID,
+        authority_id: AUTHORITY_ID,
+      },
+    );
+    repository.onboardSlackOrganizationTool(
+      organizationToolInput(
+        "organization-slack-person-binding",
+        "sch_66666666-6666-4666-8666-666666666666",
+      ),
+    );
+    const organizationTool = repository.activeSlackOrganizationTool()!;
+    const begun = repository.beginPersonSlackIdentityLinkChallenge({
+      request_sha256: digest("person-binding-begin"),
+      challenge_code_sha256: digest("person-binding-challenge"),
+      person_session: PERSON_SESSION,
+      organization_tool: organizationTool,
+      now: NOW,
+    });
+    const differentFamily = {
+      ...PERSON_SESSION,
+      session_family_id: "psf_33333333-3333-4333-8333-333333333333",
+    };
+    expect(() =>
+      repository.personSlackIdentityLinkChallenge({
+        challenge_attempt_id: begun.challenge_attempt_id,
+        challenge_code_sha256: digest("person-binding-challenge"),
+        person_session: differentFamily,
+        organization_tool: organizationTool,
+        now: NOW,
+      }),
+    ).toThrow("does not match this session");
+    expect(() =>
+      repository.personSlackIdentityLinkChallenge({
+        challenge_attempt_id: begun.challenge_attempt_id,
+        challenge_code_sha256: digest("wrong-person-challenge"),
+        person_session: PERSON_SESSION,
+        organization_tool: organizationTool,
+        now: NOW,
+      }),
+    ).toThrow("does not match this session");
+    expect(() =>
+      repository.slackIdentityLinkChallenge({
+        challenge_attempt_id: begun.challenge_attempt_id,
+        challenge_code_sha256: digest("person-binding-challenge"),
+        installation: INSTALLATION,
+        organization_tool: organizationTool,
+        now: NOW,
+      }),
+    ).toThrow("does not match this installation");
+
+    const first = repository.completePersonSlackIdentityLinkChallenge(
+      personSlackIdentityLinkCompletion(
+        begun.challenge_attempt_id,
+        organizationTool,
+        { challenge: "person-binding-challenge" },
+      ),
+    );
+    const anotherMemberSession = {
+      ...PERSON_SESSION,
+      principal_id: "prn_other-person",
+      membership_id: "mem_other-membership",
+      identity_binding_id: "oib_44444444-4444-4444-8444-444444444444",
+      session_family_id: "psf_55555555-5555-4555-8555-555555555555",
+    };
+    const conflicting = repository.beginPersonSlackIdentityLinkChallenge({
+      request_sha256: digest("person-binding-conflicting-begin"),
+      challenge_code_sha256: digest("person-binding-conflicting-challenge"),
+      person_session: anotherMemberSession,
+      organization_tool: organizationTool,
+      now: "2026-07-29T20:01:00.000Z",
+    });
+    expect(() =>
+      repository.completePersonSlackIdentityLinkChallenge(
+        personSlackIdentityLinkCompletion(
+          conflicting.challenge_attempt_id,
+          organizationTool,
+          {
+            command: "person-link-conflicting-member",
+            challenge: "person-binding-conflicting-challenge",
+            message_ts: "1753822860.000001",
+            person_session: anotherMemberSession,
+            user_id: first.provider_subject_id,
+            now: "2026-07-29T20:01:00.000Z",
+          },
+        ),
+      ),
+    ).toThrow("already linked to another active membership");
+    expect(repository.overview().identity_links).toHaveLength(1);
+    expect(repository.overview().adapter_bindings).toEqual([]);
+    expect(repository.overview().permission_grants).toEqual([]);
+
+    const expiring = repository.beginPersonSlackIdentityLinkChallenge({
+      request_sha256: digest("person-binding-expiring-begin"),
+      challenge_code_sha256: digest("person-binding-expiring-challenge"),
+      person_session: PERSON_SESSION,
+      organization_tool: organizationTool,
+      now: "2026-07-29T20:02:00.000Z",
+    });
+    expect(() =>
+      repository.personSlackIdentityLinkChallenge({
+        challenge_attempt_id: expiring.challenge_attempt_id,
+        challenge_code_sha256: digest("person-binding-expiring-challenge"),
+        person_session: PERSON_SESSION,
+        organization_tool: organizationTool,
+        now: "2026-07-29T20:17:00.000Z",
+      }),
+    ).toThrow("Person Slack identity link challenge expired");
+    expect(
+      integrationDatabase
+        .prepare(
+          `SELECT status, outcome_reason
+           FROM organization_connection_attempts
+           WHERE connection_attempt_id = ?`,
+        )
+        .get(expiring.challenge_attempt_id),
+    ).toEqual({ status: "expired", outcome_reason: "challenge_expired" });
+    repository.close();
+  });
+
   it("activates an existing Slack identity and binding with one direct grant pair", () => {
     const integrationDatabase = database();
     const repository = new OrganizationIntegrationsRepository(
@@ -777,6 +1074,39 @@ describe("organization integrations repository", () => {
       ),
     ).toEqual(result);
     expect(repository.activateExistingSlackApproval(input)).toEqual(result);
+    expect(
+      repository.activeSlackApprovalRuntimeBinding(
+        "founder-approvals",
+        INSTALLATION_ID,
+        digest("installation-key"),
+      ),
+    ).toMatchObject({
+      principal_id: PRINCIPAL_ID,
+      membership_id: MEMBERSHIP_ID,
+      reviewer_slack_user_id: "U_ZHEN",
+      installation_id: INSTALLATION_ID,
+      adapter_binding_id: linked.adapter_binding_id,
+      approve_permission_grant_id: result.approve_permission_grant_id,
+      reject_permission_grant_id: result.reject_permission_grant_id,
+      organization_tool: {
+        team_id: "T123TEAM",
+        channel_id: "C123CHANNEL",
+      },
+    });
+    expect(
+      repository.activeSlackApprovalRuntimeBinding(
+        "missing-approvals",
+        INSTALLATION_ID,
+        digest("installation-key"),
+      ),
+    ).toBeNull();
+    expect(
+      repository.activeSlackApprovalRuntimeBinding(
+        "founder-approvals",
+        INSTALLATION_ID,
+        digest("different-installation-key"),
+      ),
+    ).toBeNull();
     expect(() =>
       repository.slackApprovalActivationReplay(
         input.command_id,
@@ -828,6 +1158,55 @@ describe("organization integrations repository", () => {
       "slack_identity_link.completed",
       "organization_tool.slack.onboarded",
     ]);
+    repository.close();
+  });
+
+  it("ignores same-surface bindings owned by historical installations", () => {
+    const integrationDatabase = database();
+    const repository = new OrganizationIntegrationsRepository(
+      integrationDatabase,
+      {
+        organization_id: ORGANIZATION_ID,
+        authority_id: AUTHORITY_ID,
+      },
+    );
+    const linked = completeSlackIdentityLink(
+      repository,
+      "runtime-installation-scope",
+      "sch_19191919-1919-4191-8191-191919191919",
+    );
+    repository.activateExistingSlackApproval(approvalActivationInput(linked));
+    const organizationTool = repository.activeSlackOrganizationTool()!;
+    insertHistoricalSlackBinding(integrationDatabase, {
+      binding_id: "bnd_historical-internal-approvals",
+      installation_id: "ins_historical-installation",
+      adapter_instance_id: "founder-approvals",
+      connection_id: organizationTool.connection_id,
+      configuration: {
+        approve_reaction: organizationTool.approve_reaction,
+        channel_id: organizationTool.channel_id,
+        reject_reaction: organizationTool.reject_reaction,
+        slack_app_id: organizationTool.app_id,
+        slack_bot_id: organizationTool.bot_id,
+        slack_bot_user_id: organizationTool.bot_user_id,
+        slack_enterprise_id: organizationTool.enterprise_id,
+      },
+    });
+
+    expect(
+      repository.activeSlackApprovalRuntimeBinding(
+        "founder-approvals",
+        INSTALLATION_ID,
+        digest("installation-key"),
+      ),
+    ).toMatchObject({ adapter_binding_id: linked.adapter_binding_id });
+    expect(
+      repository.activeSlackApprovalRuntimeBinding(
+        "founder-approvals",
+        "ins_historical-installation",
+        digest("ins_historical-installation-key"),
+      ),
+    ).toBeNull();
     repository.close();
   });
 

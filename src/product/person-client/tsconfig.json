@@ -1,0 +1,17 @@
+{
+  "extends": "../../../tsconfig.build.json",
+  "compilerOptions": {
+    "composite": true,
+    "rootDir": ".",
+    "outDir": "dist",
+    "tsBuildInfoFile": "dist/.tsbuildinfo",
+    "types": ["node"]
+  },
+  "include": ["*.ts"],
+  "exclude": [],
+  "references": [
+    { "path": "../../../packages/federation-protocol" },
+    { "path": "../../../packages/organization-protocol" },
+    { "path": "../../../packages/organization-api" }
+  ]
+}

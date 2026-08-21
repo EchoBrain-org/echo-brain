@@ -15,6 +15,7 @@ export {
   type OrganizationControlDatabaseIdentity,
 } from "./persistence/inspect-database.js";
 export {
+  openAndMigrateOrganizationControlDatabase,
   openOrganizationControlDatabase,
   type OpenOrganizationControlDatabaseOptions,
 } from "./persistence/open-database.js";
@@ -27,11 +28,15 @@ export {
   SLACK_ORGANIZATION_TOOL_PROFILE,
   SLACK_ORGANIZATION_TOOL_REQUIRED_SCOPES,
   type ActiveSlackOrganizationTool,
+  type ActiveSlackApprovalRuntimeBinding,
+  type BeginPersonSlackIdentityLinkChallengeInput,
   type BeginSlackIdentityLinkChallengeInput,
   type BegunSlackIdentityLinkChallenge,
   type LegacySlackOrganizationTool,
   type UpgradeableSlackOrganizationTool,
   type CompleteSlackIdentityLinkChallengeInput,
+  type CompletePersonSlackIdentityLinkChallengeInput,
+  type CompletedPersonSlackIdentityLink,
   type CompletedSlackIdentityLink,
   type ActivateExistingSlackApprovalInput,
   type ActivateExistingSlackApprovalResult,
@@ -67,6 +72,8 @@ export {
   type PostedSlackIdentityLinkChallenge,
   type PostSlackIdentityLinkChallengeInput,
   type PendingSlackIdentityLinkChallenge,
+  type PendingPersonSlackIdentityLinkChallenge,
+  type PersonSlackIdentityLinkSession,
   type SlackIdentityLinkInstallation,
   type SlackApprovalPermissionCandidate,
   type SlackApprovalPermissionLookup,

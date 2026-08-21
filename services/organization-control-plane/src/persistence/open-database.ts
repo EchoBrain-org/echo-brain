@@ -21,6 +21,11 @@ export interface OpenOrganizationControlDatabaseOptions {
  * point to an independently protected customer secret broker. This persistence
  * helper does not claim live process ownership; the future service must acquire
  * its authenticated kernel singleton guard before calling it.
+ *
+ * Opening never touches the schema: the open step is split from migration so a
+ * pre-open state-lineage guard can run between filesystem verification and any
+ * schema decision. Callers that need the legacy open-then-migrate behavior use
+ * `openAndMigrateOrganizationControlDatabase`.
  */
 export function openOrganizationControlDatabase(
   databasePath: string,
@@ -77,6 +82,26 @@ export function openOrganizationControlDatabase(
     database.pragma('foreign_keys = ON');
     database.pragma('busy_timeout = 5000');
     database.pragma('temp_store = MEMORY');
+    return database;
+  } catch (error) {
+    database.close();
+    throw error;
+  }
+}
+
+/**
+ * Opens the organization control database and brings it to the current
+ * schema. This is the legacy-lineage entry point: every existing writable
+ * caller keeps the open-then-migrate behavior through this name, while
+ * new-lineage composition will pair the pure opener with the pre-open guard
+ * and an explicit initializer instead of implicit migration.
+ */
+export function openAndMigrateOrganizationControlDatabase(
+  databasePath: string,
+  options: OpenOrganizationControlDatabaseOptions = {},
+): Database.Database {
+  const database = openOrganizationControlDatabase(databasePath, options);
+  try {
     migrateOrganizationControlDatabase(database);
     return database;
   } catch (error) {

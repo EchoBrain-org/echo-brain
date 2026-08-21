@@ -27,10 +27,10 @@ and qualification proof.
 
 | Component | Primary source | Responsibility |
 | --- | --- | --- |
-| [Core pipeline](core-pipeline.md) | `src/core/` | Provider-neutral decision pipeline and ports |
-| [Adapters](adapters.md) | `src/adapters/` | Provider-specific sources, processors, approvals, and delivery |
-| [Local runtime](local-runtime.md) | `src/product/`, `src/infrastructure/` | Mac composition, durable local state, lifecycle, and update control |
-| [Identity and access](identity-access.md) | local organization code plus Authority | Installation, person, enrollment, lease, and revocation state |
+| [Core pipeline](core-pipeline.md) | `services/organization-authority/src/processing/core/` | Provider-neutral decision pipeline and ports |
+| [Adapters](adapters.md) | `services/organization-authority/src/processing/adapters/` | Provider-specific sources, processors, approvals, and delivery |
+| [Local runtime](local-runtime.md) | `src/product/person-client/` | Thin Person CLI and private session state |
+| [Identity and access](identity-access.md) | Person client plus Authority | Person sessions, membership, compatibility enrollment, and revocation state |
 | [Central organization](central-organization.md) | `services/organization-*` | Authority, integration policy, record, and retrieval ownership |
 | [Permissions](permissions.md) | cross-cutting | Approval, admission, visibility, and read authorization |
 | [Protocols and cryptography](protocols-crypto.md) | `packages/*` | Signed documents, canonicalization, identifiers, and HTTP contracts |
@@ -51,6 +51,6 @@ Each component page records or links:
 
 The checked source-boundary registry at
 [`tools/workspace-source-boundaries.v1.json`](../../tools/workspace-source-boundaries.v1.json)
-is the machine-readable inventory for package, service, and local-organization
+is the machine-readable inventory for package, service, and Person-client
 workspaces. `npm run check:docs` requires every registered workspace to remain
 reachable from this catalog.

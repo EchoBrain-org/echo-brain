@@ -54,6 +54,25 @@ export interface AuthorityRuntimeFingerprintInput {
     activated_at: string;
     audit_sequence: number;
   };
+  person_session_runtime_v1?: {
+    overlay_sha256: `sha256:${string}`;
+    oidc_configuration: {
+      issuer: string;
+      client_id: string;
+      redirect_uri: string;
+      tenant:
+        | { kind: 'issuer' }
+        | { kind: 'claim'; claim_name: string; claim_value: string };
+      id_token_algorithms: readonly string[];
+    };
+    client_authentication:
+      | { method: 'none' }
+      | {
+          method: 'client_secret_basic' | 'client_secret_post';
+          client_secret: string;
+        };
+    pkce_sealing_key: Uint8Array;
+  };
 }
 
 function sha256(value: string | Buffer): `sha256:${string}` {
@@ -225,6 +244,34 @@ export function authorityRuntimeFingerprint(
             organization_member_recording_activation_v1:
               config.organization_member_recording_activation_v1,
           }),
+      ...(config.person_session_runtime_v1 === undefined
+        ? {}
+        : {
+            person_session_runtime_v1: {
+              overlay_sha256:
+                config.person_session_runtime_v1.overlay_sha256,
+              oidc_configuration:
+                config.person_session_runtime_v1.oidc_configuration,
+              pkce_sealing_key_sha256: sha256(
+                Buffer.from(
+                  config.person_session_runtime_v1.pkce_sealing_key,
+                ),
+              ),
+              client_authentication:
+                config.person_session_runtime_v1.client_authentication.method ===
+                'none'
+                  ? { method: 'none' }
+                  : {
+                      method:
+                        config.person_session_runtime_v1
+                          .client_authentication.method,
+                      client_secret_sha256: sha256(
+                        config.person_session_runtime_v1
+                          .client_authentication.client_secret,
+                      ),
+                    },
+            },
+          }),
       credentials: {
         admin_token_sha256: sha256(config.admin_token),
         trusted_proxy_token_sha256: sha256(config.trusted_proxy_token),
@@ -245,7 +292,8 @@ export function authorityMaintenanceFingerprint(
     | 'export-reviewer-query-audit'
     | 'expire-reviewer-query-audit'
     | 'export-readable-search-query-audit'
-    | 'expire-readable-search-query-audit',
+    | 'expire-readable-search-query-audit'
+    | 'activate-meeting-source',
 ): `sha256:${string}` {
   const keyPath = join(
     config.key_directory,

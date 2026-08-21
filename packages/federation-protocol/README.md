@@ -2,8 +2,8 @@
 
 **Status:** Promoted portable trust primitives
 
-This package owns the portable trust primitives that the local product and
-organization authority must execute identically:
+This package owns portable trust primitives shared by the organization
+Authority, protocol workspaces, and retained V1 compatibility validators:
 
 - RFC 8785 canonical JSON bytes and SHA-256 digests;
 - federation identifier and UTC timestamp validation;
@@ -29,10 +29,10 @@ consistency but are metadata claims, not hardware attestation.
 
 It owns no filesystem store, private-key provider, macOS implementation,
 database, HTTP transport, UI, schema, or organization-specific document or
-workflow. The root product's federation foundation keeps compatibility exports
-for existing imports and delegates these portable operations to this package;
-machine signer lifecycle and capability-specific behavior remain in the
-product.
+workflow. The repository root has no runtime exports. Private-key lifecycle
+and capability-specific behavior belong to the Authority or to the protocol
+consumer that uses these primitives. Installation-key helpers remain only for
+server-side V1 compatibility; the Person client has no installation signer.
 
 The package has no workspace dependencies. `src/index.ts` is its only public
 code entry point; modules are separated by protocol responsibility rather than

@@ -16,14 +16,10 @@ import type {
   SignedIntegrity,
 } from '@echo-brain/federation-protocol';
 import {
-  compareOrganizationInternalLiveReleaseVersions,
   isOrganizationApiValidationError,
   MINIMUM_ORGANIZATION_ACCESS_RECOVERY_GAP,
-  validateApproveOrganizationInternalLiveReleaseRequest,
   validateIssueOrganizationEnrollmentGrantRequest,
   validateOrganizationAccessLeaseRequestAnyVersion,
-  validateOrganizationInternalLiveDirectiveRequest,
-  validateOrganizationInternalLiveUpdateReceipt,
   validateOrganizationPermissionCheckRequest,
   validateOrganizationReadableSearchRequest,
   validateOrganizationRecentDecisionsRequest,
@@ -35,16 +31,11 @@ import {
 } from '@echo-brain/organization-api';
 import type {
   IssueOrganizationEnrollmentGrantRequestV1,
-  ApproveOrganizationInternalLiveReleaseRequestV1,
   OrganizationAccessLeaseRequestAnyVersion,
   OrganizationAdminOverviewV1,
   OrganizationAuditPageV1,
   OrganizationEnrollmentGrantPageV1,
   OrganizationInstallationPageV1,
-  OrganizationInternalLiveDirectiveRequestV1,
-  OrganizationInternalLiveRolloutStatusV1,
-  OrganizationInternalLiveUpdateDirectiveV1,
-  OrganizationInternalLiveUpdateReceiptV1,
   OrganizationMembershipPageV1,
   OrganizationPermissionCheckRequestV1,
   OrganizationReadableSearchRequestV1,
@@ -107,7 +98,6 @@ import type {
   StoredAuthorityEnrollment,
   StoredAuthorityMembership,
   StoredEnrollmentGrant,
-  StoredInternalLiveRelease,
   StoredReadableSearchActiveGeneration,
 } from './ports/authority-repository.js';
 import type {
@@ -860,311 +850,6 @@ export class OrganizationAuthorityApplication {
         installation_id: currentEnrollment.installation_id,
         installation_key_id: currentEnrollment.installation_signing_key.key_id,
         checked_at: checkedAt,
-      };
-    });
-  }
-
-  private internalLiveDirective(
-    release: StoredInternalLiveRelease,
-    evaluatedAt: string,
-  ): OrganizationInternalLiveUpdateDirectiveV1 {
-    return {
-      schema_version: 1,
-      kind: 'echo-internal-live-update-directive',
-      channel: 'internal-live',
-      directive_sequence: release.directive_sequence,
-      manifest_url: release.manifest_url,
-      manifest_sha256: release.manifest_sha256,
-      approved_at: release.approved_at,
-      evaluated_at: evaluatedAt,
-    };
-  }
-
-  approveInternalLiveRelease(
-    input: ApproveOrganizationInternalLiveReleaseRequestV1,
-  ): OrganizationInternalLiveUpdateDirectiveV1 {
-    const command =
-      validateApproveOrganizationInternalLiveReleaseRequest(input);
-    const commandSha256 = canonicalSha256(command);
-    const replay = this.repository.read((transaction) =>
-      transaction.internalLiveReleaseByCommand(command.command_id),
-    );
-    if (replay !== undefined) {
-      if (replay.command_sha256 !== commandSha256) {
-        throw new AuthorityOperationError(
-          'conflict',
-          'administrator command ID was reused with different internal-live release input',
-        );
-      }
-      return this.internalLiveDirective(replay, replay.approved_at);
-    }
-    const approvedAt = this.now('internal-live release approval time');
-    return this.repository.write(approvedAt, (transaction) => {
-      const concurrent = transaction.internalLiveReleaseByCommand(
-        command.command_id,
-      );
-      if (concurrent !== undefined) {
-        if (concurrent.command_sha256 !== commandSha256) {
-          throw new AuthorityOperationError(
-            'conflict',
-            'administrator command ID was reused with different internal-live release input',
-          );
-        }
-        return this.internalLiveDirective(concurrent, concurrent.approved_at);
-      }
-      const current = transaction.currentInternalLiveRelease();
-      if (
-        current !== undefined &&
-        compareOrganizationInternalLiveReleaseVersions(
-          command.manifest.release_version,
-          current.release_version,
-        ) <= 0
-      ) {
-        throw new AuthorityOperationError(
-          'conflict',
-          'internal-live release version must increase monotonically',
-        );
-      }
-      if (
-        current?.manifest_sha256 === command.manifest_sha256 ||
-        current?.artifact_sha256 === command.manifest.artifact.sha256
-      ) {
-        throw new AuthorityOperationError(
-          'conflict',
-          'internal-live release is already approved',
-        );
-      }
-      if (current !== undefined) {
-        const activeInstallations = transaction.activeEnrollments(101);
-        if (activeInstallations.length > 100) {
-          throw new AuthorityOperationError(
-            'unavailable',
-            'internal-live rollout exceeds the minimum-v1 installation bound',
-          );
-        }
-        const rolloutReceipts = activeInstallations.map((installation) =>
-          transaction.latestInternalLiveUpdateReceipt(
-            installation.installation_id,
-            current.directive_sequence,
-          ),
-        );
-        const rolloutStarted = rolloutReceipts.some(
-          (receipt) => receipt !== undefined,
-        );
-        const everyActiveInstallationHealthy = rolloutReceipts.every(
-          (receipt) => receipt?.receipt.outcome === 'healthy',
-        );
-        if (rolloutStarted && !everyActiveInstallationHealthy) {
-          throw new AuthorityOperationError(
-            'conflict',
-            'current internal-live release is not healthy on every active installation',
-          );
-        }
-      }
-      transaction.insertInternalLiveRelease({
-        command,
-        command_sha256: commandSha256,
-        approved_at: approvedAt,
-      });
-      const stored = transaction.internalLiveReleaseByCommand(
-        command.command_id,
-      );
-      if (stored === undefined) {
-        throw new Error('approved internal-live release disappeared');
-      }
-      transaction.appendAudit({
-        occurred_at: approvedAt,
-        actor_kind: 'admin',
-        action: 'internal_live.release_approved',
-        subject_id: stored.release_tag,
-        detail: {
-          command_id: command.command_id,
-          directive_sequence: stored.directive_sequence,
-          manifest_sha256: stored.manifest_sha256,
-          release_version: stored.release_version,
-          source_sha: stored.source_sha,
-        },
-      });
-      return this.internalLiveDirective(stored, approvedAt);
-    });
-  }
-
-  fetchInternalLiveDirective(
-    input: OrganizationInternalLiveDirectiveRequestV1,
-  ): OrganizationInternalLiveUpdateDirectiveV1 {
-    const request = validateOrganizationInternalLiveDirectiveRequest(input);
-    const context = this.integrationInstallationContext(
-      request,
-      'internal-live directive request',
-    );
-    const release = this.repository.read((transaction) =>
-      transaction.currentInternalLiveRelease(),
-    );
-    if (release === undefined) {
-      throw new AuthorityOperationError(
-        'not_found',
-        'no internal-live release is approved',
-      );
-    }
-    return this.internalLiveDirective(release, context.checked_at);
-  }
-
-  recordInternalLiveUpdateReceipt(
-    input: OrganizationInternalLiveUpdateReceiptV1,
-  ): void {
-    const receipt = validateOrganizationInternalLiveUpdateReceipt(input);
-    const context = this.authenticatedActiveInstallationContext(
-      receipt,
-      null,
-      'internal-live update receipt',
-    );
-    if (Date.parse(receipt.finished_at) > Date.parse(context.checked_at)) {
-      throw new AuthorityOperationError(
-        'invalid_request',
-        'internal-live update receipt finished_at cannot be in the future',
-      );
-    }
-    const payloadSha256 = receipt.integrity.payload_sha256;
-    const replay = this.repository.read((transaction) =>
-      transaction.internalLiveUpdateReceiptByTransaction(
-        receipt.transaction_id,
-      ),
-    );
-    if (replay !== undefined) {
-      if (replay.payload_sha256 !== payloadSha256) {
-        throw new AuthorityOperationError(
-          'conflict',
-          'internal-live transaction ID was reused with a different receipt',
-        );
-      }
-      return;
-    }
-    const release = this.repository.read((transaction) =>
-      transaction.internalLiveReleaseBySequence(receipt.directive_sequence),
-    );
-    if (
-      release === undefined ||
-      release.release_version !== receipt.release_version ||
-      release.manifest_sha256 !== receipt.manifest_sha256 ||
-      release.artifact_sha256 !== receipt.artifact_sha256 ||
-      release.source_sha !== receipt.source_sha
-    ) {
-      throw new AuthorityOperationError(
-        'conflict',
-        'internal-live update receipt does not match an approved release',
-      );
-    }
-    const acceptedAt = context.checked_at;
-    return this.repository.write(acceptedAt, (transaction) => {
-      const concurrent = transaction.internalLiveUpdateReceiptByTransaction(
-        receipt.transaction_id,
-      );
-      if (concurrent !== undefined) {
-        if (concurrent.payload_sha256 !== payloadSha256) {
-          throw new AuthorityOperationError(
-            'conflict',
-            'internal-live transaction ID was reused with a different receipt',
-          );
-        }
-        return;
-      }
-      const currentRelease = transaction.internalLiveReleaseBySequence(
-        receipt.directive_sequence,
-      );
-      const currentEnrollment = transaction.enrollmentById(
-        receipt.enrollment_id,
-      );
-      if (
-        currentRelease === undefined ||
-        currentRelease.release_version !== receipt.release_version ||
-        currentRelease.manifest_sha256 !== receipt.manifest_sha256 ||
-        currentRelease.artifact_sha256 !== receipt.artifact_sha256 ||
-        currentRelease.source_sha !== receipt.source_sha ||
-        currentEnrollment?.status !== 'active' ||
-        currentEnrollment.installation_id !== receipt.installation_id
-      ) {
-        throw new AuthorityOperationError(
-          'conflict',
-          'internal-live update receipt state changed before commit',
-        );
-      }
-      transaction.insertInternalLiveUpdateReceipt({
-        payload_sha256: payloadSha256,
-        receipt,
-        received_at: acceptedAt,
-      });
-      transaction.appendAudit({
-        occurred_at: acceptedAt,
-        actor_kind: 'installation',
-        action: 'internal_live.update_reported',
-        subject_id: receipt.installation_id,
-        detail: {
-          artifact_sha256: receipt.artifact_sha256,
-          directive_sequence: receipt.directive_sequence,
-          manifest_sha256: receipt.manifest_sha256,
-          outcome: receipt.outcome,
-          source_sha: receipt.source_sha,
-          transaction_id: receipt.transaction_id,
-        },
-      });
-    });
-  }
-
-  internalLiveRolloutStatus(): OrganizationInternalLiveRolloutStatusV1 {
-    const evaluatedAt = this.now('internal-live rollout status time');
-    return this.repository.read((transaction) => {
-      const release = transaction.currentInternalLiveRelease();
-      const installations = transaction.activeEnrollments(101);
-      if (installations.length > 100) {
-        throw new AuthorityOperationError(
-          'unavailable',
-          'internal-live rollout status exceeds the minimum-v1 installation bound',
-        );
-      }
-      return {
-        schema_version: 1,
-        kind: 'echo-internal-live-rollout-status',
-        channel: 'internal-live',
-        evaluated_at: evaluatedAt,
-        approved_release:
-          release === undefined
-            ? null
-            : {
-                directive_sequence: release.directive_sequence,
-                release_version: release.release_version,
-                manifest_url: release.manifest_url,
-                manifest_sha256: release.manifest_sha256,
-                approved_at: release.approved_at,
-              },
-        installations: installations.map((installation) => {
-          const stored =
-            release === undefined
-              ? undefined
-              : transaction.latestInternalLiveUpdateReceipt(
-                  installation.installation_id,
-                  release.directive_sequence,
-                );
-          const receipt = stored?.receipt;
-          return {
-            installation_id: installation.installation_id,
-            rollout_state:
-              release === undefined
-                ? ('no_release' as const)
-                : receipt === undefined
-                  ? ('pending' as const)
-                  : receipt.outcome,
-            receipt:
-              receipt === undefined || stored === undefined
-                ? null
-                : {
-                    release_version: receipt.release_version,
-                    outcome: receipt.outcome,
-                    doctor: receipt.doctor,
-                    failure: receipt.failure,
-                    finished_at: receipt.finished_at,
-                  },
-          };
-        }),
       };
     });
   }

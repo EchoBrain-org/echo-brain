@@ -18,3 +18,9 @@ against the unchanged shared limit and the exact terminal-code mapping.
 `organization-record-lifecycle` covers publication at initialization, the
 runtime fingerprint, preflight refusal, startup chain verification, clean
 shutdown, the `install-integrations` retrofit, and a fatal startup derive halt.
+
+`person-read-contracts-v2` is the private D6-1 structural checkpoint. It
+freezes all four semantic request bodies and golden digests plus the exact
+bearer-derived caller-binding body/digest, including hostile-object and I-JSON
+rejection. It is unwired and makes no scope, release, audit, retention, export,
+persistence, public-surface, live-DTO, or caller-supplied-subject-removal claim.

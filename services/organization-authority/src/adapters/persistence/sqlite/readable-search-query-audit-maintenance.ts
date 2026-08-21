@@ -33,7 +33,7 @@ import type {
   ReadableSearchQueryAuditMaintenanceCommandV1,
 } from '../../../application/readable-search-query-audit-maintenance.js';
 import { validateStoredReadableSearchQueryAuditEntry } from '../../../application/readable-search-persistence.js';
-import { openAuthorityDatabase } from './open-database.js';
+import { openAndMigrateAuthorityDatabase } from './open-database.js';
 import {
   createAuthorityStateReader,
   type AuthorityStateReader,
@@ -169,7 +169,7 @@ export class SqliteReadableSearchQueryAuditMaintenanceRepository {
   private closed = false;
   private constructor(private readonly database: Database.Database, private readonly state: AuthorityStateReader) {}
   static open(input: OpenReadableSearchQueryAuditMaintenanceInput): SqliteReadableSearchQueryAuditMaintenanceRepository {
-    const database = openAuthorityDatabase(input.database_path, { fileMustExist: true });
+    const database = openAndMigrateAuthorityDatabase(input.database_path, { fileMustExist: true });
     try { return new SqliteReadableSearchQueryAuditMaintenanceRepository(database, createAuthorityStateReader(database, input.trust)); } catch (error) { database.close(); throw error; }
   }
   authorizeExport(input: ReadableSearchQueryAuditExportCommandV1, observe: () => string): AuthorizedReadableSearchQueryAuditExport {

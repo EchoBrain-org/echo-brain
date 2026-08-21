@@ -10,12 +10,16 @@ component_ids:
 created_at: 2026-08-13
 reviewed_at: 2026-08-13
 reviewed_ref: 808ac89eaf3e8eba529b356bd80d4509b9a2a293
+decision_ids:
+  - ADR-0003
+  - ADR-0004
 invariant_ids:
   - INV-ADAPTERS-001
   - INV-ADAPTERS-002
   - INV-ADAPTERS-003
   - INV-ADAPTERS-004
   - INV-IDENTITY-001
+  - INV-IDENTITY-005
   - INV-PERMISSIONS-013
   - INV-PERMISSIONS-014
 failure_pattern_ids:
@@ -33,7 +37,8 @@ qualification_ids:
 
 ## Responsibility
 
-`src/adapters/` translates between core ports and external capabilities:
+`services/organization-authority/src/processing/adapters/` translates between
+processing ports and external capabilities:
 
 - meeting sources;
 - decision processors, including LLM providers;
@@ -54,8 +59,8 @@ semantics.
 ## Current references
 
 - [Core and adapters](../architecture/core-and-adapters.md)
-- Source: [`src/adapters/`](../../src/adapters)
-- Adapter tests: [`tests/adapters/`](../../tests/adapters)
+- Source: [`services/organization-authority/src/processing/adapters/`](../../services/organization-authority/src/processing/adapters)
+- Adapter tests: [`services/organization-authority/test/processing/adapters/`](../../services/organization-authority/test/processing/adapters)
 - [Failure-pattern registry](../failure-patterns/README.md)
 - [Qualification](../qualification/README.md)
 

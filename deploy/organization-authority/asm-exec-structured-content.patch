@@ -1,5 +1,8 @@
 --- asm-exec
 +++ asm-exec
+@@ -196 +196 @@
+-    resp = urllib.request.urlopen(req, timeout=10)
++    resp = urllib.request.urlopen(req, timeout=30)
 @@ -203,7 +203,7 @@
          if "SecretString" in payload:
              return payload["SecretString"]

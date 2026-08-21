@@ -1,11 +1,11 @@
 import type { RetrievalPermissionFact } from '../application/contracts.js';
 import { READABLE_SEARCH_FACTS_DATABASE } from './database-definition.js';
-import { openReadableSearchPlane } from './open-plane.js';
+import { openAndMigrateReadableSearchPlane } from './open-plane.js';
 import { ReadableSearchPlaneStore } from './plane-store.js';
 
 export class ReadableSearchFactsStore extends ReadableSearchPlaneStore {
   private constructor(path: string) {
-    super(openReadableSearchPlane(path, READABLE_SEARCH_FACTS_DATABASE), 'facts');
+    super(openAndMigrateReadableSearchPlane(path, READABLE_SEARCH_FACTS_DATABASE), 'facts');
   }
 
   static open(path: string): ReadableSearchFactsStore {

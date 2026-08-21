@@ -17,10 +17,12 @@ import {
 } from './operator-state.js';
 import { startOrganizationAuthority } from './runtime.js';
 import { canonicalAuthorityStatus, inspectAuthorityStatus } from './status.js';
+import { activateAuthorityMeetingSource } from './activate-meeting-source.js';
 
 const USAGE = `usage:
   echo-organization-authority init-development --config <absolute-path> --state-dir <absolute-path> --organization-name <name> [--port <1-65535>]
   echo-organization-authority install-integrations --config <absolute-path>
+  echo-organization-authority activate-meeting-source --config <absolute-path> --principal-id <prn-id> --membership-id <mem-id> --membership-type <owner|employee> --source-instance <id>
   echo-organization-authority activate-permission-pilot --config <absolute-path> --command <absolute-json-path>
   echo-organization-authority activate-organization-member-recording --config <absolute-path> --command <absolute-json-path>
   echo-organization-authority reviewer-query-audit-export --config <absolute-path> --command <absolute-json-path> --output <absolute-path>
@@ -80,6 +82,11 @@ function parsePort(value: string | undefined): number | undefined {
   const port = Number(value);
   if (port > 65_535) throw new Error(USAGE);
   return port;
+}
+
+function membershipType(value: string): 'owner' | 'employee' {
+  if (value !== 'owner' && value !== 'employee') throw new Error(USAGE);
+  return value;
 }
 
 async function runServe(
@@ -174,6 +181,28 @@ export async function runOrganizationAuthorityCli(
     const flags = parseFlags(commandArguments, ['--config']);
     const result = await installAuthorityIntegrations(
       requiredFlag(flags, '--config'),
+    );
+    io.stdout(`${canonicalJson(result as never)}\n`);
+    return 0;
+  }
+  if (command === 'activate-meeting-source') {
+    const flags = parseFlags(commandArguments, [
+      '--config',
+      '--principal-id',
+      '--membership-id',
+      '--membership-type',
+      '--source-instance',
+    ]);
+    const result = await activateAuthorityMeetingSource(
+      requiredFlag(flags, '--config'),
+      {
+        principal_id: requiredFlag(flags, '--principal-id'),
+        membership_id: requiredFlag(flags, '--membership-id'),
+        membership_type: membershipType(
+          requiredFlag(flags, '--membership-type'),
+        ),
+        source_instance_id: requiredFlag(flags, '--source-instance'),
+      },
     );
     io.stdout(`${canonicalJson(result as never)}\n`);
     return 0;

@@ -1,12 +1,13 @@
 {
   "name": "echo-brain",
   "version": "0.1.0-internal.6",
-  "description": "Tool-agnostic meeting-to-decision core with replaceable source, processor, and delivery adapters",
+  "description": "ECHO organization Authority and thin Person client monorepo",
   "private": true,
   "workspaces": [
     "packages/federation-protocol",
     "packages/organization-protocol",
     "packages/organization-api",
+    "src/product/person-client",
     "services/organization-authority",
     "services/organization-control-plane",
     "services/organization-record",
@@ -14,107 +15,33 @@
   ],
   "license": "MIT",
   "type": "module",
-  "main": "dist/product/index.js",
-  "types": "dist/product/index.d.ts",
-  "exports": {
-    ".": {
-      "types": "./dist/product/index.d.ts",
-      "import": "./dist/product/index.js"
-    },
-    "./core": {
-      "types": "./dist/core/index.d.ts",
-      "import": "./dist/core/index.js"
-    },
-    "./adapters": {
-      "types": "./dist/adapters/index.d.ts",
-      "import": "./dist/adapters/index.js"
-    },
-    "./adapters/meeting-sources/granola": {
-      "types": "./dist/adapters/meeting-sources/granola/index.d.ts",
-      "import": "./dist/adapters/meeting-sources/granola/index.js"
-    },
-    "./adapters/decision-processors/structured-text": {
-      "types": "./dist/adapters/decision-processors/structured-text/index.d.ts",
-      "import": "./dist/adapters/decision-processors/structured-text/index.js"
-    },
-    "./adapters/decision-processors/llm": {
-      "types": "./dist/adapters/decision-processors/llm/index.d.ts",
-      "import": "./dist/adapters/decision-processors/llm/index.js"
-    },
-    "./adapters/delivery-surfaces/jsonl-outbox": {
-      "types": "./dist/adapters/delivery-surfaces/jsonl-outbox/index.d.ts",
-      "import": "./dist/adapters/delivery-surfaces/jsonl-outbox/index.js"
-    },
-    "./adapters/delivery-surfaces/slack": {
-      "types": "./dist/adapters/delivery-surfaces/slack/index.d.ts",
-      "import": "./dist/adapters/delivery-surfaces/slack/index.js"
-    },
-    "./adapters/approval-surfaces/slack-reactions": {
-      "types": "./dist/adapters/approval-surfaces/slack-reactions/index.d.ts",
-      "import": "./dist/adapters/approval-surfaces/slack-reactions/index.js"
-    },
-    "./organization": {
-      "types": "./dist/product/organization/index.d.ts",
-      "import": "./dist/product/organization/index.js"
-    },
-    "./schemas/meeting-context.v1.schema.json": "./schemas/meeting-context.v1.schema.json",
-    "./schemas/runtime-config.v1.schema.json": "./schemas/runtime-config.v1.schema.json"
-  },
-  "bin": {
-    "echo-brain": "dist/product/cli.js"
-  },
   "engines": {
     "node": "22.22.1",
     "npm": "10.9.4"
   },
-  "files": [
-    "dist/**",
-    "schemas/meeting-context.v1.schema.json",
-    "schemas/runtime-config.v1.schema.json",
-    "docs/architecture/core-and-adapters.md",
-    "npm-shrinkwrap.json",
-    "README.md",
-    "LICENSE"
-  ],
-  "bundleDependencies": [
-    "@echo-brain/federation-protocol",
-    "@echo-brain/organization-protocol",
-    "@echo-brain/organization-api"
-  ],
   "scripts": {
     "clean": "node tools/build.mjs --clean",
+    "pack:person-client": "node tools/pack-person-client.mjs",
     "clean:workspaces": "tsc -b tsconfig.workspaces.json --clean",
     "build": "node tools/build.mjs",
     "build:workspaces": "tsc -b tsconfig.workspaces.json",
     "typecheck": "npm run typecheck:workspaces && tsc --noEmit -p tsconfig.json",
     "typecheck:workspaces": "tsc -b tsconfig.workspaces.json",
     "lint": "eslint . --max-warnings 0",
-    "test": "npm run build:workspaces && vitest run --config vitest.config.ts && vitest run --config vitest.product.config.ts",
-    "test:core": "npm run build:workspaces && vitest run --config vitest.config.ts tests/core",
-    "test:adapters": "npm run build:workspaces && vitest run --config vitest.config.ts tests/adapters",
-    "test:infrastructure": "npm run build:workspaces && vitest run --config vitest.config.ts tests/infrastructure",
+    "test": "npm run build:workspaces && vitest run --config vitest.config.ts",
+    "test:core": "npm run build:workspaces && vitest run --config vitest.config.ts services/organization-authority/test/processing/core",
     "test:architecture": "npm run build:workspaces && vitest run --config vitest.config.ts tests/architecture",
     "test:protocols": "npm run build:workspaces && npm test --workspace @echo-brain/federation-protocol && npm test --workspace @echo-brain/organization-protocol && npm test --workspace @echo-brain/organization-api",
-    "test:local-org": "npm run build:workspaces && vitest run --config vitest.product.config.ts tests/product/local-organization-coordinator.test.ts tests/product/http-organization-authority-client.test.ts tests/product/organization-state-store.test.ts",
     "test:authority": "npm run build:workspaces && npm test --workspace @echo-brain/organization-authority",
     "test:control-plane": "npm run build:workspaces && npm test --workspace @echo-brain/organization-control-plane",
     "test:record": "npm run build:workspaces && npm test --workspace @echo-brain/organization-record",
     "test:integration": "npm run build:workspaces && vitest run --config vitest.config.ts tests/integration",
-    "test:product": "npm run build:workspaces && vitest run --config vitest.product.config.ts",
-    "test:machine": "npm run build:workspaces && vitest run --config vitest.config.ts tests/machine && vitest run --config vitest.product.config.ts tests/product/adapter-factories.test.ts tests/product/decision-node-store.test.ts tests/product/sqlite-core-state.test.ts tests/product/product-database-migrations.test.ts tests/product/runtime-config.test.ts tests/product/runtime-isolation.test.ts",
+    "test:person": "npm run build:workspaces && vitest run --config vitest.config.ts tests/person-client",
     "check:boundary": "node tools/check-boundary.mjs",
     "check:docs": "node tools/check-docs.mjs",
     "organization-authority:cli": "node services/organization-authority/dist/main.js",
     "organization-authority:admin": "node services/organization-authority/dist/admin-main.js",
-    "check": "npm run check:boundary && npm run check:docs && npm run typecheck && npm run lint && npm test",
-    "prepack": "npm run build"
-  },
-  "dependencies": {
-    "@echo-brain/federation-protocol": "0.0.0-dev.0",
-    "@echo-brain/organization-api": "0.0.0-dev.0",
-    "@echo-brain/organization-protocol": "0.0.0-dev.0",
-    "ajv": "8.20.0",
-    "better-sqlite3": "12.10.0"
+    "check": "npm run check:boundary && npm run check:docs && npm run typecheck && npm run lint && npm test"
   },
   "devDependencies": {
     "@types/better-sqlite3": "7.6.11",

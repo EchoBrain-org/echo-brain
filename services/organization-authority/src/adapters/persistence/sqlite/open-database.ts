@@ -7,6 +7,12 @@ export interface OpenAuthorityDatabaseOptions {
   fileMustExist?: boolean;
 }
 
+/**
+ * Opens the authority database without touching its schema. The open step is
+ * deliberately split from migration so a pre-open state-lineage guard can run
+ * between filesystem verification and any schema decision; opening alone never
+ * creates, upgrades, or rejects a schema version.
+ */
 export function openAuthorityDatabase(
   databasePath: string,
   options: OpenAuthorityDatabaseOptions = {},
@@ -57,6 +63,26 @@ export function openAuthorityDatabase(
     database.pragma('foreign_keys = ON');
     database.pragma('busy_timeout = 5000');
     database.pragma('temp_store = MEMORY');
+    return database;
+  } catch (error) {
+    database.close();
+    throw error;
+  }
+}
+
+/**
+ * Opens the authority database and brings it to the current schema. This is
+ * the legacy-lineage entry point: every existing writable caller keeps the
+ * open-then-migrate behavior through this name, while new-lineage composition
+ * will pair the pure opener with the pre-open guard and an explicit
+ * initializer instead of implicit migration.
+ */
+export function openAndMigrateAuthorityDatabase(
+  databasePath: string,
+  options: OpenAuthorityDatabaseOptions = {},
+): Database.Database {
+  const database = openAuthorityDatabase(databasePath, options);
+  try {
     migrateAuthorityDatabase(database);
     return database;
   } catch (error) {

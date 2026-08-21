@@ -2,6 +2,7 @@ import { once } from 'node:events';
 import type { AddressInfo } from 'node:net';
 import { join } from 'node:path';
 import { canonicalJson } from '@echo-brain/federation-protocol';
+import type { Sha256Digest } from '@echo-brain/federation-protocol';
 import {
   createReadableSearchAnalyzerDescriptor,
   readableSearchRetrievalContractSha256,
@@ -11,12 +12,14 @@ import { organizationMemberReadablePolicyContractSha256 } from '@echo-brain/orga
 import {
   FileOrganizationSecretStore,
   inspectOpenOrganizationControlDatabase,
-  openOrganizationControlDatabase,
+  openAndMigrateOrganizationControlDatabase,
   OrganizationIntegrationsRepository,
   SlackWebIntegrationProvider,
 } from '@echo-brain/organization-control-plane';
 import { AdminBearerAuthenticator } from '../adapters/security/admin-bearer-authenticator.js';
 import { DevelopmentFileOrganizationAuthoritySigner } from '../adapters/security/development-file-authority-signer.js';
+import { NodePersonSessionCrypto } from '../adapters/security/node-person-session-crypto.js';
+import { OpenIdClientPersonSessionProvider } from '../adapters/oidc/openid-client-person-session-provider.js';
 import {
   RandomAuthorityIdentifierGenerator,
   SystemAuthorityClock,
@@ -24,6 +27,12 @@ import {
 import { SqliteOrganizationAuthorityRepository } from '../adapters/persistence/sqlite/sqlite-authority-repository.js';
 import { readOrganizationMemberRecordingActivation } from '../adapters/persistence/sqlite/organization-recording-policy-activation.js';
 import { OrganizationAuthorityApplication } from '../application/organization-authority.js';
+import { PersonIdentitySessionApplication } from '../application/person-identity-sessions.js';
+import { PersonReadableSearchService } from '../application/person-readable-search.js';
+import { PersonMemberExclusionService } from '../application/person-member-exclusions.js';
+import { PersonMemberExclusionReadService } from '../application/person-member-exclusion-reads.js';
+import { createPersonReadRecentDecisionsApplication } from '../application/person-read-recent-decisions.js';
+import { AuthorityOperationError } from '../domain/errors.js';
 import { reviewerPolicyContractSha256 } from '../application/reviewer-policy-contract.js';
 import { ReadableSearchAuthorizationFence } from '../application/readable-search-authorization-fence.js';
 import {
@@ -54,10 +63,33 @@ import {
   assertAuthorityRuntimeStateBinding,
   readableSearchReleaseDescriptor,
 } from './operator-state.js';
-import { composeOrganizationRecentDecisions } from './recent-decisions.js';
-import { composeReviewerRecentDecisions } from './reviewer-recent-decisions.js';
-import { fenceAuthorizationRelevantAuthorityMutations } from './readable-search-authorization-writes.js';
-import { createReadableSearchRuntimeAdapter } from './readable-search.js';
+import {
+  composeOrganizationRecentDecisions,
+  loadOrganizationRecentDecisionsProjectedRecords,
+  organizationRecentDecisionsPilotActivation,
+} from './recent-decisions.js';
+import {
+  composeReviewerRecentDecisions,
+  loadReviewerRecentDecisionsSource,
+} from './reviewer-recent-decisions.js';
+import {
+  fenceAuthorizationRelevantAuthorityMutations,
+  fenceAuthorizationRelevantPersonSessionMutations,
+} from './readable-search-authorization-writes.js';
+import {
+  createReadableSearchRetrievalPort,
+  createReadableSearchRuntimeAdapter,
+} from './readable-search.js';
+import {
+  LazyPersonSessionOidcProvider,
+  type PersonSessionOidcAuthorizationProvider,
+} from './lazy-person-session-oidc-provider.js';
+import { PersonSlackIdentityLinkService } from './person-slack-identity-link.js';
+import {
+  openAuthorityMeetingProcessingRuntime,
+  type AuthorityMeetingProcessingRuntime,
+} from './meeting-processing-runtime.js';
+import { recoverAuthorityTerminalRecordActs } from './terminal-record-recovery.js';
 
 export interface RunningOrganizationAuthority {
   address: AddressInfo;
@@ -80,6 +112,15 @@ const GRACEFUL_SHUTDOWN_DEADLINE_MS = 30_000;
 const READABLE_SEARCH_FENCE_TIMEOUT_MS = 5_000;
 const ADMIN_CONSOLE_SESSION_TTL_MS = 8 * 60 * 60 * 1000;
 const MAXIMUM_ADMIN_CONSOLE_SESSIONS = 256;
+const PERSON_SESSION_OIDC_EXPIRY_BATCH_LIMIT = 1000;
+
+export interface OrganizationAuthorityRuntimeDependencies {
+  discoverPersonSessionOidcProvider?: (
+    options: Parameters<typeof OpenIdClientPersonSessionProvider.discover>[0],
+  ) => Promise<PersonSessionOidcAuthorizationProvider>;
+  openMeetingProcessingRuntime?: typeof openAuthorityMeetingProcessingRuntime;
+  recoverTerminalRecordActs?: typeof recoverAuthorityTerminalRecordActs;
+}
 
 function assertOrganizationMemberRecordingRuntimeBinding(
   config: AuthorityServeConfig,
@@ -199,6 +240,7 @@ function throwCleanupFailures(failures: unknown[], message: string): never {
 
 export async function startOrganizationAuthority(
   config: AuthorityServeConfig,
+  dependencies: OrganizationAuthorityRuntimeDependencies = {},
 ): Promise<RunningOrganizationAuthority> {
   assertPersistentAuthorityDatabasePath(config.database_path);
   assertAuthorityServeStateBoundary(config);
@@ -217,11 +259,12 @@ export async function startOrganizationAuthority(
   );
   let repository: SqliteOrganizationAuthorityRepository | undefined;
   let integrationsDatabase:
-    | ReturnType<typeof openOrganizationControlDatabase>
+    | ReturnType<typeof openAndMigrateOrganizationControlDatabase>
     | undefined;
   let application: OrganizationAuthorityApplication | undefined;
   const authorizationFence = new ReadableSearchAuthorizationFence();
   let records: OrganizationRecordRuntime | undefined;
+  let meetingProcessing: AuthorityMeetingProcessingRuntime | null | undefined;
   let server: OrganizationAuthorityHttpServer | undefined;
   let signalFatalFailure: (failure: Error) => void = () => undefined;
   // Resolve-only: a promise that never rejects cannot become an unhandled
@@ -238,6 +281,7 @@ export async function startOrganizationAuthority(
   const shutdown = (): Promise<void> => {
     shutdownPromise ??= (async (): Promise<void> => {
       const runningServer = server;
+      const runningMeetingProcessing = meetingProcessing;
       const runningRecords = records;
       const runningApplication = application;
       const runningIntegrationsDatabase = integrationsDatabase;
@@ -247,6 +291,13 @@ export async function startOrganizationAuthority(
           await closeAuthorityServer(runningServer);
         } catch (error) {
           failures.push(error);
+          if (runningMeetingProcessing !== undefined && runningMeetingProcessing !== null) {
+            try {
+              await runningMeetingProcessing.close();
+            } catch (processingError) {
+              failures.push(processingError);
+            }
+          }
           abandonUncertainServer(runningServer, failures);
           try {
             await runtimeLock.abandon();
@@ -263,12 +314,21 @@ export async function startOrganizationAuthority(
           );
         }
       }
+      // Stop polling before either database it depends on is drained or closed.
+      let ownershipUncertain = false;
+      if (runningMeetingProcessing !== undefined && runningMeetingProcessing !== null) {
+        try {
+          await runningMeetingProcessing.close();
+        } catch (error) {
+          failures.push(error);
+          ownershipUncertain = true;
+        }
+      }
       // Records first, and awaited: its close drains derive, verifies the
       // chain, and only then releases both handles. Draining can still need
       // the authority (an unmaterialized receipt) and the integration audit, so
       // closing either of those first would race a stop that is supposed to
       // leave a backup-safe state behind.
-      let ownershipUncertain = false;
       if (runningRecords !== undefined) {
         try {
           await runningRecords.close();
@@ -330,7 +390,7 @@ export async function startOrganizationAuthority(
     // activation that won the startup race is detected rather than served
     // under the caller's stale policy snapshot.
     assertOrganizationMemberRecordingRuntimeBinding(config);
-    integrationsDatabase = openOrganizationControlDatabase(
+    integrationsDatabase = openAndMigrateOrganizationControlDatabase(
       config.integrations_database_path,
       { fileMustExist: true },
     );
@@ -347,6 +407,42 @@ export async function startOrganizationAuthority(
         'organization integrations database identity differs from config',
       );
     }
+    const personSessionConfig = config.person_session_runtime_v1;
+    const personOidcProvider =
+      personSessionConfig === undefined
+        ? undefined
+        : new LazyPersonSessionOidcProvider(() =>
+            (dependencies.discoverPersonSessionOidcProvider ??
+              OpenIdClientPersonSessionProvider.discover)({
+              configuration: personSessionConfig.oidc_configuration,
+              client_authentication:
+                personSessionConfig.client_authentication,
+            }),
+          );
+    let personIdentitySessions: PersonIdentitySessionApplication | undefined;
+    if (personSessionConfig !== undefined && personOidcProvider !== undefined) {
+      const crypto = new NodePersonSessionCrypto(
+        personSessionConfig.pkce_sealing_key,
+      );
+      personIdentitySessions = new PersonIdentitySessionApplication(
+        repository,
+        personSessionConfig.oidc_configuration,
+        {
+          clock: new SystemAuthorityClock(),
+          random: crypto,
+          hash: crypto,
+          pkce_sealer: crypto,
+          oidc_provider: personOidcProvider,
+          diagnostics: {
+            oidcLoginDenied(reason) {
+              process.stderr.write(
+                `authority_person_session_oidc_denied reason=${reason}\n`,
+              );
+            },
+          },
+        },
+      );
+    }
     application = await OrganizationAuthorityApplication.create({
       repository,
       signer,
@@ -357,6 +453,10 @@ export async function startOrganizationAuthority(
       active_lease_ttl_ms: config.active_lease_ttl_ms,
       access_request_maximum_age_ms: config.access_request_maximum_age_ms,
     });
+    personIdentitySessions?.expireOidcLoginAttempts({
+      limit: PERSON_SESSION_OIDC_EXPIRY_BATCH_LIMIT,
+    });
+    const authorityRepository = repository;
     repository = undefined;
     const integrationsRepository = new OrganizationIntegrationsRepository(
       integrationsDatabase,
@@ -420,12 +520,14 @@ export async function startOrganizationAuthority(
         );
       },
     });
+    const recordRuntime = records;
+    const slackIntegrationProvider = new SlackWebIntegrationProvider();
     const integrations = new ComposedOrganizationIntegrationsApplication({
       authority: application,
       repository: integrationsRepository,
       secrets: integrationSecrets,
-      slack: new SlackWebIntegrationProvider(),
-      permissionPilotHealth: records.permissionPilotHealth,
+      slack: slackIntegrationProvider,
+      permissionPilotHealth: recordRuntime.permissionPilotHealth,
       organizationRecordingPolicy: config.organization_recording_policy_v1,
       authorizationFence,
     });
@@ -439,11 +541,11 @@ export async function startOrganizationAuthority(
       unicode_version: process.versions.unicode ?? 'unknown',
       icu_version: process.versions.icu ?? 'unknown',
     });
-    const readableSearch = createReadableSearchRuntimeAdapter({
+    const readableSearchOptions = {
       authority: application,
-      records,
+      records: recordRuntime,
       generation_directories: {
-        directoryFor: (generationId) =>
+        directoryFor: (generationId: Sha256Digest) =>
           join(config.state_directory, 'record-retrieval', 'generations', generationId),
       },
       retrieval_state_directory: config.state_directory,
@@ -467,30 +569,191 @@ export async function startOrganizationAuthority(
       },
       fence: authorizationFence,
       fence_timeout_ms: READABLE_SEARCH_FENCE_TIMEOUT_MS,
-    });
+    } as const;
+    const readableSearchRetrieval = createReadableSearchRetrievalPort(
+      readableSearchOptions,
+    );
+    const readableSearch = createReadableSearchRuntimeAdapter(
+      readableSearchOptions,
+      readableSearchRetrieval,
+    );
+    const personAuthorization =
+      personIdentitySessions?.createPersonReadAuthorizationPort();
+    const personRecentDecisions =
+      personAuthorization !== undefined
+        ? createPersonReadRecentDecisionsApplication({
+            descriptor: application.descriptor(),
+            authorization: personAuthorization,
+            ...(recordRuntime.permissionPilotHealth.kind === 'ready'
+              ? {
+                  recent_decisions: {
+                    activation: organizationRecentDecisionsPilotActivation(
+                      recordRuntime.permissionPilotHealth.activation,
+                    ),
+                    source: {
+                      load: () =>
+                        loadOrganizationRecentDecisionsProjectedRecords(
+                          recordRuntime,
+                        ),
+                    },
+                  },
+                }
+              : {}),
+            reviewer_recent_decisions: {
+              load: (input) =>
+                loadReviewerRecentDecisionsSource(
+                  recordRuntime,
+                  integrationsRepository,
+                  input,
+                ),
+            },
+          })
+        : undefined;
+    const personReadableSearch =
+      personAuthorization === undefined
+        ? undefined
+        : new PersonReadableSearchService({
+            authority_id: config.authority_id,
+            organization_id: config.organization_id,
+            authorization: personAuthorization,
+            retrieval: readableSearchRetrieval,
+            fence: authorizationFence,
+            contract: readableSearchOptions.contract,
+            fence_timeout_ms: READABLE_SEARCH_FENCE_TIMEOUT_MS,
+          });
+    const personMemberExclusions =
+      personIdentitySessions === undefined
+        ? undefined
+        : new PersonMemberExclusionService({
+            authority_id: config.authority_id,
+            organization_id: config.organization_id,
+            authentication: personIdentitySessions,
+            authorization_fence: authorizationFence,
+          });
+    const personMemberExclusionReads =
+      personAuthorization === undefined
+        ? undefined
+        : new PersonMemberExclusionReadService({
+            authority_id: config.authority_id,
+            organization_id: config.organization_id,
+            authorization: personAuthorization,
+            repository: authorityRepository,
+            authorization_fence: authorizationFence,
+            fence_timeout_ms: READABLE_SEARCH_FENCE_TIMEOUT_MS,
+            now: () => new Date().toISOString(),
+          });
+    const personSlackIdentityLink =
+      personIdentitySessions === undefined
+        ? undefined
+        : new PersonSlackIdentityLinkService({
+            authority_id: config.authority_id,
+            organization_id: config.organization_id,
+            authentication: personIdentitySessions,
+            repository: integrationsRepository,
+            secrets: integrationSecrets,
+            slack: slackIntegrationProvider,
+            authorization_fence: authorizationFence,
+          });
+    const personSessions =
+      personIdentitySessions === undefined ||
+      personOidcProvider === undefined ||
+      personSessionConfig === undefined
+        ? undefined
+        : fenceAuthorizationRelevantPersonSessionMutations(Object.freeze({
+            expected_issuer: personSessionConfig.oidc_configuration.issuer,
+            issueBootstrapLoginGrant: (input: {
+              target_membership_id: string;
+              expected_email: string;
+            }) =>
+              personIdentitySessions.issueBootstrapLoginGrant({
+                ...input,
+                expected_issuer:
+                  personSessionConfig.oidc_configuration.issuer,
+              }),
+            beginOidcLogin: async (input: Parameters<
+              PersonIdentitySessionApplication['beginOidcLogin']
+            >[0]) => {
+              personIdentitySessions.expireOidcLoginAttempts({
+                limit: PERSON_SESSION_OIDC_EXPIRY_BATCH_LIMIT,
+              });
+              let provider: PersonSessionOidcAuthorizationProvider;
+              try {
+                provider = await personOidcProvider.acquire();
+              } catch {
+                throw new AuthorityOperationError(
+                  'unavailable',
+                  'Person identity provider is temporarily unavailable',
+                );
+              }
+              const begun = personIdentitySessions.beginOidcLogin(input);
+              return {
+                authorization_url: provider.buildAuthorizationUrl(begun),
+                expires_at: begun.expires_at,
+              };
+            },
+            completeOidcLogin: (input: Parameters<
+              PersonIdentitySessionApplication['completeOidcLogin']
+            >[0]) => personIdentitySessions.completeOidcLogin(input),
+            refresh: (input: Parameters<
+              PersonIdentitySessionApplication['refresh']
+            >[0]) => personIdentitySessions.refresh(input),
+            revoke: (input: Parameters<
+              PersonIdentitySessionApplication['revoke']
+            >[0]) => personIdentitySessions.revoke(input),
+          }), authorizationFence);
+    const processingRuntimeOptions = {
+      config,
+      authority: application,
+      authorityRepository,
+      authorizationFence,
+      integrations,
+      integrationsRepository,
+      integrationSecrets,
+      records: recordRuntime,
+    } as const;
     if (authorityRuntimeFingerprint(config) !== runtimeFingerprint) {
       throw new Error(
         'organization authority files changed while composing the runtime',
       );
     }
     assertOrganizationMemberRecordingRuntimeBinding(config);
+    await (
+      dependencies.recoverTerminalRecordActs ??
+      recoverAuthorityTerminalRecordActs
+    )(processingRuntimeOptions);
     server = createOrganizationAuthorityHttpServer({
       application: fenceAuthorizationRelevantAuthorityMutations(
         application,
         authorizationFence,
       ),
       integrations,
-      records,
+      records: recordRuntime,
       recentDecisions: composeOrganizationRecentDecisions(
         application,
-        records,
+        recordRuntime,
       ),
       reviewerRecentDecisions: composeReviewerRecentDecisions(
         application,
-        records,
+        recordRuntime,
         integrationsRepository,
       ),
       readableSearch,
+      ...(personSessions === undefined ? {} : { personSessions }),
+      ...(personRecentDecisions === undefined
+        ? {}
+        : { personRecentDecisions }),
+      ...(personReadableSearch === undefined
+        ? {}
+        : { personReadableSearch }),
+      ...(personMemberExclusions === undefined
+        ? {}
+        : { personMemberExclusions }),
+      ...(personMemberExclusionReads === undefined
+        ? {}
+        : { personMemberExclusionReads }),
+      ...(personSlackIdentityLink === undefined
+        ? {}
+        : { personSlackIdentityLink }),
       adminAuthenticator,
       clientIdentityResolver,
       adminConsole: {
@@ -516,6 +779,10 @@ export async function startOrganizationAuthority(
     if (address === null || typeof address === 'string') {
       throw new Error('organization authority did not bind a TCP address');
     }
+    meetingProcessing = await (
+      dependencies.openMeetingProcessingRuntime ??
+      openAuthorityMeetingProcessingRuntime
+    )(processingRuntimeOptions);
     return {
       address,
       fatalFailure,
@@ -536,6 +803,13 @@ export async function startOrganizationAuthority(
       }
     }
     if (serverCleanupFailed && server !== undefined) {
+      if (meetingProcessing !== undefined && meetingProcessing !== null) {
+        try {
+          await meetingProcessing.close();
+        } catch (cleanupError) {
+          failures.push(cleanupError);
+        }
+      }
       abandonUncertainServer(server, failures);
       try {
         await runtimeLock.abandon();
@@ -549,9 +823,16 @@ export async function startOrganizationAuthority(
         'organization authority startup and ownership cleanup failed',
       );
     }
-    // Same order as the ordinary stop: records first and awaited, so its drain
-    // and chain verification run while everything they might read is still
-    // open.
+    // Same order as the ordinary stop: halt polling, then drain records while
+    // everything record derive might read is still open.
+    try {
+      if (meetingProcessing !== undefined && meetingProcessing !== null) {
+        await meetingProcessing.close();
+      }
+    } catch (cleanupError) {
+      cleanupFailed = true;
+      failures.push(cleanupError);
+    }
     try {
       if (records !== undefined) await records.close();
     } catch (cleanupError) {

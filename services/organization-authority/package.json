@@ -5,6 +5,12 @@
   "license": "MIT",
   "type": "module",
   "main": "dist/main.js",
+  "exports": {
+    ".": {
+      "types": "./dist/main.d.ts",
+      "import": "./dist/main.js"
+    }
+  },
   "files": [
     "dist/**/*.js",
     "dist/**/*.js.map",
@@ -19,12 +25,16 @@
   },
   "dependencies": {
     "@echo-brain/federation-protocol": "0.0.0-dev.0",
+    "@echo-brain/organization-api": "0.0.0-dev.0",
     "@echo-brain/organization-control-plane": "0.0.0-dev.0",
     "@echo-brain/organization-protocol": "0.0.0-dev.0",
-    "@echo-brain/organization-api": "0.0.0-dev.0",
     "@echo-brain/organization-record": "0.0.0-dev.0",
     "@echo-brain/organization-retrieval": "0.0.0-dev.0",
-    "better-sqlite3": "12.10.0"
+    "better-sqlite3": "12.10.0",
+    "openid-client": "6.8.4"
+  },
+  "devDependencies": {
+    "ajv": "8.20.0"
   },
   "engines": {
     "node": "22.22.1",
