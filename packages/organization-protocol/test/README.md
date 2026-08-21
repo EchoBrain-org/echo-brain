@@ -27,3 +27,14 @@ hashing an unversioned event directly. The suite reuses the retained payload
 grammar, pins representative canonical hashes, and proves exact policy,
 action, and coordinate joins without exporting or selecting a new envelope,
 receipt, persistence, or live writer.
+
+The private D3-2 envelope suite freezes the closed v4 body and four-member
+wrapper, exact kinded source/processor provenance and derived digests, record
+hash, detached signature preimage, pinned Authority key, and explicit lineage.
+It covers both policies/actions and genesis/non-genesis records, reuses the
+complete D3-1 joins, pins golden hashes and signature-input bytes, and rejects
+cross-version, key, lineage, signature, digest, provenance, and hostile-object
+substitution. Processor version and the opaque processor-contract digest are
+independent commitments; the latter's preimage/reproof, plus receipt, facts,
+persistence, exports, routes, and live selection, remain outside this private
+structural checkpoint.

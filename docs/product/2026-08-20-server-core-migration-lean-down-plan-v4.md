@@ -756,10 +756,14 @@ contract for Authority writing. It must pin:
   policy-specific record fields, owns the detailed provider
   connection/tenant/tool/actor/link, adapter identity/instance/version,
   binding, and capability tuple;
-- source adapter kind/ID/instance/version, external source locator, canonical
-  revision, `normalizer_version`, nullable provider `source_revision`,
-  decision-processor kind/ID/instance/version and contract digest; these are
-  provenance, not actor authority. One closed
+- one exact closed, domain-separated source-provenance body containing
+  Authority/organization/lineage, full source adapter identity, external
+  source locator, canonical revision, `normalizer_version`, and always-present
+  nullable provider `source_revision`; and one exact closed processor-
+  provenance body containing those coordinates, full decision-processor
+  identity, and its independent opaque contract digest. These are provenance,
+  not actor authority. Adapter version and processor-contract digest remain
+  distinct replay dimensions. One closed
   `echo-approved-decision-snapshot-v2` body contains the staged/final content
   digests and exact existing `OrganizationRecordApprovalPayloadV1` bytes under
   literal `organization-record-approval-payload-v1`; its canonical digest is
@@ -1309,12 +1313,28 @@ Approval embeds only the retained exact V1 payload under
 the accepted Person-v2 policy tuple. Rejection retains the bounded V1
 rejection payload and only candidate/snapshot/card/policy commitments; it
 rejects approved content, readable facts, and delivery fields. This checkpoint
-does not derive the opaque staged/final-content commitments and does not add an
-envelope wrapper, signature, source/processor provenance, receipt, fact
-projector, persistence, public export, or live writer. Those remain D3-2,
-D3-3, and Phase 3 work. The retained tree passes the full repository gate:
+does not derive the opaque staged/final-content commitments. D3-2 now owns the
+private envelope/provenance/signature structural checkpoint below; receipt,
+fact projector, persistence, public export, and live writer remain D3-3 and
+Phase 3 work. The retained D3-1 tree passed the full repository gate:
 143 test files and 1,447 tests, plus boundary, documentation, type checking,
 and lint.
+
+**D3-2 private envelope checkpoint (2026-08-20):** one non-exported
+organization-protocol module now freezes the exact v4 body and four-member
+wrapper, closed source and processor provenance bodies and derived digests,
+domain-separated record-signature preimage, detached P-256 low-S signature,
+exact pinned Authority key, and explicit expected lineage. It recomputes the
+complete D3-1 aggregate and semantic idempotency key, joins both actions and
+both Person-v2 policies, and for approvals joins the retained payload's source,
+meeting revision, and complete processor identity. The processor adapter
+version and opaque processor-contract digest remain independent mutation
+dimensions. D3-2 does not claim the processor-contract preimage, rejected-
+candidate preimage, staged/final-content preimages, D2 audit lookup, receipt,
+facts, persistence, public export, or live writer; Phase 3 must own and reprove
+those inputs before admission. The retained tree passes the full repository
+gate: 144 test files and 1,458 tests, plus boundary, documentation, type
+checking, and lint.
 
 **Entry gate**
 
@@ -1382,11 +1402,12 @@ earlier red, and compatibility remains selectable until Phase 3 parity.
    persistence, the real Slack observer and live alternate-authorizer
    selection, baseline SQL, application IDs, lineage manifests, and writable
    openers.
-5. **Authority envelope, receipt, and Layer-1 facts — D3-1 leaf contracts
-   complete.** The private D3-1 checkpoint freezes the snapshot, resolution
+5. **Authority envelope, receipt, and Layer-1 facts — D3-1 leaf and D3-2
+   envelope structural contracts complete.** The private D3-1 checkpoint freezes the snapshot, resolution
    reference, approved/rejected event, and semantic-idempotency leaf graph
-   without changing V1-V3 readers. D3-2 adds the exact envelope body/wrapper,
-   source/processor provenance, and P-256 signature preimage. D3-3 adds the
+   without changing V1-V3 readers. D3-2 freezes the exact envelope
+   body/wrapper, source/processor provenance, and P-256 signature preimage
+   without exporting or selecting them. D3-3 adds the
    receipt body/wrapper and pure policy-specific fact projector. Phase 3 then
    reproves the exact human-act reference at the Record application boundary,
    appends record and the complete policy-specific text-free facts atomically,

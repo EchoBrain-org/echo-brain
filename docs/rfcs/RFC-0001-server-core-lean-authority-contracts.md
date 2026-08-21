@@ -153,6 +153,8 @@ The new lineage uses these normative identifiers:
 | Integration audit entry | `echo-integration-audit-entry-v2` |
 | Human-act resolution reference | `echo-human-act-resolution-ref-v1` |
 | Human-act event commitment | `echo-human-act-event-commitment-v1` |
+| Meeting source provenance | `echo-meeting-source-provenance-v1` |
+| Decision processor provenance | `echo-decision-processor-provenance-v1` |
 | Record envelope | `echo-organization-record-envelope-v4` |
 | Record signature | `echo-organization-record-signature-v4` |
 | Record receipt | `echo-organization-record-receipt-v2` |
@@ -737,20 +739,61 @@ or mutated references deny.
 
 `echo-organization-record-envelope-v4` is a closed signed wrapper with four
 members: `body`, `record_sha256`, `signing_key_descriptor`, and `signature`.
-The closed `body` contains only:
+The closed `body` has these exact keys:
 
-- schema version 4, kind, envelope ID, Authority, organization, lineage,
-  organization-scoped semantic idempotency-key digest, and issued time;
-- predecessor position and hash, with both present and `null` only at the new
-  lineage genesis;
-- the exact human-act resolution reference and immutable authorization-proof
-  digest;
-- source adapter kind/ID/instance/version, external object ID, canonical
-  revision, `normalizer_version`, nullable provider `source_revision`, and
-  source-provenance digest;
-- processor kind/ID/instance/version and processor contract/configuration
-  digest; and
-- exactly one discriminated `event` object below.
+```text
+schema_version
+kind
+envelope_id
+authority_id
+organization_id
+state_lineage_id
+semantic_idempotency_key
+issued_at
+predecessor_position
+predecessor_record_sha256
+human_act_resolution_ref
+source_provenance
+source_provenance_sha256
+processor_provenance
+processor_provenance_sha256
+event
+```
+
+`schema_version` is `4`; `kind` is
+`echo-organization-record-envelope-v4`. Predecessor position and hash are both
+present and both `null` only at the new-lineage genesis. The embedded exact
+human-act reference already owns `authorization_proof_sha256`; neither that
+digest nor `human_act_resolution_ref_sha256` is duplicated at body level.
+
+`source_provenance` is the closed
+`echo-meeting-source-provenance-v1` object with exact keys
+`schema_version`, `kind`, `authority_id`, `organization_id`,
+`state_lineage_id`,
+`source_adapter_kind`, `source_adapter_id`, `source_adapter_instance_id`,
+`source_adapter_version`, `external_id`, `canonical_revision`,
+`normalizer_version`, and always-present nullable `source_revision`.
+`schema_version` is `1`, `kind` is
+`echo-meeting-source-provenance-v1`, and `source_adapter_kind` is
+`meeting-source`. Provider-owned source values remain opaque and byte-
+preserving JSON strings. `source_provenance_sha256` is recomputed from this
+complete domain-separated body.
+
+`processor_provenance` is the closed
+`echo-decision-processor-provenance-v1` object with exact keys
+`schema_version`, `kind`, `authority_id`, `organization_id`,
+`state_lineage_id`,
+`processor_adapter_kind`, `processor_adapter_id`,
+`processor_adapter_instance_id`, `processor_adapter_version`, and
+`processor_contract_sha256`. `schema_version` is `1`, `kind` is
+`echo-decision-processor-provenance-v1`, and `processor_adapter_kind` is
+`decision-processor`. Adapter version and processor-contract digest are
+independent replay dimensions and neither substitutes for the other.
+`processor_provenance_sha256` is recomputed from the complete provenance body.
+The private D3-2 structural slice validates and binds the opaque processor
+contract digest but does not claim its preimage. Live V4 admission remains
+blocked until Phase 3 names a closed domain-separated processor-contract
+preimage and reproves the frozen value.
 
 For `event.kind: approved`, the exact keys are:
 
@@ -795,10 +838,23 @@ fact data, any delivery fields, and rejected candidate content remain
 forbidden. Exact-key dispatch rejects a mixed event.
 
 `record_sha256` is SHA-256 of the canonical UTF-8 `body` bytes. It is not a
-member of `body`. The signature input is the canonical closed object containing
-schema version 4, kind `echo-organization-record-signature-v4`, Authority,
-organization, lineage, signing-key ID, and `record_sha256`. The signature is
-computed over those bytes. Verification recomputes body hash and signature;
+member of `body`. The signature input is the canonical closed object with exact
+keys:
+
+```text
+schema_version
+kind
+authority_id
+organization_id
+state_lineage_id
+signing_key_id
+record_sha256
+```
+
+`schema_version` is `4` and `kind` is
+`echo-organization-record-signature-v4`. The signature is
+computed over those bytes through an Authority signer that is also given the
+expected pinned key ID. Verification recomputes body hash and signature;
 the wrapper is rejected if a field is missing, extra, duplicated, or moved
 between body and wrapper. There is no self-hash or self-signature cycle.
 

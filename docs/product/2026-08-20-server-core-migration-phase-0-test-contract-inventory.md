@@ -261,6 +261,20 @@ rejection. It deliberately proves no D2 audit/body lookup, staged/final-content
 preimage, signed envelope, source/processor provenance, receipt, policy facts,
 persistence, restart, public export, or live writer selection.
 
+**D3-2 private envelope slice (2026-08-20):**
+`packages/organization-protocol/test/record-envelope-v4.test.ts` freezes the
+exact v4 body and wrapper, kinded source/processor provenance bodies and
+digests, record hash, detached Authority signature preimage, P-256 descriptor,
+and low-S signature. It proves both Person-v2 policies, approve/reject,
+genesis/non-genesis predecessors, complete D3-1 aggregate joins, exact approved
+source/revision/processor joins, independent processor-version and opaque
+processor-contract-digest mutation, golden hashes/preimage bytes, pinned-key
+and explicit-lineage denial, asynchronous signer snapshot safety,
+cross-version denial, and hostile-object rejection. It deliberately proves no
+processor-contract, staged/final-content, or rejected-candidate preimage; no D2
+audit lookup; and no receipt, policy facts, persistence, restart, public export,
+route, or live writer selection. Those remain D3-3/Phase 3 evidence.
+
 The suite must prove:
 
 - approve and reject both carry one opaque monotonic
