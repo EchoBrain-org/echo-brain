@@ -314,7 +314,7 @@ admission evidence and never a Layer-3 current read edge.
 
 The disposition must select:
 
-- a 30-day interval from Authority-owned `occurred_at`, explicitly replacing
+- a 30-day interval from Authority-owned `evaluated_at`, explicitly replacing
   the two historical 180-day query-audit contracts; and
 - a deliberately unsupported export contract with no production export route,
   command, writer, or row-selection port.

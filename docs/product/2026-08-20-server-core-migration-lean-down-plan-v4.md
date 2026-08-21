@@ -1415,6 +1415,26 @@ is structurally checked only after a future caller has re-proved it. This
 checkpoint adds no final fence, audit, retention, SQL, persistence, export,
 public export, route, transport, protected-handle, or live release behavior.
 
+**D6-3 private audit and retention checkpoint (2026-08-20):** one additional
+non-exported, unwired Authority application module freezes the exact
+`echo-person-read-decision-audit-v2` append-once row and the
+`echo-audit-expiry-control-v1` whole-row-expiry control as
+body-plus-`row_sha256` commitments. The aggregate revalidates the complete D6-1
+request/caller and D6-2A scope bodies, recomputes their joins, recomputes the
+D6-2B release binding for byte-returning allows, and snapshots and hashes the
+exact supplied denial bytes itself, so every deny binds `response_sha256`
+with no release binding and no item metadata; mutation acknowledgements carry
+no digests. `retain_until` is exactly thirty days from Authority-owned
+`evaluated_at`. Expiry commits ascending, unique batches of at most five
+hundred row digests with `cutoff` equal to its own `occurred_at`; empty
+batches are not written. The focused suite is 15 tests and the full Authority
+workspace is 88 test files and 856 tests; the full repository gate passes 150
+test files and 1,528 tests plus boundary, documentation, type checking, and
+lint. This checkpoint adds no final fence, audit
+persistence, SQL, export capability, route, transport, or live behavior, and
+the thirty-day retention and unsupported-export dispositions remain explicitly
+open for founder acceptance.
+
 **Entry gate**
 
 - Phase 1 exit is green.
@@ -1492,15 +1512,18 @@ earlier red, and compatibility remains selectable until Phase 3 parity.
    appends record and the complete policy-specific text-free facts atomically,
    makes rejection append no readable facts, and wires bounded terminal
    cleanup only after the receipt is durable.
-6. **Caller-neutral Person read boundary — D6-1 through D6-2B private
-   structural contracts complete; audit and live boundary pending.** Share current caller
+6. **Caller-neutral Person read boundary — D6-1 through D6-3 private
+   structural contracts complete; final fence, audit persistence, export
+   capability, opaque-preimage persistence/reproof, and live removal
+   pending.** Share current caller
    resolution, final fence, audit-before-release, and immutable response-byte
    handoff while keeping reviewer-recent Layer-1/log-backed and readable search
    Layer-2/exact-head. Reuse current repository materializers; do not add the
    proposed roughly 400-line joined query without profiling. The final single
    audit baseline lands with the accepted D6/new-lineage schema, not as another
-   transitional persistence system. D6-1 through D6-2B change no live DTO,
-   route, repository, database, final fence, audit, export, or byte release.
+   transitional persistence system. D6-1 through D6-3 change no live DTO,
+   route, repository, database, final fence, audit persistence, export, or
+   byte release.
 
 Every tranche selects exactly one writer in tests, can be reverted without a
 state downgrade, and has its own focused/full-suite exit record.

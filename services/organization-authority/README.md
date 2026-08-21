@@ -27,7 +27,7 @@ layer, or multi-replica coordination.
 
 ## Private migration contracts
 
-The Authority contains three unwired, non-package-exported D6 structural
+The Authority contains four unwired, non-package-exported D6 structural
 checkpoints. D6-1 freezes the four semantic Person request commitments and the
 bearer-derived caller binding. D6-2A freezes body-plus-digest
 `echo-person-scope-binding-v2` commitments with three closed variants:
@@ -44,13 +44,23 @@ capability. Retrieval uses a present ordered zero-through-ten exact five-field
 opaque tuple array with policy-to-scope admission; Authority-state is keyless
 and list-only, and mutation cannot create a release binding.
 
+D6-3 freezes body-plus-digest `echo-person-read-decision-audit-v2` append-once
+row and `echo-audit-expiry-control-v1` whole-row-expiry control commitments. It
+revalidates the complete D6-1 and D6-2A joins, recomputes the D6-2B release
+binding for a byte-returning allow, and snapshots and hashes the exact supplied
+denial bytes, so every deny binds `response_sha256` with no release
+binding and no item metadata while a mutation acknowledgement carries no digest
+at all. `retain_until` is exactly thirty days from Authority-owned
+`evaluated_at`; expiry commits ascending unique batches of at most five hundred
+row digests with `cutoff` equal to its own `occurred_at`.
+
 These modules validate closed structural bytes and recompute the request and
 caller/scope digests. They do not prove the opaque policy, retrieval,
 generation, segment, record-head, result, ownership, or exclusion preimages and
-do not add final-fence authorization, audit, retention, SQL, export,
-protected-handle, route, transport, or other live behavior. Fresh-lineage
-persistence and live reproof remain Phase 3 work; the current Person routes and
-audit stores are unchanged.
+do not add final-fence authorization, audit or retention persistence, SQL,
+export capability, protected-handle, route, transport, or other live behavior.
+Fresh-lineage persistence and live reproof remain Phase 3 work; the current
+Person routes and audit stores are unchanged.
 
 ## Release boundary
 

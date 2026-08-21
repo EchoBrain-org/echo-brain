@@ -105,16 +105,19 @@ The only exceptions to that structured canonical-object rule are:
 
 - `policy_consequence_sha256`, SHA-256 over its separately frozen exact human-
   visible UTF-8 bytes, with no quoting or trailing newline;
-- `serialized_response_sha256`, and the equal audit `response_sha256`, each
-  SHA-256 over the exact private immutable response-buffer bytes; and
+- `serialized_response_sha256`, and the audit `response_sha256`, each SHA-256
+  over the exact private immutable response-buffer bytes, or, for a deny, over
+  the exact fixed opaque denial bytes; and
 - the inherited P-256 `key_id` fingerprint, which is SHA-256 over the exact
   canonical SPKI DER bytes and is encoded as specified in D3.
 
 These byte digests are not structured contracts and cannot verify as a
-canonical-object digest or as one another. The audit `response_sha256` MUST
-equal the `serialized_response_sha256` in the release binding for the same
-release; it is not a second serialization or digest. Every other digest
-introduced by this RFC follows the closed-object rule above.
+canonical-object digest or as one another. For a byte-returning allow the audit
+`response_sha256` MUST equal the `serialized_response_sha256` in the release
+binding for the same release; it is not a second serialization or digest. A
+deny has no release binding, and its audit `response_sha256` is the digest of
+the fixed opaque denial bytes. Every other digest introduced by this RFC
+follows the closed-object rule above.
 
 Two Layer-1 identities are retained byte-for-byte from main rather than
 introduced as new digest-contract namespaces: `signal_id_sha256` is SHA-256
@@ -1325,7 +1328,10 @@ committed inside the scope preimage.
 `outcome` is exactly one of:
 
 ```text
-{kind: deny}
+{
+  kind: deny,
+  response_sha256
+}
 {
   kind: retrieval_release,
   release_binding_sha256,
@@ -1339,14 +1345,16 @@ committed inside the scope preimage.
 {kind: authority_state_mutation}
 ```
 
-`decision: deny` requires `outcome: {kind: deny}`. `decision: allow` requires
-the outcome matching its scope and operation. The only allow reason is
-`authorized`; deny reasons are `unauthenticated`, `caller_context_invalid`,
-`operation_forbidden`, `scope_not_admitted`, `current_state_changed`, or
-`protected_data_unavailable`. Each deny reason requires the context stage
-defined above. Every deny maps to the same safe opaque external failure family
-and contains no release/response digest, returned binding,
-item/count/path/segment, resource/source identifier, or policy-specific reason.
+`decision: deny` requires `outcome: {kind: deny, response_sha256}`.
+`decision: allow` requires the outcome matching its scope and operation. The
+only allow reason is `authorized`; deny reasons are `unauthenticated`,
+`caller_context_invalid`, `operation_forbidden`, `scope_not_admitted`,
+`current_state_changed`, or `protected_data_unavailable`. Each deny reason
+requires the context stage defined above. Every deny maps to the same safe
+opaque external failure family and contains no release digest, returned
+binding, item/count/path/segment, resource/source identifier, or
+policy-specific reason; its outcome binds exactly the SHA-256 of the fixed
+opaque denial bytes as `response_sha256`.
 `audit_unavailable` is not a row because persistence failed; it releases zero
 bytes and performs no mutation.
 
@@ -1355,8 +1363,10 @@ protected bytes; its desired-state mutation and audit row commit in the same
 Authority transaction. There is no second mutation-receipt object. A
 byte-returning allow commits the row before the adapter writes
 the exact buffer whose digest is both the outcome `response_sha256` and the
-release binding's `serialized_response_sha256`. The caller, scope, and release
-bindings are never overwritten, aliased, or substituted. No row contains
+release binding's `serialized_response_sha256`. A deny commits the row before
+the adapter writes the fixed opaque denial bytes whose digest is that
+outcome's `response_sha256`. The caller, scope, and release bindings are
+never overwritten, aliased, or substituted. No row contains
 query/content text, titles, participants, display/provider identities, source,
 custodian, resource, policy-path, segment, generation, manifest, or record-head
 identifiers, or caller-supplied identity fields. `retain_until` is exactly 30
@@ -1389,12 +1399,26 @@ grant. D6 reads use current Person/session/membership and canonical policy
 facts. Revoking an originating Slack connection or link after append cannot
 change reader semantics or break rebuild.
 
+The private D6-3 implementation revalidates the complete D6-1 request and
+caller bodies, revalidates the D6-2A scope against them, recomputes those
+commitments, and recomputes the D6-2B release binding for a byte-returning
+allow. It snapshots and hashes the exact supplied denial bytes itself rather
+than trusting a supplied digest, so every deny binds its own `response_sha256`.
+It enforces the closed decision/reason/context/outcome matrix, `retain_until`
+exactly 30 days after `evaluated_at`, and ascending unique expiry batches of at
+most 500 row digests whose `cutoff` equals the control row's own `occurred_at`.
+That the adapter supplies the same fixed opaque denial bytes for every deny is
+not proved here; it remains a final-fence and live-parity obligation deferred
+to Phase 3 with result-witness reproof. D6-3 does not authorize snapshot
+handoff. It adds no final fence, audit or retention persistence, SQL, export
+capability, public export, route, transport, or live behavior.
+
 ### Retention and export choices requiring disposition
 
 This draft recommends the lean disposition below, but it remains unresolved
 until the exact founder review accepts it:
 
-1. **Retention interval:** 30 days from Authority-owned `occurred_at`. This is
+1. **Retention interval:** 30 days from Authority-owned `evaluated_at`. This is
    an explicit replacement of the two historical 180-day query-audit
    contracts, not an inference that their data was unimportant.
 2. **Export position:** deliberately unsupported. The lean runtime has no
@@ -1589,7 +1613,7 @@ bytes:
 
 | ID | Choice | Least semantic-delta proposal |
 | --- | --- | --- |
-| OQ-1 | D6 retention interval | Lean proposal: 30 days from Authority `occurred_at`, explicitly superseding the historical 180-day query-audit contracts |
+| OQ-1 | D6 retention interval | Lean proposal: 30 days from Authority `evaluated_at`, explicitly superseding the historical 180-day query-audit contracts |
 | OQ-2 | D6 export position | Lean proposal: deliberately unsupported, with no production export route, command, writer, or row-selection port |
 | OQ-3 | D1 review | Lean proposal: founder/constitution-owner acceptance plus the recorded independent contract review; founder explicitly waives a second human reviewer until first-external-organization re-entry |
 | OQ-4 | D2 version break | Resolved by ADR-0005: the two v2 IDs, exact policy-contract bodies/selectors and computed digests, and exact consequence bytes are accepted while preserving reader sets |
