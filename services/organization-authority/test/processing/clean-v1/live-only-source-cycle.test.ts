@@ -13,6 +13,7 @@ import {
   type CleanApprovalStagerV1,
   type CleanLiveCandidateSnapshotInputV1,
   type CleanLiveCandidateV1,
+  type CleanFrozenCandidateSnapshotV1,
   type CleanGranolaSourceAdmissionV1,
   type CleanLiveOnlySourceStateV1,
 } from "../../../src/processing/clean-v1/live-only-source-cycle.js";
@@ -102,6 +103,10 @@ class FakeState implements CleanLiveOnlySourceStateV1 {
   readonly advances: Array<{ expected_cursor: string; next_cursor: string }> =
     [];
   readonly candidates: CleanLiveCandidateSnapshotInputV1[] = [];
+  private readonly sourceRevisions = new Map<
+    string,
+    CleanFrozenCandidateSnapshotV1
+  >();
 
   constructor(
     private readonly value: CleanGranolaSourceAdmissionV1,
@@ -113,17 +118,38 @@ class FakeState implements CleanLiveOnlySourceStateV1 {
     return this.value;
   }
 
+  async readFrozenCandidateForSourceRevision(input: {
+    readonly external_id: string;
+    readonly canonical_revision: string;
+  }): Promise<CleanFrozenCandidateSnapshotV1 | undefined> {
+    return this.sourceRevisions.get(
+      `${input.external_id}:${input.canonical_revision}`,
+    );
+  }
+
   async stageCandidate(
     input: CleanLiveCandidateSnapshotInputV1,
   ): Promise<CleanLiveCandidateV1> {
     this.candidates.push(input);
-    return {
+    const candidate = {
       candidate_id: "cnd_test",
       candidate_semantic_sha256: `sha256:${"b".repeat(64)}`,
       approval_id: "apr_test",
       stage_command_id: "pas_test",
       state: "queued",
-    };
+    } as const;
+    this.sourceRevisions.set(
+      `${input.meeting.provenance.external_id}:${input.meeting.provenance.canonical_revision}`,
+      { ...candidate, ...input },
+    );
+    return candidate;
+  }
+
+  seedFrozenCandidate(input: CleanFrozenCandidateSnapshotV1): void {
+    this.sourceRevisions.set(
+      `${input.meeting.provenance.external_id}:${input.meeting.provenance.canonical_revision}`,
+      input,
+    );
   }
 
   async advanceCursor(input: {
@@ -300,6 +326,142 @@ describe("clean live-only source cycle", () => {
         next_cursor: "granola:v1:next",
       },
     ]);
+  });
+
+  it("retries queued and posted revisions with only their frozen snapshots", async () => {
+    for (const stateName of ["queued", "posted"] as const) {
+      const current = admission();
+      const state = new FakeState(current);
+      const originalMeeting = meeting();
+      const originalDecisions = decisions(originalMeeting);
+      state.seedFrozenCandidate({
+        candidate_id: `cnd_${stateName}`,
+        candidate_semantic_sha256: `sha256:${"b".repeat(64)}`,
+        approval_id: `apr_${stateName}`,
+        stage_command_id: `pas_${stateName}`,
+        state: stateName,
+        admission: current,
+        meeting: originalMeeting,
+        decisions: originalDecisions,
+      });
+      let extracts = 0;
+      let retried: Parameters<CleanApprovalStagerV1["stage"]>[0] | undefined;
+      const downstream: CleanApprovalStagerV1 = {
+        stage: async (input) => {
+          retried = input;
+          return { kind: "staged", stage_id: "stage-1" };
+        },
+      };
+      const changedObservation: MeetingDocument = {
+        ...originalMeeting,
+        provenance: {
+          ...originalMeeting.provenance,
+          observed_at: "2026-08-22T02:06:04.005Z",
+        },
+      };
+      const cycle = new CleanLiveOnlySourceCycleV1({
+        source: source({
+          meetings: [changedObservation],
+          next_cursor: current.source.cursor,
+        }),
+        processor: processor((value) => {
+          extracts += 1;
+          return decisions(value);
+        }),
+        state,
+        stager: downstream,
+      });
+
+      await expect(cycle.runOnce()).resolves.toEqual({
+        kind: "staged",
+        stage_id: "stage-1",
+        cursor_advanced: false,
+      });
+      expect(extracts).toBe(0);
+      expect(retried).toEqual({
+        admission: current,
+        candidate: expect.objectContaining({ state: stateName }),
+        meeting: originalMeeting,
+        decisions: originalDecisions,
+      });
+      expect(state.advances).toEqual([]);
+    }
+  });
+
+  it("skips staged revisions before extraction and processes a changed revision", async () => {
+    const current = admission();
+    const state = new FakeState(current);
+    const originalMeeting = meeting();
+    state.seedFrozenCandidate({
+      candidate_id: "cnd_staged",
+      candidate_semantic_sha256: `sha256:${"b".repeat(64)}`,
+      approval_id: "apr_staged",
+      stage_command_id: "pas_staged",
+      state: "staged",
+      admission: current,
+      meeting: originalMeeting,
+      decisions: decisions(originalMeeting),
+    });
+    let extracts = 0;
+    let stages = 0;
+    const countingProcessor = processor((value) => {
+      extracts += 1;
+      return decisions(value);
+    });
+    const downstream: CleanApprovalStagerV1 = {
+      stage: async () => {
+        stages += 1;
+        return { kind: "staged", stage_id: "stage-1" };
+      },
+    };
+
+    const repeated = new CleanLiveOnlySourceCycleV1({
+      source: source({
+        meetings: [
+          {
+            ...originalMeeting,
+            provenance: {
+              ...originalMeeting.provenance,
+              observed_at: "2026-08-22T02:06:04.005Z",
+            },
+          },
+        ],
+        next_cursor: current.source.cursor,
+      }),
+      processor: countingProcessor,
+      state,
+      stager: downstream,
+    });
+    await expect(repeated.runOnce()).resolves.toEqual({
+      kind: "already_processed",
+      cursor_advanced: false,
+    });
+
+    const revisedMeeting: MeetingDocument = {
+      ...originalMeeting,
+      provenance: {
+        ...originalMeeting.provenance,
+        canonical_revision: "sha256:note-2",
+      },
+    };
+    const revised = new CleanLiveOnlySourceCycleV1({
+      source: source({
+        meetings: [revisedMeeting],
+        next_cursor: current.source.cursor,
+      }),
+      processor: countingProcessor,
+      state,
+      stager: downstream,
+    });
+    await expect(revised.runOnce()).resolves.toEqual({
+      kind: "staged",
+      stage_id: "stage-1",
+      cursor_advanced: false,
+    });
+    expect(extracts).toBe(1);
+    expect(stages).toBe(1);
+    expect(state.candidates).toHaveLength(1);
+    expect(state.advances).toEqual([]);
   });
 
   it("does not advance no-signal meetings when the Authority cursor fence drifts or is revoked", async () => {

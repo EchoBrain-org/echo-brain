@@ -36,6 +36,22 @@ interface ProgressRow {
 
 type CandidateRow = CleanLiveCandidateV1;
 
+function candidateSemanticDigest(input: {
+  readonly admission_semantic_input_sha256: string;
+  readonly external_id: string;
+  readonly canonical_revision: string;
+}): string {
+  return canonicalSha256({
+    schema_version: 1,
+    kind: "echo-clean-live-candidate-v1",
+    admission_semantic_input_sha256: input.admission_semantic_input_sha256,
+    meeting: {
+      external_id: input.external_id,
+      canonical_revision: input.canonical_revision,
+    },
+  });
+}
+
 export interface CleanPostedApprovalCardV1 {
   readonly candidate_id: string;
   readonly provider_message_ts: string;
@@ -186,12 +202,16 @@ export class SqliteCleanLiveOnlySourceStateV1 implements CleanLiveOnlySourceStat
       }
       const meetingJson = canonicalJson(input.meeting);
       const decisionsJson = canonicalJson(input.decisions);
-      const candidateSemanticSha256 = canonicalSha256({
-        schema_version: 1,
-        kind: "echo-clean-live-candidate-v1",
-        admission: input.admission,
-        meeting: input.meeting,
-        decisions: input.decisions,
+      // A source page can be retried after its cursor has advanced, and the
+      // processor can produce a different observation of the same revision.
+      // Neither event may create another approval. The admission's persisted
+      // semantic identity fixes the admitted source/processor configuration;
+      // the meeting's provider identity fixes the admitted source revision.
+      // The first writer below remains the immutable audit snapshot.
+      const candidateSemanticSha256 = candidateSemanticDigest({
+        admission_semantic_input_sha256: admission.semantic_input_sha256,
+        external_id: input.meeting.provenance.external_id,
+        canonical_revision: input.meeting.provenance.canonical_revision,
       });
       const candidateId = `cnd_${candidateSemanticSha256.slice("sha256:".length)}`;
       const approvalId = `apr_${candidateSemanticSha256.slice("sha256:".length)}`;
@@ -235,6 +255,28 @@ export class SqliteCleanLiveOnlySourceStateV1 implements CleanLiveOnlySourceStat
         stage_command_id: stageCommandId,
         state: "queued" as const,
       };
+    })();
+  }
+
+  async readFrozenCandidateForSourceRevision(input: {
+    readonly external_id: string;
+    readonly canonical_revision: string;
+  }): Promise<CleanFrozenCandidateForApprovalV1 | undefined> {
+    return this.database.transaction(() => {
+      const admission = this.admission();
+      if (admission.membership_status !== "active") {
+        throw new CleanLiveOnlySourceRevokedError();
+      }
+      const candidate = this.candidate(
+        candidateSemanticDigest({
+          admission_semantic_input_sha256: admission.semantic_input_sha256,
+          external_id: input.external_id,
+          canonical_revision: input.canonical_revision,
+        }),
+      );
+      return candidate === undefined
+        ? undefined
+        : this.readFrozenCandidateForApproval(candidate.approval_id);
     })();
   }
 

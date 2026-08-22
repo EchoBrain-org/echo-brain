@@ -36,6 +36,11 @@ export interface CleanGranolaSourceAdmissionV1 {
  */
 export interface CleanLiveOnlySourceStateV1 {
   readAdmission(): Promise<CleanGranolaSourceAdmissionV1>;
+  /** Returns the original frozen snapshot for an admitted source revision. */
+  readFrozenCandidateForSourceRevision(input: {
+    readonly external_id: string;
+    readonly canonical_revision: string;
+  }): Promise<CleanFrozenCandidateSnapshotV1 | undefined>;
   stageCandidate(
     input: CleanLiveCandidateSnapshotInputV1,
   ): Promise<CleanLiveCandidateV1>;
@@ -58,6 +63,13 @@ export interface CleanLiveCandidateV1 {
   readonly approval_id: string;
   readonly stage_command_id: string;
   readonly state: "queued" | "posted" | "staged";
+}
+
+/** The immutable Authority snapshot associated with a durable candidate. */
+export interface CleanFrozenCandidateSnapshotV1 extends CleanLiveCandidateV1 {
+  readonly admission: CleanGranolaSourceAdmissionV1;
+  readonly meeting: MeetingDocument;
+  readonly decisions: DecisionSet;
 }
 
 export interface CleanApprovalStageInputV1 {
@@ -123,6 +135,15 @@ export type CleanLiveOnlySourceCycleResultV1 =
   | {
       readonly kind: "staged_cursor_not_advanced";
       readonly stage_id: string;
+      readonly reason: "revoked" | "state_drift";
+      readonly cursor_advanced: false;
+    }
+  | {
+      readonly kind: "already_processed";
+      readonly cursor_advanced: boolean;
+    }
+  | {
+      readonly kind: "already_processed_cursor_not_advanced";
       readonly reason: "revoked" | "state_drift";
       readonly cursor_advanced: false;
     };
@@ -256,6 +277,77 @@ export class CleanLiveOnlySourceCycleV1 {
     }
 
     assertCanonicalMeetingDocument(meeting, this.options.source.identity);
+    const frozen = await this.options.state.readFrozenCandidateForSourceRevision(
+      {
+        external_id: meeting.provenance.external_id,
+        canonical_revision: meeting.provenance.canonical_revision,
+      },
+    );
+    if (frozen !== undefined) {
+      if (frozen.state !== "staged") {
+        const staged = await this.options.stager.stage(
+          {
+            admission: frozen.admission,
+            candidate: frozen,
+            meeting: frozen.meeting,
+            decisions: frozen.decisions,
+          },
+          signal === undefined ? undefined : { signal },
+        );
+        if (staged.kind !== "staged") {
+          return {
+            kind: "not_staged",
+            reason: staged.kind,
+            cursor_advanced: false,
+          };
+        }
+        if (
+          batch.next_cursor === undefined ||
+          batch.next_cursor === admission.source.cursor
+        ) {
+          return {
+            kind: "staged",
+            stage_id: staged.stage_id,
+            cursor_advanced: false,
+          };
+        }
+        const advanced = await this.options.state.advanceCursor({
+          expected_cursor: admission.source.cursor,
+          next_cursor: batch.next_cursor,
+        });
+        if (advanced !== "advanced") {
+          return {
+            kind: "staged_cursor_not_advanced",
+            stage_id: staged.stage_id,
+            reason: advanced,
+            cursor_advanced: false,
+          };
+        }
+        return {
+          kind: "staged",
+          stage_id: staged.stage_id,
+          cursor_advanced: true,
+        };
+      }
+      if (
+        batch.next_cursor === undefined ||
+        batch.next_cursor === admission.source.cursor
+      ) {
+        return { kind: "already_processed", cursor_advanced: false };
+      }
+      const advanced = await this.options.state.advanceCursor({
+        expected_cursor: admission.source.cursor,
+        next_cursor: batch.next_cursor,
+      });
+      if (advanced === "advanced") {
+        return { kind: "already_processed", cursor_advanced: true };
+      }
+      return {
+        kind: "already_processed_cursor_not_advanced",
+        reason: advanced,
+        cursor_advanced: false,
+      };
+    }
     const decisions = await this.options.processor.extract(
       meeting,
       {
@@ -305,7 +397,10 @@ export class CleanLiveOnlySourceCycleV1 {
         cursor_advanced: false,
       };
     }
-    if (batch.next_cursor === undefined) {
+    if (
+      batch.next_cursor === undefined ||
+      batch.next_cursor === admission.source.cursor
+    ) {
       return {
         kind: "staged",
         stage_id: staged.stage_id,

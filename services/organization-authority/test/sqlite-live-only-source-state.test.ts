@@ -276,4 +276,128 @@ describe("SQLite clean live-only source state", () => {
     ).toMatchObject({ approval_id: candidate.approval_id });
     expect(state.listStagedApprovalIds()).toEqual([]);
   });
+
+  it("deduplicates retries by admitted configuration and source revision while preserving the first audit snapshot", async () => {
+    const value = database();
+    const state = new SqliteCleanLiveOnlySourceStateV1(
+      value,
+      () => ADVANCED_AT,
+    );
+    const initialAdmission = await state.readAdmission();
+    const original = await state.stageCandidate({
+      admission: initialAdmission,
+      meeting,
+      decisions,
+    });
+
+    await state.advanceCursor({
+      expected_cursor: sourceCursor,
+      next_cursor: nextCursor,
+    });
+    const advancedAdmission = await state.readAdmission();
+    await expect(
+      state.readFrozenCandidateForSourceRevision({
+        external_id: meeting.provenance.external_id,
+        canonical_revision: meeting.provenance.canonical_revision,
+      }),
+    ).resolves.toMatchObject({
+      admission: { source: { cursor: sourceCursor } },
+      meeting,
+      decisions,
+    });
+    await expect(
+      state.readFrozenCandidateForSourceRevision({
+        external_id: meeting.provenance.external_id,
+        canonical_revision: "sha256:note-2",
+      }),
+    ).resolves.toBeUndefined();
+    const retriedMeeting: MeetingDocument = {
+      ...meeting,
+      provenance: {
+        ...meeting.provenance,
+        observed_at: NEXT_CUTOFF,
+      },
+      content: [
+        {
+          id: "block-1",
+          kind: "note",
+          text: "A later provider observation of the same revision.",
+        },
+      ],
+    };
+    const retriedDecisions: DecisionSet = {
+      ...decisions,
+      generated_at: NEXT_CUTOFF,
+      signals: [
+        {
+          id: "decision-1",
+          kind: "decision",
+          status: "decided",
+          text: "A later LLM observation of the same revision.",
+          subject: null,
+          confidence: 1,
+          evidence: [{ meeting_id: meeting.id, block_id: "block-1" }],
+        },
+      ],
+    };
+
+    await expect(
+      state.stageCandidate({
+        admission: advancedAdmission,
+        meeting: retriedMeeting,
+        decisions: retriedDecisions,
+      }),
+    ).resolves.toEqual(original);
+    expect(
+      value
+        .prepare(
+          `SELECT COUNT(*) AS count FROM authority_clean_live_candidates_v1`,
+        )
+        .get(),
+    ).toEqual({ count: 1 });
+    expect(
+      value
+        .prepare(
+          `SELECT COUNT(*) AS count FROM authority_clean_live_approval_outbox_v1`,
+        )
+        .get(),
+    ).toEqual({ count: 1 });
+    expect(state.readFrozenCandidateForApproval(original.approval_id)).toMatchObject({
+      admission: { source: { cursor: sourceCursor } },
+      meeting,
+      decisions,
+    });
+
+    const revisedMeeting: MeetingDocument = {
+      ...retriedMeeting,
+      provenance: {
+        ...retriedMeeting.provenance,
+        canonical_revision: "sha256:note-2",
+      },
+    };
+    const revisedDecisions: DecisionSet = {
+      ...retriedDecisions,
+      meeting_revision: revisedMeeting.provenance.canonical_revision,
+    };
+    const revised = await state.stageCandidate({
+      admission: advancedAdmission,
+      meeting: revisedMeeting,
+      decisions: revisedDecisions,
+    });
+    expect(revised).not.toEqual(original);
+    expect(
+      value
+        .prepare(
+          `SELECT COUNT(*) AS count FROM authority_clean_live_candidates_v1`,
+        )
+        .get(),
+    ).toEqual({ count: 2 });
+    expect(
+      value
+        .prepare(
+          `SELECT COUNT(*) AS count FROM authority_clean_live_approval_outbox_v1`,
+        )
+        .get(),
+    ).toEqual({ count: 2 });
+  });
 });
