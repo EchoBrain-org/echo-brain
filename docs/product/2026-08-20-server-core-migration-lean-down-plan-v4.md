@@ -2,32 +2,35 @@
 
 **Status:** active initial-V1 execution plan, written 2026-08-20 against
 `77a212134fce762fdffd30e028f3256ba6e75b42` and checked for product parity
-against `main@4665c3a93187095d5d14acbe95e825cd69aaf31e`. ADR-0004 now authorizes
-the current-only cleanup sprint. Live reset and sole-writer cutover remain
-blocked until that cleanup and the disposable empty-state rehearsal pass.
+against `main@4665c3a93187095d5d14acbe95e825cd69aaf31e`. ADR-0006 governs the
+permission-aware clean-state implementation. On 2026-08-22 the founder reset,
+identity/provider re-onboarding, and sole clean-Authority start completed at
+`1e72ae8`; the replacement lineage is active and empty, while its post-cutoff
+record canary and employee rollout remain next-sprint work.
 
-**Accepted clean-state override (2026-08-22):**
-[ADR-0004](../decisions/ADR-0004-founder-authority-clean-state-reset.md)
-supersedes ADR-0003, ADR-0005, and every incompatible preserve/parity clause
-below. The target is one founder-only pipeline, one directly authored genesis
-per retained database role, one current access-event table, and the current
-top-level envelope only. Permission-aware dual-policy reads, readable-search
-planes, historical envelope admission, additive migration ledgers, the
-installation compatibility bridge, delivery fan-out, and formal rollback
-evidence are not V1 requirements. Until this plan is mechanically condensed
-in the cleanup sprint, incompatible detail below is historical implementation
-context, not a governing acceptance gate.
+**Accepted permission-aware clean-state correction (2026-08-22):**
+[ADR-0006](../decisions/ADR-0006-permission-aware-clean-v1-completion.md)
+supersedes ADR-0004 while retaining its clean-state, current-only, and
+no-compatibility decisions. The target is one directly authored genesis per
+retained database role, current V4 only, and permission-aware Layer 1 through
+Layer 3 list/search for N >= 2. Historical envelope admission, additive
+migration ledgers, the installation compatibility bridge, delivery fan-out,
+and formal old/new rollback evidence are not V1 requirements. Until this plan
+is mechanically condensed, incompatible detail below is historical
+implementation context, not a governing acceptance gate.
 
-This plan originally preserved main's byte-level v2 behavior. ADR-0004 records
-the explicit delta: clean state permits deletion of historical compatibility
-and replacement with the smaller current-only contracts.
+This plan originally preserved main's byte-level v2 behavior. ADR-0006 retains
+ADR-0004's clean-state deletion of historical compatibility and corrects its
+sole-user assumption by requiring current permission-aware contracts.
 
 **Governing decisions:**
 [ADR-0001](../decisions/ADR-0001-organization-operated-server-core.md) and
 [ADR-0002](../decisions/ADR-0002-external-oidc-person-sessions.md) are accepted
 and binding. Accepted
-[ADR-0004](../decisions/ADR-0004-founder-authority-clean-state-reset.md)
-narrows their initial implementation and supersedes ADR-0003 and ADR-0005.
+[ADR-0006](../decisions/ADR-0006-permission-aware-clean-v1-completion.md)
+updates their initial implementation and supersedes ADR-0004. It retains the
+clean-state and no-compatibility disposition that passed through ADR-0004 from
+superseded ADR-0003 and ADR-0005.
 
 **Historical context:**
 [server-core migration plan v3](2026-08-17-server-core-migration-plan-v3.md)
@@ -37,14 +40,20 @@ successor added. This document is the active plan for finishing the migration
 against the current repository.
 
 **Objective:** remove the installation-era compatibility system and redundant
-transport ceremony, leaving one founder-operated Authority with OIDC, Slack,
-Granola, one LLM, approve/reject, durable current records, and one simple
-founder read.
+transport ceremony, leaving one organization-operated Authority with OIDC,
+Slack, Granola, one LLM, approve/reject, durable current records, and
+permission-aware Person list/search.
+
+**Next execution sprint:**
+[organization onboarding and employee rollout V1](2026-08-22-organization-onboarding-and-employee-rollout-v1.md).
+It productizes the proven clean runtime and completes the employee read path
+before broad legacy deletion resumes.
 
 This is a clean-state replacement. The founder has confirmed there is no
-customer or other user state to preserve and has accepted ADR-0004. The new
-runtime copies no rows and admits no historical schema or envelope. Live reset
-still waits for the accepted implementation and empty-state rehearsal.
+customer state to preserve; ADR-0006 retains ADR-0004's authorization to start
+fresh. The new runtime copies no rows and admits no historical schema or
+envelope. The founder reset and clean-runtime start completed on 2026-08-22;
+the current lineage still needs its post-cutoff record canary.
 
 **Founder reset-first scope decision (2026-08-21).** There are no live users or
 customers to migrate: the founder is the only operator. Raw Slack, Granola, and
@@ -1133,10 +1142,13 @@ The historical Phase-0 packet is the
 [closure ledger](2026-08-20-server-core-migration-phase-0-closure.md),
 [test-contract inventory](2026-08-20-server-core-migration-phase-0-test-contract-inventory.md),
 [RFC-0001](../rfcs/RFC-0001-server-core-lean-authority-contracts.md), superseded
-[ADR-0003](../decisions/ADR-0003-server-core-lean-authority-contracts.md), and
-accepted [ADR-0004](../decisions/ADR-0004-founder-authority-clean-state-reset.md).
-ADR-0004 now governs implementation. Acceptance alone is not evidence that the
-live reset or cutover has run.
+[ADR-0003](../decisions/ADR-0003-server-core-lean-authority-contracts.md),
+superseded
+[ADR-0004](../decisions/ADR-0004-founder-authority-clean-state-reset.md), and
+accepted
+[ADR-0006](../decisions/ADR-0006-permission-aware-clean-v1-completion.md).
+ADR-0006 now governs implementation. Acceptance by itself was not deployment
+evidence; the 2026-08-22 clean start is recorded separately above.
 
 **Entry gate**
 
@@ -1155,9 +1167,9 @@ live reset or cutover has run.
    object, record-proof, policy-fact, retrieval-scope, and audit identifier from
    authoritative source through final consumer. Record whether each edge is
    current, frozen, revocable, tenant-scoped, and safe to minimize.
-4. Replace the superseded D1 through D4 and D6 contract packet with ADR-0004's
-   founder-only current pipeline and direct genesis schemas.
-5. Implement accepted D0/ADR-0004, rehearse it from disposable empty state,
+4. Replace the superseded D1 through D4 and D6 contract packet with ADR-0006's
+   current permission-aware pipeline and direct genesis schemas.
+5. Implement accepted D0/ADR-0006, rehearse it from disposable empty state,
    and review the streamlined onboarding flow before touching the central
    organization. It does not create an old/new rollback pair.
 6. Add no compatibility abstraction merely to make later deletion easier.
@@ -1166,7 +1178,7 @@ live reset or cutover has run.
 
 - The initial V1 preserve/replace/delete boundary and every intentional delta
   from main are recorded; unresolved exact contracts have an owning phase.
-- D0/ADR-0004 is accepted, while implementation and qualification remain
+- D0/ADR-0006 is accepted, while implementation and qualification remain
   visibly incomplete until the cleanup sprint and empty-state rehearsal pass.
 - Every proposed deletion has an owner, replacement or zero-caller proof, and
   a named verification case.

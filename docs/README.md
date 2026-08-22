@@ -15,13 +15,18 @@ failures, operations, and proof for exact runs.
   [server-core lean-down plan v4](product/2026-08-20-server-core-migration-lean-down-plan-v4.md).
   V2, v3, and existing qualification reports remain historical context, not
   the current deletion sequence.
+- Running the next sprint: use the locked
+  [organization onboarding and employee rollout V1](product/2026-08-22-organization-onboarding-and-employee-rollout-v1.md)
+  scope. It productizes the clean runtime under ADR-0006 before broad legacy
+  deletion resumes.
 - Closing its first gate: review the
   [Phase 0 closure ledger](product/2026-08-20-server-core-migration-phase-0-closure.md),
   [test-contract inventory](product/2026-08-20-server-core-migration-phase-0-test-contract-inventory.md),
   [coordinated RFC](rfcs/RFC-0001-server-core-lean-authority-contracts.md),
-  and proposed [technical](decisions/ADR-0003-server-core-lean-authority-contracts.md)
-  and [clean-state reset](decisions/ADR-0004-founder-authority-clean-state-reset.md)
-  decisions. Phase 0 remains open until their exact dispositions are recorded.
+  and accepted
+  [permission-aware clean V1 decision](decisions/ADR-0006-permission-aware-clean-v1-completion.md).
+  ADR-0006 preserves the clean-state replacement while restoring the required
+  permission-aware Layer 1 through Layer 3 stack for N >= 2.
 
 Components are the navigation layer. Cross-cutting records are written once,
 linked by stable ID, and not copied between component pages.
