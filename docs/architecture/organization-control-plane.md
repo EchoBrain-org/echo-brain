@@ -1,34 +1,41 @@
 # Minimum organization control plane v1
 
-**Status:** minimum organization-owned Slack onboarding plus the first live
-identity-link and action-time permission slice.
+**Status:** current organization-owned Slack onboarding and Person identity
+linking, plus a retained installation-bound V1 permission slice with no shipped
+caller.
 
 This milestone is intentionally smaller than the eventual organization
-platform. It exists to prove two customer-visible behaviors:
+platform. It implements two current customer-visible behaviors:
 
 1. A current Authority owner can make one organization-owned Slack connection
    active only after the Authority independently verifies its provider
    identity, scopes, and public channel access.
-2. The retained live permission path can prove a provider identity such as an
-   employee's Slack `U...` user ID, link it to that employee's current Echo
-   membership, grant one explicit action on one exact adapter, and deny it
-   after either the membership or enrolled installation is revoked.
+2. A signed-in Person can prove a provider identity such as an employee's Slack
+   `U...` user ID and link it to that employee's current ECHO membership. This
+   creates no adapter binding or permission grant.
+
+The control plane also retains the installation-signed V1 action-time
+permission evaluator because existing approval and record schemas still refer
+to it. The old machine runtime and signer are deleted, so that evaluator is a
+server compatibility surface, not a current Person workflow.
 
 ## Ownership boundaries
 
 | Boundary | Owner | V1 authority |
 | --- | --- | --- |
-| Organization Authority | Customer | Principal, membership, role, installation, and revocation truth |
+| Organization Authority | Customer | Principal, membership, role, Person session, processing, retained installation compatibility, and revocation truth |
 | Organization control plane | Customer | Provider links, connection handles, adapter bindings, direct grants, and integration audit |
 | Organization record | Customer | The append-only log of human-approved decisions and rejections, and the deterministic graph derived from it |
-| Echo Brain product | Customer | Meetings, decisions, local processing, and delivery evidence |
+| Authority processing | Customer | Meetings, decisions, server processing, pending approval, and delivery evidence |
+| Person client | Person | One private Authority session and bounded authenticated requests |
 | Future ECHO entitlement | ECHO | Pseudonymous organization-wide deny/revoke only |
 
-Decision ownership is split deliberately. The product owns the meeting and the
-local decision node; the organization record owns the org-wide act once a human
-approved or rejected it. The control plane owns neither — it holds the
-permission evaluation that authorized the act, and organization-record ingest
-reads that existing `organization_integration_audit` row read-only before it
+Decision ownership is split deliberately. Authority processing owns the
+meeting and pre-record decision state; the organization record owns the
+org-wide act once a human approved or rejected it. The control plane owns
+neither — it holds provider identity and, for the retained V1 path, the
+permission evaluation that authorized the act. Organization-record ingest
+reads an existing `organization_integration_audit` row read-only before it
 appends. No control-plane table exists for records.
 
 The future ECHO entitlement cannot create a customer membership, grant an
@@ -84,16 +91,17 @@ database never receives the token.
 
 The `slack-organization-tool-v1` ready state is accepted only while its opaque
 credential reference resolves to a private readable secret during Authority
-startup. An enrolled installation can then start a manual Slack link: it keeps
-a one-time code locally, the Authority posts a code-free challenge through the
-organization bot, and Slack identifies the one human who replies with that
-code in the exact thread. The observed human must match the reviewer already
-configured for the installation's approval adapter. Completion creates or
-reuses that membership's identity link and the installation's exact adapter
-binding. It creates no permission grant. A profileless active connection is
-compatibility-only.
-Automatic tool discovery and configuration propagation into installations are
-not implemented in this milestone.
+startup. A signed-in Person can then start a manual Slack link: the Person
+client keeps a one-time code, the Authority posts a code-free challenge through
+the organization bot, and Slack identifies the one human who replies with that
+code in the exact thread. Completion creates or reuses that membership's
+external identity link. It creates no adapter binding or permission grant.
+
+The retained V1 installation-signed challenge still expects an installation's
+configured reviewer and can create an installation adapter binding. No shipped
+client can initiate that compatibility flow. A profileless active connection
+is compatibility-only. Automatic multi-provider tool discovery and Person-bound
+approval configuration remain later work.
 
 The live database upgrade preserves one active organization-owned Slack
 connection. Migration `0002_organization_tool_public_configuration.sql` is an
@@ -130,7 +138,10 @@ re-verification. Any other tool or binding shape, provider mismatch, missing
 app proof, or concurrent change fails closed. This is identity repair, not
 credential rotation, channel rotation, or a general lifecycle operation.
 
-### Retained action-time permission path
+### Retained V1 action-time permission path
+
+This path is still implemented and tested server-side, but it has no caller in
+the Person product:
 
 ```text
 verified provider event
@@ -157,6 +168,14 @@ allow or deny, then append audit before returning
 Every dependency is an intersection. Missing, revoked, expired, unverifiable,
 or unreachable state denies.
 
+The replacement server approval path must preserve that intersection under
+[INV-IDENTITY-005](../invariants/INV-IDENTITY-005-adapter-to-echo-identity-chain.md).
+It removes installation authentication from the chain; it does not collapse or
+discard the verified provider connection, adapter identity/instance/binding,
+tenant-scoped external identity link, exact principal/membership tenure,
+explicit action capability, frozen provider object, or integration-audit
+proof. A Person identity link still grants no action by itself.
+
 ## Closed v1 schema
 
 The schema contains seven domain tables plus its migration ledger:
@@ -170,8 +189,8 @@ The schema contains seven domain tables plus its migration ledger:
 4. `organization_tool_connections` records immutable provider account identity,
    granted scopes, verified public configuration, and an opaque customer
    secret-store handle.
-5. `organization_adapter_bindings` permits one exact product installation,
-   installation key, and adapter instance to use a connection.
+5. `organization_adapter_bindings` retains the V1 permission for one exact
+   installation, installation key, and adapter instance to use a connection.
 6. `organization_permission_grants` grants one membership exactly one of
    `view`, `approve`, or `reject` on an approval binding.
 7. `organization_integration_audit` records mutations and every live
@@ -182,17 +201,17 @@ Organization-tool onboarding adds public configuration to the existing tool
 connection table. It does not add a domain table: the contract remains seven
 domain tables and eight total including the migration ledger.
 
-Authority `principal_id`, `membership_id`, and `installation_id` values are
-opaque references. They are not foreign keys because Authority remains a
-separate service and the sole source of those facts.
+Authority `principal_id`, `membership_id`, and retained `installation_id`
+values are opaque references. They are not foreign keys because Authority
+remains the sole source of those facts.
 
 ## Implemented v1 safety
 
 The connection and permission service must preserve these rules:
 
 - Recheck the current Authority owner role for every connection/grant
-  mutation, and current installation plus target membership state for every
-  permission action. Authority failure denies.
+  mutation, and, on the retained V1 permission path, current installation plus
+  target membership state for every action. Authority failure denies.
 - Only a current Authority owner or administrator may mutate links,
   connections, bindings, or grants. Local grants cannot create an
   administrator.
@@ -207,13 +226,13 @@ The connection and permission service must preserve these rules:
   proof. The app ID embedded in a reviewed Slack message is never trusted as
   the connection identity.
 - Existing profileless approval connections and their links, bindings, and
-  grants remain usable. Explicit organization-tool onboarding re-verifies the
-  stored credential and channel and promotes that same connection ID; it never
-  creates a parallel tool connection. After Slack is explicitly ready, an
-  installation-signed challenge proves one exact Slack human and commits only
-  that identity link and installation binding. A separate owner-attributed
-  activation creates or reuses approve/reject grants for those exact existing
-  records. Organization-tool onboarding creates no employee-specific state.
+  grants remain readable for compatibility. Explicit organization-tool
+  onboarding re-verifies the stored credential and channel and promotes that
+  same connection ID; it never creates a parallel tool connection. The current
+  Person-session-authenticated challenge proves one exact Slack human and commits only the
+  identity link. The retained installation-signed challenge and
+  owner-attributed grant activation are not callable by the Person client.
+  Organization-tool onboarding creates no employee-specific state.
 - A historical profileless or ready v1 tool with a `null` Slack app ID is not
   silently accepted as an exact reviewer identity. An owner must explicitly
   re-onboard it. The Authority verifies the retained private credential again
@@ -225,43 +244,48 @@ The connection and permission service must preserve these rules:
 - Normalize scopes, require the provider's granted scope set to contain every
   scope required by the selected flow, and create the terminal attempt plus
   resulting link or connection in the same database transaction.
-- Authenticate the local product caller as the exact enrolled installation and
-  installation key named by the binding. Loopback networking alone is not
-  authentication.
+- On the retained V1 path, authenticate the caller as the exact enrolled
+  installation and installation key named by the binding. Loopback networking
+  alone is not authentication.
 - Store provider tokens in a private mode-0600 file under customer-owned
-  Authority state for the one-machine milestone. SQLite stores only an opaque
-  `sch_*` handle, never token bytes, authorization codes, or raw PKCE material.
+  Authority state for the single-Authority milestone. SQLite stores only an
+  opaque `sch_*` handle, never token bytes, authorization codes, or raw PKCE
+  material.
 - Acquire an authenticated kernel singleton guard before opening writable
   state or listening.
 - Commit the mutation or allow/deny audit record before publishing success.
 - Bind the exact channel plus approve/reject reaction names into the adapter
-  binding. The product cannot reinterpret a reject reaction as approval.
-- Require an installation-signed `/v1/permission-checks` request and verify the
+  binding. A server adapter cannot reinterpret a reject reaction as approval.
+- On the retained V1 path, require an installation-signed
+  `/v1/permission-checks` request and verify the
   decisive Slack reaction live before returning an allow. The decision itself is
   not signed. It carries `request_sha256` and `provider_event_sha256`, which
   bind the response to the exact request but do not authenticate it; the
-  response is trusted because it arrives over the configured HTTPS origin
-  associated with the pinned Authority descriptor, and the product verifies both
-  digests before acting on it.
+  response is trusted only after a compatible caller verifies its configured
+  HTTPS Authority and both digests. No current Person operation consumes this
+  decision.
 - Bind the live Slack bot, app, workspace, human, channel, message, reaction,
   and opaque approval digest into the installation-signed request. The Authority
   independently requires the bound bot to have authored a message carrying that
   exact approval marker.
-- The installation-signed `/v1/permission-checks` request never sends the
-  product processing key, meeting identifier, meeting content, decision text,
+- The installation-signed `/v1/permission-checks` request never sends the V1
+  processing key, meeting identifier, meeting content, decision text,
   or reason text to the Authority's action-time authorization path.
   `approval_id` is an irreversible digest used only to name the approval card.
-- Never reuse a provider-event result as authorization. Every retry rechecks
-  current installation, membership, link, binding, grant, bot identity,
+- Never reuse a provider-event result as authorization. Every retained V1 retry
+  rechecks current installation, membership, link, binding, grant, bot identity,
   message marker, and conflicting reactions before appending a new audit
   evaluation.
-- Keep the Slack approval surface the single resolver. The CLI ships no
-  approve/reject command at all, so no local actor can resolve a decision until
-  a centrally attributable CLI actor policy exists.
+- Keep the Slack approval surface the single resolver. The Person CLI ships no
+  approve/reject command. The bundled Slack approval adapter is composed into
+  the Authority meeting runtime when the retained installation-bound binding
+  exists; the missing piece is a Person/server approval activation contract,
+  not Slack runtime composition.
 
-The Authority and integration layer run in one process. The permission lookup
-is authenticated by the enrolled installation key and never receives the
-administrator credential. No positive authorization result is cached in v1.
+The Authority and integration layer run in one process. The retained V1
+permission lookup is authenticated by the enrolled installation key and never
+receives the administrator credential. No positive authorization result is
+cached.
 
 ## Explicitly deferred
 
@@ -272,37 +296,35 @@ V1 does not persist:
 - quorum and candidate snapshots;
 - projection streams or authorization receipts;
 - non-Slack and general-purpose organization workload identities;
-- product cutover state;
+- Person-bound approval and record-writer bindings;
 - control-plane signing delegation or recovery epochs;
-- offline authorization, multi-machine operation, HA, or witnessed backup
+- offline authorization, multi-replica operation, HA, or witnessed backup
   rollback protection;
 - Slack credential or channel rotation, explicit organization-tool disconnect,
   and fine-grained operator actions for revoking or replacing provider identity
   links, tool connections, adapter bindings, or individual grants. V1
   organization access is disabled through the implemented membership or
   installation revocation controls; provider lifecycle management is a later
-  milestone.
+  milestone. Current Person access is disabled through session or membership
+  revocation; installation revocation applies only to the retained V1 path.
 
 These are design possibilities, not scheduled schema. They may be added only
 when an accepted milestone has an externally observable behavior that cannot
 be implemented safely with the current model.
 
 No Teams, Granola, project-management, or other non-Slack organization-tool
-onboarding is implemented. Automatic organization-tool propagation and a
-multi-provider employee connect catalog are also explicitly deferred.
+onboarding is implemented. A multi-provider Person connect catalog is also
+explicitly deferred.
 
 `organization_permission_grants` receives NEW Slack approval grants only
-through the current installation-signed Slack identity-proof path: the
-employee first completes that proof, and the resulting identity link is the
-verified prerequisite and the audit reference for activation. The
-administrator command `echo-organization-admin slack approval activate`
-names that existing identity link and exact installation adapter binding.
-Its Authority route creates or reuses only the direct `approve` and `reject`
-grants; the grants themselves are scoped to the adapter binding plus the
-exact principal and membership. It does not call Slack, accept a bot token,
-create a provider identity, or create an adapter binding. Completing the
-employee link therefore still reports `permission_grants_created: 0`, and
-activation is the one separate owner-attributed permission step.
+through the retained installation-bound activation path. The administrator
+command names an existing V1 identity link and exact installation adapter
+binding; its Authority route creates or reuses only direct `approve` and
+`reject` grants. It does not call Slack, accept a bot token, create a provider
+identity, or create an adapter binding. Person-v2 Slack completion creates or
+reuses only an external identity link and cannot feed this old activation
+contract. Therefore no current Person product path creates a new approval
+grant; the replacement must be additive and server-owned.
 
 ## Schema growth rule
 

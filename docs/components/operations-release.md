@@ -10,6 +10,9 @@ component_ids:
 created_at: 2026-08-13
 reviewed_at: 2026-08-14
 reviewed_ref: 83819a57fd8635384d14d3cc8d591e8f76ad1260
+decision_ids:
+  - ADR-0004
+  - ADR-0006
 invariant_ids:
   - INV-IDENTITY-004
   - INV-RELEASE-001
@@ -25,6 +28,8 @@ qualification_ids:
   - QUAL-20260814-050326-001
   - QMAT-READABLE-SEARCH-MINIMUM-V1-001
   - QUAL-20260814-194049-001
+  - QMAT-PERSON-CLIENT-FOUNDATION-V1-001
+  - QUAL-20260819-193536-001
 ---
 
 # Operations and release
@@ -35,8 +40,9 @@ This component owns the procedures and automation that turn source into a
 tested artifact, deploy compatible product and Authority generations, operate
 them, preserve backups, recover state, and record qualification evidence.
 
-Primary roots are `.github/`, `tools/`, and `deploy/` plus the lifecycle and
-update code under `src/product/`.
+Primary roots are `.github/`, `tools/`, and `deploy/`. The Person artifact has
+no lifecycle daemon or fleet updater; the Authority uses the server deployment
+and rollback procedure.
 
 ## Claim boundaries
 

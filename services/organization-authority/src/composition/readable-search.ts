@@ -31,6 +31,7 @@ import {
   type ReadableSearchContract,
   type ReadableSearchFetchedItem,
   type ReadableSearchGenerationBinding,
+  type ReadableSearchRetrievalAdmission,
   type ReadableSearchRetrievalPort,
   type ReadableSearchScope,
 } from '../application/readable-search.js';
@@ -142,6 +143,58 @@ function sameActiveGeneration(
   );
 }
 
+/** Exact V1/V2 scope receipts passed to the opaque retrieval machine. */
+export function readableSearchScopeBindingSha256(input: {
+  readonly admission: ReadableSearchRetrievalAdmission;
+  readonly binding: ReadableSearchGenerationBinding;
+  readonly admitted_segments: readonly {
+    readonly policy_id: string;
+    readonly segment_manifest_sha256: Sha256Digest;
+  }[];
+}): Sha256Digest {
+  const common = {
+    retrieval_contract_sha256: input.binding.retrieval_contract_sha256,
+    policy_contracts: input.binding.policy_contracts,
+    generation: {
+      generation_id: input.binding.generation_id,
+      manifest_sha256: input.binding.manifest_sha256,
+    },
+    record_head: {
+      position: input.binding.record_head_position,
+      record_hash: input.binding.record_head_hash,
+    },
+    admitted_segments: input.admitted_segments.map((segment) => ({
+      policy_id: segment.policy_id,
+      segment_manifest_sha256: segment.segment_manifest_sha256,
+    })),
+  };
+  return canonicalSha256(
+    input.admission.kind === 'installation-v1'
+      ? {
+          schema_version: 1,
+          kind: 'readable-search-scope-binding-v1',
+          request_sha256: input.admission.request_sha256,
+          requester: {
+            principal_id: input.admission.principal_id,
+            membership_id: input.admission.membership_id,
+            membership_type: input.admission.membership_type,
+            enrollment_id: input.admission.enrollment_id,
+            installation_id: input.admission.installation_id,
+          },
+          person_state_sha256: input.admission.person_state_sha256,
+          operation: 'search-readable',
+          ...common,
+        }
+      : {
+          schema_version: 2,
+          kind: 'readable-search-scope-binding-v2',
+          request_sha256: input.admission.request_sha256,
+          caller_binding_sha256: input.admission.caller_binding_sha256,
+          ...common,
+        },
+  );
+}
+
 /**
  * Startup performs the complete immutable-generation admission once. Its
  * broad integrity reads are never on a requester path; serving receives only
@@ -217,22 +270,15 @@ function captureGeneration(
   }
 }
 
-/**
- * Wires the Authority-owned current-Person/final-audit port to the retrieval
- * serving subpath.  It does not construct an HTTP listener or expose a
- * generic record/SQLite reader.
- */
-export function createReadableSearchRuntimeAdapter(
+/** The one opaque retrieval runtime shared by V1 and Person-readable V2. */
+export function createReadableSearchRetrievalPort(
   options: CreateReadableSearchRuntimeAdapterOptions,
-): ReadableSearchService {
-  const statePort = options.authority.createBoundReadableSearchAuthorityStatePort(
-    matchingRecordHeadVerifier(options.records),
-  );
+): ReadableSearchRetrievalPort {
   const captured = captureGeneration(options);
   const scopes = new WeakMap<object, OpaqueScopeState>();
 
   const retrieval: ReadableSearchRetrievalPort = {
-    openScope: ({ authenticated, person }) => {
+    openScope: (admission) => {
       if (captured.kind !== 'ready') {
         throw new ReadableSearchError(
           'unavailable',
@@ -264,8 +310,8 @@ export function createReadableSearchRuntimeAdapter(
       const reviewerSegment = reviewerSegmentIdentity({
         organization_id: active.organization_id,
         policy_contract_sha256: captured.value.reviewer_policy_contract_sha256,
-        reviewer_principal_id: person.principal_id,
-        reviewer_membership_id: person.membership_id,
+        reviewer_principal_id: admission.principal_id,
+        reviewer_membership_id: admission.membership_id,
       });
       if (generation.segments.has(reviewerSegment.segment_id)) {
         admitted.push(reviewerSegment);
@@ -294,40 +340,17 @@ export function createReadableSearchRuntimeAdapter(
         retrieval_contract_sha256: active.retrieval_contract_sha256,
         policy_contracts: options.contract.policy_contracts,
       });
-      const scopeBindingSha256 = canonicalSha256({
-        schema_version: 1,
-        kind: 'readable-search-scope-binding-v1',
-        request_sha256: authenticated.request_sha256,
-        requester: {
-          principal_id: person.principal_id,
-          membership_id: person.membership_id,
-          membership_type: person.membership_type,
-          enrollment_id: person.enrollment_id,
-          installation_id: person.installation_id,
-        },
-        person_state_sha256: person.person_state_sha256,
-        operation: 'search-readable',
-        retrieval_contract_sha256: binding.retrieval_contract_sha256,
-        policy_contracts: binding.policy_contracts,
-        generation: {
-          generation_id: binding.generation_id,
-          manifest_sha256: binding.manifest_sha256,
-        },
-        record_head: {
-          position: binding.record_head_position,
-          record_hash: binding.record_head_hash,
-        },
-        admitted_segments: admittedSegments.map((segment) => ({
-          policy_id: segment.policy_id,
-          segment_manifest_sha256: segment.segment_manifest_sha256,
-        })),
+      const scopeBindingSha256 = readableSearchScopeBindingSha256({
+        admission,
+        binding,
+        admitted_segments: admittedSegments,
       });
       const machine = new OpaqueReadableSearchMachine(
         generation,
         options.handle_observer,
       );
       const opaque = machine.bind({
-        request_sha256: authenticated.request_sha256,
+        request_sha256: admission.request_sha256,
         caller_binding_sha256: scopeBindingSha256,
         admitted_segment_ids: admittedSegments.map((segment) => segment.segment_id),
       });
@@ -337,8 +360,8 @@ export function createReadableSearchRuntimeAdapter(
         scope_binding_sha256: scopeBindingSha256,
         reviewer_tuple: generation.segments.has(reviewerSegment.segment_id)
           ? Object.freeze({
-              principal_id: person.principal_id,
-              membership_id: person.membership_id,
+              principal_id: admission.principal_id,
+              membership_id: admission.membership_id,
             })
           : null,
         selected_policy_paths_still_match: (
@@ -432,12 +455,43 @@ export function createReadableSearchRuntimeAdapter(
         }),
       );
     },
+    finalStateStillMatches: (scope, transaction, selected) => {
+      const active = transaction.activeReadableSearchGeneration();
+      return (
+        active !== null &&
+        active.generation_id === scope.binding.generation_id &&
+        active.manifest_sha256 === scope.binding.manifest_sha256 &&
+        active.retrieval_contract_sha256 === scope.binding.retrieval_contract_sha256 &&
+        active.record_head_position === scope.binding.record_head_position &&
+        active.record_head_hash === scope.binding.record_head_hash &&
+        sameHead(recordHead(options.records), {
+          position: scope.binding.record_head_position,
+          record_hash: scope.binding.record_head_hash,
+        }) &&
+        scope.selected_policy_paths_still_match(selected)
+      );
+    },
     close: (scope) => {
       const state = scopes.get(scope);
       if (state !== undefined) state.machine.close(state.opaque);
     },
   };
 
+  return retrieval;
+}
+
+/**
+ * Wires the existing V1 Authority-owned current-Person/final-audit port to
+ * the shared opaque retrieval runtime. It does not construct an HTTP listener
+ * or expose a generic record/SQLite reader.
+ */
+export function createReadableSearchRuntimeAdapter(
+  options: CreateReadableSearchRuntimeAdapterOptions,
+  retrieval: ReadableSearchRetrievalPort = createReadableSearchRetrievalPort(options),
+): ReadableSearchService {
+  const statePort = options.authority.createBoundReadableSearchAuthorityStatePort(
+    matchingRecordHeadVerifier(options.records),
+  );
   return new ReadableSearchService({
     authority: statePort,
     retrieval,

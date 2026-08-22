@@ -18,6 +18,7 @@ import {
 } from './readable-search-authorization-fence.js';
 import type { ReadableSearchAuthorizationFenceLease } from './readable-search-authorization-fence.js';
 import type {
+  AuthorityReadTransaction,
   ReadableSearchQueryAuditEntry,
   ReadableSearchQueryAuditReasonCode,
 } from './ports/authority-repository.js';
@@ -102,11 +103,36 @@ export interface ReadableSearchScope {
   ): boolean;
 }
 
+/**
+ * Source-neutral admission data. Authentication is complete before this
+ * crosses into retrieval; the two variants exist solely to preserve V1's
+ * immutable scope receipt while keeping V2 free of installation state.
+ */
+export type ReadableSearchRetrievalAdmission =
+  | {
+      readonly kind: 'installation-v1';
+      readonly request_sha256: Sha256Digest;
+      readonly principal_id: string;
+      readonly membership_id: string;
+      readonly membership_type: 'owner' | 'employee';
+      readonly enrollment_id: string;
+      readonly installation_id: string;
+      readonly person_state_sha256: Sha256Digest;
+    }
+  | {
+      readonly kind: 'person-v2';
+      readonly request_sha256: Sha256Digest;
+      readonly principal_id: string;
+      readonly membership_id: string;
+      readonly membership_type: 'owner' | 'employee';
+      readonly person_state_sha256: Sha256Digest;
+      readonly caller_binding_sha256: Sha256Digest;
+    };
+
 export interface ReadableSearchRetrievalPort {
-  openScope(input: {
-    readonly authenticated: ReadableSearchAuthenticatedRequest;
-    readonly person: ReadableSearchCurrentPerson;
-  }): Promise<ReadableSearchScope> | ReadableSearchScope;
+  openScope(
+    admission: ReadableSearchRetrievalAdmission,
+  ): Promise<ReadableSearchScope> | ReadableSearchScope;
   search(
     scope: ReadableSearchScope,
     query: string,
@@ -115,6 +141,12 @@ export interface ReadableSearchRetrievalPort {
     scope: ReadableSearchScope,
     candidates: readonly ReadableSearchCandidate[],
   ): Promise<readonly ReadableSearchFetchedItem[]> | readonly ReadableSearchFetchedItem[];
+  /** V2 final check; V1 retains its established Authority-owned equivalent. */
+  finalStateStillMatches(
+    scope: ReadableSearchScope,
+    transaction: AuthorityReadTransaction,
+    selected: readonly ReadableSearchCandidate[],
+  ): boolean;
   close(scope: ReadableSearchScope): void;
 }
 
@@ -250,7 +282,7 @@ function witness(policy: ReadableSearchPolicyId): string {
     : ORGANIZATION_MEMBER_READABLE_SEARCH_WITNESS;
 }
 
-function validateBinding(
+export function validateReadableSearchBinding(
   binding: ReadableSearchGenerationBinding,
   expected: ReadableSearchContract,
 ): void {
@@ -275,10 +307,10 @@ function validateBinding(
   }
 }
 
-function validateCandidates(
+export function validateReadableSearchCandidates(
   candidates: readonly ReadableSearchCandidate[],
   scope: ReadableSearchScope,
-  person: ReadableSearchCurrentPerson,
+  person: Pick<ReadableSearchCurrentPerson, 'principal_id' | 'membership_id'>,
 ): void {
   if (candidates.length > MAX_ITEMS) {
     unavailable('readable-search candidate count exceeded the closed result bound');
@@ -298,9 +330,15 @@ function validateCandidates(
   }
 }
 
-function prepareAllow(
+export interface CanonicalReadableSearchAllowResponse {
+  readonly status_code: 200;
+  readonly response_bytes: Buffer;
+}
+
+/** The one canonical V1 response builder, shared by V1 and Person reads. */
+export function canonicalReadableSearchAllowResponse(
   items: readonly ReadableSearchFetchedItem[],
-): PreparedReadableSearchDraft {
+): CanonicalReadableSearchAllowResponse {
   if (items.length > MAX_ITEMS) unavailable('readable-search returned too many items');
   const responseItems = items.map((item) => {
     if (
@@ -328,10 +366,20 @@ function prepareAllow(
     unavailable('readable-search canonical response is invalid', error);
   }
   const body = Buffer.from(canonicalJson(response), 'utf8');
-  return Object.freeze({ status_code: 200, body });
+  return Object.freeze({ status_code: 200, response_bytes: body });
 }
 
-function validateFetchedAlignment(
+function prepareAllow(
+  items: readonly ReadableSearchFetchedItem[],
+): PreparedReadableSearchDraft {
+  const canonical = canonicalReadableSearchAllowResponse(items);
+  return Object.freeze({
+    status_code: canonical.status_code,
+    body: canonical.response_bytes,
+  });
+}
+
+export function validateReadableSearchFetchedAlignment(
   candidates: readonly ReadableSearchCandidate[],
   items: readonly ReadableSearchFetchedItem[],
 ): void {
@@ -515,12 +563,21 @@ export class ReadableSearchService {
     let items: readonly ReadableSearchFetchedItem[] = [];
     let prepared: PreparedReadableSearchDraft;
     try {
-      scope = await this.options.retrieval.openScope({ authenticated, person: initial });
-      validateBinding(scope.binding, this.options.contract);
+      scope = await this.options.retrieval.openScope({
+        kind: 'installation-v1',
+        request_sha256: authenticated.request_sha256,
+        principal_id: initial.principal_id,
+        membership_id: initial.membership_id,
+        membership_type: initial.membership_type,
+        enrollment_id: initial.enrollment_id,
+        installation_id: initial.installation_id,
+        person_state_sha256: initial.person_state_sha256,
+      });
+      validateReadableSearchBinding(scope.binding, this.options.contract);
       candidates = await this.options.retrieval.search(scope, authenticated.request.query);
-      validateCandidates(candidates, scope, initial);
+      validateReadableSearchCandidates(candidates, scope, initial);
       items = await this.options.retrieval.fetch(scope, candidates);
-      validateFetchedAlignment(candidates, items);
+      validateReadableSearchFetchedAlignment(candidates, items);
       prepared = prepareAllow(items);
     } catch (error) {
       if (scope !== undefined) {
@@ -632,7 +689,7 @@ export class ReadableSearchService {
             if (!samePerson(initial, finalized.person) || !finalized.scope_still_admitted) {
               unavailable('readable-search state changed before final commitment');
             }
-            validateCandidates(
+            validateReadableSearchCandidates(
               items,
               scope,
               finalized.person,

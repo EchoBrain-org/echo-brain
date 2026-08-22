@@ -14,6 +14,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import {
   AUTHORITY_FILE_SECRET_BACKEND,
   currentOrganizationControlSchemaVersion,
+  openAndMigrateOrganizationControlDatabase,
   openOrganizationControlDatabase,
   OrganizationIntegrationsRepository,
   organizationControlApplicationId,
@@ -668,7 +669,7 @@ afterEach(() => {
 
 describe("minimum organization control-plane v1 schema", () => {
   it("locks every v1 table, column, enum check, index, and trigger", () => {
-    const controlDatabase = openOrganizationControlDatabase(":memory:");
+    const controlDatabase = openAndMigrateOrganizationControlDatabase(":memory:");
     try {
       const schema = controlDatabase
         .prepare(
@@ -686,7 +687,7 @@ describe("minimum organization control-plane v1 schema", () => {
 
   it("installs only tables assigned to observable v1 behavior", () => {
     const path = databasePath();
-    const database = openOrganizationControlDatabase(path);
+    const database = openAndMigrateOrganizationControlDatabase(path);
     expect(currentOrganizationControlSchemaVersion()).toBe(5);
     expect(database.pragma("user_version", { simple: true })).toBe(5);
     expect(database.pragma("application_id", { simple: true })).toBe(
@@ -714,7 +715,7 @@ describe("minimum organization control-plane v1 schema", () => {
   });
 
   it("rejects a fresh ready Slack connection without a canonical app ID", () => {
-    const database = openOrganizationControlDatabase(":memory:");
+    const database = openAndMigrateOrganizationControlDatabase(":memory:");
     seedMetadata(database);
     insertPendingAttempt(database, {
       id: "cat_fresh-null-app",
@@ -907,12 +908,12 @@ describe("minimum organization control-plane v1 schema", () => {
 
   it("rejects missing, foreign, partial, future, and tampered databases", () => {
     const path = databasePath();
-    openOrganizationControlDatabase(path).close();
-    expect(() => openOrganizationControlDatabase(path).close()).not.toThrow();
+    openAndMigrateOrganizationControlDatabase(path).close();
+    expect(() => openAndMigrateOrganizationControlDatabase(path).close()).not.toThrow();
 
     const missing = join(path, "..", "missing.sqlite");
     expect(() =>
-      openOrganizationControlDatabase(missing, { fileMustExist: true }),
+      openAndMigrateOrganizationControlDatabase(missing, { fileMustExist: true }),
     ).toThrow();
     expect(existsSync(missing)).toBe(false);
 
@@ -921,7 +922,7 @@ describe("minimum organization control-plane v1 schema", () => {
     foreign.pragma("application_id = 1234");
     foreign.close();
     chmodSync(foreignPath, 0o600);
-    expect(() => openOrganizationControlDatabase(foreignPath)).toThrow(
+    expect(() => openAndMigrateOrganizationControlDatabase(foreignPath)).toThrow(
       "not an organization control-plane database",
     );
 
@@ -930,7 +931,7 @@ describe("minimum organization control-plane v1 schema", () => {
     occupied.exec("CREATE TABLE unrelated (id INTEGER PRIMARY KEY) STRICT");
     occupied.close();
     chmodSync(occupiedPath, 0o600);
-    expect(() => openOrganizationControlDatabase(occupiedPath)).toThrow(
+    expect(() => openAndMigrateOrganizationControlDatabase(occupiedPath)).toThrow(
       "refusing to claim a non-empty uninitialized database",
     );
 
@@ -940,7 +941,7 @@ describe("minimum organization control-plane v1 schema", () => {
     partial.pragma("user_version = 1");
     partial.close();
     chmodSync(partialPath, 0o600);
-    expect(() => openOrganizationControlDatabase(partialPath)).toThrow(
+    expect(() => openAndMigrateOrganizationControlDatabase(partialPath)).toThrow(
       "migration ledger does not match user_version",
     );
 
@@ -949,18 +950,18 @@ describe("minimum organization control-plane v1 schema", () => {
     future.pragma("user_version = 6");
     future.close();
     chmodSync(futurePath, 0o600);
-    expect(() => openOrganizationControlDatabase(futurePath)).toThrow(
+    expect(() => openAndMigrateOrganizationControlDatabase(futurePath)).toThrow(
       "newer than supported schema 5",
     );
 
     const tamperedPath = join(path, "..", "tampered.sqlite");
-    openOrganizationControlDatabase(tamperedPath).close();
+    openAndMigrateOrganizationControlDatabase(tamperedPath).close();
     const tampered = new Database(tamperedPath);
     tampered.exec(
       "DROP TRIGGER organization_permission_grants_immutable_delete",
     );
     tampered.close();
-    expect(() => openOrganizationControlDatabase(tamperedPath)).toThrow(
+    expect(() => openAndMigrateOrganizationControlDatabase(tamperedPath)).toThrow(
       "schema fingerprint is invalid",
     );
   });
@@ -1446,7 +1447,7 @@ describe("minimum organization control-plane v1 schema", () => {
     });
     legacyRepository.close();
 
-    const fresh = openOrganizationControlDatabase(":memory:");
+    const fresh = openAndMigrateOrganizationControlDatabase(":memory:");
     seedMetadata(fresh);
     const freshRepository = new OrganizationIntegrationsRepository(fresh, {
       organization_id: IDS.organization,
@@ -1576,7 +1577,7 @@ describe("minimum organization control-plane v1 schema", () => {
   });
 
   it("accepts one exact terminal result for a pending connect ceremony", () => {
-    const database = openOrganizationControlDatabase(":memory:");
+    const database = openAndMigrateOrganizationControlDatabase(":memory:");
     seedMetadata(database);
     expect(() =>
       database
@@ -1691,7 +1692,7 @@ describe("minimum organization control-plane v1 schema", () => {
     ] as const;
 
     for (const scenario of cases) {
-      const database = openOrganizationControlDatabase(":memory:");
+      const database = openAndMigrateOrganizationControlDatabase(":memory:");
       seedMetadata(database);
       insertPendingAttempt(database, {
         id: "cat_slack-app",
@@ -1723,7 +1724,7 @@ describe("minimum organization control-plane v1 schema", () => {
   });
 
   it("links only the exact provider human proved by the connect ceremony", () => {
-    const database = openOrganizationControlDatabase(":memory:");
+    const database = openAndMigrateOrganizationControlDatabase(":memory:");
     seedMetadata(database);
     insertPendingAttempt(database, {
       id: "cat_slack-human",
@@ -1772,7 +1773,7 @@ describe("minimum organization control-plane v1 schema", () => {
   });
 
   it("supports the complete minimum Slack identity and approval grant flow", () => {
-    const database = openOrganizationControlDatabase(":memory:");
+    const database = openAndMigrateOrganizationControlDatabase(":memory:");
     seedApprovalFlow(database);
 
     expect(effectivePermission(database)).toEqual({
@@ -1814,7 +1815,7 @@ describe("minimum organization control-plane v1 schema", () => {
   });
 
   it("fails closed when a connection or binding is retired", () => {
-    const database = openOrganizationControlDatabase(":memory:");
+    const database = openAndMigrateOrganizationControlDatabase(":memory:");
     seedApprovalFlow(database);
     database
       .prepare(
@@ -1857,7 +1858,7 @@ describe("minimum organization control-plane v1 schema", () => {
   });
 
   it("keeps audit append-only and permits fresh checks of one provider event", () => {
-    const database = openOrganizationControlDatabase(":memory:");
+    const database = openAndMigrateOrganizationControlDatabase(":memory:");
     seedApprovalFlow(database);
     const firstEntry = digest("audit-entry-1");
     database
@@ -1946,5 +1947,54 @@ describe("minimum organization control-plane v1 schema", () => {
         .run(),
     ).toThrow("organization integration audit cannot be deleted");
     database.close();
+  });
+});
+
+describe("organization control-plane opening is split from migration", () => {
+  it("opens a fresh database without installing any schema", () => {
+    const path = databasePath();
+    const database = openOrganizationControlDatabase(path);
+    try {
+      expect(database.pragma("user_version", { simple: true })).toBe(0);
+      expect(
+        database
+          .prepare(
+            "SELECT name FROM sqlite_master WHERE name NOT LIKE 'sqlite_%'",
+          )
+          .all(),
+      ).toEqual([]);
+    } finally {
+      database.close();
+    }
+  });
+
+  it("never upgrades or judges an existing schema on open", () => {
+    // A schema newer than this build: migration refuses it, opening does not.
+    // Version and identity judgment move to migration now and to the pre-open
+    // state-lineage guard once new-lineage composition wires it.
+    const path = databasePath();
+    const future = new Database(path);
+    future.pragma("user_version = 6");
+    future.close();
+    chmodSync(path, 0o600);
+
+    const database = openOrganizationControlDatabase(path, {
+      fileMustExist: true,
+    });
+    try {
+      expect(database.pragma("user_version", { simple: true })).toBe(6);
+      expect(
+        database
+          .prepare(
+            "SELECT name FROM sqlite_master WHERE name NOT LIKE 'sqlite_%'",
+          )
+          .all(),
+      ).toEqual([]);
+    } finally {
+      database.close();
+    }
+    expect(() => openAndMigrateOrganizationControlDatabase(path)).toThrow(
+      "newer than supported schema 5",
+    );
   });
 });

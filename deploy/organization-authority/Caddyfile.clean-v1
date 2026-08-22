@@ -1,0 +1,5 @@
+{$ECHO_CLEAN_AUTHORITY_HOST} {
+	route {
+		reverse_proxy 127.0.0.1:39479
+	}
+}

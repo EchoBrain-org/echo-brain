@@ -10,7 +10,7 @@ import {
   SLACK_DEFAULT_REJECT_REACTION,
   SLACK_ORGANIZATION_TOOL_PROFILE,
   SLACK_ORGANIZATION_TOOL_REQUIRED_SCOPES,
-  openOrganizationControlDatabase,
+  openAndMigrateOrganizationControlDatabase,
 } from '@echo-brain/organization-control-plane';
 
 export interface SlackApprovalSurfaceFixtureIdentity {
@@ -48,7 +48,7 @@ export interface SeededActiveSlackApprovalSurface {
 export function seedActiveSlackApprovalSurface(
   input: SeedActiveSlackApprovalSurfaceInput,
 ): SeededActiveSlackApprovalSurface {
-  const database = openOrganizationControlDatabase(
+  const database = openAndMigrateOrganizationControlDatabase(
     input.integrations_database_path,
     { fileMustExist: true },
   );

@@ -11,7 +11,7 @@ import {
   type OrganizationMemberRecordingActivationCommandV1,
   type StoredOrganizationMemberRecordingActivation,
 } from '../../../application/organization-recording-policy-activation.js';
-import { openAuthorityDatabase } from './open-database.js';
+import { openAndMigrateAuthorityDatabase } from './open-database.js';
 
 interface ActivationRow {
   command_id: string;
@@ -143,7 +143,7 @@ export function appendOrganizationMemberRecordingActivation(input: {
   readonly activated_at: string;
   readonly fault_after_audit?: () => void;
 }): { readonly created: boolean; readonly activation: StoredOrganizationMemberRecordingActivation } {
-  const database = openAuthorityDatabase(input.database_path, { fileMustExist: true });
+  const database = openAndMigrateAuthorityDatabase(input.database_path, { fileMustExist: true });
   const commandSha256 = organizationMemberRecordingActivationCommandSha256(input.command);
   try {
     database.exec('BEGIN IMMEDIATE');

@@ -4,6 +4,7 @@
     { "path": "./packages/federation-protocol" },
     { "path": "./packages/organization-protocol" },
     { "path": "./packages/organization-api" },
+    { "path": "./src/product/person-client" },
     { "path": "./services/organization-authority" },
     { "path": "./services/organization-control-plane" },
     { "path": "./services/organization-record" },

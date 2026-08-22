@@ -232,6 +232,193 @@ export interface OrganizationMemberReadablePermissionCheckDecisionV3 {
   authorization_audit_event_id: string | null; authorization_audit_entry_sha256: OrganizationApiSha256Digest | null; release_draft_sha256: OrganizationApiSha256Digest | null; approval_presentation_sha256: OrganizationApiSha256Digest | null; semantic_intent_sha256: OrganizationApiSha256Digest | null; message_presentation_sha256: OrganizationApiSha256Digest | null;
 }
 
+/** Legacy pilot transport envelope; intentionally unchanged in this phase. */
+export interface OrganizationPersonRecentDecisionsRequestV2 {
+  schema_version: 2;
+  kind: 'echo-organization-person-recent-decisions-request';
+  request_id: string;
+  authority_id: string;
+  organization_id: string;
+  subject_principal_id: string;
+  http_method: 'POST';
+  http_path: '/v2/recent-decisions';
+}
+
+/**
+ * Session-authenticated Person read bodies carry only the asserted Person
+ * subject plus operation-specific semantic input. The route, credential,
+ * Authority, organization and membership stay outside the body.
+ */
+export interface OrganizationPersonReviewerRecentDecisionsRequestV2 {
+  subject_principal_id: string;
+}
+
+export interface OrganizationPersonReadableSearchRequestV2 {
+  subject_principal_id: string;
+  query: string;
+}
+
+/** Exact, whole-source member valve selector. */
+export interface OrganizationPersonMemberExclusionSourceSelectorV2 {
+  scope: 'source';
+  source_adapter_id: string;
+  source_instance_id: string;
+}
+
+/** Exact, one-meeting member valve selector. */
+export interface OrganizationPersonMemberExclusionMeetingSelectorV2 {
+  scope: 'meeting';
+  source_adapter_id: string;
+  source_instance_id: string;
+  external_id: string;
+}
+
+export type OrganizationPersonMemberExclusionSelectorV2 =
+  | OrganizationPersonMemberExclusionSourceSelectorV2
+  | OrganizationPersonMemberExclusionMeetingSelectorV2;
+
+/**
+ * Idempotent desired-state change for the authenticated Person's own
+ * pre-record exclusion. `excluded: true` adds the exact row and `false`
+ * removes it; neither operation implies erasure of an already-admitted row.
+ */
+export interface OrganizationPersonMemberExclusionChangeRequestV2 {
+  schema_version: 2;
+  kind: 'echo-organization-person-member-exclusion-change-request';
+  request_id: string;
+  authority_id: string;
+  organization_id: string;
+  subject_principal_id: string;
+  http_method: 'POST';
+  http_path: '/v2/member-exclusions';
+  excluded: boolean;
+  selector: OrganizationPersonMemberExclusionSelectorV2;
+}
+
+/** Exact-source list for the authenticated Person who owns that source. */
+export interface OrganizationPersonMemberExclusionListRequestV2 {
+  schema_version: 2;
+  kind: 'echo-organization-person-member-exclusion-list-request';
+  request_id: string;
+  authority_id: string;
+  organization_id: string;
+  subject_principal_id: string;
+  http_method: 'POST';
+  http_path: '/v2/member-exclusions/list';
+  source_adapter_id: string;
+  source_instance_id: string;
+}
+
+/** One explicit, exact-target administrator break-glass read. */
+export interface OrganizationAdminMemberExclusionBreakGlassReadRequestV2 {
+  schema_version: 2;
+  kind: 'echo-organization-admin-member-exclusion-break-glass-read-request';
+  request_id: string;
+  authority_id: string;
+  organization_id: string;
+  target_principal_id: string;
+  target_membership_id: string;
+  http_method: 'POST';
+  http_path: '/v2/admin/member-exclusions/break-glass';
+  source_adapter_id: string;
+  source_instance_id: string;
+}
+
+/** The shared exact response; no generic administrator surface returns it. */
+export interface OrganizationMemberExclusionListResponseV2 {
+  schema_version: 2;
+  kind: 'echo-organization-member-exclusion-list-response';
+  authority_id: string;
+  organization_id: string;
+  subject_principal_id: string;
+  membership_id: string;
+  source_adapter_id: string;
+  source_instance_id: string;
+  exclusions: readonly OrganizationPersonMemberExclusionSelectorV2[];
+}
+
+export type OrganizationPersonOidcBeginRequestV2 =
+  | {
+      kind: 'identity_bootstrap';
+      login_grant: string;
+    }
+  | {
+      kind: 'existing_identity_login';
+    };
+
+export interface OrganizationPersonOidcBeginResponseV2 {
+  authorization_url: string;
+  expires_at: string;
+}
+
+/** The exact Authority-issued credential pair returned by callback/refresh. */
+export interface OrganizationPersonSessionV2 {
+  organization_id: string;
+  principal_id: string;
+  membership_id: string;
+  membership_type: 'owner' | 'employee';
+  identity_binding_id: string;
+  session_family_id: string;
+  access_token: string;
+  refresh_token: string;
+  access_expires_at: string;
+  refresh_expires_at: string;
+  hard_reauthentication_at: string;
+}
+
+export interface OrganizationPersonSessionRefreshRequestV2 {
+  refresh_token: string;
+}
+
+/**
+ * A Person-authenticated request to post one Slack identity challenge.
+ * Identity and route context come from the bearer credential and matched route.
+ */
+export interface OrganizationPersonSlackLinkBeginRequestV2 {
+  request_id: string;
+  challenge_code_sha256: OrganizationApiSha256Digest;
+}
+
+/**
+ * A Person-authenticated request to prove the exact reply to that challenge.
+ * The request ID and message timestamp remain transitional replay inputs until
+ * new-lineage challenge state owns the provider coordinate.
+ */
+export interface OrganizationPersonSlackLinkCompleteRequestV2 {
+  request_id: string;
+  challenge_attempt_id: string;
+  challenge_message_ts: string;
+  challenge_code: string;
+}
+
+export interface OrganizationPersonSlackLinkBeginResponseV2 {
+  schema_version: 2;
+  kind: 'echo-organization-person-slack-link-begin-response';
+  challenge_attempt_id: string;
+  provider: 'slack';
+  provider_tenant_id: string;
+  channel_id: string;
+  challenge_message_ts: string;
+  expires_at: string;
+}
+
+/** Person linking proves identity only; adapter bindings and grants are absent. */
+export interface OrganizationPersonSlackLinkResultV2 {
+  schema_version: 2;
+  kind: 'echo-organization-person-slack-link-result';
+  identity_link_id: string;
+  connection_id: string;
+  organization_id: string;
+  principal_id: string;
+  membership_id: string;
+  provider: 'slack';
+  provider_tenant_id: string;
+  provider_subject_id: string;
+  channel_id: string;
+  linked_at: string;
+  identity_link_created: boolean;
+}
+
 /**
  * The signed, target-free reviewer read. The caller supplies no target,
  * policy, limit, cursor, sort, query, or atom id, and query parameters are

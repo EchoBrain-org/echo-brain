@@ -159,6 +159,143 @@ function revokeOperatorOwner(context: OperatorFixture, revokedAt: string): void 
   }
 }
 
+describe('member exclusion stopped-export noninterference', () => {
+  it('keeps exclusion coordinates and their private audit out of both current exports', async () => {
+    const context = await operatorFixture();
+    const sourceAdapterId = 'sentinel-private-adapter';
+    const sourceInstanceId = 'sentinel-private-instance';
+    const externalId = 'sentinel-private-meeting';
+    const databasePath = readAuthorityRuntimeConfig(context.config).database_path;
+    const database = new Database(databasePath);
+    database.pragma('foreign_keys = ON');
+    database
+      .prepare(
+        `INSERT INTO authority_processing_source_owner_bindings (
+           source_adapter_id, source_instance_id, organization_id,
+           principal_id, membership_id, membership_type, bound_at
+         ) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .run(
+        sourceAdapterId,
+        sourceInstanceId,
+        context.organization_id,
+        context.owner.principal_id,
+        context.owner.membership_id,
+        context.owner.membership_type,
+        context.last_observed_at,
+      );
+    database
+      .prepare(
+        `INSERT INTO authority_processing_member_exclusions (
+           organization_id, principal_id, membership_id, membership_type,
+           source_adapter_id, source_instance_id, scope_kind, external_id,
+           created_at
+         ) VALUES (?, ?, ?, ?, ?, ?, 'meeting', ?, ?)`,
+      )
+      .run(
+        context.organization_id,
+        context.owner.principal_id,
+        context.owner.membership_id,
+        context.owner.membership_type,
+        sourceAdapterId,
+        sourceInstanceId,
+        externalId,
+        context.last_observed_at,
+      );
+    database
+      .prepare(
+        `INSERT INTO authority_member_exclusion_read_audit (
+           occurred_at, retain_until, authority_id, organization_id,
+           actor_kind, actor_binding_version, actor_binding_sha256,
+           operation, request_sha256, response_sha256, result_count,
+           asserted_subject_principal_id, decision, reason_code,
+           authenticated_principal_id, authenticated_membership_id,
+           authenticated_membership_type, identity_binding_id,
+           session_family_id, access_credential_sha256,
+           caller_binding_sha256, person_state_sha256, session_state_sha256
+         ) VALUES (?, ?, ?, ?, 'admin_break_glass', 1, ?,
+           'member_exclusions_break_glass', ?, ?, 1, NULL, 'allow',
+           'break_glass_authorized', NULL, NULL, NULL, NULL, NULL, NULL,
+           NULL, NULL, NULL)`,
+      )
+      .run(
+        context.last_observed_at,
+        plus(context.last_observed_at, 180 * 24 * 60 * 60 * 1000),
+        context.authority_id,
+        context.organization_id,
+        canonicalSha256({ actor: 'admin' }),
+        canonicalSha256({ request: 'break-glass' }),
+        canonicalSha256({ response: externalId }),
+      );
+    database.close();
+
+    const reviewerAt = plus(context.last_observed_at, 1);
+    const reviewerOutput = join(context.root, 'sentinel-reviewer-export.json');
+    const reviewerCommand: ReviewerQueryAuditExportCommandV1 = {
+      schema_version: 1,
+      kind: 'echo-authority-reviewer-query-audit-export-command',
+      command_id: `qac_${randomUUID()}`,
+      authority_id: context.authority_id,
+      organization_id: context.organization_id,
+      owner_principal_id: context.owner.principal_id,
+      owner_membership_id: context.owner.membership_id,
+      requested_at: reviewerAt,
+      reason: 'prove exclusion isolation',
+      from_inclusive: plus(reviewerAt, -60_000),
+      until_exclusive: reviewerAt,
+      output_path_sha256:
+        reviewerQueryAuditOutputPathSha256(reviewerOutput),
+    };
+    const reviewerCommandPath = join(
+      context.root,
+      'sentinel-reviewer-command.json',
+    );
+    privateCanonicalCommand(reviewerCommandPath, reviewerCommand);
+    await exportReviewerQueryAudit(
+      context.config,
+      reviewerCommandPath,
+      reviewerOutput,
+      { now: () => reviewerAt },
+    );
+
+    const readableAt = plus(reviewerAt, 1);
+    const readableOutput = join(context.root, 'sentinel-readable-export.json');
+    const readableCommand: ReadableSearchQueryAuditExportCommandV1 = {
+      schema_version: 1,
+      kind: 'echo-authority-readable-search-query-audit-export-command',
+      command_id: `sqa_${randomUUID()}`,
+      authority_id: context.authority_id,
+      organization_id: context.organization_id,
+      owner_principal_id: context.owner.principal_id,
+      owner_membership_id: context.owner.membership_id,
+      requested_at: readableAt,
+      reason: 'prove exclusion isolation',
+      from_inclusive: plus(readableAt, -60_000),
+      until_exclusive: readableAt,
+      output_path_sha256:
+        readableSearchQueryAuditOutputPathSha256(readableOutput),
+    };
+    const readableCommandPath = join(
+      context.root,
+      'sentinel-readable-command.json',
+    );
+    privateCanonicalCommand(readableCommandPath, readableCommand);
+    await exportReadableSearchQueryAudit(
+      context.config,
+      readableCommandPath,
+      readableOutput,
+      { now: () => readableAt },
+    );
+
+    for (const output of [reviewerOutput, readableOutput]) {
+      const bytes = readFileSync(output, 'utf8');
+      expect(bytes).not.toContain(sourceAdapterId);
+      expect(bytes).not.toContain(sourceInstanceId);
+      expect(bytes).not.toContain(externalId);
+    }
+  });
+});
+
 describe('reviewer query-audit stopped operator commands', () => {
   it('publishes exact create-once 0600 export bytes after its durable receipt', async () => {
     const context = await operatorFixture();

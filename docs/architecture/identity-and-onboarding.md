@@ -1,84 +1,92 @@
 # Identity and onboarding
 
-**Status:** Current — onboarding and access are live; the retired
-founder-provenance surface is deleted, with presence-only residue refusal
-(see [Product runtime](product-runtime.md#identity-modes)).
+**Status:** Current — the shipped machine identity is an Authority-issued
+Person session. Installation enrollment and access leases remain server-side
+V1 compatibility only.
 
-Echo processes source data locally while preserving organization attribution.
-The installation owns personal provider credentials, raw source data, and its
-private signing key. The organization
-authority owns shared membership, enrollment, access leases, revocation, and
-organization-level provider app credentials that an administrator explicitly
-onboards. Provider secret bytes remain in the customer-owned secret store at
-the boundary that uses them; SQLite stores only opaque secret handles.
+ECHO processes organization meeting data on the organization Authority. A
+person's machine owns only its private Authority origin and rotating Person
+session credentials. The Authority owns OIDC verification, principals,
+memberships, organization authorization, meeting-source and provider
+credentials, processing state, and revocation.
 
 ## Durable identity
 
-- Organization, principal, membership, device, installation, provider
-  connection, and adapter binding are distinct.
-- A principal is a person; a membership is one tenure.
-- An installation is the signing and revocation unit. A replacement machine
-  receives a new ID and key.
-- Credentials are not identities. Connections represent provider accounts;
-  bindings represent product capabilities using them.
+- A principal is one person; a membership is one tenure in one organization.
+- An OIDC identity binding records the verified external issuer and subject
+  that may authenticate that principal.
+- A Person session family is the current machine-facing authentication and
+  revocation unit. Access and refresh credentials are private bearer secrets,
+  not durable identities.
+- Provider connections represent organization-owned provider accounts.
+  External identity links bind a provider-observed human, such as a Slack user,
+  to one exact principal and membership.
 - Meeting participants remain source observations until explicitly resolved.
+- Installation and enrollment rows describe the retained V1 protocol. They are
+  not a second current machine identity mode.
 
-One local state root has at most one active organization enrollment and
-installation profile while retaining immutable history.
+[INV-IDENTITY-005](../invariants/INV-IDENTITY-005-adapter-to-echo-identity-chain.md)
+makes the provider/adapter-to-ECHO chain load-bearing. A verified provider
+connection, adapter instance/binding, tenant-scoped external human link,
+principal, membership tenure, and explicit action capability are distinct
+edges. None implies another, and no display name, email, bare provider user ID,
+source owner, or meeting participant substitutes for one. Provider identity is
+resolved into the exact ECHO actor when a consequential human act is admitted;
+permission-aware read later resolves the current Person independently from
+canonical policy facts.
 
-## Evidence
+## Active Person onboarding and access
+
+For a new identity, an Authority administrator creates the membership and a
+one-time Person login grant. The Person client begins Google OIDC login against
+the Authority. The Authority verifies the provider callback and organization
+admission policy, binds the external subject to the exact principal and
+membership, and issues a rotating Person session. A returning bound identity
+can begin login without another bootstrap grant.
+
+The Person client stores the installed session below
+`~/.local/share/echo-brain/person/` and sends the access credential only to its
+stored Authority origin. Refresh consumes and rotates the refresh credential;
+an ambiguous refresh outcome cannot replay it. Logout removes local authority
+even if the remote revocation outcome is unknown. Every Person read, exclusion,
+and integration-link request rechecks the current session, membership, and
+revocation state on the Authority.
+
+Organization-tool onboarding remains an Authority administrator operation. An
+owner supplies the organization Slack bot credential and public channel; the
+Authority verifies the workspace, app, bot, scopes, and channel before storing
+the secret in its private credential store. SQLite receives only an opaque
+secret handle and verified public identity.
+
+After that organization tool is active, a signed-in Person can run the
+`echo-brain person slack-link-begin` and `slack-link-complete` challenge. The
+Authority posts the challenge, observes the exact Slack human replying in the
+exact thread, and creates or reuses that membership's external identity link.
+The Person flow creates no adapter binding or approve/reject grant. Those
+Person-bound approval capabilities require a later additive server path.
+
+## Retained V1 compatibility
+
+The Authority still implements installation enrollment, installation-signed
+access leases, V1 permission checks, and V1 record ingest because existing
+server-side record and approval schemas still refer to those identities.
+Historical migrations and rows remain immutable. The old machine runtime,
+installation signer, enrollment CLI, local database, and lease-renewal daemon
+have been deleted, so no current product artifact can create or refresh that
+state.
+
+These compatibility routes are not the onboarding path for a new Person and
+must not be presented as one. They can be retired only after Person-bound
+approval and record-writer contracts replace the surviving server call sites
+and retained rows have a defined historical treatment.
+
+## Evidence boundary
 
 Identity claims are scoped by issuer, tenant, and subject and record their
-verification method. Display names, email addresses, token possession, and
-unscoped provider IDs are not canonical identity. The retired provenance
-surface's per-fact capture pipeline and signed-record projection are deleted
-with it; only claim scoping is live.
+verification method. Display names, unverified email text, token possession,
+and unscoped provider IDs are not canonical identity. Provider credentials and
+raw meeting content never enter Person session state or Person CLI output.
 
-## Onboarding and access
-
-Organization tool onboarding precedes employee account linking. An
-administrator selects a supported tool and supplies its organization-owned
-provider setup. The Authority verifies the provider account, granted scopes,
-and required public settings before recording one active organization tool.
-An absent or failed setup is inactive. The minimum Slack flow lets an enrolled
-installation prove its Slack human through an Authority-posted thread
-challenge. The Slack-observed human must match the reviewer already configured
-for that installation's exact Slack approval adapter. Completion creates an
-identity link and exact adapter binding without granting an action.
-Automatically offering and configuring all active
-organization tools in employee installations remains a separate milestone.
-
-An administrator creates a membership and one-time enrollment invitation. The
-installation independently verifies the authority pin, creates its local key,
-signs the enrollment request, and stores the verified receipt before treating
-itself as enrolled.
-
-Access leases are short, signed, and monotonic. Missing, expired, corrupted, or
-rolled-back local access state fails closed. Revoking one installation does not
-erase history or revoke a different active installation. Ending a membership
-revokes all its installations. Current clients opt in to a renewal of up to 30
-minutes;
-the unchanged V1 request continues to receive five minutes for compatibility.
-The longer renewal reduces avoidable Authority churn and permits up to 30
-minutes of already-signed local operation during an outage. Online permission
-and read routes still evaluate current central membership and installation
-state on every request.
-
-The current portable signer uses a private file-backed P-256 key and explicitly
-records software-key assurance. The CLI requires an explicit acknowledgement
-before creating that exportable key. The signer interface permits a later
-hardware-backed adapter without changing the signed organization documents.
-
-Pre-1.0 Secure Enclave identities are not silently rewritten, exercised, or
-diagnosed for readiness. Their residue is sufficient to refuse product work;
-operators must preserve the old state for continuity.
-
-A state root left behind by the retired founder-provenance mode is detected
-and refused, never downgraded. The shared observational gate, the commands it
-fences and spares, and the `service stop` → `backup` → `bootstrap` recovery
-path are documented once in
-[Product runtime](product-runtime.md#identity-modes).
-
-Organization ingest, search, embeddings, participant resolution, IdP/SCIM,
-billing, and multi-organization tenancy are outside this onboarding/access
-slice.
+Multi-organization tenancy, IdP/SCIM provisioning, generalized provider
+catalogs, and Person-bound record publication are outside this minimum V1
+identity foundation.

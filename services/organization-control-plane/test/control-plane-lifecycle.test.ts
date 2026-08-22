@@ -14,7 +14,7 @@ import {
   inspectOpenOrganizationControlDatabase,
   inspectOrganizationControlDatabaseForServe,
   inspectOrganizationControlDatabaseReadOnly,
-  openOrganizationControlDatabase,
+  openAndMigrateOrganizationControlDatabase,
   openOrganizationControlDatabaseReadOnly,
 } from '../src/index.js';
 
@@ -69,7 +69,7 @@ describe('organization integrations database lifecycle', () => {
       ),
     ).toEqual([]);
 
-    const opened = openOrganizationControlDatabase(path, {
+    const opened = openAndMigrateOrganizationControlDatabase(path, {
       fileMustExist: true,
     });
     expect(inspectOpenOrganizationControlDatabase(opened)).toEqual(initialized);
@@ -116,7 +116,7 @@ describe('organization integrations database lifecycle', () => {
     expect(() => inspectOrganizationControlDatabaseReadOnly(path)).toThrow();
     expect(existsSync(path)).toBe(false);
 
-    const database = openOrganizationControlDatabase(path);
+    const database = openAndMigrateOrganizationControlDatabase(path);
     database.close();
     expect(() => inspectOrganizationControlDatabaseReadOnly(path)).toThrow(
       'identity is missing or invalid',

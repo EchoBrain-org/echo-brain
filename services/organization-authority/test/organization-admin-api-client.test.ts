@@ -1,46 +1,46 @@
-import { readFileSync } from 'node:fs';
-import { resolve } from 'node:path';
-import { describe, expect, it, vi } from 'vitest';
+import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
+import { describe, expect, it, vi } from "vitest";
 import {
   MAX_ORGANIZATION_ADMIN_API_RESPONSE_BYTES,
   OrganizationAdminApiClient,
   OrganizationAdminApiError,
   OrganizationAdminApiTransportError,
   type OrganizationAdminApiClientOptions,
-} from '../src/adapters/http/organization-admin-api-client.js';
+} from "../src/adapters/http/organization-admin-api-client.js";
 
 const IDS = {
-  authority: 'oau_00000000-0000-4000-8000-000000000001',
-  organization: 'org_00000000-0000-4000-8000-000000000001',
-  principal: 'prn_00000000-0000-4000-8000-000000000001',
-  membership: 'mem_00000000-0000-4000-8000-000000000001',
-  installation: 'ins_00000000-0000-4000-8000-000000000001',
-  identityLink: 'clm_00000000-0000-4000-8000-000000000001',
-  adapterBinding: 'bnd_00000000-0000-4000-8000-000000000001',
-  approveGrant: 'pgr_00000000-0000-4000-8000-000000000001',
-  rejectGrant: 'pgr_00000000-0000-4000-8000-000000000002',
-  command: 'adm_00000000-0000-4000-8000-000000000001',
+  authority: "oau_00000000-0000-4000-8000-000000000001",
+  organization: "org_00000000-0000-4000-8000-000000000001",
+  principal: "prn_00000000-0000-4000-8000-000000000001",
+  membership: "mem_00000000-0000-4000-8000-000000000001",
+  installation: "ins_00000000-0000-4000-8000-000000000001",
+  identityLink: "clm_00000000-0000-4000-8000-000000000001",
+  adapterBinding: "bnd_00000000-0000-4000-8000-000000000001",
+  approveGrant: "pgr_00000000-0000-4000-8000-000000000001",
+  rejectGrant: "pgr_00000000-0000-4000-8000-000000000002",
+  command: "adm_00000000-0000-4000-8000-000000000001",
 } as const;
 
 const DIGESTS = {
   authorityPin:
-    'sha256:b237acdd2200b3d2f3816778a40994d872b44345ab4c1cc4ad370630b0f03db2',
+    "sha256:b237acdd2200b3d2f3816778a40994d872b44345ab4c1cc4ad370630b0f03db2",
   grant:
-    'sha256:630dcd2966c4336691125448bbb25b4ff412a49c732db2c8abc1b8581bd710dd',
+    "sha256:630dcd2966c4336691125448bbb25b4ff412a49c732db2c8abc1b8581bd710dd",
 } as const;
 
-const ADMIN_TOKEN = `admin-${'a'.repeat(40)}`;
-const PROXY_TOKEN = `proxy-${'p'.repeat(40)}`;
-const CLIENT_ID = `cid_${Buffer.alloc(32, 7).toString('base64url')}`;
-const BASE_URL = 'http://127.0.0.1:39479';
+const ADMIN_TOKEN = `admin-${"a".repeat(40)}`;
+const PROXY_TOKEN = `proxy-${"p".repeat(40)}`;
+const CLIENT_ID = `cid_${Buffer.alloc(32, 7).toString("base64url")}`;
+const BASE_URL = "http://127.0.0.1:39479";
 
 const protocolFixture = JSON.parse(
   readFileSync(
     resolve(
       import.meta.dirname,
-      '../../../packages/organization-protocol/fixtures/onboarding-access-chain.v1.json',
+      "../../../packages/organization-protocol/fixtures/onboarding-access-chain.v1.json",
     ),
-    'utf8',
+    "utf8",
   ),
 ) as { revoked_access_state: Record<string, unknown> };
 
@@ -48,10 +48,10 @@ const membership = {
   organization_id: IDS.organization,
   principal_id: IDS.principal,
   membership_id: IDS.membership,
-  display_name: 'Example Employee',
-  membership_type: 'employee' as const,
-  status: 'active' as const,
-  provisioned_at: '2026-07-22T00:00:00.000Z',
+  display_name: "Example Employee",
+  membership_type: "employee" as const,
+  status: "active" as const,
+  provisioned_at: "2026-07-22T00:00:00.000Z",
   revoked_at: null,
 };
 
@@ -63,19 +63,19 @@ const revokedInstallation = {
 const revokedMembership = {
   membership: {
     ...membership,
-    status: 'revoked' as const,
-    revoked_at: '2026-07-22T00:02:00.000Z',
+    status: "revoked" as const,
+    revoked_at: "2026-07-22T00:02:00.000Z",
   },
   installations: [revokedInstallation],
 };
 
 const overview = {
   organization_id: IDS.organization,
-  organization_display_name: 'Example Company',
+  organization_display_name: "Example Company",
   authority_id: IDS.authority,
   authority_pin_sha256: DIGESTS.authorityPin,
-  created_at: '2026-07-22T00:00:00.000Z',
-  last_observed_at: '2026-07-22T00:02:00.000Z',
+  created_at: "2026-07-22T00:00:00.000Z",
+  last_observed_at: "2026-07-22T00:02:00.000Z",
   counts: {
     memberships: 1,
     active_memberships: 1,
@@ -98,8 +98,20 @@ const issuedGrant = {
   principal_id: IDS.principal,
   membership_id: IDS.membership,
   enrollment_grant_sha256: DIGESTS.grant,
-  issued_at: '2026-07-22T00:00:00.000Z',
-  expires_at: '2026-07-22T01:00:00.000Z',
+  issued_at: "2026-07-22T00:00:00.000Z",
+  expires_at: "2026-07-22T01:00:00.000Z",
+};
+
+const issuedPersonLoginGrant = {
+  organization_id: IDS.organization,
+  principal_id: IDS.principal,
+  membership_id: IDS.membership,
+  membership_type: "employee" as const,
+  login_grant: "G".repeat(43),
+  expected_issuer: "https://identity.example.test/",
+  expected_email_sha256: DIGESTS.grant,
+  issued_at: "2026-07-22T00:00:00.000Z",
+  expires_at: "2026-07-22T00:15:00.000Z",
 };
 
 const activatedSlackApproval = {
@@ -109,7 +121,7 @@ const activatedSlackApproval = {
   reject_permission_grant_id: IDS.rejectGrant,
   membership_id: IDS.membership,
   installation_id: IDS.installation,
-  activated_at: '2026-07-22T00:03:00.000Z',
+  activated_at: "2026-07-22T00:03:00.000Z",
   permission_grants_created: 2 as const,
 };
 
@@ -121,7 +133,7 @@ function jsonResponse(
   return new Response(JSON.stringify(value), {
     status,
     headers: {
-      'content-type': 'application/json; charset=utf-8',
+      "content-type": "application/json; charset=utf-8",
       ...headers,
     },
   });
@@ -139,107 +151,109 @@ function options(
   };
 }
 
-describe('organization administrator API client configuration', () => {
+describe("organization administrator API client configuration", () => {
   it.each([
-    'https://127.0.0.1:39479',
-    'http://localhost:39479',
-    'http://127.0.0.1:39479/path',
-    'http://127.0.0.1:39479/?query=yes',
-    'http://user@127.0.0.1:39479/',
-    'http://0x7f000001:39479/',
-    ' http://127.0.0.1:39479/',
-  ])('rejects non-origin or non-loopback base URL %s', (baseUrl) => {
+    "https://127.0.0.1:39479",
+    "http://localhost:39479",
+    "http://127.0.0.1:39479/path",
+    "http://127.0.0.1:39479/?query=yes",
+    "http://user@127.0.0.1:39479/",
+    "http://0x7f000001:39479/",
+    " http://127.0.0.1:39479/",
+  ])("rejects non-origin or non-loopback base URL %s", (baseUrl) => {
     expect(
       () => new OrganizationAdminApiClient(options({ base_url: baseUrl })),
-    ).toThrow('bare loopback HTTP origin');
+    ).toThrow("bare loopback HTTP origin");
   });
 
-  it('accepts canonical IPv4 and IPv6 loopback origins only', () => {
+  it("accepts canonical IPv4 and IPv6 loopback origins only", () => {
     expect(() => new OrganizationAdminApiClient(options())).not.toThrow();
     expect(
       () =>
         new OrganizationAdminApiClient(
-          options({ base_url: 'http://[::1]:39479/' }),
+          options({ base_url: "http://[::1]:39479/" }),
         ),
     ).not.toThrow();
   });
 
-  it('rejects malformed or overlapping credentials, identity, and deadlines', () => {
+  it("rejects malformed or overlapping credentials, identity, and deadlines", () => {
     expect(
       () =>
-        new OrganizationAdminApiClient(options({ admin_token: 'too-short' })),
-    ).toThrow('administrator token');
+        new OrganizationAdminApiClient(options({ admin_token: "too-short" })),
+    ).toThrow("administrator token");
     expect(
       () =>
         new OrganizationAdminApiClient(
           options({ trusted_proxy_token: ADMIN_TOKEN }),
         ),
-    ).toThrow('distinct credentials');
+    ).toThrow("distinct credentials");
     expect(
       () =>
         new OrganizationAdminApiClient(
-          options({ client_identity: `cid_${'A'.repeat(42)}B` }),
+          options({ client_identity: `cid_${"A".repeat(42)}B` }),
         ),
-    ).toThrow('client identity');
+    ).toThrow("client identity");
     expect(
       () => new OrganizationAdminApiClient(options({ timeout_ms: 0 })),
-    ).toThrow('timeout');
+    ).toThrow("timeout");
   });
 });
 
-describe('organization administrator API client requests', () => {
-  it('authenticates every request and exposes every bounded admin operation', async () => {
+describe("organization administrator API client requests", () => {
+  it("authenticates every request and exposes every bounded admin operation", async () => {
     const captured: Array<{ url: URL; init: RequestInit }> = [];
     const cursor = Buffer.from(
-      JSON.stringify({ kind: 'memberships', value: IDS.membership }),
-      'utf8',
-    ).toString('base64url');
+      JSON.stringify({ kind: "memberships", value: IDS.membership }),
+      "utf8",
+    ).toString("base64url");
     const fetchImpl = vi.fn(
       async (input: URL | RequestInfo, init?: RequestInit) => {
         const url = new URL(String(input));
         captured.push({ url, init: init ?? {} });
-        if (url.pathname === '/v1/admin/overview') {
+        if (url.pathname === "/v1/admin/overview") {
           return jsonResponse(overview);
         }
         if (
-          url.pathname === '/v1/admin/memberships' &&
-          init?.method === 'GET'
+          url.pathname === "/v1/admin/memberships" &&
+          init?.method === "GET"
         ) {
           return jsonResponse({ items: [], next_cursor: null });
         }
-        if (url.pathname === '/v1/admin/installations') {
+        if (url.pathname === "/v1/admin/installations") {
           return jsonResponse({ items: [], next_cursor: null });
         }
-        if (url.pathname === '/v1/admin/enrollment-grants') {
+        if (url.pathname === "/v1/admin/enrollment-grants") {
           return jsonResponse({ items: [], next_cursor: null });
         }
-        if (url.pathname === '/v1/admin/audit') {
+        if (url.pathname === "/v1/admin/audit") {
           return jsonResponse({ items: [], next_cursor: null });
         }
         if (
-          url.pathname === '/v1/admin/memberships' &&
-          init?.method === 'POST'
+          url.pathname === "/v1/admin/memberships" &&
+          init?.method === "POST"
         ) {
           return jsonResponse(membership, 201);
         }
-        if (url.pathname.endsWith('/enrollment-grants')) {
+        if (url.pathname.endsWith("/enrollment-grants")) {
           return jsonResponse(issuedGrant, 201);
         }
-        if (url.pathname.endsWith('/revocations')) {
+        if (url.pathname.endsWith("/person-login-grants")) {
+          return jsonResponse(issuedPersonLoginGrant, 201);
+        }
+        if (url.pathname.endsWith("/revocations")) {
           return jsonResponse(
-            url.pathname.includes('/installations/')
+            url.pathname.includes("/installations/")
               ? revokedInstallation
               : revokedMembership,
           );
         }
         if (
-          url.pathname ===
-          '/v1/admin/integrations/slack-approval-activation'
+          url.pathname === "/v1/admin/integrations/slack-approval-activation"
         ) {
           return jsonResponse(activatedSlackApproval, 201);
         }
         return jsonResponse(
-          { error: { code: 'not_found', message: 'route was not found' } },
+          { error: { code: "not_found", message: "route was not found" } },
           404,
         );
       },
@@ -279,11 +293,14 @@ describe('organization administrator API client requests', () => {
       }),
     ).resolves.toEqual(issuedGrant);
     await expect(
-      client.revokeMembership(IDS.membership, { reason: 'employment ended' }),
+      client.issuePersonLoginGrant(IDS.membership, "person@example.com"),
+    ).resolves.toEqual(issuedPersonLoginGrant);
+    await expect(
+      client.revokeMembership(IDS.membership, { reason: "employment ended" }),
     ).resolves.toEqual(revokedMembership);
     await expect(
       client.revokeInstallation(IDS.installation, {
-        reason: 'device retired',
+        reason: "device retired",
       }),
     ).resolves.toEqual(revokedInstallation);
     await expect(
@@ -297,24 +314,24 @@ describe('organization administrator API client requests', () => {
       }),
     ).resolves.toEqual(activatedSlackApproval);
 
-    expect(captured).toHaveLength(10);
+    expect(captured).toHaveLength(11);
     for (const { init } of captured) {
       const headers = new Headers(init.headers);
-      expect(headers.get('accept')).toBe('application/json');
-      expect(headers.get('authorization')).toBe(`Bearer ${ADMIN_TOKEN}`);
-      expect(headers.get('x-echo-proxy-authorization')).toBe(
+      expect(headers.get("accept")).toBe("application/json");
+      expect(headers.get("authorization")).toBe(`Bearer ${ADMIN_TOKEN}`);
+      expect(headers.get("x-echo-proxy-authorization")).toBe(
         `Echo-Proxy ${PROXY_TOKEN}`,
       );
-      expect(headers.get('x-echo-authenticated-client-id')).toBe(CLIENT_ID);
-      expect(init.redirect).toBe('error');
+      expect(headers.get("x-echo-authenticated-client-id")).toBe(CLIENT_ID);
+      expect(init.redirect).toBe("error");
       expect(init.signal).toBeInstanceOf(AbortSignal);
     }
-    expect(captured[1]!.url.searchParams.get('cursor')).toBe(cursor);
-    expect(captured[1]!.url.searchParams.get('limit')).toBe('25');
+    expect(captured[1]!.url.searchParams.get("cursor")).toBe(cursor);
+    expect(captured[1]!.url.searchParams.get("limit")).toBe("25");
 
     const grantRequest = captured.find(
       ({ url, init }) =>
-        url.pathname.endsWith('/enrollment-grants') && init.method === 'POST',
+        url.pathname.endsWith("/enrollment-grants") && init.method === "POST",
     )!;
     expect(JSON.parse(String(grantRequest.init.body))).toEqual({
       command_id: IDS.command,
@@ -322,12 +339,17 @@ describe('organization administrator API client requests', () => {
       lifetime_seconds: 3600,
     });
     expect(String(grantRequest.init.body)).not.toContain(
-      'enrollment_grant_base64url',
+      "enrollment_grant_base64url",
     );
+    const personGrantRequest = captured.find(({ url }) =>
+      url.pathname.endsWith("/person-login-grants"),
+    )!;
+    expect(JSON.parse(String(personGrantRequest.init.body))).toEqual({
+      expected_email: "person@example.com",
+    });
     const activationRequest = captured.find(
       ({ url }) =>
-        url.pathname ===
-        '/v1/admin/integrations/slack-approval-activation',
+        url.pathname === "/v1/admin/integrations/slack-approval-activation",
     )!;
     expect(JSON.parse(String(activationRequest.init.body))).toEqual({
       command_id: IDS.command,
@@ -339,17 +361,17 @@ describe('organization administrator API client requests', () => {
     });
   });
 
-  it('posts the operator access repair and accepts only a matching response', async () => {
+  it("posts the operator access repair and accepts only a matching response", async () => {
     const recovered = {
       installation_id: IDS.installation,
       changed: true,
       local_access_state_sequence: 254,
       access_state_sequence: 257,
-      valid_until: '2026-08-09T12:05:00.000Z',
+      valid_until: "2026-08-09T12:05:00.000Z",
     };
     const command = {
       local_access_state_sequence: 254,
-      reason: 'Missed issued heads through lost lease responses',
+      reason: "Missed issued heads through lost lease responses",
     };
     const captured: Array<{ url: URL; init: RequestInit }> = [];
     const client = new OrganizationAdminApiClient(
@@ -368,7 +390,7 @@ describe('organization administrator API client requests', () => {
     expect(captured[0]!.url.pathname).toBe(
       `/v1/admin/installations/${IDS.installation}/access-recoveries`,
     );
-    expect(captured[0]!.init.method).toBe('POST');
+    expect(captured[0]!.init.method).toBe("POST");
     expect(JSON.parse(String(captured[0]!.init.body))).toEqual(command);
 
     // A response restating another local sequence is not an answer to this
@@ -384,45 +406,48 @@ describe('organization administrator API client requests', () => {
     );
     await expect(
       mismatched.recoverInstallationAccess(IDS.installation, command),
-    ).rejects.toMatchObject({ code: 'invalid_response', status: 200 });
+    ).rejects.toMatchObject({ code: "invalid_response", status: 200 });
   });
 
-  it('validates IDs, command bodies, cursors, and page sizes before fetch', async () => {
+  it("validates IDs, command bodies, cursors, and page sizes before fetch", async () => {
     const fetchImpl = vi.fn<typeof fetch>();
     const client = new OrganizationAdminApiClient(
       options({ fetch: fetchImpl }),
     );
 
-    expect(() => client.listMemberships({ cursor: 'x' })).toThrow('cursor');
-    expect(() => client.listAudit({ limit: 101 })).toThrow('page limit');
+    expect(() => client.listMemberships({ cursor: "x" })).toThrow("cursor");
+    expect(() => client.listAudit({ limit: 101 })).toThrow("page limit");
     expect(() =>
-      client.registerEnrollmentGrant('../membership', {
+      client.registerEnrollmentGrant("../membership", {
         command_id: IDS.command,
         enrollment_grant_sha256: DIGESTS.grant,
         lifetime_seconds: 3600,
       }),
-    ).toThrow('membership_id');
+    ).toThrow("membership_id");
+    expect(() =>
+      client.issuePersonLoginGrant(IDS.membership, "Person@Example.com"),
+    ).toThrow("expected_email");
     expect(() =>
       client.provisionMembership({
-        command_id: 'wrong-command',
-        display_name: 'Example Employee',
-        membership_type: 'employee',
+        command_id: "wrong-command",
+        display_name: "Example Employee",
+        membership_type: "employee",
       }),
-    ).toThrow('canonical adm identifier');
+    ).toThrow("canonical adm identifier");
     expect(() =>
       client.activateSlackApproval({
         command_id: IDS.command,
         administrator_membership_id: IDS.membership,
         target_membership_id: IDS.membership,
         installation_id: IDS.installation,
-        identity_link_id: '../identity-link',
+        identity_link_id: "../identity-link",
         adapter_binding_id: IDS.adapterBinding,
       }),
-    ).toThrow('identity_link_id');
+    ).toThrow("identity_link_id");
     expect(fetchImpl).not.toHaveBeenCalled();
   });
 
-  it('returns only shared-validator-approved success shapes and exact statuses', async () => {
+  it("returns only shared-validator-approved success shapes and exact statuses", async () => {
     const extraFieldClient = new OrganizationAdminApiClient(
       options({
         fetch: (async () =>
@@ -430,8 +455,8 @@ describe('organization administrator API client requests', () => {
       }),
     );
     await expect(extraFieldClient.overview()).rejects.toMatchObject({
-      name: 'OrganizationAdminApiTransportError',
-      code: 'invalid_response',
+      name: "OrganizationAdminApiTransportError",
+      code: "invalid_response",
       status: 200,
     });
 
@@ -441,7 +466,7 @@ describe('organization administrator API client requests', () => {
       }),
     );
     await expect(wrongStatusClient.overview()).rejects.toMatchObject({
-      code: 'invalid_response',
+      code: "invalid_response",
       status: 201,
     });
 
@@ -464,18 +489,18 @@ describe('organization administrator API client requests', () => {
         adapter_binding_id: IDS.adapterBinding,
       }),
     ).rejects.toMatchObject({
-      code: 'invalid_response',
+      code: "invalid_response",
       status: 201,
     });
   });
 
-  it('surfaces only validated ordinary API errors', async () => {
+  it("surfaces only validated ordinary API errors", async () => {
     const client = new OrganizationAdminApiClient(
       options({
         fetch: (async () =>
           jsonResponse(
             {
-              error: { code: 'unauthorized', message: 'authorization failed' },
+              error: { code: "unauthorized", message: "authorization failed" },
             },
             401,
           )) as typeof fetch,
@@ -490,10 +515,10 @@ describe('organization administrator API client requests', () => {
     }
     expect(failure).toBeInstanceOf(OrganizationAdminApiError);
     expect(failure).toMatchObject({
-      code: 'unauthorized',
+      code: "unauthorized",
       status: 401,
       response: {
-        error: { code: 'unauthorized', message: 'authorization failed' },
+        error: { code: "unauthorized", message: "authorization failed" },
       },
     });
     expect((failure as Error).message).not.toContain(ADMIN_TOKEN);
@@ -503,7 +528,7 @@ describe('organization administrator API client requests', () => {
       options({
         fetch: (async () =>
           jsonResponse(
-            { error: { code: 'UPPER', message: 'bad' } },
+            { error: { code: "UPPER", message: "bad" } },
             500,
           )) as typeof fetch,
       }),
@@ -514,46 +539,46 @@ describe('organization administrator API client requests', () => {
   });
 });
 
-describe('organization administrator API client response bounds', () => {
+describe("organization administrator API client response bounds", () => {
   it.each([
     {
-      label: 'non-JSON content type',
+      label: "non-JSON content type",
       response: () =>
-        new Response('{}', {
+        new Response("{}", {
           status: 200,
-          headers: { 'content-type': 'text/plain' },
+          headers: { "content-type": "text/plain" },
         }),
-      code: 'invalid_response',
+      code: "invalid_response",
     },
     {
-      label: 'invalid UTF-8',
+      label: "invalid UTF-8",
       response: () =>
         new Response(Uint8Array.of(0xc3, 0x28), {
           status: 200,
-          headers: { 'content-type': 'application/json' },
+          headers: { "content-type": "application/json" },
         }),
-      code: 'invalid_response',
+      code: "invalid_response",
     },
     {
-      label: 'oversized streamed body',
+      label: "oversized streamed body",
       response: () =>
         new Response(
           new Uint8Array(MAX_ORGANIZATION_ADMIN_API_RESPONSE_BYTES + 1),
           {
             status: 200,
-            headers: { 'content-type': 'application/json' },
+            headers: { "content-type": "application/json" },
           },
         ),
-      code: 'response_too_large',
+      code: "response_too_large",
     },
-  ])('rejects $label', async ({ response, code }) => {
+  ])("rejects $label", async ({ response, code }) => {
     const client = new OrganizationAdminApiClient(
       options({ fetch: (async () => response()) as typeof fetch }),
     );
     await expect(client.overview()).rejects.toMatchObject({ code });
   });
 
-  it('passes an abort deadline and never echoes secret-bearing transport errors', async () => {
+  it("passes an abort deadline and never echoes secret-bearing transport errors", async () => {
     const fetchImpl = (async (
       _input: URL | RequestInfo,
       init?: RequestInit,
@@ -564,12 +589,12 @@ describe('organization administrator API client response bounds', () => {
       }
       await new Promise<void>((_resolve, reject) => {
         signal.addEventListener(
-          'abort',
+          "abort",
           () => reject(new Error(`${ADMIN_TOKEN}:${PROXY_TOKEN}`)),
           { once: true },
         );
       });
-      throw new Error('unreachable');
+      throw new Error("unreachable");
     }) as typeof fetch;
     const client = new OrganizationAdminApiClient(
       options({ fetch: fetchImpl, timeout_ms: 5 }),
@@ -582,8 +607,8 @@ describe('organization administrator API client response bounds', () => {
       failure = error;
     }
     expect(failure).toMatchObject({
-      name: 'OrganizationAdminApiTransportError',
-      code: 'transport_failed',
+      name: "OrganizationAdminApiTransportError",
+      code: "transport_failed",
       status: null,
     });
     expect((failure as Error).message).not.toContain(ADMIN_TOKEN);

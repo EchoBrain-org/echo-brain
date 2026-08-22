@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import { describe, expect, it } from "vitest";
 import type Database from "better-sqlite3";
-import { openOrganizationControlDatabase } from "../src/persistence/open-database.js";
+import { openAndMigrateOrganizationControlDatabase } from "../src/persistence/open-database.js";
 import { OrganizationIntegrationsRepository } from "../src/persistence/organization-integrations-repository.js";
 import {
   RESTRICTED_REVIEWER_ALLOW_REASON_CODE,
@@ -40,7 +40,7 @@ function openRepository(): {
   repository: OrganizationIntegrationsRepository;
   database: Database.Database;
 } {
-  const database = openOrganizationControlDatabase(":memory:");
+  const database = openAndMigrateOrganizationControlDatabase(":memory:");
   database.pragma("foreign_keys = OFF");
   database
     .prepare(

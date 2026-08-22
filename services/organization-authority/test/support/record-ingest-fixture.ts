@@ -7,7 +7,13 @@ import {
   sign as signMessage,
 } from 'node:crypto';
 import type { KeyObject } from 'node:crypto';
-import { chmodSync, mkdtempSync, rmSync } from 'node:fs';
+import {
+  chmodSync,
+  mkdirSync,
+  mkdtempSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
@@ -73,7 +79,7 @@ import type {
 import {
   OrganizationIntegrationsRepository,
   organizationMemberMessagePresentationPreimage,
-  openOrganizationControlDatabase,
+  openAndMigrateOrganizationControlDatabase,
   reviewerMessagePresentationPreimage,
   type OrganizationSecretStore,
   type OrganizationPermissionReasonCode,
@@ -286,6 +292,8 @@ export interface RecordIngestFixture {
     reason?: string | null;
   }): Promise<OrganizationRecordRejectionEnvelopeV1>;
   signEnvelopeBytes(bytes: Buffer): Buffer;
+  /** Writes the existing development installation key in server-runtime form. */
+  writeProcessingInstallationKeyState(): string;
   revokeInstallation(): Promise<void>;
   /** Expires the current access lease without revoking anything. */
   expireAccessLease(): void;
@@ -408,6 +416,43 @@ export async function createRecordIngestFixture(
   });
   const enrollmentId = enrolled.enrollment_receipt.enrollment_id;
 
+  const writeProcessingInstallationKeyState = (): string => {
+    const credentialDirectory = join(
+      directory,
+      'credentials',
+      'processing',
+    );
+    mkdirSync(credentialDirectory, { recursive: true, mode: 0o700 });
+    const path = join(
+      credentialDirectory,
+      'installation-key-state.v1.json',
+    );
+    const privateKey = installation.privateKey.export({
+      format: 'der',
+      type: 'pkcs8',
+    });
+    if (!Buffer.isBuffer(privateKey)) {
+      throw new Error('fixture installation private key export failed');
+    }
+    writeFileSync(
+      path,
+      canonicalJson({
+        schema_version: 1,
+        descriptor: {
+          installation_id: installationId,
+          ...installation.descriptor,
+          protection: 'development-file',
+          assurance: 'software_key_development_only',
+          private_key_exportable: true,
+        },
+        private_key_pkcs8_der_base64: privateKey.toString('base64'),
+      }),
+      { mode: 0o600 },
+    );
+    chmodSync(path, 0o600);
+    return path;
+  };
+
   // Grace owns a separate current installation for the negative reviewer-read
   // half of the lifecycle. The Slack approval binding below remains Ada's:
   // installation identity and later read identity are intentionally distinct.
@@ -438,7 +483,7 @@ export async function createRecordIngestFixture(
   });
   const otherEnrollmentId = otherEnrolled.enrollment_receipt.enrollment_id;
 
-  const controlDatabase = openOrganizationControlDatabase(':memory:');
+  const controlDatabase = openAndMigrateOrganizationControlDatabase(':memory:');
   controlDatabase
     .prepare(
       `INSERT INTO organization_control_plane_metadata (
@@ -1472,6 +1517,7 @@ export async function createRecordIngestFixture(
         async (bytes) => signWith(installation, bytes),
       ),
     signEnvelopeBytes: (bytes) => signWith(installation, bytes),
+    writeProcessingInstallationKeyState,
     revokeInstallation: async () => {
       await application.revokeInstallation(installationId, 'fixture revocation');
     },

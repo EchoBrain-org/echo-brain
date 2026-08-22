@@ -10,11 +10,19 @@ component_ids:
 created_at: 2026-08-13
 reviewed_at: 2026-08-14
 reviewed_ref: 83819a57fd8635384d14d3cc8d591e8f76ad1260
+decision_ids:
+  - ADR-0002
+  - ADR-0003
+  - ADR-0004
+  - ADR-0005
+  - ADR-0006
 invariant_ids:
   - INV-ADAPTERS-002
+  - INV-IDENTITY-005
   - INV-PERMISSIONS-013
   - INV-PERMISSIONS-014
   - INV-IDENTITY-003
+  - INV-PERMISSIONS-015
 failure_pattern_ids:
   - FP-ADAPTERS-002
   - FP-PERMISSIONS-001

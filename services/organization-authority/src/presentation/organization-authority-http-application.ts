@@ -1,5 +1,4 @@
 import type {
-  ApproveOrganizationInternalLiveReleaseRequestV1,
   CompletedOrganizationEnrollmentV1,
   IssueOrganizationEnrollmentGrantRequestV1,
   OrganizationAccessLeaseRequestAnyVersion,
@@ -7,10 +6,6 @@ import type {
   OrganizationAuditPageV1,
   OrganizationEnrollmentGrantPageV1,
   OrganizationInstallationPageV1,
-  OrganizationInternalLiveDirectiveRequestV1,
-  OrganizationInternalLiveRolloutStatusV1,
-  OrganizationInternalLiveUpdateDirectiveV1,
-  OrganizationInternalLiveUpdateReceiptV1,
   OrganizationMembershipPageV1,
   OrganizationPermissionCheckRequestV1,
   OrganizationMemberReadablePermissionCheckRequestV3,
@@ -59,16 +54,6 @@ export interface OrganizationAuthorityHttpApplication {
     cursor?: string;
     limit?: number;
   }): OrganizationAuditPageV1;
-  internalLiveRolloutStatus(): OrganizationInternalLiveRolloutStatusV1;
-  approveInternalLiveRelease(
-    input: ApproveOrganizationInternalLiveReleaseRequestV1,
-  ): OrganizationInternalLiveUpdateDirectiveV1;
-  fetchInternalLiveDirective(
-    input: OrganizationInternalLiveDirectiveRequestV1,
-  ): OrganizationInternalLiveUpdateDirectiveV1;
-  recordInternalLiveUpdateReceipt(
-    input: OrganizationInternalLiveUpdateReceiptV1,
-  ): void;
   provisionMembership(
     input: ProvisionOrganizationMembershipRequestV1,
   ): ProvisionedOrganizationMembershipV1 | Promise<ProvisionedOrganizationMembershipV1>;

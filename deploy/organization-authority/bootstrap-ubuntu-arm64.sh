@@ -5,11 +5,13 @@ CLOUDFLARED_VERSION=2026.7.3
 CLOUDFLARED_SHA256=d3ea7d22dd337b465da33d6bc1c4b3cfd381407447a2a7d29542c19783430db3
 AGENT_TOOLKIT_COMMIT=171d4fba3bc404da3473f323c3e293b4a989f089
 ASM_EXEC_UPSTREAM_SHA256=d55eb38ad33a5b76f584ca180f633ecc120cf39b8fd29427ffbe11a8fbf19556
-ASM_EXEC_PATCHED_SHA256=50fe3ed2dba8db65f29f4bfb7e382d8f9a95a0165f15153c7be2e28baeb30b6b
+ASM_EXEC_PATCHED_SHA256=1fbb03673905a55fa4ace3bb80ecd383e75d81de72c40fab23c11b0a7c0f4e89
 ECR_REGISTRY=904560150024.dkr.ecr.us-west-2.amazonaws.com
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
 UNIT_SOURCE="$SCRIPT_DIR/cloudflared-echo-authority.service"
 TOKEN_INSTALLER_SOURCE="$SCRIPT_DIR/install-cloudflare-tunnel-token.sh"
+GRANOLA_INSTALLER_SOURCE="$SCRIPT_DIR/install-granola-organization-source.sh"
+OPENROUTER_INSTALLER_SOURCE="$SCRIPT_DIR/install-openrouter-api-key.sh"
 ASM_EXEC_PATCH_SOURCE="$SCRIPT_DIR/asm-exec-structured-content.patch"
 
 fail() {
@@ -25,6 +27,8 @@ fail() {
 [[ ${ID:-} == ubuntu ]] || fail 'this bootstrap supports Ubuntu only'
 [[ -f "$UNIT_SOURCE" ]] || fail "missing $UNIT_SOURCE"
 [[ -f "$TOKEN_INSTALLER_SOURCE" ]] || fail "missing $TOKEN_INSTALLER_SOURCE"
+[[ -f "$GRANOLA_INSTALLER_SOURCE" ]] || fail "missing $GRANOLA_INSTALLER_SOURCE"
+[[ -f "$OPENROUTER_INSTALLER_SOURCE" ]] || fail "missing $OPENROUTER_INSTALLER_SOURCE"
 [[ -f "$ASM_EXEC_PATCH_SOURCE" ]] || fail "missing $ASM_EXEC_PATCH_SOURCE"
 
 export DEBIAN_FRONTEND=noninteractive
@@ -102,6 +106,10 @@ install -o root -g root -m 0644 "$UNIT_SOURCE" \
   /etc/systemd/system/cloudflared-echo-authority.service
 install -o root -g root -m 0700 "$TOKEN_INSTALLER_SOURCE" \
   /usr/local/sbin/install-echo-authority-tunnel-token
+install -o root -g root -m 0700 "$GRANOLA_INSTALLER_SOURCE" \
+  /usr/local/sbin/install-echo-authority-granola-source
+install -o root -g root -m 0700 "$OPENROUTER_INSTALLER_SOURCE" \
+  /usr/local/sbin/install-echo-authority-openrouter-key
 systemctl daemon-reload
 systemctl disable cloudflared-echo-authority.service >/dev/null 2>&1 || true
 systemctl stop cloudflared-echo-authority.service >/dev/null 2>&1 || true

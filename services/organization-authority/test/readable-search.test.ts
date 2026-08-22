@@ -212,6 +212,8 @@ function harness(input: {
       retrievalCalls.fetched += 1;
       return input.fetched ?? [];
     },
+    finalStateStillMatches: (scope, _transaction, selected) =>
+      scope.selected_policy_paths_still_match(selected),
     close: () => {
       retrievalCalls.closed += 1;
     },
@@ -612,8 +614,8 @@ describe('readable-search Authority orchestration', () => {
     const auditRequestIds: string[] = [];
     const found = candidate();
     const retrieval: ReadableSearchRetrievalPort = {
-      openScope: async ({ authenticated }) => {
-        if (authenticated.request.request_id === REQUEST.request_id) {
+      openScope: async ({ request_sha256 }) => {
+        if (request_sha256 === digest('a')) {
           aOpened.resolve();
           await continueA.promise;
         }
@@ -621,6 +623,8 @@ describe('readable-search Authority orchestration', () => {
       },
       search: () => [found],
       fetch: () => [item(found)],
+      finalStateStillMatches: (scope, _transaction, selected) =>
+        scope.selected_policy_paths_still_match(selected),
       close: () => undefined,
     };
     const authority: ReadableSearchAuthorityStatePort = {

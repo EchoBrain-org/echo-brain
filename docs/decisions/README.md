@@ -20,9 +20,17 @@ separately.
 
 ## Index
 
-No standalone ADRs have been migrated yet. Existing decisions remain embedded
-in `docs/product/` design contracts and architecture pages. Extract them
-incrementally when the affected boundary changes; do not perform a mechanical
-rewrite that loses context.
+| ADR                                                          | Title                                        | Status     |
+| ------------------------------------------------------------ | -------------------------------------------- | ---------- |
+| [ADR-0001](ADR-0001-organization-operated-server-core.md)    | Organization-operated server-core processing | accepted   |
+| [ADR-0002](ADR-0002-external-oidc-person-sessions.md)        | External OIDC person sessions                | accepted   |
+| [ADR-0003](ADR-0003-server-core-lean-authority-contracts.md) | Server-core lean Authority contracts         | superseded |
+| [ADR-0004](ADR-0004-founder-authority-clean-state-reset.md)  | Founder Authority clean-state reset          | superseded |
+| [ADR-0005](ADR-0005-person-content-policy-v2-lineage.md)     | Person content-policy v2 lineage             | superseded |
+| [ADR-0006](ADR-0006-permission-aware-clean-v1-completion.md) | Permission-aware clean V1 completion         | accepted   |
+
+Other decisions remain embedded in `docs/product/` design contracts and
+architecture pages. Extract them incrementally when the affected boundary
+changes; do not perform a mechanical rewrite that loses context.
 
 Use the [ADR template](../_templates/adr.md).

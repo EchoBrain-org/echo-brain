@@ -30,6 +30,12 @@ const KINDS = new Set([
   "qualification",
   "evidence-index",
 ]);
+const DECISION_STATUSES = new Set([
+  "proposed",
+  "accepted",
+  "rejected",
+  "superseded",
+]);
 const ID_PATTERNS = new Map([
   ["component-index", /^CMP-CATALOG$/],
   ["component", /^CMP-[A-Z][A-Z0-9-]+$/],
@@ -288,6 +294,22 @@ function validateShape(record, errors) {
   else if (!gitObjectExists(`${metadata.reviewed_ref}^{commit}`))
     errors.push(`${record.path}: reviewed_ref does not name a local commit`);
   for (const field of RELATIONS.keys()) array(record, field, errors);
+}
+
+function validateDecisionLifecycle(record, errors) {
+  if (record.metadata.kind !== "decision") return;
+  const status = required(record, "status", errors);
+  if (!DECISION_STATUSES.has(status))
+    errors.push(
+      `${record.path}: unsupported decision status ${String(status)}`,
+    );
+  array(record, "supersedes", errors, true);
+  const supersededBy = array(record, "superseded_by", errors, true);
+  array(record, "updates", errors, true);
+  if (supersededBy.length > 0 && status !== "superseded")
+    errors.push(
+      `${record.path}: decision with nonempty superseded_by must have status superseded`,
+    );
 }
 
 function validateEvidence(record, errors) {
@@ -751,6 +773,7 @@ export function checkDocumentation() {
   const recordsById = new Map();
   for (const record of records) {
     validateShape(record, errors);
+    validateDecisionLifecycle(record, errors);
     if (typeof record.metadata.id !== "string") continue;
     const prior = recordsById.get(record.metadata.id);
     if (prior)

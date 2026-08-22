@@ -18,7 +18,7 @@ import {
 import type { OrganizationRecentDecisionsHttpApplication } from '../presentation/organization-recent-decisions-http-application.js';
 import type { OrganizationRecordRuntime } from './organization-record.js';
 
-function activationView(
+export function organizationRecentDecisionsPilotActivation(
   marker: OrganizationPermissionPilotActivationMarkerV1,
 ): OrganizationRecentDecisionsPilotActivation {
   return {
@@ -75,6 +75,26 @@ function projectEligibleRecord(
   };
 }
 
+/** The V1 and V2 adapters share this bounded canonical-log projection only. */
+export function loadOrganizationRecentDecisionsProjectedRecords(
+  records: OrganizationRecordRuntime,
+): readonly OrganizationRecentDecisionsProjectedRecord[] {
+  if (records.fatalFailure !== null) {
+    throw new OrganizationRecentDecisionsError(
+      'unavailable',
+      'recent decisions record runtime is unavailable',
+      { cause: records.fatalFailure },
+    );
+  }
+  let eligible: readonly OrganizationPermissionPilotEligibleRecord[];
+  try {
+    eligible = records.readPermissionPilotEligibleRecords();
+  } catch (error) {
+    unavailable('recent decisions record selection is unavailable', error);
+  }
+  return eligible.map(projectEligibleRecord);
+}
+
 /**
  * Wires startup-cached pilot health and the bounded canonical-log reader into
  * the Authority application. Clean absence leaves the route at its fixed 404;
@@ -99,30 +119,14 @@ export function composeOrganizationRecentDecisions(
     };
   }
   const marker = health.activation;
-  const activation = activationView(marker);
+  const activation = organizationRecentDecisionsPilotActivation(marker);
   return {
     recentDecisions(
       request: OrganizationRecentDecisionsRequestV1,
     ): PreparedOrganizationRecentDecisionsResponse {
-      return authority.serveRecentDecisions(request, activation, () => {
-        if (records.fatalFailure !== null) {
-          throw new OrganizationRecentDecisionsError(
-            'unavailable',
-            'recent decisions record runtime is unavailable',
-            { cause: records.fatalFailure },
-          );
-        }
-        let eligible: readonly OrganizationPermissionPilotEligibleRecord[];
-        try {
-          eligible = records.readPermissionPilotEligibleRecords();
-        } catch (error) {
-          unavailable(
-            'recent decisions record selection is unavailable',
-            error,
-          );
-        }
-        return eligible.map(projectEligibleRecord);
-      });
+      return authority.serveRecentDecisions(request, activation, () =>
+        loadOrganizationRecentDecisionsProjectedRecords(records),
+      );
     },
   };
 }

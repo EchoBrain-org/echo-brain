@@ -26,6 +26,10 @@
     "./retrieval-build": {
       "types": "./dist/retrieval-build.d.ts",
       "import": "./dist/retrieval-build.js"
+    },
+    "./new-lineage-v1": {
+      "types": "./dist/new-lineage-v1.d.ts",
+      "import": "./dist/new-lineage-v1.js"
     }
   },
   "files": [
@@ -33,7 +37,8 @@
     "dist/**/*.js.map",
     "dist/**/*.d.ts",
     "dist/**/*.d.ts.map",
-    "migrations/**"
+    "migrations/**",
+    "baselines/**"
   ],
   "scripts": {
     "build": "tsc -b",

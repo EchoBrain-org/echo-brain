@@ -4,10 +4,7 @@ import type {
   Sha256Digest,
 } from '@echo-brain/federation-protocol';
 import type {
-  ApproveOrganizationInternalLiveReleaseRequestV1,
   OrganizationAccessLeaseRequestAnyVersion,
-  OrganizationInternalLiveReleaseManifestV1,
-  OrganizationInternalLiveUpdateReceiptV1,
 } from '@echo-brain/organization-api';
 import type {
   OrganizationAuthorityDescriptorV1,
@@ -93,33 +90,6 @@ export interface StoredAccessLeaseRequest {
   enrollment_id: string;
   previous_access_state_sha256: Sha256Digest;
   resulting_state_sha256: Sha256Digest;
-  received_at: string;
-}
-
-export interface StoredInternalLiveRelease {
-  directive_sequence: number;
-  command_id: string;
-  command_sha256: Sha256Digest;
-  manifest_url: string;
-  manifest_sha256: string;
-  manifest: OrganizationInternalLiveReleaseManifestV1;
-  release_version: string;
-  release_tag: string;
-  source_sha: string;
-  artifact_sha256: string;
-  approved_at: string;
-}
-
-export interface NewInternalLiveRelease {
-  command: ApproveOrganizationInternalLiveReleaseRequestV1;
-  command_sha256: Sha256Digest;
-  approved_at: string;
-}
-
-export interface StoredInternalLiveUpdateReceipt {
-  receipt_sequence: number;
-  payload_sha256: Sha256Digest;
-  receipt: OrganizationInternalLiveUpdateReceiptV1;
   received_at: string;
 }
 
@@ -335,6 +305,297 @@ export interface ReviewerQueryAuditCommandBinding {
   command_sha256: Sha256Digest;
 }
 
+/** Exact Authority person tuple; never inferred from an OIDC email claim. */
+export interface AuthorityPersonMembershipBinding {
+  organization_id: string;
+  principal_id: string;
+  membership_id: string;
+  membership_type: OrganizationMembershipTypeV1;
+}
+
+export interface StoredOidcIdentityBinding
+  extends AuthorityPersonMembershipBinding {
+  identity_binding_id: string;
+  issuer: string;
+  subject: string;
+  tenant_constraint_sha256: Sha256Digest;
+  oidc_configuration_sha256: Sha256Digest;
+  initial_login_attempt_id: string;
+  initial_login_grant_sha256: Sha256Digest;
+  status: 'active' | 'revoked';
+  bound_at: string;
+  revoked_at: string | null;
+  revocation_reason: string | null;
+}
+
+export type NewOidcIdentityBinding = Omit<
+  StoredOidcIdentityBinding,
+  'status' | 'bound_at' | 'revoked_at' | 'revocation_reason'
+>;
+
+/**
+ * An application-sealed PKCE verifier envelope. A raw byte array cannot be
+ * supplied where durable, authenticated ciphertext is required.
+ */
+export interface SealedPkceVerifier {
+  key_id: string;
+  sealed_bytes: Uint8Array;
+}
+
+export type OidcLoginAttemptTerminalOutcome =
+  | 'succeeded'
+  | 'denied'
+  | 'expired';
+
+export interface StoredOidcLoginAttempt {
+  login_attempt_id: string;
+  issuer: string;
+  attempt_purpose: 'identity_bootstrap' | 'existing_identity_login';
+  client_id: string;
+  redirect_uri: string;
+  tenant_constraint_sha256: Sha256Digest;
+  oidc_configuration_sha256: Sha256Digest;
+  /** Null when an already-bound identity starts the attempt. */
+  login_grant_sha256: Sha256Digest | null;
+  state_sha256: Sha256Digest;
+  nonce_sha256: Sha256Digest;
+  pkce_verifier_seal_key_id: string | null;
+  /** Ciphertext/sealed bytes only. The repository never accepts a verifier. */
+  pkce_verifier_sealed: Uint8Array | null;
+  created_at: string;
+  expires_at: string;
+  redemption_claim_id: string | null;
+  redemption_claimed_at: string | null;
+  terminal_outcome: OidcLoginAttemptTerminalOutcome | null;
+  completed_at: string | null;
+  resolved_identity_binding_id: string | null;
+  upstream_assertion_issued_at: string | null;
+}
+
+export type NewOidcLoginAttempt = Omit<
+  StoredOidcLoginAttempt,
+  | 'created_at'
+  | 'terminal_outcome'
+  | 'redemption_claim_id'
+  | 'redemption_claimed_at'
+  | 'completed_at'
+  | 'resolved_identity_binding_id'
+  | 'upstream_assertion_issued_at'
+  | 'pkce_verifier_seal_key_id'
+  | 'pkce_verifier_sealed'
+> & {
+  sealed_pkce_verifier: SealedPkceVerifier;
+};
+
+export type OidcLoginAttemptCompletion =
+  | {
+      outcome: 'succeeded';
+      resolved_identity_binding_id: string;
+      upstream_assertion_issued_at: string;
+    }
+  | { outcome: 'denied' };
+
+export interface StoredPersonLoginGrant
+  extends AuthorityPersonMembershipBinding {
+  login_grant_sha256: Sha256Digest;
+  grant_purpose: 'oidc_identity_bootstrap';
+  /** Exact issuer this bootstrap grant permits; no subject is known yet. */
+  expected_issuer: string;
+  /** Domain-separated digest of the canonical invited work email. */
+  expected_email_sha256: Sha256Digest;
+  oidc_configuration_sha256: Sha256Digest;
+  issued_at: string;
+  expires_at: string;
+  consumed_at: string | null;
+}
+
+export type NewPersonLoginGrant = Omit<
+  StoredPersonLoginGrant,
+  'issued_at' | 'consumed_at'
+>;
+
+export interface StoredPersonSessionFamily
+  extends AuthorityPersonMembershipBinding {
+  session_family_id: string;
+  identity_binding_id: string;
+  authentication_login_attempt_id: string;
+  created_at: string;
+  upstream_assertion_issued_at: string;
+  tenant_constraint_sha256: Sha256Digest;
+  oidc_configuration_sha256: Sha256Digest;
+  hard_reauthentication_at: string;
+  status: 'active' | 'revoked';
+  revoked_at: string | null;
+  revocation_reason: string | null;
+}
+
+export type NewPersonSessionFamily = Omit<
+  StoredPersonSessionFamily,
+  'created_at' | 'status' | 'revoked_at' | 'revocation_reason'
+>;
+
+export type PersonSessionCredentialKind = 'access' | 'refresh';
+
+export interface StoredPersonSessionCredential {
+  session_credential_id: string;
+  session_family_id: string;
+  credential_kind: PersonSessionCredentialKind;
+  rotation_sequence: number;
+  token_sha256: Sha256Digest;
+  issued_at: string;
+  expires_at: string;
+  /** Non-null only after a refresh credential has been used for rotation. */
+  consumed_at: string | null;
+  revoked_at: string | null;
+  revocation_reason: string | null;
+}
+
+export type NewPersonSessionCredential = Omit<
+  StoredPersonSessionCredential,
+  'issued_at' | 'consumed_at' | 'revoked_at' | 'revocation_reason'
+>;
+
+export const PERSON_READ_DECISION_AUDIT_RETENTION_DAYS = 180;
+
+export type PersonReadOperation =
+  | 'recent_decisions'
+  | 'reviewer_recent_decisions'
+  | 'readable_search';
+
+export type PersonReadDecisionReasonCode =
+  | 'active_person_session'
+  | 'person_or_session_inactive'
+  | 'caller_subject_mismatch'
+  | 'authorization_state_changed'
+  | 'operation_not_permitted';
+
+export interface PersonReadAuthenticatedEvidence
+  extends AuthorityPersonMembershipBinding {
+  identity_binding_id: string;
+  session_family_id: string;
+  access_credential_sha256: Sha256Digest;
+  /**
+   * Start denies retain the stage-1 session caller receipt. Final decisions
+   * made after a readable-search scope opens retain its stage-2 scope receipt,
+   * which nests stage 1 with generation, head, contracts, and segments.
+   */
+  caller_binding_sha256: Sha256Digest;
+  person_state_sha256: Sha256Digest;
+  session_state_sha256: Sha256Digest;
+}
+
+interface PersonReadDecisionAuditInputBase {
+  operation: PersonReadOperation;
+  /** SHA-256 of the operation's validated canonical request bytes. */
+  request_sha256: Sha256Digest;
+  /** Exact prepared response bytes. Only their SHA-256 is retained. */
+  response_bytes: Uint8Array;
+  asserted_subject_principal_id: string;
+}
+
+export type PersonReadDecisionAuditEntry = PersonReadDecisionAuditInputBase &
+  (
+    | {
+        decision: 'allow';
+        reason_code: 'active_person_session';
+        authenticated: PersonReadAuthenticatedEvidence;
+      }
+    | {
+        decision: 'deny';
+        reason_code: 'person_or_session_inactive';
+        authenticated: PersonReadAuthenticatedEvidence | null;
+      }
+    | {
+        decision: 'deny';
+        reason_code:
+          | 'caller_subject_mismatch'
+          | 'authorization_state_changed'
+          | 'operation_not_permitted';
+        authenticated: PersonReadAuthenticatedEvidence;
+      }
+  );
+
+export interface StoredPersonReadDecisionAudit {
+  audit_sequence: number;
+  occurred_at: string;
+  retain_until: string;
+  authority_id: string;
+  organization_id: string;
+  operation: PersonReadOperation;
+  request_sha256: Sha256Digest;
+  response_sha256: Sha256Digest;
+  asserted_subject_principal_id: string;
+  decision: 'allow' | 'deny';
+  reason_code: PersonReadDecisionReasonCode;
+  authenticated: PersonReadAuthenticatedEvidence | null;
+}
+
+export interface MemberExclusionOwnerSource {
+  organization_id: string;
+  principal_id: string;
+  membership_id: string;
+  membership_type: OrganizationMembershipTypeV1;
+  source_adapter_id: string;
+  source_instance_id: string;
+}
+
+export type StoredMemberExclusionSelector =
+  | {
+      scope: 'source';
+      source_adapter_id: string;
+      source_instance_id: string;
+    }
+  | {
+      scope: 'meeting';
+      source_adapter_id: string;
+      source_instance_id: string;
+      external_id: string;
+    };
+
+interface MemberExclusionReadAuditInputBase {
+  request_sha256: Sha256Digest;
+  response_bytes: Uint8Array;
+  result_count: number;
+}
+
+export type MemberExclusionReadAuditEntry =
+  | (MemberExclusionReadAuditInputBase & {
+      actor_kind: 'person';
+      asserted_subject_principal_id: string;
+      decision: 'allow';
+      reason_code: 'active_person_session';
+      authenticated: PersonReadAuthenticatedEvidence;
+    })
+  | (MemberExclusionReadAuditInputBase & {
+      actor_kind: 'person';
+      asserted_subject_principal_id: string;
+      decision: 'deny';
+      reason_code: 'person_or_session_inactive';
+      authenticated: PersonReadAuthenticatedEvidence | null;
+    })
+  | (MemberExclusionReadAuditInputBase & {
+      actor_kind: 'person';
+      asserted_subject_principal_id: string;
+      decision: 'deny';
+      reason_code:
+        | 'caller_subject_mismatch'
+        | 'authorization_state_changed'
+        | 'operation_not_permitted';
+      authenticated: PersonReadAuthenticatedEvidence;
+    })
+  | (MemberExclusionReadAuditInputBase & {
+      actor_kind: 'admin_break_glass';
+      actor_binding_sha256: Sha256Digest;
+      decision: 'allow';
+      reason_code: 'break_glass_authorized';
+    })
+  | (MemberExclusionReadAuditInputBase & {
+      actor_kind: 'admin_break_glass';
+      actor_binding_sha256: Sha256Digest;
+      decision: 'deny';
+      reason_code: 'break_glass_target_unavailable';
+    });
+
 export interface AuthorityReadTransaction {
   metadata(): StoredAuthorityMetadata;
   membership(membershipId: string): StoredAuthorityMembership | undefined;
@@ -385,25 +646,40 @@ export interface AuthorityReadTransaction {
   accessStateByDigest(
     stateSha256: Sha256Digest,
   ): StoredAuthorityAccessState | undefined;
-  internalLiveReleaseByCommand(
-    commandId: string,
-  ): StoredInternalLiveRelease | undefined;
-  internalLiveReleaseBySequence(
-    directiveSequence: number,
-  ): StoredInternalLiveRelease | undefined;
-  currentInternalLiveRelease(): StoredInternalLiveRelease | undefined;
-  internalLiveUpdateReceiptByTransaction(
-    transactionId: string,
-  ): StoredInternalLiveUpdateReceipt | undefined;
-  latestInternalLiveUpdateReceipt(
-    installationId: string,
-    directiveSequence: number,
-  ): StoredInternalLiveUpdateReceipt | undefined;
   recentAuditBefore(
     auditSequence: number | undefined,
     limit: number,
   ): StoredAuthorityAuditEntry[];
   adminCounts(now: string): AuthorityAdminCounts;
+  oidcIdentityBinding(
+    issuer: string,
+    subject: string,
+  ): StoredOidcIdentityBinding | undefined;
+  oidcIdentityBindingById(
+    identityBindingId: string,
+  ): StoredOidcIdentityBinding | undefined;
+  oidcLoginAttempt(
+    stateSha256: Sha256Digest,
+  ): StoredOidcLoginAttempt | undefined;
+  oidcLoginAttemptForLoginGrant(
+    loginGrantSha256: Sha256Digest,
+  ): StoredOidcLoginAttempt | undefined;
+  personLoginGrant(
+    loginGrantSha256: Sha256Digest,
+  ): StoredPersonLoginGrant | undefined;
+  personSessionFamily(
+    sessionFamilyId: string,
+  ): StoredPersonSessionFamily | undefined;
+  personSessionCredential(
+    tokenSha256: Sha256Digest,
+  ): StoredPersonSessionCredential | undefined;
+  personSessionCredentialsForFamily(
+    sessionFamilyId: string,
+  ): StoredPersonSessionCredential[];
+  /** Returns `undefined` unless this exact source has this active owner. */
+  memberExclusionsForOwnerSource(
+    source: MemberExclusionOwnerSource,
+  ): readonly StoredMemberExclusionSelector[] | undefined;
   /** `null` is the clean, never-built state; corruption throws. */
   activeReadableSearchGeneration(): StoredReadableSearchActiveGeneration | null;
 }
@@ -419,10 +695,6 @@ export interface AuthorityWriteTransaction extends AuthorityReadTransaction {
   ): boolean;
   insertAccessState(state: StoredAuthorityAccessState): void;
   insertAccessLeaseRequest(request: StoredAccessLeaseRequest): void;
-  insertInternalLiveRelease(release: NewInternalLiveRelease): void;
-  insertInternalLiveUpdateReceipt(
-    receipt: Omit<StoredInternalLiveUpdateReceipt, 'receipt_sequence'>,
-  ): void;
   revokeMembership(
     membershipId: string,
     revokedAt: string,
@@ -434,6 +706,73 @@ export interface AuthorityWriteTransaction extends AuthorityReadTransaction {
     kind: 'membership_revoked' | 'installation_revoked',
     reason: string,
   ): boolean;
+  insertOidcIdentityBinding(
+    binding: NewOidcIdentityBinding,
+  ): StoredOidcIdentityBinding;
+  revokeOidcIdentityBinding(
+    identityBindingId: string,
+    reason: string,
+  ): boolean;
+  insertOidcLoginAttempt(
+    attempt: NewOidcLoginAttempt,
+  ): StoredOidcLoginAttempt;
+  claimOidcLoginAttempt(
+    stateSha256: Sha256Digest,
+    redemptionClaimId: string,
+  ): StoredOidcLoginAttempt | undefined;
+  releaseOidcLoginAttemptClaim(
+    stateSha256: Sha256Digest,
+    redemptionClaimId: string,
+  ): boolean;
+  completeOidcLoginAttempt(
+    stateSha256: Sha256Digest,
+    redemptionClaimId: string,
+    completion: OidcLoginAttemptCompletion,
+  ): StoredOidcLoginAttempt | undefined;
+  /** Scrubs at most `limit` pending attempts whose exact expiry has passed. */
+  expireOidcLoginAttempts(limit: number): number;
+  insertPersonLoginGrant(
+    grant: NewPersonLoginGrant,
+  ): StoredPersonLoginGrant;
+  consumePersonLoginGrant(
+    loginGrantSha256: Sha256Digest,
+  ): StoredPersonLoginGrant | undefined;
+  insertPersonSessionFamily(
+    family: NewPersonSessionFamily,
+  ): StoredPersonSessionFamily;
+  insertPersonSessionCredential(
+    credential: NewPersonSessionCredential,
+  ): StoredPersonSessionCredential;
+  consumePersonSessionRefreshCredential(
+    tokenSha256: Sha256Digest,
+  ): StoredPersonSessionCredential | undefined;
+  revokePersonSessionCredential(
+    tokenSha256: Sha256Digest,
+    reason: string,
+  ): boolean;
+  /** Revokes the family and every still-unrevoked credential atomically. */
+  revokePersonSessionFamily(
+    sessionFamilyId: string,
+    reason: string,
+  ): boolean;
+  /**
+   * Applies idempotent member-owned exclusion state only when the exact source
+   * binding and membership are still active in this transaction.
+   *
+   * `false` is the opaque unavailable-source result; `true` means the desired
+   * state already held or was applied.
+   */
+  setMemberExclusionForOwner(
+    source: MemberExclusionOwnerSource,
+    selector: StoredMemberExclusionSelector,
+    excluded: boolean,
+  ): boolean;
+  /** Appends one isolated V2 Person read decision at the transaction time. */
+  appendPersonReadDecisionAudit(
+    entry: PersonReadDecisionAuditEntry,
+  ): StoredPersonReadDecisionAudit;
+  /** Appends minimized INV-10 evidence; exclusion coordinates are never stored. */
+  appendMemberExclusionReadAudit(entry: MemberExclusionReadAuditEntry): void;
   appendAudit(entry: AuthorityAuditEntry): void;
   /**
    * Appends one reviewer query decision at this transaction's own final time.

@@ -16,8 +16,13 @@ import { createServer as createHttpServer } from 'node:http';
 import { createServer as createNetServer, type Socket } from 'node:net';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import Database from 'better-sqlite3';
+import {
+  ORGANIZATION_API_PROXY_AUTH_SCHEME,
+  TRUSTED_PROXY_AUTHORIZATION_HEADER,
+  TRUSTED_PROXY_CLIENT_ID_HEADER,
+} from '@echo-brain/organization-api';
 import {
   initializeOrganizationControlDatabase,
   inspectOrganizationControlDatabaseForServe,
@@ -33,7 +38,7 @@ import {
   inspectAuthorityDatabaseForServe,
   inspectAuthorityDatabaseReadOnly,
 } from '../src/adapters/persistence/sqlite/read-only-inspection.js';
-import { openAuthorityDatabase } from '../src/adapters/persistence/sqlite/open-database.js';
+import { openAndMigrateAuthorityDatabase } from '../src/adapters/persistence/sqlite/open-database.js';
 import { authorityRuntimeFingerprint } from '../src/adapters/runtime/runtime-fingerprint.js';
 import {
   acquireAuthorityRuntimeLock,
@@ -51,10 +56,20 @@ import {
   installAuthorityIntegrations,
   inspectAuthorityServePreflight,
   inspectInitializedAuthorityState,
+  resolveEffectiveAuthorityServeConfig,
   type AuthorityIntegrationsInstallationFaultPoint,
 } from '../src/composition/operator-state.js';
+import {
+  AUTHORITY_PERSON_SESSION_PKCE_KEY_FILENAME,
+  AUTHORITY_PERSON_SESSION_RUNTIME_OVERLAY_FILENAME,
+} from '../src/composition/person-session-runtime-config.js';
 import { startOrganizationAuthority } from '../src/composition/runtime.js';
 import { reviewerPolicyContractSha256 } from '../src/application/reviewer-policy-contract.js';
+import { PersonIdentitySessionApplication } from '../src/application/person-identity-sessions.js';
+import {
+  PERSON_SESSION_OIDC_BEGIN_PATH,
+  PERSON_SESSION_REFRESH_PATH,
+} from '../src/presentation/person-identity-session-http-application.js';
 import {
   inspectAuthorityRuntimeOwnership,
   inspectAuthorityStatus,
@@ -378,10 +393,31 @@ describe('organization authority operator lifecycle', () => {
       'authority_enrollments',
       'authority_internal_live_releases',
       'authority_internal_live_update_receipts',
+      'authority_member_exclusion_read_audit',
       'authority_memberships',
       'authority_metadata',
+      'authority_oidc_identity_bindings',
+      'authority_oidc_login_attempts',
       'authority_organization_member_recording_activation',
+      'authority_person_login_grants',
+      'authority_person_read_decision_audit',
+      'authority_person_session_credentials',
+      'authority_person_session_families',
       'authority_principals',
+      'authority_processing_approval_presentation_contracts',
+      'authority_processing_approval_publications',
+      'authority_processing_approval_resolution_metadata',
+      'authority_processing_candidates',
+      'authority_processing_delivery_receipts',
+      'authority_processing_frozen_record_envelopes',
+      'authority_processing_member_exclusions',
+      'authority_processing_processed_markers',
+      'authority_processing_resolutions',
+      'authority_processing_slack_delivery_attempts',
+      'authority_processing_slots',
+      'authority_processing_source_configuration_bindings',
+      'authority_processing_source_cursors',
+      'authority_processing_source_owner_bindings',
       'authority_query_decision_audit',
       'authority_readable_search_active_generation',
       'authority_readable_search_query_audit',
@@ -430,6 +466,182 @@ describe('organization authority operator lifecycle', () => {
     expect(repeated.authority_descriptor.authority_id).toBe(
       firstConfig.authority.authority_id,
     );
+  });
+
+  it('keeps current-schema read-only inspection fail-closed on extra tables', async () => {
+    const fixture = await initializedFixture();
+    const paths = authorityStatePaths(fixture.stateDirectory);
+    const database = new Database(paths.database_path);
+    try {
+      database.exec('CREATE TABLE unexpected_authority_state (value TEXT)');
+    } finally {
+      database.close();
+    }
+
+    expect(() =>
+      inspectAuthorityDatabaseReadOnly(paths.database_path),
+    ).toThrow('organization authority database table set is invalid');
+  });
+
+  it('folds the opt-in Person overlay without rewriting initialized intent', async () => {
+    const fixture = await initializedFixture();
+    const config = readAuthorityRuntimeConfig(fixture.configPath);
+    const paths = authorityStatePaths(fixture.stateDirectory);
+    const configBytes = readFileSync(fixture.configPath);
+    const manifestBytes = readFileSync(paths.initialization_manifest_path);
+    const keyPath = join(
+      paths.credential_directory,
+      AUTHORITY_PERSON_SESSION_PKCE_KEY_FILENAME,
+    );
+    const overlayPath = join(
+      paths.state_directory,
+      AUTHORITY_PERSON_SESSION_RUNTIME_OVERLAY_FILENAME,
+    );
+    writeFileSync(keyPath, Buffer.alloc(32, 6).toString('base64url'), {
+      mode: 0o600,
+    });
+    chmodSync(keyPath, 0o600);
+    writeFileSync(
+      overlayPath,
+      `${JSON.stringify({
+        schema_version: 1,
+        kind: 'echo-organization-authority-person-session-runtime-overlay',
+        authority_id: config.authority.authority_id,
+        organization_id: config.organization.organization_id,
+        oidc: {
+          issuer: 'https://identity.example/tenant',
+          client_id: 'echo-person-client',
+          redirect_uri:
+            'https://authority.example/v2/session/oidc/callback',
+          tenant: { kind: 'issuer' },
+          id_token_algorithms: ['RS256'],
+          client_authentication: { method: 'none' },
+        },
+        pkce_sealing_key_ref: `file:${keyPath}`,
+      })}\n`,
+      { mode: 0o600 },
+    );
+    chmodSync(overlayPath, 0o600);
+
+    const baseline = authorityRuntimeFingerprint(
+      resolveAuthorityServeConfig(config),
+    );
+    const first = resolveEffectiveAuthorityServeConfig(
+      fixture.configPath,
+      config,
+    );
+    const firstFingerprint = authorityRuntimeFingerprint(first);
+    expect(first.person_session_runtime_v1).toBeDefined();
+    expect(firstFingerprint).not.toBe(baseline);
+    expect(readFileSync(fixture.configPath)).toEqual(configBytes);
+    expect(readFileSync(paths.initialization_manifest_path)).toEqual(
+      manifestBytes,
+    );
+
+    writeFileSync(keyPath, Buffer.alloc(32, 7).toString('base64url'));
+    const rotated = resolveEffectiveAuthorityServeConfig(
+      fixture.configPath,
+      config,
+    );
+    expect(authorityRuntimeFingerprint(rotated)).not.toBe(firstFingerprint);
+  });
+
+  it('starts a slashless-root Person issuer offline and expires attempts', async () => {
+    const fixture = await initializedFixture();
+    const base = resolveAuthorityServeConfig(
+      readAuthorityRuntimeConfig(fixture.configPath),
+    );
+    const configured = {
+      ...base,
+      person_session_runtime_v1: Object.freeze({
+        overlay_sha256: `sha256:${'a'.repeat(64)}` as const,
+        oidc_configuration: Object.freeze({
+          issuer: 'https://accounts.google.com',
+          client_id: 'echo-person-client',
+          redirect_uri:
+            'https://authority.example/v2/session/oidc/callback',
+          tenant: Object.freeze({ kind: 'issuer' as const }),
+          id_token_algorithms: Object.freeze(['RS256']),
+        }),
+        client_authentication: Object.freeze({ method: 'none' as const }),
+        pkce_sealing_key: new Uint8Array(32).fill(7),
+      }),
+    };
+    const expire = vi.spyOn(
+      PersonIdentitySessionApplication.prototype,
+      'expireOidcLoginAttempts',
+    );
+    const begin = vi.spyOn(
+      PersonIdentitySessionApplication.prototype,
+      'beginOidcLogin',
+    );
+    let discoveryCalls = 0;
+    let runtime: Awaited<ReturnType<typeof startOrganizationAuthority>> | undefined;
+    try {
+      runtime = await startOrganizationAuthority(configured, {
+        discoverPersonSessionOidcProvider: async () => {
+          discoveryCalls += 1;
+          if (discoveryCalls === 1) {
+            throw new Error('identity provider is temporarily unavailable');
+          }
+          return {
+            buildAuthorizationUrl: (attempt) =>
+              `https://identity.example/authorize?state=${encodeURIComponent(attempt.state)}`,
+            redeemAuthorizationCode: async () =>
+              ({ kind: 'terminal_failure' }) as const,
+          };
+        },
+      });
+      expect(discoveryCalls).toBe(0);
+      expect(expire).toHaveBeenCalledTimes(1);
+      expect(expire).toHaveBeenLastCalledWith({ limit: 1000 });
+
+      const origin = `http://127.0.0.1:${String(runtime.address.port)}`;
+      const proxyHeaders = {
+        [TRUSTED_PROXY_AUTHORIZATION_HEADER]:
+          `${ORGANIZATION_API_PROXY_AUTH_SCHEME} ${configured.trusted_proxy_token}`,
+        [TRUSTED_PROXY_CLIENT_ID_HEADER]: `cid_${createHash('sha256')
+          .update('offline-person-session-runtime-test')
+          .digest('base64url')}`,
+        'content-type': 'application/json',
+      };
+      const refresh = await fetch(`${origin}${PERSON_SESSION_REFRESH_PATH}`, {
+        method: 'POST',
+        headers: proxyHeaders,
+        body: JSON.stringify({ refresh_token: 'R'.repeat(43) }),
+      });
+      expect(refresh.status).toBe(401);
+      expect(discoveryCalls).toBe(0);
+      expect(expire).toHaveBeenCalledTimes(1);
+
+      const unavailable = await fetch(
+        `${origin}${PERSON_SESSION_OIDC_BEGIN_PATH}`,
+        {
+          method: 'POST',
+          headers: proxyHeaders,
+          body: JSON.stringify({ kind: 'existing_identity_login' }),
+        },
+      );
+      expect(unavailable.status).toBe(503);
+      expect(discoveryCalls).toBe(1);
+      expect(expire).toHaveBeenCalledTimes(2);
+      expect(begin).not.toHaveBeenCalled();
+
+      const begun = await fetch(`${origin}${PERSON_SESSION_OIDC_BEGIN_PATH}`, {
+        method: 'POST',
+        headers: proxyHeaders,
+        body: JSON.stringify({ kind: 'existing_identity_login' }),
+      });
+      expect(begun.status).toBe(201);
+      expect(discoveryCalls).toBe(2);
+      expect(expire).toHaveBeenCalledTimes(3);
+      expect(expire).toHaveBeenLastCalledWith({ limit: 1000 });
+      expect(begin).toHaveBeenCalledTimes(1);
+    } finally {
+      await runtime?.close();
+      expire.mockRestore();
+      begin.mockRestore();
+    }
   });
 
   it('serializes concurrent initialization and safely completes a published state without config', async () => {
@@ -768,6 +980,63 @@ describe('organization authority operator lifecycle', () => {
         name.startsWith('.g-'),
       ),
     ).toBe(false);
+  });
+
+  it('owns the live meeting worker for the full server lifecycle', async () => {
+    const fixture = await initializedFixture();
+    const serveConfig = resolveAuthorityServeConfig(
+      readAuthorityRuntimeConfig(fixture.configPath),
+    );
+    const closeMeetingProcessing = vi.fn(async () => undefined);
+    const startupOrder: string[] = [];
+    const recoverTerminalRecordActs = vi.fn(async () => {
+      startupOrder.push('terminal-record-recovery');
+      return {
+        source_binding: 'absent' as const,
+        recovered_processing_keys: [],
+      };
+    });
+    const openMeetingProcessingRuntime = vi.fn(async () => {
+      startupOrder.push('meeting-polling');
+      return { close: closeMeetingProcessing };
+    });
+    const runtime = await startOrganizationAuthority(serveConfig, {
+      recoverTerminalRecordActs,
+      openMeetingProcessingRuntime,
+    });
+
+    expect(recoverTerminalRecordActs).toHaveBeenCalledOnce();
+    expect(openMeetingProcessingRuntime).toHaveBeenCalledOnce();
+    expect(startupOrder).toEqual([
+      'terminal-record-recovery',
+      'meeting-polling',
+    ]);
+    expect(closeMeetingProcessing).not.toHaveBeenCalled();
+    await runtime.close();
+    expect(closeMeetingProcessing).toHaveBeenCalledOnce();
+  });
+
+  it('remains healthy when meeting processing is not ready', async () => {
+    const fixture = await initializedFixture();
+    const serveConfig = resolveAuthorityServeConfig(
+      readAuthorityRuntimeConfig(fixture.configPath),
+    );
+    const openMeetingProcessingRuntime = vi.fn(async () => null);
+    const runtime = await startOrganizationAuthority(serveConfig, {
+      openMeetingProcessingRuntime,
+    });
+    try {
+      expect(openMeetingProcessingRuntime).toHaveBeenCalledOnce();
+      await expect(
+        inspectAuthorityStatus(fixture.configPath),
+      ).resolves.toMatchObject({
+        ok: true,
+        running: true,
+        healthy: true,
+      });
+    } finally {
+      await runtime.close();
+    }
   });
 
   it('abandons kernel ownership but preserves recovery state when shutdown fails', async () => {
@@ -1232,7 +1501,7 @@ describe('organization authority operator lifecycle', () => {
     expect(
       inspectAuthorityDatabaseReadOnly(config.database_path),
     ).toMatchObject({
-      schema_version: 8,
+      schema_version: 19,
       integrations_control_plane_id: integrationsIdentity.control_plane_id,
       integrations_marker_sha256: expect.stringMatching(
         /^sha256:[0-9a-f]{64}$/,
@@ -1323,7 +1592,7 @@ describe('organization authority operator lifecycle', () => {
       const interruptedAuthority = inspectAuthorityDatabaseReadOnly(
         config.database_path,
       );
-      expect(interruptedAuthority.schema_version).toBe(8);
+      expect(interruptedAuthority.schema_version).toBe(19);
       expect(
         interruptedAuthority.integrations_control_plane_id !== null,
       ).toBe(anchoredAfterFault);
@@ -1340,7 +1609,7 @@ describe('organization authority operator lifecycle', () => {
         config.database_path,
       );
       expect(recoveredAuthority).toMatchObject({
-        schema_version: 8,
+        schema_version: 19,
         integrations_control_plane_id: recovered.control_plane_id,
         integrations_marker_sha256: expect.stringMatching(
           /^sha256:[0-9a-f]{64}$/,
@@ -1380,7 +1649,7 @@ describe('organization authority operator lifecycle', () => {
     ) as { control_plane_id: string };
     replaceAuthorityDatabaseWithLegacyV2(config.database_path);
     unlinkSync(paths.integrations_database_path);
-    openAuthorityDatabase(config.database_path, {
+    openAndMigrateAuthorityDatabase(config.database_path, {
       fileMustExist: true,
     }).close();
 
@@ -1403,7 +1672,7 @@ describe('organization authority operator lifecycle', () => {
     replaceAuthorityDatabaseWithLegacyV2(config.database_path);
     unlinkSync(paths.integrations_database_path);
     unlinkSync(paths.integrations_installation_marker_path);
-    openAuthorityDatabase(config.database_path, {
+    openAndMigrateAuthorityDatabase(config.database_path, {
       fileMustExist: true,
     }).close();
     const foreign = initializeOrganizationControlDatabase(
@@ -1553,7 +1822,7 @@ describe('organization authority operator lifecycle', () => {
     const fixture = await initializedFixture();
     const config = readAuthorityRuntimeConfig(fixture.configPath);
     unlinkSync(config.database_path);
-    openAuthorityDatabase(config.database_path).close();
+    openAndMigrateAuthorityDatabase(config.database_path).close();
 
     await expect(
       startOrganizationAuthority(resolveAuthorityServeConfig(config)),

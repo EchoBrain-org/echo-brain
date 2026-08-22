@@ -8,22 +8,13 @@ export default [
   {
     files: [
       'src/**/*.ts',
-      'tests/machine/**/*.ts',
-      'tests/architecture/**/*.ts',
-      'tests/core/**/*.ts',
-      'tests/adapters/**/*.ts',
-      'tests/infrastructure/**/*.ts',
-      'tests/integration/**/*.ts',
-      'tests/product/**/*.ts',
-      'tests/support/**/*.ts',
-      'tests/system/**/*.ts',
+      'tests/**/*.ts',
       'packages/*/src/**/*.ts',
       'packages/*/test/**/*.ts',
       'services/*/src/**/*.ts',
       'services/*/test/**/*.ts',
       'vitest.config.ts',
       'vitest.package.config.ts',
-      'vitest.product.config.ts',
     ],
     languageOptions: {
       parser: tsParser,

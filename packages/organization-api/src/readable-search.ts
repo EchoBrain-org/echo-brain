@@ -66,7 +66,11 @@ function validateQuery(value: unknown, label: string): string {
   return value;
 }
 
-function validateAnalyzableQuery(value: unknown, label: string): string {
+/** Shared internally by the installation- and Person-authenticated requests. */
+export function validateOrganizationReadableSearchQuery(
+  value: unknown,
+  label: string,
+): string {
   const query = validateQuery(value, label);
   const observed = new Set<string>();
   for (const run of query.match(/[\p{L}\p{N}]+/gu) ?? []) {
@@ -140,7 +144,10 @@ export function validateOrganizationReadableSearchRequest(
   ) {
     fail(`${label} HTTP operation is unsupported`);
   }
-  const query = validateAnalyzableQuery(record.query, `${label} query`);
+  const query = validateOrganizationReadableSearchQuery(
+    record.query,
+    `${label} query`,
+  );
   assertTimestamp(record.requested_at, `${label} requested_at`);
   const integrity = validateIntegrity(record.integrity, label);
   if (integrity.key_id !== record.installation_key_id) {
@@ -215,7 +222,7 @@ export async function createOrganizationReadableSearchRequest(
     installation_key_id: input.installation_signing_key.key_id,
     http_method: 'POST',
     http_path: ORGANIZATION_API_READABLE_SEARCH_PATH,
-    query: validateAnalyzableQuery(
+    query: validateOrganizationReadableSearchQuery(
       input.query,
       'organization readable search request query',
     ),
