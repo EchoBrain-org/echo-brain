@@ -43,10 +43,25 @@ link Slack while the profile runs, then finalize while stopped. Bootstrap owns
 timestamps, IDs, PKCE location, connection ID, and invitation path. It reads
 the Slack token once from stdin and issues the 15-minute invitation last.
 
+On the EC2 host behind the existing Cloudflare Tunnel, include
+`compose.clean-v1.ec2.yaml`. The override disables local image builds, requires
+an immutable remote image reference, exposes only HTTP port 80 on `127.0.0.1`,
+and selects `Caddyfile.clean-v1.ec2`. The EC2 security group remains closed to
+inbound traffic; Cloudflare Tunnel is the only public path. Before starting the
+clean profile, bring the retained EC2 Compose project down without `-v`, since
+both projects claim `127.0.0.1:80`. Keep the retained `data/` directory and its
+volumes intact. The existing Tunnel route must target that loopback port and
+use the same hostname named by `ECHO_CLEAN_AUTHORITY_HOST`.
+
 ```sh
 compose_clean() {
   docker compose --env-file .env.clean-v1 -f compose.clean-v1.yaml "$@"
 }
+# On EC2, define the helper with both files instead:
+# compose_clean() {
+#   docker compose --env-file .env.clean-v1 -f compose.clean-v1.yaml \
+#     -f compose.clean-v1.ec2.yaml "$@"
+# }
 set -a
 . ./.env.clean-v1
 set +a

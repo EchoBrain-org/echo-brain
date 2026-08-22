@@ -1,0 +1,5 @@
+http://{$ECHO_CLEAN_AUTHORITY_HOST:localhost} {
+	route {
+		reverse_proxy 127.0.0.1:39479
+	}
+}

@@ -26,23 +26,46 @@ describe("clean founder deployment profile", () => {
   });
 
   it("keeps clean ingress free of the retired authenticated proxy contract", () => {
-    const caddyfile = deploymentFile("Caddyfile.clean-v1");
+    const caddyfiles = [
+      deploymentFile("Caddyfile.clean-v1"),
+      deploymentFile("Caddyfile.clean-v1.ec2"),
+    ];
 
-    expect(caddyfile).toContain("reverse_proxy 127.0.0.1:39479");
-    for (const forbidden of [
-      "X-Echo-Proxy-Authorization",
-      "X-Echo-Authenticated-Client-Id",
-      "X-Echo-Proxy-Source-Address",
-      "trusted-proxy",
-    ]) {
-      expect(caddyfile).not.toContain(forbidden);
+    for (const caddyfile of caddyfiles) {
+      expect(caddyfile).toContain("reverse_proxy 127.0.0.1:39479");
+      for (const forbidden of [
+        "X-Echo-Proxy-Authorization",
+        "X-Echo-Authenticated-Client-Id",
+        "X-Echo-Proxy-Source-Address",
+        "trusted-proxy",
+      ]) {
+        expect(caddyfile).not.toContain(forbidden);
+      }
     }
+  });
+
+  it("offers a loopback-only HTTP origin for the EC2 tunnel", () => {
+    const compose = deploymentFile("compose.clean-v1.ec2.yaml");
+    const caddyfile = deploymentFile("Caddyfile.clean-v1.ec2");
+
+    expect(compose).toContain("build: !reset null");
+    expect(compose).toContain("host_ip: 127.0.0.1");
+    expect(compose).toContain("published: \"80\"");
+    expect(compose).not.toContain('published: "443"');
+    expect(compose).toContain(
+      "./Caddyfile.clean-v1.ec2:/etc/caddy/Caddyfile:ro",
+    );
+    expect(caddyfile).toContain(
+      "http://{$ECHO_CLEAN_AUTHORITY_HOST:localhost}",
+    );
   });
 
   it("does not make legacy machine lifecycle surfaces part of the clean profile", () => {
     const cleanFiles = [
       deploymentFile("compose.clean-v1.yaml"),
+      deploymentFile("compose.clean-v1.ec2.yaml"),
       deploymentFile("Caddyfile.clean-v1"),
+      deploymentFile("Caddyfile.clean-v1.ec2"),
     ].join("\n");
 
     for (const forbidden of ["installation", "enrollment", "lease"]) {
