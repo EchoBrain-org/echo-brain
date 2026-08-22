@@ -73,7 +73,7 @@ jobs:
           test "$("$cli" --version)" = "$package_version"
           test "$("$cli" --help)" = 'usage: echo-brain person <command> [options]'
           set +e
-          HOME="$person_home" "$cli" person recent-decisions \
+          HOME="$person_home" "$cli" person records \
             > "$stdout_file" 2> "$stderr_file"
           status="$?"
           set -e
@@ -85,7 +85,7 @@ jobs:
             const value = JSON.parse(fs.readFileSync(process.argv[1], "utf8"));
             if (
               value.ok !== false ||
-              value.action !== "recent-decisions" ||
+              value.action !== "records" ||
               value.error !== "Person session is unavailable; sign in again"
             ) throw new Error(`unexpected result: ${JSON.stringify(value)}`);
           ' "$stderr_file"
