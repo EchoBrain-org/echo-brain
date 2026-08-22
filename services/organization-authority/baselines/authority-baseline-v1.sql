@@ -1010,17 +1010,47 @@ CREATE TABLE authority_record_write_receipts (
   recorded_at TEXT NOT NULL
 ) STRICT;
 
--- D6 persists the frozen full row and its row commitment. The expiry-control
--- rows are the matching whole-row-retention witnesses.
+-- The clean lineage has one append-only read-audit table. The nullable hash
+-- reservation is deliberately inert until a later accepted Layer 4 decision.
 CREATE TABLE authority_person_read_decision_audit_v2 (
   row_sha256 TEXT PRIMARY KEY CHECK (row_sha256 LIKE 'sha256:%'),
   body_json TEXT NOT NULL UNIQUE CHECK (json_valid(body_json) AND json_type(body_json) = 'object'),
-  retain_until TEXT NOT NULL,
-  recorded_at TEXT NOT NULL
+  context_kind TEXT NOT NULL CHECK (context_kind IN ('record_read', 'answer_composition')),
+  prompt_sha256 TEXT CHECK (prompt_sha256 IS NULL OR (
+    length(prompt_sha256) = 71 AND prompt_sha256 LIKE 'sha256:%' AND
+    substr(prompt_sha256, 8) NOT GLOB '*[^0-9a-f]*'
+  )),
+  answer_sha256 TEXT CHECK (answer_sha256 IS NULL OR (
+    length(answer_sha256) = 71 AND answer_sha256 LIKE 'sha256:%' AND
+    substr(answer_sha256, 8) NOT GLOB '*[^0-9a-f]*'
+  )),
+  recorded_at TEXT NOT NULL,
+  CHECK (
+    (context_kind = 'record_read' AND prompt_sha256 IS NULL AND answer_sha256 IS NULL) OR
+    (context_kind = 'answer_composition' AND prompt_sha256 IS NOT NULL AND answer_sha256 IS NOT NULL)
+  ),
+  -- The indexed discriminator and hashes are redundant commitments of the
+  -- immutable body. JSON null is distinct from an absent key.
+  CHECK (
+    COALESCE(
+      json_type(body_json, '$.context_kind') = 'text' AND
+      json_extract(body_json, '$.context_kind') = context_kind AND
+      CASE
+        WHEN prompt_sha256 IS NULL THEN json_type(body_json, '$.prompt_sha256') = 'null'
+        WHEN json_type(body_json, '$.prompt_sha256') = 'text'
+          THEN json_extract(body_json, '$.prompt_sha256') = prompt_sha256
+        ELSE 0
+      END AND
+      CASE
+        WHEN answer_sha256 IS NULL THEN json_type(body_json, '$.answer_sha256') = 'null'
+        WHEN json_type(body_json, '$.answer_sha256') = 'text'
+          THEN json_extract(body_json, '$.answer_sha256') = answer_sha256
+        ELSE 0
+      END,
+      0
+    )
+  )
 ) STRICT;
-
-CREATE INDEX authority_person_read_decision_audit_v2_retention
-  ON authority_person_read_decision_audit_v2 (retain_until, row_sha256);
 
 CREATE TRIGGER authority_person_read_decision_audit_v2_immutable
 BEFORE UPDATE ON authority_person_read_decision_audit_v2
@@ -1028,24 +1058,7 @@ BEGIN SELECT RAISE(ABORT, 'person read decision audit row is immutable'); END;
 
 CREATE TRIGGER authority_person_read_decision_audit_v2_delete_denied
 BEFORE DELETE ON authority_person_read_decision_audit_v2
-WHEN NOT EXISTS (
-  SELECT 1
-    FROM authority_person_read_audit_expiry_controls_v1 AS control,
-         json_each(control.body_json, '$.expired_row_sha256s') AS expired
-   WHERE expired.value = OLD.row_sha256
-     AND json_extract(control.body_json, '$.cutoff') >= OLD.retain_until
-)
 BEGIN SELECT RAISE(ABORT, 'person read decision audit row deletion is denied'); END;
-
-CREATE TABLE authority_person_read_audit_expiry_controls_v1 (
-  row_sha256 TEXT PRIMARY KEY CHECK (row_sha256 LIKE 'sha256:%'),
-  body_json TEXT NOT NULL UNIQUE CHECK (json_valid(body_json) AND json_type(body_json) = 'object'),
-  occurred_at TEXT NOT NULL
-) STRICT;
-
-CREATE TRIGGER authority_person_read_audit_expiry_controls_v1_immutable
-BEFORE UPDATE ON authority_person_read_audit_expiry_controls_v1
-BEGIN SELECT RAISE(ABORT, 'person read audit expiry control is immutable'); END;
 
 CREATE TABLE authority_readable_search_active_generation (
   singleton INTEGER PRIMARY KEY CHECK (singleton = 1),

@@ -360,11 +360,18 @@ function buildRecordInput(
             reconsider_after: null,
           },
         };
-  const human_act_record_input: HumanActRecordInputV1 =
-    buildHumanActRecordInputV1({
-      human_act_resolution_ref: ref,
-      event: finalEvent,
-    });
+  // The builder returns an enriched validation view with derived digest
+  // fields. D3 accepts the exact three-field protocol input, so retain only
+  // its canonical wire body at this composition boundary.
+  const built = buildHumanActRecordInputV1({
+    human_act_resolution_ref: ref,
+    event: finalEvent,
+  });
+  const human_act_record_input: HumanActRecordInputV1 = {
+    human_act_resolution_ref: built.human_act_resolution_ref,
+    event: built.event,
+    idempotency: built.idempotency,
+  };
   return {
     d2_witness: reproved.witness,
     human_act_record_input,

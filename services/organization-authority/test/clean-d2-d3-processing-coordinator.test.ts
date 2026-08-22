@@ -406,6 +406,8 @@ describe("clean D2 to D3 processing coordinator", () => {
       const fixture = setup(action);
       const candidate = frozenCandidate(fixture.approvedSnapshot);
       let recorded = false;
+      let receiptAttempts = 0;
+      let logicalV4Appends = 0;
       const inputs: unknown[] = [];
       const authority: CleanD2ToD3AuthorityStateV1 = {
         async listStagedApprovalIds() {
@@ -415,14 +417,24 @@ describe("clean D2 to D3 processing coordinator", () => {
           return candidate;
         },
         async recordV4Receipt() {
+          receiptAttempts += 1;
+          // Model the one crash window that cannot be made append-atomic
+          // across the V4 record store and Authority: V4 committed, then the
+          // Authority receipt write did not. Recovery must retry the V4
+          // idempotency key, not create a second logical record.
+          if (receiptAttempts === 1) {
+            throw new Error("simulated Authority receipt interruption");
+          }
           recorded = true;
         },
       };
       const record_writer = {
         appendFinalized: async (input: unknown) => {
           inputs.push(input);
+          const outcome = logicalV4Appends === 0 ? "appended" : "duplicate";
+          if (outcome === "appended") logicalV4Appends += 1;
           return {
-            outcome: "appended",
+            outcome,
             position: 1,
             envelope_id: "rec_1",
             envelope_sha256: digest("envelope"),
@@ -449,9 +461,15 @@ describe("clean D2 to D3 processing coordinator", () => {
       const signal = new AbortController().signal;
       const first = make();
       await first.observeAndFinalizePendingApprovals(signal);
-      await first.appendFinalizedApprovalsToV4(signal);
+      await expect(first.appendFinalizedApprovalsToV4(signal)).rejects.toThrow(
+        "simulated Authority receipt interruption",
+      );
+      expect(logicalV4Appends).toBe(1);
       await make().recoverV4Appends(signal);
-      expect(inputs).toHaveLength(1);
+      expect(inputs).toHaveLength(2);
+      expect(logicalV4Appends).toBe(1);
+      expect(receiptAttempts).toBe(2);
+      expect(recorded).toBe(true);
       expect(
         (inputs[0] as { human_act_record_input: { event: { kind: string } } })
           .human_act_record_input.event.kind,

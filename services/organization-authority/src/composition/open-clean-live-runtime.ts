@@ -42,6 +42,7 @@ import {
   CleanSlackApprovalStagerV1,
   SlackWebApiCleanApprovalCardPosterV1,
   type CleanSlackApprovalCardFactoryV1,
+  type CleanSlackApprovalCardPosterV1,
 } from "../processing/clean-v1/clean-slack-approval-stager.js";
 import { CleanLiveOnlySourceCycleV1 } from "../processing/clean-v1/live-only-source-cycle.js";
 import { SqliteCleanLiveOnlySourceStateV1 } from "../processing/clean-v1/sqlite-live-only-source-state.js";
@@ -65,6 +66,8 @@ import {
   createCleanReadableSearchGenerationReconcilerV1,
 } from "./clean-readable-search-runtime.js";
 import type { CleanPersonRuntimeConfig } from "./clean-person-runtime.js";
+import type { CleanPersonRuntimeDependencies } from "./clean-person-runtime.js";
+import type { PersonSlackApprovalObserverV2 } from "@echo-brain/organization-control-plane/clean-runtime-v1";
 import { verifyCleanStateLineage } from "./verify-clean-state-lineage.js";
 
 export interface OpenCleanLiveRuntimeConfig {
@@ -86,6 +89,34 @@ export interface OpenCleanLiveRuntimeConfig {
 
 export interface OpenedCleanLiveRuntime extends RunningCleanLiveRuntime {
   readonly processing: "idle_until_finalize" | "active";
+}
+
+type CleanLiveSourceAdapter = ConstructorParameters<
+  typeof CleanLiveOnlySourceCycleV1
+>[0]["source"];
+type CleanLiveProcessorAdapter = ConstructorParameters<
+  typeof CleanLiveOnlySourceCycleV1
+>[0]["processor"];
+
+/**
+ * Narrow composition seams for deterministic local rehearsals. Production
+ * callers leave this absent and retain the concrete provider adapters.
+ */
+export interface OpenCleanLiveRuntimeDependencies {
+  /** Passed straight to the Person runtime, for example a local OIDC fake. */
+  readonly person?: CleanPersonRuntimeDependencies;
+  /**
+   * Replaces the active post-finalize worker only. It is ignored before source
+   * admission, so stopped-state startup remains provider-free by default.
+   */
+  readonly active_processing?: CleanLiveProcessingCycleV1;
+  /** Optional provider-free substitutes for the concrete active adapters. */
+  readonly live_adapters?: {
+    readonly source?: CleanLiveSourceAdapter;
+    readonly processor?: CleanLiveProcessorAdapter;
+    readonly approval_card_poster?: CleanSlackApprovalCardPosterV1;
+    readonly approval_observer?: PersonSlackApprovalObserverV2;
+  };
 }
 
 function fixedGranolaConfig(
@@ -445,6 +476,7 @@ function sourceIsAdmitted(database: Database.Database): boolean {
  */
 export async function openCleanLiveRuntime(
   config: OpenCleanLiveRuntimeConfig,
+  dependencies: OpenCleanLiveRuntimeDependencies = {},
 ): Promise<OpenedCleanLiveRuntime> {
   const lineage = verifyCleanStateLineage(config.state_directory);
   const person: CleanPersonRuntimeConfig = {
@@ -469,10 +501,23 @@ export async function openCleanLiveRuntime(
       { person, worker_interval_ms: config.worker_interval_ms },
       {
         processing: new IdleCleanLiveProcessing(),
+        person: dependencies.person,
         on_worker_error: config.on_worker_error,
       },
     );
     return { ...runtime, processing: "idle_until_finalize" };
+  }
+  if (dependencies.active_processing !== undefined) {
+    authority.close();
+    const runtime = await startCleanLiveRuntime(
+      { person, worker_interval_ms: config.worker_interval_ms },
+      {
+        processing: dependencies.active_processing,
+        person: dependencies.person,
+        on_worker_error: config.on_worker_error,
+      },
+    );
+    return { ...runtime, processing: "active" };
   }
   const control = openOrganizationControlDatabase(
     join(config.state_directory, "integrations.sqlite"),
@@ -485,37 +530,46 @@ export async function openCleanLiveRuntime(
   try {
     const sourceState = new SqliteCleanLiveOnlySourceStateV1(authority);
     const admission = await sourceState.readAdmission();
-    const ownerEmail = readPrivateAuthorityGranolaOwnerEmail(
-      `file:${config.granola_owner_email_file}`,
-    );
     const granolaReference = `file:${config.granola_credential_file}`;
     const llmReference = `file:${config.llm_credential_file}`;
-    const granolaCredential =
-      readPrivateAuthorityGranolaOrganizationCredential(granolaReference);
-    const llmCredential = readPrivateAuthorityCredential(llmReference);
-    const granolaConfig = fixedGranolaConfig(
-      admission.source.instance_id,
-      ownerEmail,
-      granolaReference,
-    );
-    const source = createGranolaMeetingSourceAdapter(granolaConfig, {
-      credentialResolver: (reference) =>
-        reference === granolaReference ? granolaCredential : undefined,
-    });
-    assertAdapter("Granola", source, granolaConfig);
-    const processorConfig = fixedOpenRouterConfig(
-      admission.processor.instance_id,
-      llmReference,
-    );
-    const processor = createLlmDecisionProcessor(processorConfig, {
-      credentialResolver: (reference) =>
-        reference === llmReference ? llmCredential : undefined,
-    });
-    assertAdapter("OpenRouter", processor, processorConfig);
+    const source = dependencies.live_adapters?.source ?? (() => {
+      const ownerEmail = readPrivateAuthorityGranolaOwnerEmail(
+        `file:${config.granola_owner_email_file}`,
+      );
+      const granolaCredential =
+        readPrivateAuthorityGranolaOrganizationCredential(granolaReference);
+      const granolaConfig = fixedGranolaConfig(
+        admission.source.instance_id,
+        ownerEmail,
+        granolaReference,
+      );
+      const created = createGranolaMeetingSourceAdapter(granolaConfig, {
+        credentialResolver: (reference) =>
+          reference === granolaReference ? granolaCredential : undefined,
+      });
+      assertAdapter("Granola", created, granolaConfig);
+      return created;
+    })();
+    const processor = dependencies.live_adapters?.processor ?? (() => {
+      const llmCredential = readPrivateAuthorityCredential(llmReference);
+      const processorConfig = fixedOpenRouterConfig(
+        admission.processor.instance_id,
+        llmReference,
+      );
+      const created = createLlmDecisionProcessor(processorConfig, {
+        credentialResolver: (reference) =>
+          reference === llmReference ? llmCredential : undefined,
+      });
+      assertAdapter("OpenRouter", created, processorConfig);
+      return created;
+    })();
     if (
       source.identity.version !== admission.source.version ||
       processor.identity.version !== admission.processor.version ||
-      llmProcessingVersion(processorConfig) !== admission.processor.version
+      (dependencies.live_adapters?.processor === undefined &&
+        llmProcessingVersion(
+          fixedOpenRouterConfig(admission.processor.instance_id, llmReference),
+        ) !== admission.processor.version)
     ) {
       throw new Error(
         "clean live adapters differ from the admitted fixed source configuration",
@@ -525,14 +579,24 @@ export async function openCleanLiveRuntime(
       control,
       config.slack_approval_channel_id,
     );
-    const tokenReader = new SqliteCleanSlackApprovalTokenReaderV1(
-      control,
-      new FileOrganizationSecretStore(join(config.state_directory, "secrets")),
-    );
-    const token = tokenReader.readApprovalToken({
-      connection_id: slack.connection_id,
-      connection_state_sha256: slack.connection_state_sha256,
-    });
+    const needsTokenReader =
+      dependencies.live_adapters?.approval_card_poster === undefined ||
+      dependencies.live_adapters?.approval_observer === undefined;
+    const tokenReader = needsTokenReader
+      ? new SqliteCleanSlackApprovalTokenReaderV1(
+          control,
+          new FileOrganizationSecretStore(join(config.state_directory, "secrets")),
+        )
+      : undefined;
+    const approvalCardPoster =
+      dependencies.live_adapters?.approval_card_poster ??
+      new SlackWebApiCleanApprovalCardPosterV1(
+        tokenReader!.readApprovalToken({
+          connection_id: slack.connection_id,
+          connection_state_sha256: slack.connection_state_sha256,
+        }),
+        config.slack_approval_channel_id,
+      );
     const stager = new CleanSlackApprovalStagerV1(
       sourceState,
       control,
@@ -544,10 +608,7 @@ export async function openCleanLiveRuntime(
         },
         slack,
       ),
-      new SlackWebApiCleanApprovalCardPosterV1(
-        token,
-        config.slack_approval_channel_id,
-      ),
+      approvalCardPoster,
     );
     const sourceCycle = new CleanLiveOnlySourceCycleV1({
       source,
@@ -577,10 +638,12 @@ export async function openCleanLiveRuntime(
           database: control,
           authority_fence: authorityMembershipFence(authority),
         }),
-        observer: new CleanSlackReactionObserverV1({
-          token_reader: tokenReader,
-          now: () => new Date().toISOString(),
-        }),
+        observer:
+          dependencies.live_adapters?.approval_observer ??
+          new CleanSlackReactionObserverV1({
+            token_reader: tokenReader!,
+            now: () => new Date().toISOString(),
+          }),
         codec: { sha256: canonicalSha256 },
         ids: {
           next: (kind) =>
@@ -605,6 +668,7 @@ export async function openCleanLiveRuntime(
           d2d3,
           readableSearch,
         ),
+        person: dependencies.person,
         on_worker_error: config.on_worker_error,
       },
     );

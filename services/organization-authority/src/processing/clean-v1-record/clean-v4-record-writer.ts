@@ -127,7 +127,13 @@ export class CleanV4RecordWriterV1 {
     const issuedAt = this.options.now();
     assertTimestamp(issuedAt, "clean V4 record issuance time");
     const envelopeFactory = this.envelopeFactory({
-      human_act_record_input: human,
+      // Validation returns derived digest fields for callers. The envelope
+      // constructor deliberately accepts only the canonical wire body.
+      human_act_record_input: {
+        human_act_resolution_ref: human.human_act_resolution_ref,
+        event: human.event,
+        idempotency: human.idempotency,
+      },
       source_provenance: source,
       processor_provenance: processor,
       issued_at: issuedAt,

@@ -14,11 +14,12 @@ component_ids:
 created_at: 2026-08-20
 reviewed_at: 2026-08-22
 reviewed_ref: 15d18effbb022c90061ccbe26236734d21df9d55
-status: accepted
+status: superseded
 supersedes:
   - ADR-0003
   - ADR-0005
-superseded_by: []
+superseded_by:
+  - ADR-0006
 updates:
   - ADR-0001
   - ADR-0002
@@ -200,3 +201,9 @@ boundary and documentation, and pass repository build, type, lint, unit,
 boundary, documentation, and empty-state end-to-end checks. This accepted ADR
 does not by itself perform the live stop, deletion, initialization,
 deployment, provider call, or re-onboarding.
+
+## Lifecycle update
+
+Superseded on 2026-08-22 by ADR-0006 because the sole-user and
+no-permission-aware-read premises are false. Its clean-state, current-only, and
+no-compatibility decisions remain preserved through ADR-0006.

@@ -8,7 +8,14 @@ export type CleanPersonRecordSearchPolicyV1 =
 export interface CleanPersonRecordSearchResponseV1 {
   readonly schema_version: 1;
   readonly kind: "echo-clean-person-record-search-v1";
+  readonly generation_id: CleanPersonRecordSearchDigestV1;
+  readonly record_head: {
+    readonly position: number;
+    readonly record_sha256: CleanPersonRecordSearchDigestV1 | null;
+  };
   readonly items: readonly {
+    readonly atom_id: CleanPersonRecordSearchDigestV1;
+    readonly record_sha256: CleanPersonRecordSearchDigestV1;
     readonly kind: "decision" | "action" | "rationale";
     readonly text: string;
     readonly policy_id: CleanPersonRecordSearchPolicyV1;

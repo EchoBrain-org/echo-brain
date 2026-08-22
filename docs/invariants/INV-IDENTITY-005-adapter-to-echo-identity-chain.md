@@ -13,10 +13,10 @@ created_at: 2026-08-20
 reviewed_at: 2026-08-20
 reviewed_ref: 77a212134fce762fdffd30e028f3256ba6e75b42
 decision_ids:
-  - ADR-0003
+  - ADR-0006
 normative: MUST
 enforcement_status: partial
-enforcement_scope: Source custody, processing identity, Slack approval actor admission, record reproof, delivery identity, and Person permission-aware reads
+enforcement_scope: Clean V1 source custody, approval, current V4 record append, two-policy Layer 1 and Layer 2 retrieval, current-Person Layer 3 release, and minimized read audit
 invariant_ids:
   - INV-11B
   - INV-12
@@ -273,8 +273,8 @@ the trusted server context and remains covered by these cases.
 
 - [RFC-0001](../rfcs/RFC-0001-server-core-lean-authority-contracts.md)
   proposes the exact replacement contracts that would enforce the full chain.
-- [ADR-0003](../decisions/ADR-0003-server-core-lean-authority-contracts.md)
-  remains proposed; this invariant therefore remains partially enforced.
+- [ADR-0006](../decisions/ADR-0006-permission-aware-clean-v1-completion.md)
+  accepts the clean V1 enforcement scope; this invariant remains partial outside that scope.
 - The [Phase 0 closure ledger](../product/2026-08-20-server-core-migration-phase-0-closure.md)
   owns the stage-by-stage identity-edge inventory and deletion gates.
 - The [Phase 0 test-contract inventory](../product/2026-08-20-server-core-migration-phase-0-test-contract-inventory.md)

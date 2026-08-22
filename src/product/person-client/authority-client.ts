@@ -77,10 +77,17 @@ export interface CleanPersonRecordListItemV1 {
 export interface CleanPersonRecordSearchV1 {
   readonly schema_version: 1;
   readonly kind: "echo-clean-person-record-search-v1";
+  readonly generation_id: `sha256:${string}`;
+  readonly record_head: {
+    readonly position: number;
+    readonly record_sha256: `sha256:${string}` | null;
+  };
   readonly items: readonly CleanPersonRecordSearchItemV1[];
 }
 
 export interface CleanPersonRecordSearchItemV1 {
+  readonly atom_id: `sha256:${string}`;
+  readonly record_sha256: `sha256:${string}`;
   readonly kind: "decision" | "action" | "rationale";
   readonly text: string;
   readonly policy_id:
@@ -331,14 +338,28 @@ function validateCleanPersonRecordSearch(
   const response = asPlainRecord(value, "record search response is invalid");
   exactKeys(
     response,
-    ["schema_version", "kind", "items"],
+    ["schema_version", "kind", "generation_id", "record_head", "items"],
     "record search response is invalid",
   );
   if (
     response.schema_version !== 1 ||
     response.kind !== "echo-clean-person-record-search-v1" ||
+    typeof response.generation_id !== "string" ||
+    !/^sha256:[a-f0-9]{64}$/.test(response.generation_id) ||
     !Array.isArray(response.items) ||
     response.items.length > 10
+  ) {
+    throw new Error("record search response is invalid");
+  }
+  const recordHead = asPlainRecord(response.record_head, "record search response is invalid");
+  exactKeys(recordHead, ["position", "record_sha256"], "record search response is invalid");
+  if (
+    !Number.isSafeInteger(recordHead.position) ||
+    (recordHead.position as number) < 0 ||
+    (((recordHead.position as number) === 0) !== (recordHead.record_sha256 === null)) ||
+    (recordHead.record_sha256 !== null &&
+      (typeof recordHead.record_sha256 !== "string" ||
+        !/^sha256:[a-f0-9]{64}$/.test(recordHead.record_sha256)))
   ) {
     throw new Error("record search response is invalid");
   }
@@ -346,10 +367,14 @@ function validateCleanPersonRecordSearch(
     const item = asPlainRecord(value, "record search item is invalid");
     exactKeys(
       item,
-      ["kind", "text", "policy_id"],
+      ["atom_id", "record_sha256", "kind", "text", "policy_id"],
       "record search item is invalid",
     );
     if (
+      typeof item.atom_id !== "string" ||
+      !/^sha256:[a-f0-9]{64}$/.test(item.atom_id) ||
+      typeof item.record_sha256 !== "string" ||
+      !/^sha256:[a-f0-9]{64}$/.test(item.record_sha256) ||
       (item.kind !== "decision" &&
         item.kind !== "action" &&
         item.kind !== "rationale") ||
@@ -362,6 +387,8 @@ function validateCleanPersonRecordSearch(
       throw new Error("record search item is invalid");
     }
     return Object.freeze({
+      atom_id: item.atom_id as `sha256:${string}`,
+      record_sha256: item.record_sha256 as `sha256:${string}`,
       kind: item.kind,
       text: item.text,
       policy_id: item.policy_id,
@@ -370,6 +397,11 @@ function validateCleanPersonRecordSearch(
   return Object.freeze({
     schema_version: 1,
     kind: "echo-clean-person-record-search-v1",
+    generation_id: response.generation_id as `sha256:${string}`,
+    record_head: Object.freeze({
+      position: recordHead.position as number,
+      record_sha256: recordHead.record_sha256 as `sha256:${string}` | null,
+    }),
     items: Object.freeze(items),
   });
 }

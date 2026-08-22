@@ -111,12 +111,14 @@ describe("clean Person V4 record read route", () => {
 
       const audit = value.authority
         .prepare(
-          `SELECT body_json, retain_until, recorded_at
+          `SELECT body_json, context_kind, prompt_sha256, answer_sha256, recorded_at
              FROM authority_person_read_decision_audit_v2`,
         )
         .get() as {
         body_json: string;
-        retain_until: string;
+        context_kind: string;
+        prompt_sha256: string | null;
+        answer_sha256: string | null;
         recorded_at: string;
       };
       expect(JSON.parse(audit.body_json)).toMatchObject({
@@ -130,7 +132,9 @@ describe("clean Person V4 record read route", () => {
         result_count: 1,
       });
       expect(audit.recorded_at).toBe("2026-08-22T00:00:00.000Z");
-      expect(audit.retain_until).toBe("2026-09-21T00:00:00.000Z");
+      expect(audit.context_kind).toBe("record_read");
+      expect(audit.prompt_sha256).toBeNull();
+      expect(audit.answer_sha256).toBeNull();
     } finally {
       value.authority.close();
     }

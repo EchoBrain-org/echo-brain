@@ -1,11 +1,71 @@
-import { chmodSync, mkdtempSync, realpathSync, rmSync } from "node:fs";
+import {
+  chmodSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  realpathSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import {
+  canonicalJson,
+  canonicalSha256,
+  type Sha256Digest,
+} from "@echo-brain/federation-protocol";
+import {
+  CleanPersonRecordReaderV1,
+  openOrganizationRecordDatabase,
+} from "@echo-brain/organization-record/new-lineage-v1";
 import { afterEach, describe, expect, it } from "vitest";
+import {
+  ORGANIZATION_MEMBER_READABLE_PERSON_POLICY_CONTRACT_SHA256,
+  ORGANIZATION_MEMBER_READABLE_PERSON_POLICY_ID,
+  openOrganizationControlDatabase,
+  type PersonSlackApprovalObserverV2,
+} from "@echo-brain/organization-control-plane/clean-runtime-v1";
+import {
+  RESTRICTED_REVIEWER_PERSON_POLICY_CONTRACT_SHA256,
+  RESTRICTED_REVIEWER_PERSON_POLICY_ID,
+  SLACK_APPROVAL_REQUIRED_PROVIDER_SCOPES,
+  buildExternalHumanIdentityLinkContractV2,
+  buildOrganizationToolConnectionContractV2,
+  buildOrganizationToolConnectionStateV2,
+  buildPersonSlackApprovalActionCapabilityV2,
+  buildPersonSlackApprovalBindingContractV2,
+} from "../../organization-control-plane/src/application/person-slack-approval-contracts-v2.js";
+import type { BegunPersonOidcLogin } from "../src/application/person-identity-sessions.js";
+import { PersonIdentitySessionApplication } from "../src/application/person-identity-sessions.js";
+import { SqliteCleanPersonSessionRepository } from "../src/adapters/persistence/sqlite/clean-person-session-repository.js";
+import { SqliteCleanPersonRecordReadAuditV1 } from "../src/adapters/persistence/sqlite/clean-person-record-read-audit-v1.js";
+import { openAuthorityDatabase } from "../src/adapters/persistence/sqlite/open-unmigrated-database.js";
+import { NodePersonSessionCrypto } from "../src/adapters/security/node-person-session-crypto.js";
+import { readPrivateAuthorityPersonSessionPkceKey } from "../src/adapters/security/private-file-credentials.js";
+import { SystemAuthorityClock } from "../src/adapters/runtime/system-runtime-ports.js";
+import { admitCleanGranolaSource } from "../src/composition/clean-granola-source-admission.js";
 import { initializeCleanPersonCredentials } from "../src/composition/clean-person-onboarding.js";
+import {
+  issueCleanPersonInvitation,
+} from "../src/composition/clean-person-onboarding.js";
+import { createCleanPersonRecordReadRouteV1 } from "../src/composition/clean-person-record-read-route.js";
+import { createCleanPersonRecordSearchRouteV1 } from "../src/composition/clean-person-record-search-route.js";
+import { cleanReadableSearchRuntimeContractV1 } from "../src/composition/clean-readable-search-runtime.js";
 import { initializeCleanResetState } from "../src/composition/clean-reset-state.js";
-import { openCleanLiveRuntime } from "../src/composition/open-clean-live-runtime.js";
+import type { PersonSessionOidcAuthorizationProvider } from "../src/composition/lazy-person-session-oidc-provider.js";
+import {
+  openCleanLiveRuntime,
+  type OpenCleanLiveRuntimeConfig,
+} from "../src/composition/open-clean-live-runtime.js";
+import { createGranolaLiveOnlyCursor } from "../src/processing/adapters/meeting-sources/granola/index.js";
+import type {
+  AdapterHealth,
+  DecisionProcessorAdapter,
+  DecisionSet,
+  MeetingDocument,
+  MeetingSourceAdapter,
+} from "../src/processing/core/index.js";
 
 const roots: string[] = [];
 
@@ -32,6 +92,485 @@ async function availablePort(): Promise<number> {
     server.close((error) => (error ? reject(error) : resolve())),
   );
   return address.port;
+}
+
+const OIDC = {
+  issuer: "https://issuer.example",
+  client_id: "founder-client",
+  redirect_uri: "https://authority.example/v2/session/oidc/callback",
+  tenant: { kind: "issuer" as const },
+  id_token_algorithms: ["RS256"],
+};
+const SLACK_CHANNEL = "C0123456789";
+const NOW = "2026-08-22T12:00:00.000Z";
+
+class FounderOidcProvider implements PersonSessionOidcAuthorizationProvider {
+  private attempt: BegunPersonOidcLogin | undefined;
+
+  buildAuthorizationUrl(attempt: BegunPersonOidcLogin): string {
+    this.attempt = attempt;
+    return `https://issuer.example/authorize?state=${encodeURIComponent(attempt.state)}`;
+  }
+
+  async redeemAuthorizationCode() {
+    if (this.attempt === undefined) throw new Error("OIDC begin was not called");
+    return {
+      kind: "verified" as const,
+      token: {
+        issuer: OIDC.issuer,
+        subject: "founder-subject",
+        audience: OIDC.client_id,
+        nonce: this.attempt.nonce,
+        issued_at: Math.floor(Date.now() / 1_000),
+        claims: { email: "founder@example.com", email_verified: true },
+      },
+    };
+  }
+}
+
+function privateFile(parent: string, name: string, value: string): string {
+  const path = join(parent, name);
+  writeFileSync(path, value, { mode: 0o600 });
+  chmodSync(path, 0o600);
+  return path;
+}
+
+async function completeFounderReonboarding(input: {
+  readonly state_directory: string;
+  readonly parent: string;
+  readonly owner_membership_id: string;
+}): Promise<string> {
+  const credentials = initializeCleanPersonCredentials({
+    state_directory: input.state_directory,
+  });
+  const pkce = credentials.pkce_sealing_key_reference.slice("file:".length);
+  const invitationDirectory = join(input.parent, "invitations");
+  mkdirSync(invitationDirectory, { mode: 0o700 });
+  chmodSync(invitationDirectory, 0o700);
+  const invitationPath = join(invitationDirectory, "founder.invitation.json");
+  issueCleanPersonInvitation({
+    state_directory: input.state_directory,
+    oidc: OIDC,
+    pkce_sealing_key: readPrivateAuthorityPersonSessionPkceKey(
+      credentials.pkce_sealing_key_reference,
+    ),
+    membership_id: input.owner_membership_id,
+    expected_email: "founder@example.com",
+    authority_url: "https://authority.example",
+    output_path: invitationPath,
+  });
+  const invitation = JSON.parse(
+    readFileSync(invitationPath, "utf8"),
+  ) as { login_grant: string };
+  const authority = openAuthorityDatabase(
+    join(input.state_directory, "authority.sqlite"),
+    { fileMustExist: true },
+  );
+  try {
+    const provider = new FounderOidcProvider();
+    const crypto = new NodePersonSessionCrypto(
+      readPrivateAuthorityPersonSessionPkceKey(
+        credentials.pkce_sealing_key_reference,
+      ),
+    );
+    const sessions = new PersonIdentitySessionApplication(
+      new SqliteCleanPersonSessionRepository(authority),
+      OIDC,
+      {
+        clock: new SystemAuthorityClock(),
+        random: crypto,
+        hash: crypto,
+        pkce_sealer: crypto,
+        oidc_provider: provider,
+      },
+    );
+    const begun = sessions.beginOidcLogin({
+      kind: "identity_bootstrap",
+      login_grant: invitation.login_grant,
+    });
+    provider.buildAuthorizationUrl(begun);
+    await sessions.completeOidcLogin({
+      state: begun.state,
+      authorization_code: "founder-code",
+    });
+  } finally {
+    authority.close();
+  }
+  return pkce;
+}
+
+function seedActiveSlackApproval(input: {
+  readonly state_directory: string;
+  readonly authority_id: string;
+  readonly organization_id: string;
+  readonly state_lineage_id: string;
+  readonly principal_id: string;
+  readonly membership_id: string;
+}): void {
+  const control = openOrganizationControlDatabase(
+    join(input.state_directory, "integrations.sqlite"),
+    { fileMustExist: true },
+  );
+  try {
+    const coordinates = {
+      authority_id: input.authority_id,
+      organization_id: input.organization_id,
+      state_lineage_id: input.state_lineage_id,
+    };
+    const connection = buildOrganizationToolConnectionContractV2({
+      ...coordinates,
+      connection_id: "con_live_test",
+      provider_issuer: "https://slack.com",
+      provider_tenant_kind: "workspace",
+      provider_tenant_id: "T_LIVE_TEST",
+      provider_enterprise_id: null,
+      tool_kind: "slack",
+      provider_app_id: "A_LIVE_TEST",
+      provider_bot_id: "B_LIVE_TEST",
+      provider_bot_user_id: "U_LIVE_BOT",
+      required_provider_scopes: SLACK_APPROVAL_REQUIRED_PROVIDER_SCOPES,
+      public_connection_configuration_sha256: canonicalSha256({ kind: "configuration" }),
+    });
+    const connectionSha = canonicalSha256(connection);
+    const state = buildOrganizationToolConnectionStateV2({
+      connection_id: connection.connection_id,
+      connection_contract_sha256: connectionSha,
+      connection_status: "active",
+      credential_reference_sha256: canonicalSha256({ kind: "test-only-unread-token" }),
+      observed_granted_scopes: SLACK_APPROVAL_REQUIRED_PROVIDER_SCOPES,
+      verification_event_id: "verify_live_test",
+      verification_evidence_sha256: canonicalSha256({ kind: "verification" }),
+      verification_revision: 1,
+      verified_at: NOW,
+    });
+    const stateSha = canonicalSha256(state);
+    control.prepare(
+      "INSERT INTO organization_tool_connection_contracts VALUES (?, ?, ?, ?)",
+    ).run(connection.connection_id, canonicalJson(connection), connectionSha, NOW);
+    control.prepare(
+      "INSERT INTO organization_tool_connection_current_state VALUES (?, ?, ?, ?, 'active', ?)",
+    ).run(connection.connection_id, connectionSha, canonicalJson(state), stateSha, NOW);
+    const link = buildExternalHumanIdentityLinkContractV2({
+      ...coordinates,
+      external_identity_link_id: "clm_live_test",
+      provider_issuer: "https://slack.com",
+      provider_tenant_kind: "workspace",
+      provider_tenant_id: "T_LIVE_TEST",
+      provider_enterprise_id: null,
+      provider_subject_id: "UFOUNDER",
+      principal_id: input.principal_id,
+      membership_id: input.membership_id,
+      membership_type: "owner",
+      verification_event_id: "verify_founder_link",
+      verification_evidence_sha256: canonicalSha256({ kind: "founder-link" }),
+      verified_at: NOW,
+    });
+    const linkSha = canonicalSha256(link);
+    control.prepare(
+      "INSERT INTO organization_external_human_link_contracts VALUES (?, ?, ?, ?)",
+    ).run(link.external_identity_link_id, linkSha, canonicalJson(link), NOW);
+    control.prepare(
+      "INSERT INTO organization_external_human_link_current VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'active', ?)",
+    ).run(
+      link.external_identity_link_id, linkSha, link.provider_issuer,
+      link.provider_tenant_kind, link.provider_tenant_id,
+      link.provider_enterprise_id, link.provider_subject_id,
+      link.principal_id, link.membership_id, NOW,
+    );
+    const binding = buildPersonSlackApprovalBindingContractV2({
+      ...coordinates,
+      approval_binding_id: "bnd_live_test",
+      connection_id: connection.connection_id,
+      connection_contract_sha256: connectionSha,
+      approval_adapter_kind: "approval-surface",
+      approval_adapter_id: "slack-reactions",
+      approval_adapter_instance_id: "founder-approval",
+      approval_adapter_version: "1.0.0",
+      approval_channel_id: SLACK_CHANNEL,
+      approve_reaction: "white_check_mark",
+      reject_reaction: "x",
+      supported_policy_actions: [{
+        policy_id: ORGANIZATION_MEMBER_READABLE_PERSON_POLICY_ID,
+        policy_contract_sha256: ORGANIZATION_MEMBER_READABLE_PERSON_POLICY_CONTRACT_SHA256,
+        actions: ["approve", "reject"],
+      }, {
+        policy_id: RESTRICTED_REVIEWER_PERSON_POLICY_ID,
+        policy_contract_sha256: RESTRICTED_REVIEWER_PERSON_POLICY_CONTRACT_SHA256,
+        actions: ["approve", "reject"],
+      }],
+    });
+    const bindingSha = canonicalSha256(binding);
+    control.prepare(
+      "INSERT INTO organization_approval_binding_contracts VALUES (?, ?, ?, ?, ?)",
+    ).run(binding.approval_binding_id, canonicalJson(binding), bindingSha, connection.connection_id, NOW);
+    control.prepare(
+      "INSERT INTO organization_approval_binding_current VALUES (?, ?, 'active', ?)",
+    ).run(binding.approval_binding_id, bindingSha, NOW);
+    for (const action of ["approve", "reject"] as const) {
+      const capability = buildPersonSlackApprovalActionCapabilityV2({
+        ...coordinates,
+        action_capability_id: `cap_live_${action}`,
+        approval_binding_id: binding.approval_binding_id,
+        approval_binding_contract_sha256: bindingSha,
+        external_identity_link_id: link.external_identity_link_id,
+        principal_id: input.principal_id,
+        membership_id: input.membership_id,
+        membership_type: "owner",
+        policy_id: ORGANIZATION_MEMBER_READABLE_PERSON_POLICY_ID,
+        policy_contract_sha256: ORGANIZATION_MEMBER_READABLE_PERSON_POLICY_CONTRACT_SHA256,
+        action,
+      });
+      const capabilitySha = canonicalSha256(capability);
+      control.prepare(
+        "INSERT INTO organization_approval_action_capability_contracts VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+      ).run(
+        capability.action_capability_id, canonicalJson(capability), capabilitySha,
+        binding.approval_binding_id, link.external_identity_link_id,
+        capability.policy_id, action, NOW,
+      );
+      control.prepare(
+        "INSERT INTO organization_approval_action_capability_current VALUES (?, ?, 'active', ?)",
+      ).run(capability.action_capability_id, capabilitySha, NOW);
+    }
+  } finally {
+    control.close();
+  }
+}
+
+const healthy = (): AdapterHealth => ({
+  status: "healthy",
+  checked_at: NOW,
+});
+
+function fakeSource(
+  meeting: MeetingDocument,
+  source: MeetingSourceAdapter["identity"],
+): MeetingSourceAdapter & { readonly pulls: () => number } {
+  let pulls = 0;
+  return {
+    identity: source,
+    validateConfig: () => ({ ok: true, errors: [] }),
+    healthCheck: async () => healthy(),
+    pull: async (request) => {
+      pulls += 1;
+      return pulls === 1
+        ? {
+            meetings: [meeting],
+            next_cursor: createGranolaLiveOnlyCursor(
+              "2026-08-22T12:00:01.000Z",
+            ),
+          }
+        : { meetings: [], next_cursor: request.cursor };
+    },
+    pulls: () => pulls,
+  };
+}
+
+function fakeProcessor(
+  identity: DecisionProcessorAdapter["identity"],
+): DecisionProcessorAdapter {
+  return {
+    identity,
+    validateConfig: () => ({ ok: true, errors: [] }),
+    healthCheck: async () => healthy(),
+    extract: async (meeting): Promise<DecisionSet> => ({
+      schema_version: 1,
+      meeting_id: meeting.id,
+      meeting_revision: meeting.provenance.canonical_revision,
+      processor: identity,
+      generated_at: NOW,
+      signals: [{
+        id: "decision-live-test",
+        kind: "decision",
+        status: "decided",
+        text: "Ship the clean live migration.",
+        subject: null,
+        confidence: 1,
+        evidence: [{ meeting_id: meeting.id, block_id: "note-live-test" }],
+      }],
+    }),
+  };
+}
+
+function fakeReaction(
+  action: "approve" | "reject",
+): PersonSlackApprovalObserverV2 & { readonly calls: () => number } {
+  let calls = 0;
+  return {
+    async observeApprovalReaction(expectation, expectation_sha256) {
+      calls += 1;
+      return {
+        kind: "observed",
+        expectation_sha256,
+        provider_actor_subject: "UFOUNDER",
+        observed_reaction:
+          action === "approve" ? expectation.approve_reaction : expectation.reject_reaction,
+        observed_action: action,
+        provider_response_evidence_sha256: canonicalSha256({
+          kind: "synthetic-slack-reaction",
+          approval_id: expectation.approval_id,
+          action,
+        }),
+        observed_at: NOW,
+      };
+    },
+    calls: () => calls,
+  };
+}
+
+async function waitFor(
+  assertion: () => boolean,
+  label: string,
+): Promise<void> {
+  for (let attempt = 0; attempt < 100; attempt += 1) {
+    if (assertion()) return;
+    await new Promise<void>((resolve) => setTimeout(resolve, 10));
+  }
+  throw new Error(`timed out waiting for ${label}`);
+}
+
+async function activeFixture(action: "approve" | "reject") {
+  const parent = root();
+  const initialized = initializeCleanResetState({
+    state_directory: join(parent, "state"),
+    organization_display_name: "Founder Organization",
+    owner_display_name: "Founder",
+    created_at: "2026-08-22T11:00:00.000Z",
+    creating_artifact_revision: "open-clean-live-runtime-test",
+  });
+  const pkce_key_file = await completeFounderReonboarding({
+    state_directory: initialized.state_directory,
+    parent,
+    owner_membership_id: initialized.owner_membership_id,
+  });
+  const granola_credential_file = privateFile(
+    parent,
+    "granola.key",
+    `grn_${"a".repeat(32)}`,
+  );
+  const granola_owner_email_file = privateFile(
+    parent,
+    "granola-owner-email",
+    "founder@example.com",
+  );
+  const llm_credential_file = privateFile(
+    parent,
+    "llm.key",
+    "llm-private-credential-material-000000",
+  );
+  const admitted = admitCleanGranolaSource({
+    state_directory: initialized.state_directory,
+    source_instance_id: "founder-granola",
+    processor_instance_id: "founder-llm",
+    granola_credential_reference: `file:${granola_credential_file}`,
+    granola_owner_email_reference: `file:${granola_owner_email_file}`,
+    llm_credential_reference: `file:${llm_credential_file}`,
+    now: () => NOW,
+  });
+  seedActiveSlackApproval({
+    state_directory: initialized.state_directory,
+    authority_id: initialized.authority_id,
+    organization_id: initialized.organization_id,
+    state_lineage_id: initialized.state_lineage_id,
+    principal_id: initialized.owner_principal_id,
+    membership_id: initialized.owner_membership_id,
+  });
+  const sourceIdentity = {
+    kind: "meeting-source" as const,
+    adapter_id: "granola",
+    instance_id: admitted.source.instance_id,
+    version: admitted.source.version,
+  };
+  const processorIdentity = {
+    kind: "decision-processor" as const,
+    adapter_id: "llm",
+    instance_id: admitted.processor.instance_id,
+    version: admitted.processor.version,
+  };
+  const meeting: MeetingDocument = {
+    schema_version: 1,
+    id: "granola:founder-granola:note-live-test",
+    title: "Live migration review",
+    provenance: {
+      source: sourceIdentity,
+      external_id: "note-live-test",
+      canonical_revision: canonicalSha256({ note: "live-test" }),
+      observed_at: NOW,
+      normalizer_version: sourceIdentity.version,
+    },
+    capture: { state: "complete", components: [] },
+    participants: [],
+    content: [{
+      id: "note-live-test",
+      kind: "note",
+      text: "Ship the clean live migration.",
+    }],
+    artifacts: [],
+  };
+  const source = fakeSource(meeting, sourceIdentity);
+  const reaction = fakeReaction(action);
+  const posted: string[] = [];
+  const errors: Error[] = [];
+  const config: OpenCleanLiveRuntimeConfig = {
+    state_directory: initialized.state_directory,
+    host: "127.0.0.1",
+    port: await availablePort(),
+    authority_url: "https://authority.example",
+    oidc: OIDC,
+    client_authentication: { method: "none" },
+    pkce_key_file,
+    slack_approval_channel_id: SLACK_CHANNEL,
+    granola_credential_file,
+    granola_owner_email_file,
+    llm_credential_file,
+    worker_interval_ms: 60_000,
+    on_worker_error: (error) => errors.push(error),
+  };
+  const runtime = await openCleanLiveRuntime(config, {
+    live_adapters: {
+      source,
+      processor: fakeProcessor(processorIdentity),
+      approval_card_poster: {
+        async post(input) {
+          posted.push(input.text);
+          return { provider_message_ts: "1724112000.000100" };
+        },
+      },
+      approval_observer: reaction,
+    },
+  });
+  return {
+    initialized,
+    config,
+    source,
+    processorIdentity,
+    reaction,
+    posted,
+    errors,
+    runtime,
+  };
+}
+
+function ownerAuthorization(input: {
+  readonly organization_id: string;
+  readonly principal_id: string;
+  readonly membership_id: string;
+}) {
+  const digest = (value: string): Sha256Digest => canonicalSha256({ value });
+  return {
+    organization_id: input.organization_id,
+    principal_id: input.principal_id,
+    membership_id: input.membership_id,
+    membership_type: "owner" as const,
+    identity_binding_id: "identity_live_test",
+    session_family_id: "session_live_test",
+    access_credential_sha256: digest("access"),
+    access_expires_at: "2026-08-22T13:00:00.000Z",
+    hard_reauthentication_at: "2026-08-22T14:00:00.000Z",
+    person_state_sha256: digest("person"),
+    session_state_sha256: digest("session"),
+    checked_at: NOW,
+  };
 }
 
 afterEach(() => {
@@ -85,6 +624,184 @@ describe("open clean live runtime", () => {
       expect(descriptor.status).toBe(200);
     } finally {
       await runtime.close();
+    }
+  });
+
+  it("carries one synthetic Granola decision through Slack approval, D2 finalization, V4, exact-head Layer 2, and an authenticated read", async () => {
+    const fixture = await activeFixture("approve");
+    const authority = openAuthorityDatabase(
+      join(fixture.initialized.state_directory, "authority.sqlite"),
+      { fileMustExist: true },
+    );
+    const record = openOrganizationRecordDatabase(
+      join(fixture.initialized.state_directory, "record-log.sqlite"),
+      { fileMustExist: true },
+    );
+    try {
+      await waitFor(
+        () =>
+          fixture.errors.length > 0 ||
+          (record
+            .prepare("SELECT count(*) AS count FROM organization_record_log")
+            .get() as { count: number }).count === 1,
+        "V4 append",
+      );
+      if (fixture.errors[0] !== undefined) throw fixture.errors[0];
+      expect(fixture.posted).toHaveLength(1);
+      expect(fixture.posted[0]).toContain("Ship the clean live migration.");
+      expect(fixture.reaction.calls()).toBe(1);
+      expect(
+        authority
+          .prepare(
+            `SELECT record_head_position
+               FROM authority_readable_search_active_generation
+              WHERE singleton = 1`,
+          )
+          .get(),
+      ).toEqual({ record_head_position: 1 });
+    } finally {
+      record.close();
+      authority.close();
+      await fixture.runtime.close();
+    }
+
+    // A normal restart first recovers append receipts and cannot append the
+    // finalized action a second time.
+    const restarted = await openCleanLiveRuntime(fixture.config, {
+      live_adapters: {
+        source: fixture.source,
+        processor: fakeProcessor(fixture.processorIdentity),
+        approval_card_poster: {
+          async post() {
+            throw new Error("restart must not post a duplicate approval card");
+          },
+        },
+        approval_observer: fixture.reaction,
+      },
+    });
+    try {
+      await waitFor(() => fixture.source.pulls() >= 2, "restart source poll");
+    } finally {
+      await restarted.close();
+    }
+
+    const rereadAuthority = openAuthorityDatabase(
+      join(fixture.initialized.state_directory, "authority.sqlite"),
+      { fileMustExist: true },
+    );
+    const rereadRecord = openOrganizationRecordDatabase(
+      join(fixture.initialized.state_directory, "record-log.sqlite"),
+      { fileMustExist: true },
+    );
+    try {
+      expect(
+        rereadRecord
+          .prepare("SELECT count(*) AS count FROM organization_record_log")
+          .get(),
+      ).toEqual({ count: 1 });
+      const authorization = ownerAuthorization({
+        organization_id: fixture.initialized.organization_id,
+        principal_id: fixture.initialized.owner_principal_id,
+        membership_id: fixture.initialized.owner_membership_id,
+      });
+      const sessions = { authenticateAccess: () => authorization };
+      const list = createCleanPersonRecordReadRouteV1({
+        authority_id: fixture.initialized.authority_id,
+        organization_id: fixture.initialized.organization_id,
+        state_lineage_id: fixture.initialized.state_lineage_id,
+        sessions,
+        records: new CleanPersonRecordReaderV1(rereadRecord),
+        audit: new SqliteCleanPersonRecordReadAuditV1(rereadAuthority),
+      });
+      expect(list.list({ access_token: "synthetic-founder-token" }).records).toHaveLength(1);
+
+      const search = createCleanPersonRecordSearchRouteV1({
+        state_directory: fixture.initialized.state_directory,
+        authority_id: fixture.initialized.authority_id,
+        organization_id: fixture.initialized.organization_id,
+        state_lineage_id: fixture.initialized.state_lineage_id,
+        retrieval_contract_sha256:
+          cleanReadableSearchRuntimeContractV1().retrieval_contract_sha256,
+        sessions,
+        authority: rereadAuthority,
+        record: rereadRecord,
+        audit: new SqliteCleanPersonRecordReadAuditV1(rereadAuthority),
+      });
+      const result = search.search({
+        access_token: "synthetic-founder-token",
+        query: "ship live migration",
+      });
+      expect(result.record_head.position).toBe(1);
+      expect(result.items).toHaveLength(1);
+      expect(result.items[0]).toMatchObject({
+        text: "Ship the clean live migration.",
+        policy_id: ORGANIZATION_MEMBER_READABLE_PERSON_POLICY_ID,
+      });
+    } finally {
+      rereadRecord.close();
+      rereadAuthority.close();
+    }
+  });
+
+  it("records a synthetic Slack rejection without a readable V4 record or Layer 2 result", async () => {
+    const fixture = await activeFixture("reject");
+    const authority = openAuthorityDatabase(
+      join(fixture.initialized.state_directory, "authority.sqlite"),
+      { fileMustExist: true },
+    );
+    const record = openOrganizationRecordDatabase(
+      join(fixture.initialized.state_directory, "record-log.sqlite"),
+      { fileMustExist: true },
+    );
+    try {
+      await waitFor(
+        () => fixture.reaction.calls() === 1,
+        "D2 rejection finalization",
+      );
+      if (fixture.errors[0] !== undefined) throw fixture.errors[0];
+      // A rejection is durably recorded for replay/audit, but it is not a
+      // readable content record and therefore never becomes a Layer 2 atom.
+      expect(
+        record
+          .prepare("SELECT count(*) AS count FROM organization_record_log")
+          .get(),
+      ).toEqual({ count: 1 });
+      const authorization = ownerAuthorization({
+        organization_id: fixture.initialized.organization_id,
+        principal_id: fixture.initialized.owner_principal_id,
+        membership_id: fixture.initialized.owner_membership_id,
+      });
+      const list = createCleanPersonRecordReadRouteV1({
+        authority_id: fixture.initialized.authority_id,
+        organization_id: fixture.initialized.organization_id,
+        state_lineage_id: fixture.initialized.state_lineage_id,
+        sessions: { authenticateAccess: () => authorization },
+        records: new CleanPersonRecordReaderV1(record),
+        audit: new SqliteCleanPersonRecordReadAuditV1(authority),
+      });
+      expect(list.list({ access_token: "synthetic-founder-token" }).records).toEqual([]);
+      const search = createCleanPersonRecordSearchRouteV1({
+        state_directory: fixture.initialized.state_directory,
+        authority_id: fixture.initialized.authority_id,
+        organization_id: fixture.initialized.organization_id,
+        state_lineage_id: fixture.initialized.state_lineage_id,
+        retrieval_contract_sha256:
+          cleanReadableSearchRuntimeContractV1().retrieval_contract_sha256,
+        sessions: { authenticateAccess: () => authorization },
+        authority,
+        record,
+        audit: new SqliteCleanPersonRecordReadAuditV1(authority),
+      });
+      expect(
+        search.search({
+          access_token: "synthetic-founder-token",
+          query: "ship live migration",
+        }).items,
+      ).toEqual([]);
+    } finally {
+      record.close();
+      authority.close();
+      await fixture.runtime.close();
     }
   });
 });

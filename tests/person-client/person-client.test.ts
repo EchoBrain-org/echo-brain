@@ -308,8 +308,12 @@ describe("Person client", () => {
         return json({
           schema_version: 1,
           kind: "echo-clean-person-record-search-v1",
+          generation_id: `sha256:${"a".repeat(64)}`,
+          record_head: { position: 1, record_sha256: `sha256:${"b".repeat(64)}` },
           items: [
             {
+              atom_id: `sha256:${"c".repeat(64)}`,
+              record_sha256: `sha256:${"b".repeat(64)}`,
               kind: "decision",
               text: "Use simple pricing.",
               policy_id: "organization-member-readable-person-v2",

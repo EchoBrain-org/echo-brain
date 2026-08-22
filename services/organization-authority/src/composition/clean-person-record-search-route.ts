@@ -105,6 +105,30 @@ function samePointer(
   );
 }
 
+/**
+ * The immutable generation may be searched with the admission tuple, but it
+ * may only leave Layer 3 after that exact bearer-derived tuple is still
+ * current. Keep this aligned with the Layer 1 record route: a membership,
+ * session, credential, or Person-state change while retrieval is running is a
+ * non-disclosing denial, not a stale release.
+ */
+function sameReleaseAuthorization(
+  initial: PersonAccessAuthorization,
+  current: PersonAccessAuthorization,
+): boolean {
+  return (
+    initial.organization_id === current.organization_id &&
+    initial.principal_id === current.principal_id &&
+    initial.membership_id === current.membership_id &&
+    initial.membership_type === current.membership_type &&
+    initial.identity_binding_id === current.identity_binding_id &&
+    initial.session_family_id === current.session_family_id &&
+    initial.access_credential_sha256 === current.access_credential_sha256 &&
+    initial.person_state_sha256 === current.person_state_sha256 &&
+    initial.session_state_sha256 === current.session_state_sha256
+  );
+}
+
 function unavailable(): never {
   throw new AuthorityOperationError(
     "unavailable",
@@ -118,9 +142,16 @@ function asResponse(
   return Object.freeze({
     schema_version: 1,
     kind: "echo-clean-person-record-search-v1",
+    generation_id: result.generation_id,
+    record_head: Object.freeze({
+      position: result.exact_head.position,
+      record_sha256: result.exact_head.record_sha256,
+    }),
     items: Object.freeze(
       result.items.map((item) =>
         Object.freeze({
+          atom_id: item.atom_id,
+          record_sha256: item.record_sha256,
           kind: item.item_kind,
           text: item.text,
           policy_id: item.policy_id,
@@ -198,20 +229,32 @@ export function createCleanPersonRecordSearchRouteV1(
       ) {
         unavailable();
       }
+      const released = options.sessions.authenticateAccess({
+        access_token: input.access_token,
+      });
+      if (
+        !sameReleaseAuthorization(authorization, released) ||
+        released.organization_id !== options.organization_id
+      ) {
+        throw new AuthorityOperationError(
+          "unauthorized",
+          "person authentication failed",
+        );
+      }
       const response = asResponse(result);
       options.audit.append({
         read_mode: "layer2",
         authority_id: options.authority_id,
         organization_id: options.organization_id,
         state_lineage_id: options.state_lineage_id,
-        principal_id: authorization.principal_id,
-        membership_id: authorization.membership_id,
-        session_family_id: authorization.session_family_id,
+        principal_id: released.principal_id,
+        membership_id: released.membership_id,
+        session_family_id: released.session_family_id,
         result_count: response.items.length,
         response_sha256: canonicalSha256(
           JSON.parse(canonicalJson(response)) as never,
         ),
-        checked_at: authorization.checked_at,
+        checked_at: released.checked_at,
       });
       return response;
     },

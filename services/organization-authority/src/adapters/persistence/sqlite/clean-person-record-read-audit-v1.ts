@@ -5,8 +5,6 @@ import {
 import type { Sha256Digest } from "@echo-brain/federation-protocol";
 import type Database from "better-sqlite3";
 
-const RETENTION_DAYS = 30;
-
 export interface CleanPersonRecordReadAuditEntryV1 {
   readonly read_mode: "layer1" | "layer2";
   readonly authority_id: string;
@@ -18,20 +16,6 @@ export interface CleanPersonRecordReadAuditEntryV1 {
   readonly result_count: number;
   readonly response_sha256: Sha256Digest;
   readonly checked_at: string;
-}
-
-function retainUntil(checkedAt: string): string {
-  const checked = new Date(checkedAt);
-  if (checked.toISOString() !== checkedAt) {
-    throw new Error(
-      "clean Person record read audit time must be canonical UTC",
-    );
-  }
-  const until = new Date(checked.getTime() + RETENTION_DAYS * 86_400_000);
-  if (!Number.isFinite(until.getTime())) {
-    throw new Error("clean Person record read audit retention is invalid");
-  }
-  return until.toISOString();
 }
 
 /**
@@ -50,10 +34,15 @@ export class SqliteCleanPersonRecordReadAuditV1 {
     ) {
       throw new Error("clean Person record read result count is invalid");
     }
-    const retain_until = retainUntil(entry.checked_at);
+    if (new Date(entry.checked_at).toISOString() !== entry.checked_at) {
+      throw new Error("clean Person record read audit time must be canonical UTC");
+    }
     const body = {
       schema_version: 1,
       kind: "echo-clean-person-record-read-audit-v1",
+      context_kind: "record_read",
+      prompt_sha256: null,
+      answer_sha256: null,
       read_mode: entry.read_mode,
       authority_id: entry.authority_id,
       organization_id: entry.organization_id,
@@ -64,17 +53,16 @@ export class SqliteCleanPersonRecordReadAuditV1 {
       result_count: entry.result_count,
       response_sha256: entry.response_sha256,
       checked_at: entry.checked_at,
-      retain_until,
     } as const;
     const body_json = canonicalJson(body);
     const row_sha256 = canonicalSha256(body);
     this.database
       .prepare(
         `INSERT INTO authority_person_read_decision_audit_v2
-         (row_sha256, body_json, retain_until, recorded_at)
-         VALUES (?, ?, ?, ?)`,
+         (row_sha256, body_json, context_kind, prompt_sha256, answer_sha256, recorded_at)
+         VALUES (?, ?, 'record_read', NULL, NULL, ?)`,
       )
-      .run(row_sha256, body_json, retain_until, entry.checked_at);
+      .run(row_sha256, body_json, entry.checked_at);
     return row_sha256;
   }
 }

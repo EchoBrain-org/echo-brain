@@ -34,7 +34,7 @@ import {
   readableSearchPlaneBaselineSha256V1,
   type ReadableSearchPlaneBaselineV1,
 } from "./persistence/baseline.js";
-import { openReadableSearchPlane } from "./persistence/open-plane.js";
+import { openReadableSearchPlane } from "./persistence/open-readable-search-plane.js";
 
 /** The only policies accepted by the clean multi-person retrieval lineage. */
 export const ORGANIZATION_MEMBER_READABLE_PERSON_POLICY_ID_V2 =
@@ -1174,7 +1174,8 @@ function assertSegmentManifest(
     nonNegative(value, `segment ${label}`);
   if (
     (manifest.segment_kind === "organization-member" &&
-      (manifest.policy_id !== ORGANIZATION_MEMBER_READABLE_PERSON_POLICY_ID_V2 ||
+      (manifest.policy_id !==
+        ORGANIZATION_MEMBER_READABLE_PERSON_POLICY_ID_V2 ||
         manifest.reviewer_principal_id !== null ||
         manifest.reviewer_membership_id !== null)) ||
     (manifest.segment_kind === "reviewer" &&
@@ -1250,7 +1251,9 @@ function validateCleanPlaneLineage(
       baseline.application_id ||
     database.pragma("user_version", { simple: true }) !== 1
   )
-    throw new Error(`clean retrieval ${plane} plane baseline identity is invalid`);
+    throw new Error(
+      `clean retrieval ${plane} plane baseline identity is invalid`,
+    );
   if (
     database
       .prepare(
@@ -1263,15 +1266,21 @@ function validateCleanPlaneLineage(
     .prepare(
       `SELECT manifest_json, manifest_sha256 FROM ${MANIFEST_TABLE} WHERE singleton = 1`,
     )
-    .get() as { manifest_json: string; manifest_sha256: Sha256Digest } | undefined;
+    .get() as
+    { manifest_json: string; manifest_sha256: Sha256Digest } | undefined;
   if (
     lineage === undefined ||
     digest(lineage.manifest_json) !== lineage.manifest_sha256 ||
     canonicalJson(JSON.parse(lineage.manifest_json) as never) !==
       lineage.manifest_json
   )
-    throw new Error(`clean retrieval ${plane} plane lineage manifest is invalid`);
-  const lineageBody = JSON.parse(lineage.manifest_json) as Record<string, unknown>;
+    throw new Error(
+      `clean retrieval ${plane} plane lineage manifest is invalid`,
+    );
+  const lineageBody = JSON.parse(lineage.manifest_json) as Record<
+    string,
+    unknown
+  >;
   if (
     lineageBody.role !== `retrieval-${plane}` ||
     lineageBody.authority_id !== manifest.authority_id ||
@@ -1280,7 +1289,9 @@ function validateCleanPlaneLineage(
     lineageBody.database_schema_version !== 1 ||
     lineageBody.schema_sha256 !== readableSearchPlaneBaselineSha256V1(baseline)
   )
-    throw new Error(`clean retrieval ${plane} plane lineage is not generation-bound`);
+    throw new Error(
+      `clean retrieval ${plane} plane lineage is not generation-bound`,
+    );
   const metadata = database
     .prepare(
       "SELECT schema_version, plane, organization_id, segment_id, segment_kind, policy_id, policy_contract_sha256, reviewer_principal_id, reviewer_membership_id, analyzer_contract_sha256, finalized FROM retrieval_plane_metadata WHERE singleton = 1",
@@ -1304,7 +1315,10 @@ function validateCleanPlaneLineage(
     throw new Error(`clean retrieval ${plane} plane metadata is invalid`);
 }
 
-function openCleanReadonlyPlane(path: string, label: string): Database.Database {
+function openCleanReadonlyPlane(
+  path: string,
+  label: string,
+): Database.Database {
   assertPrivateFile(path, label);
   const database = new Database(path, { readonly: true, fileMustExist: true });
   try {
@@ -1327,16 +1341,32 @@ function readAndValidateCleanSegment(
   validDigest(entry.facts_root, "generation segment facts root");
   validDigest(entry.content_root, "generation segment content root");
   validDigest(entry.lexical_root, "generation segment lexical root");
-  const directory = join(generationDirectory, SEGMENTS_DIRECTORY, entry.segment_id);
-  assertWithin(directory, join(generationDirectory, SEGMENTS_DIRECTORY), "segment");
+  const directory = join(
+    generationDirectory,
+    SEGMENTS_DIRECTORY,
+    entry.segment_id,
+  );
+  assertWithin(
+    directory,
+    join(generationDirectory, SEGMENTS_DIRECTORY),
+    "segment",
+  );
   assertPrivateDirectory(directory, "clean retrieval segment directory");
   const names = readdirSync(directory).sort();
   if (
     canonicalJson(names) !==
-    canonicalJson(["content.sqlite", "facts.sqlite", "lexical.sqlite", "segment-manifest.json"])
+    canonicalJson([
+      "content.sqlite",
+      "facts.sqlite",
+      "lexical.sqlite",
+      "segment-manifest.json",
+    ])
   )
     throw new Error("clean retrieval segment has undeclared entries");
-  const segmentSource = readFileSync(join(directory, "segment-manifest.json"), "utf8");
+  const segmentSource = readFileSync(
+    join(directory, "segment-manifest.json"),
+    "utf8",
+  );
   const segmentValue = readCanonicalPrivateJson(
     join(directory, "segment-manifest.json"),
     "clean retrieval segment manifest",
@@ -1350,7 +1380,9 @@ function readAndValidateCleanSegment(
     segment.content_root !== entry.content_root ||
     segment.lexical_root !== entry.lexical_root
   )
-    throw new Error("clean retrieval segment manifest does not match generation");
+    throw new Error(
+      "clean retrieval segment manifest does not match generation",
+    );
   const policy = generation.policies.find(
     (value) => value.policy_id === segment.policy_id,
   );
@@ -1404,8 +1436,11 @@ function readAndValidateCleanSegment(
       content.length !== segment.content_count ||
       documents.length !== segment.document_count ||
       postings.length !== segment.posting_count ||
-      rootForRead("clean-readable-search-facts-root-v1", segment.segment_id, facts) !==
-        segment.facts_root ||
+      rootForRead(
+        "clean-readable-search-facts-root-v1",
+        segment.segment_id,
+        facts,
+      ) !== segment.facts_root ||
       rootForRead(
         "clean-readable-search-content-root-v1",
         segment.segment_id,
@@ -1421,7 +1456,9 @@ function readAndValidateCleanSegment(
     )
       throw new Error("clean retrieval segment plane roots are invalid");
     const contentByAtom = new Map(content.map((item) => [item.atom_id, item]));
-    const documentByAtom = new Map(documents.map((item) => [item.atom_id, item]));
+    const documentByAtom = new Map(
+      documents.map((item) => [item.atom_id, item]),
+    );
     if (
       contentByAtom.size !== facts.length ||
       documentByAtom.size !== facts.length
@@ -1454,9 +1491,16 @@ function readAndValidateCleanSegment(
           fact.content_binding_sha256 ||
         cleanProvenanceBindingFromFact(fact) !== fact.provenance_binding_sha256
       )
-        throw new Error("clean retrieval fact/content/lexical binding is invalid");
+        throw new Error(
+          "clean retrieval fact/content/lexical binding is invalid",
+        );
     }
-    return { manifest: segment, facts, content_by_atom: contentByAtom, postings };
+    return {
+      manifest: segment,
+      facts,
+      content_by_atom: contentByAtom,
+      postings,
+    };
   } finally {
     for (const database of databases.values()) database.close();
   }
@@ -1482,23 +1526,35 @@ export function searchCleanReadableSearchGenerationV1(
   text(input.reader.membership_id, "reader membership_id");
   const limit = input.limit ?? 10;
   if (!Number.isSafeInteger(limit) || limit < 1 || limit > 10)
-    throw new Error("clean retrieval limit must be a safe integer from one through ten");
+    throw new Error(
+      "clean retrieval limit must be a safe integer from one through ten",
+    );
   const terms = analyzeReadableSearchQuery(input.query);
   const generations = join(
     input.state_directory,
     RETRIEVAL_DIRECTORY,
     GENERATIONS_DIRECTORY,
   );
-  assertCanonicalAbsoluteDirectory(generations, "clean retrieval generations directory");
+  assertCanonicalAbsoluteDirectory(
+    generations,
+    "clean retrieval generations directory",
+  );
   const generationDirectory = join(generations, active.generation_id);
   assertWithin(generationDirectory, generations, "active generation");
-  assertPrivateDirectory(generationDirectory, "active clean retrieval generation");
+  assertPrivateDirectory(
+    generationDirectory,
+    "active clean retrieval generation",
+  );
   const entries = readdirSync(generationDirectory).sort();
   if (
-    canonicalJson(entries) !== canonicalJson(["manifest.json", SEGMENTS_DIRECTORY])
+    canonicalJson(entries) !==
+    canonicalJson(["manifest.json", SEGMENTS_DIRECTORY])
   )
     throw new Error("active clean retrieval generation has undeclared entries");
-  const manifestSource = readFileSync(join(generationDirectory, "manifest.json"), "utf8");
+  const manifestSource = readFileSync(
+    join(generationDirectory, "manifest.json"),
+    "utf8",
+  );
   const manifestValue = readCanonicalPrivateJson(
     join(generationDirectory, "manifest.json"),
     "active clean retrieval manifest",
@@ -1511,13 +1567,20 @@ export function searchCleanReadableSearchGenerationV1(
     manifest.retrieval_contract_sha256 !== active.retrieval_contract_sha256 ||
     !sameExactHead(manifest.exact_head, active.exact_head)
   )
-    throw new Error("active clean retrieval pointer does not bind this generation");
+    throw new Error(
+      "active clean retrieval pointer does not bind this generation",
+    );
   if (resolve(generationDirectory) !== generationDirectory)
     throw new Error("active clean retrieval generation is not canonical");
   const segmentDirectory = join(generationDirectory, SEGMENTS_DIRECTORY);
-  assertPrivateDirectory(segmentDirectory, "clean retrieval segments directory");
+  assertPrivateDirectory(
+    segmentDirectory,
+    "clean retrieval segments directory",
+  );
   const names = readdirSync(segmentDirectory).sort();
-  const declared = manifest.segments.map((segment) => segment.segment_id).sort();
+  const declared = manifest.segments
+    .map((segment) => segment.segment_id)
+    .sort();
   if (
     names.length !== declared.length ||
     names.some((name, index) => name !== declared[index])
@@ -1566,8 +1629,7 @@ export function searchCleanReadableSearchGenerationV1(
     if (
       segment.manifest.policy_id ===
         ORGANIZATION_MEMBER_READABLE_PERSON_POLICY_ID_V2 ||
-      (segment.manifest.policy_id ===
-        RESTRICTED_REVIEWER_PERSON_POLICY_ID_V2 &&
+      (segment.manifest.policy_id === RESTRICTED_REVIEWER_PERSON_POLICY_ID_V2 &&
         segment.manifest.reviewer_principal_id === input.reader.principal_id &&
         segment.manifest.reviewer_membership_id === input.reader.membership_id)
     )

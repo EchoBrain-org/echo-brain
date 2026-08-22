@@ -15,6 +15,7 @@ decision_ids:
   - ADR-0002
   - ADR-0003
   - ADR-0004
+  - ADR-0006
 invariant_ids:
   - INV-IDENTITY-001
   - INV-IDENTITY-002
@@ -23,6 +24,7 @@ invariant_ids:
   - INV-IDENTITY-005
   - INV-RUNTIME-001
   - INV-OPERATIONS-001
+  - INV-PERMISSIONS-015
 failure_pattern_ids:
   - FP-IDENTITY-001
   - FP-IDENTITY-002

@@ -71,13 +71,10 @@ const NEW_LINEAGE_TABLE_COLUMNS = {
   authority_person_read_decision_audit_v2: [
     "row_sha256",
     "body_json",
-    "retain_until",
+    "context_kind",
+    "prompt_sha256",
+    "answer_sha256",
     "recorded_at",
-  ],
-  authority_person_read_audit_expiry_controls_v1: [
-    "row_sha256",
-    "body_json",
-    "occurred_at",
   ],
   authority_readable_search_active_generation: [
     "singleton",
@@ -150,12 +147,10 @@ const NEW_LINEAGE_TABLE_COLUMNS = {
 
 const NEW_LINEAGE_OBJECTS = [
   "index:authority_memberships_current",
-  "index:authority_person_read_decision_audit_v2_retention",
   "table:authority_provider_human_action_reproofs",
   "table:authority_record_write_inputs",
   "table:authority_record_write_receipts",
   "table:authority_person_read_decision_audit_v2",
-  "table:authority_person_read_audit_expiry_controls_v1",
   "table:authority_readable_search_active_generation",
   "table:authority_clean_granola_source_admission_v1",
   "table:authority_clean_granola_source_progress_v1",
@@ -165,7 +160,6 @@ const NEW_LINEAGE_OBJECTS = [
   "trigger:authority_provider_human_action_reproofs_immutable",
   "trigger:authority_person_read_decision_audit_v2_immutable",
   "trigger:authority_person_read_decision_audit_v2_delete_denied",
-  "trigger:authority_person_read_audit_expiry_controls_v1_immutable",
   "trigger:authority_clean_granola_source_admission_v1_delete_denied",
   "trigger:authority_clean_granola_source_admission_v1_immutable",
   "trigger:authority_clean_granola_source_progress_v1_delete_denied",
@@ -323,48 +317,148 @@ describe("private Authority new-lineage baseline v1", () => {
       database
         .prepare(
           `INSERT INTO authority_person_read_decision_audit_v2
-         VALUES (?, ?, ?, ?)`,
+           (row_sha256, body_json, context_kind, prompt_sha256, answer_sha256, recorded_at)
+           VALUES (?, ?, 'record_read', NULL, NULL, ?)`,
         )
         .run(
           digest("f"),
-          '{"kind":"echo-person-read-decision-audit-v2"}',
-          "2026-09-21T00:00:00.000Z",
+          '{"kind":"echo-clean-person-record-read-audit-v1","context_kind":"record_read","prompt_sha256":null,"answer_sha256":null}',
           "2026-08-22T00:00:00.000Z",
         );
       expect(() =>
         database
           .prepare(
             `UPDATE authority_person_read_decision_audit_v2
-            SET retain_until = ? WHERE row_sha256 = ?`,
+             SET recorded_at = ? WHERE row_sha256 = ?`,
           )
-          .run("2026-09-22T00:00:00.000Z", digest("f")),
+          .run("2026-08-22T00:00:01.000Z", digest("f")),
       ).toThrow(/immutable/);
       expect(() =>
         database
           .prepare(
-            `DELETE FROM authority_person_read_decision_audit_v2
-          WHERE row_sha256 = ?`,
+            `INSERT INTO authority_person_read_decision_audit_v2
+           VALUES (?, ?, 'record_read', ?, NULL, ?)`,
           )
-          .run(digest("f")),
-      ).toThrow(/deletion is denied/);
-      database
-        .prepare(
-          `INSERT INTO authority_person_read_audit_expiry_controls_v1
-         VALUES (?, ?, ?)`,
-        )
-        .run(
-          digest("g"),
-          `{"cutoff":"2026-09-21T00:00:00.000Z","expired_row_sha256s":["${digest("f")}"]}`,
-          "2026-09-21T00:00:00.000Z",
-        );
-      expect(
+          .run(digest("g"), "{}", digest("prompt"), "2026-08-22T00:00:00.000Z"),
+      ).toThrow();
+      expect(() =>
         database
           .prepare(
-            `DELETE FROM authority_person_read_decision_audit_v2
-          WHERE row_sha256 = ?`,
+            `INSERT INTO authority_person_read_decision_audit_v2
+           VALUES (?, ?, 'answer_composition', NULL, NULL, ?)`,
           )
-          .run(digest("f")).changes,
-      ).toBe(1);
+          .run(digest("h"), '{"x":1}', "2026-08-22T00:00:00.000Z"),
+      ).toThrow();
+    } finally {
+      database.close();
+    }
+  });
+
+  it("binds read-audit discriminator and hash columns to their immutable JSON body", () => {
+    const database = openAuthorityDatabase(path());
+    try {
+      applyAuthorityBaselineV1(database);
+      const recordRead = JSON.stringify({
+        context_kind: "record_read",
+        prompt_sha256: null,
+        answer_sha256: null,
+      });
+      const prompt = digest("a");
+      const answer = digest("b");
+      const answerComposition = JSON.stringify({
+        context_kind: "answer_composition",
+        prompt_sha256: prompt,
+        answer_sha256: answer,
+      });
+
+      expect(() =>
+        database
+          .prepare(
+            `INSERT INTO authority_person_read_decision_audit_v2
+             (row_sha256, body_json, context_kind, prompt_sha256, answer_sha256, recorded_at)
+             VALUES (?, ?, 'record_read', NULL, NULL, ?)`,
+          )
+          .run(digest("i"), recordRead, "2026-08-22T00:00:00.000Z"),
+      ).not.toThrow();
+      expect(() =>
+        database
+          .prepare(
+            `INSERT INTO authority_person_read_decision_audit_v2
+             (row_sha256, body_json, context_kind, prompt_sha256, answer_sha256, recorded_at)
+             VALUES (?, ?, 'answer_composition', ?, ?, ?)`,
+          )
+          .run(
+            digest("j"),
+            answerComposition,
+            prompt,
+            answer,
+            "2026-08-22T00:00:00.000Z",
+          ),
+      ).not.toThrow();
+
+      expect(() =>
+        database
+          .prepare(
+            `INSERT INTO authority_person_read_decision_audit_v2
+             VALUES (?, ?, 'record_read', ?, NULL, ?)`,
+          )
+          .run(
+            digest("k"),
+            JSON.stringify({
+              context_kind: "record_read",
+              prompt_sha256: prompt,
+              answer_sha256: null,
+            }),
+            prompt,
+            "2026-08-22T00:00:00.000Z",
+          ),
+      ).toThrow();
+      expect(() =>
+        database
+          .prepare(
+            `INSERT INTO authority_person_read_decision_audit_v2
+             VALUES (?, ?, 'answer_composition', NULL, NULL, ?)`,
+          )
+          .run(
+            digest("l"),
+            JSON.stringify({
+              context_kind: "answer_composition",
+              prompt_sha256: null,
+              answer_sha256: null,
+            }),
+            "2026-08-22T00:00:00.000Z",
+          ),
+      ).toThrow();
+      expect(() =>
+        database
+          .prepare(
+            `INSERT INTO authority_person_read_decision_audit_v2
+             VALUES (?, ?, 'record_read', NULL, NULL, ?)`,
+          )
+          .run(
+            digest("m"),
+            '{"context_kind":"record_read","answer_sha256":null}',
+            "2026-08-22T00:00:00.000Z",
+          ),
+      ).toThrow();
+      expect(() =>
+        database
+          .prepare(
+            `INSERT INTO authority_person_read_decision_audit_v2
+             VALUES (?, ?, 'answer_composition', ?, ?, ?)`,
+          )
+          .run(
+            digest("n"),
+            JSON.stringify({
+              context_kind: "answer_composition",
+              prompt_sha256: digest("c"),
+              answer_sha256: answer,
+            }),
+            prompt,
+            answer,
+            "2026-08-22T00:00:00.000Z",
+          ),
+      ).toThrow();
     } finally {
       database.close();
     }
@@ -376,7 +470,7 @@ describe("private Authority new-lineage baseline v1", () => {
       /installation|enrollment|lease|internal[_ -]?live/i,
     );
     expect(authorityBaselineSha256V1()).toBe(
-      "sha256:3913a81c148d9aea17b8fff09993e9d9fdf9d57d4ca0ba21082883afe829e4df",
+      "sha256:cfa8f3f9922652d05b22accd51e78bf0c0654ad32c96d6b123e2853d4670f256",
     );
   });
 

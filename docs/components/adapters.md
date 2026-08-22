@@ -13,6 +13,7 @@ reviewed_ref: 808ac89eaf3e8eba529b356bd80d4509b9a2a293
 decision_ids:
   - ADR-0003
   - ADR-0004
+  - ADR-0006
 invariant_ids:
   - INV-ADAPTERS-001
   - INV-ADAPTERS-002
