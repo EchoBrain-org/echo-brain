@@ -2,16 +2,20 @@ export {
   PersonAuthorityClient,
   PersonAuthorityClientError,
   type PersonAuthorityClientOptions,
-} from './authority-client.js';
+  type CleanPersonRecordListItemV1,
+  type CleanPersonRecordListV1,
+  type CleanPersonRecordSearchItemV1,
+  type CleanPersonRecordSearchV1,
+} from "./authority-client.js";
 export {
   PersonClient,
   type PersonClientOptions,
   type PersonClientSessionSummary,
-} from './client.js';
+} from "./client.js";
 export {
   runPersonClientCli,
   type PersonClientCliDependencies,
-} from './commands.js';
+} from "./commands.js";
 export {
   createPersonMemberExclusionChangeRequest,
   createPersonMemberExclusionListRequest,
@@ -21,7 +25,11 @@ export {
   createPersonSlackLinkBeginRequest,
   createPersonSlackLinkCompleteRequest,
   type PersonRequestIdentity,
-} from './requests.js';
+} from "./requests.js";
+export {
+  readPersonOnboardingInvitation,
+  type PersonOnboardingInvitationV1,
+} from "./onboarding-invitation.js";
 export {
   personSessionStorePaths,
   PersonClientSessionUnavailableError,
@@ -29,4 +37,4 @@ export {
   type PersonSessionStorePaths,
   type PersonSessionRefreshClaim,
   type StoredPersonClientSessionV1,
-} from './session-store.js';
+} from "./session-store.js";

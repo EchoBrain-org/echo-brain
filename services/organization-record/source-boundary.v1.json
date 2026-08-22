@@ -11,7 +11,8 @@
     "services/organization-record/src/append.ts",
     "services/organization-record/src/maintenance.ts",
     "services/organization-record/src/reviewer.ts",
-    "services/organization-record/src/retrieval-build.ts"
+    "services/organization-record/src/retrieval-build.ts",
+    "services/organization-record/src/new-lineage-v1.ts"
   ],
   "owned_source_paths": ["services/organization-record/src/**"],
   "allowed_internal_paths": ["services/organization-record/src/**"],
@@ -25,7 +26,9 @@
     "services/organization-record/migrations/log/0004_organization_member_readable_policy_fact.sql",
     "services/organization-record/migrations/derived/0001_organization_record_derived.sql",
     "services/organization-record/migrations/derived/0002_reviewer_v2_exclusion.sql",
-    "services/organization-record/migrations/derived/0003_member_readable_v3_exclusion.sql"
+    "services/organization-record/migrations/derived/0003_member_readable_v3_exclusion.sql",
+    "services/organization-record/baselines/organization-record-derived-baseline-v1.sql",
+    "services/organization-record/baselines/organization-record-log-baseline-v1.sql"
   ],
   "layer_rules": [
     {

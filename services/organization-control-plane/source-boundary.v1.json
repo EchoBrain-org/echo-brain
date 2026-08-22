@@ -6,7 +6,14 @@
   "boundary_root": "services/organization-control-plane",
   "source_root": "services/organization-control-plane/src",
   "package_json": "services/organization-control-plane/package.json",
-  "entry_points": ["services/organization-control-plane/src/index.ts"],
+  "entry_points": [
+    "services/organization-control-plane/src/index.ts",
+    "services/organization-control-plane/src/new-lineage-v1.ts",
+    "services/organization-control-plane/src/clean-runtime-v1.ts",
+    "services/organization-control-plane/src/clean-founder-v1.ts",
+    "services/organization-control-plane/src/clean-slack-connect-main.ts",
+    "services/organization-control-plane/src/clean-person-slack-approval-activate-main.ts"
+  ],
   "owned_source_paths": ["services/organization-control-plane/src/**"],
   "allowed_internal_paths": ["services/organization-control-plane/src/**"],
   "allowed_workspace_packages": [],
@@ -17,21 +24,39 @@
     "services/organization-control-plane/migrations/0002_organization_tool_public_configuration.sql",
     "services/organization-control-plane/migrations/0003_single_canonical_slack_promotion.sql",
     "services/organization-control-plane/migrations/0004_slack_enterprise_grid_user_ids.sql",
-    "services/organization-control-plane/migrations/0005_slack_app_identity_promotion.sql"
+    "services/organization-control-plane/migrations/0005_slack_app_identity_promotion.sql",
+    "services/organization-control-plane/baselines/organization-control-plane-baseline-v1.sql"
   ],
   "layer_rules": [
     {
       "name": "control-plane-entrypoint-exports-public-api",
-      "from": "services/organization-control-plane/src/index.ts",
+      "from": "services/organization-control-plane/src/*.ts",
       "allowed_imports": ["services/organization-control-plane/src/**"],
       "allowed_workspace_packages": [],
       "allowed_external_packages": [],
       "allowed_node_builtins": []
     },
     {
+      "name": "control-plane-clean-command-composes-stopped-state-seams",
+      "from": "services/organization-control-plane/src/composition/**",
+      "allowed_imports": [
+        "services/organization-control-plane/src/adapters/**",
+        "services/organization-control-plane/src/application/**",
+        "services/organization-control-plane/src/canonical/**",
+        "services/organization-control-plane/src/composition/**",
+        "services/organization-control-plane/src/persistence/**",
+        "services/organization-control-plane/src/security/**"
+      ],
+      "allowed_workspace_packages": [],
+      "allowed_external_packages": [],
+      "allowed_node_builtins": ["crypto", "path"]
+    },
+    {
       "name": "control-plane-application-contracts-are-pure",
       "from": "services/organization-control-plane/src/application/**",
-      "allowed_imports": ["services/organization-control-plane/src/application/**"],
+      "allowed_imports": [
+        "services/organization-control-plane/src/application/**"
+      ],
       "allowed_workspace_packages": [],
       "allowed_external_packages": [],
       "allowed_node_builtins": []
@@ -39,7 +64,9 @@
     {
       "name": "control-plane-canonical-json-is-self-contained",
       "from": "services/organization-control-plane/src/canonical/**",
-      "allowed_imports": ["services/organization-control-plane/src/canonical/**"],
+      "allowed_imports": [
+        "services/organization-control-plane/src/canonical/**"
+      ],
       "allowed_workspace_packages": [],
       "allowed_external_packages": [],
       "allowed_node_builtins": ["crypto"]

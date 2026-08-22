@@ -9,7 +9,8 @@
   "entry_points": [
     "services/organization-retrieval/src/index.ts",
     "services/organization-retrieval/src/build.ts",
-    "services/organization-retrieval/src/serve.ts"
+    "services/organization-retrieval/src/serve.ts",
+    "services/organization-retrieval/src/new-lineage-v1.ts"
   ],
   "owned_source_paths": ["services/organization-retrieval/src/**"],
   "allowed_internal_paths": ["services/organization-retrieval/src/**"],
@@ -19,7 +20,10 @@
   "runtime_assets": [
     "services/organization-retrieval/migrations/facts/0001_readable_search_facts.sql",
     "services/organization-retrieval/migrations/lexical/0001_readable_search_lexical.sql",
-    "services/organization-retrieval/migrations/content/0001_readable_search_content.sql"
+    "services/organization-retrieval/migrations/content/0001_readable_search_content.sql",
+    "services/organization-retrieval/baselines/readable-search-facts-baseline-v1.sql",
+    "services/organization-retrieval/baselines/readable-search-lexical-baseline-v1.sql",
+    "services/organization-retrieval/baselines/readable-search-content-baseline-v1.sql"
   ],
   "forbidden_repository_roots": [
     "services/organization-authority",

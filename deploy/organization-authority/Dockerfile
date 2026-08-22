@@ -29,15 +29,19 @@ COPY --from=build /app/packages/organization-api/dist ./packages/organization-ap
 COPY --from=build /app/services/organization-authority/package.json ./services/organization-authority/package.json
 COPY --from=build /app/services/organization-authority/dist ./services/organization-authority/dist
 COPY --from=build /app/services/organization-authority/migrations ./services/organization-authority/migrations
+COPY --from=build /app/services/organization-authority/baselines ./services/organization-authority/baselines
 COPY --from=build /app/services/organization-control-plane/package.json ./services/organization-control-plane/package.json
 COPY --from=build /app/services/organization-control-plane/dist ./services/organization-control-plane/dist
 COPY --from=build /app/services/organization-control-plane/migrations ./services/organization-control-plane/migrations
+COPY --from=build /app/services/organization-control-plane/baselines ./services/organization-control-plane/baselines
 COPY --from=build /app/services/organization-record/package.json ./services/organization-record/package.json
 COPY --from=build /app/services/organization-record/dist ./services/organization-record/dist
 COPY --from=build /app/services/organization-record/migrations ./services/organization-record/migrations
+COPY --from=build /app/services/organization-record/baselines ./services/organization-record/baselines
 COPY --from=build /app/services/organization-retrieval/package.json ./services/organization-retrieval/package.json
 COPY --from=build /app/services/organization-retrieval/dist ./services/organization-retrieval/dist
 COPY --from=build /app/services/organization-retrieval/migrations ./services/organization-retrieval/migrations
+COPY --from=build /app/services/organization-retrieval/baselines ./services/organization-retrieval/baselines
 RUN install -d -m 1777 /echo-runtime
 USER node
 ENTRYPOINT ["node", "services/organization-authority/dist/main.js"]

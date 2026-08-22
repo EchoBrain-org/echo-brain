@@ -30,7 +30,7 @@ import {
   validateRevokeOrganizationSubjectRequest,
   validateRevokedOrganizationInstallation,
   validateRevokedOrganizationMembership,
-} from '@echo-brain/organization-api';
+} from "@echo-brain/organization-api";
 import type {
   IssueOrganizationEnrollmentGrantRequestV1,
   IssuedOrganizationEnrollmentGrantV1,
@@ -48,25 +48,31 @@ import type {
   RevokeOrganizationSubjectRequestV1,
   RevokedOrganizationInstallationV1,
   RevokedOrganizationMembershipV1,
-} from '@echo-brain/organization-api';
+} from "@echo-brain/organization-api";
 import {
   ORGANIZATION_API_ADMIN_SLACK_APPROVAL_ACTIVATION_PATH,
   type ActivateOrganizationSlackApprovalRequest,
   type ActivatedOrganizationSlackApproval,
-} from '../../application/slack-approval-activation.js';
+} from "../../application/slack-approval-activation.js";
+import { isCanonicalPersonEmail } from "../../domain/person-session-rules.js";
 
 const DEFAULT_TIMEOUT_MS = 15_000;
 const MAXIMUM_TIMEOUT_MS = 120_000;
 export const MAX_ORGANIZATION_ADMIN_API_RESPONSE_BYTES = 512 * 1024;
 
 const UUID_V4_SOURCE =
-  '[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}';
+  "[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}";
 const COMMAND_ID_PATTERN = new RegExp(`^adm_${UUID_V4_SOURCE}$`);
 const MEMBERSHIP_ID_PATTERN = new RegExp(`^mem_${UUID_V4_SOURCE}$`);
 const INSTALLATION_ID_PATTERN = new RegExp(`^ins_${UUID_V4_SOURCE}$`);
 const IDENTITY_LINK_ID_PATTERN = new RegExp(`^clm_${UUID_V4_SOURCE}$`);
 const ADAPTER_BINDING_ID_PATTERN = new RegExp(`^bnd_${UUID_V4_SOURCE}$`);
 const PERMISSION_GRANT_ID_PATTERN = new RegExp(`^pgr_${UUID_V4_SOURCE}$`);
+const PRINCIPAL_ID_PATTERN = new RegExp(`^prn_${UUID_V4_SOURCE}$`);
+const ORGANIZATION_ID_PATTERN = new RegExp(`^org_${UUID_V4_SOURCE}$`);
+const SHA256_DIGEST_PATTERN = /^sha256:[0-9a-f]{64}$/;
+const PERSON_LOGIN_GRANT_PATTERN = /^[A-Za-z0-9_-]{43}$/;
+const PERSON_LOGIN_GRANTS_PATH = "/v2/admin/memberships";
 const SLACK_APPROVAL_ACTIVATION_REQUEST_IDS = {
   command_id: COMMAND_ID_PATTERN,
   administrator_membership_id: MEMBERSHIP_ID_PATTERN,
@@ -98,21 +104,33 @@ export interface OrganizationAdminPageRequest {
   limit?: number;
 }
 
+export interface IssuedPersonLoginGrant {
+  organization_id: string;
+  principal_id: string;
+  membership_id: string;
+  membership_type: "owner" | "employee";
+  login_grant: string;
+  expected_issuer: string;
+  expected_email_sha256: `sha256:${string}`;
+  issued_at: string;
+  expires_at: string;
+}
+
 export class OrganizationAdminApiTransportError extends Error {
   readonly code:
-    | 'invalid_response'
-    | 'request_too_large'
-    | 'response_too_large'
-    | 'transport_failed';
+    | "invalid_response"
+    | "request_too_large"
+    | "response_too_large"
+    | "transport_failed";
   readonly status: number | null;
 
   constructor(
-    code: OrganizationAdminApiTransportError['code'],
+    code: OrganizationAdminApiTransportError["code"],
     message: string,
     status: number | null = null,
   ) {
     super(message);
-    this.name = 'OrganizationAdminApiTransportError';
+    this.name = "OrganizationAdminApiTransportError";
     this.code = code;
     this.status = status;
   }
@@ -125,8 +143,8 @@ export class OrganizationAdminApiError extends Error {
   readonly response: OrganizationApiErrorV1;
 
   constructor(status: number, response: OrganizationApiErrorV1) {
-    super('organization authority rejected the administrator request');
-    this.name = 'OrganizationAdminApiError';
+    super("organization authority rejected the administrator request");
+    this.name = "OrganizationAdminApiError";
     this.code = response.error.code;
     this.status = status;
     this.response = response;
@@ -134,7 +152,7 @@ export class OrganizationAdminApiError extends Error {
 }
 
 interface AdminRequest<T> {
-  method: 'GET' | 'POST';
+  method: "GET" | "POST";
   path: string;
   expected_status: 200 | 201;
   body?: unknown;
@@ -143,53 +161,53 @@ interface AdminRequest<T> {
 
 function invalidResponse(status: number): OrganizationAdminApiTransportError {
   return new OrganizationAdminApiTransportError(
-    'invalid_response',
-    'organization authority returned an invalid administrator response',
+    "invalid_response",
+    "organization authority returned an invalid administrator response",
     status,
   );
 }
 
 function validateVisibleCredential(value: string, label: string): string {
-  if (typeof value !== 'string' || !/^[\x21-\x7e]{32,4096}$/.test(value)) {
+  if (typeof value !== "string" || !/^[\x21-\x7e]{32,4096}$/.test(value)) {
     throw new Error(`${label} must be 32-4096 visible ASCII bytes`);
   }
   return value;
 }
 
 function validateClientIdentity(value: string): string {
-  const match = /^cid_([A-Za-z0-9_-]{43})$/.exec(value ?? '');
+  const match = /^cid_([A-Za-z0-9_-]{43})$/.exec(value ?? "");
   if (match === null) {
-    throw new Error('administrator client identity must be canonical');
+    throw new Error("administrator client identity must be canonical");
   }
-  const bytes = Buffer.from(match[1]!, 'base64url');
-  if (bytes.length !== 32 || bytes.toString('base64url') !== match[1]) {
-    throw new Error('administrator client identity must be canonical');
+  const bytes = Buffer.from(match[1]!, "base64url");
+  if (bytes.length !== 32 || bytes.toString("base64url") !== match[1]) {
+    throw new Error("administrator client identity must be canonical");
   }
   return value;
 }
 
 function validateBaseUrl(value: string): URL {
-  if (typeof value !== 'string') {
-    throw new Error('organization administrator base URL is invalid');
+  if (typeof value !== "string") {
+    throw new Error("organization administrator base URL is invalid");
   }
   let url: URL;
   try {
     url = new URL(value);
   } catch {
-    throw new Error('organization administrator base URL is invalid');
+    throw new Error("organization administrator base URL is invalid");
   }
   if (
-    url.protocol !== 'http:' ||
-    (url.hostname !== '127.0.0.1' && url.hostname !== '[::1]') ||
-    url.username !== '' ||
-    url.password !== '' ||
-    url.pathname !== '/' ||
-    url.search !== '' ||
-    url.hash !== '' ||
+    url.protocol !== "http:" ||
+    (url.hostname !== "127.0.0.1" && url.hostname !== "[::1]") ||
+    url.username !== "" ||
+    url.password !== "" ||
+    url.pathname !== "/" ||
+    url.search !== "" ||
+    url.hash !== "" ||
     (value !== url.origin && value !== `${url.origin}/`)
   ) {
     throw new Error(
-      'organization administrator base URL must be one bare loopback HTTP origin',
+      "organization administrator base URL must be one bare loopback HTTP origin",
     );
   }
   return url;
@@ -215,29 +233,29 @@ function validateCanonicalCursor(value: string): void {
     value.length > MAX_ORGANIZATION_API_CURSOR_CHARACTERS ||
     !/^[A-Za-z0-9_-]+$/.test(value)
   ) {
-    throw new Error('organization administrator page cursor is invalid');
+    throw new Error("organization administrator page cursor is invalid");
   }
-  const bytes = Buffer.from(value, 'base64url');
-  if (bytes.length === 0 || bytes.toString('base64url') !== value) {
-    throw new Error('organization administrator page cursor is invalid');
+  const bytes = Buffer.from(value, "base64url");
+  if (bytes.length === 0 || bytes.toString("base64url") !== value) {
+    throw new Error("organization administrator page cursor is invalid");
   }
 }
 
 function pageQuery(request: OrganizationAdminPageRequest | undefined): string {
-  if (request === undefined) return '';
+  if (request === undefined) return "";
   const record = request as unknown as Record<string, unknown>;
   if (
     record === null ||
-    typeof record !== 'object' ||
+    typeof record !== "object" ||
     Array.isArray(record) ||
-    Object.keys(record).some((key) => key !== 'cursor' && key !== 'limit')
+    Object.keys(record).some((key) => key !== "cursor" && key !== "limit")
   ) {
-    throw new Error('organization administrator page request is invalid');
+    throw new Error("organization administrator page request is invalid");
   }
   const parameters = new URLSearchParams();
   if (request.cursor !== undefined) {
     validateCanonicalCursor(request.cursor);
-    parameters.set('cursor', request.cursor);
+    parameters.set("cursor", request.cursor);
   }
   if (request.limit !== undefined) {
     if (
@@ -249,10 +267,10 @@ function pageQuery(request: OrganizationAdminPageRequest | undefined): string {
         `organization administrator page limit must be from 1 through ${MAX_ORGANIZATION_API_PAGE_ITEMS}`,
       );
     }
-    parameters.set('limit', String(request.limit));
+    parameters.set("limit", String(request.limit));
   }
   const query = parameters.toString();
-  return query === '' ? '' : `?${query}`;
+  return query === "" ? "" : `?${query}`;
 }
 
 function validateSubjectId(
@@ -260,7 +278,7 @@ function validateSubjectId(
   pattern: RegExp,
   label: string,
 ): string {
-  if (typeof value !== 'string' || !pattern.test(value)) {
+  if (typeof value !== "string" || !pattern.test(value)) {
     throw new Error(`${label} must be a canonical identifier`);
   }
   return value;
@@ -273,7 +291,7 @@ function exactRecord(
 ): Record<string, unknown> {
   if (
     value === null ||
-    typeof value !== 'object' ||
+    typeof value !== "object" ||
     Array.isArray(value) ||
     Object.keys(value).length !== keys.length ||
     keys.some((key) => !Object.hasOwn(value, key))
@@ -307,7 +325,7 @@ function validateSlackApprovalActivationRequest(
     value,
     SLACK_APPROVAL_ACTIVATION_REQUEST_IDS,
     [],
-    'Slack approval activation request',
+    "Slack approval activation request",
   ) as unknown as ActivateOrganizationSlackApprovalRequest;
 }
 
@@ -317,33 +335,99 @@ function validateActivatedOrganizationSlackApproval(
   const record = identifierRecord(
     value,
     SLACK_APPROVAL_ACTIVATION_RESULT_IDS,
-    ['activated_at', 'permission_grants_created'],
-    'Slack approval activation response',
+    ["activated_at", "permission_grants_created"],
+    "Slack approval activation response",
   );
-  const activatedAt = record['activated_at'];
+  const activatedAt = record["activated_at"];
   if (
-    typeof activatedAt !== 'string' ||
+    typeof activatedAt !== "string" ||
     !Number.isFinite(Date.parse(activatedAt)) ||
     new Date(Date.parse(activatedAt)).toISOString() !== activatedAt
   ) {
-    throw new Error('activated_at must be a canonical timestamp');
+    throw new Error("activated_at must be a canonical timestamp");
   }
-  const grantsCreated = record['permission_grants_created'];
+  const grantsCreated = record["permission_grants_created"];
   if (grantsCreated !== 0 && grantsCreated !== 2) {
-    throw new Error('permission_grants_created must be 0 or 2');
+    throw new Error("permission_grants_created must be 0 or 2");
   }
   return record as unknown as ActivatedOrganizationSlackApproval;
 }
 
+function validateCanonicalTimestamp(value: unknown, label: string): string {
+  if (
+    typeof value !== "string" ||
+    !Number.isFinite(Date.parse(value)) ||
+    new Date(Date.parse(value)).toISOString() !== value
+  ) {
+    throw new Error(`${label} must be a canonical timestamp`);
+  }
+  return value;
+}
+
+function validateIssuedPersonLoginGrant(
+  value: unknown,
+): IssuedPersonLoginGrant {
+  const record = identifierRecord(
+    value,
+    {
+      organization_id: ORGANIZATION_ID_PATTERN,
+      principal_id: PRINCIPAL_ID_PATTERN,
+      membership_id: MEMBERSHIP_ID_PATTERN,
+    },
+    [
+      "membership_type",
+      "login_grant",
+      "expected_issuer",
+      "expected_email_sha256",
+      "issued_at",
+      "expires_at",
+    ],
+    "Person login grant response",
+  );
+  if (
+    (record["membership_type"] !== "owner" &&
+      record["membership_type"] !== "employee") ||
+    typeof record["login_grant"] !== "string" ||
+    !PERSON_LOGIN_GRANT_PATTERN.test(record["login_grant"]) ||
+    Buffer.from(record["login_grant"], "base64url").length !== 32 ||
+    typeof record["expected_issuer"] !== "string" ||
+    record["expected_issuer"].length === 0 ||
+    !SHA256_DIGEST_PATTERN.test(String(record["expected_email_sha256"]))
+  ) {
+    throw new Error("Person login grant response is invalid");
+  }
+  const issuedAt = validateCanonicalTimestamp(record["issued_at"], "issued_at");
+  const expiresAt = validateCanonicalTimestamp(
+    record["expires_at"],
+    "expires_at",
+  );
+  if (Date.parse(expiresAt) <= Date.parse(issuedAt)) {
+    throw new Error("Person login grant expiry is invalid");
+  }
+  return {
+    organization_id: record["organization_id"] as string,
+    principal_id: record["principal_id"] as string,
+    membership_id: record["membership_id"] as string,
+    membership_type: record["membership_type"] as "owner" | "employee",
+    login_grant: record["login_grant"] as string,
+    expected_issuer: record["expected_issuer"] as string,
+    expected_email_sha256: record[
+      "expected_email_sha256"
+    ] as `sha256:${string}`,
+    issued_at: issuedAt,
+    expires_at: expiresAt,
+  };
+}
+
 async function readBoundedJson(response: Response): Promise<unknown> {
-  const contentType = response.headers.get('content-type');
+  const contentType = response.headers.get("content-type");
   if (
     contentType === null ||
     !/^application\/json(?:\s*;\s*charset=utf-8)?$/i.test(contentType)
   ) {
     throw invalidResponse(response.status);
   }
-  const declaredLength = response.headers.get('content-length');
+  const declaredLength = response.headers.get("content-length");
   if (declaredLength !== null) {
     if (!/^\d+$/.test(declaredLength)) {
       throw invalidResponse(response.status);
@@ -354,8 +438,8 @@ async function readBoundedJson(response: Response): Promise<unknown> {
       length > MAX_ORGANIZATION_ADMIN_API_RESPONSE_BYTES
     ) {
       throw new OrganizationAdminApiTransportError(
-        'response_too_large',
-        'organization authority administrator response exceeded its size limit',
+        "response_too_large",
+        "organization authority administrator response exceeded its size limit",
         response.status,
       );
     }
@@ -372,8 +456,8 @@ async function readBoundedJson(response: Response): Promise<unknown> {
         result = await reader.read();
       } catch {
         throw new OrganizationAdminApiTransportError(
-          'transport_failed',
-          'organization authority administrator response could not be read',
+          "transport_failed",
+          "organization authority administrator response could not be read",
           response.status,
         );
       }
@@ -384,8 +468,8 @@ async function readBoundedJson(response: Response): Promise<unknown> {
           await reader.cancel();
         } catch {}
         throw new OrganizationAdminApiTransportError(
-          'response_too_large',
-          'organization authority administrator response exceeded its size limit',
+          "response_too_large",
+          "organization authority administrator response exceeded its size limit",
           response.status,
         );
       }
@@ -398,7 +482,7 @@ async function readBoundedJson(response: Response): Promise<unknown> {
 
   let text: string;
   try {
-    text = new TextDecoder('utf-8', { fatal: true }).decode(
+    text = new TextDecoder("utf-8", { fatal: true }).decode(
       Buffer.concat(chunks, total),
     );
   } catch {
@@ -422,30 +506,30 @@ export class OrganizationAdminApiClient {
   constructor(options: OrganizationAdminApiClientOptions) {
     if (
       options === null ||
-      typeof options !== 'object' ||
+      typeof options !== "object" ||
       Array.isArray(options)
     ) {
-      throw new Error('organization administrator client options are invalid');
+      throw new Error("organization administrator client options are invalid");
     }
     this.baseUrl = validateBaseUrl(options.base_url);
     this.adminToken = validateVisibleCredential(
       options.admin_token,
-      'administrator token',
+      "administrator token",
     );
     this.trustedProxyToken = validateVisibleCredential(
       options.trusted_proxy_token,
-      'trusted proxy token',
+      "trusted proxy token",
     );
     if (this.adminToken === this.trustedProxyToken) {
       throw new Error(
-        'administrator and trusted proxy tokens must be distinct credentials',
+        "administrator and trusted proxy tokens must be distinct credentials",
       );
     }
     this.clientIdentity = validateClientIdentity(options.client_identity);
     this.fetchImpl = options.fetch ?? globalThis.fetch;
-    if (typeof this.fetchImpl !== 'function') {
+    if (typeof this.fetchImpl !== "function") {
       throw new Error(
-        'organization administrator HTTP transport is unavailable',
+        "organization administrator HTTP transport is unavailable",
       );
     }
     this.timeoutMs = validateTimeout(options.timeout_ms);
@@ -457,7 +541,7 @@ export class OrganizationAdminApiClient {
 
   private async request<T>(request: AdminRequest<T>): Promise<T> {
     const headers: Record<string, string> = {
-      accept: 'application/json',
+      accept: "application/json",
       authorization: `${ORGANIZATION_API_ADMIN_AUTH_SCHEME} ${this.adminToken}`,
       [TRUSTED_PROXY_AUTHORIZATION_HEADER]: `${ORGANIZATION_API_PROXY_AUTH_SCHEME} ${this.trustedProxyToken}`,
       [TRUSTED_PROXY_CLIENT_ID_HEADER]: this.clientIdentity,
@@ -466,15 +550,15 @@ export class OrganizationAdminApiClient {
     if (request.body !== undefined) {
       serializedBody = JSON.stringify(request.body);
       if (
-        Buffer.byteLength(serializedBody, 'utf8') >
+        Buffer.byteLength(serializedBody, "utf8") >
         MAX_ORGANIZATION_API_BODY_BYTES
       ) {
         throw new OrganizationAdminApiTransportError(
-          'request_too_large',
-          'organization administrator request exceeded its size limit',
+          "request_too_large",
+          "organization administrator request exceeded its size limit",
         );
       }
-      headers['content-type'] = 'application/json; charset=utf-8';
+      headers["content-type"] = "application/json; charset=utf-8";
     }
 
     const signal = AbortSignal.timeout(this.timeoutMs);
@@ -484,13 +568,13 @@ export class OrganizationAdminApiClient {
         method: request.method,
         headers,
         ...(serializedBody === undefined ? {} : { body: serializedBody }),
-        redirect: 'error',
+        redirect: "error",
         signal,
       });
     } catch {
       throw new OrganizationAdminApiTransportError(
-        'transport_failed',
-        'organization administrator request failed',
+        "transport_failed",
+        "organization administrator request failed",
       );
     }
 
@@ -518,7 +602,7 @@ export class OrganizationAdminApiClient {
 
   overview(): Promise<OrganizationAdminOverviewV1> {
     return this.request({
-      method: 'GET',
+      method: "GET",
       path: ORGANIZATION_API_ADMIN_OVERVIEW_PATH,
       expected_status: 200,
       validate: validateOrganizationAdminOverview,
@@ -529,7 +613,7 @@ export class OrganizationAdminApiClient {
     page?: OrganizationAdminPageRequest,
   ): Promise<OrganizationMembershipPageV1> {
     return this.request({
-      method: 'GET',
+      method: "GET",
       path: `${ORGANIZATION_API_ADMIN_MEMBERSHIPS_PATH}${pageQuery(page)}`,
       expected_status: 200,
       validate: validateOrganizationMembershipPage,
@@ -540,7 +624,7 @@ export class OrganizationAdminApiClient {
     page?: OrganizationAdminPageRequest,
   ): Promise<OrganizationInstallationPageV1> {
     return this.request({
-      method: 'GET',
+      method: "GET",
       path: `${ORGANIZATION_API_ADMIN_INSTALLATIONS_PATH}${pageQuery(page)}`,
       expected_status: 200,
       validate: validateOrganizationInstallationPage,
@@ -551,7 +635,7 @@ export class OrganizationAdminApiClient {
     page?: OrganizationAdminPageRequest,
   ): Promise<OrganizationEnrollmentGrantPageV1> {
     return this.request({
-      method: 'GET',
+      method: "GET",
       path: `${ORGANIZATION_API_ADMIN_ENROLLMENT_GRANTS_PATH}${pageQuery(page)}`,
       expected_status: 200,
       validate: validateOrganizationEnrollmentGrantPage,
@@ -562,7 +646,7 @@ export class OrganizationAdminApiClient {
     page?: OrganizationAdminPageRequest,
   ): Promise<OrganizationAuditPageV1> {
     return this.request({
-      method: 'GET',
+      method: "GET",
       path: `${ORGANIZATION_API_ADMIN_AUDIT_PATH}${pageQuery(page)}`,
       expected_status: 200,
       validate: validateOrganizationAuditPage,
@@ -574,7 +658,7 @@ export class OrganizationAdminApiClient {
   ): Promise<ActivatedOrganizationSlackApproval> {
     const body = validateSlackApprovalActivationRequest(input);
     return this.request({
-      method: 'POST',
+      method: "POST",
       path: ORGANIZATION_API_ADMIN_SLACK_APPROVAL_ACTIVATION_PATH,
       expected_status: 201,
       body,
@@ -587,7 +671,7 @@ export class OrganizationAdminApiClient {
   ): Promise<ProvisionedOrganizationMembershipV1> {
     const body = validateProvisionOrganizationMembershipRequest(input);
     return this.request({
-      method: 'POST',
+      method: "POST",
       path: ORGANIZATION_API_ADMIN_MEMBERSHIPS_PATH,
       expected_status: 201,
       body,
@@ -602,15 +686,36 @@ export class OrganizationAdminApiClient {
     const membership = validateSubjectId(
       membershipId,
       MEMBERSHIP_ID_PATTERN,
-      'membership_id',
+      "membership_id",
     );
     const body = validateIssueOrganizationEnrollmentGrantRequest(input);
     return this.request({
-      method: 'POST',
+      method: "POST",
       path: organizationApiMembershipEnrollmentGrantsPath(membership),
       expected_status: 201,
       body,
       validate: validateIssuedOrganizationEnrollmentGrant,
+    });
+  }
+
+  issuePersonLoginGrant(
+    membershipId: string,
+    expectedEmail: string,
+  ): Promise<IssuedPersonLoginGrant> {
+    const membership = validateSubjectId(
+      membershipId,
+      MEMBERSHIP_ID_PATTERN,
+      "membership_id",
+    );
+    if (!isCanonicalPersonEmail(expectedEmail)) {
+      throw new Error("expected_email must be canonical lowercase ASCII");
+    }
+    return this.request({
+      method: "POST",
+      path: `${PERSON_LOGIN_GRANTS_PATH}/${membership}/person-login-grants`,
+      expected_status: 201,
+      body: { expected_email: expectedEmail },
+      validate: validateIssuedPersonLoginGrant,
     });
   }
 
@@ -621,11 +726,11 @@ export class OrganizationAdminApiClient {
     const membership = validateSubjectId(
       membershipId,
       MEMBERSHIP_ID_PATTERN,
-      'membership_id',
+      "membership_id",
     );
     const body = validateRevokeOrganizationSubjectRequest(input);
     return this.request({
-      method: 'POST',
+      method: "POST",
       path: organizationApiMembershipRevocationsPath(membership),
       expected_status: 200,
       body,
@@ -640,11 +745,11 @@ export class OrganizationAdminApiClient {
     const installation = validateSubjectId(
       installationId,
       INSTALLATION_ID_PATTERN,
-      'installation_id',
+      "installation_id",
     );
     const body = validateRevokeOrganizationSubjectRequest(input);
     return this.request({
-      method: 'POST',
+      method: "POST",
       path: organizationApiInstallationRevocationsPath(installation),
       expected_status: 200,
       body,
@@ -659,11 +764,11 @@ export class OrganizationAdminApiClient {
     const installation = validateSubjectId(
       installationId,
       INSTALLATION_ID_PATTERN,
-      'installation_id',
+      "installation_id",
     );
     const body = validateRecoverOrganizationInstallationAccessRequest(input);
     return this.request({
-      method: 'POST',
+      method: "POST",
       path: organizationApiInstallationAccessRecoveriesPath(installation),
       expected_status: 200,
       body,
@@ -671,13 +776,15 @@ export class OrganizationAdminApiClient {
         const recovered =
           validateRecoveredOrganizationInstallationAccess(value);
         if (recovered.installation_id !== installation) {
-          throw new Error('access recovery response names another installation');
+          throw new Error(
+            "access recovery response names another installation",
+          );
         }
         if (
           recovered.local_access_state_sequence !==
           body.local_access_state_sequence
         ) {
-          throw new Error('access recovery response restates another sequence');
+          throw new Error("access recovery response restates another sequence");
         }
         return recovered;
       },

@@ -25,6 +25,7 @@
     "os",
     "path",
     "process",
+    "readline/promises",
     "url",
     "util"
   ],
@@ -63,7 +64,7 @@
       "allowed_imports": ["src/product/person-client/**"],
       "allowed_workspace_packages": [],
       "allowed_external_packages": [],
-      "allowed_node_builtins": ["buffer", "os", "util"]
+      "allowed_node_builtins": ["buffer", "os", "readline/promises", "util"]
     },
     {
       "name": "person-client-entry-exports-owned-modules",
@@ -88,6 +89,17 @@
       "allowed_workspace_packages": ["@echo-brain/organization-api"],
       "allowed_external_packages": [],
       "allowed_node_builtins": ["buffer", "crypto", "fs", "path"]
+    },
+    {
+      "name": "person-onboarding-invitation-owns-private-input",
+      "from": "src/product/person-client/onboarding-invitation.ts",
+      "allowed_imports": [],
+      "allowed_workspace_packages": [
+        "@echo-brain/federation-protocol",
+        "@echo-brain/organization-api"
+      ],
+      "allowed_external_packages": [],
+      "allowed_node_builtins": ["fs", "path"]
     }
   ]
 }

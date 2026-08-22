@@ -13,9 +13,10 @@ component_ids:
 created_at: 2026-08-20
 reviewed_at: 2026-08-20
 reviewed_ref: 77a212134fce762fdffd30e028f3256ba6e75b42
-status: proposed
+status: superseded
 supersedes: []
-superseded_by: []
+superseded_by:
+  - ADR-0004
 updates:
   - ADR-0001
   - ADR-0002
@@ -25,10 +26,10 @@ updates:
 
 ## Disposition state
 
-This ADR is proposed. It records the exact decision that may close D1, D2, D3,
-D4, and D6 of the
+This ADR was proposed and was superseded before acceptance. It records the
+decision that would have closed D1, D2, D3, D4, and D6 of the
 [server-core lean-down plan](../product/2026-08-20-server-core-migration-lean-down-plan-v4.md),
-but it does not accept that decision yet.
+but it never accepted that decision.
 
 The normative candidate is
 [RFC-0001](../rfcs/RFC-0001-server-core-lean-authority-contracts.md). The
@@ -41,17 +42,17 @@ file, the reviewer identities and dispositions, and the resolution of every
 open choice. A broad instruction to continue the migration is not an
 artifact-bound disposition.
 
-| Disposition field | Current value |
-| --- | --- |
-| RFC candidate commit | pending |
-| RFC candidate SHA-256 | pending |
-| Constitution owner/founder disposition | partial: D6 retention interval, D6 export position, delivery behavior, and the standalone reviewer-recent route accepted 2026-08-20 for initial V1; D1 review and the remaining D2 identity/action contracts pending |
-| Independent permissions review or explicit founder waiver | independent Phase-0 review in progress; founder waiver pending |
-| D6 retention interval | accepted by the founder 2026-08-20 for initial V1: 30 days from Authority-owned `evaluated_at`; a different interval is a new dated disposition before Phase 4 cutover |
-| D6 export position | accepted by the founder 2026-08-20 for initial V1: deliberately unsupported; a different position is a new dated disposition before Phase 4 cutover |
-| D2 v2 policy IDs, exact contract bodies/selectors and digests, and consequence-byte acceptance | accepted separately by ADR-0005; remaining D2 identity/action contracts pending |
-| Delivery behavior | accepted by the founder 2026-08-20 for initial V1: preserve main's configured delivery behavior and approval/delivery channel separation; any contraction remains deferred and enters only as a new dated disposition before Phase 4 cutover |
-| Standalone reviewer-recent route | accepted by the founder 2026-08-20 for initial V1: retained with exact reviewer-tenure semantics and Layer-1/log-backed availability; route consolidation remains deferred and enters only as a new dated disposition before Phase 4 cutover |
+| Disposition field                                                                              | Current value                                                                                                                                                                                                                                |
+| ---------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| RFC candidate commit                                                                           | pending                                                                                                                                                                                                                                      |
+| RFC candidate SHA-256                                                                          | pending                                                                                                                                                                                                                                      |
+| Constitution owner/founder disposition                                                         | partial: D6 retention interval, D6 export position, delivery behavior, and the standalone reviewer-recent route accepted 2026-08-20 for initial V1; D1 review and the remaining D2 identity/action contracts pending                         |
+| Independent permissions review or explicit founder waiver                                      | independent Phase-0 review in progress; founder waiver pending                                                                                                                                                                               |
+| D6 retention interval                                                                          | accepted by the founder 2026-08-20 for initial V1: 30 days from Authority-owned `evaluated_at`; a different interval is a new dated disposition before Phase 4 cutover                                                                       |
+| D6 export position                                                                             | accepted by the founder 2026-08-20 for initial V1: deliberately unsupported; a different position is a new dated disposition before Phase 4 cutover                                                                                          |
+| D2 v2 policy IDs, exact contract bodies/selectors and digests, and consequence-byte acceptance | accepted separately by ADR-0005; remaining D2 identity/action contracts pending                                                                                                                                                              |
+| Delivery behavior                                                                              | accepted by the founder 2026-08-20 for initial V1: preserve main's configured delivery behavior and approval/delivery channel separation; any contraction remains deferred and enters only as a new dated disposition before Phase 4 cutover |
+| Standalone reviewer-recent route                                                               | accepted by the founder 2026-08-20 for initial V1: retained with exact reviewer-tenure semantics and Layer-1/log-backed availability; route consolidation remains deferred and enters only as a new dated disposition before Phase 4 cutover |
 
 Updating only this table, the ADR lifecycle status, `reviewed_at`, and
 `reviewed_ref` after review is lifecycle metadata. Any change to context,
@@ -410,3 +411,11 @@ state bytes change meaning. After a separately authorized cutover, rollback
 stops the new artifact and uses only the checksummed old artifact with its
 intact old-state snapshot. Old and new writers never run together, and rows are
 never copied between lineages.
+
+## Lifecycle update
+
+Superseded on 2026-08-22 by ADR-0004 before this proposal was accepted.
+ADR-0004 chooses one founder-only current pipeline and a directly authored
+clean genesis instead of this candidate's multi-policy, multi-audit,
+compatibility-preserving contract packet. The text above remains historical
+context and is not a live implementation requirement.

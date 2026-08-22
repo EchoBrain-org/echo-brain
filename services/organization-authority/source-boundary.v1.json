@@ -8,7 +8,12 @@
   "package_json": "services/organization-authority/package.json",
   "entry_points": [
     "services/organization-authority/src/main.ts",
-    "services/organization-authority/src/admin-main.ts"
+    "services/organization-authority/src/admin-main.ts",
+    "services/organization-authority/src/clean-reset-main.ts",
+    "services/organization-authority/src/clean-person-main.ts",
+    "services/organization-authority/src/clean-live-main.ts",
+    "services/organization-authority/src/clean-granola-source-main.ts",
+    "services/organization-authority/src/clean-founder-main.ts"
   ],
   "owned_source_paths": ["services/organization-authority/src/**"],
   "allowed_internal_paths": ["services/organization-authority/src/**"],
@@ -51,7 +56,8 @@
     "services/organization-authority/migrations/0016_processing_slack_approval_state.sql",
     "services/organization-authority/migrations/0017_processing_frozen_record_envelopes.sql",
     "services/organization-authority/migrations/0018_processing_slack_delivery_attempts.sql",
-    "services/organization-authority/migrations/0019_processing_frozen_record_rejections.sql"
+    "services/organization-authority/migrations/0019_processing_frozen_record_rejections.sql",
+    "services/organization-authority/baselines/authority-baseline-v1.sql"
   ],
   "layer_rules": [
     {
@@ -66,6 +72,56 @@
       "name": "authority-admin-entrypoint-calls-composition",
       "from": "services/organization-authority/src/admin-main.ts",
       "allowed_imports": ["services/organization-authority/src/composition/**"],
+      "allowed_workspace_packages": [],
+      "allowed_external_packages": [],
+      "allowed_node_builtins": []
+    },
+    {
+      "name": "authority-clean-reset-entrypoint-calls-composition",
+      "from": "services/organization-authority/src/clean-reset-main.ts",
+      "allowed_imports": [
+        "services/organization-authority/src/composition/clean-reset-cli.ts"
+      ],
+      "allowed_workspace_packages": [],
+      "allowed_external_packages": [],
+      "allowed_node_builtins": []
+    },
+    {
+      "name": "authority-clean-person-entrypoint-calls-composition",
+      "from": "services/organization-authority/src/clean-person-main.ts",
+      "allowed_imports": [
+        "services/organization-authority/src/composition/clean-person-cli.ts"
+      ],
+      "allowed_workspace_packages": [],
+      "allowed_external_packages": [],
+      "allowed_node_builtins": []
+    },
+    {
+      "name": "authority-clean-live-entrypoint-calls-composition",
+      "from": "services/organization-authority/src/clean-live-main.ts",
+      "allowed_imports": [
+        "services/organization-authority/src/composition/clean-live-cli.ts"
+      ],
+      "allowed_workspace_packages": [],
+      "allowed_external_packages": [],
+      "allowed_node_builtins": []
+    },
+    {
+      "name": "authority-clean-granola-source-entrypoint-calls-composition",
+      "from": "services/organization-authority/src/clean-granola-source-main.ts",
+      "allowed_imports": [
+        "services/organization-authority/src/composition/clean-granola-source-cli.ts"
+      ],
+      "allowed_workspace_packages": [],
+      "allowed_external_packages": [],
+      "allowed_node_builtins": []
+    },
+    {
+      "name": "authority-clean-founder-entrypoint-calls-composition",
+      "from": "services/organization-authority/src/clean-founder-main.ts",
+      "allowed_imports": [
+        "services/organization-authority/src/composition/clean-founder-cli.ts"
+      ],
       "allowed_workspace_packages": [],
       "allowed_external_packages": [],
       "allowed_node_builtins": []
@@ -216,6 +272,7 @@
         "services/organization-authority/src/composition/**",
         "services/organization-authority/src/domain/**",
         "services/organization-authority/src/presentation/**",
+        "services/organization-authority/src/state-lineage/**",
         "services/organization-authority/src/processing/adapters/approval-surfaces/slack-reactions/**",
         "services/organization-authority/src/processing/adapters/decision-processors/llm/**",
         "services/organization-authority/src/processing/adapters/decision-processors/structured-text/**",
@@ -223,7 +280,12 @@
         "services/organization-authority/src/processing/adapters/meeting-sources/granola/**",
         "services/organization-authority/src/processing/authorization/**",
         "services/organization-authority/src/processing/core/contracts/adapter.ts",
+        "services/organization-authority/src/processing/core/contracts/**",
+        "services/organization-authority/src/processing/core/processing/brief.ts",
         "services/organization-authority/src/processing/core/processing/run-core-cycle.ts",
+        "services/organization-authority/src/processing/clean-v1/**",
+        "services/organization-authority/src/processing/clean-v1-d2-d3/**",
+        "services/organization-authority/src/processing/clean-v1-record/**",
         "services/organization-authority/src/processing/live/**",
         "services/organization-authority/src/processing/record/**",
         "services/organization-authority/src/processing/storage/**"
@@ -236,7 +298,7 @@
         "@echo-brain/organization-record",
         "@echo-brain/organization-retrieval"
       ],
-      "allowed_external_packages": [],
+      "allowed_external_packages": ["better-sqlite3"],
       "allowed_node_builtins": ["crypto", "events", "fs", "http", "net", "path"]
     },
     {
@@ -248,6 +310,42 @@
       "allowed_workspace_packages": ["@echo-brain/federation-protocol"],
       "allowed_external_packages": ["better-sqlite3"],
       "allowed_node_builtins": ["fs", "path"]
+    },
+    {
+      "name": "clean-live-only-source-cycle-uses-no-legacy-runtime",
+      "from": "services/organization-authority/src/processing/clean-v1/**",
+      "allowed_imports": [
+        "services/organization-authority/src/processing/clean-v1/**",
+        "services/organization-authority/src/processing/core/**",
+        "services/organization-authority/src/processing/adapters/meeting-sources/granola/index.ts",
+        "services/organization-authority/src/processing/adapters/shared/slack/slack-web-api-client.ts"
+      ],
+      "allowed_workspace_packages": [
+        "@echo-brain/federation-protocol",
+        "@echo-brain/organization-control-plane"
+      ],
+      "allowed_external_packages": ["better-sqlite3"],
+      "allowed_node_builtins": []
+    },
+    {
+      "name": "clean-d2-d3-coordinator-uses-only-selected-clean-ports",
+      "from": "services/organization-authority/src/processing/clean-v1-d2-d3/**",
+      "allowed_imports": [
+        "services/organization-authority/src/processing/clean-v1-d2-d3/**",
+        "services/organization-authority/src/processing/clean-v1/**",
+        "services/organization-authority/src/processing/clean-v1-record/**",
+        "services/organization-authority/src/application/ports/runtime-ports.ts",
+        "services/organization-authority/src/composition/clean-live-runtime.ts",
+        "services/organization-authority/src/processing/core/**"
+      ],
+      "allowed_workspace_packages": [
+        "@echo-brain/federation-protocol",
+        "@echo-brain/organization-control-plane",
+        "@echo-brain/organization-protocol",
+        "@echo-brain/organization-record"
+      ],
+      "allowed_external_packages": [],
+      "allowed_node_builtins": []
     },
     {
       "name": "processing-core-is-tool-agnostic",
@@ -268,9 +366,7 @@
         "services/organization-authority/src/processing/core/**",
         "services/organization-authority/src/processing/storage/**"
       ],
-      "allowed_workspace_packages": [
-        "@echo-brain/federation-protocol"
-      ],
+      "allowed_workspace_packages": ["@echo-brain/federation-protocol"],
       "allowed_external_packages": ["better-sqlite3"],
       "allowed_node_builtins": ["crypto"]
     },
@@ -390,9 +486,7 @@
       "name": "processing-server-installation-key-is-read-only-compatibility",
       "from": "services/organization-authority/src/processing/authorization/security/existing-exportable-installation-key.ts",
       "allowed_imports": [],
-      "allowed_workspace_packages": [
-        "@echo-brain/federation-protocol"
-      ],
+      "allowed_workspace_packages": ["@echo-brain/federation-protocol"],
       "allowed_external_packages": [],
       "allowed_node_builtins": ["crypto", "fs", "path"]
     },
@@ -452,6 +546,21 @@
       "allowed_workspace_packages": [
         "@echo-brain/federation-protocol",
         "@echo-brain/organization-protocol"
+      ],
+      "allowed_external_packages": [],
+      "allowed_node_builtins": []
+    },
+    {
+      "name": "processing-clean-v1-record-writer-uses-only-clean-record-ports",
+      "from": "services/organization-authority/src/processing/clean-v1-record/**",
+      "allowed_imports": [
+        "services/organization-authority/src/application/ports/runtime-ports.ts",
+        "services/organization-authority/src/processing/clean-v1-record/**"
+      ],
+      "allowed_workspace_packages": [
+        "@echo-brain/federation-protocol",
+        "@echo-brain/organization-protocol",
+        "@echo-brain/organization-record"
       ],
       "allowed_external_packages": [],
       "allowed_node_builtins": []

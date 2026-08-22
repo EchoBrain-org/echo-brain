@@ -8,10 +8,10 @@ import {
   realpathSync,
   rmSync,
   writeFileSync,
-} from 'node:fs';
-import { tmpdir } from 'node:os';
-import { join } from 'node:path';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+} from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type {
   IssueOrganizationEnrollmentGrantRequestV1,
   IssuedOrganizationEnrollmentGrantV1,
@@ -19,39 +19,40 @@ import type {
   RecoverOrganizationInstallationAccessRequestV1,
   RecoveredOrganizationInstallationAccessV1,
   RevokeOrganizationSubjectRequestV1,
-} from '@echo-brain/organization-api';
+} from "@echo-brain/organization-api";
+import type { IssuedPersonLoginGrant } from "../src/adapters/http/organization-admin-api-client.js";
 import {
   runOrganizationAuthorityAdminCli,
   type OrganizationAdminCliClient,
   type OrganizationAdminCliDependencies,
   type OrganizationAdminCliIo,
-} from '../src/composition/admin-cli.js';
+} from "../src/composition/admin-cli.js";
 import {
   authorityStatePaths,
   createAuthorityRuntimeConfig,
   writeAuthorityRuntimeConfigExclusive,
-} from '../src/composition/operator-config.js';
+} from "../src/composition/operator-config.js";
 
 const IDS = {
-  authority: 'oau_00000000-0000-4000-8000-000000000001',
-  organization: 'org_00000000-0000-4000-8000-000000000001',
-  principal: 'prn_00000000-0000-4000-8000-000000000001',
-  membership: 'mem_00000000-0000-4000-8000-000000000001',
-  targetMembership: 'mem_00000000-0000-4000-8000-000000000002',
-  installation: 'ins_00000000-0000-4000-8000-000000000001',
-  identityLink: 'clm_00000000-0000-4000-8000-000000000001',
-  adapterBinding: 'bnd_00000000-0000-4000-8000-000000000001',
-  approveGrant: 'pgr_00000000-0000-4000-8000-000000000001',
-  rejectGrant: 'pgr_00000000-0000-4000-8000-000000000002',
-  command: 'adm_00000000-0000-4000-8000-000000000001',
+  authority: "oau_00000000-0000-4000-8000-000000000001",
+  organization: "org_00000000-0000-4000-8000-000000000001",
+  principal: "prn_00000000-0000-4000-8000-000000000001",
+  membership: "mem_00000000-0000-4000-8000-000000000001",
+  targetMembership: "mem_00000000-0000-4000-8000-000000000002",
+  installation: "ins_00000000-0000-4000-8000-000000000001",
+  identityLink: "clm_00000000-0000-4000-8000-000000000001",
+  adapterBinding: "bnd_00000000-0000-4000-8000-000000000001",
+  approveGrant: "pgr_00000000-0000-4000-8000-000000000001",
+  rejectGrant: "pgr_00000000-0000-4000-8000-000000000002",
+  command: "adm_00000000-0000-4000-8000-000000000001",
 } as const;
 
 const PIN =
-  'sha256:b237acdd2200b3d2f3816778a40994d872b44345ab4c1cc4ad370630b0f03db2' as const;
-const ADMIN_TOKEN = `admin-${'a'.repeat(40)}`;
-const PROXY_TOKEN = `proxy-${'p'.repeat(40)}`;
-const FIXED_UUID = '10000000-0000-4000-8000-000000000001';
-const AUTHORITY_URL = 'https://authority.example.com';
+  "sha256:b237acdd2200b3d2f3816778a40994d872b44345ab4c1cc4ad370630b0f03db2" as const;
+const ADMIN_TOKEN = `admin-${"a".repeat(40)}`;
+const PROXY_TOKEN = `proxy-${"p".repeat(40)}`;
+const FIXED_UUID = "10000000-0000-4000-8000-000000000001";
+const AUTHORITY_URL = "https://authority.example.com";
 
 interface Fixture {
   root: string;
@@ -79,17 +80,17 @@ function privateDirectory(path: string): void {
 }
 
 function privateFile(path: string, value: string): void {
-  writeFileSync(path, value, { encoding: 'utf8', mode: 0o600 });
+  writeFileSync(path, value, { encoding: "utf8", mode: 0o600 });
   chmodSync(path, 0o600);
 }
 
 function fixture(): Fixture {
-  const root = realpathSync(mkdtempSync(join(tmpdir(), 'echo-admin-cli-')));
+  const root = realpathSync(mkdtempSync(join(tmpdir(), "echo-admin-cli-")));
   roots.push(root);
   chmodSync(root, 0o700);
-  const configDirectory = join(root, 'config');
-  const stateDirectory = join(root, 'state');
-  const invitationDirectory = join(root, 'invitations');
+  const configDirectory = join(root, "config");
+  const stateDirectory = join(root, "state");
+  const invitationDirectory = join(root, "invitations");
   privateDirectory(configDirectory);
   privateDirectory(stateDirectory);
   privateDirectory(invitationDirectory);
@@ -97,11 +98,11 @@ function fixture(): Fixture {
   privateDirectory(paths.credential_directory);
   privateFile(paths.admin_credential_path, ADMIN_TOKEN);
   privateFile(paths.proxy_credential_path, PROXY_TOKEN);
-  const configPath = join(configDirectory, 'authority.json');
+  const configPath = join(configDirectory, "authority.json");
   const config = createAuthorityRuntimeConfig({
     state_directory: stateDirectory,
     organization_id: IDS.organization,
-    organization_display_name: 'Example Company',
+    organization_display_name: "Example Company",
     authority_id: IDS.authority,
     authority_pin_sha256: PIN,
     port: 39479,
@@ -132,22 +133,24 @@ function fakeClient(
   return {
     overview: async () =>
       ({
-        operation: 'overview',
+        operation: "overview",
       }) as never,
-    listMemberships: async () => ({ operation: 'memberships' }) as never,
-    listInstallations: async () => ({ operation: 'installations' }) as never,
-    listEnrollmentGrants: async () => ({ operation: 'invitations' }) as never,
-    listAudit: async () => ({ operation: 'audit' }) as never,
-    provisionMembership: async () => ({ operation: 'member-create' }) as never,
+    listMemberships: async () => ({ operation: "memberships" }) as never,
+    listInstallations: async () => ({ operation: "installations" }) as never,
+    listEnrollmentGrants: async () => ({ operation: "invitations" }) as never,
+    listAudit: async () => ({ operation: "audit" }) as never,
+    provisionMembership: async () => ({ operation: "member-create" }) as never,
     registerEnrollmentGrant: async () =>
-      ({ operation: 'invitation-create' }) as never,
-    revokeMembership: async () => ({ operation: 'member-revoke' }) as never,
+      ({ operation: "invitation-create" }) as never,
+    issuePersonLoginGrant: async () =>
+      ({ operation: "person-invite" }) as never,
+    revokeMembership: async () => ({ operation: "member-revoke" }) as never,
     revokeInstallation: async () =>
-      ({ operation: 'installation-revoke' }) as never,
+      ({ operation: "installation-revoke" }) as never,
     recoverInstallationAccess: async () =>
-      ({ operation: 'installation-access-recover' }) as never,
+      ({ operation: "installation-access-recover" }) as never,
     activateSlackApproval: async () =>
-      ({ operation: 'slack-approval-activate' }) as never,
+      ({ operation: "slack-approval-activate" }) as never,
     ...overrides,
   };
 }
@@ -160,7 +163,7 @@ function successfulDependencies(
     client_factory: () => client,
     preflight: async (configPath) => ({
       schema_version: 1,
-      kind: 'echo-organization-authority-status',
+      kind: "echo-organization-authority-status",
       ok: true,
       initialized: true,
       running: true,
@@ -169,7 +172,7 @@ function successfulDependencies(
       state_dir: null,
       authority_id: IDS.authority,
       organization_id: IDS.organization,
-      listener: 'http://127.0.0.1:39479',
+      listener: "http://127.0.0.1:39479",
       checks: [],
     }),
     ...overrides,
@@ -177,11 +180,11 @@ function successfulDependencies(
 }
 
 function configArguments(value: Fixture): string[] {
-  return ['--config', value.config_path];
+  return ["--config", value.config_path];
 }
 
-describe('organization administrator CLI transport boundary', () => {
-  it('reads the strict operator config and reaches overview through the loopback HTTP client port only', async () => {
+describe("organization administrator CLI transport boundary", () => {
+  it("reads the strict operator config and reaches overview through the loopback HTTP client port only", async () => {
     const value = fixture();
     const io = capturedIo();
     const client = fakeClient();
@@ -190,7 +193,7 @@ describe('organization administrator CLI transport boundary', () => {
     expect(existsSync(value.database_path)).toBe(false);
     await expect(
       runOrganizationAuthorityAdminCli(
-        ['overview', ...configArguments(value)],
+        ["overview", ...configArguments(value)],
         io,
         successfulDependencies(client, { client_factory: factory }),
       ),
@@ -198,36 +201,36 @@ describe('organization administrator CLI transport boundary', () => {
     expect(existsSync(value.database_path)).toBe(false);
     expect(factory).toHaveBeenCalledOnce();
     expect(factory).toHaveBeenCalledWith({
-      base_url: 'http://127.0.0.1:39479',
+      base_url: "http://127.0.0.1:39479",
       admin_token: ADMIN_TOKEN,
       trusted_proxy_token: PROXY_TOKEN,
       client_identity: expect.stringMatching(/^cid_[A-Za-z0-9_-]{43}$/),
     });
-    expect(JSON.parse(io.stdout_values.join(''))).toEqual({
-      operation: 'overview',
+    expect(JSON.parse(io.stdout_values.join(""))).toEqual({
+      operation: "overview",
     });
     expect(io.stderr_values).toEqual([]);
-    expect(io.stdout_values.join('')).not.toContain(ADMIN_TOKEN);
-    expect(io.stdout_values.join('')).not.toContain(PROXY_TOKEN);
+    expect(io.stdout_values.join("")).not.toContain(ADMIN_TOKEN);
+    expect(io.stdout_values.join("")).not.toContain(PROXY_TOKEN);
   });
 
   it.each([
-    { name: 'stopped authority', ok: true, running: false, healthy: false },
-    { name: 'unproven listener', ok: false, running: true, healthy: false },
+    { name: "stopped authority", ok: true, running: false, healthy: false },
+    { name: "unproven listener", ok: false, running: true, healthy: false },
   ])(
-    'refuses a $name before constructing a credential-bearing client',
+    "refuses a $name before constructing a credential-bearing client",
     async ({ ok, running, healthy }) => {
       const value = fixture();
       const factory = vi.fn(() => fakeClient());
       await expect(
         runOrganizationAuthorityAdminCli(
-          ['overview', ...configArguments(value)],
+          ["overview", ...configArguments(value)],
           capturedIo(),
           {
             client_factory: factory,
             preflight: async (configPath) => ({
               schema_version: 1,
-              kind: 'echo-organization-authority-status',
+              kind: "echo-organization-authority-status",
               ok,
               initialized: true,
               running,
@@ -236,54 +239,54 @@ describe('organization administrator CLI transport boundary', () => {
               state_dir: null,
               authority_id: IDS.authority,
               organization_id: IDS.organization,
-              listener: 'http://127.0.0.1:39479',
+              listener: "http://127.0.0.1:39479",
               checks: [],
             }),
           },
         ),
-      ).rejects.toThrow('must prove that it is running and healthy');
+      ).rejects.toThrow("must prove that it is running and healthy");
       expect(factory).not.toHaveBeenCalled();
     },
   );
 
-  it('dispatches each bounded list over the admin client with one canonical page request', async () => {
+  it("dispatches each bounded list over the admin client with one canonical page request", async () => {
     const value = fixture();
-    const cursor = Buffer.from('next page', 'utf8').toString('base64url');
+    const cursor = Buffer.from("next page", "utf8").toString("base64url");
     const calls: Array<{ command: string; page: unknown }> = [];
     const client = fakeClient({
       listMemberships: async (page) => {
-        calls.push({ command: 'memberships', page });
+        calls.push({ command: "memberships", page });
         return { items: [], next_cursor: null };
       },
       listInstallations: async (page) => {
-        calls.push({ command: 'installations', page });
+        calls.push({ command: "installations", page });
         return { items: [], next_cursor: null };
       },
       listEnrollmentGrants: async (page) => {
-        calls.push({ command: 'invitations', page });
+        calls.push({ command: "invitations", page });
         return { items: [], next_cursor: null };
       },
       listAudit: async (page) => {
-        calls.push({ command: 'audit', page });
+        calls.push({ command: "audit", page });
         return { items: [], next_cursor: null };
       },
     });
 
     for (const command of [
-      'memberships',
-      'installations',
-      'invitations',
-      'audit',
+      "memberships",
+      "installations",
+      "invitations",
+      "audit",
     ]) {
       await runOrganizationAuthorityAdminCli(
         [
           command,
-          'list',
+          "list",
           ...configArguments(value),
-          '--cursor',
+          "--cursor",
           cursor,
-          '--limit',
-          '25',
+          "--limit",
+          "25",
         ],
         capturedIo(),
         successfulDependencies(client),
@@ -291,14 +294,14 @@ describe('organization administrator CLI transport boundary', () => {
     }
 
     expect(calls).toEqual([
-      { command: 'memberships', page: { cursor, limit: 25 } },
-      { command: 'installations', page: { cursor, limit: 25 } },
-      { command: 'invitations', page: { cursor, limit: 25 } },
-      { command: 'audit', page: { cursor, limit: 25 } },
+      { command: "memberships", page: { cursor, limit: 25 } },
+      { command: "installations", page: { cursor, limit: 25 } },
+      { command: "invitations", page: { cursor, limit: 25 } },
+      { command: "audit", page: { cursor, limit: 25 } },
     ]);
   });
 
-  it('validates and dispatches membership creation and both revocations', async () => {
+  it("validates and dispatches membership creation and both revocations", async () => {
     const value = fixture();
     const provisioned: ProvisionOrganizationMembershipRequestV1[] = [];
     const membershipRevocations: Array<{
@@ -312,15 +315,15 @@ describe('organization administrator CLI transport boundary', () => {
     const client = fakeClient({
       provisionMembership: async (request) => {
         provisioned.push(request);
-        return { operation: 'member-create' } as never;
+        return { operation: "member-create" } as never;
       },
       revokeMembership: async (id, request) => {
         membershipRevocations.push({ id, request });
-        return { operation: 'member-revoke' } as never;
+        return { operation: "member-revoke" } as never;
       },
       revokeInstallation: async (id, request) => {
         installationRevocations.push({ id, request });
-        return { operation: 'installation-revoke' } as never;
+        return { operation: "installation-revoke" } as never;
       },
     });
     const dependencies = successfulDependencies(client, {
@@ -329,27 +332,27 @@ describe('organization administrator CLI transport boundary', () => {
 
     await runOrganizationAuthorityAdminCli(
       [
-        'member',
-        'create',
+        "member",
+        "create",
         ...configArguments(value),
-        '--display-name',
-        'Ada Lovelace',
-        '--membership-type',
-        'employee',
+        "--display-name",
+        "Ada Lovelace",
+        "--membership-type",
+        "employee",
       ],
       capturedIo(),
       dependencies,
     );
     await runOrganizationAuthorityAdminCli(
       [
-        'member',
-        'create',
+        "member",
+        "create",
         ...configArguments(value),
-        '--display-name',
-        'Grace Hopper',
-        '--membership-type',
-        'owner',
-        '--command-id',
+        "--display-name",
+        "Grace Hopper",
+        "--membership-type",
+        "owner",
+        "--command-id",
         IDS.command,
       ],
       capturedIo(),
@@ -357,26 +360,26 @@ describe('organization administrator CLI transport boundary', () => {
     );
     await runOrganizationAuthorityAdminCli(
       [
-        'member',
-        'revoke',
+        "member",
+        "revoke",
         ...configArguments(value),
-        '--membership-id',
+        "--membership-id",
         IDS.membership,
-        '--reason',
-        'Employment ended',
+        "--reason",
+        "Employment ended",
       ],
       capturedIo(),
       dependencies,
     );
     await runOrganizationAuthorityAdminCli(
       [
-        'installation',
-        'revoke',
+        "installation",
+        "revoke",
         ...configArguments(value),
-        '--installation-id',
+        "--installation-id",
         IDS.installation,
-        '--reason',
-        'Device retired',
+        "--reason",
+        "Device retired",
       ],
       capturedIo(),
       dependencies,
@@ -385,30 +388,30 @@ describe('organization administrator CLI transport boundary', () => {
     expect(provisioned).toEqual([
       {
         command_id: `adm_${FIXED_UUID}`,
-        display_name: 'Ada Lovelace',
-        membership_type: 'employee',
+        display_name: "Ada Lovelace",
+        membership_type: "employee",
       },
       {
         command_id: IDS.command,
-        display_name: 'Grace Hopper',
-        membership_type: 'owner',
+        display_name: "Grace Hopper",
+        membership_type: "owner",
       },
     ]);
     expect(membershipRevocations).toEqual([
       {
         id: IDS.membership,
-        request: { reason: 'Employment ended' },
+        request: { reason: "Employment ended" },
       },
     ]);
     expect(installationRevocations).toEqual([
       {
         id: IDS.installation,
-        request: { reason: 'Device retired' },
+        request: { reason: "Device retired" },
       },
     ]);
   });
 
-  it('sends the operator access repair and prints the changed head plainly', async () => {
+  it("sends the operator access repair and prints the changed head plainly", async () => {
     const value = fixture();
     const calls: Array<{
       id: string;
@@ -419,9 +422,9 @@ describe('organization administrator CLI transport boundary', () => {
       changed: true,
       local_access_state_sequence: 254,
       access_state_sequence: 257,
-      valid_until: '2026-08-09T12:05:00.000Z',
+      valid_until: "2026-08-09T12:05:00.000Z",
     };
-    const reason = 'Missed issued heads through lost lease responses';
+    const reason = "Missed issued heads through lost lease responses";
     const client = fakeClient({
       recoverInstallationAccess: async (id, request) => {
         calls.push({ id, request });
@@ -433,14 +436,14 @@ describe('organization administrator CLI transport boundary', () => {
     await expect(
       runOrganizationAuthorityAdminCli(
         [
-          'installation',
-          'access-recover',
+          "installation",
+          "access-recover",
           ...configArguments(value),
-          '--installation-id',
+          "--installation-id",
           IDS.installation,
-          '--local-access-sequence',
-          '254',
-          '--reason',
+          "--local-access-sequence",
+          "254",
+          "--reason",
           reason,
         ],
         io,
@@ -454,11 +457,11 @@ describe('organization administrator CLI transport boundary', () => {
         request: { local_access_state_sequence: 254, reason },
       },
     ]);
-    expect(JSON.parse(io.stdout_values.join(''))).toEqual(recovered);
+    expect(JSON.parse(io.stdout_values.join(""))).toEqual(recovered);
     expect(io.stderr_values).toEqual([]);
   });
 
-  it('activates Slack approval from existing employee link IDs only', async () => {
+  it("activates Slack approval from existing employee link IDs only", async () => {
     const value = fixture();
     const requests: unknown[] = [];
     const result = {
@@ -468,7 +471,7 @@ describe('organization administrator CLI transport boundary', () => {
       reject_permission_grant_id: IDS.rejectGrant,
       membership_id: IDS.targetMembership,
       installation_id: IDS.installation,
-      activated_at: '2026-07-22T00:03:00.000Z',
+      activated_at: "2026-07-22T00:03:00.000Z",
       permission_grants_created: 2 as const,
     };
     const client = fakeClient({
@@ -482,19 +485,19 @@ describe('organization administrator CLI transport boundary', () => {
     await expect(
       runOrganizationAuthorityAdminCli(
         [
-          'slack',
-          'approval',
-          'activate',
+          "slack",
+          "approval",
+          "activate",
           ...configArguments(value),
-          '--administrator-membership-id',
+          "--administrator-membership-id",
           IDS.membership,
-          '--target-membership-id',
+          "--target-membership-id",
           IDS.targetMembership,
-          '--installation-id',
+          "--installation-id",
           IDS.installation,
-          '--identity-link-id',
+          "--identity-link-id",
           IDS.identityLink,
-          '--adapter-binding-id',
+          "--adapter-binding-id",
           IDS.adapterBinding,
         ],
         io,
@@ -512,15 +515,147 @@ describe('organization administrator CLI transport boundary', () => {
         adapter_binding_id: IDS.adapterBinding,
       },
     ]);
-    expect(JSON.parse(io.stdout_values.join(''))).toEqual(result);
-    expect(io.stdout_values.join('')).not.toContain('xoxb-');
+    expect(JSON.parse(io.stdout_values.join(""))).toEqual(result);
+    expect(io.stdout_values.join("")).not.toContain("xoxb-");
   });
 });
 
-describe('organization invitation output safety and retry', () => {
-  it('persists a pending 0600 secret before transport and reuses it after uncertainty', async () => {
+describe("organization invitation output safety and retry", () => {
+  it("issues a Person bootstrap grant into a minimal private artifact", async () => {
     const value = fixture();
-    const outputPath = join(value.invitation_directory, 'ada.invitation.json');
+    const outputPath = join(value.invitation_directory, "ada.person.json");
+    const issued: IssuedPersonLoginGrant = {
+      organization_id: IDS.organization,
+      principal_id: IDS.principal,
+      membership_id: IDS.membership,
+      membership_type: "owner",
+      login_grant: "G".repeat(43),
+      expected_issuer: "https://identity.example.test/",
+      expected_email_sha256: PIN,
+      issued_at: "2026-08-21T00:00:00.000Z",
+      expires_at: "2026-08-21T00:15:00.000Z",
+    };
+    const issuePersonLoginGrant = vi.fn(async () => {
+      expect(existsSync(outputPath)).toBe(true);
+      expect(lstatSync(outputPath).mode & 0o777).toBe(0o600);
+      return issued;
+    });
+    const io = capturedIo();
+
+    await expect(
+      runOrganizationAuthorityAdminCli(
+        [
+          "person",
+          "invite",
+          ...configArguments(value),
+          "--membership-id",
+          IDS.membership,
+          "--expected-email",
+          "ada@example.com",
+          "--authority-url",
+          AUTHORITY_URL,
+          "--out",
+          outputPath,
+        ],
+        io,
+        successfulDependencies(fakeClient({ issuePersonLoginGrant })),
+      ),
+    ).resolves.toBe(0);
+
+    expect(issuePersonLoginGrant).toHaveBeenCalledWith(
+      IDS.membership,
+      "ada@example.com",
+    );
+    expect(lstatSync(outputPath).mode & 0o777).toBe(0o600);
+    expect(JSON.parse(readFileSync(outputPath, "utf8"))).toEqual({
+      schema_version: 1,
+      kind: "echo-person-onboarding-invitation",
+      authority_url: AUTHORITY_URL,
+      login_grant: issued.login_grant,
+      expires_at: issued.expires_at,
+    });
+    const output = io.stdout_values.join("");
+    expect(output).not.toContain(issued.login_grant);
+    expect(output).not.toContain("enrollment");
+    expect(output).not.toContain("installation");
+    expect(output).not.toContain("lease");
+  });
+
+  it("removes a reserved Person artifact when issuance fails or returns another membership", async () => {
+    const value = fixture();
+    const failingPath = join(value.invitation_directory, "failing.person.json");
+    const failingClient = fakeClient({
+      issuePersonLoginGrant: async () => {
+        expect(existsSync(failingPath)).toBe(true);
+        throw new Error("login grant issuance failed");
+      },
+    });
+    const failedInvocation = [
+      "person",
+      "invite",
+      ...configArguments(value),
+      "--membership-id",
+      IDS.membership,
+      "--expected-email",
+      "ada@example.com",
+      "--authority-url",
+      AUTHORITY_URL,
+      "--out",
+      failingPath,
+    ];
+    await expect(
+      runOrganizationAuthorityAdminCli(
+        failedInvocation,
+        capturedIo(),
+        successfulDependencies(failingClient),
+      ),
+    ).rejects.toThrow("login grant issuance failed");
+    expect(existsSync(failingPath)).toBe(false);
+
+    const mismatchedPath = join(
+      value.invitation_directory,
+      "wrong.person.json",
+    );
+    const mismatchedClient = fakeClient({
+      issuePersonLoginGrant: async () => ({
+        organization_id: IDS.organization,
+        principal_id: IDS.principal,
+        membership_id: IDS.targetMembership,
+        membership_type: "owner",
+        login_grant: "G".repeat(43),
+        expected_issuer: "https://identity.example.test/",
+        expected_email_sha256: PIN,
+        issued_at: "2026-08-21T00:00:00.000Z",
+        expires_at: "2026-08-21T00:15:00.000Z",
+      }),
+    });
+    const mismatchIo = capturedIo();
+    await expect(
+      runOrganizationAuthorityAdminCli(
+        [
+          "person",
+          "invite",
+          ...configArguments(value),
+          "--membership-id",
+          IDS.membership,
+          "--expected-email",
+          "ada@example.com",
+          "--authority-url",
+          AUTHORITY_URL,
+          "--out",
+          mismatchedPath,
+        ],
+        mismatchIo,
+        successfulDependencies(mismatchedClient),
+      ),
+    ).rejects.toThrow("another membership");
+    expect(existsSync(mismatchedPath)).toBe(false);
+    expect(mismatchIo.stdout_values).toEqual([]);
+  });
+
+  it("persists a pending 0600 secret before transport and reuses it after uncertainty", async () => {
+    const value = fixture();
+    const outputPath = join(value.invitation_directory, "ada.invitation.json");
     const calls: IssueOrganizationEnrollmentGrantRequestV1[] = [];
     let attempt = 0;
     const client = fakeClient({
@@ -529,7 +664,7 @@ describe('organization invitation output safety and retry', () => {
         calls.push(request);
         attempt += 1;
         if (attempt === 1) {
-          throw new Error('organization administrator request failed');
+          throw new Error("organization administrator request failed");
         }
         return {
           authority_id: IDS.authority,
@@ -538,23 +673,23 @@ describe('organization invitation output safety and retry', () => {
           principal_id: IDS.principal,
           membership_id: IDS.membership,
           enrollment_grant_sha256: request.enrollment_grant_sha256,
-          issued_at: '2026-07-22T00:00:00.000Z',
-          expires_at: '2026-07-22T01:00:00.000Z',
+          issued_at: "2026-07-22T00:00:00.000Z",
+          expires_at: "2026-07-22T01:00:00.000Z",
         } satisfies IssuedOrganizationEnrollmentGrantV1;
       },
     });
     const firstIo = capturedIo();
     const invocation = [
-      'invitation',
-      'create',
+      "invitation",
+      "create",
       ...configArguments(value),
-      '--authority-url',
+      "--authority-url",
       AUTHORITY_URL,
-      '--membership-id',
+      "--membership-id",
       IDS.membership,
-      '--lifetime-seconds',
-      '3600',
-      '--out',
+      "--lifetime-seconds",
+      "3600",
+      "--out",
       outputPath,
     ];
 
@@ -567,16 +702,16 @@ describe('organization invitation output safety and retry', () => {
           random_uuid: () => FIXED_UUID,
         }),
       ),
-    ).rejects.toThrow('organization administrator request failed');
+    ).rejects.toThrow("organization administrator request failed");
     expect(firstIo.stdout_values).toEqual([]);
     expect(firstIo.stderr_values).toEqual([]);
     expect(lstatSync(outputPath).mode & 0o777).toBe(0o600);
-    const pendingRaw = readFileSync(outputPath, 'utf8');
+    const pendingRaw = readFileSync(outputPath, "utf8");
     const pending = JSON.parse(pendingRaw) as Record<string, unknown>;
-    expect(pending.status).toBe('pending_registration');
+    expect(pending.status).toBe("pending_registration");
     expect(pending.command_id).toBe(`adm_${FIXED_UUID}`);
     expect(pending.enrollment_grant_base64url).toBe(
-      Buffer.alloc(32, 9).toString('base64url'),
+      Buffer.alloc(32, 9).toString("base64url"),
     );
 
     const secondIo = capturedIo();
@@ -586,10 +721,10 @@ describe('organization invitation output safety and retry', () => {
         secondIo,
         successfulDependencies(client, {
           random_bytes: () => {
-            throw new Error('retry generated a replacement secret');
+            throw new Error("retry generated a replacement secret");
           },
           random_uuid: () => {
-            throw new Error('retry generated a replacement command');
+            throw new Error("retry generated a replacement command");
           },
         }),
       ),
@@ -597,13 +732,13 @@ describe('organization invitation output safety and retry', () => {
 
     expect(calls).toHaveLength(2);
     expect(calls[1]).toEqual(calls[0]);
-    const issuedRaw = readFileSync(outputPath, 'utf8');
+    const issuedRaw = readFileSync(outputPath, "utf8");
     const envelope = JSON.parse(issuedRaw) as Record<string, unknown>;
-    expect(envelope.status).toBe('issued');
+    expect(envelope.status).toBe("issued");
     expect(envelope.enrollment_grant_base64url).toBe(
       pending.enrollment_grant_base64url,
     );
-    const safeOutput = JSON.parse(secondIo.stdout_values.join('')) as Record<
+    const safeOutput = JSON.parse(secondIo.stdout_values.join("")) as Record<
       string,
       unknown
     >;
@@ -611,66 +746,66 @@ describe('organization invitation output safety and retry', () => {
       invitation_path: outputPath,
       authority_url: AUTHORITY_URL,
       configured_authority_pin_sha256: PIN,
-      authority_pin_verification: 'verify_independently_before_enrollment',
+      authority_pin_verification: "verify_independently_before_enrollment",
     });
-    expect(secondIo.stdout_values.join('')).not.toContain(
+    expect(secondIo.stdout_values.join("")).not.toContain(
       String(pending.enrollment_grant_base64url),
     );
-    expect(secondIo.stdout_values.join('')).not.toContain(ADMIN_TOKEN);
-    expect(secondIo.stdout_values.join('')).not.toContain(PROXY_TOKEN);
+    expect(secondIo.stdout_values.join("")).not.toContain(ADMIN_TOKEN);
+    expect(secondIo.stdout_values.join("")).not.toContain(PROXY_TOKEN);
   });
 });
 
-describe('organization administrator CLI argument bounds', () => {
+describe("organization administrator CLI argument bounds", () => {
   it.each([
     {
-      name: 'relative config',
-      arguments_: ['overview', '--config', 'authority.json'],
+      name: "relative config",
+      arguments_: ["overview", "--config", "authority.json"],
     },
     {
-      name: 'oversized page',
-      arguments_: ['memberships', 'list', '--limit', '101'],
+      name: "oversized page",
+      arguments_: ["memberships", "list", "--limit", "101"],
     },
     {
-      name: 'noncanonical membership',
+      name: "noncanonical membership",
       arguments_: [
-        'member',
-        'revoke',
-        '--membership-id',
-        'mem_not-a-uuid',
-        '--reason',
-        'retired',
+        "member",
+        "revoke",
+        "--membership-id",
+        "mem_not-a-uuid",
+        "--reason",
+        "retired",
       ],
     },
     {
-      name: 'oversized display name',
+      name: "oversized display name",
       arguments_: [
-        'member',
-        'create',
-        '--display-name',
-        'a'.repeat(201),
-        '--membership-type',
-        'employee',
+        "member",
+        "create",
+        "--display-name",
+        "a".repeat(201),
+        "--membership-type",
+        "employee",
       ],
     },
     {
-      name: 'oversized lifetime',
+      name: "oversized lifetime",
       arguments_: [
-        'invitation',
-        'create',
-        '--authority-url',
+        "invitation",
+        "create",
+        "--authority-url",
         AUTHORITY_URL,
-        '--membership-id',
+        "--membership-id",
         IDS.membership,
-        '--lifetime-seconds',
+        "--lifetime-seconds",
         String(7 * 24 * 60 * 60 + 1),
-        '--out',
-        '/tmp/invitation.json',
+        "--out",
+        "/tmp/invitation.json",
       ],
     },
-  ])('rejects $name', async ({ arguments_ }) => {
+  ])("rejects $name", async ({ arguments_ }) => {
     const value = fixture();
-    const withConfig = arguments_.includes('--config')
+    const withConfig = arguments_.includes("--config")
       ? arguments_
       : [...arguments_, ...configArguments(value)];
     const client = fakeClient();
@@ -683,32 +818,32 @@ describe('organization administrator CLI argument bounds', () => {
     ).rejects.toThrow();
   });
 
-  it('requires invitation output beneath a canonical current-user 0700 parent', async () => {
+  it("requires invitation output beneath a canonical current-user 0700 parent", async () => {
     const value = fixture();
-    const publicDirectory = join(value.root, 'public');
+    const publicDirectory = join(value.root, "public");
     mkdirSync(publicDirectory, { mode: 0o755 });
     chmodSync(publicDirectory, 0o755);
-    const outputPath = join(publicDirectory, 'invitation.json');
+    const outputPath = join(publicDirectory, "invitation.json");
 
     await expect(
       runOrganizationAuthorityAdminCli(
         [
-          'invitation',
-          'create',
+          "invitation",
+          "create",
           ...configArguments(value),
-          '--authority-url',
+          "--authority-url",
           AUTHORITY_URL,
-          '--membership-id',
+          "--membership-id",
           IDS.membership,
-          '--lifetime-seconds',
-          '3600',
-          '--out',
+          "--lifetime-seconds",
+          "3600",
+          "--out",
           outputPath,
         ],
         capturedIo(),
         successfulDependencies(fakeClient()),
       ),
-    ).rejects.toThrow('0700 canonical directory');
+    ).rejects.toThrow("0700 canonical directory");
     expect(existsSync(outputPath)).toBe(false);
   });
 });

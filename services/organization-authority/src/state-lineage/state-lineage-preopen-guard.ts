@@ -1,9 +1,9 @@
-import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs';
-import type { Stats } from 'node:fs';
-import { isAbsolute, join } from 'node:path';
-import Database from 'better-sqlite3';
-import { canonicalJson } from '@echo-brain/federation-protocol';
-import type { JsonValue, Sha256Digest } from '@echo-brain/federation-protocol';
+import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
+import type { Stats } from "node:fs";
+import { isAbsolute, join } from "node:path";
+import Database from "better-sqlite3";
+import { canonicalJson } from "@echo-brain/federation-protocol";
+import type { JsonValue, Sha256Digest } from "@echo-brain/federation-protocol";
 import {
   STATE_LINEAGE_MANIFEST_TABLE,
   STATE_LINEAGE_RETRIEVAL_DIRECTORY,
@@ -12,12 +12,12 @@ import {
   stateLineageDatabaseSlotsV1,
   validateStateLineageRootManifestV1,
   validateStoredStateLineageDatabaseManifestV1,
-} from './state-lineage-manifest-v1.js';
+} from "./state-lineage-manifest-v1.js";
 import type {
   StateLineageDatabaseManifestV1,
   StateLineageRoleV1,
   StateLineageRootManifestV1,
-} from './state-lineage-manifest-v1.js';
+} from "./state-lineage-manifest-v1.js";
 
 /**
  * Read-only pre-open verifier for one new-lineage state directory.
@@ -40,26 +40,26 @@ import type {
  */
 
 export type StateLineageRefusalFamilyV1 =
-  | 'invalid_input'
-  | 'missing_manifest'
-  | 'missing_database'
-  | 'legacy_state'
-  | 'duplicated_manifest'
-  | 'wrong_role'
-  | 'wrong_binding'
-  | 'mixed_binding'
-  | 'wrong_application_id'
-  | 'schema_version_mismatch'
-  | 'artifact_state_mismatch'
-  | 'partial_publish'
-  | 'dangling_generation_pointer';
+  | "invalid_input"
+  | "missing_manifest"
+  | "missing_database"
+  | "legacy_state"
+  | "duplicated_manifest"
+  | "wrong_role"
+  | "wrong_binding"
+  | "mixed_binding"
+  | "wrong_application_id"
+  | "schema_version_mismatch"
+  | "artifact_state_mismatch"
+  | "partial_publish"
+  | "dangling_generation_pointer";
 
 export class StateLineagePreopenRefusal extends Error {
   readonly family: StateLineageRefusalFamilyV1;
 
   constructor(family: StateLineageRefusalFamilyV1, message: string) {
     super(message);
-    this.name = 'StateLineagePreopenRefusal';
+    this.name = "StateLineagePreopenRefusal";
     this.family = family;
   }
 }
@@ -102,17 +102,19 @@ export interface StateLineagePreopenResultV1 {
 }
 
 const ACTIVE_GENERATION_TABLE =
-  'authority_readable_search_active_generation' as const;
-const GENERATIONS_DIRECTORY = 'generations' as const;
-const GENERATION_MANIFEST_FILENAME = 'manifest.json' as const;
-const SEGMENTS_DIRECTORY = 'segments' as const;
-const STATE_ROOT_DEBRIS = /^\.(?:installing|rebuilding)-/;
+  "authority_readable_search_active_generation" as const;
+const GENERATIONS_DIRECTORY = "generations" as const;
+const GENERATION_MANIFEST_FILENAME = "manifest.json" as const;
+const SEGMENTS_DIRECTORY = "segments" as const;
+// Historical and current publishers use both a bare operation prefix
+// (`.installing-...`) and a prepared-file suffix
+// (`.integrations.sqlite.installing-...`). Accept neither as state: either
+// name signals an interrupted publish that must refuse before opening.
+const STATE_ROOT_DEBRIS =
+  /^\.(?:(?:installing|rebuilding)-|.+\.(?:installing|rebuilding)-)/;
 const GENERATIONS_DEBRIS = /^\.staging-/;
 
-function refuse(
-  family: StateLineageRefusalFamilyV1,
-  message: string,
-): never {
+function refuse(family: StateLineageRefusalFamilyV1, message: string): never {
   throw new StateLineagePreopenRefusal(family, message);
 }
 
@@ -131,35 +133,34 @@ function validatedExpectation(
   const binding = expectation.expected_binding as unknown;
   if (
     binding === null ||
-    typeof binding !== 'object' ||
-    ['authority_id', 'organization_id', 'state_lineage_id'].some((key) => {
+    typeof binding !== "object" ||
+    ["authority_id", "organization_id", "state_lineage_id"].some((key) => {
       const value = (binding as Record<string, unknown>)[key];
-      return typeof value !== 'string' || value.length === 0;
+      return typeof value !== "string" || value.length === 0;
     })
   ) {
     refuse(
-      'invalid_input',
-      'expected_binding must name authority_id, organization_id, and state_lineage_id',
+      "invalid_input",
+      "expected_binding must name authority_id, organization_id, and state_lineage_id",
     );
   }
   const schemas = expectation.expected_schemas as unknown;
-  if (schemas === null || typeof schemas !== 'object') {
-    refuse('invalid_input', 'expected_schemas must cover every role');
+  if (schemas === null || typeof schemas !== "object") {
+    refuse("invalid_input", "expected_schemas must cover every role");
   }
   for (const slot of stateLineageDatabaseSlotsV1()) {
     const entry = (schemas as Record<string, unknown>)[slot.role] as
-      | Record<string, unknown>
-      | undefined;
+      Record<string, unknown> | undefined;
     if (
       entry === null ||
-      typeof entry !== 'object' ||
+      typeof entry !== "object" ||
       !Number.isSafeInteger(entry.database_schema_version) ||
       (entry.database_schema_version as number) < 0 ||
-      typeof entry.schema_sha256 !== 'string' ||
+      typeof entry.schema_sha256 !== "string" ||
       !DIGEST.test(entry.schema_sha256)
     ) {
       refuse(
-        'invalid_input',
+        "invalid_input",
         `expected_schemas must give the ${slot.role} role an exact schema version and digest`,
       );
     }
@@ -171,7 +172,7 @@ function statEntry(path: string, label: string): Stats {
   try {
     return statSync(path);
   } catch {
-    refuse('partial_publish', `${label} is unreadable publish debris`);
+    refuse("partial_publish", `${label} is unreadable publish debris`);
   }
 }
 
@@ -189,17 +190,17 @@ function inspectDatabase(
     });
   } catch {
     refuse(
-      'missing_database',
+      "missing_database",
       `${label} could not be opened read-only as a SQLite database`,
     );
   }
   try {
-    database.pragma('query_only = ON');
-    database.pragma('trusted_schema = OFF');
-    const applicationId = database.pragma('application_id', {
+    database.pragma("query_only = ON");
+    database.pragma("trusted_schema = OFF");
+    const applicationId = database.pragma("application_id", {
       simple: true,
     }) as number;
-    const userVersion = database.pragma('user_version', {
+    const userVersion = database.pragma("user_version", {
       simple: true,
     }) as number;
     const tables = new Set(
@@ -214,7 +215,7 @@ function inspectDatabase(
     );
     if (!tables.has(STATE_LINEAGE_MANIFEST_TABLE)) {
       refuse(
-        'legacy_state',
+        "legacy_state",
         `${label} has no ${STATE_LINEAGE_MANIFEST_TABLE} table and is not new-lineage state; no automatic upgrade exists`,
       );
     }
@@ -225,11 +226,11 @@ function inspectDatabase(
       )
       .all() as Array<Record<string, unknown>>;
     if (rows.length === 0) {
-      refuse('missing_manifest', `${label} lineage manifest row is missing`);
+      refuse("missing_manifest", `${label} lineage manifest row is missing`);
     }
     if (rows.length > 1) {
       refuse(
-        'duplicated_manifest',
+        "duplicated_manifest",
         `${label} holds ${String(rows.length)} lineage manifest rows`,
       );
     }
@@ -242,22 +243,22 @@ function inspectDatabase(
       });
     } catch (error) {
       refuse(
-        'missing_manifest',
+        "missing_manifest",
         `${label} lineage manifest row is invalid: ${
           error instanceof Error ? error.message : String(error)
         }`,
       );
     }
     let pointerGenerationId: string | null = null;
-    if (role === 'authority' && tables.has(ACTIVE_GENERATION_TABLE)) {
+    if (role === "authority" && tables.has(ACTIVE_GENERATION_TABLE)) {
       const pointer = database
         .prepare(`SELECT generation_id FROM ${ACTIVE_GENERATION_TABLE}`)
         .all() as Array<{ generation_id: unknown }>;
       if (pointer.length > 0) {
         const generationId = pointer[0]?.generation_id;
-        if (typeof generationId !== 'string' || generationId.length === 0) {
+        if (typeof generationId !== "string" || generationId.length === 0) {
           refuse(
-            'dangling_generation_pointer',
+            "dangling_generation_pointer",
             `${label} active-generation pointer names no generation`,
           );
         }
@@ -273,7 +274,7 @@ function inspectDatabase(
   } catch (error) {
     if (error instanceof StateLineagePreopenRefusal) throw error;
     refuse(
-      'missing_database',
+      "missing_database",
       `${label} could not be read as a SQLite database`,
     );
   } finally {
@@ -293,7 +294,7 @@ function verifyDatabase(
   // duplicated-manifest family is the duplicated stored row, refused above.
   if (manifest.role !== role) {
     refuse(
-      'wrong_role',
+      "wrong_role",
       `${label} carries a ${manifest.role} manifest where ${role} is required`,
     );
   }
@@ -301,7 +302,7 @@ function verifyDatabase(
     inspected.application_id !== STATE_LINEAGE_ROLE_APPLICATION_IDS_V1[role]
   ) {
     refuse(
-      'wrong_application_id',
+      "wrong_application_id",
       `${label} application_id ${String(inspected.application_id)} does not match the ${role} role`,
     );
   }
@@ -311,13 +312,13 @@ function verifyDatabase(
     manifest.database_schema_version !== expectedSchema.database_schema_version
   ) {
     refuse(
-      'schema_version_mismatch',
+      "schema_version_mismatch",
       `${label} schema version is not exactly ${String(expectedSchema.database_schema_version)}`,
     );
   }
   if (manifest.schema_sha256 !== expectedSchema.schema_sha256) {
     refuse(
-      'artifact_state_mismatch',
+      "artifact_state_mismatch",
       `${label} schema digest does not match the running artifact's ${role} schema`,
     );
   }
@@ -334,62 +335,60 @@ function checkCoherence(
   expected: StateLineageExpectedBindingV1,
 ): void {
   for (const dimension of [
-    'authority_id',
-    'organization_id',
-    'state_lineage_id',
+    "authority_id",
+    "organization_id",
+    "state_lineage_id",
   ] as const) {
     const values = new Set(bindings.map((binding) => binding[dimension]));
     if (values.size > 1) {
       refuse(
-        'mixed_binding',
+        "mixed_binding",
         `opened state disagrees with itself on ${dimension}`,
       );
     }
     const [value] = values;
     if (value !== expected[dimension]) {
       refuse(
-        'wrong_binding',
+        "wrong_binding",
         `opened state ${dimension} does not match the expected binding`,
       );
     }
   }
 }
 
-function readRootManifest(
-  stateDirectory: string,
-): StateLineageRootManifestV1 {
+function readRootManifest(stateDirectory: string): StateLineageRootManifestV1 {
   const rootPath = join(stateDirectory, STATE_LINEAGE_ROOT_MANIFEST_FILENAME);
   if (!existsSync(rootPath)) {
     refuse(
-      'missing_manifest',
+      "missing_manifest",
       `state directory has no ${STATE_LINEAGE_ROOT_MANIFEST_FILENAME}`,
     );
   }
   let raw: string;
   try {
-    raw = readFileSync(rootPath, 'utf8');
+    raw = readFileSync(rootPath, "utf8");
   } catch {
-    refuse('missing_manifest', 'root manifest could not be read');
+    refuse("missing_manifest", "root manifest could not be read");
   }
   let parsed: unknown;
   try {
     parsed = JSON.parse(raw) as unknown;
   } catch {
-    refuse('missing_manifest', 'root manifest is not JSON');
+    refuse("missing_manifest", "root manifest is not JSON");
   }
   let root;
   try {
     root = validateStateLineageRootManifestV1(parsed);
   } catch (error) {
     refuse(
-      'missing_manifest',
+      "missing_manifest",
       `root manifest is invalid: ${
         error instanceof Error ? error.message : String(error)
       }`,
     );
   }
   if (raw !== canonicalJson(root as unknown as JsonValue)) {
-    refuse('missing_manifest', 'root manifest is not canonical bytes');
+    refuse("missing_manifest", "root manifest is not canonical bytes");
   }
   return root;
 }
@@ -398,7 +397,7 @@ function scanStateRootDebris(stateDirectory: string): void {
   for (const entry of readdirSync(stateDirectory)) {
     if (STATE_ROOT_DEBRIS.test(entry)) {
       refuse(
-        'partial_publish',
+        "partial_publish",
         `state directory holds unfinished publish debris ${entry}`,
       );
     }
@@ -441,20 +440,21 @@ function scanRetrievalTree(
   const databases: VerifiedStateLineageDatabaseV1[] = [];
   let segmentCount = 0;
   const retrievalSlots = stateLineageDatabaseSlotsV1().filter(
-    (slot) => slot.location.kind === 'retrieval_segment_tree',
+    (slot) => slot.location.kind === "retrieval_segment_tree",
   );
   for (const entry of readdirSync(generationsRoot)) {
     if (GENERATIONS_DEBRIS.test(entry)) {
       refuse(
-        'partial_publish',
+        "partial_publish",
         `retrieval generations hold unfinished publish debris ${entry}`,
       );
     }
     const generationPath = join(generationsRoot, entry);
-    if (!statEntry(generationPath, `generation entry ${entry}`).isDirectory()) continue;
+    if (!statEntry(generationPath, `generation entry ${entry}`).isDirectory())
+      continue;
     if (!existsSync(join(generationPath, GENERATION_MANIFEST_FILENAME))) {
       refuse(
-        'partial_publish',
+        "partial_publish",
         `generation ${entry} has no ${GENERATION_MANIFEST_FILENAME}`,
       );
     }
@@ -463,14 +463,15 @@ function scanRetrievalTree(
     if (!existsSync(segmentsRoot)) continue;
     for (const segment of readdirSync(segmentsRoot)) {
       const segmentPath = join(segmentsRoot, segment);
-      if (!statEntry(segmentPath, `segment entry ${segment}`).isDirectory()) continue;
+      if (!statEntry(segmentPath, `segment entry ${segment}`).isDirectory())
+        continue;
       segmentCount += 1;
       for (const slot of retrievalSlots) {
-        if (slot.location.kind !== 'retrieval_segment_tree') continue;
+        if (slot.location.kind !== "retrieval_segment_tree") continue;
         const label = `${slot.role} database for generation ${entry} segment ${segment}`;
         const planePath = join(segmentPath, slot.location.filename);
         if (!existsSync(planePath)) {
-          refuse('missing_database', `${label} is missing`);
+          refuse("missing_database", `${label} is missing`);
         }
         const inspected = inspectDatabase(planePath, slot.role, label);
         const manifest = verifyDatabase(
@@ -512,15 +513,18 @@ export function verifyStateLineageBeforeOpen(
 ): StateLineagePreopenResultV1 {
   const stateDirectory = expectation.state_directory;
   if (
-    typeof stateDirectory !== 'string' ||
+    typeof stateDirectory !== "string" ||
     stateDirectory.length === 0 ||
     !isAbsolute(stateDirectory)
   ) {
-    refuse('invalid_input', 'state_directory must be an explicit absolute path');
+    refuse(
+      "invalid_input",
+      "state_directory must be an explicit absolute path",
+    );
   }
   validatedExpectation(expectation);
   if (!existsSync(stateDirectory)) {
-    refuse('missing_database', 'state directory does not exist');
+    refuse("missing_database", "state directory does not exist");
   }
   scanStateRootDebris(stateDirectory);
   const root = readRootManifest(stateDirectory);
@@ -531,7 +535,7 @@ export function verifyStateLineageBeforeOpen(
     state_lineage_id: string;
   }> = [
     {
-      label: 'root manifest',
+      label: "root manifest",
       authority_id: root.authority_id,
       organization_id: root.organization_id,
       state_lineage_id: root.state_lineage_id,
@@ -540,11 +544,11 @@ export function verifyStateLineageBeforeOpen(
   const databases: VerifiedStateLineageDatabaseV1[] = [];
   let pointerGenerationId: string | null = null;
   for (const slot of root.databases) {
-    if (slot.location.kind !== 'state_file') continue;
+    if (slot.location.kind !== "state_file") continue;
     const label = `${slot.role} database ${slot.location.filename}`;
     const databasePath = join(stateDirectory, slot.location.filename);
     if (!existsSync(databasePath)) {
-      refuse('missing_database', `${label} is missing`);
+      refuse("missing_database", `${label} is missing`);
     }
     const inspected = inspectDatabase(databasePath, slot.role, label);
     const manifest = verifyDatabase(inspected, slot.role, expectation, label);
@@ -554,8 +558,10 @@ export function verifyStateLineageBeforeOpen(
       organization_id: manifest.organization_id,
       state_lineage_id: manifest.state_lineage_id,
     });
-    databases.push(Object.freeze({ role: slot.role, path: databasePath, manifest }));
-    if (slot.role === 'authority') {
+    databases.push(
+      Object.freeze({ role: slot.role, path: databasePath, manifest }),
+    );
+    if (slot.role === "authority") {
       pointerGenerationId = inspected.pointer_generation_id;
     }
   }
@@ -566,7 +572,7 @@ export function verifyStateLineageBeforeOpen(
     !retrieval.generation_ids.has(pointerGenerationId)
   ) {
     refuse(
-      'dangling_generation_pointer',
+      "dangling_generation_pointer",
       `active-generation pointer names ${pointerGenerationId}, which is not a published generation directory`,
     );
   }

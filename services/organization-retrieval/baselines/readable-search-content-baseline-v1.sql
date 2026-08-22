@@ -14,15 +14,15 @@ CREATE TABLE retrieval_plane_metadata (
   organization_id TEXT NOT NULL,
   segment_id TEXT NOT NULL UNIQUE,
   segment_kind TEXT NOT NULL CHECK (segment_kind IN ('organization-member', 'reviewer')),
-  policy_id TEXT NOT NULL CHECK (policy_id IN ('organization-member-readable-v1', 'restricted-reviewer-v1')),
+  policy_id TEXT NOT NULL CHECK (policy_id IN ('organization-member-readable-person-v2', 'restricted-reviewer-person-v2')),
   policy_contract_sha256 TEXT NOT NULL,
   reviewer_principal_id TEXT,
   reviewer_membership_id TEXT,
   analyzer_contract_sha256 TEXT NOT NULL,
   finalized INTEGER NOT NULL DEFAULT 0 CHECK (finalized IN (0, 1)),
   CHECK (
-    (segment_kind = 'organization-member' AND policy_id = 'organization-member-readable-v1' AND reviewer_principal_id IS NULL AND reviewer_membership_id IS NULL) OR
-    (segment_kind = 'reviewer' AND policy_id = 'restricted-reviewer-v1' AND reviewer_principal_id IS NOT NULL AND reviewer_membership_id IS NOT NULL)
+    (segment_kind = 'organization-member' AND policy_id = 'organization-member-readable-person-v2' AND reviewer_principal_id IS NULL AND reviewer_membership_id IS NULL) OR
+    (segment_kind = 'reviewer' AND policy_id = 'restricted-reviewer-person-v2' AND reviewer_principal_id IS NOT NULL AND reviewer_membership_id IS NOT NULL)
   )
 ) STRICT;
 

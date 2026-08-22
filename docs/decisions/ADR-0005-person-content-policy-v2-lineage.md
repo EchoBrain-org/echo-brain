@@ -10,9 +10,10 @@ component_ids:
 created_at: 2026-08-20
 reviewed_at: 2026-08-20
 reviewed_ref: 3c5a26bcb06853c220a93e3a93c156ea89b0ae68
-status: accepted
+status: superseded
 supersedes: []
-superseded_by: []
+superseded_by:
+  - ADR-0004
 updates:
   - ADR-0002
 ---
@@ -101,3 +102,10 @@ Rollback before live cutover removes the private v2 candidate and its tests.
 After a new-lineage record exists, these bytes are immutable; a change requires
 a new policy version and ADR rather than editing this decision or relabeling
 stored data.
+
+## Lifecycle update
+
+Superseded on 2026-08-22 by ADR-0004 for the founder-only clean lineage. The
+accepted historical policy bytes and rationale above are unchanged, but the
+new genesis does not implement either dual Person content-policy branch. It
+uses the single current-founder read described by ADR-0004.

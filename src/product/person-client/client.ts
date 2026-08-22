@@ -1,11 +1,15 @@
-import { Buffer } from 'node:buffer';
-import { randomBytes, randomUUID } from 'node:crypto';
+import { Buffer } from "node:buffer";
+import { randomBytes, randomUUID } from "node:crypto";
 import {
   validateOrganizationPersonSession,
   type OrganizationPersonMemberExclusionSelectorV2,
   type OrganizationPersonSessionV2,
-} from '@echo-brain/organization-api';
-import { PersonAuthorityClient } from './authority-client.js';
+} from "@echo-brain/organization-api";
+import {
+  PersonAuthorityClient,
+  type CleanPersonRecordListV1,
+  type CleanPersonRecordSearchV1,
+} from "./authority-client.js";
 import {
   createPersonMemberExclusionChangeRequest,
   createPersonMemberExclusionListRequest,
@@ -14,12 +18,12 @@ import {
   createPersonReviewerRecentDecisionsRequest,
   createPersonSlackLinkBeginRequest,
   createPersonSlackLinkCompleteRequest,
-} from './requests.js';
+} from "./requests.js";
 import {
   PersonClientSessionUnavailableError,
   PersonSessionStore,
   type StoredPersonClientSessionV1,
-} from './session-store.js';
+} from "./session-store.js";
 
 export interface PersonClientOptions {
   readonly home_directory: string;
@@ -36,7 +40,7 @@ export interface PersonClientSessionSummary {
   readonly organization_id: string;
   readonly principal_id: string;
   readonly membership_id: string;
-  readonly membership_type: 'owner' | 'employee';
+  readonly membership_type: "owner" | "employee";
   readonly access_expires_at: string;
   readonly hard_reauthentication_at: string;
 }
@@ -61,20 +65,20 @@ function assertRefreshIdentity(
   next: OrganizationPersonSessionV2,
 ): void {
   for (const key of [
-    'organization_id',
-    'principal_id',
-    'membership_id',
-    'membership_type',
-    'identity_binding_id',
-    'session_family_id',
-    'hard_reauthentication_at',
+    "organization_id",
+    "principal_id",
+    "membership_id",
+    "membership_type",
+    "identity_binding_id",
+    "session_family_id",
+    "hard_reauthentication_at",
   ] as const) {
     if (previous[key] !== next[key]) {
       throw new Error(`Person session refresh changed ${key}`);
     }
   }
   if (previous.refresh_token === next.refresh_token) {
-    throw new Error('Person session refresh did not rotate its refresh token');
+    throw new Error("Person session refresh did not rotate its refresh token");
   }
 }
 
@@ -94,28 +98,31 @@ export class PersonClient {
   private authority(origin: string): PersonAuthorityClient {
     return new PersonAuthorityClient({
       authority_origin: origin,
-      ...(this.options.fetch === undefined ? {} : { fetch: this.options.fetch }),
-      allow_insecure_loopback:
-        this.options.allow_insecure_loopback === true,
+      ...(this.options.fetch === undefined
+        ? {}
+        : { fetch: this.options.fetch }),
+      allow_insecure_loopback: this.options.allow_insecure_loopback === true,
     });
   }
 
   private currentTime(): number {
     const value = Date.parse(this.now());
-    if (!Number.isFinite(value)) throw new Error('Person client clock is invalid');
+    if (!Number.isFinite(value))
+      throw new Error("Person client clock is invalid");
     return value;
   }
 
-  private requestId(prefix: 'rdr' | 'rrd' | 'osq' | 'mex' | 'psb' | 'psc'):
-    string {
+  private requestId(
+    prefix: "rdr" | "rrd" | "osq" | "mex" | "psb" | "psc",
+  ): string {
     return `${prefix}_${this.randomUuid()}`;
   }
 
   async beginLogin(authorityOrigin: string, loginGrant?: string) {
     return await this.authority(authorityOrigin).beginOidcLogin(
       loginGrant === undefined
-        ? { kind: 'existing_identity_login' }
-        : { kind: 'identity_bootstrap', login_grant: loginGrant },
+        ? { kind: "existing_identity_login" }
+        : { kind: "identity_bootstrap", login_grant: loginGrant },
     );
   }
 
@@ -125,13 +132,14 @@ export class PersonClient {
   ): Promise<PersonClientSessionSummary> {
     const session = validateOrganizationPersonSession(value);
     if (this.currentTime() >= Date.parse(session.hard_reauthentication_at)) {
-      throw new Error('Person session is already past hard reauthentication');
+      throw new Error("Person session is already past hard reauthentication");
     }
     const descriptor = await this.authority(authorityOrigin).descriptor();
     if (
-      descriptor.authority_descriptor.organization_id !== session.organization_id
+      descriptor.authority_descriptor.organization_id !==
+      session.organization_id
     ) {
-      throw new Error('Person session belongs to another organization');
+      throw new Error("Person session belongs to another organization");
     }
     return summary(
       this.store.install(
@@ -153,16 +161,14 @@ export class PersonClient {
       Date.parse(claimed.stored.session.hard_reauthentication_at)
     ) {
       throw new PersonClientSessionUnavailableError(
-        'Person session requires authentication again',
+        "Person session requires authentication again",
       );
     }
     const next = await this.authority(claimed.stored.authority_origin).refresh(
       claimed.stored.session.refresh_token,
     );
     assertRefreshIdentity(claimed.stored.session, next);
-    return summary(
-      this.store.completeRefresh(claimed, next),
-    );
+    return summary(this.store.completeRefresh(claimed, next));
   }
 
   private async accessSession(): Promise<StoredPersonClientSessionV1> {
@@ -188,17 +194,16 @@ export class PersonClient {
   async recentDecisions() {
     const stored = await this.accessSession();
     return await this.authority(stored.authority_origin).recentDecisions(
-      createPersonRecentDecisionsRequest(
-        stored,
-        this.requestId('rdr'),
-      ),
+      createPersonRecentDecisionsRequest(stored, this.requestId("rdr")),
       stored.session.access_token,
     );
   }
 
   async reviewerRecentDecisions() {
     const stored = await this.accessSession();
-    return await this.authority(stored.authority_origin).reviewerRecentDecisions(
+    return await this.authority(
+      stored.authority_origin,
+    ).reviewerRecentDecisions(
       createPersonReviewerRecentDecisionsRequest(stored),
       stored.session.access_token,
     );
@@ -212,6 +217,24 @@ export class PersonClient {
     );
   }
 
+  async records(
+    limit?: number,
+    query?: string,
+  ): Promise<CleanPersonRecordListV1 | CleanPersonRecordSearchV1> {
+    const stored = await this.accessSession();
+    if (query !== undefined) {
+      return await this.authority(stored.authority_origin).searchRecords(
+        stored.session.access_token,
+        query,
+        limit,
+      );
+    }
+    return await this.authority(stored.authority_origin).records(
+      stored.session.access_token,
+      limit,
+    );
+  }
+
   async changeExclusion(
     excluded: boolean,
     selector: OrganizationPersonMemberExclusionSelectorV2,
@@ -220,7 +243,7 @@ export class PersonClient {
     await this.authority(stored.authority_origin).changeExclusion(
       createPersonMemberExclusionChangeRequest(
         stored,
-        this.requestId('mex'),
+        this.requestId("mex"),
         excluded,
         selector,
       ),
@@ -233,7 +256,7 @@ export class PersonClient {
     return await this.authority(stored.authority_origin).exclusions(
       createPersonMemberExclusionListRequest(
         stored,
-        this.requestId('mex'),
+        this.requestId("mex"),
         sourceAdapterId,
         sourceInstanceId,
       ),
@@ -245,17 +268,16 @@ export class PersonClient {
     const stored = await this.accessSession();
     const challengeBytes = this.randomBytes(32);
     if (challengeBytes.byteLength !== 32) {
-      throw new Error('Person client challenge generator returned the wrong size');
+      throw new Error(
+        "Person client challenge generator returned the wrong size",
+      );
     }
-    const challengeCode = Buffer.from(challengeBytes).toString('base64url');
+    const challengeCode = Buffer.from(challengeBytes).toString("base64url");
     try {
       const response = await this.authority(
         stored.authority_origin,
       ).beginSlackLink(
-        createPersonSlackLinkBeginRequest(
-          this.requestId('psb'),
-          challengeCode,
-        ),
+        createPersonSlackLinkBeginRequest(this.requestId("psb"), challengeCode),
         stored.session.access_token,
       );
       return { ...response, challenge_code: challengeCode };
@@ -271,10 +293,7 @@ export class PersonClient {
   }) {
     const stored = await this.accessSession();
     return await this.authority(stored.authority_origin).completeSlackLink(
-      createPersonSlackLinkCompleteRequest(
-        this.requestId('psc'),
-        input,
-      ),
+      createPersonSlackLinkCompleteRequest(this.requestId("psc"), input),
       stored.session.access_token,
     );
   }

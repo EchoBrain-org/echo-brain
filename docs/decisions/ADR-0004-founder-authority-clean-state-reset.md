@@ -12,255 +12,191 @@ component_ids:
   - CMP-OPERATIONS-RELEASE
   - CMP-PROTOCOLS-CRYPTO
 created_at: 2026-08-20
-reviewed_at: 2026-08-20
-reviewed_ref: 77a212134fce762fdffd30e028f3256ba6e75b42
-status: proposed
-supersedes: []
+reviewed_at: 2026-08-22
+reviewed_ref: 15d18effbb022c90061ccbe26236734d21df9d55
+status: accepted
+supersedes:
+  - ADR-0003
+  - ADR-0005
 superseded_by: []
-updates: []
+updates:
+  - ADR-0001
+  - ADR-0002
 ---
 
 # ADR-0004: Founder Authority clean-state reset
 
+## Disposition
+
+The founder accepted this decision on 2026-08-22. The acceptance rests on the
+explicit facts that the founder is the only user, there are no live customers
+or other users to migrate, the raw Slack, Granola, and server context remains
+available outside the application state, and the founder can re-onboard.
+
+This is the deliberately lean V1 decision. It replaces the earlier proposed
+compatibility, permission-policy, audit-retention, snapshot, and rollback
+ceremony in this ADR. Because ADR-0004 was still proposed, its candidate text
+could be revised before acceptance. It supersedes the unaccepted contract
+packet in ADR-0003 and the now-unneeded dual content-policy lineage in
+ADR-0005. ADR-0001 and ADR-0002 remain binding, narrowed to one founder and one
+fresh Authority lineage.
+
+`reviewed_ref` identifies the exact pre-acceptance implementation baseline. It
+does not claim that the cleanup below is already implemented or that a live
+reset, deployment, or re-onboarding has occurred. Acceptance authorizes the
+cleanup sprint and a later fresh initialization after its gates pass.
+
 ## Context and options
 
-[ADR-0001](ADR-0001-organization-operated-server-core.md) moves processing
-into the organization-operated Authority, and
-[ADR-0002](ADR-0002-external-oidc-person-sessions.md) makes current Person
-identity the replacement for employee-installation identity. The active
-[server-core lean-down plan](../product/2026-08-20-server-core-migration-lean-down-plan-v4.md)
-therefore needs a deliberately new state lineage rather than a compatibility
-migration that relabels installation-era rows.
+The migration had been treating a founder-only development state like a live
+customer migration. That added compatibility reads, additive migrations,
+multiple policy and audit lineages, historical envelope support, a recovery
+manifest, and a formal rollback pair. Those mechanisms would take longer to
+remove than the state is worth preserving.
 
-The target is the single founder-operated Authority. This proposal does not
-infer from that description that its current state is disposable. Founder
-attestation is required below, and the exact live artifact and state must be
-captured only at the stopped Phase-4 gate. No live state was inspected while
-preparing this proposal.
+The considered choices are:
 
-The options are:
+1. migrate the existing state and keep compatibility until every historical
+   reader and record drains;
+2. initialize fresh state but retain compatibility code, additive migrations,
+   and historical envelope readers as a precaution; or
+3. initialize fresh state and ship one current founder-only pipeline with no
+   historical compatibility surface.
 
-1. Preserve and translate the current state in place. This retains rollback
-   history inside the new runtime, but also retains the compatibility schema,
-   makes new meanings depend on old installation rows, and expands the
-   migration beyond the clean-state objective.
-2. Delete the current state and initialize a new Authority without a stopped
-   snapshot. This is smaller, but it has no exact rollback pair and cannot
-   prove which artifact created the discarded bytes.
-3. Authorize a future stopped cutover to a new empty lineage, preserve the old
-   artifact and whole old state as one checksummed rollback pair, and
-   re-onboard through the accepted current flows. This keeps old bytes under
-   their original meaning and prevents a dual writer.
+This decision selects option 3.
 
-This proposal selects option 3 if and only if the disposition below is
-accepted by the founder and every Phase-4 execution precondition is later
-satisfied.
+## Decision
 
-## Proposed decision and consequences
+### Fresh lineage, not data migration
 
-### 1. Phase-0 authorization scope
+The new Authority starts from an empty lineage. Copy no application row,
+identity, key, link, session, approval, rejection, audit event, record,
+receipt, migration ledger, derived row, or retrieval generation from the old
+state. New code must never open an old database and must contain no automatic
+upgrade or mixed-lineage mode.
 
-If accepted, this ADR authorizes planning, offline rehearsal against copies or
-fixtures, and a later Phase-4 stopped clean-state cutover for exactly one
-founder Authority and one organization. It authorizes discarding and
-re-onboarding the following semantic state roles together:
+Before initializing the central organization, stop every old listener,
+poller, writer, and provider worker. Only one lineage may own those effects at
+a time. Moving old state outside the runtime path for short-term operator
+convenience is allowed, but the old artifact/state pair is not a product
+rollback contract.
 
-1. **Authority and organization root:** Authority identity, organization
-   binding, principals, memberships, invitations, OIDC bindings, Person
-   session families and credentials, administrator state, signing identity,
-   and state/installation anchors.
-2. **Pre-record processing:** source activation and custody, cursor/cutoff,
-   normalized meetings and revisions, processing identities, pending approval
-   and rejection work, frozen presentations and policy consequences, terminal
-   cleanup state, delivery attempts, and processing receipts.
-3. **Integration control plane:** provider-connection attempts and active
-   connections, external human identity links, adapter identities and
-   bindings, action capabilities, organization-tool configuration, and the
-   immutable integration audit.
-4. **Layer 1 record truth:** canonical approve/reject records, record signing,
-   idempotency, hash chain, checkpoints, append receipts, and append-atomic
-   policy facts.
-5. **Derived record state:** the deterministic projection rebuilt from the
-   Layer 1 log.
-6. **Layer 2 retrieval state:** policy-fact, content, and lexical planes,
-   immutable generations, manifests, active pointers, and rebuild metadata.
-7. **Operational identity and configuration:** Authority configuration,
-   identity/initialization manifests, keys, credential files or opaque secret
-   references, provider configuration, and deployment state that is valid only
-   with the exact Authority state above.
+### One lean founder pipeline
 
-The roles are one recovery unit even when several roles currently share a
-database or one role spans a database and immutable files. Acceptance does
-not bless a guessed file list, permit a partial reset, or permit new code to
-open old state. Phase 4 must bind these roles to the exact stopped files and
-lineages before any destructive action.
+V1 has one happy-path pipeline:
 
-### 2. Required founder attestation
+1. the founder signs in through current OIDC;
+2. the founder links one Slack identity and selects one approval channel;
+3. the Authority reads new Granola source material;
+4. one configured LLM produces a decision body;
+5. the Authority posts that body to Slack;
+6. the linked founder reacts with `white_check_mark` to approve or `x` to
+   reject; and
+7. approval appends one current record envelope, while rejection records the
+   terminal outcome but exposes no readable record.
 
-Acceptance requires a founder disposition bound to the exact text of this ADR
-that states all of the following:
+The durable minimum is the decision body shown for approval, source reference,
+approval ID, Slack message/reaction reference, action, record append receipt,
+and enough idempotency state to prevent duplicate work across retry or restart.
+V1 does not require a policy-consequence digest graph, separate approval
+capabilities, a frozen presentation protocol, delivery fan-out, or retrieval
+generation.
 
-> I attest that the scoped Authority serves no customer and contains no
-> customer-owned or otherwise irreplaceable identity, content, approval,
-> audit, record, receipt, configuration, or recovery state. I authorize this
-> founder-only state to be discarded after the stopped Phase-4 snapshot and
-> rollback-pair gates pass, and I authorize re-onboarding from empty state.
+### Current founder read
 
-If any customer, legal, contractual, evidentiary, or otherwise irreplaceable
-state is discovered, this authorization does not apply. The migration stops
-and requires a different decision. A general statement that the environment
-is low risk is not a substitute for this scoped attestation.
+Delete the V1 and compatibility read implementations. Replace them with one
+clean route that:
 
-### 3. Declarative re-onboarding inventory
+- authenticates one current Person bearer for the configured active founder;
+- lists current approved records for that founder's single organization;
+- omits rejected and pending items; and
+- uses only the current top-level record envelope.
 
-Before acceptance, the Phase-0 record must name how each of these inputs will
-be re-entered or deliberately omitted. It records no secret value. Phase 0
-freezes the field names, ownership, and re-entry operation; the exact newly
-minted IDs and external public tuple values are captured in the stopped
-Phase-4 configuration manifest because this proposal does not inspect live
-state:
+There is no restricted-reviewer/member-readable branch, tenure calculation,
+record-side reader fact, permission-check transport, second authentication
+pass, historical-byte reader, or readable-search dependency in lean V1.
 
-- canonical Authority origin, organization name, public deployment settings,
-  trusted-proxy settings, and the intended new Authority/organization and
-  state-lineage creation procedure;
-- OIDC issuer, client identifier, redirect URI, tenant rule, algorithm
-  allowlist, and opaque reference to the client credential installation
-  procedure;
-- owner identity and the employee invitation roster, work addresses,
-  membership types, and planned Person login/OIDC completion flow;
-- organization Slack workspace/app/bot/bot-user/channel/scope tuple and opaque
-  references to credential installation, followed by fresh Person Slack links;
-- meeting-source kind, adapter identity/version, organization credential
-  scope, custodian, cutoff/cursor rule, and opaque source-credential
-  installation reference;
-- processing adapter kind/ID/instance/version, provider/model selection,
-  contract/configuration digest inputs, and opaque provider-credential
-  installation reference;
-- approval adapter binding, policy-specific approve/reject capabilities,
-  action mapping, policy contracts, and frozen presentation contract;
-- delivery intent policy and, when enabled, its distinct adapter binding,
-  destination identity/digest, contract, and credential reference; and
-- operational listener, tunnel, deployment, backup, retention, and recovery
-  configuration required to start the one new Authority safely.
+### Genesis and audit shape
 
-Unknown, inferred, or unavailable input is an open gate, not permission to
-copy a legacy row or invent an identity edge. Provider-human links, active
-memberships, action capabilities, and provider verification are recreated
-through their accepted flows; they are never bulk relabelled.
+Each retained SQLite role has one directly authored genesis schema:
 
-The secret-free re-entry map is complete as follows:
+- Authority;
+- organization control plane;
+- organization record log; and
+- organization record derived state.
 
-| Role | Exact declarative input | Re-entry or deliberate omission |
-| --- | --- | --- |
-| Authority root | founder-supplied canonical HTTPS origin and organization display name; loopback listener default `127.0.0.1:39479`; trusted-proxy mode; new `authority_id`, `organization_id`, `state_lineage_id`, application IDs, schema digests, and Authority signing-key descriptor | The new initializer generates every ID, lineage, manifest, genesis, admin credential, proxy credential, and signing key in a new state directory. The operator supplies only the public origin/name/listener fields. Old IDs, pins, keys, marker hashes, and `installed_at` rows are omitted. |
-| Person OIDC | `issuer`, `client_id`, exact `/v2/session/oidc/callback` redirect URI, tenant constraint, one ID-token algorithm, client-authentication method, client-secret reference when applicable, and PKCE-sealing-key reference | Write one new-lineage Person-session overlay whose Authority/organization IDs are the newly generated values. Install fresh private credential/key bytes behind the opaque references. Copy no OIDC binding, attempt, family, access credential, nonce, or PKCE state. |
-| People | one owner work identity plus at least three separately invited employee work identities; display names; membership types; invitation lifetime policy | Create the owner through initialization. For each employee, the administrator first provisions the new principal and membership, then issues a one-time Person login grant to that exact existing membership. The employee completes OIDC binding and session creation. No grant creates or retargets a membership. Old principal, membership, grant, enrollment, installation, and session rows are omitted. |
-| Organization Slack tool | issuer `https://slack.com`; founder-supplied workspace/enterprise, app, bot, bot-user, and channel IDs; required ordered scopes `channels:history`, `channels:read`, `chat:write`, `reactions:read`, `users:read`; opaque bot-credential reference | Run fresh organization-tool verification and activation, persist the new stable connection contract and current-state proof, then create new Person Slack links through link-only challenges. Copy no connection, attempt, external-link, audit, binding, capability, or credential row. |
-| Meeting source | `granola` meeting-source adapter version `2.2.0`; founder-supplied instance; literal credential scope `organization`; normalizer contract/version; cutoff/cursor rule; custodian Person/membership; opaque source-credential reference | Install a fresh opaque organization-source credential, then run the stopped no-pull source activation against the current custodian. The first provider pull creates new candidate identity. Old cursor, candidate, owner binding, or pending bytes are omitted. |
-| Decision processor | `llm` adapter version `1.3.0`; prompt `decision-extraction-v3`; schema `decision-extraction-schema-v4`; explicit provider `openrouter`; model `deepseek/deepseek-r1`; `max_output_tokens: 8192`; `request_timeout_ms: 600000`; founder-supplied instance; processor/configuration digests; opaque provider-credential reference | Activate this one explicit retained provider with no fallback. Install fresh credential bytes behind the reference. Old processor overlay, default-provider choice, candidate key, and model response are omitted. Changing any semantic input creates a new processor/configuration digest. |
-| Approval | `slack-reactions` approval-surface adapter version `1.0.0`; founder-supplied instance and channel; reactions `white_check_mark` and `x`; provider connection; both v2 policy contracts and consequence bytes; presentation contract | An operator using the Authority administrator credential invokes the replacement approval-activation API and targets the exact current Person Slack link/membership. An owner Person session is not administrator authorization. The operation creates a new stable approval binding and separate approve/reject capabilities. Old installation ownership, grants, cards, pending work, and action audits are omitted. |
-| Delivery | at least one configured delivery surface for enabled processing; initial live target uses `slack` version `1.0.0` with founder-supplied instance and destination plus opaque credential/connection reference | Configure the typed delivery-surface array in deterministic order. The Slack destination must differ from the approval channel. Every durable attempt/unknown/outcome/receipt store begins empty. Approval bindings and receipts are never reused as delivery authority. |
-| Runtime and operations | exact artifact digest; config/overlay digests; state directory; listener; tunnel/service identity; proxy policy; backup/restore location; 30-day processing and D6 retention; D6 export `unsupported`; qualification mode | Render fresh config from these declarative fields, validate preflight while stopped, initialize, restart, rebuild the empty exact-head retrieval generation, and only then enable one listener/poller. Installation leases, browser-console state, query-audit exporters, legacy derived state, and old migration ledgers are deliberately omitted. |
+Each role keeps its distinct SQLite `application_id` and starts at
+`user_version = 1`, but it has no additive migration ledger. The 19 Authority,
+5 control-plane, 4 record-log, and 3 record-derived legacy migration chains do
+not run in the clean lineage. Readable-search fact, content, and lexical roles
+are outside lean V1 and are not initialized.
 
-The Phase-4 manifest must fill every public field in this table and replace
-every opaque credential reference with a successfully installed reference,
-never the credential bytes. A missing row or unresolved reference stops
-initialization. This table is the Phase-0 declarative inventory; it is not
-evidence that re-entry has already run.
+Authority genesis never defines the old `0006` reviewer-query audit or `0007`
+readable-search state. It also does not forward-migrate or merge `0010` and
+`0012`. Instead, genesis defines one small current record-access event table
+directly. An event identifies the access, current founder, record or listing
+operation, outcome, and time. It has no policy trace, response-body digest,
+hash-chain export, drain window, or retention job. It must not restore the
+permission-aware read graph through a differently named schema.
 
-### 4. Reset and no-dual-writer protocol
+### Current envelope only
 
-Acceptance approves this protocol but does not execute it:
+The runtime reads and writes only the current top-level record envelope, V4 at
+the accepted baseline. Delete production exports, validators, routes,
+fixtures, and tests whose only purpose is to admit V1 through V3 envelopes.
+This does not require mechanically renumbering unrelated nested schemas; it
+removes top-level historical envelope coexistence from the runtime contract.
 
-1. Complete the replacement implementation, its accepted decision gates, the
-   offline rehearsal, and the semantic parity gate before cutover.
-2. At Phase 4, stop the old Authority and every poller, listener, tunnel, and
-   process that can mutate its state or call a provider. Prove successful
-   shutdown and singleton release before treating the state as stopped.
-3. While stopped, validate the old recovery unit and create the fresh exact
-   snapshot and artifact/state evidence required below. A failed shutdown,
-   validation, or snapshot stops the cutover.
-4. Move the complete old state out of every path the new artifact can open.
-   Keep it immutable with its exact old artifact as the named rollback pair.
-5. Initialize a different empty directory with new application, schema,
-   envelope, audit, policy, and state-lineage versions. Copy no row, receipt,
-   key, identity link, capability, audit entry, record, or retrieval
-   generation into it.
-6. Recreate the Authority/organization, owner, employees, Person identities,
-   provider connections, source, processing, approval, delivery, and
-   operational configuration through the accepted current commands and
-   contracts.
-7. Qualify the new lineage while the old artifact/state pair remains stopped.
-   Enable the normal cycle only after the new artifact, manifests, record
-   head, retrieval generation, and audit heads are recorded.
+### Delete the compatibility bridge
 
-At no time may the old and new artifacts both own a listener, provider poller,
-provider side-effect worker, record writer, or writable state handle. There is
-no dual-write, shadow-write, row import, automatic upgrade, or mixed-lineage
-mode.
+Delete installation enrollment, lease, signature, record-ingest transport,
+installation-owned access, compatibility bridge, and their zero-caller
+exports, fixtures, migrations, tests, and documentation. Do not hold a bridge
+for future re-keying because no old application state enters the new lineage.
 
-### 5. Rollback protocol
+### Streamlined re-onboarding
 
-Rollback is a whole-pair switch, never a data merge:
+The clean onboarding flow asks only for:
 
-1. Stop the new artifact and every associated writer, listener, poller, and
-   tunnel; preserve its state separately for diagnosis.
-2. Prove the new singleton and all writable/provider-call paths are stopped.
-3. Restore only the untouched stopped snapshot with the exact old artifact
-   whose digest was recorded for it. New code never opens that snapshot.
-4. Validate the restored old recovery unit while stopped, then start exactly
-   one old Authority.
-5. Record which external provider or delivery effects occurred after cutover.
-   Never replay, merge, or pretend those effects are represented in the old
-   state. If they make rollback semantically unsafe, remain stopped and obtain
-   a new disposition.
+- organization name, owner email, and Authority URL;
+- OIDC issuer/client configuration and credential;
+- Slack credential and approval channel;
+- Granola credential and account email; and
+- LLM provider credential.
 
-The rollback pair is retained until the founder explicitly retires it after
-the lean artifact is qualified. Retention of the pair does not make old state
-part of the new runtime closure.
+Credential values are entered through the runtime's secret path and are not
+stored in this ADR or emitted in logs. There is one owner and no employee
+invitation roster. The operator then performs one smoke cycle: sign in, link
+Slack, ingest one item, approve one item, reject one item, restart, and read
+back only the approved record.
 
-## Phase-4 execution evidence
+The onboarding UX is reviewed and rehearsed against disposable empty state
+before the central organization is reset and re-onboarded.
 
-This proposal deliberately separates Phase-0 authorization from destructive
-execution evidence. Acceptance of this ADR does not assert that the following
-evidence exists. Immediately before the Phase-4 cutover, with the Authority
-stopped, the operator must produce and verify:
+## Failure and recovery
 
-- successful shutdown evidence and proof that no writer, listener, poller,
-  tunnel, provider-call worker, or writable handle remains;
-- the exact old executable/container revision and immutable artifact digest;
-- a complete state-role-to-path and state-lineage manifest for the stopped
-  Authority, including supporting identity, key, credential, marker, and
-  retrieval-generation files;
-- stopped integrity, record-chain, derived-head, and active retrieval-
-  generation verification appropriate to the old artifact;
-- a fresh whole-state snapshot with per-file path, role, size, mode, and
-  SHA-256, plus a deterministic manifest digest and archive digest;
-- an exact declarative-configuration inventory, containing only public values,
-  digests, and opaque secret references, checked against the Phase-0 inventory;
-- a named immutable old artifact/state pair and the exact restore command or
-  runbook that consumes only that pair;
-- confirmation that the founder attestation still holds at cutover time and
-  that no customer or irreplaceable state has since been introduced; and
-- after initialization, the exact new artifact digest, new Authority,
-  organization and lineage identifiers, database-role manifests, genesis,
-  record head, retrieval generation, and audit heads.
+There is no formal old/new rollback matrix, checksummed whole-state snapshot,
+or historical artifact retention promise. If the fresh V1 fails before it is
+accepted for founder use, stop it, preserve only the diagnostic material that
+is useful, fix the implementation, recreate empty state, and re-onboard. The
+raw Slack, Granola, and server context is the recovery source.
 
-Missing, stale, partially copied, internally inconsistent, or unbound evidence
-stops Phase 4. An earlier backup, a running-filesystem copy, a digest without
-the matching artifact, or a state archive without the role manifest cannot
-satisfy this gate.
+Discovery of a real second user, customer-owned state, or irreplaceable data
+before reset invalidates this clean-state premise and stops live execution for
+a new decision. It does not require defensive machinery while those facts are
+absent.
 
-## Non-authorization and disposition
+## Consequences and non-goals
 
-This proposed ADR does not authorize or perform a service stop, live-state
-read, snapshot, deletion, credential rotation, provider call, deployment,
-reset, re-onboarding, or cutover. The Phase-0 field/procedure inventory above
-is complete; it does not claim the founder attestation has been made, the
-deferred public values or opaque references have been filled in, or the
-Phase-4 evidence has been produced.
+Lean V1 intentionally has no historical state readability, multi-person
+permission model, reviewer policy, readable search, retrieval generation,
+delivery surface, audit export, audit-retention guarantee, row migration, or
+compatibility rollback. Those capabilities may return only in response to a
+real product need through a later decision and a new clean schema or envelope
+version.
 
-Disposition remains pending. Acceptance requires the founder identity,
-decision timestamp, exact ADR digest, the attestation above, and acceptance of
-the complete secret-free field/procedure inventory with its Phase-4 value and
-reference gates. Any edit after review requires a new digest and disposition.
+The implementation sprint must delete the superseded paths, update the source
+boundary and documentation, and pass repository build, type, lint, unit,
+boundary, documentation, and empty-state end-to-end checks. This accepted ADR
+does not by itself perform the live stop, deletion, initialization,
+deployment, provider call, or re-onboarding.

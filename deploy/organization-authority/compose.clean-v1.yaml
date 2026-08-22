@@ -1,0 +1,70 @@
+# Opt-in clean founder-onboarding deployment. It intentionally does not share
+# the legacy compose file, legacy data directory, or legacy process entrypoint.
+name: echo-organization-authority-clean-v1
+
+services:
+  authority:
+    image: "${ECHO_CLEAN_AUTHORITY_IMAGE:-echo-organization-authority:local}"
+    build:
+      context: ../..
+      dockerfile: deploy/organization-authority/Dockerfile
+    entrypoint:
+      - node
+      - services/organization-authority/dist/clean-live-main.js
+    command:
+      - serve
+      - --state-dir
+      - /echo-clean/state
+      - --host
+      - 127.0.0.1
+      - --port
+      - "39479"
+      - --client-secret-file
+      - /echo-clean/private/oidc-client-secret
+    user: "${ECHO_CLEAN_AUTHORITY_UID:-1000}:${ECHO_CLEAN_AUTHORITY_GID:-1000}"
+    restart: unless-stopped
+    stop_grace_period: 45s
+    volumes:
+      - ./clean-data:/echo-clean
+    ports:
+      - "80:80"
+      - "443:443"
+    healthcheck:
+      test:
+        - CMD
+        - node
+        - -e
+        - >-
+          fetch('http://127.0.0.1:39479/v1/authority-descriptor').then((response) => {
+            if (!response.ok) process.exit(1);
+          }).catch(() => process.exit(1));
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+  proxy:
+    image: caddy:2.10.2-alpine@sha256:4c6e91c6ed0e2fa03efd5b44747b625fec79bc9cd06ac5235a779726618e530d
+    depends_on:
+      authority:
+        condition: service_healthy
+        restart: true
+    network_mode: service:authority
+    restart: unless-stopped
+    environment:
+      ECHO_CLEAN_AUTHORITY_HOST: ${ECHO_CLEAN_AUTHORITY_HOST:?set ECHO_CLEAN_AUTHORITY_HOST to the public DNS name}
+    command:
+      - caddy
+      - run
+      - --config
+      - /etc/caddy/Caddyfile
+      - --adapter
+      - caddyfile
+    volumes:
+      - ./Caddyfile.clean-v1:/etc/caddy/Caddyfile:ro
+      - clean_caddy_data:/data
+      - clean_caddy_config:/config
+
+volumes:
+  clean_caddy_data:
+  clean_caddy_config:

@@ -76,7 +76,131 @@ the route, generation, verifier, and query-audit procedures whenever the
 selected image is readable-search-capable. Historical images may not contain
 those commands.
 
-## Stopped meeting-source activation
+## Clean founder onboarding rehearsal
+
+This is a fresh reset. No historical Authority, Slack, Granola, or record rows
+are copied. The whole founder path has three phases: bootstrap once while
+stopped, sign in and link Slack while the clean listener runs, then finalize
+once while stopped again. IDs, timestamps, PKCE location, source identities,
+and the invitation path are deliberately not operator inputs.
+
+### 1. Bootstrap while stopped
+
+Use a new empty state directory. Place the Slack token in a current-user `0600`
+file containing exactly the token, with at most one trailing newline. It must
+not have a second line, surrounding whitespace, shell interpolation, or a token
+copied into a command argument.
+The command reads it once from stdin, creates the fresh lineage and Slack
+connection, and issues the 15-minute invitation **last**. Its only useful
+output is the invitation path and the next step.
+
+```sh
+STATE_DIR='<absolute-empty-state-directory>'
+AUTHORITY_URL='https://authority.example.com'
+OIDC_CONFIG='<absolute-oidc-config-json-path>'
+SLACK_APPROVAL_CHANNEL_ID='<slack-channel-id>'
+SLACK_BOT_TOKEN_FILE='<absolute-private-single-token-file>'
+
+echo-organization-authority-clean-founder bootstrap \
+  --state-dir "$STATE_DIR" \
+  --organization-name 'Example Organization' \
+  --owner-display-name 'Founder Name' \
+  --owner-email 'founder@example.com' \
+  --authority-url "$AUTHORITY_URL" \
+  --oidc-config "$OIDC_CONFIG" \
+  --slack-approval-channel-id "$SLACK_APPROVAL_CHANNEL_ID" \
+  < "$SLACK_BOT_TOKEN_FILE"
+```
+
+Use the exact canonical lowercase email that OIDC will return for
+`--owner-email`. The same byte-for-byte value is installed later as the
+Granola owner-email input.
+
+The command stores a private, mode-`0600`, non-secret manifest at
+`$STATE_DIR/onboarding/clean-founder-v1.json`. It contains safe IDs, channel,
+and file paths only. Do not edit it or copy it to a different account.
+
+### 2. Re-onboard once while the listener runs
+
+Start the clean live listener. Before finalization this exact command serves
+only Person onboarding; its worker is idle. The OIDC redirect URI must be
+`$AUTHORITY_URL/v2/session/oidc/callback`, and the existing public HTTPS proxy
+or tunnel must forward that origin to loopback `127.0.0.1:39479`.
+
+```sh
+echo-organization-authority-clean-live serve \
+  --state-dir "$STATE_DIR" \
+  --host 127.0.0.1 \
+  --port 39479
+# For client_secret_basic or client_secret_post only, append:
+#   --client-secret-file "$OIDC_CLIENT_SECRET_FILE"
+```
+
+The private onboarding manifest supplies the Authority URL, OIDC config,
+PKCE key path, and Slack channel. They are not repeated on `serve`.
+
+In a second terminal, use the invitation. The command prints the browser URL,
+waits, then accepts one pasted, single-line callback-session JSON document and
+installs the session in the same invocation. One paste remains necessary
+because the local CLI cannot receive the browser callback directly. Paste it
+at the waiting prompt and press Enter; do not put it in shell history, logs,
+tickets, or chat.
+
+```sh
+echo-brain person login \
+  --invitation "$STATE_DIR/onboarding/founder-person-invitation.json"
+```
+
+Link Slack with one interactive command. It prints the code to reply with in
+the exact Slack thread, retains opaque attempt/message IDs in memory, then
+waits for a plain Enter acknowledgement. It does not ask you to paste the code
+back. Advanced `slack-link-begin` and `slack-link-complete` commands remain
+available only for recovery.
+
+```sh
+echo-brain person slack-link
+```
+
+### 3. Finalize while stopped
+
+Stop the listener. Before finalization, install the three private inputs at the
+exact manifest paths. Each source file must contain only its value, with no
+trailing newline or other whitespace, and each destination must be current-user
+mode `0600`. The owner-email file must contain the exact lowercase email used
+for `--owner-email` and returned by OIDC.
+
+```sh
+install -m 0600 '<absolute-private-granola-credential-file>' \
+  "$STATE_DIR/credentials/granola-credential"
+install -m 0600 '<absolute-private-granola-owner-email-file>' \
+  "$STATE_DIR/credentials/granola-owner-email"
+install -m 0600 '<absolute-private-llm-credential-file>' \
+  "$STATE_DIR/credentials/llm-credential"
+```
+
+Finalization derives the sole owner, Slack connection, channel, and fixed
+source/processor IDs from the private manifest. It takes no IDs or credential
+values and makes no provider request.
+
+```sh
+echo-organization-authority-clean-founder finalize --state-dir "$STATE_DIR"
+```
+
+This starts the source at a fresh live-only cutoff. It does not import old
+Granola notes. Restart the exact same `clean-live serve` command from phase 2.
+It now activates the admitted Granola poller, Slack approval finalizer, V4
+writer, and current-Person record read path; it never selects the legacy
+worker. After approving a newly created note in Slack, verify the result with
+`echo-brain person records --limit 20` and `echo-brain person records --query
+'<term>'`. Clean live reconciles Layer 2 once at startup and after each
+coalesced append cycle whose exact Layer-1 head advanced. Reconciliation builds
+an immutable generation off the append path and publishes its pointer only when
+the head is still exact; it is never query-triggered. Layer-1 `records` reads
+remain available while a query waits for its first or next exact-head
+generation. A failed or superseded build does not change the active pointer and
+is retried on the next worker cycle.
+
+## Retained V1 stopped meeting-source activation
 
 `activate-meeting-source` is the one stopped command that admits a Granola
 source. It takes the same singleton as `serve`, makes no provider calls, proves
@@ -104,6 +228,7 @@ stored in Authority config, a database, Compose, or logs.
 The Person, retained compatibility, and administrator surfaces share one
 listener and one public origin. Current Person routes are:
 
+- `GET /v1/person/records`
 - `POST /v2/session/oidc/begin`
 - `GET /v2/session/oidc/callback`
 - `POST /v2/session/refresh`
@@ -230,13 +355,16 @@ The administrator-authenticated
 installation-bound compatibility surface. It accepts
 `administrator_membership_id`, `target_membership_id`, `installation_id`, an
 existing identity link, and an existing adapter binding, then creates the exact
-`approve` and `reject` grants. The Person identity-link flow cannot satisfy
-that old binding contract. A Person-bound approval activation path is not yet
-implemented. The retained installation-signed V1 Slack link remains the narrow
-way to create that exact binding. Once its grants and a processing source are
-ready, `serve` composes the bundled Slack approval adapter into the serialized
+`approve` and `reject` grants. The Person identity-link flow alone cannot
+satisfy that old binding contract. The clean lineage instead uses the stopped
+Person-bound approval activation command in the founder rehearsal above; it
+creates no installation binding and does not make the retained V1 worker
+usable. The retained installation-signed V1 Slack link remains the narrow way
+to create the old binding. Once its grants and a processing source are ready,
+legacy `serve` composes the bundled Slack approval adapter into the serialized
 meeting worker. `activate-meeting-source` creates no candidate or approval
-card. It only admits the source which the live LLM worker may subsequently use.
+card. It only admits the source which the legacy live LLM worker may
+subsequently use.
 
 ### Retained installation access recovery
 
@@ -462,9 +590,10 @@ central gate is the built-in policy digest plus the exact active and audited
 approval-surface instance; `presentation_mode` is not stored in control-plane
 public configuration.
 
-Stop the Authority and snapshot the complete state directory before any
-maintenance command. The shared initialization and authenticated runtime locks refuse
-maintenance while a live Authority owns the state:
+The following is retained legacy stopped maintenance, not the clean V1 Layer-2
+path. Stop the Authority and snapshot the complete state directory before any
+maintenance command. The shared initialization and authenticated runtime locks
+refuse maintenance while a live Authority owns the state:
 
 ```sh
 npm run organization-authority:cli -- rebuild-readable-search \
@@ -480,14 +609,14 @@ npm run organization-authority:cli -- readable-search-query-audit-expire \
   --command /absolute/operator/readable-search-query-audit-expiry.json
 ```
 
-`rebuild-readable-search` verifies the Authority, integration, record, and
-both policy-fact families; builds one complete private generation; then
-atomically publishes its pointer at the exact record head. A new record append
-does not wait for Layer 2, but immediately makes that pointer stale and the
-route returns `503` until another stopped rebuild publishes an exact-head
-generation. Rebuild never mutates an active generation in place; a failed
-rebuild leaves the prior pointer untouched, which may still be unavailable if
-its head is stale.
+For retained legacy state only, `rebuild-readable-search` verifies the
+Authority, integration, record, and both policy-fact families; builds one
+complete private generation; then atomically publishes its pointer at the exact
+record head. A new record append does not wait for Layer 2, but immediately
+makes that pointer stale and the route returns `503` until another stopped
+rebuild publishes an exact-head generation. Rebuild never mutates an active
+generation in place; a failed rebuild leaves the prior pointer untouched, which
+may still be unavailable if its head is stale.
 
 The readable-search decision audit is isolated from generic admin audit listing
 and retained immutably for 180 days. Export and expiry use distinct canonical
@@ -573,12 +702,13 @@ volume backup belong to the container or service manager.
 ### Rebuilding the derived record store
 
 `record-derived.sqlite` is the only replaceable SQLite projection in the state
-directory: it holds nothing the log does not already prove. Retrieval
-generations are separately rebuilt and published only through
-`rebuild-readable-search`; no individual generation file is repairable. Stop
-the authority and snapshot the whole state directory exactly as-is before
-mutation, then recreate a missing projection or replace a stale or
-content-corrupt one:
+directory: it holds nothing the log does not already prove. In retained legacy
+state, retrieval generations are separately rebuilt and published only through
+`rebuild-readable-search`; no individual generation file is repairable. Clean
+V1 instead reconciles an immutable exact-head generation automatically at
+startup and after a coalesced append cycle. Stop the authority and snapshot the
+whole state directory exactly as-is before mutation, then recreate a missing
+projection or replace a stale or content-corrupt one:
 
 ```sh
 npm run organization-authority:cli -- rebuild-derived \
@@ -648,7 +778,7 @@ investigate before copying it, and never copy it as a good backup.
      that record ingest reads
    - `record-log.sqlite` — the organization decision record log. Truth.
    - `record-derived.sqlite` — the derived graph. Rebuildable, but copied so a
-   restore does not have to replay
+     restore does not have to replay
    - `record-retrieval/` — the active-generation directory and any retained
      immutable generations. The active pointer in `authority.sqlite` must refer
      to a complete generation at the restored record head before search can
@@ -687,12 +817,12 @@ retrieval state only when it follows a stopped `verified` or `not_built` result
 at the appropriate checkpoint; it still does not authorize serving after
 restore without the external reconciliation below.
 
-If the command rejects a stale pointer/head after an authorized append, keep
-the Authority stopped. A pre-rebuild copy may be retained only as an
-**unverified incident snapshot**, never as a known-good recovery backup. Run
-`rebuild-readable-search`, rerun this verifier, and only then take a separate
-recovery-grade archive. The rebuild is what repairs intended Layer 2 staleness;
-the verifier never repairs it.
+For retained legacy state, if the command rejects a stale pointer/head after an
+authorized append, keep the Authority stopped. A pre-rebuild copy may be
+retained only as an **unverified incident snapshot**, never as a known-good
+recovery backup. Run `rebuild-readable-search`, rerun this verifier, and only
+then take a separate recovery-grade archive. The rebuild is what repairs legacy
+Layer 2 staleness; the verifier never repairs it.
 
 Runtime ownership is authenticated through a private Unix socket beside its
 lock. The portable Docker deployment sets
@@ -711,6 +841,36 @@ npm run organization-authority:admin -- member create \
   --display-name "Ada Lovelace" \
   --membership-type employee
 ```
+
+This is a bootstrap-artifact path pending clean-state `serve` wiring. Issue one
+private onboarding artifact for an already-provisioned membership. The
+Authority must have its Person OIDC runtime configuration before this command
+can succeed. The `--out` parent must be a current-user mode-0700 directory;
+the artifact itself is create-once, mode-0600, and contains the public
+Authority URL, the one-time login grant, and its expiry only.
+
+```sh
+npm run organization-authority:admin -- person invite \
+  --config /absolute/operator/authority.json \
+  --membership-id mem_<uuid-v4> \
+  --expected-email person@example.com \
+  --authority-url https://authority.example.com \
+  --out /absolute/private/person-onboarding.json
+```
+
+Deliver that file through the approved private channel. With a packaged
+`echo-brain` client installed, the recipient starts OIDC without printing or
+manually extracting the grant:
+
+```sh
+echo-brain person login-begin \
+  --invitation /absolute/private/person-onboarding.json
+```
+
+Follow the returned OIDC authorization URL, then install the returned session
+with `echo-brain person session-install --authority-url <authority-url>`
+(the session JSON is read from standard input). This bootstrap artifact
+intentionally has no Authority PIN, enrollment, installation, or lease material.
 
 The included Authority private-key adapter is an explicitly labeled exportable
 software key for the pilot. A later hardware-backed Authority adapter can

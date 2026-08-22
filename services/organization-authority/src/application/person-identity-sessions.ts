@@ -20,14 +20,17 @@ import {
 import { timestampMillis } from "../domain/rules.js";
 import type {
   AuthorityPersonMembershipBinding,
-  AuthorityReadTransaction,
   AuthorityWriteTransaction,
   NewPersonSessionCredential,
-  OrganizationAuthorityRepository,
   StoredOidcIdentityBinding,
   StoredOidcLoginAttempt,
   StoredPersonSessionFamily,
 } from "./ports/authority-repository.js";
+import type {
+  PersonSessionReadTransaction,
+  PersonSessionRepository,
+  PersonSessionWriteTransaction,
+} from "./ports/person-session-repository.js";
 import type {
   FrozenPersonSessionOidcConfiguration,
   OidcTenantConstraint,
@@ -304,7 +307,7 @@ export class PersonIdentitySessionApplication {
   >();
 
   constructor(
-    private readonly repository: OrganizationAuthorityRepository,
+    private readonly repository: PersonSessionRepository,
     configuration: PersonSessionOidcConfiguration,
     private readonly runtime: PersonSessionRuntime,
   ) {
@@ -397,7 +400,10 @@ export class PersonIdentitySessionApplication {
             this.configuration.oidc_configuration_sha256,
           expires_at: expiresAt,
         });
-        transaction.appendAudit({
+        // The legacy repository retains its generic audit receipt. A clean
+        // Authority deliberately omits that legacy table: its durable
+        // login-grant row is the founder-onboarding receipt instead.
+        transaction.appendAudit?.({
           occurred_at: stored.issued_at,
           actor_kind: "admin",
           action: "person_login_grant.issued",
@@ -620,7 +626,7 @@ export class PersonIdentitySessionApplication {
               ? "provider_redemption_failed"
               : stage === "response"
                 ? "provider_response_invalid"
-              : "provider_verification_failed",
+                : "provider_verification_failed",
         );
       }
       const identity = this.validateVerifiedIdentity(
@@ -669,8 +675,7 @@ export class PersonIdentitySessionApplication {
               grant.consumed_at !== null ||
               grant.expected_issuer !== identity.issuer ||
               identity.bootstrap_email_sha256 === null ||
-              grant.expected_email_sha256 !==
-                identity.bootstrap_email_sha256 ||
+              grant.expected_email_sha256 !== identity.bootstrap_email_sha256 ||
               grant.oidc_configuration_sha256 !==
                 current.oidc_configuration_sha256 ||
               !isStrictlyBefore(observedAt, grant.expires_at)
@@ -830,6 +835,13 @@ export class PersonIdentitySessionApplication {
       transaction: AuthorityWriteTransaction,
     ) => SynchronousResult<T>;
   }): SynchronousResult<T> {
+    if (
+      this.repository.supports_full_person_authorization_transactions === false
+    ) {
+      throw new Error(
+        "clean Person session runtime does not expose full Authority write transactions",
+      );
+    }
     let tokenSha256: Sha256Digest;
     try {
       tokenSha256 = this.digestSecret(input.access_token);
@@ -838,7 +850,10 @@ export class PersonIdentitySessionApplication {
     }
     const outcome = this.repository.writeAtLinearization(
       () => this.runtime.clock.now(),
-      (transaction, checkedAt):
+      (
+        transaction,
+        checkedAt,
+      ):
         | { kind: "denied" }
         | { kind: "committed"; result: SynchronousResult<T> } => {
         const resolution = this.resolveAccess(
@@ -847,7 +862,10 @@ export class PersonIdentitySessionApplication {
           checkedAt,
         );
         if (resolution.kind === "denied") return { kind: "denied" };
-        const result = input.commit(resolution.authorization, transaction);
+        const result = input.commit(
+          resolution.authorization,
+          transaction as unknown as AuthorityWriteTransaction,
+        );
         this.assertSynchronousCommit(
           result,
           "Person authenticated write commit must be synchronous",
@@ -983,6 +1001,13 @@ export class PersonIdentitySessionApplication {
   }
 
   createPersonReadAuthorizationPort(): PersonReadAuthorizationPort {
+    if (
+      this.repository.supports_full_person_authorization_transactions === false
+    ) {
+      throw new Error(
+        "clean Person session runtime does not expose Person read authorization",
+      );
+    }
     return {
       admitSelfRead: (input) => {
         let tokenSha256: Sha256Digest | undefined;
@@ -1009,7 +1034,7 @@ export class PersonIdentitySessionApplication {
                   authorization: null,
                   checked_at: checkedAt,
                 },
-                transaction,
+                transaction as unknown as AuthorityWriteTransaction,
               );
               this.assertSynchronousCommit(committed);
               return { kind: "denied" as const };
@@ -1025,7 +1050,7 @@ export class PersonIdentitySessionApplication {
                   authorization: resolution.authorization,
                   checked_at: checkedAt,
                 },
-                transaction,
+                transaction as unknown as AuthorityWriteTransaction,
               );
               this.assertSynchronousCommit(committed);
               return { kind: "denied" as const };
@@ -1057,7 +1082,9 @@ export class PersonIdentitySessionApplication {
           input.admission,
         );
         if (tokenSha256 === undefined) {
-          throw new Error("Person read admission is invalid or already finalized");
+          throw new Error(
+            "Person read admission is invalid or already finalized",
+          );
         }
         this.admissionCredentialDigests.delete(input.admission);
         const outcome = this.repository.writeAtLinearization(
@@ -1070,13 +1097,13 @@ export class PersonIdentitySessionApplication {
                   reason_code: "caller_subject_mismatch",
                   checked_at: checkedAt,
                 },
-                transaction,
+                transaction as unknown as AuthorityWriteTransaction,
               );
               this.assertSynchronousCommit(committed);
               return { kind: "denied" as const };
             }
             const fresh = this.resolveAccess(
-              transaction,
+              transaction as unknown as AuthorityWriteTransaction,
               tokenSha256,
               checkedAt,
             );
@@ -1087,7 +1114,7 @@ export class PersonIdentitySessionApplication {
                   reason_code: "person_or_session_inactive",
                   checked_at: checkedAt,
                 },
-                transaction,
+                transaction as unknown as AuthorityWriteTransaction,
               );
               this.assertSynchronousCommit(committed);
               return { kind: "denied" as const };
@@ -1109,14 +1136,14 @@ export class PersonIdentitySessionApplication {
                   reason_code: "authorization_state_changed",
                   checked_at: checkedAt,
                 },
-                transaction,
+                transaction as unknown as AuthorityWriteTransaction,
               );
               this.assertSynchronousCommit(committed);
               return { kind: "denied" as const };
             }
             const committed = input.commit(
               { decision: "allow", authorization: fresh.authorization },
-              transaction,
+              transaction as unknown as AuthorityWriteTransaction,
             );
             this.assertSynchronousCommit(committed);
             return {
@@ -1140,7 +1167,7 @@ export class PersonIdentitySessionApplication {
   }
 
   private completeDeniedAttempt(
-    transaction: AuthorityWriteTransaction,
+    transaction: PersonSessionWriteTransaction,
     stateSha256: Sha256Digest,
     redemptionClaimId: string,
   ): StoredOidcLoginAttempt | undefined {
@@ -1297,7 +1324,7 @@ export class PersonIdentitySessionApplication {
   }
 
   private issueFamily(
-    transaction: AuthorityWriteTransaction,
+    transaction: PersonSessionWriteTransaction,
     observedAt: string,
     upstreamAssertionIssuedAt: string,
     binding: StoredOidcIdentityBinding,
@@ -1337,7 +1364,7 @@ export class PersonIdentitySessionApplication {
   }
 
   private issueCredentialPair(
-    transaction: AuthorityWriteTransaction,
+    transaction: PersonSessionWriteTransaction,
     observedAt: string,
     family: StoredPersonSessionFamily,
     binding: StoredOidcIdentityBinding,
@@ -1388,7 +1415,7 @@ export class PersonIdentitySessionApplication {
   }
 
   private resolveAccess(
-    transaction: AuthorityReadTransaction,
+    transaction: PersonSessionReadTransaction,
     tokenSha256: Sha256Digest,
     checkedAt: string,
   ): AccessResolution {
@@ -1481,7 +1508,7 @@ export class PersonIdentitySessionApplication {
   }
 
   private hasActiveExactMembership(
-    transaction: AuthorityReadTransaction,
+    transaction: PersonSessionReadTransaction,
     binding: AuthorityPersonMembershipBinding,
   ): boolean {
     const membership = transaction.membership(binding.membership_id);

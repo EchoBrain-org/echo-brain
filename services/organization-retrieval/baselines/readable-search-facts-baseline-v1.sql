@@ -14,40 +14,38 @@ CREATE TABLE retrieval_plane_metadata (
   organization_id TEXT NOT NULL,
   segment_id TEXT NOT NULL UNIQUE,
   segment_kind TEXT NOT NULL CHECK (segment_kind IN ('organization-member', 'reviewer')),
-  policy_id TEXT NOT NULL CHECK (policy_id IN ('organization-member-readable-v1', 'restricted-reviewer-v1')),
+  policy_id TEXT NOT NULL CHECK (policy_id IN ('organization-member-readable-person-v2', 'restricted-reviewer-person-v2')),
   policy_contract_sha256 TEXT NOT NULL,
   reviewer_principal_id TEXT,
   reviewer_membership_id TEXT,
   analyzer_contract_sha256 TEXT NOT NULL,
   finalized INTEGER NOT NULL DEFAULT 0 CHECK (finalized IN (0, 1)),
   CHECK (
-    (segment_kind = 'organization-member' AND policy_id = 'organization-member-readable-v1' AND reviewer_principal_id IS NULL AND reviewer_membership_id IS NULL) OR
-    (segment_kind = 'reviewer' AND policy_id = 'restricted-reviewer-v1' AND reviewer_principal_id IS NOT NULL AND reviewer_membership_id IS NOT NULL)
+    (segment_kind = 'organization-member' AND policy_id = 'organization-member-readable-person-v2' AND reviewer_principal_id IS NULL AND reviewer_membership_id IS NULL) OR
+    (segment_kind = 'reviewer' AND policy_id = 'restricted-reviewer-person-v2' AND reviewer_principal_id IS NOT NULL AND reviewer_membership_id IS NOT NULL)
   )
 ) STRICT;
 
 CREATE TABLE retrieval_permission_fact (
   atom_id TEXT PRIMARY KEY,
+  authority_id TEXT NOT NULL,
   organization_id TEXT NOT NULL,
+  state_lineage_id TEXT NOT NULL,
   envelope_sha256 TEXT NOT NULL,
   log_position INTEGER NOT NULL CHECK (log_position > 0),
   record_hash TEXT NOT NULL,
   atom_order INTEGER NOT NULL CHECK (atom_order >= 0),
   signal_id_sha256 TEXT NOT NULL,
   item_kind TEXT NOT NULL CHECK (item_kind IN ('decision', 'action', 'rationale')),
-  policy_id TEXT NOT NULL CHECK (policy_id IN ('organization-member-readable-v1', 'restricted-reviewer-v1')),
+  approval_id TEXT NOT NULL,
+  policy_id TEXT NOT NULL CHECK (policy_id IN ('organization-member-readable-person-v2', 'restricted-reviewer-person-v2')),
   policy_contract_sha256 TEXT NOT NULL,
-  approval_actor_principal_id TEXT NOT NULL,
-  approval_actor_membership_id TEXT NOT NULL,
   reviewer_principal_id TEXT,
   reviewer_membership_id TEXT,
-  release_draft_sha256 TEXT NOT NULL,
-  approval_presentation_sha256 TEXT NOT NULL,
-  semantic_intent_sha256 TEXT NOT NULL,
-  message_presentation_sha256 TEXT NOT NULL,
   authorization_audit_event_id TEXT NOT NULL,
+  authorization_audit_sequence INTEGER NOT NULL CHECK (authorization_audit_sequence > 0),
   authorization_audit_entry_sha256 TEXT NOT NULL,
-  evaluated_at TEXT NOT NULL,
+  provider_action_sha256 TEXT NOT NULL,
   authorization_proof_sha256 TEXT NOT NULL,
   content_binding_sha256 TEXT NOT NULL,
   provenance_binding_sha256 TEXT NOT NULL,

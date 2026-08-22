@@ -361,6 +361,36 @@ describe("documentation validator", () => {
       "qualification_ids has stale backlink QUAL-20260813-120000-001; QUAL-20260813-120000-001 does not reference CMP-TEST",
     );
   });
+  it("requires superseded decision status when superseded_by is nonempty", () => {
+    const { root, sha } = fixture();
+    edit(root, "docs/components/test.md", (source) =>
+      source.replace(
+        "qualification_ids:",
+        "decision_ids:\n  - ADR-0001\nqualification_ids:",
+      ),
+    );
+    write(
+      join(root, "docs/decisions/ADR-0001-test-decision.md"),
+      [
+        common("ADR-0001", "decision").replaceAll(PLACEHOLDER, sha),
+        "status: accepted",
+        "supersedes: []",
+        "superseded_by:",
+        "  - ADR-0002",
+        "updates: []",
+        "---",
+        "# Test decision",
+        "",
+      ].join("\n"),
+    );
+    expect(validate(root)).toContain(
+      "decision with nonempty superseded_by must have status superseded",
+    );
+    edit(root, "docs/decisions/ADR-0001-test-decision.md", (source) =>
+      source.replace("status: accepted", "status: superseded"),
+    );
+    expect(validate(root)).toContain("checks passed");
+  });
   it("rejects malformed managed records, historic references, and sensitive content", () => {
     const { root, sha } = fixture();
     write(join(root, "docs/failure-patterns/FP-TEST-002.md"), "# Untyped\n");

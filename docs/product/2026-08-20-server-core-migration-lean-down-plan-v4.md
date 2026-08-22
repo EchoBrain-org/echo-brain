@@ -2,22 +2,32 @@
 
 **Status:** active initial-V1 execution plan, written 2026-08-20 against
 `77a212134fce762fdffd30e028f3256ba6e75b42` and checked for product parity
-against `main@4665c3a93187095d5d14acbe95e825cd69aaf31e`. Reversible offline
-inventory, transport slimming, and additive replacement work may proceed while
-the contract packet remains draft/proposed. Live reset, sole-writer cutover,
-and compatibility deletion remain blocked until the named decisions and parity
-gates are accepted against exact artifacts.
+against `main@4665c3a93187095d5d14acbe95e825cd69aaf31e`. ADR-0004 now authorizes
+the current-only cleanup sprint. Live reset and sole-writer cutover remain
+blocked until that cleanup and the disposable empty-state rehearsal pass.
 
-This plan deliberately does not try to finish every byte-level v2 contract in
-Phase 0. The first pass preserves main's product behavior and moves exact
-schemas, canonical vectors, and negative cases into the phase that implements
-their owning boundary. A later iteration may narrow or consolidate behavior,
-but only through an explicit delta from main.
+**Accepted clean-state override (2026-08-22):**
+[ADR-0004](../decisions/ADR-0004-founder-authority-clean-state-reset.md)
+supersedes ADR-0003, ADR-0005, and every incompatible preserve/parity clause
+below. The target is one founder-only pipeline, one directly authored genesis
+per retained database role, one current access-event table, and the current
+top-level envelope only. Permission-aware dual-policy reads, readable-search
+planes, historical envelope admission, additive migration ledgers, the
+installation compatibility bridge, delivery fan-out, and formal rollback
+evidence are not V1 requirements. Until this plan is mechanically condensed
+in the cleanup sprint, incompatible detail below is historical implementation
+context, not a governing acceptance gate.
+
+This plan originally preserved main's byte-level v2 behavior. ADR-0004 records
+the explicit delta: clean state permits deletion of historical compatibility
+and replacement with the smaller current-only contracts.
 
 **Governing decisions:**
 [ADR-0001](../decisions/ADR-0001-organization-operated-server-core.md) and
 [ADR-0002](../decisions/ADR-0002-external-oidc-person-sessions.md) are accepted
-and binding. This plan narrows their implementation; it does not reopen them.
+and binding. Accepted
+[ADR-0004](../decisions/ADR-0004-founder-authority-clean-state-reset.md)
+narrows their initial implementation and supersedes ADR-0003 and ADR-0005.
 
 **Historical context:**
 [server-core migration plan v3](2026-08-17-server-core-migration-plan-v3.md)
@@ -27,18 +37,26 @@ successor added. This document is the active plan for finishing the migration
 against the current repository.
 
 **Objective:** remove the installation-era compatibility system and redundant
-transport ceremony, leaving one organization-operated Authority per
-organization, 1:N human memberships, Person-authenticated reads and controls,
-server-owned processing, and the existing permission-aware record and
-retrieval foundation.
+transport ceremony, leaving one founder-operated Authority with OIDC, Slack,
+Granola, one LLM, approve/reject, durable current records, and one simple
+founder read.
 
-This is a clean-state migration. The founder-stated planning premise is that
-there is no customer state to preserve, but Phase 0 does not treat that premise
-as the artifact-bound attestation. The founder state may be reset only after
-D0/ADR-0004 is accepted and through the explicit lineage cutover in this plan.
-Clean state removes the need for online V1 history serving; it does not
-authorize reinterpretation of V1 bytes or deletion of accepted permission
-semantics.
+This is a clean-state replacement. The founder has confirmed there is no
+customer or other user state to preserve and has accepted ADR-0004. The new
+runtime copies no rows and admits no historical schema or envelope. Live reset
+still waits for the accepted implementation and empty-state rehearsal.
+
+**Founder reset-first scope decision (2026-08-21).** There are no live users or
+customers to migrate: the founder is the only operator. Raw Slack, Granola, and
+server context remain available outside the retired state, and the founder will
+re-onboard through the clean flow. Phase 3 and Phase 4 therefore require no
+founder-state copy rehearsal, row migration, dual writing, historical-byte
+parity corpus, or old/new rollback matrix. They require exact fresh genesis, a
+clean runtime closure, a founder onboarding rehearsal, and an
+approve/reject-plus-record/read smoke instead. Semantic correctness and the
+retained authorization invariants remain required; historical bytes are not a
+comparison target. This records scope only: it does not claim that runtime
+wiring, reset, or cutover is complete.
 
 ## Scope boundary
 
@@ -77,8 +95,9 @@ semantics.
 
 ## End state in plain English
 
-- One organization runs one Authority. It onboards an owner and any number of
-  employees; v4 proves an owner plus at least three employees.
+- One organization runs one Authority. It supports an owner and any number of
+  employees; the founder reset-first rehearsal proves the founder clean flow,
+  while focused tests retain the required membership and denial semantics.
 - An administrator creates or revokes memberships, issues one-time human login
   invitations, and connects the organization's Slack and meeting source.
   Humans authenticate through OIDC and link their own Slack identity.
@@ -93,7 +112,9 @@ semantics.
   content, retrieval entry, delivery, or hidden count.
 - Layer 1 is canonical append-only truth; approved records atomically add
   text-free eligibility facts, while rejected records add none. Layer 2 is a
-  deterministic, exact-head, rebuildable retrieval generation. Layer 3
+  deterministic, exact-head, rebuildable retrieval generation. In clean V1,
+  live reconciliation runs once at startup and after a coalesced append cycle
+  advances the exact record head; it is never query-triggered. Layer 3
   resolves the current Person and membership, scopes candidates before
   content or scoring, rechecks at the final fence, commits one minimized audit,
   and only then releases bytes.
@@ -143,9 +164,9 @@ permission model itself:
    persisted instance/binding identities, and direct composition.
 5. Use the atomic stopped source-activation command that replaced the
    incompatible one-meeting canary, structured-text live orchestration, and
-   canary-only store APIs in Phase 2B. Keep structured-text only behind the
-   D5 parity corpus; move or delete that remaining migration evidence
-   only after parity gate D5 closes.
+   canary-only store APIs in Phase 2B. Keep structured-text only where a
+   retained current contract test still needs it; otherwise move or delete the
+   remaining migration evidence with its focused replacement proof.
 6. Replace the separate file delivery journal with the same pre-call
    attempt/unknown/outcome semantics in SQLite, then delete the file-locking and
    second persistence subsystem.
@@ -328,7 +349,8 @@ caller's current active owner/employee membership; the approving actor remains
 provenance. Layer 3 never authorizes from a live Slack link, adapter binding,
 source identity, participant observation, or model inference.
 
-After append, restart verification, deterministic rebuild, and reads reprove
+After append, restart verification, deterministic rebuild where needed for
+legacy recovery, automatic clean-V1 reconciliation, and reads reprove
 the immutable canonical authorization audit/proof. They do not require the
 current Slack connection, external identity link, approval binding, or current
 recording configuration to remain active. Rotating or revoking those mutable
@@ -376,7 +398,9 @@ the Authority writer may append.
   and hash-chain position. Eligibility facts are text-free and committed in
   the same transaction as the verified record.
 - **Layer 2:** deterministic projections and immutable retrieval generations
-  remain rebuildable from verified Layer 1 at an exact record head. Facts,
+  remain rebuildable from verified Layer 1 at an exact record head. Clean V1
+  reconciles them automatically at startup and after a coalesced append cycle
+  advances that head, publishing only an exact-head pointer. Facts,
   content, and lexical planes remain physically and logically separated.
   Policy namespaces remain distinct: member-readable segmentation binds the
   organization and exact policy contract, while restricted-reviewer
@@ -414,16 +438,16 @@ of authority for v4 is:
 V4 does not silently pick the newest prose. Each conflict below has an explicit
 disposition:
 
-| Existing contract or claim                                                                                                                                                                                                                    | Conflict exposed by the sweep                                                                        | V4 disposition                                                                                                                                                                                                   |
-| --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| [Permission architecture](2026-08-09-organization-permission-architecture.md) ordinary reads use an installation and lease, while [ADR-0002](../decisions/ADR-0002-external-oidc-person-sessions.md) and current V2 code use Person sessions. | Person/Authority service-actor semantics are still only a proposed amendment.                        | Close D1 with an accepted narrow amendment before deleting installation authority. Person remains the sole human read actor; the service actor receives no ordinary-read capability.                             |
-| [Trusted Layer-2 design](2026-08-11-trusted-permission-aware-searchable-layer-2-design.md) retains the Pilot and separate reviewer path while adding member-readable search.                                                                  | The lean target keeps both approved policies but not the fixed two-person Pilot transport/substrate. | Preserve reviewer and member meanings exactly. Retire Pilot only through D5 and a rebaselined two-policy contract; never reinterpret Pilot rows.                                                                 |
-| Reviewer and readable-search designs freeze separate 180-day audit/export/expiry systems.                                                                                                                                                     | Those parallel maintenance systems duplicate one semantic decision fence.                            | Keep audit-before-release. D6 must accept one minimized Person-read audit, explicit retention, whole-row expiry, and an explicit export decision before old audit systems are deleted.                           |
-| [Append/derive design](2026-08-07-org-decision-record-append-derive-design.md) and the Layer-2 design freeze separate canonical, derived, facts, content, and lexical storage roles.                                                          | Merging databases looks lean by file count but erases a qualified trust boundary.                    | Preserve the logical and current physical roles in v4. Squash history only within a brand-new lineage; database consolidation is not part of this plan.                                                          |
-| ADR-0001 requires frozen pre-record work, approve/edit/reject outcome evidence, a member exclusion valve, and 30-day terminal cleanup.                                                                                                        | Some implementations are currently test-only or unwired and therefore look dead in a caller scan.    | Treat them as missing required behavior: wire a lean report/cleanup path or obtain an explicit superseding decision. Do not delete them as unused code.                                                          |
+| Existing contract or claim                                                                                                                                                                                                                    | Conflict exposed by the sweep                                                                        | V4 disposition                                                                                                                                                                                                                             |
+| --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| [Permission architecture](2026-08-09-organization-permission-architecture.md) ordinary reads use an installation and lease, while [ADR-0002](../decisions/ADR-0002-external-oidc-person-sessions.md) and current V2 code use Person sessions. | Person/Authority service-actor semantics are still only a proposed amendment.                        | Close D1 with an accepted narrow amendment before deleting installation authority. Person remains the sole human read actor; the service actor receives no ordinary-read capability.                                                       |
+| [Trusted Layer-2 design](2026-08-11-trusted-permission-aware-searchable-layer-2-design.md) retains the Pilot and separate reviewer path while adding member-readable search.                                                                  | The lean target keeps both approved policies but not the fixed two-person Pilot transport/substrate. | Preserve reviewer and member meanings exactly. Retire Pilot only through a recorded new-lineage disposition and focused two-policy contract tests; never reinterpret Pilot rows.                                                           |
+| Reviewer and readable-search designs freeze separate 180-day audit/export/expiry systems.                                                                                                                                                     | Those parallel maintenance systems duplicate one semantic decision fence.                            | Keep audit-before-release. D6 must accept one minimized Person-read audit, explicit retention, whole-row expiry, and an explicit export decision before old audit systems are deleted.                                                     |
+| [Append/derive design](2026-08-07-org-decision-record-append-derive-design.md) and the Layer-2 design freeze separate canonical, derived, facts, content, and lexical storage roles.                                                          | Merging databases looks lean by file count but erases a qualified trust boundary.                    | Preserve the logical and current physical roles in v4. Squash history only within a brand-new lineage; database consolidation is not part of this plan.                                                                                    |
+| ADR-0001 requires frozen pre-record work, approve/edit/reject outcome evidence, a member exclusion valve, and 30-day terminal cleanup.                                                                                                        | Some implementations are currently test-only or unwired and therefore look dead in a caller scan.    | Treat them as missing required behavior: wire a lean report/cleanup path or obtain an explicit superseding decision. Do not delete them as unused code.                                                                                    |
 | ADR-0002 and workspace architecture require old bytes to keep their meaning and old migrations to remain immutable while served.                                                                                                              | A migration squash would otherwise appear to rewrite history.                                        | D0 authorizes a whole-state reset; the new artifact uses role-stable application IDs, fresh lineage manifests, new envelope kinds/versions, and genesis, and rejects all old or mixed state. Historical files remain unchanged in history. |
-| Existing qualification reports are green for exact old artifacts and two-policy generations.                                                                                                                                                  | Source, schema, adapter, actor, or state-lineage changes invalidate those claims.                    | Mark them historical; never rewrite them. Phase 6 creates a new matrix and exact run for the lean artifact.                                                                                                      |
-| Current adapter docs promise four LLM transports and a canary-to-worker flow; current composition selects OpenRouter and cannot resume the structured-text canary candidate.                                                                  | Architectural allowance and operational reality are conflated.                                       | Preserve the provider-neutral processor port. Rebaseline concrete drivers and replace the canary as described below; do not call either old claim current.                                                       |
+| Existing qualification reports are green for exact old artifacts and two-policy generations.                                                                                                                                                  | Source, schema, adapter, actor, or state-lineage changes invalidate those claims.                    | Mark them historical; never rewrite them. Phase 6 creates a new matrix and exact run for the lean artifact.                                                                                                                                |
+| Current adapter docs promise four LLM transports and a canary-to-worker flow; current composition selects OpenRouter and cannot resume the structured-text canary candidate.                                                                  | Architectural allowance and operational reality are conflated.                                       | Preserve the provider-neutral processor port. Rebaseline concrete drivers and replace the canary as described below; do not call either old claim current.                                                                                 |
 
 Any change to an accepted ADR or frozen product decision is a separate
 superseding decision, not a cleanup patch. This plan may name and gate that
@@ -469,7 +493,7 @@ or `v1` suffix alone is never deletion evidence.
 | Installation-signed record envelope and ingest route             | An accepted Authority-writer envelope and in-process append path retaining the exact human act, policy evidence, canonical bytes, log hash, receipt, and retry semantics.                                                                                                                                                                                                                                                                                                                                 |
 | Installation-scoped idempotency and receipt fields               | Organization/Authority writer-scoped semantic idempotency and a new receipt/log version. Reuse with different semantic bytes must deny.                                                                                                                                                                                                                                                                                                                                                                   |
 | Installation actor fields in integration and query audits        | A versioned actor binding that distinguishes Person, administrator, provider-observed human, and the one internal processing actor without synthesizing installation or Person identifiers. Provider action evidence must still bind the identity link, connection, adapter binding/instance/version, capability, Authority, organization, and exact principal/membership where material.                                                                                                                 |
-| Installation-signed reviewer-recent and readable-search requests | Person bearer reviewer-recent and search routes with semantic request bodies, self-only server context, start/end current-state checks, witnesses, and audits. Reviewer-recent remains verified Layer-1/log-backed and available after append before a search rebuild; readable search remains exact-head Layer-2 and fixed-unavailable while stale.                                                                                                                                                      |
+| Installation-signed reviewer-recent and readable-search requests | Person bearer reviewer-recent and search routes with semantic request bodies, self-only server context, start/end current-state checks, witnesses, and audits. Reviewer-recent remains verified Layer-1/log-backed and available after append while clean V1 reconciles Layer 2; readable search remains exact-head Layer-2 and fixed-unavailable until its next exact-head generation is published.                                                                                                                                                      |
 | V1 Slack identity-link transport                                 | The existing Person Slack begin/complete path plus a single server-derived idempotency contract for completion. Stored challenge state, not caller duplication, supplies provider message coordinates.                                                                                                                                                                                                                                                                                                    |
 | Machine enrollment invitation UI                                 | A Person invitation UI/API that creates a membership and one-time Person login grant. Human onboarding must be visibly named as such and remain usable before machine enrollment UI is removed.                                                                                                                                                                                                                                                                                                           |
 | Compatibility administration counts and pages                    | Person membership, invitation, session, Slack link, and current processing views. Remove installation counts only after no current operation depends on them.                                                                                                                                                                                                                                                                                                                                             |
@@ -572,13 +596,13 @@ contracts, or boundary tests merely because a request transport is deleted.
 | `organization_recording_policy_v1` combines decision-processor routing with approval policy/adapter authorization.                                                                                | Split it in the new lineage. Source/pipeline activation owns source adapter identity, processor adapter ID/instance/version, processor/config contract digest, and cutoff. D2 owns policy ID/digest plus approval-surface identity/binding. Candidate creation freezes both; processor identity remains provenance and never becomes human authorization. Delete the overlay only after both contracts exist and exact restart/config-drift tests pass.                                                                                                                        |
 | Live Slack delivery reuses approval-instance configuration and a separate file attempt journal.                                                                                                   | Preserve main's typed delivery-surface array and different-channel rule, derive no reader audience from delivery, and keep approval identity from authorizing delivery. Move the existing claim/unknown/outcome recovery semantics into SQLite, preserve deterministic configured-surface fan-out and exact snapshot identity, then delete the file journal. A future persisted delivery-activation contract is a separate product iteration.                                                                                                                                  |
 | The current processing key omits the meeting-source adapter version and replay normalization strips it; activation-time identity is also conflated with values learned only after a meeting pull. | Create a no-pull pipeline contract for source kind/ID/instance/version, cursor/cutoff lineage, normalizer contract, and processor kind/ID/instance/version/config digest. The new processing key combines that digest with actual external object ID, canonical revision, `normalizer_version`, and nullable provider `source_revision` learned at candidate creation. Replay must preserve every field. Mutating a pipeline or per-meeting member creates a distinct/conflicting candidate; a newly authorized custodian may resume only the exact unchanged tuple and bytes. |
-| `process-one-meeting` staged a `structured-text` processing key, while `serve` selected the OpenRouter `llm` key.                                                                                | Completed in Phase 2B. One stopped, atomic `activate-meeting-source` operation validates the exact Person/member and organization credential, freezes the live-only cutoff without pulling a meeting, and converges under retry/concurrency. The canary, baseline helper, canary-only store APIs, and false handoff runbook are deleted. The Phase-1 replay corpus is disposed on 2026-08-25; the D5 parity corpus authored in Phase 3 replaces it.                                                                                                                             |
+| `process-one-meeting` staged a `structured-text` processing key, while `serve` selected the OpenRouter `llm` key.                                                                                 | Completed in Phase 2B. One stopped, atomic `activate-meeting-source` operation validates the exact Person/member and organization credential, freezes the live-only cutoff without pulling a meeting, and converges under retry/concurrency. The canary, baseline helper, canary-only store APIs, and false handoff runbook are deleted. The Phase-1 replay corpus is disposed on 2026-08-25; no historical parity corpus is required by the founder reset-first scope.                                                                                                        |
 | The Slack approval adapter multiplexes ordinary, Pilot, reviewer, and member presentation/authorization branches, while live composition currently rejects reviewer mode.                         | Compose both retained policies from the frozen pending contract. Keep reviewer schema-v2 approval, member schema-v3 approval, and the common durable rejection authorization. After a state preflight proves no unresolved ordinary/Pilot card, delete only their new-card branches and compatibility resolvers.                                                                                                                                                                                                                                                               |
 | Core marks rejection terminal without the same record-first resolution used for approval.                                                                                                         | Add one narrow record-resolution port for both terminal human outcomes. Freeze and append a bounded rejection act before terminal marking; it creates no approved atom, policy fact, retrieval entry, or delivery. Delete older rejection transport only after retry/restart/race tests pass.                                                                                                                                                                                                                                                                                  |
 | Slack delivery previously wrote a pre-call attempt/outcome file while core stored provider receipts in Authority SQLite.                                                                          | Phase 2 now puts the atomic pre-call claim and unknown/delivered outcome in the existing Authority processing store. Concurrent and restarted callers observe the durable unknown marker instead of posting. The file journal and process-file lock are deleted; live cutover still requires proof that no old file entry needs import.                                                                                                                                                                                                                                        |
 | `approval-outcome-instrument` and terminal cleanup have no live caller.                                                                                                                           | ADR-0001/v3 still require accept/edit/reject evidence and 30-day terminal deletion. Generate the report deterministically from immutable request/resolution rows and schedule bounded lifecycle-owned cleanup, or explicitly supersede those requirements before deleting either implementation.                                                                                                                                                                                                                                                                               |
 | Ollama, OpenAI, Anthropic, and OpenRouter drivers are compiled while current live composition fixes OpenRouter and the processor still has an implicit default/fallback.                          | Keep the processor and provider-client seam. If unused drivers are deleted, require an explicit OpenRouter provider, narrow the union/factory, and make a missing or retired provider fail instead of falling back. Current architecture must stop promising the removed drivers, state preflight must find no binding, their qualification becomes historical, and golden tests must preserve the retained processing-version digest and processing key. This does not add the future read model.                                                                             |
-| Migration-only synthetic replay and structured-text parity fixtures ship in the production closure.                                                                                               | Move them under test support or delete them only after D5 closes the real-corpus parity requirement, or after an accepted decision explicitly supersedes ADR-0001's parity gate.                                                                                                                                                                                                                                                                                                                                                                                               |
+| Migration-only synthetic replay and structured-text parity fixtures ship in the production closure.                                                                                               | Move them under test support or delete them once the focused current-contract proof no longer imports them. The founder reset-first scope does not retain a real-corpus parity requirement.                                                                                                                                                                                                                                                                                                                                                                                    |
 | Person read services separately authenticate, admit, finalize, and append route-specific audits, causing repeated transactions and historical provenance reloads.                                 | Add one joined current-access query and one shared read/fence service. Keep operation-specific policy evaluation, but commit one minimized audit at the final release boundary. Delete duplicate audit repositories and per-route transaction choreography after D6 and race tests.                                                                                                                                                                                                                                                                                            |
 | HTTP handlers return pre-serialized authorized bytes with no reusable application result boundary.                                                                                                | Use an explicit `prepare -> deterministic private serialization -> final fence/audit -> release unchanged bytes` protocol. The HTTP adapter may hold but cannot write or otherwise expose the immutable buffer before commit. Keep HTTP as the sole v4 release adapter; a future Layer-4 consumer requires a separate purpose-specific release/audit contract and is not implemented here.                                                                                                                                                                                     |
 
@@ -625,10 +649,12 @@ to re-onboard from empty state.
 **Phase 0 acceptance evidence:** an inventory of state roles and schema
 lineages; a list of declarative configuration to re-enter; confirmation that
 no customer or irreplaceable record is present; and the exact stop,
-snapshot-checksum, no-dual-writer, restore, and rollback protocol.
+no-dual-writer, fresh-genesis, founder-re-onboarding, and failure-diagnosis
+protocol.
 
-**Phase 4 entry evidence:** a fresh stopped offline checksummed snapshot and a
-named old artifact/state pair that were produced under the accepted protocol.
+**Phase 4 entry evidence:** the exact new artifact, its frozen baseline and
+manifest expectations, the clean runtime closure report, and founder
+reset-first attestation. Any old snapshot remains archival evidence only.
 Phase 0 neither reads nor resets live state.
 
 **Blocks:** Phase 4 cutover. It does not block replacement implementation or
@@ -837,54 +863,39 @@ or non-`none` delivery field. Their executable proof is Phase 2 exit evidence.
 **Blocks:** record-writer activation and deletion of the old rejection
 envelope/ingest path.
 
-### D5 — parity gate
+### D5 — founder clean-reset proof gate
 
-**Decision:** accept the semantic parity report for the replacement path.
-Envelope bytes, actor versions, and the explicitly accepted Person-versioned
-policy contracts are expected to change. The human-visible policy delta is
-that a current Person/session replaces installation plus lease. Reviewer-tenure
-and organization-membership reader sets, revocation, later-member behavior,
-policy separation, denial, recent-read availability, and non-disclosure may not
-change. D6 separately accepted the audit retention and export changes on
-2026-08-20. Delivery cardinality, destination policy, and route consolidation
-are not implicit migration deltas; the initial V1 keeps main behavior unless a
-later accepted decision names and proves a change.
+**Decision (2026-08-21):** D5 does not require an old/new historical parity
+corpus for the founder reset-first scope. No live user or customer state is
+being carried forward, so historical rows, envelopes, receipts, and founder
+state are not copied or compared. The founder re-enters through the clean
+onboarding flow using the available raw Slack, Granola, and server context.
 
-The corpus contains one organization with one owner and at least three
-employees, multiple source revisions, one approval under each retained policy,
-one rejection, one approval/rejection conflict, retries, one revoked former
-employee, and a separately invited later-joining employee. A same-principal
-OIDC/membership retarget attempt must deny. A separate foreign Authority fixture
-supplies only wrong-origin/session/identifier denial cases.
+The replacement proof is exact fresh genesis and clean-runtime behavior:
 
-Parity is exact for:
+- all four top-level roles are created from their frozen baselines with their
+  expected schema digests and one bound lineage manifest;
+- the clean reset entry/import closure reaches neither legacy operator/runtime
+  composition nor historical migrations;
+- founder onboarding creates the Authority/organization binding, founder
+  membership, Person session, provider connection, Person Slack link, and
+  server approval binding without importing retired state;
+- one approval under each retained policy, one rejection, append/restart or
+  rebuild as applicable, and the corresponding current-Person reads prove the
+  retained authorization, non-disclosure, audit, and delivery semantics; and
+- the new writer, receipts, policy facts, and audit contain no employee
+  installation, enrollment, lease, or installation key meaning.
 
-- human outcome and frozen staged bytes;
-- mapped policy family, the accepted old-to-new consequence/version delta,
-  immutable authorization proof, and identical reader-set semantics;
-- admitted Layer 1 facts and excluded rejection facts;
-- derived items and immutable retrieval generation contents;
-- reviewer exact-tenure visibility;
-- organization-member current-membership and later-member visibility;
-- reviewer-recent remains backed by verified append-atomic facts and canonical
-  records and remains available after append before a Layer-2 rebuild, while
-  readable search remains bound to an exact-head Layer-2 generation;
-- denial shape, witness, response content, and absence of hidden counts;
-- start/end Person state and final head fence behavior;
-- audit allow/deny meaning and response digest before day 30; deliberate
-  whole-row expiry divergence after day 30; and deliberate absence of every
-  old query-audit export path;
-- idempotent retry, conflict, restart, and unknown-outcome behavior; and
-- separation between approval success and delivery acknowledgement.
+Focused contract, denial, retry, restart, and cross-origin tests continue to
+prove the retained semantics. They prove the clean design directly, not an
+equivalence claim over historical bytes. D6 retention/export commitments and
+the approval/delivery separation remain unchanged.
 
-**Pass condition:** zero unexplained semantic mismatch after applying only the
-accepted identity/policy-version and D6 retention/export mappings. Any other
-intentional change requires its own
-accepted decision before the report can pass. Comparing only hashes cannot
-pass; the report must show the old and new consequence sentences and why their
-reader sets are equivalent under Person identity.
+**Pass condition:** the exact fresh-genesis, closure, founder-onboarding, and
+approve/reject-plus-record/read evidence is green against one named new
+artifact. This gate does not claim a live reset or cutover has occurred.
 
-**Blocks:** clean-state cutover and all compatibility deletion.
+**Blocks:** compatibility deletion until the clean replacement proof is green.
 
 ### D6 — shared Person-read audit and retention
 
@@ -1035,13 +1046,13 @@ therefore presents its correct role ID and is refused by its missing or
 legacy manifest, which lets a refusal distinguish "right role, legacy
 lineage" from "not this role's file at all".
 
-| Database role | Application ID |
-| --- | --- |
-| `authority` | `0x45434155` (`ECAU`) |
-| `control-plane` | `0x45434f50` (`ECOP`) |
-| `record-log` | `0x4543524c` (`ECRL`) |
-| `record-derived` | `0x45435244` (`ECRD`) |
-| `retrieval-facts` | `0x45524654` (`ERFT`) |
+| Database role       | Application ID        |
+| ------------------- | --------------------- |
+| `authority`         | `0x45434155` (`ECAU`) |
+| `control-plane`     | `0x45434f50` (`ECOP`) |
+| `record-log`        | `0x4543524c` (`ECRL`) |
+| `record-derived`    | `0x45435244` (`ECRD`) |
+| `retrieval-facts`   | `0x45524654` (`ERFT`) |
 | `retrieval-lexical` | `0x45524c58` (`ERLX`) |
 | `retrieval-content` | `0x45524354` (`ERCT`) |
 
@@ -1087,9 +1098,8 @@ backfilling is allowed.
 - Existing migration files and decision/qualification documents are not
   edited to look current. They may leave the runtime migration closure only
   after the new lineage is the sole live lineage.
-- The old checksummed snapshot is opened only with the matching old artifact
-  and only as the rollback pair. New code never guesses, imports, or upgrades
-  it.
+- Any retained old snapshot is historical evidence only, not an active rollback
+  pair. New code never guesses, imports, upgrades, or compares against it.
 - No V1 record is copied into the new log, no installation act is relabelled
   as a Person/service act, and no old receipt is presented as a new-lineage
   receipt.
@@ -1097,36 +1107,36 @@ backfilling is allowed.
 ### Reset sequence
 
 1. Stop the Authority and prove the singleton is released.
-2. Inventory and checksum every old state file and the exact old artifact.
-3. Move the old state directory intact to the named rollback location.
-4. Initialize a different empty directory with the new lineage.
-5. Recreate the Authority/organization binding and owner membership.
-6. Recreate employee memberships and issue Person login grants; complete OIDC
-   binding and sessions through normal current flows.
-7. Re-onboard the organization Slack tool, complete each Person Slack identity
-   link, and configure the accepted server approval binding.
-8. Re-enter source, processing, approval, and delivery configuration through
-   their current typed adapter configuration paths.
-9. Append one reviewer-restricted approval, one organization-member-readable
-   approval, and one rejection; rebuild Layer 2 and exercise all Person reads.
-10. Record the new lineage manifests, record head, retrieval generation,
-    audit heads, and exact artifact digest before enabling the normal cycle.
+2. Retain the old directory only as an opaque historical archive if needed; do
+   not reopen it for a deployment rollback or comparison rehearsal.
+3. Initialize a different empty directory with the new lineage.
+4. Recreate the Authority/organization binding and founder membership; complete
+   the founder's Person/OIDC flow.
+5. Re-onboard the organization Slack tool, complete the founder's Person Slack
+   identity link, and configure the accepted server approval binding.
+6. Re-enter raw Granola/source, processing, approval, and delivery
+   configuration through their current typed adapter configuration paths.
+7. Append one reviewer-restricted approval, one organization-member-readable
+   approval, and one rejection; rebuild as applicable and exercise the founder
+   Person reads.
+8. Record the new lineage manifests, record head, retrieval generation, audit
+   heads, and exact artifact digest before enabling the normal cycle.
 
-There is never a dual writer. The old artifact/state pair is stopped before
-the new lineage can write.
+There is never a row migration or dual writer. The retired artifact remains
+outside the new runtime closure.
 
 ## Execution phases
 
 ### Phase 0 — freeze the initial V1 scope
 
-The working Phase-0 packet is the
+The historical Phase-0 packet is the
 [closure ledger](2026-08-20-server-core-migration-phase-0-closure.md),
 [test-contract inventory](2026-08-20-server-core-migration-phase-0-test-contract-inventory.md),
-[RFC-0001](../rfcs/RFC-0001-server-core-lean-authority-contracts.md), and
-proposed [ADR-0003](../decisions/ADR-0003-server-core-lean-authority-contracts.md)
-and [ADR-0004](../decisions/ADR-0004-founder-authority-clean-state-reset.md).
-Their draft/proposed state is sufficient for reversible offline implementation;
-it is not sufficient for live reset, cutover, or compatibility deletion.
+[RFC-0001](../rfcs/RFC-0001-server-core-lean-authority-contracts.md), superseded
+[ADR-0003](../decisions/ADR-0003-server-core-lean-authority-contracts.md), and
+accepted [ADR-0004](../decisions/ADR-0004-founder-authority-clean-state-reset.md).
+ADR-0004 now governs implementation. Acceptance alone is not evidence that the
+live reset or cutover has run.
 
 **Entry gate**
 
@@ -1145,20 +1155,19 @@ it is not sufficient for live reset, cutover, or compatibility deletion.
    object, record-proof, policy-fact, retrieval-scope, and audit identifier from
    authoritative source through final consumer. Record whether each edge is
    current, frozen, revocable, tenant-scoped, and safe to minimize.
-4. Record the initial D1 through D4 and D6 contract direction, unresolved exact
-   schemas, and owning implementation phase. Keep ADR-0003 proposed until the
-   implemented evidence exists.
-5. Draft D0/ADR-0004 with the reset scope, secret-free re-entry map, attestation
-   fields, and reset/rollback protocol. Accept it only at the Phase 4 entry
-   gate, together with the stopped snapshot and rollback pair.
+4. Replace the superseded D1 through D4 and D6 contract packet with ADR-0004's
+   founder-only current pipeline and direct genesis schemas.
+5. Implement accepted D0/ADR-0004, rehearse it from disposable empty state,
+   and review the streamlined onboarding flow before touching the central
+   organization. It does not create an old/new rollback pair.
 6. Add no compatibility abstraction merely to make later deletion easier.
 
 **Exit gate**
 
 - The initial V1 preserve/replace/delete boundary and every intentional delta
   from main are recorded; unresolved exact contracts have an owning phase.
-- D0/ADR-0004 and D1 through D4/D6 remain visibly proposed and are named as
-  hard prerequisites for Phase 4 rather than falsely claimed complete.
+- D0/ADR-0004 is accepted, while implementation and qualification remain
+  visibly incomplete until the cleanup sprint and empty-state rehearsal pass.
 - Every proposed deletion has an owner, replacement or zero-caller proof, and
   a named verification case.
 - INV-IDENTITY-005 has a complete edge inventory with no inferred, duplicated,
@@ -1168,17 +1177,16 @@ it is not sufficient for live reset, cutover, or compatibility deletion.
 
 **Kill gate**
 
-Stop the migration if a proposed replacement collapses Person and service
-actors, weakens either policy, merges approval with delivery, makes the
-Authority multi-tenant, or requires Layer 4. Re-scope or seek a new decision;
-do not code through the conflict.
+Stop if the implementation reintroduces legacy state admission, additive
+migration ledgers, historical envelope readers, permission-policy branches,
+or a second writer. Also stop for newly discovered customer, second-user, or
+irreplaceable state and seek a new decision.
 
 **Rollback gate**
 
-Phase 0 is documentation and tests only. Revert unaccepted draft artifacts;
-no runtime or state change is permitted. Reversible Phase 1 and Phase 2 work
-may be reverted without a state downgrade because the old live lineage and
-compatibility paths remain untouched.
+ADR acceptance is documentation only. The cleanup sprint may change code and
+disposable test state, but no central-organization runtime or state changes
+until the implementation and onboarding rehearsal pass.
 
 ### Phase 1 — establish semantic Person transport and new lineage offline
 
@@ -1251,10 +1259,12 @@ shadow assertion. The final target request bodies are:
 | complete Slack identity link | `{ "challenge_attempt_id": "...", "challenge_code": "..." }`                  |
 
 `reviewer recent decisions` preserves main's exact-reviewer-tenure policy and
-Layer-1/log-backed availability, including availability after append before a
-Layer-2 rebuild. Readable search separately preserves the current organization-
-member exact-head Layer-2 path. Both derive caller context server-side and use
-the shared final fence/audit mechanism.
+Layer-1/log-backed availability, including availability after append while
+clean V1 reconciles Layer 2. Readable search separately preserves the current
+organization-member exact-head Layer-2 path: the query is unavailable until an
+exact-head generation publishes, never triggers that build itself, and does not
+block Layer-1 reads. Both derive caller context server-side and use the shared
+final fence/audit mechanism.
 
 `challenge_attempt_id` is only the completion lookup/correlation key. A
 versioned server-derived completion digest binds the attempt, challenge-code
@@ -1310,8 +1320,8 @@ revision, normalizer version, nullable provider revision, and the processor's
 configuration-derived identity version. The current exact source custodian is
 still immutable and fail-closed: revocation stops future source work. A
 replaceable custody activation remains a later Phase-2 contract; this tranche
-does not add a second custody system. Structured-text remains only for the
-D5 parity corpus authored in Phase 3.
+does not add a second custody system. Structured-text remains only where a
+retained current-contract test requires it.
 
 The initial compatibility writer now appends one canonical approval or
 rejection act before any terminal marker or delivery fan-out. Record creation
@@ -1525,7 +1535,8 @@ dated disposition.
 **Work**
 
 Phase 2 is six independently green tranches. A later tranche may not make an
-earlier red, and compatibility remains selectable until Phase 3 parity.
+earlier red, and compatibility remains selectable until the clean replacement
+proof in Phase 3 is green.
 
 1. **SQLite delivery attempts — complete.** Replace the separate file journal and process
    lock with an Authority-SQLite `claim -> existing | claimed -> outcome`
@@ -1539,7 +1550,7 @@ earlier red, and compatibility remains selectable until Phase 3 parity.
    processing-key preimage with source/normalizer/provider revisions. After
    this is green, delete `process-one-meeting`, `baseline-live-source`, and
    their structured-text canary orchestration; keep structured-text only where
-   the D5 parity corpus consumes it.
+   a retained current-contract test consumes it.
 3. **Canonical act before delivery — complete for compatibility V1.** Add one internal resolved-act writer port
    to the core. Adapt the current compatibility builder/ingest path behind it
    first: approve and reject obtain an idempotent canonical receipt before the
@@ -1550,7 +1561,7 @@ earlier red, and compatibility remains selectable until Phase 3 parity.
    either read policy. The current compatibility composition still reuses its
    one Slack approval instance/channel for delivery; replacing that coupling
    with main's distinct approval/delivery channel configuration remains Phase
-   2D/D5 work and is not claimed complete here. C-B adds the
+   2D and clean-reset proof work and is not claimed complete here. C-B adds the
    source-free startup executable that reopens only exact terminal acts after
    custody revocation, performs no provider/candidate work, creates or reuses
    the exact frozen canonical envelope, and idempotently submits it through
@@ -1693,7 +1704,7 @@ Remove the new composition binding and discard only new offline/test state.
 The old compatibility writer remains the sole live path. Never replay a new
 envelope through the old writer or vice versa.
 
-### Phase 3 — prove parity and rehearse reset
+### Phase 3 — prove the clean reset and rehearse founder onboarding
 
 **Progress, slice 1 (2026-08-21):** the lineage-manifest contracts and the
 read-only pre-open guard are implemented as private, unwired Authority
@@ -1703,8 +1714,8 @@ environment read — and refuses every family in the canonical refusal matrix,
 plus a malformed expectation as the invalid-input caller-error family;
 its 17-test suite proves each family plus the coherent positive paths, and
 the 7-test manifest suite freezes both bodies, the role locations, and the
-role application IDs. Baseline SQL, fresh initialization, the D5 corpus, and
-the reset rehearsal remain later Phase 3 slices.
+role application IDs. Baseline SQL, fresh initialization, clean runtime
+wiring, and the founder onboarding rehearsal remain later Phase 3 slices.
 
 **Progress, slice 2 (2026-08-21):** open is split from migrate at all four
 production open-database entry points (authority, control-plane, record,
@@ -1750,25 +1761,80 @@ their installation-free new-lineage shapes are contract work owned by the
 same later slice as the authority baseline, drawing on the frozen D2-2B
 installation-free action/audit chain and the D3 envelope/receipt identity.
 
+**Progress, slice 4 (2026-08-21):** stopped fresh genesis is implemented as a
+dedicated clean-reset executable. It creates an absent staged state directory,
+applies the four top-level baselines, seeds only the Authority/organization,
+active owner, control-plane, record-log, and derived-cursor metadata required
+for a new lineage, stamps and verifies its manifests, then publishes the
+directory atomically. Its explicitly checked import closure follows the three
+new-lineage package exports and excludes legacy migration and runtime modules.
+This is not a clean runtime: clean serve, founder Person/provider onboarding,
+and the live record writer remain pending and are not selected by this slice.
+
 **Entry gate**
 
 - Phase 2 exit is green.
-- The implemented D6 audit shape is stable enough for the parity comparison;
+- The implemented D6 audit shape is stable enough for the clean smoke;
   formal acceptance remains a Phase 4 entry requirement.
-- The parity corpus and comparison rules in D5 are checked in. By the corpus
-  disposition below this item is not satisfied at phase entry: the corpus is
-  authored inside Phase 3, so the gate is met before the parity run rather
-  than before the phase begins.
-- The old and new writer paths can be run only in isolated state directories.
+- Frozen baseline digests and an exact fresh-genesis seam exist for every
+  retained database role.
+- The clean reset entry and its import closure have a focused guard against
+  legacy operator/runtime composition and historical migrations.
 
-**Corpus disposition (2026-08-20):** the founder disposed the Phase-1 synthetic
-replay corpus on schedule at its declared `disposal_due_at` of 2026-08-25;
-operator removal remains required and nothing authorizes earlier deletion by
-inference. The D5 parity corpus is authored fresh as Phase 3 work with the
-D5-required structure: one owner plus three employees, both policy families, a
-rejection, an approval/rejection conflict, retries, a revoked former employee,
-a later-joining employee, an OIDC-retarget denial, and a bounded
-foreign-Authority fixture. Its comparison rules become executable alongside it.
+**Reset-first disposition (2026-08-21):** the founder has no live
+user/customer state to copy. Phase 3 starts from an empty directory and uses
+the available raw Slack, Granola, and server context only through the clean
+onboarding/configuration flow. It creates neither a founder-state copy nor an
+old/new writer, artifact, or rollback comparison matrix.
+
+**Progress, slice 5 (2026-08-21):** the clean Person runtime now starts only
+from verified fresh-lineage state. A stopped command issues the founder's
+private invitation; the Person client consumes that artifact without printing
+the grant; OIDC bootstrap, refresh, and logout run against the clean listener.
+The stopped Slack connection command and signed-in Person challenge create the
+founder's current Slack identity link with exact request replay. A command-level
+rehearsal proves reset through logout, and the selected reset, Person, Slack,
+source, and approval-activation executable closures exclude migrations,
+operator runtime, installation writers, and the retained reaction-policy
+provider.
+
+**Progress, slice 6 (2026-08-21):** two stopped commands finish the clean
+configuration seam without provider side effects. Person-bound Slack approval
+activation derives the active founder and current Slack link, then freezes
+approve/reject capabilities for both retained policies without an installation
+ID. Granola admission requires that founder's completed OIDC bootstrap and
+matching email, freezes the retained source/LLM identities, and creates a
+canonical live-only cursor. A separate opt-in clean Compose/Caddy artifact
+selects only the clean Person listener over a fresh data mount; it does not
+change or inherit the legacy deployment.
+
+**Progress, founder source admission (2026-08-21):** a dedicated stopped clean
+source command now admits one new-lineage Granola pipeline from private local
+credential files. It makes no provider call, imports no historical notes, and
+persists only active founder custody, source/normalizer identity, a newly
+sampled live-only cutoff cursor, opaque credential-reference digests, and the
+fixed retained LLM processing configuration digest. Exact retry returns the
+stored cutoff; a changed semantic input conflicts. It is not a poller, live
+writer, or historical-state bridge. Approval activation is implemented as the
+separate stopped command described above.
+
+**Progress, slice 7 — lean live wiring (2026-08-22):** one manifest-driven
+`clean-live serve` command now starts the current-Person HTTP surface with an
+idle worker before founder finalization and, after the stopped finalize plus
+restart, composes the admitted live-only Granola cursor, fixed OpenRouter
+processor, readable Slack approve/reject card, D2-to-D3 finalization, V4 append,
+`GET /v1/person/records`, and automatic Layer-2 exact-head reconciliation at
+startup and after coalesced append cycles. The founder coordinator reduces
+onboarding to three phases and asks for no generated IDs; the only human
+handoffs are one OIDC callback JSON paste and one Slack challenge reply
+followed by Enter.
+Local fake-provider tests cover empty/no-signal cursor advancement,
+approve/reject, append recovery/restart, rejection non-readability, and the
+current-Person read. The repository gate is green at 177 test files and 1,680
+tests. No central organization state or live provider was touched, so this is
+wiring evidence, not the founder-live Phase 3 exit rehearsal. Historical
+Granola notes remain intentionally outside the cutoff, and legacy deletion
+still waits for the clean live smoke.
 
 **Work**
 
@@ -1779,67 +1845,78 @@ foreign-Authority fixture. Its comparison rules become executable alongside it.
    D6 audit baseline persists exactly the frozen rows under the accepted
    commitment-only semantics recorded in D6 above, with no companion
    preimage store.
-2. Author the D5 parity corpus and its executable comparison rules, then run
-   that corpus through the old compatibility path and new server path.
-3. Compare semantic outcomes, policy facts, projections, visibility, witnesses,
-   audits, retries, and delivery independently of expected envelope-version
-   changes.
-4. Rehearse the full reset sequence on a copy of founder state.
-5. Rehearse rollback as an artifact/state pair and prove that mixed pairs are
-   rejected.
-6. Scan the prospective new runtime closure for installation/enrollment/lease
-   dependencies and classify every remaining match.
+2. Wire one clean reset entry that performs only exact genesis/pre-open and
+   clean-runtime composition. It must not import legacy operator/runtime
+   composition or historical migrations.
+3. Rehearse founder onboarding from that empty state: Authority/organization,
+   founder membership and Person session, Slack/provider link, approval binding,
+   and typed source/processing/delivery configuration are entered anew from the
+   remaining raw context.
+4. Exercise one approval under each retained policy, one rejection, canonical
+   record append, automatic exact-head Layer-2 publication after restart and
+   after an append cycle, and the corresponding current-Person reads. The smoke
+   proves policy separation, audit-before-bytes, non-disclosure, and absence of
+   retired identity fields without comparing old bytes or rows.
+5. Scan the prospective clean runtime closure for installation/enrollment/lease
+   dependencies and delete or classify every remaining match before legacy code
+   is removed.
 
 **Exit gate**
 
-- The D5 report has zero unexplained semantic mismatch and is ready for
-  artifact-bound acceptance at the Phase 4 gate.
 - Fresh initialization and byte-stable restart pass; every family in the
   canonical refusal matrix of the lineage contract refuses before a writable
   database or provider/listener is opened.
-- A clean reset and rollback rehearsal both complete without row copying,
-  dual writing, or provider side effects against the live organization.
-- The new runtime closure has no unclassified installation-era dependency.
-- The exact cutover and rollback artifacts and directories are named.
+- The clean reset entry/import closure reaches no legacy operator/runtime
+  composition or historical migration asset, and has no unclassified
+  installation-era dependency.
+- Founder onboarding from exact fresh genesis and the approve/reject-plus-
+  record/read smoke are green against one named new artifact.
+- No row is copied, relabelled, or backfilled; no dual writer or old/new
+  rollback matrix was created.
 
 **Kill gate**
 
-Stop on any visibility mismatch, missing audit, different human outcome,
-rejection leak, non-idempotent retry, mixed-lineage acceptance, or provider
-side effect during an offline rehearsal. Fix and restart the parity run from
-empty isolated state.
+Stop on any visibility mismatch, missing audit, rejection leak, non-idempotent
+retry, mixed-lineage acceptance, forbidden legacy import, or provider side
+effect during the clean rehearsal. Fix and restart from empty isolated state.
 
 **Rollback gate**
 
-Delete the rehearsal state only. It contains no authoritative live data. Keep
-the live old artifact/state pair unchanged.
+Delete the rehearsal state only. It contains no authoritative live data. This
+reset-first scope does not establish an old/new rollback matrix.
 
-### Phase 4 — reset founder state and cut over once
+### Phase 4 — reset founder state into the clean runtime once
 
 **Entry gate**
 
 - Phases 0 through 3 have exited.
-- D0 through D6 are accepted against the exact implemented artifacts,
-  contracts, parity report, founder attestation, and reset/rollback pair. This
-  is the first phase that requires formal acceptance rather than a draft target.
-- The exact old and new artifacts are built and checksummed.
+- D0 through D4 and D6 are accepted against the exact implemented artifacts,
+  contracts, founder reset-first attestation, and fresh-genesis/clean-closure
+  evidence. D5 is satisfied by the clean-reset proof above, not a historical
+  parity report. This is the first phase that requires formal acceptance rather
+  than a draft target.
+- The exact new artifact and its expected genesis manifests are built and
+  checksummed.
 - The cutover begins in a stopped Authority with no pending provider request or
   unknown delivery outcome.
 
 **Work**
 
-Execute the reset sequence exactly once. Re-onboard the organization and
-people through the preserved membership, invitation, OIDC, organization Slack,
-Person Slack identity-link, approval activation, and typed delivery-surface
-configuration flows. Exercise both policies, configured delivery fan-out, and rejection before enabling the
-ordinary processing cycle.
+Execute the reset sequence exactly once from an empty state directory. Re-onboard
+the founder through the preserved membership, invitation/OIDC, organization
+Slack, Person Slack identity-link, approval activation, and typed
+delivery-surface configuration flows. Re-enter raw Granola/source and server
+configuration through their current typed paths. Exercise both policies,
+configured delivery fan-out, and rejection before enabling the ordinary
+processing cycle. Do not copy rows, run a dual writer, or construct an old/new
+rollback matrix.
 
 **Exit gate**
 
 - The live Authority opens only the new lineage and reports the expected
   Authority/organization binding.
-- At least one owner and three employees have distinct active memberships; at
-  least two complete OIDC/Person paths and their Slack links are exercised.
+- The founder has one active membership, completes the clean OIDC/Person path,
+  and completes the required Slack identity link.
 - Reviewer-restricted content is visible only to the exact active reviewer
   tenure.
 - Organization-member-readable content is visible to every tested current
@@ -1858,10 +1935,9 @@ provider identity verification fails. Do not partially import old state.
 
 **Rollback gate**
 
-Stop the new artifact, preserve its state for diagnosis, and restart only the
-checksummed old artifact with the intact old state snapshot. Re-onboarded
-provider actions after cutover must be reconciled explicitly before rollback;
-never run both artifacts or copy rows between them.
+Stop the new artifact and preserve its state for diagnosis. There is no
+old/new rollback matrix in the founder reset-first scope; never run both
+artifacts or copy rows between them.
 
 ### Phase 5 — delete compatibility in bounded tranches
 
@@ -1880,7 +1956,7 @@ never run both artifacts or copy rows between them.
    surface. The generic adapter registry and duplicate exclusion CRUD already
    exited in reversible Phase 1A.
 3. Move or remove the remaining structured-text synthetic-replay production
-   files after D5 parity replaces their last purpose. The live canary,
+   files once no retained current-contract proof imports them. The live canary,
    baseline helper, and canary-only store APIs already exited in Phase 2B.
 4. Confirm the Phase-2 SQLite Slack attempt migration is active and the live
    state preflight proves zero old file entries or imports them. The file
@@ -1946,10 +2022,9 @@ tranche and narrow it.
 
 **Rollback gate**
 
-Revert only the failing deletion tranche. If runtime rollback is required,
-use the last green new-lineage artifact with the same new state. Do not use an
-old-lineage artifact against new state. The pre-cutover old pair remains a
-separate emergency rollback until final acceptance.
+Revert only the failing deletion tranche. If runtime rollback is required, use
+the last green new-lineage artifact with the same new state. Do not use an
+old-lineage artifact against new state or recreate an old/new rollback matrix.
 
 ### Phase 6 — lean closure and plan exit
 
@@ -1994,7 +2069,7 @@ completion label is reversible; record or identity meaning is not.
 | Workspace direction            | Core imports no adapters/vendor/persistence; adapters implement typed ports; approval and delivery remain separate.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                | `npm run check:boundary`; `npm run test:architecture`; `npm run test:core`                                                                  |
 | Protocol/API                   | Canonical new writer fixtures; semantic Person DTOs; unknown-field denial; cross-version and cross-policy rejection; no retired exports.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           | `npm run test:protocols`                                                                                                                    |
 | Person client                  | Login import, private session, refresh rotation/replay, logout, foreign-Authority rejection, semantic requests, no installation state or dependency.                                                                                                                                                                                                                                                                                                                                                                                                                                                                               | `npm run test:person`; `npm run pack:person-client` plus offline artifact smoke                                                             |
-| Organization topology          | One target Authority has one owner plus at least three employees; a bounded foreign-Authority fixture proves that foreign IDs, sessions, provider links, records, and search results are rejected.                                                                                                                                                                                                                                                                                                                                                                                                                                 | Authority and integration topology suite with isolated negative-fixture state                                                               |
+| Organization topology          | The founder clean-reset rehearsal creates one owner membership from empty state. Focused fixtures prove foreign IDs, sessions, provider links, records, and search results are rejected, without requiring live historical users or a founder-state copy.                                                                                                                                                                                                                                                                                                                                                                          | Authority and integration topology suite with isolated negative-fixture state                                                               |
 | Invitations/OIDC               | Provision a new principal and membership, then issue a one-time Person login grant to that exact existing membership; prove exact email/issuer/subject checks, PKCE-S256, state/nonce, redirect/tenant/algorithm/audience/`azp`/`iat`, upstream-token non-persistence, returning login, access/family deadlines, refresh replay/race, revocation, and same-principal/membership retarget denial.                                                                                                                                                                                                                                   | `npm run test:authority`; Person integration suite                                                                                          |
 | Slack identity                 | Organization tool verification, opaque credential handle, Person challenge replay keyed for lookup by attempt but semantically bound by the server-derived completion digest, exact tenant human, wrong thread/user/workspace denial, mutate-field replay conflict, and membership revocation.                                                                                                                                                                                                                                                                                                                                     | `npm run test:control-plane`; `npm run test:authority`; integration fake-provider suite                                                     |
 | Adapter-to-ECHO identity spine | Exact Authority/org/lineage, issuer/tenant/tool, connection, adapter identity/instance/version/binding, provider object/actor, external link, principal/membership tenure, capability, domain-separated provider-action and integration-audit chain entries, canonical proof, policy fact, and current Person chain; every missing, mismatched, revoked, replaced, cross-tenant, or inferred edge denies at the stage that consumes it. Post-append provider-edge revocation does not become a read-time check.                                                                                                                    | INV-IDENTITY-005 contract suite across control-plane, Authority, record, retrieval, and integration tests                                   |
@@ -2005,13 +2080,13 @@ completion label is reversible; record or identity meaning is not.
 | Delivery identity and recovery | At least one configured surface for enabled processing; deterministic fan-out to every configured surface after either policy approval; rejection creates none; Slack approval and delivery channels differ; approval identity/receipt confer no delivery authority; each surface validates destination/configuration, keys durable attempt state to the exact record/snapshot plus adapter instance/configuration, and covers crash before call, provider success before outcome persistence, ambiguous outcome, known-no-write retry, frozen unknown/delivered recovery, and the core-receipt crash window without blind repost. | Core delivery fan-out, Slack delivery, and SQLite attempt-store suites                                                                      |
 | Restricted reviewer            | Only exact current principal and membership tenure reads; a different membership tuple, other employee, other organization, revoked membership, and malformed proof deny.                                                                                                                                                                                                                                                                                                                                                                                                                                                          | `npm run test:record`; `npm run test:authority`; `npm run test:integration`                                                                 |
 | Organization member            | Every current owner/employee, including a separately invited later employee, reads; revoked, unknown future membership type, other organization, and malformed proof deny.                                                                                                                                                                                                                                                                                                                                                                                                                                                         | `npm run test:record`; retrieval/Authority/integration policy suites                                                                        |
-| Reviewer recent                | The exact current reviewer principal/membership tenure reads from verified append-atomic Layer-1 facts/canonical rows before and after a Layer-2 rebuild; other tenure, other employees, revocation, and foreign Authority deny. An append followed by no rebuild does not make this route unavailable.                                                                                                                                                                                                                                                                                                                            | Authority/API/client parity plus T09, T13, and T14                                                                                          |
-| Layer 1                        | Canonical record and approval-only eligibility facts commit atomically; rejection commits no eligibility/readable fact; canonical reproof, predecessor/hash chain, mutation denial, receipt, and stopped rebuild are deterministic.                                                                                                                                                                                                                                                                                                                                                                                                | `npm run test:record`                                                                                                                       |
-| Layer 2                        | Exact-head build, immutable generation, separated planes, authorized candidate/statistic scope, distinct member `(organization, policy)` and reviewer `(organization, policy, principal, membership)` segment namespaces, cross-policy substitution denial, fact/content/provenance reproof, stale/corrupt generation denial, stopped rebuild, and restore admission.                                                                                                                                                                                                                                                              | Retrieval workspace tests; `npm run test:integration`                                                                                       |
+| Reviewer recent                | The exact current reviewer principal/membership tenure reads from verified append-atomic Layer-1 facts/canonical rows before and after clean V1 Layer-2 publication; other tenure, other employees, revocation, and foreign Authority deny. An append while reconciliation is pending does not make this route unavailable.                                                                                                                                                                                                                                                                                                                            | Authority/API/client parity plus T09, T13, and T14                                                                                          |
+| Layer 1                        | Canonical record and approval-only eligibility facts commit atomically; rejection commits no eligibility/readable fact; canonical reproof, predecessor/hash chain, mutation denial, receipt, and deterministic recovery rebuild are preserved.                                                                                                                                                                                                                                                                                                                                                                                       | `npm run test:record`                                                                                                                       |
+| Layer 2                        | Exact-head build, immutable generation, separated planes, authorized candidate/statistic scope, distinct member `(organization, policy)` and reviewer `(organization, policy, principal, membership)` segment namespaces, cross-policy substitution denial, fact/content/provenance reproof, stale/corrupt generation denial, automatic clean-live reconciliation at startup and after an advancing coalesced append cycle, no query-triggered build, pointer preservation on failed or superseded build, retry on the next worker cycle, and restore admission.                                                                                                                                                                                                                                                              | Retrieval workspace tests; `npm run test:integration`                                                                                       |
 | Layer 3                        | Start/end Person resolution, self-only caller binding, pre-search caller-bound scope receipt, prepare/private deterministic serialization/finalize/release ordering, post-search release binding, mutation race, exact-head fence, safe witness, minimized allow/deny audit, audit failure discarding the buffer, and only the exact audited bytes written after commit.                                                                                                                                                                                                                                                           | `npm run test:authority`; `npm run test:integration`                                                                                        |
 | Audit/retention                | One D6 row shape for every retained Person operation; distinct caller/scope/release digests; no content/query leakage; exact returned opaque bindings and response digest; 30-day whole-row expiry and its audit; a closed unsupported capability result that selects zero rows and opens/writes no file; and zero legacy export route, command, writer, selector, runtime mode, or CLI branch.                                                                                                                                                                                                                                    | Authority audit repository/application/HTTP/CLI tests plus T09 and T13                                                                      |
-| Operator surface               | Organization initialization, owner plus three employee invitations, revocation, organization Slack/source onboarding, Person links, approval activation, typed delivery-surface configuration, binding inspection, and required recovery through JSON API and thin CLI without browser-console dependency.                                                                                                                                                                                                                                                                                                                             | Admin API/CLI and fresh-state integration suite                                                                                             |
-| Lineage                        | Fresh init, restart, schema digest, and every family in the canonical refusal matrix of the lineage contract: missing state directory or missing/unreadable database, missing/duplicated/swapped/legacy manifest, wrong-X, mixed-X, wrong application ID, inexact schema version, partial publish, a pointer row naming an absent generation, and artifact/state mismatch in either direction, with no auto-upgrade.                                                                                                                                                                                                                                                                                                                                                                                                                                                      | Exact-schema tests and reset rehearsal report                                                                                               |
+| Operator surface               | Organization initialization, owner plus three employee invitations, revocation, organization Slack/source onboarding, Person links, approval activation, typed delivery-surface configuration, binding inspection, and required recovery through JSON API and thin CLI without browser-console dependency.                                                                                                                                                                                                                                                                                                                         | Admin API/CLI and fresh-state integration suite                                                                                             |
+| Lineage                        | Fresh init, restart, schema digest, and every family in the canonical refusal matrix of the lineage contract: missing state directory or missing/unreadable database, missing/duplicated/swapped/legacy manifest, wrong-X, mixed-X, wrong application ID, inexact schema version, partial publish, a pointer row naming an absent generation, and artifact/state mismatch in either direction, with no auto-upgrade.                                                                                                                                                                                                               | Exact-schema tests and reset rehearsal report                                                                                               |
 | Deletion                       | Zero runtime callers, exports, routes, SQL objects, artifact files, or direct dependencies for retired installation surfaces; historical references allowlisted by path.                                                                                                                                                                                                                                                                                                                                                                                                                                                           | Checked `rg`/manifest scan plus architecture test                                                                                           |
 | Full repository                | Build, docs, boundaries, types, lint, all workspace and integration tests from a clean checkout.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   | `npm run check`                                                                                                                             |
 | Layer 4 exclusion              | No new answer-composition route, retrieval-to-model dependency, prompt/answer audit schema, agent/tool path, or streaming response in this change.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 | Boundary manifest and dependency scan                                                                                                       |
@@ -2027,10 +2102,10 @@ at the same named commit:
 
 1. ADR-0001 and ADR-0002 remain accepted and unsuperseded, and D0 through D6
    have recorded accepted dispositions bound to exact artifact digests.
-2. The live topology is one organization and its one Authority;
-   the verification run includes one owner plus at least three employees and a
-   bounded foreign-Authority rejection fixture, without a two-person product
-   constant or a tenant registry.
+2. The live topology is one organization and its one Authority; the founder
+   clean-reset rehearsal creates the founder owner from empty state, and focused
+   fixtures include bounded foreign-Authority rejection without a two-person
+   product constant, tenant registry, historical user copy, or row migration.
 3. Organization initialization, membership provisioning/revocation, Person
    invitation grants, OIDC login/refresh/logout, organization Slack onboarding,
    and Person Slack identity linking all pass their positive, semantic-digest

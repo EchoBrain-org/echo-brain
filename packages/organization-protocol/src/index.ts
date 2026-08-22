@@ -31,9 +31,7 @@ export type {
   VerifyOrganizationInstallationAccessStateInput,
 } from "./installation-access-state.js";
 export { MAX_ORGANIZATION_PROTOCOL_DOCUMENT_BYTES } from "./validation-support.js";
-export {
-  MAX_ORGANIZATION_RECORD_DOCUMENT_BYTES,
-} from "./record-payload.js";
+export { MAX_ORGANIZATION_RECORD_DOCUMENT_BYTES } from "./record-payload.js";
 export {
   CONSERVATIVE_ORGANIZATION_RECORD_INTENT,
   createOrganizationRecordApprovalEnvelope,
@@ -83,7 +81,10 @@ export {
   projectOrganizationMemberReadableReleaseDraft,
   validateOrganizationMemberReadableReleaseDraft,
 } from "./organization-member-release-draft.js";
-export type { OrganizationMemberReadableReleaseDraftItemV1, OrganizationMemberReadableReleaseDraftV1 } from "./organization-member-release-draft.js";
+export type {
+  OrganizationMemberReadableReleaseDraftItemV1,
+  OrganizationMemberReadableReleaseDraftV1,
+} from "./organization-member-release-draft.js";
 export {
   organizationMemberReadableApprovalPresentation,
   organizationMemberReadableApprovalPresentationSha256,
@@ -199,3 +200,42 @@ export type {
   RevokedOrganizationInstallationAccessStatePayloadV1,
   RevokedOrganizationInstallationAccessStateV1,
 } from "./contracts.js";
+export {
+  createOrganizationRecordEnvelopeV4,
+  validateOrganizationRecordEnvelopeV4,
+  verifyOrganizationRecordEnvelopeV4,
+  validateMeetingSourceProvenanceV1,
+  validateDecisionProcessorProvenanceV1,
+  MEETING_SOURCE_PROVENANCE_V1_KIND,
+  DECISION_PROCESSOR_PROVENANCE_V1_KIND,
+} from "./record-envelope-v4.js";
+export type {
+  AuthorityDetachedSigner,
+  CreateOrganizationRecordEnvelopeV4Input,
+  DecisionProcessorProvenanceV1,
+  MeetingSourceProvenanceV1,
+  OrganizationRecordEnvelopeV4,
+} from "./record-envelope-v4.js";
+export {
+  createOrganizationRecordReceiptV2,
+  validateOrganizationRecordReceiptBodyV2,
+  verifyOrganizationRecordReceiptV2,
+} from "./organization-record-receipt-v2.js";
+export type { OrganizationRecordReceiptV2 } from "./organization-record-receipt-v2.js";
+export {
+  buildHumanActRecordInputV1,
+  validateHumanActRecordInputV1,
+} from "./human-act-record-input-v1.js";
+export type {
+  HumanActEventV1,
+  HumanActRecordInputV1,
+  PersonContentPolicyIdV2,
+} from "./human-act-record-input-v1.js";
+export {
+  ORGANIZATION_MEMBER_READABLE_PERSON_CONSEQUENCE_TEXT,
+  organizationMemberReadablePersonConsequenceSha256,
+  organizationMemberReadablePersonPolicyContractSha256,
+  RESTRICTED_REVIEWER_PERSON_CONSEQUENCE_TEXT,
+  restrictedReviewerPersonConsequenceSha256,
+  restrictedReviewerPersonPolicyContractSha256,
+} from "./person-content-policy-v2.js";

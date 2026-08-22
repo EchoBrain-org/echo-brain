@@ -1,29 +1,38 @@
-import { chmodSync, readdirSync, readFileSync } from 'node:fs';
-import { join } from 'node:path';
-import { sha256Digest } from '@echo-brain/federation-protocol';
-import Database from 'better-sqlite3';
-import { afterAll, describe, expect, it } from 'vitest';
+import { chmodSync, readdirSync, readFileSync } from "node:fs";
+import { join } from "node:path";
+import { sha256Digest } from "@echo-brain/federation-protocol";
+import Database from "better-sqlite3";
+import { afterAll, describe, expect, it } from "vitest";
 import {
   inspectOrganizationRecordDatabaseSchema,
   openAndMigrateOrganizationRecordDatabase,
   openOrganizationRecordDatabase,
   ORGANIZATION_RECORD_DERIVED_DATABASE,
   ORGANIZATION_RECORD_LOG_DATABASE,
-} from '../src/maintenance.js';
+} from "../src/maintenance.js";
 import {
   applyOrganizationRecordDerivedBaselineV1,
   ORGANIZATION_RECORD_DERIVED_BASELINE_SCHEMA_VERSION_V1,
   organizationRecordDerivedBaselineSha256V1,
   organizationRecordDerivedBaselineSqlV1,
-} from '../src/persistence/baseline.js';
-import type { OrganizationRecordDatabaseDefinition } from '../src/persistence/database-definition.js';
+} from "../src/persistence/baseline.js";
+import {
+  applyOrganizationRecordLogBaselineV1,
+  ORGANIZATION_RECORD_LOG_BASELINE_SCHEMA_VERSION_V1,
+  organizationRecordLogBaselineSha256V1,
+  organizationRecordLogBaselineSqlV1,
+} from "../src/persistence/record-log-baseline.js";
+import type { OrganizationRecordDatabaseDefinition } from "../src/persistence/database-definition.js";
 import {
   currentOrganizationRecordSchemaVersion,
   migrateOrganizationRecordDatabaseWithMigrations,
   organizationRecordMigrations,
   type OrganizationRecordMigration,
-} from '../src/persistence/migrate.js';
-import { removeTemporaryDirectories, temporaryStateDirectory } from './support/fixtures.js';
+} from "../src/persistence/migrate.js";
+import {
+  removeTemporaryDirectories,
+  temporaryStateDirectory,
+} from "./support/fixtures.js";
 
 afterAll(removeTemporaryDirectories);
 
@@ -33,77 +42,91 @@ afterAll(removeTemporaryDirectories);
  * instead of claiming speculative future use.
  */
 const LOG_TABLES_BY_OBSERVABLE_BEHAVIOR = {
-  'opens only the intended organization record log': [
-    'organization_record_log_metadata',
-    'organization_record_schema_migrations',
+  "opens only the intended organization record log": [
+    "organization_record_log_metadata",
+    "organization_record_schema_migrations",
   ],
-  'appends one verifiable record per human act and never rewrites it': [
-    'organization_record_log',
+  "appends one verifiable record per human act and never rewrites it": [
+    "organization_record_log",
   ],
-  'materializes a signed receipt once, recoverably, after the append commits': [
-    'organization_record_signed_receipt',
+  "materializes a signed receipt once, recoverably, after the append commits": [
+    "organization_record_signed_receipt",
   ],
-  'activates one immutable notice-bound two-member permission pilot': [
-    'organization_record_permission_pilot_activation',
+  "activates one immutable notice-bound two-member permission pilot": [
+    "organization_record_permission_pilot_activation",
   ],
-  'indexes only notice-qualified post-activation approvals for the pilot read': [
-    'organization_record_permission_pilot_eligibility',
-  ],
-  'indexes each released item of a verified reviewer-v2 approval, text-free, for its exact approving reviewer':
-    ['organization_record_reviewer_policy_fact'],
-  'indexes each released item of a verified organization-member-readable schema-v3 approval, text-free':
-    ['organization_member_readable_policy_fact'],
+  "indexes only notice-qualified post-activation approvals for the pilot read":
+    ["organization_record_permission_pilot_eligibility"],
+  "indexes each released item of a verified reviewer-v2 approval, text-free, for its exact approving reviewer":
+    ["organization_record_reviewer_policy_fact"],
+  "indexes each released item of a verified organization-member-readable schema-v3 approval, text-free":
+    ["organization_member_readable_policy_fact"],
 } as const;
 
 const DERIVED_TABLES_BY_OBSERVABLE_BEHAVIOR = {
-  'opens only the intended organization derived store': [
-    'organization_derived_metadata',
-    'organization_record_schema_migrations',
+  "opens only the intended organization derived store": [
+    "organization_derived_metadata",
+    "organization_record_schema_migrations",
   ],
-  'follows the log from one cursor that advances with its own rows': [
-    'organization_derived_cursor',
+  "follows the log from one cursor that advances with its own rows": [
+    "organization_derived_cursor",
   ],
-  'answers which decisions came from which approved meeting snapshot': [
-    'organization_derived_atom',
-    'organization_derived_meeting_snapshot',
-    'organization_derived_participant_observation',
+  "answers which decisions came from which approved meeting snapshot": [
+    "organization_derived_atom",
+    "organization_derived_meeting_snapshot",
+    "organization_derived_participant_observation",
   ],
-  'records rejection acts without candidate content': ['organization_derived_rejection'],
-  'answers what supports what and who was listed or attended': [
-    'organization_derived_edge',
+  "records rejection acts without candidate content": [
+    "organization_derived_rejection",
   ],
-  'defers a reviewer-v2 approval to permission-aware retrieval without deriving its content':
-    ['organization_derived_reviewer_policy_exclusion'],
-  'defers an organization-member-readable schema-v3 approval without deriving its content':
-    ['organization_derived_member_readable_policy_exclusion'],
+  "answers what supports what and who was listed or attended": [
+    "organization_derived_edge",
+  ],
+  "defers a reviewer-v2 approval to permission-aware retrieval without deriving its content":
+    ["organization_derived_reviewer_policy_exclusion"],
+  "defers an organization-member-readable schema-v3 approval without deriving its content":
+    ["organization_derived_member_readable_policy_exclusion"],
 } as const;
 
-const LOG_TABLES = Object.values(LOG_TABLES_BY_OBSERVABLE_BEHAVIOR).flat().sort();
-const DERIVED_TABLES = Object.values(DERIVED_TABLES_BY_OBSERVABLE_BEHAVIOR).flat().sort();
+const LOG_TABLES = Object.values(LOG_TABLES_BY_OBSERVABLE_BEHAVIOR)
+  .flat()
+  .sort();
+const DERIVED_TABLES = Object.values(DERIVED_TABLES_BY_OBSERVABLE_BEHAVIOR)
+  .flat()
+  .sort();
 
 const LOG_MIGRATION_SHA256 = [
   sha256Digest(
     readFileSync(
-      new URL('../migrations/log/0001_organization_record_log.sql', import.meta.url),
-      'utf8',
+      new URL(
+        "../migrations/log/0001_organization_record_log.sql",
+        import.meta.url,
+      ),
+      "utf8",
     ),
   ),
   sha256Digest(
     readFileSync(
-      new URL('../migrations/log/0002_permission_pilot.sql', import.meta.url),
-      'utf8',
+      new URL("../migrations/log/0002_permission_pilot.sql", import.meta.url),
+      "utf8",
     ),
   ),
   sha256Digest(
     readFileSync(
-      new URL('../migrations/log/0003_reviewer_policy_fact.sql', import.meta.url),
-      'utf8',
+      new URL(
+        "../migrations/log/0003_reviewer_policy_fact.sql",
+        import.meta.url,
+      ),
+      "utf8",
     ),
   ),
   sha256Digest(
     readFileSync(
-      new URL('../migrations/log/0004_organization_member_readable_policy_fact.sql', import.meta.url),
-      'utf8',
+      new URL(
+        "../migrations/log/0004_organization_member_readable_policy_fact.sql",
+        import.meta.url,
+      ),
+      "utf8",
     ),
   ),
 ] as const;
@@ -130,11 +153,11 @@ function tableNames(database: Database.Database): string[] {
   ).map((row) => row.name);
 }
 
-describe('organization record migrations', () => {
-  it('applies contiguous migrations and stamps the application id', () => {
+describe("organization record migrations", () => {
+  it("applies contiguous migrations and stamps the application id", () => {
     for (const [definition, filename, expectedTables] of [
-      [ORGANIZATION_RECORD_LOG_DATABASE, 'log.sqlite', LOG_TABLES],
-      [ORGANIZATION_RECORD_DERIVED_DATABASE, 'derived.sqlite', DERIVED_TABLES],
+      [ORGANIZATION_RECORD_LOG_DATABASE, "log.sqlite", LOG_TABLES],
+      [ORGANIZATION_RECORD_DERIVED_DATABASE, "derived.sqlite", DERIVED_TABLES],
     ] as const) {
       const database = open(definition, filename);
       try {
@@ -142,41 +165,48 @@ describe('organization record migrations', () => {
         expect(migrations.map((migration) => migration.version)).toEqual(
           migrations.map((_, index) => index + 1),
         );
-        expect(database.pragma('user_version', { simple: true })).toBe(
+        expect(database.pragma("user_version", { simple: true })).toBe(
           currentOrganizationRecordSchemaVersion(definition),
         );
-        expect(database.pragma('application_id', { simple: true })).toBe(
+        expect(database.pragma("application_id", { simple: true })).toBe(
           definition.application_id,
         );
         expect(tableNames(database)).toEqual(expectedTables);
-        expect(inspectOrganizationRecordDatabaseSchema(database, definition)).toBe(
-          migrations.length,
-        );
+        expect(
+          inspectOrganizationRecordDatabaseSchema(database, definition),
+        ).toBe(migrations.length);
       } finally {
         database.close();
       }
     }
   });
 
-  it('lists every migration as a boundary runtime asset', () => {
+  it("lists every migration as a boundary runtime asset", () => {
     // The repo-wide architecture check enumerates flat `migrations/` roots and
     // does not descend into this workspace's per-database series, so the
     // packaging guarantee is asserted here instead.
     const manifest = JSON.parse(
-      readFileSync(new URL('../source-boundary.v1.json', import.meta.url), 'utf8'),
+      readFileSync(
+        new URL("../source-boundary.v1.json", import.meta.url),
+        "utf8",
+      ),
     ) as { runtime_assets: string[] };
     const declared = [...manifest.runtime_assets].sort();
-    const present = ['derived', 'log']
-      .flatMap((series) =>
-        readdirSync(new URL(`../migrations/${series}/`, import.meta.url))
-          .filter((file) => file.endsWith('.sql'))
-          .map((file) => `services/organization-record/migrations/${series}/${file}`),
-      )
-      .sort();
+    const migrations = ["derived", "log"].flatMap((series) =>
+      readdirSync(new URL(`../migrations/${series}/`, import.meta.url))
+        .filter((file) => file.endsWith(".sql"))
+        .map(
+          (file) => `services/organization-record/migrations/${series}/${file}`,
+        ),
+    );
+    const baselines = readdirSync(new URL("../baselines/", import.meta.url))
+      .filter((file) => file.endsWith(".sql"))
+      .map((file) => `services/organization-record/baselines/${file}`);
+    const present = [...migrations, ...baselines].sort();
     expect(declared).toEqual(present);
   });
 
-  it('pins the log migration checksums', () => {
+  it("pins the log migration checksums", () => {
     expect(
       organizationRecordMigrations(ORGANIZATION_RECORD_LOG_DATABASE).map(
         (migration) => migration.sha256,
@@ -184,46 +214,60 @@ describe('organization record migrations', () => {
     ).toEqual([...LOG_MIGRATION_SHA256]);
   });
 
-  it('keeps DELETE journaling and the shared pragma set', () => {
-    const database = open(ORGANIZATION_RECORD_LOG_DATABASE, 'pragmas.sqlite');
+  it("keeps DELETE journaling and the shared pragma set", () => {
+    const database = open(ORGANIZATION_RECORD_LOG_DATABASE, "pragmas.sqlite");
     try {
       // A stopped database must be inspectable read-only without WAL/SHM
       // sidecars, and state-backup refuses WAL sidecars.
-      expect(database.pragma('journal_mode', { simple: true })).toBe('delete');
-      expect(database.pragma('trusted_schema', { simple: true })).toBe(0);
-      expect(database.pragma('temp_store', { simple: true })).toBe(2);
-      expect(database.pragma('foreign_keys', { simple: true })).toBe(1);
-      expect(database.pragma('synchronous', { simple: true })).toBe(2);
+      expect(database.pragma("journal_mode", { simple: true })).toBe("delete");
+      expect(database.pragma("trusted_schema", { simple: true })).toBe(0);
+      expect(database.pragma("temp_store", { simple: true })).toBe(2);
+      expect(database.pragma("foreign_keys", { simple: true })).toBe(1);
+      expect(database.pragma("synchronous", { simple: true })).toBe(2);
     } finally {
       database.close();
     }
   });
 
-  it('refuses a database that belongs to the other record charter', () => {
-    const path = join(temporaryStateDirectory(), 'log.sqlite');
-    const log = openAndMigrateOrganizationRecordDatabase(path, ORGANIZATION_RECORD_LOG_DATABASE);
+  it("refuses a database that belongs to the other record charter", () => {
+    const path = join(temporaryStateDirectory(), "log.sqlite");
+    const log = openAndMigrateOrganizationRecordDatabase(
+      path,
+      ORGANIZATION_RECORD_LOG_DATABASE,
+    );
     log.close();
     expect(() =>
-      openAndMigrateOrganizationRecordDatabase(path, ORGANIZATION_RECORD_DERIVED_DATABASE),
+      openAndMigrateOrganizationRecordDatabase(
+        path,
+        ORGANIZATION_RECORD_DERIVED_DATABASE,
+      ),
     ).toThrow(/not an organization record derived database/);
   });
 
-  it('refuses a world-readable database file and then a non-empty uninitialized one', () => {
-    const path = join(temporaryStateDirectory(), 'foreign.sqlite');
+  it("refuses a world-readable database file and then a non-empty uninitialized one", () => {
+    const path = join(temporaryStateDirectory(), "foreign.sqlite");
     const foreign = new Database(path);
-    foreign.exec('CREATE TABLE someone_elses_table (id INTEGER PRIMARY KEY) STRICT');
+    foreign.exec(
+      "CREATE TABLE someone_elses_table (id INTEGER PRIMARY KEY) STRICT",
+    );
     foreign.close();
     expect(() =>
-      openAndMigrateOrganizationRecordDatabase(path, ORGANIZATION_RECORD_LOG_DATABASE),
+      openAndMigrateOrganizationRecordDatabase(
+        path,
+        ORGANIZATION_RECORD_LOG_DATABASE,
+      ),
     ).toThrow(/current-user 0600 regular file/);
     chmodSync(path, 0o600);
     expect(() =>
-      openAndMigrateOrganizationRecordDatabase(path, ORGANIZATION_RECORD_LOG_DATABASE),
+      openAndMigrateOrganizationRecordDatabase(
+        path,
+        ORGANIZATION_RECORD_LOG_DATABASE,
+      ),
     ).toThrow(/refusing to claim a non-empty uninitialized/);
   });
 
-  it('rejects a tampered migration ledger', () => {
-    const path = join(temporaryStateDirectory(), 'tampered.sqlite');
+  it("rejects a tampered migration ledger", () => {
+    const path = join(temporaryStateDirectory(), "tampered.sqlite");
     const database = openAndMigrateOrganizationRecordDatabase(
       path,
       ORGANIZATION_RECORD_LOG_DATABASE,
@@ -233,18 +277,21 @@ describe('organization record migrations', () => {
        UPDATE organization_record_schema_migrations SET migration_sha256 = 'sha256:0'`,
     );
     expect(() =>
-      inspectOrganizationRecordDatabaseSchema(database, ORGANIZATION_RECORD_LOG_DATABASE),
+      inspectOrganizationRecordDatabaseSchema(
+        database,
+        ORGANIZATION_RECORD_LOG_DATABASE,
+      ),
     ).toThrow(/identity or checksum is invalid/);
     database.close();
   });
 
-  it('rejects a schema newer than this build supports', () => {
-    const path = join(temporaryStateDirectory(), 'newer.sqlite');
+  it("rejects a schema newer than this build supports", () => {
+    const path = join(temporaryStateDirectory(), "newer.sqlite");
     const database = openAndMigrateOrganizationRecordDatabase(
       path,
       ORGANIZATION_RECORD_LOG_DATABASE,
     );
-    database.pragma('user_version = 99');
+    database.pragma("user_version = 99");
     expect(() =>
       migrateOrganizationRecordDatabaseWithMigrations(
         database,
@@ -255,12 +302,13 @@ describe('organization record migrations', () => {
     database.close();
   });
 
-  it('applies a later migration onto an existing database', () => {
+  it("applies a later migration onto an existing database", () => {
     const definition = ORGANIZATION_RECORD_LOG_DATABASE;
-    const path = join(temporaryStateDirectory(), 'upgrade.sqlite');
+    const path = join(temporaryStateDirectory(), "upgrade.sqlite");
     const database = openAndMigrateOrganizationRecordDatabase(path, definition);
     const applied = organizationRecordMigrations(definition);
-    const nextSql = 'CREATE TABLE organization_record_future (id INTEGER PRIMARY KEY) STRICT;\n';
+    const nextSql =
+      "CREATE TABLE organization_record_future (id INTEGER PRIMARY KEY) STRICT;\n";
     const next: OrganizationRecordMigration = {
       version: applied.length + 1,
       filename: `000${applied.length + 1}_organization_record_future.sql`,
@@ -271,14 +319,16 @@ describe('organization record migrations', () => {
       ...applied,
       next,
     ]);
-    expect(database.pragma('user_version', { simple: true })).toBe(next.version);
-    expect(tableNames(database)).toContain('organization_record_future');
+    expect(database.pragma("user_version", { simple: true })).toBe(
+      next.version,
+    );
+    expect(tableNames(database)).toContain("organization_record_future");
     database.close();
   });
 
-  it('rejects non-contiguous migration series', () => {
+  it("rejects non-contiguous migration series", () => {
     const definition = ORGANIZATION_RECORD_LOG_DATABASE;
-    const path = join(temporaryStateDirectory(), 'gap.sqlite');
+    const path = join(temporaryStateDirectory(), "gap.sqlite");
     const database = openAndMigrateOrganizationRecordDatabase(path, definition);
     const applied = organizationRecordMigrations(definition);
     expect(() =>
@@ -286,9 +336,9 @@ describe('organization record migrations', () => {
         ...applied,
         {
           version: applied.length + 2,
-          filename: '0009_organization_record_gap.sql',
-          sql: 'CREATE TABLE organization_record_gap (id INTEGER PRIMARY KEY) STRICT;',
-          sha256: sha256Digest('gap'),
+          filename: "0009_organization_record_gap.sql",
+          sql: "CREATE TABLE organization_record_gap (id INTEGER PRIMARY KEY) STRICT;",
+          sha256: sha256Digest("gap"),
         },
       ]),
     ).toThrow();
@@ -296,23 +346,23 @@ describe('organization record migrations', () => {
   });
 });
 
-describe('organization record log immutability triggers', () => {
+describe("organization record log immutability triggers", () => {
   const seed = {
     position: 1,
-    envelope_id: 'ore_1',
-    event_type: 'approval',
-    installation_id: 'ins_alpha',
-    idempotency_key: 'k1',
-    canonical_envelope: '{}',
-    envelope_sha256: `sha256:${'1'.repeat(64)}`,
-    receipt_payload: '{}',
+    envelope_id: "ore_1",
+    event_type: "approval",
+    installation_id: "ins_alpha",
+    idempotency_key: "k1",
+    canonical_envelope: "{}",
+    envelope_sha256: `sha256:${"1".repeat(64)}`,
+    receipt_payload: "{}",
     previous_record_hash: null,
-    record_hash: `sha256:${'2'.repeat(64)}`,
-    recorded_at: '2026-08-07T12:00:00.000Z',
+    record_hash: `sha256:${"2".repeat(64)}`,
+    recorded_at: "2026-08-07T12:00:00.000Z",
   };
 
   function seeded(): Database.Database {
-    const database = open(ORGANIZATION_RECORD_LOG_DATABASE, 'immutable.sqlite');
+    const database = open(ORGANIZATION_RECORD_LOG_DATABASE, "immutable.sqlite");
     database
       .prepare(
         `INSERT INTO organization_record_log (
@@ -327,24 +377,28 @@ describe('organization record log immutability triggers', () => {
     return database;
   }
 
-  it('rejects update and delete through ordinary code paths', () => {
+  it("rejects update and delete through ordinary code paths", () => {
     const database = seeded();
     try {
       expect(() =>
-        database.exec(`UPDATE organization_record_log SET recorded_at = 'later'`),
+        database.exec(
+          `UPDATE organization_record_log SET recorded_at = 'later'`,
+        ),
       ).toThrow(/append-only/);
-      expect(() => database.exec(`DELETE FROM organization_record_log`)).toThrow(
-        /cannot be deleted/,
-      );
-      expect(database.prepare(`SELECT COUNT(*) AS n FROM organization_record_log`).get()).toEqual(
-        { n: 1 },
-      );
+      expect(() =>
+        database.exec(`DELETE FROM organization_record_log`),
+      ).toThrow(/cannot be deleted/);
+      expect(
+        database
+          .prepare(`SELECT COUNT(*) AS n FROM organization_record_log`)
+          .get(),
+      ).toEqual({ n: 1 });
     } finally {
       database.close();
     }
   });
 
-  it('rejects a non-contiguous insertion', () => {
+  it("rejects a non-contiguous insertion", () => {
     const database = seeded();
     try {
       expect(() =>
@@ -364,9 +418,9 @@ describe('organization record log immutability triggers', () => {
           .run({
             ...seed,
             position: 3,
-            envelope_id: 'ore_3',
-            idempotency_key: 'k3',
-            record_hash: `sha256:${'3'.repeat(64)}`,
+            envelope_id: "ore_3",
+            idempotency_key: "k3",
+            record_hash: `sha256:${"3".repeat(64)}`,
             previous_record_hash: null,
           }),
       ).toThrow(/positions must be contiguous/);
@@ -375,7 +429,7 @@ describe('organization record log immutability triggers', () => {
     }
   });
 
-  it('rejects an insertion that breaks the predecessor link', () => {
+  it("rejects an insertion that breaks the predecessor link", () => {
     const database = seeded();
     try {
       expect(() =>
@@ -392,9 +446,9 @@ describe('organization record log immutability triggers', () => {
           .run({
             ...seed,
             position: 2,
-            envelope_id: 'ore_2',
-            idempotency_key: 'k2',
-            record_hash: `sha256:${'4'.repeat(64)}`,
+            envelope_id: "ore_2",
+            idempotency_key: "k2",
+            record_hash: `sha256:${"4".repeat(64)}`,
             previous_record_hash: null,
           }),
       ).toThrow(/predecessor hash must match/);
@@ -403,19 +457,21 @@ describe('organization record log immutability triggers', () => {
     }
   });
 
-  it('keeps the signed receipt create-once', () => {
+  it("keeps the signed receipt create-once", () => {
     const database = seeded();
     try {
       const insert = database.prepare(
         `INSERT INTO organization_record_signed_receipt (position, signed_receipt, materialized_at)
          VALUES (?, ?, ?)`,
       );
-      insert.run(1, '{"a":1}', '2026-08-07T12:00:01.000Z');
-      expect(() => insert.run(1, '{"a":2}', '2026-08-07T12:00:02.000Z')).toThrow(
-        /UNIQUE constraint failed|PRIMARY KEY/,
-      );
+      insert.run(1, '{"a":1}', "2026-08-07T12:00:01.000Z");
       expect(() =>
-        database.exec(`UPDATE organization_record_signed_receipt SET signed_receipt = '{}'`),
+        insert.run(1, '{"a":2}', "2026-08-07T12:00:02.000Z"),
+      ).toThrow(/UNIQUE constraint failed|PRIMARY KEY/);
+      expect(() =>
+        database.exec(
+          `UPDATE organization_record_signed_receipt SET signed_receipt = '{}'`,
+        ),
       ).toThrow(/create-once/);
       expect(() =>
         database.exec(`DELETE FROM organization_record_signed_receipt`),
@@ -425,7 +481,7 @@ describe('organization record log immutability triggers', () => {
     }
   });
 
-  it('refuses a signed receipt for a position the log does not hold', () => {
+  it("refuses a signed receipt for a position the log does not hold", () => {
     const database = seeded();
     try {
       expect(() =>
@@ -434,7 +490,7 @@ describe('organization record log immutability triggers', () => {
             `INSERT INTO organization_record_signed_receipt (position, signed_receipt, materialized_at)
              VALUES (?, ?, ?)`,
           )
-          .run(9, '{}', '2026-08-07T12:00:01.000Z'),
+          .run(9, "{}", "2026-08-07T12:00:01.000Z"),
       ).toThrow(/FOREIGN KEY/);
     } finally {
       database.close();
@@ -442,12 +498,12 @@ describe('organization record log immutability triggers', () => {
   });
 });
 
-describe('organization record opening is split from migration', () => {
-  it('opens a fresh database without installing any schema', () => {
-    const path = join(temporaryStateDirectory(), 'pure-open.sqlite');
+describe("organization record opening is split from migration", () => {
+  it("opens a fresh database without installing any schema", () => {
+    const path = join(temporaryStateDirectory(), "pure-open.sqlite");
     const database = openOrganizationRecordDatabase(path);
     try {
-      expect(database.pragma('user_version', { simple: true })).toBe(0);
+      expect(database.pragma("user_version", { simple: true })).toBe(0);
       expect(
         database
           .prepare(
@@ -460,23 +516,23 @@ describe('organization record opening is split from migration', () => {
     }
   });
 
-  it('never upgrades or judges an existing schema on open', () => {
+  it("never upgrades or judges an existing schema on open", () => {
     // A charter mismatch refuses under migration, not under opening. Identity
     // and version judgment move to migration now and to the pre-open
     // state-lineage guard once new-lineage composition wires it.
-    const path = join(temporaryStateDirectory(), 'pure-open-foreign.sqlite');
+    const path = join(temporaryStateDirectory(), "pure-open-foreign.sqlite");
     const log = openAndMigrateOrganizationRecordDatabase(
       path,
       ORGANIZATION_RECORD_LOG_DATABASE,
     );
-    const version = log.pragma('user_version', { simple: true }) as number;
+    const version = log.pragma("user_version", { simple: true }) as number;
     log.close();
 
     const reopened = openOrganizationRecordDatabase(path, {
       fileMustExist: true,
     });
     try {
-      expect(reopened.pragma('user_version', { simple: true })).toBe(version);
+      expect(reopened.pragma("user_version", { simple: true })).toBe(version);
     } finally {
       reopened.close();
     }
@@ -489,7 +545,7 @@ describe('organization record opening is split from migration', () => {
   });
 });
 
-describe('organization record derived new-lineage baseline v1', () => {
+describe("organization record derived new-lineage baseline v1", () => {
   const INSTALLATION_ERA = /enrollment|installation|(?<!re)lease/i;
 
   function schemaObjects(database: Database.Database) {
@@ -502,45 +558,45 @@ describe('organization record derived new-lineage baseline v1', () => {
       .all() as { type: string; name: string; sql: string }[];
   }
 
-  it('creates the terminal derived schema exactly, minus the migration ledger', () => {
+  it("creates the terminal derived schema exactly, minus the migration ledger", () => {
     const migrated = openAndMigrateOrganizationRecordDatabase(
-      join(temporaryStateDirectory(), 'derived-migrated.sqlite'),
+      join(temporaryStateDirectory(), "derived-migrated.sqlite"),
       ORGANIZATION_RECORD_DERIVED_DATABASE,
     );
     const allMigratedObjects = schemaObjects(migrated);
     migrated.close();
     const migratedObjects = allMigratedObjects.filter(
-      (row) => !row.name.includes('schema_migrations'),
+      (row) => !row.name.includes("schema_migrations"),
     );
     // The excluded set must be exactly the ledger machinery; a behavior
     // object whose name merely matched the filter would silently vanish
     // from both sides of the equivalence.
     expect(
       allMigratedObjects
-        .filter((row) => row.name.includes('schema_migrations'))
+        .filter((row) => row.name.includes("schema_migrations"))
         .map((row) => `${row.type}:${row.name}`)
         .sort(),
     ).toEqual([
-      'table:organization_record_schema_migrations',
-      'trigger:organization_record_schema_migrations_immutable_delete',
-      'trigger:organization_record_schema_migrations_immutable_update',
+      "table:organization_record_schema_migrations",
+      "trigger:organization_record_schema_migrations_immutable_delete",
+      "trigger:organization_record_schema_migrations_immutable_update",
     ]);
     expect(migratedObjects.length).toBeGreaterThan(0);
 
     const database = openOrganizationRecordDatabase(
-      join(temporaryStateDirectory(), 'derived-baseline.sqlite'),
+      join(temporaryStateDirectory(), "derived-baseline.sqlite"),
     );
     try {
       applyOrganizationRecordDerivedBaselineV1(database);
       const objects = schemaObjects(database);
       expect(objects).toEqual(migratedObjects);
       expect(
-        objects.some((row) => row.name.includes('schema_migrations')),
+        objects.some((row) => row.name.includes("schema_migrations")),
       ).toBe(false);
-      expect(database.pragma('user_version', { simple: true })).toBe(
+      expect(database.pragma("user_version", { simple: true })).toBe(
         ORGANIZATION_RECORD_DERIVED_BASELINE_SCHEMA_VERSION_V1,
       );
-      expect(database.pragma('application_id', { simple: true })).toBe(
+      expect(database.pragma("application_id", { simple: true })).toBe(
         ORGANIZATION_RECORD_DERIVED_DATABASE.application_id,
       );
     } finally {
@@ -548,16 +604,16 @@ describe('organization record derived new-lineage baseline v1', () => {
     }
   });
 
-  it('contains no installation-era object and freezes the baseline digest', () => {
+  it("contains no installation-era object and freezes the baseline digest", () => {
     const sql = organizationRecordDerivedBaselineSqlV1();
     expect(INSTALLATION_ERA.test(sql)).toBe(false);
     expect(organizationRecordDerivedBaselineSha256V1()).toBe(
-      'sha256:06f5ac7ee52a3a6be7583743db99c7d75c32923b559388e2b7a52bf26d76d99d',
+      "sha256:06f5ac7ee52a3a6be7583743db99c7d75c32923b559388e2b7a52bf26d76d99d",
     );
   });
 
-  it('refuses any database that is not completely empty', () => {
-    const path = join(temporaryStateDirectory(), 'derived-occupied.sqlite');
+  it("refuses any database that is not completely empty", () => {
+    const path = join(temporaryStateDirectory(), "derived-occupied.sqlite");
     const database = openOrganizationRecordDatabase(path);
     try {
       applyOrganizationRecordDerivedBaselineV1(database);
@@ -569,7 +625,7 @@ describe('organization record derived new-lineage baseline v1', () => {
     }
 
     const migrated = openAndMigrateOrganizationRecordDatabase(
-      join(temporaryStateDirectory(), 'derived-legacy.sqlite'),
+      join(temporaryStateDirectory(), "derived-legacy.sqlite"),
       ORGANIZATION_RECORD_DERIVED_DATABASE,
     );
     try {
@@ -578,11 +634,375 @@ describe('organization record derived new-lineage baseline v1', () => {
       );
       expect(
         schemaObjects(migrated).some((row) =>
-          row.name.includes('schema_migrations'),
+          row.name.includes("schema_migrations"),
         ),
       ).toBe(true);
     } finally {
       migrated.close();
+    }
+  });
+});
+
+describe("organization record log new-lineage baseline v1", () => {
+  const INSTALLATION_ERA = /enrollment|installation|(?<!re)lease/i;
+  const digest = (value: string) => sha256Digest(value);
+
+  function schemaObjects(database: Database.Database) {
+    return database
+      .prepare(
+        `SELECT type, name, sql FROM sqlite_master
+         WHERE name NOT LIKE 'sqlite_%' AND sql IS NOT NULL
+         ORDER BY type, name`,
+      )
+      .all() as { type: string; name: string; sql: string }[];
+  }
+
+  function receipt(input: {
+    readonly position: number;
+    readonly record_sha256: string;
+    readonly predecessor_record_sha256: string | null;
+    readonly event_kind: "approved" | "rejected";
+    readonly envelope_id: string;
+    readonly semantic_idempotency_key: string;
+  }): string {
+    return JSON.stringify({
+      schema_version: 2,
+      kind: "echo-organization-record-receipt-v2",
+      authority_id: "authority-1",
+      organization_id: "organization-1",
+      state_lineage_id: "lineage-1",
+      envelope_id: input.envelope_id,
+      semantic_idempotency_key: input.semantic_idempotency_key,
+      event_kind: input.event_kind,
+      record_position: input.position,
+      record_sha256: input.record_sha256,
+      predecessor_record_sha256: input.predecessor_record_sha256,
+      record_head_position: input.position,
+      record_head_sha256: input.record_sha256,
+      issued_at: "2026-08-21T12:01:00.000Z",
+      policy_fact_outcome:
+        input.event_kind === "approved"
+          ? { kind: "appended", policy_id: "restricted-reviewer-person-v2" }
+          : { kind: "none" },
+    });
+  }
+
+  function envelope(input: {
+    readonly position: number;
+    readonly record_sha256: string;
+    readonly predecessor_record_sha256: string | null;
+    readonly event_kind: "approved" | "rejected";
+    readonly envelope_id: string;
+    readonly semantic_idempotency_key: string;
+    readonly approval_id: string;
+    readonly action: "approve" | "reject";
+  }): string {
+    return JSON.stringify({
+      body: {
+        schema_version: 4,
+        kind: "echo-organization-record-envelope-v4",
+        authority_id: "authority-1",
+        organization_id: "organization-1",
+        state_lineage_id: "lineage-1",
+        envelope_id: input.envelope_id,
+        semantic_idempotency_key: input.semantic_idempotency_key,
+        predecessor_position: input.position === 1 ? null : input.position - 1,
+        predecessor_record_sha256: input.predecessor_record_sha256,
+        event: { kind: input.event_kind },
+        human_act_resolution_ref: {
+          approval_id: input.approval_id,
+          action: input.action,
+          policy_id: "restricted-reviewer-person-v2",
+          policy_contract_sha256: digest("policy"),
+        },
+      },
+      record_sha256: input.record_sha256,
+    });
+  }
+
+  function insertRecord(
+    database: Database.Database,
+    input: {
+      readonly position: number;
+      readonly record_sha256: string;
+      readonly predecessor_record_sha256: string | null;
+      readonly event_kind: "approved" | "rejected";
+      readonly envelope_id: string;
+      readonly semantic_idempotency_key: string;
+      readonly approval_id: string;
+      readonly action: "approve" | "reject";
+    },
+  ): void {
+    const canonicalEnvelope = envelope(input);
+    database
+      .prepare(
+        `INSERT INTO organization_record_log (
+         position, envelope_id, event_kind, approval_id, action,
+         semantic_idempotency_key, canonical_envelope, predecessor_position,
+         envelope_sha256, predecessor_record_sha256, record_sha256,
+         receipt_payload, receipt_issued_at
+       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .run(
+        input.position,
+        input.envelope_id,
+        input.event_kind,
+        input.approval_id,
+        input.action,
+        input.semantic_idempotency_key,
+        canonicalEnvelope,
+        input.position === 1 ? null : input.position - 1,
+        sha256Digest(canonicalEnvelope),
+        input.predecessor_record_sha256,
+        input.record_sha256,
+        receipt(input),
+        "2026-08-21T12:01:00.000Z",
+      );
+  }
+
+  function bindMetadata(database: Database.Database): void {
+    database
+      .prepare(
+        `INSERT INTO organization_record_log_metadata (
+           singleton, authority_id, organization_id, state_lineage_id, created_at
+         ) VALUES (1, 'authority-1', 'organization-1', 'lineage-1', '2026-08-21T12:00:00.000Z')`,
+      )
+      .run();
+  }
+
+  it("contains the exact V4 log, recovery, and Person-fact behavior objects", () => {
+    const database = openOrganizationRecordDatabase(
+      join(temporaryStateDirectory(), "log-baseline.sqlite"),
+    );
+    try {
+      applyOrganizationRecordLogBaselineV1(database);
+      const objects = schemaObjects(database);
+      expect(
+        objects.filter((row) => row.type === "table").map((row) => row.name),
+      ).toEqual([
+        "organization_record_log",
+        "organization_record_log_metadata",
+        "organization_record_member_readable_person_fact",
+        "organization_record_restricted_reviewer_person_fact",
+        "organization_record_signed_receipt",
+      ]);
+      expect(
+        objects.some((row) => row.name.includes("schema_migrations")),
+      ).toBe(false);
+      expect(objects.some((row) => row.name.includes("permission_pilot"))).toBe(
+        false,
+      );
+      expect(
+        objects.some(
+          (row) =>
+            row.name === "organization_record_reviewer_policy_fact" ||
+            row.name === "organization_member_readable_policy_fact",
+        ),
+      ).toBe(false);
+      expect(database.pragma("user_version", { simple: true })).toBe(
+        ORGANIZATION_RECORD_LOG_BASELINE_SCHEMA_VERSION_V1,
+      );
+      expect(database.pragma("application_id", { simple: true })).toBe(
+        ORGANIZATION_RECORD_LOG_DATABASE.application_id,
+      );
+    } finally {
+      database.close();
+    }
+  });
+
+  it("has no installation-era schema and freezes the baseline digest", () => {
+    const sql = organizationRecordLogBaselineSqlV1();
+    expect(INSTALLATION_ERA.test(sql)).toBe(false);
+    expect(organizationRecordLogBaselineSha256V1()).toBe(
+      "sha256:4362ff17a61c2896f8825c2788287503355c5c9be9470464f23315dc058c33f9",
+    );
+  });
+
+  it("commits a V4 receipt seed with the record, holds a strict chain, and rejects fact leakage from rejection", () => {
+    const database = openOrganizationRecordDatabase(
+      join(temporaryStateDirectory(), "log-baseline-behavior.sqlite"),
+    );
+    try {
+      applyOrganizationRecordLogBaselineV1(database);
+      bindMetadata(database);
+      const firstHash = digest("1");
+      insertRecord(database, {
+        position: 1,
+        record_sha256: firstHash,
+        predecessor_record_sha256: null,
+        event_kind: "approved",
+        envelope_id: "envelope-1",
+        semantic_idempotency_key: digest("semantic-1"),
+        approval_id: "approval-1",
+        action: "approve",
+      });
+      expect(
+        database
+          .prepare(
+            `SELECT envelope_sha256, receipt_payload, receipt_issued_at
+             FROM organization_record_log WHERE position = 1`,
+          )
+          .get(),
+      ).toEqual({
+        envelope_sha256: sha256Digest(
+          envelope({
+            position: 1,
+            record_sha256: firstHash,
+            predecessor_record_sha256: null,
+            event_kind: "approved",
+            envelope_id: "envelope-1",
+            semantic_idempotency_key: digest("semantic-1"),
+            approval_id: "approval-1",
+            action: "approve",
+          }),
+        ),
+        receipt_payload: receipt({
+          position: 1,
+          record_sha256: firstHash,
+          predecessor_record_sha256: null,
+          event_kind: "approved",
+          envelope_id: "envelope-1",
+          semantic_idempotency_key: digest("semantic-1"),
+        }),
+        receipt_issued_at: "2026-08-21T12:01:00.000Z",
+      });
+      expect(() =>
+        database
+          .prepare(
+            "UPDATE organization_record_log SET receipt_issued_at = ? WHERE position = 1",
+          )
+          .run("2026-08-21T12:02:00.000Z"),
+      ).toThrow(/append-only/);
+
+      const fact = database.prepare(
+        `INSERT INTO organization_record_restricted_reviewer_person_fact (
+           authority_id, organization_id, state_lineage_id, approval_id, action,
+           policy_id, policy_contract_sha256, record_position, record_sha256,
+           atom_order, signal_id_sha256, atom_id, item_kind, audit_event_id,
+           audit_sequence, audit_entry_sha256, provider_action_sha256,
+           authorization_proof_sha256, reviewer_principal_id, reviewer_membership_id
+         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      );
+      fact.run(
+        "authority-1",
+        "organization-1",
+        "lineage-1",
+        "approval-1",
+        "approve",
+        "restricted-reviewer-person-v2",
+        digest("policy"),
+        1,
+        firstHash,
+        0,
+        digest("signal"),
+        digest("atom"),
+        "decision",
+        "audit-1",
+        1,
+        digest("audit"),
+        digest("provider"),
+        digest("proof"),
+        "principal-1",
+        "membership-1",
+      );
+      // Atom order is the projector's stable ordinal, not a ten-item storage
+      // cap. The protocol may change its bounded payload surface without a
+      // log schema change, so this baseline accepts any nonnegative ordinal.
+      fact.run(
+        "authority-1",
+        "organization-1",
+        "lineage-1",
+        "approval-1",
+        "approve",
+        "restricted-reviewer-person-v2",
+        digest("policy"),
+        1,
+        firstHash,
+        10,
+        digest("signal-11"),
+        digest("atom-11"),
+        "rationale",
+        "audit-1",
+        1,
+        digest("audit"),
+        digest("provider"),
+        digest("proof"),
+        "principal-1",
+        "membership-1",
+      );
+
+      const secondHash = digest("2");
+      insertRecord(database, {
+        position: 2,
+        record_sha256: secondHash,
+        predecessor_record_sha256: firstHash,
+        event_kind: "rejected",
+        envelope_id: "envelope-2",
+        semantic_idempotency_key: digest("semantic-2"),
+        approval_id: "approval-2",
+        action: "reject",
+      });
+      expect(() =>
+        fact.run(
+          "authority-1",
+          "organization-1",
+          "lineage-1",
+          "approval-2",
+          "approve",
+          "restricted-reviewer-person-v2",
+          digest("policy"),
+          2,
+          secondHash,
+          0,
+          digest("signal-2"),
+          digest("atom-2"),
+          "decision",
+          "audit-2",
+          2,
+          digest("audit-2"),
+          digest("provider-2"),
+          digest("proof-2"),
+          "principal-1",
+          "membership-1",
+        ),
+      ).toThrow(/not bound to an exact v4 approval/);
+      expect(
+        database
+          .prepare(
+            "SELECT count(*) AS count FROM organization_record_restricted_reviewer_person_fact",
+          )
+          .get(),
+      ).toEqual({ count: 2 });
+    } finally {
+      database.close();
+    }
+  });
+
+  it("refuses every database that is not completely empty", () => {
+    const path = join(
+      temporaryStateDirectory(),
+      "log-baseline-occupied.sqlite",
+    );
+    const empty = openOrganizationRecordDatabase(path);
+    try {
+      applyOrganizationRecordLogBaselineV1(empty);
+      expect(() => applyOrganizationRecordLogBaselineV1(empty)).toThrow(
+        /completely empty database/,
+      );
+    } finally {
+      empty.close();
+    }
+
+    const legacy = openAndMigrateOrganizationRecordDatabase(
+      join(temporaryStateDirectory(), "log-legacy.sqlite"),
+      ORGANIZATION_RECORD_LOG_DATABASE,
+    );
+    try {
+      expect(() => applyOrganizationRecordLogBaselineV1(legacy)).toThrow(
+        /completely empty database/,
+      );
+    } finally {
+      legacy.close();
     }
   });
 });

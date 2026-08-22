@@ -1,4 +1,4 @@
-import { createHash, randomBytes, randomUUID } from 'node:crypto';
+import { createHash, randomBytes, randomUUID } from "node:crypto";
 import {
   MAX_ENROLLMENT_GRANT_LIFETIME_SECONDS,
   MAX_ORGANIZATION_API_CURSOR_CHARACTERS,
@@ -6,7 +6,7 @@ import {
   validateProvisionOrganizationMembershipRequest,
   validateRecoverOrganizationInstallationAccessRequest,
   validateRevokeOrganizationSubjectRequest,
-} from '@echo-brain/organization-api';
+} from "@echo-brain/organization-api";
 import type {
   IssueOrganizationEnrollmentGrantRequestV1,
   IssuedOrganizationEnrollmentGrantV1,
@@ -23,29 +23,35 @@ import type {
   RevokeOrganizationSubjectRequestV1,
   RevokedOrganizationInstallationV1,
   RevokedOrganizationMembershipV1,
-} from '@echo-brain/organization-api';
-import { canonicalJson } from '@echo-brain/federation-protocol';
+} from "@echo-brain/organization-api";
+import { canonicalJson } from "@echo-brain/federation-protocol";
 import {
   OrganizationAdminApiClient,
   type OrganizationAdminApiClientOptions,
   type OrganizationAdminPageRequest,
-} from '../adapters/http/organization-admin-api-client.js';
+  type IssuedPersonLoginGrant,
+} from "../adapters/http/organization-admin-api-client.js";
 import type {
   ActivateOrganizationSlackApprovalRequest,
   ActivatedOrganizationSlackApproval,
-} from '../application/slack-approval-activation.js';
+} from "../application/slack-approval-activation.js";
 import {
   prepareOrganizationInvitation,
   recordOrganizationInvitationIssued,
-} from '../adapters/files/private-organization-invitation.js';
+} from "../adapters/files/private-organization-invitation.js";
+import {
+  discardPersonOnboardingInvitation,
+  reservePersonOnboardingInvitationTarget,
+  writePersonOnboardingInvitation,
+} from "../adapters/files/private-person-onboarding-invitation.js";
 import {
   readAuthorityRuntimeConfig,
   resolveAuthorityServeConfig,
-} from './operator-config.js';
+} from "./operator-config.js";
 import {
   inspectAuthorityRuntimeOwnership,
   type AuthorityStatusReport,
-} from './status.js';
+} from "./status.js";
 
 const USAGE = `usage:
   echo-organization-admin overview --config <absolute-path>
@@ -54,6 +60,7 @@ const USAGE = `usage:
   echo-organization-admin invitations list --config <absolute-path> [--cursor <cursor>] [--limit <1-${MAX_ORGANIZATION_API_PAGE_ITEMS}>]
   echo-organization-admin audit list --config <absolute-path> [--cursor <cursor>] [--limit <1-${MAX_ORGANIZATION_API_PAGE_ITEMS}>]
   echo-organization-admin member create --config <absolute-path> --display-name <name> --membership-type <owner|employee> [--command-id <adm_UUIDv4>]
+  echo-organization-admin person invite --config <absolute-path> --membership-id <mem_UUIDv4> --expected-email <canonical-email> --authority-url <public-https-origin> --out <absolute-path>
   echo-organization-admin invitation create --config <absolute-path> --authority-url <public-https-origin> --membership-id <mem_UUIDv4> --lifetime-seconds <1-${MAX_ENROLLMENT_GRANT_LIFETIME_SECONDS}> --out <absolute-path> [--command-id <adm_UUIDv4>]
   echo-organization-admin member revoke --config <absolute-path> --membership-id <mem_UUIDv4> --reason <reason>
   echo-organization-admin installation revoke --config <absolute-path> --installation-id <ins_UUIDv4> --reason <reason>
@@ -61,7 +68,7 @@ const USAGE = `usage:
   echo-organization-admin slack approval activate --config <absolute-path> --administrator-membership-id <mem_UUIDv4> --target-membership-id <mem_UUIDv4> --installation-id <ins_UUIDv4> --identity-link-id <clm_UUIDv4> --adapter-binding-id <bnd_UUIDv4> [--command-id <adm_UUIDv4>]`;
 
 const UUID_V4_SOURCE =
-  '[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}';
+  "[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}";
 const COMMAND_ID_PATTERN = new RegExp(`^adm_${UUID_V4_SOURCE}$`);
 const MEMBERSHIP_ID_PATTERN = new RegExp(`^mem_${UUID_V4_SOURCE}$`);
 const INSTALLATION_ID_PATTERN = new RegExp(`^ins_${UUID_V4_SOURCE}$`);
@@ -96,6 +103,10 @@ export interface OrganizationAdminCliClient {
     membershipId: string,
     input: IssueOrganizationEnrollmentGrantRequestV1,
   ): Promise<IssuedOrganizationEnrollmentGrantV1>;
+  issuePersonLoginGrant(
+    membershipId: string,
+    expectedEmail: string,
+  ): Promise<IssuedPersonLoginGrant>;
   revokeMembership(
     membershipId: string,
     input: RevokeOrganizationSubjectRequestV1,
@@ -212,11 +223,11 @@ function validateCanonicalCursor(value: string): OrganizationApiPageCursorV1 {
     value.length > MAX_ORGANIZATION_API_CURSOR_CHARACTERS ||
     !/^[A-Za-z0-9_-]+$/.test(value)
   ) {
-    throw new Error('page cursor is invalid');
+    throw new Error("page cursor is invalid");
   }
-  const bytes = Buffer.from(value, 'base64url');
-  if (bytes.length === 0 || bytes.toString('base64url') !== value) {
-    throw new Error('page cursor is invalid');
+  const bytes = Buffer.from(value, "base64url");
+  if (bytes.length === 0 || bytes.toString("base64url") !== value) {
+    throw new Error("page cursor is invalid");
   }
   return value;
 }
@@ -224,8 +235,8 @@ function validateCanonicalCursor(value: string): OrganizationApiPageCursorV1 {
 function pageRequest(
   flags: Readonly<Record<string, string>>,
 ): OrganizationAdminPageRequest | undefined {
-  const cursor = flags['--cursor'];
-  const rawLimit = flags['--limit'];
+  const cursor = flags["--cursor"];
+  const rawLimit = flags["--limit"];
   if (cursor === undefined && rawLimit === undefined) return undefined;
   return {
     ...(cursor === undefined
@@ -238,7 +249,7 @@ function pageRequest(
             rawLimit,
             1,
             MAX_ORGANIZATION_API_PAGE_ITEMS,
-            'page limit',
+            "page limit",
           ),
         }),
   };
@@ -261,11 +272,11 @@ function validateBoundedText(
 }
 
 function generatedCommandId(randomUuid: () => string): string {
-  return canonicalId(`adm_${randomUuid()}`, COMMAND_ID_PATTERN, 'command_id');
+  return canonicalId(`adm_${randomUuid()}`, COMMAND_ID_PATTERN, "command_id");
 }
 
-function baseUrl(host: '127.0.0.1' | '::1', port: number): string {
-  const address = host === '::1' ? '[::1]' : host;
+function baseUrl(host: "127.0.0.1" | "::1", port: number): string {
+  const address = host === "::1" ? "[::1]" : host;
   return `http://${address}:${port}`;
 }
 
@@ -276,12 +287,12 @@ export function organizationAdminClientIdentity(input: {
 }): string {
   const identity = canonicalJson({
     schema_version: 1,
-    kind: 'echo-organization-admin-cli-identity',
+    kind: "echo-organization-admin-cli-identity",
     config_path: input.config_path,
     authority_id: input.authority_id,
     organization_id: input.organization_id,
   });
-  return `cid_${createHash('sha256').update(identity, 'utf8').digest('base64url')}`;
+  return `cid_${createHash("sha256").update(identity, "utf8").digest("base64url")}`;
 }
 
 async function commandContext(
@@ -293,7 +304,7 @@ async function commandContext(
   )(configPath);
   if (!preflight.ok || !preflight.running || !preflight.healthy) {
     throw new Error(
-      'organization authority must prove that it is running and healthy before administrator credentials can be used',
+      "organization authority must prove that it is running and healthy before administrator credentials can be used",
     );
   }
   const runtimeConfig = readAuthorityRuntimeConfig(configPath);
@@ -305,7 +316,7 @@ async function commandContext(
     preflight.listener !== authorityBaseUrl
   ) {
     throw new Error(
-      'organization authority runtime proof does not match the administrator config',
+      "organization authority runtime proof does not match the administrator config",
     );
   }
   const factory =
@@ -339,10 +350,10 @@ async function runListCommand(
   io: OrganizationAdminCliIo,
   dependencies: OrganizationAdminCliDependencies,
 ): Promise<number> {
-  const flags = parseFlags(arguments_, ['--config', '--cursor', '--limit']);
+  const flags = parseFlags(arguments_, ["--config", "--cursor", "--limit"]);
   const page = pageRequest(flags);
   const context = await commandContext(
-    requiredFlag(flags, '--config'),
+    requiredFlag(flags, "--config"),
     dependencies,
   );
   let result:
@@ -350,11 +361,11 @@ async function runListCommand(
     | OrganizationInstallationPageV1
     | OrganizationEnrollmentGrantPageV1
     | OrganizationAuditPageV1;
-  if (command === 'memberships list') {
+  if (command === "memberships list") {
     result = await context.client.listMemberships(page);
-  } else if (command === 'installations list') {
+  } else if (command === "installations list") {
     result = await context.client.listInstallations(page);
-  } else if (command === 'invitations list') {
+  } else if (command === "invitations list") {
     result = await context.client.listEnrollmentGrants(page);
   } else {
     result = await context.client.listAudit(page);
@@ -369,33 +380,33 @@ async function runMemberCreate(
   dependencies: OrganizationAdminCliDependencies,
 ): Promise<number> {
   const flags = parseFlags(arguments_, [
-    '--config',
-    '--display-name',
-    '--membership-type',
-    '--command-id',
+    "--config",
+    "--display-name",
+    "--membership-type",
+    "--command-id",
   ]);
-  const membershipType = requiredFlag(flags, '--membership-type');
-  if (membershipType !== 'owner' && membershipType !== 'employee') {
-    throw new Error('membership type must be owner or employee');
+  const membershipType = requiredFlag(flags, "--membership-type");
+  if (membershipType !== "owner" && membershipType !== "employee") {
+    throw new Error("membership type must be owner or employee");
   }
   const suppliedCommand = optionalCanonicalId(
-    flags['--command-id'],
+    flags["--command-id"],
     COMMAND_ID_PATTERN,
-    'command_id',
+    "command_id",
   );
   const request = validateProvisionOrganizationMembershipRequest({
     command_id:
       suppliedCommand ??
       generatedCommandId(dependencies.random_uuid ?? randomUUID),
     display_name: validateBoundedText(
-      requiredFlag(flags, '--display-name'),
+      requiredFlag(flags, "--display-name"),
       200,
-      'display name',
+      "display name",
     ),
     membership_type: membershipType,
   });
   const context = await commandContext(
-    requiredFlag(flags, '--config'),
+    requiredFlag(flags, "--config"),
     dependencies,
   );
   outputJson(io, await context.client.provisionMembership(request));
@@ -408,33 +419,33 @@ async function runInvitationCreate(
   dependencies: OrganizationAdminCliDependencies,
 ): Promise<number> {
   const flags = parseFlags(arguments_, [
-    '--config',
-    '--authority-url',
-    '--membership-id',
-    '--lifetime-seconds',
-    '--out',
-    '--command-id',
+    "--config",
+    "--authority-url",
+    "--membership-id",
+    "--lifetime-seconds",
+    "--out",
+    "--command-id",
   ]);
   const membershipId = canonicalId(
-    requiredFlag(flags, '--membership-id'),
+    requiredFlag(flags, "--membership-id"),
     MEMBERSHIP_ID_PATTERN,
-    'membership_id',
+    "membership_id",
   );
   const suppliedCommand = optionalCanonicalId(
-    flags['--command-id'],
+    flags["--command-id"],
     COMMAND_ID_PATTERN,
-    'command_id',
+    "command_id",
   );
   const lifetimeSeconds = parseInteger(
-    requiredFlag(flags, '--lifetime-seconds'),
+    requiredFlag(flags, "--lifetime-seconds"),
     1,
     MAX_ENROLLMENT_GRANT_LIFETIME_SECONDS,
-    'invitation lifetime',
+    "invitation lifetime",
   );
-  const authorityUrl = requiredFlag(flags, '--authority-url');
-  const outputPath = requiredFlag(flags, '--out');
+  const authorityUrl = requiredFlag(flags, "--authority-url");
+  const outputPath = requiredFlag(flags, "--out");
   const context = await commandContext(
-    requiredFlag(flags, '--config'),
+    requiredFlag(flags, "--config"),
     dependencies,
   );
   const prepared = prepareOrganizationInvitation({
@@ -457,14 +468,62 @@ async function runInvitationCreate(
   recordOrganizationInvitationIssued(prepared, issued);
   outputJson(io, {
     schema_version: 1,
-    kind: 'echo-organization-enrollment-invitation-created',
+    kind: "echo-organization-enrollment-invitation-created",
     invitation_path: prepared.output_path,
     authority_url: prepared.envelope.authority_base_url,
     issued,
     configured_authority_pin_sha256: context.authority_pin_sha256,
-    authority_pin_verification: 'verify_independently_before_enrollment',
+    authority_pin_verification: "verify_independently_before_enrollment",
   });
   return 0;
+}
+
+async function runPersonInvite(
+  arguments_: readonly string[],
+  io: OrganizationAdminCliIo,
+  dependencies: OrganizationAdminCliDependencies,
+): Promise<number> {
+  const flags = parseFlags(arguments_, [
+    "--config",
+    "--membership-id",
+    "--expected-email",
+    "--authority-url",
+    "--out",
+  ]);
+  const membershipId = canonicalId(
+    requiredFlag(flags, "--membership-id"),
+    MEMBERSHIP_ID_PATTERN,
+    "membership_id",
+  );
+  const reservation = reservePersonOnboardingInvitationTarget({
+    output_path: requiredFlag(flags, "--out"),
+    authority_url: requiredFlag(flags, "--authority-url"),
+  });
+  try {
+    const context = await commandContext(
+      requiredFlag(flags, "--config"),
+      dependencies,
+    );
+    const issued = await context.client.issuePersonLoginGrant(
+      membershipId,
+      requiredFlag(flags, "--expected-email"),
+    );
+    if (issued.membership_id !== membershipId) {
+      throw new Error("Person login grant was issued for another membership");
+    }
+    const invitation = writePersonOnboardingInvitation(reservation, issued);
+    outputJson(io, {
+      schema_version: 1,
+      kind: "echo-person-onboarding-invitation-created",
+      invitation_path: reservation.output_path,
+      authority_url: invitation.authority_url,
+      membership_id: issued.membership_id,
+      expires_at: invitation.expires_at,
+    });
+    return 0;
+  } finally {
+    discardPersonOnboardingInvitation(reservation);
+  }
 }
 
 async function runMemberRevoke(
@@ -473,24 +532,24 @@ async function runMemberRevoke(
   dependencies: OrganizationAdminCliDependencies,
 ): Promise<number> {
   const flags = parseFlags(arguments_, [
-    '--config',
-    '--membership-id',
-    '--reason',
+    "--config",
+    "--membership-id",
+    "--reason",
   ]);
   const membershipId = canonicalId(
-    requiredFlag(flags, '--membership-id'),
+    requiredFlag(flags, "--membership-id"),
     MEMBERSHIP_ID_PATTERN,
-    'membership_id',
+    "membership_id",
   );
   const request = validateRevokeOrganizationSubjectRequest({
     reason: validateBoundedText(
-      requiredFlag(flags, '--reason'),
+      requiredFlag(flags, "--reason"),
       500,
-      'revocation reason',
+      "revocation reason",
     ),
   });
   const context = await commandContext(
-    requiredFlag(flags, '--config'),
+    requiredFlag(flags, "--config"),
     dependencies,
   );
   outputJson(io, await context.client.revokeMembership(membershipId, request));
@@ -503,24 +562,24 @@ async function runInstallationRevoke(
   dependencies: OrganizationAdminCliDependencies,
 ): Promise<number> {
   const flags = parseFlags(arguments_, [
-    '--config',
-    '--installation-id',
-    '--reason',
+    "--config",
+    "--installation-id",
+    "--reason",
   ]);
   const installationId = canonicalId(
-    requiredFlag(flags, '--installation-id'),
+    requiredFlag(flags, "--installation-id"),
     INSTALLATION_ID_PATTERN,
-    'installation_id',
+    "installation_id",
   );
   const request = validateRevokeOrganizationSubjectRequest({
     reason: validateBoundedText(
-      requiredFlag(flags, '--reason'),
+      requiredFlag(flags, "--reason"),
       500,
-      'revocation reason',
+      "revocation reason",
     ),
   });
   const context = await commandContext(
-    requiredFlag(flags, '--config'),
+    requiredFlag(flags, "--config"),
     dependencies,
   );
   outputJson(
@@ -536,31 +595,31 @@ async function runInstallationAccessRecover(
   dependencies: OrganizationAdminCliDependencies,
 ): Promise<number> {
   const flags = parseFlags(arguments_, [
-    '--config',
-    '--installation-id',
-    '--local-access-sequence',
-    '--reason',
+    "--config",
+    "--installation-id",
+    "--local-access-sequence",
+    "--reason",
   ]);
   const installationId = canonicalId(
-    requiredFlag(flags, '--installation-id'),
+    requiredFlag(flags, "--installation-id"),
     INSTALLATION_ID_PATTERN,
-    'installation_id',
+    "installation_id",
   );
   const request = validateRecoverOrganizationInstallationAccessRequest({
     local_access_state_sequence: parseInteger(
-      requiredFlag(flags, '--local-access-sequence'),
+      requiredFlag(flags, "--local-access-sequence"),
       1,
       Number.MAX_SAFE_INTEGER,
-      'local access sequence',
+      "local access sequence",
     ),
     reason: validateBoundedText(
-      requiredFlag(flags, '--reason'),
+      requiredFlag(flags, "--reason"),
       500,
-      'access recovery reason',
+      "access recovery reason",
     ),
   });
   const context = await commandContext(
-    requiredFlag(flags, '--config'),
+    requiredFlag(flags, "--config"),
     dependencies,
   );
   outputJson(
@@ -576,51 +635,51 @@ async function runSlackApprovalActivate(
   dependencies: OrganizationAdminCliDependencies,
 ): Promise<number> {
   const flags = parseFlags(arguments_, [
-    '--config',
-    '--administrator-membership-id',
-    '--target-membership-id',
-    '--installation-id',
-    '--identity-link-id',
-    '--adapter-binding-id',
-    '--command-id',
+    "--config",
+    "--administrator-membership-id",
+    "--target-membership-id",
+    "--installation-id",
+    "--identity-link-id",
+    "--adapter-binding-id",
+    "--command-id",
   ]);
   const suppliedCommand = optionalCanonicalId(
-    flags['--command-id'],
+    flags["--command-id"],
     COMMAND_ID_PATTERN,
-    'command_id',
+    "command_id",
   );
   const request: ActivateOrganizationSlackApprovalRequest = {
     command_id:
       suppliedCommand ??
       generatedCommandId(dependencies.random_uuid ?? randomUUID),
     administrator_membership_id: canonicalId(
-      requiredFlag(flags, '--administrator-membership-id'),
+      requiredFlag(flags, "--administrator-membership-id"),
       MEMBERSHIP_ID_PATTERN,
-      'administrator_membership_id',
+      "administrator_membership_id",
     ),
     target_membership_id: canonicalId(
-      requiredFlag(flags, '--target-membership-id'),
+      requiredFlag(flags, "--target-membership-id"),
       MEMBERSHIP_ID_PATTERN,
-      'target_membership_id',
+      "target_membership_id",
     ),
     installation_id: canonicalId(
-      requiredFlag(flags, '--installation-id'),
+      requiredFlag(flags, "--installation-id"),
       INSTALLATION_ID_PATTERN,
-      'installation_id',
+      "installation_id",
     ),
     identity_link_id: canonicalId(
-      requiredFlag(flags, '--identity-link-id'),
+      requiredFlag(flags, "--identity-link-id"),
       IDENTITY_LINK_ID_PATTERN,
-      'identity_link_id',
+      "identity_link_id",
     ),
     adapter_binding_id: canonicalId(
-      requiredFlag(flags, '--adapter-binding-id'),
+      requiredFlag(flags, "--adapter-binding-id"),
       ADAPTER_BINDING_ID_PATTERN,
-      'adapter_binding_id',
+      "adapter_binding_id",
     ),
   };
   const context = await commandContext(
-    requiredFlag(flags, '--config'),
+    requiredFlag(flags, "--config"),
     dependencies,
   );
   outputJson(io, await context.client.activateSlackApproval(request));
@@ -636,10 +695,10 @@ export async function runOrganizationAuthorityAdminCli(
     arguments_.length > MAX_CLI_ARGUMENTS ||
     arguments_.some(
       (value) =>
-        typeof value !== 'string' ||
+        typeof value !== "string" ||
         value.length === 0 ||
         value.length > MAX_CLI_ARGUMENT_CHARACTERS ||
-        value.includes('\0'),
+        value.includes("\0"),
     )
   ) {
     throw new Error(USAGE);
@@ -648,25 +707,25 @@ export async function runOrganizationAuthorityAdminCli(
   const first = arguments_[0];
   const second = arguments_[1];
   const third = arguments_[2];
-  if ((first === 'help' || first === '--help') && arguments_.length === 1) {
+  if ((first === "help" || first === "--help") && arguments_.length === 1) {
     outputJson(io, {
       schema_version: 1,
-      kind: 'echo-organization-admin-help',
+      kind: "echo-organization-admin-help",
       usage: USAGE,
     });
     return 0;
   }
-  if (first === 'overview') {
-    const flags = parseFlags(arguments_.slice(1), ['--config']);
+  if (first === "overview") {
+    const flags = parseFlags(arguments_.slice(1), ["--config"]);
     const context = await commandContext(
-      requiredFlag(flags, '--config'),
+      requiredFlag(flags, "--config"),
       dependencies,
     );
     outputJson(io, await context.client.overview());
     return 0;
   }
 
-  if (first === 'slack' && second === 'approval' && third === 'activate') {
+  if (first === "slack" && second === "approval" && third === "activate") {
     return await runSlackApprovalActivate(
       arguments_.slice(3),
       io,
@@ -674,29 +733,32 @@ export async function runOrganizationAuthorityAdminCli(
     );
   }
 
-  const command = `${first ?? ''} ${second ?? ''}`;
+  const command = `${first ?? ""} ${second ?? ""}`;
   const commandArguments = arguments_.slice(2);
   if (
-    command === 'memberships list' ||
-    command === 'installations list' ||
-    command === 'invitations list' ||
-    command === 'audit list'
+    command === "memberships list" ||
+    command === "installations list" ||
+    command === "invitations list" ||
+    command === "audit list"
   ) {
     return await runListCommand(command, commandArguments, io, dependencies);
   }
-  if (command === 'member create') {
+  if (command === "member create") {
     return await runMemberCreate(commandArguments, io, dependencies);
   }
-  if (command === 'invitation create') {
+  if (command === "person invite") {
+    return await runPersonInvite(commandArguments, io, dependencies);
+  }
+  if (command === "invitation create") {
     return await runInvitationCreate(commandArguments, io, dependencies);
   }
-  if (command === 'member revoke') {
+  if (command === "member revoke") {
     return await runMemberRevoke(commandArguments, io, dependencies);
   }
-  if (command === 'installation revoke') {
+  if (command === "installation revoke") {
     return await runInstallationRevoke(commandArguments, io, dependencies);
   }
-  if (command === 'installation access-recover') {
+  if (command === "installation access-recover") {
     return await runInstallationAccessRecover(
       commandArguments,
       io,

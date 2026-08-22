@@ -1,7 +1,7 @@
 import {
   canonicalJson,
   canonicalSha256,
-} from '@echo-brain/federation-protocol';
+} from "@echo-brain/federation-protocol";
 import {
   organizationSlackLinkChallengeCodeSha256,
   validateOrganizationPersonSlackLinkBeginRequest,
@@ -12,7 +12,7 @@ import {
   type OrganizationPersonSlackLinkBeginResponseV2,
   type OrganizationPersonSlackLinkCompleteRequestV2,
   type OrganizationPersonSlackLinkResultV2,
-} from '@echo-brain/organization-api';
+} from "@echo-brain/organization-api";
 import type {
   ActiveSlackOrganizationTool,
   BeginPersonSlackIdentityLinkChallengeInput,
@@ -21,15 +21,15 @@ import type {
   CompletedPersonSlackIdentityLink,
   OrganizationSecretStore,
   PendingPersonSlackIdentityLinkChallenge,
-  SlackIntegrationProvider,
-} from '@echo-brain/organization-control-plane';
+  CleanSlackIdentityProviderV1,
+} from "@echo-brain/organization-control-plane/clean-slack-identity-v1";
 import {
   SLACK_ORGANIZATION_TOOL_REQUIRED_SCOPES,
-  SlackIntegrationProviderError,
-} from '@echo-brain/organization-control-plane';
-import { AuthorityOperationError } from '../domain/errors.js';
-import type { PersonAccessAuthorization } from '../application/person-identity-sessions.js';
-import { ReadableSearchAuthorizationFence } from '../application/readable-search-authorization-fence.js';
+  CleanSlackIdentityProviderErrorV1,
+} from "@echo-brain/organization-control-plane/clean-slack-identity-v1";
+import { AuthorityOperationError } from "../domain/errors.js";
+import type { PersonAccessAuthorization } from "../application/person-identity-sessions.js";
+import { ReadableSearchAuthorizationFence } from "../application/readable-search-authorization-fence.js";
 
 export interface PersonSlackIdentityLinkAuthenticationPort {
   authenticateAccess(input: {
@@ -39,13 +39,31 @@ export interface PersonSlackIdentityLinkAuthenticationPort {
 
 export interface PersonSlackIdentityLinkRepositoryPort {
   activeSlackOrganizationTool(): ActiveSlackOrganizationTool | null;
+  personSlackIdentityLinkBeginReplay?(input: {
+    readonly request_id: string;
+    readonly request_sha256: `sha256:${string}`;
+    readonly person_session: BeginPersonSlackIdentityLinkChallengeInput["person_session"];
+    readonly organization_tool: ActiveSlackOrganizationTool;
+  }):
+    | (BegunSlackIdentityLinkChallenge & {
+        readonly replayed: true;
+        readonly challenge_message_ts: string;
+      })
+    | null;
   beginPersonSlackIdentityLinkChallenge(
     input: BeginPersonSlackIdentityLinkChallengeInput,
-  ): BegunSlackIdentityLinkChallenge;
+  ): BegunSlackIdentityLinkChallenge & {
+    readonly replayed?: boolean;
+    readonly challenge_message_ts?: string;
+  };
+  recordPersonSlackIdentityLinkChallengeMessage?(input: {
+    readonly challenge_attempt_id: string;
+    readonly challenge_message_ts: string;
+  }): void;
   personSlackIdentityLinkChallenge(input: {
     challenge_attempt_id: string;
     challenge_code_sha256: `sha256:${string}`;
-    person_session: BeginPersonSlackIdentityLinkChallengeInput['person_session'];
+    person_session: BeginPersonSlackIdentityLinkChallengeInput["person_session"];
     organization_tool: ActiveSlackOrganizationTool;
     now: string;
   }): PendingPersonSlackIdentityLinkChallenge;
@@ -62,7 +80,7 @@ export interface PersonSlackIdentityLinkRepositoryPort {
     challenge_attempt_id: string;
     challenge_code_sha256: `sha256:${string}`;
     challenge_message_ts: string;
-    person_session: BeginPersonSlackIdentityLinkChallengeInput['person_session'];
+    person_session: BeginPersonSlackIdentityLinkChallengeInput["person_session"];
     organization_tool: ActiveSlackOrganizationTool;
   }): CompletedPersonSlackIdentityLink | null;
   completePersonSlackIdentityLinkChallenge(
@@ -76,15 +94,15 @@ export interface PersonSlackIdentityLinkServiceOptions {
   readonly authentication: PersonSlackIdentityLinkAuthenticationPort;
   readonly repository: PersonSlackIdentityLinkRepositoryPort;
   readonly secrets: OrganizationSecretStore;
-  readonly slack: SlackIntegrationProvider;
+  readonly slack: CleanSlackIdentityProviderV1;
   readonly authorization_fence: ReadableSearchAuthorizationFence;
   readonly now?: () => string;
 }
 
 function unauthorized(): AuthorityOperationError {
   return new AuthorityOperationError(
-    'unauthorized',
-    'Person Slack identity-link authorization failed',
+    "unauthorized",
+    "Person Slack identity-link authorization failed",
   );
 }
 
@@ -104,8 +122,8 @@ function personSession(
 
 function personSlackLinkRequestSha256(
   kind:
-    | 'echo-person-slack-link-begin-request-binding-v1'
-    | 'echo-person-slack-link-complete-request-binding-v1',
+    | "echo-person-slack-link-begin-request-binding-v1"
+    | "echo-person-slack-link-complete-request-binding-v1",
   session: ReturnType<typeof personSession>,
   request:
     | OrganizationPersonSlackLinkBeginRequestV2
@@ -139,29 +157,55 @@ function sameTool(
   return right !== null && canonicalJson(left) === canonicalJson(right);
 }
 
+type SlackProviderFailureCode =
+  | "unauthorized"
+  | "identity_mismatch"
+  | "unavailable"
+  | "invalid_response"
+  | "not_observed";
+
+function slackProviderFailureCode(
+  error: unknown,
+): SlackProviderFailureCode | null {
+  if (error instanceof CleanSlackIdentityProviderErrorV1) return error.code;
+  // Legacy composition still supplies the original provider. Preserve its
+  // public error mapping without importing that provider into this clean path.
+  const legacy = error as unknown as { readonly code?: unknown };
+  if (
+    error instanceof Error &&
+    error.name === "SlackIntegrationProviderError" &&
+    typeof legacy.code === "string" &&
+    [
+      "unauthorized",
+      "identity_mismatch",
+      "unavailable",
+      "invalid_response",
+      "not_observed",
+    ].includes(legacy.code)
+  ) {
+    return legacy.code as SlackProviderFailureCode;
+  }
+  return null;
+}
+
 function providerFailure(error: unknown): never {
-  if (
-    error instanceof SlackIntegrationProviderError &&
-    error.code === 'not_observed'
-  ) {
+  const code = slackProviderFailureCode(error);
+  if (code === "not_observed") {
     throw new AuthorityOperationError(
-      'unavailable',
-      'The exact Slack challenge reply has not been observed yet',
+      "unavailable",
+      "The exact Slack challenge reply has not been observed yet",
     );
   }
-  if (
-    error instanceof SlackIntegrationProviderError &&
-    error.code === 'unavailable'
-  ) {
+  if (code === "unavailable") {
     throw new AuthorityOperationError(
-      'unavailable',
-      'Slack identity verification is temporarily unavailable',
+      "unavailable",
+      "Slack identity verification is temporarily unavailable",
     );
   }
-  if (error instanceof SlackIntegrationProviderError) {
+  if (code !== null) {
     throw new AuthorityOperationError(
-      'invalid_request',
-      'Slack could not verify the identity-link evidence',
+      "invalid_request",
+      "Slack could not verify the identity-link evidence",
     );
   }
   throw error;
@@ -173,11 +217,11 @@ function repositoryOperation<T>(operation: () => T): T {
   } catch (error) {
     if (
       error instanceof Error &&
-      (error.name === 'OrganizationIntegrationConflictError' ||
+      (error.name === "OrganizationIntegrationConflictError" ||
         error.message ===
-          'organization integration command ID was reused with different input')
+          "organization integration command ID was reused with different input")
     ) {
-      throw new AuthorityOperationError('conflict', error.message);
+      throw new AuthorityOperationError("conflict", error.message);
     }
     throw error;
   }
@@ -185,7 +229,9 @@ function repositoryOperation<T>(operation: () => T): T {
 
 /** Bearer-authenticated Person-to-Slack identity proof; it grants nothing. */
 export class PersonSlackIdentityLinkService {
-  constructor(private readonly options: PersonSlackIdentityLinkServiceOptions) {}
+  constructor(
+    private readonly options: PersonSlackIdentityLinkServiceOptions,
+  ) {}
 
   async begin(
     input: unknown,
@@ -197,34 +243,69 @@ export class PersonSlackIdentityLinkService {
       request = validateOrganizationPersonSlackLinkBeginRequest(input);
     } catch {
       throw new AuthorityOperationError(
-        'invalid_request',
-        'Person Slack identity-link begin request is invalid',
+        "invalid_request",
+        "Person Slack identity-link begin request is invalid",
       );
     }
     const before = this.authenticate(accessToken);
     const activeTool = this.requireActiveTool();
+    const earlyReplay = await this.options.authorization_fence.withRead(() => {
+      const current = this.authenticate(accessToken);
+      if (!samePersonSession(before, current)) {
+        throw new AuthorityOperationError(
+          "conflict",
+          "Person state changed while replaying the identity link",
+        );
+      }
+      return repositoryOperation(
+        () =>
+          this.options.repository.personSlackIdentityLinkBeginReplay?.({
+            request_id: request.request_id,
+            request_sha256: personSlackLinkRequestSha256(
+              "echo-person-slack-link-begin-request-binding-v1",
+              personSession(current, this.options.authority_id),
+              request,
+            ),
+            person_session: personSession(current, this.options.authority_id),
+            organization_tool: activeTool,
+          }) ?? null,
+      );
+    });
+    if (earlyReplay !== null) {
+      return validateOrganizationPersonSlackLinkBeginResponse({
+        schema_version: 2,
+        kind: "echo-organization-person-slack-link-begin-response",
+        challenge_attempt_id: earlyReplay.challenge_attempt_id,
+        provider: "slack",
+        provider_tenant_id: activeTool.team_id,
+        channel_id: activeTool.channel_id,
+        challenge_message_ts: earlyReplay.challenge_message_ts,
+        expires_at: earlyReplay.expires_at,
+      });
+    }
     const token = this.readToolSecret(activeTool);
     const verified = await this.verifyTool(token, activeTool, signal);
     const begun = await this.options.authorization_fence.withRead(() => {
       const current = this.authenticate(accessToken);
       if (
         !samePersonSession(before, current) ||
-        !sameTool(activeTool, this.options.repository.activeSlackOrganizationTool()) ||
+        !sameTool(
+          activeTool,
+          this.options.repository.activeSlackOrganizationTool(),
+        ) ||
         !this.verifiedToolMatches(activeTool, verified)
       ) {
         throw new AuthorityOperationError(
-          'conflict',
-          'Person or Slack state changed while beginning the identity link',
+          "conflict",
+          "Person or Slack state changed while beginning the identity link",
         );
       }
-      const currentSession = personSession(
-        current,
-        this.options.authority_id,
-      );
+      const currentSession = personSession(current, this.options.authority_id);
       return repositoryOperation(() =>
         this.options.repository.beginPersonSlackIdentityLinkChallenge({
+          request_id: request.request_id,
           request_sha256: personSlackLinkRequestSha256(
-            'echo-person-slack-link-begin-request-binding-v1',
+            "echo-person-slack-link-begin-request-binding-v1",
             currentSession,
             request,
           ),
@@ -232,12 +313,27 @@ export class PersonSlackIdentityLinkService {
           person_session: currentSession,
           organization_tool: activeTool,
           now: current.checked_at,
+        } as BeginPersonSlackIdentityLinkChallengeInput & {
+          request_id: string;
         }),
       );
     });
 
+    if (begun.replayed === true && begun.challenge_message_ts !== undefined) {
+      return validateOrganizationPersonSlackLinkBeginResponse({
+        schema_version: 2,
+        kind: "echo-organization-person-slack-link-begin-response",
+        challenge_attempt_id: begun.challenge_attempt_id,
+        provider: "slack",
+        provider_tenant_id: activeTool.team_id,
+        channel_id: activeTool.channel_id,
+        challenge_message_ts: begun.challenge_message_ts,
+        expires_at: begun.expires_at,
+      });
+    }
+
     let posted: Awaited<
-      ReturnType<SlackIntegrationProvider['postIdentityLinkChallenge']>
+      ReturnType<CleanSlackIdentityProviderV1["postIdentityLinkChallenge"]>
     >;
     try {
       posted = await this.options.slack.postIdentityLinkChallenge(
@@ -259,7 +355,7 @@ export class PersonSlackIdentityLinkService {
       this.options.repository.failSlackIdentityLinkChallenge(
         begun.challenge_attempt_id,
         this.now(),
-        'provider_challenge_post_failed',
+        "provider_challenge_post_failed",
       );
       providerFailure(error);
     }
@@ -268,7 +364,10 @@ export class PersonSlackIdentityLinkService {
       const current = this.authenticate(accessToken);
       if (
         !samePersonSession(before, current) ||
-        !sameTool(activeTool, this.options.repository.activeSlackOrganizationTool()) ||
+        !sameTool(
+          activeTool,
+          this.options.repository.activeSlackOrganizationTool(),
+        ) ||
         current.checked_at >= begun.expires_at ||
         posted.team_id !== activeTool.team_id ||
         posted.channel_id !== activeTool.channel_id
@@ -276,13 +375,17 @@ export class PersonSlackIdentityLinkService {
         this.options.repository.failSlackIdentityLinkChallenge(
           begun.challenge_attempt_id,
           this.now(),
-          'person_or_tool_changed_after_challenge_post',
+          "person_or_tool_changed_after_challenge_post",
         );
         throw new AuthorityOperationError(
-          'conflict',
-          'Person or Slack state changed while posting the identity challenge',
+          "conflict",
+          "Person or Slack state changed while posting the identity challenge",
         );
       }
+      this.options.repository.recordPersonSlackIdentityLinkChallengeMessage?.({
+        challenge_attempt_id: begun.challenge_attempt_id,
+        challenge_message_ts: posted.challenge_message_ts,
+      });
       repositoryOperation(() =>
         this.options.repository.personSlackIdentityLinkChallenge({
           challenge_attempt_id: begun.challenge_attempt_id,
@@ -296,9 +399,9 @@ export class PersonSlackIdentityLinkService {
 
     return validateOrganizationPersonSlackLinkBeginResponse({
       schema_version: 2,
-      kind: 'echo-organization-person-slack-link-begin-response',
+      kind: "echo-organization-person-slack-link-begin-response",
       challenge_attempt_id: begun.challenge_attempt_id,
-      provider: 'slack',
+      provider: "slack",
       provider_tenant_id: activeTool.team_id,
       channel_id: activeTool.channel_id,
       challenge_message_ts: posted.challenge_message_ts,
@@ -316,14 +419,14 @@ export class PersonSlackIdentityLinkService {
       request = validateOrganizationPersonSlackLinkCompleteRequest(input);
     } catch {
       throw new AuthorityOperationError(
-        'invalid_request',
-        'Person Slack identity-link completion request is invalid',
+        "invalid_request",
+        "Person Slack identity-link completion request is invalid",
       );
     }
     const before = this.authenticate(accessToken);
     const session = personSession(before, this.options.authority_id);
     const commandSha256 = personSlackLinkRequestSha256(
-      'echo-person-slack-link-complete-request-binding-v1',
+      "echo-person-slack-link-complete-request-binding-v1",
       session,
       request,
     );
@@ -367,7 +470,7 @@ export class PersonSlackIdentityLinkService {
     );
     const token = this.readToolSecret(activeTool);
     let observed: Awaited<
-      ReturnType<SlackIntegrationProvider['observeIdentityLinkChallenge']>
+      ReturnType<CleanSlackIdentityProviderV1["observeIdentityLinkChallenge"]>
     >;
     try {
       observed = await this.options.slack.observeIdentityLinkChallenge(
@@ -392,7 +495,7 @@ export class PersonSlackIdentityLinkService {
     }
 
     let currentChannel: Awaited<
-      ReturnType<SlackIntegrationProvider['verifyChannel']>
+      ReturnType<CleanSlackIdentityProviderV1["verifyChannel"]>
     >;
     try {
       currentChannel = await this.options.slack.verifyChannel(
@@ -415,8 +518,8 @@ export class PersonSlackIdentityLinkService {
         currentChannel.channel_id !== activeTool.channel_id
       ) {
         throw new AuthorityOperationError(
-          'conflict',
-          'Person or Slack state changed during the identity proof',
+          "conflict",
+          "Person or Slack state changed during the identity proof",
         );
       }
       return validateOrganizationPersonSlackLinkResult(
@@ -452,8 +555,8 @@ export class PersonSlackIdentityLinkService {
     const tool = this.options.repository.activeSlackOrganizationTool();
     if (tool === null) {
       throw new AuthorityOperationError(
-        'conflict',
-        'Slack is not active for this organization',
+        "conflict",
+        "Slack is not active for this organization",
       );
     }
     return tool;
@@ -464,8 +567,8 @@ export class PersonSlackIdentityLinkService {
       return this.options.secrets.read(tool.secret);
     } catch {
       throw new AuthorityOperationError(
-        'unavailable',
-        'The active organization Slack credential is unavailable',
+        "unavailable",
+        "The active organization Slack credential is unavailable",
       );
     }
   }
@@ -475,15 +578,20 @@ export class PersonSlackIdentityLinkService {
     tool: ActiveSlackOrganizationTool,
     signal?: AbortSignal,
   ): Promise<{
-    connection: Awaited<ReturnType<SlackIntegrationProvider['verifyConnection']>>;
-    channel: Awaited<ReturnType<SlackIntegrationProvider['verifyChannel']>>;
+    connection: Awaited<
+      ReturnType<CleanSlackIdentityProviderV1["verifyConnection"]>
+    >;
+    channel: Awaited<ReturnType<CleanSlackIdentityProviderV1["verifyChannel"]>>;
   }> {
     try {
-      const connection = await this.options.slack.verifyConnection(token, signal);
+      const connection = await this.options.slack.verifyConnection(
+        token,
+        signal,
+      );
       for (const required of SLACK_ORGANIZATION_TOOL_REQUIRED_SCOPES) {
         if (!connection.granted_scopes.includes(required)) {
           throw new AuthorityOperationError(
-            'invalid_request',
+            "invalid_request",
             `Slack bot token is missing required scope ${required}`,
           );
         }
@@ -503,8 +611,12 @@ export class PersonSlackIdentityLinkService {
   private verifiedToolMatches(
     tool: ActiveSlackOrganizationTool,
     verified: {
-      connection: Awaited<ReturnType<SlackIntegrationProvider['verifyConnection']>>;
-      channel: Awaited<ReturnType<SlackIntegrationProvider['verifyChannel']>>;
+      connection: Awaited<
+        ReturnType<CleanSlackIdentityProviderV1["verifyConnection"]>
+      >;
+      channel: Awaited<
+        ReturnType<CleanSlackIdentityProviderV1["verifyChannel"]>
+      >;
     },
   ): boolean {
     return (
