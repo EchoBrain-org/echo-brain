@@ -204,4 +204,27 @@ describe("clean reset state initialization", () => {
       }),
     ).toThrow("usage:");
   });
+
+  it("rejects a caller seed with the wrong identifier namespaces before creating state", () => {
+    const root = fixtureRoot();
+    const stateDirectory = join(root, "new-state");
+    expect(() =>
+      initializeCleanResetState({
+        state_directory: stateDirectory,
+        organization_display_name: "Example Organization",
+        owner_display_name: "Ada Owner",
+        created_at: CREATED_AT,
+        creating_artifact_revision: "clean-reset-test-artifact",
+        seed: {
+          authority_id: "org_00000000-0000-4000-8000-000000000001",
+          organization_id: "org_00000000-0000-4000-8000-000000000001",
+          state_lineage_id: "lineage-00000000-0000-4000-8000-000000000001",
+          owner_principal_id: "prn_00000000-0000-4000-8000-000000000001",
+          owner_membership_id: "mem_00000000-0000-4000-8000-000000000001",
+          control_plane_id: "ocp_00000000-0000-4000-8000-000000000001",
+        },
+      }),
+    ).toThrow("invalid federation identifier");
+    expect(existsSync(stateDirectory)).toBe(false);
+  });
 });

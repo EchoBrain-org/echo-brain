@@ -2,7 +2,10 @@ import { Buffer } from "node:buffer";
 import { generateKeyPairSync } from "node:crypto";
 import {
   chmodSync,
+  existsSync,
+  lstatSync,
   mkdtempSync,
+  readFileSync,
   realpathSync,
   rmSync,
   writeFileSync,
@@ -93,6 +96,32 @@ async function withHome(run: (home: string) => Promise<void>): Promise<void> {
 }
 
 describe("Person client", () => {
+  it("reports disconnected status without a network call or private paths", async () => {
+    await withHome(async (home) => {
+      let networkCalled = false;
+      let stdout = "";
+      const status = await runPersonClientCli(["status"], {
+        stdout: { write: (value) => ((stdout += String(value)), true) },
+        stderr: { write: () => true },
+        home_directory: home,
+        fetch: async () => {
+          networkCalled = true;
+          throw new Error("status must not contact the Authority");
+        },
+      });
+      expect(status).toBe(0);
+      expect(networkCalled).toBe(false);
+      expect(JSON.parse(stdout)).toMatchObject({
+        schema_version: 1,
+        kind: "echo-person-client-status-v1",
+        signed_in: false,
+        membership_type: null,
+        connected_authority: null,
+      });
+      expect(stdout).not.toContain(home);
+    });
+  });
+
   it("limits development HTTP origins to numeric loopback", async () => {
     await withHome(async (home) => {
       const authority = authorityDescriptor();
@@ -368,6 +397,38 @@ describe("Person client", () => {
     });
   });
 
+  it("gives a safe retry instruction while a queried generation is unavailable", async () => {
+    await withHome(async (home) => {
+      const authority = authorityDescriptor();
+      await new PersonClient({
+        home_directory: home,
+        now: () => NOW,
+        fetch: async () => json({ authority_descriptor: authority }),
+      }).installSession("https://authority.example", ROTATED_SESSION);
+      let stdout = "";
+      let stderr = "";
+      const status = await runPersonClientCli(["records", "--query", "pricing"], {
+        stdout: { write: (value) => ((stdout += String(value)), true) },
+        stderr: { write: (value) => ((stderr += String(value)), true) },
+        home_directory: home,
+        now: () => NOW,
+        fetch: async (input) => {
+          const path = new URL(String(input)).pathname;
+          if (path === "/v1/person/records") {
+            return json({ error: { code: "unavailable", message: "request failed" } }, 503);
+          }
+          return json({ authority_descriptor: authority });
+        },
+      });
+      expect(status).toBe(1);
+      expect(stdout).toBe("");
+      expect(JSON.parse(stderr)).toMatchObject({
+        action: "records",
+        error: "Search is catching up to the latest records; retry after the next worker cycle.",
+      });
+    });
+  });
+
   it("rejects malformed clean record responses and invalid CLI limits", async () => {
     await withHome(async (home) => {
       const authority = authorityDescriptor();
@@ -516,100 +577,176 @@ describe("Person client", () => {
     });
   });
 
-  it("dispatches session install without a product config and never prints tokens", async () => {
+  it("writes an owner-issued employee invitation privately without rendering its grant or IDs", async () => {
     await withHome(async (home) => {
       const authority = authorityDescriptor();
+      const outputPath = join(home, "employee-onboarding.json");
       let stdout = "";
-      let stderr = "";
-      const status = await runPersonClientCli(
-        ["session-install", "--authority-url", "https://authority.example"],
-        {
-          stdout: {
-            write: (value: string | Uint8Array) => (
-              (stdout += value.toString()),
-              true
-            ),
-          },
-          stderr: {
-            write: (value: string | Uint8Array) => (
-              (stderr += value.toString()),
-              true
-            ),
-          },
-          home_directory: home,
-          now: () => NOW,
-          read_input: () => JSON.stringify(SESSION),
-          fetch: async () => json({ authority_descriptor: authority }),
-        },
-      );
-
-      expect(status).toBe(0);
-      expect(stderr).toBe("");
-      expect(JSON.parse(stdout)).toMatchObject({
-        ok: true,
-        authority_id: authority.authority_id,
-        organization_id: SESSION.organization_id,
-      });
-      expect(stdout).not.toContain(SESSION.access_token);
-      expect(stdout).not.toContain(SESSION.refresh_token);
-    });
-  });
-
-  it("begins bootstrap login from a private invitation without printing its grant", async () => {
-    await withHome(async (home) => {
-      const invitationPath = join(home, "person-onboarding.json");
       const loginGrant = "G".repeat(43);
-      writeFileSync(
-        invitationPath,
-        canonicalJson({
-          schema_version: 1,
-          kind: "echo-person-onboarding-invitation",
-          authority_url: "https://authority.example",
-          login_grant: loginGrant,
-          expires_at: "2026-08-18T00:15:00.000Z",
-        }) + "\n",
-        { mode: 0o600 },
-      );
-      chmodSync(invitationPath, 0o600);
-      let stdout = "";
-      let stderr = "";
+      await new PersonClient({
+        home_directory: home,
+        now: () => "2026-08-18T00:00:00.000Z",
+        fetch: async () => json({ authority_descriptor: authority }),
+      }).installSession("https://authority.example", {
+        ...SESSION,
+        membership_type: "owner",
+      });
       const status = await runPersonClientCli(
-        ["login-begin", "--invitation", invitationPath],
+        [
+          "employee",
+          "invite",
+          "--name",
+          "Jane Doe",
+          "--email",
+          "jane@example.com",
+          "--out",
+          outputPath,
+        ],
         {
           stdout: { write: (value) => ((stdout += String(value)), true) },
-          stderr: { write: (value) => ((stderr += String(value)), true) },
+          stderr: { write: () => true },
           home_directory: home,
-          read_input: () => {
-            throw new Error("invitation login must not read stdin");
-          },
+          now: () => "2026-08-18T00:00:00.000Z",
           fetch: async (input, init) => {
-            expect(new URL(String(input)).pathname).toBe(
-              "/v2/session/oidc/begin",
+            expect(new URL(String(input)).pathname).toBe("/v1/person/employees");
+            expect(init?.method).toBe("POST");
+            expect(new Headers(init?.headers).get("authorization")).toBe(
+              `Bearer ${SESSION.access_token}`,
             );
             expect(JSON.parse(String(init?.body))).toEqual({
-              kind: "identity_bootstrap",
-              login_grant: loginGrant,
+              name: "Jane Doe",
+              email: "jane@example.com",
             });
-            return json(
-              {
-                authorization_url:
-                  "https://identity.example/authorize?state=state",
-                expires_at: "2026-08-18T00:10:00.000Z",
-              },
-              201,
-            );
+            return json({ login_grant: loginGrant, expires_at: "2026-08-18T00:15:00.000Z" }, 201);
           },
         },
       );
-
       expect(status).toBe(0);
-      expect(stderr).toBe("");
-      expect(stdout).toContain("authorization_url");
       expect(stdout).not.toContain(loginGrant);
+      expect(stdout).not.toContain("mem_");
+      expect(stdout).not.toContain("prn_");
+      expect(JSON.parse(stdout)).toEqual({
+        ok: true,
+        output_path: outputPath,
+        expires_at: "2026-08-18T00:15:00.000Z",
+      });
+      expect(readFileSync(outputPath, "utf8")).toContain(loginGrant);
+      expect(lstatSync(outputPath).mode & 0o777).toBe(0o600);
     });
   });
 
-  it("completes invitation login in one command with one callback JSON paste", async () => {
+  it("preflights an existing employee invitation output before remote issuance", async () => {
+    await withHome(async (home) => {
+      const authority = authorityDescriptor();
+      let mutations = 0;
+      const client = new PersonClient({
+        home_directory: home,
+        now: () => NOW,
+        fetch: async (input) => {
+          if (new URL(String(input)).pathname === "/v1/authority-descriptor") {
+            return json({ authority_descriptor: authority });
+          }
+          mutations += 1;
+          throw new Error("remote mutation must not run");
+        },
+      });
+      await client.installSession("https://authority.example", {
+        ...SESSION,
+        membership_type: "owner",
+      });
+      const output = join(home, "already-exists.json");
+      writeFileSync(output, "reserved\n", { mode: 0o600 });
+      await expect(
+        client.inviteEmployee({ name: "Jane Doe", email: "jane@example.com", output_path: output }),
+      ).rejects.toThrow();
+      expect(mutations).toBe(0);
+    });
+  });
+
+  it("preflights a non-private employee invitation parent before remote issuance", async () => {
+    await withHome(async (home) => {
+      const authority = authorityDescriptor();
+      let mutations = 0;
+      const client = new PersonClient({
+        home_directory: home,
+        now: () => NOW,
+        fetch: async (input) => {
+          if (new URL(String(input)).pathname === "/v1/authority-descriptor") {
+            return json({ authority_descriptor: authority });
+          }
+          mutations += 1;
+          throw new Error("remote mutation must not run");
+        },
+      });
+      await client.installSession("https://authority.example", {
+        ...SESSION,
+        membership_type: "owner",
+      });
+      chmodSync(home, 0o755);
+      try {
+        await expect(
+          client.reissueEmployee({ email: "jane@example.com", output_path: join(home, "invite.json") }),
+        ).rejects.toThrow(/0700/);
+      } finally {
+        chmodSync(home, 0o700);
+      }
+      expect(mutations).toBe(0);
+    });
+  });
+
+  it("leaves no employee invitation artifact when remote issuance fails", async () => {
+    await withHome(async (home) => {
+      const authority = authorityDescriptor();
+      const output = join(home, "invite.json");
+      const client = new PersonClient({
+        home_directory: home,
+        now: () => NOW,
+        fetch: async (input) => {
+          if (new URL(String(input)).pathname === "/v1/authority-descriptor") {
+            return json({ authority_descriptor: authority });
+          }
+          throw new Error("network failed");
+        },
+      });
+      await client.installSession("https://authority.example", {
+        ...ROTATED_SESSION,
+        membership_type: "owner",
+      });
+      await expect(
+        client.inviteEmployee({ name: "Jane Doe", email: "jane@example.com", output_path: output }),
+      ).rejects.toThrow("Person Authority request failed");
+      expect(existsSync(output)).toBe(false);
+    });
+  });
+
+  it("preserves a local output that wins the post-preflight race", async () => {
+    await withHome(async (home) => {
+      const authority = authorityDescriptor();
+      const output = join(home, "invite.json");
+      const client = new PersonClient({
+        home_directory: home,
+        now: () => NOW,
+        fetch: async (input) => {
+          const path = new URL(String(input)).pathname;
+          if (path === "/v1/authority-descriptor") {
+            return json({ authority_descriptor: authority });
+          }
+          writeFileSync(output, "created by another local writer\n", { mode: 0o600 });
+          return json({ login_grant: "G".repeat(43), expires_at: "2026-08-18T00:15:00.000Z" }, 201);
+        },
+      });
+      await client.installSession("https://authority.example", {
+        ...ROTATED_SESSION,
+        membership_type: "owner",
+      });
+      await expect(
+        client.inviteEmployee({ name: "Jane Doe", email: "jane@example.com", output_path: output }),
+      ).rejects.toThrow();
+      expect(readFileSync(output, "utf8")).toBe("created by another local writer\n");
+    });
+  });
+
+  it("completes invitation login through a one-use loopback browser handoff", async () => {
     await withHome(async (home) => {
       const invitationPath = join(home, "person-onboarding.json");
       const loginGrant = "G".repeat(43);
@@ -633,13 +770,28 @@ describe("Person client", () => {
           stdout: { write: (value) => ((stdout += String(value)), true) },
           stderr: { write: () => true },
           home_directory: home,
-          read_input: () => JSON.stringify(SESSION),
           fetch: async (input, init) => {
             const path = new URL(String(input)).pathname;
             if (path === "/v2/session/oidc/begin") {
-              expect(JSON.parse(String(init?.body))).toEqual({
+              const begunRequest = JSON.parse(String(init?.body)) as Record<string, unknown>;
+              expect(begunRequest).toMatchObject({
                 kind: "identity_bootstrap",
                 login_grant: loginGrant,
+              });
+              const handoff = begunRequest.loopback_handoff as Record<string, unknown>;
+              expect(handoff.url).toMatch(/^http:\/\/127\.0\.0\.1:[1-9][0-9]*\/[A-Za-z0-9_-]{43}$/);
+              expect(handoff.token).toMatch(/^[A-Za-z0-9_-]{43}$/);
+              queueMicrotask(() => {
+                void globalThis.fetch(handoff.url as string, {
+                  method: "POST",
+                  headers: {
+                    "content-type": "application/x-www-form-urlencoded",
+                  },
+                  body: new URLSearchParams({
+                    token: handoff.token as string,
+                    session: Buffer.from(canonicalJson(SESSION as never), "utf8").toString("base64url"),
+                  }),
+                });
               });
               return json(
                 {
@@ -667,9 +819,120 @@ describe("Person client", () => {
         authorization_url: "https://identity.example/authorize?state=state",
       });
       expect(lines[1]).toMatchObject({ phase: "installed", ok: true });
+      expect(lines[0].instruction).toBe(
+        "Open authorization_url to complete sign-in in your browser.",
+      );
       expect(stdout).not.toContain(loginGrant);
       expect(stdout).not.toContain(SESSION.access_token);
       expect(stdout).not.toContain(SESSION.refresh_token);
+    });
+  });
+
+  it("reauthenticates through the same loopback handoff without an invitation", async () => {
+    await withHome(async (home) => {
+      const authority = authorityDescriptor();
+      let stdout = "";
+      const status = await runPersonClientCli(
+        ["login", "--authority-url", "https://authority.example"],
+        {
+          stdout: { write: (value) => ((stdout += String(value)), true) },
+          stderr: { write: () => true },
+          home_directory: home,
+          fetch: async (input, init) => {
+            const path = new URL(String(input)).pathname;
+            if (path === "/v2/session/oidc/begin") {
+              const request = JSON.parse(String(init?.body)) as Record<string, unknown>;
+              expect(request.kind).toBe("existing_identity_login");
+              const handoff = request.loopback_handoff as Record<string, string>;
+              queueMicrotask(() => {
+                void globalThis.fetch(handoff.url, {
+                  method: "POST",
+                  headers: {
+                    "content-type": "application/x-www-form-urlencoded",
+                  },
+                  body: new URLSearchParams({
+                    token: handoff.token,
+                    session: Buffer.from(canonicalJson(SESSION as never), "utf8").toString("base64url"),
+                  }),
+                });
+              });
+              return json(
+                {
+                  authorization_url: "https://identity.example/authorize?state=state",
+                  expires_at: "2026-08-18T00:10:00.000Z",
+                },
+                201,
+              );
+            }
+            expect(path).toBe("/v1/authority-descriptor");
+            return json({ authority_descriptor: authority });
+          },
+        },
+      );
+      expect(status).toBe(0);
+      expect(stdout).toContain('"phase":"installed"');
+    });
+  });
+
+  it("recovers a consumed invitation once through existing-identity login", async () => {
+    await withHome(async (home) => {
+      const invitationPath = join(home, "person-onboarding.json");
+      writeFileSync(
+        invitationPath,
+        `${canonicalJson({
+          schema_version: 1,
+          kind: "echo-person-onboarding-invitation",
+          authority_url: "https://authority.example",
+          login_grant: "G".repeat(43),
+          expires_at: "2026-08-18T00:15:00.000Z",
+        })}\n`,
+        { mode: 0o600 },
+      );
+      chmodSync(invitationPath, 0o600);
+      const authority = authorityDescriptor();
+      const begins: Record<string, unknown>[] = [];
+      let stdout = "";
+      const status = await runPersonClientCli(
+        ["login", "--invitation", invitationPath],
+        {
+          stdout: { write: (value) => ((stdout += String(value)), true) },
+          stderr: { write: () => true },
+          home_directory: home,
+          now: () => NOW,
+          fetch: async (input, init) => {
+            const path = new URL(String(input)).pathname;
+            if (path === "/v2/session/oidc/begin") {
+              const request = JSON.parse(String(init?.body)) as Record<string, unknown>;
+              begins.push(request);
+              if (begins.length === 1) {
+                return json({ error: { code: "unauthorized", message: "request failed" } }, 401);
+              }
+              expect(request.kind).toBe("existing_identity_login");
+              expect(request).not.toHaveProperty("login_grant");
+              const handoff = request.loopback_handoff as Record<string, string>;
+              queueMicrotask(() => {
+                void globalThis.fetch(handoff.url, {
+                  method: "POST",
+                  headers: { "content-type": "application/x-www-form-urlencoded" },
+                  body: new URLSearchParams({
+                    token: handoff.token,
+                    session: Buffer.from(canonicalJson(SESSION as never), "utf8").toString("base64url"),
+                  }),
+                });
+              });
+              return json({
+                authorization_url: "https://identity.example/authorize?state=state",
+                expires_at: "2026-08-18T00:10:00.000Z",
+              }, 201);
+            }
+            return json({ authority_descriptor: authority });
+          },
+        },
+      );
+      expect(status).toBe(0);
+      expect(begins).toHaveLength(2);
+      expect(stdout).toContain("The invitation was already consumed.");
+      expect(stdout).toContain('"phase":"installed"');
     });
   });
 

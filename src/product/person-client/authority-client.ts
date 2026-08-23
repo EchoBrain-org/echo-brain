@@ -60,6 +60,12 @@ const SLACK_TIMEOUT_MS = 75_000;
 const MAXIMUM_ORDINARY_RESPONSE_BYTES = 64 * 1024;
 const MAXIMUM_RECORDS_RESPONSE_BYTES = 512 * 1024;
 const CLEAN_PERSON_RECORDS_PATH_V1 = "/v1/person/records";
+const CLEAN_PERSON_EMPLOYEES_PATH_V1 = "/v1/person/employees";
+
+export interface CleanEmployeeInvitationV1 {
+  readonly login_grant: string;
+  readonly expires_at: string;
+}
 
 export interface CleanPersonRecordListV1 {
   readonly schema_version: 1;
@@ -406,6 +412,37 @@ function validateCleanPersonRecordSearch(
   });
 }
 
+function validateCleanEmployeeInvitation(value: unknown): CleanEmployeeInvitationV1 {
+  const response = asPlainRecord(value, "employee invitation response is invalid");
+  exactKeys(response, ["login_grant", "expires_at"], "employee invitation response is invalid");
+  if (
+    typeof response.login_grant !== "string" ||
+    !/^[A-Za-z0-9_-]{43}$/.test(response.login_grant) ||
+    Buffer.from(response.login_grant, "base64url").length !== 32 ||
+    typeof response.expires_at !== "string" ||
+    !Number.isFinite(Date.parse(response.expires_at)) ||
+    new Date(Date.parse(response.expires_at)).toISOString() !== response.expires_at
+  ) {
+    throw new Error("employee invitation response is invalid");
+  }
+  return Object.freeze({
+    login_grant: response.login_grant,
+    expires_at: response.expires_at,
+  });
+}
+
+function employeeInviteRequest(value: unknown, includeName: boolean): Readonly<Record<string, string>> {
+  const request = asPlainRecord(value, "employee request is invalid");
+  exactKeys(request, includeName ? ["name", "email"] : ["email"], "employee request is invalid");
+  if (
+    typeof request.email !== "string" ||
+    (includeName && typeof request.name !== "string")
+  ) {
+    throw new Error("employee request is invalid");
+  }
+  return request as Readonly<Record<string, string>>;
+}
+
 export class PersonAuthorityClient {
   private readonly origin: URL;
   private readonly fetchImpl: typeof fetch;
@@ -452,6 +489,7 @@ export class PersonAuthorityClient {
     readonly maximum_response_bytes?: number;
     readonly require_canonical_response?: boolean;
     readonly timeout_ms?: number;
+    readonly method?: "POST" | "PUT";
   }): Promise<T> {
     const request = input.validate_request(input.body);
     const body = canonicalJson(request);
@@ -461,7 +499,7 @@ export class PersonAuthorityClient {
     const response = await this.send(
       input.path,
       {
-        method: "POST",
+        method: input.method ?? "POST",
         headers: {
           accept: "application/json",
           "content-type": "application/json",
@@ -617,6 +655,7 @@ export class PersonAuthorityClient {
     readonly body: unknown;
     readonly validate_request: (value: unknown) => unknown;
     readonly access_token: string;
+    readonly method?: "POST" | "DELETE";
   }): Promise<void> {
     const request = input.validate_request(input.body);
     const body = canonicalJson(request);
@@ -624,7 +663,7 @@ export class PersonAuthorityClient {
       throw new Error("Person Authority request exceeds its body bound");
     }
     const response = await this.send(input.path, {
-      method: "POST",
+      method: input.method ?? "POST",
       headers: {
         accept: "application/json",
         authorization: `Bearer ${input.access_token}`,
@@ -833,6 +872,43 @@ export class PersonAuthorityClient {
       validate_response: validateOrganizationPersonSlackLinkResult,
       access_token: accessToken,
       timeout_ms: Math.max(this.timeoutMs, SLACK_TIMEOUT_MS),
+    });
+  }
+
+  inviteEmployee(
+    input: { name: string; email: string },
+    accessToken: string,
+  ): Promise<CleanEmployeeInvitationV1> {
+    return this.json({
+      path: CLEAN_PERSON_EMPLOYEES_PATH_V1,
+      body: input,
+      validate_request: (value) => employeeInviteRequest(value, true),
+      validate_response: validateCleanEmployeeInvitation,
+      access_token: accessToken,
+    });
+  }
+
+  reissueEmployee(
+    input: { email: string },
+    accessToken: string,
+  ): Promise<CleanEmployeeInvitationV1> {
+    return this.json({
+      path: CLEAN_PERSON_EMPLOYEES_PATH_V1,
+      body: input,
+      validate_request: (value) => employeeInviteRequest(value, false),
+      validate_response: validateCleanEmployeeInvitation,
+      access_token: accessToken,
+      method: "PUT",
+    });
+  }
+
+  revokeEmployee(input: { email: string }, accessToken: string): Promise<void> {
+    return this.noContent({
+      path: CLEAN_PERSON_EMPLOYEES_PATH_V1,
+      body: input,
+      validate_request: (value) => employeeInviteRequest(value, false),
+      access_token: accessToken,
+      method: "DELETE",
     });
   }
 }

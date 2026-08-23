@@ -1,7 +1,7 @@
 import { runCleanGranolaSourceCli } from "./composition/clean-granola-source-cli.js";
 
 try {
-  process.exitCode = runCleanGranolaSourceCli(process.argv.slice(2));
+  process.exitCode = await runCleanGranolaSourceCli(process.argv.slice(2));
 } catch (error) {
   process.stderr.write(
     `${error instanceof Error ? error.message : "clean Granola source admission failed"}\n`,

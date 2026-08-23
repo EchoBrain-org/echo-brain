@@ -31,6 +31,10 @@ import type {
   PersonSessionRepository,
   PersonSessionWriteTransaction,
 } from "./ports/person-session-repository.js";
+import {
+  isCleanPersonMembershipWriteRepository,
+  type CleanPersonMembershipWriteTransaction,
+} from "./ports/clean-person-membership-write.js";
 import type {
   FrozenPersonSessionOidcConfiguration,
   OidcTenantConstraint,
@@ -168,6 +172,22 @@ export interface PersonAuthenticatedWritePort {
   }): SynchronousResult<T>;
 }
 
+/**
+ * A deliberately separate authenticated transaction for clean employee
+ * lifecycle mutations. It cannot reach the legacy Authority transaction.
+ */
+export interface PersonAuthenticatedMembershipWritePort {
+  withAuthenticatedMembershipWrite<T>(input: {
+    access_token: string;
+    commit: (
+      authorization: PersonAccessAuthorization,
+      transaction: CleanPersonMembershipWriteTransaction &
+        PersonSessionWriteTransaction,
+      observed_at: string,
+    ) => SynchronousResult<T>;
+  }): SynchronousResult<T>;
+}
+
 /** Only the read port's expected, already-audited denials use this sentinel. */
 export class PersonReadUnauthorizedError extends AuthorityOperationError {
   constructor() {
@@ -210,6 +230,7 @@ type CallbackWriteResult =
 type RefreshWriteResult =
   { kind: "issued"; session: IssuedPersonSession } | { kind: "denied" };
 
+
 function validateHttpsUrl(
   value: string,
   label: string,
@@ -232,6 +253,7 @@ function validateHttpsUrl(
     throw new Error(`${label} must be an absolute HTTPS URL`);
   }
 }
+
 
 function validateText(
   value: string,
@@ -369,70 +391,155 @@ export class PersonIdentitySessionApplication {
     const expectedEmailSha256 = this.expectedEmailSha256(input.expected_email);
     return this.repository.writeAtLinearization(
       () => this.runtime.clock.now(),
-      (transaction, issuedAt) => {
-        const membership = transaction.membership(input.target_membership_id);
-        if (membership === undefined || membership.status !== "active") {
-          throw new AuthorityOperationError(
-            "not_found",
-            "active target membership was not found",
-          );
-        }
-        const metadata = transaction.metadata();
-        if (membership.organization_id !== metadata.organization_id) {
-          throw new Error(
-            "membership belongs to another Authority organization",
-          );
-        }
-        const expiresAt = addPersonSessionMilliseconds(
+      (transaction, issuedAt) =>
+        this.issueBootstrapLoginGrantAt(
+          transaction,
           issuedAt,
-          PERSON_LOGIN_GRANT_LIFETIME_MS,
+          input,
+          loginGrant,
+          loginGrantSha256,
+          expectedEmailSha256,
+        ),
+    );
+  }
+
+  /** Used only by the clean employee lifecycle inside its owner-authenticated transaction. */
+  issueEmployeeBootstrapLoginGrantAt(
+    transaction: PersonSessionWriteTransaction,
+    issuedAt: string,
+    input: { target_membership_id: string; expected_email: string },
+  ): IssuedPersonLoginGrant {
+    const expectedIssuer = this.configuration.issuer;
+    if (!isCanonicalPersonEmail(input.expected_email)) {
+      throw new AuthorityOperationError(
+        "invalid_request",
+        "login grant expected email must be canonical lowercase ASCII",
+      );
+    }
+    const loginGrant = this.secret("login_grant");
+    return this.issueBootstrapLoginGrantAt(
+      transaction,
+      issuedAt,
+      { ...input, expected_issuer: expectedIssuer },
+      loginGrant,
+      this.digestSecret(loginGrant),
+      this.expectedEmailSha256(input.expected_email),
+    );
+  }
+
+  withAuthenticatedMembershipWrite<T>(input: {
+    access_token: string;
+    commit: (
+      authorization: PersonAccessAuthorization,
+      transaction: CleanPersonMembershipWriteTransaction &
+        PersonSessionWriteTransaction,
+      observed_at: string,
+    ) => SynchronousResult<T>;
+  }): SynchronousResult<T> {
+    if (!isCleanPersonMembershipWriteRepository(this.repository)) {
+      throw new Error("clean Person membership write transaction is unavailable");
+    }
+    let tokenSha256: Sha256Digest;
+    try {
+      tokenSha256 = this.digestSecret(input.access_token);
+    } catch {
+      throw personSessionUnauthorized();
+    }
+    const outcome = this.repository.writeMembershipAtLinearization(
+      () => this.runtime.clock.now(),
+      (transaction, observedAt):
+        | { kind: "denied" }
+        | { kind: "committed"; result: SynchronousResult<T> } => {
+        const resolution = this.resolveAccess(
+          transaction as unknown as PersonSessionReadTransaction,
+          tokenSha256,
+          observedAt,
         );
-        const stored = transaction.insertPersonLoginGrant({
-          login_grant_sha256: loginGrantSha256,
-          grant_purpose: "oidc_identity_bootstrap",
-          organization_id: membership.organization_id,
-          principal_id: membership.principal_id,
-          membership_id: membership.membership_id,
-          membership_type: membership.membership_type,
-          expected_issuer: input.expected_issuer,
-          expected_email_sha256: expectedEmailSha256,
-          oidc_configuration_sha256:
-            this.configuration.oidc_configuration_sha256,
-          expires_at: expiresAt,
-        });
-        // The legacy repository retains its generic audit receipt. A clean
-        // Authority deliberately omits that legacy table: its durable
-        // login-grant row is the founder-onboarding receipt instead.
-        transaction.appendAudit?.({
-          occurred_at: stored.issued_at,
-          actor_kind: "admin",
-          action: "person_login_grant.issued",
-          subject_id: stored.membership_id,
-          detail: {
-            organization_id: stored.organization_id,
-            principal_id: stored.principal_id,
-            membership_id: stored.membership_id,
-            membership_type: stored.membership_type,
-            login_grant_sha256: stored.login_grant_sha256,
-            expected_issuer: stored.expected_issuer,
-            expected_email_sha256: stored.expected_email_sha256,
-            issued_at: stored.issued_at,
-            expires_at: stored.expires_at,
-          },
-        });
-        return {
-          organization_id: stored.organization_id,
-          principal_id: stored.principal_id,
-          membership_id: stored.membership_id,
-          membership_type: stored.membership_type,
-          login_grant: loginGrant,
-          expected_issuer: stored.expected_issuer,
-          expected_email_sha256: stored.expected_email_sha256,
-          issued_at: stored.issued_at,
-          expires_at: stored.expires_at,
-        };
+        if (resolution.kind === "denied") return { kind: "denied" };
+        const result = input.commit(
+          resolution.authorization,
+          transaction as CleanPersonMembershipWriteTransaction &
+            PersonSessionWriteTransaction,
+          observedAt,
+        );
+        this.assertSynchronousCommit(
+          result,
+          "Person membership write commit must be synchronous",
+        );
+        return { kind: "committed", result };
       },
     );
+    if (outcome.kind === "denied") throw personSessionUnauthorized();
+    return outcome.result;
+  }
+
+  private issueBootstrapLoginGrantAt(
+    transaction: PersonSessionWriteTransaction,
+    issuedAt: string,
+    input: {
+      target_membership_id: string;
+      expected_issuer: string;
+      expected_email: string;
+    },
+    loginGrant: string,
+    loginGrantSha256: Sha256Digest,
+    expectedEmailSha256: Sha256Digest,
+  ): IssuedPersonLoginGrant {
+    const membership = transaction.membership(input.target_membership_id);
+    if (membership === undefined || membership.status !== "active") {
+      throw new AuthorityOperationError(
+        "not_found",
+        "active target membership was not found",
+      );
+    }
+    const metadata = transaction.metadata();
+    if (membership.organization_id !== metadata.organization_id) {
+      throw new Error("membership belongs to another Authority organization");
+    }
+    const expiresAt = addPersonSessionMilliseconds(
+      issuedAt,
+      PERSON_LOGIN_GRANT_LIFETIME_MS,
+    );
+    const stored = transaction.insertPersonLoginGrant({
+      login_grant_sha256: loginGrantSha256,
+      grant_purpose: "oidc_identity_bootstrap",
+      organization_id: membership.organization_id,
+      principal_id: membership.principal_id,
+      membership_id: membership.membership_id,
+      membership_type: membership.membership_type,
+      expected_issuer: input.expected_issuer,
+      expected_email_sha256: expectedEmailSha256,
+      oidc_configuration_sha256: this.configuration.oidc_configuration_sha256,
+      expires_at: expiresAt,
+    });
+    transaction.appendAudit?.({
+      occurred_at: stored.issued_at,
+      actor_kind: "admin",
+      action: "person_login_grant.issued",
+      subject_id: stored.membership_id,
+      detail: {
+        organization_id: stored.organization_id,
+        principal_id: stored.principal_id,
+        membership_id: stored.membership_id,
+        membership_type: stored.membership_type,
+        login_grant_sha256: stored.login_grant_sha256,
+        expected_issuer: stored.expected_issuer,
+        expected_email_sha256: stored.expected_email_sha256,
+        issued_at: stored.issued_at,
+        expires_at: stored.expires_at,
+      },
+    });
+    return {
+      organization_id: stored.organization_id,
+      principal_id: stored.principal_id,
+      membership_id: stored.membership_id,
+      membership_type: stored.membership_type,
+      login_grant: loginGrant,
+      expected_issuer: stored.expected_issuer,
+      expected_email_sha256: stored.expected_email_sha256,
+      issued_at: stored.issued_at,
+      expires_at: stored.expires_at,
+    };
   }
 
   beginOidcLogin(input: BeginPersonOidcLoginInput): BegunPersonOidcLogin {
@@ -460,6 +567,7 @@ export class PersonIdentitySessionApplication {
           if (
             grant === undefined ||
             grant.consumed_at !== null ||
+            grant.invalidated_at !== null ||
             grant.expected_issuer !== this.configuration.issuer ||
             grant.oidc_configuration_sha256 !==
               this.configuration.oidc_configuration_sha256 ||
@@ -673,6 +781,7 @@ export class PersonIdentitySessionApplication {
             if (
               grant === undefined ||
               grant.consumed_at !== null ||
+              grant.invalidated_at !== null ||
               grant.expected_issuer !== identity.issuer ||
               identity.bootstrap_email_sha256 === null ||
               grant.expected_email_sha256 !== identity.bootstrap_email_sha256 ||
@@ -687,7 +796,7 @@ export class PersonIdentitySessionApplication {
               );
               return { kind: "denied", reason: "bootstrap_binding_denied" };
             }
-            const existing = transaction.oidcIdentityBinding(
+            const existing = transaction.activeOidcIdentityBinding(
               identity.issuer,
               identity.subject,
             );
@@ -749,7 +858,7 @@ export class PersonIdentitySessionApplication {
               );
               return { kind: "denied", reason: "attempt_invalid" };
             }
-            const existing = transaction.oidcIdentityBinding(
+            const existing = transaction.activeOidcIdentityBinding(
               identity.issuer,
               identity.subject,
             );

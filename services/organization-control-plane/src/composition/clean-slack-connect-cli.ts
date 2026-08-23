@@ -13,6 +13,7 @@ import {
   type VerifiedCleanControlPlaneStateV1,
 } from "../persistence/verified-clean-control-plane-state-v1.js";
 import { FileOrganizationSecretStore } from "../security/file-secret-store.js";
+import { SLACK_ORGANIZATION_TOOL_REQUIRED_SCOPES } from "../application/contracts.js";
 
 export interface CleanSlackConnectCliIo {
   readonly stdout: (value: string) => void;
@@ -113,16 +114,14 @@ function publicResult(
 ): Readonly<Record<string, unknown>> {
   return Object.freeze({
     approval_channel_id: approvalChannelId,
-    connection_id: result.connection.connection_id,
-    credential_reference_sha256: result.state.credential_reference_sha256,
     idempotent: result.idempotent,
-    organization_id: result.connection.organization_id,
     provider_app_id: result.connection.provider_app_id,
     provider_bot_id: result.connection.provider_bot_id,
     provider_bot_user_id: result.connection.provider_bot_user_id,
     provider_enterprise_id: result.connection.provider_enterprise_id,
     provider_tenant_id: result.connection.provider_tenant_id,
-    state_lineage_id: result.connection.state_lineage_id,
+    required_scopes: SLACK_ORGANIZATION_TOOL_REQUIRED_SCOPES,
+    ...result.channel_verification,
     verified_at: result.state.verified_at,
   });
 }

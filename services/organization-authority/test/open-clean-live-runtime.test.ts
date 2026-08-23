@@ -7,18 +7,31 @@ import {
   rmSync,
   writeFileSync,
 } from "node:fs";
+import { Buffer } from "node:buffer";
 import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
   canonicalJson,
   canonicalSha256,
+  sha256Digest,
   type Sha256Digest,
 } from "@echo-brain/federation-protocol";
 import {
   CleanPersonRecordReaderV1,
   openOrganizationRecordDatabase,
 } from "@echo-brain/organization-record/new-lineage-v1";
+import {
+  buildCleanReadableSearchGenerationV1,
+  ORGANIZATION_MEMBER_READABLE_PERSON_POLICY_ID_V2,
+  READABLE_SEARCH_CONTENT_BASELINE_V1,
+  READABLE_SEARCH_FACTS_BASELINE_V1,
+  READABLE_SEARCH_LEXICAL_BASELINE_V1,
+  readableSearchPlaneBaselineSha256V1,
+  RESTRICTED_REVIEWER_PERSON_POLICY_ID_V2,
+  type BuildCleanReadableSearchGenerationV1Input,
+  type CleanReadableSearchAtomV1,
+} from "@echo-brain/organization-retrieval/new-lineage-v1";
 import { afterEach, describe, expect, it } from "vitest";
 import {
   ORGANIZATION_MEMBER_READABLE_PERSON_POLICY_CONTRACT_SHA256,
@@ -46,9 +59,7 @@ import { readPrivateAuthorityPersonSessionPkceKey } from "../src/adapters/securi
 import { SystemAuthorityClock } from "../src/adapters/runtime/system-runtime-ports.js";
 import { admitCleanGranolaSource } from "../src/composition/clean-granola-source-admission.js";
 import { initializeCleanPersonCredentials } from "../src/composition/clean-person-onboarding.js";
-import {
-  issueCleanPersonInvitation,
-} from "../src/composition/clean-person-onboarding.js";
+import { issueCleanPersonInvitation } from "../src/composition/clean-person-onboarding.js";
 import { createCleanPersonRecordReadRouteV1 } from "../src/composition/clean-person-record-read-route.js";
 import { createCleanPersonRecordSearchRouteV1 } from "../src/composition/clean-person-record-search-route.js";
 import { cleanReadableSearchRuntimeContractV1 } from "../src/composition/clean-readable-search-runtime.js";
@@ -113,7 +124,8 @@ class FounderOidcProvider implements PersonSessionOidcAuthorizationProvider {
   }
 
   async redeemAuthorizationCode() {
-    if (this.attempt === undefined) throw new Error("OIDC begin was not called");
+    if (this.attempt === undefined)
+      throw new Error("OIDC begin was not called");
     return {
       kind: "verified" as const,
       token: {
@@ -126,6 +138,73 @@ class FounderOidcProvider implements PersonSessionOidcAuthorizationProvider {
       },
     };
   }
+}
+
+/** A deterministic browser-login stand-in for the owner and one employee. */
+class OwnerAndEmployeeOidcProvider implements PersonSessionOidcAuthorizationProvider {
+  private attempt: BegunPersonOidcLogin | undefined;
+  email = "founder@example.com";
+
+  buildAuthorizationUrl(attempt: BegunPersonOidcLogin): string {
+    this.attempt = attempt;
+    return `https://issuer.example/authorize?state=${encodeURIComponent(attempt.state)}`;
+  }
+
+  async redeemAuthorizationCode() {
+    if (this.attempt === undefined)
+      throw new Error("OIDC begin was not called");
+    const founder = this.email === "founder@example.com";
+    return {
+      kind: "verified" as const,
+      token: {
+        issuer: OIDC.issuer,
+        subject: founder ? "founder-subject" : "employee-subject",
+        audience: OIDC.client_id,
+        nonce: this.attempt.nonce,
+        issued_at: Math.floor(Date.now() / 1_000),
+        claims: { email: this.email, email_verified: true },
+      },
+    };
+  }
+}
+
+async function responseJson(
+  response: Response,
+): Promise<Record<string, unknown>> {
+  return JSON.parse(await response.text()) as Record<string, unknown>;
+}
+
+async function browserLogin(
+  origin: string,
+  input: Record<string, unknown>,
+): Promise<Record<string, unknown>> {
+  const begun = await fetch(`${origin}/v2/session/oidc/begin`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({
+      ...input,
+      loopback_handoff: {
+        url: `http://127.0.0.1:39999/${"P".repeat(43)}`,
+        token: "T".repeat(43),
+      },
+    }),
+  });
+  expect(begun.status).toBe(201);
+  const authorization = await responseJson(begun);
+  const state = new URL(
+    authorization.authorization_url as string,
+  ).searchParams.get("state");
+  expect(state).not.toBeNull();
+  const callback = await fetch(
+    `${origin}/v2/session/oidc/callback?state=${encodeURIComponent(state!)}&code=browser-code`,
+  );
+  expect(callback.status).toBe(200);
+  const page = await callback.text();
+  const encoded = /name="session" value="([A-Za-z0-9_-]+)"/.exec(page)?.[1];
+  expect(encoded).toBeDefined();
+  return JSON.parse(
+    Buffer.from(encoded!, "base64url").toString("utf8"),
+  ) as Record<string, unknown>;
 }
 
 function privateFile(parent: string, name: string, value: string): string {
@@ -159,9 +238,9 @@ async function completeFounderReonboarding(input: {
     authority_url: "https://authority.example",
     output_path: invitationPath,
   });
-  const invitation = JSON.parse(
-    readFileSync(invitationPath, "utf8"),
-  ) as { login_grant: string };
+  const invitation = JSON.parse(readFileSync(invitationPath, "utf8")) as {
+    login_grant: string;
+  };
   const authority = openAuthorityDatabase(
     join(input.state_directory, "authority.sqlite"),
     { fileMustExist: true },
@@ -229,14 +308,18 @@ function seedActiveSlackApproval(input: {
       provider_bot_id: "B_LIVE_TEST",
       provider_bot_user_id: "U_LIVE_BOT",
       required_provider_scopes: SLACK_APPROVAL_REQUIRED_PROVIDER_SCOPES,
-      public_connection_configuration_sha256: canonicalSha256({ kind: "configuration" }),
+      public_connection_configuration_sha256: canonicalSha256({
+        kind: "configuration",
+      }),
     });
     const connectionSha = canonicalSha256(connection);
     const state = buildOrganizationToolConnectionStateV2({
       connection_id: connection.connection_id,
       connection_contract_sha256: connectionSha,
       connection_status: "active",
-      credential_reference_sha256: canonicalSha256({ kind: "test-only-unread-token" }),
+      credential_reference_sha256: canonicalSha256({
+        kind: "test-only-unread-token",
+      }),
       observed_granted_scopes: SLACK_APPROVAL_REQUIRED_PROVIDER_SCOPES,
       verification_event_id: "verify_live_test",
       verification_evidence_sha256: canonicalSha256({ kind: "verification" }),
@@ -244,12 +327,27 @@ function seedActiveSlackApproval(input: {
       verified_at: NOW,
     });
     const stateSha = canonicalSha256(state);
-    control.prepare(
-      "INSERT INTO organization_tool_connection_contracts VALUES (?, ?, ?, ?)",
-    ).run(connection.connection_id, canonicalJson(connection), connectionSha, NOW);
-    control.prepare(
-      "INSERT INTO organization_tool_connection_current_state VALUES (?, ?, ?, ?, 'active', ?)",
-    ).run(connection.connection_id, connectionSha, canonicalJson(state), stateSha, NOW);
+    control
+      .prepare(
+        "INSERT INTO organization_tool_connection_contracts VALUES (?, ?, ?, ?)",
+      )
+      .run(
+        connection.connection_id,
+        canonicalJson(connection),
+        connectionSha,
+        NOW,
+      );
+    control
+      .prepare(
+        "INSERT INTO organization_tool_connection_current_state VALUES (?, ?, ?, ?, 'active', ?)",
+      )
+      .run(
+        connection.connection_id,
+        connectionSha,
+        canonicalJson(state),
+        stateSha,
+        NOW,
+      );
     const link = buildExternalHumanIdentityLinkContractV2({
       ...coordinates,
       external_identity_link_id: "clm_live_test",
@@ -266,17 +364,27 @@ function seedActiveSlackApproval(input: {
       verified_at: NOW,
     });
     const linkSha = canonicalSha256(link);
-    control.prepare(
-      "INSERT INTO organization_external_human_link_contracts VALUES (?, ?, ?, ?)",
-    ).run(link.external_identity_link_id, linkSha, canonicalJson(link), NOW);
-    control.prepare(
-      "INSERT INTO organization_external_human_link_current VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'active', ?)",
-    ).run(
-      link.external_identity_link_id, linkSha, link.provider_issuer,
-      link.provider_tenant_kind, link.provider_tenant_id,
-      link.provider_enterprise_id, link.provider_subject_id,
-      link.principal_id, link.membership_id, NOW,
-    );
+    control
+      .prepare(
+        "INSERT INTO organization_external_human_link_contracts VALUES (?, ?, ?, ?)",
+      )
+      .run(link.external_identity_link_id, linkSha, canonicalJson(link), NOW);
+    control
+      .prepare(
+        "INSERT INTO organization_external_human_link_current VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'active', ?)",
+      )
+      .run(
+        link.external_identity_link_id,
+        linkSha,
+        link.provider_issuer,
+        link.provider_tenant_kind,
+        link.provider_tenant_id,
+        link.provider_enterprise_id,
+        link.provider_subject_id,
+        link.principal_id,
+        link.membership_id,
+        NOW,
+      );
     const binding = buildPersonSlackApprovalBindingContractV2({
       ...coordinates,
       approval_binding_id: "bnd_live_test",
@@ -289,23 +397,38 @@ function seedActiveSlackApproval(input: {
       approval_channel_id: SLACK_CHANNEL,
       approve_reaction: "white_check_mark",
       reject_reaction: "x",
-      supported_policy_actions: [{
-        policy_id: ORGANIZATION_MEMBER_READABLE_PERSON_POLICY_ID,
-        policy_contract_sha256: ORGANIZATION_MEMBER_READABLE_PERSON_POLICY_CONTRACT_SHA256,
-        actions: ["approve", "reject"],
-      }, {
-        policy_id: RESTRICTED_REVIEWER_PERSON_POLICY_ID,
-        policy_contract_sha256: RESTRICTED_REVIEWER_PERSON_POLICY_CONTRACT_SHA256,
-        actions: ["approve", "reject"],
-      }],
+      supported_policy_actions: [
+        {
+          policy_id: ORGANIZATION_MEMBER_READABLE_PERSON_POLICY_ID,
+          policy_contract_sha256:
+            ORGANIZATION_MEMBER_READABLE_PERSON_POLICY_CONTRACT_SHA256,
+          actions: ["approve", "reject"],
+        },
+        {
+          policy_id: RESTRICTED_REVIEWER_PERSON_POLICY_ID,
+          policy_contract_sha256:
+            RESTRICTED_REVIEWER_PERSON_POLICY_CONTRACT_SHA256,
+          actions: ["approve", "reject"],
+        },
+      ],
     });
     const bindingSha = canonicalSha256(binding);
-    control.prepare(
-      "INSERT INTO organization_approval_binding_contracts VALUES (?, ?, ?, ?, ?)",
-    ).run(binding.approval_binding_id, canonicalJson(binding), bindingSha, connection.connection_id, NOW);
-    control.prepare(
-      "INSERT INTO organization_approval_binding_current VALUES (?, ?, 'active', ?)",
-    ).run(binding.approval_binding_id, bindingSha, NOW);
+    control
+      .prepare(
+        "INSERT INTO organization_approval_binding_contracts VALUES (?, ?, ?, ?, ?)",
+      )
+      .run(
+        binding.approval_binding_id,
+        canonicalJson(binding),
+        bindingSha,
+        connection.connection_id,
+        NOW,
+      );
+    control
+      .prepare(
+        "INSERT INTO organization_approval_binding_current VALUES (?, ?, 'active', ?)",
+      )
+      .run(binding.approval_binding_id, bindingSha, NOW);
     for (const action of ["approve", "reject"] as const) {
       const capability = buildPersonSlackApprovalActionCapabilityV2({
         ...coordinates,
@@ -317,20 +440,30 @@ function seedActiveSlackApproval(input: {
         membership_id: input.membership_id,
         membership_type: "owner",
         policy_id: ORGANIZATION_MEMBER_READABLE_PERSON_POLICY_ID,
-        policy_contract_sha256: ORGANIZATION_MEMBER_READABLE_PERSON_POLICY_CONTRACT_SHA256,
+        policy_contract_sha256:
+          ORGANIZATION_MEMBER_READABLE_PERSON_POLICY_CONTRACT_SHA256,
         action,
       });
       const capabilitySha = canonicalSha256(capability);
-      control.prepare(
-        "INSERT INTO organization_approval_action_capability_contracts VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-      ).run(
-        capability.action_capability_id, canonicalJson(capability), capabilitySha,
-        binding.approval_binding_id, link.external_identity_link_id,
-        capability.policy_id, action, NOW,
-      );
-      control.prepare(
-        "INSERT INTO organization_approval_action_capability_current VALUES (?, ?, 'active', ?)",
-      ).run(capability.action_capability_id, capabilitySha, NOW);
+      control
+        .prepare(
+          "INSERT INTO organization_approval_action_capability_contracts VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+        )
+        .run(
+          capability.action_capability_id,
+          canonicalJson(capability),
+          capabilitySha,
+          binding.approval_binding_id,
+          link.external_identity_link_id,
+          capability.policy_id,
+          action,
+          NOW,
+        );
+      control
+        .prepare(
+          "INSERT INTO organization_approval_action_capability_current VALUES (?, ?, 'active', ?)",
+        )
+        .run(capability.action_capability_id, capabilitySha, NOW);
     }
   } finally {
     control.close();
@@ -379,15 +512,17 @@ function fakeProcessor(
       meeting_revision: meeting.provenance.canonical_revision,
       processor: identity,
       generated_at: NOW,
-      signals: [{
-        id: "decision-live-test",
-        kind: "decision",
-        status: "decided",
-        text: "Ship the clean live migration.",
-        subject: null,
-        confidence: 1,
-        evidence: [{ meeting_id: meeting.id, block_id: "note-live-test" }],
-      }],
+      signals: [
+        {
+          id: "decision-live-test",
+          kind: "decision",
+          status: "decided",
+          text: "Ship the clean live migration.",
+          subject: null,
+          confidence: 1,
+          evidence: [{ meeting_id: meeting.id, block_id: "note-live-test" }],
+        },
+      ],
     }),
   };
 }
@@ -404,7 +539,9 @@ function fakeReaction(
         expectation_sha256,
         provider_actor_subject: "UFOUNDER",
         observed_reaction:
-          action === "approve" ? expectation.approve_reaction : expectation.reject_reaction,
+          action === "approve"
+            ? expectation.approve_reaction
+            : expectation.reject_reaction,
         observed_action: action,
         provider_response_evidence_sha256: canonicalSha256({
           kind: "synthetic-slack-reaction",
@@ -418,10 +555,7 @@ function fakeReaction(
   };
 }
 
-async function waitFor(
-  assertion: () => boolean,
-  label: string,
-): Promise<void> {
+async function waitFor(assertion: () => boolean, label: string): Promise<void> {
   for (let attempt = 0; attempt < 100; attempt += 1) {
     if (assertion()) return;
     await new Promise<void>((resolve) => setTimeout(resolve, 10));
@@ -429,7 +563,10 @@ async function waitFor(
   throw new Error(`timed out waiting for ${label}`);
 }
 
-async function activeFixture(action: "approve" | "reject") {
+async function activeFixture(
+  action: "approve" | "reject",
+  person?: PersonSessionOidcAuthorizationProvider,
+) {
   const parent = root();
   const initialized = initializeCleanResetState({
     state_directory: join(parent, "state"),
@@ -458,13 +595,24 @@ async function activeFixture(action: "approve" | "reject") {
     "llm.key",
     "llm-private-credential-material-000000",
   );
-  const admitted = admitCleanGranolaSource({
+  const admitted = await admitCleanGranolaSource({
     state_directory: initialized.state_directory,
     source_instance_id: "founder-granola",
     processor_instance_id: "founder-llm",
     granola_credential_reference: `file:${granola_credential_file}`,
     granola_owner_email_reference: `file:${granola_owner_email_file}`,
     llm_credential_reference: `file:${llm_credential_file}`,
+    create_granola_record_owner_client: () => ({
+      async listNotes() {
+        return {
+          notes: [
+            { id: "preflight-only", owner: { email: "founder@example.com" } },
+          ],
+          hasMore: false,
+          cursor: null,
+        };
+      },
+    }),
     now: () => NOW,
   });
   seedActiveSlackApproval({
@@ -500,11 +648,13 @@ async function activeFixture(action: "approve" | "reject") {
     },
     capture: { state: "complete", components: [] },
     participants: [],
-    content: [{
-      id: "note-live-test",
-      kind: "note",
-      text: "Ship the clean live migration.",
-    }],
+    content: [
+      {
+        id: "note-live-test",
+        kind: "note",
+        text: "Ship the clean live migration.",
+      },
+    ],
     artifacts: [],
   };
   const source = fakeSource(meeting, sourceIdentity);
@@ -527,6 +677,7 @@ async function activeFixture(action: "approve" | "reject") {
     on_worker_error: (error) => errors.push(error),
   };
   const runtime = await openCleanLiveRuntime(config, {
+    ...(person === undefined ? {} : { person: { oidc_provider: person } }),
     live_adapters: {
       source,
       processor: fakeProcessor(processorIdentity),
@@ -548,6 +699,246 @@ async function activeFixture(action: "approve" | "reject") {
     posted,
     errors,
     runtime,
+  };
+}
+
+function readableSearchBuildInput(input: {
+  readonly state_directory: string;
+  readonly authority_id: string;
+  readonly organization_id: string;
+  readonly state_lineage_id: string;
+  readonly exact_head: {
+    readonly position: number;
+    readonly record_sha256: Sha256Digest;
+  };
+  readonly atoms: readonly CleanReadableSearchAtomV1[];
+}): BuildCleanReadableSearchGenerationV1Input {
+  const plane = (role: string, schema_sha256: Sha256Digest) => {
+    const manifest_json = canonicalJson({
+      schema_version: 1,
+      kind: "echo-state-lineage-database-manifest-v1",
+      role,
+      authority_id: input.authority_id,
+      organization_id: input.organization_id,
+      state_lineage_id: input.state_lineage_id,
+      database_schema_version: 1,
+      schema_sha256,
+      created_at: NOW,
+      creating_artifact_revision: "employee-permission-acceptance",
+    });
+    return {
+      database_schema_version: 1 as const,
+      schema_sha256,
+      manifest_json,
+      manifest_sha256: sha256Digest(manifest_json),
+    };
+  };
+  const contract = cleanReadableSearchRuntimeContractV1();
+  return {
+    state_directory: input.state_directory,
+    lineage: {
+      authority_id: input.authority_id,
+      organization_id: input.organization_id,
+      state_lineage_id: input.state_lineage_id,
+      planes: {
+        facts: plane(
+          "retrieval-facts",
+          readableSearchPlaneBaselineSha256V1(
+            READABLE_SEARCH_FACTS_BASELINE_V1,
+          ),
+        ),
+        content: plane(
+          "retrieval-content",
+          readableSearchPlaneBaselineSha256V1(
+            READABLE_SEARCH_CONTENT_BASELINE_V1,
+          ),
+        ),
+        lexical: plane(
+          "retrieval-lexical",
+          readableSearchPlaneBaselineSha256V1(
+            READABLE_SEARCH_LEXICAL_BASELINE_V1,
+          ),
+        ),
+      },
+    },
+    exact_head: {
+      authority_id: input.authority_id,
+      organization_id: input.organization_id,
+      state_lineage_id: input.state_lineage_id,
+      position: input.exact_head.position,
+      record_sha256: input.exact_head.record_sha256,
+    },
+    retrieval_contract_sha256: contract.retrieval_contract_sha256,
+    organization_member_policy_contract_sha256:
+      contract.organization_member_policy_contract_sha256,
+    restricted_reviewer_policy_contract_sha256:
+      contract.restricted_reviewer_policy_contract_sha256,
+    analyzer: contract.analyzer,
+    source_revision: contract.source_revision,
+    builder_artifact_sha256: contract.builder_artifact_sha256,
+    sqlite_version: "3.50.4",
+    atoms: input.atoms,
+  };
+}
+
+function syntheticRestrictedRecord(input: {
+  readonly record: ReturnType<typeof openOrganizationRecordDatabase>;
+  readonly initialized: {
+    readonly authority_id: string;
+    readonly organization_id: string;
+    readonly state_lineage_id: string;
+    readonly owner_principal_id: string;
+    readonly owner_membership_id: string;
+  };
+}): {
+  readonly record_sha256: Sha256Digest;
+  readonly atom: CleanReadableSearchAtomV1;
+} {
+  const prior = input.record
+    .prepare(
+      `SELECT position, record_sha256, canonical_envelope
+       FROM organization_record_log WHERE position = 1`,
+    )
+    .get() as {
+    readonly position: number;
+    readonly record_sha256: Sha256Digest;
+    readonly canonical_envelope: string;
+  };
+  const memberFact = input.record
+    .prepare(
+      `SELECT atom_order, signal_id_sha256, item_kind, audit_event_id, audit_sequence,
+            audit_entry_sha256, provider_action_sha256, authorization_proof_sha256
+       FROM organization_record_member_readable_person_fact
+      WHERE record_position = 1 AND record_sha256 = ?`,
+    )
+    .get(prior.record_sha256) as {
+    readonly atom_order: number;
+    readonly signal_id_sha256: Sha256Digest;
+    readonly item_kind: "decision" | "action" | "rationale";
+    readonly audit_event_id: string;
+    readonly audit_sequence: number;
+    readonly audit_entry_sha256: Sha256Digest;
+    readonly provider_action_sha256: Sha256Digest;
+    readonly authorization_proof_sha256: Sha256Digest;
+  };
+  const record_sha256 = sha256Digest("employee-permission-restricted-record");
+  const envelope = JSON.parse(prior.canonical_envelope) as {
+    body: Record<string, unknown>;
+    record_sha256: string;
+  };
+  const body = envelope.body;
+  const reference = body.human_act_resolution_ref as Record<string, unknown>;
+  const event = body.event as Record<string, unknown>;
+  const approval_id = "approval-employee-permission-restricted";
+  body.envelope_id = "envelope-employee-permission-restricted";
+  body.semantic_idempotency_key = sha256Digest(
+    "employee-permission-restricted-idempotency",
+  );
+  body.predecessor_position = prior.position;
+  body.predecessor_record_sha256 = prior.record_sha256;
+  reference.approval_id = approval_id;
+  reference.policy_id = RESTRICTED_REVIEWER_PERSON_POLICY_ID_V2;
+  reference.policy_contract_sha256 =
+    cleanReadableSearchRuntimeContractV1().restricted_reviewer_policy_contract_sha256;
+  event.policy_id = RESTRICTED_REVIEWER_PERSON_POLICY_ID_V2;
+  event.policy_contract_sha256 =
+    cleanReadableSearchRuntimeContractV1().restricted_reviewer_policy_contract_sha256;
+  envelope.record_sha256 = record_sha256;
+  const canonical_envelope = canonicalJson(envelope);
+  const receipt = canonicalJson({
+    schema_version: 2,
+    kind: "echo-organization-record-receipt-v2",
+    authority_id: input.initialized.authority_id,
+    organization_id: input.initialized.organization_id,
+    state_lineage_id: input.initialized.state_lineage_id,
+    envelope_id: body.envelope_id,
+    semantic_idempotency_key: body.semantic_idempotency_key,
+    event_kind: "approved",
+    record_position: 2,
+    record_sha256,
+    predecessor_record_sha256: prior.record_sha256,
+    record_head_position: 2,
+    record_head_sha256: record_sha256,
+    issued_at: NOW,
+  });
+  input.record
+    .prepare(
+      `INSERT INTO organization_record_log
+      (position, envelope_id, event_kind, approval_id, action, semantic_idempotency_key,
+       canonical_envelope, envelope_sha256, predecessor_position, predecessor_record_sha256,
+       record_sha256, receipt_payload, receipt_issued_at)
+     VALUES (2, ?, 'approved', ?, 'approve', ?, ?, ?, 1, ?, ?, ?, ?)`,
+    )
+    .run(
+      body.envelope_id,
+      approval_id,
+      body.semantic_idempotency_key,
+      canonical_envelope,
+      sha256Digest(canonical_envelope),
+      prior.record_sha256,
+      record_sha256,
+      receipt,
+      NOW,
+    );
+  const atom_id = sha256Digest("employee-permission-restricted-atom");
+  input.record
+    .prepare(
+      `INSERT INTO organization_record_restricted_reviewer_person_fact
+      (authority_id, organization_id, state_lineage_id, approval_id, action, policy_id,
+       policy_contract_sha256, record_position, record_sha256, atom_order,
+       signal_id_sha256, atom_id, item_kind, audit_event_id, audit_sequence,
+       audit_entry_sha256, provider_action_sha256, authorization_proof_sha256,
+       reviewer_principal_id, reviewer_membership_id)
+     VALUES (?, ?, ?, ?, 'approve', ?, ?, 2, ?, 0, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    )
+    .run(
+      input.initialized.authority_id,
+      input.initialized.organization_id,
+      input.initialized.state_lineage_id,
+      approval_id,
+      RESTRICTED_REVIEWER_PERSON_POLICY_ID_V2,
+      cleanReadableSearchRuntimeContractV1()
+        .restricted_reviewer_policy_contract_sha256,
+      record_sha256,
+      memberFact.signal_id_sha256,
+      atom_id,
+      memberFact.item_kind,
+      memberFact.audit_event_id,
+      memberFact.audit_sequence,
+      memberFact.audit_entry_sha256,
+      memberFact.provider_action_sha256,
+      memberFact.authorization_proof_sha256,
+      input.initialized.owner_principal_id,
+      input.initialized.owner_membership_id,
+    );
+  return {
+    record_sha256,
+    atom: {
+      authority_id: input.initialized.authority_id,
+      organization_id: input.initialized.organization_id,
+      state_lineage_id: input.initialized.state_lineage_id,
+      record_position: 2,
+      record_sha256,
+      envelope_sha256: sha256Digest(canonical_envelope),
+      approval_id,
+      atom_id,
+      atom_order: 0,
+      signal_id_sha256: memberFact.signal_id_sha256,
+      item_kind: memberFact.item_kind,
+      text: "restricted employee permission acceptance",
+      text_sha256: sha256Digest("restricted employee permission acceptance"),
+      policy_id: RESTRICTED_REVIEWER_PERSON_POLICY_ID_V2,
+      policy_contract_sha256:
+        cleanReadableSearchRuntimeContractV1()
+          .restricted_reviewer_policy_contract_sha256,
+      authorization_audit_event_id: memberFact.audit_event_id,
+      authorization_audit_sequence: memberFact.audit_sequence,
+      authorization_audit_entry_sha256: memberFact.audit_entry_sha256,
+      provider_action_sha256: memberFact.provider_action_sha256,
+      authorization_proof_sha256: memberFact.authorization_proof_sha256,
+      reviewer_principal_id: input.initialized.owner_principal_id,
+      reviewer_membership_id: input.initialized.owner_membership_id,
+    },
   };
 }
 
@@ -641,9 +1032,11 @@ describe("open clean live runtime", () => {
       await waitFor(
         () =>
           fixture.errors.length > 0 ||
-          (record
-            .prepare("SELECT count(*) AS count FROM organization_record_log")
-            .get() as { count: number }).count === 1,
+          (
+            record
+              .prepare("SELECT count(*) AS count FROM organization_record_log")
+              .get() as { count: number }
+          ).count === 1,
         "V4 append",
       );
       if (fixture.errors[0] !== undefined) throw fixture.errors[0];
@@ -713,7 +1106,9 @@ describe("open clean live runtime", () => {
         records: new CleanPersonRecordReaderV1(rereadRecord),
         audit: new SqliteCleanPersonRecordReadAuditV1(rereadAuthority),
       });
-      expect(list.list({ access_token: "synthetic-founder-token" }).records).toHaveLength(1);
+      expect(
+        list.list({ access_token: "synthetic-founder-token" }).records,
+      ).toHaveLength(1);
 
       const search = createCleanPersonRecordSearchRouteV1({
         state_directory: fixture.initialized.state_directory,
@@ -740,6 +1135,231 @@ describe("open clean live runtime", () => {
     } finally {
       rereadRecord.close();
       rereadAuthority.close();
+    }
+  });
+
+  it("gives an employee only member-readable Layer 1 and Layer 2 content, then revocation fences both paths", async () => {
+    const provider = new OwnerAndEmployeeOidcProvider();
+    const fixture = await activeFixture("approve", provider);
+    const authority = openAuthorityDatabase(
+      join(fixture.initialized.state_directory, "authority.sqlite"),
+      { fileMustExist: true },
+    );
+    const record = openOrganizationRecordDatabase(
+      join(fixture.initialized.state_directory, "record-log.sqlite"),
+      { fileMustExist: true },
+    );
+    try {
+      await waitFor(
+        () =>
+          fixture.errors.length > 0 ||
+          (
+            record
+              .prepare("SELECT count(*) AS count FROM organization_record_log")
+              .get() as { count: number }
+          ).count === 1,
+        "member-readable V4 append",
+      );
+      if (fixture.errors[0] !== undefined) throw fixture.errors[0];
+
+      const member = record
+        .prepare(
+          `SELECT log.record_sha256, log.envelope_sha256, fact.atom_id, fact.atom_order,
+                fact.signal_id_sha256, fact.item_kind, fact.audit_event_id, fact.audit_sequence,
+                fact.audit_entry_sha256, fact.provider_action_sha256, fact.authorization_proof_sha256
+           FROM organization_record_log AS log
+           JOIN organization_record_member_readable_person_fact AS fact
+             ON fact.record_position = log.position AND fact.record_sha256 = log.record_sha256
+          WHERE log.position = 1`,
+        )
+        .get() as {
+        readonly record_sha256: Sha256Digest;
+        readonly envelope_sha256: Sha256Digest;
+        readonly atom_id: Sha256Digest;
+        readonly atom_order: number;
+        readonly signal_id_sha256: Sha256Digest;
+        readonly item_kind: "decision" | "action" | "rationale";
+        readonly audit_event_id: string;
+        readonly audit_sequence: number;
+        readonly audit_entry_sha256: Sha256Digest;
+        readonly provider_action_sha256: Sha256Digest;
+        readonly authorization_proof_sha256: Sha256Digest;
+      };
+      const restricted = syntheticRestrictedRecord({
+        record,
+        initialized: fixture.initialized,
+      });
+      const contract = cleanReadableSearchRuntimeContractV1();
+      const built = buildCleanReadableSearchGenerationV1(
+        readableSearchBuildInput({
+          state_directory: fixture.initialized.state_directory,
+          authority_id: fixture.initialized.authority_id,
+          organization_id: fixture.initialized.organization_id,
+          state_lineage_id: fixture.initialized.state_lineage_id,
+          exact_head: { position: 2, record_sha256: restricted.record_sha256 },
+          atoms: [
+            {
+              authority_id: fixture.initialized.authority_id,
+              organization_id: fixture.initialized.organization_id,
+              state_lineage_id: fixture.initialized.state_lineage_id,
+              record_position: 1,
+              record_sha256: member.record_sha256,
+              envelope_sha256: member.envelope_sha256,
+              approval_id: "apr_live_test",
+              atom_id: member.atom_id,
+              atom_order: member.atom_order,
+              signal_id_sha256: member.signal_id_sha256,
+              item_kind: member.item_kind,
+              text: "Ship the clean live migration.",
+              text_sha256: sha256Digest("Ship the clean live migration."),
+              policy_id: ORGANIZATION_MEMBER_READABLE_PERSON_POLICY_ID_V2,
+              policy_contract_sha256:
+                contract.organization_member_policy_contract_sha256,
+              authorization_audit_event_id: member.audit_event_id,
+              authorization_audit_sequence: member.audit_sequence,
+              authorization_audit_entry_sha256: member.audit_entry_sha256,
+              provider_action_sha256: member.provider_action_sha256,
+              authorization_proof_sha256: member.authorization_proof_sha256,
+              reviewer_principal_id: null,
+              reviewer_membership_id: null,
+            },
+            restricted.atom,
+          ],
+        }),
+      );
+      authority
+        .prepare(
+          `UPDATE authority_readable_search_active_generation
+            SET generation_id = ?, manifest_sha256 = ?, retrieval_contract_sha256 = ?,
+                record_head_position = 2, record_head_hash = ?, published_at = ?
+          WHERE singleton = 1`,
+        )
+        .run(
+          built.manifest.generation_id,
+          built.manifest_sha256,
+          contract.retrieval_contract_sha256,
+          restricted.record_sha256,
+          NOW,
+        );
+
+      const origin = `http://127.0.0.1:${String(fixture.runtime.address.port)}`;
+      const owner = await browserLogin(origin, {
+        kind: "existing_identity_login",
+      });
+      const ownerAccess = owner.access_token as string;
+      const invitation = await fetch(`${origin}/v1/person/employees`, {
+        method: "POST",
+        headers: {
+          authorization: `Bearer ${ownerAccess}`,
+          "content-type": "application/json",
+        },
+        body: JSON.stringify({
+          name: "Employee",
+          email: "employee@example.com",
+        }),
+      });
+      expect(invitation.status).toBe(201);
+      const invitationBody = await responseJson(invitation);
+      provider.email = "employee@example.com";
+      const employee = await browserLogin(origin, {
+        kind: "identity_bootstrap",
+        login_grant: invitationBody.login_grant,
+      });
+      const employeeAccess = employee.access_token as string;
+
+      const employeeList = await fetch(`${origin}/v1/person/records`, {
+        headers: { authorization: `Bearer ${employeeAccess}` },
+      });
+      expect(employeeList.status).toBe(200);
+      const employeeListBody = await responseJson(employeeList);
+      expect(employeeListBody.records).toEqual([
+        expect.objectContaining({ record_sha256: member.record_sha256 }),
+      ]);
+      const employeeSearch = await fetch(`${origin}/v1/person/records`, {
+        method: "POST",
+        headers: {
+          authorization: `Bearer ${employeeAccess}`,
+          "content-type": "application/json",
+        },
+        body: JSON.stringify({ query: "migration restricted" }),
+      });
+      expect(employeeSearch.status).toBe(200);
+      const employeeSearchBody = await responseJson(employeeSearch);
+      expect(employeeSearchBody).toMatchObject({
+        generation_id: built.manifest.generation_id,
+        record_head: { position: 2, record_sha256: restricted.record_sha256 },
+      });
+      expect(employeeSearchBody.items).toEqual([
+        expect.objectContaining({
+          atom_id: member.atom_id,
+          record_sha256: member.record_sha256,
+          policy_id: ORGANIZATION_MEMBER_READABLE_PERSON_POLICY_ID_V2,
+        }),
+      ]);
+
+      provider.email = "founder@example.com";
+      const ownerList = await fetch(`${origin}/v1/person/records`, {
+        headers: { authorization: `Bearer ${ownerAccess}` },
+      });
+      expect(ownerList.status).toBe(200);
+      expect((await responseJson(ownerList)).records).toHaveLength(2);
+      const ownerSearch = await fetch(`${origin}/v1/person/records`, {
+        method: "POST",
+        headers: {
+          authorization: `Bearer ${ownerAccess}`,
+          "content-type": "application/json",
+        },
+        body: JSON.stringify({ query: "migration restricted" }),
+      });
+      expect(ownerSearch.status).toBe(200);
+      expect((await responseJson(ownerSearch)).items).toHaveLength(2);
+
+      const revoked = await fetch(`${origin}/v1/person/employees`, {
+        method: "DELETE",
+        headers: {
+          authorization: `Bearer ${ownerAccess}`,
+          "content-type": "application/json",
+        },
+        body: JSON.stringify({ email: "employee@example.com" }),
+      });
+      expect(revoked.status).toBe(204);
+      const employeeListAfterRevoke = await fetch(
+        `${origin}/v1/person/records`,
+        {
+          headers: { authorization: `Bearer ${employeeAccess}` },
+        },
+      );
+      expect(employeeListAfterRevoke.status).toBe(401);
+      const employeeSearchAfterRevoke = await fetch(
+        `${origin}/v1/person/records`,
+        {
+          method: "POST",
+          headers: {
+            authorization: `Bearer ${employeeAccess}`,
+            "content-type": "application/json",
+          },
+          body: JSON.stringify({ query: "migration" }),
+        },
+      );
+      expect(employeeSearchAfterRevoke.status).toBe(401);
+      const ownerContinues = await fetch(`${origin}/v1/person/records`, {
+        headers: { authorization: `Bearer ${ownerAccess}` },
+      });
+      expect(ownerContinues.status).toBe(200);
+      const ownerSearchContinues = await fetch(`${origin}/v1/person/records`, {
+        method: "POST",
+        headers: {
+          authorization: `Bearer ${ownerAccess}`,
+          "content-type": "application/json",
+        },
+        body: JSON.stringify({ query: "migration restricted" }),
+      });
+      expect(ownerSearchContinues.status).toBe(200);
+      expect((await responseJson(ownerSearchContinues)).items).toHaveLength(2);
+    } finally {
+      record.close();
+      authority.close();
+      await fixture.runtime.close();
     }
   });
 
@@ -779,7 +1399,9 @@ describe("open clean live runtime", () => {
         records: new CleanPersonRecordReaderV1(record),
         audit: new SqliteCleanPersonRecordReadAuditV1(authority),
       });
-      expect(list.list({ access_token: "synthetic-founder-token" }).records).toEqual([]);
+      expect(
+        list.list({ access_token: "synthetic-founder-token" }).records,
+      ).toEqual([]);
       const search = createCleanPersonRecordSearchRouteV1({
         state_directory: fixture.initialized.state_directory,
         authority_id: fixture.initialized.authority_id,

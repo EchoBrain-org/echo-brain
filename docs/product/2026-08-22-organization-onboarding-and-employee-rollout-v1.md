@@ -1,6 +1,6 @@
 # Organization onboarding and employee rollout V1
 
-**Status:** next sprint, scope locked 2026-08-22.
+**Status:** active sprint, scope revised 2026-08-22.
 
 **Governing decision:**
 [ADR-0006](../decisions/ADR-0006-permission-aware-clean-v1-completion.md).
@@ -17,6 +17,33 @@ IDs, direct SQLite access, or provider credentials on the employee machine.
 The current EC2 plus Docker Compose deployment is the only server target for
 this sprint. The employee machine runs the packaged Person client only; it is
 not an enrolled machine and runs no ECHO daemon.
+
+## Iteration contract
+
+This sprint optimizes for a usable product and a short release loop, not for
+compatibility machinery before customer state exists.
+
+- Until the first live-user release, the clean genesis may be replaced and the
+  founder may re-onboard. Do not add a forward migration or compatibility
+  bridge merely to preserve rehearsal state.
+- The first live-user release freezes one exact clean-v1 baseline compatibility
+  class. After that point, ordinary fixes must be baseline-preserving
+  application-image replacements. A later schema change requires an explicit
+  migration decision; it must not silently weaken the pre-open schema check.
+- One release record binds the source commit, immutable Authority image digest,
+  Person-client version and SHA-256, and baseline compatibility class. Server
+  and employee installation consume that record rather than a floating tag or
+  repository checkout.
+- A server application update retains the previous image digest, pulls and
+  starts the new digest, checks setup/runtime status plus a bounded canary, and
+  may roll back only to a release in the same baseline compatibility class.
+- An employee update is an exact-checksum reinstall of the small packaged
+  Person client. V1 adds version/status visibility, not a background updater,
+  MDM integration, or fleet service.
+
+Every product bug found during onboarding is fixed by building another exact
+candidate and rerunning the same setup, install, status, and canary surfaces.
+No bug should require direct SQLite work or generated-ID handoffs.
 
 ## Starting point
 
@@ -126,20 +153,29 @@ The sprint is complete when all of the following pass against one candidate:
    reads it through both Layer 1 listing and Layer 2 search.
 4. The owner creates an employee invitation without generated-ID handoffs. A
    clean employee machine installs the packaged client, completes browser OIDC,
-   and obtains its session without invoking `session-install` or pasting raw
-   callback JSON. It holds only its invitation/session state, never server,
+   and obtains its session without pasting raw callback JSON. It holds only
+   its invitation/session state, never server,
    Slack, Granola, or LLM credentials.
 5. The employee reads organization-member-readable content through listing and
    search, cannot read another person's restricted-reviewer content, and loses
    both read paths after membership revocation. The founder's allowed paths
    continue to work.
-6. Layer 3 responses retain request-level generation/head metadata and
-   per-item atom, record, and policy identity. Layer 2 remains append/startup
-   driven and is never built by a query.
+6. Layer 2-backed Layer 3 search responses retain request-level generation/head
+   metadata and per-item atom, record, and policy identity. Layer 1 listing
+   retains its existing record envelope, position, and record-hash contract.
+   Layer 2 remains append/startup driven and is never built by a query.
 7. Invitation email mismatch, expiry, reuse, foreign Authority, and revoked
    membership deny without creating a session or releasing content.
 8. `npm run check`, the boundary scan, packaged Person-client smoke, and the
    Layer 4 exclusion remain green.
+9. One release record identifies the exact Authority image, source commit,
+   Person-client artifact/version/SHA-256, and clean-v1 compatibility class.
+   The EC2 operator can apply a baseline-preserving image replacement, observe
+   health and the next action, and retain the prior compatible digest without
+   reading SQLite or generated IDs.
+10. A clean employee machine can install or reinstall the exact Person-client
+    artifact after checking its SHA-256, then report the installed version and
+    connected Authority without exposing its local session.
 
 ## Hard exclusions
 
@@ -153,6 +189,8 @@ The sprint is complete when all of the following pass against one candidate:
 - no employee Slack approval capability in this sprint;
 - no browser admin console, SCIM, generic RBAC/policy engine, multi-tenancy,
   multi-cloud deployer, HA, MDM, or fleet updater;
+- no automatic schema migration, compatibility bridge, or cross-baseline
+  rollback after the first live-user baseline is frozen;
 - no general retry framework or broad Slack, Granola, or LLM product-bug
   cleanup; and
 - no broad legacy-deletion tranche beyond code directly replaced by the new
@@ -167,4 +205,6 @@ The sprint is complete when all of the following pass against one candidate:
 4. Run fake-provider organization plus two-Person permission acceptance.
 5. Rehearse one real organization server and one clean employee machine using
    the second employee OIDC identity.
-6. Only after this exit, resume broad legacy deletion and migration closure.
+6. Bind the accepted image and Person client into one release record; rehearse
+   one baseline-preserving server update and one verified client reinstall.
+7. Only after this exit, resume broad legacy deletion and migration closure.

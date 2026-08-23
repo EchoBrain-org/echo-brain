@@ -28,6 +28,10 @@ import type {
   PersonSessionRepository,
   PersonSessionWriteTransaction,
 } from "../../../application/ports/person-session-repository.js";
+import type {
+  CleanPersonMembershipWriteRepository,
+  CleanPersonMembershipWriteTransaction,
+} from "../../../application/ports/clean-person-membership-write.js";
 
 type MetadataRow = {
   authority_id: string;
@@ -104,6 +108,7 @@ type GrantRow = {
   issued_at: string;
   expires_at: string;
   consumed_at: string | null;
+  invalidated_at: string | null;
 };
 
 type FamilyRow = {
@@ -244,6 +249,69 @@ class Transaction implements PersonSessionWriteTransaction {
     return row === undefined ? undefined : membership(row);
   }
 
+  employeeMembershipByEmailSha256(
+    emailSha256: Sha256Digest,
+  ): StoredAuthorityMembership | undefined {
+    const row = this.database
+      .prepare(
+        `SELECT membership.organization_id, membership.principal_id, membership.membership_id, principal.display_name, membership.membership_type, membership.status, membership.provisioned_at, membership.revoked_at, membership.revocation_reason FROM authority_memberships AS membership JOIN authority_principals AS principal ON principal.principal_id = membership.principal_id WHERE membership.employee_email_sha256 = ? AND membership.membership_type = 'employee' ORDER BY CASE membership.status WHEN 'active' THEN 0 ELSE 1 END, membership.provisioned_at DESC LIMIT 1`,
+      )
+      .get(emailSha256) as MembershipRow | undefined;
+    return row === undefined ? undefined : membership(row);
+  }
+
+  createEmployeeMembership(input: {
+    principal_id: string;
+    membership_id: string;
+    display_name: string;
+    email_sha256: Sha256Digest;
+  }): StoredAuthorityMembership {
+    const now = this.writeTime();
+    const metadata = this.metadata();
+    this.database
+      .prepare(
+        `INSERT INTO authority_principals (principal_id, organization_id, display_name, provisioned_at) VALUES (?, ?, ?, ?)`,
+      )
+      .run(input.principal_id, metadata.organization_id, input.display_name, now);
+    this.database
+      .prepare(
+        `INSERT INTO authority_memberships (membership_id, organization_id, principal_id, membership_type, status, provisioned_at, revoked_at, revocation_reason, employee_email_sha256) VALUES (?, ?, ?, 'employee', 'active', ?, NULL, NULL, ?)`,
+      )
+      .run(
+        input.membership_id,
+        metadata.organization_id,
+        input.principal_id,
+        now,
+        input.email_sha256,
+      );
+    const stored = this.membership(input.membership_id);
+    if (stored === undefined)
+      throw new Error("clean employee membership insert did not persist");
+    return stored;
+  }
+
+  invalidatePendingPersonLoginGrants(membershipId: string): number {
+    const now = this.writeTime();
+    return this.database
+      .prepare(
+        `UPDATE authority_person_login_grants SET invalidated_at = ? WHERE membership_id = ? AND consumed_at IS NULL AND invalidated_at IS NULL AND expires_at > ?`,
+      )
+      .run(now, membershipId, now).changes;
+  }
+
+  revokeEmployeeMembership(
+    membershipId: string,
+    reason: "owner_revoked_employee",
+  ): StoredAuthorityMembership | undefined {
+    const now = this.writeTime();
+    const changed = this.database
+      .prepare(
+        `UPDATE authority_memberships SET status = 'revoked', revoked_at = ?, revocation_reason = ? WHERE membership_id = ? AND membership_type = 'employee' AND status = 'active'`,
+      )
+      .run(now, reason, membershipId).changes;
+    return changed === 1 ? this.membership(membershipId) : undefined;
+  }
+
   oidcIdentityBinding(
     issuer: string,
     subject: string,
@@ -251,6 +319,18 @@ class Transaction implements PersonSessionWriteTransaction {
     const row = this.database
       .prepare(
         `SELECT * FROM authority_oidc_identity_bindings WHERE issuer = ? AND subject = ?`,
+      )
+      .get(issuer, subject) as OidcBindingRow | undefined;
+    return row === undefined ? undefined : binding(row);
+  }
+
+  activeOidcIdentityBinding(
+    issuer: string,
+    subject: string,
+  ): StoredOidcIdentityBinding | undefined {
+    const row = this.database
+      .prepare(
+        `SELECT * FROM authority_oidc_identity_bindings WHERE issuer = ? AND subject = ? AND status = 'active'`,
       )
       .get(issuer, subject) as OidcBindingRow | undefined;
     return row === undefined ? undefined : binding(row);
@@ -495,7 +575,7 @@ class Transaction implements PersonSessionWriteTransaction {
     const now = this.writeTime();
     const changed = this.database
       .prepare(
-        `UPDATE authority_person_login_grants SET consumed_at = ? WHERE login_grant_sha256 = ? AND consumed_at IS NULL AND expires_at > ?`,
+        `UPDATE authority_person_login_grants SET consumed_at = ? WHERE login_grant_sha256 = ? AND consumed_at IS NULL AND invalidated_at IS NULL AND expires_at > ?`,
       )
       .run(now, loginGrantSha256, now).changes;
     return changed === 1 ? this.personLoginGrant(loginGrantSha256) : undefined;
@@ -593,7 +673,9 @@ class Transaction implements PersonSessionWriteTransaction {
 }
 
 /** Migration-free adapter for a fresh Authority baseline only. */
-export class SqliteCleanPersonSessionRepository implements PersonSessionRepository {
+export class SqliteCleanPersonSessionRepository
+  implements PersonSessionRepository, CleanPersonMembershipWriteRepository
+{
   readonly supports_full_person_authorization_transactions = false;
 
   constructor(private readonly database: Database.Database) {}
@@ -633,5 +715,17 @@ export class SqliteCleanPersonSessionRepository implements PersonSessionReposito
       } catch {}
       throw error;
     }
+  }
+
+  writeMembershipAtLinearization<T>(
+    observe: () => string,
+    operation: (
+      transaction: CleanPersonMembershipWriteTransaction,
+      observedAt: string,
+    ) => T,
+  ): T {
+    return this.writeAtLinearization(observe, (transaction, observedAt) =>
+      operation(transaction as Transaction, observedAt),
+    );
   }
 }

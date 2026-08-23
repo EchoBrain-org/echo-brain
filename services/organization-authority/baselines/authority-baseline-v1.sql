@@ -32,21 +32,38 @@ CREATE TABLE authority_memberships (
   provisioned_at TEXT NOT NULL,
   revoked_at TEXT,
   revocation_reason TEXT,
+  employee_email_sha256 TEXT CHECK (
+    employee_email_sha256 IS NULL OR (
+      length(employee_email_sha256) = 71 AND
+      substr(employee_email_sha256, 1, 7) = 'sha256:' AND
+      substr(employee_email_sha256, 8) NOT GLOB '*[^0-9a-f]*'
+    )
+  ),
   UNIQUE (membership_id, organization_id, principal_id, membership_type),
+  CHECK (
+    (membership_type = 'employee' AND employee_email_sha256 IS NOT NULL) OR
+    (membership_type = 'owner' AND employee_email_sha256 IS NULL)
+  ),
   CHECK ((status = 'active' AND revoked_at IS NULL AND revocation_reason IS NULL) OR
          (status = 'revoked' AND revoked_at IS NOT NULL AND revocation_reason IS NOT NULL))
 ) STRICT;
 
 CREATE INDEX authority_memberships_current
   ON authority_memberships (principal_id, status, membership_id);
+
+CREATE UNIQUE INDEX authority_memberships_active_employee_email
+  ON authority_memberships (organization_id, employee_email_sha256)
+  WHERE membership_type = 'employee' AND status = 'active';
 -- Provider-neutral person identity and opaque browser-session persistence.
 -- Provider-neutral person identity and opaque browser-session persistence.
 --
--- OIDC identities are keyed only by the exact `(issuer, subject)` pair. Raw
--- state, nonce, login-grant, access-token, refresh-token, and PKCE verifier
--- values have no column in this schema. The PKCE verifier is accepted only as
--- an already sealed byte string; cryptographic sealing remains an application
--- adapter responsibility.
+-- OIDC identities are keyed by the exact `(issuer, subject)` pair only while
+-- active. A revoked membership retains its historical binding, while a later
+-- employee tenure may bind the same upstream account again. Raw state, nonce,
+-- login-grant, access-token, refresh-token, and PKCE verifier values have no
+-- column in this schema. The PKCE verifier is accepted only as an already
+-- sealed byte string; cryptographic sealing remains an application adapter
+-- responsibility.
 
 CREATE TABLE authority_person_login_grants (
   login_grant_sha256 TEXT PRIMARY KEY CHECK (
@@ -85,6 +102,14 @@ CREATE TABLE authority_person_login_grants (
       consumed_at >= issued_at AND consumed_at < expires_at
     )
   ),
+  invalidated_at TEXT CHECK (
+    invalidated_at IS NULL OR (
+      strftime('%Y-%m-%dT%H:%M:%fZ', invalidated_at) IS NOT NULL AND
+      invalidated_at = strftime('%Y-%m-%dT%H:%M:%fZ', invalidated_at) AND
+      invalidated_at >= issued_at AND invalidated_at < expires_at
+    )
+  ),
+  CHECK (NOT (consumed_at IS NOT NULL AND invalidated_at IS NOT NULL)),
   UNIQUE (login_grant_sha256, expected_issuer, oidc_configuration_sha256),
   UNIQUE (
     login_grant_sha256, expected_issuer, oidc_configuration_sha256,
@@ -98,6 +123,9 @@ CREATE TABLE authority_person_login_grants (
 
 CREATE INDEX authority_person_login_grants_membership
   ON authority_person_login_grants (membership_id, issued_at);
+
+CREATE INDEX authority_person_login_grants_pending_membership
+  ON authority_person_login_grants (membership_id, consumed_at);
 
 CREATE INDEX authority_person_login_grants_expiry
   ON authority_person_login_grants (expires_at, login_grant_sha256);
@@ -142,7 +170,6 @@ CREATE TABLE authority_oidc_identity_bindings (
   revocation_reason TEXT CHECK (
     revocation_reason IS NULL OR length(revocation_reason) BETWEEN 1 AND 500
   ),
-  UNIQUE (issuer, subject),
   UNIQUE (identity_binding_id, issuer),
   UNIQUE (identity_binding_id, initial_login_attempt_id),
   UNIQUE (
@@ -169,6 +196,10 @@ CREATE TABLE authority_oidc_identity_bindings (
 
 CREATE INDEX authority_oidc_identity_bindings_membership
   ON authority_oidc_identity_bindings (membership_id, status);
+
+CREATE UNIQUE INDEX authority_oidc_identity_bindings_active_subject
+  ON authority_oidc_identity_bindings (issuer, subject)
+  WHERE status = 'active';
 
 CREATE TABLE authority_oidc_login_attempts (
   login_attempt_id TEXT PRIMARY KEY CHECK (
@@ -471,7 +502,7 @@ CREATE INDEX authority_person_session_credentials_family
 -- online mutations are the narrow terminal transitions used by the repository.
 CREATE TRIGGER authority_person_login_grants_initial_state_insert
 BEFORE INSERT ON authority_person_login_grants
-WHEN NEW.consumed_at IS NOT NULL
+WHEN NEW.consumed_at IS NOT NULL OR NEW.invalidated_at IS NOT NULL
 BEGIN
   SELECT RAISE(ABORT, 'person login grant must begin pending');
 END;
@@ -571,6 +602,7 @@ WHEN NEW.attempt_purpose = 'identity_bootstrap' AND NOT EXISTS (
      AND grant_row.oidc_configuration_sha256 =
            NEW.oidc_configuration_sha256
      AND grant_row.consumed_at IS NULL
+     AND grant_row.invalidated_at IS NULL
      AND grant_row.issued_at <= NEW.created_at
      AND grant_row.expires_at > NEW.created_at
 )
@@ -606,6 +638,7 @@ BEGIN
      SET consumed_at = NEW.completed_at
    WHERE login_grant_sha256 = OLD.login_grant_sha256
      AND consumed_at IS NULL
+     AND invalidated_at IS NULL
      AND issued_at <= NEW.completed_at
      AND expires_at > NEW.completed_at;
 
@@ -623,6 +656,7 @@ BEGIN
              NEW.terminal_outcome IN ('denied', 'expired') AND
              (
                grant_row.consumed_at IS NOT NULL OR
+               grant_row.invalidated_at IS NOT NULL OR
                (
                  grant_row.expires_at <= NEW.completed_at AND
                  grant_row.consumed_at IS NULL
@@ -838,6 +872,15 @@ CREATE TRIGGER authority_memberships_revoke_person_session_families
 AFTER UPDATE OF status ON authority_memberships
 WHEN OLD.status = 'active' AND NEW.status = 'revoked'
 BEGIN
+  UPDATE authority_oidc_identity_bindings
+     SET status = 'revoked', revoked_at = NEW.revoked_at,
+         revocation_reason = NEW.revocation_reason
+   WHERE membership_id = NEW.membership_id
+     AND organization_id = NEW.organization_id
+     AND principal_id = NEW.principal_id
+     AND membership_type = NEW.membership_type
+     AND status = 'active';
+
   UPDATE authority_person_session_families
      SET status = 'revoked', revoked_at = NEW.revoked_at,
          revocation_reason = NEW.revocation_reason
@@ -971,7 +1014,16 @@ WHEN NOT (
   NEW.expected_email_sha256 IS OLD.expected_email_sha256 AND
   NEW.oidc_configuration_sha256 IS OLD.oidc_configuration_sha256 AND
   NEW.issued_at IS OLD.issued_at AND NEW.expires_at IS OLD.expires_at AND
-  OLD.consumed_at IS NULL AND NEW.consumed_at IS NOT NULL
+  (
+    (
+      OLD.consumed_at IS NULL AND OLD.invalidated_at IS NULL AND
+      NEW.consumed_at IS NOT NULL AND NEW.invalidated_at IS NULL
+    ) OR
+    (
+      OLD.consumed_at IS NULL AND OLD.invalidated_at IS NULL AND
+      NEW.consumed_at IS NULL AND NEW.invalidated_at IS NOT NULL
+    )
+  )
 )
 BEGIN
   SELECT RAISE(ABORT, 'person login grant mutation is denied');
@@ -1091,6 +1143,13 @@ CREATE TABLE authority_clean_granola_source_admission_v1 (
   source_adapter_version TEXT NOT NULL CHECK (source_adapter_version = '2.2.0'),
   normalizer_version TEXT NOT NULL CHECK (normalizer_version = '2.2.0'),
   owner_email_sha256 TEXT NOT NULL CHECK (owner_email_sha256 LIKE 'sha256:%'),
+  owner_observation_assurance TEXT NOT NULL CHECK (
+    owner_observation_assurance = 'provider_record_owner_observed'
+  ),
+  owner_observed_at TEXT NOT NULL CHECK (
+    strftime('%Y-%m-%dT%H:%M:%fZ', owner_observed_at) IS NOT NULL AND
+    owner_observed_at = strftime('%Y-%m-%dT%H:%M:%fZ', owner_observed_at)
+  ),
   source_credential_reference_sha256 TEXT NOT NULL CHECK (
     source_credential_reference_sha256 LIKE 'sha256:%'
   ),

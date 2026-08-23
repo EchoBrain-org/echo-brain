@@ -139,12 +139,11 @@ echo-organization-authority-clean-live serve \
 The private onboarding manifest supplies the Authority URL, OIDC config,
 PKCE key path, and Slack channel. They are not repeated on `serve`.
 
-In a second terminal, use the invitation. The command prints the browser URL,
-waits, then accepts one pasted, single-line callback-session JSON document and
-installs the session in the same invocation. One paste remains necessary
-because the local CLI cannot receive the browser callback directly. Paste it
-at the waiting prompt and press Enter; do not put it in shell history, logs,
-tickets, or chat.
+In a second terminal, use the invitation. The command starts an ephemeral,
+one-use receiver on numeric loopback, prints the browser URL, and installs the
+session when the verified Authority callback returns to that receiver. Nothing
+is pasted into the terminal, URL history, shell history, logs, tickets, or
+chat.
 
 ```sh
 echo-brain person login \
@@ -163,24 +162,31 @@ echo-brain person slack-link
 
 ### 3. Finalize while stopped
 
-Stop the listener. Before finalization, install the three private inputs at the
-exact manifest paths. Each source file must contain only its value, with no
-trailing newline or other whitespace, and each destination must be current-user
-mode `0600`. The owner-email file must contain the exact lowercase email used
-for `--owner-email` and returned by OIDC.
+Stop the listener. Before finalization, install all three private inputs in one
+command. Each source file must contain only its value, with no trailing newline
+or other whitespace, and must be current-user mode `0600`. The owner-email
+file must contain the exact lowercase email used for `--owner-email` and
+returned by OIDC. The command validates every source before replacing any
+fixed destination, so a bad input cannot leave a partial credential install.
 
 ```sh
-install -m 0600 '<absolute-private-granola-credential-file>' \
-  "$STATE_DIR/credentials/granola-credential"
-install -m 0600 '<absolute-private-granola-owner-email-file>' \
-  "$STATE_DIR/credentials/granola-owner-email"
-install -m 0600 '<absolute-private-llm-credential-file>' \
-  "$STATE_DIR/credentials/llm-credential"
+echo-organization-authority-clean-founder credentials-install \
+  --state-dir "$STATE_DIR" \
+  --granola-credential-file '<absolute-private-granola-credential-file>' \
+  --granola-owner-email-file '<absolute-private-granola-owner-email-file>' \
+  --llm-credential-file '<absolute-private-llm-credential-file>'
 ```
 
-Finalization derives the sole owner, Slack connection, channel, and fixed
-source/processor IDs from the private manifest. It takes no IDs or credential
-values and makes no provider request.
+Run `status` at any time to get the next safe action. Finalization derives the
+sole owner, Slack connection, channel, and fixed source/processor IDs from the
+private manifest. It first requires valid genesis, active founder OIDC and
+Slack bindings, and all three valid provider credentials. It takes no IDs or
+credential values and makes no provider request. Retrying after a partial
+success skips an already-active Slack approval binding or Granola admission.
+Status also reconstructs safe, durable Slack verification facts (workspace,
+app/bot identities, selected channel, fixed scopes, and channel-access checks)
+plus the Granola owner-observation assurance and time. It never prints tokens,
+generated internal IDs, email digests, or note content.
 
 ```sh
 echo-organization-authority-clean-founder finalize --state-dir "$STATE_DIR"
@@ -199,6 +205,59 @@ the head is still exact; it is never query-triggered. Layer-1 `records` reads
 remain available while a query waits for its first or next exact-head
 generation. A failed or superseded build does not change the active pointer and
 is retried on the next worker cycle.
+
+After finalization, `status` deliberately reports `runtime_status:
+"ready_to_start"`, `runtime_observation: "not_observed"`, and `canary_status:
+"not_complete"`. The stopped-state coordinator cannot truthfully observe a
+separately started runtime or a human Slack/Granola canary. Start the runtime,
+then complete the one-new-note approval/read/search canary before treating the
+organization as live.
+
+## Clean V1 employee onboarding
+
+Run these commands from an owner-signed-in Person client. The owner supplies
+only the employee's display name, canonical lowercase work email, and a new
+private output path; generated Person and membership IDs stay inside the
+Authority.
+
+```sh
+install -d -m 0700 /absolute/private/employee-invitations
+echo-brain person employee invite \
+  --name 'Ada Lovelace' \
+  --email ada@example.com \
+  --out /absolute/private/employee-invitations/ada.json
+```
+
+Transfer the resulting mode-`0600` file through the organization's private
+channel. On the employee machine, install the accepted Person-client release
+using [the clean-v1 installer](../../deploy/release/README.md#employee-client-install-or-reinstall),
+then sign in and verify the connection:
+
+```sh
+echo-brain person login \
+  --invitation /absolute/private/employee-invitations/ada.json
+echo-brain person status
+echo-brain person records --limit 20
+```
+
+Employees do not receive server, Slack, Granola, or model credentials and do
+not link Slack for read-only access. If an unused invitation expires or is
+lost, issue a replacement to a different new output path; reissue immediately
+invalidates any earlier pending grant:
+
+```sh
+echo-brain person employee reissue \
+  --email ada@example.com \
+  --out /absolute/private/employee-invitations/ada-reissue.json
+```
+
+Revocation is one owner command and immediately denies both listing and search
+for that membership. Inviting the same email later creates a new tenure and
+allows the same OIDC account to bind again.
+
+```sh
+echo-brain person employee revoke --email ada@example.com
+```
 
 ## Retained V1 stopped meeting-source activation
 
@@ -229,6 +288,8 @@ The Person, retained compatibility, and administrator surfaces share one
 listener and one public origin. Current Person routes are:
 
 - `GET /v1/person/records`
+- `POST /v1/person/records`
+- `POST|PUT|DELETE /v1/person/employees`
 - `POST /v2/session/oidc/begin`
 - `GET /v2/session/oidc/callback`
 - `POST /v2/session/refresh`
@@ -833,7 +894,10 @@ directory. An authenticated live owner is never replaced; an invalid or
 ambiguous proof fails closed. A stale lock is recovered only when the shared
 socket listener is absent.
 
-The separate administrator CLI speaks HTTP only and never opens SQLite:
+The following administrator flow is retained legacy behavior, not the clean-V1
+employee path above. It requires generated membership IDs and should not be
+used for a clean organization. The separate administrator CLI speaks HTTP only
+and never opens SQLite:
 
 ```sh
 npm run organization-authority:admin -- member create \
@@ -842,8 +906,8 @@ npm run organization-authority:admin -- member create \
   --membership-type employee
 ```
 
-This is a bootstrap-artifact path pending clean-state `serve` wiring. Issue one
-private onboarding artifact for an already-provisioned membership. The
+This retained path issues one private onboarding artifact for an
+already-provisioned membership. The
 Authority must have its Person OIDC runtime configuration before this command
 can succeed. The `--out` parent must be a current-user mode-0700 directory;
 the artifact itself is create-once, mode-0600, and contains the public
@@ -859,18 +923,20 @@ npm run organization-authority:admin -- person invite \
 ```
 
 Deliver that file through the approved private channel. With a packaged
-`echo-brain` client installed, the recipient starts OIDC without printing or
-manually extracting the grant:
+`echo-brain` client installed, the recipient starts and completes OIDC without
+printing or manually extracting the grant or callback session:
 
 ```sh
-echo-brain person login-begin \
+echo-brain person login \
   --invitation /absolute/private/person-onboarding.json
 ```
 
-Follow the returned OIDC authorization URL, then install the returned session
-with `echo-brain person session-install --authority-url <authority-url>`
-(the session JSON is read from standard input). This bootstrap artifact
-intentionally has no Authority PIN, enrollment, installation, or lease material.
+Open the returned OIDC authorization URL. The client receives the session on
+its temporary loopback receiver and writes its private session state itself.
+If delivery expires or the server restarts, rerun `echo-brain person login
+--authority-url <authority-url>` for an existing-identity sign-in. This
+bootstrap artifact intentionally has no Authority PIN, enrollment,
+installation, or lease material.
 
 The included Authority private-key adapter is an explicitly labeled exportable
 software key for the pilot. A later hardware-backed Authority adapter can

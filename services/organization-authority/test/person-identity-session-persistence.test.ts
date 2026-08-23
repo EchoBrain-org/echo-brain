@@ -1210,6 +1210,10 @@ describe('person identity and session persistence', () => {
         issuer,
         'opaque-provider-subject-123',
       ),
+      activeBinding: transaction.activeOidcIdentityBinding(
+        issuer,
+        'opaque-provider-subject-123',
+      ),
       family: transaction.personSessionFamily(familyId),
       credentials: transaction.personSessionCredentialsForFamily(familyId),
     }));
@@ -1228,6 +1232,7 @@ describe('person identity and session persistence', () => {
       status: 'revoked',
       revoked_at: '2026-08-18T00:04:00.000Z',
     });
+    expect(persisted.activeBinding).toBeUndefined();
     expect(persisted.family).toMatchObject({
       status: 'revoked',
       revoked_at: '2026-08-18T00:03:30.000Z',

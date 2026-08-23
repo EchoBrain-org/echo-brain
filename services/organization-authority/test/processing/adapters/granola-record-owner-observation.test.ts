@@ -74,7 +74,7 @@ describe("Granola record-owner observation", () => {
     await expect(
       observeGranolaRecordOwner(fixture.api, "audrey@echobrain.org"),
     ).rejects.toThrow(
-      "Granola did not report an accessible note owned by audrey@echobrain.org",
+      "Granola did not report an accessible note owned by the configured owner",
     );
     expect(fixture.listCalls).toEqual([{ page_size: 30 }]);
   });

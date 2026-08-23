@@ -1691,7 +1691,10 @@ class SqliteAuthorityTransaction
   }
 
   private oidcIdentityBindingWhere(
-    where: 'identity_binding_id = ?' | 'issuer = ? AND subject = ?',
+    where:
+      | 'identity_binding_id = ?'
+      | 'issuer = ? AND subject = ?'
+      | "issuer = ? AND subject = ? AND status = 'active'",
     values: readonly string[],
   ): StoredOidcIdentityBinding | undefined {
     const row = this.database
@@ -1712,6 +1715,16 @@ class SqliteAuthorityTransaction
     subject: string,
   ): StoredOidcIdentityBinding | undefined {
     return this.oidcIdentityBindingWhere('issuer = ? AND subject = ?', [
+      issuer,
+      subject,
+    ]);
+  }
+
+  activeOidcIdentityBinding(
+    issuer: string,
+    subject: string,
+  ): StoredOidcIdentityBinding | undefined {
+    return this.oidcIdentityBindingWhere("issuer = ? AND subject = ? AND status = 'active'", [
       issuer,
       subject,
     ]);
@@ -1970,6 +1983,10 @@ class SqliteAuthorityTransaction
     }
     return {
       ...row,
+      // Legacy state predates explicit pending-grant invalidation. It is never
+      // used by the clean lifecycle, but remains representable to the shared
+      // Person-session application as a non-invalidated grant.
+      invalidated_at: null,
       grant_purpose: 'oidc_identity_bootstrap',
       membership_type: row.membership_type as OrganizationMembershipTypeV1,
       login_grant_sha256: row.login_grant_sha256 as Sha256Digest,
@@ -2657,7 +2674,10 @@ class SqliteAuthorityTransaction
     attempt: NewOidcLoginAttempt,
   ): StoredOidcLoginAttempt {
     const createdAt = this.transactionTime();
-    const { sealed_pkce_verifier: sealedEnvelope, ...attemptFields } = attempt;
+    const {
+      sealed_pkce_verifier: sealedEnvelope,
+      ...attemptFields
+    } = attempt;
     assertBoundedText(sealedEnvelope.key_id, 200, 'PKCE sealing key ID');
     const sealed = Uint8Array.from(sealedEnvelope.sealed_bytes);
     const row: OidcLoginAttemptRow = {

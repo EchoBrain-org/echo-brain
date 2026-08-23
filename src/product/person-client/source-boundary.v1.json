@@ -22,6 +22,7 @@
     "buffer",
     "crypto",
     "fs",
+    "http",
     "os",
     "path",
     "process",
@@ -67,6 +68,14 @@
       "allowed_node_builtins": ["buffer", "os", "readline/promises", "util"]
     },
     {
+      "name": "person-client-browser-handoff-is-local-only",
+      "from": "src/product/person-client/browser-login-handoff.ts",
+      "allowed_imports": [],
+      "allowed_workspace_packages": [],
+      "allowed_external_packages": [],
+      "allowed_node_builtins": ["buffer", "crypto", "http", "util"]
+    },
+    {
       "name": "person-client-entry-exports-owned-modules",
       "from": "src/product/person-client/index.ts",
       "allowed_imports": ["src/product/person-client/**"],
@@ -100,6 +109,14 @@
       ],
       "allowed_external_packages": [],
       "allowed_node_builtins": ["fs", "path"]
+    },
+    {
+      "name": "person-client-package-identity-reads-only-packaged-provenance",
+      "from": "src/product/person-client/package-identity.ts",
+      "allowed_imports": [],
+      "allowed_workspace_packages": [],
+      "allowed_external_packages": [],
+      "allowed_node_builtins": ["fs", "url"]
     }
   ]
 }

@@ -43,6 +43,12 @@ link Slack while the profile runs, then finalize while stopped. Bootstrap owns
 timestamps, IDs, PKCE location, connection ID, and invitation path. It reads
 the Slack token once from stdin and issues the 15-minute invitation last.
 
+After the first live-user release, use the exact-record server replacement and
+checksum client reinstall procedure in
+[the clean-v1 release loop](../release/README.md). It supports only
+baseline-preserving `clean-v1` image replacements; it is not a schema migration
+or automatic client updater.
+
 On the EC2 host behind the existing Cloudflare Tunnel, include
 `compose.clean-v1.ec2.yaml`. The override disables local image builds, requires
 an immutable remote image reference, exposes only HTTP port 80 on `127.0.0.1`,
@@ -98,15 +104,17 @@ to the founder's current-user machine, then follow the clean Person login and
 Slack-link steps in
 [the Authority runbook](../../services/organization-authority/README.md#clean-founder-onboarding-rehearsal).
 `echo-brain person login --invitation <path>` prints the browser URL, then
-waits for one pasted callback JSON document. `echo-brain person slack-link`
+waits for the browser to return the session directly to a one-use loopback
+receiver. Nothing is pasted into the terminal. `echo-brain person slack-link`
 prints a code to reply with in Slack and waits only for Enter; it retains the
 code and opaque handles in memory.
 
 After founder OIDC login and Slack linking succeed, stop the profile again.
-Only now copy the live-processing inputs into the private mount, then
-install them at the exact fixed paths inside the new state.
+Only now copy the live-processing inputs into the private mount, then run the
+single credential installer. It validates all three sources before replacing
+any fixed destination.
 Each source contains only its value, with no trailing newline or other
-whitespace, and `install -m 0600` preserves the required destination mode.
+whitespace, and remains current-user mode `0600`.
 Source admission requires the completed founder OIDC binding and matching owner
 email. Use the exact lowercase OIDC email as the entire owner-email file. Source
 admission starts at a fresh live-only cutoff and does not import older Granola
@@ -119,12 +127,13 @@ install -m 0600 /absolute/private/granola-organization-key clean-data/private/gr
 install -m 0600 /absolute/private/llm-provider-credential clean-data/private/llm-provider-credential
 (umask 077 && printf %s "$ECHO_CLEAN_OWNER_EMAIL" > clean-data/private/granola-owner-email)
 
-install -m 0600 clean-data/private/granola-organization-key \
-  clean-data/state/credentials/granola-credential
-install -m 0600 clean-data/private/granola-owner-email \
-  clean-data/state/credentials/granola-owner-email
-install -m 0600 clean-data/private/llm-provider-credential \
-  clean-data/state/credentials/llm-credential
+compose_clean run --rm --no-deps --entrypoint node authority \
+  services/organization-authority/dist/clean-founder-main.js \
+  credentials-install \
+  --state-dir /echo-clean/state \
+  --granola-credential-file /echo-clean/private/granola-organization-key \
+  --granola-owner-email-file /echo-clean/private/granola-owner-email \
+  --llm-credential-file /echo-clean/private/llm-provider-credential
 
 compose_clean run --rm --no-deps --entrypoint node authority \
   services/organization-authority/dist/clean-founder-main.js \
@@ -147,9 +156,10 @@ exact Layer-1 record head has advanced. It builds a new immutable generation
 outside the record append and publishes its pointer only if that generation
 still matches the exact head. A query never starts a build. Until an
 exact-head generation is published, `echo-brain person records --query ...`
-is unavailable while ordinary Layer-1 `records` reads remain available. A
-failed or superseded build leaves the existing pointer untouched and retries
-on the next worker cycle.
+can report that search is catching up while ordinary Layer-1 `records` reads
+remain available. Wait one worker cycle and retry the same query. A failed or
+superseded build leaves the existing pointer untouched and retries on the next
+worker cycle.
 
 For the live-only smoke, create a new Granola note after finalization. Approve
 one generated Slack card and confirm it with

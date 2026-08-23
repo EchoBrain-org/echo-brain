@@ -28,6 +28,7 @@ export {
 } from "./requests.js";
 export {
   readPersonOnboardingInvitation,
+  writePersonOnboardingInvitation,
   type PersonOnboardingInvitationV1,
 } from "./onboarding-invitation.js";
 export {

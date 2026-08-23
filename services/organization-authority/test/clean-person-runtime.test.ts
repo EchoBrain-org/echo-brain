@@ -6,6 +6,7 @@ import {
   realpathSync,
   rmSync,
 } from "node:fs";
+import { Buffer } from "node:buffer";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -186,6 +187,10 @@ describe("clean Person runtime", () => {
         body: JSON.stringify({
           kind: "identity_bootstrap",
           login_grant: invitationBody.login_grant,
+          loopback_handoff: {
+            url: `http://127.0.0.1:39999/${"P".repeat(43)}`,
+            token: "T".repeat(43),
+          },
         }),
       });
       expect(begun.status).toBe(201);
@@ -199,8 +204,40 @@ describe("clean Person runtime", () => {
         `${origin}/v2/session/oidc/callback?state=${encodeURIComponent(state!)}&code=code-1&iss=https%3A%2F%2Fissuer.example`,
       );
       expect(callback.status).toBe(200);
-      const session = await json(callback);
+      expect(callback.headers.get("content-type")).toContain("text/html");
+      expect(callback.headers.get("cache-control")).toBe("no-store");
+      const callbackPage = await callback.text();
+      expect(callbackPage).toContain(`action="http://127.0.0.1:39999/${"P".repeat(43)}"`);
+      expect(callbackPage).toContain('name="token" value="' + "T".repeat(43) + '"');
+      expect(callbackPage).not.toContain("access_token");
+      expect(callbackPage).not.toContain("refresh_token");
+      const encoded = /name="session" value="([A-Za-z0-9_-]+)"/.exec(callbackPage)?.[1];
+      expect(encoded).toBeDefined();
+      const session = JSON.parse(
+        Buffer.from(encoded!, "base64url").toString("utf8"),
+      ) as Record<string, unknown>;
       expect(session.membership_id).toBe(initialized.owner_membership_id);
+
+      const recoveryBegin = await fetch(`${origin}/v2/session/oidc/begin`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ kind: "existing_identity_login" }),
+      });
+      expect(recoveryBegin.status).toBe(201);
+      const recoveryState = new URL(
+        (await json(recoveryBegin)).authorization_url as string,
+      ).searchParams.get("state");
+      const expiredDelivery = await fetch(
+        `${origin}/v2/session/oidc/callback?state=${encodeURIComponent(recoveryState!)}&code=code-2&iss=https%3A%2F%2Fissuer.example`,
+      );
+      expect(expiredDelivery.status).toBe(200);
+      expect(expiredDelivery.headers.get("content-type")).toContain("text/html");
+      const expiredPage = await expiredDelivery.text();
+      expect(expiredPage).toContain("Sign-in expired");
+      expect(expiredPage).toContain("echo-brain person login");
+      expect(expiredPage).not.toContain("access_token");
+      expect(expiredPage).not.toContain("refresh_token");
+      expect(expiredPage).not.toContain('name="session"');
 
       const searchBeforeGeneration = await fetch(
         `${origin}/v1/person/records`,

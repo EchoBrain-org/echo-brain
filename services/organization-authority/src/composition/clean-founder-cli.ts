@@ -1,25 +1,56 @@
+import { createHash, randomUUID } from "node:crypto";
 import {
   closeSync,
   constants,
+  existsSync,
+  fchmodSync,
+  fsyncSync,
+  linkSync,
   lstatSync,
   mkdirSync,
   openSync,
   readFileSync,
+  renameSync,
+  rmSync,
+  unlinkSync,
   writeFileSync,
 } from "node:fs";
 import { dirname, isAbsolute, join, resolve } from "node:path";
-import { canonicalJson } from "@echo-brain/federation-protocol";
+import Database from "better-sqlite3";
+import {
+  assertFederationId,
+  canonicalJson,
+  federationId,
+} from "@echo-brain/federation-protocol";
+import { validateOrganizationAuthorityOrigin } from "@echo-brain/organization-api";
 import {
   runCleanPersonSlackApprovalActivateCli,
   runCleanSlackConnectCli,
+  SLACK_ORGANIZATION_TOOL_REQUIRED_SCOPES,
 } from "@echo-brain/organization-control-plane/clean-founder-v1";
+import { assertDisplayName } from "../domain/rules.js";
 import { isCanonicalPersonEmail } from "../domain/person-session-rules.js";
-import { initializeCleanResetState } from "./clean-reset-state.js";
+import { readPrivateAuthorityPersonSessionPkceKey } from "../adapters/security/private-file-credentials.js";
+import {
+  readPrivateAuthorityCredential,
+  readPrivateAuthorityGranolaOrganizationCredential,
+  readPrivateAuthorityGranolaOwnerEmail,
+} from "../adapters/security/private-file-credentials.js";
+import {
+  initializeCleanResetState,
+  type CleanResetSeedV1,
+} from "./clean-reset-state.js";
 import { runCleanGranolaSourceCli } from "./clean-granola-source-cli.js";
-import { runCleanPersonCli } from "./clean-person-cli.js";
+import {
+  assertCleanPersonAuthorityCallback,
+  readCleanPersonOidcConfiguration,
+  runCleanPersonCli,
+} from "./clean-person-cli.js";
+import { verifyCleanStateLineage } from "./verify-clean-state-lineage.js";
 
 const MANIFEST_DIRECTORY = "onboarding";
 const MANIFEST_FILENAME = "clean-founder-v1.json";
+const SETUP_PLAN_SUFFIX = ".clean-founder-setup-plan-v1.json";
 const INVITATION_FILENAME = "founder-person-invitation.json";
 const GRANOLA_CREDENTIAL_FILENAME = "granola-credential";
 const GRANOLA_OWNER_EMAIL_FILENAME = "granola-owner-email";
@@ -30,7 +61,9 @@ const DEFAULT_ARTIFACT_REVISION = "clean-founder-v1";
 
 const USAGE = `usage:
   echo-organization-authority-clean-founder bootstrap --state-dir <absolute-path> --organization-name <name> --owner-display-name <name> --owner-email <email> --authority-url <https-origin> --oidc-config <absolute-json-path> --slack-approval-channel-id <id> [--artifact-revision <revision>] < slack-bot-token
-  echo-organization-authority-clean-founder finalize --state-dir <absolute-path>`;
+  echo-organization-authority-clean-founder credentials-install --state-dir <absolute-path> --granola-credential-file <absolute-private-path> --granola-owner-email-file <absolute-private-path> --llm-credential-file <absolute-private-path>
+  echo-organization-authority-clean-founder finalize --state-dir <absolute-path>
+  echo-organization-authority-clean-founder status --state-dir <absolute-path>`;
 
 interface CliIo {
   readonly stdout: (value: string) => void;
@@ -48,6 +81,10 @@ const PROCESS_IO: CliIo = {
     return result;
   },
 };
+
+export interface CleanFounderSetupSeedV1 extends CleanResetSeedV1 {
+  readonly slack_connection_id: string;
+}
 
 export interface CleanFounderOnboardingManifestV1 {
   readonly schema_version: 1;
@@ -69,6 +106,10 @@ export interface CleanFounderOnboardingManifestV1 {
   readonly granola_credential_file: string;
   readonly granola_owner_email_file: string;
   readonly llm_credential_file: string;
+  readonly setup_seed: CleanFounderSetupSeedV1;
+  readonly owner_email: string;
+  readonly organization_name: string;
+  readonly owner_display_name: string;
 }
 
 interface BootstrapInput {
@@ -86,8 +127,37 @@ interface FinalizeInput {
   readonly state_directory: string;
 }
 
+interface CredentialInstallInput extends FinalizeInput {
+  readonly granola_credential_source: string;
+  readonly granola_owner_email_source: string;
+  readonly llm_credential_source: string;
+}
+
+interface SafeSlackVerification {
+  readonly workspace_id: string;
+  readonly enterprise_id: string | null;
+  readonly app_id: string;
+  readonly bot_id: string;
+  readonly bot_user_id: string;
+  readonly approval_channel_id: string;
+  readonly required_scopes: readonly string[];
+  readonly approval_channel_access: "verified";
+  readonly selected_channel_public: true;
+  readonly selected_channel_active: true;
+  readonly bot_membership_verified: true;
+  readonly bot_access_verified: true;
+  readonly verified_at: string;
+}
+
 interface ConnectedSlack {
   readonly connection_id: string;
+  readonly verification?: SafeSlackVerification;
+}
+
+interface CleanFounderSetupStage {
+  readonly credentials_ready: boolean;
+  readonly slack_connected: boolean;
+  readonly invitation_file_present: boolean;
 }
 
 export interface CleanFounderCliDependencies {
@@ -97,6 +167,7 @@ export interface CleanFounderCliDependencies {
   readonly connect_slack: (input: {
     readonly state_directory: string;
     readonly approval_channel_id: string;
+    readonly connection_id?: string;
     readonly read_stdin: () => Promise<string>;
   }) => Promise<ConnectedSlack>;
   readonly issue_invitation: (input: {
@@ -119,6 +190,14 @@ export interface CleanFounderCliDependencies {
     readonly granola_owner_email_file: string;
     readonly llm_credential_file: string;
   }) => Promise<void>;
+  /** Test seam only; production derives these facts from durable state. */
+  readonly read_full_founder_status?: (
+    manifest: CleanFounderOnboardingManifestV1,
+  ) => FullFounderStatus;
+  /** Test seam only; production derives these facts from durable state. */
+  readonly read_setup_stage?: (
+    manifest: CleanFounderOnboardingManifestV1,
+  ) => CleanFounderSetupStage;
 }
 
 function captureCommand(
@@ -157,14 +236,65 @@ const DEFAULT_DEPENDENCIES: CleanFounderCliDependencies = {
           input.state_directory,
           "--approval-channel-id",
           input.approval_channel_id,
+          ...(input.connection_id === undefined
+            ? []
+            : ["--connection-id", input.connection_id]),
         ],
         { stdout, read_stdin: input.read_stdin },
       ),
     );
-    if (typeof result.connection_id !== "string") {
-      throw new Error("clean Slack connection did not return a connection ID");
+    for (const field of [
+      "provider_tenant_id",
+      "provider_app_id",
+      "provider_bot_id",
+      "provider_bot_user_id",
+      "approval_channel_id",
+      "verified_at",
+    ] as const) {
+      if (typeof result[field] !== "string") {
+        throw new Error("clean Slack connection did not return safe verification details");
+      }
     }
-    return Object.freeze({ connection_id: result.connection_id });
+    if (
+      result.provider_enterprise_id !== null &&
+      typeof result.provider_enterprise_id !== "string"
+    ) {
+      throw new Error("clean Slack connection did not return safe verification details");
+    }
+    if (
+      !Array.isArray(result.required_scopes) ||
+      result.required_scopes.length !== SLACK_ORGANIZATION_TOOL_REQUIRED_SCOPES.length ||
+      result.required_scopes.some(
+        (scope, index) => scope !== SLACK_ORGANIZATION_TOOL_REQUIRED_SCOPES[index],
+      ) ||
+      result.selected_channel_public !== true ||
+      result.selected_channel_active !== true ||
+      result.bot_membership_verified !== true ||
+      result.bot_access_verified !== true
+    ) {
+      throw new Error("clean Slack connection did not return complete channel verification");
+    }
+    if (input.connection_id === undefined) {
+      throw new Error("clean founder Slack setup requires a planned connection ID");
+    }
+    return Object.freeze({
+      connection_id: input.connection_id,
+      verification: Object.freeze({
+        workspace_id: result.provider_tenant_id as string,
+        enterprise_id: result.provider_enterprise_id as string | null,
+        app_id: result.provider_app_id as string,
+        bot_id: result.provider_bot_id as string,
+        bot_user_id: result.provider_bot_user_id as string,
+        approval_channel_id: result.approval_channel_id as string,
+        required_scopes: SLACK_ORGANIZATION_TOOL_REQUIRED_SCOPES,
+        approval_channel_access: "verified" as const,
+        selected_channel_public: true,
+        selected_channel_active: true,
+        bot_membership_verified: true,
+        bot_access_verified: true,
+        verified_at: result.verified_at as string,
+      }),
+    });
   },
   issue_invitation: async (input) => {
     await captureCommand((stdout) =>
@@ -274,7 +404,7 @@ function parseBootstrap(arguments_: readonly string[]): BootstrapInput {
   if (!isCanonicalPersonEmail(ownerEmail)) {
     throw new Error("--owner-email must be a canonical lowercase email");
   }
-  return Object.freeze({
+  const parsed = Object.freeze({
     state_directory: absolutePath(required("--state-dir"), "state directory"),
     organization_name: required("--organization-name"),
     owner_display_name: required("--owner-display-name"),
@@ -285,6 +415,10 @@ function parseBootstrap(arguments_: readonly string[]): BootstrapInput {
     artifact_revision:
       values.get("--artifact-revision") ?? DEFAULT_ARTIFACT_REVISION,
   });
+  assertDisplayName(parsed.organization_name);
+  assertDisplayName(parsed.owner_display_name);
+  validateOrganizationAuthorityOrigin(parsed.authority_url);
+  return parsed;
 }
 
 function parseFinalize(arguments_: readonly string[]): FinalizeInput {
@@ -296,22 +430,112 @@ function parseFinalize(arguments_: readonly string[]): FinalizeInput {
   });
 }
 
+function parseCredentialInstall(
+  arguments_: readonly string[],
+): CredentialInstallInput {
+  const accepted = new Set([
+    "--state-dir",
+    "--granola-credential-file",
+    "--granola-owner-email-file",
+    "--llm-credential-file",
+  ]);
+  const values = new Map<string, string>();
+  for (let index = 0; index < arguments_.length; index += 2) {
+    const key = arguments_[index];
+    const value = arguments_[index + 1];
+    if (
+      key === undefined ||
+      value === undefined ||
+      value.length === 0 ||
+      !accepted.has(key) ||
+      values.has(key)
+    ) {
+      throw new Error(USAGE);
+    }
+    values.set(key, value);
+  }
+  const source = (key: string, label: string): string => {
+    const value = values.get(key);
+    if (value === undefined) throw new Error(USAGE);
+    return absolutePath(value, label);
+  };
+  return Object.freeze({
+    state_directory: source("--state-dir", "state directory"),
+    granola_credential_source: source(
+      "--granola-credential-file",
+      "Granola credential source",
+    ),
+    granola_owner_email_source: source(
+      "--granola-owner-email-file",
+      "Granola owner email source",
+    ),
+    llm_credential_source: source(
+      "--llm-credential-file",
+      "LLM credential source",
+    ),
+  });
+}
+
 function manifestPath(stateDirectory: string): string {
   return join(stateDirectory, MANIFEST_DIRECTORY, MANIFEST_FILENAME);
 }
 
-function writeManifest(manifest: CleanFounderOnboardingManifestV1): void {
-  const path = manifestPath(manifest.state_directory);
+function siblingSetupPlanPath(stateDirectory: string): string {
+  return `${stateDirectory}${SETUP_PLAN_SUFFIX}`;
+}
+
+function writeCanonicalPrivateFile(
+  path: string,
+  value: CleanFounderOnboardingManifestV1,
+): void {
   mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
+  const temporaryPath = `${path}.installing-${randomUUID()}`;
   const descriptor = openSync(
-    path,
+    temporaryPath,
     constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL,
     0o600,
   );
   try {
-    writeFileSync(descriptor, `${canonicalJson(manifest as never)}\n`);
+    writeFileSync(descriptor, `${canonicalJson(value as never)}\n`);
+    fsyncSync(descriptor);
   } finally {
     closeSync(descriptor);
+  }
+  try {
+    // link(2) is an exclusive no-clobber publish: unlike rename it cannot
+    // overwrite another concurrent founder's plan at the final path.
+    linkSync(temporaryPath, path);
+    const parent = openSync(dirname(path), constants.O_RDONLY);
+    try {
+      fsyncSync(parent);
+    } finally {
+      closeSync(parent);
+    }
+    unlinkSync(temporaryPath);
+  } catch (error) {
+    try {
+      rmSync(temporaryPath, { force: true });
+    } catch {}
+    throw error;
+  }
+}
+
+function assertSetupSeed(seed: CleanFounderSetupSeedV1): void {
+  try {
+    assertFederationId(seed.authority_id, "oau", "setup authority_id");
+    assertFederationId(seed.organization_id, "org", "setup organization_id");
+    assertFederationId(seed.owner_principal_id, "prn", "setup owner_principal_id");
+    assertFederationId(seed.owner_membership_id, "mem", "setup owner_membership_id");
+    assertFederationId(seed.slack_connection_id, "con", "setup slack_connection_id");
+  } catch {
+    throw new Error("clean founder setup seed is invalid");
+  }
+  const uuid = "[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}";
+  if (
+    !new RegExp(`^lineage-${uuid}$`).test(seed.state_lineage_id) ||
+    !new RegExp(`^ocp_${uuid}$`).test(seed.control_plane_id)
+  ) {
+    throw new Error("clean founder setup seed is invalid");
   }
 }
 
@@ -341,10 +565,18 @@ function validateManifest(value: unknown): CleanFounderOnboardingManifestV1 {
     "state_directory",
     "state_lineage_id",
   ];
+  const currentKeys = [
+    ...keys,
+    "organization_name",
+    "owner_display_name",
+    "owner_email",
+    "setup_seed",
+  ];
+  const actualKeys = Object.keys(record).sort().join(",");
   if (
     record.schema_version !== 1 ||
     record.kind !== "echo-clean-founder-onboarding-manifest-v1" ||
-    Object.keys(record).sort().join(",") !== keys.join(",") ||
+    actualKeys !== currentKeys.sort().join(",") ||
     keys
       .filter((key) => key !== "schema_version")
       .some((key) => typeof record[key] !== "string")
@@ -352,6 +584,15 @@ function validateManifest(value: unknown): CleanFounderOnboardingManifestV1 {
     throw new Error("clean founder onboarding manifest is invalid");
   }
   const manifest = record as unknown as CleanFounderOnboardingManifestV1;
+  if (
+    !isCanonicalPersonEmail(manifest.owner_email) ||
+    typeof manifest.organization_name !== "string" ||
+    typeof manifest.owner_display_name !== "string" ||
+    manifest.setup_seed === undefined
+  ) {
+    throw new Error("clean founder onboarding manifest is invalid");
+  }
+  assertSetupSeed(manifest.setup_seed);
   for (const path of [
     manifest.state_directory,
     manifest.oidc_config_path,
@@ -363,15 +604,29 @@ function validateManifest(value: unknown): CleanFounderOnboardingManifestV1 {
   ]) {
     absolutePath(path, "clean founder manifest path");
   }
-  if (
-    `${canonicalJson(manifest as never)}\n` !==
-    readFileSync(manifestPath(manifest.state_directory), "utf8")
-  ) {
-    throw new Error(
-      "clean founder onboarding manifest is not canonically encoded",
-    );
-  }
   return Object.freeze(manifest);
+}
+
+function readPrivateManifest(path: string): CleanFounderOnboardingManifestV1 {
+  const metadata = lstatSync(path);
+  const currentUid = process.getuid?.();
+  if (
+    !metadata.isFile() ||
+    metadata.isSymbolicLink() ||
+    (currentUid !== undefined && metadata.uid !== currentUid) ||
+    (metadata.mode & 0o777) !== 0o600
+  ) {
+    throw new Error("clean founder onboarding manifest must be current-user 0600");
+  }
+  const bytes = readFileSync(path);
+  if (bytes.byteLength === 0 || bytes.byteLength > 16 * 1024) {
+    throw new Error("clean founder onboarding manifest is invalid");
+  }
+  const manifest = validateManifest(JSON.parse(bytes.toString("utf8")) as unknown);
+  if (`${canonicalJson(manifest as never)}\n` !== bytes.toString("utf8")) {
+    throw new Error("clean founder onboarding manifest is not canonically encoded");
+  }
+  return manifest;
 }
 
 export function readCleanFounderOnboardingManifest(
@@ -381,26 +636,7 @@ export function readCleanFounderOnboardingManifest(
     stateDirectory,
     "state directory",
   );
-  const path = manifestPath(canonicalStateDirectory);
-  const metadata = lstatSync(path);
-  const currentUid = process.getuid?.();
-  if (
-    !metadata.isFile() ||
-    metadata.isSymbolicLink() ||
-    (currentUid !== undefined && metadata.uid !== currentUid) ||
-    (metadata.mode & 0o777) !== 0o600
-  ) {
-    throw new Error(
-      "clean founder onboarding manifest must be current-user 0600",
-    );
-  }
-  const bytes = readFileSync(path);
-  if (bytes.byteLength === 0 || bytes.byteLength > 16 * 1024) {
-    throw new Error("clean founder onboarding manifest is invalid");
-  }
-  const manifest = validateManifest(
-    JSON.parse(bytes.toString("utf8")) as unknown,
-  );
+  const manifest = readPrivateManifest(manifestPath(canonicalStateDirectory));
   if (manifest.state_directory !== canonicalStateDirectory) {
     throw new Error(
       "clean founder onboarding manifest belongs to another state directory",
@@ -409,32 +645,21 @@ export function readCleanFounderOnboardingManifest(
   return manifest;
 }
 
-async function bootstrap(
+function setupManifest(
   input: BootstrapInput,
-  io: CliIo,
-  dependencies: CleanFounderCliDependencies,
-): Promise<void> {
-  const createdAt = dependencies.now();
-  const reset = dependencies.reset({
-    state_directory: input.state_directory,
-    organization_display_name: input.organization_name,
-    owner_display_name: input.owner_display_name,
-    created_at: createdAt,
-    creating_artifact_revision: input.artifact_revision,
-  });
-  await dependencies.initialize_credentials(input.state_directory);
-  const slack = await dependencies.connect_slack({
-    state_directory: input.state_directory,
-    approval_channel_id: input.slack_approval_channel_id,
-    read_stdin: io.read_stdin,
-  });
+  createdAt: string,
+): CleanFounderOnboardingManifestV1 {
   const credentialsDirectory = join(input.state_directory, "credentials");
-  const invitationPath = join(
-    input.state_directory,
-    MANIFEST_DIRECTORY,
-    INVITATION_FILENAME,
-  );
-  const manifest: CleanFounderOnboardingManifestV1 = Object.freeze({
+  const seed: CleanFounderSetupSeedV1 = Object.freeze({
+    authority_id: federationId("oau"),
+    organization_id: federationId("org"),
+    state_lineage_id: `lineage-${randomUUID()}`,
+    owner_principal_id: federationId("prn"),
+    owner_membership_id: federationId("mem"),
+    control_plane_id: `ocp_${randomUUID()}`,
+    slack_connection_id: federationId("con"),
+  });
+  return Object.freeze({
     schema_version: 1,
     kind: "echo-clean-founder-onboarding-manifest-v1",
     state_directory: input.state_directory,
@@ -442,46 +667,695 @@ async function bootstrap(
     artifact_revision: input.artifact_revision,
     authority_url: input.authority_url,
     oidc_config_path: input.oidc_config_path,
-    pkce_key_file: join(
-      credentialsDirectory,
-      "person-session-pkce-sealing-key",
-    ),
-    invitation_path: invitationPath,
+    pkce_key_file: join(credentialsDirectory, "person-session-pkce-sealing-key"),
+    invitation_path: join(input.state_directory, MANIFEST_DIRECTORY, INVITATION_FILENAME),
     slack_approval_channel_id: input.slack_approval_channel_id,
-    slack_connection_id: slack.connection_id,
-    authority_id: reset.authority_id,
-    organization_id: reset.organization_id,
-    state_lineage_id: reset.state_lineage_id,
-    owner_principal_id: reset.owner_principal_id,
-    owner_membership_id: reset.owner_membership_id,
-    granola_credential_file: join(
-      credentialsDirectory,
-      GRANOLA_CREDENTIAL_FILENAME,
-    ),
-    granola_owner_email_file: join(
-      credentialsDirectory,
-      GRANOLA_OWNER_EMAIL_FILENAME,
-    ),
+    slack_connection_id: seed.slack_connection_id,
+    authority_id: seed.authority_id,
+    organization_id: seed.organization_id,
+    state_lineage_id: seed.state_lineage_id,
+    owner_principal_id: seed.owner_principal_id,
+    owner_membership_id: seed.owner_membership_id,
+    granola_credential_file: join(credentialsDirectory, GRANOLA_CREDENTIAL_FILENAME),
+    granola_owner_email_file: join(credentialsDirectory, GRANOLA_OWNER_EMAIL_FILENAME),
     llm_credential_file: join(credentialsDirectory, LLM_CREDENTIAL_FILENAME),
+    organization_name: input.organization_name,
+    owner_display_name: input.owner_display_name,
+    owner_email: input.owner_email,
+    setup_seed: seed,
   });
-  // The manifest is non-secret and intentionally written before the invitation:
-  // the one-time 15-minute invitation is the final bootstrap operation.
-  writeManifest(manifest);
-  await dependencies.issue_invitation({
-    state_directory: input.state_directory,
-    oidc_config_path: input.oidc_config_path,
-    pkce_key_file: manifest.pkce_key_file,
-    membership_id: reset.owner_membership_id,
-    expected_email: input.owner_email,
-    authority_url: input.authority_url,
-    output_path: invitationPath,
+}
+
+function setupInputMatches(
+  manifest: CleanFounderOnboardingManifestV1,
+  input: BootstrapInput,
+): boolean {
+  return (
+    manifest.organization_name === input.organization_name &&
+    manifest.owner_display_name === input.owner_display_name &&
+    manifest.owner_email === input.owner_email &&
+    manifest.authority_url === input.authority_url &&
+    manifest.oidc_config_path === input.oidc_config_path &&
+    manifest.slack_approval_channel_id === input.slack_approval_channel_id &&
+    manifest.artifact_revision === input.artifact_revision
+  );
+}
+
+function loadSetupManifest(stateDirectory: string): {
+  readonly manifest: CleanFounderOnboardingManifestV1;
+  readonly location: "sibling" | "state";
+} | undefined {
+  const sibling = siblingSetupPlanPath(stateDirectory);
+  const state = manifestPath(stateDirectory);
+  if (!existsSync(sibling) && !existsSync(state)) return undefined;
+  const siblingManifest = existsSync(sibling) ? readPrivateManifest(sibling) : undefined;
+  const stateManifest = existsSync(state) ? readPrivateManifest(state) : undefined;
+  if (
+    siblingManifest !== undefined &&
+    stateManifest !== undefined &&
+    canonicalJson(siblingManifest as never) !== canonicalJson(stateManifest as never)
+  ) {
+    throw new Error("clean founder setup has conflicting durable plans");
+  }
+  const manifest = stateManifest ?? siblingManifest!;
+  if (manifest.state_directory !== stateDirectory) {
+    throw new Error("clean founder setup plan belongs to another state directory");
+  }
+  return Object.freeze({
+    manifest,
+    location: stateManifest === undefined ? "sibling" : "state",
+  });
+}
+
+function verifySetupGenesis(manifest: CleanFounderOnboardingManifestV1): void {
+  const verified = verifyCleanStateLineage(manifest.state_directory);
+  if (
+    verified.root.authority_id !== manifest.setup_seed.authority_id ||
+    verified.root.organization_id !== manifest.setup_seed.organization_id ||
+    verified.root.state_lineage_id !== manifest.setup_seed.state_lineage_id
+  ) {
+    throw new Error("clean founder setup plan does not match published genesis");
+  }
+}
+
+function publishSetupPlan(manifest: CleanFounderOnboardingManifestV1): void {
+  const source = siblingSetupPlanPath(manifest.state_directory);
+  const destination = manifestPath(manifest.state_directory);
+  if (existsSync(destination)) return;
+  if (!existsSync(source)) throw new Error("clean founder setup plan is missing");
+  mkdirSync(dirname(destination), { recursive: true, mode: 0o700 });
+  renameSync(source, destination);
+  const parent = openSync(dirname(destination), constants.O_RDONLY);
+  try {
+    fsyncSync(parent);
+  } finally {
+    closeSync(parent);
+  }
+}
+
+function privateFilePresent(path: string, minimumBytes = 1): boolean {
+  try {
+    const metadata = lstatSync(path);
+    const currentUid = process.getuid?.();
+    return (
+      metadata.isFile() &&
+      !metadata.isSymbolicLink() &&
+      metadata.size >= minimumBytes &&
+      metadata.size <= 16 * 1024 &&
+      (currentUid === undefined || metadata.uid === currentUid) &&
+      (metadata.mode & 0o777) === 0o600
+    );
+  } catch {
+    return false;
+  }
+}
+
+function installPrivateCredentialValue(path: string, value: string): void {
+  const parentPath = dirname(path);
+  const parent = lstatSync(parentPath);
+  const currentUid = process.getuid?.();
+  if (
+    !parent.isDirectory() ||
+    parent.isSymbolicLink() ||
+    (currentUid !== undefined && parent.uid !== currentUid) ||
+    (parent.mode & 0o777) !== 0o700
+  ) {
+    throw new Error(
+      "clean founder credential destination must have a current-user 0700 parent",
+    );
+  }
+  const temporaryPath = `${path}.installing-${randomUUID()}`;
+  let descriptor: number | undefined;
+  try {
+    descriptor = openSync(
+      temporaryPath,
+      constants.O_WRONLY |
+        constants.O_CREAT |
+        constants.O_EXCL |
+        (constants.O_NOFOLLOW ?? 0),
+      0o600,
+    );
+    fchmodSync(descriptor, 0o600);
+    writeFileSync(descriptor, value, "utf8");
+    fsyncSync(descriptor);
+    closeSync(descriptor);
+    descriptor = undefined;
+    renameSync(temporaryPath, path);
+    const parentDescriptor = openSync(parentPath, constants.O_RDONLY);
+    try {
+      fsyncSync(parentDescriptor);
+    } finally {
+      closeSync(parentDescriptor);
+    }
+  } catch (error) {
+    if (descriptor !== undefined) {
+      try {
+        closeSync(descriptor);
+      } catch {}
+    }
+    try {
+      rmSync(temporaryPath, { force: true });
+    } catch {}
+    throw error;
+  }
+}
+
+function validPkceKeyPresent(path: string): boolean {
+  try {
+    readPrivateAuthorityPersonSessionPkceKey(`file:${path}`);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function sha256Secret(value: string): `sha256:${string}` {
+  return `sha256:${createHash("sha256").update(value, "utf8").digest("hex")}`;
+}
+
+function usableFounderInvitation(manifest: CleanFounderOnboardingManifestV1): boolean {
+  try {
+    const path = manifest.invitation_path;
+    if (!privateFilePresent(path)) return false;
+    const raw = readFileSync(path, "utf8");
+    const parsed = JSON.parse(raw) as unknown;
+    if (
+      parsed === null ||
+      typeof parsed !== "object" ||
+      Array.isArray(parsed) ||
+      Object.keys(parsed).sort().join(",") !==
+        "authority_url,expires_at,kind,login_grant,schema_version" ||
+      `${canonicalJson(parsed as never)}\n` !== raw
+    ) return false;
+    const invitation = parsed as {
+      schema_version: unknown;
+      kind: unknown;
+      authority_url: unknown;
+      login_grant: unknown;
+      expires_at: unknown;
+    };
+    if (
+      invitation.schema_version !== 1 ||
+      invitation.kind !== "echo-person-onboarding-invitation" ||
+      invitation.authority_url !== manifest.authority_url ||
+      typeof invitation.login_grant !== "string" ||
+      !/^[A-Za-z0-9_-]{43}$/.test(invitation.login_grant) ||
+      typeof invitation.expires_at !== "string" ||
+      new Date(invitation.expires_at).toISOString() !== invitation.expires_at ||
+      invitation.expires_at <= new Date().toISOString()
+    ) return false;
+    const database = new Database(join(manifest.state_directory, "authority.sqlite"), {
+      readonly: true,
+      fileMustExist: true,
+    });
+    try {
+      return database.prepare(
+        `SELECT 1 FROM authority_person_login_grants
+          WHERE login_grant_sha256 = ? AND organization_id = ?
+            AND principal_id = ? AND membership_id = ? AND membership_type = 'owner'
+            AND consumed_at IS NULL AND invalidated_at IS NULL AND expires_at > ?
+          LIMIT 1`,
+      ).get(
+        sha256Secret(invitation.login_grant),
+        manifest.organization_id,
+        manifest.owner_principal_id,
+        manifest.owner_membership_id,
+        new Date().toISOString(),
+      ) !== undefined;
+    } finally {
+      database.close();
+    }
+  } catch {
+    return false;
+  }
+}
+
+function discardUnusableInvitation(path: string): void {
+  if (!existsSync(path)) return;
+  if (!privateFilePresent(path)) {
+    throw new Error("unusable founder invitation is not a private regular file");
+  }
+  unlinkSync(path);
+  const parent = openSync(dirname(path), constants.O_RDONLY);
+  try {
+    fsyncSync(parent);
+  } finally {
+    closeSync(parent);
+  }
+}
+
+function plannedSlackIsActive(manifest: CleanFounderOnboardingManifestV1): boolean {
+  try {
+    verifySetupGenesis(manifest);
+    const database = new Database(join(manifest.state_directory, "integrations.sqlite"), {
+      readonly: true,
+      fileMustExist: true,
+    });
+    try {
+      return database
+        .prepare(
+          "SELECT 1 FROM organization_tool_connection_current_state " +
+            "WHERE connection_id = ? AND current_status = 'active' LIMIT 1",
+        )
+        .get(manifest.slack_connection_id) !== undefined;
+    } finally {
+      database.close();
+    }
+  } catch {
+    return false;
+  }
+}
+
+function durableSetupStage(
+  manifest: CleanFounderOnboardingManifestV1,
+): CleanFounderSetupStage {
+  return Object.freeze({
+    credentials_ready: validPkceKeyPresent(manifest.pkce_key_file),
+    slack_connected: plannedSlackIsActive(manifest),
+    invitation_file_present: privateFilePresent(manifest.invitation_path),
+  });
+}
+
+interface FullFounderStatus {
+  readonly founder_oidc_bound: boolean;
+  readonly founder_slack_link_active: boolean;
+  readonly granola_credentials_valid: boolean;
+  readonly slack_approval_binding_active: boolean;
+  readonly granola_admission_present: boolean;
+  readonly slack_verification?: SafeSlackVerification;
+  readonly granola_admission_proof?: {
+    readonly owner_observation_assurance: "provider_record_owner_observed";
+    readonly owner_observed_at: string;
+  };
+}
+
+type FounderSetupNextStep =
+  | "resume_bootstrap"
+  | "complete_founder_browser_login"
+  | "complete_founder_slack_link"
+  | "install_provider_credentials"
+  | "run_finalize"
+  | "ready_to_start";
+
+function nextFounderSetupStep(input: {
+  readonly genesis_published: boolean;
+  readonly setup_plan_location: "sibling" | "state";
+  readonly credentials_ready: boolean;
+  readonly slack_connected: boolean;
+  readonly founder_invitation_valid: boolean;
+  readonly full: FullFounderStatus;
+}): FounderSetupNextStep {
+  if (
+    !input.genesis_published ||
+    input.setup_plan_location === "sibling" ||
+    !input.credentials_ready ||
+    !input.slack_connected ||
+    (!input.full.founder_oidc_bound && !input.founder_invitation_valid)
+  ) {
+    return "resume_bootstrap";
+  }
+  if (!input.full.founder_oidc_bound) return "complete_founder_browser_login";
+  if (!input.full.founder_slack_link_active) return "complete_founder_slack_link";
+  if (!input.full.granola_credentials_valid) return "install_provider_credentials";
+  if (
+    !input.full.slack_approval_binding_active ||
+    !input.full.granola_admission_present
+  ) return "run_finalize";
+  return "ready_to_start";
+}
+
+function nextFounderSetupInstruction(step: FounderSetupNextStep): string {
+  return {
+    resume_bootstrap: "Run the same bootstrap command again.",
+    complete_founder_browser_login:
+      "Start the clean Authority and complete founder browser login.",
+    complete_founder_slack_link:
+      "Complete the founder Slack identity link in the clean Authority.",
+    install_provider_credentials:
+      "Run the credentials-install command with the three private source files.",
+    run_finalize: "Run the finalize command.",
+    ready_to_start:
+      "Start or restart the clean runtime, then complete the founder canary.",
+  }[step];
+}
+
+function readFullFounderStatus(
+  manifest: CleanFounderOnboardingManifestV1,
+  dependencies?: CleanFounderCliDependencies,
+): FullFounderStatus {
+  return dependencies?.read_full_founder_status?.(manifest) ??
+    fullFounderStatus(manifest);
+}
+
+function fullFounderStatus(manifest: CleanFounderOnboardingManifestV1): FullFounderStatus {
+  const empty: FullFounderStatus = {
+    founder_oidc_bound: false,
+    founder_slack_link_active: false,
+    granola_credentials_valid: false,
+    slack_approval_binding_active: false,
+    granola_admission_present: false,
+  };
+  try {
+    verifySetupGenesis(manifest);
+    const authority = new Database(join(manifest.state_directory, "authority.sqlite"), {
+      readonly: true,
+      fileMustExist: true,
+    });
+    let founderOidcBound = false;
+    let granolaAdmissionProof: FullFounderStatus["granola_admission_proof"];
+    try {
+      founderOidcBound = authority.prepare(
+        `SELECT 1 FROM authority_oidc_identity_bindings AS binding
+          JOIN authority_person_login_grants AS grant_row
+            ON grant_row.login_grant_sha256 = binding.initial_login_grant_sha256
+          WHERE binding.organization_id = ? AND binding.principal_id = ?
+            AND binding.membership_id = ? AND binding.membership_type = 'owner'
+            AND binding.status = 'active' AND grant_row.consumed_at = binding.bound_at
+          LIMIT 1`,
+      ).get(
+        manifest.organization_id,
+        manifest.owner_principal_id,
+        manifest.owner_membership_id,
+      ) !== undefined;
+      const admission = authority.prepare(
+        `SELECT owner_observation_assurance, owner_observed_at
+           FROM authority_clean_granola_source_admission_v1
+          WHERE singleton = 1 AND organization_id = ? AND principal_id = ?
+            AND membership_id = ? AND membership_type = 'owner'
+            AND source_instance_id = ? AND processor_instance_id = ?
+          LIMIT 1`,
+      ).get(
+        manifest.organization_id,
+        manifest.owner_principal_id,
+        manifest.owner_membership_id,
+        SOURCE_INSTANCE_ID,
+        PROCESSOR_INSTANCE_ID,
+      ) as
+        | {
+            readonly owner_observation_assurance: unknown;
+            readonly owner_observed_at: unknown;
+          }
+        | undefined;
+      if (
+        admission?.owner_observation_assurance ===
+          "provider_record_owner_observed" &&
+        typeof admission.owner_observed_at === "string"
+      ) {
+        granolaAdmissionProof = Object.freeze({
+          owner_observation_assurance: "provider_record_owner_observed",
+          owner_observed_at: admission.owner_observed_at,
+        });
+      }
+    } finally {
+      authority.close();
+    }
+    let granolaCredentialsValid = false;
+    try {
+      void readPrivateAuthorityGranolaOrganizationCredential(
+        `file:${manifest.granola_credential_file}`,
+      );
+      const ownerEmail = readPrivateAuthorityGranolaOwnerEmail(
+        `file:${manifest.granola_owner_email_file}`,
+      );
+      void readPrivateAuthorityCredential(`file:${manifest.llm_credential_file}`);
+      granolaCredentialsValid = ownerEmail === manifest.owner_email;
+    } catch {}
+    const control = new Database(join(manifest.state_directory, "integrations.sqlite"), {
+      readonly: true,
+      fileMustExist: true,
+    });
+    try {
+      const founderSlackLinkActive = control.prepare(
+        `SELECT 1 FROM organization_external_human_link_current AS link
+          JOIN organization_tool_connection_contracts AS connection
+            ON connection.connection_id = ?
+          JOIN organization_tool_connection_current_state AS connection_state
+            ON connection_state.connection_id = connection.connection_id
+          WHERE link.current_status = 'active' AND link.principal_id = ?
+            AND link.membership_id = ? AND link.provider_issuer = 'https://slack.com'
+            AND link.provider_tenant_id = json_extract(connection.contract_json, '$.provider_tenant_id')
+            AND COALESCE(link.provider_enterprise_id, '') =
+                COALESCE(json_extract(connection.contract_json, '$.provider_enterprise_id'), '')
+            AND connection_state.current_status = 'active'
+          LIMIT 1`,
+      ).get(
+        manifest.slack_connection_id,
+        manifest.owner_principal_id,
+        manifest.owner_membership_id,
+      ) !== undefined;
+      const slackProofRow = control.prepare(
+        `SELECT json_extract(connection.contract_json, '$.provider_tenant_id') AS workspace_id,
+                json_extract(connection.contract_json, '$.provider_enterprise_id') AS enterprise_id,
+                json_extract(connection.contract_json, '$.provider_app_id') AS app_id,
+                json_extract(connection.contract_json, '$.provider_bot_id') AS bot_id,
+                json_extract(connection.contract_json, '$.provider_bot_user_id') AS bot_user_id,
+                json_extract(state.state_json, '$.observed_granted_scopes') AS observed_scopes_json,
+                json_extract(state.state_json, '$.verified_at') AS verified_at
+           FROM organization_tool_connection_contracts AS connection
+           JOIN organization_tool_connection_current_state AS state
+             ON state.connection_id = connection.connection_id
+            AND state.connection_contract_sha256 = connection.contract_sha256
+          WHERE connection.connection_id = ? AND state.current_status = 'active'
+          LIMIT 1`,
+      ).get(manifest.slack_connection_id) as
+        | {
+            readonly workspace_id: unknown;
+            readonly enterprise_id: unknown;
+            readonly app_id: unknown;
+            readonly bot_id: unknown;
+            readonly bot_user_id: unknown;
+            readonly observed_scopes_json: unknown;
+            readonly verified_at: unknown;
+          }
+        | undefined;
+      let requiredScopesObserved = false;
+      try {
+        const scopes = JSON.parse(
+          typeof slackProofRow?.observed_scopes_json === "string"
+            ? slackProofRow.observed_scopes_json
+            : "null",
+        ) as unknown;
+        requiredScopesObserved =
+          Array.isArray(scopes) &&
+          SLACK_ORGANIZATION_TOOL_REQUIRED_SCOPES.every((scope) =>
+            scopes.includes(scope),
+          );
+      } catch {}
+      const slackVerification =
+        slackProofRow !== undefined &&
+        requiredScopesObserved &&
+        typeof slackProofRow.workspace_id === "string" &&
+        (slackProofRow.enterprise_id === null ||
+          typeof slackProofRow.enterprise_id === "string") &&
+        typeof slackProofRow.app_id === "string" &&
+        typeof slackProofRow.bot_id === "string" &&
+        typeof slackProofRow.bot_user_id === "string" &&
+        typeof slackProofRow.verified_at === "string"
+          ? Object.freeze({
+              workspace_id: slackProofRow.workspace_id,
+              enterprise_id: slackProofRow.enterprise_id,
+              app_id: slackProofRow.app_id,
+              bot_id: slackProofRow.bot_id,
+              bot_user_id: slackProofRow.bot_user_id,
+              approval_channel_id: manifest.slack_approval_channel_id,
+              required_scopes: SLACK_ORGANIZATION_TOOL_REQUIRED_SCOPES,
+              approval_channel_access: "verified" as const,
+              selected_channel_public: true as const,
+              selected_channel_active: true as const,
+              bot_membership_verified: true as const,
+              bot_access_verified: true as const,
+              verified_at: slackProofRow.verified_at,
+            })
+          : undefined;
+      const slackApprovalBindingActive = control.prepare(
+        `SELECT 1 FROM organization_approval_binding_current AS current_binding
+          JOIN organization_approval_binding_contracts AS binding
+            ON binding.approval_binding_id = current_binding.approval_binding_id
+           AND binding.contract_sha256 = current_binding.contract_sha256
+          WHERE current_binding.current_status = 'active'
+            AND binding.connection_id = ?
+            AND json_extract(binding.contract_json, '$.approval_channel_id') = ?
+          LIMIT 1`,
+      ).get(manifest.slack_connection_id, manifest.slack_approval_channel_id) !== undefined;
+      return Object.freeze({
+        founder_oidc_bound: founderOidcBound,
+        founder_slack_link_active: founderSlackLinkActive,
+        granola_credentials_valid: granolaCredentialsValid,
+        slack_approval_binding_active: slackApprovalBindingActive,
+        granola_admission_present: granolaAdmissionProof !== undefined,
+        ...(slackVerification === undefined ? {} : { slack_verification: slackVerification }),
+        ...(granolaAdmissionProof === undefined
+          ? {}
+          : { granola_admission_proof: granolaAdmissionProof }),
+      });
+    } finally {
+      control.close();
+    }
+  } catch {
+    return Object.freeze(empty);
+  }
+}
+
+async function bootstrap(
+  input: BootstrapInput,
+  io: CliIo,
+  dependencies: CleanFounderCliDependencies,
+): Promise<void> {
+  // This must happen before a durable setup plan, genesis, or Slack call. The
+  // same current OIDC parser and callback rule power the Person CLI.
+  const oidc = readCleanPersonOidcConfiguration(input.oidc_config_path);
+  assertCleanPersonAuthorityCallback(input.authority_url, oidc.configuration);
+  let setup = loadSetupManifest(input.state_directory);
+  if (setup === undefined) {
+    if (existsSync(input.state_directory)) {
+      throw new Error("state directory exists without a clean founder setup plan");
+    }
+    const manifest = setupManifest(input, dependencies.now());
+    writeCanonicalPrivateFile(siblingSetupPlanPath(input.state_directory), manifest);
+    setup = Object.freeze({ manifest, location: "sibling" as const });
+  } else if (!setupInputMatches(setup.manifest, input)) {
+    throw new Error("bootstrap arguments do not exactly match the durable setup plan");
+  }
+  const manifest = setup.manifest;
+  if (!existsSync(input.state_directory)) {
+    const seed = manifest.setup_seed;
+    dependencies.reset({
+      state_directory: input.state_directory,
+      organization_display_name: input.organization_name,
+      owner_display_name: input.owner_display_name,
+      created_at: manifest.created_at,
+      creating_artifact_revision: input.artifact_revision,
+      seed: {
+        authority_id: seed.authority_id,
+        organization_id: seed.organization_id,
+        state_lineage_id: seed.state_lineage_id,
+        owner_principal_id: seed.owner_principal_id,
+        owner_membership_id: seed.owner_membership_id,
+        control_plane_id: seed.control_plane_id,
+      },
+    });
+  }
+  // Genesis verifies its rename target. Verify it once more before the plan
+  // crosses from its sibling file into the published state directory.
+  verifySetupGenesis(manifest);
+  publishSetupPlan(manifest);
+  const stage = () =>
+    dependencies.read_setup_stage?.(manifest) ?? durableSetupStage(manifest);
+  if (!stage().credentials_ready) {
+    await dependencies.initialize_credentials(input.state_directory);
+  }
+  let slack: ConnectedSlack = { connection_id: manifest.slack_connection_id };
+  if (!stage().slack_connected) {
+    slack = await dependencies.connect_slack({
+      state_directory: input.state_directory,
+      approval_channel_id: input.slack_approval_channel_id,
+      connection_id: manifest.slack_connection_id,
+      read_stdin: io.read_stdin,
+    });
+  }
+  const invitationPath = manifest.invitation_path;
+  if (slack.connection_id !== manifest.slack_connection_id) {
+    throw new Error("clean Slack connection did not retain the setup ID");
+  }
+  const full = readFullFounderStatus(manifest, dependencies);
+  const founderAlreadyBound = full.founder_oidc_bound;
+  const invitationIsUsable = () =>
+    dependencies.read_setup_stage === undefined
+      ? usableFounderInvitation(manifest)
+      : stage().invitation_file_present;
+  if (!founderAlreadyBound && !invitationIsUsable()) {
+    discardUnusableInvitation(invitationPath);
+    await dependencies.issue_invitation({
+      state_directory: input.state_directory,
+      oidc_config_path: input.oidc_config_path,
+      pkce_key_file: manifest.pkce_key_file,
+      membership_id: manifest.owner_membership_id,
+      expected_email: input.owner_email,
+      authority_url: input.authority_url,
+      output_path: invitationPath,
+    });
+  }
+  const completedStage = stage();
+  const completedFull = readFullFounderStatus(manifest, dependencies);
+  const nextStep = nextFounderSetupStep({
+    genesis_published: true,
+    setup_plan_location: "state",
+    credentials_ready: completedStage.credentials_ready,
+    slack_connected: completedStage.slack_connected,
+    founder_invitation_valid: invitationIsUsable(),
+    full: completedFull,
   });
   io.stdout(
     `${canonicalJson({
       ok: true,
-      invitation_path: invitationPath,
-      next_instruction:
-        "Start echo-organization-authority-clean-live serve, then run: echo-brain person login --invitation <invitation_path>.",
+      ...(!founderAlreadyBound ? { invitation_path: invitationPath } : {}),
+      ...((completedFull.slack_verification ?? slack.verification) === undefined
+        ? {}
+        : { slack_verification: completedFull.slack_verification ?? slack.verification }),
+      ...(completedFull.granola_admission_proof === undefined
+        ? {}
+        : { granola_admission_proof: completedFull.granola_admission_proof }),
+      next_step: nextStep,
+      next_instruction: nextFounderSetupInstruction(nextStep),
+    } as never)}\n`,
+  );
+}
+
+function installProviderCredentials(
+  input: CredentialInstallInput,
+  io: CliIo,
+): void {
+  const manifest = readCleanFounderOnboardingManifest(input.state_directory);
+  verifySetupGenesis(manifest);
+  if (
+    manifest.granola_credential_file !==
+      join(input.state_directory, "credentials", GRANOLA_CREDENTIAL_FILENAME) ||
+    manifest.granola_owner_email_file !==
+      join(input.state_directory, "credentials", GRANOLA_OWNER_EMAIL_FILENAME) ||
+    manifest.llm_credential_file !==
+      join(input.state_directory, "credentials", LLM_CREDENTIAL_FILENAME)
+  ) {
+    throw new Error(
+      "clean founder setup does not have fixed provider credential destinations",
+    );
+  }
+
+  // Read and validate every source before replacing any destination. Values
+  // are never accepted as argv text and never enter output or durable setup
+  // metadata.
+  const granolaCredential =
+    readPrivateAuthorityGranolaOrganizationCredential(
+      `file:${input.granola_credential_source}`,
+    );
+  const granolaOwnerEmail = readPrivateAuthorityGranolaOwnerEmail(
+    `file:${input.granola_owner_email_source}`,
+  );
+  const llmCredential = readPrivateAuthorityCredential(
+    `file:${input.llm_credential_source}`,
+  );
+  if (granolaOwnerEmail !== manifest.owner_email) {
+    throw new Error(
+      "Granola owner email does not match the founder setup email",
+    );
+  }
+
+  installPrivateCredentialValue(
+    manifest.granola_credential_file,
+    granolaCredential,
+  );
+  installPrivateCredentialValue(
+    manifest.granola_owner_email_file,
+    granolaOwnerEmail,
+  );
+  installPrivateCredentialValue(manifest.llm_credential_file, llmCredential);
+  if (!fullFounderStatus(manifest).granola_credentials_valid) {
+    throw new Error("clean founder provider credentials did not install");
+  }
+  io.stdout(
+    `${canonicalJson({
+      ok: true,
+      credentials_ready: true,
+      next_instruction: "Run the clean founder status command to continue.",
     } as never)}\n`,
   );
 }
@@ -492,22 +1366,121 @@ async function finalize(
   dependencies: CleanFounderCliDependencies,
 ): Promise<void> {
   const manifest = readCleanFounderOnboardingManifest(input.state_directory);
-  await dependencies.activate_approval({
-    state_directory: manifest.state_directory,
-    connection_id: manifest.slack_connection_id,
-    approval_channel_id: manifest.slack_approval_channel_id,
-  });
-  await dependencies.admit_source({
-    state_directory: manifest.state_directory,
-    granola_credential_file: manifest.granola_credential_file,
-    granola_owner_email_file: manifest.granola_owner_email_file,
-    llm_credential_file: manifest.llm_credential_file,
-  });
+  // This is a stopped-state activation gate, not merely a convenience
+  // command. Prove genesis before a dependency can activate anything.
+  verifySetupGenesis(manifest);
+  let full = readFullFounderStatus(manifest, dependencies);
+  const missing = [
+    !full.founder_oidc_bound && "founder OIDC binding",
+    !full.founder_slack_link_active && "founder Slack link",
+    !full.granola_credentials_valid && "provider credentials",
+  ].filter((value): value is string => typeof value === "string");
+  if (missing.length > 0) {
+    throw new Error(`clean founder finalize requires ${missing.join(", ")}`);
+  }
+  if (!full.slack_approval_binding_active) {
+    await dependencies.activate_approval({
+      state_directory: manifest.state_directory,
+      connection_id: manifest.slack_connection_id,
+      approval_channel_id: manifest.slack_approval_channel_id,
+    });
+    full = readFullFounderStatus(manifest, dependencies);
+  }
+  if (!full.granola_admission_present) {
+    await dependencies.admit_source({
+      state_directory: manifest.state_directory,
+      granola_credential_file: manifest.granola_credential_file,
+      granola_owner_email_file: manifest.granola_owner_email_file,
+      llm_credential_file: manifest.llm_credential_file,
+    });
+  }
   io.stdout(
     `${canonicalJson({
       ok: true,
+      runtime_status: "ready_to_start",
+      runtime_observation: "not_observed",
+      canary_status: "not_complete",
       next_instruction:
         "Restart the same echo-organization-authority-clean-live serve command. The clean Granola source begins at its live-only cutoff.",
+    } as never)}\n`,
+  );
+}
+
+function status(input: FinalizeInput, io: CliIo): void {
+  const setup = loadSetupManifest(input.state_directory);
+  if (setup === undefined) {
+    io.stdout(
+      `${canonicalJson({
+        schema_version: 1,
+        kind: "echo-clean-founder-setup-status-v1",
+        setup_plan_present: false,
+        genesis_published: false,
+        credentials_ready: false,
+        slack_connected: false,
+        invitation_file_present: false,
+        founder_invitation_valid: false,
+        founder_oidc_bound: false,
+        founder_slack_link_active: false,
+        granola_credentials_valid: false,
+        slack_approval_binding_active: false,
+        granola_admission_present: false,
+        runtime_status: "not_ready",
+        runtime_observation: "not_observed",
+        canary_status: "not_ready",
+        next_step: existsSync(input.state_directory)
+          ? "recover_setup_plan"
+          : "run_bootstrap",
+        next_instruction: existsSync(input.state_directory)
+          ? "Recover the missing setup plan before continuing."
+          : "Run the bootstrap command.",
+      } as never)}\n`,
+    );
+    return;
+  }
+  let genesisPublished = false;
+  try {
+    verifySetupGenesis(setup.manifest);
+    genesisPublished = true;
+  } catch {
+    genesisPublished = false;
+  }
+  const durable = durableSetupStage(setup.manifest);
+  const full = fullFounderStatus(setup.manifest);
+  const credentialsReady = genesisPublished && durable.credentials_ready;
+  const slackConnected = genesisPublished && durable.slack_connected;
+  const invitationFilePresent =
+    genesisPublished && durable.invitation_file_present;
+  const invitationValid = genesisPublished && usableFounderInvitation(setup.manifest);
+  const nextStep = nextFounderSetupStep({
+    genesis_published: genesisPublished,
+    setup_plan_location: setup.location,
+    credentials_ready: credentialsReady,
+    slack_connected: slackConnected,
+    founder_invitation_valid: invitationValid,
+    full,
+  });
+  const runtimeStatus = nextStep === "ready_to_start"
+    ? "ready_to_start"
+    : "not_ready";
+  const canaryStatus = nextStep === "ready_to_start"
+    ? "not_complete"
+    : "not_ready";
+  io.stdout(
+    `${canonicalJson({
+      schema_version: 1,
+      kind: "echo-clean-founder-setup-status-v1",
+      setup_plan_present: true,
+      genesis_published: genesisPublished,
+      credentials_ready: credentialsReady,
+      slack_connected: slackConnected,
+      invitation_file_present: invitationFilePresent,
+      founder_invitation_valid: invitationValid,
+      ...full,
+      next_step: nextStep,
+      next_instruction: nextFounderSetupInstruction(nextStep),
+      runtime_status: runtimeStatus,
+      runtime_observation: "not_observed",
+      canary_status: canaryStatus,
     } as never)}\n`,
   );
 }
@@ -524,6 +1497,14 @@ export async function runCleanFounderCli(
     }
     if (argv[0] === "finalize") {
       await finalize(parseFinalize(argv.slice(1)), io, dependencies);
+      return 0;
+    }
+    if (argv[0] === "credentials-install") {
+      installProviderCredentials(parseCredentialInstall(argv.slice(1)), io);
+      return 0;
+    }
+    if (argv[0] === "status") {
+      status(parseFinalize(argv.slice(1)), io);
       return 0;
     }
     throw new Error(USAGE);

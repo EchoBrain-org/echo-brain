@@ -102,7 +102,7 @@ function privateReference(path: string): string {
   return `file:${path}`;
 }
 
-function assertAuthorityCallback(
+export function assertCleanPersonAuthorityCallback(
   origin: string,
   configuration: PersonSessionOidcConfiguration,
 ): void {
@@ -142,7 +142,7 @@ export async function runCleanPersonCli(
       required(parsed, "--oidc-config"),
     );
     const authorityUrl = required(parsed, "--authority-url");
-    assertAuthorityCallback(authorityUrl, configured.configuration);
+    assertCleanPersonAuthorityCallback(authorityUrl, configured.configuration);
     const result = issueCleanPersonInvitation({
       state_directory: required(parsed, "--state-dir"),
       oidc: configured.configuration,
@@ -174,7 +174,7 @@ export async function runCleanPersonCli(
       required(parsed, "--oidc-config"),
     );
     const authorityUrl = required(parsed, "--authority-url");
-    assertAuthorityCallback(authorityUrl, configured.configuration);
+    assertCleanPersonAuthorityCallback(authorityUrl, configured.configuration);
     const secretFile = parsed["--client-secret-file"];
     if (
       (configured.client_authentication === "none") !==

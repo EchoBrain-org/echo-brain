@@ -1,4 +1,5 @@
 import { once } from "node:events";
+import { randomUUID } from "node:crypto";
 import { join } from "node:path";
 import { canonicalSha256 } from "@echo-brain/federation-protocol";
 import {
@@ -28,6 +29,8 @@ import { LazyPersonSessionOidcProvider } from "./lazy-person-session-oidc-provid
 import { createCleanPersonSlackIdentityLinkServiceV1 } from "./clean-person-slack-identity-link.js";
 import { createCleanPersonRecordReadRouteV1 } from "./clean-person-record-read-route.js";
 import { createCleanPersonRecordSearchRouteV1 } from "./clean-person-record-search-route.js";
+import { CleanPersonEmployeeLifecycleApplication } from "../application/clean-person-employee-lifecycle.js";
+import { createCleanPersonEmployeeHttpApplication } from "../presentation/clean-person-employee-http-application.js";
 import { cleanReadableSearchRuntimeContractV1 } from "./clean-readable-search-runtime.js";
 import { verifyCleanStateLineage } from "./verify-clean-state-lineage.js";
 
@@ -220,6 +223,13 @@ export async function startCleanPersonRuntime(
         record: recordDatabase,
         audit: new SqliteCleanPersonRecordReadAuditV1(database),
       }),
+      person_employees: createCleanPersonEmployeeHttpApplication(
+        new CleanPersonEmployeeLifecycleApplication(sessions, {
+          next(prefix) {
+            return `${prefix}_${randomUUID()}`;
+          },
+        }),
+      ),
       ...(personSlackIdentityLink === undefined
         ? {}
         : { person_slack_identity_link: personSlackIdentityLink }),

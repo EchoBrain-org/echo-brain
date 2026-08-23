@@ -43,6 +43,7 @@ const NEW_LINEAGE_TABLE_COLUMNS = {
     "provisioned_at",
     "revoked_at",
     "revocation_reason",
+    "employee_email_sha256",
   ],
   authority_provider_human_action_reproofs: [
     "provider_action_sha256",
@@ -96,6 +97,8 @@ const NEW_LINEAGE_TABLE_COLUMNS = {
     "source_adapter_version",
     "normalizer_version",
     "owner_email_sha256",
+    "owner_observation_assurance",
+    "owner_observed_at",
     "source_credential_reference_sha256",
     "cursor",
     "cutoff_at",
@@ -147,6 +150,9 @@ const NEW_LINEAGE_TABLE_COLUMNS = {
 
 const NEW_LINEAGE_OBJECTS = [
   "index:authority_memberships_current",
+  "index:authority_memberships_active_employee_email",
+  "index:authority_oidc_identity_bindings_active_subject",
+  "index:authority_person_login_grants_pending_membership",
   "table:authority_provider_human_action_reproofs",
   "table:authority_record_write_inputs",
   "table:authority_record_write_receipts",
@@ -172,10 +178,8 @@ const NEW_LINEAGE_OBJECTS = [
   "trigger:authority_clean_live_v4_receipts_v1_immutable_update",
 ].sort();
 
-const IDENTITY_TABLES = [
-  "authority_person_login_grants",
+const SETTLED_PERSON_SESSION_TABLES = [
   "authority_oidc_identity_bindings",
-  "authority_oidc_login_attempts",
   "authority_person_session_families",
   "authority_person_session_credentials",
 ] as const;
@@ -222,7 +226,7 @@ afterEach(() => {
 });
 
 describe("private Authority new-lineage baseline v1", () => {
-  it("retains the settled Person/OIDC/session terminal schema exactly", () => {
+  it("retains the settled Person/OIDC/session terminal schema except genesis-only employee lifecycle facts", () => {
     const baseline = openAuthorityDatabase(path());
     const legacyPath = path();
     try {
@@ -230,12 +234,26 @@ describe("private Authority new-lineage baseline v1", () => {
       openAndMigrateAuthorityDatabase(legacyPath).close();
       const legacy = new Database(legacyPath, { readonly: true });
       try {
-        const names = identityObjectNames(legacy);
-        expect(identityObjectNames(baseline)).toEqual(names);
+        const names = identityObjectNames(legacy).filter(
+          (name) =>
+            !name.startsWith("authority_person_login_grants") &&
+            !name.startsWith("authority_oidc_login_attempts") &&
+            !name.startsWith("authority_oidc_identity_bindings") &&
+            name !== "authority_memberships_revoke_person_session_families",
+        );
+        expect(
+          identityObjectNames(baseline).filter(
+            (name) =>
+              !name.startsWith("authority_person_login_grants") &&
+              !name.startsWith("authority_oidc_login_attempts") &&
+              !name.startsWith("authority_oidc_identity_bindings") &&
+              name !== "authority_memberships_revoke_person_session_families",
+          ),
+        ).toEqual(names);
         expect(namedObjects(baseline, names)).toEqual(
           namedObjects(legacy, names),
         );
-        for (const table of IDENTITY_TABLES) {
+        for (const table of SETTLED_PERSON_SESSION_TABLES) {
           expect(baseline.pragma(`table_xinfo(${table})`)).toEqual(
             legacy.pragma(`table_xinfo(${table})`),
           );
@@ -469,8 +487,11 @@ describe("private Authority new-lineage baseline v1", () => {
     expect(sql).not.toMatch(
       /installation|enrollment|lease|internal[_ -]?live/i,
     );
+    expect(sql).toContain(
+      "owner_observed_at = strftime('%Y-%m-%dT%H:%M:%fZ', owner_observed_at)",
+    );
     expect(authorityBaselineSha256V1()).toBe(
-      "sha256:cfa8f3f9922652d05b22accd51e78bf0c0654ad32c96d6b123e2853d4670f256",
+      "sha256:0742b4e106e26773cda0c0fd99115818fcd0022eb6d2b7d5c0b3eac61b397e0f",
     );
   });
 

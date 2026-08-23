@@ -11,6 +11,8 @@ import { openAuthorityDatabase } from "../adapters/persistence/sqlite/open-unmig
 import {
   createGranolaLiveOnlyCursor,
   granolaLiveOnlyCutoff,
+  observeGranolaRecordOwner,
+  type GranolaRecordOwnerObservationClient,
 } from "../processing/adapters/meeting-sources/granola/index.js";
 import { llmProcessingVersion } from "../processing/adapters/decision-processors/llm/llm-decision-processor.js";
 import type { AdapterConfig } from "../processing/core/contracts/adapter.js";
@@ -56,6 +58,13 @@ export interface AdmitCleanGranolaSourceInput {
   readonly granola_owner_email_reference: string;
   /** A canonical `file:` reference to a current-user 0600 LLM credential. */
   readonly llm_credential_reference: string;
+  /**
+   * Metadata-only provider seam. It exposes listNotes only, so admission
+   * cannot fetch provider content while proving the configured owner exists.
+   */
+  readonly create_granola_record_owner_client: (
+    credential: string,
+  ) => GranolaRecordOwnerObservationClient;
   /** Test seam. An exact retry never evaluates it. */
   readonly now?: () => string;
 }
@@ -94,6 +103,8 @@ interface ExistingAdmission {
   readonly cursor: string;
   readonly cutoff_at: string;
   readonly owner_email_sha256: Sha256Digest;
+  readonly owner_observation_assurance: "provider_record_owner_observed";
+  readonly owner_observed_at: string;
   readonly processor_instance_id: string;
   readonly processor_adapter_version: string;
   readonly processor_configuration_sha256: Sha256Digest;
@@ -164,13 +175,39 @@ function result(
 
 /**
  * Creates the one fresh, live-only source pipeline while Authority is stopped.
- * It makes no Granola, LLM, Slack, or HTTP call. Credential bytes are read
- * only to prove their private-file contracts and are never persisted, logged,
- * or returned.
+ * It makes one bounded, metadata-only Granola list request before its first
+ * admission. Credential bytes are read only to prove their private-file
+ * contracts and are never persisted, logged, or returned.
  */
-export function admitCleanGranolaSource(
+export async function admitCleanGranolaSource(
   input: AdmitCleanGranolaSourceInput,
-): CleanGranolaSourceAdmissionResult {
+): Promise<CleanGranolaSourceAdmissionResult> {
+  const granolaCredential = readPrivateAuthorityGranolaOrganizationCredential(
+    input.granola_credential_reference,
+  );
+  const ownerEmail = readPrivateAuthorityGranolaOwnerEmail(
+    input.granola_owner_email_reference,
+  );
+  return admitCleanGranolaSourceAfterOwnerPreflight(
+    input,
+    granolaCredential,
+    ownerEmail,
+    false,
+  );
+}
+
+/**
+ * The second entry is private so a caller cannot claim that provider ownership
+ * was observed. It rechecks every database admission fact after the bounded
+ * network observation, without holding SQLite's write transaction open while
+ * waiting on the provider.
+ */
+async function admitCleanGranolaSourceAfterOwnerPreflight(
+  input: AdmitCleanGranolaSourceInput,
+  granolaCredential: string,
+  ownerEmail: string,
+  ownerPreflightComplete: boolean,
+): Promise<CleanGranolaSourceAdmissionResult> {
   if (
     !INSTANCE_ID.test(input.source_instance_id) ||
     !INSTANCE_ID.test(input.processor_instance_id)
@@ -181,12 +218,9 @@ export function admitCleanGranolaSource(
   }
 
   const lineage = verifyCleanStateLineage(input.state_directory);
-  // Intentionally discard every private value after local validation.
+  // Private values are never persisted, logged, or returned.
   const ownerEmailSha256 = personLoginGrantExpectedEmailSha256(
-    readPrivateAuthorityGranolaOwnerEmail(input.granola_owner_email_reference),
-  );
-  void readPrivateAuthorityGranolaOrganizationCredential(
-    input.granola_credential_reference,
+    ownerEmail,
   );
   void readPrivateAuthorityCredential(input.llm_credential_reference);
   const sourceCredentialReferenceSha256 = privateReferenceSha256(
@@ -269,6 +303,7 @@ export function admitCleanGranolaSource(
           instance_id: input.source_instance_id,
           normalizer_version: CLEAN_GRANOLA_SOURCE_ADAPTER_VERSION_V1,
           owner_email_sha256: ownerEmailSha256,
+          owner_observation_assurance: "provider_record_owner_observed",
           credential_reference_sha256: sourceCredentialReferenceSha256,
         },
         processor: {
@@ -283,6 +318,7 @@ export function admitCleanGranolaSource(
         .prepare(
           `SELECT organization_id, principal_id, membership_id, membership_type,
                   source_instance_id, cursor, cutoff_at, owner_email_sha256,
+                  owner_observation_assurance, owner_observed_at,
                   processor_instance_id, processor_adapter_version,
                   processor_configuration_sha256,
                   semantic_input_sha256
@@ -300,10 +336,23 @@ export function admitCleanGranolaSource(
         return result("already_admitted", existing);
       }
 
-      const admittedAt = (input.now ?? (() => new Date().toISOString()))();
-      assertCanonicalUtcMillis(admittedAt);
-      const cursor = createGranolaLiveOnlyCursor(admittedAt);
-      if (granolaLiveOnlyCutoff(cursor) !== admittedAt) {
+      if (!ownerPreflightComplete) {
+        database.exec("COMMIT");
+        await observeGranolaRecordOwner(
+          input.create_granola_record_owner_client(granolaCredential),
+          ownerEmail,
+        );
+        return admitCleanGranolaSourceAfterOwnerPreflight(
+          input,
+          granolaCredential,
+          ownerEmail,
+          true,
+        );
+      }
+      const ownerObservedAt = (input.now ?? (() => new Date().toISOString()))();
+      assertCanonicalUtcMillis(ownerObservedAt);
+      const cursor = createGranolaLiveOnlyCursor(ownerObservedAt);
+      if (granolaLiveOnlyCutoff(cursor) !== ownerObservedAt) {
         throw new Error(
           "clean Granola source admission could not establish its live-only cutoff",
         );
@@ -315,8 +364,10 @@ export function admitCleanGranolaSource(
         membership_type: "owner",
         source_instance_id: input.source_instance_id,
         cursor,
-        cutoff_at: admittedAt,
+        cutoff_at: ownerObservedAt,
         owner_email_sha256: ownerEmailSha256,
+        owner_observation_assurance: "provider_record_owner_observed",
+        owner_observed_at: ownerObservedAt,
         processor_instance_id: input.processor_instance_id,
         processor_adapter_version: CLEAN_LLM_PROCESSOR_RUNTIME_VERSION_V1,
         processor_configuration_sha256: configurationSha256,
@@ -328,12 +379,13 @@ export function admitCleanGranolaSource(
              singleton, organization_id, principal_id, membership_id,
              membership_type, source_instance_id, source_adapter_version,
              normalizer_version, owner_email_sha256,
+             owner_observation_assurance, owner_observed_at,
              source_credential_reference_sha256, cursor, cutoff_at,
              processor_instance_id, processor_adapter_version,
              processor_configuration_sha256,
              processor_credential_reference_sha256, semantic_input_sha256,
              admitted_at
-           ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+           ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         )
         .run(
           1,
@@ -345,6 +397,8 @@ export function admitCleanGranolaSource(
           CLEAN_GRANOLA_SOURCE_ADAPTER_VERSION_V1,
           CLEAN_GRANOLA_SOURCE_ADAPTER_VERSION_V1,
           admission.owner_email_sha256,
+          admission.owner_observation_assurance,
+          admission.owner_observed_at,
           sourceCredentialReferenceSha256,
           admission.cursor,
           admission.cutoff_at,
@@ -353,7 +407,7 @@ export function admitCleanGranolaSource(
           admission.processor_configuration_sha256,
           processorCredentialReferenceSha256,
           admission.semantic_input_sha256,
-          admittedAt,
+          ownerObservedAt,
         );
       database.exec("COMMIT");
       return result("admitted", admission);

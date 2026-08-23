@@ -341,9 +341,22 @@ export type OrganizationPersonOidcBeginRequestV2 =
   | {
       kind: 'identity_bootstrap';
       login_grant: string;
+      /**
+       * Optional one-shot local receiver. The Authority holds this exact
+       * binding process-locally by OIDC state and posts the resulting session
+       * there only after a verified callback.
+       */
+      loopback_handoff?: {
+        url: string;
+        token: string;
+      };
     }
   | {
       kind: 'existing_identity_login';
+      loopback_handoff?: {
+        url: string;
+        token: string;
+      };
     };
 
 export interface OrganizationPersonOidcBeginResponseV2 {

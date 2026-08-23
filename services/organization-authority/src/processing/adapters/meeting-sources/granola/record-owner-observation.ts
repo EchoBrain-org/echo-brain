@@ -1,7 +1,17 @@
 import {
   DEFAULT_GRANOLA_PAGE_SIZE,
-  type GranolaApiClient,
+  type GranolaListParams,
+  type GranolaListResponse,
 } from "./granola-api-client.js";
+
+/**
+ * The ownership preflight is intentionally unable to fetch a note detail.
+ * Keeping this narrower than the source client's full interface prevents a
+ * future preflight change from accidentally admitting provider content.
+ */
+export interface GranolaRecordOwnerObservationClient {
+  listNotes(params: GranolaListParams): Promise<GranolaListResponse>;
+}
 
 export interface GranolaRecordOwnerObservation {
   provider: "granola";
@@ -58,7 +68,7 @@ export function granolaRecordOwnerMatches(
  * claim that the API credential itself belongs to that person.
  */
 export async function observeGranolaRecordOwner(
-  client: GranolaApiClient,
+  client: GranolaRecordOwnerObservationClient,
   ownerEmail: string,
 ): Promise<GranolaRecordOwnerObservation> {
   if (!isCanonicalGranolaOwnerEmail(ownerEmail)) {
@@ -75,7 +85,7 @@ export async function observeGranolaRecordOwner(
   );
   if (!ownerObserved) {
     throw new Error(
-      `Granola did not report an accessible note owned by ${ownerEmail} in the bounded observation page`,
+      "Granola did not report an accessible note owned by the configured owner in the bounded observation page",
     );
   }
   return {

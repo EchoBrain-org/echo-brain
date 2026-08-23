@@ -31,6 +31,14 @@ export interface VerifiedSlackHuman {
 export interface VerifiedSlackChannel {
   team_id: string;
   channel_id: string;
+  /** The exact selected channel was verified as a public organization channel. */
+  is_public_organization_channel?: boolean;
+  /** The selected channel was not archived, frozen, read-only, or thread-only. */
+  is_active?: boolean;
+  /** The bot was observed as a member of that exact selected channel. */
+  bot_membership_verified?: boolean;
+  /** Slack accepted the bot's channel inspection with the supplied token. */
+  bot_access_verified?: boolean;
   verification_evidence_sha256: `sha256:${string}`;
 }
 

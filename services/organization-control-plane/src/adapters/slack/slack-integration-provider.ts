@@ -650,6 +650,10 @@ export class SlackWebIntegrationProvider implements SlackIntegrationProvider {
     return Object.freeze({
       channel_id: observedChannelId,
       team_id: contextTeamId,
+      is_public_organization_channel: true,
+      is_active: true,
+      bot_membership_verified: true,
+      bot_access_verified: true,
       verification_evidence_sha256: canonicalSha256({
         method: 'slack_conversations_info',
         channel_id: observedChannelId,

@@ -342,6 +342,7 @@ export interface SealedPkceVerifier {
   sealed_bytes: Uint8Array;
 }
 
+
 export type OidcLoginAttemptTerminalOutcome =
   | 'succeeded'
   | 'denied'
@@ -407,11 +408,13 @@ export interface StoredPersonLoginGrant
   issued_at: string;
   expires_at: string;
   consumed_at: string | null;
+  /** Pending grants can be invalidated by a safe reissue or membership revoke. */
+  invalidated_at: string | null;
 }
 
 export type NewPersonLoginGrant = Omit<
   StoredPersonLoginGrant,
-  'issued_at' | 'consumed_at'
+  'issued_at' | 'consumed_at' | 'invalidated_at'
 >;
 
 export interface StoredPersonSessionFamily
@@ -652,6 +655,11 @@ export interface AuthorityReadTransaction {
   ): StoredAuthorityAuditEntry[];
   adminCounts(now: string): AuthorityAdminCounts;
   oidcIdentityBinding(
+    issuer: string,
+    subject: string,
+  ): StoredOidcIdentityBinding | undefined;
+  /** Authentication-only lookup: never resolves a revoked historical tenure. */
+  activeOidcIdentityBinding(
     issuer: string,
     subject: string,
   ): StoredOidcIdentityBinding | undefined;

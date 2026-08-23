@@ -72,8 +72,10 @@ function database(): Database.Database {
     .run(ADMITTED_AT);
   value
     .prepare(
-      `INSERT INTO authority_memberships
-       VALUES ('mem_test', 'org_test', 'prn_test', 'owner', 'active', ?, NULL, NULL)`,
+      `INSERT INTO authority_memberships (
+         membership_id, organization_id, principal_id, membership_type, status,
+         provisioned_at, revoked_at, revocation_reason, employee_email_sha256
+       ) VALUES ('mem_test', 'org_test', 'prn_test', 'owner', 'active', ?, NULL, NULL, NULL)`,
     )
     .run(ADMITTED_AT);
   value
@@ -82,17 +84,20 @@ function database(): Database.Database {
          singleton, organization_id, principal_id, membership_id,
          membership_type, source_instance_id, source_adapter_version,
          normalizer_version, owner_email_sha256,
+         owner_observation_assurance, owner_observed_at,
          source_credential_reference_sha256, cursor, cutoff_at,
          processor_instance_id, processor_adapter_version,
          processor_configuration_sha256,
          processor_credential_reference_sha256, semantic_input_sha256,
          admitted_at
        ) VALUES (1, 'org_test', 'prn_test', 'mem_test', 'owner',
-                 'founder-granola', '2.2.0', '2.2.0', ?, ?, ?, ?,
+                 'founder-granola', '2.2.0', '2.2.0', ?,
+                 'provider_record_owner_observed', ?, ?, ?, ?,
                  'founder-llm', ?, ?, ?, ?, ?)`,
     )
     .run(
       SHA,
+      ADMITTED_AT,
       SHA,
       sourceCursor,
       ADMITTED_AT,

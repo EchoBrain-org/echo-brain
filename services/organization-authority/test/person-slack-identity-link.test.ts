@@ -151,6 +151,10 @@ function fixture(options: {
       return {
         channel_id: 'C123ABC',
         team_id: 'T123ABC',
+        is_public_organization_channel: true,
+        is_active: true,
+        bot_membership_verified: true,
+        bot_access_verified: true,
         verification_evidence_sha256: canonicalSha256('channel'),
       };
     }),

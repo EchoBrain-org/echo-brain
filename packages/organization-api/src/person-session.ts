@@ -14,9 +14,48 @@ import {
 } from './validation.js';
 
 const OPAQUE_SECRET_PATTERN = /^[A-Za-z0-9_-]{43}$/;
+const LOOPBACK_HANDOFF_PATH_PATTERN = /^\/[A-Za-z0-9_-]{43}$/;
 
 function assertOpaqueSecret(value: unknown, label: string): void {
   assertPatternString(value, label, 43, OPAQUE_SECRET_PATTERN);
+}
+
+function assertLoopbackHandoff(value: unknown, label: string): void {
+  const record = asRecord(value, label);
+  assertExactKeys(record, ['token', 'url'], label);
+  assertOpaqueSecret(record.token, `${label} token`);
+  assertPatternString(record.url, `${label} url`, 512, /^http:\/\/[^\s]+$/);
+  const Url = (globalThis as unknown as {
+    URL?: new (input: string) => {
+      protocol: string;
+      hostname: string;
+      port: string;
+      username: string;
+      password: string;
+      pathname: string;
+      search: string;
+      hash: string;
+    };
+  }).URL;
+  if (Url === undefined) fail(`${label} url is invalid`);
+  let url: InstanceType<typeof Url>;
+  try {
+    url = new Url(record.url as string);
+  } catch {
+    fail(`${label} url is invalid`);
+  }
+  if (
+    url.protocol !== 'http:' ||
+    url.hostname !== '127.0.0.1' ||
+    url.port === '' ||
+    url.username !== '' ||
+    url.password !== '' ||
+    !LOOPBACK_HANDOFF_PATH_PATTERN.test(url.pathname) ||
+    url.search !== '' ||
+    url.hash !== ''
+  ) {
+    fail(`${label} url is invalid`);
+  }
 }
 
 export function validateOrganizationPersonOidcBeginRequest(
@@ -25,14 +64,26 @@ export function validateOrganizationPersonOidcBeginRequest(
   const label = 'Person OIDC begin request';
   const record = asRecord(value, label);
   if (record.kind === 'existing_identity_login') {
-    assertExactKeys(record, ['kind'], label);
+    const keys = record.loopback_handoff === undefined
+      ? ['kind']
+      : ['kind', 'loopback_handoff'];
+    assertExactKeys(record, keys, label);
+    if (record.loopback_handoff !== undefined) {
+      assertLoopbackHandoff(record.loopback_handoff, `${label} loopback_handoff`);
+    }
     return record as unknown as OrganizationPersonOidcBeginRequestV2;
   }
-  assertExactKeys(record, ['kind', 'login_grant'], label);
+  const keys = record.loopback_handoff === undefined
+    ? ['kind', 'login_grant']
+    : ['kind', 'login_grant', 'loopback_handoff'];
+  assertExactKeys(record, keys, label);
   if (record.kind !== 'identity_bootstrap') {
     fail(`${label} kind is unsupported`);
   }
   assertOpaqueSecret(record.login_grant, `${label} login_grant`);
+  if (record.loopback_handoff !== undefined) {
+    assertLoopbackHandoff(record.loopback_handoff, `${label} loopback_handoff`);
+  }
   return record as unknown as OrganizationPersonOidcBeginRequestV2;
 }
 
