@@ -11,6 +11,7 @@ RELEASE_DIR="$DATA_DIR/release"
 ENV_FILE="$DEPLOY_DIR/.env.clean-v1"
 SETUP_FILE="$PRIVATE_DIR/onboard-clean-v1.conf"
 RELEASE_FILE="$RELEASE_DIR/current.clean-v1.json"
+CANDIDATE_FILE="$RELEASE_DIR/candidate.clean-v1.json"
 RELEASE_TOOL="$DEPLOY_DIR/../release/clean-v1-release.py"
 if [[ -f "$DEPLOY_DIR/release/clean-v1-release.py" ]]; then
   RELEASE_TOOL="$DEPLOY_DIR/release/clean-v1-release.py"
@@ -178,8 +179,16 @@ require_image_present() {
 }
 
 founder_status() {
-  compose_clean run --rm --no-deps --entrypoint node authority \
+  compose_clean run --rm --no-deps --pull never --entrypoint node authority \
     "$FOUNDER_MAIN" status --state-dir /echo-clean/state
+}
+
+staged_candidate_present() {
+  [[ -e "$CANDIDATE_FILE" || -L "$CANDIDATE_FILE" ]] || return 1
+  [[ -f "$CANDIDATE_FILE" && ! -L "$CANDIDATE_FILE" ]] || \
+    fail 'staged clean-v1 candidate record is unsafe'
+  python3 "$RELEASE_TOOL" validate "$CANDIDATE_FILE" >/dev/null || \
+    fail 'staged clean-v1 candidate record is not canonical'
 }
 
 next_step_from_status() {
@@ -198,7 +207,36 @@ start_runtime() {
 }
 
 running_authority() {
-  [[ -n "$(compose_clean ps --status running -q authority)" ]]
+  local id
+  id="$(compose_clean ps -q authority 2>/dev/null)" || return 1
+  [[ -n "$id" ]] || return 1
+  [[ "$(docker inspect --format '{{.State.Running}}' "$id" 2>/dev/null)" == true ]]
+}
+
+healthy_authority() {
+  local id
+  id="$(compose_clean ps -q authority 2>/dev/null)" || return 1
+  [[ -n "$id" ]] || return 1
+  [[ "$(docker inspect --format '{{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}' "$id" 2>/dev/null)" == healthy ]]
+}
+
+authority_uses_accepted_image() {
+  local id expected_image expected_source running_image_id
+  id="$(compose_clean ps -q authority 2>/dev/null)" || return 1
+  [[ -n "$id" ]] || return 1
+  expected_image="$(release_field authority-image)"
+  expected_source="$(release_field source-sha)"
+  running_image_id="$(docker inspect --format '{{.Image}}' "$id" 2>/dev/null)" || return 1
+  [[ "$running_image_id" =~ ^sha256:[0-9a-f]{64}$ ]] || return 1
+  docker image inspect --format '{{range .RepoDigests}}{{println .}}{{end}}' \
+    "$running_image_id" 2>/dev/null | grep -Fqx "$expected_image" || return 1
+  [[ "$(docker image inspect --format '{{index .Config.Labels "org.opencontainers.image.revision"}}' "$running_image_id" 2>/dev/null)" == "$expected_source" ]]
+}
+
+terminal_green() {
+  local status_json="$1"
+  [[ "$(next_step_from_status "$status_json")" == complete ]] || return 1
+  running_authority && healthy_authority && authority_uses_accepted_image
 }
 
 print_status() {
@@ -208,7 +246,29 @@ print_status() {
   else
     printf 'authority_running=false\n'
   fi
+  if healthy_authority; then
+    printf 'authority_healthy=true\n'
+  else
+    printf 'authority_healthy=false\n'
+  fi
+  if authority_uses_accepted_image; then
+    printf 'authority_exact_accepted_image=true\n'
+  else
+    printf 'authority_exact_accepted_image=false\n'
+  fi
+  if terminal_green "$status_json"; then
+    printf 'terminal_green=true\n'
+  else
+    printf 'terminal_green=false\n'
+  fi
   printf 'status_json=%s\n' "$status_json"
+}
+
+print_staged_candidate_status() {
+  printf 'release_state=staged_candidate\n'
+  printf 'authority_exact_accepted_image=false\n'
+  printf 'terminal_green=false\n'
+  printf 'next_action=Run update-clean-v1.sh status, then promote the candidate or roll it back.\n'
 }
 
 prepare() {
@@ -359,6 +419,9 @@ finalize() {
 resume() {
   require_host_prerequisites
   require_prepared
+  if staged_candidate_present; then
+    fail 'a candidate release is staged; use update-clean-v1.sh status, then promote or roll it back before resuming accepted onboarding'
+  fi
   ensure_image
   local status_json step loops=0
   while (( loops < 5 )); do
@@ -399,8 +462,17 @@ resume() {
         ;;
       ready_to_start)
         start_runtime
-        printf 'CANARY: create one new Granola note with a unique marker; approve its Slack card; then run echo-brain person records --limit 20 and echo-brain person records --query <marker>. Reject a second card and confirm it appears in neither result.\n'
+        printf 'CANARY: create one new Granola note with a unique marker; approve its Slack card; then run echo-brain person records --limit 20 and echo-brain person records --query <marker>. Rerun onboard-clean-v1.sh resume, then onboard-clean-v1.sh status; terminal green requires one positive Layer 1 read and one positive Layer 2 search after the approved record and current generation.\n'
         print_status "$(founder_status)"
+        return
+        ;;
+      complete)
+        start_runtime
+        status_json="$(founder_status)"
+        terminal_green "$status_json" || \
+          fail 'durable canary evidence is complete, but Authority is not running, healthy, and on the accepted image'
+        printf 'onboarding_complete=true\n'
+        print_status "$status_json"
         return
         ;;
       recover_setup_plan)
@@ -416,8 +488,14 @@ resume() {
 status() {
   require_host_prerequisites
   require_prepared
+  if staged_candidate_present; then
+    print_staged_candidate_status
+    return
+  fi
   require_image_present
-  print_status "$(founder_status)"
+  local status_json
+  status_json="$(founder_status)"
+  print_status "$status_json"
 }
 
 case "${1:-}" in

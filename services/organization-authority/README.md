@@ -222,17 +222,20 @@ startup, the runtime reconciles Layer 2 once, then each cycle recovers pending
 V4 appends, polls the admitted live-only source, finalizes approvals, appends
 approved records, and reconciles Layer 2 again.
 
-Create a new post-finalization Granola note, approve its Slack card, then check
-both read paths:
+Create one new post-finalization Granola note with a unique marker, approve its
+Slack card, then check both read paths:
 
 ```sh
 echo-brain person records --limit 20
 echo-brain person records --query 'known marker'
 ```
 
-Reject a second card and confirm it appears in neither result. Until this
-canary is complete, stopped-state `status` accurately remains
-`runtime_observation: "not_observed"` and `canary_status: "not_complete"`.
+Rerun `echo-organization-authority-clean-founder resume --state-dir
+/absolute/clean-state`, then `status`. The one-note canary is complete only
+when durable state proves source progress, an approved record, an exact-head
+Layer 2 generation, and positive owner Layer 1 and Layer 2 reads after that
+head and generation. The status output contains only boolean or enum evidence;
+it never prints record, reader, query, or timestamp data.
 
 ## Person reads and permissions
 

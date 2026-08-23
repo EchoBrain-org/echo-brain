@@ -37,6 +37,9 @@ compatibility machinery before customer state exists.
 - A server application update retains the previous image digest, pulls and
   starts the new digest, checks setup/runtime status plus a bounded canary, and
   may roll back only to a release in the same baseline compatibility class.
+- While a server candidate is staged, the founder onboarding wrapper reports a
+  staged handoff and never treats that candidate as the accepted release; the
+  update command alone can promote or roll it back.
 - An employee update is an exact-checksum reinstall of the small packaged
   Person client. V1 adds version/status visibility, not a background updater,
   MDM integration, or fleet service.
@@ -129,10 +132,13 @@ admits every eligible post-cutoff note owned by the configured founder. One
 exact folder name may classify the admitted note's read audience as described
 below. Existing notes remain outside the cutoff.
 
-The canary proves that a card can be approved and the resulting record can be
-listed and searched. Duplicate or presentation anomalies are reported as
-product warnings and can be fixed by an image update; they are not a reason to
-rebuild the onboarding architecture.
+The one-note canary proves source progress, an approved record, and that the
+owner can list and search the exact current Layer 2 generation after the
+record is appended and published. Terminal status exposes only boolean or enum
+evidence; wrapper completion also requires a healthy Authority on the exact
+accepted image. Duplicate or presentation anomalies are reported as product
+warnings and can be fixed by an image update; they are not a reason to rebuild
+the onboarding architecture.
 
 ### Granola record visibility marker
 
@@ -252,8 +258,9 @@ The sprint is complete when all of the following pass against one candidate:
 2. The setup status contains no secret bytes, grants, bearers, note content, or
    model content and gives one actionable next step for every incomplete stage.
 3. One real organization rehearsal deploys the current EC2/Compose target,
-   completes the post-cutoff Granola-to-Slack canary, approves one record, and
-   reads it through both Layer 1 listing and Layer 2 search.
+   completes the one-note post-cutoff Granola-to-Slack canary, approves one
+   record, reads it through both Layer 1 listing and Layer 2 search, and reruns
+   `resume`/`status` to a terminal green result.
 4. The owner creates an employee invitation without generated-ID handoffs. A
    clean employee machine installs the packaged client, completes browser OIDC,
    and obtains its session without pasting raw callback JSON. It holds only

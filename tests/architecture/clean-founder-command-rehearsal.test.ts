@@ -353,22 +353,18 @@ describe("clean founder command rehearsal", () => {
         { stdout: status.write, stderr: status.write, read_stdin: async () => "" },
       ),
     ).toBe(0);
-    expect(oneJson<Record<string, unknown>>(status)).toMatchObject({
-      slack_verification: {
-        workspace_id: "T12345678",
-        enterprise_id: null,
-        app_id: "A12345678",
-        bot_id: "B12345678",
-        bot_user_id: "U12345678",
-        approval_channel_id: "C12345678",
-        required_scopes: ["channels:history", "channels:read", "chat:write", "reactions:read", "users:read"],
-        selected_channel_public: true,
-        selected_channel_active: true,
-        bot_membership_verified: true,
-        bot_access_verified: true,
-        verified_at: "2026-08-22T12:00:00.000Z",
-      },
+    const safeStatus = oneJson<Record<string, unknown>>(status);
+    expect(safeStatus).toMatchObject({
+      slack_connected: true,
+      source_progress_observed: false,
+      approved_record_present: false,
+      active_generation_current: false,
+      owner_layer1_read_after_head: false,
+      owner_layer2_read_after_generation: false,
     });
+    expect(safeStatus).not.toHaveProperty("slack_verification");
+    expect(JSON.stringify(safeStatus)).not.toContain("T12345678");
+    expect(JSON.stringify(safeStatus)).not.toContain("2026-08-22T12:00:00.000Z");
     const resumed = commandOutput();
     expect(
       await runCleanFounderCli(

@@ -85,8 +85,10 @@ path and command printed by `resume`. Install the exact Person client from the
 same release record first, using [the release installer](../release/README.md).
 The received invitation must be a current-user mode-`0600` file inside a
 mode-`0700` directory. Do not paste invitation contents into chat or a terminal.
-The wrapper also prints the bounded post-finalization Granola, Slack, list, and
-search canary.
+The wrapper also prints the bounded one-note post-finalization Granola, Slack,
+list, and search canary. After approving that card and completing both reads,
+rerun `resume`, then `status`: a terminal green result additionally requires a
+running healthy Authority container on the exact accepted image.
 
 Use this Authority-state read-only progress check after the accepted image is
 present locally:
@@ -95,10 +97,16 @@ present locally:
 ./onboard-clean-v1.sh status
 ```
 
-It creates one transient no-dependency local container, prints
-`authority_running` and the safe clean-founder status JSON, and never pulls an
+It creates one transient no-dependency local container, prints safe running,
+health, exact-image, and clean-founder status booleans, and never pulls an
 image implicitly. If the image is absent, use `resume`, whose pull is explicit.
-Re-running `resume` is the recovery path for a stopped or interrupted stage.
+Re-running `resume` is also idempotent after terminal completion.
+
+This wrapper follows the accepted release only. While
+`update-clean-v1.sh stage` has a candidate record, `status` reports a staged
+handoff with `terminal_green=false` and `resume` refuses to start or act on the
+candidate. Use `update-clean-v1.sh status`, then promote or roll back that
+candidate before returning to accepted-onboarding commands.
 
 ## Release and recovery
 

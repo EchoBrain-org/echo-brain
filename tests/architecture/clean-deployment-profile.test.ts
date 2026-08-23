@@ -11,7 +11,7 @@ import {
   symlinkSync,
   writeFileSync,
 } from "node:fs";
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
 import { join, resolve } from "node:path";
 import { tmpdir } from "node:os";
 import { describe, expect, it } from "vitest";
@@ -21,6 +21,108 @@ const DEPLOYMENT = "deploy/organization-authority";
 
 function deploymentFile(name: string): string {
   return readFileSync(resolve(REPO, DEPLOYMENT, name), "utf8");
+}
+
+function preparedStatusFixture() {
+  const root = mkdtempSync(join(tmpdir(), "echo-clean-status-"));
+  const deploy = join(root, "deploy", "organization-authority");
+  const release = join(deploy, "release");
+  const privateDir = join(deploy, "clean-data", "private");
+  const releaseDir = join(deploy, "clean-data", "release");
+  const bin = join(root, "bin");
+  const calls = join(root, "docker-calls");
+  const image = "123456789012.dkr.ecr.us-west-2.amazonaws.com/echo-brain/authority@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+  const source = "c".repeat(40);
+  mkdirSync(release, { recursive: true });
+  mkdirSync(privateDir, { recursive: true });
+  mkdirSync(releaseDir, { recursive: true });
+  mkdirSync(bin, { recursive: true });
+  for (const file of [
+    "onboard-clean-v1.sh",
+    "compose.clean-v1.yaml",
+    "compose.clean-v1.ec2.yaml",
+  ]) {
+    copyFileSync(resolve(REPO, DEPLOYMENT, file), join(deploy, file));
+  }
+  copyFileSync(
+    resolve(REPO, "deploy/release/clean-v1-release.py"),
+    join(release, "clean-v1-release.py"),
+  );
+  chmodSync(join(deploy, "onboard-clean-v1.sh"), 0o755);
+  const record = `${JSON.stringify({
+    authority_image: { reference: image },
+    baseline_compatibility_class: "clean-v1",
+    kind: "echo-clean-v1-release",
+    person_client: {
+      artifact_sha256: "b".repeat(64),
+      artifact_url: "https://downloads.example/echo-brain-person-client.tgz",
+      package: "@echo-brain/person-client",
+      version: "0.1.0-internal.1",
+    },
+    release_id: "clean-v1-status-test",
+    released_at: "2026-08-23T00:00:00Z",
+    schema_version: 1,
+    source_sha: source,
+  })}\n`;
+  writeFileSync(join(releaseDir, "current.clean-v1.json"), record);
+  writeFileSync(
+    join(deploy, ".env.clean-v1"),
+    `ECHO_CLEAN_AUTHORITY_IMAGE=${image}\n`,
+  );
+  for (const name of [
+    "onboard-clean-v1.conf",
+    "oidc-config.json",
+    "oidc-client-secret",
+    "slack-bot-token",
+    "granola-credential-source",
+    "granola-owner-email",
+    "llm-credential-source",
+  ]) {
+    writeFileSync(join(privateDir, name), "fixture");
+  }
+  const fakeDocker = join(bin, "docker");
+  writeFileSync(
+    fakeDocker,
+    `#!/usr/bin/env bash
+set -eu
+printf '%s\\n' "$*" >> ${JSON.stringify(calls)}
+if [[ "$1" == compose && "$2" == version ]]; then exit 0; fi
+if [[ "$1" == compose ]]; then
+  case " $* " in
+    *" run "*) printf '%s\\n' '{"next_step":"complete"}'; exit 0 ;;
+    *" ps -q authority "*) printf '%s\\n' fake-container; exit 0 ;;
+  esac
+  exit 0
+fi
+if [[ "$1" == image && "$2" == inspect ]]; then
+  if [[ "$*" == *RepoDigests* ]]; then printf '%s\\n' "$ECHO_FAKE_REPO_DIGEST"; exit 0; fi
+  if [[ "$*" == *org.opencontainers.image.revision* ]]; then printf '%s\\n' "$ECHO_FAKE_SOURCE"; exit 0; fi
+  printf '%s\\n' sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
+  exit 0
+fi
+if [[ "$1" == inspect ]]; then
+  if [[ "$*" == *.State.Running* ]]; then printf '%s\\n' "$ECHO_FAKE_RUNNING"; exit 0; fi
+  if [[ "$*" == *.State.Health* ]]; then printf '%s\\n' "$ECHO_FAKE_HEALTH"; exit 0; fi
+  if [[ "$*" == *.Image* ]]; then printf '%s\\n' sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb; exit 0; fi
+fi
+exit 1
+`,
+  );
+  chmodSync(fakeDocker, 0o755);
+  const run = (command: "status" | "resume", overrides: Record<string, string> = {}) =>
+    spawnSync("bash", [join(deploy, "onboard-clean-v1.sh"), command], {
+      encoding: "utf8",
+      env: {
+        ...process.env,
+        PATH: `${bin}:${process.env.PATH}`,
+        ECHO_FAKE_REPO_DIGEST: image,
+        ECHO_FAKE_SOURCE: source,
+        ECHO_FAKE_RUNNING: "true",
+        ECHO_FAKE_HEALTH: "healthy",
+        ...overrides,
+      },
+    });
+  return { root, releaseDir, calls, image, source, run };
 }
 
 describe("clean founder deployment profile", () => {
@@ -44,6 +146,13 @@ describe("clean founder deployment profile", () => {
     expect(source).toContain('"$FOUNDER_MAIN" resume --state-dir /echo-clean/state');
     expect(source).toContain("status_boolean \"$status_json\" slack_connected");
     expect(source).toContain("require_image_present");
+    expect(source).toContain("healthy_authority()");
+    expect(source).toContain("authority_uses_accepted_image()");
+    expect(source).toContain("terminal_green()");
+    expect(source).toContain("onboarding_complete=true");
+    expect(source).toContain("Rerun onboard-clean-v1.sh resume, then onboard-clean-v1.sh status");
+    expect(source).toContain("one new Granola note");
+    expect(source).not.toContain("Reject a second card");
     expect(source).toContain("founder-person-invitation.json");
     expect(source).toContain("replace-rehearsal --confirm-no-live-users");
     expect(source).toContain("--runtime-user <os-user>");
@@ -61,6 +170,59 @@ describe("clean founder deployment profile", () => {
     expect(source).not.toContain("--slack-bot-token ");
     expect(source).not.toContain("--granola-credential ");
     expect(source).not.toContain("--llm-credential ");
+  });
+
+  it("reports a complete canary safely when the Authority is stopped or drifted", () => {
+    const fixture = preparedStatusFixture();
+    try {
+      const stopped = fixture.run("status", { ECHO_FAKE_RUNNING: "false" });
+      expect(stopped.status).toBe(0);
+      expect(stopped.stdout).toContain("authority_running=false");
+      expect(stopped.stdout).toContain("terminal_green=false");
+      expect(readFileSync(fixture.calls, "utf8")).toContain("--pull never");
+      expect(readFileSync(fixture.calls, "utf8")).not.toMatch(/compose .* pull/);
+
+      const digestDrift = fixture.run("status", {
+        ECHO_FAKE_REPO_DIGEST:
+          "123456789012.dkr.ecr.us-west-2.amazonaws.com/echo-brain/authority@sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+      });
+      expect(digestDrift.status).toBe(0);
+      expect(digestDrift.stdout).toContain("authority_exact_accepted_image=false");
+      expect(digestDrift.stdout).toContain("terminal_green=false");
+
+      const sourceDrift = fixture.run("status", {
+        ECHO_FAKE_SOURCE: "d".repeat(40),
+      });
+      expect(sourceDrift.status).toBe(0);
+      expect(sourceDrift.stdout).toContain("authority_exact_accepted_image=false");
+      expect(sourceDrift.stdout).toContain("terminal_green=false");
+    } finally {
+      rmSync(fixture.root, { force: true, recursive: true });
+    }
+  });
+
+  it("hands a staged candidate to the update command without running it as accepted onboarding", () => {
+    const fixture = preparedStatusFixture();
+    try {
+      writeFileSync(
+        join(fixture.releaseDir, "candidate.clean-v1.json"),
+        readFileSync(join(fixture.releaseDir, "current.clean-v1.json")),
+      );
+      const status = fixture.run("status");
+      expect(status.status).toBe(0);
+      expect(status.stdout).toContain("release_state=staged_candidate");
+      expect(status.stdout).toContain("terminal_green=false");
+      expect(status.stdout).toContain("update-clean-v1.sh status");
+      expect(readFileSync(fixture.calls, "utf8")).not.toContain(" run ");
+      expect(readFileSync(fixture.calls, "utf8")).not.toContain(" pull ");
+
+      const resume = fixture.run("resume");
+      expect(resume.status).toBe(1);
+      expect(resume.stderr).toContain("a candidate release is staged");
+      expect(readFileSync(fixture.calls, "utf8")).not.toContain(" up ");
+    } finally {
+      rmSync(fixture.root, { force: true, recursive: true });
+    }
   });
 
   it("prepares offline without pulling and persists the fixed clean inputs", () => {

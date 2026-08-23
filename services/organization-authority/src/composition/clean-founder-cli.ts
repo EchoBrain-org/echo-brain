@@ -41,6 +41,7 @@ import {
   type CleanResetSeedV1,
 } from "./clean-reset-state.js";
 import { runCleanGranolaSourceCli } from "./clean-granola-source-cli.js";
+import { cleanReadableSearchRuntimeContractV1 } from "./clean-readable-search-runtime.js";
 import {
   assertCleanPersonAuthorityCallback,
   readCleanPersonOidcConfiguration,
@@ -195,6 +196,10 @@ export interface CleanFounderCliDependencies {
   readonly read_full_founder_status?: (
     manifest: CleanFounderOnboardingManifestV1,
   ) => FullFounderStatus;
+  /** Test seam only; production derives this from immutable state. */
+  readonly read_founder_canary_evidence?: (
+    manifest: CleanFounderOnboardingManifestV1,
+  ) => FounderCanaryEvidence;
   /** Test seam only; production derives these facts from durable state. */
   readonly read_setup_stage?: (
     manifest: CleanFounderOnboardingManifestV1,
@@ -950,13 +955,53 @@ interface FullFounderStatus {
   };
 }
 
+/**
+ * A deliberately non-descriptive proof that the one-note founder rehearsal
+ * reached the durable read boundary.  This is status output, so it must never
+ * reveal a record, reader, query, source cursor, or timestamp.
+ */
+interface FounderCanaryEvidence {
+  readonly source_progress_observed: boolean;
+  readonly approved_record_present: boolean;
+  readonly active_generation_current: boolean;
+  readonly owner_layer1_read_after_head: boolean;
+  readonly owner_layer2_read_after_generation: boolean;
+  readonly complete: boolean;
+}
+
+const EMPTY_FOUNDER_CANARY_EVIDENCE: FounderCanaryEvidence = Object.freeze({
+  source_progress_observed: false,
+  approved_record_present: false,
+  active_generation_current: false,
+  owner_layer1_read_after_head: false,
+  owner_layer2_read_after_generation: false,
+  complete: false,
+});
+
+interface CurrentRecordHead {
+  readonly position: number;
+  readonly record_sha256: string | null;
+  readonly receipt_issued_at: string | null;
+}
+
+interface CurrentGenerationPointer {
+  readonly organization_id: string;
+  readonly generation_id: string;
+  readonly manifest_sha256: string;
+  readonly retrieval_contract_sha256: string;
+  readonly record_head_position: number;
+  readonly record_head_hash: string | null;
+  readonly published_at: string;
+}
+
 type FounderSetupNextStep =
   | "resume_bootstrap"
   | "complete_founder_browser_login"
   | "complete_founder_slack_link"
   | "install_provider_credentials"
   | "run_finalize"
-  | "ready_to_start";
+  | "ready_to_start"
+  | "complete";
 
 function nextFounderSetupStep(input: {
   readonly genesis_published: boolean;
@@ -998,6 +1043,7 @@ function nextFounderSetupInstruction(step: FounderSetupNextStep): string {
     run_finalize: "Run the finalize command.",
     ready_to_start:
       "Start or restart the clean runtime, then complete the founder canary.",
+    complete: "Founder onboarding is complete.",
   }[step];
 }
 
@@ -1007,6 +1053,260 @@ function readFullFounderStatus(
 ): FullFounderStatus {
   return dependencies?.read_full_founder_status?.(manifest) ??
     fullFounderStatus(manifest);
+}
+
+function currentRecordHead(database: Database.Database): CurrentRecordHead {
+  const row = database
+    .prepare(
+      `SELECT position, record_sha256, receipt_issued_at
+         FROM organization_record_log
+        ORDER BY position DESC
+        LIMIT 1`,
+    )
+    .get() as
+    | {
+        readonly position: unknown;
+        readonly record_sha256: unknown;
+        readonly receipt_issued_at: unknown;
+      }
+    | undefined;
+  if (row === undefined) {
+    return Object.freeze({
+      position: 0,
+      record_sha256: null,
+      receipt_issued_at: null,
+    });
+  }
+  if (
+    !Number.isSafeInteger(row.position) ||
+    (typeof row.record_sha256 !== "string" && row.record_sha256 !== null) ||
+    typeof row.receipt_issued_at !== "string"
+  ) {
+    throw new Error("clean founder canary record head is invalid");
+  }
+  return Object.freeze({
+    position: row.position as number,
+    record_sha256: row.record_sha256,
+    receipt_issued_at: row.receipt_issued_at,
+  });
+}
+
+function activeGenerationPointer(
+  database: Database.Database,
+): CurrentGenerationPointer | null {
+  const row = database
+    .prepare(
+      `SELECT organization_id, generation_id, manifest_sha256,
+              retrieval_contract_sha256, record_head_position,
+              record_head_hash, published_at
+         FROM authority_readable_search_active_generation
+        WHERE singleton = 1`,
+    )
+    .get() as
+    | {
+        readonly organization_id: unknown;
+        readonly generation_id: unknown;
+        readonly manifest_sha256: unknown;
+        readonly retrieval_contract_sha256: unknown;
+        readonly record_head_position: unknown;
+        readonly record_head_hash: unknown;
+        readonly published_at: unknown;
+      }
+    | undefined;
+  if (row === undefined) return null;
+  if (
+    typeof row.organization_id !== "string" ||
+    typeof row.generation_id !== "string" ||
+    typeof row.manifest_sha256 !== "string" ||
+    typeof row.retrieval_contract_sha256 !== "string" ||
+    !Number.isSafeInteger(row.record_head_position) ||
+    (typeof row.record_head_hash !== "string" && row.record_head_hash !== null) ||
+    typeof row.published_at !== "string"
+  ) {
+    throw new Error("clean founder canary generation pointer is invalid");
+  }
+  return Object.freeze({
+    organization_id: row.organization_id,
+    generation_id: row.generation_id,
+    manifest_sha256: row.manifest_sha256,
+    retrieval_contract_sha256: row.retrieval_contract_sha256,
+    record_head_position: row.record_head_position as number,
+    record_head_hash: row.record_head_hash,
+    published_at: row.published_at,
+  });
+}
+
+function sameRecordHead(
+  left: CurrentRecordHead,
+  right: CurrentRecordHead,
+): boolean {
+  return (
+    left.position === right.position &&
+    left.record_sha256 === right.record_sha256 &&
+    left.receipt_issued_at === right.receipt_issued_at
+  );
+}
+
+function sameGenerationPointer(
+  left: CurrentGenerationPointer | null,
+  right: CurrentGenerationPointer | null,
+): boolean {
+  return (
+    left !== null &&
+    right !== null &&
+    left.organization_id === right.organization_id &&
+    left.generation_id === right.generation_id &&
+    left.manifest_sha256 === right.manifest_sha256 &&
+    left.retrieval_contract_sha256 === right.retrieval_contract_sha256 &&
+    left.record_head_position === right.record_head_position &&
+    left.record_head_hash === right.record_head_hash &&
+    left.published_at === right.published_at
+  );
+}
+
+function pointerMatchesHead(
+  pointer: CurrentGenerationPointer | null,
+  head: CurrentRecordHead,
+  organizationId: string,
+): pointer is CurrentGenerationPointer {
+  return (
+    pointer !== null &&
+    pointer.organization_id === organizationId &&
+    pointer.record_head_position === head.position &&
+    pointer.record_head_hash === head.record_sha256
+  );
+}
+
+function ownerReadAfter(
+  authority: Database.Database,
+  manifest: CleanFounderOnboardingManifestV1,
+  mode: "layer1" | "layer2",
+  after: string,
+): boolean {
+  return authority
+    .prepare(
+      `SELECT 1
+         FROM authority_person_read_decision_audit_v2
+        WHERE context_kind = 'record_read'
+          AND recorded_at > ?
+          AND json_extract(body_json, '$.read_mode') = ?
+          AND json_extract(body_json, '$.authority_id') = ?
+          AND json_extract(body_json, '$.organization_id') = ?
+          AND json_extract(body_json, '$.state_lineage_id') = ?
+          AND json_extract(body_json, '$.principal_id') = ?
+          AND json_extract(body_json, '$.membership_id') = ?
+          AND json_extract(body_json, '$.result_count') > 0
+        LIMIT 1`,
+    )
+    .get(
+      after,
+      mode,
+      manifest.authority_id,
+      manifest.organization_id,
+      manifest.state_lineage_id,
+      manifest.owner_principal_id,
+      manifest.owner_membership_id,
+    ) !== undefined;
+}
+
+/**
+ * Read only durable proof. The head and active-generation pointer are read
+ * before and after the proof query: any append or generation publication in
+ * between makes the terminal claim fail closed until the owner reruns status.
+ */
+function founderCanaryEvidence(
+  manifest: CleanFounderOnboardingManifestV1,
+): FounderCanaryEvidence {
+  let authority: Database.Database | undefined;
+  let record: Database.Database | undefined;
+  try {
+    verifySetupGenesis(manifest);
+    authority = new Database(join(manifest.state_directory, "authority.sqlite"), {
+      readonly: true,
+      fileMustExist: true,
+    });
+    record = new Database(join(manifest.state_directory, "record-log.sqlite"), {
+      readonly: true,
+      fileMustExist: true,
+    });
+    const initialHead = currentRecordHead(record);
+    const initialPointer = activeGenerationPointer(authority);
+    const sourceProgressObserved = authority
+      .prepare(
+        `SELECT 1
+           FROM authority_clean_granola_source_progress_v1 AS progress
+           JOIN authority_clean_granola_source_admission_v1 AS admission
+             ON admission.singleton = 1
+            AND admission.semantic_input_sha256 =
+                progress.admission_semantic_input_sha256
+          WHERE progress.singleton = 1
+            AND progress.cursor_version > 0
+          LIMIT 1`,
+      )
+      .get() !== undefined;
+    const approvedRecordPresent = record
+      .prepare(
+        `SELECT 1 FROM organization_record_log
+          WHERE event_kind = 'approved' AND action = 'approve'
+          LIMIT 1`,
+      )
+      .get() !== undefined;
+    const activeGenerationCurrent = pointerMatchesHead(
+      initialPointer,
+      initialHead,
+      manifest.organization_id,
+    ) &&
+      initialPointer.retrieval_contract_sha256 ===
+        cleanReadableSearchRuntimeContractV1().retrieval_contract_sha256;
+    const ownerLayer1ReadAfterHead =
+      activeGenerationCurrent &&
+      initialHead.receipt_issued_at !== null &&
+      ownerReadAfter(
+        authority,
+        manifest,
+        "layer1",
+        initialHead.receipt_issued_at,
+      );
+    const ownerLayer2ReadAfterGeneration =
+      activeGenerationCurrent &&
+      ownerReadAfter(
+        authority,
+        manifest,
+        "layer2",
+        initialPointer.published_at,
+      );
+    const stable =
+      sameRecordHead(initialHead, currentRecordHead(record)) &&
+      sameGenerationPointer(initialPointer, activeGenerationPointer(authority));
+    if (!stable) return EMPTY_FOUNDER_CANARY_EVIDENCE;
+    const complete =
+      sourceProgressObserved &&
+      approvedRecordPresent &&
+      activeGenerationCurrent &&
+      ownerLayer1ReadAfterHead &&
+      ownerLayer2ReadAfterGeneration;
+    return Object.freeze({
+      source_progress_observed: sourceProgressObserved,
+      approved_record_present: approvedRecordPresent,
+      active_generation_current: activeGenerationCurrent,
+      owner_layer1_read_after_head: ownerLayer1ReadAfterHead,
+      owner_layer2_read_after_generation: ownerLayer2ReadAfterGeneration,
+      complete,
+    });
+  } catch {
+    return EMPTY_FOUNDER_CANARY_EVIDENCE;
+  } finally {
+    record?.close();
+    authority?.close();
+  }
+}
+
+function readFounderCanaryEvidence(
+  manifest: CleanFounderOnboardingManifestV1,
+  dependencies?: CleanFounderCliDependencies,
+): FounderCanaryEvidence {
+  return dependencies?.read_founder_canary_evidence?.(manifest) ??
+    founderCanaryEvidence(manifest);
 }
 
 function fullFounderStatus(manifest: CleanFounderOnboardingManifestV1): FullFounderStatus {
@@ -1320,6 +1620,32 @@ async function resume(
     );
   }
   const manifest = setup.manifest;
+  // A terminal rehearsal is durable state, not a signal to replay setup. This
+  // keeps `resume` safe to rerun after the final status check.
+  let genesisPublished = false;
+  try {
+    verifySetupGenesis(manifest);
+    genesisPublished = true;
+  } catch {}
+  const durable =
+    dependencies.read_setup_stage?.(manifest) ?? durableSetupStage(manifest);
+  const full = readFullFounderStatus(manifest, dependencies);
+  const setupStep = nextFounderSetupStep({
+    genesis_published: genesisPublished,
+    setup_plan_location: setup.location,
+    credentials_ready: genesisPublished && durable.credentials_ready,
+    slack_connected: genesisPublished && durable.slack_connected,
+    founder_invitation_valid:
+      genesisPublished && usableFounderInvitation(manifest),
+    full,
+  });
+  if (
+    setupStep === "ready_to_start" &&
+    readFounderCanaryEvidence(manifest, dependencies).complete
+  ) {
+    status(input, io, dependencies);
+    return;
+  }
   await bootstrap(
     Object.freeze({
       state_directory: manifest.state_directory,
@@ -1441,7 +1767,11 @@ async function finalize(
   );
 }
 
-function status(input: FinalizeInput, io: CliIo): void {
+function status(
+  input: FinalizeInput,
+  io: CliIo,
+  dependencies?: CleanFounderCliDependencies,
+): void {
   const setup = loadSetupManifest(input.state_directory);
   if (setup === undefined) {
     io.stdout(
@@ -1459,15 +1789,17 @@ function status(input: FinalizeInput, io: CliIo): void {
         granola_credentials_valid: false,
         slack_approval_binding_active: false,
         granola_admission_present: false,
+        source_progress_observed: false,
+        approved_record_present: false,
+        active_generation_current: false,
+        owner_layer1_read_after_head: false,
+        owner_layer2_read_after_generation: false,
         runtime_status: "not_ready",
         runtime_observation: "not_observed",
         canary_status: "not_ready",
         next_step: existsSync(input.state_directory)
           ? "recover_setup_plan"
           : "run_bootstrap",
-        next_instruction: existsSync(input.state_directory)
-          ? "Recover the missing setup plan before continuing."
-          : "Run the bootstrap command.",
       } as never)}\n`,
     );
     return;
@@ -1479,8 +1811,10 @@ function status(input: FinalizeInput, io: CliIo): void {
   } catch {
     genesisPublished = false;
   }
-  const durable = durableSetupStage(setup.manifest);
-  const full = fullFounderStatus(setup.manifest);
+  const durable =
+    dependencies?.read_setup_stage?.(setup.manifest) ??
+    durableSetupStage(setup.manifest);
+  const full = readFullFounderStatus(setup.manifest, dependencies);
   const credentialsReady = genesisPublished && durable.credentials_ready;
   const slackConnected = genesisPublished && durable.slack_connected;
   const invitationFilePresent =
@@ -1497,9 +1831,17 @@ function status(input: FinalizeInput, io: CliIo): void {
   const runtimeStatus = nextStep === "ready_to_start"
     ? "ready_to_start"
     : "not_ready";
-  const canaryStatus = nextStep === "ready_to_start"
-    ? "not_complete"
-    : "not_ready";
+  const canary = nextStep === "ready_to_start"
+    ? readFounderCanaryEvidence(setup.manifest, dependencies)
+    : EMPTY_FOUNDER_CANARY_EVIDENCE;
+  const terminalStep: FounderSetupNextStep = canary.complete
+    ? "complete"
+    : nextStep;
+  const canaryStatus = terminalStep === "complete"
+    ? "complete"
+    : nextStep === "ready_to_start"
+      ? "not_complete"
+      : "not_ready";
   io.stdout(
     `${canonicalJson({
       schema_version: 1,
@@ -1510,9 +1852,18 @@ function status(input: FinalizeInput, io: CliIo): void {
       slack_connected: slackConnected,
       invitation_file_present: invitationFilePresent,
       founder_invitation_valid: invitationValid,
-      ...full,
-      next_step: nextStep,
-      next_instruction: nextFounderSetupInstruction(nextStep),
+      founder_oidc_bound: full.founder_oidc_bound,
+      founder_slack_link_active: full.founder_slack_link_active,
+      granola_credentials_valid: full.granola_credentials_valid,
+      slack_approval_binding_active: full.slack_approval_binding_active,
+      granola_admission_present: full.granola_admission_present,
+      source_progress_observed: canary.source_progress_observed,
+      approved_record_present: canary.approved_record_present,
+      active_generation_current: canary.active_generation_current,
+      owner_layer1_read_after_head: canary.owner_layer1_read_after_head,
+      owner_layer2_read_after_generation:
+        canary.owner_layer2_read_after_generation,
+      next_step: terminalStep,
       runtime_status: runtimeStatus,
       runtime_observation: "not_observed",
       canary_status: canaryStatus,
@@ -1543,7 +1894,7 @@ export async function runCleanFounderCli(
       return 0;
     }
     if (argv[0] === "status") {
-      status(parseFinalize(argv.slice(1)), io);
+      status(parseFinalize(argv.slice(1)), io, dependencies);
       return 0;
     }
     throw new Error(USAGE);
