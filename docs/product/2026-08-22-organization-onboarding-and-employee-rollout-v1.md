@@ -110,10 +110,10 @@ the credential can observe an accessible record owned by the canonical founder
 email and persists only the non-secret result and verification time. It does
 not ingest that record. Activation still creates a fresh live-only cutoff.
 
-V1 does not promise Granola folder or space filtering: the current source has
-no such configuration boundary. The onboarding canary is one new or edited
-post-activation note owned by the configured founder. Existing notes remain
-outside the cutoff.
+V1 does not use Granola folders or spaces as an intake filter: the source still
+admits every eligible post-cutoff note owned by the configured founder. One
+exact folder name may classify the admitted note's read audience as described
+below. Existing notes remain outside the cutoff.
 
 The canary proves that a card can be approved and the resulting record can be
 listed and searched. Duplicate or presentation anomalies are reported as
@@ -124,14 +124,15 @@ rebuild the onboarding architecture.
 
 By default, a post-cutoff Granola note produces an
 `organization-member-readable-person-v2` candidate: every current active owner
-or employee may read it after approval. To make one candidate reviewer-only,
-start its Granola title with the exact prefix `[echo:restricted] ` (including
-the trailing space). That selects the existing
-`restricted-reviewer-person-v2` policy: only the exact approving owner and
-that owner's current membership tenure may read it. The Slack approval card
-shows the selected policy's full consequence immediately before its approve or
-reject instruction, so approval is informed. Any other title, including a
-marker with altered casing, spacing, or position, remains member-readable.
+or employee may read it after approval. To make a candidate reviewer-only, put
+the note in a Granola folder named exactly `echo-restricted`. The frozen source
+snapshot then selects the existing `restricted-reviewer-person-v2` policy: only
+the exact approving owner and that owner's current membership tenure may read
+it. The rule accepts any folder membership with that exact case-sensitive name;
+titles never select policy. The Slack approval card shows the selected policy's
+full consequence immediately before its approve or reject instruction, so
+approval is informed. A later folder move may create a new source revision but
+does not reinterpret an already posted card or approved record.
 
 ### 3. Employee lifecycle
 
@@ -246,7 +247,7 @@ The sprint is complete when all of the following pass against one candidate:
 - no V4 envelope, Layer 1, Layer 2, Layer 3 policy, release-fence, response, or
   current read-audit redesign;
 - no historical import, backfill, compatibility bridge, or old-state reader;
-- no Granola folder/space scoping or historical replay;
+- no general Granola folder/space intake filtering or historical replay;
 - no employee installation identity, signing key, lease, local database,
   server daemon, or provider secret;
 - no employee Slack approval capability in this sprint;

@@ -308,7 +308,7 @@ class CleanSlackCardFactoryV1 implements CleanSlackApprovalCardFactoryV1 {
   ) {}
 
   build(input: Parameters<CleanSlackApprovalCardFactoryV1["build"]>[0]) {
-    const policy = selectGranolaPersonContentPolicyV1(input.meeting.title);
+    const policy = selectGranolaPersonContentPolicyV1(input.meeting.extensions);
     const brief = compileDecisionBrief(
       `brf_${input.candidate.candidate_semantic_sha256.slice("sha256:".length)}`,
       input.meeting,
@@ -359,7 +359,7 @@ class CleanSlackCardFactoryV1 implements CleanSlackApprovalCardFactoryV1 {
     input: Parameters<CleanSlackApprovalCardFactoryV1["pendingApproval"]>[0],
   ) {
     const { stage, outbox } = input;
-    const policy = selectGranolaPersonContentPolicyV1(stage.meeting.title);
+    const policy = selectGranolaPersonContentPolicyV1(stage.meeting.extensions);
     if (
       outbox.provider_message_ts === null ||
       outbox.frozen_card_sha256 === null ||

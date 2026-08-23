@@ -11,13 +11,9 @@ import {
   type PersonApprovalPolicyId,
 } from "@echo-brain/organization-control-plane/clean-runtime-v1";
 
-/**
- * A Granola author can make a record reviewer-only by starting its title with
- * this exact marker. It is deliberately a title convention, not a new source
- * setting, policy engine, or alternate intake path.
- */
-export const GRANOLA_RESTRICTED_PERSON_TITLE_PREFIX_V1 =
-  "[echo:restricted] " as const;
+/** Exact case-sensitive Granola folder name for reviewer-only records. */
+export const GRANOLA_RESTRICTED_PERSON_FOLDER_NAME_V1 =
+  "echo-restricted" as const;
 
 export interface CleanGranolaPersonContentPolicyV1 {
   readonly policy_id: PersonApprovalPolicyId;
@@ -45,11 +41,30 @@ const RESTRICTED_REVIEWER_POLICY: CleanGranolaPersonContentPolicyV1 =
       RESTRICTED_REVIEWER_PERSON_CONSEQUENCE_SHA256,
   });
 
-/** The marker is exact and only recognized at the very start of a title. */
+function isRecord(value: unknown): value is Readonly<Record<string, unknown>> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+/**
+ * The adapter freezes Granola's provider fact under
+ * extensions.granola.folder_membership. Nothing inferred from the title can
+ * affect Person policy selection.
+ */
 export function selectGranolaPersonContentPolicyV1(
-  title: string | null | undefined,
+  extensions: unknown,
 ): CleanGranolaPersonContentPolicyV1 {
-  return title?.startsWith(GRANOLA_RESTRICTED_PERSON_TITLE_PREFIX_V1) === true
+  const folderMembership =
+    isRecord(extensions) && isRecord(extensions.granola)
+      ? extensions.granola.folder_membership
+      : undefined;
+  const restricted =
+    Array.isArray(folderMembership) &&
+    folderMembership.some(
+      (folder) =>
+        isRecord(folder) &&
+        folder.name === GRANOLA_RESTRICTED_PERSON_FOLDER_NAME_V1,
+    );
+  return restricted
     ? RESTRICTED_REVIEWER_POLICY
     : MEMBER_READABLE_POLICY;
 }

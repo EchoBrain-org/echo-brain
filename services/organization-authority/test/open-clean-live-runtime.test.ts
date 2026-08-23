@@ -590,6 +590,7 @@ async function activeFixture(
     readonly title: string;
     readonly external_id: string;
     readonly text: string;
+    readonly folder_membership?: readonly { readonly name: string }[];
   }[],
 ) {
   const parent = root();
@@ -693,6 +694,17 @@ async function activeFixture(
         canonical_revision: canonicalSha256({ note: variant.external_id }),
       },
       content: [{ id: variant.external_id, kind: "note", text: variant.text }],
+      ...(variant.folder_membership === undefined
+        ? {}
+        : {
+            extensions: {
+              granola: {
+                folder_membership: variant.folder_membership.map((folder) => ({
+                  ...folder,
+                })),
+              },
+            },
+          }),
     })) ?? [meeting],
     sourceIdentity,
   );
@@ -1403,7 +1415,7 @@ describe("open clean live runtime", () => {
     }
   });
 
-  it("processes a title-marked restricted Granola record through approval while an active employee receives only member-readable content", async () => {
+  it("processes an echo-restricted Granola folder record through approval while an active employee receives only member-readable content", async () => {
     const provider = new OwnerAndEmployeeOidcProvider();
     const fixture = await activeFixture("approve", provider, [
       {
@@ -1412,9 +1424,10 @@ describe("open clean live runtime", () => {
         text: "MemberVisibleC186576",
       },
       {
-        title: "[echo:restricted] Founder review",
+        title: "Founder review",
         external_id: "restricted-only",
         text: "RestrictedOnlyC186576",
+        folder_membership: [{ name: "echo-restricted" }],
       },
     ]);
     const authority = openAuthorityDatabase(
