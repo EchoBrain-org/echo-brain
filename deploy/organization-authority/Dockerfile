@@ -46,5 +46,4 @@ COPY --from=build /app/services/organization-retrieval/migrations ./services/org
 COPY --from=build /app/services/organization-retrieval/baselines ./services/organization-retrieval/baselines
 RUN install -d -m 1777 /echo-runtime
 USER node
-ENTRYPOINT ["node", "services/organization-authority/dist/main.js"]
-CMD ["help"]
+ENTRYPOINT ["node", "services/organization-authority/dist/clean-live-main.js"]

@@ -7,8 +7,6 @@
   "source_root": "services/organization-authority/src",
   "package_json": "services/organization-authority/package.json",
   "entry_points": [
-    "services/organization-authority/src/main.ts",
-    "services/organization-authority/src/admin-main.ts",
     "services/organization-authority/src/clean-reset-main.ts",
     "services/organization-authority/src/clean-person-main.ts",
     "services/organization-authority/src/clean-live-main.ts",
@@ -60,22 +58,6 @@
     "services/organization-authority/baselines/authority-baseline-v1.sql"
   ],
   "layer_rules": [
-    {
-      "name": "authority-entrypoint-calls-composition",
-      "from": "services/organization-authority/src/main.ts",
-      "allowed_imports": ["services/organization-authority/src/composition/**"],
-      "allowed_workspace_packages": [],
-      "allowed_external_packages": [],
-      "allowed_node_builtins": []
-    },
-    {
-      "name": "authority-admin-entrypoint-calls-composition",
-      "from": "services/organization-authority/src/admin-main.ts",
-      "allowed_imports": ["services/organization-authority/src/composition/**"],
-      "allowed_workspace_packages": [],
-      "allowed_external_packages": [],
-      "allowed_node_builtins": []
-    },
     {
       "name": "authority-clean-reset-entrypoint-calls-composition",
       "from": "services/organization-authority/src/clean-reset-main.ts",

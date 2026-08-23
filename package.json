@@ -40,8 +40,6 @@
     "test:person": "npm run build:workspaces && vitest run --config vitest.config.ts tests/person-client",
     "check:boundary": "node tools/check-boundary.mjs",
     "check:docs": "node tools/check-docs.mjs",
-    "organization-authority:cli": "node services/organization-authority/dist/main.js",
-    "organization-authority:admin": "node services/organization-authority/dist/admin-main.js",
     "check": "npm run check:boundary && npm run check:docs && npm run typecheck && npm run lint && npm test"
   },
   "devDependencies": {

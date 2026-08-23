@@ -4,19 +4,12 @@
   "private": true,
   "license": "MIT",
   "type": "module",
-  "main": "dist/main.js",
   "bin": {
     "echo-organization-authority-init-clean-state": "dist/clean-reset-main.js",
     "echo-organization-authority-clean-person": "dist/clean-person-main.js",
     "echo-organization-authority-clean-live": "dist/clean-live-main.js",
     "echo-organization-authority-admit-clean-granola-source": "dist/clean-granola-source-main.js",
     "echo-organization-authority-clean-founder": "dist/clean-founder-main.js"
-  },
-  "exports": {
-    ".": {
-      "types": "./dist/main.d.ts",
-      "import": "./dist/main.js"
-    }
   },
   "files": [
     "dist/**/*.js",
