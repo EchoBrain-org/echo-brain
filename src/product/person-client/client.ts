@@ -8,6 +8,7 @@ import {
 import {
   PersonAuthorityClient,
   PersonAuthorityClientError,
+  type CleanEmployeeRosterV1,
   type CleanPersonRecordListV1,
   type CleanPersonRecordSearchV1,
 } from "./authority-client.js";
@@ -336,6 +337,13 @@ export class PersonClient {
     );
   }
 
+  async employees(): Promise<CleanEmployeeRosterV1> {
+    const stored = await this.accessSession();
+    return await this.authority(stored.authority_origin).employees(
+      stored.session.access_token,
+    );
+  }
+
   async inviteEmployee(input: {
     name: string;
     email: string;
@@ -360,15 +368,28 @@ export class PersonClient {
   }): Promise<{ output_path: string; expires_at: string }> {
     const outputPath = preflightPersonOnboardingInvitationOutput(input.output_path);
     const stored = await this.accessSession();
-    return await this.issueEmployeeInvitation(
-      outputPath,
-      () =>
-        this.authority(stored.authority_origin).reissueEmployee(
-          { email: input.email },
-          stored.session.access_token,
-        ),
-      stored.authority_origin,
-    );
+    try {
+      return await this.issueEmployeeInvitation(
+        outputPath,
+        () =>
+          this.authority(stored.authority_origin).reissueEmployee(
+            { email: input.email },
+            stored.session.access_token,
+          ),
+        stored.authority_origin,
+      );
+    } catch (error) {
+      if (
+        error instanceof PersonAuthorityClientError &&
+        error.code === "conflict" &&
+        error.status === 409
+      ) {
+        throw new Error(
+          "Employee identity onboarding is already complete; use person login with the Authority URL on the employee machine.",
+        );
+      }
+      throw error;
+    }
   }
 
   async revokeEmployee(email: string): Promise<void> {

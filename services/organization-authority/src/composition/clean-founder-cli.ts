@@ -61,6 +61,7 @@ const DEFAULT_ARTIFACT_REVISION = "clean-founder-v1";
 
 const USAGE = `usage:
   echo-organization-authority-clean-founder bootstrap --state-dir <absolute-path> --organization-name <name> --owner-display-name <name> --owner-email <email> --authority-url <https-origin> --oidc-config <absolute-json-path> --slack-approval-channel-id <id> [--artifact-revision <revision>] < slack-bot-token
+  echo-organization-authority-clean-founder resume --state-dir <absolute-path> < slack-bot-token
   echo-organization-authority-clean-founder credentials-install --state-dir <absolute-path> --granola-credential-file <absolute-private-path> --granola-owner-email-file <absolute-private-path> --llm-credential-file <absolute-private-path>
   echo-organization-authority-clean-founder finalize --state-dir <absolute-path>
   echo-organization-authority-clean-founder status --state-dir <absolute-path>`;
@@ -986,7 +987,8 @@ function nextFounderSetupStep(input: {
 
 function nextFounderSetupInstruction(step: FounderSetupNextStep): string {
   return {
-    resume_bootstrap: "Run the same bootstrap command again.",
+    resume_bootstrap:
+      "Run echo-organization-authority-clean-founder resume --state-dir <absolute-path>.",
     complete_founder_browser_login:
       "Start the clean Authority and complete founder browser login.",
     complete_founder_slack_link:
@@ -1301,6 +1303,39 @@ async function bootstrap(
   );
 }
 
+async function resume(
+  input: FinalizeInput,
+  io: CliIo,
+  dependencies: CleanFounderCliDependencies,
+): Promise<void> {
+  const setup = loadSetupManifest(input.state_directory);
+  if (setup === undefined) {
+    if (existsSync(input.state_directory)) {
+      throw new Error(
+        "clean founder setup plan is missing; restore the exact setup plan or choose a new clean state directory",
+      );
+    }
+    throw new Error(
+      "clean founder resume requires an existing durable clean founder setup plan",
+    );
+  }
+  const manifest = setup.manifest;
+  await bootstrap(
+    Object.freeze({
+      state_directory: manifest.state_directory,
+      organization_name: manifest.organization_name,
+      owner_display_name: manifest.owner_display_name,
+      owner_email: manifest.owner_email,
+      authority_url: manifest.authority_url,
+      oidc_config_path: manifest.oidc_config_path,
+      slack_approval_channel_id: manifest.slack_approval_channel_id,
+      artifact_revision: manifest.artifact_revision,
+    }),
+    io,
+    dependencies,
+  );
+}
+
 function installProviderCredentials(
   input: CredentialInstallInput,
   io: CliIo,
@@ -1493,6 +1528,10 @@ export async function runCleanFounderCli(
   try {
     if (argv[0] === "bootstrap") {
       await bootstrap(parseBootstrap(argv.slice(1)), io, dependencies);
+      return 0;
+    }
+    if (argv[0] === "resume") {
+      await resume(parseFinalize(argv.slice(1)), io, dependencies);
       return 0;
     }
     if (argv[0] === "finalize") {

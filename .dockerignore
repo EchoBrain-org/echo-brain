@@ -12,6 +12,8 @@ tests
 docs
 product
 deploy/organization-authority/data
+deploy/organization-authority/clean-data
+deploy/organization-authority/retired-rehearsals
 .env
 .env.*
 **/.env

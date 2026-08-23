@@ -67,6 +67,19 @@ export interface CleanEmployeeInvitationV1 {
   readonly expires_at: string;
 }
 
+export interface CleanEmployeeRosterV1 {
+  readonly schema_version: 1;
+  readonly kind: "echo-clean-person-employee-roster-v1";
+  readonly employees: readonly CleanEmployeeRosterItemV1[];
+}
+
+export interface CleanEmployeeRosterItemV1 {
+  readonly email: string;
+  readonly display_name: string;
+  readonly membership_status: "active" | "revoked";
+  readonly invitation_state: "pending" | "expired" | "redeemed" | "none";
+}
+
 export interface CleanPersonRecordListV1 {
   readonly schema_version: 1;
   readonly kind: "echo-clean-person-record-list-v1";
@@ -428,6 +441,65 @@ function validateCleanEmployeeInvitation(value: unknown): CleanEmployeeInvitatio
   return Object.freeze({
     login_grant: response.login_grant,
     expires_at: response.expires_at,
+  });
+}
+
+function validateCleanEmployeeRoster(value: unknown): CleanEmployeeRosterV1 {
+  const response = asPlainRecord(value, "employee roster response is invalid");
+  exactKeys(
+    response,
+    ["schema_version", "kind", "employees"],
+    "employee roster response is invalid",
+  );
+  if (
+    response.schema_version !== 1 ||
+    response.kind !== "echo-clean-person-employee-roster-v1" ||
+    !Array.isArray(response.employees)
+  ) {
+    throw new Error("employee roster response is invalid");
+  }
+  const employees = response.employees.map((value) => {
+    const employee = asPlainRecord(value, "employee roster item is invalid");
+    exactKeys(
+      employee,
+      ["email", "display_name", "membership_status", "invitation_state"],
+      "employee roster item is invalid",
+    );
+    if (
+      typeof employee.email !== "string" ||
+      employee.email.length < 3 ||
+      employee.email.length > 254 ||
+      employee.email !== employee.email.trim() ||
+      employee.email !== employee.email.toLowerCase() ||
+      !/^[!-~]+$/.test(employee.email) ||
+      employee.email.indexOf("@") <= 0 ||
+      employee.email.indexOf("@") !== employee.email.lastIndexOf("@") ||
+      employee.email.endsWith("@") ||
+      typeof employee.display_name !== "string" ||
+      employee.display_name.length < 1 ||
+      employee.display_name.length > 200 ||
+      employee.display_name !== employee.display_name.trim() ||
+      employee.display_name !== employee.display_name.normalize("NFC") ||
+      /[\u0000-\u001f\u007f]/.test(employee.display_name) ||
+      (employee.membership_status !== "active" && employee.membership_status !== "revoked") ||
+      (employee.invitation_state !== "pending" &&
+        employee.invitation_state !== "expired" &&
+        employee.invitation_state !== "redeemed" &&
+        employee.invitation_state !== "none")
+    ) {
+      throw new Error("employee roster item is invalid");
+    }
+    return Object.freeze({
+      email: employee.email,
+      display_name: employee.display_name,
+      membership_status: employee.membership_status,
+      invitation_state: employee.invitation_state,
+    }) as CleanEmployeeRosterItemV1;
+  });
+  return Object.freeze({
+    schema_version: 1,
+    kind: "echo-clean-person-employee-roster-v1",
+    employees: Object.freeze(employees),
   });
 }
 
@@ -872,6 +944,15 @@ export class PersonAuthorityClient {
       validate_response: validateOrganizationPersonSlackLinkResult,
       access_token: accessToken,
       timeout_ms: Math.max(this.timeoutMs, SLACK_TIMEOUT_MS),
+    });
+  }
+
+  employees(accessToken: string): Promise<CleanEmployeeRosterV1> {
+    return this.getJson({
+      path: CLEAN_PERSON_EMPLOYEES_PATH_V1,
+      access_token: accessToken,
+      validate_response: validateCleanEmployeeRoster,
+      maximum_response_bytes: MAXIMUM_RECORDS_RESPONSE_BYTES,
     });
   }
 

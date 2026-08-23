@@ -1,165 +1,101 @@
 # Clean V1 Authority deployment
 
-This directory deploys the clean V1 Authority only. It starts
-`clean-live-main.js` over `clean-data/`; it never reads or modifies any other
-Authority state directory. Do not reuse state, Compose volumes, or credentials
-from an earlier deployment.
+This is the deployable clean V1 Authority only. It uses a new `clean-data/`
+directory, never imports previous Authority state, and uses both EC2 Compose
+profiles automatically.
 
-## Founder onboarding
+## One-time preparation
 
-The profile expects a confidential OIDC client. Create its private files and
-the empty clean state directory before starting anything. The OIDC JSON must
-declare `client_secret_basic` or `client_secret_post`, and must name
-`https://<host>/v2/session/oidc/callback` as its redirect URI. The JSON itself
-contains no secret. Keep both private files mode `0600` and the containing
-directory mode `0700`.
+Provision Docker, Docker Compose v2, Cloudflare Tunnel, and registry access
+first. The EC2 security group remains closed to inbound traffic; the tunnel must
+target `127.0.0.1:80` for the Authority hostname. The wrapper does not install
+or configure host infrastructure.
+
+The confidential OIDC client must allow
+`https://<authority-host>/v2/session/oidc/callback`. Put each source in a
+private regular file. The secret values are accepted only from files and are
+never placed in command arguments or output. Each credential file contains
+exactly one value with no surrounding whitespace; `prepare` installs the fixed
+server copies with mode `0600` under a mode-`0700` directory.
 
 ```sh
 cd deploy/organization-authority
-umask 077
-install -d -m 0700 clean-data/private
-install -m 0600 /absolute/private/oidc-config.json clean-data/private/oidc-config.json
-install -m 0600 /absolute/private/oidc-client-secret clean-data/private/oidc-client-secret
-ECHO_CLEAN_AUTHORITY_HOST=authority.example.com
-ECHO_CLEAN_AUTHORITY_URL="https://${ECHO_CLEAN_AUTHORITY_HOST}"
-ECHO_CLEAN_SLACK_APPROVAL_CHANNEL_ID=C0123456789
-ECHO_CLEAN_OWNER_EMAIL=founder@example.com
-ECHO_CLEAN_AUTHORITY_UID="$(id -u)"
-ECHO_CLEAN_AUTHORITY_GID="$(id -g)"
-{
-  printf 'ECHO_CLEAN_AUTHORITY_HOST=%s\n' "$ECHO_CLEAN_AUTHORITY_HOST"
-  printf 'ECHO_CLEAN_AUTHORITY_URL=%s\n' "$ECHO_CLEAN_AUTHORITY_URL"
-  printf 'ECHO_CLEAN_AUTHORITY_UID=%s\n' "$ECHO_CLEAN_AUTHORITY_UID"
-  printf 'ECHO_CLEAN_AUTHORITY_GID=%s\n' "$ECHO_CLEAN_AUTHORITY_GID"
-  printf 'ECHO_CLEAN_AUTHORITY_IMAGE=%s\n' echo-organization-authority:local
-  printf 'ECHO_CLEAN_SLACK_APPROVAL_CHANNEL_ID=%s\n' "$ECHO_CLEAN_SLACK_APPROVAL_CHANNEL_ID"
-  printf 'ECHO_CLEAN_OWNER_EMAIL=%s\n' "$ECHO_CLEAN_OWNER_EMAIL"
-} > .env.clean-v1
-chmod 0600 .env.clean-v1
-```
-
-The founder path has three phases: bootstrap while stopped, sign in and link
-Slack while the profile runs, then finalize while stopped. Bootstrap owns
-timestamps, IDs, PKCE location, connection ID, and invitation path. It reads
-the Slack token once from stdin and issues the 15-minute invitation last.
-
-On EC2 behind the Cloudflare Tunnel, use both Compose files. The override
-disables local image builds, requires an immutable remote image reference,
-exposes only HTTP port 80 on `127.0.0.1`, and selects
-`Caddyfile.clean-v1.ec2`. Ensure no other process owns that loopback port. The
-EC2 security group remains closed to inbound traffic; Cloudflare Tunnel is the
-only public path and targets that loopback port with the hostname named by
-`ECHO_CLEAN_AUTHORITY_HOST`.
-
-```sh
-compose_clean() {
-  docker compose --env-file .env.clean-v1 -f compose.clean-v1.yaml "$@"
-}
-# On EC2, define the helper with both files instead:
-# compose_clean() {
-#   docker compose --env-file .env.clean-v1 -f compose.clean-v1.yaml \
-#     -f compose.clean-v1.ec2.yaml "$@"
-# }
-set -a
-. ./.env.clean-v1
-set +a
-
-# For ECHO_CLEAN_AUTHORITY_IMAGE=echo-organization-authority:local:
-compose_clean build authority
-# For an immutable remote image reference instead, use:
-# compose_clean pull authority
-
-SLACK_BOT_TOKEN_FILE=/absolute/private/slack-bot-token
-compose_clean run --rm --no-deps --entrypoint node authority \
-  services/organization-authority/dist/clean-founder-main.js \
-  bootstrap \
-  --state-dir /echo-clean/state \
+./onboard-clean-v1.sh prepare \
+  --release /absolute/private/clean-v1-release.json \
   --organization-name 'Example Organization' \
   --owner-display-name 'Founder Name' \
-  --owner-email "$ECHO_CLEAN_OWNER_EMAIL" \
-  --authority-url "$ECHO_CLEAN_AUTHORITY_URL" \
-  --oidc-config /echo-clean/private/oidc-config.json \
-  --slack-approval-channel-id "$ECHO_CLEAN_SLACK_APPROVAL_CHANNEL_ID" \
-  < "$SLACK_BOT_TOKEN_FILE"
+  --owner-email founder@example.com \
+  --authority-host authority.example.com \
+  --slack-approval-channel-id C0123456789 \
+  --oidc-config-file /absolute/private/oidc-config.json \
+  --oidc-client-secret-file /absolute/private/oidc-client-secret \
+  --slack-bot-token-file /absolute/private/slack-bot-token \
+  --granola-credential-file /absolute/private/granola-credential \
+  --llm-credential-file /absolute/private/llm-credential
 ```
 
-The token file contains exactly the token with at most one trailing newline,
-with mode `0600`; do not add whitespace or a second line. Bootstrap outputs the
-invitation path and next instruction. It leaves a private, non-secret `0600`
-manifest at `clean-data/state/onboarding/clean-founder-v1.json`.
+`prepare` validates the exact canonical release record, derives its immutable
+image, writes fixed `clean-data/private` files with mode `0600`, and renders
+the two Compose profiles offline. It does not build or pull an image. An exact
+repeat is safe; a changed release, setup value, or private input fails rather
+than silently changing this organization.
 
-Start the profile with `compose_clean up -d`. Its health check fetches the clean
-descriptor at loopback; Caddy forwards to that listener without using external
-identity headers. Securely transfer the mode-0600 invitation to the founder's
-current-user machine, then follow the clean Person login and Slack-link steps
-in [the Authority runbook](../../services/organization-authority/README.md#clean-founder-onboarding-rehearsal).
-`echo-brain person login --invitation <path>` prints the browser URL, then waits
-for the browser to return the session directly to a one-use loopback receiver.
-Nothing is pasted into the terminal. `echo-brain person slack-link` prints a
-code to reply with in Slack and waits only for Enter; it retains the code and
-opaque handles in memory.
+### Replace pre-live rehearsal state
 
-After founder OIDC login and Slack linking succeed, stop the profile. Only now
-copy the live-processing inputs into the private mount, then run the single
-credential installer. It validates all three sources before replacing any fixed
-destination. Each source contains only its value, with no trailing newline or
-other whitespace, and remains current-user mode `0600`. Source admission
-requires the completed founder OIDC binding and matching owner email. Use the
-exact lowercase OIDC email as the entire owner-email file. Source admission
-starts at a fresh live-only cutoff and does not import older Granola notes.
+The roster candidate changes the fresh Authority baseline. It cannot start over
+an earlier rehearsal lineage. Because that lineage has no live users, retire it
+once through the explicit founder attestation:
 
 ```sh
-compose_clean down
-
-install -m 0600 /absolute/private/granola-organization-key clean-data/private/granola-organization-key
-install -m 0600 /absolute/private/llm-provider-credential clean-data/private/llm-provider-credential
-(umask 077 && printf %s "$ECHO_CLEAN_OWNER_EMAIL" > clean-data/private/granola-owner-email)
-
-compose_clean run --rm --no-deps --entrypoint node authority \
-  services/organization-authority/dist/clean-founder-main.js \
-  credentials-install \
-  --state-dir /echo-clean/state \
-  --granola-credential-file /echo-clean/private/granola-organization-key \
-  --granola-owner-email-file /echo-clean/private/granola-owner-email \
-  --llm-credential-file /echo-clean/private/llm-provider-credential
-
-compose_clean run --rm --no-deps --entrypoint node authority \
-  services/organization-authority/dist/clean-founder-main.js \
-  finalize --state-dir /echo-clean/state
-
-compose_clean up -d
+./onboard-clean-v1.sh replace-rehearsal --confirm-no-live-users
 ```
 
-This profile and runbook cover founder identity, Slack linking, Slack approval
-activation, and live-only Granola/LLM source admission. The same
-`compose_clean up -d` starts an idle Person server before finalization, then,
-after the stopped-state finalize and restart, the admitted Granola poller,
-Slack approval finalizer, and V4 record writer. Its manifest supplies the
-Authority URL, OIDC configuration, PKCE key, and approval channel; do not
-repeat them when restarting the profile.
+This stops the Compose profile and moves both `clean-data` and its environment
+file into a mode-`0700` timestamped `retired-rehearsals/` archive. It does not
+delete them. Run `prepare` again with the new exact release record. Never use
+this command after the first live-user release; subsequent baseline-preserving
+updates use the release procedure below.
 
-Clean V1 reconciles Layer 2 automatically: once at clean-live startup and again
-after a coalesced cycle appends an approved record, but only when the exact
-Layer-1 record head has advanced. It builds a new immutable generation outside
-the record append and publishes its pointer only if that generation still
-matches the exact head. A query never starts a build. Until an exact-head
-generation is published, `echo-brain person records --query ...` can report that
-search is catching up while ordinary Layer-1 `records` reads remain available.
-Wait one worker cycle and retry the same query. A failed or superseded build
-leaves the existing pointer untouched and retries on the next worker cycle.
+## Resumable founder onboarding
 
-For the live-only smoke, create a new Granola note after finalization. Approve
-one generated Slack card and confirm it with `echo-brain person records --limit
-20`, then confirm the searchable result with `echo-brain person records --query
-'<term>'`; reject another and confirm that it does not appear in either result.
-Existing Granola notes are intentionally outside the new cutoff.
+Run this same command after each human step:
+
+```sh
+./onboard-clean-v1.sh resume
+```
+
+It pulls the accepted immutable image only when the host lacks it, calls the
+durable clean-founder status command, and advances the next safe stage. It
+starts the runtime for browser login and Slack linking, stops it for credential
+installation and finalization, then starts it again. It never reads SQLite,
+prints secret values, or asks for generated IDs.
+
+When prompted for browser login, transfer the founder invitation to the
+founder's current-user machine through a private channel, then run the exact
+path and command printed by `resume`. Install the exact Person client from the
+same release record first, using [the release installer](../release/README.md).
+The received invitation must be a current-user mode-`0600` file inside a
+mode-`0700` directory. Do not paste invitation contents into chat or a terminal.
+The wrapper also prints the bounded post-finalization Granola, Slack, list, and
+search canary.
+
+Use this Authority-state read-only progress check after the accepted image is
+present locally:
+
+```sh
+./onboard-clean-v1.sh status
+```
+
+It creates one transient no-dependency local container, prints
+`authority_running` and the safe clean-founder status JSON, and never pulls an
+image implicitly. If the image is absent, use `resume`, whose pull is explicit.
+Re-running `resume` is the recovery path for a stopped or interrupted stage.
 
 ## Release and recovery
 
-After the first live-user release, use the exact-record server replacement and
-checksum client reinstall procedure in [the clean-v1 release loop](../release/README.md).
-It supports only baseline-preserving `clean-v1` image replacements; it is not a
-schema migration or automatic client updater. The current release record and
-the clean state directory are the recovery unit. Do not start a replacement
-until the accepted release record, exact image, and state lineage have been
-verified by the release procedure.
+After onboarding, use the exact-record replacement and checksum client reinstall
+procedure in [the clean-v1 release loop](../release/README.md), including
+[update-clean-v1.sh](./update-clean-v1.sh). It supports only
+baseline-preserving `clean-v1` image replacements, not schema migrations or
+automatic client updates. The current release record and clean state directory
+are the recovery unit.

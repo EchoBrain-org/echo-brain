@@ -1,6 +1,14 @@
 import type { Sha256Digest } from "@echo-brain/federation-protocol";
 import type { StoredAuthorityMembership } from "./authority-repository.js";
 
+/** The intentionally small, owner-visible employee lifecycle projection. */
+export interface CleanEmployeeRosterEntry {
+  readonly email: string;
+  readonly display_name: string;
+  readonly membership_status: "active" | "revoked";
+  readonly invitation_state: "pending" | "expired" | "redeemed" | "none";
+}
+
 /**
  * The only clean online membership mutation capability.  It intentionally
  * has no installation, machine, lease, admin-bearer, or generic Authority
@@ -11,10 +19,13 @@ export interface CleanPersonMembershipWriteTransaction {
   employeeMembershipByEmailSha256(
     email_sha256: Sha256Digest,
   ): StoredAuthorityMembership | undefined;
+  employeeMembershipHasActiveIdentityBinding(membership_id: string): boolean;
+  listEmployeeRoster(observed_at: string): readonly CleanEmployeeRosterEntry[];
   createEmployeeMembership(input: {
     principal_id: string;
     membership_id: string;
     display_name: string;
+    email: string;
     email_sha256: Sha256Digest;
   }): StoredAuthorityMembership;
   invalidatePendingPersonLoginGrants(membership_id: string): number;

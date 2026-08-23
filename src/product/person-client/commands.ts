@@ -84,6 +84,7 @@ const RULES: Readonly<
     accepts: ["email"],
     requires: ["email"],
   },
+  "employee-list": {},
 };
 
 function usage(): string {
@@ -98,7 +99,7 @@ Commands:
   status      Show installed version and sign-in state.
   logout      Remove the local session.
   records     List records or search the current generation.
-  employee    Invite, reissue, or revoke an employee.
+  employee    List, invite, reissue, or revoke an employee.
   slack-link  Link the signed-in founder to Slack.
 
 Run \`echo-brain person <command> --help\` for command options.
@@ -119,7 +120,7 @@ Removes the local session. A revoked session is also removed locally.
 
 Without --query, lists recent released records. With --query, searches the current Layer 2 generation.
 `,
-  employee: `usage: echo-brain person employee <invite|reissue|revoke> [options]
+  employee: `usage: echo-brain person employee <list|invite|reissue|revoke> [options]
 
 Run \`echo-brain person employee <command> --help\` for required options.
 `,
@@ -134,6 +135,10 @@ All options are required. --out must name a new file in a current-user 0700 dire
   "employee-revoke": `usage: echo-brain person employee revoke --email <email>
 
 --email is required. Revocation ends that employee membership immediately.
+`,
+  "employee-list": `usage: echo-brain person employee list
+
+Shows each employee's name, canonical email, membership state, and invitation state. Owner only.
 `,
 };
 
@@ -150,7 +155,8 @@ function personClientCliHelp(argv: readonly string[]): string | undefined {
       invite: "employee-invite",
       reissue: "employee-reissue",
       revoke: "employee-revoke",
-    } as const)[argv[1] as "invite" | "reissue" | "revoke"];
+      list: "employee-list",
+    } as const)[argv[1] as "invite" | "reissue" | "revoke" | "list"];
     return action === undefined ? undefined : HELP[action];
   }
   return undefined;
@@ -228,7 +234,14 @@ export async function runPersonClientCli(
   }
   const employeeAction =
     argv[0] === "employee"
-      ? ({ invite: "employee-invite", reissue: "employee-reissue", revoke: "employee-revoke" } as const)[argv[1] ?? "" as "invite" | "reissue" | "revoke"]
+      ? ({
+          invite: "employee-invite",
+          reissue: "employee-reissue",
+          revoke: "employee-revoke",
+          list: "employee-list",
+        } as const)[
+          argv[1] as "invite" | "reissue" | "revoke" | "list"
+        ]
       : undefined;
   const action = employeeAction ?? (argv[0] ?? "");
   const rule = RULES[action];
@@ -494,6 +507,9 @@ export async function runPersonClientCli(
             output_path: requiredText(values, "out"),
           })),
         });
+        break;
+      case "employee-list":
+        print(stdout, { ok: true, result: await client.employees() });
         break;
       case "employee-reissue":
         print(stdout, {

@@ -158,6 +158,30 @@ describe("clean Person employee lifecycle", () => {
       const first = await json(invite);
       expect(Object.keys(first).sort()).toEqual(["expires_at", "login_grant"]);
 
+      const pendingRoster = await fetch(`${origin}/v1/person/employees`, {
+        headers: { authorization: `Bearer ${founderAccess}` },
+      });
+      expect(pendingRoster.status).toBe(200);
+      expect(await json(pendingRoster)).toEqual({
+        schema_version: 1,
+        kind: "echo-clean-person-employee-roster-v1",
+        employees: [
+          {
+            email: "jane@example.com",
+            display_name: "Jane Doe",
+            membership_status: "active",
+            invitation_state: "pending",
+          },
+        ],
+      });
+
+      const secondEmployee = await fetch(`${origin}/v1/person/employees`, {
+        method: "POST",
+        headers: { authorization: `Bearer ${founderAccess}`, "content-type": "application/json" },
+        body: JSON.stringify({ name: "John Doe", email: "john@example.com" }),
+      });
+      expect(secondEmployee.status).toBe(201);
+
       const duplicate = await fetch(`${origin}/v1/person/employees`, {
         method: "POST",
         headers: { authorization: `Bearer ${founderAccess}`, "content-type": "application/json" },
@@ -172,22 +196,68 @@ describe("clean Person employee lifecycle", () => {
       });
       expect(reissue.status).toBe(201);
       const second = await json(reissue);
+      const secondReissue = await fetch(`${origin}/v1/person/employees`, {
+        method: "PUT",
+        headers: { authorization: `Bearer ${founderAccess}`, "content-type": "application/json" },
+        body: JSON.stringify({ email: "jane@example.com" }),
+      });
+      expect(secondReissue.status).toBe(201);
+      const third = await json(secondReissue);
       const oldGrant = await fetch(`${origin}/v2/session/oidc/begin`, {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({ kind: "identity_bootstrap", login_grant: first.login_grant }),
       });
       expect(oldGrant.status).toBe(401);
+      const supersededGrant = await fetch(`${origin}/v2/session/oidc/begin`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ kind: "identity_bootstrap", login_grant: second.login_grant }),
+      });
+      expect(supersededGrant.status).toBe(401);
 
       provider.email = "jane@example.com";
-      const employee = await login(origin, second.login_grant as string);
+      const employee = await login(origin, third.login_grant as string);
       const employeeAccess = employee.access_token as string;
+      const redundantReissue = await fetch(`${origin}/v1/person/employees`, {
+        method: "PUT",
+        headers: { authorization: `Bearer ${founderAccess}`, "content-type": "application/json" },
+        body: JSON.stringify({ email: "jane@example.com" }),
+      });
+      expect(redundantReissue.status).toBe(409);
       const employeeDenied = await fetch(`${origin}/v1/person/employees`, {
+        headers: { authorization: `Bearer ${employeeAccess}` },
+      });
+      expect(employeeDenied.status).toBe(401);
+
+      const employeeWriteDenied = await fetch(`${origin}/v1/person/employees`, {
         method: "PUT",
         headers: { authorization: `Bearer ${employeeAccess}`, "content-type": "application/json" },
         body: JSON.stringify({ email: "jane@example.com" }),
       });
-      expect(employeeDenied.status).toBe(401);
+      expect(employeeWriteDenied.status).toBe(401);
+
+      const redeemedRoster = await fetch(`${origin}/v1/person/employees`, {
+        headers: { authorization: `Bearer ${founderAccess}` },
+      });
+      expect(redeemedRoster.status).toBe(200);
+      const redeemedEmployees = (await json(redeemedRoster)).employees as Array<Record<string, unknown>>;
+      expect(redeemedEmployees).toEqual(
+        expect.arrayContaining([
+          {
+            email: "jane@example.com",
+            display_name: "Jane Doe",
+            membership_status: "active",
+            invitation_state: "redeemed",
+          },
+          {
+            email: "john@example.com",
+            display_name: "John Doe",
+            membership_status: "active",
+            invitation_state: "pending",
+          },
+        ]),
+      );
 
       const revoke = await fetch(`${origin}/v1/person/employees`, {
         method: "DELETE",
@@ -195,6 +265,27 @@ describe("clean Person employee lifecycle", () => {
         body: JSON.stringify({ email: "jane@example.com" }),
       });
       expect(revoke.status).toBe(204);
+      const revokedRoster = await fetch(`${origin}/v1/person/employees`, {
+        headers: { authorization: `Bearer ${founderAccess}` },
+      });
+      expect(revokedRoster.status).toBe(200);
+      const revokedEmployees = (await json(revokedRoster)).employees as Array<Record<string, unknown>>;
+      expect(revokedEmployees).toEqual(
+        expect.arrayContaining([
+          {
+            email: "jane@example.com",
+            display_name: "Jane Doe",
+            membership_status: "revoked",
+            invitation_state: "none",
+          },
+          {
+            email: "john@example.com",
+            display_name: "John Doe",
+            membership_status: "active",
+            invitation_state: "pending",
+          },
+        ]),
+      );
       const revokedRead = await fetch(`${origin}/v1/person/records`, {
         headers: { authorization: `Bearer ${employeeAccess}` },
       });
@@ -213,6 +304,19 @@ describe("clean Person employee lifecycle", () => {
         headers: { authorization: `Bearer ${rehired.access_token as string}` },
       });
       expect(rehiredRead.status).toBe(200);
+      const rehiredRoster = await fetch(`${origin}/v1/person/employees`, {
+        headers: { authorization: `Bearer ${founderAccess}` },
+      });
+      expect(rehiredRoster.status).toBe(200);
+      const currentEmployees = (await json(rehiredRoster)).employees as Array<Record<string, unknown>>;
+      expect(currentEmployees.filter((entry) => entry.email === "jane@example.com")).toEqual([
+        {
+          email: "jane@example.com",
+          display_name: "Jane Doe Again",
+          membership_status: "active",
+          invitation_state: "redeemed",
+        },
+      ]);
     } finally {
       await runtime.close();
     }

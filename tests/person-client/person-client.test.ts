@@ -702,6 +702,65 @@ describe("Person client", () => {
     });
   });
 
+  it("renders the owner employee roster without local database access or lifecycle identifiers", async () => {
+    await withHome(async (home) => {
+      const authority = authorityDescriptor();
+      let stdout = "";
+      const client = new PersonClient({
+        home_directory: home,
+        now: () => "2026-08-18T00:00:00.000Z",
+        fetch: async () => json({ authority_descriptor: authority }),
+      });
+      await client.installSession("https://authority.example", {
+        ...SESSION,
+        membership_type: "owner",
+      });
+      const status = await runPersonClientCli(["employee", "list"], {
+        stdout: { write: (value) => ((stdout += String(value)), true) },
+        stderr: { write: () => true },
+        home_directory: home,
+        now: () => "2026-08-18T00:00:00.000Z",
+        fetch: async (input, init) => {
+          expect(new URL(String(input)).pathname).toBe("/v1/person/employees");
+          expect(init?.method).toBe("GET");
+          expect(new Headers(init?.headers).get("authorization")).toBe(
+            `Bearer ${SESSION.access_token}`,
+          );
+          return json({
+            schema_version: 1,
+            kind: "echo-clean-person-employee-roster-v1",
+            employees: [
+              {
+                email: "jane@example.com",
+                display_name: "Jane Doe",
+                membership_status: "active",
+                invitation_state: "pending",
+              },
+            ],
+          });
+        },
+      });
+      expect(status).toBe(0);
+      expect(JSON.parse(stdout)).toEqual({
+        ok: true,
+        result: {
+          schema_version: 1,
+          kind: "echo-clean-person-employee-roster-v1",
+          employees: [
+            {
+              email: "jane@example.com",
+              display_name: "Jane Doe",
+              membership_status: "active",
+              invitation_state: "pending",
+            },
+          ],
+        },
+      });
+      expect(stdout).not.toContain("mem_");
+      expect(stdout).not.toContain("prn_");
+    });
+  });
+
   it("preflights an existing employee invitation output before remote issuance", async () => {
     await withHome(async (home) => {
       const authority = authorityDescriptor();
@@ -782,6 +841,37 @@ describe("Person client", () => {
       await expect(
         client.inviteEmployee({ name: "Jane Doe", email: "jane@example.com", output_path: output }),
       ).rejects.toThrow("Person Authority request failed");
+      expect(existsSync(output)).toBe(false);
+    });
+  });
+
+  it("explains that a bound employee signs in without reissuing an invitation", async () => {
+    await withHome(async (home) => {
+      const authority = authorityDescriptor();
+      const output = join(home, "invite.json");
+      const client = new PersonClient({
+        home_directory: home,
+        now: () => NOW,
+        fetch: async (input) => {
+          if (new URL(String(input)).pathname === "/v1/authority-descriptor") {
+            return json({ authority_descriptor: authority });
+          }
+          return json(
+            { error: { code: "conflict", message: "request failed" } },
+            409,
+          );
+        },
+      });
+      await client.installSession("https://authority.example", {
+        ...ROTATED_SESSION,
+        membership_type: "owner",
+      });
+      await expect(
+        client.reissueEmployee({
+          email: "jane@example.com",
+          output_path: output,
+        }),
+      ).rejects.toThrow(/identity onboarding is already complete.*Authority URL/);
       expect(existsSync(output)).toBe(false);
     });
   });

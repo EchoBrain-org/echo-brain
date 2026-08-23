@@ -45,23 +45,37 @@ Every product bug found during onboarding is fixed by building another exact
 candidate and rerunning the same setup, install, status, and canary surfaces.
 No bug should require direct SQLite work or generated-ID handoffs.
 
-## Starting point
+## Current candidate
 
 The clean Authority already supports founder bootstrap, OIDC Person sessions,
 founder Slack linking, verified organization Slack connection, stopped source
 activation, live-only Granola polling, approval/rejection, Layer 1 append,
 automatic Layer 2 reconciliation, and permission-aware Layer 3 list/search.
 
-The remaining product gap is onboarding:
+The candidate now adds the narrow onboarding product surface:
 
-- the clean HTTP surface and clean founder command issue only the seeded owner
-  invitation;
-- employee membership, invitation, reissue, and revocation are not wired into
-  clean live;
-- founder setup is split across shell commands and has no single safe status
-  view; and
-- Granola admission verifies local credential shape and founder email but does
-  not make a bounded provider preflight request.
+- one server `prepare` followed by the same repeatable `resume` command and a
+  safe `status` view;
+- founder bootstrap recovery from its durable non-secret setup plan, without
+  re-entering organization, OIDC, origin, channel, or revision inputs;
+- bounded Granola owner observation before activation; and
+- owner-only employee list, invite, reissue, and revoke commands, with no
+  generated-ID handoff.
+
+The employee roster requires the canonical work email to be retained alongside
+its lookup digest in fresh Authority state. It returns one current row per work
+email: the active tenure when one exists, otherwise the latest revoked tenure.
+Only the owner can read the projection, and it contains only email, display
+name, membership state, and invitation state.
+
+This changes the fresh Authority genesis bytes. There are no live users on the
+pre-roster rehearsal baseline, so this candidate replaces that rehearsal state
+through clean organization re-onboarding. It must not be applied to the old
+rehearsal state as a baseline-preserving image update. The first accepted
+live-user release freezes the new exact baseline hash. The supported server
+runbook makes this recoverable with
+`onboard-clean-v1.sh replace-rehearsal --confirm-no-live-users`, which stops and
+archives rather than deletes the old rehearsal state before a new `prepare`.
 
 Slack and Granola revision quirks remain ordinary integration-product work.
 They do not expand this sprint unless they prevent setup from completing or
@@ -147,6 +161,12 @@ Add the narrow owner-authenticated clean-live operations needed to:
 A thin CLI is the V1 operator surface. No browser administrator console or
 generic role system is required.
 
+The owner checks the current human-readable roster at any time with:
+
+```sh
+echo-brain person employee list
+```
+
 The employee receives the invitation through a private out-of-band channel,
 runs the packaged `echo-brain person login --invitation ...` flow, and then uses
 `echo-brain person records` with or without `--query`. The login handoff must be
@@ -176,6 +196,15 @@ to a current-user `0700` directory; `/tmp` itself is not private and is rejected
 Do not use a relative path, a root path, a symlinked invitation leaf, or an
 existing output file.
 
+On the receiving machine, keep the file private before login:
+
+```sh
+RECEIVED_DIR="$HOME/.local/share/echo-brain/onboarding"
+install -d -m 0700 "$RECEIVED_DIR"
+install -m 0600 /absolute/path/to/received-file \
+  "$RECEIVED_DIR/employee-onboarding.json"
+```
+
 On the employee machine, install the exact released Person-client artifact, then
 run the browser-assisted login and both allowed read paths:
 
@@ -202,6 +231,16 @@ echo-brain person employee reissue \
   --email employee@example.com \
   --out "$INVITATION_DIR/employee-onboarding-reissue.json"
 ```
+
+Reissue is only for an active employee whose initial bootstrap is still being
+completed; it invalidates the prior pending grant. Reinstalling the exact
+Person-client package preserves an existing local session. On a new or replaced
+machine after identity binding, install the client and run
+`echo-brain person login --authority-url https://<authority-host>`; no new
+invitation is needed. After membership revocation, onboarding the person again
+uses `employee invite` and creates a new tenure. `person status` describes the
+installed client and locally stored session; the owner roster and an actual
+records request are the authoritative current membership checks.
 
 ## Acceptance
 
@@ -262,13 +301,10 @@ The sprint is complete when all of the following pass against one candidate:
 
 ## Sequence
 
-1. Add resumable setup state/status and safe provider preflight.
-2. Wire clean employee create/invite/reissue/revoke.
-3. Remove raw callback copying from Person login and package the clean-machine
-   flow.
-4. Run fake-provider organization plus two-Person permission acceptance.
-5. Rehearse one real organization server and one clean employee machine using
+1. Land the resumable server wrapper, founder resume, and owner employee roster.
+2. Run fake-provider organization plus two-Person permission acceptance.
+3. Rehearse one real organization server and one clean employee machine using
    the second employee OIDC identity.
-6. Bind the accepted image and Person client into one release record; rehearse
+4. Bind the accepted image and Person client into one release record; rehearse
    one baseline-preserving server update and one verified client reinstall.
-7. Only after this exit, resume broad legacy deletion and migration closure.
+5. Only after this exit, resume broad legacy deletion and migration closure.

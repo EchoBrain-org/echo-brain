@@ -364,6 +364,14 @@ export function createCleanPersonHttpServer(
         url.search === ""
       ) {
         const authenticated = accessToken(request.headers.authorization);
+        if (method === "GET") {
+          json(
+            response,
+            200,
+            options.person_employees.list({ access_token: authenticated }),
+          );
+          return;
+        }
         const requestBody = await body(request);
         if (method === "POST") {
           json(

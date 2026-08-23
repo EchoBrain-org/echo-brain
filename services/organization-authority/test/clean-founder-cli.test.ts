@@ -193,7 +193,8 @@ describe("clean founder coordinator", () => {
         verified_at: "2026-08-22T12:00:00.000Z",
       },
       next_step: "resume_bootstrap",
-      next_instruction: "Run the same bootstrap command again.",
+      next_instruction:
+        "Run echo-organization-authority-clean-founder resume --state-dir <absolute-path>.",
     });
     expect(stdout).not.toContain("xoxb-test-token");
     expect(stdout).not.toContain("con_clean-founder");
@@ -282,6 +283,28 @@ describe("clean founder coordinator", () => {
     expect(() => readCleanFounderOnboardingManifest(state)).toThrow(
       "clean founder onboarding manifest is invalid",
     );
+  });
+
+  it("refuses resume when state exists but its exact setup plan is missing", async () => {
+    const state = stateDirectory();
+    mkdirSync(state, { mode: 0o700 });
+    let stderr = "";
+
+    const result = await runCleanFounderCli(
+      ["resume", "--state-dir", state],
+      {
+        stdout: () => undefined,
+        stderr: (value) => (stderr += value),
+        read_stdin: async () => {
+          throw new Error("resume must not read Slack stdin without a plan");
+        },
+      },
+      dependencies([]),
+    );
+
+    expect(result).toBe(1);
+    expect(stderr).toContain("restore the exact setup plan");
+    expect(stderr).toContain("new clean state directory");
   });
 
   it("finalizes from the private manifest without asking for IDs", async () => {
@@ -562,7 +585,7 @@ describe("clean founder coordinator", () => {
     }
   });
 
-  it("preserves a pre-genesis plan and resumes each completed setup stage without rereading Slack stdin", async () => {
+  it("resumes a lost bootstrap response from the durable plan without rereading connected Slack stdin", async () => {
     const state = stateDirectory();
     const order: string[] = [];
     const stage = {
@@ -627,16 +650,24 @@ describe("clean founder coordinator", () => {
 
     resetFails = false;
     failAfter = "credentials";
-    expect(await runCleanFounderCli(bootstrapArgs(state), io, deps)).toBe(1);
+    expect(
+      await runCleanFounderCli(["resume", "--state-dir", state], io, deps),
+    ).toBe(1);
     failAfter = "slack";
-    expect(await runCleanFounderCli(bootstrapArgs(state), io, deps)).toBe(1);
+    expect(
+      await runCleanFounderCli(["resume", "--state-dir", state], io, deps),
+    ).toBe(1);
     expect(order.filter((value) => value === "credentials")).toHaveLength(1);
     failAfter = "invitation";
-    expect(await runCleanFounderCli(bootstrapArgs(state), io, deps)).toBe(1);
+    expect(
+      await runCleanFounderCli(["resume", "--state-dir", state], io, deps),
+    ).toBe(1);
     expect(order.filter((value) => value === "slack")).toHaveLength(1);
     expect(stdinReads).toBe(1);
     failAfter = undefined;
-    expect(await runCleanFounderCli(bootstrapArgs(state), io, deps)).toBe(0);
+    expect(
+      await runCleanFounderCli(["resume", "--state-dir", state], io, deps),
+    ).toBe(0);
     expect(order.filter((value) => value === "invitation")).toHaveLength(1);
     expect(stdinReads).toBe(1);
   });

@@ -88,10 +88,23 @@ echo-organization-authority-clean-founder bootstrap \
 ```
 
 `--artifact-revision <revision>` is optional and defaults to `clean-founder-v1`.
-The command is resumable only with exactly the same bootstrap arguments. Its
-private, non-secret manifest is
+The private, non-secret setup plan is
 `/absolute/clean-state/onboarding/clean-founder-v1.json`; do not edit or move
-it. Use this safe status view at any time:
+it. If the command stops or its response is lost, resume from that plan without
+repeating the organization, owner, OIDC, origin, channel, or revision inputs:
+
+```sh
+echo-organization-authority-clean-founder resume \
+  --state-dir /absolute/clean-state \
+  < /absolute/private/slack-bot-token
+```
+
+When Slack is already connected, `resume` does not read standard input, so the
+redirection may be omitted. If Slack was not yet connected, it still requires
+the token on standard input and performs the same verification. If the setup
+plan is missing, restore that exact plan or start with a new clean state
+directory; do not try to recreate it around existing state. Use this safe
+status view at any time:
 
 ```sh
 echo-organization-authority-clean-founder status \
@@ -249,8 +262,9 @@ Approved content is selected at the frozen Granola source snapshot:
 A later folder move does not reinterpret a posted card or approved record.
 Revoking a membership denies both list and search for that tenure. A newly
 invited employee gets a new membership tenure and may read only content allowed
-to that membership. Owner-managed employee invitation, reissue, and revocation
-commands are documented in the [product onboarding flow](../../docs/product/2026-08-22-organization-onboarding-and-employee-rollout-v1.md#employee-rehearsal-commands).
+to that membership. The owner sees the current roster with
+`echo-brain person employee list`; invite, list, reissue, and revoke commands
+are documented in the [product onboarding flow](../../docs/product/2026-08-22-organization-onboarding-and-employee-rollout-v1.md#employee-rehearsal-commands).
 
 ## State and baselines
 
@@ -266,6 +280,10 @@ database. Do not modify SQLite files, copy one state directory into another,
 or introduce a schema migration under this runbook. After the first live-user
 release, use only baseline-preserving image replacements through the
 [release procedure](../../deploy/release/README.md).
+
+The pre-live roster candidate changes the Authority baseline bytes and replaces
+earlier rehearsal state through clean re-onboarding. It is not a compatible
+image update for that discarded rehearsal lineage.
 
 ## Verification
 

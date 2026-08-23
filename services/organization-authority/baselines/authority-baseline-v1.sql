@@ -32,6 +32,7 @@ CREATE TABLE authority_memberships (
   provisioned_at TEXT NOT NULL,
   revoked_at TEXT,
   revocation_reason TEXT,
+  employee_email TEXT,
   employee_email_sha256 TEXT CHECK (
     employee_email_sha256 IS NULL OR (
       length(employee_email_sha256) = 71 AND
@@ -41,8 +42,8 @@ CREATE TABLE authority_memberships (
   ),
   UNIQUE (membership_id, organization_id, principal_id, membership_type),
   CHECK (
-    (membership_type = 'employee' AND employee_email_sha256 IS NOT NULL) OR
-    (membership_type = 'owner' AND employee_email_sha256 IS NULL)
+    (membership_type = 'employee' AND employee_email IS NOT NULL AND employee_email_sha256 IS NOT NULL) OR
+    (membership_type = 'owner' AND employee_email IS NULL AND employee_email_sha256 IS NULL)
   ),
   CHECK ((status = 'active' AND revoked_at IS NULL AND revocation_reason IS NULL) OR
          (status = 'revoked' AND revoked_at IS NOT NULL AND revocation_reason IS NOT NULL))

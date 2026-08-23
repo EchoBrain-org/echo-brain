@@ -29,6 +29,7 @@ import type {
   PersonSessionWriteTransaction,
 } from "../../../application/ports/person-session-repository.js";
 import type {
+  CleanEmployeeRosterEntry,
   CleanPersonMembershipWriteRepository,
   CleanPersonMembershipWriteTransaction,
 } from "../../../application/ports/clean-person-membership-write.js";
@@ -52,6 +53,13 @@ type MembershipRow = {
   provisioned_at: string;
   revoked_at: string | null;
   revocation_reason: string | null;
+};
+
+type EmployeeRosterRow = {
+  email: string;
+  display_name: string;
+  membership_status: "active" | "revoked";
+  invitation_state: "pending" | "expired" | "redeemed" | "none";
 };
 
 type OidcBindingRow = {
@@ -260,10 +268,71 @@ class Transaction implements PersonSessionWriteTransaction {
     return row === undefined ? undefined : membership(row);
   }
 
+  employeeMembershipHasActiveIdentityBinding(membershipId: string): boolean {
+    return this.database
+      .prepare(
+        `SELECT 1 FROM authority_oidc_identity_bindings
+          WHERE membership_id = ? AND membership_type = 'employee'
+            AND status = 'active'
+          LIMIT 1`,
+      )
+      .get(membershipId) !== undefined;
+  }
+
+  listEmployeeRoster(observedAt: string): readonly CleanEmployeeRosterEntry[] {
+    const rows = this.database
+      .prepare(
+        `SELECT membership.employee_email AS email,
+                principal.display_name AS display_name,
+                membership.status AS membership_status,
+                CASE
+                  WHEN EXISTS (
+                    SELECT 1 FROM authority_oidc_identity_bindings AS binding
+                     WHERE binding.membership_id = membership.membership_id
+                       AND binding.status = 'active'
+                  ) THEN 'redeemed'
+                  WHEN EXISTS (
+                    SELECT 1 FROM authority_person_login_grants AS pending
+                     WHERE pending.membership_id = membership.membership_id
+                       AND pending.consumed_at IS NULL
+                       AND pending.invalidated_at IS NULL
+                       AND pending.expires_at > ?
+                  ) THEN 'pending'
+                  WHEN EXISTS (
+                    SELECT 1 FROM authority_person_login_grants AS expired
+                     WHERE expired.membership_id = membership.membership_id
+                       AND expired.consumed_at IS NULL
+                       AND expired.invalidated_at IS NULL
+                       AND expired.expires_at <= ?
+                  ) THEN 'expired'
+                  ELSE 'none'
+                END AS invitation_state
+           FROM authority_memberships AS membership
+           JOIN authority_principals AS principal
+             ON principal.principal_id = membership.principal_id
+          WHERE membership.membership_type = 'employee'
+            AND membership.membership_id = (
+              SELECT candidate.membership_id
+                FROM authority_memberships AS candidate
+               WHERE candidate.organization_id = membership.organization_id
+                 AND candidate.membership_type = 'employee'
+                 AND candidate.employee_email_sha256 = membership.employee_email_sha256
+               ORDER BY (candidate.status = 'active') DESC,
+                        candidate.provisioned_at DESC,
+                        candidate.membership_id DESC
+               LIMIT 1
+            )
+          ORDER BY membership.provisioned_at DESC, membership.membership_id DESC`,
+      )
+      .all(observedAt, observedAt) as EmployeeRosterRow[];
+    return Object.freeze(rows.map((row) => Object.freeze({ ...row })));
+  }
+
   createEmployeeMembership(input: {
     principal_id: string;
     membership_id: string;
     display_name: string;
+    email: string;
     email_sha256: Sha256Digest;
   }): StoredAuthorityMembership {
     const now = this.writeTime();
@@ -275,13 +344,14 @@ class Transaction implements PersonSessionWriteTransaction {
       .run(input.principal_id, metadata.organization_id, input.display_name, now);
     this.database
       .prepare(
-        `INSERT INTO authority_memberships (membership_id, organization_id, principal_id, membership_type, status, provisioned_at, revoked_at, revocation_reason, employee_email_sha256) VALUES (?, ?, ?, 'employee', 'active', ?, NULL, NULL, ?)`,
+        `INSERT INTO authority_memberships (membership_id, organization_id, principal_id, membership_type, status, provisioned_at, revoked_at, revocation_reason, employee_email, employee_email_sha256) VALUES (?, ?, ?, 'employee', 'active', ?, NULL, NULL, ?, ?)`,
       )
       .run(
         input.membership_id,
         metadata.organization_id,
         input.principal_id,
         now,
+        input.email,
         input.email_sha256,
       );
     const stored = this.membership(input.membership_id);

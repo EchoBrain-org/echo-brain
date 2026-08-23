@@ -2,6 +2,9 @@ import { AuthorityOperationError } from "../domain/errors.js";
 import { isCanonicalPersonEmail } from "../domain/person-session-rules.js";
 import { personLoginGrantExpectedEmailSha256 } from "../domain/person-email-binding.js";
 import type {
+  CleanEmployeeRosterEntry,
+} from "./ports/clean-person-membership-write.js";
+import type {
   IssuedPersonLoginGrant,
   PersonIdentitySessionApplication,
 } from "./person-identity-sessions.js";
@@ -9,6 +12,12 @@ import type {
 export interface IssuedCleanEmployeeInvitation {
   readonly login_grant: string;
   readonly expires_at: string;
+}
+
+export interface CleanEmployeeRosterV1 {
+  readonly schema_version: 1;
+  readonly kind: "echo-clean-person-employee-roster-v1";
+  readonly employees: readonly CleanEmployeeRosterEntry[];
 }
 
 export interface CleanEmployeeIdentityFactory {
@@ -79,6 +88,7 @@ export class CleanPersonEmployeeLifecycleApplication {
           principal_id: this.identities.next("prn"),
           membership_id: this.identities.next("mem"),
           display_name: input.name,
+          email: input.email,
           email_sha256: emailSha256,
         });
         return invitation(
@@ -88,6 +98,20 @@ export class CleanPersonEmployeeLifecycleApplication {
             { target_membership_id: membership.membership_id, expected_email: input.email },
           ),
         );
+      },
+    });
+  }
+
+  list(input: { access_token: string }): CleanEmployeeRosterV1 {
+    return this.sessions.withAuthenticatedMembershipWrite({
+      access_token: input.access_token,
+      commit: (authorization, transaction, observedAt) => {
+        ownerOnly(authorization.membership_type);
+        return Object.freeze({
+          schema_version: 1 as const,
+          kind: "echo-clean-person-employee-roster-v1" as const,
+          employees: Object.freeze([...transaction.listEmployeeRoster(observedAt)]),
+        });
       },
     });
   }
@@ -105,6 +129,16 @@ export class CleanPersonEmployeeLifecycleApplication {
         const membership = transaction.employeeMembershipByEmailSha256(emailSha256);
         if (membership === undefined || membership.status !== "active") {
           throw new AuthorityOperationError("not_found", "active employee was not found");
+        }
+        if (
+          transaction.employeeMembershipHasActiveIdentityBinding(
+            membership.membership_id,
+          )
+        ) {
+          throw new AuthorityOperationError(
+            "conflict",
+            "employee already completed identity onboarding",
+          );
         }
         transaction.invalidatePendingPersonLoginGrants(membership.membership_id);
         return invitation(

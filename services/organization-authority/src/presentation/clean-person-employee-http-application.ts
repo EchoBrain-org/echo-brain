@@ -21,6 +21,16 @@ function exactObject(value: unknown, keys: readonly string[]): Record<string, un
 }
 
 export interface CleanPersonEmployeeHttpApplication {
+  list(input: { access_token: string }): {
+    schema_version: 1;
+    kind: "echo-clean-person-employee-roster-v1";
+    employees: readonly {
+      email: string;
+      display_name: string;
+      membership_status: "active" | "revoked";
+      invitation_state: "pending" | "expired" | "redeemed" | "none";
+    }[];
+  };
   invite(input: { access_token: string; body: unknown }): {
     login_grant: string;
     expires_at: string;
@@ -36,6 +46,8 @@ export function createCleanPersonEmployeeHttpApplication(
   lifecycle: CleanPersonEmployeeLifecycleApplication,
 ): CleanPersonEmployeeHttpApplication {
   return Object.freeze({
+    list: ({ access_token }: { access_token: string }) =>
+      lifecycle.list({ access_token }),
     invite: ({ access_token, body }: { access_token: string; body: unknown }) => {
       const request = exactObject(body, ["name", "email"]);
       return lifecycle.invite({
