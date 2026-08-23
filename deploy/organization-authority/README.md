@@ -59,9 +59,11 @@ once through the explicit founder attestation:
 
 This stops the Compose profile and moves both `clean-data` and its environment
 file into a mode-`0700` timestamped `retired-rehearsals/` archive. It does not
-delete them. Run `prepare` again with the new exact release record. Never use
-this command after the first live-user release; subsequent baseline-preserving
-updates use the release procedure below.
+delete them. It also accepts a clean rehearsal created before this wrapper, so
+no wrapper-specific setup record is required for the one pre-live replacement.
+Run `prepare` again with the new exact release record. Never use this command
+after the first live-user release; subsequent baseline-preserving updates use
+the release procedure below.
 
 ## Resumable founder onboarding
 

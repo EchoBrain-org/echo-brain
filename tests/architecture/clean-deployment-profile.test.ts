@@ -184,6 +184,7 @@ describe("clean founder deployment profile", () => {
       expect(() =>
         execFileSync("bash", rootArguments, commandEnvironment),
       ).toThrow(/runtime user must be a non-root/);
+      rmSync(join(deploy, "clean-data/private/onboard-clean-v1.conf"));
       const retired = execFileSync(
         "bash",
         [

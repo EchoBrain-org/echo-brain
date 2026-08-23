@@ -309,7 +309,6 @@ bootstrap() {
 replace_rehearsal() {
   [[ $# -eq 1 && "$1" == --confirm-no-live-users ]] || usage
   require_host_prerequisites
-  require_prepared
   [[ -d "$DATA_DIR" && ! -L "$DATA_DIR" ]] || \
     fail 'clean rehearsal data directory is unsafe'
   [[ -f "$ENV_FILE" && ! -L "$ENV_FILE" ]] || \
