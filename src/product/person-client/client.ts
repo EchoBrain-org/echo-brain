@@ -7,6 +7,7 @@ import {
 } from "@echo-brain/organization-api";
 import {
   PersonAuthorityClient,
+  PersonAuthorityClientError,
   type CleanPersonRecordListV1,
   type CleanPersonRecordSearchV1,
 } from "./authority-client.js";
@@ -210,6 +211,19 @@ export class PersonClient {
       await this.authority(claimed.authority_origin).logout(
         claimed.session.access_token,
       );
+    } catch (error) {
+      // A membership revocation has already invalidated this credential. The
+      // Authority's explicit 401 is therefore a successful terminal result
+      // for local sign-out. Transport and server failures remain visible.
+      if (
+        !(
+          error instanceof PersonAuthorityClientError &&
+          error.code === "unauthorized" &&
+          error.status === 401
+        )
+      ) {
+        throw error;
+      }
     } finally {
       this.store.finishLogout();
     }

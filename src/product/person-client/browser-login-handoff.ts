@@ -95,6 +95,10 @@ function noStoreHtml(response: import("node:http").ServerResponse, status: numbe
     "content-type": "text/html; charset=utf-8",
     "content-length": String(bytes.byteLength),
     "cache-control": "no-store",
+    // The CLI closes the receiver immediately after the successful handoff.
+    // Do not leave a browser's HTTP/1.1 keep-alive socket for server.close()
+    // to drain on its own timeout.
+    connection: "close",
     "referrer-policy": "no-referrer",
     "x-content-type-options": "nosniff",
   });

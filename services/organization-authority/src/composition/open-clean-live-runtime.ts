@@ -8,9 +8,6 @@ import {
 import {
   CleanSlackReactionObserverV1,
   FileOrganizationSecretStore,
-  ORGANIZATION_MEMBER_READABLE_PERSON_CONSEQUENCE_SHA256,
-  ORGANIZATION_MEMBER_READABLE_PERSON_POLICY_CONTRACT_SHA256,
-  ORGANIZATION_MEMBER_READABLE_PERSON_POLICY_ID,
   SqliteCleanSlackApprovalTokenReaderV1,
   SqlitePersonSlackApprovalFinalizationCoordinatorV2,
   openOrganizationControlDatabase,
@@ -50,6 +47,7 @@ import {
   CleanD2ToD3ProcessingCoordinatorV1,
   SqliteCleanD2ToD3AuthorityStateV1,
 } from "../processing/clean-v1-d2-d3/clean-d2-d3-processing-coordinator.js";
+import { selectGranolaPersonContentPolicyV1 } from "../processing/clean-v1/granola-person-content-policy.js";
 import { createCleanV4RecordWriterV1 } from "../processing/clean-v1-record/clean-v4-record-writer.js";
 import {
   CLEAN_LLM_PROCESSOR_MAX_OUTPUT_TOKENS_V1,
@@ -254,6 +252,7 @@ const CLEAN_SLACK_APPROVAL_CARD_TRUNCATION_V1 =
  */
 export function renderCleanSlackApprovalCardTextV1(
   brief: DecisionBrief,
+  policyConsequenceText: string,
 ): string {
   const lines = [
     `Review ${brief.meeting.title ?? "meeting decisions"}`,
@@ -274,17 +273,27 @@ export function renderCleanSlackApprovalCardTextV1(
       ...signals.map((signal) => `• ${signal.text}`),
     );
   }
-  lines.push("", "React with :white_check_mark: to approve or :x: to reject.");
-  const rendered = lines.join("\n");
+  const footer = [
+    "",
+    policyConsequenceText,
+    "",
+    "React with :white_check_mark: to approve or :x: to reject.",
+  ].join("\n");
+  const rendered = `${lines.join("\n")}${footer}`;
   if (rendered.length <= CLEAN_SLACK_APPROVAL_CARD_TEXT_LIMIT_V1) {
     return rendered;
   }
+  const bodyLimit =
+    CLEAN_SLACK_APPROVAL_CARD_TEXT_LIMIT_V1 -
+    CLEAN_SLACK_APPROVAL_CARD_TRUNCATION_V1.length -
+    footer.length;
+  if (bodyLimit < 0) {
+    throw new Error("clean Slack approval policy consequence exceeds card limit");
+  }
   return (
-    rendered.slice(
-      0,
-      CLEAN_SLACK_APPROVAL_CARD_TEXT_LIMIT_V1 -
-        CLEAN_SLACK_APPROVAL_CARD_TRUNCATION_V1.length,
-    ) + CLEAN_SLACK_APPROVAL_CARD_TRUNCATION_V1
+    lines.join("\n").slice(0, bodyLimit) +
+    CLEAN_SLACK_APPROVAL_CARD_TRUNCATION_V1 +
+    footer
   );
 }
 
@@ -299,6 +308,7 @@ class CleanSlackCardFactoryV1 implements CleanSlackApprovalCardFactoryV1 {
   ) {}
 
   build(input: Parameters<CleanSlackApprovalCardFactoryV1["build"]>[0]) {
+    const policy = selectGranolaPersonContentPolicyV1(input.meeting.title);
     const brief = compileDecisionBrief(
       `brf_${input.candidate.candidate_semantic_sha256.slice("sha256:".length)}`,
       input.meeting,
@@ -328,7 +338,10 @@ class CleanSlackCardFactoryV1 implements CleanSlackApprovalCardFactoryV1 {
       payload_contract_id: "organization-record-approval-payload-v1" as const,
       approved_payload: payload,
     });
-    const text = renderCleanSlackApprovalCardTextV1(brief);
+    const text = renderCleanSlackApprovalCardTextV1(
+      brief,
+      policy.policy_consequence_text,
+    );
     return Object.freeze({
       text,
       frozen_card_sha256: canonicalSha256({
@@ -346,6 +359,7 @@ class CleanSlackCardFactoryV1 implements CleanSlackApprovalCardFactoryV1 {
     input: Parameters<CleanSlackApprovalCardFactoryV1["pendingApproval"]>[0],
   ) {
     const { stage, outbox } = input;
+    const policy = selectGranolaPersonContentPolicyV1(stage.meeting.title);
     if (
       outbox.provider_message_ts === null ||
       outbox.frozen_card_sha256 === null ||
@@ -366,11 +380,9 @@ class CleanSlackCardFactoryV1 implements CleanSlackApprovalCardFactoryV1 {
         this.slack.approval_binding_contract_sha256,
       approval_channel_id: this.slack.approval_channel_id,
       provider_message_ts: outbox.provider_message_ts,
-      policy_id: ORGANIZATION_MEMBER_READABLE_PERSON_POLICY_ID,
-      policy_contract_sha256:
-        ORGANIZATION_MEMBER_READABLE_PERSON_POLICY_CONTRACT_SHA256,
-      policy_consequence_sha256:
-        ORGANIZATION_MEMBER_READABLE_PERSON_CONSEQUENCE_SHA256,
+      policy_id: policy.policy_id,
+      policy_contract_sha256: policy.policy_contract_sha256,
+      policy_consequence_sha256: policy.policy_consequence_sha256,
       frozen_card_sha256: outbox.frozen_card_sha256 as Sha256Digest,
       approved_snapshot_sha256: outbox.approved_snapshot_sha256 as Sha256Digest,
     });

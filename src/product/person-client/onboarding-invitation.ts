@@ -10,7 +10,7 @@ import {
   realpathSync,
   writeFileSync,
 } from "node:fs";
-import { dirname, isAbsolute, resolve } from "node:path";
+import { basename, dirname, isAbsolute, join, resolve } from "node:path";
 import { canonicalJson } from "@echo-brain/federation-protocol";
 import { validateOrganizationAuthorityOrigin } from "@echo-brain/organization-api";
 
@@ -39,14 +39,24 @@ function invitationPath(value: string): string {
   return value;
 }
 
-function assertPrivateOutputParent(path: string): void {
+/**
+ * Resolves only the already-existing parent. This accepts macOS's `/tmp`
+ * spelling when the actual private directory is under `/private/tmp`, while
+ * leaving the invitation leaf un-resolved so a leaf symlink is never accepted.
+ */
+function canonicalInvitationPath(inputPath: string): string {
+  const path = invitationPath(inputPath);
+  const canonicalParent = realpathSync(dirname(path));
+  return join(canonicalParent, basename(path));
+}
+
+function assertPrivateOutputParent(inputPath: string): string {
+  const path = canonicalInvitationPath(inputPath);
   const parent = dirname(path);
   const state = lstatSync(parent);
   const currentUid = process.getuid?.();
   if (
-    state.isSymbolicLink() ||
     !state.isDirectory() ||
-    realpathSync(parent) !== parent ||
     (currentUid !== undefined && state.uid !== currentUid) ||
     (state.mode & 0o777) !== 0o700
   ) {
@@ -54,6 +64,7 @@ function assertPrivateOutputParent(path: string): void {
       "Person onboarding output parent must be a current-user 0700 canonical directory",
     );
   }
+  return path;
 }
 
 function fsyncParent(path: string): void {
@@ -70,8 +81,7 @@ function fsyncParent(path: string): void {
  * write remains authoritative: a rare race is recoverable by reissuing.
  */
 export function preflightPersonOnboardingInvitationOutput(inputPath: string): string {
-  const path = invitationPath(inputPath);
-  assertPrivateOutputParent(path);
+  const path = assertPrivateOutputParent(inputPath);
   try {
     lstatSync(path);
   } catch (error) {
@@ -123,7 +133,7 @@ function validate(value: unknown): PersonOnboardingInvitationV1 {
 export function readPersonOnboardingInvitation(
   inputPath: string,
 ): PersonOnboardingInvitationV1 {
-  const path = invitationPath(inputPath);
+  const path = canonicalInvitationPath(inputPath);
   const before = lstatSync(path);
   const currentUid = process.getuid?.();
   if (
@@ -180,8 +190,7 @@ export function writePersonOnboardingInvitation(
   inputPath: string,
   value: PersonOnboardingInvitationV1,
 ): void {
-  const path = invitationPath(inputPath);
-  assertPrivateOutputParent(path);
+  const path = assertPrivateOutputParent(inputPath);
   const invitation = validate(value);
   const bytes = `${canonicalJson(invitation)}\n`;
   if (Buffer.byteLength(bytes, "utf8") > MAXIMUM_INVITATION_BYTES) {

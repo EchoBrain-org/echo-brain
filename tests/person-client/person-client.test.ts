@@ -122,6 +122,73 @@ describe("Person client", () => {
     });
   });
 
+  it("treats an explicitly revoked session as a successful local logout without masking server failures", async () => {
+    await withHome(async (home) => {
+      const authority = authorityDescriptor();
+      await new PersonClient({
+        home_directory: home,
+        now: () => NOW,
+        fetch: async () => json({ authority_descriptor: authority }),
+      }).installSession("https://authority.example", ROTATED_SESSION);
+
+      let stdout = "";
+      let stderr = "";
+      const status = await runPersonClientCli(["logout"], {
+        stdout: { write: (value) => ((stdout += String(value)), true) },
+        stderr: { write: (value) => ((stderr += String(value)), true) },
+        home_directory: home,
+        fetch: async (input, init) => {
+          expect(new URL(String(input)).pathname).toBe("/v2/session/revocations");
+          expect(init?.method).toBe("POST");
+          expect(new Headers(init?.headers).get("authorization")).toBe(
+            `Bearer ${ROTATED_SESSION.access_token}`,
+          );
+          return json(
+            { error: { code: "unauthorized", message: "request failed" } },
+            401,
+          );
+        },
+      });
+
+      expect(status).toBe(0);
+      expect(JSON.parse(stdout)).toEqual({ ok: true });
+      expect(stderr).toBe("");
+      expect(() => new PersonClient({ home_directory: home }).sessionSummary()).toThrow(
+        /sign in again/,
+      );
+    });
+
+    await withHome(async (home) => {
+      const authority = authorityDescriptor();
+      await new PersonClient({
+        home_directory: home,
+        now: () => NOW,
+        fetch: async () => json({ authority_descriptor: authority }),
+      }).installSession("https://authority.example", ROTATED_SESSION);
+
+      let stdout = "";
+      let stderr = "";
+      const status = await runPersonClientCli(["logout"], {
+        stdout: { write: (value) => ((stdout += String(value)), true) },
+        stderr: { write: (value) => ((stderr += String(value)), true) },
+        home_directory: home,
+        fetch: async () =>
+          json({ error: { code: "unavailable", message: "request failed" } }, 503),
+      });
+
+      expect(status).toBe(1);
+      expect(stdout).toBe("");
+      expect(JSON.parse(stderr)).toMatchObject({
+        ok: false,
+        action: "logout",
+        error: "Person Authority rejected the request",
+      });
+      expect(() => new PersonClient({ home_directory: home }).sessionSummary()).toThrow(
+        /sign in again/,
+      );
+    });
+  });
+
   it("limits development HTTP origins to numeric loopback", async () => {
     await withHome(async (home) => {
       const authority = authorityDescriptor();

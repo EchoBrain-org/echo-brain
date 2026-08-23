@@ -5,12 +5,13 @@ import {
   mkdirSync,
   mkdtempSync,
   readFileSync,
+  realpathSync,
   rmSync,
   symlinkSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { join, resolve } from "node:path";
+import { basename, dirname, join, resolve } from "node:path";
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { afterEach, describe, expect, it } from "vitest";
@@ -20,6 +21,7 @@ const TOOL = join(REPO, "tools", "clean-v1-release.mjs");
 const DEPLOY_TOOL = join(REPO, "deploy", "release", "clean-v1-release.py");
 const UPDATE = join(REPO, "deploy", "organization-authority", "update-clean-v1.sh");
 const INSTALL = join(REPO, "deploy", "release", "install-person-client-clean-v1.sh");
+const BUNDLE = join(REPO, "deploy", "release", "create-offline-person-client-bundle.mjs");
 const DOCKERFILE = join(REPO, "deploy", "organization-authority", "Dockerfile");
 const roots: string[] = [];
 
@@ -266,6 +268,140 @@ printf '%s\\n' '{"schema_version":1,"kind":"echo-packaged-build-identity","produ
     expect(result.status).toBe(1);
     expect(result.stderr).toContain("build identity does not match");
     expect(result.stdout).not.toContain("a".repeat(40));
+  });
+
+  it("creates a zero-argument offline bundle and preserves an existing employee session on reinstall", () => {
+    const root = realpathSync(mkdtempSync(join(tmpdir(), "echo-clean-v1-offline-bundle-")));
+    roots.push(root);
+    const sourceSha = "a".repeat(40);
+    const version = "0.1.0-internal.1";
+    const artifact = join(root, "client.tgz");
+    const output = join(root, "employee-bundle.tar.gz");
+    const extracted = join(root, "extracted");
+    const packageRoot = join(root, "package", "dist");
+    const home = join(root, "employee-home");
+    const session = join(home, ".local", "share", "echo-brain", "person", "session.v1.json");
+    mkdirSync(packageRoot, { recursive: true });
+    writeFileSync(join(packageRoot, "build-identity.v1.json"), JSON.stringify({
+      schema_version: 1,
+      kind: "echo-packaged-build-identity",
+      product_version: version,
+      source_sha: sourceSha,
+      source_kind: "materialized-commit",
+    }));
+    expect(run("tar", ["-czf", artifact, "-C", root, "package"]).status).toBe(0);
+    const artifactSha = createHash("sha256").update(readFileSync(artifact)).digest("hex");
+    const release = writeRecord(record({
+      source_sha: sourceSha,
+      person_client: { ...record().person_client, version, artifact_sha256: artifactSha },
+    }));
+
+    const bundled = run(process.execPath, [BUNDLE, "--release", release, "--artifact", artifact, "--output", output]);
+    expect(bundled.status).toBe(0);
+    const bundleReceipt = JSON.parse(bundled.stdout);
+    expect(readFileSync(`${output}.sha256`, "utf8")).toBe(`${bundleReceipt.bundle_sha256}  ${basename(output)}\n`);
+    mkdirSync(extracted);
+    expect(run("tar", ["-xzf", output, "-C", extracted]).status).toBe(0);
+    const members = run("tar", ["-tzf", output]).stdout.split("\n").filter(Boolean);
+    expect([...members].sort()).toEqual([
+      "echo-brain-person-client-clean-v1-20260822-001/",
+      "echo-brain-person-client-clean-v1-20260822-001/clean-v1-release.py",
+      "echo-brain-person-client-clean-v1-20260822-001/install.sh",
+      "echo-brain-person-client-clean-v1-20260822-001/install-person-client-clean-v1.sh",
+      "echo-brain-person-client-clean-v1-20260822-001/person-client.tgz",
+      "echo-brain-person-client-clean-v1-20260822-001/release.json",
+    ].sort());
+    expect(members.join("\n")).not.toMatch(/authority|credential|secret|provider/i);
+
+    mkdirSync(dirname(session), { recursive: true });
+    writeFileSync(session, "existing-private-session");
+    const bin = join(root, "bin");
+    mkdirSync(bin);
+    const node = join(bin, "node");
+    const npm = join(bin, "npm");
+    writeFileSync(node, "#!/usr/bin/env bash\nprintf 'v22.22.1\\n'\n");
+    writeFileSync(npm, [
+      "#!/usr/bin/env bash",
+      "if [[ \"$1\" == --version ]]; then printf '10.9.4\\n'; exit 0; fi",
+      "for ((i=1; i<=$#; i++)); do",
+      "  if [[ \"${!i}\" == --prefix ]]; then j=$((i + 1)); prefix=\"${!j}\"; fi",
+      "done",
+      "mkdir -p \"$prefix/bin\" \"$prefix/lib/node_modules/@echo-brain/person-client/dist\"",
+      `printf '#!/usr/bin/env bash\\nif [[ \"$1\" == --version ]]; then printf \"${version}\\\\n\"; else printf \"{}\\\\n\"; fi\\n' > \"$prefix/bin/echo-brain\"`,
+      "chmod 0755 \"$prefix/bin/echo-brain\"",
+      `printf '%s\\n' '{\"schema_version\":1,\"kind\":\"echo-packaged-build-identity\",\"product_version\":\"${version}\",\"source_sha\":\"${sourceSha}\",\"source_kind\":\"materialized-commit\"}' > \"$prefix/lib/node_modules/@echo-brain/person-client/dist/build-identity.v1.json\"`,
+      "",
+    ].join("\n"));
+    chmodSync(node, 0o755);
+    chmodSync(npm, 0o755);
+    const installed = run("bash", [join(extracted, "echo-brain-person-client-clean-v1-20260822-001", "install.sh")], {
+      PATH: `${bin}:${process.env.PATH}`,
+      HOME: home,
+    });
+    expect(installed.status).toBe(0);
+    expect(readFileSync(session, "utf8")).toBe("existing-private-session");
+  });
+
+  it("refuses noncanonical, digest-mismatched, and source-mismatched offline bundle inputs", () => {
+    const root = realpathSync(mkdtempSync(join(tmpdir(), "echo-clean-v1-offline-bundle-reject-")));
+    roots.push(root);
+    const artifact = join(root, "client.tgz");
+    const output = join(root, "employee-bundle.tar.gz");
+    const packageRoot = join(root, "package", "dist");
+    mkdirSync(packageRoot, { recursive: true });
+    writeFileSync(join(packageRoot, "build-identity.v1.json"), JSON.stringify({
+      schema_version: 1,
+      kind: "echo-packaged-build-identity",
+      product_version: "0.1.0-internal.1",
+      source_sha: "b".repeat(40),
+      source_kind: "materialized-commit",
+    }));
+    expect(run("tar", ["-czf", artifact, "-C", root, "package"]).status).toBe(0);
+    const artifactSha = createHash("sha256").update(readFileSync(artifact)).digest("hex");
+    const release = writeRecord(record({ person_client: { ...record().person_client, artifact_sha256: artifactSha } }));
+    const badSource = run(process.execPath, [BUNDLE, "--release", release, "--artifact", artifact, "--output", output]);
+    expect(badSource.status).toBe(1);
+    expect(badSource.stderr).toContain("build identity does not match");
+    expect(existsSync(output)).toBe(false);
+
+    const noncanonical = writeRecord(record());
+    writeFileSync(noncanonical, `${JSON.stringify(record())}\n`);
+    expect(run(process.execPath, [BUNDLE, "--release", noncanonical, "--artifact", artifact, "--output", output]).status).toBe(1);
+    expect(existsSync(output)).toBe(false);
+
+    const badDigest = writeRecord(record({ person_client: { ...record().person_client, artifact_sha256: "d".repeat(64) } }));
+    const digest = run(process.execPath, [BUNDLE, "--release", badDigest, "--artifact", artifact, "--output", output]);
+    expect(digest.status).toBe(1);
+    expect(digest.stderr).toContain("SHA-256");
+    expect(existsSync(output)).toBe(false);
+  });
+
+  it("refuses symlinked or already-present output paths without replacing their targets", () => {
+    const root = realpathSync(mkdtempSync(join(tmpdir(), "echo-clean-v1-offline-output-")));
+    roots.push(root);
+    const targetDirectory = join(root, "target");
+    const symlinkDirectory = join(root, "symlink");
+    const protectedTarget = join(targetDirectory, "bundle.tar.gz");
+    const existing = join(root, "existing.tar.gz");
+    mkdirSync(targetDirectory, { mode: 0o700 });
+    writeFileSync(protectedTarget, "do-not-replace");
+    symlinkSync(targetDirectory, symlinkDirectory);
+    writeFileSync(existing, "untrusted-input");
+    const symlinked = run(process.execPath, [BUNDLE, "--release", existing, "--artifact", existing, "--output", join(symlinkDirectory, "bundle.tar.gz")]);
+    expect(symlinked.status).toBe(1);
+    expect(symlinked.stderr).toContain("canonical real directory");
+    expect(readFileSync(protectedTarget, "utf8")).toBe("do-not-replace");
+
+    chmodSync(targetDirectory, 0o755);
+    const nonPrivate = run(process.execPath, [BUNDLE, "--release", existing, "--artifact", existing, "--output", join(targetDirectory, "new.tar.gz")]);
+    expect(nonPrivate.status).toBe(1);
+    expect(nonPrivate.stderr).toContain("current-user-owned mode 0700");
+    chmodSync(targetDirectory, 0o700);
+
+    const noReplace = run(process.execPath, [BUNDLE, "--release", existing, "--artifact", existing, "--output", existing]);
+    expect(noReplace.status).toBe(1);
+    expect(noReplace.stderr).toContain("already exists");
+    expect(readFileSync(existing, "utf8")).toBe("untrusted-input");
   });
 
   it("checks the exact Node and npm versions before creating the install prefix", () => {

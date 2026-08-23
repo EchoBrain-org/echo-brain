@@ -45,7 +45,7 @@ node tools/clean-v1-release.mjs validate \
 Its canonical shape is:
 
 ```json
-{"authority_image":{"reference":"123456789012.dkr.ecr.us-west-2.amazonaws.com/echo-brain/authority@sha256:<64-lowercase-hex>"},"baseline_compatibility_class":"clean-v1","kind":"echo-clean-v1-release","person_client":{"artifact_sha256":"<64-lowercase-hex>","artifact_url":"https://downloads.example/echo-brain-person-client.tgz","package":"@echo-brain/person-client","version":"0.1.0-internal.1"},"release_id":"clean-v1-20260822-001","released_at":"2026-08-22T20:00:00Z","schema_version":1,"source_sha":"<40-lowercase-hex>"}
+{"authority_image":{"reference":"<aws-account-id>.dkr.ecr.us-west-2.amazonaws.com/echo-brain/authority@sha256:<64-lowercase-hex>"},"baseline_compatibility_class":"clean-v1","kind":"echo-clean-v1-release","person_client":{"artifact_sha256":"<64-lowercase-hex>","artifact_url":"https://downloads.example/echo-brain-person-client.tgz","package":"@echo-brain/person-client","version":"0.1.0-internal.1"},"release_id":"clean-v1-20260822-001","released_at":"2026-08-22T20:00:00Z","schema_version":1,"source_sha":"<40-lowercase-hex>"}
 ```
 
 The angle-bracket text above is explanatory only; it is not valid record data.
@@ -114,39 +114,59 @@ instead.
 
 ## Employee client install or reinstall
 
-Give employees the accepted `current.clean-v1.json` record and its exact
-artifact through the normal private distribution channel. Use a staged
-candidate record only on the explicitly designated canary machine before
-promotion. Distribute this small release-helper directory as one unit: both
-`clean-v1-release.py` and `install-person-client-clean-v1.sh` must be siblings.
-On a machine with Node 22.22.1 and npm 10.9.4, run the copied installer. It
-needs no repository checkout, server access, generated IDs, or provider
-credentials.
+Create one offline employee bundle from the accepted canonical release record
+and the exact client artifact. Use a staged candidate only on the explicitly
+designated canary machine before promotion. The bundle builder rejects a
+noncanonical record, a mismatched artifact checksum, or a packaged build
+identity whose version/source commit does not match that record. Its output
+directory must be a canonical, current-user-owned directory with mode `0700`.
 
 ```sh
-install -d -m 0700 "$HOME/echo-brain-release-helper"
-install -m 0755 /absolute/private/clean-v1-release.py "$HOME/echo-brain-release-helper/clean-v1-release.py"
-install -m 0755 /absolute/private/install-person-client-clean-v1.sh "$HOME/echo-brain-release-helper/install-person-client-clean-v1.sh"
-"$HOME/echo-brain-release-helper/install-person-client-clean-v1.sh" \
-  --release /absolute/private/current.clean-v1.json
+npm run bundle:person-client -- \
+  --release /absolute/private/current.clean-v1.json \
+  --artifact /absolute/private/echo-brain-person-client-0.1.0-internal.1.tgz \
+  --output /absolute/private/echo-brain-person-client-clean-v1-20260822-001.tar.gz
 ```
 
-The default per-user prefix is `$HOME/.local`, so the installed `echo-brain`
-normally lands in `$HOME/.local/bin`. Pass `--prefix /absolute/prefix` only
-when the organization has a different standard per-user prefix; the installer
-prints the one PATH command needed when that bin directory is not active.
+The builder atomically publishes each of the archive and its detached
+`<bundle>.sha256` sidecar without replacing an existing file. Transfer both
+privately. The owner must send the exact 64-character archive digest through
+the employee's private invitation channel (or an equivalently authenticated
+private channel). That out-of-band owner transfer is the trust boundary; the
+sidecar is a transfer receipt, not an authority to trust a newly received
+archive.
 
-For an offline/private transfer, add `--artifact /absolute/path/client.tgz`.
-The installer verifies the record, verifies the artifact SHA-256 before npm is
-allowed to unpack it, installs with scripts, audit, funding notices, and
-registry access disabled, checks the exact Node/npm versions, installed package
-version, and non-secret packaged build identity against the release source
-commit, then runs
+Before extraction, the employee verifies the received archive against the
+digest sent by the owner. On an employee machine with Node 22.22.1 and npm
+10.9.4:
+
+```sh
+export EXPECTED_BUNDLE_SHA256='exact-64-lowercase-hex-from-owner'
+test "$(cat echo-brain-person-client-clean-v1-20260822-001.tar.gz.sha256)" = \
+  "$EXPECTED_BUNDLE_SHA256  echo-brain-person-client-clean-v1-20260822-001.tar.gz"
+printf '%s  %s\n' "$EXPECTED_BUNDLE_SHA256" \
+  echo-brain-person-client-clean-v1-20260822-001.tar.gz | shasum -a 256 -c -
+tar -xzf echo-brain-person-client-clean-v1-20260822-001.tar.gz
+cd echo-brain-person-client-clean-v1-20260822-001
+./install.sh
+```
+
+The archive contains exactly the canonical release record, exact client
+artifact, release validator, checksum installer, and this zero-argument
+wrapper. It contains no Authority image, server state, provider configuration,
+or credentials. The installer verifies the release record and artifact
+SHA-256 before npm is allowed to unpack it, installs with scripts, audit,
+funding notices, and registry access disabled, checks the exact Node/npm
+versions, installed package version, and non-secret packaged build identity
+against the release source commit, then runs
 `echo-brain person status`. That status output contains only the installed
 version, whether a local session exists, its safe owner/employee membership
 type, and the connected public Authority origin. It never prints the session,
 refresh token, invitation grant, or IDs.
 
-Re-running the same command is the V1 update mechanism. It replaces packaged
-code only; it leaves the employee's private session state in place. There is no
-background updater, MDM integration, or automatic rollback.
+The default per-user prefix is `$HOME/.local`, so the installed `echo-brain`
+normally lands in `$HOME/.local/bin`; the installer prints the one PATH command
+needed when that bin directory is not active. Re-running `./install.sh` is the
+V1 update mechanism. It replaces packaged code only; it leaves the employee's
+private session state in place. There is no background updater, MDM integration,
+public artifact bucket, signed download URL, or automatic rollback.

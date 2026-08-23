@@ -87,7 +87,73 @@ const RULES: Readonly<
 };
 
 function usage(): string {
-  return `usage: echo-brain person <${Object.keys(RULES).join("|")}>`;
+  return "usage: echo-brain person <command> [options]";
+}
+
+const HELP: Readonly<Record<string, string>> = {
+  person: `${usage()}
+
+Commands:
+  login       Sign in with an invitation or existing Authority identity.
+  status      Show installed version and sign-in state.
+  logout      Remove the local session.
+  records     List records or search the current generation.
+  employee    Invite, reissue, or revoke an employee.
+  slack-link  Link the signed-in founder to Slack.
+
+Run \`echo-brain person <command> --help\` for command options.
+`,
+  login: `usage: echo-brain person login (--invitation <path> | --authority-url <url>)
+
+Provide exactly one option. The browser handoff completes sign-in without pasting callback data.
+`,
+  status: `usage: echo-brain person status
+
+Shows the installed version, sign-in state, membership type, and Authority origin.
+`,
+  logout: `usage: echo-brain person logout
+
+Removes the local session. A revoked session is also removed locally.
+`,
+  records: `usage: echo-brain person records [--limit <1-100>] [--query <text>]
+
+Without --query, lists recent released records. With --query, searches the current Layer 2 generation.
+`,
+  employee: `usage: echo-brain person employee <invite|reissue|revoke> [options]
+
+Run \`echo-brain person employee <command> --help\` for required options.
+`,
+  "employee-invite": `usage: echo-brain person employee invite --name <name> --email <email> --out <absolute-path>
+
+All options are required. --out must name a new file in a current-user 0700 directory.
+`,
+  "employee-reissue": `usage: echo-brain person employee reissue --email <email> --out <absolute-path>
+
+All options are required. --out must name a new file in a current-user 0700 directory.
+`,
+  "employee-revoke": `usage: echo-brain person employee revoke --email <email>
+
+--email is required. Revocation ends that employee membership immediately.
+`,
+};
+
+/** Returns supported human CLI help without constructing a client or session. */
+function personClientCliHelp(argv: readonly string[]): string | undefined {
+  if (argv.length === 1 && argv[0] === "--help") return HELP.person;
+  if (argv.length === 2 && argv[1] === "--help") return HELP[argv[0] ?? ""];
+  if (
+    argv.length === 3 &&
+    argv[0] === "employee" &&
+    argv[2] === "--help"
+  ) {
+    const action = ({
+      invite: "employee-invite",
+      reissue: "employee-reissue",
+      revoke: "employee-revoke",
+    } as const)[argv[1] as "invite" | "reissue" | "revoke"];
+    return action === undefined ? undefined : HELP[action];
+  }
+  return undefined;
 }
 
 function print(output: Output, value: unknown): void {
@@ -155,6 +221,11 @@ export async function runPersonClientCli(
 ): Promise<number> {
   const stdout = dependencies.stdout ?? process.stdout;
   const stderr = dependencies.stderr ?? process.stderr;
+  const help = personClientCliHelp(argv);
+  if (help !== undefined) {
+    stdout.write(help);
+    return 0;
+  }
   const employeeAction =
     argv[0] === "employee"
       ? ({ invite: "employee-invite", reissue: "employee-reissue", revoke: "employee-revoke" } as const)[argv[1] ?? "" as "invite" | "reissue" | "revoke"]

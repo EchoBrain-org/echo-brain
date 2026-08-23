@@ -40,7 +40,9 @@ import {
   type PersonSlackApprovalObserverV2,
 } from "@echo-brain/organization-control-plane/clean-runtime-v1";
 import {
+  ORGANIZATION_MEMBER_READABLE_PERSON_CONSEQUENCE_TEXT,
   RESTRICTED_REVIEWER_PERSON_POLICY_CONTRACT_SHA256,
+  RESTRICTED_REVIEWER_PERSON_CONSEQUENCE_TEXT,
   RESTRICTED_REVIEWER_PERSON_POLICY_ID,
   SLACK_APPROVAL_REQUIRED_PROVIDER_SCOPES,
   buildExternalHumanIdentityLinkContractV2,
@@ -429,41 +431,53 @@ function seedActiveSlackApproval(input: {
         "INSERT INTO organization_approval_binding_current VALUES (?, ?, 'active', ?)",
       )
       .run(binding.approval_binding_id, bindingSha, NOW);
-    for (const action of ["approve", "reject"] as const) {
-      const capability = buildPersonSlackApprovalActionCapabilityV2({
-        ...coordinates,
-        action_capability_id: `cap_live_${action}`,
-        approval_binding_id: binding.approval_binding_id,
-        approval_binding_contract_sha256: bindingSha,
-        external_identity_link_id: link.external_identity_link_id,
-        principal_id: input.principal_id,
-        membership_id: input.membership_id,
-        membership_type: "owner",
+    for (const policy of [
+      {
         policy_id: ORGANIZATION_MEMBER_READABLE_PERSON_POLICY_ID,
         policy_contract_sha256:
           ORGANIZATION_MEMBER_READABLE_PERSON_POLICY_CONTRACT_SHA256,
-        action,
-      });
-      const capabilitySha = canonicalSha256(capability);
-      control
-        .prepare(
-          "INSERT INTO organization_approval_action_capability_contracts VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-        )
-        .run(
-          capability.action_capability_id,
-          canonicalJson(capability),
-          capabilitySha,
-          binding.approval_binding_id,
-          link.external_identity_link_id,
-          capability.policy_id,
+      },
+      {
+        policy_id: RESTRICTED_REVIEWER_PERSON_POLICY_ID,
+        policy_contract_sha256:
+          RESTRICTED_REVIEWER_PERSON_POLICY_CONTRACT_SHA256,
+      },
+    ] as const) {
+      for (const action of ["approve", "reject"] as const) {
+        const capability = buildPersonSlackApprovalActionCapabilityV2({
+          ...coordinates,
+          action_capability_id: `cap_live_${policy.policy_id}_${action}`,
+          approval_binding_id: binding.approval_binding_id,
+          approval_binding_contract_sha256: bindingSha,
+          external_identity_link_id: link.external_identity_link_id,
+          principal_id: input.principal_id,
+          membership_id: input.membership_id,
+          membership_type: "owner",
+          policy_id: policy.policy_id,
+          policy_contract_sha256: policy.policy_contract_sha256,
           action,
-          NOW,
-        );
-      control
-        .prepare(
-          "INSERT INTO organization_approval_action_capability_current VALUES (?, ?, 'active', ?)",
-        )
-        .run(capability.action_capability_id, capabilitySha, NOW);
+        });
+        const capabilitySha = canonicalSha256(capability);
+        control
+          .prepare(
+            "INSERT INTO organization_approval_action_capability_contracts VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+          )
+          .run(
+            capability.action_capability_id,
+            canonicalJson(capability),
+            capabilitySha,
+            binding.approval_binding_id,
+            link.external_identity_link_id,
+            capability.policy_id,
+            action,
+            NOW,
+          );
+        control
+          .prepare(
+            "INSERT INTO organization_approval_action_capability_current VALUES (?, ?, 'active', ?)",
+          )
+          .run(capability.action_capability_id, capabilitySha, NOW);
+      }
     }
   } finally {
     control.close();
@@ -476,7 +490,7 @@ const healthy = (): AdapterHealth => ({
 });
 
 function fakeSource(
-  meeting: MeetingDocument,
+  meetings: readonly MeetingDocument[],
   source: MeetingSourceAdapter["identity"],
 ): MeetingSourceAdapter & { readonly pulls: () => number } {
   let pulls = 0;
@@ -486,11 +500,12 @@ function fakeSource(
     healthCheck: async () => healthy(),
     pull: async (request) => {
       pulls += 1;
-      return pulls === 1
+      const meeting = meetings[pulls - 1];
+      return meeting !== undefined
         ? {
             meetings: [meeting],
             next_cursor: createGranolaLiveOnlyCursor(
-              "2026-08-22T12:00:01.000Z",
+              `2026-08-22T12:00:0${String(pulls)}.000Z`,
             ),
           }
         : { meetings: [], next_cursor: request.cursor };
@@ -517,10 +532,15 @@ function fakeProcessor(
           id: "decision-live-test",
           kind: "decision",
           status: "decided",
-          text: "Ship the clean live migration.",
+          text: meeting.content[0]?.text ?? "Ship the clean live migration.",
           subject: null,
           confidence: 1,
-          evidence: [{ meeting_id: meeting.id, block_id: "note-live-test" }],
+          evidence: [
+            {
+              meeting_id: meeting.id,
+              block_id: meeting.content[0]?.id ?? "note-live-test",
+            },
+          ],
         },
       ],
     }),
@@ -566,6 +586,11 @@ async function waitFor(assertion: () => boolean, label: string): Promise<void> {
 async function activeFixture(
   action: "approve" | "reject",
   person?: PersonSessionOidcAuthorizationProvider,
+  meetingVariants?: readonly {
+    readonly title: string;
+    readonly external_id: string;
+    readonly text: string;
+  }[],
 ) {
   const parent = root();
   const initialized = initializeCleanResetState({
@@ -657,7 +682,20 @@ async function activeFixture(
     ],
     artifacts: [],
   };
-  const source = fakeSource(meeting, sourceIdentity);
+  const source = fakeSource(
+    meetingVariants?.map((variant) => ({
+      ...meeting,
+      id: `granola:founder-granola:${variant.external_id}`,
+      title: variant.title,
+      provenance: {
+        ...meeting.provenance,
+        external_id: variant.external_id,
+        canonical_revision: canonicalSha256({ note: variant.external_id }),
+      },
+      content: [{ id: variant.external_id, kind: "note", text: variant.text }],
+    })) ?? [meeting],
+    sourceIdentity,
+  );
   const reaction = fakeReaction(action);
   const posted: string[] = [];
   const errors: Error[] = [];
@@ -673,7 +711,7 @@ async function activeFixture(
     granola_credential_file,
     granola_owner_email_file,
     llm_credential_file,
-    worker_interval_ms: 60_000,
+    worker_interval_ms: meetingVariants === undefined ? 60_000 : 10,
     on_worker_error: (error) => errors.push(error),
   };
   const runtime = await openCleanLiveRuntime(config, {
@@ -684,7 +722,9 @@ async function activeFixture(
       approval_card_poster: {
         async post(input) {
           posted.push(input.text);
-          return { provider_message_ts: "1724112000.000100" };
+          return {
+            provider_message_ts: `1724112000.${String(posted.length).padStart(6, "0")}`,
+          };
         },
       },
       approval_observer: reaction,
@@ -1356,6 +1396,153 @@ describe("open clean live runtime", () => {
       });
       expect(ownerSearchContinues.status).toBe(200);
       expect((await responseJson(ownerSearchContinues)).items).toHaveLength(2);
+    } finally {
+      record.close();
+      authority.close();
+      await fixture.runtime.close();
+    }
+  });
+
+  it("processes a title-marked restricted Granola record through approval while an active employee receives only member-readable content", async () => {
+    const provider = new OwnerAndEmployeeOidcProvider();
+    const fixture = await activeFixture("approve", provider, [
+      {
+        title: "Member record",
+        external_id: "member-visible",
+        text: "MemberVisibleC186576",
+      },
+      {
+        title: "[echo:restricted] Founder review",
+        external_id: "restricted-only",
+        text: "RestrictedOnlyC186576",
+      },
+    ]);
+    const authority = openAuthorityDatabase(
+      join(fixture.initialized.state_directory, "authority.sqlite"),
+      { fileMustExist: true },
+    );
+    const record = openOrganizationRecordDatabase(
+      join(fixture.initialized.state_directory, "record-log.sqlite"),
+      { fileMustExist: true },
+    );
+    try {
+      await waitFor(
+        () =>
+          fixture.errors.length > 0 ||
+          (
+            record
+              .prepare("SELECT count(*) AS count FROM organization_record_log")
+              .get() as { count: number }
+          ).count === 2,
+        "both live Granola approvals appended",
+      );
+      if (fixture.errors[0] !== undefined) throw fixture.errors[0];
+      expect(fixture.posted).toHaveLength(2);
+      expect(fixture.posted[0]).toContain(
+        ORGANIZATION_MEMBER_READABLE_PERSON_CONSEQUENCE_TEXT,
+      );
+      expect(fixture.posted[1]).toContain(
+        RESTRICTED_REVIEWER_PERSON_CONSEQUENCE_TEXT,
+      );
+      expect(
+        record
+          .prepare(
+            `SELECT policy_id
+               FROM (
+                 SELECT record_position, policy_id
+                   FROM organization_record_member_readable_person_fact
+                 UNION ALL
+                 SELECT record_position, policy_id
+                   FROM organization_record_restricted_reviewer_person_fact
+               )
+              ORDER BY record_position`,
+          )
+          .all(),
+      ).toEqual([
+        { policy_id: ORGANIZATION_MEMBER_READABLE_PERSON_POLICY_ID },
+        { policy_id: RESTRICTED_REVIEWER_PERSON_POLICY_ID },
+      ]);
+      await waitFor(
+        () =>
+          (
+            authority
+              .prepare(
+                `SELECT record_head_position
+                   FROM authority_readable_search_active_generation
+                  WHERE singleton = 1`,
+              )
+              .get() as { record_head_position: number }
+          ).record_head_position === 2,
+        "exact-head search generation",
+      );
+
+      const origin = `http://127.0.0.1:${String(fixture.runtime.address.port)}`;
+      const owner = await browserLogin(origin, { kind: "existing_identity_login" });
+      const ownerAccess = owner.access_token as string;
+      const invitation = await fetch(`${origin}/v1/person/employees`, {
+        method: "POST",
+        headers: {
+          authorization: `Bearer ${ownerAccess}`,
+          "content-type": "application/json",
+        },
+        body: JSON.stringify({
+          name: "Employee",
+          email: "employee@example.com",
+        }),
+      });
+      expect(invitation.status).toBe(201);
+      provider.email = "employee@example.com";
+      const employee = await browserLogin(origin, {
+        kind: "identity_bootstrap",
+        login_grant: (await responseJson(invitation)).login_grant,
+      });
+      const employeeAccess = employee.access_token as string;
+
+      const employeeList = await fetch(`${origin}/v1/person/records`, {
+        headers: { authorization: `Bearer ${employeeAccess}` },
+      });
+      expect(employeeList.status).toBe(200);
+      expect((await responseJson(employeeList)).records).toHaveLength(1);
+      const employeeMemberSearch = await fetch(`${origin}/v1/person/records`, {
+        method: "POST",
+        headers: {
+          authorization: `Bearer ${employeeAccess}`,
+          "content-type": "application/json",
+        },
+        body: JSON.stringify({ query: "MemberVisibleC186576" }),
+      });
+      expect(employeeMemberSearch.status).toBe(200);
+      expect((await responseJson(employeeMemberSearch)).items).toHaveLength(1);
+      const employeeRestrictedSearch = await fetch(
+        `${origin}/v1/person/records`,
+        {
+          method: "POST",
+          headers: {
+            authorization: `Bearer ${employeeAccess}`,
+            "content-type": "application/json",
+          },
+          body: JSON.stringify({ query: "RestrictedOnlyC186576" }),
+        },
+      );
+      expect(employeeRestrictedSearch.status).toBe(200);
+      expect((await responseJson(employeeRestrictedSearch)).items).toEqual([]);
+
+      provider.email = "founder@example.com";
+      const ownerList = await fetch(`${origin}/v1/person/records`, {
+        headers: { authorization: `Bearer ${ownerAccess}` },
+      });
+      expect(ownerList.status).toBe(200);
+      expect((await responseJson(ownerList)).records).toHaveLength(2);
+      const ownerRestrictedSearch = await fetch(`${origin}/v1/person/records`, {
+        method: "POST",
+        headers: {
+          authorization: `Bearer ${ownerAccess}`,
+          "content-type": "application/json",
+        },
+        body: JSON.stringify({ query: "RestrictedOnlyC186576" }),
+      });
+      expect(ownerRestrictedSearch.status).toBe(200);
+      expect((await responseJson(ownerRestrictedSearch)).items).toHaveLength(1);
     } finally {
       record.close();
       authority.close();

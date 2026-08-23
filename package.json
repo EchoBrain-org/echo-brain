@@ -22,6 +22,7 @@
   "scripts": {
     "clean": "node tools/build.mjs --clean",
     "pack:person-client": "node tools/pack-person-client.mjs",
+    "bundle:person-client": "node deploy/release/create-offline-person-client-bundle.mjs",
     "clean:workspaces": "tsc -b tsconfig.workspaces.json --clean",
     "build": "node tools/build.mjs",
     "build:workspaces": "tsc -b tsconfig.workspaces.json",

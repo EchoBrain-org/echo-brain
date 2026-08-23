@@ -120,6 +120,19 @@ listed and searched. Duplicate or presentation anomalies are reported as
 product warnings and can be fixed by an image update; they are not a reason to
 rebuild the onboarding architecture.
 
+### Granola record visibility marker
+
+By default, a post-cutoff Granola note produces an
+`organization-member-readable-person-v2` candidate: every current active owner
+or employee may read it after approval. To make one candidate reviewer-only,
+start its Granola title with the exact prefix `[echo:restricted] ` (including
+the trailing space). That selects the existing
+`restricted-reviewer-person-v2` policy: only the exact approving owner and
+that owner's current membership tenure may read it. The Slack approval card
+shows the selected policy's full consequence immediately before its approve or
+reject instruction, so approval is informed. Any other title, including a
+marker with altered casing, spacing, or position, remains member-readable.
+
 ### 3. Employee lifecycle
 
 Add the narrow owner-authenticated clean-live operations needed to:
@@ -138,6 +151,56 @@ runs the packaged `echo-brain person login --invitation ...` flow, and then uses
 `echo-brain person records` with or without `--query`. The login handoff must be
 human-readable and must not require copying raw callback JSON. Slack linking is
 not required for read-only employee access.
+
+### Employee rehearsal commands
+
+On the owner's machine, create a private, existing output directory before
+issuing an invitation. The invitation leaf must not already exist:
+
+```sh
+INVITATION_DIR="$HOME/.local/share/echo-brain/invitations"
+mkdir -p "$INVITATION_DIR"
+chmod 700 "$INVITATION_DIR"
+
+echo-brain person employee invite \
+  --name 'Employee Name' \
+  --email employee@example.com \
+  --out "$INVITATION_DIR/employee-onboarding.json"
+```
+
+The command reports the canonical private output path, never the invitation
+grant. Send that one file to the employee through a private out-of-band channel.
+The client accepts a macOS `/tmp/...` spelling when its existing parent resolves
+to a current-user `0700` directory; `/tmp` itself is not private and is rejected.
+Do not use a relative path, a root path, a symlinked invitation leaf, or an
+existing output file.
+
+On the employee machine, install the exact released Person-client artifact, then
+run the browser-assisted login and both allowed read paths:
+
+```sh
+echo-brain person login --invitation /absolute/private/employee-onboarding.json
+echo-brain person status
+echo-brain person records --limit 20
+echo-brain person records --query 'known member-readable marker'
+```
+
+The owner then revokes the membership and the employee repeats the last two
+commands. Both must deny access; the owner's list/search continue to work:
+
+```sh
+echo-brain person employee revoke --email employee@example.com
+```
+
+Use `echo-brain person --help`, `echo-brain person login --help`, and
+`echo-brain person employee invite --help` for the supported local command
+forms. Reissue uses the same private output rule:
+
+```sh
+echo-brain person employee reissue \
+  --email employee@example.com \
+  --out "$INVITATION_DIR/employee-onboarding-reissue.json"
+```
 
 ## Acceptance
 
