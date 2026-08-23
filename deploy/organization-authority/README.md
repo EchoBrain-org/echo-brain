@@ -9,7 +9,9 @@ profiles automatically.
 Provision Docker, Docker Compose v2, Cloudflare Tunnel, and registry access
 first. The EC2 security group remains closed to inbound traffic; the tunnel must
 target `127.0.0.1:80` for the Authority hostname. The wrapper does not install
-or configure host infrastructure.
+or configure host infrastructure. It accepts the release validator at the
+source-tree path `../release/clean-v1-release.py` or the installed deployment
+path `./release/clean-v1-release.py` used under `/srv/echo-authority-clean-v1`.
 
 The confidential OIDC client must allow
 `https://<authority-host>/v2/session/oidc/callback`. Put each source in a
@@ -22,6 +24,7 @@ server copies with mode `0600` under a mode-`0700` directory.
 cd deploy/organization-authority
 ./onboard-clean-v1.sh prepare \
   --release /absolute/private/clean-v1-release.json \
+  --runtime-user echo-authority \
   --organization-name 'Example Organization' \
   --owner-display-name 'Founder Name' \
   --owner-email founder@example.com \
@@ -36,9 +39,13 @@ cd deploy/organization-authority
 
 `prepare` validates the exact canonical release record, derives its immutable
 image, writes fixed `clean-data/private` files with mode `0600`, and renders
-the two Compose profiles offline. It does not build or pull an image. An exact
-repeat is safe; a changed release, setup value, or private input fails rather
-than silently changing this organization.
+the two Compose profiles offline. `--runtime-user` is the existing non-login OS
+account that owns the mounted Authority state; on the EC2 deployment it is
+`echo-authority`, even when SSM runs Docker lifecycle commands as root. The
+wrapper derives that account's UID and GID so the container never inherits the
+operator's root identity. It does not build or pull an image. An exact repeat
+is safe; a changed release, setup value, runtime user, or private input fails
+rather than silently changing this organization.
 
 ### Replace pre-live rehearsal state
 

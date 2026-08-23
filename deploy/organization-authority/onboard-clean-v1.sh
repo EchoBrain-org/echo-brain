@@ -12,7 +12,13 @@ ENV_FILE="$DEPLOY_DIR/.env.clean-v1"
 SETUP_FILE="$PRIVATE_DIR/onboard-clean-v1.conf"
 RELEASE_FILE="$RELEASE_DIR/current.clean-v1.json"
 RELEASE_TOOL="$DEPLOY_DIR/../release/clean-v1-release.py"
+if [[ -f "$DEPLOY_DIR/release/clean-v1-release.py" ]]; then
+  RELEASE_TOOL="$DEPLOY_DIR/release/clean-v1-release.py"
+fi
 FOUNDER_MAIN="services/organization-authority/dist/clean-founder-main.js"
+RUNTIME_UID=''
+RUNTIME_GID=''
+EXECUTOR_UID=''
 
 fail() { printf 'onboard-clean-v1: %s\n' "$*" >&2; exit 1; }
 
@@ -21,6 +27,7 @@ usage() {
 usage:
   onboard-clean-v1.sh prepare \
     --release <canonical-release.json> \
+    --runtime-user <os-user> \
     --organization-name <name> --owner-display-name <name> --owner-email <email> \
     --authority-host <dns-name> --slack-approval-channel-id <channel-id> \
     --oidc-config-file <private-file> --oidc-client-secret-file <private-file> \
@@ -59,16 +66,52 @@ no_newline_value() {
   [[ -n "$value" && "$value" != *$'\n'* && "$value" != *$'\r'* ]] || fail "$label must be one non-empty line"
 }
 
+select_runtime_identity() {
+  local runtime_user="$1"
+  [[ "$runtime_user" =~ ^[A-Za-z_][A-Za-z0-9_.-]*$ ]] || \
+    fail 'runtime user must be a local operating-system account name'
+  id "$runtime_user" >/dev/null 2>&1 || \
+    fail "runtime user does not exist on this server: $runtime_user"
+  RUNTIME_UID="$(id -u "$runtime_user")"
+  RUNTIME_GID="$(id -g "$runtime_user")"
+  [[ "$RUNTIME_UID" != 0 ]] || \
+    fail 'runtime user must be a non-root operating-system account'
+  EXECUTOR_UID="$(id -u)"
+  if [[ "$EXECUTOR_UID" != 0 && ( "$EXECUTOR_UID" != "$RUNTIME_UID" || "$(id -g)" != "$RUNTIME_GID" ) ]]; then
+    fail 'prepare must run as root or as the selected runtime user'
+  fi
+}
+
+require_safe_directory_target() {
+  local path="$1" label="$2"
+  if [[ -e "$path" || -L "$path" ]]; then
+    [[ -d "$path" && ! -L "$path" ]] || fail "$label is not a safe directory"
+  fi
+}
+
+own_for_runtime() {
+  local path="$1"
+  if [[ "$EXECUTOR_UID" == 0 ]]; then
+    chown "$RUNTIME_UID:$RUNTIME_GID" "$path"
+  fi
+}
+
 copy_exact_private() {
-  local source="$1" destination="$2" label="$3"
+  local source="$1" destination="$2" label="$3" ownership="${4:-runtime}"
   private_source "$source" "$label"
   if [[ -e "$destination" ]]; then
     [[ -f "$destination" && ! -L "$destination" ]] || fail "existing $label destination is unsafe"
     cmp -s "$source" "$destination" || fail "$label conflicts with the existing clean onboarding input"
     chmod 0600 "$destination"
+    if [[ "$ownership" == runtime ]]; then
+      own_for_runtime "$destination"
+    fi
     return
   fi
   install -m 0600 "$source" "$destination"
+  if [[ "$ownership" == runtime ]]; then
+    own_for_runtime "$destination"
+  fi
 }
 
 write_exact_private() {
@@ -76,10 +119,12 @@ write_exact_private() {
   temporary="$(mktemp "$PRIVATE_DIR/.${label}.XXXXXX")"
   chmod 0600 "$temporary"
   printf '%s' "$value" > "$temporary"
+  own_for_runtime "$temporary"
   if [[ -e "$destination" ]]; then
     [[ -f "$destination" && ! -L "$destination" ]] || fail "existing $label destination is unsafe"
     cmp -s "$temporary" "$destination" || fail "$label conflicts with the existing clean onboarding input"
     chmod 0600 "$destination"
+    own_for_runtime "$destination"
     rm -f "$temporary"
     return
   fi
@@ -87,14 +132,20 @@ write_exact_private() {
 }
 
 write_exact_file() {
-  local destination="$1" content="$2" label="$3" temporary
+  local destination="$1" content="$2" label="$3" ownership="${4:-host}" temporary
   temporary="$(mktemp "${destination}.XXXXXX")"
   chmod 0600 "$temporary"
   printf '%s' "$content" > "$temporary"
+  if [[ "$ownership" == runtime ]]; then
+    own_for_runtime "$temporary"
+  fi
   if [[ -e "$destination" ]]; then
     [[ -f "$destination" && ! -L "$destination" ]] || fail "existing $label is unsafe"
     cmp -s "$temporary" "$destination" || fail "$label conflicts with the existing clean onboarding configuration"
     chmod 0600 "$destination"
+    if [[ "$ownership" == runtime ]]; then
+      own_for_runtime "$destination"
+    fi
     rm -f "$temporary"
     return
   fi
@@ -161,10 +212,11 @@ print_status() {
 }
 
 prepare() {
-  local release='' organization_name='' owner_display_name='' owner_email='' authority_host='' channel='' oidc_config='' oidc_secret='' slack_token='' granola_credential='' llm_credential=''
+  local release='' runtime_user='' organization_name='' owner_display_name='' owner_email='' authority_host='' channel='' oidc_config='' oidc_secret='' slack_token='' granola_credential='' llm_credential=''
   while [[ $# -gt 0 ]]; do
     case "$1" in
       --release) release="${2:-}"; shift 2 ;;
+      --runtime-user) runtime_user="${2:-}"; shift 2 ;;
       --organization-name) organization_name="${2:-}"; shift 2 ;;
       --owner-display-name) owner_display_name="${2:-}"; shift 2 ;;
       --owner-email) owner_email="${2:-}"; shift 2 ;;
@@ -178,7 +230,7 @@ prepare() {
       *) usage ;;
     esac
   done
-  [[ -n "$release" && -n "$organization_name" && -n "$owner_display_name" && -n "$owner_email" && -n "$authority_host" && -n "$channel" && -n "$oidc_config" && -n "$oidc_secret" && -n "$slack_token" && -n "$granola_credential" && -n "$llm_credential" ]] || usage
+  [[ -n "$release" && -n "$runtime_user" && -n "$organization_name" && -n "$owner_display_name" && -n "$owner_email" && -n "$authority_host" && -n "$channel" && -n "$oidc_config" && -n "$oidc_secret" && -n "$slack_token" && -n "$granola_credential" && -n "$llm_credential" ]] || usage
   require_host_prerequisites
   private_source "$release" 'release record'
   no_newline_value "$organization_name" 'organization name'
@@ -186,16 +238,23 @@ prepare() {
   no_newline_value "$owner_email" 'owner email'
   no_newline_value "$authority_host" 'Authority host'
   no_newline_value "$channel" 'Slack approval channel ID'
+  select_runtime_identity "$runtime_user"
   python3 "$RELEASE_TOOL" validate "$release" >/dev/null
+  require_safe_directory_target "$DATA_DIR" 'clean data path'
+  require_safe_directory_target "$PRIVATE_DIR" 'clean private-input path'
+  require_safe_directory_target "$RELEASE_DIR" 'clean release path'
   install -d -m 0700 "$DATA_DIR" "$PRIVATE_DIR" "$RELEASE_DIR"
   chmod 0700 "$DATA_DIR" "$PRIVATE_DIR" "$RELEASE_DIR"
-  copy_exact_private "$release" "$RELEASE_FILE" 'release record'
+  own_for_runtime "$DATA_DIR"
+  own_for_runtime "$PRIVATE_DIR"
+  copy_exact_private "$release" "$RELEASE_FILE" 'release record' host
   local image uid gid authority_url setup env
   image="$(release_field authority-image)"
-  uid="$(id -u)"
-  gid="$(id -g)"
+  uid="$RUNTIME_UID"
+  gid="$RUNTIME_GID"
   authority_url="https://$authority_host"
-  setup="organization_name=$organization_name
+  setup="runtime_user=$runtime_user
+organization_name=$organization_name
 owner_display_name=$owner_display_name
 owner_email=$owner_email
 authority_host=$authority_host
@@ -213,7 +272,7 @@ ECHO_CLEAN_AUTHORITY_GID=$gid
 ECHO_CLEAN_AUTHORITY_IMAGE=$image
 ECHO_CLEAN_SLACK_APPROVAL_CHANNEL_ID=$channel
 ECHO_CLEAN_OWNER_EMAIL=$owner_email"
-  write_exact_file "$SETUP_FILE" "$setup" 'setup configuration'
+  write_exact_file "$SETUP_FILE" "$setup" 'setup configuration' runtime
   write_exact_file "$ENV_FILE" "$env" 'Compose environment'
   copy_exact_private "$oidc_config" "$PRIVATE_DIR/oidc-config.json" 'OIDC configuration'
   copy_exact_private "$oidc_secret" "$PRIVATE_DIR/oidc-client-secret" 'OIDC client secret'
@@ -253,6 +312,8 @@ replace_rehearsal() {
   require_prepared
   [[ -d "$DATA_DIR" && ! -L "$DATA_DIR" ]] || \
     fail 'clean rehearsal data directory is unsafe'
+  [[ -f "$ENV_FILE" && ! -L "$ENV_FILE" ]] || \
+    fail 'clean rehearsal environment file is unsafe'
   compose_clean down --remove-orphans
   local archive_root="$DEPLOY_DIR/retired-rehearsals" archive
   archive="$archive_root/$(date -u +%Y%m%dT%H%M%SZ)"
@@ -260,7 +321,13 @@ replace_rehearsal() {
   [[ ! -e "$archive" ]] || fail 'a rehearsal archive already exists for this second; retry later'
   install -d -m 0700 "$archive"
   mv "$DATA_DIR" "$archive/clean-data"
-  mv "$ENV_FILE" "$archive/.env.clean-v1"
+  if ! mv "$ENV_FILE" "$archive/.env.clean-v1"; then
+    if mv "$archive/clean-data" "$DATA_DIR"; then
+      rmdir "$archive"
+      fail 'could not archive the rehearsal environment; clean data was restored and the replacement may be retried'
+    fi
+    fail "could not archive the rehearsal environment or restore clean data; recover from $archive/clean-data before retrying"
+  fi
   printf 'rehearsal_replaced=true\narchive=%s\nnext_action=Run prepare with the new exact release and onboarding inputs.\n' "$archive"
 }
 

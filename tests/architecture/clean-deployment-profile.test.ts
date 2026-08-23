@@ -7,6 +7,8 @@ import {
   readFileSync,
   readdirSync,
   rmSync,
+  statSync,
+  symlinkSync,
   writeFileSync,
 } from "node:fs";
 import { execFileSync } from "node:child_process";
@@ -35,6 +37,7 @@ describe("clean founder deployment profile", () => {
     expect(source).toContain('PRIVATE_DIR="$DATA_DIR/private"');
     expect(source).toContain("granola-owner-email");
     expect(source).toContain("clean-v1-release.py");
+    expect(source).toContain('$DEPLOY_DIR/release/clean-v1-release.py');
     expect(source).toContain("< \"$PRIVATE_DIR/slack-bot-token\"");
     expect(source).toContain("docker image inspect");
     expect(source).toContain("compose_clean pull authority");
@@ -43,6 +46,15 @@ describe("clean founder deployment profile", () => {
     expect(source).toContain("require_image_present");
     expect(source).toContain("founder-person-invitation.json");
     expect(source).toContain("replace-rehearsal --confirm-no-live-users");
+    expect(source).toContain("--runtime-user <os-user>");
+    expect(source).toContain('id -u "$runtime_user"');
+    expect(source).toContain('id -g "$runtime_user"');
+    expect(source).toContain('chown "$RUNTIME_UID:$RUNTIME_GID"');
+    expect(source).toContain("runtime user must be a non-root");
+    expect(source).toContain("require_safe_directory_target");
+    expect(source).toContain("clean data was restored");
+    expect(source).not.toContain('uid="$(id -u)"');
+    expect(source).not.toContain('gid="$(id -g)"');
     expect(source).not.toContain("compose_clean build");
     expect(source).not.toContain("migrations/");
     expect(source).not.toContain("dist/main.js");
@@ -55,7 +67,7 @@ describe("clean founder deployment profile", () => {
     const root = mkdtempSync(join(tmpdir(), "echo-clean-onboard-"));
     try {
       const deploy = join(root, "deploy", "organization-authority");
-      const release = join(root, "deploy", "release");
+      const release = join(deploy, "release");
       const privateSources = join(root, "private-sources");
       const bin = join(root, "bin");
       mkdirSync(deploy, { recursive: true });
@@ -112,30 +124,66 @@ describe("clean founder deployment profile", () => {
         writeFileSync(path, `${name}-value`);
         return path;
       });
+      const prepareArguments = [
+        join(deploy, "onboard-clean-v1.sh"),
+        "prepare",
+        "--release", releaseRecord,
+        "--runtime-user", execFileSync("id", ["-un"]).toString().trim(),
+        "--organization-name", "Test Org",
+        "--owner-display-name", "Founder",
+        "--owner-email", "founder@example.com",
+        "--authority-host", "authority.example.com",
+        "--slack-approval-channel-id", "C0123456789",
+        "--oidc-config-file", privateFiles[0],
+        "--oidc-client-secret-file", privateFiles[1],
+        "--slack-bot-token-file", privateFiles[2],
+        "--granola-credential-file", privateFiles[3],
+        "--llm-credential-file", privateFiles[4],
+      ];
+      const commandEnvironment = {
+        env: { ...process.env, PATH: `${bin}:${process.env.PATH}` },
+      };
       const output = execFileSync(
         "bash",
-        [
-          join(deploy, "onboard-clean-v1.sh"),
-          "prepare",
-          "--release", releaseRecord,
-          "--organization-name", "Test Org",
-          "--owner-display-name", "Founder",
-          "--owner-email", "founder@example.com",
-          "--authority-host", "authority.example.com",
-          "--slack-approval-channel-id", "C0123456789",
-          "--oidc-config-file", privateFiles[0],
-          "--oidc-client-secret-file", privateFiles[1],
-          "--slack-bot-token-file", privateFiles[2],
-          "--granola-credential-file", privateFiles[3],
-          "--llm-credential-file", privateFiles[4],
-        ],
-        { env: { ...process.env, PATH: `${bin}:${process.env.PATH}` } },
+        prepareArguments,
+        commandEnvironment,
       ).toString();
       expect(output).toContain("prepared=true");
       expect(readFileSync(calls, "utf8")).toContain("compose");
       expect(readFileSync(calls, "utf8")).not.toContain("pull");
       expect(readFileSync(join(deploy, "clean-data/private/granola-owner-email"), "utf8")).toBe("founder@example.com");
       expect(readFileSync(join(deploy, ".env.clean-v1"), "utf8")).toContain(image);
+      expect(readFileSync(join(deploy, ".env.clean-v1"), "utf8")).toContain(
+        `ECHO_CLEAN_AUTHORITY_UID=${statSync(privateSources).uid}`,
+      );
+      expect(readFileSync(join(deploy, ".env.clean-v1"), "utf8")).toContain(
+        `ECHO_CLEAN_AUTHORITY_GID=${statSync(privateSources).gid}`,
+      );
+      expect(statSync(join(deploy, "clean-data")).uid).toBe(
+        statSync(privateSources).uid,
+      );
+      expect(statSync(join(deploy, "clean-data/private")).mode & 0o777).toBe(
+        0o700,
+      );
+      for (const fixedPrivate of [
+        "onboard-clean-v1.conf",
+        "oidc-config.json",
+        "oidc-client-secret",
+        "slack-bot-token",
+        "granola-credential-source",
+        "granola-owner-email",
+        "llm-credential-source",
+      ]) {
+        const metadata = statSync(join(deploy, "clean-data/private", fixedPrivate));
+        expect(metadata.uid).toBe(statSync(privateSources).uid);
+        expect(metadata.gid).toBe(statSync(privateSources).gid);
+        expect(metadata.mode & 0o777).toBe(0o600);
+      }
+      const rootArguments = [...prepareArguments];
+      rootArguments[rootArguments.indexOf("--runtime-user") + 1] = "root";
+      expect(() =>
+        execFileSync("bash", rootArguments, commandEnvironment),
+      ).toThrow(/runtime user must be a non-root/);
       const retired = execFileSync(
         "bash",
         [
@@ -158,6 +206,10 @@ describe("clean founder deployment profile", () => {
           join(deploy, "retired-rehearsals", archives[0]!, ".env.clean-v1"),
         ),
       ).toBe(true);
+      symlinkSync(privateSources, join(deploy, "clean-data"), "dir");
+      expect(() =>
+        execFileSync("bash", prepareArguments, commandEnvironment),
+      ).toThrow(/clean data path is not a safe directory/);
     } finally {
       rmSync(root, { force: true, recursive: true });
     }
