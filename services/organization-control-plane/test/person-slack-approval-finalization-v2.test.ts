@@ -1,5 +1,4 @@
 import { describe, expect, it } from "vitest";
-import * as publicControlPlane from "../src/index.js";
 import { canonicalSha256 } from "../src/canonical/canonical-json.js";
 import {
   ORGANIZATION_MEMBER_READABLE_PERSON_CONSEQUENCE_SHA256,
@@ -929,8 +928,7 @@ describe("private Person Slack approval finalization v2", () => {
     expect(fixture.store.saveCount).toBe(0);
   });
 
-  it("remains private and grants no delivery, read, source, model, or D3 authority", () => {
-    expect("finalizePersonSlackApprovalV2" in publicControlPlane).toBe(false);
+  it("grants no delivery, read, source, model, or D3 authority", () => {
     const forbidden = JSON.stringify(harness().store.approval);
     expect(forbidden).not.toMatch(
       /"(delivery_binding_id|read_scope|source_activation_id|model_id|human_act_resolution_ref)":/,

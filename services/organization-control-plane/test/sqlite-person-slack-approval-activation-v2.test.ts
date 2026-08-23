@@ -20,7 +20,7 @@ import {
 } from "../src/application/person-slack-approval-contracts-v2.js";
 import { activatePersonSlackApprovalV2 } from "../src/application/person-slack-approval-activation-v2.js";
 import { applyOrganizationControlBaselineV1 } from "../src/persistence/baseline.js";
-import { openOrganizationControlDatabase } from "../src/persistence/open-database.js";
+import { openOrganizationControlDatabase } from "../src/persistence/open-unmigrated-database.js";
 import {
   SqlitePersonSlackApprovalActivationCoordinatorV2,
   type StableAuthorityAdministratorFenceV2,

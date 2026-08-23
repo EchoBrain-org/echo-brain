@@ -23,6 +23,7 @@ const UPDATE = join(REPO, "deploy", "organization-authority", "update-clean-v1.s
 const INSTALL = join(REPO, "deploy", "release", "install-person-client-clean-v1.sh");
 const BUNDLE = join(REPO, "deploy", "release", "create-offline-person-client-bundle.mjs");
 const DOCKERFILE = join(REPO, "deploy", "organization-authority", "Dockerfile");
+const AUTHORITY_IMAGE_BUILD = join(REPO, "tools", "build-authority-image.mjs");
 const roots: string[] = [];
 
 function canonical(value: unknown): string {
@@ -152,6 +153,80 @@ describe("clean-v1 release record", () => {
     expect(dockerfile).toContain('org.opencontainers.image.revision="${ECHO_SOURCE_SHA}"');
     expect(update).toContain("org.opencontainers.image.revision");
     expect(update).toContain("image_source_matches \"$expected\" \"$expected_source\"");
+  });
+
+  it("builds an Authority image only from one clean committed source", () => {
+    const root = mkdtempSync(join(tmpdir(), "echo-clean-v1-image-build-"));
+    roots.push(root);
+    const repository = join(root, "repository");
+    const tools = join(repository, "tools");
+    const bin = join(root, "bin");
+    const docker = join(bin, "docker");
+    const dockerLog = join(root, "docker.log");
+    mkdirSync(tools, { recursive: true });
+    mkdirSync(bin);
+    copyFileSync(AUTHORITY_IMAGE_BUILD, join(tools, "build-authority-image.mjs"));
+    writeFileSync(join(repository, "tracked.txt"), "clean\n");
+    expect(spawnSync("git", ["init", "-q"], { cwd: repository }).status).toBe(0);
+    expect(spawnSync("git", ["add", "."], { cwd: repository }).status).toBe(0);
+    expect(
+      spawnSync(
+        "git",
+        [
+          "-c",
+          "user.name=Echo Test",
+          "-c",
+          "user.email=echo@example.test",
+          "commit",
+          "-qm",
+          "fixture",
+        ],
+        { cwd: repository },
+      ).status,
+    ).toBe(0);
+    const sourceSha = spawnSync("git", ["rev-parse", "HEAD"], {
+      cwd: repository,
+      encoding: "utf8",
+    }).stdout.trim();
+    writeFileSync(
+      docker,
+      `#!/usr/bin/env bash
+printf '%s\\n' "$*" >> "$ECHO_DOCKER_LOG"
+if [[ "$1" == image && "$2" == inspect ]]; then
+  printf '%s\\n' "$ECHO_FAKE_SOURCE_SHA"
+fi
+`,
+    );
+    chmodSync(docker, 0o755);
+    const environment = {
+      PATH: `${bin}:${process.env.PATH}`,
+      ECHO_DOCKER_LOG: dockerLog,
+      ECHO_FAKE_SOURCE_SHA: sourceSha,
+    };
+    const clean = spawnSync(
+      process.execPath,
+      [join(tools, "build-authority-image.mjs"), "echo-authority:test"],
+      { cwd: repository, encoding: "utf8", env: { ...process.env, ...environment } },
+    );
+    expect(clean.status).toBe(0);
+    expect(JSON.parse(clean.stdout)).toEqual({
+      image: "echo-authority:test",
+      source_sha: sourceSha,
+    });
+    expect(readFileSync(dockerLog, "utf8")).toContain(
+      `ECHO_SOURCE_SHA=${sourceSha}`,
+    );
+
+    const callsBeforeDirtyAttempt = readFileSync(dockerLog, "utf8");
+    writeFileSync(join(repository, "tracked.txt"), "dirty\n");
+    const dirty = spawnSync(
+      process.execPath,
+      [join(tools, "build-authority-image.mjs"), "echo-authority:test"],
+      { cwd: repository, encoding: "utf8", env: { ...process.env, ...environment } },
+    );
+    expect(dirty.status).toBe(1);
+    expect(dirty.stderr).toContain("build requires clean, committed source");
+    expect(readFileSync(dockerLog, "utf8")).toBe(callsBeforeDirtyAttempt);
   });
 
   it("refuses an Authority image whose OCI revision label differs before startup", () => {

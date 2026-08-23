@@ -459,8 +459,8 @@ Phase 2 is not complete while any of these blockers remains:
 The source facts for this disposition are the
 [machine-boundary audit](../product/2026-08-16-machine-boundary-audit.md), the
 [Authority repository port](../../services/organization-authority/src/application/ports/authority-repository.ts),
-the [Authority migration ledger](../../services/organization-authority/migrations),
-the [record log schema](../../services/organization-record/migrations/log/0001_organization_record_log.sql),
-and the [control-plane schema](../../services/organization-control-plane/migrations/0001_organization_control_plane.sql).
+the historical Authority migration ledger, record log schema, and control-plane
+schema recorded by this ADR. Those executable migrations were retired by the
+physical lean V1 closure.
 Documentation validation is evidence only that this record and its relations
 are well formed; it is not behavior or deployment evidence.

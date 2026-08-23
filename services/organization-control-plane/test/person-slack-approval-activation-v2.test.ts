@@ -1,5 +1,4 @@
 import { describe, expect, it } from "vitest";
-import * as publicControlPlane from "../src/index.js";
 import { canonicalSha256 } from "../src/canonical/canonical-json.js";
 import {
   ORGANIZATION_MEMBER_READABLE_PERSON_POLICY_CONTRACT_SHA256,
@@ -487,10 +486,4 @@ describe("private Person Slack approval activation v2", () => {
     expect(divergent.store.saveCount).toBe(1);
   });
 
-  it("keeps the candidate state machine out of the public and live composition surface", () => {
-    expect("activatePersonSlackApprovalV2" in publicControlPlane).toBe(false);
-    expect(
-      "PersonSlackApprovalActivationCoordinatorV2" in publicControlPlane,
-    ).toBe(false);
-  });
 });

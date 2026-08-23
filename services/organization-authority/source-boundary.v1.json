@@ -13,8 +13,12 @@
     "services/organization-authority/src/clean-granola-source-main.ts",
     "services/organization-authority/src/clean-founder-main.ts"
   ],
-  "owned_source_paths": ["services/organization-authority/src/**"],
-  "allowed_internal_paths": ["services/organization-authority/src/**"],
+  "owned_source_paths": [
+    "services/organization-authority/src/**"
+  ],
+  "allowed_internal_paths": [
+    "services/organization-authority/src/**"
+  ],
   "allowed_workspace_packages": [
     "@echo-brain/federation-protocol",
     "@echo-brain/organization-control-plane",
@@ -23,7 +27,10 @@
     "@echo-brain/organization-record",
     "@echo-brain/organization-retrieval"
   ],
-  "allowed_external_packages": ["better-sqlite3", "openid-client"],
+  "allowed_external_packages": [
+    "better-sqlite3",
+    "openid-client"
+  ],
   "allowed_node_builtins": [
     "buffer",
     "crypto",
@@ -36,25 +43,6 @@
     "util"
   ],
   "runtime_assets": [
-    "services/organization-authority/migrations/0001_single_org_authority.sql",
-    "services/organization-authority/migrations/0002_admin_command_idempotency.sql",
-    "services/organization-authority/migrations/0003_integrations_installation_anchor.sql",
-    "services/organization-authority/migrations/0004_internal_live_release_rollout.sql",
-    "services/organization-authority/migrations/0005_record_installation_anchor.sql",
-    "services/organization-authority/migrations/0006_reviewer_query_audit.sql",
-    "services/organization-authority/migrations/0007_readable_search_state.sql",
-    "services/organization-authority/migrations/0008_organization_member_recording_activation.sql",
-    "services/organization-authority/migrations/0009_person_identity_and_sessions.sql",
-    "services/organization-authority/migrations/0010_person_read_decision_audit.sql",
-    "services/organization-authority/migrations/0011_authority_processing_state.sql",
-    "services/organization-authority/migrations/0012_member_exclusion_read_audit.sql",
-    "services/organization-authority/migrations/0013_person_session_assertion_issued_at.sql",
-    "services/organization-authority/migrations/0014_person_login_grant_expected_email.sql",
-    "services/organization-authority/migrations/0015_processing_source_configuration_binding.sql",
-    "services/organization-authority/migrations/0016_processing_slack_approval_state.sql",
-    "services/organization-authority/migrations/0017_processing_frozen_record_envelopes.sql",
-    "services/organization-authority/migrations/0018_processing_slack_delivery_attempts.sql",
-    "services/organization-authority/migrations/0019_processing_frozen_record_rejections.sql",
     "services/organization-authority/baselines/authority-baseline-v1.sql"
   ],
   "layer_rules": [
@@ -111,7 +99,9 @@
     {
       "name": "authority-domain-is-pure",
       "from": "services/organization-authority/src/domain/**",
-      "allowed_imports": ["services/organization-authority/src/domain/**"],
+      "allowed_imports": [
+        "services/organization-authority/src/domain/**"
+      ],
       "allowed_workspace_packages": [
         "@echo-brain/federation-protocol",
         "@echo-brain/organization-protocol"
@@ -132,7 +122,9 @@
         "@echo-brain/organization-api"
       ],
       "allowed_external_packages": [],
-      "allowed_node_builtins": ["buffer"]
+      "allowed_node_builtins": [
+        "buffer"
+      ]
     },
     {
       "name": "authority-file-adapters-implement-application-ports",
@@ -148,23 +140,13 @@
         "@echo-brain/organization-api"
       ],
       "allowed_external_packages": [],
-      "allowed_node_builtins": ["crypto", "events", "fs", "net", "path"]
-    },
-    {
-      "name": "authority-http-adapters-implement-application-ports",
-      "from": "services/organization-authority/src/adapters/http/**",
-      "allowed_imports": [
-        "services/organization-authority/src/domain/**",
-        "services/organization-authority/src/application/**",
-        "services/organization-authority/src/adapters/**"
-      ],
-      "allowed_workspace_packages": [
-        "@echo-brain/federation-protocol",
-        "@echo-brain/organization-protocol",
-        "@echo-brain/organization-api"
-      ],
-      "allowed_external_packages": [],
-      "allowed_node_builtins": ["crypto", "events", "fs", "net", "path"]
+      "allowed_node_builtins": [
+        "crypto",
+        "events",
+        "fs",
+        "net",
+        "path"
+      ]
     },
     {
       "name": "authority-oidc-adapter-implements-person-session-port",
@@ -179,8 +161,16 @@
         "@echo-brain/organization-protocol",
         "@echo-brain/organization-api"
       ],
-      "allowed_external_packages": ["openid-client"],
-      "allowed_node_builtins": ["crypto", "events", "fs", "net", "path"]
+      "allowed_external_packages": [
+        "openid-client"
+      ],
+      "allowed_node_builtins": [
+        "crypto",
+        "events",
+        "fs",
+        "net",
+        "path"
+      ]
     },
     {
       "name": "authority-persistence-adapters-implement-application-ports",
@@ -195,8 +185,16 @@
         "@echo-brain/organization-protocol",
         "@echo-brain/organization-api"
       ],
-      "allowed_external_packages": ["better-sqlite3"],
-      "allowed_node_builtins": ["crypto", "events", "fs", "net", "path"]
+      "allowed_external_packages": [
+        "better-sqlite3"
+      ],
+      "allowed_node_builtins": [
+        "crypto",
+        "events",
+        "fs",
+        "net",
+        "path"
+      ]
     },
     {
       "name": "authority-runtime-adapters-implement-application-ports",
@@ -212,7 +210,13 @@
         "@echo-brain/organization-api"
       ],
       "allowed_external_packages": [],
-      "allowed_node_builtins": ["crypto", "events", "fs", "net", "path"]
+      "allowed_node_builtins": [
+        "crypto",
+        "events",
+        "fs",
+        "net",
+        "path"
+      ]
     },
     {
       "name": "authority-security-adapters-implement-application-ports",
@@ -228,7 +232,13 @@
         "@echo-brain/organization-api"
       ],
       "allowed_external_packages": [],
-      "allowed_node_builtins": ["crypto", "events", "fs", "net", "path"]
+      "allowed_node_builtins": [
+        "crypto",
+        "events",
+        "fs",
+        "net",
+        "path"
+      ]
     },
     {
       "name": "authority-presentation-calls-application",
@@ -243,7 +253,13 @@
         "@echo-brain/organization-api"
       ],
       "allowed_external_packages": [],
-      "allowed_node_builtins": ["buffer", "crypto", "http", "net", "util"]
+      "allowed_node_builtins": [
+        "buffer",
+        "crypto",
+        "http",
+        "net",
+        "util"
+      ]
     },
     {
       "name": "authority-composition-may-wire-pre-processing-layers",
@@ -280,8 +296,17 @@
         "@echo-brain/organization-record",
         "@echo-brain/organization-retrieval"
       ],
-      "allowed_external_packages": ["better-sqlite3"],
-      "allowed_node_builtins": ["crypto", "events", "fs", "http", "net", "path"]
+      "allowed_external_packages": [
+        "better-sqlite3"
+      ],
+      "allowed_node_builtins": [
+        "crypto",
+        "events",
+        "fs",
+        "http",
+        "net",
+        "path"
+      ]
     },
     {
       "name": "state-lineage-guard-is-unwired-and-read-only",
@@ -289,9 +314,16 @@
       "allowed_imports": [
         "services/organization-authority/src/state-lineage/**"
       ],
-      "allowed_workspace_packages": ["@echo-brain/federation-protocol"],
-      "allowed_external_packages": ["better-sqlite3"],
-      "allowed_node_builtins": ["fs", "path"]
+      "allowed_workspace_packages": [
+        "@echo-brain/federation-protocol"
+      ],
+      "allowed_external_packages": [
+        "better-sqlite3"
+      ],
+      "allowed_node_builtins": [
+        "fs",
+        "path"
+      ]
     },
     {
       "name": "clean-live-only-source-cycle-uses-no-legacy-runtime",
@@ -306,7 +338,9 @@
         "@echo-brain/federation-protocol",
         "@echo-brain/organization-control-plane"
       ],
-      "allowed_external_packages": ["better-sqlite3"],
+      "allowed_external_packages": [
+        "better-sqlite3"
+      ],
       "allowed_node_builtins": []
     },
     {
@@ -337,20 +371,9 @@
       ],
       "allowed_workspace_packages": [],
       "allowed_external_packages": [],
-      "allowed_node_builtins": ["crypto"]
-    },
-    {
-      "name": "processing-storage-owns-authority-durability",
-      "from": "services/organization-authority/src/processing/storage/**",
-      "allowed_imports": [
-        "services/organization-authority/src/adapters/persistence/sqlite/open-database.ts",
-        "services/organization-authority/src/processing/adapters/delivery-surfaces/slack/slack-delivery-receipt-store.ts",
-        "services/organization-authority/src/processing/core/**",
-        "services/organization-authority/src/processing/storage/**"
-      ],
-      "allowed_workspace_packages": ["@echo-brain/federation-protocol"],
-      "allowed_external_packages": ["better-sqlite3"],
-      "allowed_node_builtins": ["crypto"]
+      "allowed_node_builtins": [
+        "crypto"
+      ]
     },
     {
       "name": "processing-llm-decision-processor-composes-provider-drivers",
@@ -361,7 +384,9 @@
       ],
       "allowed_workspace_packages": [],
       "allowed_external_packages": [],
-      "allowed_node_builtins": ["crypto"]
+      "allowed_node_builtins": [
+        "crypto"
+      ]
     },
     {
       "name": "processing-llm-provider-drivers-own-only-transport",
@@ -373,17 +398,6 @@
       "allowed_workspace_packages": [],
       "allowed_external_packages": [],
       "allowed_node_builtins": []
-    },
-    {
-      "name": "processing-structured-text-decision-processor-is-deterministic",
-      "from": "services/organization-authority/src/processing/adapters/decision-processors/structured-text/**",
-      "allowed_imports": [
-        "services/organization-authority/src/processing/core/**",
-        "services/organization-authority/src/processing/adapters/decision-processors/structured-text/**"
-      ],
-      "allowed_workspace_packages": [],
-      "allowed_external_packages": [],
-      "allowed_node_builtins": ["crypto"]
     },
     {
       "name": "processing-granola-namespace-index",
@@ -405,7 +419,9 @@
       ],
       "allowed_workspace_packages": [],
       "allowed_external_packages": [],
-      "allowed_node_builtins": ["crypto"]
+      "allowed_node_builtins": [
+        "crypto"
+      ]
     },
     {
       "name": "processing-granola-api-client-owns-only-transport",
@@ -434,105 +450,6 @@
       "allowed_node_builtins": []
     },
     {
-      "name": "processing-slack-reactions-approval-surface-uses-the-shared-transport",
-      "from": "services/organization-authority/src/processing/adapters/approval-surfaces/slack-reactions/slack-reactions-approval-surface.ts",
-      "allowed_imports": [
-        "services/organization-authority/src/processing/core/**",
-        "services/organization-authority/src/processing/adapters/shared/slack/**"
-      ],
-      "allowed_workspace_packages": [],
-      "allowed_external_packages": [],
-      "allowed_node_builtins": []
-    },
-    {
-      "name": "processing-slack-delivery-surface-uses-the-shared-transport",
-      "from": "services/organization-authority/src/processing/adapters/delivery-surfaces/slack/slack-delivery-surface.ts",
-      "allowed_imports": [
-        "services/organization-authority/src/processing/core/**",
-        "services/organization-authority/src/processing/adapters/shared/slack/**",
-        "services/organization-authority/src/processing/adapters/delivery-surfaces/slack/slack-delivery-receipt-store.ts"
-      ],
-      "allowed_workspace_packages": [],
-      "allowed_external_packages": [],
-      "allowed_node_builtins": []
-    },
-    {
-      "name": "processing-slack-delivery-receipt-store-is-a-port",
-      "from": "services/organization-authority/src/processing/adapters/delivery-surfaces/slack/slack-delivery-receipt-store.ts",
-      "allowed_imports": [],
-      "allowed_workspace_packages": [],
-      "allowed_external_packages": [],
-      "allowed_node_builtins": []
-    },
-    {
-      "name": "processing-server-installation-key-is-read-only-compatibility",
-      "from": "services/organization-authority/src/processing/authorization/security/existing-exportable-installation-key.ts",
-      "allowed_imports": [],
-      "allowed_workspace_packages": ["@echo-brain/federation-protocol"],
-      "allowed_external_packages": [],
-      "allowed_node_builtins": ["crypto", "fs", "path"]
-    },
-    {
-      "name": "processing-server-installation-bridge-uses-current-authority-contracts",
-      "from": "services/organization-authority/src/processing/authorization/server-installation-compatibility-bridge.ts",
-      "allowed_imports": [
-        "services/organization-authority/src/application/ports/authority-repository.ts",
-        "services/organization-authority/src/processing/adapters/approval-surfaces/slack-reactions/slack-reactions-approval-surface.ts",
-        "services/organization-authority/src/processing/authorization/organization-member-authorization-evidence.ts",
-        "services/organization-authority/src/processing/authorization/security/existing-exportable-installation-key.ts"
-      ],
-      "allowed_workspace_packages": [
-        "@echo-brain/federation-protocol",
-        "@echo-brain/organization-api",
-        "@echo-brain/organization-protocol"
-      ],
-      "allowed_external_packages": [],
-      "allowed_node_builtins": ["crypto"]
-    },
-    {
-      "name": "processing-authorization-evidence-validators-read-only-core",
-      "from": "services/organization-authority/src/processing/authorization/*-authorization-evidence.ts",
-      "allowed_imports": [
-        "services/organization-authority/src/processing/core/**"
-      ],
-      "allowed_workspace_packages": [],
-      "allowed_external_packages": [],
-      "allowed_node_builtins": []
-    },
-    {
-      "name": "processing-approval-outcome-instrument-reads-only-core",
-      "from": "services/organization-authority/src/processing/approval/approval-outcome-instrument.ts",
-      "allowed_imports": [
-        "services/organization-authority/src/processing/core/**"
-      ],
-      "allowed_workspace_packages": [],
-      "allowed_external_packages": [],
-      "allowed_node_builtins": []
-    },
-    {
-      "name": "processing-synthetic-replay-is-offline",
-      "from": "services/organization-authority/src/processing/replay/**",
-      "allowed_imports": [
-        "services/organization-authority/src/processing/core/**",
-        "services/organization-authority/src/processing/adapters/decision-processors/structured-text/**",
-        "services/organization-authority/src/processing/replay/**"
-      ],
-      "allowed_workspace_packages": [],
-      "allowed_external_packages": [],
-      "allowed_node_builtins": ["crypto"]
-    },
-    {
-      "name": "processing-record-envelope-ports-use-protocol-contracts",
-      "from": "services/organization-authority/src/processing/record/ports.ts",
-      "allowed_imports": [],
-      "allowed_workspace_packages": [
-        "@echo-brain/federation-protocol",
-        "@echo-brain/organization-protocol"
-      ],
-      "allowed_external_packages": [],
-      "allowed_node_builtins": []
-    },
-    {
       "name": "processing-clean-v1-record-writer-uses-only-clean-record-ports",
       "from": "services/organization-authority/src/processing/clean-v1-record/**",
       "allowed_imports": [
@@ -548,68 +465,12 @@
       "allowed_node_builtins": []
     },
     {
-      "name": "processing-record-envelope-builder-uses-protocol-contracts",
-      "from": "services/organization-authority/src/processing/record/protocol-record-envelope-builder.ts",
-      "allowed_imports": [
-        "services/organization-authority/src/processing/record/ports.ts"
-      ],
-      "allowed_workspace_packages": [
-        "@echo-brain/federation-protocol",
-        "@echo-brain/organization-protocol"
-      ],
-      "allowed_external_packages": [],
-      "allowed_node_builtins": []
-    },
-    {
-      "name": "processing-organization-member-renderer-uses-v3-protocol",
-      "from": "services/organization-authority/src/processing/record/adapters/organization-member-presentation-renderer.ts",
-      "allowed_imports": [],
-      "allowed_workspace_packages": [
-        "@echo-brain/federation-protocol",
-        "@echo-brain/organization-protocol"
-      ],
-      "allowed_external_packages": [],
-      "allowed_node_builtins": []
-    },
-    {
-      "name": "processing-resolved-organization-record-act-writer-coordinates-ports",
-      "from": "services/organization-authority/src/processing/record/adapters/resolved-organization-record-act-writer.ts",
-      "allowed_imports": [
-        "services/organization-authority/src/processing/core/**",
-        "services/organization-authority/src/processing/record/ports.ts"
-      ],
-      "allowed_workspace_packages": [
-        "@echo-brain/organization-api",
-        "@echo-brain/organization-protocol"
-      ],
-      "allowed_external_packages": [],
-      "allowed_node_builtins": []
-    },
-    {
       "name": "processing-serialized-authority-meeting-worker-is-generic",
       "from": "services/organization-authority/src/processing/live/serialized-authority-meeting-worker.ts",
       "allowed_imports": [],
       "allowed_workspace_packages": [],
       "allowed_external_packages": [],
       "allowed_node_builtins": []
-    },
-    {
-      "name": "processing-organization-member-record-metadata-rejoins-authority-state",
-      "from": "services/organization-authority/src/processing/record/adapters/organization-member-record-metadata.ts",
-      "allowed_imports": [
-        "services/organization-authority/src/processing/authorization/organization-member-authorization-evidence.ts",
-        "services/organization-authority/src/processing/authorization/reviewer-authorization-evidence.ts",
-        "services/organization-authority/src/processing/core/**",
-        "services/organization-authority/src/processing/record/adapters/resolved-organization-record-act-writer.ts",
-        "services/organization-authority/src/processing/record/ports.ts",
-        "services/organization-authority/src/processing/storage/sqlite-authority-processing-store.ts"
-      ],
-      "allowed_workspace_packages": [
-        "@echo-brain/federation-protocol",
-        "@echo-brain/organization-protocol"
-      ],
-      "allowed_external_packages": [],
-      "allowed_node_builtins": ["crypto"]
     }
   ]
 }

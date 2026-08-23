@@ -40,11 +40,9 @@ Tokens are never printed by successful commands.
 - the append-only organization record; and
 - recent-decision and readable-search projections.
 
-The server still preserves historical schema migrations and the V1
-installation/enrollment data needed by record and approval compatibility.
-Those compatibility paths remain server-side only until their surviving
-bindings are re-keyed to Person identities. The retired machine runtime is not
-kept in the repository as a second product.
+The server starts only from the seven byte-pinned clean baselines. Historical
+migration runners and compatibility APIs are not shipped. Layer 3 is the sole
+release boundary; no Layer 4 product or runtime is present.
 
 ## Repository layout
 
@@ -108,10 +106,10 @@ echo-brain person <command> [options]
 
 ## Authority deployment
 
-The production container is built from
-`deploy/organization-authority/Dockerfile`. It does not copy or build the
-Person client source. The EC2 deployment and rollback procedure is documented
-in [deploy/organization-authority/AWS-EC2.md](deploy/organization-authority/AWS-EC2.md).
+Build the production container from `deploy/organization-authority/Dockerfile`.
+Clean operation uses `compose.clean-v1.yaml` locally and
+`compose.clean-v1.ec2.yaml` for the EC2 host shape. The accepted release and
+update workflows are documented under `deploy/release/`.
 
 The public descriptor health endpoint is:
 
@@ -130,6 +128,6 @@ does not enable meeting ingestion by itself.
 - [Workspace boundaries](docs/architecture/organization-workspace-boundaries.md)
 - [Product runtime boundary](docs/architecture/product-runtime.md)
 
-Historical migrations and qualification evidence are intentionally retained.
-They describe deployed state and verification history, not additional shipped
-products.
+Typed ADR, RFC, invariant, and qualification evidence remains as design and
+verification history. Historical executable migrations are intentionally not
+part of the clean product.

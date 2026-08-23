@@ -18,18 +18,15 @@ client version and SHA-256:
 npm run pack:person-client -- /absolute/private/release-artifacts
 ```
 
-Build the Authority image from that same committed source with its source SHA
-embedded as the OCI revision label. The release record's `source_sha` must be
-that exact value; the deploy command checks the pulled image label before it
-starts the container.
+Build the Authority image from that same committed source with the guarded
+build command. It refuses a dirty worktree, derives the source SHA itself,
+checks that the source stays unchanged during the build, and verifies the OCI
+revision label. The release record's `source_sha` must be that exact value;
+the deploy command checks the pulled image label before it starts the
+container.
 
 ```sh
-SOURCE_SHA="$(git rev-parse HEAD)"
-docker build --build-arg ECHO_SOURCE_SHA="$SOURCE_SHA" \
-  -f deploy/organization-authority/Dockerfile \
-  -t echo-organization-authority:release-candidate .
-docker image inspect --format '{{index .Config.Labels "org.opencontainers.image.revision"}}' \
-  echo-organization-authority:release-candidate
+npm run build:authority-image -- echo-organization-authority:release-candidate
 ```
 
 Create a non-secret draft record from the reviewed image digest and pack output,
@@ -60,7 +57,7 @@ Compose files, then copy the update command there. The same `stage` and
 pre-install a `current.clean-v1.json` record by hand:
 
 ```sh
-cd /srv/echo-authority
+cd /srv/echo-authority-clean-v1
 install -d -m 0755 release
 install -m 0755 /absolute/reviewed/clean-v1-release.py release/clean-v1-release.py
 install -m 0755 /absolute/reviewed/update-clean-v1.sh ./update-clean-v1.sh

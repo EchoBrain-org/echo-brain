@@ -63,7 +63,7 @@ import {
   type CleanV4Layer1VerifiedEnvelope,
 } from "../src/retrieve/clean-v4-layer1-snapshot.js";
 import { applyOrganizationRecordLogBaselineV1 } from "../src/persistence/record-log-baseline.js";
-import { openOrganizationRecordDatabase } from "../src/persistence/open-database.js";
+import { openOrganizationRecordDatabase } from "../src/persistence/open-unmigrated-database.js";
 
 const COORDINATES = {
   authority_id: "oau_00000000-0000-4000-8000-000000000001",

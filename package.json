@@ -21,6 +21,7 @@
   },
   "scripts": {
     "clean": "node tools/build.mjs --clean",
+    "build:authority-image": "node tools/build-authority-image.mjs",
     "pack:person-client": "node tools/pack-person-client.mjs",
     "bundle:person-client": "node deploy/release/create-offline-person-client-bundle.mjs",
     "clean:workspaces": "tsc -b tsconfig.workspaces.json --clean",
