@@ -119,6 +119,9 @@ export async function runCleanLiveCli(
       on_worker_error: (error) => {
         io.stderr(`clean live worker failed: ${error.message}\n`);
       },
+      on_layer4_failure: (event) => {
+        io.stderr(`${canonicalJson(event as never)}\n`);
+      },
       ...(parsed["--worker-interval-ms"] === undefined
         ? {}
         : {

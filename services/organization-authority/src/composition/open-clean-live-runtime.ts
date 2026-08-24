@@ -68,6 +68,7 @@ import type { CleanPersonRuntimeDependencies } from "./clean-person-runtime.js";
 import type { PersonSlackApprovalObserverV2 } from "@echo-brain/organization-control-plane/clean-runtime-v1";
 import { verifyCleanStateLineage } from "./verify-clean-state-lineage.js";
 import { createOpenRouterStructuredOutput } from "../answer-composition/openrouter-structured-output.js";
+import type { CleanLayer4FailureEventV1 } from "./clean-person-answer-route.js";
 
 export interface OpenCleanLiveRuntimeConfig {
   readonly state_directory: string;
@@ -84,6 +85,8 @@ export interface OpenCleanLiveRuntimeConfig {
   readonly worker_interval_ms?: number;
   /** Observational only: a failed cycle is retried by the serialized worker. */
   readonly on_worker_error?: (error: Error) => void;
+  /** Observational only: redacted Layer 4 model-stage failures. */
+  readonly on_layer4_failure?: (event: CleanLayer4FailureEventV1) => void;
 }
 
 export interface OpenedCleanLiveRuntime extends RunningCleanLiveRuntime {
@@ -694,6 +697,11 @@ export async function openCleanLiveRuntime(
               credential_resolver: (reference) =>
                 reference === llmReference ? llmCredential : undefined,
             }),
+          ...(dependencies.person?.answer_failure !== undefined
+            ? { answer_failure: dependencies.person.answer_failure }
+            : config.on_layer4_failure === undefined
+              ? {}
+              : { answer_failure: config.on_layer4_failure }),
         },
         on_worker_error: config.on_worker_error,
       },

@@ -4,6 +4,7 @@ import {
   createLeanAnswerComposition,
   LeanAnswerCompositionError,
   type Layer4BatchReadPort,
+  type Layer4FailureDiagnosticV1,
   type Layer4ReleasedBatch,
   type Layer4StructuredGenerationInput,
 } from "../../src/answer-composition/lean-answer-composition.js";
@@ -220,6 +221,172 @@ describe("lean Layer 4 answer composition", () => {
     expect(layer3.retrieve).toHaveBeenCalledWith({
       queries: ["What is the launch date?"],
     });
+  });
+
+  it("reports a redacted planner validation failure while retaining the original-query fallback", async () => {
+    const diagnostics: Layer4FailureDiagnosticV1[] = [];
+    const question = "Question that must not appear in the diagnostic";
+    const layer3 = {
+      retrieve: vi.fn(async () => ({
+        ...release(false),
+        released_atoms: [],
+      })),
+      revalidate: vi.fn(async () => ({ checked_at: "2026-08-23T00:00:01.000Z" })),
+    };
+    const answer = createLeanAnswerComposition({
+      planner: { generate: vi.fn(async () => ({ queries: ["   "] })) },
+      answerer: { generate: vi.fn() },
+      layer3,
+      audit: { append: vi.fn() },
+      provider: "openrouter",
+      planner_model: "openai/gpt-4.1-mini",
+      answer_model: "openai/gpt-4.1-mini",
+      on_failure: (event) => diagnostics.push(event),
+      now_ms: vi.fn(() => 100),
+    });
+
+    await expect(answer.answer({ question })).resolves.toMatchObject({
+      answer: "Insufficient accessible evidence to answer this question.",
+    });
+
+    expect(layer3.retrieve).toHaveBeenCalledWith({ queries: [question] });
+    expect(diagnostics).toEqual([
+      expect.objectContaining({
+        schema_version: 1,
+        kind: "echo-clean-layer4-failure-v1",
+        stage: "planner",
+        failure_class: "core_validation",
+        elapsed_ms: 0,
+        http_status: null,
+        provider: null,
+        finish_reason: null,
+        provider_generation_id: null,
+        retrieval_generation_id: null,
+      }),
+    ]);
+    const serialized = JSON.stringify(diagnostics[0]);
+    expect(serialized).not.toContain(question);
+    expect(serialized).not.toContain("Insufficient accessible evidence");
+  });
+
+  it("reports answer validation failure against the exact released generation", async () => {
+    const diagnostics: Layer4FailureDiagnosticV1[] = [];
+    const released = release();
+    const layer3 = {
+      retrieve: vi.fn(async () => released),
+      revalidate: vi.fn(async () => ({ checked_at: "2026-08-23T00:00:01.000Z" })),
+    };
+    const answer = createLeanAnswerComposition({
+      planner: { generate: vi.fn(async () => ({ queries: [] })) },
+      answerer: {
+        generate: vi.fn(async () => ({
+          status: "answered",
+          answer: "Answer text that must not appear in the diagnostic",
+          citations: ["a1", "a1"],
+        })),
+      },
+      layer3,
+      audit: { append: vi.fn() },
+      provider: "openrouter",
+      planner_model: "openai/gpt-4.1-mini",
+      answer_model: "openai/gpt-4.1-mini",
+      on_failure: (event) => diagnostics.push(event),
+      now_ms: vi.fn(() => 100),
+    });
+
+    await expect(answer.answer({ question: "Question that must remain redacted" })).rejects.toBeInstanceOf(
+      LeanAnswerCompositionError,
+    );
+
+    expect(diagnostics).toEqual([
+      expect.objectContaining({
+        schema_version: 1,
+        kind: "echo-clean-layer4-failure-v1",
+        stage: "answer",
+        failure_class: "core_validation",
+        elapsed_ms: 0,
+        http_status: null,
+        provider: null,
+        finish_reason: null,
+        provider_generation_id: null,
+        retrieval_generation_id: released.generation_id,
+      }),
+    ]);
+    const serialized = JSON.stringify(diagnostics[0]);
+    expect(serialized).not.toContain("Question that must remain redacted");
+    expect(serialized).not.toContain("Answer text that must not appear");
+    expect(serialized).not.toContain(released.released_atoms[0]?.text ?? "");
+  });
+
+  it("propagates only safe structural adapter failure metadata into the answer diagnostic", async () => {
+    const diagnostics: Layer4FailureDiagnosticV1[] = [];
+    const question = "Question that must remain absent from adapter diagnostics";
+    const released = release();
+    const adapterFailure = Object.assign(new Error("Provider failure text is not diagnostic data"), {
+      diagnostic: Object.freeze({
+        failure_class: "adapter_finish",
+        http_status: 200,
+        provider: "novita",
+        finish_reason: "length",
+        provider_generation_id: "gen-abcdefgh12345678",
+      }),
+    });
+    const answer = createLeanAnswerComposition({
+      planner: { generate: vi.fn(async () => ({ queries: [] })) },
+      answerer: { generate: vi.fn(async () => { throw adapterFailure; }) },
+      layer3: {
+        retrieve: vi.fn(async () => released),
+        revalidate: vi.fn(async () => ({ checked_at: "2026-08-23T00:00:01.000Z" })),
+      },
+      audit: { append: vi.fn() },
+      provider: "openrouter",
+      planner_model: "openai/gpt-4.1-mini",
+      answer_model: "openai/gpt-4.1-mini",
+      on_failure: (event) => diagnostics.push(event),
+      now_ms: vi.fn(() => 100),
+    });
+
+    await expect(answer.answer({ question })).rejects.toBe(adapterFailure);
+
+    expect(diagnostics).toEqual([
+      expect.objectContaining({
+        stage: "answer",
+        failure_class: "adapter_finish",
+        http_status: 200,
+        provider: "novita",
+        finish_reason: "length",
+        provider_generation_id: "gen-abcdefgh12345678",
+        retrieval_generation_id: released.generation_id,
+      }),
+    ]);
+    const serialized = JSON.stringify(diagnostics[0]);
+    expect(serialized).not.toContain(question);
+    expect(serialized).not.toContain("Provider failure text");
+    expect(serialized).not.toContain(released.released_atoms[0]?.text ?? "");
+  });
+
+  it("does not let a diagnostics observer failure change answer behavior", async () => {
+    const layer3 = {
+      retrieve: vi.fn(async () => release()),
+      revalidate: vi.fn(async () => ({ checked_at: "2026-08-23T00:00:01.000Z" })),
+    };
+    const answer = createLeanAnswerComposition({
+      planner: { generate: vi.fn(async () => ({ queries: ["   "] })) },
+      answerer: { generate: vi.fn(async () => ({ status: "answered", answer: "Tuesday.", citations: ["a1"] })) },
+      layer3,
+      audit: { append: vi.fn() },
+      provider: "openrouter",
+      planner_model: "openai/gpt-4.1-mini",
+      answer_model: "openai/gpt-4.1-mini",
+      on_failure: () => {
+        throw new Error("diagnostics sink unavailable");
+      },
+    });
+
+    await expect(answer.answer({ question: "What is the launch date?" })).resolves.toMatchObject({
+      answer: "Tuesday.",
+    });
+    expect(layer3.retrieve).toHaveBeenCalledWith({ queries: ["What is the launch date?"] });
   });
 
   it("does not turn caller cancellation into planner fallback", async () => {

@@ -1,8 +1,10 @@
+import { randomUUID } from "node:crypto";
 import type { Sha256Digest } from "@echo-brain/federation-protocol";
 import {
   createLeanAnswerComposition,
   LeanAnswerCompositionError,
   validateLayer2CompatibleQuery,
+  type Layer4FailureDiagnosticV1,
   type Layer4ReleasedBatch,
   type Layer4StructuredOutputPort,
 } from "../answer-composition/lean-answer-composition.js";
@@ -22,6 +24,11 @@ export const CLEAN_LAYER4_PROVIDER_V1 = "openrouter" as const;
 export const CLEAN_LAYER4_MODEL_V1 = "deepseek/deepseek-r1" as const;
 export const CLEAN_LAYER4_TIMEOUT_MS_V1 = 60_000;
 
+export interface CleanLayer4FailureEventV1
+  extends Layer4FailureDiagnosticV1 {
+  readonly failure_id: string;
+}
+
 export interface CreateCleanPersonAnswerRouteV1Options {
   readonly authority_id: string;
   readonly organization_id: string;
@@ -29,6 +36,8 @@ export interface CreateCleanPersonAnswerRouteV1Options {
   readonly search: CleanPersonRecordSearchBatchApplicationV1;
   readonly model: Layer4StructuredOutputPort;
   readonly audit: SqliteCleanPersonAnswerCompositionAuditV1;
+  /** Metadata-only server observer. It never changes the public response. */
+  readonly on_failure?: (event: CleanLayer4FailureEventV1) => void;
 }
 
 function unavailable(): never {
@@ -173,6 +182,17 @@ export function createCleanPersonAnswerRouteV1(
           planner_model: CLEAN_LAYER4_MODEL_V1,
           answer_model: CLEAN_LAYER4_MODEL_V1,
           timeout_ms: CLEAN_LAYER4_TIMEOUT_MS_V1,
+          ...(options.on_failure === undefined
+            ? {}
+            : {
+                on_failure: (event: Layer4FailureDiagnosticV1) =>
+                  options.on_failure!(
+                    Object.freeze({
+                      ...event,
+                      failure_id: `l4f_${randomUUID()}`,
+                    }),
+                  ),
+              }),
         });
         return publicResponse(
           await composition.answer({ question: input.question }),

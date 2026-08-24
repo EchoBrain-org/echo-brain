@@ -7,10 +7,47 @@ import {
 export const OPENROUTER_STRUCTURED_OUTPUT_TIMEOUT_MS = 30_000;
 export const OPENROUTER_STRUCTURED_OUTPUT_MAX_TIMEOUT_MS = 120_000;
 
+export type OpenRouterFailureClass =
+  | "adapter_timeout"
+  | "adapter_transport"
+  | "adapter_http"
+  | "adapter_provider_error"
+  | "adapter_finish"
+  | "adapter_refusal"
+  | "adapter_response"
+  | "adapter_json";
+
+export type OpenRouterFinishReason =
+  | "stop"
+  | "length"
+  | "content_filter"
+  | "error"
+  | "other";
+
+/**
+ * Closed, safe-to-record failure metadata. It excludes request and response
+ * content, provider error text, credentials, prompts, and reasoning.
+ */
+export interface OpenRouterFailureDiagnostic {
+  readonly failure_class: OpenRouterFailureClass;
+  readonly http_status: number | null;
+  readonly provider: string | null;
+  readonly finish_reason: OpenRouterFinishReason | null;
+  readonly provider_generation_id: string | null;
+}
+
 export class OpenRouterStructuredOutputError extends Error {
-  constructor(message: string) {
+  readonly diagnostic: OpenRouterFailureDiagnostic;
+
+  constructor(
+    message: string,
+    diagnostic: OpenRouterFailureDiagnostic = failureDiagnostic({
+      failure_class: "adapter_response",
+    }),
+  ) {
     super(message);
     this.name = "OpenRouterStructuredOutputError";
+    this.diagnostic = diagnostic;
   }
 }
 
@@ -55,6 +92,66 @@ function object(value: unknown): Record<string, unknown> | null {
   return typeof value === "object" && value !== null && !Array.isArray(value)
     ? (value as Record<string, unknown>)
     : null;
+}
+
+const OPENROUTER_GENERATION_ID = /^gen-[A-Za-z0-9]{8,64}$/;
+const OPENROUTER_PROVIDER_NAME = /^[A-Za-z][A-Za-z0-9]{1,31}$/;
+
+function generationId(value: unknown): string | null {
+  return typeof value === "string" && OPENROUTER_GENERATION_ID.test(value)
+    ? value
+    : null;
+}
+
+function providerName(value: unknown): string | null {
+  return typeof value === "string" && OPENROUTER_PROVIDER_NAME.test(value)
+    ? value
+    : null;
+}
+
+function finishReason(value: unknown): OpenRouterFinishReason | null {
+  if (value === undefined || value === null) return null;
+  if (value === "stop" || value === "length" || value === "content_filter" || value === "error") {
+    return value;
+  }
+  return typeof value === "string" ? "other" : null;
+}
+
+function isTimeoutFailure(value: unknown): boolean {
+  return value instanceof Error && value.name === "TimeoutError";
+}
+
+function failureDiagnostic(input: {
+  readonly failure_class: OpenRouterFailureClass;
+  readonly response?: Response;
+  readonly root?: Record<string, unknown> | null;
+  readonly finish_reason?: OpenRouterFinishReason | null;
+}): OpenRouterFailureDiagnostic {
+  const root = input.root ?? null;
+  const error = root === null ? null : object(root.error);
+  const metadata = error === null ? null : object(error.metadata);
+  const providerGenerationId =
+    generationId(input.response?.headers.get("x-generation-id")) ??
+    generationId(root?.id) ??
+    generationId(metadata?.generation_id) ??
+    null;
+  return Object.freeze({
+    failure_class: input.failure_class,
+    http_status: input.response?.status ?? null,
+    provider:
+      providerGenerationId === null
+        ? null
+        : (providerName(root?.provider) ?? providerName(metadata?.provider_name)),
+    finish_reason: input.finish_reason ?? null,
+    provider_generation_id: providerGenerationId,
+  });
+}
+
+function fail(
+  message: "OpenRouter request failed" | "OpenRouter response is invalid",
+  input: Parameters<typeof failureDiagnostic>[0],
+): never {
+  throw new OpenRouterStructuredOutputError(message, failureDiagnostic(input));
 }
 
 /** A small, credential-contained OpenRouter JSON-schema adapter for Layer 4. */
@@ -112,45 +209,102 @@ export function createOpenRouterStructuredOutput(
             },
           }),
         });
-      } catch {
-        throw new OpenRouterStructuredOutputError("OpenRouter request failed");
-      }
-      if (!response.ok) {
-        throw new OpenRouterStructuredOutputError("OpenRouter request failed");
+      } catch (error) {
+        fail("OpenRouter request failed", {
+          failure_class: isTimeoutFailure(error)
+            ? "adapter_timeout"
+            : "adapter_transport",
+        });
       }
       let payload: unknown;
       try {
         payload = await response.json();
       } catch {
-        throw new OpenRouterStructuredOutputError("OpenRouter response is invalid");
+        fail(
+          response.ok
+            ? "OpenRouter response is invalid"
+            : "OpenRouter request failed",
+          {
+            failure_class: response.ok ? "adapter_response" : "adapter_http",
+            response,
+          },
+        );
       }
       const root = object(payload);
-      if (root === null || object(root.error) !== null) {
-        throw new OpenRouterStructuredOutputError("OpenRouter response is invalid");
+      const rootError = root === null ? null : object(root.error);
+      if (!response.ok) {
+        fail("OpenRouter request failed", {
+          failure_class:
+            rootError === null ? "adapter_http" : "adapter_provider_error",
+          response,
+          root,
+        });
+      }
+      if (root === null || rootError !== null) {
+        fail("OpenRouter response is invalid", {
+          failure_class:
+            rootError === null ? "adapter_response" : "adapter_provider_error",
+          response,
+          root,
+        });
       }
       const choices = Array.isArray(root?.choices) ? root.choices : [];
       const first = object(choices[0]);
-      if (
-        first === null ||
-        object(first.error) !== null ||
-        first.finish_reason === "length" ||
-        first.finish_reason === "content_filter" ||
-        first.finish_reason === "error"
-      ) {
-        throw new OpenRouterStructuredOutputError("OpenRouter response is invalid");
+      if (first === null) {
+        fail("OpenRouter response is invalid", {
+          failure_class: "adapter_response",
+          response,
+          root,
+        });
+      }
+      if (object(first.error) !== null) {
+        fail("OpenRouter response is invalid", {
+          failure_class: "adapter_provider_error",
+          response,
+          root,
+          finish_reason: finishReason(first.finish_reason),
+        });
+      }
+      const completed = finishReason(first.finish_reason);
+      if (completed !== null && completed !== "stop") {
+        fail("OpenRouter response is invalid", {
+          failure_class: "adapter_finish",
+          response,
+          root,
+          finish_reason: completed,
+        });
       }
       const message = object(first?.message);
-      if (message === null || nonEmpty(message.refusal)) {
-        throw new OpenRouterStructuredOutputError("OpenRouter response is invalid");
+      if (message === null) {
+        fail("OpenRouter response is invalid", {
+          failure_class: "adapter_response",
+          response,
+          root,
+        });
+      }
+      if (nonEmpty(message.refusal)) {
+        fail("OpenRouter response is invalid", {
+          failure_class: "adapter_refusal",
+          response,
+          root,
+        });
       }
       const content = message?.content;
       if (!nonEmpty(content)) {
-        throw new OpenRouterStructuredOutputError("OpenRouter response is invalid");
+        fail("OpenRouter response is invalid", {
+          failure_class: "adapter_response",
+          response,
+          root,
+        });
       }
       try {
         return JSON.parse(content);
       } catch {
-        throw new OpenRouterStructuredOutputError("OpenRouter response is invalid");
+        fail("OpenRouter response is invalid", {
+          failure_class: "adapter_json",
+          response,
+          root,
+        });
       }
     },
   });

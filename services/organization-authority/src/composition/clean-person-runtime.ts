@@ -35,7 +35,10 @@ import { createCleanPersonEmployeeHttpApplication } from "../presentation/clean-
 import { cleanReadableSearchRuntimeContractV1 } from "./clean-readable-search-runtime.js";
 import { verifyCleanStateLineage } from "./verify-clean-state-lineage.js";
 import type { Layer4StructuredOutputPort } from "../answer-composition/lean-answer-composition.js";
-import { createCleanPersonAnswerRouteV1 } from "./clean-person-answer-route.js";
+import {
+  createCleanPersonAnswerRouteV1,
+  type CleanLayer4FailureEventV1,
+} from "./clean-person-answer-route.js";
 
 export interface CleanPersonRuntimeConfig {
   readonly state_directory: string;
@@ -65,6 +68,8 @@ export interface CleanPersonRuntimeDependencies {
   readonly slack_provider?: CleanSlackIdentityProviderV1;
   /** Present only in the active live runtime; omitted during founder setup. */
   readonly answer_model?: Layer4StructuredOutputPort;
+  /** Metadata-only Layer 4 failure observer for the live server log. */
+  readonly answer_failure?: (event: CleanLayer4FailureEventV1) => void;
 }
 
 export interface RunningCleanPersonRuntime {
@@ -240,6 +245,9 @@ export async function startCleanPersonRuntime(
               search: recordSearch,
               model: dependencies.answer_model,
               audit: new SqliteCleanPersonAnswerCompositionAuditV1(database),
+              ...(dependencies.answer_failure === undefined
+                ? {}
+                : { on_failure: dependencies.answer_failure }),
             }),
           }),
       person_employees: createCleanPersonEmployeeHttpApplication(

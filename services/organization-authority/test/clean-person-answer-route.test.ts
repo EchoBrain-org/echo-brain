@@ -7,6 +7,7 @@ import { openAuthorityDatabase } from "../src/adapters/persistence/sqlite/open-u
 import type { PersonAccessAuthorization } from "../src/application/person-identity-sessions.js";
 import {
   createCleanPersonAnswerRouteV1,
+  type CleanLayer4FailureEventV1,
 } from "../src/composition/clean-person-answer-route.js";
 import type {
   Layer4StructuredGenerationInput,
@@ -86,6 +87,8 @@ function searchResponse() {
 function setup(input: {
   readonly model?: Layer4StructuredOutputPort;
   readonly revalidate?: () => PersonAccessAuthorization;
+  readonly on_failure?: (event: CleanLayer4FailureEventV1) => void;
+  readonly source_text?: string;
 }) {
   const database = openAuthorityDatabase(":memory:");
   applyAuthorityBaselineV1(database);
@@ -94,7 +97,22 @@ function setup(input: {
   const search: CleanPersonRecordSearchBatchApplicationV1 = {
     searchBatch: vi.fn((_value) => {
       events.push("batch");
-      return Object.freeze({ response: searchResponse(), release: witness });
+      const response = searchResponse();
+      const sourceText = input.source_text;
+      return Object.freeze({
+        response:
+          sourceText === undefined
+            ? response
+            : Object.freeze({
+                ...response,
+                items: Object.freeze(
+                  response.items.map((item) =>
+                    Object.freeze({ ...item, text: sourceText }),
+                  ),
+                ),
+              }),
+        release: witness,
+      });
     }),
     revalidateBatchRelease: vi.fn(() => {
       events.push("revalidate");
@@ -129,6 +147,7 @@ function setup(input: {
     search,
     model,
     audit,
+    ...(input.on_failure === undefined ? {} : { on_failure: input.on_failure }),
   });
   return { database, events, search, append, modelInputs, route };
 }
@@ -251,6 +270,71 @@ describe("clean Person Layer 4 answer route", () => {
       expect(value.search.revalidateBatchRelease).toHaveBeenCalledTimes(
         revalidationCalls,
       );
+      expect(value.append).not.toHaveBeenCalled();
+    } finally {
+      value.database.close();
+    }
+  });
+
+  it("reports one redacted answer failure while keeping the public error generic", async () => {
+    const question = "QUESTION-DO-NOT-LOG-79a3067";
+    const source = "SOURCE-DO-NOT-LOG-79a3067";
+    const providerSecret = "PROVIDER-SECRET-DO-NOT-LOG-79a3067";
+    const prompt = "PROMPT-DO-NOT-LOG-79a3067";
+    const reasoning = "REASONING-DO-NOT-LOG-79a3067";
+    const failures: CleanLayer4FailureEventV1[] = [];
+    const value = setup({
+      model: {
+        generate: vi
+          .fn()
+          .mockResolvedValueOnce({ queries: [] })
+          .mockResolvedValueOnce({
+            status: "answered",
+            answer: `${providerSecret} ${prompt} ${reasoning}`,
+            citations: ["a99"],
+          }),
+      },
+      on_failure: (event) => failures.push(event),
+      source_text: source,
+    });
+    try {
+      await expect(
+        value.route.ask({
+          access_token: "bearer-only-token",
+          question,
+        }),
+      ).rejects.toMatchObject({
+        code: "unavailable",
+        message: "answer composition is unavailable",
+      });
+
+      expect(failures).toHaveLength(1);
+      expect(failures[0]).toMatchObject({
+        schema_version: 1,
+        kind: "echo-clean-layer4-failure-v1",
+        failure_id: expect.stringMatching(/^l4f_[0-9a-f-]{36}$/),
+        stage: "answer",
+        failure_class: "core_validation",
+        http_status: null,
+        provider: null,
+        finish_reason: null,
+        provider_generation_id: null,
+        retrieval_generation_id: digest("generation"),
+      });
+      expect(failures[0]?.elapsed_ms).toEqual(expect.any(Number));
+      expect(failures[0]?.elapsed_ms).toBeGreaterThanOrEqual(0);
+
+      const diagnostic = JSON.stringify(failures[0]);
+      for (const forbidden of [
+        question,
+        source,
+        providerSecret,
+        prompt,
+        reasoning,
+      ]) {
+        expect(diagnostic).not.toContain(forbidden);
+      }
+      expect(value.search.revalidateBatchRelease).not.toHaveBeenCalled();
       expect(value.append).not.toHaveBeenCalled();
     } finally {
       value.database.close();
