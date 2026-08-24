@@ -16,6 +16,7 @@ import type { AddressInfo } from "node:net";
 import { validateOrganizationAuthorityOrigin } from "@echo-brain/organization-api";
 import { SqliteCleanPersonSessionRepository } from "../adapters/persistence/sqlite/clean-person-session-repository.js";
 import { SqliteCleanPersonRecordReadAuditV1 } from "../adapters/persistence/sqlite/clean-person-record-read-audit-v1.js";
+import { SqliteCleanPersonAnswerCompositionAuditV1 } from "../adapters/persistence/sqlite/clean-person-answer-composition-audit-v1.js";
 import { openAuthorityDatabase } from "../adapters/persistence/sqlite/open-unmigrated-database.js";
 import { NodePersonSessionCrypto } from "../adapters/security/node-person-session-crypto.js";
 import { OpenIdClientPersonSessionProvider } from "../adapters/oidc/openid-client-person-session-provider.js";
@@ -33,6 +34,11 @@ import { CleanPersonEmployeeLifecycleApplication } from "../application/clean-pe
 import { createCleanPersonEmployeeHttpApplication } from "../presentation/clean-person-employee-http-application.js";
 import { cleanReadableSearchRuntimeContractV1 } from "./clean-readable-search-runtime.js";
 import { verifyCleanStateLineage } from "./verify-clean-state-lineage.js";
+import type { Layer4StructuredOutputPort } from "../answer-composition/lean-answer-composition.js";
+import {
+  createCleanPersonAnswerRouteV1,
+  type CleanLayer4FailureEventV1,
+} from "./clean-person-answer-route.js";
 
 export interface CleanPersonRuntimeConfig {
   readonly state_directory: string;
@@ -60,6 +66,10 @@ export interface CleanPersonRuntimeConfig {
 export interface CleanPersonRuntimeDependencies {
   readonly oidc_provider?: PersonSessionOidcAuthorizationProvider;
   readonly slack_provider?: CleanSlackIdentityProviderV1;
+  /** Present only in the active live runtime; omitted during founder setup. */
+  readonly answer_model?: Layer4StructuredOutputPort;
+  /** Metadata-only Layer 4 failure observer for the live server log. */
+  readonly answer_failure?: (event: CleanLayer4FailureEventV1) => void;
 }
 
 export interface RunningCleanPersonRuntime {
@@ -198,6 +208,19 @@ export async function startCleanPersonRuntime(
             },
             authorization_fence: new ReadableSearchAuthorizationFence(),
           });
+    const readAudit = new SqliteCleanPersonRecordReadAuditV1(database);
+    const recordSearch = createCleanPersonRecordSearchRouteV1({
+      state_directory: config.state_directory,
+      authority_id: metadata.authority_id,
+      organization_id: metadata.organization_id,
+      state_lineage_id: lineage.root.state_lineage_id,
+      retrieval_contract_sha256:
+        cleanReadableSearchRuntimeContractV1().retrieval_contract_sha256,
+      sessions,
+      authority: database,
+      record: recordDatabase,
+      audit: readAudit,
+    });
     const server = createCleanPersonHttpServer({
       descriptor: metadata.descriptor,
       sessions,
@@ -209,20 +232,24 @@ export async function startCleanPersonRuntime(
         state_lineage_id: lineage.root.state_lineage_id,
         sessions,
         records: new CleanPersonRecordReaderV1(recordDatabase),
-        audit: new SqliteCleanPersonRecordReadAuditV1(database),
+        audit: readAudit,
       }),
-      person_record_search: createCleanPersonRecordSearchRouteV1({
-        state_directory: config.state_directory,
-        authority_id: metadata.authority_id,
-        organization_id: metadata.organization_id,
-        state_lineage_id: lineage.root.state_lineage_id,
-        retrieval_contract_sha256:
-          cleanReadableSearchRuntimeContractV1().retrieval_contract_sha256,
-        sessions,
-        authority: database,
-        record: recordDatabase,
-        audit: new SqliteCleanPersonRecordReadAuditV1(database),
-      }),
+      person_record_search: recordSearch,
+      ...(dependencies.answer_model === undefined
+        ? {}
+        : {
+            person_answer: createCleanPersonAnswerRouteV1({
+              authority_id: metadata.authority_id,
+              organization_id: metadata.organization_id,
+              state_lineage_id: lineage.root.state_lineage_id,
+              search: recordSearch,
+              model: dependencies.answer_model,
+              audit: new SqliteCleanPersonAnswerCompositionAuditV1(database),
+              ...(dependencies.answer_failure === undefined
+                ? {}
+                : { on_failure: dependencies.answer_failure }),
+            }),
+          }),
       person_employees: createCleanPersonEmployeeHttpApplication(
         new CleanPersonEmployeeLifecycleApplication(sessions, {
           next(prefix) {

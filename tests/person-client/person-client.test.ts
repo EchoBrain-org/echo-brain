@@ -15,7 +15,7 @@ import { join } from "node:path";
 import { canonicalJson, p256KeyId } from "@echo-brain/federation-protocol";
 import { organizationSlackLinkChallengeCodeSha256 } from "@echo-brain/organization-api";
 import type { OrganizationAuthorityDescriptorV1 } from "@echo-brain/organization-protocol";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   PersonClient,
   runPersonClientCli,
@@ -90,6 +90,8 @@ async function withHome(run: (home: string) => Promise<void>): Promise<void> {
     rmSync(home, { recursive: true, force: true });
   }
 }
+
+afterEach(() => vi.restoreAllMocks());
 
 describe("Person client", () => {
   it("reports disconnected status without a network call or private paths", async () => {
@@ -383,6 +385,128 @@ describe("Person client", () => {
       expect(removed).toBe(2);
       expect(stdout).toBe("");
       expect(stderr).toContain("usage:");
+    });
+  });
+
+  it("asks one bounded question through the installed Person session and preserves answer bindings", async () => {
+    await withHome(async (home) => {
+      const authority = authorityDescriptor();
+      const client = new PersonClient({
+        home_directory: home,
+        now: () => NOW,
+        fetch: async () => json({ authority_descriptor: authority }),
+      });
+      await client.installSession("https://authority.example", ROTATED_SESSION);
+
+      let stdout = "";
+      let stderr = "";
+      const timeout = vi.spyOn(AbortSignal, "timeout");
+      const status = await runPersonClientCli(
+        ["ask", "--question", "What is our pricing decision?"],
+        {
+          stdout: { write: (value) => ((stdout += String(value)), true) },
+          stderr: { write: (value) => ((stderr += String(value)), true) },
+          home_directory: home,
+          now: () => NOW,
+          fetch: async (input, init) => {
+            expect(new URL(String(input)).pathname).toBe("/v1/person/ask");
+            expect(init?.method).toBe("POST");
+            expect(JSON.parse(String(init?.body))).toEqual({
+              question: "What is our pricing decision?",
+            });
+            expect(new Headers(init?.headers).get("authorization")).toBe(
+              `Bearer ${ROTATED_SESSION.access_token}`,
+            );
+            return json({
+              schema_version: 1,
+              kind: "echo-clean-person-answer-v1",
+              generation_id: `sha256:${"a".repeat(64)}`,
+              record_head: {
+                position: 1,
+                record_sha256: `sha256:${"b".repeat(64)}`,
+              },
+              answer: "Use simple pricing.",
+              citations: [
+                {
+                  atom_id: `sha256:${"c".repeat(64)}`,
+                  record_sha256: `sha256:${"b".repeat(64)}`,
+                  policy_id: "organization-member-readable-person-v2",
+                },
+              ],
+            });
+          },
+        },
+      );
+
+      expect(status).toBe(0);
+      expect(timeout).toHaveBeenCalledOnce();
+      expect(timeout).toHaveBeenCalledWith(135_000);
+      expect(stderr).toBe("");
+      expect(JSON.parse(stdout)).toEqual({
+        ok: true,
+        result: {
+          schema_version: 1,
+          kind: "echo-clean-person-answer-v1",
+          generation_id: `sha256:${"a".repeat(64)}`,
+          record_head: {
+            position: 1,
+            record_sha256: `sha256:${"b".repeat(64)}`,
+          },
+          answer: "Use simple pricing.",
+          citations: [
+            {
+              atom_id: `sha256:${"c".repeat(64)}`,
+              record_sha256: `sha256:${"b".repeat(64)}`,
+              policy_id: "organization-member-readable-person-v2",
+            },
+          ],
+        },
+      });
+    });
+  });
+
+  it("rejects invalid questions and malformed answer bindings before any answer is released", async () => {
+    await withHome(async (home) => {
+      const authority = authorityDescriptor();
+      let asks = 0;
+      const client = new PersonClient({
+        home_directory: home,
+        now: () => NOW,
+        fetch: async (input) => {
+          if (new URL(String(input)).pathname === "/v1/authority-descriptor") {
+            return json({ authority_descriptor: authority });
+          }
+          asks += 1;
+          return json({
+            schema_version: 1,
+            kind: "echo-clean-person-answer-v1",
+            generation_id: `sha256:${"a".repeat(64)}`,
+            record_head: {
+              position: 1,
+              record_sha256: `sha256:${"b".repeat(64)}`,
+            },
+            answer: "Use simple pricing.",
+            citations: [
+              {
+                atom_id: `sha256:${"c".repeat(64)}`,
+                record_sha256: `sha256:${"b".repeat(64)}`,
+                policy_id: "organization-member-readable-person-v2",
+                unexpected: true,
+              },
+            ],
+          });
+        },
+      });
+      await client.installSession("https://authority.example", ROTATED_SESSION);
+
+      await expect(client.ask(" pricing")).rejects.toThrow(
+        "ask request is invalid",
+      );
+      expect(asks).toBe(0);
+      await expect(client.ask("pricing")).rejects.toThrow(
+        "ask citation is invalid",
+      );
+      expect(asks).toBe(1);
     });
   });
 

@@ -267,6 +267,7 @@
       "allowed_imports": [
         "services/organization-authority/src/adapters/**",
         "services/organization-authority/src/application/**",
+        "services/organization-authority/src/answer-composition/**",
         "services/organization-authority/src/composition/**",
         "services/organization-authority/src/domain/**",
         "services/organization-authority/src/presentation/**",
@@ -307,6 +308,18 @@
         "net",
         "path"
       ]
+    },
+    {
+      "name": "authority-lean-layer4-answer-composition-is-a-layer3-client",
+      "from": "services/organization-authority/src/answer-composition/**",
+      "allowed_imports": [
+        "services/organization-authority/src/answer-composition/**"
+      ],
+      "allowed_workspace_packages": [
+        "@echo-brain/federation-protocol"
+      ],
+      "allowed_external_packages": [],
+      "allowed_node_builtins": []
     },
     {
       "name": "state-lineage-guard-is-unwired-and-read-only",
