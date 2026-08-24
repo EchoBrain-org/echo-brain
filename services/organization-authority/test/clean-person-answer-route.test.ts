@@ -164,6 +164,10 @@ describe("clean Person Layer 4 answer route", () => {
       expect(JSON.stringify(value.modelInputs)).not.toContain(
         "principal_reader",
       );
+      expect(value.modelInputs.map((input) => input.timeout_ms)).toEqual([
+        60_000,
+        60_000,
+      ]);
       expect(value.events).toEqual(["batch", "revalidate", "audit"]);
       expect(value.append).toHaveBeenCalledOnce();
       expect(response).toEqual({

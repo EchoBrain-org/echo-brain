@@ -20,7 +20,7 @@ import type {
 
 export const CLEAN_LAYER4_PROVIDER_V1 = "openrouter" as const;
 export const CLEAN_LAYER4_MODEL_V1 = "deepseek/deepseek-r1" as const;
-export const CLEAN_LAYER4_TIMEOUT_MS_V1 = 30_000;
+export const CLEAN_LAYER4_TIMEOUT_MS_V1 = 60_000;
 
 export interface CreateCleanPersonAnswerRouteV1Options {
   readonly authority_id: string;

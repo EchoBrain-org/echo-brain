@@ -15,7 +15,7 @@ import { join } from "node:path";
 import { canonicalJson, p256KeyId } from "@echo-brain/federation-protocol";
 import { organizationSlackLinkChallengeCodeSha256 } from "@echo-brain/organization-api";
 import type { OrganizationAuthorityDescriptorV1 } from "@echo-brain/organization-protocol";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   PersonClient,
   runPersonClientCli,
@@ -90,6 +90,8 @@ async function withHome(run: (home: string) => Promise<void>): Promise<void> {
     rmSync(home, { recursive: true, force: true });
   }
 }
+
+afterEach(() => vi.restoreAllMocks());
 
 describe("Person client", () => {
   it("reports disconnected status without a network call or private paths", async () => {
@@ -398,6 +400,7 @@ describe("Person client", () => {
 
       let stdout = "";
       let stderr = "";
+      const timeout = vi.spyOn(AbortSignal, "timeout");
       const status = await runPersonClientCli(
         ["ask", "--question", "What is our pricing decision?"],
         {
@@ -436,6 +439,8 @@ describe("Person client", () => {
       );
 
       expect(status).toBe(0);
+      expect(timeout).toHaveBeenCalledOnce();
+      expect(timeout).toHaveBeenCalledWith(135_000);
       expect(stderr).toBe("");
       expect(JSON.parse(stdout)).toEqual({
         ok: true,
