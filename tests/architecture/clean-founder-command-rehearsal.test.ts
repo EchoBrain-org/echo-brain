@@ -132,6 +132,10 @@ const fakeSlack: CleanSlackIdentityProviderV1 = {
   verifyChannel: async (_token, channelId) => ({
     team_id: "T12345678",
     channel_id: channelId,
+    is_public_organization_channel: true,
+    is_active: true,
+    bot_membership_verified: true,
+    bot_access_verified: true,
     verification_evidence_sha256: canonicalSha256("rehearsal-slack-channel"),
   }),
   verifyHuman: async () => {
@@ -168,6 +172,9 @@ function founderDependencies(): CleanFounderCliDependencies {
       initializeCleanPersonCredentials({ state_directory: stateDirectory });
     },
     connect_slack: async (input) => {
+      if (input.connection_id === undefined) {
+        throw new Error("missing planned connection ID");
+      }
       const output = commandOutput();
       const status = await runCleanSlackConnectCli(
         [
@@ -175,6 +182,8 @@ function founderDependencies(): CleanFounderCliDependencies {
           input.state_directory,
           "--approval-channel-id",
           input.approval_channel_id,
+          "--connection-id",
+          input.connection_id,
         ],
         { stdout: output.write, read_stdin: input.read_stdin },
         {
@@ -184,7 +193,38 @@ function founderDependencies(): CleanFounderCliDependencies {
         },
       );
       expect(status).toBe(0);
-      return oneJson<{ connection_id: string }>(output);
+      const verified = oneJson<{
+        provider_tenant_id: string;
+        provider_enterprise_id: string | null;
+        provider_app_id: string;
+        provider_bot_id: string;
+        provider_bot_user_id: string;
+        approval_channel_id: string;
+        required_scopes: readonly string[];
+        selected_channel_public: true;
+        selected_channel_active: true;
+        bot_membership_verified: true;
+        bot_access_verified: true;
+        verified_at: string;
+      }>(output);
+      return {
+        connection_id: input.connection_id,
+        verification: {
+          workspace_id: verified.provider_tenant_id,
+          enterprise_id: verified.provider_enterprise_id,
+          app_id: verified.provider_app_id,
+          bot_id: verified.provider_bot_id,
+          bot_user_id: verified.provider_bot_user_id,
+          approval_channel_id: verified.approval_channel_id,
+          required_scopes: verified.required_scopes,
+          approval_channel_access: "verified",
+          selected_channel_public: verified.selected_channel_public,
+          selected_channel_active: verified.selected_channel_active,
+          bot_membership_verified: verified.bot_membership_verified,
+          bot_access_verified: verified.bot_access_verified,
+          verified_at: verified.verified_at,
+        },
+      };
     },
     issue_invitation: async (input) => {
       issueCleanPersonInvitation({
@@ -217,7 +257,7 @@ function founderDependencies(): CleanFounderCliDependencies {
     },
     admit_source: async (input) => {
       const output = commandOutput();
-      const status = runCleanGranolaSourceCli(
+      const status = await runCleanGranolaSourceCli(
         [
           "--state-dir",
           input.state_directory,
@@ -233,6 +273,22 @@ function founderDependencies(): CleanFounderCliDependencies {
           input.llm_credential_file,
         ],
         { stdout: output.write, stderr: () => undefined },
+        {
+          createGranolaRecordOwnerClient: () => ({
+            async listNotes() {
+              return {
+                notes: [
+                  {
+                    id: "founder-preflight-note",
+                    owner: { email: "founder@example.com" },
+                  },
+                ],
+                hasMore: false,
+                cursor: null,
+              };
+            },
+          }),
+        },
       );
       expect(status).toBe(0);
       oneJson(output);
@@ -251,6 +307,83 @@ afterEach(() => {
 });
 
 describe("clean founder command rehearsal", () => {
+  it("recovers durable Slack preflight proof after a lost bootstrap response", async () => {
+    const root = directory();
+    const stateDirectory = join(root, "state");
+    const oidcConfigPath = join(root, "oidc.json");
+    writeFileSync(
+      oidcConfigPath,
+      JSON.stringify({ ...OIDC, client_authentication: "none" }),
+      { mode: 0o600 },
+    );
+    chmodSync(oidcConfigPath, 0o600);
+    const args = [
+      "bootstrap",
+      "--state-dir",
+      stateDirectory,
+      "--organization-name",
+      "Founder Organization",
+      "--owner-display-name",
+      "Founder",
+      "--owner-email",
+      "founder@example.com",
+      "--authority-url",
+      AUTHORITY_URL,
+      "--oidc-config",
+      oidcConfigPath,
+      "--slack-approval-channel-id",
+      "C12345678",
+      "--artifact-revision",
+      "clean-founder-command-rehearsal",
+    ];
+    const first = commandOutput();
+    expect(
+      await runCleanFounderCli(
+        args,
+        { stdout: first.write, stderr: first.write, read_stdin: async () => "fake-slack-bot-token" },
+        founderDependencies(),
+      ),
+    ).toBe(0);
+    // Deliberately discard `first`: status and an exact bootstrap retry must
+    // reconstruct only durable, safe provider facts without a second token read.
+    const status = commandOutput();
+    expect(
+      await runCleanFounderCli(
+        ["status", "--state-dir", stateDirectory],
+        { stdout: status.write, stderr: status.write, read_stdin: async () => "" },
+      ),
+    ).toBe(0);
+    const safeStatus = oneJson<Record<string, unknown>>(status);
+    expect(safeStatus).toMatchObject({
+      slack_connected: true,
+      source_progress_observed: false,
+      approved_record_present: false,
+      active_generation_current: false,
+      owner_layer1_read_after_head: false,
+      owner_layer2_read_after_generation: false,
+    });
+    expect(safeStatus).not.toHaveProperty("slack_verification");
+    expect(JSON.stringify(safeStatus)).not.toContain("T12345678");
+    expect(JSON.stringify(safeStatus)).not.toContain("2026-08-22T12:00:00.000Z");
+    const resumed = commandOutput();
+    expect(
+      await runCleanFounderCli(
+        args,
+        { stdout: resumed.write, stderr: resumed.write, read_stdin: async () => { throw new Error("Slack stdin must not be reread"); } },
+        founderDependencies(),
+      ),
+    ).toBe(0);
+    expect(oneJson<Record<string, unknown>>(resumed)).toMatchObject({
+      slack_verification: {
+        workspace_id: "T12345678",
+        selected_channel_public: true,
+        selected_channel_active: true,
+        bot_membership_verified: true,
+        bot_access_verified: true,
+      },
+    });
+  });
+
   it("runs bootstrap, idle live login and Slack link, stopped finalize, then active live restart", async () => {
     const root = directory();
     const stateDirectory = join(root, "state");
@@ -317,7 +450,6 @@ describe("clean founder command rehearsal", () => {
     expect(idle.processing).toBe("idle_until_finalize");
     try {
       const loopback = `http://127.0.0.1:${String(idle.address.port)}`;
-      let callbackSession: unknown;
       const rewriteFetch: typeof fetch = async (input, init) => {
         const request = input instanceof Request ? input : new Request(input, init);
         const url = new URL(request.url);
@@ -336,7 +468,20 @@ describe("clean founder command rehearsal", () => {
             `${loopback}/v2/session/oidc/callback?state=${encodeURIComponent(state!)}&code=code-1&iss=${encodeURIComponent(OIDC.issuer)}`,
           );
           expect(callback.status).toBe(200);
-          callbackSession = await callback.json();
+          expect(callback.headers.get("content-type")).toContain("text/html");
+          const page = await callback.text();
+          const action = /<form id="handoff" method="post" action="([^"]+)">/.exec(page)?.[1];
+          const token = /name="token" value="([A-Za-z0-9_-]+)"/.exec(page)?.[1];
+          const session = /name="session" value="([A-Za-z0-9_-]+)"/.exec(page)?.[1];
+          expect(action).toBeDefined();
+          expect(token).toBeDefined();
+          expect(session).toBeDefined();
+          const delivered = await fetch(action!, {
+            method: "POST",
+            headers: { "content-type": "application/x-www-form-urlencoded" },
+            body: new URLSearchParams({ token: token!, session: session! }),
+          });
+          expect(delivered.status).toBe(200);
         }
         return response;
       };
@@ -348,7 +493,6 @@ describe("clean founder command rehearsal", () => {
           stderr: { write: login.write },
           home_directory: homeDirectory,
           fetch: rewriteFetch,
-          read_input: () => JSON.stringify(callbackSession),
         }),
       ).resolves.toBe(0);
       expect(login.values.join("")).toContain('"phase":"installed"');

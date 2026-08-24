@@ -283,8 +283,8 @@ describe("workspace source boundaries", () => {
 
     // npm's workspace links resolve into these runtime directories. Every
     // reachable workspace therefore needs its package exports and compiled
-    // code, and service packages that ship migrations or new-lineage
-    // baselines need those immutable filesystem assets beside dist.
+    // code, and service packages that ship new-lineage baselines need those
+    // immutable filesystem assets beside dist.
     for (const workspace of [...runtimeClosure].sort()) {
       const manifest = readJson<PackageManifest>(`${workspace}/package.json`);
       expect(dockerfile).toContain(
@@ -293,11 +293,6 @@ describe("workspace source boundaries", () => {
       expect(dockerfile).toContain(
         `COPY --from=build /app/${workspace}/dist ./${workspace}/dist`,
       );
-      if (manifest.files?.some((path) => path.startsWith("migrations/"))) {
-        expect(dockerfile).toContain(
-          `COPY --from=build /app/${workspace}/migrations ./${workspace}/migrations`,
-        );
-      }
       if (manifest.files?.some((path) => path.startsWith("baselines/"))) {
         expect(dockerfile).toContain(
           `COPY --from=build /app/${workspace}/baselines ./${workspace}/baselines`,
@@ -306,7 +301,29 @@ describe("workspace source boundaries", () => {
     }
   });
 
-  it("lists every SQL migration as a runtime asset", () => {
+  it("removes TypeScript-only Authority image artifacts before the runtime image copies them", () => {
+    const dockerfile = readFileSync(
+      join(REPO, "deploy/organization-authority/Dockerfile"),
+      "utf8",
+    );
+    const cleanup =
+      "RUN find packages services -type f \\( -name '*.d.ts' -o -name '*.tsbuildinfo' \\) -delete";
+
+    expect(dockerfile).toContain(cleanup);
+    expect(dockerfile.indexOf(cleanup)).toBeGreaterThan(
+      dockerfile.indexOf("npm ci --omit=dev --workspace @echo-brain/organization-authority --include-workspace-root=false"),
+    );
+    expect(dockerfile.indexOf(cleanup)).toBeLessThan(
+      dockerfile.indexOf("\nFROM node:22.22.1-bookworm-slim"),
+    );
+    expect([...cleanup.matchAll(/-name '([^']+)'/g)].map((match) => match[1])).toEqual([
+      "*.d.ts",
+      "*.tsbuildinfo",
+    ]);
+    expect(cleanup).not.toContain("*.map");
+  });
+
+  it("ships frozen baselines instead of migration trees", () => {
     for (const [root, manifestPath] of [
       [
         "services/organization-authority",
@@ -316,18 +333,30 @@ describe("workspace source boundaries", () => {
         "services/organization-control-plane",
         "services/organization-control-plane/source-boundary.v1.json",
       ],
+      [
+        "services/organization-record",
+        "services/organization-record/source-boundary.v1.json",
+      ],
+      [
+        "services/organization-retrieval",
+        "services/organization-retrieval/source-boundary.v1.json",
+      ],
     ]) {
+      const packageManifest = readJson<PackageManifest>(`${root}/package.json`);
       const manifest = readJson<{ runtime_assets?: string[] }>(manifestPath);
-      const migrations = readdirSync(join(REPO, root, "migrations"))
-        .filter((path) => path.endsWith(".sql"))
-        .sort()
-        .map((path) => `${root}/migrations/${path}`);
+      expect(existsSync(join(REPO, root, "migrations"))).toBe(false);
       expect(
-        [...(manifest.runtime_assets ?? [])]
-          .filter((path) => path.startsWith(`${root}/migrations/`))
-          .sort(),
-      ).toEqual(migrations);
+        packageManifest.files?.some((path) => path.startsWith("migrations/")) ??
+          false,
+      ).toBe(false);
+      expect(
+        (manifest.runtime_assets ?? []).some((path) =>
+          path.startsWith(`${root}/migrations/`),
+        ),
+      ).toBe(false);
     }
+    expect(readFileSync(join(REPO, "deploy/organization-authority/Dockerfile"), "utf8"))
+      .not.toContain("/migrations");
   });
 
   it("declares and ships all new-lineage baseline SQL assets", () => {
@@ -883,8 +912,6 @@ describe("workspace source boundaries", () => {
       "granola",
       "llm",
       "slack",
-      "slack-reactions",
-      "structured-text",
     ]);
 
     const probe = join(
@@ -903,7 +930,7 @@ describe("workspace source boundaries", () => {
     const fixture = fixtureRepository();
     const compositionPath = join(
       fixture,
-      "services/organization-authority/src/composition/config.ts",
+      "services/organization-authority/src/composition/clean-founder-cli.ts",
     );
     writeFileSync(
       compositionPath,
@@ -914,7 +941,7 @@ describe("workspace source boundaries", () => {
 
     expect(result.status).not.toBe(0);
     expect(result.stdout + result.stderr).toContain(
-      "@echo-brain/organization-authority: layer rule 'authority-composition-may-wire-pre-processing-layers' rejects edge: services/organization-authority/src/composition/config.ts -> services/organization-authority/src/processing/core/index.ts",
+      "@echo-brain/organization-authority: layer rule 'authority-composition-may-wire-pre-processing-layers' rejects edge: services/organization-authority/src/composition/clean-founder-cli.ts -> services/organization-authority/src/processing/core/index.ts",
     );
   });
 

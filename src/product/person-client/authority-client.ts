@@ -2,16 +2,10 @@ import { Buffer } from "node:buffer";
 import { canonicalJson } from "@echo-brain/federation-protocol";
 import {
   MAX_ORGANIZATION_API_BODY_BYTES,
-  MAX_ORGANIZATION_READABLE_SEARCH_RESPONSE_BYTES,
-  MAX_ORGANIZATION_RECENT_DECISIONS_RESPONSE_BYTES,
-  MAX_ORGANIZATION_REVIEWER_RECENT_DECISIONS_RESPONSE_BYTES,
   ORGANIZATION_API_PERSON_MEMBER_EXCLUSIONS_PATH,
   ORGANIZATION_API_PERSON_MEMBER_EXCLUSION_LIST_PATH,
   ORGANIZATION_API_AUTHORITY_DESCRIPTOR_PATH,
   ORGANIZATION_API_PERSON_OIDC_BEGIN_PATH,
-  ORGANIZATION_API_PERSON_READABLE_SEARCH_PATH,
-  ORGANIZATION_API_PERSON_RECENT_DECISIONS_PATH,
-  ORGANIZATION_API_PERSON_REVIEWER_RECENT_DECISIONS_PATH,
   ORGANIZATION_API_PERSON_SESSION_REFRESH_PATH,
   ORGANIZATION_API_PERSON_SESSION_REVOCATIONS_PATH,
   ORGANIZATION_API_PERSON_SLACK_LINK_CHALLENGES_PATH,
@@ -24,35 +18,23 @@ import {
   validateOrganizationPersonMemberExclusionListRequest,
   validateOrganizationPersonOidcBeginRequest,
   validateOrganizationPersonOidcBeginResponse,
-  validateOrganizationPersonReadableSearchRequest,
-  validateOrganizationPersonRecentDecisionsRequest,
-  validateOrganizationPersonReviewerRecentDecisionsRequest,
   validateOrganizationPersonSession,
   validateOrganizationPersonSessionRefreshRequest,
   validateOrganizationPersonSlackLinkBeginRequest,
   validateOrganizationPersonSlackLinkBeginResponse,
   validateOrganizationPersonSlackLinkCompleteRequest,
   validateOrganizationPersonSlackLinkResult,
-  validateOrganizationReadableSearchResponse,
-  validateOrganizationRecentDecisionsResponse,
-  validateOrganizationReviewerRecentDecisionsResponse,
   type OrganizationPersonMemberExclusionChangeRequestV2,
   type OrganizationMemberExclusionListResponseV2,
   type OrganizationPersonMemberExclusionListRequestV2,
   type OrganizationAuthorityDescriptorResponseV1,
   type OrganizationPersonOidcBeginRequestV2,
   type OrganizationPersonOidcBeginResponseV2,
-  type OrganizationPersonReadableSearchRequestV2,
-  type OrganizationPersonRecentDecisionsRequestV2,
-  type OrganizationPersonReviewerRecentDecisionsRequestV2,
   type OrganizationPersonSessionV2,
   type OrganizationPersonSlackLinkBeginRequestV2,
   type OrganizationPersonSlackLinkBeginResponseV2,
   type OrganizationPersonSlackLinkCompleteRequestV2,
   type OrganizationPersonSlackLinkResultV2,
-  type OrganizationReadableSearchResponseV1,
-  type OrganizationRecentDecisionsResponseV1,
-  type OrganizationReviewerRecentDecisionsResponseV1,
 } from "@echo-brain/organization-api";
 
 const DEFAULT_TIMEOUT_MS = 15_000;
@@ -60,6 +42,25 @@ const SLACK_TIMEOUT_MS = 75_000;
 const MAXIMUM_ORDINARY_RESPONSE_BYTES = 64 * 1024;
 const MAXIMUM_RECORDS_RESPONSE_BYTES = 512 * 1024;
 const CLEAN_PERSON_RECORDS_PATH_V1 = "/v1/person/records";
+const CLEAN_PERSON_EMPLOYEES_PATH_V1 = "/v1/person/employees";
+
+export interface CleanEmployeeInvitationV1 {
+  readonly login_grant: string;
+  readonly expires_at: string;
+}
+
+export interface CleanEmployeeRosterV1 {
+  readonly schema_version: 1;
+  readonly kind: "echo-clean-person-employee-roster-v1";
+  readonly employees: readonly CleanEmployeeRosterItemV1[];
+}
+
+export interface CleanEmployeeRosterItemV1 {
+  readonly email: string;
+  readonly display_name: string;
+  readonly membership_status: "active" | "revoked";
+  readonly invitation_state: "pending" | "expired" | "redeemed" | "none";
+}
 
 export interface CleanPersonRecordListV1 {
   readonly schema_version: 1;
@@ -406,6 +407,96 @@ function validateCleanPersonRecordSearch(
   });
 }
 
+function validateCleanEmployeeInvitation(value: unknown): CleanEmployeeInvitationV1 {
+  const response = asPlainRecord(value, "employee invitation response is invalid");
+  exactKeys(response, ["login_grant", "expires_at"], "employee invitation response is invalid");
+  if (
+    typeof response.login_grant !== "string" ||
+    !/^[A-Za-z0-9_-]{43}$/.test(response.login_grant) ||
+    Buffer.from(response.login_grant, "base64url").length !== 32 ||
+    typeof response.expires_at !== "string" ||
+    !Number.isFinite(Date.parse(response.expires_at)) ||
+    new Date(Date.parse(response.expires_at)).toISOString() !== response.expires_at
+  ) {
+    throw new Error("employee invitation response is invalid");
+  }
+  return Object.freeze({
+    login_grant: response.login_grant,
+    expires_at: response.expires_at,
+  });
+}
+
+function validateCleanEmployeeRoster(value: unknown): CleanEmployeeRosterV1 {
+  const response = asPlainRecord(value, "employee roster response is invalid");
+  exactKeys(
+    response,
+    ["schema_version", "kind", "employees"],
+    "employee roster response is invalid",
+  );
+  if (
+    response.schema_version !== 1 ||
+    response.kind !== "echo-clean-person-employee-roster-v1" ||
+    !Array.isArray(response.employees)
+  ) {
+    throw new Error("employee roster response is invalid");
+  }
+  const employees = response.employees.map((value) => {
+    const employee = asPlainRecord(value, "employee roster item is invalid");
+    exactKeys(
+      employee,
+      ["email", "display_name", "membership_status", "invitation_state"],
+      "employee roster item is invalid",
+    );
+    if (
+      typeof employee.email !== "string" ||
+      employee.email.length < 3 ||
+      employee.email.length > 254 ||
+      employee.email !== employee.email.trim() ||
+      employee.email !== employee.email.toLowerCase() ||
+      !/^[!-~]+$/.test(employee.email) ||
+      employee.email.indexOf("@") <= 0 ||
+      employee.email.indexOf("@") !== employee.email.lastIndexOf("@") ||
+      employee.email.endsWith("@") ||
+      typeof employee.display_name !== "string" ||
+      employee.display_name.length < 1 ||
+      employee.display_name.length > 200 ||
+      employee.display_name !== employee.display_name.trim() ||
+      employee.display_name !== employee.display_name.normalize("NFC") ||
+      /[\u0000-\u001f\u007f]/.test(employee.display_name) ||
+      (employee.membership_status !== "active" && employee.membership_status !== "revoked") ||
+      (employee.invitation_state !== "pending" &&
+        employee.invitation_state !== "expired" &&
+        employee.invitation_state !== "redeemed" &&
+        employee.invitation_state !== "none")
+    ) {
+      throw new Error("employee roster item is invalid");
+    }
+    return Object.freeze({
+      email: employee.email,
+      display_name: employee.display_name,
+      membership_status: employee.membership_status,
+      invitation_state: employee.invitation_state,
+    }) as CleanEmployeeRosterItemV1;
+  });
+  return Object.freeze({
+    schema_version: 1,
+    kind: "echo-clean-person-employee-roster-v1",
+    employees: Object.freeze(employees),
+  });
+}
+
+function employeeInviteRequest(value: unknown, includeName: boolean): Readonly<Record<string, string>> {
+  const request = asPlainRecord(value, "employee request is invalid");
+  exactKeys(request, includeName ? ["name", "email"] : ["email"], "employee request is invalid");
+  if (
+    typeof request.email !== "string" ||
+    (includeName && typeof request.name !== "string")
+  ) {
+    throw new Error("employee request is invalid");
+  }
+  return request as Readonly<Record<string, string>>;
+}
+
 export class PersonAuthorityClient {
   private readonly origin: URL;
   private readonly fetchImpl: typeof fetch;
@@ -452,6 +543,7 @@ export class PersonAuthorityClient {
     readonly maximum_response_bytes?: number;
     readonly require_canonical_response?: boolean;
     readonly timeout_ms?: number;
+    readonly method?: "POST" | "PUT";
   }): Promise<T> {
     const request = input.validate_request(input.body);
     const body = canonicalJson(request);
@@ -461,7 +553,7 @@ export class PersonAuthorityClient {
     const response = await this.send(
       input.path,
       {
-        method: "POST",
+        method: input.method ?? "POST",
         headers: {
           accept: "application/json",
           "content-type": "application/json",
@@ -617,6 +709,7 @@ export class PersonAuthorityClient {
     readonly body: unknown;
     readonly validate_request: (value: unknown) => unknown;
     readonly access_token: string;
+    readonly method?: "POST" | "DELETE";
   }): Promise<void> {
     const request = input.validate_request(input.body);
     const body = canonicalJson(request);
@@ -624,7 +717,7 @@ export class PersonAuthorityClient {
       throw new Error("Person Authority request exceeds its body bound");
     }
     const response = await this.send(input.path, {
-      method: "POST",
+      method: input.method ?? "POST",
       headers: {
         accept: "application/json",
         authorization: `Bearer ${input.access_token}`,
@@ -693,53 +786,6 @@ export class PersonAuthorityClient {
         return value;
       },
       access_token: accessToken,
-    });
-  }
-
-  recentDecisions(
-    request: OrganizationPersonRecentDecisionsRequestV2,
-    accessToken: string,
-  ): Promise<OrganizationRecentDecisionsResponseV1> {
-    return this.json({
-      path: ORGANIZATION_API_PERSON_RECENT_DECISIONS_PATH,
-      body: request,
-      validate_request: validateOrganizationPersonRecentDecisionsRequest,
-      validate_response: validateOrganizationRecentDecisionsResponse,
-      access_token: accessToken,
-      maximum_response_bytes: MAX_ORGANIZATION_RECENT_DECISIONS_RESPONSE_BYTES,
-      require_canonical_response: true,
-    });
-  }
-
-  reviewerRecentDecisions(
-    request: OrganizationPersonReviewerRecentDecisionsRequestV2,
-    accessToken: string,
-  ): Promise<OrganizationReviewerRecentDecisionsResponseV1> {
-    return this.json({
-      path: ORGANIZATION_API_PERSON_REVIEWER_RECENT_DECISIONS_PATH,
-      body: request,
-      validate_request:
-        validateOrganizationPersonReviewerRecentDecisionsRequest,
-      validate_response: validateOrganizationReviewerRecentDecisionsResponse,
-      access_token: accessToken,
-      maximum_response_bytes:
-        MAX_ORGANIZATION_REVIEWER_RECENT_DECISIONS_RESPONSE_BYTES,
-      require_canonical_response: true,
-    });
-  }
-
-  readableSearch(
-    request: OrganizationPersonReadableSearchRequestV2,
-    accessToken: string,
-  ): Promise<OrganizationReadableSearchResponseV1> {
-    return this.json({
-      path: ORGANIZATION_API_PERSON_READABLE_SEARCH_PATH,
-      body: request,
-      validate_request: validateOrganizationPersonReadableSearchRequest,
-      validate_response: validateOrganizationReadableSearchResponse,
-      access_token: accessToken,
-      maximum_response_bytes: MAX_ORGANIZATION_READABLE_SEARCH_RESPONSE_BYTES,
-      require_canonical_response: true,
     });
   }
 
@@ -833,6 +879,52 @@ export class PersonAuthorityClient {
       validate_response: validateOrganizationPersonSlackLinkResult,
       access_token: accessToken,
       timeout_ms: Math.max(this.timeoutMs, SLACK_TIMEOUT_MS),
+    });
+  }
+
+  employees(accessToken: string): Promise<CleanEmployeeRosterV1> {
+    return this.getJson({
+      path: CLEAN_PERSON_EMPLOYEES_PATH_V1,
+      access_token: accessToken,
+      validate_response: validateCleanEmployeeRoster,
+      maximum_response_bytes: MAXIMUM_RECORDS_RESPONSE_BYTES,
+    });
+  }
+
+  inviteEmployee(
+    input: { name: string; email: string },
+    accessToken: string,
+  ): Promise<CleanEmployeeInvitationV1> {
+    return this.json({
+      path: CLEAN_PERSON_EMPLOYEES_PATH_V1,
+      body: input,
+      validate_request: (value) => employeeInviteRequest(value, true),
+      validate_response: validateCleanEmployeeInvitation,
+      access_token: accessToken,
+    });
+  }
+
+  reissueEmployee(
+    input: { email: string },
+    accessToken: string,
+  ): Promise<CleanEmployeeInvitationV1> {
+    return this.json({
+      path: CLEAN_PERSON_EMPLOYEES_PATH_V1,
+      body: input,
+      validate_request: (value) => employeeInviteRequest(value, false),
+      validate_response: validateCleanEmployeeInvitation,
+      access_token: accessToken,
+      method: "PUT",
+    });
+  }
+
+  revokeEmployee(input: { email: string }, accessToken: string): Promise<void> {
+    return this.noContent({
+      path: CLEAN_PERSON_EMPLOYEES_PATH_V1,
+      body: input,
+      validate_request: (value) => employeeInviteRequest(value, false),
+      access_token: accessToken,
+      method: "DELETE",
     });
   }
 }

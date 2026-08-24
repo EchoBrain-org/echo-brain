@@ -28,6 +28,10 @@ import {
   CLEAN_PERSON_RECORD_SEARCH_PATH_V1,
   type CleanPersonRecordSearchHttpApplicationV1,
 } from "./clean-person-record-search-http-application.js";
+import {
+  CLEAN_PERSON_EMPLOYEES_PATH_V1,
+  type CleanPersonEmployeeHttpApplication,
+} from "./clean-person-employee-http-application.js";
 
 const MAXIMUM_BODY_BYTES = 64 * 1024;
 export interface CleanPersonOidcProvider {
@@ -47,6 +51,14 @@ export interface CleanPersonHttpServerOptions {
   readonly person_record_read?: CleanPersonRecordReadHttpApplicationV1;
   /** Optional only for focused identity-runtime tests. Clean live wires it. */
   readonly person_record_search?: CleanPersonRecordSearchHttpApplicationV1;
+  /** Owner-only employee invite, reissue, and revoke. */
+  readonly person_employees?: CleanPersonEmployeeHttpApplication;
+}
+
+interface PendingLoopbackHandoff {
+  readonly url: string;
+  readonly token: string;
+  readonly expires_at: string;
 }
 
 function json(response: ServerResponse, status: number, body: unknown): void {
@@ -62,6 +74,58 @@ function json(response: ServerResponse, status: number, body: unknown): void {
 function noContent(response: ServerResponse): void {
   response.writeHead(204, { "cache-control": "no-store" });
   response.end();
+}
+
+/**
+ * The credential stays out of the callback URL and browser history. The only
+ * receiver is the exact, sealed localhost target created by this CLI run.
+ */
+function loopbackHandoffPage(input: {
+  url: string;
+  token: string;
+  session: unknown;
+}): Buffer {
+  const session = Buffer.from(JSON.stringify(input.session), "utf8").toString(
+    "base64url",
+  );
+  return Buffer.from(
+    `<!doctype html><meta charset="utf-8"><title>Echo sign-in complete</title><p>Completing sign-in…</p><form id="handoff" method="post" action="${input.url}"><input type="hidden" name="token" value="${input.token}"><input type="hidden" name="session" value="${session}"></form><script>document.getElementById("handoff").submit()</script>`,
+    "utf8",
+  );
+}
+
+function handoffHtml(response: ServerResponse, value: {
+  url: string;
+  token: string;
+  session: unknown;
+}): void {
+  const page = loopbackHandoffPage(value);
+  const receiverOrigin = new URL(value.url).origin;
+  response.writeHead(200, {
+    "content-type": "text/html; charset=utf-8",
+    "content-length": String(page.byteLength),
+    "cache-control": "no-store",
+    "referrer-policy": "no-referrer",
+    "x-content-type-options": "nosniff",
+    "content-security-policy": `default-src 'none'; base-uri 'none'; form-action ${receiverOrigin}; script-src 'unsafe-inline'`,
+  });
+  response.end(page);
+}
+
+function expiredHandoffHtml(response: ServerResponse): void {
+  const page = Buffer.from(
+    "<!doctype html><meta charset=\"utf-8\"><title>Echo sign-in expired</title><p>Sign-in expired. Return to your terminal and rerun <code>echo-brain person login</code>.</p>",
+    "utf8",
+  );
+  response.writeHead(200, {
+    "content-type": "text/html; charset=utf-8",
+    "content-length": String(page.byteLength),
+    "cache-control": "no-store",
+    "referrer-policy": "no-referrer",
+    "x-content-type-options": "nosniff",
+    "content-security-policy": "default-src 'none'; base-uri 'none'",
+  });
+  response.end(page);
 }
 
 function fail(response: ServerResponse, status: number, code: string): void {
@@ -168,6 +232,7 @@ function recordSearchInput(value: unknown): {
 export function createCleanPersonHttpServer(
   options: CleanPersonHttpServerOptions,
 ): Server {
+  const handoffs = new Map<string, PendingLoopbackHandoff>();
   return createServer(async (request, response) => {
     try {
       const url = new URL(request.url ?? "/", "http://localhost");
@@ -185,9 +250,27 @@ export function createCleanPersonHttpServer(
         url.pathname === PERSON_SESSION_OIDC_BEGIN_PATH &&
         url.search === ""
       ) {
-        const begun = options.sessions.beginOidcLogin(
-          validateOrganizationPersonOidcBeginRequest(await body(request)),
+        const input = validateOrganizationPersonOidcBeginRequest(
+          await body(request),
         );
+        const begun = options.sessions.beginOidcLogin(
+          input.kind === "identity_bootstrap"
+            ? { kind: input.kind, login_grant: input.login_grant }
+            : { kind: input.kind },
+        );
+        for (const [state, handoff] of handoffs) {
+          if (Date.parse(handoff.expires_at) <= Date.now()) handoffs.delete(state);
+        }
+        if (input.loopback_handoff !== undefined) {
+          handoffs.set(
+            begun.state,
+            Object.freeze({
+              url: input.loopback_handoff.url,
+              token: input.loopback_handoff.token,
+              expires_at: begun.expires_at,
+            }),
+          );
+        }
         json(response, 201, {
           authorization_url:
             await options.oidc_provider.buildAuthorizationUrl(begun),
@@ -212,14 +295,26 @@ export function createCleanPersonHttpServer(
             "person authentication failed",
           );
         }
-        json(
-          response,
-          200,
-          await options.sessions.completeOidcLogin({
-            state,
-            authorization_code: code,
-          }),
-        );
+        const handoff = handoffs.get(state);
+        // Delete before completion: a retry after a delivery or process fault
+        // is an explicit fresh login, never a second credential delivery.
+        handoffs.delete(state);
+        const completed = await options.sessions.completeOidcLogin({
+          state,
+          authorization_code: code,
+        });
+        if (handoff === undefined || Date.parse(handoff.expires_at) <= Date.now()) {
+          // A callback can still complete the Authority-side state after a
+          // process restart, but credential bytes never fall back to JSON.
+          void completed;
+          expiredHandoffHtml(response);
+        } else {
+          handoffHtml(response, {
+            url: handoff.url,
+            token: handoff.token,
+            session: completed,
+          });
+        }
         return;
       }
       if (
@@ -262,6 +357,52 @@ export function createCleanPersonHttpServer(
         });
         noContent(response);
         return;
+      }
+      if (
+        options.person_employees !== undefined &&
+        url.pathname === CLEAN_PERSON_EMPLOYEES_PATH_V1 &&
+        url.search === ""
+      ) {
+        const authenticated = accessToken(request.headers.authorization);
+        if (method === "GET") {
+          json(
+            response,
+            200,
+            options.person_employees.list({ access_token: authenticated }),
+          );
+          return;
+        }
+        const requestBody = await body(request);
+        if (method === "POST") {
+          json(
+            response,
+            201,
+            options.person_employees.invite({
+              access_token: authenticated,
+              body: requestBody,
+            }),
+          );
+          return;
+        }
+        if (method === "PUT") {
+          json(
+            response,
+            201,
+            options.person_employees.reissue({
+              access_token: authenticated,
+              body: requestBody,
+            }),
+          );
+          return;
+        }
+        if (method === "DELETE") {
+          options.person_employees.revoke({
+            access_token: authenticated,
+            body: requestBody,
+          });
+          noContent(response);
+          return;
+        }
       }
       if (method === "GET" && url.pathname === CLEAN_PERSON_RECORDS_PATH_V1) {
         if (options.person_record_read === undefined) {

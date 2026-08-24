@@ -7,9 +7,6 @@
   "source_root": "services/organization-retrieval/src",
   "package_json": "services/organization-retrieval/package.json",
   "entry_points": [
-    "services/organization-retrieval/src/index.ts",
-    "services/organization-retrieval/src/build.ts",
-    "services/organization-retrieval/src/serve.ts",
     "services/organization-retrieval/src/new-lineage-v1.ts"
   ],
   "owned_source_paths": [
@@ -30,9 +27,6 @@
     "path"
   ],
   "runtime_assets": [
-    "services/organization-retrieval/migrations/facts/0001_readable_search_facts.sql",
-    "services/organization-retrieval/migrations/lexical/0001_readable_search_lexical.sql",
-    "services/organization-retrieval/migrations/content/0001_readable_search_content.sql",
     "services/organization-retrieval/baselines/readable-search-facts-baseline-v1.sql",
     "services/organization-retrieval/baselines/readable-search-lexical-baseline-v1.sql",
     "services/organization-retrieval/baselines/readable-search-content-baseline-v1.sql"
@@ -43,36 +37,6 @@
     "services/organization-control-plane"
   ],
   "layer_rules": [
-    {
-      "name": "retrieval-index-entrypoint-exports-owned-api",
-      "from": "services/organization-retrieval/src/index.ts",
-      "allowed_imports": [
-        "services/organization-retrieval/src/**"
-      ],
-      "allowed_workspace_packages": [],
-      "allowed_external_packages": [],
-      "allowed_node_builtins": []
-    },
-    {
-      "name": "retrieval-build-entrypoint-exports-owned-api",
-      "from": "services/organization-retrieval/src/build.ts",
-      "allowed_imports": [
-        "services/organization-retrieval/src/**"
-      ],
-      "allowed_workspace_packages": [],
-      "allowed_external_packages": [],
-      "allowed_node_builtins": []
-    },
-    {
-      "name": "retrieval-serve-entrypoint-exports-owned-api",
-      "from": "services/organization-retrieval/src/serve.ts",
-      "allowed_imports": [
-        "services/organization-retrieval/src/**"
-      ],
-      "allowed_workspace_packages": [],
-      "allowed_external_packages": [],
-      "allowed_node_builtins": []
-    },
     {
       "name": "retrieval-new-lineage-v1-owns-genesis-composition",
       "from": "services/organization-retrieval/src/new-lineage-v1.ts",
@@ -118,45 +82,6 @@
       ],
       "allowed_node_builtins": [
         "crypto",
-        "fs",
-        "path"
-      ]
-    },
-    {
-      "name": "retrieval-build-cannot-import-serving-or-authority",
-      "from": "services/organization-retrieval/src/build/**",
-      "allowed_imports": [
-        "services/organization-retrieval/src/application/**",
-        "services/organization-retrieval/src/build/**",
-        "services/organization-retrieval/src/persistence/**"
-      ],
-      "allowed_workspace_packages": [
-        "@echo-brain/federation-protocol"
-      ],
-      "allowed_external_packages": [
-        "better-sqlite3"
-      ],
-      "allowed_node_builtins": [
-        "crypto",
-        "fs",
-        "path"
-      ]
-    },
-    {
-      "name": "retrieval-serving-uses-only-immutable-generation-state",
-      "from": "services/organization-retrieval/src/serve/**",
-      "allowed_imports": [
-        "services/organization-retrieval/src/application/**",
-        "services/organization-retrieval/src/persistence/**",
-        "services/organization-retrieval/src/serve/**"
-      ],
-      "allowed_workspace_packages": [
-        "@echo-brain/federation-protocol"
-      ],
-      "allowed_external_packages": [
-        "better-sqlite3"
-      ],
-      "allowed_node_builtins": [
         "fs",
         "path"
       ]

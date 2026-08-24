@@ -51,9 +51,9 @@ a derivation, not a list.
 - **`src/product/state-backup.ts` (1,474)** — manifested backup with roles,
   integrity evidence, consistent SQLite copy, validated restore, named
   fault points. Note: it protects only the machine database
-  (`echo-brain.sqlite` hard-coded) — the server's data is protected by
-  `deploy/organization-authority/restore-authority-state.sh`, a different
-  mechanism. *Why retired:* server backup is policy on the org box.
+  (`echo-brain.sqlite` hard-coded) — the then-current server used a separate
+  restore mechanism, since removed with the legacy deployment. *Why retired:*
+  server backup is policy on the org box.
 - **`src/infrastructure/filesystem/` (862)** — process file lock, atomic
   write (temp/fsync/rename), atomic create. *Why retired:* a database has
   transactions. First thing to grow back if a local queue ever appears.

@@ -1,13 +1,16 @@
 import {
   closeSync,
   constants,
+  fchmodSync,
   fstatSync,
+  fsyncSync,
   lstatSync,
   openSync,
   readFileSync,
   realpathSync,
+  writeFileSync,
 } from "node:fs";
-import { isAbsolute, resolve } from "node:path";
+import { basename, dirname, isAbsolute, join, resolve } from "node:path";
 import { canonicalJson } from "@echo-brain/federation-protocol";
 import { validateOrganizationAuthorityOrigin } from "@echo-brain/organization-api";
 
@@ -34,6 +37,58 @@ function invitationPath(value: string): string {
     throw new Error("Person onboarding invitation path must be absolute");
   }
   return value;
+}
+
+/**
+ * Resolves only the already-existing parent. This accepts macOS's `/tmp`
+ * spelling when the actual private directory is under `/private/tmp`, while
+ * leaving the invitation leaf un-resolved so a leaf symlink is never accepted.
+ */
+function canonicalInvitationPath(inputPath: string): string {
+  const path = invitationPath(inputPath);
+  const canonicalParent = realpathSync(dirname(path));
+  return join(canonicalParent, basename(path));
+}
+
+function assertPrivateOutputParent(inputPath: string): string {
+  const path = canonicalInvitationPath(inputPath);
+  const parent = dirname(path);
+  const state = lstatSync(parent);
+  const currentUid = process.getuid?.();
+  if (
+    !state.isDirectory() ||
+    (currentUid !== undefined && state.uid !== currentUid) ||
+    (state.mode & 0o777) !== 0o700
+  ) {
+    throw new Error(
+      "Person onboarding output parent must be a current-user 0700 canonical directory",
+    );
+  }
+  return path;
+}
+
+function fsyncParent(path: string): void {
+  const descriptor = openSync(dirname(path), constants.O_RDONLY);
+  try {
+    fsyncSync(descriptor);
+  } finally {
+    closeSync(descriptor);
+  }
+}
+
+/**
+ * Checks local output safety before any Authority request. The later O_EXCL
+ * write remains authoritative: a rare race is recoverable by reissuing.
+ */
+export function preflightPersonOnboardingInvitationOutput(inputPath: string): string {
+  const path = assertPrivateOutputParent(inputPath);
+  try {
+    lstatSync(path);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return path;
+    throw error;
+  }
+  throw new Error("Person onboarding invitation output already exists");
 }
 
 function validate(value: unknown): PersonOnboardingInvitationV1 {
@@ -78,7 +133,7 @@ function validate(value: unknown): PersonOnboardingInvitationV1 {
 export function readPersonOnboardingInvitation(
   inputPath: string,
 ): PersonOnboardingInvitationV1 {
-  const path = invitationPath(inputPath);
+  const path = canonicalInvitationPath(inputPath);
   const before = lstatSync(path);
   const currentUid = process.getuid?.();
   if (
@@ -128,4 +183,36 @@ export function readPersonOnboardingInvitation(
   } finally {
     closeSync(descriptor);
   }
+}
+
+/** Writes a new invitation once into an explicitly private, non-replaced file. */
+export function writePersonOnboardingInvitation(
+  inputPath: string,
+  value: PersonOnboardingInvitationV1,
+): void {
+  const path = assertPrivateOutputParent(inputPath);
+  const invitation = validate(value);
+  const bytes = `${canonicalJson(invitation)}\n`;
+  if (Buffer.byteLength(bytes, "utf8") > MAXIMUM_INVITATION_BYTES) {
+    throw new Error("Person onboarding invitation exceeds its size limit");
+  }
+  let descriptor: number | undefined;
+  try {
+    descriptor = openSync(
+      path,
+      constants.O_CREAT |
+        constants.O_EXCL |
+        constants.O_WRONLY |
+        (constants.O_NOFOLLOW ?? 0),
+      0o600,
+    );
+    fchmodSync(descriptor, 0o600);
+    writeFileSync(descriptor, bytes, "utf8");
+    fsyncSync(descriptor);
+  } catch (error) {
+    throw error;
+  } finally {
+    if (descriptor !== undefined) closeSync(descriptor);
+  }
+  fsyncParent(path);
 }

@@ -1,6 +1,10 @@
 import { randomUUID } from "node:crypto";
 import { join } from "node:path";
-import { canonicalJson, federationId } from "@echo-brain/federation-protocol";
+import {
+  assertFederationId,
+  canonicalJson,
+  federationId,
+} from "@echo-brain/federation-protocol";
 import type { Sha256Digest } from "@echo-brain/federation-protocol";
 import {
   organizationAuthorityPinSha256,
@@ -57,6 +61,11 @@ export interface InitializeCleanResetStateInput {
   readonly owner_display_name: string;
   readonly created_at: string;
   readonly creating_artifact_revision: string;
+  /**
+   * A caller may persist this non-secret identity seed before genesis so a
+   * stopped setup can be resumed without allocating a second lineage.
+   */
+  readonly seed?: CleanResetSeedV1;
 }
 
 export interface CleanResetManifestEvidenceV1 {
@@ -79,9 +88,7 @@ export interface InitializedCleanResetStateV1 {
   readonly manifests: CleanResetManifestEvidenceV1;
 }
 
-interface CleanResetSeed {
-  readonly organization_display_name: string;
-  readonly owner_display_name: string;
+export interface CleanResetSeedV1 {
   readonly authority_id: string;
   readonly organization_id: string;
   readonly state_lineage_id: string;
@@ -90,9 +97,65 @@ interface CleanResetSeed {
   readonly control_plane_id: string;
 }
 
+function generatedSeed(): CleanResetSeedV1 {
+  return Object.freeze({
+    authority_id: federationId("oau"),
+    organization_id: federationId("org"),
+    state_lineage_id: `lineage-${randomUUID()}`,
+    owner_principal_id: federationId("prn"),
+    owner_membership_id: federationId("mem"),
+    control_plane_id: `ocp_${randomUUID()}`,
+  });
+}
+
+function validateSeed(seed: CleanResetSeedV1): CleanResetSeedV1 {
+  const value = seed as unknown as Record<string, unknown>;
+  const fields = [
+    "authority_id",
+    "organization_id",
+    "state_lineage_id",
+    "owner_principal_id",
+    "owner_membership_id",
+    "control_plane_id",
+  ];
+  if (
+    value === null ||
+    typeof value !== "object" ||
+    Array.isArray(value) ||
+    Object.keys(value).sort().join(",") !== fields.sort().join(",")
+  ) {
+    throw new Error("clean reset seed has an invalid shape");
+  }
+  try {
+    assertFederationId(seed.authority_id, "oau", "clean reset seed authority_id");
+    assertFederationId(seed.organization_id, "org", "clean reset seed organization_id");
+    assertFederationId(seed.owner_principal_id, "prn", "clean reset seed owner_principal_id");
+    assertFederationId(seed.owner_membership_id, "mem", "clean reset seed owner_membership_id");
+  } catch {
+    throw new Error("clean reset seed has an invalid federation identifier");
+  }
+  const uuid =
+    "[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}";
+  if (
+    !new RegExp(`^lineage-${uuid}$`).test(seed.state_lineage_id) ||
+    !new RegExp(`^ocp_${uuid}$`).test(seed.control_plane_id)
+  ) {
+    throw new Error("clean reset seed has an invalid lineage or control-plane identifier");
+  }
+  return Object.freeze({
+    authority_id: seed.authority_id,
+    organization_id: seed.organization_id,
+    state_lineage_id: seed.state_lineage_id,
+    owner_principal_id: seed.owner_principal_id,
+    owner_membership_id: seed.owner_membership_id,
+    control_plane_id: seed.control_plane_id,
+  });
+}
+
 function seedAuthority(
   state: NewLineageStagedStateV1,
-  seed: CleanResetSeed,
+  input: InitializeCleanResetStateInput,
+  seed: CleanResetSeedV1,
 ): {
   readonly descriptor: OrganizationAuthorityDescriptorV1;
   readonly descriptor_sha256: Sha256Digest;
@@ -121,7 +184,7 @@ function seedAuthority(
         1,
         seed.authority_id,
         seed.organization_id,
-        seed.organization_display_name,
+        input.organization_display_name,
         canonicalJson(descriptor),
         state.created_at,
         state.created_at,
@@ -135,7 +198,7 @@ function seedAuthority(
       .run(
         seed.owner_principal_id,
         seed.organization_id,
-        seed.owner_display_name,
+        input.owner_display_name,
         state.created_at,
       );
     database
@@ -165,10 +228,11 @@ function seedAuthority(
 
 function prepareCleanResetState(
   state: NewLineageStagedStateV1,
-  seed: CleanResetSeed,
+  input: InitializeCleanResetStateInput,
+  seed: CleanResetSeedV1,
   captured: { descriptor_sha256?: Sha256Digest },
 ): void {
-  const authority = seedAuthority(state, seed);
+  const authority = seedAuthority(state, input, seed);
   captured.descriptor_sha256 = authority.descriptor_sha256;
 
   const control = openOrganizationControlDatabase(
@@ -274,16 +338,7 @@ export function initializeCleanResetState(
 ): InitializedCleanResetStateV1 {
   assertDisplayName(input.organization_display_name);
   assertDisplayName(input.owner_display_name);
-  const seed: CleanResetSeed = {
-    organization_display_name: input.organization_display_name,
-    owner_display_name: input.owner_display_name,
-    authority_id: federationId("oau"),
-    organization_id: federationId("org"),
-    state_lineage_id: `lineage-${randomUUID()}`,
-    owner_principal_id: federationId("prn"),
-    owner_membership_id: federationId("mem"),
-    control_plane_id: `ocp_${randomUUID()}`,
-  };
+  const seed = validateSeed(input.seed ?? generatedSeed());
   const captured: { descriptor_sha256?: Sha256Digest } = {};
   const initialized = initializeNewStateLineageV1({
     state_directory: input.state_directory,
@@ -349,7 +404,7 @@ export function initializeCleanResetState(
       return openOrganizationRecordDatabase(path);
     },
     prepare_staged_state: (state) =>
-      prepareCleanResetState(state, seed, captured),
+      prepareCleanResetState(state, input, seed, captured),
   });
   if (captured.descriptor_sha256 === undefined) {
     throw new Error("clean reset did not create an authority descriptor");

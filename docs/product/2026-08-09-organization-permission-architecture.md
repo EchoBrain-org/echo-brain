@@ -513,9 +513,11 @@ named human operator.
 
 Deployment evidence is tracked separately from code grounding: the EC2 host is
 the sole live Authority owner, the old Mac connector is disabled, and an
-isolated restore of the reviewed image passed. The changing evidence belongs in
-`deploy/organization-authority/AWS-EC2.md`. Any production restore still
-requires Person-state reconciliation before visibility service.
+isolated restore of the reviewed image passed. That evidence lived in the
+then-current EC2 runbook, which the clean lineage has since replaced with the
+[clean deployment runbook](../../deploy/organization-authority/README.md).
+Any production restore still requires Person-state reconciliation before
+visibility service.
 
 ## Primary-source research ledger (checked 2026-08-09)
 

@@ -19,15 +19,13 @@ export {
 export {
   createPersonMemberExclusionChangeRequest,
   createPersonMemberExclusionListRequest,
-  createPersonReadableSearchRequest,
-  createPersonRecentDecisionsRequest,
-  createPersonReviewerRecentDecisionsRequest,
   createPersonSlackLinkBeginRequest,
   createPersonSlackLinkCompleteRequest,
   type PersonRequestIdentity,
 } from "./requests.js";
 export {
   readPersonOnboardingInvitation,
+  writePersonOnboardingInvitation,
   type PersonOnboardingInvitationV1,
 } from "./onboarding-invitation.js";
 export {

@@ -1,9 +1,12 @@
 import {
   chmodSync,
   lstatSync,
+  mkdirSync,
   mkdtempSync,
+  readFileSync,
   realpathSync,
   rmSync,
+  symlinkSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
@@ -12,7 +15,9 @@ import {
   PersonClientSessionUnavailableError,
   PersonSessionStore,
   readPersonOnboardingInvitation,
+  writePersonOnboardingInvitation,
 } from "../../src/product/person-client/index.js";
+import { preflightPersonOnboardingInvitationOutput } from "../../src/product/person-client/onboarding-invitation.js";
 import { describe, expect, it } from "vitest";
 
 const id = (prefix: string, tail: string) =>
@@ -61,6 +66,59 @@ describe("Person session store", () => {
 
       chmodSync(path, 0o644);
       expect(() => readPersonOnboardingInvitation(path)).toThrow("0600");
+    });
+  });
+
+  it("never removes a pre-existing invitation when exclusive output creation fails", () => {
+    withHome((home) => {
+      const path = join(home, "existing-invitation.json");
+      const existing = "existing bytes must survive\n";
+      writeFileSync(path, existing, { mode: 0o600 });
+      chmodSync(path, 0o600);
+      expect(() =>
+        writePersonOnboardingInvitation(path, {
+          schema_version: 1,
+          kind: "echo-person-onboarding-invitation",
+          authority_url: "https://authority.example",
+          login_grant: "G".repeat(43),
+          expires_at: "2026-08-21T00:15:00.000Z",
+        }),
+      ).toThrow();
+      expect(readFileSync(path, "utf8")).toBe(existing);
+      expect(lstatSync(path).mode & 0o777).toBe(0o600);
+    });
+  });
+
+  it("canonicalizes a private parent alias without following an invitation leaf", () => {
+    withHome((home) => {
+      const privateParent = join(home, "private-invitations");
+      const parentAlias = join(home, "tmp-alias");
+      mkdirSync(privateParent, { mode: 0o700 });
+      chmodSync(privateParent, 0o700);
+      symlinkSync(privateParent, parentAlias);
+      const aliasPath = join(parentAlias, "employee-onboarding.json");
+      const canonicalPath = join(privateParent, "employee-onboarding.json");
+
+      expect(preflightPersonOnboardingInvitationOutput(aliasPath)).toBe(
+        canonicalPath,
+      );
+      writePersonOnboardingInvitation(aliasPath, {
+        schema_version: 1,
+        kind: "echo-person-onboarding-invitation",
+        authority_url: "https://authority.example",
+        login_grant: "G".repeat(43),
+        expires_at: "2026-08-21T00:15:00.000Z",
+      });
+      expect(readPersonOnboardingInvitation(aliasPath)).toMatchObject({
+        login_grant: "G".repeat(43),
+      });
+
+      const leafAlias = join(parentAlias, "leaf-alias.json");
+      symlinkSync(canonicalPath, leafAlias);
+      expect(() => preflightPersonOnboardingInvitationOutput(leafAlias)).toThrow(
+        "already exists",
+      );
+      expect(() => readPersonOnboardingInvitation(leafAlias)).toThrow("0600");
     });
   });
 

@@ -173,6 +173,10 @@ function verifier(): CleanSlackConnectionVerifierV1 & {
   const channel = {
     team_id: "T01",
     channel_id: "C_APPROVAL",
+    is_public_organization_channel: true,
+    is_active: true,
+    bot_membership_verified: true,
+    bot_access_verified: true,
     verification_evidence_sha256: canonicalSha256({ channel: "ok" }),
   } satisfies VerifiedSlackChannel;
   return {
@@ -218,13 +222,17 @@ describe("clean Slack connect founder command", () => {
     expect(output[0]).not.toContain(token);
     const parsed = JSON.parse(output[0]!) as Record<string, unknown>;
     expect(parsed).toMatchObject({
-      connection_id: "con_00000000-0000-4000-8000-000000000001",
-      organization_id: COORDINATES.organization_id,
       provider_tenant_id: "T01",
-      state_lineage_id: COORDINATES.state_lineage_id,
+      required_scopes: SLACK_ORGANIZATION_TOOL_REQUIRED_SCOPES,
+      selected_channel_public: true,
+      selected_channel_active: true,
+      bot_membership_verified: true,
+      bot_access_verified: true,
     });
     expect(Object.keys(parsed)).not.toContain("slack_bot_token");
-    expect(parsed.credential_reference_sha256).toMatch(/^sha256:/);
+    expect(Object.keys(parsed)).not.toContain("connection_id");
+    expect(Object.keys(parsed)).not.toContain("organization_id");
+    expect(Object.keys(parsed)).not.toContain("state_lineage_id");
   });
 
   it("refuses multiple stdin tokens before selecting a provider", async () => {

@@ -7,6 +7,8 @@ node_modules/
 dist/
 coverage/
 deploy/organization-authority/data/
+deploy/organization-authority/clean-data/
+deploy/organization-authority/retired-rehearsals/
 *.tgz
 organization-authority-data-*.tar.gz*
 *.log

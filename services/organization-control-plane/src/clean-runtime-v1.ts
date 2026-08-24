@@ -6,8 +6,13 @@
 export { openOrganizationControlDatabase } from "./persistence/open-unmigrated-database.js";
 export {
   ORGANIZATION_MEMBER_READABLE_PERSON_CONSEQUENCE_SHA256,
+  ORGANIZATION_MEMBER_READABLE_PERSON_CONSEQUENCE_TEXT,
   ORGANIZATION_MEMBER_READABLE_PERSON_POLICY_CONTRACT_SHA256,
   ORGANIZATION_MEMBER_READABLE_PERSON_POLICY_ID,
+  RESTRICTED_REVIEWER_PERSON_CONSEQUENCE_SHA256,
+  RESTRICTED_REVIEWER_PERSON_CONSEQUENCE_TEXT,
+  RESTRICTED_REVIEWER_PERSON_POLICY_CONTRACT_SHA256,
+  RESTRICTED_REVIEWER_PERSON_POLICY_ID,
   validatePersonSlackApprovalBindingContractV2,
   buildProviderHumanActionDurableResult,
   buildProviderHumanSemanticActionInputV1,
@@ -16,6 +21,7 @@ export {
   validateProviderHumanIntegrationAuditEntryV2,
   validateProviderHumanSemanticActionInputV1,
   type ApprovalContractSha256,
+  type PersonApprovalPolicyId,
 } from "./application/person-slack-approval-contracts-v2.js";
 export { FileOrganizationSecretStore } from "./security/file-secret-store.js";
 export {

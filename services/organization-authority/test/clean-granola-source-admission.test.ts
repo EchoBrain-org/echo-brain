@@ -23,6 +23,7 @@ import {
   CLEAN_LLM_PROCESSOR_RUNTIME_VERSION_V1,
 } from "../src/composition/clean-granola-source-admission.js";
 import { runCleanGranolaSourceCli } from "../src/composition/clean-granola-source-cli.js";
+import { personLoginGrantExpectedEmailSha256 } from "../src/domain/person-email-binding.js";
 import {
   initializeCleanPersonCredentials,
   issueCleanPersonInvitation,
@@ -40,6 +41,16 @@ const OIDC = {
   redirect_uri: "https://authority.example/v2/session/oidc/callback",
   tenant: { kind: "issuer" as const },
   id_token_algorithms: ["RS256"],
+};
+
+const RECORD_OWNER_CLIENT = {
+  async listNotes(_params: { page_size?: number }) {
+    return {
+      notes: [{ id: "preflight-only", owner: { email: "founder@example.com" } }],
+      hasMore: false,
+      cursor: null,
+    };
+  },
 };
 
 class FounderOidcProvider implements PersonSessionOidcAuthorizationProvider {
@@ -100,6 +111,7 @@ function fixture() {
     created_at: new Date(Date.now() - 1_000).toISOString(),
     creating_artifact_revision: "clean-granola-source-test",
   });
+  let recordOwnerCalls = 0;
   return {
     parent,
     initialized,
@@ -109,6 +121,13 @@ function fixture() {
     granola_credential_reference: `file:${privateFile(parent, "granola.key", `grn_${"a".repeat(32)}`)}`,
     granola_owner_email_reference: `file:${privateFile(parent, "granola-owner-email", "founder@example.com")}`,
     llm_credential_reference: `file:${privateFile(parent, "llm.key", "llm-private-credential-material-000000")}`,
+    create_granola_record_owner_client: () => ({
+      async listNotes(params: { page_size?: number }) {
+        recordOwnerCalls += 1;
+        return RECORD_OWNER_CLIENT.listNotes(params);
+      },
+    }),
+    record_owner_calls: () => recordOwnerCalls,
   };
 }
 
@@ -187,11 +206,11 @@ afterEach(() => {
 describe("clean Granola source admission", () => {
   it("requires founder OIDC re-onboarding, then admits a fresh live-only source and fixed LLM processing identity", async () => {
     const input = fixture();
-    expect(() =>
+    await expect(
       admitCleanGranolaSource({ ...input, now: () => ADMITTED_AT }),
-    ).toThrow("completed founder OIDC re-onboarding");
+    ).rejects.toThrow("completed founder OIDC re-onboarding");
     await bootstrapFounder(input);
-    const admitted = admitCleanGranolaSource({
+    const admitted = await admitCleanGranolaSource({
       ...input,
       now: () => ADMITTED_AT,
     });
@@ -231,8 +250,9 @@ describe("clean Granola source admission", () => {
       expect(
         database
           .prepare(
-            `SELECT source_adapter_version, normalizer_version, cutoff_at,
-                    processor_configuration_sha256, source_credential_reference_sha256,
+          `SELECT source_adapter_version, normalizer_version, cutoff_at,
+                  owner_observation_assurance, owner_observed_at,
+                  processor_configuration_sha256, source_credential_reference_sha256,
                     processor_credential_reference_sha256
                FROM authority_clean_granola_source_admission_v1`,
           )
@@ -241,6 +261,8 @@ describe("clean Granola source admission", () => {
         source_adapter_version: "2.2.0",
         normalizer_version: "2.2.0",
         cutoff_at: ADMITTED_AT,
+        owner_observation_assurance: "provider_record_owner_observed",
+        owner_observed_at: ADMITTED_AT,
       });
     } finally {
       database.close();
@@ -250,11 +272,11 @@ describe("clean Granola source admission", () => {
   it("reuses the exact cutoff for an exact retry and conflicts on changed semantic input", async () => {
     const input = fixture();
     await bootstrapFounder(input);
-    const first = admitCleanGranolaSource({
+    const first = await admitCleanGranolaSource({
       ...input,
       now: () => ADMITTED_AT,
     });
-    const retry = admitCleanGranolaSource({
+    const retry = await admitCleanGranolaSource({
       ...input,
       now: () => {
         throw new Error("exact retry must not sample a new cutoff");
@@ -264,12 +286,13 @@ describe("clean Granola source admission", () => {
       outcome: "already_admitted",
       source: { cursor: first.source.cursor, cutoff_at: ADMITTED_AT },
     });
-    expect(() =>
+    expect(input.record_owner_calls()).toBe(1);
+    await expect(
       admitCleanGranolaSource({
         ...input,
         source_instance_id: "different-granola",
       }),
-    ).toThrow("semantic input conflicts");
+    ).rejects.toThrow("semantic input conflicts");
   });
 
   it("refuses a Granola owner email that differs from the completed founder identity", async () => {
@@ -280,19 +303,137 @@ describe("clean Granola source admission", () => {
       "other-owner-email",
       "other@example.com",
     );
-    expect(() =>
+    await expect(
       admitCleanGranolaSource({
         ...input,
         granola_owner_email_reference: `file:${otherOwner}`,
       }),
-    ).toThrow("completed founder OIDC re-onboarding");
+    ).rejects.toThrow("completed founder OIDC re-onboarding");
+  });
+
+  it("fails closed without an admission or cutoff when provider observation fails or cannot find the owner", async () => {
+    for (const create_granola_record_owner_client of [
+      () => ({
+        async listNotes() {
+          throw new Error("Granola provider unavailable");
+        },
+      }),
+      () => ({
+        async listNotes() {
+          return {
+            notes: [{ id: "other", owner: { email: "other@example.com" } }],
+            hasMore: false,
+            cursor: null,
+          };
+        },
+      }),
+    ]) {
+      const input = fixture();
+      await bootstrapFounder(input);
+      await expect(
+        admitCleanGranolaSource({
+          ...input,
+          create_granola_record_owner_client,
+          now: () => ADMITTED_AT,
+        }),
+      ).rejects.toThrow();
+      const database = new Database(
+        join(input.state_directory, "authority.sqlite"),
+        { readonly: true, fileMustExist: true },
+      );
+      try {
+        expect(
+          database
+            .prepare(
+              "SELECT count(*) AS count FROM authority_clean_granola_source_admission_v1",
+            )
+            .get(),
+        ).toEqual({ count: 0 });
+      } finally {
+        database.close();
+      }
+    }
+  });
+
+  it("does not hold the Authority write transaction across the provider preflight", async () => {
+    const input = fixture();
+    await bootstrapFounder(input);
+    let competingWriteAcquired = false;
+    const admitted = await admitCleanGranolaSource({
+      ...input,
+      create_granola_record_owner_client: () => ({
+        async listNotes() {
+          const contender = new Database(
+            join(input.state_directory, "authority.sqlite"),
+            { fileMustExist: true },
+          );
+          try {
+            contender.exec("BEGIN IMMEDIATE");
+            competingWriteAcquired = true;
+            contender.exec("ROLLBACK");
+          } finally {
+            contender.close();
+          }
+          return {
+            notes: [{ id: "preflight-only", owner: { email: "founder@example.com" } }],
+            hasMore: false,
+            cursor: null,
+          };
+        },
+      }),
+      now: () => ADMITTED_AT,
+    });
+    expect(competingWriteAcquired).toBe(true);
+    expect(admitted.outcome).toBe("admitted");
+  });
+
+  it("binds provider observation and admission validation to one credential read", async () => {
+    const input = fixture();
+    await bootstrapFounder(input);
+    let factoryCredential: string | undefined;
+    const credentialPath = input.granola_credential_reference.slice(
+      "file:".length,
+    );
+    const admitted = await admitCleanGranolaSource({
+      ...input,
+      create_granola_record_owner_client: (credential) => {
+        factoryCredential = credential;
+        writeFileSync(credentialPath, "changed-after-client-creation");
+        chmodSync(credentialPath, 0o600);
+        return RECORD_OWNER_CLIENT;
+      },
+      now: () => ADMITTED_AT,
+    });
+    expect(factoryCredential).toBe(`grn_${"a".repeat(32)}`);
+    expect(admitted.outcome).toBe("admitted");
+  });
+
+  it("binds provider observation and admission validation to one owner-email read", async () => {
+    const input = fixture();
+    await bootstrapFounder(input);
+    const ownerEmailPath = input.granola_owner_email_reference.slice(
+      "file:".length,
+    );
+    const admitted = await admitCleanGranolaSource({
+      ...input,
+      create_granola_record_owner_client: () => {
+        writeFileSync(ownerEmailPath, "other@example.com");
+        chmodSync(ownerEmailPath, 0o600);
+        return RECORD_OWNER_CLIENT;
+      },
+      now: () => ADMITTED_AT,
+    });
+    expect(admitted.outcome).toBe("admitted");
+    expect(admitted.custody.owner_email_sha256).toBe(
+      personLoginGrantExpectedEmailSha256("founder@example.com"),
+    );
   });
 
   it("accepts only private file paths at its CLI boundary and never prints the credential", async () => {
     const input = fixture();
     await bootstrapFounder(input);
     const output: string[] = [];
-    expect(
+    await expect(
       runCleanGranolaSourceCli(
         [
           "--state-dir",
@@ -309,15 +450,26 @@ describe("clean Granola source admission", () => {
           input.llm_credential_reference.slice("file:".length),
         ],
         { stdout: (value) => output.push(value), stderr: () => undefined },
+        { createGranolaRecordOwnerClient: () => RECORD_OWNER_CLIENT },
       ),
-    ).toBe(0);
+    ).resolves.toBe(0);
     expect(output.join("")).not.toContain("grn_");
     expect(output.join("")).not.toContain("llm-private");
-    expect(() =>
+    const status = JSON.parse(output.join("")) as Record<string, unknown>;
+    expect(status).toEqual({
+      schema_version: 1,
+      kind: "echo-clean-granola-source-admission-status-v1",
+      outcome: "admitted",
+      owner_observed_at: expect.any(String),
+    });
+    expect(Object.keys(status)).not.toContain("source");
+    expect(Object.keys(status)).not.toContain("processor");
+    expect(Object.keys(status)).not.toContain("custody");
+    await expect(
       runCleanGranolaSourceCli(
         ["--state-dir", input.initialized.state_directory],
         { stdout: () => undefined, stderr: () => undefined },
       ),
-    ).toThrow("usage:");
+    ).rejects.toThrow("usage:");
   });
 });

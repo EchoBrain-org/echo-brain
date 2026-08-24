@@ -78,12 +78,12 @@ tables below reference their stable IDs rather than redefining them.
 | ID | Settled constraint | Code status | Evidence and limit |
 | --- | --- | --- | --- |
 | `AD-01` | Append, derive, and retrieve are separate logical machines communicating through data at rest. | Implemented at baseline | Ingest, follower, and the bounded pilot reader are separate application paths. The [source-boundary manifest](../../services/organization-record/source-boundary.v1.json) constrains imports. This does not provide general retrieval. |
-| `AD-02` | The log records human facts; deterministic interpretation is derived; retrieval-time scoring/search is not derive output. | Implemented for record v1 | [Record append](../../services/organization-record/src/log/record-log-store.ts) owns canonical rows; [projection](../../services/organization-record/src/derive/projection.ts) derives atoms/provenance. That Layer 1 projection contains no search index; the bounded Layer 2 capability owns a separate immutable retrieval generation. |
+| `AD-02` | The log records human facts; deterministic interpretation is derived; retrieval-time scoring/search is not derive output. | Historical record v1 | The retired broad append and projection implementation established the original split. The clean lineage now owns canonical rows and a separate immutable retrieval generation. |
 | `AD-03` | Content stores frozen provenance/intent facts, never resolved reader lists; effective access uses current Person state at query time. | Partially implemented | V1 content does not contain current reader lists, and the pilot rechecks current Authority state. The general gatekeeper, identity resolution, and policy resolver are not implemented. The pilot's immutable two-member marker is a reviewed bounded policy outside content, not proof of the general rule. |
-| `AD-04` | The log unit is the complete package the human approved; atoms are a rebuildable projection. | Implemented at baseline | The protocol stores the bounded `DecisionBrief`; [derive](../../services/organization-record/src/derive/projection.ts) creates atom rows. |
+| `AD-04` | The log unit is the complete package the human approved; atoms are a rebuildable projection. | Implemented at baseline | The protocol stores the bounded `DecisionBrief`; clean lineage generation creates atom rows. |
 | `AD-05` | Rejections are immutable human acts, not candidate content; the rejected package stays local. | Implemented at baseline | The protocol and log admit rejection envelopes while the projection creates rejection facts rather than approved atoms. |
 | `AD-06` | Raw transcripts/vendor payloads stay local; only the bounded approved brief, evidence spans, source locator, or bounded rejection reason crosses the organization boundary. | Implemented at baseline | The [organization protocol](../../packages/organization-protocol/src/contracts.ts) defines the bounded shared shapes; the member submitter builds those shapes rather than transmitting raw custody. |
-| `AD-07` | Derive v1 is deterministic and log-only: no live Authority state, principal binding, models, or inferred links. | Implemented at baseline | The [pure projector](../../services/organization-record/src/derive/projection.ts), [follower](../../services/organization-record/src/derive/follower.ts), and boundary rules enforce the current dependency shape. |
+| `AD-07` | Derive v1 is deterministic and log-only: no live Authority state, principal binding, models, or inferred links. | Historical baseline | The retained boundary and qualification history record the retired projector and follower dependency shape. |
 | `AD-08` | Organization-record signing and hashing use the shared RFC 8785 canonicalization only. | Implemented at baseline | Protocol creation and record hashing use the federation canonical JSON/signed-document primitives; tests pin stable hashes. |
 
 Additional landed integrity primitives support those constraints:
@@ -119,13 +119,10 @@ claim of general enforcement.
 | `INV-09` | Bounded pilot implemented: activation fixes the pair, Slack shows/verifies the audience notice, and append eligibility requires the immutable proof. | There is no general intent surface, floor, participant path, or grant policy. |
 | `INV-10` | Bounded pilot implemented: authenticated allow/deny decisions commit minimized evidence and exact response digest before bytes; audit failure denies. | General audit retention/export/admin-isolation governance is not established for all future response types. |
 
-Pilot evidence is concentrated in:
-
-- [pilot log migration](../../services/organization-record/migrations/log/0002_permission_pilot.sql);
-- [pilot reader](../../services/organization-record/src/retrieve/permission-pilot-reader.ts);
-- [Authority recent-decision flow](../../services/organization-authority/src/application/organization-authority.ts);
-- [record pilot tests](../../services/organization-record/test/permission-pilot.test.ts); and
-- [Authority activation test](../../services/organization-authority/test/organization-permission-pilot-activation.test.ts).
+Pilot evidence remains in this typed invariant record and its qualification
+history. The executable pilot migration, reader, compatibility flow, and
+exclusive tests were retired when the clean multi-person V1 lineage replaced
+that bounded compatibility surface.
 
 Two constitutional invariants are not classified as pilot-enforced controls:
 

@@ -4,29 +4,7 @@
   "private": true,
   "license": "MIT",
   "type": "module",
-  "main": "dist/index.js",
-  "types": "dist/index.d.ts",
   "exports": {
-    ".": {
-      "types": "./dist/index.d.ts",
-      "import": "./dist/index.js"
-    },
-    "./append": {
-      "types": "./dist/append.d.ts",
-      "import": "./dist/append.js"
-    },
-    "./maintenance": {
-      "types": "./dist/maintenance.d.ts",
-      "import": "./dist/maintenance.js"
-    },
-    "./reviewer": {
-      "types": "./dist/reviewer.d.ts",
-      "import": "./dist/reviewer.js"
-    },
-    "./retrieval-build": {
-      "types": "./dist/retrieval-build.d.ts",
-      "import": "./dist/retrieval-build.js"
-    },
     "./new-lineage-v1": {
       "types": "./dist/new-lineage-v1.d.ts",
       "import": "./dist/new-lineage-v1.js"
@@ -37,7 +15,6 @@
     "dist/**/*.js.map",
     "dist/**/*.d.ts",
     "dist/**/*.d.ts.map",
-    "migrations/**",
     "baselines/**"
   ],
   "scripts": {

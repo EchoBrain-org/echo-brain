@@ -24,6 +24,11 @@ export interface PersonSessionReadTransaction {
     issuer: string,
     subject: string,
   ): StoredOidcIdentityBinding | undefined;
+  /** Authentication-only lookup: never resolves a revoked historical tenure. */
+  activeOidcIdentityBinding(
+    issuer: string,
+    subject: string,
+  ): StoredOidcIdentityBinding | undefined;
   oidcIdentityBindingById(
     identityBindingId: string,
   ): StoredOidcIdentityBinding | undefined;

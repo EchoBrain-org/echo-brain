@@ -64,6 +64,13 @@ export interface ConnectedCleanSlackV1 {
   readonly connection: OrganizationToolConnectionContractV2;
   readonly state: OrganizationToolConnectionStateV2;
   readonly idempotent: boolean;
+  /** Present for a new provider verification; replay proves the same stored connection. */
+  readonly channel_verification: {
+    readonly selected_channel_public: true;
+    readonly selected_channel_active: true;
+    readonly bot_membership_verified: true;
+    readonly bot_access_verified: true;
+  };
 }
 
 export class CleanSlackConnectionConflictError extends Error {
@@ -166,6 +173,12 @@ function existingResult(
     connection: existing.connection,
     state: existing.state,
     idempotent: true,
+    channel_verification: Object.freeze({
+      selected_channel_public: true,
+      selected_channel_active: true,
+      bot_membership_verified: true,
+      bot_access_verified: true,
+    }),
   });
 }
 
@@ -233,7 +246,11 @@ export async function connectCleanSlackV1(
   );
   if (
     channelEvidence.team_id !== connectionEvidence.team_id ||
-    channelEvidence.channel_id !== input.approval_channel_id
+    channelEvidence.channel_id !== input.approval_channel_id ||
+    channelEvidence.is_public_organization_channel !== true ||
+    channelEvidence.is_active !== true ||
+    channelEvidence.bot_membership_verified !== true ||
+    channelEvidence.bot_access_verified !== true
   ) {
     throw new Error("Slack verified a different approval channel");
   }
@@ -314,7 +331,17 @@ export async function connectCleanSlackV1(
         );
       input.database.exec("COMMIT");
       retainedSecret = true;
-      return Object.freeze({ connection, state, idempotent: false });
+      return Object.freeze({
+        connection,
+        state,
+        idempotent: false,
+        channel_verification: Object.freeze({
+          selected_channel_public: true,
+          selected_channel_active: true,
+          bot_membership_verified: true,
+          bot_access_verified: true,
+        }),
+      });
     } catch (error) {
       try {
         input.database.exec("ROLLBACK");

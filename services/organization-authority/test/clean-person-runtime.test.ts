@@ -6,6 +6,7 @@ import {
   realpathSync,
   rmSync,
 } from "node:fs";
+import { Buffer } from "node:buffer";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -37,6 +38,13 @@ function root(): string {
 class MockOidcProvider implements PersonSessionOidcAuthorizationProvider {
   private last: BegunPersonOidcLogin | undefined;
 
+  constructor(
+    private readonly claims: Readonly<Record<string, unknown>> = {
+      email: "founder@example.com",
+      email_verified: true,
+    },
+  ) {}
+
   buildAuthorizationUrl(attempt: BegunPersonOidcLogin): string {
     this.last = attempt;
     return `https://issuer.example/authorize?state=${encodeURIComponent(attempt.state)}`;
@@ -62,7 +70,7 @@ class MockOidcProvider implements PersonSessionOidcAuthorizationProvider {
         audience: "founder-client",
         nonce: this.last.nonce,
         issued_at: Math.floor(Date.now() / 1000),
-        claims: { email: "founder@example.com", email_verified: true },
+        claims: this.claims,
       },
     };
   }
@@ -78,6 +86,96 @@ afterEach(() => {
 });
 
 describe("clean Person runtime", () => {
+  it("burns a bootstrap invitation when the verified email does not match", async () => {
+    const parent = root();
+    const initialized = initializeCleanResetState({
+      state_directory: join(parent, "state"),
+      organization_display_name: "Founder Organization",
+      owner_display_name: "Founder",
+      created_at: new Date(Date.now() - 1_000).toISOString(),
+      creating_artifact_revision: "clean-person-email-binding-test",
+    });
+    const oidc = {
+      issuer: "https://issuer.example",
+      client_id: "founder-client",
+      redirect_uri: "https://authority.example/v2/session/oidc/callback",
+      tenant: { kind: "issuer" as const },
+      id_token_algorithms: ["RS256"],
+    };
+    const credentials = initializeCleanPersonCredentials({
+      state_directory: initialized.state_directory,
+    });
+    const pkce = readPrivateAuthorityPersonSessionPkceKey(
+      credentials.pkce_sealing_key_reference,
+    );
+    const invitationDirectory = join(parent, "invitations");
+    mkdirSync(invitationDirectory, { mode: 0o700 });
+    chmodSync(invitationDirectory, 0o700);
+    const invitationPath = join(invitationDirectory, "founder.invitation.json");
+    issueCleanPersonInvitation({
+      state_directory: initialized.state_directory,
+      oidc,
+      pkce_sealing_key: pkce,
+      membership_id: initialized.owner_membership_id,
+      expected_email: "founder@example.com",
+      authority_url: "https://authority.example",
+      output_path: invitationPath,
+    });
+    const invitation = JSON.parse(readFileSync(invitationPath, "utf8")) as {
+      login_grant: string;
+    };
+    const database = openAuthorityDatabase(
+      join(initialized.state_directory, "authority.sqlite"),
+      { fileMustExist: true },
+    );
+    try {
+      const crypto = new NodePersonSessionCrypto(pkce);
+      const sessions = new PersonIdentitySessionApplication(
+        new SqliteCleanPersonSessionRepository(database),
+        oidc,
+        {
+          clock: new SystemAuthorityClock(),
+          random: crypto,
+          hash: crypto,
+          pkce_sealer: crypto,
+          oidc_provider: new MockOidcProvider({
+            email: "someone-else@example.com",
+            email_verified: true,
+          }),
+        },
+      );
+      const begun = sessions.beginOidcLogin({
+        kind: "identity_bootstrap",
+        login_grant: invitation.login_grant,
+      });
+      await expect(
+        sessions.completeOidcLogin({
+          state: begun.state,
+          authorization_code: "wrong-email-code",
+        }),
+      ).rejects.toMatchObject({
+        code: "unauthorized",
+        message: "person authentication failed",
+      });
+      expect(
+        database
+          .prepare(
+            "SELECT consumed_at IS NOT NULL FROM authority_person_login_grants",
+          )
+          .pluck()
+          .get(),
+      ).toBe(1);
+      expect(
+        database
+          .prepare("SELECT count(*) FROM authority_person_session_families")
+          .pluck()
+          .get(),
+      ).toBe(0);
+    } finally {
+      database.close();
+    }
+  });
+
   it("runs fresh genesis through founder grant, OIDC bootstrap, refresh, and logout without legacy state", async () => {
     const parent = root();
     const initialized = initializeCleanResetState({
@@ -186,6 +284,10 @@ describe("clean Person runtime", () => {
         body: JSON.stringify({
           kind: "identity_bootstrap",
           login_grant: invitationBody.login_grant,
+          loopback_handoff: {
+            url: `http://127.0.0.1:39999/${"P".repeat(43)}`,
+            token: "T".repeat(43),
+          },
         }),
       });
       expect(begun.status).toBe(201);
@@ -199,8 +301,40 @@ describe("clean Person runtime", () => {
         `${origin}/v2/session/oidc/callback?state=${encodeURIComponent(state!)}&code=code-1&iss=https%3A%2F%2Fissuer.example`,
       );
       expect(callback.status).toBe(200);
-      const session = await json(callback);
+      expect(callback.headers.get("content-type")).toContain("text/html");
+      expect(callback.headers.get("cache-control")).toBe("no-store");
+      const callbackPage = await callback.text();
+      expect(callbackPage).toContain(`action="http://127.0.0.1:39999/${"P".repeat(43)}"`);
+      expect(callbackPage).toContain('name="token" value="' + "T".repeat(43) + '"');
+      expect(callbackPage).not.toContain("access_token");
+      expect(callbackPage).not.toContain("refresh_token");
+      const encoded = /name="session" value="([A-Za-z0-9_-]+)"/.exec(callbackPage)?.[1];
+      expect(encoded).toBeDefined();
+      const session = JSON.parse(
+        Buffer.from(encoded!, "base64url").toString("utf8"),
+      ) as Record<string, unknown>;
       expect(session.membership_id).toBe(initialized.owner_membership_id);
+
+      const recoveryBegin = await fetch(`${origin}/v2/session/oidc/begin`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ kind: "existing_identity_login" }),
+      });
+      expect(recoveryBegin.status).toBe(201);
+      const recoveryState = new URL(
+        (await json(recoveryBegin)).authorization_url as string,
+      ).searchParams.get("state");
+      const expiredDelivery = await fetch(
+        `${origin}/v2/session/oidc/callback?state=${encodeURIComponent(recoveryState!)}&code=code-2&iss=https%3A%2F%2Fissuer.example`,
+      );
+      expect(expiredDelivery.status).toBe(200);
+      expect(expiredDelivery.headers.get("content-type")).toContain("text/html");
+      const expiredPage = await expiredDelivery.text();
+      expect(expiredPage).toContain("Sign-in expired");
+      expect(expiredPage).toContain("echo-brain person login");
+      expect(expiredPage).not.toContain("access_token");
+      expect(expiredPage).not.toContain("refresh_token");
+      expect(expiredPage).not.toContain('name="session"');
 
       const searchBeforeGeneration = await fetch(
         `${origin}/v1/person/records`,

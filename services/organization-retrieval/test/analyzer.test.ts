@@ -4,7 +4,7 @@ import {
   analyzeReadableSearchQuery,
   compareReadableSearchCandidates,
   readableSearchScore,
-} from '../src/index.js';
+} from '../src/application/analyzer.js';
 
 describe('readable-search analyzer', () => {
   it('uses Unicode alphanumeric runs, lowercases, and preserves query first occurrence', () => {

@@ -1838,7 +1838,7 @@ processor, readable Slack approve/reject card, D2-to-D3 finalization, V4 append,
 `GET /v1/person/records`, and automatic Layer-2 exact-head reconciliation at
 startup and after coalesced append cycles. The founder coordinator reduces
 onboarding to three phases and asks for no generated IDs; the only human
-handoffs are one OIDC callback JSON paste and one Slack challenge reply
+handoffs are one browser-delivered OIDC return and one Slack challenge reply
 followed by Enter.
 Local fake-provider tests cover empty/no-signal cursor advancement,
 approve/reject, append recovery/restart, rejection non-readability, and the

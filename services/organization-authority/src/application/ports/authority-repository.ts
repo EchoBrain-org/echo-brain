@@ -1,16 +1,9 @@
 import type {
   JsonValue,
-  P256SigningKeyDescriptor,
   Sha256Digest,
 } from '@echo-brain/federation-protocol';
 import type {
-  OrganizationAccessLeaseRequestAnyVersion,
-} from '@echo-brain/organization-api';
-import type {
   OrganizationAuthorityDescriptorV1,
-  OrganizationEnrollmentReceiptV1,
-  OrganizationEnrollmentRequestV1,
-  OrganizationInstallationAccessStateV1,
   OrganizationMembershipTypeV1,
 } from '@echo-brain/organization-protocol';
 
@@ -40,88 +33,12 @@ export interface StoredAuthorityMembership {
   admin_command_sha256: Sha256Digest | null;
 }
 
-export interface StoredEnrollmentGrant {
-  grant_sha256: Sha256Digest;
-  authority_id: string;
-  organization_id: string;
-  principal_id: string;
-  membership_id: string;
-  issued_at: string;
-  expires_at: string;
-  consumed_at: string | null;
-  request_sha256: Sha256Digest | null;
-  /** Null only for rows created before the retry-safe admin API. */
-  admin_command_id: string | null;
-  /** Distinct from request_sha256, which names the employee enrollment. */
-  admin_command_sha256: Sha256Digest | null;
-}
-
-export interface StoredAuthorityEnrollment {
-  enrollment_id: string;
-  grant_sha256: Sha256Digest;
-  request_sha256: Sha256Digest;
-  request: OrganizationEnrollmentRequestV1;
-  receipt_sha256: Sha256Digest;
-  receipt: OrganizationEnrollmentReceiptV1;
-  authority_id: string;
-  organization_id: string;
-  principal_id: string;
-  membership_id: string;
-  membership_type: OrganizationMembershipTypeV1;
-  installation_id: string;
-  installation_signing_key: P256SigningKeyDescriptor;
-  status: 'active' | 'revoked';
-  enrolled_at: string;
-  revoked_at: string | null;
-  revocation_kind: 'membership_revoked' | 'installation_revoked' | null;
-  revocation_reason: string | null;
-}
-
-export interface StoredAuthorityAccessState {
-  enrollment_id: string;
-  state_sha256: Sha256Digest;
-  state: OrganizationInstallationAccessStateV1;
-}
-
-export interface StoredAccessLeaseRequest {
-  request_id: string;
-  request_sha256: Sha256Digest;
-  request: OrganizationAccessLeaseRequestAnyVersion;
-  enrollment_id: string;
-  previous_access_state_sha256: Sha256Digest;
-  resulting_state_sha256: Sha256Digest;
-  received_at: string;
-}
-
-export interface NewAuthorityEnrollment {
-  enrollment: StoredAuthorityEnrollment;
-  initial_access_state: StoredAuthorityAccessState;
-}
-
 export interface AuthorityAuditEntry {
   occurred_at: string;
   actor_kind: 'admin' | 'enrollment_grant' | 'installation';
   action: string;
   subject_id: string;
   detail: JsonValue;
-}
-
-export interface StoredAuthorityAuditEntry extends AuthorityAuditEntry {
-  audit_sequence: number;
-}
-
-export interface AuthorityAdminCounts {
-  memberships: number;
-  active_memberships: number;
-  revoked_memberships: number;
-  installations: number;
-  active_installations: number;
-  revoked_installations: number;
-  enrollment_grants: number;
-  pending_enrollment_grants: number;
-  consumed_enrollment_grants: number;
-  expired_enrollment_grants: number;
-  audit_entries: number;
 }
 
 export const REVIEWER_QUERY_AUDIT_OPERATION =
@@ -342,6 +259,7 @@ export interface SealedPkceVerifier {
   sealed_bytes: Uint8Array;
 }
 
+
 export type OidcLoginAttemptTerminalOutcome =
   | 'succeeded'
   | 'denied'
@@ -407,11 +325,13 @@ export interface StoredPersonLoginGrant
   issued_at: string;
   expires_at: string;
   consumed_at: string | null;
+  /** Pending grants can be invalidated by a safe reissue or membership revoke. */
+  invalidated_at: string | null;
 }
 
 export type NewPersonLoginGrant = Omit<
   StoredPersonLoginGrant,
-  'issued_at' | 'consumed_at'
+  'issued_at' | 'consumed_at' | 'invalidated_at'
 >;
 
 export interface StoredPersonSessionFamily
@@ -599,59 +519,12 @@ export type MemberExclusionReadAuditEntry =
 export interface AuthorityReadTransaction {
   metadata(): StoredAuthorityMetadata;
   membership(membershipId: string): StoredAuthorityMembership | undefined;
-  membershipByAdminCommand(
-    commandId: string,
-  ): StoredAuthorityMembership | undefined;
-  membershipsAfter(
-    membershipId: string | undefined,
-    limit: number,
-  ): StoredAuthorityMembership[];
-  grant(grantSha256: Sha256Digest): StoredEnrollmentGrant | undefined;
-  grantByAdminCommand(commandId: string): StoredEnrollmentGrant | undefined;
-  grantsAfter(
-    grantSha256: Sha256Digest | undefined,
-    limit: number,
-  ): StoredEnrollmentGrant[];
-  enrollmentByGrant(
-    grantSha256: Sha256Digest,
-  ): StoredAuthorityEnrollment | undefined;
-  enrollmentByRequest(
-    requestSha256: Sha256Digest,
-  ): StoredAuthorityEnrollment | undefined;
-  enrollmentById(enrollmentId: string): StoredAuthorityEnrollment | undefined;
-  enrollmentByInstallation(
-    installationId: string,
-  ): StoredAuthorityEnrollment | undefined;
-  enrollmentByKey(keyId: Sha256Digest): StoredAuthorityEnrollment | undefined;
-  enrollmentsForMembership(membershipId: string): StoredAuthorityEnrollment[];
-  enrollmentsAfter(
-    enrollmentId: string | undefined,
-    limit: number,
-  ): StoredAuthorityEnrollment[];
-  activeEnrollments(limit: number): StoredAuthorityEnrollment[];
-  currentAccessState(
-    enrollmentId: string,
-  ): StoredAuthorityAccessState | undefined;
-  accessState(
-    enrollmentId: string,
-    accessStateSequence: number,
-  ): StoredAuthorityAccessState | undefined;
-  accessLeaseRequestByDigest(
-    requestSha256: Sha256Digest,
-  ): StoredAccessLeaseRequest | undefined;
-  accessLeaseRequestById(
-    enrollmentId: string,
-    requestId: string,
-  ): StoredAccessLeaseRequest | undefined;
-  accessStateByDigest(
-    stateSha256: Sha256Digest,
-  ): StoredAuthorityAccessState | undefined;
-  recentAuditBefore(
-    auditSequence: number | undefined,
-    limit: number,
-  ): StoredAuthorityAuditEntry[];
-  adminCounts(now: string): AuthorityAdminCounts;
   oidcIdentityBinding(
+    issuer: string,
+    subject: string,
+  ): StoredOidcIdentityBinding | undefined;
+  /** Authentication-only lookup: never resolves a revoked historical tenure. */
+  activeOidcIdentityBinding(
     issuer: string,
     subject: string,
   ): StoredOidcIdentityBinding | undefined;
@@ -685,27 +558,6 @@ export interface AuthorityReadTransaction {
 }
 
 export interface AuthorityWriteTransaction extends AuthorityReadTransaction {
-  insertMembership(membership: StoredAuthorityMembership): void;
-  insertGrant(grant: StoredEnrollmentGrant): void;
-  insertEnrollment(value: NewAuthorityEnrollment): void;
-  consumeGrant(
-    grantSha256: Sha256Digest,
-    requestSha256: Sha256Digest,
-    consumedAt: string,
-  ): boolean;
-  insertAccessState(state: StoredAuthorityAccessState): void;
-  insertAccessLeaseRequest(request: StoredAccessLeaseRequest): void;
-  revokeMembership(
-    membershipId: string,
-    revokedAt: string,
-    reason: string,
-  ): boolean;
-  revokeEnrollment(
-    enrollmentId: string,
-    revokedAt: string,
-    kind: 'membership_revoked' | 'installation_revoked',
-    reason: string,
-  ): boolean;
   insertOidcIdentityBinding(
     binding: NewOidcIdentityBinding,
   ): StoredOidcIdentityBinding;

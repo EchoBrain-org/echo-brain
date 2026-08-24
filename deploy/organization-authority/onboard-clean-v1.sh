@@ -1,0 +1,507 @@
+#!/usr/bin/env bash
+# One-time clean-v1 Authority preparation plus resumable founder onboarding.
+# This wrapper deliberately owns the two EC2 Compose profiles and only the
+# fixed clean-data paths below. It never reads Authority SQLite files.
+set -euo pipefail
+
+DEPLOY_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
+DATA_DIR="$DEPLOY_DIR/clean-data"
+PRIVATE_DIR="$DATA_DIR/private"
+RELEASE_DIR="$DATA_DIR/release"
+ENV_FILE="$DEPLOY_DIR/.env.clean-v1"
+SETUP_FILE="$PRIVATE_DIR/onboard-clean-v1.conf"
+RELEASE_FILE="$RELEASE_DIR/current.clean-v1.json"
+CANDIDATE_FILE="$RELEASE_DIR/candidate.clean-v1.json"
+RELEASE_TOOL="$DEPLOY_DIR/../release/clean-v1-release.py"
+if [[ -f "$DEPLOY_DIR/release/clean-v1-release.py" ]]; then
+  RELEASE_TOOL="$DEPLOY_DIR/release/clean-v1-release.py"
+fi
+FOUNDER_MAIN="services/organization-authority/dist/clean-founder-main.js"
+RUNTIME_UID=''
+RUNTIME_GID=''
+EXECUTOR_UID=''
+
+fail() { printf 'onboard-clean-v1: %s\n' "$*" >&2; exit 1; }
+
+usage() {
+  cat >&2 <<'EOF'
+usage:
+  onboard-clean-v1.sh prepare \
+    --release <canonical-release.json> \
+    --runtime-user <os-user> \
+    --organization-name <name> --owner-display-name <name> --owner-email <email> \
+    --authority-host <dns-name> --slack-approval-channel-id <channel-id> \
+    --oidc-config-file <private-file> --oidc-client-secret-file <private-file> \
+    --slack-bot-token-file <private-file> --granola-credential-file <private-file> \
+    --llm-credential-file <private-file>
+  onboard-clean-v1.sh replace-rehearsal --confirm-no-live-users
+  onboard-clean-v1.sh resume
+  onboard-clean-v1.sh status
+EOF
+  exit 2
+}
+
+require_host_prerequisites() {
+  command -v docker >/dev/null 2>&1 || fail 'Docker is not installed. Provision Docker, Cloudflare Tunnel, and registry access before using this wrapper.'
+  docker compose version >/dev/null 2>&1 || fail 'Docker Compose v2 is unavailable. Provision Docker Compose before using this wrapper.'
+  command -v python3 >/dev/null 2>&1 || fail 'python3 is required for canonical release validation.'
+  [[ -f "$RELEASE_TOOL" ]] || fail 'clean-v1 release validator is missing from deploy/release.'
+}
+
+compose_clean() {
+  docker compose --env-file "$ENV_FILE" \
+    -f "$DEPLOY_DIR/compose.clean-v1.yaml" \
+    -f "$DEPLOY_DIR/compose.clean-v1.ec2.yaml" "$@"
+}
+
+release_field() { python3 "$RELEASE_TOOL" field "$RELEASE_FILE" "$1"; }
+
+private_source() {
+  local path="$1" label="$2"
+  [[ "$path" = /* ]] || fail "$label must be an absolute file path"
+  [[ -f "$path" && ! -L "$path" ]] || fail "$label must be a regular, non-symlink file"
+}
+
+no_newline_value() {
+  local value="$1" label="$2"
+  [[ -n "$value" && "$value" != *$'\n'* && "$value" != *$'\r'* ]] || fail "$label must be one non-empty line"
+}
+
+select_runtime_identity() {
+  local runtime_user="$1"
+  [[ "$runtime_user" =~ ^[A-Za-z_][A-Za-z0-9_.-]*$ ]] || \
+    fail 'runtime user must be a local operating-system account name'
+  id "$runtime_user" >/dev/null 2>&1 || \
+    fail "runtime user does not exist on this server: $runtime_user"
+  RUNTIME_UID="$(id -u "$runtime_user")"
+  RUNTIME_GID="$(id -g "$runtime_user")"
+  [[ "$RUNTIME_UID" != 0 ]] || \
+    fail 'runtime user must be a non-root operating-system account'
+  EXECUTOR_UID="$(id -u)"
+  if [[ "$EXECUTOR_UID" != 0 && ( "$EXECUTOR_UID" != "$RUNTIME_UID" || "$(id -g)" != "$RUNTIME_GID" ) ]]; then
+    fail 'prepare must run as root or as the selected runtime user'
+  fi
+}
+
+require_safe_directory_target() {
+  local path="$1" label="$2"
+  if [[ -e "$path" || -L "$path" ]]; then
+    [[ -d "$path" && ! -L "$path" ]] || fail "$label is not a safe directory"
+  fi
+}
+
+own_for_runtime() {
+  local path="$1"
+  if [[ "$EXECUTOR_UID" == 0 ]]; then
+    chown "$RUNTIME_UID:$RUNTIME_GID" "$path"
+  fi
+}
+
+copy_exact_private() {
+  local source="$1" destination="$2" label="$3" ownership="${4:-runtime}"
+  private_source "$source" "$label"
+  if [[ -e "$destination" ]]; then
+    [[ -f "$destination" && ! -L "$destination" ]] || fail "existing $label destination is unsafe"
+    cmp -s "$source" "$destination" || fail "$label conflicts with the existing clean onboarding input"
+    chmod 0600 "$destination"
+    if [[ "$ownership" == runtime ]]; then
+      own_for_runtime "$destination"
+    fi
+    return
+  fi
+  install -m 0600 "$source" "$destination"
+  if [[ "$ownership" == runtime ]]; then
+    own_for_runtime "$destination"
+  fi
+}
+
+write_exact_private() {
+  local destination="$1" value="$2" label="$3" temporary
+  temporary="$(mktemp "$PRIVATE_DIR/.${label}.XXXXXX")"
+  chmod 0600 "$temporary"
+  printf '%s' "$value" > "$temporary"
+  own_for_runtime "$temporary"
+  if [[ -e "$destination" ]]; then
+    [[ -f "$destination" && ! -L "$destination" ]] || fail "existing $label destination is unsafe"
+    cmp -s "$temporary" "$destination" || fail "$label conflicts with the existing clean onboarding input"
+    chmod 0600 "$destination"
+    own_for_runtime "$destination"
+    rm -f "$temporary"
+    return
+  fi
+  mv "$temporary" "$destination"
+}
+
+write_exact_file() {
+  local destination="$1" content="$2" label="$3" ownership="${4:-host}" temporary
+  temporary="$(mktemp "${destination}.XXXXXX")"
+  chmod 0600 "$temporary"
+  printf '%s' "$content" > "$temporary"
+  if [[ "$ownership" == runtime ]]; then
+    own_for_runtime "$temporary"
+  fi
+  if [[ -e "$destination" ]]; then
+    [[ -f "$destination" && ! -L "$destination" ]] || fail "existing $label is unsafe"
+    cmp -s "$temporary" "$destination" || fail "$label conflicts with the existing clean onboarding configuration"
+    chmod 0600 "$destination"
+    if [[ "$ownership" == runtime ]]; then
+      own_for_runtime "$destination"
+    fi
+    rm -f "$temporary"
+    return
+  fi
+  mv "$temporary" "$destination"
+}
+
+require_prepared() {
+  [[ -f "$SETUP_FILE" && ! -L "$SETUP_FILE" ]] || fail 'run prepare first'
+  [[ -f "$RELEASE_FILE" && ! -L "$RELEASE_FILE" ]] || fail 'clean release record is missing; run prepare again with the same record'
+  [[ -f "$ENV_FILE" && ! -L "$ENV_FILE" ]] || fail 'clean Compose environment is missing; run prepare again with the same inputs'
+  python3 "$RELEASE_TOOL" validate "$RELEASE_FILE" >/dev/null || fail 'persisted release record is no longer canonical clean-v1'
+  for required in oidc-config.json oidc-client-secret slack-bot-token granola-credential-source granola-owner-email llm-credential-source; do
+    [[ -f "$PRIVATE_DIR/$required" && ! -L "$PRIVATE_DIR/$required" ]] || fail "fixed private input is missing: $required"
+  done
+}
+
+ensure_image() {
+  local image
+  image="$(release_field authority-image)"
+  if ! docker image inspect "$image" >/dev/null 2>&1; then
+    compose_clean pull authority
+  fi
+}
+
+require_image_present() {
+  local image
+  image="$(release_field authority-image)"
+  docker image inspect "$image" >/dev/null 2>&1 || \
+    fail 'accepted Authority image is not present locally; run resume to pull it explicitly'
+}
+
+founder_status() {
+  compose_clean run --rm --no-deps --pull never --entrypoint node authority \
+    "$FOUNDER_MAIN" status --state-dir /echo-clean/state
+}
+
+staged_candidate_present() {
+  [[ -e "$CANDIDATE_FILE" || -L "$CANDIDATE_FILE" ]] || return 1
+  [[ -f "$CANDIDATE_FILE" && ! -L "$CANDIDATE_FILE" ]] || \
+    fail 'staged clean-v1 candidate record is unsafe'
+  python3 "$RELEASE_TOOL" validate "$CANDIDATE_FILE" >/dev/null || \
+    fail 'staged clean-v1 candidate record is not canonical'
+}
+
+next_step_from_status() {
+  python3 -c 'import json, sys; value=json.load(sys.stdin); step=value.get("next_step"); assert isinstance(step, str); print(step)' \
+    <<<"$1" || fail 'clean founder status was not the expected safe JSON'
+}
+
+status_boolean() {
+  local status_json="$1" field="$2"
+  python3 -c 'import json, sys; value=json.load(sys.stdin); result=value.get(sys.argv[1]); assert type(result) is bool; print("true" if result else "false")' \
+    "$field" <<<"$status_json" || fail "clean founder status has no boolean $field"
+}
+
+start_runtime() {
+  compose_clean up -d --no-build --wait --wait-timeout 90
+}
+
+running_authority() {
+  local id
+  id="$(compose_clean ps -q authority 2>/dev/null)" || return 1
+  [[ -n "$id" ]] || return 1
+  [[ "$(docker inspect --format '{{.State.Running}}' "$id" 2>/dev/null)" == true ]]
+}
+
+healthy_authority() {
+  local id
+  id="$(compose_clean ps -q authority 2>/dev/null)" || return 1
+  [[ -n "$id" ]] || return 1
+  [[ "$(docker inspect --format '{{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}' "$id" 2>/dev/null)" == healthy ]]
+}
+
+authority_uses_accepted_image() {
+  local id expected_image expected_source running_image_id
+  id="$(compose_clean ps -q authority 2>/dev/null)" || return 1
+  [[ -n "$id" ]] || return 1
+  expected_image="$(release_field authority-image)"
+  expected_source="$(release_field source-sha)"
+  running_image_id="$(docker inspect --format '{{.Image}}' "$id" 2>/dev/null)" || return 1
+  [[ "$running_image_id" =~ ^sha256:[0-9a-f]{64}$ ]] || return 1
+  docker image inspect --format '{{range .RepoDigests}}{{println .}}{{end}}' \
+    "$running_image_id" 2>/dev/null | grep -Fqx "$expected_image" || return 1
+  [[ "$(docker image inspect --format '{{index .Config.Labels "org.opencontainers.image.revision"}}' "$running_image_id" 2>/dev/null)" == "$expected_source" ]]
+}
+
+terminal_green() {
+  local status_json="$1"
+  [[ "$(next_step_from_status "$status_json")" == complete ]] || return 1
+  running_authority && healthy_authority && authority_uses_accepted_image
+}
+
+print_status() {
+  local status_json="$1"
+  if running_authority; then
+    printf 'authority_running=true\n'
+  else
+    printf 'authority_running=false\n'
+  fi
+  if healthy_authority; then
+    printf 'authority_healthy=true\n'
+  else
+    printf 'authority_healthy=false\n'
+  fi
+  if authority_uses_accepted_image; then
+    printf 'authority_exact_accepted_image=true\n'
+  else
+    printf 'authority_exact_accepted_image=false\n'
+  fi
+  if terminal_green "$status_json"; then
+    printf 'terminal_green=true\n'
+  else
+    printf 'terminal_green=false\n'
+  fi
+  printf 'status_json=%s\n' "$status_json"
+}
+
+print_staged_candidate_status() {
+  printf 'release_state=staged_candidate\n'
+  printf 'authority_exact_accepted_image=false\n'
+  printf 'terminal_green=false\n'
+  printf 'next_action=Run update-clean-v1.sh status, then promote the candidate or roll it back.\n'
+}
+
+prepare() {
+  local release='' runtime_user='' organization_name='' owner_display_name='' owner_email='' authority_host='' channel='' oidc_config='' oidc_secret='' slack_token='' granola_credential='' llm_credential=''
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --release) release="${2:-}"; shift 2 ;;
+      --runtime-user) runtime_user="${2:-}"; shift 2 ;;
+      --organization-name) organization_name="${2:-}"; shift 2 ;;
+      --owner-display-name) owner_display_name="${2:-}"; shift 2 ;;
+      --owner-email) owner_email="${2:-}"; shift 2 ;;
+      --authority-host) authority_host="${2:-}"; shift 2 ;;
+      --slack-approval-channel-id) channel="${2:-}"; shift 2 ;;
+      --oidc-config-file) oidc_config="${2:-}"; shift 2 ;;
+      --oidc-client-secret-file) oidc_secret="${2:-}"; shift 2 ;;
+      --slack-bot-token-file) slack_token="${2:-}"; shift 2 ;;
+      --granola-credential-file) granola_credential="${2:-}"; shift 2 ;;
+      --llm-credential-file) llm_credential="${2:-}"; shift 2 ;;
+      *) usage ;;
+    esac
+  done
+  [[ -n "$release" && -n "$runtime_user" && -n "$organization_name" && -n "$owner_display_name" && -n "$owner_email" && -n "$authority_host" && -n "$channel" && -n "$oidc_config" && -n "$oidc_secret" && -n "$slack_token" && -n "$granola_credential" && -n "$llm_credential" ]] || usage
+  require_host_prerequisites
+  private_source "$release" 'release record'
+  no_newline_value "$organization_name" 'organization name'
+  no_newline_value "$owner_display_name" 'owner display name'
+  no_newline_value "$owner_email" 'owner email'
+  no_newline_value "$authority_host" 'Authority host'
+  no_newline_value "$channel" 'Slack approval channel ID'
+  select_runtime_identity "$runtime_user"
+  python3 "$RELEASE_TOOL" validate "$release" >/dev/null
+  require_safe_directory_target "$DATA_DIR" 'clean data path'
+  require_safe_directory_target "$PRIVATE_DIR" 'clean private-input path'
+  require_safe_directory_target "$RELEASE_DIR" 'clean release path'
+  install -d -m 0700 "$DATA_DIR" "$PRIVATE_DIR" "$RELEASE_DIR"
+  chmod 0700 "$DATA_DIR" "$PRIVATE_DIR" "$RELEASE_DIR"
+  own_for_runtime "$DATA_DIR"
+  own_for_runtime "$PRIVATE_DIR"
+  copy_exact_private "$release" "$RELEASE_FILE" 'release record' host
+  local image uid gid authority_url setup env
+  image="$(release_field authority-image)"
+  uid="$RUNTIME_UID"
+  gid="$RUNTIME_GID"
+  authority_url="https://$authority_host"
+  setup="runtime_user=$runtime_user
+organization_name=$organization_name
+owner_display_name=$owner_display_name
+owner_email=$owner_email
+authority_host=$authority_host
+authority_url=$authority_url
+slack_approval_channel_id=$channel
+release_id=$(release_field release-id)
+authority_image=$image
+artifact_revision=$(release_field source-sha)
+authority_uid=$uid
+authority_gid=$gid"
+  env="ECHO_CLEAN_AUTHORITY_HOST=$authority_host
+ECHO_CLEAN_AUTHORITY_URL=$authority_url
+ECHO_CLEAN_AUTHORITY_UID=$uid
+ECHO_CLEAN_AUTHORITY_GID=$gid
+ECHO_CLEAN_AUTHORITY_IMAGE=$image
+ECHO_CLEAN_SLACK_APPROVAL_CHANNEL_ID=$channel
+ECHO_CLEAN_OWNER_EMAIL=$owner_email"
+  write_exact_file "$SETUP_FILE" "$setup" 'setup configuration' runtime
+  write_exact_file "$ENV_FILE" "$env" 'Compose environment'
+  copy_exact_private "$oidc_config" "$PRIVATE_DIR/oidc-config.json" 'OIDC configuration'
+  copy_exact_private "$oidc_secret" "$PRIVATE_DIR/oidc-client-secret" 'OIDC client secret'
+  copy_exact_private "$slack_token" "$PRIVATE_DIR/slack-bot-token" 'Slack bot token'
+  copy_exact_private "$granola_credential" "$PRIVATE_DIR/granola-credential-source" 'Granola credential'
+  copy_exact_private "$llm_credential" "$PRIVATE_DIR/llm-credential-source" 'LLM credential'
+  write_exact_private "$PRIVATE_DIR/granola-owner-email" "$owner_email" 'Granola owner email'
+  # This render is intentionally offline: prepare never builds or pulls an image.
+  compose_clean config >/dev/null
+  printf 'prepared=true\nnext_action=Run onboard-clean-v1.sh resume on this server.\n'
+}
+
+setup_value() {
+  local key="$1" value
+  value="$(sed -n "s/^${key}=//p" "$SETUP_FILE")"
+  [[ -n "$value" ]] || fail "setup configuration is missing $key"
+  printf '%s\n' "$value"
+}
+
+bootstrap() {
+  compose_clean run --rm --no-deps --entrypoint node authority \
+    "$FOUNDER_MAIN" bootstrap \
+    --state-dir /echo-clean/state \
+    --organization-name "$(setup_value organization_name)" \
+    --owner-display-name "$(setup_value owner_display_name)" \
+    --owner-email "$(setup_value owner_email)" \
+    --authority-url "$(setup_value authority_url)" \
+    --oidc-config /echo-clean/private/oidc-config.json \
+    --slack-approval-channel-id "$(setup_value slack_approval_channel_id)" \
+    --artifact-revision "$(setup_value artifact_revision)" \
+    < "$PRIVATE_DIR/slack-bot-token"
+}
+
+replace_rehearsal() {
+  [[ $# -eq 1 && "$1" == --confirm-no-live-users ]] || usage
+  require_host_prerequisites
+  [[ -d "$DATA_DIR" && ! -L "$DATA_DIR" ]] || \
+    fail 'clean rehearsal data directory is unsafe'
+  [[ -f "$ENV_FILE" && ! -L "$ENV_FILE" ]] || \
+    fail 'clean rehearsal environment file is unsafe'
+  compose_clean down --remove-orphans
+  local archive_root="$DEPLOY_DIR/retired-rehearsals" archive
+  archive="$archive_root/$(date -u +%Y%m%dT%H%M%SZ)"
+  install -d -m 0700 "$archive_root"
+  [[ ! -e "$archive" ]] || fail 'a rehearsal archive already exists for this second; retry later'
+  install -d -m 0700 "$archive"
+  mv "$DATA_DIR" "$archive/clean-data"
+  if ! mv "$ENV_FILE" "$archive/.env.clean-v1"; then
+    if mv "$archive/clean-data" "$DATA_DIR"; then
+      rmdir "$archive"
+      fail 'could not archive the rehearsal environment; clean data was restored and the replacement may be retried'
+    fi
+    fail "could not archive the rehearsal environment or restore clean data; recover from $archive/clean-data before retrying"
+  fi
+  printf 'rehearsal_replaced=true\narchive=%s\nnext_action=Run prepare with the new exact release and onboarding inputs.\n' "$archive"
+}
+
+resume_bootstrap() {
+  local slack_connected="$1"
+  if [[ "$slack_connected" == true ]]; then
+    compose_clean run --rm --no-deps --entrypoint node authority \
+      "$FOUNDER_MAIN" resume --state-dir /echo-clean/state
+    return
+  fi
+  compose_clean run --rm --no-deps --entrypoint node authority \
+    "$FOUNDER_MAIN" resume --state-dir /echo-clean/state \
+    < "$PRIVATE_DIR/slack-bot-token"
+}
+
+install_credentials() {
+  compose_clean run --rm --no-deps --entrypoint node authority \
+    "$FOUNDER_MAIN" credentials-install \
+    --state-dir /echo-clean/state \
+    --granola-credential-file /echo-clean/private/granola-credential-source \
+    --granola-owner-email-file /echo-clean/private/granola-owner-email \
+    --llm-credential-file /echo-clean/private/llm-credential-source
+}
+
+finalize() {
+  compose_clean run --rm --no-deps --entrypoint node authority \
+    "$FOUNDER_MAIN" finalize --state-dir /echo-clean/state
+}
+
+resume() {
+  require_host_prerequisites
+  require_prepared
+  if staged_candidate_present; then
+    fail 'a candidate release is staged; use update-clean-v1.sh status, then promote or roll it back before resuming accepted onboarding'
+  fi
+  ensure_image
+  local status_json step loops=0
+  while (( loops < 5 )); do
+    status_json="$(founder_status)"
+    step="$(next_step_from_status "$status_json")"
+    case "$step" in
+      run_bootstrap)
+        bootstrap
+        start_runtime
+        ;;
+      resume_bootstrap)
+        resume_bootstrap "$(status_boolean "$status_json" slack_connected)"
+        start_runtime
+        ;;
+      complete_founder_browser_login)
+        start_runtime
+        local founder_invitation="$DATA_DIR/state/onboarding/founder-person-invitation.json"
+        [[ -f "$founder_invitation" && ! -L "$founder_invitation" ]] || \
+          fail 'founder invitation is missing from the expected clean state path'
+        printf 'ACTION: Privately transfer %s to the founder machine, preserve mode 0600, then run echo-brain person login --invitation <transferred-absolute-path>.\n' "$founder_invitation"
+        print_status "$(founder_status)"
+        return
+        ;;
+      complete_founder_slack_link)
+        start_runtime
+        printf 'ACTION: On the founder machine, run echo-brain person slack-link and complete its one-time Slack code exchange.\n'
+        print_status "$(founder_status)"
+        return
+        ;;
+      install_provider_credentials)
+        compose_clean down
+        install_credentials
+        ;;
+      run_finalize)
+        compose_clean down
+        finalize
+        start_runtime
+        ;;
+      ready_to_start)
+        start_runtime
+        printf 'CANARY: create one new Granola note with a unique marker; approve its Slack card; then run echo-brain person records --limit 20 and echo-brain person records --query <marker>. Rerun onboard-clean-v1.sh resume, then onboard-clean-v1.sh status; terminal green requires one positive Layer 1 read and one positive Layer 2 search after the approved record and current generation.\n'
+        print_status "$(founder_status)"
+        return
+        ;;
+      complete)
+        start_runtime
+        status_json="$(founder_status)"
+        terminal_green "$status_json" || \
+          fail 'durable canary evidence is complete, but Authority is not running, healthy, and on the accepted image'
+        printf 'onboarding_complete=true\n'
+        print_status "$status_json"
+        return
+        ;;
+      recover_setup_plan)
+        fail 'clean founder state exists without a recoverable setup plan; stop and recover the clean state before retrying'
+        ;;
+      *) fail "unexpected clean founder next_step: $step" ;;
+    esac
+    ((loops += 1))
+  done
+  fail 'onboarding did not reach a human-action or ready stage after five durable transitions'
+}
+
+status() {
+  require_host_prerequisites
+  require_prepared
+  if staged_candidate_present; then
+    print_staged_candidate_status
+    return
+  fi
+  require_image_present
+  local status_json
+  status_json="$(founder_status)"
+  print_status "$status_json"
+}
+
+case "${1:-}" in
+  prepare) shift; prepare "$@" ;;
+  replace-rehearsal) shift; replace_rehearsal "$@" ;;
+  resume) [[ $# -eq 1 ]] || usage; resume ;;
+  status) [[ $# -eq 1 ]] || usage; status ;;
+  *) usage ;;
+esac

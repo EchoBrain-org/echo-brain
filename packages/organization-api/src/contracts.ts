@@ -5,70 +5,12 @@ import type {
 } from '@echo-brain/federation-protocol';
 import type {
   OrganizationAuthorityDescriptorV1,
-  OrganizationEnrollmentReceiptV1,
-  OrganizationEnrollmentRequestV1,
-  OrganizationInstallationAccessStateV1,
   OrganizationMembershipTypeV1,
-  OrganizationRecordEnvelopeAnyVersion,
-  OrganizationRecordReceiptV1,
 } from '@echo-brain/organization-protocol';
 
 export type OrganizationApiSha256Digest = Sha256Digest;
 export type OrganizationApiSignedIntegrityV1 = SignedIntegrity;
 export type OrganizationApiPageCursorV1 = string;
-
-export const MIN_ORGANIZATION_ACCESS_LEASE_REQUEST_TTL_MS = 1;
-export const MAX_ORGANIZATION_ACCESS_LEASE_REQUEST_TTL_MS = 30 * 60 * 1000;
-
-export interface OrganizationAccessLeaseRequestPayloadV1 {
-  schema_version: 1;
-  kind: 'echo-organization-access-lease-request';
-  request_id: string;
-  authority_id: string;
-  authority_key_id: OrganizationApiSha256Digest;
-  organization_id: string;
-  enrollment_id: string;
-  installation_id: string;
-  installation_key_id: OrganizationApiSha256Digest;
-  previous_access_state_sha256: OrganizationApiSha256Digest;
-  requested_at: string;
-}
-
-/**
- * An opt-in lease request that lets a current installation ask the Authority
- * for one bounded active lease lifetime. V1 intentionally has no TTL field,
- * so its canonical bytes and Authority-defined lifetime remain unchanged.
- */
-export interface OrganizationAccessLeaseRequestPayloadV2 {
-  schema_version: 2;
-  kind: 'echo-organization-access-lease-request';
-  request_id: string;
-  authority_id: string;
-  authority_key_id: OrganizationApiSha256Digest;
-  organization_id: string;
-  enrollment_id: string;
-  installation_id: string;
-  installation_key_id: OrganizationApiSha256Digest;
-  previous_access_state_sha256: OrganizationApiSha256Digest;
-  requested_active_lease_ttl_ms: number;
-  requested_at: string;
-}
-
-/**
- * An ordinary authenticated API command, not a durable organization trust
- * fact. The enrolled installation signs it with the key named by its receipt.
- */
-export interface OrganizationAccessLeaseRequestV1 extends OrganizationAccessLeaseRequestPayloadV1 {
-  integrity: OrganizationApiSignedIntegrityV1;
-}
-
-export interface OrganizationAccessLeaseRequestV2 extends OrganizationAccessLeaseRequestPayloadV2 {
-  integrity: OrganizationApiSignedIntegrityV1;
-}
-
-export type OrganizationAccessLeaseRequestAnyVersion =
-  | OrganizationAccessLeaseRequestV1
-  | OrganizationAccessLeaseRequestV2;
 
 export type OrganizationPermissionActionV1 = 'approve' | 'reject';
 
@@ -232,32 +174,6 @@ export interface OrganizationMemberReadablePermissionCheckDecisionV3 {
   authorization_audit_event_id: string | null; authorization_audit_entry_sha256: OrganizationApiSha256Digest | null; release_draft_sha256: OrganizationApiSha256Digest | null; approval_presentation_sha256: OrganizationApiSha256Digest | null; semantic_intent_sha256: OrganizationApiSha256Digest | null; message_presentation_sha256: OrganizationApiSha256Digest | null;
 }
 
-/** Legacy pilot transport envelope; intentionally unchanged in this phase. */
-export interface OrganizationPersonRecentDecisionsRequestV2 {
-  schema_version: 2;
-  kind: 'echo-organization-person-recent-decisions-request';
-  request_id: string;
-  authority_id: string;
-  organization_id: string;
-  subject_principal_id: string;
-  http_method: 'POST';
-  http_path: '/v2/recent-decisions';
-}
-
-/**
- * Session-authenticated Person read bodies carry only the asserted Person
- * subject plus operation-specific semantic input. The route, credential,
- * Authority, organization and membership stay outside the body.
- */
-export interface OrganizationPersonReviewerRecentDecisionsRequestV2 {
-  subject_principal_id: string;
-}
-
-export interface OrganizationPersonReadableSearchRequestV2 {
-  subject_principal_id: string;
-  query: string;
-}
-
 /** Exact, whole-source member valve selector. */
 export interface OrganizationPersonMemberExclusionSourceSelectorV2 {
   scope: 'source';
@@ -341,9 +257,22 @@ export type OrganizationPersonOidcBeginRequestV2 =
   | {
       kind: 'identity_bootstrap';
       login_grant: string;
+      /**
+       * Optional one-shot local receiver. The Authority holds this exact
+       * binding process-locally by OIDC state and posts the resulting session
+       * there only after a verified callback.
+       */
+      loopback_handoff?: {
+        url: string;
+        token: string;
+      };
     }
   | {
       kind: 'existing_identity_login';
+      loopback_handoff?: {
+        url: string;
+        token: string;
+      };
     };
 
 export interface OrganizationPersonOidcBeginResponseV2 {
@@ -417,126 +346,6 @@ export interface OrganizationPersonSlackLinkResultV2 {
   channel_id: string;
   linked_at: string;
   identity_link_created: boolean;
-}
-
-/**
- * The signed, target-free reviewer read. The caller supplies no target,
- * policy, limit, cursor, sort, query, or atom id, and query parameters are
- * invalid.
- */
-export interface OrganizationReviewerRecentDecisionsRequestPayloadV1 {
-  schema_version: 1;
-  kind: 'echo-organization-reviewer-recent-decisions-request';
-  request_id: string;
-  authority_id: string;
-  authority_key_id: OrganizationApiSha256Digest;
-  organization_id: string;
-  enrollment_id: string;
-  installation_id: string;
-  installation_key_id: OrganizationApiSha256Digest;
-  http_method: 'POST';
-  http_path: '/v1/reviewer-recent-decisions';
-  requested_at: string;
-}
-
-export interface OrganizationReviewerRecentDecisionsRequestV1
-  extends OrganizationReviewerRecentDecisionsRequestPayloadV1 {
-  integrity: OrganizationApiSignedIntegrityV1;
-}
-
-/**
- * One released item. It exposes no atom or record id, log position, total,
- * hidden count, cursor, scan depth, title, meeting id, participant, source,
- * evidence, subject, score, identity value, audit reference, or internal path
- * kind.
- */
-export interface OrganizationReviewerRecentDecisionItemV1 {
-  kind: OrganizationRecentDecisionKindV1;
-  text: string;
-}
-
-export interface OrganizationReviewerRecentDecisionsResponseV1 {
-  schema_version: 1;
-  items: readonly OrganizationReviewerRecentDecisionItemV1[];
-  policy_id: 'restricted-reviewer-v1';
-  witness: string;
-}
-
-/** The target-free, signed permission-aware lexical search operation. */
-export interface OrganizationReadableSearchRequestPayloadV1 {
-  schema_version: 1;
-  kind: 'echo-organization-readable-search-request';
-  request_id: string;
-  authority_id: string;
-  authority_key_id: OrganizationApiSha256Digest;
-  organization_id: string;
-  enrollment_id: string;
-  installation_id: string;
-  installation_key_id: OrganizationApiSha256Digest;
-  http_method: 'POST';
-  http_path: '/v1/readable-search';
-  query: string;
-  requested_at: string;
-}
-
-export interface OrganizationReadableSearchRequestV1
-  extends OrganizationReadableSearchRequestPayloadV1 {
-  integrity: OrganizationApiSignedIntegrityV1;
-}
-
-export interface OrganizationReadableSearchResultItemV1 {
-  kind: OrganizationRecentDecisionKindV1;
-  text: string;
-  policy_id: 'organization-member-readable-v1' | 'restricted-reviewer-v1';
-  witness: string;
-}
-
-export interface OrganizationReadableSearchResponseV1 {
-  schema_version: 1;
-  contract_id: 'permission-aware-readable-search-v1';
-  items: readonly OrganizationReadableSearchResultItemV1[];
-}
-
-export interface OrganizationRecentDecisionsRequestPayloadV1 {
-  schema_version: 1;
-  kind: 'echo-organization-recent-decisions-request';
-  request_id: string;
-  authority_id: string;
-  authority_key_id: OrganizationApiSha256Digest;
-  organization_id: string;
-  enrollment_id: string;
-  installation_id: string;
-  installation_key_id: OrganizationApiSha256Digest;
-  http_method: 'POST';
-  http_path: '/v1/recent-decisions';
-  requested_at: string;
-}
-
-/**
- * A fresh, exact-operation read authenticated by the enrolled installation.
- * The request is not an authorization receipt; the Authority rechecks current
- * membership and access immediately before releasing every response.
- */
-export interface OrganizationRecentDecisionsRequestV1 extends OrganizationRecentDecisionsRequestPayloadV1 {
-  integrity: OrganizationApiSignedIntegrityV1;
-}
-
-export type OrganizationRecentDecisionKindV1 =
-  'decision' | 'action' | 'rationale';
-
-export interface OrganizationRecentDecisionItemV1 {
-  atom_id: OrganizationApiSha256Digest;
-  kind: OrganizationRecentDecisionKindV1;
-  text: string;
-  record_hash: OrganizationApiSha256Digest;
-}
-
-/** The deliberately closed content surface for permission pilot slice 1. */
-export interface OrganizationRecentDecisionsResponseV1 {
-  schema_version: 1;
-  policy_id: 'pilot-member-readable-v1';
-  witness: 'Readable because your active membership is one of the two memberships bound to pilot-member-readable-v1 and the returned records carry the exact two-person sharing notice.';
-  items: OrganizationRecentDecisionItemV1[];
 }
 
 export interface OrganizationSlackLinkBeginRequestPayloadV1 {
@@ -641,46 +450,6 @@ export interface ProvisionedOrganizationMembershipV1 {
   revoked_at: string | null;
 }
 
-export interface IssueOrganizationEnrollmentGrantRequestV1 {
-  command_id: string;
-  enrollment_grant_sha256: OrganizationApiSha256Digest;
-  lifetime_seconds: number;
-}
-
-/** The caller retains the bearer bytes; the authority accepts and returns only their digest. */
-export interface IssuedOrganizationEnrollmentGrantV1 {
-  authority_id: string;
-  authority_pin_sha256: OrganizationApiSha256Digest;
-  organization_id: string;
-  principal_id: string;
-  membership_id: string;
-  enrollment_grant_sha256: OrganizationApiSha256Digest;
-  issued_at: string;
-  expires_at: string;
-}
-
-/**
- * Secret-bearing handoff from an organization administrator to one employee.
- * The embedded authority PIN is descriptive only; enrollment still requires
- * the same PIN from an independent trusted channel.
- */
-export interface OrganizationEnrollmentInvitationV1 {
-  schema_version: 1;
-  kind: 'echo-organization-enrollment-invitation';
-  status: 'pending_registration' | 'issued';
-  authority_base_url: string;
-  authority_id: string;
-  authority_pin_sha256: OrganizationApiSha256Digest;
-  authority_pin_verification: 'independent_pin_required';
-  organization_id: string;
-  membership_id: string;
-  command_id: string;
-  enrollment_grant_sha256: OrganizationApiSha256Digest;
-  enrollment_grant_base64url: string;
-  lifetime_seconds: number;
-  issued: IssuedOrganizationEnrollmentGrantV1 | null;
-}
-
 export interface OrganizationAdminOverviewCountsV1 {
   memberships: number;
   active_memberships: number;
@@ -722,44 +491,6 @@ export interface OrganizationMembershipPageV1 {
   next_cursor: OrganizationApiPageCursorV1 | null;
 }
 
-export interface OrganizationInstallationSummaryV1 {
-  organization_id: string;
-  principal_id: string;
-  membership_id: string;
-  enrollment_id: string;
-  installation_id: string;
-  installation_key_id: OrganizationApiSha256Digest;
-  status: 'active' | 'revoked';
-  enrolled_at: string;
-  revoked_at: string | null;
-  revocation_kind: 'membership_revoked' | 'installation_revoked' | null;
-  revocation_reason: string | null;
-  current_access_sequence: number;
-  current_access_status: 'active' | 'revoked';
-  current_access_valid_until: string | null;
-}
-
-export interface OrganizationInstallationPageV1 {
-  items: OrganizationInstallationSummaryV1[];
-  next_cursor: OrganizationApiPageCursorV1 | null;
-}
-
-export interface OrganizationEnrollmentGrantSummaryV1 {
-  organization_id: string;
-  principal_id: string;
-  membership_id: string;
-  enrollment_grant_sha256: OrganizationApiSha256Digest;
-  issued_at: string;
-  expires_at: string;
-  consumed_at: string | null;
-  status: 'pending' | 'consumed' | 'expired';
-}
-
-export interface OrganizationEnrollmentGrantPageV1 {
-  items: OrganizationEnrollmentGrantSummaryV1[];
-  next_cursor: OrganizationApiPageCursorV1 | null;
-}
-
 export interface OrganizationAuditEntrySummaryV1 {
   audit_sequence: number;
   occurred_at: string;
@@ -774,58 +505,8 @@ export interface OrganizationAuditPageV1 {
   next_cursor: OrganizationApiPageCursorV1 | null;
 }
 
-/** The enrollment grant is supplied only through the Authorization header. */
-export interface CompleteOrganizationEnrollmentRequestV1 {
-  enrollment_request: OrganizationEnrollmentRequestV1;
-}
-
-export interface CompletedOrganizationEnrollmentV1 {
-  enrollment_receipt: OrganizationEnrollmentReceiptV1;
-  access_state: OrganizationInstallationAccessStateV1;
-}
-
-export interface OrganizationAccessLeaseResponseV1 {
-  access_state: OrganizationInstallationAccessStateV1;
-}
-
 export interface RevokeOrganizationSubjectRequestV1 {
   reason: string;
-}
-
-export interface RevokedOrganizationInstallationV1 {
-  installation_id: string;
-  access_state: OrganizationInstallationAccessStateV1;
-}
-
-export interface RevokedOrganizationMembershipV1 {
-  membership: ProvisionedOrganizationMembershipV1;
-  installations: RevokedOrganizationInstallationV1[];
-}
-
-/**
- * The operator repair for an installation whose local access head is too far
- * behind for the one-skipped-head automatic recovery. The sequence is what the
- * operator read from the stranded installation; the authority cannot confirm
- * that the installation really holds it, and uses it only to establish that the
- * reported head is further behind than automatic recovery reaches.
- */
-export interface RecoverOrganizationInstallationAccessRequestV1 {
-  local_access_state_sequence: number;
-  reason: string;
-}
-
-/**
- * Deliberately flat. The repaired head reaches the installation through the
- * ordinary access-lease route, so the administrator response carries only what
- * the operator has to decide with: whether this call appended a head, which
- * sequence is current, and when it expires.
- */
-export interface RecoveredOrganizationInstallationAccessV1 {
-  installation_id: string;
-  changed: boolean;
-  local_access_state_sequence: number;
-  access_state_sequence: number;
-  valid_until: string;
 }
 
 export interface OrganizationApiErrorV1 {
@@ -834,29 +515,3 @@ export interface OrganizationApiErrorV1 {
     message: string;
   };
 }
-
-/** The signed envelope is the whole request; nothing else is submitted with it. */
-export interface SubmitOrganizationRecordEnvelopeRequestV1 {
-  record_envelope: OrganizationRecordEnvelopeAnyVersion;
-}
-
-/**
- * The authority's answer to one accepted submission. A replayed envelope
- * returns the stored original receipt unchanged, so the submitter cannot tell
- * a fresh append from a retry -- and does not need to.
- */
-export interface AcceptedOrganizationRecordV1 {
-  record_receipt: OrganizationRecordReceiptV1;
-}
-
-/**
- * Terminal ingest outcomes. A code outside this set is transient: the
- * submitter keeps its frozen envelope and retries on the next cycle rather
- * than writing a permanent-rejection slot.
- */
-export type OrganizationRecordRejectionCodeV1 =
-  | 'record_envelope_invalid'
-  | 'record_envelope_too_large'
-  | 'record_signature_invalid'
-  | 'record_authorization_invalid'
-  | 'record_idempotency_conflict';

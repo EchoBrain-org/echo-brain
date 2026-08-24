@@ -46,6 +46,15 @@ const detail: GranolaNoteDetail = {
   calendar_event: {
     start: { dateTime: "2026-07-15T15:30:00-07:00" },
   },
+  folder_membership: [
+    {
+      object: "folder",
+      id: "fol_4y6LduVdwSKC27",
+      name: "echo-restricted",
+      parent_folder_id: null,
+      space_id: "spa_4y6LduVdwSKC27",
+    },
+  ],
   web_url: "https://app.granola.ai/notes/note-1",
   transcript: [
     {
@@ -366,6 +375,19 @@ describe("Granola canonical meeting mapping", () => {
         { kind: "recording", state: "not_provided" },
       ]),
     });
+    expect(meeting.extensions).toMatchObject({
+      granola: {
+        folder_membership: [
+          {
+            object: "folder",
+            id: "fol_4y6LduVdwSKC27",
+            name: "echo-restricted",
+            parent_folder_id: null,
+            space_id: "spa_4y6LduVdwSKC27",
+          },
+        ],
+      },
+    });
     expect(meeting.provenance.canonical_revision).toMatch(
       /^sha256:[a-f0-9]{64}$/,
     );
@@ -374,6 +396,18 @@ describe("Granola canonical meeting mapping", () => {
     );
     expect(second.meetings[0]!.provenance.observed_at).not.toBe(
       meeting.provenance.observed_at,
+    );
+
+    const withoutFolderClient = new FakeClient(
+      [{ ...response, notes: [...response.notes] }],
+      new Map([[detail.id, { ...detail, folder_membership: [] }]]),
+    );
+    const withoutFolder = await new GranolaMeetingSourceAdapter(config, {
+      client: withoutFolderClient,
+      now: () => "2026-07-16T02:00:00.000Z",
+    }).pull({ limit: 1 });
+    expect(withoutFolder.meetings[0]!.provenance.canonical_revision).not.toBe(
+      meeting.provenance.canonical_revision,
     );
   });
 

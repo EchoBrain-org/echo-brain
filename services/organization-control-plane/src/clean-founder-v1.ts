@@ -12,3 +12,4 @@ export {
   type CleanPersonSlackApprovalActivateCliDependencies,
   type CleanPersonSlackApprovalActivateCliIo,
 } from "./composition/clean-person-slack-approval-activate-cli.js";
+export { SLACK_ORGANIZATION_TOOL_REQUIRED_SCOPES } from "./application/contracts.js";

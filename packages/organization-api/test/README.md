@@ -4,11 +4,6 @@ The suite verifies exact request shape, canonical installation signing,
 signature verification, and request hashing. Server transport behavior is
 tested with the authority service.
 
-The recent-decisions contract cases pin the signed method/path operation and
-the deliberately closed pilot response. They reject caller-selected query
-controls, hidden derived fields, unknown atom kinds, repeated atoms, and both
-the ten-item and 60 KiB response bounds.
-
 The record ingest suite covers the dedicated ingest path, the record-specific
 raw body limit against the unchanged shared limit, both event types through the
 submission DTO, the accepted-record response, and the terminal/retryable split

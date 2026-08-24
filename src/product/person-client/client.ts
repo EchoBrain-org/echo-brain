@@ -7,15 +7,14 @@ import {
 } from "@echo-brain/organization-api";
 import {
   PersonAuthorityClient,
+  PersonAuthorityClientError,
+  type CleanEmployeeRosterV1,
   type CleanPersonRecordListV1,
   type CleanPersonRecordSearchV1,
 } from "./authority-client.js";
 import {
   createPersonMemberExclusionChangeRequest,
   createPersonMemberExclusionListRequest,
-  createPersonReadableSearchRequest,
-  createPersonRecentDecisionsRequest,
-  createPersonReviewerRecentDecisionsRequest,
   createPersonSlackLinkBeginRequest,
   createPersonSlackLinkCompleteRequest,
 } from "./requests.js";
@@ -24,6 +23,15 @@ import {
   PersonSessionStore,
   type StoredPersonClientSessionV1,
 } from "./session-store.js";
+import {
+  preflightPersonOnboardingInvitationOutput,
+  writePersonOnboardingInvitation,
+} from "./onboarding-invitation.js";
+
+interface PersonOidcLoopbackHandoff {
+  readonly url: string;
+  readonly token: string;
+}
 
 export interface PersonClientOptions {
   readonly home_directory: string;
@@ -118,11 +126,26 @@ export class PersonClient {
     return `${prefix}_${this.randomUuid()}`;
   }
 
-  async beginLogin(authorityOrigin: string, loginGrant?: string) {
+  async beginLogin(
+    authorityOrigin: string,
+    loginGrant?: string,
+    loopbackHandoff?: PersonOidcLoopbackHandoff,
+  ) {
     return await this.authority(authorityOrigin).beginOidcLogin(
       loginGrant === undefined
-        ? { kind: "existing_identity_login" }
-        : { kind: "identity_bootstrap", login_grant: loginGrant },
+        ? {
+            kind: "existing_identity_login",
+            ...(loopbackHandoff === undefined
+              ? {}
+              : { loopback_handoff: loopbackHandoff }),
+          }
+        : {
+            kind: "identity_bootstrap",
+            login_grant: loginGrant,
+            ...(loopbackHandoff === undefined
+              ? {}
+              : { loopback_handoff: loopbackHandoff }),
+          },
     );
   }
 
@@ -186,35 +209,22 @@ export class PersonClient {
       await this.authority(claimed.authority_origin).logout(
         claimed.session.access_token,
       );
+    } catch (error) {
+      // A membership revocation has already invalidated this credential. The
+      // Authority's explicit 401 is therefore a successful terminal result
+      // for local sign-out. Transport and server failures remain visible.
+      if (
+        !(
+          error instanceof PersonAuthorityClientError &&
+          error.code === "unauthorized" &&
+          error.status === 401
+        )
+      ) {
+        throw error;
+      }
     } finally {
       this.store.finishLogout();
     }
-  }
-
-  async recentDecisions() {
-    const stored = await this.accessSession();
-    return await this.authority(stored.authority_origin).recentDecisions(
-      createPersonRecentDecisionsRequest(stored, this.requestId("rdr")),
-      stored.session.access_token,
-    );
-  }
-
-  async reviewerRecentDecisions() {
-    const stored = await this.accessSession();
-    return await this.authority(
-      stored.authority_origin,
-    ).reviewerRecentDecisions(
-      createPersonReviewerRecentDecisionsRequest(stored),
-      stored.session.access_token,
-    );
-  }
-
-  async readableSearch(query: string) {
-    const stored = await this.accessSession();
-    return await this.authority(stored.authority_origin).readableSearch(
-      createPersonReadableSearchRequest(stored, query),
-      stored.session.access_token,
-    );
   }
 
   async records(
@@ -296,5 +306,86 @@ export class PersonClient {
       createPersonSlackLinkCompleteRequest(this.requestId("psc"), input),
       stored.session.access_token,
     );
+  }
+
+  async employees(): Promise<CleanEmployeeRosterV1> {
+    const stored = await this.accessSession();
+    return await this.authority(stored.authority_origin).employees(
+      stored.session.access_token,
+    );
+  }
+
+  async inviteEmployee(input: {
+    name: string;
+    email: string;
+    output_path: string;
+  }): Promise<{ output_path: string; expires_at: string }> {
+    const outputPath = preflightPersonOnboardingInvitationOutput(input.output_path);
+    const stored = await this.accessSession();
+    return await this.issueEmployeeInvitation(
+      outputPath,
+      () =>
+        this.authority(stored.authority_origin).inviteEmployee(
+          { name: input.name, email: input.email },
+          stored.session.access_token,
+        ),
+      stored.authority_origin,
+    );
+  }
+
+  async reissueEmployee(input: {
+    email: string;
+    output_path: string;
+  }): Promise<{ output_path: string; expires_at: string }> {
+    const outputPath = preflightPersonOnboardingInvitationOutput(input.output_path);
+    const stored = await this.accessSession();
+    try {
+      return await this.issueEmployeeInvitation(
+        outputPath,
+        () =>
+          this.authority(stored.authority_origin).reissueEmployee(
+            { email: input.email },
+            stored.session.access_token,
+          ),
+        stored.authority_origin,
+      );
+    } catch (error) {
+      if (
+        error instanceof PersonAuthorityClientError &&
+        error.code === "conflict" &&
+        error.status === 409
+      ) {
+        throw new Error(
+          "Employee identity onboarding is already complete; use person login with the Authority URL on the employee machine.",
+        );
+      }
+      throw error;
+    }
+  }
+
+  async revokeEmployee(email: string): Promise<void> {
+    const stored = await this.accessSession();
+    await this.authority(stored.authority_origin).revokeEmployee(
+      { email },
+      stored.session.access_token,
+    );
+  }
+
+  private async issueEmployeeInvitation(
+    outputPath: string,
+    issue: () => Promise<{ login_grant: string; expires_at: string }>,
+    authorityOrigin: string,
+  ): Promise<{ output_path: string; expires_at: string }> {
+    const issued = await issue();
+    // A different local writer can win after preflight. O_EXCL leaves its
+    // file untouched; the owner can safely reissue the one-time grant.
+    writePersonOnboardingInvitation(outputPath, {
+      schema_version: 1,
+      kind: "echo-person-onboarding-invitation",
+      authority_url: authorityOrigin,
+      login_grant: issued.login_grant,
+      expires_at: issued.expires_at,
+    });
+    return Object.freeze({ output_path: outputPath, expires_at: issued.expires_at });
   }
 }
