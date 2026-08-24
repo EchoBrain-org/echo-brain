@@ -2,6 +2,8 @@ export {
   PersonAuthorityClient,
   PersonAuthorityClientError,
   type PersonAuthorityClientOptions,
+  type CleanPersonAskCitationV1,
+  type CleanPersonAskV1,
   type CleanPersonRecordListItemV1,
   type CleanPersonRecordListV1,
   type CleanPersonRecordSearchItemV1,

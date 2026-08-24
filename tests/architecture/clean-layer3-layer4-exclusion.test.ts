@@ -1,21 +1,33 @@
-import { readdirSync, readFileSync, statSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { join, posix, relative, resolve } from "node:path";
 import ts from "typescript";
 import { describe, expect, it } from "vitest";
 
 const REPO = resolve(import.meta.dirname, "../..");
-const LAYER3_ROOTS = [
-  "services/organization-authority/src/application",
-  "services/organization-authority/src/presentation",
-  // These are the actual composition roots that bind the L3 HTTP applications
-  // to their release implementations. Presentation uses their interfaces only.
-  "services/organization-authority/src/composition/clean-person-runtime.ts",
+// These are the actual Layer 1 through Layer 3 read/search modules. Deliberately
+// exclude the Person runtime composition root: it may compose Layer 4, but must
+// not make the lower-layer read/search closures model-aware.
+const LAYER1_3_READ_SEARCH_ROOTS = [
+  "services/organization-record/src/retrieve",
+  "services/organization-retrieval/src",
+  "services/organization-authority/src/application/readable-search-authorization-fence.ts",
   "services/organization-authority/src/composition/clean-person-record-read-route.ts",
   "services/organization-authority/src/composition/clean-person-record-search-route.ts",
-  "services/organization-retrieval/src",
+  "services/organization-authority/src/presentation/clean-person-record-read-http-application.ts",
+  "services/organization-authority/src/presentation/clean-person-record-search-http-application.ts",
 ] as const;
+const ANSWER_COMPOSITION_ROOT =
+  "services/organization-authority/src/answer-composition";
+const ANSWER_COMPOSITION_ROUTE =
+  "services/organization-authority/src/composition/clean-person-answer-route.ts";
+const ANSWER_COMPOSITION_AUDIT_WRITER =
+  "services/organization-authority/src/adapters/persistence/sqlite/clean-person-answer-composition-audit-v1.ts";
 const MODEL_IMPORT =
   /(?:anthropic|openai|openrouter|ollama|processing\/adapters\/decision-processors\/llm)/;
+const DIRECT_LOWER_LAYER_IMPORT =
+  /(?:@echo-brain\/organization-(?:record|retrieval)|better-sqlite3|(?:^|\/)(?:record|retrieval|storage)(?:\/|$))/;
+const EXCLUDED_LAYER4_PATH =
+  /(?:^|\/)(?:agents?|tools?|memory|iterations?|vector|hybrid|rerank(?:ing)?|streaming)(?:[\/_\-.]|$)/i;
 
 function files(root: string): string[] {
   const absolute = join(REPO, root);
@@ -28,6 +40,10 @@ function files(root: string): string[] {
         ? [repositoryPath]
         : [];
   });
+}
+
+function filesIfPresent(root: string): string[] {
+  return existsSync(join(REPO, root)) ? files(root) : [];
 }
 
 function source(path: string): string {
@@ -128,7 +144,7 @@ function runtimeModuleReferences(
 }
 
 function reachableModelEdges(
-  roots: readonly string[] = LAYER3_ROOTS,
+  roots: readonly string[] = LAYER1_3_READ_SEARCH_ROOTS,
 ): readonly string[] {
   const pending = roots.flatMap((root) =>
     root.endsWith(".ts") ? [root] : files(root),
@@ -161,8 +177,25 @@ function reachableModelEdges(
   return edges.sort();
 }
 
-describe("clean Layer 3 excludes Layer 4 execution", () => {
-  it("keeps every Layer 3-reachable import path independent from LLM processors and model SDKs", () => {
+function directLayer4LowerLayerEdges(): readonly string[] {
+  return [...filesIfPresent(ANSWER_COMPOSITION_ROOT), ANSWER_COMPOSITION_ROUTE]
+    .flatMap((importer) =>
+      runtimeModuleReferences(importer).flatMap(({ specifier }) => {
+        if (specifier === undefined) return [`${importer} -> non-static import`];
+        const resolved = specifier.startsWith(".")
+          ? resolveRelative(importer, specifier)
+          : undefined;
+        return DIRECT_LOWER_LAYER_IMPORT.test(specifier) ||
+            (resolved !== undefined && DIRECT_LOWER_LAYER_IMPORT.test(resolved))
+          ? [`${importer} -> ${specifier}`]
+          : [];
+      }),
+    )
+    .sort();
+}
+
+describe("clean Layer 3 and lean Layer 4 boundaries", () => {
+  it("keeps every Layer 1 through Layer 3 read/search import path independent from LLM processors and model SDKs", () => {
     expect(reachableModelEdges()).toEqual([]);
   });
 
@@ -192,7 +225,7 @@ describe("clean Layer 3 excludes Layer 4 execution", () => {
     ]);
   });
 
-  it("has no production TypeScript answer-composition writer or Layer 4 endpoint", () => {
+  it("allows answer_composition only in the declared Layer 4 source root and one audit writer", () => {
     const production = [
       "services/organization-authority/src",
       "services/organization-control-plane/src",
@@ -204,14 +237,24 @@ describe("clean Layer 3 excludes Layer 4 execution", () => {
       "src/product/person-client",
     ].flatMap(files);
     expect(
-      production.filter((path) => /answer_composition/.test(source(path))),
-    ).toEqual([]);
-    expect(
-      production.filter((path) =>
-        /(?:layer[-_ ]?4|answer[-_ ]?composition).*(?:route|endpoint|handler)/i.test(
-          source(path),
-        ),
+      production.filter(
+        (path) =>
+          /answer_composition/.test(source(path)) &&
+          !path.startsWith(`${ANSWER_COMPOSITION_ROOT}/`) &&
+          path !== ANSWER_COMPOSITION_AUDIT_WRITER,
       ),
+    ).toEqual([]);
+  });
+
+  it("keeps Layer 4 from directly importing Layer 1, Layer 2, or storage", () => {
+    expect(directLayer4LowerLayerEdges()).toEqual([]);
+  });
+
+  it("keeps excluded agent, tool, memory, iterative retrieval, hybrid retrieval, reranking, and streaming paths absent from Layer 4", () => {
+    const layer4 = filesIfPresent(ANSWER_COMPOSITION_ROOT);
+    expect(layer4.filter((path) => EXCLUDED_LAYER4_PATH.test(path))).toEqual([]);
+    expect(
+      layer4.filter((path) => /(?:ReadableStream|text\/event-stream|stream\s*:\s*true)/.test(source(path))),
     ).toEqual([]);
   });
 

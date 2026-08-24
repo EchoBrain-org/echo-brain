@@ -28,6 +28,7 @@ separately.
 | [ADR-0004](ADR-0004-founder-authority-clean-state-reset.md)  | Founder Authority clean-state reset          | superseded |
 | [ADR-0005](ADR-0005-person-content-policy-v2-lineage.md)     | Person content-policy v2 lineage             | superseded |
 | [ADR-0006](ADR-0006-permission-aware-clean-v1-completion.md) | Permission-aware clean V1 completion         | accepted   |
+| [ADR-0007](ADR-0007-lean-layer-4-answer-composition-v1.md)   | Lean Layer 4 answer composition V1            | accepted   |
 
 Other decisions remain embedded in `docs/product/` design contracts and
 architecture pages. Extract them incrementally when the affected boundary

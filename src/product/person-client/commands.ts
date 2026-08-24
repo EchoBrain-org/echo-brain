@@ -30,6 +30,7 @@ export interface PersonClientCliDependencies {
 const OPTIONS = {
   "authority-url": { type: "string" },
   invitation: { type: "string" },
+  question: { type: "string" },
   query: { type: "string" },
   "source-adapter-id": { type: "string" },
   "source-instance-id": { type: "string" },
@@ -53,6 +54,10 @@ const RULES: Readonly<
   status: {},
   "session-refresh": {},
   logout: {},
+  ask: {
+    accepts: ["question"],
+    requires: ["question"],
+  },
   records: { accepts: ["limit", "query"] },
   exclusions: {
     accepts: ["source-adapter-id", "source-instance-id"],
@@ -98,6 +103,7 @@ Commands:
   login       Sign in with an invitation or existing Authority identity.
   status      Show installed version and sign-in state.
   logout      Remove the local session.
+  ask         Ask a question over records you may read.
   records     List records or search the current generation.
   employee    List, invite, reissue, or revoke an employee.
   slack-link  Link the signed-in founder to Slack.
@@ -115,6 +121,10 @@ Shows the installed version, sign-in state, membership type, and Authority origi
   logout: `usage: echo-brain person logout
 
 Removes the local session. A revoked session is also removed locally.
+`,
+  ask: `usage: echo-brain person ask --question <text>
+
+Ask one bounded question. ECHO searches only records you may read and returns a cited answer.
 `,
   records: `usage: echo-brain person records [--limit <1-100>] [--query <text>]
 
@@ -399,6 +409,12 @@ export async function runPersonClientCli(
       case "logout":
         await client.logout();
         print(stdout, { ok: true });
+        break;
+      case "ask":
+        print(stdout, {
+          ok: true,
+          result: await client.ask(requiredText(values, "question")),
+        });
         break;
       case "records": {
         const query = values.query;

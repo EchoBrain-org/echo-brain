@@ -39,10 +39,12 @@ import {
 
 const DEFAULT_TIMEOUT_MS = 15_000;
 const SLACK_TIMEOUT_MS = 75_000;
+const ASK_TIMEOUT_MS = 75_000;
 const MAXIMUM_ORDINARY_RESPONSE_BYTES = 64 * 1024;
 const MAXIMUM_RECORDS_RESPONSE_BYTES = 512 * 1024;
 const CLEAN_PERSON_RECORDS_PATH_V1 = "/v1/person/records";
 const CLEAN_PERSON_EMPLOYEES_PATH_V1 = "/v1/person/employees";
+const CLEAN_PERSON_ASK_PATH_V1 = "/v1/person/ask";
 
 export interface CleanEmployeeInvitationV1 {
   readonly login_grant: string;
@@ -91,6 +93,26 @@ export interface CleanPersonRecordSearchItemV1 {
   readonly record_sha256: `sha256:${string}`;
   readonly kind: "decision" | "action" | "rationale";
   readonly text: string;
+  readonly policy_id:
+    | "organization-member-readable-person-v2"
+    | "restricted-reviewer-person-v2";
+}
+
+export interface CleanPersonAskV1 {
+  readonly schema_version: 1;
+  readonly kind: "echo-clean-person-answer-v1";
+  readonly generation_id: `sha256:${string}`;
+  readonly record_head: {
+    readonly position: number;
+    readonly record_sha256: `sha256:${string}` | null;
+  };
+  readonly answer: string;
+  readonly citations: readonly CleanPersonAskCitationV1[];
+}
+
+export interface CleanPersonAskCitationV1 {
+  readonly atom_id: `sha256:${string}`;
+  readonly record_sha256: `sha256:${string}`;
   readonly policy_id:
     | "organization-member-readable-person-v2"
     | "restricted-reviewer-person-v2";
@@ -333,6 +355,35 @@ function validateCleanPersonRecordSearchRequest(value: unknown): {
   });
 }
 
+function validateCleanPersonAskRequest(value: unknown): {
+  readonly question: string;
+} {
+  const request = asPlainRecord(value, "ask request is invalid");
+  exactKeys(request, ["question"], "ask request is invalid");
+  const questionTerms =
+    typeof request.question === "string"
+      ? new Set(
+          (request.question.match(/[\p{L}\p{N}]+/gu) ?? []).map((term) =>
+            term.toLowerCase().normalize("NFC"),
+          ),
+        )
+      : new Set<string>();
+  if (
+    typeof request.question !== "string" ||
+    request.question.length === 0 ||
+    request.question !== request.question.normalize("NFC") ||
+    request.question.trim() !== request.question ||
+    /[\p{Cc}\p{Zl}\p{Zp}]/u.test(request.question) ||
+    [...request.question].length > 240 ||
+    questionTerms.size < 1 ||
+    questionTerms.size > 16 ||
+    [...questionTerms].some((term) => Buffer.byteLength(term, "utf8") > 64)
+  ) {
+    throw new Error("ask request is invalid");
+  }
+  return Object.freeze({ question: request.question });
+}
+
 function validateCleanPersonRecordSearch(
   value: unknown,
 ): CleanPersonRecordSearchV1 {
@@ -404,6 +455,85 @@ function validateCleanPersonRecordSearch(
       record_sha256: recordHead.record_sha256 as `sha256:${string}` | null,
     }),
     items: Object.freeze(items),
+  });
+}
+
+function validateCleanPersonAsk(value: unknown): CleanPersonAskV1 {
+  const response = asPlainRecord(value, "ask response is invalid");
+  exactKeys(
+    response,
+    [
+      "schema_version",
+      "kind",
+      "generation_id",
+      "record_head",
+      "answer",
+      "citations",
+    ],
+    "ask response is invalid",
+  );
+  if (
+    response.schema_version !== 1 ||
+    response.kind !== "echo-clean-person-answer-v1" ||
+    typeof response.generation_id !== "string" ||
+    !/^sha256:[a-f0-9]{64}$/.test(response.generation_id) ||
+    typeof response.answer !== "string" ||
+    response.answer.length === 0 ||
+    response.answer.trim() !== response.answer ||
+    [...response.answer].length > 12_000 ||
+    !Array.isArray(response.citations) ||
+    response.citations.length > 16
+  ) {
+    throw new Error("ask response is invalid");
+  }
+  const recordHead = asPlainRecord(response.record_head, "ask response is invalid");
+  exactKeys(recordHead, ["position", "record_sha256"], "ask response is invalid");
+  if (
+    !Number.isSafeInteger(recordHead.position) ||
+    (recordHead.position as number) < 0 ||
+    (((recordHead.position as number) === 0) !== (recordHead.record_sha256 === null)) ||
+    (recordHead.record_sha256 !== null &&
+      (typeof recordHead.record_sha256 !== "string" ||
+        !/^sha256:[a-f0-9]{64}$/.test(recordHead.record_sha256)))
+  ) {
+    throw new Error("ask response is invalid");
+  }
+  const seenAtomIds = new Set<string>();
+  const citations = response.citations.map((value) => {
+    const citation = asPlainRecord(value, "ask citation is invalid");
+    exactKeys(
+      citation,
+      ["atom_id", "record_sha256", "policy_id"],
+      "ask citation is invalid",
+    );
+    if (
+      typeof citation.atom_id !== "string" ||
+      !/^sha256:[a-f0-9]{64}$/.test(citation.atom_id) ||
+      seenAtomIds.has(citation.atom_id) ||
+      typeof citation.record_sha256 !== "string" ||
+      !/^sha256:[a-f0-9]{64}$/.test(citation.record_sha256) ||
+      (citation.policy_id !== "organization-member-readable-person-v2" &&
+        citation.policy_id !== "restricted-reviewer-person-v2")
+    ) {
+      throw new Error("ask citation is invalid");
+    }
+    seenAtomIds.add(citation.atom_id);
+    return Object.freeze({
+      atom_id: citation.atom_id as `sha256:${string}`,
+      record_sha256: citation.record_sha256 as `sha256:${string}`,
+      policy_id: citation.policy_id,
+    }) as CleanPersonAskCitationV1;
+  });
+  return Object.freeze({
+    schema_version: 1,
+    kind: "echo-clean-person-answer-v1",
+    generation_id: response.generation_id as `sha256:${string}`,
+    record_head: Object.freeze({
+      position: recordHead.position as number,
+      record_sha256: recordHead.record_sha256 as `sha256:${string}` | null,
+    }),
+    answer: response.answer,
+    citations: Object.freeze(citations),
   });
 }
 
@@ -825,6 +955,18 @@ export class PersonAuthorityClient {
       validate_response: validateCleanPersonRecordSearch,
       access_token: accessToken,
       maximum_response_bytes: MAXIMUM_ORDINARY_RESPONSE_BYTES,
+    });
+  }
+
+  ask(accessToken: string, question: string): Promise<CleanPersonAskV1> {
+    return this.json({
+      path: CLEAN_PERSON_ASK_PATH_V1,
+      body: { question },
+      validate_request: validateCleanPersonAskRequest,
+      validate_response: validateCleanPersonAsk,
+      access_token: accessToken,
+      maximum_response_bytes: MAXIMUM_ORDINARY_RESPONSE_BYTES,
+      timeout_ms: ASK_TIMEOUT_MS,
     });
   }
 

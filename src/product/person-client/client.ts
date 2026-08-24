@@ -9,6 +9,7 @@ import {
   PersonAuthorityClient,
   PersonAuthorityClientError,
   type CleanEmployeeRosterV1,
+  type CleanPersonAskV1,
   type CleanPersonRecordListV1,
   type CleanPersonRecordSearchV1,
 } from "./authority-client.js";
@@ -242,6 +243,14 @@ export class PersonClient {
     return await this.authority(stored.authority_origin).records(
       stored.session.access_token,
       limit,
+    );
+  }
+
+  async ask(question: string): Promise<CleanPersonAskV1> {
+    const stored = await this.accessSession();
+    return await this.authority(stored.authority_origin).ask(
+      stored.session.access_token,
+      question,
     );
   }
 

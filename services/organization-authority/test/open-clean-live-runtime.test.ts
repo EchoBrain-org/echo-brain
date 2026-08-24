@@ -79,6 +79,10 @@ import type {
   MeetingDocument,
   MeetingSourceAdapter,
 } from "../src/processing/core/index.js";
+import type {
+  Layer4StructuredGenerationInput,
+  Layer4StructuredOutputPort,
+} from "../src/answer-composition/lean-answer-composition.js";
 
 const roots: string[] = [];
 
@@ -592,6 +596,7 @@ async function activeFixture(
     readonly text: string;
     readonly folder_membership?: readonly { readonly name: string }[];
   }[],
+  answerModel?: Layer4StructuredOutputPort,
 ) {
   const parent = root();
   const initialized = initializeCleanResetState({
@@ -727,7 +732,16 @@ async function activeFixture(
     on_worker_error: (error) => errors.push(error),
   };
   const runtime = await openCleanLiveRuntime(config, {
-    ...(person === undefined ? {} : { person: { oidc_provider: person } }),
+    ...(person === undefined && answerModel === undefined
+      ? {}
+      : {
+          person: {
+            ...(person === undefined ? {} : { oidc_provider: person }),
+            ...(answerModel === undefined
+              ? {}
+              : { answer_model: answerModel }),
+          },
+        }),
     live_adapters: {
       source,
       processor: fakeProcessor(processorIdentity),
@@ -1417,6 +1431,33 @@ describe("open clean live runtime", () => {
 
   it("processes an echo-restricted Granola folder record through approval while an active employee receives only member-readable content", async () => {
     const provider = new OwnerAndEmployeeOidcProvider();
+    const observedAnswerContexts: string[][] = [];
+    const answerModel: Layer4StructuredOutputPort = {
+      async generate(input: Layer4StructuredGenerationInput): Promise<unknown> {
+        const schema = input.schema as {
+          readonly required?: readonly string[];
+        };
+        if (schema.required?.includes("queries") === true) {
+          return {
+            queries: ["MemberVisibleC186576 RestrictedOnlyC186576"],
+          };
+        }
+        const prompt = JSON.parse(input.user_prompt) as {
+          readonly sources: readonly {
+            readonly citation_id: string;
+            readonly text: string;
+          }[];
+        };
+        observedAnswerContexts.push(
+          prompt.sources.map((source) => source.text),
+        );
+        return {
+          status: "answered",
+          answer: prompt.sources.map((source) => source.text).join(" "),
+          citations: prompt.sources.map((source) => source.citation_id),
+        };
+      },
+    };
     const fixture = await activeFixture("approve", provider, [
       {
         title: "Member record",
@@ -1429,7 +1470,7 @@ describe("open clean live runtime", () => {
         text: "RestrictedOnlyC186576",
         folder_membership: [{ name: "echo-restricted" }],
       },
-    ]);
+    ], answerModel);
     const authority = openAuthorityDatabase(
       join(fixture.initialized.state_directory, "authority.sqlite"),
       { fileMustExist: true },
@@ -1540,6 +1581,27 @@ describe("open clean live runtime", () => {
       expect(employeeRestrictedSearch.status).toBe(200);
       expect((await responseJson(employeeRestrictedSearch)).items).toEqual([]);
 
+      const employeeAnswer = await fetch(`${origin}/v1/person/ask`, {
+        method: "POST",
+        headers: {
+          authorization: `Bearer ${employeeAccess}`,
+          "content-type": "application/json",
+        },
+        body: JSON.stringify({ question: "What was decided in these notes?" }),
+      });
+      expect(employeeAnswer.status).toBe(200);
+      expect(await responseJson(employeeAnswer)).toMatchObject({
+        answer: expect.stringContaining("MemberVisibleC186576"),
+        citations: [
+          expect.objectContaining({
+            policy_id: ORGANIZATION_MEMBER_READABLE_PERSON_POLICY_ID_V2,
+          }),
+        ],
+      });
+      expect(observedAnswerContexts[0]).toEqual([
+        expect.stringContaining("MemberVisibleC186576"),
+      ]);
+
       provider.email = "founder@example.com";
       const ownerList = await fetch(`${origin}/v1/person/records`, {
         headers: { authorization: `Bearer ${ownerAccess}` },
@@ -1556,6 +1618,22 @@ describe("open clean live runtime", () => {
       });
       expect(ownerRestrictedSearch.status).toBe(200);
       expect((await responseJson(ownerRestrictedSearch)).items).toHaveLength(1);
+      const ownerAnswer = await fetch(`${origin}/v1/person/ask`, {
+        method: "POST",
+        headers: {
+          authorization: `Bearer ${ownerAccess}`,
+          "content-type": "application/json",
+        },
+        body: JSON.stringify({ question: "What was decided in these notes?" }),
+      });
+      expect(ownerAnswer.status).toBe(200);
+      expect((await responseJson(ownerAnswer)).citations).toHaveLength(2);
+      expect(observedAnswerContexts[1]).toEqual(
+        expect.arrayContaining([
+          expect.stringContaining("MemberVisibleC186576"),
+          expect.stringContaining("RestrictedOnlyC186576"),
+        ]),
+      );
     } finally {
       record.close();
       authority.close();

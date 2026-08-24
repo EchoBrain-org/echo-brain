@@ -1,9 +1,4 @@
-import {
-  chmodSync,
-  mkdtempSync,
-  realpathSync,
-  rmSync,
-} from "node:fs";
+import { chmodSync, mkdtempSync, realpathSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -145,9 +140,8 @@ function realGenerationInput(
     exact_head,
     retrieval_contract_sha256: RETRIEVAL_CONTRACT,
     organization_member_policy_contract_sha256: sha256Digest("member-policy"),
-    restricted_reviewer_policy_contract_sha256: sha256Digest(
-      "restricted-policy",
-    ),
+    restricted_reviewer_policy_contract_sha256:
+      sha256Digest("restricted-policy"),
     analyzer: {
       analyzer_contract_sha256: sha256Digest("analyzer-contract"),
       analyzer_source_sha256: sha256Digest("analyzer-source"),
@@ -166,8 +160,7 @@ function policyAtom(input: {
   readonly id: "member" | "restricted";
   readonly policy_id: CleanReadableSearchAtomV1["policy_id"];
 }): CleanReadableSearchAtomV1 {
-  const reviewer =
-    input.policy_id === RESTRICTED_REVIEWER_PERSON_POLICY_ID_V2;
+  const reviewer = input.policy_id === RESTRICTED_REVIEWER_PERSON_POLICY_ID_V2;
   return {
     authority_id: "oau_clean",
     organization_id: "org_clean",
@@ -394,7 +387,8 @@ describe("clean Person Layer 2 route", () => {
         retrieval_contract_sha256: RETRIEVAL_CONTRACT,
         sessions: {
           authenticateAccess: ({ access_token }) => {
-            const current = authorizations[access_token as keyof typeof authorizations];
+            const current =
+              authorizations[access_token as keyof typeof authorizations];
             if (current === undefined) throw new Error("unexpected bearer");
             return current;
           },
@@ -490,6 +484,238 @@ describe("clean Person Layer 2 route", () => {
           )
           .get(),
       ).toEqual({ count: 0 });
+    } finally {
+      value.record.close();
+      value.authority.close();
+    }
+  });
+
+  it("runs a bounded Layer 4 plan under one reader and snapshot, then releases one aggregate audit", () => {
+    const value = setup();
+    const item = (
+      name: string,
+    ): {
+      readonly atom_id: Sha256Digest;
+      readonly record_position: number;
+      readonly record_sha256: Sha256Digest;
+      readonly envelope_sha256: Sha256Digest;
+      readonly item_kind: "decision";
+      readonly text: string;
+      readonly policy_id: "organization-member-readable-person-v2";
+    } => ({
+      atom_id: digest(`atom-${name}`),
+      record_position: 1,
+      record_sha256: digest(`record-${name}`),
+      envelope_sha256: digest(`envelope-${name}`),
+      item_kind: "decision",
+      text: `evidence ${name}`,
+      policy_id: "organization-member-readable-person-v2",
+    });
+    const answers = {
+      original: [item("original"), item("shared")],
+      focused: [item("focused"), item("shared")],
+      third: [item("third")],
+    } as const;
+    const search = vi.fn((input: { readonly query: string }) => ({
+      generation_id: digest("generation"),
+      exact_head: {
+        authority_id: "oau_clean",
+        organization_id: "org_clean",
+        state_lineage_id: "lineage_clean",
+        position: 0,
+        record_sha256: null,
+      },
+      items: answers[input.query as keyof typeof answers],
+    }));
+    let authenticateCount = 0;
+    try {
+      const route = createCleanPersonRecordSearchRouteV1({
+        state_directory: value.state_directory,
+        authority_id: "oau_clean",
+        organization_id: "org_clean",
+        state_lineage_id: "lineage_clean",
+        retrieval_contract_sha256: RETRIEVAL_CONTRACT,
+        sessions: {
+          authenticateAccess: () => {
+            authenticateCount += 1;
+            return authorization();
+          },
+        },
+        authority: value.authority,
+        record: value.record,
+        audit: new SqliteCleanPersonRecordReadAuditV1(value.authority),
+        search_generation: search,
+      });
+      const batch = route.searchBatch({
+        access_token: "bearer-only",
+        queries: ["original", "focused", "third"],
+      });
+
+      expect(authenticateCount).toBe(2);
+      expect(search).toHaveBeenCalledTimes(3);
+      for (const call of search.mock.calls) {
+        expect(call[0]).toMatchObject({
+          reader: {
+            principal_id: "principal_reader",
+            membership_id: "membership_reader",
+          },
+          active_generation: {
+            generation_id: digest("generation"),
+            exact_head: { position: 0, record_sha256: null },
+          },
+        });
+      }
+      expect(batch.response.items.map((result) => result.atom_id)).toEqual([
+        digest("atom-original"),
+        digest("atom-focused"),
+        digest("atom-third"),
+        digest("atom-shared"),
+      ]);
+      expect(batch.release).toMatchObject({
+        initial_authorization: {
+          principal_id: "principal_reader",
+          membership_id: "membership_reader",
+        },
+        current_authorization: {
+          principal_id: "principal_reader",
+          membership_id: "membership_reader",
+        },
+        active_pointer: {
+          generation_id: digest("generation"),
+          record_head: { position: 0, record_sha256: null },
+        },
+        record_read_audit_row_sha256: expect.stringMatching(/^sha256:/),
+      });
+      expect(
+        value.authority
+          .prepare(
+            "SELECT count(*) AS count FROM authority_person_read_decision_audit_v2",
+          )
+          .get(),
+      ).toEqual({ count: 1 });
+    } finally {
+      value.record.close();
+      value.authority.close();
+    }
+  });
+
+  it.each([
+    ["zero queries", []],
+    ["five queries", ["one", "two", "three", "four", "five"]],
+    ["duplicate queries", ["one", "one"]],
+    ["invalid query", [" leading space"]],
+  ])("rejects %s before retrieval or audit", (_name, queries) => {
+    const value = setup();
+    const search = vi.fn();
+    const authenticateAccess = vi.fn(() => authorization());
+    try {
+      const route = createCleanPersonRecordSearchRouteV1({
+        state_directory: value.state_directory,
+        authority_id: "oau_clean",
+        organization_id: "org_clean",
+        state_lineage_id: "lineage_clean",
+        retrieval_contract_sha256: RETRIEVAL_CONTRACT,
+        sessions: { authenticateAccess },
+        authority: value.authority,
+        record: value.record,
+        audit: new SqliteCleanPersonRecordReadAuditV1(value.authority),
+        search_generation: search,
+      });
+      expect(() =>
+        route.searchBatch({ access_token: "bearer-only", queries }),
+      ).toThrow("request is invalid");
+      expect(authenticateAccess).not.toHaveBeenCalled();
+      expect(search).not.toHaveBeenCalled();
+      expect(
+        value.authority
+          .prepare(
+            "SELECT count(*) AS count FROM authority_person_read_decision_audit_v2",
+          )
+          .get(),
+      ).toEqual({ count: 0 });
+    } finally {
+      value.record.close();
+      value.authority.close();
+    }
+  });
+
+  it("revalidates only the route-local release against the same bearer, pointer, and head", () => {
+    const value = setup();
+    let currentAuthorization = authorization();
+    try {
+      const route = createCleanPersonRecordSearchRouteV1({
+        state_directory: value.state_directory,
+        authority_id: "oau_clean",
+        organization_id: "org_clean",
+        state_lineage_id: "lineage_clean",
+        retrieval_contract_sha256: RETRIEVAL_CONTRACT,
+        sessions: { authenticateAccess: () => currentAuthorization },
+        authority: value.authority,
+        record: value.record,
+        audit: new SqliteCleanPersonRecordReadAuditV1(value.authority),
+        search_generation: () => ({
+          generation_id: digest("generation"),
+          exact_head: {
+            authority_id: "oau_clean",
+            organization_id: "org_clean",
+            state_lineage_id: "lineage_clean",
+            position: 0,
+            record_sha256: null,
+          },
+          items: [],
+        }),
+      });
+      const { release } = route.searchBatch({
+        access_token: "bearer-only",
+        queries: ["original"],
+      });
+      expect(
+        route.revalidateBatchRelease({
+          access_token: "bearer-only",
+          release,
+        }),
+      ).toMatchObject({
+        principal_id: "principal_reader",
+        membership_id: "membership_reader",
+      });
+      expect(
+        value.authority
+          .prepare(
+            "SELECT count(*) AS count FROM authority_person_read_decision_audit_v2",
+          )
+          .get(),
+      ).toEqual({ count: 1 });
+
+      expect(() =>
+        route.revalidateBatchRelease({
+          access_token: "bearer-only",
+          release: { ...release },
+        }),
+      ).toThrow("person authentication failed");
+      currentAuthorization = {
+        ...authorization(),
+        session_family_id: "session-replacement",
+      };
+      expect(() =>
+        route.revalidateBatchRelease({
+          access_token: "bearer-only",
+          release,
+        }),
+      ).toThrow("person authentication failed");
+      currentAuthorization = authorization();
+
+      value.authority
+        .prepare(
+          `UPDATE authority_readable_search_active_generation
+              SET generation_id = ? WHERE singleton = 1`,
+        )
+        .run(digest("replacement-generation"));
+      expect(() =>
+        route.revalidateBatchRelease({
+          access_token: "bearer-only",
+          release,
+        }),
+      ).toThrow("person authentication failed");
     } finally {
       value.record.close();
       value.authority.close();

@@ -20,6 +20,7 @@ describe("Person client help", () => {
       "usage: echo-brain person <command> [options]",
     );
     await expect(help(["--help"])).resolves.toContain("employee");
+    await expect(help(["--help"])).resolves.toContain("ask");
   });
 
   it("documents sign-in, reads, session commands, and nested employee commands", async () => {
@@ -34,6 +35,9 @@ describe("Person client help", () => {
     );
     await expect(help(["logout", "--help"])).resolves.toContain(
       "echo-brain person logout",
+    );
+    await expect(help(["ask", "--help"])).resolves.toContain(
+      "echo-brain person ask --question <text>",
     );
     await expect(help(["employee", "--help"])).resolves.toContain(
       "<list|invite|reissue|revoke>",

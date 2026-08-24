@@ -26,7 +26,7 @@ during migration.
 | [`INV-IDENTITY-003`](INV-IDENTITY-003-revocation-windows.md) | Central and offline revocation windows are separate claims | Access and permissions | partial | bounded tests |
 | [`INV-IDENTITY-004`](INV-IDENTITY-004-provider-identity-migration.md) | Incomplete provider identity is repaired by fresh atomic proof | Provider migrations | partial | linked tests and live promotion |
 | [`INV-IDENTITY-005`](INV-IDENTITY-005-adapter-to-echo-identity-chain.md) | Adapter and provider identities confer ECHO authority only through explicit links | Provider approval and Person reads | partial | linked tests; v4 end-to-end qualification open |
-| [`INV-PERMISSIONS-015`](INV-PERMISSIONS-015-layer-3-person-release-boundary.md) | Layer 3 is the sole Authority content-release boundary | Clean V1 Person record release | partial | focused boundary and integration tests |
+| [`INV-PERMISSIONS-015`](INV-PERMISSIONS-015-layer-3-person-release-boundary.md) | Layer 3 is the sole Authority content-release boundary | Clean V1 Person release and Layer 4 request boundary | partial | focused boundary and integration tests |
 | [`INV-RELEASE-001`](INV-RELEASE-001-worktree-bound-artifact.md) | Artifact identity is bound to the exact source worktree | Build and release | not implemented systemically | live detection only |
 | [`INV-OPERATIONS-001`](INV-OPERATIONS-001-shared-namespace-lifecycle.md) | Shared namespaces imply shared lifecycle qualification | Authority and proxy | partial | explicit restart tests |
 

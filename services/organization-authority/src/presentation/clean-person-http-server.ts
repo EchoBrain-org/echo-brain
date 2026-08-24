@@ -32,6 +32,10 @@ import {
   CLEAN_PERSON_EMPLOYEES_PATH_V1,
   type CleanPersonEmployeeHttpApplication,
 } from "./clean-person-employee-http-application.js";
+import {
+  CLEAN_PERSON_ANSWER_PATH_V1,
+  type CleanPersonAnswerHttpApplicationV1,
+} from "./clean-person-answer-http-application.js";
 
 const MAXIMUM_BODY_BYTES = 64 * 1024;
 export interface CleanPersonOidcProvider {
@@ -53,6 +57,8 @@ export interface CleanPersonHttpServerOptions {
   readonly person_record_search?: CleanPersonRecordSearchHttpApplicationV1;
   /** Owner-only employee invite, reissue, and revoke. */
   readonly person_employees?: CleanPersonEmployeeHttpApplication;
+  /** Optional until the active clean runtime has a configured answer model. */
+  readonly person_answer?: CleanPersonAnswerHttpApplicationV1;
 }
 
 interface PendingLoopbackHandoff {
@@ -226,6 +232,37 @@ function recordSearchInput(value: unknown): {
       ? {}
       : { limit: record.limit as number }),
   });
+}
+
+function answerInput(value: unknown): { readonly question: string } {
+  if (value === null || typeof value !== "object" || Array.isArray(value)) {
+    throw new AuthorityOperationError("invalid_request", "request is invalid");
+  }
+  const record = value as Record<string, unknown>;
+  const question = record.question;
+  const terms =
+    typeof question === "string"
+      ? new Set(
+          (question.match(/[\p{L}\p{N}]+/gu) ?? []).map((term) =>
+            term.toLowerCase().normalize("NFC"),
+          ),
+        )
+      : new Set<string>();
+  if (
+    Object.keys(record).length !== 1 ||
+    typeof question !== "string" ||
+    question.length === 0 ||
+    question !== question.normalize("NFC") ||
+    question.trim() !== question ||
+    /[\p{Cc}\p{Zl}\p{Zp}]/u.test(question) ||
+    [...question].length > 240 ||
+    terms.size < 1 ||
+    terms.size > 16 ||
+    [...terms].some((term) => Buffer.byteLength(term, "utf8") > 64)
+  ) {
+    throw new AuthorityOperationError("invalid_request", "request is invalid");
+  }
+  return Object.freeze({ question });
 }
 
 /** Exactly the founder Person surface, with no legacy machine routes. */
@@ -436,6 +473,25 @@ export function createCleanPersonHttpServer(
           options.person_record_search.search({
             access_token: accessToken(request.headers.authorization),
             ...input,
+          }),
+        );
+        return;
+      }
+      if (
+        method === "POST" &&
+        url.pathname === CLEAN_PERSON_ANSWER_PATH_V1 &&
+        url.search === ""
+      ) {
+        if (options.person_answer === undefined) {
+          fail(response, 503, "unavailable");
+          return;
+        }
+        json(
+          response,
+          200,
+          await options.person_answer.ask({
+            access_token: accessToken(request.headers.authorization),
+            ...answerInput(await body(request)),
           }),
         );
         return;
