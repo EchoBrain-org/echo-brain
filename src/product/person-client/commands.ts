@@ -456,7 +456,22 @@ export async function runPersonClientCli(
             dependencies.open_authorization_url ?? openAuthorizationUrl,
         });
         const session = client.sessionSummary();
-        await client.records(1);
+        try {
+          await client.records(1);
+        } catch (error) {
+          // `completePersonLogin` has persisted a session, but `start` is not
+          // complete until the Authority proves that session can read. Roll
+          // back only the session installed by this attempt so the same
+          // one-use invitation can recover through existing-identity login.
+          // `logout` always removes the local credential; a failed remote
+          // revocation must not hide the original readiness failure.
+          try {
+            await client.logout();
+          } catch {
+            // Preserve the readiness error reported to the person.
+          }
+          throw error;
+        }
         const identity = readPackagedPersonClientBuildIdentity();
         print(stdout, {
           ok: true,
