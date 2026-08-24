@@ -1,21 +1,14 @@
 import {
   ORGANIZATION_API_PERSON_MEMBER_EXCLUSIONS_PATH,
   ORGANIZATION_API_PERSON_MEMBER_EXCLUSION_LIST_PATH,
-  ORGANIZATION_API_PERSON_RECENT_DECISIONS_PATH,
   organizationSlackLinkChallengeCodeSha256,
   validateOrganizationPersonMemberExclusionChangeRequest,
   validateOrganizationPersonMemberExclusionListRequest,
-  validateOrganizationPersonReadableSearchRequest,
-  validateOrganizationPersonRecentDecisionsRequest,
-  validateOrganizationPersonReviewerRecentDecisionsRequest,
   validateOrganizationPersonSlackLinkBeginRequest,
   validateOrganizationPersonSlackLinkCompleteRequest,
   type OrganizationPersonMemberExclusionChangeRequestV2,
   type OrganizationPersonMemberExclusionListRequestV2,
   type OrganizationPersonMemberExclusionSelectorV2,
-  type OrganizationPersonReadableSearchRequestV2,
-  type OrganizationPersonRecentDecisionsRequestV2,
-  type OrganizationPersonReviewerRecentDecisionsRequestV2,
   type OrganizationPersonSessionV2,
   type OrganizationPersonSlackLinkBeginRequestV2,
   type OrganizationPersonSlackLinkCompleteRequestV2,
@@ -43,36 +36,6 @@ function base(
     subject_principal_id: identity.session.principal_id,
     http_method: 'POST',
   };
-}
-
-export function createPersonRecentDecisionsRequest(
-  identity: PersonRequestIdentity,
-  requestId: string,
-): OrganizationPersonRecentDecisionsRequestV2 {
-  return validateOrganizationPersonRecentDecisionsRequest({
-    schema_version: 2,
-    kind: 'echo-organization-person-recent-decisions-request',
-    ...base(identity, requestId),
-    http_path: ORGANIZATION_API_PERSON_RECENT_DECISIONS_PATH,
-  });
-}
-
-export function createPersonReviewerRecentDecisionsRequest(
-  identity: PersonRequestIdentity,
-): OrganizationPersonReviewerRecentDecisionsRequestV2 {
-  return validateOrganizationPersonReviewerRecentDecisionsRequest({
-    subject_principal_id: identity.session.principal_id,
-  });
-}
-
-export function createPersonReadableSearchRequest(
-  identity: PersonRequestIdentity,
-  query: string,
-): OrganizationPersonReadableSearchRequestV2 {
-  return validateOrganizationPersonReadableSearchRequest({
-    subject_principal_id: identity.session.principal_id,
-    query,
-  });
 }
 
 export function createPersonMemberExclusionChangeRequest(

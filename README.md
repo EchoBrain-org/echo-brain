@@ -17,7 +17,7 @@ The only shipped machine product is `@echo-brain/person-client` in
 It can:
 
 - begin Google OIDC login and install or refresh a Person session;
-- read recent decisions and searchable organization content;
+- list approved records and search currently indexed organization content;
 - manage the signed-in member's meeting exclusions; and
 - bind the signed-in identity to Slack.
 
@@ -38,7 +38,7 @@ Tokens are never printed by successful commands.
 - organization authorization and audit;
 - meeting-source, decision-processing, approval, and Slack delivery adapters;
 - the append-only organization record; and
-- recent-decision and readable-search projections.
+- deterministic, permission-aware record reads.
 
 The server starts only from the seven byte-pinned clean baselines. Historical
 migration runners and compatibility APIs are not shipped. Layer 3 is the sole

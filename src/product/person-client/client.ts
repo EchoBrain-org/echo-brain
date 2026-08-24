@@ -15,9 +15,6 @@ import {
 import {
   createPersonMemberExclusionChangeRequest,
   createPersonMemberExclusionListRequest,
-  createPersonReadableSearchRequest,
-  createPersonRecentDecisionsRequest,
-  createPersonReviewerRecentDecisionsRequest,
   createPersonSlackLinkBeginRequest,
   createPersonSlackLinkCompleteRequest,
 } from "./requests.js";
@@ -228,32 +225,6 @@ export class PersonClient {
     } finally {
       this.store.finishLogout();
     }
-  }
-
-  async recentDecisions() {
-    const stored = await this.accessSession();
-    return await this.authority(stored.authority_origin).recentDecisions(
-      createPersonRecentDecisionsRequest(stored, this.requestId("rdr")),
-      stored.session.access_token,
-    );
-  }
-
-  async reviewerRecentDecisions() {
-    const stored = await this.accessSession();
-    return await this.authority(
-      stored.authority_origin,
-    ).reviewerRecentDecisions(
-      createPersonReviewerRecentDecisionsRequest(stored),
-      stored.session.access_token,
-    );
-  }
-
-  async readableSearch(query: string) {
-    const stored = await this.accessSession();
-    return await this.authority(stored.authority_origin).readableSearch(
-      createPersonReadableSearchRequest(stored, query),
-      stored.session.access_token,
-    );
   }
 
   async records(

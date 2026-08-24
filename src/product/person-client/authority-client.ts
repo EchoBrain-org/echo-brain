@@ -2,16 +2,10 @@ import { Buffer } from "node:buffer";
 import { canonicalJson } from "@echo-brain/federation-protocol";
 import {
   MAX_ORGANIZATION_API_BODY_BYTES,
-  MAX_ORGANIZATION_READABLE_SEARCH_RESPONSE_BYTES,
-  MAX_ORGANIZATION_RECENT_DECISIONS_RESPONSE_BYTES,
-  MAX_ORGANIZATION_REVIEWER_RECENT_DECISIONS_RESPONSE_BYTES,
   ORGANIZATION_API_PERSON_MEMBER_EXCLUSIONS_PATH,
   ORGANIZATION_API_PERSON_MEMBER_EXCLUSION_LIST_PATH,
   ORGANIZATION_API_AUTHORITY_DESCRIPTOR_PATH,
   ORGANIZATION_API_PERSON_OIDC_BEGIN_PATH,
-  ORGANIZATION_API_PERSON_READABLE_SEARCH_PATH,
-  ORGANIZATION_API_PERSON_RECENT_DECISIONS_PATH,
-  ORGANIZATION_API_PERSON_REVIEWER_RECENT_DECISIONS_PATH,
   ORGANIZATION_API_PERSON_SESSION_REFRESH_PATH,
   ORGANIZATION_API_PERSON_SESSION_REVOCATIONS_PATH,
   ORGANIZATION_API_PERSON_SLACK_LINK_CHALLENGES_PATH,
@@ -24,35 +18,23 @@ import {
   validateOrganizationPersonMemberExclusionListRequest,
   validateOrganizationPersonOidcBeginRequest,
   validateOrganizationPersonOidcBeginResponse,
-  validateOrganizationPersonReadableSearchRequest,
-  validateOrganizationPersonRecentDecisionsRequest,
-  validateOrganizationPersonReviewerRecentDecisionsRequest,
   validateOrganizationPersonSession,
   validateOrganizationPersonSessionRefreshRequest,
   validateOrganizationPersonSlackLinkBeginRequest,
   validateOrganizationPersonSlackLinkBeginResponse,
   validateOrganizationPersonSlackLinkCompleteRequest,
   validateOrganizationPersonSlackLinkResult,
-  validateOrganizationReadableSearchResponse,
-  validateOrganizationRecentDecisionsResponse,
-  validateOrganizationReviewerRecentDecisionsResponse,
   type OrganizationPersonMemberExclusionChangeRequestV2,
   type OrganizationMemberExclusionListResponseV2,
   type OrganizationPersonMemberExclusionListRequestV2,
   type OrganizationAuthorityDescriptorResponseV1,
   type OrganizationPersonOidcBeginRequestV2,
   type OrganizationPersonOidcBeginResponseV2,
-  type OrganizationPersonReadableSearchRequestV2,
-  type OrganizationPersonRecentDecisionsRequestV2,
-  type OrganizationPersonReviewerRecentDecisionsRequestV2,
   type OrganizationPersonSessionV2,
   type OrganizationPersonSlackLinkBeginRequestV2,
   type OrganizationPersonSlackLinkBeginResponseV2,
   type OrganizationPersonSlackLinkCompleteRequestV2,
   type OrganizationPersonSlackLinkResultV2,
-  type OrganizationReadableSearchResponseV1,
-  type OrganizationRecentDecisionsResponseV1,
-  type OrganizationReviewerRecentDecisionsResponseV1,
 } from "@echo-brain/organization-api";
 
 const DEFAULT_TIMEOUT_MS = 15_000;
@@ -804,53 +786,6 @@ export class PersonAuthorityClient {
         return value;
       },
       access_token: accessToken,
-    });
-  }
-
-  recentDecisions(
-    request: OrganizationPersonRecentDecisionsRequestV2,
-    accessToken: string,
-  ): Promise<OrganizationRecentDecisionsResponseV1> {
-    return this.json({
-      path: ORGANIZATION_API_PERSON_RECENT_DECISIONS_PATH,
-      body: request,
-      validate_request: validateOrganizationPersonRecentDecisionsRequest,
-      validate_response: validateOrganizationRecentDecisionsResponse,
-      access_token: accessToken,
-      maximum_response_bytes: MAX_ORGANIZATION_RECENT_DECISIONS_RESPONSE_BYTES,
-      require_canonical_response: true,
-    });
-  }
-
-  reviewerRecentDecisions(
-    request: OrganizationPersonReviewerRecentDecisionsRequestV2,
-    accessToken: string,
-  ): Promise<OrganizationReviewerRecentDecisionsResponseV1> {
-    return this.json({
-      path: ORGANIZATION_API_PERSON_REVIEWER_RECENT_DECISIONS_PATH,
-      body: request,
-      validate_request:
-        validateOrganizationPersonReviewerRecentDecisionsRequest,
-      validate_response: validateOrganizationReviewerRecentDecisionsResponse,
-      access_token: accessToken,
-      maximum_response_bytes:
-        MAX_ORGANIZATION_REVIEWER_RECENT_DECISIONS_RESPONSE_BYTES,
-      require_canonical_response: true,
-    });
-  }
-
-  readableSearch(
-    request: OrganizationPersonReadableSearchRequestV2,
-    accessToken: string,
-  ): Promise<OrganizationReadableSearchResponseV1> {
-    return this.json({
-      path: ORGANIZATION_API_PERSON_READABLE_SEARCH_PATH,
-      body: request,
-      validate_request: validateOrganizationPersonReadableSearchRequest,
-      validate_response: validateOrganizationReadableSearchResponse,
-      access_token: accessToken,
-      maximum_response_bytes: MAX_ORGANIZATION_READABLE_SEARCH_RESPONSE_BYTES,
-      require_canonical_response: true,
     });
   }
 

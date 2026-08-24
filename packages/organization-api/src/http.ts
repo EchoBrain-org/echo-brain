@@ -7,12 +7,6 @@ export const ORGANIZATION_API_PROXY_AUTH_SCHEME = 'Echo-Proxy';
 
 export const ORGANIZATION_API_AUTHORITY_DESCRIPTOR_PATH =
   '/v1/authority-descriptor';
-export const ORGANIZATION_API_PERSON_RECENT_DECISIONS_PATH =
-  '/v2/recent-decisions';
-export const ORGANIZATION_API_PERSON_REVIEWER_RECENT_DECISIONS_PATH =
-  '/v2/reviewer-recent-decisions';
-export const ORGANIZATION_API_PERSON_READABLE_SEARCH_PATH =
-  '/v2/readable-search';
 export const ORGANIZATION_API_PERSON_MEMBER_EXCLUSIONS_PATH =
   '/v2/member-exclusions';
 export const ORGANIZATION_API_PERSON_MEMBER_EXCLUSION_LIST_PATH =

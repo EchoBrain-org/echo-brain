@@ -19,9 +19,6 @@ export {
 export {
   createPersonMemberExclusionChangeRequest,
   createPersonMemberExclusionListRequest,
-  createPersonReadableSearchRequest,
-  createPersonRecentDecisionsRequest,
-  createPersonReviewerRecentDecisionsRequest,
   createPersonSlackLinkBeginRequest,
   createPersonSlackLinkCompleteRequest,
   type PersonRequestIdentity,

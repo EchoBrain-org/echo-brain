@@ -13,11 +13,7 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { canonicalJson, p256KeyId } from "@echo-brain/federation-protocol";
-import {
-  ORGANIZATION_RECENT_DECISIONS_POLICY_ID,
-  ORGANIZATION_RECENT_DECISIONS_WITNESS,
-  organizationSlackLinkChallengeCodeSha256,
-} from "@echo-brain/organization-api";
+import { organizationSlackLinkChallengeCodeSha256 } from "@echo-brain/organization-api";
 import type { OrganizationAuthorityDescriptorV1 } from "@echo-brain/organization-protocol";
 import { describe, expect, it } from "vitest";
 import {
@@ -210,7 +206,7 @@ describe("Person client", () => {
     });
   });
 
-  it("rotates one expired access session before a bearer read", async () => {
+  it("rotates one expired access session before listing records", async () => {
     await withHome(async (home) => {
       const authority = authorityDescriptor();
       const paths: string[] = [];
@@ -228,28 +224,17 @@ describe("Person client", () => {
           });
           return json(ROTATED_SESSION);
         }
-        expect(path).toBe("/v2/recent-decisions");
+        expect(path).toBe("/v1/person/records");
+        expect(new URL(String(input)).search).toBe("");
+        expect(init?.method).toBe("GET");
+        expect(init?.body).toBeUndefined();
         expect(new Headers(init?.headers).get("authorization")).toBe(
           `Bearer ${ROTATED_SESSION.access_token}`,
         );
-        const request = JSON.parse(String(init?.body)) as Record<
-          string,
-          unknown
-        >;
-        expect(request).toMatchObject({
-          authority_id: authority.authority_id,
-          organization_id: SESSION.organization_id,
-          subject_principal_id: SESSION.principal_id,
-          http_path: "/v2/recent-decisions",
-        });
-        expect(JSON.stringify(request)).not.toContain(
-          ROTATED_SESSION.access_token,
-        );
         return json({
           schema_version: 1,
-          policy_id: ORGANIZATION_RECENT_DECISIONS_POLICY_ID,
-          witness: ORGANIZATION_RECENT_DECISIONS_WITNESS,
-          items: [],
+          kind: "echo-clean-person-record-list-v1",
+          records: [],
         });
       };
       const client = new PersonClient({
@@ -260,80 +245,17 @@ describe("Person client", () => {
       });
 
       await client.installSession("https://authority.example", SESSION);
-      await expect(client.recentDecisions()).resolves.toMatchObject({
-        items: [],
+      await expect(client.records()).resolves.toMatchObject({
+        records: [],
       });
       expect(paths).toEqual([
         "/v1/authority-descriptor",
         "/v2/session/refresh",
-        "/v2/recent-decisions",
+        "/v1/person/records",
       ]);
       expect(client.sessionSummary().access_expires_at).toBe(
         ROTATED_SESSION.access_expires_at,
       );
-    });
-  });
-
-  it("sends semantic-only reviewer-recent and readable-search bodies", async () => {
-    await withHome(async (home) => {
-      const authority = authorityDescriptor();
-      const observed: Array<{ path: string; body: unknown }> = [];
-      const client = new PersonClient({
-        home_directory: home,
-        now: () => NOW,
-        fetch: async (input, init) => {
-          const path = new URL(String(input)).pathname;
-          if (path === "/v1/authority-descriptor") {
-            return json({ authority_descriptor: authority });
-          }
-          const body = JSON.parse(String(init?.body)) as unknown;
-          observed.push({ path, body });
-          expect(new Headers(init?.headers).get("authorization")).toBe(
-            `Bearer ${ROTATED_SESSION.access_token}`,
-          );
-          if (path === "/v2/reviewer-recent-decisions") {
-            return json({
-              schema_version: 1,
-              items: [],
-              policy_id: "restricted-reviewer-v1",
-              witness:
-                "Allowed by restricted-reviewer-v1 because every returned item records you as its approving reviewer and that exact reviewer membership is currently active.",
-            });
-          }
-          expect(path).toBe("/v2/readable-search");
-          return json({
-            schema_version: 1,
-            contract_id: "permission-aware-readable-search-v1",
-            items: [],
-          });
-        },
-      });
-
-      await client.installSession("https://authority.example", ROTATED_SESSION);
-      await client.reviewerRecentDecisions();
-      await client.readableSearch("pricing");
-
-      expect(observed).toEqual([
-        {
-          path: "/v2/reviewer-recent-decisions",
-          body: { subject_principal_id: SESSION.principal_id },
-        },
-        {
-          path: "/v2/readable-search",
-          body: {
-            query: "pricing",
-            subject_principal_id: SESSION.principal_id,
-          },
-        },
-      ]);
-      for (const request of observed) {
-        expect(request.body).not.toHaveProperty("schema_version");
-        expect(request.body).not.toHaveProperty("request_id");
-        expect(request.body).not.toHaveProperty("authority_id");
-        expect(request.body).not.toHaveProperty("organization_id");
-        expect(request.body).not.toHaveProperty("http_method");
-        expect(request.body).not.toHaveProperty("http_path");
-      }
     });
   });
 
@@ -1239,8 +1161,8 @@ describe("Person client", () => {
       });
       await client.installSession("https://authority.example", SESSION);
 
-      await expect(client.recentDecisions()).rejects.toThrow(/request failed/);
-      await expect(client.recentDecisions()).rejects.toThrow(/sign in again/);
+      await expect(client.records()).rejects.toThrow(/request failed/);
+      await expect(client.records()).rejects.toThrow(/sign in again/);
       expect(refreshCalls).toBe(1);
     });
   });
