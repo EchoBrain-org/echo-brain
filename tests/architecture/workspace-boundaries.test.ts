@@ -301,6 +301,28 @@ describe("workspace source boundaries", () => {
     }
   });
 
+  it("removes TypeScript-only Authority image artifacts before the runtime image copies them", () => {
+    const dockerfile = readFileSync(
+      join(REPO, "deploy/organization-authority/Dockerfile"),
+      "utf8",
+    );
+    const cleanup =
+      "RUN find packages services -type f \\( -name '*.d.ts' -o -name '*.tsbuildinfo' \\) -delete";
+
+    expect(dockerfile).toContain(cleanup);
+    expect(dockerfile.indexOf(cleanup)).toBeGreaterThan(
+      dockerfile.indexOf("npm ci --omit=dev --workspace @echo-brain/organization-authority --include-workspace-root=false"),
+    );
+    expect(dockerfile.indexOf(cleanup)).toBeLessThan(
+      dockerfile.indexOf("\nFROM node:22.22.1-bookworm-slim"),
+    );
+    expect([...cleanup.matchAll(/-name '([^']+)'/g)].map((match) => match[1])).toEqual([
+      "*.d.ts",
+      "*.tsbuildinfo",
+    ]);
+    expect(cleanup).not.toContain("*.map");
+  });
+
   it("ships frozen baselines instead of migration trees", () => {
     for (const [root, manifestPath] of [
       [
