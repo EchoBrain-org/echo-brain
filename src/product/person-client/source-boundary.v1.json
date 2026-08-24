@@ -20,6 +20,7 @@
   "allowed_external_packages": [],
   "allowed_node_builtins": [
     "buffer",
+    "child_process",
     "crypto",
     "fs",
     "http",
@@ -65,7 +66,7 @@
       "allowed_imports": ["src/product/person-client/**"],
       "allowed_workspace_packages": [],
       "allowed_external_packages": [],
-      "allowed_node_builtins": ["buffer", "os", "readline/promises", "util"]
+      "allowed_node_builtins": ["buffer", "child_process", "os", "readline/promises", "util"]
     },
     {
       "name": "person-client-browser-handoff-is-local-only",

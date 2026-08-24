@@ -24,6 +24,7 @@
     "build:authority-image": "node tools/build-authority-image.mjs",
     "pack:person-client": "node tools/pack-person-client.mjs",
     "bundle:person-client": "node deploy/release/create-offline-person-client-bundle.mjs",
+    "kit:person-onboarding": "node deploy/release/create-person-onboarding-kit.mjs",
     "clean:workspaces": "tsc -b tsconfig.workspaces.json --clean",
     "build": "node tools/build.mjs",
     "build:workspaces": "tsc -b tsconfig.workspaces.json",

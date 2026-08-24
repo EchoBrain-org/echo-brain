@@ -26,19 +26,231 @@ fail() { printf 'onboard-clean-v1: %s\n' "$*" >&2; exit 1; }
 usage() {
   cat >&2 <<'EOF'
 usage:
-  onboard-clean-v1.sh prepare \
-    --release <canonical-release.json> \
-    --runtime-user <os-user> \
-    --organization-name <name> --owner-display-name <name> --owner-email <email> \
-    --authority-host <dns-name> --slack-approval-channel-id <channel-id> \
-    --oidc-config-file <private-file> --oidc-client-secret-file <private-file> \
-    --slack-bot-token-file <private-file> --granola-credential-file <private-file> \
-    --llm-credential-file <private-file>
+  onboard-clean-v1.sh doctor --input-dir <absolute-private-input-directory>
+  onboard-clean-v1.sh prepare --input-dir <absolute-private-input-directory>
   onboard-clean-v1.sh replace-rehearsal --confirm-no-live-users
   onboard-clean-v1.sh resume
   onboard-clean-v1.sh status
 EOF
   exit 2
+}
+
+INPUT_MANIFEST_NAME='onboarding.clean-v1.json'
+INPUT_RELEASE_NAME='release.json'
+INPUT_OIDC_CONFIG_NAME='oidc-config.json'
+INPUT_OIDC_SECRET_NAME='oidc-client-secret'
+INPUT_SLACK_TOKEN_NAME='slack-bot-token'
+INPUT_GRANOLA_CREDENTIAL_NAME='granola-credential'
+INPUT_LLM_CREDENTIAL_NAME='llm-credential'
+
+input_dir=''
+input_release=''
+input_oidc_config=''
+input_oidc_secret=''
+input_slack_token=''
+input_granola_credential=''
+input_llm_credential=''
+input_runtime_user=''
+input_organization_name=''
+input_owner_display_name=''
+input_owner_email=''
+input_authority_host=''
+input_channel=''
+
+portable_stat_mode() {
+  stat -c '%a' "$1" 2>/dev/null || stat -f '%Lp' "$1"
+}
+
+portable_stat_uid() {
+  stat -c '%u' "$1" 2>/dev/null || stat -f '%u' "$1"
+}
+
+require_input_dir_argument() {
+  [[ $# -eq 2 && "$1" == --input-dir && "$2" = /* ]] || usage
+  input_dir="$2"
+}
+
+read_input_manifest() {
+  local manifest="$input_dir/$INPUT_MANIFEST_NAME"
+  local value count=0
+  while IFS= read -r value; do
+    case "$count" in
+      0) input_runtime_user="$value" ;;
+      1) input_organization_name="$value" ;;
+      2) input_owner_display_name="$value" ;;
+      3) input_owner_email="$value" ;;
+      4) input_authority_host="$value" ;;
+      5) input_channel="$value" ;;
+      *) return 1 ;;
+    esac
+    count=$((count + 1))
+  done < <(python3 - "$manifest" <<'PY'
+import json
+import re
+import sys
+
+path = sys.argv[1]
+try:
+    with open(path, encoding="utf-8") as source:
+        value = json.load(source)
+except Exception:
+    raise SystemExit(1)
+
+expected = {
+    "kind",
+    "schema_version",
+    "runtime_user",
+    "organization_name",
+    "owner_display_name",
+    "owner_email",
+    "authority_host",
+    "slack_approval_channel_id",
+}
+if not isinstance(value, dict) or set(value) != expected:
+    raise SystemExit(1)
+if value["kind"] != "echo-clean-v1-onboarding-input-v1" or value["schema_version"] != 1:
+    raise SystemExit(1)
+
+def text(key, maximum=200):
+    item = value[key]
+    if not isinstance(item, str) or not item or len(item) > maximum:
+        raise SystemExit(1)
+    if any(character in item for character in "\r\n\t=") or any(ord(character) < 32 for character in item):
+        raise SystemExit(1)
+    return item
+
+runtime_user = text("runtime_user", 64)
+organization_name = text("organization_name")
+owner_display_name = text("owner_display_name")
+owner_email = text("owner_email", 254)
+authority_host = text("authority_host", 253)
+channel = text("slack_approval_channel_id", 32)
+
+if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_.-]*", runtime_user):
+    raise SystemExit(1)
+if not re.fullmatch(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+", owner_email):
+    raise SystemExit(1)
+labels = authority_host.split(".")
+if (
+    len(authority_host) > 253
+    or len(labels) < 2
+    or any(
+        not re.fullmatch(r"[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?", label)
+        for label in labels
+    )
+):
+    raise SystemExit(1)
+if not re.fullmatch(r"[CG][A-Z0-9]{8,}", channel):
+    raise SystemExit(1)
+
+for item in (runtime_user, organization_name, owner_display_name, owner_email, authority_host, channel):
+    print(item)
+PY
+)
+  [[ "$count" -eq 6 ]]
+}
+
+validate_input_oidc_callback() {
+  python3 - "$input_oidc_config" "$input_authority_host" <<'PY'
+import json
+import sys
+
+try:
+    with open(sys.argv[1], encoding="utf-8") as source:
+        value = json.load(source)
+except Exception:
+    raise SystemExit(1)
+
+if not isinstance(value, dict) or value.get("redirect_uri") != f"https://{sys.argv[2]}/v2/session/oidc/callback":
+    raise SystemExit(1)
+PY
+}
+
+runtime_identity_is_valid() {
+  local runtime_user="$1" uid
+  [[ "$runtime_user" =~ ^[A-Za-z_][A-Za-z0-9_.-]*$ ]] || return 1
+  id "$runtime_user" >/dev/null 2>&1 || return 1
+  uid="$(id -u "$runtime_user")" || return 1
+  [[ "$uid" != 0 ]]
+}
+
+runtime_executor_can_prepare() {
+  local runtime_user="$1" uid gid
+  uid="$(id -u "$runtime_user")" || return 1
+  gid="$(id -g "$runtime_user")" || return 1
+  [[ "$(id -u)" == 0 || ( "$(id -u)" == "$uid" && "$(id -g)" == "$gid" ) ]]
+}
+
+safe_directory_target() {
+  local path="$1"
+  [[ ! -e "$path" && ! -L "$path" ]] && return 0
+  [[ -d "$path" && ! -L "$path" ]]
+}
+
+check_input_dir() {
+  [[ "$input_dir" = /* && -d "$input_dir" && ! -L "$input_dir" ]] || return 1
+  [[ "$(portable_stat_uid "$input_dir")" == "$(id -u)" ]] || return 1
+  [[ "$(portable_stat_mode "$input_dir")" == 700 ]] || return 1
+
+  local name path
+  local -a expected=(
+    "$INPUT_MANIFEST_NAME"
+    "$INPUT_RELEASE_NAME"
+    "$INPUT_OIDC_CONFIG_NAME"
+    "$INPUT_OIDC_SECRET_NAME"
+    "$INPUT_SLACK_TOKEN_NAME"
+    "$INPUT_GRANOLA_CREDENTIAL_NAME"
+    "$INPUT_LLM_CREDENTIAL_NAME"
+  )
+  for name in "${expected[@]}"; do
+    path="$input_dir/$name"
+    [[ -f "$path" && ! -L "$path" ]] || return 1
+    [[ "$(portable_stat_uid "$path")" == "$(id -u)" ]] || return 1
+    [[ "$(portable_stat_mode "$path")" == 600 ]] || return 1
+  done
+  shopt -s nullglob dotglob
+  local entries=("$input_dir"/*)
+  shopt -u nullglob dotglob
+  [[ ${#entries[@]} -eq ${#expected[@]} ]] || return 1
+
+  input_release="$input_dir/$INPUT_RELEASE_NAME"
+  input_oidc_config="$input_dir/$INPUT_OIDC_CONFIG_NAME"
+  input_oidc_secret="$input_dir/$INPUT_OIDC_SECRET_NAME"
+  input_slack_token="$input_dir/$INPUT_SLACK_TOKEN_NAME"
+  input_granola_credential="$input_dir/$INPUT_GRANOLA_CREDENTIAL_NAME"
+  input_llm_credential="$input_dir/$INPUT_LLM_CREDENTIAL_NAME"
+  return 0
+}
+
+doctor_json() {
+  local ok="$1" code="$2" next_action="$3"
+  [[ "$ok" == true || "$ok" == false ]] || return 1
+  [[ "$code" =~ ^[a-z0-9_]+$ ]] || return 1
+  [[ "$next_action" != *'"'* && "$next_action" != *'\\'* ]] || return 1
+  printf '{"ok":%s,"code":"%s","next_action":"%s"}\n' \
+    "$ok" "$code" "$next_action"
+}
+
+doctor() {
+  require_input_dir_argument "$@"
+  if ! command -v docker >/dev/null 2>&1; then doctor_json false docker_missing 'Install Docker, then rerun doctor.'; return; fi
+  if ! docker compose version >/dev/null 2>&1; then doctor_json false docker_compose_missing 'Install Docker Compose v2, then rerun doctor.'; return; fi
+  if ! command -v python3 >/dev/null 2>&1; then doctor_json false python3_missing 'Install python3, then rerun doctor.'; return; fi
+  if [[ ! -f "$RELEASE_TOOL" ]]; then doctor_json false release_validator_missing 'Install the clean-v1 release validator, then rerun doctor.'; return; fi
+  if ! command -v systemctl >/dev/null 2>&1; then doctor_json false systemctl_missing 'Provision the supported EC2 host, then rerun doctor.'; return; fi
+  if ! systemctl is-active --quiet cloudflared-echo-authority.service >/dev/null 2>&1; then doctor_json false cloudflared_inactive 'Start cloudflared-echo-authority.service, then rerun doctor.'; return; fi
+  if [[ ! -d "$input_dir" || -L "$input_dir" || "$input_dir" != /* ]]; then doctor_json false input_dir_invalid 'Create an absolute private input directory with mode 0700.'; return; fi
+  if [[ "$(portable_stat_uid "$input_dir")" != "$(id -u)" || "$(portable_stat_mode "$input_dir")" != 700 ]]; then doctor_json false input_dir_permissions_invalid 'Make the input directory current-executor-owned with mode 0700.'; return; fi
+  if ! check_input_dir; then doctor_json false input_files_invalid 'Use exactly the documented current-executor-owned regular files with mode 0600.'; return; fi
+  if ! read_input_manifest; then doctor_json false input_manifest_invalid 'Use the exact manifest schema and safe ordinary values from the committed example.'; return; fi
+  if ! runtime_identity_is_valid "$input_runtime_user"; then doctor_json false runtime_user_invalid 'Create a non-root runtime user and run as root or that runtime user.'; return; fi
+  if ! runtime_executor_can_prepare "$input_runtime_user"; then doctor_json false runtime_executor_invalid 'Run prepare as root or as the selected runtime user.'; return; fi
+  if ! python3 "$RELEASE_TOOL" validate "$input_release" >/dev/null 2>&1; then doctor_json false release_invalid 'Replace release.json with a canonical clean-v1 release record.'; return; fi
+  if ! validate_input_oidc_callback >/dev/null 2>&1; then doctor_json false oidc_callback_invalid 'Set oidc-config.json redirect_uri to the exact Authority callback URL.'; return; fi
+  if ! safe_directory_target "$DATA_DIR"; then doctor_json false clean_data_path_invalid 'Remove or repair the unsafe clean-data path before preparing.'; return; fi
+  if ! safe_directory_target "$PRIVATE_DIR"; then doctor_json false clean_private_path_invalid 'Remove or repair the unsafe clean private-input path before preparing.'; return; fi
+  if ! safe_directory_target "$RELEASE_DIR"; then doctor_json false clean_release_path_invalid 'Remove or repair the unsafe clean release path before preparing.'; return; fi
+  doctor_json true ready 'Run prepare with the same input directory.'
 }
 
 require_host_prerequisites() {
@@ -272,34 +484,18 @@ print_staged_candidate_status() {
 }
 
 prepare() {
-  local release='' runtime_user='' organization_name='' owner_display_name='' owner_email='' authority_host='' channel='' oidc_config='' oidc_secret='' slack_token='' granola_credential='' llm_credential=''
-  while [[ $# -gt 0 ]]; do
-    case "$1" in
-      --release) release="${2:-}"; shift 2 ;;
-      --runtime-user) runtime_user="${2:-}"; shift 2 ;;
-      --organization-name) organization_name="${2:-}"; shift 2 ;;
-      --owner-display-name) owner_display_name="${2:-}"; shift 2 ;;
-      --owner-email) owner_email="${2:-}"; shift 2 ;;
-      --authority-host) authority_host="${2:-}"; shift 2 ;;
-      --slack-approval-channel-id) channel="${2:-}"; shift 2 ;;
-      --oidc-config-file) oidc_config="${2:-}"; shift 2 ;;
-      --oidc-client-secret-file) oidc_secret="${2:-}"; shift 2 ;;
-      --slack-bot-token-file) slack_token="${2:-}"; shift 2 ;;
-      --granola-credential-file) granola_credential="${2:-}"; shift 2 ;;
-      --llm-credential-file) llm_credential="${2:-}"; shift 2 ;;
-      *) usage ;;
-    esac
-  done
-  [[ -n "$release" && -n "$runtime_user" && -n "$organization_name" && -n "$owner_display_name" && -n "$owner_email" && -n "$authority_host" && -n "$channel" && -n "$oidc_config" && -n "$oidc_secret" && -n "$slack_token" && -n "$granola_credential" && -n "$llm_credential" ]] || usage
+  require_input_dir_argument "$@"
+  local doctor_result
+  doctor_result="$(doctor --input-dir "$input_dir")"
+  [[ "$doctor_result" == '{"ok":true,'* ]] || fail 'doctor did not report this input directory ready; run doctor directly for its safe next action'
+  # Doctor runs the complete preflight. Read the same fixed sources again in
+  # this process before persisting them, so prepare never accepts a different
+  # shape than the one it just checked.
+  check_input_dir && read_input_manifest && validate_input_oidc_callback || \
+    fail 'input directory changed after doctor; rerun prepare'
   require_host_prerequisites
-  private_source "$release" 'release record'
-  no_newline_value "$organization_name" 'organization name'
-  no_newline_value "$owner_display_name" 'owner display name'
-  no_newline_value "$owner_email" 'owner email'
-  no_newline_value "$authority_host" 'Authority host'
-  no_newline_value "$channel" 'Slack approval channel ID'
-  select_runtime_identity "$runtime_user"
-  python3 "$RELEASE_TOOL" validate "$release" >/dev/null
+  select_runtime_identity "$input_runtime_user"
+  python3 "$RELEASE_TOOL" validate "$input_release" >/dev/null
   require_safe_directory_target "$DATA_DIR" 'clean data path'
   require_safe_directory_target "$PRIVATE_DIR" 'clean private-input path'
   require_safe_directory_target "$RELEASE_DIR" 'clean release path'
@@ -307,39 +503,39 @@ prepare() {
   chmod 0700 "$DATA_DIR" "$PRIVATE_DIR" "$RELEASE_DIR"
   own_for_runtime "$DATA_DIR"
   own_for_runtime "$PRIVATE_DIR"
-  copy_exact_private "$release" "$RELEASE_FILE" 'release record' host
+  copy_exact_private "$input_release" "$RELEASE_FILE" 'release record' host
   local image uid gid authority_url setup env
   image="$(release_field authority-image)"
   uid="$RUNTIME_UID"
   gid="$RUNTIME_GID"
-  authority_url="https://$authority_host"
-  setup="runtime_user=$runtime_user
-organization_name=$organization_name
-owner_display_name=$owner_display_name
-owner_email=$owner_email
-authority_host=$authority_host
+  authority_url="https://$input_authority_host"
+  setup="runtime_user=$input_runtime_user
+organization_name=$input_organization_name
+owner_display_name=$input_owner_display_name
+owner_email=$input_owner_email
+authority_host=$input_authority_host
 authority_url=$authority_url
-slack_approval_channel_id=$channel
+slack_approval_channel_id=$input_channel
 release_id=$(release_field release-id)
 authority_image=$image
 artifact_revision=$(release_field source-sha)
 authority_uid=$uid
 authority_gid=$gid"
-  env="ECHO_CLEAN_AUTHORITY_HOST=$authority_host
+  env="ECHO_CLEAN_AUTHORITY_HOST=$input_authority_host
 ECHO_CLEAN_AUTHORITY_URL=$authority_url
 ECHO_CLEAN_AUTHORITY_UID=$uid
 ECHO_CLEAN_AUTHORITY_GID=$gid
 ECHO_CLEAN_AUTHORITY_IMAGE=$image
-ECHO_CLEAN_SLACK_APPROVAL_CHANNEL_ID=$channel
-ECHO_CLEAN_OWNER_EMAIL=$owner_email"
+ECHO_CLEAN_SLACK_APPROVAL_CHANNEL_ID=$input_channel
+ECHO_CLEAN_OWNER_EMAIL=$input_owner_email"
   write_exact_file "$SETUP_FILE" "$setup" 'setup configuration' runtime
   write_exact_file "$ENV_FILE" "$env" 'Compose environment'
-  copy_exact_private "$oidc_config" "$PRIVATE_DIR/oidc-config.json" 'OIDC configuration'
-  copy_exact_private "$oidc_secret" "$PRIVATE_DIR/oidc-client-secret" 'OIDC client secret'
-  copy_exact_private "$slack_token" "$PRIVATE_DIR/slack-bot-token" 'Slack bot token'
-  copy_exact_private "$granola_credential" "$PRIVATE_DIR/granola-credential-source" 'Granola credential'
-  copy_exact_private "$llm_credential" "$PRIVATE_DIR/llm-credential-source" 'LLM credential'
-  write_exact_private "$PRIVATE_DIR/granola-owner-email" "$owner_email" 'Granola owner email'
+  copy_exact_private "$input_oidc_config" "$PRIVATE_DIR/oidc-config.json" 'OIDC configuration'
+  copy_exact_private "$input_oidc_secret" "$PRIVATE_DIR/oidc-client-secret" 'OIDC client secret'
+  copy_exact_private "$input_slack_token" "$PRIVATE_DIR/slack-bot-token" 'Slack bot token'
+  copy_exact_private "$input_granola_credential" "$PRIVATE_DIR/granola-credential-source" 'Granola credential'
+  copy_exact_private "$input_llm_credential" "$PRIVATE_DIR/llm-credential-source" 'LLM credential'
+  write_exact_private "$PRIVATE_DIR/granola-owner-email" "$input_owner_email" 'Granola owner email'
   # This render is intentionally offline: prepare never builds or pulls an image.
   compose_clean config >/dev/null
   printf 'prepared=true\nnext_action=Run onboard-clean-v1.sh resume on this server.\n'
@@ -499,6 +695,7 @@ status() {
 }
 
 case "${1:-}" in
+  doctor) shift; doctor "$@" ;;
   prepare) shift; prepare "$@" ;;
   replace-rehearsal) shift; replace_rehearsal "$@" ;;
   resume) [[ $# -eq 1 ]] || usage; resume ;;

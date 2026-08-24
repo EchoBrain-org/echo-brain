@@ -1,0 +1,10 @@
+{
+  "authority_host": "authority.example.com",
+  "kind": "echo-clean-v1-onboarding-input-v1",
+  "organization_name": "Example Organization",
+  "owner_display_name": "Founder Name",
+  "owner_email": "founder@example.com",
+  "runtime_user": "echo-authority",
+  "schema_version": 1,
+  "slack_approval_channel_id": "C0123456789"
+}

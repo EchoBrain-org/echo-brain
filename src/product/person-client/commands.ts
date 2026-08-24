@@ -1,4 +1,5 @@
 import { Buffer } from "node:buffer";
+import { spawnSync } from "node:child_process";
 import { homedir } from "node:os";
 import { createInterface } from "node:readline/promises";
 import { parseArgs } from "node:util";
@@ -25,6 +26,7 @@ export interface PersonClientCliDependencies {
   readonly random_bytes?: (size: number) => Uint8Array;
   readonly random_uuid?: () => string;
   readonly read_input?: () => string | Promise<string>;
+  readonly open_authorization_url?: (url: string) => boolean | Promise<boolean>;
 }
 
 const OPTIONS = {
@@ -50,6 +52,10 @@ const RULES: Readonly<
 > = {
   login: {
     accepts: ["invitation", "authority-url"],
+  },
+  start: {
+    accepts: ["invitation"],
+    requires: ["invitation"],
   },
   status: {},
   "session-refresh": {},
@@ -100,6 +106,7 @@ const HELP: Readonly<Record<string, string>> = {
   person: `${usage()}
 
 Commands:
+  start       Complete invitation sign-in and verify that ECHO is ready.
   login       Sign in with an invitation or existing Authority identity.
   status      Show installed version and sign-in state.
   logout      Remove the local session.
@@ -109,6 +116,10 @@ Commands:
   slack-link  Link the signed-in founder to Slack.
 
 Run \`echo-brain person <command> --help\` for command options.
+`,
+  start: `usage: echo-brain person start --invitation <path>
+
+Installs the invited identity, opens Google sign-in, verifies one permission-aware read, and reports ready.
 `,
   login: `usage: echo-brain person login (--invitation <path> | --authority-url <url>)
 
@@ -231,6 +242,93 @@ function optionalRecordLimit(
   return Number(value);
 }
 
+function openAuthorizationUrl(url: string): boolean {
+  if (process.platform !== "darwin") return false;
+  const opened = spawnSync("/usr/bin/open", [url], {
+    stdio: "ignore",
+    timeout: 10_000,
+  });
+  return opened.status === 0;
+}
+
+async function completePersonLogin(input: {
+  readonly client: PersonClient;
+  readonly authority_url: string;
+  readonly login_grant?: string;
+  readonly stdout: Output;
+  readonly random_bytes?: (size: number) => Uint8Array;
+  readonly open_browser?: (url: string) => boolean | Promise<boolean>;
+}): Promise<void> {
+  const handoff = await startPersonLoopbackHandoff({
+    ...(input.random_bytes === undefined
+      ? {}
+      : { random_bytes: input.random_bytes }),
+  });
+  try {
+    let begun;
+    let recoveredConsumedInvitation = false;
+    try {
+      begun = await input.client.beginLogin(
+        input.authority_url,
+        input.login_grant,
+        { url: handoff.url, token: handoff.token },
+      );
+    } catch (error) {
+      // The Authority can complete an OIDC bootstrap even when a browser
+      // never reaches this short-lived local receiver. In that case its
+      // one-use invitation is consumed; retry once as the now-bound
+      // identity, never by exposing the session in the callback.
+      if (
+        input.login_grant !== undefined &&
+        error instanceof PersonAuthorityClientError &&
+        error.code === "unauthorized" &&
+        error.status === 401
+      ) {
+        begun = await input.client.beginLogin(
+          input.authority_url,
+          undefined,
+          { url: handoff.url, token: handoff.token },
+        );
+        recoveredConsumedInvitation = true;
+      } else {
+        throw error;
+      }
+    }
+    const browserOpened =
+      input.open_browser === undefined
+        ? undefined
+        : await input.open_browser(begun.authorization_url);
+    print(input.stdout, {
+      ok: true,
+      phase: "open-browser",
+      authorization_url: begun.authorization_url,
+      expires_at: begun.expires_at,
+      ...(browserOpened === undefined ? {} : { browser_opened: browserOpened }),
+      instruction: recoveredConsumedInvitation
+        ? browserOpened === undefined
+          ? "The invitation was already consumed. Open authorization_url to finish sign-in as the existing identity."
+          : browserOpened
+            ? "The invitation was already consumed. Finish sign-in as the existing identity in the opened browser."
+            : "The invitation was already consumed. Open authorization_url to finish sign-in as the existing identity."
+        : browserOpened === false
+          ? "Open authorization_url to complete sign-in in your browser."
+          : browserOpened === true
+            ? "Complete sign-in in the opened browser."
+            : "Open authorization_url to complete sign-in in your browser.",
+    });
+    print(input.stdout, {
+      ok: true,
+      phase: "installed",
+      ...(await input.client.installSession(
+        input.authority_url,
+        await handoff.wait(),
+      )),
+    });
+  } finally {
+    await handoff.close();
+  }
+}
+
 export async function runPersonClientCli(
   argv: readonly string[],
   dependencies: PersonClientCliDependencies = {},
@@ -319,61 +417,70 @@ export async function runPersonClientCli(
             ? readPersonOnboardingInvitation(values.invitation)
             : undefined;
         const authorityUrl = invitation?.authority_url ?? requiredText(values, "authority-url");
-        const handoff = await startPersonLoopbackHandoff({
+        await completePersonLogin({
+          client,
+          authority_url: authorityUrl,
+          ...(invitation === undefined
+            ? {}
+            : { login_grant: invitation.login_grant }),
+          stdout,
           ...(dependencies.random_bytes === undefined
             ? {}
             : { random_bytes: dependencies.random_bytes }),
         });
+        break;
+      }
+      case "start": {
+        const invitation = readPersonOnboardingInvitation(
+          requiredText(values, "invitation"),
+        );
         try {
-          let begun;
-          let recoveredConsumedInvitation = false;
-          try {
-            begun = await client.beginLogin(
-              authorityUrl,
-              invitation?.login_grant,
-              { url: handoff.url, token: handoff.token },
-            );
-          } catch (error) {
-            // The Authority can complete an OIDC bootstrap even when a browser
-            // never reaches this short-lived local receiver. In that case its
-            // one-use invitation is consumed; retry once as the now-bound
-            // identity, never by exposing the session in the callback.
-            if (
-              invitation !== undefined &&
-              error instanceof PersonAuthorityClientError &&
-              error.code === "unauthorized" &&
-              error.status === 401
-            ) {
-              begun = await client.beginLogin(
-                authorityUrl,
-                undefined,
-                { url: handoff.url, token: handoff.token },
-              );
-              recoveredConsumedInvitation = true;
-            } else {
-              throw error;
-            }
+          client.sessionSummary();
+          throw new Error(
+            "This Mac is already signed in to ECHO. Use the installed client for this person, or run `echo-brain person logout` before onboarding a different person.",
+          );
+        } catch (error) {
+          if (!(error instanceof PersonClientSessionUnavailableError)) {
+            throw error;
           }
-          print(stdout, {
-            ok: true,
-            phase: "open-browser",
-            authorization_url: begun.authorization_url,
-            expires_at: begun.expires_at,
-            instruction: recoveredConsumedInvitation
-              ? "The invitation was already consumed. Open authorization_url to finish sign-in as the existing identity."
-              : "Open authorization_url to complete sign-in in your browser.",
-          });
-          print(stdout, {
-            ok: true,
-            phase: "installed",
-            ...(await client.installSession(
-              authorityUrl,
-              await handoff.wait(),
-            )),
-          });
-        } finally {
-          await handoff.close();
         }
+        await completePersonLogin({
+          client,
+          authority_url: invitation.authority_url,
+          login_grant: invitation.login_grant,
+          stdout,
+          ...(dependencies.random_bytes === undefined
+            ? {}
+            : { random_bytes: dependencies.random_bytes }),
+          open_browser:
+            dependencies.open_authorization_url ?? openAuthorizationUrl,
+        });
+        const session = client.sessionSummary();
+        try {
+          await client.records(1);
+        } catch (error) {
+          // `completePersonLogin` has persisted a session, but `start` is not
+          // complete until the Authority proves that session can read. Roll
+          // back only the session installed by this attempt so the same
+          // one-use invitation can recover through existing-identity login.
+          // `logout` always removes the local credential; a failed remote
+          // revocation must not hide the original readiness failure.
+          try {
+            await client.logout();
+          } catch {
+            // Preserve the readiness error reported to the person.
+          }
+          throw error;
+        }
+        const identity = readPackagedPersonClientBuildIdentity();
+        print(stdout, {
+          ok: true,
+          phase: "ready",
+          installed_version: identity.product_version,
+          membership_type: session.membership_type,
+          connected_authority: session.authority_origin,
+          permission_aware_read: "passed",
+        });
         break;
       }
       case "status": {
