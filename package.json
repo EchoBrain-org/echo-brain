@@ -30,7 +30,7 @@
     "typecheck": "npm run typecheck:workspaces && tsc --noEmit -p tsconfig.json",
     "typecheck:workspaces": "tsc -b tsconfig.workspaces.json",
     "lint": "eslint . --max-warnings 0",
-    "test": "npm run build:workspaces && vitest run --config vitest.config.ts",
+    "test": "npm run build && vitest run --config vitest.config.ts",
     "test:core": "npm run build:workspaces && vitest run --config vitest.config.ts services/organization-authority/test/processing/core",
     "test:architecture": "npm run build:workspaces && vitest run --config vitest.config.ts tests/architecture",
     "test:protocols": "npm run build:workspaces && npm test --workspace @echo-brain/federation-protocol && npm test --workspace @echo-brain/organization-protocol && npm test --workspace @echo-brain/organization-api",
@@ -38,7 +38,7 @@
     "test:control-plane": "npm run build:workspaces && npm test --workspace @echo-brain/organization-control-plane",
     "test:record": "npm run build:workspaces && npm test --workspace @echo-brain/organization-record",
     "test:integration": "npm run build:workspaces && vitest run --config vitest.config.ts tests/integration",
-    "test:person": "npm run build:workspaces && vitest run --config vitest.config.ts tests/person-client",
+    "test:person": "node tools/build.mjs --person-client && vitest run --config vitest.config.ts tests/person-client",
     "check:boundary": "node tools/check-boundary.mjs",
     "check:docs": "node tools/check-docs.mjs",
     "check": "npm run check:boundary && npm run check:docs && npm run typecheck && npm run lint && npm test"
