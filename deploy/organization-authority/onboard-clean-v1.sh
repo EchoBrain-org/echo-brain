@@ -20,6 +20,10 @@ FOUNDER_MAIN="services/organization-authority/dist/clean-founder-main.js"
 RUNTIME_UID=''
 RUNTIME_GID=''
 EXECUTOR_UID=''
+ACTIVATION_GRANOLA_SOURCE_BACKUP=''
+ACTIVATION_LLM_SOURCE_BACKUP=''
+ACTIVATION_GRANOLA_ACTIVE_BACKUP=''
+ACTIVATION_LLM_ACTIVE_BACKUP=''
 
 fail() { printf 'onboard-clean-v1: %s\n' "$*" >&2; exit 1; }
 
@@ -28,6 +32,7 @@ usage() {
 usage:
   onboard-clean-v1.sh doctor --input-dir <absolute-private-input-directory>
   onboard-clean-v1.sh prepare --input-dir <absolute-private-input-directory>
+  onboard-clean-v1.sh activate-provider-credentials --input-dir <absolute-private-provider-directory>
   onboard-clean-v1.sh replace-rehearsal --confirm-no-live-users
   onboard-clean-v1.sh resume
   onboard-clean-v1.sh status
@@ -222,6 +227,49 @@ check_input_dir() {
   return 0
 }
 
+check_provider_activation_input_dir() {
+  [[ "$input_dir" = /* && -d "$input_dir" && ! -L "$input_dir" ]] || return 1
+  [[ "$(portable_stat_uid "$input_dir")" == "$(id -u)" ]] || return 1
+  [[ "$(portable_stat_mode "$input_dir")" == 700 ]] || return 1
+
+  local name path
+  local -a expected=(
+    "$INPUT_GRANOLA_CREDENTIAL_NAME"
+    "$INPUT_LLM_CREDENTIAL_NAME"
+  )
+  for name in "${expected[@]}"; do
+    path="$input_dir/$name"
+    [[ -f "$path" && ! -L "$path" ]] || return 1
+    [[ "$(portable_stat_uid "$path")" == "$(id -u)" ]] || return 1
+    [[ "$(portable_stat_mode "$path")" == 600 ]] || return 1
+  done
+  shopt -s nullglob dotglob
+  local entries=("$input_dir"/*)
+  shopt -u nullglob dotglob
+  [[ ${#entries[@]} -eq ${#expected[@]} ]] || return 1
+
+  input_granola_credential="$input_dir/$INPUT_GRANOLA_CREDENTIAL_NAME"
+  input_llm_credential="$input_dir/$INPUT_LLM_CREDENTIAL_NAME"
+  python3 - "$input_granola_credential" "$input_llm_credential" <<'PY'
+import re
+import sys
+
+def credential(path):
+    try:
+        value = open(path, "rb").read()
+    except Exception:
+        raise SystemExit(1)
+    if not 32 <= len(value) <= 4096 or any(byte < 0x21 or byte > 0x7e for byte in value):
+        raise SystemExit(1)
+    return value.decode("ascii")
+
+granola = credential(sys.argv[1])
+credential(sys.argv[2])
+if re.fullmatch(r"grn_[A-Za-z0-9][A-Za-z0-9_-]*", granola) is None:
+    raise SystemExit(1)
+PY
+}
+
 doctor_json() {
   local ok="$1" code="$2" next_action="$3"
   [[ "$ok" == true || "$ok" == false ]] || return 1
@@ -264,6 +312,12 @@ compose_clean() {
   docker compose --env-file "$ENV_FILE" \
     -f "$DEPLOY_DIR/compose.clean-v1.yaml" \
     -f "$DEPLOY_DIR/compose.clean-v1.ec2.yaml" "$@"
+}
+
+compose_clean_quiet() {
+  docker compose --env-file "$ENV_FILE" \
+    -f "$DEPLOY_DIR/compose.clean-v1.yaml" \
+    -f "$DEPLOY_DIR/compose.clean-v1.ec2.yaml" "$@" >/dev/null 2>&1
 }
 
 release_field() { python3 "$RELEASE_TOOL" field "$RELEASE_FILE" "$1"; }
@@ -416,6 +470,44 @@ status_boolean() {
 
 start_runtime() {
   compose_clean up -d --no-build --wait --wait-timeout 90
+}
+
+public_descriptor_healthy() {
+  local descriptor_url
+  descriptor_url="$(setup_value authority_url)/v1/authority-descriptor"
+  compose_clean exec -T authority node -e '
+const url = process.argv[1];
+Promise.all([
+  fetch(url, { signal: AbortSignal.timeout(10_000) }),
+  fetch("http://127.0.0.1:39479/v1/authority-descriptor", {
+    signal: AbortSignal.timeout(10_000),
+  }),
+])
+  .then(async ([publicResponse, localResponse]) => {
+    if (!publicResponse.ok || !localResponse.ok) throw new Error("descriptor status");
+    const [publicBody, localBody] = await Promise.all([
+      publicResponse.text(),
+      localResponse.text(),
+    ]);
+    if (publicBody !== localBody || JSON.parse(publicBody)?.authority_descriptor === undefined)
+      throw new Error("descriptor identity");
+  })
+  .catch(() => process.exit(1));
+' "$descriptor_url" >/dev/null 2>&1
+}
+
+wait_for_public_descriptor() {
+  local attempts=0
+  while (( attempts < 18 )); do
+    if public_descriptor_healthy; then
+      return
+    fi
+    ((attempts += 1))
+    if (( attempts < 18 )); then
+      sleep 5
+    fi
+  done
+  return 1
 }
 
 running_authority() {
@@ -607,6 +699,210 @@ install_credentials() {
     --llm-credential-file /echo-clean/private/llm-credential-source
 }
 
+install_credentials_quiet() {
+  compose_clean_quiet run --rm --no-deps --entrypoint node authority \
+    "$FOUNDER_MAIN" credentials-install \
+    --state-dir /echo-clean/state \
+    --granola-credential-file /echo-clean/private/granola-credential-source \
+    --granola-owner-email-file /echo-clean/private/granola-owner-email \
+    --llm-credential-file /echo-clean/private/llm-credential-source
+}
+
+require_runtime_private_file() {
+  local path="$1" label="$2"
+  [[ -f "$path" && ! -L "$path" ]] || fail "$label destination is unsafe"
+  [[ "$(portable_stat_uid "$path")" == "$RUNTIME_UID" ]] || \
+    fail "$label destination is not runtime-user-owned"
+  [[ "$(portable_stat_mode "$path")" == 600 ]] || \
+    fail "$label destination is not mode 0600"
+}
+
+replace_runtime_private() {
+  local source="$1" destination="$2" label="$3" temporary
+  local destination_directory="${destination%/*}"
+  temporary="$(mktemp "$destination_directory/.${label}.XXXXXX" 2>/dev/null)" || return 1
+  if ! install -m 0600 "$source" "$temporary" >/dev/null 2>&1; then
+    rm -f "$temporary" >/dev/null 2>&1 || true
+    return 1
+  fi
+  if [[ "$EXECUTOR_UID" == 0 ]] && \
+    ! chown "$RUNTIME_UID:$RUNTIME_GID" "$temporary" >/dev/null 2>&1; then
+    rm -f "$temporary" >/dev/null 2>&1 || true
+    return 1
+  fi
+  if ! mv -f "$temporary" "$destination" >/dev/null 2>&1; then
+    rm -f "$temporary" >/dev/null 2>&1 || true
+    return 1
+  fi
+}
+
+backup_runtime_private() {
+  local source="$1" backup="$2"
+  install -m 0600 "$source" "$backup" >/dev/null 2>&1 || return 1
+  if [[ "$EXECUTOR_UID" == 0 ]]; then
+    chown "$RUNTIME_UID:$RUNTIME_GID" "$backup" >/dev/null 2>&1 || return 1
+  fi
+}
+
+restore_provider_backups() {
+  local granola_source_backup="$1" llm_source_backup="$2"
+  local granola_active_backup="$3" llm_active_backup="$4"
+  local granola_source_destination="$PRIVATE_DIR/granola-credential-source"
+  local llm_source_destination="$PRIVATE_DIR/llm-credential-source"
+  local active_directory="$DATA_DIR/state/credentials"
+  replace_runtime_private \
+      "$granola_source_backup" "$granola_source_destination" 'granola-credential' &&
+    replace_runtime_private \
+      "$llm_source_backup" "$llm_source_destination" 'llm-credential' &&
+    replace_runtime_private \
+      "$granola_active_backup" "$active_directory/granola-credential" 'granola-active' &&
+    replace_runtime_private \
+      "$llm_active_backup" "$active_directory/llm-credential" 'llm-active'
+}
+
+provider_rollback_and_verify() {
+  compose_clean down >/dev/null 2>&1 &&
+    restore_provider_backups \
+      "$ACTIVATION_GRANOLA_SOURCE_BACKUP" \
+      "$ACTIVATION_LLM_SOURCE_BACKUP" \
+      "$ACTIVATION_GRANOLA_ACTIVE_BACKUP" \
+      "$ACTIVATION_LLM_ACTIVE_BACKUP" &&
+    start_runtime >/dev/null 2>&1 &&
+    running_authority &&
+    healthy_authority &&
+    authority_uses_accepted_image &&
+    wait_for_public_descriptor
+}
+
+remove_provider_rollback_copies() {
+  rm -f \
+    "$ACTIVATION_GRANOLA_SOURCE_BACKUP" \
+    "$ACTIVATION_LLM_SOURCE_BACKUP" \
+    "$ACTIVATION_GRANOLA_ACTIVE_BACKUP" \
+    "$ACTIVATION_LLM_ACTIVE_BACKUP" >/dev/null 2>&1
+}
+
+disarm_provider_rollback() {
+  trap - EXIT HUP INT TERM
+}
+
+activation_rollback_on_exit() {
+  local exit_status="${1:-1}"
+  trap - EXIT HUP INT TERM
+  if provider_rollback_and_verify >/dev/null 2>&1; then
+    remove_provider_rollback_copies || true
+    printf 'onboard-clean-v1: provider credential activation was interrupted; previous credentials were restored and verified\n' >&2
+  else
+    printf 'onboard-clean-v1: provider credential activation was interrupted; automatic rollback could not be verified and rollback copies were retained\n' >&2
+  fi
+  exit "$exit_status"
+}
+
+arm_provider_rollback() {
+  ACTIVATION_GRANOLA_SOURCE_BACKUP="$1"
+  ACTIVATION_LLM_SOURCE_BACKUP="$2"
+  ACTIVATION_GRANOLA_ACTIVE_BACKUP="$3"
+  ACTIVATION_LLM_ACTIVE_BACKUP="$4"
+  trap 'activation_rollback_on_exit "$?"' EXIT
+  trap 'exit 129' HUP
+  trap 'exit 130' INT
+  trap 'exit 143' TERM
+}
+
+activate_provider_credentials() {
+  require_input_dir_argument "$@"
+  require_host_prerequisites
+  require_prepared
+  if staged_candidate_present; then
+    fail 'a candidate release is staged; finish its promotion or rollback before activating provider credentials'
+  fi
+  if ! check_provider_activation_input_dir; then
+    fail 'provider activation input must contain exactly current-executor-owned mode-0600 granola-credential and llm-credential files in a mode-0700 directory'
+  fi
+  select_runtime_identity "$(setup_value runtime_user)"
+  local granola_source_destination="$PRIVATE_DIR/granola-credential-source"
+  local llm_source_destination="$PRIVATE_DIR/llm-credential-source"
+  local active_directory="$DATA_DIR/state/credentials"
+  local granola_active_destination="$active_directory/granola-credential"
+  local llm_active_destination="$active_directory/llm-credential"
+  require_runtime_private_file "$granola_source_destination" 'Granola credential source'
+  require_runtime_private_file "$llm_source_destination" 'LLM credential source'
+  require_runtime_private_file "$granola_active_destination" 'active Granola credential'
+  require_runtime_private_file "$llm_active_destination" 'active LLM credential'
+  require_image_present
+  local status_json
+  status_json="$(founder_status)"
+  terminal_green "$status_json" || \
+    fail 'provider credentials can activate only on a complete, healthy Authority using the accepted image'
+
+  local granola_source_backup llm_source_backup
+  local granola_active_backup llm_active_backup
+  if ! granola_source_backup="$(mktemp "$PRIVATE_DIR/.granola-source.previous.XXXXXX" 2>/dev/null)" ||
+    ! llm_source_backup="$(mktemp "$PRIVATE_DIR/.llm-source.previous.XXXXXX" 2>/dev/null)" ||
+    ! granola_active_backup="$(mktemp "$active_directory/.granola-active.previous.XXXXXX" 2>/dev/null)" ||
+    ! llm_active_backup="$(mktemp "$active_directory/.llm-active.previous.XXXXXX" 2>/dev/null)"; then
+    rm -f "${granola_source_backup:-}" "${llm_source_backup:-}" \
+      "${granola_active_backup:-}" "${llm_active_backup:-}" >/dev/null 2>&1 || true
+    fail 'could not prepare private provider-credential rollback copies'
+  fi
+  if ! backup_runtime_private "$granola_source_destination" "$granola_source_backup" ||
+    ! backup_runtime_private "$llm_source_destination" "$llm_source_backup" ||
+    ! backup_runtime_private "$granola_active_destination" "$granola_active_backup" ||
+    ! backup_runtime_private "$llm_active_destination" "$llm_active_backup"; then
+    rm -f "$granola_source_backup" "$llm_source_backup" \
+      "$granola_active_backup" "$llm_active_backup" >/dev/null 2>&1 || true
+    fail 'could not prepare private provider-credential rollback copies'
+  fi
+
+  arm_provider_rollback \
+    "$granola_source_backup" "$llm_source_backup" \
+    "$granola_active_backup" "$llm_active_backup"
+
+  if ! compose_clean down >/dev/null 2>&1; then
+    disarm_provider_rollback
+    rm -f "$granola_source_backup" "$llm_source_backup" \
+      "$granola_active_backup" "$llm_active_backup" >/dev/null 2>&1 || true
+    fail 'could not stop the healthy Authority before provider-credential activation'
+  fi
+
+  local installed=false
+  if replace_runtime_private \
+      "$input_granola_credential" "$granola_source_destination" 'granola-credential' &&
+    replace_runtime_private \
+      "$input_llm_credential" "$llm_source_destination" 'llm-credential' &&
+    install_credentials_quiet; then
+    installed=true
+  fi
+
+  if [[ "$installed" == true ]] && \
+    start_runtime && \
+    running_authority && \
+    healthy_authority && \
+    authority_uses_accepted_image && \
+    wait_for_public_descriptor; then
+    disarm_provider_rollback
+    if ! remove_provider_rollback_copies; then
+      fail 'provider credentials activated, but private rollback copies could not be removed'
+    fi
+    printf 'provider_credentials_activated=true\n'
+    printf 'release_id=%s\n' "$(release_field release-id)"
+    printf 'authority_healthy=true\n'
+    printf 'authority_exact_accepted_image=true\n'
+    printf 'public_descriptor_healthy=true\n'
+    return
+  fi
+
+  if provider_rollback_and_verify; then
+    disarm_provider_rollback
+    if ! remove_provider_rollback_copies; then
+      fail 'provider credential activation failed; previous credentials were restored and verified, but private rollback copies could not be removed'
+    fi
+    fail 'provider credential activation failed; previous credentials were restored and verified'
+  fi
+  disarm_provider_rollback
+  fail 'provider credential activation failed; automatic rollback could not be verified and rollback copies were retained'
+}
+
 finalize() {
   compose_clean run --rm --no-deps --entrypoint node authority \
     "$FOUNDER_MAIN" finalize --state-dir /echo-clean/state
@@ -697,6 +993,7 @@ status() {
 case "${1:-}" in
   doctor) shift; doctor "$@" ;;
   prepare) shift; prepare "$@" ;;
+  activate-provider-credentials) shift; activate_provider_credentials "$@" ;;
   replace-rehearsal) shift; replace_rehearsal "$@" ;;
   resume) [[ $# -eq 1 ]] || usage; resume ;;
   status) [[ $# -eq 1 ]] || usage; status ;;

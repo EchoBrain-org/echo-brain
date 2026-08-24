@@ -120,6 +120,38 @@ handoff with `terminal_green=false` and `resume` refuses to start or act on the
 candidate. Use `update-clean-v1.sh status`, then promote or roll back that
 candidate before returning to accepted-onboarding commands.
 
+## Activate replacement provider credentials
+
+Granola and LLM credentials are loaded when the Authority process starts.
+Replacing a file by hand does not activate it in the running process and is not
+a supported status claim. Put both current replacement values in a separate
+current-executor-owned mode-`0700` directory containing exactly these
+mode-`0600` regular files:
+
+| File | Purpose |
+| --- | --- |
+| `granola-credential` | Replacement organization Granola credential. |
+| `llm-credential` | Replacement LLM provider credential. |
+
+Then run the single activation operation:
+
+```sh
+./onboard-clean-v1.sh activate-provider-credentials \
+  --input-dir /absolute/private/echo-provider-credentials
+```
+
+The operation requires a completed, healthy Authority on the accepted image.
+It validates both private inputs before stopping anything, installs both values
+through the Authority's fixed stopped-state credential destinations, restarts
+the same accepted release, and waits for both container health and a public
+descriptor that exactly matches the local Authority. Its result contains
+only the release ID and boolean activation/health outcomes. If the replacement
+cannot start healthily, the previous two credentials are restored and the old
+runtime is started again. Durable records, staged candidates, and Slack
+approval state are not rewritten. OIDC client-secret and Slack-token rotation
+have separate identity/link semantics and are intentionally outside this
+operation.
+
 ## Release and recovery
 
 After onboarding, use the exact-record replacement and checksum client reinstall
