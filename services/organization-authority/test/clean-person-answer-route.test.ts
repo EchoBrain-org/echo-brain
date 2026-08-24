@@ -201,15 +201,15 @@ describe("clean Person Layer 4 answer route", () => {
 
   it.each([
     {
-      name: "the provider fails before planning",
+      name: "the provider fails during planning and answering",
       model: { generate: vi.fn(async () => { throw new Error("provider timeout"); }) },
-      searchCalls: 0,
+      searchCalls: 1,
       revalidationCalls: 0,
     },
     {
-      name: "the planner returns malformed query text",
+      name: "the planner and answerer both return malformed output",
       model: { generate: vi.fn(async () => ({ queries: ["   "] })) },
-      searchCalls: 0,
+      searchCalls: 1,
       revalidationCalls: 0,
     },
     {

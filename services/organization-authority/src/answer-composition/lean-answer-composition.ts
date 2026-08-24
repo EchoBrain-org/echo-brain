@@ -388,13 +388,22 @@ export function createLeanAnswerComposition(options: LeanAnswerCompositionOption
           max_output_tokens: LAYER4_PLANNER_MAX_OUTPUT_TOKENS,
           timeout_ms: requestTimeout,
         });
-      const plan = parsePlan(
-        await options.planner.generate({
-          ...plannerRequest,
-          ...(input.signal === undefined ? {} : { signal: input.signal }),
-        }),
-        question,
-      );
+      input.signal?.throwIfAborted();
+      let plan: readonly string[] = Object.freeze([question]);
+      try {
+        plan = parsePlan(
+          await options.planner.generate({
+            ...plannerRequest,
+            ...(input.signal === undefined ? {} : { signal: input.signal }),
+          }),
+          question,
+        );
+      } catch {
+        // Query expansion improves recall but is not an authorization or
+        // correctness gate. The validated original question remains a safe,
+        // complete Layer 3 request when the planner is unavailable or invalid.
+        input.signal?.throwIfAborted();
+      }
       const release = await options.layer3.retrieve({
         queries: plan,
         ...(input.signal === undefined ? {} : { signal: input.signal }),

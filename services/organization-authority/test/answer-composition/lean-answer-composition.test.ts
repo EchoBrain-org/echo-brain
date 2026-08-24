@@ -176,22 +176,75 @@ describe("lean Layer 4 answer composition", () => {
     expect(audit.append).toHaveBeenCalledTimes(1);
   });
 
-  it("makes planner output obey the Layer 2 query grammar", async () => {
+  it("falls back to the original query when planner output violates the Layer 2 grammar", async () => {
+    const layer3 = {
+      retrieve: vi.fn(async () => release(false)),
+      revalidate: vi.fn(async () => ({ checked_at: "2026-08-23T00:00:01.000Z" })),
+    };
     const answer = createLeanAnswerComposition({
       planner: { generate: vi.fn(async () => ({ queries: ["   "] })) },
-      answerer: { generate: vi.fn(async () => ({ status: "answered", answer: "x", citations: ["a1"] })) },
-      layer3: {
-        retrieve: vi.fn(async () => release()),
-        revalidate: vi.fn(async () => ({ checked_at: "2026-08-23T00:00:01.000Z" })),
-      },
+      answerer: { generate: vi.fn() },
+      layer3,
       audit: { append: vi.fn() },
       provider: "openrouter",
       planner_model: "openai/gpt-4.1-mini",
       answer_model: "openai/gpt-4.1-mini",
     });
-    await expect(answer.answer({ question: "What is the launch date?" })).rejects.toThrow(
-      "query is not Layer 2 compatible",
-    );
+    await expect(answer.answer({ question: "What is the launch date?" })).resolves.toMatchObject({
+      answer: "Insufficient accessible evidence to answer this question.",
+    });
+    expect(layer3.retrieve).toHaveBeenCalledWith({
+      queries: ["What is the launch date?"],
+    });
+  });
+
+  it("falls back once when the optional planner is unavailable", async () => {
+    const layer3 = {
+      retrieve: vi.fn(async () => release()),
+      revalidate: vi.fn(async () => ({ checked_at: "2026-08-23T00:00:01.000Z" })),
+    };
+    const answer = createLeanAnswerComposition({
+      planner: { generate: vi.fn(async () => { throw new Error("provider unavailable"); }) },
+      answerer: { generate: vi.fn(async () => ({ status: "answered", answer: "Tuesday.", citations: ["a1"] })) },
+      layer3,
+      audit: { append: vi.fn() },
+      provider: "openrouter",
+      planner_model: "openai/gpt-4.1-mini",
+      answer_model: "openai/gpt-4.1-mini",
+    });
+
+    await expect(answer.answer({ question: "What is the launch date?" })).resolves.toMatchObject({
+      answer: "Tuesday.",
+    });
+    expect(layer3.retrieve).toHaveBeenCalledOnce();
+    expect(layer3.retrieve).toHaveBeenCalledWith({
+      queries: ["What is the launch date?"],
+    });
+  });
+
+  it("does not turn caller cancellation into planner fallback", async () => {
+    const controller = new AbortController();
+    controller.abort(new Error("caller cancelled"));
+    const planner = { generate: vi.fn() };
+    const layer3 = {
+      retrieve: vi.fn(async () => release()),
+      revalidate: vi.fn(async () => ({ checked_at: "2026-08-23T00:00:01.000Z" })),
+    };
+    const answer = createLeanAnswerComposition({
+      planner,
+      answerer: { generate: vi.fn() },
+      layer3,
+      audit: { append: vi.fn() },
+      provider: "openrouter",
+      planner_model: "openai/gpt-4.1-mini",
+      answer_model: "openai/gpt-4.1-mini",
+    });
+
+    await expect(
+      answer.answer({ question: "What is the launch date?", signal: controller.signal }),
+    ).rejects.toThrow("caller cancelled");
+    expect(planner.generate).not.toHaveBeenCalled();
+    expect(layer3.retrieve).not.toHaveBeenCalled();
   });
 
   it("keeps the original query first and drops exact planner duplicates", async () => {
