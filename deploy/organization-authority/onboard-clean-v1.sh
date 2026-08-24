@@ -24,6 +24,7 @@ ACTIVATION_GRANOLA_SOURCE_BACKUP=''
 ACTIVATION_LLM_SOURCE_BACKUP=''
 ACTIVATION_GRANOLA_ACTIVE_BACKUP=''
 ACTIVATION_LLM_ACTIVE_BACKUP=''
+ACTIVATION_ROLLBACK_FAILURE_STAGE=''
 
 fail() { printf 'onboard-clean-v1: %s\n' "$*" >&2; exit 1; }
 
@@ -500,7 +501,7 @@ wait_for_public_descriptor() {
   local attempts=0
   while (( attempts < 18 )); do
     if public_descriptor_healthy; then
-      return
+      return 0
     fi
     ((attempts += 1))
     if (( attempts < 18 )); then
@@ -761,17 +762,40 @@ restore_provider_backups() {
 }
 
 provider_rollback_and_verify() {
-  compose_clean down >/dev/null 2>&1 &&
-    restore_provider_backups \
+  ACTIVATION_ROLLBACK_FAILURE_STAGE=''
+  if ! compose_clean down >/dev/null 2>&1; then
+    ACTIVATION_ROLLBACK_FAILURE_STAGE='stop'
+    return 1
+  fi
+  if ! restore_provider_backups \
       "$ACTIVATION_GRANOLA_SOURCE_BACKUP" \
       "$ACTIVATION_LLM_SOURCE_BACKUP" \
       "$ACTIVATION_GRANOLA_ACTIVE_BACKUP" \
-      "$ACTIVATION_LLM_ACTIVE_BACKUP" &&
-    start_runtime >/dev/null 2>&1 &&
-    running_authority &&
-    healthy_authority &&
-    authority_uses_accepted_image &&
-    wait_for_public_descriptor
+      "$ACTIVATION_LLM_ACTIVE_BACKUP"; then
+    ACTIVATION_ROLLBACK_FAILURE_STAGE='restore'
+    return 1
+  fi
+  if ! start_runtime >/dev/null 2>&1; then
+    ACTIVATION_ROLLBACK_FAILURE_STAGE='start'
+    return 1
+  fi
+  if ! running_authority; then
+    ACTIVATION_ROLLBACK_FAILURE_STAGE='running'
+    return 1
+  fi
+  if ! healthy_authority; then
+    ACTIVATION_ROLLBACK_FAILURE_STAGE='health'
+    return 1
+  fi
+  if ! authority_uses_accepted_image; then
+    ACTIVATION_ROLLBACK_FAILURE_STAGE='image'
+    return 1
+  fi
+  if ! wait_for_public_descriptor; then
+    ACTIVATION_ROLLBACK_FAILURE_STAGE='descriptor'
+    return 1
+  fi
+  return 0
 }
 
 remove_provider_rollback_copies() {
@@ -793,7 +817,7 @@ activation_rollback_on_exit() {
     remove_provider_rollback_copies || true
     printf 'onboard-clean-v1: provider credential activation was interrupted; previous credentials were restored and verified\n' >&2
   else
-    printf 'onboard-clean-v1: provider credential activation was interrupted; automatic rollback could not be verified and rollback copies were retained\n' >&2
+    printf 'onboard-clean-v1: provider credential activation was interrupted; automatic rollback could not be verified at stage=%s and rollback copies were retained\n' "$ACTIVATION_ROLLBACK_FAILURE_STAGE" >&2
   fi
   exit "$exit_status"
 }
@@ -900,7 +924,7 @@ activate_provider_credentials() {
     fail 'provider credential activation failed; previous credentials were restored and verified'
   fi
   disarm_provider_rollback
-  fail 'provider credential activation failed; automatic rollback could not be verified and rollback copies were retained'
+  fail "provider credential activation failed; automatic rollback could not be verified at stage=$ACTIVATION_ROLLBACK_FAILURE_STAGE and rollback copies were retained"
 }
 
 finalize() {
