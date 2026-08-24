@@ -14,38 +14,50 @@ source-tree path `../release/clean-v1-release.py` or the installed deployment
 path `./release/clean-v1-release.py` used under `/srv/echo-authority-clean-v1`.
 
 The confidential OIDC client must allow
-`https://<authority-host>/v2/session/oidc/callback`. Put each source in a
-private regular file. The secret values are accepted only from files and are
-never placed in command arguments or output. Each credential file contains
-exactly one value with no surrounding whitespace; `prepare` installs the fixed
-server copies with mode `0600` under a mode-`0700` directory.
+`https://<authority-host>/v2/session/oidc/callback`. Create one private input
+directory, owned by the account running the wrapper and with mode `0700`.
+Put exactly these mode-`0600` regular, non-symlink files inside it:
+
+| File | Purpose |
+| --- | --- |
+| `onboarding.clean-v1.json` | Ordinary organization configuration. Start from the committed example. |
+| `release.json` | Canonical clean-v1 release record. |
+| `oidc-config.json` | OIDC configuration, including the exact callback above. |
+| `oidc-client-secret` | OIDC client secret. |
+| `slack-bot-token` | Slack bot token. |
+| `granola-credential` | Organization Granola credential. |
+| `llm-credential` | Retained LLM provider credential. |
+
+The secrets are never placed in command arguments or normal wrapper output.
+`prepare` installs byte-exact fixed server copies with mode `0600` under its
+mode-`0700` private data directory.
 
 ```sh
 cd deploy/organization-authority
-./onboard-clean-v1.sh prepare \
-  --release /absolute/private/clean-v1-release.json \
-  --runtime-user echo-authority \
-  --organization-name 'Example Organization' \
-  --owner-display-name 'Founder Name' \
-  --owner-email founder@example.com \
-  --authority-host authority.example.com \
-  --slack-approval-channel-id C0123456789 \
-  --oidc-config-file /absolute/private/oidc-config.json \
-  --oidc-client-secret-file /absolute/private/oidc-client-secret \
-  --slack-bot-token-file /absolute/private/slack-bot-token \
-  --granola-credential-file /absolute/private/granola-credential \
-  --llm-credential-file /absolute/private/llm-credential
+install -d -m 0700 /absolute/private/echo-onboarding
+cp onboarding.clean-v1.example.json /absolute/private/echo-onboarding/onboarding.clean-v1.json
+# Add the canonical release as release.json and the five provider files listed above.
+chmod 600 /absolute/private/echo-onboarding/*
+chmod 700 /absolute/private/echo-onboarding
+./onboard-clean-v1.sh doctor --input-dir /absolute/private/echo-onboarding
+./onboard-clean-v1.sh prepare --input-dir /absolute/private/echo-onboarding
 ```
 
-`prepare` validates the exact canonical release record, derives its immutable
-image, writes fixed `clean-data/private` files with mode `0600`, and renders
-the two Compose profiles offline. `--runtime-user` is the existing non-login OS
-account that owns the mounted Authority state; on the EC2 deployment it is
-`echo-authority`, even when SSM runs Docker lifecycle commands as root. The
+`doctor` is read-only: it emits one safe JSON result, stops at the first local
+precondition failure, makes no provider calls, and does not pull an image. It
+checks the host tools, active `cloudflared-echo-authority.service`, private
+directory shape, canonical release, runtime user, persisted-path safety, and
+exact OIDC callback. It cannot prove that the tunnel is publicly routed or that
+the callback has been registered with Google; finish those provider steps
+before continuing. `prepare` repeats the same checks, derives the
+immutable image, writes fixed `clean-data/private` files with mode `0600`, and
+renders the two Compose profiles offline. `runtime_user` in the manifest is
+the existing non-login OS account that owns mounted Authority state; on EC2 it
+is `echo-authority`, even when SSM runs Docker lifecycle commands as root. The
 wrapper derives that account's UID and GID so the container never inherits the
-operator's root identity. It does not build or pull an image. An exact repeat
-is safe; a changed release, setup value, runtime user, or private input fails
-rather than silently changing this organization.
+operator's root identity. An exact repeat is safe; a changed release, setup
+value, runtime user, or private input fails rather than silently changing this
+organization.
 
 ### Replace pre-live rehearsal state
 

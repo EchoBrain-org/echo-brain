@@ -22,6 +22,12 @@ const DEPLOY_TOOL = join(REPO, "deploy", "release", "clean-v1-release.py");
 const UPDATE = join(REPO, "deploy", "organization-authority", "update-clean-v1.sh");
 const INSTALL = join(REPO, "deploy", "release", "install-person-client-clean-v1.sh");
 const BUNDLE = join(REPO, "deploy", "release", "create-offline-person-client-bundle.mjs");
+const ONBOARDING_KIT = join(
+  REPO,
+  "deploy",
+  "release",
+  "create-person-onboarding-kit.mjs",
+);
 const DOCKERFILE = join(REPO, "deploy", "organization-authority", "Dockerfile");
 const AUTHORITY_IMAGE_BUILD = join(REPO, "tools", "build-authority-image.mjs");
 const roots: string[] = [];
@@ -415,6 +421,149 @@ printf '%s\\n' '{"schema_version":1,"kind":"echo-packaged-build-identity","produ
     });
     expect(installed.status).toBe(0);
     expect(readFileSync(session, "utf8")).toBe("existing-private-session");
+  });
+
+  it("creates one macOS-arm64 install-to-ready kit with a pinned Node runtime and no npm prerequisite", () => {
+    const root = realpathSync(
+      mkdtempSync(join(tmpdir(), "echo-person-onboarding-kit-")),
+    );
+    roots.push(root);
+    const sourceSha = "a".repeat(40);
+    const version = "0.1.0-internal.1";
+    const artifact = join(root, "client.tgz");
+    const output = join(root, "employee-kit.tar.gz");
+    const runtime = join(root, "node");
+    const packageRoot = join(root, "package", "dist");
+    mkdirSync(packageRoot, { recursive: true });
+    writeFileSync(
+      join(packageRoot, "build-identity.v1.json"),
+      JSON.stringify({
+        schema_version: 1,
+        kind: "echo-packaged-build-identity",
+        product_version: version,
+        source_sha: sourceSha,
+        source_kind: "materialized-commit",
+      }),
+    );
+    writeFileSync(join(packageRoot, "main.js"), "process.stdout.write('fixture\\n');\n");
+    expect(run("tar", ["-czf", artifact, "-C", root, "package"]).status).toBe(0);
+    const artifactSha = createHash("sha256")
+      .update(readFileSync(artifact))
+      .digest("hex");
+    const release = writeRecord(
+      record({
+        source_sha: sourceSha,
+        person_client: {
+          ...record().person_client,
+          version,
+          artifact_sha256: artifactSha,
+        },
+      }),
+    );
+    writeFileSync(
+      runtime,
+      "#!/usr/bin/env bash\nprintf '%s\\n' '{\"version\":\"v22.22.1\",\"platform\":\"darwin\",\"architecture\":\"arm64\"}'\n",
+    );
+    chmodSync(runtime, 0o755);
+
+    const built = run(process.execPath, [
+      ONBOARDING_KIT,
+      "--release",
+      release,
+      "--artifact",
+      artifact,
+      "--runtime-node",
+      runtime,
+      "--output",
+      output,
+    ]);
+    expect(built.status).toBe(0);
+    const receipt = JSON.parse(built.stdout);
+    expect(receipt).toMatchObject({
+      release_id: "clean-v1-20260822-001",
+      client_version: version,
+      platform: "darwin",
+      architecture: "arm64",
+      node_version: "v22.22.1",
+    });
+    expect(readFileSync(`${output}.sha256`, "utf8")).toBe(
+      `${receipt.kit_sha256}  ${basename(output)}\n`,
+    );
+    const members = run("tar", ["-tzf", output]).stdout
+      .split("\n")
+      .filter(Boolean);
+    expect(members).toContain(
+      "echo-person-onboarding-clean-v1-20260822-001/Start ECHO.command",
+    );
+    expect(members).toContain(
+      "echo-person-onboarding-clean-v1-20260822-001/node",
+    );
+    expect(members).toContain(
+      "echo-person-onboarding-clean-v1-20260822-001/kit-manifest.v1.json",
+    );
+    const start = run("tar", [
+      "-xOzf",
+      output,
+      "echo-person-onboarding-clean-v1-20260822-001/Start ECHO.command",
+    ]).stdout;
+    expect(start).toContain("person start");
+    expect(start).toContain("Choose your ECHO invitation file");
+    expect(start).not.toContain("npm ");
+    expect(start).not.toContain("export PATH");
+    expect(members.join("\n")).not.toMatch(
+      /server-state|slack-bot|granola-credential|llm-credential/i,
+    );
+  });
+
+  it("rejects an employee-kit runtime for the wrong platform before publishing", () => {
+    const root = realpathSync(mkdtempSync(join(tmpdir(), "echo-person-kit-runtime-")));
+    roots.push(root);
+    const runtime = join(root, "node");
+    const artifact = join(root, "client.tgz");
+    const output = join(root, "employee-kit.tar.gz");
+    const packageRoot = join(root, "package", "dist");
+    mkdirSync(packageRoot, { recursive: true });
+    writeFileSync(
+      join(packageRoot, "build-identity.v1.json"),
+      JSON.stringify({
+        schema_version: 1,
+        kind: "echo-packaged-build-identity",
+        product_version: "0.1.0-internal.1",
+        source_sha: "a".repeat(40),
+        source_kind: "materialized-commit",
+      }),
+    );
+    expect(run("tar", ["-czf", artifact, "-C", root, "package"]).status).toBe(0);
+    const artifactSha = createHash("sha256")
+      .update(readFileSync(artifact))
+      .digest("hex");
+    const release = writeRecord(
+      record({
+        person_client: {
+          ...record().person_client,
+          artifact_sha256: artifactSha,
+        },
+      }),
+    );
+    writeFileSync(
+      runtime,
+      "#!/usr/bin/env bash\nprintf '%s\\n' '{\"version\":\"v22.22.1\",\"platform\":\"linux\",\"architecture\":\"x64\"}'\n",
+    );
+    chmodSync(runtime, 0o755);
+    const rejected = run(process.execPath, [
+      ONBOARDING_KIT,
+      "--release",
+      release,
+      "--artifact",
+      artifact,
+      "--runtime-node",
+      runtime,
+      "--output",
+      output,
+    ]);
+    expect(rejected.status).toBe(1);
+    expect(rejected.stderr).toContain("v22.22.1 for macOS arm64");
+    expect(existsSync(output)).toBe(false);
   });
 
   it("refuses noncanonical, digest-mismatched, and source-mismatched offline bundle inputs", () => {

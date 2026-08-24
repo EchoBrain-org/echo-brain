@@ -9,14 +9,17 @@ and the permission-aware Layer 1 through Layer 3 stack.
 
 ## Outcome
 
-An operator can deploy one organization Authority through one resumable flow,
-and an owner can invite or revoke an employee who signs in and reads from a
-clean machine. Neither flow requires repository knowledge, generated database
+An operator can bring one prepared organization Authority through one resumable
+flow, and an owner can invite or revoke an employee who signs in and reads from
+a clean machine. Neither flow requires repository knowledge, generated database
 IDs, direct SQLite access, or provider credentials on the employee machine.
 
 The current EC2 plus Docker Compose deployment is the only server target for
-this sprint. The employee machine runs the packaged Person client only; it is
-not an enrolled machine and runs no ECHO daemon.
+this sprint. Preparing the host, its Docker installation, the public
+origin/tunnel or DNS, and the matching OIDC redirect URI remains an operator
+prerequisite; this flow does not provision EC2, a tunnel, DNS, or an OIDC
+client. The employee machine runs the packaged Person client only; it is not
+an enrolled machine and runs no ECHO daemon.
 
 ## Iteration contract
 
@@ -34,15 +37,16 @@ compatibility machinery before customer state exists.
   Person-client version and SHA-256, and baseline compatibility class. Server
   and employee installation consume that record rather than a floating tag or
   repository checkout.
-- A server application update retains the previous image digest, pulls and
-  starts the new digest, checks setup/runtime status plus a bounded canary, and
-  may roll back only to a release in the same baseline compatibility class.
-- While a server candidate is staged, the founder onboarding wrapper reports a
-  staged handoff and never treats that candidate as the accepted release; the
-  update command alone can promote or roll it back.
-- An employee update is an exact-checksum reinstall of the small packaged
-  Person client. V1 adds version/status visibility, not a background updater,
-  MDM integration, or fleet service.
+- A baseline-preserving server application update is an in-place replacement:
+  retain the previous compatible image digest, replace the running image during
+  a short maintenance window, and verify setup/runtime status plus a bounded
+  canary. It is not zero-downtime, rolling, or isolated staging.
+- Rollback currently means restoring the prior compatible application image.
+  It does not restore Authority schema or data, and is therefore not a remedy
+  for a failed schema/data migration.
+- An employee update is an exact-checksum reinstall of the packaged Person
+  client and its bundled runtime. V1 adds version/status visibility, not a
+  background updater, MDM integration, or fleet service.
 
 Every product bug found during onboarding is fixed by building another exact
 candidate and rerunning the same setup, install, status, and canary surfaces.
@@ -54,11 +58,13 @@ The clean Authority already supports founder bootstrap, OIDC Person sessions,
 founder Slack linking, verified organization Slack connection, stopped source
 activation, live-only Granola polling, approval/rejection, Layer 1 append,
 automatic Layer 2 reconciliation, and permission-aware Layer 3 list/search.
+The accepted Layer 4 answer-composition capability is already present; this
+onboarding sprint does not extend it.
 
 The candidate now adds the narrow onboarding product surface:
 
-- one server `prepare` followed by the same repeatable `resume` command and a
-  safe `status` view;
+- host-prerequisite validation through `doctor`, then `prepare`, followed by
+  the same repeatable `resume` command and a safe `status` view;
 - founder bootstrap recovery from its durable non-secret setup plan, without
   re-entering organization, OIDC, origin, channel, or revision inputs;
 - bounded Granola owner observation before activation; and
@@ -88,8 +94,24 @@ would cause the onboarding flow to report a false success.
 
 ### 1. Organization server
 
-Provide one resumable setup command with a non-secret status view over these
-existing stages:
+After the host prerequisites are in place, use the organization wrapper in this
+order:
+
+```sh
+deploy/organization-authority/onboard-clean-v1.sh doctor --input-dir /absolute/private/onboarding-input
+deploy/organization-authority/onboard-clean-v1.sh prepare --input-dir /absolute/private/onboarding-input
+deploy/organization-authority/onboard-clean-v1.sh resume
+```
+
+`doctor` is read-only. It validates the private input directory, the exact
+clean-v1 manifest, expected credential leaves, the canonical release record,
+and the OIDC callback shape before any provider or runtime action. `prepare`
+consumes that prepared input. `resume` continues from the first incomplete
+stage and may be run again after a human OIDC or Slack action. These commands
+do not create the EC2 host, Docker installation, public origin/tunnel or DNS,
+or OIDC client.
+
+The resumable setup has a non-secret status view over these existing stages:
 
 1. Authority origin, OIDC configuration, and clean-state readiness.
 2. Slack bot credential plus a human-selected approval channel.
@@ -99,7 +121,7 @@ existing stages:
 5. Granola owner preflight, live-only source activation, runtime start, and a
    post-cutoff canary.
 
-The command may wrap the current stopped bootstrap/finalize boundary. It must
+The command wraps the current stopped bootstrap/finalize boundary. It must
 explain the next human action and resume from the first incomplete stage. It
 must not print a secret, bearer, invitation grant, or OIDC callback body.
 
@@ -173,11 +195,14 @@ The owner checks the current human-readable roster at any time with:
 echo-brain person employee list
 ```
 
-The employee receives the invitation through a private out-of-band channel,
-runs the packaged `echo-brain person login --invitation ...` flow, and then uses
-`echo-brain person records` with or without `--query`. The login handoff must be
-human-readable and must not require copying raw callback JSON. Slack linking is
-not required for read-only employee access.
+The employee receives the invitation through a private out-of-band channel and
+the owner transfers the matching macOS arm64 onboarding kit separately. The kit
+contains the exact Person-client artifact and its bundled Node runtime, so the
+employee does not install Node, npm, Homebrew, a repository checkout, or a
+daemon. After double-clicking `Start ECHO.command`, the employee chooses the
+invitation file, completes Google sign-in, and the kit performs one bounded
+Layer 3 read before reporting ready. Slack linking is not required for
+read-only employee access.
 
 ### Employee rehearsal commands
 
@@ -202,20 +227,14 @@ to a current-user `0700` directory; `/tmp` itself is not private and is rejected
 Do not use a relative path, a root path, a symlinked invitation leaf, or an
 existing output file.
 
-On the receiving machine, keep the file private before login:
+On the receiving macOS arm64 machine, extract the matching kit and
+double-click `Start ECHO.command`. It asks the employee to choose the
+invitation, copies it into a temporary private location, opens Google sign-in,
+and installs the verified released client under the employee's Application
+Support directory. The employee can subsequently use the installed
+`echo-brain` command for status and reads:
 
 ```sh
-RECEIVED_DIR="$HOME/.local/share/echo-brain/onboarding"
-install -d -m 0700 "$RECEIVED_DIR"
-install -m 0600 /absolute/path/to/received-file \
-  "$RECEIVED_DIR/employee-onboarding.json"
-```
-
-On the employee machine, install the exact released Person-client artifact, then
-run the browser-assisted login and both allowed read paths:
-
-```sh
-echo-brain person login --invitation /absolute/private/employee-onboarding.json
 echo-brain person status
 echo-brain person records --limit 20
 echo-brain person records --query 'known member-readable marker'
@@ -240,7 +259,7 @@ echo-brain person employee reissue \
 
 Reissue is only for an active employee whose initial bootstrap is still being
 completed; it invalidates the prior pending grant. Reinstalling the exact
-Person-client package preserves an existing local session. On a new or replaced
+Person-client kit preserves an existing local session. On a new or replaced
 machine after identity binding, install the client and run
 `echo-brain person login --authority-url https://<authority-host>`; no new
 invitation is needed. After membership revocation, onboarding the person again
@@ -250,46 +269,60 @@ records request are the authoritative current membership checks.
 
 ## Acceptance
 
-The sprint is complete when all of the following pass against one candidate:
+The sprint is complete when the code and real-host rehearsals below pass
+against one candidate.
+
+### Code-level acceptance
 
 1. A fresh fake-provider rehearsal can stop and resume at every setup stage,
    and reaches `processing: active` only after Slack verification, founder
    identity/linking, Granola owner observation, and live-only activation.
 2. The setup status contains no secret bytes, grants, bearers, note content, or
    model content and gives one actionable next step for every incomplete stage.
-3. One real organization rehearsal deploys the current EC2/Compose target,
-   completes the one-note post-cutoff Granola-to-Slack canary, approves one
-   record, reads it through both Layer 1 listing and Layer 2 search, and reruns
-   `resume`/`status` to a terminal green result.
-4. The owner creates an employee invitation without generated-ID handoffs. A
-   clean employee machine installs the packaged client, completes browser OIDC,
-   and obtains its session without pasting raw callback JSON. It holds only
-   its invitation/session state, never server,
-   Slack, Granola, or LLM credentials.
-5. The employee reads organization-member-readable content through listing and
+3. The organization wrapper's `doctor` rejects malformed or unsafe private
+   input before runtime/provider work, and accepts the canonical clean-v1
+   manifest and release record for `prepare`/`resume`.
+4. The packaged macOS arm64 employee kit binds its release record,
+   Person-client artifact, and bundled Node runtime by SHA-256; it performs no
+   npm install or repository checkout, and reports ready only after a bounded
+   Layer 3 read succeeds.
+5. The owner creates an employee invitation without generated-ID handoffs. A
+   clean employee machine completes browser OIDC through the kit and obtains
+   its session without pasting raw callback JSON. It holds only its
+   invitation/session state, never server, Slack, Granola, or LLM credentials.
+6. The employee reads organization-member-readable content through listing and
    search, cannot read another person's restricted-reviewer content, and loses
    both read paths after membership revocation. The founder's allowed paths
    continue to work.
-6. Layer 2-backed Layer 3 search responses retain request-level generation/head
+7. Layer 2-backed Layer 3 search responses retain request-level generation/head
    metadata and per-item atom, record, and policy identity. Layer 1 listing
    retains its existing record envelope, position, and record-hash contract.
    Layer 2 remains append/startup driven and is never built by a query.
-7. Invitation email mismatch, expiry, reuse, foreign Authority, and revoked
+8. Invitation email mismatch, expiry, reuse, foreign Authority, and revoked
    membership deny without creating a session or releasing content.
-8. `npm run check`, the boundary scan, packaged Person-client smoke, and the
-   Layer 4 exclusion remain green.
-9. One release record identifies the exact Authority image, source commit,
-   Person-client artifact/version/SHA-256, and clean-v1 compatibility class.
-   The EC2 operator can apply a baseline-preserving image replacement, observe
-   health and the next action, and retain the prior compatible digest without
-   reading SQLite or generated IDs.
-10. A clean employee machine can install or reinstall the exact Person-client
-    artifact after checking its SHA-256, then report the installed version and
-    connected Authority without exposing its local session.
+9. `npm run check`, the boundary scan, and the packaged Person-client and kit
+   verification tests remain green.
+10. One release record identifies the exact Authority image, source commit,
+    Person-client artifact/version/SHA-256, and clean-v1 compatibility class.
+
+### Real-host acceptance
+
+1. One real organization rehearsal uses a separately prepared EC2/Compose
+   host, public origin, and registered OIDC redirect URI; it completes the
+   one-note post-cutoff Granola-to-Slack canary, approves one record, reads it
+   through Layer 3 listing and Layer 3 search, and reruns `resume`/`status` to
+   a terminal green result.
+2. A clean macOS arm64 employee machine receives the release-matched kit and
+   invitation separately, completes Google sign-in, and reaches ready only
+   after the kit's bounded Layer 3 read.
+3. A baseline-preserving Authority image replacement is rehearsed during a
+   short maintenance window. Health and the bounded canary pass, and restoring
+   the prior compatible image is confirmed as a code/image rollback only.
 
 ## Hard exclusions
 
-- no Layer 4 prompt, model, agent, tool, stream, answer, or citation path;
+- no additional Layer 4 prompt, model, agent, tool, stream, answer, or citation
+  capability beyond the accepted Layer 4 baseline;
 - no V4 envelope, Layer 1, Layer 2, Layer 3 policy, release-fence, response, or
   current read-audit redesign;
 - no historical import, backfill, compatibility bridge, or old-state reader;
@@ -298,7 +331,8 @@ The sprint is complete when all of the following pass against one candidate:
   server daemon, or provider secret;
 - no employee Slack approval capability in this sprint;
 - no browser admin console, SCIM, generic RBAC/policy engine, multi-tenancy,
-  multi-cloud deployer, HA, MDM, or fleet updater;
+  multi-cloud deployer, HA, MDM, fleet updater, zero-downtime deployment, or
+  automated EC2/tunnel/DNS/OIDC provisioning;
 - no automatic schema migration, compatibility bridge, or cross-baseline
   rollback after the first live-user baseline is frozen;
 - no general retry framework or broad Slack, Granola, or LLM product-bug
@@ -308,10 +342,12 @@ The sprint is complete when all of the following pass against one candidate:
 
 ## Sequence
 
-1. Land the resumable server wrapper, founder resume, and owner employee roster.
+1. Prepare the EC2/Compose host, public origin, and OIDC client outside the
+   wrapper, then run `doctor`, `prepare`, and `resume`.
 2. Run fake-provider organization plus two-Person permission acceptance.
-3. Rehearse one real organization server and one clean employee machine using
-   the second employee OIDC identity.
+3. Rehearse one real organization server and one clean macOS arm64 employee
+   machine using the second employee OIDC identity.
 4. Bind the accepted image and Person client into one release record; rehearse
-   one baseline-preserving server update and one verified client reinstall.
+   one in-place baseline-preserving server update and one verified client-kit
+   reinstall.
 5. Only after this exit, resume broad legacy deletion and migration closure.

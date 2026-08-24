@@ -47,6 +47,7 @@ jobs:
           set -euo pipefail
           pack_dir="$RUNNER_TEMP/echo-person-client-package"
           mkdir -p "$pack_dir"
+          chmod 700 "$pack_dir"
           npm run pack:person-client -- "$pack_dir"
           archive_count="$(find "$pack_dir" -maxdepth 1 -type f -name '*.tgz' | wc -l | tr -d ' ')"
           test "$archive_count" = 1
@@ -89,6 +90,44 @@ jobs:
               value.error !== "Person session is unavailable; sign in again"
             ) throw new Error(`unexpected result: ${JSON.stringify(value)}`);
           ' "$stderr_file"
+
+          artifact_sha="$(shasum -a 256 "$archive" | awk '{print $1}')"
+          release_draft="$RUNNER_TEMP/echo-clean-v1-release-draft.json"
+          release_record="$RUNNER_TEMP/echo-clean-v1-release.json"
+          node -e '
+            const fs = require("node:fs");
+            fs.writeFileSync(process.argv[1], JSON.stringify({
+              schema_version: 1,
+              kind: "echo-clean-v1-release",
+              release_id: `clean-v1-ci-${process.env.GITHUB_SHA.slice(0, 12)}`,
+              released_at: "2026-08-24T00:00:00Z",
+              baseline_compatibility_class: "clean-v1",
+              source_sha: process.env.GITHUB_SHA,
+              authority_image: {
+                reference: `123456789012.dkr.ecr.us-west-2.amazonaws.com/echo-brain/authority@sha256:${"b".repeat(64)}`,
+              },
+              person_client: {
+                package: "@echo-brain/person-client",
+                version: process.argv[2],
+                artifact_url: "https://downloads.example.test/echo-brain-person-client.tgz",
+                artifact_sha256: process.argv[3],
+              },
+            }));
+          ' "$release_draft" "$package_version" "$artifact_sha"
+          node tools/clean-v1-release.mjs create "$release_draft" "$release_record"
+          kit="$pack_dir/echo-person-onboarding-kit.tar.gz"
+          npm run kit:person-onboarding -- \
+            --release "$release_record" \
+            --artifact "$archive" \
+            --runtime-node "$(node -p 'process.execPath')" \
+            --output "$kit"
+          kit_extract="$RUNNER_TEMP/echo-person-onboarding-kit"
+          mkdir -p "$kit_extract"
+          tar -xzf "$kit" -C "$kit_extract"
+          kit_root="$(find "$kit_extract" -mindepth 1 -maxdepth 1 -type d -print -quit)"
+          test -x "$kit_root/Start ECHO.command"
+          test -x "$kit_root/node"
+          "$kit_root/node" "$kit_root/verify-person-onboarding-kit.mjs" "$kit_root"
 
   authority-container:
     name: Organization authority container

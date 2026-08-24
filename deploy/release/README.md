@@ -109,9 +109,58 @@ does not query SQLite or print credentials. A change that needs a schema
 migration is not eligible for this loop; make an explicit migration decision
 instead.
 
-## Employee client install or reinstall
+## First-cohort employee onboarding kit
 
-Create one offline employee bundle from the accepted canonical release record
+The supported first-cohort employee path is one private macOS Apple-silicon
+kit plus that employee's one-use invitation. The kit carries the exact Person
+client and a pinned Node 22.22.1 runtime. The employee does not install Node,
+npm, Homebrew, or a repository checkout and does not edit `PATH`.
+
+From the accepted release record and exact Person-client artifact, create the
+kit on a reviewed macOS arm64 build machine running Node 22.22.1:
+
+```sh
+npm run kit:person-onboarding -- \
+  --release /absolute/private/current.clean-v1.json \
+  --artifact /absolute/private/echo-brain-person-client-0.1.0-internal.1.tgz \
+  --output /absolute/private/echo-person-onboarding-clean-v1-20260824-001.tar.gz
+```
+
+The builder binds the release record, client artifact, runtime version,
+platform, architecture, and Node binary hashes in the kit manifest. It emits
+the private archive and its SHA-256 receipt without replacing either. Keep the
+receipt with the owner-side delivery record and transfer the kit through an
+authenticated private channel. That channel is the first-cohort trust boundary:
+the kit is internally hash-bound but is not yet Apple-signed or independently
+signed by ECHO.
+
+Immediately before onboarding, the signed-in owner issues or reissues the
+employee's invitation and transfers that file privately. On the employee Mac:
+
+1. Extract the kit.
+2. Double-click `Start ECHO.command`.
+3. Choose the invitation file when macOS asks.
+4. Complete Google sign-in in the browser that opens.
+
+The command verifies the kit, installs the versioned client under
+`~/Library/Application Support/ECHO`, copies the selected invitation into a
+temporary private file, completes the existing loopback login, and makes one
+bounded permission-aware record request. It prints `phase: "ready"` only after
+that request succeeds. Reinstalling the same kit preserves an existing Person
+session. If `Start ECHO.command` sees any existing session, it stops instead of
+silently applying a possibly different person's invitation; use the installed
+client for the current person, or log out before onboarding another person.
+The invitation remains separate because it is employee-bound, short-lived, and
+may need reissue without rebuilding the release kit.
+
+The first cohort supports macOS arm64 only. A signed and notarized graphical
+installer is a later distribution improvement; it is not required for the
+founder-assisted cohort.
+
+## Advanced client-only install or reinstall
+
+The lower-level offline bundle remains available for development and recovery.
+Create it from the accepted canonical release record
 and the exact client artifact. Use a staged candidate only on the explicitly
 designated canary machine before promotion. The bundle builder rejects a
 noncanonical record, a mismatched artifact checksum, or a packaged build

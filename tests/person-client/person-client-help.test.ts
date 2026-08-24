@@ -21,9 +21,13 @@ describe("Person client help", () => {
     );
     await expect(help(["--help"])).resolves.toContain("employee");
     await expect(help(["--help"])).resolves.toContain("ask");
+    await expect(help(["--help"])).resolves.toContain("start");
   });
 
   it("documents sign-in, reads, session commands, and nested employee commands", async () => {
+    await expect(help(["start", "--help"])).resolves.toContain(
+      "echo-brain person start --invitation <path>",
+    );
     await expect(help(["login", "--help"])).resolves.toContain(
       "--invitation <path> | --authority-url <url>",
     );

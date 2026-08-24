@@ -131,6 +131,7 @@ describe("clean founder deployment profile", () => {
     const source = readFileSync(wrapper, "utf8");
 
     expect(() => execFileSync("bash", ["-n", wrapper])).not.toThrow();
+    expect(source).toContain("doctor) shift; doctor");
     expect(source).toContain("prepare) shift; prepare");
     expect(source).toContain("resume) [[ $# -eq 1 ]] || usage; resume");
     expect(source).toContain("status) [[ $# -eq 1 ]] || usage; status");
@@ -155,7 +156,12 @@ describe("clean founder deployment profile", () => {
     expect(source).not.toContain("Reject a second card");
     expect(source).toContain("founder-person-invitation.json");
     expect(source).toContain("replace-rehearsal --confirm-no-live-users");
-    expect(source).toContain("--runtime-user <os-user>");
+    expect(source).toContain("doctor --input-dir <absolute-private-input-directory>");
+    expect(source).toContain("prepare --input-dir <absolute-private-input-directory>");
+    expect(source).toContain("onboarding.clean-v1.json");
+    expect(source).toContain("echo-clean-v1-onboarding-input-v1");
+    expect(source).toContain("doctor_json");
+    expect(source).toContain("oidc_callback_invalid");
     expect(source).toContain('id -u "$runtime_user"');
     expect(source).toContain('id -g "$runtime_user"');
     expect(source).toContain('chown "$RUNTIME_UID:$RUNTIME_GID"');
@@ -230,11 +236,9 @@ describe("clean founder deployment profile", () => {
     try {
       const deploy = join(root, "deploy", "organization-authority");
       const release = join(deploy, "release");
-      const privateSources = join(root, "private-sources");
       const bin = join(root, "bin");
       mkdirSync(deploy, { recursive: true });
       mkdirSync(release, { recursive: true });
-      mkdirSync(privateSources, { recursive: true });
       mkdirSync(bin, { recursive: true });
       for (const file of [
         "onboard-clean-v1.sh",
@@ -252,11 +256,19 @@ describe("clean founder deployment profile", () => {
       const fakeDocker = join(bin, "docker");
       writeFileSync(
         fakeDocker,
-        `#!/usr/bin/env bash\nprintf '%s\\n' "$*" >> ${JSON.stringify(calls)}\nif [[ "$1 $2" == "compose version" ]]; then exit 0; fi\nif [[ "$1" == compose ]]; then exit 0; fi\nexit 1\n`,
+        `#!/bin/sh\nprintf '%s\\n' "$*" >> ${JSON.stringify(calls)}\nif [ "$1 $2" = "compose version" ]; then exit 0; fi\nif [ "$1" = compose ]; then exit 0; fi\nexit 1\n`,
       );
       chmodSync(fakeDocker, 0o755);
+      writeFileSync(
+        join(bin, "systemctl"),
+        "#!/bin/sh\n[ \"${ECHO_FAKE_TUNNEL:-active}\" = active ]\n",
+      );
+      chmodSync(join(bin, "systemctl"), 0o755);
       const image = "123456789012.dkr.ecr.us-west-2.amazonaws.com/echo-brain/authority@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
-      const releaseRecord = join(privateSources, "release.json");
+      const inputDir = join(root, "onboarding-input");
+      mkdirSync(inputDir);
+      chmodSync(inputDir, 0o700);
+      const releaseRecord = join(inputDir, "release.json");
       writeFileSync(
         releaseRecord,
         `${JSON.stringify({
@@ -275,36 +287,115 @@ describe("clean founder deployment profile", () => {
           source_sha: "c".repeat(40),
         })}\n`,
       );
-      const privateFiles = [
-        "oidc.json",
-        "oidc-secret",
-        "slack-token",
+      writeFileSync(
+        join(inputDir, "onboarding.clean-v1.json"),
+        `${JSON.stringify({
+          authority_host: "authority.example.com",
+          kind: "echo-clean-v1-onboarding-input-v1",
+          organization_name: "Test Org",
+          owner_display_name: "Founder",
+          owner_email: "founder@example.com",
+          runtime_user: execFileSync("id", ["-un"]).toString().trim(),
+          schema_version: 1,
+          slack_approval_channel_id: "C0123456789",
+        })}\n`,
+      );
+      writeFileSync(
+        join(inputDir, "oidc-config.json"),
+        `${JSON.stringify({
+          client_authentication: "client_secret_post",
+          client_id: "founder-client",
+          id_token_algorithms: ["RS256"],
+          issuer: "https://issuer.example",
+          redirect_uri: "https://authority.example.com/v2/session/oidc/callback",
+          tenant: { kind: "issuer" },
+        })}\n`,
+      );
+      for (const name of [
+        "oidc-client-secret",
+        "slack-bot-token",
         "granola-credential",
         "llm-credential",
-      ].map((name) => {
-        const path = join(privateSources, name);
-        writeFileSync(path, `${name}-value`);
-        return path;
-      });
+      ]) {
+        writeFileSync(join(inputDir, name), `${name}-value`);
+      }
+      for (const name of readdirSync(inputDir)) chmodSync(join(inputDir, name), 0o600);
       const prepareArguments = [
         join(deploy, "onboard-clean-v1.sh"),
         "prepare",
-        "--release", releaseRecord,
-        "--runtime-user", execFileSync("id", ["-un"]).toString().trim(),
-        "--organization-name", "Test Org",
-        "--owner-display-name", "Founder",
-        "--owner-email", "founder@example.com",
-        "--authority-host", "authority.example.com",
-        "--slack-approval-channel-id", "C0123456789",
-        "--oidc-config-file", privateFiles[0],
-        "--oidc-client-secret-file", privateFiles[1],
-        "--slack-bot-token-file", privateFiles[2],
-        "--granola-credential-file", privateFiles[3],
-        "--llm-credential-file", privateFiles[4],
+        "--input-dir", inputDir,
       ];
       const commandEnvironment = {
-        env: { ...process.env, PATH: `${bin}:${process.env.PATH}` },
+        env: {
+          ...process.env,
+          PATH: `${bin}:${process.env.PATH}`,
+          ECHO_FAKE_TUNNEL: "active",
+        },
       };
+      symlinkSync("/usr/bin/dirname", join(bin, "dirname"));
+      const noPython = spawnSync(
+        "/bin/bash",
+        [join(deploy, "onboard-clean-v1.sh"), "doctor", "--input-dir", inputDir],
+        { encoding: "utf8", env: { PATH: bin } },
+      );
+      expect(noPython.status).toBe(0);
+      expect(JSON.parse(noPython.stdout)).toEqual({
+        ok: false,
+        code: "python3_missing",
+        next_action: "Install python3, then rerun doctor.",
+      });
+      const inactiveTunnel = execFileSync(
+        "bash",
+        [join(deploy, "onboard-clean-v1.sh"), "doctor", "--input-dir", inputDir],
+        {
+          env: {
+            ...commandEnvironment.env,
+            ECHO_FAKE_TUNNEL: "inactive",
+          },
+        },
+      ).toString();
+      expect(JSON.parse(inactiveTunnel)).toEqual({
+        ok: false,
+        code: "cloudflared_inactive",
+        next_action: "Start cloudflared-echo-authority.service, then rerun doctor.",
+      });
+      const doctor = execFileSync(
+        "bash",
+        [join(deploy, "onboard-clean-v1.sh"), "doctor", "--input-dir", inputDir],
+        commandEnvironment,
+      ).toString();
+      expect(doctor.split("\n").filter(Boolean)).toHaveLength(1);
+      expect(JSON.parse(doctor)).toEqual({
+        ok: true,
+        code: "ready",
+        next_action: "Run prepare with the same input directory.",
+      });
+      const oidcConfig = join(inputDir, "oidc-config.json");
+      writeFileSync(oidcConfig, '{"redirect_uri":"https://wrong.example/v2/session/oidc/callback"}\n');
+      chmodSync(oidcConfig, 0o600);
+      const invalidCallbackDoctor = execFileSync(
+        "bash",
+        [join(deploy, "onboard-clean-v1.sh"), "doctor", "--input-dir", inputDir],
+        commandEnvironment,
+      ).toString();
+      expect(invalidCallbackDoctor.split("\n").filter(Boolean)).toHaveLength(1);
+      expect(JSON.parse(invalidCallbackDoctor)).toEqual({
+        ok: false,
+        code: "oidc_callback_invalid",
+        next_action: "Set oidc-config.json redirect_uri to the exact Authority callback URL.",
+      });
+      writeFileSync(
+        oidcConfig,
+        `${JSON.stringify({
+          client_authentication: "client_secret_post",
+          client_id: "founder-client",
+          id_token_algorithms: ["RS256"],
+          issuer: "https://issuer.example",
+          redirect_uri: "https://authority.example.com/v2/session/oidc/callback",
+          tenant: { kind: "issuer" },
+        })}\n`,
+      );
+      chmodSync(oidcConfig, 0o600);
       const output = execFileSync(
         "bash",
         prepareArguments,
@@ -316,13 +407,13 @@ describe("clean founder deployment profile", () => {
       expect(readFileSync(join(deploy, "clean-data/private/granola-owner-email"), "utf8")).toBe("founder@example.com");
       expect(readFileSync(join(deploy, ".env.clean-v1"), "utf8")).toContain(image);
       expect(readFileSync(join(deploy, ".env.clean-v1"), "utf8")).toContain(
-        `ECHO_CLEAN_AUTHORITY_UID=${statSync(privateSources).uid}`,
+        `ECHO_CLEAN_AUTHORITY_UID=${statSync(inputDir).uid}`,
       );
       expect(readFileSync(join(deploy, ".env.clean-v1"), "utf8")).toContain(
-        `ECHO_CLEAN_AUTHORITY_GID=${statSync(privateSources).gid}`,
+        `ECHO_CLEAN_AUTHORITY_GID=${statSync(inputDir).gid}`,
       );
       expect(statSync(join(deploy, "clean-data")).uid).toBe(
-        statSync(privateSources).uid,
+        statSync(inputDir).uid,
       );
       expect(statSync(join(deploy, "clean-data/private")).mode & 0o777).toBe(
         0o700,
@@ -337,15 +428,27 @@ describe("clean founder deployment profile", () => {
         "llm-credential-source",
       ]) {
         const metadata = statSync(join(deploy, "clean-data/private", fixedPrivate));
-        expect(metadata.uid).toBe(statSync(privateSources).uid);
-        expect(metadata.gid).toBe(statSync(privateSources).gid);
+        expect(metadata.uid).toBe(statSync(inputDir).uid);
+        expect(metadata.gid).toBe(statSync(inputDir).gid);
         expect(metadata.mode & 0o777).toBe(0o600);
       }
       const rootArguments = [...prepareArguments];
-      rootArguments[rootArguments.indexOf("--runtime-user") + 1] = "root";
+      const manifest = join(inputDir, "onboarding.clean-v1.json");
+      writeFileSync(manifest, readFileSync(manifest, "utf8").replace(`"runtime_user":"${execFileSync("id", ["-un"]).toString().trim()}"`, '"runtime_user":"root"'));
       expect(() =>
         execFileSync("bash", rootArguments, commandEnvironment),
-      ).toThrow(/runtime user must be a non-root/);
+      ).toThrow(/doctor did not report this input directory ready/);
+      writeFileSync(manifest, `${JSON.stringify({
+        authority_host: "authority.example.com",
+        kind: "echo-clean-v1-onboarding-input-v1",
+        organization_name: "Test Org",
+        owner_display_name: "Founder",
+        owner_email: "founder@example.com",
+        runtime_user: execFileSync("id", ["-un"]).toString().trim(),
+        schema_version: 1,
+        slack_approval_channel_id: "C0123456789",
+      })}\n`);
+      chmodSync(manifest, 0o600);
       rmSync(join(deploy, "clean-data/private/onboard-clean-v1.conf"));
       const retired = execFileSync(
         "bash",
@@ -369,10 +472,10 @@ describe("clean founder deployment profile", () => {
           join(deploy, "retired-rehearsals", archives[0]!, ".env.clean-v1"),
         ),
       ).toBe(true);
-      symlinkSync(privateSources, join(deploy, "clean-data"), "dir");
+      symlinkSync(inputDir, join(deploy, "clean-data"), "dir");
       expect(() =>
         execFileSync("bash", prepareArguments, commandEnvironment),
-      ).toThrow(/clean data path is not a safe directory/);
+      ).toThrow(/doctor did not report this input directory ready/);
     } finally {
       rmSync(root, { force: true, recursive: true });
     }
