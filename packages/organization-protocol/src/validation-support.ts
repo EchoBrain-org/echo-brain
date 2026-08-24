@@ -12,7 +12,6 @@ import type {
   Sha256Digest,
   SignedIntegrity,
 } from "@echo-brain/federation-protocol";
-import type { OrganizationMembershipTypeV1 } from "./contracts.js";
 import { organizationProtocolValidationFailure } from "./validation-error.js";
 
 export const MAX_ORGANIZATION_PROTOCOL_DOCUMENT_BYTES = 16 * 1024;
@@ -157,17 +156,6 @@ export function assertNonnegativeSafeInteger(
   if (!Number.isSafeInteger(value) || (value as number) < 0) {
     organizationProtocolValidationFailure(
       `${label} must be a nonnegative safe integer`,
-    );
-  }
-}
-
-export function assertMembershipType(
-  value: unknown,
-  label: string,
-): asserts value is OrganizationMembershipTypeV1 {
-  if (value !== "owner" && value !== "employee") {
-    organizationProtocolValidationFailure(
-      `${label} must be owner or employee`,
     );
   }
 }

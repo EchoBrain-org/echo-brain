@@ -14,13 +14,6 @@ const packageJson = JSON.parse(
 
 const assetExports = [
   "./schemas/organization-authority-descriptor.v1.schema.json",
-  "./schemas/organization-enrollment-request.v1.schema.json",
-  "./schemas/organization-enrollment-receipt.v1.schema.json",
-  "./schemas/organization-installation-access-state.v1.schema.json",
-  "./schemas/organization-record-envelope.v1.schema.json",
-  "./schemas/organization-record-receipt.v1.schema.json",
-  "./fixtures/onboarding-access-chain.v1.json",
-  "./fixtures/organization-record-chain.v1.json",
   "./fixtures/organization-record-payload-conformance.v1.json",
 ] as const;
 
@@ -55,8 +48,6 @@ describe("organization protocol package contract", () => {
 
   it("ships no private key or bearer grant in its fixtures", () => {
     for (const name of [
-      "fixtures/onboarding-access-chain.v1.json",
-      "fixtures/organization-record-chain.v1.json",
       "fixtures/organization-record-payload-conformance.v1.json",
     ]) {
       const fixture = readFileSync(new URL(name, packageRoot), "utf8");

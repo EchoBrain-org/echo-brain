@@ -7,7 +7,6 @@ import type {
 import {
   ORGANIZATION_API_PERSON_RECENT_DECISIONS_PATH,
 } from './http.js';
-import { validateOrganizationReadableSearchQuery } from './readable-search.js';
 import {
   MAX_ORGANIZATION_API_BODY_BYTES,
   asRecord,
@@ -73,6 +72,34 @@ function validatePersonReadOperation(
   }
 }
 
+function validateOrganizationPersonReadableSearchQuery(
+  value: unknown,
+  label: string,
+): string {
+  if (
+    typeof value !== 'string' ||
+    value.length === 0 ||
+    value !== value.normalize('NFC') ||
+    value.trim() !== value ||
+    /[\p{Cc}\p{Zl}\p{Zp}]/u.test(value) ||
+    [...value].length > 240
+  ) {
+    fail(`${label} is invalid`);
+  }
+  const terms = new Set<string>();
+  for (const run of value.match(/[\p{L}\p{N}]+/gu) ?? []) {
+    const term = run.toLowerCase().normalize('NFC');
+    if (canonicalJsonBytes(term).byteLength - 2 > 64) {
+      fail(`${label} contains an overlong analyzer term`);
+    }
+    terms.add(term);
+  }
+  if (terms.size === 0 || terms.size > 16) {
+    fail(`${label} must produce from one through sixteen unique terms`);
+  }
+  return value;
+}
+
 export function validateOrganizationPersonRecentDecisionsRequest(
   value: unknown,
 ): OrganizationPersonRecentDecisionsRequestV2 {
@@ -114,7 +141,7 @@ export function validateOrganizationPersonReadableSearchRequest(
     'prn',
     `${label} subject_principal_id`,
   );
-  const query = validateOrganizationReadableSearchQuery(
+  const query = validateOrganizationPersonReadableSearchQuery(
     record.query,
     `${label} query`,
   );

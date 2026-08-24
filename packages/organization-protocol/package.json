@@ -12,13 +12,6 @@
       "import": "./dist/index.js"
     },
     "./schemas/organization-authority-descriptor.v1.schema.json": "./schemas/organization-authority-descriptor.v1.schema.json",
-    "./schemas/organization-enrollment-request.v1.schema.json": "./schemas/organization-enrollment-request.v1.schema.json",
-    "./schemas/organization-enrollment-receipt.v1.schema.json": "./schemas/organization-enrollment-receipt.v1.schema.json",
-    "./schemas/organization-installation-access-state.v1.schema.json": "./schemas/organization-installation-access-state.v1.schema.json",
-    "./schemas/organization-record-envelope.v1.schema.json": "./schemas/organization-record-envelope.v1.schema.json",
-    "./schemas/organization-record-receipt.v1.schema.json": "./schemas/organization-record-receipt.v1.schema.json",
-    "./fixtures/onboarding-access-chain.v1.json": "./fixtures/onboarding-access-chain.v1.json",
-    "./fixtures/organization-record-chain.v1.json": "./fixtures/organization-record-chain.v1.json",
     "./fixtures/organization-record-payload-conformance.v1.json": "./fixtures/organization-record-payload-conformance.v1.json"
   },
   "files": [
@@ -31,7 +24,8 @@
   ],
   "scripts": {
     "build": "tsc -b",
-    "clean": "tsc -b --clean",
+    "clean": "rm -rf dist",
+    "prepack": "npm run clean && npm run build",
     "test": "vitest run --root . --config ../../vitest.package.config.ts"
   },
   "dependencies": {

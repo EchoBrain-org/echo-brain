@@ -13,14 +13,6 @@ export interface P256SigningKeyDescriptor {
   public_key_spki_der_base64: string;
 }
 
-export type KeyProtection =
-  "secure-enclave" | "keychain-this-device-only" | "development-file";
-
-export type KeyProtectionAssurance =
-  | "hardware_bound"
-  | "platform_key_device_only"
-  | "software_key_development_only";
-
 export interface SignedIntegrity {
   canonicalization: "RFC8785";
   payload_sha256: Sha256Digest;
@@ -31,11 +23,4 @@ export interface SignedIntegrity {
 
 export interface SignedDocument {
   integrity: SignedIntegrity;
-}
-
-export interface InstallationKeyDescriptor extends P256SigningKeyDescriptor {
-  installation_id: string;
-  protection: KeyProtection;
-  assurance: KeyProtectionAssurance;
-  private_key_exportable: boolean;
 }

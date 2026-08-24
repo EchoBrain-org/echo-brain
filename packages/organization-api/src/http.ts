@@ -7,13 +7,6 @@ export const ORGANIZATION_API_PROXY_AUTH_SCHEME = 'Echo-Proxy';
 
 export const ORGANIZATION_API_AUTHORITY_DESCRIPTOR_PATH =
   '/v1/authority-descriptor';
-export const ORGANIZATION_API_ENROLLMENTS_PATH = '/v1/enrollments';
-export const ORGANIZATION_API_ACCESS_LEASES_PATH = '/v1/access-leases';
-export const ORGANIZATION_API_PERMISSION_CHECKS_PATH = '/v1/permission-checks';
-export const ORGANIZATION_API_RECENT_DECISIONS_PATH = '/v1/recent-decisions';
-export const ORGANIZATION_API_REVIEWER_RECENT_DECISIONS_PATH =
-  '/v1/reviewer-recent-decisions';
-export const ORGANIZATION_API_READABLE_SEARCH_PATH = '/v1/readable-search';
 export const ORGANIZATION_API_PERSON_RECENT_DECISIONS_PATH =
   '/v2/recent-decisions';
 export const ORGANIZATION_API_PERSON_REVIEWER_RECENT_DECISIONS_PATH =
@@ -38,45 +31,12 @@ export const ORGANIZATION_API_PERSON_SLACK_LINK_CHALLENGES_PATH =
   '/v2/integration-links/slack/challenges';
 export const ORGANIZATION_API_PERSON_SLACK_LINK_COMPLETIONS_PATH =
   '/v2/integration-links/slack/completions';
-/**
- * The organization decision record ingest path. It is the only route bounded by
- * MAX_ORGANIZATION_RECORD_API_BODY_BYTES — the canonical-envelope contract plus
- * the exact request-wrapper bytes; every other route keeps the shared
- * MAX_ORGANIZATION_API_BODY_BYTES limit.
- */
-export const ORGANIZATION_API_RECORD_ENVELOPES_PATH = '/v1/record-envelopes';
-export const ORGANIZATION_API_SLACK_LINK_CHALLENGES_PATH =
-  '/v1/integration-links/slack/challenges';
-export const ORGANIZATION_API_SLACK_LINK_COMPLETIONS_PATH =
-  '/v1/integration-links/slack/completions';
 export const ORGANIZATION_API_ADMIN_OVERVIEW_PATH = '/v1/admin/overview';
 export const ORGANIZATION_API_ADMIN_MEMBERSHIPS_PATH = '/v1/admin/memberships';
-export const ORGANIZATION_API_ADMIN_INSTALLATIONS_PATH =
-  '/v1/admin/installations';
-export const ORGANIZATION_API_ADMIN_ENROLLMENT_GRANTS_PATH =
-  '/v1/admin/enrollment-grants';
 export const ORGANIZATION_API_ADMIN_AUDIT_PATH = '/v1/admin/audit';
-
-export function organizationApiMembershipEnrollmentGrantsPath(
-  membershipId: string,
-): string {
-  return `${ORGANIZATION_API_ADMIN_MEMBERSHIPS_PATH}/${membershipId}/enrollment-grants`;
-}
 
 export function organizationApiMembershipRevocationsPath(
   membershipId: string,
 ): string {
   return `${ORGANIZATION_API_ADMIN_MEMBERSHIPS_PATH}/${membershipId}/revocations`;
-}
-
-export function organizationApiInstallationRevocationsPath(
-  installationId: string,
-): string {
-  return `${ORGANIZATION_API_ADMIN_INSTALLATIONS_PATH}/${installationId}/revocations`;
-}
-
-export function organizationApiInstallationAccessRecoveriesPath(
-  installationId: string,
-): string {
-  return `${ORGANIZATION_API_ADMIN_INSTALLATIONS_PATH}/${installationId}/access-recoveries`;
 }

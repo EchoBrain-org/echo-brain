@@ -21,16 +21,11 @@ import {
   parseCanonicalJson,
   sha256Digest,
   signedPayload,
-  verifyInstallationKeyDescriptor,
   verifyP256LowSSignature,
   verifyP256SigningKeyDescriptor,
   verifySignedDocument,
 } from "../src/index.js";
-import type {
-  InstallationKeyDescriptor,
-  Sha256Digest,
-  SignedDocument,
-} from "../src/index.js";
+import type { Sha256Digest, SignedDocument } from "../src/index.js";
 
 interface GoldenFixture {
   fixture_version: number;
@@ -53,7 +48,6 @@ interface GoldenFixture {
     public_key_spki_der_base64: string;
     key_id: Sha256Digest;
   };
-  installation_key_descriptor: InstallationKeyDescriptor;
   signed_document: SignedDocument & Record<string, unknown>;
   canonical_signed_document_utf8_base64: string;
   canonical_signed_document_sha256: Sha256Digest;
@@ -98,18 +92,6 @@ function signedDocumentWithIntegrity(
       ...patch,
     },
   } as SignedDocument;
-}
-
-function expectInstallationKeyFailure(
-  patch: Record<string, unknown>,
-  message: string,
-): void {
-  expect(() =>
-    verifyInstallationKeyDescriptor({
-      ...fixture.installation_key_descriptor,
-      ...patch,
-    } as InstallationKeyDescriptor),
-  ).toThrow(message);
 }
 
 function expectSignedDocumentFailure(
@@ -189,16 +171,13 @@ describe("federation protocol golden fixture", () => {
     ).toBe(true);
   });
 
-  it("verifies the public installation-key descriptor", () => {
+  it("verifies the public P-256 signing-key descriptor", () => {
     expect(
       verifyP256SigningKeyDescriptor({
         key_id: fixture.key_id,
         algorithm: "ecdsa-p256-sha256-der-low-s",
         public_key_spki_der_base64: fixture.public_key_spki_der_base64,
       }),
-    ).toEqual(publicKey);
-    expect(
-      verifyInstallationKeyDescriptor(fixture.installation_key_descriptor),
     ).toEqual(publicKey);
     expect(() =>
       verifyP256SigningKeyDescriptor({
@@ -347,50 +326,6 @@ describe("federation protocol golden fixture", () => {
       ),
     ).toThrow();
 
-    expectInstallationKeyFailure(
-      { private_key_exportable: false },
-      "installation key protection assurance is inconsistent",
-    );
-    expectInstallationKeyFailure(
-      { key_id: `sha256:${"0".repeat(64)}` },
-      "installation key fingerprint does not match its public key",
-    );
-    expectInstallationKeyFailure(
-      { installation_id: "installation-1" },
-      "installation_id must be a canonical ins identifier",
-    );
-    expectInstallationKeyFailure(
-      { algorithm: "not-supported" },
-      "installation signing algorithm is unsupported",
-    );
-    expectInstallationKeyFailure(
-      {
-        public_key_spki_der_base64: `${fixture.public_key_spki_der_base64}\n`,
-      },
-      "installation public key is not canonical base64",
-    );
-
-    const publicKeyWithTrailingByte = Buffer.concat([
-      publicKey,
-      Buffer.from([0]),
-    ]);
-    expectInstallationKeyFailure(
-      {
-        key_id: p256KeyId(publicKeyWithTrailingByte),
-        public_key_spki_der_base64:
-          publicKeyWithTrailingByte.toString("base64"),
-      },
-      "installation public key must use canonical P-256 SPKI DER bytes",
-    );
-    expectInstallationKeyFailure(
-      {
-        key_id: fixture.non_p256_key_vector.key_id,
-        public_key_spki_der_base64:
-          fixture.non_p256_key_vector.public_key_spki_der_base64,
-      },
-      "installation public key must be P-256 SPKI DER",
-    );
-
     const tampered = structuredClone(fixture.signed_document);
     tampered.fixture_id = "evt_00000000-0000-4000-8000-000000000002";
     expect(() =>
@@ -522,7 +457,6 @@ describe("federation protocol golden fixture", () => {
       "parseCanonicalJson",
       "sha256Digest",
       "signedPayload",
-      "verifyInstallationKeyDescriptor",
       "verifyP256LowSSignature",
       "verifyP256SigningKeyDescriptor",
       "verifySignedDocument",

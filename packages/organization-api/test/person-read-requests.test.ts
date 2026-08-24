@@ -11,9 +11,6 @@ import {
   validateOrganizationPersonReadableSearchRequest,
   validateOrganizationPersonRecentDecisionsRequest,
   validateOrganizationPersonReviewerRecentDecisionsRequest,
-  validateOrganizationReadableSearchRequest,
-  validateOrganizationRecentDecisionsRequest,
-  validateOrganizationReviewerRecentDecisionsRequest,
 } from '../src/index.js';
 
 const IDS = {
@@ -118,15 +115,6 @@ describe('organization Person read requests', () => {
       }),
     ).toThrow('version or kind is unsupported');
 
-    expect(() => validateOrganizationRecentDecisionsRequest(recentRequest)).toThrow(
-      'unexpected shape',
-    );
-    expect(() =>
-      validateOrganizationReviewerRecentDecisionsRequest(reviewerRecentRequest),
-    ).toThrow('unexpected shape');
-    expect(() => validateOrganizationReadableSearchRequest(searchRequest)).toThrow(
-      'unexpected shape',
-    );
   });
 
   it('rejects the retired reviewer and search transport envelopes', () => {
