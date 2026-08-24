@@ -194,4 +194,31 @@ describe("OpenRouter Layer 4 structured output", () => {
     expect(JSON.stringify(error)).not.toContain("private timeout detail");
     expect(JSON.stringify(error)).not.toContain("secret-not-in-errors");
   });
+
+  it("classifies a timeout while reading an HTTP 200 body", async () => {
+    const adapter = createOpenRouterStructuredOutput({
+      credential_ref: "openrouter-production",
+      credential_resolver: () => "secret-not-in-errors",
+      fetch_impl: (async () =>
+        ({
+          ok: true,
+          status: 200,
+          headers: new Headers(),
+          json: async () => {
+            throw new DOMException("private stalled body", "TimeoutError");
+          },
+        }) as unknown as Response) as typeof fetch,
+    });
+
+    const error = await caught(adapter);
+
+    expect(error.diagnostic).toEqual({
+      failure_class: "adapter_timeout",
+      http_status: 200,
+      provider: null,
+      finish_reason: null,
+      provider_generation_id: null,
+    });
+    expect(JSON.stringify(error)).not.toContain("private stalled body");
+  });
 });

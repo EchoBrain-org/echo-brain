@@ -219,13 +219,17 @@ export function createOpenRouterStructuredOutput(
       let payload: unknown;
       try {
         payload = await response.json();
-      } catch {
+      } catch (error) {
         fail(
           response.ok
             ? "OpenRouter response is invalid"
             : "OpenRouter request failed",
           {
-            failure_class: response.ok ? "adapter_response" : "adapter_http",
+            failure_class: isTimeoutFailure(error)
+              ? "adapter_timeout"
+              : response.ok
+                ? "adapter_response"
+                : "adapter_http",
             response,
           },
         );
