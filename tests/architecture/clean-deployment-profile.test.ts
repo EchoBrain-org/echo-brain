@@ -11,7 +11,7 @@ import {
   symlinkSync,
   writeFileSync,
 } from "node:fs";
-import { execFileSync, spawnSync } from "node:child_process";
+import { execFileSync, spawn, spawnSync } from "node:child_process";
 import { join, resolve } from "node:path";
 import { tmpdir } from "node:os";
 import { describe, expect, it } from "vitest";
@@ -23,18 +23,37 @@ function deploymentFile(name: string): string {
   return readFileSync(resolve(REPO, DEPLOYMENT, name), "utf8");
 }
 
+async function waitForFile(path: string): Promise<void> {
+  for (let attempt = 0; attempt < 500; attempt += 1) {
+    if (existsSync(path)) return;
+    await new Promise((resolveWait) => setTimeout(resolveWait, 10));
+  }
+  throw new Error(`timed out waiting for test marker ${path}`);
+}
+
 function preparedStatusFixture() {
   const root = mkdtempSync(join(tmpdir(), "echo-clean-status-"));
   const deploy = join(root, "deploy", "organization-authority");
   const release = join(deploy, "release");
   const privateDir = join(deploy, "clean-data", "private");
+  const stateCredentialDir = join(
+    deploy,
+    "clean-data",
+    "state",
+    "credentials",
+  );
+  const durableSentinel = join(deploy, "clean-data", "state", "durable-sentinel");
   const releaseDir = join(deploy, "clean-data", "release");
   const bin = join(root, "bin");
   const calls = join(root, "docker-calls");
+  const failedUpMarker = join(root, "failed-first-up");
+  const installWaitMarker = join(root, "credential-install-waiting");
+  const installReleaseMarker = join(root, "credential-install-release");
   const image = "123456789012.dkr.ecr.us-west-2.amazonaws.com/echo-brain/authority@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
   const source = "c".repeat(40);
   mkdirSync(release, { recursive: true });
   mkdirSync(privateDir, { recursive: true });
+  mkdirSync(stateCredentialDir, { recursive: true });
   mkdirSync(releaseDir, { recursive: true });
   mkdirSync(bin, { recursive: true });
   for (const file of [
@@ -69,17 +88,32 @@ function preparedStatusFixture() {
     join(deploy, ".env.clean-v1"),
     `ECHO_CLEAN_AUTHORITY_IMAGE=${image}\n`,
   );
-  for (const name of [
-    "onboard-clean-v1.conf",
-    "oidc-config.json",
-    "oidc-client-secret",
-    "slack-bot-token",
-    "granola-credential-source",
-    "granola-owner-email",
-    "llm-credential-source",
-  ]) {
-    writeFileSync(join(privateDir, name), "fixture");
+  chmodSync(privateDir, 0o700);
+  const privateFiles: Record<string, string> = {
+    "onboard-clean-v1.conf": `runtime_user=${execFileSync("id", ["-un"]).toString().trim()}\nauthority_url=https://authority.example\n`,
+    "oidc-config.json": "fixture",
+    "oidc-client-secret": "fixture",
+    "slack-bot-token": "fixture",
+    "granola-credential-source": `grn_${"a".repeat(40)}`,
+    "granola-owner-email": "founder@example.com",
+    "llm-credential-source": "b".repeat(43),
+  };
+  for (const [name, value] of Object.entries(privateFiles)) {
+    writeFileSync(join(privateDir, name), value);
+    chmodSync(join(privateDir, name), 0o600);
   }
+  chmodSync(stateCredentialDir, 0o700);
+  writeFileSync(
+    join(stateCredentialDir, "granola-credential"),
+    privateFiles["granola-credential-source"]!,
+    { mode: 0o600 },
+  );
+  writeFileSync(
+    join(stateCredentialDir, "llm-credential"),
+    privateFiles["llm-credential-source"]!,
+    { mode: 0o600 },
+  );
+  writeFileSync(durableSentinel, "durable-work-must-survive");
   const fakeDocker = join(bin, "docker");
   writeFileSync(
     fakeDocker,
@@ -89,6 +123,28 @@ printf '%s\\n' "$*" >> ${JSON.stringify(calls)}
 if [[ "$1" == compose && "$2" == version ]]; then exit 0; fi
 if [[ "$1" == compose ]]; then
   case " $* " in
+    *" up -d --no-build --wait --wait-timeout 90 "*)
+      if [[ "$ECHO_FAKE_FAIL_FIRST_UP" == true && ! -f ${JSON.stringify(failedUpMarker)} ]]; then
+        touch ${JSON.stringify(failedUpMarker)}
+        exit 1
+      fi
+      exit 0
+      ;;
+    *" credentials-install "*)
+      install -m 0600 ${JSON.stringify(join(privateDir, "granola-credential-source"))} ${JSON.stringify(join(stateCredentialDir, "granola-credential"))}
+      install -m 0600 ${JSON.stringify(join(privateDir, "llm-credential-source"))} ${JSON.stringify(join(stateCredentialDir, "llm-credential"))}
+      if [[ "$ECHO_FAKE_WAIT_DURING_INSTALL" == true ]]; then
+        printf '%s\n' "$PPID" > ${JSON.stringify(installWaitMarker)}
+        wait_attempts=0
+        while [[ ! -f ${JSON.stringify(installReleaseMarker)} && "$wait_attempts" -lt 500 ]]; do
+          sleep 0.01
+          wait_attempts=$((wait_attempts + 1))
+        done
+        [[ -f ${JSON.stringify(installReleaseMarker)} ]] || exit 1
+      fi
+      printf '%s\\n' '{"ok":true,"credentials_ready":true}'
+      exit 0
+      ;;
     *" run "*) printf '%s\\n' '{"next_step":"complete"}'; exit 0 ;;
     *" ps -q authority "*) printf '%s\\n' fake-container; exit 0 ;;
   esac
@@ -109,30 +165,66 @@ exit 1
 `,
   );
   chmodSync(fakeDocker, 0o755);
-  const run = (command: "status" | "resume", overrides: Record<string, string> = {}) =>
-    spawnSync("bash", [join(deploy, "onboard-clean-v1.sh"), command], {
+  const environment = (overrides: Record<string, string>) => ({
+    ...process.env,
+    PATH: `${bin}:${process.env.PATH}`,
+    ECHO_FAKE_REPO_DIGEST: image,
+    ECHO_FAKE_SOURCE: source,
+    ECHO_FAKE_RUNNING: "true",
+    ECHO_FAKE_HEALTH: "healthy",
+    ECHO_FAKE_FAIL_FIRST_UP: "false",
+    ECHO_FAKE_WAIT_DURING_INSTALL: "false",
+    ...overrides,
+  });
+  const run = (
+    command: "activate-provider-credentials" | "status" | "resume",
+    overrides: Record<string, string> = {},
+    args: readonly string[] = [],
+  ) =>
+    spawnSync("bash", [join(deploy, "onboard-clean-v1.sh"), command, ...args], {
       encoding: "utf8",
-      env: {
-        ...process.env,
-        PATH: `${bin}:${process.env.PATH}`,
-        ECHO_FAKE_REPO_DIGEST: image,
-        ECHO_FAKE_SOURCE: source,
-        ECHO_FAKE_RUNNING: "true",
-        ECHO_FAKE_HEALTH: "healthy",
-        ...overrides,
-      },
+      env: environment(overrides),
     });
-  return { root, releaseDir, calls, image, source, run };
+  const spawnRun = (
+    command: "activate-provider-credentials",
+    overrides: Record<string, string>,
+    args: readonly string[],
+  ) =>
+    spawn("bash", [join(deploy, "onboard-clean-v1.sh"), command, ...args], {
+      env: environment(overrides),
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+  return {
+    root,
+    deploy,
+    privateDir,
+    stateCredentialDir,
+    durableSentinel,
+    releaseDir,
+    calls,
+    installWaitMarker,
+    installReleaseMarker,
+    image,
+    source,
+    run,
+    spawnRun,
+  };
 }
 
 describe("clean founder deployment profile", () => {
   it("keeps server onboarding in one resumable wrapper with fixed private inputs", () => {
     const wrapper = resolve(REPO, DEPLOYMENT, "onboard-clean-v1.sh");
     const source = readFileSync(wrapper, "utf8");
+    const guide = deploymentFile("README.md");
 
     expect(() => execFileSync("bash", ["-n", wrapper])).not.toThrow();
     expect(source).toContain("doctor) shift; doctor");
     expect(source).toContain("prepare) shift; prepare");
+    expect(source).toContain(
+      "activate-provider-credentials) shift; activate_provider_credentials",
+    );
+    expect(source).toContain('redirect: "error"');
+    expect(source).toContain(".authority-operation-lock");
     expect(source).toContain("resume) [[ $# -eq 1 ]] || usage; resume");
     expect(source).toContain("status) [[ $# -eq 1 ]] || usage; status");
     expect(source).toContain("compose.clean-v1.yaml");
@@ -176,6 +268,9 @@ describe("clean founder deployment profile", () => {
     expect(source).not.toContain("--slack-bot-token ");
     expect(source).not.toContain("--granola-credential ");
     expect(source).not.toContain("--llm-credential ");
+    expect(guide).toContain("never auto-reclaim an existing lock");
+    expect(guide).toContain("Recover an interrupted operation lock");
+    expect(guide).toContain('rmdir -- "$authority_lock"');
   });
 
   it("reports a complete canary safely when the Authority is stopped or drifted", () => {
@@ -226,10 +321,329 @@ describe("clean founder deployment profile", () => {
       expect(resume.status).toBe(1);
       expect(resume.stderr).toContain("a candidate release is staged");
       expect(readFileSync(fixture.calls, "utf8")).not.toContain(" up ");
+
+      const activation = fixture.run(
+        "activate-provider-credentials",
+        {},
+        ["--input-dir", join(fixture.root, "unused-provider-credentials")],
+      );
+      expect(activation.status).toBe(1);
+      expect(activation.stderr).toContain("a candidate release is staged");
+      expect(readFileSync(fixture.calls, "utf8")).not.toMatch(/ down\n/);
+      expect(readFileSync(fixture.durableSentinel, "utf8")).toBe(
+        "durable-work-must-survive",
+      );
     } finally {
       rmSync(fixture.root, { force: true, recursive: true });
     }
   });
+
+  it("refuses provider activation while another Authority operation holds the shared lock", () => {
+    const fixture = preparedStatusFixture();
+    try {
+      const lock = join(
+        fixture.deploy,
+        "clean-data",
+        ".authority-operation-lock",
+      );
+      mkdirSync(lock, { mode: 0o700 });
+      writeFileSync(join(lock, "owner-pid"), `${process.pid}\n`, {
+        mode: 0o600,
+      });
+
+      const activation = fixture.run(
+        "activate-provider-credentials",
+        {},
+        ["--input-dir", join(fixture.root, "unused-provider-credentials")],
+      );
+
+      expect(activation.status).toBe(1);
+      expect(activation.stderr).toContain(
+        "another Authority activation or release operation is already in progress",
+      );
+      expect(readFileSync(fixture.calls, "utf8")).not.toMatch(/ down\n/);
+    } finally {
+      rmSync(fixture.root, { force: true, recursive: true });
+    }
+  });
+
+  it("keeps a dead-owner operation lock fail-closed for deliberate recovery", () => {
+    const fixture = preparedStatusFixture();
+    try {
+      const lock = join(
+        fixture.deploy,
+        "clean-data",
+        ".authority-operation-lock",
+      );
+      mkdirSync(lock, { mode: 0o700 });
+      writeFileSync(join(lock, "owner-pid"), "99999999\n", {
+        mode: 0o600,
+      });
+
+      const activation = fixture.run(
+        "activate-provider-credentials",
+        {},
+        ["--input-dir", join(fixture.root, "unused-provider-credentials")],
+      );
+
+      expect(activation.status).toBe(1);
+      expect(activation.stderr).toContain(
+        "another Authority activation or release operation is already in progress",
+      );
+      expect(activation.stderr).toContain("README operation-lock recovery");
+      expect(existsSync(lock)).toBe(true);
+      expect(readFileSync(fixture.calls, "utf8")).not.toMatch(/ down\n/);
+    } finally {
+      rmSync(fixture.root, { force: true, recursive: true });
+    }
+  });
+
+  it("activates validated provider credentials through one healthy accepted-image restart", () => {
+    const fixture = preparedStatusFixture();
+    try {
+      const inputDir = join(fixture.root, "provider-credentials");
+      const nextGranola = `grn_${"g".repeat(40)}`;
+      const nextLlm = "l".repeat(43);
+      mkdirSync(inputDir, { mode: 0o700 });
+      writeFileSync(join(inputDir, "granola-credential"), nextGranola, {
+        mode: 0o600,
+      });
+      writeFileSync(join(inputDir, "llm-credential"), nextLlm, {
+        mode: 0o600,
+      });
+
+      expect(
+        readFileSync(join(fixture.stateCredentialDir, "granola-credential"), "utf8"),
+      ).not.toBe(nextGranola);
+      expect(
+        readFileSync(join(fixture.stateCredentialDir, "llm-credential"), "utf8"),
+      ).not.toBe(nextLlm);
+
+      chmodSync(join(inputDir, "llm-credential"), 0o644);
+      const rejected = fixture.run(
+        "activate-provider-credentials",
+        {},
+        ["--input-dir", inputDir],
+      );
+      expect(rejected.status).toBe(1);
+      expect(rejected.stderr).toContain("provider activation input");
+      expect(rejected.stdout).not.toContain("provider_credentials_activated");
+      expect(rejected.stderr).not.toContain(nextGranola);
+      expect(rejected.stderr).not.toContain(nextLlm);
+      expect(readFileSync(fixture.calls, "utf8")).not.toMatch(/ down\n/);
+      expect(
+        readFileSync(join(fixture.stateCredentialDir, "granola-credential"), "utf8"),
+      ).not.toBe(nextGranola);
+      expect(
+        readFileSync(join(fixture.stateCredentialDir, "llm-credential"), "utf8"),
+      ).not.toBe(nextLlm);
+      chmodSync(join(inputDir, "llm-credential"), 0o600);
+
+      const activated = fixture.run(
+        "activate-provider-credentials",
+        {},
+        ["--input-dir", inputDir],
+      );
+      expect(activated.status).toBe(0);
+      expect(activated.stdout).toContain("provider_credentials_activated=true");
+      expect(activated.stdout).toContain("authority_healthy=true");
+      expect(activated.stdout).toContain(
+        "authority_exact_accepted_image=true",
+      );
+      expect(activated.stdout).toContain("public_descriptor_healthy=true");
+      expect(activated.stdout).not.toContain(inputDir);
+      expect(activated.stdout).not.toContain(nextGranola);
+      expect(activated.stdout).not.toContain(nextLlm);
+      expect(activated.stderr).not.toContain(nextGranola);
+      expect(activated.stderr).not.toContain(nextLlm);
+      expect(
+        readFileSync(join(fixture.stateCredentialDir, "granola-credential"), "utf8"),
+      ).toBe(nextGranola);
+      expect(
+        readFileSync(join(fixture.stateCredentialDir, "llm-credential"), "utf8"),
+      ).toBe(nextLlm);
+      const calls = readFileSync(fixture.calls, "utf8");
+      expect(calls).toMatch(/ down\n/);
+      expect(calls).toContain(" up -d --no-build --wait --wait-timeout 90");
+      expect(calls).toContain(" credentials-install ");
+      expect(calls).toContain(" exec -T authority node ");
+      expect(calls).not.toMatch(/ (bootstrap|finalize|resume) /);
+      expect(calls).not.toContain(nextGranola);
+      expect(calls).not.toContain(nextLlm);
+      expect(readFileSync(fixture.durableSentinel, "utf8")).toBe(
+        "durable-work-must-survive",
+      );
+    } finally {
+      rmSync(fixture.root, { force: true, recursive: true });
+    }
+  });
+
+  it("restores and verifies both previous provider credentials when replacement startup fails", () => {
+    const fixture = preparedStatusFixture();
+    try {
+      const inputDir = join(fixture.root, "provider-credentials");
+      const nextGranola = `grn_${"r".repeat(40)}`;
+      const nextLlm = "q".repeat(43);
+      const previousGranolaSource = readFileSync(
+        join(fixture.privateDir, "granola-credential-source"),
+        "utf8",
+      );
+      const previousLlmSource = readFileSync(
+        join(fixture.privateDir, "llm-credential-source"),
+        "utf8",
+      );
+      const previousGranolaActive = readFileSync(
+        join(fixture.stateCredentialDir, "granola-credential"),
+        "utf8",
+      );
+      const previousLlmActive = readFileSync(
+        join(fixture.stateCredentialDir, "llm-credential"),
+        "utf8",
+      );
+      mkdirSync(inputDir, { mode: 0o700 });
+      writeFileSync(join(inputDir, "granola-credential"), nextGranola, {
+        mode: 0o600,
+      });
+      writeFileSync(join(inputDir, "llm-credential"), nextLlm, {
+        mode: 0o600,
+      });
+
+      const failed = fixture.run(
+        "activate-provider-credentials",
+        { ECHO_FAKE_FAIL_FIRST_UP: "true" },
+        ["--input-dir", inputDir],
+      );
+
+      expect(failed.status).toBe(1);
+      expect(failed.stderr).toContain(
+        "previous credentials were restored and verified",
+      );
+      expect(failed.stdout).not.toContain("provider_credentials_activated");
+      expect(failed.stdout).not.toContain(inputDir);
+      expect(failed.stdout).not.toContain(nextGranola);
+      expect(failed.stdout).not.toContain(nextLlm);
+      expect(failed.stderr).not.toContain(inputDir);
+      expect(failed.stderr).not.toContain(nextGranola);
+      expect(failed.stderr).not.toContain(nextLlm);
+      expect(
+        readFileSync(join(fixture.privateDir, "granola-credential-source"), "utf8"),
+      ).toBe(previousGranolaSource);
+      expect(
+        readFileSync(join(fixture.privateDir, "llm-credential-source"), "utf8"),
+      ).toBe(previousLlmSource);
+      expect(
+        readFileSync(join(fixture.stateCredentialDir, "granola-credential"), "utf8"),
+      ).toBe(previousGranolaActive);
+      expect(
+        readFileSync(join(fixture.stateCredentialDir, "llm-credential"), "utf8"),
+      ).toBe(previousLlmActive);
+      const calls = readFileSync(fixture.calls, "utf8");
+      expect(calls.match(/ down\n/g)).toHaveLength(2);
+      expect(
+        calls.match(/ up -d --no-build --wait --wait-timeout 90\n/g),
+      ).toHaveLength(2);
+      expect(calls.match(/ credentials-install /g)).toHaveLength(1);
+      expect(calls).not.toMatch(/ (bootstrap|finalize|resume) /);
+      expect(calls).not.toContain(nextGranola);
+      expect(calls).not.toContain(nextLlm);
+      expect(readFileSync(fixture.durableSentinel, "utf8")).toBe(
+        "durable-work-must-survive",
+      );
+    } finally {
+      rmSync(fixture.root, { force: true, recursive: true });
+    }
+  });
+
+  it("restores the previous provider credentials and runtime when activation is interrupted", async () => {
+    const fixture = preparedStatusFixture();
+    try {
+      const inputDir = join(fixture.root, "provider-credentials");
+      const nextGranola = `grn_${"i".repeat(40)}`;
+      const nextLlm = "j".repeat(43);
+      const previousGranolaSource = readFileSync(
+        join(fixture.privateDir, "granola-credential-source"),
+        "utf8",
+      );
+      const previousLlmSource = readFileSync(
+        join(fixture.privateDir, "llm-credential-source"),
+        "utf8",
+      );
+      const previousGranolaActive = readFileSync(
+        join(fixture.stateCredentialDir, "granola-credential"),
+        "utf8",
+      );
+      const previousLlmActive = readFileSync(
+        join(fixture.stateCredentialDir, "llm-credential"),
+        "utf8",
+      );
+      mkdirSync(inputDir, { mode: 0o700 });
+      writeFileSync(join(inputDir, "granola-credential"), nextGranola, {
+        mode: 0o600,
+      });
+      writeFileSync(join(inputDir, "llm-credential"), nextLlm, {
+        mode: 0o600,
+      });
+
+      const activation = fixture.spawnRun(
+        "activate-provider-credentials",
+        { ECHO_FAKE_WAIT_DURING_INSTALL: "true" },
+        ["--input-dir", inputDir],
+      );
+      let stdout = "";
+      let stderr = "";
+      activation.stdout.on("data", (chunk) => (stdout += chunk.toString()));
+      activation.stderr.on("data", (chunk) => (stderr += chunk.toString()));
+      const completion = new Promise<{ code: number | null; signal: NodeJS.Signals | null }>(
+        (resolveCompletion, rejectCompletion) => {
+          activation.once("error", rejectCompletion);
+          activation.once("close", (code, signal) =>
+            resolveCompletion({ code, signal }),
+          );
+        },
+      );
+      await waitForFile(fixture.installWaitMarker);
+      expect(Number(readFileSync(fixture.installWaitMarker, "utf8"))).toBe(
+        activation.pid,
+      );
+      process.kill(activation.pid!, "SIGTERM");
+      const interruptedAt = Date.now();
+      const interrupted = await completion;
+
+      expect(interrupted).toEqual({ code: 143, signal: null });
+      expect(Date.now() - interruptedAt).toBeLessThan(4_000);
+      expect(stdout).not.toContain("provider_credentials_activated");
+      expect(stdout).not.toContain(nextGranola);
+      expect(stdout).not.toContain(nextLlm);
+      expect(stderr).not.toContain(nextGranola);
+      expect(stderr).not.toContain(nextLlm);
+      expect(
+        readFileSync(join(fixture.privateDir, "granola-credential-source"), "utf8"),
+      ).toBe(previousGranolaSource);
+      expect(
+        readFileSync(join(fixture.privateDir, "llm-credential-source"), "utf8"),
+      ).toBe(previousLlmSource);
+      expect(
+        readFileSync(join(fixture.stateCredentialDir, "granola-credential"), "utf8"),
+      ).toBe(previousGranolaActive);
+      expect(
+        readFileSync(join(fixture.stateCredentialDir, "llm-credential"), "utf8"),
+      ).toBe(previousLlmActive);
+      expect(readFileSync(fixture.durableSentinel, "utf8")).toBe(
+        "durable-work-must-survive",
+      );
+      const calls = readFileSync(fixture.calls, "utf8");
+      expect(calls.match(/ down\n/g)).toHaveLength(2);
+      expect(calls.match(/ credentials-install /g)).toHaveLength(1);
+      expect(calls.match(/ up -d --no-build --wait --wait-timeout 90\n/g)).toHaveLength(1);
+      expect(calls).not.toContain(nextGranola);
+      expect(calls).not.toContain(nextLlm);
+      expect(stderr).toContain(
+        "activation was interrupted; previous credentials were restored and verified",
+      );
+    } finally {
+      rmSync(fixture.root, { force: true, recursive: true });
+    }
+  }, 10_000);
 
   it("prepares offline without pulling and persists the fixed clean inputs", () => {
     const root = mkdtempSync(join(tmpdir(), "echo-clean-onboard-"));
