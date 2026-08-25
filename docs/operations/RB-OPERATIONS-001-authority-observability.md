@@ -8,7 +8,7 @@ component_ids:
 created_at: 2026-08-25
 reviewed_at: 2026-08-25
 reviewed_ref: d3694510a24a8ae1c9b94e22d74fba6335c750a8
-tested_at: null
+tested_at: 2026-08-25
 ---
 
 # RB-OPERATIONS-001: Deploy and rehearse minimal Authority observability
@@ -223,9 +223,22 @@ checks and an availability alarm email. Restore the exact accepted deployment:
 
 ```sh
 docker compose --env-file .env.clean-v1 \
-  -f compose.clean-v1.yaml -f compose.clean-v1.ec2.yaml up -d authority proxy
+  -f compose.clean-v1.yaml -f compose.clean-v1.ec2.yaml \
+  up -d --no-build --wait --wait-timeout 90 authority
+docker compose --env-file .env.clean-v1 \
+  -f compose.clean-v1.yaml -f compose.clean-v1.ec2.yaml restart proxy
+docker compose --env-file .env.clean-v1 \
+  -f compose.clean-v1.yaml -f compose.clean-v1.ec2.yaml \
+  up -d --no-build --wait --wait-timeout 90 authority proxy
 ./onboard-clean-v1.sh status
+curl --fail --silent --show-error --output /dev/null \
+  "https://$authority_host/v1/authority-descriptor"
 ```
+
+The explicit proxy restart is required because `proxy` shares the Authority
+container's network namespace. Stopping and starting only `authority` can leave
+Compose reporting the proxy as running while that proxy still serves from the
+stopped namespace.
 
 Expected recovery evidence is terminal green status, successful descriptor
 checks, the alarm returning to `OK`, and a recovery email. This is the only

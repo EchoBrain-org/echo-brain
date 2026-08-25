@@ -7,6 +7,10 @@ const TEMPLATE = resolve(
   REPO,
   "deploy/organization-authority/authority-observability-v1.template.json",
 );
+const RUNBOOK = resolve(
+  REPO,
+  "docs/operations/RB-OPERATIONS-001-authority-observability.md",
+);
 
 type CloudFormationResource = {
   readonly Type: string;
@@ -35,6 +39,22 @@ function resource(
 }
 
 describe("Authority minimal observability stack", () => {
+  it("reattaches the shared-network proxy after the controlled Authority stop", () => {
+    const runbook = readFileSync(RUNBOOK, "utf8");
+    const rehearsal = runbook.slice(
+      runbook.indexOf("### 6. Rehearse the real public failure path"),
+      runbook.indexOf("## Rollback, containment, evidence, and follow-up"),
+    );
+
+    expect(rehearsal).toContain("stop authority");
+    expect(rehearsal).toMatch(
+      /up -d --no-build --wait --wait-timeout 90 authority[\s\S]+restart proxy[\s\S]+onboard-clean-v1\.sh status/,
+    );
+    expect(rehearsal).toContain(
+      '"https://$authority_host/v1/authority-descriptor"',
+    );
+  });
+
   it("declares a bounded, redirect-rejecting external descriptor check", () => {
     const stack = template();
     const check = resource(stack, "ExternalDescriptorCheck");
