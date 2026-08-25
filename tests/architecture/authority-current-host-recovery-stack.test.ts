@@ -225,6 +225,7 @@ describe("Authority current-host recovery floor stack", () => {
         "ec2:CreateTags",
         "ec2:DeleteSnapshot",
         "ec2:DescribeSnapshots",
+        "ec2:DescribeTags",
         "ec2:DescribeVolumes",
         "ec2:ModifySnapshotTier",
         "tag:GetResources",

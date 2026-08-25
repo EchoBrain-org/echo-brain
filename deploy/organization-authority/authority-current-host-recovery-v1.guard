@@ -60,7 +60,7 @@ rule exact_backup_and_restore_roles {
                 {
                     "Sid": "DescribeEbsResources",
                     "Effect": "Allow",
-                    "Action": [ "ec2:DescribeVolumes", "ec2:DescribeSnapshots" ],
+                    "Action": [ "ec2:DescribeVolumes", "ec2:DescribeSnapshots", "ec2:DescribeTags" ],
                     "Resource": "*"
                 },
                 {
