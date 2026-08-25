@@ -36,3 +36,28 @@ On founder-live machines, those instructions also bind every ECHO-using turn to 
   NOT hit the Secrets Manager Agent daemon directly. MUST use
   `{{resolve:secretsmanager:secret-id:SecretString:json-key}}` with
   `asm-exec` so the secret resolves at runtime without entering context.
+
+## Codex Cloud task boundary
+
+Codex Cloud is the default lane for isolated issue investigation, implementation,
+tests, and pull requests. Cloud tasks may install dependencies, use public
+documentation, read repository and issue metadata, create an issue branch, and
+open or update its pull request.
+
+Cloud tasks MUST NOT:
+
+- call AWS, SSM, EC2, production endpoints, or deployment commands;
+- receive or retrieve AWS, GitHub, Slack, Granola, OpenRouter, or application
+  secrets or tokens;
+- perform a production deploy or a live Slack/Granola rehearsal; or
+- merge a pull request or close an issue directly.
+
+For a bug fix, the Cloud task sequence is: reproduce the issue with a focused
+failing test or command, implement the smallest root-cause fix, run the focused
+proof, run `npm run check`, and open a pull request using the repository template.
+Use `Closes #NN` only for a complete fix and `Refs #NN` for partial work.
+When using `gh`, place `--repo EchoBrain-org/echo-brain` immediately after the
+subcommand so the repository-scoped command rules match without an approval.
+
+Production validation remains a local operator step through SSM and the EC2
+instance role. Never copy a production secret into a Cloud environment.
