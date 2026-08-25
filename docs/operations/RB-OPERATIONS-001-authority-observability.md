@@ -8,7 +8,7 @@ component_ids:
 created_at: 2026-08-25
 reviewed_at: 2026-08-25
 reviewed_ref: d3694510a24a8ae1c9b94e22d74fba6335c750a8
-tested_at: null
+tested_at: 2026-08-25
 ---
 
 # RB-OPERATIONS-001: Deploy and rehearse minimal Authority observability
