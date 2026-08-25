@@ -21,6 +21,8 @@ failure_pattern_ids:
   - FP-IDENTITY-004
   - FP-RELEASE-001
   - FP-OPERATIONS-001
+runbook_ids:
+  - RB-OPERATIONS-001
 qualification_ids:
   - QMAT-JOB-A-STOPPED-001
   - QUAL-20260813-174902-001
@@ -63,6 +65,7 @@ identity no longer matches.
 ## Current references
 
 - [Operations records](../operations/README.md)
+- [Minimal Authority observability runbook](../operations/RB-OPERATIONS-001-authority-observability.md)
 - [Qualification and evidence](../qualification/README.md)
 - [`deploy/organization-authority/`](../../deploy/organization-authority)
 - [`tools/`](../../tools)

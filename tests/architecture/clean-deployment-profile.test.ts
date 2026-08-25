@@ -705,6 +705,7 @@ describe("clean founder deployment profile", () => {
         join(inputDir, "onboarding.clean-v1.json"),
         `${JSON.stringify({
           authority_host: "authority.example.com",
+          aws_region: "us-west-2",
           kind: "echo-clean-v1-onboarding-input-v1",
           organization_name: "Test Org",
           owner_display_name: "Founder",
@@ -784,6 +785,34 @@ describe("clean founder deployment profile", () => {
         code: "ready",
         next_action: "Run prepare with the same input directory.",
       });
+      const manifest = join(inputDir, "onboarding.clean-v1.json");
+      writeFileSync(
+        manifest,
+        readFileSync(manifest, "utf8").replace(
+          '"aws_region":"us-west-2"',
+          '"aws_region":"not-a-region"',
+        ),
+      );
+      chmodSync(manifest, 0o600);
+      const invalidRegionDoctor = execFileSync(
+        "bash",
+        [join(deploy, "onboard-clean-v1.sh"), "doctor", "--input-dir", inputDir],
+        commandEnvironment,
+      ).toString();
+      expect(JSON.parse(invalidRegionDoctor)).toEqual({
+        ok: false,
+        code: "input_manifest_invalid",
+        next_action:
+          "Use the exact manifest schema and safe ordinary values from the committed example.",
+      });
+      writeFileSync(
+        manifest,
+        readFileSync(manifest, "utf8").replace(
+          '"aws_region":"not-a-region"',
+          '"aws_region":"us-west-2"',
+        ),
+      );
+      chmodSync(manifest, 0o600);
       const oidcConfig = join(inputDir, "oidc-config.json");
       writeFileSync(oidcConfig, '{"redirect_uri":"https://wrong.example/v2/session/oidc/callback"}\n');
       chmodSync(oidcConfig, 0o600);
@@ -826,6 +855,12 @@ describe("clean founder deployment profile", () => {
       expect(readFileSync(join(deploy, ".env.clean-v1"), "utf8")).toContain(
         `ECHO_CLEAN_AUTHORITY_GID=${statSync(inputDir).gid}`,
       );
+      expect(readFileSync(join(deploy, ".env.clean-v1"), "utf8")).toContain(
+        "ECHO_CLEAN_AWS_REGION=us-west-2",
+      );
+      expect(readFileSync(join(deploy, ".env.clean-v1"), "utf8")).toContain(
+        "ECHO_CLEAN_AUTHORITY_LOG_GROUP=/echo-brain/authority/authority.example.com",
+      );
       expect(statSync(join(deploy, "clean-data")).uid).toBe(
         statSync(inputDir).uid,
       );
@@ -847,13 +882,13 @@ describe("clean founder deployment profile", () => {
         expect(metadata.mode & 0o777).toBe(0o600);
       }
       const rootArguments = [...prepareArguments];
-      const manifest = join(inputDir, "onboarding.clean-v1.json");
       writeFileSync(manifest, readFileSync(manifest, "utf8").replace(`"runtime_user":"${execFileSync("id", ["-un"]).toString().trim()}"`, '"runtime_user":"root"'));
       expect(() =>
         execFileSync("bash", rootArguments, commandEnvironment),
       ).toThrow(/doctor did not report this input directory ready/);
       writeFileSync(manifest, `${JSON.stringify({
         authority_host: "authority.example.com",
+        aws_region: "us-west-2",
         kind: "echo-clean-v1-onboarding-input-v1",
         organization_name: "Test Org",
         owner_display_name: "Founder",
@@ -931,6 +966,7 @@ describe("clean founder deployment profile", () => {
 
   it("offers a loopback-only HTTP origin for the EC2 tunnel", () => {
     const compose = deploymentFile("compose.clean-v1.ec2.yaml");
+    const baseCompose = deploymentFile("compose.clean-v1.yaml");
     const caddyfile = deploymentFile("Caddyfile.clean-v1.ec2");
 
     expect(compose).toContain("build: !reset null");
@@ -940,6 +976,11 @@ describe("clean founder deployment profile", () => {
     expect(compose).toContain(
       "./Caddyfile.clean-v1.ec2:/etc/caddy/Caddyfile:ro",
     );
+    expect(compose).toContain("driver: awslogs");
+    expect(compose).toContain("ECHO_CLEAN_AWS_REGION");
+    expect(compose).toContain("ECHO_CLEAN_AUTHORITY_LOG_GROUP");
+    expect(compose).toContain('awslogs-stream: "authority"');
+    expect(baseCompose).not.toContain("driver: awslogs");
     expect(caddyfile).toContain(
       "http://{$ECHO_CLEAN_AUTHORITY_HOST:localhost}",
     );

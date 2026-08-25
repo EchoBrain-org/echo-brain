@@ -1,5 +1,6 @@
 {
   "authority_host": "authority.example.com",
+  "aws_region": "us-west-2",
   "kind": "echo-clean-v1-onboarding-input-v1",
   "organization_name": "Example Organization",
   "owner_display_name": "Founder Name",

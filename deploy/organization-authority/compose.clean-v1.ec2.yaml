@@ -8,6 +8,12 @@ services:
         published: "80"
         host_ip: 127.0.0.1
         protocol: tcp
+    logging:
+      driver: awslogs
+      options:
+        awslogs-region: "${ECHO_CLEAN_AWS_REGION:?set ECHO_CLEAN_AWS_REGION to the deployment region}"
+        awslogs-group: "${ECHO_CLEAN_AUTHORITY_LOG_GROUP:?set ECHO_CLEAN_AUTHORITY_LOG_GROUP to the provisioned log group}"
+        awslogs-stream: "authority"
 
   proxy:
     volumes:
