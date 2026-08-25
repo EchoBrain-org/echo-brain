@@ -114,6 +114,7 @@ describe("Authority minimal observability stack", () => {
     expect(JSON.stringify(topicPolicy.Properties)).toContain(
       "cloudwatch.amazonaws.com",
     );
+    expect(JSON.stringify(topicPolicy.Properties)).not.toContain('"sns:*"');
     expect(subscription).toMatchObject({
       Type: "AWS::SNS::Subscription",
       Properties: { Endpoint: { Ref: "AlertEmail" }, Protocol: "email" },

@@ -148,7 +148,7 @@
               "Sid": "DenyInsecureTransport",
               "Effect": "Deny",
               "Principal": "*",
-              "Action": "sns:*",
+              "Action": "sns:Publish",
               "Resource": {
                 "Ref": "AlertTopic"
               },
