@@ -1,0 +1,55 @@
+# Repository-scoped GitHub operations used by the issue-to-PR loop.
+# Put --repo immediately after the subcommand so these narrow rules match.
+
+prefix_rule(
+    pattern = ["gh", "issue", ["list", "view", "create", "edit", "comment", "close", "reopen"], "--repo", "EchoBrain-org/echo-brain"],
+    decision = "allow",
+    justification = "Allow issue lifecycle work only in the ECHO Brain repository",
+    match = [
+        "gh issue list --repo EchoBrain-org/echo-brain --state open",
+        "gh issue view --repo EchoBrain-org/echo-brain 59",
+        "gh issue create --repo EchoBrain-org/echo-brain --title Example --body Example",
+        "gh issue edit --repo EchoBrain-org/echo-brain 59 --add-label area:ingestion",
+        "gh issue comment --repo EchoBrain-org/echo-brain 59 --body Verified",
+        "gh issue close --repo EchoBrain-org/echo-brain 59 --comment Fixed",
+        "gh issue reopen --repo EchoBrain-org/echo-brain 59",
+    ],
+    not_match = [
+        "gh issue close 59 --repo EchoBrain-org/echo-brain",
+        "gh issue close --repo another-org/another-repo 59",
+    ],
+)
+
+prefix_rule(
+    pattern = ["gh", "pr", ["list", "view", "checks", "create", "edit", "comment", "review"], "--repo", "EchoBrain-org/echo-brain"],
+    decision = "allow",
+    justification = "Allow pull-request work only in the ECHO Brain repository; merging remains a separate operator decision",
+    match = [
+        "gh pr list --repo EchoBrain-org/echo-brain --state open",
+        "gh pr view --repo EchoBrain-org/echo-brain 66",
+        "gh pr checks --repo EchoBrain-org/echo-brain 66",
+        "gh pr create --repo EchoBrain-org/echo-brain --base main --title Example --body Example",
+        "gh pr edit --repo EchoBrain-org/echo-brain 66 --add-label area:release",
+        "gh pr comment --repo EchoBrain-org/echo-brain 66 --body Verified",
+        "gh pr review --repo EchoBrain-org/echo-brain 66 --approve",
+    ],
+    not_match = [
+        "gh pr merge --repo EchoBrain-org/echo-brain 66",
+        "gh pr create --repo another-org/another-repo --title Example --body Example",
+    ],
+)
+
+prefix_rule(
+    pattern = ["gh", "repo", "view", "EchoBrain-org/echo-brain"],
+    decision = "allow",
+    justification = "Allow read-only repository metadata inspection",
+    match = ["gh repo view EchoBrain-org/echo-brain --json nameWithOwner"],
+)
+
+# Raw API calls can change settings or bypass the typed command boundaries above.
+prefix_rule(
+    pattern = ["gh", "api"],
+    decision = "prompt",
+    justification = "Use a typed gh issue/pr command when possible; review raw GitHub API calls explicitly",
+    match = ["gh api repos/EchoBrain-org/echo-brain"],
+)
