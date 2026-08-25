@@ -38,7 +38,7 @@ function sourceSha(value, path = 'source_sha') {
 }
 
 function utf8(value, path) {
-  if (typeof value !== 'string' || Buffer.byteLength(value, 'utf8') > MAX_FILE_BYTES) {
+  if (typeof value !== 'string' || !value.isWellFormed() || Buffer.byteLength(value, 'utf8') > MAX_FILE_BYTES) {
     fail(`${path} must be UTF-8 text no larger than 64 KiB`);
   }
   return value;

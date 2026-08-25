@@ -309,6 +309,29 @@ describe("clean-v1 release record", () => {
     expect(missingPython.stderr).toContain("runtime_profile");
   });
 
+  it.each([
+    ["lone high surrogate", "\ud800"],
+    ["lone low surrogate", "\udc00"],
+  ])("keeps runtime-profile validators in parity for %s", (_name, surrogate) => {
+    const profile = writeRuntimeProfile();
+    const value = JSON.parse(readFileSync(profile, "utf8")) as { files: Record<string, string> };
+    value.files["Caddyfile.clean-v1"] = surrogate;
+    writeFileSync(profile, `${canonical(value)}\n`);
+
+    expect(run(process.execPath, [RUNTIME_PROFILE_TOOL, "validate", profile]).status).toBe(1);
+    expect(run("python3", [DEPLOY_RUNTIME_PROFILE_TOOL, "validate", profile]).status).toBe(1);
+  });
+
+  it("keeps runtime-profile validators in parity for valid supplementary Unicode", () => {
+    const profile = writeRuntimeProfile("a".repeat(40), "# valid emoji: 😀\n");
+    const node = run(process.execPath, [RUNTIME_PROFILE_TOOL, "validate", profile]);
+    const python = run("python3", [DEPLOY_RUNTIME_PROFILE_TOOL, "validate", profile]);
+
+    expect(node.status).toBe(0);
+    expect(python.status).toBe(0);
+    expect(node.stdout).toBe(python.stdout);
+  });
+
   it("materializes a runtime profile only into a new directory", () => {
     const root = mkdtempSync(join(tmpdir(), "echo-clean-v1-profile-target-"));
     roots.push(root);
