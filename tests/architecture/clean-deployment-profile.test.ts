@@ -215,6 +215,7 @@ describe("clean founder deployment profile", () => {
   it("keeps server onboarding in one resumable wrapper with fixed private inputs", () => {
     const wrapper = resolve(REPO, DEPLOYMENT, "onboard-clean-v1.sh");
     const source = readFileSync(wrapper, "utf8");
+    const guide = deploymentFile("README.md");
 
     expect(() => execFileSync("bash", ["-n", wrapper])).not.toThrow();
     expect(source).toContain("doctor) shift; doctor");
@@ -222,6 +223,8 @@ describe("clean founder deployment profile", () => {
     expect(source).toContain(
       "activate-provider-credentials) shift; activate_provider_credentials",
     );
+    expect(source).toContain('redirect: "error"');
+    expect(source).toContain(".authority-operation-lock");
     expect(source).toContain("resume) [[ $# -eq 1 ]] || usage; resume");
     expect(source).toContain("status) [[ $# -eq 1 ]] || usage; status");
     expect(source).toContain("compose.clean-v1.yaml");
@@ -265,6 +268,9 @@ describe("clean founder deployment profile", () => {
     expect(source).not.toContain("--slack-bot-token ");
     expect(source).not.toContain("--granola-credential ");
     expect(source).not.toContain("--llm-credential ");
+    expect(guide).toContain("never auto-reclaim an existing lock");
+    expect(guide).toContain("Recover an interrupted operation lock");
+    expect(guide).toContain('rmdir -- "$authority_lock"');
   });
 
   it("reports a complete canary safely when the Authority is stopped or drifted", () => {
@@ -327,6 +333,66 @@ describe("clean founder deployment profile", () => {
       expect(readFileSync(fixture.durableSentinel, "utf8")).toBe(
         "durable-work-must-survive",
       );
+    } finally {
+      rmSync(fixture.root, { force: true, recursive: true });
+    }
+  });
+
+  it("refuses provider activation while another Authority operation holds the shared lock", () => {
+    const fixture = preparedStatusFixture();
+    try {
+      const lock = join(
+        fixture.deploy,
+        "clean-data",
+        ".authority-operation-lock",
+      );
+      mkdirSync(lock, { mode: 0o700 });
+      writeFileSync(join(lock, "owner-pid"), `${process.pid}\n`, {
+        mode: 0o600,
+      });
+
+      const activation = fixture.run(
+        "activate-provider-credentials",
+        {},
+        ["--input-dir", join(fixture.root, "unused-provider-credentials")],
+      );
+
+      expect(activation.status).toBe(1);
+      expect(activation.stderr).toContain(
+        "another Authority activation or release operation is already in progress",
+      );
+      expect(readFileSync(fixture.calls, "utf8")).not.toMatch(/ down\n/);
+    } finally {
+      rmSync(fixture.root, { force: true, recursive: true });
+    }
+  });
+
+  it("keeps a dead-owner operation lock fail-closed for deliberate recovery", () => {
+    const fixture = preparedStatusFixture();
+    try {
+      const lock = join(
+        fixture.deploy,
+        "clean-data",
+        ".authority-operation-lock",
+      );
+      mkdirSync(lock, { mode: 0o700 });
+      writeFileSync(join(lock, "owner-pid"), "99999999\n", {
+        mode: 0o600,
+      });
+
+      const activation = fixture.run(
+        "activate-provider-credentials",
+        {},
+        ["--input-dir", join(fixture.root, "unused-provider-credentials")],
+      );
+
+      expect(activation.status).toBe(1);
+      expect(activation.stderr).toContain(
+        "another Authority activation or release operation is already in progress",
+      );
+      expect(activation.stderr).toContain("README operation-lock recovery");
+      expect(existsSync(lock)).toBe(true);
+      expect(readFileSync(fixture.calls, "utf8")).not.toMatch(/ down\n/);
     } finally {
       rmSync(fixture.root, { force: true, recursive: true });
     }
@@ -540,10 +606,11 @@ describe("clean founder deployment profile", () => {
         activation.pid,
       );
       process.kill(activation.pid!, "SIGTERM");
-      writeFileSync(fixture.installReleaseMarker, "continue");
+      const interruptedAt = Date.now();
       const interrupted = await completion;
 
       expect(interrupted).toEqual({ code: 143, signal: null });
+      expect(Date.now() - interruptedAt).toBeLessThan(4_000);
       expect(stdout).not.toContain("provider_credentials_activated");
       expect(stdout).not.toContain(nextGranola);
       expect(stdout).not.toContain(nextLlm);
@@ -576,7 +643,7 @@ describe("clean founder deployment profile", () => {
     } finally {
       rmSync(fixture.root, { force: true, recursive: true });
     }
-  });
+  }, 10_000);
 
   it("prepares offline without pulling and persists the fixed clean inputs", () => {
     const root = mkdtempSync(join(tmpdir(), "echo-clean-onboard-"));

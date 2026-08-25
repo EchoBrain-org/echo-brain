@@ -149,7 +149,72 @@ describe("clean-v1 release record", () => {
     expect(source).toContain("--canary-passed");
     expect(source).toContain("candidate baseline is not compatible");
     expect(source).toContain("@sha256:");
+    expect(source).toContain(".authority-operation-lock");
     expect(source).not.toContain("imageTag");
+  });
+
+  it("serializes release commands with Authority credential activation", () => {
+    const root = mkdtempSync(join(tmpdir(), "echo-clean-v1-operation-lock-"));
+    roots.push(root);
+    const envFile = join(root, ".env.clean-v1");
+    const state = join(root, "release-state");
+    const lock = join(root, ".authority-operation-lock");
+    const marker = join(root, "docker-called");
+    const bin = join(root, "bin");
+    const docker = join(bin, "docker");
+    mkdirSync(bin);
+    mkdirSync(lock, { mode: 0o700 });
+    writeFileSync(join(lock, "owner-pid"), `${process.pid}\n`, {
+      mode: 0o600,
+    });
+    writeFileSync(docker, `#!/usr/bin/env bash\ntouch "${marker}"\n`);
+    chmodSync(docker, 0o755);
+    writeFileSync(
+      envFile,
+      `ECHO_CLEAN_AUTHORITY_IMAGE=${record().authority_image.reference}\n`,
+      { mode: 0o600 },
+    );
+
+    const result = run("bash", [UPDATE, "status"], {
+      PATH: `${bin}:${process.env.PATH}`,
+      ECHO_CLEAN_ENV_FILE: envFile,
+      ECHO_CLEAN_RELEASE_STATE_DIR: state,
+    });
+
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain(
+      "another Authority activation or release operation is already in progress",
+    );
+    expect(existsSync(marker)).toBe(false);
+  });
+
+  it("keeps a dead-owner release lock fail-closed for deliberate recovery", () => {
+    const root = mkdtempSync(join(tmpdir(), "echo-clean-v1-stale-lock-"));
+    roots.push(root);
+    const envFile = join(root, ".env.clean-v1");
+    const state = join(root, "release-state");
+    const lock = join(root, ".authority-operation-lock");
+    mkdirSync(lock, { mode: 0o700 });
+    writeFileSync(join(lock, "owner-pid"), "99999999\n", {
+      mode: 0o600,
+    });
+    writeFileSync(
+      envFile,
+      `ECHO_CLEAN_AUTHORITY_IMAGE=${record().authority_image.reference}\n`,
+      { mode: 0o600 },
+    );
+
+    const result = run("bash", [UPDATE, "status"], {
+      ECHO_CLEAN_ENV_FILE: envFile,
+      ECHO_CLEAN_RELEASE_STATE_DIR: state,
+    });
+
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain(
+      "another Authority activation or release operation is already in progress",
+    );
+    expect(result.stderr).toContain("README operation-lock recovery");
+    expect(existsSync(lock)).toBe(true);
   });
 
   it("binds Authority image source to the OCI revision label before startup", () => {

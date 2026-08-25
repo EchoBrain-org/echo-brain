@@ -12,6 +12,7 @@ ENV_FILE="$DEPLOY_DIR/.env.clean-v1"
 SETUP_FILE="$PRIVATE_DIR/onboard-clean-v1.conf"
 RELEASE_FILE="$RELEASE_DIR/current.clean-v1.json"
 CANDIDATE_FILE="$RELEASE_DIR/candidate.clean-v1.json"
+OPERATION_LOCK_DIR="$DATA_DIR/.authority-operation-lock"
 RELEASE_TOOL="$DEPLOY_DIR/../release/clean-v1-release.py"
 if [[ -f "$DEPLOY_DIR/release/clean-v1-release.py" ]]; then
   RELEASE_TOOL="$DEPLOY_DIR/release/clean-v1-release.py"
@@ -25,8 +26,29 @@ ACTIVATION_LLM_SOURCE_BACKUP=''
 ACTIVATION_GRANOLA_ACTIVE_BACKUP=''
 ACTIVATION_LLM_ACTIVE_BACKUP=''
 ACTIVATION_ROLLBACK_FAILURE_STAGE=''
+ACTIVATION_CHILD_PID=''
+OPERATION_LOCK_HELD=false
 
 fail() { printf 'onboard-clean-v1: %s\n' "$*" >&2; exit 1; }
+
+release_operation_lock() {
+  if [[ "$OPERATION_LOCK_HELD" == true ]]; then
+    rm -f "$OPERATION_LOCK_DIR/owner-pid" >/dev/null 2>&1 || true
+    rmdir "$OPERATION_LOCK_DIR" >/dev/null 2>&1 || true
+    OPERATION_LOCK_HELD=false
+  fi
+}
+
+acquire_operation_lock() {
+  if ! mkdir -m 0700 "$OPERATION_LOCK_DIR" 2>/dev/null; then
+    fail 'another Authority activation or release operation is already in progress; follow the README operation-lock recovery steps if its owner was interrupted'
+  fi
+  OPERATION_LOCK_HELD=true
+  if ! (umask 077; printf '%s\n' "$$" > "$OPERATION_LOCK_DIR/owner-pid"); then
+    release_operation_lock
+    fail 'could not record the Authority operation lock owner'
+  fi
+}
 
 usage() {
   cat >&2 <<'EOF'
@@ -315,10 +337,15 @@ compose_clean() {
     -f "$DEPLOY_DIR/compose.clean-v1.ec2.yaml" "$@"
 }
 
-compose_clean_quiet() {
+activation_compose_quiet() {
+  local status=0
   docker compose --env-file "$ENV_FILE" \
     -f "$DEPLOY_DIR/compose.clean-v1.yaml" \
-    -f "$DEPLOY_DIR/compose.clean-v1.ec2.yaml" "$@" >/dev/null 2>&1
+    -f "$DEPLOY_DIR/compose.clean-v1.ec2.yaml" "$@" >/dev/null 2>&1 &
+  ACTIVATION_CHILD_PID=$!
+  wait "$ACTIVATION_CHILD_PID" || status=$?
+  ACTIVATION_CHILD_PID=''
+  return "$status"
 }
 
 release_field() { python3 "$RELEASE_TOOL" field "$RELEASE_FILE" "$1"; }
@@ -476,11 +503,12 @@ start_runtime() {
 public_descriptor_healthy() {
   local descriptor_url
   descriptor_url="$(setup_value authority_url)/v1/authority-descriptor"
-  compose_clean exec -T authority node -e '
+  activation_compose_quiet exec -T authority node -e '
 const url = process.argv[1];
 Promise.all([
-  fetch(url, { signal: AbortSignal.timeout(10_000) }),
+  fetch(url, { redirect: "error", signal: AbortSignal.timeout(10_000) }),
   fetch("http://127.0.0.1:39479/v1/authority-descriptor", {
+    redirect: "error",
     signal: AbortSignal.timeout(10_000),
   }),
 ])
@@ -701,7 +729,7 @@ install_credentials() {
 }
 
 install_credentials_quiet() {
-  compose_clean_quiet run --rm --no-deps --entrypoint node authority \
+  activation_compose_quiet run --rm --no-deps --entrypoint node authority \
     "$FOUNDER_MAIN" credentials-install \
     --state-dir /echo-clean/state \
     --granola-credential-file /echo-clean/private/granola-credential-source \
@@ -763,7 +791,7 @@ restore_provider_backups() {
 
 provider_rollback_and_verify() {
   ACTIVATION_ROLLBACK_FAILURE_STAGE=''
-  if ! compose_clean down >/dev/null 2>&1; then
+  if ! activation_compose_quiet down; then
     ACTIVATION_ROLLBACK_FAILURE_STAGE='stop'
     return 1
   fi
@@ -775,7 +803,7 @@ provider_rollback_and_verify() {
     ACTIVATION_ROLLBACK_FAILURE_STAGE='restore'
     return 1
   fi
-  if ! start_runtime >/dev/null 2>&1; then
+  if ! activation_compose_quiet up -d --no-build --wait --wait-timeout 90; then
     ACTIVATION_ROLLBACK_FAILURE_STAGE='start'
     return 1
   fi
@@ -807,7 +835,20 @@ remove_provider_rollback_copies() {
 }
 
 disarm_provider_rollback() {
-  trap - EXIT HUP INT TERM
+  trap - HUP INT TERM
+  trap 'release_operation_lock' EXIT
+}
+
+activation_signal_exit() {
+  local exit_status="$1"
+  trap - HUP INT TERM
+  if [[ "$ACTIVATION_CHILD_PID" =~ ^[0-9]+$ ]] && \
+    kill -0 "$ACTIVATION_CHILD_PID" >/dev/null 2>&1; then
+    kill -TERM "$ACTIVATION_CHILD_PID" >/dev/null 2>&1 || true
+    wait "$ACTIVATION_CHILD_PID" >/dev/null 2>&1 || true
+  fi
+  ACTIVATION_CHILD_PID=''
+  exit "$exit_status"
 }
 
 activation_rollback_on_exit() {
@@ -819,6 +860,7 @@ activation_rollback_on_exit() {
   else
     printf 'onboard-clean-v1: provider credential activation was interrupted; automatic rollback could not be verified at stage=%s and rollback copies were retained\n' "$ACTIVATION_ROLLBACK_FAILURE_STAGE" >&2
   fi
+  release_operation_lock
   exit "$exit_status"
 }
 
@@ -828,15 +870,20 @@ arm_provider_rollback() {
   ACTIVATION_GRANOLA_ACTIVE_BACKUP="$3"
   ACTIVATION_LLM_ACTIVE_BACKUP="$4"
   trap 'activation_rollback_on_exit "$?"' EXIT
-  trap 'exit 129' HUP
-  trap 'exit 130' INT
-  trap 'exit 143' TERM
+  trap 'activation_signal_exit 129' HUP
+  trap 'activation_signal_exit 130' INT
+  trap 'activation_signal_exit 143' TERM
 }
 
 activate_provider_credentials() {
   require_input_dir_argument "$@"
   require_host_prerequisites
   require_prepared
+  acquire_operation_lock
+  trap 'release_operation_lock' EXIT
+  trap 'exit 129' HUP
+  trap 'exit 130' INT
+  trap 'exit 143' TERM
   if staged_candidate_present; then
     fail 'a candidate release is staged; finish its promotion or rollback before activating provider credentials'
   fi
@@ -882,7 +929,7 @@ activate_provider_credentials() {
     "$granola_source_backup" "$llm_source_backup" \
     "$granola_active_backup" "$llm_active_backup"
 
-  if ! compose_clean down >/dev/null 2>&1; then
+  if ! activation_compose_quiet down; then
     disarm_provider_rollback
     rm -f "$granola_source_backup" "$llm_source_backup" \
       "$granola_active_backup" "$llm_active_backup" >/dev/null 2>&1 || true
@@ -899,7 +946,7 @@ activate_provider_credentials() {
   fi
 
   if [[ "$installed" == true ]] && \
-    start_runtime && \
+    activation_compose_quiet up -d --no-build --wait --wait-timeout 90 && \
     running_authority && \
     healthy_authority && \
     authority_uses_accepted_image && \

@@ -141,6 +141,10 @@ Then run the single activation operation:
 ```
 
 The operation requires a completed, healthy Authority on the accepted image.
+It holds the same single-operation lock as release stage, promotion, rollback,
+and status, so credential activation cannot race an image change.
+The scripts never auto-reclaim an existing lock: a killed wrapper can leave a
+Compose child or Docker Engine operation running after the wrapper PID exits.
 It validates both private inputs before stopping anything, installs both values
 through the Authority's fixed stopped-state credential destinations, restarts
 the same accepted release, and waits for both container health and a public
@@ -151,6 +155,45 @@ runtime is started again. Durable records, staged candidates, and Slack
 approval state are not rewritten. OIDC client-secret and Slack-token rotation
 have separate identity/link semantics and are intentionally outside this
 operation.
+
+### Recover an interrupted operation lock
+
+If an activation or release wrapper was killed without running its exit trap,
+leave `clean-data/.authority-operation-lock` in place until the old Docker work
+is conclusively stopped. On the EC2 Authority host:
+
+1. Restart the host before recovery. This is the lean V1 way to terminate an
+   orphaned Compose client and any in-flight operation whose state cannot be
+   proven from the dead wrapper PID alone. Wait for Docker to become responsive.
+2. From this directory, inspect without deleting anything:
+
+   ```sh
+   authority_lock=clean-data/.authority-operation-lock
+   cat "$authority_lock/owner-pid"
+   ps -p "$(cat "$authority_lock/owner-pid")" -o pid=,ppid=,command=
+   docker compose --env-file .env.clean-v1 \
+     -f compose.clean-v1.yaml -f compose.clean-v1.ec2.yaml ps --all
+   find clean-data/private clean-data/state/credentials -maxdepth 1 \
+     -type f -name '.*.previous.*' -print
+   ```
+
+3. If the recorded process still exists, a container is starting or restarting,
+   or any `.previous` credential rollback copy is listed, keep the lock. For a
+   credential interruption, restore a known Authority-state recovery unit; when
+   there are no live users, `replace-rehearsal --confirm-no-live-users` is the
+   supported clean replacement path.
+4. Only when the old process is absent, Docker is settled, and no rollback copy
+   exists, remove exactly the owner file and empty lock directory:
+
+   ```sh
+   rm -- "$authority_lock/owner-pid"
+   rmdir -- "$authority_lock"
+   ```
+
+5. If `clean-data/release/candidate.clean-v1.json` exists, run
+   `./update-clean-v1.sh status` and then promote or roll back that candidate.
+   Otherwise run `./onboard-clean-v1.sh status`. Do not start another mutation
+   until that status is understood.
 
 ## Release and recovery
 

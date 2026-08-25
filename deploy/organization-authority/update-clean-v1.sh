@@ -11,8 +11,30 @@ ENV_FILE="${ECHO_CLEAN_ENV_FILE:-$DEPLOY_DIR/.env.clean-v1}"
 RELEASE_STATE_DIR="${ECHO_CLEAN_RELEASE_STATE_DIR:-$DEPLOY_DIR/clean-data/release}"
 CURRENT_RECORD="$RELEASE_STATE_DIR/current.clean-v1.json"
 CANDIDATE_RECORD="$RELEASE_STATE_DIR/candidate.clean-v1.json"
+OPERATION_LOCK_DIR="${ECHO_CLEAN_OPERATION_LOCK_DIR:-${RELEASE_STATE_DIR%/*}/.authority-operation-lock}"
+OPERATION_LOCK_HELD=false
 
 fail() { printf '%s\n' "$*" >&2; exit 1; }
+
+release_operation_lock() {
+  if [[ "$OPERATION_LOCK_HELD" == true ]]; then
+    rm -f "$OPERATION_LOCK_DIR/owner-pid" >/dev/null 2>&1 || true
+    rmdir "$OPERATION_LOCK_DIR" >/dev/null 2>&1 || true
+    OPERATION_LOCK_HELD=false
+  fi
+}
+
+acquire_operation_lock() {
+  if ! mkdir -m 0700 "$OPERATION_LOCK_DIR" 2>/dev/null; then
+    fail 'another Authority activation or release operation is already in progress; follow the README operation-lock recovery steps if its owner was interrupted'
+  fi
+  OPERATION_LOCK_HELD=true
+  if ! (umask 077; printf '%s\n' "$$" > "$OPERATION_LOCK_DIR/owner-pid"); then
+    release_operation_lock
+    fail 'could not record the Authority operation lock owner'
+  fi
+}
+
 [[ -x /usr/bin/python3 || -x "$(command -v python3)" ]] || fail 'python3 is required'
 [[ -f "$RELEASE_TOOL" ]] || fail 'clean-v1 release validator is missing'
 [[ -f "$ENV_FILE" && ! -L "$ENV_FILE" ]] || fail 'clean Authority environment file is missing or unsafe'
@@ -198,6 +220,11 @@ EOF
 }
 
 command="${1:-}"
+acquire_operation_lock
+trap 'release_operation_lock' EXIT
+trap 'exit 129' HUP
+trap 'exit 130' INT
+trap 'exit 143' TERM
 case "$command" in
   stage)
     [[ "${2:-}" == '--release' && -n "${3:-}" && $# -eq 3 ]] || usage
